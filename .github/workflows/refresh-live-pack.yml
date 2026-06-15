@@ -52,7 +52,7 @@ jobs:
         run: node tools/fetch-live-pack.mjs
 
       - name: Upload live pack artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: production-live-pack
           path: .tmp-production-live.pack.yaml
