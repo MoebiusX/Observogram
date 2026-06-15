@@ -36,7 +36,7 @@ jobs:
       # otelcol-contrib) — cached by the pin versions baked into the
       # fetch script, so the ~300MB download happens once per bump.
       - name: Cache backend validators
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .tools
           key: validators-${{ runner.os }}-${{ hashFiles('tools/fetch-validators.mjs') }}
