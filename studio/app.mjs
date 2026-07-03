@@ -39,6 +39,7 @@ import { renderBenchmarkView, renderComparePicker, renderTraceabilityView, refre
 import { catalogToDeployManifest } from './artifact-model.mjs';
 import { computeDeployTransitions } from './verify-deploy.mjs';
 import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-view.mjs';
+import { initHost } from './host.mjs';
 
 // `state`, the `$`/`$$` DOM helpers and the persistence layer now live in
 // studio/state.mjs (imported above).
@@ -750,7 +751,7 @@ export function renderMainView() {
 }
 
 // ============================================================
-// DISCOVER — the TOMOGRAM SCAN dashboard.
+// DISCOVER — the OBSERVOGRAM SCAN dashboard.
 //
 // Three-column mission-control layout:
 //   LEFT   — pack overview (manifest identity) + pack catalog
@@ -966,7 +967,7 @@ function setupUpload() {
         // doHomeMcpConnect that the home button calls. The friendly
         // label is held on the panel via a data-attribute so the
         // adopt handler can pass it through to the API.
-        window._tomographQuickLabel = 'Krystaline (live MCP draft)';
+        window._observogramQuickLabel = 'Krystaline (live MCP draft)';
         const newFromLive = document.getElementById('draft-mcp-btn');
         if (newFromLive) newFromLive.click();
         setTimeout(() => {
@@ -979,7 +980,7 @@ function setupUpload() {
       }
       if (action === 'quick-krystalinex-repo') {
         // Open the scan-a-repo panel and pre-fill the GitHub URL field.
-        window._tomographQuickLabel = 'KrystalineX (repo scan)';
+        window._observogramQuickLabel = 'KrystalineX (repo scan)';
         const scanBtn = document.getElementById('crawl-btn');
         if (scanBtn) scanBtn.click();
         setTimeout(() => {
@@ -1049,11 +1050,11 @@ export async function refresh() {
 // ============================================================
 // OBSERVA chrome — the three-tab top bar from the demo mockup.
 //
-// Replaces the legacy header (Tomograph logo + dense pack-picker row +
+// Replaces the legacy header (Observogram logo + dense pack-picker row +
 // meta strip + view-nav + layer chips) with a single clean chrome:
 //
 //   ┌──────────────────────────────────────────────────────────────────┐
-//   │ [logo] TOMOGRAPH    ① Layers       ② Comparison    ③ ObsOps     │
+//   │ [logo] OBSERVOGRAM    ① Layers       ② Comparison    ③ ObsOps     │
 //   │                       What's in...   Is it good...   Compile &  │
 //   │                                                                  │
 //   │                                          Projects · Alerts · AD  │
@@ -1069,7 +1070,7 @@ export async function refresh() {
 // question, the small workflow word beneath identifies the act the
 // product takes to answer it. This is the load-bearing framing —
 // most observability tools organize around data types or products;
-// Tomograph organizes around three questions that map onto a workflow
+// Observogram organizes around three questions that map onto a workflow
 // people already understand from medicine:
 //
 //     Discover  →  Diagnose  →  Remediate
@@ -1084,7 +1085,7 @@ const OBSERVA_TABS = [
     label: 'What Do We Have?',
     sub: 'Discover',
     techName: 'Layers',
-    tagline: 'the Observability Tomogram',
+    tagline: 'the Observogram Scan',
     accent: 'tab-blue',
   },
   {
@@ -1131,7 +1132,7 @@ function installObservaChrome() {
   hdr.className = 'observa-hdr';
   hdr.innerHTML = `
     <div class="observa-hdr-inner">
-      <a class="observa-brand" href="/" aria-label="Tomograph home">
+      <a class="observa-brand" href="/" aria-label="Observogram home">
         <span class="observa-logo" aria-hidden="true">
           <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
             <defs>
@@ -1147,7 +1148,7 @@ function installObservaChrome() {
           </svg>
         </span>
         <span class="observa-brand-text">
-          <span class="observa-wordmark">TOMO<strong>GRAPH</strong></span>
+          <span class="observa-wordmark">OBSERVO<strong>GRAM</strong></span>
           <span class="observa-tagline">
             <span class="observa-tagline-step">Discover</span>
             <span class="observa-tagline-dot">·</span>
@@ -1159,7 +1160,7 @@ function installObservaChrome() {
       </a>
 
       <!-- The active org (Stage 2 tenancy) — same rule as the SERVICE
-           chip: which workspace Tomograph is reading must never be a
+           chip: which workspace Observogram is reading must never be a
            mystery. Becomes a switcher when the user has several orgs. -->
       <span class="observa-service observa-org" id="observa-org" hidden>
         <span class="observa-service-key">ORG</span>
@@ -1167,7 +1168,7 @@ function installObservaChrome() {
       </span>
 
       <!-- The active service — always visible once chosen (the gate or
-           the header SERVICE selector set it). "Tomograph is configured
+           the header SERVICE selector set it). "Observogram is configured
            for MY service" must never be a mystery. -->
       <span class="observa-service" id="observa-service" hidden>
         <span class="observa-service-key">SERVICE</span>
@@ -1206,7 +1207,7 @@ function installObservaChrome() {
               </button>
             `).join('')}
             <button type="button" class="observa-adv-item observa-adv-about" role="menuitem" data-action="about">
-              <span class="observa-adv-item-label">About Tomograph</span>
+              <span class="observa-adv-item-label">About Observogram</span>
               <span class="observa-adv-item-sub" id="observa-about-sub">version &amp; build</span>
             </button>
           </div>
@@ -1335,7 +1336,7 @@ async function boot() {
   resolveActiveOrg();
   try { await loadCatalog(); }
   catch (e) {
-    document.body.innerHTML = `<pre class="json" style="margin:48px;max-width:800px">Failed to reach Tomograph's API.\n\n${escapeHtml(e.message)}\n\nMake sure the server is running: \`node server/index.mjs\` or \`npm run serve\`.</pre>`;
+    document.body.innerHTML = `<pre class="json" style="margin:48px;max-width:800px">Failed to reach Observogram's API.\n\n${escapeHtml(e.message)}\n\nMake sure the server is running: \`node server/index.mjs\` or \`npm run serve\`.</pre>`;
     return;
   }
 
@@ -1436,7 +1437,7 @@ function goHome() {
 // ============================================================
 // SERVICE GATE — the post-sign-in landing. The user's services
 // (from the same catalogue the header SERVICE selector reads),
-// one click from "signed in" to "Tomograph configured for my
+// one click from "signed in" to "Observogram configured for my
 // service". docs/PRODUCTIZATION_PLAN.md Stage 1 UX.
 // ============================================================
 
@@ -1447,7 +1448,7 @@ function renderServiceGate() {
   const who = state.identity?.name || state.identity?.email || state.identity?.sub || '';
   view.innerHTML = `
     <section class="svc-gate">
-      <div class="svc-gate-eyebrow">TOMOGRAPH · THE OBSERVABILITY COMPILER</div>
+      <div class="svc-gate-eyebrow">OBSERVOGRAM · THE OBSERVABILITY COMPILER</div>
       <h1 class="svc-gate-title">Welcome back${who ? `, ${escapeHtml(who.split(' ')[0])}` : ''}.</h1>
       <p class="svc-gate-sub">Which service are you working on?</p>
       <div class="svc-gate-grid">
@@ -1516,7 +1517,7 @@ function updateObservaServiceChip() {
   chip.hidden = false;
 }
 
-// One click on a service card → Tomograph configured for that service:
+// One click on a service card → Observogram configured for that service:
 // service selected, its most recent pack loaded as Pack A, Discover open.
 function enterServiceWorkspace(serviceKey) {
   if (!serviceKey) return;
@@ -1620,7 +1621,7 @@ function setupResetButton() {
   const btn = $('#reset-btn');
   if (!btn) return;
   btn.onclick = async () => {
-    const ok = confirm('Reset Tomograph?\n\n' +
+    const ok = confirm('Reset Observogram?\n\n' +
       'This will:\n' +
       '  • drop every uploaded / scanned / drafted pack from the server\n' +
       '  • clear saved view + filter + focus + trace preferences from localStorage\n' +
@@ -1739,7 +1740,7 @@ function renderDiscoverEmpty(view) {
       <header class="discover-empty-head">
         <h2 class="discover-empty-title">What do we have?</h2>
         <p class="discover-empty-lede">
-          Load or generate an ObservabilityPack to draw its tomogram — the
+          Load or generate an ObservabilityPack to draw its observogram — the
           per-layer inventory of every contract, signal, dashboard, alert
           and check that makes up this service's observability posture.
         </p>
@@ -1845,12 +1846,12 @@ function renderHomeView() {
 
   view.innerHTML = `
     <section class="home-hero">
-      <div class="home-hero-eyebrow">tomograph · the observability compiler</div>
+      <div class="home-hero-eyebrow">observogram · the observability compiler</div>
       <h2 class="home-hero-title">Map your observability platform in seconds.</h2>
       <p class="home-hero-lede">
         Scan a service repo to capture what it <em>declares</em>, then draft
         from a live OpenTelemetry MCP server to capture what the platform
-        <em>verifies</em> — Tomograph diffs the two and shows you exactly where
+        <em>verifies</em> — Observogram diffs the two and shows you exactly where
         they drift. Connect below to begin, or scan a repo from Discover.
       </p>
 
@@ -1951,13 +1952,13 @@ async function doHomeMcpConnect() {
         mcpUrl: url,
         mcpAuth: auth || undefined,
         // Forward the quick-start friendly label when the user came
-        // through the Upload popover. window._tomographQuickLabel is
+        // through the Upload popover. window._observogramQuickLabel is
         // cleared after consumption so manual draft-from-mcp from the
         // panel keeps the auto-generated label.
-        label: window._tomographQuickLabel || undefined,
+        label: window._observogramQuickLabel || undefined,
       }),
     });
-    if (window._tomographQuickLabel) window._tomographQuickLabel = null;
+    if (window._observogramQuickLabel) window._observogramQuickLabel = null;
     const ct = r.headers.get('content-type') || '';
     if (!ct.includes('application/json')) {
       throw new Error(`server returned ${r.status} ${ct || 'no content-type'}`);
@@ -1997,7 +1998,7 @@ function renderHomeMcpCapabilities(out, host) {
   const backends = s.backends ?? 0;
 
   // tools/list inventory: the full set of tools the MCP advertised, and the
-  // subset Tomograph doesn't yet have a probe pattern for. These come from
+  // subset Observogram doesn't yet have a probe pattern for. These come from
   // the post-rename fetcher that calls `tools/list` instead of guessing.
   const toolsExposed   = (ann['mcp.toolsExposed']   || '').split(',').filter(Boolean);
   const toolsUnmatched = (ann['mcp.toolsUnmatched'] || '').split(',').filter(Boolean);
@@ -2098,7 +2099,7 @@ function renderHomeMcpCapabilities(out, host) {
 // Render the skill → backend → product → version matrix the MCP
 // exposes via `backend_capabilities`. The signal-class skills
 // (metrics/logs/traces/profiles + alerting/dashboards) lead because
-// they're what drive Tomograph's L1–L4 projection; the rest follow
+// they're what drive Observogram's L1–L4 projection; the rest follow
 // in a compact tail.
 //
 // When `liveVersions` carries an authoritative live version for a
@@ -2722,9 +2723,9 @@ async function doCrawlFromGithub() {
     diffScopeMode: $('#crawl-diff-scope')?.value || 'service',
     // Quick-start cases pass a friendly label via the global so the
     // picker doesn't read "moebiusx-krystalinex" but the human name.
-    label:      window._tomographQuickLabel || undefined,
+    label:      window._observogramQuickLabel || undefined,
   };
-  if (window._tomographQuickLabel) window._tomographQuickLabel = null;
+  if (window._observogramQuickLabel) window._observogramQuickLabel = null;
   const crit = $('#crawl-criticality').value;
   if (crit) body.criticality = crit;
 
@@ -3720,7 +3721,7 @@ function renderDraftMcpResult(out) {
     ${alertsFiringCount > 0 || recordingFallbackCount > 0 ? `
       <div class="crawl-evidence-note">
         Rows in italic = fallback evidence. The standard rule endpoints came back empty,
-        but Tomograph found evidence in metric data: firing alerts via the
+        but Observogram found evidence in metric data: firing alerts via the
         <code>ALERTS</code> series, recording rules via metric names following the
         <code>&lt;ns&gt;:&lt;metric&gt;:&lt;op&gt;</code> convention.
       </div>
@@ -3817,7 +3818,7 @@ async function loadVersion() {
   const hdrSub = document.querySelector('.hdr-sub');
   if (hdrSub && !hdrSub.textContent.includes('build')) hdrSub.textContent += ` · ${label}`;
   const brand = document.querySelector('.observa-brand');
-  if (brand) brand.title = `Tomograph ${label}`;
+  if (brand) brand.title = `Observogram ${label}`;
 }
 
 function openAboutModal() {
@@ -3828,8 +3829,8 @@ function openAboutModal() {
   overlay.id = 'about-modal';
   overlay.className = 'about-overlay';
   overlay.innerHTML = `
-    <div class="about-card" role="dialog" aria-modal="true" aria-label="About Tomograph">
-      <div class="about-brand">Tomo<i>graph</i></div>
+    <div class="about-card" role="dialog" aria-modal="true" aria-label="About Observogram">
+      <div class="about-brand">Observo<i>gram</i></div>
       <div class="about-tagline">the observability compiler</div>
       <div class="about-version">${escapeHtml(v.version ? `v${v.version}` : 'version unknown')}<span class="about-build">${escapeHtml(v.build ? ` · build ${v.build}` : '')}</span></div>
       <div class="about-rows">
@@ -3838,7 +3839,7 @@ function openAboutModal() {
         ${row('identity', state.identity?.mode || 'local (no sign-in)')}
         ${state.identity?.orgs?.length ? row('org', state.identity.orgs.map(o => o.name || o.id).join(' · ')) : ''}
       </div>
-      <a class="about-link" href="https://github.com/MoebiusX/tomograph/blob/develop/docs/CHANGELOG.md" target="_blank" rel="noopener">changelog</a>
+      <a class="about-link" href="https://github.com/MoebiusX/Observogram/blob/develop/docs/CHANGELOG.md" target="_blank" rel="noopener">changelog</a>
       <button type="button" class="about-close" aria-label="Close">esc</button>
     </div>
   `;
@@ -3959,5 +3960,11 @@ function setupTheme() {
 }
 
 // ---------- helpers ----------
+
+// Fill the studio-wide host seam (studio/host.mjs) — view modules reach the
+// re-render / loader / modal entrypoints through it instead of importing
+// app.mjs (docs/VENDORING.md, docs/UI_CONVENTIONS.md). Function declarations
+// hoist, so binding them here (before boot) is safe.
+initHost({ loadPackB, openDeployModal, renderMainView, renderTabs });
 
 boot();

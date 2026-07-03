@@ -25,7 +25,7 @@
       "crawler.filesExcludedByEnvironment": "0",
       "crawler.filesClassified": "6",
       "crawler.environmentProfile": "prod",
-      "tomograph.diff.scopeMode": "service",
+      "observogram.diff.scopeMode": "service",
       "crawler.tierInferred": "tier-2",
       "crawler.warningCount": "3",
       "crawler.syntheticRecordingRulesSkipped": "1",

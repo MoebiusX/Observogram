@@ -31,7 +31,7 @@ One page, top to bottom, each band answering before the next deepens:
 3. **Partial-evidence banner** — before anyone reads numbers.
 4. **Trend tiles.** Score trend and Drift fidelity with sparkline +
    "▲/▼ pp vs previous run" from journey run history
-   (`.tomograph/runs/`); Chain integrity and Freshness as stat tiles.
+   (`.observogram/runs/`); Chain integrity and Freshness as stat tiles.
    No history → an honest "no run history yet" note, never a fake trend.
 5. **Panel grid** — every report focused, glanceable, expandable (⤢):
    *Signal Lattice* (weighted health/badness donuts + legend; risk-note,

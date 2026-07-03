@@ -115,8 +115,8 @@ export function retrofeedShadowSignals(canonicalA, entries, { now } = {}) {
   if (adopted.length) {
     if (!updated.metadata) updated.metadata = {};
     if (!updated.metadata.annotations || typeof updated.metadata.annotations !== 'object') updated.metadata.annotations = {};
-    updated.metadata.annotations['tomograph.retrofeed.adoptedAt'] = now || new Date().toISOString();
-    updated.metadata.annotations['tomograph.retrofeed.adopted'] =
+    updated.metadata.annotations['observogram.retrofeed.adoptedAt'] = now || new Date().toISOString();
+    updated.metadata.annotations['observogram.retrofeed.adopted'] =
       adopted.map(a => `${a.kind}:${a.id}`).join(' · ');
   }
 

@@ -2,7 +2,7 @@
 //
 // A minimal MCP server backed by a REAL Grafana HTTP API — test
 // scaffolding for the T4 round trip (docs/TEST_PLAN_COMPILER_VALIDITY.md
-// §6). Tomograph's deploy and fetch-live paths speak MCP (in production
+// §6). Observogram's deploy and fetch-live paths speak MCP (in production
 // to otel-mcp-server or another gateway); this bridge plays that
 // gateway's role against the disposable validation Grafana so the WHOLE
 // ratified chain — deploy-bulk → MCP tools → Grafana → fetch-live →
@@ -97,7 +97,7 @@ export async function startGrafanaMcpBridge({
         dashboard,
         folderUid: folder_uid || undefined,
         overwrite: mode !== 'create',
-        message: message || 'tomograph t4 round trip',
+        message: message || 'observogram t4 round trip',
       });
       if (!r.ok) throw new Error(`grafana /api/dashboards/db HTTP ${r.status}: ${r.text.slice(0, 300)}`);
       return r.json;
@@ -178,7 +178,7 @@ export async function startGrafanaMcpBridge({
     };
     try {
       if (msg.method === 'initialize') {
-        return send({ protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'tomograph-t4-grafana-bridge', version: '0.1.0' } });
+        return send({ protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'observogram-t4-grafana-bridge', version: '0.1.0' } });
       }
       if (msg.method === 'notifications/initialized') return send({});
       if (msg.method === 'tools/list') {

@@ -11,7 +11,9 @@ coverage/
 .nyc_output/
 
 # Local workspace — persisted packs, deploy audit, journey runs.
-# Per-machine state, never source. TOMOGRAPH_WORKSPACE relocates it.
+# Per-machine state, never source. OBSERVOGRAM_WORKSPACE relocates it
+# (.tomograph/ is the pre-rebrand name; existing ones keep working).
+.observogram/
 .tomograph/
 
 # Pinned backend-validator binaries + compiled-artifact scratch

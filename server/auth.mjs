@@ -10,14 +10,14 @@
 //     Zero behaviour change, zero friction — asserted by the regression
 //     suite, not promised.
 //   - LOCAL USERS (stand-alone): a users file exists
-//     (TOMOGRAPH_USERS_FILE, default <workspace>/users.json) → a
+//     (OBSERVOGRAM_USERS_FILE, default <workspace>/users.json) → a
 //     password login page at /auth/login, credentials scrypt-hashed in
 //     the file, managed by `npm run users` (tools/user-admin.mjs). No
 //     IdP, no network dependency — file-first like everything else.
 //     The session secret auto-generates and persists into the
 //     workspace, so stand-alone mode is zero-config beyond adding a
 //     user.
-//   - OIDC (TOMOGRAPH_OIDC_ISSUER set — wins over a users file):
+//   - OIDC (OBSERVOGRAM_OIDC_ISSUER set — wins over a users file):
 //     Authorization Code + PKCE against any conformant provider
 //     (Entra ID, Google, Okta, Keycloak, dex).
 //
@@ -27,36 +27,39 @@
 // service-account/CI path); the static studio shell stays open so the
 // client can redirect to /auth/login.
 //
-// Env contract:
-//   TOMOGRAPH_OIDC_ISSUER        e.g. https://login.example.com/realms/x
-//   TOMOGRAPH_OIDC_CLIENT_ID     registered client id (required w/ issuer)
-//   TOMOGRAPH_OIDC_CLIENT_SECRET optional — omit for a public PKCE client
-//   TOMOGRAPH_OIDC_REDIRECT_URL  optional — defaults to <host>/auth/callback
-//   TOMOGRAPH_USERS_FILE         optional — stand-alone users file path
-//   TOMOGRAPH_SESSION_SECRET     ≥ 32 chars; REQUIRED for OIDC (multi-
-//                                instance correctness); auto-persisted
-//                                under the workspace for local users
-//   TOMOGRAPH_SESSION_TTL_HOURS  optional, default 8
-//   TOMOGRAPH_OIDC_ALLOW_HTTP    '1' permits an http:// issuer (tests,
-//                                dex-in-docker) — never production
+// Env contract (every knob also honors the legacy TOMOGRAPH_* spelling —
+// see tools/lib/brand-env.mjs):
+//   OBSERVOGRAM_OIDC_ISSUER        e.g. https://login.example.com/realms/x
+//   OBSERVOGRAM_OIDC_CLIENT_ID     registered client id (required w/ issuer)
+//   OBSERVOGRAM_OIDC_CLIENT_SECRET optional — omit for a public PKCE client
+//   OBSERVOGRAM_OIDC_REDIRECT_URL  optional — defaults to <host>/auth/callback
+//   OBSERVOGRAM_USERS_FILE         optional — stand-alone users file path
+//   OBSERVOGRAM_SESSION_SECRET     ≥ 32 chars; REQUIRED for OIDC (multi-
+//                                  instance correctness); auto-persisted
+//                                  under the workspace for local users
+//   OBSERVOGRAM_SESSION_TTL_HOURS  optional, default 8
+//   OBSERVOGRAM_OIDC_ALLOW_HTTP    '1' permits an http:// issuer (tests,
+//                                  dex-in-docker) — never production
 
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import * as oidc from 'openid-client';
+import { brandEnv, baseWorkspacePath } from '../tools/lib/brand-env.mjs';
 import { tenancyEnabled, orgsForUser } from './tenancy.mjs';
 
-const SESSION_COOKIE = 'tomo_session';
-const FLOW_COOKIE = 'tomo_flow';
+const SESSION_COOKIE = 'observogram_session';
+// Sessions signed before the rebrand stay valid (same HMAC secret): read
+// the old cookie name too, clear both on logout. Drop with the env shim.
+const LEGACY_SESSION_COOKIE = 'tomo_session';
+const FLOW_COOKIE = 'observogram_flow';
 const FLOW_TTL_S = 600;
 
-function env(name) { return (process.env[name] || '').trim(); }
+function workspaceRoot() { return baseWorkspacePath(); }
 
-function workspaceRoot() { return resolve(env('TOMOGRAPH_WORKSPACE') || '.tomograph'); }
+export function usersFilePath() { return brandEnv('USERS_FILE') || join(workspaceRoot(), 'users.json'); }
 
-export function usersFilePath() { return env('TOMOGRAPH_USERS_FILE') || join(workspaceRoot(), 'users.json'); }
-
-export function oidcEnabled() { return !!env('TOMOGRAPH_OIDC_ISSUER'); }
+export function oidcEnabled() { return !!brandEnv('OIDC_ISSUER'); }
 
 // Stand-alone mode: active when a users file exists (and OIDC doesn't
 // win). Creating the file with `npm run users -- add <name>` and
@@ -66,7 +69,7 @@ export function localUsersEnabled() { return !oidcEnabled() && existsSync(usersF
 export function authEnabled() { return oidcEnabled() || localUsersEnabled(); }
 
 function sessionTtlMs() {
-  const h = Number(env('TOMOGRAPH_SESSION_TTL_HOURS') || 8);
+  const h = Number(brandEnv('SESSION_TTL_HOURS') || 8);
   return (Number.isFinite(h) && h > 0 ? h : 8) * 3600_000;
 }
 
@@ -75,7 +78,7 @@ function sessionTtlMs() {
 // users file's workspace so restarts keep sessions valid.
 let cachedSecret = null;
 function sessionSecret() {
-  const fromEnv = env('TOMOGRAPH_SESSION_SECRET');
+  const fromEnv = brandEnv('SESSION_SECRET');
   if (fromEnv) return fromEnv;
   if (cachedSecret) return cachedSecret;
   const file = join(workspaceRoot(), 'session-secret');
@@ -171,7 +174,7 @@ function parseCookies(req) {
 }
 
 function cookieFlags(maxAgeS) {
-  const secure = env('TOMOGRAPH_OIDC_REDIRECT_URL').startsWith('https://') || env('TOMOGRAPH_OIDC_SECURE_COOKIES') === '1';
+  const secure = brandEnv('OIDC_REDIRECT_URL').startsWith('https://') || brandEnv('OIDC_SECURE_COOKIES') === '1';
   return `Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeS}${secure ? '; Secure' : ''}`;
 }
 
@@ -186,7 +189,8 @@ function clearCookie(res, name) {
 // The session attached to a request, or null. Exported for the auth
 // gate in server/index.mjs.
 export function readSession(req) {
-  return verify(parseCookies(req)[SESSION_COOKIE]);
+  const cookies = parseCookies(req);
+  return verify(cookies[SESSION_COOKIE] || cookies[LEGACY_SESSION_COOKIE]);
 }
 
 // ---------- OIDC client (lazy discovery, cached) ----------
@@ -195,13 +199,13 @@ let configPromise = null;
 function getConfig() {
   if (!configPromise) {
     configPromise = (async () => {
-      const issuer = new URL(env('TOMOGRAPH_OIDC_ISSUER'));
-      const clientId = env('TOMOGRAPH_OIDC_CLIENT_ID');
-      const secret = env('TOMOGRAPH_OIDC_CLIENT_SECRET');
+      const issuer = new URL(brandEnv('OIDC_ISSUER'));
+      const clientId = brandEnv('OIDC_CLIENT_ID');
+      const secret = brandEnv('OIDC_CLIENT_SECRET');
       const options = {};
       if (issuer.protocol === 'http:') {
-        if (env('TOMOGRAPH_OIDC_ALLOW_HTTP') !== '1') {
-          throw new Error('TOMOGRAPH_OIDC_ISSUER uses http:// — set TOMOGRAPH_OIDC_ALLOW_HTTP=1 only for local test IdPs, never production');
+        if (brandEnv('OIDC_ALLOW_HTTP') !== '1') {
+          throw new Error('OBSERVOGRAM_OIDC_ISSUER uses http:// — set OBSERVOGRAM_OIDC_ALLOW_HTTP=1 only for local test IdPs, never production');
         }
         options.execute = [oidc.allowInsecureRequests];
       }
@@ -215,7 +219,7 @@ function getConfig() {
 }
 
 function redirectUri(req) {
-  const fixed = env('TOMOGRAPH_OIDC_REDIRECT_URL');
+  const fixed = brandEnv('OIDC_REDIRECT_URL');
   if (fixed) return fixed;
   return `${req.protocol}://${req.get('host')}/auth/callback`;
 }
@@ -233,6 +237,7 @@ export function initAuth(app) {
 function registerShared(app, mode) {
   app.post('/auth/logout', (req, res) => {
     clearCookie(res, SESSION_COOKIE);
+    clearCookie(res, LEGACY_SESSION_COOKIE);
     res.status(204).end();
   });
   app.get('/auth/me', (req, res) => {
@@ -241,7 +246,7 @@ function registerShared(app, mode) {
     res.json({
       ok: true, mode, authenticated: true, sub: s.sub, email: s.email, name: s.name, expiresAt: s.exp,
       // Stage 2 tenancy: the client needs the user's orgs at boot to pick
-      // an active one (X-Tomograph-Org) before the first /api call.
+      // an active one (X-Observogram-Org) before the first /api call.
       ...(tenancyEnabled() ? { orgs: orgsForUser(s.sub) } : {}),
     });
   });
@@ -251,7 +256,7 @@ function registerShared(app, mode) {
 
 const LOGIN_PAGE = (error = '') => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Tomograph — sign in</title>
+<title>Observogram — sign in</title>
 <style>
   body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f1623;color:#e5e8ec;
        font-family:'IBM Plex Sans',system-ui,sans-serif}
@@ -266,7 +271,7 @@ const LOGIN_PAGE = (error = '') => `<!doctype html>
        font-size:12px;margin-bottom:6px}
 </style></head><body>
 <form method="post" action="/auth/login">
-  <h1>Tomo<i>graph</i></h1><p>the observability compiler · sign in</p>
+  <h1>Observo<i>gram</i></h1><p>the observability compiler · sign in</p>
   ${error ? `<div class="err">${error}</div>` : ''}
   <label for="u">Username</label><input id="u" name="username" autocomplete="username" autofocus required>
   <label for="p">Password</label><input id="p" name="password" type="password" autocomplete="current-password" required>
@@ -319,10 +324,10 @@ function initLocalUsers(app) {
 
 function initOidc(app) {
   const missing = [];
-  if (!env('TOMOGRAPH_OIDC_CLIENT_ID')) missing.push('TOMOGRAPH_OIDC_CLIENT_ID');
-  if (env('TOMOGRAPH_SESSION_SECRET').length < 32) missing.push('TOMOGRAPH_SESSION_SECRET (≥ 32 chars — instances must share it)');
+  if (!brandEnv('OIDC_CLIENT_ID')) missing.push('OBSERVOGRAM_OIDC_CLIENT_ID');
+  if (brandEnv('SESSION_SECRET').length < 32) missing.push('OBSERVOGRAM_SESSION_SECRET (≥ 32 chars — instances must share it)');
   if (missing.length) {
-    throw new Error(`OIDC is configured (TOMOGRAPH_OIDC_ISSUER set) but incomplete — missing: ${missing.join(', ')}. Refusing to start half-authenticated.`);
+    throw new Error(`OIDC is configured (OBSERVOGRAM_OIDC_ISSUER set) but incomplete — missing: ${missing.join(', ')}. Refusing to start half-authenticated.`);
   }
 
   app.get('/auth/login', async (req, res) => {

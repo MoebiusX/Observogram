@@ -33,7 +33,7 @@ metadata:
     crawler.filesExcludedByEnvironment: "66"
     crawler.filesClassified: "109"
     crawler.environmentProfile: prod
-    tomograph.diff.scopeMode: service
+    observogram.diff.scopeMode: service
     crawler.tierInferred: tier-2
     crawler.warningCount: "5"
     crawler.syntheticRecordingRulesSkipped: "18"

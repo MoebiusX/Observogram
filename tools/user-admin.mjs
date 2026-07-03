@@ -3,7 +3,7 @@
  * tools/user-admin.mjs — manage stand-alone users (npm run users).
  *
  * Stand-alone identity for docs/PRODUCTIZATION_PLAN.md Stage 1: users
- * live scrypt-hashed in a plain file (TOMOGRAPH_USERS_FILE, default
+ * live scrypt-hashed in a plain file (OBSERVOGRAM_USERS_FILE, default
  * <workspace>/users.json). The file EXISTING is what switches the
  * server into local-users mode — add the first user, restart, sign in.
  *

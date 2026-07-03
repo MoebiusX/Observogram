@@ -1,4 +1,6 @@
-# Tomograph is now Observogram
+# Observogram
+
+*(formerly **Tomograph** — pre-rebrand env vars, headers, workspaces, and pack annotations keep working; see docs/CHANGELOG.md.)*
 
 **Observogram is the observability compiler and diagnostic workspace for
 ObservabilityPack spec v1.2.**
@@ -7,7 +9,7 @@ It answers one operational question:
 
 > Is this service's observability diagnostic-grade?
 
-Tomograph checks that in two parts:
+Observogram checks that in two parts:
 
 1. **Coverage** - are we observing the right signals for the service's
    observability goals and OLA?
@@ -24,7 +26,7 @@ Use a repo scan, a live MCP scan, or an uploaded pack to create an
 ObservabilityPack. Compare the declared repo posture with the live production
 posture. Then compile and deploy the delta through the platform tools.
 
-In Tomograph, the OLA is represented as an observability contract inside the
+In Observogram, the OLA is represented as an observability contract inside the
 pack: criticality, SLOs, SLIs, telemetry bindings, rules, dashboards, alerts,
 runbooks, and validation expectations. A repo-derived pack captures what the
 service declares. A live MCP-derived pack captures what production verifies.
@@ -46,7 +48,7 @@ drift:
 - live telemetry exists, but no OLA or runbook says why it matters
 - the team cannot explain whether the service is truly diagnosable
 
-Tomograph treats observability as a compiled contract. The pack is the source
+Observogram treats observability as a compiled contract. The pack is the source
 of truth. Native artifacts are generated from it. Live systems are scanned back
 into pack shape. The diff between declared and live is the operational truth.
 
@@ -69,12 +71,12 @@ The Discover view renders the observability Observogram across the layered model
 - L5 Validation: baselines, synthetics, chaos, release checks
 - GOV: ownership and governance metadata
 
-![Tomograph Discover view showing the layered observability inventory](docs/img/xray-discover.png)
+![Observogram Discover view showing the layered observability inventory](docs/img/xray-discover.png)
 
 ### 2. Diagnose - Can We Trust It?
 
 Load the declared repo pack as **Pack A** and the live production pack as
-**Pack B**. Tomograph computes the Diagnostic Grade:
+**Pack B**. Observogram computes the Diagnostic Grade:
 
 - **Score**: total criteria passed out of 7
 - **Coverage**: four checks for "are we observing the right things?"
@@ -127,11 +129,11 @@ The drift drill shows:
 Traceability shows requirement chains from SLO to SLI, metrics, recording
 rules, exporters, scrape evidence, dashboards, alerts, and runbooks.
 
-![Tomograph Diagnose view showing Diagnostic Grade and live drift buckets](docs/img/xray-diagnose-drift.png)
+![Observogram Diagnose view showing Diagnostic Grade and live drift buckets](docs/img/xray-diagnose-drift.png)
 
 ### 3. Remediate - Fix The Gaps
 
-Tomograph compiles the pack delta into native backend artifacts:
+Observogram compiles the pack delta into native backend artifacts:
 
 - Prometheus recording and alerting rules
 - Grafana-managed rules
@@ -143,13 +145,13 @@ Deployable artifacts can be pushed through an MCP write target. Non-deployable
 or inferred artifacts remain visible as manual follow-up, not silent production
 changes.
 
-![Tomograph Remediate view showing the Pack A minus Pack B deploy delta](docs/img/xray-remediate.png)
+![Observogram Remediate view showing the Pack A minus Pack B deploy delta](docs/img/xray-remediate.png)
 
 ## Quickstart
 
 ```bash
-git clone https://github.com/MoebiusX/tomograph.git
-cd tomograph
+git clone https://github.com/MoebiusX/Observogram.git
+cd Observogram
 npm install
 npm run dev
 ```
@@ -162,20 +164,20 @@ One token, three postures:
 
 1. **Local (default).** The server binds to `127.0.0.1` and runs with no
    authentication — a zero-friction local workspace.
-2. **Exposed with a token.** Set `TOMOGRAPH_API_TOKEN=<secret>` and bind
+2. **Exposed with a token.** Set `OBSERVOGRAM_API_TOKEN=<secret>` and bind
    wherever you need (`HOST=0.0.0.0`). Mutating `/api/*` routes (crawl,
    draft, validate-register, deploy, verify, reset) then require
    `Authorization: Bearer <secret>`; read routes stay open. Set
-   `TOMOGRAPH_API_TOKEN_LABEL=<team-or-owner>` to stamp the deploy audit
+   `OBSERVOGRAM_API_TOKEN_LABEL=<team-or-owner>` to stamp the deploy audit
    log with the token's ownership — the secret itself never lands in any
    log.
 3. **Exposed without a token.** The server **refuses to start** with a
-   clear message. `TOMOGRAPH_INSECURE_NO_AUTH=1` overrides knowingly (it
+   clear message. `OBSERVOGRAM_INSECURE_NO_AUTH=1` overrides knowingly (it
    logs a loud warning) for trusted-network demos only.
 
 MCP write tokens are unrelated to the API token: they pass through per
 request and are never stored server-side. Registered packs and the deploy
-audit live in the `.tomograph/` workspace (`TOMOGRAPH_WORKSPACE`
+audit live in the `.observogram/` workspace (`OBSERVOGRAM_WORKSPACE`
 relocates it).
 
 Useful local checks:
@@ -193,8 +195,8 @@ npm run test
 The whole app is one Express process, so the container story is one image:
 
 ```bash
-docker build -t tomograph:0.4.0 .
-docker run --rm -p 8000:8000 tomograph:0.4.0
+docker build -t observogram:0.4.0 .
+docker run --rm -p 8000:8000 observogram:0.4.0
 ```
 
 Kubernetes manifests (Deployment + Service + Ingress, applied with Kustomize)
@@ -265,7 +267,7 @@ The UI exposes the same path through **Remediate -> Compile & Deploy**.
 Freeze a comparison as a journey file and run it on demand or on a schedule:
 
 ```yaml
-# .tomograph/journeys/repo-vs-live.journey.yaml
+# .observogram/journeys/repo-vs-live.journey.yaml
 name: repo-vs-live
 packA:
   crawl: { path: ../my-service, name: my-service, env: prod }
@@ -286,7 +288,7 @@ node tools/cli.mjs journey list                      # journeys + last outcome
 Exit codes follow the gate contract: `0` verdict passes, `1` gate failed,
 `2` tooling/config error — so the same command is a cron job, a Windows
 scheduled task, or a CI gate. Every run appends a JSON record under
-`.tomograph/runs/<journey>/` (the drift-over-time series). Secrets never
+`.observogram/runs/<journey>/` (the drift-over-time series). Secrets never
 live in journey files — MCP auth is referenced by env-var name.
 
 ## API Surface
@@ -370,6 +372,8 @@ deploy/k8s/
 - [`docs/VALUE_BACKLOG.md`](docs/VALUE_BACKLOG.md) - prioritized product backlog for the next iterations
 - [`docs/REFACTORING_PLAN.md`](docs/REFACTORING_PLAN.md) - maintainability refactor backlog from the 2026-06 audit
 - [`docs/BRANCHING.md`](docs/BRANCHING.md) - the branching model: lanes, per-commit bar, multi-writer rules, promotion cadence
+- [`docs/VENDORING.md`](docs/VENDORING.md) - vendoring the verdict/diff engines into a downstream studio, and how to stay current
+- [`docs/UI_CONVENTIONS.md`](docs/UI_CONVENTIONS.md) - studio view-module conventions: the host seam, loader/renderer split, render signatures, CSS zones
 
 Superseded planning docs live in [`docs/archive/`](docs/archive/README.md).
 

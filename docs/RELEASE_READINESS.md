@@ -1,6 +1,6 @@
 # Release Readiness
 
-This document defines the V1 release gate for Tomograph. The gate is centered
+This document defines the V1 release gate for Observogram. The gate is centered
 on the product promise:
 
 ```text
@@ -16,7 +16,7 @@ the demo.
 
 The release question is:
 
-> Can Tomograph prove whether a service is diagnostic-grade, explain the gaps,
+> Can Observogram prove whether a service is diagnostic-grade, explain the gaps,
 > and produce the next deployable observability fix?
 
 ## Required Capabilities

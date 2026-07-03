@@ -11,7 +11,7 @@
 
 import { state } from './state.mjs';
 import { escapeHtml } from './util.mjs';
-import { openDeployModal, renderMainView } from './app.mjs';
+import { host as appHost } from './host.mjs';
 import {
   buildProtoModel, protoEnsureComparison, projectGrade, projectionSentence,
   ladderHtml, chip, criterionChip, donutSvg, fmtUnits, fixChip, badnessClassChip,
@@ -108,19 +108,19 @@ function renderActionBar(host, m) {
     <button type="button" class="proto-act is-quiet" id="pa-remediate">Open Remediate →</button>
   `;
   host.querySelector('#pa-deploy')?.addEventListener('click', () =>
-    openDeployModal({ packId: state.selectedPackId, presetIdentities: m.deployableSet.identities }));
+    appHost.openDeployModal({ packId: state.selectedPackId, presetIdentities: m.deployableSet.identities }));
   host.querySelector('#pa-retrofeed')?.addEventListener('click', () => {
     state.remediateOp = 'retrofeed';
     state.view = 'compile';
-    renderMainView();
+    appHost.renderMainView();
   });
   host.querySelector('#pa-reverify')?.addEventListener('click', () => {
     state.view = 'journeys';
-    renderMainView();
+    appHost.renderMainView();
   });
   host.querySelector('#pa-remediate')?.addEventListener('click', () => {
     state.view = 'compile';
-    renderMainView();
+    appHost.renderMainView();
   });
 }
 
@@ -340,14 +340,14 @@ export function renderProtoRemediateA(view) {
     cb.addEventListener('change', () => {
       const uid = cb.closest('.pa-work').dataset.uid;
       if (cb.checked) addressed.add(uid); else addressed.delete(uid);
-      renderMainView();
+      appHost.renderMainView();
     });
   });
   bandsHost.querySelectorAll('[data-deploy]').forEach(btn => {
     btn.addEventListener('click', () => {
       const item = m.items.find(i => i.uid === btn.dataset.deploy);
       if (!item?.deployIdentity) return;
-      openDeployModal({ packId: state.selectedPackId, presetIdentities: new Set([item.deployIdentity]) });
+      appHost.openDeployModal({ packId: state.selectedPackId, presetIdentities: new Set([item.deployIdentity]) });
     });
   });
 
@@ -369,7 +369,7 @@ export function renderProtoRemediateA(view) {
         : ''}
   `;
   bar.querySelector('#pa-deploy-all')?.addEventListener('click', () =>
-    openDeployModal({ packId: state.selectedPackId, presetIdentities: dep.identities }));
+    appHost.openDeployModal({ packId: state.selectedPackId, presetIdentities: dep.identities }));
   bar.querySelector('#pa-plan-retrofeed')?.addEventListener('click', () => {
     state.remediateOp = 'retrofeed';
     const url = new URL(window.location.href);

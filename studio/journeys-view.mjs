@@ -6,13 +6,13 @@
 // accumulating), a run-now action, and expandable run history. Plus the
 // capture affordance: freeze the current A/B comparison as a journey.
 //
-// Orchestration-coupled (the standard view-module cycle): imports the
-// re-render entrypoint back from app.mjs; all bindings call-time only.
+// The re-render entrypoint comes through the studio host seam (host.mjs);
+// all host bindings are call-time only.
 
 import { state } from './state.mjs';
 import { api } from './api.mjs';
 import { escapeHtml, toast } from './util.mjs';
-import { renderMainView } from './app.mjs';
+import { host as appHost } from './host.mjs';
 
 // Tiny inline SVG sparkline over alignment % (0–100). Oldest → newest,
 // left → right. Pure presentation; returns '' below two points.
@@ -90,7 +90,7 @@ function renderCaptureBar(host) {
         }),
       });
       toast(`Journey "${r.name}" saved — runnable here or via packc`);
-      renderMainView();
+      appHost.renderMainView();
     } catch (e) {
       toast(`Capture failed: ${e.message}`, 'error');
     }
@@ -108,7 +108,7 @@ async function loadJourneysList(host) {
   }
   if (!journeys.length) {
     host.innerHTML = `<div class="refs-empty">No journeys saved yet. Capture one above, or add
-      <code>.tomograph/journeys/&lt;name&gt;.journey.yaml</code> by hand.</div>`;
+      <code>.observogram/journeys/&lt;name&gt;.journey.yaml</code> by hand.</div>`;
     return;
   }
   // Fetch each journey's recent runs for the sparkline (small N, parallel).

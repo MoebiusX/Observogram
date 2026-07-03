@@ -3,8 +3,18 @@
 // Keep this module DOM-free so the clinical verdict can be unit-tested
 // directly (and computed headlessly by the CLI journey runner).
 // compare-view.mjs is responsible for rendering only.
+//
+// ZERO-DEPENDENCY on purpose: downstream studios vendor this file verbatim
+// (docs/VENDORING.md), so it must import nothing.
 
-import { L4_SUBGROUPS } from './constants.mjs';
+// The spec's fixed L4 sub-taxonomy. Inlined copy of L4_SUBGROUPS in
+// constants.mjs (the studio's display copy) — a stable 3-item vocabulary;
+// keep the two in sync.
+const L4_SUBGROUPS = [
+  { key: 'policy',   label: 'Policy' },
+  { key: 'alerting', label: 'Alerting' },
+  { key: 'healing',  label: 'Self-healing' },
+];
 
 // Flatten a layered pack's artefacts for one layer (L4's policy/alerting/
 // healing subgroups are merged, tagged with _sub). Shared by the posture

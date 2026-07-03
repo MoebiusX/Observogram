@@ -18,8 +18,8 @@
  * the bridge plays otel-mcp-server's gateway role so the entire ratified
  * MCP chain is exercised. If Grafana isn't reachable and docker can't
  * start it, the suite SKIPS loudly; --strict (CI) turns that into a
- * failure. The Tomograph server runs in-process against a temp
- * workspace, so the host's .tomograph/ is never touched.
+ * failure. The Observogram server runs in-process against a temp
+ * workspace, so the host's .observogram/ is never touched.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -42,8 +42,8 @@ const FOLDER = 't4-roundtrip';
 // The in-process server must see an isolated workspace BEFORE the module
 // loads (workspace paths resolve from this env at call time, but boot
 // rehydration runs at start()).
-const WORKSPACE = mkdtempSync(join(tmpdir(), 'tomograph-t4-'));
-process.env.TOMOGRAPH_WORKSPACE = WORKSPACE;
+const WORKSPACE = mkdtempSync(join(tmpdir(), 'observogram-t4-'));
+process.env.OBSERVOGRAM_WORKSPACE = WORKSPACE;
 
 import { createHarness } from './lib/harness.mjs';
 const { assert, failures, report } = createHarness({ indent: '  ', truncate: 400 });
@@ -342,7 +342,7 @@ async function main() {
       const provYaml = (await apiText(base,
         `/api/packs/${encodeURIComponent(packAId)}/compile-artifact?env=prod&group=rules&flavor=grafana-managed&artifact=all`))
         .replaceAll('${DS_PROMETHEUS}', 'obs-pack-prom');
-      writeFileSync(join(PROV_DIR, 'tomograph-rules.yaml'), provYaml);
+      writeFileSync(join(PROV_DIR, 'observogram-rules.yaml'), provYaml);
       const reload = await fetch(`${GRAFANA_PROV_URL}/api/admin/provisioning/alerting/reload`, { method: 'POST', ...gfAuthOf() });
       assert(reload.ok, 'T2a: provisioning reload accepted', `HTTP ${reload.status}`, '2xx');
       const provRules = await api(GRAFANA_PROV_URL, '/api/v1/provisioning/alert-rules', gfAuthOf());

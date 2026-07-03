@@ -5,7 +5,8 @@
 // be a process-scoped Map: every restart lost the user's working set. This
 // module gives that registry a durable home without changing its contract:
 //
-//   .tomograph/                      (gitignored; TOMOGRAPH_WORKSPACE relocates)
+//   .observogram/                    (gitignored; OBSERVOGRAM_WORKSPACE relocates;
+//                                     a pre-rebrand .tomograph/ keeps working)
 //     packs/<id>.pack.yaml           one inspectable YAML file per pack
 //     packs/index.json               id → { label, source, createdAt, lastUsedAt }
 //
@@ -18,7 +19,7 @@
 //     never silently re-mint an id. A hand-edited workspace file keeps its
 //     id — that's documented behaviour, not drift detection's job.
 //   - Env is read lazily (at call time, not module load) so tests can point
-//     TOMOGRAPH_WORKSPACE at a temp dir before booting the server.
+//     OBSERVOGRAM_WORKSPACE at a temp dir before booting the server.
 //   - Sync fs on the write paths (files are tens of KB); lastUsedAt touches
 //     are debounced and the timer is unref'd so the process can still exit.
 //   - Durability over trust in any single syscall (2026-06-11 incident: a
@@ -366,7 +367,7 @@ export function readDeploySnapshot(deployId) {
 export function flushWorkspaceIndex() { flushIndexNow(); }
 
 // Test hook: drop the in-memory index caches so a re-pointed
-// TOMOGRAPH_WORKSPACE takes effect within the same process.
+// OBSERVOGRAM_WORKSPACE takes effect within the same process.
 export function resetWorkspaceCache() {
   for (const s of rootState.values()) {
     if (s.flushTimer) { clearTimeout(s.flushTimer); s.flushTimer = null; }

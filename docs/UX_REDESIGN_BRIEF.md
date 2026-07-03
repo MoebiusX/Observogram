@@ -32,7 +32,7 @@ more incremental patching.
 ## The product story (unchanged, non-negotiable)
 
 ```text
-1 DISCOVER   What do we have?      — the observability tomogram
+1 DISCOVER   What do we have?      — the observogram
 2 DIAGNOSE   Can we trust it?      — coverage & fidelity verdict
 3 REMEDIATE  Fix the gaps          — compile & deploy the delta
 ```
@@ -81,7 +81,7 @@ from B to A" is never drawn.
 
 ### What already works (don't regress)
 
-- Discover tab and the layered tomogram.
+- Discover tab and the layered observogram.
 - The grade header: score rows + ladder side-by-side.
 - The honesty machinery: partial-evidence banner, scaffold notes,
   out-of-scope parking, verification-not-validation language.
@@ -116,10 +116,10 @@ widgets:
 
 1. **Hero KPI band.** A top row of stat tiles — big number, unit,
    colored sparkline, delta vs a previous window ("▲ 0.62 pp vs 6h
-   ago"). Tomograph mapping: Score · Coverage · Trust · Drift fidelity
+   ago"). Observogram mapping: Score · Coverage · Trust · Drift fidelity
    · Freshness · Verified as tiles, with sparkline + delta powered by
    **journey run history** (the data already exists in
-   `.tomograph/runs/`). The grade ladder sits beside this band.
+   `.observogram/runs/`). The grade ladder sits beside this band.
 2. **Per-tile color identity.** Each tile owns a saturated accent on
    the dark ground (green/blue/purple/amber/red fills) — glanceable
    semantics, not rainbow decoration. Light theme must still hold.
@@ -135,7 +135,7 @@ widgets:
    (deploy/retrofeed/manual) · one-click act.
 6. **Dramatic-but-precise naming.** "MCP Signal Lattice", "Reliability
    Matrix" — names that sound advanced and are literally accurate.
-   Tomograph already owns "tomogram"; lean into the instrument/imaging
+   Observogram already owns the "-gram" — the observogram is the image the instrument draws; lean into the instrument/imaging
    vocabulary (lattice, strata, drill, posture).
 7. **Dark-first, glowing accents, zero clutter chrome.** Filter bar
    (env/service/pack/time) styled as quiet chips; "Powered by" footer

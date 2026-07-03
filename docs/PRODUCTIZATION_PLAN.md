@@ -19,7 +19,7 @@ designed so this stream attaches without re-architecture:
 
 | Seam | What exists today | Where | Role in this plan |
 |---|---|---|---|
-| **Actor** | `requireAuth` middleware enforces `Authorization: Bearer` on mutating routes when `TOMOGRAPH_API_TOKEN` is set, and stamps `req.tomographActor` (today: a token *label*) into every audit record | `server/index.mjs` ~392–418 | identity replaces the label with a real subject — **one assignment changes** |
+| **Actor** | `requireAuth` middleware enforces `Authorization: Bearer` on mutating routes when `OBSERVOGRAM_API_TOKEN` is set, and stamps `req.observogramActor` (today: a token *label*) into every audit record | `server/index.mjs` ~392–418 | identity replaces the label with a real subject — **one assignment changes** |
 | **Fail-closed exposure** | binding beyond loopback without a token refuses to start | `server/index.mjs` `start()` ~2317 | becomes the hosted front-door invariant: no identity configured → no network exposure |
 | **Tenancy root** | ALL state is file-rooted under one function: `workspaceRoot()` → packs registry, `deploys.jsonl`, `snapshots/`, `journeys/`, `runs/` | `server/workspace.mjs:32`, `tools/lib/journey.mjs:50` | tenancy = making this function answer *per request* instead of per process |
 | **Service scoping** | packs carry `bindings.service`; the studio's SERVICE selector and diff scope-modes already partition by service | studio header, adapter | the unit a role grant will reference |
@@ -50,7 +50,7 @@ enforced server-side, not hidden client-side.
 > **Stage 1 status — DELIVERED**, with one maintainer-requested
 > addition: a **stand-alone posture with locally-defined users** — no
 > IdP, no network dependency. Users live scrypt-hashed in a plain file
-> (`TOMOGRAPH_USERS_FILE`, default `<workspace>/users.json` — plain
+> (`OBSERVOGRAM_USERS_FILE`, default `<workspace>/users.json` — plain
 > file chosen over sqlite: file-first like everything else, zero new
 > deps, and `node:sqlite` would raise the engine floor to Node 22),
 > managed by `npm run users -- add|passwd|remove|list`. The file
@@ -80,9 +80,9 @@ enforced server-side, not hidden client-side.
   expiry).
 - **Attachment:** `requireAuth` accepts EITHER a valid session cookie
   OR the existing bearer token (the token becomes the **service
-  account / CI path** — headless CLIs keep working). `tomographActor`
+  account / CI path** — headless CLIs keep working). `observogramActor`
   becomes `sub` / email.
-- **Local mode unchanged:** no `TOMOGRAPH_OIDC_ISSUER` configured →
+- **Local mode unchanged:** no `OBSERVOGRAM_OIDC_ISSUER` configured →
   exactly today's behaviour.
 - **Immediate value even without tenancy:** real names in the deploy
   audit, and safe network exposure for a single team.
@@ -98,7 +98,7 @@ enforced server-side, not hidden client-side.
 > the journeys/runs engine answers `<workspace>/orgs/<orgId>/` inside a
 > request; the in-memory upload registry and the workspace index cache
 > are keyed per org (the two places a process-wide cache would have
-> leaked across tenants). The org comes from `X-Tomograph-Org`
+> leaked across tenants). The org comes from `X-Observogram-Org`
 > (defaulting to the user's first membership); membership is enforced
 > at the middleware seam Stage 3 roles will extend; the bearer token
 > remains the deployment-level service account. Managed by
@@ -115,7 +115,7 @@ enforced server-side, not hidden client-side.
 > (no-orgs.json) regression is asserted by every other suite.
 
 - `workspaceRoot()` becomes context-aware:
-  `<TOMOGRAPH_WORKSPACE>/orgs/<orgId>/` per request, threaded through
+  `<OBSERVOGRAM_WORKSPACE>/orgs/<orgId>/` per request, threaded through
   the few entry points that call it (registry, deploys, snapshots,
   journeys, runs). The file-first machinery underneath is **unchanged**
   — this is precisely why v1 chose files over a database.
@@ -142,7 +142,7 @@ enforced server-side, not hidden client-side.
   optional read-token env indirection, mirroring the existing
   `mcpAuthEnv` pattern). **Write tokens stay per-request pass-through**
   — the v1 secrets rule survives because it is the correct rule:
-  Tomograph never persists a credential that can mutate production.
+  Observogram never persists a credential that can mutate production.
 
 ### Stage 4 — Hosted posture (ops hardening)
 

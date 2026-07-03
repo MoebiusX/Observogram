@@ -1,14 +1,14 @@
 {
-  "name": "tomograph",
+  "name": "observogram",
   "version": "0.4.0",
-  "description": "Tomograph — the Observability Compiler. Compiles, scans, and scores ObservabilityPack spec v1.2 manifests. Express server + thin client.",
+  "description": "Observogram — the Observability Compiler. Compiles, scans, and scores ObservabilityPack spec v1.2 manifests. Express server + thin client.",
   "type": "module",
   "engines": {
     "node": ">=18"
   },
   "bin": {
     "packc": "tools/cli.mjs",
-    "tomograph": "tools/cli.mjs"
+    "observogram": "tools/cli.mjs"
   },
   "files": [
     "server/",
@@ -19,12 +19,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/MoebiusX/tomograph.git"
+    "url": "git+https://github.com/MoebiusX/Observogram.git"
   },
   "bugs": {
-    "url": "https://github.com/MoebiusX/tomograph/issues"
+    "url": "https://github.com/MoebiusX/Observogram/issues"
   },
-  "homepage": "https://github.com/MoebiusX/tomograph#readme",
+  "homepage": "https://github.com/MoebiusX/Observogram#readme",
   "author": "Carlos Montero (https://github.com/MoebiusX)",
   "publishConfig": {
     "access": "public"
@@ -64,6 +64,7 @@
     "test:verify-deploy": "node tools/test-verify-deploy.mjs",
     "test:journey": "node tools/test-journey.mjs",
     "test:golden": "node tools/test-golden-crawl.mjs",
+    "test:studio-graph": "node tools/test-studio-graph.mjs",
     "test:golden:update": "node tools/test-golden-crawl.mjs --update",
     "test:contracts": "node tools/test-contract-guard.mjs && node tools/test-contract-shapes.mjs",
     "test:contracts:update": "node tools/test-contract-shapes.mjs --update",
@@ -77,7 +78,7 @@
     "test:retrofeed": "node tools/test-retrofeed.mjs",
     "test:auth": "node server/test-auth-local.mjs && node server/test-auth-oidc.mjs",
     "users": "node tools/user-admin.mjs",
-    "test": "node --test tools/test-adapt.mjs tools/test-backend-validate.mjs tools/test-compile.mjs tools/test-contract-guard.mjs tools/test-contract-shapes.mjs tools/test-crawl.mjs tools/test-diagnostic-grade.mjs tools/test-diff.mjs tools/test-fetch-live.mjs tools/test-golden-compile.mjs tools/test-golden-crawl.mjs tools/test-journey.mjs tools/test-legacy-pack.mjs tools/test-packs.mjs tools/test-profiles.mjs tools/test-promql.mjs tools/test-promql-canon.mjs tools/test-retrofeed.mjs tools/test-traceability-graph.mjs tools/test-verify-deploy.mjs tools/test-zip.mjs server/test-auth-local.mjs server/test-auth-oidc.mjs server/test-deploy-helpers.mjs server/test-mcp-url.mjs server/test-tenancy.mjs server/test-workspace.mjs server/test-smoke.mjs",
+    "test": "node --test tools/test-adapt.mjs tools/test-backend-validate.mjs tools/test-compile.mjs tools/test-contract-guard.mjs tools/test-contract-shapes.mjs tools/test-crawl.mjs tools/test-diagnostic-grade.mjs tools/test-diff.mjs tools/test-fetch-live.mjs tools/test-golden-compile.mjs tools/test-golden-crawl.mjs tools/test-journey.mjs tools/test-legacy-pack.mjs tools/test-packs.mjs tools/test-profiles.mjs tools/test-promql.mjs tools/test-promql-canon.mjs tools/test-retrofeed.mjs tools/test-studio-graph.mjs tools/test-traceability-graph.mjs tools/test-verify-deploy.mjs tools/test-zip.mjs server/test-auth-local.mjs server/test-auth-oidc.mjs server/test-deploy-helpers.mjs server/test-mcp-url.mjs server/test-tenancy.mjs server/test-workspace.mjs server/test-smoke.mjs",
     "lint": "eslint .",
     "coverage": "c8 npm test",
     "sync-spec": "node tools/sync-spec.mjs",
@@ -111,7 +112,7 @@
   },
   "license": "MIT",
   "keywords": [
-    "tomograph",
+    "observogram",
     "observability-compiler",
     "observability",
     "otel",

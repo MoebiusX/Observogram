@@ -38,7 +38,7 @@ metadata:
   annotations:
     docs: https://docs.example.internal/services/platform-edge
     on_call_handbook: https://runbooks.example.internal/edge
-    # Tomograph reads this to frame the diagnostic-grade Coverage card as
+    # Observogram reads this to frame the diagnostic-grade Coverage card as
     # "vs the Observability Contract" — this pack IS the contract,
     # not a generic tool/maturity reference.
     studio.role: contract

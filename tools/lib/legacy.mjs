@@ -1,6 +1,6 @@
 // tools/lib/legacy.mjs
 //
-// Upconverts the PREVIOUS Tomograph pack format — the layered "studio-shape"
+// Upconverts the PREVIOUS Observogram (né Tomograph) pack format — the layered "studio-shape"
 // JSON that predates the canonical v1.2 manifest (Phase 5, commit 7c79975) —
 // into a valid canonical ObservabilityPack. Browser-friendly pure ESM (no
 // Node APIs), same contract as adapter.mjs / crawler.mjs, so the server,

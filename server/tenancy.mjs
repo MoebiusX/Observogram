@@ -4,7 +4,7 @@
 // The whole design is one move: workspaceRoot() becomes context-aware.
 // When tenancy is armed, every org gets its own subtree —
 //
-//   <TOMOGRAPH_WORKSPACE>/
+//   <OBSERVOGRAM_WORKSPACE>/
 //     users.json, session-secret, orgs.json     deployment-level (shared)
 //     orgs/<orgId>/packs|deploys.jsonl|snapshots|journeys|runs
 //
@@ -34,13 +34,12 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, rmSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-
-function env(name) { return (process.env[name] || '').trim(); }
+import { join } from 'node:path';
+import { baseWorkspacePath } from '../tools/lib/brand-env.mjs';
 
 // The deployment-level base — auth state (users.json, session-secret)
 // and orgs.json always live here, never inside an org subtree.
-export function baseWorkspaceRoot() { return resolve(env('TOMOGRAPH_WORKSPACE') || '.tomograph'); }
+export function baseWorkspaceRoot() { return baseWorkspacePath(); }
 
 export function orgsFilePath() { return join(baseWorkspaceRoot(), 'orgs.json'); }
 

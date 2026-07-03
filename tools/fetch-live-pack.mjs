@@ -41,6 +41,7 @@ import { inferSlisFromRecordingRules } from './lib/sli-inference.mjs';
 import { materializeL2XFromBackends } from './lib/l2x.mjs';
 import { serviceSlug as slug } from './lib/slug.mjs';
 import { probeCandidates, capabilityTool, candidateTool, BUILD_INFO_PROBES } from './lib/contracts/mcp-capabilities.mjs';
+import { brandEnv } from './lib/brand-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = resolve(__dirname, '..', 'vendor', 'observability-pack-spec', `v${SPEC_VERSION}`, 'observability-pack.schema.json');
@@ -50,13 +51,13 @@ const MCP_URL_DEFAULT  = process.env.MCP_URL  || 'https://mcp.example.com/observ
 const OUTPUT           = process.env.OUTPUT   || 'examples/production-live.pack.yaml';
 const MCP_AUTH_DEFAULT = process.env.MCP_AUTH || null;
 const PACK_NAME        = (process.env.PACK_NAME || 'production-live').toLowerCase();
-const GRAFANA_DASHBOARD_SEARCH_LIMIT = Math.min(Number(process.env.TOMOGRAPH_GRAFANA_DASHBOARD_LIMIT || 100) || 100, 500);
-const GRAFANA_DASHBOARD_PANEL_LIMIT  = Math.min(Number(process.env.TOMOGRAPH_GRAFANA_PANEL_LIMIT || 500) || 500, 500);
-const GRAFANA_DASHBOARD_INCLUDE_JSON = !/^(0|false|no|off)$/i.test(process.env.TOMOGRAPH_GRAFANA_INCLUDE_JSON || 'true');
+const GRAFANA_DASHBOARD_SEARCH_LIMIT = Math.min(Number(brandEnv('GRAFANA_DASHBOARD_LIMIT') || 100) || 100, 500);
+const GRAFANA_DASHBOARD_PANEL_LIMIT  = Math.min(Number(brandEnv('GRAFANA_PANEL_LIMIT') || 500) || 500, 500);
+const GRAFANA_DASHBOARD_INCLUDE_JSON = !/^(0|false|no|off)$/i.test(brandEnv('GRAFANA_INCLUDE_JSON') || 'true');
 const JSON_ANNOTATION_BLOCK_LENGTH = 4096;
 // Per-request MCP timeout. Without it a hung endpoint stalls the fetch (and
 // the server's /api/refresh-live caller) forever. Capped at 5 minutes.
-const MCP_TIMEOUT_MS = Math.min(Number(process.env.TOMOGRAPH_MCP_TIMEOUT_MS || 30_000) || 30_000, 300_000);
+const MCP_TIMEOUT_MS = Math.min(Number(brandEnv('MCP_TIMEOUT_MS') || 30_000) || 30_000, 300_000);
 
 // Single-tool capability names resolved ONCE from the contract registry
 // (tools/lib/contracts/mcp-capabilities.mjs). The registry owns every MCP
@@ -312,7 +313,7 @@ function specSlug(s, fallback = 'item') {
 }
 
 function dashboardIdFrom(item, fallback = 'dashboard') {
-  // Dashboards deployed by Tomograph self-identify via the obs-pack-id
+  // Dashboards deployed by Observogram self-identify via the obs-pack-id
   // tag (uids are capped + fingerprinted, so they can't carry the
   // declared id). Honouring the tag closes the deploy→fetch→diff round
   // trip with the SAME canonical id the source pack declares; dashboards
@@ -1139,14 +1140,14 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
         try { return await fn(); }
         catch (e2) {
           if (!probeFailures[name]) probeFailures[name] = e2.message;
-          if (process.env.TOMOGRAPH_DEBUG) {
+          if (brandEnv('DEBUG')) {
             process.stderr.write(`[fetch-live-pack] probe ${name} failed twice: ${e2.message}\n`);
           }
           return null;
         }
       }
       if (!probeFailures[name]) probeFailures[name] = e.message;
-      if (process.env.TOMOGRAPH_DEBUG) {
+      if (brandEnv('DEBUG')) {
         process.stderr.write(`[fetch-live-pack] probe ${name} failed: ${e.message}\n`);
       }
       return null;
@@ -1156,7 +1157,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
   const initialized = await rpc('initialize', {
     protocolVersion: '2025-06-18',
     capabilities: {},
-    clientInfo: { name: 'tomograph-fetcher', version: '0.4.0' },
+    clientInfo: { name: 'observogram-fetcher', version: '0.4.0' },
   }).then(() => true).catch(() => false);
   if (initialized) await notify('notifications/initialized').catch(() => {});
 

@@ -59,9 +59,9 @@ export function deployToolMissingError(tool, availableTools) {
     .slice(0, 18);
   let hint = 'Configure a Grafana write-capable MCP gateway, or add a compatible deploy adapter before retrying.';
   if (tool === GRAFANA_ALERT_RULE_TOOL) {
-    hint = 'For otel-mcp-server, set MCP_ENABLE_WRITES=true, configure GRAFANA_URL and GRAFANA_AUTH_TOKEN with alert.provisioning:write on the MCP server, and pass a valid MCP client key in Tomograph when MCP_AUTH_KEYS is configured.';
+    hint = 'For otel-mcp-server, set MCP_ENABLE_WRITES=true, configure GRAFANA_URL and GRAFANA_AUTH_TOKEN with alert.provisioning:write on the MCP server, and pass a valid MCP client key in Observogram when MCP_AUTH_KEYS is configured.';
   } else if (tool === GRAFANA_DASHBOARD_TOOL) {
-    hint = 'For otel-mcp-server, set MCP_ENABLE_WRITES=true, configure GRAFANA_URL and GRAFANA_AUTH_TOKEN with dashboards:write on the MCP server, and pass a valid MCP client key in Tomograph when MCP_AUTH_KEYS is configured.';
+    hint = 'For otel-mcp-server, set MCP_ENABLE_WRITES=true, configure GRAFANA_URL and GRAFANA_AUTH_TOKEN with dashboards:write on the MCP server, and pass a valid MCP client key in Observogram when MCP_AUTH_KEYS is configured.';
   }
   const suffix = related.length
     ? ` Advertised related tools: ${related.join(', ')}.`

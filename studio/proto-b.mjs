@@ -11,7 +11,7 @@
 
 import { state } from './state.mjs';
 import { escapeHtml } from './util.mjs';
-import { openDeployModal, renderMainView } from './app.mjs';
+import { host as appHost } from './host.mjs';
 import {
   buildProtoModel, protoEnsureComparison, projectGrade, projectionSentence,
   loadRunHistory, runHistory, runSeries, deltaVsPrevious,
@@ -34,7 +34,7 @@ export function renderProtoDiagnoseB(view) {
   // callback only re-renders when no gate is pending — re-entering the
   // gate would double-fetch the diff.
   loadRunHistory(() => {
-    if (state.view === 'compare' && (!state.compareBId || state.packB)) renderMainView();
+    if (state.view === 'compare' && (!state.compareBId || state.packB)) appHost.renderMainView();
   });
   if (protoEnsureComparison(view)) return;
   const m = buildProtoModel();
@@ -274,12 +274,12 @@ function renderPanels(host, m) {
     btn.addEventListener('click', () => {
       const id = btn.closest('.pb-panel').dataset.panel;
       if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
-      renderMainView();
+      appHost.renderMainView();
     });
   });
   host.querySelector('#pb-open-queue')?.addEventListener('click', () => {
     state.view = 'compile';
-    renderMainView();
+    appHost.renderMainView();
   });
 }
 
@@ -356,16 +356,16 @@ export function renderProtoRemediateB(view) {
     cb.addEventListener('change', () => {
       const uid = cb.closest('tr').dataset.uid;
       if (cb.checked) deselected.delete(uid); else deselected.add(uid);
-      renderMainView();
+      appHost.renderMainView();
     });
   });
   root.querySelectorAll('[data-deploy]').forEach(btn => {
     btn.addEventListener('click', () => {
       const item = m.items.find(i => i.uid === btn.dataset.deploy);
       if (!item?.deployIdentity) return;
-      openDeployModal({ packId: state.selectedPackId, presetIdentities: new Set([item.deployIdentity]) });
+      appHost.openDeployModal({ packId: state.selectedPackId, presetIdentities: new Set([item.deployIdentity]) });
     });
   });
   root.querySelector('#pb-deploy')?.addEventListener('click', () =>
-    openDeployModal({ packId: state.selectedPackId, presetIdentities: dep.identities }));
+    appHost.openDeployModal({ packId: state.selectedPackId, presetIdentities: dep.identities }));
 }

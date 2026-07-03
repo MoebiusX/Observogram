@@ -3,13 +3,13 @@
 // The artefact detail drawer — the slide-in panel that renders an artefact's
 // full spec, cross-references, and per-type panels (SLI/SLO/backend/dashboard/
 // chaos/…). Opened from the cards (openDrawer) and closed from the chrome
-// (closeDrawer). Orchestration-coupled: imports cardKey + the re-render
-// entrypoints back from app.mjs (a safe call-time cycle).
+// (closeDrawer). Re-render entrypoints come through the studio host seam
+// (host.mjs); cardKey is imported from layers-view.mjs.
 
 import { state, $, $$ } from './state.mjs';
 import { L4_SUBGROUPS } from './constants.mjs';
 import { escapeHtml, toast } from './util.mjs';
-import { renderMainView, renderTabs } from './app.mjs';
+import { host as appHost } from './host.mjs';
 import { cardKey } from './layers-view.mjs';
 
 // ---------- drawer ----------
@@ -147,8 +147,8 @@ function jumpToRef(symbol) {
   }
   if (!hit) { toast(`no artefact defines ${symbol}`, 'error'); return; }
   state.activeLayer = hit.layerId;
-  renderTabs();
-  renderMainView();
+  appHost.renderTabs();
+  appHost.renderMainView();
   openDrawer(hit.a, { id: hit.layerId }, hit.sublayerKey);
   // Scroll the now-active card into view if visible
   requestAnimationFrame(() => {

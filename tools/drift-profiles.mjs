@@ -71,7 +71,7 @@ function tagToVersion(tag) {
 }
 
 async function latestRelease(repo) {
-  const headers = { 'Accept': 'application/vnd.github+json', 'User-Agent': 'tomograph-drift-profiles' };
+  const headers = { 'Accept': 'application/vnd.github+json', 'User-Agent': 'observogram-drift-profiles' };
   if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
 
   // Prefer /releases/latest; fall back to /tags for repos that don't mark a

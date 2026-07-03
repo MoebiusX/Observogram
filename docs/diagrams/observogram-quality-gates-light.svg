@@ -1,23 +1,23 @@
 <svg viewBox="0 0 1240 780" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, system-ui, sans-serif">
-<title>Tomograph quality gates (dark), verified at commit 795f122</title>
-<desc>Every hand-off between Tomograph components is guarded by an input/output gate: schema, golden, backend attestation (T1), deploy snapshot, live-evidence honesty, the T4 round trip, weighted trust, and the audit bar. Side panels list what the gates caught on first run and how CI enforces them.</desc>
+<title>Observogram quality gates (light), verified at commit 795f122</title>
+<desc>Every hand-off between Observogram components is guarded by an input/output gate: schema, golden, backend attestation (T1), deploy snapshot, live-evidence honesty, the T4 round trip, weighted trust, and the audit bar. Side panels list what the gates caught on first run and how CI enforces them.</desc>
 <style>
-  .pg{fill:#0b1220;}
-  .h1{fill:#e7ecf6;font-size:24px;font-weight:800;letter-spacing:-.2px;}
-  .h2{fill:#90a0bd;font-size:12.5px;}
-  .sec{fill:#9fb0cc;font-size:12px;font-weight:800;letter-spacing:.12em;}
-  .row{fill:#111a2e;stroke:#26324c;stroke-width:1.2;}
-  .gnum{fill:#c084fc;font-size:11px;font-weight:800;}
-  .gname{fill:#e7ecf6;font-size:13px;font-weight:700;}
-  .gmech{fill:#90a0bd;font-size:11px;}
-  .flow{fill:#5e6f8e;font-size:10px;font-weight:600;}
-  .ok{fill:#7ee9bd;font-size:10.5px;font-weight:800;letter-spacing:.04em;}
-  .okchip{fill:#0f2a22;stroke:#34d399;stroke-width:1.2;}
-  .panel{fill:#11192c;stroke:#26324c;stroke-width:1.3;}
-  .pt{fill:#9fb0cc;font-size:12px;font-weight:800;letter-spacing:.06em;}
-  .pi{fill:#90a0bd;font-size:10.6px;}
-  .red{fill:#fca5a5;}
-  .note{fill:#5e6f8e;font-size:10px;}
+  .pg{fill:#f6f8fc;}
+  .h1{fill:#0f172a;font-size:24px;font-weight:800;letter-spacing:-.2px;}
+  .h2{fill:#64748b;font-size:12.5px;}
+  .sec{fill:#475569;font-size:12px;font-weight:800;letter-spacing:.12em;}
+  .row{fill:#ffffff;stroke:#d3dcea;stroke-width:1.2;}
+  .gnum{fill:#7c3aed;font-size:11px;font-weight:800;}
+  .gname{fill:#1e293b;font-size:13px;font-weight:700;}
+  .gmech{fill:#64748b;font-size:11px;}
+  .flow{fill:#94a3b8;font-size:10px;font-weight:600;}
+  .ok{fill:#047857;font-size:10.5px;font-weight:800;letter-spacing:.04em;}
+  .okchip{fill:#ecfdf5;stroke:#10b981;stroke-width:1.2;}
+  .panel{fill:#ffffff;stroke:#d3dcea;stroke-width:1.3;}
+  .pt{fill:#475569;font-size:12px;font-weight:800;letter-spacing:.06em;}
+  .pi{fill:#64748b;font-size:10.6px;}
+  .red{fill:#b91c1c;}
+  .note{fill:#94a3b8;font-size:10px;}
   .i{fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
 </style>
 <defs>
@@ -28,7 +28,7 @@
 
 <rect class="pg" x="0" y="0" width="1240" height="780"/>
 
-<use href="#g-shield" x="28" y="24" width="26" height="26" color="#c084fc"/>
+<use href="#g-shield" x="28" y="24" width="26" height="26" color="#7c3aed"/>
 <text class="h1" x="66" y="44">Quality gates — every hand-off attested</text>
 <text class="h2" x="66" y="64">input/output contracts between components · enforced in CI on every push · verified at HEAD 795f122</text>
 
@@ -109,7 +109,7 @@
 <!-- ============ SIDE PANELS ============ -->
 <g><!-- caught -->
   <rect class="panel" x="794" y="104" width="418" height="332" rx="10"/>
-  <use href="#g-bug" x="810" y="120" width="18" height="18" color="#fca5a5"/>
+  <use href="#g-bug" x="810" y="120" width="18" height="18" color="#b91c1c"/>
   <text class="pt" x="836" y="134">WHAT THE GATES CAUGHT · first runs</text>
   <text class="pi red" x="810" y="160" font-weight="700">9 real compiler bug classes — found by the gates,</text>
   <text class="pi red" x="810" y="175" font-weight="700">fixed the same day, locked by regression tests:</text>
@@ -130,21 +130,21 @@
 
 <g><!-- enforcement -->
   <rect class="panel" x="794" y="454" width="418" height="286" rx="10"/>
-  <use href="#g-ci" x="810" y="470" width="18" height="18" color="#7ee9bd"/>
+  <use href="#g-ci" x="810" y="470" width="18" height="18" color="#047857"/>
   <text class="pt" x="836" y="484">ENFORCEMENT · GitHub Actions, every push</text>
-  <text class="pi" x="810" y="510" font-weight="700" fill="#e7ecf6">validate job</text>
+  <text class="pi" x="810" y="510" font-weight="700" fill="#1e293b">validate job</text>
   <text class="pi" x="810" y="527">lint 0 errors · 19 test suites · coverage · dep audit (high+)</text>
   <text class="pi" x="810" y="544">spec checksums · golden gate · backend attestation (T1) strict</text>
   <text class="pi" x="810" y="561">validator binaries cached on their sha256 pins</text>
-  <text class="pi" x="810" y="588" font-weight="700" fill="#e7ecf6">backend-live job (docker)</text>
+  <text class="pi" x="810" y="588" font-weight="700" fill="#1e293b">backend-live job (docker)</text>
   <text class="pi" x="810" y="605">disposable Grafana 12.4.4 · T4 round trip strict</text>
   <text class="pi" x="810" y="622">MCP gateway bridge = the only test scaffolding; every other</text>
   <text class="pi" x="810" y="639">layer under test is production code</text>
-  <line x1="810" y1="658" x2="1196" y2="658" stroke="#26324c"/>
-  <text class="pi" x="810" y="680" font-weight="700" fill="#e7ecf6">developer loop</text>
+  <line x1="810" y1="658" x2="1196" y2="658" stroke="#d3dcea"/>
+  <text class="pi" x="810" y="680" font-weight="700" fill="#1e293b">developer loop</text>
   <text class="pi" x="810" y="697">npm run fetch-validators → test:backend → test:backend:live</text>
   <text class="note" x="810" y="722">missing tooling skips LOUDLY locally · --strict in CI fails instead</text>
 </g>
 
-<text class="note" x="28" y="764">Tomograph · docs/TEST_PLAN_COMPILER_VALIDITY.md — tiers T0–T4 · T2 (Grafana 13 matrix) and T3 (behavioral promtool fixtures) are the next planned gates</text>
+<text class="note" x="28" y="764">Observogram · docs/TEST_PLAN_COMPILER_VALIDITY.md — tiers T0–T4 · T2 (Grafana 13 matrix) and T3 (behavioral promtool fixtures) are the next planned gates</text>
 </svg>

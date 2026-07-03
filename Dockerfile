@@ -1,7 +1,7 @@
-# Tomograph — studio + API in one Express server (server/index.mjs).
+# Observogram — studio + API in one Express server (server/index.mjs).
 #
-# Build:  docker build -t tomograph:0.4.0 .
-# Run:    docker run --rm -p 8000:8000 tomograph:0.4.0
+# Build:  docker build -t observogram:0.4.0 .
+# Run:    docker run --rm -p 8000:8000 observogram:0.4.0
 # Open:   http://127.0.0.1:8000
 #
 # The k8s manifests under deploy/k8s/ expect this image; see deploy/k8s/README.md.
@@ -9,9 +9,9 @@ FROM node:22-alpine
 
 # Bake the build identifier into the image — the container has no .git,
 # so server/version.mjs reads this instead. Pass your CI run number/sha:
-#   docker build --build-arg TOMOGRAPH_BUILD=412.a1b2c3d -t tomograph:0.4.0 .
-ARG TOMOGRAPH_BUILD=container
-ENV TOMOGRAPH_BUILD=$TOMOGRAPH_BUILD
+#   docker build --build-arg OBSERVOGRAM_BUILD=412.a1b2c3d -t observogram:0.4.0 .
+ARG OBSERVOGRAM_BUILD=container
+ENV OBSERVOGRAM_BUILD=$OBSERVOGRAM_BUILD
 
 ENV NODE_ENV=production
 WORKDIR /app

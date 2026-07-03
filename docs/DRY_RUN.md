@@ -2,7 +2,7 @@
 
 This runbook is for the Krystaline dry run on June 10, 2026.
 
-The purpose is to demonstrate the main Tomograph value loop:
+The purpose is to demonstrate the main Observogram value loop:
 
 ```text
 Discover -> Diagnose -> Remediate -> Validate again
@@ -13,12 +13,12 @@ The demo question is:
 > Is our observability diagnostic-grade?
 
 The OLA is represented by the repo-derived ObservabilityPack. The live MCP pack
-is production evidence. The dry run is valuable only when Tomograph compares
+is production evidence. The dry run is valuable only when Observogram compares
 those two things directly.
 
 ## Success Criteria
 
-The dry run is successful when Tomograph can show all of the following:
+The dry run is successful when Observogram can show all of the following:
 
 - repo-derived Pack A loads cleanly
 - live MCP-derived Pack B loads cleanly
@@ -117,7 +117,7 @@ Confirm the selector identifies the file source:
 krystalinex-core · v0.1.0-crawled · from krystaline.service.repo.yaml
 ```
 
-Review the tomogram layers quickly:
+Review the observogram layers quickly:
 
 - L1 Contract
 - L2 Telemetry
@@ -256,7 +256,7 @@ Required MCP server environment:
 MCP_ENABLE_WRITES=true
 GRAFANA_URL=https://grafana.example.net
 GRAFANA_AUTH_TOKEN=glsa_...
-MCP_AUTH_KEYS='{"keys":[{"id":"tomograph","key":"sk-tomograph-prod"}]}'
+MCP_AUTH_KEYS='{"keys":[{"id":"observogram","key":"sk-observogram-prod"}]}'
 ```
 
 ## Post-Deploy Validation
@@ -272,7 +272,7 @@ After deploy:
 The expected story is not "everything is perfect." The expected story is:
 
 ```text
-Tomograph found the gap, compiled the fix, deployed the source-backed delta,
+Observogram found the gap, compiled the fix, deployed the source-backed delta,
 and verified the new live state.
 ```
 

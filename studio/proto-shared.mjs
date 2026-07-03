@@ -36,7 +36,7 @@ import {
   DELTA_BADNESS,
 } from './diagnostic-grade.mjs';
 import { catalogEntryFor, loadDiff, LAYERS_FOR_DIFF } from './compare-view.mjs';
-import { loadPackB, renderMainView, renderTabs } from './app.mjs';
+import { host as appHost } from './host.mjs';
 
 export const PROTO_LAYER_NAMES = {
   L1: 'Contract', L2: 'Telemetry', L2X: 'Extended', L3: 'Insight',
@@ -60,16 +60,16 @@ export function protoEnsureComparison(host) {
   `;
   host.appendChild(loading);
   Promise.all([
-    haveB ? Promise.resolve() : loadPackB(),
+    haveB ? Promise.resolve() : appHost.loadPackB(),
     (state.diff && !state.diff.error) ? Promise.resolve() : loadDiff(),
-  ]).then(() => { renderTabs(); renderMainView(); })
+  ]).then(() => { appHost.renderTabs(); appHost.renderMainView(); })
     .catch((e) => {
       loading.classList.remove('loading-compare');
       loading.innerHTML = `
         <span>Comparison failed to load: ${escapeHtml(e?.message || 'unknown error')}</span>
         <button type="button" class="ctrl-btn loading-compare-retry">retry</button>
       `;
-      loading.querySelector('.loading-compare-retry')?.addEventListener('click', () => renderMainView());
+      loading.querySelector('.loading-compare-retry')?.addEventListener('click', () => appHost.renderMainView());
     });
   return true;
 }

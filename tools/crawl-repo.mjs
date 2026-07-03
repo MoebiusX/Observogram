@@ -14,6 +14,7 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, relative, basename } from 'node:path';
 import { crawlToYaml } from './lib/crawler.mjs';
 import { validateCanonical } from './lib/validator.mjs';
+import { brandEnv } from './lib/brand-env.mjs';
 import { readFileSync } from 'node:fs';
 const SCHEMA = JSON.parse(readFileSync(
   new URL('../vendor/observability-pack-spec/v1.2/observability-pack.schema.json', import.meta.url), 'utf8'));
@@ -119,7 +120,7 @@ function parseArgs(argv) {
 
 async function main() {
   const opts = parseArgs(process.argv);
-  if (!opts.diffScopeMode && process.env.TOMOGRAPH_DIFF_SCOPE) opts.diffScopeMode = process.env.TOMOGRAPH_DIFF_SCOPE;
+  if (!opts.diffScopeMode && brandEnv('DIFF_SCOPE')) opts.diffScopeMode = brandEnv('DIFF_SCOPE');
   if (opts.help) { process.stdout.write(USAGE); process.exit(0); }
   if (!opts.repoPath) {
     process.stderr.write(USAGE);

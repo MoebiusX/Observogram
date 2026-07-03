@@ -1,19 +1,19 @@
 <svg viewBox="0 0 1240 812" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, system-ui, sans-serif">
-<title>Tomograph architecture (light), verified at commit 795f122</title>
-<desc>Light architecture map. Studio over HTTP to Express server importing a pure-ESM engine. The engine returns diff plus requirement-chain integrity which feeds the studio grade.</desc>
+<title>Observogram architecture (dark), verified at commit 795f122</title>
+<desc>Dark studio-themed architecture map. Studio over HTTP to Express server importing a pure-ESM engine. The engine returns diff plus requirement-chain integrity which feeds the studio grade.</desc>
 <style>
-  .pg{fill:#f6f8fc;}
-  .band{fill:#ffffff;stroke:#d3dcea;stroke-width:1.4;} .bl{fill:#475569;font-size:12.5px;font-weight:700;letter-spacing:.03em;}
-  .mod{fill:#f1f5fb;stroke:#cbd6e6;stroke-width:1.1;} .mt{fill:#1e293b;font-size:12px;font-weight:700;} .sub{fill:#64748b;font-size:10px;} .note{fill:#94a3b8;font-size:9.5px;}
-  .acc{fill:#f4ecfe;stroke:#8b5cf6;stroke-width:1.8;} .at{fill:#6d28d9;font-size:12px;font-weight:700;}
-  .grn{fill:#ecfdf5;stroke:#10b981;stroke-width:1.5;} .gt{fill:#047857;font-size:12px;font-weight:700;}
-  .warn{fill:#fef2f2;stroke:#ef4444;stroke-width:1.4;} .wt{fill:#b91c1c;font-size:12px;font-weight:700;}
-  .side{fill:#fffbeb;stroke:#d97706;stroke-width:1.2;} .st{fill:#b45309;font-size:11.5px;font-weight:700;}
-  .ar{stroke:#94a3b8;stroke-width:2.2;fill:none;} .arl{fill:#64748b;font-size:10.5px;}
+  .pg{fill:#0b1220;}
+  .band{fill:#111a2e;stroke:#26324c;stroke-width:1.4;} .bl{fill:#9fb0cc;font-size:12.5px;font-weight:700;letter-spacing:.03em;}
+  .mod{fill:#16203a;stroke:#2a3858;stroke-width:1.1;} .mt{fill:#e7ecf6;font-size:12px;font-weight:700;} .sub{fill:#90a0bd;font-size:10px;} .note{fill:#5e6f8e;font-size:9.5px;}
+  .acc{fill:#1d1638;stroke:#a855f7;stroke-width:1.8;} .at{fill:#c9b6fb;font-size:12px;font-weight:700;}
+  .grn{fill:#0f2a22;stroke:#34d399;stroke-width:1.5;} .gt{fill:#7ee9bd;font-size:12px;font-weight:700;}
+  .warn{fill:#2a1418;stroke:#f87171;stroke-width:1.4;} .wt{fill:#fca5a5;font-size:12px;font-weight:700;}
+  .side{fill:#241a08;stroke:#eab308;stroke-width:1.2;} .st{fill:#fcd34d;font-size:11.5px;font-weight:700;}
+  .ar{stroke:#6b7c9c;stroke-width:2.2;fill:none;} .arl{fill:#8ea0bd;font-size:10.5px;}
   .i{fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;}
 </style>
 <defs>
-  <marker id="dn" markerWidth="11" markerHeight="11" refX="5.5" refY="8" orient="auto"><path d="M2,2 L5.5,8 L9,2" fill="none" stroke="#94a3b8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></marker>
+  <marker id="dn" markerWidth="11" markerHeight="11" refX="5.5" refY="8" orient="auto"><path d="M2,2 L5.5,8 L9,2" fill="none" stroke="#6b7c9c" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></marker>
   <symbol id="ic-browser" viewBox="0 0 24 24"><rect class="i" x="3" y="4" width="18" height="15" rx="2"/><path class="i" d="M3 8h18"/></symbol>
   <symbol id="ic-server" viewBox="0 0 24 24"><rect class="i" x="3" y="4" width="18" height="6" rx="1.5"/><rect class="i" x="3" y="14" width="18" height="6" rx="1.5"/><circle cx="7" cy="7" r="0.7" fill="currentColor"/><circle cx="7" cy="17" r="0.7" fill="currentColor"/></symbol>
   <symbol id="ic-chip" viewBox="0 0 24 24"><rect class="i" x="6" y="6" width="12" height="12" rx="2"/><path class="i" d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/></symbol>
@@ -27,7 +27,7 @@
   <symbol id="ic-shield" viewBox="0 0 24 24"><path class="i" d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path class="i" d="M9 12l2 2 4-4"/></symbol>
   <symbol id="ic-pulse" viewBox="0 0 24 24"><path class="i" d="M3 12h4l2-5 3 10 2-5h7"/></symbol>
   <symbol id="ic-flask" viewBox="0 0 24 24"><path class="i" d="M9 3h6M10 3v6l-5 8a2 2 0 002 3h10a2 2 0 002-3l-5-8V3"/><path class="i" d="M7.5 14h9"/></symbol>
-  <symbol id="ic-book" viewBox="0 0 24 24"><path class="i" d="M4 5a2 2 0 012-2h13v16H6a2 2 0 00-2 2z"/><path class="i" d="M4 19a2 2 0 012-2h13"/></symbol>
+  <symbol id="ic-book" viewBox="0 0 24 24"><path class="i" d="M4 5a2 2 0 012-2h13v16H6a2 2 0 00-2 2z"/><path class="i" d="M4 19a2 2 0 002-2h13"/></symbol>
   <symbol id="ic-warn" viewBox="0 0 24 24"><path class="i" d="M12 4l9 16H3z"/><path class="i" d="M12 10v4"/><circle cx="12" cy="17.2" r="0.8" fill="currentColor"/></symbol>
 </defs>
 
@@ -35,78 +35,80 @@
 
 <!-- STUDIO -->
 <rect class="band" x="20" y="22" width="760" height="128" rx="12"/>
-<use href="#ic-browser" x="34" y="30" width="17" height="17" color="#475569"/><text class="bl" x="58" y="42">STUDIO · thin vanilla-JS client (studio/)</text>
-<rect class="mod" x="34" y="56" width="172" height="80" rx="8"/><use href="#ic-cube" x="44" y="68" width="15" height="15" color="#475569"/><text class="mt" x="64" y="80">Shell</text><text class="sub" x="44" y="100">app · state · api</text><text class="sub" x="44" y="115">router · home · MCP</text>
-<rect class="mod" x="218" y="56" width="172" height="80" rx="8"/><use href="#ic-compass" x="228" y="68" width="15" height="15" color="#475569"/><text class="mt" x="248" y="80">Discover</text><text class="sub" x="228" y="100">layers-view · drawer</text><text class="sub" x="228" y="115">the tomogram</text>
-<rect class="acc" x="402" y="56" width="172" height="80" rx="8"/><use href="#ic-stetho" x="412" y="68" width="15" height="15" color="#6d28d9"/><text class="at" x="432" y="80">Diagnose ★</text><text class="sub" x="412" y="100">compare-view (3.1k)</text><text class="sub" x="412" y="115">grade · drift · chain</text>
-<rect class="mod" x="586" y="56" width="180" height="80" rx="8"/><use href="#ic-wrench" x="596" y="68" width="15" height="15" color="#475569"/><text class="mt" x="616" y="80">Remediate</text><text class="sub" x="596" y="100">compile-view · reconcile</text><text class="sub" x="596" y="115">+ atlases · otlp</text><text class="note" x="596" y="129" fill="#b91c1c">UI · not unit-tested</text>
+<use href="#ic-browser" x="34" y="30" width="17" height="17" color="#9fb0cc"/><text class="bl" x="58" y="42">STUDIO · thin vanilla-JS client (studio/)</text>
+<rect class="mod" x="34" y="56" width="172" height="80" rx="8"/><use href="#ic-cube" x="44" y="68" width="15" height="15" color="#cbd5e1"/><text class="mt" x="64" y="80">Shell</text><text class="sub" x="44" y="100">app · state · api</text><text class="sub" x="44" y="115">router · home · MCP</text>
+<rect class="mod" x="218" y="56" width="172" height="80" rx="8"/><use href="#ic-compass" x="228" y="68" width="15" height="15" color="#cbd5e1"/><text class="mt" x="248" y="80">Discover</text><text class="sub" x="228" y="100">layers-view · drawer</text><text class="sub" x="228" y="115">the tomogram</text>
+<rect class="acc" x="402" y="56" width="172" height="80" rx="8"/><use href="#ic-stetho" x="412" y="68" width="15" height="15" color="#c9b6fb"/><text class="at" x="432" y="80">Diagnose ★</text><text class="sub" x="412" y="100">compare-view (3.1k)</text><text class="sub" x="412" y="115">grade · drift · chain</text>
+<rect class="mod" x="586" y="56" width="180" height="80" rx="8"/><use href="#ic-wrench" x="596" y="68" width="15" height="15" color="#cbd5e1"/><text class="mt" x="616" y="80">Remediate</text><text class="sub" x="596" y="100">compile-view · reconcile</text><text class="sub" x="596" y="115">+ atlases · otlp</text><text class="note" x="596" y="129" fill="#fca5a5">UI · not unit-tested</text>
 
+<!-- gap 1: single arrow, label well clear -->
 <line class="ar" x1="120" y1="152" x2="120" y2="184" marker-end="url(#dn)"/>
 <text class="arl" x="138" y="172">HTTP /api/*  —  server returns { diff, chain-integrity }</text>
 
 <!-- SERVER -->
 <rect class="band" x="20" y="188" width="760" height="90" rx="12"/>
-<use href="#ic-server" x="34" y="196" width="17" height="17" color="#475569"/><text class="bl" x="58" y="208">SERVER · Express (server/index.mjs · 1.4k)</text>
+<use href="#ic-server" x="34" y="196" width="17" height="17" color="#9fb0cc"/><text class="bl" x="58" y="208">SERVER · Express (server/index.mjs · 1.4k)</text>
 <rect class="mod" x="34" y="220" width="356" height="48" rx="8"/><text class="mt" x="44" y="240">Pack registry</text><text class="sub" x="44" y="257">catalog ∪ examples ∪ uploads</text>
 <rect class="mod" x="402" y="220" width="364" height="48" rx="8"/><text class="mt" x="412" y="240">API endpoints</text><text class="sub" x="412" y="257">diff · deploy-bulk ⛨ snapshot→rollback · audit log · SSRF-guarded</text>
 
+<!-- gap 2 -->
 <line class="ar" x1="120" y1="278" x2="120" y2="312" marker-end="url(#dn)"/>
 <text class="arl" x="138" y="299">imports (ESM)</text>
 
 <!-- ENGINE -->
 <rect class="band" x="20" y="314" width="760" height="472" rx="12"/>
-<use href="#ic-chip" x="34" y="322" width="17" height="17" color="#475569"/><text class="bl" x="58" y="334">ENGINE · tools/lib (pure ESM · shared by server + studio + CLIs)</text>
+<use href="#ic-chip" x="34" y="322" width="17" height="17" color="#9fb0cc"/><text class="bl" x="58" y="334">ENGINE · tools/lib (pure ESM · shared by server + studio + CLIs)</text>
 
-<rect class="mod" x="34" y="348" width="232" height="148" rx="8"/><use href="#ic-swap" x="46" y="360" width="15" height="15" color="#475569"/><text class="mt" x="66" y="372">Decompile</text>
+<rect class="mod" x="34" y="348" width="232" height="148" rx="8"/><use href="#ic-swap" x="46" y="360" width="15" height="15" color="#cbd5e1"/><text class="mt" x="66" y="372">Decompile</text>
 <text class="sub" x="46" y="394">crawler — repo x-ray (950)</text><text class="sub" x="46" y="410">sli-inference · l2x</text><text class="sub" x="46" y="426">mini-yaml · validator</text><text class="sub" x="46" y="450" font-weight="700">⛨ OUT: schema v1.2 only · golden-gated</text><text class="note" x="46" y="484">repo → pack (the inverse)</text>
 
-<rect class="mod" x="274" y="348" width="232" height="148" rx="8"/><use href="#ic-cube" x="286" y="360" width="15" height="15" color="#475569"/><text class="mt" x="306" y="372">Model · IR</text>
+<rect class="mod" x="274" y="348" width="232" height="148" rx="8"/><use href="#ic-cube" x="286" y="360" width="15" height="15" color="#cbd5e1"/><text class="mt" x="306" y="372">Model · IR</text>
 <text class="sub" x="286" y="394">adapter — spec → layers (647)</text><text class="sub" x="286" y="410">artefact-model — identity ·</text><text class="sub" x="286" y="425">behaviour · classify</text><text class="sub" x="286" y="450" font-weight="700">⛨ IN: schema-valid · OUT: golden-gated</text><text class="note" x="286" y="484">attaches mcp.verified.* stamps</text>
 
-<rect class="acc" x="514" y="348" width="232" height="148" rx="8"/><use href="#ic-compare" x="526" y="360" width="15" height="15" color="#6d28d9"/><text class="at" x="546" y="372">Compare ★ (all wired)</text>
+<rect class="acc" x="514" y="348" width="232" height="148" rx="8"/><use href="#ic-compare" x="526" y="360" width="15" height="15" color="#c9b6fb"/><text class="at" x="546" y="372">Compare ★ (all wired)</text>
 <text class="sub" x="526" y="394">diff — flat pack arithmetic</text><text class="sub" x="526" y="410">traceability — 1-pack chains</text><text class="sub" x="526" y="425">traceability-graph (762) —</text><text class="sub" x="526" y="440">req-rooted DAG · Lezer-parsed</text><text class="sub" x="526" y="460" font-weight="700">⛨ OUT: golden + suite-locked</text><text class="note" x="526" y="484">chain integrity → server → grade</text>
 
-<rect class="grn" x="34" y="510" width="232" height="148" rx="8"/><use href="#ic-code" x="46" y="522" width="15" height="15" color="#047857"/><text class="gt" x="66" y="534">Static analysis ✓</text>
+<rect class="grn" x="34" y="510" width="232" height="148" rx="8"/><use href="#ic-code" x="46" y="522" width="15" height="15" color="#7ee9bd"/><text class="gt" x="66" y="534">Static analysis ✓</text>
 <text class="sub" x="46" y="556">promql — tokeniser (353)</text><text class="sub" x="46" y="572">promql-lezer — Lezer (100)</text><text class="sub" x="46" y="588">Prometheus official grammar</text><text class="note" x="46" y="642">tested · → crawler · trace · graph</text>
 
-<rect class="grn" x="274" y="510" width="232" height="148" rx="8"/><use href="#ic-wrench" x="286" y="522" width="15" height="15" color="#047857"/><text class="gt" x="306" y="534">Compile ✓ backend-attested</text>
+<rect class="grn" x="274" y="510" width="232" height="148" rx="8"/><use href="#ic-wrench" x="286" y="522" width="15" height="15" color="#7ee9bd"/><text class="gt" x="306" y="534">Compile ✓ backend-attested</text>
 <text class="sub" x="286" y="556">compile — packc (1.3k)</text><text class="sub" x="286" y="571">profiles · protocols — canon/caps</text><text class="sub" x="286" y="591" font-weight="700">⛨ OUT (T1): promtool · amtool · otelcol</text><text class="sub" x="286" y="606" font-weight="700">165 artifacts · strict in CI</text><text class="sub" x="286" y="626" font-weight="700">⛨ T4: live round trip = aligned ✓</text><text class="note" x="286" y="646">pack → Prom · Grafana · OTel</text>
 
-<rect class="grn" x="514" y="510" width="232" height="148" rx="8"/><use href="#ic-shield" x="526" y="522" width="15" height="15" color="#047857"/><text class="gt" x="546" y="534">Score &amp; IO ✓</text>
+<rect class="grn" x="514" y="510" width="232" height="148" rx="8"/><use href="#ic-shield" x="526" y="522" width="15" height="15" color="#7ee9bd"/><text class="gt" x="546" y="534">Score &amp; IO ✓</text>
 <text class="sub" x="526" y="556">conformance — 29 clauses ✓</text><text class="sub" x="526" y="572">grade — diagnostic-grade.mjs (404)</text><text class="sub" x="526" y="587">pure module · 25 verdict tests ✓</text><text class="sub" x="526" y="603">zip — export</text><text class="sub" x="526" y="623" font-weight="700">⛨ OUT: PASS strictly &gt;85% · schema-versioned</text><text class="note" x="526" y="646">PASS gate (&gt;85%) locked by tests</text>
 
-<rect class="grn" x="34" y="670" width="712" height="100" rx="8"/><use href="#ic-pulse" x="46" y="678" width="16" height="16" color="#047857"/><text class="gt" x="68" y="692">Runtime / semantic verification ✓ — MCP prober (the 6fcb7ef commit)</text>
+<rect class="grn" x="34" y="670" width="712" height="100" rx="8"/><use href="#ic-pulse" x="46" y="678" width="16" height="16" color="#7ee9bd"/><text class="gt" x="68" y="692">Runtime / semantic verification ✓ — MCP prober (the 6fcb7ef commit)</text>
 <text class="sub" x="46" y="714">adapter stamps per-artefact mcp.verified.&lt;symbol&gt; (ISO ts) + mcp.versions.&lt;product&gt; live captures</text>
 <text class="sub" x="46" y="732">graph marks each node live-verifiable vs not; declared / derived-promql / inferred provenance per edge</text>
 <text class="note" x="46" y="754">⛨ evidence gate: failed probes ⇒ loud PARTIAL LIVE EVIDENCE banner — counts become upper bounds, never silently wrong</text>
 
 <!-- SIDE: CLIs -->
-<rect class="side" x="798" y="22" width="200" height="226" rx="10"/><use href="#ic-flask" x="812" y="30" width="15" height="15" color="#b45309"/><text class="st" x="834" y="42">CLIs · tools/*.mjs</text>
+<rect class="side" x="798" y="22" width="200" height="226" rx="10"/><use href="#ic-flask" x="812" y="30" width="15" height="15" color="#fcd34d"/><text class="st" x="834" y="42">CLIs · tools/*.mjs</text>
 <text class="sub" x="812" y="66">crawl-repo · fetch-live</text><text class="sub" x="812" y="84">validate-pack · adapt</text><text class="sub" x="812" y="102">sync-spec · detect-drift</text>
 <text class="note" x="812" y="126">TESTS (in CI, c8): 19 suites —</text><text class="note" x="812" y="141">adapt·fetch·packs·compile·profiles·</text><text class="note" x="812" y="156">promql×2·crawl·diff·diagnostic·journey·</text><text class="note" x="812" y="171">retrofeed·traceability·verify·golden·</text><text class="note" x="812" y="186">backend-validate·zip·server×2</text>
-<text class="note" x="812" y="208" fill="#047857">⛨ validators pinned: promtool·amtool·otelcol</text>
-<text class="note" x="812" y="224" fill="#047857">⛨ T4 docker job: live-Grafana round trip ✓</text>
+<text class="note" x="812" y="208" fill="#7ee9bd">⛨ validators pinned: promtool·amtool·otelcol</text>
+<text class="note" x="812" y="224" fill="#7ee9bd">⛨ T4 docker job: live-Grafana round trip ✓</text>
 <text class="note" x="812" y="242">↳ call the same Engine</text>
 
 <!-- SIDE: Vendor -->
-<rect class="side" x="798" y="262" width="200" height="132" rx="10"/><use href="#ic-book" x="812" y="270" width="15" height="15" color="#b45309"/><text class="st" x="834" y="282">Vendor · spec v1.2</text>
+<rect class="side" x="798" y="262" width="200" height="132" rx="10"/><use href="#ic-book" x="812" y="270" width="15" height="15" color="#fcd34d"/><text class="st" x="834" y="282">Vendor · spec v1.2</text>
 <text class="sub" x="812" y="306">schema · maturity-model</text><text class="sub" x="812" y="324">payment-service example</text><text class="note" x="812" y="350">checksummed · pinned</text><text class="note" x="812" y="368">↳ feeds validator + conformance</text>
 
 <!-- WHAT IT IS -->
-<rect x="798" y="408" width="420" height="378" rx="10" fill="#ffffff" stroke="#d3dcea"/>
+<rect x="798" y="408" width="420" height="378" rx="10" fill="#11192c" stroke="#26324c"/>
 <text class="bl" x="814" y="430">WHAT IT IS · one toolchain (verified @ 795f122)</text>
-<use href="#ic-swap"    x="814" y="444" width="15" height="15" color="#7c3aed"/><text class="sub" x="836" y="456">bidirectional compiler ⇄ decompiler  (packc / x-ray)</text>
-<use href="#ic-cube"    x="814" y="466" width="15" height="15" color="#7c3aed"/><text class="sub" x="836" y="478">vendor-neutral IR + multi-backend  (LLVM-like)</text>
-<use href="#ic-code"    x="814" y="488" width="15" height="15" color="#059669"/><text class="sub" x="836" y="500">static analyzer of executable layer  (PromQL · Lezer)</text>
-<use href="#ic-pulse"   x="814" y="510" width="15" height="15" color="#059669"/><text class="sub" x="836" y="522">runtime verifier / OTel-MCP prober  (mcp.verified.*)</text>
-<use href="#ic-compare" x="814" y="532" width="15" height="15" color="#7c3aed"/><text class="sub" x="836" y="544">drift / calibration &amp; reconciliation instrument</text>
-<use href="#ic-shield"  x="814" y="554" width="15" height="15" color="#7c3aed"/><text class="sub" x="836" y="566">referential / chain-integrity checker (L1→L4)</text>
-<use href="#ic-book"    x="814" y="576" width="15" height="15" color="#7c3aed"/><text class="sub" x="836" y="588">conformance grader + provenance tracker</text>
-<line x1="814" y1="606" x2="1202" y2="606" stroke="#d3dcea"/>
+<use href="#ic-swap"    x="814" y="444" width="15" height="15" color="#c084fc"/><text class="sub" x="836" y="456">bidirectional compiler ⇄ decompiler  (packc / x-ray)</text>
+<use href="#ic-cube"    x="814" y="466" width="15" height="15" color="#c084fc"/><text class="sub" x="836" y="478">vendor-neutral IR + multi-backend  (LLVM-like)</text>
+<use href="#ic-code"    x="814" y="488" width="15" height="15" color="#34d399"/><text class="sub" x="836" y="500">static analyzer of executable layer  (PromQL · Lezer)</text>
+<use href="#ic-pulse"   x="814" y="510" width="15" height="15" color="#34d399"/><text class="sub" x="836" y="522">runtime verifier / OTel-MCP prober  (mcp.verified.*)</text>
+<use href="#ic-compare" x="814" y="532" width="15" height="15" color="#c084fc"/><text class="sub" x="836" y="544">drift / calibration &amp; reconciliation instrument</text>
+<use href="#ic-shield"  x="814" y="554" width="15" height="15" color="#c084fc"/><text class="sub" x="836" y="566">referential / chain-integrity checker (L1→L4)</text>
+<use href="#ic-book"    x="814" y="576" width="15" height="15" color="#c084fc"/><text class="sub" x="836" y="588">conformance grader + provenance tracker</text>
+<line x1="814" y1="606" x2="1202" y2="606" stroke="#26324c"/>
 <text class="note" x="814" y="622">Chain integrity feeds the grade's trust signal. NEW: every</text>
 <text class="note" x="814" y="636">compiled artifact backend-attested (T1) + round-trip</text>
 <text class="note" x="814" y="650">verified against a live Grafana (T4) — both strict in CI.</text>
-<line x1="814" y1="654" x2="1202" y2="654" stroke="#d3dcea"/>
+<line x1="814" y1="654" x2="1202" y2="654" stroke="#26324c"/>
 <text class="bl" x="814" y="674" font-size="11px">LEGEND</text>
 <rect class="acc" x="814" y="684" width="16" height="12" rx="3"/><text class="sub" x="838" y="694">diagnose path · ★ active · all wired</text>
 <rect class="grn" x="814" y="702" width="16" height="12" rx="3"/><text class="sub" x="838" y="712">static + runtime verification · shipping</text>

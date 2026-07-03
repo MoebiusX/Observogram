@@ -1,12 +1,12 @@
 # Slide notes — Quality Gates (CTO / board, 2026-06-12)
 
-*Companion to `tomograph-quality-gates-{light,dark}.png` and the updated
+*Companion to `observogram-quality-gates-{light,dark}.png` and the updated
 architecture diagrams. Every number below is verified at HEAD `795f122`
 and enforced in CI — nothing on these slides is aspirational.*
 
 ## The one-sentence story
 
-> Tomograph no longer asks you to trust its output — **every artifact it
+> Observogram no longer asks you to trust its output — **every artifact it
 > compiles is accepted by the real backend's own validator, and the full
 > compile → deploy → verify loop runs against a live Grafana on every
 > push.**

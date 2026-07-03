@@ -2,7 +2,7 @@
 /**
  * server/index.mjs
  *
- * Express server for Tomograph v0.3+.
+ * Express server for Observogram v0.3+.
  *
  * Responsibilities:
  *   - Serve the studio HTML/CSS/JS shell from studio/.
@@ -58,6 +58,7 @@ import { versionInfo } from './version.mjs';
 import { tenancyEnabled, orgsForUser, orgExists, runWithOrg, currentOrg, readOrgs, migrateFlatWorkspace } from './tenancy.mjs';
 import { setWorkspaceRootResolver } from '../tools/lib/journey.mjs';
 import { orgWorkspaceRoot } from './tenancy.mjs';
+import { brandEnv } from '../tools/lib/brand-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -159,7 +160,7 @@ function loadPackFile(relPath) {
 // server can't refer back to.
 //
 // Capped at MAX_UPLOADS to bound memory; oldest entry evicted on overflow.
-// Backed by the .tomograph/ workspace (server/workspace.mjs): every
+// Backed by the workspace directory (server/workspace.mjs): every
 // registration writes through to disk and start() rehydrates the map, so
 // crawled / drafted / uploaded packs survive restarts. Eviction at the cap
 // prunes both the map and the disk copy (retention by least-recently-used).
@@ -308,7 +309,8 @@ function serviceMetadata(canonical) {
   add(bindings.service);
   add(bindings.namespace);
   add(annotations['mcp.servicesDiscovered']);
-  add(annotations['tomograph.services']);
+  add(annotations['observogram.services']);
+  add(annotations['tomograph.services']);   // legacy namespace (pre-rebrand packs)
   return {
     service: bindings.service || canonical?.metadata?.name || '',
     namespace: bindings.namespace || bindings.service || canonical?.metadata?.name || '',
@@ -355,20 +357,20 @@ app.set('trust proxy', false);
 //
 // One token, three postures:
 //   1. Local (default): loopback bind, no token, no auth — zero friction.
-//   2. Exposed + TOMOGRAPH_API_TOKEN set: mutating /api/* routes require
+//   2. Exposed + OBSERVOGRAM_API_TOKEN set: mutating /api/* routes require
 //      `Authorization: Bearer <token>`. Reads stay open. Once a token is
 //      set it is enforced regardless of bind address — a reverse proxy
 //      makes everything look local, so a loopback bypass would undermine
 //      the token exactly when it matters.
 //   3. Exposed + no token: the server REFUSES TO START (fail closed; see
-//      start()). TOMOGRAPH_INSECURE_NO_AUTH=1 is the explicit, loudly
+//      start()). OBSERVOGRAM_INSECURE_NO_AUTH=1 is the explicit, loudly
 //      logged override for trusted-network demos.
 // MCP write tokens are unrelated and never stored here — they pass
 // through per request. The audit log records the token's ownership label
-// (TOMOGRAPH_API_TOKEN_LABEL), never the secret.
+// (OBSERVOGRAM_API_TOKEN_LABEL), never the secret.
 
-function apiToken() { return (process.env.TOMOGRAPH_API_TOKEN || '').trim(); }
-function apiTokenLabel() { return (process.env.TOMOGRAPH_API_TOKEN_LABEL || '').trim() || 'token'; }
+function apiToken() { return brandEnv('API_TOKEN'); }
+function apiTokenLabel() { return brandEnv('API_TOKEN_LABEL') || 'token'; }
 
 function tokenEquals(candidate, token) {
   // Constant-time compare over digests so length differences leak nothing.
@@ -378,7 +380,7 @@ function tokenEquals(candidate, token) {
 }
 
 // Who performed a mutating request — the audit log's actor field.
-function actorForRequest(req) { return req?.tomographActor || 'local'; }
+function actorForRequest(req) { return req?.observogramActor || 'local'; }
 
 app.use((req, res, next) => {
   if (req.path.startsWith('/auth/')) return next();   // the login flow itself
@@ -391,8 +393,8 @@ app.use((req, res, next) => {
   // Bearer token: the service-account / CI path — works in every posture.
   const m = /^Bearer\s+(.+)$/i.exec(req.headers.authorization || '');
   if (m && token && tokenEquals(m[1].trim(), token)) {
-    req.tomographActor = apiTokenLabel();
-    req.tomographBearer = true;
+    req.observogramActor = apiTokenLabel();
+    req.observogramBearer = true;
     return next();
   }
 
@@ -401,12 +403,14 @@ app.use((req, res, next) => {
     if (session) {
       // Cookie-authenticated mutations require the custom header —
       // cross-origin pages can't set one without a CORS preflight, so
-      // SameSite=Lax + this check closes the CSRF window.
-      if (mutating && isApi && req.headers['x-tomograph-csrf'] !== '1') {
-        return res.status(403).json({ ok: false, error: 'missing X-Tomograph-CSRF header on a session-authenticated mutation' });
+      // SameSite=Lax + this check closes the CSRF window. The legacy
+      // X-Tomograph-CSRF spelling stays accepted for pre-rebrand clients.
+      const csrf = req.headers['x-observogram-csrf'] || req.headers['x-tomograph-csrf'];
+      if (mutating && isApi && csrf !== '1') {
+        return res.status(403).json({ ok: false, error: 'missing X-Observogram-CSRF header on a session-authenticated mutation' });
       }
-      req.tomographActor = session.email || session.sub;
-      req.tomographSub = session.sub;   // tenancy middleware resolves org membership by sub
+      req.observogramActor = session.email || session.sub;
+      req.observogramSub = session.sub;   // tenancy middleware resolves org membership by sub
       return next();
     }
     // Identity mode protects ALL /api data (reads included) — "your
@@ -421,10 +425,10 @@ app.use((req, res, next) => {
   // Token-only posture (no identity configured): original 10B contract —
   // mutating /api routes require the bearer, reads stay open.
   if (!mutating || !isApi) return next();
-  res.set('WWW-Authenticate', 'Bearer realm="tomograph"');
+  res.set('WWW-Authenticate', 'Bearer realm="observogram"');
   return res.status(401).json({
     ok: false,
-    error: 'unauthorized: mutating /api routes require `Authorization: Bearer <TOMOGRAPH_API_TOKEN>`',
+    error: 'unauthorized: mutating /api routes require `Authorization: Bearer <OBSERVOGRAM_API_TOKEN>`',
   });
 });
 
@@ -433,14 +437,15 @@ app.use((req, res, next) => {
 // Armed when <workspace>/orgs.json exists (server/tenancy.mjs). Every
 // /api request then runs inside an AsyncLocalStorage org context, and
 // workspaceRoot() everywhere underneath answers <workspace>/orgs/<id>/.
-// The org comes from the X-Tomograph-Org header (or ?org=), defaulting
-// to the user's first membership; membership is enforced here — Stage 3
-// adds per-route roles on top of this same seam.
+// The org comes from the X-Observogram-Org header (or ?org=; the legacy
+// X-Tomograph-Org spelling still works), defaulting to the user's first
+// membership; membership is enforced here — Stage 3 adds per-route roles
+// on top of this same seam.
 app.use((req, res, next) => {
   if (!req.path.startsWith('/api/') || !tenancyEnabled()) return next();
-  const requested = String(req.headers['x-tomograph-org'] || req.query.org || '').trim();
+  const requested = String(req.headers['x-observogram-org'] || req.headers['x-tomograph-org'] || req.query.org || '').trim();
   let orgId;
-  if (req.tomographBearer) {
+  if (req.observogramBearer) {
     // The bearer is the deployment-level service account: it may target
     // any existing org explicitly; without a header it falls back to
     // 'default' (the migration org) or, failing that, the first org in
@@ -450,7 +455,7 @@ app.use((req, res, next) => {
       return res.status(403).json({ ok: false, error: `unknown org '${orgId}'` });
     }
   } else {
-    const memberships = orgsForUser(req.tomographSub);
+    const memberships = orgsForUser(req.observogramSub);
     if (!memberships.length) {
       return res.status(403).json({ ok: false, error: 'no org membership — ask an admin to add you to orgs.json' });
     }
@@ -459,7 +464,7 @@ app.use((req, res, next) => {
       return res.status(403).json({ ok: false, error: `not a member of org '${orgId}'` });
     }
   }
-  res.set('X-Tomograph-Org', orgId);   // echo so the client always knows the active org
+  res.set('X-Observogram-Org', orgId);   // echo so the client always knows the active org
   return runWithOrg(orgId, next);
 });
 
@@ -516,9 +521,9 @@ app.delete('/api/uploads', (req, res) => {
 // org so clients never have to guess which workspace they're in.
 app.get('/api/orgs', (req, res) => {
   if (!tenancyEnabled()) return res.json({ ok: true, tenancy: false, orgs: [], active: null });
-  const orgs = req.tomographBearer
+  const orgs = req.observogramBearer
     ? Object.entries(readOrgs()).map(([id, o]) => ({ id, name: o?.name || id, role: 'service-account' }))
-    : orgsForUser(req.tomographSub);
+    : orgsForUser(req.observogramSub);
   res.json({ ok: true, tenancy: true, orgs, active: currentOrg() });
 });
 
@@ -642,7 +647,8 @@ app.get('/api/diff', (req, res) => {
   try {
     const aCanonical = loadPackCanonical(aMeta);
     const bCanonical = loadPackCanonical(bMeta);
-    const annotatedScopeMode = aCanonical.metadata?.annotations?.['tomograph.diff.scopeMode'];
+    const annotatedScopeMode = aCanonical.metadata?.annotations?.['observogram.diff.scopeMode']
+      ?? aCanonical.metadata?.annotations?.['tomograph.diff.scopeMode'];   // legacy namespace
     const scopeMode = requestedScopeMode || annotatedScopeMode;
     const aLayered = adapt(aCanonical, { environment: aEnv });
     const bLayered = adapt(bCanonical, { environment: bEnv });
@@ -1514,13 +1520,13 @@ app.get(/^(?!\/api\/).*/, (req, res, next) => {
 
 const PORT = Number(process.env.PORT || 8000);
 // Loopback by default — matching the documented contract. Exposing the
-// studio (HOST=0.0.0.0) requires TOMOGRAPH_API_TOKEN; see start().
+// studio (HOST=0.0.0.0) requires OBSERVOGRAM_API_TOKEN; see start().
 const HOST = process.env.HOST || '127.0.0.1';
 
 export { app };
-// Rehydrate the upload registry from the .tomograph/ workspace. Runs once
-// per process, inside start() (not at module load) so tests can point
-// TOMOGRAPH_WORKSPACE at a temp dir before booting. Entries arrive oldest
+// Rehydrate the upload registry from the workspace (.observogram/). Runs
+// once per process, inside start() (not at module load) so tests can point
+// OBSERVOGRAM_WORKSPACE at a temp dir before booting. Entries arrive oldest
 // lastUsedAt first, preserving the map's LRU insertion order.
 let workspaceRehydrated = false;
 function rehydrateUploadsFromWorkspace(silent) {
@@ -1550,15 +1556,15 @@ export function start({ port = PORT, host = HOST, silent = false } = {}) {
   // Identity (OIDC or stand-alone users) satisfies the requirement just
   // like the API token does.
   if (!isLoopbackHost(host) && !apiToken() && !authEnabled()) {
-    if (process.env.TOMOGRAPH_INSECURE_NO_AUTH === '1') {
+    if (brandEnv('INSECURE_NO_AUTH') === '1') {
       process.stderr.write(
-        `[studio] WARNING: bound to ${host} with NO auth (TOMOGRAPH_INSECURE_NO_AUTH=1). ` +
+        `[studio] WARNING: bound to ${host} with NO auth (OBSERVOGRAM_INSECURE_NO_AUTH=1). ` +
         `Every write route is open to the network. Do not run this posture outside a trusted network.\n`);
     } else {
       return Promise.reject(new Error(
         `refusing to bind to ${host} without auth: mutating /api routes would be open to the network.\n` +
-        `  Set TOMOGRAPH_API_TOKEN=<secret> (clients send Authorization: Bearer <secret>),\n` +
-        `  or bind to loopback (HOST=127.0.0.1), or set TOMOGRAPH_INSECURE_NO_AUTH=1 to override knowingly.`));
+        `  Set OBSERVOGRAM_API_TOKEN=<secret> (clients send Authorization: Bearer <secret>),\n` +
+        `  or bind to loopback (HOST=127.0.0.1), or set OBSERVOGRAM_INSECURE_NO_AUTH=1 to override knowingly.`));
     }
   }
   // Tenancy (Stage 2) sits ON TOP of identity: orgs.json without a way
@@ -1567,7 +1573,7 @@ export function start({ port = PORT, host = HOST, silent = false } = {}) {
   if (tenancyEnabled() && !authEnabled()) {
     return Promise.reject(new Error(
       'orgs.json found but no identity is configured: tenancy needs to know who the user is.\n' +
-      '  Configure OIDC (TOMOGRAPH_OIDC_*) or stand-alone users (users.json / npm run users),\n' +
+      '  Configure OIDC (OBSERVOGRAM_OIDC_*) or stand-alone users (users.json / npm run users),\n' +
       '  or remove orgs.json to run the flat single-tenant workspace.'));
   }
   // One-shot, idempotent: a deployment whose flat workspace predates
@@ -1600,7 +1606,7 @@ if (invokedDirectly) {
     if (e && e.code === 'EADDRINUSE') {
       process.stderr.write(
         `[studio] port ${PORT} is already in use.\n` +
-        `         Another Tomograph instance is probably running. Stop it, or:\n` +
+        `         Another Observogram instance is probably running. Stop it, or:\n` +
         `           PORT=8001 npm run dev\n`
       );
     } else {

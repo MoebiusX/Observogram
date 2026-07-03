@@ -297,4 +297,17 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
   assert(partialLiveEvidence(null).partial === false, 'null pack is handled');
 }
 
+// ---------- the vendoring seam (docs/VENDORING.md) ----------
+// Downstream studios vendor these files verbatim; an import creeping in
+// breaks their build, not ours — so CI holds the line here.
+{
+  const { readFileSync } = await import('node:fs');
+  for (const f of ['studio/diagnostic-grade.mjs', 'studio/artifact-model.mjs']) {
+    const src = readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+    if (/^\s*import\s/m.test(src)) {
+      throw new Error(`${f} must stay zero-import — it is vendored verbatim by downstream studios (docs/VENDORING.md)`);
+    }
+  }
+}
+
 console.log('all diagnostic-grade assertions pass.');

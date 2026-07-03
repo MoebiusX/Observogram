@@ -11,7 +11,7 @@
 
 import { state } from './state.mjs';
 import { escapeHtml } from './util.mjs';
-import { openDeployModal, renderMainView } from './app.mjs';
+import { host as appHost } from './host.mjs';
 import {
   buildProtoModel, protoEnsureComparison, projectGrade, projectionSentence,
   ladderHtml, chip, criterionChip, donutSvg, fmtUnits, fixChip, badnessClassChip,
@@ -51,10 +51,10 @@ function navHtml(active, { nextLabel = 'Next →', canNext = true } = {}) {
 
 function wireStepper(root) {
   root.querySelectorAll('.pc-step').forEach(el => {
-    el.addEventListener('click', () => { step = Number(el.dataset.step); renderMainView(); });
+    el.addEventListener('click', () => { step = Number(el.dataset.step); appHost.renderMainView(); });
   });
-  root.querySelector('#pc-back')?.addEventListener('click', () => { step = Math.max(1, step - 1); renderMainView(); });
-  root.querySelector('#pc-next')?.addEventListener('click', () => { step = Math.min(4, step + 1); renderMainView(); });
+  root.querySelector('#pc-back')?.addEventListener('click', () => { step = Math.max(1, step - 1); appHost.renderMainView(); });
+  root.querySelector('#pc-next')?.addEventListener('click', () => { step = Math.min(4, step + 1); appHost.renderMainView(); });
 }
 
 // ---------- DIAGNOSE ----------
@@ -252,33 +252,33 @@ function wireStage(root, m) {
     cb.addEventListener('change', () => {
       const uid = cb.closest('.pc-gap').dataset.uid;
       if (cb.checked) basket.add(uid); else basket.delete(uid);
-      renderMainView();
+      appHost.renderMainView();
     });
   });
   root.querySelector('#pc-pick-all')?.addEventListener('click', () => {
     for (const i of m.items) basket.add(i.uid);
-    renderMainView();
+    appHost.renderMainView();
   });
   root.querySelector('#pc-pick-none')?.addEventListener('click', () => {
     basket.clear();
-    renderMainView();
+    appHost.renderMainView();
   });
   root.querySelector('#pc-pick-critical')?.addEventListener('click', () => {
     basket.clear();
     for (const i of m.items) if (i.badness >= 1) basket.add(i.uid);
-    renderMainView();
+    appHost.renderMainView();
   });
   const picked = m.items.filter(i => basket.has(i.uid));
   const dep = deploySelectionFromItems(picked, basket);
   root.querySelector('#pc-deploy')?.addEventListener('click', () =>
-    openDeployModal({ packId: state.selectedPackId, presetIdentities: dep.identities }));
+    appHost.openDeployModal({ packId: state.selectedPackId, presetIdentities: dep.identities }));
   root.querySelector('#pc-to-remediate')?.addEventListener('click', () => {
     state.view = 'compile';
-    renderMainView();
+    appHost.renderMainView();
   });
   root.querySelector('#pc-reverify')?.addEventListener('click', () => {
     state.view = 'journeys';
-    renderMainView();
+    appHost.renderMainView();
   });
 }
 
@@ -351,13 +351,13 @@ export function renderProtoRemediateC(view) {
     cb.addEventListener('change', () => {
       const uid = cb.closest('.pc-gap').dataset.uid;
       if (cb.checked) basket.add(uid); else basket.delete(uid);
-      renderMainView();
+      appHost.renderMainView();
     });
   });
   root.querySelector('#pc-r-deploy')?.addEventListener('click', () =>
-    openDeployModal({ packId: state.selectedPackId, presetIdentities: dep.identities }));
+    appHost.openDeployModal({ packId: state.selectedPackId, presetIdentities: dep.identities }));
   root.querySelector('#pc-r-reverify')?.addEventListener('click', () => {
     state.view = 'journeys';
-    renderMainView();
+    appHost.renderMainView();
   });
 }

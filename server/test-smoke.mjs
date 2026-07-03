@@ -11,11 +11,11 @@ import { join, resolve as resolvePath } from 'node:path';
 import { tmpdir } from 'node:os';
 
 // Redirect the pack workspace to a temp dir BEFORE the server boots, so
-// smoke-test registrations never pollute the repo's .tomograph/. Workspace
+// smoke-test registrations never pollute the repo's .observogram/. Workspace
 // resolution is lazy (read at start(), not at import), which is what makes
 // this ordering work despite the hoisted import below.
-const SMOKE_WORKSPACE = mkdtempSync(join(tmpdir(), 'tomograph-smoke-ws-'));
-process.env.TOMOGRAPH_WORKSPACE = SMOKE_WORKSPACE;
+const SMOKE_WORKSPACE = mkdtempSync(join(tmpdir(), 'observogram-smoke-ws-'));
+process.env.OBSERVOGRAM_WORKSPACE = SMOKE_WORKSPACE;
 
 import { start } from './index.mjs';
 import { createServer } from 'node:http';
@@ -388,9 +388,9 @@ try {
   assert(!/hunter2/.test(badUrlBody.error || ''), 'unparseable-mcpUrl error redacts credentials', badUrlBody.error);
 
   // SSRF guard — local/private addresses are allowed by default (the fake-MCP
-  // tests below depend on that) but refused when TOMOGRAPH_ALLOW_LOCAL_MCP=0.
+  // tests below depend on that) but refused when OBSERVOGRAM_ALLOW_LOCAL_MCP=0.
   // The server runs in-process, so flipping process.env takes effect live.
-  process.env.TOMOGRAPH_ALLOW_LOCAL_MCP = '0';
+  process.env.OBSERVOGRAM_ALLOW_LOCAL_MCP = '0';
   try {
     for (const blocked of ['http://127.0.0.1:9999/mcp', 'http://localhost:9999/mcp',
                            'http://169.254.169.254/latest/meta-data/', 'http://[::1]:9999/mcp',
@@ -399,7 +399,7 @@ try {
       assert(r.status === 400, `ALLOW_LOCAL_MCP=0 blocks ${blocked} → 400`, r.status, 400);
     }
   } finally {
-    delete process.env.TOMOGRAPH_ALLOW_LOCAL_MCP;
+    delete process.env.OBSERVOGRAM_ALLOW_LOCAL_MCP;
   }
 
   // POST /api/packs/:id/deploy/:target — unknown pack → 404
@@ -471,8 +471,8 @@ try {
   const authRaw = await getJson(base, '/api/packs/payment-service/canonical');
   delete authRaw.__effectiveEnvironment;
   delete authRaw.__effective;
-  process.env.TOMOGRAPH_API_TOKEN = 'smoke-secret';
-  process.env.TOMOGRAPH_API_TOKEN_LABEL = 'smoke-ci';
+  process.env.OBSERVOGRAM_API_TOKEN = 'smoke-secret';
+  process.env.OBSERVOGRAM_API_TOKEN_LABEL = 'smoke-ci';
   const openRead = await fetch(`${base}/api/packs`);
   assert(openRead.status === 200, 'token set: GET routes stay open without auth');
   const denied = await fetch(`${base}/api/validate`, {
@@ -480,7 +480,7 @@ try {
   });
   assert(denied.status === 401, 'token set: mutating route without bearer → 401');
   assert((denied.headers.get('www-authenticate') || '').includes('Bearer'), '401 carries WWW-Authenticate: Bearer');
-  assert(/TOMOGRAPH_API_TOKEN/.test((await denied.json()).error || ''), '401 error names the env var to set');
+  assert(/OBSERVOGRAM_API_TOKEN/.test((await denied.json()).error || ''), '401 error names the env var to set');
   const wrongTok = await fetch(`${base}/api/validate`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer not-the-secret' },
     body: JSON.stringify(authRaw),
@@ -501,8 +501,8 @@ try {
   const authedRec = authedAudit.deploys.find(d => d.deployId === authedDeploy.deployId);
   assert(authedRec?.actor === 'smoke-ci', 'audit actor is the token label', authedRec?.actor, 'smoke-ci');
   assert(!JSON.stringify(authedRec).includes('smoke-secret'), 'the token secret never lands in the audit log');
-  delete process.env.TOMOGRAPH_API_TOKEN;
-  delete process.env.TOMOGRAPH_API_TOKEN_LABEL;
+  delete process.env.OBSERVOGRAM_API_TOKEN;
+  delete process.env.OBSERVOGRAM_API_TOKEN_LABEL;
   const reopened = await fetch(`${base}/api/validate`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(authRaw),
   });
@@ -511,13 +511,13 @@ try {
   // --- fail-closed startup (10B): exposed bind without a token refuses to boot. ---
   let exposedRefused = null;
   try { await start({ host: '0.0.0.0', port: 0, silent: true }); exposedRefused = false; }
-  catch (e) { exposedRefused = /TOMOGRAPH_API_TOKEN/.test(e.message); }
+  catch (e) { exposedRefused = /OBSERVOGRAM_API_TOKEN/.test(e.message); }
   assert(exposedRefused === true, 'binding 0.0.0.0 without a token fails closed with a clear message');
-  process.env.TOMOGRAPH_INSECURE_NO_AUTH = '1';
+  process.env.OBSERVOGRAM_INSECURE_NO_AUTH = '1';
   const insecureSrv = await start({ host: '0.0.0.0', port: 0, silent: true });
-  assert(!!insecureSrv.address(), 'TOMOGRAPH_INSECURE_NO_AUTH=1 overrides knowingly (with a loud warning)');
+  assert(!!insecureSrv.address(), 'OBSERVOGRAM_INSECURE_NO_AUTH=1 overrides knowingly (with a loud warning)');
   await new Promise(r => insecureSrv.close(r));
-  delete process.env.TOMOGRAPH_INSECURE_NO_AUTH;
+  delete process.env.OBSERVOGRAM_INSECURE_NO_AUTH;
 
   // --- saved journeys API (item 11, studio surface) ---
   const PAY = resolvePath('vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml');
@@ -805,7 +805,7 @@ try {
   assert(typeof validateRes.conformance?.scorePercent === 'number', 'validate response includes conformance report');
 
   // Workspace persistence (10A): registering a pack writes it through to
-  // the .tomograph/ workspace as an inspectable YAML file + index entry.
+  // the .observogram/ workspace as an inspectable YAML file + index entry.
   const registeredId = validateRes.registered?.id;
   assert(typeof registeredId === 'string' && registeredId.length > 0, 'validate returns a registered pack id');
   const wsPackFile = join(SMOKE_WORKSPACE, 'packs', `${registeredId}.pack.yaml`);
@@ -831,7 +831,7 @@ try {
 
   // GET / returns the studio shell
   const html = await getText(base, '/');
-  assert(html.includes('<title>Tomograph'), 'GET / returns studio shell');
+  assert(html.includes('<title>Observogram'), 'GET / returns studio shell');
   assert(html.includes('/app.mjs'), 'shell loads app.mjs');
   assert(html.includes('/app.css'), 'shell loads app.css');
 
@@ -858,7 +858,7 @@ try {
   assert(crawlOut.ok === true, 'crawl ok');
   assert(crawlOut.canonical?.apiVersion === 'observability.platform/v1', 'crawl emits canonical v1');
   assert(crawlOut.canonical?.metadata?.name === 'smoke-crawl', 'crawl honors repoName');
-  assert(crawlOut.canonical?.metadata?.annotations?.['tomograph.diff.scopeMode'] === 'family',
+  assert(crawlOut.canonical?.metadata?.annotations?.['observogram.diff.scopeMode'] === 'family',
          'crawl honors requested live-drift scope mode');
   assert(crawlOut.summary?.comparison?.diffScopeMode === 'family',
          'crawl summary echoes requested live-drift scope mode');

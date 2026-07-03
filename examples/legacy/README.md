@@ -1,6 +1,6 @@
 # Previous pack format — layered JSON
 
-These four files are the **original Tomograph pack format**: the layered
+These four files are the **original pack format** (from when Observogram was named Tomograph): the layered
 "studio-shape" JSON that the studio consumed before the canonical
 ObservabilityPack v1.2 migration (Changelog 0.3.0, Phase 5). They are
 restored verbatim from git history as working examples of the format.
@@ -21,7 +21,7 @@ restored verbatim from git history as working examples of the format.
 
 ## Loading them today
 
-Tomograph still accepts this format everywhere a pack can enter:
+Observogram still accepts this format everywhere a pack can enter:
 
 - **Studio upload** — pick any of these files; the server detects the
   layered shape and upconverts it to a canonical v1.2 manifest at the

@@ -1,6 +1,6 @@
 # Repository instructions for coding agents
 
-Canonical agent guidance for tomograph (Copilot, Codex, Claude, and friends).
+Canonical agent guidance for Observogram (Copilot, Codex, Claude, and friends).
 The authoritative branching contract is [docs/BRANCHING.md](../docs/BRANCHING.md);
 the architecture/sequencing plan is
 [docs/ARCHITECTURE_EVOLUTION.md](../docs/ARCHITECTURE_EVOLUTION.md). This file

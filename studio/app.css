@@ -1,5 +1,5 @@
 /* ============================================================
-   Tomograph v0.3 — the Observability Compiler
+   Observogram v0.3 — the Observability Compiler
    Visual identity: hairline grid · monospaced data · layer-numbered
    sections · slide-in drawer.
 
@@ -7260,7 +7260,7 @@ body.chrome-observa .upload-popover-divider {
 /* The main view sits beneath the chrome — extend it edge-to-edge
    so the content can claim the full width promised in the mockup.
    The content area KEEPS its existing light/cream engineering-tool
-   aesthetic — the dark navy stays in the chrome only. Tomograph is
+   aesthetic — the dark navy stays in the chrome only. Observogram is
    an audit tool; the content is the audit, and audits are read on
    paper, not on a marketing site. */
 body.chrome-observa #layer-view {
@@ -7285,7 +7285,7 @@ body.chrome-observa #layer-view {
 }
 
 /* =============================================================
-   DISCOVER — TOMOGRAM SCAN dashboard (dark mission control)
+   DISCOVER — OBSERVOGRAM SCAN dashboard (dark mission control)
    ============================================================= */
 body.chrome-observa .disco {
   display: grid;
@@ -7723,28 +7723,11 @@ body.chrome-observa .disco {
   border: 1px dashed color-mix(in srgb, var(--BLD) 40%, transparent);
 }
 
-/* ---------- shared atoms ---------- */
-.mc-chip {
-  display: inline-block; padding: 1px 7px; border-radius: 999px;
-  font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
-  border: 1px solid transparent; white-space: nowrap; vertical-align: middle;
-}
-.mc-chip.is-pass    { color: var(--pr-green);  border-color: color-mix(in srgb, var(--pr-green) 45%, transparent);  background: color-mix(in srgb, var(--pr-green) 12%, transparent); }
-.mc-chip.is-fail    { color: var(--pr-red);    border-color: color-mix(in srgb, var(--pr-red) 45%, transparent);    background: color-mix(in srgb, var(--pr-red) 12%, transparent); }
-.mc-chip.is-partial { color: var(--pr-amber);  border-color: color-mix(in srgb, var(--pr-amber) 45%, transparent);  background: color-mix(in srgb, var(--pr-amber) 12%, transparent); }
-.mc-chip.is-warn    { color: var(--pr-amber);  border-color: color-mix(in srgb, var(--pr-amber) 55%, transparent);  background: color-mix(in srgb, var(--pr-amber) 16%, transparent); }
-.mc-chip.is-info    { color: var(--pr-gray);   border-color: color-mix(in srgb, var(--pr-gray) 45%, transparent);   background: color-mix(in srgb, var(--pr-gray) 12%, transparent); }
-
-.mc-fix {
-  display: inline-block; padding: 1px 7px; border-radius: var(--r-sm);
-  font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.05em;
-  white-space: nowrap; vertical-align: middle;
-}
-.mc-fix.is-deploy    { color: var(--BLD);    background: var(--BLD-bg); }
-.mc-fix.is-retrofeed { color: var(--pr-cyan); background: color-mix(in srgb, var(--pr-cyan) 14%, transparent); }
-.mc-fix.is-reconcile { color: var(--pr-purple); background: color-mix(in srgb, var(--pr-purple) 14%, transparent); }
-.mc-fix.is-manual    { color: var(--ink-3);  background: var(--line-2); }
-
+/* ---------- shared atoms ----------
+   The widget atoms verdict-ui.mjs emits (.mc-chip, .mc-fix, .mc-tile*,
+   .mc-spark, .mc-donut-center, .mc-verification-note) live in
+   verdict-ui.css so downstream studios can vendor them with the module
+   (docs/VENDORING.md). Only view-level atoms remain here. */
 .mc-lnum {
   display: inline-block; min-width: 26px; text-align: center;
   font-family: var(--mono); font-size: 10px; font-weight: 700;
@@ -7789,44 +7772,6 @@ body.chrome-observa .disco {
   box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.18);
 }
 .mc-deploybar-projection { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); max-width: 70ch; }
-
-.mc-verification-note { margin: 14px 2px 0; font-size: 12px; color: var(--ink-4); font-style: italic; }
-.mc-spark { width: 96px; height: 28px; display: block; }
-.mc-donut-center { font-family: var(--mono); font-size: 17px; font-weight: 700; fill: var(--ink); }
-
-/* ---------- KPI tiles ---------- */
-.mc-tiles { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
-.mc-tile {
-  --acc: var(--CMP);
-  position: relative; min-width: 150px; flex: 1 1 150px;
-  padding: 10px 12px 9px; border-radius: var(--r-lg);
-  background:
-    radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--acc) 14%, transparent), transparent 55%),
-    var(--card);
-  border: 1px solid color-mix(in srgb, var(--acc) 30%, var(--line));
-  overflow: hidden;
-}
-.mc-tile::before {
-  content: ''; position: absolute; inset: 0 auto 0 0; width: 3px;
-  background: var(--acc); box-shadow: 0 0 12px color-mix(in srgb, var(--acc) 70%, transparent);
-}
-.mc-tile.is-cmp    { --acc: var(--CMP); }
-.mc-tile.is-blue   { --acc: var(--pr-blue); }
-.mc-tile.is-green  { --acc: var(--pr-green); }
-.mc-tile.is-amber  { --acc: var(--pr-amber); }
-.mc-tile.is-red    { --acc: var(--pr-red); }
-.mc-tile.is-cyan   { --acc: var(--pr-cyan); }
-.mc-tile.is-gray   { --acc: var(--pr-gray); }
-.mc-tile.is-warn .mc-tile-value { color: var(--pr-amber); }
-.mc-tile-label { font-family: var(--mono); font-size: 9.5px; font-weight: 700; letter-spacing: 0.14em; color: var(--ink-4); }
-.mc-tile-value {
-  font-family: var(--mono); font-size: 25px; font-weight: 700; line-height: 1.15;
-  color: var(--acc); text-shadow: 0 0 16px color-mix(in srgb, var(--acc) 35%, transparent);
-}
-.mc-tile-unit { font-size: 13px; font-weight: 600; color: var(--ink-3); margin-left: 2px; }
-.mc-tile-trend { display: flex; align-items: center; gap: 8px; color: var(--acc); min-height: 14px; }
-.mc-tile-delta { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
-.mc-tile-note { font-size: 10.5px; color: var(--ink-4); margin-top: 3px; }
 
 /* ---------- panel grid ---------- */
 .mc-grid {

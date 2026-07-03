@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 //
-// tools/cli.mjs — the `packc` / `tomograph` entry point.
+// tools/cli.mjs — the `packc` / `observogram` entry point.
 //
 // A thin dispatcher: it reads the first positional argument as a command
 // and either forwards to one of the existing single-purpose tools (so their
@@ -12,10 +12,11 @@
 //   packc x-ray    <repo-dir>         → tools/crawl-repo.mjs
 //   packc compile  <file> [target]    → tools/lib/compile.mjs (programmatic)
 //   packc serve                       → server/index.mjs (boots the studio)
-//   tomograph                         → same as `serve`
+//   observogram                       → same as `serve`
 //
-// Both bin names point here. With no command, the `tomograph` bin boots the
-// studio; everything else prints help. `serve` works under either name, so
+// Both bin names point here (a pre-rebrand global `tomograph` shim still
+// resolves too). With no command, the `observogram` bin boots the studio;
+// everything else prints help. `serve` works under either name, so
 // behaviour is identical across platforms even where the invoked bin name
 // isn't recoverable (e.g. npm's Windows .cmd shims).
 
@@ -82,7 +83,7 @@ async function runCompile(args) {
 }
 
 function printHelp() {
-  console.log(`Tomograph — the Observability Compiler
+  console.log(`Observogram — the Observability Compiler
 
 Usage:
   packc validate <file...>        Validate pack(s) against spec v1.2
@@ -92,7 +93,7 @@ Usage:
   packc journey  run <name>       Run a saved drift check (exit 0 pass · 1 gate-failed · 2 error)
   packc journey  list             List saved journeys + their last outcome
   packc serve                     Boot the studio (Express server)
-  tomograph                       Same as \`packc serve\`
+  observogram                     Same as \`packc serve\`
 
 Run a command with no/invalid args to see its own usage.`);
 }
@@ -107,7 +108,7 @@ async function runJourneyCommand([sub, ...args]) {
   const journeyLib = await import('./lib/journey.mjs');
   if (sub === 'list') {
     const names = journeyLib.listJourneys();
-    if (!names.length) { console.log('(no journeys saved — add .tomograph/journeys/<name>.journey.yaml)'); return; }
+    if (!names.length) { console.log('(no journeys saved — add .observogram/journeys/<name>.journey.yaml)'); return; }
     for (const n of names) {
       const last = journeyLib.readJourneyRuns(n, { limit: 1 })[0];
       console.log(`${n}\t${last ? `${last.outcome} · ${last.startedAt} · alignment ${last.drift?.alignmentPct}%` : '(never run)'}`);
@@ -165,14 +166,17 @@ switch (command) {
     console.log(pkg.version);
     break;
   }
-  case undefined:
-    // No subcommand: the `tomograph` bin boots the studio; `packc` shows help.
-    if (basename(process.argv[1] || '').startsWith('tomograph')) {
+  case undefined: {
+    // No subcommand: the `observogram` bin boots the studio (so does a
+    // stale global `tomograph` shim); `packc` shows help.
+    const bin = basename(process.argv[1] || '');
+    if (bin.startsWith('observogram') || bin.startsWith('tomograph')) {
       delegate('server/index.mjs', rest);
     } else {
       printHelp();
     }
     break;
+  }
   default:
     console.error(`packc: unknown command "${command}"\n`);
     printHelp();

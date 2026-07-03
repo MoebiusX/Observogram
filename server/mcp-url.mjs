@@ -6,13 +6,15 @@
 //   - only http(s) is accepted (no file:, ftp:, gopher:, ...);
 //   - localhost / private / link-local addresses are allowed by default
 //     (a local MCP server is the normal dev setup) but logged per use;
-//     set TOMOGRAPH_ALLOW_LOCAL_MCP=0 to turn them into 400s when the
+//     set OBSERVOGRAM_ALLOW_LOCAL_MCP=0 to turn them into 400s when the
 //     studio is exposed beyond the developer's own machine;
 //   - the returned safeUrl has credentials stripped — stderr logs must use
 //     it (or redactCredentials), never the raw URL.
 // Hostnames that RESOLVE to private addresses are not caught (no DNS
 // lookup here); the literal-IP check covers hex/decimal/octal IPv4 forms
 // because the WHATWG URL parser normalises those to dotted-decimal.
+
+import { brandEnv } from '../tools/lib/brand-env.mjs';
 
 const PRIVATE_V4 = [
   /^127\./, /^10\./, /^192\.168\./, /^169\.254\./, /^0\./,
@@ -51,10 +53,10 @@ export function validateMcpUrl(raw) {
   url.password = '';
   const safeUrl = url.href;
   if (isLocalOrPrivateHost(url.hostname)) {
-    if (process.env.TOMOGRAPH_ALLOW_LOCAL_MCP === '0') {
-      return { error: `mcpUrl targets a local/private address (${url.hostname}), which TOMOGRAPH_ALLOW_LOCAL_MCP=0 forbids` };
+    if (brandEnv('ALLOW_LOCAL_MCP') === '0') {
+      return { error: `mcpUrl targets a local/private address (${url.hostname}), which OBSERVOGRAM_ALLOW_LOCAL_MCP=0 forbids` };
     }
-    process.stderr.write(`[mcp-url] note: ${safeUrl} targets a local/private address; set TOMOGRAPH_ALLOW_LOCAL_MCP=0 to refuse these\n`);
+    process.stderr.write(`[mcp-url] note: ${safeUrl} targets a local/private address; set OBSERVOGRAM_ALLOW_LOCAL_MCP=0 to refuse these\n`);
   }
   return { safeUrl };
 }

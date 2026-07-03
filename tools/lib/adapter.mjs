@@ -137,7 +137,7 @@ export function adapt(canonical, opts = {}) {
       version: canonical.metadata?.version,
       owners: canonical.metadata?.owners ?? [],
       service: metaBindings.service,
-      diffScopeMode: annotations['tomograph.diff.scopeMode'],
+      diffScopeMode: annotations['observogram.diff.scopeMode'] ?? annotations['tomograph.diff.scopeMode'],
       criticality: effective.criticality || metaBindings.criticality,
       environment: envName,
       environments: envs,

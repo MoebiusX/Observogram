@@ -4,12 +4,12 @@
 drift/gap view exposed by `GET /api/diff?a=<packId>&b=<packId>`.
 
 The comparison is directional: **A is the declared pack under review, B is the
-reference or live pack**. Tomograph reports in-scope drift for A against B and
+reference or live pack**. Observogram reports in-scope drift for A against B and
 keeps unrelated live inventory in a separate `outOfScope` bucket.
 
 ## The Claim
 
-Tomograph separates two questions:
+Observogram separates two questions:
 
 1. **Identity:** is this the same control?
 2. **Agreement:** do both sides declare the same contract for that control?
@@ -39,7 +39,7 @@ Representative identities:
 | L2X profiling/network/policy | product |
 | L2X mesh/collection | product + role |
 
-The precise phrasing matters: Tomograph matches on behaviour. For reliability
+The precise phrasing matters: Observogram matches on behaviour. For reliability
 contract artefacts, the declared id is the behavioural handle by design.
 
 ## Collision Handling
@@ -120,7 +120,7 @@ reported separately.
 - `alignment = aligned / union`: true agreement ratio.
 
 The strongest diagnostic signal is the gap between them: high Jaccard and low
-alignment means Tomograph found the same controls, but their definitions drift.
+alignment means Observogram found the same controls, but their definitions drift.
 
 ## Weighted Drift Fidelity
 

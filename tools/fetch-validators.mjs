@@ -186,7 +186,7 @@ function readManifest() {
 function download(url, dest, redirects = 0) {
   return new Promise((resolveDl, reject) => {
     if (redirects > 5) return reject(new Error(`too many redirects for ${url}`));
-    httpsGet(url, { headers: { 'User-Agent': 'tomograph-fetch-validators' } }, (res) => {
+    httpsGet(url, { headers: { 'User-Agent': 'observogram-fetch-validators' } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
         return resolveDl(download(res.headers.location, dest, redirects + 1));

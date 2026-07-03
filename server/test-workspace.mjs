@@ -18,8 +18,9 @@ const { assert, report } = createHarness();
 
 // Point the workspace at a fresh temp dir BEFORE first use — resolution is
 // lazy by design, exactly so tests can do this.
-const TMP = mkdtempSync(join(tmpdir(), 'tomograph-ws-'));
-process.env.TOMOGRAPH_WORKSPACE = TMP;
+const TMP = mkdtempSync(join(tmpdir(), 'observogram-ws-'));
+process.env.OBSERVOGRAM_WORKSPACE = TMP;
+delete process.env.TOMOGRAPH_WORKSPACE;
 
 const {
   saveWorkspacePack, deleteWorkspacePack, touchWorkspacePack,
@@ -214,13 +215,26 @@ try {
   assert(readDeployRecords().length === 2, 'deploy audit survives a registry clear — reset is not amnesia');
 
   // --- cache reset honors a re-pointed workspace ---
-  const TMP2 = mkdtempSync(join(tmpdir(), 'tomograph-ws2-'));
-  process.env.TOMOGRAPH_WORKSPACE = TMP2;
+  const TMP2 = mkdtempSync(join(tmpdir(), 'observogram-ws2-'));
+  process.env.OBSERVOGRAM_WORKSPACE = TMP2;
   resetWorkspaceCache();
   saveWorkspacePack('uploaded-relocated-eeee5555', { canonical, label: 'Moved', source: 'unit' });
   assert(existsSync(join(TMP2, 'packs', 'uploaded-relocated-eeee5555.pack.yaml')),
-         'TOMOGRAPH_WORKSPACE relocation takes effect after cache reset');
+         'OBSERVOGRAM_WORKSPACE relocation takes effect after cache reset');
   rmSync(TMP2, { recursive: true, force: true });
+
+  // --- rebrand shim: the legacy TOMOGRAPH_WORKSPACE spelling still works ---
+  const TMP3 = mkdtempSync(join(tmpdir(), 'observogram-ws3-'));
+  delete process.env.OBSERVOGRAM_WORKSPACE;
+  process.env.TOMOGRAPH_WORKSPACE = TMP3;
+  resetWorkspaceCache();
+  saveWorkspacePack('uploaded-legacyenv-ffff6666', { canonical, label: 'Legacy env', source: 'unit' });
+  assert(existsSync(join(TMP3, 'packs', 'uploaded-legacyenv-ffff6666.pack.yaml')),
+         'legacy TOMOGRAPH_WORKSPACE is honored when OBSERVOGRAM_WORKSPACE is unset');
+  delete process.env.TOMOGRAPH_WORKSPACE;
+  process.env.OBSERVOGRAM_WORKSPACE = TMP;
+  resetWorkspaceCache();
+  rmSync(TMP3, { recursive: true, force: true });
 } finally {
   rmSync(TMP, { recursive: true, force: true });
 }

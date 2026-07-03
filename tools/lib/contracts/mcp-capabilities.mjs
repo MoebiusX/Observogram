@@ -5,7 +5,7 @@
 // names up by CAPABILITY id and never hardcodes a tool string
 // (tools/test-contract-guard.mjs enforces this).
 //
-// A *capability* is what tomograph wants ("the recording rules", "the live
+// A *capability* is what Observogram wants ("the recording rules", "the live
 // Grafana version"); a *tool* is whatever name the connected MCP server
 // happens to expose for it. When an upstream renames a tool, the change
 // lands HERE: add the new name as the first candidate, mark the old row
@@ -20,7 +20,7 @@
 //   id           optional stable handle for callers that need to reference
 //                one candidate (e.g. the dashboards search/detail pair)
 //   deprecated   { since, removeAfter, aliasOf } — the alias keeps working
-//                until `removeAfter` (a tomograph version); CI fails a
+//                until `removeAfter` (an Observogram version); CI fails a
 //                release past `removeAfter` while the row still exists
 //                (docs/ARCHITECTURE_EVOLUTION.md §6).
 //

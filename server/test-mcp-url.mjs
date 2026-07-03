@@ -51,18 +51,18 @@ for (const [raw, label] of [
   const v = validateMcpUrl(raw);
   // Allowed by default posture, but it must be RECOGNISED as loopback —
   // assert via the strict posture below instead of log inspection.
-  process.env.TOMOGRAPH_ALLOW_LOCAL_MCP = '0';
+  process.env.OBSERVOGRAM_ALLOW_LOCAL_MCP = '0';
   const strict = validateMcpUrl(raw);
-  delete process.env.TOMOGRAPH_ALLOW_LOCAL_MCP;
+  delete process.env.OBSERVOGRAM_ALLOW_LOCAL_MCP;
   assert(!v.error && !!strict.error, `${label} normalises to loopback (allowed lax, refused strict)`, strict);
 }
 
-// ---------- TOMOGRAPH_ALLOW_LOCAL_MCP=0 posture ----------
-process.env.TOMOGRAPH_ALLOW_LOCAL_MCP = '0';
+// ---------- OBSERVOGRAM_ALLOW_LOCAL_MCP=0 posture ----------
+process.env.OBSERVOGRAM_ALLOW_LOCAL_MCP = '0';
 assert(!!validateMcpUrl('http://127.0.0.1:3001/mcp').error, 'strict posture refuses loopback');
 assert(!!validateMcpUrl('http://192.168.1.34:3001/mcp').error, 'strict posture refuses RFC1918');
 assert(!validateMcpUrl('https://mcp.example.com/x').error, 'strict posture still accepts public hosts');
-delete process.env.TOMOGRAPH_ALLOW_LOCAL_MCP;
+delete process.env.OBSERVOGRAM_ALLOW_LOCAL_MCP;
 assert(!validateMcpUrl('http://127.0.0.1:3001/mcp').error, 'default posture allows loopback (local dev)');
 
 report('mcp-url', 'the SSRF guard rejects bad schemes, strips credentials, and classifies hosts correctly.');

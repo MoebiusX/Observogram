@@ -1,6 +1,6 @@
 # User Journey
 
-Tomograph has one product journey:
+Observogram has one product journey:
 
 ```text
 Discover -> Diagnose -> Remediate
@@ -18,7 +18,7 @@ that answer.
 
 | Step | User question | Product answer |
 |---|---|---|
-| Discover | What do we have? | Render the observability tomogram from a repo, live scan, or pack. |
+| Discover | What do we have? | Render the observogram from a repo, live scan, or pack. |
 | Diagnose | Can we trust it? | Score coverage and trust; show declared-vs-live drift. |
 | Remediate | How do we fix it? | Compile and deploy the source-backed delta. |
 
@@ -33,7 +33,7 @@ analysis: References, Conformance, Schema, OTLP Coverage, Traceability, Atlas.
 
 ## OLA And Observability Contract
 
-The OLA is the service's observability intent. Tomograph represents that intent
+The OLA is the service's observability intent. Observogram represents that intent
 as a canonical ObservabilityPack:
 
 - criticality and ownership

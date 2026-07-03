@@ -8,7 +8,8 @@
 // Three responsibilities:
 //   1. buildVerdictModel()  — one normalized read of the drift universe:
 //      per-layer buckets, per-item badness (the engine's own weights),
-//      biggest-gap attribution, honesty flags. Accepts the active
+//      biggest-gap attribution, honesty flags. Accepts the state slice
+//      ({ pack, packB, diff, compareBId, catalogEntry }) plus the active
 //      product-lens predicate so counts match the lensed drill.
 //   2. projectGrade()       — "fixing these N takes you from B to A",
 //      computed by RE-RUNNING computeDiagnosticGrade on a hypothetical
@@ -19,8 +20,12 @@
 //   3. Widgets + honesty blocks — KPI tiles, sparklines, chips, donuts,
 //      and the partial-evidence / scaffold / out-of-scope /
 //      verification≠validation blocks every surface must carry.
+//
+// NO GLOBAL STATE: callers pass the state slice in and loadRunHistory's
+// fetcher is injectable, so downstream studios can vendor this file and
+// feed it their own store (docs/VENDORING.md). Only pure-module imports
+// below (api.mjs supplies just the default fetcher).
 
-import { state } from './state.mjs';
 import { api } from './api.mjs';
 import { escapeHtml } from './util.mjs';
 import { diffEntryLabel, deploySurfaceForArtefact } from './artifact-model.mjs';
@@ -35,7 +40,7 @@ import {
   criterionScore,
   DELTA_BADNESS,
 } from './diagnostic-grade.mjs';
-import { catalogEntryFor, LAYERS_FOR_DIFF } from './compare-view.mjs';
+import { LAYERS_FOR_DIFF } from './compare-catalog.mjs';
 
 export const VERDICT_LAYER_NAMES = {
   L1: 'Contract', L2: 'Telemetry', L2X: 'Extended', L3: 'Insight',
@@ -53,14 +58,16 @@ function entryUid(L, kind, entry) {
 
 // passesLens(entry, side) — optional predicate threading the Diagnose
 // product lens into the model so the lattice matches the lensed counts.
-export function buildVerdictModel({ passesLens = null } = {}) {
-  const haveB = !!state.packB;
-  const posture = computePostureMatrix(state.pack, state.packB);
-  const diff = (state.diff && !state.diff.error && state.diff.layers) ? state.diff : null;
-  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diff);
-  const mode = compareModeFor(state.packB, state.compareBId);
-  const bName = catalogEntryFor(state.compareBId)?.label
-    || state.packB?.meta?.name || state.packB?.metadata?.name || state.packB?.id || 'Pack B';
+// pack/packB/diff/compareBId are the caller's state slice; catalogEntry
+// is the (optional) catalog row for compareBId — only its label is read.
+export function buildVerdictModel({ pack, packB, diff, compareBId, catalogEntry = null, passesLens = null } = {}) {
+  const haveB = !!packB;
+  const posture = computePostureMatrix(pack, packB);
+  const resolvedDiff = (diff && !diff.error && diff.layers) ? diff : null;
+  const diagnostic = computeDiagnosticGrade(pack, packB, posture, compareBId, resolvedDiff);
+  const mode = compareModeFor(packB, compareBId);
+  const bName = catalogEntry?.label
+    || packB?.meta?.name || packB?.metadata?.name || packB?.id || 'Pack B';
   const lensed = (entry, side) => !passesLens || passesLens(entry, side);
 
   const totals = { aligned: 0, drifted: 0, onlyInA: 0, onlyInB: 0, scaffold: 0, outOfScope: 0 };
@@ -68,9 +75,9 @@ export function buildVerdictModel({ passesLens = null } = {}) {
   const items = [];
   const driftedEntries = [];
 
-  if (diff) {
+  if (resolvedDiff) {
     for (const L of LAYERS_FOR_DIFF) {
-      const bucket = diff.layers[L] || { onlyInA: [], onlyInB: [], inBoth: [], outOfScope: [] };
+      const bucket = resolvedDiff.layers[L] || { onlyInA: [], onlyInB: [], inBoth: [], outOfScope: [] };
       const matched = (bucket.inBoth || []).filter(e => lensed(e, 'a') && !isScaffoldDiffEntry(e));
       const aligned = matched.filter(e => e.match !== 'drifted');
       const drifted = matched.filter(e => e.match === 'drifted');
@@ -147,9 +154,9 @@ export function buildVerdictModel({ passesLens = null } = {}) {
   const deployableSet = deploySelectionFromItems(items);
 
   return {
-    haveB, posture, diff, diagnostic, mode, bName,
+    haveB, posture, diff: resolvedDiff, diagnostic, mode, bName,
     totals, layers, items, weighted, biggestGap, deployableSet,
-    liveEvidence: partialLiveEvidence(state.packB),
+    liveEvidence: partialLiveEvidence(packB),
     overallPct: diagnostic.overall.total === 0 ? 0
       : Math.round((diagnostic.overall.passed / diagnostic.overall.total) * 100),
   };
@@ -180,15 +187,16 @@ export function deploySelectionFromItems(items, selectedUids = null) {
 // claim it), and freshness / chaos-validated are never projected. When
 // the drift criterion is anchored on chain integrity the projection can
 // legitimately be flat — `chainAnchored` lets the view say so.
-export function projectGrade(uids /* Set<string> | null = fix everything */) {
-  const diff = (state.diff && !state.diff.error && state.diff.layers) ? state.diff : null;
-  if (!diff) return null;
+export function projectGrade(uids /* Set<string> | null = fix everything */,
+                             { pack, packB, diff, compareBId } = {}) {
+  const resolvedDiff = (diff && !diff.error && diff.layers) ? diff : null;
+  if (!resolvedDiff) return null;
   const fixAll = !uids;
   const isFixed = (L, kind, e) => fixAll || uids.has(entryUid(L, kind, e));
 
   const hypoLayers = {};
-  for (const L of Object.keys(diff.layers)) {
-    const bucket = diff.layers[L] || {};
+  for (const L of Object.keys(resolvedDiff.layers)) {
+    const bucket = resolvedDiff.layers[L] || {};
     const inBoth = [];
     const onlyInA = [];
     const onlyInB = [];
@@ -209,16 +217,16 @@ export function projectGrade(uids /* Set<string> | null = fix everything */) {
     }
     hypoLayers[L] = { ...bucket, inBoth, onlyInA, onlyInB };
   }
-  const hypo = { ...diff, layers: hypoLayers };
+  const hypo = { ...resolvedDiff, layers: hypoLayers };
 
-  const posture = computePostureMatrix(state.pack, state.packB);
-  const before = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diff);
-  const after = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, hypo);
+  const posture = computePostureMatrix(pack, packB);
+  const before = computeDiagnosticGrade(pack, packB, posture, compareBId, resolvedDiff);
+  const after = computeDiagnosticGrade(pack, packB, posture, compareBId, hypo);
   return {
     before, after,
     beforePct: Math.round(before.overall.audit.scorePctExact),
     afterPct: Math.round(after.overall.audit.scorePctExact),
-    chainAnchored: (diff.traceabilityGraph?.rollup?.declaredTotal || 0) > 0,
+    chainAnchored: (resolvedDiff.traceabilityGraph?.rollup?.declaredTotal || 0) > 0,
   };
 }
 
@@ -244,15 +252,17 @@ export function runHistory() { return _runs; }
 
 // Fire-and-forget loader: views call this; when it resolves with data
 // the onReady callback fires once and runHistory() is populated.
-export function loadRunHistory(onReady) {
+// fetchFn(path) → parsed JSON — defaults to the studio's api(); a host
+// studio vendoring this file passes its own transport instead.
+export function loadRunHistory(onReady, { fetchFn = api } = {}) {
   if (_runs) { return; }
   if (_runsPromise) { _runsPromise.then(onReady); return; }
   _runsPromise = (async () => {
     try {
-      const { journeys = [] } = await api('/api/journeys');
+      const { journeys = [] } = await fetchFn('/api/journeys');
       const j = journeys.find(x => x.lastRun) || journeys[0];
       if (!j) { _runs = { journey: null, runs: [] }; return; }
-      const { runs = [] } = await api(`/api/journeys/${encodeURIComponent(j.name)}/runs?limit=20`);
+      const { runs = [] } = await fetchFn(`/api/journeys/${encodeURIComponent(j.name)}/runs?limit=20`);
       // Newest-first from the API → oldest-first for sparklines.
       _runs = {
         journey: j.name,

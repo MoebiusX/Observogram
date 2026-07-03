@@ -24,7 +24,7 @@ const b64u = (x) => Buffer.from(x).toString('base64url');
 
 const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const KID = 'test-key-1';
-const CLIENT_ID = 'tomograph-studio';
+const CLIENT_ID = 'observogram-studio';
 const authCodes = new Map();   // code → { nonce, code_challenge, redirect_uri }
 let issuer;
 
@@ -104,20 +104,20 @@ issuer = `http://127.0.0.1:${idp.address().port}`;
 
 // ---------- boot the server in OIDC posture ----------
 
-const WORKSPACE = mkdtempSync(join(tmpdir(), 'tomograph-auth-oidc-'));
-process.env.TOMOGRAPH_WORKSPACE = WORKSPACE;
-process.env.TOMOGRAPH_OIDC_ISSUER = issuer;
-process.env.TOMOGRAPH_OIDC_CLIENT_ID = CLIENT_ID;
-process.env.TOMOGRAPH_OIDC_ALLOW_HTTP = '1';
-process.env.TOMOGRAPH_SESSION_SECRET = 'test-session-secret-0123456789-abcdef-XYZ';
-delete process.env.TOMOGRAPH_OIDC_CLIENT_SECRET;
-delete process.env.TOMOGRAPH_API_TOKEN;
-delete process.env.TOMOGRAPH_USERS_FILE;
+const WORKSPACE = mkdtempSync(join(tmpdir(), 'observogram-auth-oidc-'));
+process.env.OBSERVOGRAM_WORKSPACE = WORKSPACE;
+process.env.OBSERVOGRAM_OIDC_ISSUER = issuer;
+process.env.OBSERVOGRAM_OIDC_CLIENT_ID = CLIENT_ID;
+process.env.OBSERVOGRAM_OIDC_ALLOW_HTTP = '1';
+process.env.OBSERVOGRAM_SESSION_SECRET = 'test-session-secret-0123456789-abcdef-XYZ';
+delete process.env.OBSERVOGRAM_OIDC_CLIENT_SECRET;
+delete process.env.OBSERVOGRAM_API_TOKEN;
+delete process.env.OBSERVOGRAM_USERS_FILE;
 
 const { start } = await import('./index.mjs');
 const srv = await start({ port: 0, host: '127.0.0.1', silent: true });
 const base = `http://127.0.0.1:${srv.address().port}`;
-process.env.TOMOGRAPH_OIDC_REDIRECT_URL = `${base}/auth/callback`;
+process.env.OBSERVOGRAM_OIDC_REDIRECT_URL = `${base}/auth/callback`;
 
 const cookieOf = (res, name) =>
   (res.headers.getSetCookie?.() || []).find(c => c.startsWith(`${name}=`))?.split(';')[0] || null;
@@ -137,7 +137,7 @@ try {
   assert(authUrl.origin === issuer, 'redirect targets the configured issuer', authUrl.origin, issuer);
   assert(authUrl.searchParams.get('code_challenge_method') === 'S256', 'PKCE S256 challenge present');
   assert(!!authUrl.searchParams.get('state') && !!authUrl.searchParams.get('nonce'), 'state + nonce present');
-  const flowCookie = cookieOf(r, 'tomo_flow');
+  const flowCookie = cookieOf(r, 'observogram_flow');
   assert(!!flowCookie, 'flow cookie issued for the round trip');
 
   const idpHop = await fetch(authUrl, { redirect: 'manual' });
@@ -146,7 +146,7 @@ try {
 
   r = await fetch(cbUrl, { redirect: 'manual', headers: { Cookie: flowCookie } });
   assert(r.status === 302 && r.headers.get('location') === '/', 'callback exchanges the code and lands home', `${r.status} → ${r.headers.get('location')}`);
-  const session = cookieOf(r, 'tomo_session');
+  const session = cookieOf(r, 'observogram_session');
   assert(!!session, 'session cookie issued after token validation (RS256 + nonce + aud verified by openid-client)');
 
   // ---- authenticated ----

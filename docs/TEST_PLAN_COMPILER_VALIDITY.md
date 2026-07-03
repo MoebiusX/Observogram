@@ -1,7 +1,7 @@
 # Test Plan — Compiler Validity Against Real Backends
 
 *Commissioned 2026-06-11. The claim under test: "the pack is the
-program" — every artifact Tomograph compiles must be **ingestible by
+program" — every artifact Observogram compiles must be **ingestible by
 the platform it targets**, attested by that platform's own validator,
 not by our shape assertions. Today `tools/test-compile.mjs` checks that
 outputs are well-shaped (YAML round-trips, `groups:` present, schema
@@ -231,7 +231,7 @@ docker/validate.compose.yaml     # grafana:12.x, grafana:13.x pinned digests
 
 ## 6 · T4 — the round trip (closing the loop)
 
-The deepest validity claim Tomograph makes is its own product story:
+The deepest validity claim Observogram makes is its own product story:
 compile → deploy → verify. In CI, against the disposable Grafana:
 
 1. compile `payment-service` rules (grafana-managed) + dashboards;

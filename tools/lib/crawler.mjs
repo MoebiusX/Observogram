@@ -727,7 +727,7 @@ export function crawlFiles(filesInput, opts = {}) {
         'crawler.filesExcludedByEnvironment': String(summary.files.excludedByEnvironment),
         'crawler.filesClassified': String(summary.files.classified),
         'crawler.environmentProfile': envScope.profile || '',
-        'tomograph.diff.scopeMode': diffScopeMode,
+        'observogram.diff.scopeMode': diffScopeMode,
         'crawler.tierInferred':    tier,
         'crawler.warningCount':    String(summary.warnings.length),
         'crawler.syntheticRecordingRulesSkipped': String(summary.omitted.syntheticRecordingRules.length),

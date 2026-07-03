@@ -3,7 +3,7 @@
 Status: draft for maintainer review.
 
 This document scopes the Phase 1 research/specification pass for making
-Tomograph's verdict harder to dispute. It is intentionally docs/spec only.
+Observogram's verdict harder to dispute. It is intentionally docs/spec only.
 It does not change crawler behavior, diff behavior, PromQL parsing,
 artifact identity, Diagnostic Grade semantics, or drift-fidelity weights.
 
@@ -16,7 +16,7 @@ artifact identity, Diagnostic Grade semantics, or drift-fidelity weights.
 - No direct pushes to `develop`. The draft is reviewed by PR before merge.
 - No verification/validation conflation. Manifest checks, schema checks,
   conformance checks, and live artifact existence checks are verification
-  evidence. Tomograph is not called validated until its verdict is checked
+  evidence. Observogram is not called validated until its verdict is checked
   against incident ground truth for the intended use.
 - No drift-fidelity re-weighting in this draft. Existing weighted-fidelity
   semantics remain the baseline until the maintainer explicitly reviews a
@@ -26,14 +26,14 @@ artifact identity, Diagnostic Grade semantics, or drift-fidelity weights.
 
 Phase 1 answers this research question:
 
-> What must Tomograph specify, measure, and display before its Diagnostic
+> What must Observogram specify, measure, and display before its Diagnostic
 > Grade and drift verdict can be trusted as a decision aid?
 
 The current product already has strong verification machinery: deterministic
 pack adaptation, structural diff, live MCP evidence, traceability, and a
 repeatable Diagnostic Grade. The remaining credibility gap is not whether the
 pipeline runs. It is whether the verdict is true enough, fresh enough, and
-validated enough for the decision Tomograph asks users to make.
+validated enough for the decision Observogram asks users to make.
 
 This research track runs alongside the active execution track in
 `docs/VALUE_BACKLOG.md`: post-deploy re-verify, workspace persistence, audit,
@@ -96,7 +96,7 @@ selection, evidence, and comparison scope:
 ### Current understanding
 
 `docs/DIFF.md` says expression fields currently collapse whitespace only.
-That is an honest and useful baseline: it avoids pretending Tomograph has
+That is an honest and useful baseline: it avoids pretending Observogram has
 semantic equivalence it does not yet prove. The research task is to define
 which future equivalences are safe enough to canonicalize and which must stay
 textual.
@@ -139,7 +139,7 @@ These are plausible candidates for a later reviewed implementation:
 
 ### Current understanding
 
-Tomograph already carries live MCP evidence and a freshness idea through
+Observogram already carries live MCP evidence and a freshness idea through
 `mcp.refreshedAt` and the Fresh criterion. The gap is precision: pack-level
 freshness is not the same as per-artifact attestation, and a write
 acknowledgement is not live verification.
@@ -215,9 +215,9 @@ Exit-code intent:
 
 ### Purpose
 
-Incident back-testing is the validation track. It asks whether Tomograph's
+Incident back-testing is the validation track. It asks whether Observogram's
 verdict corresponds to operational reality for a service and a stated
-decision. This is the point where Tomograph can move from "verified" toward
+decision. This is the point where Observogram can move from "verified" toward
 "validated."
 
 ### Minimum incident record
@@ -241,7 +241,7 @@ An incident back-test fixture should capture:
 
 ### Release criterion
 
-Before Tomograph claims the Diagnostic Grade is validated for a given use, it
+Before Observogram claims the Diagnostic Grade is validated for a given use, it
 should back-test against 3-5 real incidents for that service class and publish:
 
 - incident catch rate;

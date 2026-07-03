@@ -4,15 +4,17 @@
 // the Diagnose sub-views (benchmark, drift drill, posture matrix, diagnostic
 // grade, traceability), and the side-by-side Compare view. The largest single
 // cluster; its many functions cross-call each other, so they live together.
-// Orchestration-coupled: imports the re-render entrypoints, the card opener,
-// and a couple of pack helpers back from app.mjs + drawer.mjs.
+// Re-render / loader / modal entrypoints come through the studio host seam
+// (host.mjs); a couple of pack helpers are still imported back from app.mjs
+// and the card opener from drawer.mjs (safe call-time cycles).
 
 import { state } from './state.mjs';
 import { api } from './api.mjs';
 import { escapeHtml, toast } from './util.mjs';
 import { LAYER_DEFS, L4_SUBGROUPS } from './constants.mjs';
 import { openDrawer } from './drawer.mjs';
-import { defaultEnvFor, loadPackB, openDeployModal, renderMainView, renderTabs, refresh } from './app.mjs';
+import { defaultEnvFor, refresh } from './app.mjs';
+import { host as appHost } from './host.mjs';
 import { cardKey } from './layers-view.mjs';
 import { diffEntryLabel, deploySelectionFromEntries, deploySurfaceForArtefact } from './artifact-model.mjs';
 import {
@@ -30,6 +32,11 @@ import {
   isScaffoldDiffEntry,
   partialLiveEvidence,
 } from './diagnostic-grade.mjs';
+import { catalogEntryFor, LAYERS_FOR_DIFF } from './compare-catalog.mjs';
+
+// Re-exported: these two lived here before moving to compare-catalog.mjs
+// (kept importable from the view for compile-view.mjs and proto-shared.mjs).
+export { catalogEntryFor, LAYERS_FOR_DIFF };
 
 // ---------- compare view ----------
 
@@ -87,8 +94,8 @@ export async function refreshDiff() {
   // dispatches on state.packB directly, so nulling it here just forced
   // a redundant network round-trip AND silently broke the view nav's
   // "Compare/Atlas appear when B is loaded" rule on every diff refresh.
-  renderTabs();
-  renderMainView();
+  appHost.renderTabs();
+  appHost.renderMainView();
 }
 
 // ============================================================
@@ -294,7 +301,7 @@ export function renderTraceabilityView(host) {
     card.onclick = () => {
       if (!state.traceOpen) state.traceOpen = {};
       state.traceOpen[key] = !state.traceOpen[key];
-      renderMainView();
+      appHost.renderMainView();
     };
     headlineGrid.appendChild(card);
   }
@@ -546,8 +553,8 @@ function renderTraceRow(bucketKey, finding, resolvedSet) {
     state.layerFilter = finding.layer === 'L4' ? 'L4' : finding.layer;
     state.activeLayer = finding.layer;
     state.activeCardKey = finding.key;
-    renderTabs();
-    renderMainView();
+    appHost.renderTabs();
+    appHost.renderMainView();
     // Open the drawer for the artefact if we can find it.
     const pack = (bucketKey === 'verifiedNotDeclared') ? state.packB : state.pack;
     const items = layerItemsFor(pack, finding.layer);
@@ -557,8 +564,8 @@ function renderTraceRow(bucketKey, finding, resolvedSet) {
       try { openDrawer(art, layerDef, null); } catch (_) {}
     }
   };
-  row.querySelector('[data-act="resolve"]').onclick = () => { toggleTraceResolved(finding.findingKey); renderMainView(); };
-  row.querySelector('[data-act="suppress"]').onclick = () => { toggleTraceSuppressed(finding.findingKey); renderMainView(); };
+  row.querySelector('[data-act="resolve"]').onclick = () => { toggleTraceResolved(finding.findingKey); appHost.renderMainView(); };
+  row.querySelector('[data-act="suppress"]').onclick = () => { toggleTraceSuppressed(finding.findingKey); appHost.renderMainView(); };
   return row;
 }
 
@@ -619,7 +626,7 @@ function renderDiagnoseSubnav(active) {
     btn.addEventListener('click', () => {
       if (state.diagnoseSub === t.id) return;
       state.diagnoseSub = t.id;
-      renderMainView();
+      appHost.renderMainView();
     });
     nav.appendChild(btn);
   }
@@ -662,16 +669,16 @@ export function renderBenchmarkView(view) {
     `;
     scaffold.appendChild(loading);
     Promise.all([
-      haveB ? Promise.resolve() : loadPackB(),
+      haveB ? Promise.resolve() : appHost.loadPackB(),
       (state.diff && !state.diff.error) ? Promise.resolve() : loadDiff(),
-    ]).then(() => { renderTabs(); renderMainView(); })
+    ]).then(() => { appHost.renderTabs(); appHost.renderMainView(); })
       .catch((e) => {
         loading.classList.remove('loading-compare');
         loading.innerHTML = `
           <span>Comparison failed to load: ${escapeHtml(e?.message || 'unknown error')}</span>
           <button type="button" class="ctrl-btn loading-compare-retry">retry</button>
         `;
-        loading.querySelector('.loading-compare-retry')?.addEventListener('click', () => renderMainView());
+        loading.querySelector('.loading-compare-retry')?.addEventListener('click', () => appHost.renderMainView());
       });
     return;
   }
@@ -1031,7 +1038,7 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
     `;
     wrap.appendChild(actions);
     actions.querySelector('#drift-deploy-missing')?.addEventListener('click', () => {
-      openDeployModal({ packId: state.selectedPackId, presetIdentities: deployable.identities });
+      appHost.openDeployModal({ packId: state.selectedPackId, presetIdentities: deployable.identities });
     });
     actions.querySelector('#drift-retrofeed')?.addEventListener('click', (ev) =>
       runRetrofeed(ev.currentTarget, actions.querySelector('.drift-retrofeed-result')));
@@ -1072,7 +1079,7 @@ export async function runRetrofeed(btn, host, { keys, scopeMode } = {}) {
       ${r.adopted.length ? `<p class="drift-retrofeed-dl">
           ${dl('⬇ additions fragment', r.fragmentYaml, `${slug}.retrofeed-fragment.yaml`)}
           ${dl('⬇ updated pack', r.updatedPackYaml, `${slug}.pack.yaml`)}
-          <span class="drift-retrofeed-note">commit the updated pack to the service repo (it carries tomograph.retrofeed.* provenance), then re-scan to confirm the gap closed</span>
+          <span class="drift-retrofeed-note">commit the updated pack to the service repo (it carries observogram.retrofeed.* provenance), then re-scan to confirm the gap closed</span>
         </p>` : ''}
     `;
     host.hidden = false;
@@ -1595,7 +1602,7 @@ function wireChainActions() {
       const declaredOnly = (branch.nodes || []).filter(n => n.status === 'declared_only' && !n.virtual);
       const deployable = deploySelectionFromEntries(
         declaredOnly.map(n => deploySurfaceForArtefact(layeredArtefactById(state.pack, n.aId))));
-      openDeployModal({ packId: state.selectedPackId, presetIdentities: deployable.identities });
+      appHost.openDeployModal({ packId: state.selectedPackId, presetIdentities: deployable.identities });
     } else {
       const keys = adoptableLiveOnly(branch).map(n => n.key);
       const host = btn.closest('.diag-chain-card')?.querySelector('.diag-chain-result');
@@ -2044,9 +2051,9 @@ function renderCompareView(view) {
     loading.textContent = 'Loading both packs…';
     scaffold.appendChild(loading);
     Promise.all([
-      haveB    ? Promise.resolve() : loadPackB(),
+      haveB    ? Promise.resolve() : appHost.loadPackB(),
       haveDiff ? Promise.resolve() : loadDiff(),
-    ]).then(() => { renderTabs(); renderMainView(); })
+    ]).then(() => { appHost.renderTabs(); appHost.renderMainView(); })
       .catch((e) => {
         loading.className = 'error';
         loading.textContent = `Failed to load packs: ${e.message}`;
@@ -2118,16 +2125,6 @@ function renderComparePackHeaders() {
 
   wrap.appendChild(renderComparePackHeader('b', state.packB, state.diff?.b));
   return wrap;
-}
-
-// Return the catalog entry for a pack id — the source of truth for
-// the human-readable label, version, criticality, environments. The
-// per-pack metadata.name in the YAML may DIFFER from the catalog
-// label (e.g. catalog "Target advanced (tier-1 reference)" vs YAML
-// metadata.name "platform-edge"); the catalog label is what the
-// user picked from the dropdown, so it wins for display.
-export function catalogEntryFor(packId) {
-  return (state.catalog || []).find(p => p.id === packId) || null;
 }
 
 function uploadedSourceHint(p) {
@@ -2229,13 +2226,13 @@ function renderComparePackHeader(side, pack, diffMeta) {
       state.compareBEnv = defaultEnvFor(newId);
       state.diff = null; state.packB = null;
       refreshDiff();
-      renderTabs(); renderMainView();
+      appHost.renderTabs(); appHost.renderMainView();
     }
   };
   const envSel = card.querySelector('.cpc-env-select');
   if (envSel) envSel.onchange = () => {
     if (side === 'a') { state.selectedEnv = envSel.value || null; refresh(); }
-    else { state.compareBEnv = envSel.value || null; state.packB = null; state.diff = null; refreshDiff(); renderTabs(); renderMainView(); }
+    else { state.compareBEnv = envSel.value || null; state.packB = null; state.diff = null; refreshDiff(); appHost.renderTabs(); appHost.renderMainView(); }
   };
   // Wire the action buttons. Evaluate opens the maturity popover;
   // coverage opens a layer-by-layer count breakdown.
@@ -2247,7 +2244,7 @@ function renderComparePackHeader(side, pack, diffMeta) {
   if (depBtn) depBtn.onclick = (e) => {
     e.stopPropagation();
     const packId = (side === 'a') ? state.selectedPackId : state.compareBId;
-    openDeployModal({ packId });
+    appHost.openDeployModal({ packId });
   };
   return card;
 }
@@ -2506,7 +2503,7 @@ function renderCompareFilters() {
     b.dataset.slice = s.id;
     b.textContent = s.label;
     b.title = s.hint;
-    b.onclick = () => { state.compareSlice = s.id; renderMainView(); };
+    b.onclick = () => { state.compareSlice = s.id; appHost.renderMainView(); };
     wrap.appendChild(b);
   }
   // Lens — scopes the comparison to one product's surface. When the user
@@ -2537,7 +2534,7 @@ function renderCompareFilters() {
   lensSel.onchange = () => {
     state.compareLens = lensSel.value;
     lensSel.dataset.lens = lensSel.value;
-    renderMainView();
+    appHost.renderMainView();
   };
   lensWrap.appendChild(lensSel);
   wrap.appendChild(lensWrap);
@@ -2554,7 +2551,7 @@ function renderCompareFilters() {
     if (pending) cancelAnimationFrame(pending);
     pending = requestAnimationFrame(() => {
       state.compareSearch = search.value;
-      renderMainView();
+      appHost.renderMainView();
       // After re-render, restore focus + cursor (renderMainView wipes the DOM).
       const fresh = document.querySelector('.compare-search-input');
       if (fresh) { fresh.focus(); fresh.setSelectionRange(search.value.length, search.value.length); }
@@ -2825,8 +2822,6 @@ function renderCompareLayerColumn(side, L, items, sets) {
   }
   return col;
 }
-
-export const LAYERS_FOR_DIFF = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'];
 
 function compareKeyOf(art) {
   return art?.defines || art?.id || '';

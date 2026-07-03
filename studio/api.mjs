@@ -11,10 +11,10 @@ import { state } from './state.mjs';
 // Session-authenticated mutations must carry this header (CSRF defence
 // in identity mode — see server/auth.mjs). Sent on every studio request;
 // the server ignores it outside identity mode.
-export const CSRF_HEADER = { 'X-Tomograph-CSRF': '1' };
+export const CSRF_HEADER = { 'X-Observogram-CSRF': '1' };
 
 // Active org (Stage 2 tenancy — server/tenancy.mjs). When the server has
-// orgs.json, every /api call carries X-Tomograph-Org so the request runs
+// orgs.json, every /api call carries X-Observogram-Org so the request runs
 // in that org's workspace. Resolved at boot from /auth/me memberships +
 // the persisted choice; null outside tenancy mode.
 let activeOrg = null;
@@ -32,7 +32,7 @@ export function savedOrg() { try { return localStorage.getItem('studioOrg.v1') |
 // always, the active org when tenancy is on. Raw fetch() call sites use
 // this too — one source of truth.
 export function authHeaders() {
-  return { ...CSRF_HEADER, ...(activeOrg ? { 'X-Tomograph-Org': activeOrg } : {}) };
+  return { ...CSRF_HEADER, ...(activeOrg ? { 'X-Observogram-Org': activeOrg } : {}) };
 }
 
 export async function api(path, opts = {}) {

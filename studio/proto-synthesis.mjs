@@ -17,7 +17,7 @@
 
 import { state } from './state.mjs';
 import { escapeHtml } from './util.mjs';
-import { loadPackB, openDeployModal, renderMainView, renderTabs } from './app.mjs';
+import { catalogEntryFor } from './compare-catalog.mjs';
 import {
   loadDiff, renderBenchmarkView, renderLiveScopeControl, refreshDiff,
   renderDiagnosticTraceabilityGraph, runRetrofeed, productSurface,
@@ -37,6 +37,17 @@ import {
   kpiTile, chip, criterionChip, donutSvg, fmtUnits, fixChip, badnessClassChip,
   partialEvidenceBanner, scaffoldOosNotes, buildEvidenceRows, deploySelectionFromItems,
 } from './verdict-ui.mjs';
+// App-level callbacks, injected by the host studio at boot (app.mjs calls
+// initHost right before boot()) — dependency inversion instead of importing
+// app.mjs, so a downstream studio can vendor this file and hand it its own
+// loader / modal / re-render entrypoints (docs/VENDORING.md).
+import { host as appHost } from './host.mjs';
+
+// The verdict-ui engines take the state slice explicitly (no global reads);
+// this is the studio's one binding of that contract.
+function verdictInputs() {
+  return { pack: state.pack, packB: state.packB, diff: state.diff, compareBId: state.compareBId };
+}
 
 // ---------- comparison loading gate (mirrors production behaviour) ----------
 
@@ -52,16 +63,16 @@ function ensureComparison(host) {
   `;
   host.appendChild(loading);
   Promise.all([
-    haveB ? Promise.resolve() : loadPackB(),
+    haveB ? Promise.resolve() : appHost.loadPackB(),
     (state.diff && !state.diff.error) ? Promise.resolve() : loadDiff(),
-  ]).then(() => { renderTabs(); renderMainView(); })
+  ]).then(() => { appHost.renderTabs(); appHost.renderMainView(); })
     .catch((e) => {
       loading.classList.remove('loading-compare');
       loading.innerHTML = `
         <span>Comparison failed to load: ${escapeHtml(e?.message || 'unknown error')}</span>
         <button type="button" class="ctrl-btn loading-compare-retry">retry</button>
       `;
-      loading.querySelector('.loading-compare-retry')?.addEventListener('click', () => renderMainView());
+      loading.querySelector('.loading-compare-retry')?.addEventListener('click', () => appHost.renderMainView());
     });
   return true;
 }
@@ -85,7 +96,7 @@ export function renderSynthDiagnose(view) {
   `;
   nav.querySelector('[data-sub="compare"]').addEventListener('click', () => {
     state.diagnoseSub = 'compare';
-    renderMainView();
+    appHost.renderMainView();
   });
   view.appendChild(nav);
 
@@ -115,12 +126,16 @@ export function renderSynthDiagnose(view) {
 
   const posture = computePostureMatrix(state.pack, state.packB);
   const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, state.diff);
-  const vm = buildVerdictModel({ passesLens });
+  const vm = buildVerdictModel({
+    ...verdictInputs(),
+    catalogEntry: catalogEntryFor(state.compareBId),
+    passesLens,
+  });
 
   // Trend tiles read journey run history; repaint once when it lands
   // (only when no comparison gate is pending).
   loadRunHistory(() => {
-    if (state.view === 'compare' && (!state.compareBId || state.packB)) renderMainView();
+    if (state.view === 'compare' && (!state.compareBId || state.packB)) appHost.renderMainView();
   });
 
   scaffold.appendChild(buildDiagnosePage(vm, diagnostic, posture, lens, useLens));
@@ -213,7 +228,7 @@ function buildDiagnosePage(vm, diagnostic, posture, lens, useLens) {
   let dragSentence = '';
   if (vm.haveB && vm.biggestGap) {
     const gapUids = new Set(vm.items.filter(i => i.kind === vm.biggestGap.kind).map(i => i.uid));
-    const gp = gapUids.size ? projectGrade(gapUids) : null;
+    const gp = gapUids.size ? projectGrade(gapUids, verdictInputs()) : null;
     dragSentence = gp ? projectionSentence(gp, gapUids.size) : '';
   }
 
@@ -309,16 +324,16 @@ function buildActionStrip(vm) {
     <div class="drift-retrofeed-result" hidden></div>
   `;
   strip.querySelector('#mc-deploy-missing')?.addEventListener('click', () =>
-    openDeployModal({ packId: state.selectedPackId, presetIdentities: vm.deployableSet.identities }));
+    appHost.openDeployModal({ packId: state.selectedPackId, presetIdentities: vm.deployableSet.identities }));
   strip.querySelector('#mc-retrofeed')?.addEventListener('click', (ev) =>
     runRetrofeed(ev.currentTarget, strip.querySelector('.drift-retrofeed-result')));
   strip.querySelector('#mc-reverify')?.addEventListener('click', () => {
     state.view = 'journeys';
-    renderTabs(); renderMainView();
+    appHost.renderTabs(); appHost.renderMainView();
   });
   strip.querySelector('#mc-open-remediate')?.addEventListener('click', () => {
     state.view = 'compile';
-    renderTabs(); renderMainView();
+    appHost.renderTabs(); appHost.renderMainView();
   });
   return strip;
 }
@@ -621,17 +636,20 @@ export function renderSynthRemediate(view) {
 
   if (!state.diff || state.diff.error || !state.diff.layers) {
     wrap.innerHTML = `<div class="remediate-loading">Computing the set…</div>`;
-    loadDiff().then(() => renderMainView());
+    loadDiff().then(() => appHost.renderMainView());
     return;
   }
 
-  const vm = buildVerdictModel();
+  const vm = buildVerdictModel({
+    ...verdictInputs(),
+    catalogEntry: catalogEntryFor(state.compareBId),
+  });
   const bName = vm.bName;
   for (const uid of [...rqDeselected]) if (!vm.items.some(i => i.uid === uid)) rqDeselected.delete(uid);
   const basket = new Set(vm.items.filter(i => !rqDeselected.has(i.uid)).map(i => i.uid));
   const picked = vm.items.filter(i => basket.has(i.uid));
   const dep = deploySelectionFromItems(vm.items, basket);
-  const projection = basket.size ? projectGrade(basket) : null;
+  const projection = basket.size ? projectGrade(basket, verdictInputs()) : null;
   const sentence = projection ? projectionSentence(projection, basket.size) : '';
 
   const projTile = projection && projection.afterPct > projection.beforePct
@@ -719,22 +737,22 @@ export function renderSynthRemediate(view) {
   }
 
   wrap.querySelectorAll('.rq-filter').forEach(btn => {
-    btn.onclick = () => { triageFilter = btn.dataset.filter; renderMainView(); };
+    btn.onclick = () => { triageFilter = btn.dataset.filter; appHost.renderMainView(); };
   });
   wrap.querySelectorAll('.rq-table input[type="checkbox"]').forEach(cb => {
     cb.onchange = () => {
       const uid = cb.closest('tr').dataset.uid;
       if (cb.checked) rqDeselected.delete(uid); else rqDeselected.add(uid);
-      renderMainView();
+      appHost.renderMainView();
     };
   });
   wrap.querySelectorAll('[data-deploy]').forEach(btn => {
     btn.onclick = () => {
       const item = vm.items.find(i => i.uid === btn.dataset.deploy);
       if (!item?.deployIdentity) return;
-      openDeployModal({ packId: state.selectedPackId, presetIdentities: new Set([item.deployIdentity]) });
+      appHost.openDeployModal({ packId: state.selectedPackId, presetIdentities: new Set([item.deployIdentity]) });
     };
   });
   wrap.querySelector('#rq-deploy')?.addEventListener('click', () =>
-    openDeployModal({ packId: state.selectedPackId, presetIdentities: dep.identities }));
+    appHost.openDeployModal({ packId: state.selectedPackId, presetIdentities: dep.identities }));
 }

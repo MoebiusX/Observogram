@@ -53,7 +53,7 @@ export async function ghFetch(path, init = {}) {
   const headers = {
     'Accept': 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'tomograph-crawler/1.0',
+    'User-Agent': 'observogram-crawler/1.0',
     ...(init.headers || {}),
   };
   if (process.env.GITHUB_TOKEN) {

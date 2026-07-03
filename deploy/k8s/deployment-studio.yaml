@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Tomograph studio + API — one Express container (server/index.mjs).
+# Observogram studio + API — one Express container (server/index.mjs).
 #
 # v0.3 replaced the old nginx + ConfigMap-statics + fetcher-sidecar layout:
 # the server renders nothing statically embeddable — the studio shell needs
@@ -35,7 +35,7 @@ spec:
         runAsGroup: 1000
       containers:
         - name: studio
-          image: tomograph:0.4.0
+          image: observogram:0.4.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

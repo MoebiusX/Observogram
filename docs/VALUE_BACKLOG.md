@@ -1,6 +1,6 @@
 # Value Backlog
 
-Prioritized product backlog for Tomograph's next iterations, distilled from
+Prioritized product backlog for Observogram's next iterations, distilled from
 the 2026-06 audits ([ADVANCED_FEATURE_AUDIT.md](ADVANCED_FEATURE_AUDIT.md),
 [REFACTORING_PLAN.md](REFACTORING_PLAN.md)), the live-drift remediation
 work, and the 2026-06-10 deep-analysis pass (post-deploy re-verify and
@@ -91,8 +91,8 @@ Gate. Design constraint: stay **file-first, zero new runtime deps,
 local-first** — a workspace directory + append-only JSONL + one optional
 bearer token, not a database + user accounts.
 
-**A. Workspace persistence** — `.tomograph/` (gitignored;
-`TOMOGRAPH_WORKSPACE` to relocate): `packs/<id>.pack.yaml` (id = the
+**A. Workspace persistence** — `.observogram/` (gitignored;
+`OBSERVOGRAM_WORKSPACE` to relocate): `packs/<id>.pack.yaml` (id = the
 existing deterministic content hash, so **zero client changes**),
 `packs/index.json` (label/source/createdAt/lastUsedAt),
 `deploys.jsonl`, `snapshots/<deployId>/`. `registerUploadedPack` writes
@@ -102,7 +102,7 @@ Fixes the restart-loses-everything and silent-eviction gaps. Effort: S.
 
 **B. Auth — one token, three postures.** (1) Local default: loopback bind,
 no auth, zero friction. (2) Exposed: if `HOST` ≠ loopback and no
-`TOMOGRAPH_API_TOKEN` set → **fail closed** on write routes with a clear
+`OBSERVOGRAM_API_TOKEN` set → **fail closed** on write routes with a clear
 message; with the token set, require `Authorization: Bearer` on mutating
 routes only (validate-register, crawl, draft, deploy, deploy-bulk,
 DELETE /uploads). (3) Never store MCP write tokens server-side — keep the
@@ -146,8 +146,8 @@ Canonical example: *"repo vs live drift check"* — crawl
 (alignment ≥ 85%, grade PASS, declared-not-live = 0).
 
 - **Definition is a file** (shareable, committable):
-  `.tomograph/journeys/<name>.journey.yaml` in the workspace, or a
-  `tomograph.journey.yaml` committed in the service repo. Secrets never
+  `.observogram/journeys/<name>.journey.yaml` in the workspace, or a
+  `observogram.journey.yaml` committed in the service repo. Secrets never
   inline — reference an env var name (`mcpAuthEnv: KRYSTALINE_MCP_TOKEN`).
 - **Runner is the CLI**, headless: `packc journey run <name>` — composes
   the engines that already run headless today (crawler, fetch-live-pack,
@@ -159,10 +159,10 @@ Canonical example: *"repo vs live drift check"* — crawl
   Task Scheduler command, a GitHub Actions workflow (the existing
   refresh-live-pack.yml is already half of this journey). Keeps the
   zero-dep, local-first posture.
-- **Every run appends history**: `.tomograph/runs/<journey>/<ts>.json`
+- **Every run appends history**: `.observogram/runs/<journey>/<ts>.json`
   with the summary (alignment %, grade score, bucket counts, breached
   criteria). History unlocks the real prize: **drift over time** — a
-  sparkline/chart of alignment per journey turns Tomograph from a
+  sparkline/chart of alignment per journey turns Observogram from a
   point-in-time scanner into a monitoring instrument for observability
   posture itself, and makes drift *velocity* visible ("alignment dropped
   6 points since Tuesday's deploy").
@@ -184,7 +184,7 @@ The v1 non-goal ("multi-tenant persistence") activates as its own
 stream: **sign in → land in your org → see only your services** —
 packs, journeys, deploys, audit, MCP endpoints all org-scoped,
 enforced server-side. Four stages, each shippable alone: OIDC identity
-(attaches at the existing `requireAuth` / `tomographActor` seam; the
+(attaches at the existing `requireAuth` / `observogramActor` seam; the
 bearer token becomes the service-account path), workspace-per-org
 tenancy (the `workspaceRoot()` seam — file-first machinery unchanged),
 roles (viewer / operator / admin) + org-scoped MCP endpoints (write

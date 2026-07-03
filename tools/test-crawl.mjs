@@ -283,7 +283,7 @@ const { canonical, summary, evidence } = crawlFiles(FIXTURE, {
 assert(canonical.apiVersion === 'observability.platform/v1', 'apiVersion is v1');
 assert(canonical.kind === 'ObservabilityPack',                 'kind is ObservabilityPack');
 assert(canonical.metadata.name === 'payments',                 'metadata.name = repo name');
-assert(canonical.metadata.annotations['tomograph.diff.scopeMode'] === 'service',
+assert(canonical.metadata.annotations['observogram.diff.scopeMode'] === 'service',
        'crawler annotates default live-drift scope mode');
 assert(canonical.metadata.bindings.criticality === 'tier-2',
   `tier-2 inferred from rules+dashboards+alerting (got ${canonical.metadata.bindings.criticality}; discovered ${JSON.stringify(summary.discovered)})`);
@@ -361,7 +361,7 @@ const familyScope = crawlFiles(FIXTURE, {
   diffScopeMode: 'family',
   now: '2026-06-05T00:00:00.000Z',
 });
-assert(familyScope.canonical.metadata.annotations['tomograph.diff.scopeMode'] === 'family',
+assert(familyScope.canonical.metadata.annotations['observogram.diff.scopeMode'] === 'family',
        'crawler honors live-drift scope override');
 
 // ---------- validate against spec v1.2 ----------

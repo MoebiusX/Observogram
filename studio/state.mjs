@@ -81,7 +81,7 @@ export const state = {
                                // provider.kind=grafana, anything whose mcp.source.<id>
                                // annotation came from a grafana_* tool, and any artefact
                                // that refs a surface backend). 'all' disables the filter.
-  diffScopeMode: '',           // '' means use Pack A's tomograph.diff.scopeMode annotation
+  diffScopeMode: '',           // '' means use Pack A's observogram.diff.scopeMode annotation
                                // or the service-scoped default. Otherwise:
                                // 'service' | 'family' | 'all'.
   diff: null,                  // last fetched /api/diff result

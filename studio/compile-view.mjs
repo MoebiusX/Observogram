@@ -3,8 +3,8 @@
 // The Compile / Remediate / Deploy workflow — Remediate's set-operation band
 // and the per-artefact compile catalog (pack -> Prometheus rules, Grafana
 // dashboards, OTel pipelines, Alertmanager routes), plus the deploy panel.
-// Orchestration-coupled: imports the re-render entrypoint and a few compare-
-// cluster helpers back from app.mjs (a safe call-time cycle).
+// Re-render + deploy-modal entrypoints come through the studio host seam
+// (host.mjs); compare-cluster helpers are imported from compare-view.mjs.
 
 import { state } from './state.mjs';
 import { api } from './api.mjs';
@@ -17,7 +17,7 @@ import {
   focusedCompileFlavor, setFocusedCompileFlavor,
   focusedCompileArtifact, setFocusedCompileArtifact,
 } from './focus.mjs';
-import { openDeployModal, renderMainView } from './app.mjs';
+import { host as appHost } from './host.mjs';
 import { catalogEntryFor, layerItemsFor, loadDiff, LAYERS_FOR_DIFF, renderLiveScopeControl } from './compare-view.mjs';
 import { artefactLabel, deploySelectionFromEntries, deploySurfaceForArtefact } from './artifact-model.mjs';
 
@@ -355,7 +355,7 @@ function renderRemediationPlan(host) {
     btn.onclick = () => {
       state.remediateOp = btn.dataset.op;
       state.remediateDeselected = new Set();   // reset curation on op change
-      renderMainView();
+      appHost.renderMainView();
     };
   });
 
@@ -369,7 +369,7 @@ function renderRemediationPlan(host) {
     loading.textContent = 'Computing the set…';
     wrap.appendChild(loading);
     host.appendChild(wrap);
-    loadDiff().then(() => renderMainView());
+    loadDiff().then(() => appHost.renderMainView());
     return;
   }
 
@@ -454,7 +454,7 @@ function renderRemediationPlan(host) {
         cb.onchange = () => {
           if (cb.checked) deselected.delete(e.identity);
           else deselected.add(e.identity);
-          renderMainView();
+          appHost.renderMainView();
         };
       } else {
         const tag = e.direction === 'retrofeed' ? 'repo patch'
@@ -493,7 +493,7 @@ function renderRemediationPlan(host) {
   `;
   const btn = action.querySelector('.remediate-deploy-btn');
   if (btn && n > 0) {
-    btn.onclick = () => openDeployModal({ packId: deployPackId, presetIdentities: selectedDeployment.identities });
+    btn.onclick = () => appHost.openDeployModal({ packId: deployPackId, presetIdentities: selectedDeployment.identities });
   }
   wrap.appendChild(action);
 
@@ -510,7 +510,7 @@ export function buildRetrofeedPatchText(resolved, bName) {
   }
   if (!changes.length) return '';
   const lines = [
-    'apiVersion: tomograph.dev/v1alpha1',
+    'apiVersion: observogram.dev/v1alpha1',
     'kind: ReconcilePatch',
     'metadata:',
     `  service: ${yamlScalar(state.pack?.meta?.service || state.pack?.meta?.name || 'unknown')}`,
@@ -596,7 +596,7 @@ export function renderCompileView(host) {
   if (!focusedCompileCatalog()) {
     nav.innerHTML = '<div class="compile-loading">Loading artifacts…</div>';
     stage.innerHTML = '<div class="placeholder">Loading the artifact catalog…</div>';
-    loadCompileCatalog().then(() => { setFocusedCompileContent(null); renderMainView(); });
+    loadCompileCatalog().then(() => { setFocusedCompileContent(null); appHost.renderMainView(); });
     return;
   }
 
@@ -649,7 +649,7 @@ export function renderCompileView(host) {
           setFocusedCompileFlavor(g.flavors?.[0]?.id || null);
         }
         setFocusedCompileContent(null);
-        renderMainView();
+        appHost.renderMainView();
       };
       list.appendChild(li);
     }
@@ -689,7 +689,7 @@ export function renderCompileView(host) {
         if (focusedCompileFlavor() === f.id) return;
         setFocusedCompileFlavor(f.id);
         setFocusedCompileContent(null);
-        renderMainView();
+        appHost.renderMainView();
       };
       flavorBar.appendChild(b);
     }
@@ -713,7 +713,7 @@ export function renderCompileView(host) {
     ph.className = 'placeholder';
     ph.textContent = 'Compiling…';
     stage.appendChild(ph);
-    loadCompiled().then(() => renderMainView());
+    loadCompiled().then(() => appHost.renderMainView());
     return;
   }
   if (focusedCompileContent().error) {
@@ -779,7 +779,7 @@ export function renderCompileView(host) {
   dl.href = URL.createObjectURL(blob);
 
   const deployBtn = actions.querySelector('#deploy-compiled');
-  if (deployBtn) deployBtn.onclick = () => openDeployModal({ packId: focusedPackId() });
+  if (deployBtn) deployBtn.onclick = () => appHost.openDeployModal({ packId: focusedPackId() });
 
   // Live re-derive the default tool name as the user changes product /
   // version / scope. We DON'T overwrite a user-typed override — only when

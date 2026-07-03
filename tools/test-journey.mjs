@@ -17,8 +17,8 @@ import { createHarness } from './lib/harness.mjs';
 
 const { assert, report } = createHarness();
 
-const TMP = mkdtempSync(join(tmpdir(), 'tomograph-journey-'));
-process.env.TOMOGRAPH_WORKSPACE = TMP;
+const TMP = mkdtempSync(join(tmpdir(), 'observogram-journey-'));
+process.env.OBSERVOGRAM_WORKSPACE = TMP;
 
 const {
   loadJourneyDef, runJourney, listJourneys, readJourneyRuns,
@@ -117,11 +117,11 @@ try {
   writeFileSync(join(TMP, 'journeys', 'live.journey.yaml'), [
     'name: live',
     `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`,
-    'packB: { mcp: { url: https://example.invalid/mcp, authEnv: TOMOGRAPH_TEST_NO_SUCH_TOKEN } }',
+    'packB: { mcp: { url: https://example.invalid/mcp, authEnv: OBSERVOGRAM_TEST_NO_SUCH_TOKEN } }',
   ].join('\n'));
   let authErr = null;
   try { await runJourney(loadJourneyDef('live')); } catch (e) { authErr = e.message; }
-  assert(/TOMOGRAPH_TEST_NO_SUCH_TOKEN/.test(authErr || '') && /not set/.test(authErr || ''),
+  assert(/OBSERVOGRAM_TEST_NO_SUCH_TOKEN/.test(authErr || '') && /not set/.test(authErr || ''),
          'unresolved authEnv refuses to run and names the env var');
 } finally {
   rmSync(TMP, { recursive: true, force: true });

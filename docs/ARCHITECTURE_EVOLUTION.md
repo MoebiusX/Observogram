@@ -170,7 +170,7 @@ Measurable gates:
   work had no output-space side effects).
 
 Rollback: move-only PRs revert cleanly; facade PR keeps the legacy cascade
-behind `TOMOGRAPH_LEGACY_MCP_RESOLVE=1` for one release.
+behind `OBSERVOGRAM_LEGACY_MCP_RESOLVE=1` for one release.
 
 ### Sprint 3 — studio decomposition (conservative) and release mechanics
 

@@ -2,13 +2,36 @@
 
 ## Unreleased
 
+### Tomograph → Observogram (rebrand, backwards-compatible)
+- Every user-facing name is now **Observogram**: package name and npm bin (`observogram`; `packc` unchanged), studio shell, login page, CLI help, Docker image (`observogram:<version>`), k8s manifests, docs, and diagrams.
+- **Nothing breaks on upgrade** — the legacy spellings keep working via `tools/lib/brand-env.mjs` (drop planned for 0.6):
+  - Env vars: every knob reads `OBSERVOGRAM_*` first, then the legacy `TOMOGRAPH_*` (`WORKSPACE`, `API_TOKEN[_LABEL]`, `OIDC_*`, `SESSION_*`, `USERS_FILE`, `INSECURE_NO_AUTH`, `ALLOW_LOCAL_MCP`, `STRICT_SNAPSHOT`, `BUILD`, `DEBUG`, `DIFF_SCOPE`, `MCP_TIMEOUT_MS`, `GRAFANA_*`).
+  - Workspace: the default directory is `.observogram/`, but an existing `.tomograph/` keeps being used as-is (no migration needed, no data orphaned).
+  - HTTP: the studio sends `X-Observogram-Org` / `X-Observogram-CSRF`; the server accepts the `X-Tomograph-*` spellings too and echoes `X-Observogram-Org`.
+  - Sessions: the cookie is `observogram_session`; sessions issued pre-rebrand under `tomo_session` stay valid (same HMAC secret), and logout clears both.
+  - Pack annotations: writers emit `observogram.*` (`diff.scopeMode`, `retrofeed.*`, `services`); readers accept the `tomograph.*` namespace from pre-rebrand packs, new key wins when both exist.
+- Legacy-compat is CI-asserted (workspace env fallback, org/CSRF headers, session cookie, annotation namespace).
+
+### Vendorable verdict engines (downstream-studio decoupling)
+- `studio/diagnostic-grade.mjs` is now **zero-dependency** (`L4_SUBGROUPS` inlined) — vendorable verbatim, like `tools/lib/diff.mjs` and `tools/lib/protocols.mjs`.
+- `studio/verdict-ui.mjs` no longer reads global state: `buildVerdictModel()` / `projectGrade()` take `{ pack, packB, diff, compareBId, catalogEntry }` explicitly and `loadRunHistory()` accepts an injectable `fetchFn`.
+- New `studio/compare-catalog.mjs` — `catalogEntryFor()` + `LAYERS_FOR_DIFF` extracted from the 3000-line compare-view (which re-exports them), so verdict modules import the small catalog module instead of the whole view.
+- See the new [docs/VENDORING.md](VENDORING.md) for the downstream contract.
+
+### The studio host seam (no view imports app.mjs for orchestration)
+- New `studio/host.mjs` — a zero-import module holding the app-level callbacks (`loadPackB`, `openDeployModal`, `renderMainView`, `renderTabs`); app.mjs fills it once at boot via `initHost()`. Every view module (compare, compile, layers, drawer, journeys, references, atlas, all protos) now calls these through `host` (imported as `appHost`) instead of importing app.mjs — app-specific *helpers* remain direct imports until each view adopts the model-passing convention.
+- New `tools/test-studio-graph.mjs` in `npm test` — links the entire studio ES-module graph headlessly, so a dangling import/export anywhere in the studio fails CI (node --check is parse-only and cannot catch it).
+- New `studio/verdict-ui.css` — the `.mc-*` widget styles verdict-ui.mjs emits, split out of app.css along the vendoring seam (the file header documents the theme variables it expects).
+- New [docs/UI_CONVENTIONS.md](UI_CONVENTIONS.md) — the adopt-on-touch conventions: host seam, loader/renderer split with injectable `fetchFn`, `render(container, model, host)` signature, and per-zone CSS prefixes.
+- Rebrand follow-through: the last "tomogram" vocabulary is now "observogram" (Discover's scan title/tagline, hero-asset path `assets/observogram-hero.png`, docs).
+
 ### Fixed: comparing legacy imports (and any cross-service packs)
 - The PACK B picker filtered out every pack whose service didn't match the active one — two legacy imports (each deriving its own service from the old pack id) could never be compared. Cross-service packs are now selectable under an "other services" group; same-service packs and live aggregates still lead the list, and the diff's service scope keeps cross-service comparisons honest.
 
 ### Stage 2 tenancy — workspace-per-org
 - New `server/tenancy.mjs`: org registry in `<workspace>/orgs.json` (the file existing arms tenancy, mirroring `users.json`), per-request org context via AsyncLocalStorage, idempotent flat → `orgs/default/` boot migration. Requires identity; refuses to boot otherwise (fail-closed).
 - `workspaceRoot()` is context-aware: registry, deploys, snapshots, journeys, runs all answer from `<workspace>/orgs/<orgId>/` inside a request. The in-memory upload registry and workspace index cache are keyed per org.
-- Org selection via `X-Tomograph-Org` (default: first membership); membership enforced in middleware; bearer token = deployment-level service account. New `GET /api/orgs`; `/auth/me` carries memberships; roles recorded for Stage 3 (not yet enforced).
+- Org selection via `X-Observogram-Org` (default: first membership); membership enforced in middleware; bearer token = deployment-level service account. New `GET /api/orgs`; `/auth/me` carries memberships; roles recorded for Stage 3 (not yet enforced).
 - New CLI `npm run orgs -- create|remove|add-member|remove-member|list`.
 - Studio: active org resolved before the first catalog fetch; ORG chip (switcher when multi-org) in the OBSERVA bar.
 - New suite `server/test-tenancy.mjs` — the isolation gate: org B reads/writes nothing of org A (API + filesystem-path assertions), migration, per-org reset, fail-closed posture.

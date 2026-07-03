@@ -41,6 +41,7 @@ import { adapt } from './adapter.mjs';
 import { evaluateConformance } from './conformance.mjs';
 import { diffPacks } from './diff.mjs';
 import { crawlFiles } from './crawler.mjs';
+import { baseWorkspacePath } from './brand-env.mjs';
 import { computeDiagnosticGrade, computePostureMatrix, DIAGNOSTIC_PASS_SCORE_THRESHOLD } from '../../studio/diagnostic-grade.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -55,7 +56,7 @@ let workspaceRootResolver = null;
 export function setWorkspaceRootResolver(fn) { workspaceRootResolver = typeof fn === 'function' ? fn : null; }
 function workspaceRoot() {
   if (workspaceRootResolver) return workspaceRootResolver();
-  return resolve(process.env.TOMOGRAPH_WORKSPACE || '.tomograph');
+  return baseWorkspacePath();
 }
 function journeysDir()   { return join(workspaceRoot(), 'journeys'); }
 function runsDir(name)   { return join(workspaceRoot(), 'runs', sanitizeName(name)); }
@@ -117,7 +118,7 @@ function loadPackFile(path, baseDir) {
 
 // Minimal repo walk for the crawl source — mirrors tools/crawl-repo.mjs's
 // filters (that script runs main() on import, so it can't be imported).
-const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'out', '.tomograph', 'coverage', 'vendor']);
+const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'out', '.observogram', '.tomograph', 'coverage', 'vendor']);
 const SCAN_EXT = /\.(ya?ml|json|cs|go|java|py|ts|tsx|js|mjs|rs|kt)$/i;
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_TOTAL_BYTES = 16 * 1024 * 1024;

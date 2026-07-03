@@ -53,9 +53,9 @@ assert(r1.updatedCanonical.spec.policy.burn_rate_alerts.some(b => b.slo === 'sha
        'burn-rate lands in spec.policy (path created on demand)');
 assert(baseA.spec.slos.length === 0 && !baseA.spec.policy,
        'input pack is never mutated');
-assert(r1.updatedCanonical.metadata.annotations['tomograph.retrofeed.adoptedAt'] === '2026-06-11T00:00:00.000Z',
+assert(r1.updatedCanonical.metadata.annotations['observogram.retrofeed.adoptedAt'] === '2026-06-11T00:00:00.000Z',
        'provenance timestamp is caller-supplied (deterministic)');
-assert(/sli:shadow_sli/.test(r1.updatedCanonical.metadata.annotations['tomograph.retrofeed.adopted']),
+assert(/sli:shadow_sli/.test(r1.updatedCanonical.metadata.annotations['observogram.retrofeed.adopted']),
        'provenance annotation lists the adopted identities');
 assert(r1.fragment?.spec?.slis?.length === 1, 'fragment carries just the additions');
 
@@ -84,7 +84,7 @@ assert(r4.adopted.length === 0 && r4.skipped.length === 3, 'non-declarable famil
 assert(/inventory-level evidence/.test(r4.skipped.find(s => s.kind === 'metric').reason),
        'metric skip names the inventory reason');
 assert(r4.skipped.some(s => /unparseable diff key/.test(s.reason)), 'garbage keys skip without throwing');
-assert(!('annotations' in (r4.updatedCanonical.metadata || {})) || !r4.updatedCanonical.metadata.annotations['tomograph.retrofeed.adoptedAt'],
+assert(!('annotations' in (r4.updatedCanonical.metadata || {})) || !r4.updatedCanonical.metadata.annotations['observogram.retrofeed.adoptedAt'],
        'no provenance annotation when nothing was adopted');
 assert(r4.fragment === null, 'no fragment when nothing was adopted');
 

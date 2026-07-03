@@ -2,15 +2,15 @@
 //
 // The References view (Advanced) — the curated, evidence-cited best-practice
 // reference packs, each with a "Benchmark vs …" action that loads it as Pack
-// B and opens the drift drill. This is the first orchestration-coupled view
-// module: it imports the re-render entrypoint and a couple of shared actions
-// from app.mjs. That edge is a deliberate cycle, but a safe one — every
-// app.mjs import here is a hoisted function (or a const read only at click
-// time), never touched during module evaluation.
+// B and opens the drift drill. The re-render entrypoint comes through the
+// studio host seam (host.mjs); two shared actions are still imported back
+// from app.mjs — a deliberate cycle, but a safe one: every app.mjs import
+// here is a hoisted function, never touched during module evaluation.
 
 import { state } from './state.mjs';
 import { escapeHtml } from './util.mjs';
-import { renderMainView, runBenchmark, loadAndCacheReferences } from './app.mjs';
+import { runBenchmark, loadAndCacheReferences } from './app.mjs';
+import { host as appHost } from './host.mjs';
 import { LENS_PRODUCTS } from './compare-view.mjs';
 
 export function renderReferencesView(view) {
@@ -24,7 +24,7 @@ export function renderReferencesView(view) {
   // every render); the user retries explicitly via the button below.
   if (!refs.length && !loadFailed && !loading && !state._referencesLoaded) {
     loadAndCacheReferences().then(() => {
-      if (state.view === 'references') renderMainView();
+      if (state.view === 'references') appHost.renderMainView();
     });
   }
 
@@ -81,7 +81,7 @@ export function renderReferencesView(view) {
   section.querySelector('.refs-retry-btn')?.addEventListener('click', () => {
     state._referencesError = null;
     state._referencesLoaded = false;
-    renderMainView(); // empty cache + cleared error → render kicks a fresh load
+    appHost.renderMainView(); // empty cache + cleared error → render kicks a fresh load
   });
 
   view.appendChild(section);

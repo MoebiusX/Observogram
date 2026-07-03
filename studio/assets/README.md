@@ -2,13 +2,13 @@
 
 Static assets served by the studio at `/assets/...`.
 
-## tomogram-hero.png
+## observogram-hero.png
 
-The Discover dashboard (TOMOGRAM SCAN) renders this image as the scanner
+The Discover dashboard (OBSERVOGRAM SCAN) renders this image as the scanner
 centerpiece:
 
 ```
-studio/assets/tomogram-hero.png   →   served at /assets/tomogram-hero.png
+studio/assets/observogram-hero.png   →   served at /assets/observogram-hero.png
 ```
 
 Drop the CT-scanner hero render here and it appears instantly — no code

@@ -15,8 +15,8 @@ codex/<topic> ──PR──▶ develop ──promotion PR──▶ main ──�
 ### `main` — the release line
 
 - Advances **only** by promotion PR from `develop`
-  (e.g. [#39](https://github.com/MoebiusX/tomograph/pull/39),
-  [#50](https://github.com/MoebiusX/tomograph/pull/50)). Never receives
+  (e.g. [#39](https://github.com/MoebiusX/Observogram/pull/39),
+  [#50](https://github.com/MoebiusX/Observogram/pull/50)). Never receives
   direct pushes or topic-branch merges.
 - Release tags (`v0.3.0`, …) are cut on `main` at promoted commits.
 - Merging to `main` is the **maintainer's act**: agents prepare and open
@@ -39,7 +39,7 @@ codex/<topic> ──PR──▶ develop ──promotion PR──▶ main ──�
   which forced back-merges into `develop`. That pattern is retired —
   `main` only advances by promotion.
 - Research/spec-track branches (e.g.
-  [#49](https://github.com/MoebiusX/tomograph/pull/49)) are docs-only and
+  [#49](https://github.com/MoebiusX/Observogram/pull/49)) are docs-only and
   reviewed by the execution lead before merge, so load-bearing engine
   semantics never move underneath in-flight implementation work.
 

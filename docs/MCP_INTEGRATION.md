@@ -1,6 +1,6 @@
 # MCP Integration
 
-Tomograph uses MCP for two jobs:
+Observogram uses MCP for two jobs:
 
 1. **Read live production posture** and reconstruct it as an ObservabilityPack.
 2. **Write selected remediation artifacts** back to the observability platform.
@@ -44,7 +44,7 @@ diagnostic-grade drift:
 | Baselines | MTTD/MTTR and anomaly-derived evidence when available |
 | Backend versions | observed platform products and versions |
 
-This is what lets Tomograph compare declared repo artifacts against live
+This is what lets Observogram compare declared repo artifacts against live
 production artifacts instead of only checking whether a live endpoint responded.
 
 ## Verification Annotations
@@ -77,7 +77,7 @@ fresh live signal exists.
 
 Dashboard search alone is not enough for diagnostic drift. The fetcher uses
 `grafana_dashboards_search` to find dashboard UIDs, then calls
-`grafana_dashboard_get` for each UID so Tomograph captures panels, variables,
+`grafana_dashboard_get` for each UID so Observogram captures panels, variables,
 targets, and sanitized dashboard JSON.
 
 ## Diagnostic Drift Semantics
@@ -98,9 +98,9 @@ still rendered as evidence and usually becomes the Remediate plan.
 ## Write Path: Deploy Through MCP
 
 The Remediate deploy flow compiles selected pack artifacts and sends them to an
-MCP write target. For Grafana, Tomograph uses:
+MCP write target. For Grafana, Observogram uses:
 
-| Tomograph artifact | MCP tool |
+| Observogram artifact | MCP tool |
 |---|---|
 | Grafana-managed recording rules | `grafana_create_alert_rule` |
 | Grafana-managed alerting rules | `grafana_create_alert_rule` |
@@ -118,13 +118,13 @@ not in the browser.
 MCP_ENABLE_WRITES=true
 GRAFANA_URL=https://grafana.example.net
 GRAFANA_AUTH_TOKEN=glsa_...
-MCP_AUTH_KEYS='{"keys":[{"id":"tomograph","key":"sk-tomograph-prod"}]}'
+MCP_AUTH_KEYS='{"keys":[{"id":"observogram","key":"sk-observogram-prod"}]}'
 ```
 
-The Tomograph deploy modal receives the MCP client key, for example:
+The Observogram deploy modal receives the MCP client key, for example:
 
 ```text
-sk-tomograph-prod
+sk-observogram-prod
 ```
 
 Grafana permissions:

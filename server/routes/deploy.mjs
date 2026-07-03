@@ -25,6 +25,7 @@ import {
   newDeployId, captureDeploySnapshot,
 } from '../deploy-helpers.mjs';
 import { validateMcpUrl, redactCredentials } from '../mcp-url.mjs';
+import { brandEnv } from '../../tools/lib/brand-env.mjs';
 import {
   appendDeployRecord, appendDeployVerify, readDeployRecords, readDeploySnapshot,
 } from '../workspace.mjs';
@@ -175,7 +176,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
           const result = await callTool(GRAFANA_DASHBOARD_TOOL, {
             dashboard,
             folder_uid: snap.meta.folder || undefined,
-            message: `Tomograph rollback of ${rollbackOf}`,
+            message: `Observogram rollback of ${rollbackOf}`,
             mode: 'upsert',
             dry_run: dryRun,
           });
@@ -291,7 +292,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
     // about to overwrite BEFORE the first write, so rollback always has a
     // pre-state — or an honest record that the artefact didn't exist yet.
     const deployId = newDeployId();
-    const strictSnapshot = body.strictSnapshot === true || process.env.TOMOGRAPH_STRICT_SNAPSHOT === '1';
+    const strictSnapshot = body.strictSnapshot === true || brandEnv('STRICT_SNAPSHOT') === '1';
     const snapshot = await captureDeploySnapshot({ deployId, callTool, availableTools, items, dryRun, folder, safeMcpUrl });
     if (strictSnapshot && !['captured', 'empty', 'skipped'].includes(snapshot.status)) {
       return res.status(412).json({
@@ -340,7 +341,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
           tool,
           mode,
           dryRun,
-          message: `Tomograph deploy ${meta.id}@${overlaid?.metadata?.version || '?'}`,
+          message: `Observogram deploy ${meta.id}@${overlaid?.metadata?.version || '?'}`,
         });
         if (!nativeCalls) {
           results.push({ item, ok: false, tool, error: `no native deploy adapter for '${tool}'`, tookMs: Date.now() - itStart });
@@ -503,7 +504,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
           tool: mcpTool,
           mode,
           dryRun,
-          message: `Tomograph deploy ${meta.id}@${canonical.metadata?.version || '?'}`,
+          message: `Observogram deploy ${meta.id}@${canonical.metadata?.version || '?'}`,
         });
         result = [];
         operations = nativeCalls.length;

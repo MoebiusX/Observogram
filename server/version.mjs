@@ -3,7 +3,7 @@
 // Version comes from package.json; the build identifier is resolved once
 // at module load, in precedence order:
 //
-//   1. TOMOGRAPH_BUILD          — baked into hosted images (Dockerfile
+//   1. OBSERVOGRAM_BUILD        — baked into hosted images (Dockerfile
 //                                 ARG/ENV), e.g. a CI run number or tag.
 //   2. git metadata             — dev checkouts: `<commit-count>.<short-sha>`
 //                                 (monotonic build number + exact commit),
@@ -19,6 +19,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { brandEnv } from '../tools/lib/brand-env.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -57,7 +58,7 @@ function gitDirty() {
 }
 
 function resolveBuild() {
-  const fromEnv = (process.env.TOMOGRAPH_BUILD || '').trim();
+  const fromEnv = brandEnv('BUILD');
   if (fromEnv) return fromEnv;
   const sha = gitSha();
   if (!sha) return 'untracked';

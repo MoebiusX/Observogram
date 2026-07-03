@@ -18,13 +18,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // Environment BEFORE the server module loads.
-const WORKSPACE = mkdtempSync(join(tmpdir(), 'tomograph-tenancy-'));
-process.env.TOMOGRAPH_WORKSPACE = WORKSPACE;
-process.env.TOMOGRAPH_API_TOKEN = 'ci-token-tenancy-0123456789';
-process.env.TOMOGRAPH_API_TOKEN_LABEL = 'ci-bot';
-process.env.TOMOGRAPH_USERS_FILE = join(WORKSPACE, 'users.json');
-delete process.env.TOMOGRAPH_OIDC_ISSUER;
-delete process.env.TOMOGRAPH_SESSION_SECRET;
+const WORKSPACE = mkdtempSync(join(tmpdir(), 'observogram-tenancy-'));
+process.env.OBSERVOGRAM_WORKSPACE = WORKSPACE;
+process.env.OBSERVOGRAM_API_TOKEN = 'ci-token-tenancy-0123456789';
+process.env.OBSERVOGRAM_API_TOKEN_LABEL = 'ci-bot';
+process.env.OBSERVOGRAM_USERS_FILE = join(WORKSPACE, 'users.json');
+delete process.env.OBSERVOGRAM_OIDC_ISSUER;
+delete process.env.OBSERVOGRAM_SESSION_SECRET;
 
 import { createHarness } from '../tools/lib/harness.mjs';
 const { assert, failures, report } = createHarness({ indent: '  ', truncate: 200 });
@@ -53,7 +53,7 @@ const login = async (username, password) => {
     body: `username=${username}&password=${encodeURIComponent(password)}`,
     redirect: 'manual',
   });
-  const cookie = (r.headers.getSetCookie?.() || []).find(c => c.startsWith('tomo_session='))?.split(';')[0];
+  const cookie = (r.headers.getSetCookie?.() || []).find(c => c.startsWith('observogram_session='))?.split(';')[0];
   if (!cookie) throw new Error(`login failed for ${username}: ${r.status}`);
   return cookie;
 };
@@ -78,7 +78,7 @@ try {
   // ---- alice uploads a pack into acme ----
   r = await fetch(`${base}/api/validate?source=demo.yaml`, {
     method: 'POST',
-    headers: { Cookie: alice, 'Content-Type': 'text/yaml', 'X-Tomograph-CSRF': '1' },
+    headers: { Cookie: alice, 'Content-Type': 'text/yaml', 'X-Observogram-CSRF': '1' },
     body: PACK_YAML,
   });
   j = await r.json();
@@ -97,11 +97,15 @@ try {
   r = await fetch(`${base}/api/packs/${packId}/conformance`, { headers: { Cookie: bob } });
   assert(r.status === 404, "bob addressing acme's pack id directly → 404", r.status, 404);
 
-  r = await fetch(`${base}/api/packs`, { headers: { Cookie: bob, 'X-Tomograph-Org': 'acme' } });
+  r = await fetch(`${base}/api/packs`, { headers: { Cookie: bob, 'X-Observogram-Org': 'acme' } });
   assert(r.status === 403, 'bob requesting org acme explicitly → 403 (membership enforced)', r.status, 403);
 
+  r = await fetch(`${base}/api/packs`, { headers: { Cookie: alice, 'X-Observogram-Org': 'acme' } });
+  assert(r.ok && r.headers.get('x-observogram-org') === 'acme', 'explicit org header works for members and is echoed', r.headers.get('x-observogram-org'), 'acme');
+
+  // Rebrand shim: pre-rebrand clients still send the old header spelling.
   r = await fetch(`${base}/api/packs`, { headers: { Cookie: alice, 'X-Tomograph-Org': 'acme' } });
-  assert(r.ok && r.headers.get('x-tomograph-org') === 'acme', 'explicit org header works for members and is echoed', r.headers.get('x-tomograph-org'), 'acme');
+  assert(r.ok && r.headers.get('x-observogram-org') === 'acme', 'legacy X-Tomograph-Org header is still honored', r.headers.get('x-observogram-org'), 'acme');
 
   // ---- filesystem-path isolation ----
   assert(existsSync(join(WORKSPACE, 'orgs', 'acme', 'packs', `${packId}.pack.yaml`)),
@@ -115,14 +119,14 @@ try {
   // ---- per-org reset: alice's reset must not touch bravo ----
   r = await fetch(`${base}/api/validate?source=bob.yaml`, {
     method: 'POST',
-    headers: { Cookie: bob, 'Content-Type': 'text/yaml', 'X-Tomograph-CSRF': '1' },
+    headers: { Cookie: bob, 'Content-Type': 'text/yaml', 'X-Observogram-CSRF': '1' },
     body: PACK_YAML.replace('demo-skeleton', 'bob-skeleton'),
   });
   j = await r.json();
   const bobPackId = j.registered?.id;
   assert(!!bobPackId, 'bob registers his own pack in bravo');
 
-  r = await fetch(`${base}/api/uploads`, { method: 'DELETE', headers: { Cookie: alice, 'X-Tomograph-CSRF': '1' } });
+  r = await fetch(`${base}/api/uploads`, { method: 'DELETE', headers: { Cookie: alice, 'X-Observogram-CSRF': '1' } });
   assert(r.ok, "alice resets HER uploads");
   r = await fetch(`${base}/api/packs`, { headers: { Cookie: bob } });
   j = await r.json();
@@ -131,11 +135,11 @@ try {
     "bravo's pack file survived acme's reset");
 
   // ---- the bearer service account ----
-  const bearer = { Authorization: `Bearer ${process.env.TOMOGRAPH_API_TOKEN}` };
-  r = await fetch(`${base}/api/packs`, { headers: { ...bearer, 'X-Tomograph-Org': 'bravo' } });
+  const bearer = { Authorization: `Bearer ${process.env.OBSERVOGRAM_API_TOKEN}` };
+  r = await fetch(`${base}/api/packs`, { headers: { ...bearer, 'X-Observogram-Org': 'bravo' } });
   j = await r.json();
   assert(r.ok && j.packs.some(p => p.id === bobPackId), 'bearer + org header reads that org');
-  r = await fetch(`${base}/api/packs`, { headers: { ...bearer, 'X-Tomograph-Org': 'nonexistent' } });
+  r = await fetch(`${base}/api/packs`, { headers: { ...bearer, 'X-Observogram-Org': 'nonexistent' } });
   assert(r.status === 403, 'bearer targeting an unknown org → 403', r.status, 403);
   r = await fetch(`${base}/api/orgs`, { headers: bearer });
   j = await r.json();
@@ -151,14 +155,14 @@ try {
 
 // ---- boot migration: flat workspace → orgs/default/ ----
 {
-  const WS2 = mkdtempSync(join(tmpdir(), 'tomograph-tenancy-mig-'));
+  const WS2 = mkdtempSync(join(tmpdir(), 'observogram-tenancy-mig-'));
   mkdirSync(join(WS2, 'packs'), { recursive: true });
   writeFileSync(join(WS2, 'packs', 'flat-pack.pack.yaml'), PACK_YAML);
   writeFileSync(join(WS2, 'packs', 'index.json'), JSON.stringify({ 'flat-pack': { label: 'Flat', source: 'upload', createdAt: 1, lastUsedAt: 1 } }));
   writeFileSync(join(WS2, 'deploys.jsonl'), JSON.stringify({ type: 'deploy', deployId: 'dep_1' }) + '\n');
 
-  process.env.TOMOGRAPH_WORKSPACE = WS2;
-  process.env.TOMOGRAPH_USERS_FILE = join(WS2, 'users.json');
+  process.env.OBSERVOGRAM_WORKSPACE = WS2;
+  process.env.OBSERVOGRAM_USERS_FILE = join(WS2, 'users.json');
   const { writeUsers: writeUsers2 } = await import('./auth.mjs');
   writeUsers2({ users: { alice: { createdAt: 'test', password: hashPassword('alice-passw0rd!') } } });
   const { writeOrgs: writeOrgs2, readOrgs: readOrgs2 } = await import('./tenancy.mjs');
@@ -178,7 +182,7 @@ try {
     // The migrated state is reachable — the bearer can read org default.
     const base2 = `http://127.0.0.1:${srv2.address().port}`;
     const r2 = await fetch(`${base2}/api/packs`, {
-      headers: { Authorization: `Bearer ${process.env.TOMOGRAPH_API_TOKEN}`, 'X-Tomograph-Org': 'default' },
+      headers: { Authorization: `Bearer ${process.env.OBSERVOGRAM_API_TOKEN}`, 'X-Observogram-Org': 'default' },
     });
     const j2 = await r2.json();
     assert(r2.ok && j2.packs.some(p => p.id === 'flat-pack'), 'the migrated pack is served from orgs/default/');
@@ -190,9 +194,9 @@ try {
 
 // ---- fail closed: orgs.json without identity ----
 {
-  const WS3 = mkdtempSync(join(tmpdir(), 'tomograph-tenancy-noid-'));
-  process.env.TOMOGRAPH_WORKSPACE = WS3;
-  process.env.TOMOGRAPH_USERS_FILE = join(WS3, 'users.json');   // does not exist → identity OFF
+  const WS3 = mkdtempSync(join(tmpdir(), 'observogram-tenancy-noid-'));
+  process.env.OBSERVOGRAM_WORKSPACE = WS3;
+  process.env.OBSERVOGRAM_USERS_FILE = join(WS3, 'users.json');   // does not exist → identity OFF
   const { writeOrgs: writeOrgs3 } = await import('./tenancy.mjs');
   writeOrgs3({ acme: { name: 'Acme', members: {} } });
   let rejected = null;

@@ -254,6 +254,20 @@ assert(declaredOnlyMetric?.declared === true && declaredOnlyMetric?.verified ===
        { declared: declaredOnlyMetric?.declared, verified: declaredOnlyMetric?.verified },
        { declared: true, verified: false });
 
+// ---------- rebrand shim: legacy annotation namespace ----------
+// Packs crawled before the Observogram rename carry tomograph.* annotation
+// keys; the adapter must keep honoring them (new key wins when both exist).
+const legacyScopeFixture = clone(canonical);
+legacyScopeFixture.metadata.annotations = {
+  ...(legacyScopeFixture.metadata.annotations || {}),
+  'tomograph.diff.scopeMode': 'family',
+};
+assert(adapt(legacyScopeFixture).meta.diffScopeMode === 'family',
+       'legacy tomograph.diff.scopeMode annotation still resolves', adapt(legacyScopeFixture).meta.diffScopeMode, 'family');
+legacyScopeFixture.metadata.annotations['observogram.diff.scopeMode'] = 'service';
+assert(adapt(legacyScopeFixture).meta.diffScopeMode === 'service',
+       'observogram.diff.scopeMode wins over the legacy key when both exist', adapt(legacyScopeFixture).meta.diffScopeMode, 'service');
+
 // ---------- summary ----------
 
 report('adapter');

@@ -2,7 +2,7 @@
 //
 // Browser-safe PromQL dependency extraction.
 //
-// Tomograph treats PromQL as an executable declaration language: the series
+// Observogram treats PromQL as an executable declaration language: the series
 // named in an SLI, recording rule, alert rule, or dashboard panel are the
 // dependency edges. This module extracts those series with PromQL-aware
 // tokenisation instead of free-text matching. The Node-only Lezer wrapper in
@@ -57,7 +57,7 @@ export function parsePromqlDependencies(value, opts = {}) {
   }
 
   return {
-    parser: 'tomograph-promql-core',
+    parser: 'observogram-promql-core',
     parseOk: errors.length === 0,
     confidence: errors.length ? 'derived-promql-with-warnings' : 'derived-promql',
     metrics: [...metrics].sort(),
