@@ -44,6 +44,10 @@ const FOLDER = 't4-roundtrip';
 // rehydration runs at start()).
 const WORKSPACE = mkdtempSync(join(tmpdir(), 'observogram-t4-'));
 process.env.OBSERVOGRAM_WORKSPACE = WORKSPACE;
+// This suite asserts backend round-trips, not auth posture — without
+// the off switch, first boot would seed a default admin (Grafana-style
+// bootstrap) and 401 every /api call below.
+process.env.OBSERVOGRAM_AUTH = 'off';
 
 import { createHarness } from './lib/harness.mjs';
 const { assert, failures, report } = createHarness({ indent: '  ', truncate: 400 });
