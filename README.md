@@ -156,24 +156,37 @@ npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:8000`.
+Open `http://127.0.0.1:8000` and sign in with **admin / admin** — first
+boot seeds this default user and forces a password change at first
+sign-in. From there it's a signed-in app: your packs, deploy audit and
+run history belong to you. (`OBSERVOGRAM_AUTH=off` skips login entirely
+for a throwaway open sandbox.)
 
 ### Security Posture
 
-One token, three postures:
-
-1. **Local (default).** The server binds to `127.0.0.1` and runs with no
-   authentication — a zero-friction local workspace.
+1. **Local (default).** The server binds to `127.0.0.1` and ships like
+   Grafana: first boot seeds a default `admin` user (password `admin`,
+   change forced at first sign-in). The default credential is
+   loopback-only — the server refuses to bind beyond loopback until it
+   is changed; container/network first boots seed a real secret with
+   `OBSERVOGRAM_ADMIN_PASSWORD` instead. `OBSERVOGRAM_AUTH=off` restores
+   the pre-0.5 open mode: no login, a zero-friction local workspace.
 2. **Exposed with a token.** Set `OBSERVOGRAM_API_TOKEN=<secret>` and bind
    wherever you need (`HOST=0.0.0.0`). Mutating `/api/*` routes (crawl,
    draft, validate-register, deploy, verify, reset) then require
    `Authorization: Bearer <secret>`; read routes stay open. Set
    `OBSERVOGRAM_API_TOKEN_LABEL=<team-or-owner>` to stamp the deploy audit
    log with the token's ownership — the secret itself never lands in any
-   log.
-3. **Exposed without a token.** The server **refuses to start** with a
+   log. A token configured on a fresh workspace suppresses the
+   default-admin seed: the token is the expressed auth intent.
+3. **Exposed without any auth.** The server **refuses to start** with a
    clear message. `OBSERVOGRAM_INSECURE_NO_AUTH=1` overrides knowingly (it
    logs a loud warning) for trusted-network demos only.
+
+Real users and SSO: `npm run users` manages locally-defined accounts,
+`OBSERVOGRAM_OIDC_*` wires any OIDC provider, and `npm run orgs` arms
+workspace-per-org tenancy — see
+[docs/PRODUCTIZATION_PLAN.md](docs/PRODUCTIZATION_PLAN.md).
 
 MCP write tokens are unrelated to the API token: they pass through per
 request and are never stored server-side. Registered packs and the deploy

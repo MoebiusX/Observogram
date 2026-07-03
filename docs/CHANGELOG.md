@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Ships like Grafana: default admin on first boot
+- **First boot with nothing configured now seeds a default `admin` user (password `admin`)** and the login page is live — the studio is a signed-in app out of the box, no CLI setup. The password change is **forced at first sign-in** (new `/auth/change-password`, signed short-lived flow cookie, no session until the change lands).
+- **The default credential never crosses loopback**: a network boot never seeds `admin/admin` (it refuses to start and names the options), and `start()` refuses to bind beyond loopback while an already-seeded default is unchanged. Container/network boots set `OBSERVOGRAM_ADMIN_PASSWORD=<secret>` to seed a real credential (no forced change); the same env var also *replaces* a still-default admin record, so a workspace seeded on loopback can be moved behind the network without a deadlock.
+- The seed backs off from any expressed intent: OIDC configured, an existing users file, `OBSERVOGRAM_API_TOKEN` (the token-only 10B contract is unchanged), or armed tenancy.
+- **New `OBSERVOGRAM_AUTH=off`** — the one switch that disables identity entirely (no login, no seeding, `/auth/*` answers 404): the pre-0.5 open posture, kept for dev shells, scripts and CI. This is a **default-behaviour change**: `npm start` on a fresh workspace now lands on a login page.
+- Stand-alone auth arming is now per-request (routes register once, posture follows the users file), so the seed at `start()` and `npm run users` both take effect without a re-import; `npm run users -- passwd` clears a pending forced-change flag.
+- Suite: `server/test-auth-local.mjs` grew 18 assertions — seed shape, 401-by-default, loopback guard, the full forced-change flow, `OBSERVOGRAM_ADMIN_PASSWORD` (fresh seed + rescue), never-seed-on-network-boot, and the off switch; `server/test-smoke.mjs` runs under `OBSERVOGRAM_AUTH=off` and is the open-posture regression.
+
 ### Tomograph → Observogram (rebrand, backwards-compatible)
 - Every user-facing name is now **Observogram**: package name and npm bin (`observogram`; `packc` unchanged), studio shell, login page, CLI help, Docker image (`observogram:<version>`), k8s manifests, docs, and diagrams.
 - **Nothing breaks on upgrade** — the legacy spellings keep working via `tools/lib/brand-env.mjs` (drop planned for 0.6):

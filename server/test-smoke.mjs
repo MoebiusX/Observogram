@@ -16,6 +16,11 @@ import { tmpdir } from 'node:os';
 // this ordering work despite the hoisted import below.
 const SMOKE_WORKSPACE = mkdtempSync(join(tmpdir(), 'observogram-smoke-ws-'));
 process.env.OBSERVOGRAM_WORKSPACE = SMOKE_WORKSPACE;
+// This suite asserts the OPEN posture (every route reachable without a
+// session). Without the off switch, first boot would seed a default
+// admin (Grafana-style bootstrap) and 401 everything — this line IS the
+// open-mode regression assertion the productization plan promises.
+process.env.OBSERVOGRAM_AUTH = 'off';
 
 import { start } from './index.mjs';
 import { createServer } from 'node:http';

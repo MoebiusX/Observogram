@@ -25,6 +25,8 @@ process.env.OBSERVOGRAM_API_TOKEN_LABEL = 'ci-bot';
 process.env.OBSERVOGRAM_USERS_FILE = join(WORKSPACE, 'users.json');
 delete process.env.OBSERVOGRAM_OIDC_ISSUER;
 delete process.env.OBSERVOGRAM_SESSION_SECRET;
+delete process.env.OBSERVOGRAM_AUTH;
+delete process.env.TOMOGRAPH_AUTH;
 
 import { createHarness } from '../tools/lib/harness.mjs';
 const { assert, failures, report } = createHarness({ indent: '  ', truncate: 200 });

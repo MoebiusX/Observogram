@@ -50,7 +50,7 @@ import {
   listJourneys, loadJourneyDef, runJourney, readJourneyRuns, saveJourneyDef,
 } from '../tools/lib/journey.mjs';
 import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
-import { initAuth, authEnabled, readSession } from './auth.mjs';
+import { initAuth, authEnabled, readSession, maybeSeedDefaultAdmin, defaultAdminCredentialActive } from './auth.mjs';
 import { validateMcpUrl, redactCredentials } from './mcp-url.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
@@ -1551,6 +1551,14 @@ function isLoopbackHost(h) {
 }
 
 export function start({ port = PORT, host = HOST, silent = false } = {}) {
+  // Grafana-style first boot: nothing configured → seed admin/admin,
+  // change forced at first sign-in. Backs off from any expressed intent
+  // (OIDC, users file, API token, tenancy, OBSERVOGRAM_AUTH=off) — see
+  // maybeSeedDefaultAdmin in server/auth.mjs.
+  maybeSeedDefaultAdmin({
+    log: (m) => { if (!silent) process.stdout.write(m + '\n'); },
+    wouldExpose: !isLoopbackHost(host),
+  });
   // Fail closed (10B): binding beyond loopback with no auth at all would
   // expose every write route — crawl, draft, deploy — to the network.
   // Identity (OIDC or stand-alone users) satisfies the requirement just
@@ -1564,8 +1572,18 @@ export function start({ port = PORT, host = HOST, silent = false } = {}) {
       return Promise.reject(new Error(
         `refusing to bind to ${host} without auth: mutating /api routes would be open to the network.\n` +
         `  Set OBSERVOGRAM_API_TOKEN=<secret> (clients send Authorization: Bearer <secret>),\n` +
+        `  or seed a sign-in with OBSERVOGRAM_ADMIN_PASSWORD=<secret> (user 'admin'),\n` +
         `  or bind to loopback (HOST=127.0.0.1), or set OBSERVOGRAM_INSECURE_NO_AUTH=1 to override knowingly.`));
     }
+  }
+  // The seeded default credential is loopback-only, without exception:
+  // admin/admin reachable from the network is how Grafana instances end
+  // up on Shodan. Signing in once (the forced change) clears this.
+  if (!isLoopbackHost(host) && defaultAdminCredentialActive()) {
+    return Promise.reject(new Error(
+      `refusing to bind to ${host} while the seeded default admin password is unchanged.\n` +
+      `  Sign in once on loopback (admin / admin) to set a real password,\n` +
+      `  or seed a fresh workspace with OBSERVOGRAM_ADMIN_PASSWORD=<secret>.`));
   }
   // Tenancy (Stage 2) sits ON TOP of identity: orgs.json without a way
   // to know who the user is cannot enforce membership — fail closed with

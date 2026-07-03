@@ -7,7 +7,7 @@
  * suite (none of them configure identity).
  */
 
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,6 +18,9 @@ process.env.OBSERVOGRAM_API_TOKEN = 'ci-token-abcdef-0123456789';
 process.env.OBSERVOGRAM_API_TOKEN_LABEL = 'ci-bot';
 delete process.env.OBSERVOGRAM_OIDC_ISSUER;
 delete process.env.OBSERVOGRAM_SESSION_SECRET;
+delete process.env.OBSERVOGRAM_AUTH;
+delete process.env.TOMOGRAPH_AUTH;
+delete process.env.OBSERVOGRAM_ADMIN_PASSWORD;
 process.env.OBSERVOGRAM_USERS_FILE = join(WORKSPACE, 'users.json');
 
 import { createHarness } from '../tools/lib/harness.mjs';
@@ -158,6 +161,153 @@ try {
 } finally {
   await new Promise(res => srv.close(res));
   rmSync(WORKSPACE, { recursive: true, force: true });
+}
+
+// ---- Grafana-style first boot: nothing configured → seeded admin ----
+// (docs/PRODUCTIZATION_PLAN.md Stage 1 addendum: default admin/admin,
+// change forced at first sign-in, never valid beyond loopback.)
+const BOOT_WS = mkdtempSync(join(tmpdir(), 'observogram-auth-boot-'));
+process.env.OBSERVOGRAM_WORKSPACE = BOOT_WS;
+process.env.OBSERVOGRAM_USERS_FILE = join(BOOT_WS, 'users.json');
+delete process.env.OBSERVOGRAM_API_TOKEN;         // a configured token suppresses the seed
+delete process.env.OBSERVOGRAM_API_TOKEN_LABEL;
+
+const srv2 = await start({ port: 0, host: '127.0.0.1', silent: true });
+const base2 = `http://127.0.0.1:${srv2.address().port}`;
+try {
+  const seeded = JSON.parse(readFileSync(join(BOOT_WS, 'users.json'), 'utf8')).users.admin;
+  assert(!!seeded && seeded.mustChange === true && seeded.seededDefault === true,
+    'first boot seeds admin with a forced-change default', JSON.stringify(seeded));
+
+  let r = await fetch(`${base2}/api/packs`);
+  assert(r.status === 401, 'the seeded posture protects the API like any identity mode', r.status, 401);
+
+  // The default credential is loopback-only, without exception.
+  let guardErr = null;
+  await start({ port: 0, host: '0.0.0.0', silent: true }).then(s => s.close(), e => { guardErr = e; });
+  assert(!!guardErr && /default admin password/.test(guardErr.message),
+    'network bind refused while admin/admin is unchanged', guardErr && guardErr.message);
+
+  // admin/admin → no session yet; a pwchange flow cookie instead.
+  r = await fetch(`${base2}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: 'username=admin&password=admin',
+  });
+  let j = await r.json();
+  assert(r.ok && j.mustChange === true && j.next === '/auth/change-password',
+    'default login demands a password change instead of a session', JSON.stringify(j));
+  assert(!getCookie(r, 'observogram_session'), 'no session cookie before the change');
+  const pwflow = getCookie(r, 'observogram_pwflow');
+  assert(!!pwflow, 'pwchange flow cookie issued');
+
+  r = await fetch(`${base2}/auth/change-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', Cookie: pwflow },
+    body: 'password=short&repeat=short',
+  });
+  assert(r.status === 400, 'short new password rejected', r.status, 400);
+
+  r = await fetch(`${base2}/auth/change-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', Cookie: pwflow },
+    body: 'password=fresh-horse-battery-1&repeat=fresh-horse-battery-1',
+  });
+  j = await r.json();
+  const session2 = getCookie(r, 'observogram_session');
+  assert(r.ok && j.ok === true && !!session2, 'password change issues the real session', JSON.stringify(j));
+
+  r = await fetch(`${base2}/api/packs`, { headers: { Cookie: session2 } });
+  assert(r.ok, 'API works with the post-change session', r.status, 200);
+
+  const after = JSON.parse(readFileSync(join(BOOT_WS, 'users.json'), 'utf8')).users.admin;
+  assert(!after.mustChange && !after.seededDefault, 'forced-change flags cleared after the change');
+
+  r = await fetch(`${base2}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: 'username=admin&password=admin',
+  });
+  assert(r.status === 401, 'admin/admin is dead after the change', r.status, 401);
+} finally {
+  await new Promise(res => srv2.close(res));
+  rmSync(BOOT_WS, { recursive: true, force: true });
+}
+
+// ---- OBSERVOGRAM_ADMIN_PASSWORD: docker/k8s seed, no forced change ----
+const ENV_WS = mkdtempSync(join(tmpdir(), 'observogram-auth-envpw-'));
+process.env.OBSERVOGRAM_WORKSPACE = ENV_WS;
+process.env.OBSERVOGRAM_USERS_FILE = join(ENV_WS, 'users.json');
+process.env.OBSERVOGRAM_ADMIN_PASSWORD = 'from-the-env-9';
+const srv3 = await start({ port: 0, host: '127.0.0.1', silent: true });
+const base3 = `http://127.0.0.1:${srv3.address().port}`;
+try {
+  const r = await fetch(`${base3}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: 'username=admin&password=from-the-env-9',
+  });
+  const j = await r.json();
+  assert(r.ok && j.ok === true && !j.mustChange && !!getCookie(r, 'observogram_session'),
+    'OBSERVOGRAM_ADMIN_PASSWORD seeds a ready-to-use admin (no forced change)', JSON.stringify(j));
+} finally {
+  delete process.env.OBSERVOGRAM_ADMIN_PASSWORD;
+  await new Promise(res => srv3.close(res));
+  rmSync(ENV_WS, { recursive: true, force: true });
+}
+
+// ---- exposure semantics: defaults never strand on a network boot ----
+const NET_WS = mkdtempSync(join(tmpdir(), 'observogram-auth-net-'));
+process.env.OBSERVOGRAM_WORKSPACE = NET_WS;
+process.env.OBSERVOGRAM_USERS_FILE = join(NET_WS, 'users.json');
+try {
+  let netErr = null;
+  await start({ port: 0, host: '0.0.0.0', silent: true }).then(s => s.close(), e => { netErr = e; });
+  assert(!!netErr && /OBSERVOGRAM_ADMIN_PASSWORD/.test(netErr.message),
+    'fresh network boot refuses and names the admin-password option', netErr && netErr.message);
+  assert(!existsSync(join(NET_WS, 'users.json')), 'no default credential is written for a network boot');
+
+  // Rescue: seed on loopback (default admin), then boot with
+  // OBSERVOGRAM_ADMIN_PASSWORD — the still-default record is replaced.
+  const seedSrv = await start({ port: 0, host: '127.0.0.1', silent: true });
+  await new Promise(res => seedSrv.close(res));
+  process.env.OBSERVOGRAM_ADMIN_PASSWORD = 'rescued-pass-7';
+  const srv5 = await start({ port: 0, host: '127.0.0.1', silent: true });
+  const base5 = `http://127.0.0.1:${srv5.address().port}`;
+  try {
+    const r = await fetch(`${base5}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+      body: 'username=admin&password=rescued-pass-7',
+    });
+    const j = await r.json();
+    assert(r.ok && j.ok === true && !j.mustChange,
+      'OBSERVOGRAM_ADMIN_PASSWORD replaces a still-default admin (rescue path)', JSON.stringify(j));
+  } finally {
+    delete process.env.OBSERVOGRAM_ADMIN_PASSWORD;
+    await new Promise(res => srv5.close(res));
+  }
+} finally {
+  rmSync(NET_WS, { recursive: true, force: true });
+}
+
+// ---- OBSERVOGRAM_AUTH=off: the pre-0.5 open posture, no seeding ----
+const OFF_WS = mkdtempSync(join(tmpdir(), 'observogram-auth-off-'));
+process.env.OBSERVOGRAM_WORKSPACE = OFF_WS;
+process.env.OBSERVOGRAM_USERS_FILE = join(OFF_WS, 'users.json');
+process.env.OBSERVOGRAM_AUTH = 'off';
+const srv4 = await start({ port: 0, host: '127.0.0.1', silent: true });
+const base4 = `http://127.0.0.1:${srv4.address().port}`;
+try {
+  let r = await fetch(`${base4}/api/packs`);
+  assert(r.ok, 'OBSERVOGRAM_AUTH=off keeps the API open with no login', r.status, 200);
+  r = await fetch(`${base4}/auth/me`);
+  assert(r.status === 404, '/auth/me answers 404 in the open posture (studio local-mode detection)', r.status, 404);
+  assert(!existsSync(join(OFF_WS, 'users.json')), 'no admin is seeded in the open posture');
+} finally {
+  delete process.env.OBSERVOGRAM_AUTH;
+  await new Promise(res => srv4.close(res));
+  rmSync(OFF_WS, { recursive: true, force: true });
 }
 
 report('auth-local');
