@@ -38,6 +38,13 @@ docroot. That architecture is gone:
 
 ## Knobs
 
+- **Auth (required)** — binding to `0.0.0.0` fails closed without it.
+  Uncomment in [deployment-studio.yaml](deployment-studio.yaml):
+  `OBSERVOGRAM_ADMIN_PASSWORD` seeds the `admin` sign-in on first boot
+  (the loopback `admin/admin` default is never seeded off-loopback),
+  and/or `OBSERVOGRAM_API_TOKEN` for service-account/CI access. OIDC
+  (`OBSERVOGRAM_OIDC_*`) also satisfies the requirement — see
+  [.env.example](../../.env.example).
 - `GITHUB_TOKEN` (optional) — uncomment in
   [deployment-studio.yaml](deployment-studio.yaml) to raise GitHub rate
   limits / allow private repos for `POST /api/crawl-github`.

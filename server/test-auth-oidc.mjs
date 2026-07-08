@@ -113,6 +113,8 @@ process.env.OBSERVOGRAM_SESSION_SECRET = 'test-session-secret-0123456789-abcdef-
 delete process.env.OBSERVOGRAM_OIDC_CLIENT_SECRET;
 delete process.env.OBSERVOGRAM_API_TOKEN;
 delete process.env.OBSERVOGRAM_USERS_FILE;
+delete process.env.OBSERVOGRAM_AUTH;
+delete process.env.TOMOGRAPH_AUTH;
 
 const { start } = await import('./index.mjs');
 const srv = await start({ port: 0, host: '127.0.0.1', silent: true });

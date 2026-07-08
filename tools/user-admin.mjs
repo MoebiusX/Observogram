@@ -101,6 +101,10 @@ async function main() {
     ...(typeof flag('email') === 'string' ? { email: flag('email') } : {}),
     password: hashPassword(password),
   };
+  // A password set here is a real secret — clear any forced-change
+  // state (the seeded default, or a temporary) it replaces.
+  delete data.users[username].mustChange;
+  delete data.users[username].seededDefault;
   writeUsers(data, file);
   console.log(`${cmd === 'add' ? 'added' : 'updated password for'} ${username} (${file})`);
   if (cmd === 'add' && Object.keys(data.users).length === 1) {

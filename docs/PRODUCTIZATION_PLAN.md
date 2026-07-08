@@ -69,6 +69,20 @@ enforced server-side, not hidden client-side.
 > header. Local no-auth mode is regression-asserted by every other
 > suite. Remaining stage-1 nicety: dex-in-docker interop leg on the
 > backend-live job.
+>
+> **Stage 1 addendum (2026-07-03, maintainer decision): ship like
+> Grafana.** The signed-in experience is now the DEFAULT: first boot
+> with nothing configured seeds `admin/admin` (users.json, the standard
+> stand-alone machinery), forces the password change at first sign-in
+> (`/auth/change-password`, flow-cookie gated, no session until the
+> change lands), and refuses to bind beyond loopback while the default
+> credential stands — `OBSERVOGRAM_ADMIN_PASSWORD` seeds a real secret
+> for container boots. The "local mode must never grow friction"
+> constraint below is renegotiated to an explicit switch:
+> `OBSERVOGRAM_AUTH=off` is the open posture (no login, no seeding,
+> `/auth/*` 404), regression-asserted by the smoke suite. The seed
+> backs off from any expressed intent (OIDC, users file, API token,
+> armed tenancy).
 
 ### Stage 1 — Identity (OIDC login)
 

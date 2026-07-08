@@ -45,6 +45,14 @@ spec:
               value: "0.0.0.0"
             - name: PORT
               value: "8000"
+            # REQUIRED to start off-loopback (the server fails closed
+            # without auth): seed a sign-in and/or set a service token.
+            # - name: OBSERVOGRAM_ADMIN_PASSWORD
+            #   valueFrom:
+            #     secretKeyRef: { name: studio-admin-password, key: password }
+            # - name: OBSERVOGRAM_API_TOKEN
+            #   valueFrom:
+            #     secretKeyRef: { name: studio-api-token, key: token }
             # Optional: raises GitHub API rate limits and enables private
             # repos for POST /api/crawl-github.
             # - name: GITHUB_TOKEN
