@@ -4,9 +4,10 @@
  *
  * Regression tests for the behavioural matcher. The important case is a pack
  * containing multiple artefacts with the same behavioural identity key:
- * duplicate-severity alert routes, duplicate dashboard ids, and same
- * product+signal backend instances. These must survive diffPacks instead of
- * being collapsed by a Map.
+ * duplicate-severity alert routes, duplicate dashboard ids, same
+ * product+signal backend instances, and same-named pipeline stages. These
+ * must survive diffPacks instead of being collapsed by a Map, and must be
+ * reported on the top-level `collisions` surface.
  */
 
 import { adapt } from './lib/adapter.mjs';
@@ -58,8 +59,10 @@ const collisionPack = {
       },
     ],
     pipelines: {
-      receivers: [{ name: 'otlp' }],
-      processors: [{ name: 'batch' }],
+      // Duplicate bare stages mirror real crawler output: the collector's
+      // `otlp/2` / `batch/2` ids strip to the same name.
+      receivers: [{ name: 'otlp' }, { name: 'otlp' }],
+      processors: [{ name: 'batch' }, { name: 'batch' }],
       exporters: {
         metrics: { kind: 'prometheusremotewrite' },
         logs: { kind: 'loki' },
@@ -101,6 +104,9 @@ const collisionPack = {
         { severity: 'SEV2', match: { team: 'payments' }, channels: [{ email: 'payments@example.com' }] },
         { severity: 'SEV2', match: { team: 'settlement' }, channels: [{ webhook: 'https://hooks.example/settlement' }] },
         { severity: 'SEV2', match: { team: 'platform' }, channels: [{ msteams: '#platform-alerts' }] },
+        // A fourth SEV2 route — one identity class of four, all of which
+        // must survive via occurrence ordinals.
+        { severity: 'SEV2', match: { team: 'fraud' }, channels: [{ webhook: 'https://hooks.example/fraud' }] },
       ],
     },
     baselines: { mttd_target_p50: '5m', mttr_target_p50: '2h' },
@@ -148,8 +154,42 @@ assert(self.summary.onlyInA === 0 && self.summary.onlyInB === 0,
        'self-diff has no missing artefacts');
 assert(self.summary.alignment === 1,
        'self-diff alignment remains 1.0');
-assert(self.layers.L4.inBoth.filter(x => x.key.startsWith('alert_route::')).length === 3,
+assert(self.layers.L4.inBoth.filter(x => x.key.startsWith('alert_route::')).length === 4,
        'duplicate SEV2 routes survive as separate matched controls');
+
+const routeIdentities = new Set(
+  self.layers.L4.inBoth
+    .filter(x => x.key.startsWith('alert_route::'))
+    .map(x => x.key.replace(/#\d+$/, ''))
+);
+assert(routeIdentities.size === 1,
+       'same-severity routes share one identity class, preserved as ordinals',
+       routeIdentities.size, 1);
+
+process.stdout.write('\n--- collision reporting ---\n');
+const collidedKinds = new Set(self.collisions.map(c => c.kind));
+for (const kind of ['alert_route', 'backend', 'dashboard', 'pipeline_receiver', 'pipeline_processor']) {
+  assert(collidedKinds.has(kind), `self-diff reports the ${kind} identity collision`);
+}
+assert(self.collisions.length === 5,
+       'exactly one collision entry per duplicated identity key',
+       self.collisions.length, 5);
+assert(new Set(self.collisions.map(c => c.key)).size === self.collisions.length,
+       'collision keys are unique across the result');
+assert(self.collisions.every(c => c.aCount > 1 || c.bCount > 1),
+       'every reported collision has more than one artefact on some side');
+assert(self.collisions.every(c => c.key.startsWith(`${c.kind}::`) && !/#\d+$/.test(c.key)),
+       'collision keys are base identity keys, without occurrence suffixes');
+const collisionLayers = Object.fromEntries(self.collisions.map(c => [c.kind, c.layer]));
+assert(collisionLayers.alert_route === 'L4' && collisionLayers.dashboard === 'L3'
+         && collisionLayers.backend === 'L2' && collisionLayers.pipeline_receiver === 'L2'
+         && collisionLayers.pipeline_processor === 'L2',
+       'collision entries carry the layer their group lives in',
+       JSON.stringify(collisionLayers), 'alert_route:L4, dashboard:L3, rest:L2');
+const routeCollision = self.collisions.find(c => c.kind === 'alert_route');
+assert(routeCollision && routeCollision.aCount === 4 && routeCollision.bCount === 4,
+       'all four SEV2 routes are counted in the route collision group',
+       JSON.stringify(routeCollision), '{aCount: 4, bCount: 4}');
 
 process.stdout.write('\n--- surplus duplicate drift ---\n');
 const thinPack = clone(collisionPack);
@@ -161,11 +201,35 @@ const thin = diffPacks(declared, adapt(thinPack));
 assert(thin.summary.aTotal === total,
        'declared-side total still counts every artefact when live is thinner',
        thin.summary.aTotal, total);
-assert(thin.summary.onlyInA === 4,
+assert(thin.summary.onlyInA === 5,
        'surplus duplicate controls are reported as onlyInA, not dropped',
-       thin.summary.onlyInA, 4);
-assert(thin.layers.L4.onlyInA.filter(x => x.key.startsWith('alert_route::')).length === 2,
-       'two missing SEV2 routes are visible as drift');
+       thin.summary.onlyInA, 5);
+assert(thin.layers.L4.onlyInA.filter(x => x.key.startsWith('alert_route::')).length === 3,
+       'three missing SEV2 routes are visible as drift');
+assert(thin.collisions.some(c => c.kind === 'alert_route' && c.aCount === 4 && c.bCount === 1),
+       'a lopsided identity group is still reported as a collision');
+
+process.stdout.write('\n--- live placeholder routes still pair ---\n');
+// fetch-live-pack.mjs and the crawler fabricate a channel kind when live
+// routing cannot be introspected (e.g. { severity: SEV1, channels:
+// [{ msteams: '#platform-oncall' }] }). Identity must stay severity-keyed so
+// a declared route PAIRS with that placeholder as channel drift — putting
+// channel kinds into identity would report it falsely missing in live.
+const declaredRoutePack = clone(collisionPack);
+declaredRoutePack.spec.alerting.routes = [
+  { severity: 'SEV1', channels: [{ webhook: 'https://hooks.example/oncall' }] },
+];
+const livePlaceholderPack = clone(collisionPack);
+livePlaceholderPack.spec.alerting.routes = [
+  { severity: 'SEV1', channels: [{ msteams: '#platform-oncall' }] },
+];
+const placeholderDiff = diffPacks(adapt(declaredRoutePack), adapt(livePlaceholderPack));
+const routePairs = placeholderDiff.layers.L4.inBoth.filter(x => x.key.startsWith('alert_route::'));
+assert(routePairs.length === 1 && routePairs[0].match === 'drifted',
+       'a declared route pairs with the live placeholder as channel drift',
+       `${routePairs.length}/${routePairs[0]?.match}`, '1/drifted');
+assert(placeholderDiff.layers.L4.onlyInA.every(x => !x.key.startsWith('alert_route::')),
+       'no declared route is falsely reported missing in live');
 
 process.stdout.write('\n--- canonicalisation edge cases ---\n');
 const emptyArray = {

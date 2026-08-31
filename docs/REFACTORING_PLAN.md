@@ -62,7 +62,7 @@ file. Natural seams, in extraction order:
 
 ## 5. Deterministic crawler output for committed fixtures
 
-`examples/krystaline.repo.pack.Carlos.yaml` is a committed fixture, but any
+`examples/krystaline-repo-carlos.pack.yaml` is a committed fixture, but any
 local crawler run rewrites its `crawler.discoveredAt` timestamp and header
 banner, leaving permanent working-tree churn. `crawlToYaml` already accepts
 `{ now }` (the tests use it). Expose that as a CLI flag
@@ -71,10 +71,12 @@ with a pinned timestamp, so a fixture refresh produces a diff only when the
 crawler's *behaviour* changes.
 
 Related: `.gitignore` says `*.repo.pack.yaml` crawler drafts "must never
-land in this public repo" because they can carry secrets, yet this one is
-deliberately committed. Decide which rule wins — either rename committed
-fixtures to a non-ignored pattern (e.g. `*.fixture.yaml`) or document the
-exception where it lives.
+land in this public repo" because they can carry secrets. The committed
+fixture used to skirt that pattern via its `.Carlos.yaml` suffix; it is now
+named `krystaline-repo-carlos.pack.yaml` — a deliberately non-ignored,
+suite-discoverable name (`tools/test-packs.mjs` matches `*.pack.yaml`) — so
+the ignore rule keeps guarding fresh crawler drafts while the fixture stays
+committed and tested.
 
 ## 6. Finish the test-runner migration
 

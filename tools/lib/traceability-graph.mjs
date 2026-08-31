@@ -77,6 +77,9 @@ export function buildDependencyGraph(adaptedPack = {}) {
     byIdentity: new Map(),
     byDefines: new Map(),
     byKind: new Map(),
+    // Identity keys shared by >1 artefact — same fail-loud surface as
+    // diffPacks().collisions; the nodes themselves survive via `#NN` keys.
+    collisions: [],
     meta: adaptedPack.meta || {},
   };
 
@@ -90,6 +93,13 @@ export function buildDependencyGraph(adaptedPack = {}) {
 
   for (const [identityKey, group] of grouped) {
     const suffix = group.length > 1;
+    if (suffix) {
+      graph.collisions.push({
+        key: identityKey,
+        kind: classify(group[0].artefact),
+        count: group.length,
+      });
+    }
     group.forEach(({ artefact, layer }, index) => {
       addNode(graph, {
         key: occurrenceKey(identityKey, index, suffix),
@@ -102,6 +112,8 @@ export function buildDependencyGraph(adaptedPack = {}) {
       });
     });
   }
+
+  graph.collisions.sort((x, y) => x.key.localeCompare(y.key));
 
   resolveContractEdges(graph);
   resolveRecordingRuleEdges(graph);

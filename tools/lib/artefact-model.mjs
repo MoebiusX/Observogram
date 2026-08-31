@@ -187,9 +187,15 @@ const IDENTITY = {
   // deploy the same collector wiring.
   backend:      (s) => ({ product: low(s.product), signal: low(s.signal) }),
 
+  // spec.otel is a singular required object and the adapter emits at most one
+  // artefact (fixed OTEL-01 id), so the empty identity is a deliberate
+  // singleton-per-pack invariant, not an accidental collision.
   otel:         () => ({}),
 
-  // Pipeline stages identify by what they do, not by position.
+  // Pipeline stages identify by what they do, not by position. Same-named
+  // stages (the collector's `batch/2` convention) share one identity on
+  // purpose: config differences are drift of the same stage, and duplicate
+  // instances survive via the diff's occurrence ordinals.
   pipeline_receiver:          (s) => ({ name: low(s.name) }),
   pipeline_processor:         (s) => ({ name: low(s.name) }),
   pipeline_exporter_metrics:  (s) => ({ signal: 'metrics', target: low(s.kind) }),
@@ -227,8 +233,17 @@ const IDENTITY = {
 
   burn_rate:    (s) => ({ slo: stripRef(s.slo) }),
   forecast:     (s) => ({ slo: stripRef(s.slo) }),
+  // Routes key on severity alone, on purpose. Live and crawled packs
+  // fabricate channel kinds when routing cannot be introspected (fetch-live's
+  // SEV1 msteams placeholder, the crawler's unmapped-receiver stub), so
+  // putting channel kinds into identity would turn those evidence gaps into
+  // false "missing in production" verdicts. Channel changes surface as
+  // decision-bearing drift on the paired route instead; same-severity
+  // duplicates survive via the diff's occurrence ordinals and `collisions`.
   alert_route:  (s) => ({ severity: low(s.severity) }),
   remediation:  (s) => ({ trigger: low(s.trigger) }),
+  // spec.baselines is a singular object (fixed BASE-01 id, at most one per
+  // pack) — empty identity is the documented singleton invariant, like otel.
   baselines:    () => ({}),
   chaos:        (s) => ({ id: low(s.id) }),
   synthetic:    (s) => ({ id: low(s.id) }),

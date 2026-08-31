@@ -7,12 +7,16 @@
  *   1. Parse the YAML.
  *   2. Validate against the vendored v1.2 schema.
  *   3. Adapt via the layered adapter.
- *   4. Compute conformance scoring.
- *   5. Assert per-pack expected ranges (where declared).
+ *   4. Assert the self-diff invariant: diffPacks(pack, pack) preserves every
+ *      flat-comparable artefact with alignment/jaccard 1.0 — identity-key
+ *      collisions must surface as occurrence ordinals and `collisions`
+ *      entries, never as silent drops.
+ *   5. Compute conformance scoring.
+ *   6. Assert per-pack expected ranges (where declared).
  *
  * Pack-specific expectations live in PACK_EXPECTATIONS below. Packs not
- * listed there only need to pass schema validation and adapt without
- * throwing.
+ * listed there only need to pass schema validation, adapt without throwing,
+ * and hold the self-diff invariant.
  */
 
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
@@ -21,6 +25,8 @@ import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
 import { adapt } from './lib/adapter.mjs';
+import { classify } from './lib/artefact-model.mjs';
+import { diffPacks } from './lib/diff.mjs';
 import { evaluateConformance } from './lib/conformance.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -57,10 +63,29 @@ const PACK_EXPECTATIONS = {
     shouldMin: 80,
     description: 'Aspirational tier-1 reference — 100% MUST conformance.',
   },
+  'krystaline-repo-carlos.pack.yaml': {
+    // The crawled real-world pack is in the suite precisely because it holds
+    // genuine identity collisions (same-severity routes, collector `otlp/2`
+    // style duplicate stages). Pin the collided families so a fixture refresh
+    // or identity change can't silently de-collide it.
+    collidedKinds: ['alert_route', 'pipeline_processor', 'pipeline_receiver'],
+    description: 'Crawled fixture — must keep exercising real identity collisions.',
+  },
 };
 
 import { createHarness } from './lib/harness.mjs';
 const { assert, failures, report } = createHarness();
+
+// Panels are excluded from flat drift arithmetic (see layerArtefacts in
+// tools/lib/diff.mjs); mirror that here so inBoth can be compared exactly.
+function flatComparableCount(layered) {
+  const l = layered.layers || {};
+  return [
+    ...(l.L1 || []), ...(l.L2 || []), ...(l.L2X || []), ...(l.L3 || []),
+    ...(l.L4?.policy || []), ...(l.L4?.alerting || []), ...(l.L4?.healing || []),
+    ...(l.L5 || []), ...(l.GOV || []),
+  ].filter(a => classify(a) !== 'panel').length;
+}
 
 if (!existsSync(PACKS_DIR)) {
   process.stderr.write(`examples directory missing: ${PACKS_DIR}\n`);
@@ -110,6 +135,24 @@ for (const { dir, file } of packFiles) {
   assert(!!layered.layers?.L1, 'adapter produced L1');
   assert(!!layered.layers?.L2, 'adapter produced L2');
 
+  // self-diff invariant
+  const flat = flatComparableCount(layered);
+  const self = diffPacks(layered, adapt(JSON.parse(JSON.stringify(canonical))));
+  assert(self.summary.inBoth === flat,
+         'self-diff preserves every flat-comparable artefact',
+         self.summary.inBoth, flat);
+  assert(self.summary.onlyInA === 0 && self.summary.onlyInB === 0,
+         'self-diff has no missing artefacts');
+  assert(self.summary.alignment === 1 && self.summary.jaccard === 1,
+         'self-diff alignment and jaccard are 1.0',
+         `${self.summary.alignment}/${self.summary.jaccard}`, '1/1');
+  assert(self.collisions.every(c => c.aCount > 1 || c.bCount > 1),
+         'reported collisions are real identity groups');
+  if (self.collisions.length) {
+    process.stdout.write(`  · ${self.collisions.length} identity collision(s): ` +
+      `${[...new Set(self.collisions.map(c => c.kind))].sort().join(', ')}\n`);
+  }
+
   // conformance
   const report = evaluateConformance(canonical);
   process.stdout.write(`  tier=${report.declaredTier} · ` +
@@ -123,6 +166,12 @@ for (const { dir, file } of packFiles) {
     continue;
   }
 
+  if (exp.collidedKinds) {
+    const kinds = [...new Set(self.collisions.map(c => c.kind))].sort();
+    assert(kinds.join(',') === [...exp.collidedKinds].sort().join(','),
+           `identity collisions cover: ${exp.collidedKinds.join(', ')}`,
+           kinds.join(','), [...exp.collidedKinds].sort().join(','));
+  }
   if (exp.tier)         assert(report.declaredTier === exp.tier, `tier = ${exp.tier}`, report.declaredTier, exp.tier);
   if ('conformant' in exp) assert(report.conformant === exp.conformant, `conformant = ${exp.conformant}`, report.conformant, exp.conformant);
   if (exp.mustMin != null) assert(report.mustPercent >= exp.mustMin, `MUST% >= ${exp.mustMin}`, report.mustPercent, `>= ${exp.mustMin}`);

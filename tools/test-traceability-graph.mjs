@@ -177,6 +177,36 @@ const withLegacyMetricInventory = comparePackBranches(adapted, adapt(liveWithLeg
 assert(withLegacyMetricInventory.branches[0].nodes.some((node) => node.kind === 'metric' && node.status === 'aligned'),
        'legacy count-shaped metric_names falls back to sample for metric proof');
 
+process.stdout.write('\n--- duplicate identity keys ---\n');
+const dupPack = completePack();
+// Mirror real crawler output: a second bare `otlp` receiver (collector
+// `otlp/2`) and a second SEV2 email route — both collide on identity.
+dupPack.spec.pipelines.receivers.push({ name: 'otlp' });
+dupPack.spec.alerting.routes.push({ severity: 'SEV2', channels: [{ email: 'team@example.com' }] });
+const dupAdapted = adapt(dupPack);
+const dupGraph = buildDependencyGraph(dupAdapted);
+
+assert((dupGraph.byKind.get('pipeline_receiver')?.size || 0) === 2,
+       'both same-named receivers survive as graph nodes',
+       dupGraph.byKind.get('pipeline_receiver')?.size, 2);
+assert((dupGraph.byKind.get('alert_route')?.size || 0) === 3,
+       'all three alert routes survive as graph nodes',
+       dupGraph.byKind.get('alert_route')?.size, 3);
+assert([...dupGraph.nodes.keys()].some((key) => /#02$/.test(key)),
+       'colliding nodes carry occurrence-suffixed keys');
+assert(dupGraph.collisions.length === 2
+         && dupGraph.collisions.every((c) => c.count === 2)
+         && dupGraph.collisions.map((c) => c.kind).sort().join(',') === 'alert_route,pipeline_receiver',
+       'graph reports both identity collisions with kind and group size',
+       JSON.stringify(dupGraph.collisions.map((c) => `${c.kind}:${c.count}`)), 'alert_route:2 + pipeline_receiver:2');
+assert(dupGraph.collisions.every((c) => c.key.startsWith(`${c.kind}::`) && !/#\d+$/.test(c.key)),
+       'graph collision keys are base identity keys, without occurrence suffixes');
+
+const dupSelf = comparePackBranches(dupAdapted, adapt(clone(dupPack)));
+assert(dupSelf.rollup.intact === 1 && dupSelf.rollup.integrityMean === 1,
+       'self compare stays intact with duplicate identity keys',
+       `${dupSelf.rollup.intact}/${dupSelf.rollup.integrityMean}`, '1/1');
+
 process.stdout.write('\n--- broken action limb ---\n');
 const noAlertPack = clone(pack);
 noAlertPack.spec.policy.burn_rate_alerts = [];
