@@ -153,4 +153,40 @@ for (const f of FIXTURES) {
   }
 }
 
+// ---------- duplicate-severity routes ----------
+// Packs can legally declare several routes of one severity (crawled packs
+// do). Alertmanager rejects duplicate notification-config names, and stops
+// at the first matching sibling route — so duplicates must get unique
+// ordinal names and be chained with `continue: true` or every receiver
+// after the first is silently unreachable.
+process.stdout.write('\n[duplicate-severity alertmanager routes]\n');
+const dupRoutePack = {
+  metadata: { name: 'dup-route-demo' },
+  spec: {
+    alerting: {
+      routes: [
+        { severity: 'SEV2', channels: [{ webhook: 'https://hooks.example/a' }] },
+        { severity: 'SEV2', channels: [{ webhook: 'https://hooks.example/b' }] },
+        { severity: 'SEV2', channels: [{ email: 'oncall@example.com' }] },
+        { severity: 'SEV1', channels: [{ webhook: 'https://hooks.example/page' }] },
+      ],
+    },
+  },
+};
+const dupAm = parseYaml(compileAlertmanager(dupRoutePack).replace(/^#[^\n]*\n/gm, ''));
+const recNames = (dupAm.receivers || []).map(r => r.name);
+assert(new Set(recNames).size === recNames.length,
+       'duplicate-severity routes get unique receiver names', recNames.join(','), 'all unique');
+assert(recNames.filter(n => /-sev2(-\d+)?$/.test(n)).length === 3,
+       'all three SEV2 routes keep their own receiver', recNames.join(','), '3 sev2 receivers');
+const sev2Routes = (dupAm.route?.routes || []).filter(r => (r.matchers || []).some(m => /SEV2/.test(m)));
+assert(sev2Routes.length === 3
+         && sev2Routes.slice(0, -1).every(r => r.continue === true)
+         && sev2Routes[sev2Routes.length - 1].continue !== true,
+       'identical-matcher siblings chain with continue so every channel fires',
+       JSON.stringify(sev2Routes.map(r => !!r.continue)), '[true,true,false]');
+const sev1Routes = (dupAm.route?.routes || []).filter(r => (r.matchers || []).some(m => /SEV1/.test(m)));
+assert(sev1Routes.length === 1 && sev1Routes[0].continue !== true,
+       'a lone route in its matcher group stays terminal');
+
 report('compile');
