@@ -85,6 +85,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
   const scopeMode = normalizeScopeMode(opts.scopeMode);
   const serviceScope = buildServiceScope(aLayered, opts.service);
   const layers = {};
+  const collisions = [];
   let onlyInA = 0, onlyInB = 0, inBoth = 0, aligned = 0, drifted = 0, outOfScope = 0;
 
   for (const layerId of LAYER_ORDER) {
@@ -93,6 +94,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
 
     const aByKey = groupByKey(aItems);
     const bByKey = groupByKey(bItems);
+    collectCollisions(collisions, layerId, aByKey, bByKey);
 
     // Kinds (artefact families) the declared side (A) actually participates in
     // for this layer. The behavioural key is `${kind}::${identity}`, so the
@@ -150,6 +152,13 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     a: packMeta(aLayered),
     b: packMeta(bLayered),
     scope: diffScopeMeta(scopeMode, serviceScope),
+    // Identity keys held by more than one artefact on either side. The bucket
+    // entries already preserve every instance via `#NN` occurrence suffixes;
+    // this is the explicit fail-loud surface so callers (and downstream
+    // vendors bucketing by identityKeyOf) never have to infer collisions from
+    // key strings. Top-level on purpose — several consumers enumerate
+    // `layers` as a map of layer buckets.
+    collisions,
     summary: {
       onlyInA,
       onlyInB,
@@ -397,6 +406,17 @@ function groupByKey(items) {
     out.get(k).push(item);
   }
   return out;
+}
+
+function collectCollisions(target, layerId, aByKey, bByKey) {
+  const keys = new Set([...aByKey.keys(), ...bByKey.keys()]);
+  for (const k of [...keys].sort()) {
+    const aCount = aByKey.get(k)?.length || 0;
+    const bCount = bByKey.get(k)?.length || 0;
+    if (aCount > 1 || bCount > 1) {
+      target.push({ layer: layerId, kind: k.slice(0, k.indexOf('::')), key: k, aCount, bCount });
+    }
+  }
 }
 
 function matchGroups(baseKey, aGroup, bGroup, bucket) {

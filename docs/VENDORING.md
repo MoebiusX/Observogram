@@ -15,7 +15,10 @@ promises to keep stable.
 
 | Module | Dependencies | Notes |
 | --- | --- | --- |
-| [`tools/lib/diff.mjs`](../tools/lib/diff.mjs) | pure ESM, no Node APIs | pack arithmetic — the diff buckets everything downstream consumes |
+| [`tools/lib/diff.mjs`](../tools/lib/diff.mjs) | imports `artefact-model.mjs` | pack arithmetic — the diff buckets everything downstream consumes |
+| [`tools/lib/artefact-model.mjs`](../tools/lib/artefact-model.mjs) | imports `promql-canon.mjs` | behavioural identity + contract projection — `identityKeyOf`, `behaviorOf`, `deltasOf`, `classify` |
+| [`tools/lib/promql-canon.mjs`](../tools/lib/promql-canon.mjs) | imports `promql.mjs` | parser-proven PromQL canonicalisation |
+| [`tools/lib/promql.mjs`](../tools/lib/promql.mjs) | pure ESM, no Node APIs | PromQL tokeniser/dependency reader |
 | [`tools/lib/protocols.mjs`](../tools/lib/protocols.mjs) | pure data | the versioned protocol/feature canon |
 | [`studio/diagnostic-grade.mjs`](../studio/diagnostic-grade.mjs) | **zero-import** (CI-asserted) | the grade engine: coverage/trust criteria, posture matrix, weighted delta risk, instrument-grade scale |
 | [`studio/artifact-model.mjs`](../studio/artifact-model.mjs) | **zero-import** (CI-asserted) | behavioural identity + deploy-surface model per artefact family |
@@ -94,11 +97,20 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
 
    ```sh
    git -C observogram diff <UPSTREAM_SHA>..HEAD -- \
-     tools/lib/diff.mjs tools/lib/protocols.mjs \
+     tools/lib/diff.mjs tools/lib/artefact-model.mjs \
+     tools/lib/promql-canon.mjs tools/lib/promql.mjs \
+     tools/lib/protocols.mjs \
      studio/diagnostic-grade.mjs studio/artifact-model.mjs \
      studio/constants.mjs studio/verdict-ui.mjs studio/verdict-ui.css \
      studio/compare-catalog.mjs studio/host.mjs studio/proto-synthesis.mjs
    ```
+
+   `diff.mjs` → `artefact-model.mjs` → `promql-canon.mjs` → `promql.mjs` is
+   one import chain: always re-copy these four together. A mixed-generation
+   copy (e.g. a newer `diff.mjs` over an older identity model) is exactly the
+   silent drift this contract exists to prevent — a downstream studio's 2026-08
+   collision report was filed from such a copy, against engine code this repo
+   had replaced on 2026-06-09.
 
 3. Re-copy the changed files, re-run your adapter's type-check, bump the
    recorded sha. Because the modules take their inputs explicitly, upstream
