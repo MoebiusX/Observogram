@@ -11,19 +11,35 @@ function nonEmptyString(value) {
 
 export function prettyDiffKey(key) {
   const raw = String(key || '');
-  const short = raw.includes(':') ? raw.slice(raw.indexOf(':') + 1) : raw;
+  // Behavioural identity keys are `kind::{identity-json}` with an optional
+  // `#NN` occurrence ordinal (identityKeyOf + the diff's collision
+  // suffixing); legacy keys were `family:<name>`. Split on `::` first so
+  // the JSON payload survives intact.
+  const m = /^([a-z0-9_]+)::(\{.*\})(#\d+)?$/i.exec(raw);
+  const short = m ? m[2]
+    : raw.includes(':') ? raw.slice(raw.indexOf(':') + 1) : raw;
+  const ordinal = m?.[3] || '';
   if (/^\{.*\}$/.test(short)) {
     try {
       const parsed = JSON.parse(short);
-      if (parsed.id) return String(parsed.id);
-      if (parsed.record) return String(parsed.record);
-      if (parsed.slo) return `burn-rate alert: ${parsed.slo}`;
-      if (parsed.severity) return `${String(parsed.severity).toUpperCase()} route`;
-      if (parsed.signal && parsed.target) return `${parsed.signal}: ${parsed.target}`;
-      if (parsed.name) return String(parsed.name);
+      const label =
+        parsed.id ? String(parsed.id) :
+        parsed.record ? String(parsed.record) :
+        parsed.slo ? `burn-rate alert: ${parsed.slo}` :
+        parsed.severity ? `${String(parsed.severity).toUpperCase()} route` :
+        parsed.product && parsed.signal ? `${parsed.product} · ${parsed.signal}` :
+        parsed.signal && parsed.target ? `${parsed.signal}: ${parsed.target}` :
+        parsed.name ? String(parsed.name) :
+        parsed.job ? String(parsed.job) :
+        parsed.ref ? String(parsed.ref) :
+        parsed.trigger ? `on ${parsed.trigger}` :
+        null;
+      if (label !== null) return `${label}${ordinal}`;
     } catch (_) {}
   }
-  return short || raw;
+  // A behavioural key with no printable identity (e.g. the otel/baselines
+  // singletons, `otel::{}`) reads better whole than as bare braces.
+  return m ? raw : (short || raw);
 }
 
 export function artefactLabel(art, fallback = '-') {
