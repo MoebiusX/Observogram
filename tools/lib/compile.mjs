@@ -883,8 +883,17 @@ export function compileAlertmanager(canonical, opts = {}) {
   const receivers = [];
   const childRoutes = [];
 
+  // Alertmanager requires notification-config names to be unique, and packs
+  // can legally declare several routes of one severity (the diff engine's
+  // collision handling exists for the same reason) — later duplicates get an
+  // occurrence ordinal.
+  const recNameCounts = new Map();
+
   routes.forEach((route, i) => {
-    const recName = `${slug(svc)}-${(route.severity || 'sev').toLowerCase()}`;
+    const baseRecName = `${slug(svc)}-${(route.severity || 'sev').toLowerCase()}`;
+    const seq = (recNameCounts.get(baseRecName) || 0) + 1;
+    recNameCounts.set(baseRecName, seq);
+    const recName = seq > 1 ? `${baseRecName}-${seq}` : baseRecName;
     const recCfg = { name: recName };
     for (const ch of route.channels || []) {
       const kind = Object.keys(ch)[0];
@@ -934,6 +943,21 @@ export function compileAlertmanager(canonical, opts = {}) {
       matchers: Object.entries(match).filter(([_, v]) => !!v).map(([k, v]) => `${k}="${v}"`),
     });
   });
+
+  // Alertmanager stops at the first matching sibling route, so duplicate-
+  // severity routes with identical matchers would leave every receiver after
+  // the first silently unreachable. Chain each identical-matcher group with
+  // `continue: true` (all but its last member) so every declared channel
+  // actually fires.
+  const routesByMatchers = new Map();
+  for (const r of childRoutes) {
+    const sig = r.matchers.join('|');
+    if (!routesByMatchers.has(sig)) routesByMatchers.set(sig, []);
+    routesByMatchers.get(sig).push(r);
+  }
+  for (const group of routesByMatchers.values()) {
+    for (const r of group.slice(0, -1)) r.continue = true;
+  }
 
   // Default "null" receiver for unmatched alerts so the config doesn't
   // claim a route to nowhere.
