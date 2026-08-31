@@ -19,16 +19,22 @@ export function prettyDiffKey(key) {
   const short = m ? m[2]
     : raw.includes(':') ? raw.slice(raw.indexOf(':') + 1) : raw;
   const ordinal = m?.[3] || '';
+  // The kind prefix disambiguates families that share an identity shape
+  // (burn_rate and forecast both key on {slo}).
+  const kind = (m?.[1] || '').toLowerCase();
   if (/^\{.*\}$/.test(short)) {
     try {
       const parsed = JSON.parse(short);
       const label =
         parsed.id ? String(parsed.id) :
         parsed.record ? String(parsed.record) :
-        parsed.slo ? `burn-rate alert: ${parsed.slo}` :
+        parsed.slo ? `${kind === 'forecast' ? 'forecast' : 'burn-rate'} alert: ${parsed.slo}` :
         parsed.severity ? `${String(parsed.severity).toUpperCase()} route` :
         parsed.product && parsed.signal ? `${parsed.product} · ${parsed.signal}` :
+        parsed.product && parsed.role ? `${parsed.product} · ${parsed.role}` :
         parsed.signal && parsed.target ? `${parsed.signal}: ${parsed.target}` :
+        parsed.signal && parsed.backend ? `${parsed.signal} storage: ${parsed.backend}` :
+        parsed.product ? String(parsed.product) :
         parsed.name ? String(parsed.name) :
         parsed.job ? String(parsed.job) :
         parsed.ref ? String(parsed.ref) :
