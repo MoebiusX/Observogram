@@ -19,8 +19,9 @@
 //     The session secret auto-generates and persists into the
 //     workspace, so stand-alone mode is zero-config beyond adding a
 //     user. First boot with NOTHING configured ships like Grafana:
-//     start() seeds admin/admin, the change is forced at first
-//     sign-in, and the default credential never binds beyond loopback
+//     start() seeds admin/admin, the change is asked at every sign-in
+//     until it lands (skippable per session for the seeded default
+//     only), and the default credential never binds beyond loopback
 //     — see maybeSeedDefaultAdmin().
 //   - OIDC (OBSERVOGRAM_OIDC_ISSUER set — wins over a users file):
 //     Authorization Code + PKCE against any conformant provider
@@ -65,7 +66,8 @@ const FLOW_COOKIE = 'observogram_flow';
 const FLOW_TTL_S = 600;
 // Forced password change (seeded default / admin-set temporary): the
 // verified-but-not-yet-sessioned sub rides this signed cookie between
-// POST /auth/login and POST /auth/change-password.
+// POST /auth/login and POST /auth/change-password (or its /skip
+// sibling, seeded default only).
 const PWFLOW_COOKIE = 'observogram_pwflow';
 const PWFLOW_TTL_S = 600;
 
@@ -151,7 +153,8 @@ export function writeUsers(data, file = usersFilePath()) {
 //
 // A fresh install should feel like a product, not a config exercise:
 // boot with NOTHING configured → users.json is seeded with admin/admin
-// and the login page is live, change forced at first sign-in. The seed
+// and the login page is live, change asked at every sign-in until it
+// lands (skippable per session for the seeded default). The seed
 // backs off whenever the operator has expressed ANY intent: OIDC, an
 // existing users file, a bearer token (the 10B token-only contract),
 // armed tenancy (its fail-closed boot message is the better error), or
@@ -191,7 +194,7 @@ export function maybeSeedDefaultAdmin({ log = () => {}, wouldExpose = false } = 
   } } });
   log(provided
     ? "[studio] seeded user 'admin' from OBSERVOGRAM_ADMIN_PASSWORD — sign in at /auth/login"
-    : '[studio] first boot: seeded default sign-in admin / admin — change is forced at first sign-in. OBSERVOGRAM_AUTH=off runs open with no login.');
+    : '[studio] first boot: seeded default sign-in admin / admin — a password change is asked at sign-in (skippable until it lands). OBSERVOGRAM_AUTH=off runs open with no login.');
   return true;
 }
 
@@ -358,6 +361,9 @@ const AUTH_PAGE_STYLE = `<style>
         background:#11192a;color:#e5e8ec;font-size:14px}
   button{margin-top:22px;width:100%;padding:10px;border-radius:5px;border:0;background:#047857;color:#fff;
          font-weight:700;font-size:13px;cursor:pointer}
+  .skip{display:block;width:100%;box-sizing:border-box;margin-top:10px;background:none;border:0;
+        color:#788396;font-weight:400;font-size:12px;text-decoration:underline;padding:0;
+        cursor:pointer;text-align:center}
   .err{background:#2a1414;border:1px solid #7f1d1d;color:#fca5a5;border-radius:5px;padding:8px 10px;
        font-size:12px;margin-bottom:6px}
 </style>`;
@@ -374,16 +380,19 @@ ${AUTH_PAGE_STYLE}</head><body>
   <button type="submit">Sign in</button>
 </form></body></html>`;
 
-const CHANGE_PAGE = (error = '') => `<!doctype html>
+const CHANGE_PAGE = (error = '', { canSkip = false, askCurrent = false } = {}) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Observogram — set a new password</title>
+<title>Observogram — ${askCurrent ? 'change your password' : 'set a new password'}</title>
 ${AUTH_PAGE_STYLE}</head><body>
 <form method="post" action="/auth/change-password">
-  <h1>Observo<i>gram</i></h1><p>choose a new password to finish signing in</p>
+  <h1>Observo<i>gram</i></h1><p>${askCurrent ? 'change your password' : 'choose a new password to finish signing in'}</p>
   ${error ? `<div class="err">${error}</div>` : ''}
-  <label for="p">New password</label><input id="p" name="password" type="password" autocomplete="new-password" minlength="8" autofocus required>
+  ${askCurrent ? '<label for="c">Current password</label><input id="c" name="current" type="password" autocomplete="current-password" autofocus required>' : ''}
+  <label for="p">New password</label><input id="p" name="password" type="password" autocomplete="new-password" minlength="8"${askCurrent ? '' : ' autofocus'} required>
   <label for="r">Repeat</label><input id="r" name="repeat" type="password" autocomplete="new-password" minlength="8" required>
-  <button type="submit">Set password &amp; sign in</button>
+  <button type="submit">${askCurrent ? 'Change password' : 'Set password &amp; sign in'}</button>
+  ${canSkip ? `<button type="submit" class="skip" formaction="/auth/change-password/skip" formnovalidate>Skip for now — ask again next sign-in</button>` : ''}
+  ${askCurrent ? '<a class="skip" href="/">Cancel — back to the studio</a>' : ''}
 </form></body></html>`;
 
 // Issue the signed session cookie for a users-file record. Shared by
@@ -435,12 +444,19 @@ function initLocalUsers(app) {
       // Correct password, but it's the seeded default (or an admin-set
       // temporary): no session yet — a short-lived signed flow cookie
       // carries the sub to /auth/change-password, which issues the real
-      // session once a new password is set.
+      // session once a new password is set (or, for the seeded default
+      // only, once the change is skipped for this session).
       setCookie(res, PWFLOW_COOKIE, sign({ sub: username, purpose: 'pwchange', exp: Date.now() + PWFLOW_TTL_S * 1000 }), PWFLOW_TTL_S);
       return wantsJson
         ? res.json({ ok: true, mustChange: true, next: '/auth/change-password' })
         : res.redirect('/auth/change-password');
     }
+    // A leftover pwchange flow cookie — an abandoned forced change for a
+    // DIFFERENT account on this browser — must never shadow this session
+    // on /auth/change-password (the change routes check the flow cookie
+    // first, so a stale one would target the other account): clear it
+    // the moment a normal session lands.
+    clearCookie(res, PWFLOW_COOKIE);
     issueSession(res, username, rec);
     return wantsJson ? res.json({ ok: true }) : res.redirect('/');
   });
@@ -448,43 +464,114 @@ function initLocalUsers(app) {
   app.get('/auth/change-password', (req, res) => {
     if (!localUsersEnabled()) return identityOff(res);
     const flow = verify(parseCookies(req)[PWFLOW_COOKIE]);
-    if (!flow || flow.purpose !== 'pwchange') return res.redirect('/auth/login');
-    res.type('html').send(CHANGE_PAGE());
+    if (flow && flow.purpose === 'pwchange') {
+      // The skip affordance renders only while the record still holds the
+      // seeded default — an admin-set temporary password stays a forced
+      // change (see the skip route below for the rationale).
+      const canSkip = !!readUsers().users[flow.sub]?.seededDefault;
+      return res.type('html').send(CHANGE_PAGE('', { canSkip }));
+    }
+    // Signed-in self-service (the account menu's "change password…"):
+    // the same page, with the current password required.
+    const session = readSession(req);
+    if (session?.sub && readUsers().users[session.sub]) {
+      return res.type('html').send(CHANGE_PAGE('', { askCurrent: true }));
+    }
+    res.redirect('/auth/login');
   });
 
+  // Two credentials open this route: the signed pwflow cookie (forced
+  // change mid-login — it only exists after a correct password, is
+  // HMAC-signed, and SameSite=Lax keeps it off cross-site POSTs), or a
+  // signed-in session, which must ALSO prove the current password —
+  // that knowledge is what makes a forged cross-site POST useless.
+  // Neither path needs a separate CSRF token.
   app.post('/auth/change-password', (req, res) => {
     if (!localUsersEnabled()) return identityOff(res);
     const wantsJson = (req.headers.accept || '').includes('application/json');
     const flow = verify(parseCookies(req)[PWFLOW_COOKIE]);
-    // The flow cookie is the credential here: it only exists after a
-    // correct password, it is HMAC-signed, and SameSite=Lax keeps it off
-    // cross-site POSTs — no separate CSRF token needed.
-    if (!flow || flow.purpose !== 'pwchange') {
+    const inFlow = !!flow && flow.purpose === 'pwchange';
+    const session = inFlow ? null : readSession(req);
+    const sub = inFlow ? flow.sub : session?.sub;
+    if (!sub) {
       return wantsJson
         ? res.status(401).json({ ok: false, error: 'password-change flow expired — sign in again', login: '/auth/login' })
         : res.redirect('/auth/login');
     }
-    const body = req.body || {};
-    const password = String(body.password || '');
-    const bad = (msg) => wantsJson
-      ? res.status(400).json({ ok: false, error: msg })
-      : res.status(400).type('html').send(CHANGE_PAGE(msg));
-    if (password.length < 8) return bad('password must be at least 8 characters');
-    if (password !== String(body.repeat || '')) return bad('passwords do not match');
     const data = readUsers();
-    const rec = data.users[flow.sub];
+    const rec = data.users[sub];
     if (!rec) {
       return wantsJson
         ? res.status(401).json({ ok: false, error: 'unknown user', login: '/auth/login' })
         : res.redirect('/auth/login');
     }
+    const body = req.body || {};
+    const password = String(body.password || '');
+    const canSkip = inFlow && !!rec.seededDefault;
+    const bad = (msg, status = 400) => wantsJson
+      ? res.status(status).json({ ok: false, error: msg })
+      : res.status(status).type('html').send(CHANGE_PAGE(msg, { canSkip, askCurrent: !inFlow }));
+    if (!inFlow) {
+      // Known limitation of the stateless-session model: rotating the
+      // password here does NOT revoke other outstanding sessions — an
+      // already-stolen cookie rides out its TTL. Real revocation needs a
+      // per-user epoch persisted in users.json and checked in
+      // readSession; until then the TTL (default 8h) bounds the window.
+      // Same damper as login — current-password guesses from a stolen
+      // session cookie must not be free.
+      const key = `${sub}|${req.ip || ''}`;
+      if (loginLocked(key)) return bad('too many attempts — wait 30 seconds', 429);
+      if (!verifyPassword(String(body.current || ''), rec.password)) {
+        noteLoginFailure(key);
+        return bad('current password is incorrect', 401);
+      }
+      clearLoginFailures(key);
+    }
+    if (password.length < 8) return bad('password must be at least 8 characters');
+    if (password !== String(body.repeat || '')) return bad('passwords do not match');
     rec.password = hashPassword(password);
     delete rec.mustChange;
     delete rec.seededDefault;
     writeUsers(data);
+    if (inFlow) clearCookie(res, PWFLOW_COOKIE);
+    issueSession(res, sub, rec);
+    return wantsJson ? res.json({ ok: true }) : res.redirect('/');
+  });
+
+  // "Skip for now" — the first-run affordance on the forced change:
+  // issue a session WITHOUT replacing the seeded default. Deliberately
+  // narrow on purpose:
+  //   - only while the record still holds the seeded default; an
+  //     admin-set temporary password (mustChange without seededDefault)
+  //     stays a forced change — skipping would defeat the admin's intent.
+  //   - the mustChange/seededDefault flags stay untouched, so every
+  //     subsequent sign-in asks again ("for now", not "never") and
+  //     defaultAdminCredentialActive() keeps refusing non-loopback
+  //     binds — skipping never lets admin/admin reach a network.
+  // The flow cookie is the credential, same as the change POST above.
+  app.post('/auth/change-password/skip', (req, res) => {
+    if (!localUsersEnabled()) return identityOff(res);
+    const wantsJson = (req.headers.accept || '').includes('application/json');
+    const flow = verify(parseCookies(req)[PWFLOW_COOKIE]);
+    if (!flow || flow.purpose !== 'pwchange') {
+      return wantsJson
+        ? res.status(401).json({ ok: false, error: 'password-change flow expired — sign in again', login: '/auth/login' })
+        : res.redirect('/auth/login');
+    }
+    const rec = readUsers().users[flow.sub];
+    if (!rec) {
+      return wantsJson
+        ? res.status(401).json({ ok: false, error: 'unknown user', login: '/auth/login' })
+        : res.redirect('/auth/login');
+    }
+    if (!rec.seededDefault) {
+      return wantsJson
+        ? res.status(403).json({ ok: false, error: 'a password change is required for this account' })
+        : res.status(403).type('html').send(CHANGE_PAGE('a password change is required for this account'));
+    }
     clearCookie(res, PWFLOW_COOKIE);
     issueSession(res, flow.sub, rec);
-    return wantsJson ? res.json({ ok: true }) : res.redirect('/');
+    return wantsJson ? res.json({ ok: true, skipped: true }) : res.redirect('/');
   });
 }
 

@@ -83,6 +83,19 @@ enforced server-side, not hidden client-side.
 > `/auth/*` 404), regression-asserted by the smoke suite. The seed
 > backs off from any expressed intent (OIDC, users file, API token,
 > armed tenancy).
+>
+> **Addendum to the addendum (2026-08-31): the forced change softened
+> to skippable-per-session.** The change page now offers "Skip for now"
+> for the *seeded default only* (`POST /auth/change-password/skip`,
+> same flow-cookie credential): a session is issued with `admin/admin`
+> still in place, the forced-change flags stay, every sign-in re-asks,
+> and the loopback-only guard is unchanged. Admin-set temporary
+> passwords (`mustChange` without `seededDefault`) remain a forced
+> change. 2026-09-01 added signed-in self-service: the studio's
+> account menu links to `/auth/change-password`, which now also
+> accepts a session — the current password is required (that
+> knowledge is the CSRF defence), so the route is no longer
+> flow-cookie-only.
 
 ### Stage 1 — Identity (OIDC login)
 
