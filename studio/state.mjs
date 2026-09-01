@@ -45,8 +45,10 @@ export const state = {
   compileArtifactB: 'all',      // mirrors compileArtifact for B
   compileContentB: null,        // mirrors compileContent for B
   // Traceability view preferences (persisted via Direction 3). Keys are
-  // `${layer}::${key}` strings — see compareKeyOf. Suppressed findings
-  // are hidden from their bucket; resolved findings render as resolved.
+  // `${layer}::${behavioural identity key}` strings — see categorizeTrace
+  // in compare-view.mjs (collision entries append the artefact symbol).
+  // Suppressed findings are hidden from their bucket; resolved findings
+  // render as resolved.
   tracePrefs: { suppressed: [], resolved: [] },
   traceOpen: { aligned: false, declaredNotVerified: true, verifiedNotDeclared: true, stale: true },
   // Per-section Expand toggles — each L2/L3 section hides its detail-level

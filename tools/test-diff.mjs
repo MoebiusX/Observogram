@@ -490,4 +490,48 @@ assert(allLiveDiff.summary.outOfScope === 0,
        'all-live mode counts every unmatched live artefact as live-not-declared',
        allLiveDiff.summary.outOfScope, 0);
 
+// ---------- client classification contract ----------
+// The studio classifies compare cards and traceability rows by the artefact
+// objects EMBEDDED in diff entries (studio/compare-view.mjs
+// buildCompareKeySets / categorizeTrace): every bucket entry must carry its
+// artefact(s) with a non-empty id, and within one layer no id may appear
+// twice on the same pack side — otherwise the per-side id maps misclassify.
+{
+  const { readFileSync, readdirSync } = await import('node:fs');
+  const { parse } = await import('./lib/mini-yaml.mjs');
+  const dir = new URL('../examples/', import.meta.url);
+  const packs = [];
+  for (const f of readdirSync(dir).filter(f => f.endsWith('.pack.yaml'))) {
+    try { packs.push({ name: f, layered: adapt(parse(readFileSync(new URL(f, dir), 'utf8'))) }); }
+    catch (_) { /* legacy/unadaptable packs are covered elsewhere */ }
+  }
+  assert(packs.length >= 3, 'client-contract check loads at least 3 bundled packs', packs.map(p => p.name));
+
+  const checkDiff = (label, diff) => {
+    const violations = [];
+    for (const [L, bucket] of Object.entries(diff.layers)) {
+      const sides = { a: new Set(), b: new Set() };
+      const track = (side, art, where) => {
+        if (!art?.id) { violations.push(`${L} ${where}: entry missing embedded artefact id`); return; }
+        if (sides[side].has(art.id)) violations.push(`${L} ${where}: id ${art.id} repeats on side ${side}`);
+        sides[side].add(art.id);
+      };
+      for (const e of bucket.inBoth) { track('a', e.a, 'inBoth.a'); track('b', e.b, 'inBoth.b'); }
+      for (const e of bucket.onlyInA) track('a', e.artefact, 'onlyInA');
+      for (const e of bucket.onlyInB) track('b', e.artefact, 'onlyInB');
+      for (const e of bucket.outOfScope) track('b', e.artefact, 'outOfScope');
+    }
+    assert(violations.length === 0,
+      `${label}: every diff entry embeds a unique-per-side artefact id`, violations.slice(0, 5));
+  };
+
+  for (const a of packs) for (const b of packs) {
+    for (const scopeMode of ['service', 'all']) {
+      checkDiff(`${a.name} vs ${b.name} (${scopeMode})`, diffPacks(a.layered, b.layered, { scopeMode }));
+    }
+  }
+  checkDiff('collision-pack self-diff',
+    diffPacks(adapt(clone(collisionPack)), adapt(clone(collisionPack)), { scopeMode: 'all' }));
+}
+
 report('diff');

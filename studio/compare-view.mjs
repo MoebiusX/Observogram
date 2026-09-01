@@ -16,7 +16,7 @@ import { openDrawer } from './drawer.mjs';
 import { defaultEnvFor, refresh } from './app.mjs';
 import { host as appHost } from './host.mjs';
 import { cardKey } from './layers-view.mjs';
-import { diffEntryLabel, deploySelectionFromEntries, deploySurfaceForArtefact } from './artifact-model.mjs';
+import { diffEntryLabel, deploySelectionFromEntries, deploySurfaceForArtefact, prettyDiffKey } from './artifact-model.mjs';
 import {
   POSTURE_LAYERS,
   POSTURE_MECHANISMS_PER_LAYER,
@@ -55,24 +55,66 @@ function defaultCompareB() {
   return state.catalog.find(p => p.ok && p.id !== state.selectedPackId)?.id || null;
 }
 
+// The selection tuple a diff is computed for. loadDiff stamps it on the
+// result as `__for`, and diffMatchesSelection() re-checks it at read time.
+// This guard is load-bearing: many flows swap Pack A / env A without
+// touching state.diff (header pickers, service fallback, uploads), and
+// adapter ids are positional (SLI-01, DASH-02…), so a stale diff would
+// confidently mislabel the new pack's cards instead of failing closed.
+function diffSelection() {
+  return {
+    a: state.selectedPackId || null,
+    b: state.compareBId || null,
+    aEnv: state.selectedEnv || null,
+    bEnv: state.compareBEnv || null,
+    scopeMode: activeDiffScopeMode(),
+    service: state.selectedService || null,
+  };
+}
+
+export function diffMatchesSelection(diff) {
+  const f = diff?.__for;
+  if (!f) return false;
+  const sel = diffSelection();
+  return f.a === sel.a && f.b === sel.b && f.aEnv === sel.aEnv &&
+    f.bEnv === sel.bEnv && f.scopeMode === sel.scopeMode && f.service === sel.service;
+}
+
+// One in-flight fetch per selection tuple — concurrent renders while a
+// diff loads share the request instead of stampeding the server.
+let diffInFlight = null;
+
 export async function loadDiff() {
   if (!state.selectedPackId || !state.compareBId) { state.diff = null; return; }
-  const params = new URLSearchParams({ a: state.selectedPackId, b: state.compareBId });
-  if (state.selectedEnv) params.set('aEnv', state.selectedEnv);
-  if (state.compareBEnv) params.set('bEnv', state.compareBEnv);
-  params.set('scopeMode', activeDiffScopeMode());
-  if (state.selectedService) params.set('service', state.selectedService);
-  try {
-    const result = await api(`/api/diff?${params}`);
-    // Sanity-check the shape so a stale server returning some other JSON
-    // doesn't crash later renderers.
-    if (!result || !result.summary || !result.layers) {
-      throw new Error('server returned an unexpected shape — restart `npm run dev`?');
+  const requested = diffSelection();
+  const key = JSON.stringify(requested);
+  if (diffInFlight?.key === key) return diffInFlight.promise;
+  const params = new URLSearchParams({ a: requested.a, b: requested.b });
+  if (requested.aEnv) params.set('aEnv', requested.aEnv);
+  if (requested.bEnv) params.set('bEnv', requested.bEnv);
+  params.set('scopeMode', requested.scopeMode);
+  if (requested.service) params.set('service', requested.service);
+  const promise = (async () => {
+    let next;
+    try {
+      const result = await api(`/api/diff?${params}`);
+      // Sanity-check the shape so a stale server returning some other JSON
+      // doesn't crash later renderers.
+      if (!result || !result.summary || !result.layers) {
+        throw new Error('server returned an unexpected shape — restart `npm run dev`?');
+      }
+      next = result;
+    } catch (e) {
+      next = { error: e.message };
     }
-    state.diff = result;
-  } catch (e) {
-    state.diff = { error: e.message };
-  }
+    next.__for = requested;
+    // A slow response for a superseded selection must not clobber the
+    // current one — drop it and let the current selection's own fetch win.
+    if (JSON.stringify(diffSelection()) === key) state.diff = next;
+    if (diffInFlight?.key === key) diffInFlight = null;
+  })();
+  diffInFlight = { key, promise };
+  return promise;
 }
 
 export function activeDiffScopeMode() {
@@ -104,13 +146,21 @@ export async function refreshDiff() {
 //
 // Compare shows raw deltas per layer. Useful for engineers reading the
 // diff first-hand, but it leaves the harder question — "what should I do
-// about this?" — to the reader. Traceability answers that by binning
-// every artefact across both packs into one of four buckets:
+// about this?" — to the reader. Traceability answers that by re-binning
+// the server diff's buckets (behavioural identity matching + contract
+// agreement — the same engine behind the Diagnose verdict) into four
+// actionable piles:
 //
-//   Aligned             both packs have it AND the shape matches
+//   Aligned             shared identity AND the behavioural contract agrees
 //   Declared, not verified   only in pack A (the manifest)
 //   Verified, not declared   only in pack B (live)
-//   Stale declaration   both packs have it but the shapes diverge
+//   Stale declaration   shared identity but the deployed contract diverges
+//
+// Live artefacts the diff parks as out-of-scope (families or services
+// Pack A never declares) are excluded here, and scaffold placeholders are
+// parked the same way the drift drill parks them — so these buckets
+// reconcile with the drill's UNLENSED totals. The drill additionally
+// applies the active product lens; this view deliberately does not.
 //
 // Convention: Pack A is treated as the manifest ("declared"), Pack B as
 // the live signal ("verified"). The unlock means either pack can be in
@@ -131,53 +181,37 @@ export async function refreshDiff() {
 
 const TRACE_LAYERS = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'];
 
-// Strip volatile fields before comparing two artefacts for shape equality.
-function stripVolatileArt(art) {
-  if (!art || typeof art !== 'object') return art;
-  // _sub is the L4 sub-group marker we added for flattening.
-  // annotations include MCP refresh timestamps and source tags that
-  // legitimately differ between repo and live.
-  const { _sub, annotations, ...rest } = art;
-  return rest;
-}
-
-function artefactsShapeEqual(a, b) {
-  try { return JSON.stringify(stripVolatileArt(a)) === JSON.stringify(stripVolatileArt(b)); }
-  catch (_) { return false; }
-}
-
-// Walk both packs and bin every artefact key into a bucket. The key is
-// `${layer}::${compareKeyOf(art)}` so the same id in two different
-// layers doesn't collide.
-function categorizeTrace(packA, packB) {
-  const buckets = { aligned: [], declaredNotVerified: [], verifiedNotDeclared: [], stale: [] };
+// Re-bin the server diff's buckets into the four traceability piles.
+// Identity pairing and aligned-vs-drifted both come from the behavioural
+// engine (identityKeyOf + deltasOf, server-side) — never re-derived here
+// with id or shape equality, which mis-binned renamed backends and
+// volatile-field differences. `key` is the entry's behavioural identity
+// key; findingKey namespaces it per layer for the suppress/resolve prefs.
+function categorizeTrace(diff) {
+  const buckets = { aligned: [], declaredNotVerified: [], verifiedNotDeclared: [], stale: [], scaffoldParked: 0 };
+  const tier = state.pack?.meta?.criticality || state.packB?.meta?.criticality || 'tier-3';
+  // Suppress/resolve prefs persist on findingKey. Collision entries carry
+  // order-dependent #NN ordinals (the diff's pairing order can reshuffle
+  // them between live redrafts), so those keys get the embedded artefact's
+  // own symbol appended — best-effort stability, not a guarantee.
+  const findingKeyFor = (L, e, art) =>
+    /#\d+$/.test(e.key) ? `${L}::${e.key}::${art?.defines || art?.id || ''}` : `${L}::${e.key}`;
   for (const L of TRACE_LAYERS) {
-    const aItems = layerItemsFor(packA, L);
-    const bItems = layerItemsFor(packB, L);
-    const aMap = new Map();
-    const bMap = new Map();
-    for (const it of aItems) {
-      const k = compareKeyOf(it);
-      if (k) aMap.set(k, it);
+    const bucket = diff?.layers?.[L];
+    if (!bucket) continue;
+    for (const e of bucket.inBoth || []) {
+      if (isScaffoldDiffEntry(e)) { buckets.scaffoldParked++; continue; }
+      const row = { layer: L, key: e.key, findingKey: findingKeyFor(L, e, e.a), a: e.a, b: e.b, deltas: e.deltas || [], tier };
+      if (e.match === 'drifted') buckets.stale.push(row);
+      else buckets.aligned.push(row);
     }
-    for (const it of bItems) {
-      const k = compareKeyOf(it);
-      if (k) bMap.set(k, it);
+    for (const e of bucket.onlyInA || []) {
+      if (isScaffoldDiffEntry(e)) { buckets.scaffoldParked++; continue; }
+      buckets.declaredNotVerified.push({ layer: L, key: e.key, findingKey: findingKeyFor(L, e, e.artefact), a: e.artefact, tier });
     }
-    const allKeys = new Set([...aMap.keys(), ...bMap.keys()]);
-    for (const k of allKeys) {
-      const a = aMap.get(k);
-      const b = bMap.get(k);
-      const findingKey = `${L}::${k}`;
-      const layerTier = packA?.meta?.criticality || packB?.meta?.criticality || 'tier-3';
-      if (a && b) {
-        if (artefactsShapeEqual(a, b)) buckets.aligned.push({ layer: L, key: k, findingKey, a, b, tier: layerTier });
-        else buckets.stale.push({ layer: L, key: k, findingKey, a, b, tier: layerTier });
-      } else if (a) {
-        buckets.declaredNotVerified.push({ layer: L, key: k, findingKey, a, tier: layerTier });
-      } else {
-        buckets.verifiedNotDeclared.push({ layer: L, key: k, findingKey, b, tier: layerTier });
-      }
+    for (const e of bucket.onlyInB || []) {
+      if (isScaffoldDiffEntry(e)) { buckets.scaffoldParked++; continue; }
+      buckets.verifiedNotDeclared.push({ layer: L, key: e.key, findingKey: findingKeyFor(L, e, e.artefact), b: e.artefact, tier });
     }
   }
   return buckets;
@@ -196,10 +230,10 @@ function traceFindingSeverity(bucket, finding) {
 }
 
 const BUCKET_META = {
-  aligned:             { label: 'Aligned',                blurb: 'Declared in repo AND shape matches in live. Nothing to do.' },
+  aligned:             { label: 'Aligned',                blurb: 'Same behavioural identity AND the deployed contract agrees. Nothing to do.' },
   declaredNotVerified: { label: 'Declared, not verified', blurb: 'In the repo manifest but absent from live. Stale spec, or live collection broken.' },
   verifiedNotDeclared: { label: 'Verified, not declared', blurb: 'Live signal exists with no entry in the repo. Drift or out-of-band telemetry.' },
-  stale:               { label: 'Stale declaration',      blurb: 'Both sides have it, but the live shape diverges from the declared shape. Reconcile.' },
+  stale:               { label: 'Stale declaration',      blurb: 'Same behavioural identity, but the deployed contract diverges from the declared one. Reconcile.' },
 };
 
 function ensureTracePrefs() {
@@ -244,7 +278,7 @@ export function renderTraceabilityView(host) {
   const requirementBlock = renderRequirementTraceabilityBlock(state.pack);
   if (requirementBlock) section.appendChild(requirementBlock);
 
-  if (!state.packB) {
+  if (!state.packB && !state.compareBId) {
     if (!requirementBlock) {
       section.innerHTML = '<div class="placeholder">No SLI/SLO requirements found in this pack.</div>';
     }
@@ -252,7 +286,56 @@ export function renderTraceabilityView(host) {
     return;
   }
 
-  const buckets = categorizeTrace(state.pack, state.packB);
+  // The buckets come from the server diff (behavioural matching). A Pack B
+  // pick normally loads it already, but guard the races: diff still in
+  // flight, stale for the current selection, or failed — never fall back
+  // to a client-side re-derivation.
+  const diffCurrent = !!state.diff && diffMatchesSelection(state.diff);
+  const haveDiff = diffCurrent && !state.diff.error && !!state.diff.layers;
+  if (!state.packB || !haveDiff) {
+    const notice = document.createElement('div');
+    if (diffCurrent && state.diff?.error) {
+      notice.className = 'error';
+      notice.textContent = `Diff failed: ${state.diff.error}`;
+      section.appendChild(notice);
+      host.appendChild(section);
+      return;
+    }
+    if (!state.selectedPackId) {
+      // Pack A never registered with the server (edge upload path) — the
+      // diff endpoint can't compare it, so fail honestly rather than
+      // re-entering this branch on every render.
+      notice.className = 'error';
+      notice.textContent = 'Traceability needs Pack A registered on the server — re-upload or rescan it, then retry.';
+      section.appendChild(notice);
+      host.appendChild(section);
+      return;
+    }
+    notice.className = 'placeholder loading-compare';
+    notice.innerHTML = `
+      <span class="compare-spinner" aria-hidden="true"></span>
+      <span>Comparing <strong>${escapeHtml(state.pack?.name || 'pack A')}</strong> against <strong>${escapeHtml(String(state.compareBId))}</strong>…</span>
+      <span class="loading-compare-sub">matching artefacts by behavioural identity — large packs take a few seconds</span>
+    `;
+    section.appendChild(notice);
+    host.appendChild(section);
+    Promise.all([
+      state.packB ? Promise.resolve() : appHost.loadPackB(),
+      haveDiff ? Promise.resolve() : loadDiff(),
+    ]).then(() => {
+      // Re-render only when the load actually progressed; re-entering this
+      // branch with nothing changed would spin a synchronous render loop.
+      if (state.packB && state.diff) { appHost.renderTabs(); appHost.renderMainView(); return; }
+      notice.classList.remove('loading-compare');
+      notice.textContent = 'Comparison failed to load — pick Pack B again or reload.';
+    }).catch((e) => {
+        notice.classList.remove('loading-compare');
+        notice.textContent = `Comparison failed to load: ${e?.message || 'unknown error'}`;
+      });
+    return;
+  }
+
+  const buckets = categorizeTrace(state.diff);
   const suppressedSet = new Set(state.tracePrefs.suppressed);
   const resolvedSet   = new Set(state.tracePrefs.resolved);
 
@@ -273,12 +356,17 @@ export function renderTraceabilityView(host) {
 
   const lede = document.createElement('div');
   lede.className = 'trace-lede';
+  const outOfScopeTotal = TRACE_LAYERS.reduce((n, L) => n + (state.diff.layers[L]?.outOfScope?.length || 0), 0);
   lede.innerHTML = `
     Pack A is treated as the manifest (<em>declared</em>) and Pack B as the live signal (<em>verified</em>).
-    Every artefact lands in one of four buckets; per-row actions persist locally so suppressions and
-    resolutions survive a refresh.
+    Artefacts are paired by <em>behavioural identity</em> (what they do, not what they're named) and land in
+    one of four buckets; per-row actions persist locally so suppressions and resolutions survive a refresh.
+    Dashboard panels are compared at dashboard granularity, not listed individually.
+    ${outOfScopeTotal ? `${outOfScopeTotal} live artefact${outOfScopeTotal === 1 ? '' : 's'} outside this pack's scope ${outOfScopeTotal === 1 ? 'is' : 'are'} parked by the live-scope setting below.` : ''}
+    ${buckets.scaffoldParked ? `${buckets.scaffoldParked} scaffold placeholder${buckets.scaffoldParked === 1 ? '' : 's'} (crawler stubs, not deployed contract) ${buckets.scaffoldParked === 1 ? 'is' : 'are'} parked, matching the drift drill.` : ''}
   `;
   section.appendChild(lede);
+  section.appendChild(renderLiveScopeControl({ standalone: true }));
 
   // Headline cards — one per bucket. Click to scroll to its section.
   const headlineGrid = document.createElement('div');
@@ -528,8 +616,12 @@ function renderTraceRow(bucketKey, finding, resolvedSet) {
   // Side primary — for declaredNotVerified use A, for verifiedNotDeclared use B,
   // for stale + aligned use A (it's the manifest).
   const primary = (bucketKey === 'verifiedNotDeclared') ? finding.b : finding.a;
-  const title = primary?.title || primary?.id || primary?.defines || finding.key;
-  const sub   = primary?.desc || primary?.tool || '';
+  const title = primary?.title || primary?.id || primary?.defines || prettyDiffKey(finding.key);
+  // For stale rows the engine already names the diverging contract fields —
+  // surface them so "reconcile" starts from the actual deltas.
+  const driftFields = (finding.deltas || []).map(d => d.field).filter(Boolean);
+  const sub = [primary?.desc || primary?.tool || '', driftFields.length ? `drift: ${driftFields.join(', ')}` : '']
+    .filter(Boolean).join(' · ');
 
   row.innerHTML = `
     <div class="trace-row-pill">
@@ -539,7 +631,7 @@ function renderTraceRow(bucketKey, finding, resolvedSet) {
     <div class="trace-row-body">
       <div class="trace-row-title">${escapeHtml(String(title || finding.key))}</div>
       <div class="trace-row-sub">${escapeHtml(sub)}</div>
-      <div class="trace-row-key"><code>${escapeHtml(finding.findingKey)}</code></div>
+      <div class="trace-row-key"><code>${escapeHtml(`${finding.layer} · ${prettyDiffKey(finding.key)}`)}</code></div>
     </div>
     <div class="trace-row-actions">
       <button type="button" class="trace-action" data-act="open" title="Open the artefact drawer on the Layers view">open</button>
@@ -552,16 +644,19 @@ function renderTraceRow(bucketKey, finding, resolvedSet) {
     state.view = 'layers';
     state.layerFilter = finding.layer === 'L4' ? 'L4' : finding.layer;
     state.activeLayer = finding.layer;
-    state.activeCardKey = finding.key;
-    appHost.renderTabs();
-    appHost.renderMainView();
-    // Open the drawer for the artefact if we can find it.
+    // The diff entry embeds the artefact it paired — locate the loaded
+    // pack's copy by id (falling back to the embedded copy) so the drawer
+    // opens regardless of which keyspace the diff entry's key lives in.
+    const embedded = (bucketKey === 'verifiedNotDeclared') ? finding.b : finding.a;
     const pack = (bucketKey === 'verifiedNotDeclared') ? state.packB : state.pack;
     const items = layerItemsFor(pack, finding.layer);
-    const art = items.find(it => compareKeyOf(it) === finding.key);
+    const art = items.find(it => it.id === embedded?.id) || embedded;
+    state.activeCardKey = art ? cardKey(finding.layer, art._sub || null, art.id) : null;
+    appHost.renderTabs();
+    appHost.renderMainView();
     if (art) {
       const layerDef = LAYER_DEFS.find(d => d.id === finding.layer) || { id: finding.layer };
-      try { openDrawer(art, layerDef, null); } catch (_) {}
+      try { openDrawer(art, layerDef, art._sub || null); } catch (_) {}
     }
   };
   row.querySelector('[data-act="resolve"]').onclick = () => { toggleTraceResolved(finding.findingKey); appHost.renderMainView(); };
@@ -574,8 +669,9 @@ function renderTraceRow(bucketKey, finding, resolvedSet) {
 //
 // A focused destination — answers "how does PACK A's posture for
 // <product> compare to PACK B as the reference?" Built on the same
-// machinery as Compare (productSurface lens + buildCompareKeySets)
-// but framed as a scorecard rather than a free-form side-by-side.
+// machinery as Compare (productSurface lens + the server diff's
+// behavioural buckets) but framed as a scorecard rather than a
+// free-form side-by-side.
 //
 //   ┌─────────────────────────────────────────────────────────────┐
 //   │  BENCHMARK: krystaline-live  vs  grafana-reference          │
@@ -659,7 +755,12 @@ export function renderBenchmarkView(view) {
   // The diff over big packs takes real seconds — show motion so it reads
   // as "working", not "hung". And NEVER hang on failure: a rejected fetch
   // renders an honest error with a retry instead of an eternal spinner.
-  if (state.compareBId && (!haveB || (!state.diff && !state.diff?.error))) {
+  // A diff computed for a different selection (pack A swapped, env
+  // flipped, scope changed) must count as missing, not render — see
+  // diffMatchesSelection. When Pack A has no server id the diff can never
+  // load, so skip the fetch branch and render the Pack-A-only verdict.
+  const diffCurrent = !!state.diff && diffMatchesSelection(state.diff);
+  if (state.compareBId && state.selectedPackId && (!haveB || !diffCurrent)) {
     const loading = document.createElement('div');
     loading.className = 'placeholder loading-compare';
     loading.innerHTML = `
@@ -670,8 +771,18 @@ export function renderBenchmarkView(view) {
     scaffold.appendChild(loading);
     Promise.all([
       haveB ? Promise.resolve() : appHost.loadPackB(),
-      (state.diff && !state.diff.error) ? Promise.resolve() : loadDiff(),
-    ]).then(() => { appHost.renderTabs(); appHost.renderMainView(); })
+      diffCurrent ? Promise.resolve() : loadDiff(),
+    ]).then(() => {
+      // Only re-render on progress — re-entering this branch unchanged
+      // would spin a synchronous render loop.
+      if (state.packB && state.diff) { appHost.renderTabs(); appHost.renderMainView(); return; }
+      loading.classList.remove('loading-compare');
+      loading.innerHTML = `
+        <span>Comparison failed to load.</span>
+        <button type="button" class="ctrl-btn loading-compare-retry">retry</button>
+      `;
+      loading.querySelector('.loading-compare-retry')?.addEventListener('click', () => appHost.renderMainView());
+    })
       .catch((e) => {
         loading.classList.remove('loading-compare');
         loading.innerHTML = `
@@ -682,6 +793,9 @@ export function renderBenchmarkView(view) {
       });
     return;
   }
+  // Past the gate: the diff is either current or unavailable for this
+  // selection — never hand a stale one to the grade or the drill.
+  const diffSafe = diffCurrent ? state.diff : null;
 
   // Auto-apply the lens when Pack B is a *-reference catalogue pack.
   // Picking grafana-reference IS choosing the Grafana benchmark; no
@@ -704,7 +818,7 @@ export function renderBenchmarkView(view) {
 
   // THE verdict — diagnostic-grade YES/NO from coverage (2A) + trust /
   // drift (2B), Pack A alone. Always leads the view.
-  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, state.diff);
+  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSafe);
   const verdict = renderDiagnosticGradeVerdict(diagnostic, lens, state.packB);
   scaffold.appendChild(verdict);
 
@@ -726,7 +840,7 @@ export function renderBenchmarkView(view) {
   } else {
     // Pack B present — render the true side-by-side A-vs-B drill (drift
     // cells / gap deltas) as the lead evidence beneath the verdict.
-    placeCompareBand(renderDriftDrill(state.diff, state.packB, state.compareBId, lens));
+    placeCompareBand(renderDriftDrill(diffSafe, state.packB, state.compareBId, lens));
     placeCompareBand(renderLiveScopeControl({ standalone: true }));
   }
 
@@ -1823,12 +1937,22 @@ function renderCompareView(view) {
 
   const haveA = !!state.pack;
   const haveB = !!state.packB;
-  const haveDiff = !!state.diff && !state.diff.error;
+  // Stale diffs (computed for a different pack/env/scope selection) count
+  // as missing so this view can never classify against the wrong packs.
+  const diffCurrent = !!state.diff && diffMatchesSelection(state.diff);
+  const haveDiff = diffCurrent && !state.diff.error;
   if (!haveA || !haveB || !haveDiff) {
-    if (state.diff?.error) {
+    if (diffCurrent && state.diff?.error) {
       const err = document.createElement('div');
       err.className = 'error';
       err.textContent = `Diff failed: ${state.diff.error}`;
+      scaffold.appendChild(err);
+      return;
+    }
+    if (!state.selectedPackId) {
+      const err = document.createElement('div');
+      err.className = 'error';
+      err.textContent = 'Compare needs Pack A registered on the server — re-upload or rescan it, then retry.';
       scaffold.appendChild(err);
       return;
     }
@@ -1839,7 +1963,13 @@ function renderCompareView(view) {
     Promise.all([
       haveB    ? Promise.resolve() : appHost.loadPackB(),
       haveDiff ? Promise.resolve() : loadDiff(),
-    ]).then(() => { appHost.renderTabs(); appHost.renderMainView(); })
+    ]).then(() => {
+      // Only re-render on progress — see the twin guards in the grade and
+      // traceability views; an unchanged re-entry would loop.
+      if (state.packB && state.diff) { appHost.renderTabs(); appHost.renderMainView(); return; }
+      loading.className = 'error';
+      loading.textContent = 'Comparison failed to load — pick Pack B again or reload.';
+    })
       .catch((e) => {
         loading.className = 'error';
         loading.textContent = `Failed to load packs: ${e.message}`;
@@ -1868,14 +1998,33 @@ function renderCompareView(view) {
 }
 
 function buildCompareKeySets() {
-  const keysOnlyInA = {}, keysInBoth = {}, keysOnlyInB = {};
+  // Diff entry keys are behavioural identity keys (identityKeyOf, server-side)
+  // — a keyspace the client can't rebuild from `defines`/id. Every entry
+  // embeds the artefact object(s) it paired though, and artefact ids are
+  // unique within a pack side, so cards classify by id per side instead.
+  // Out-of-scope live artefacts stay unclassified on purpose — the summary
+  // arithmetic excludes them too.
+  const aStatus = {}, bStatus = {};
   for (const L of LAYERS_FOR_DIFF) {
-    const bucket = state.diff.layers[L] || { onlyInA: [], onlyInB: [], inBoth: [] };
-    keysOnlyInA[L] = new Set(bucket.onlyInA.map(x => x.key));
-    keysOnlyInB[L] = new Set(bucket.onlyInB.map(x => x.key));
-    keysInBoth[L]  = new Set(bucket.inBoth.map(x => x.key));
+    const bucket = state.diff.layers[L] || {};
+    const a = new Map(), b = new Map();
+    for (const e of bucket.inBoth || []) {
+      if (e.a?.id) a.set(e.a.id, 'both');
+      if (e.b?.id) b.set(e.b.id, 'both');
+    }
+    for (const e of bucket.onlyInA || []) if (e.artefact?.id) a.set(e.artefact.id, 'only');
+    for (const e of bucket.onlyInB || []) if (e.artefact?.id) b.set(e.artefact.id, 'only');
+    aStatus[L] = a;
+    bStatus[L] = b;
   }
-  return { keysOnlyInA, keysInBoth, keysOnlyInB };
+  return { aStatus, bStatus };
+}
+
+// 'both' | 'only' | null for one card. null = not part of the comparison
+// (panels are excluded from the diff; out-of-scope live artefacts are parked).
+function compareStatusFor(side, L, art, sets) {
+  const byId = side === 'a' ? sets.aStatus[L] : sets.bStatus[L];
+  return (art?.id && byId?.get(art.id)) || null;
 }
 
 // New: stacked PACK A + PACK B header band, side-by-side.
@@ -2277,7 +2426,7 @@ function renderCompareFilters() {
     { id: 'all',   label: 'All',       hint: 'Every artefact from both packs, side by side.' },
     { id: 'onlyA', label: 'Only in A', hint: 'Artefacts present in pack A but not in pack B. Right column is empty.' },
     { id: 'onlyB', label: 'Only in B', hint: 'Artefacts present in pack B but not in pack A. Left column is empty.' },
-    { id: 'both',  label: 'In both',   hint: 'Artefacts present in both packs (matched by `defines` symbol or id).' },
+    { id: 'both',  label: 'In both',   hint: 'Artefacts present in both packs (matched by behavioural identity — the same deployed control, whatever it is named).' },
     { id: 'a-b',   label: 'A − B',     hint: 'Set difference: every artefact in A, minus anything also in B.' },
     { id: 'a+b',   label: 'A + B',     hint: 'Union: combined view of both packs without duplication.' },
   ];
@@ -2573,9 +2722,9 @@ function filterCompareItems(items, L, side, sets) {
   const sidePack = side === 'a' ? state.pack : state.packB;
   return items.filter(art => {
     if (lens !== 'all' && !productSurface(art, lens, sidePack)) return false;
-    const k = compareKeyOf(art);
-    const inBoth = sets.keysInBoth[L]?.has(k);
-    const onlySide = side === 'a' ? sets.keysOnlyInA[L]?.has(k) : sets.keysOnlyInB[L]?.has(k);
+    const status = compareStatusFor(side, L, art, sets);
+    const inBoth = status === 'both';
+    const onlySide = status === 'only';
     let sliceOk = true;
     switch (slice) {
       case 'onlyA': sliceOk = side === 'a' && onlySide; break;
@@ -2609,6 +2758,11 @@ function renderCompareLayerColumn(side, L, items, sets) {
   return col;
 }
 
+// Raw symbolic key — referenced ONLY by the benchmark footprint's
+// deliberately naive "reference IDs matched" scorecard, which is currently
+// unwired (its callers were stripped in 59e366c; kept pending cleanup).
+// Everything that claims comparison semantics goes through the server
+// diff's behavioural buckets instead (see buildCompareKeySets).
 function compareKeyOf(art) {
   return art?.defines || art?.id || '';
 }
@@ -2683,11 +2837,9 @@ function renderCompareSideLayer(def, items, side, sets, isL4) {
 }
 
 function renderCompareCard(artefact, def, sublayerKey, side, sets) {
-  const k = compareKeyOf(artefact);
-  const inBoth   = sets.keysInBoth[def.id]?.has(k);
-  const onlyA    = sets.keysOnlyInA?.[def.id]?.has(k);
-  const onlyB    = sets.keysOnlyInB?.[def.id]?.has(k);
-  const isOnlySide = side === 'a' ? onlyA : onlyB;
+  const status = compareStatusFor(side, def.id, artefact, sets);
+  const inBoth = status === 'both';
+  const isOnlySide = status === 'only';
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'card compare-side-card';
@@ -2703,8 +2855,7 @@ function renderCompareCard(artefact, def, sublayerKey, side, sets) {
   // Comparison status pill — what this card means in the diff.
   let statusPill = '';
   if (inBoth) statusPill = '<span class="diff-chip chip-both">in both</span>';
-  else if (onlyA) statusPill = `<span class="diff-chip chip-only-a">only in A</span>`;
-  else if (onlyB) statusPill = `<span class="diff-chip chip-only-b">only in B</span>`;
+  else if (isOnlySide) statusPill = `<span class="diff-chip chip-only-${side}">only in ${side.toUpperCase()}</span>`;
 
   // Source pill — Declared/Verified/Missing (what the studio's
   // per-artefact taxonomy already says about this card's status in

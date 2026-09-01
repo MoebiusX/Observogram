@@ -297,6 +297,38 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
   assert(partialLiveEvidence(null).partial === false, 'null pack is handled');
 }
 
+// ---------- prettyDiffKey (studio/artifact-model.mjs) ----------
+// The studio's display renderer for behavioural identity keys. One case
+// per identity shape in tools/lib/artefact-model.mjs's IDENTITY table,
+// plus ordinals, singletons, and the legacy `family:<name>` keyspace.
+{
+  const { prettyDiffKey } = await import('../studio/artifact-model.mjs');
+  const cases = [
+    ['sli::{"id":"checkout_availability"}', 'checkout_availability'],
+    ['recording_rule::{"record":"slo:checkout:ratio"}', 'slo:checkout:ratio'],
+    ['burn_rate::{"slo":"api_99"}', 'burn-rate alert: api_99'],
+    ['forecast::{"slo":"api_99"}', 'forecast alert: api_99'],
+    ['alert_route::{"severity":"sev1"}', 'SEV1 route'],
+    ['alert_route::{"severity":"sev1"}#02', 'SEV1 route#02'],
+    ['backend::{"product":"prometheus","signal":"metrics"}', 'prometheus · metrics'],
+    ['storage_metrics::{"backend":"prometheus","signal":"metrics"}', 'metrics storage: prometheus'],
+    ['mesh::{"product":"envoy","role":"proxy"}', 'envoy · proxy'],
+    ['profiling::{"product":"pyroscope"}', 'pyroscope'],
+    ['pipeline_exporter_metrics::{"signal":"metrics","target":"prometheusremotewrite"}', 'metrics: prometheusremotewrite'],
+    ['scrape_job::{"job":"node"}', 'node'],
+    ['metric::{"name":"http_requests_total"}', 'http_requests_total'],
+    ['imports::{"ref":"stdlib/base"}', 'stdlib/base'],
+    ['remediation::{"trigger":"disk_pressure"}', 'on disk_pressure'],
+    ['otel::{}', 'otel::{}'],                    // singleton — whole key beats bare braces
+    ['recording_rule:legacy_name', 'legacy_name'], // pre-behavioural keyspace still readable
+    ['', ''],
+  ];
+  for (const [key, want] of cases) {
+    const got = prettyDiffKey(key);
+    assert(got === want, `prettyDiffKey(${JSON.stringify(key)}) renders ${JSON.stringify(want)}`, got);
+  }
+}
+
 // ---------- the vendoring seam (docs/VENDORING.md) ----------
 // Downstream studios vendor these files verbatim; an import creeping in
 // breaks their build, not ours — so CI holds the line here.
