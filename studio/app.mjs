@@ -3914,14 +3914,29 @@ function setupIdentityChip() {
     anchor.parentNode.insertBefore(wrap, anchor);
   }
 
+  // Account menu: who you are, change password (stand-alone mode — OIDC
+  // passwords belong to the IdP), sign out.
   const chip = document.createElement('span');
   chip.id = 'hdr-user';
   chip.className = 'hdr-user';
-  chip.title = `signed in as ${me.email || me.sub} (${me.mode})`;
+  // Deliberately NOT role="menu"/"menuitem": that ARIA contract demands
+  // arrow-key navigation this popover doesn't implement. Plain links and
+  // buttons are natively focusable and honest about what this is.
   chip.innerHTML = `
-    <span class="hdr-user-name">⏣ ${escapeHtml(me.name || me.email || me.sub)}</span>
-    <button type="button" class="ctrl-btn hdr-user-out" title="Sign out">sign out</button>
+    <button type="button" class="ctrl-btn hdr-user-btn" aria-expanded="false"
+            title="signed in as ${escapeHtml(me.email || me.sub)} (${escapeHtml(me.mode)})">⏣ ${escapeHtml(me.name || me.email || me.sub)} ▾</button>
+    <div class="hdr-user-menu" hidden>
+      <div class="hdr-user-menu-id">signed in as <strong>${escapeHtml(me.email || me.sub)}</strong><span class="hdr-user-menu-mode">${escapeHtml(me.mode)}</span></div>
+      ${me.mode === 'local-users' ? '<a class="hdr-user-menu-item" href="/auth/change-password">change password…</a>' : ''}
+      <button type="button" class="hdr-user-menu-item hdr-user-out">sign out</button>
+    </div>
   `;
+  const menuBtn = chip.querySelector('.hdr-user-btn');
+  const menu = chip.querySelector('.hdr-user-menu');
+  const setOpen = (open) => { menu.hidden = !open; menuBtn.setAttribute('aria-expanded', String(open)); };
+  menuBtn.addEventListener('click', () => setOpen(menu.hidden));
+  document.addEventListener('click', (e) => { if (!chip.contains(e.target)) setOpen(false); });
+  chip.addEventListener('keydown', (e) => { if (e.key === 'Escape') { setOpen(false); menuBtn.focus(); } });
   chip.querySelector('.hdr-user-out').addEventListener('click', async () => {
     await fetch('/auth/logout', { method: 'POST', headers: { ...authHeaders() } }).catch(() => {});
     window.location.assign('/auth/login');

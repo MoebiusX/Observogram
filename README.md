@@ -157,16 +157,19 @@ npm run dev
 ```
 
 Open `http://127.0.0.1:8000` and sign in with **admin / admin** — first
-boot seeds this default user and forces a password change at first
-sign-in. From there it's a signed-in app: your packs, deploy audit and
-run history belong to you. (`OBSERVOGRAM_AUTH=off` skips login entirely
+boot seeds this default user and asks for a password change at sign-in
+(skippable for now; it asks again each sign-in until a real password
+lands — or change it any time from the account menu, top right). From
+there it's a signed-in app: your packs, deploy audit and run history
+belong to you. (`OBSERVOGRAM_AUTH=off` skips login entirely
 for a throwaway open sandbox.)
 
 ### Security Posture
 
 1. **Local (default).** The server binds to `127.0.0.1` and ships like
    Grafana: first boot seeds a default `admin` user (password `admin`,
-   change forced at first sign-in). The default credential is
+   change asked at every sign-in until it lands — skippable per
+   session). The default credential is
    loopback-only — the server refuses to bind beyond loopback until it
    is changed; container/network first boots seed a real secret with
    `OBSERVOGRAM_ADMIN_PASSWORD` instead. `OBSERVOGRAM_AUTH=off` restores

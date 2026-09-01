@@ -1552,7 +1552,8 @@ function isLoopbackHost(h) {
 
 export function start({ port = PORT, host = HOST, silent = false } = {}) {
   // Grafana-style first boot: nothing configured → seed admin/admin,
-  // change forced at first sign-in. Backs off from any expressed intent
+  // change asked at every sign-in until it lands (skippable per
+  // session). Backs off from any expressed intent
   // (OIDC, users file, API token, tenancy, OBSERVOGRAM_AUTH=off) — see
   // maybeSeedDefaultAdmin in server/auth.mjs.
   maybeSeedDefaultAdmin({
@@ -1578,7 +1579,8 @@ export function start({ port = PORT, host = HOST, silent = false } = {}) {
   }
   // The seeded default credential is loopback-only, without exception:
   // admin/admin reachable from the network is how Grafana instances end
-  // up on Shodan. Signing in once (the forced change) clears this.
+  // up on Shodan. Completing the password change clears this — skipping
+  // it does not (the guard stays armed until a real password lands).
   if (!isLoopbackHost(host) && defaultAdminCredentialActive()) {
     return Promise.reject(new Error(
       `refusing to bind to ${host} while the seeded default admin password is unchanged.\n` +
