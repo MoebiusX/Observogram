@@ -7885,17 +7885,55 @@ body.chrome-observa .disco {
   .diag-head-drag { flex-basis: 100%; order: 3; }
 }
 
-/* Identity chip — only present in identity postures (see setupIdentityChip). */
-.hdr-user { display: inline-flex; align-items: center; gap: 6px; }
-.hdr-user-name {
-  font: 600 11px/1 var(--mono);
-  color: var(--ink-2);
-  letter-spacing: 0.04em;
-  max-width: 22ch;
+/* Identity chip + account menu — only present in identity postures
+   (see setupIdentityChip). Popover follows the upload-popover idiom. */
+.hdr-user { position: relative; display: inline-flex; align-items: center; gap: 6px; }
+.hdr-user-btn {
+  max-width: 26ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.hdr-user-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 50;
+  min-width: 220px;
+  padding: 6px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: 0 10px 32px rgba(0,0,0,0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.hdr-user-menu[hidden] { display: none; }
+.hdr-user-menu-id {
+  padding: 8px 12px 10px;
+  font: 11px/1.5 var(--mono);
+  color: var(--ink-3);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+.hdr-user-menu-id strong { color: var(--ink-1); font-weight: 600; }
+.hdr-user-menu-mode { display: block; color: var(--ink-4); }
+.hdr-user-menu-item {
+  display: block;
+  padding: 9px 12px;
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  text-align: left;
+  cursor: pointer;
+  font: 600 12px/1 var(--mono);
+  color: var(--ink-2);
+  text-decoration: none;
+  transition: background 100ms;
+}
+.hdr-user-menu-item:hover { background: var(--hover); color: var(--ink); }
+.hdr-user-menu-item:focus-visible { outline: 2px solid var(--CMP); outline-offset: 1px; }
 
 /* ============================================================
    SERVICE GATE — the post-sign-in landing (which service are

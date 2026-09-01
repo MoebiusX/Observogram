@@ -133,6 +133,130 @@ try {
   });
   assert(r.status !== 401 && r.status !== 403, 'bearer token still works alongside identity', r.status, 'not 401/403');
 
+  // ---- signed-in self-service password change (account menu) ----
+  r = await fetch(`${base}/auth/change-password`, { headers: { Cookie: session } });
+  const changePage = await r.text();
+  assert(r.ok && changePage.includes('name="current"') && !changePage.includes('/auth/change-password/skip'),
+    'signed-in change page asks for the current password, offers no skip');
+
+  r = await fetch(`${base}/auth/change-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', Cookie: session },
+    body: 'current=wrong-guess&password=rotated-horse-10&repeat=rotated-horse-10',
+  });
+  assert(r.status === 401, 'wrong current password rejected', r.status, 401);
+
+  r = await fetch(`${base}/auth/change-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', Cookie: session },
+    body: 'current=correct-horse-9&password=short&repeat=short',
+  });
+  assert(r.status === 400, 'short replacement rejected on the session path', r.status, 400);
+
+  r = await fetch(`${base}/auth/change-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', Cookie: session },
+    body: 'current=correct-horse-9&password=rotated-horse-10&repeat=rotated-horse-10',
+  });
+  j = await r.json();
+  assert(r.ok && j.ok === true, 'session-authenticated change succeeds with the current password', JSON.stringify(j));
+
+  r = await fetch(`${base}/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'username=carlos&password=correct-horse-9', redirect: 'manual',
+  });
+  assert(r.status === 401, 'the old password is dead after the self-service change', r.status, 401);
+
+  r = await fetch(`${base}/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'username=carlos&password=rotated-horse-10', redirect: 'manual',
+  });
+  assert(r.status === 302 && !!getCookie(r, 'observogram_session'), 'the new password signs in', r.status, 302);
+
+  // ---- HTML mode of the session path (the browser form) ----
+  r = await fetch(`${base}/auth/change-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: session },
+    body: 'current=wrong-guess&password=rotated-horse-11&repeat=rotated-horse-11',
+  });
+  const errPage = await r.text();
+  assert(r.status === 401 && errPage.includes('name="current"') && !errPage.includes('/auth/change-password/skip'),
+    'HTML wrong-current re-renders the self-service form (no skip control)', r.status, 401);
+
+  r = await fetch(`${base}/auth/change-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: session },
+    body: 'current=rotated-horse-10&password=rotated-horse-11&repeat=rotated-horse-11',
+    redirect: 'manual',
+  });
+  assert(r.status === 302 && r.headers.get('location') === '/' && !!getCookie(r, 'observogram_session'),
+    'HTML self-service change redirects home with a session', `${r.status} ${r.headers.get('location')}`);
+
+  // ---- a session can outlive its users.json record ----
+  const withGhost = JSON.parse(readFileSync(process.env.OBSERVOGRAM_USERS_FILE, 'utf8'));
+  withGhost.users.ghost = { name: 'Ghost', createdAt: 'test', password: hashPassword('ghost-pass-123') };
+  writeUsers(withGhost);
+  r = await fetch(`${base}/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'username=ghost&password=ghost-pass-123', redirect: 'manual',
+  });
+  const ghostSession = getCookie(r, 'observogram_session');
+  assert(!!ghostSession, 'ghost signs in before deletion');
+  const withoutGhost = JSON.parse(readFileSync(process.env.OBSERVOGRAM_USERS_FILE, 'utf8'));
+  delete withoutGhost.users.ghost;
+  writeUsers(withoutGhost);
+  r = await fetch(`${base}/auth/change-password`, { headers: { Cookie: ghostSession }, redirect: 'manual' });
+  assert(r.status === 302 && (r.headers.get('location') || '').includes('/auth/login'),
+    'deleted user with a live session: GET change page bounces to login', r.status, 302);
+  r = await fetch(`${base}/auth/change-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', Cookie: ghostSession },
+    body: 'current=ghost-pass-123&password=whatever-long-1&repeat=whatever-long-1',
+  });
+  assert(r.status === 401, 'deleted user with a live session: POST answers unknown user', r.status, 401);
+
+  // ---- a normal login clears a leftover pwchange flow cookie ----
+  // An abandoned forced change (say admin/admin typed on a shared
+  // browser, then closed) must never shadow the account menu's
+  // change-password entry point — the change routes check the flow
+  // cookie first, so login must clear the stale one.
+  const withStale = JSON.parse(readFileSync(process.env.OBSERVOGRAM_USERS_FILE, 'utf8'));
+  withStale.users.stale = { name: 'Stale', createdAt: 'test', password: hashPassword('stale-pass-123'), mustChange: true };
+  writeUsers(withStale);
+  r = await fetch(`${base}/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'username=stale&password=stale-pass-123', redirect: 'manual',
+  });
+  assert(!!getCookie(r, 'observogram_pwflow'), 'abandoned forced change leaves a flow cookie behind');
+  r = await fetch(`${base}/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'username=carlos&password=rotated-horse-11', redirect: 'manual',
+  });
+  const clearsFlow = (r.headers.getSetCookie?.() || []).find(c => c.startsWith('observogram_pwflow=;'));
+  assert(r.status === 302 && !!clearsFlow && /Max-Age=0/.test(clearsFlow),
+    'a normal login clears the stale flow cookie so it cannot shadow the session');
+
+  // ---- the login damper covers current-password guesses too ----
+  // (LAST carlos exercise in this block: the lockout outlives it.)
+  for (let i = 0; i < 5; i++) {
+    await fetch(`${base}/auth/change-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', Cookie: session },
+      body: `current=guess-${i}&password=long-enough-pw-1&repeat=long-enough-pw-1`,
+    });
+  }
+  r = await fetch(`${base}/auth/change-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', Cookie: session },
+    body: 'current=rotated-horse-11&password=long-enough-pw-1&repeat=long-enough-pw-1',
+  });
+  assert(r.status === 429, '5 wrong current-password guesses lock the change route', r.status, 429);
+  r = await fetch(`${base}/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'username=carlos&password=rotated-horse-11', redirect: 'manual',
+  });
+  assert(r.status === 429, 'the lockout is shared with /auth/login (one damper)', r.status, 429);
+
   // ---- tamper + expiry ----
   const tampered = session.slice(0, -4) + 'AAAA';
   r = await fetch(`${base}/api/packs`, { headers: { Cookie: tampered } });
@@ -200,6 +324,84 @@ try {
   assert(!getCookie(r, 'observogram_session'), 'no session cookie before the change');
   const pwflow = getCookie(r, 'observogram_pwflow');
   assert(!!pwflow, 'pwchange flow cookie issued');
+
+  // ---- "skip for now": session without the change, seeded default only ----
+  r = await fetch(`${base2}/auth/change-password`, { headers: { Cookie: pwflow } });
+  let pageHtml = await r.text();
+  assert(r.ok && pageHtml.includes('/auth/change-password/skip') && !pageHtml.includes('name="current"'),
+    'change page offers "skip for now" while the seeded default is active — and never a current-password field');
+
+  r = await fetch(`${base2}/auth/change-password/skip`, {
+    method: 'POST', headers: { Accept: 'application/json' },
+  });
+  assert(r.status === 401, 'skip without the flow cookie rejected', r.status, 401);
+
+  r = await fetch(`${base2}/auth/change-password/skip`, {
+    method: 'POST', headers: { Accept: 'application/json', Cookie: pwflow },
+  });
+  j = await r.json();
+  const skipSession = getCookie(r, 'observogram_session');
+  assert(r.ok && j.ok === true && j.skipped === true && !!skipSession,
+    'skip issues a session without changing the password', JSON.stringify(j));
+
+  r = await fetch(`${base2}/api/packs`, { headers: { Cookie: skipSession } });
+  assert(r.ok, 'API works with the skipped session', r.status, 200);
+
+  // The browser path: the form's skip button POSTs without Accept:
+  // application/json — success is a 302 home carrying the session.
+  r = await fetch(`${base2}/auth/change-password/skip`, {
+    method: 'POST', headers: { Cookie: pwflow }, redirect: 'manual',
+  });
+  assert(r.status === 302 && r.headers.get('location') === '/' && !!getCookie(r, 'observogram_session'),
+    'HTML skip redirects home with a session', `${r.status} ${r.headers.get('location')}`);
+
+  const afterSkip = JSON.parse(readFileSync(join(BOOT_WS, 'users.json'), 'utf8')).users.admin;
+  assert(afterSkip.mustChange === true && afterSkip.seededDefault === true,
+    'skip leaves the forced-change flags in place', JSON.stringify(afterSkip));
+
+  let skipGuardErr = null;
+  await start({ port: 0, host: '0.0.0.0', silent: true }).then(s => s.close(), e => { skipGuardErr = e; });
+  assert(!!skipGuardErr && /default admin password/.test(skipGuardErr.message),
+    'network bind still refused after a skip', skipGuardErr && skipGuardErr.message);
+
+  r = await fetch(`${base2}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: 'username=admin&password=admin',
+  });
+  j = await r.json();
+  assert(r.ok && j.mustChange === true, 'next sign-in asks for the change again after a skip', JSON.stringify(j));
+
+  // Admin-set temporary password (mustChange WITHOUT seededDefault):
+  // the change stays forced — no skip control, skip POST refused.
+  const bootData = JSON.parse(readFileSync(join(BOOT_WS, 'users.json'), 'utf8'));
+  bootData.users.temp = { name: 'Temp', createdAt: 'test', password: hashPassword('temp-pass-123'), mustChange: true };
+  writeUsers(bootData);
+  r = await fetch(`${base2}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: 'username=temp&password=temp-pass-123',
+  });
+  j = await r.json();
+  const tempFlow = getCookie(r, 'observogram_pwflow');
+  assert(r.ok && j.mustChange === true && !!tempFlow, 'temporary password demands a change too', JSON.stringify(j));
+
+  r = await fetch(`${base2}/auth/change-password`, { headers: { Cookie: tempFlow } });
+  pageHtml = await r.text();
+  assert(r.ok && !pageHtml.includes('/auth/change-password/skip'),
+    'no skip control for an admin-set temporary password');
+
+  r = await fetch(`${base2}/auth/change-password/skip`, {
+    method: 'POST', headers: { Accept: 'application/json', Cookie: tempFlow },
+  });
+  assert(r.status === 403, 'skip refused for an admin-set temporary password', r.status, 403);
+
+  r = await fetch(`${base2}/auth/change-password/skip`, {
+    method: 'POST', headers: { Cookie: tempFlow }, redirect: 'manual',
+  });
+  pageHtml = await r.text();
+  assert(r.status === 403 && !pageHtml.includes('/auth/change-password/skip'),
+    'HTML skip refusal re-renders the change form without the skip control', r.status, 403);
 
   r = await fetch(`${base2}/auth/change-password`, {
     method: 'POST',
