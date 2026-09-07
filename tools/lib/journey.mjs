@@ -33,6 +33,13 @@
 //     maxLiveAgeHours: 24
 //     failOnPartialEvidence: true   # any probe family FAILED → the verdict is not trustworthy
 //     maxUnhealthy: 0               # scrape jobs down + unhealthy rules observed on the wire
+//     stack:                        # step 3: thresholds on the stack self-metric SAMPLES
+//       requireSampled: true        #   breach unless the panel was sampled and a row answered data
+//       rows:                       #   per row id (contracts table), min/max on the sampled value
+//         scrape_success_ratio: { min: 0.9 }
+//         scrape_targets_down: { max: 0 }
+//     A stack breach is an early warning to a business owner — a
+//     point-in-time sample outside a declared band — never an SLO verdict.
 //
 // Vantage: when Pack B is a live MCP source and the fetch itself fails
 // (endpoint down, core tools unavailable), the run still leaves a record
@@ -113,8 +120,37 @@ export function loadJourneyDef(ref) {
   def.name = def.name || sanitizeName(ref).replace(/\.journey\.yaml$/, '');
   if (!def.packA || (!def.packA.file && !def.packA.crawl)) throw new Error(`journey ${def.name}: packA needs file: or crawl:`);
   if (!def.packB || (!def.packB.file && !def.packB.mcp)) throw new Error(`journey ${def.name}: packB needs file: or mcp:`);
+  if (def.gate && typeof def.gate === 'object' && def.gate.stack !== undefined) validateGateStack(def.gate.stack, def.name);
   def.__source = source;
   return def;
+}
+
+// gate.stack is validated at load time, not at run time: a typo in a row
+// id would otherwise breach every run with "no sample" and read as a stack
+// problem. Ids are case-sensitive against the contracts table; min/max
+// must be finite numbers; an entry that declares neither has nothing to
+// check and is refused rather than silently passing.
+export function validateGateStack(stack, journeyName = '?') {
+  const where = `journey ${journeyName}: gate.stack`;
+  if (!stack || typeof stack !== 'object' || Array.isArray(stack)) throw new Error(`${where} must be a mapping`);
+  if (stack.requireSampled !== undefined && typeof stack.requireSampled !== 'boolean') {
+    throw new Error(`${where}.requireSampled must be true or false`);
+  }
+  if (stack.rows === undefined) return;
+  if (!stack.rows || typeof stack.rows !== 'object' || Array.isArray(stack.rows)) throw new Error(`${where}.rows must be a mapping of row id → { min, max }`);
+  for (const [id, entry] of Object.entries(stack.rows)) {
+    if (!STACK_ROW_BY_ID.has(id)) {
+      throw new Error(`${where}.rows names unknown row ${id}; known rows: ${STACK_SELF_METRIC_PROBES.map(r => r.id).join(', ')}`);
+    }
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error(`${where}.rows.${id} must be a mapping with min and/or max`);
+    for (const bound of ['min', 'max']) {
+      if (entry[bound] !== undefined && !(typeof entry[bound] === 'number' && Number.isFinite(entry[bound]))) {
+        throw new Error(`${where}.rows.${id}.${bound} must be a finite number`);
+      }
+    }
+    if (entry.min === undefined && entry.max === undefined) throw new Error(`${where}.rows.${id} declares neither min nor max — nothing to check`);
+    if (entry.min !== undefined && entry.max !== undefined && entry.min > entry.max) throw new Error(`${where}.rows.${id}: min ${entry.min} is above max ${entry.max}`);
+  }
 }
 
 // ---------- pack sources ----------
@@ -256,7 +292,59 @@ export function evaluateGate(gate, facts) {
         + (names.length ? `: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''}` : ''));
     }
   }
+  if (gate.stack && typeof gate.stack === 'object') evaluateStackGate(gate.stack, facts.stackEvidence, add);
   return breaches;
+}
+
+// Display formatting for a sampled value by its contracts unit. Pure; a
+// non-number reads '—' so a missing sample never prints as a number.
+export function formatStackValue(value, unit) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+  switch (unit) {
+    case 'ratio': return `${(value * 100).toFixed(1)}%`;
+    case 'per-second': return `${value.toFixed(3)}/s`;
+    case 'per-hour': return `${value.toFixed(1)}/h`;
+    case 'seconds': return `${value.toFixed(1)}s`;
+    case 'count': return String(Math.round(value));
+    default: return String(value);
+  }
+}
+
+// gate.stack — thresholds on the stack self-metric SAMPLES of this run.
+// Honesty rules: a threshold can only be checked against a row that
+// answered `data`; anything else (row absent, empty, failed, not in
+// inventory, not attempted, a file-sourced B with no evidence at all)
+// breaches as "no sample" rather than passing by absence. A breach is a
+// point-in-time sample outside a declared band — an early warning, never
+// an SLO verdict — and the detail says so.
+function evaluateStackGate(stack, evidence, add) {
+  const rows = Array.isArray(evidence?.rows) ? evidence.rows : [];
+  const byId = new Map(rows.map(r => [r.id, r]));
+  const isData = (r) => r && r.outcome === 'data' && typeof r.value === 'number' && Number.isFinite(r.value);
+  if (stack.requireSampled) {
+    const why = !evidence ? 'Pack B is not a live draft'
+      : evidence.status !== 'sampled' ? (evidence.reason || evidence.status)
+      : !rows.some(isData) ? 'sampled, but no row answered with data'
+      : null;
+    if (why) add('stack', `stack self-metrics not sampled (${why}) — the vantage cannot prove stack health`);
+  }
+  const thresholds = stack.rows && typeof stack.rows === 'object' ? stack.rows : {};
+  for (const [id, t] of Object.entries(thresholds)) {
+    if (!t || typeof t !== 'object') continue;
+    const row = byId.get(id);
+    if (!isData(row)) {
+      const outcome = !evidence ? 'no stack evidence' : !row ? 'absent from this run' : row.outcome === 'data' ? 'data without a numeric value' : row.outcome;
+      add(`stack.${id}`, `no sample for ${id} (${outcome}${row?.reason ? `: ${row.reason}` : ''}) — threshold cannot be checked`);
+      continue;
+    }
+    const min = typeof t.min === 'number' ? t.min : null;
+    const max = typeof t.max === 'number' ? t.max : null;
+    if ((min !== null && row.value < min) || (max !== null && row.value > max)) {
+      const unit = row.unit || 'value';
+      const band = `[${min === null ? '-∞' : formatStackValue(min, unit)} … ${max === null ? '∞' : formatStackValue(max, unit)}]`;
+      add(`stack.${id}`, `${id} = ${formatStackValue(row.value, unit)} ${unit} outside ${band} — point-in-time sample, not an SLO verdict`);
+    }
+  }
 }
 
 // ---------- step 3: stack-health evidence (samples, kept per run) ----------
@@ -348,7 +436,8 @@ export function liveEvidenceFacts(canonicalB) {
   // Step 2 stack self-metrics counts (mcp.stack.*). status is null when
   // Pack B carries no panel (file-sourced, or a pre-step-2 refresh); the
   // counts are then 0 — an absence, never a healthy stack. No gate key
-  // reads these: a sample is a signal, not a verdict.
+  // reads the counts; gate.stack reads the samples in stackEvidence below,
+  // and even then a breach is an early warning, not a verdict.
   const stackStatus = ann['mcp.stack.status'] === 'sampled' || ann['mcp.stack.status'] === 'not-attempted'
     ? ann['mcp.stack.status'] : null;
   const stackCount = (k) => { const v = Number(ann[k]); return Number.isFinite(v) ? v : 0; };
@@ -500,7 +589,7 @@ export async function runJourney(def, { baseDir } = {}) {
     stack: live.stack,
     // Step 3: the samples this run saw (rows + Alertmanager / Grafana
     // status), null when Pack B carries no panel. Point-in-time evidence
-    // kept per run so the history is the time series.
+    // kept per run so the history is the time series; gate.stack reads it.
     stackEvidence: live.stackEvidence,
     gate: { thresholds: def.gate || {}, breaches },
     outcome: breaches.length ? 'gate-failed' : 'pass',
@@ -638,10 +727,53 @@ export function renderJourneyMarkdown(r) {
     `| Stack self-metrics | ${stackLine(r)} |`,
     `| Took | ${r.tookMs}ms |`,
   ];
+  lines.push(...stackEvidenceTable(r.stackEvidence));
   if (r.gate.breaches.length) {
     lines.push('', '### Gate breaches', '');
     for (const b of r.gate.breaches) lines.push(`- **${b.criterion}** — ${b.detail}`);
   }
   lines.push('', '_Verification evidence (declared vs observed); not incident-validated._');
   return lines.join('\n');
+}
+
+// The samples this run saw, one row each (cap STACK_REPORT_ROW_CAP). Only
+// rendered when there are rows: a not-attempted or absent panel already
+// reads on the Stack self-metrics line above, and an empty table would
+// look like an empty (healthy) stack.
+const STACK_REPORT_ROW_CAP = 24;
+function stackEvidenceTable(se) {
+  const rows = Array.isArray(se?.rows) ? se.rows : [];
+  if (!rows.length) return [];
+  const cell = (v) => String(v ?? '-').replace(/\|/g, '\\|');
+  const out = [
+    '',
+    '### Stack self-metrics — point-in-time samples',
+    '',
+    '| id | family | value unit | outcome | hint | reference SLI |',
+    '|---|---|---|---|---|---|',
+  ];
+  for (const row of rows.slice(0, STACK_REPORT_ROW_CAP)) {
+    const value = row.outcome === 'data' && typeof row.value === 'number' ? `${formatStackValue(row.value, row.unit)} ${row.unit || ''}`.trim() : '-';
+    const outcome = row.outcome + (row.reason ? `: ${row.reason}` : '');
+    out.push(`| ${cell(row.id)} | ${cell(row.family)} | ${cell(value)} | ${cell(outcome)} | ${cell(row.hint)} | ${cell(row.referenceSli)} |`);
+  }
+  if (rows.length > STACK_REPORT_ROW_CAP) out.push('', `_${rows.length - STACK_REPORT_ROW_CAP} more row(s) not shown._`);
+  out.push('', "_Samples, not verdicts: each value is the stack's own self-metric at the moment of the run._");
+  return out;
+}
+
+// Stack status of a run record in a few words, for `packc journey list`:
+// 'stack sampled N' (rows that answered data), 'stack not attempted', or
+// 'stack none' when the record carries no panel at all. Pre-step-3
+// records (counts only) fall back to the fetcher's sampled count.
+export function stackStatusLine(record) {
+  const se = record?.stackEvidence;
+  if (se && typeof se === 'object') {
+    if (se.status !== 'sampled') return 'stack not attempted';
+    return `stack sampled ${(Array.isArray(se.rows) ? se.rows : []).filter(r => r.outcome === 'data').length}`;
+  }
+  const s = record?.stack;
+  if (s && s.status === 'sampled') return `stack sampled ${s.sampled ?? 0}`;
+  if (s && s.status === 'not-attempted') return 'stack not attempted';
+  return 'stack none';
 }

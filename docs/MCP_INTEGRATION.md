@@ -319,8 +319,56 @@ refresh) — never an empty "healthy" panel — and otherwise:
 | `grafana` | `mcp.observed.grafana.datasources` / `.contact_points` / `.error` | `{ datasources, unhealthyDatasources: [names], contactPoints, error }` or `null`; only a health verdict of `error` is unhealthy (`unknown` was never checked) |
 
 Malformed JSON in any of those annotations degrades to `rows: []` /
-`null` for that surface — the status survives, nothing is fabricated. No
-gate key reads `stackEvidence` yet: a sample is a signal, not a verdict.
+`null` for that surface — the status survives, nothing is fabricated. The
+`stack` gate key below is the only reader; a sample stays a signal, and a
+breach is an early warning, not a verdict.
+
+#### Gate key `stack`: thresholds on the samples
+
+```yaml
+gate:
+  stack:
+    requireSampled: true          # breach unless the panel was sampled AND a row answered data
+    rows:                         # per row id of STACK_SELF_METRIC_PROBES (case-sensitive)
+      scrape_success_ratio: { min: 0.9 }
+      scrape_targets_down: { max: 0 }
+      tsdb_active_series: { max: 2000000 }   # an `info` row may carry a threshold too
+```
+
+`loadJourneyDef` validates the block (`validateGateStack(stack, name)`):
+an unknown row id throws `journey <name>: gate.stack.rows names unknown row
+<id>; known rows: …`, `min` / `max` must be finite numbers when present, an
+entry with neither is refused (nothing to check), `min > max` is refused,
+and `requireSampled` must be a boolean. The studio's capture default gate
+stays `{ minAlignmentPct: 85 }`; the block is opt-in and every existing key
+is unchanged.
+
+`evaluateGate` reads `facts.stackEvidence` and breaches with the criteria
+`stack` and `stack.<id>`:
+
+| Condition | Criterion | Detail |
+|---|---|---|
+| `requireSampled` and `stackEvidence` is `null` (file-sourced B) | `stack` | `stack self-metrics not sampled (Pack B is not a live draft) — the vantage cannot prove stack health` |
+| `requireSampled` and `status` is `not-attempted` | `stack` | `stack self-metrics not sampled (<reason>) — the vantage cannot prove stack health` |
+| `requireSampled` and no row has outcome `data` | `stack` | `stack self-metrics not sampled (sampled, but no row answered with data) — …` |
+| `rows.<id>` and the row is absent, or its outcome is not `data` (or `data` with no number) | `stack.<id>` | `no sample for <id> (<outcome>[: reason]) — threshold cannot be checked` |
+| `rows.<id>` and `value < min` or `value > max` | `stack.<id>` | `<id> = <value> <unit> outside [min … max] — point-in-time sample, not an SLO verdict` |
+
+Honesty rules: thresholds compare numbers only and equality passes
+(`< min` / `> max`); a file-sourced Pack B never breaches `stack.rows` unless
+a threshold is declared — then it breaches with `no sample (no stack
+evidence)` instead of passing by absence; nothing here touches the grade or
+creates a `Verified` stamp. Values print through the pure
+`formatStackValue(value, unit)` (`ratio` → `83.3%`, `per-second` →
+`0.004/s`, `per-hour` → `0.0/h`, `seconds` → `7.4s`, `count` → `1`; a
+non-number prints `—`), bounds in the same unit.
+
+Surfaces: `renderJourneyMarkdown` adds a `Stack self-metrics — point-in-time
+samples` table (`id | family | value unit | outcome | hint | reference SLI`,
+capped at 24 rows, only when the run has rows) and lists stack breaches
+with the others; `packc journey list` appends `stackStatusLine(record)` —
+`stack sampled N` (rows that answered data), `stack not attempted`, or
+`stack none` — to each line.
 
 ### Stack self-metrics (registry)
 
@@ -615,7 +663,7 @@ The same annotations are read back, never re-sampled, on three surfaces:
 - `POST /api/draft-from-mcp` — `summary.stack = { status, reason, sampled, empty, failed, notInInventory, notAttempted, families: { <family>: <best outcome> }, rows: [{ id, family, product, value, unit, direction, outcome, hint, reason? }] }` parsed from `mcp.stack.*` and `mcp.observed.stack_metrics`; `hint` is the contracts' display-only `displayHint` (`'nonzero'` when a lower-is-comfortable row is above zero, else `null`) and is computed here, never stored. `summary.alertmanager = { version, uptime, clusterStatus, silences, error }` and `summary.grafana = { datasources, healthChecked, contactPoints, error }` come from the `mcp.observed.*` JSON; each is `null` only when the surface was not advertised (or the fetcher predates step 2) — an advertised tool that failed keeps the summary with `error` set, and the server adds a `… status probe failed — <error>` warning. `healthChecked` counts the datasources that actually got a verdict; `health: 'unknown'` stays visible as "not checked". A `not-attempted` panel adds the warning `Stack self-metrics not attempted — metrics_query not exposed by this MCP tier.` (or `— <reason>.` for any other reason).
 - `GET /api/live-status` — `stackStatus` (`sampled` | `not-attempted` | `null`) and `stackSampled` (number).
 - The studio draft summary renders a "stack self-metrics — point-in-time sample, signal not verdict" block under the discovery rows: one row per family in `families` showing the family's best row (ratios as a percent, per-second to three decimals, seconds to one, counts as integers, `· nonzero` when hinted) or its outcome (`— empty`, `— probe failed: …`, `— not in inventory`; a family with no observed row reads `— not attempted: call budget exhausted`), a single `— not attempted: <summary.stack.reason>` row on a not-attempted panel, then `alertmanager: v<version> · N active silences` (`— probe failed: <error>` when advertised but failing), `datasources: N · M error: <names> · K unchecked: <names>` — or `N · health not checked (grafana_datasource_health not exposed or did not answer)` when no datasource got a verdict; `0 unhealthy`-style wording is never printed for a surface nothing checked — and `contact points: N`. `— not exposed` is reserved for a surface the MCP did not advertise.
-- Journeys — `liveEvidenceFacts(canonicalB).stack = { status, reason, sampled, empty, failed, notAttempted }` (status `null` and zero counts for a file-sourced Pack B) rides on the run record as `stack` and prints one `Stack self-metrics` line in the markdown report; since step 3 the record also keeps the samples themselves as `stackEvidence` (see "Stack-health evidence on the run record" above). No gate key reads either.
+- Journeys — `liveEvidenceFacts(canonicalB).stack = { status, reason, sampled, empty, failed, notAttempted }` (status `null` and zero counts for a file-sourced Pack B) rides on the run record as `stack` and prints one `Stack self-metrics` line in the markdown report; since step 3 the record also keeps the samples themselves as `stackEvidence` (see "Stack-health evidence on the run record" above), the report prints them as a table, and the opt-in `gate.stack` block (`requireSampled`, per-row `min` / `max`) breaches on them as an early warning — the counts are never gated on, and no breach is an SLO verdict.
 
 ## Diagnostic Drift Semantics
 

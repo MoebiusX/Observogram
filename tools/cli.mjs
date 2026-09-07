@@ -113,7 +113,7 @@ async function runJourneyCommand([sub, ...args]) {
       const last = journeyLib.readJourneyRuns(n, { limit: 1 })[0];
       const tail = !last ? '(never run)'
         : last.outcome === 'vantage-lost' ? `vantage-lost · ${last.startedAt} · ${last.error || 'live source unreachable'}`
-        : `${last.outcome} · ${last.startedAt} · alignment ${last.drift?.alignmentPct}%`;
+        : `${last.outcome} · ${last.startedAt} · alignment ${last.drift?.alignmentPct}% · ${journeyLib.stackStatusLine(last)}`;
       console.log(`${n}\t${tail}`);
     }
     return;

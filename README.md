@@ -303,6 +303,10 @@ gate:
   maxLiveAgeHours: 24
   failOnPartialEvidence: true   # a probe family FAILED → the verdict is not trustworthy
   maxUnhealthy: 0               # scrape jobs down + rules failing to evaluate, as seen on the wire
+  stack:                        # thresholds on the stack's own self-metric samples (early warning)
+    requireSampled: true        # breach unless the MCP tier let the run sample them
+    rows:
+      scrape_targets_down: { max: 0 }   # row ids come from the stack self-metrics table
 ```
 
 ```bash
@@ -332,6 +336,19 @@ scheduled task) by design. Each record of a live run also keeps the stack
 self-metric samples it saw (`stackEvidence`: the rows, plus the Alertmanager
 and Grafana status the MCP answered) — point-in-time signals kept per run so
 the history is the time series, never a verdict.
+
+The `stack:` gate block turns those samples into an early warning: `rows`
+declares a `min` / `max` band per row id (validated against the table when
+the journey loads — an unknown id is refused with the known ids listed), and
+`requireSampled: true` breaches when the tier could not sample at all. A
+threshold can only be checked against a row that answered data; a row that
+was empty, failed, not in the inventory or absent breaches as *no sample*
+rather than passing by absence. A stack breach reads
+`scrape_targets_down = 2 count outside [-∞ … 0] — point-in-time sample, not
+an SLO verdict`: it is a signal to look, not an SLO verdict, and it never
+touches the grade. The report prints the samples in a *Stack self-metrics*
+table and `journey list` shows `stack sampled N` / `stack not attempted` /
+`stack none` per journey.
 
 ## API Surface
 
