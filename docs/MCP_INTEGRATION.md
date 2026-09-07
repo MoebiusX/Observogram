@@ -297,44 +297,86 @@ signals through `metrics_query`: 24 rows across nine families (`scrape`,
 `traces`), each with a plain-English `signal`, a `unit`, a display-only
 `direction`, an optional `referenceSli` naming the reference-pack SLI whose
 vocabulary it follows (`prometheus-reference/scrape_success_ratio`, …), an
-ordered list of product `aliases` (`{ product, expr, requires }` — an alias is
-eligible only when every name in `requires` is in the metric inventory), and
-a `source` naming the upstream documentation the metric names come from. The
-registry rows `stack_self_metrics`, `alertmanager_status`,
-`alertmanager_silences`, `grafana_datasources`, `grafana_datasource_health`
-and `grafana_contact_points` carry the tool names; the response shapes
-`instant-vector`, `status-object`, `silences`, `datasources`, `health-object`
-and `contact-points` pin the critical fields against the hand-written
-fixtures in `tools/fixtures/mcp/synthetic/` (no recording exists yet —
-`npm run record-fixtures` is the path to one; see that directory's README). Every sampled number is a point-in-time **signal,
-never a verdict**: nothing in this table creates a `Verified` stamp, an SLO
-verdict or a grade change, and on a restricted tier the answer is "not
-attempted" with the reason. Two known discrepancies, documented rather than
-fixed (the reference packs are out of scope): (1) the reference pack's
-`scrape_duration_p99` is written over `scrape_duration_seconds_bucket`, but
-Prometheus exposes `scrape_duration_seconds` as a per-target gauge with no
-histogram, so the row `scrape_duration_max` samples
-`max(scrape_duration_seconds)` and points at the reference SLI for vocabulary
-only; (2) the reference pack's `query_latency_p99` is written over
+ordered list of product `aliases` (`{ product, expr, requires, verified }` —
+an alias is eligible only when every name in `requires` is in the metric
+inventory; `verified` is the pinned product image whose real exposition
+carried every required name and whose PromQL evaluated the `expr`, as
+`<image:tag> <exposition|TSDB inventory|probe output> + PromQL, <date>`),
+and a `source` naming the upstream documentation the metric names come from
+plus the live evidence that confirmed them. The registry rows
+`stack_self_metrics`, `alertmanager_status`, `alertmanager_silences`,
+`grafana_datasources`, `grafana_datasource_health` and
+`grafana_contact_points` carry the tool names; the response shapes
+`instant-vector`, `status-object`, `silences`, `datasources`,
+`health-object` and `contact-points` pin the critical fields against the
+fixtures in `tools/fixtures/mcp/` — recordings from the public Krystaline
+tier where that tier answers, hand-written `synthetic/` files where it
+cannot (see that directory's README). Every sampled number is a
+point-in-time **signal, never a verdict**: nothing in this table creates a
+`Verified` stamp, an SLO verdict or a grade change, and on a restricted tier
+the answer is "not attempted" with the reason.
+
+Three known discrepancies, documented rather than fixed (the reference packs
+are out of scope): (1) the reference pack's `scrape_duration_p99` is written
+over `scrape_duration_seconds_bucket`, but Prometheus exposes
+`scrape_duration_seconds` as a per-target gauge with no histogram, so the
+row `scrape_duration_max` samples `max(scrape_duration_seconds)` and points
+at the reference SLI for vocabulary only; (2) the reference pack's
+`query_latency_p99` is written over
 `prometheus_engine_query_duration_seconds_bucket`, but Prometheus registers
 `prometheus_engine_query_duration_seconds` as a **summary** (objectives 0.5 /
-0.9 / 0.99, label `slice`) with no `_bucket` series, so the row
-`query_latency_p99` reads
-`max(prometheus_engine_query_duration_seconds{slice="inner_eval",quantile="0.99"})`.
-The lower-is-comfortable count rows (`scrape_targets_down`,
-`synthetic_probe_failures`) carry a presence-guarded zero —
-`count(up == 0) or (count(up) * 0)` — so a healthy stack reads `0` rather than
-an empty vector while a backend without the metric still reads `empty`
-(`or vector(0)` would fabricate "0 down" where nothing is scraped); the ratio
-is `sum(up) / count(up)` for the same reason. Names pinned against upstream
-source: vmalert's `vmalert_recording_rules_errors_total` /
-`vmalert_alerting_rules_errors_total` (plural), and the otelcol
-`otelcol_processor_dropped_*` counters, which exist only on collectors that
-predate the processorhelper metric rework — `not-in-inventory` on a current
-collector is version drift, not a wrong name. Resolvers: `probeRows()`,
-`rowsForFamily(family)`, `eligibleAliases(row, inventory)`,
+0.9 / 0.99, labels `slice` / `quantile`) with no `_bucket` series, so the
+row `query_latency_p99` reads
+`max(prometheus_engine_query_duration_seconds{slice="inner_eval",quantile="0.99"})`;
+(3) the reference pack's `datasource_proxy_success_ratio` is written over
+`grafana_datasource_request_total`, which Grafana 12.4.4 registers only on
+the first datasource request (a proxied query or a rule evaluation), so the
+row `datasource_errors` reads the pre-registered
+`grafana_proxy_response_status_total{code=~"5.."}` first (present at startup
+with `code="500"` at 0) and keeps the reference name as its second alias.
+
+Rows that must read zero when healthy carry a **presence-guarded zero** —
+`count(up == 0) or (count(up) * 0)` for the count rows
+(`scrape_targets_down`, `synthetic_probe_failures`),
+`sum(rate(m{code=~"5.."}[5m])) or (count(m) * 0)` for the Grafana 5xx rate
+rows — so a healthy stack reads `0` rather than an empty vector while a
+backend without the metric still reads `empty` (`or vector(0)` would
+fabricate "0 down" where nothing is scraped); the ratio is
+`sum(up) / count(up)` for the same reason. **Lazily-registered counters**
+take the same guard one step further. The OpenTelemetry Collector creates
+`otelcol_exporter_send_failed_<kind>` and `otelcol_receiver_refused_<kind>`
+only when the first export / receive happens (0.115.1: registered together
+with `sent_<kind>` / `accepted_<kind>`; 10 metric names at startup, 39 after
+one OTLP request) or only on the first failure (0.154.0: `sent_spans`
+present, `send_failed_spans` absent), so strict `requires` on the counter
+would read `not-in-inventory` on a healthy collector forever. Those six
+aliases therefore `require` the sibling that registers with or before the
+counter (`otelcol_exporter_sent_<kind>`, `otelcol_receiver_accepted_<kind>`)
+and end with `or (count(<sibling>) * 0)`: a collector that has exported
+reads 0 failures unless the counter exists, a collector that never exported
+that signal reads `not-in-inventory` (no evidence either way), and a renamed
+counter on a future collector renames the sibling too, so the alias falls to
+`not-in-inventory` instead of a false 0. Every other counter the table reads
+is pre-registered at 0 by its product (observed at startup on the pinned
+stack) and keeps strict `requires`.
+
+Names pinned against live exposition (2026-09-07, see "Live validation
+tier" below): no `_total` suffix on any otelcol internal-telemetry name
+(0.115.1 and 0.154.0 alike); `otelcol_processor_dropped_*` exist on no
+current collector in either spelling (removed by the processorhelper
+rework), so the former `collector_dropped_*` rows are now
+`collector_refused_{metrics,spans,logs}` over the receiver counters — the
+current-generation "the collector is losing telemetry" signal;
+`collector_queue_saturation` takes the per-exporter max on both sides
+(`queue_size` carries `data_type` and `queue_capacity` does not on 0.115.1,
+both do on 0.154.0); vmalert's plural `vmalert_*_rules_errors_total`;
+`jaeger_collector_spans_dropped_total` on Jaeger v1's admin port (a Jaeger
+v2 is an otelcol distribution and answers through the collector rows, the
+jaeger alias reading an honest `not-in-inventory` there). Resolvers:
+`probeRows()`, `rowsForFamily(family)`, `eligibleAliases(row, inventory)`,
 `productPreferenceOrder(row, seenProducts)`, `displayHint(row, value)`,
-`bestOutcome(outcomes)`; integrity is pinned by `npm run test:stack`.
+`bestOutcome(outcomes)`; integrity is pinned by `npm run test:stack`, the
+live evidence by `npm run test:stack:live`.
 
 ### Stack self-metrics (sampling)
 
@@ -415,8 +457,10 @@ returned data or an honest empty. `hasToolsList` is whether the `tools/list`
 RPC succeeded: a server advertising an empty list reads `not-attempted`
 (tier), not a string of `tools/call` failures.
 
-Nothing has been recorded against a live server yet: the alias table is
-documentation-grounded until it is. `npm run record-fixtures`
+The table has two live evidence sources (2026-09-07): the public Krystaline
+tier through this recorder, and the pinned stack of the real products through
+the live validation tier below; re-record when a product version moves.
+`npm run record-fixtures`
 (`tools/record-mcp-fixtures.mjs`, `MCP_URL` + optional `MCP_AUTH`) is the
 verification path — it reuses the fetcher's client and the registry for
 every tool name, never prints or stores the token, and by default only
@@ -438,6 +482,64 @@ The annotation keys the sampler writes (`mcp.stack.*`,
 `mcp.observed.grafana.*`) are listed once, in the annotation reference
 above; they are written only when the fetch sampled — a caller that predates
 step 2 writes none of them.
+
+### Live validation tier
+
+`docker/stack.compose.yaml` (`name: observogram-stack`; every port bound to
+127.0.0.1, every image tag pinned, the port block disjoint from the validate
+stack's) runs every product the table names: Prometheus v2.55.1 scraping all
+of them plus a blackbox probe job, Alertmanager v0.27.0 with a dead webhook
+receiver, VictoriaMetrics v1.113.0 scraping itself and a dead target, vmalert
+v1.113.0, otel-collector-contrib 0.115.1 with a `debug` exporter beside an
+OTLP exporter to a dead endpoint, Grafana 12.4.4 with a provisioned
+Prometheus datasource and one always-firing alert rule, blackbox-exporter
+v0.25.0, promtail 3.3.2 tailing a sample file into a dead Loki, and Jaeger
+all-in-one 1.62.0 — deliberate faults so every failure counter exists and
+moves on a fresh stack. `npm run test:stack:live` (`tools/test-stack-live.mjs`;
+`:strict` turns the no-Docker skip into a failure; **not** part of
+`npm test`) brings it up, recreates the collector and Grafana so "at
+startup" is true on every run, waits for every scrape job and for the rate
+windows, then for **every alias of every row** asserts: (a) every `requires`
+name is a metric family on the product's own exposition — `/metrics`, the
+Prometheus TSDB name inventory for the scrape-synthesised `up` /
+`scrape_duration_seconds` (which never appear on Prometheus' own
+`/metrics`), the blackbox `/probe` output for `probe_success`, the vmalert
+service for `vmalert_*`; (b) every lazily-registered counter the `expr`
+reads beyond `requires` is present **after** the stimulus (one OTLP/HTTP
+request per signal kind into the collector, one query through Grafana's
+datasource proxy) — that is what proves the counter's name; (c) the alias's
+`verified` stamp names the compose image of the product it was checked on;
+(d) the `expr` evaluates on the real Prometheus with no PromQL error, the
+answer read through the fetcher's own `sampleFromInstantVector`. The
+collector's and Grafana's name sets before and after the stimulus are
+printed (the lazy-registration probe), and the ledger — alias |
+product@version | exposition | query — goes to the git-ignored
+`.tmp-stack-live-ledger.json`. The stack is left running.
+
+Verification ledger, 2026-09-07 — 32 aliases: 32 ✓ exposition (lazy
+counters included), 32 stamps matching their image, 32 `data` / 0 `empty` /
+0 PromQL errors:
+
+| product @ version | aliases verified |
+|---|---|
+| Prometheus `prom/prometheus:v2.55.1` | `scrape_success_ratio`, `scrape_targets_down` [generic], `scrape_duration_max` (TSDB inventory); `rule_evaluation_failures` [prometheus], `rule_evaluation_staleness`, `notification_errors` [prometheus], `notifications_sent` [prometheus], `tsdb_active_series` [prometheus], `tsdb_compaction_failures`, `wal_corruptions`, `query_latency_p99` |
+| VictoriaMetrics `victoriametrics/victoria-metrics:v1.113.0` | `scrape_targets_down` [victoriametrics], `tsdb_active_series` [victoriametrics] |
+| vmalert `victoriametrics/vmalert:v1.113.0` | `rule_evaluation_failures` [victoriametrics], `notification_errors` [victoriametrics] |
+| Alertmanager `prom/alertmanager:v0.27.0` | `notification_errors` [alertmanager], `notifications_sent` [alertmanager], `active_silences` |
+| OpenTelemetry Collector `otel/opentelemetry-collector-contrib:0.115.1` | `collector_export_failures_{metrics,spans,logs}`, `collector_refused_{metrics,spans,logs}` (six lazy counters, present after the stimulus), `collector_queue_saturation` |
+| Grafana `grafana/grafana:12.4.4` | `rule_evaluation_failures` [grafana], `datasource_errors` (both aliases), `grafana_http_errors` |
+| blackbox-exporter `prom/blackbox-exporter:v0.25.0` | `synthetic_probe_failures` (probe output) |
+| promtail `grafana/promtail:3.3.2` | `log_shipper_drops` |
+| Jaeger `jaegertracing/all-in-one:1.62.0` | `trace_collector_drops` |
+
+The public Krystaline tier (read-only:
+`MCP_URL=https://www.krystaline.io/mcp/public npm run record-fixtures`) is
+the second evidence source, at other versions (otel-collector 0.154.0,
+Jaeger v2.18.0, Grafana 12.4.0, Alertmanager 0.27.0): after the correction it
+reads 14 aliases `data` · 0 `empty` · 0 `failed` · 18 honest
+`not-in-inventory` on its 2,682-name inventory (no Prometheus server, no
+blackbox, vmalert not scraped, a traces-only collector, a v2 Jaeger), 13 of 24
+rows with data.
 
 ### Stack self-metrics (surfaces)
 

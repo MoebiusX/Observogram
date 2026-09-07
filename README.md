@@ -257,7 +257,9 @@ stack's own self-metrics (scrape, ruler, notify, tsdb, collector, dashboards,
 synthetic, logs, traces) as point-in-time signals — never verdicts, stamps or
 grade inputs; on a restricted tier the pack says `not-attempted` and why.
 `npm run record-fixtures` verifies the alias table behind that sample against
-your endpoint (report only; `-- --write` records fixtures).
+your endpoint (report only; `-- --write` records fixtures), and
+`npm run test:stack:live` re-verifies every alias against the real products at
+pinned versions in Docker (`docker/stack.compose.yaml`; skips without Docker).
 
 See [`docs/MCP_INTEGRATION.md`](docs/MCP_INTEGRATION.md) for the live fetch and
 write-back contract.
