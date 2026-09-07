@@ -63,8 +63,11 @@ const tenDashboards = (() => {
   return { ...d, results };
 })();
 
-// Handler returns { result } or { isError: true, text }.
-function answer(name, args) {
+// Handler returns { result } or { isError: true, text }. `reqUrl` is the
+// request path the fake saw (query string included) — one error echoes
+// it, the way an upstream proxy might, so the suite can prove a URL-borne
+// token is redacted from error text too.
+function answer(name, args, reqUrl = '') {
   switch (name) {
     case 'metrics_label_values': return { label: '__name__', values: inventory };
     case 'metrics_targets': return fx('metrics_targets.json');
@@ -72,9 +75,9 @@ function answer(name, args) {
     case 'grafana_dashboards_search': return tenDashboards;
     case 'metrics_query': {
       const q = String(args?.query || '');
-      if (q.includes('scrape_duration_seconds')) return { isError: true, text: 'query timed out' };
+      if (q.includes('scrape_duration_seconds')) return { isError: true, text: `query timed out (upstream ${reqUrl})` };
       if (q.includes('prometheus_tsdb_head_series')) return { result: [{ metric: {}, value: [1757203200, '123456'] }] };
-      if (q === 'count(up == 0)') return { result: [] };   // nothing down → PromQL answers no series
+      if (q.startsWith('count(up == 0)')) return { result: [{ metric: {}, value: [1757203200, '0'] }] };   // nothing down → the guarded count reads 0
       if (q.includes('up')) return synthetic('metrics_query.instant-vector.json');
       return { result: [] };
     }
@@ -104,7 +107,7 @@ async function startFakeMcp(toolNames) {
     if (msg.method === 'tools/list') return send({ tools: toolNames.map(name => ({ name })) });
     if (msg.method === 'tools/call') {
       calls.push(msg.params);
-      const a = answer(msg.params?.name, msg.params?.arguments || {});
+      const a = answer(msg.params?.name, msg.params?.arguments || {}, req.url);
       if (a?.isError) return send({ isError: true, content: [{ type: 'text', text: a.text }] });
       return send({ content: [{ type: 'text', text: JSON.stringify(a) }] });
     }
@@ -117,11 +120,11 @@ async function startFakeMcp(toolNames) {
 
 // Async on purpose: the fake MCP lives in THIS process, so a spawnSync
 // would block the event loop that has to answer the recorder.
-function runRecorder(url, extraArgs = []) {
+function runRecorder(url, extraArgs = [], envOverride = {}) {
   return new Promise((done) => {
     const child = spawn(process.execPath, [RECORDER, ...extraArgs], {
       cwd: ROOT,
-      env: { ...process.env, MCP_URL: url, MCP_AUTH: TOKEN, OBSERVOGRAM_DEBUG: '' },
+      env: { ...process.env, MCP_URL: url, MCP_AUTH: TOKEN, OBSERVOGRAM_DEBUG: '', ...envOverride },
     });
     let stdout = '';
     let stderr = '';
@@ -149,11 +152,13 @@ try {
   assert(/metrics_query ✓ · alertmanager_status ✓/.test(rep.stdout), 'report shows the step-2 surface as advertised');
   assert(new RegExp(`metrics_label_values answered ${inventory.length} names`).test(rep.stdout), 'report states the inventory size from the adapted list');
   assert(/scrape\/scrape_success_ratio\s+generic\s+data 0\.98(00)? ratio/.test(rep.stdout), 'an eligible alias is sampled the way the fetcher reads it (0.98 ratio)', rep.stdout.split('\n').find(l => l.includes('scrape_success_ratio')));
-  assert(/scrape\/scrape_targets_down\s+generic\s+empty/.test(rep.stdout), 'an empty instant vector reads as empty, not as a value');
+  assert(/scrape\/scrape_targets_down\s+generic\s+data 0 count/.test(rep.stdout), 'a healthy count row reads data 0 (the guarded zero), not empty', rep.stdout.split('\n').find(l => l.includes('scrape_targets_down')));
+  assert(/fetcher inventory trust: trusted \(\d+ names, carries up\)/.test(rep.stdout), 'the report prints the fetcher\'s inventory-trust verdict', rep.stdout.split('\n').find(l => l.includes('inventory trust')));
+  assert(new RegExp(`not-in-inventory \\(of a ${inventory.length}-name inventory\\)`).test(rep.stdout), 'the not-in-inventory count is printed next to the inventory size', rep.stdout.split('\n').find(l => l.includes('rows with data')));
   assert(/victoriametrics\s+not-in-inventory \(missing vm_promscrape_targets\)/.test(rep.stdout), 'an alias whose requires are absent is not-in-inventory and names the missing metric (no call)');
   assert(/scrape\/scrape_duration_max\s+generic\s+FAILED metrics_query: query timed out/.test(rep.stdout), 'a tool error reads as FAILED with the upstream message');
   assert(/tsdb\/tsdb_active_series\s+prometheus\s+data 123456 count/.test(rep.stdout), 'a count row reads its integer value');
-  assert(/rows with data: 2\/24/.test(rep.stdout), 'the summary counts rows with data (2 of 24 on this fake)', rep.stdout.split('\n').find(l => l.includes('rows with data')));
+  assert(/rows with data: 3\/24/.test(rep.stdout), 'the summary counts rows with data (3 of 24 on this fake: ratio, targets down = 0, active series)', rep.stdout.split('\n').find(l => l.includes('rows with data')));
   assert(/alertmanager_status: version .* — shape status-object ok/.test(rep.stdout), 'the Alertmanager status tool is summarised with its shape verdict');
   assert(/grafana_datasource_health: .* (OK|answered)/.test(rep.stdout), 'datasource health is asked per uid');
   assert(/scrape_configs\s+metrics_targets answered/.test(rep.stdout) && /recording_rules\s+vmalert_rules answered/.test(rep.stdout), 'probe families report their winning tool');
@@ -161,6 +166,13 @@ try {
   assert(vmCalls.length === 0, 'not-in-inventory aliases are never called');
   assert(!rep.stdout.includes(TOKEN) && !rep.stderr.includes(TOKEN), 'the bearer token never reaches stdout/stderr (URL query included)');
   assert(rep.stdout.includes('auth: bearer (redacted)'), 'the report says auth was used without showing it');
+
+  // ---- 1b. the token ONLY in the URL (no MCP_AUTH): an upstream error that
+  // echoes the request URL must come out redacted all the same.
+  const repUrlOnly = await runRecorder(fake.url, ['--out', reportDir], { MCP_AUTH: '' });
+  assert(repUrlOnly.status === 0 && repUrlOnly.stdout.includes('auth: none'), 'URL-only credential: report runs without MCP_AUTH', { status: repUrlOnly.status });
+  assert(/FAILED metrics_query: query timed out \(upstream [^\n]*<redacted>/.test(repUrlOnly.stdout), 'URL-only credential: an error echoing the request URL shows <redacted> in place of the token', repUrlOnly.stdout.split('\n').find(l => l.includes('timed out')));
+  assert(!repUrlOnly.stdout.includes(TOKEN) && !repUrlOnly.stderr.includes(TOKEN), 'URL-only credential: the token never reaches stdout/stderr');
 
   // ---- 2. --write ----
   fake.calls.length = 0;
@@ -202,6 +214,8 @@ try {
     const j = read(join('recorded-stack', f));
     assert(j._recorded?.tool === 'metrics_query' && typeof j._recorded.query === 'string' && j._recorded.row === f.replace(/\.json$/, ''),
       `${f}: carries _recorded provenance (tool, query, row)`, j._recorded);
+    assert(j._recorded.server === undefined && !JSON.stringify(j).includes('127.0.0.1'),
+      `${f}: committed provenance names no server host (the maintainer's MCP hostname stays out of git)`, j._recorded);
     const v = validateResponseShape(capability('stack_self_metrics').responseShape, j);
     assert(v.ok, `${f}: satisfies the instant-vector shape`, v);
     perFamily.set(j._recorded.family, (perFamily.get(j._recorded.family) || 0) + 1);
@@ -218,6 +232,7 @@ try {
     if (!existsSync(join(outDir, file))) continue;
     const j = read(file);
     assert(j._synthetic === undefined, `${file}: carries no _synthetic marker`);
+    assert(!JSON.stringify(j).includes('127.0.0.1'), `${file}: names no server host`);
     const v = validateResponseShape(capability(id).responseShape, j);
     assert(v.ok, `${file}: satisfies shape ${capability(id).responseShape}`, v);
   }

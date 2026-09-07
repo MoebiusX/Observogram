@@ -54,7 +54,7 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { resolve, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createMcpClient, PROBES, sampleFromInstantVector } from './fetch-live-pack.mjs';
+import { createMcpClient, PROBES, sampleFromInstantVector, stackInventoryTrust } from './fetch-live-pack.mjs';
 import { capabilityTool, allKnownToolNames, capability, BUILD_INFO_PROBES } from './lib/contracts/mcp-capabilities.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_FAMILIES } from './lib/contracts/stack-self-metrics.mjs';
 import { validateResponseShape } from './lib/contracts/response-shapes.mjs';
@@ -90,8 +90,17 @@ if (!MCP_URL) {
 }
 
 // Never let the token out: not in the report, not in a file, not via an
-// upstream error message that happens to echo a header.
-const redact = (s) => (MCP_AUTH && typeof s === 'string' ? s.split(MCP_AUTH).join('<redacted>') : s);
+// upstream error message that happens to echo a header — or the request
+// URL. A credential may ride in MCP_URL's query string instead of
+// MCP_AUTH (`?token=…`), so every query-string value of MCP_URL is
+// redacted alongside MCP_AUTH.
+const SECRETS = (() => {
+  const s = new Set();
+  if (MCP_AUTH) s.add(MCP_AUTH);
+  try { for (const v of new URL(MCP_URL).searchParams.values()) if (v.length >= 6) s.add(v); } catch { /* unparseable */ }
+  return [...s].sort((a, b) => b.length - a.length);
+})();
+const redact = (s) => (typeof s === 'string' ? SECRETS.reduce((acc, secret) => acc.split(secret).join('<redacted>'), s) : s);
 const safeUrl = (u) => {
   try { const x = new URL(u); return `${x.origin}${x.pathname}`; }
   catch { return '<unparseable MCP_URL>'; }
@@ -263,6 +272,14 @@ out(`  step-2 surface: ${step2Tools.map(t => `${t.tool} ${t.advertised ? '✓' :
 out();
 out(`metric inventory (${inventoryProbe.attempted.join(' → ') || 'no candidate advertised'}): ${
   inventoryNames ? `${inventoryProbe.tool} answered ${inventoryNames.length} names` : `${inventoryProbe.outcome}${inventoryProbe.error ? ` — ${inventoryProbe.error}` : ''} — aliases cannot be inventory-gated, every one is tried`}`);
+// The fetcher's trust verdict on the same inventory: an inventory is
+// evidence of presence, never of absence, and one without `up` gates
+// nothing in the fetcher (rows are queried anyway). Printed here so a
+// capped inventory is visible on the first live run.
+const inventoryTrust = stackInventoryTrust(inventoryNames);
+if (inventoryNames) {
+  out(`  fetcher inventory trust: ${inventoryTrust.trusted ? `trusted (${inventoryTrust.size} names, carries up) — rows with no eligible alias read not-in-inventory in the fetcher` : `UNTRUSTED — ${inventoryTrust.reason}; the fetcher queries rows with no eligible alias anyway (bounded cascade)`}`);
+}
 out();
 out(`alias table (${STACK_SELF_METRIC_PROBES.length} rows, ${aliasReport.reduce((n, r) => n + r.entries.length, 0)} aliases; ${metricsQueryTool} ${queryAdvertised ? 'advertised' : 'NOT advertised'}):`);
 for (const { row, entries } of aliasReport) {
@@ -279,7 +296,7 @@ for (const { row, entries } of aliasReport) {
 const outcomes = aliasReport.flatMap(r => r.entries.map(e => e.outcome));
 const countOf = (o) => outcomes.filter(x => x === o).length;
 const rowsWithData = aliasReport.filter(r => r.entries.some(e => e.outcome === 'data')).length;
-out(`  aliases: ${countOf('data')} data · ${countOf('empty')} empty · ${countOf('failed')} failed · ${countOf('not-in-inventory')} not-in-inventory · ${countOf('not-attempted')} not-attempted; rows with data: ${rowsWithData}/${STACK_SELF_METRIC_PROBES.length}`);
+out(`  aliases: ${countOf('data')} data · ${countOf('empty')} empty · ${countOf('failed')} failed · ${countOf('not-in-inventory')} not-in-inventory${inventoryNames ? ` (of a ${inventoryNames.length}-name inventory${inventoryTrust.trusted ? '' : ', untrusted'})` : ''} · ${countOf('not-attempted')} not-attempted; rows with data: ${rowsWithData}/${STACK_SELF_METRIC_PROBES.length}`);
 out();
 out('status tools:');
 const describeStatus = (s, summary) => {
@@ -362,13 +379,16 @@ const writeJson = (path, value) => {
   writeFileSync(path, redact(JSON.stringify(value, null, 2)) + '\n');
   written.push(path);
 };
-const provenance = (extra) => ({ recordedAt, server: safeUrl(MCP_URL), ...extra });
+// Committed fixtures carry tool + timestamp (+ query) only: the
+// maintainer's MCP hostname is private and stays out of git. The full
+// URL (token stripped) goes into the git-ignored review copy alone.
+const provenance = (extra) => ({ recordedAt, ...extra });
 
 out();
 out(`writing into ${OUT_DIR}`);
 
 if (inventoryNames) {
-  writeJson(INVENTORY_FILE, provenance({ tool: inventoryProbe.tool, count: inventoryNames.length, names: inventoryNames }));
+  writeJson(INVENTORY_FILE, { ...provenance({ tool: inventoryProbe.tool, count: inventoryNames.length, names: inventoryNames }), server: safeUrl(MCP_URL) });
   writeJson(resolve(OUT_DIR, `${inventoryProbe.tool}.json`), trimInventory(inventoryProbe.response));
 } else {
   out(`  metric inventory not recorded (${inventoryProbe.outcome})`);

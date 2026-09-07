@@ -31,13 +31,33 @@
 //                 no Docker); the recorder script lets a maintainer verify
 //                 each row later against a real MCP.
 //
-// KNOWN DISCREPANCY (documented, not fixed): reference-packs/prometheus
-// `scrape_duration_p99` is written over `scrape_duration_seconds_bucket`,
-// but Prometheus exposes `scrape_duration_seconds` as a per-target GAUGE
-// (no histogram) — the reference pack's histogram_quantile can never
-// answer. Row `scrape_duration_max` therefore samples
-// `max(scrape_duration_seconds)` and points at the reference SLI only for
-// vocabulary.
+// KNOWN DISCREPANCIES (documented, not fixed — the reference packs are
+// out of scope here):
+//   1. reference-packs/prometheus `scrape_duration_p99` is written over
+//      `scrape_duration_seconds_bucket`, but Prometheus exposes
+//      `scrape_duration_seconds` as a per-target GAUGE (no histogram) — the
+//      reference pack's histogram_quantile can never answer. Row
+//      `scrape_duration_max` therefore samples `max(scrape_duration_seconds)`
+//      and points at the reference SLI only for vocabulary.
+//   2. reference-packs/prometheus `query_latency_p99` is written over
+//      `prometheus_engine_query_duration_seconds_bucket`, but Prometheus
+//      registers `prometheus_engine_query_duration_seconds` as a SUMMARY
+//      (promql/engine.go: SummaryVec with objectives 0.5 / 0.9 / 0.99 and
+//      the label `slice`) — there is no `_bucket` series to quantile over.
+//      Row `query_latency_p99` therefore reads the summary's own 0.99
+//      quantile for the `inner_eval` slice and points at the reference SLI
+//      only for vocabulary.
+//
+// COUNT ROWS THAT MUST READ ZERO WHEN HEALTHY: a PromQL filter that matches
+// nothing (`count(up == 0)` on a stack with every target up) yields an EMPTY
+// vector, which the sampler records as `empty` — indistinguishable from
+// "the metric does not exist here". The count rows therefore carry a guard
+// that reads 0 only when the base metric is present:
+//   `count(up == 0) or (count(up) * 0)`
+// — `count(up) * 0` is 0 whenever any `up` series exists and empty when none
+// does, so a healthy stack reads 0 and a stack without the metric still reads
+// `empty`. (`or vector(0)` was rejected: it would fabricate "0 targets down"
+// on a backend that never scrapes anything.)
 //
 // Pure ESM, data + lookup resolvers only. No control flow beyond mapping
 // and filtering, no Node APIs — browser-safe by construction.
@@ -56,10 +76,10 @@ export const STACK_OUTCOMES = Object.freeze(['data', 'empty', 'failed', 'not-in-
 // Upstream documentation each alias's metric names follow.
 const SRC = Object.freeze({
   prometheus:      'Prometheus server self-metrics (/metrics): docs.prometheus.io — "Jobs and instances" (up, scrape_duration_seconds) and the prometheus_* series the server exposes',
-  victoriametrics: 'VictoriaMetrics docs — vmagent "Monitoring" (vm_promscrape_targets), vmalert "Monitoring" (vmalert_*_error_total, vmalert_alerts_send_errors_total), VictoriaMetrics "Monitoring" (vm_cache_entries{type="storage/hour_metric_ids"} = active time series)',
+  victoriametrics: 'VictoriaMetrics docs — vmagent "Monitoring" (vm_promscrape_targets), vmalert "Monitoring" (vmalert_recording_rules_errors_total and vmalert_alerting_rules_errors_total — plural "errors", per app/vmalert/rule/recording.go and alerting.go; vmalert_alerts_send_errors_total), VictoriaMetrics "Monitoring" (vm_cache_entries{type="storage/hour_metric_ids"} = active time series)',
   grafana:         'Grafana docs — "Grafana metrics" (internal /metrics): grafana_alerting_rule_evaluation_failures_total, grafana_datasource_request_total, grafana_http_request_duration_seconds',
   alertmanager:    'Prometheus Alertmanager self-metrics (/metrics): alertmanager_notifications_total, alertmanager_notifications_failed_total, alertmanager_silences{state}',
-  otelcol:         'OpenTelemetry Collector docs — "Internal telemetry": otelcol_exporter_send_failed_*, otelcol_processor_dropped_*, otelcol_exporter_queue_size / queue_capacity; the `_total` suffix is added by the Prometheus exposition of newer collectors, older ones expose the bare name',
+  otelcol:         'OpenTelemetry Collector docs — "Internal telemetry": otelcol_exporter_send_failed_*, otelcol_exporter_queue_size / queue_capacity; the `_total` suffix is added by the Prometheus exposition of newer collectors, older ones expose the bare name. otelcol_processor_dropped_* exist ONLY on collectors that predate the processorhelper metric rework (the current processor/processorhelper/metadata.yaml defines processor_incoming_items, processor_outgoing_items and processor_internal_duration only) — not-in-inventory or empty on a current collector is version drift, not a wrong name; the rows stay because the crawled pack uses them',
   blackbox:        'prometheus/blackbox_exporter README: probe_success',
   promtail:        'Grafana Loki docs — Promtail "Observability": promtail_dropped_entries_total',
   jaeger:          'Jaeger docs — collector metrics: jaeger_collector_spans_dropped_total',
@@ -82,7 +102,9 @@ export const STACK_SELF_METRIC_PROBES = Object.freeze([
     id: 'scrape_success_ratio', family: 'scrape',
     signal: 'fraction of scrape targets up', unit: 'ratio', direction: 'higher',
     referenceSli: 'prometheus-reference/scrape_success_ratio',
-    aliases: [alias('generic', 'sum(up == 1) / count(up)', ['up'])],
+    // `up` is 0/1, so sum/count is the fraction up and an all-down stack
+    // reads 0 rather than empty (`sum(up == 1)` would match nothing).
+    aliases: [alias('generic', 'sum(up) / count(up)', ['up'])],
     source: SRC.prometheus,
   }),
   row({
@@ -90,7 +112,7 @@ export const STACK_SELF_METRIC_PROBES = Object.freeze([
     signal: 'scrape targets down', unit: 'count', direction: 'lower',
     referenceSli: null,
     aliases: [
-      alias('generic', 'count(up == 0)', ['up']),
+      alias('generic', 'count(up == 0) or (count(up) * 0)', ['up']),
       alias('victoriametrics', 'sum(vm_promscrape_targets{status="down"})', ['vm_promscrape_targets']),
     ],
     source: `${SRC.prometheus}; ${SRC.victoriametrics}`,
@@ -110,7 +132,7 @@ export const STACK_SELF_METRIC_PROBES = Object.freeze([
     referenceSli: 'prometheus-reference/rule_evaluation_success_ratio',
     aliases: [
       alias('prometheus', 'sum(rate(prometheus_rule_evaluation_failures_total[5m]))', ['prometheus_rule_evaluation_failures_total']),
-      alias('victoriametrics', 'sum(rate(vmalert_recording_rules_error_total[5m])) + sum(rate(vmalert_alerting_rules_error_total[5m]))', ['vmalert_recording_rules_error_total', 'vmalert_alerting_rules_error_total']),
+      alias('victoriametrics', 'sum(rate(vmalert_recording_rules_errors_total[5m])) + sum(rate(vmalert_alerting_rules_errors_total[5m]))', ['vmalert_recording_rules_errors_total', 'vmalert_alerting_rules_errors_total']),
       alias('grafana', 'sum(rate(grafana_alerting_rule_evaluation_failures_total[5m]))', ['grafana_alerting_rule_evaluation_failures_total']),
     ],
     source: `${SRC.prometheus}; ${SRC.victoriametrics}; ${SRC.grafana}`,
@@ -180,9 +202,9 @@ export const STACK_SELF_METRIC_PROBES = Object.freeze([
   }),
   row({
     id: 'query_latency_p99', family: 'tsdb',
-    signal: 'PromQL p99 latency', unit: 'seconds', direction: 'lower',
+    signal: 'PromQL p99 latency (summary quantile — see discrepancy 2 in the header)', unit: 'seconds', direction: 'lower',
     referenceSli: 'prometheus-reference/query_latency_p99',
-    aliases: [alias('prometheus', 'histogram_quantile(0.99, sum by (le)(rate(prometheus_engine_query_duration_seconds_bucket[5m])))', ['prometheus_engine_query_duration_seconds_bucket'])],
+    aliases: [alias('prometheus', 'max(prometheus_engine_query_duration_seconds{slice="inner_eval",quantile="0.99"})', ['prometheus_engine_query_duration_seconds'])],
     source: SRC.prometheus,
   }),
 
@@ -208,6 +230,9 @@ export const STACK_SELF_METRIC_PROBES = Object.freeze([
     aliases: otelcolPair('otelcol_exporter_send_failed_log_records'),
     source: SRC.otelcol,
   }),
+  // collector_dropped_*: counters of collectors that predate the
+  // processorhelper metric rework (see SRC.otelcol) — permanently
+  // not-in-inventory / empty on a current collector.
   row({
     id: 'collector_dropped_metrics', family: 'collector',
     signal: 'metric points dropped by processors per second', unit: 'per-second', direction: 'lower',
@@ -258,7 +283,7 @@ export const STACK_SELF_METRIC_PROBES = Object.freeze([
     id: 'synthetic_probe_failures', family: 'synthetic',
     signal: 'blackbox probes currently failing', unit: 'count', direction: 'lower',
     referenceSli: null,
-    aliases: [alias('blackbox', 'count(probe_success == 0)', ['probe_success'])],
+    aliases: [alias('blackbox', 'count(probe_success == 0) or (count(probe_success) * 0)', ['probe_success'])],
     source: SRC.blackbox,
   }),
   row({

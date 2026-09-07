@@ -21,7 +21,7 @@ import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
 import { adapt } from './lib/adapter.mjs';
 import {
   buildCanonicalPack, fetchMcp, mapDiscoveredBurnAlerts, PROBES,
-  sampleStackSelfMetrics, observeAlertmanager, observeGrafana,
+  sampleStackSelfMetrics, sampleFromInstantVector, observeAlertmanager, observeGrafana,
 } from './fetch-live-pack.mjs';
 import { STACK_SELF_METRIC_PROBES } from './lib/contracts/stack-self-metrics.mjs';
 
@@ -1245,20 +1245,20 @@ const pick = (...ids) => STACK_SELF_METRIC_PROBES.filter(r => ids.includes(r.id)
                     'tsdb_active_series', 'wal_corruptions', 'query_latency_p99');
   const inventory = [
     'up', 'vm_promscrape_targets',
-    'vmalert_recording_rules_error_total', 'vmalert_alerting_rules_error_total',
+    'vmalert_recording_rules_errors_total', 'vmalert_alerting_rules_errors_total',
     'prometheus_rule_evaluation_failures_total',
     'vm_cache_entries', 'prometheus_tsdb_head_series',
-    'prometheus_engine_query_duration_seconds_bucket',
+    'prometheus_engine_query_duration_seconds',
     // wal_corruptions' metric deliberately absent
   ];
   const { calls, callTool } = stubMetricsQuery({
-    'sum(up == 1) / count(up)': vec('0.98'),
-    'count(up == 0)': { result: [] },                                   // empty on the generic alias …
+    'sum(up) / count(up)': vec('0.98'),
+    'count(up == 0) or (count(up) * 0)': { result: [] },                                   // empty on the generic alias …
     'sum(vm_promscrape_targets{status="down"})': vec('1'),             // … the VM alias answers
-    'sum(rate(vmalert_recording_rules_error_total[5m])) + sum(rate(vmalert_alerting_rules_error_total[5m]))': vec('0'),
+    'sum(rate(vmalert_recording_rules_errors_total[5m])) + sum(rate(vmalert_alerting_rules_errors_total[5m]))': vec('0'),
     'sum(vm_cache_entries{type="storage/hour_metric_ids"})': vec('NaN'),
     'sum(prometheus_tsdb_head_series)': vec('12345'),
-    'histogram_quantile(0.99, sum by (le)(rate(prometheus_engine_query_duration_seconds_bucket[5m])))': { throw: 'metrics_query: HTTP 500 boom' },
+    'max(prometheus_engine_query_duration_seconds{slice="inner_eval",quantile="0.99"})': { throw: 'metrics_query: HTTP 500 boom' },
   });
   const s = await sampleStackSelfMetrics({
     callTool, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory,
@@ -1298,19 +1298,32 @@ const pick = (...ids) => STACK_SELF_METRIC_PROBES.filter(r => ids.includes(r.id)
 {
   const rows = pick('scrape_success_ratio');
   for (const [raw, label] of [['NaN', 'NaN'], ['+Inf', '+Inf'], ['-Inf', '-Inf']]) {
-    const { callTool } = stubMetricsQuery({ 'sum(up == 1) / count(up)': vec(raw) });
+    const { callTool } = stubMetricsQuery({ 'sum(up) / count(up)': vec(raw) });
     const s = await sampleStackSelfMetrics({ callTool, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory: ['up'], refreshedAt, rows });
     assert(s.rows[0].outcome === 'empty' && s.rows[0].value === null, `${label} sample → outcome empty, value null`, s.rows[0]);
   }
   const { callTool: promApi } = stubMetricsQuery({
-    'sum(up == 1) / count(up)': { status: 'success', data: { resultType: 'vector', result: [{ metric: {}, value: [1, '1'] }] } },
+    'sum(up) / count(up)': { status: 'success', data: { resultType: 'vector', result: [{ metric: {}, value: [1, '1'] }] } },
   });
   const s2 = await sampleStackSelfMetrics({ callTool: promApi, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory: ['up'], refreshedAt, rows });
   assert(s2.rows[0].outcome === 'data' && s2.rows[0].value === 1, 'Prometheus-API envelope { data: { result } } is parsed', s2.rows[0]);
-  const { callTool: noValue } = stubMetricsQuery({ 'sum(up == 1) / count(up)': { result: [{ metric: { job: 'x' } }] } });
+  const { callTool: noValue } = stubMetricsQuery({ 'sum(up) / count(up)': { result: [{ metric: { job: 'x' } }] } });
   const s3 = await sampleStackSelfMetrics({ callTool: noValue, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory: ['up'], refreshedAt, rows });
   assert(s3.rows[0].outcome === 'empty', 'a series with no sample value is empty (not data)', s3.rows[0]);
-  const { callTool: badShape } = stubMetricsQuery({ 'sum(up == 1) / count(up)': { rows: 3 } });
+  // A COUNT row is an aggregation returning one series: a series-only
+  // answer must never be counted as "1 target down" — it is empty, for
+  // every unit.
+  for (const id of ['scrape_targets_down', 'active_silences', 'synthetic_probe_failures']) {
+    const [countRow] = pick(id);
+    const seriesOnly = sampleFromInstantVector(countRow, { result: [{ metric: { __name__: 'x' } }] });
+    assert(seriesOnly.outcome === 'empty' && seriesOnly.value === null && /no sample value/.test(seriesOnly.reason),
+           `${id} (count): a series without a sample value is empty, never value=1`, seriesOnly);
+    const twoSeries = sampleFromInstantVector(countRow, { result: [{ metric: { a: '1' } }, { metric: { a: '2' } }] });
+    assert(twoSeries.outcome === 'empty' && twoSeries.value === null, `${id} (count): two value-less series are still empty, not 2`, twoSeries);
+  }
+  const zero = sampleFromInstantVector(pick('scrape_targets_down')[0], vec('0'));
+  assert(zero.outcome === 'data' && zero.value === 0, 'a count row answering 0 (the guarded zero) is data 0, not empty', zero);
+  const { callTool: badShape } = stubMetricsQuery({ 'sum(up) / count(up)': { rows: 3 } });
   const s4 = await sampleStackSelfMetrics({ callTool: badShape, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory: ['up'], refreshedAt, rows });
   assert(s4.rows[0].outcome === 'failed' && /payload/.test(s4.rows[0].reason), 'a non-instant-vector answer is failed with the shape reason', s4.rows[0]);
 }
@@ -1331,6 +1344,57 @@ const pick = (...ids) => STACK_SELF_METRIC_PROBES.filter(r => ids.includes(r.id)
          'a seen product jumps ahead of the declared order and data stops the cascade', s2.rows[0]);
 }
 
+// (b2) with a TRUSTED inventory every eligible alias may be tried (no per-row cap)
+{
+  const rows = pick('rule_evaluation_failures');
+  const inventory = ['up', 'prometheus_rule_evaluation_failures_total', 'vmalert_recording_rules_errors_total', 'vmalert_alerting_rules_errors_total', 'grafana_alerting_rule_evaluation_failures_total'];
+  const { calls, callTool } = stubMetricsQuery({});  // everything empty
+  const s = await sampleStackSelfMetrics({ callTool, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory, refreshedAt, rows });
+  assert(calls.length === 3 && s.rows[0].product === 'grafana' && s.rows[0].outcome === 'empty',
+         'with an inventory all three eligible aliases are tried (evidence-backed, no 2-per-row cap)', calls.map(c => c.query));
+  assert(s.inventory && s.inventory.trusted === true && s.inventory.size === inventory.length,
+         'the sampler reports the inventory as trusted (carries up) with its size', s.inventory);
+}
+
+// (b3) an inventory WITHOUT `up` is evidence of presence, never of absence:
+// rows with no eligible alias are queried anyway (bounded cascade) and read
+// empty / failed / data honestly, never not-in-inventory.
+{
+  const trimmed = ['bayesian_forecast_total', 'ALERTS', 'ALERTS_FOR_STATE'];   // the recorded reference fixture's flavour
+  const { calls, callTool } = stubMetricsQuery({
+    'sum(up) / count(up)': vec('0.83'),
+    'count(up == 0) or (count(up) * 0)': vec('1'),
+  });
+  const s = await sampleStackSelfMetrics({ callTool, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory: trimmed, refreshedAt });
+  assert(s.inventory.trusted === false && /lacks `up`/.test(s.inventory.reason) && s.inventory.size === 3,
+         'an inventory without up is untrusted, with the reason', s.inventory);
+  assert(s.rows.every(r => r.outcome !== 'not-in-inventory'), 'an untrusted inventory gates nothing — no row reads not-in-inventory', s.rows.filter(r => r.outcome === 'not-in-inventory').map(r => r.id));
+  const ratio = rowById(s.rows, 'scrape_success_ratio');
+  assert(ratio.outcome === 'data' && ratio.value === 0.83, 'rows the trimmed inventory would have gated are sampled through the wire', ratio);
+  const down = rowById(s.rows, 'scrape_targets_down');
+  assert(down.outcome === 'data' && down.value === 1, 'a count row beyond the trimmed inventory samples its value', down);
+  const wal = rowById(s.rows, 'wal_corruptions');
+  assert(wal.outcome === 'empty' && /queried anyway/.test(wal.reason) && /3-name inventory/.test(wal.reason),
+         'an empty answer beyond an untrusted inventory says so in the reason (queried anyway)', wal);
+  assert(calls.length > 0 && calls.length <= 48 && s.callsMade === calls.length, 'the cascade stays within the global budget', calls.length);
+  const rule = rowById(s.rows, 'rule_evaluation_failures');
+  assert(calls.filter(c => /rule_evaluation_failures_total|vmalert_.*rules_errors_total|grafana_alerting_rule/.test(c.query)).length === 2,
+         'the fallback cascade is bounded to 2 calls per row', rule);
+  // An EMPTY inventory (the tool answered a list with nothing in it) is
+  // likewise untrusted — not 24 × not-in-inventory with zero calls.
+  const { calls: c0, callTool: t0 } = stubMetricsQuery({ 'sum(up) / count(up)': vec('1') });
+  const s0 = await sampleStackSelfMetrics({ callTool: t0, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory: [], refreshedAt, rows: pick('scrape_success_ratio') });
+  assert(c0.length === 1 && s0.rows[0].outcome === 'data', 'an empty inventory never asserts absence: the row is queried', [c0.length, s0.rows[0].outcome]);
+}
+
+// (b4) a TRUSTED inventory names its size in the not-in-inventory reason
+{
+  const { calls, callTool } = stubMetricsQuery({});
+  const s = await sampleStackSelfMetrics({ callTool, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory: ['up', 'other_metric'], refreshedAt, rows: pick('wal_corruptions') });
+  assert(calls.length === 0 && s.rows[0].outcome === 'not-in-inventory' && /2-name inventory/.test(s.rows[0].reason) && /prometheus_tsdb_wal_corruptions_total/.test(s.rows[0].reason),
+         'a trusted inventory gates with the inventory size and the required names in the reason', s.rows[0]);
+}
+
 // (c) global cap → not-attempted with reason
 {
   const { calls, callTool } = stubMetricsQuery({});
@@ -1346,7 +1410,7 @@ const pick = (...ids) => STACK_SELF_METRIC_PROBES.filter(r => ids.includes(r.id)
 
 // (d) tools/list present but metrics_query not advertised → not-attempted, zero calls
 {
-  const { calls, callTool } = stubMetricsQuery({ 'sum(up == 1) / count(up)': vec('1') });
+  const { calls, callTool } = stubMetricsQuery({ 'sum(up) / count(up)': vec('1') });
   const s = await sampleStackSelfMetrics({
     callTool, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory: ['up'],
     discoveredToolNames: new Set(['system_health']), hasToolsList: true, refreshedAt,
@@ -1360,7 +1424,7 @@ const pick = (...ids) => STACK_SELF_METRIC_PROBES.filter(r => ids.includes(r.id)
 
 // (e) no tools/list at all (older server) → attempted
 {
-  const { calls, callTool } = stubMetricsQuery({ 'sum(up == 1) / count(up)': vec('1') });
+  const { calls, callTool } = stubMetricsQuery({ 'sum(up) / count(up)': vec('1') });
   const s = await sampleStackSelfMetrics({
     callTool, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory: ['up'],
     discoveredToolNames: new Set(), hasToolsList: false, refreshedAt, rows: pick('scrape_success_ratio'),
@@ -1373,7 +1437,7 @@ const pick = (...ids) => STACK_SELF_METRIC_PROBES.filter(r => ids.includes(r.id)
 {
   const probeFailures = {};
   const quietReal = async (name, fn) => { try { return await fn(); } catch (e) { if (!probeFailures[name]) probeFailures[name] = e.message; return null; } };
-  const { callTool } = stubMetricsQuery({ 'sum(up == 1) / count(up)': { throw: 'metrics_query: bad request' } });
+  const { callTool } = stubMetricsQuery({ 'sum(up) / count(up)': { throw: 'metrics_query: bad request' } });
   const s = await sampleStackSelfMetrics({ callTool, quiet: quietReal, metricsQueryTool: 'metrics_query', inventory: ['up'], refreshedAt, rows: pick('scrape_success_ratio') });
   assert(probeFailures.stack_self_metrics === 'metrics_query: bad request', 'failures are collected under the family name stack_self_metrics', probeFailures);
   assert(s.rows[0].outcome === 'failed' && s.rows[0].reason === 'metrics_query: bad request', 'the row keeps its own error as reason', s.rows[0]);
@@ -1430,6 +1494,50 @@ const SYN = (f) => JSON.parse(readFileSync(resolve(__dirname, 'fixtures', 'mcp',
   const gfNone = await observeGrafana({ callTool: t3, quiet: quietStub, discoveredToolNames: new Set(['system_health']), hasToolsList: true,
     datasourcesTool: 'grafana_datasources', datasourceHealthTool: 'grafana_datasource_health', contactPointsTool: 'grafana_contact_points' });
   assert(amNone === null && gfNone === null && calls3.length === 0, 'status tools not advertised → null, zero calls', [amNone, gfNone, calls3.length]);
+
+  // Advertised but FAILING (HTTP 403): a failure is not a tier limit — the
+  // observer answers non-null with `error`, never null ("not exposed").
+  const t4 = async (name) => { throw new Error(`${name}: HTTP 403 forbidden`); };
+  const amFail = await observeAlertmanager({ callTool: t4, quiet: quietStub, discoveredToolNames: names, hasToolsList: true, statusTool: 'alertmanager_status', silencesTool: 'alertmanager_silences' });
+  assert(amFail !== null && amFail.version === null && amFail.silences === null && amFail.toolsAnswered.length === 0,
+         'advertised-but-failing Alertmanager tools → non-null, nothing answered', amFail);
+  assert(/alertmanager_status: HTTP 403/.test(amFail.error) && /alertmanager_silences: HTTP 403/.test(amFail.error),
+         'the Alertmanager observer carries the tools\' own errors', amFail.error);
+  const gfFail = await observeGrafana({ callTool: t4, quiet: quietStub, discoveredToolNames: names, hasToolsList: true,
+    datasourcesTool: 'grafana_datasources', datasourceHealthTool: 'grafana_datasource_health', contactPointsTool: 'grafana_contact_points' });
+  assert(gfFail !== null && gfFail.datasources === null && gfFail.contactPoints === null && /grafana_datasources: HTTP 403/.test(gfFail.error),
+         'advertised-but-failing Grafana tools → non-null with the error', gfFail);
+  const t5 = async (name) => (name === 'alertmanager_status' ? { rows: 3 } : SYN('alertmanager_silences.json'));
+  const amShape = await observeAlertmanager({ callTool: t5, quiet: quietStub, discoveredToolNames: names, hasToolsList: true, statusTool: 'alertmanager_status', silencesTool: 'alertmanager_silences' });
+  assert(amShape.silences.active === 1 && /unexpected shape/.test(amShape.error) && amShape.toolsAnswered.join(',') === 'alertmanager_silences',
+         'a shape failure on one tool is an error beside the other tool\'s answer', amShape);
+
+  // ENVELOPE: a Prometheus-API-style { status: 'success', data: {...} }
+  // wrapper must be read from the INNER document — never version null /
+  // clusterStatus 'success', never a wrapped ERROR read as healthy.
+  const t6 = async (name, args = {}) => {
+    if (name === 'alertmanager_status') return { status: 'success', data: { versionInfo: { version: '0.27.0' }, uptime: '2026-09-06T21:15:00Z', cluster: { status: 'ready' } } };
+    if (name === 'alertmanager_silences') return SYN('alertmanager_silences.json');
+    if (name === 'grafana_datasources') return { status: 'success', data: [{ uid: 'loki', name: 'Loki', type: 'loki' }] };
+    if (name === 'grafana_datasource_health') return { status: 'success', data: { status: 'ERROR', message: `connection refused (${args.uid})` } };
+    if (name === 'grafana_contact_points') return SYN('grafana_contact_points.json');
+    throw new Error(`unexpected tool ${name}`);
+  };
+  const amEnv = await observeAlertmanager({ callTool: t6, quiet: quietStub, discoveredToolNames: names, hasToolsList: true, statusTool: 'alertmanager_status', silencesTool: 'alertmanager_silences' });
+  assert(amEnv.version === '0.27.0' && amEnv.clusterStatus === 'ready' && amEnv.error === null,
+         'a { status: success, data: {...} } Alertmanager envelope reads version 0.27.0 / cluster ready from the inner document', amEnv);
+  const gfEnv = await observeGrafana({ callTool: t6, quiet: quietStub, discoveredToolNames: names, hasToolsList: true,
+    datasourcesTool: 'grafana_datasources', datasourceHealthTool: 'grafana_datasource_health', contactPointsTool: 'grafana_contact_points' });
+  assert(gfEnv.datasources.length === 1 && gfEnv.datasources[0].health === 'error' && /connection refused/.test(gfEnv.datasources[0].message),
+         'a wrapped { data: { status: ERROR } } health verdict reads error with its message — never ok', gfEnv.datasources[0]);
+
+  // Health tool not advertised: every datasource is `unknown` (not
+  // checked) — never `ok`, so no surface can print "0 unhealthy".
+  const t7 = async (name) => (name === 'grafana_datasources' ? SYN('grafana_datasources.json') : SYN('grafana_contact_points.json'));
+  const gfNoHealth = await observeGrafana({ callTool: t7, quiet: quietStub, discoveredToolNames: new Set(['grafana_datasources', 'grafana_contact_points']), hasToolsList: true,
+    datasourcesTool: 'grafana_datasources', datasourceHealthTool: 'grafana_datasource_health', contactPointsTool: 'grafana_contact_points' });
+  assert(gfNoHealth.datasources.length === 3 && gfNoHealth.datasources.every(d => d.health === 'unknown') && gfNoHealth.error === null,
+         'without the health tool every datasource stays unknown (unchecked), with no error (a tier fact)', gfNoHealth.datasources.map(d => d.health));
 }
 
 // ---------- case 8c: buildCanonicalPack writes the step-2 annotation contract, never a Verified stamp ----------
@@ -1438,8 +1546,8 @@ const SYN = (f) => JSON.parse(readFileSync(resolve(__dirname, 'fixtures', 'mcp',
   const stackSamples = {
     status: 'sampled', reason: null, callsMade: 6,
     rows: [
-      { id: 'scrape_success_ratio', family: 'scrape', product: 'generic', expr: 'sum(up == 1) / count(up)', value: 0.98, unit: 'ratio', direction: 'higher', at: refreshedAt, outcome: 'data' },
-      { id: 'scrape_targets_down', family: 'scrape', product: 'generic', expr: 'count(up == 0)', value: null, unit: 'count', direction: 'lower', at: refreshedAt, outcome: 'empty' },
+      { id: 'scrape_success_ratio', family: 'scrape', product: 'generic', expr: 'sum(up) / count(up)', value: 0.98, unit: 'ratio', direction: 'higher', at: refreshedAt, outcome: 'data' },
+      { id: 'scrape_targets_down', family: 'scrape', product: 'generic', expr: 'count(up == 0) or (count(up) * 0)', value: null, unit: 'count', direction: 'lower', at: refreshedAt, outcome: 'empty' },
       { id: 'rule_evaluation_failures', family: 'ruler', product: 'prometheus', expr: 'x', value: null, unit: 'per-second', direction: 'lower', at: refreshedAt, outcome: 'failed', reason: 'HTTP 500' },
       { id: 'wal_corruptions', family: 'tsdb', product: null, expr: null, value: null, unit: 'per-hour', direction: 'lower', at: refreshedAt, outcome: 'not-in-inventory', reason: 'no alias …' },
       { id: 'log_shipper_drops', family: 'logs', product: null, expr: null, value: null, unit: 'per-second', direction: 'lower', at: refreshedAt, outcome: 'not-attempted', reason: 'call budget exhausted' },
@@ -1468,6 +1576,21 @@ const SYN = (f) => JSON.parse(readFileSync(resolve(__dirname, 'fixtures', 'mcp',
   assert(observed[0].value === 0.98 && observed[0].at === refreshedAt && observed[2].reason === 'HTTP 500' && observed[1].reason === undefined,
          'observed rows keep value / at / reason (reason only when present)', observed);
   assert(observed.every(r => !('hint' in r) && !('verdict' in r)), 'observed rows carry no hint/verdict — signals, not verdicts');
+  const amAnn = JSON.parse(w['mcp.observed.alertmanager']);
+  assert(amAnn.version === '0.27.0' && amAnn.silences.active === 1 && !('error' in amAnn), 'mcp.observed.alertmanager carries the observation and no error key when nothing failed', amAnn);
+  assert(w['mcp.observed.grafana.error'] === undefined, 'no mcp.observed.grafana.error when the Grafana tools answered');
+
+  // Advertised-but-failing observers annotate the failure (never silent,
+  // never "not exposed").
+  const failing = buildCanonicalPack({
+    ...base,
+    alertmanagerObserved: { version: null, uptime: null, clusterStatus: null, silences: null, toolsAnswered: [], error: 'alertmanager_status: HTTP 403 forbidden' },
+    grafanaObserved: { datasources: null, contactPoints: null, toolsAnswered: [], error: 'grafana_datasources: HTTP 403 forbidden' },
+  }).metadata.annotations;
+  assert(JSON.parse(failing['mcp.observed.alertmanager']).error === 'alertmanager_status: HTTP 403 forbidden', 'mcp.observed.alertmanager carries the probe error', failing['mcp.observed.alertmanager']);
+  assert(failing['mcp.observed.grafana.error'] === 'grafana_datasources: HTTP 403 forbidden' && failing['mcp.observed.grafana.datasources'] === undefined,
+         'mcp.observed.grafana.error carries the probe error; no datasources key is fabricated', [failing['mcp.observed.grafana.error'], failing['mcp.observed.grafana.datasources']]);
+  assert(!failing['mcp.toolsCalled'].split(',').some(t => /alertmanager|grafana_datasources|grafana_contact/.test(t)), 'failing status tools are not listed as called');
   const am = JSON.parse(w['mcp.observed.alertmanager']);
   assert(am.version === '0.27.0' && am.clusterStatus === 'ready' && am.silences.active === 1 && am.toolsAnswered === undefined,
          'mcp.observed.alertmanager = {version, uptime, clusterStatus, silences}', am);
@@ -1518,7 +1641,7 @@ const SYN = (f) => JSON.parse(readFileSync(resolve(__dirname, 'fixtures', 'mcp',
     if (name === 'metrics_query') {
       queries.push(args.query);
       if (args.query === 'vm_app_version') return { result: [{ metric: { short_version: 'v1.113.0', version: 'victoria-metrics-v1.113.0' }, value: [1, '1'] }] };
-      if (args.query === 'sum(up == 1) / count(up)') return { result: [{ metric: {}, value: [1, '0.9'] }] };
+      if (args.query === 'sum(up) / count(up)') return { result: [{ metric: {}, value: [1, '0.9'] }] };
       if (args.query === 'sum(rate(vmalert_alerts_send_errors_total[5m]))') return { result: [{ metric: {}, value: [1, '0'] }] };
       return { result: [] };
     }

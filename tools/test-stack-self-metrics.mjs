@@ -86,14 +86,39 @@ const sliIdsOf = (pack) => {
 };
 for (const r of rows.filter((x) => x.referenceSli !== null)) {
   const [pack, sli] = String(r.referenceSli).split('/');
-  let ok = false; let ids = [];
+  let ok; let ids = [];
   try { ids = [...sliIdsOf(pack)]; ok = sliIdsOf(pack).has(sli); } catch { ok = false; }
   assert(ok, `${r.id}: referenceSli ${r.referenceSli} names a real reference-pack SLI`, ids.slice(0, 12));
 }
-// The documented discrepancy stays visible on the row it concerns.
+// The documented discrepancies stay visible on the rows they concern.
 const dur = rows.find((r) => r.id === 'scrape_duration_max');
 assert(dur.referenceSli === 'prometheus-reference/scrape_duration_p99' && dur.aliases[0].expr === 'max(scrape_duration_seconds)',
-  'scrape_duration_max samples the gauge (max) while pointing at the histogram-worded reference SLI (documented discrepancy)');
+  'scrape_duration_max samples the gauge (max) while pointing at the histogram-worded reference SLI (documented discrepancy 1)');
+const ql = rows.find((r) => r.id === 'query_latency_p99');
+assert(ql.referenceSli === 'prometheus-reference/query_latency_p99'
+  && ql.aliases.every((a) => !/_bucket/.test(a.expr) && !a.requires.some((n) => /_bucket$/.test(n)))
+  && ql.aliases[0].requires.includes('prometheus_engine_query_duration_seconds'),
+  'query_latency_p99 reads the summary quantile of prometheus_engine_query_duration_seconds — never a _bucket Prometheus does not expose (documented discrepancy 2)', ql.aliases[0]);
+
+// Upstream names pinned against the products' own source (reviewed 2026-09-07).
+const ruler = rows.find((r) => r.id === 'rule_evaluation_failures');
+const vmAlias = ruler.aliases.find((a) => a.product === 'victoriametrics');
+assert(vmAlias.requires.includes('vmalert_recording_rules_errors_total') && vmAlias.requires.includes('vmalert_alerting_rules_errors_total')
+  && !ruler.aliases.some((a) => a.requires.some((n) => /_error_total$/.test(n))),
+  'vmalert names use the plural errors_total (app/vmalert/rule/recording.go, alerting.go)', vmAlias.requires);
+
+// Lower-is-comfortable COUNT rows read 0 when healthy without fabricating
+// 0 when the base metric is absent: the guard is `or (count(<m>) * 0)`,
+// never `or vector(0)`.
+for (const id of ['scrape_targets_down', 'synthetic_probe_failures']) {
+  const r = rows.find((x) => x.id === id);
+  const g = r.aliases[0];
+  const base = g.requires[0];
+  assert(g.expr.endsWith(`or (count(${base}) * 0)`) && !/vector\(0\)/.test(g.expr),
+    `${id}: the count alias carries the presence-guarded zero (or (count(${base}) * 0)), not vector(0)`, g.expr);
+}
+const ratio = rows.find((x) => x.id === 'scrape_success_ratio');
+assert(ratio.aliases[0].expr === 'sum(up) / count(up)', 'scrape_success_ratio is sum(up) / count(up) so an all-down stack reads 0, not empty', ratio.aliases[0].expr);
 
 // Registry seam: the sampler gates on metrics_query, same tool as build_info.
 assert(capabilityTool('stack_self_metrics') === capabilityTool('build_info_versions'),
@@ -112,11 +137,11 @@ assert(rowsForFamily('collector').length === 7 && rowsForFamily('collector').eve
 assert(rowsForFamily('nope').length === 0, 'rowsForFamily of an unknown family is empty');
 
 const ruleFailures = rows.find((r) => r.id === 'rule_evaluation_failures');
-const vmInventory = new Set(['vmalert_recording_rules_error_total', 'vmalert_alerting_rules_error_total', 'up']);
+const vmInventory = new Set(['vmalert_recording_rules_errors_total', 'vmalert_alerting_rules_errors_total', 'up']);
 const elig = eligibleAliases(ruleFailures, vmInventory);
 assert(elig.length === 1 && elig[0].product === 'victoriametrics',
   'eligibleAliases keeps only aliases whose EVERY required name is in the inventory', elig.map((a) => a.product));
-const partial = eligibleAliases(ruleFailures, ['vmalert_recording_rules_error_total']);
+const partial = eligibleAliases(ruleFailures, ['vmalert_recording_rules_errors_total']);
 assert(partial.length === 0, 'eligibleAliases: one of two required names present → not eligible (array inventory accepted)');
 assert(eligibleAliases(ruleFailures, null) === ruleFailures.aliases && eligibleAliases(ruleFailures, undefined).length === 3,
   'eligibleAliases without an inventory returns every alias in declared order');

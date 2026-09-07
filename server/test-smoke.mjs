@@ -846,7 +846,7 @@ try {
       if (name === 'anomalies_baselines') return { baselines: [] };
       if (name === 'metrics_label_values') return { values: ['up', 'vmalert_alerts_send_errors_total', 'prometheus_notifications_errors_total'] };
       if (name === 'metrics_query') {
-        if (args.query === 'sum(up == 1) / count(up)') return { result: [{ metric: {}, value: [1, '0.9'] }] };
+        if (args.query === 'sum(up) / count(up)') return { result: [{ metric: {}, value: [1, '0.9'] }] };
         if (args.query === 'sum(rate(prometheus_notifications_errors_total[5m]))') return { result: [{ metric: {}, value: [1, '0.25'] }] };
         return { result: [] };
       }
@@ -884,6 +884,9 @@ try {
              'summary.grafana.datasources carries the datasources with a normalised health', gf);
       assert(gf.contactPoints && typeof gf.contactPoints.count === 'number' && Array.isArray(gf.contactPoints.names),
              'summary.grafana.contactPoints carries count and names', gf.contactPoints);
+      assert(gf.healthChecked === 3 && gf.error === null && am.error === null,
+             'summary.grafana.healthChecked counts the datasources that got a verdict; no probe error when every status tool answered', [gf.healthChecked, gf.error, am.error]);
+      assert(!(draft.summary.warnings || []).some(w => /status probe failed/.test(w)), 'no probe-failed warning when the status tools answered');
       assert(!(draft.summary.warnings || []).some(w => /Stack self-metrics not attempted/.test(w)),
              'no not-attempted warning when the panel was sampled');
       assert(Object.keys(draft.annotations || {}).every(k => !k.startsWith('mcp.verified.') || !/stack|alertmanager|grafana\.(datasources|contact)/.test(k)),

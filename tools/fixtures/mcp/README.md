@@ -66,10 +66,16 @@ alias of every row — whether all of its `requires` are in the inventory and,
 for the eligible ones, the sampled value read exactly the way the fetcher
 reads it (`sampleFromInstantVector`: `data <value>`, `empty`, `FAILED
 <reason>`). Ineligible aliases read `not-in-inventory (missing <names>)` and
-are never called; on a restricted tier (no `metrics_query`) every alias
-reads `not-attempted (metrics_query not exposed by this MCP (restricted
-tier))`. The Alertmanager / Grafana status tools and the probe families
-follow, each with its shape verdict.
+are never called by the recorder; the report also prints the fetcher's
+inventory-trust verdict (an inventory without `up` is treated as incomplete
+by the fetcher, which then queries such rows anyway) and the inventory size
+beside the not-in-inventory count, so a capped list is visible on the first
+live run. On a restricted tier (no `metrics_query`) every alias reads
+`not-attempted (metrics_query not exposed by this MCP (restricted tier))`.
+The Alertmanager / Grafana status tools and the probe families follow, each
+with its shape verdict. Committed fixtures carry `_recorded` provenance of
+tool + timestamp (+ query) only — the MCP hostname goes to the git-ignored
+review copy alone.
 
 **`--write` records the fixtures** (`npm run record-fixtures -- --write`;
 `--out <dir>` redirects everything, the recorder suite uses it):

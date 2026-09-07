@@ -94,9 +94,16 @@ export const RESPONSE_SHAPES = Object.freeze({
     ],
   },
   // Alertmanager API v2 /status — a single object, not a list.
+  //
+  // objectAt is ENVELOPE-FIRST: a Prometheus-API-style wrapper
+  // `{ status: 'success', data: {...} }` carries the generic key `status`
+  // at its root, so a root-first locator would pick the wrapper and read
+  // `success` as the cluster status (or a wrapped `{ status: 'ERROR' }`
+  // health verdict as healthy). The innermost candidate that carries the
+  // key group wins; a bare document still locates at the root.
   'status-object': {
     object: true,
-    objectAt: ['', 'data'],
+    objectAt: ['data', ''],
     anyOfKeys: [
       ['versionInfo', 'version', 'uptime', 'cluster', 'status'],
     ],
@@ -104,7 +111,7 @@ export const RESPONSE_SHAPES = Object.freeze({
   // Grafana datasource health check — a single verdict object.
   'health-object': {
     object: true,
-    objectAt: ['', 'data'],
+    objectAt: ['data', ''],
     anyOfKeys: [
       ['status', 'message', 'ok'],
     ],
@@ -114,6 +121,21 @@ export const RESPONSE_SHAPES = Object.freeze({
 const get = (obj, path) => path === ''
   ? obj
   : path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
+
+// The payload object an object shape locates in `response`: the first
+// candidate in the shape's declared `objectAt` order (envelope paths
+// first) that carries every key group, or null. Readers (the fetcher's
+// status observers) MUST use this rather than "first object at the root"
+// so they parse the same document the shape validated.
+export function locateObjectPayload(shapeId, response) {
+  const shape = RESPONSE_SHAPES[shapeId];
+  if (!shape) throw new Error(`unknown response shape: ${shapeId}. Known: ${Object.keys(RESPONSE_SHAPES).join(', ')}`);
+  if (!shape.object || response == null || typeof response !== 'object') return null;
+  const candidates = (shape.objectAt || ['']).map(p => get(response, p))
+    .filter(v => v && typeof v === 'object' && !Array.isArray(v));
+  const missingGroup = (obj) => (shape.anyOfKeys || []).find(group => !group.some(k => get(obj, k) !== undefined));
+  return candidates.find(obj => missingGroup(obj) === undefined) ?? null;
+}
 
 // Validate a response against a shape. Returns { ok, reason, items } —
 // `items` is the located payload length (0 is a legitimate pass).
@@ -133,10 +155,10 @@ export function validateResponseShape(shapeId, response) {
     if (candidates.length === 0) {
       return { ok: false, reason: `no payload object at any of: ${paths.map(p => p || '<root>').join(', ')}`, items: 0 };
     }
-    // First candidate (in declared path order) carrying every key group
-    // wins — a bare document and a { data: {...} } envelope both locate.
+    // Same rule as locateObjectPayload: the first candidate in declared
+    // path order (envelope first) carrying every key group wins.
     const missingGroup = (obj) => (shape.anyOfKeys || []).find(group => !group.some(k => get(obj, k) !== undefined));
-    const found = candidates.find(obj => missingGroup(obj) === undefined);
+    const found = locateObjectPayload(shapeId, response);
     if (!found) {
       return { ok: false, reason: `object missing all of: ${missingGroup(candidates[0]).join(' | ')}`, items: 1 };
     }

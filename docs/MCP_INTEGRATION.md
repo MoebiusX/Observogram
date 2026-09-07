@@ -137,11 +137,14 @@ JSON arrays (`annotationJson`) at 200 entries; error strings at 200 chars.
 | `mcp.observed.alert_rules` | JSON `[{name, state, health, lastError, lastEvaluation, activeAt}]` | every alerting rule's evaluation state |
 | `mcp.servicesDiscovered`, `mcp.activeAnomalies`, `mcp.baselinesComputed` | comma list, counts | `system_health` / anomaly tools answered (not a measurement of anything in `spec.baselines`) |
 | `mcp.capabilities.*`, `mcp.versions.<product>[.*]` | strings | `backend_capabilities` inventory and observed product versions |
-| `mcp.stack.status` | `sampled` \| `not-attempted` | the stack self-metrics panel (step 2, "Stack self-metrics (sampling)"): whether it was sampled at all — signals, never verdicts; written only when the fetch sampled |
+| `mcp.stack.status` | `sampled` \| `not-attempted` | the stack self-metrics panel (step 2, "Stack self-metrics (sampling)"): whether it was sampled at all — signals, never verdicts; written whenever the fetcher ran the step-2 sampler (a caller that predates step 2 writes nothing) |
 | `mcp.stack.reason` | string | only when `not-attempted`: why (`metrics_query not exposed by this MCP (restricted tier)`) |
 | `mcp.stack.sampled` / `empty` / `failed` / `notInInventory` / `notAttempted` | counts (strings) | rows per outcome (`data` rows are `sampled`) |
 | `mcp.stack.families` | comma list of `<family>:<best outcome>` | best outcome per family, `data > empty > failed > not-in-inventory > not-attempted` |
 | `mcp.observed.stack_metrics` | JSON `[{id, family, product, expr, value, unit, direction, at, outcome, reason?}]` | attempted and `not-in-inventory` rows (cap 64); `not-attempted` rows are counted, not listed |
+| `mcp.observed.alertmanager` | JSON `{version, uptime, clusterStatus, silences, error?}` | written when `alertmanager_status` / `alertmanager_silences` was ADVERTISED; `error` carries the trimmed failure of an advertised tool that did not answer — a failure, not a tier limit |
+| `mcp.observed.grafana.datasources`, `mcp.observed.grafana.contact_points` | JSON `[{uid, name, type, health: ok\|error\|unknown, message}]`, `{count, names}` | `unknown` health means NOT CHECKED (health tool not exposed / errored / beyond the 10-uid cap), never "not unhealthy" |
+| `mcp.observed.grafana.error` | string | the trimmed failure of an advertised Grafana status tool that did not answer |
 | `mcp.observed.alertmanager` | JSON `{version, uptime, clusterStatus, silences: {active, total} \| null}` | Alertmanager status surface (`alertmanager_status` + `alertmanager_silences`) |
 | `mcp.observed.grafana.datasources` | JSON `[{uid, name, type, health, message}]` | Grafana datasources with their health (`ok` \| `error` \| `unknown`, message trimmed to 200 chars) |
 | `mcp.observed.grafana.contact_points` | JSON `{count, names}` | Grafana contact points (names capped at 32) |
@@ -306,12 +309,29 @@ fixtures in `tools/fixtures/mcp/synthetic/` (no recording exists yet —
 `npm run record-fixtures` is the path to one; see that directory's README). Every sampled number is a point-in-time **signal,
 never a verdict**: nothing in this table creates a `Verified` stamp, an SLO
 verdict or a grade change, and on a restricted tier the answer is "not
-attempted" with the reason. Known discrepancy, documented rather than fixed:
-the reference pack's `scrape_duration_p99` is written over
-`scrape_duration_seconds_bucket`, but Prometheus exposes
-`scrape_duration_seconds` as a per-target gauge with no histogram, so the row
-`scrape_duration_max` samples `max(scrape_duration_seconds)` and points at the
-reference SLI for vocabulary only. Resolvers: `probeRows()`,
+attempted" with the reason. Two known discrepancies, documented rather than
+fixed (the reference packs are out of scope): (1) the reference pack's
+`scrape_duration_p99` is written over `scrape_duration_seconds_bucket`, but
+Prometheus exposes `scrape_duration_seconds` as a per-target gauge with no
+histogram, so the row `scrape_duration_max` samples
+`max(scrape_duration_seconds)` and points at the reference SLI for vocabulary
+only; (2) the reference pack's `query_latency_p99` is written over
+`prometheus_engine_query_duration_seconds_bucket`, but Prometheus registers
+`prometheus_engine_query_duration_seconds` as a **summary** (objectives 0.5 /
+0.9 / 0.99, label `slice`) with no `_bucket` series, so the row
+`query_latency_p99` reads
+`max(prometheus_engine_query_duration_seconds{slice="inner_eval",quantile="0.99"})`.
+The lower-is-comfortable count rows (`scrape_targets_down`,
+`synthetic_probe_failures`) carry a presence-guarded zero —
+`count(up == 0) or (count(up) * 0)` — so a healthy stack reads `0` rather than
+an empty vector while a backend without the metric still reads `empty`
+(`or vector(0)` would fabricate "0 down" where nothing is scraped); the ratio
+is `sum(up) / count(up)` for the same reason. Names pinned against upstream
+source: vmalert's `vmalert_recording_rules_errors_total` /
+`vmalert_alerting_rules_errors_total` (plural), and the otelcol
+`otelcol_processor_dropped_*` counters, which exist only on collectors that
+predate the processorhelper metric rework — `not-in-inventory` on a current
+collector is version drift, not a wrong name. Resolvers: `probeRows()`,
 `rowsForFamily(family)`, `eligibleAliases(row, inventory)`,
 `productPreferenceOrder(row, seenProducts)`, `displayHint(row, value)`,
 `bestOutcome(outcomes)`; integrity is pinned by `npm run test:stack`.
@@ -327,19 +347,31 @@ knows what is already seen). The policy:
   (older servers) is attempted. Otherwise the panel is `not-attempted` with
   the reason `metrics_query not exposed by this MCP (restricted tier)` — every
   row carries that outcome, zero calls are made, nothing is "absent".
-- **Inventory gating.** When the `metric_names` probe answered with data, its
-  list is the inventory: an alias is eligible only when *every* name in its
-  `requires` is present, and a row with no eligible alias is
-  `not-in-inventory` (no call; the reason lists the required names). Without
-  an inventory (probe failed / empty / unsupported — or a trimmed fixture)
-  every alias is eligible.
+- **Inventory: evidence of presence, never of absence.** When the
+  `metric_names` probe answered with data, its list is the inventory: an
+  alias is eligible when *every* name in its `requires` is present, and
+  eligible aliases are tried first — all of them, since the inventory is
+  evidence they exist (no per-row cap on that path). A row with **no**
+  eligible alias is `not-in-inventory` (no call; the reason names the
+  inventory size and the required names) **only when the inventory is
+  trusted**: `stackInventoryTrust(inventory)` trusts a list that carries `up`
+  (present on every Prometheus-compatible backend). The `metric_names` tool
+  has no completeness contract (no `limit`, no truncation marker; the
+  recorded reference fixture is a 25-name subset without `up`), so an
+  inventory without `up` — or an empty one — is treated as incomplete and
+  gates nothing: those rows fall back to the bounded cascade and read
+  `empty` / `failed` / `data` honestly, with `queried anyway` and the
+  inventory size in the reason of an empty answer. Without an inventory at
+  all (probe failed / empty / unsupported) every alias is eligible on the
+  bounded cascade. The sampler result carries `inventory: { size, trusted,
+  reason }` (not annotated) and the recorder prints the same verdict.
 - **Product preference.** A row's eligible aliases are ordered `generic`
   first, then products already seen in `liveVersions` (build_info,
   `grafana_health`, `traces_services`) or in the `backend_capabilities`
   inventory, then the rest in declared order.
-- **Bounded cascade.** At most 2 calls per row, stopping at the first alias
-  that returns data; an `empty` or `failed` answer falls through to the next
-  eligible alias and the last outcome is recorded.
+- **Bounded cascade.** Without a trusted inventory at most 2 calls per row,
+  stopping at the first alias that returns data; an `empty` or `failed`
+  answer falls through to the next alias and the last outcome is recorded.
 - **Global budget.** 48 `metrics_query` calls per panel; rows beyond it are
   `not-attempted` with the reason `call budget exhausted`.
 - **Every call goes through `quiet()`** under the family name
@@ -348,10 +380,11 @@ knows what is already seen). The policy:
 - **Parsing.** An instant vector in either envelope (`{ result }` or
   `{ data: { result } }`); the value is `Number(result[0].value[1])`. An empty
   array, a series without a sample, or `NaN` / `+Inf` / `-Inf` is `empty`
-  (value `null`); a non-vector answer is `failed` with the shape reason. A
-  `count` row whose answer carries only series identities counts the series.
-  Note that PromQL `count(up == 0)` returns an *empty* vector when nothing
-  matches — the panel records that as `empty`, which is the honest reading.
+  (value `null`) — for every unit: a series-only answer is never counted as
+  a value, because every `count` row is an aggregation returning one series
+  and "1" would be a fabricated number; a non-vector answer is `failed` with
+  the shape reason. The count rows' presence-guarded zero (registry section
+  above) is what lets a healthy stack read `0` instead of `empty`.
 - **Outcomes** are exactly `data | empty | failed | not-in-inventory |
   not-attempted` — a row is never "ok". No `Verified` stamp, no `Scaffold`
   marker, no grade input is produced by any of it; `displayHint(row, value)`
@@ -365,10 +398,22 @@ The Alertmanager and Grafana status rows ride the same fetch
 `alertmanager_silences` → `{ active, total }`; `grafana_datasources` →
 `[{ uid, name, type }]` then `grafana_datasource_health` per uid (at most 10,
 called with `{ uid }`) → `health: ok | error | unknown` plus a message trimmed
-to 200 chars (`unknown` when the health tool is not advertised, errored, or
-the datasource is beyond the cap); `grafana_contact_points` → a count and up
-to 32 names. Tools that answered join `mcp.toolsCalled`; the sampler's tool
-joins only when at least one row returned data or an honest empty.
+to 200 chars (`unknown` means NOT CHECKED — the health tool is not
+advertised, errored, or the datasource is beyond the cap — and is never
+folded into "not unhealthy"); `grafana_contact_points` → a count and up to 32
+names. Object payloads are located **envelope-first** (`locateObjectPayload`,
+the same rule `validateResponseShape` applies): a Prometheus-API-style
+`{ status: 'success', data: {...} }` wrapper is read from its inner document,
+so a wrapped `{ status: 'ERROR' }` health verdict reads `error`, never `ok`.
+Each observer returns `null` only when none of its tools is advertised (a
+tier fact); an advertised tool that fails (HTTP error, timeout, bad shape)
+yields a non-null result carrying `error` — annotated as
+`mcp.observed.alertmanager.error` / `mcp.observed.grafana.error` — so the
+surfaces say "probe failed", never "not exposed". Tools that answered join
+`mcp.toolsCalled`; the sampler's tool joins only when at least one row
+returned data or an honest empty. `hasToolsList` is whether the `tools/list`
+RPC succeeded: a server advertising an empty list reads `not-attempted`
+(tier), not a string of `tools/call` failures.
 
 Nothing has been recorded against a live server yet: the alias table is
 documentation-grounded until it is. `npm run record-fixtures`
@@ -398,9 +443,9 @@ step 2 writes none of them.
 
 The same annotations are read back, never re-sampled, on three surfaces:
 
-- `POST /api/draft-from-mcp` — `summary.stack = { status, reason, sampled, empty, failed, notInInventory, notAttempted, families: { <family>: <best outcome> }, rows: [{ id, family, product, value, unit, direction, outcome, hint, reason? }] }` parsed from `mcp.stack.*` and `mcp.observed.stack_metrics`; `hint` is the contracts' display-only `displayHint` (`'nonzero'` when a lower-is-comfortable row is above zero, else `null`) and is computed here, never stored. `summary.alertmanager = { version, uptime, clusterStatus, silences }` and `summary.grafana = { datasources, contactPoints }` come from the `mcp.observed.*` JSON; each is `null` when the surface was not exposed or the fetcher predates step 2. A `not-attempted` panel adds the warning `Stack self-metrics not attempted — metrics_query not exposed by this MCP tier.`
+- `POST /api/draft-from-mcp` — `summary.stack = { status, reason, sampled, empty, failed, notInInventory, notAttempted, families: { <family>: <best outcome> }, rows: [{ id, family, product, value, unit, direction, outcome, hint, reason? }] }` parsed from `mcp.stack.*` and `mcp.observed.stack_metrics`; `hint` is the contracts' display-only `displayHint` (`'nonzero'` when a lower-is-comfortable row is above zero, else `null`) and is computed here, never stored. `summary.alertmanager = { version, uptime, clusterStatus, silences, error }` and `summary.grafana = { datasources, healthChecked, contactPoints, error }` come from the `mcp.observed.*` JSON; each is `null` only when the surface was not advertised (or the fetcher predates step 2) — an advertised tool that failed keeps the summary with `error` set, and the server adds a `… status probe failed — <error>` warning. `healthChecked` counts the datasources that actually got a verdict; `health: 'unknown'` stays visible as "not checked". A `not-attempted` panel adds the warning `Stack self-metrics not attempted — metrics_query not exposed by this MCP tier.` (or `— <reason>.` for any other reason).
 - `GET /api/live-status` — `stackStatus` (`sampled` | `not-attempted` | `null`) and `stackSampled` (number).
-- The studio draft summary renders a "stack self-metrics — point-in-time sample, signal not verdict" block under the discovery rows: one row per family in `families` showing the family's best row (ratios as a percent, per-second to three decimals, seconds to one, counts as integers, `· nonzero` when hinted) or its outcome (`— empty`, `— probe failed: …`, `— not in inventory`), a single `— not attempted: metrics_query not exposed by this MCP tier` row on a restricted tier, then `alertmanager: v<version> · N active silences`, `datasources: N · M unhealthy: <names>` and `contact points: N` (`— not exposed` when absent).
+- The studio draft summary renders a "stack self-metrics — point-in-time sample, signal not verdict" block under the discovery rows: one row per family in `families` showing the family's best row (ratios as a percent, per-second to three decimals, seconds to one, counts as integers, `· nonzero` when hinted) or its outcome (`— empty`, `— probe failed: …`, `— not in inventory`; a family with no observed row reads `— not attempted: call budget exhausted`), a single `— not attempted: <summary.stack.reason>` row on a not-attempted panel, then `alertmanager: v<version> · N active silences` (`— probe failed: <error>` when advertised but failing), `datasources: N · M error: <names> · K unchecked: <names>` — or `N · health not checked (grafana_datasource_health not exposed or did not answer)` when no datasource got a verdict; `0 unhealthy`-style wording is never printed for a surface nothing checked — and `contact points: N`. `— not exposed` is reserved for a surface the MCP did not advertise.
 - Journeys — `liveEvidenceFacts(canonicalB).stack = { status, reason, sampled, empty, failed, notAttempted }` (status `null` and zero counts for a file-sourced Pack B) rides on the run record as `stack` and prints one `Stack self-metrics` line in the markdown report. No gate key reads it.
 
 ## Diagnostic Drift Semantics

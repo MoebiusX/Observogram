@@ -3696,7 +3696,8 @@ function renderStackSelfMetricsBlock(summary, row) {
   if (!stack) {
     lines.push(row('stack self-metrics', '— not sampled by this fetcher', true));
   } else if (stack.status !== 'sampled') {
-    lines.push(row('stack self-metrics', '— not attempted: metrics_query not exposed by this MCP tier', true));
+    // The server's reason is the source of truth (today: the tier).
+    lines.push(row('stack self-metrics', `— not attempted: ${stack.reason || 'metrics_query not exposed by this MCP tier'}`, true));
   } else {
     const rows = Array.isArray(stack.rows) ? stack.rows : [];
     for (const [family, familyOutcome] of Object.entries(stack.families || {})) {
@@ -3706,7 +3707,9 @@ function renderStackSelfMetricsBlock(summary, row) {
         .filter(({ r }) => r.family === family)
         .sort((a, b) => rank(a.r.outcome) - rank(b.r.outcome) || a.i - b.i)[0]?.r;
       if (!best) {
-        lines.push(row(family, stackOutcomeText(familyOutcome, stack.reason), true));
+        // A family with no observed row was never reached: its rows were
+        // counted not-attempted (call budget), not listed.
+        lines.push(row(family, stackOutcomeText(familyOutcome, familyOutcome === 'not-attempted' ? 'call budget exhausted' : null), true));
         continue;
       }
       const hint = `${best.id}${best.product && best.product !== 'generic' ? ` · ${best.product}` : ''}`;
@@ -3718,18 +3721,41 @@ function renderStackSelfMetricsBlock(summary, row) {
       }
     }
   }
+  // "— not exposed" is reserved for a surface the MCP did not advertise
+  // (summary null). An advertised tool that failed carries `error` and
+  // reads "probe failed" — a failure must never look like a tier limit.
   if (am) {
-    const silences = am.silences ? `${am.silences.active} active silence${am.silences.active === 1 ? '' : 's'}` : 'silences not exposed';
-    lines.push(row('alertmanager', `${am.version ? `v${am.version}` : 'version unknown'} · ${silences}`));
+    const answered = am.version || am.silences || am.clusterStatus || am.uptime;
+    if (!answered && am.error) {
+      lines.push(row('alertmanager', `— probe failed: ${am.error}`, true));
+    } else {
+      const silences = am.silences ? `${am.silences.active} active silence${am.silences.active === 1 ? '' : 's'}` : 'silences not answered';
+      lines.push(row('alertmanager', `${am.version ? `v${am.version}` : 'version unknown'} · ${silences}${am.error ? ` · probe failed: ${am.error}` : ''}`));
+    }
   } else {
     lines.push(row('alertmanager', '— not exposed', true));
   }
   if (gf) {
     if (Array.isArray(gf.datasources)) {
-      const unhealthy = gf.datasources.filter(d => d.health === 'error').map(d => d.name || d.uid || '?');
-      lines.push(row('datasources', `${gf.datasources.length} · ${unhealthy.length} unhealthy${unhealthy.length ? `: ${unhealthy.join(', ')}` : ''}`));
+      // Three buckets, never two: `unknown` means the health of that
+      // datasource was NOT checked (health tool not exposed / errored /
+      // beyond the cap) — "0 unhealthy" is printed only when at least one
+      // datasource actually got a verdict.
+      const label = (d) => d.name || d.uid || '?';
+      const errors = gf.datasources.filter(d => d.health === 'error').map(label);
+      const unchecked = gf.datasources.filter(d => d.health !== 'ok' && d.health !== 'error').map(label);
+      const checked = gf.datasources.length - unchecked.length;
+      let text;
+      if (gf.datasources.length === 0) text = '0';
+      else if (checked === 0) text = `${gf.datasources.length} · health not checked (grafana_datasource_health not exposed or did not answer)`;
+      else {
+        text = `${gf.datasources.length} · ${errors.length} error${errors.length ? `: ${errors.join(', ')}` : ''}`
+          + (unchecked.length ? ` · ${unchecked.length} unchecked: ${unchecked.join(', ')}` : '');
+      }
+      lines.push(row('datasources', text));
     }
     if (gf.contactPoints) lines.push(row('contact points', gf.contactPoints.count));
+    if (gf.error) lines.push(row('grafana', `— probe failed: ${gf.error}`, true));
   } else {
     lines.push(row('grafana', '— not exposed', true));
   }

@@ -1032,6 +1032,9 @@ function stackSummaryFromAnnotations(ann) {
   };
 }
 
+// A null summary means the surface was NOT ADVERTISED by the MCP (a tier
+// fact). An advertised tool that failed still yields a summary, carrying
+// `error` — the studio words that as "probe failed", never "not exposed".
 function alertmanagerSummaryFromAnnotations(ann) {
   const o = parseJsonAnnotation(ann['mcp.observed.alertmanager']);
   if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
@@ -1043,13 +1046,19 @@ function alertmanagerSummaryFromAnnotations(ann) {
     uptime: o.uptime == null ? null : String(o.uptime),
     clusterStatus: o.clusterStatus == null ? null : String(o.clusterStatus),
     silences,
+    error: o.error == null ? null : String(o.error).slice(0, 200),
   };
 }
 
 function grafanaSummaryFromAnnotations(ann) {
   const ds = parseJsonAnnotation(ann['mcp.observed.grafana.datasources']);
   const cp = parseJsonAnnotation(ann['mcp.observed.grafana.contact_points']);
-  if (!Array.isArray(ds) && !(cp && typeof cp === 'object')) return null;
+  const err = ann['mcp.observed.grafana.error'];
+  if (!Array.isArray(ds) && !(cp && typeof cp === 'object') && !err) return null;
+  // Health stays three-valued on the summary: `unknown` is "not checked"
+  // (health tool not exposed / errored / beyond the cap) and must never be
+  // folded into the non-error bucket — `healthChecked` counts the
+  // datasources that actually got a verdict.
   const datasources = Array.isArray(ds)
     ? ds.filter(d => d && typeof d === 'object').map(d => ({
         uid: d.uid == null ? null : String(d.uid),
@@ -1062,7 +1071,12 @@ function grafanaSummaryFromAnnotations(ann) {
   const contactPoints = cp && typeof cp === 'object' && !Array.isArray(cp)
     ? { count: Number(cp.count ?? 0) || 0, names: Array.isArray(cp.names) ? cp.names.map(String) : [] }
     : null;
-  return { datasources, contactPoints };
+  return {
+    datasources,
+    healthChecked: datasources ? datasources.filter(d => d.health !== 'unknown').length : 0,
+    contactPoints,
+    error: err == null ? null : String(err).slice(0, 200),
+  };
 }
 
 app.get('/api/live-status', (req, res) => {
@@ -1227,7 +1241,15 @@ app.post('/api/draft-from-mcp', async (req, res) => {
     // The stack panel is gated on metrics_query alone; a restricted tier
     // reads "not attempted", never "healthy" and never "absent".
     if (summary.stack && summary.stack.status === 'not-attempted') {
-      summary.warnings.push('Stack self-metrics not attempted — metrics_query not exposed by this MCP tier.');
+      summary.warnings.push(/not exposed/.test(summary.stack.reason || '')
+        ? 'Stack self-metrics not attempted — metrics_query not exposed by this MCP tier.'
+        : `Stack self-metrics not attempted — ${summary.stack.reason || 'no reason recorded'}.`);
+    }
+    if (summary.alertmanager?.error) {
+      summary.warnings.push(`Alertmanager status probe failed — ${summary.alertmanager.error}`);
+    }
+    if (summary.grafana?.error) {
+      summary.warnings.push(`Grafana status probe failed — ${summary.grafana.error}`);
     }
     const attemptedNothing = (k) => probesAttempted.includes(k) && !probesSucceeded.includes(k) && !probesUnsupported.includes(k);
     if (attemptedNothing('recording_rules')) {

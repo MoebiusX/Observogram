@@ -29,7 +29,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PROBES } from './fetch-live-pack.mjs';
 import { capability } from './lib/contracts/mcp-capabilities.mjs';
-import { validateResponseShape } from './lib/contracts/response-shapes.mjs';
+import { validateResponseShape, locateObjectPayload } from './lib/contracts/response-shapes.mjs';
 import { STACK_SELF_METRIC_PROBES } from './lib/contracts/stack-self-metrics.mjs';
 import { createHarness } from './lib/harness.mjs';
 
@@ -126,7 +126,7 @@ for (const c of CASES) {
 //
 // tools/fixtures/mcp/synthetic/ holds HAND-WRITTEN samples (each carries a
 // top-level `_synthetic` marker) for shapes no recording exists for yet —
-// see the fixtures README, "Recorded vs synthetic". Only the shape contract
+// see the fixtures README, "Provenance". Only the shape contract
 // is pinned here (SHAPE / TOLERANT / CRITICAL); there are no adapted
 // goldens because these capabilities have no PROBES adapter (the fetcher's
 // observeAlertmanager / observeGrafana parse them directly).
@@ -225,6 +225,21 @@ const vObjAsList = validateResponseShape('status-object', { silences: [] });
 assert(!vObjAsList.ok, 'status-object: a response without any status key FAILS', vObjAsList);
 const vWrapped = validateResponseShape('health-object', { data: { status: 'ERROR', message: 'synthetic' } });
 assert(vWrapped.ok, 'health-object: a { data: {...} } envelope is located', vWrapped);
+// Envelope-first: a Prometheus-API-style wrapper carries the generic key
+// `status` at its root — the located payload must be the INNER document,
+// so a wrapped error never reads as a healthy status.
+const envHealth = { status: 'success', data: { status: 'ERROR', message: 'connection refused' } };
+assert(validateResponseShape('health-object', envHealth).ok, 'health-object: { status: success, data: {...} } envelope passes');
+assert(locateObjectPayload('health-object', envHealth) === envHealth.data,
+  'health-object: the located payload is the inner data document, not the success wrapper', locateObjectPayload('health-object', envHealth));
+const envStatus = { status: 'success', data: { versionInfo: { version: '0.27.0' }, cluster: { status: 'ready' } } };
+assert(locateObjectPayload('status-object', envStatus) === envStatus.data,
+  'status-object: the located payload is the inner data document, not the success wrapper', locateObjectPayload('status-object', envStatus));
+const bareStatus = { versionInfo: { version: '0.27.0' }, cluster: { status: 'ready' }, data: { unrelated: true } };
+assert(locateObjectPayload('status-object', bareStatus) === bareStatus,
+  'status-object: a bare document whose `data` carries no status key still locates at the root');
+assert(locateObjectPayload('health-object', { silences: [] }) === null, 'locateObjectPayload is null when no candidate carries the key group');
+assert(locateObjectPayload('silences', { silences: [] }) === null, 'locateObjectPayload is null for list shapes');
 const vArray = validateResponseShape('health-object', [{ status: 'OK' }]);
 assert(!vArray.ok, 'health-object: a list is not an object payload', vArray);
 
