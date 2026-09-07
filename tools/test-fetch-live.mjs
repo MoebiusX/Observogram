@@ -747,6 +747,72 @@ assert(!probedEmpty.metadata.annotations['mcp.probesSucceeded']?.includes('recor
 assert(probedEmpty.metadata.annotations['mcp.verified.queries.recording_rules'] === undefined,
        'recording rules NOT marked verified when probes returned empty');
 
+// ---------- case 4a: probe-outcome honesty — unsupported vs failed ----------
+//
+// tools/list answered and exposes NO candidate for a family: the probe
+// loop records outcome 'unsupported' (a restricted MCP tier). A family
+// whose every exposed candidate errored records 'failed', and fetchMcp's
+// probeFailures map (keyed by candidate tool NAME) carries the reason.
+// The pack must keep the two apart — "not exposed" is never "no answer"
+// — and surface WHY a probe failed, trimmed like every observed error.
+
+{
+  const longError = 'HTTP 503 Service Unavailable: ' + 'x'.repeat(300);
+  const outcomes = buildCanonicalPack({
+    refreshedAt,
+    mcpUrl: 'https://fake-mcp.test/observability',
+    health: { services: [{ name: 'svc-checkout', criticality: 'tier-2' }] },
+    topology: { dependencies: [] },
+    anomaliesActive: {},
+    baselinesData: { baselines: [] },
+    probeResults: {
+      recording_rules: { tool: 'vmalert_rules', attempted: ['vmalert_rules'], adapted: [{ name: 'job:up:ratio', expr: 'avg(up)' }], outcome: 'data' },
+      dashboards:      { tool: null, attempted: ['grafana_dashboards_search', 'grafana_search'], adapted: null, outcome: 'failed' },
+      scrape_configs:  { tool: null, attempted: ['metrics_targets', 'prometheus_targets'], adapted: null,
+                         skippedReason: 'no candidate matched tools/list inventory', outcome: 'unsupported' },
+      metric_names:    { tool: null, attempted: ['metrics_label_values'], adapted: null,
+                         skippedReason: 'no candidate matched tools/list inventory', outcome: 'unsupported' },
+    },
+    probeFailures: {
+      grafana_dashboards_search: 'HTTP 502 Bad Gateway',
+      grafana_search: longError,
+      'metrics_query.ALERTS': 'HTTP 503',            // fallback key — no family's candidate list names it
+      metrics_targets: 'never tried (unsupported)',  // an unsupported family must not gain an error entry from a stale key
+    },
+    errors: {},
+  });
+  const oAnn = outcomes.metadata.annotations;
+  assert(validateCanonical(outcomes, SCHEMA).length === 0, 'probe-outcome pack validates against canonical schema');
+  assert(oAnn['mcp.probesUnsupported'] === 'scrape_configs,metric_names',
+         'mcp.probesUnsupported lists the families with outcome unsupported, in probe order', oAnn['mcp.probesUnsupported']);
+  assert(oAnn['mcp.probesFailed'] === 'dashboards',
+         'mcp.probesFailed lists ONLY the failed family — unsupported families are not failures', oAnn['mcp.probesFailed']);
+  assert(oAnn['mcp.probesSucceeded'] === 'recording_rules',
+         'mcp.probesSucceeded is unaffected', oAnn['mcp.probesSucceeded']);
+  assert(oAnn['mcp.probesAttempted'] === 'recording_rules,dashboards,scrape_configs,metric_names',
+         'mcp.probesAttempted still lists every family (unsupported included) — existing key unchanged', oAnn['mcp.probesAttempted']);
+  assert(typeof oAnn['mcp.probeErrors.dashboards'] === 'string' && oAnn['mcp.probeErrors.dashboards'].startsWith('HTTP 503 Service Unavailable: '),
+         'mcp.probeErrors.<family> carries the LAST erroring candidate of the family', oAnn['mcp.probeErrors.dashboards']);
+  assert(oAnn['mcp.probeErrors.dashboards'].length === 200,
+         'probe errors are trimmed to 200 chars', oAnn['mcp.probeErrors.dashboards'].length, 200);
+  assert(oAnn['mcp.probeErrors.recording_rules'] === undefined,
+         'a family whose winning candidate answered carries no error');
+  assert(oAnn['mcp.probeErrors.scrape_configs'] === undefined && oAnn['mcp.probeErrors.metric_names'] === undefined,
+         'unsupported families carry no probe error even when a stale probeFailures key names a candidate',
+         [oAnn['mcp.probeErrors.scrape_configs'], oAnn['mcp.probeErrors.metric_names']]);
+  assert(!Object.keys(oAnn).some(k => k.startsWith('mcp.probeErrors.') && !['dashboards'].includes(k.slice('mcp.probeErrors.'.length))),
+         'probeFailures keys that match no family candidate (e.g. metrics_query.ALERTS) never become annotations',
+         Object.keys(oAnn).filter(k => k.startsWith('mcp.probeErrors.')));
+  assert(oAnn['mcp.verified.telemetry.scrape'] === undefined && oAnn['mcp.discovered.scrape_jobs'] === undefined,
+         'an unsupported scrape_configs family attests nothing');
+
+  // Nothing unsupported, nothing failed → the keys exist but are empty /
+  // absent, so older readers keep parsing ''.
+  const cleanAnn = probedEmpty.metadata.annotations;
+  assert(cleanAnn['mcp.probesUnsupported'] === '', 'mcp.probesUnsupported is an empty string when every family is exposed', cleanAnn['mcp.probesUnsupported']);
+  assert(!Object.keys(cleanAnn).some(k => k.startsWith('mcp.probeErrors.')), 'no mcp.probeErrors.* without probeFailures');
+}
+
 // ---------- case 5: VMAlert probe adapters recover REAL exprs ----------
 //
 // Regression guard for the name-only-stub bug: on VictoriaMetrics stacks

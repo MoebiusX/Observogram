@@ -382,7 +382,7 @@ export function partialEvidenceBanner(model) {
       (${ev.attempted.length - ev.failed.length} of ${ev.attempted.length} surfaces responded) — the endpoint was likely mid-deploy or overloaded.
       Anything that lives on the failed surface is invisible to this comparison, so
       <strong>"${escapeHtml(aLabel)}" is an upper bound, not a count</strong>.
-      Redraft from MCP before acting on this drift.
+      Redraft from MCP before acting on this drift.${(ev.unsupported || []).length ? ` restricted MCP tier — not exposed: ${escapeHtml(ev.unsupported.join(', '))}` : ''}
     </div>`;
 }
 

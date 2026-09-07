@@ -205,18 +205,49 @@ export function instrumentGradeFor(scorePctExact) {
 // deploy) — the fetcher records that honestly in mcp.probesFailed, but a
 // thin Pack B silently inflates "declared, not live" into garbage drift.
 // Pure so it's unit-testable; the drift drill renders a loud banner from it.
+//
+// Additive keys (vendored downstream — never remove or rename, see
+// docs/VENDORING.md):
+//   unsupported — probe families the MCP does not expose at all
+//                 (mcp.probesUnsupported): a restricted tier, not an outage.
+//   errors      — { family: last error message } from mcp.probeErrors.<family>.
+//   vantage     — how much of the live surface this draft could see:
+//                 'full' (nothing failed, nothing unsupported),
+//                 'partial' (some probes failed — a hole of unknown size),
+//                 'restricted' (nothing failed, but some families are not
+//                 exposed by this MCP tier), 'lost' (every attempted family
+//                 failed or is unsupported), 'none' (not a live draft).
+// `partial` keeps its meaning: outright failures only.
 export function partialLiveEvidence(packB) {
   const ann = packB?.meta?.annotations || packB?.metadata?.annotations || {};
   const list = (k) => String(ann[k] || '').split(',').map(s => s.trim()).filter(Boolean);
   const failed = list('mcp.probesFailed');
   const empty = list('mcp.probesEmpty');
   const attempted = list('mcp.probesAttempted');
+  const unsupported = list('mcp.probesUnsupported');
+  const errors = {};
+  for (const [k, v] of Object.entries(ann)) {
+    if (k.startsWith('mcp.probeErrors.') && v != null && String(v) !== '') {
+      errors[k.slice('mcp.probeErrors.'.length)] = String(v);
+    }
+  }
   const isLiveDraft = !!ann['mcp.url'];
+  const noAnswer = new Set([...failed, ...unsupported]);
+  let vantage = 'none';
+  if (isLiveDraft) {
+    if (attempted.length > 0 && attempted.every(p => noAnswer.has(p))) vantage = 'lost';
+    else if (failed.length > 0) vantage = 'partial';
+    else if (unsupported.length > 0) vantage = 'restricted';
+    else vantage = 'full';
+  }
   return {
     isLiveDraft,
     failed,
     empty,
     attempted,
+    unsupported,
+    errors,
+    vantage,
     // Only outright failures make the evidence PARTIAL — an empty probe is
     // an honest zero, a failed probe is a hole of unknown size.
     partial: isLiveDraft && failed.length > 0,

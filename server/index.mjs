@@ -987,6 +987,10 @@ app.get('/api/live-status', (req, res) => {
       url:                a['mcp.url']                || null,
       toolsCalled:        a['mcp.toolsCalled']        || '',
       toolsFailed:        a['mcp.toolsFailed']        || '',
+      // Probe-outcome honesty: families that got no answer (a hole) vs
+      // families this MCP tier simply doesn't expose (a restriction).
+      probesFailed:       a['mcp.probesFailed']       || '',
+      probesUnsupported:  a['mcp.probesUnsupported']  || '',
       servicesDiscovered: a['mcp.servicesDiscovered'] || '',
       baselinesComputed:  a['mcp.baselinesComputed']  || '0',
       activeAnomalies:    a['mcp.activeAnomalies']    || '0',
@@ -1037,6 +1041,12 @@ app.post('/api/draft-from-mcp', async (req, res) => {
     const probesSucceeded = (ann['mcp.probesSucceeded'] || '').split(',').filter(Boolean);
     const probesEmpty     = (ann['mcp.probesEmpty']     || '').split(',').filter(Boolean);
     const probesFailed    = (ann['mcp.probesFailed']    || '').split(',').filter(Boolean);
+    const probesUnsupported = (ann['mcp.probesUnsupported'] || '').split(',').filter(Boolean);
+    // Why a family got no answer — the fetcher's last candidate error.
+    const probeErrors = {};
+    for (const [k, v] of Object.entries(ann)) {
+      if (k.startsWith('mcp.probeErrors.') && v) probeErrors[k.slice('mcp.probeErrors.'.length)] = String(v);
+    }
 
     // Parse the capability inventory (skill → backend → product → versions)
     // out of the flat annotation set the fetcher stamped. The studio's
@@ -1090,6 +1100,7 @@ app.post('/api/draft-from-mcp', async (req, res) => {
         toolsExposed:    (ann['mcp.toolsExposed']    || '').split(',').filter(Boolean),
         toolsUnmatched:  (ann['mcp.toolsUnmatched']  || '').split(',').filter(Boolean),
         probesAttempted, probesSucceeded, probesEmpty, probesFailed,
+        probesUnsupported, probeErrors,
       },
       // Full backend_capabilities inventory — the version-gating contract.
       // When null, the MCP didn't expose backend_capabilities (older
@@ -1106,7 +1117,13 @@ app.post('/api/draft-from-mcp', async (req, res) => {
     if ((summary.discovered.toolsFailed || []).length) {
       summary.warnings.push(`MCP tools that failed: ${summary.discovered.toolsFailed.join(', ')}`);
     }
-    const attemptedNothing = (k) => probesAttempted.includes(k) && !probesSucceeded.includes(k);
+    // A family the MCP doesn't expose at all is a tier restriction, not an
+    // empty answer — one honest line, never the per-family "returned empty"
+    // narrative below.
+    if (probesUnsupported.length) {
+      summary.warnings.push(`Restricted MCP tier — families not exposed by this server: ${probesUnsupported.join(', ')}.`);
+    }
+    const attemptedNothing = (k) => probesAttempted.includes(k) && !probesSucceeded.includes(k) && !probesUnsupported.includes(k);
     if (attemptedNothing('recording_rules')) {
       summary.warnings.push('Recording-rule probes returned empty. The SLI/SLO sections were synthesised from system_health — if your platform has Prometheus/Mimir rules, the MCP isn\'t exposing them yet.');
     }

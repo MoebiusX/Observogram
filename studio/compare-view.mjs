@@ -1073,7 +1073,7 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
       ${liveEvidence.failed.length} of ${liveEvidence.attempted.length} probe${liveEvidence.failed.length === 1 ? '' : 's'} failed during the live draft
       (<code>${escapeHtml(liveEvidence.failed.join(', '))}</code>) — the live endpoint was likely mid-deploy or overloaded.
       Pack B may be missing whole surfaces, so <strong>"${escapeHtml(frame.aLabel)}" is probably overstated</strong>.
-      Redraft from MCP before acting on this drift.
+      Redraft from MCP before acting on this drift.${(liveEvidence.unsupported || []).length ? ` restricted MCP tier — not exposed: ${escapeHtml(liveEvidence.unsupported.join(', '))}` : ''}
     </div>` : '';
 
   wrap.innerHTML = `

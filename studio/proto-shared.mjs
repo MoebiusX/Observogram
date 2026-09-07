@@ -400,7 +400,7 @@ export function partialEvidenceBanner(model) {
       ${ev.failed.length} of ${ev.attempted.length} probe${ev.failed.length === 1 ? '' : 's'} failed during the live draft
       (<code>${escapeHtml(ev.failed.join(', '))}</code>) — the live endpoint was likely mid-deploy or overloaded.
       Pack B may be missing whole surfaces, so <strong>"${escapeHtml(aLabel)}" is probably overstated</strong>.
-      Redraft from MCP before acting on this drift.
+      Redraft from MCP before acting on this drift.${(ev.unsupported || []).length ? ` restricted MCP tier — not exposed: ${escapeHtml(ev.unsupported.join(', '))}` : ''}
     </div>`;
 }
 

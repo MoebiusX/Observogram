@@ -7,7 +7,8 @@
  */
 
 import { mkdtempSync, rmSync, readdirSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve as resolvePath } from 'node:path';
+import { join, dirname, resolve as resolvePath } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 
 // Redirect the pack workspace to a temp dir BEFORE the server boots, so
@@ -773,6 +774,47 @@ try {
   if (liveStatus.present) {
     assert(typeof liveStatus.refreshedAt === 'string' || liveStatus.refreshedAt === null,
            'live-status surfaces refreshedAt when present');
+  }
+  // Probe-outcome honesty on the badge: when a live pack exists, the
+  // status carries the failed AND the unsupported probe families as the
+  // same comma-string shape as toolsFailed. The live pack is an ignored
+  // runtime file (examples/production-live.pack.yaml); when the working
+  // tree has none, plant a minimal one for the assertion and remove it
+  // afterwards — never overwrite a real refresh.
+  {
+    const livePackPath = resolvePath(dirname(fileURLToPath(import.meta.url)), '..', 'examples', 'production-live.pack.yaml');
+    const planted = !existsSync(livePackPath);
+    if (planted) {
+      writeFileSync(livePackPath, [
+        'apiVersion: observability.pack/v1',
+        'kind: ObservabilityPack',
+        'metadata:',
+        '  name: production-live',
+        '  annotations:',
+        '    mcp.refreshedAt: "2026-06-06T00:00:00Z"',
+        '    mcp.url: "https://fake-mcp.test/observability"',
+        '    mcp.toolsFailed: ""',
+        '    mcp.probesFailed: "dashboards"',
+        '    mcp.probesUnsupported: "scrape_configs,metric_names"',
+        '    mcp.probeErrors.dashboards: "HTTP 502 Bad Gateway"',
+        'spec: {}',
+        '',
+      ].join('\n'));
+    }
+    try {
+      const withPack = await getJson(base, '/api/live-status');
+      assert(withPack.present === true, 'live-status reports present with a live pack on disk');
+      assert(typeof withPack.probesFailed === 'string' && typeof withPack.probesUnsupported === 'string',
+             'live-status carries probesFailed and probesUnsupported as comma strings',
+             [withPack.probesFailed, withPack.probesUnsupported]);
+      if (planted) {
+        assert(withPack.probesFailed === 'dashboards' && withPack.probesUnsupported === 'scrape_configs,metric_names',
+               'live-status reads mcp.probesFailed / mcp.probesUnsupported straight from the pack annotations',
+               [withPack.probesFailed, withPack.probesUnsupported]);
+      }
+    } finally {
+      if (planted) rmSync(livePackPath, { force: true });
+    }
   }
 
   // POST /api/refresh-live — missing mcpUrl

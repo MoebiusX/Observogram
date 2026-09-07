@@ -671,6 +671,7 @@ export function buildCanonicalPack({
   anomaliesActive = {},
   baselinesData = {},
   probeResults = {},
+  probeFailures = {},
   errors = {},
   discoveredTools = [],
   unmatchedTools = [],
@@ -689,6 +690,7 @@ export function buildCanonicalPack({
   anomaliesActive = anomaliesActive || {};
   baselinesData   = baselinesData   || {};
   probeResults    = probeResults    || {};
+  probeFailures   = probeFailures   || {};
   errors          = errors          || {};
 
   const services = Array.isArray(health.services) ? health.services : [];
@@ -727,6 +729,27 @@ export function buildCanonicalPack({
   const probesSucceeded = probesByOutcome('data');
   const probesEmpty     = probesByOutcome('empty');
   const probesFailed    = probesByOutcome('failed');
+  // unsupported — tools/list answered and NO candidate for the family is
+  // exposed: a restricted MCP tier, not an outage. Distinct from `failed`
+  // (we asked, nothing answered) so the studio never blames a deploy for
+  // a surface the server simply doesn't offer.
+  const probesUnsupported = probesByOutcome('unsupported');
+  // Last error per probe family: fetchMcp keys probeFailures by candidate
+  // tool NAME; map each name back to its family through the candidate
+  // list the probe loop recorded in `attempted`. The last erroring
+  // candidate wins (it is the one the cascade gave up on).
+  const probeErrors = {};
+  for (const [family, v] of Object.entries(probeResults || {})) {
+    // An unsupported family never called anything: its `attempted` is
+    // the full candidate list, so a same-named tool that errored for a
+    // DIFFERENT family must not be blamed on it.
+    if (classify(v) === 'unsupported') continue;
+    const attempted = Array.isArray(v?.attempted) ? v.attempted : [];
+    for (const name of attempted) {
+      const msg = probeFailures[name];
+      if (typeof msg === 'string' && msg) probeErrors[family] = trimError(msg);
+    }
+  }
 
   const annotations = {
     'mcp.refreshedAt':         refreshedAt,
@@ -741,6 +764,7 @@ export function buildCanonicalPack({
     // distinct from "— not attempted".
     'mcp.probesEmpty':         probesEmpty.join(','),
     'mcp.probesFailed':        probesFailed.join(','),
+    'mcp.probesUnsupported':   probesUnsupported.join(','),
     'mcp.servicesDiscovered':  serviceNames.join(','),
     // Count of anomaly baselines the tool returned — evidence that
     // anomalies_baselines answered, NOT an MTTD/MTTR measurement.
@@ -755,6 +779,11 @@ export function buildCanonicalPack({
     // the user can name what to wire next.
     'mcp.toolsUnmatched':      unmatchedTools.map(t => t.name).join(','),
   };
+  // WHY a probe family got no answer — the last candidate's error message,
+  // trimmed like every other observed error. Absent when nothing errored.
+  for (const [family, msg] of Object.entries(probeErrors)) {
+    annotations[`mcp.probeErrors.${family}`] = msg;
+  }
   // Per-probe count annotations — ANY probe with an array result, whether
   // empty or populated, lands here so the studio can read "0" honestly.
   for (const [k, v] of Object.entries(probeResults || {})) {
@@ -1990,6 +2019,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
   return {
     health, topology, anomaliesActive, baselinesData,
     probeResults, errors,
+    probeFailures,              // { <candidate tool name>: last error message } — why a probe got no answer
     discoveredTools,            // full list from tools/list (or empty if unsupported)
     unmatchedTools,             // tools the MCP exposes that we don't probe yet
     capabilities,               // parsed backend_capabilities inventory (or null)

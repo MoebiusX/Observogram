@@ -62,7 +62,9 @@ metadata:
     mcp.probesAttempted: "recording_rules,alert_rules,dashboards,metric_names,scrape_configs"
     mcp.probesSucceeded: "recording_rules,alert_rules,dashboards,metric_names,scrape_configs"
     mcp.probesEmpty: ""
-    mcp.probesFailed: ""
+    mcp.probesFailed: "dashboards"
+    mcp.probesUnsupported: "scrape_configs"        # tools/list exposes no candidate — a restricted tier, not an outage
+    mcp.probeErrors.dashboards: "HTTP 502 Bad Gateway"   # last erroring candidate of a failed family (trimmed to 200 chars)
 
     mcp.verified.otel.metrics: "2026-06-09T00:09:14.730Z"
     mcp.verified.telemetry.scrape: "2026-06-09T00:09:14.730Z"

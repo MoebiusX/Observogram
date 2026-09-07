@@ -2254,12 +2254,26 @@ function renderMcpBadge(status) {
     return;
   }
   const stale = status.refreshedAt && (Date.now() - Date.parse(status.refreshedAt) > MCP_STALE_HOURS * 3600_000);
-  const errored = (status.toolsFailed || '').trim() !== '';
+  const toolsFailed = (status.toolsFailed || '').trim();
+  // A probe family that got no answer is a hole in the live picture —
+  // the badge goes red for it exactly as for a failed core tool.
+  const probesFailed = (status.probesFailed || '').trim();
+  // Families this MCP tier doesn't expose at all: a restriction, not an
+  // error — named in the title, never a colour state of its own.
+  const probesUnsupported = (status.probesUnsupported || '').trim();
+  const errored = toolsFailed !== '' || probesFailed !== '';
   btn.dataset.mcpState = errored ? 'error' : stale ? 'stale' : 'fresh';
   ageEl.textContent = fmtRelative(status.refreshedAt) || '—';
-  btn.title = errored
-    ? `MCP refresh had errors (${status.toolsFailed})`
+  const errorBits = [
+    toolsFailed ? `tools: ${toolsFailed}` : '',
+    probesFailed ? `probes with no answer: ${probesFailed}` : '',
+  ].filter(Boolean);
+  const title = errored
+    ? `MCP refresh had errors (${errorBits.join('; ')})`
     : `Last refresh ${fmtRelative(status.refreshedAt)} from ${status.url || 'unknown'}`;
+  btn.title = probesUnsupported
+    ? `${title} · restricted tier: families ${probesUnsupported} not exposed`
+    : title;
 }
 
 function renderMcpStatusBody(status) {
@@ -2274,6 +2288,8 @@ function renderMcpStatusBody(status) {
     ['mcp url',    status.url || '—'],
     ['tools called',  status.toolsCalled || '—'],
     ['tools failed',  status.toolsFailed || 'none'],
+    ['probes failed', status.probesFailed || 'none'],
+    ['not exposed',   status.probesUnsupported || 'none'],
     ['services',   status.servicesDiscovered || '—'],
     ['baselines',  status.baselinesComputed || '0'],
     ['anomalies',  status.activeAnomalies   || '0'],
@@ -3665,17 +3681,23 @@ function renderDraftMcpResult(out) {
   const probesS = new Set(d.probesSucceeded || []);
   const probesE = new Set(d.probesEmpty || []);
   const probesF = new Set(d.probesFailed || []);
-  // Three distinct outcomes when a probe was attempted:
-  //   data     — MCP responded with real content → show count
-  //   empty    — MCP responded with empty payload → "0 (none configured)"
-  //              honest zero, e.g. Krystaline has no Prometheus rules
-  //   failed   — every candidate errored / 503'd → "— probe failed"
-  //              transient or systemic, not the same as zero
+  const probesU = new Set(d.probesUnsupported || []);
+  const probeErrors = d.probeErrors || {};
+  // Four distinct outcomes when a probe was attempted:
+  //   data        — MCP responded with real content → show count
+  //   empty       — MCP responded with empty payload → "0 (none configured)"
+  //                 honest zero, e.g. Krystaline has no Prometheus rules
+  //   failed      — every candidate errored / 503'd → "— probe failed"
+  //                 transient or systemic, not the same as zero
+  //   unsupported — tools/list exposes no candidate for the family →
+  //                 "— not exposed by this MCP": a tier restriction, not
+  //                 an outage; nothing to retry.
   const probeRow = (label, key, value) => {
     if (!probesA.has(key)) return '';
     if (probesS.has(key))  return row(label, value || 0);
     if (probesE.has(key))  return row(label, `0 — none configured`, true);
-    if (probesF.has(key))  return row(label, '— probe failed', true);
+    if (probesU.has(key))  return row(label, '— not exposed by this MCP', true);
+    if (probesF.has(key))  return row(label, probeErrors[key] ? `— probe failed: ${probeErrors[key]}` : '— probe failed', true);
     // Older packs (pre-Phase 5) don't have probesEmpty/probesFailed
     // annotations; fall back to the original behaviour.
     return row(label, '— probed, none found', true);

@@ -32,6 +32,17 @@ promises to keep stable.
 `tools/test-diagnostic-grade.mjs` fails CI if an import ever creeps into the
 two zero-import modules, so the seam cannot erode silently.
 
+**Additive keys on `partialLiveEvidence(packB)`.** The result keeps its
+original shape (`isLiveDraft`, `failed`, `empty`, `attempted`, `partial` —
+`partial` still means *outright probe failures only*) and gains optional keys
+a downstream host may ignore: `unsupported` (probe families the MCP tier does
+not expose, from `mcp.probesUnsupported`), `errors` (`{ family: message }`
+from `mcp.probeErrors.<family>`), and `vantage` — `'full'` (nothing failed,
+nothing unsupported), `'partial'` (some probes failed), `'restricted'` (nothing
+failed, some families not exposed), `'lost'` (every attempted family failed or
+is unsupported), `'none'` (not a live draft). Keys are only ever added here,
+never renamed or removed.
+
 ## What the host supplies
 
 **`verdict-ui.mjs` reads no global state.** Its imports are the vendorable
