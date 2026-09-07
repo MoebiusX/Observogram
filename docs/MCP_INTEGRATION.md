@@ -64,15 +64,27 @@ metadata:
     mcp.probesEmpty: ""
     mcp.probesFailed: ""
 
-    mcp.verified.otel: "2026-06-09T00:09:14.730Z"
+    mcp.verified.otel.metrics: "2026-06-09T00:09:14.730Z"
     mcp.verified.telemetry.scrape: "2026-06-09T00:09:14.730Z"
+    mcp.verified.pipelines.exporters.metrics: "2026-06-09T00:09:14.730Z"
     mcp.verified.queries.recording_rules: "2026-06-09T00:09:14.730Z"
+    mcp.verified.slis.svc_checkout_availability: "2026-06-09T00:09:14.730Z"
     mcp.verified.dashboards: "2026-06-09T00:09:14.730Z"
     mcp.verified.policy.burn_rate_alerts[0]: "2026-06-09T00:09:14.730Z"
 
     mcp.discovered.alert_rule_names: "svc_checkout_availability_99_9_burn_14x_5m_1h,..."
     mcp.discovered.alert_rules_unmapped: "svc_payments_latency_99"
     mcp.discovered.alert_rules_severity_inferred: ""
+    mcp.baselinesComputed: "2"
+
+    mcp.scaffold.otel: "schema-required fallback; not attested by any MCP tool"
+    mcp.scaffold.pipelines.receivers[0]: "schema-required fallback; not attested by any MCP tool"
+    mcp.scaffold.pipelines.processors[0]: "schema-required fallback; not attested by any MCP tool"
+    mcp.scaffold.pipelines.exporters.logs: "schema-required fallback; not attested by any MCP tool"
+    mcp.scaffold.pipelines.exporters.traces: "schema-required fallback; not attested by any MCP tool"
+    mcp.scaffold.telemetry.backends.logs-elastic: "schema-required fallback; not attested by any MCP tool"
+    mcp.scaffold.alerting.routes[0]: "schema-required fallback; not attested by any MCP tool"
+    mcp.scaffold.baselines: "schema-required fallback; not attested by any MCP tool"
     mcp.scaffold.policy.burn_rate_alerts[0]: "schema-required fallback; no burn-rate alerting rule discovered via MCP"
 ```
 
@@ -82,6 +94,37 @@ counterpart of `crawler.scaffold.<symbol>`) as `Scaffold` — a schema-forced
 placeholder the MCP did not attest, parked by the grade rather than counted.
 The Diagnostic Grade uses these annotations to decide whether a fresh live
 signal exists.
+
+### What the fetcher invents, and how it says so
+
+The pack schema forces sections no MCP tool can attest. Every such entry the
+fetcher has to invent is stamped `mcp.scaffold.<symbol>` (the symbol is the
+one the adapter passes to `sourceOf`) and never `mcp.verified.<symbol>`:
+
+| Placeholder | Symbol | Becomes `Verified` when |
+|---|---|---|
+| `spec.otel` (semconv, SDK languages, sampling, propagators) | `otel` | never — only `otel.metrics` is stamped, from the metric inventory |
+| Collector receiver / processors | `pipelines.receivers[0]`, `pipelines.processors[<i>]` | never |
+| Logs / traces exporters | `pipelines.exporters.logs`, `pipelines.exporters.traces` | never |
+| Metrics exporter | `pipelines.exporters.metrics` | scrape targets or a metric inventory came back |
+| Fallback backends (no `backend_capabilities`) | `telemetry.backends.metrics-prom` / `logs-elastic` / `traces-jaeger` | a `*_build_info` capture for prometheus/victoriametrics/mimir; the topology names jaeger or `traces_services` answered; never for elasticsearch |
+| Per-service availability SLI/SLO guesses, `platform_availability` | `slis.<id>`, `slos.<id>` | never as guesses — SLIs inferred from real recorded rules are `Verified`; an SLO re-identified by a discovered burn-rate group is `Verified` |
+| Dashboard stub | `dashboards.platform-overview` | never (discovered dashboards replace it) |
+| SEV1 → Teams route | `alerting.routes[0]` | never |
+| Baselines | `baselines` | never |
+| Burn-rate placeholder | `policy.burn_rate_alerts[0]` | never (mapped rules replace it) |
+
+`spec.baselines` is always the platform default for the declared criticality
+(`measurement_source: platform-default`). Earlier builds derived
+`mttd_target_p50` from the smallest `anomalies_baselines` `thresholdMs` — a
+latency-anomaly threshold is not a time-to-detect target, so that derivation is
+gone. `mcp.baselinesComputed` still counts the anomaly baselines the tool
+returned: it is evidence the tool answered, **not** an MTTD measurement.
+
+Known limitation: SLOs inferred from recorded rules carry a placeholder
+objective (`0.99`) and window (`30d`) unless a discovered burn-rate group
+re-identifies them; the SLI is `Verified` (the recorded series exist), the SLO
+stays `Declared`.
 
 ### Burn-rate alerts are mapped, never synthesised
 

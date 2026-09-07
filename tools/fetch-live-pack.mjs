@@ -338,12 +338,11 @@ function defaultBaselines(criticality) {
   return { mttd_target_p50: '15m', mttr_target_p50: '1d' };
 }
 
-function durationFromMs(ms, fallback) {
-  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return fallback;
-  if (ms < 1000) return `${Math.max(1, Math.round(ms))}ms`;
-  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
-  return `${Math.max(1, Math.round(ms / 60_000))}m`;
-}
+// Value written under every mcp.scaffold.<symbol> key the fetcher stamps
+// on a schema-forced placeholder. Same convention as crawler.scaffold.*:
+// a short human sentence saying WHY the entry exists and that nothing
+// attested it. The adapter keys on the prefix, not the value.
+const SCAFFOLD_NOTE = 'schema-required fallback; not attested by any MCP tool';
 
 // ============================================================
 // Capability inventory — otel-mcp-server's `backend_capabilities`
@@ -634,6 +633,9 @@ export function buildCanonicalPack({
     'mcp.probesEmpty':         probesEmpty.join(','),
     'mcp.probesFailed':        probesFailed.join(','),
     'mcp.servicesDiscovered':  serviceNames.join(','),
+    // Count of anomaly baselines the tool returned — evidence that
+    // anomalies_baselines answered, NOT an MTTD/MTTR measurement.
+    // spec.baselines is always a platform default (see below).
     'mcp.baselinesComputed':   String((baselinesData.baselines || []).length),
     'mcp.activeAnomalies':     String(anomaliesActive?.traceAnomalies?.active?.length || 0),
     // tools/list inventory — the honest record of what the MCP advertised.
@@ -655,8 +657,20 @@ export function buildCanonicalPack({
   // Per-artefact verification markers (only for items derived from a tool that
   // actually responded).
   const markVerified = (sym) => { annotations[`mcp.verified.${sym}`] = refreshedAt; };
+  // Per-artefact scaffold markers: schema-forced placeholders the fetcher
+  // had to invent and NO tool attested. The adapter projects them as
+  // Scaffold (never Declared, never Verified) so the grade parks them —
+  // the live counterpart of crawler.scaffold.<symbol>. The symbol MUST be
+  // the exact string the adapter's adapt* function passes to sourceOf.
+  const markScaffold = (sym, note = SCAFFOLD_NOTE) => { annotations[`mcp.scaffold.${sym}`] = note; };
 
   // ---- spec.otel ----
+  // The whole block is a guess: nothing the MCP exposes tells us the
+  // semconv version, SDK languages, sampling policy or propagators.
+  // system_health answering used to stamp mcp.verified.otel — that was
+  // false assurance (a healthy service list says nothing about the SDK
+  // configuration). The block is a scaffold; only the metric inventory
+  // (mcp.verified.otel.metrics, stamped below) is real evidence.
   const otelSection = {
     semconv: '1.27.0',
     resource_attributes: { required: ['service.name'] },
@@ -666,7 +680,7 @@ export function buildCanonicalPack({
       propagators: ['tracecontext'],
     },
   };
-  if (!errors[TOOL.systemHealth]) markVerified('otel');
+  markScaffold('otel');
 
   // ---- spec.telemetry.backends ----
   // When the MCP exposes backend_capabilities, drive backends from the
@@ -677,12 +691,23 @@ export function buildCanonicalPack({
   // older MCPs still produce a valid pack.
   const backends = [];
   const seenIds = new Set();
-  const pushBackend = (b, verifiedBy) => {
+  // `verifiedBy` is the tool whose answer attested the backend (a tool
+  // name, checked against `errors`) or `true` when the evidence was
+  // established elsewhere (a live version capture). A fallback entry
+  // with no evidence at all is stamped mcp.scaffold.telemetry.backends.<id>.
+  const pushBackend = (b, verifiedBy, { fallback = false } = {}) => {
     if (seenIds.has(b.id)) return;
     seenIds.add(b.id);
     backends.push(b);
-    if (verifiedBy && !errors[verifiedBy]) markVerified(`telemetry.backends.${b.id}`);
+    const attested = verifiedBy === true || (typeof verifiedBy === 'string' && !errors[verifiedBy]);
+    if (attested) markVerified(`telemetry.backends.${b.id}`);
+    else if (fallback) markScaffold(`telemetry.backends.${b.id}`);
   };
+  // A live version capture (grafana_health, `*_build_info` metrics,
+  // traces_services) is positive proof the product is up — the only
+  // evidence the fallback backends below can lean on.
+  const productAttested = (...products) =>
+    products.some(p => liveVersions?.[p]?.declared || liveVersions?.[p]?.alive);
 
   // Capability-derived inventory annotations (one row per skill+backend)
   // get stamped regardless of whether the entry becomes a telemetry
@@ -757,12 +782,19 @@ export function buildCanonicalPack({
 
   // Fallback / floor: ensure the headline platform backends are
   // always present even when backend_capabilities was unavailable.
-  // (Schema requires at least one telemetry backend.)
+  // (Schema requires at least one telemetry backend.) Each entry is a
+  // GUESS unless something attested the product: a build_info version
+  // capture for the metrics store (system_health answering used to
+  // count — it does not; a healthy service list says nothing about
+  // which metrics backend exists), the topology naming jaeger or
+  // traces_services answering for traces. Nothing attests Elasticsearch.
   if (backends.length === 0) {
-    pushBackend({ id: 'metrics-prom', signal: 'metrics', product: 'prometheus' }, TOOL.systemHealth);
-    pushBackend({ id: 'logs-elastic', signal: 'logs',    product: 'elasticsearch' }, null);
+    pushBackend({ id: 'metrics-prom', signal: 'metrics', product: 'prometheus' },
+                productAttested('prometheus', 'victoriametrics', 'mimir'), { fallback: true });
+    pushBackend({ id: 'logs-elastic', signal: 'logs',    product: 'elasticsearch' }, null, { fallback: true });
+    const jaegerInTopology = (topology?.dependencies || []).some(d => (d.child || '').includes('jaeger'));
     pushBackend({ id: 'traces-jaeger', signal: 'traces', product: 'jaeger' },
-                (topology?.dependencies || []).some(d => (d.child || '').includes('jaeger')) ? TOOL.systemTopology : null);
+                jaegerInTopology ? TOOL.systemTopology : productAttested('jaeger'), { fallback: true });
   }
 
   // Capability inventory annotations — the studio renders these on
@@ -871,7 +903,8 @@ export function buildCanonicalPack({
       markVerified(`slis.${sli.id}`);
     }
   } else if (serviceSlugs.length === 0) {
-    // Pack must have >= 1 SLI / SLO; stub a generic platform availability target.
+    // Pack must have >= 1 SLI / SLO; stub a generic platform availability
+    // target. Nothing attested it — scaffold, never Verified.
     slis.push({
       id: 'platform_availability',
       description: 'Platform availability — no services discovered by MCP.',
@@ -886,7 +919,12 @@ export function buildCanonicalPack({
       window: '30d',
       error_budget_policy: 'ref:platform/default-budget',
     });
+    markScaffold('slis.platform_availability');
+    markScaffold('slos.platform_availability_99');
   } else {
+    // Per-service availability GUESSES. A service name from system_health
+    // is not evidence that anyone measures its availability — these used
+    // to be stamped Verified, which was false assurance. Scaffold.
     for (const name of serviceSlugs) {
       const sliId = `${name.replace(/-/g, '_')}_availability`;
       const sloId = `${sliId}_99`;
@@ -905,11 +943,17 @@ export function buildCanonicalPack({
         window: '30d',
         error_budget_policy: 'ref:platform/default-budget',
       });
-      markVerified(`slis.${sliId}`);
+      markScaffold(`slis.${sliId}`);
+      markScaffold(`slos.${sloId}`);
     }
   }
 
   // ---- spec.pipelines ----
+  // Hard-coded collector topology: no MCP tool exposes the collector
+  // config, so every stage is a guess. The metrics exporter is the one
+  // exception — scrape targets or a metric inventory prove metrics DO
+  // reach the store; that stamp is written further down and the
+  // scaffold marker for it only when neither piece of evidence arrived.
   const pipelines = {
     receivers:  [{ name: 'otlp' }],
     processors: [{ name: 'memory_limiter' }, { name: 'batch' }],
@@ -919,6 +963,10 @@ export function buildCanonicalPack({
       traces:  { kind: 'jaeger' },
     },
   };
+  pipelines.receivers.forEach((_, i) => markScaffold(`pipelines.receivers[${i}]`));
+  pipelines.processors.forEach((_, i) => markScaffold(`pipelines.processors[${i}]`));
+  markScaffold('pipelines.exporters.logs');
+  markScaffold('pipelines.exporters.traces');
 
   // ---- spec.queries.recording_rules ----
   // PREFER the platform's real recorded series (rules API or inventory
@@ -957,12 +1005,15 @@ export function buildCanonicalPack({
     }
     markVerified('dashboards');
   } else {
+    // Schema-forced stub (dashboards minItems 1). Symbol matches the
+    // adapter's `dashboards.<id>`.
     dashboards = [{
       id: 'platform-overview',
       provider: { kind: 'grafana' },
       folder: 'platform',
       source: 'file://dashboards/platform-overview.json',
     }];
+    markScaffold('dashboards.platform-overview');
   }
 
   // ---- spec.policy.burn_rate_alerts ----
@@ -986,6 +1037,14 @@ export function buildCanonicalPack({
   const burnMapping = mapDiscoveredBurnAlerts(discoveredAlerts, slos);
   let burnRateAlerts = burnMapping.alerts;
   burnRateAlerts.forEach((_, i) => markVerified(`policy.burn_rate_alerts[${i}]`));
+  // A placeholder SLO re-identified to a discovered burn group took its
+  // objective/window from the live rule's annotations — the SLO now has
+  // MCP evidence. Drop the stale scaffold marker written under the old
+  // id and attest the new one (the SLI stays whatever it was).
+  for (const [oldId, newId] of Object.entries(burnMapping.reidentified || {})) {
+    delete annotations[`mcp.scaffold.slos.${oldId}`];
+    markVerified(`slos.${newId}`);
+  }
   if (burnMapping.unmapped.length) {
     annotations['mcp.discovered.alert_rules_unmapped'] = burnMapping.unmapped.slice(0, 64).join(',');
   }
@@ -1005,8 +1064,8 @@ export function buildCanonicalPack({
         { short: '30m', long: '6h', factor: 6,  severity: 'SEV2' },
       ],
     }];
-    annotations['mcp.scaffold.policy.burn_rate_alerts[0]'] =
-      'schema-required fallback; no burn-rate alerting rule discovered via MCP';
+    markScaffold('policy.burn_rate_alerts[0]',
+      'schema-required fallback; no burn-rate alerting rule discovered via MCP');
   }
 
   // Rule-evidence fallback annotations — what we found when the standard
@@ -1054,31 +1113,37 @@ export function buildCanonicalPack({
     markVerified('otel.metrics');
     markVerified('pipelines.exporters.metrics');
   }
+  // No scrape target and no metric inventory → the metrics exporter is
+  // as much a guess as the other two.
+  if (!annotations['mcp.verified.pipelines.exporters.metrics']) markScaffold('pipelines.exporters.metrics');
 
   // ---- spec.alerting ----
+  // Schema-forced route (alerting.routes minItems 1). No MCP tool reads
+  // the Alertmanager config, so the SEV1 → Teams route is a guess.
   const alerting = {
     routes: [{
       severity: 'SEV1',
       channels: [{ msteams: '#platform-oncall' }],
     }],
   };
+  markScaffold('alerting.routes[0]');
 
   // ---- spec.baselines ----
-  // Prefer MCP-supplied data; fall back to platform defaults for the
-  // declared criticality.
+  // Platform defaults for the declared criticality, stamped scaffold.
+  // The fetcher used to derive mttd_target_p50 from the smallest
+  // anomalies_baselines thresholdMs and stamp the block Verified — but a
+  // latency anomaly threshold (e.g. 90ms) is not a time-to-detect target,
+  // and nothing the MCP exposes measures MTTD/MTTR. mcp.baselinesComputed
+  // (above) still records how many anomaly baselines the tool returned:
+  // evidence the tool answered, NOT an MTTD measurement.
   const fallback = defaultBaselines(criticality);
-  const baselinesNormal = (baselinesData.baselines || [])
-    .map(b => b.thresholdMs).filter(n => typeof n === 'number');
-  const mttdFromData = baselinesNormal.length
-    ? durationFromMs(Math.min(...baselinesNormal), fallback.mttd_target_p50)
-    : fallback.mttd_target_p50;
   const baselines = {
-    mttd_target_p50: mttdFromData,
+    mttd_target_p50: fallback.mttd_target_p50,
     mttr_target_p50: fallback.mttr_target_p50,
-    measurement_source: 'mcp.anomalies_baselines',
+    measurement_source: 'platform-default',
     review_cadence: 'weekly',
   };
-  if (!errors[TOOL.anomaliesBaselines]) markVerified('baselines');
+  markScaffold('baselines');
 
   // ---- spec.validation ----
   // Empty — MCP can't directly attest chaos / synthetics.

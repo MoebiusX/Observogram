@@ -78,12 +78,32 @@ assert(a['mcp.servicesDiscovered'] === 'svc-checkout,svc-settler,svc-fraud', 'di
 assert(a['mcp.baselinesComputed'] === '2', 'baselinesComputed reflects MCP data');
 assert(a['mcp.activeAnomalies'] === '1', 'activeAnomalies reflects MCP data');
 
-// verified markers (flat keys)
-assert(typeof a['mcp.verified.otel'] === 'string', 'otel verified');
-assert(typeof a['mcp.verified.slis.svc_checkout_availability'] === 'string', 'per-service SLI verified');
-assert(typeof a['mcp.verified.telemetry.backends.metrics-prom'] === 'string', 'metrics-prom backend verified');
+// verified markers (flat keys) — only for what a tool actually attested.
 assert(typeof a['mcp.verified.telemetry.backends.traces-jaeger'] === 'string', 'jaeger backend verified (topology shows it)');
-assert(typeof a['mcp.verified.baselines'] === 'string', 'baselines verified');
+
+// Schema-forced placeholders are stamped mcp.scaffold.<symbol> and NEVER
+// mcp.verified.<symbol>. system_health answering used to verify the
+// hard-coded otel block, the per-service availability guesses, the
+// metrics-prom backend and the baselines — all false assurance.
+const SCAFFOLD_SYMBOLS = [
+  'otel',
+  'slis.svc_checkout_availability', 'slos.svc_checkout_availability_99',
+  'telemetry.backends.metrics-prom', 'telemetry.backends.logs-elastic',
+  'pipelines.receivers[0]', 'pipelines.processors[0]', 'pipelines.processors[1]',
+  'pipelines.exporters.metrics', 'pipelines.exporters.logs', 'pipelines.exporters.traces',
+  'dashboards.platform-overview',
+  'alerting.routes[0]',
+  'baselines',
+];
+for (const sym of SCAFFOLD_SYMBOLS) {
+  assert(typeof a[`mcp.scaffold.${sym}`] === 'string' && a[`mcp.verified.${sym}`] === undefined,
+         `placeholder ${sym} is stamped mcp.scaffold.* and not mcp.verified.*`,
+         { scaffold: a[`mcp.scaffold.${sym}`], verified: a[`mcp.verified.${sym}`] });
+}
+assert(a['mcp.verified.otel'] === undefined, 'system_health answering does NOT verify the hard-coded otel block');
+assert(a['mcp.verified.slis.svc_checkout_availability'] === undefined, 'per-service SLI guess is NOT verified');
+assert(a['mcp.verified.baselines'] === undefined, 'baselines are NOT verified on the strength of anomalies_baselines answering');
+assert(a['mcp.scaffold.telemetry.backends.traces-jaeger'] === undefined, 'a topology-attested backend carries no scaffold marker');
 
 // slis/slos
 assert(rich.spec.slis.length === 3, 'one SLI per service', rich.spec.slis.length, 3);
@@ -111,21 +131,66 @@ assert(!Object.keys(a).some(k => k.startsWith('mcp.verified.policy.')),
        'no mcp.verified.policy.* key when no alerting rule was discovered',
        Object.keys(a).filter(k => k.startsWith('mcp.verified.policy.')), []);
 
-// baselines reflect MCP minimum-threshold
-assert(rich.spec.baselines.mttd_target_p50 === '90ms', 'mttd_target_p50 derived from smallest baseline threshold',
-       rich.spec.baselines.mttd_target_p50, '90ms');
-assert(rich.spec.baselines.measurement_source === 'mcp.anomalies_baselines', 'baselines.measurement_source');
+// baselines are tier defaults, never derived from anomaly thresholds: a
+// 90ms latency-anomaly threshold is not a time-to-detect target.
+assert(rich.spec.baselines.mttd_target_p50 === '5m', 'mttd_target_p50 is the tier-2 platform default (no thresholdMs derivation)',
+       rich.spec.baselines.mttd_target_p50, '5m');
+assert(rich.spec.baselines.mttr_target_p50 === '2h', 'mttr_target_p50 is the tier-2 platform default');
+assert(rich.spec.baselines.measurement_source === 'platform-default', 'baselines.measurement_source says platform-default',
+       rich.spec.baselines.measurement_source, 'platform-default');
 
-// adapter sees the Verified tags
+// adapter: attested entries project Verified, placeholders Scaffold.
 const layered = adapt(rich);
-const verifiedSli = layered.layers.L1.find(x => x.id === 'SLI-01');
-assert(verifiedSli?.source === 'Verified', 'adapter surfaces Verified source for fetched SLI',
-       verifiedSli?.source, 'Verified');
-const verifiedBackend = layered.layers.L2.find(x => x.title === 'metrics-prom');
-assert(verifiedBackend?.source === 'Verified', 'adapter surfaces Verified source for fetched backend');
+const guessedSli = layered.layers.L1.find(x => x.id === 'SLI-01');
+assert(guessedSli?.source === 'Scaffold', 'adapter projects the per-service SLI guess as Scaffold',
+       guessedSli?.source, 'Scaffold');
+const guessedSlo = layered.layers.L1.find(x => x.id === 'SLO-01');
+assert(guessedSlo?.source === 'Scaffold', 'adapter projects the per-service SLO guess as Scaffold',
+       guessedSlo?.source, 'Scaffold');
+const jaegerBackend = layered.layers.L2.find(x => x.title === 'traces-jaeger');
+assert(jaegerBackend?.source === 'Verified', 'adapter surfaces Verified source for the topology-attested backend',
+       jaegerBackend?.source, 'Verified');
+const sourceOfL2 = (id) => layered.layers.L2.find(x => x.id === id)?.source;
+assert(layered.layers.L2.find(x => x.title === 'metrics-prom')?.source === 'Scaffold', 'metrics-prom fallback is Scaffold without a build_info capture');
+assert(layered.layers.L2.find(x => x.title === 'logs-elastic')?.source === 'Scaffold', 'logs-elastic fallback is Scaffold');
+assert(sourceOfL2('OTEL-01') === 'Scaffold', 'hard-coded otel block is Scaffold', sourceOfL2('OTEL-01'), 'Scaffold');
+assert(sourceOfL2('PIP-EXP-LOG') === 'Scaffold', 'logs exporter is Scaffold', sourceOfL2('PIP-EXP-LOG'), 'Scaffold');
+assert(sourceOfL2('PIP-EXP-TRC') === 'Scaffold', 'traces exporter is Scaffold', sourceOfL2('PIP-EXP-TRC'), 'Scaffold');
+assert(sourceOfL2('PIP-EXP-MET') === 'Scaffold', 'metrics exporter is Scaffold without scrape/metric evidence', sourceOfL2('PIP-EXP-MET'), 'Scaffold');
+assert(sourceOfL2('PIP-RCV-01') === 'Scaffold' && sourceOfL2('PIP-PRC-01') === 'Scaffold', 'receiver/processor stages are Scaffold');
+const stubDash = layered.layers.L3.find(x => x.id === 'DASH-01');
+assert(stubDash?.source === 'Scaffold', 'dashboard stub platform-overview is Scaffold', stubDash?.source, 'Scaffold');
+const stubRoute = layered.layers.L4.alerting.find(x => x.id === 'ALR-01');
+assert(stubRoute?.source === 'Scaffold', 'hard-coded SEV1 msteams route is Scaffold', stubRoute?.source, 'Scaffold');
+const stubBaselines = layered.layers.L5.find(x => x.id === 'BASE-01');
+assert(stubBaselines?.source === 'Scaffold', 'baselines are Scaffold', stubBaselines?.source, 'Scaffold');
 const scaffoldBurn = layered.layers.L4.policy.find(x => x.id === 'POL-01');
 assert(scaffoldBurn?.source === 'Scaffold', 'adapter projects the mcp.scaffold burn-rate placeholder as Scaffold',
        scaffoldBurn?.source, 'Scaffold');
+
+// ---------- case 1b: a build_info capture attests the metrics fallback backend ----------
+{
+  const attested = buildCanonicalPack({
+    refreshedAt,
+    mcpUrl: 'https://fake-mcp.test/observability',
+    health: { services: [{ name: 'svc-checkout' }] },
+    topology: { dependencies: [] },
+    anomaliesActive: {},
+    baselinesData: { baselines: [] },
+    liveVersions: { victoriametrics: { declared: 'v1.113.0', source: 'metrics_query/vm_app_version' } },
+    errors: {},
+  });
+  const ann = attested.metadata.annotations;
+  assert(typeof ann['mcp.verified.telemetry.backends.metrics-prom'] === 'string'
+         && ann['mcp.scaffold.telemetry.backends.metrics-prom'] === undefined,
+         'metrics-prom fallback is Verified (not Scaffold) when a metrics build_info capture exists');
+  assert(typeof ann['mcp.scaffold.telemetry.backends.traces-jaeger'] === 'string'
+         && ann['mcp.verified.telemetry.backends.traces-jaeger'] === undefined,
+         'traces-jaeger fallback is Scaffold when neither topology nor traces_services attested it');
+  const l = adapt(attested);
+  assert(l.layers.L2.find(x => x.title === 'metrics-prom')?.source === 'Verified', 'adapter projects the attested metrics-prom as Verified');
+  assert(l.layers.L2.find(x => x.title === 'traces-jaeger')?.source === 'Scaffold', 'adapter projects the unattested traces-jaeger as Scaffold');
+}
 
 // YAML round-trip
 const text = emitYaml(rich);
@@ -158,6 +223,14 @@ assert(empty.metadata.annotations['mcp.toolsFailed'].includes('anomalies_baselin
        'failed tool surfaced in mcp.toolsFailed');
 assert(empty.metadata.annotations['mcp.verified.baselines'] === undefined,
        'baselines NOT marked verified when anomalies_baselines failed');
+assert(typeof empty.metadata.annotations['mcp.scaffold.baselines'] === 'string',
+       'baselines stamped scaffold in the empty pack too');
+assert(typeof empty.metadata.annotations['mcp.scaffold.slis.platform_availability'] === 'string'
+       && typeof empty.metadata.annotations['mcp.scaffold.slos.platform_availability_99'] === 'string'
+       && empty.metadata.annotations['mcp.verified.slis.platform_availability'] === undefined,
+       'platform_availability SLI/SLO stubs are scaffold, not verified');
+assert(empty.spec.baselines.mttd_target_p50 === '15m' && empty.spec.baselines.mttr_target_p50 === '1d',
+       'empty pack baselines are the tier-3 platform defaults');
 
 // ---------- case 2b: tool responded with a null payload ----------
 // The MCP probe helper returns `null` when a tool answers with an
@@ -288,6 +361,20 @@ assert(typeof probed.metadata.annotations['mcp.verified.otel.metrics'] === 'stri
        'metric inventory verified by MCP');
 assert(typeof probed.metadata.annotations['mcp.verified.pipelines.exporters.metrics'] === 'string',
        'metrics exporter path verified when scrape/metric inventory is observed');
+assert(probed.metadata.annotations['mcp.scaffold.pipelines.exporters.metrics'] === undefined,
+       'metrics exporter carries no scaffold marker once evidence stamped it');
+assert(typeof probed.metadata.annotations['mcp.scaffold.pipelines.exporters.logs'] === 'string',
+       'logs exporter stays scaffold (nothing attests it)');
+assert(typeof probed.metadata.annotations['mcp.verified.slis.svc_checkout_availability'] === 'string'
+       && probed.metadata.annotations['mcp.scaffold.slis.svc_checkout_availability'] === undefined,
+       'SLI inferred from real recorded rules keeps its verified stamp (no scaffold)');
+assert(probed.metadata.annotations['mcp.scaffold.dashboards.platform-overview'] === undefined,
+       'no dashboard scaffold marker when dashboards were discovered');
+{
+  const l = adapt(probed);
+  assert(l.layers.L2.find(x => x.id === 'PIP-EXP-MET')?.source === 'Verified', 'adapter projects the evidenced metrics exporter as Verified');
+  assert(l.layers.L1.find(x => x.id === 'SLI-01')?.source === 'Verified', 'adapter projects the rule-inferred SLI as Verified');
+}
 
 // A plain threshold alert is NOT a burn-rate alert: nothing maps, the
 // schema-forced placeholder stands in and is stamped scaffold, and no
@@ -390,6 +477,10 @@ assert(typeof bAnn['mcp.verified.policy.burn_rate_alerts[0]'] === 'string', 'map
 assert(bAnn['mcp.verified.policy.burn_rate_alerts'] === undefined, 'no unindexed mcp.verified.policy.burn_rate_alerts stamp');
 assert(bAnn['mcp.verified.policy.burn_rate_alerts[1]'] === undefined, 'no stamp beyond the mapped entries');
 assert(bAnn['mcp.scaffold.policy.burn_rate_alerts[0]'] === undefined, 'no scaffold placeholder when a real burn alert mapped');
+assert(typeof bAnn[`mcp.verified.slos.${DISCOVERED_SLO}`] === 'string'
+       && bAnn['mcp.scaffold.slos.svc_checkout_availability_99'] === undefined
+       && bAnn[`mcp.scaffold.slos.${DISCOVERED_SLO}`] === undefined,
+       're-identified SLO is verified from the live rule annotations; no stale scaffold under the old id');
 
 // annotations: names (incl. forecast + threshold), unmapped, inferred severity.
 assert(bAnn['mcp.discovered.alert_rule_names']?.includes(`${DISCOVERED_SLO}_forecast_linear_7d`), 'forecast rule name still surfaced in alert_rule_names');
