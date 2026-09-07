@@ -616,6 +616,34 @@ try {
     body: JSON.stringify({ name: 'x', packAId: 'does-not-exist', packBId: 'production-curated' }),
   });
   assert(capBad.status === 404, 'capture with an unknown pack → 404');
+  // A captured gate is validated the way loadJourneyDef validates a file:
+  // an unknown stack row is refused (400), never saved as a journey that
+  // can never load.
+  const capStackBad = await fetch(`${base}/api/journeys/capture`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'captured-bad', packAId: 'payment-service', packBId: 'production-curated', gate: { minAlignmentPct: 1, stack: { rows: { nope_row: { max: 0 } } } } }),
+  });
+  const capStackBadBody = await capStackBad.json();
+  assert(capStackBad.status === 400 && /gate\.stack\.rows names unknown row nope_row/.test(capStackBadBody.error || ''),
+         'capture with an unknown stack row id → 400 naming the row', capStackBadBody);
+  assert(!(await getJson(base, '/api/journeys')).journeys.some(j => j.name === 'captured-bad'), 'the refused capture saved nothing');
+  const capStackOk = await fetch(`${base}/api/journeys/capture`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'captured-stack', packAId: 'payment-service', packBId: 'production-curated', gate: { minAlignmentPct: 1, stack: { requireSampled: true, rows: { scrape_targets_down: { max: 0 } } } } }),
+  }).then(r => r.json());
+  assert(capStackOk.ok === true, 'capture with a well-formed stack gate saves');
+  // A definition on disk that fails to load is listed with the reason.
+  writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'bad-id.journey.yaml'), [
+    'name: bad-id',
+    `packA: { file: ${PAY.replaceAll('\\', '/')} }`,
+    `packB: { file: ${CUR.replaceAll('\\', '/')} }`,
+    'gate:', '  stack:', '    rows:', '      nope_row: { max: 0 }',
+  ].join('\n'));
+  const jListBad = await getJson(base, '/api/journeys');
+  const badEntry = jListBad.journeys.find(j => j.name === 'bad-id');
+  assert(badEntry && /unknown row nope_row/.test(badEntry.loadError || '') && badEntry.lastRun === null,
+         'GET /api/journeys lists a definition that fails to load with loadError, so it never reads as a healthy never-run journey', badEntry);
+  assert(jListBad.journeys.find(j => j.name === 'smoke-journey')?.loadError === null, 'a healthy definition lists loadError null');
 
   // --- repo retrofeed (item 4, reverse remediation arrow) ---
   const rf = await fetch(`${base}/api/packs/payment-service/retrofeed`, {

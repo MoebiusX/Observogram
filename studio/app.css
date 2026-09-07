@@ -6335,6 +6335,10 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
   font: 11px/1.4 var(--mono);
   color: var(--ink-4);
 }
+/* A definition that fails to load (GET /api/journeys loadError): a config
+   fault, not a verdict — warn colour so it never reads as a healthy
+   never-run journey. */
+.journey-load-error { color: var(--warn, #d97706); }
 .journey-runs { margin-top: 10px; }
 .journey-runs-table { font: 11px/1.4 var(--mono); }
 /* Stack self-metric chips (step 3): point-in-time samples per family.

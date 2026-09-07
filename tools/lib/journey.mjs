@@ -322,21 +322,52 @@ function evaluateStackGate(stack, evidence, add) {
   }
   const thresholds = stack.rows && typeof stack.rows === 'object' ? stack.rows : {};
   for (const [id, t] of Object.entries(thresholds)) {
-    if (!t || typeof t !== 'object') continue;
+    // evaluateGate is exported and a host may compose a gate object
+    // without going through loadJourneyDef's validation: a threshold that
+    // cannot be checked breaches as such — it never passes by silence.
+    const invalid = invalidThreshold(t);
+    if (invalid) { add(`stack.${id}`, `threshold invalid (${invalid}) — cannot be checked`); continue; }
     const row = byId.get(id);
     if (!isData(row)) {
-      const outcome = !evidence ? 'no stack evidence' : !row ? 'absent from this run' : row.outcome === 'data' ? 'data without a numeric value' : row.outcome;
+      // A row the fetcher never wrote is one the sampler never attempted:
+      // on a not-attempted panel the tier reason is the whole story, on a
+      // sampled panel the call budget ran out or the row was not observed.
+      const outcome = !evidence ? 'no stack evidence'
+        : !row ? (evidence.status === 'not-attempted'
+          ? `not-attempted: ${evidence.reason || 'no reason recorded'}`
+          : 'not attempted by the sampler — call budget exhausted or row not observed')
+        : row.outcome === 'data' ? 'data without a numeric value' : row.outcome;
       add(`stack.${id}`, `no sample for ${id} (${outcome}${row?.reason ? `: ${row.reason}` : ''}) — threshold cannot be checked`);
       continue;
     }
-    const min = typeof t.min === 'number' ? t.min : null;
-    const max = typeof t.max === 'number' ? t.max : null;
-    if ((min !== null && row.value < min) || (max !== null && row.value > max)) {
+    const min = t.min === undefined ? null : t.min;
+    const max = t.max === undefined ? null : t.max;
+    const belowMin = min !== null && row.value < min;
+    const aboveMax = max !== null && row.value > max;
+    if (belowMin || aboveMax) {
       const unit = row.unit || 'value';
+      const shown = formatStackValue(row.value, unit);
       const band = `[${min === null ? '-∞' : formatStackValue(min, unit)} … ${max === null ? '∞' : formatStackValue(max, unit)}]`;
-      add(`stack.${id}`, `${id} = ${formatStackValue(row.value, unit)} ${unit} outside ${band} — point-in-time sample, not an SLO verdict`);
+      // Display rounding can print the value equal to the bound it broke
+      // (0.0004/s max 0 → "0.000/s outside [-∞ … 0.000/s]"); the raw
+      // number keeps the explanation readable.
+      const raw = shown === formatStackValue(belowMin ? min : max, unit) ? ` (raw ${row.value})` : '';
+      add(`stack.${id}`, `${id} = ${shown}${raw} ${unit} outside ${band} — point-in-time sample, not an SLO verdict`);
     }
   }
+}
+
+// Why a declared row threshold cannot be evaluated, or null when it can.
+// Mirrors validateGateStack's rules at run time (finite numeric bounds,
+// at least one of them, min ≤ max).
+function invalidThreshold(t) {
+  if (!t || typeof t !== 'object' || Array.isArray(t)) return 'not a mapping with min and/or max';
+  for (const bound of ['min', 'max']) {
+    if (t[bound] !== undefined && !(typeof t[bound] === 'number' && Number.isFinite(t[bound]))) return `${bound} is not a finite number`;
+  }
+  if (t.min === undefined && t.max === undefined) return 'neither min nor max declared';
+  if (t.min !== undefined && t.max !== undefined && t.min > t.max) return `min ${t.min} is above max ${t.max}`;
+  return null;
 }
 
 // ---------- step 3: stack-health evidence (samples, kept per run) ----------
@@ -370,7 +401,12 @@ function stackEvidenceRows(observed) {
         value,
         unit: def?.unit || r.unit || null,
         direction,
-        outcome: STACK_OUTCOMES.includes(r.outcome) ? r.outcome : 'failed',
+        // A declared outcome is kept as it is; an outcome the contracts do
+        // not know is kept verbatim (never relabelled as a probe failure
+        // nothing reported — it is still never `data`), and a missing one
+        // reads 'unknown'.
+        outcome: STACK_OUTCOMES.includes(r.outcome) ? r.outcome
+          : (typeof r.outcome === 'string' && r.outcome.trim() ? r.outcome.trim() : 'unknown'),
         hint: displayHint({ direction }, value),
         at: typeof r.at === 'string' ? r.at : null,
         // A row the table no longer declares keeps null: no vocabulary
@@ -619,15 +655,21 @@ export function journeyRunRetention() {
   return parseRunRetention(brandEnv('JOURNEY_RUN_RETENTION') || undefined);
 }
 
+// The run filename shape writeRunRecord produces: the ISO start time with
+// ':' and '.' replaced by '-'. Only names of this shape are run records for
+// retention — a hand-dropped notes.json would otherwise sort after every
+// ISO name, count as the "newest" run and displace a real record.
+export const JOURNEY_RUN_FILE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.json$/;
+
 // Pure retention policy: given the run filenames of one journey and the
 // number to keep, return the names to delete, oldest first. keep <= 0 (or
-// a non-number) means unlimited → nothing is deleted. Non-run files in the
-// directory are never candidates.
+// a non-number) means unlimited → nothing is deleted. Files that are not
+// run records (JOURNEY_RUN_FILE_RE) are never candidates and never count.
 export function pruneRunFiles(files, keep) {
   const n = Number(keep);
   if (!Number.isFinite(n) || n <= 0) return [];
   const runs = (Array.isArray(files) ? files : [])
-    .filter(f => typeof f === 'string' && f.endsWith('.json'))
+    .filter(f => typeof f === 'string' && JOURNEY_RUN_FILE_RE.test(f))
     .sort();
   const excess = runs.length - Math.floor(n);
   return excess > 0 ? runs.slice(0, excess) : [];

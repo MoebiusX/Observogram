@@ -340,17 +340,23 @@ the history is the time series, never a verdict.
 The `stack:` gate block turns those samples into an early warning: `rows`
 declares a `min` / `max` band per row id (validated against the table when
 the journey loads — an unknown id is refused with the known ids listed), and
-`requireSampled: true` breaches when the tier could not sample at all. A
-threshold can only be checked against a row that answered data; a row that
-was empty, failed, not in the inventory or absent breaches as *no sample*
-rather than passing by absence. A stack breach reads
+`requireSampled: true` breaches when the tier could not sample at all, or
+sampled with no row answering data. A threshold can only be checked against
+a row that answered data; a row that was empty, failed, not in the
+inventory or absent breaches as *no sample* rather than passing by absence
+(on a restricted tier the breach carries the tier reason), and a threshold
+that is not a finite band breaches as *threshold invalid* instead of
+passing silently. A stack breach reads
 `scrape_targets_down = 2 count outside [-∞ … 0] — point-in-time sample, not
 an SLO verdict`: it is a signal to look, not an SLO verdict, and it never
 touches the grade. The report prints the samples in a *Stack self-metrics*
 table and `journey list` shows `stack sampled N` / `stack not attempted` /
-`stack none` per journey. In the studio (Advanced → Journeys) each card
+`stack none` per journey (a definition that fails to load prints why instead
+of looking never-run). In the studio (Advanced → Journeys) each card
 carries a "stack self-metrics — point-in-time samples" line: one chip per
-family with the last run's value, a muted `nonzero` marker where a
+family with the last run's value — the row with a `nonzero` signal first,
+then lower-is-comfortable rows, so a healthy-looking ratio never hides a
+target that is down — a muted `nonzero` marker where a
 lower-is-comfortable row is above zero, `nonzero in N of last M runs` over
 the fetched history, and a single muted chip with the reason when the tier
 could not sample — chips never carry an ok/error colour, because a sample

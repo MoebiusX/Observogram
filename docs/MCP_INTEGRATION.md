@@ -298,7 +298,9 @@ newest `OBSERVOGRAM_JOURNEY_RUN_RETENTION` files (`brandEnv`, legacy
 `TOMOGRAPH_*` spelling honoured; default `1000`; `0` = unlimited; anything
 that is not a non-negative integer falls back to the default). The policy is
 the pure `pruneRunFiles(files, keep)` (returns the names to delete, oldest
-first; non-`.json` entries are never candidates) and the knob is read at
+first; only names of the run-record shape `JOURNEY_RUN_FILE_RE` —
+`<ISO start time with : and . as ->.json` — are candidates or counted, so a
+hand-dropped `notes.json` neither displaces a record nor is deleted) and the knob is read at
 write time by `journeyRunRetention()`. A file that cannot be deleted is
 recorded on the run as `historyError`, never thrown — the verdict already
 exists. `readJourneyRuns(name, { limit })` is unchanged: newest first, at
@@ -319,8 +321,12 @@ refresh) — never an empty "healthy" panel — and otherwise:
 | `grafana` | `mcp.observed.grafana.datasources` / `.contact_points` / `.error` | `{ datasources, unhealthyDatasources: [names], contactPoints, error }` or `null`; only a health verdict of `error` is unhealthy (`unknown` was never checked) |
 
 Malformed JSON in any of those annotations degrades to `rows: []` /
-`null` for that surface — the status survives, nothing is fabricated. The
-`stack` gate key below is the only reader; a sample stays a signal, and a
+`null` for that surface — the status survives, nothing is fabricated. A row
+outcome the contracts do not declare is kept verbatim (a missing one reads
+`unknown`) — never relabelled as a probe failure nothing reported; it is
+still never `data`. The `stack` gate key below is the only *gate* reader
+(the history helpers, `GET /api/journeys` and the studio chips read the
+record too, none of them as a verdict); a sample stays a signal, and a
 breach is an early warning, not a verdict.
 
 #### Gate key `stack`: thresholds on the samples
@@ -339,7 +345,12 @@ gate:
 an unknown row id throws `journey <name>: gate.stack.rows names unknown row
 <id>; known rows: …`, `min` / `max` must be finite numbers when present, an
 entry with neither is refused (nothing to check), `min > max` is refused,
-and `requireSampled` must be a boolean. The studio's capture default gate
+and `requireSampled` must be a boolean. `POST /api/journeys/capture` runs
+the same validation on a captured gate before saving (400 with the message),
+so a capture never creates a journey that cannot load; a definition on disk
+that fails to load is still listed by `GET /api/journeys` with `loadError`
+(and by `packc journey list` as `definition does not load: …`) rather than
+looking like a healthy never-run journey. The studio's capture default gate
 stays `{ minAlignmentPct: 85 }`; the block is opt-in and every existing key
 is unchanged.
 
@@ -351,8 +362,10 @@ is unchanged.
 | `requireSampled` and `stackEvidence` is `null` (file-sourced B) | `stack` | `stack self-metrics not sampled (Pack B is not a live draft) — the vantage cannot prove stack health` |
 | `requireSampled` and `status` is `not-attempted` | `stack` | `stack self-metrics not sampled (<reason>) — the vantage cannot prove stack health` |
 | `requireSampled` and no row has outcome `data` | `stack` | `stack self-metrics not sampled (sampled, but no row answered with data) — …` |
-| `rows.<id>` and the row is absent, or its outcome is not `data` (or `data` with no number) | `stack.<id>` | `no sample for <id> (<outcome>[: reason]) — threshold cannot be checked` |
-| `rows.<id>` and `value < min` or `value > max` | `stack.<id>` | `<id> = <value> <unit> outside [min … max] — point-in-time sample, not an SLO verdict` |
+| `rows.<id>` and the entry is not a finite band (a bound that is not a finite number, neither bound, `min > max`, not a mapping) — a gate object composed without `loadJourneyDef` | `stack.<id>` | `threshold invalid (<why>) — cannot be checked` |
+| `rows.<id>` and the row's outcome is not `data` (or `data` with no number) | `stack.<id>` | `no sample for <id> (<outcome>[: reason]) — threshold cannot be checked` |
+| `rows.<id>` and the row is absent from the record | `stack.<id>` | `no sample for <id> (no stack evidence)` for a file-sourced B; `no sample for <id> (not-attempted: <reason>)` on a not-attempted panel (the tier reason, so the breach reads as a tier limit, not a fetch hole); `no sample for <id> (not attempted by the sampler — call budget exhausted or row not observed)` on a sampled panel |
+| `rows.<id>` and `value < min` or `value > max` | `stack.<id>` | `<id> = <value> <unit> outside [min … max] — point-in-time sample, not an SLO verdict`; when display rounding prints the value equal to the bound it broke (`0.0004/s` against `max: 0`) the raw number follows: `<id> = 0.000/s (raw 0.0004) per-second outside [-∞ … 0.000/s]` |
 
 Honesty rules: thresholds compare numbers only and equality passes
 (`< min` / `> max`); a file-sourced Pack B never breaches `stack.rows` unless
@@ -380,7 +393,7 @@ it directly — see `docs/VENDORING.md`):
 | Helper | Returns | Honesty rule |
 |---|---|---|
 | `stackSeries(runs, rowId)` | oldest → newest `[{ at, value, outcome, hint }]` for one row (`runs` may be newest-first as `readJourneyRuns` returns them; sorted by `startedAt`) | a run without `stackEvidence` or without that row is a gap and is skipped, never interpolated; a non-data outcome is kept with `value: null` so the series shows when the probe stopped answering |
-| `latestByFamily(record)` | `{ <family>: { id, value, unit, direction, outcome, hint, referenceSli, reason? } }` | per family the row that answered `data` wins, ties fall back to the contracts table order; a retired row sorts last; `{}` without evidence |
+| `latestByFamily(record)` | `{ <family>: { id, value, unit, direction, outcome, hint, referenceSli, reason? } }` | per family the row that answered `data` (with a number) wins; among data rows the early-warning signal surfaces first — a `nonzero` hint, then a row the table declares before a retired one, then `lower` before `higher` / `info` — and the contracts table order breaks the rest, so a leading `higher` / `info` row (`scrape_success_ratio`, `tsdb_active_series`) never hides a lower-is-better row that carries signal; among non-answers the table order decides; `{}` without evidence |
 | `stackSummary(record)` | `{ status, reason, sampled, families }` or `null` | `null` when the record has no `stackEvidence` — an absence, never a healthy stack; `sampled` counts rows that answered data |
 | `nonzeroRuns(series)` | count of data samples with the display hint `nonzero` | a count of runs, not a verdict — "nonzero in N of the last M runs" is an early-warning phrase |
 | `stackPostureBudget(series, { objective, cadenceMs, windowMs, isBad? })` | `{ samples, bad, fraction, allowance, measurable, note }` | the cadence heuristic: the window allows `(1 − objective) × window / cadence` bad samples and a sampled posture is only `measurable` when that allowance is ≥ 10 (99.99 % over 30 d at a 15 min cadence allows 0.29 — not measurable; 99 % over 7 d at 5 min allows 20.16 — measurable); `fraction = good / samples`, `null` with no data sample; the note says "signal, not verdict" in every branch |
@@ -402,7 +415,10 @@ carried none (vantage lost, file-sourced B), so a file-vs-file journey
 renders no stack line at all. The view loads the helper module at call
 time from the server's `/lib` mount; a host that does not mount
 `tools/lib` at `/lib` still renders the chips from `lastRun.stack`
-(families only, no `nonzero in N of last M runs` history).
+(families only: no `nonzero in N of last M runs` history, and values print
+as raw numbers — a ratio reads `0.95`, not `95.0%` — because the formatter
+lives in the helper module). A card whose definition fails to load shows
+`definition does not load: <loadError>` under its meta line.
 
 ### Stack self-metrics (registry)
 

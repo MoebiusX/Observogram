@@ -162,6 +162,7 @@ async function loadJourneysList(host) {
           <span title="Pack B source">B: <code>${escapeHtml(j.packB || '?')}</code></span>
           <span title="Gate">gate: ${escapeHtml(gateBits)}</span>
         </div>
+        ${j.loadError ? `<div class="journey-card-meta"><span class="journey-load-error" title="loadJourneyDef">definition does not load: ${escapeHtml(j.loadError)}</span></div>` : ''}
         ${renderStackChips(last?.stack ?? null, runs, stackLib)}
         <div class="journey-runs">${renderRunsTable(runs)}</div>
         <div class="journey-result" hidden></div>

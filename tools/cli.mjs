@@ -111,7 +111,12 @@ async function runJourneyCommand([sub, ...args]) {
     if (!names.length) { console.log('(no journeys saved — add .observogram/journeys/<name>.journey.yaml)'); return; }
     for (const n of names) {
       const last = journeyLib.readJourneyRuns(n, { limit: 1 })[0];
-      const tail = !last ? '(never run)'
+      // A definition that fails to load must not read like a healthy
+      // never-run journey.
+      let loadError = null;
+      try { journeyLib.loadJourneyDef(n); } catch (e) { loadError = e.message; }
+      const tail = loadError ? `(definition does not load: ${loadError})`
+        : !last ? '(never run)'
         : last.outcome === 'vantage-lost' ? `vantage-lost · ${last.startedAt} · ${last.error || 'live source unreachable'}`
         : `${last.outcome} · ${last.startedAt} · alignment ${last.drift?.alignmentPct}% · ${journeyLib.stackStatusLine(last)}`;
       console.log(`${n}\t${tail}`);
