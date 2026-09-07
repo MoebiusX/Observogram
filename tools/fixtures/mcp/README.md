@@ -11,6 +11,23 @@ each fixture must satisfy its capability's declared response shape
 (`tools/lib/contracts/response-shapes.mjs` — critical fields required,
 extras allowed), and `adapt(fixture)` is pinned in `adapted/`.
 
+## Two evidence sources
+
+The fixtures here are one of the table's two live evidence sources: the
+public Krystaline tier answers through the MCP (what that stack happens to
+scrape, at its versions — otel-collector 0.154.0, Jaeger v2.18.0, Grafana
+12.4.0, Alertmanager 0.27.0, VictoriaMetrics; no Prometheus server, no
+blackbox, vmalert not scraped). The other is `docker/stack.compose.yaml`
+— every product the alias table names at an exactly pinned version — which
+`npm run test:stack:live` (`tools/test-stack-live.mjs`) checks directly:
+every `requires` name on the product's own exposition, every lazily
+registered counter after a stimulus, every `expr` on a real Prometheus,
+every alias's `verified` stamp against the compose image. Nothing from the
+stack is committed as a fixture (its ledger is the git-ignored
+`.tmp-stack-live-ledger.json`); the stamp on each alias and the
+"Live validation tier" section of `docs/MCP_INTEGRATION.md` carry that
+evidence.
+
 ## Provenance
 
 Every file here is one of two kinds, and the kind is part of what the suite
@@ -27,7 +44,7 @@ recording that drops it.
 | `metrics_alerts.empty.json` | `metrics_alerts` | the legitimate-empty case (`{groups: []}` — the real VM-ruler response that motivated the cascade order) | recording | 2026-06-12 |
 | `grafana_dashboards_search.json` | `grafana_dashboards_search` | dashboards | recording | 2026-06-12 |
 | `metrics_targets.json` | `metrics_targets` | scrape_configs | recording | 2026-06-12 (`alertmanager` target `down` with its `lastError`) |
-| `metrics_label_values.json` | `metrics_label_values` | metric_names | recording, trimmed by the recorder (every name an alias `requires` that the server exposes, the `*_build_info` metrics, and the first 25 others — 40 names of the server's 2,682); it now evidences `up`, `scrape_duration_seconds`, `vm_*`, `alertmanager_*`, `otelcol_exporter_queue_*`, `grafana_http_request_duration_seconds_count`, `promtail_dropped_entries_total` | 2026-09-07, Krystaline otel-mcp-server **public tier** |
+| `metrics_label_values.json` | `metrics_label_values` | metric_names | recording, trimmed by the recorder (every name an alias `requires` that the server exposes, the `*_build_info` metrics, and the first 25 others — 43 names of the server's 2,682); it evidences `up`, `scrape_duration_seconds`, `vm_*`, `alertmanager_*`, `otelcol_exporter_queue_*`, `otelcol_exporter_sent_spans`, `otelcol_receiver_accepted_spans` (the lazy-policy siblings), `grafana_proxy_response_status_total`, `grafana_http_request_duration_seconds_count`, `promtail_dropped_entries_total` | 2026-09-07 (re-recorded after the live correction of the table), Krystaline otel-mcp-server **public tier** |
 | `synthetic/metrics_query.instant-vector.json` | `metrics_query` | stack_self_metrics | synthetic (`{ result }`, otel-mcp-server) | 2026-09-07 |
 | `synthetic/metrics_query.instant-vector.prometheus-api.json` | `metrics_query` | stack_self_metrics, build_info_versions | synthetic (`{ data: { result } }`, Prometheus API) | 2026-09-07 |
 | `alertmanager_status.json` | `alertmanager_status` | alertmanager_status (`status-object`) | recording — `config` (the full Alertmanager configuration: receivers, internal hostnames) omitted by hand; the shape needs only `version` / `uptime` / `cluster` | 2026-09-07, public tier (Alertmanager 0.27.0) |
@@ -35,7 +52,7 @@ recording that drops it.
 | `synthetic/grafana_datasources.json` | `grafana_datasources` | grafana_datasources (`datasources`) | synthetic | 2026-09-07 |
 | `synthetic/grafana_datasource_health.json` | `grafana_datasource_health` | grafana_datasource_health (`health-object`) | synthetic | 2026-09-07 |
 | `synthetic/grafana_contact_points.json` | `grafana_contact_points` | grafana_contact_points (`contact-points`) | synthetic | 2026-09-07 |
-| `recorded-stack/<row id>.json` | `metrics_query` | stack_self_metrics — one instant vector per family (`scrape_success_ratio`, `notification_errors`, `tsdb_active_series`, `collector_queue_saturation`, `grafana_http_errors`, `log_shipper_drops`); otel-mcp-server answers a flat Prometheus-style envelope `{ status, resultType, result }` | recording | 2026-09-07, public tier |
+| `recorded-stack/<row id>.json` | `metrics_query` | stack_self_metrics — one instant vector per family that answered (`scrape_success_ratio`, `notification_errors`, `tsdb_active_series`, `collector_export_failures_spans` — the lazy-policy alias reading 0 on a collector whose `send_failed_spans` is absent —, `datasource_errors`, `log_shipper_drops`; ruler, synthetic and traces have no eligible alias on that tier); otel-mcp-server answers a flat Prometheus-style envelope `{ status, resultType, result }` | recording | 2026-09-07 (re-recorded after the live correction), public tier |
 
 The remaining synthetic files cover the Grafana-backed status tools
 (`grafana_datasources`, `grafana_datasource_health`, `grafana_contact_points`)

@@ -15,9 +15,11 @@
  *       Prometheus TSDB name inventory for the scrape-synthesised `up` /
  *       `scrape_*` series; the blackbox `/probe` output for `probe_*`).
  *       Names the `expr` reads but `requires` does not demand are the
- *       table's way of naming a lazily-registered counter (policy: require
- *       the always-present sibling, `or vector(0)` the counter) — their
- *       presence is recorded separately, never asserted.
+ *       table's lazily-registered counters (policy: require the sibling
+ *       that registers with the counter, guard the zero on the sibling's
+ *       presence) — they must be present AFTER the stimulus of (c), which
+ *       is what proves the counter's name. The alias's `verified` stamp
+ *       must name the compose image of the product it was checked on.
  *   (b) QUERY — every `expr` evaluates on a real Prometheus with status
  *       `success` and resultType `vector`; the sample is read through the
  *       fetcher's own `sampleFromInstantVector`, so the ledger says exactly
@@ -269,9 +271,13 @@ async function waitForNames(url, names, timeoutMs) {
 const TOKEN_RE = /[A-Za-z_:][A-Za-z0-9_:]*/g;
 // Identifiers that are PromQL, not metric names, in the table's expressions.
 const PROMQL_WORDS = new Set(['sum', 'count', 'max', 'min', 'avg', 'rate', 'increase', 'time', 'vector', 'or', 'and', 'unless', 'by', 'without', 'on', 'ignoring', 'group_left', 'group_right', 'm', 'h', 's', 'd']);
-// Label matchers `{…}` and range selectors `[5m]` are stripped first so
-// label names never read as metric names.
-const metricNamesIn = (expr) => [...new Set((expr.replace(/\{[^}]*\}/g, '').replace(/\[[^\]]*\]/g, '').match(TOKEN_RE) || []).filter((t) => !PROMQL_WORDS.has(t) && !/^\d/.test(t)))];
+// Label matchers `{…}`, range selectors `[5m]` and grouping clauses
+// (`by (…)`, `ignoring (…)`) are stripped first so label names never read
+// as metric names.
+const metricNamesIn = (expr) => [...new Set((expr
+  .replace(/\{[^}]*\}/g, '').replace(/\[[^\]]*\]/g, '')
+  .replace(/\b(by|without|on|ignoring)\s*\([^)]*\)/g, '')
+  .match(TOKEN_RE) || []).filter((t) => !PROMQL_WORDS.has(t) && !/^\d/.test(t)))];
 
 // Where a required name is looked up: the product's exposition, with the
 // documented exceptions (TSDB-synthesised series, blackbox probe output,
@@ -319,7 +325,9 @@ async function main() {
     'otelcol_processor_dropped_spans', 'otelcol_processor_dropped_spans_total',
     'otelcol_processor_dropped_metric_points', 'otelcol_processor_dropped_metric_points_total',
     'otelcol_processor_dropped_log_records', 'otelcol_processor_dropped_log_records_total',
-    'otelcol_exporter_sent_spans', 'otelcol_exporter_queue_size', 'otelcol_exporter_queue_capacity', 'otelcol_process_uptime',
+    'otelcol_exporter_sent_spans', 'otelcol_exporter_sent_metric_points', 'otelcol_exporter_sent_log_records',
+    'otelcol_receiver_accepted_spans', 'otelcol_receiver_refused_spans',
+    'otelcol_exporter_queue_size', 'otelcol_exporter_queue_capacity', 'otelcol_process_uptime',
   ];
   const lazy = {
     product: `otelcol@${versions['otel-collector']?.version}`,
@@ -371,9 +379,15 @@ async function main() {
       const missing = a.requires.filter((n) => !expo[sourceFor(a.product, n)]?.has(n));
       const sources = [...new Set(a.requires.map((n) => sourceFor(a.product, n)))];
       // Names the expr reads that `requires` does not demand — the table's
-      // lazily-registered counters (recorded, not asserted).
+      // lazily-registered counters: absent at startup by nature, so they
+      // are asserted against the POST-stimulus exposition (that is what the
+      // stimulus is for); a lazy name still absent then is a wrong name.
       const lazyNames = metricNamesIn(a.expr).filter((n) => !a.requires.includes(n));
       const lazyPresence = Object.fromEntries(lazyNames.map((n) => [n, Boolean(expo[sourceFor(a.product, n)]?.has(n))]));
+      const lazyMissing = lazyNames.filter((n) => !lazyPresence[n]);
+      // The verified stamp must name the image this alias is checked on.
+      const image = versions[service]?.image || '';
+      const stampOk = typeof a.verified === 'string' && a.verified.startsWith(`${image} `);
       // (b) query
       const q = await promQuery(a.expr);
       let query;
@@ -388,15 +402,17 @@ async function main() {
       const entry = {
         id: row.id, family: row.family, aliasIndex: i, product: a.product, service, productVersion,
         expr: a.expr, requires: [...a.requires], expositionSources: sources,
-        exposition: missing.length ? 'missing' : 'present', missing, lazyCounters: lazyPresence,
+        exposition: missing.length || lazyMissing.length ? 'missing' : 'present', missing, lazyCounters: lazyPresence,
+        verified: a.verified ?? null, verifiedMatchesImage: stampOk,
         query,
       };
       ledger.push(entry);
       const expoMark = missing.length ? `✗ (missing ${missing.join(', ')})` : '✓';
       const lazyMark = lazyNames.length ? ` lazy:{${lazyNames.map((n) => `${n}=${lazyPresence[n] ? 'present' : 'absent'}`).join(', ')}}` : '';
+      const stampMark = stampOk ? '' : ` verified✗(${a.verified ?? 'missing'} ≠ ${image})`;
       const queryMark = query.outcome === 'ERROR' ? `ERROR ${query.error}` : `${query.outcome}${query.value === null ? '' : ` ${query.value}`}`;
-      const label = `${row.id}[${i}] | ${productVersion} | exposition ${expoMark}${lazyMark} | query ${queryMark}`;
-      assert(!missing.length && query.outcome !== 'ERROR', label);
+      const label = `${row.id}[${i}] | ${productVersion} | exposition ${expoMark}${lazyMark}${stampMark} | query ${queryMark}`;
+      assert(!missing.length && !lazyMissing.length && stampOk && query.outcome !== 'ERROR', label);
     }
   }
 
@@ -404,6 +420,7 @@ async function main() {
     aliases: ledger.length,
     expositionPresent: ledger.filter((e) => e.exposition === 'present').length,
     expositionMissing: ledger.filter((e) => e.exposition === 'missing').length,
+    verifiedStampMismatch: ledger.filter((e) => !e.verifiedMatchesImage).length,
     queryData: ledger.filter((e) => e.query.outcome === 'data').length,
     queryEmpty: ledger.filter((e) => e.query.outcome === 'empty').length,
     queryError: ledger.filter((e) => e.query.outcome === 'ERROR').length,
@@ -418,7 +435,7 @@ async function main() {
     ledger,
   };
   writeFileSync(LEDGER_FILE, JSON.stringify(out, null, 2) + '\n');
-  say(`\n  ledger: ${summary.aliases} aliases — exposition ${summary.expositionPresent} ✓ / ${summary.expositionMissing} ✗; query ${summary.queryData} data / ${summary.queryEmpty} empty / ${summary.queryError} ERROR`);
+  say(`\n  ledger: ${summary.aliases} aliases — exposition ${summary.expositionPresent} ✓ / ${summary.expositionMissing} ✗ (lazy counters included); verified stamps ${summary.aliases - summary.verifiedStampMismatch}/${summary.aliases} match the compose images; query ${summary.queryData} data / ${summary.queryEmpty} empty / ${summary.queryError} ERROR`);
   say(`  written to ${LEDGER_FILE}`);
   say('  (the stack is left running: docker compose -f docker/stack.compose.yaml down -v to remove it)');
   report('stack-live', `all ${failures.length === 0 ? ledger.length : 0} alias checks pass against the live stack.`);

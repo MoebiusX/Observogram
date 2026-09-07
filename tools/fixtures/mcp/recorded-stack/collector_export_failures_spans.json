@@ -1,11 +1,11 @@
 {
   "_recorded": {
-    "recordedAt": "2026-09-07T16:08:36.735Z",
+    "recordedAt": "2026-09-07T16:42:29.556Z",
     "tool": "metrics_query",
     "family": "collector",
-    "row": "collector_queue_saturation",
+    "row": "collector_export_failures_spans",
     "product": "otelcol",
-    "query": "max(otelcol_exporter_queue_size / otelcol_exporter_queue_capacity)",
+    "query": "sum(rate(otelcol_exporter_send_failed_spans[5m])) or (count(otelcol_exporter_sent_spans) * 0)",
     "outcome": "data",
     "value": 0
   },
@@ -15,7 +15,7 @@
     {
       "metric": {},
       "value": [
-        1788797320,
+        1788799352,
         "0"
       ]
     }

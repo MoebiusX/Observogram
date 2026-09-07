@@ -2,10 +2,10 @@
   "_recorded": {
     "recordedAt": "2026-09-07T16:42:29.556Z",
     "tool": "metrics_query",
-    "family": "logs",
-    "row": "log_shipper_drops",
-    "product": "promtail",
-    "query": "sum(rate(promtail_dropped_entries_total[5m]))",
+    "family": "dashboards",
+    "row": "datasource_errors",
+    "product": "grafana",
+    "query": "sum(rate(grafana_proxy_response_status_total{code=~\"5..\"}[5m])) or (count(grafana_proxy_response_status_total) * 0)",
     "outcome": "data",
     "value": 0
   },

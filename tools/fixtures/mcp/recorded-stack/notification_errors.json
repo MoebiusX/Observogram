@@ -1,6 +1,6 @@
 {
   "_recorded": {
-    "recordedAt": "2026-09-07T16:08:36.735Z",
+    "recordedAt": "2026-09-07T16:42:29.556Z",
     "tool": "metrics_query",
     "family": "notify",
     "row": "notification_errors",
@@ -15,7 +15,7 @@
     {
       "metric": {},
       "value": [
-        1788797319,
+        1788799352,
         "0.0033333333333333335"
       ]
     }

@@ -64,6 +64,19 @@ assert(STACK_FAMILIES.every((f) => rows.some((r) => r.family === f)), 'every fam
 // requires ⊆ tokens(expr): a metric name is a whole PromQL identifier token.
 const TOKEN_RE = /[A-Za-z_:][A-Za-z0-9_:]*/g;
 const PRODUCT_RE = /^[a-z][a-z0-9]*$/;
+// `verified` (optional per alias): `<image:tag> <how> + PromQL, <date>` —
+// the pinned product image whose exposition carried the required names and
+// whose PromQL evaluated the expr (tools/test-stack-live.mjs re-checks it).
+const VERIFIED_RE = /^[a-z0-9][a-z0-9./-]*:[A-Za-z0-9._-]+ (exposition|TSDB inventory|probe output) \+ PromQL, \d{4}-\d{2}-\d{2}$/;
+// The metric names an expr reads: label matchers, range selectors and
+// grouping clauses (`by (…)`, `ignoring (…)`) stripped, PromQL words dropped.
+const PROMQL_WORDS = new Set(['sum', 'count', 'max', 'min', 'avg', 'rate', 'increase', 'time', 'vector', 'or', 'and', 'unless', 'by', 'without', 'on', 'ignoring', 'group_left', 'group_right']);
+const metricNamesIn = (expr) => [...new Set((expr
+  .replace(/\{[^}]*\}/g, '').replace(/\[[^\]]*\]/g, '')
+  .replace(/\b(by|without|on|ignoring)\s*\([^)]*\)/g, '')
+  .match(TOKEN_RE) || []).filter((t) => !PROMQL_WORDS.has(t)))];
+let verifiedAliases = 0;
+let lazyAliases = 0;
 for (const r of rows) {
   for (const [i, a] of r.aliases.entries()) {
     const tokens = new Set(a.expr.match(TOKEN_RE) || []);
@@ -71,8 +84,28 @@ for (const r of rows) {
     assert(missing.length === 0 && a.requires.length > 0,
       `${r.id}[${i}] (${a.product}): requires ⊆ metric names read by expr`, { missing, requires: a.requires });
     assert(PRODUCT_RE.test(a.product), `${r.id}[${i}]: product "${a.product}" is a slug`);
+    if (a.verified !== undefined) {
+      verifiedAliases += 1;
+      assert(typeof a.verified === 'string' && VERIFIED_RE.test(a.verified),
+        `${r.id}[${i}]: verified stamp has the shape "<image:tag> <how> + PromQL, <date>"`, a.verified);
+    }
+    assert(!/vector\(0\)/.test(a.expr), `${r.id}[${i}]: never \`or vector(0)\` — zeros are presence-guarded`, a.expr);
+    // Lazily-registered counters: an expr that reads a name `requires` does
+    // not demand must end with the presence-guarded zero of a REQUIRED
+    // sibling, so the row reads 0 only when the product is doing that work.
+    const lazy = metricNamesIn(a.expr).filter((n) => !a.requires.includes(n));
+    if (lazy.length) {
+      lazyAliases += 1;
+      const guarded = a.requires.some((s) => a.expr.endsWith(`or (count(${s}) * 0)`));
+      assert(guarded, `${r.id}[${i}]: lazily-registered counter(s) ${lazy.join(', ')} are guarded by a required sibling's presence (or (count(<sibling>) * 0))`, a.expr);
+    }
   }
 }
+assert(verifiedAliases === rows.reduce((n, r) => n + r.aliases.length, 0) && verifiedAliases === 32,
+  'every alias carries a verified stamp (32 aliases after the 2026-09-07 live correction)', verifiedAliases);
+assert(lazyAliases === 6, 'exactly the six otelcol counter rows (send_failed_*, receiver_refused_*) use the lazy-counter policy', lazyAliases);
+assert(rows.every((r) => r.aliases.every((a) => !/otelcol_[a-z_]+_total\b/.test(a.expr) && !/otelcol_processor_dropped/.test(a.expr))),
+  'no otelcol alias reads a `_total`-suffixed or processor_dropped_* name (neither exists on 0.115.1 nor 0.154.0)');
 
 // referenceSli resolves in the named reference pack.
 const packCache = {};
@@ -119,6 +152,25 @@ for (const id of ['scrape_targets_down', 'synthetic_probe_failures']) {
 }
 const ratio = rows.find((x) => x.id === 'scrape_success_ratio');
 assert(ratio.aliases[0].expr === 'sum(up) / count(up)', 'scrape_success_ratio is sum(up) / count(up) so an all-down stack reads 0, not empty', ratio.aliases[0].expr);
+// Rate rows whose label filter matches nothing on a healthy product carry
+// the same guard (documented discrepancy 3 for the datasource row).
+for (const id of ['datasource_errors', 'grafana_http_errors']) {
+  const r = rows.find((x) => x.id === id);
+  assert(r.aliases.every((a) => a.expr.endsWith(`or (count(${a.requires[0]}) * 0)`)),
+    `${id}: the 5xx rate alias(es) carry the presence-guarded zero of their base metric`, r.aliases.map((a) => a.expr));
+}
+const ds = rows.find((x) => x.id === 'datasource_errors');
+assert(ds.aliases.length === 2 && ds.aliases[0].requires[0] === 'grafana_proxy_response_status_total' && ds.aliases[1].requires[0] === 'grafana_datasource_request_total',
+  'datasource_errors reads the pre-registered grafana_proxy_response_status_total first, the lazily-registered reference-pack name second', ds.aliases.map((a) => a.requires));
+// The lazy otelcol rows require the sibling that registers with the counter.
+for (const [id, counter, sibling] of [
+  ['collector_export_failures_spans', 'otelcol_exporter_send_failed_spans', 'otelcol_exporter_sent_spans'],
+  ['collector_refused_spans', 'otelcol_receiver_refused_spans', 'otelcol_receiver_accepted_spans'],
+]) {
+  const a = rows.find((x) => x.id === id).aliases[0];
+  assert(a.requires.join() === sibling && a.expr === `sum(rate(${counter}[5m])) or (count(${sibling}) * 0)`,
+    `${id}: requires the sibling ${sibling}, reads ${counter} guarded by it`, a);
+}
 
 // Registry seam: the sampler gates on metrics_query, same tool as build_info.
 assert(capabilityTool('stack_self_metrics') === capabilityTool('build_info_versions'),
@@ -134,6 +186,8 @@ for (const id of ['alertmanager_status', 'alertmanager_silences', 'grafana_datas
 
 assert(rowsForFamily('collector').length === 7 && rowsForFamily('collector').every((r) => r.family === 'collector'),
   'rowsForFamily filters by family (collector has 7 rows)', rowsForFamily('collector').map((r) => r.id));
+assert(rowsForFamily('collector').map((r) => r.id).join(',') === 'collector_export_failures_metrics,collector_export_failures_spans,collector_export_failures_logs,collector_refused_metrics,collector_refused_spans,collector_refused_logs,collector_queue_saturation',
+  'the collector rows are export failures, receiver refusals (the retired processor_dropped_* rows) and queue saturation', rowsForFamily('collector').map((r) => r.id));
 assert(rowsForFamily('nope').length === 0, 'rowsForFamily of an unknown family is empty');
 
 const ruleFailures = rows.find((r) => r.id === 'rule_evaluation_failures');
