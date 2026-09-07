@@ -338,6 +338,56 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
   assert(nothingAttempted.vantage === 'full', 'a live draft without probe annotations (older pack) reads full, not lost', nothingAttempted);
 }
 
+// Fresh names the vantage: a refresh whose every probe family failed is
+// still a refresh (pass stays a staleness test), but the detail must not
+// read as a fresh look at production.
+{
+  const lost = computeDiagnosticGrade(
+    baseRepoPack(),
+    livePack({
+      'mcp.url': 'https://example.test/mcp',
+      'mcp.refreshedAt': '2026-06-09T11:00:00Z',
+      'mcp.probesAttempted': 'recording_rules,alert_rules,dashboards',
+      'mcp.probesFailed': 'recording_rules,alert_rules',
+      'mcp.probesUnsupported': 'dashboards',
+    }),
+    fullPosture(),
+    'production-live',
+    null,
+    { nowMs },
+  );
+  const freshLost = criterion(lost, 'fresh');
+  assert(freshLost.pass === true, 'fresh pass/fail stays a staleness test (scoring unchanged)', freshLost);
+  assert(/vantage lost/.test(freshLost.detail) && /failed: recording_rules, alert_rules/.test(freshLost.detail)
+         && /not exposed: dashboards/.test(freshLost.detail),
+         'fresh detail says the vantage was lost and names the failed / not-exposed families', freshLost.detail);
+
+  const partial = computeDiagnosticGrade(
+    baseRepoPack(),
+    livePack({
+      'mcp.url': 'https://example.test/mcp',
+      'mcp.refreshedAt': '2026-06-09T11:00:00Z',
+      'mcp.probesAttempted': 'recording_rules,alert_rules,dashboards',
+      'mcp.probesSucceeded': 'recording_rules,alert_rules',
+      'mcp.probesFailed': 'dashboards',
+    }),
+    fullPosture(),
+    'production-live',
+    null,
+    { nowMs },
+  );
+  const freshPartial = criterion(partial, 'fresh');
+  assert(freshPartial.pass === true && /vantage partial: failed dashboards/.test(freshPartial.detail),
+         'fresh detail names a partial vantage and its failed families', freshPartial.detail);
+
+  const full = computeDiagnosticGrade(
+    baseRepoPack(),
+    livePack({ 'mcp.url': 'https://example.test/mcp', 'mcp.refreshedAt': '2026-06-09T11:00:00Z', 'mcp.probesAttempted': 'a', 'mcp.probesSucceeded': 'a' }),
+    fullPosture(), 'production-live', null, { nowMs },
+  );
+  assert(!/vantage/.test(criterion(full, 'fresh').detail), 'a full vantage adds nothing to the fresh detail', criterion(full, 'fresh').detail);
+}
+
 // ---------- prettyDiffKey (studio/artifact-model.mjs) ----------
 // The studio's display renderer for behavioural identity keys. One case
 // per identity shape in tools/lib/artefact-model.mjs's IDENTITY table,

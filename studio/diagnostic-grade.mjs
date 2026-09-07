@@ -388,7 +388,10 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
         const concreteInBoth = (bucket.inBoth || []).filter(e => !isScaffoldDiffEntry(e));
         scaffoldExcluded += (bucket.onlyInA || []).filter(e => isScaffoldDiffEntry(e)).length
           + (bucket.onlyInB || []).filter(e => isScaffoldDiffEntry(e)).length
-          + (bucket.inBoth || []).filter(e => isScaffoldDiffEntry(e)).length;
+          + (bucket.inBoth || []).filter(e => isScaffoldDiffEntry(e)).length
+          // diffPacks parks placeholders in their own bucket (never paired);
+          // older diffs without it still fall through the filters above.
+          + (bucket.scaffold || []).length;
         declaredMissing += concreteOnlyInA.length;
         const bucketDrifted = concreteInBoth.filter(e => e.match === 'drifted');
         behaviorDrifted += bucketDrifted.length;
@@ -449,6 +452,17 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
       freshDetail = fresh
         ? `last refreshed ${ageHrs}h ago - within 24h staleness window`
         : `last refreshed ${ageHrs}h ago - exceeds 24h staleness window, signals may have drifted`;
+      // A refresh that saw nothing is not a fresh look at production. The
+      // pass/fail stays a staleness test (scoring is out of scope); the
+      // detail says what the vantage actually delivered.
+      const vantage = partialLiveEvidence({ meta: { annotations: liveAnn } });
+      if (vantage.vantage === 'lost') {
+        const failed = vantage.failed.length ? `failed: ${vantage.failed.join(', ')}` : '';
+        const unsupported = vantage.unsupported.length ? `not exposed: ${vantage.unsupported.join(', ')}` : '';
+        freshDetail += ` - but vantage lost: no probe family answered (${[failed, unsupported].filter(Boolean).join('; ')})`;
+      } else if (vantage.vantage === 'partial') {
+        freshDetail += ` - vantage partial: failed ${vantage.failed.join(', ')}`;
+      }
     }
   }
 
