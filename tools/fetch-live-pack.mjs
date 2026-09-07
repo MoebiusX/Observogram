@@ -189,6 +189,149 @@ function pickCriticality(services) {
   return 'tier-2';
 }
 
+// ============================================================
+// Burn-rate alert mapping — discovered alerting rules → spec.policy
+// ============================================================
+
+const BURN_ALERT_NAME_RE = /^(.+)_burn_(\d+)x_([0-9a-z]+)_([0-9a-z]+)$/;
+const SPEC_DURATION_RE = /^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h|d|w|mo|y))+$/;
+const SLO_WINDOWS_ALLOWED = new Set(['7d', '28d', '30d', '90d']);
+const DURATION_UNIT_SECONDS = { ns: 1e-9, us: 1e-6, ms: 1e-3, s: 1, m: 60, h: 3600, d: 86400, w: 604800, mo: 2628000, y: 31536000 };
+
+function durationToSeconds(d) {
+  if (typeof d !== 'string') return null;
+  let total = 0;
+  const re = /([0-9]+(?:\.[0-9]+)?)(ns|us|ms|s|m|h|d|w|mo|y)/g;
+  let m;
+  while ((m = re.exec(d)) !== null) total += parseFloat(m[1]) * (DURATION_UNIT_SECONDS[m[2]] || 0);
+  return total || null;
+}
+
+// Strip the trailing objective digits an SLO id carries
+// (`svc_checkout_availability_99_9` → `svc_checkout_availability`) so a
+// discovered SLO and an inferred placeholder can be matched on the SLI
+// base they share.
+function sloBase(id) {
+  return String(id || '').replace(/(_\d+)+$/, '');
+}
+
+// Severity must land in the spec enum. SEVn passes through; the common
+// Prometheus vocabularies are mapped; anything else falls back on the
+// burn factor (the multi-window playbook convention: 14x pages, 6x
+// warns). Callers record when the fallback fired so the pack never
+// presents an inferred severity as an observed one.
+const SEVERITY_ALIASES = {
+  CRITICAL: 'SEV1', PAGE: 'SEV1', P1: 'SEV1',
+  HIGH: 'SEV2', WARNING: 'SEV2', WARN: 'SEV2', P2: 'SEV2',
+  MEDIUM: 'SEV3', TICKET: 'SEV3', P3: 'SEV3',
+  INFO: 'SEV4', LOW: 'SEV4', P4: 'SEV4',
+};
+function normaliseSeverity(value, factor) {
+  const s = String(value ?? '').trim().toUpperCase();
+  if (/^SEV[1-4]$/.test(s)) return { severity: s, inferred: false };
+  if (SEVERITY_ALIASES[s]) return { severity: SEVERITY_ALIASES[s], inferred: false };
+  return { severity: factor >= 10 ? 'SEV1' : factor >= 5 ? 'SEV2' : 'SEV3', inferred: true };
+}
+
+function parseBurnAlert(alert) {
+  const labels = alert?.labels && typeof alert.labels === 'object' ? alert.labels : {};
+  const name = typeof alert?.name === 'string' ? alert.name : '';
+  let slo, factor, short, long;
+  if (labels.slo && labels.burn_rate && labels.window_short && labels.window_long) {
+    slo = String(labels.slo);
+    factor = Number(labels.burn_rate);
+    short = String(labels.window_short);
+    long = String(labels.window_long);
+  } else {
+    const m = BURN_ALERT_NAME_RE.exec(name);
+    if (!m) return null;
+    slo = m[1];
+    factor = Number(m[2]);
+    short = m[3];
+    long = m[4];
+  }
+  slo = slo.replace(/^ref:/, '').replace(/^slos\./, '');
+  if (!Number.isFinite(factor) || factor <= 1) return null;
+  if (!SPEC_DURATION_RE.test(short) || !SPEC_DURATION_RE.test(long)) return null;
+  const { severity, inferred } = normaliseSeverity(labels.severity, factor);
+  return { name, slo, factor, short, long, severity, severityInferred: inferred, annotations: alert?.annotations || {} };
+}
+
+function parseObjectivePercent(value) {
+  const m = /^\s*([0-9]+(?:\.[0-9]+)?)\s*%\s*$/.exec(String(value ?? ''));
+  if (!m) return null;
+  const objective = Math.round((parseFloat(m[1]) / 100) * 1e6) / 1e6;
+  return objective > 0 && objective < 1 ? objective : null;
+}
+
+/**
+ * Map discovered alerting rules onto spec.policy.burn_rate_alerts.
+ *
+ * Groups burn-rate rules by SLO id, resolves each group against the
+ * inferred `slos` (re-identifying an inferred placeholder — objective
+ * and window included when the rule annotations carry them — when the
+ * two share an SLI base) and drops what the schema cannot represent.
+ * MUTATES `slos` in place for the re-id so every later consumer sees the
+ * discovered id.
+ *
+ * Returns { alerts, unmapped, severityInferred, reidentified }.
+ */
+export function mapDiscoveredBurnAlerts(alerts, slos) {
+  const groups = new Map();  // slo id → { windows, seen, objective, window }
+  const severityInferred = [];
+  for (const alert of alerts || []) {
+    if (alert?.labels?.kind === 'forecast') continue;
+    const parsed = parseBurnAlert(alert);
+    if (!parsed) continue;
+    if (parsed.severityInferred && parsed.name) severityInferred.push(parsed.name);
+    let g = groups.get(parsed.slo);
+    if (!g) {
+      g = { windows: [], seen: new Set(), objective: null, window: null };
+      groups.set(parsed.slo, g);
+    }
+    const key = `${parsed.short}|${parsed.long}|${parsed.factor}|${parsed.severity}`;
+    if (!g.seen.has(key)) {
+      g.seen.add(key);
+      g.windows.push({ short: parsed.short, long: parsed.long, factor: parsed.factor, severity: parsed.severity });
+    }
+    if (g.objective == null) g.objective = parseObjectivePercent(parsed.annotations.slo_objective);
+    if (g.window == null && SLO_WINDOWS_ALLOWED.has(String(parsed.annotations.slo_window))) {
+      g.window = String(parsed.annotations.slo_window);
+    }
+  }
+
+  const alertsOut = [];
+  const unmapped = [];
+  const reidentified = {};
+  const claimed = new Set();  // inferred SLOs already re-identified — one discovered id each
+  for (const [discoveredId, g] of groups) {
+    let slo = slos.find(s => s.id === discoveredId);
+    if (!slo) {
+      const candidate = slos.find(s => !claimed.has(s) && sloBase(s.id) === sloBase(discoveredId));
+      if (candidate) {
+        claimed.add(candidate);
+        reidentified[candidate.id] = discoveredId;
+        candidate.id = discoveredId;
+        if (g.objective != null) candidate.objective = g.objective;
+        if (g.window) candidate.window = g.window;
+        slo = candidate;
+      }
+    }
+    // Schema: >= 2 windows per entry. A single-window group is a real
+    // alert we cannot represent — report it rather than pad it.
+    if (!slo || g.windows.length < 2) {
+      unmapped.push(discoveredId);
+      continue;
+    }
+    const windows = g.windows
+      .map((w, i) => ({ w, i, s: durationToSeconds(w.short) ?? Infinity }))
+      .sort((x, y) => (x.s - y.s) || (x.i - y.i))
+      .map(x => x.w);
+    alertsOut.push({ slo: slo.id, windows });
+  }
+  return { alerts: alertsOut, unmapped, severityInferred, reidentified };
+}
+
 function defaultBaselines(criticality) {
   if (criticality === 'tier-1') return { mttd_target_p50: '2m', mttr_target_p50: '30m' };
   if (criticality === 'tier-2') return { mttd_target_p50: '5m', mttr_target_p50: '2h' };
@@ -823,22 +966,47 @@ export function buildCanonicalPack({
   }
 
   // ---- spec.policy.burn_rate_alerts ----
-  // Per-SLO multi-window pattern is always synthesized — even when the
-  // MCP exposes flat alert rules, those rarely encode the short/long
-  // window decomposition the spec requires. We DO surface the
-  // discovered alert NAMES in metadata.annotations.mcp.discovered.alert_rules
-  // so the SRE can see what currently fires.
-  const burnRateAlerts = slos.map(s => ({
-    slo: s.id,
-    windows: [
-      { short: '5m',  long: '1h', factor: 14, severity: 'SEV1' },
-      { short: '30m', long: '6h', factor: 6,  severity: 'SEV2' },
-    ],
-  }));
-  const discoveredAlertNames = (probeResults?.alert_rules?.adapted || []).map(a => a.name).filter(Boolean);
+  // Burn-rate alerts are MAPPED from the alerting rules the MCP actually
+  // exposes — never synthesised per SLO. A synthesised two-window entry
+  // stamped Verified was the textbook false assurance: the pack claimed
+  // production paged on budget burn when nothing of the kind existed.
+  // Rules emitted by our own compiler carry the {slo, burn_rate,
+  // window_short, window_long, severity} labels; anything else is
+  // recognised by the compiler's `<slo>_burn_<N>x_<short>_<long>` name.
+  // Forecast rules (labels.kind=forecast) and plain threshold alerts are
+  // left where they are — their NAMES still surface in
+  // mcp.discovered.alert_rule_names so the SRE can see what fires.
+  const discoveredAlerts = Array.isArray(probeResults?.alert_rules?.adapted)
+    ? probeResults.alert_rules.adapted.filter(a => a && typeof a === 'object')
+    : [];
+  const discoveredAlertNames = discoveredAlerts.map(a => a.name).filter(Boolean);
   if (discoveredAlertNames.length) {
     annotations['mcp.discovered.alert_rule_names'] = discoveredAlertNames.slice(0, 64).join(',');
-    markVerified('policy.burn_rate_alerts');
+  }
+  const burnMapping = mapDiscoveredBurnAlerts(discoveredAlerts, slos);
+  let burnRateAlerts = burnMapping.alerts;
+  burnRateAlerts.forEach((_, i) => markVerified(`policy.burn_rate_alerts[${i}]`));
+  if (burnMapping.unmapped.length) {
+    annotations['mcp.discovered.alert_rules_unmapped'] = burnMapping.unmapped.slice(0, 64).join(',');
+  }
+  if (burnMapping.severityInferred.length) {
+    annotations['mcp.discovered.alert_rules_severity_inferred'] = burnMapping.severityInferred.slice(0, 64).join(',');
+  }
+  if (burnRateAlerts.length === 0) {
+    // The schema forces policy.burn_rate_alerts to hold >= 1 entry with
+    // >= 2 windows. Emit ONE placeholder on the first SLO and mark it a
+    // scaffold (same convention as crawler.scaffold.*) so the adapter
+    // projects it as Scaffold — never Declared, never Verified — and the
+    // grade parks it instead of counting it as live evidence.
+    burnRateAlerts = [{
+      slo: slos[0].id,
+      windows: [
+        { short: '5m',  long: '1h', factor: 14, severity: 'SEV1' },
+        { short: '30m', long: '6h', factor: 6,  severity: 'SEV2' },
+      ],
+    }];
+    annotations['mcp.scaffold.policy.burn_rate_alerts[0]'] =
+      'schema-required fallback; no burn-rate alerting rule discovered via MCP';
   }
 
   // Rule-evidence fallback annotations — what we found when the standard

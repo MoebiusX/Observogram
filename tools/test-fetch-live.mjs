@@ -97,9 +97,19 @@ assert(rich.spec.pipelines.processors.length >= 1, 'pipelines.processors >= 1');
 assert(!!rich.spec.pipelines.exporters.metrics && !!rich.spec.pipelines.exporters.logs && !!rich.spec.pipelines.exporters.traces,
        'pipelines.exporters has metrics + logs + traces');
 
-// burn rate alerts per SLO
-assert(rich.spec.policy.burn_rate_alerts.length === 3, 'one burn-rate alert per SLO');
-assert(rich.spec.policy.burn_rate_alerts.every(a => a.windows.length >= 2), 'burn-rate alerts have >=2 windows');
+// burn rate alerts: NOT synthesised per SLO any more. No alert probe
+// answered, so the only entry is the schema-forced placeholder, stamped
+// as an mcp.scaffold — never Verified.
+assert(rich.spec.policy.burn_rate_alerts.length === 1,
+       'no alert probe → single schema-forced burn-rate placeholder (no per-SLO synthesis)',
+       rich.spec.policy.burn_rate_alerts.length, 1);
+assert(rich.spec.policy.burn_rate_alerts[0].windows.length >= 2, 'placeholder burn-rate alert has >=2 windows');
+assert(rich.spec.policy.burn_rate_alerts[0].slo === rich.spec.slos[0].id, 'placeholder binds to the first SLO');
+assert(typeof a['mcp.scaffold.policy.burn_rate_alerts[0]'] === 'string',
+       'placeholder burn-rate alert is stamped mcp.scaffold.policy.burn_rate_alerts[0]');
+assert(!Object.keys(a).some(k => k.startsWith('mcp.verified.policy.')),
+       'no mcp.verified.policy.* key when no alerting rule was discovered',
+       Object.keys(a).filter(k => k.startsWith('mcp.verified.policy.')), []);
 
 // baselines reflect MCP minimum-threshold
 assert(rich.spec.baselines.mttd_target_p50 === '90ms', 'mttd_target_p50 derived from smallest baseline threshold',
@@ -113,6 +123,9 @@ assert(verifiedSli?.source === 'Verified', 'adapter surfaces Verified source for
        verifiedSli?.source, 'Verified');
 const verifiedBackend = layered.layers.L2.find(x => x.title === 'metrics-prom');
 assert(verifiedBackend?.source === 'Verified', 'adapter surfaces Verified source for fetched backend');
+const scaffoldBurn = layered.layers.L4.policy.find(x => x.id === 'POL-01');
+assert(scaffoldBurn?.source === 'Scaffold', 'adapter projects the mcp.scaffold burn-rate placeholder as Scaffold',
+       scaffoldBurn?.source, 'Scaffold');
 
 // YAML round-trip
 const text = emitYaml(rich);
@@ -275,6 +288,153 @@ assert(typeof probed.metadata.annotations['mcp.verified.otel.metrics'] === 'stri
        'metric inventory verified by MCP');
 assert(typeof probed.metadata.annotations['mcp.verified.pipelines.exporters.metrics'] === 'string',
        'metrics exporter path verified when scrape/metric inventory is observed');
+
+// A plain threshold alert is NOT a burn-rate alert: nothing maps, the
+// schema-forced placeholder stands in and is stamped scaffold, and no
+// mcp.verified.policy.* key is written on the strength of a NAME.
+assert(probed.spec.policy.burn_rate_alerts.length === 1
+       && typeof probed.metadata.annotations['mcp.scaffold.policy.burn_rate_alerts[0]'] === 'string',
+       'threshold alert alone → scaffold placeholder, not a Verified burn-rate alert');
+assert(probed.metadata.annotations['mcp.verified.policy.burn_rate_alerts'] === undefined
+       && probed.metadata.annotations['mcp.verified.policy.burn_rate_alerts[0]'] === undefined,
+       'no burn-rate verification stamp on the strength of a discovered alert NAME');
+
+// ---------- case 3b: discovered burn-rate alerting rules map onto policy.burn_rate_alerts ----------
+//
+// The fetcher used to synthesise a two-window burn alert per SLO and
+// stamp it Verified whenever ANY alert name came back — false assurance.
+// Now compiler-labelled rules ({slo, burn_rate, window_short, window_long,
+// severity}) and name-pattern rules (`<slo>_burn_<N>x_<short>_<long>`)
+// are grouped per SLO, an inferred placeholder SLO sharing the SLI base
+// is re-identified to the discovered id (objective/window taken from the
+// rule annotations), forecast rules are skipped, and groups that name an
+// SLO nobody inferred land in mcp.discovered.alert_rules_unmapped.
+
+const DISCOVERED_SLO = 'svc_checkout_availability_99_9';
+const UNKNOWN_SLO = 'svc_payments_latency_99';
+const compilerLabels = (slo, factor, short, long, severity) => ({
+  severity, slo, sli: 'svc_checkout_availability', service: 'checkout',
+  burn_rate: String(factor), window_short: short, window_long: long,
+});
+const compilerAnnotations = { summary: 'x', description: 'y', slo_objective: '99.900%', slo_window: '30d', runbook: '(supply runbook URL)' };
+const burnProbed = buildCanonicalPack({
+  refreshedAt,
+  mcpUrl: 'https://fake-mcp.test/observability',
+  health: { services: [{ name: 'svc-checkout', criticality: 'tier-1' }] },
+  topology: { dependencies: [] },
+  anomaliesActive: {},
+  baselinesData: { baselines: [] },
+  probeResults: {
+    recording_rules: {
+      tool: 'list_recording_rules',
+      adapted: [
+        { name: 'svc_checkout:availability:good_5m',  expr: 'sum(rate(http_requests_total{status_code!~"5.."}[5m]))', interval: '30s' },
+        { name: 'svc_checkout:availability:total_5m', expr: 'sum(rate(http_requests_total[5m]))',                       interval: '30s' },
+      ],
+    },
+    alert_rules: {
+      tool: 'list_alert_rules',
+      adapted: [
+        // long window listed FIRST — the mapper must order short-window-first.
+        { name: `${DISCOVERED_SLO}_burn_6x_30m_6h`, expr: 'e1', for: '15m',
+          labels: compilerLabels(DISCOVERED_SLO, 6, '30m', '6h', 'SEV2'), annotations: compilerAnnotations },
+        { name: `${DISCOVERED_SLO}_burn_14x_5m_1h`, expr: 'e2', for: '2m',
+          labels: compilerLabels(DISCOVERED_SLO, 14, '5m', '1h', 'SEV1'), annotations: compilerAnnotations },
+        // duplicate of the 14x window (e.g. the same rule in two groups) — deduped.
+        { name: `${DISCOVERED_SLO}_burn_14x_5m_1h_copy`, expr: 'e2', for: '2m',
+          labels: compilerLabels(DISCOVERED_SLO, 14, '5m', '1h', 'SEV1'), annotations: compilerAnnotations },
+        // unlabelled rule recognised by the compiler NAME pattern; no
+        // severity label → inferred from the factor (recorded as such).
+        { name: `${DISCOVERED_SLO}_burn_2x_6h_3d`, expr: 'e3', for: '1h', labels: {}, annotations: {} },
+        // forecast rule — skipped by the burn mapper, name still surfaced.
+        { name: `${DISCOVERED_SLO}_forecast_linear_7d`, expr: 'predict_linear(...)', for: '5m',
+          labels: { kind: 'forecast', slo: DISCOVERED_SLO }, annotations: {} },
+        // burn-rate rules for an SLO nobody inferred → unmapped (not representable).
+        { name: `${UNKNOWN_SLO}_burn_14x_5m_1h`, expr: 'e4', for: '2m',
+          labels: compilerLabels(UNKNOWN_SLO, 14, '5m', '1h', 'SEV1'), annotations: {} },
+        { name: `${UNKNOWN_SLO}_burn_6x_30m_6h`, expr: 'e5', for: '15m',
+          labels: compilerLabels(UNKNOWN_SLO, 6, '30m', '6h', 'SEV2'), annotations: {} },
+        // plain threshold alert — not a burn-rate alert, ignored by the mapper.
+        { name: 'CheckoutHighErrorRate', expr: 'svc_checkout:availability:ratio_5m < 0.99', for: '5m', labels: {}, annotations: {} },
+      ],
+    },
+  },
+  errors: {},
+});
+{
+  const errors = validateCanonical(burnProbed, SCHEMA);
+  assert(errors.length === 0, 'burn-mapped pack validates against canonical schema', errors, []);
+}
+const bAnn = burnProbed.metadata.annotations;
+const burnAlerts = burnProbed.spec.policy.burn_rate_alerts;
+assert(burnAlerts.length === 1, 'exactly one burn-rate entry (the checkout SLO group)', burnAlerts.length, 1);
+assert(burnAlerts[0]?.slo === DISCOVERED_SLO, 'burn-rate entry binds to the DISCOVERED slo id', burnAlerts[0]?.slo, DISCOVERED_SLO);
+assert(JSON.stringify(burnAlerts[0]?.windows) === JSON.stringify([
+  { short: '5m',  long: '1h', factor: 14, severity: 'SEV1' },
+  { short: '30m', long: '6h', factor: 6,  severity: 'SEV2' },
+  { short: '6h',  long: '3d', factor: 2,  severity: 'SEV3' },
+]), 'windows: deduped, short-window-first, name-pattern rule merged, factor a Number',
+   burnAlerts[0]?.windows);
+
+// re-id of the inferred placeholder SLO + objective/window replacement.
+assert(burnProbed.spec.slos.some(s => s.id === DISCOVERED_SLO), 'inferred SLO re-identified to the discovered id');
+assert(!burnProbed.spec.slos.some(s => s.id === 'svc_checkout_availability_99'), 'placeholder SLO id no longer present');
+const reidSlo = burnProbed.spec.slos.find(s => s.id === DISCOVERED_SLO);
+assert(reidSlo?.objective === 0.999, 'placeholder objective replaced from slo_objective annotation (99.900% → 0.999)',
+       reidSlo?.objective, 0.999);
+assert(reidSlo?.window === '30d', 'window taken from slo_window annotation');
+assert(reidSlo?.sli === 'svc_checkout_availability', 're-identified SLO still references its SLI');
+
+// stamps: indexed Verified for the mapped entry, no unindexed key, no scaffold.
+assert(typeof bAnn['mcp.verified.policy.burn_rate_alerts[0]'] === 'string', 'mapped burn-rate alert stamped mcp.verified.policy.burn_rate_alerts[0]');
+assert(bAnn['mcp.verified.policy.burn_rate_alerts'] === undefined, 'no unindexed mcp.verified.policy.burn_rate_alerts stamp');
+assert(bAnn['mcp.verified.policy.burn_rate_alerts[1]'] === undefined, 'no stamp beyond the mapped entries');
+assert(bAnn['mcp.scaffold.policy.burn_rate_alerts[0]'] === undefined, 'no scaffold placeholder when a real burn alert mapped');
+
+// annotations: names (incl. forecast + threshold), unmapped, inferred severity.
+assert(bAnn['mcp.discovered.alert_rule_names']?.includes(`${DISCOVERED_SLO}_forecast_linear_7d`), 'forecast rule name still surfaced in alert_rule_names');
+assert(bAnn['mcp.discovered.alert_rule_names']?.includes('CheckoutHighErrorRate'), 'threshold rule name still surfaced in alert_rule_names');
+assert(bAnn['mcp.discovered.alert_rules_unmapped'] === UNKNOWN_SLO,
+       'burn group for an SLO nobody inferred lands in mcp.discovered.alert_rules_unmapped',
+       bAnn['mcp.discovered.alert_rules_unmapped'], UNKNOWN_SLO);
+assert(bAnn['mcp.discovered.alert_rules_severity_inferred'] === `${DISCOVERED_SLO}_burn_2x_6h_3d`,
+       'rules whose severity was inferred from the factor are listed',
+       bAnn['mcp.discovered.alert_rules_severity_inferred'], `${DISCOVERED_SLO}_burn_2x_6h_3d`);
+
+// adapter: mapped entry projects as Verified and references the re-id'd SLO.
+{
+  const l = adapt(burnProbed);
+  const pol = l.layers.L4.policy.filter(x => x.id.startsWith('POL-'));
+  assert(pol.length === 1 && pol[0].source === 'Verified', 'adapter projects the mapped burn-rate alert as Verified', pol.map(p => p.source), ['Verified']);
+  assert(pol[0]?.refs?.includes(`slos.${DISCOVERED_SLO}`), 'adapter burn-rate alert refs the discovered SLO id', pol[0]?.refs, [`slos.${DISCOVERED_SLO}`]);
+  const slo = l.layers.L1.find(x => x.spec?.id === DISCOVERED_SLO);
+  assert(!!slo, 'adapter L1 carries the re-identified SLO');
+}
+
+// A single-window burn group is a real alert the schema cannot hold
+// (windows minItems 2): reported as unmapped, never padded.
+{
+  const single = buildCanonicalPack({
+    refreshedAt,
+    mcpUrl: 'https://fake-mcp.test/observability',
+    health: { services: [{ name: 'svc-checkout', criticality: 'tier-1' }] },
+    topology: { dependencies: [] }, anomaliesActive: {}, baselinesData: { baselines: [] },
+    probeResults: {
+      alert_rules: { tool: 'list_alert_rules', adapted: [
+        { name: 'svc_checkout_availability_99_burn_14x_5m_1h', expr: 'e', for: '2m', labels: { severity: 'critical' }, annotations: {} },
+      ] },
+    },
+    errors: {},
+  });
+  assert(validateCanonical(single, SCHEMA).length === 0, 'single-window pack still validates (scaffold placeholder)');
+  assert(single.metadata.annotations['mcp.discovered.alert_rules_unmapped'] === 'svc_checkout_availability_99',
+         'single-window group reported unmapped rather than padded',
+         single.metadata.annotations['mcp.discovered.alert_rules_unmapped'], 'svc_checkout_availability_99');
+  assert(typeof single.metadata.annotations['mcp.scaffold.policy.burn_rate_alerts[0]'] === 'string',
+         'single-window group → schema placeholder stamped scaffold');
+  assert(single.metadata.annotations['mcp.verified.policy.burn_rate_alerts[0]'] === undefined,
+         'single-window group → no Verified stamp');
+}
 
 // ---------- case 4: probes attempted but came back empty — honest gap ----------
 //

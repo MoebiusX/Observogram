@@ -39,7 +39,7 @@ diagnostic-grade drift:
 | Metrics | metric inventory and names observed from the live platform |
 | Scrape jobs | Prometheus/VictoriaMetrics scrape evidence |
 | Recording rules | full rule names and expressions where the MCP exposes them |
-| Alert rules | Grafana/Prometheus alerting rules and burn-rate alerts |
+| Alert rules | Grafana/Prometheus alerting rules; burn-rate alerts are mapped from them per SLO, never synthesised |
 | Dashboards | Grafana dashboard metadata plus dashboard bodies, panels, variables, and targets |
 | Baselines | MTTD/MTTR and anomaly-derived evidence when available |
 | Backend versions | observed platform products and versions |
@@ -68,12 +68,46 @@ metadata:
     mcp.verified.telemetry.scrape: "2026-06-09T00:09:14.730Z"
     mcp.verified.queries.recording_rules: "2026-06-09T00:09:14.730Z"
     mcp.verified.dashboards: "2026-06-09T00:09:14.730Z"
-    mcp.verified.policy.burn_rate_alerts: "2026-06-09T00:09:14.730Z"
+    mcp.verified.policy.burn_rate_alerts[0]: "2026-06-09T00:09:14.730Z"
+
+    mcp.discovered.alert_rule_names: "svc_checkout_availability_99_9_burn_14x_5m_1h,..."
+    mcp.discovered.alert_rules_unmapped: "svc_payments_latency_99"
+    mcp.discovered.alert_rules_severity_inferred: ""
+    mcp.scaffold.policy.burn_rate_alerts[0]: "schema-required fallback; no burn-rate alerting rule discovered via MCP"
 ```
 
 The adapter promotes artifacts with matching `mcp.verified.<symbol>` keys to
-`Verified`. The Diagnostic Grade uses these annotations to decide whether a
-fresh live signal exists.
+`Verified`, and projects `mcp.scaffold.<symbol>` keys (the live-side
+counterpart of `crawler.scaffold.<symbol>`) as `Scaffold` — a schema-forced
+placeholder the MCP did not attest, parked by the grade rather than counted.
+The Diagnostic Grade uses these annotations to decide whether a fresh live
+signal exists.
+
+### Burn-rate alerts are mapped, never synthesised
+
+`spec.policy.burn_rate_alerts` is built only from the alerting rules the MCP
+actually exposes. Rules emitted by the Observogram compiler carry the
+`slo`, `burn_rate`, `window_short`, `window_long` and `severity` labels; any
+other rule is recognised by the compiler's `<slo>_burn_<N>x_<short>_<long>`
+name. Rules are grouped per SLO (identical windows deduplicated, short window
+first) and each emitted entry is stamped `mcp.verified.policy.burn_rate_alerts[<i>]`.
+
+- When the rule names an SLO the fetcher inferred only as a placeholder
+  (same SLI base, e.g. inferred `svc_checkout_availability_99` vs. discovered
+  `svc_checkout_availability_99_9`), the placeholder is re-identified to the
+  discovered id and its placeholder objective/window are replaced from the
+  rule's `slo_objective` (`99.900%` → `0.999`) and `slo_window` annotations.
+- Forecast rules (`labels.kind=forecast`) and plain threshold alerts are not
+  burn-rate alerts; their names still surface in `mcp.discovered.alert_rule_names`.
+- A burn group for an SLO nobody inferred, or one with a single window (the
+  schema requires two), is not representable and is listed in
+  `mcp.discovered.alert_rules_unmapped` instead of being padded.
+- A rule with no recognisable severity gets one from its burn factor
+  (`>= 10x` SEV1, `>= 5x` SEV2, else SEV3) and is listed in
+  `mcp.discovered.alert_rules_severity_inferred`.
+- When nothing maps, the schema still forces one entry: a two-window
+  placeholder on the first SLO, stamped `mcp.scaffold.policy.burn_rate_alerts[0]`
+  and never `Verified`.
 
 Dashboard search alone is not enough for diagnostic drift. The fetcher uses
 `grafana_dashboards_search` to find dashboard UIDs, then calls
