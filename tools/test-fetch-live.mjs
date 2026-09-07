@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from './lib/mini-yaml.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
 import { adapt } from './lib/adapter.mjs';
-import { buildCanonicalPack, fetchMcp, PROBES } from './fetch-live-pack.mjs';
+import { buildCanonicalPack, fetchMcp, mapDiscoveredBurnAlerts, PROBES } from './fetch-live-pack.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = JSON.parse(readFileSync(
@@ -469,6 +469,59 @@ assert(probed.metadata.annotations['mcp.verified.policy.burn_rate_alerts'] === u
        && probed.metadata.annotations['mcp.verified.policy.burn_rate_alerts[0]'] === undefined,
        'no burn-rate verification stamp on the strength of a discovered alert NAME');
 
+// An SLI inferred from a rule the ruler reports FAILING to evaluate is not
+// measuring anything: the latency_p95 rule above carries health 'err', so
+// the threshold SLI built on it stays Declared and is named.
+assert(pAnn['mcp.verified.slis.svc_checkout_latency_p95'] === undefined,
+       'SLI inferred from an unhealthy recorded rule is NOT stamped verified');
+assert(pAnn['mcp.discovered.slis_unhealthy'] === 'svc_checkout_latency_p95',
+       'mcp.discovered.slis_unhealthy names the SLI whose feeding rule is unhealthy',
+       pAnn['mcp.discovered.slis_unhealthy'], 'svc_checkout_latency_p95');
+{
+  const l = adapt(probed);
+  const sli = l.layers.L1.find(x => x.spec?.id === 'svc_checkout_latency_p95');
+  assert(sli?.source === 'Declared', 'adapter projects the SLI fed by an unhealthy rule as Declared', sli?.source, 'Declared');
+}
+// Discovered dashboards are stamped per id — the symbol the adapter reads
+// (`dashboards.<id>`) — beside the aggregate key.
+assert(typeof pAnn['mcp.verified.dashboards.checkout-overview'] === 'string'
+       && typeof pAnn['mcp.verified.dashboards.platform-health'] === 'string',
+       'each discovered dashboard is stamped mcp.verified.dashboards.<id>');
+{
+  const dash = adapt(probed).layers.L3.filter(x => x.id.startsWith('DASH-'));
+  assert(dash.length === 2 && dash.every(d => d.source === 'Verified'),
+         'adapter projects discovered dashboards as Verified', dash.map(d => `${d.title}:${d.source}`));
+}
+
+// Rule health is any-unhealthy-wins per NAME: the same rule reported by
+// two groups (one failing, one ok) must not stamp both entries Verified
+// while mcp.discovered.recording_rules_unhealthy names it.
+{
+  const dup = buildCanonicalPack({
+    refreshedAt,
+    mcpUrl: 'https://fake-mcp.test/observability',
+    health: { services: [{ name: 'svc-checkout', criticality: 'tier-1' }] },
+    topology: { dependencies: [] }, anomaliesActive: {}, baselinesData: { baselines: [] },
+    probeResults: {
+      recording_rules: { tool: 'vmalert_rules', adapted: [
+        { name: 'svc_checkout:availability:ratio_5m', expr: 'a/b', health: 'err', lastError: 'boom' },
+        { name: 'svc_checkout:availability:ratio_5m', expr: 'a/b', health: 'ok' },
+      ] },
+    },
+    errors: {},
+  });
+  const dAnn = dup.metadata.annotations;
+  assert(dAnn['mcp.verified.queries.recording_rules[0]'] === undefined && dAnn['mcp.verified.queries.recording_rules[1]'] === undefined
+         && dAnn['mcp.verified.queries.recording_rules'] === undefined,
+         'a rule name reported unhealthy by any group earns no indexed (or group) stamp',
+         Object.keys(dAnn).filter(k => k.startsWith('mcp.verified.queries')), []);
+  assert(dAnn['mcp.discovered.recording_rules_unhealthy'] === 'svc_checkout:availability:ratio_5m',
+         'the duplicated rule is named unhealthy once', dAnn['mcp.discovered.recording_rules_unhealthy']);
+  assert(dAnn['mcp.verified.slis.svc_checkout_availability'] === undefined
+         && dAnn['mcp.discovered.slis_unhealthy'] === 'svc_checkout_availability',
+         'the SLI inferred from the duplicated unhealthy rule is not verified and is named');
+}
+
 // ---------- case 3a: on-wire scrape liveness — all targets down, legacy job names ----------
 //
 // A job name is not evidence. When every target the MCP reports is
@@ -721,6 +774,109 @@ assert(bAnn['mcp.discovered.alert_rules_severity_inferred'] === `${DISCOVERED_SL
   assert(pol.length === 1 && pol[0].source === 'Declared', 'adapter projects the unhealthy-fed burn alert as Declared (present, not attested)', pol.map(p => p.source), ['Declared']);
 }
 
+// Tiered SLOs on one SLI (99 and 99.9 — a realistic setup): the group
+// whose id EXACTLY matches the inferred placeholder binds it, and the
+// group that only shares the SLI base must not re-identify the SAME
+// SLO out from under it. Every burn entry's `slo` must resolve to a
+// spec.slos id, whatever order the ruler lists the groups in.
+for (const order of ['exact-first', 'base-first']) {
+  const exact = 'svc_checkout_availability_99';
+  const tiered = 'svc_checkout_availability_99_9';
+  const evidence = { summary: 'x', description: 'y', slo_objective: '99.500%', slo_window: '7d', runbook: 'r' };
+  const groupA = [
+    { name: `${exact}_burn_14x_5m_1h`, expr: 'e', for: '2m', labels: compilerLabels(exact, 14, '5m', '1h', 'SEV1'), annotations: evidence },
+    { name: `${exact}_burn_6x_30m_6h`, expr: 'e', for: '15m', labels: compilerLabels(exact, 6, '30m', '6h', 'SEV2'), annotations: evidence },
+  ];
+  const groupB = [
+    { name: `${tiered}_burn_14x_5m_1h`, expr: 'e', for: '2m', labels: compilerLabels(tiered, 14, '5m', '1h', 'SEV1'), annotations: {} },
+    { name: `${tiered}_burn_6x_30m_6h`, expr: 'e', for: '15m', labels: compilerLabels(tiered, 6, '30m', '6h', 'SEV2'), annotations: {} },
+  ];
+  const tieredPack = buildCanonicalPack({
+    refreshedAt,
+    mcpUrl: 'https://fake-mcp.test/observability',
+    // No recorded rules → the per-service availability GUESS is the only
+    // SLO: `svc_checkout_availability_99`, stamped scaffold.
+    health: { services: [{ name: 'svc-checkout', criticality: 'tier-1' }] },
+    topology: { dependencies: [] }, anomaliesActive: {}, baselinesData: { baselines: [] },
+    probeResults: {
+      alert_rules: { tool: 'list_alert_rules', adapted: order === 'exact-first' ? [...groupA, ...groupB] : [...groupB, ...groupA] },
+    },
+    errors: {},
+  });
+  const tAnn = tieredPack.metadata.annotations;
+  const sloIds = tieredPack.spec.slos.map(s => s.id);
+  const burnRefs = tieredPack.spec.policy.burn_rate_alerts.map(b => b.slo);
+  assert(validateCanonical(tieredPack, SCHEMA).length === 0, `[${order}] tiered-SLO pack validates`);
+  assert(sloIds.join() === exact, `[${order}] the exactly-matched placeholder keeps its id (never re-identified to the tiered id)`, sloIds, [exact]);
+  assert(burnRefs.every(id => sloIds.includes(id)),
+         `[${order}] every burn_rate_alerts[].slo resolves to a spec.slos id (no dangling ref)`, burnRefs, sloIds);
+  assert(burnRefs.join() === exact && tAnn['mcp.discovered.alert_rules_unmapped'] === tiered,
+         `[${order}] the tiered group cannot bind (its SLO is already claimed) and is reported unmapped`,
+         { burnRefs, unmapped: tAnn['mcp.discovered.alert_rules_unmapped'] }, { burnRefs: [exact], unmapped: tiered });
+  const slo = tieredPack.spec.slos[0];
+  assert(slo.objective === 0.995 && slo.window === '7d',
+         `[${order}] an exact match applies the rule's slo_objective / slo_window evidence like a re-id does`,
+         { objective: slo.objective, window: slo.window }, { objective: 0.995, window: '7d' });
+  assert(tAnn[`mcp.scaffold.slos.${exact}`] === undefined && typeof tAnn[`mcp.verified.slos.${exact}`] === 'string',
+         `[${order}] an exactly-matched SLO drops its scaffold marker and is attested`,
+         { scaffold: tAnn[`mcp.scaffold.slos.${exact}`], verified: tAnn[`mcp.verified.slos.${exact}`] });
+  assert(typeof tAnn[`mcp.scaffold.slis.${exact.replace(/_99$/, '')}`] === 'string',
+         `[${order}] the guessed SLI under it stays scaffold (a burn rule attests the SLO, not the measurement)`);
+  const pol = adapt(tieredPack).layers.L4.policy;
+  assert(pol.length === 1 && pol[0].source === 'Verified' && pol[0].refs[0] === `slos.${exact}`,
+         `[${order}] adapter: one Verified burn alert whose ref exists`, pol.map(p => `${p.source}:${p.refs[0]}`));
+}
+
+// An SLO re-identified from a burn group fed by an UNHEALTHY rule takes
+// the evidence (objective/window) but must not read Verified — the burn
+// entry itself is withheld for the same reason.
+{
+  const tiered = 'svc_checkout_availability_99_9';
+  const unhealthyReid = buildCanonicalPack({
+    refreshedAt,
+    mcpUrl: 'https://fake-mcp.test/observability',
+    health: { services: [{ name: 'svc-checkout', criticality: 'tier-1' }] },
+    topology: { dependencies: [] }, anomaliesActive: {}, baselinesData: { baselines: [] },
+    probeResults: {
+      recording_rules: { tool: 'list_recording_rules', adapted: [
+        { name: 'svc_checkout:availability:good_5m',  expr: 'g', interval: '30s' },
+        { name: 'svc_checkout:availability:total_5m', expr: 't', interval: '30s' },
+      ] },
+      alert_rules: { tool: 'vmalert_rules', adapted: [
+        { name: `${tiered}_burn_14x_5m_1h`, expr: 'e', for: '2m', labels: compilerLabels(tiered, 14, '5m', '1h', 'SEV1'), annotations: compilerAnnotations,
+          health: 'err', lastError: 'unknown function', state: 'inactive' },
+        { name: `${tiered}_burn_6x_30m_6h`, expr: 'e', for: '15m', labels: compilerLabels(tiered, 6, '30m', '6h', 'SEV2'), annotations: compilerAnnotations,
+          health: 'ok', state: 'inactive' },
+      ] },
+    },
+    errors: {},
+  });
+  const rAnn = unhealthyReid.metadata.annotations;
+  assert(unhealthyReid.spec.slos[0].id === tiered && unhealthyReid.spec.slos[0].objective === 0.999,
+         'the placeholder is still re-identified and takes the objective evidence', unhealthyReid.spec.slos[0]);
+  assert(rAnn[`mcp.verified.slos.${tiered}`] === undefined && rAnn[`mcp.scaffold.slos.${tiered}`] === undefined
+         && rAnn['mcp.verified.policy.burn_rate_alerts[0]'] === undefined,
+         'an SLO re-identified from an unhealthy burn group is NOT stamped verified (nor scaffold); the burn entry is not either',
+         Object.keys(rAnn).filter(k => /verified\.(slos|policy)/.test(k)), []);
+  const l = adapt(unhealthyReid);
+  assert(l.layers.L1.find(x => x.spec?.id === tiered)?.source === 'Declared', 'adapter projects that SLO as Declared');
+}
+
+// A re-id must yield a valid schema Slug: when `<base>_<objective>` would
+// exceed 64 chars the group stays unmapped and the placeholder keeps its id.
+{
+  const base = `svc_${'a'.repeat(50)}_availability`;   // 58 chars; `${base}_99` = 61 fits, `${base}_99_9` = 63 fits, `${base}_99_99_9` = 66 does not
+  const slos = [{ id: `${base}_99`, sli: base, objective: 0.99, window: '30d' }];
+  const tooLong = `${base}_99_99_9`;
+  const r = mapDiscoveredBurnAlerts([
+    { name: `${tooLong}_burn_14x_5m_1h`, labels: compilerLabels(tooLong, 14, '5m', '1h', 'SEV1'), annotations: {} },
+    { name: `${tooLong}_burn_6x_30m_6h`, labels: compilerLabels(tooLong, 6, '30m', '6h', 'SEV2'), annotations: {} },
+  ], slos);
+  assert(tooLong.length > 64 && r.alerts.length === 0 && r.unmapped.join() === tooLong && slos[0].id === `${base}_99`,
+         'a discovered id longer than the schema Slug allows is refused as a re-id (unmapped, placeholder untouched)',
+         { alerts: r.alerts, unmapped: r.unmapped, slo: slos[0].id });
+}
+
 // ---------- case 4: probes attempted but came back empty — honest gap ----------
 //
 // Confirms the "what to refine" narrative. probesAttempted records the
@@ -766,7 +922,9 @@ assert(probedEmpty.metadata.annotations['mcp.verified.queries.recording_rules'] 
     anomaliesActive: {},
     baselinesData: { baselines: [] },
     probeResults: {
-      recording_rules: { tool: 'vmalert_rules', attempted: ['vmalert_rules'], adapted: [{ name: 'job:up:ratio', expr: 'avg(up)' }], outcome: 'data' },
+      // Two-candidate cascade: the first candidate errored, the second
+      // answered — the family SUCCEEDED and must carry no probe error.
+      recording_rules: { tool: 'prometheus_rules', attempted: ['vmalert_rules', 'prometheus_rules'], adapted: [{ name: 'job:up:ratio', expr: 'avg(up)' }], outcome: 'data' },
       dashboards:      { tool: null, attempted: ['grafana_dashboards_search', 'grafana_search'], adapted: null, outcome: 'failed' },
       scrape_configs:  { tool: null, attempted: ['metrics_targets', 'prometheus_targets'], adapted: null,
                          skippedReason: 'no candidate matched tools/list inventory', outcome: 'unsupported' },
@@ -774,6 +932,7 @@ assert(probedEmpty.metadata.annotations['mcp.verified.queries.recording_rules'] 
                          skippedReason: 'no candidate matched tools/list inventory', outcome: 'unsupported' },
     },
     probeFailures: {
+      vmalert_rules: 'HTTP 503',                     // erroring FIRST candidate of a family that then answered
       grafana_dashboards_search: 'HTTP 502 Bad Gateway',
       grafana_search: longError,
       'metrics_query.ALERTS': 'HTTP 503',            // fallback key — no family's candidate list names it
@@ -796,7 +955,7 @@ assert(probedEmpty.metadata.annotations['mcp.verified.queries.recording_rules'] 
   assert(oAnn['mcp.probeErrors.dashboards'].length === 200,
          'probe errors are trimmed to 200 chars', oAnn['mcp.probeErrors.dashboards'].length, 200);
   assert(oAnn['mcp.probeErrors.recording_rules'] === undefined,
-         'a family whose winning candidate answered carries no error');
+         'a family whose later candidate answered carries no error, even though its first candidate errored (it is in probesSucceeded)');
   assert(oAnn['mcp.probeErrors.scrape_configs'] === undefined && oAnn['mcp.probeErrors.metric_names'] === undefined,
          'unsupported families carry no probe error even when a stale probeFailures key names a candidate',
          [oAnn['mcp.probeErrors.scrape_configs'], oAnn['mcp.probeErrors.metric_names']]);

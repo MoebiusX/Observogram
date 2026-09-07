@@ -37,7 +37,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emit as emitYaml } from './lib/mini-yaml.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
-import { inferSlisFromRecordingRules } from './lib/sli-inference.mjs';
+import { inferSlisFromRecordingRules, ruleNameToSliId } from './lib/sli-inference.mjs';
 import { materializeL2XFromBackends } from './lib/l2x.mjs';
 import { serviceSlug as slug } from './lib/slug.mjs';
 import { probeCandidates, capabilityTool, candidateTool, BUILD_INFO_PROBES } from './lib/contracts/mcp-capabilities.mjs';
@@ -264,19 +264,34 @@ function parseObjectivePercent(value) {
   return objective > 0 && objective < 1 ? objective : null;
 }
 
+// Schema Slug: the id a re-identified SLO takes must still validate.
+const SLUG_RE = /^[a-z][a-z0-9_-]*[a-z0-9]$/;
+const SLUG_MAX_LENGTH = 64;
+const isSlug = (id) => typeof id === 'string' && id.length <= SLUG_MAX_LENGTH && SLUG_RE.test(id);
+
 /**
  * Map discovered alerting rules onto spec.policy.burn_rate_alerts.
  *
- * Groups burn-rate rules by SLO id, resolves each group against the
- * inferred `slos` (re-identifying an inferred placeholder — objective
- * and window included when the rule annotations carry them — when the
- * two share an SLI base) and drops what the schema cannot represent.
- * MUTATES `slos` in place for the re-id so every later consumer sees the
- * discovered id.
+ * Groups burn-rate rules by SLO id and resolves each group against the
+ * inferred `slos` in two passes: groups whose id EXACTLY matches an
+ * inferred SLO bind first and claim it; only then does a group that
+ * merely shares an SLI base re-identify a still-unclaimed placeholder.
+ * (One pass used to let a `x_99_9` group re-identify the SLO a `x_99`
+ * group had already bound — the exact group's entry then pointed at an
+ * id that no longer existed.) Both paths take the objective/window from
+ * the rule annotations when they carry them; a re-id is refused when the
+ * discovered id is not a valid schema Slug. MUTATES `slos` in place for
+ * the re-id so every later consumer sees the discovered id. Drops what
+ * the schema cannot represent.
  *
- * Returns { alerts, unmapped, severityInferred, reidentified,
- * unhealthyIndexes } — the last lists entries fed by at least one rule
- * whose reported health is not 'ok'.
+ * Returns { alerts, unmapped, severityInferred, reidentified, attested,
+ * unhealthyIndexes, unhealthySlos }:
+ *   reidentified     — { oldId: newId } for placeholders re-identified
+ *   attested         — discovered ids that exactly matched an inferred SLO
+ *   unhealthyIndexes — entries in `alerts` fed by at least one rule whose
+ *                      reported health is not 'ok'
+ *   unhealthySlos    — the SLO ids of those groups (an SLO evidenced only
+ *                      by a failing rule must not read Verified)
  */
 export function mapDiscoveredBurnAlerts(alerts, slos) {
   const groups = new Map();  // slo id → { windows, seen, objective, window }
@@ -306,24 +321,50 @@ export function mapDiscoveredBurnAlerts(alerts, slos) {
     }
   }
 
-  const alertsOut = [];
-  const unmapped = [];
-  const reidentified = {};
-  const unhealthyIndexes = [];  // indexes into alertsOut fed by an unhealthy rule
-  const claimed = new Set();  // inferred SLOs already re-identified — one discovered id each
+  const applyEvidence = (slo, g) => {
+    if (g.objective != null) slo.objective = g.objective;
+    if (g.window) slo.window = g.window;
+  };
+
+  // Pass 1 — exact matches claim their SLO before any re-id can move it.
+  const resolved = new Map();  // discoveredId → slo | null
+  const claimed = new Set();
+  const attested = [];
   for (const [discoveredId, g] of groups) {
-    let slo = slos.find(s => s.id === discoveredId);
-    if (!slo) {
+    const slo = slos.find(s => s.id === discoveredId);
+    if (!slo) continue;
+    claimed.add(slo);
+    resolved.set(discoveredId, slo);
+    attested.push(discoveredId);
+    applyEvidence(slo, g);
+  }
+  // Pass 2 — re-identify an unclaimed placeholder sharing the SLI base.
+  const reidentified = {};
+  for (const [discoveredId, g] of groups) {
+    if (resolved.has(discoveredId)) continue;
+    let slo = null;
+    if (isSlug(discoveredId)) {
       const candidate = slos.find(s => !claimed.has(s) && sloBase(s.id) === sloBase(discoveredId));
       if (candidate) {
         claimed.add(candidate);
         reidentified[candidate.id] = discoveredId;
         candidate.id = discoveredId;
-        if (g.objective != null) candidate.objective = g.objective;
-        if (g.window) candidate.window = g.window;
+        applyEvidence(candidate, g);
         slo = candidate;
       }
     }
+    resolved.set(discoveredId, slo);
+  }
+
+  const alertsOut = [];
+  const unmapped = [];
+  const unhealthyIndexes = [];  // indexes into alertsOut fed by an unhealthy rule
+  const unhealthySlos = [];
+  for (const [discoveredId, g] of groups) {
+    const slo = resolved.get(discoveredId);
+    // The SLO's own stamp follows the group's health whether or not the
+    // group is representable below.
+    if (slo && g.unhealthy) unhealthySlos.push(slo.id);
     // Schema: >= 2 windows per entry. A single-window group is a real
     // alert we cannot represent — report it rather than pad it.
     if (!slo || g.windows.length < 2) {
@@ -337,7 +378,7 @@ export function mapDiscoveredBurnAlerts(alerts, slos) {
     if (g.unhealthy) unhealthyIndexes.push(alertsOut.length);
     alertsOut.push({ slo: slo.id, windows });
   }
-  return { alerts: alertsOut, unmapped, severityInferred, reidentified, unhealthyIndexes };
+  return { alerts: alertsOut, unmapped, severityInferred, reidentified, attested, unhealthyIndexes, unhealthySlos };
 }
 
 function defaultBaselines(criticality) {
@@ -737,13 +778,17 @@ export function buildCanonicalPack({
   // Last error per probe family: fetchMcp keys probeFailures by candidate
   // tool NAME; map each name back to its family through the candidate
   // list the probe loop recorded in `attempted`. The last erroring
-  // candidate wins (it is the one the cascade gave up on).
+  // candidate wins (it is the one the cascade gave up on). Only FAILED
+  // families get an entry: the key documents WHY a family got no answer,
+  // so a family whose later candidate answered (after an earlier one
+  // errored) must not carry one — it would name a family that is listed
+  // in mcp.probesSucceeded.
   const probeErrors = {};
   for (const [family, v] of Object.entries(probeResults || {})) {
     // An unsupported family never called anything: its `attempted` is
     // the full candidate list, so a same-named tool that errored for a
     // DIFFERENT family must not be blamed on it.
-    if (classify(v) === 'unsupported') continue;
+    if (classify(v) !== 'failed') continue;
     const attempted = Array.isArray(v?.attempted) ? v.attempted : [];
     for (const name of attempted) {
       const msg = probeFailures[name];
@@ -1005,7 +1050,17 @@ export function buildCanonicalPack({
     ? probeResults.recording_rules.adapted.filter(r => r && typeof r === 'object' && r.name)
     : [];
   const discoveredRules = discoveredRulesRaw.map(stripRuleObservation);
-  const recordingRuleHealth = new Map(discoveredRulesRaw.map(r => [r.name, ruleHealthy(r)]));
+  // Health per rule NAME, any-unhealthy-wins: the ruler can report the
+  // same name twice (one group evaluating, another failing), and a Map
+  // with last-wins semantics let the healthy copy stamp both spec entries
+  // Verified while mcp.discovered.recording_rules_unhealthy named the rule.
+  const recordingRuleHealth = new Map();
+  for (const r of discoveredRulesRaw) {
+    const h = ruleHealthy(r);
+    const prev = recordingRuleHealth.get(r.name);
+    if (prev === false) continue;
+    if (h === false || prev == null) recordingRuleHealth.set(r.name, h);
+  }
   if (discoveredRulesRaw.length) {
     annotations['mcp.observed.recording_rules'] = annotationJson(
       discoveredRulesRaw.slice(0, OBSERVATION_LIMIT).map(r => ruleObservation(r, 'recording')));
@@ -1051,10 +1106,24 @@ export function buildCanonicalPack({
   const slos = [];
   const inferredFromRules = inferSlisFromRecordingRules(recordedRules);
   if (inferredFromRules.length) {
+    // An SLI is Verified only when NONE of the recorded rules it was
+    // inferred from is reported unhealthy by the ruler: an SLI whose
+    // total/ratio series are not being produced is not measuring
+    // anything, whatever the rule definitions say. Inventory-grepped
+    // series carry no health and attest as before.
+    const slisUnhealthy = [];
     for (const { sli, slo } of inferredFromRules) {
       slis.push(sli);
       slos.push(slo);
+      const feeding = discoveredRulesRaw.filter(r => ruleNameToSliId(r.name) === sli.id);
+      if (feeding.some(r => recordingRuleHealth.get(r.name) === false)) {
+        slisUnhealthy.push(sli.id);
+        continue;
+      }
       markVerified(`slis.${sli.id}`);
+    }
+    if (slisUnhealthy.length) {
+      annotations['mcp.discovered.slis_unhealthy'] = slisUnhealthy.slice(0, 64).join(',');
     }
   } else if (serviceSlugs.length === 0) {
     // Pack must have >= 1 SLI / SLO; stub a generic platform availability
@@ -1170,7 +1239,10 @@ export function buildCanonicalPack({
     if (Array.isArray(probeResults?.dashboards?.detailErrors) && probeResults.dashboards.detailErrors.length) {
       annotations['mcp.discovered.dashboard_detail_errors'] = probeResults.dashboards.detailErrors.slice(0, 64).join(',');
     }
+    // The adapter reads sourceOf(`dashboards.<id>`); the aggregate key
+    // alone left every discovered dashboard projecting as Declared.
     markVerified('dashboards');
+    for (const d of dashboards) if (d?.id) markVerified(`dashboards.${d.id}`);
   } else {
     // Schema-forced stub (dashboards minItems 1). Symbol matches the
     // adapter's `dashboards.<id>`.
@@ -1219,14 +1291,24 @@ export function buildCanonicalPack({
   // Verified, until the rule evaluates again.
   const unhealthyBurn = new Set(burnMapping.unhealthyIndexes || []);
   burnRateAlerts.forEach((_, i) => { if (!unhealthyBurn.has(i)) markVerified(`policy.burn_rate_alerts[${i}]`); });
-  // A placeholder SLO re-identified to a discovered burn group took its
-  // objective/window from the live rule's annotations — the SLO now has
-  // MCP evidence. Drop the stale scaffold marker written under the old
-  // id and attest the new one (the SLI stays whatever it was).
+  // An SLO a discovered burn group bound to — re-identified from a
+  // placeholder or matched exactly — took its objective/window from the
+  // live rule's annotations: the SLO now has MCP evidence. Drop the
+  // scaffold marker (under the old id for a re-id) and attest the SLO,
+  // UNLESS the only evidence is a rule the ruler reports unhealthy — the
+  // burn entry itself is withheld from Verified for that reason, and the
+  // SLO it evidences must not read better than the rule that evidences
+  // it. The SLI stays whatever it was.
+  const unhealthySlos = new Set(burnMapping.unhealthySlos || []);
+  const attestSlo = (id) => {
+    delete annotations[`mcp.scaffold.slos.${id}`];
+    if (!unhealthySlos.has(id)) markVerified(`slos.${id}`);
+  };
   for (const [oldId, newId] of Object.entries(burnMapping.reidentified || {})) {
     delete annotations[`mcp.scaffold.slos.${oldId}`];
-    markVerified(`slos.${newId}`);
+    attestSlo(newId);
   }
+  for (const id of burnMapping.attested || []) attestSlo(id);
   if (burnMapping.unmapped.length) {
     annotations['mcp.discovered.alert_rules_unmapped'] = burnMapping.unmapped.slice(0, 64).join(',');
   }
