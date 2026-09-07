@@ -80,6 +80,8 @@
     "test:backend:strict": "node tools/test-backend-validate.mjs --strict",
     "test:backend:live": "node tools/test-backend-live.mjs",
     "test:backend:live:strict": "node tools/test-backend-live.mjs --strict",
+    "test:stack:live": "node tools/test-stack-live.mjs",
+    "test:stack:live:strict": "node tools/test-stack-live.mjs --strict",
     "test:retrofeed": "node tools/test-retrofeed.mjs",
     "test:auth": "node server/test-auth-local.mjs && node server/test-auth-oidc.mjs",
     "users": "node tools/user-admin.mjs",

@@ -1,0 +1,11 @@
+# VictoriaMetrics -promscrape.config: itself plus a target that does not
+# exist, so vm_promscrape_targets{status="down"} is a real series.
+global:
+  scrape_interval: 5s
+scrape_configs:
+  - job_name: victoriametrics
+    static_configs:
+      - targets: ['localhost:8428']
+  - job_name: dead-target
+    static_configs:
+      - targets: ['dead:9999']

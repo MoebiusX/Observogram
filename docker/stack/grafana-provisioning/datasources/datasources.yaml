@@ -1,0 +1,11 @@
+# The validation stack's Prometheus, provisioned so Grafana's datasource
+# proxy path has somewhere real to go (the live suite fires one query
+# through it so grafana_datasource_* / proxy metrics have a chance to appear).
+apiVersion: 1
+datasources:
+  - name: Prometheus (stack)
+    uid: stack-prom
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true

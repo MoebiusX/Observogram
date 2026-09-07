@@ -1,0 +1,13 @@
+# Minimal Alertmanager config: every notification goes to a webhook that
+# cannot resolve, so alertmanager_notifications_total AND
+# alertmanager_notifications_failed_total move on a fresh stack.
+route:
+  receiver: dead-webhook
+  group_wait: 1s
+  group_interval: 5s
+  repeat_interval: 30s
+receivers:
+  - name: dead-webhook
+    webhook_configs:
+      - url: http://dead:9999/hook
+        send_resolved: true
