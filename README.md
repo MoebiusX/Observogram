@@ -323,6 +323,16 @@ same construct as the studio (requirement-chain integrity rides on the
 diff), so both report one score for one comparison. Secrets never live in
 journey files — MCP auth is referenced by env-var name.
 
+Run history is bounded so a journey on a cron cadence never fills the disk:
+after every run the journey's `runs/` directory is pruned to the newest
+`OBSERVOGRAM_JOURNEY_RUN_RETENTION` records (default `1000`; `0` = unlimited).
+A record that cannot be deleted is noted on the run as `historyError` — the
+verdict still stands. Scheduling itself stays external (cron, CI, a Windows
+scheduled task) by design. Each record of a live run also keeps the stack
+self-metric samples it saw (`stackEvidence`: the rows, plus the Alertmanager
+and Grafana status the MCP answered) — point-in-time signals kept per run so
+the history is the time series, never a verdict.
+
 ## API Surface
 
 | Method | Path | Purpose |

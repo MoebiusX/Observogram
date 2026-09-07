@@ -30,6 +30,7 @@ process.env.OBSERVOGRAM_WORKSPACE = TMP;
 const {
   loadJourneyDef, runJourney, listJourneys, readJourneyRuns,
   evaluateGate, renderJourneyMarkdown, liveEvidenceFacts,
+  pruneRunFiles, parseRunRetention, journeyRunRetention, JOURNEY_RUN_RETENTION_DEFAULT,
 } = await import('./lib/journey.mjs');
 
 // A TCP port nobody listens on: bind an ephemeral one, read it, release
@@ -102,6 +103,52 @@ try {
   assert(runs2.length === 2, 'second run appends to history', runs2.length, 2);
   assert(runs2[0].startedAt > runs2[1].startedAt, 'history reads back newest first');
   assert(readdirSync(join(TMP, 'runs', 'pay-vs-curated')).length === 2, 'one JSON file per run on disk');
+  assert(rec.stackEvidence === null, 'file-sourced B carries no stack evidence — null, never an empty healthy panel', rec.stackEvidence);
+
+  // --- retention: the run directory is bounded (policy + effect) ---
+  assert(parseRunRetention(undefined) === JOURNEY_RUN_RETENTION_DEFAULT && JOURNEY_RUN_RETENTION_DEFAULT === 1000, 'retention defaults to 1000');
+  assert(parseRunRetention('250') === 250 && parseRunRetention(' 7 ') === 7, 'retention parses a non-negative integer');
+  assert(parseRunRetention('0') === 0, 'retention 0 parses as 0 (unlimited)');
+  assert(parseRunRetention('abc') === 1000 && parseRunRetention('-5') === 1000 && parseRunRetention('2.5') === 1000 && parseRunRetention('') === 1000,
+         'garbage, negative, fractional and empty retention values fall back to the default');
+  delete process.env.OBSERVOGRAM_JOURNEY_RUN_RETENTION;
+  delete process.env.TOMOGRAPH_JOURNEY_RUN_RETENTION;
+  assert(journeyRunRetention() === 1000, 'journeyRunRetention reads the default when the env var is unset');
+  process.env.OBSERVOGRAM_JOURNEY_RUN_RETENTION = '3';
+  assert(journeyRunRetention() === 3, 'journeyRunRetention reads OBSERVOGRAM_JOURNEY_RUN_RETENTION at call time');
+  const names = ['2026-01-03T00-00-00-000Z.json', '2026-01-01T00-00-00-000Z.json', 'notes.txt', '2026-01-02T00-00-00-000Z.json', '2026-01-04T00-00-00-000Z.json'];
+  assert(pruneRunFiles(names, 2).join() === '2026-01-01T00-00-00-000Z.json,2026-01-02T00-00-00-000Z.json', 'pruneRunFiles names the oldest run files beyond the keep count, oldest first', pruneRunFiles(names, 2));
+  assert(pruneRunFiles(names, 4).length === 0 && pruneRunFiles(names, 10).length === 0, 'pruneRunFiles deletes nothing at or under the keep count');
+  assert(pruneRunFiles(names, 0).length === 0 && pruneRunFiles(names, -1).length === 0 && pruneRunFiles(names, NaN).length === 0, 'keep 0 / negative / NaN means unlimited — nothing deleted');
+  assert(pruneRunFiles(names, 1).every(f => f.endsWith('.json')) && pruneRunFiles(names, 1).length === 3, 'non-run files are never pruned');
+  assert(pruneRunFiles(null, 1).length === 0, 'pruneRunFiles tolerates a missing list');
+  writeFileSync(join(TMP, 'journeys', 'retained.journey.yaml'), [
+    'name: retained',
+    `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`,
+    `packB: { file: ${PACK_B.replaceAll('\\', '/')} }`,
+  ].join('\n'));
+  const retainedDef = loadJourneyDef('retained');
+  const started = [];
+  for (let i = 0; i < 5; i++) {
+    const r = await runJourney(retainedDef);
+    started.push(r.startedAt);
+    assert(r.historyError === undefined, `retention run ${i + 1} reports no history error`, r.historyError);
+    await new Promise(res => setTimeout(res, 5));   // distinct millisecond filenames
+  }
+  const retainedFiles = readdirSync(join(TMP, 'runs', 'retained')).sort();
+  assert(retainedFiles.length === 3, 'retention 3 keeps exactly three run files after five runs', retainedFiles);
+  const keptStarts = readJourneyRuns('retained').map(r => r.startedAt);
+  assert(keptStarts.join() === [started[4], started[3], started[2]].join(), 'the newest three survive, newest first; the two oldest are deleted', { kept: keptStarts, started });
+  process.env.OBSERVOGRAM_JOURNEY_RUN_RETENTION = '0';
+  for (let i = 0; i < 2; i++) {
+    await runJourney(retainedDef);
+    await new Promise(res => setTimeout(res, 5));
+  }
+  assert(readdirSync(join(TMP, 'runs', 'retained')).length === 5, 'retention 0 is unlimited — nothing pruned', readdirSync(join(TMP, 'runs', 'retained')).length);
+  process.env.OBSERVOGRAM_JOURNEY_RUN_RETENTION = 'not-a-number';
+  await runJourney(retainedDef);
+  assert(readdirSync(join(TMP, 'runs', 'retained')).length === 6, 'an unparseable retention falls back to the default (1000) — nothing pruned at 6 files');
+  delete process.env.OBSERVOGRAM_JOURNEY_RUN_RETENTION;
 
   // --- gate breaches, each criterion ---
   const facts = { gradeScore: 60, gradePass: false, alignmentPct: 40, declaredNotLive: 7, liveNotDeclared: 2, drifted: 9, aligned: 10, liveAgeHours: 30 };
@@ -221,6 +268,23 @@ try {
     'mcp.stack.failed': '0',
     'mcp.stack.notInInventory': '9',
     'mcp.stack.notAttempted': '0',
+    // Step 3: the samples themselves, exactly as the fetcher annotates them
+    // (JSON strings; expr present on the wire, dropped on the record).
+    'mcp.observed.stack_metrics': JSON.stringify([
+      { id: 'scrape_success_ratio', family: 'scrape', product: 'generic', expr: 'sum(up) / count(up)', value: 0.95, unit: 'ratio', direction: 'higher', at: nowIso, outcome: 'data' },
+      { id: 'scrape_targets_down', family: 'scrape', product: 'generic', expr: 'count(up == 0) or (count(up) * 0)', value: 2, unit: 'count', direction: 'lower', at: nowIso, outcome: 'data' },
+      { id: 'rule_evaluation_failures', family: 'ruler', product: 'prometheus', expr: 'x', value: null, unit: 'per-second', direction: 'lower', at: nowIso, outcome: 'empty' },
+      { id: 'notification_errors', family: 'notify', product: 'alertmanager', expr: 'y', value: null, unit: 'per-second', direction: 'lower', at: nowIso, outcome: 'failed', reason: 'HTTP 500' },
+      { id: 'log_shipper_drops', family: 'logs', product: 'promtail', expr: 'z', value: null, unit: 'per-second', direction: 'lower', at: nowIso, outcome: 'not-in-inventory' },
+      { id: 'retired_row_zzz', family: 'tsdb', product: 'generic', expr: 'w', value: 1, unit: 'count', direction: 'lower', at: nowIso, outcome: 'data' },
+    ]),
+    'mcp.observed.alertmanager': JSON.stringify({ version: '0.27.0', uptime: '2h', clusterStatus: 'ready', silences: { active: 1, total: 4 } }),
+    'mcp.observed.grafana.datasources': JSON.stringify([
+      { uid: 'p1', name: 'Prometheus', type: 'prometheus', health: 'ok', message: null },
+      { uid: 'l1', name: 'Loki', type: 'loki', health: 'error', message: 'connection refused' },
+      { uid: 't1', name: 'Tempo', type: 'tempo', health: 'unknown', message: null },
+    ]),
+    'mcp.observed.grafana.contact_points': JSON.stringify({ count: 3, names: ['email', 'teams', 'pagerduty'] }),
   };
   const LIVE_B = join(TMP, 'live-b.pack.json');
   writeFileSync(LIVE_B, JSON.stringify(liveB, null, 2));
@@ -237,6 +301,45 @@ try {
     const rf = liveEvidenceFacts(restrictedB).stack;
     assert(rf.status === 'not-attempted' && rf.reason === 'metrics_query not exposed by this MCP (restricted tier)' && rf.sampled === 0 && rf.notAttempted === 24,
            'liveEvidenceFacts keeps a not-attempted panel with its reason', rf);
+    const rev = liveEvidenceFacts(restrictedB).stackEvidence;
+    assert(rev && rev.status === 'not-attempted' && rev.reason === 'metrics_query not exposed by this MCP (restricted tier)',
+           'stackEvidence keeps a not-attempted status with its reason (restricted tier reads not-attempted, never absent)', rev);
+  }
+  // --- step 3: stackEvidence — the samples, enriched from the contracts table ---
+  const se = lf.stackEvidence;
+  assert(se && se.status === 'sampled' && se.reason === null, 'stackEvidence status is sampled with no reason', se && { status: se.status, reason: se.reason });
+  assert(Array.isArray(se.rows) && se.rows.length === 6, 'stackEvidence keeps every observed row', se.rows.length);
+  const byId = Object.fromEntries(se.rows.map(r => [r.id, r]));
+  assert(byId.scrape_success_ratio.value === 0.95 && byId.scrape_success_ratio.unit === 'ratio' && byId.scrape_success_ratio.direction === 'higher' && byId.scrape_success_ratio.outcome === 'data',
+         'a data row keeps value, unit, direction and outcome', byId.scrape_success_ratio);
+  assert(byId.scrape_success_ratio.referenceSli === 'prometheus-reference/scrape_success_ratio', 'referenceSli is looked up from the contracts table', byId.scrape_success_ratio.referenceSli);
+  assert(byId.scrape_success_ratio.hint === null && byId.scrape_targets_down.hint === 'nonzero', 'hint is the contracts display marker: nonzero only for a lower-is-better row above zero', { ratio: byId.scrape_success_ratio.hint, down: byId.scrape_targets_down.hint });
+  assert(byId.scrape_targets_down.referenceSli === null, 'a row the table maps to no reference SLI keeps null');
+  assert(se.rows.every(r => !('expr' in r)), 'expr is dropped from the record (the sample, not the query, is the evidence)');
+  assert(se.rows.every(r => r.at === nowIso && r.product), 'rows keep their sample time and product', se.rows.map(r => [r.at, r.product]));
+  assert(byId.rule_evaluation_failures.outcome === 'empty' && byId.rule_evaluation_failures.value === null && byId.rule_evaluation_failures.hint === null, 'an empty row has null value and no hint');
+  assert(byId.notification_errors.outcome === 'failed' && byId.notification_errors.reason === 'HTTP 500', 'a failed row keeps its reason', byId.notification_errors);
+  assert(byId.log_shipper_drops.outcome === 'not-in-inventory' && !('reason' in byId.log_shipper_drops), 'a not-in-inventory row is kept without inventing a reason');
+  assert(byId.retired_row_zzz && byId.retired_row_zzz.referenceSli === null && byId.retired_row_zzz.value === 1 && byId.retired_row_zzz.family === 'tsdb',
+         'a row the table no longer declares is kept with referenceSli null (its own family and unit stand)', byId.retired_row_zzz);
+  assert(se.alertmanager && se.alertmanager.version === '0.27.0' && se.alertmanager.clusterStatus === 'ready' && se.alertmanager.silencesActive === 1 && se.alertmanager.error === null,
+         'stackEvidence.alertmanager carries version, cluster status, active silences, no error', se.alertmanager);
+  assert(se.grafana && se.grafana.datasources === 3 && se.grafana.unhealthyDatasources.join() === 'Loki' && se.grafana.contactPoints === 3 && se.grafana.error === null,
+         'stackEvidence.grafana counts datasources, names only the error-health ones (unknown is unchecked, not unhealthy), counts contact points', se.grafana);
+  {
+    // Malformed JSON degrades to no rows — never to a fabricated panel.
+    const brokenB = { ...liveB, metadata: { ...liveB.metadata, annotations: { ...liveB.metadata.annotations, 'mcp.observed.stack_metrics': '[{not json', 'mcp.observed.alertmanager': '{{', 'mcp.observed.grafana.datasources': 'nope' } } };
+    const bev = liveEvidenceFacts(brokenB).stackEvidence;
+    assert(bev && bev.status === 'sampled' && bev.rows.length === 0 && bev.alertmanager === null, 'malformed stack_metrics / alertmanager JSON is tolerated: status kept, rows empty, alertmanager null', bev);
+    assert(bev.grafana && bev.grafana.datasources === null && bev.grafana.unhealthyDatasources.length === 0 && bev.grafana.contactPoints === 3,
+           'malformed datasources JSON reads as unknown count while the contact points still parse', bev.grafana);
+    const noGrafana = { ...liveB, metadata: { ...liveB.metadata, annotations: Object.fromEntries(Object.entries(liveB.metadata.annotations).filter(([k]) => !k.startsWith('mcp.observed.grafana') && k !== 'mcp.observed.alertmanager')) } };
+    const nev = liveEvidenceFacts(noGrafana).stackEvidence;
+    assert(nev.alertmanager === null && nev.grafana === null && nev.rows.length === 6, 'surfaces the fetcher never wrote are null on the evidence, not empty objects', { am: nev.alertmanager, g: nev.grafana });
+    const errGrafana = { ...liveB, metadata: { ...liveB.metadata, annotations: { ...noGrafana.metadata.annotations, 'mcp.observed.grafana.error': 'HTTP 503', 'mcp.observed.alertmanager': JSON.stringify({ version: null, uptime: null, clusterStatus: null, silences: null, error: 'timeout' }) } } };
+    const eev = liveEvidenceFacts(errGrafana).stackEvidence;
+    assert(eev.grafana && eev.grafana.error === 'HTTP 503' && eev.grafana.datasources === null && eev.alertmanager.error === 'timeout' && eev.alertmanager.silencesActive === null,
+           'an advertised-but-failing surface keeps its error, with null counts', { g: eev.grafana, am: eev.alertmanager });
   }
 
   writeFileSync(join(TMP, 'journeys', 'live-synthetic.journey.yaml'), [
@@ -258,6 +361,10 @@ try {
   assert(liveRec.stack && liveRec.stack.status === 'sampled' && liveRec.stack.sampled === 12 && liveRec.stack.empty === 3 && liveRec.stack.failed === 0,
          'run record carries the stack self-metric counts', liveRec.stack);
   assert(!liveRec.gate.breaches.some(b => /stack/i.test(b.criterion)), 'no gate criterion reads the stack sample — signal, not verdict');
+  assert(liveRec.stackEvidence && liveRec.stackEvidence.status === 'sampled' && liveRec.stackEvidence.rows.length === 6 && liveRec.stackEvidence.alertmanager.version === '0.27.0' && liveRec.stackEvidence.grafana.unhealthyDatasources.join() === 'Loki',
+         'run record carries stackEvidence next to the stack counts', liveRec.stackEvidence && { status: liveRec.stackEvidence.status, rows: liveRec.stackEvidence.rows.length });
+  assert(JSON.parse(JSON.stringify(readJourneyRuns('live-synthetic')[0])).stackEvidence.rows.find(r => r.id === 'scrape_targets_down').hint === 'nonzero',
+         'stackEvidence round-trips through the run history file');
   assert(typeof liveRec.freshness.liveAgeHours === 'number', 'live-like B has a freshness age');
   const liveMd = renderJourneyMarkdown(liveRec);
   assert(/Live probes/.test(liveMd) && /failed: dashboards/.test(liveMd) && /not exposed: scrape_configs/.test(liveMd) && /vantage \*\*partial\*\*/.test(liveMd),

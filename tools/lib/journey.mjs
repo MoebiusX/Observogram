@@ -40,7 +40,7 @@
 // total loss of the observation point is a point in the drift history,
 // not a hole in it.
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { resolve, join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from './mini-yaml.mjs';
@@ -50,7 +50,8 @@ import { evaluateConformance } from './conformance.mjs';
 import { diffPacks } from './diff.mjs';
 import { comparePackBranches } from './traceability-graph.mjs';
 import { crawlFiles } from './crawler.mjs';
-import { baseWorkspacePath } from './brand-env.mjs';
+import { baseWorkspacePath, brandEnv } from './brand-env.mjs';
+import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from './contracts/stack-self-metrics.mjs';
 import { computeDiagnosticGrade, computePostureMatrix, partialLiveEvidence, DIAGNOSTIC_PASS_SCORE_THRESHOLD } from '../../studio/diagnostic-grade.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -258,6 +259,78 @@ export function evaluateGate(gate, facts) {
   return breaches;
 }
 
+// ---------- step 3: stack-health evidence (samples, kept per run) ----------
+//
+// The fetcher's step-2 panel rides on Pack B as JSON annotations
+// (mcp.observed.stack_metrics / .alertmanager / .grafana.*). Each run
+// keeps what it saw so the run history becomes the time series. Every
+// row is still a point-in-time sample: `hint` is the contracts' display
+// marker and `referenceSli` the vocabulary it follows — neither is a
+// verdict, and malformed JSON degrades to "no rows", never to health.
+const STACK_ROW_BY_ID = new Map(STACK_SELF_METRIC_PROBES.map(r => [r.id, r]));
+const STACK_EVIDENCE_ROW_CAP = 64;
+
+function parseJsonAnnotation(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try { return JSON.parse(value); } catch (_) { return null; }
+}
+
+function stackEvidenceRows(observed) {
+  return (Array.isArray(observed) ? observed : [])
+    .filter(r => r && typeof r === 'object' && typeof r.id === 'string' && r.id)
+    .slice(0, STACK_EVIDENCE_ROW_CAP)
+    .map(r => {
+      const def = STACK_ROW_BY_ID.get(r.id) || null;
+      const value = typeof r.value === 'number' && Number.isFinite(r.value) ? r.value : null;
+      const direction = def?.direction || r.direction || 'info';
+      return {
+        id: r.id,
+        family: def?.family || r.family || null,
+        product: r.product ?? null,
+        value,
+        unit: def?.unit || r.unit || null,
+        direction,
+        outcome: STACK_OUTCOMES.includes(r.outcome) ? r.outcome : 'failed',
+        hint: displayHint({ direction }, value),
+        at: typeof r.at === 'string' ? r.at : null,
+        // A row the table no longer declares keeps null: no vocabulary
+        // is claimed for a sample nothing maps any more.
+        referenceSli: def?.referenceSli ?? null,
+        ...(r.reason ? { reason: String(r.reason) } : {}),
+      };
+    });
+}
+
+function stackEvidenceFromAnnotations(ann) {
+  const status = ann['mcp.stack.status'];
+  if (status !== 'sampled' && status !== 'not-attempted') return null;
+  const am = parseJsonAnnotation(ann['mcp.observed.alertmanager']);
+  const dsRaw = parseJsonAnnotation(ann['mcp.observed.grafana.datasources']);
+  const cpRaw = parseJsonAnnotation(ann['mcp.observed.grafana.contact_points']);
+  const grafanaError = ann['mcp.observed.grafana.error'] ? String(ann['mcp.observed.grafana.error']) : null;
+  const datasources = (Array.isArray(dsRaw) ? dsRaw : []).filter(d => d && typeof d === 'object');
+  const hasGrafana = Array.isArray(dsRaw) || (cpRaw && typeof cpRaw === 'object') || grafanaError;
+  return {
+    status,
+    reason: status === 'not-attempted' ? String(ann['mcp.stack.reason'] || 'not attempted') : null,
+    rows: stackEvidenceRows(parseJsonAnnotation(ann['mcp.observed.stack_metrics'])),
+    alertmanager: am && typeof am === 'object' ? {
+      version: am.version ?? null,
+      clusterStatus: am.clusterStatus ?? null,
+      silencesActive: typeof am.silences?.active === 'number' ? am.silences.active : null,
+      error: am.error ? String(am.error) : null,
+    } : null,
+    grafana: hasGrafana ? {
+      datasources: Array.isArray(dsRaw) ? datasources.length : null,
+      // Only a health verdict of 'error' is unhealthy; 'unknown' means the
+      // health was never checked and must not read as either.
+      unhealthyDatasources: datasources.filter(d => d.health === 'error').map(d => String(d.name ?? d.uid ?? '?')),
+      contactPoints: cpRaw && typeof cpRaw === 'object' && typeof cpRaw.count === 'number' ? cpRaw.count : null,
+      error: grafanaError,
+    } : null,
+  };
+}
+
 // On-wire liveness facts read from Pack B's fetcher annotations
 // (docs/MCP_INTEGRATION.md). A file-sourced Pack B carries none: every
 // list is empty, counts are 0, toolsExposedCount is null — absence of
@@ -302,6 +375,8 @@ export function liveEvidenceFacts(canonicalB) {
       failed: stackCount('mcp.stack.failed'),
       notAttempted: stackCount('mcp.stack.notAttempted'),
     },
+    // Step 3: the samples themselves (null when Pack B carries no panel).
+    stackEvidence: stackEvidenceFromAnnotations(ann),
   };
 }
 
@@ -423,6 +498,10 @@ export async function runJourney(def, { baseDir } = {}) {
     // Step 2 stack self-metric sample counts — recorded as a signal for the
     // drift-over-time series, never gated on.
     stack: live.stack,
+    // Step 3: the samples this run saw (rows + Alertmanager / Grafana
+    // status), null when Pack B carries no panel. Point-in-time evidence
+    // kept per run so the history is the time series.
+    stackEvidence: live.stackEvidence,
     gate: { thresholds: def.gate || {}, breaches },
     outcome: breaches.length ? 'gate-failed' : 'pass',
   };
@@ -431,15 +510,70 @@ export async function runJourney(def, { baseDir } = {}) {
   return record;
 }
 
-// History: one JSON per run — the drift-over-time series. A write failure
-// is reported on the record, never thrown: the verdict already exists.
+// ---------- run history + retention ----------
+//
+// One JSON per run under runs/<journey>/ — the drift-over-time series the
+// journeys surface reads. Continuity is the point (a journey run from cron
+// every few minutes is the intended cadence), so the directory is bounded:
+// after every write it is pruned to the newest JOURNEY_RUN_RETENTION files.
+// Filenames are the ISO start time with ':' and '.' replaced, so their
+// lexical order IS their chronological order; "newest" needs no stat.
+export const JOURNEY_RUN_RETENTION_DEFAULT = 1000;
+
+// Defensive parse of the retention knob: a non-negative integer, else the
+// default. 0 means unlimited (no pruning). Exported so the policy is
+// testable without touching the environment.
+export function parseRunRetention(raw, fallback = JOURNEY_RUN_RETENTION_DEFAULT) {
+  if (raw === undefined || raw === null) return fallback;
+  const s = String(raw).trim();
+  if (!/^\d+$/.test(s)) return fallback;
+  const n = Number(s);
+  return Number.isSafeInteger(n) && n >= 0 ? n : fallback;
+}
+
+// Read at write time (not at import) so an operator's env change and a
+// test's env flip both take effect on the next run. OBSERVOGRAM_JOURNEY_RUN_RETENTION
+// (legacy TOMOGRAPH_* spelling honoured by brandEnv).
+export function journeyRunRetention() {
+  return parseRunRetention(brandEnv('JOURNEY_RUN_RETENTION') || undefined);
+}
+
+// Pure retention policy: given the run filenames of one journey and the
+// number to keep, return the names to delete, oldest first. keep <= 0 (or
+// a non-number) means unlimited → nothing is deleted. Non-run files in the
+// directory are never candidates.
+export function pruneRunFiles(files, keep) {
+  const n = Number(keep);
+  if (!Number.isFinite(n) || n <= 0) return [];
+  const runs = (Array.isArray(files) ? files : [])
+    .filter(f => typeof f === 'string' && f.endsWith('.json'))
+    .sort();
+  const excess = runs.length - Math.floor(n);
+  return excess > 0 ? runs.slice(0, excess) : [];
+}
+
+// A write failure is reported on the record, never thrown: the verdict
+// already exists. Pruning likewise: a file that cannot be deleted is noted
+// as historyError and the run still counts.
 function writeRunRecord(name, startedAt, record) {
+  const dir = runsDir(name);
   try {
-    const dir = runsDir(name);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, `${startedAt.replace(/[:.]/g, '-')}.json`), JSON.stringify(record, null, 2));
   } catch (e) {
     record.historyError = e.message;
+    return;
+  }
+  const keep = journeyRunRetention();
+  if (keep <= 0) return;
+  const errors = [];
+  let victims = [];
+  try { victims = pruneRunFiles(readdirSync(dir), keep); } catch (e) { errors.push(`list ${dir}: ${e.message}`); }
+  for (const f of victims) {
+    try { unlinkSync(join(dir, f)); } catch (e) { errors.push(`prune ${f}: ${e.message}`); }
+  }
+  if (errors.length) {
+    record.historyError = [record.historyError, ...errors].filter(Boolean).join('; ');
   }
 }
 

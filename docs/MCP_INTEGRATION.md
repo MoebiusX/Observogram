@@ -288,6 +288,40 @@ comparison (`comparePackBranches`) is attached to the diff as
 `grade.driftConstruct` says which construct scored Drift-free
 (`requirement-chain` when declared commitments exist, else `diff-buckets`).
 
+#### Run-history retention
+
+Every run appends one JSON record under `runs/<journey>/` in the workspace;
+the filename is the ISO start time, so lexical order is chronological order.
+Continuity is the goal (a cron cadence of minutes is the intended use), so
+the directory is bounded: after each write `writeRunRecord` prunes it to the
+newest `OBSERVOGRAM_JOURNEY_RUN_RETENTION` files (`brandEnv`, legacy
+`TOMOGRAPH_*` spelling honoured; default `1000`; `0` = unlimited; anything
+that is not a non-negative integer falls back to the default). The policy is
+the pure `pruneRunFiles(files, keep)` (returns the names to delete, oldest
+first; non-`.json` entries are never candidates) and the knob is read at
+write time by `journeyRunRetention()`. A file that cannot be deleted is
+recorded on the run as `historyError`, never thrown — the verdict already
+exists. `readJourneyRuns(name, { limit })` is unchanged: newest first, at
+most `limit` parsed.
+
+#### Stack-health evidence on the run record (`stackEvidence`)
+
+Next to the step-2 `stack` counts, each record keeps the samples the run saw
+so the history is the time series (step 3). `stackEvidence` is `null` when
+Pack B carries no `mcp.stack.status` (file-sourced, or a pre-step-2
+refresh) — never an empty "healthy" panel — and otherwise:
+
+| Field | Source | Notes |
+|---|---|---|
+| `status`, `reason` | `mcp.stack.status`, `mcp.stack.reason` | `not-attempted` keeps its reason (a restricted tier reads not-attempted, never absent) |
+| `rows[]` | `mcp.observed.stack_metrics` (cap 64) | `{ id, family, product, value, unit, direction, outcome, hint, at, referenceSli, reason? }` — `expr` is dropped; `hint` is the contracts' display-only `displayHint` and `referenceSli` the table's reference-pack SLI, both looked up by `id` in `STACK_SELF_METRIC_PROBES`; a row the table no longer declares keeps `referenceSli: null` |
+| `alertmanager` | `mcp.observed.alertmanager` | `{ version, clusterStatus, silencesActive, error }` or `null` when the surface was not advertised |
+| `grafana` | `mcp.observed.grafana.datasources` / `.contact_points` / `.error` | `{ datasources, unhealthyDatasources: [names], contactPoints, error }` or `null`; only a health verdict of `error` is unhealthy (`unknown` was never checked) |
+
+Malformed JSON in any of those annotations degrades to `rows: []` /
+`null` for that surface — the status survives, nothing is fabricated. No
+gate key reads `stackEvidence` yet: a sample is a signal, not a verdict.
+
 ### Stack self-metrics (registry)
 
 `tools/lib/contracts/stack-self-metrics.mjs` is the data-only alias table the
@@ -581,7 +615,7 @@ The same annotations are read back, never re-sampled, on three surfaces:
 - `POST /api/draft-from-mcp` — `summary.stack = { status, reason, sampled, empty, failed, notInInventory, notAttempted, families: { <family>: <best outcome> }, rows: [{ id, family, product, value, unit, direction, outcome, hint, reason? }] }` parsed from `mcp.stack.*` and `mcp.observed.stack_metrics`; `hint` is the contracts' display-only `displayHint` (`'nonzero'` when a lower-is-comfortable row is above zero, else `null`) and is computed here, never stored. `summary.alertmanager = { version, uptime, clusterStatus, silences, error }` and `summary.grafana = { datasources, healthChecked, contactPoints, error }` come from the `mcp.observed.*` JSON; each is `null` only when the surface was not advertised (or the fetcher predates step 2) — an advertised tool that failed keeps the summary with `error` set, and the server adds a `… status probe failed — <error>` warning. `healthChecked` counts the datasources that actually got a verdict; `health: 'unknown'` stays visible as "not checked". A `not-attempted` panel adds the warning `Stack self-metrics not attempted — metrics_query not exposed by this MCP tier.` (or `— <reason>.` for any other reason).
 - `GET /api/live-status` — `stackStatus` (`sampled` | `not-attempted` | `null`) and `stackSampled` (number).
 - The studio draft summary renders a "stack self-metrics — point-in-time sample, signal not verdict" block under the discovery rows: one row per family in `families` showing the family's best row (ratios as a percent, per-second to three decimals, seconds to one, counts as integers, `· nonzero` when hinted) or its outcome (`— empty`, `— probe failed: …`, `— not in inventory`; a family with no observed row reads `— not attempted: call budget exhausted`), a single `— not attempted: <summary.stack.reason>` row on a not-attempted panel, then `alertmanager: v<version> · N active silences` (`— probe failed: <error>` when advertised but failing), `datasources: N · M error: <names> · K unchecked: <names>` — or `N · health not checked (grafana_datasource_health not exposed or did not answer)` when no datasource got a verdict; `0 unhealthy`-style wording is never printed for a surface nothing checked — and `contact points: N`. `— not exposed` is reserved for a surface the MCP did not advertise.
-- Journeys — `liveEvidenceFacts(canonicalB).stack = { status, reason, sampled, empty, failed, notAttempted }` (status `null` and zero counts for a file-sourced Pack B) rides on the run record as `stack` and prints one `Stack self-metrics` line in the markdown report. No gate key reads it.
+- Journeys — `liveEvidenceFacts(canonicalB).stack = { status, reason, sampled, empty, failed, notAttempted }` (status `null` and zero counts for a file-sourced Pack B) rides on the run record as `stack` and prints one `Stack self-metrics` line in the markdown report; since step 3 the record also keeps the samples themselves as `stackEvidence` (see "Stack-health evidence on the run record" above). No gate key reads either.
 
 ## Diagnostic Drift Semantics
 
