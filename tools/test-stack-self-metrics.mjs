@@ -160,8 +160,11 @@ for (const id of ['datasource_errors', 'grafana_http_errors']) {
     `${id}: the 5xx rate alias(es) carry the presence-guarded zero of their base metric`, r.aliases.map((a) => a.expr));
 }
 const ds = rows.find((x) => x.id === 'datasource_errors');
-assert(ds.aliases.length === 2 && ds.aliases[0].requires[0] === 'grafana_proxy_response_status_total' && ds.aliases[1].requires[0] === 'grafana_datasource_request_total',
-  'datasource_errors reads the pre-registered grafana_proxy_response_status_total first, the lazily-registered reference-pack name second', ds.aliases.map((a) => a.requires));
+// Order matters: the sampler stops at the first alias with data, and the
+// proxy counter observes only the legacy proxy path (an /api/ds/query never
+// touches it), so the reference name that counts every path goes first.
+assert(ds.aliases.length === 2 && ds.aliases[0].requires[0] === 'grafana_datasource_request_total' && ds.aliases[1].requires[0] === 'grafana_proxy_response_status_total',
+  'datasource_errors reads the reference-pack grafana_datasource_request_total first (every query path), the proxy-only grafana_proxy_response_status_total as the fallback', ds.aliases.map((a) => a.requires));
 // The lazy otelcol rows require the sibling that registers with the counter.
 for (const [id, counter, sibling] of [
   ['collector_export_failures_spans', 'otelcol_exporter_send_failed_spans', 'otelcol_exporter_sent_spans'],

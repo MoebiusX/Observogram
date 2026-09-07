@@ -65,12 +65,20 @@
 //      only for vocabulary.
 //   3. reference-packs/grafana `datasource_proxy_success_ratio` is written
 //      over `grafana_datasource_request_total`, which Grafana 12.4.4
-//      registers only on the first datasource request — a proxied query or
-//      a rule evaluation (absent on a Grafana that has made none yet). Row
-//      `datasource_errors` therefore reads
-//      `grafana_proxy_response_status_total`, which the same Grafana
-//      pre-registers at startup with `code="500"` at 0, and keeps the
-//      reference name as its second alias.
+//      registers only on the first datasource request (absent on a Grafana
+//      that has made none yet) — but that first request is any rule
+//      evaluation, any `/api/ds/query` (the path dashboards and
+//      Grafana-managed rules use) or any legacy proxied query, so every
+//      Grafana with one dashboard or one rule has it. Row
+//      `datasource_errors` therefore reads the reference name FIRST with
+//      strict `requires`, and keeps `grafana_proxy_response_status_total`
+//      — pre-registered at startup with `code="500"` at 0, but counting
+//      ONLY the legacy `/api/datasources/proxy/...` path (observed on
+//      12.4.4: an `/api/ds/query` increments `datasource_request_total`
+//      and leaves every proxy counter untouched) — as the fallback for a
+//      Grafana whose inventory lacks the reference name (the public tier).
+//      The other order would read a systematically blind 0 on any Grafana
+//      whose queries fail through `/api/ds/query`.
 //
 // ROWS THAT MUST READ ZERO WHEN HEALTHY: a PromQL filter that matches
 // nothing (`count(up == 0)` on a stack with every target up, or
@@ -91,12 +99,16 @@
 // series at all. Observed on the OpenTelemetry Collector: 0.115.1 registers
 // `otelcol_exporter_send_failed_<kind>` together with
 // `otelcol_exporter_sent_<kind>` at the FIRST EXPORT (10 metric names at
-// startup, 39 after one OTLP request; the never-failing `debug` exporter
-// then carries `send_failed_* 0`), and `otelcol_receiver_refused_<kind>`
-// together with `otelcol_receiver_accepted_<kind>` at the first receive;
-// 0.154.0 (public tier) exposes `sent_spans` / `accepted_spans` and
-// `refused_spans` while `send_failed_spans` is absent — registered only on
-// the first failure. Strict `requires` on such a counter would read
+// startup — that count is stable —, 39 the moment the three send_failed_*
+// names register after one OTLP request per kind, and more keep appearing
+// as the dead exporter retries: 48 families some minutes later; the
+// never-failing `debug` exporter then carries `send_failed_* 0`), and
+// `otelcol_receiver_refused_<kind>` together with
+// `otelcol_receiver_accepted_<kind>` at the first receive; on 0.154.0
+// (public tier, read-only) `send_failed_spans` is absent while `sent_spans`
+// / `accepted_spans` / `refused_spans` are present — consistent with
+// registration on the first failure, though no failure was forced there.
+// Strict `requires` on such a counter would read
 // not-in-inventory on a healthy collector forever. Policy: the alias
 // `requires` the ALWAYS-PRESENT-ONCE-ACTIVE sibling that proves the product
 // is scraped and doing that work (`otelcol_exporter_sent_<kind>`,
@@ -107,10 +119,17 @@
 // evidence either way), and a backend without the product still reads
 // `empty`. A renamed counter on a future collector (e.g. a `_total` suffix)
 // also renames the sibling, so the alias falls to not-in-inventory instead
-// of a false 0. Counters the product pre-registers at 0 (Prometheus
-// client_golang: prometheus_*, alertmanager_*, vmalert_*, vm_*, promtail_*,
-// jaeger_collector_* — all observed present at startup) keep strict
-// `requires`.
+// of a false 0. Counters the product pre-registers at 0 keep strict
+// `requires`: client_golang registers prometheus_*, alertmanager_*,
+// promtail_* and jaeger_collector_* at 0; VictoriaMetrics' own `metrics`
+// library registers vm_* at startup and vmalert's `*_rules_errors_total`
+// per LOADED rule (a rule-less vmalert exposes none — honest
+// not-in-inventory, no ruler work to observe). All are present on the
+// pinned stack's exposition (tools/test-stack-live.mjs); the suite asserts
+// startup-vs-stimulus only for the collector and Grafana (the two services
+// it recreates), the others' startup state was observed by hand once.
+// The canonical prose of this policy is docs/MCP_INTEGRATION.md
+// ("Lazily-registered counters"); this header is the summary beside the data.
 //
 // Pure ESM, data + lookup resolvers only. No control flow beyond mapping
 // and filtering, no Node APIs — browser-safe by construction.
@@ -130,11 +149,11 @@ export const STACK_OUTCOMES = Object.freeze(['data', 'empty', 'failed', 'not-in-
 // evidence that confirmed them (2026-09-07: the pinned stack, the public
 // Krystaline tier).
 const SRC = Object.freeze({
-  prometheus:      'Prometheus server self-metrics (/metrics): docs.prometheus.io — "Jobs and instances" (up, scrape_duration_seconds) and the prometheus_* series the server exposes; prometheus_engine_query_duration_seconds is a summary with labels slice / quantile (promql/engine.go). Confirmed on prom/prometheus:v2.55.1 (stack, 2026-09-07) and the public tier',
-  victoriametrics: 'VictoriaMetrics docs — vmagent "Monitoring" (vm_promscrape_targets{type,status}), vmalert "Monitoring" (vmalert_recording_rules_errors_total and vmalert_alerting_rules_errors_total — plural "errors", per app/vmalert/rule/recording.go and alerting.go; vmalert_alerts_send_errors_total), VictoriaMetrics "Monitoring" (vm_cache_entries{type="storage/hour_metric_ids"} = active time series). Confirmed on victoriametrics/victoria-metrics:v1.113.0 + vmalert:v1.113.0 (stack, 2026-09-07; every counter pre-registered at 0) and vm_* on the public tier (which does not scrape its vmalert)',
-  grafana:         'Grafana docs — "Grafana metrics" (internal /metrics): grafana_proxy_response_status_total{code} (datasource proxy responses; pre-registered at startup with code 200/404/500/unknown at 0), grafana_datasource_request_total{code} (registered on the first datasource request — a proxied query or a rule evaluation), grafana_http_request_duration_seconds{status_code}, grafana_alerting_rule_evaluation_failures_total{org} (registered per org on the first rule evaluation). Confirmed on grafana/grafana:12.4.4 (stack, 2026-09-07) and grafana_proxy_response_status_total / grafana_http_request_duration_seconds_count on the public tier (Grafana 12.4.0)',
+  prometheus:      'Prometheus server self-metrics (/metrics): docs.prometheus.io — "Jobs and instances" (up, scrape_duration_seconds) and the prometheus_* series the server exposes; prometheus_engine_query_duration_seconds is a summary with labels slice / quantile (promql/engine.go). Confirmed on prom/prometheus:v2.55.1 (stack, 2026-09-07); `up` / `scrape_duration_seconds` also on the public tier (no Prometheus server there — every prometheus_* alias reads not-in-inventory)',
+  victoriametrics: 'VictoriaMetrics docs — vmagent "Monitoring" (vm_promscrape_targets{type,status}), vmalert "Monitoring" (vmalert_recording_rules_errors_total and vmalert_alerting_rules_errors_total — plural "errors", per app/vmalert/rule/recording.go and alerting.go; vmalert_alerts_send_errors_total), VictoriaMetrics "Monitoring" (vm_cache_entries{type="storage/hour_metric_ids"} = active time series). Confirmed on victoriametrics/victoria-metrics:v1.113.0 + vmalert:v1.113.0 (stack, 2026-09-07; vm_* pre-registered at 0 at startup, vmalert_*_rules_errors_total registered at 0 per loaded rule — per-rule label sets, none on a rule-less vmalert) and vm_* on the public tier (which does not scrape its vmalert)',
+  grafana:         'Grafana docs — "Grafana metrics" (internal /metrics): grafana_datasource_request_total{code,method} (every datasource request: rule evaluations, /api/ds/query — the path dashboards and Grafana-managed rules use — and legacy proxied queries; registered on the first one), grafana_proxy_response_status_total{code} (ONLY the legacy /api/datasources/proxy/... path — an /api/ds/query never touches it, observed on 12.4.4; pre-registered at startup with code 200/404/500/unknown at 0), grafana_http_request_duration_seconds{status_code}, grafana_alerting_rule_evaluation_failures_total{org} (registered per org on the first rule evaluation). Confirmed on grafana/grafana:12.4.4 (stack, 2026-09-07) and grafana_proxy_response_status_total / grafana_http_request_duration_seconds_count on the public tier (Grafana 12.4.0)',
   alertmanager:    'Prometheus Alertmanager self-metrics (/metrics): alertmanager_notifications_total, alertmanager_notifications_failed_total{integration,reason}, alertmanager_silences{state}. Confirmed on prom/alertmanager:v0.27.0 (stack, 2026-09-07; pre-registered at 0) and the public tier (Alertmanager 0.27.0)',
-  otelcol:         'OpenTelemetry Collector docs — "Internal telemetry": otelcol_exporter_sent_<kind> / otelcol_exporter_send_failed_<kind>, otelcol_receiver_accepted_<kind> / otelcol_receiver_refused_<kind>, otelcol_exporter_queue_size / queue_capacity (kinds: spans, metric_points, log_records). No `_total` suffix on any collector observed (otel/opentelemetry-collector-contrib:0.115.1 on the stack; 0.154.0 on the public tier). Lazy registration observed on otel/opentelemetry-collector-contrib:0.115.1, 2026-09-07 stack: exporter and receiver counters register at the first export / receive (10 names at startup, 39 after one OTLP request); on 0.154.0 (public tier) send_failed_spans is absent while sent_spans is present. otelcol_processor_dropped_<kind> exist on NO current collector (removed by the processorhelper rework — processor/processorhelper/metadata.yaml defines processor_incoming_items / processor_outgoing_items only): absent in both spellings on 0.115.1 and 0.154.0, so the collector_refused_* rows read the receiver counters instead. otelcol_exporter_queue_size carries a data_type label on 0.115.1 that queue_capacity lacks (0.154.0 carries it on both), hence the per-exporter max grouping in collector_queue_saturation',
+  otelcol:         'OpenTelemetry Collector docs — "Internal telemetry": otelcol_exporter_sent_<kind> / otelcol_exporter_send_failed_<kind>, otelcol_receiver_accepted_<kind> / otelcol_receiver_refused_<kind>, otelcol_exporter_queue_size / queue_capacity (kinds: spans, metric_points, log_records). No `_total` suffix on any collector observed (otel/opentelemetry-collector-contrib:0.115.1 on the stack — the image self-reports service_version 0.115.0 in target_info and on every otelcol_* series; 0.154.0 on the public tier). Lazy registration observed on otel/opentelemetry-collector-contrib:0.115.1, 2026-09-07 stack: exporter and receiver counters register at the first export / receive (10 names at startup; 39 the moment send_failed_* register after one OTLP request per kind, more as the dead exporter retries — 48 some minutes later); on 0.154.0 (public tier, read-only) send_failed_spans is absent while sent_spans is present — consistent with registration on the first failure, not forced there. otelcol_processor_dropped_<kind> exist on NO current collector (removed by the processorhelper rework — processor/processorhelper/metadata.yaml defines processor_incoming_items / processor_outgoing_items only): absent in both spellings on 0.115.1 and 0.154.0, so the collector_refused_* rows read the receiver counters instead. otelcol_exporter_queue_size carries a data_type label on 0.115.1 that queue_capacity lacks (0.154.0 carries it on both), hence the per-exporter max grouping in collector_queue_saturation',
   blackbox:        'prometheus/blackbox_exporter README: probe_success (on the /probe output the scrape job reads, never on the exporter\'s own /metrics). Confirmed on prom/blackbox-exporter:v0.25.0 (stack, 2026-09-07)',
   promtail:        'Grafana Loki docs — Promtail "Observability": promtail_dropped_entries_total{host,reason}. Confirmed on grafana/promtail:3.3.2 (stack, 2026-09-07; pre-registered at 0) and the public tier',
   jaeger:          'Jaeger docs — collector metrics (admin port 14269, no flag needed): jaeger_collector_spans_dropped_total, beside spans_received_total / spans_rejected_total. Confirmed on jaegertracing/all-in-one:1.62.0 (stack, 2026-09-07). Jaeger v2 (public tier: v2.18.0) is an OpenTelemetry Collector distribution that exposes otelcol_* names instead — its drops surface through the collector rows, and this alias reads not-in-inventory there (honest: v1 names only)',
@@ -348,14 +367,18 @@ export const STACK_SELF_METRIC_PROBES = Object.freeze([
   // ---- dashboards -----------------------------------------------------
   row({
     id: 'datasource_errors', family: 'dashboards',
-    signal: 'Grafana datasource proxy 5xx per second', unit: 'per-second', direction: 'lower',
+    signal: 'Grafana datasource request 5xx per second', unit: 'per-second', direction: 'lower',
     referenceSli: 'grafana-reference/datasource_proxy_success_ratio',
     aliases: [
-      alias('grafana', 'sum(rate(grafana_proxy_response_status_total{code=~"5.."}[5m])) or (count(grafana_proxy_response_status_total) * 0)', ['grafana_proxy_response_status_total'], verifiedOn(IMG.grafana)),
-      // The reference pack's name (discrepancy 3): registered on the first
-      // proxied request, strict requires — eligible once a datasource has
-      // been queried through Grafana.
+      // The reference pack's name first (discrepancy 3): registered on the
+      // first datasource request — a rule evaluation, an /api/ds/query or a
+      // proxied query — so strict requires; it observes every query path.
       alias('grafana', 'sum(rate(grafana_datasource_request_total{code=~"5.."}[5m])) or (count(grafana_datasource_request_total) * 0)', ['grafana_datasource_request_total'], verifiedOn(IMG.grafana)),
+      // Fallback for a Grafana whose inventory lacks the reference name:
+      // pre-registered at startup, but it counts only the legacy
+      // /api/datasources/proxy/... path (never /api/ds/query), so it must
+      // not be tried first — the sampler stops at the first data outcome.
+      alias('grafana', 'sum(rate(grafana_proxy_response_status_total{code=~"5.."}[5m])) or (count(grafana_proxy_response_status_total) * 0)', ['grafana_proxy_response_status_total'], verifiedOn(IMG.grafana)),
     ],
     source: SRC.grafana,
   }),

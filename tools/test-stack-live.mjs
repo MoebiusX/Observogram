@@ -30,6 +30,15 @@
  *       (whose second exporter targets a dead endpoint), then the name set
  *       again: before/after presence of `otelcol_exporter_send_failed_*`
  *       and `otelcol_processor_dropped_*` is recorded for the next slice.
+ *       Grafana rides along, reported never asserted: its `/metrics` is
+ *       snapshotted the moment `--force-recreate --wait grafana` returns
+ *       (before the target wait) and again after the suite's own stimulus.
+ *       "At startup" is exact for the collector (nothing sends to it before
+ *       the stimulus); for Grafana it means "before the suite's stimulus" —
+ *       the provisioned always-firing rule (10s interval) is Grafana's own
+ *       first datasource request, so on a slow start
+ *       `grafana_datasource_request_total` / `grafana_alerting_rule_*` can
+ *       already be present in the before column.
  *
  * The suite reports; it never edits the table. The LEDGER (alias | product@
  * version | exposition | query) is printed and written to
@@ -37,6 +46,10 @@
  * exposition ✗ or query ERROR, so it is a real gate — but it is NOT part of
  * `npm test`: it needs Docker. Without Docker it SKIPS loudly; --strict
  * turns the skip into a failure (CI). The stack is left running.
+ *
+ * ONE RUN AT A TIME: the suite force-recreates the collector and Grafana;
+ * two concurrent runs recreate them under each other and corrupt each
+ * other's before/after name sets.
  *
  *   npm run test:stack:live            # skip loudly without Docker
  *   npm run test:stack:live:strict     # --strict
@@ -116,6 +129,8 @@ function ensureStack() {
   // with the set after a stimulus; a collector / Grafana that already took
   // a previous run's stimulus would make "at startup" a lie, so the two
   // are recreated fresh on every run (the rest of the stack is reused).
+  // The caller snapshots Grafana's /metrics right after this returns —
+  // its provisioned rule fires its first datasource request within ~10s.
   const fresh = spawnSync('docker', ['compose', '-f', COMPOSE_FILE, 'up', '-d', '--force-recreate', '--wait', 'otel-collector', 'grafana'], { encoding: 'utf8', timeout: 300_000 });
   if (fresh.status !== 0) {
     return { ok: false, reason: `docker compose recreate (otel-collector, grafana) failed: ${(fresh.stderr || fresh.stdout || '').trim().slice(0, 400)}` };
@@ -139,8 +154,12 @@ function expectedJobs() {
 }
 
 // ---------- HTTP helpers ----------
+// Every request carries a deadline: a product that accepts the connection
+// and never answers must fail the suite, not hang it.
+const HTTP_TIMEOUT_MS = 10_000;
+const timeout = () => AbortSignal.timeout(HTTP_TIMEOUT_MS);
 async function getText(url, opts = {}) {
-  const res = await fetch(url, opts);
+  const res = await fetch(url, { signal: timeout(), ...opts });
   const text = await res.text();
   if (!res.ok) throw new Error(`${url} HTTP ${res.status}: ${text.slice(0, 200)}`);
   return text;
@@ -173,6 +192,7 @@ async function promQuery(expr) {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ query: expr }).toString(),
+    signal: timeout(),
   });
   const text = await res.text();
   try { return JSON.parse(text); } catch (_) { return { status: 'error', errorType: 'non-json', error: text.slice(0, 200) }; }
@@ -232,7 +252,7 @@ async function sendOtlp() {
   const sent = {};
   for (const [kind, body] of Object.entries(otlpPayloads())) {
     try {
-      const res = await fetch(`${URL.otelcolHttp}/v1/${kind}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const res = await fetch(`${URL.otelcolHttp}/v1/${kind}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: timeout() });
       sent[kind] = `HTTP ${res.status}`;
     } catch (e) { sent[kind] = `error: ${String(e?.message || e).slice(0, 120)}`; }
   }
@@ -241,17 +261,21 @@ async function sendOtlp() {
 
 // One query through Grafana's datasource proxy and one through /api/ds/query
 // so the datasource / proxy counters (label-vectored, hence lazy) have a
-// request to count. Failures are recorded, never asserted.
+// request to count — and so both paths are exercised: the proxy call
+// increments grafana_proxy_response_status_total AND
+// grafana_datasource_request_total{method="get"}, the /api/ds/query call
+// increments only grafana_datasource_request_total{method="post"} (12.4.4).
+// Failures are recorded, never asserted.
 async function stimulateGrafana() {
   const out = {};
   const auth = { authorization: GRAFANA_AUTH, 'content-type': 'application/json' };
   try {
-    const res = await fetch(`${URL.grafana}/api/datasources/proxy/uid/stack-prom/api/v1/query?query=up`, { headers: auth });
+    const res = await fetch(`${URL.grafana}/api/datasources/proxy/uid/stack-prom/api/v1/query?query=up`, { headers: auth, signal: timeout() });
     out.proxy = `HTTP ${res.status}`;
   } catch (e) { out.proxy = `error: ${String(e?.message || e).slice(0, 120)}`; }
   try {
     const body = { from: 'now-5m', to: 'now', queries: [{ refId: 'A', datasource: { uid: 'stack-prom' }, expr: 'up', instant: true }] };
-    const res = await fetch(`${URL.grafana}/api/ds/query`, { method: 'POST', headers: auth, body: JSON.stringify(body) });
+    const res = await fetch(`${URL.grafana}/api/ds/query`, { method: 'POST', headers: auth, body: JSON.stringify(body), signal: timeout() });
     out.dsQuery = `HTTP ${res.status}`;
   } catch (e) { out.dsQuery = `error: ${String(e?.message || e).slice(0, 120)}`; }
   return out;
@@ -296,6 +320,12 @@ function serviceFor(product, requires) {
 async function main() {
   const pre = ensureStack();
   if (!pre.ok) { skip(pre.reason); return; }
+  // Grafana's "before" snapshot is taken NOW — the closest the suite can
+  // get to startup: --wait returned on /api/health, and the provisioned
+  // 10s rule (Grafana's own first datasource request) may not have fired
+  // yet. See the header: this is "before the suite's stimulus", reported
+  // never asserted.
+  const grafanaBefore = await exposition(`${URL.grafana}/metrics`);
 
   const versions = serviceVersions();
   const jobs = expectedJobs();
@@ -308,10 +338,9 @@ async function main() {
   assert(await waitForRateWindows(60_000), 'every up series has ≥2 samples in the 5m window');
 
   // (c) lazy-registration probe — startup name sets FIRST, then stimulus.
-  // Grafana rides along: its datasource / proxy counters are label-vectored
-  // too, so they are recorded before and after the one query fired below.
+  // The collector's startup set is exact: nothing sends to it before this
+  // stimulus. Grafana's was taken right after its recreate (above).
   const otelBefore = await exposition(URL.otelcol);
-  const grafanaBefore = await exposition(`${URL.grafana}/metrics`);
   const sent = await sendOtlp();
   say(`stack-live: OTLP stimulus sent → ${JSON.stringify(sent)}`);
   const grafanaStimulus = await stimulateGrafana();
@@ -347,11 +376,11 @@ async function main() {
   const grafanaLazy = {
     product: `grafana@${versions.grafana?.version}`,
     stimulus: grafanaStimulus,
-    note: 'grafana_alerting_rule_evaluation_* register per org on the first rule evaluation (absent on a Grafana with no rules) — the stack provisions one always-firing rule (docker/stack/grafana-provisioning/alerting/rules.yaml, 10s interval) so they exist within one evaluation of startup; grafana_datasource_request_total registers on the first proxied datasource request',
+    note: 'before = right after --force-recreate --wait grafana returned (before the target wait), after = after the suite\'s stimulus. grafana_alerting_rule_evaluation_* register per org on the first rule evaluation (absent on a Grafana with no rules) — the stack provisions one always-firing rule (docker/stack/grafana-provisioning/alerting/rules.yaml, 10s interval) so they exist within one evaluation of startup; that evaluation is also Grafana\'s first datasource request, so grafana_datasource_request_total (every path: rule evaluation, /api/ds/query, proxy) can already be present in the before column on a slow start; grafana_proxy_response_status_total is pre-registered and counts only the legacy proxy path',
     watch: Object.fromEntries(GRAFANA_WATCH.map((n) => [n, { before: grafanaBefore.has(n), after: grafanaAfter.has(n) }])),
     appearedAfterStimulus: [...grafanaAfter].filter((n) => !grafanaBefore.has(n)).sort(),
   };
-  say('  lazy-registration (grafana): name | at startup | after stimulus');
+  say('  lazy-registration (grafana): name | after recreate (before stimulus) | after stimulus');
   for (const n of GRAFANA_WATCH) say(`    ${n.padEnd(52)} ${grafanaLazy.watch[n].before ? 'present' : 'absent '}  ${grafanaLazy.watch[n].after ? 'present' : 'absent '}`);
 
   // Every exposition once, then the alias checks read from the cache.

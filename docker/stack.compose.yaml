@@ -13,6 +13,10 @@
 # VictoriaMetrics scrape target, an always-firing alert in both rulers.
 # Every port is bound to loopback only. The port block (127.0.0.1:1xxxx)
 # is disjoint from docker/validate.compose.yaml (13000 / 13013 / 13002).
+# Every mount is read-only: a product must never be able to write into the
+# tracked ./stack tree. ONE SUITE RUN AT A TIME — the suite force-recreates
+# otel-collector and grafana, and two concurrent runs recreate them under
+# each other and corrupt each other's before/after name sets.
 name: observogram-stack
 
 services:
@@ -109,7 +113,7 @@ services:
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
       GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
     volumes:
-      - ./stack/grafana-provisioning:/etc/grafana/provisioning
+      - ./stack/grafana-provisioning:/etc/grafana/provisioning:ro
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/api/health"]
       interval: 2s
