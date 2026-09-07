@@ -72,9 +72,18 @@ metadata:
     mcp.verified.dashboards: "2026-06-09T00:09:14.730Z"
     mcp.verified.policy.burn_rate_alerts[0]: "2026-06-09T00:09:14.730Z"
 
+    mcp.verified.queries.recording_rules[0]: "2026-06-09T00:09:14.730Z"
+
     mcp.discovered.alert_rule_names: "svc_checkout_availability_99_9_burn_14x_5m_1h,..."
     mcp.discovered.alert_rules_unmapped: "svc_payments_latency_99"
     mcp.discovered.alert_rules_severity_inferred: ""
+    mcp.discovered.scrape_jobs: "node-exporter,grafana,otel-collector"
+    mcp.discovered.scrape_jobs_down: "alertmanager"
+    mcp.discovered.recording_rules_unhealthy: ""
+    mcp.discovered.alert_rules_unhealthy: "HighLatencyP99"
+    mcp.observed.scrape_targets: '[{"job":"alertmanager","instance":"kx-alertmanager:9093","health":"down","lastScrape":"…","lastError":"dial tcp4 …: connection refused"}, …]'
+    mcp.observed.recording_rules: '[{"name":"finops:cpu:usage_per_pod_5m","health":"ok","lastError":null,"lastEvaluation":"…","evaluationTime":0.0009}, …]'
+    mcp.observed.alert_rules: '[{"name":"HighLatencyP99","health":"err","lastError":"…","lastEvaluation":"…","state":"inactive","activeAt":null}, …]'
     mcp.baselinesComputed: "2"
 
     mcp.scaffold.otel: "schema-required fallback; not attested by any MCP tool"
@@ -125,6 +134,33 @@ Known limitation: SLOs inferred from recorded rules carry a placeholder
 objective (`0.99`) and window (`30d`) unless a discovered burn-rate group
 re-identifies them; the SLI is `Verified` (the recorded series exist), the SLO
 stays `Declared`.
+
+### On-wire liveness: scrape targets and rule health
+
+Existing is not the same as working. The probes keep what the MCP reports
+about whether each artefact is currently doing its job, and the fetcher
+withholds `Verified` where it is not:
+
+| Signal | Annotation | Effect on evidence |
+|---|---|---|
+| Every scrape target's `job`, `instance`, `health`, `lastScrape`, `lastError` (trimmed to 200 chars; at most 200 entries) | `mcp.observed.scrape_targets` (JSON) | none — the record |
+| Scrape jobs with at least one target `up` (or of unknown health) | `mcp.discovered.scrape_jobs` | attest `telemetry.scrape` and `pipelines.exporters.metrics` |
+| Scrape jobs whose **every** target is `down` | `mcp.discovered.scrape_jobs_down` | no stamp; when no job is up the metrics exporter falls back to its scaffold marker |
+| Each recording rule's `health`, `lastError`, `lastEvaluation`, `evaluationTime` (at most 200) | `mcp.observed.recording_rules` (JSON) | none — the record |
+| Recording rules whose reported `health` is not `ok` | `mcp.discovered.recording_rules_unhealthy` | no `mcp.verified.queries.recording_rules[<i>]` stamp for that index (the rule still lands in `spec.queries`, projected `Declared`); the group stamp `mcp.verified.queries.recording_rules` is kept only when at least one rule is healthy or carries no health |
+| Each alerting rule's `state`, `health`, `lastError`, `lastEvaluation`, `activeAt` (at most 200) | `mcp.observed.alert_rules` (JSON) | none — the record |
+| Alerting rules whose reported `health` is not `ok` | `mcp.discovered.alert_rules_unhealthy` | a burn-rate group fed by such a rule still maps but earns no `mcp.verified.policy.burn_rate_alerts[<i>]` stamp (projected `Declared`) |
+
+Health the ruler did not report reads `null` in the observed arrays and is
+**not** treated as unhealthy — only an explicit non-`ok` health withholds a
+stamp. Older probe results that carried only job names still count as
+(health-less) scrape evidence. The draft summary in the studio lists
+`N scrape jobs down: …` and `N rules unhealthy: …` when either is non-empty.
+
+Known limitation: an SLI inferred from a recorded rule the ruler reports
+unhealthy is still stamped `Verified` (the SLI inference does not yet consult
+rule health); the unhealthy rule itself is `Declared` and named in
+`mcp.discovered.recording_rules_unhealthy`.
 
 ### Burn-rate alerts are mapped, never synthesised
 

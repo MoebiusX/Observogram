@@ -3704,6 +3704,19 @@ function renderDraftMcpResult(out) {
         `via colon-pattern grep over metric inventory`,
       )
     : '';
+  // On-wire liveness rows — only when the MCP reported something NOT
+  // doing its job: scrape jobs whose every target is down, rules the
+  // ruler reports as failing to evaluate. These jobs/rules exist but are
+  // not counted as evidence above (the fetcher withholds their stamps).
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const scrapeJobsDown = d.scrapeJobsDown || [];
+  const rulesUnhealthy = [...(d.recordingRulesUnhealthy || []), ...(d.alertRulesUnhealthy || [])];
+  const scrapeDownRow = scrapeJobsDown.length
+    ? row(`${plural(scrapeJobsDown.length, 'scrape job')} down`, scrapeJobsDown.join(', '))
+    : '';
+  const rulesUnhealthyRow = rulesUnhealthy.length
+    ? row(`${plural(rulesUnhealthy.length, 'rule')} unhealthy`, rulesUnhealthy.join(', '))
+    : '';
   $('#draft-mcp-result-summary').innerHTML = `
     <h4>what the MCP attested</h4>
     <table class="crawl-summary-table">
@@ -3716,6 +3729,8 @@ function renderDraftMcpResult(out) {
       ${alertEvidenceRow}
       ${probeRow('dashboards',      'dashboards',      d.dashboards)}
       ${probeRow('scrape jobs',     'scrape_configs',  (d.scrapeJobs || []).length)}
+      ${scrapeDownRow}
+      ${rulesUnhealthyRow}
       ${probeRow('metric names',    'metric_names',    d.metricNamesCount)}
     </table>
     ${alertsFiringCount > 0 || recordingFallbackCount > 0 ? `

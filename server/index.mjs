@@ -1078,6 +1078,13 @@ app.post('/api/draft-from-mcp', async (req, res) => {
         alertRules:      Number(ann['mcp.discovered.alert_rules'] || 0),
         dashboards:      Number(ann['mcp.discovered.dashboards'] || (pack.spec?.dashboards || []).length),
         scrapeJobs:     (ann['mcp.discovered.scrape_jobs'] || '').split(',').filter(Boolean),
+        // On-wire liveness: jobs whose every target is down, and rules the
+        // ruler reports as failing to evaluate. Names, so the studio can
+        // say WHICH ones — the pack's mcp.observed.* annotations carry the
+        // per-target / per-rule detail.
+        scrapeJobsDown:         (ann['mcp.discovered.scrape_jobs_down'] || '').split(',').filter(Boolean),
+        recordingRulesUnhealthy: (ann['mcp.discovered.recording_rules_unhealthy'] || '').split(',').filter(Boolean),
+        alertRulesUnhealthy:    (ann['mcp.discovered.alert_rules_unhealthy'] || '').split(',').filter(Boolean),
         metricNamesCount: Number(ann['mcp.discovered.metric_names_count'] || 0),
         // tools/list inventory — what the MCP advertised vs what we matched
         toolsExposed:    (ann['mcp.toolsExposed']    || '').split(',').filter(Boolean),

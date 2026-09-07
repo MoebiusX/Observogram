@@ -274,7 +274,9 @@ function parseObjectivePercent(value) {
  * MUTATES `slos` in place for the re-id so every later consumer sees the
  * discovered id.
  *
- * Returns { alerts, unmapped, severityInferred, reidentified }.
+ * Returns { alerts, unmapped, severityInferred, reidentified,
+ * unhealthyIndexes } — the last lists entries fed by at least one rule
+ * whose reported health is not 'ok'.
  */
 export function mapDiscoveredBurnAlerts(alerts, slos) {
   const groups = new Map();  // slo id → { windows, seen, objective, window }
@@ -286,9 +288,13 @@ export function mapDiscoveredBurnAlerts(alerts, slos) {
     if (parsed.severityInferred && parsed.name) severityInferred.push(parsed.name);
     let g = groups.get(parsed.slo);
     if (!g) {
-      g = { windows: [], seen: new Set(), objective: null, window: null };
+      g = { windows: [], seen: new Set(), objective: null, window: null, unhealthy: false };
       groups.set(parsed.slo, g);
     }
+    // A rule the ruler reports as unhealthy (health present and not
+    // 'ok') still maps — it EXISTS — but the entry it lands in must not
+    // read Verified: a rule that fails to evaluate is not paging anyone.
+    if (ruleHealthy(alert) === false) g.unhealthy = true;
     const key = `${parsed.short}|${parsed.long}|${parsed.factor}|${parsed.severity}`;
     if (!g.seen.has(key)) {
       g.seen.add(key);
@@ -303,6 +309,7 @@ export function mapDiscoveredBurnAlerts(alerts, slos) {
   const alertsOut = [];
   const unmapped = [];
   const reidentified = {};
+  const unhealthyIndexes = [];  // indexes into alertsOut fed by an unhealthy rule
   const claimed = new Set();  // inferred SLOs already re-identified — one discovered id each
   for (const [discoveredId, g] of groups) {
     let slo = slos.find(s => s.id === discoveredId);
@@ -327,9 +334,10 @@ export function mapDiscoveredBurnAlerts(alerts, slos) {
       .map((w, i) => ({ w, i, s: durationToSeconds(w.short) ?? Infinity }))
       .sort((x, y) => (x.s - y.s) || (x.i - y.i))
       .map(x => x.w);
+    if (g.unhealthy) unhealthyIndexes.push(alertsOut.length);
     alertsOut.push({ slo: slo.id, windows });
   }
-  return { alerts: alertsOut, unmapped, severityInferred, reidentified };
+  return { alerts: alertsOut, unmapped, severityInferred, reidentified, unhealthyIndexes };
 }
 
 function defaultBaselines(criticality) {
@@ -337,6 +345,107 @@ function defaultBaselines(criticality) {
   if (criticality === 'tier-2') return { mttd_target_p50: '5m', mttr_target_p50: '2h' };
   return { mttd_target_p50: '15m', mttr_target_p50: '1d' };
 }
+
+// ============================================================
+// On-wire liveness — what the MCP reports about whether an artefact is
+// currently DOING its job, as opposed to merely existing. Scrape targets
+// carry health/lastScrape/lastError; rules carry health/lastError/
+// lastEvaluation (and state/activeAt for alerting rules). The probe
+// adapters keep these on the adapted objects; buildCanonicalPack strips
+// them before anything enters the schema-validated spec and writes them
+// to mcp.observed.* / mcp.discovered.*_unhealthy annotations instead.
+// ============================================================
+
+// Cap on entries written into a single mcp.observed.* JSON annotation.
+const OBSERVATION_LIMIT = 200;
+// Cap on a single lastError string inside those annotations.
+const OBSERVED_ERROR_LENGTH = 200;
+
+const trimError = (v) => (v == null || v === '' ? null : String(v).slice(0, OBSERVED_ERROR_LENGTH));
+
+// Prometheus target health is 'up' | 'down' | 'unknown'; anything we do
+// not recognise reads as null (no evidence either way).
+function normTargetHealth(v) {
+  const s = String(v ?? '').trim().toLowerCase();
+  return s === 'up' || s === 'down' ? s : null;
+}
+
+// Rule health as reported by the ruler ('ok' | 'err' | 'unknown').
+// Returns true (healthy), false (health present and not ok) or null (no
+// health information at all). Only `false` withholds a verified stamp.
+function ruleHealthy(rule) {
+  if (rule?.health == null || rule.health === '') return null;
+  return String(rule.health).trim().toLowerCase() === 'ok';
+}
+
+// Observation fields the rule adapters carry when the ruler reports
+// them. Everything outside this list (name/expr/interval/labels/for/
+// annotations) is the rule DEFINITION and goes into the spec.
+const RECORDING_OBSERVATION_FIELDS = ['health', 'lastError', 'lastEvaluation', 'evaluationTime'];
+const ALERT_OBSERVATION_FIELDS = [...RECORDING_OBSERVATION_FIELDS, 'state', 'activeAt'];
+
+function pickPresent(source, fields) {
+  const out = {};
+  for (const f of fields) {
+    if (source?.[f] != null && source[f] !== '') out[f] = source[f];
+  }
+  return out;
+}
+
+// A discovered recording rule reduced to what the schema admits
+// (name/expr/interval/labels) — the observation fields live in
+// mcp.observed.recording_rules.
+function stripRuleObservation(rule) {
+  const out = { name: rule.name, expr: rule.expr };
+  if (rule.interval != null) out.interval = rule.interval;
+  if (rule.labels != null) out.labels = rule.labels;
+  return out;
+}
+
+// One entry of mcp.observed.recording_rules / mcp.observed.alert_rules.
+// Every key is present (null when the ruler did not report it) so the
+// reader never has to guess whether a field was absent or unknown.
+function ruleObservation(rule, kind) {
+  const base = {
+    name: rule?.name ?? null,
+    health: rule?.health ?? null,
+    lastError: trimError(rule?.lastError),
+    lastEvaluation: rule?.lastEvaluation ?? null,
+  };
+  if (kind === 'alerting') {
+    return { ...base, state: rule?.state ?? null, activeAt: rule?.activeAt ?? null };
+  }
+  return { ...base, evaluationTime: rule?.evaluationTime ?? null };
+}
+
+function unhealthyRuleNames(rules) {
+  return (rules || [])
+    .filter(r => ruleHealthy(r) === false)
+    .map(r => r.name)
+    .filter(Boolean);
+}
+
+// scrape_configs adapted payloads come in two shapes: the legacy job-name
+// string[] (older probe results, pre-populated test fixtures) and the
+// per-job target list [{job, targets:[{instance, health, lastScrape,
+// lastError}]}]. Normalise both to the latter; a legacy name carries no
+// targets and therefore no evidence of being down.
+function normalizeScrapeJobs(adapted) {
+  if (!Array.isArray(adapted)) return [];
+  const out = [];
+  for (const entry of adapted) {
+    if (typeof entry === 'string') {
+      if (entry) out.push({ job: entry, targets: [] });
+    } else if (entry && typeof entry === 'object' && entry.job) {
+      out.push({ job: String(entry.job), targets: Array.isArray(entry.targets) ? entry.targets : [] });
+    }
+  }
+  return out;
+}
+
+// A job is DOWN only when it has targets and every one of them reports
+// health 'down'. Unknown health (null) is not evidence of failure.
+const scrapeJobDown = (job) => job.targets.length > 0 && job.targets.every(t => t.health === 'down');
 
 // Value written under every mcp.scaffold.<symbol> key the fetcher stamps
 // on a schema-forced placeholder. Same convention as crawler.scaffold.*:
@@ -859,7 +968,23 @@ export function buildCanonicalPack({
   }
 
   // Probes drive multiple downstream sections — hoist their results.
-  const discoveredRules = probeResults?.recording_rules?.adapted || [];
+  // The adapted rules carry on-wire evaluation state (health, lastError,
+  // lastEvaluation, …) that the schema forbids inside spec.queries: keep
+  // the raw list for the observation annotations and the per-rule health
+  // lookup, and strip it before the rules feed inference or the spec.
+  const discoveredRulesRaw = Array.isArray(probeResults?.recording_rules?.adapted)
+    ? probeResults.recording_rules.adapted.filter(r => r && typeof r === 'object' && r.name)
+    : [];
+  const discoveredRules = discoveredRulesRaw.map(stripRuleObservation);
+  const recordingRuleHealth = new Map(discoveredRulesRaw.map(r => [r.name, ruleHealthy(r)]));
+  if (discoveredRulesRaw.length) {
+    annotations['mcp.observed.recording_rules'] = annotationJson(
+      discoveredRulesRaw.slice(0, OBSERVATION_LIMIT).map(r => ruleObservation(r, 'recording')));
+    const unhealthy = unhealthyRuleNames(discoveredRulesRaw);
+    if (unhealthy.length) {
+      annotations['mcp.discovered.recording_rules_unhealthy'] = unhealthy.slice(0, 64).join(',');
+    }
+  }
 
   // Second, independent source of the platform's recorded SLO series: the
   // metric-inventory grep (metrics_label_values/__name__ filtered to the
@@ -978,7 +1103,20 @@ export function buildCanonicalPack({
     // ns:metric:op. Anything that doesn't can't go in spec.queries —
     // skip those (and they'll surface in the warnings).
     recordingRules = recordedRules.filter(r => RULE_NAME_RE.test(r.name));
-    markVerified('queries.recording_rules');
+    // The adapter projects each rule from sourceOf('queries.recording_rules[<i>]'),
+    // so the evidence has to be stamped per index — and only for rules the
+    // ruler reports healthy (or reports nothing about: inventory-grepped
+    // series carry no health). A rule with health 'err' EXISTS but is not
+    // producing its series; it stays Declared. The group-level stamp is
+    // kept for readers of the aggregate symbol, as long as at least one
+    // rule earned an indexed stamp.
+    let anyRuleAttested = false;
+    recordingRules.forEach((r, i) => {
+      if (recordingRuleHealth.get(r.name) === false) return;
+      markVerified(`queries.recording_rules[${i}]`);
+      anyRuleAttested = true;
+    });
+    if (anyRuleAttested) markVerified('queries.recording_rules');
   } else {
     recordingRules = slos.map(s => ({
       name: `platform:${s.sli}:ratio_5m`,
@@ -1034,9 +1172,24 @@ export function buildCanonicalPack({
   if (discoveredAlertNames.length) {
     annotations['mcp.discovered.alert_rule_names'] = discoveredAlertNames.slice(0, 64).join(',');
   }
+  if (discoveredAlerts.length) {
+    // On-wire evaluation state of every alerting rule the ruler exposed
+    // (state/health/lastError/lastEvaluation/activeAt) — the schema has
+    // no home for it, so it lives beside the names.
+    annotations['mcp.observed.alert_rules'] = annotationJson(
+      discoveredAlerts.slice(0, OBSERVATION_LIMIT).map(a => ruleObservation(a, 'alerting')));
+    const unhealthy = unhealthyRuleNames(discoveredAlerts);
+    if (unhealthy.length) {
+      annotations['mcp.discovered.alert_rules_unhealthy'] = unhealthy.slice(0, 64).join(',');
+    }
+  }
   const burnMapping = mapDiscoveredBurnAlerts(discoveredAlerts, slos);
   let burnRateAlerts = burnMapping.alerts;
-  burnRateAlerts.forEach((_, i) => markVerified(`policy.burn_rate_alerts[${i}]`));
+  // An entry fed by a rule the ruler reports unhealthy still maps (the
+  // rule exists) but earns no indexed stamp — it reads Declared, never
+  // Verified, until the rule evaluates again.
+  const unhealthyBurn = new Set(burnMapping.unhealthyIndexes || []);
+  burnRateAlerts.forEach((_, i) => { if (!unhealthyBurn.has(i)) markVerified(`policy.burn_rate_alerts[${i}]`); });
   // A placeholder SLO re-identified to a discovered burn group took its
   // objective/window from the live rule's annotations — the SLO now has
   // MCP evidence. Drop the stale scaffold marker written under the old
@@ -1097,11 +1250,35 @@ export function buildCanonicalPack({
   // the MCP confirmed is currently exported / scraped. This is exactly
   // what the user pushed back on: metrics being exported are observable
   // and must be surfaced.
-  const scrapeJobs = probeResults?.scrape_configs?.adapted;
-  if (Array.isArray(scrapeJobs) && scrapeJobs.length) {
-    annotations['mcp.discovered.scrape_jobs'] = scrapeJobs.slice(0, 64).join(',');
-    markVerified('telemetry.scrape');
-    markVerified('pipelines.exporters.metrics');
+  //
+  // A job name is not evidence that anything is being scraped: only jobs
+  // with at least one target reporting health 'up' (or no health at all)
+  // land in mcp.discovered.scrape_jobs and attest telemetry.scrape /
+  // pipelines.exporters.metrics. Jobs whose every target is 'down' are
+  // listed in mcp.discovered.scrape_jobs_down, and every target's health,
+  // lastScrape and lastError is kept in mcp.observed.scrape_targets.
+  const scrapeJobs = normalizeScrapeJobs(probeResults?.scrape_configs?.adapted);
+  if (scrapeJobs.length) {
+    const upJobs = scrapeJobs.filter(j => !scrapeJobDown(j)).map(j => j.job);
+    const downJobs = scrapeJobs.filter(scrapeJobDown).map(j => j.job);
+    const observedTargets = scrapeJobs.flatMap(j => j.targets.map(t => ({
+      job: j.job,
+      instance: t.instance ?? null,
+      health: t.health ?? null,
+      lastScrape: t.lastScrape ?? null,
+      lastError: trimError(t.lastError),
+    }))).slice(0, OBSERVATION_LIMIT);
+    if (upJobs.length) {
+      annotations['mcp.discovered.scrape_jobs'] = upJobs.slice(0, 64).join(',');
+      markVerified('telemetry.scrape');
+      markVerified('pipelines.exporters.metrics');
+    }
+    if (downJobs.length) {
+      annotations['mcp.discovered.scrape_jobs_down'] = downJobs.slice(0, 64).join(',');
+    }
+    if (observedTargets.length) {
+      annotations['mcp.observed.scrape_targets'] = annotationJson(observedTargets);
+    }
   }
   const metricNames = probeResults?.metric_names?.adapted;
   if (Array.isArray(metricNames) && metricNames.length) {
@@ -1242,6 +1419,10 @@ export const PROBES = [
             expr: r.expr || r.query || '',
             ...(interval ? { interval } : {}),
             ...(r.labels ? { labels: r.labels } : {}),
+            // On-wire evaluation state (VMAlert / Prometheus /api/v1/rules).
+            // Stripped before the rule enters spec.queries; surfaced via
+            // mcp.observed.recording_rules and the per-index verified stamps.
+            ...pickPresent(r, RECORDING_OBSERVATION_FIELDS),
           };
         })
         .filter(r => r.expr);
@@ -1270,6 +1451,10 @@ export const PROBES = [
           for: r.for || (r.duration ? secondsToPromDuration(r.duration) : null) || '5m',
           labels: r.labels || (r.severity ? { severity: r.severity } : {}),
           annotations: r.annotations || {},
+          // On-wire evaluation state: health/lastError/lastEvaluation plus
+          // the alerting state and activeAt (Prometheus nests activeAt per
+          // active alert instance; take the first). Never enters the spec.
+          ...pickPresent({ ...r, activeAt: r.activeAt ?? r.alerts?.[0]?.activeAt }, ALERT_OBSERVATION_FIELDS),
         }));
     },
   },
@@ -1306,12 +1491,26 @@ export const PROBES = [
         Array.isArray(response) && response,
       ];
       const targets = candidateArrays.find(Boolean) || [];
-      const jobs = new Set();
+      // One entry per job carrying every target's on-wire health, so the
+      // pack builder can tell a job that IS scraping from one whose every
+      // target is down — a job name alone was false assurance.
+      const byJob = new Map();
       for (const t of targets) {
-        const j = t.labels?.job || t.job;
-        if (j) jobs.add(j);
+        const job = t?.labels?.job || t?.job;
+        if (!job) continue;
+        let entry = byJob.get(job);
+        if (!entry) { entry = { job, targets: [] }; byJob.set(job, entry); }
+        const instance = t.labels?.instance || t.instance || t.scrapeUrl || null;
+        const health = normTargetHealth(t.health);
+        if (entry.targets.some(x => x.instance === instance && x.health === health)) continue;
+        entry.targets.push({
+          instance,
+          health,
+          lastScrape: t.lastScrape ?? null,
+          lastError: t.lastError == null || t.lastError === '' ? null : String(t.lastError),
+        });
       }
-      return [...jobs];
+      return [...byJob.values()];
     },
   },
   {

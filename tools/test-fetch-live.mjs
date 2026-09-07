@@ -279,13 +279,19 @@ const probed = buildCanonicalPack({
       adapted: [
         { name: 'svc_checkout:availability:good_5m',  expr: 'sum(rate(http_requests_total{status_code!~"5.."}[5m]))', interval: '30s' },
         { name: 'svc_checkout:availability:total_5m', expr: 'sum(rate(http_requests_total[5m]))',                       interval: '30s' },
-        { name: 'svc_checkout:availability:ratio_5m', expr: 'svc_checkout:availability:good_5m / svc_checkout:availability:total_5m', interval: '30s' },
-        { name: 'svc_checkout:latency_p95:value_5m',  expr: 'histogram_quantile(0.95, rate(http_request_duration_ms_bucket[5m]))', interval: '30s' },
+        { name: 'svc_checkout:availability:ratio_5m', expr: 'svc_checkout:availability:good_5m / svc_checkout:availability:total_5m', interval: '30s',
+          health: 'ok', lastEvaluation: '2026-06-06T00:00:00Z', evaluationTime: 0.001 },
+        // On-wire: the ruler reports this rule FAILING to evaluate. It
+        // exists (definition lands in spec.queries) but is not producing
+        // its series — it must not read Verified.
+        { name: 'svc_checkout:latency_p95:value_5m',  expr: 'histogram_quantile(0.95, rate(http_request_duration_ms_bucket[5m]))', interval: '30s',
+          health: 'err', lastError: 'vector contains metrics with the same labelset', lastEvaluation: '2026-06-06T00:00:00Z', evaluationTime: 0.002 },
       ],
     },
     alert_rules: {
       tool: 'list_alert_rules',
-      adapted: [{ name: 'CheckoutHighErrorRate', expr: 'svc_checkout:availability:ratio_5m < 0.99', for: '5m', labels: {}, annotations: {} }],
+      adapted: [{ name: 'CheckoutHighErrorRate', expr: 'svc_checkout:availability:ratio_5m < 0.99', for: '5m', labels: {}, annotations: {},
+                  state: 'firing', health: 'ok', lastEvaluation: '2026-06-06T00:00:00Z', activeAt: '2026-06-05T23:50:00Z' }],
     },
     dashboards: {
       tool: 'grafana_search',
@@ -294,7 +300,18 @@ const probed = buildCanonicalPack({
         { id: 'platform-health',   provider: { kind: 'grafana', version: '12.0', schemaVersion: 41 }, folder: 'platform', source: 'grafana://uid/platform-health' },
       ],
     },
-    scrape_configs: { tool: 'list_scrape_configs', adapted: ['checkout', 'platform', 'collector'] },
+    // Fixture-shaped targets (metrics_targets): per-job target health.
+    // `alertmanager` has ONE target and it is down — a job name that is
+    // scraping nothing must not evidence telemetry.scrape.
+    scrape_configs: { tool: 'metrics_targets', adapted: [
+      { job: 'checkout',  targets: [{ instance: 'checkout:8080', health: 'up', lastScrape: '2026-06-06T00:00:00Z', lastError: null }] },
+      { job: 'platform',  targets: [
+        { instance: 'platform-1:9100', health: 'up',   lastScrape: '2026-06-06T00:00:00Z', lastError: null },
+        { instance: 'platform-2:9100', health: 'down', lastScrape: '2026-06-06T00:00:00Z', lastError: 'connection refused' },
+      ] },
+      { job: 'collector', targets: [{ instance: 'collector:8888', health: null, lastScrape: null, lastError: null }] },
+      { job: 'alertmanager', targets: [{ instance: 'am:9093', health: 'down', lastScrape: '2026-06-06T00:00:00Z', lastError: 'dial tcp4 10.96.4.190:9093: connect: connection refused; ' + 'x'.repeat(300) }] },
+    ] },
     metric_names:   { tool: 'list_metrics',         adapted: ['http_requests_total', 'http_request_duration_ms_bucket', 'queue_depth'] },
   },
   errors: {},
@@ -304,6 +321,7 @@ const probed = buildCanonicalPack({
   const errors = validateCanonical(probed, SCHEMA);
   assert(errors.length === 0, 'probed pack validates against canonical schema', errors, []);
 }
+const pAnn = probed.metadata.annotations;
 
 // SLIs INFERRED from recording rules (not service-derived stubs).
 assert(probed.spec.slis.some(s => s.id === 'svc_checkout_availability'),
@@ -322,6 +340,49 @@ assert(ruleNames.includes('svc_checkout:availability:ratio_5m'),
        'queries.recording_rules carries discovered rules verbatim');
 assert(!ruleNames.includes('platform:platform_availability:ratio_5m'),
        'queries.recording_rules does NOT include the synth stub when probe responded');
+// Observation fields never enter the spec (the schema forbids them).
+assert(probed.spec.queries.recording_rules.every(r =>
+         ['health', 'lastError', 'lastEvaluation', 'evaluationTime', 'state', 'activeAt'].every(k => !(k in r))),
+       'on-wire rule health/evaluation fields are stripped before spec.queries.recording_rules');
+// ...but they are kept, verbatim, in mcp.observed.recording_rules.
+{
+  const observed = JSON.parse(pAnn['mcp.observed.recording_rules'] || 'null');
+  assert(Array.isArray(observed) && observed.length === 4, 'mcp.observed.recording_rules is a JSON array with one entry per discovered rule', observed?.length, 4);
+  const bad = observed?.find(r => r.name === 'svc_checkout:latency_p95:value_5m');
+  assert(bad?.health === 'err' && bad?.lastError === 'vector contains metrics with the same labelset'
+         && bad?.lastEvaluation === '2026-06-06T00:00:00Z' && bad?.evaluationTime === 0.002,
+         'observed recording rule carries health, lastError, lastEvaluation, evaluationTime', bad);
+  const unknown = observed?.find(r => r.name === 'svc_checkout:availability:good_5m');
+  assert(unknown && unknown.health === null && unknown.lastError === null,
+         'a rule the ruler reported no health for reads null (absent ≠ unhealthy)', unknown);
+}
+assert(pAnn['mcp.discovered.recording_rules_unhealthy'] === 'svc_checkout:latency_p95:value_5m',
+       'mcp.discovered.recording_rules_unhealthy lists the rule with health !== ok',
+       pAnn['mcp.discovered.recording_rules_unhealthy'], 'svc_checkout:latency_p95:value_5m');
+// Per-index stamps (the adapter reads queries.recording_rules[<i>]):
+// healthy and health-less rules are Verified; the failing one is not.
+{
+  const badIdx = ruleNames.indexOf('svc_checkout:latency_p95:value_5m');
+  assert(badIdx >= 0, 'failing rule still lands in spec.queries (it exists)');
+  ruleNames.forEach((n, i) => {
+    const stamped = typeof pAnn[`mcp.verified.queries.recording_rules[${i}]`] === 'string';
+    assert(stamped === (i !== badIdx), `queries.recording_rules[${i}] (${n}) ${i === badIdx ? 'NOT ' : ''}stamped verified`, stamped, i !== badIdx);
+  });
+  const l = adapt(probed);
+  const qry = l.layers.L3.filter(x => x.id.startsWith('QRY-'));
+  assert(qry[0]?.source === 'Verified' && qry[badIdx]?.source === 'Declared',
+         'adapter projects healthy rules as Verified and the failing rule as Declared',
+         qry.map(q => `${q.title}:${q.source}`));
+}
+// Alerting rule on-wire state is observed too.
+{
+  const observed = JSON.parse(pAnn['mcp.observed.alert_rules'] || 'null');
+  assert(Array.isArray(observed) && observed.length === 1
+         && observed[0].name === 'CheckoutHighErrorRate' && observed[0].state === 'firing'
+         && observed[0].health === 'ok' && observed[0].activeAt === '2026-06-05T23:50:00Z' && observed[0].lastError === null,
+         'mcp.observed.alert_rules carries state/health/lastError/lastEvaluation/activeAt', observed);
+  assert(pAnn['mcp.discovered.alert_rules_unhealthy'] === undefined, 'no alert_rules_unhealthy list when every alert rule is healthy');
+}
 
 // dashboards: discovered ones replace the platform-overview stub.
 const dashIds = probed.spec.dashboards.map(d => d.id);
@@ -334,9 +395,31 @@ assert(!dashIds.includes('platform-overview'),
 assert(probed.metadata.annotations['mcp.discovered.alert_rule_names']?.includes('CheckoutHighErrorRate'),
        'discovered alert rule names annotated');
 
-// scrape jobs + metric inventory surfaced as annotations.
-assert(probed.metadata.annotations['mcp.discovered.scrape_jobs'] === 'checkout,platform,collector',
-       'scrape jobs annotated');
+// scrape jobs + metric inventory surfaced as annotations. Only jobs with
+// a target that is up (or of unknown health) count as scrape evidence;
+// the all-down job is listed separately and every target's on-wire
+// health is kept.
+assert(pAnn['mcp.discovered.scrape_jobs'] === 'checkout,platform,collector',
+       'scrape jobs annotated — the all-down job is excluded',
+       pAnn['mcp.discovered.scrape_jobs'], 'checkout,platform,collector');
+assert(pAnn['mcp.discovered.scrape_jobs_down'] === 'alertmanager',
+       'mcp.discovered.scrape_jobs_down lists the job whose every target is down',
+       pAnn['mcp.discovered.scrape_jobs_down'], 'alertmanager');
+{
+  const targets = JSON.parse(pAnn['mcp.observed.scrape_targets'] || 'null');
+  assert(Array.isArray(targets) && targets.length === 5, 'mcp.observed.scrape_targets is a JSON array with one entry per target', targets?.length, 5);
+  const am = targets?.find(t => t.job === 'alertmanager');
+  assert(am?.instance === 'am:9093' && am?.health === 'down' && am?.lastScrape === '2026-06-06T00:00:00Z',
+         'observed target carries job/instance/health/lastScrape', am);
+  assert(typeof am?.lastError === 'string' && am.lastError.startsWith('dial tcp4') && am.lastError.length === 200,
+         'observed target lastError is carried, trimmed to 200 chars', am?.lastError?.length, 200);
+  const unknown = targets?.find(t => t.job === 'collector');
+  assert(unknown && unknown.health === null, 'unknown target health reads null', unknown);
+  const l = adapt(probed);
+  const live = l.layers.L2.filter(x => x.id.startsWith('SCRAPE-') && !x.id.startsWith('SCRAPE-SRC-'));
+  assert(live.length === 3 && live.every(x => x.source === 'Verified') && !live.some(x => x.spec?.job === 'alertmanager'),
+         'adapter projects only the up jobs as Verified scrape evidence', live.map(x => x.spec?.job));
+}
 assert(probed.metadata.annotations['mcp.discovered.metric_names_count'] === '3',
        'metric inventory count annotated');
 assert(probed.metadata.annotations['mcp.discovered.metric_names']?.includes('http_requests_total'),
@@ -385,6 +468,82 @@ assert(probed.spec.policy.burn_rate_alerts.length === 1
 assert(probed.metadata.annotations['mcp.verified.policy.burn_rate_alerts'] === undefined
        && probed.metadata.annotations['mcp.verified.policy.burn_rate_alerts[0]'] === undefined,
        'no burn-rate verification stamp on the strength of a discovered alert NAME');
+
+// ---------- case 3a: on-wire scrape liveness — all targets down, legacy job names ----------
+//
+// A job name is not evidence. When every target the MCP reports is
+// down, nothing is being scraped: no mcp.discovered.scrape_jobs, no
+// mcp.verified.telemetry.scrape, and the metrics exporter falls back to
+// its scaffold marker (no metric inventory arrived either).
+{
+  const allDown = buildCanonicalPack({
+    refreshedAt,
+    mcpUrl: 'https://fake-mcp.test/observability',
+    health: { services: [{ name: 'svc-checkout' }] },
+    topology: { dependencies: [] }, anomaliesActive: {}, baselinesData: { baselines: [] },
+    probeResults: {
+      scrape_configs: { tool: 'metrics_targets', adapted: [
+        { job: 'checkout', targets: [
+          { instance: 'checkout-1:8080', health: 'down', lastScrape: '2026-06-06T00:00:00Z', lastError: 'connection refused' },
+          { instance: 'checkout-2:8080', health: 'down', lastScrape: '2026-06-06T00:00:00Z', lastError: 'context deadline exceeded' },
+        ] },
+        { job: 'alertmanager', targets: [{ instance: 'am:9093', health: 'down', lastScrape: null, lastError: 'connection refused' }] },
+      ] },
+    },
+    errors: {},
+  });
+  const ann = allDown.metadata.annotations;
+  assert(validateCanonical(allDown, SCHEMA).length === 0, 'all-down pack validates');
+  assert(ann['mcp.discovered.scrape_jobs'] === undefined, 'no mcp.discovered.scrape_jobs when every target is down');
+  assert(ann['mcp.discovered.scrape_jobs_down'] === 'checkout,alertmanager',
+         'every all-down job listed in mcp.discovered.scrape_jobs_down', ann['mcp.discovered.scrape_jobs_down'], 'checkout,alertmanager');
+  assert(ann['mcp.verified.telemetry.scrape'] === undefined, 'telemetry.scrape NOT verified on the strength of down targets');
+  assert(ann['mcp.verified.pipelines.exporters.metrics'] === undefined
+         && typeof ann['mcp.scaffold.pipelines.exporters.metrics'] === 'string',
+         'metrics exporter stays scaffold when the only scrape evidence is down targets');
+  assert(JSON.parse(ann['mcp.observed.scrape_targets']).length === 3, 'all three down targets observed');
+  assert(ann['mcp.discovered.scrape_configs'] === '2', 'probe count annotation still counts jobs (2)', ann['mcp.discovered.scrape_configs'], '2');
+  const l = adapt(allDown);
+  assert(!l.layers.L2.some(x => x.id.startsWith('SCRAPE-')), 'adapter projects no live scrape rows for down-only jobs');
+  assert(l.layers.L2.find(x => x.id === 'PIP-EXP-MET')?.source === 'Scaffold', 'adapter projects the metrics exporter as Scaffold');
+
+  // Legacy probe results (job-name string[]) still count as evidence —
+  // a name carries no target health, so it is not evidence of being down.
+  const legacy = buildCanonicalPack({
+    refreshedAt,
+    mcpUrl: 'https://fake-mcp.test/observability',
+    health: { services: [{ name: 'svc-checkout' }] },
+    topology: { dependencies: [] }, anomaliesActive: {}, baselinesData: { baselines: [] },
+    probeResults: { scrape_configs: { tool: 'list_scrape_configs', adapted: ['checkout', 'platform'] } },
+    errors: {},
+  });
+  const lAnn = legacy.metadata.annotations;
+  assert(lAnn['mcp.discovered.scrape_jobs'] === 'checkout,platform' && typeof lAnn['mcp.verified.telemetry.scrape'] === 'string',
+         'legacy string[] scrape results still surface as (health-less) scrape evidence');
+  assert(lAnn['mcp.discovered.scrape_jobs_down'] === undefined && lAnn['mcp.observed.scrape_targets'] === undefined,
+         'legacy string[] scrape results carry no down list and no observed targets');
+
+  // The metrics_targets adapter itself: fixture shape → per-job targets,
+  // deduped, unknown health → null, Prometheus /api/v1/targets tolerated.
+  const scrapeProbe = PROBES.find(p => p.name === 'scrape_configs');
+  const adapted = scrapeProbe.adapt({ activeTargets: 3, targets: [
+    { job: 'a', instance: 'a-1', health: 'up', lastScrape: 't1', lastError: null },
+    { job: 'a', instance: 'a-1', health: 'up', lastScrape: 't1', lastError: null },   // duplicate
+    { job: 'a', instance: 'a-2', health: 'unknown', lastScrape: null, lastError: '' },
+    { job: 'b', instance: 'b-1', health: 'DOWN', lastScrape: 't2', lastError: 'boom' },
+  ] });
+  assert(adapted.length === 2 && adapted[0].job === 'a' && adapted[0].targets.length === 2,
+         'scrape_configs adapt groups targets per job and dedupes identical targets', adapted);
+  assert(adapted[0].targets[1].health === null && adapted[0].targets[1].lastError === null,
+         'unknown health → null; empty lastError → null', adapted[0].targets[1]);
+  assert(adapted[1].targets[0].health === 'down' && adapted[1].targets[0].lastError === 'boom',
+         'health is case-normalised; lastError carried', adapted[1].targets[0]);
+  const prom = scrapeProbe.adapt({ status: 'success', data: { activeTargets: [
+    { labels: { job: 'node', instance: 'n1:9100' }, health: 'up', lastScrape: 't', lastError: '' },
+  ] } });
+  assert(prom.length === 1 && prom[0].job === 'node' && prom[0].targets[0].instance === 'n1:9100' && prom[0].targets[0].health === 'up',
+         'Prometheus /api/v1/targets shape (labels.job / labels.instance) tolerated', prom);
+}
 
 // ---------- case 3b: discovered burn-rate alerting rules map onto policy.burn_rate_alerts ----------
 //
@@ -527,6 +686,41 @@ assert(bAnn['mcp.discovered.alert_rules_severity_inferred'] === `${DISCOVERED_SL
          'single-window group → no Verified stamp');
 }
 
+// A burn-rate group fed by a rule the ruler reports UNHEALTHY still maps
+// (the rule exists, the entry is real) but earns no indexed verified
+// stamp: a rule that fails to evaluate is not paging anyone.
+{
+  const unhealthy = buildCanonicalPack({
+    refreshedAt,
+    mcpUrl: 'https://fake-mcp.test/observability',
+    health: { services: [{ name: 'svc-checkout', criticality: 'tier-1' }] },
+    topology: { dependencies: [] }, anomaliesActive: {}, baselinesData: { baselines: [] },
+    probeResults: {
+      alert_rules: { tool: 'vmalert_rules', adapted: [
+        { name: 'svc_checkout_availability_99_burn_14x_5m_1h', expr: 'e', for: '2m', labels: { severity: 'critical' }, annotations: {},
+          health: 'err', lastError: 'unknown function', state: 'inactive', lastEvaluation: '2026-06-06T00:00:00Z' },
+        { name: 'svc_checkout_availability_99_burn_6x_30m_6h', expr: 'e', for: '15m', labels: { severity: 'warning' }, annotations: {},
+          health: 'ok', state: 'inactive', lastEvaluation: '2026-06-06T00:00:00Z' },
+      ] },
+    },
+    errors: {},
+  });
+  const uAnn = unhealthy.metadata.annotations;
+  assert(validateCanonical(unhealthy, SCHEMA).length === 0, 'unhealthy-rule pack validates');
+  assert(unhealthy.spec.policy.burn_rate_alerts.length === 1 && unhealthy.spec.policy.burn_rate_alerts[0].windows.length === 2,
+         'unhealthy burn rule still maps into its group (it exists)');
+  assert(uAnn['mcp.verified.policy.burn_rate_alerts[0]'] === undefined && uAnn['mcp.scaffold.policy.burn_rate_alerts[0]'] === undefined,
+         'group fed by an unhealthy rule earns no verified stamp (and is no scaffold either)');
+  assert(uAnn['mcp.discovered.alert_rules_unhealthy'] === 'svc_checkout_availability_99_burn_14x_5m_1h',
+         'mcp.discovered.alert_rules_unhealthy names the failing rule',
+         uAnn['mcp.discovered.alert_rules_unhealthy'], 'svc_checkout_availability_99_burn_14x_5m_1h');
+  const observed = JSON.parse(uAnn['mcp.observed.alert_rules']);
+  assert(observed.length === 2 && observed[0].health === 'err' && observed[0].lastError === 'unknown function' && observed[1].health === 'ok',
+         'mcp.observed.alert_rules carries per-rule health', observed);
+  const pol = adapt(unhealthy).layers.L4.policy.filter(x => x.id.startsWith('POL-'));
+  assert(pol.length === 1 && pol[0].source === 'Declared', 'adapter projects the unhealthy-fed burn alert as Declared (present, not attested)', pol.map(p => p.source), ['Declared']);
+}
+
 // ---------- case 4: probes attempted but came back empty — honest gap ----------
 //
 // Confirms the "what to refine" narrative. probesAttempted records the
@@ -596,6 +790,23 @@ const vmalertResponse = {
 const recAdapted = recProbe.adapt(vmalertResponse);
 assert(recAdapted.length === 1 && recAdapted[0].name === 'finops:cpu:usage_per_pod_5m',
        'vmalert recording rule recovered (alerting rule excluded)');
+assert(!('health' in recAdapted[0]) && !('lastEvaluation' in recAdapted[0]),
+       'observation fields absent from the adapted rule when the ruler did not report them');
+{
+  const withState = recProbe.adapt({ groups: [{ name: 'g', interval: 60, rules: [
+    { name: 'a:b:c', type: 'recording', query: 'up', health: 'err', lastError: 'boom', lastEvaluation: 't', evaluationTime: 0.5, state: '', activeAt: null },
+  ] }] });
+  assert(withState[0].health === 'err' && withState[0].lastError === 'boom' && withState[0].lastEvaluation === 't' && withState[0].evaluationTime === 0.5
+         && !('state' in withState[0]) && !('activeAt' in withState[0]),
+         'recording adapter carries health/lastError/lastEvaluation/evaluationTime (not state/activeAt)', withState[0]);
+  const alertState = altProbe.adapt({ groups: [{ name: 'g', rules: [
+    { name: 'A', type: 'alerting', query: 'up == 0', health: 'ok', state: 'firing', lastEvaluation: 't', activeAt: 'a0', lastError: null },
+    { alert: 'B', expr: 'up == 0', health: 'ok', state: 'firing', alerts: [{ activeAt: 'a1', state: 'firing' }] },
+  ] }] });
+  assert(alertState[0].state === 'firing' && alertState[0].activeAt === 'a0' && alertState[0].health === 'ok' && !('lastError' in alertState[0]),
+         'alert adapter carries state/health/activeAt; null lastError omitted', alertState[0]);
+  assert(alertState[1].activeAt === 'a1', 'Prometheus per-instance alerts[].activeAt tolerated', alertState[1]);
+}
 assert(recAdapted[0].expr.includes('container_cpu_usage_seconds_total') && recAdapted[0].expr !== recAdapted[0].name,
        'vmalert recording rule carries REAL PromQL expr, not the name stub');
 assert(recAdapted[0].interval === '5m',
