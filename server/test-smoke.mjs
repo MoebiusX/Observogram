@@ -6,7 +6,7 @@
  * route, asserts response shape, then kills the server. Exit 0 = pass.
  */
 
-import { mkdtempSync, rmSync, readdirSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readdirSync, existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -46,7 +46,9 @@ async function getText(base, path) {
   return r.text();
 }
 
-async function startFakeMcp(toolNames) {
+// `handler(name, args)` answers tools/call when given; the default echoes
+// { ok, name } (enough for the deploy path, whose tools return opaque ids).
+async function startFakeMcp(toolNames, handler = null) {
   const calls = [];
   const srv = createServer(async (req, res) => {
     let raw = '';
@@ -71,7 +73,8 @@ async function startFakeMcp(toolNames) {
     }
     if (msg.method === 'tools/call') {
       calls.push(msg.params);
-      send({ content: [{ type: 'text', text: JSON.stringify({ ok: true, name: msg.params?.name }) }] });
+      const answer = handler ? handler(msg.params?.name, msg.params?.arguments || {}) : { ok: true, name: msg.params?.name };
+      send({ content: [{ type: 'text', text: JSON.stringify(answer) }] });
       return;
     }
     send({});
@@ -797,6 +800,8 @@ try {
         '    mcp.probesFailed: "dashboards"',
         '    mcp.probesUnsupported: "scrape_configs,metric_names"',
         '    mcp.probeErrors.dashboards: "HTTP 502 Bad Gateway"',
+        '    mcp.stack.status: "sampled"',
+        '    mcp.stack.sampled: "7"',
         'spec: {}',
         '',
       ].join('\n'));
@@ -807,13 +812,107 @@ try {
       assert(typeof withPack.probesFailed === 'string' && typeof withPack.probesUnsupported === 'string',
              'live-status carries probesFailed and probesUnsupported as comma strings',
              [withPack.probesFailed, withPack.probesUnsupported]);
+      assert((withPack.stackStatus === null || typeof withPack.stackStatus === 'string') && typeof withPack.stackSampled === 'number',
+             'live-status carries stackStatus (string|null) and stackSampled (number)',
+             [withPack.stackStatus, withPack.stackSampled]);
       if (planted) {
         assert(withPack.probesFailed === 'dashboards' && withPack.probesUnsupported === 'scrape_configs,metric_names',
                'live-status reads mcp.probesFailed / mcp.probesUnsupported straight from the pack annotations',
                [withPack.probesFailed, withPack.probesUnsupported]);
+        assert(withPack.stackStatus === 'sampled' && withPack.stackSampled === 7,
+               'live-status reads mcp.stack.status / mcp.stack.sampled straight from the pack annotations',
+               [withPack.stackStatus, withPack.stackSampled]);
       }
     } finally {
       if (planted) rmSync(livePackPath, { force: true });
+    }
+  }
+
+  // POST /api/draft-from-mcp — step 2 stack self-metrics on the summary.
+  // A fake MCP that advertises metrics_query + the status tools answers a
+  // few instant vectors; the summary must carry stack / alertmanager /
+  // grafana as point-in-time samples (outcomes, hints), never a verdict.
+  {
+    const SYN = (f) => JSON.parse(readFileSync(resolvePath(dirname(fileURLToPath(import.meta.url)), '..', 'tools', 'fixtures', 'mcp', 'synthetic', f), 'utf8'));
+    const stackTools = [
+      'system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines',
+      'metrics_query', 'metrics_label_values', 'alertmanager_status', 'alertmanager_silences',
+      'grafana_datasources', 'grafana_datasource_health', 'grafana_contact_points',
+    ];
+    const fakeStack = await startFakeMcp(stackTools, (name, args) => {
+      if (name === 'system_health') return { services: [] };
+      if (name === 'system_topology') return { dependencies: [] };
+      if (name === 'anomalies_active') return {};
+      if (name === 'anomalies_baselines') return { baselines: [] };
+      if (name === 'metrics_label_values') return { values: ['up', 'vmalert_alerts_send_errors_total', 'prometheus_notifications_errors_total'] };
+      if (name === 'metrics_query') {
+        if (args.query === 'sum(up == 1) / count(up)') return { result: [{ metric: {}, value: [1, '0.9'] }] };
+        if (args.query === 'sum(rate(prometheus_notifications_errors_total[5m]))') return { result: [{ metric: {}, value: [1, '0.25'] }] };
+        return { result: [] };
+      }
+      if (name === 'alertmanager_status') return SYN('alertmanager_status.json');
+      if (name === 'alertmanager_silences') return SYN('alertmanager_silences.json');
+      if (name === 'grafana_datasources') return SYN('grafana_datasources.json');
+      if (name === 'grafana_datasource_health') return SYN('grafana_datasource_health.json');
+      if (name === 'grafana_contact_points') return SYN('grafana_contact_points.json');
+      return {};
+    });
+    try {
+      const draft = await (await postJson('/api/draft-from-mcp', { mcpUrl: fakeStack.url })).json();
+      assert(draft.ok === true, 'draft-from-mcp against the stack fake succeeds', draft.error);
+      const st = draft.summary?.stack;
+      assert(st && st.status === 'sampled', 'summary.stack.status is sampled when metrics_query is advertised', st);
+      assert(['sampled', 'empty', 'failed', 'notInInventory', 'notAttempted'].every(k => typeof st[k] === 'number'),
+             'summary.stack carries the five counts as numbers', st);
+      assert(st.sampled >= 2 && st.notInInventory >= 1, 'summary.stack counts: two sampled rows, inventory-gated rows not in inventory', st);
+      assert(st.families && st.families.scrape === 'data' && st.families.notify === 'data',
+             'summary.stack.families maps family → best outcome', st.families);
+      const byId = Object.fromEntries((st.rows || []).map(r => [r.id, r]));
+      assert(byId.scrape_success_ratio && byId.scrape_success_ratio.value === 0.9 && byId.scrape_success_ratio.unit === 'ratio' && byId.scrape_success_ratio.outcome === 'data' && byId.scrape_success_ratio.hint === null,
+             'summary.stack.rows carries the sampled ratio with unit and a null hint (higher-is-better)', byId.scrape_success_ratio);
+      assert(byId.notification_errors && byId.notification_errors.value === 0.25 && byId.notification_errors.hint === 'nonzero' && byId.notification_errors.direction === 'lower',
+             'summary.stack.rows: a lower-is-comfortable row above zero carries the display hint nonzero', byId.notification_errors);
+      assert(byId.wal_corruptions && byId.wal_corruptions.outcome === 'not-in-inventory' && byId.wal_corruptions.value === null,
+             'summary.stack.rows: inventory-gated rows read not-in-inventory with a null value', byId.wal_corruptions);
+      assert((st.rows || []).every(r => !('verified' in r) && ['data', 'empty', 'failed', 'not-in-inventory', 'not-attempted'].includes(r.outcome)),
+             'stack rows are outcomes only — never ok / verified');
+      const am = draft.summary?.alertmanager;
+      assert(am && am.version === '0.99.0' && am.silences && typeof am.silences.active === 'number',
+             'summary.alertmanager carries version and the active-silence count', am);
+      const gf = draft.summary?.grafana;
+      assert(gf && Array.isArray(gf.datasources) && gf.datasources.length === 3 && gf.datasources.every(d => ['ok', 'error', 'unknown'].includes(d.health)),
+             'summary.grafana.datasources carries the datasources with a normalised health', gf);
+      assert(gf.contactPoints && typeof gf.contactPoints.count === 'number' && Array.isArray(gf.contactPoints.names),
+             'summary.grafana.contactPoints carries count and names', gf.contactPoints);
+      assert(!(draft.summary.warnings || []).some(w => /Stack self-metrics not attempted/.test(w)),
+             'no not-attempted warning when the panel was sampled');
+      assert(Object.keys(draft.annotations || {}).every(k => !k.startsWith('mcp.verified.') || !/stack|alertmanager|grafana\.(datasources|contact)/.test(k)),
+             'no Verified stamp names a stack / Alertmanager / Grafana surface');
+    } finally {
+      await fakeStack.close();
+    }
+
+    // Restricted tier: tools/list without metrics_query → not attempted,
+    // with the reason on the summary and one honest warning.
+    const fakeRestricted = await startFakeMcp(['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines'], (name) => {
+      if (name === 'system_health') return { services: [] };
+      if (name === 'system_topology') return { dependencies: [] };
+      return {};
+    });
+    try {
+      const draft = await (await postJson('/api/draft-from-mcp', { mcpUrl: fakeRestricted.url })).json();
+      assert(draft.ok === true, 'draft-from-mcp against the restricted fake succeeds', draft.error);
+      const st = draft.summary?.stack;
+      assert(st && st.status === 'not-attempted' && st.reason === 'metrics_query not exposed by this MCP (restricted tier)',
+             'restricted tier → summary.stack.status not-attempted with the tier reason', st);
+      assert(st.sampled === 0 && st.rows.length === 0 && Object.values(st.families).every(o => o === 'not-attempted'),
+             'restricted tier → zero sampled, no rows, every family not-attempted', st);
+      assert((draft.summary.warnings || []).includes('Stack self-metrics not attempted — metrics_query not exposed by this MCP tier.'),
+             'restricted tier → the not-attempted warning', draft.summary.warnings);
+      assert(draft.summary.alertmanager === null && draft.summary.grafana === null,
+             'restricted tier → alertmanager / grafana summaries are null (not exposed), never fabricated');
+    } finally {
+      await fakeRestricted.close();
     }
   }
 

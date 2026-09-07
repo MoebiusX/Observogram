@@ -3653,6 +3653,93 @@ async function doDraftFromMcp() {
   }
 }
 
+// Step 2 — the stack's own self-metrics (docs/MCP_INTEGRATION.md,
+// mcp.stack.* / mcp.observed.*). Every number is a point-in-time sample
+// read straight from the server summary: signal, not verdict. Absent when
+// the fetcher predates step 2 (summary.stack == null). `row` is the
+// caller's table-row helper so the markup matches the rows above; a
+// sampled row adds the row id / product as a hint line (plain, never the
+// purple "fallback evidence" tint — a sample is not fallback evidence).
+const STACK_OUTCOME_RANK = ['data', 'empty', 'failed', 'not-in-inventory', 'not-attempted'];
+
+function formatStackValue(value, unit) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+  switch (unit) {
+    case 'ratio':      return `${(value * 100).toFixed(1)}%`;
+    case 'per-second': return `${value.toFixed(3)}/s`;
+    case 'per-hour':   return `${value.toFixed(1)}/h`;
+    case 'seconds':    return `${value.toFixed(1)}s`;
+    case 'count':      return String(Math.round(value));
+    default:           return String(value);
+  }
+}
+
+function stackOutcomeText(outcome, reason) {
+  switch (outcome) {
+    case 'empty':            return '— empty';
+    case 'failed':           return reason ? `— probe failed: ${reason}` : '— probe failed';
+    case 'not-in-inventory': return '— not in inventory';
+    case 'not-attempted':    return `— not attempted: ${reason || 'not attempted'}`;
+    default:                 return `— ${outcome || 'unknown'}`;
+  }
+}
+
+function renderStackSelfMetricsBlock(summary, row) {
+  const sampledRow = (label, value, hint) =>
+    `<tr><td>${escapeHtml(label)}<span class="row-evidence-hint">${escapeHtml(hint)}</span></td><td>${escapeHtml(String(value))}</td></tr>`;
+  const stack = summary?.stack;
+  const am = summary?.alertmanager;
+  const gf = summary?.grafana;
+  if (!stack && !am && !gf) return '';
+  const rank = (o) => { const i = STACK_OUTCOME_RANK.indexOf(o); return i < 0 ? STACK_OUTCOME_RANK.length : i; };
+  const lines = [];
+  if (!stack) {
+    lines.push(row('stack self-metrics', '— not sampled by this fetcher', true));
+  } else if (stack.status !== 'sampled') {
+    lines.push(row('stack self-metrics', '— not attempted: metrics_query not exposed by this MCP tier', true));
+  } else {
+    const rows = Array.isArray(stack.rows) ? stack.rows : [];
+    for (const [family, familyOutcome] of Object.entries(stack.families || {})) {
+      // The family's best row: outcome rank first, then the table order.
+      const best = rows
+        .map((r, i) => ({ r, i }))
+        .filter(({ r }) => r.family === family)
+        .sort((a, b) => rank(a.r.outcome) - rank(b.r.outcome) || a.i - b.i)[0]?.r;
+      if (!best) {
+        lines.push(row(family, stackOutcomeText(familyOutcome, stack.reason), true));
+        continue;
+      }
+      const hint = `${best.id}${best.product && best.product !== 'generic' ? ` · ${best.product}` : ''}`;
+      if (best.outcome === 'data') {
+        const text = formatStackValue(best.value, best.unit) + (best.hint === 'nonzero' ? ' · nonzero' : '');
+        lines.push(sampledRow(family, text, hint));
+      } else {
+        lines.push(row(family, stackOutcomeText(best.outcome, best.reason), true));
+      }
+    }
+  }
+  if (am) {
+    const silences = am.silences ? `${am.silences.active} active silence${am.silences.active === 1 ? '' : 's'}` : 'silences not exposed';
+    lines.push(row('alertmanager', `${am.version ? `v${am.version}` : 'version unknown'} · ${silences}`));
+  } else {
+    lines.push(row('alertmanager', '— not exposed', true));
+  }
+  if (gf) {
+    if (Array.isArray(gf.datasources)) {
+      const unhealthy = gf.datasources.filter(d => d.health === 'error').map(d => d.name || d.uid || '?');
+      lines.push(row('datasources', `${gf.datasources.length} · ${unhealthy.length} unhealthy${unhealthy.length ? `: ${unhealthy.join(', ')}` : ''}`));
+    }
+    if (gf.contactPoints) lines.push(row('contact points', gf.contactPoints.count));
+  } else {
+    lines.push(row('grafana', '— not exposed', true));
+  }
+  return `
+    <div class="crawl-stack-heading">stack self-metrics — point-in-time sample, signal not verdict</div>
+    <table class="crawl-summary-table">
+      ${lines.join('')}
+    </table>`;
+}
+
 function renderDraftMcpResult(out) {
   const resBox = $('#draft-mcp-result');
   resBox.hidden = false;
@@ -3739,6 +3826,7 @@ function renderDraftMcpResult(out) {
   const rulesUnhealthyRow = rulesUnhealthy.length
     ? row(`${plural(rulesUnhealthy.length, 'rule')} unhealthy`, rulesUnhealthy.join(', '))
     : '';
+  const stackBlock = renderStackSelfMetricsBlock(out.summary, row);
   $('#draft-mcp-result-summary').innerHTML = `
     <h4>what the MCP attested</h4>
     <table class="crawl-summary-table">
@@ -3755,6 +3843,7 @@ function renderDraftMcpResult(out) {
       ${rulesUnhealthyRow}
       ${probeRow('metric names',    'metric_names',    d.metricNamesCount)}
     </table>
+    ${stackBlock}
     ${alertsFiringCount > 0 || recordingFallbackCount > 0 ? `
       <div class="crawl-evidence-note">
         Rows in italic = fallback evidence. The standard rule endpoints came back empty,

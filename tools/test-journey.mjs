@@ -215,6 +215,12 @@ try {
     'mcp.discovered.scrape_jobs_down': 'alertmanager',
     'mcp.discovered.recording_rules_unhealthy': 'svc_rr_bad',
     'mcp.discovered.alert_rules_unhealthy': 'svc_ar_bad,svc_ar_worse',
+    'mcp.stack.status': 'sampled',
+    'mcp.stack.sampled': '12',
+    'mcp.stack.empty': '3',
+    'mcp.stack.failed': '0',
+    'mcp.stack.notInInventory': '9',
+    'mcp.stack.notAttempted': '0',
   };
   const LIVE_B = join(TMP, 'live-b.pack.json');
   writeFileSync(LIVE_B, JSON.stringify(liveB, null, 2));
@@ -224,6 +230,14 @@ try {
   assert(lf.vantage === 'partial' && lf.toolsExposedCount === 12 && lf.scrapeJobsDown === 1 && lf.unhealthyRules === 3,
          'liveEvidenceFacts reads vantage, tools exposed, down jobs and unhealthy rules', lf);
   assert(lf.probeErrors.dashboards === 'HTTP 502 Bad Gateway', 'liveEvidenceFacts carries the probe error text');
+  assert(lf.stack.status === 'sampled' && lf.stack.sampled === 12 && lf.stack.empty === 3 && lf.stack.failed === 0 && lf.stack.notAttempted === 0 && lf.stack.reason === null,
+         'liveEvidenceFacts reads the stack self-metric counts as numbers', lf.stack);
+  {
+    const restrictedB = { ...liveB, metadata: { ...liveB.metadata, annotations: { ...liveB.metadata.annotations, 'mcp.stack.status': 'not-attempted', 'mcp.stack.reason': 'metrics_query not exposed by this MCP (restricted tier)', 'mcp.stack.sampled': '0', 'mcp.stack.notAttempted': '24' } } };
+    const rf = liveEvidenceFacts(restrictedB).stack;
+    assert(rf.status === 'not-attempted' && rf.reason === 'metrics_query not exposed by this MCP (restricted tier)' && rf.sampled === 0 && rf.notAttempted === 24,
+           'liveEvidenceFacts keeps a not-attempted panel with its reason', rf);
+  }
 
   writeFileSync(join(TMP, 'journeys', 'live-synthetic.journey.yaml'), [
     'name: live-synthetic',
@@ -241,12 +255,18 @@ try {
   assert(liveRec.vantage === 'partial' && liveRec.toolsExposedCount === 12, 'run record carries vantage and toolsExposedCount', { v: liveRec.vantage, t: liveRec.toolsExposedCount });
   assert(liveRec.scrapeJobsDown === 1 && liveRec.unhealthyRules === 3, 'run record counts down jobs and unhealthy rules (recording + alerting)', { d: liveRec.scrapeJobsDown, u: liveRec.unhealthyRules });
   assert(liveRec.probeErrors?.dashboards === 'HTTP 502 Bad Gateway', 'run record keeps the probe error text', liveRec.probeErrors);
+  assert(liveRec.stack && liveRec.stack.status === 'sampled' && liveRec.stack.sampled === 12 && liveRec.stack.empty === 3 && liveRec.stack.failed === 0,
+         'run record carries the stack self-metric counts', liveRec.stack);
+  assert(!liveRec.gate.breaches.some(b => /stack/i.test(b.criterion)), 'no gate criterion reads the stack sample — signal, not verdict');
   assert(typeof liveRec.freshness.liveAgeHours === 'number', 'live-like B has a freshness age');
   const liveMd = renderJourneyMarkdown(liveRec);
   assert(/Live probes/.test(liveMd) && /failed: dashboards/.test(liveMd) && /not exposed: scrape_configs/.test(liveMd) && /vantage \*\*partial\*\*/.test(liveMd),
          'markdown prints the probes line with failed / not-exposed families and the vantage');
   assert(/12 MCP tools exposed/.test(liveMd), 'markdown prints the tools-exposed count');
   assert(/1 scrape job\(s\) down · 3 unhealthy rule\(s\)/.test(liveMd), 'markdown prints the on-wire health line');
+  assert(/\| Stack self-metrics \| sampled 12 · empty 3 · failed 0 \|/.test(liveMd), 'markdown prints the stack self-metrics line');
+  assert(/not attempted \(metrics_query not exposed by this MCP \(restricted tier\)\)/.test(renderJourneyMarkdown({ ...liveRec, stack: { status: 'not-attempted', reason: 'metrics_query not exposed by this MCP (restricted tier)', sampled: 0, empty: 0, failed: 0, notAttempted: 24 } })),
+         'markdown prints the not-attempted reason for a restricted tier');
   assert(/\*\*failOnPartialEvidence\*\*/.test(liveMd) && /\*\*maxUnhealthy\*\*/.test(liveMd), 'markdown lists both new breach types');
   assert(/no live probes \(file-sourced B\)/.test(renderJourneyMarkdown(rec)), 'file-sourced report says there were no live probes');
 

@@ -59,6 +59,7 @@ import { tenancyEnabled, orgsForUser, orgExists, runWithOrg, currentOrg, readOrg
 import { setWorkspaceRootResolver } from '../tools/lib/journey.mjs';
 import { orgWorkspaceRoot } from './tenancy.mjs';
 import { brandEnv } from '../tools/lib/brand-env.mjs';
+import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -975,6 +976,95 @@ app.get('/api/maturity-rubric', (req, res) => {
 // creates it in the working tree.
 const LIVE_PACK_PATH = 'examples/production-live.pack.yaml';
 
+// ---------- step 2: stack self-metrics summary (signal, never verdict) ----------
+//
+// The fetcher stamps mcp.stack.* counts and mcp.observed.* JSON blocks
+// (docs/MCP_INTEGRATION.md). This turns them back into the shape the
+// studio's draft review renders. Nothing here is a threshold: `hint` is
+// the contracts' display-only 'nonzero' marker, and every row keeps the
+// outcome the sampler recorded (data | empty | failed | not-in-inventory
+// | not-attempted) so an absent number is shown as absent.
+function parseJsonAnnotation(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try { return JSON.parse(value); } catch { return null; }
+}
+
+const STACK_ROW_BY_ID = new Map(STACK_SELF_METRIC_PROBES.map(r => [r.id, r]));
+
+function stackSummaryFromAnnotations(ann) {
+  const status = ann['mcp.stack.status'];
+  if (status !== 'sampled' && status !== 'not-attempted') return null;
+  const n = (k) => { const v = Number(ann[k]); return Number.isFinite(v) ? v : 0; };
+  const families = {};
+  for (const entry of String(ann['mcp.stack.families'] || '').split(',').filter(Boolean)) {
+    const [family, outcome] = entry.split(':');
+    if (family && STACK_OUTCOMES.includes(outcome)) families[family] = outcome;
+  }
+  const observed = parseJsonAnnotation(ann['mcp.observed.stack_metrics']);
+  const rows = (Array.isArray(observed) ? observed : [])
+    .filter(r => r && typeof r === 'object' && typeof r.id === 'string')
+    .map(r => {
+      const def = STACK_ROW_BY_ID.get(r.id);
+      const value = typeof r.value === 'number' && Number.isFinite(r.value) ? r.value : null;
+      const direction = def?.direction || r.direction || 'info';
+      return {
+        id: r.id,
+        family: def?.family || r.family || null,
+        product: r.product ?? null,
+        value,
+        unit: def?.unit || r.unit || null,
+        direction,
+        outcome: STACK_OUTCOMES.includes(r.outcome) ? r.outcome : 'failed',
+        hint: displayHint({ direction }, value),
+        ...(r.reason ? { reason: String(r.reason) } : {}),
+      };
+    });
+  return {
+    status,
+    reason: status === 'not-attempted' ? (ann['mcp.stack.reason'] || 'not attempted') : null,
+    sampled: n('mcp.stack.sampled'),
+    empty: n('mcp.stack.empty'),
+    failed: n('mcp.stack.failed'),
+    notInInventory: n('mcp.stack.notInInventory'),
+    notAttempted: n('mcp.stack.notAttempted'),
+    families,
+    rows,
+  };
+}
+
+function alertmanagerSummaryFromAnnotations(ann) {
+  const o = parseJsonAnnotation(ann['mcp.observed.alertmanager']);
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
+  const silences = o.silences && typeof o.silences === 'object'
+    ? { active: Number(o.silences.active ?? 0) || 0, total: Number(o.silences.total ?? 0) || 0 }
+    : null;
+  return {
+    version: o.version == null ? null : String(o.version),
+    uptime: o.uptime == null ? null : String(o.uptime),
+    clusterStatus: o.clusterStatus == null ? null : String(o.clusterStatus),
+    silences,
+  };
+}
+
+function grafanaSummaryFromAnnotations(ann) {
+  const ds = parseJsonAnnotation(ann['mcp.observed.grafana.datasources']);
+  const cp = parseJsonAnnotation(ann['mcp.observed.grafana.contact_points']);
+  if (!Array.isArray(ds) && !(cp && typeof cp === 'object')) return null;
+  const datasources = Array.isArray(ds)
+    ? ds.filter(d => d && typeof d === 'object').map(d => ({
+        uid: d.uid == null ? null : String(d.uid),
+        name: d.name == null ? null : String(d.name),
+        type: d.type == null ? null : String(d.type),
+        health: d.health === 'ok' || d.health === 'error' ? d.health : 'unknown',
+        message: d.message == null ? null : String(d.message).slice(0, 200),
+      }))
+    : null;
+  const contactPoints = cp && typeof cp === 'object' && !Array.isArray(cp)
+    ? { count: Number(cp.count ?? 0) || 0, names: Array.isArray(cp.names) ? cp.names.map(String) : [] }
+    : null;
+  return { datasources, contactPoints };
+}
+
 app.get('/api/live-status', (req, res) => {
   try {
     const abs = resolve(ROOT, LIVE_PACK_PATH);
@@ -991,6 +1081,10 @@ app.get('/api/live-status', (req, res) => {
       // families this MCP tier simply doesn't expose (a restriction).
       probesFailed:       a['mcp.probesFailed']       || '',
       probesUnsupported:  a['mcp.probesUnsupported']  || '',
+      // Step 2 stack self-metrics: 'sampled' | 'not-attempted' | null (a
+      // pack refreshed before step 2 carries no panel at all).
+      stackStatus:        a['mcp.stack.status']        || null,
+      stackSampled:       Number(a['mcp.stack.sampled'] || 0),
       servicesDiscovered: a['mcp.servicesDiscovered'] || '',
       baselinesComputed:  a['mcp.baselinesComputed']  || '0',
       activeAnomalies:    a['mcp.activeAnomalies']    || '0',
@@ -1107,6 +1201,13 @@ app.post('/api/draft-from-mcp', async (req, res) => {
       // server). When set, the studio renders the full skill → backend →
       // product → version matrix on connect.
       capabilities,
+      // Step 2: the stack's own self-metrics and the Alertmanager /
+      // Grafana status surfaces — point-in-time samples the studio shows
+      // under "signal, not verdict". null when the fetcher predates step 2
+      // (or the surface wasn't advertised); never a Verified stamp.
+      stack: stackSummaryFromAnnotations(ann),
+      alertmanager: alertmanagerSummaryFromAnnotations(ann),
+      grafana: grafanaSummaryFromAnnotations(ann),
       warnings: [],
       tier: pack.metadata?.bindings?.criticality || 'tier-3',
     };
@@ -1122,6 +1223,11 @@ app.post('/api/draft-from-mcp', async (req, res) => {
     // narrative below.
     if (probesUnsupported.length) {
       summary.warnings.push(`Restricted MCP tier — families not exposed by this server: ${probesUnsupported.join(', ')}.`);
+    }
+    // The stack panel is gated on metrics_query alone; a restricted tier
+    // reads "not attempted", never "healthy" and never "absent".
+    if (summary.stack && summary.stack.status === 'not-attempted') {
+      summary.warnings.push('Stack self-metrics not attempted — metrics_query not exposed by this MCP tier.');
     }
     const attemptedNothing = (k) => probesAttempted.includes(k) && !probesSucceeded.includes(k) && !probesUnsupported.includes(k);
     if (attemptedNothing('recording_rules')) {

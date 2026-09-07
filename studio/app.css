@@ -787,6 +787,13 @@ a:hover { color: var(--ink); }
   padding: 1px 4px;
   border-radius: 3px;
 }
+/* Step 2 stack self-metrics block — a second summary table under the
+   discovery rows, introduced by one muted heading line. */
+.crawl-stack-heading {
+  margin: 10px 0 2px;
+  font: italic 11px/1.5 var(--serif);
+  color: var(--ink-4);
+}
 .crawl-inferred {
   margin-top: 6px;
   font: italic 11px/1.5 var(--serif);

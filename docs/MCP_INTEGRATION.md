@@ -385,6 +385,15 @@ caller that predates step 2 writes none of them):
 | `mcp.observed.grafana.datasources` | JSON `[{uid, name, type, health, message}]` | Grafana datasources with their health verdicts |
 | `mcp.observed.grafana.contact_points` | JSON `{count, names}` | Grafana contact points (names capped at 32) |
 
+### Stack self-metrics (surfaces)
+
+The same annotations are read back, never re-sampled, on three surfaces:
+
+- `POST /api/draft-from-mcp` — `summary.stack = { status, reason, sampled, empty, failed, notInInventory, notAttempted, families: { <family>: <best outcome> }, rows: [{ id, family, product, value, unit, direction, outcome, hint, reason? }] }` parsed from `mcp.stack.*` and `mcp.observed.stack_metrics`; `hint` is the contracts' display-only `displayHint` (`'nonzero'` when a lower-is-comfortable row is above zero, else `null`) and is computed here, never stored. `summary.alertmanager = { version, uptime, clusterStatus, silences }` and `summary.grafana = { datasources, contactPoints }` come from the `mcp.observed.*` JSON; each is `null` when the surface was not exposed or the fetcher predates step 2. A `not-attempted` panel adds the warning `Stack self-metrics not attempted — metrics_query not exposed by this MCP tier.`
+- `GET /api/live-status` — `stackStatus` (`sampled` | `not-attempted` | `null`) and `stackSampled` (number).
+- The studio draft summary renders a "stack self-metrics — point-in-time sample, signal not verdict" block under the discovery rows: one row per family in `families` showing the family's best row (ratios as a percent, per-second to three decimals, seconds to one, counts as integers, `· nonzero` when hinted) or its outcome (`— empty`, `— probe failed: …`, `— not in inventory`), a single `— not attempted: metrics_query not exposed by this MCP tier` row on a restricted tier, then `alertmanager: v<version> · N active silences`, `datasources: N · M unhealthy: <names>` and `contact points: N` (`— not exposed` when absent).
+- Journeys — `liveEvidenceFacts(canonicalB).stack = { status, reason, sampled, empty, failed, notAttempted }` (status `null` and zero counts for a file-sourced Pack B) rides on the run record as `stack` and prints one `Stack self-metrics` line in the markdown report. No gate key reads it.
+
 ## Diagnostic Drift Semantics
 
 When Pack B is live-like, Diagnose treats the comparison as declared vs live:

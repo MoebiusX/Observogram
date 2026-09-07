@@ -272,6 +272,13 @@ export function liveEvidenceFacts(canonicalB) {
     ...list('mcp.discovered.alert_rules_unhealthy'),
   ];
   const exposed = Number(ann['mcp.toolsExposedCount']);
+  // Step 2 stack self-metrics counts (mcp.stack.*). status is null when
+  // Pack B carries no panel (file-sourced, or a pre-step-2 refresh); the
+  // counts are then 0 — an absence, never a healthy stack. No gate key
+  // reads these: a sample is a signal, not a verdict.
+  const stackStatus = ann['mcp.stack.status'] === 'sampled' || ann['mcp.stack.status'] === 'not-attempted'
+    ? ann['mcp.stack.status'] : null;
+  const stackCount = (k) => { const v = Number(ann[k]); return Number.isFinite(v) ? v : 0; };
   return {
     probes: {
       attempted: ev.attempted,
@@ -287,6 +294,14 @@ export function liveEvidenceFacts(canonicalB) {
     scrapeJobsDownNames,
     unhealthyRules: unhealthyRuleNames.length,
     unhealthyRuleNames,
+    stack: {
+      status: stackStatus,
+      reason: stackStatus === 'not-attempted' ? String(ann['mcp.stack.reason'] || 'not attempted') : null,
+      sampled: stackCount('mcp.stack.sampled'),
+      empty: stackCount('mcp.stack.empty'),
+      failed: stackCount('mcp.stack.failed'),
+      notAttempted: stackCount('mcp.stack.notAttempted'),
+    },
   };
 }
 
@@ -405,6 +420,9 @@ export async function runJourney(def, { baseDir } = {}) {
     toolsExposedCount: live.toolsExposedCount,
     scrapeJobsDown: live.scrapeJobsDown,
     unhealthyRules: live.unhealthyRules,
+    // Step 2 stack self-metric sample counts — recorded as a signal for the
+    // drift-over-time series, never gated on.
+    stack: live.stack,
     gate: { thresholds: def.gate || {}, breaches },
     outcome: breaches.length ? 'gate-failed' : 'pass',
   };
@@ -446,6 +464,13 @@ function probesLine(r) {
     + (r.toolsExposedCount != null ? ` · ${r.toolsExposedCount} MCP tools exposed` : '');
 }
 
+function stackLine(r) {
+  const s = r.stack;
+  if (!s || !s.status) return 'no stack sample (file-sourced B or pre-step-2 refresh)';
+  if (s.status === 'not-attempted') return `not attempted (${s.reason || 'no reason recorded'})`;
+  return `sampled ${s.sampled ?? 0} · empty ${s.empty ?? 0} · failed ${s.failed ?? 0}`;
+}
+
 export function renderJourneyMarkdown(r) {
   if (r.outcome === 'vantage-lost') {
     return [
@@ -476,6 +501,7 @@ export function renderJourneyMarkdown(r) {
     `| Live freshness | ${r.freshness.liveAgeHours === null ? 'no refresh timestamp' : r.freshness.liveAgeHours.toFixed(1) + 'h old'} |`,
     `| Live probes | ${probesLine(r)} |`,
     `| On-wire health | ${r.scrapeJobsDown ?? 0} scrape job(s) down · ${r.unhealthyRules ?? 0} unhealthy rule(s) |`,
+    `| Stack self-metrics | ${stackLine(r)} |`,
     `| Took | ${r.tookMs}ms |`,
   ];
   if (r.gate.breaches.length) {
