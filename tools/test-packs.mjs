@@ -78,13 +78,18 @@ const { assert, failures, report } = createHarness();
 
 // Panels are excluded from flat drift arithmetic (see layerArtefacts in
 // tools/lib/diff.mjs); mirror that here so inBoth can be compared exactly.
-function flatComparableCount(layered) {
+// Every flat-comparable artefact, split into the concrete ones diffPacks
+// pairs and the Scaffold placeholders it parks (crawler.scaffold.* /
+// mcp.scaffold.* — never paired, even with themselves).
+function flatComparableCounts(layered) {
   const l = layered.layers || {};
-  return [
+  const flat = [
     ...(l.L1 || []), ...(l.L2 || []), ...(l.L2X || []), ...(l.L3 || []),
     ...(l.L4?.policy || []), ...(l.L4?.alerting || []), ...(l.L4?.healing || []),
     ...(l.L5 || []), ...(l.GOV || []),
-  ].filter(a => classify(a) !== 'panel').length;
+  ].filter(a => classify(a) !== 'panel');
+  const scaffold = flat.filter(a => a.source === 'Scaffold').length;
+  return { concrete: flat.length - scaffold, scaffold };
 }
 
 if (!existsSync(PACKS_DIR)) {
@@ -136,11 +141,14 @@ for (const { dir, file } of packFiles) {
   assert(!!layered.layers?.L2, 'adapter produced L2');
 
   // self-diff invariant
-  const flat = flatComparableCount(layered);
+  const flat = flatComparableCounts(layered);
   const self = diffPacks(layered, adapt(JSON.parse(JSON.stringify(canonical))));
-  assert(self.summary.inBoth === flat,
-         'self-diff preserves every flat-comparable artefact',
-         self.summary.inBoth, flat);
+  assert(self.summary.inBoth === flat.concrete,
+         'self-diff preserves every concrete flat-comparable artefact',
+         self.summary.inBoth, flat.concrete);
+  assert(self.summary.scaffold === flat.scaffold * 2,
+         'self-diff parks every scaffold placeholder on both sides (never paired)',
+         self.summary.scaffold, flat.scaffold * 2);
   assert(self.summary.onlyInA === 0 && self.summary.onlyInB === 0,
          'self-diff has no missing artefacts');
   assert(self.summary.alignment === 1 && self.summary.jaccard === 1,

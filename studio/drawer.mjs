@@ -212,7 +212,7 @@ function renderRequirementTracePanel(artefact, side = 'b') {
         ? chain.scrapeJobs.items.map(j => j.name).join(', ')
         : (chain.scrapeJobs?.observedCount ? `${chain.scrapeJobs.observedCount} jobs observed` : null)],
       ['dashboards', chain.dashboards?.map(d => d.title || d.id).slice(0, 4).join(', ')],
-      ['alerts', chain.alerts?.map(a => a.name).slice(0, 5).join(', ')],
+      ['alerts', chain.alerts?.map(a => `${a.name}${a.verified === false ? ' (unhealthy)' : ''}`).slice(0, 5).join(', ')],
     ]));
     if (chain.gaps?.length) {
       const gap = document.createElement('div');

@@ -393,6 +393,8 @@ export async function runJourney(def, { baseDir } = {}) {
       declaredNotLive: facts.declaredNotLive,
       liveNotDeclared: facts.liveNotDeclared,
       outOfScope: diff.summary?.outOfScope ?? 0,
+      // Placeholders parked on either side (never paired, never counted).
+      scaffold: diff.summary?.scaffold ?? 0,
     },
     freshness: { liveAgeHours: facts.liveAgeHours, refreshedAt: liveRefreshedAt },
     // On-wire liveness of the vantage point itself (Pack B annotations).

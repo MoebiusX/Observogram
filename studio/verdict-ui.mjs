@@ -84,8 +84,12 @@ export function buildVerdictModel({ pack, packB, diff, compareBId, catalogEntry 
       const onlyInA = (bucket.onlyInA || []).filter(e => lensed(e, 'a') && !isScaffoldDiffEntry(e));
       const onlyInB = (bucket.onlyInB || []).filter(e => lensed(e, 'b') && !isScaffoldDiffEntry(e));
       const scaffold = [
-        ...(bucket.onlyInA || []), ...(bucket.onlyInB || []), ...(bucket.inBoth || []),
-      ].filter(e => isScaffoldDiffEntry(e));
+        ...[
+          ...(bucket.onlyInA || []), ...(bucket.onlyInB || []), ...(bucket.inBoth || []),
+        ].filter(e => isScaffoldDiffEntry(e)),
+        // The engine parks placeholders before pairing (diffPacks `scaffold`).
+        ...(bucket.scaffold || []),
+      ];
       const outOfScope = (bucket.outOfScope || []).filter(e => lensed(e, 'b'));
 
       totals.aligned += aligned.length;

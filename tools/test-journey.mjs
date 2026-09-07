@@ -154,6 +154,36 @@ try {
   assert(strictRec.outcome === 'gate-failed' && strictRec.gate.breaches.length >= 1,
          'breached gate yields outcome gate-failed', strictRec.gate.breaches.map(b => b.criterion), 'breaches');
 
+  // --- a live placeholder never masks a declared artefact ---
+  // Pack B is Pack A itself, re-annotated as a live draft whose burn-rate
+  // entry is the fetcher's schema-forced placeholder. Same SLO, same
+  // windows — the declared alert used to read aligned, so
+  // maxDeclaredNotLive: 0 passed against a platform with no burn-rate
+  // alerting rule at all.
+  const maskedB = parseYaml(readFileSync(PACK_A, 'utf8'));
+  maskedB.metadata.name = `${maskedB.metadata.name}-live`;
+  maskedB.metadata.annotations = {
+    ...(maskedB.metadata.annotations || {}),
+    'mcp.url': 'https://otel-mcp.example.invalid/mcp',
+    'mcp.refreshedAt': new Date().toISOString(),
+    'mcp.scaffold.policy.burn_rate_alerts[0]': 'schema-required fallback; no burn-rate alerting rule discovered via MCP',
+  };
+  const MASKED_B = join(TMP, 'masked-b.pack.json');
+  writeFileSync(MASKED_B, JSON.stringify(maskedB, null, 2));
+  writeFileSync(join(TMP, 'journeys', 'masked.journey.yaml'), [
+    'name: masked',
+    `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`,
+    `packB: { file: ${MASKED_B.replaceAll('\\', '/')} }`,
+    'gate: { maxDeclaredNotLive: 0 }',
+  ].join('\n'));
+  const maskedRec = await runJourney(loadJourneyDef('masked'));
+  assert(maskedRec.drift.declaredNotLive === 1 && maskedRec.drift.scaffold === 1,
+         'the declared burn-rate alert counts as declared-not-live; the placeholder is parked, not aligned',
+         { declaredNotLive: maskedRec.drift.declaredNotLive, scaffold: maskedRec.drift.scaffold }, { declaredNotLive: 1, scaffold: 1 });
+  assert(maskedRec.outcome === 'gate-failed' && maskedRec.gate.breaches[0]?.criterion === 'maxDeclaredNotLive',
+         'maxDeclaredNotLive: 0 breaches on the masked alert', maskedRec.gate.breaches.map(b => b.criterion));
+  assert(maskedRec.drift.alignmentPct < 100, 'alignment is below 100% against the placeholder', maskedRec.drift.alignmentPct);
+
   // --- markdown report ---
   const md = renderJourneyMarkdown(strictRec);
   assert(/GATE FAILED/.test(md), 'markdown headline states the verdict');

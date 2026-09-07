@@ -106,8 +106,12 @@ export function buildProtoModel() {
       const onlyInA = (bucket.onlyInA || []).filter(e => !isScaffoldDiffEntry(e));
       const onlyInB = (bucket.onlyInB || []).filter(e => !isScaffoldDiffEntry(e));
       const scaffold = [
-        ...(bucket.onlyInA || []), ...(bucket.onlyInB || []), ...(bucket.inBoth || []),
-      ].filter(e => isScaffoldDiffEntry(e));
+        ...[
+          ...(bucket.onlyInA || []), ...(bucket.onlyInB || []), ...(bucket.inBoth || []),
+        ].filter(e => isScaffoldDiffEntry(e)),
+        // The engine parks placeholders before pairing (diffPacks `scaffold`).
+        ...(bucket.scaffold || []),
+      ];
       const outOfScope = bucket.outOfScope || [];
 
       totals.aligned += aligned.length;

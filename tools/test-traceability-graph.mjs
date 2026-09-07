@@ -217,4 +217,54 @@ assert(broken.branches[0].verdict === 'broken',
 assert(broken.branches[0].missingRoles.some((role) => role.role === 'action'),
        'broken branch reports missing action limb');
 
+process.stdout.write('\n--- live scaffold placeholders are not live evidence ---\n');
+{
+  // Live pack = the same declaration, but its burn-rate entry is the
+  // fetcher's schema-forced placeholder (no alerting rule exists) and its
+  // SEV1 route is the hard-coded fallback. Both carry the compiler's
+  // default shape, so behavioural pairing would read them aligned.
+  const livePack = clone(pack);
+  livePack.metadata.annotations = {
+    ...livePack.metadata.annotations,
+    'mcp.url': 'https://example.test/mcp',
+    'mcp.refreshedAt': '2026-06-09T00:00:00.000Z',
+    'mcp.scaffold.policy.burn_rate_alerts[0]': 'schema-required fallback; no burn-rate alerting rule discovered via MCP',
+    'mcp.scaffold.alerting.routes[0]': 'schema-required fallback; not attested by any MCP tool',
+  };
+  const cmp = comparePackBranches(adapted, adapt(livePack));
+  const br = cmp.branches[0];
+  const burn = br.nodes.filter((n) => n.kind === 'burn_rate');
+  assert(burn.length === 1 && burn[0].status === 'declared_only' && burn[0].bId === null,
+         'declared burn-rate alert reads declared_only against the live Scaffold placeholder (never aligned/drifted)',
+         burn.map((n) => `${n.status}:${n.aId}/${n.bId}`), ['declared_only:POL-01/null']);
+  assert(!br.nodes.some((n) => n.status === 'live_only'),
+         'no placeholder is reported as a live_only (undeclared) node',
+         br.nodes.filter((n) => n.status === 'live_only').map((n) => `${n.kind}:${n.bId}`), []);
+  assert(br.verdict === 'broken',
+         'a branch whose only action limb is a live placeholder is broken, not intact', br.verdict, 'broken');
+  const sev1 = br.nodes.find((n) => n.kind === 'alert_route' && n.aId === 'ALR-01');
+  assert(sev1 && sev1.status === 'declared_only',
+         'declared SEV1 route reads declared_only against the scaffold route (a real SEV2 route proves live can see routes)',
+         sev1?.status, 'declared_only');
+
+  // A live-only branch rooted on a placeholder SLO (the fetcher's
+  // per-service availability guess) is not an undeclared commitment.
+  const guessPack = clone(livePack);
+  guessPack.spec.slis.push({ id: 'svc_guess_availability', type: 'ratio', good: 'sum(rate(g[5m]))', total: 'sum(rate(t[5m]))' });
+  guessPack.spec.slos.push({ id: 'svc_guess_availability_99', sli: 'svc_guess_availability', objective: 0.99, window: '30d' });
+  guessPack.metadata.annotations['mcp.scaffold.slis.svc_guess_availability'] = 'schema-required fallback; not attested by any MCP tool';
+  guessPack.metadata.annotations['mcp.scaffold.slos.svc_guess_availability_99'] = 'schema-required fallback; not attested by any MCP tool';
+  const cmp2 = comparePackBranches(adapted, adapt(guessPack));
+  assert(cmp2.rollup.undeclared === 0 && cmp2.rollup.total === 1,
+         'a branch rooted on a scaffold SLO is dropped instead of counted as undeclared',
+         cmp2.rollup, { undeclared: 0, total: 1 });
+  // ...while a real live-only SLO still is one.
+  const realPack = clone(guessPack);
+  delete realPack.metadata.annotations['mcp.scaffold.slis.svc_guess_availability'];
+  delete realPack.metadata.annotations['mcp.scaffold.slos.svc_guess_availability_99'];
+  const cmp3 = comparePackBranches(adapted, adapt(realPack));
+  assert(cmp3.rollup.undeclared === 1 && cmp3.rollup.total === 2,
+         'a real live-only SLO still counts as undeclared', cmp3.rollup, { undeclared: 1, total: 2 });
+}
+
 report('traceability graph');
