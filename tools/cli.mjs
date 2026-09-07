@@ -111,7 +111,10 @@ async function runJourneyCommand([sub, ...args]) {
     if (!names.length) { console.log('(no journeys saved — add .observogram/journeys/<name>.journey.yaml)'); return; }
     for (const n of names) {
       const last = journeyLib.readJourneyRuns(n, { limit: 1 })[0];
-      console.log(`${n}\t${last ? `${last.outcome} · ${last.startedAt} · alignment ${last.drift?.alignmentPct}%` : '(never run)'}`);
+      const tail = !last ? '(never run)'
+        : last.outcome === 'vantage-lost' ? `vantage-lost · ${last.startedAt} · ${last.error || 'live source unreachable'}`
+        : `${last.outcome} · ${last.startedAt} · alignment ${last.drift?.alignmentPct}%`;
+      console.log(`${n}\t${tail}`);
     }
     return;
   }

@@ -1,0 +1,13 @@
+{
+  "_recorded": {
+    "recordedAt": "2026-09-07T16:08:36.735Z",
+    "tool": "alertmanager_status",
+    "trimmed": "config omitted (the full Alertmanager configuration: receivers, internal hostnames)"
+  },
+  "version": "0.27.0",
+  "uptime": "2026-08-31T20:21:26.668Z",
+  "cluster": {
+    "status": "ready",
+    "peers": 1
+  }
+}

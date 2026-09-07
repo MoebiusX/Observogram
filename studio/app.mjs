@@ -2254,12 +2254,26 @@ function renderMcpBadge(status) {
     return;
   }
   const stale = status.refreshedAt && (Date.now() - Date.parse(status.refreshedAt) > MCP_STALE_HOURS * 3600_000);
-  const errored = (status.toolsFailed || '').trim() !== '';
+  const toolsFailed = (status.toolsFailed || '').trim();
+  // A probe family that got no answer is a hole in the live picture —
+  // the badge goes red for it exactly as for a failed core tool.
+  const probesFailed = (status.probesFailed || '').trim();
+  // Families this MCP tier doesn't expose at all: a restriction, not an
+  // error — named in the title, never a colour state of its own.
+  const probesUnsupported = (status.probesUnsupported || '').trim();
+  const errored = toolsFailed !== '' || probesFailed !== '';
   btn.dataset.mcpState = errored ? 'error' : stale ? 'stale' : 'fresh';
   ageEl.textContent = fmtRelative(status.refreshedAt) || '—';
-  btn.title = errored
-    ? `MCP refresh had errors (${status.toolsFailed})`
+  const errorBits = [
+    toolsFailed ? `tools: ${toolsFailed}` : '',
+    probesFailed ? `probes with no answer: ${probesFailed}` : '',
+  ].filter(Boolean);
+  const title = errored
+    ? `MCP refresh had errors (${errorBits.join('; ')})`
     : `Last refresh ${fmtRelative(status.refreshedAt)} from ${status.url || 'unknown'}`;
+  btn.title = probesUnsupported
+    ? `${title} · restricted tier: families ${probesUnsupported} not exposed`
+    : title;
 }
 
 function renderMcpStatusBody(status) {
@@ -2274,6 +2288,8 @@ function renderMcpStatusBody(status) {
     ['mcp url',    status.url || '—'],
     ['tools called',  status.toolsCalled || '—'],
     ['tools failed',  status.toolsFailed || 'none'],
+    ['probes failed', status.probesFailed || 'none'],
+    ['not exposed',   status.probesUnsupported || 'none'],
     ['services',   status.servicesDiscovered || '—'],
     ['baselines',  status.baselinesComputed || '0'],
     ['anomalies',  status.activeAnomalies   || '0'],
@@ -3637,6 +3653,119 @@ async function doDraftFromMcp() {
   }
 }
 
+// Step 2 — the stack's own self-metrics (docs/MCP_INTEGRATION.md,
+// mcp.stack.* / mcp.observed.*). Every number is a point-in-time sample
+// read straight from the server summary: signal, not verdict. Absent when
+// the fetcher predates step 2 (summary.stack == null). `row` is the
+// caller's table-row helper so the markup matches the rows above; a
+// sampled row adds the row id / product as a hint line (plain, never the
+// purple "fallback evidence" tint — a sample is not fallback evidence).
+const STACK_OUTCOME_RANK = ['data', 'empty', 'failed', 'not-in-inventory', 'not-attempted'];
+
+function formatStackValue(value, unit) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+  switch (unit) {
+    case 'ratio':      return `${(value * 100).toFixed(1)}%`;
+    case 'per-second': return `${value.toFixed(3)}/s`;
+    case 'per-hour':   return `${value.toFixed(1)}/h`;
+    case 'seconds':    return `${value.toFixed(1)}s`;
+    case 'count':      return String(Math.round(value));
+    default:           return String(value);
+  }
+}
+
+function stackOutcomeText(outcome, reason) {
+  switch (outcome) {
+    case 'empty':            return '— empty';
+    case 'failed':           return reason ? `— probe failed: ${reason}` : '— probe failed';
+    case 'not-in-inventory': return '— not in inventory';
+    case 'not-attempted':    return `— not attempted: ${reason || 'not attempted'}`;
+    default:                 return `— ${outcome || 'unknown'}`;
+  }
+}
+
+function renderStackSelfMetricsBlock(summary, row) {
+  const sampledRow = (label, value, hint) =>
+    `<tr><td>${escapeHtml(label)}<span class="row-evidence-hint">${escapeHtml(hint)}</span></td><td>${escapeHtml(String(value))}</td></tr>`;
+  const stack = summary?.stack;
+  const am = summary?.alertmanager;
+  const gf = summary?.grafana;
+  if (!stack && !am && !gf) return '';
+  const rank = (o) => { const i = STACK_OUTCOME_RANK.indexOf(o); return i < 0 ? STACK_OUTCOME_RANK.length : i; };
+  const lines = [];
+  if (!stack) {
+    lines.push(row('stack self-metrics', '— not sampled by this fetcher', true));
+  } else if (stack.status !== 'sampled') {
+    // The server's reason is the source of truth (today: the tier).
+    lines.push(row('stack self-metrics', `— not attempted: ${stack.reason || 'metrics_query not exposed by this MCP tier'}`, true));
+  } else {
+    const rows = Array.isArray(stack.rows) ? stack.rows : [];
+    for (const [family, familyOutcome] of Object.entries(stack.families || {})) {
+      // The family's best row: outcome rank first, then the table order.
+      const best = rows
+        .map((r, i) => ({ r, i }))
+        .filter(({ r }) => r.family === family)
+        .sort((a, b) => rank(a.r.outcome) - rank(b.r.outcome) || a.i - b.i)[0]?.r;
+      if (!best) {
+        // A family with no observed row was never reached: its rows were
+        // counted not-attempted (call budget), not listed.
+        lines.push(row(family, stackOutcomeText(familyOutcome, familyOutcome === 'not-attempted' ? 'call budget exhausted' : null), true));
+        continue;
+      }
+      const hint = `${best.id}${best.product && best.product !== 'generic' ? ` · ${best.product}` : ''}`;
+      if (best.outcome === 'data') {
+        const text = formatStackValue(best.value, best.unit) + (best.hint === 'nonzero' ? ' · nonzero' : '');
+        lines.push(sampledRow(family, text, hint));
+      } else {
+        lines.push(row(family, stackOutcomeText(best.outcome, best.reason), true));
+      }
+    }
+  }
+  // "— not exposed" is reserved for a surface the MCP did not advertise
+  // (summary null). An advertised tool that failed carries `error` and
+  // reads "probe failed" — a failure must never look like a tier limit.
+  if (am) {
+    const answered = am.version || am.silences || am.clusterStatus || am.uptime;
+    if (!answered && am.error) {
+      lines.push(row('alertmanager', `— probe failed: ${am.error}`, true));
+    } else {
+      const silences = am.silences ? `${am.silences.active} active silence${am.silences.active === 1 ? '' : 's'}` : 'silences not answered';
+      lines.push(row('alertmanager', `${am.version ? `v${am.version}` : 'version unknown'} · ${silences}${am.error ? ` · probe failed: ${am.error}` : ''}`));
+    }
+  } else {
+    lines.push(row('alertmanager', '— not exposed', true));
+  }
+  if (gf) {
+    if (Array.isArray(gf.datasources)) {
+      // Three buckets, never two: `unknown` means the health of that
+      // datasource was NOT checked (health tool not exposed / errored /
+      // beyond the cap) — "0 unhealthy" is printed only when at least one
+      // datasource actually got a verdict.
+      const label = (d) => d.name || d.uid || '?';
+      const errors = gf.datasources.filter(d => d.health === 'error').map(label);
+      const unchecked = gf.datasources.filter(d => d.health !== 'ok' && d.health !== 'error').map(label);
+      const checked = gf.datasources.length - unchecked.length;
+      let text;
+      if (gf.datasources.length === 0) text = '0';
+      else if (checked === 0) text = `${gf.datasources.length} · health not checked (grafana_datasource_health not exposed or did not answer)`;
+      else {
+        text = `${gf.datasources.length} · ${errors.length} error${errors.length ? `: ${errors.join(', ')}` : ''}`
+          + (unchecked.length ? ` · ${unchecked.length} unchecked: ${unchecked.join(', ')}` : '');
+      }
+      lines.push(row('datasources', text));
+    }
+    if (gf.contactPoints) lines.push(row('contact points', gf.contactPoints.count));
+    if (gf.error) lines.push(row('grafana', `— probe failed: ${gf.error}`, true));
+  } else {
+    lines.push(row('grafana', '— not exposed', true));
+  }
+  return `
+    <div class="crawl-stack-heading">stack self-metrics — point-in-time sample, signal not verdict</div>
+    <table class="crawl-summary-table">
+      ${lines.join('')}
+    </table>`;
+}
+
 function renderDraftMcpResult(out) {
   const resBox = $('#draft-mcp-result');
   resBox.hidden = false;
@@ -3665,17 +3794,23 @@ function renderDraftMcpResult(out) {
   const probesS = new Set(d.probesSucceeded || []);
   const probesE = new Set(d.probesEmpty || []);
   const probesF = new Set(d.probesFailed || []);
-  // Three distinct outcomes when a probe was attempted:
-  //   data     — MCP responded with real content → show count
-  //   empty    — MCP responded with empty payload → "0 (none configured)"
-  //              honest zero, e.g. Krystaline has no Prometheus rules
-  //   failed   — every candidate errored / 503'd → "— probe failed"
-  //              transient or systemic, not the same as zero
+  const probesU = new Set(d.probesUnsupported || []);
+  const probeErrors = d.probeErrors || {};
+  // Four distinct outcomes when a probe was attempted:
+  //   data        — MCP responded with real content → show count
+  //   empty       — MCP responded with empty payload → "0 (none configured)"
+  //                 honest zero, e.g. Krystaline has no Prometheus rules
+  //   failed      — every candidate errored / 503'd → "— probe failed"
+  //                 transient or systemic, not the same as zero
+  //   unsupported — tools/list exposes no candidate for the family →
+  //                 "— not exposed by this MCP": a tier restriction, not
+  //                 an outage; nothing to retry.
   const probeRow = (label, key, value) => {
     if (!probesA.has(key)) return '';
     if (probesS.has(key))  return row(label, value || 0);
     if (probesE.has(key))  return row(label, `0 — none configured`, true);
-    if (probesF.has(key))  return row(label, '— probe failed', true);
+    if (probesU.has(key))  return row(label, '— not exposed by this MCP', true);
+    if (probesF.has(key))  return row(label, probeErrors[key] ? `— probe failed: ${probeErrors[key]}` : '— probe failed', true);
     // Older packs (pre-Phase 5) don't have probesEmpty/probesFailed
     // annotations; fall back to the original behaviour.
     return row(label, '— probed, none found', true);
@@ -3704,6 +3839,20 @@ function renderDraftMcpResult(out) {
         `via colon-pattern grep over metric inventory`,
       )
     : '';
+  // On-wire liveness rows — only when the MCP reported something NOT
+  // doing its job: scrape jobs whose every target is down, rules the
+  // ruler reports as failing to evaluate. These jobs/rules exist but are
+  // not counted as evidence above (the fetcher withholds their stamps).
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const scrapeJobsDown = d.scrapeJobsDown || [];
+  const rulesUnhealthy = [...(d.recordingRulesUnhealthy || []), ...(d.alertRulesUnhealthy || [])];
+  const scrapeDownRow = scrapeJobsDown.length
+    ? row(`${plural(scrapeJobsDown.length, 'scrape job')} down`, scrapeJobsDown.join(', '))
+    : '';
+  const rulesUnhealthyRow = rulesUnhealthy.length
+    ? row(`${plural(rulesUnhealthy.length, 'rule')} unhealthy`, rulesUnhealthy.join(', '))
+    : '';
+  const stackBlock = renderStackSelfMetricsBlock(out.summary, row);
   $('#draft-mcp-result-summary').innerHTML = `
     <h4>what the MCP attested</h4>
     <table class="crawl-summary-table">
@@ -3716,8 +3865,11 @@ function renderDraftMcpResult(out) {
       ${alertEvidenceRow}
       ${probeRow('dashboards',      'dashboards',      d.dashboards)}
       ${probeRow('scrape jobs',     'scrape_configs',  (d.scrapeJobs || []).length)}
+      ${scrapeDownRow}
+      ${rulesUnhealthyRow}
       ${probeRow('metric names',    'metric_names',    d.metricNamesCount)}
     </table>
+    ${stackBlock}
     ${alertsFiringCount > 0 || recordingFallbackCount > 0 ? `
       <div class="crawl-evidence-note">
         Rows in italic = fallback evidence. The standard rule endpoints came back empty,

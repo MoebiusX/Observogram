@@ -40,6 +40,9 @@ export function buildRequirementTraceability({ spec = {}, annotations = {}, laye
     ? spec.policy.burn_rate_alerts
     : [];
   const liveAlertNames = annotationList(annotations['mcp.discovered.alert_rule_names']);
+  // Alerting rules the ruler reports as failing to evaluate: they exist,
+  // but a rule that cannot evaluate is not alert evidence.
+  const unhealthyAlertNames = new Set(annotationList(annotations['mcp.discovered.alert_rules_unhealthy']));
   const declaredMetricOrigins = parseAnnotationObject(annotations['crawler.discovered.metric_origins']);
   const declaredMetricNames = new Set([
     ...annotationList(
@@ -79,6 +82,7 @@ export function buildRequirementTraceability({ spec = {}, annotations = {}, laye
       dashboards,
       burnRateAlerts,
       liveAlertNames,
+      unhealthyAlertNames,
       liveMetricNames,
       declaredMetricNames,
       declaredMetricOrigins,
@@ -99,6 +103,7 @@ export function buildRequirementTraceability({ spec = {}, annotations = {}, laye
       dashboards,
       burnRateAlerts,
       liveAlertNames,
+      unhealthyAlertNames,
       liveMetricNames,
       declaredMetricNames,
       declaredMetricOrigins,
@@ -116,7 +121,7 @@ export function buildRequirementTraceability({ spec = {}, annotations = {}, laye
     withScrapeEvidence: chains.filter(c => c.scrapeJobs.observedCount > 0).length,
     withMatchedScrapeJobs: chains.filter(c => c.scrapeJobs.items.length > 0).length,
     withDashboards: chains.filter(c => c.dashboards.length > 0).length,
-    withAlerts: chains.filter(c => c.alerts.length > 0).length,
+    withAlerts: chains.filter(c => c.alerts.some(alertIsEvidence)).length,
     complete: chains.filter(c => c.gaps.length === 0).length,
   };
 
@@ -131,6 +136,7 @@ function buildChain({
   dashboards,
   burnRateAlerts,
   liveAlertNames,
+  unhealthyAlertNames = new Set(),
   liveMetricNames,
   declaredMetricNames,
   declaredMetricOrigins,
@@ -185,7 +191,9 @@ function buildChain({
     slo,
     burnRateAlerts,
     liveAlertNames,
+    unhealthyAlertNames,
     needles: baseNeedles,
+    flat,
   });
 
   const gaps = [];
@@ -194,7 +202,8 @@ function buildChain({
   if (exporters.length === 0) gaps.push('missing_metrics_exporter');
   if (scrape.observedCount === 0) gaps.push('missing_scrape_evidence');
   if (dashboardEvidence.length === 0) gaps.push('missing_dashboard_evidence');
-  if (alerts.length === 0) gaps.push('missing_alert_evidence');
+  // An unhealthy live rule is listed (it exists) but is not evidence.
+  if (!alerts.some(alertIsEvidence)) gaps.push('missing_alert_evidence');
 
   const notes = [];
   if (scrape.observedCount > 0 && scrape.items.length === 0) {
@@ -331,26 +340,42 @@ function dashboardTrace(dashboard, needles, metrics, ruleNames, symbols) {
   };
 }
 
-function alertTrace({ slo, burnRateAlerts, liveAlertNames, needles }) {
+// An alert entry counts as evidence unless it says otherwise: a live rule
+// the ruler reports unhealthy carries `verified: false`.
+function alertIsEvidence(alert) {
+  return alert?.verified !== false;
+}
+
+function alertTrace({ slo, burnRateAlerts, liveAlertNames, unhealthyAlertNames = new Set(), needles, flat = [] }) {
   const out = [];
   const sloId = slo?.id || null;
-  for (const alert of burnRateAlerts) {
-    if (!sloId) continue;
-    if (stripSymbol(alert.slo || '', 'slos') !== sloId) continue;
+  burnRateAlerts.forEach((alert, i) => {
+    if (!sloId) return;
+    if (stripSymbol(alert.slo || '', 'slos') !== sloId) return;
+    // The adapter projects each entry as POL-<i+1>; a Scaffold projection
+    // is the fetcher's schema-forced placeholder (mcp.scaffold.policy.
+    // burn_rate_alerts[<i>]) — no alerting rule exists, so it is not alert
+    // evidence and must not suppress the missing_alert_evidence gap.
+    const artefact = flat.find(a => a?.spec === alert)
+      || flat.find(a => a?.id === `POL-${String(i + 1).padStart(2, '0')}`);
+    if (artefact?.source === 'Scaffold') return;
     out.push({
       name: `burn-rate alert: ${sloId}`,
       type: 'burn_rate',
       source: 'spec.policy.burn_rate_alerts',
       windows: Array.isArray(alert.windows) ? alert.windows.length : 0,
+      ...(artefact?.id ? { artefactId: artefact.id } : {}),
     });
-  }
+  });
   for (const name of liveAlertNames) {
     if (!matchesAnyNeedle(name, needles)) continue;
+    const unhealthy = unhealthyAlertNames.has(name);
     out.push({
       name,
       type: 'live_alert_rule',
       source: 'mcp.discovered.alert_rule_names',
-      verified: true,
+      verified: !unhealthy,
+      ...(unhealthy ? { health: 'err' } : {}),
     });
   }
   return dedupeBy(out, a => `${a.type}:${a.name}`);

@@ -32,6 +32,25 @@ promises to keep stable.
 `tools/test-diagnostic-grade.mjs` fails CI if an import ever creeps into the
 two zero-import modules, so the seam cannot erode silently.
 
+**Additive keys on `partialLiveEvidence(packB)`.** The result keeps its
+original shape (`isLiveDraft`, `failed`, `empty`, `attempted`, `partial` —
+`partial` still means *outright probe failures only*) and gains optional keys
+a downstream host may ignore: `unsupported` (probe families the MCP tier does
+not expose, from `mcp.probesUnsupported`), `errors` (`{ family: message }`
+from `mcp.probeErrors.<family>`), and `vantage` — `'full'` (nothing failed,
+nothing unsupported), `'partial'` (some probes failed), `'restricted'` (nothing
+failed, some families not exposed), `'lost'` (every attempted family failed or
+is unsupported), `'none'` (not a live draft). Keys are only ever added here,
+never renamed or removed.
+
+**Optional inputs `computeDiagnosticGrade` reads.** The diff-bucket path
+counts a layer bucket's optional `scaffold` array (placeholders `diffPacks`
+parks before pairing) into its `N scaffold excluded` note; older diffs without
+it still pass through the `isScaffoldDiffEntry` filters. The Fresh criterion
+appends the live vantage to its `detail` (`vantage lost …` / `vantage partial
+…`) read through `partialLiveEvidence` from the same module — the pass/fail
+and every score are unchanged, and no import was added.
+
 ## What the host supplies
 
 **`verdict-ui.mjs` reads no global state.** Its imports are the vendorable
@@ -110,7 +129,12 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
    copy (e.g. a newer `diff.mjs` over an older identity model) is exactly the
    silent drift this contract exists to prevent — a downstream studio's 2026-08
    collision report was filed from such a copy, against engine code this repo
-   had replaced on 2026-06-09.
+   had replaced on 2026-06-09. Most recent reason to re-copy the pair:
+   2026-09 `promql-canon.mjs` tightens whitespace around symbolic binary
+   operators (`a / b` ≡ `a/b`) and `artefact-model.mjs` strips a leading
+   `ref:` from reference fields before comparing behaviour — an older
+   `artefact-model.mjs` over the newer canon (or vice versa) reports drift
+   the other half no longer sees.
 
 3. Re-copy the changed files, re-run your adapter's type-check, bump the
    recorded sha. Because the modules take their inputs explicitly, upstream

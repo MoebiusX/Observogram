@@ -490,6 +490,43 @@ assert(allLiveDiff.summary.outOfScope === 0,
        'all-live mode counts every unmatched live artefact as live-not-declared',
        allLiveDiff.summary.outOfScope, 0);
 
+// ---------- `ref:` prefix is authoring syntax, not behaviour ----------
+// A burn alert declared as `slo: ref:x` and one discovered as `slo: x` bind
+// to the same SLO. Identity already stripped the prefix (they paired); the
+// behavioural model must strip it too, or the pair reads as drifted on its
+// own binding — a false-drift for every repo pack that uses `ref:`.
+{
+  const refPack = clone(scopedRepoPack);
+  refPack.spec.policy.burn_rate_alerts[0].slo = 'ref:checkout_availability_99';
+  refPack.spec.slos[0].error_budget_policy = 'ref:platform/default-budget';
+  const barePack = clone(scopedRepoPack);
+  barePack.spec.slos[0].error_budget_policy = 'platform/default-budget';
+  const refDiff = diffPacks(adapt(refPack), adapt(barePack), { scopeMode: 'off' });
+  const burnPair = refDiff.layers.L3.inBoth.find(e => e.key.startsWith('burn_rate::'))
+    || Object.values(refDiff.layers).flatMap(l => l.inBoth).find(e => e.key.startsWith('burn_rate::'));
+  assert(burnPair && burnPair.match === 'aligned',
+    'burn alert with slo ref:x ALIGNS with slo x (identity paired, behaviour now agrees)', burnPair);
+  const sloPair = Object.values(refDiff.layers).flatMap(l => l.inBoth).find(e => e.key.startsWith('slo::'));
+  assert(sloPair && sloPair.match === 'aligned',
+    'slo with error_budget_policy ref:… aligns with the bare reference', sloPair);
+  assert(refDiff.summary.drifted === 0,
+    'ref:-only rewrites produce no drift anywhere in the pack', refDiff.summary);
+  // The prefix is cosmetic; the TARGET is not.
+  const otherPack = clone(scopedRepoPack);
+  otherPack.spec.policy.burn_rate_alerts[0].slo = 'ref:checkout_latency_99';
+  const otherDiff = diffPacks(adapt(refPack), adapt(otherPack), { scopeMode: 'off' });
+  assert(otherDiff.summary.aligned < refDiff.summary.aligned,
+    'NEGATIVE: a burn alert bound to a different SLO does not align', otherDiff.summary);
+  // The recording rule declared as `expr: ref:slis.x` against a live rule
+  // carrying the compiled expression is still partial evidence, not drift.
+  const compiledPack = clone(scopedRepoPack);
+  compiledPack.spec.queries.recording_rules[0].expr = 'sum(rate(checkout_requests_total{code!~"5.."}[5m])) / sum(rate(checkout_requests_total[5m]))';
+  const compiledDiff = diffPacks(adapt(scopedRepoPack), adapt(compiledPack), { scopeMode: 'off' });
+  const rulePair = Object.values(compiledDiff.layers).flatMap(l => l.inBoth).find(e => e.key.startsWith('recording_rule::'));
+  assert(rulePair && rulePair.match === 'aligned',
+    'expr ref:slis.x vs the compiled expression stays partial-evidence aligned after ref stripping', rulePair);
+}
+
 // ---------- client classification contract ----------
 // The studio classifies compare cards and traceability rows by the artefact
 // objects EMBEDDED in diff entries (studio/compare-view.mjs
@@ -532,6 +569,53 @@ assert(allLiveDiff.summary.outOfScope === 0,
   }
   checkDiff('collision-pack self-diff',
     diffPacks(adapt(clone(collisionPack)), adapt(clone(collisionPack)), { scopeMode: 'all' }));
+}
+
+process.stdout.write('\n--- scaffold placeholders never pair ---\n');
+{
+  // The live fetcher's schema-forced burn-rate placeholder carries the
+  // compiler's default windows (5m/1h/14x + 30m/6h/6x) on the live pack's
+  // first SLO — byte-identical to a declared default-window alert on the
+  // same SLO. It is not an alerting rule; it must not read `aligned`.
+  const live = clone(collisionPack);
+  live.metadata.annotations = {
+    'mcp.url': 'https://example.test/mcp',
+    'mcp.refreshedAt': '2026-06-09T00:00:00.000Z',
+    'mcp.scaffold.policy.burn_rate_alerts[0]': 'schema-required fallback; no burn-rate alerting rule discovered via MCP',
+  };
+  const d = diffPacks(adapt(clone(collisionPack)), adapt(live), { scopeMode: 'all' });
+  const l4 = d.layers.L4;
+  assert(!l4.inBoth.some(e => e.a?.id === 'POL-01' || e.b?.id === 'POL-01'),
+         'declared burn-rate alert is not paired with the live Scaffold placeholder, even with identical windows',
+         l4.inBoth.map(e => `${e.a?.id}/${e.b?.id}:${e.match}`));
+  assert(l4.onlyInA.some(e => e.artefact?.id === 'POL-01'),
+         'the declared burn-rate alert reads declared, not live (onlyInA)',
+         l4.onlyInA.map(e => e.artefact?.id));
+  assert(!l4.onlyInB.some(e => e.artefact?.id === 'POL-01'),
+         'the placeholder never reads live, not declared (onlyInB)');
+  assert(l4.scaffold.length === 1 && l4.scaffold[0].side === 'b' && l4.scaffold[0].artefact?.id === 'POL-01'
+         && l4.scaffold[0].artefact?.source === 'Scaffold',
+         'the placeholder is parked in the layer scaffold bucket with its side',
+         l4.scaffold.map(e => `${e.side}:${e.artefact?.id}:${e.artefact?.source}`));
+  assert(d.summary.scaffold === 1 && d.summary.onlyInA === 1 && d.summary.onlyInB === 0,
+         'summary counts the parked placeholder separately and the declared alert as onlyInA',
+         { scaffold: d.summary.scaffold, onlyInA: d.summary.onlyInA, onlyInB: d.summary.onlyInB });
+  assert(d.summary.inBoth === self.summary.inBoth - 1 && d.summary.union === self.summary.union,
+         'the parked placeholder leaves the in-scope union (declared alert moved from inBoth to onlyInA)',
+         { inBoth: d.summary.inBoth, union: d.summary.union }, { inBoth: self.summary.inBoth - 1, union: self.summary.union });
+
+  // Symmetric: a repo crawler's placeholder (crawler.scaffold.*) never
+  // reads declared, not live — and never aligns with a real live route.
+  const repo = clone(collisionPack);
+  repo.metadata.annotations = { 'crawler.scaffold.alerting.routes[0]': 'schema-required fallback; no source evidence found in selected environment' };
+  const d2 = diffPacks(adapt(repo), adapt(clone(collisionPack)), { scopeMode: 'all' });
+  assert(!d2.layers.L4.onlyInA.some(e => e.artefact?.id === 'ALR-01')
+         && !d2.layers.L4.inBoth.some(e => e.a?.id === 'ALR-01'),
+         'a repo scaffold route is neither onlyInA nor paired');
+  assert(d2.layers.L4.scaffold.some(e => e.side === 'a' && e.artefact?.id === 'ALR-01'),
+         'the repo scaffold route is parked on side a');
+  assert(d2.layers.L4.onlyInB.some(e => e.artefact?.id === 'ALR-01'),
+         'the live route the repo only had a placeholder for reads live, not declared');
 }
 
 report('diff');

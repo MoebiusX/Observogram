@@ -1,0 +1,7 @@
+{
+  "_synthetic": "hand-written 2026-09-07 — replace with a recording via npm run record-fixtures",
+  "_shape": "Grafana GET /api/datasources/uid/:uid/health",
+  "_uid": "synthetic-prom",
+  "status": "OK",
+  "message": "Successfully queried the Prometheus API."
+}

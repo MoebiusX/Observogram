@@ -295,6 +295,97 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
   assert(filePack.partial === false, 'non-live packs (no mcp.url) never claim partial live evidence', filePack);
 
   assert(partialLiveEvidence(null).partial === false, 'null pack is handled');
+
+  // Additive keys: unsupported families, per-family errors, vantage.
+  assert(clean.vantage === 'full' && clean.unsupported.length === 0 && Object.keys(clean.errors).length === 0,
+         'a clean live draft has vantage full, no unsupported families, no errors', clean);
+  assert(partial.vantage === 'partial', 'failed probes give vantage partial', partial.vantage);
+  assert(emptyOnly.vantage === 'full', 'empty probes do not degrade the vantage', emptyOnly.vantage);
+  assert(filePack.vantage === 'none', 'non-live packs have vantage none', filePack.vantage);
+  assert(partialLiveEvidence(null).vantage === 'none', 'null pack has vantage none');
+
+  const restricted = partialLiveEvidence(liveDraft({ 'mcp.probesUnsupported': 'metrics,routes' }));
+  assert(restricted.vantage === 'restricted' && restricted.partial === false,
+         'unsupported families without failures give vantage restricted and do NOT mark the evidence partial', restricted);
+  assert(restricted.unsupported.join(',') === 'metrics,routes', 'unsupported families parse from mcp.probesUnsupported', restricted.unsupported);
+
+  const mixed = partialLiveEvidence(liveDraft({
+    'mcp.probesFailed': 'metrics',
+    'mcp.probesUnsupported': 'routes',
+    'mcp.probeErrors.metrics': 'HTTP 503 Service Unavailable',
+  }));
+  assert(mixed.vantage === 'partial' && mixed.partial === true,
+         'a failure outranks an unsupported family: vantage partial', mixed);
+  assert(mixed.errors.metrics === 'HTTP 503 Service Unavailable' && Object.keys(mixed.errors).length === 1,
+         'per-family errors are read from mcp.probeErrors.<family>', mixed.errors);
+
+  const lost = partialLiveEvidence(liveDraft({
+    'mcp.probesAttempted': 'metrics,routes,dashboards',
+    'mcp.probesFailed': 'metrics,routes',
+    'mcp.probesUnsupported': 'dashboards',
+  }));
+  assert(lost.vantage === 'lost' && lost.partial === true,
+         'every attempted family failed or unsupported gives vantage lost', lost);
+
+  const allUnsupported = partialLiveEvidence(liveDraft({
+    'mcp.probesAttempted': 'metrics,routes',
+    'mcp.probesUnsupported': 'metrics,routes',
+  }));
+  assert(allUnsupported.vantage === 'lost' && allUnsupported.partial === false,
+         'an MCP that exposes none of the probed families is lost, yet not partial (nothing failed)', allUnsupported);
+
+  const nothingAttempted = partialLiveEvidence({ meta: { annotations: { 'mcp.url': 'https://example.test/mcp' } } });
+  assert(nothingAttempted.vantage === 'full', 'a live draft without probe annotations (older pack) reads full, not lost', nothingAttempted);
+}
+
+// Fresh names the vantage: a refresh whose every probe family failed is
+// still a refresh (pass stays a staleness test), but the detail must not
+// read as a fresh look at production.
+{
+  const lost = computeDiagnosticGrade(
+    baseRepoPack(),
+    livePack({
+      'mcp.url': 'https://example.test/mcp',
+      'mcp.refreshedAt': '2026-06-09T11:00:00Z',
+      'mcp.probesAttempted': 'recording_rules,alert_rules,dashboards',
+      'mcp.probesFailed': 'recording_rules,alert_rules',
+      'mcp.probesUnsupported': 'dashboards',
+    }),
+    fullPosture(),
+    'production-live',
+    null,
+    { nowMs },
+  );
+  const freshLost = criterion(lost, 'fresh');
+  assert(freshLost.pass === true, 'fresh pass/fail stays a staleness test (scoring unchanged)', freshLost);
+  assert(/vantage lost/.test(freshLost.detail) && /failed: recording_rules, alert_rules/.test(freshLost.detail)
+         && /not exposed: dashboards/.test(freshLost.detail),
+         'fresh detail says the vantage was lost and names the failed / not-exposed families', freshLost.detail);
+
+  const partial = computeDiagnosticGrade(
+    baseRepoPack(),
+    livePack({
+      'mcp.url': 'https://example.test/mcp',
+      'mcp.refreshedAt': '2026-06-09T11:00:00Z',
+      'mcp.probesAttempted': 'recording_rules,alert_rules,dashboards',
+      'mcp.probesSucceeded': 'recording_rules,alert_rules',
+      'mcp.probesFailed': 'dashboards',
+    }),
+    fullPosture(),
+    'production-live',
+    null,
+    { nowMs },
+  );
+  const freshPartial = criterion(partial, 'fresh');
+  assert(freshPartial.pass === true && /vantage partial: failed dashboards/.test(freshPartial.detail),
+         'fresh detail names a partial vantage and its failed families', freshPartial.detail);
+
+  const full = computeDiagnosticGrade(
+    baseRepoPack(),
+    livePack({ 'mcp.url': 'https://example.test/mcp', 'mcp.refreshedAt': '2026-06-09T11:00:00Z', 'mcp.probesAttempted': 'a', 'mcp.probesSucceeded': 'a' }),
+    fullPosture(), 'production-live', null, { nowMs },
+  );
+  assert(!/vantage/.test(criterion(full, 'fresh').detail), 'a full vantage adds nothing to the fresh detail', criterion(full, 'fresh').detail);
 }
 
 // ---------- prettyDiffKey (studio/artifact-model.mjs) ----------

@@ -31,6 +31,14 @@
 //     maxDeclaredNotLive: 0
 //     maxDrifted: 5
 //     maxLiveAgeHours: 24
+//     failOnPartialEvidence: true   # any probe family FAILED → the verdict is not trustworthy
+//     maxUnhealthy: 0               # scrape jobs down + unhealthy rules observed on the wire
+//
+// Vantage: when Pack B is a live MCP source and the fetch itself fails
+// (endpoint down, core tools unavailable), the run still leaves a record
+// with outcome 'vantage-lost' before the error propagates (exit 2) — a
+// total loss of the observation point is a point in the drift history,
+// not a hole in it.
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { resolve, join, dirname, extname } from 'node:path';
@@ -40,9 +48,10 @@ import { validateCanonical } from './validator.mjs';
 import { adapt } from './adapter.mjs';
 import { evaluateConformance } from './conformance.mjs';
 import { diffPacks } from './diff.mjs';
+import { comparePackBranches } from './traceability-graph.mjs';
 import { crawlFiles } from './crawler.mjs';
 import { baseWorkspacePath } from './brand-env.mjs';
-import { computeDiagnosticGrade, computePostureMatrix, DIAGNOSTIC_PASS_SCORE_THRESHOLD } from '../../studio/diagnostic-grade.mjs';
+import { computeDiagnosticGrade, computePostureMatrix, partialLiveEvidence, DIAGNOSTIC_PASS_SCORE_THRESHOLD } from '../../studio/diagnostic-grade.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = JSON.parse(readFileSync(
@@ -175,10 +184,18 @@ async function resolvePackB(def) {
   // Imported lazily: fetch-live-pack is the heaviest module and only the
   // live path needs it. Composition mirrors the server's draft route.
   const { fetchMcp, buildCanonicalPack } = await import('../fetch-live-pack.mjs');
-  const fetched = await fetchMcp({ mcpUrl: m.url, mcpAuth });
-  const refreshedAt = new Date().toISOString();
-  const canonical = buildCanonicalPack({ refreshedAt, mcpUrl: m.url, ...fetched });
-  return { canonical, source: `mcp:${m.url}` };
+  try {
+    const fetched = await fetchMcp({ mcpUrl: m.url, mcpAuth });
+    const refreshedAt = new Date().toISOString();
+    const canonical = buildCanonicalPack({ refreshedAt, mcpUrl: m.url, ...fetched });
+    return { canonical, source: `mcp:${m.url}` };
+  } catch (e) {
+    // The vantage point itself failed (unreachable, core tools missing,
+    // unbuildable answer) — distinct from the configuration errors above,
+    // which never reach the wire and leave no run record.
+    e.vantageLost = true;
+    throw e;
+  }
 }
 
 // ---------- gate ----------
@@ -211,7 +228,81 @@ export function evaluateGate(gate, facts) {
       add('maxLiveAgeHours', `live evidence is ${facts.liveAgeHours.toFixed(1)}h old (max ${gate.maxLiveAgeHours}h)`);
     }
   }
+  // Vantage-aware criteria. A failed probe family is a hole of unknown
+  // size in the live evidence: whatever the diff says about that family
+  // is unverifiable, so a verdict built on it must not pass a gate that
+  // asked for whole evidence. (An EMPTY probe is an honest zero and an
+  // UNSUPPORTED one a restricted tier — neither breaches on its own; the
+  // one exception is a vantage that is entirely lost.)
+  if (gate.failOnPartialEvidence) {
+    const failed = facts.probes?.failed || [];
+    if (failed.length) {
+      add('failOnPartialEvidence', `live evidence is partial: probes failed: ${failed.join(', ')} — verdict not trustworthy`);
+    } else if (facts.vantage === 'lost') {
+      const unsupported = facts.probes?.unsupported || [];
+      add('failOnPartialEvidence', `live evidence is lost: no probe family answered (not exposed: ${unsupported.join(', ') || '-'}) — verdict not trustworthy`);
+    }
+  }
+  if (Number.isFinite(gate.maxUnhealthy)) {
+    const down = facts.scrapeJobsDown ?? 0;
+    const unhealthy = facts.unhealthyRules ?? 0;
+    if (down + unhealthy > gate.maxUnhealthy) {
+      const names = [
+        ...(facts.scrapeJobsDownNames || []).map(n => `job ${n} down`),
+        ...(facts.unhealthyRuleNames || []).map(n => `rule ${n} unhealthy`),
+      ];
+      add('maxUnhealthy', `${down} scrape job(s) down + ${unhealthy} unhealthy rule(s) observed on the wire (max ${gate.maxUnhealthy})`
+        + (names.length ? `: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''}` : ''));
+    }
+  }
   return breaches;
+}
+
+// On-wire liveness facts read from Pack B's fetcher annotations
+// (docs/MCP_INTEGRATION.md). A file-sourced Pack B carries none: every
+// list is empty, counts are 0, toolsExposedCount is null — absence of
+// evidence is reported as absence, never as health.
+export function liveEvidenceFacts(canonicalB) {
+  const ann = canonicalB?.metadata?.annotations || {};
+  const list = (k) => String(ann[k] || '').split(',').map(x => x.trim()).filter(Boolean);
+  const ev = partialLiveEvidence(canonicalB);
+  const scrapeJobsDownNames = list('mcp.discovered.scrape_jobs_down');
+  const unhealthyRuleNames = [
+    ...list('mcp.discovered.recording_rules_unhealthy'),
+    ...list('mcp.discovered.alert_rules_unhealthy'),
+  ];
+  const exposed = Number(ann['mcp.toolsExposedCount']);
+  // Step 2 stack self-metrics counts (mcp.stack.*). status is null when
+  // Pack B carries no panel (file-sourced, or a pre-step-2 refresh); the
+  // counts are then 0 — an absence, never a healthy stack. No gate key
+  // reads these: a sample is a signal, not a verdict.
+  const stackStatus = ann['mcp.stack.status'] === 'sampled' || ann['mcp.stack.status'] === 'not-attempted'
+    ? ann['mcp.stack.status'] : null;
+  const stackCount = (k) => { const v = Number(ann[k]); return Number.isFinite(v) ? v : 0; };
+  return {
+    probes: {
+      attempted: ev.attempted,
+      succeeded: list('mcp.probesSucceeded'),
+      empty: ev.empty,
+      failed: ev.failed,
+      unsupported: ev.unsupported,
+    },
+    probeErrors: ev.errors,
+    vantage: ev.vantage,
+    toolsExposedCount: ann['mcp.toolsExposedCount'] != null && String(ann['mcp.toolsExposedCount']) !== '' && Number.isFinite(exposed) ? exposed : null,
+    scrapeJobsDown: scrapeJobsDownNames.length,
+    scrapeJobsDownNames,
+    unhealthyRules: unhealthyRuleNames.length,
+    unhealthyRuleNames,
+    stack: {
+      status: stackStatus,
+      reason: stackStatus === 'not-attempted' ? String(ann['mcp.stack.reason'] || 'not attempted') : null,
+      sampled: stackCount('mcp.stack.sampled'),
+      empty: stackCount('mcp.stack.empty'),
+      failed: stackCount('mcp.stack.failed'),
+      notAttempted: stackCount('mcp.stack.notAttempted'),
+    },
+  };
 }
 
 // ---------- the run ----------
@@ -222,7 +313,28 @@ export async function runJourney(def, { baseDir } = {}) {
   const t0 = Date.now();
 
   const a = await resolvePackA(def, def.__baseDir);
-  const b = await resolvePackB(def);
+  let b;
+  try {
+    b = await resolvePackB(def);
+  } catch (e) {
+    // Only a LIVE source that reached the wire can lose its vantage; a
+    // missing pack file or an unset authEnv is a configuration error and
+    // leaves no record.
+    if (def.packB?.mcp && e?.vantageLost) {
+      writeRunRecord(def.name, startedAt, {
+        journey: def.name,
+        startedAt,
+        tookMs: Date.now() - t0,
+        outcome: 'vantage-lost',
+        error: String(e.message || e),
+        packA: { source: a.source, name: a.canonical?.metadata?.name || null, version: a.canonical?.metadata?.version || null },
+        packB: { source: `mcp:${def.packB.mcp.url}` },
+        scope: { env: def.env || null, service: def.service || null, scopeMode: def.scopeMode || null },
+        gate: { thresholds: def.gate || {}, breaches: [] },
+      });
+    }
+    throw e;
+  }
 
   for (const [label, pack] of [['packA', a.canonical], ['packB', b.canonical]]) {
     const errors = validateCanonical(pack, SCHEMA);
@@ -231,12 +343,21 @@ export async function runJourney(def, { baseDir } = {}) {
 
   const layeredA = adapt(a.canonical, { environment: def.env || undefined });
   const layeredB = adapt(b.canonical, {});
-  const diff = diffPacks(layeredA, layeredB, { scopeMode: def.scopeMode, service: def.service });
+  // Same construct as the studio's /api/diff: the requirement-chain
+  // comparison rides on the diff, and the grade's Drift-free criterion
+  // reads it when declared commitments exist. Without it the CLI would
+  // grade on raw diff buckets while the studio graded on chain integrity
+  // — two scores for one comparison.
+  const diff = {
+    ...diffPacks(layeredA, layeredB, { scopeMode: def.scopeMode, service: def.service }),
+    traceabilityGraph: comparePackBranches(layeredA, layeredB),
+  };
   const conformance = evaluateConformance(a.canonical);
   const posture = computePostureMatrix(layeredA, layeredB);
   const grade = computeDiagnosticGrade(layeredA, layeredB, posture, null, diff);
 
   const liveRefreshedAt = b.canonical?.metadata?.annotations?.['mcp.refreshedAt'] || null;
+  const live = liveEvidenceFacts(b.canonical);
   // grade.overall.audit is the canonical PASS/FAIL contract (score > 85%).
   const audit = grade.overall?.audit || { scorePctExact: 0, passes: false };
   const facts = {
@@ -248,8 +369,10 @@ export async function runJourney(def, { baseDir } = {}) {
     drifted: diff.summary?.drifted ?? 0,
     aligned: diff.summary?.aligned ?? 0,
     liveAgeHours: hoursSince(liveRefreshedAt),
+    ...live,
   };
   const breaches = evaluateGate(def.gate, facts);
+  const rollup = diff.traceabilityGraph?.rollup || null;
 
   const record = {
     journey: def.name,
@@ -268,7 +391,15 @@ export async function runJourney(def, { baseDir } = {}) {
       schema: grade.gradeSchema ?? 1,
       letter: grade.overall?.instrumentGrade?.letter ?? null,
       letterLabel: grade.overall?.instrumentGrade?.label ?? null,
+      // Which construct Drift-free was scored on: requirement-chain
+      // integrity (studio parity) when declared commitments exist, else
+      // the diff buckets. Explains a score step across a pack change.
+      driftConstruct: rollup && rollup.declaredTotal > 0 ? 'requirement-chain' : 'diff-buckets',
     },
+    traceability: rollup ? {
+      integrityPct: rollup.integrityPct, intact: rollup.intact, partial: rollup.partial,
+      broken: rollup.broken, undeclared: rollup.undeclared, declaredTotal: rollup.declaredTotal,
+    } : null,
     conformance: { scorePercent: conformance.scorePercent, mustPercent: conformance.mustPercent, conformant: conformance.conformant, declaredTier: conformance.declaredTier },
     drift: {
       alignmentPct: facts.alignmentPct,
@@ -277,21 +408,39 @@ export async function runJourney(def, { baseDir } = {}) {
       declaredNotLive: facts.declaredNotLive,
       liveNotDeclared: facts.liveNotDeclared,
       outOfScope: diff.summary?.outOfScope ?? 0,
+      // Placeholders parked on either side (never paired, never counted).
+      scaffold: diff.summary?.scaffold ?? 0,
     },
     freshness: { liveAgeHours: facts.liveAgeHours, refreshedAt: liveRefreshedAt },
+    // On-wire liveness of the vantage point itself (Pack B annotations).
+    // probes.* are family NAMES so a breach can say which hole it saw.
+    probes: live.probes,
+    probeErrors: live.probeErrors,
+    vantage: live.vantage,
+    toolsExposedCount: live.toolsExposedCount,
+    scrapeJobsDown: live.scrapeJobsDown,
+    unhealthyRules: live.unhealthyRules,
+    // Step 2 stack self-metric sample counts — recorded as a signal for the
+    // drift-over-time series, never gated on.
+    stack: live.stack,
     gate: { thresholds: def.gate || {}, breaches },
     outcome: breaches.length ? 'gate-failed' : 'pass',
   };
 
-  // History: one JSON per run — the drift-over-time series.
+  writeRunRecord(def.name, startedAt, record);
+  return record;
+}
+
+// History: one JSON per run — the drift-over-time series. A write failure
+// is reported on the record, never thrown: the verdict already exists.
+function writeRunRecord(name, startedAt, record) {
   try {
-    const dir = runsDir(def.name);
+    const dir = runsDir(name);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, `${startedAt.replace(/[:.]/g, '-')}.json`), JSON.stringify(record, null, 2));
   } catch (e) {
     record.historyError = e.message;
   }
-  return record;
 }
 
 export function readJourneyRuns(name, { limit = 50 } = {}) {
@@ -307,7 +456,36 @@ export function readJourneyRuns(name, { limit = 50 } = {}) {
 
 // ---------- report rendering ----------
 
+function probesLine(r) {
+  const p = r.probes;
+  if (!p || !p.attempted?.length) return (!r.vantage || r.vantage === 'none') ? 'no live probes (file-sourced B)' : `vantage ${r.vantage}`;
+  const fam = (xs) => (xs && xs.length) ? xs.join(', ') : '-';
+  return `${p.attempted.length} attempted · succeeded: ${fam(p.succeeded)} · empty: ${fam(p.empty)} · **failed: ${fam(p.failed)}** · not exposed: ${fam(p.unsupported)} · vantage **${r.vantage}**`
+    + (r.toolsExposedCount != null ? ` · ${r.toolsExposedCount} MCP tools exposed` : '');
+}
+
+function stackLine(r) {
+  const s = r.stack;
+  if (!s || !s.status) return 'no stack sample (file-sourced B or pre-step-2 refresh)';
+  if (s.status === 'not-attempted') return `not attempted (${s.reason || 'no reason recorded'})`;
+  return `sampled ${s.sampled ?? 0} · empty ${s.empty ?? 0} · failed ${s.failed ?? 0}`;
+}
+
 export function renderJourneyMarkdown(r) {
+  if (r.outcome === 'vantage-lost') {
+    return [
+      `## ⚠️ Journey \`${r.journey}\` — VANTAGE LOST`,
+      '',
+      `| | |`,
+      `|---|---|`,
+      `| Declared (A) | \`${r.packA?.name || '?'}@${r.packA?.version || '?'}\` — ${r.packA?.source || '?'} |`,
+      `| Live (B) | ${r.packB?.source || '?'} — **unreachable** |`,
+      `| Error | ${r.error || '?'} |`,
+      `| Took | ${r.tookMs ?? '?'}ms |`,
+      '',
+      '_No verdict: the live vantage point did not answer, so nothing about the declared artefacts could be verified. Recorded so the loss is a point in history, not a gap._',
+    ].join('\n');
+  }
   const icon = r.outcome === 'pass' ? '✅' : '❌';
   const lines = [
     `## ${icon} Journey \`${r.journey}\` — ${r.outcome === 'pass' ? 'PASS' : 'GATE FAILED'}`,
@@ -321,6 +499,9 @@ export function renderJourneyMarkdown(r) {
     `| Conformance | ${r.conformance.scorePercent}% (${r.conformance.declaredTier}, ${r.conformance.conformant ? 'conformant' : 'not conformant'}) |`,
     `| Alignment | **${r.drift.alignmentPct}%** — ${r.drift.aligned} aligned · ${r.drift.drifted} drifted · ${r.drift.declaredNotLive} declared-not-live · ${r.drift.liveNotDeclared} live-not-declared |`,
     `| Live freshness | ${r.freshness.liveAgeHours === null ? 'no refresh timestamp' : r.freshness.liveAgeHours.toFixed(1) + 'h old'} |`,
+    `| Live probes | ${probesLine(r)} |`,
+    `| On-wire health | ${r.scrapeJobsDown ?? 0} scrape job(s) down · ${r.unhealthyRules ?? 0} unhealthy rule(s) |`,
+    `| Stack self-metrics | ${stackLine(r)} |`,
     `| Took | ${r.tookMs}ms |`,
   ];
   if (r.gate.breaches.length) {

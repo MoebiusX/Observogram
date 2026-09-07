@@ -1,0 +1,11 @@
+{
+  "_synthetic": "hand-written 2026-09-07 — replace with a recording via npm run record-fixtures",
+  "_shape": "otel-mcp-server metrics_query: bare { result } instant vector",
+  "_query": "sum(up == 1) / count(up)",
+  "result": [
+    {
+      "metric": {},
+      "value": [1757203200, "0.98"]
+    }
+  ]
+}

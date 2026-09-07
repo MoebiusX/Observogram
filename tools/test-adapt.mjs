@@ -232,6 +232,44 @@ assert(chain?.alerts?.some(a => a.name === 'CheckoutLatencyBudgetBurn'),
        'traceability links live alert rule by requirement tokens');
 assert(chain?.gaps?.length === 0, 'traceability chain is complete', chain?.gaps, []);
 
+// Alert evidence honesty in the requirement chain: a live alerting rule the
+// ruler reports unhealthy is listed but is NOT evidence, and the fetcher's
+// scaffold burn-rate placeholder is not an alert at all.
+{
+  const unhealthyFixture = clone(traceFixture);
+  unhealthyFixture.metadata.annotations['mcp.discovered.alert_rules_unhealthy'] = 'CheckoutLatencyBudgetBurn';
+  const c = adapt(unhealthyFixture).traceability.chains[0];
+  const live = c.alerts.find(a => a.name === 'CheckoutLatencyBudgetBurn');
+  assert(live?.verified === false && live?.health === 'err',
+         'an unhealthy live alert rule is listed with verified:false and health:err', live);
+  assert(c.alerts.some(a => a.type === 'burn_rate' && a.artefactId === 'POL-01'),
+         'the declared burn-rate entry resolves to its POL artefact', c.alerts);
+  assert(!c.gaps.includes('missing_alert_evidence'),
+         'a declared (non-scaffold) burn-rate alert still counts as alert evidence', c.gaps);
+
+  const scaffoldFixture = clone(traceFixture);
+  scaffoldFixture.metadata.annotations['mcp.scaffold.policy.burn_rate_alerts[0]'] = 'schema-required fallback; no burn-rate alerting rule discovered via MCP';
+  scaffoldFixture.metadata.annotations['mcp.discovered.alert_rule_names'] = 'NodeDown';
+  const s = adapt(scaffoldFixture);
+  const sc = s.traceability.chains[0];
+  assert(s.layers.L4.policy[0].source === 'Scaffold', 'fixture: the burn-rate entry projects as Scaffold');
+  assert(!sc.alerts.some(a => a.type === 'burn_rate'),
+         'a scaffold burn-rate placeholder is not listed as alert evidence', sc.alerts);
+  assert(sc.gaps.includes('missing_alert_evidence') && s.traceability.summary.withAlerts === 0,
+         'the placeholder does not suppress missing_alert_evidence, and the summary counts no alerts',
+         { gaps: sc.gaps, withAlerts: s.traceability.summary.withAlerts });
+
+  const onlyUnhealthy = clone(scaffoldFixture);
+  onlyUnhealthy.metadata.annotations['mcp.discovered.alert_rule_names'] = 'CheckoutLatencyBudgetBurn';
+  onlyUnhealthy.metadata.annotations['mcp.discovered.alert_rules_unhealthy'] = 'CheckoutLatencyBudgetBurn';
+  const u = adapt(onlyUnhealthy);
+  const uc = u.traceability.chains[0];
+  assert(uc.alerts.length === 1 && uc.alerts[0].verified === false
+         && uc.gaps.includes('missing_alert_evidence') && u.traceability.summary.withAlerts === 0,
+         'an unhealthy live rule alone leaves the alert gap open and withAlerts at 0',
+         { alerts: uc.alerts, gaps: uc.gaps, withAlerts: u.traceability.summary.withAlerts });
+}
+
 const fullMetricFixture = clone(traceFixture);
 fullMetricFixture.metadata.annotations['mcp.discovered.metric_names'] =
   '["checkout_latency_seconds_bucket","checkout_latency_seconds_count","process_cpu_seconds_total"]';

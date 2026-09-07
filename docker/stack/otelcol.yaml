@@ -1,0 +1,55 @@
+# OpenTelemetry Collector (contrib 0.115.1) for the validation stack.
+# Two exporters: `debug` (always succeeds) and an OTLP exporter to a dead
+# endpoint with a sending queue + bounded retries, so queue_size /
+# queue_capacity exist at startup and the send_failed_* counters can appear
+# once something is exported (the live suite sends one OTLP request and
+# records the before/after exposition — the lazy-registration probe).
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 200
+  batch:
+    timeout: 1s
+
+exporters:
+  debug:
+    verbosity: basic
+  otlp/dead:
+    endpoint: dead:4317
+    tls:
+      insecure: true
+    sending_queue:
+      enabled: true
+      queue_size: 100
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 2s
+      max_elapsed_time: 8s
+
+service:
+  telemetry:
+    metrics:
+      level: detailed
+      address: 0.0.0.0:8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug, otlp/dead]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug, otlp/dead]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug, otlp/dead]

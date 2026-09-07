@@ -1,0 +1,24 @@
+# Promtail tails a sample log mounted into the container and pushes to a
+# Loki that does not exist, so promtail_sent_* / retries / dropped entries
+# all move on a fresh stack.
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://dead:3100/loki/api/v1/push
+    backoff_config:
+      min_period: 500ms
+      max_period: 5s
+      max_retries: 3
+
+scrape_configs:
+  - job_name: container-logs
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: varlogs
+          __path__: /var/log/*.log

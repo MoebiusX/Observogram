@@ -110,9 +110,13 @@ export const CAPABILITIES = Object.freeze({
     // (Grafana skill). The others are legacy / community-MCP names. The
     // search limit is env-tunable, so the caller injects it at resolve time
     // (runtimeArgs) rather than this layer reading process.env.
+    // grafana_dashboard_get is NOT a search candidate: it requires a `uid`
+    // and belongs to the dashboard_detail enrichment below. Listing it here
+    // made a failed search fall through to a uid-less call whose -32602
+    // "Invalid arguments" error then masked the real search error (a 401
+    // from Grafana on the public Krystaline tier, recorded 2026-09-07).
     candidates: [
       { id: 'search', tool: 'grafana_dashboards_search', args: { type: 'dash-db' }, runtimeArgs: { limit: 'grafanaDashboardSearchLimit' } },
-      { tool: 'grafana_dashboard_get' },
       { tool: 'list_dashboards' },
       { tool: 'grafana_dashboards' },
       { tool: 'grafana_list_dashboards' },
@@ -170,6 +174,7 @@ export const CAPABILITIES = Object.freeze({
   },
   build_info_versions: {
     kind: 'version',
+    responseShape: 'instant-vector',
     // Carrier for the BUILD_INFO_PROBES table below: one metrics_query per
     // `*_build_info` metric, version read from the first series' labels.
     candidates: [{ tool: 'metrics_query' }],
@@ -185,6 +190,52 @@ export const CAPABILITIES = Object.freeze({
     // Rule-evidence fallback: when the rule-discovery probes come back
     // empty, ALERTS{alertstate="firing"} still attests alerting is real.
     candidates: [{ tool: 'metrics_query' }],
+  },
+
+  // ---- stack self-metrics (step 2 acquisition): signals, never verdicts --
+  // Every row below is SAMPLED point-in-time evidence about the stack's own
+  // health. None of them may create a Verified stamp, an SLO verdict or a
+  // grade change; when the tool is not advertised the outcome is
+  // "not attempted" with the reason, never "absent".
+  stack_self_metrics: {
+    kind: 'evidence',
+    responseShape: 'instant-vector',
+    // Carrier for STACK_SELF_METRIC_PROBES
+    // (tools/lib/contracts/stack-self-metrics.mjs): one metrics_query per
+    // eligible alias, the instant-vector value read from the first series.
+    candidates: [{ tool: 'metrics_query' }],
+  },
+  alertmanager_status: {
+    kind: 'evidence',
+    responseShape: 'status-object',
+    // Alertmanager API v2 /status: { versionInfo, uptime, cluster, config }.
+    candidates: [{ tool: 'alertmanager_status' }],
+  },
+  alertmanager_silences: {
+    kind: 'evidence',
+    responseShape: 'silences',
+    // Alertmanager API v2 /silences: [{ id, status: { state }, matchers }].
+    candidates: [{ tool: 'alertmanager_silences' }],
+  },
+  grafana_datasources: {
+    kind: 'evidence',
+    responseShape: 'datasources',
+    // Grafana /api/datasources: [{ uid, name, type }].
+    candidates: [{ tool: 'grafana_datasources' }],
+  },
+  grafana_datasource_health: {
+    kind: 'enrich',
+    responseShape: 'health-object',
+    // One call per datasource uid (capped by the caller) after
+    // grafana_datasources answers: { status, message }.
+    candidates: [{ tool: 'grafana_datasource_health' }],
+  },
+  grafana_contact_points: {
+    kind: 'evidence',
+    responseShape: 'contact-points',
+    // Grafana provisioning API /api/v1/provisioning/contact-points:
+    // [{ uid, name, type }].
+    candidates: [{ tool: 'grafana_contact_points' }],
   },
 });
 

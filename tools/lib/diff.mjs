@@ -21,8 +21,16 @@
 //                  caller can show spec differences side-by-side
 //     - outOfScope  present in B, in a family A declares NOTHING of — the rest
 //                  of the platform's inventory, kept out of the drift headline
+//     - scaffold   artefacts whose `source` is 'Scaffold' on EITHER side — the
+//                  schema-forced placeholders a crawler or the live fetcher had
+//                  to invent (crawler.scaffold.* / mcp.scaffold.*). A
+//                  placeholder is not a declaration and not live evidence, so
+//                  it never pairs: a declared burn-rate alert must not read
+//                  `aligned` against the live pack's fallback entry, and a repo
+//                  placeholder must not read `declared, not live`. Parked here,
+//                  outside every ratio.
 //
-//   The classic operations follow:
+//   The classic operations follow (over the concrete, non-scaffold artefacts):
 //     A ∪ B  = onlyInA ∪ inBoth ∪ onlyInB
 //     A ∩ B  = inBoth
 //     A − B  = onlyInA
@@ -86,11 +94,20 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
   const serviceScope = buildServiceScope(aLayered, opts.service);
   const layers = {};
   const collisions = [];
-  let onlyInA = 0, onlyInB = 0, inBoth = 0, aligned = 0, drifted = 0, outOfScope = 0;
+  let onlyInA = 0, onlyInB = 0, inBoth = 0, aligned = 0, drifted = 0, outOfScope = 0, scaffold = 0;
 
   for (const layerId of LAYER_ORDER) {
-    const aItems = layerArtefacts(aLayered, layerId);
-    const bItems = layerArtefacts(bLayered, layerId);
+    const aAll = layerArtefacts(aLayered, layerId);
+    const bAll = layerArtefacts(bLayered, layerId);
+    // Placeholders never pair (see the header): park them before matching
+    // so a declared artefact cannot align with, or drift against, a
+    // schema-forced fallback on the other side.
+    const aItems = aAll.filter((x) => !isScaffoldArtefact(x));
+    const bItems = bAll.filter((x) => !isScaffoldArtefact(x));
+    const parked = [
+      ...aAll.filter(isScaffoldArtefact).map((artefact) => ({ side: 'a', artefact })),
+      ...bAll.filter(isScaffoldArtefact).map((artefact) => ({ side: 'b', artefact })),
+    ];
 
     const aByKey = groupByKey(aItems);
     const bByKey = groupByKey(bItems);
@@ -107,7 +124,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     const aKinds = new Set();
     for (const k of aByKey.keys()) aKinds.add(k.slice(0, k.indexOf('::')));
 
-    const bucket = { onlyInA: [], onlyInB: [], inBoth: [], outOfScope: [] };
+    const bucket = { onlyInA: [], onlyInB: [], inBoth: [], outOfScope: [], scaffold: [] };
 
     for (const [k, aGroup] of aByKey) {
       if (bByKey.has(k)) {
@@ -134,6 +151,13 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     bucket.onlyInB.sort((x, y) => x.key.localeCompare(y.key));
     bucket.inBoth.sort ((x, y) => x.key.localeCompare(y.key));
     bucket.outOfScope.sort((x, y) => x.key.localeCompare(y.key));
+    // Parked placeholders keep their behavioural key (with the side, so a
+    // placeholder present on both sides stays two entries) for display.
+    parked
+      .sort((x, y) => `${x.side}:${keyOf(x.artefact)}`.localeCompare(`${y.side}:${keyOf(y.artefact)}`))
+      .forEach(({ side, artefact }, i) => {
+        bucket.scaffold.push({ key: `${keyOf(artefact)}@${side}#${String(i + 1).padStart(2, '0')}`, side, artefact });
+      });
 
     // Per-layer aligned/drifted split of the matched pairs.
     bucket.aligned = bucket.inBoth.filter((e) => e.match === 'aligned').length;
@@ -146,6 +170,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     aligned += bucket.aligned;
     drifted += bucket.drifted;
     outOfScope += bucket.outOfScope.length;
+    scaffold += bucket.scaffold.length;
   }
 
   return {
@@ -169,6 +194,8 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
       // surfaced separately so the headline drift count isn't dominated by the
       // rest of the platform's inventory.
       outOfScope,
+      // Placeholders parked on either side (never paired, never counted).
+      scaffold,
       union: onlyInA + onlyInB + inBoth,
       aTotal: onlyInA + inBoth,
       bTotal: onlyInB + inBoth,
@@ -396,6 +423,12 @@ function isUsefulMetricPrefix(prefix) {
 
 function compact(value) {
   return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+// A schema-forced placeholder projected by the adapter from a
+// crawler.scaffold.* / mcp.scaffold.* marker. Not a declaration, not live.
+function isScaffoldArtefact(artefact) {
+  return artefact?.source === 'Scaffold';
 }
 
 function groupByKey(items) {

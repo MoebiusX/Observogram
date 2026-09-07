@@ -530,7 +530,7 @@ function renderRequirementChain(chain) {
   lanes.appendChild(renderRtLane('exporter', chain.exporters?.map(e => e.title || e.id), 'missing'));
   lanes.appendChild(renderRtLane('scrape', scrapeTraceLabels(chain.scrapeJobs), 'missing'));
   lanes.appendChild(renderRtLane('dashboard', dashboardTraceLabels(chain.dashboards), 'missing'));
-  lanes.appendChild(renderRtLane('alert', chain.alerts?.map(a => a.name), 'missing'));
+  lanes.appendChild(renderRtLane('alert', chain.alerts?.map(a => alertTraceLabel(a)), 'missing'));
   row.appendChild(lanes);
 
   if (chain.gaps?.length || chain.notes?.length) {
@@ -587,6 +587,13 @@ function renderRtLane(label, items = [], emptyLabel = 'missing') {
 function metricTraceLabel(metric) {
   if (!metric) return '';
   return `${metric.name}${metric.verified === false ? ' (unverified)' : ''}`;
+}
+
+// A live alerting rule the ruler reports unhealthy is listed (it exists)
+// but flagged: it is not alert evidence and does not close the gap.
+function alertTraceLabel(alert) {
+  if (!alert) return '';
+  return `${alert.name}${alert.verified === false ? ' (unhealthy)' : ''}`;
 }
 
 function scrapeTraceLabels(scrape) {
@@ -915,6 +922,8 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
       ...rawOnlyInA.filter(e => isScaffoldDiffEntry(e)),
       ...rawOnlyInB.filter(e => isScaffoldDiffEntry(e)),
       ...bucket.inBoth.filter(e => passesLens(e, 'a') && isScaffoldDiffEntry(e)),
+      // The engine parks placeholders before pairing (diffPacks `scaffold`).
+      ...(bucket.scaffold || []).filter(e => passesLens(e, e.side || 'b')),
     ];
     // Live members of a family this pack declares nothing of — the rest of the
     // platform inventory. Shown muted, never counted as drift.
@@ -1073,7 +1082,7 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
       ${liveEvidence.failed.length} of ${liveEvidence.attempted.length} probe${liveEvidence.failed.length === 1 ? '' : 's'} failed during the live draft
       (<code>${escapeHtml(liveEvidence.failed.join(', '))}</code>) — the live endpoint was likely mid-deploy or overloaded.
       Pack B may be missing whole surfaces, so <strong>"${escapeHtml(frame.aLabel)}" is probably overstated</strong>.
-      Redraft from MCP before acting on this drift.
+      Redraft from MCP before acting on this drift.${(liveEvidence.unsupported || []).length ? ` restricted MCP tier — not exposed: ${escapeHtml(liveEvidence.unsupported.join(', '))}` : ''}
     </div>` : '';
 
   wrap.innerHTML = `

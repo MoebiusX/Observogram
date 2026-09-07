@@ -31,9 +31,17 @@ export function journeySparkline(values, { w = 120, h = 28 } = {}) {
 }
 
 const OUTCOME_META = {
-  'pass':        { icon: '✅', cls: 'is-pass' },
-  'gate-failed': { icon: '❌', cls: 'is-fail' },
+  'pass':         { icon: '✅', cls: 'is-pass' },
+  'gate-failed':  { icon: '❌', cls: 'is-fail' },
+  // The live source did not answer at all — no verdict, recorded so the
+  // loss shows up in the history instead of leaving a gap.
+  'vantage-lost': { icon: '⚠️', cls: 'is-lost' },
 };
+
+function outcomeLabel(last) {
+  if (last.outcome === 'vantage-lost') return `${last.outcome} · live source unreachable`;
+  return `${last.outcome} · alignment ${last.alignmentPct}% · grade ${last.gradeScore}%`;
+}
 
 export function renderJourneysView(view) {
   const section = document.createElement('section');
@@ -128,7 +136,7 @@ async function loadJourneysList(host) {
       <article class="journey-card" data-journey="${escapeHtml(j.name)}">
         <div class="journey-card-head">
           <span class="journey-name">${escapeHtml(j.name)}</span>
-          ${last ? `<span class="journey-outcome ${om.cls}">${om.icon} ${escapeHtml(last.outcome)} · alignment ${last.alignmentPct}% · grade ${last.gradeScore}%</span>`
+          ${last ? `<span class="journey-outcome ${om.cls}">${om.icon} ${escapeHtml(outcomeLabel(last))}</span>`
                  : '<span class="journey-outcome">never run</span>'}
           ${journeySparkline(series)}
           <button type="button" class="ctrl-btn journey-run-btn" data-journey="${escapeHtml(j.name)}">▶ run now</button>
@@ -157,7 +165,8 @@ function renderRunsTable(runs) {
       <td>${escapeHtml(new Date(r.startedAt).toLocaleString())}</td>
       <td>${r.drift?.alignmentPct ?? '?'}%</td>
       <td>${r.grade?.score ?? '?'}%</td>
-      <td>${r.gate?.breaches?.length ? escapeHtml(r.gate.breaches.map(b => b.criterion).join(', ')) : '—'}</td>
+      <td>${r.outcome === 'vantage-lost' ? escapeHtml(`vantage lost: ${r.error || 'unreachable'}`)
+            : r.gate?.breaches?.length ? escapeHtml(r.gate.breaches.map(b => b.criterion).join(', ')) : '—'}</td>
       <td>${r.tookMs ?? '?'} ms</td>
     </tr>`;
   }).join('');
@@ -194,5 +203,7 @@ async function runJourneyNow(name, listHost, btn) {
     toast(`Run failed: ${e.message}`, 'error');
     btn.disabled = false;
     btn.textContent = '▶ run now';
+    // A live source that did not answer still left a vantage-lost record.
+    loadJourneysList(listHost);
   }
 }

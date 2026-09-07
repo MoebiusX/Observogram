@@ -275,6 +275,28 @@ export function modelOf(artefact) {
   return { kind, identity, behavior };
 }
 
+// Spec fields that carry a symbolic reference to another artefact. The
+// `ref:` prefix is authoring syntax — `slo: ref:x` and `slo: x` bind to the
+// same SLO — so IDENTITY already strips it (stripRef); behaviour must agree
+// or a burn alert pairs with itself and then reads as drifted on its own
+// binding. `expr` counts only when the whole value is a reference
+// (`ref:slis.x`), never inside a real expression.
+const REF_KEYS = ['slo', 'sli', 'trigger', 'error_budget_policy'];
+
+// Pure: returns a shallow copy of `spec` with the leading `ref:` removed
+// from the reference-bearing fields. Never mutates its input.
+function stripRefFields(spec) {
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return spec;
+  const out = { ...spec };
+  for (const k of REF_KEYS) {
+    if (typeof out[k] === 'string') out[k] = out[k].replace(/^ref:/, '');
+  }
+  if (typeof out.expr === 'string' && /^ref:[a-z0-9_.:-]+$/i.test(out.expr.trim())) {
+    out.expr = out.expr.trim().replace(/^ref:/, '');
+  }
+  return out;
+}
+
 function behaviorFor(kind, spec) {
   if (kind === 'metric') {
     return canonicalize({ name: spec.name });
@@ -282,7 +304,7 @@ function behaviorFor(kind, spec) {
   if (kind === 'scrape_job') {
     return canonicalize({ job: spec.job });
   }
-  return canonicalize(spec);
+  return canonicalize(stripRefFields(spec));
 }
 
 // Stable primitive key for pairing. A Map needs a string key, so we serialise
@@ -338,6 +360,9 @@ function isExpressionReferenceOnly(value) {
   const s = normalizeExpr(value ?? '');
   if (!s) return true;
   if (/^ref:[a-z0-9_.:-]+$/i.test(s)) return true;
+  // behaviorFor strips the `ref:` prefix before this check runs on the
+  // behaviour fields, so the bare symbolic form counts as reference-only too.
+  if (/^(?:slis|slos)\.[a-z0-9_.:-]+$/i.test(s)) return true;
   if (/^[a-z_:][a-z0-9_:]*(\{[^{}]*\})?$/i.test(s)) return true;
   if (/^(?:\d+(?:\.\d+)?|true|false)$/i.test(s)) return true;
   return false;

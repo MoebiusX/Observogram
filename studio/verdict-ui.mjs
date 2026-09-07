@@ -84,8 +84,12 @@ export function buildVerdictModel({ pack, packB, diff, compareBId, catalogEntry 
       const onlyInA = (bucket.onlyInA || []).filter(e => lensed(e, 'a') && !isScaffoldDiffEntry(e));
       const onlyInB = (bucket.onlyInB || []).filter(e => lensed(e, 'b') && !isScaffoldDiffEntry(e));
       const scaffold = [
-        ...(bucket.onlyInA || []), ...(bucket.onlyInB || []), ...(bucket.inBoth || []),
-      ].filter(e => isScaffoldDiffEntry(e));
+        ...[
+          ...(bucket.onlyInA || []), ...(bucket.onlyInB || []), ...(bucket.inBoth || []),
+        ].filter(e => isScaffoldDiffEntry(e)),
+        // The engine parks placeholders before pairing (diffPacks `scaffold`).
+        ...(bucket.scaffold || []),
+      ];
       const outOfScope = (bucket.outOfScope || []).filter(e => lensed(e, 'b'));
 
       totals.aligned += aligned.length;
@@ -382,7 +386,7 @@ export function partialEvidenceBanner(model) {
       (${ev.attempted.length - ev.failed.length} of ${ev.attempted.length} surfaces responded) — the endpoint was likely mid-deploy or overloaded.
       Anything that lives on the failed surface is invisible to this comparison, so
       <strong>"${escapeHtml(aLabel)}" is an upper bound, not a count</strong>.
-      Redraft from MCP before acting on this drift.
+      Redraft from MCP before acting on this drift.${(ev.unsupported || []).length ? ` restricted MCP tier — not exposed: ${escapeHtml(ev.unsupported.join(', '))}` : ''}
     </div>`;
 }
 

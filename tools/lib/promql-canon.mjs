@@ -7,6 +7,10 @@
 //   1. label-matcher order inside a selector:  {b="2",a="1"} ≡ {a="1",b="2"}
 //   2. aggregation grouping label order:       sum by (b, a) ≡ sum by (a, b)
 //
+// plus two whitespace tightenings that never touch tokens: structural
+// punctuation (`rate( x [5m] )` ≡ `rate(x[5m])`) and the symbolic binary
+// operators (`a / b` ≡ `a/b`; `-` and keyword operators excluded).
+//
 // Everything else on the contract's non-goals list stays untouched: no
 // algebraic rewrites, no binary-expression reordering, no regex
 // equivalence, no histogram folding. Canonicalization only applies when
@@ -112,6 +116,57 @@ function tightenStructuralWhitespace(expr) {
   return out;
 }
 
+// Symbolic binary / comparison operators whose surrounding spaces are
+// cosmetic: `a / b` ≡ `a/b`, `rate(x[5m]) > 0.5` ≡ `rate(x[5m])>0.5`.
+// Longest first so `<=` is never read as `<` + `=`. Deliberately absent:
+//   - `-`: unary/binary ambiguity (`a - -b` must stay as written);
+//   - `=` alone: a label matcher, not an operator (`a = "1"` is left to
+//     the selector pass, which only trims);
+//   - keyword operators (and/or/unless/by/on/ignoring/group_*/bool/offset):
+//     the space IS the token boundary.
+const BINARY_OPERATORS = ['==', '!=', '<=', '>=', '=~', '!~', '+', '*', '/', '%', '^', '<', '>'];
+// Characters that could extend an operator token if glued to one: `a < = b`
+// (which does not parse) must not tighten into `a<=b` (which does), so a
+// single space is kept between an operator and one of these.
+const OPERATOR_EXTENDERS = '=~!<>';
+
+function operatorAt(expr, i) {
+  for (const op of BINARY_OPERATORS) if (expr.startsWith(op, i)) return op;
+  return null;
+}
+
+// Remove spaces adjacent to the symbolic binary operators, outside strings.
+// Applied only to parser-proven expressions (see canonicalizePromql); it
+// never merges identifiers because every operator here is punctuation.
+function tightenOperatorWhitespace(expr) {
+  let out = '';
+  let quote = null;
+  for (let i = 0; i < expr.length; i++) {
+    const ch = expr[i];
+    if (quote) {
+      out += ch;
+      if (ch === '\\' && i + 1 < expr.length) out += expr[++i];
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; out += ch; continue; }
+    const op = operatorAt(expr, i);
+    if (!op) { out += ch; continue; }
+    // Trailing spaces before the operator go, unless gluing would form a
+    // different token (`a = <b` stays apart).
+    let trimmed = out.replace(/ +$/, '');
+    if (trimmed.length !== out.length && OPERATOR_EXTENDERS.includes(trimmed[trimmed.length - 1])) trimmed += ' ';
+    out = trimmed + op;
+    i += op.length - 1;
+    // Leading spaces after the operator go, same guard.
+    let j = i + 1;
+    while (j < expr.length && expr[j] === ' ') j++;
+    if (j > i + 1 && j < expr.length && OPERATOR_EXTENDERS.includes(expr[j])) out += ' ';
+    i = j - 1;
+  }
+  return out;
+}
+
 // Sort the label list of aggregation grouping clauses. Strictly `by` and
 // `without` — vector-matching clauses (on/ignoring/group_*) are adjacent
 // to binary-expression semantics the contract fences off for this slice.
@@ -161,6 +216,6 @@ export function canonicalizePromql(value) {
   const sortedSelectors = sortSelectorMatchers(collapsed);
   if (sortedSelectors === null) return { text: collapsed, method: 'textual-fallback', changed: false };
   // Tighten LAST so the canonical form is a fixed point (idempotent).
-  const text = tightenStructuralWhitespace(sortGroupingLabels(sortedSelectors));
+  const text = tightenOperatorWhitespace(tightenStructuralWhitespace(sortGroupingLabels(sortedSelectors)));
   return { text, method: 'parser-proven', changed: text !== collapsed };
 }

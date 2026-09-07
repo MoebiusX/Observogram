@@ -68,7 +68,11 @@ export function adapt(canonical, opts = {}) {
   // schema constrains metadata.annotations to {string: string}).
   const annotations = canonical.metadata?.annotations || {};
   const verifyPrefix = 'mcp.verified.';
-  const scaffoldPrefix = 'crawler.scaffold.';
+  // Scaffold markers come from two writers: the crawler (schema-forced
+  // placeholders with no repo evidence) and the live fetcher (schema-
+  // forced placeholders the MCP did not attest). Both project as
+  // Scaffold — never Declared — so the grade parks them.
+  const scaffoldPrefixes = ['crawler.scaffold.', 'mcp.scaffold.'];
 
   const ctx = {
     spec,
@@ -77,7 +81,7 @@ export function adapt(canonical, opts = {}) {
     sourceOf: (id) => (
       annotations[`${verifyPrefix}${id}`]
         ? 'Verified'
-        : annotations[`${scaffoldPrefix}${id}`] ? 'Scaffold' : 'Declared'
+        : scaffoldPrefixes.some(p => annotations[`${p}${id}`]) ? 'Scaffold' : 'Declared'
     ),
     mcpEvidence: (id) => annotations[`${verifyPrefix}${id}`] ?? undefined,
   };

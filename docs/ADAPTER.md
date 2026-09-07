@@ -177,7 +177,9 @@ Conversion contract:
 - **Honest** — the layered format never carried machine detail (exprs,
   windows, channels); every placeholder a schema-required field forces is
   marked `crawler.scaffold.<symbol>` so it projects as Scaffold, never
-  Declared. Legacy `GAP` items are always scaffolds.
+  Declared. Legacy `GAP` items are always scaffolds. (`sourceOf` honours a
+  second prefix, `mcp.scaffold.<symbol>`, for the placeholders the live
+  fetcher is forced to invent — see `MCP_INTEGRATION.md`.)
 - **Deterministic** — same input, same manifest (timestamps only via
   `opts.now`).
 

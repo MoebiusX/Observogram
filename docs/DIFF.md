@@ -103,13 +103,21 @@ Normalisation rules:
 - Expressions in `expr`, `query`, `promql`, and `expression` are
   order-canonicalized when the expression parses cleanly (parser-proven):
   selector matcher order (`{b="2",a="1"}` ≡ `{a="1",b="2"}`), aggregation
-  grouping label order (`sum by (a,b)` ≡ `sum by (b,a)`), and structural
-  whitespace (`rate( x [5m] )` ≡ `rate(x[5m])`). Anything that fails to
-  parse falls back to whitespace collapse only — recorded as
-  `textual-fallback` by `tools/lib/promql-canon.mjs`. Explicit non-goals
-  (per `PHASE_1_VERDICT_TRUST_RESEARCH.md` Workstream B): no algebraic
-  rewrites, no binary-expression or vector-matching reordering, no regex
-  equivalence, no histogram folding.
+  grouping label order (`sum by (a,b)` ≡ `sum by (b,a)`), structural
+  whitespace (`rate( x [5m] )` ≡ `rate(x[5m])`), and whitespace around the
+  symbolic binary operators `+ * / % ^ == != <= >= < > =~ !~`
+  (`a / b` ≡ `a/b`, `rate(x[5m]) > 0.5` ≡ `rate(x[5m])>0.5`). `-` is never
+  tightened (unary/binary ambiguity) and keyword operators (`and`, `or`,
+  `unless`, `bool`, `offset`, `by`, `on`, …) keep the space that bounds
+  them. Anything that fails to parse falls back to whitespace collapse only
+  — recorded as `textual-fallback` by `tools/lib/promql-canon.mjs`.
+  Explicit non-goals (per `PHASE_1_VERDICT_TRUST_RESEARCH.md` Workstream B):
+  no algebraic rewrites, no binary-expression or vector-matching
+  reordering, no regex equivalence, no histogram folding.
+- A leading `ref:` on the reference-bearing fields `slo`, `sli`, `trigger`,
+  `error_budget_policy` — and on `expr` when the whole value is a reference
+  (`ref:slis.x`) — is authoring syntax, not behaviour: `slo: ref:x` and
+  `slo: x` compare equal, matching what identity already does.
 - `version` blocks compare by `declared` when present.
 - Deployment/presentation fields are stripped:
 
@@ -129,10 +137,21 @@ Each layer (`L1`, `L2`, `L2X`, `L3`, `L4`, `L5`, `GOV`) contains:
 | `onlyInB` | B has it in a family A participates in; A does not |
 | `inBoth` | same identity on both sides, with `aligned` or `drifted` verdict |
 | `outOfScope` | B has it, but A declares nothing in that artefact family |
+| `scaffold` | a placeholder (`source: Scaffold`) on either side — parked before pairing, never counted; entries carry `side` (`a`/`b`) and `artefact` |
 
 `outOfScope` prevents a single-service drift view from being flooded by the
 rest of a platform's live inventory. It is reported, but excluded from the
 in-scope ratios.
+
+`scaffold` holds the schema-forced placeholders the crawler
+(`crawler.scaffold.<symbol>`) or the live fetcher (`mcp.scaffold.<symbol>`)
+had to invent. A placeholder is neither a declaration nor live evidence, so
+it is removed from both sides **before** identity pairing: a declared
+burn-rate alert never reads `aligned` (or `drifted`) against the live pack's
+fallback entry — even when both carry the compiler's default windows on the
+same SLO — and a repo placeholder never reads `declared, not live`. A real
+live artefact whose repo counterpart is only a placeholder reads `live, not
+declared` as it should. `summary.scaffold` counts the parked entries.
 
 ## Summary Ratios
 
@@ -158,6 +177,25 @@ The Diagnose view does not score every delta equally. It uses weighted badness:
 | Live, not declared | 0.15 | shadow signal: useful inventory gap, but less dangerous than false reassurance |
 | Out-of-scope live | 0.0 | excluded platform inventory |
 | Scaffold | 0.0 | schema-required fallback with no source evidence |
+
+`Scaffold` is the adapter's projection of a placeholder stamp on either side:
+`crawler.scaffold.<symbol>` from the repo crawler, `mcp.scaffold.<symbol>` from
+the live fetcher (the `spec.otel` block, collector receivers/processors,
+logs/traces exporters, fallback backends, the `platform-overview` stub, the
+SEV1 route, baselines, guessed SLI/SLOs and the burn-rate placeholder — see
+`MCP_INTEGRATION.md`). Both sides can therefore contribute parked artefacts:
+`diffPacks` moves them to the `scaffold` bucket before pairing (see
+[Buckets](#buckets)), the requirement-chain comparison
+(`comparePackBranches`) refuses a `Scaffold` live node as evidence — a
+declared node against it reads `declared_only`, and a placeholder is never a
+`live_only` node or an `undeclared` branch root — and the requirement
+traceability chain skips a scaffold burn-rate entry when deciding
+`missing_alert_evidence`. A live-pack placeholder therefore never weighs in
+as `Live, not declared` and a repo scaffold never as `Declared, not live` on
+**any** path: the diff-bucket grade, the requirement-chain grade the studio
+and the journey CLI score on, and the journey's `alignmentPct` /
+`declaredNotLive` gate facts (`isScaffoldDiffEntry` still filters older
+diffs that carry no `scaffold` bucket).
 
 Weighted fidelity is:
 

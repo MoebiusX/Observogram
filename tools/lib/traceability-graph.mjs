@@ -240,7 +240,12 @@ export function compareBranches(graphA, graphB) {
   const rootsB = requirementRoots(graphB);
   const aByRoot = new Map(rootsA.map((key) => [rootCompareKey(graphA.nodes.get(key)), buildBranch(graphA, key)]));
   const bByRoot = new Map(rootsB.map((key) => [rootCompareKey(graphB.nodes.get(key)), buildBranch(graphB, key)]));
-  const rootKeys = [...new Set([...aByRoot.keys(), ...bByRoot.keys()])].sort();
+  const rootKeys = [...new Set([...aByRoot.keys(), ...bByRoot.keys()])]
+    // A live-only branch rooted on a placeholder SLO/SLI (the fetcher's
+    // per-service availability guess, `platform_availability`) is not an
+    // undeclared commitment production runs — nothing attested it.
+    .filter((rootKey) => aByRoot.has(rootKey) || !isScaffoldNode(graphB.nodes.get(bByRoot.get(rootKey).rootKey)))
+    .sort();
 
   const branches = rootKeys.map((rootKey) => compareBranch(aByRoot.get(rootKey), bByRoot.get(rootKey), graphB));
   const declared = branches.filter((branch) => branch.hasA);
@@ -273,6 +278,8 @@ function compareBranch(branchA, branchB, liveGraph) {
   if (!branchA && !branchB) throw new Error('compareBranch: at least one branch required');
 
   if (!branchA) {
+    // Placeholders on a live-only branch are not undeclared live artefacts.
+    const liveNodes = branchB.nodes.filter((node) => !isScaffoldNode(node));
     return {
       rootKey: branchB.rootIdentityKey,
       title: branchB.title,
@@ -285,8 +292,8 @@ function compareBranch(branchA, branchB, liveGraph) {
       confidence: branchConfidence(branchB),
       edgeProvenance: branchB.edgeProvenance,
       missingRoles: [],
-      counts: { aligned: 0, drifted: 0, declaredOnly: 0, liveOnly: branchB.nodes.length, unverifiable: 0 },
-      nodes: branchB.nodes.map((node) => nodeVerdict('live_only', null, node)),
+      counts: { aligned: 0, drifted: 0, declaredOnly: 0, liveOnly: liveNodes.length, unverifiable: 0 },
+      nodes: liveNodes.map((node) => nodeVerdict('live_only', null, node)),
     };
   }
 
@@ -360,6 +367,7 @@ function compareBranch(branchA, branchB, liveGraph) {
     if (usedB.has(bNode.key)) continue;
     if (aGroups.has(bNode.identityKey)) continue;
     if (isLiveOnlyInferredMetric(bNode, liveGraph)) continue;
+    if (isScaffoldNode(bNode)) continue;
     nodeVerdicts.push(nodeVerdict('live_only', null, bNode));
   }
 
@@ -710,11 +718,25 @@ function isLoadBearingKind(kind) {
 function canVerifyKind(kind, liveGraph) {
   if (ALWAYS_LIVE_VERIFIABLE.has(kind)) return true;
   if (!PARTIAL_LIVE_VERIFIABLE.has(kind)) return false;
-  return (liveGraph?.byKind.get(kind)?.size || 0) > 0;
+  // A placeholder of the kind (the live pack's scaffold SEV1 route or
+  // dashboard stub) is not proof the live connector can see that kind.
+  return [...(liveGraph?.byKind.get(kind) || [])]
+    .some((key) => !isScaffoldNode(liveGraph.nodes.get(key)));
+}
+
+// A schema-forced placeholder the crawler or the live fetcher had to
+// invent (source 'Scaffold' from a crawler.scaffold.* / mcp.scaffold.*
+// marker). Never live evidence, never an undeclared live artefact.
+function isScaffoldNode(node) {
+  return node?.artefact?.source === 'Scaffold';
 }
 
 function canSatisfyLiveEvidence(bNode, liveGraph) {
   if (!bNode) return false;
+  // The live pack's fallback burn-rate entry, SEV1 route, backends and
+  // collector stages are placeholders: a declared node must fall through
+  // to declared_only against them, never read aligned or drifted.
+  if (isScaffoldNode(bNode)) return false;
   if (bNode.kind !== 'metric') return true;
   if (!bNode.virtual) return true;
   if (!hasMcpSource(liveGraph)) return true;
