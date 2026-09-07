@@ -252,6 +252,12 @@ npm run fetch-live
 ```
 
 The default output is the ignored local file `examples/production-live.pack.yaml`.
+When the MCP exposes `metrics_query`, the fetch also samples the observability
+stack's own self-metrics (scrape, ruler, notify, tsdb, collector, dashboards,
+synthetic, logs, traces) as point-in-time signals — never verdicts, stamps or
+grade inputs; on a restricted tier the pack says `not-attempted` and why.
+`npm run record-fixtures` verifies the alias table behind that sample against
+your endpoint (report only; `-- --write` records fixtures).
 
 See [`docs/MCP_INTEGRATION.md`](docs/MCP_INTEGRATION.md) for the live fetch and
 write-back contract.

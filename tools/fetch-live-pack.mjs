@@ -744,8 +744,10 @@ function instantVectorResult(response) {
 // is missing or non-finite (NaN, +Inf, -Inf) is `empty` with a reason.
 // A `count` row whose answer carries series identities but no sample
 // values counts the series instead — the tolerant reading of a
-// series-only answer for a count-of-series signal.
-function sampleFromInstantVector(row, response) {
+// series-only answer for a count-of-series signal. Exported so the
+// recorder (tools/record-mcp-fixtures.mjs) reads a live answer exactly
+// the way the sampler does.
+export function sampleFromInstantVector(row, response) {
   const result = instantVectorResult(response);
   if (result === null) {
     const v = validateResponseShape('instant-vector', response);

@@ -4,8 +4,9 @@
  *
  * Contract-registry guard. Three jobs:
  *
- * 1. NO TOOL-NAME LITERALS AT CALL SITES — tools/fetch-live-pack.mjs must
- *    resolve every MCP tool name through the contract registry
+ * 1. NO TOOL-NAME LITERALS AT CALL SITES — tools/fetch-live-pack.mjs (and
+ *    the recorder tools/record-mcp-fixtures.mjs) must resolve every MCP
+ *    tool name through the contract registry
  *    (tools/lib/contracts/mcp-capabilities.mjs), never hardcode one. This
  *    scans the source for string literals in callTool / cachedCall /
  *    discoveredToolNames.has positions and fails on any hit, so a future
@@ -43,7 +44,9 @@ const { assert, report } = createHarness({ indent: '  ', truncate: 160 });
 
 // ---------- 1. no tool-name literals at call sites ----------
 
-const GUARDED_FILES = ['tools/fetch-live-pack.mjs'];
+// The recorder verifies the registry against a live server, so it must
+// not carry a second copy of any name either.
+const GUARDED_FILES = ['tools/fetch-live-pack.mjs', 'tools/record-mcp-fixtures.mjs'];
 // String literal directly inside a tool-call position. `rpc('tools/list')`
 // and safe/quiet LABELS are out of scope: rpc takes protocol methods, and
 // labels are diagnostics (kept aligned by sharing the TOOL constants).

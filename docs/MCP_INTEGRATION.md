@@ -137,9 +137,14 @@ JSON arrays (`annotationJson`) at 200 entries; error strings at 200 chars.
 | `mcp.observed.alert_rules` | JSON `[{name, state, health, lastError, lastEvaluation, activeAt}]` | every alerting rule's evaluation state |
 | `mcp.servicesDiscovered`, `mcp.activeAnomalies`, `mcp.baselinesComputed` | comma list, counts | `system_health` / anomaly tools answered (not a measurement of anything in `spec.baselines`) |
 | `mcp.capabilities.*`, `mcp.versions.<product>[.*]` | strings | `backend_capabilities` inventory and observed product versions |
-| `mcp.stack.status`, `mcp.stack.reason`, `mcp.stack.sampled` / `empty` / `failed` / `notInInventory` / `notAttempted`, `mcp.stack.families` | status, reason, counts, `<family>:<best outcome>` list | the stack self-metrics panel (step 2) — see "Stack self-metrics (sampling)"; signals, never verdicts |
-| `mcp.observed.stack_metrics` | JSON `[{id, family, product, expr, value, unit, direction, at, outcome, reason?}]` | every attempted or not-in-inventory stack self-metric row (cap 64) |
-| `mcp.observed.alertmanager`, `mcp.observed.grafana.datasources`, `mcp.observed.grafana.contact_points` | JSON | Alertmanager status + silences, Grafana datasources with health, Grafana contact points |
+| `mcp.stack.status` | `sampled` \| `not-attempted` | the stack self-metrics panel (step 2, "Stack self-metrics (sampling)"): whether it was sampled at all — signals, never verdicts; written only when the fetch sampled |
+| `mcp.stack.reason` | string | only when `not-attempted`: why (`metrics_query not exposed by this MCP (restricted tier)`) |
+| `mcp.stack.sampled` / `empty` / `failed` / `notInInventory` / `notAttempted` | counts (strings) | rows per outcome (`data` rows are `sampled`) |
+| `mcp.stack.families` | comma list of `<family>:<best outcome>` | best outcome per family, `data > empty > failed > not-in-inventory > not-attempted` |
+| `mcp.observed.stack_metrics` | JSON `[{id, family, product, expr, value, unit, direction, at, outcome, reason?}]` | attempted and `not-in-inventory` rows (cap 64); `not-attempted` rows are counted, not listed |
+| `mcp.observed.alertmanager` | JSON `{version, uptime, clusterStatus, silences: {active, total} \| null}` | Alertmanager status surface (`alertmanager_status` + `alertmanager_silences`) |
+| `mcp.observed.grafana.datasources` | JSON `[{uid, name, type, health, message}]` | Grafana datasources with their health (`ok` \| `error` \| `unknown`, message trimmed to 200 chars) |
+| `mcp.observed.grafana.contact_points` | JSON `{count, names}` | Grafana contact points (names capped at 32) |
 
 ### What the fetcher invents, and how it says so
 
@@ -297,8 +302,8 @@ registry rows `stack_self_metrics`, `alertmanager_status`,
 and `grafana_contact_points` carry the tool names; the response shapes
 `instant-vector`, `status-object`, `silences`, `datasources`, `health-object`
 and `contact-points` pin the critical fields against the hand-written
-fixtures in `tools/fixtures/mcp/synthetic/` (no recording exists yet — see
-that directory's README). Every sampled number is a point-in-time **signal,
+fixtures in `tools/fixtures/mcp/synthetic/` (no recording exists yet —
+`npm run record-fixtures` is the path to one; see that directory's README). Every sampled number is a point-in-time **signal,
 never a verdict**: nothing in this table creates a `Verified` stamp, an SLO
 verdict or a grade change, and on a restricted tier the answer is "not
 attempted" with the reason. Known discrepancy, documented rather than fixed:
@@ -365,25 +370,29 @@ the datasource is beyond the cap); `grafana_contact_points` → a count and up
 to 32 names. Tools that answered join `mcp.toolsCalled`; the sampler's tool
 joins only when at least one row returned data or an honest empty.
 
-Nothing has been recorded against a live server yet. `npm run
-record-fixtures` (`tools/record-mcp-fixtures.mjs`, `MCP_URL` + optional
-`MCP_AUTH`) calls **every** alias of every row plus the status tools and
-writes the raw answers under `tools/fixtures/mcp/recordings/<date>/` so a
-maintainer can verify the alias table and replace the synthetic fixtures.
+Nothing has been recorded against a live server yet: the alias table is
+documentation-grounded until it is. `npm run record-fixtures`
+(`tools/record-mcp-fixtures.mjs`, `MCP_URL` + optional `MCP_AUTH`) is the
+verification path — it reuses the fetcher's client and the registry for
+every tool name, never prints or stores the token, and by default only
+**reports**: the `tools/list` surface with its drift against the registry,
+the metric inventory, and for every alias of every row whether its
+`requires` are all in the inventory plus the value read the way the sampler
+reads it (`data <value>` / `empty` / `FAILED <reason>` /
+`not-in-inventory (missing …)` / `not-attempted (restricted tier)`), then the
+status tools. `-- --write` records the fixtures `tools/fixtures/mcp/README.md`
+prescribes (the trimmed inventory that keeps every required name, the probe
+payloads, one instant vector per family under `recorded-stack/`, the status
+tools) and a recorded file takes precedence over its synthetic copy in the
+shapes suite; the full inventory goes to the git-ignored
+`.tmp-mcp-metric-names.json`. Afterwards: `node
+tools/test-contract-shapes.mjs --update`, then `npm test`.
 
-Annotation keys written by the sampler (only when the fetch sampled — a
-caller that predates step 2 writes none of them):
-
-| Key | Value | Meaning |
-|---|---|---|
-| `mcp.stack.status` | `sampled` \| `not-attempted` | whether the panel was sampled at all |
-| `mcp.stack.reason` | string | only when `not-attempted`: why (restricted tier) |
-| `mcp.stack.sampled` / `empty` / `failed` / `notInInventory` / `notAttempted` | counts (strings) | rows per outcome |
-| `mcp.stack.families` | comma list of `<family>:<best outcome>` | best outcome per family, `data > empty > failed > not-in-inventory > not-attempted` |
-| `mcp.observed.stack_metrics` | JSON `[{id, family, product, expr, value, unit, direction, at, outcome, reason?}]` | attempted and `not-in-inventory` rows (cap 64); `not-attempted` rows are counted, not listed |
-| `mcp.observed.alertmanager` | JSON `{version, uptime, clusterStatus, silences: {active, total} \| null}` | Alertmanager status surface |
-| `mcp.observed.grafana.datasources` | JSON `[{uid, name, type, health, message}]` | Grafana datasources with their health verdicts |
-| `mcp.observed.grafana.contact_points` | JSON `{count, names}` | Grafana contact points (names capped at 32) |
+The annotation keys the sampler writes (`mcp.stack.*`,
+`mcp.observed.stack_metrics`, `mcp.observed.alertmanager`,
+`mcp.observed.grafana.*`) are listed once, in the annotation reference
+above; they are written only when the fetch sampled — a caller that predates
+step 2 writes none of them.
 
 ### Stack self-metrics (surfaces)
 

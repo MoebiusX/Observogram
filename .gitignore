@@ -21,9 +21,10 @@ coverage/
 # fetched on demand, never source.
 .tools/
 
-# Raw recordings of a live MCP (npm run record-fixtures). Reviewed and
-# trimmed by hand before anything moves into tools/fixtures/mcp/.
-tools/fixtures/mcp/recordings/
+# The full metric-name inventory `npm run record-fixtures -- --write` keeps
+# beside the trimmed tools/fixtures/mcp/ copy: a review aid (thousands of
+# names from a real stack), never a fixture. Covered by .tmp-* below too.
+.tmp-mcp-metric-names.json
 
 # Ad-hoc test/debug dumps created during fetcher + adapter probing.
 # These are scratch artefacts, not source of truth.

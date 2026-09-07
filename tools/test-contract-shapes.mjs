@@ -24,12 +24,13 @@
  * meaningful answer, not a contract break.
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PROBES } from './fetch-live-pack.mjs';
 import { capability } from './lib/contracts/mcp-capabilities.mjs';
 import { validateResponseShape } from './lib/contracts/response-shapes.mjs';
+import { STACK_SELF_METRIC_PROBES } from './lib/contracts/stack-self-metrics.mjs';
 import { createHarness } from './lib/harness.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -127,10 +128,18 @@ for (const c of CASES) {
 // top-level `_synthetic` marker) for shapes no recording exists for yet —
 // see the fixtures README, "Recorded vs synthetic". Only the shape contract
 // is pinned here (SHAPE / TOLERANT / CRITICAL); there are no adapted
-// goldens because the fetcher's parsers for these capabilities land in a
-// later slice. When a recording replaces a synthetic file, drop the marker
-// and move the case into CASES with its adapt() pin.
+// goldens because these capabilities have no PROBES adapter (the fetcher's
+// observeAlertmanager / observeGrafana parse them directly).
+//
+// A RECORDING takes precedence: when `npm run record-fixtures -- --write`
+// has put <fixture> at the fixtures top level (the tool's own name), that
+// file is tested instead — same three assertions, plus "carries no
+// `_synthetic` marker" — and the synthetic copy is ignored. The stack
+// instant vectors it records land in recorded-stack/ (checked below).
 const SYNTHETIC_DIR = resolve(FIXTURE_DIR, 'synthetic');
+// Status payloads may be a bare list (Alertmanager /api/v2/silences) or an
+// envelope; the breakers reach the list either way.
+const listIn = (f, ...keys) => (Array.isArray(f) ? f : (keys.map(k => f[k]).find(Array.isArray) || []));
 const SYNTHETIC_CASES = [
   { capability: 'stack_self_metrics', fixture: 'metrics_query.instant-vector.json',
     breakCriticals: (f) => f.result.forEach(r => { delete r.metric; delete r.value; delete r.values; }) },
@@ -141,36 +150,69 @@ const SYNTHETIC_CASES = [
   { capability: 'alertmanager_status', fixture: 'alertmanager_status.json',
     breakCriticals: (f) => { delete f.versionInfo; delete f.version; delete f.uptime; delete f.cluster; delete f.status; } },
   { capability: 'alertmanager_silences', fixture: 'alertmanager_silences.json',
-    breakCriticals: (f) => f.silences.forEach(s => { delete s.id; delete s.status; delete s.matchers; }) },
+    breakCriticals: (f) => listIn(f, 'silences', 'data').forEach(s => { delete s.id; delete s.status; delete s.matchers; }) },
   { capability: 'grafana_datasources', fixture: 'grafana_datasources.json',
-    breakCriticals: (f) => f.datasources.forEach(d => { delete d.uid; delete d.id; delete d.name; }) },
+    breakCriticals: (f) => listIn(f, 'datasources', 'data').forEach(d => { delete d.uid; delete d.id; delete d.name; }) },
   { capability: 'grafana_datasource_health', fixture: 'grafana_datasource_health.json',
-    breakCriticals: (f) => { delete f.status; delete f.message; delete f.ok; } },
+    breakCriticals: (f) => { delete f.status; delete f.message; delete f.ok; if (f.data && typeof f.data === 'object') { delete f.data.status; delete f.data.message; delete f.data.ok; } } },
   { capability: 'grafana_contact_points', fixture: 'grafana_contact_points.json',
-    breakCriticals: (f) => f.contactPoints.forEach(c => { delete c.name; delete c.uid; }) },
+    breakCriticals: (f) => listIn(f, 'contactPoints', 'contact_points', 'data').forEach(c => { delete c.name; delete c.uid; }) },
 ];
 
 for (const c of SYNTHETIC_CASES) {
   const shapeId = capability(c.capability).responseShape;
-  assert(!!shapeId, `${c.capability} (synthetic): declared responseShape exists`, shapeId);
+  assert(!!shapeId, `${c.capability}: declared responseShape exists`, shapeId);
   if (!shapeId) continue;
-  const fixture = JSON.parse(readFileSync(resolve(SYNTHETIC_DIR, c.fixture), 'utf8'));
-  assert(typeof fixture._synthetic === 'string' && fixture._synthetic.startsWith('hand-written'),
-    `${c.capability} (synthetic): ${c.fixture} is marked _synthetic`, fixture._synthetic);
+  const recordedPath = resolve(FIXTURE_DIR, c.fixture);
+  const recorded = existsSync(recordedPath);
+  const tag = recorded ? 'recorded' : 'synthetic';
+  const fixture = JSON.parse(readFileSync(recorded ? recordedPath : resolve(SYNTHETIC_DIR, c.fixture), 'utf8'));
+  if (recorded) {
+    assert(fixture._synthetic === undefined,
+      `${c.capability} (recorded): ${c.fixture} carries no _synthetic marker (a recording replaced the hand-written sample)`, fixture._synthetic);
+  } else {
+    assert(typeof fixture._synthetic === 'string' && fixture._synthetic.startsWith('hand-written'),
+      `${c.capability} (synthetic): ${c.fixture} is marked _synthetic`, fixture._synthetic);
+  }
 
-  // 1. SHAPE — the marker itself is an "extra" the shape must tolerate.
+  // 1. SHAPE — the marker / `_recorded` provenance is an "extra" the shape must tolerate.
   const v = validateResponseShape(shapeId, fixture);
-  assert(v.ok && v.items > 0, `${c.capability} (synthetic): ${c.fixture} satisfies shape ${shapeId} (${v.items} items)`, v);
+  assert(v.ok && v.items > 0, `${c.capability} (${tag}): ${c.fixture} satisfies shape ${shapeId} (${v.items} items)`, v);
 
   // 3. TOLERANT — unknown extras change nothing.
   const vExt = validateResponseShape(shapeId, injectExtras(clone(fixture)));
-  assert(vExt.ok, `${c.capability} (synthetic): shape check ignores unknown extra fields`, vExt);
+  assert(vExt.ok, `${c.capability} (${tag}): shape check ignores unknown extra fields`, vExt);
 
-  // 4. CRITICAL — removing what the (future) parser consumes fails the gate.
+  // 4. CRITICAL — removing what the parser consumes fails the gate.
   const broken = clone(fixture);
   c.breakCriticals(broken);
   const vBroken = validateResponseShape(shapeId, broken);
-  assert(!vBroken.ok, `${c.capability} (synthetic): shape check FAILS when critical fields are removed`, vBroken);
+  assert(!vBroken.ok, `${c.capability} (${tag}): shape check FAILS when critical fields are removed`, vBroken);
+}
+
+// ---------- RECORDED stack instant vectors (recorder --write) ----------
+//
+// tools/fixtures/mcp/recorded-stack/<row id>.json — one metrics_query
+// payload per family, written by the recorder with `_recorded` provenance
+// (tool, family, row, product, query, outcome). Absent until a maintainer
+// records against a live server; every file present must be a valid
+// instant vector for a row the alias table still declares.
+const RECORDED_STACK_DIR = resolve(FIXTURE_DIR, 'recorded-stack');
+if (existsSync(RECORDED_STACK_DIR)) {
+  const stackShape = capability('stack_self_metrics').responseShape;
+  const files = readdirSync(RECORDED_STACK_DIR).filter(f => f.endsWith('.json')).sort();
+  assert(files.length > 0, 'recorded-stack/: holds at least one recorded instant vector');
+  for (const file of files) {
+    const fixture = JSON.parse(readFileSync(resolve(RECORDED_STACK_DIR, file), 'utf8'));
+    const rowId = file.replace(/\.json$/, '');
+    assert(STACK_SELF_METRIC_PROBES.some(r => r.id === rowId), `recorded-stack/${file}: names a row the alias table declares`);
+    assert(fixture._recorded && typeof fixture._recorded.query === 'string' && fixture._recorded.row === rowId,
+      `recorded-stack/${file}: carries _recorded provenance (query, row)`, fixture._recorded);
+    const v = validateResponseShape(stackShape, fixture);
+    assert(v.ok, `recorded-stack/${file}: satisfies shape ${stackShape} (${v.items} items)`, v);
+  }
+} else {
+  assert(true, 'recorded-stack/: absent — no live recording yet (synthetic instant vectors pin the shape)');
 }
 
 // Instant-vector edge cases the sampler relies on: an empty result is a
