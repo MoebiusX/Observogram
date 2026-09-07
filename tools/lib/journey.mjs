@@ -59,6 +59,7 @@ import { comparePackBranches } from './traceability-graph.mjs';
 import { crawlFiles } from './crawler.mjs';
 import { baseWorkspacePath, brandEnv } from './brand-env.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from './contracts/stack-self-metrics.mjs';
+import { formatStackValue } from './stack-evidence.mjs';
 import { computeDiagnosticGrade, computePostureMatrix, partialLiveEvidence, DIAGNOSTIC_PASS_SCORE_THRESHOLD } from '../../studio/diagnostic-grade.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -296,19 +297,10 @@ export function evaluateGate(gate, facts) {
   return breaches;
 }
 
-// Display formatting for a sampled value by its contracts unit. Pure; a
-// non-number reads '—' so a missing sample never prints as a number.
-export function formatStackValue(value, unit) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
-  switch (unit) {
-    case 'ratio': return `${(value * 100).toFixed(1)}%`;
-    case 'per-second': return `${value.toFixed(3)}/s`;
-    case 'per-hour': return `${value.toFixed(1)}/h`;
-    case 'seconds': return `${value.toFixed(1)}s`;
-    case 'count': return String(Math.round(value));
-    default: return String(value);
-  }
-}
+// Display formatting for a sampled value lives in the browser-safe
+// tools/lib/stack-evidence.mjs (the studio prints the same vocabulary);
+// re-exported here so the CLI and the tests keep one import.
+export { formatStackValue };
 
 // gate.stack — thresholds on the stack self-metric SAMPLES of this run.
 // Honesty rules: a threshold can only be checked against a row that

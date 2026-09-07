@@ -14,6 +14,17 @@ import { api } from './api.mjs';
 import { escapeHtml, toast } from './util.mjs';
 import { host as appHost } from './host.mjs';
 
+// tools/lib/stack-evidence.mjs — the browser-safe history helpers over the
+// run records (step 3). The server exposes tools/lib at /lib (the same
+// path app.mjs loads the crawler from), so it is imported at call time by
+// URL, never statically: the module graph stays linkable headless and a
+// failed load degrades to "no chips", never to a broken view.
+let _stackLib = null;
+async function stackEvidenceLib() {
+  if (!_stackLib) _stackLib = await import('/lib/stack-evidence.mjs');
+  return _stackLib;
+}
+
 // Tiny inline SVG sparkline over alignment % (0–100). Oldest → newest,
 // left → right. Pure presentation; returns '' below two points.
 export function journeySparkline(values, { w = 120, h = 28 } = {}) {
@@ -121,17 +132,22 @@ async function loadJourneysList(host) {
   }
   // Fetch each journey's recent runs for the sparkline (small N, parallel).
   const runsByName = {};
-  await Promise.all(journeys.map(async j => {
-    try { runsByName[j.name] = (await api(`/api/journeys/${encodeURIComponent(j.name)}/runs?limit=20`)).runs; }
-    catch (_) { runsByName[j.name] = []; }
-  }));
+  let stackLib = null;
+  await Promise.all([
+    ...journeys.map(async j => {
+      try { runsByName[j.name] = (await api(`/api/journeys/${encodeURIComponent(j.name)}/runs?limit=20`)).runs; }
+      catch (_) { runsByName[j.name] = []; }
+    }),
+    (async () => { try { stackLib = await stackEvidenceLib(); } catch { stackLib = null; } })(),
+  ]);
 
   host.innerHTML = journeys.map(j => {
     const runs = runsByName[j.name] || [];
     const series = runs.slice().reverse().map(r => r.drift?.alignmentPct);
     const last = j.lastRun;
     const om = last ? (OUTCOME_META[last.outcome] || { icon: '·', cls: '' }) : null;
-    const gateBits = Object.entries(j.gate || {}).map(([k, v]) => `${k}=${v}`).join(' · ') || 'no gate';
+    // gate.stack is a nested block (requireSampled / rows) — print it as JSON, not [object Object].
+    const gateBits = Object.entries(j.gate || {}).map(([k, v]) => `${k}=${v && typeof v === 'object' ? JSON.stringify(v) : v}`).join(' · ') || 'no gate';
     return `
       <article class="journey-card" data-journey="${escapeHtml(j.name)}">
         <div class="journey-card-head">
@@ -146,6 +162,7 @@ async function loadJourneysList(host) {
           <span title="Pack B source">B: <code>${escapeHtml(j.packB || '?')}</code></span>
           <span title="Gate">gate: ${escapeHtml(gateBits)}</span>
         </div>
+        ${renderStackChips(last?.stack ?? null, runs, stackLib)}
         <div class="journey-runs">${renderRunsTable(runs)}</div>
         <div class="journey-result" hidden></div>
       </article>`;
@@ -154,6 +171,52 @@ async function loadJourneysList(host) {
   host.querySelectorAll('.journey-run-btn').forEach(btn => {
     btn.onclick = () => runJourneyNow(btn.dataset.journey, host, btn);
   });
+}
+
+// Stack self-metric chips — the samples the last run saw, one chip per
+// family present. Every chip is a point-in-time SIGNAL: no ok/err colour,
+// the 'nonzero' hint is a muted marker, and a row that did not answer
+// says which honest non-answer it gave. For lower-is-comfortable rows the
+// fetched history adds "nonzero in N of last M runs" (M = runs that
+// carried a sample for that row). `lastStack` is GET /api/journeys'
+// lastRun.stack (null when the last run has no evidence); with the helper
+// module loaded the families are recomputed from the newest fetched run
+// with the same function the server uses, so both read alike.
+function renderStackChips(lastStack, runs, lib) {
+  // The newest run only: an older run's evidence must never stand in for a
+  // last run that carried none (vantage lost, file-sourced B).
+  const newest = runs[0]?.stackEvidence ? runs[0] : null;
+  const families = lib && newest ? lib.latestByFamily(newest) : (lastStack?.families || null);
+  const status = newest?.stackEvidence?.status || lastStack?.status || null;
+  if (!status) return '';
+  const label = '<span class="journey-stack-label">stack self-metrics — point-in-time samples:</span>';
+  if (status === 'not-attempted') {
+    const reason = newest?.stackEvidence?.reason || lastStack?.reason || 'no reason recorded';
+    return `<div class="journey-stack">${label}
+      <span class="journey-stack-chip is-muted" title="mcp.stack.status = not-attempted">not attempted — ${escapeHtml(reason)}</span></div>`;
+  }
+  const entries = Object.entries(families || {});
+  if (!entries.length) {
+    return `<div class="journey-stack">${label}
+      <span class="journey-stack-chip is-muted">sampled, but no row answered</span></div>`;
+  }
+  const fmt = (v, u) => (lib ? lib.formatStackValue(v, u) : (typeof v === 'number' ? String(v) : '—'));
+  const outcomeText = (o) => (lib ? lib.stackOutcomeLabel(o) : String(o ?? 'unknown'));
+  const chips = entries.map(([family, row]) => {
+    const title = `${row.id}${row.referenceSli ? ` · reference SLI ${row.referenceSli}` : ''}${row.reason ? ` · ${row.reason}` : ''}`;
+    const fam = `<span class="journey-stack-family">${escapeHtml(family)}</span>`;
+    if (row.outcome !== 'data' || typeof row.value !== 'number') {
+      return `<span class="journey-stack-chip is-muted" title="${escapeHtml(title)}">${fam} ${escapeHtml(outcomeText(row.outcome))}</span>`;
+    }
+    const mark = row.hint === 'nonzero' ? ' <span class="journey-stack-mark">nonzero</span>' : '';
+    let history = '';
+    if (lib && row.direction === 'lower') {
+      const series = lib.stackSeries(runs, row.id);
+      if (series.length) history = ` <span class="journey-stack-runs">· nonzero in ${lib.nonzeroRuns(series)} of last ${series.length} runs</span>`;
+    }
+    return `<span class="journey-stack-chip" title="${escapeHtml(title)}">${fam} ${escapeHtml(fmt(row.value, row.unit))}${mark}${history}</span>`;
+  }).join('');
+  return `<div class="journey-stack">${label}${chips}</div>`;
 }
 
 function renderRunsTable(runs) {

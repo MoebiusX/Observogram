@@ -60,6 +60,7 @@ import { setWorkspaceRootResolver } from '../tools/lib/journey.mjs';
 import { orgWorkspaceRoot } from './tenancy.mjs';
 import { brandEnv } from '../tools/lib/brand-env.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
+import { stackSummary } from '../tools/lib/stack-evidence.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -844,6 +845,11 @@ app.get('/api/journeys', (req, res) => {
           alignmentPct: lastRun.drift?.alignmentPct ?? null,
           gradeScore: lastRun.grade?.score ?? null,
           breaches: lastRun.gate?.breaches?.length ?? 0,
+          // Step 3: the stack self-metric samples the last run saw —
+          // status, rows that answered data, best row per family. null
+          // when the record carries no stackEvidence (file-sourced B,
+          // pre-step-3 record): an absence, never a healthy stack.
+          stack: stackSummary(lastRun),
         },
       };
     });

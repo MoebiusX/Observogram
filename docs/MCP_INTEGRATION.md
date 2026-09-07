@@ -370,6 +370,33 @@ with the others; `packc journey list` appends `stackStatusLine(record)` —
 `stack sampled N` (rows that answered data), `stack not attempted`, or
 `stack none` — to each line.
 
+#### History helpers: the run history as a time series
+
+`tools/lib/stack-evidence.mjs` is the browser-safe reader of that history
+(pure functions, imports only the contracts table; the studio loads it
+from `/lib/stack-evidence.mjs`, the server and a vendoring studio import
+it directly — see `docs/VENDORING.md`):
+
+| Helper | Returns | Honesty rule |
+|---|---|---|
+| `stackSeries(runs, rowId)` | oldest → newest `[{ at, value, outcome, hint }]` for one row (`runs` may be newest-first as `readJourneyRuns` returns them; sorted by `startedAt`) | a run without `stackEvidence` or without that row is a gap and is skipped, never interpolated; a non-data outcome is kept with `value: null` so the series shows when the probe stopped answering |
+| `latestByFamily(record)` | `{ <family>: { id, value, unit, direction, outcome, hint, referenceSli, reason? } }` | per family the row that answered `data` wins, ties fall back to the contracts table order; a retired row sorts last; `{}` without evidence |
+| `stackSummary(record)` | `{ status, reason, sampled, families }` or `null` | `null` when the record has no `stackEvidence` — an absence, never a healthy stack; `sampled` counts rows that answered data |
+| `nonzeroRuns(series)` | count of data samples with the display hint `nonzero` | a count of runs, not a verdict — "nonzero in N of the last M runs" is an early-warning phrase |
+| `stackPostureBudget(series, { objective, cadenceMs, windowMs, isBad? })` | `{ samples, bad, fraction, allowance, measurable, note }` | the cadence heuristic: the window allows `(1 − objective) × window / cadence` bad samples and a sampled posture is only `measurable` when that allowance is ≥ 10 (99.99 % over 30 d at a 15 min cadence allows 0.29 — not measurable; 99 % over 7 d at 5 min allows 20.16 — measurable); `fraction = good / samples`, `null` with no data sample; the note says "signal, not verdict" in every branch |
+| `formatStackValue(value, unit)`, `stackOutcomeLabel(outcome)` | the shared display vocabulary (`83.3%`, `0.004/s`, `0.0/h`, `7.4s`, `1`, `—`; `empty` / `probe failed` / `not in inventory` / `not attempted`) | one formatter for the CLI, the report and the studio |
+
+Surfaces: `GET /api/journeys` puts `stackSummary(lastRun)` on
+`lastRun.stack` (`null` for a file-sourced B); the studio's Journeys view
+renders a `stack self-metrics — point-in-time samples` line under each
+card — one chip per family (value in its unit, or the honest non-answer),
+the `nonzero` hint as a muted marker, the row id and reference SLI in the
+chip's title, and for lower-is-comfortable rows `nonzero in N of last M
+runs` over the 20 fetched runs; a `not-attempted` panel is one muted chip
+with the reason. No chip carries an ok/error colour: a sample is a
+signal, and the runs table lists `stack` / `stack.<id>` breaches like any
+other.
+
 ### Stack self-metrics (registry)
 
 `tools/lib/contracts/stack-self-metrics.mjs` is the data-only alias table the

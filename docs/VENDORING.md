@@ -20,6 +20,8 @@ promises to keep stable.
 | [`tools/lib/promql-canon.mjs`](../tools/lib/promql-canon.mjs) | imports `promql.mjs` | parser-proven PromQL canonicalisation |
 | [`tools/lib/promql.mjs`](../tools/lib/promql.mjs) | pure ESM, no Node APIs | PromQL tokeniser/dependency reader |
 | [`tools/lib/protocols.mjs`](../tools/lib/protocols.mjs) | pure data | the versioned protocol/feature canon |
+| [`tools/lib/stack-evidence.mjs`](../tools/lib/stack-evidence.mjs) | imports `contracts/stack-self-metrics.mjs` only | pure history helpers over journey run records — `stackSeries`, `latestByFamily`, `stackSummary`, `stackPostureBudget`, `nonzeroRuns`, `formatStackValue`, `stackOutcomeLabel`; explicit inputs, no Node APIs, every output a point-in-time signal |
+| [`tools/lib/contracts/stack-self-metrics.mjs`](../tools/lib/contracts/stack-self-metrics.mjs) | pure data + lookups | the stack self-metric alias table `stack-evidence.mjs` orders by — copy the two together |
 | [`studio/diagnostic-grade.mjs`](../studio/diagnostic-grade.mjs) | **zero-import** (CI-asserted) | the grade engine: coverage/trust criteria, posture matrix, weighted delta risk, instrument-grade scale |
 | [`studio/artifact-model.mjs`](../studio/artifact-model.mjs) | **zero-import** (CI-asserted) | behavioural identity + deploy-surface model per artefact family |
 | [`studio/constants.mjs`](../studio/constants.mjs) | pure data | the display vocabulary (layers, domains, grade banding) |
@@ -119,6 +121,7 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
      tools/lib/diff.mjs tools/lib/artefact-model.mjs \
      tools/lib/promql-canon.mjs tools/lib/promql.mjs \
      tools/lib/protocols.mjs \
+     tools/lib/stack-evidence.mjs tools/lib/contracts/stack-self-metrics.mjs \
      studio/diagnostic-grade.mjs studio/artifact-model.mjs \
      studio/constants.mjs studio/verdict-ui.mjs studio/verdict-ui.css \
      studio/compare-catalog.mjs studio/host.mjs studio/proto-synthesis.mjs
