@@ -27,22 +27,26 @@ recording that drops it.
 | `metrics_alerts.empty.json` | `metrics_alerts` | the legitimate-empty case (`{groups: []}` — the real VM-ruler response that motivated the cascade order) | recording | 2026-06-12 |
 | `grafana_dashboards_search.json` | `grafana_dashboards_search` | dashboards | recording | 2026-06-12 |
 | `metrics_targets.json` | `metrics_targets` | scrape_configs | recording | 2026-06-12 (`alertmanager` target `down` with its `lastError`) |
-| `metrics_label_values.json` | `metrics_label_values` | metric_names | recording, **trimmed to 25 names** (mostly `bayesian_*`; it proves only `ALERTS` and `ALERTS_FOR_STATE` of the stack's self-metrics — the alias table's `requires` were not recorded) | 2026-06-12 |
+| `metrics_label_values.json` | `metrics_label_values` | metric_names | recording, trimmed by the recorder (every name an alias `requires` that the server exposes, the `*_build_info` metrics, and the first 25 others — 40 names of the server's 2,682); it now evidences `up`, `scrape_duration_seconds`, `vm_*`, `alertmanager_*`, `otelcol_exporter_queue_*`, `grafana_http_request_duration_seconds_count`, `promtail_dropped_entries_total` | 2026-09-07, Krystaline otel-mcp-server **public tier** |
 | `synthetic/metrics_query.instant-vector.json` | `metrics_query` | stack_self_metrics | synthetic (`{ result }`, otel-mcp-server) | 2026-09-07 |
 | `synthetic/metrics_query.instant-vector.prometheus-api.json` | `metrics_query` | stack_self_metrics, build_info_versions | synthetic (`{ data: { result } }`, Prometheus API) | 2026-09-07 |
-| `synthetic/alertmanager_status.json` | `alertmanager_status` | alertmanager_status (`status-object`) | synthetic | 2026-09-07 |
-| `synthetic/alertmanager_silences.json` | `alertmanager_silences` | alertmanager_silences (`silences`) | synthetic | 2026-09-07 |
+| `alertmanager_status.json` | `alertmanager_status` | alertmanager_status (`status-object`) | recording — `config` (the full Alertmanager configuration: receivers, internal hostnames) omitted by hand; the shape needs only `version` / `uptime` / `cluster` | 2026-09-07, public tier (Alertmanager 0.27.0) |
+| `synthetic/alertmanager_silences.json` | `alertmanager_silences` | alertmanager_silences (`silences`) | synthetic — the 2026-09-07 recording came back `{ count: 0, silences: [] }` (no active silences), which pins nothing about the item fields, so the synthetic file stays until a recording with entries exists | 2026-09-07 |
 | `synthetic/grafana_datasources.json` | `grafana_datasources` | grafana_datasources (`datasources`) | synthetic | 2026-09-07 |
 | `synthetic/grafana_datasource_health.json` | `grafana_datasource_health` | grafana_datasource_health (`health-object`) | synthetic | 2026-09-07 |
 | `synthetic/grafana_contact_points.json` | `grafana_contact_points` | grafana_contact_points (`contact-points`) | synthetic | 2026-09-07 |
-| `recorded-stack/<row id>.json` | `metrics_query` | stack_self_metrics — one instant vector per family | recording (absent until the recorder runs) | — |
+| `recorded-stack/<row id>.json` | `metrics_query` | stack_self_metrics — one instant vector per family (`scrape_success_ratio`, `notification_errors`, `tsdb_active_series`, `collector_queue_saturation`, `grafana_http_errors`, `log_shipper_drops`); otel-mcp-server answers a flat Prometheus-style envelope `{ status, resultType, result }` | recording | 2026-09-07, public tier |
 
-The synthetic files exist because the session that added the step-2
-surfaces (stack self-metrics, Alertmanager status and silences, Grafana
-datasources, datasource health, contact points) had neither credentials nor
-Docker, so nothing could be captured; the alias table in
-`tools/lib/contracts/stack-self-metrics.mjs` is grounded in upstream
-documentation and the crawled pack until it is re-recorded. Synthetic
+The remaining synthetic files cover the Grafana-backed status tools
+(`grafana_datasources`, `grafana_datasource_health`, `grafana_contact_points`)
+and the instant-vector envelopes: on the public Krystaline tier every
+Grafana-backed tool except `grafana_health` answers `HTTP 401` from Grafana
+(the tier carries no Grafana credentials), so they could not be recorded
+there — run the recorder against the authenticated tier to replace them. The
+2026-06-12 recordings of `metrics_targets.json`, `vmalert_rules.json` and
+`grafana_dashboards_search.json` were kept on purpose: the 2026-09-07 targets
+payload has every target `up`, and the `down` Alertmanager target with its
+`lastError` is the case the liveness adapters are pinned against. Synthetic
 fixtures pin **shape only** (critical fields, tolerance, removal gate) — no
 `adapted/` goldens, because these capabilities have no `PROBES` adapter (the
 fetcher's `observeAlertmanager` / `observeGrafana` parse them directly).

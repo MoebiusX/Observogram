@@ -1,0 +1,23 @@
+{
+  "_recorded": {
+    "recordedAt": "2026-09-07T16:08:36.735Z",
+    "tool": "metrics_query",
+    "family": "scrape",
+    "row": "scrape_success_ratio",
+    "product": "generic",
+    "query": "sum(up) / count(up)",
+    "outcome": "data",
+    "value": 1
+  },
+  "status": "success",
+  "resultType": "vector",
+  "result": [
+    {
+      "metric": {},
+      "value": [
+        1788797319,
+        "1"
+      ]
+    }
+  ]
+}

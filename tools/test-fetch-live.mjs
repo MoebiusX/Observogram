@@ -12,7 +12,7 @@
  *      tags surface where the fetcher attested them).
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1445,7 +1445,18 @@ const pick = (...ids) => STACK_SELF_METRIC_PROBES.filter(r => ids.includes(r.id)
 
 // ---------- case 8b: Alertmanager / Grafana status observers ----------
 
-const SYN = (f) => JSON.parse(readFileSync(resolve(__dirname, 'fixtures', 'mcp', 'synthetic', f), 'utf8'));
+// A recording at the fixtures top level takes precedence over the synthetic
+// copy (tools/fixtures/mcp/README.md, "Provenance"): once a status payload
+// has been recorded the synthetic file is deleted, so replay the recording.
+// The authoring metadata (_synthetic / _recorded) is not something a server
+// would send — strip it either way.
+const SYN = (f) => {
+  const recorded = resolve(__dirname, 'fixtures', 'mcp', f);
+  const path = existsSync(recorded) ? recorded : resolve(__dirname, 'fixtures', 'mcp', 'synthetic', f);
+  const j = JSON.parse(readFileSync(path, 'utf8'));
+  delete j._synthetic; delete j._recorded;
+  return j;
+};
 {
   const calls = [];
   const callTool = async (name, args = {}) => {
@@ -1463,8 +1474,9 @@ const SYN = (f) => JSON.parse(readFileSync(resolve(__dirname, 'fixtures', 'mcp',
   };
   const names = new Set(['alertmanager_status', 'alertmanager_silences', 'grafana_datasources', 'grafana_datasource_health', 'grafana_contact_points']);
   const am = await observeAlertmanager({ callTool, quiet: quietStub, discoveredToolNames: names, hasToolsList: true, statusTool: 'alertmanager_status', silencesTool: 'alertmanager_silences' });
-  assert(am.version === '0.99.0' && am.clusterStatus === 'ready' && typeof am.uptime === 'string',
-         'alertmanager_status → version / uptime / clusterStatus', am);
+  const amFixture = SYN('alertmanager_status.json');
+  assert(am.version === amFixture.version && am.clusterStatus === 'ready' && typeof am.uptime === 'string',
+         'alertmanager_status → version / uptime / clusterStatus (values read from the fixture that was replayed)', am);
   assert(am.silences.active === 1 && am.silences.total === 2, 'alertmanager_silences → active count (expired excluded)', am.silences);
   assert(am.toolsAnswered.join(',') === 'alertmanager_status,alertmanager_silences', 'alertmanager toolsAnswered lists both', am.toolsAnswered);
 
@@ -1662,7 +1674,7 @@ const SYN = (f) => JSON.parse(readFileSync(resolve(__dirname, 'fixtures', 'mcp',
            'end-to-end: victoriametrics seen via vm_app_version → its notification alias is preferred', notify);
     assert(rowById(fetched.stackSamples.rows, 'wal_corruptions').outcome === 'not-in-inventory',
            'end-to-end: the metric_names inventory gates eligibility', rowById(fetched.stackSamples.rows, 'wal_corruptions'));
-    assert(fetched.alertmanagerObserved.version === '0.99.0' && fetched.grafanaObserved.datasources.length === 3,
+    assert(fetched.alertmanagerObserved.version === SYN('alertmanager_status.json').version && fetched.grafanaObserved.datasources.length === 3,
            'end-to-end: Alertmanager and Grafana status surfaces observed', [fetched.alertmanagerObserved?.version, fetched.grafanaObserved?.datasources?.length]);
     const unmatched = fetched.unmatchedTools.map(t => t.name);
     assert(!unmatched.includes('metrics_query') && !unmatched.includes('alertmanager_status') && !unmatched.includes('grafana_contact_points'),

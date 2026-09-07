@@ -833,7 +833,16 @@ try {
   // few instant vectors; the summary must carry stack / alertmanager /
   // grafana as point-in-time samples (outcomes, hints), never a verdict.
   {
-    const SYN = (f) => JSON.parse(readFileSync(resolvePath(dirname(fileURLToPath(import.meta.url)), '..', 'tools', 'fixtures', 'mcp', 'synthetic', f), 'utf8'));
+    // Recorded fixture first (tools/fixtures/mcp/<tool>.json), synthetic
+    // fallback — the fixtures README's precedence rule; authoring metadata
+    // stripped because a server would not send it.
+    const SYN = (f) => {
+      const base = resolvePath(dirname(fileURLToPath(import.meta.url)), '..', 'tools', 'fixtures', 'mcp');
+      const recorded = resolvePath(base, f);
+      const j = JSON.parse(readFileSync(existsSync(recorded) ? recorded : resolvePath(base, 'synthetic', f), 'utf8'));
+      delete j._synthetic; delete j._recorded;
+      return j;
+    };
     const stackTools = [
       'system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines',
       'metrics_query', 'metrics_label_values', 'alertmanager_status', 'alertmanager_silences',
@@ -877,7 +886,7 @@ try {
       assert((st.rows || []).every(r => !('verified' in r) && ['data', 'empty', 'failed', 'not-in-inventory', 'not-attempted'].includes(r.outcome)),
              'stack rows are outcomes only — never ok / verified');
       const am = draft.summary?.alertmanager;
-      assert(am && am.version === '0.99.0' && am.silences && typeof am.silences.active === 'number',
+      assert(am && am.version === SYN('alertmanager_status.json').version && am.silences && typeof am.silences.active === 'number',
              'summary.alertmanager carries version and the active-silence count', am);
       const gf = draft.summary?.grafana;
       assert(gf && Array.isArray(gf.datasources) && gf.datasources.length === 3 && gf.datasources.every(d => ['ok', 'error', 'unknown'].includes(d.health)),

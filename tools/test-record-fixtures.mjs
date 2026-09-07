@@ -39,20 +39,40 @@ const { assert, report } = createHarness({ indent: '  ', truncate: 200 });
 const fx = (name) => JSON.parse(readFileSync(resolve(FIXTURES, name), 'utf8'));
 // Synthetic fixtures replayed as if a server answered: the markers are
 // authoring metadata, a server would not send them.
+// A recording at the fixtures top level takes precedence over the synthetic
+// copy (tools/fixtures/mcp/README.md, "Provenance") — once a maintainer has
+// recorded a status payload the synthetic file is deleted, so the fake
+// replays the recording instead. Either way the authoring metadata
+// (_synthetic / _recorded / _shape / _query) is stripped: a server would
+// not send it.
 const synthetic = (name) => {
-  const j = fx(join('synthetic', name));
-  delete j._synthetic; delete j._shape; delete j._query;
+  const recorded = resolve(FIXTURES, name);
+  const j = existsSync(recorded) ? fx(name) : fx(join('synthetic', name));
+  delete j._synthetic; delete j._recorded; delete j._shape; delete j._query;
   return j;
 };
 
 const TOKEN = 'SECRET-TOKEN-sentinel-8675309';
 
-// Inventory: the recorded 24 names, 40 fillers, then the names the alias
-// table requires AT THE END — so the trimmed fixture proves it keeps
-// required names beyond the first-25 window.
+// Inventory: 24 base names that no alias requires (the 2026-06-12 recording,
+// frozen here so re-recording metrics_label_values.json never moves this
+// suite's expectations), 40 fillers, then the names the alias table requires
+// AT THE END — so the trimmed fixture proves it keeps required names beyond
+// the first-25 window.
+const BASE_NAMES = [
+  'ALERTS', 'ALERTS_FOR_STATE', 'anomalies_detected_total',
+  'bayesian_alert_incidents_learned', 'bayesian_alert_infer_requests_created', 'bayesian_alert_infer_requests_total',
+  'bayesian_alert_train_requests_created', 'bayesian_alert_train_requests_total',
+  'bayesian_infer_duration_seconds_bucket', 'bayesian_infer_duration_seconds_count', 'bayesian_infer_duration_seconds_created',
+  'bayesian_infer_duration_seconds_sum', 'bayesian_infer_errors_created', 'bayesian_infer_errors_total',
+  'bayesian_infer_requests_created', 'bayesian_infer_requests_total', 'bayesian_model_trained',
+  'bayesian_poll_cycles_total', 'bayesian_poll_errors_total', 'bayesian_services_tracked',
+  'bayesian_train_duration_seconds_bucket', 'bayesian_train_duration_seconds_count', 'bayesian_train_duration_seconds_created',
+  'bayesian_train_duration_seconds_sum',
+];
 const REQUIRED_PRESENT = ['up', 'scrape_duration_seconds', 'prometheus_tsdb_head_series', 'prometheus_build_info'];
 const inventory = [
-  ...fx('metrics_label_values.json').values,
+  ...BASE_NAMES,
   ...Array.from({ length: 40 }, (_, i) => `filler_metric_${String(i).padStart(2, '0')}`),
   ...REQUIRED_PRESENT,
 ];

@@ -110,9 +110,13 @@ export const CAPABILITIES = Object.freeze({
     // (Grafana skill). The others are legacy / community-MCP names. The
     // search limit is env-tunable, so the caller injects it at resolve time
     // (runtimeArgs) rather than this layer reading process.env.
+    // grafana_dashboard_get is NOT a search candidate: it requires a `uid`
+    // and belongs to the dashboard_detail enrichment below. Listing it here
+    // made a failed search fall through to a uid-less call whose -32602
+    // "Invalid arguments" error then masked the real search error (a 401
+    // from Grafana on the public Krystaline tier, recorded 2026-09-07).
     candidates: [
       { id: 'search', tool: 'grafana_dashboards_search', args: { type: 'dash-db' }, runtimeArgs: { limit: 'grafanaDashboardSearchLimit' } },
-      { tool: 'grafana_dashboard_get' },
       { tool: 'list_dashboards' },
       { tool: 'grafana_dashboards' },
       { tool: 'grafana_list_dashboards' },

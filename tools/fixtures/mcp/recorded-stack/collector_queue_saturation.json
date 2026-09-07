@@ -1,0 +1,23 @@
+{
+  "_recorded": {
+    "recordedAt": "2026-09-07T16:08:36.735Z",
+    "tool": "metrics_query",
+    "family": "collector",
+    "row": "collector_queue_saturation",
+    "product": "otelcol",
+    "query": "max(otelcol_exporter_queue_size / otelcol_exporter_queue_capacity)",
+    "outcome": "data",
+    "value": 0
+  },
+  "status": "success",
+  "resultType": "vector",
+  "result": [
+    {
+      "metric": {},
+      "value": [
+        1788797320,
+        "0"
+      ]
+    }
+  ]
+}

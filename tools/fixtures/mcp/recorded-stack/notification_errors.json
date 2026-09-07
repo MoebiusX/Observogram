@@ -1,0 +1,23 @@
+{
+  "_recorded": {
+    "recordedAt": "2026-09-07T16:08:36.735Z",
+    "tool": "metrics_query",
+    "family": "notify",
+    "row": "notification_errors",
+    "product": "alertmanager",
+    "query": "sum(rate(alertmanager_notifications_failed_total[5m]))",
+    "outcome": "data",
+    "value": 0.0033333333333333335
+  },
+  "status": "success",
+  "resultType": "vector",
+  "result": [
+    {
+      "metric": {},
+      "value": [
+        1788797319,
+        "0.0033333333333333335"
+      ]
+    }
+  ]
+}
