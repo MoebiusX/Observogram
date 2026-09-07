@@ -490,6 +490,43 @@ assert(allLiveDiff.summary.outOfScope === 0,
        'all-live mode counts every unmatched live artefact as live-not-declared',
        allLiveDiff.summary.outOfScope, 0);
 
+// ---------- `ref:` prefix is authoring syntax, not behaviour ----------
+// A burn alert declared as `slo: ref:x` and one discovered as `slo: x` bind
+// to the same SLO. Identity already stripped the prefix (they paired); the
+// behavioural model must strip it too, or the pair reads as drifted on its
+// own binding — a false-drift for every repo pack that uses `ref:`.
+{
+  const refPack = clone(scopedRepoPack);
+  refPack.spec.policy.burn_rate_alerts[0].slo = 'ref:checkout_availability_99';
+  refPack.spec.slos[0].error_budget_policy = 'ref:platform/default-budget';
+  const barePack = clone(scopedRepoPack);
+  barePack.spec.slos[0].error_budget_policy = 'platform/default-budget';
+  const refDiff = diffPacks(adapt(refPack), adapt(barePack), { scopeMode: 'off' });
+  const burnPair = refDiff.layers.L3.inBoth.find(e => e.key.startsWith('burn_rate::'))
+    || Object.values(refDiff.layers).flatMap(l => l.inBoth).find(e => e.key.startsWith('burn_rate::'));
+  assert(burnPair && burnPair.match === 'aligned',
+    'burn alert with slo ref:x ALIGNS with slo x (identity paired, behaviour now agrees)', burnPair);
+  const sloPair = Object.values(refDiff.layers).flatMap(l => l.inBoth).find(e => e.key.startsWith('slo::'));
+  assert(sloPair && sloPair.match === 'aligned',
+    'slo with error_budget_policy ref:… aligns with the bare reference', sloPair);
+  assert(refDiff.summary.drifted === 0,
+    'ref:-only rewrites produce no drift anywhere in the pack', refDiff.summary);
+  // The prefix is cosmetic; the TARGET is not.
+  const otherPack = clone(scopedRepoPack);
+  otherPack.spec.policy.burn_rate_alerts[0].slo = 'ref:checkout_latency_99';
+  const otherDiff = diffPacks(adapt(refPack), adapt(otherPack), { scopeMode: 'off' });
+  assert(otherDiff.summary.aligned < refDiff.summary.aligned,
+    'NEGATIVE: a burn alert bound to a different SLO does not align', otherDiff.summary);
+  // The recording rule declared as `expr: ref:slis.x` against a live rule
+  // carrying the compiled expression is still partial evidence, not drift.
+  const compiledPack = clone(scopedRepoPack);
+  compiledPack.spec.queries.recording_rules[0].expr = 'sum(rate(checkout_requests_total{code!~"5.."}[5m])) / sum(rate(checkout_requests_total[5m]))';
+  const compiledDiff = diffPacks(adapt(scopedRepoPack), adapt(compiledPack), { scopeMode: 'off' });
+  const rulePair = Object.values(compiledDiff.layers).flatMap(l => l.inBoth).find(e => e.key.startsWith('recording_rule::'));
+  assert(rulePair && rulePair.match === 'aligned',
+    'expr ref:slis.x vs the compiled expression stays partial-evidence aligned after ref stripping', rulePair);
+}
+
 // ---------- client classification contract ----------
 // The studio classifies compare cards and traceability rows by the artefact
 // objects EMBEDDED in diff entries (studio/compare-view.mjs

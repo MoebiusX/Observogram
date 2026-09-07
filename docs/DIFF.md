@@ -103,13 +103,21 @@ Normalisation rules:
 - Expressions in `expr`, `query`, `promql`, and `expression` are
   order-canonicalized when the expression parses cleanly (parser-proven):
   selector matcher order (`{b="2",a="1"}` ≡ `{a="1",b="2"}`), aggregation
-  grouping label order (`sum by (a,b)` ≡ `sum by (b,a)`), and structural
-  whitespace (`rate( x [5m] )` ≡ `rate(x[5m])`). Anything that fails to
-  parse falls back to whitespace collapse only — recorded as
-  `textual-fallback` by `tools/lib/promql-canon.mjs`. Explicit non-goals
-  (per `PHASE_1_VERDICT_TRUST_RESEARCH.md` Workstream B): no algebraic
-  rewrites, no binary-expression or vector-matching reordering, no regex
-  equivalence, no histogram folding.
+  grouping label order (`sum by (a,b)` ≡ `sum by (b,a)`), structural
+  whitespace (`rate( x [5m] )` ≡ `rate(x[5m])`), and whitespace around the
+  symbolic binary operators `+ * / % ^ == != <= >= < > =~ !~`
+  (`a / b` ≡ `a/b`, `rate(x[5m]) > 0.5` ≡ `rate(x[5m])>0.5`). `-` is never
+  tightened (unary/binary ambiguity) and keyword operators (`and`, `or`,
+  `unless`, `bool`, `offset`, `by`, `on`, …) keep the space that bounds
+  them. Anything that fails to parse falls back to whitespace collapse only
+  — recorded as `textual-fallback` by `tools/lib/promql-canon.mjs`.
+  Explicit non-goals (per `PHASE_1_VERDICT_TRUST_RESEARCH.md` Workstream B):
+  no algebraic rewrites, no binary-expression or vector-matching
+  reordering, no regex equivalence, no histogram folding.
+- A leading `ref:` on the reference-bearing fields `slo`, `sli`, `trigger`,
+  `error_budget_policy` — and on `expr` when the whole value is a reference
+  (`ref:slis.x`) — is authoring syntax, not behaviour: `slo: ref:x` and
+  `slo: x` compare equal, matching what identity already does.
 - `version` blocks compare by `declared` when present.
 - Deployment/presentation fields are stripped:
 

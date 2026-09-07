@@ -121,7 +121,12 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
    copy (e.g. a newer `diff.mjs` over an older identity model) is exactly the
    silent drift this contract exists to prevent — a downstream studio's 2026-08
    collision report was filed from such a copy, against engine code this repo
-   had replaced on 2026-06-09.
+   had replaced on 2026-06-09. Most recent reason to re-copy the pair:
+   2026-09 `promql-canon.mjs` tightens whitespace around symbolic binary
+   operators (`a / b` ≡ `a/b`) and `artefact-model.mjs` strips a leading
+   `ref:` from reference fields before comparing behaviour — an older
+   `artefact-model.mjs` over the newer canon (or vice versa) reports drift
+   the other half no longer sees.
 
 3. Re-copy the changed files, re-run your adapter's type-check, bump the
    recorded sha. Because the modules take their inputs explicitly, upstream

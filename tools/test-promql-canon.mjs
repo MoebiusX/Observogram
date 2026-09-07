@@ -54,6 +54,36 @@ assert(equiv('(a) and (b)', '(a)and(b)'),
 assert(!equiv('a and b', 'aand b'),
   'identifier boundaries are never merged');
 
+// ---------- binary-operator whitespace (this slice) ----------
+assert(equiv('a / b', 'a/b'), 'operator whitespace: a / b ≡ a/b');
+assert(equiv('rate(x[5m]) > 0.5', 'rate(x[5m])>0.5'), 'operator whitespace: comparison tightens');
+assert(equiv('sum(rate(a[5m])) / sum(rate(b[5m])) >= 0.99', 'sum(rate(a[5m]))/sum(rate(b[5m]))>=0.99'),
+  'operator whitespace: division and >= in one expression');
+assert(equiv('a == b', 'a==b') && equiv('a != b', 'a!=b') && equiv('a <= b', 'a<=b')
+    && equiv('a % b', 'a%b') && equiv('a ^ b', 'a^b') && equiv('a * b', 'a*b'),
+  'operator whitespace: every listed symbolic operator tightens');
+assert(equiv('x{a =~ "1"}', 'x{a=~"1"}') && equiv('x{a !~ "1"}', 'x{a!~"1"}'),
+  'operator whitespace: regex matchers inside selectors tighten');
+const opString = 'x{path="a / b > c"} > 0';
+assert(canon(opString).includes('"a / b > c"'), 'operators inside label-value strings stay byte-identical');
+assert(canon('a - -b') === 'a - -b', 'minus is never tightened (unary/binary ambiguity)');
+assert(canon('a - b') === 'a - b', 'binary minus keeps its spacing');
+assert(canon('a and b') === 'a and b', 'keyword operators keep their spacing');
+assert(canon('a unless b') === 'a unless b' && canon('a > bool b').endsWith('bool b'),
+  'keyword modifiers keep the space that bounds them');
+assert(canon('a < = b') !== canon('a <= b'), 'a space inside an operator is never glued into a different operator');
+// NEGATIVE: non-equivalent expressions must not collapse together.
+assert(!equiv('rate(x[5m]) > 0.5', 'rate(x[5m]) >= 0.5'), 'NEGATIVE: > vs >= stay different');
+assert(!equiv('a / b', 'a * b'), 'NEGATIVE: different operators stay different');
+assert(!equiv('rate(x[5m]) > 0.5', 'rate(x[5m]) > 0.05'), 'NEGATIVE: different thresholds stay different');
+assert(!equiv('x{a=~"1"}', 'x{a!~"1"}'), 'NEGATIVE: =~ vs !~ stay different');
+assert(!equiv('x{path="a / b"}', 'x{path="a/b"}'), 'NEGATIVE: label-value string content is decision-bearing');
+const opOnce = canon('sum by (b, a) (rate(x[5m])) / sum(y) > 0.5');
+assert(canon(opOnce) === opOnce, 'operator tightening is idempotent');
+assert(canonicalizePromql('a / b').method === 'parser-proven' && canonicalizePromql('a / b').changed === true,
+  'operator tightening is recorded as a parser-proven change');
+assert(canonicalizePromql('a / (b').text === 'a / (b', 'operator tightening is NOT applied on the textual fallback');
+
 // ---------- method record + conservative fallback ----------
 assert(canonicalizePromql('sum by (b, a) (x)').method === 'parser-proven',
   'clean parse records parser-proven');
@@ -77,6 +107,10 @@ assert(JSON.stringify(behaviorOf(ruleArt('sum by (a, b) (rate(x{j="1",k="2"}[5m]
 assert(JSON.stringify(behaviorOf(ruleArt('sum by (a) (x)')))
    !== JSON.stringify(behaviorOf(ruleArt('sum by (a, b) (x)'))),
   'behaviorOf keeps genuinely different grouping as drift');
+
+assert(JSON.stringify(behaviorOf(ruleArt('sum(rate(a[5m])) / sum(rate(b[5m]))')))
+   === JSON.stringify(behaviorOf(ruleArt('sum(rate(a[5m]))/sum(rate(b[5m]))'))),
+  'behaviorOf treats operator-spacing-only rewrites as identical');
 
 // ---------- end-to-end: diff alignment ----------
 const layered = (expr) => ({
