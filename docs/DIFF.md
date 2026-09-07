@@ -167,6 +167,16 @@ The Diagnose view does not score every delta equally. It uses weighted badness:
 | Out-of-scope live | 0.0 | excluded platform inventory |
 | Scaffold | 0.0 | schema-required fallback with no source evidence |
 
+`Scaffold` is the adapter's projection of a placeholder stamp on either side:
+`crawler.scaffold.<symbol>` from the repo crawler, `mcp.scaffold.<symbol>` from
+the live fetcher (the `spec.otel` block, collector receivers/processors,
+logs/traces exporters, fallback backends, the `platform-overview` stub, the
+SEV1 route, baselines, guessed SLI/SLOs and the burn-rate placeholder — see
+`MCP_INTEGRATION.md`). Both sides can therefore contribute parked artefacts
+(`isScaffoldDiffEntry` checks either side of an entry): a live-pack
+placeholder never weighs in as `Live, not declared`, and a repo scaffold
+never weighs in as `Declared, not live`.
+
 Weighted fidelity is:
 
 ```text

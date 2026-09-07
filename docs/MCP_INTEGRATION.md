@@ -41,7 +41,7 @@ diagnostic-grade drift:
 | Recording rules | full rule names and expressions where the MCP exposes them |
 | Alert rules | Grafana/Prometheus alerting rules; burn-rate alerts are mapped from them per SLO, never synthesised |
 | Dashboards | Grafana dashboard metadata plus dashboard bodies, panels, variables, and targets |
-| Baselines | MTTD/MTTR and anomaly-derived evidence when available |
+| Baselines | none yet — MTTD/MTTR are platform defaults stamped `Scaffold`; anomaly baselines are only counted (`mcp.baselinesComputed`) |
 | Backend versions | observed platform products and versions |
 
 This is what lets Observogram compare declared repo artifacts against live
@@ -57,24 +57,26 @@ metadata:
   annotations:
     mcp.refreshedAt: "2026-06-09T00:09:14.730Z"
     mcp.url: "https://otel-mcp.example.com/mcp"
-    mcp.toolsCalled: "system_health,vmalert_rules,grafana_dashboards_search,grafana_dashboard_get,metrics_label_values,metrics_targets"
-    mcp.toolsFailed: ""
+    mcp.toolsCalled: "system_health,vmalert_rules,metrics_label_values,metrics_targets"
+    mcp.toolsFailed: ""                              # core tools only; probe families are accounted below
+    mcp.toolsExposed: "system_health,vmalert_rules,metrics_label_values,metrics_targets,grafana_dashboards_search,…"
+    mcp.toolsExposedCount: "14"
+    mcp.toolsUnmatched: "logs_search"                # advertised, no probe pattern yet
     mcp.probesAttempted: "recording_rules,alert_rules,dashboards,metric_names,scrape_configs"
-    mcp.probesSucceeded: "recording_rules,alert_rules,dashboards,metric_names,scrape_configs"
-    mcp.probesEmpty: ""
-    mcp.probesFailed: "dashboards"
-    mcp.probesUnsupported: "scrape_configs"        # tools/list exposes no candidate — a restricted tier, not an outage
+    mcp.probesSucceeded: "recording_rules,alert_rules,metric_names,scrape_configs"
+    mcp.probesEmpty: ""                              # a probe answered with an empty list
+    mcp.probesFailed: "dashboards"                   # every candidate errored — a hole of unknown size
+    mcp.probesUnsupported: ""                        # e.g. "traces_services" when tools/list exposes no candidate — a restricted tier, not an outage
     mcp.probeErrors.dashboards: "HTTP 502 Bad Gateway"   # last erroring candidate of a failed family (trimmed to 200 chars)
 
     mcp.verified.otel.metrics: "2026-06-09T00:09:14.730Z"
     mcp.verified.telemetry.scrape: "2026-06-09T00:09:14.730Z"
     mcp.verified.pipelines.exporters.metrics: "2026-06-09T00:09:14.730Z"
-    mcp.verified.queries.recording_rules: "2026-06-09T00:09:14.730Z"
+    mcp.verified.queries.recording_rules: "2026-06-09T00:09:14.730Z"      # aggregate: at least one rule earned an indexed stamp
+    mcp.verified.queries.recording_rules[0]: "2026-06-09T00:09:14.730Z"   # per rule, withheld when the ruler reports it unhealthy
     mcp.verified.slis.svc_checkout_availability: "2026-06-09T00:09:14.730Z"
-    mcp.verified.dashboards: "2026-06-09T00:09:14.730Z"
-    mcp.verified.policy.burn_rate_alerts[0]: "2026-06-09T00:09:14.730Z"
-
-    mcp.verified.queries.recording_rules[0]: "2026-06-09T00:09:14.730Z"
+    mcp.verified.slos.svc_checkout_availability_99_9: "2026-06-09T00:09:14.730Z"   # re-identified by a discovered burn-rate group
+    mcp.verified.policy.burn_rate_alerts[0]: "2026-06-09T00:09:14.730Z"  # per mapped entry, never unindexed
 
     mcp.discovered.alert_rule_names: "svc_checkout_availability_99_9_burn_14x_5m_1h,..."
     mcp.discovered.alert_rules_unmapped: "svc_payments_latency_99"
@@ -105,6 +107,35 @@ counterpart of `crawler.scaffold.<symbol>`) as `Scaffold` — a schema-forced
 placeholder the MCP did not attest, parked by the grade rather than counted.
 The Diagnostic Grade uses these annotations to decide whether a fresh live
 signal exists.
+
+### Annotation reference
+
+Every key the fetcher writes, by family. Comma lists are capped at 64 names;
+JSON arrays (`annotationJson`) at 200 entries; error strings at 200 chars.
+
+| Key | Value | Meaning |
+|---|---|---|
+| `mcp.refreshedAt`, `mcp.url` | ISO time, URL | when and from where the pack was fetched |
+| `mcp.toolsCalled`, `mcp.toolsFailed` | comma list | core tools (`system_health`, …) called / errored |
+| `mcp.toolsExposed`, `mcp.toolsExposedCount`, `mcp.toolsUnmatched` | comma list, count | the `tools/list` inventory, and advertised tools with no probe pattern |
+| `mcp.probesAttempted` / `Succeeded` / `Empty` / `Failed` / `Unsupported` | comma list of probe families | outcome per family: answered with data / answered empty / every candidate errored / no candidate advertised by `tools/list` |
+| `mcp.probeErrors.<family>` | string | last erroring candidate's message for a failed family |
+| `mcp.verified.<symbol>` | `refreshedAt` | the adapter projects the artefact as `Verified`; indexed for per-entry lists (`queries.recording_rules[<i>]`, `policy.burn_rate_alerts[<i>]`) |
+| `mcp.scaffold.<symbol>` | note string (same convention as `crawler.scaffold.*`) | schema-forced placeholder no tool attested; projects as `Scaffold` |
+| `mcp.discovered.<family>` | count | array length of a probe's adapted result, `"0"` when it answered empty |
+| `mcp.discovered.scrape_jobs` / `scrape_jobs_down` | comma list of job names | jobs with at least one target up (or of unknown health) / jobs whose every target is down |
+| `mcp.discovered.recording_rules_unhealthy` / `alert_rules_unhealthy` | comma list of rule names | rules whose reported `health` is not `ok` |
+| `mcp.discovered.alert_rule_names` | comma list | every alerting rule name the MCP exposed |
+| `mcp.discovered.alert_rules_unmapped` / `alert_rules_severity_inferred` | comma list | burn-rate groups the schema cannot represent / rules whose severity came from the burn factor |
+| `mcp.discovered.metric_names`, `_count`, `_sample` | JSON, count, comma list | the metric inventory |
+| `mcp.discovered.dashboard_panels`, `dashboard_raw_json`, `dashboard_detail_errors` | counts, comma list | dashboard body capture |
+| `mcp.discovered.alerts_firing.*`, `recording_rules_via_inventory.*` | counts, names, source | `ALERTS` series and rule names recovered from the metric inventory |
+| `mcp.discovered.extended_surfaces`, `extended_surface_refs` | count, comma list | level-2 evidence surfaces |
+| `mcp.observed.scrape_targets` | JSON `[{job, instance, health, lastScrape, lastError}]` | every scrape target's on-wire health |
+| `mcp.observed.recording_rules` | JSON `[{name, health, lastError, lastEvaluation, evaluationTime}]` | every recording rule's evaluation state |
+| `mcp.observed.alert_rules` | JSON `[{name, state, health, lastError, lastEvaluation, activeAt}]` | every alerting rule's evaluation state |
+| `mcp.servicesDiscovered`, `mcp.activeAnomalies`, `mcp.baselinesComputed` | comma list, counts | `system_health` / anomaly tools answered (not a measurement of anything in `spec.baselines`) |
+| `mcp.capabilities.*`, `mcp.versions.<product>[.*]` | strings | `backend_capabilities` inventory and observed product versions |
 
 ### What the fetcher invents, and how it says so
 
