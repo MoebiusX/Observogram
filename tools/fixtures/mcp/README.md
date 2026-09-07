@@ -19,6 +19,37 @@ extras allowed), and `adapt(fixture)` is pinned in `adapted/`.
 | `metrics_targets.json` | `metrics_targets` | scrape_configs |
 | `metrics_label_values.json` | `metrics_label_values` | metric_names |
 
+## Recorded vs synthetic
+
+Everything in this directory's top level is a **recording** — a real payload
+from a real server, trimmed. `synthetic/` is different: **hand-written**
+samples for the step-2 surfaces (stack self-metrics, Alertmanager status and
+silences, Grafana datasources, datasource health, contact points) that no
+recording exists for yet — the session that added them had neither
+credentials nor Docker, so nothing could be captured. Each synthetic file
+carries a top-level `"_synthetic"` marker naming the date and the
+replacement path; the shape contract tolerates the marker like any other
+extra, and `tools/test-contract-shapes.mjs` asserts it is present so a
+recording that replaces the file must also drop the marker (and move the
+case into the recorded `CASES` list with its `adapted/` pin).
+
+| Synthetic fixture | Tool | Capability | Shape |
+|---|---|---|---|
+| `synthetic/metrics_query.instant-vector.json` | `metrics_query` | stack_self_metrics | `instant-vector` (otel-mcp-server `{ result }`) |
+| `synthetic/metrics_query.instant-vector.prometheus-api.json` | `metrics_query` | stack_self_metrics, build_info_versions | `instant-vector` (Prometheus API `{ data: { result } }`) |
+| `synthetic/alertmanager_status.json` | `alertmanager_status` | alertmanager_status | `status-object` |
+| `synthetic/alertmanager_silences.json` | `alertmanager_silences` | alertmanager_silences | `silences` |
+| `synthetic/grafana_datasources.json` | `grafana_datasources` | grafana_datasources | `datasources` |
+| `synthetic/grafana_datasource_health.json` | `grafana_datasource_health` | grafana_datasource_health | `health-object` |
+| `synthetic/grafana_contact_points.json` | `grafana_contact_points` | grafana_contact_points | `contact-points` |
+
+Synthetic fixtures pin **shape only** (critical fields, tolerance, removal
+gate) — no `adapted/` goldens, because the fetcher's parsers for these
+capabilities land with the sampler. The markers name `npm run
+record-fixtures` as the replacement path; that recorder script ships with
+the sampler slice, so until then re-record the same way as below (any MCP
+client, parsed `content[0].text`).
+
 ## Re-recording
 
 When an upstream MCP changes its payload shape on purpose: capture the new

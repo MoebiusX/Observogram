@@ -1,0 +1,30 @@
+{
+  "_synthetic": "hand-written 2026-09-07 — replace with a recording via npm run record-fixtures",
+  "_shape": "Alertmanager API v2 GET /api/v2/silences, wrapped as { silences: [...] }",
+  "silences": [
+    {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "status": { "state": "active" },
+      "matchers": [
+        { "name": "alertname", "value": "SyntheticNoisyAlert", "isRegex": false, "isEqual": true }
+      ],
+      "startsAt": "2026-09-07T08:00:00.000Z",
+      "endsAt": "2026-09-07T20:00:00.000Z",
+      "updatedAt": "2026-09-07T08:00:00.000Z",
+      "createdBy": "synthetic",
+      "comment": "hand-written fixture — maintenance window"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "status": { "state": "expired" },
+      "matchers": [
+        { "name": "job", "value": "payment-processor", "isRegex": false, "isEqual": true }
+      ],
+      "startsAt": "2026-09-01T08:00:00.000Z",
+      "endsAt": "2026-09-01T09:00:00.000Z",
+      "updatedAt": "2026-09-01T08:00:00.000Z",
+      "createdBy": "synthetic",
+      "comment": "hand-written fixture — expired"
+    }
+  ]
+}

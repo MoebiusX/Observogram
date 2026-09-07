@@ -121,6 +121,71 @@ for (const c of CASES) {
   assert(!vBroken.ok, `${c.capability}: shape check FAILS when critical fields are removed`, vBroken);
 }
 
+// ---------- SYNTHETIC fixtures (step 2 surfaces) ----------
+//
+// tools/fixtures/mcp/synthetic/ holds HAND-WRITTEN samples (each carries a
+// top-level `_synthetic` marker) for shapes no recording exists for yet —
+// see the fixtures README, "Recorded vs synthetic". Only the shape contract
+// is pinned here (SHAPE / TOLERANT / CRITICAL); there are no adapted
+// goldens because the fetcher's parsers for these capabilities land in a
+// later slice. When a recording replaces a synthetic file, drop the marker
+// and move the case into CASES with its adapt() pin.
+const SYNTHETIC_DIR = resolve(FIXTURE_DIR, 'synthetic');
+const SYNTHETIC_CASES = [
+  { capability: 'stack_self_metrics', fixture: 'metrics_query.instant-vector.json',
+    breakCriticals: (f) => f.result.forEach(r => { delete r.metric; delete r.value; delete r.values; }) },
+  { capability: 'stack_self_metrics', fixture: 'metrics_query.instant-vector.prometheus-api.json',
+    breakCriticals: (f) => f.data.result.forEach(r => { delete r.metric; delete r.value; delete r.values; }) },
+  { capability: 'build_info_versions', fixture: 'metrics_query.instant-vector.prometheus-api.json',
+    breakCriticals: (f) => { delete f.result; delete f.data; } },
+  { capability: 'alertmanager_status', fixture: 'alertmanager_status.json',
+    breakCriticals: (f) => { delete f.versionInfo; delete f.version; delete f.uptime; delete f.cluster; delete f.status; } },
+  { capability: 'alertmanager_silences', fixture: 'alertmanager_silences.json',
+    breakCriticals: (f) => f.silences.forEach(s => { delete s.id; delete s.status; delete s.matchers; }) },
+  { capability: 'grafana_datasources', fixture: 'grafana_datasources.json',
+    breakCriticals: (f) => f.datasources.forEach(d => { delete d.uid; delete d.id; delete d.name; }) },
+  { capability: 'grafana_datasource_health', fixture: 'grafana_datasource_health.json',
+    breakCriticals: (f) => { delete f.status; delete f.message; delete f.ok; } },
+  { capability: 'grafana_contact_points', fixture: 'grafana_contact_points.json',
+    breakCriticals: (f) => f.contactPoints.forEach(c => { delete c.name; delete c.uid; }) },
+];
+
+for (const c of SYNTHETIC_CASES) {
+  const shapeId = capability(c.capability).responseShape;
+  assert(!!shapeId, `${c.capability} (synthetic): declared responseShape exists`, shapeId);
+  if (!shapeId) continue;
+  const fixture = JSON.parse(readFileSync(resolve(SYNTHETIC_DIR, c.fixture), 'utf8'));
+  assert(typeof fixture._synthetic === 'string' && fixture._synthetic.startsWith('hand-written'),
+    `${c.capability} (synthetic): ${c.fixture} is marked _synthetic`, fixture._synthetic);
+
+  // 1. SHAPE — the marker itself is an "extra" the shape must tolerate.
+  const v = validateResponseShape(shapeId, fixture);
+  assert(v.ok && v.items > 0, `${c.capability} (synthetic): ${c.fixture} satisfies shape ${shapeId} (${v.items} items)`, v);
+
+  // 3. TOLERANT — unknown extras change nothing.
+  const vExt = validateResponseShape(shapeId, injectExtras(clone(fixture)));
+  assert(vExt.ok, `${c.capability} (synthetic): shape check ignores unknown extra fields`, vExt);
+
+  // 4. CRITICAL — removing what the (future) parser consumes fails the gate.
+  const broken = clone(fixture);
+  c.breakCriticals(broken);
+  const vBroken = validateResponseShape(shapeId, broken);
+  assert(!vBroken.ok, `${c.capability} (synthetic): shape check FAILS when critical fields are removed`, vBroken);
+}
+
+// Instant-vector edge cases the sampler relies on: an empty result is a
+// legitimate answer (outcome 'empty'); a non-object is not a payload.
+const vNoSeries = validateResponseShape('instant-vector', { result: [] });
+assert(vNoSeries.ok && vNoSeries.items === 0, 'metrics_query { result: [] }: empty instant vector PASSES (zero series is an answer)', vNoSeries);
+const vBadEnvelope = validateResponseShape('instant-vector', { status: 'success', data: { resultType: 'vector' } });
+assert(!vBadEnvelope.ok, 'metrics_query envelope without a result list FAILS the shape check', vBadEnvelope);
+const vObjAsList = validateResponseShape('status-object', { silences: [] });
+assert(!vObjAsList.ok, 'status-object: a response without any status key FAILS', vObjAsList);
+const vWrapped = validateResponseShape('health-object', { data: { status: 'ERROR', message: 'synthetic' } });
+assert(vWrapped.ok, 'health-object: a { data: {...} } envelope is located', vWrapped);
+const vArray = validateResponseShape('health-object', [{ status: 'OK' }]);
+assert(!vArray.ok, 'health-object: a list is not an object payload', vArray);
+
 // Legitimate-empty: the real Krystaline metrics_alerts response.
 const empty = JSON.parse(readFileSync(resolve(FIXTURE_DIR, 'metrics_alerts.empty.json'), 'utf8'));
 const vEmpty = validateResponseShape('rule-groups', empty);

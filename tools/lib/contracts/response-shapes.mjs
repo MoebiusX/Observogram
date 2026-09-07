@@ -17,6 +17,12 @@
 //   itemAnyOf    for object items: groups of field paths; every group must
 //                have at least ONE field present on each item. String items
 //                pass automatically (adapters filter non-strings leniently).
+//   object       true for shapes whose payload is a single plain OBJECT
+//                rather than a list (a status document, a health verdict)
+//   objectAt     for object shapes: candidate paths where that object may
+//                live ('' = the response itself), tried in order
+//   anyOfKeys    for object shapes: groups of key paths; every group must
+//                have at least ONE key present on the located object
 //
 // An EMPTY payload array is a PASS: "the backend says zero" is a legitimate,
 // meaningful response (the fetcher's outcome:'empty' case) — shape checking
@@ -55,6 +61,54 @@ export const RESPONSE_SHAPES = Object.freeze({
     objectKeysAt: ['data'],
     itemAnyOf: [],                   // items are strings
   },
+
+  // ---- step 2: stack self-metrics + status surfaces ----------------------
+  // PromQL instant vector — otel-mcp-server's metrics_query ({ result })
+  // and the Prometheus HTTP API envelope ({ data: { result } }). Consumed
+  // by build_info_versions and stack_self_metrics.
+  'instant-vector': {
+    lists: ['result', 'data.result'],
+    itemAnyOf: [
+      ['value', 'values', 'metric'], // a sample (or a series identity)
+    ],
+  },
+  // Alertmanager API v2 silences.
+  'silences': {
+    lists: ['silences', 'data', ''],
+    itemAnyOf: [
+      ['id', 'status', 'matchers'],
+    ],
+  },
+  // Grafana datasource listing.
+  'datasources': {
+    lists: ['datasources', 'data', ''],
+    itemAnyOf: [
+      ['uid', 'id', 'name'],
+    ],
+  },
+  // Grafana contact points (provisioning API).
+  'contact-points': {
+    lists: ['contactPoints', 'contact_points', 'data', ''],
+    itemAnyOf: [
+      ['name', 'uid'],
+    ],
+  },
+  // Alertmanager API v2 /status — a single object, not a list.
+  'status-object': {
+    object: true,
+    objectAt: ['', 'data'],
+    anyOfKeys: [
+      ['versionInfo', 'version', 'uptime', 'cluster', 'status'],
+    ],
+  },
+  // Grafana datasource health check — a single verdict object.
+  'health-object': {
+    object: true,
+    objectAt: ['', 'data'],
+    anyOfKeys: [
+      ['status', 'message', 'ok'],
+    ],
+  },
 });
 
 const get = (obj, path) => path === ''
@@ -68,6 +122,25 @@ export function validateResponseShape(shapeId, response) {
   if (!shape) throw new Error(`unknown response shape: ${shapeId}. Known: ${Object.keys(RESPONSE_SHAPES).join(', ')}`);
   if (response == null || typeof response !== 'object') {
     return { ok: false, reason: 'response is not an object', items: 0 };
+  }
+
+  // Object shapes: a single plain object carrying at least one key of each
+  // anyOfKeys group. Extras are never inspected; `items` is 1 when found.
+  if (shape.object) {
+    const paths = shape.objectAt || [''];
+    const candidates = paths.map(p => get(response, p))
+      .filter(v => v && typeof v === 'object' && !Array.isArray(v));
+    if (candidates.length === 0) {
+      return { ok: false, reason: `no payload object at any of: ${paths.map(p => p || '<root>').join(', ')}`, items: 0 };
+    }
+    // First candidate (in declared path order) carrying every key group
+    // wins — a bare document and a { data: {...} } envelope both locate.
+    const missingGroup = (obj) => (shape.anyOfKeys || []).find(group => !group.some(k => get(obj, k) !== undefined));
+    const found = candidates.find(obj => missingGroup(obj) === undefined);
+    if (!found) {
+      return { ok: false, reason: `object missing all of: ${missingGroup(candidates[0]).join(' | ')}`, items: 1 };
+    }
+    return { ok: true, reason: null, items: 1 };
   }
 
   // Locate the payload: first declared path that yields an array (or, for

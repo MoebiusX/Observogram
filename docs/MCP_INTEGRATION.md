@@ -277,6 +277,37 @@ comparison (`comparePackBranches`) is attached to the diff as
 `grade.driftConstruct` says which construct scored Drift-free
 (`requirement-chain` when declared commitments exist, else `diff-buckets`).
 
+### Stack self-metrics (registry)
+
+`tools/lib/contracts/stack-self-metrics.mjs` is the data-only alias table the
+step-2 sampler reads to acquire the observability stack's *own* health
+signals through `metrics_query`: 24 rows across nine families (`scrape`,
+`ruler`, `notify`, `tsdb`, `collector`, `dashboards`, `synthetic`, `logs`,
+`traces`), each with a plain-English `signal`, a `unit`, a display-only
+`direction`, an optional `referenceSli` naming the reference-pack SLI whose
+vocabulary it follows (`prometheus-reference/scrape_success_ratio`, …), an
+ordered list of product `aliases` (`{ product, expr, requires }` — an alias is
+eligible only when every name in `requires` is in the metric inventory), and
+a `source` naming the upstream documentation the metric names come from. The
+registry rows `stack_self_metrics`, `alertmanager_status`,
+`alertmanager_silences`, `grafana_datasources`, `grafana_datasource_health`
+and `grafana_contact_points` carry the tool names; the response shapes
+`instant-vector`, `status-object`, `silences`, `datasources`, `health-object`
+and `contact-points` pin the critical fields against the hand-written
+fixtures in `tools/fixtures/mcp/synthetic/` (no recording exists yet — see
+that directory's README). Every sampled number is a point-in-time **signal,
+never a verdict**: nothing in this table creates a `Verified` stamp, an SLO
+verdict or a grade change, and on a restricted tier the answer is "not
+attempted" with the reason. Known discrepancy, documented rather than fixed:
+the reference pack's `scrape_duration_p99` is written over
+`scrape_duration_seconds_bucket`, but Prometheus exposes
+`scrape_duration_seconds` as a per-target gauge with no histogram, so the row
+`scrape_duration_max` samples `max(scrape_duration_seconds)` and points at the
+reference SLI for vocabulary only. Resolvers: `probeRows()`,
+`rowsForFamily(family)`, `eligibleAliases(row, inventory)`,
+`productPreferenceOrder(row, seenProducts)`, `displayHint(row, value)`,
+`bestOutcome(outcomes)`; integrity is pinned by `npm run test:stack`.
+
 ## Diagnostic Drift Semantics
 
 When Pack B is live-like, Diagnose treats the comparison as declared vs live:
