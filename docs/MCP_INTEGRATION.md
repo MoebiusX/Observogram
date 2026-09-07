@@ -195,6 +195,46 @@ Dashboard search alone is not enough for diagnostic drift. The fetcher uses
 `grafana_dashboard_get` for each UID so Observogram captures panels, variables,
 targets, and sanitized dashboard JSON.
 
+### Journeys read the vantage, and can gate on it
+
+A saved journey (`tools/lib/journey.mjs`, `packc journey run`) whose Pack B is
+an `mcp:` source reads the annotations above into its run record:
+
+| Record field | Source annotations |
+|---|---|
+| `probes.attempted / succeeded / empty / failed / unsupported` | `mcp.probesAttempted`, `mcp.probesSucceeded`, `mcp.probesEmpty`, `mcp.probesFailed`, `mcp.probesUnsupported` (family names) |
+| `probeErrors.<family>` | `mcp.probeErrors.<family>` |
+| `vantage` | derived — `full` / `partial` / `restricted` / `lost` / `none` (same rule as `partialLiveEvidence`) |
+| `toolsExposedCount` | `mcp.toolsExposedCount` (`null` when absent) |
+| `scrapeJobsDown` | count of `mcp.discovered.scrape_jobs_down` |
+| `unhealthyRules` | count of `mcp.discovered.recording_rules_unhealthy` + `mcp.discovered.alert_rules_unhealthy` |
+
+A file-sourced Pack B carries none of these: the lists are empty, the counts
+`0`, the vantage `none` — absence of evidence is reported as absence.
+
+Two gate keys act on them:
+
+```yaml
+gate:
+  failOnPartialEvidence: true   # breach when any probe family FAILED (a hole of unknown size),
+                                # or when the vantage is entirely lost; EMPTY and UNSUPPORTED
+                                # families never breach on their own
+  maxUnhealthy: 0               # breach when scrapeJobsDown + unhealthyRules exceeds N
+```
+
+When the fetch itself fails (endpoint unreachable, core tools unavailable) the
+journey writes a run record with `outcome: vantage-lost` and the error before
+rethrowing — the CLI still exits `2`, the studio still answers 502 — so a total
+loss of the observation point shows in the drift history instead of leaving a
+gap. Configuration errors (missing pack file, unset `authEnv`) never reach the
+wire and leave no record.
+
+The journey grades on the same construct as the studio: the requirement-chain
+comparison (`comparePackBranches`) is attached to the diff as
+`traceabilityGraph` before `computeDiagnosticGrade`, and the record's
+`grade.driftConstruct` says which construct scored Drift-free
+(`requirement-chain` when declared commitments exist, else `diff-buckets`).
+
 ## Diagnostic Drift Semantics
 
 When Pack B is live-like, Diagnose treats the comparison as declared vs live:

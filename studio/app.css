@@ -6319,6 +6319,7 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
 .journey-outcome { font: 12px/1.2 var(--mono); color: var(--ink-3); }
 .journey-outcome.is-pass { color: var(--ok, #16a34a); }
 .journey-outcome.is-fail { color: var(--err, #b91c1c); }
+.journey-outcome.is-lost { color: rgb(217, 119, 6); }
 .journey-spark { width: 120px; height: 28px; flex: none; }
 .journey-run-btn { margin-left: auto; }
 .journey-card-meta {

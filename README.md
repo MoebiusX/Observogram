@@ -293,6 +293,8 @@ gate:
   minAlignmentPct: 85
   requireGradePass: true
   maxLiveAgeHours: 24
+  failOnPartialEvidence: true   # a probe family FAILED → the verdict is not trustworthy
+  maxUnhealthy: 0               # scrape jobs down + rules failing to evaluate, as seen on the wire
 ```
 
 ```bash
@@ -304,8 +306,14 @@ node tools/cli.mjs journey list                      # journeys + last outcome
 Exit codes follow the gate contract: `0` verdict passes, `1` gate failed,
 `2` tooling/config error — so the same command is a cron job, a Windows
 scheduled task, or a CI gate. Every run appends a JSON record under
-`.observogram/runs/<journey>/` (the drift-over-time series). Secrets never
-live in journey files — MCP auth is referenced by env-var name.
+`.observogram/runs/<journey>/` (the drift-over-time series), including the
+vantage of the live source itself (`probes`, `vantage`, `toolsExposedCount`,
+`scrapeJobsDown`, `unhealthyRules`). When the live MCP does not answer at
+all, the run still writes an `outcome: vantage-lost` record before exiting
+`2` — the loss is a point in the history, not a gap. The CLI grades on the
+same construct as the studio (requirement-chain integrity rides on the
+diff), so both report one score for one comparison. Secrets never live in
+journey files — MCP auth is referenced by env-var name.
 
 ## API Surface
 
