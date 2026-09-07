@@ -67,24 +67,25 @@ metadata:
     mcp.probesEmpty: ""                              # a probe answered with an empty list
     mcp.probesFailed: "dashboards"                   # every candidate errored — a hole of unknown size
     mcp.probesUnsupported: ""                        # e.g. "traces_services" when tools/list exposes no candidate — a restricted tier, not an outage
-    mcp.probeErrors.dashboards: "HTTP 502 Bad Gateway"   # last erroring candidate of a failed family (trimmed to 200 chars)
+    mcp.probeErrors.dashboards: "HTTP 502 Bad Gateway"   # last erroring candidate of a FAILED family only (trimmed to 200 chars)
 
     mcp.verified.otel.metrics: "2026-06-09T00:09:14.730Z"
     mcp.verified.telemetry.scrape: "2026-06-09T00:09:14.730Z"
     mcp.verified.pipelines.exporters.metrics: "2026-06-09T00:09:14.730Z"
     mcp.verified.queries.recording_rules: "2026-06-09T00:09:14.730Z"      # aggregate: at least one rule earned an indexed stamp
     mcp.verified.queries.recording_rules[0]: "2026-06-09T00:09:14.730Z"   # per rule, withheld when the ruler reports it unhealthy
-    mcp.verified.slis.svc_checkout_availability: "2026-06-09T00:09:14.730Z"
-    mcp.verified.slos.svc_checkout_availability_99_9: "2026-06-09T00:09:14.730Z"   # re-identified by a discovered burn-rate group
+    mcp.verified.slis.svc_checkout_availability: "2026-06-09T00:09:14.730Z"   # withheld when a feeding rule is unhealthy
+    mcp.verified.slos.svc_checkout_availability_99_9: "2026-06-09T00:09:14.730Z"   # bound by a discovered burn-rate group (exact id or re-identified)
     mcp.verified.policy.burn_rate_alerts[0]: "2026-06-09T00:09:14.730Z"  # per mapped entry, never unindexed
+    mcp.verified.dashboards: "2026-06-09T00:09:14.730Z"                   # aggregate
+    mcp.verified.dashboards.kx-genai-operations: "2026-06-09T00:09:14.730Z"   # per discovered dashboard (the symbol the adapter reads)
 
     mcp.discovered.alert_rule_names: "svc_checkout_availability_99_9_burn_14x_5m_1h,..."
     mcp.discovered.alert_rules_unmapped: "svc_payments_latency_99"
-    mcp.discovered.alert_rules_severity_inferred: ""
     mcp.discovered.scrape_jobs: "node-exporter,grafana,otel-collector"
     mcp.discovered.scrape_jobs_down: "alertmanager"
-    mcp.discovered.recording_rules_unhealthy: ""
     mcp.discovered.alert_rules_unhealthy: "HighLatencyP99"
+    mcp.discovered.slis_unhealthy: "svc_payments_latency"      # SLIs whose feeding recorded rule is unhealthy (only when non-empty; likewise recording_rules_unhealthy, alert_rules_severity_inferred)
     mcp.observed.scrape_targets: '[{"job":"alertmanager","instance":"kx-alertmanager:9093","health":"down","lastScrape":"…","lastError":"dial tcp4 …: connection refused"}, …]'
     mcp.observed.recording_rules: '[{"name":"finops:cpu:usage_per_pod_5m","health":"ok","lastError":null,"lastEvaluation":"…","evaluationTime":0.0009}, …]'
     mcp.observed.alert_rules: '[{"name":"HighLatencyP99","health":"err","lastError":"…","lastEvaluation":"…","state":"inactive","activeAt":null}, …]'
@@ -119,8 +120,8 @@ JSON arrays (`annotationJson`) at 200 entries; error strings at 200 chars.
 | `mcp.toolsCalled`, `mcp.toolsFailed` | comma list | core tools (`system_health`, …) called / errored |
 | `mcp.toolsExposed`, `mcp.toolsExposedCount`, `mcp.toolsUnmatched` | comma list, count | the `tools/list` inventory, and advertised tools with no probe pattern |
 | `mcp.probesAttempted` / `Succeeded` / `Empty` / `Failed` / `Unsupported` | comma list of probe families | outcome per family: answered with data / answered empty / every candidate errored / no candidate advertised by `tools/list` |
-| `mcp.probeErrors.<family>` | string | last erroring candidate's message for a failed family |
-| `mcp.verified.<symbol>` | `refreshedAt` | the adapter projects the artefact as `Verified`; indexed for per-entry lists (`queries.recording_rules[<i>]`, `policy.burn_rate_alerts[<i>]`) |
+| `mcp.probeErrors.<family>` | string | last erroring candidate's message, written only for a family whose outcome is `failed` (a family whose later candidate answered carries none — it is in `probesSucceeded`) |
+| `mcp.verified.<symbol>` | `refreshedAt` | the adapter projects the artefact as `Verified`; indexed for per-entry lists (`queries.recording_rules[<i>]`, `policy.burn_rate_alerts[<i>]`), per id for dashboards (`dashboards.<id>`, beside the aggregate `dashboards`) |
 | `mcp.scaffold.<symbol>` | note string (same convention as `crawler.scaffold.*`) | schema-forced placeholder no tool attested; projects as `Scaffold` |
 | `mcp.discovered.<family>` | count | array length of a probe's adapted result, `"0"` when it answered empty |
 | `mcp.discovered.scrape_jobs` / `scrape_jobs_down` | comma list of job names | jobs with at least one target up (or of unknown health) / jobs whose every target is down |
@@ -150,8 +151,8 @@ one the adapter passes to `sourceOf`) and never `mcp.verified.<symbol>`:
 | Logs / traces exporters | `pipelines.exporters.logs`, `pipelines.exporters.traces` | never |
 | Metrics exporter | `pipelines.exporters.metrics` | scrape targets or a metric inventory came back |
 | Fallback backends (no `backend_capabilities`) | `telemetry.backends.metrics-prom` / `logs-elastic` / `traces-jaeger` | a `*_build_info` capture for prometheus/victoriametrics/mimir; the topology names jaeger or `traces_services` answered; never for elasticsearch |
-| Per-service availability SLI/SLO guesses, `platform_availability` | `slis.<id>`, `slos.<id>` | never as guesses — SLIs inferred from real recorded rules are `Verified`; an SLO re-identified by a discovered burn-rate group is `Verified` |
-| Dashboard stub | `dashboards.platform-overview` | never (discovered dashboards replace it) |
+| Per-service availability SLI/SLO guesses, `platform_availability` | `slis.<id>`, `slos.<id>` | never as guesses — SLIs inferred from real recorded rules are `Verified` (unless a feeding rule is unhealthy); an SLO bound by a discovered burn-rate group — exact id or re-identified — drops its scaffold marker and is `Verified` unless that group is fed by an unhealthy rule (then `Declared`) |
+| Dashboard stub | `dashboards.platform-overview` | never (discovered dashboards replace it, each stamped `dashboards.<id>`) |
 | SEV1 → Teams route | `alerting.routes[0]` | never |
 | Baselines | `baselines` | never |
 | Burn-rate placeholder | `policy.burn_rate_alerts[0]` | never (mapped rules replace it) |
@@ -165,8 +166,10 @@ returned: it is evidence the tool answered, **not** an MTTD measurement.
 
 Known limitation: SLOs inferred from recorded rules carry a placeholder
 objective (`0.99`) and window (`30d`) unless a discovered burn-rate group
-re-identifies them; the SLI is `Verified` (the recorded series exist), the SLO
-stays `Declared`.
+binds them (exact id or re-identification, which also applies the rule's
+`slo_objective` / `slo_window` evidence); the SLI is `Verified` (the recorded
+series exist and evaluate), the SLO stays `Declared` — the rule evidences the
+measurement, the objective is a guess until a burn-rate rule names it.
 
 ### On-wire liveness: scrape targets and rule health
 
@@ -182,7 +185,8 @@ withholds `Verified` where it is not:
 | Each recording rule's `health`, `lastError`, `lastEvaluation`, `evaluationTime` (at most 200) | `mcp.observed.recording_rules` (JSON) | none — the record |
 | Recording rules whose reported `health` is not `ok` | `mcp.discovered.recording_rules_unhealthy` | no `mcp.verified.queries.recording_rules[<i>]` stamp for that index (the rule still lands in `spec.queries`, projected `Declared`); the group stamp `mcp.verified.queries.recording_rules` is kept only when at least one rule is healthy or carries no health |
 | Each alerting rule's `state`, `health`, `lastError`, `lastEvaluation`, `activeAt` (at most 200) | `mcp.observed.alert_rules` (JSON) | none — the record |
-| Alerting rules whose reported `health` is not `ok` | `mcp.discovered.alert_rules_unhealthy` | a burn-rate group fed by such a rule still maps but earns no `mcp.verified.policy.burn_rate_alerts[<i>]` stamp (projected `Declared`) |
+| Alerting rules whose reported `health` is not `ok` | `mcp.discovered.alert_rules_unhealthy` | a burn-rate group fed by such a rule still maps but earns no `mcp.verified.policy.burn_rate_alerts[<i>]` stamp (projected `Declared`), and the SLO it bound is not stamped either; the requirement chain lists the rule with `verified: false` / `health: err` and does not let it close `missing_alert_evidence` |
+| SLIs inferred from recorded rules of which at least one is unhealthy | `mcp.discovered.slis_unhealthy` | no `mcp.verified.slis.<id>` stamp (projected `Declared`) — an SLI whose total/ratio series are not being produced is not measuring anything |
 
 Health the ruler did not report reads `null` in the observed arrays and is
 **not** treated as unhealthy — only an explicit non-`ok` health withholds a
@@ -190,10 +194,10 @@ stamp. Older probe results that carried only job names still count as
 (health-less) scrape evidence. The draft summary in the studio lists
 `N scrape jobs down: …` and `N rules unhealthy: …` when either is non-empty.
 
-Known limitation: an SLI inferred from a recorded rule the ruler reports
-unhealthy is still stamped `Verified` (the SLI inference does not yet consult
-rule health); the unhealthy rule itself is `Declared` and named in
-`mcp.discovered.recording_rules_unhealthy`.
+Rule health is keyed by rule NAME with any-unhealthy-wins semantics: when the
+ruler reports the same name from two groups (one evaluating, one failing) the
+rule is unhealthy, so neither spec entry is stamped and the SLI inferred from
+it stays `Declared`.
 
 ### Burn-rate alerts are mapped, never synthesised
 
@@ -204,11 +208,18 @@ other rule is recognised by the compiler's `<slo>_burn_<N>x_<short>_<long>`
 name. Rules are grouped per SLO (identical windows deduplicated, short window
 first) and each emitted entry is stamped `mcp.verified.policy.burn_rate_alerts[<i>]`.
 
-- When the rule names an SLO the fetcher inferred only as a placeholder
-  (same SLI base, e.g. inferred `svc_checkout_availability_99` vs. discovered
-  `svc_checkout_availability_99_9`), the placeholder is re-identified to the
-  discovered id and its placeholder objective/window are replaced from the
-  rule's `slo_objective` (`99.900%` → `0.999`) and `slo_window` annotations.
+- Groups are resolved in two passes. A group whose id exactly matches an
+  inferred SLO binds it first and claims it. Only then does a group that
+  merely shares an SLI base (inferred `svc_checkout_availability_99` vs.
+  discovered `svc_checkout_availability_99_9`) re-identify a still-unclaimed
+  placeholder to the discovered id — so with tiered SLOs on one SLI (`_99`
+  and `_99_9`) the exact group keeps its SLO and the other is reported
+  unmapped, never a dangling `slo` ref. Both paths replace the placeholder
+  objective/window from the rule's `slo_objective` (`99.900%` → `0.999`) and
+  `slo_window` annotations, drop the SLO's scaffold marker and stamp
+  `mcp.verified.slos.<id>` — unless the group is fed by an unhealthy rule.
+  A re-id is refused (group unmapped) when the discovered id is not a valid
+  schema Slug (`^[a-z][a-z0-9_-]*[a-z0-9]$`, at most 64 chars).
 - Forecast rules (`labels.kind=forecast`) and plain threshold alerts are not
   burn-rate alerts; their names still surface in `mcp.discovered.alert_rule_names`.
 - A burn group for an SLO nobody inferred, or one with a single window (the

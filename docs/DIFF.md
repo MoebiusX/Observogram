@@ -137,10 +137,21 @@ Each layer (`L1`, `L2`, `L2X`, `L3`, `L4`, `L5`, `GOV`) contains:
 | `onlyInB` | B has it in a family A participates in; A does not |
 | `inBoth` | same identity on both sides, with `aligned` or `drifted` verdict |
 | `outOfScope` | B has it, but A declares nothing in that artefact family |
+| `scaffold` | a placeholder (`source: Scaffold`) on either side — parked before pairing, never counted; entries carry `side` (`a`/`b`) and `artefact` |
 
 `outOfScope` prevents a single-service drift view from being flooded by the
 rest of a platform's live inventory. It is reported, but excluded from the
 in-scope ratios.
+
+`scaffold` holds the schema-forced placeholders the crawler
+(`crawler.scaffold.<symbol>`) or the live fetcher (`mcp.scaffold.<symbol>`)
+had to invent. A placeholder is neither a declaration nor live evidence, so
+it is removed from both sides **before** identity pairing: a declared
+burn-rate alert never reads `aligned` (or `drifted`) against the live pack's
+fallback entry — even when both carry the compiler's default windows on the
+same SLO — and a repo placeholder never reads `declared, not live`. A real
+live artefact whose repo counterpart is only a placeholder reads `live, not
+declared` as it should. `summary.scaffold` counts the parked entries.
 
 ## Summary Ratios
 
@@ -172,10 +183,19 @@ The Diagnose view does not score every delta equally. It uses weighted badness:
 the live fetcher (the `spec.otel` block, collector receivers/processors,
 logs/traces exporters, fallback backends, the `platform-overview` stub, the
 SEV1 route, baselines, guessed SLI/SLOs and the burn-rate placeholder — see
-`MCP_INTEGRATION.md`). Both sides can therefore contribute parked artefacts
-(`isScaffoldDiffEntry` checks either side of an entry): a live-pack
-placeholder never weighs in as `Live, not declared`, and a repo scaffold
-never weighs in as `Declared, not live`.
+`MCP_INTEGRATION.md`). Both sides can therefore contribute parked artefacts:
+`diffPacks` moves them to the `scaffold` bucket before pairing (see
+[Buckets](#buckets)), the requirement-chain comparison
+(`comparePackBranches`) refuses a `Scaffold` live node as evidence — a
+declared node against it reads `declared_only`, and a placeholder is never a
+`live_only` node or an `undeclared` branch root — and the requirement
+traceability chain skips a scaffold burn-rate entry when deciding
+`missing_alert_evidence`. A live-pack placeholder therefore never weighs in
+as `Live, not declared` and a repo scaffold never as `Declared, not live` on
+**any** path: the diff-bucket grade, the requirement-chain grade the studio
+and the journey CLI score on, and the journey's `alignmentPct` /
+`declaredNotLive` gate facts (`isScaffoldDiffEntry` still filters older
+diffs that carry no `scaffold` bucket).
 
 Weighted fidelity is:
 
