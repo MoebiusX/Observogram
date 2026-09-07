@@ -44,11 +44,14 @@ case into the recorded `CASES` list with its `adapted/` pin).
 | `synthetic/grafana_contact_points.json` | `grafana_contact_points` | grafana_contact_points | `contact-points` |
 
 Synthetic fixtures pin **shape only** (critical fields, tolerance, removal
-gate) — no `adapted/` goldens, because the fetcher's parsers for these
-capabilities land with the sampler. The markers name `npm run
-record-fixtures` as the replacement path; that recorder script ships with
-the sampler slice, so until then re-record the same way as below (any MCP
-client, parsed `content[0].text`).
+gate) — no `adapted/` goldens. The markers name `npm run record-fixtures`
+as the replacement path: `tools/record-mcp-fixtures.mjs` (`MCP_URL`,
+optional `MCP_AUTH`, optional `OUTPUT_DIR`) calls every alias of every
+stack self-metric row plus the status tools against a live server and
+writes the raw answers under `recordings/<date>/` (git-ignored). Those are
+not fixtures yet: trim them as described below, drop the `_synthetic`
+marker of the file you replace, and move its case from `SYNTHETIC_CASES`
+into `CASES` in `tools/test-contract-shapes.mjs`.
 
 ## Re-recording
 

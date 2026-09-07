@@ -19,7 +19,11 @@ import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from './lib/mini-yaml.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
 import { adapt } from './lib/adapter.mjs';
-import { buildCanonicalPack, fetchMcp, mapDiscoveredBurnAlerts, PROBES } from './fetch-live-pack.mjs';
+import {
+  buildCanonicalPack, fetchMcp, mapDiscoveredBurnAlerts, PROBES,
+  sampleStackSelfMetrics, observeAlertmanager, observeGrafana,
+} from './fetch-live-pack.mjs';
+import { STACK_SELF_METRIC_PROBES } from './lib/contracts/stack-self-metrics.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = JSON.parse(readFileSync(
@@ -1051,7 +1055,16 @@ assert(recProbe.adapt({ groups: [] }).length === 0,
 
 // ---------- case 6: dashboard search is enriched with dashboard bodies ----------
 
-async function withFakeMcp(handler) {
+const FAKE_MCP_TOOLS = [
+  'system_health',
+  'system_topology',
+  'anomalies_active',
+  'anomalies_baselines',
+  'grafana_dashboards_search',
+  'grafana_dashboard_get',
+];
+
+async function withFakeMcp(handler, tools = FAKE_MCP_TOOLS) {
   const srv = createServer(async (req, res) => {
     let raw = '';
     req.setEncoding('utf8');
@@ -1071,16 +1084,7 @@ async function withFakeMcp(handler) {
     }
     if (msg.method === 'notifications/initialized') { send({}); return; }
     if (msg.method === 'tools/list') {
-      send({
-        tools: [
-          'system_health',
-          'system_topology',
-          'anomalies_active',
-          'anomalies_baselines',
-          'grafana_dashboards_search',
-          'grafana_dashboard_get',
-        ].map(name => ({ name })),
-      });
+      send({ tools: tools.map(name => ({ name })) });
       return;
     }
     if (msg.method === 'tools/call') {
@@ -1214,6 +1218,359 @@ assert(l2xLayered.layers.L2X.length === 6,
        'adapter renders all live L2X surfaces', l2xLayered.layers.L2X.length, 6);
 assert(l2xLayered.layers.L2X.every(x => x.source === 'Verified'),
        'adapter surfaces Verified source for live L2X surfaces');
+
+// ---------- case 8: step 2 — stack self-metrics sampler (signals, never verdicts) ----------
+
+// A stub metrics_query: `answers` maps an expr to a response (or a thrown
+// error via { throw: msg }); anything else answers an empty vector. Every
+// call is logged so the tests can pin the call budget and the alias order.
+function stubMetricsQuery(answers) {
+  const calls = [];
+  const callTool = async (name, args) => {
+    calls.push({ name, query: args.query });
+    const a = answers[args.query];
+    if (a && a.throw) throw new Error(a.throw);
+    return a === undefined ? { result: [] } : a;
+  };
+  return { calls, callTool };
+}
+const vec = (v) => ({ result: [{ metric: {}, value: [1757203200, String(v)] }] });
+const quietStub = async (_name, fn) => { try { return await fn(); } catch { return null; } };
+const rowById = (rows, id) => rows.find(r => r.id === id);
+const pick = (...ids) => STACK_SELF_METRIC_PROBES.filter(r => ids.includes(r.id));
+
+// (a) with an inventory: eligibility via requires, product preference, outcomes
+{
+  const rows = pick('scrape_success_ratio', 'scrape_targets_down', 'rule_evaluation_failures',
+                    'tsdb_active_series', 'wal_corruptions', 'query_latency_p99');
+  const inventory = [
+    'up', 'vm_promscrape_targets',
+    'vmalert_recording_rules_error_total', 'vmalert_alerting_rules_error_total',
+    'prometheus_rule_evaluation_failures_total',
+    'vm_cache_entries', 'prometheus_tsdb_head_series',
+    'prometheus_engine_query_duration_seconds_bucket',
+    // wal_corruptions' metric deliberately absent
+  ];
+  const { calls, callTool } = stubMetricsQuery({
+    'sum(up == 1) / count(up)': vec('0.98'),
+    'count(up == 0)': { result: [] },                                   // empty on the generic alias …
+    'sum(vm_promscrape_targets{status="down"})': vec('1'),             // … the VM alias answers
+    'sum(rate(vmalert_recording_rules_error_total[5m])) + sum(rate(vmalert_alerting_rules_error_total[5m]))': vec('0'),
+    'sum(vm_cache_entries{type="storage/hour_metric_ids"})': vec('NaN'),
+    'sum(prometheus_tsdb_head_series)': vec('12345'),
+    'histogram_quantile(0.99, sum by (le)(rate(prometheus_engine_query_duration_seconds_bucket[5m])))': { throw: 'metrics_query: HTTP 500 boom' },
+  });
+  const s = await sampleStackSelfMetrics({
+    callTool, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory,
+    seenProducts: ['victoriametrics'], discoveredToolNames: new Set(['metrics_query']), hasToolsList: true,
+    refreshedAt, rows,
+  });
+  assert(s.status === 'sampled', 'sampler status is sampled when metrics_query is advertised', s.status, 'sampled');
+  const ratio = rowById(s.rows, 'scrape_success_ratio');
+  assert(ratio.outcome === 'data' && ratio.value === 0.98 && ratio.product === 'generic',
+         'generic alias samples data', ratio, 'data/0.98/generic');
+  assert(ratio.at === refreshedAt && ratio.unit === 'ratio' && ratio.direction === 'higher',
+         'row record carries at/unit/direction', ratio);
+  const down = rowById(s.rows, 'scrape_targets_down');
+  assert(down.outcome === 'data' && down.product === 'victoriametrics' && down.value === 1,
+         'generic empty → cascades to the next eligible alias (VM) which answers', down);
+  const rule = rowById(s.rows, 'rule_evaluation_failures');
+  assert(rule.product === 'victoriametrics' && rule.outcome === 'data' && rule.value === 0,
+         'product preference: victoriametrics seen → its alias is tried before prometheus', rule);
+  assert(calls.filter(c => c.query.includes('prometheus_rule_evaluation_failures_total')).length === 0,
+         'the preferred alias answering with data stops the row cascade (no prometheus call)', calls.map(c => c.query));
+  assert(calls.filter(c => c.query.includes('grafana_alerting_rule_evaluation_failures_total')).length === 0,
+         'an alias whose required metric is missing from the inventory is never called');
+  const series = rowById(s.rows, 'tsdb_active_series');
+  assert(series.outcome === 'data' && series.product === 'prometheus' && series.value === 12345,
+         'NaN from the preferred alias is empty → the next eligible alias is tried', series);
+  const wal = rowById(s.rows, 'wal_corruptions');
+  assert(wal.outcome === 'not-in-inventory' && wal.product === null && wal.expr === null && /prometheus_tsdb_wal_corruptions_total/.test(wal.reason),
+         'a row with no eligible alias is not-in-inventory with the required names in the reason', wal);
+  assert(calls.every(c => !c.query.includes('wal_corruptions')), 'not-in-inventory rows make no call');
+  const q = rowById(s.rows, 'query_latency_p99');
+  assert(q.outcome === 'failed' && /HTTP 500/.test(q.reason), 'a thrown call is failed with the trimmed error as reason', q);
+  assert(s.callsMade === calls.length && s.callsMade === 7, 'callsMade counts every metrics_query call', [s.callsMade, calls.length], 7);
+  assert(s.rows.every(r => r.outcome !== 'ok'), 'rows are never ok — only data|empty|failed|not-in-inventory|not-attempted');
+}
+
+// (a2) NaN / ±Inf / missing value / Prometheus-API envelope
+{
+  const rows = pick('scrape_success_ratio');
+  for (const [raw, label] of [['NaN', 'NaN'], ['+Inf', '+Inf'], ['-Inf', '-Inf']]) {
+    const { callTool } = stubMetricsQuery({ 'sum(up == 1) / count(up)': vec(raw) });
+    const s = await sampleStackSelfMetrics({ callTool, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory: ['up'], refreshedAt, rows });
+    assert(s.rows[0].outcome === 'empty' && s.rows[0].value === null, `${label} sample → outcome empty, value null`, s.rows[0]);
+  }
+  const { callTool: promApi } = stubMetricsQuery({
+    'sum(up == 1) / count(up)': { status: 'success', data: { resultType: 'vector', result: [{ metric: {}, value: [1, '1'] }] } },
+  });
+  const s2 = await sampleStackSelfMetrics({ callTool: promApi, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory: ['up'], refreshedAt, rows });
+  assert(s2.rows[0].outcome === 'data' && s2.rows[0].value === 1, 'Prometheus-API envelope { data: { result } } is parsed', s2.rows[0]);
+  const { callTool: noValue } = stubMetricsQuery({ 'sum(up == 1) / count(up)': { result: [{ metric: { job: 'x' } }] } });
+  const s3 = await sampleStackSelfMetrics({ callTool: noValue, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory: ['up'], refreshedAt, rows });
+  assert(s3.rows[0].outcome === 'empty', 'a series with no sample value is empty (not data)', s3.rows[0]);
+  const { callTool: badShape } = stubMetricsQuery({ 'sum(up == 1) / count(up)': { rows: 3 } });
+  const s4 = await sampleStackSelfMetrics({ callTool: badShape, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory: ['up'], refreshedAt, rows });
+  assert(s4.rows[0].outcome === 'failed' && /payload/.test(s4.rows[0].reason), 'a non-instant-vector answer is failed with the shape reason', s4.rows[0]);
+}
+
+// (b) without an inventory: bounded alias cascade, 2 calls per row
+{
+  const rows = pick('rule_evaluation_failures');   // three aliases: prometheus, victoriametrics, grafana
+  const { calls, callTool } = stubMetricsQuery({});  // everything empty
+  const s = await sampleStackSelfMetrics({ callTool, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory: null, refreshedAt, rows });
+  assert(calls.length === 2, 'without an inventory a row tries at most 2 aliases', calls.map(c => c.query), 2);
+  assert(s.rows[0].outcome === 'empty' && s.rows[0].product === 'victoriametrics',
+         'the last tried alias is recorded when all come back empty', s.rows[0]);
+  const { calls: c2, callTool: t2 } = stubMetricsQuery({
+    'sum(rate(grafana_alerting_rule_evaluation_failures_total[5m]))': vec('2'),
+  });
+  const s2 = await sampleStackSelfMetrics({ callTool: t2, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory: null, seenProducts: ['grafana'], refreshedAt, rows });
+  assert(c2.length === 1 && s2.rows[0].product === 'grafana' && s2.rows[0].value === 2,
+         'a seen product jumps ahead of the declared order and data stops the cascade', s2.rows[0]);
+}
+
+// (c) global cap → not-attempted with reason
+{
+  const { calls, callTool } = stubMetricsQuery({});
+  const s = await sampleStackSelfMetrics({ callTool, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory: null, refreshedAt, maxCalls: 5 });
+  assert(calls.length === 5 && s.callsMade === 5, 'the global cap bounds the metrics_query calls', [calls.length, s.callsMade], 5);
+  const notAttempted = s.rows.filter(r => r.outcome === 'not-attempted');
+  assert(notAttempted.length > 0 && notAttempted.every(r => r.reason === 'call budget exhausted'),
+         'rows beyond the cap are not-attempted with reason "call budget exhausted"', notAttempted[0]);
+  assert(s.rows.length === STACK_SELF_METRIC_PROBES.length, 'every row of the table gets a record', s.rows.length, STACK_SELF_METRIC_PROBES.length);
+  const sDefault = await sampleStackSelfMetrics({ callTool: stubMetricsQuery({}).callTool, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory: null, refreshedAt });
+  assert(sDefault.callsMade <= 48, 'default budget is 48 calls', sDefault.callsMade);
+}
+
+// (d) tools/list present but metrics_query not advertised → not-attempted, zero calls
+{
+  const { calls, callTool } = stubMetricsQuery({ 'sum(up == 1) / count(up)': vec('1') });
+  const s = await sampleStackSelfMetrics({
+    callTool, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory: ['up'],
+    discoveredToolNames: new Set(['system_health']), hasToolsList: true, refreshedAt,
+  });
+  assert(s.status === 'not-attempted' && s.reason === 'metrics_query not exposed by this MCP (restricted tier)',
+         'restricted tier → status not-attempted with the reason', [s.status, s.reason]);
+  assert(calls.length === 0 && s.callsMade === 0, 'restricted tier makes zero calls', calls.length, 0);
+  assert(s.rows.every(r => r.outcome === 'not-attempted' && r.reason === s.reason),
+         'every row is not-attempted with the tier reason (never absent)', s.rows[0]);
+}
+
+// (e) no tools/list at all (older server) → attempted
+{
+  const { calls, callTool } = stubMetricsQuery({ 'sum(up == 1) / count(up)': vec('1') });
+  const s = await sampleStackSelfMetrics({
+    callTool, quiet: quietStub, metricsQueryTool: 'metrics_query', inventory: ['up'],
+    discoveredToolNames: new Set(), hasToolsList: false, refreshedAt, rows: pick('scrape_success_ratio'),
+  });
+  assert(s.status === 'sampled' && calls.length === 1 && s.rows[0].value === 1,
+         'no tools/list → the sampler still attempts', [s.status, calls.length]);
+}
+
+// (f) quiet() integration: errors land in probeFailures under 'stack_self_metrics'
+{
+  const probeFailures = {};
+  const quietReal = async (name, fn) => { try { return await fn(); } catch (e) { if (!probeFailures[name]) probeFailures[name] = e.message; return null; } };
+  const { callTool } = stubMetricsQuery({ 'sum(up == 1) / count(up)': { throw: 'metrics_query: bad request' } });
+  const s = await sampleStackSelfMetrics({ callTool, quiet: quietReal, metricsQueryTool: 'metrics_query', inventory: ['up'], refreshedAt, rows: pick('scrape_success_ratio') });
+  assert(probeFailures.stack_self_metrics === 'metrics_query: bad request', 'failures are collected under the family name stack_self_metrics', probeFailures);
+  assert(s.rows[0].outcome === 'failed' && s.rows[0].reason === 'metrics_query: bad request', 'the row keeps its own error as reason', s.rows[0]);
+}
+
+// ---------- case 8b: Alertmanager / Grafana status observers ----------
+
+const SYN = (f) => JSON.parse(readFileSync(resolve(__dirname, 'fixtures', 'mcp', 'synthetic', f), 'utf8'));
+{
+  const calls = [];
+  const callTool = async (name, args = {}) => {
+    calls.push({ name, args });
+    if (name === 'alertmanager_status') return SYN('alertmanager_status.json');
+    if (name === 'alertmanager_silences') return SYN('alertmanager_silences.json');
+    if (name === 'grafana_datasources') return SYN('grafana_datasources.json');
+    if (name === 'grafana_datasource_health') {
+      if (args.uid === 'synthetic-loki') return { status: 'ERROR', message: 'x'.repeat(400) };
+      if (args.uid === 'synthetic-jaeger') throw new Error('grafana_datasource_health: 502');
+      return SYN('grafana_datasource_health.json');
+    }
+    if (name === 'grafana_contact_points') return SYN('grafana_contact_points.json');
+    throw new Error(`unexpected tool ${name}`);
+  };
+  const names = new Set(['alertmanager_status', 'alertmanager_silences', 'grafana_datasources', 'grafana_datasource_health', 'grafana_contact_points']);
+  const am = await observeAlertmanager({ callTool, quiet: quietStub, discoveredToolNames: names, hasToolsList: true, statusTool: 'alertmanager_status', silencesTool: 'alertmanager_silences' });
+  assert(am.version === '0.99.0' && am.clusterStatus === 'ready' && typeof am.uptime === 'string',
+         'alertmanager_status → version / uptime / clusterStatus', am);
+  assert(am.silences.active === 1 && am.silences.total === 2, 'alertmanager_silences → active count (expired excluded)', am.silences);
+  assert(am.toolsAnswered.join(',') === 'alertmanager_status,alertmanager_silences', 'alertmanager toolsAnswered lists both', am.toolsAnswered);
+
+  const gf = await observeGrafana({ callTool, quiet: quietStub, discoveredToolNames: names, hasToolsList: true,
+    datasourcesTool: 'grafana_datasources', datasourceHealthTool: 'grafana_datasource_health', contactPointsTool: 'grafana_contact_points' });
+  assert(gf.datasources.length === 3 && gf.datasources[0].uid === 'synthetic-prom' && gf.datasources[0].type === 'prometheus',
+         'grafana_datasources → [{uid,name,type}]', gf.datasources[0]);
+  assert(gf.datasources[0].health === 'ok' && gf.datasources[1].health === 'error' && gf.datasources[2].health === 'unknown',
+         'datasource health ok / error / unknown (tool errored)', gf.datasources.map(d => d.health));
+  assert(gf.datasources[1].message.length === 200, 'health message trimmed to 200 chars', gf.datasources[1].message.length, 200);
+  assert(gf.contactPoints.count === 2 && gf.contactPoints.names.join(',') === 'teams-sev1,email-oncall', 'grafana_contact_points → count + names', gf.contactPoints);
+  assert(calls.filter(c => c.name === 'grafana_datasource_health').length === 3, 'one health call per datasource uid', calls.filter(c => c.name === 'grafana_datasource_health').length, 3);
+
+  // Health cap: 12 datasources → only 10 health calls.
+  const many = { datasources: Array.from({ length: 12 }, (_, i) => ({ uid: `ds-${i}`, name: `ds ${i}`, type: 'prometheus' })) };
+  const calls2 = [];
+  const t2 = async (name) => { calls2.push(name); return name === 'grafana_datasources' ? many : { status: 'OK', message: 'fine' }; };
+  const gf2 = await observeGrafana({ callTool: t2, quiet: quietStub, discoveredToolNames: names, hasToolsList: true,
+    datasourcesTool: 'grafana_datasources', datasourceHealthTool: 'grafana_datasource_health', contactPointsTool: null });
+  assert(calls2.filter(n => n === 'grafana_datasource_health').length === 10, 'datasource health calls capped at 10', calls2.length);
+  assert(gf2.datasources.filter(d => d.health === 'unknown').length === 2, 'datasources beyond the cap stay unknown', gf2.datasources.map(d => d.health));
+
+  // Restricted tier: tools/list without the status tools → no call, null result.
+  const calls3 = [];
+  const t3 = async (name) => { calls3.push(name); return {}; };
+  const amNone = await observeAlertmanager({ callTool: t3, quiet: quietStub, discoveredToolNames: new Set(['system_health']), hasToolsList: true, statusTool: 'alertmanager_status', silencesTool: 'alertmanager_silences' });
+  const gfNone = await observeGrafana({ callTool: t3, quiet: quietStub, discoveredToolNames: new Set(['system_health']), hasToolsList: true,
+    datasourcesTool: 'grafana_datasources', datasourceHealthTool: 'grafana_datasource_health', contactPointsTool: 'grafana_contact_points' });
+  assert(amNone === null && gfNone === null && calls3.length === 0, 'status tools not advertised → null, zero calls', [amNone, gfNone, calls3.length]);
+}
+
+// ---------- case 8c: buildCanonicalPack writes the step-2 annotation contract, never a Verified stamp ----------
+
+{
+  const stackSamples = {
+    status: 'sampled', reason: null, callsMade: 6,
+    rows: [
+      { id: 'scrape_success_ratio', family: 'scrape', product: 'generic', expr: 'sum(up == 1) / count(up)', value: 0.98, unit: 'ratio', direction: 'higher', at: refreshedAt, outcome: 'data' },
+      { id: 'scrape_targets_down', family: 'scrape', product: 'generic', expr: 'count(up == 0)', value: null, unit: 'count', direction: 'lower', at: refreshedAt, outcome: 'empty' },
+      { id: 'rule_evaluation_failures', family: 'ruler', product: 'prometheus', expr: 'x', value: null, unit: 'per-second', direction: 'lower', at: refreshedAt, outcome: 'failed', reason: 'HTTP 500' },
+      { id: 'wal_corruptions', family: 'tsdb', product: null, expr: null, value: null, unit: 'per-hour', direction: 'lower', at: refreshedAt, outcome: 'not-in-inventory', reason: 'no alias …' },
+      { id: 'log_shipper_drops', family: 'logs', product: null, expr: null, value: null, unit: 'per-second', direction: 'lower', at: refreshedAt, outcome: 'not-attempted', reason: 'call budget exhausted' },
+    ],
+  };
+  const alertmanagerObserved = { version: '0.27.0', uptime: '2026-09-06T21:15:00Z', clusterStatus: 'ready', silences: { active: 1, total: 2 }, toolsAnswered: ['alertmanager_status', 'alertmanager_silences'] };
+  const grafanaObserved = {
+    datasources: [{ uid: 'p', name: 'Prom', type: 'prometheus', health: 'ok', message: null }],
+    contactPoints: { count: 1, names: ['teams-sev1'] },
+    toolsAnswered: ['grafana_datasources', 'grafana_datasource_health', 'grafana_contact_points'],
+  };
+  const base = { refreshedAt, mcpUrl: 'https://fake-mcp.test/observability', health: { services: [] }, topology: { dependencies: [] }, packName: 'stack-live' };
+  const without = buildCanonicalPack(base);
+  const withStack = buildCanonicalPack({ ...base, stackSamples, alertmanagerObserved, grafanaObserved });
+  const w = withStack.metadata.annotations;
+  assert(Object.keys(without.metadata.annotations).every(k => !k.startsWith('mcp.stack.') && !k.startsWith('mcp.observed.stack') && !k.startsWith('mcp.observed.alertmanager') && !k.startsWith('mcp.observed.grafana')),
+         'a caller that predates step 2 (null inputs) gets no stack/alertmanager/grafana keys');
+  assert(w['mcp.stack.status'] === 'sampled' && w['mcp.stack.reason'] === undefined, 'mcp.stack.status sampled, no reason key', [w['mcp.stack.status'], w['mcp.stack.reason']]);
+  assert(w['mcp.stack.sampled'] === '1' && w['mcp.stack.empty'] === '1' && w['mcp.stack.failed'] === '1' && w['mcp.stack.notInInventory'] === '1' && w['mcp.stack.notAttempted'] === '1',
+         'mcp.stack.* counts are strings per outcome', [w['mcp.stack.sampled'], w['mcp.stack.empty'], w['mcp.stack.failed'], w['mcp.stack.notInInventory'], w['mcp.stack.notAttempted']]);
+  assert(w['mcp.stack.families'] === 'scrape:data,ruler:failed,tsdb:not-in-inventory,logs:not-attempted',
+         'mcp.stack.families is family:best-outcome in table order', w['mcp.stack.families']);
+  const observed = JSON.parse(w['mcp.observed.stack_metrics']);
+  assert(observed.length === 4 && observed.every(r => r.outcome !== 'not-attempted'),
+         'mcp.observed.stack_metrics carries attempted + not-in-inventory rows only', observed.map(r => `${r.id}:${r.outcome}`));
+  assert(observed[0].value === 0.98 && observed[0].at === refreshedAt && observed[2].reason === 'HTTP 500' && observed[1].reason === undefined,
+         'observed rows keep value / at / reason (reason only when present)', observed);
+  assert(observed.every(r => !('hint' in r) && !('verdict' in r)), 'observed rows carry no hint/verdict — signals, not verdicts');
+  const am = JSON.parse(w['mcp.observed.alertmanager']);
+  assert(am.version === '0.27.0' && am.clusterStatus === 'ready' && am.silences.active === 1 && am.toolsAnswered === undefined,
+         'mcp.observed.alertmanager = {version, uptime, clusterStatus, silences}', am);
+  assert(JSON.parse(w['mcp.observed.grafana.datasources'])[0].health === 'ok', 'mcp.observed.grafana.datasources written', w['mcp.observed.grafana.datasources']);
+  assert(JSON.parse(w['mcp.observed.grafana.contact_points']).names[0] === 'teams-sev1', 'mcp.observed.grafana.contact_points written', w['mcp.observed.grafana.contact_points']);
+  const called = w['mcp.toolsCalled'].split(',');
+  for (const t of ['metrics_query', 'alertmanager_status', 'alertmanager_silences', 'grafana_datasources', 'grafana_datasource_health', 'grafana_contact_points']) {
+    assert(called.includes(t), `mcp.toolsCalled includes ${t}`, called);
+  }
+  const verifiedWithout = Object.keys(without.metadata.annotations).filter(k => k.startsWith('mcp.verified.')).sort();
+  const verifiedWith = Object.keys(w).filter(k => k.startsWith('mcp.verified.')).sort();
+  assert(JSON.stringify(verifiedWith) === JSON.stringify(verifiedWithout), 'no mcp.verified.* key is added by stack / Alertmanager / Grafana input', verifiedWith, verifiedWithout);
+  const scaffoldWithout = Object.keys(without.metadata.annotations).filter(k => k.startsWith('mcp.scaffold.')).sort();
+  const scaffoldWith = Object.keys(w).filter(k => k.startsWith('mcp.scaffold.')).sort();
+  assert(JSON.stringify(scaffoldWith) === JSON.stringify(scaffoldWithout), 'no mcp.scaffold.* key changes either');
+  assert(validateCanonical(withStack, SCHEMA).length === 0, 'pack with step-2 annotations validates against the schema', validateCanonical(withStack, SCHEMA));
+  assert(JSON.stringify(adapt(withStack).layers.L1) === JSON.stringify(adapt(without).layers.L1), 'the adapted layers are unchanged by stack input (no grade effect)');
+
+  // Not-attempted panel: status + reason, zero sampled, observed key absent.
+  const restricted = buildCanonicalPack({ ...base, stackSamples: {
+    status: 'not-attempted', reason: 'metrics_query not exposed by this MCP (restricted tier)', callsMade: 0,
+    rows: STACK_SELF_METRIC_PROBES.map(r => ({ id: r.id, family: r.family, product: null, expr: null, value: null, unit: r.unit, direction: r.direction, at: refreshedAt, outcome: 'not-attempted', reason: 'metrics_query not exposed by this MCP (restricted tier)' })),
+  } });
+  const r = restricted.metadata.annotations;
+  assert(r['mcp.stack.status'] === 'not-attempted' && r['mcp.stack.reason'] === 'metrics_query not exposed by this MCP (restricted tier)',
+         'restricted tier → mcp.stack.status not-attempted + mcp.stack.reason', [r['mcp.stack.status'], r['mcp.stack.reason']]);
+  assert(r['mcp.stack.notAttempted'] === String(STACK_SELF_METRIC_PROBES.length) && r['mcp.observed.stack_metrics'] === undefined,
+         'restricted tier → every row counted not-attempted, no observed rows', [r['mcp.stack.notAttempted'], r['mcp.observed.stack_metrics']]);
+  assert(!r['mcp.toolsCalled'].split(',').includes('metrics_query'), 'metrics_query is not listed as called when nothing answered');
+  assert(r['mcp.stack.families'].split(',').every(f => f.endsWith(':not-attempted')), 'every family reads not-attempted', r['mcp.stack.families']);
+}
+
+// ---------- case 8d: fetchMcp end-to-end against the fake JSON-RPC server ----------
+
+{
+  const stackTools = [
+    'system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines',
+    'metrics_query', 'metrics_label_values', 'alertmanager_status', 'alertmanager_silences',
+    'grafana_datasources', 'grafana_datasource_health', 'grafana_contact_points',
+  ];
+  const queries = [];
+  const fake = await withFakeMcp((name, args) => {
+    if (name === 'system_health') return { services: [] };
+    if (name === 'system_topology') return { dependencies: [] };
+    if (name === 'anomalies_active') return {};
+    if (name === 'anomalies_baselines') return { baselines: [] };
+    if (name === 'metrics_label_values') return { values: ['up', 'vm_app_version', 'vm_promscrape_targets', 'vmalert_alerts_send_errors_total', 'prometheus_notifications_errors_total'] };
+    if (name === 'metrics_query') {
+      queries.push(args.query);
+      if (args.query === 'vm_app_version') return { result: [{ metric: { short_version: 'v1.113.0', version: 'victoria-metrics-v1.113.0' }, value: [1, '1'] }] };
+      if (args.query === 'sum(up == 1) / count(up)') return { result: [{ metric: {}, value: [1, '0.9'] }] };
+      if (args.query === 'sum(rate(vmalert_alerts_send_errors_total[5m]))') return { result: [{ metric: {}, value: [1, '0'] }] };
+      return { result: [] };
+    }
+    if (name === 'alertmanager_status') return SYN('alertmanager_status.json');
+    if (name === 'alertmanager_silences') return SYN('alertmanager_silences.json');
+    if (name === 'grafana_datasources') return SYN('grafana_datasources.json');
+    if (name === 'grafana_datasource_health') return SYN('grafana_datasource_health.json');
+    if (name === 'grafana_contact_points') return SYN('grafana_contact_points.json');
+    return {};
+  }, stackTools);
+  try {
+    const fetched = await fetchMcp({ mcpUrl: fake.url, refreshedAt });
+    assert(fetched.stackSamples.status === 'sampled', 'fetchMcp samples the stack panel when metrics_query is advertised', fetched.stackSamples.status);
+    const ratio = rowById(fetched.stackSamples.rows, 'scrape_success_ratio');
+    assert(ratio.outcome === 'data' && ratio.value === 0.9 && ratio.at === refreshedAt, 'end-to-end: scrape_success_ratio sampled through the wire', ratio);
+    const notify = rowById(fetched.stackSamples.rows, 'notification_errors');
+    assert(notify.product === 'victoriametrics' && notify.value === 0,
+           'end-to-end: victoriametrics seen via vm_app_version → its notification alias is preferred', notify);
+    assert(rowById(fetched.stackSamples.rows, 'wal_corruptions').outcome === 'not-in-inventory',
+           'end-to-end: the metric_names inventory gates eligibility', rowById(fetched.stackSamples.rows, 'wal_corruptions'));
+    assert(fetched.alertmanagerObserved.version === '0.99.0' && fetched.grafanaObserved.datasources.length === 3,
+           'end-to-end: Alertmanager and Grafana status surfaces observed', [fetched.alertmanagerObserved?.version, fetched.grafanaObserved?.datasources?.length]);
+    const unmatched = fetched.unmatchedTools.map(t => t.name);
+    assert(!unmatched.includes('metrics_query') && !unmatched.includes('alertmanager_status') && !unmatched.includes('grafana_contact_points'),
+           'answered step-2 tools are wired (not in unmatchedTools)', unmatched);
+    const pack = buildCanonicalPack({ refreshedAt, mcpUrl: fake.url, ...fetched });
+    const ann = pack.metadata.annotations;
+    assert(ann['mcp.stack.status'] === 'sampled' && Number(ann['mcp.stack.sampled']) >= 2, 'end-to-end: mcp.stack.* written from the wire', [ann['mcp.stack.status'], ann['mcp.stack.sampled']]);
+    assert(validateCanonical(pack, SCHEMA).length === 0, 'end-to-end pack validates');
+    assert(Object.keys(ann).every(k => !k.startsWith('mcp.verified.') || !/stack|alertmanager|grafana\.(datasources|contact)/.test(k)),
+           'no Verified stamp names a stack / Alertmanager / Grafana surface');
+  } finally {
+    await fake.close();
+  }
+
+  // Restricted tier on the wire: tools/list without metrics_query.
+  const fakeR = await withFakeMcp((name) => {
+    if (name === 'system_health') return { services: [] };
+    if (name === 'system_topology') return { dependencies: [] };
+    return {};
+  }, ['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines']);
+  try {
+    const fetched = await fetchMcp({ mcpUrl: fakeR.url, refreshedAt });
+    assert(fetched.stackSamples.status === 'not-attempted' && fetched.stackSamples.callsMade === 0,
+           'restricted tier on the wire → not-attempted, zero calls', fetched.stackSamples);
+    assert(fetched.alertmanagerObserved === null && fetched.grafanaObserved === null, 'restricted tier → status surfaces null');
+    const ann = buildCanonicalPack({ refreshedAt, mcpUrl: fakeR.url, ...fetched }).metadata.annotations;
+    assert(ann['mcp.stack.reason'] === 'metrics_query not exposed by this MCP (restricted tier)', 'restricted tier reason annotated', ann['mcp.stack.reason']);
+  } finally {
+    await fakeR.close();
+  }
+}
 
 // ---------- summary ----------
 

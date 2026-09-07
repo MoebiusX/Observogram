@@ -21,6 +21,10 @@ coverage/
 # fetched on demand, never source.
 .tools/
 
+# Raw recordings of a live MCP (npm run record-fixtures). Reviewed and
+# trimmed by hand before anything moves into tools/fixtures/mcp/.
+tools/fixtures/mcp/recordings/
+
 # Ad-hoc test/debug dumps created during fetcher + adapter probing.
 # These are scratch artefacts, not source of truth.
 .tmp-*

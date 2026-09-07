@@ -41,6 +41,10 @@ import { inferSlisFromRecordingRules, ruleNameToSliId } from './lib/sli-inferenc
 import { materializeL2XFromBackends } from './lib/l2x.mjs';
 import { serviceSlug as slug } from './lib/slug.mjs';
 import { probeCandidates, capabilityTool, candidateTool, BUILD_INFO_PROBES } from './lib/contracts/mcp-capabilities.mjs';
+import { validateResponseShape } from './lib/contracts/response-shapes.mjs';
+import {
+  STACK_SELF_METRIC_PROBES, STACK_FAMILIES, eligibleAliases, productPreferenceOrder, bestOutcome,
+} from './lib/contracts/stack-self-metrics.mjs';
 import { brandEnv } from './lib/brand-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -74,6 +78,13 @@ const TOOL = {
   grafanaHealth:       capabilityTool('grafana_version'),
   metricsQuery:        capabilityTool('build_info_versions'),
   tracesServices:      capabilityTool('traces_alive'),
+  // Step 2 — stack self-metrics + status surfaces (signals, never verdicts).
+  stackSelfMetrics:        capabilityTool('stack_self_metrics'),
+  alertmanagerStatus:      capabilityTool('alertmanager_status'),
+  alertmanagerSilences:    capabilityTool('alertmanager_silences'),
+  grafanaDatasources:      capabilityTool('grafana_datasources'),
+  grafanaDatasourceHealth: capabilityTool('grafana_datasource_health'),
+  grafanaContactPoints:    capabilityTool('grafana_contact_points'),
 };
 
 function annotationJson(value) {
@@ -704,6 +715,269 @@ function dashboardFromGrafanaDetail(detail, searchItem = {}) {
   };
 }
 
+// ============================================================
+// Step 2 — stack self-metrics sampler + Alertmanager / Grafana status
+// observers. SIGNALS, NEVER VERDICTS: nothing in this section calls
+// markVerified / markScaffold, nothing here changes a grade. Every row
+// is a point-in-time sample with an honest outcome; on a restricted
+// tier the answer is "not attempted" with the reason, never "absent".
+// ============================================================
+
+const STACK_NOT_EXPOSED = (tool) => `${tool} not exposed by this MCP (restricted tier)`;
+const STACK_BUDGET_EXHAUSTED = 'call budget exhausted';
+const STACK_ALIAS_CALLS_PER_ROW = 2;
+const STACK_MAX_CALLS = 48;
+const STACK_OBSERVED_ROWS = 64;
+const GRAFANA_DATASOURCE_HEALTH_LIMIT = 10;
+const GRAFANA_CONTACT_POINT_NAMES = 32;
+
+// Locate an instant vector's result array in either envelope
+// (otel-mcp-server `{ result }`, Prometheus API `{ data: { result } }`).
+function instantVectorResult(response) {
+  if (Array.isArray(response?.result)) return response.result;
+  if (Array.isArray(response?.data?.result)) return response.data.result;
+  return null;
+}
+
+// One instant-vector answer → { outcome, value, reason }. An empty array
+// is `empty` (the backend says "no series"); a first sample whose value
+// is missing or non-finite (NaN, +Inf, -Inf) is `empty` with a reason.
+// A `count` row whose answer carries series identities but no sample
+// values counts the series instead — the tolerant reading of a
+// series-only answer for a count-of-series signal.
+function sampleFromInstantVector(row, response) {
+  const result = instantVectorResult(response);
+  if (result === null) {
+    const v = validateResponseShape('instant-vector', response);
+    return { outcome: 'failed', value: null, reason: trimError(v.reason || 'response is not an instant vector') };
+  }
+  if (result.length === 0) return { outcome: 'empty', value: null, reason: null };
+  const raw = result[0]?.value?.[1];
+  if (raw === undefined) {
+    if (row.unit === 'count' && result.every(s => s?.metric && s.value === undefined)) {
+      return { outcome: 'data', value: result.length, reason: null };
+    }
+    return { outcome: 'empty', value: null, reason: 'first series carries no sample value' };
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    return { outcome: 'empty', value: null, reason: `non-finite sample value ${String(raw).slice(0, 16)}` };
+  }
+  return { outcome: 'data', value, reason: null };
+}
+
+// Sample the stack self-metric alias table through `metrics_query`.
+//
+// Policy (docs/MCP_INTEGRATION.md "Stack self-metrics (sampling)"):
+//   • attempt only when the query tool is available — a tools/list
+//     inventory must advertise it; a server with no tools/list at all is
+//     attempted (older servers). Otherwise status 'not-attempted'.
+//   • with a metric-name inventory an alias is eligible only when EVERY
+//     name in its `requires` is present; a row with no eligible alias is
+//     'not-in-inventory' (no call). Without an inventory every alias is
+//     eligible and the cascade is bounded to STACK_ALIAS_CALLS_PER_ROW.
+//   • aliases are ordered generic-first, then products already seen
+//     (build_info / grafana_health / traces_services / capabilities).
+//   • a global budget of `maxCalls` metrics_query calls; rows beyond it
+//     are 'not-attempted' with the reason 'call budget exhausted'.
+//   • every call goes through `quiet` under the family name
+//     'stack_self_metrics' (probeFailures); the per-row reason keeps the
+//     row's own last error message.
+// Returns { status, reason, rows, callsMade }. Rows are never 'ok'.
+export async function sampleStackSelfMetrics({
+  callTool,
+  quiet,
+  metricsQueryTool,
+  inventory = null,
+  seenProducts = [],
+  discoveredToolNames = null,
+  hasToolsList = false,
+  refreshedAt,
+  maxCalls = STACK_MAX_CALLS,
+  rows = STACK_SELF_METRIC_PROBES,
+} = {}) {
+  const at = refreshedAt || new Date().toISOString();
+  const record = (row, extra) => ({
+    id: row.id, family: row.family, product: null, expr: null, value: null,
+    unit: row.unit, direction: row.direction, at, ...extra,
+  });
+  const advertised = !hasToolsList || (discoveredToolNames?.has?.(metricsQueryTool) ?? false);
+  if (!advertised) {
+    const reason = STACK_NOT_EXPOSED(metricsQueryTool);
+    return {
+      status: 'not-attempted', reason, callsMade: 0,
+      rows: rows.map(row => record(row, { outcome: 'not-attempted', reason })),
+    };
+  }
+  const inv = inventory == null ? null
+    : inventory instanceof Set ? inventory
+    : new Set(Array.isArray(inventory) ? inventory.filter(n => typeof n === 'string') : []);
+  const seen = seenProducts instanceof Set ? seenProducts : new Set(seenProducts || []);
+  const quietly = quiet || (async (_name, fn) => { try { return await fn(); } catch { return null; } });
+
+  let callsMade = 0;
+  const out = [];
+  for (const row of rows) {
+    const eligible = eligibleAliases(row, inv);
+    if (eligible.length === 0) {
+      const required = [...new Set(row.aliases.flatMap(a => a.requires))];
+      out.push(record(row, {
+        outcome: 'not-in-inventory',
+        reason: `no alias whose required metrics are in the inventory (${required.join(', ')})`,
+      }));
+      continue;
+    }
+    const ordered = productPreferenceOrder({ aliases: eligible }, seen).slice(0, STACK_ALIAS_CALLS_PER_ROW);
+    let last = null;
+    for (const alias of ordered) {
+      if (callsMade >= maxCalls) break;
+      callsMade += 1;
+      let err = null;
+      const response = await quietly('stack_self_metrics', async () => {
+        try { return await callTool(metricsQueryTool, { query: alias.expr }); }
+        catch (e) { err = e; throw e; }
+      });
+      const sample = response == null
+        ? { outcome: 'failed', value: null, reason: trimError(err?.message || 'tool returned no response') }
+        : sampleFromInstantVector(row, response);
+      last = record(row, { product: alias.product, expr: alias.expr, ...sample });
+      if (sample.outcome === 'data') break;
+    }
+    out.push(last || record(row, { outcome: 'not-attempted', reason: STACK_BUDGET_EXHAUSTED }));
+  }
+  return { status: 'sampled', reason: null, rows: out, callsMade };
+}
+
+const asString = (v) => (typeof v === 'string' && v.length ? v.slice(0, OBSERVED_ERROR_LENGTH) : null);
+
+// First candidate object at the declared paths of an object shape (the
+// same locator validateResponseShape applies), or null.
+function locateObject(response, paths = ['', 'data']) {
+  for (const p of paths) {
+    const v = p === '' ? response : response?.[p];
+    if (v && typeof v === 'object' && !Array.isArray(v)) return v;
+  }
+  return null;
+}
+
+// First array at the declared list paths of a list shape, or null.
+function locateList(response, paths) {
+  for (const p of paths) {
+    const v = p === '' ? response : response?.[p];
+    if (Array.isArray(v)) return v;
+  }
+  return null;
+}
+
+// Alertmanager status + silences → { version, uptime, clusterStatus,
+// silences: { active, total } | null, toolsAnswered } or null when
+// neither tool answered. Each tool is guarded by the tools/list inventory
+// when one exists and called through `quiet`.
+export async function observeAlertmanager({
+  callTool, quiet, discoveredToolNames = null, hasToolsList = false,
+  statusTool, silencesTool,
+} = {}) {
+  const advertised = (name) => !!name && (!hasToolsList || (discoveredToolNames?.has?.(name) ?? false));
+  const quietly = quiet || (async (_name, fn) => { try { return await fn(); } catch { return null; } });
+  const out = { version: null, uptime: null, clusterStatus: null, silences: null, toolsAnswered: [] };
+  let answered = false;
+
+  if (advertised(statusTool)) {
+    const resp = await quietly(statusTool, () => callTool(statusTool));
+    if (resp != null && validateResponseShape('status-object', resp).ok) {
+      const obj = locateObject(resp) || {};
+      out.version = asString(obj.versionInfo?.version) ?? asString(obj.version);
+      out.uptime = asString(obj.uptime);
+      out.clusterStatus = asString(obj.cluster?.status) ?? asString(obj.clusterStatus) ?? asString(obj.status);
+      out.toolsAnswered.push(statusTool);
+      answered = true;
+    }
+  }
+  if (advertised(silencesTool)) {
+    const resp = await quietly(silencesTool, () => callTool(silencesTool));
+    if (resp != null && validateResponseShape('silences', resp).ok) {
+      const list = locateList(resp, ['silences', 'data', '']) || [];
+      const state = (s) => s?.status?.state ?? s?.state ?? null;
+      out.silences = { active: list.filter(s => state(s) === 'active').length, total: list.length };
+      out.toolsAnswered.push(silencesTool);
+      answered = true;
+    }
+  }
+  return answered ? out : null;
+}
+
+function normDatasourceHealth(obj) {
+  const status = typeof obj?.status === 'string' ? obj.status.toLowerCase() : null;
+  if (status === 'ok' || status === 'success' || obj?.ok === true) return 'ok';
+  if (status === 'error' || status === 'err' || obj?.ok === false) return 'error';
+  return 'unknown';
+}
+
+// Grafana datasources (+ per-uid health, capped) and contact points →
+// { datasources: [{uid,name,type,health,message}] | null,
+//   contactPoints: { count, names } | null, toolsAnswered } or null when
+// nothing answered. Health is 'unknown' (no call) when the health tool
+// is not advertised or beyond the cap.
+export async function observeGrafana({
+  callTool, quiet, discoveredToolNames = null, hasToolsList = false,
+  datasourcesTool, datasourceHealthTool, contactPointsTool,
+  healthLimit = GRAFANA_DATASOURCE_HEALTH_LIMIT,
+} = {}) {
+  const advertised = (name) => !!name && (!hasToolsList || (discoveredToolNames?.has?.(name) ?? false));
+  const quietly = quiet || (async (_name, fn) => { try { return await fn(); } catch { return null; } });
+  const out = { datasources: null, contactPoints: null, toolsAnswered: [] };
+  let answered = false;
+
+  if (advertised(datasourcesTool)) {
+    const resp = await quietly(datasourcesTool, () => callTool(datasourcesTool));
+    if (resp != null && validateResponseShape('datasources', resp).ok) {
+      const list = (locateList(resp, ['datasources', 'data', '']) || [])
+        .filter(d => d && typeof d === 'object')
+        .slice(0, OBSERVATION_LIMIT)
+        .map(d => ({
+          uid: asString(d.uid) ?? (d.id != null ? String(d.id) : null),
+          name: asString(d.name),
+          type: asString(d.type),
+          health: 'unknown',
+          message: null,
+        }));
+      out.toolsAnswered.push(datasourcesTool);
+      answered = true;
+      if (advertised(datasourceHealthTool)) {
+        let healthAnswered = false;
+        for (const ds of list.filter(d => d.uid).slice(0, healthLimit)) {
+          const h = await quietly(`${datasourceHealthTool}.${ds.uid}`,
+            () => callTool(datasourceHealthTool, { uid: ds.uid }));
+          if (h == null || !validateResponseShape('health-object', h).ok) {
+            ds.health = 'unknown';
+            continue;
+          }
+          const obj = locateObject(h) || {};
+          ds.health = normDatasourceHealth(obj);
+          ds.message = trimError(obj.message);
+          healthAnswered = true;
+        }
+        if (healthAnswered) out.toolsAnswered.push(datasourceHealthTool);
+      }
+      out.datasources = list;
+    }
+  }
+  if (advertised(contactPointsTool)) {
+    const resp = await quietly(contactPointsTool, () => callTool(contactPointsTool));
+    if (resp != null && validateResponseShape('contact-points', resp).ok) {
+      const list = (locateList(resp, ['contactPoints', 'contact_points', 'data', '']) || [])
+        .filter(c => c && typeof c === 'object');
+      out.contactPoints = {
+        count: list.length,
+        names: list.map(c => asString(c.name) ?? asString(c.uid)).filter(Boolean).slice(0, GRAFANA_CONTACT_POINT_NAMES),
+      };
+      out.toolsAnswered.push(contactPointsTool);
+      answered = true;
+    }
+  }
+  return answered ? out : null;
+}
+
 export function buildCanonicalPack({
   refreshedAt,
   mcpUrl,
@@ -719,6 +993,10 @@ export function buildCanonicalPack({
   capabilities = null,
   liveVersions = {},
   ruleEvidence = { firingAlerts: [], recordingRuleNames: [] },
+  // Step 2 — null when the caller predates the sampler (nothing written).
+  stackSamples = null,
+  alertmanagerObserved = null,
+  grafanaObserved = null,
   packName = PACK_NAME,
 } = {}) {
   // Destructuring defaults only fire for `undefined`. The MCP probe
@@ -835,6 +1113,65 @@ export function buildCanonicalPack({
     if (Array.isArray(v?.adapted)) {
       annotations[`mcp.discovered.${k}`] = String(v.adapted.length);
     }
+  }
+
+  // ---- step 2: stack self-metrics + status surfaces (signals, never verdicts) ----
+  // Written only when the caller sampled (a null input predates step 2 and
+  // writes nothing). No markVerified / markScaffold in this block: a
+  // sampled number is evidence about the stack's own health at one
+  // instant, not an attestation of any pack artefact.
+  const stepTwoTools = [];
+  if (stackSamples && typeof stackSamples === 'object') {
+    const rows = Array.isArray(stackSamples.rows) ? stackSamples.rows : [];
+    const count = (o) => String(rows.filter(r => r?.outcome === o).length);
+    annotations['mcp.stack.status'] = stackSamples.status === 'sampled' ? 'sampled' : 'not-attempted';
+    if (annotations['mcp.stack.status'] !== 'sampled') {
+      annotations['mcp.stack.reason'] = trimError(stackSamples.reason) || 'not attempted';
+    }
+    annotations['mcp.stack.sampled']        = count('data');
+    annotations['mcp.stack.empty']          = count('empty');
+    annotations['mcp.stack.failed']         = count('failed');
+    annotations['mcp.stack.notInInventory'] = count('not-in-inventory');
+    annotations['mcp.stack.notAttempted']   = count('not-attempted');
+    const families = STACK_FAMILIES
+      .map(f => [f, bestOutcome(rows.filter(r => r?.family === f).map(r => r.outcome))])
+      .filter(([, best]) => best)
+      .map(([f, best]) => `${f}:${best}`);
+    annotations['mcp.stack.families'] = families.join(',');
+    const observed = rows
+      .filter(r => r && r.outcome !== 'not-attempted')
+      .slice(0, STACK_OBSERVED_ROWS)
+      .map(r => ({
+        id: r.id, family: r.family, product: r.product ?? null, expr: r.expr ?? null,
+        value: typeof r.value === 'number' ? r.value : null, unit: r.unit, direction: r.direction,
+        at: r.at ?? refreshedAt, outcome: r.outcome,
+        ...(r.reason ? { reason: trimError(r.reason) } : {}),
+      }));
+    if (observed.length) annotations['mcp.observed.stack_metrics'] = annotationJson(observed);
+    if (rows.some(r => r?.outcome === 'data' || r?.outcome === 'empty')) stepTwoTools.push(TOOL.stackSelfMetrics);
+  }
+  if (alertmanagerObserved && typeof alertmanagerObserved === 'object') {
+    annotations['mcp.observed.alertmanager'] = annotationJson({
+      version: alertmanagerObserved.version ?? null,
+      uptime: alertmanagerObserved.uptime ?? null,
+      clusterStatus: alertmanagerObserved.clusterStatus ?? null,
+      silences: alertmanagerObserved.silences ?? null,
+    });
+    stepTwoTools.push(...(alertmanagerObserved.toolsAnswered || []));
+  }
+  if (grafanaObserved && typeof grafanaObserved === 'object') {
+    if (Array.isArray(grafanaObserved.datasources)) {
+      annotations['mcp.observed.grafana.datasources'] = annotationJson(grafanaObserved.datasources);
+    }
+    if (grafanaObserved.contactPoints && typeof grafanaObserved.contactPoints === 'object') {
+      annotations['mcp.observed.grafana.contact_points'] = annotationJson(grafanaObserved.contactPoints);
+    }
+    stepTwoTools.push(...(grafanaObserved.toolsAnswered || []));
+  }
+  if (stepTwoTools.length) {
+    const called = annotations['mcp.toolsCalled'].split(',').filter(Boolean);
+    for (const t of stepTwoTools) if (typeof t === 'string' && t && !called.includes(t)) called.push(t);
+    annotations['mcp.toolsCalled'] = called.join(',');
   }
 
   // Per-artefact verification markers (only for items derived from a tool that
@@ -1654,7 +1991,7 @@ export const PROBES = [
   },
 ];
 
-export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
+export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null } = {}) {
   if (!mcpUrl) throw new Error('fetchMcp: mcpUrl required');
   const { rpc, notify, callTool } = createMcpClient({ mcpUrl, mcpAuth });
   const errors = {};
@@ -2003,6 +2340,45 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
   }
 
   // ----------------------------------------------------------------
+  // Step 2 — sample the stack's own self-metrics and the Alertmanager /
+  // Grafana status surfaces. Runs AFTER the version probes so the
+  // product preference knows which products are already seen. Signals
+  // only: nothing below feeds a Verified stamp.
+  // ----------------------------------------------------------------
+  const hasToolsList = discoveredToolNames.size > 0;
+  const seenProducts = new Set(Object.keys(liveVersions));
+  for (const s of (capabilities?.skills || [])) {
+    for (const b of (s?.backends || [])) {
+      const p = BACKEND_TO_PRODUCT[b?.backend];
+      if (p) seenProducts.add(p);
+    }
+  }
+  const metricNamesProbe = probeResults?.metric_names;
+  const stackInventory = metricNamesProbe?.outcome === 'data' && Array.isArray(metricNamesProbe.adapted)
+    ? metricNamesProbe.adapted
+    : null;
+  const stackSamples = await sampleStackSelfMetrics({
+    callTool, quiet,
+    metricsQueryTool: TOOL.stackSelfMetrics,
+    inventory: stackInventory,
+    seenProducts,
+    discoveredToolNames,
+    hasToolsList,
+    refreshedAt: refreshedAt || new Date().toISOString(),
+  });
+  const alertmanagerObserved = await observeAlertmanager({
+    callTool, quiet, discoveredToolNames, hasToolsList,
+    statusTool: TOOL.alertmanagerStatus,
+    silencesTool: TOOL.alertmanagerSilences,
+  });
+  const grafanaObserved = await observeGrafana({
+    callTool, quiet, discoveredToolNames, hasToolsList,
+    datasourcesTool: TOOL.grafanaDatasources,
+    datasourceHealthTool: TOOL.grafanaDatasourceHealth,
+    contactPointsTool: TOOL.grafanaContactPoints,
+  });
+
+  // ----------------------------------------------------------------
   // Rule-evidence fallback (Phase 6) — capture rule existence even when
   // the standard rule-discovery endpoints come back empty.
   //
@@ -2096,6 +2472,14 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
   // captured an `alive: true` entry via it.
   const tracesAlive = Object.values(liveVersions).some(v => v?.source === TOOL.tracesServices);
   if (tracesAlive) allMatchedNames.add(TOOL.tracesServices);
+  // Step 2 surfaces are wired when they answered: the stack sampler when
+  // at least one row came back with data or an honest empty; the status
+  // observers for each tool that answered.
+  if (stackSamples.rows.some(r => r.outcome === 'data' || r.outcome === 'empty')) {
+    allMatchedNames.add(TOOL.stackSelfMetrics);
+  }
+  for (const t of (alertmanagerObserved?.toolsAnswered || [])) allMatchedNames.add(t);
+  for (const t of (grafanaObserved?.toolsAnswered || [])) allMatchedNames.add(t);
   const unmatchedTools = discoveredTools.filter(t => !allMatchedNames.has(t.name));
 
   return {
@@ -2107,14 +2491,17 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
     capabilities,               // parsed backend_capabilities inventory (or null)
     liveVersions,               // { <product>: { declared, ...meta } } from authoritative endpoints
     ruleEvidence,               // { firingAlerts, recordingRuleNames } — fallback evidence
+    stackSamples,               // { status, reason, rows, callsMade } — stack self-metric samples (signals)
+    alertmanagerObserved,       // { version, uptime, clusterStatus, silences, toolsAnswered } or null
+    grafanaObserved,            // { datasources, contactPoints, toolsAnswered } or null
   };
 }
 
 // Convenience entrypoint used by the CLI + the server: end-to-end build,
 // validate, and (optionally) write to disk. Returns the canonical pack.
 export async function buildAndValidate({ mcpUrl, mcpAuth, packName, refreshedAt }) {
-  const fetched = await fetchMcp({ mcpUrl, mcpAuth });
   const at = refreshedAt || new Date().toISOString();
+  const fetched = await fetchMcp({ mcpUrl, mcpAuth, refreshedAt: at });
   const pack = buildCanonicalPack({ refreshedAt: at, mcpUrl, packName, ...fetched });
   const errors = validateCanonical(pack, SCHEMA);
   if (errors.length) {

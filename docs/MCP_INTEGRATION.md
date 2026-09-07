@@ -137,6 +137,9 @@ JSON arrays (`annotationJson`) at 200 entries; error strings at 200 chars.
 | `mcp.observed.alert_rules` | JSON `[{name, state, health, lastError, lastEvaluation, activeAt}]` | every alerting rule's evaluation state |
 | `mcp.servicesDiscovered`, `mcp.activeAnomalies`, `mcp.baselinesComputed` | comma list, counts | `system_health` / anomaly tools answered (not a measurement of anything in `spec.baselines`) |
 | `mcp.capabilities.*`, `mcp.versions.<product>[.*]` | strings | `backend_capabilities` inventory and observed product versions |
+| `mcp.stack.status`, `mcp.stack.reason`, `mcp.stack.sampled` / `empty` / `failed` / `notInInventory` / `notAttempted`, `mcp.stack.families` | status, reason, counts, `<family>:<best outcome>` list | the stack self-metrics panel (step 2) — see "Stack self-metrics (sampling)"; signals, never verdicts |
+| `mcp.observed.stack_metrics` | JSON `[{id, family, product, expr, value, unit, direction, at, outcome, reason?}]` | every attempted or not-in-inventory stack self-metric row (cap 64) |
+| `mcp.observed.alertmanager`, `mcp.observed.grafana.datasources`, `mcp.observed.grafana.contact_points` | JSON | Alertmanager status + silences, Grafana datasources with health, Grafana contact points |
 
 ### What the fetcher invents, and how it says so
 
@@ -307,6 +310,80 @@ reference SLI for vocabulary only. Resolvers: `probeRows()`,
 `rowsForFamily(family)`, `eligibleAliases(row, inventory)`,
 `productPreferenceOrder(row, seenProducts)`, `displayHint(row, value)`,
 `bestOutcome(outcomes)`; integrity is pinned by `npm run test:stack`.
+
+### Stack self-metrics (sampling)
+
+`sampleStackSelfMetrics(...)` in `tools/fetch-live-pack.mjs` walks the alias
+table once per fetch, after the version probes (so the product preference
+knows what is already seen). The policy:
+
+- **Attempt only when `metrics_query` is available.** When `tools/list`
+  answered, it must advertise the tool; a server with no `tools/list` at all
+  (older servers) is attempted. Otherwise the panel is `not-attempted` with
+  the reason `metrics_query not exposed by this MCP (restricted tier)` — every
+  row carries that outcome, zero calls are made, nothing is "absent".
+- **Inventory gating.** When the `metric_names` probe answered with data, its
+  list is the inventory: an alias is eligible only when *every* name in its
+  `requires` is present, and a row with no eligible alias is
+  `not-in-inventory` (no call; the reason lists the required names). Without
+  an inventory (probe failed / empty / unsupported — or a trimmed fixture)
+  every alias is eligible.
+- **Product preference.** A row's eligible aliases are ordered `generic`
+  first, then products already seen in `liveVersions` (build_info,
+  `grafana_health`, `traces_services`) or in the `backend_capabilities`
+  inventory, then the rest in declared order.
+- **Bounded cascade.** At most 2 calls per row, stopping at the first alias
+  that returns data; an `empty` or `failed` answer falls through to the next
+  eligible alias and the last outcome is recorded.
+- **Global budget.** 48 `metrics_query` calls per panel; rows beyond it are
+  `not-attempted` with the reason `call budget exhausted`.
+- **Every call goes through `quiet()`** under the family name
+  `stack_self_metrics` (so `probeFailures.stack_self_metrics` keeps the first
+  error); each row keeps its own last error as `reason`.
+- **Parsing.** An instant vector in either envelope (`{ result }` or
+  `{ data: { result } }`); the value is `Number(result[0].value[1])`. An empty
+  array, a series without a sample, or `NaN` / `+Inf` / `-Inf` is `empty`
+  (value `null`); a non-vector answer is `failed` with the shape reason. A
+  `count` row whose answer carries only series identities counts the series.
+  Note that PromQL `count(up == 0)` returns an *empty* vector when nothing
+  matches — the panel records that as `empty`, which is the honest reading.
+- **Outcomes** are exactly `data | empty | failed | not-in-inventory |
+  not-attempted` — a row is never "ok". No `Verified` stamp, no `Scaffold`
+  marker, no grade input is produced by any of it; `displayHint(row, value)`
+  (`nonzero` for a lower-is-better row above zero) is a display helper the
+  server may compute, never something the pack stores.
+
+The Alertmanager and Grafana status rows ride the same fetch
+(`observeAlertmanager`, `observeGrafana`), each tool guarded by the
+`tools/list` inventory when one exists and called through `quiet()`:
+`alertmanager_status` → `{ version, uptime, clusterStatus }`;
+`alertmanager_silences` → `{ active, total }`; `grafana_datasources` →
+`[{ uid, name, type }]` then `grafana_datasource_health` per uid (at most 10,
+called with `{ uid }`) → `health: ok | error | unknown` plus a message trimmed
+to 200 chars (`unknown` when the health tool is not advertised, errored, or
+the datasource is beyond the cap); `grafana_contact_points` → a count and up
+to 32 names. Tools that answered join `mcp.toolsCalled`; the sampler's tool
+joins only when at least one row returned data or an honest empty.
+
+Nothing has been recorded against a live server yet. `npm run
+record-fixtures` (`tools/record-mcp-fixtures.mjs`, `MCP_URL` + optional
+`MCP_AUTH`) calls **every** alias of every row plus the status tools and
+writes the raw answers under `tools/fixtures/mcp/recordings/<date>/` so a
+maintainer can verify the alias table and replace the synthetic fixtures.
+
+Annotation keys written by the sampler (only when the fetch sampled — a
+caller that predates step 2 writes none of them):
+
+| Key | Value | Meaning |
+|---|---|---|
+| `mcp.stack.status` | `sampled` \| `not-attempted` | whether the panel was sampled at all |
+| `mcp.stack.reason` | string | only when `not-attempted`: why (restricted tier) |
+| `mcp.stack.sampled` / `empty` / `failed` / `notInInventory` / `notAttempted` | counts (strings) | rows per outcome |
+| `mcp.stack.families` | comma list of `<family>:<best outcome>` | best outcome per family, `data > empty > failed > not-in-inventory > not-attempted` |
+| `mcp.observed.stack_metrics` | JSON `[{id, family, product, expr, value, unit, direction, at, outcome, reason?}]` | attempted and `not-in-inventory` rows (cap 64); `not-attempted` rows are counted, not listed |
+| `mcp.observed.alertmanager` | JSON `{version, uptime, clusterStatus, silences: {active, total} \| null}` | Alertmanager status surface |
+| `mcp.observed.grafana.datasources` | JSON `[{uid, name, type, health, message}]` | Grafana datasources with their health verdicts |
+| `mcp.observed.grafana.contact_points` | JSON `{count, names}` | Grafana contact points (names capped at 32) |
 
 ## Diagnostic Drift Semantics
 
