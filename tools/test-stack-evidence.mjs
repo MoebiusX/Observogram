@@ -79,7 +79,39 @@ const rec = run(t4, [
 ]);
 const fam = latestByFamily(rec);
 assert(fam.scrape?.id === 'scrape_targets_down' && fam.scrape.value === 2 && fam.scrape.hint === 'nonzero' && fam.scrape.referenceSli === 'prometheus-reference/scrape_targets_down',
-       'latestByFamily prefers a data row over an earlier empty one, then table order among data rows', fam.scrape);
+       'latestByFamily prefers a data row over an earlier empty one, and a nonzero lower-is-better row over a later info row', fam.scrape);
+// The ranking that keeps the early-warning row on the surface: a `higher`
+// / `info` row that leads the table must not hide a lower-is-better row.
+{
+  const hides = latestByFamily(run(t1, [
+    row('scrape_success_ratio', 'scrape', { value: 0.95, unit: 'ratio', direction: 'higher' }),
+    row('scrape_targets_down', 'scrape', { value: 3, unit: 'count', hint: 'nonzero' }),
+  ]));
+  assert(hides.scrape?.id === 'scrape_targets_down' && hides.scrape.value === 3, 'a nonzero lower-is-better row wins over an earlier higher-is-better data row (scrape 95.0% never hides scrape_targets_down = 3)', hides.scrape);
+  const quiet = latestByFamily(run(t1, [
+    row('scrape_success_ratio', 'scrape', { value: 0.95, unit: 'ratio', direction: 'higher' }),
+    row('scrape_targets_down', 'scrape', { value: 0, unit: 'count' }),
+    row('scrape_duration_max', 'scrape', { value: 1.5, unit: 'seconds' }),
+  ]));
+  assert(quiet.scrape?.id === 'scrape_targets_down' && quiet.scrape.value === 0, 'with no nonzero hint, a lower-is-better row still precedes a higher/info row, and table order breaks the tie among lower rows', quiet.scrape);
+  const tsdb = latestByFamily(run(t1, [
+    row('tsdb_active_series', 'tsdb', { value: 123456, unit: 'count', direction: 'info' }),
+    row('wal_corruptions', 'tsdb', { value: 0.5, unit: 'per-hour', hint: 'nonzero' }),
+    row('tsdb_compaction_failures', 'tsdb', { value: 0, unit: 'per-hour' }),
+  ]));
+  assert(tsdb.tsdb?.id === 'wal_corruptions', 'tsdb: the nonzero row beats both the leading info row and an earlier zero lower row', tsdb.tsdb);
+  const infoOnly = latestByFamily(run(t1, [
+    row('notifications_sent', 'notify', { value: 4, unit: 'per-second', direction: 'info' }),
+    row('active_silences', 'notify', { value: 1, unit: 'count', direction: 'info' }),
+    row('notification_errors', 'notify', { value: null, outcome: 'empty' }),
+  ]));
+  assert(infoOnly.notify?.id === 'notifications_sent', 'among info rows alone the table order decides; an empty lower row never outranks data', infoOnly.notify);
+  const nullData = latestByFamily(run(t1, [
+    row('scrape_targets_down', 'scrape', { value: null, unit: 'count' }),
+    row('scrape_duration_max', 'scrape', { value: 2, unit: 'seconds' }),
+  ]));
+  assert(nullData.scrape?.id === 'scrape_duration_max', 'a data row without a numeric value does not count as data for the ranking', nullData.scrape);
+}
 assert(fam.ruler?.id === 'rule_evaluation_failures' && fam.ruler.outcome === 'not-in-inventory' && fam.ruler.value === null,
        'latestByFamily with no data row falls back to table order (rule_evaluation_failures precedes rule_evaluation_staleness)', fam.ruler);
 assert(fam.tsdb?.id === 'tsdb_active_series', 'a row the table no longer declares sorts after every declared data row', fam.tsdb);

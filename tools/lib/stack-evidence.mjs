@@ -86,22 +86,37 @@ export function stackSeries(runs, rowId) {
   return out;
 }
 
-// One row per family from a single run record: the row that answered
-// `data` wins, ties (all data, or none) fall back to the contracts table
-// order; a row the table no longer declares sorts after every declared
-// one. {} when the record has no evidence. `referenceSli` and `reason`
-// ride along so a surface can say which SLI vocabulary the row follows
-// and why a probe did not answer.
+// One row per family from a single run record. Rank: a row that answered
+// `data` wins over any non-answer; among data rows the signal an early
+// warning needs surfaces first — a `nonzero` hint (a lower-is-comfortable
+// row above zero), then a row the contracts table declares before one it
+// no longer declares (a retired row's direction is only what the wire
+// said), then any lower-is-comfortable row before `higher` / `info` rows
+// — and the contracts table order breaks the rest. Without the direction
+// ranking a family whose first table row is `higher` or `info`
+// (scrape_success_ratio, tsdb_active_series) hid its lower-is-better rows
+// whenever that first row answered, and the chip read `scrape 95.0%`
+// while the run breached on scrape_targets_down. {} when the record has
+// no evidence. `referenceSli` and `reason` ride along so a surface can
+// say which SLI vocabulary the row follows and why a probe did not answer.
 export function latestByFamily(record) {
-  const rank = (row) => [row.outcome === 'data' ? 0 : 1, TABLE_INDEX.has(row.id) ? TABLE_INDEX.get(row.id) : Number.MAX_SAFE_INTEGER];
+  const rank = (row) => {
+    const data = dataValue(row) !== null;
+    return [
+      data ? 0 : 1,
+      data && row.hint === 'nonzero' ? 0 : 1,
+      TABLE_INDEX.has(row.id) ? 0 : 1,
+      data && row.direction === 'lower' ? 0 : 1,
+      TABLE_INDEX.has(row.id) ? TABLE_INDEX.get(row.id) : Number.MAX_SAFE_INTEGER,
+    ];
+  };
+  const before = (a, b) => { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i]; return false; };
   const best = new Map();
   for (const row of rowsOf(record)) {
     if (typeof row.id !== 'string' || !row.id) continue;
     const family = typeof row.family === 'string' && row.family ? row.family : 'unknown';
     const cur = best.get(family);
-    if (!cur) { best.set(family, row); continue; }
-    const [ao, ai] = rank(row); const [bo, bi] = rank(cur);
-    if (ao < bo || (ao === bo && ai < bi)) best.set(family, row);
+    if (!cur || before(rank(row), rank(cur))) best.set(family, row);
   }
   const out = {};
   for (const [family, row] of best) {
