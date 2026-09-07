@@ -178,6 +178,12 @@ Canonical example: *"repo vs live drift check"* — crawl
   draft→diff→grade pipeline the verify phase uses).
 - Effort: M (CLI command + run-record writer ~200 lines reusing existing
   engines; studio panel ~150; schedule-snippet emitters trivial).
+- *Status 2026-09-07:* drift over time now includes the stack's own
+  self-metric samples — every live run keeps them as `stackEvidence`, the
+  opt-in `gate.stack` block breaches on them as an early warning (never an
+  SLO verdict), and the journeys panel reads the bounded run history
+  (`OBSERVOGRAM_JOURNEY_RUN_RETENTION`) as the time series; scheduling stays
+  external as decided here.
 
 ### 12. Identity · tenancy · hosted posture *(plan ratification pending — 2026-06-12)*
 The v1 non-goal ("multi-tenant persistence") activates as its own

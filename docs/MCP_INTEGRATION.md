@@ -393,9 +393,16 @@ card — one chip per family (value in its unit, or the honest non-answer),
 the `nonzero` hint as a muted marker, the row id and reference SLI in the
 chip's title, and for lower-is-comfortable rows `nonzero in N of last M
 runs` over the 20 fetched runs; a `not-attempted` panel is one muted chip
-with the reason. No chip carries an ok/error colour: a sample is a
-signal, and the runs table lists `stack` / `stack.<id>` breaches like any
-other.
+with the reason; a `sampled` panel where no row answered is one muted
+`sampled, but no row answered` chip. No chip carries an ok/error colour: a
+sample is a signal, and the runs table lists `stack` / `stack.<id>`
+breaches like any other. The families are always taken from the newest
+fetched run — an older run's evidence never stands in for a last run that
+carried none (vantage lost, file-sourced B), so a file-vs-file journey
+renders no stack line at all. The view loads the helper module at call
+time from the server's `/lib` mount; a host that does not mount
+`tools/lib` at `/lib` still renders the chips from `lastRun.stack`
+(families only, no `nonzero in N of last M runs` history).
 
 ### Stack self-metrics (registry)
 

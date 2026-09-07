@@ -348,7 +348,13 @@ rather than passing by absence. A stack breach reads
 an SLO verdict`: it is a signal to look, not an SLO verdict, and it never
 touches the grade. The report prints the samples in a *Stack self-metrics*
 table and `journey list` shows `stack sampled N` / `stack not attempted` /
-`stack none` per journey.
+`stack none` per journey. In the studio (Advanced → Journeys) each card
+carries a "stack self-metrics — point-in-time samples" line: one chip per
+family with the last run's value, a muted `nonzero` marker where a
+lower-is-comfortable row is above zero, `nonzero in N of last M runs` over
+the fetched history, and a single muted chip with the reason when the tier
+could not sample — chips never carry an ok/error colour, because a sample
+is a signal, not a verdict.
 
 ## API Surface
 
@@ -371,6 +377,10 @@ table and `journey list` shows `stack sampled N` / `stack not attempted` /
 | `POST` | `/api/packs/:id/deploy-bulk` | Deploy selected compiled artifacts |
 | `POST` | `/api/packs/:id/deploy/:target` | Deploy one compiled target |
 | `DELETE` | `/api/uploads` | Clear uploaded/crawled/drafted packs |
+| `GET` | `/api/journeys` | Saved journeys with the last run (outcome, alignment, grade, breaches, `stack` summary) |
+| `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series) |
+| `POST` | `/api/journeys/:name/run` | Run a saved journey now |
+| `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file |
 
 ## Repository Map
 
@@ -384,8 +394,10 @@ studio/
   compare-view.mjs         Diagnostic Grade, drift, traceability entry points
   compile-view.mjs         Remediate, compile catalog, deploy surfaces
   layers-view.mjs          Discover Observogram and artifact cards
+  journeys-view.mjs        Saved journeys: capture, run-now, history, stack chips
 
 tools/
+  cli.mjs                  packc CLI (journey run / list, compile, …)
   crawl-repo.mjs           CLI repo crawler
   fetch-live-pack.mjs      MCP live-pack fetcher
   validate-pack.mjs        Canonical pack validator
@@ -394,6 +406,8 @@ tools/
     compile.mjs            packc compiler
     conformance.mjs        Maturity rubric
     diff.mjs               Structural pack diff
+    journey.mjs            Journey definitions, runner, gate, run history (node-only)
+    stack-evidence.mjs     Stack self-metric history helpers (browser-safe, vendorable)
     traceability.mjs       Requirement chains
 
 examples/
