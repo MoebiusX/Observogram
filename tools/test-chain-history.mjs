@@ -17,6 +17,7 @@ import {
   DEGRADED_STATUSES, BRANCH_RECORD_CAPS, VERDICT_RANK, LADDER_VERDICT_RANK,
   isDegradedNode, degradedSeverity, branchRecordsFromGraph, chainSummary, transitionDirection, diffRunBranches,
   CAUSE_KINDS, CAUSE_NOTE, CAUSE_SCORES, FAMILY_FOR_KIND, familyForKind, deploysInWindow, rankCauses, topCause,
+  DEPLOY_GROUP_KINDS, deployArtifactNames,
 } from './lib/chain-history.mjs';
 
 const { assert, report } = createHarness();
@@ -96,9 +97,14 @@ assert(a.degraded.length === 8, 'the degraded list holds every recorded node of 
 assert(a.degraded.map(d => d.label).join() === 'checkout_sli,http_requests_total,payment,orders,checkout:ratio,burn-rate alert: checkout,slo-panel,extra_metric',
        'degraded nodes sort worst first: absent (by blast total desc), present_unhealthy (by total), present_stale, drifted, unobserved, live_only', a.degraded.map(d => d.label));
 const d0 = a.degraded[0];
-assert(Object.keys(d0).join() === 'key,kind,label,status,ladder,blastRadius,deltaFields', 'a degraded node carries exactly key, kind, label, status, ladder, blastRadius, deltaFields', Object.keys(d0));
+assert(Object.keys(d0).join() === 'key,kind,label,status,ladder,blastRadius,deltaFields,aId,bId', 'a degraded node carries exactly key, kind, label, status, ladder, blastRadius, deltaFields, aId, bId', Object.keys(d0));
 assert(d0.key === 'sli::checkout_sli' && d0.kind === 'sli' && d0.status === 'declared_only' && d0.ladder.rung === 'absent' && d0.ladder.status === null && d0.ladder.detail === 'absent from Pack B',
        'the node record keeps key, kind, status and the ladder triple', d0);
+assert(d0.aId === null && d0.bId === null, 'a node without artefact ids records null for both (never an empty string)', { a: d0.aId, b: d0.bId });
+{
+  const withIds = branchRecordsFromGraph({ branches: [branch('slo::ids', { nodes: [node('drifted', 'recording_rule', 'r', { aId: 'QRY-01', bId: 'QRY-07' }), node('declared_only', 'panel', 'p', { aId: 'PANEL-03' })] })] })[0].degraded;
+  assert(withIds.map(d => `${d.aId}/${d.bId}`).join() === 'PANEL-03/null,QRY-01/QRY-07', 'the adapter artefact ids on each side are persisted on the degraded node', withIds.map(d => [d.label, d.aId, d.bId]));
+}
 assert(Object.keys(d0.blastRadius).join() === 'slos,alerts,panels,dashboards,routes,remediations,total' && d0.blastRadius.slos === 1 && d0.blastRadius.total === 6,
        'blastRadius is the summary shape', d0.blastRadius);
 const drifted = a.degraded.find(d => d.status === 'drifted');
@@ -292,8 +298,8 @@ assert(c1.evidence === 'deploy dep_in by carlos at 2026-09-08T10:05:00.000Z (ups
 assert(c1.chains.join() === 'slo::checkout' && c1.nodes.join() === 'checkout:ratio', 'a deploy cause lists the chains and nodes its items touched', { chains: c1.chains, nodes: c1.nodes });
 assert(rc.causes[1].evidence === 'burn-rate alert: checkout (burn_rate) drifted on objective, labels.team — decision-bearing: objective' && rc.causes[1].chains.join() === 'slo::checkout' && rc.causes[1].nodes.join() === 'burn-rate alert: checkout',
        'a decision-bearing drift scores 0.8 and its evidence lists the fields', rc.causes[1].evidence);
-assert(rc.causes[2].evidence === 'deploy dep_pack by ci at 2026-09-08T10:07:00.000Z (upsert) wrote pack payment-service — no item names a degraded artefact' && rc.causes[2].chains.join() === 'slo::checkout' && rc.causes[2].nodes.length === 0,
-       'a deploy of the journey\'s pack whose items name no degraded artefact scores 0.6 over every chain that got worse', rc.causes[2]);
+assert(rc.causes[2].evidence === 'deploy dep_pack by ci at 2026-09-08T10:07:00.000Z (upsert) wrote pack payment-service (all dashboards) — no item names a moved artefact' && rc.causes[2].chains.join() === 'slo::checkout' && rc.causes[2].nodes.length === 0,
+       'a deploy of the journey\'s pack whose only item is the group wildcard scores 0.6 over every chain that got worse and names the wildcard', rc.causes[2]);
 assert(rc.causes[3].evidence === 'prometheus 2.53.0 → 2.54.0' && rc.causes[3].nodes.join() === 'burn-rate alert: checkout,checkout:ratio', 'a version change on the ruler / TSDB path scores 0.6 and names the rule nodes; an unchanged product (grafana) is no cause', rc.causes[3]);
 assert(rc.causes[4].evidence === 'rule_evaluation_failures = 0.2 per-second (ruler) — point-in-time sample' && rc.causes[4].nodes.join() === 'burn-rate alert: checkout,checkout:ratio',
        'a non-zero stack row in the family feeding the moved kinds scores 0.5, phrased as a sample', rc.causes[4].evidence);
@@ -312,17 +318,72 @@ assert(JSON.stringify(rankCauses({ previous: prevRun, current: curRun, deploys: 
   assert(two.causes[0].evidence.startsWith('deploy dep_a by amy') && two.causes[0].evidence.includes('touched checkout:ratio (failed)') && two.causes[1].evidence.startsWith('deploy dep_z by zed'),
          'two deploys at the same score order by evidence; a failed item is marked', two.causes.map(c => c.evidence));
   assert(two.causes[0].chains.join() === 'slo::checkout,slo::second' && two.causes[0].nodes.join() === 'checkout:ratio', 'one evidence explaining two chains is one cause listing both, in record order', two.causes[0].chains);
-  // Rollbacks are named; aId matches exactly; 'all' and short stubs never match.
+  // Rollbacks are named; an artefact id matches exactly (and the evidence says what it resolved to); 'all' and a name that is not a label match nothing.
   const rb = rankCauses({ previous: prevRun, current: { ...curRun, branches: [{ ...curRun.branches[0], degraded: [dn('recording_rule', 'checkout:ratio', { aId: 'rr-123' })] }, ...curRun.branches.slice(1)] }, deploys: [
     { type: 'deploy', deployId: 'dep_rb', at: '2026-09-08T10:05:00.000Z', actor: 'carlos', pack: { id: 'x' }, mode: 'rollback', rollbackOf: 'dep_in', items: [{ artifact: 'rr-123', ok: true }, { artifact: 'all', ok: true }, { artifact: 'ch', ok: true }] },
   ] });
   const deployCauses = (r) => r.causes.filter(c => c.kind === 'observogram-deploy');
-  assert(deployCauses(rb).length === 1 && rb.causes[0].evidence === 'deploy dep_rb by carlos at 2026-09-08T10:05:00.000Z (rollback, rollback of dep_in) touched rr-123', 'a rollback is named as such; aId matches exactly; all and a two-letter stub match nothing', rb.causes.map(c => c.evidence));
-  // A deploy naming an artefact whose label embeds the SLI's name does not blame the SLI (containment runs one way).
+  assert(deployCauses(rb).length === 1 && rb.causes[0].evidence === 'deploy dep_rb by carlos at 2026-09-08T10:05:00.000Z (rollback, rollback of dep_in) touched rr-123 → checkout:ratio', 'a rollback is named as such; aId matches exactly and the evidence names the node; all and a bare prefix of a label match nothing', rb.causes.map(c => c.evidence));
+  // A deploy naming an artefact whose label embeds the SLI's name does not blame the SLI (matching is exact, never by substring).
   const oneWay = rankCauses({ previous: prevRun, current: { ...curRun, branches: [{ ...curRun.branches[0], degraded: [dn('recording_rule', 'payment:api_availability:ratio_5m'), dn('sli', 'api_availability')] }, ...curRun.branches.slice(1)] }, deploys: [
     { type: 'deploy', deployId: 'dep_rule', at: '2026-09-08T10:05:00.000Z', actor: 'ci', pack: { id: 'x' }, mode: 'upsert', items: [{ artifact: 'payment:api_availability:ratio_5m', ok: true }] },
   ] });
-  assert(deployCauses(oneWay).length === 1 && oneWay.causes[0].kind === 'observogram-deploy' && oneWay.causes[0].nodes.join() === 'payment:api_availability:ratio_5m', 'label / key containment runs one way: the rule deploy names the rule, not the SLI whose name it embeds', oneWay.causes[0]?.nodes);
+  assert(deployCauses(oneWay).length === 1 && oneWay.causes[0].kind === 'observogram-deploy' && oneWay.causes[0].nodes.join() === 'payment:api_availability:ratio_5m', 'exact matching: the rule deploy names the rule, not the SLI whose name it embeds', oneWay.causes[0]?.nodes);
+  // The server's real selector strings, resolved against Pack A by the caller (`resolved`) or pack-free by the ranker; group ↔ kind compatibility; never a substring.
+  {
+    const jn = (kind, label, identity, patch = {}) => dn(kind, label, { key: `${kind}::${JSON.stringify(identity)}`, ...patch });
+    const wire = [
+      jn('recording_rule', 'payment:api_availability:ratio_5m', { record: 'payment:api_availability:ratio_5m' }),
+      jn('sli', 'api_availability', { id: 'api_availability' }),
+      jn('scrape_job', 'payment', { job: 'payment' }),
+      jn('slo', 'checkout', { id: 'checkout' }),
+      jn('metric', 'http_requests_total', { name: 'http_requests_total' }),
+      jn('dashboard', 'payment', { id: 'payment' }),
+      jn('burn_rate', 'burn-rate alert: checkout', { slo: 'checkout' }),
+      jn('dashboard', 'api', { id: 'api' }),
+    ];
+    const wireCur = { ...curRun, versions: null, stackEvidence: null, branches: [{ rootKey: 'slo::{"id":"checkout"}', title: 'checkout', verdict: 'broken', ladderVerdict: 'broken', degraded: wire }, ...curRun.branches.slice(1)] };
+    const wirePrev = { ...prevRun, versions: null, branches: [{ rootKey: 'slo::{"id":"checkout"}', title: 'checkout', verdict: 'intact', ladderVerdict: 'healthy', degraded: [] }, ...prevRun.branches.slice(1)] };
+    const sel = (deployId, items, patch = {}) => ({ type: 'deploy', deployId, at: '2026-09-08T10:05:00.000Z', actor: 'ci', pack: { id: 'payment-service' }, mode: 'upsert', items, ...patch });
+    const rank = (items, patch) => deployCauses(rankCauses({ previous: wirePrev, current: wireCur, deploys: [sel('dep_sel', items, patch)] }));
+    const declared = rank([{ artifact: 'declared:0', group: 'rules', ok: true, resolved: ['payment:api_availability:ratio_5m'] }]);
+    assert(declared.length === 1 && declared[0].score === 0.9 && declared[0].nodes.join() === 'payment:api_availability:ratio_5m' && declared[0].evidence.endsWith('touched declared:0 → payment:api_availability:ratio_5m'),
+           'declared:<i> resolved by the caller to the rule name scores 0.9 on that rule and the evidence names both', declared);
+    const unresolved = rank([{ artifact: 'declared:0', group: 'rules', ok: true }]);
+    assert(unresolved.length === 1 && unresolved[0].score === 0.6 && /wrote pack payment-service — no item names a moved artefact/.test(unresolved[0].evidence), 'declared:<i> without a pack to resolve it names nothing — the pack-level 0.6, never a substring guess', unresolved);
+    const slo = rank([{ artifact: 'slo:checkout', group: 'rules', ok: true }]);
+    assert(slo.length === 1 && slo[0].score === 0.9 && slo[0].nodes.join() === 'burn-rate alert: checkout,checkout' && slo[0].evidence.endsWith('touched slo:checkout → burn-rate alert: checkout, checkout'),
+           'slo:<id> resolves pack-free to the SLO id: it names the SLO (label) and its burn-rate alert (identity slo), never the scrape job or the SLI of another name', slo);
+    const sloResolved = rank([{ artifact: 'slo:checkout', group: 'rules', ok: true, resolved: ['checkout', 'api_availability'] }]);
+    assert(sloResolved[0].nodes.join() === 'api_availability,burn-rate alert: checkout,checkout', 'a caller-resolved SLI id reaches the SLI node too', sloResolved[0]?.nodes);
+    const all = rank([{ artifact: 'all', group: 'rules', ok: true }]);
+    assert(all.length === 1 && all[0].score === 0.6 && all[0].nodes.length === 0 && /wrote pack payment-service \(all rules\) — no item names a moved artefact/.test(all[0].evidence), 'the group wildcard all names nothing by itself: a pack-level touch at 0.6 naming the wildcard', all);
+    const rollback = rank([{ artifact: 'payment', group: 'restore', ok: true }], { mode: 'rollback', rollbackOf: 'dep_x' });
+    assert(rollback.length === 1 && rollback[0].nodes.join() === 'payment' && rollback[0].evidence.includes('(rollback, rollback of dep_x) touched payment') && !rollback[0].evidence.includes('→'),
+           'a rollback ref (bare dashboard uid, group restore) blames the dashboard payment and not the scrape job payment', rollback);
+    const dash = rank([{ artifact: 'dash:payment', group: 'dashboards', ok: true }]);
+    assert(dash.length === 1 && dash[0].nodes.join() === 'payment' && dash[0].evidence.endsWith('touched dash:payment → payment'), 'dash:payment blames the dashboard payment only — not scrape_job payment, not the rule embedding payment', dash);
+    const short = rank([{ artifact: 'dash:api', group: 'dashboards', ok: true }]);
+    assert(short.length === 1 && short[0].nodes.join() === 'api', 'a three-letter dashboard id blames exactly the dashboard of that id and nothing that contains it', short);
+    const nothing = rank([{ artifact: 'dash:pay', group: 'dashboards', ok: true }, { artifact: 'ratio_5m', group: 'rules', ok: true }, { artifact: 'sli', group: 'rules', ok: true }, { artifact: 'payment', group: 'dashboards', ok: true, resolved: ['pay'] }]);
+    assert(nothing.length === 1 && nothing[0].score === 0.6, 'prefixes, suffixes and short words that are not a label match nothing (pack-level 0.6 only)', nothing);
+    const wrongGroup = rank([{ artifact: 'payment:api_availability:ratio_5m', group: 'dashboards', ok: true }, { artifact: 'checkout', group: 'alertmanager', ok: true }]);
+    assert(wrongGroup.length === 1 && wrongGroup[0].score === 0.6, 'a group that cannot write the node kind never matches (rules under dashboards, an SLO under alertmanager)', wrongGroup);
+    const noGroup = rank([{ artifact: 'payment', ok: true }]);
+    assert(noGroup.length === 1 && noGroup[0].nodes.join() === 'payment' && noGroup[0].evidence.endsWith('touched payment'), 'an item without a group is constrained by nothing but the exact name (the scrape job and the dashboard both called payment)', noGroup[0]);
+    assert(DEPLOY_GROUP_KINDS.dashboards.join() === 'dashboard,panel' && DEPLOY_GROUP_KINDS.restore.join() === 'dashboard,panel' && DEPLOY_GROUP_KINDS.delete.join() === 'dashboard,panel'
+           && DEPLOY_GROUP_KINDS.rules.join() === 'recording_rule,burn_rate,sli,slo' && DEPLOY_GROUP_KINDS.alerts.join() === 'burn_rate,alert_route' && DEPLOY_GROUP_KINDS.alertmanager.join() === 'alert_route'
+           && DEPLOY_GROUP_KINDS.pipelines.includes('pipeline_receiver') && DEPLOY_GROUP_KINDS.pipelines.includes('otel'),
+           'DEPLOY_GROUP_KINDS maps the server\'s deploy groups and rollback actions to the node kinds they can write', DEPLOY_GROUP_KINDS);
+    assert(deployArtifactNames({ artifact: 'dash:x' }).join() === 'x' && deployArtifactNames({ artifact: 'slo:settlement_latency_99' }).join() === 'settlement_latency_99,settlement_latency'
+           && deployArtifactNames({ artifact: 'declared:2' }).length === 0 && deployArtifactNames({ artifact: 'all' }).length === 0 && deployArtifactNames({ artifact: ' bare ' }).join() === 'bare'
+           && deployArtifactNames({ artifact: 'declared:2', resolved: ['r', 'r', ''] }).join() === 'r' && deployArtifactNames(null).length === 0,
+           'deployArtifactNames: caller resolution wins, else the pack-free part of the selector (dash id, SLO id + SLI base, bare name; declared and all → nothing)');
+    // branchRecordsFromGraph output satisfies the id match: a deploy naming the artefact id of a recorded node touches it.
+    const fromGraph = branchRecordsFromGraph({ branches: [branch('slo::g', { verdict: 'broken', ladderVerdict: 'broken', nodes: [node('drifted', 'recording_rule', 'checkout:ratio', { aId: 'QRY-04', deltas: [{ field: 'expr' }] })] })] });
+    const byId = deployCauses(rankCauses({ previous: { ...prevRun, branches: [{ rootKey: 'slo::g', title: 'g', verdict: 'intact', ladderVerdict: 'healthy', degraded: [] }] }, current: { ...curRun, branches: fromGraph }, deploys: [sel('dep_id', [{ artifact: 'QRY-04', group: 'rules', ok: true }])] }));
+    assert(byId.length === 1 && byId[0].score === 0.9 && byId[0].nodes.join() === 'checkout:ratio' && byId[0].evidence.endsWith('touched QRY-04 → checkout:ratio'), 'a persisted degraded node carries the artefact id the id match needs', byId);
+  }
   // Cosmetic drift 0.4; version 0.3 when nothing on the ruler path moved; a ratio row below 1 is a signal.
   const cosmetic = rankCauses({ previous: prevRun, current: { ...curRun, versions: { prometheus: '2.54.0' }, stackEvidence: { status: 'sampled', rows: [
       { id: 'scrape_success_ratio', family: 'scrape', value: 0.75, unit: 'ratio', direction: 'higher', outcome: 'data', hint: null }] },

@@ -102,6 +102,11 @@ function degradedNodeRecord(node, maxDeltaFields) {
     ladder: ladderOf(node),
     blastRadius: blastSummary(node.blastRadius),
     deltaFields: fields,
+    // The adapter's artefact ids on each side (`QRY-01`, `DASH-02`, …), so
+    // a deploy item that names an artefact by id can be matched exactly on
+    // a persisted record; null when the side has no artefact.
+    aId: node.aId == null ? null : str(node.aId),
+    bId: node.bId == null ? null : str(node.bId),
   };
 }
 
@@ -480,24 +485,93 @@ function worseChains(transitions, previous, current) {
   return out.sort((a, b) => (order.get(a.rootKey) ?? 0) - (order.get(b.rootKey) ?? 0));
 }
 
-// Does a deploy item's `artifact` name this node? The artefact id recorded
-// on the node (aId / bId, when the node carries one) matches exactly;
-// otherwise the node's label or key contains the artifact
-// case-insensitively (a `dash:` prefix is dropped first). Only that
-// direction: an artifact selector is at least as specific as a label, and
-// the reverse would let a rule deploy blame every SLI whose short name it
-// embeds. The group wildcard 'all' and stubs shorter than three characters
-// name nothing — they would match everything.
-function artifactMatches(artifact, node) {
-  const a = str(artifact).trim();
-  if (!a || a.toLowerCase() === 'all') return false;
-  const ids = [node.aId, node.bId].map((v) => str(v)).filter(Boolean);
-  if (ids.includes(a)) return true;
-  const needle = (a.toLowerCase().startsWith('dash:') ? a.slice(5) : a).toLowerCase();
-  if (needle.length < 3) return false;
-  return [str(node.label), str(node.key)].some((s) => s.toLowerCase().includes(needle));
+// ---- deploy items → nodes ----
+//
+// Which node kinds a deploy group can write. The server records the compile
+// group on every item (`rules`, `dashboards`, `pipelines`, `alertmanager`)
+// and, on a rollback, the action it took (`restore` / `delete` — dashboards,
+// the only automated restore today). A group outside the table, or none,
+// constrains nothing.
+export const DEPLOY_GROUP_KINDS = Object.freeze({
+  dashboards: Object.freeze(['dashboard', 'panel']),
+  restore: Object.freeze(['dashboard', 'panel']),
+  delete: Object.freeze(['dashboard', 'panel']),
+  rules: Object.freeze(['recording_rule', 'burn_rate', 'sli', 'slo']),
+  alerts: Object.freeze(['burn_rate', 'alert_route']),
+  alertmanager: Object.freeze(['alert_route']),
+  pipelines: Object.freeze(['pipeline_receiver', 'pipeline_processor', 'pipeline_exporter_metrics', 'pipeline_exporter_logs', 'pipeline_exporter_traces', 'otel']),
+});
+
+function groupAllowsKind(group, kind) {
+  const g = str(group).trim().toLowerCase();
+  if (!Object.prototype.hasOwnProperty.call(DEPLOY_GROUP_KINDS, g)) return true;
+  return DEPLOY_GROUP_KINDS[g].includes(str(kind));
 }
 
+// The SLI base of an SLO id — the id minus its trailing objective suffix
+// (`settlement_latency_99` → `settlement_latency`); the same rule as the
+// studio's post-deploy verifier (studio/verify-deploy.mjs sliBaseOfSloId),
+// copied so this module stays zero-import.
+const sliBaseOfSloId = (id) => str(id).replace(/_\d+(?:_\d+)*$/, '');
+
+// The names a deploy item's `artifact` selector stands for. A caller that
+// holds Pack A resolves the selector there and passes `resolved`
+// (journey.mjs resolveDeployArtifact — `declared:<i>` is only resolvable
+// against the pack); without it only the pack-free part is known:
+// `dash:<id>` → the dashboard id, `slo:<id>` → the SLO id and its SLI base,
+// a bare name → itself, `declared:<i>` and the group wildcard `all` →
+// nothing.
+export function deployArtifactNames(item) {
+  if (!isRecord(item)) return [];
+  if (Array.isArray(item.resolved)) return [...new Set(item.resolved.map((v) => str(v).trim()).filter(Boolean))];
+  const a = str(item.artifact).trim();
+  const low = a.toLowerCase();
+  if (!a || low === 'all' || low.startsWith('declared:')) return [];
+  if (low.startsWith('dash:')) return a.slice(5) ? [a.slice(5)] : [];
+  if (low.startsWith('slo:')) { const id = a.slice(4); return id ? [...new Set([id, sliBaseOfSloId(id)])] : []; }
+  return [a];
+}
+
+// The identity handles a node's key carries: the part after `kind::` and,
+// when that part is a JSON identity (artefact-model identityKeyOf), the
+// string values of its handle fields — id, name, record, slo, job, uid.
+function identityHandles(key) {
+  const k = str(key);
+  const i = k.indexOf('::');
+  if (i < 0) return [];
+  const rest = k.slice(i + 2);
+  const out = [rest];
+  if (rest.startsWith('{')) {
+    try {
+      const idn = JSON.parse(rest);
+      if (isRecord(idn)) for (const f of ['id', 'name', 'record', 'slo', 'job', 'uid']) if (typeof idn[f] === 'string' && idn[f]) out.push(idn[f]);
+    } catch (_) { /* not a JSON identity */ }
+  }
+  return out;
+}
+
+// Does a deploy item name this node? Exactly, never by substring: the item's
+// group must be able to write the node's kind (DEPLOY_GROUP_KINDS), and then
+// either the selector as written or a name it resolved to equals an artefact
+// id recorded on the node (aId / bId), or a resolved name equals the node's
+// label or one of its identity handles. `all` names nothing by itself — a
+// group-wide write is the pack-level touch scored in rankCauses.
+function artifactMatches(item, node) {
+  if (!isRecord(item) || !isRecord(node)) return false;
+  const artifact = str(item.artifact).trim();
+  if (!artifact || artifact.toLowerCase() === 'all') return false;
+  if (!groupAllowsKind(item.group, node.kind)) return false;
+  const names = deployArtifactNames(item);
+  const ids = [node.aId, node.bId].map((v) => str(v)).filter(Boolean);
+  if ([artifact, ...names].some((n) => ids.includes(n))) return true;
+  if (!names.length) return false;
+  const handles = [str(node.label), ...identityHandles(node.key)].filter(Boolean);
+  return names.some((n) => handles.includes(n));
+}
+
+// Does a deploy record write the journey's own pack? Needs the audit line's
+// `pack.id` (the registry id — the pack file's stem) or `pack.name` to equal
+// the record's `packA.name` (`metadata.name`) or `packA.id`.
 function packMatches(deploy, current) {
   const packA = isRecord(current?.packA) ? current.packA : null;
   const mine = [packA?.name, packA?.id].map((v) => str(v).toLowerCase()).filter(Boolean);
@@ -505,13 +579,18 @@ function packMatches(deploy, current) {
   return mine.some((m) => theirs.includes(m));
 }
 
-function deployEvidence(deploy, touched) {
-  const head = `deploy ${str(deploy.deployId) || '?'} by ${str(deploy.actor) || 'unknown actor'} at ${str(deploy.at) || '?'}`
-    + ` (${str(deploy.mode) || 'deploy'}${deploy.rollbackOf ? `, rollback of ${str(deploy.rollbackOf)}` : ''})`;
+// Evidence text is rendered into markdown and CLI lines: every value that
+// came off the wire or the request (labels, actor, deploy id, artifact) is
+// collapsed to single spaces so it cannot open a new line there.
+const ws = (v) => str(v).replace(/\s+/g, ' ').trim();
+
+function deployEvidence(deploy, touched, wildcards = []) {
+  const head = `deploy ${ws(deploy.deployId) || '?'} by ${ws(deploy.actor) || 'unknown actor'} at ${ws(deploy.at) || '?'}`
+    + ` (${ws(deploy.mode) || 'deploy'}${deploy.rollbackOf ? `, rollback of ${ws(deploy.rollbackOf)}` : ''})`;
   const tail = touched.length
     ? ` touched ${touched.join(', ')}`
-    : ` wrote pack ${str(deploy.pack?.id) || str(deploy.pack?.name) || '?'} — no item names a degraded artefact`;
-  const verify = isRecord(deploy.verify) && deploy.verify.outcome != null ? `; verify: ${str(deploy.verify.outcome)}` : '';
+    : ` wrote pack ${ws(deploy.pack?.id) || ws(deploy.pack?.name) || '?'}${wildcards.length ? ` (${wildcards.join(', ')})` : ''} — no item names a moved artefact`;
+  const verify = isRecord(deploy.verify) && deploy.verify.outcome != null ? `; verify: ${ws(deploy.verify.outcome)}` : '';
   return head + tail + verify;
 }
 
@@ -568,21 +647,30 @@ export function rankCauses({ previous, current, deploys = [] } = {}) {
   if (considered.length) {
     // observogram-deploy: an item that names a moved node, else the pack.
     for (const deploy of (Array.isArray(deploys) ? deploys : []).filter(isRecord)) {
-      if ((deploy.type !== undefined && deploy.type !== 'deploy') || deploy.dryRun === true) continue;
+      if (deploy.type !== 'deploy' || deploy.dryRun === true) continue;
       const touched = [];
+      const wildcards = [];
       const keys = [];
       const labels = [];
       for (const item of (Array.isArray(deploy.items) ? deploy.items : []).filter(isRecord)) {
+        const artifact = ws(item.artifact);
+        if (artifact.toLowerCase() === 'all') { wildcards.push(`all ${ws(item.group) || 'items'}`); continue; }
+        const hit = [];
         for (const { node, rootKey } of considered) {
-          if (!artifactMatches(item.artifact, node)) continue;
-          const name = `${str(item.artifact)}${item.ok === false ? ' (failed)' : ''}`;
-          if (!touched.includes(name)) touched.push(name);
+          if (!artifactMatches(item, node)) continue;
+          hit.push(ws(labelOf(node)));
           keys.push(rootKey);
           labels.push(labelOf(node));
         }
+        if (!hit.length) continue;
+        const names = [...new Set(hit)].sort(cmp);
+        // A selector reads as what it resolved to (`declared:0 → payment:…`);
+        // a bare name that is the label reads as itself.
+        const name = `${artifact}${names.length === 1 && names[0] === artifact ? '' : ` → ${names.join(', ')}`}${item.ok === false ? ' (failed)' : ''}`;
+        if (!touched.includes(name)) touched.push(name);
       }
       if (touched.length) add('observogram-deploy', CAUSE_SCORES.deployTouchedNode, deployEvidence(deploy, touched), keys, labels);
-      else if (packMatches(deploy, current)) add('observogram-deploy', CAUSE_SCORES.deployTouchedPack, deployEvidence(deploy, []), worse.map((w) => w.rootKey), []);
+      else if (packMatches(deploy, current)) add('observogram-deploy', CAUSE_SCORES.deployTouchedPack, deployEvidence(deploy, [], wildcards), worse.map((w) => w.rootKey), []);
     }
     // config-drift: a moved node that drifted, by what it drifted on.
     for (const { node, rootKey } of considered) {

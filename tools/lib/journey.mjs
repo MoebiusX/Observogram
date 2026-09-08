@@ -66,6 +66,7 @@ import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from './contrac
 import { formatStackValue } from './stack-evidence.mjs';
 import { branchRecordsFromGraph, chainSummary, diffRunBranches, rankCauses, deploysInWindow, topCause } from './chain-history.mjs';
 import { computeDiagnosticGrade, computePostureMatrix, partialLiveEvidence, DIAGNOSTIC_PASS_SCORE_THRESHOLD } from '../../studio/diagnostic-grade.mjs';
+import { sliBaseOfSloId } from '../../studio/verify-deploy.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = JSON.parse(readFileSync(
@@ -760,12 +761,13 @@ export async function runJourney(def, { baseDir } = {}) {
   };
   // Step 4: candidate causes for the chains that got worse since the
   // previous run — ranked over Observogram's own deploys inside the window
-  // (previous start, this start], the drift and version facts of this
-  // record and its stack samples (chain-history.mjs rankCauses). A vantage
-  // change rides beside them, never among them. null on the first run:
-  // nothing to explain yet.
+  // (previous start, this start] with every item's artifact selector
+  // resolved against Pack A (the ranker matches names exactly, never by
+  // substring), the drift and version facts of this record and its stack
+  // samples (chain-history.mjs rankCauses). A vantage change rides beside
+  // them, never among them. null on the first run: nothing to explain yet.
   record.causes = previousRun
-    ? rankCauses({ previous: previousRun, current: record, deploys: deploysInWindow(readDeployLog(), previousRun.startedAt ?? null, startedAt) })
+    ? rankCauses({ previous: previousRun, current: record, deploys: resolveDeployItems(deploysInWindow(readDeployLog(), previousRun.startedAt ?? null, startedAt), a.canonical) })
     : null;
   if (livePackError) record.historyError = livePackError;
 
@@ -890,6 +892,46 @@ function readDeployLog() {
     } catch (_) {}
   }
   return out;
+}
+
+// The names a deploy item's `artifact` selector stands for in Pack A — the
+// selectors the server persists on its audit lines (server/routes/deploy.mjs
+// writes the compile selector: `all`, `declared:<i>`, `slo:<id>`,
+// `dash:<id>`; a rollback writes the bare dashboard uid). Resolved here,
+// where the pack is in memory, following the studio's post-deploy verifier
+// (studio/verify-deploy.mjs): `declared:<i>` → the i-th declared recording
+// rule's name; `slo:<id>` → the SLO id, its SLI base and the SLI the pack
+// binds it to; `dash:<id>` → the dashboard id; a bare name → itself; `all`
+// and an unresolvable index → nothing (a group-wide write is the pack-level
+// touch the ranker scores on its own). Names only — the ranker matches
+// them exactly.
+export function resolveDeployArtifact(artifact, canonicalA) {
+  const a = String(artifact ?? '').trim();
+  const low = a.toLowerCase();
+  if (!a || low === 'all') return [];
+  const spec = canonicalA?.spec || {};
+  if (low.startsWith('declared:')) {
+    const idx = /^declared:(\d+)$/i.exec(a);
+    const name = idx ? (Array.isArray(spec.queries?.recording_rules) ? spec.queries.recording_rules[Number(idx[1])]?.name : null) : null;
+    return typeof name === 'string' && name ? [name] : [];
+  }
+  if (low.startsWith('slo:')) {
+    const id = a.slice(4);
+    if (!id) return [];
+    const slo = (Array.isArray(spec.slos) ? spec.slos : []).find(s => s && typeof s === 'object' && s.id === id);
+    const sli = typeof slo?.sli === 'string' ? slo.sli.replace(/^slis\./, '') : '';
+    return [...new Set([id, sliBaseOfSloId(id), sli].filter(Boolean))];
+  }
+  if (low.startsWith('dash:')) return a.slice(5) ? [a.slice(5)] : [];
+  return [a];
+}
+
+// Every item of every windowed deploy, with `resolved` beside its
+// `artifact` for the ranker. Records are copied, never mutated.
+function resolveDeployItems(deploys, canonicalA) {
+  return deploys.map(d => (d && typeof d === 'object' && Array.isArray(d.items)
+    ? { ...d, items: d.items.map(it => (it && typeof it === 'object' && !Array.isArray(it) ? { ...it, resolved: resolveDeployArtifact(it.artifact, canonicalA) } : it)) }
+    : d));
 }
 
 // ---------- report rendering ----------

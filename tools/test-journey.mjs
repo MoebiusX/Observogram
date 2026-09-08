@@ -34,7 +34,7 @@ const {
   pruneRunFiles, parseRunRetention, journeyRunRetention, JOURNEY_RUN_RETENTION_DEFAULT,
   formatStackValue, validateGateStack, stackStatusLine,
   chainStatusLine, liveVersions, livePackDecision, pruneLiveSnapshots, readLivePack, KEEP_LIVE_PACK_POLICIES, LIVE_PACK_PATH_RE,
-  causeLine, transitionGotWorse,
+  causeLine, transitionGotWorse, resolveDeployArtifact,
 } = await import('./lib/journey.mjs');
 const { STACK_SELF_METRIC_PROBES } = await import('./lib/contracts/stack-self-metrics.mjs');
 
@@ -408,8 +408,9 @@ try {
     const b0 = liveRec.branches[0];
     assert(Object.keys(b0).join() === 'rootKey,title,rootKind,verdict,ladderVerdict,integrityPct,ladderIntegrityPct,confidence,missingRoles,degraded',
            'a persisted branch carries the chain-history shape', Object.keys(b0));
-    assert(b0.degraded.length > 0 && Object.keys(b0.degraded[0]).join() === 'key,kind,label,status,ladder,blastRadius,deltaFields' && b0.degraded[0].ladder.rung && b0.degraded[0].blastRadius && typeof b0.degraded[0].blastRadius.slos === 'number',
-           'a persisted degraded node carries status, ladder, blast radius and delta fields', b0.degraded[0]);
+    assert(b0.degraded.length > 0 && Object.keys(b0.degraded[0]).join() === 'key,kind,label,status,ladder,blastRadius,deltaFields,aId,bId' && b0.degraded[0].ladder.rung && b0.degraded[0].blastRadius && typeof b0.degraded[0].blastRadius.slos === 'number',
+           'a persisted degraded node carries status, ladder, blast radius, delta fields and the artefact ids', b0.degraded[0]);
+    assert(liveRec.branches.some(b => b.degraded.some(d => typeof d.aId === 'string' && /^[A-Z]+-\d+$/.test(d.aId))), 'a declared node persists the adapter artefact id (e.g. QRY-01) so a deploy naming it by id can match', liveRec.branches[0].degraded.map(d => [d.label, d.aId, d.bId]));
     assert(liveRec.branches.some(b => b.degraded.some(d => d.ladder.status === 'unobserved' && /probe family dashboards failed/.test(d.ladder.detail))),
            'the failed dashboards probe lands on the record as unobserved nodes, never as absent ones');
     assert(liveRec.branches.every(b => b.degraded.every(d => d.status !== 'unverifiable')), 'unverifiable nodes (not live-introspectable) are not recorded as degraded');
@@ -801,12 +802,27 @@ try {
     assert(/^live pack: not kept — no transition since /m.test(renderJourneyMarkdown(t2)) && /_no chain changed since /.test(renderJourneyMarkdown(t2)), 'markdown prints the not-kept decision and the quiet transition');
     // Slice 4: Observogram's own deploy audit beside the runs (the server
     // appends deploys.jsonl under the workspace root). One deploy inside
-    // the window (t2, t3] naming the recording rule the third run will see
-    // move, one long before the window naming the same rule, its verify
-    // line, and a torn line.
+    // the window (t2, t3] whose item carries the server's real selector
+    // (`declared:0` — Pack A's first declared recording rule, the one the
+    // third run will see move), one long before the window naming the same
+    // rule, its verify line, and a torn line.
     await new Promise(r => setTimeout(r, 5));
     const depAt = new Date().toISOString();
-    const depItem = { artifact: 'payment:api_availability:ratio_5m', group: 'rules', ok: true, tookMs: 2 };
+    const depItem = { artifact: 'declared:0', group: 'rules', flavor: 'prometheus', scope: 'recording', ok: true, tookMs: 2 };
+    {
+      const packA = parseYaml(readFileSync(PACK_A, 'utf8'));
+      assert(packA.spec.queries.recording_rules[0].name === 'payment:api_availability:ratio_5m', 'fixture: Pack A\'s first declared recording rule is the one the fake MCP exposes');
+      assert(resolveDeployArtifact('declared:0', packA).join() === 'payment:api_availability:ratio_5m' && resolveDeployArtifact('declared:99', packA).length === 0 && resolveDeployArtifact('declared:x', packA).length === 0,
+             'resolveDeployArtifact maps declared:<i> to the i-th declared recording rule name, nothing for an index the pack lacks', resolveDeployArtifact('declared:0', packA));
+      const slo0 = packA.spec.slos[0];
+      const sli0 = String(slo0.sli).replace(/^slis\./, '');
+      assert(resolveDeployArtifact(`slo:${slo0.id}`, packA).join() === [...new Set([slo0.id, slo0.id.replace(/_\d+(?:_\d+)*$/, ''), sli0])].join(),
+             'resolveDeployArtifact maps slo:<id> to the SLO id, its SLI base and the SLI the pack binds it to', resolveDeployArtifact(`slo:${slo0.id}`, packA));
+      assert(resolveDeployArtifact('slo:no_such_slo_99', packA).join() === 'no_such_slo_99,no_such_slo', 'an SLO the pack does not declare still resolves to its id and SLI base (pack-free part)');
+      assert(resolveDeployArtifact('dash:payment-overview', packA).join() === 'payment-overview' && resolveDeployArtifact('all', packA).length === 0 && resolveDeployArtifact('  ', packA).length === 0
+             && resolveDeployArtifact('payment-overview', packA).join() === 'payment-overview' && resolveDeployArtifact('dash:', packA).length === 0 && resolveDeployArtifact(null, null).length === 0,
+             'resolveDeployArtifact: dash:<id> → the id, a bare name → itself, all / blank / empty selector → nothing, no pack tolerated');
+    }
     writeFileSync(join(TMP, 'deploys.jsonl'), [
       JSON.stringify({ type: 'deploy', deployId: 'dep_out', at: '2000-01-01T00:00:00.000Z', actor: 'old', pack: { id: 'payment-service', version: '1.5.0' }, env: null, mcpUrl: fakeUrl, target: { product: 'prometheus' }, mode: 'upsert', dryRun: false, items: [depItem], summary: { total: 1, ok: 1, failed: 0 } }),
       JSON.stringify({ type: 'deploy', deployId: 'dep_in', at: depAt, actor: 'carlos', pack: { id: 'payment-service', version: '1.5.0' }, env: null, mcpUrl: fakeUrl, target: { product: 'prometheus' }, mode: 'upsert', dryRun: false, items: [depItem], summary: { total: 1, ok: 1, failed: 0 } }),
@@ -842,15 +858,15 @@ try {
     const c3 = t3.causes;
     assert(c3 && c3.causes.length === 1 && c3.causes[0].rank === 1 && c3.causes[0].kind === 'observogram-deploy' && c3.causes[0].score === 0.9,
            'the moved run ranks the deploy inside the window first (0.9)', c3 && c3.causes);
-    assert(c3.causes[0].evidence === `deploy dep_in by carlos at ${depAt} (upsert) touched payment:api_availability:ratio_5m; verify: pending`,
-           'the deploy evidence names deployId, actor, at, mode, the artefact and the verify outcome merged from its verify line', c3.causes[0].evidence);
+    assert(c3.causes[0].evidence === `deploy dep_in by carlos at ${depAt} (upsert) touched declared:0 → payment:api_availability:ratio_5m; verify: pending`,
+           'the deploy evidence names deployId, actor, at, mode, the selector with the rule it resolved to against Pack A, and the verify outcome merged from its verify line', c3.causes[0].evidence);
     assert(!JSON.stringify(c3).includes('dep_out') && !JSON.stringify(c3).includes('dep_torn'), 'the deploy outside the window and the torn line never appear');
     const availChain = t3.branches.find(b => b.title === 'api_availability_99_9');
     assert(c3.causes[0].chains.join() === availChain.rootKey && c3.causes[0].nodes.join() === 'payment:api_availability:ratio_5m',
            'the cause names the chain and the recording rule the deploy touched — not the SLI whose name the rule embeds, not the still-unobserved metric of the same name', { chains: c3.causes[0].chains, nodes: c3.causes[0].nodes });
     assert(c3.vantage && c3.vantage.changed === true && /vantage lost → restricted/.test(c3.vantage.detail) && /probe family recording_rules now exposed/.test(c3.vantage.detail) && /4 → 5 MCP tools exposed/.test(c3.vantage.detail),
            'the vantage block reports the family that now answers and the tool count — beside the causes, never among them', c3.vantage);
-    assert(new RegExp(`### Candidate causes — ranked by evidence, not a root-cause verdict\n\n1\\. \\[observogram-deploy\\] 0\\.9 — deploy dep_in by carlos at ${escapeRe(depAt)} \\(upsert\\) touched payment:api_availability:ratio_5m; verify: pending \\(chains: api_availability_99_9\\)\n\nvantage changed: vantage lost → restricted`).test(md3),
+    assert(new RegExp(`### Candidate causes — ranked by evidence, not a root-cause verdict\n\n1\\. \\[observogram-deploy\\] 0\\.9 — deploy dep_in by carlos at ${escapeRe(depAt)} \\(upsert\\) touched declared:0 → payment:api_availability:ratio_5m; verify: pending \\(chains: api_availability_99_9\\)\n\nvantage changed: vantage lost → restricted`).test(md3),
            'markdown lists the ranked causes with their chains by title, then the vantage change', md3.split('### Candidate causes')[1]);
     assert(JSON.stringify(t3json.causes) === JSON.stringify(c3), 'causes round-trip through the history file');
     assert(causeLine(t3) === `top cause: [observogram-deploy] ${c3.causes[0].evidence}` && causeLine(t2) === 'no candidate causes' && causeLine(t1) === 'no candidate causes' && causeLine({ outcome: 'vantage-lost' }) === 'no candidate causes',
@@ -908,7 +924,7 @@ try {
     // The CLI line shows the chains segment for a live journey too.
     const cliLive = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'list'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000 });
     assert(/^fake-live\tpass · .* · chains \d+\/\d+ intact · ladder \d+ healthy/m.test(cliLive.stdout), 'journey list prints the chains status for a live journey', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-live')));
-    assert(/^fake-live\t.* · top cause: \[observogram-deploy\] deploy dep_in by carlos at .* touched payment:api_availability:ratio_5m; verify: pending$/m.test(cliLive.stdout),
+    assert(/^fake-live\t.* · top cause: \[observogram-deploy\] deploy dep_in by carlos at .* touched declared:0 → payment:api_availability:ratio_5m; verify: pending$/m.test(cliLive.stdout),
            'journey list appends the top candidate cause to the journey whose chains got worse', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-live')));
     assert(/^fake-always\t.* · ladder [^\n]*$/m.test(cliLive.stdout) && !/^fake-always\t.*top cause/m.test(cliLive.stdout) && !/^fake-always\t.*no candidate causes/m.test(cliLive.stdout),
            'a journey whose chains did not get worse gets no cause segment at all', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-always')));
