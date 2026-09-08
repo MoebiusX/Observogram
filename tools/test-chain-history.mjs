@@ -17,7 +17,7 @@ import {
   DEGRADED_STATUSES, BRANCH_RECORD_CAPS, VERDICT_RANK, LADDER_VERDICT_RANK,
   isDegradedNode, degradedSeverity, branchRecordsFromGraph, chainSummary, transitionDirection, diffRunBranches,
   CAUSE_KINDS, CAUSE_NOTE, CAUSE_SCORES, FAMILY_FOR_KIND, familyForKind, deploysInWindow, rankCauses, topCause,
-  DEPLOY_GROUP_KINDS, deployArtifactNames,
+  DEPLOY_GROUP_KINDS, deployArtifactNames, PRODUCT_FAMILIES, familiesForProduct,
 } from './lib/chain-history.mjs';
 
 const { assert, report } = createHarness();
@@ -142,13 +142,17 @@ assert(JSON.stringify(branchRecordsFromGraph(graph)) === JSON.stringify(recs), '
 
 // --- chainSummary ---
 const summary = chainSummary({ branches: recs });
-assert(Object.keys(summary).join() === 'declaredTotal,intact,partial,broken,undeclared,ladder,integrityPct,ladderIntegrityPct,degradedNodes,topExposure',
+assert(Object.keys(summary).join() === 'declaredTotal,intact,partial,broken,undeclared,ladder,integrityPct,ladderIntegrityPct,degradedNodes,undeclaredNodes,topExposure',
        'chainSummary carries exactly the listing fields', Object.keys(summary));
 assert(summary.declaredTotal === 3 && summary.intact === 1 && summary.partial === 1 && summary.broken === 1 && summary.undeclared === 1, 'chainSummary counts verdicts over the declared chains', summary);
 assert(Object.keys(summary.ladder).join() === 'healthy,degraded,broken,unobserved' && summary.ladder.healthy === 1 && summary.ladder.degraded === 1 && summary.ladder.broken === 1 && summary.ladder.unobserved === 0,
        'chainSummary counts ladder verdicts over the declared chains', summary.ladder);
 assert(summary.integrityPct === 73 && summary.ladderIntegrityPct === 67, 'integrities are the rounded means of the declared per-branch percentages', { i: summary.integrityPct, l: summary.ladderIntegrityPct });
-assert(summary.degradedNodes === 11, 'degradedNodes counts every recorded node across every branch (undeclared included)', summary.degradedNodes);
+assert(summary.degradedNodes === 9 && summary.undeclaredNodes === 2, 'degradedNodes counts the recorded nodes of the declared chains only; the live-only nodes of undeclared chains are inventory, counted apart as undeclaredNodes', { d: summary.degradedNodes, u: summary.undeclaredNodes });
+{
+  const onlyUndeclared = chainSummary({ branches: [recs[3]] });
+  assert(onlyUndeclared.degradedNodes === 0 && onlyUndeclared.undeclaredNodes === 2 && onlyUndeclared.topExposure === null, 'a live-only node of an undeclared chain is never the top exposure, however many SLOs it would blind', onlyUndeclared);
+}
 assert(summary.topExposure && Object.keys(summary.topExposure).join() === 'label,kind,slos,alerts' && summary.topExposure.label === 'payment' && summary.topExposure.kind === 'scrape_job' && summary.topExposure.slos === 2 && summary.topExposure.alerts === 2,
        'topExposure is the degraded node that blinds the most SLOs (then alerts)', summary.topExposure);
 assert(chainSummary({ branches: [recs[2]] }).topExposure === null && chainSummary({ branches: [recs[2]] }).degradedNodes === 0, 'no degraded node → topExposure null');
@@ -193,8 +197,16 @@ assert(t && Object.keys(t).join() === 'since,changed,appeared,disappeared,any', 
 assert(t.since === '2026-09-08T10:00:00.000Z' && t.any === true, 'the diff names the previous start time and says something moved', { since: t.since, any: t.any });
 assert(t.changed.length === 2 && t.changed.map(c => c.rootKey).join() === 'slo::a,slo::b', 'only chains whose verdict or ladder verdict differ are changed, in current order', t.changed.map(c => c.rootKey));
 const ca = t.changed[0];
-assert(Object.keys(ca).join() === 'rootKey,title,from,to,direction,nodes' && ca.title === 'a' && ca.from.verdict === 'intact' && ca.from.ladderVerdict === 'healthy' && ca.to.verdict === 'broken' && ca.to.ladderVerdict === 'broken' && ca.direction === 'worse',
-       'a changed entry carries from / to pairs and the direction', ca);
+assert(Object.keys(ca).join() === 'rootKey,title,from,to,direction,nodes,note' && ca.title === 'a' && ca.from.verdict === 'intact' && ca.from.ladderVerdict === 'healthy' && ca.to.verdict === 'broken' && ca.to.ladderVerdict === 'broken' && ca.direction === 'worse' && ca.note === null,
+       'a changed entry carries from / to pairs, the direction and a null note when the declared side did not move', ca);
+{
+  const roleMoved = diffRunBranches({ branches: [{ rootKey: 'r', verdict: 'partial', ladderVerdict: 'degraded', missingRoles: [], degraded: [] }, { rootKey: 't', verdict: 'partial', ladderVerdict: 'degraded', degraded: [] }] },
+                                    { branches: [{ rootKey: 'r', verdict: 'broken', ladderVerdict: 'broken', missingRoles: ['action', 'sli'], degraded: [] }, { rootKey: 't', verdict: 'broken', ladderVerdict: 'broken', degraded: [], truncated: true }] });
+  assert(roleMoved.changed[0].note === 'declared side: missingRoles none → action, sli', 'a changed entry whose missing roles moved carries a declared-side note naming before and after', roleMoved.changed[0].note);
+  assert(roleMoved.changed[1].note === 'degraded list truncated (cap 16) — a node that moved may be unrecorded', 'a changed entry whose degraded list was cut on either side says so', roleMoved.changed[1].note);
+  const both = diffRunBranches({ branches: [{ rootKey: 'r', verdict: 'intact', ladderVerdict: 'healthy', missingRoles: ['sli'], degraded: [], truncated: true }] }, { branches: [{ rootKey: 'r', verdict: 'broken', ladderVerdict: 'broken', missingRoles: [], degraded: [] }] });
+  assert(both.changed[0].note === 'declared side: missingRoles sli → none · degraded list truncated (cap 16) — a node that moved may be unrecorded', 'both notes join with a middle dot', both.changed[0].note);
+}
 assert(ca.nodes.newlyDegraded.join() === 'a_sli,m' && ca.nodes.recovered.length === 0, 'newlyDegraded lists the labels new on the current side', ca.nodes);
 assert(t.changed[1].direction === 'better' && t.changed[1].nodes.recovered.join() === 'burn b' && t.changed[1].nodes.newlyDegraded.length === 0, 'recovered lists the labels gone from the previous side', t.changed[1]);
 assert(t.appeared.join() === 'slo::new' && t.disappeared.join() === 'slo::gone', 'appeared / disappeared are the root keys present on one side only', { a: t.appeared, d: t.disappeared });
@@ -226,7 +238,12 @@ assert(JSON.stringify(diffRunBranches(prevRecord, curRecord)) === JSON.stringify
 assert(CAUSE_KINDS.join() === 'observogram-deploy,config-drift,backend-version,stack-self-metric', 'CAUSE_KINDS is the tie-break order: deploy, drift, version, stack sample', CAUSE_KINDS);
 assert(CAUSE_NOTE === 'candidate causes ranked by evidence — not a root-cause verdict', 'the note keeps the honesty vocabulary');
 assert(CAUSE_SCORES.deployTouchedNode === 0.9 && CAUSE_SCORES.deployTouchedPack === 0.6 && CAUSE_SCORES.driftDecisionBearing === 0.8 && CAUSE_SCORES.driftCosmetic === 0.4
-       && CAUSE_SCORES.versionOnRulerPath === 0.6 && CAUSE_SCORES.versionElsewhere === 0.3 && CAUSE_SCORES.stackSignal === 0.5, 'the scoring table is the documented one', CAUSE_SCORES);
+       && CAUSE_SCORES.versionFeedsMovedKind === 0.6 && CAUSE_SCORES.versionElsewhere === 0.3 && CAUSE_SCORES.stackSignal === 0.5, 'the scoring table is the documented one', CAUSE_SCORES);
+assert(PRODUCT_FAMILIES.prometheus.join() === 'scrape,ruler,tsdb' && PRODUCT_FAMILIES.victoriametrics.join() === 'scrape,ruler,tsdb' && PRODUCT_FAMILIES.thanos.join() === 'scrape,ruler,tsdb' && PRODUCT_FAMILIES.mimir.join() === 'scrape,ruler,tsdb'
+       && PRODUCT_FAMILIES.grafana.join() === 'dashboards' && PRODUCT_FAMILIES.alertmanager.join() === 'notify' && PRODUCT_FAMILIES.otel.join() === 'collector' && PRODUCT_FAMILIES.otelcol.join() === 'collector'
+       && PRODUCT_FAMILIES.loki.join() === 'logs' && PRODUCT_FAMILIES.promtail.join() === 'logs' && PRODUCT_FAMILIES.jaeger.join() === 'traces' && PRODUCT_FAMILIES.tempo.join() === 'traces',
+       'PRODUCT_FAMILIES maps each product whose version the fetcher reports to the stack families it feeds', PRODUCT_FAMILIES);
+assert(familiesForProduct('Prometheus').join() === 'scrape,ruler,tsdb' && familiesForProduct('unknown-product').length === 0 && familiesForProduct(null).length === 0, 'familiesForProduct is case-insensitive and knows no family for an unknown product');
 assert(FAMILY_FOR_KIND.scrape_job === 'scrape' && FAMILY_FOR_KIND.recording_rule === 'ruler' && FAMILY_FOR_KIND.burn_rate === 'ruler' && FAMILY_FOR_KIND.sli === 'ruler' && FAMILY_FOR_KIND.slo === 'ruler'
        && FAMILY_FOR_KIND.alert_route === 'notify' && FAMILY_FOR_KIND.backend === 'tsdb' && FAMILY_FOR_KIND.otel === 'collector' && FAMILY_FOR_KIND.panel === 'dashboards' && FAMILY_FOR_KIND.dashboard === 'dashboards' && FAMILY_FOR_KIND.synthetic === 'synthetic',
        'FAMILY_FOR_KIND maps every kind to the stack family that feeds it', FAMILY_FOR_KIND);
@@ -293,14 +310,14 @@ assert(rc.transitions && rc.transitions.since === prevRun.startedAt && rc.transi
 assert(rc.causes.map(c => `${c.rank}:${c.kind}:${c.score}`).join() === '1:observogram-deploy:0.9,2:config-drift:0.8,3:observogram-deploy:0.6,4:backend-version:0.6,5:stack-self-metric:0.5',
        'causes rank by score desc, then CAUSE_KINDS order on a tie (deploy 0.6 before version 0.6); ranks are 1-based', rc.causes.map(c => `${c.rank}:${c.kind}:${c.score}`));
 const c1 = rc.causes[0];
-assert(Object.keys(c1).join() === 'rank,kind,score,evidence,chains,nodes', 'a cause carries exactly rank, kind, score, evidence, chains, nodes', Object.keys(c1));
+assert(Object.keys(c1).join() === 'rank,kind,score,evidence,chains,rootKeys,nodes', 'a cause carries exactly rank, kind, score, evidence, chains, rootKeys, nodes', Object.keys(c1));
 assert(c1.evidence === 'deploy dep_in by carlos at 2026-09-08T10:05:00.000Z (upsert) touched checkout:ratio; verify: verified', 'deploy evidence names deployId, actor, at, mode, the matching artifact and the verify outcome', c1.evidence);
-assert(c1.chains.join() === 'slo::checkout' && c1.nodes.join() === 'checkout:ratio', 'a deploy cause lists the chains and nodes its items touched', { chains: c1.chains, nodes: c1.nodes });
-assert(rc.causes[1].evidence === 'burn-rate alert: checkout (burn_rate) drifted on objective, labels.team — decision-bearing: objective' && rc.causes[1].chains.join() === 'slo::checkout' && rc.causes[1].nodes.join() === 'burn-rate alert: checkout',
+assert(c1.chains.join() === 'checkout' && c1.rootKeys.join() === 'slo::checkout' && c1.nodes.join() === 'checkout:ratio', 'a deploy cause lists the chains it touched by title, their identity keys apart, and the nodes', { chains: c1.chains, rootKeys: c1.rootKeys, nodes: c1.nodes });
+assert(rc.causes[1].evidence === 'burn-rate alert: checkout (burn_rate) drifted on objective, labels.team — decision-bearing: objective' && rc.causes[1].chains.join() === 'checkout' && rc.causes[1].nodes.join() === 'burn-rate alert: checkout',
        'a decision-bearing drift scores 0.8 and its evidence lists the fields', rc.causes[1].evidence);
-assert(rc.causes[2].evidence === 'deploy dep_pack by ci at 2026-09-08T10:07:00.000Z (upsert) wrote pack payment-service (all dashboards) — no item names a moved artefact' && rc.causes[2].chains.join() === 'slo::checkout' && rc.causes[2].nodes.length === 0,
+assert(rc.causes[2].evidence === 'deploy dep_pack by ci at 2026-09-08T10:07:00.000Z (upsert) wrote pack payment-service (all dashboards) — no item names a moved artefact' && rc.causes[2].chains.join() === 'checkout' && rc.causes[2].nodes.length === 0,
        'a deploy of the journey\'s pack whose only item is the group wildcard scores 0.6 over every chain that got worse and names the wildcard', rc.causes[2]);
-assert(rc.causes[3].evidence === 'prometheus 2.53.0 → 2.54.0' && rc.causes[3].nodes.join() === 'burn-rate alert: checkout,checkout:ratio', 'a version change on the ruler / TSDB path scores 0.6 and names the rule nodes; an unchanged product (grafana) is no cause', rc.causes[3]);
+assert(rc.causes[3].evidence === 'prometheus 2.53.0 → 2.54.0' && rc.causes[3].nodes.join() === 'burn-rate alert: checkout,checkout:ratio', 'a version change of the product feeding the moved nodes\' family (prometheus → ruler) scores 0.6 and names them; an unchanged product (grafana) is no cause', rc.causes[3]);
 assert(rc.causes[4].evidence === 'rule_evaluation_failures = 0.2 per-second (ruler) — point-in-time sample' && rc.causes[4].nodes.join() === 'burn-rate alert: checkout,checkout:ratio',
        'a non-zero stack row in the family feeding the moved kinds scores 0.5, phrased as a sample', rc.causes[4].evidence);
 assert(!rc.causes.some(c => /notification_errors|scrape_targets_down|tsdb_compaction/.test(c.evidence)), 'a non-zero row in an unrelated family (notify, no alert_route moved), a zero row and an empty row are no cause');
@@ -317,7 +334,7 @@ assert(JSON.stringify(rankCauses({ previous: prevRun, current: curRun, deploys: 
   ] });
   assert(two.causes[0].evidence.startsWith('deploy dep_a by amy') && two.causes[0].evidence.includes('touched checkout:ratio (failed)') && two.causes[1].evidence.startsWith('deploy dep_z by zed'),
          'two deploys at the same score order by evidence; a failed item is marked', two.causes.map(c => c.evidence));
-  assert(two.causes[0].chains.join() === 'slo::checkout,slo::second' && two.causes[0].nodes.join() === 'checkout:ratio', 'one evidence explaining two chains is one cause listing both, in record order', two.causes[0].chains);
+  assert(two.causes[0].chains.join() === 'checkout,second' && two.causes[0].rootKeys.join() === 'slo::checkout,slo::second' && two.causes[0].nodes.join() === 'checkout:ratio', 'one evidence explaining two chains is one cause listing both, in record order', two.causes[0].chains);
   // Rollbacks are named; an artefact id matches exactly (and the evidence says what it resolved to); 'all' and a name that is not a label match nothing.
   const rb = rankCauses({ previous: prevRun, current: { ...curRun, branches: [{ ...curRun.branches[0], degraded: [dn('recording_rule', 'checkout:ratio', { aId: 'rr-123' })] }, ...curRun.branches.slice(1)] }, deploys: [
     { type: 'deploy', deployId: 'dep_rb', at: '2026-09-08T10:05:00.000Z', actor: 'carlos', pack: { id: 'x' }, mode: 'rollback', rollbackOf: 'dep_in', items: [{ artifact: 'rr-123', ok: true }, { artifact: 'all', ok: true }, { artifact: 'ch', ok: true }] },
@@ -384,30 +401,74 @@ assert(JSON.stringify(rankCauses({ previous: prevRun, current: curRun, deploys: 
     const byId = deployCauses(rankCauses({ previous: { ...prevRun, branches: [{ rootKey: 'slo::g', title: 'g', verdict: 'intact', ladderVerdict: 'healthy', degraded: [] }] }, current: { ...curRun, branches: fromGraph }, deploys: [sel('dep_id', [{ artifact: 'QRY-04', group: 'rules', ok: true }])] }));
     assert(byId.length === 1 && byId[0].score === 0.9 && byId[0].nodes.join() === 'checkout:ratio' && byId[0].evidence.endsWith('touched QRY-04 → checkout:ratio'), 'a persisted degraded node carries the artefact id the id match needs', byId);
   }
-  // Cosmetic drift 0.4; version 0.3 when nothing on the ruler path moved; a ratio row below 1 is a signal.
-  const cosmetic = rankCauses({ previous: prevRun, current: { ...curRun, versions: { prometheus: '2.54.0' }, stackEvidence: { status: 'sampled', rows: [
+  // Cosmetic drift 0.4; version 0.3 when the changed product feeds no moved node's family; a ratio row below 1 is a signal.
+  const cosmetic = rankCauses({ previous: { ...prevRun, versions: { ...prevRun.versions, alertmanager: '0.26.0' } }, current: { ...curRun, versions: { prometheus: '2.53.0', grafana: '11.1.0', alertmanager: '0.27.0' }, stackEvidence: { status: 'sampled', rows: [
       { id: 'scrape_success_ratio', family: 'scrape', value: 0.75, unit: 'ratio', direction: 'higher', outcome: 'data', hint: null }] },
     branches: [{ ...curRun.branches[0], degraded: [dn('panel', 'checkout-panel', { status: 'drifted', deltaFields: ['title', 'gridPos'] }), dn('scrape_job', 'checkout-scrape')] }, ...curRun.branches.slice(1)] } });
-  assert(cosmetic.causes.map(c => `${c.kind}:${c.score}`).join() === 'stack-self-metric:0.5,config-drift:0.4,backend-version:0.3', 'a cosmetic-only drift scores 0.4, a version change off the ruler path 0.3 (no node named), a ratio row below 1 is a scrape signal', cosmetic.causes.map(c => `${c.kind}:${c.score}:${c.evidence}`));
-  assert(cosmetic.causes[1].evidence === 'checkout-panel (panel) drifted on title, gridPos — cosmetic only' && cosmetic.causes[2].nodes.length === 0 && cosmetic.causes[2].chains.join() === 'slo::checkout' && cosmetic.causes[0].evidence === 'scrape_success_ratio = 0.75 ratio (scrape) — point-in-time sample',
-         'evidence wording for cosmetic drift, an off-path version and a ratio sample', cosmetic.causes.map(c => c.evidence));
+  assert(cosmetic.causes.map(c => `${c.kind}:${c.score}`).join() === 'stack-self-metric:0.5,config-drift:0.4,backend-version:0.3', 'a cosmetic-only drift scores 0.4, a version change of a product feeding no moved kind (alertmanager → notify; a panel and a scrape job moved) 0.3 with no node named, a ratio row below 1 is a scrape signal', cosmetic.causes.map(c => `${c.kind}:${c.score}:${c.evidence}`));
+  assert(cosmetic.causes[1].evidence === 'checkout-panel (panel) drifted on title, gridPos — cosmetic only' && cosmetic.causes[2].evidence === 'alertmanager 0.26.0 → 0.27.0' && cosmetic.causes[2].nodes.length === 0 && cosmetic.causes[2].chains.join() === 'checkout' && cosmetic.causes[0].evidence === 'scrape_success_ratio = 0.75 ratio (scrape) — point-in-time sample',
+         'evidence wording for cosmetic drift, an unrelated product version and a ratio sample', cosmetic.causes.map(c => c.evidence));
   assert(rankCauses({ previous: prevRun, current: { ...curRun, branches: [{ ...curRun.branches[0], degraded: [dn('panel', 'checkout-panel', { status: 'drifted', deltaFields: [] })] }] } }).causes[0].evidence === 'checkout-panel (panel) drifted on fields not recorded — cosmetic only',
          'a drifted node without recorded fields reads cosmetic (0.4), never decision-bearing');
-  // A node already degraded and unchanged in a chain that got worse is not blamed when another node moved; it is when the record cannot say which moved.
-  const stayed = { ...prevRun, branches: [{ rootKey: 'slo::checkout', title: 'checkout', verdict: 'partial', ladderVerdict: 'degraded', degraded: [dn('metric', 'old_metric')] }] };
+  // Product → family: a Grafana-only change is not 0.6 on a Prometheus rule; a Prometheus change is 0.6 on a scrape job; a flip to / from the literal `live` is a vantage matter, never a cause.
+  {
+    const grafanaOnly = rankCauses({ previous: prevRun, current: { ...curRun, versions: { prometheus: '2.53.0', grafana: '11.2.0' }, stackEvidence: null } });
+    const gv = grafanaOnly.causes.filter(c => c.kind === 'backend-version');
+    assert(gv.length === 1 && gv[0].score === 0.3 && gv[0].evidence === 'grafana 11.1.0 → 11.2.0' && gv[0].nodes.length === 0, 'a Grafana-only version change scores 0.3 when only rule nodes moved (grafana feeds dashboards, not the ruler)', gv);
+    const scrapeMoved = rankCauses({ previous: prevRun, current: { ...curRun, stackEvidence: null, branches: [{ ...curRun.branches[0], degraded: [dn('scrape_job', 'checkout-scrape')] }, ...curRun.branches.slice(1)] } });
+    const pv = scrapeMoved.causes.filter(c => c.kind === 'backend-version');
+    assert(pv.length === 1 && pv[0].score === 0.6 && pv[0].nodes.join() === 'checkout-scrape', 'a Prometheus version change scores 0.6 on a moved scrape job (prometheus feeds scrape)', pv);
+    const unknownProduct = rankCauses({ previous: { ...prevRun, versions: { thing: '1' } }, current: { ...curRun, versions: { thing: '2' }, stackEvidence: null } });
+    assert(unknownProduct.causes.filter(c => c.kind === 'backend-version').map(c => c.score).join() === '0.3', 'an unknown product feeds no family: 0.3');
+    const toLive = rankCauses({ previous: prevRun, current: { ...curRun, versions: { prometheus: 'live', grafana: '11.1.0' }, stackEvidence: null } });
+    assert(!toLive.causes.some(c => c.kind === 'backend-version') && toLive.vantage.changed === true && toLive.vantage.detail === 'mcp.versions.prometheus changed to live',
+           'a version that flips to the literal live is no cause; the vantage block reports it', { causes: toLive.causes.map(c => c.kind), vantage: toLive.vantage });
+    const fromLive = rankCauses({ previous: { ...prevRun, versions: { prometheus: 'live', grafana: 'live' } }, current: { ...curRun, versions: { prometheus: '2.54.0', grafana: '11.1.0' }, stackEvidence: null } });
+    assert(!fromLive.causes.some(c => c.kind === 'backend-version') && fromLive.vantage.detail === 'mcp.versions.grafana changed from live · mcp.versions.prometheus changed from live',
+           'a version that flips from live is no cause either (the product did not move; the vantage learned to read it), listed per product', fromLive.vantage);
+    const liveBoth = rankCauses({ previous: { ...prevRun, versions: { prometheus: 'live' } }, current: { ...curRun, versions: { prometheus: 'live' }, stackEvidence: null } });
+    assert(!liveBoth.causes.some(c => c.kind === 'backend-version') && liveBoth.vantage.changed === false, 'live on both sides is neither a cause nor a vantage change');
+    const withProbes = rankCauses({ previous: prevRun, current: { ...curRun, versions: { prometheus: 'live', grafana: '11.1.0' }, toolsExposedCount: 9, stackEvidence: null } });
+    assert(withProbes.vantage.detail === '12 → 9 MCP tools exposed · mcp.versions.prometheus changed to live', 'a live flip joins the probe facts in the vantage detail', withProbes.vantage.detail);
+  }
+  // The stored display hint is never consulted: a zero sample with a stale `nonzero` hint is no signal; a non-zero sample without a hint is.
+  {
+    const staleHint = rankCauses({ previous: prevRun, current: { ...curRun, versions: null, stackEvidence: { status: 'sampled', rows: [
+      { id: 'rule_evaluation_failures', family: 'ruler', value: 0, unit: 'per-second', direction: 'lower', outcome: 'data', hint: 'nonzero' },
+      { id: 'tsdb_compaction_failures', family: 'tsdb', value: 0, unit: 'per-hour', direction: 'lower', outcome: 'data', hint: 'nonzero' }] } } });
+    assert(!staleHint.causes.some(c => c.kind === 'stack-self-metric'), 'a zero sample with a stale nonzero hint is not a signal — direction and value decide', staleHint.causes.map(c => c.evidence));
+    const noHint = rankCauses({ previous: prevRun, current: { ...curRun, versions: null, stackEvidence: { status: 'sampled', rows: [{ id: 'rule_evaluation_failures', family: 'ruler', value: 1, unit: 'per-second', direction: 'lower', outcome: 'data', hint: null }] } } });
+    assert(noHint.causes.some(c => c.kind === 'stack-self-metric' && c.evidence === 'rule_evaluation_failures = 1 per-second (ruler) — point-in-time sample'), 'a non-zero lower-is-comfortable sample is a signal with or without a hint');
+  }
+  // A node already degraded and unchanged in a chain that got worse is never blamed: neither when another node moved, nor when nothing recorded moved (the change is on the declared side — the transition entry says so).
+  const stayed = { ...prevRun, branches: [{ rootKey: 'slo::checkout', title: 'checkout', verdict: 'partial', ladderVerdict: 'degraded', missingRoles: [], degraded: [dn('metric', 'old_metric')] }] };
   const movedOne = { ...curRun, branches: [{ rootKey: 'slo::checkout', title: 'checkout', verdict: 'broken', ladderVerdict: 'broken', degraded: [dn('metric', 'old_metric'), dn('recording_rule', 'checkout:ratio')] }] };
   const touchOld = [{ type: 'deploy', deployId: 'dep_old', at: '2026-09-08T10:05:00.000Z', actor: 'ci', pack: { id: 'x' }, mode: 'upsert', items: [{ artifact: 'old_metric', ok: true }] }];
   assert(deployCauses(rankCauses({ previous: stayed, current: movedOne, deploys: touchOld })).length === 0, 'a deploy naming a node that did not move is no cause when the record says which node moved');
-  const sameNodes = { ...curRun, branches: [{ rootKey: 'slo::checkout', title: 'checkout', verdict: 'broken', ladderVerdict: 'broken', degraded: [dn('metric', 'old_metric')] }] };
-  const sameRanked = deployCauses(rankCauses({ previous: stayed, current: sameNodes, deploys: touchOld }));
-  assert(sameRanked.length === 1 && sameRanked[0].nodes.join() === 'old_metric', 'when the chain got worse but no recorded node moved, every degraded node is considered', sameRanked);
+  const sameNodes = { ...curRun, branches: [{ rootKey: 'slo::checkout', title: 'checkout', verdict: 'broken', ladderVerdict: 'broken', missingRoles: ['action'], degraded: [dn('metric', 'old_metric')] }] };
+  const sameRanked = rankCauses({ previous: stayed, current: sameNodes, deploys: touchOld });
+  assert(sameRanked.causes.length === 0 && sameRanked.transitions.changed[0].direction === 'worse' && sameRanked.transitions.changed[0].note === 'declared side: missingRoles none → action',
+         'when the chain got worse but no recorded node moved, nothing is blamed — the transition entry notes the declared side (a role went missing)', { causes: sameRanked.causes, note: sameRanked.transitions.changed[0]?.note });
+  const cut = { ...curRun, branches: [{ rootKey: 'slo::checkout', title: 'checkout', verdict: 'broken', ladderVerdict: 'broken', missingRoles: [], degraded: [dn('metric', 'old_metric')], truncated: true }] };
+  const cutRanked = rankCauses({ previous: stayed, current: cut, deploys: touchOld });
+  assert(cutRanked.causes.length === 0 && cutRanked.transitions.changed[0].note === 'degraded list truncated (cap 16) — a node that moved may be unrecorded',
+         'a chain that got worse with an identical degraded list cut at the cap blames nobody and says the moved node may be unrecorded', cutRanked.transitions.changed[0]?.note);
   const ladderMoved = { ...curRun, branches: [{ rootKey: 'slo::checkout', title: 'checkout', verdict: 'partial', ladderVerdict: 'broken', degraded: [dn('metric', 'old_metric', { ladder: { rung: 'exists', status: 'present_unhealthy', detail: 'down' } }), dn('recording_rule', 'checkout:ratio')] }] };
   assert(deployCauses(rankCauses({ previous: stayed, current: ladderMoved, deploys: touchOld }))[0]?.nodes.join() === 'old_metric', 'a node whose ladder status changed counts as moved');
   // A chain that appeared already broken is considered with every degraded node.
   const appeared = rankCauses({ previous: prevRun, current: { ...curRun, branches: [...prevRun.branches, { rootKey: 'slo::new', title: 'new', verdict: 'broken', ladderVerdict: 'broken', degraded: [dn('recording_rule', 'new:ratio')] }] }, deploys: [
     { type: 'deploy', deployId: 'dep_new', at: '2026-09-08T10:05:00.000Z', actor: 'ci', pack: { id: 'x' }, mode: 'upsert', items: [{ artifact: 'new:ratio', ok: true }] }] });
-  assert(appeared.causes.map(c => `${c.kind}:${c.chains}`).join() === 'observogram-deploy:slo::new,backend-version:slo::new,stack-self-metric:slo::new',
+  assert(appeared.causes.map(c => `${c.kind}:${c.chains}`).join() === 'observogram-deploy:new,backend-version:new,stack-self-metric:new',
          'a chain that appeared broken contributes its degraded nodes (the deploy, the version change and the ruler sample on its rule)', appeared.causes.map(c => `${c.kind}:${c.chains}`));
+  // A baseline apart from the previous record: the chain diff, versions and deploys read against the baseline, the vantage against the previous record.
+  {
+    const lostBetween = { startedAt: '2026-09-08T10:10:00.000Z', outcome: 'vantage-lost', error: 'ECONNREFUSED', packA: prevRun.packA };
+    const viaBaseline = rankCauses({ previous: lostBetween, baseline: prevRun, current: curRun, deploys: deploysInWindow(deployLog, prevRun.startedAt, curRun.startedAt) });
+    assert(viaBaseline.transitions && viaBaseline.transitions.since === prevRun.startedAt && viaBaseline.transitions.changed[0].direction === 'worse', 'with a baseline the chain diff is against the baseline (since = baseline start)', viaBaseline.transitions);
+    assert(viaBaseline.causes.map(c => `${c.kind}:${c.score}`).join() === rc.causes.map(c => `${c.kind}:${c.score}`).join(), 'the causes read exactly as they would against the baseline directly', viaBaseline.causes.map(c => `${c.kind}:${c.score}`));
+    assert(viaBaseline.vantage.changed === true && viaBaseline.vantage.detail === 'vantage lost → full' && viaBaseline.vantage.from.vantage === 'lost', 'the vantage is compared against the previous record: lost → full', viaBaseline.vantage);
+    assert(JSON.stringify(rankCauses({ previous: prevRun, baseline: 'x', current: curRun, deploys: deploysInWindow(deployLog, prevRun.startedAt, curRun.startedAt) })) === JSON.stringify(rc), 'a non-object baseline reads as none (previous is the baseline)');
+  }
   assert(rankCauses({ previous: prevRun, current: { ...curRun, branches: [...prevRun.branches, { rootKey: 'slo::new', title: 'new', verdict: 'intact', ladderVerdict: 'healthy', degraded: [] }] } }).causes.length === 0, 'a chain that appeared healthy contributes nothing');
 }
 {

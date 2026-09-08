@@ -46,6 +46,10 @@ const isRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 const str = (v, fallback = '') => (typeof v === 'string' ? v : (v == null ? fallback : String(v)));
 const num = (v, fallback = null) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+// Evidence text is rendered into markdown and CLI lines: every value that
+// came off the wire or the request (labels, actor, deploy id, artifact,
+// product) is collapsed to single spaces so it cannot open a new line there.
+const ws = (v) => str(v).replace(/\s+/g, ' ').trim();
 
 export function isDegradedNode(node) {
   if (!isRecord(node)) return false;
@@ -165,11 +169,14 @@ const degradedOf = (branch) => (Array.isArray(branch.degraded) ? branch.degraded
 
 // The summary a listing shows per journey — counts by verdict and ladder
 // verdict over the declared chains, the mean integrities, how many nodes
-// are degraded and the one degraded node with the widest exposure (most
-// SLOs, then alerts, then total — null when no degraded node would blind an
-// SLO or an alert). Integrities are means of the recorded per-branch
-// percentages (null with no declared chain: an empty set is not 100 %
-// healthy). null when the record carries no `branches`.
+// are degraded inside the declared chains and the one of them with the
+// widest exposure (most SLOs, then alerts, then total — null when none
+// would blind an SLO or an alert). The nodes of undeclared chains are
+// live-only inventory, not degraded assurance: they are counted apart as
+// `undeclaredNodes` and never rank as the top exposure. Integrities are
+// means of the recorded per-branch percentages (null with no declared
+// chain: an empty set is not 100 % healthy). null when the record carries
+// no `branches`.
 export function chainSummary(record) {
   const branches = branchesOf(record);
   if (!branches) return null;
@@ -177,9 +184,11 @@ export function chainSummary(record) {
   const count = (list, field, value) => list.filter((b) => b[field] === value).length;
   const mean = (field) => (declared.length ? Math.round(declared.reduce((s, b) => s + num(b[field], 0), 0) / declared.length) : null);
   let degradedNodes = 0;
+  let undeclaredNodes = 0;
   let top = null;
   const better = (a, b) => (a.slos - b.slos) || (a.alerts - b.alerts) || (a.total - b.total) || cmp(b.label, a.label) || cmp(b.kind, a.kind);
   for (const branch of branches) {
+    if (branch.verdict === 'undeclared') { undeclaredNodes += degradedOf(branch).length; continue; }
     for (const node of degradedOf(branch)) {
       degradedNodes++;
       const radius = blastSummary(node.blastRadius);
@@ -203,6 +212,7 @@ export function chainSummary(record) {
     integrityPct: mean('integrityPct'),
     ladderIntegrityPct: mean('ladderIntegrityPct'),
     degradedNodes,
+    undeclaredNodes,
     topExposure: top ? { label: top.label, kind: top.kind, slos: top.slos, alerts: top.alerts } : null,
   };
 }
@@ -222,12 +232,28 @@ export function transitionDirection(from, to) {
 }
 
 const nodeIdentity = (node) => str(node.key) || str(node.label);
+const roleNames = (v) => (Array.isArray(v) ? v.map((r) => str(r)).filter(Boolean) : []);
+
+// What the declared side of a changed chain says about the change: the
+// roles the branch misses (`missingRoles`) moved, or a degraded list was
+// cut at the cap on either side so the node that moved may not be
+// recorded. Both explain a verdict that moved while no recorded node did —
+// a fact about the record, never a cause. null when neither applies.
+function transitionNote(before, after) {
+  const bits = [];
+  const was = roleNames(before.missingRoles);
+  const now = roleNames(after.missingRoles);
+  if (was.join(' ') !== now.join(' ')) bits.push(`declared side: missingRoles ${was.join(', ') || 'none'} → ${now.join(', ') || 'none'}`);
+  if (before.truncated === true || after.truncated === true) bits.push(`degraded list truncated (cap ${BRANCH_RECORD_CAPS.maxNodes}) — a node that moved may be unrecorded`);
+  return bits.length ? bits.join(' · ') : null;
+}
 
 // What changed between two consecutive run records' chains. A chain is
 // `changed` when its verdict or ladder verdict differs; `appeared` /
 // `disappeared` list root keys present on one side only; `any` is true
 // when anything moved. Node lists name the degraded nodes that are new on
-// the current side / gone from the previous side of a changed chain.
+// the current side / gone from the previous side of a changed chain, and
+// `note` carries the declared-side facts (transitionNote) or null.
 // null when either record carries no `branches` (a vantage-lost or
 // pre-chain record cannot be compared). Order follows the current record.
 export function diffRunBranches(previous, current) {
@@ -260,6 +286,7 @@ export function diffRunBranches(previous, current) {
         newlyDegraded: [...afterNodes].filter(([id]) => !beforeNodes.has(id)).map(([, n]) => str(n.label) || str(n.key)),
         recovered: [...beforeNodes].filter(([id]) => !afterNodes.has(id)).map(([, n]) => str(n.label) || str(n.key)),
       },
+      note: transitionNote(before, b),
     });
   }
   const disappeared = [...prevByKey.keys()].filter((key) => !curKeys.has(key));
@@ -299,7 +326,7 @@ export const CAUSE_SCORES = Object.freeze({
   deployTouchedPack: 0.6,     // a deploy wrote the journey's pack, no item names a node
   driftDecisionBearing: 0.8,  // drifted on objective / expr / route / … fields
   driftCosmetic: 0.4,         // drifted on cosmetic fields only (or fields not recorded)
-  versionOnRulerPath: 0.6,    // a version changed and a backend / metric / rule node moved
+  versionFeedsMovedKind: 0.6, // a product's version changed and it feeds the family of a node that moved
   versionElsewhere: 0.3,      // a version changed while a chain got worse
   stackSignal: 0.5,           // a non-zero sample in the family feeding a moved node's kind
 });
@@ -330,9 +357,29 @@ export function familyForKind(kind) {
 // decides; anything else is cosmetic.
 const DECISION_BEARING_DELTA_RE = /(objective|target|threshold|window|duration|severity|burn|budget|expr|query|promql|expression|condition|sli|slo|metric|record|route|receiver|channel|contact|notification|pager|trigger|pipeline|exporter|backend|signal|good|total|mttd|mttr)/i;
 
-// The kinds on the ruler / TSDB path: a backend version change reaches
-// them directly (what the ruler evaluates and the TSDB stores).
-const RULER_TSDB_KINDS = Object.freeze(['backend', 'metric', 'recording_rule', 'burn_rate']);
+// Which stack families a product feeds — the product whose version moved
+// (`mcp.versions.<product>`) can only explain a node whose family it
+// serves. A product outside the table feeds nothing (its change is a
+// 0.3 cause, never a 0.6 one).
+export const PRODUCT_FAMILIES = Object.freeze({
+  prometheus: Object.freeze(['scrape', 'ruler', 'tsdb']),
+  victoriametrics: Object.freeze(['scrape', 'ruler', 'tsdb']),
+  thanos: Object.freeze(['scrape', 'ruler', 'tsdb']),
+  mimir: Object.freeze(['scrape', 'ruler', 'tsdb']),
+  grafana: Object.freeze(['dashboards']),
+  alertmanager: Object.freeze(['notify']),
+  otel: Object.freeze(['collector']),
+  otelcol: Object.freeze(['collector']),
+  loki: Object.freeze(['logs']),
+  promtail: Object.freeze(['logs']),
+  jaeger: Object.freeze(['traces']),
+  tempo: Object.freeze(['traces']),
+});
+
+export function familiesForProduct(product) {
+  const p = str(product).trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(PRODUCT_FAMILIES, p) ? PRODUCT_FAMILIES[p] : [];
+}
 
 const timeMs = (v) => {
   if (typeof v !== 'string' || !v) return null;
@@ -442,8 +489,11 @@ function vantageChange(previous, current) {
 
 // The degraded nodes of a chain that got worse which the record can say
 // moved: new on the current side, or the same identity with a different
-// status / ladder status. When the record cannot say which moved (caps, a
-// role lost), every degraded node of the chain is considered. Unobserved
+// status / ladder status. A node whose status and ladder status are the
+// same on both sides did not move and is never blamed — when nothing
+// recorded moved, the change is on the declared side (a role lost, the
+// caps) and the transition entry's `note` says so; the chain yields no
+// node. A chain that appeared considers every degraded node. Unobserved
 // nodes are dropped LAST, so a chain whose only movement is the vantage
 // looking away yields no node — that is a vantage change, never a cause.
 function movedNodes(currentBranch, previousBranch) {
@@ -455,7 +505,6 @@ function movedNodes(currentBranch, previousBranch) {
       const b = before.get(nodeIdentity(n));
       return !b || str(b.status) !== str(n.status) || ladderStatusOf(b) !== ladderStatusOf(n);
     });
-    if (!moved.length) moved = cur;
   }
   return moved.filter((n) => ladderStatusOf(n) !== 'unobserved');
 }
@@ -579,11 +628,6 @@ function packMatches(deploy, current) {
   return mine.some((m) => theirs.includes(m));
 }
 
-// Evidence text is rendered into markdown and CLI lines: every value that
-// came off the wire or the request (labels, actor, deploy id, artifact) is
-// collapsed to single spaces so it cannot open a new line there.
-const ws = (v) => str(v).replace(/\s+/g, ' ').trim();
-
 function deployEvidence(deploy, touched, wildcards = []) {
   const head = `deploy ${ws(deploy.deployId) || '?'} by ${ws(deploy.actor) || 'unknown actor'} at ${ws(deploy.at) || '?'}`
     + ` (${ws(deploy.mode) || 'deploy'}${deploy.rollbackOf ? `, rollback of ${ws(deploy.rollbackOf)}` : ''})`;
@@ -596,47 +640,73 @@ function deployEvidence(deploy, touched, wildcards = []) {
 
 // Products whose reported version differs between the two records. Only a
 // product both sides reported can have changed: a version that appears or
-// disappears is a vantage matter, not a change.
+// disappears is a vantage matter, not a change — and so is the literal
+// `live` (the fetcher's word for "the product answered without a version
+// number"): a flip to or from it says what the vantage could read, not
+// that the product moved. Those flips are returned apart, for the vantage
+// block.
 function versionChanges(previous, current) {
   const p = isRecord(previous?.versions) ? previous.versions : null;
   const c = isRecord(current?.versions) ? current.versions : null;
-  if (!p || !c) return [];
-  return Object.keys(c).sort()
-    .filter((k) => Object.prototype.hasOwnProperty.call(p, k) && str(p[k]) && str(c[k]) && str(p[k]) !== str(c[k]))
-    .map((k) => ({ product: k, from: str(p[k]), to: str(c[k]) }));
+  const out = { changes: [], liveFlips: [] };
+  if (!p || !c) return out;
+  const isLive = (v) => ws(v).toLowerCase() === 'live';
+  for (const k of Object.keys(c).sort()) {
+    if (!Object.prototype.hasOwnProperty.call(p, k)) continue;
+    const from = ws(p[k]);
+    const to = ws(c[k]);
+    if (!from || !to || from === to) continue;
+    if (isLive(from) || isLive(to)) out.liveFlips.push(`mcp.versions.${ws(k)} changed ${isLive(to) ? 'to' : 'from'} live`);
+    else out.changes.push({ product: ws(k), from, to });
+  }
+  return out;
 }
 
 // Stack rows of the current record that read as a signal: answered data
-// and non-zero on a lower-is-comfortable row (the fetcher's `nonzero`
-// hint, or the direction and value say so), or below 1 on a
-// higher-is-comfortable ratio row.
+// and non-zero on a lower-is-comfortable row, or below 1 on a
+// higher-is-comfortable ratio row. The direction and the value decide;
+// the stored display hint is never consulted (a stale `nonzero` hint on
+// a zero sample is not a signal).
 function stackSignalRows(current) {
   const rows = isRecord(current?.stackEvidence) && Array.isArray(current.stackEvidence.rows) ? current.stackEvidence.rows.filter(isRecord) : [];
   return rows.filter((r) => r.outcome === 'data' && typeof r.value === 'number' && Number.isFinite(r.value)
-    && (r.hint === 'nonzero' || (r.direction === 'lower' && r.value > 0) || (r.direction === 'higher' && r.unit === 'ratio' && r.value < 1)));
+    && ((r.direction === 'lower' && r.value > 0) || (r.direction === 'higher' && r.unit === 'ratio' && r.value < 1)));
 }
 
-// Rank the candidate causes of the chains that got worse between two
-// consecutive run records. `deploys` are Observogram's own deploy records
-// for the window (deploysInWindow) — a verify-type record or a dry run
-// changed nothing on the wire and is skipped. Returns
-//   { transitions, causes: [{ rank, kind, score, evidence, chains, nodes }], vantage, note }
+// Rank the candidate causes of the chains that got worse between two run
+// records. `previous` is the record written right before `current` — the
+// vantage comparison is against it; `baseline`, when given, is the newest
+// earlier record that carries chains (a vantage-lost or pre-chain record
+// in between cannot be diffed) — the chain diff and the version comparison
+// are against it, else against `previous`. `deploys` are Observogram's own
+// deploy records for the window (deploysInWindow) — a verify-type record
+// or a dry run changed nothing on the wire and is skipped. Returns
+//   { transitions, causes: [{ rank, kind, score, evidence, chains, rootKeys, nodes }], vantage, note }
 // with causes sorted by score desc, then CAUSE_KINDS order, then evidence;
-// `chains` are root keys in the current record's order, `nodes` the labels
-// the evidence explains. `causes` is [] when no chain got worse or nothing
-// moved but the vantage; `transitions` is null when either record carries
-// no chains. Pure and deterministic; malformed input never throws.
-export function rankCauses({ previous, current, deploys = [] } = {}) {
-  const transitions = diffRunBranches(previous, current);
-  const worse = worseChains(transitions, previous, current).filter((w) => w.nodes.length);
+// `chains` are the branch titles and `rootKeys` their identity keys, both
+// in the current record's order, `nodes` the labels the evidence explains.
+// `causes` is [] when no chain got worse or nothing moved but the vantage;
+// `transitions` is null when either record carries no chains. Pure and
+// deterministic; malformed input never throws.
+export function rankCauses({ previous, current, deploys = [], baseline = null } = {}) {
+  const base = isRecord(baseline) ? baseline : previous;
+  const transitions = diffRunBranches(base, current);
+  const worse = worseChains(transitions, base, current).filter((w) => w.nodes.length);
   const considered = [];
   for (const w of worse) for (const node of w.nodes) considered.push({ node, rootKey: w.rootKey });
+  const versions = versionChanges(base, current);
   const chainOrder = new Map();
-  (branchesOf(current) || []).forEach((b, i) => { if (!chainOrder.has(str(b.rootKey))) chainOrder.set(str(b.rootKey), i); });
+  const titles = new Map();
+  (branchesOf(current) || []).forEach((b, i) => {
+    const key = str(b.rootKey);
+    if (chainOrder.has(key)) return;
+    chainOrder.set(key, i);
+    titles.set(key, ws(b.title) || key);
+  });
 
   const acc = new Map();
   const add = (kind, score, evidence, rootKeys, labels) => {
-    const id = `${kind} ${evidence}`;
+    const id = `${kind} ${evidence}`;
     const entry = acc.get(id) || { kind, score, evidence, chains: new Set(), nodes: new Set() };
     entry.score = Math.max(entry.score, score);
     for (const k of rootKeys) entry.chains.add(k);
@@ -675,35 +745,49 @@ export function rankCauses({ previous, current, deploys = [] } = {}) {
     // config-drift: a moved node that drifted, by what it drifted on.
     for (const { node, rootKey } of considered) {
       if (str(node.status) !== 'drifted') continue;
-      const fields = (Array.isArray(node.deltaFields) ? node.deltaFields : []).map((f) => str(f)).filter(Boolean);
+      const fields = (Array.isArray(node.deltaFields) ? node.deltaFields : []).map((f) => ws(f)).filter(Boolean);
       const decision = fields.filter((f) => DECISION_BEARING_DELTA_RE.test(f));
-      const evidence = `${labelOf(node)} (${str(node.kind, 'unknown')}) drifted on ${fields.length ? fields.join(', ') : 'fields not recorded'}`
+      const evidence = `${ws(labelOf(node))} (${ws(node.kind) || 'unknown'}) drifted on ${fields.length ? fields.join(', ') : 'fields not recorded'}`
         + (decision.length ? ` — decision-bearing: ${decision.join(', ')}` : ' — cosmetic only');
       add('config-drift', decision.length ? CAUSE_SCORES.driftDecisionBearing : CAUSE_SCORES.driftCosmetic, evidence, [rootKey], [labelOf(node)]);
     }
-    // backend-version: a product's version moved between the two runs.
-    const rulerPath = considered.filter(({ node }) => RULER_TSDB_KINDS.includes(str(node.kind)));
-    for (const change of versionChanges(previous, current)) {
+    // backend-version: a product's version moved between the two runs —
+    // 0.6 when that product feeds the family of a node that moved
+    // (PRODUCT_FAMILIES × FAMILY_FOR_KIND), else 0.3.
+    for (const change of versions.changes) {
+      const families = familiesForProduct(change.product);
+      const fed = considered.filter(({ node }) => families.includes(familyForKind(node.kind)));
       const evidence = `${change.product} ${change.from} → ${change.to}`;
-      if (rulerPath.length) add('backend-version', CAUSE_SCORES.versionOnRulerPath, evidence, rulerPath.map((x) => x.rootKey), rulerPath.map((x) => labelOf(x.node)));
+      if (fed.length) add('backend-version', CAUSE_SCORES.versionFeedsMovedKind, evidence, fed.map((x) => x.rootKey), fed.map((x) => labelOf(x.node)));
       else add('backend-version', CAUSE_SCORES.versionElsewhere, evidence, worse.map((w) => w.rootKey), []);
     }
     // stack-self-metric: a non-zero sample in the family feeding a moved kind.
     for (const row of stackSignalRows(current)) {
-      const family = str(row.family);
+      const family = ws(row.family);
       const hits = considered.filter(({ node }) => family && familyForKind(node.kind) === family);
       if (!hits.length) continue;
-      const evidence = `${str(row.id)} = ${formatNumber(row.value)}${row.unit ? ` ${str(row.unit)}` : ''} (${family}) — point-in-time sample`;
+      const evidence = `${ws(row.id)} = ${formatNumber(row.value)}${row.unit ? ` ${ws(row.unit)}` : ''} (${family}) — point-in-time sample`;
       add('stack-self-metric', CAUSE_SCORES.stackSignal, evidence, hits.map((x) => x.rootKey), hits.map((x) => labelOf(x.node)));
     }
   }
 
+  // A version flip to or from the literal `live` is a vantage matter: it
+  // rides in the vantage block, beside the causes, never among them.
+  let vantage = vantageChange(previous, current);
+  if (versions.liveFlips.length) {
+    const detail = [vantage?.detail, ...versions.liveFlips].filter(Boolean).join(' · ');
+    vantage = vantage ? { ...vantage, changed: true, detail } : { changed: true, from: null, to: null, detail };
+  }
+
   const byChainOrder = (a, b) => ((chainOrder.get(a) ?? Infinity) - (chainOrder.get(b) ?? Infinity)) || cmp(a, b);
   const causes = [...acc.values()]
-    .map((c) => ({ kind: c.kind, score: c.score, evidence: c.evidence, chains: [...c.chains].sort(byChainOrder), nodes: [...c.nodes].sort(cmp) }))
+    .map((c) => {
+      const rootKeys = [...c.chains].sort(byChainOrder);
+      return { kind: c.kind, score: c.score, evidence: c.evidence, chains: rootKeys.map((k) => titles.get(k) || k), rootKeys, nodes: [...c.nodes].sort(cmp) };
+    })
     .sort((a, b) => (b.score - a.score) || (CAUSE_KINDS.indexOf(a.kind) - CAUSE_KINDS.indexOf(b.kind)) || cmp(a.evidence, b.evidence))
     .map((c, i) => ({ rank: i + 1, ...c }));
-  return { transitions, causes, vantage: vantageChange(previous, current), note: CAUSE_NOTE };
+  return { transitions, causes, vantage, note: CAUSE_NOTE };
 }
 
 // The rank-1 candidate cause of a run record (its `causes` block, as

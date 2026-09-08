@@ -241,6 +241,9 @@ function renderChainsLine(last) {
     const t = c.topExposure;
     bits.push(`top exposure: ${t.label} (${t.kind}) blinds ${t.slos} SLO${t.slos === 1 ? '' : 's'}`);
   }
+  // Live-only nodes of undeclared chains are inventory, not degraded
+  // assurance: counted apart, shown only when there are any.
+  if (typeof c.undeclaredNodes === 'number' && c.undeclaredNodes > 0) bits.push(`${c.undeclaredNodes} live-only in undeclared chains`);
   const tr = last.transition;
   const mark = tr && tr.any
     ? ` <span class="journey-stack-mark">changed since previous run (${tr.worse ?? 0} worse)</span>`

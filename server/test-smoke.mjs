@@ -626,30 +626,52 @@ try {
       { rootKey: 'slo::a', title: 'a', from: { verdict: 'partial', ladderVerdict: 'degraded' }, to: { verdict: 'intact', ladderVerdict: 'healthy' }, direction: 'better', nodes: { newlyDegraded: [], recovered: ['x'] } },
     ], appeared: [], disappeared: [], any: true },
     livePack: { kept: false, path: null, reason: 'Pack B is a file (x)' },
-    // Slice 4: the ranker's block as runJourney stores it.
-    causes: { transitions: null, causes: [
-      { rank: 1, kind: 'observogram-deploy', score: 0.9, evidence: 'deploy dep_smoke by local at 2026-09-08T10:05:00.000Z (upsert) touched payment', chains: ['slo::c'], nodes: ['payment'] },
-      { rank: 2, kind: 'config-drift', score: 0.8, evidence: 'burn-rate alert: b (burn_rate) drifted on windows[0].long — decision-bearing: windows[0].long', chains: ['slo::b'], nodes: ['burn-rate alert: b'] },
+    // Slice 4: the ranker's block as runJourney stores it — `transition`
+    // above is the single copy of the diff (the block carries none) and
+    // a cause names its chains by title with the identity keys apart.
+    causes: { causes: [
+      { rank: 1, kind: 'observogram-deploy', score: 0.9, evidence: 'deploy dep_smoke by local at 2026-09-08T10:05:00.000Z (upsert) touched payment', chains: ['c'], rootKeys: ['slo::c'], nodes: ['payment'] },
+      { rank: 2, kind: 'config-drift', score: 0.8, evidence: 'burn-rate alert: b (burn_rate) drifted on windows[0].long — decision-bearing: windows[0].long', chains: ['b'], rootKeys: ['slo::b'], nodes: ['burn-rate alert: b'] },
     ], vantage: { changed: true, from: { vantage: 'full', failed: [], unsupported: [], toolsExposedCount: 12 }, to: { vantage: 'partial', failed: ['scrape_configs'], unsupported: [], toolsExposedCount: 12 }, detail: 'vantage full → partial · probe family scrape_configs newly failed (HTTP 502)' },
     note: 'candidate causes ranked by evidence — not a root-cause verdict' },
   }, null, 2));
   const jList4 = await getJson(base, '/api/journeys');
   const chainLast = jList4.journeys.find(j => j.name === 'chain-seeded')?.lastRun;
-  assert(chainLast?.chains && Object.keys(chainLast.chains).join() === 'declaredTotal,intact,partial,broken,undeclared,ladder,integrityPct,ladderIntegrityPct,degradedNodes,topExposure',
+  assert(chainLast?.chains && Object.keys(chainLast.chains).join() === 'declaredTotal,intact,partial,broken,undeclared,ladder,integrityPct,ladderIntegrityPct,degradedNodes,undeclaredNodes,topExposure',
          'GET /api/journeys lastRun.chains carries the chain summary shape', chainLast?.chains && Object.keys(chainLast.chains));
   assert(chainLast.chains.declaredTotal === 3 && chainLast.chains.intact === 1 && chainLast.chains.partial === 1 && chainLast.chains.broken === 1 && chainLast.chains.undeclared === 1
          && chainLast.chains.ladder.healthy === 1 && chainLast.chains.ladder.degraded === 1 && chainLast.chains.ladder.broken === 1 && chainLast.chains.ladder.unobserved === 0
-         && chainLast.chains.integrityPct === 67 && chainLast.chains.ladderIntegrityPct === 62 && chainLast.chains.degradedNodes === 2,
-         'lastRun.chains counts verdicts and ladder verdicts over the declared chains, means the integrities and counts degraded nodes', chainLast.chains);
+         && chainLast.chains.integrityPct === 67 && chainLast.chains.ladderIntegrityPct === 62 && chainLast.chains.degradedNodes === 2 && chainLast.chains.undeclaredNodes === 0,
+         'lastRun.chains counts verdicts and ladder verdicts over the declared chains, means the integrities and counts degraded nodes (undeclared chains apart)', chainLast.chains);
   assert(chainLast.chains.topExposure?.label === 'payment' && chainLast.chains.topExposure.kind === 'scrape_job' && chainLast.chains.topExposure.slos === 2 && chainLast.chains.topExposure.alerts === 2,
          'lastRun.chains.topExposure is the degraded node that blinds the most SLOs', chainLast.chains.topExposure);
   assert(JSON.stringify(chainLast.transition) === JSON.stringify({ any: true, changed: 2, worse: 1 }), 'lastRun.transition summarises any / changed / worse', chainLast.transition);
   // Slice 4: the rank-1 candidate cause and the vantage marker ride on lastRun.
-  assert(chainLast.topCause && Object.keys(chainLast.topCause).join() === 'rank,kind,score,evidence,chains,nodes' && chainLast.topCause.rank === 1 && chainLast.topCause.kind === 'observogram-deploy' && chainLast.topCause.score === 0.9
-         && /^deploy dep_smoke by local/.test(chainLast.topCause.evidence) && chainLast.topCause.chains.join() === 'slo::c' && chainLast.topCause.nodes.join() === 'payment',
-         'GET /api/journeys lastRun.topCause is the rank-1 cause with its full shape', chainLast.topCause);
+  assert(chainLast.topCause && Object.keys(chainLast.topCause).join() === 'rank,kind,score,evidence,chains,rootKeys,nodes' && chainLast.topCause.rank === 1 && chainLast.topCause.kind === 'observogram-deploy' && chainLast.topCause.score === 0.9
+         && /^deploy dep_smoke by local/.test(chainLast.topCause.evidence) && chainLast.topCause.chains.join() === 'c' && chainLast.topCause.rootKeys.join() === 'slo::c' && chainLast.topCause.nodes.join() === 'payment',
+         'GET /api/journeys lastRun.topCause is the rank-1 cause with its full shape (chains by title, rootKeys apart)', chainLast.topCause);
   assert(chainLast.vantageChanged === true, 'lastRun.vantageChanged reads the vantage block beside the causes', chainLast.vantageChanged);
   assert(seededLast.topCause === null && seededLast.vantageChanged === null, 'a record without a causes block reads topCause null and vantageChanged null', { t: seededLast.topCause, v: seededLast.vantageChanged });
+  // A causes block whose vantage is null (two file-sourced runs carry no
+  // vantage facts) reads vantageChanged null — never false, never true.
+  writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'vantage-null-seeded.journey.yaml'), [
+    'name: vantage-null-seeded',
+    `packA: { file: ${PAY.replaceAll('\\', '/')} }`,
+    `packB: { file: ${CUR.replaceAll('\\', '/')} }`,
+  ].join('\n'));
+  const vnAt = '2026-09-08T10:20:00.000Z';
+  mkdirSync(join(SMOKE_WORKSPACE, 'runs', 'vantage-null-seeded'), { recursive: true });
+  writeFileSync(join(SMOKE_WORKSPACE, 'runs', 'vantage-null-seeded', `${vnAt.replace(/[:.]/g, '-')}.json`), JSON.stringify({
+    journey: 'vantage-null-seeded', startedAt: vnAt, tookMs: 5, outcome: 'pass',
+    grade: { score: 70, pass: true }, drift: { alignmentPct: 90 }, gate: { thresholds: {}, breaches: [] },
+    branches: [], chains: null, versions: null,
+    transition: { since: '2026-09-08T10:00:00.000Z', changed: [], appeared: [], disappeared: [], any: false, skipped: [], reason: null },
+    livePack: { kept: false, path: null, reason: 'Pack B is a file (x)' },
+    causes: { causes: [], vantage: null, note: 'candidate causes ranked by evidence — not a root-cause verdict' },
+  }, null, 2));
+  const vnLast = (await getJson(base, '/api/journeys')).journeys.find(j => j.name === 'vantage-null-seeded')?.lastRun;
+  assert(vnLast && vnLast.topCause === null && vnLast.vantageChanged === null && vnLast.transition && vnLast.transition.any === false && vnLast.chains && vnLast.chains.declaredTotal === 0,
+         'a causes block with vantage null reads vantageChanged null (not false); an empty branch list reads chains with 0 declared', vnLast && { t: vnLast.topCause, v: vnLast.vantageChanged, tr: vnLast.transition, c: vnLast.chains });
   const chainRuns = await getJson(base, '/api/journeys/chain-seeded/runs?limit=5');
   assert(chainRuns.runs[0]?.branches?.length === 4 && chainRuns.runs[0].transition.changed.length === 2 && chainRuns.runs[0].livePack.kept === false,
          'GET /api/journeys/:name/runs hands the record through unchanged (branches, transition, livePack)');

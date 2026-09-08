@@ -422,17 +422,21 @@ try {
     assert(c.topExposure && typeof c.topExposure.label === 'string' && c.topExposure.slos > 0, 'chains names the top exposure (the degraded node that blinds the most SLOs)', c.topExposure);
     assert(JSON.stringify(liveRec.versions) === JSON.stringify({ grafana: 'live', prometheus: '2.53.0' }), 'versions maps mcp.versions.<product> only (provenance keys excluded), sorted', liveRec.versions);
     assert(rec.versions === null, 'a Pack B without version annotations records versions null, never {}', rec.versions);
-    assert(liveRec.transition === null, 'the first run of a journey has no transition (nothing to compare against)', liveRec.transition);
+    assert(liveRec.transition && liveRec.transition.reason === 'first run' && liveRec.transition.any === false && liveRec.transition.since === null && liveRec.transition.changed.length === 0 && liveRec.transition.skipped.length === 0,
+           'the first run of a journey has no comparison and its transition says why (reason: first run), with empty lists — never "any: true"', liveRec.transition);
     assert(JSON.stringify(liveRec.livePack) === JSON.stringify({ kept: false, path: null, reason: `Pack B is a file (${LIVE_B})` }),
            'a file-sourced Pack B is never snapshotted, and the record says so', liveRec.livePack);
     assert(!readdirSync(join(TMP, 'runs', 'live-synthetic')).includes('live'), 'no live/ directory is created for a file-sourced B');
     const persisted = readJourneyRuns('live-synthetic')[0];
-    assert(persisted.branches.length === liveRec.branches.length && JSON.stringify(persisted.chains) === JSON.stringify(liveRec.chains) && persisted.transition === null,
+    assert(persisted.branches.length === liveRec.branches.length && JSON.stringify(persisted.chains) === JSON.stringify(liveRec.chains) && persisted.transition.reason === 'first run',
            'branches, chains and transition round-trip through the run history file');
+    assert(typeof liveRec.chains.undeclaredNodes === 'number' && liveRec.chains.degradedNodes === liveRec.branches.filter(b => b.verdict !== 'undeclared').reduce((s, b) => s + b.degraded.length, 0)
+           && liveRec.chains.undeclaredNodes === liveRec.branches.filter(b => b.verdict === 'undeclared').reduce((s, b) => s + b.degraded.length, 0),
+           'chains.degradedNodes counts the declared chains\' nodes and undeclaredNodes the live-only nodes of undeclared chains', { d: liveRec.chains.degradedNodes, u: liveRec.chains.undeclaredNodes });
     await new Promise(r => setTimeout(r, 5));
     const liveRec2 = await runJourney(loadJourneyDef('live-synthetic'));
-    assert(liveRec2.transition && liveRec2.transition.any === false && liveRec2.transition.since === liveRec.startedAt && liveRec2.transition.changed.length === 0,
-           'an identical second run reads transition.any false against the first run', liveRec2.transition);
+    assert(liveRec2.transition && liveRec2.transition.any === false && liveRec2.transition.since === liveRec.startedAt && liveRec2.transition.changed.length === 0 && liveRec2.transition.reason === null && liveRec2.transition.skipped.length === 0,
+           'an identical second run reads transition.any false against the first run, with no reason and nothing skipped', liveRec2.transition);
     assert(JSON.stringify(liveRec2.branches) === JSON.stringify(liveRec.branches), 'identical inputs record identical branches');
     assert(liveRec2.livePack.kept === false && /^Pack B is a file/.test(liveRec2.livePack.reason), 'the file rule wins over the transition rule');
     const md2 = renderJourneyMarkdown(liveRec2);
@@ -452,8 +456,9 @@ try {
     assert(chainStatusLine(liveRec) === `chains ${c.intact}/${c.declaredTotal} intact · ladder ${c.ladder.healthy} healthy` + ['degraded', 'broken', 'unobserved'].filter(k => c.ladder[k] > 0).map(k => ` · ${c.ladder[k]} ${k}`).join(''),
            'chainStatusLine reads intact/declared and the nonzero ladder buckets', chainStatusLine(liveRec));
     assert(chainStatusLine({ branches: [{ verdict: 'intact', ladderVerdict: 'healthy', integrityPct: 100, ladderIntegrityPct: 100, degraded: [] }, { verdict: 'partial', ladderVerdict: 'degraded', integrityPct: 50, ladderIntegrityPct: 50, degraded: [] }] }) === 'chains 1/2 intact · ladder 1 healthy · 1 degraded'
-           && chainStatusLine({ outcome: 'vantage-lost' }) === 'chains none' && chainStatusLine({ branches: [] }) === 'chains none' && chainStatusLine({ branches: [{ verdict: 'undeclared', ladderVerdict: 'undeclared' }] }) === 'chains none',
-           'chainStatusLine omits zero buckets and reads none for a record without declared chains');
+           && chainStatusLine({ outcome: 'vantage-lost' }) === 'chains none (vantage lost)' && chainStatusLine({ outcome: 'pass', drift: {} }) === 'chains none (pre-step-4 record)'
+           && chainStatusLine({ branches: [] }) === 'chains 0 declared' && chainStatusLine({ branches: [{ verdict: 'undeclared', ladderVerdict: 'undeclared' }] }) === 'chains 0 declared',
+           'chainStatusLine omits zero buckets, distinguishes a record without chains (pre-step-4 / vantage lost) from one that declares none');
   }
   const liveMd = renderJourneyMarkdown(liveRec);
   assert(/Live probes/.test(liveMd) && /failed: dashboards/.test(liveMd) && /not exposed: scrape_configs/.test(liveMd) && /vantage \*\*partial\*\*/.test(liveMd),
@@ -724,10 +729,10 @@ try {
     assert(JSON.stringify(liveVersions({ metadata: { annotations: { 'mcp.versions.b': '1', 'mcp.versions.a': 'live', 'mcp.versions.a.source': 'x', 'mcp.versions.c': '', 'mcp.url': 'u' } } })) === JSON.stringify({ a: 'live', b: '1' })
            && liveVersions({ metadata: { annotations: { 'mcp.versions.a.source': 'x' } } }) === null && liveVersions(null) === null,
            'liveVersions keeps bare product keys with a value, sorted; provenance-only or no annotations read null');
-    assert(pruneLiveSnapshots(['2026-01-02T00-00-00-000Z.json', 'notes.json', 'live'], ['2026-01-01T00-00-00-000Z.json', '2026-01-02T00-00-00-000Z.json', 'notes.json', '2026-01-03T00-00-00-000Z.json']).join() === '2026-01-01T00-00-00-000Z.json,2026-01-03T00-00-00-000Z.json',
-           'pruneLiveSnapshots names the run-shaped live files whose record is gone — never a survivor, never a non-run file');
-    assert(pruneLiveSnapshots(null, ['2026-01-01T00-00-00-000Z.json']).join() === '2026-01-01T00-00-00-000Z.json' && pruneLiveSnapshots([], null).length === 0 && pruneLiveSnapshots(['x'], [3, null]).length === 0,
-           'pruneLiveSnapshots tolerates missing lists and non-string entries');
+    assert(pruneLiveSnapshots(['2026-01-02T00-00-00-000Z.json', 'notes.json', 'live'], ['2026-01-01T00-00-00-000Z.json', '2026-01-02T00-00-00-000Z.json', 'notes.json', '2026-01-03T00-00-00-000Z.json']).join() === '2026-01-01T00-00-00-000Z.json',
+           'pruneLiveSnapshots names only the run-shaped live files OLDER than the oldest surviving record — never a survivor, never a non-run file, never a newer snapshot whose record a concurrent writer has not landed yet');
+    assert(pruneLiveSnapshots(null, ['2026-01-01T00-00-00-000Z.json']).length === 0 && pruneLiveSnapshots(['notes.json'], ['2026-01-01T00-00-00-000Z.json']).length === 0 && pruneLiveSnapshots([], null).length === 0 && pruneLiveSnapshots(['x'], [3, null]).length === 0,
+           'with no surviving record nothing is older than one — nothing is named; missing lists and non-string entries are tolerated');
     assert(LIVE_PACK_PATH_RE.test('live/2026-01-01T00-00-00-000Z.json') && !LIVE_PACK_PATH_RE.test('live/../x.json') && !LIVE_PACK_PATH_RE.test('2026-01-01T00-00-00-000Z.json'),
            'only live/<run stem>.json is a snapshot path');
   }
@@ -780,7 +785,7 @@ try {
 
     // transitions (default): first run kept, identical run not, moved run kept, gate failure kept.
     const t1 = await runJourney(fakeDef('fake-live'));
-    assert(t1.packB.source === `mcp:${fakeUrl}` && t1.outcome === 'pass' && t1.transition === null, 'the fake MCP answers as a live source; the first run has no transition', { src: t1.packB.source, o: t1.outcome, t: t1.transition });
+    assert(t1.packB.source === `mcp:${fakeUrl}` && t1.outcome === 'pass' && t1.transition.reason === 'first run', 'the fake MCP answers as a live source; the first run has no comparison (reason: first run)', { src: t1.packB.source, o: t1.outcome, t: t1.transition });
     assert(t1.livePack.kept === true && t1.livePack.path === `live/${stemOf(t1)}` && t1.livePack.bytes > 0 && t1.livePack.reason === 'first run (no previous record)',
            'the first run keeps the live pack under live/<record stem>.json and says why', t1.livePack);
     assert(liveFilesOf('fake-live').join() === stemOf(t1), 'the snapshot file exists beside the run directory', liveFilesOf('fake-live'));
@@ -851,9 +856,9 @@ try {
     const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     assert(t1.causes === null && /### Candidate causes — ranked by evidence, not a root-cause verdict\n\n_no previous run_/.test(renderJourneyMarkdown(t1)),
            'the first run records causes null and its markdown says there is no previous run');
-    assert(t2.causes && typeof t2.causes === 'object' && Object.keys(t2.causes).join() === 'transitions,causes,vantage,note' && t2.causes.causes.length === 0
+    assert(t2.causes && typeof t2.causes === 'object' && Object.keys(t2.causes).join() === 'causes,vantage,note' && t2.causes.causes.length === 0
            && t2.causes.note === 'candidate causes ranked by evidence — not a root-cause verdict' && t2.causes.vantage?.changed === false,
-           'an identical run records an empty cause list with the note and an unchanged vantage', t2.causes);
+           'an identical run records an empty cause list with the note and an unchanged vantage — and no second copy of the transition', t2.causes);
     assert(new RegExp(`_no chain got worse since ${escapeRe(t1.startedAt)}_\n\nvantage: unchanged`).test(renderJourneyMarkdown(t2)), 'the quiet run\'s markdown says no chain got worse and the vantage is unchanged', renderJourneyMarkdown(t2).split('### Candidate causes')[1]);
     const c3 = t3.causes;
     assert(c3 && c3.causes.length === 1 && c3.causes[0].rank === 1 && c3.causes[0].kind === 'observogram-deploy' && c3.causes[0].score === 0.9,
@@ -862,8 +867,8 @@ try {
            'the deploy evidence names deployId, actor, at, mode, the selector with the rule it resolved to against Pack A, and the verify outcome merged from its verify line', c3.causes[0].evidence);
     assert(!JSON.stringify(c3).includes('dep_out') && !JSON.stringify(c3).includes('dep_torn'), 'the deploy outside the window and the torn line never appear');
     const availChain = t3.branches.find(b => b.title === 'api_availability_99_9');
-    assert(c3.causes[0].chains.join() === availChain.rootKey && c3.causes[0].nodes.join() === 'payment:api_availability:ratio_5m',
-           'the cause names the chain and the recording rule the deploy touched — not the SLI whose name the rule embeds, not the still-unobserved metric of the same name', { chains: c3.causes[0].chains, nodes: c3.causes[0].nodes });
+    assert(c3.causes[0].chains.join() === availChain.title && c3.causes[0].rootKeys.join() === availChain.rootKey && c3.causes[0].nodes.join() === 'payment:api_availability:ratio_5m',
+           'the cause names the chain by title (its identity key apart) and the recording rule the deploy touched — not the SLI whose name the rule embeds, not the still-unobserved metric of the same name', { chains: c3.causes[0].chains, rootKeys: c3.causes[0].rootKeys, nodes: c3.causes[0].nodes });
     assert(c3.vantage && c3.vantage.changed === true && /vantage lost → restricted/.test(c3.vantage.detail) && /probe family recording_rules now exposed/.test(c3.vantage.detail) && /4 → 5 MCP tools exposed/.test(c3.vantage.detail),
            'the vantage block reports the family that now answers and the tool count — beside the causes, never among them', c3.vantage);
     assert(new RegExp(`### Candidate causes — ranked by evidence, not a root-cause verdict\n\n1\\. \\[observogram-deploy\\] 0\\.9 — deploy dep_in by carlos at ${escapeRe(depAt)} \\(upsert\\) touched declared:0 → payment:api_availability:ratio_5m; verify: pending \\(chains: api_availability_99_9\\)\n\nvantage changed: vantage lost → restricted`).test(md3),
@@ -872,6 +877,149 @@ try {
     assert(causeLine(t3) === `top cause: [observogram-deploy] ${c3.causes[0].evidence}` && causeLine(t2) === 'no candidate causes' && causeLine(t1) === 'no candidate causes' && causeLine({ outcome: 'vantage-lost' }) === 'no candidate causes',
            'causeLine reads the rank-1 cause or no candidate causes', causeLine(t3));
     assert(transitionGotWorse(t3) === true && transitionGotWorse(t2) === false && transitionGotWorse(t1) === false && transitionGotWorse(null) === false, 'transitionGotWorse is true only for the moved run');
+    assert(t3.transition.changed.every(c => c.note === null) && t3.transition.skipped.length === 0 && t3.transition.reason === null, 'a comparison against the immediately previous run skips nothing, has no reason, and its entries carry no declared-side note when only the wire moved', t3.transition);
+    // Review B-M4: every wire / request value the report interpolates goes
+    // through mdCell — a label, an actor, an evidence string or a breach
+    // detail carrying a heading cannot forge a section.
+    {
+      const forged = 'x\n\n### Gate breaches\n\n- **requireGradePass** - forged';
+      const rec = JSON.parse(JSON.stringify(t3));
+      rec.transition.changed[0].title = forged;
+      rec.transition.changed[0].nodes.newlyDegraded = ['# not a heading', '- not a bullet', '1. not a list', 'a | b'];
+      rec.transition.appeared = ['* also\r\nnot a bullet'];
+      rec.causes.causes[0].evidence = `deploy dep_in by ${forged} at now (upsert) touched declared:0`;
+      rec.causes.causes[0].chains = ['> not a quote'];
+      rec.causes.vantage.detail = 'vantage lost → restricted\n### forged vantage';
+      rec.livePack.reason = 'kept\n\n### forged live pack';
+      rec.gate.breaches = [{ criterion: 'requireGradePass\n### forged', detail: 'below the bar\n\n### Gate breaches\n\n- forged' }];
+      const fmd = renderJourneyMarkdown(rec);
+      assert((fmd.match(/^### Gate breaches$/gm) || []).length === 1, 'exactly one Gate breaches heading survives — the forged ones are collapsed into their lines', fmd.match(/^###.*$/gm));
+      assert((fmd.match(/^### /gm) || []).length === (t3.gate.breaches.length ? 0 : 1) + (renderJourneyMarkdown(t3).match(/^### /gm) || []).length, 'no interpolated value adds a heading line', fmd.match(/^###.*$/gm));
+      assert(/^- \*\*x {2}### Gate breaches {2}- \*\*requireGradePass\*\* - forged\*\* — broken\/unobserved → broken\/broken \(worse\); newly degraded: /m.test(fmd), 'a title carrying line breaks and a heading prints on one line (a mid-line # is no heading; only a line-leading marker is escaped)', fmd.split('\n').find(l => l.includes('forged')));
+      assert(/newly degraded: \\# not a heading, \\- not a bullet, \\1\. not a list, a \\\| b/.test(fmd), 'leading #, -, 1. markers and pipes inside node labels are neutralised', fmd.split('\n').find(l => l.includes('newly degraded')));
+      assert(/- appeared: \\\* also not a bullet/.test(fmd) && /\(chains: \\> not a quote\)/.test(fmd), 'appeared keys and chain titles are escaped too', fmd.split('\n').filter(l => /appeared|chains:/.test(l)));
+      assert(/^vantage changed: vantage lost → restricted ### forged vantage$/m.test(fmd) && /^live pack: kept \(live\/.*\) — kept {2}### forged live pack$/m.test(fmd), 'the vantage detail and the live-pack reason cannot open a line', fmd.split('\n').filter(l => /^vantage changed|^live pack/.test(l)));
+      assert(/^1\. \[observogram-deploy\] 0\.9 — deploy dep_in by x {2}### Gate breaches/m.test(fmd), 'the rank stays the list marker and the score a plain number; the forged actor is on that same line', fmd.split('\n').find(l => l.startsWith('1. ')));
+      assert(/^- \*\*requireGradePass ### forged\*\* — below the bar {2}### Gate breaches {2}- forged$/m.test(fmd), 'a breach criterion / detail prints on its own line only', fmd.split('\n').filter(l => l.startsWith('- **requireGradePass')));
+    }
+    // `journey list` while t3 is the newest run: the top candidate cause
+    // rides on the line of the journey whose chains got worse — and, since
+    // the vantage moved too (lost → restricted), that change beside it.
+    {
+      const cliT3 = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'list'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000 });
+      assert(/^fake-live\t.* · top cause: \[observogram-deploy\] deploy dep_in by carlos at .* touched declared:0 → payment:api_availability:ratio_5m; verify: pending · vantage changed: vantage lost → restricted · probe family recording_rules now exposed · 4 → 5 MCP tools exposed$/m.test(cliT3.stdout),
+             'journey list appends the top candidate cause to the journey whose chains got worse, then the vantage change beside it', cliT3.stdout.split('\n').filter(l => l.startsWith('fake-live')));
+    }
+    // Review B-M6: a hand-dropped notes.json in the run directory is not a
+    // record — the newest run stays the newest run, and nothing reads it.
+    writeFileSync(join(TMP, 'runs', 'fake-live', 'notes.json'), '{"startedAt":"zzz-not-a-run","branches":[]}');
+    writeFileSync(join(TMP, 'runs', 'fake-live', 'zzzz.json'), 'not even json');
+    assert(readJourneyRuns('fake-live').length === 3 && readJourneyRuns('fake-live')[0].startedAt === t3.startedAt && readJourneyRuns('fake-live', { limit: 1 })[0].startedAt === t3.startedAt,
+           'readJourneyRuns reads only run-shaped files: a stray notes.json sorts after every ISO name yet never becomes the previous run', readJourneyRuns('fake-live').map(r => r.startedAt));
+    // Review B-M2: a vantage-lost record between two live runs. The next run
+    // compares its chains against the newest record that CARRIES chains
+    // (t3), names the skipped record, and its wording says so — never "no
+    // previous run", never "no chain got worse" as if something had been
+    // compared against the outage.
+    await new Promise(r => setTimeout(r, 5));
+    const lostAt = new Date().toISOString();
+    writeFileSync(join(TMP, 'runs', 'fake-live', `${lostAt.replace(/[:.]/g, '-')}.json`), JSON.stringify({
+      journey: 'fake-live', startedAt: lostAt, tookMs: 3, outcome: 'vantage-lost', error: 'connect ECONNREFUSED (synthetic)',
+      packA: t3.packA, packB: { source: t3.packB.source }, scope: t3.scope, gate: { thresholds: {}, breaches: [] },
+    }, null, 2));
+    await new Promise(r => setTimeout(r, 5));
+    const t4 = await runJourney(loadJourneyDef('fake-live'));
+    assert(t4.transition.since === t3.startedAt && t4.transition.reason === null && t4.transition.any === false && t4.transition.skipped.length === 1 && t4.transition.skipped[0].startedAt === lostAt && t4.transition.skipped[0].outcome === 'vantage-lost',
+           'after a vantage-lost run the transition is against the newest record with chains (since = t3) and names the skipped record', t4.transition);
+    assert(t4.livePack.kept === true && t4.livePack.reason === `previous run ${lostAt} lost its vantage`, 'the run after a vantage loss keeps its snapshot for that reason', t4.livePack);
+    assert(t4.causes.causes.length === 0 && t4.causes.vantage.changed === true && /^vantage lost → restricted/.test(t4.causes.vantage.detail) && !('transitions' in t4.causes),
+           'the vantage is compared against the lost run (lost → restricted); nothing got worse against t3; the ranker\'s copy of the diff is not persisted', t4.causes);
+    const md4 = renderJourneyMarkdown(t4);
+    assert(new RegExp(`### Transitions since previous run\\n\\n_previous run ${escapeRe(lostAt)} lost its vantage — comparing against ${escapeRe(t3.startedAt)}_\\n\\n_no chain changed since ${escapeRe(t3.startedAt)}_`).test(md4),
+           'the transitions section says the previous run lost its vantage and which run it compared against', md4.split('### Transitions since previous run')[1]?.slice(0, 300));
+    assert(new RegExp(`_no chain got worse since ${escapeRe(t3.startedAt)} \\(previous run ${escapeRe(lostAt)} lost its vantage — comparing against ${escapeRe(t3.startedAt)}\\)_\\n\\nvantage changed: vantage lost → restricted`).test(md4),
+           'the causes section words the baseline the same way, then the vantage change', md4.split('### Candidate causes')[1]?.slice(0, 400));
+    assert(!/no previous run/.test(md4), 'a run after an outage never claims there was no previous run', md4);
+    const lostFirst = readJourneyRuns('fake-live').find(r => r.outcome === 'vantage-lost');
+    assert(lostFirst && lostFirst.startedAt === lostAt && readJourneyRuns('fake-live')[0].startedAt === t4.startedAt, 'the synthetic vantage-lost record sits in the history between t3 and t4');
+    // The first run after an outage with no earlier chains at all: reason 'previous run lost its vantage'.
+    {
+      mkdirSync(join(TMP, 'runs', 'fake-lost-first'), { recursive: true });
+      writeFileSync(join(TMP, 'runs', 'fake-lost-first', `${lostAt.replace(/[:.]/g, '-')}.json`), JSON.stringify({ journey: 'fake-lost-first', startedAt: lostAt, tookMs: 3, outcome: 'vantage-lost', error: 'ECONNREFUSED', packA: t3.packA, packB: { source: t3.packB.source }, scope: t3.scope, gate: { thresholds: {}, breaches: [] } }));
+      const lf = await runJourney(fakeDef('fake-lost-first'));
+      assert(lf.transition.reason === 'previous run lost its vantage' && lf.transition.since === null && lf.transition.skipped.length === 1 && lf.transition.skipped[0].outcome === 'vantage-lost',
+             'with no earlier record carrying chains the transition says the previous run lost its vantage (not "first run")', lf.transition);
+      assert(new RegExp(`_previous run ${escapeRe(lostAt)} lost its vantage — no earlier run carries chains to compare against_`).test(renderJourneyMarkdown(lf)) && /_previous run .* lost its vantage — no earlier run carries chains to compare against — nothing to rank_/.test(renderJourneyMarkdown(lf)),
+             'both sections word the uncomparable case honestly', renderJourneyMarkdown(lf).split('### Transitions')[1]);
+      // A pre-step-4 record (no branches) as the only history: reason 'previous runs carry no chain record'.
+      mkdirSync(join(TMP, 'runs', 'fake-prestep4'), { recursive: true });
+      writeFileSync(join(TMP, 'runs', 'fake-prestep4', `${lostAt.replace(/[:.]/g, '-')}.json`), JSON.stringify({ journey: 'fake-prestep4', startedAt: lostAt, tookMs: 3, outcome: 'pass', packA: t3.packA, packB: t3.packB, scope: t3.scope, grade: { score: 90, pass: true }, drift: { alignmentPct: 80 }, gate: { thresholds: {}, breaches: [] } }));
+      const ps = await runJourney(fakeDef('fake-prestep4'));
+      assert(ps.transition.reason === 'previous runs carry no chain record' && ps.transition.skipped.length === 1 && ps.livePack.kept === true && /carries no chain record to compare/.test(ps.livePack.reason),
+             'a pre-step-4 record as the only history reads reason "previous runs carry no chain record"', ps.transition);
+      assert(new RegExp(`_previous run ${escapeRe(lostAt)} carries no chain record to compare against \\(pre-step-4 record\\)_`).test(renderJourneyMarkdown(ps)), 'the markdown names the pre-step-4 record', renderJourneyMarkdown(ps).split('### Transitions')[1]?.slice(0, 200));
+    }
+    // Review B-M6: a baseline whose startedAt cannot be parsed gives an EMPTY
+    // deploy window — an ancient deploy naming a moved artefact is never
+    // pulled in as "all of history".
+    {
+      mkdirSync(join(TMP, 'runs', 'fake-badstart'), { recursive: true });
+      writeFileSync(join(TMP, 'runs', 'fake-badstart', '2020-01-01T00-00-00-000Z.json'), JSON.stringify({ journey: 'fake-badstart', startedAt: 'yesterday', tookMs: 3, outcome: 'pass', packA: t3.packA, packB: t3.packB, scope: t3.scope, grade: { score: 90, pass: true }, drift: { alignmentPct: 80 }, gate: { thresholds: {}, breaches: [] }, branches: [], chains: null, versions: null, transition: null, livePack: { kept: false, path: null, reason: 'x' } }));
+      const ancientLog = readFileSync(join(TMP, 'deploys.jsonl'), 'utf8');
+      writeFileSync(join(TMP, 'deploys.jsonl'), ancientLog + JSON.stringify({ type: 'deploy', deployId: 'dep_ancient', at: '2000-06-01T00:00:00.000Z', actor: 'old', pack: { id: 'payment-service' }, mode: 'upsert', dryRun: false, items: [depItem] }) + '\n');
+      const bs = await runJourney(fakeDef('fake-badstart'));
+      assert(bs.transition.since === 'yesterday' && bs.transition.appeared.length > 0 && bs.transition.any === true, 'fixture: the run compares against the bad-start baseline (every chain appears)', bs.transition);
+      assert(!JSON.stringify(bs.causes).includes('dep_ancient') && !JSON.stringify(bs.causes).includes('dep_out'), 'an unparseable baseline start gives an empty deploy window: no deploy from history is a cause', bs.causes.causes.map(c => c.evidence));
+      writeFileSync(join(TMP, 'deploys.jsonl'), ancientLog);
+    }
+    // Review B-M5: only the trailing 8 MB of deploys.jsonl are read; the
+    // partial first line of the tail is dropped, never mis-parsed.
+    {
+      const { readDeployLog, DEPLOY_LOG_TAIL_BYTES } = await import('./lib/journey.mjs');
+      assert(DEPLOY_LOG_TAIL_BYTES === 8 * 1024 * 1024, 'the tail cap is 8 MB');
+      const original = readFileSync(join(TMP, 'deploys.jsonl'), 'utf8');
+      const filler = [];
+      let bytes = 0;
+      const pad = 'x'.repeat(150);
+      for (let i = 0; bytes < DEPLOY_LOG_TAIL_BYTES + 512 * 1024; i++) {
+        const line = JSON.stringify({ type: 'deploy', deployId: `dep_filler_${i}`, at: '2001-01-01T00:00:00.000Z', actor: 'old', pack: { id: 'p' }, mode: 'upsert', items: [], note: pad }) + '\n';
+        filler.push(line);
+        bytes += Buffer.byteLength(line);
+      }
+      const last = JSON.stringify({ type: 'deploy', deployId: 'dep_tail_last', at: '2001-01-02T00:00:00.000Z', actor: 'old', pack: { id: 'p' }, mode: 'upsert', items: [] }) + '\n';
+      writeFileSync(join(TMP, 'deploys.jsonl'), filler.join('') + last);
+      const tail = readDeployLog();
+      assert(tail.length > 0 && tail.length < filler.length && tail[tail.length - 1].deployId === 'dep_tail_last' && !tail.some(r => r.deployId === 'dep_filler_0'),
+             'a log larger than the cap yields only its tail: the newest line is there, the oldest is not', { got: tail.length, lines: filler.length + 1 });
+      assert(tail.every(r => typeof r.deployId === 'string' && r.type === 'deploy' && (r.deployId === 'dep_tail_last' || r.note === pad)), 'every record of the tail parsed whole — the cut line at the start of the tail was dropped, not mis-parsed', tail.find(r => typeof r.deployId !== 'string'));
+      const first = tail[0].deployId;
+      const firstIdx = Number(first.replace('dep_filler_', ''));
+      assert(Number.isInteger(firstIdx) && firstIdx > 0 && filler.slice(firstIdx).join('').length + last.length <= DEPLOY_LOG_TAIL_BYTES, 'the tail starts at the first whole line inside the cap', { first, firstIdx });
+      writeFileSync(join(TMP, 'deploys.jsonl'), original);
+      assert(readDeployLog().length === original.split('\n').filter(l => l.trim()).length - 1, 'a log under the cap reads whole (the torn line skipped)', readDeployLog().length);
+    }
+    // Review B-L2: `journey list` appends the vantage change beside the
+    // cause segment — for the run after the outage (no cause, vantage
+    // changed) and, seeded, for a vantage-only worse transition.
+    {
+      writeFileSync(join(TMP, 'journeys', 'vantage-worse.journey.yaml'), ['name: vantage-worse', `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`, `packB: { file: ${LIVE_B.replaceAll('\\', '/')} }`].join('\n'));
+      mkdirSync(join(TMP, 'runs', 'vantage-worse'), { recursive: true });
+      const vwAt = '2026-09-08T12:00:00.000Z';
+      writeFileSync(join(TMP, 'runs', 'vantage-worse', `${vwAt.replace(/[:.]/g, '-')}.json`), JSON.stringify({
+        journey: 'vantage-worse', startedAt: vwAt, tookMs: 3, outcome: 'pass', packA: t3.packA, packB: t3.packB, scope: t3.scope, grade: { score: 90, pass: true }, drift: { alignmentPct: 80 }, gate: { thresholds: {}, breaches: [] },
+        branches: [{ rootKey: 'slo::x', title: 'x', rootKind: 'slo', verdict: 'intact', ladderVerdict: 'unobserved', integrityPct: 100, ladderIntegrityPct: 0, confidence: 'declared', missingRoles: [], degraded: [] }],
+        chains: null, versions: null,
+        transition: { since: '2026-09-08T11:00:00.000Z', changed: [{ rootKey: 'slo::x', title: 'x', from: { verdict: 'intact', ladderVerdict: 'healthy' }, to: { verdict: 'intact', ladderVerdict: 'unobserved' }, direction: 'worse', nodes: { newlyDegraded: [], recovered: [] }, note: null }], appeared: [], disappeared: [], any: true, skipped: [], reason: null },
+        livePack: { kept: false, path: null, reason: 'Pack B is a file (x)' },
+        causes: { causes: [], vantage: { changed: true, from: { vantage: 'full', failed: [], unsupported: [], toolsExposedCount: 12 }, to: { vantage: 'partial', failed: ['recording_rules'], unsupported: [], toolsExposedCount: 12 }, detail: 'vantage full → partial · probe family recording_rules newly failed (HTTP 502)' }, note: 'candidate causes ranked by evidence — not a root-cause verdict' },
+      }, null, 2));
+      const cliV = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'list'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000 });
+      assert(/^vantage-worse\tpass · .* · no candidate causes · vantage changed: vantage full → partial · probe family recording_rules newly failed \(HTTP 502\)$/m.test(cliV.stdout),
+             'a vantage-only worse transition lists no candidate causes AND the vantage change — the change is named, never blamed', cliV.stdout.split('\n').filter(l => l.startsWith('vantage-worse')));
+      assert(/^fake-live\tpass · .* · ladder [^\n]* · vantage changed: vantage lost → restricted[^\n]*$/m.test(cliV.stdout) && !/^fake-live\t.*top cause/m.test(cliV.stdout),
+             'the run after the outage (no cause) still lists the vantage change', cliV.stdout.split('\n').filter(l => l.startsWith('fake-live')));
+      assert(!/^fake-always\t.*vantage changed/m.test(cliV.stdout), 'a run whose vantage did not change gets no vantage segment');
+    }
     // Gate failure without a transition: kept, reason 'gate failed'.
     const g1 = await runJourney(fakeDef('fake-gated', ['gate: { maxDeclaredNotLive: 0 }']));
     assert(g1.outcome === 'gate-failed' && g1.livePack.kept === true && g1.livePack.reason === 'first run (no previous record)', 'a gated journey keeps its first run for being first', g1.livePack);
@@ -918,14 +1066,14 @@ try {
     ].join('\n'));
     await new Promise(r => setTimeout(r, 5));
     const blockedRun = await runJourney(loadJourneyDef('fake-never'));
-    assert(blockedRun.outcome === 'pass' && blockedRun.livePack.kept === false && /^live pack live\/.*\.json: /.test(blockedRun.historyError || '') && blockedRun.livePack.reason === 'keepLivePack: always',
-           'a snapshot write failure is noted as historyError on the record, the run still lands and livePack reads not kept', { lp: blockedRun.livePack, he: blockedRun.historyError });
+    assert(blockedRun.outcome === 'pass' && blockedRun.livePack.kept === false && /^live pack live\/.*\.json: /.test(blockedRun.historyError || '') && /^snapshot write failed: live pack live\/.*\.json: /.test(blockedRun.livePack.reason),
+           'a snapshot write failure is noted as historyError on the record, the run still lands and livePack reads not kept with the failure as its reason (never the policy that asked for it)', { lp: blockedRun.livePack, he: blockedRun.historyError });
     assert(readJourneyRuns('fake-never')[0]?.startedAt === blockedRun.startedAt && readJourneyRuns('fake-never')[0].historyError === blockedRun.historyError, 'the persisted record carries the same historyError');
     // The CLI line shows the chains segment for a live journey too.
     const cliLive = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'list'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000 });
     assert(/^fake-live\tpass · .* · chains \d+\/\d+ intact · ladder \d+ healthy/m.test(cliLive.stdout), 'journey list prints the chains status for a live journey', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-live')));
-    assert(/^fake-live\t.* · top cause: \[observogram-deploy\] deploy dep_in by carlos at .* touched declared:0 → payment:api_availability:ratio_5m; verify: pending$/m.test(cliLive.stdout),
-           'journey list appends the top candidate cause to the journey whose chains got worse', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-live')));
+    assert(/^fake-live\t.* · ladder [^\n]* · vantage changed: vantage lost → restricted[^\n]*$/m.test(cliLive.stdout) && !/^fake-live\t.*top cause/m.test(cliLive.stdout),
+           'once the run after the outage is the newest, the line carries the vantage change and no cause segment (nothing got worse against t3)', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-live')));
     assert(/^fake-always\t.* · ladder [^\n]*$/m.test(cliLive.stdout) && !/^fake-always\t.*top cause/m.test(cliLive.stdout) && !/^fake-always\t.*no candidate causes/m.test(cliLive.stdout),
            'a journey whose chains did not get worse gets no cause segment at all', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-always')));
   } finally {

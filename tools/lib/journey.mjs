@@ -51,7 +51,7 @@
 // total loss of the observation point is a point in the drift history,
 // not a hole in it.
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync, openSync, readSync, closeSync } from 'node:fs';
 import { resolve, join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from './mini-yaml.mjs';
@@ -138,10 +138,16 @@ export function loadJourneyDef(ref) {
 // Step 4: when the run keeps a snapshot of Pack B beside its record
 // (runs/<journey>/live/<stem>.json). `transitions` keeps the packs that
 // explain a change in the chain history; `always` keeps every one;
-// `never` keeps none. A file-sourced Pack B is never snapshotted — the
-// file is the snapshot.
+// `never` writes none from now on (snapshots earlier runs kept stay until
+// their records age out of retention). A file-sourced Pack B is never
+// snapshotted — the file is the snapshot.
 export const KEEP_LIVE_PACK_POLICIES = Object.freeze(['transitions', 'always', 'never']);
 export const KEEP_LIVE_PACK_DEFAULT = 'transitions';
+
+// How many records back the run looks for a baseline that carries chains
+// (readJourneyRuns limit), and how many skipped records a transition names.
+export const BASELINE_SCAN_LIMIT = 25;
+const TRANSITION_SKIPPED_CAP = 8;
 
 // gate.stack is validated at load time, not at run time: a typo in a row
 // id would otherwise breach every run with "no sample" and read as a stack
@@ -588,13 +594,20 @@ export function readLivePack(name, record) {
   try { return JSON.parse(readFileSync(join(runsDir(name), 'live', `${LIVE_PACK_PATH_RE.exec(rel)[1]}.json`), 'utf8')); } catch (_) { return null; }
 }
 
-// Pure: which files of live/ no longer have a run record. Only names of the
-// run-file shape are candidates; a snapshot whose record exists is never
-// named, whatever else the directory holds.
+// Pure: which files of live/ belong to records retention has already
+// dropped — the run-shaped names OLDER than the oldest surviving record.
+// Never a survivor's snapshot, never a file that is not of the run shape,
+// and never a snapshot newer than the oldest record that merely has no
+// record YET: two writers (a cron run and POST /api/journeys/:name/run)
+// can interleave, and one's just-written snapshot must not be another's
+// orphan. With no surviving record nothing is older than one — nothing is
+// named.
 export function pruneLiveSnapshots(recordFiles, liveFiles) {
-  const records = new Set((Array.isArray(recordFiles) ? recordFiles : []).filter(f => typeof f === 'string' && JOURNEY_RUN_FILE_RE.test(f)));
+  const records = (Array.isArray(recordFiles) ? recordFiles : []).filter(f => typeof f === 'string' && JOURNEY_RUN_FILE_RE.test(f)).sort();
+  if (!records.length) return [];
+  const oldest = records[0];
   return (Array.isArray(liveFiles) ? liveFiles : [])
-    .filter(f => typeof f === 'string' && JOURNEY_RUN_FILE_RE.test(f) && !records.has(f))
+    .filter(f => typeof f === 'string' && JOURNEY_RUN_FILE_RE.test(f) && f < oldest)
     .sort();
 }
 
@@ -668,22 +681,38 @@ export async function runJourney(def, { baseDir } = {}) {
   const rollup = diff.traceabilityGraph?.rollup || null;
   const outcome = breaches.length ? 'gate-failed' : 'pass';
 
-  // Step 4: the per-chain verdicts this run saw, the previous record they
-  // are compared against (read BEFORE this run is written, so the diff is
+  // Step 4: the per-chain verdicts this run saw, the records they are
+  // compared against (read BEFORE this run is written, so the diff is
   // against history, never against itself) and the snapshot decision.
+  // `previousRun` is the newest record whatever it holds — the vantage is
+  // compared against it; `baseline` is the newest record that carries
+  // chains (a vantage-lost or pre-chain record in between cannot be
+  // diffed) — the chain diff, the deploy window and the versions are
+  // compared against it. The records between them are named on the
+  // transition as `skipped`, so a run after an outage never claims "no
+  // previous run" nor compares against nothing.
   const branches = branchRecordsFromGraph(diff.traceabilityGraph);
   const chains = chainSummary({ branches });
-  const previousRun = readJourneyRuns(def.name, { limit: 1 })[0] || null;
-  const transition = diffRunBranches(previousRun, { branches });
+  const recent = readJourneyRuns(def.name, { limit: BASELINE_SCAN_LIMIT });
+  const previousRun = recent[0] || null;
+  const baseline = recent.find(r => r && typeof r === 'object' && Array.isArray(r.branches)) || null;
+  const skipped = (baseline ? recent.slice(0, recent.indexOf(baseline)) : recent)
+    .slice(0, TRANSITION_SKIPPED_CAP)
+    .map(r => ({ startedAt: typeof r?.startedAt === 'string' ? r.startedAt : null, outcome: typeof r?.outcome === 'string' ? r.outcome : null }));
+  const diffed = diffRunBranches(baseline, { branches });
+  const transition = diffed
+    ? { ...diffed, skipped, reason: null }
+    : { reason: !previousRun ? 'first run' : previousRun.outcome === 'vantage-lost' ? 'previous run lost its vantage' : 'previous runs carry no chain record',
+        since: null, changed: [], appeared: [], disappeared: [], any: false, skipped };
   const livePackDecided = livePackDecision({
-    policy: def.keepLivePack, previousRun, transition, outcome,
+    policy: def.keepLivePack, previousRun, transition: diffed, outcome,
     packBIsFile: !!def.packB?.file, packBSource: b.source,
   });
   let livePack = { kept: false, path: null, reason: livePackDecided.reason };
   let livePackError = null;
   if (livePackDecided.kept) {
     const written = writeLivePack(def.name, startedAt, b.canonical);
-    if (written.error) livePackError = written.error;
+    if (written.error) { livePackError = written.error; livePack = { kept: false, path: null, reason: `snapshot write failed: ${written.error}` }; }
     else livePack = { kept: true, path: written.path, bytes: written.bytes, reason: livePackDecided.reason };
   }
 
@@ -723,8 +752,10 @@ export async function runJourney(def, { baseDir } = {}) {
     chains,
     // mcp.versions.<product> as Pack B reported them; null when none.
     versions: liveVersions(b.canonical),
-    // What changed since the previous record's chains; null on the first
-    // run or when the previous record carries no chains (vantage lost).
+    // What changed since the baseline record's chains (`since`), the
+    // records skipped to reach it, and — when nothing could be compared —
+    // why (`reason`: first run · previous run lost its vantage · previous
+    // runs carry no chain record); `reason` is null on a comparison.
     transition,
     // Whether Pack B was snapshotted beside this record and why (policy
     // keepLivePack, default transitions). A file-sourced B is never kept.
@@ -760,15 +791,25 @@ export async function runJourney(def, { baseDir } = {}) {
     outcome,
   };
   // Step 4: candidate causes for the chains that got worse since the
-  // previous run — ranked over Observogram's own deploys inside the window
-  // (previous start, this start] with every item's artifact selector
+  // baseline — ranked over Observogram's own deploys inside the window
+  // (baseline start, this start] with every item's artifact selector
   // resolved against Pack A (the ranker matches names exactly, never by
   // substring), the drift and version facts of this record and its stack
   // samples (chain-history.mjs rankCauses). A vantage change rides beside
-  // them, never among them. null on the first run: nothing to explain yet.
-  record.causes = previousRun
-    ? rankCauses({ previous: previousRun, current: record, deploys: resolveDeployItems(deploysInWindow(readDeployLog(), previousRun.startedAt ?? null, startedAt), a.canonical) })
-    : null;
+  // them, never among them. A baseline whose start time cannot be parsed
+  // gives an EMPTY window — never all of history. The ranker's own copy of
+  // the diff is dropped: `transition` above is the single persisted copy.
+  // null on the first run: nothing to explain yet.
+  if (previousRun) {
+    const sinceIso = (baseline || previousRun).startedAt;
+    const deploys = typeof sinceIso === 'string' && Number.isFinite(Date.parse(sinceIso))
+      ? resolveDeployItems(deploysInWindow(readDeployLog(), sinceIso, startedAt), a.canonical)
+      : [];
+    const { transitions: _transitions, ...causes } = rankCauses({ previous: previousRun, baseline, current: record, deploys });
+    record.causes = causes;
+  } else {
+    record.causes = null;
+  }
   if (livePackError) record.historyError = livePackError;
 
   writeRunRecord(def.name, startedAt, record);
@@ -845,9 +886,11 @@ function writeRunRecord(name, startedAt, record) {
     }
   }
   // Step 4: a live-pack snapshot outlives its record only until the next
-  // write — then it is an orphan and goes. Listed AFTER the record prune so
-  // the survivors are the records that still exist; a snapshot whose
-  // record exists is never touched. No live/ directory: nothing to do.
+  // write — then it is a retention victim and goes. Listed AFTER the record
+  // prune so the survivors are the records that still exist; only
+  // snapshots older than the oldest survivor are named (pruneLiveSnapshots),
+  // so a concurrent writer's just-written snapshot is never touched. No
+  // live/ directory: nothing to do.
   const liveDir = join(dir, 'live');
   let liveFiles = null;
   try { liveFiles = readdirSync(liveDir); } catch (_) { liveFiles = null; }
@@ -863,10 +906,13 @@ function writeRunRecord(name, startedAt, record) {
   }
 }
 
+// The run records of a journey, newest first. Only files of the run shape
+// (JOURNEY_RUN_FILE_RE) are records: a hand-dropped notes.json would
+// otherwise sort after every ISO name and become the "previous run".
 export function readJourneyRuns(name, { limit = 50 } = {}) {
   const dir = runsDir(name);
   let files = [];
-  try { files = readdirSync(dir).filter(f => f.endsWith('.json')).sort().reverse(); } catch (_) { return []; }
+  try { files = readdirSync(dir).filter(f => JOURNEY_RUN_FILE_RE.test(f)).sort().reverse(); } catch (_) { return []; }
   const out = [];
   for (const f of files.slice(0, limit)) {
     try { out.push(JSON.parse(readFileSync(join(dir, f), 'utf8'))); } catch (_) {}
@@ -878,11 +924,32 @@ export function readJourneyRuns(name, { limit = 50 } = {}) {
 // lines to deploys.jsonl under the same workspace root the runs live in.
 // Read here without importing server code (the engine stays
 // server-agnostic): every parseable line, deploy and verify alike, for
-// chain-history's deploysInWindow to window and merge. Missing file → [];
-// a torn or unparseable line is skipped, never fatal.
-function readDeployLog() {
+// chain-history's deploysInWindow to window and merge. The log is
+// append-only and unbounded, and a run only needs the window since its
+// baseline, so only the trailing DEPLOY_LOG_TAIL_BYTES are read (the
+// partial first line of the tail is dropped): a 250 MB audit costs one
+// run 8 MB, not 2 s and 80 MB of heap. Missing file → []; a torn or
+// unparseable line is skipped, never fatal.
+export const DEPLOY_LOG_TAIL_BYTES = 8 * 1024 * 1024;
+
+export function readDeployLog() {
   let raw = '';
-  try { raw = readFileSync(join(workspaceRoot(), 'deploys.jsonl'), 'utf8'); } catch (_) { return []; }
+  try {
+    const path = join(workspaceRoot(), 'deploys.jsonl');
+    const size = statSync(path).size;
+    if (size <= DEPLOY_LOG_TAIL_BYTES) {
+      raw = readFileSync(path, 'utf8');
+    } else {
+      const fd = openSync(path, 'r');
+      try {
+        const buf = Buffer.alloc(DEPLOY_LOG_TAIL_BYTES);
+        const got = readSync(fd, buf, 0, DEPLOY_LOG_TAIL_BYTES, size - DEPLOY_LOG_TAIL_BYTES);
+        raw = buf.toString('utf8', 0, got);
+      } finally { closeSync(fd); }
+      const nl = raw.indexOf('\n');
+      raw = nl < 0 ? '' : raw.slice(nl + 1);
+    }
+  } catch (_) { return []; }
   const out = [];
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
@@ -990,18 +1057,28 @@ export function renderJourneyMarkdown(r) {
   lines.push(...causesSection(r));
   if (r.gate.breaches.length) {
     lines.push('', '### Gate breaches', '');
-    for (const b of r.gate.breaches) lines.push(`- **${b.criterion}** — ${b.detail}`);
+    for (const b of r.gate.breaches) lines.push(`- **${mdCell(b.criterion)}** — ${mdCell(b.detail)}`);
   }
   lines.push('', '_Verification evidence (declared vs observed); not incident-validated._');
   return lines.join('\n');
 }
+
+// Every value interpolated into the report that came off the wire or the
+// request (labels, titles, actor, deploy ids, artifacts, evidence, probe
+// errors) goes through mdCell: `|` is escaped, a line break collapses to a
+// space so a value cannot open a new line, and a leading markdown marker
+// (`#`, `-`, `*`, `+`, `>`, `1.`) is neutralised so it cannot forge a
+// heading or a list item even at a line start.
+const mdCell = (v) => String(v ?? '-')
+  .replace(/\r?\n|\r/g, ' ')
+  .replace(/\|/g, '\\|')
+  .replace(/^(\s*)([#\-*+>]|\d+\.)/, '$1\\$2');
 
 // Step 4: one row per requirement chain (cap CHAIN_REPORT_ROW_CAP), only
 // when the record carries chains — no table means no chains were declared
 // or recorded, never that every chain is intact. The worst node is the
 // first of the branch's degraded list (worst first by construction).
 const CHAIN_REPORT_ROW_CAP = 24;
-const mdCell = (v) => String(v ?? '-').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 function requirementChainsTable(branches) {
   const rows = Array.isArray(branches) ? branches.filter(b => b && typeof b === 'object') : [];
   if (!rows.length) return [];
@@ -1030,42 +1107,78 @@ function worstNodeCell(node) {
   return `${node.label || node.key || '?'} (${bits.join(' · ')})`;
 }
 
-// What moved since the previous record, plus whether Pack B was kept.
+// What a transition was compared against, in words: null when it was the
+// immediately previous run (or there is nothing to say), else the run(s)
+// skipped to reach the baseline — `previous run <ts> lost its vantage —
+// comparing against <baseline ts>`. Older records (no `skipped`) say nothing.
+function baselineNote(t) {
+  const skipped = Array.isArray(t?.skipped) ? t.skipped.filter(s => s && typeof s === 'object') : [];
+  if (!skipped.length || !t.since) return null;
+  const first = skipped[0];
+  const what = first.outcome === 'vantage-lost' ? 'lost its vantage' : 'carries no chain record';
+  const more = skipped.length > 1 ? ` (and ${skipped.length - 1} more skipped)` : '';
+  return `previous run ${mdCell(first.startedAt || '?')} ${what}${more} — comparing against ${mdCell(t.since)}`;
+}
+
+// Why a transition could not be made, in words (transition.reason).
+function noComparisonNote(t) {
+  const skipped = Array.isArray(t?.skipped) ? t.skipped.filter(s => s && typeof s === 'object') : [];
+  const ts = skipped[0]?.startedAt ? mdCell(skipped[0].startedAt) : null;
+  if (t.reason === 'first run') return 'no previous run to compare';
+  if (t.reason === 'previous run lost its vantage') return `previous run ${ts || '?'} lost its vantage — no earlier run carries chains to compare against`;
+  if (t.reason === 'previous runs carry no chain record') return `previous run${skipped.length > 1 ? 's' : ''} ${ts ? `${ts} ` : ''}carr${skipped.length > 1 ? 'y' : 'ies'} no chain record to compare against (pre-step-4 record${skipped.length > 1 ? 's' : ''})`;
+  return `nothing to compare: ${mdCell(t.reason)}`;
+}
+
+// What moved since the baseline record, plus whether Pack B was kept.
 // A record written before transitions existed (no `transition` key) gets
-// no section; null means there was no previous record to compare.
+// no section; null (older records) or a `reason` means nothing could be
+// compared — and the section says why, never "no previous run" when one
+// exists. Every interpolated value goes through mdCell.
 function transitionsSection(r) {
   if (!Object.prototype.hasOwnProperty.call(r, 'transition') && !r.livePack) return [];
   const out = ['', '### Transitions since previous run', ''];
   const t = r.transition;
-  if (!t) {
+  if (!t || typeof t !== 'object') {
     out.push('_no previous run to compare_');
-  } else if (!t.any) {
-    out.push(`_no chain changed since ${t.since || 'the previous run'}_`);
+  } else if (t.reason) {
+    out.push(`_${noComparisonNote(t)}_`);
   } else {
-    for (const c of t.changed || []) {
-      const nodes = [];
-      if (c.nodes?.newlyDegraded?.length) nodes.push(`newly degraded: ${c.nodes.newlyDegraded.join(', ')}`);
-      if (c.nodes?.recovered?.length) nodes.push(`recovered: ${c.nodes.recovered.join(', ')}`);
-      out.push(`- **${c.title || c.rootKey}** — ${c.from?.verdict}/${c.from?.ladderVerdict} → ${c.to?.verdict}/${c.to?.ladderVerdict} (${c.direction})${nodes.length ? `; ${nodes.join('; ')}` : ''}`);
+    const note = baselineNote(t);
+    if (note) out.push(`_${note}_`, '');
+    if (!t.any) {
+      out.push(`_no chain changed since ${mdCell(t.since || 'the previous run')}_`);
+    } else {
+      for (const c of (Array.isArray(t.changed) ? t.changed : []).filter(x => x && typeof x === 'object')) {
+        const nodes = [];
+        if (c.nodes?.newlyDegraded?.length) nodes.push(`newly degraded: ${c.nodes.newlyDegraded.map(mdCell).join(', ')}`);
+        if (c.nodes?.recovered?.length) nodes.push(`recovered: ${c.nodes.recovered.map(mdCell).join(', ')}`);
+        if (c.note) nodes.push(mdCell(c.note));
+        out.push(`- **${mdCell(c.title || c.rootKey)}** — ${mdCell(c.from?.verdict)}/${mdCell(c.from?.ladderVerdict)} → ${mdCell(c.to?.verdict)}/${mdCell(c.to?.ladderVerdict)} (${mdCell(c.direction)})${nodes.length ? `; ${nodes.join('; ')}` : ''}`);
+      }
+      if (t.appeared?.length) out.push(`- appeared: ${t.appeared.map(mdCell).join(', ')}`);
+      if (t.disappeared?.length) out.push(`- disappeared: ${t.disappeared.map(mdCell).join(', ')}`);
     }
-    if (t.appeared?.length) out.push(`- appeared: ${t.appeared.join(', ')}`);
-    if (t.disappeared?.length) out.push(`- disappeared: ${t.disappeared.join(', ')}`);
   }
   if (r.livePack && typeof r.livePack === 'object') {
     out.push('', r.livePack.kept
-      ? `live pack: kept (${r.livePack.path}, ${r.livePack.bytes} bytes) — ${r.livePack.reason}`
-      : `live pack: not kept — ${r.livePack.reason}`);
+      ? `live pack: kept (${mdCell(r.livePack.path)}, ${mdCell(r.livePack.bytes)} bytes) — ${mdCell(r.livePack.reason)}`
+      : `live pack: not kept — ${mdCell(r.livePack.reason)}`);
   }
   return out;
 }
 
 // Chain status of a run record in a few words, for `packc journey list`:
 // 'chains 8/10 intact · ladder 7 healthy · 2 degraded' (zero ladder
-// buckets other than healthy are omitted), or 'chains none' when the record
-// carries no chains or declares none.
+// buckets other than healthy are omitted); 'chains 0 declared' when the
+// record carries chains but declares none; 'chains none (pre-step-4
+// record)' when it carries no `branches` at all; 'chains none (vantage
+// lost)' for a vantage-lost record.
 export function chainStatusLine(record) {
+  if (record && typeof record === 'object' && record.outcome === 'vantage-lost') return 'chains none (vantage lost)';
   const s = chainSummary(record);
-  if (!s || !s.declaredTotal) return 'chains none';
+  if (!s) return 'chains none (pre-step-4 record)';
+  if (!s.declaredTotal) return 'chains 0 declared';
   const ladder = [`${s.ladder.healthy} healthy`];
   for (const k of ['degraded', 'broken', 'unobserved']) if (s.ladder[k] > 0) ladder.push(`${s.ladder[k]} ${k}`);
   return `chains ${s.intact}/${s.declaredTotal} intact · ladder ${ladder.join(' · ')}`;
@@ -1075,20 +1188,33 @@ export function chainStatusLine(record) {
 // (chain-history.mjs rankCauses) — never a root-cause verdict, the heading
 // says so. A record written before the ranker existed (no `causes` key)
 // gets no section; null means there was no previous run to rank against.
-// The vantage line rides beside the causes, never among them.
+// The vantage line rides beside the causes, never among them. Every
+// interpolated value goes through mdCell.
 function causesSection(r) {
   if (!Object.prototype.hasOwnProperty.call(r, 'causes')) return [];
   const out = ['', '### Candidate causes — ranked by evidence, not a root-cause verdict', ''];
   const c = r.causes;
   if (!c || typeof c !== 'object') { out.push('_no previous run_'); return out; }
   const list = Array.isArray(c.causes) ? c.causes.filter(x => x && typeof x === 'object') : [];
-  if (!list.length) out.push(`_no chain got worse since ${c.transitions?.since || r.transition?.since || 'the previous run'}_`);
+  const t = r.transition && typeof r.transition === 'object' ? r.transition : null;
+  if (!list.length) {
+    if (t?.reason) out.push(`_${noComparisonNote(t)} — nothing to rank_`);
+    else {
+      const note = baselineNote(t);
+      out.push(`_no chain got worse since ${mdCell(t?.since || c.transitions?.since || 'the previous run')}${note ? ` (${note})` : ''}_`);
+    }
+  }
   const titles = new Map((Array.isArray(r.branches) ? r.branches : []).filter(b => b && typeof b === 'object').map(b => [String(b.rootKey), b.title || b.rootKey]));
   for (const cause of list) {
-    const chains = Array.isArray(cause.chains) ? cause.chains.map(k => titles.get(String(k)) || k) : [];
-    out.push(`${cause.rank}. [${cause.kind}] ${cause.score} — ${cause.evidence}${chains.length ? ` (chains: ${chains.join(', ')})` : ''}`);
+    // `chains` are titles since the review pass; an older record's root
+    // keys are mapped to titles here.
+    const chains = Array.isArray(cause.chains) ? cause.chains.map(k => mdCell(titles.get(String(k)) || k)) : [];
+    // rank and score are the ranker's numbers (the rank IS the list
+    // marker); only a non-number stands in for them goes through mdCell.
+    const numCell = (v) => (typeof v === 'number' && Number.isFinite(v) ? String(v) : mdCell(v));
+    out.push(`${numCell(cause.rank)}. [${mdCell(cause.kind)}] ${numCell(cause.score)} — ${mdCell(cause.evidence)}${chains.length ? ` (chains: ${chains.join(', ')})` : ''}`);
   }
-  if (c.vantage && typeof c.vantage === 'object') out.push('', c.vantage.changed ? `vantage changed: ${c.vantage.detail}` : 'vantage: unchanged');
+  if (c.vantage && typeof c.vantage === 'object') out.push('', c.vantage.changed ? `vantage changed: ${mdCell(c.vantage.detail)}` : 'vantage: unchanged');
   return out;
 }
 
@@ -1098,6 +1224,16 @@ function causesSection(r) {
 export function causeLine(record) {
   const top = topCause(record);
   return top ? `top cause: [${top.kind}] ${top.evidence}` : 'no candidate causes';
+}
+
+// The vantage change of a run record in a few words, for `packc journey
+// list`: 'vantage changed: vantage full → partial · …' when the ranker's
+// vantage block says it changed, else null (nothing to append). A vantage
+// change is never a cause — it rides beside the cause segment.
+export function vantageLine(record) {
+  const v = record?.causes?.vantage;
+  if (!v || typeof v !== 'object' || v.changed !== true) return null;
+  return `vantage changed: ${String(v.detail ?? '').replace(/\s+/g, ' ').trim() || 'detail not recorded'}`;
 }
 
 // Whether a run record's transition got worse (or its ranker found a
