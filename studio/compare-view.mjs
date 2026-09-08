@@ -1761,7 +1761,11 @@ export function renderDiagnosticTraceabilityGraph(graph) {
         live_only: 'live-only',
       }[node.status] || node.status;
       const fields = node.deltas?.length ? ` (${node.deltas.map(d => d.field).slice(0, 3).join(', ')})` : '';
-      return `${node.kind}: ${node.label} · ${status}${fields}`;
+      // Structural exposure: what WOULD go blind if this declared node is
+      // really gone or wrong live — never a claim that it is blind now.
+      const slos = ['declared_only', 'drifted'].includes(node.status) ? Number(node.blastRadius?.slos) || 0 : 0;
+      const blinds = slos > 0 ? ` · blinds ${slos} SLO${slos === 1 ? '' : 's'}` : '';
+      return `${node.kind}: ${node.label} · ${status}${fields}${blinds}`;
     }).join(' · ') + (interesting.length > 5 ? ` · +${interesting.length - 5}` : '');
   };
   // Requirement-branch reconciliation (item 6): each chain card carries the

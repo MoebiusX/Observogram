@@ -15,6 +15,7 @@ import {
   identityKeyOf,
 } from './artefact-model.mjs';
 import { extractPromqlMetricNames, parsePromqlDependencies } from './promql-lezer.mjs';
+import { blastRadiusIndex } from './blast-radius.mjs';
 
 const LAYER_ORDER = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'];
 
@@ -247,7 +248,12 @@ export function compareBranches(graphA, graphB) {
     .filter((rootKey) => aByRoot.has(rootKey) || !isScaffoldNode(graphB.nodes.get(bByRoot.get(rootKey).rootKey)))
     .sort();
 
-  const branches = rootKeys.map((rootKey) => compareBranch(aByRoot.get(rootKey), bByRoot.get(rootKey), graphB));
+  // Structural exposure per node, computed once per graph: what would go
+  // blind if the node died. Additive beside the scored fields.
+  const radiusA = blastRadiusIndex(graphShape(graphA));
+  const radiusB = blastRadiusIndex(graphShape(graphB));
+
+  const branches = rootKeys.map((rootKey) => compareBranch(aByRoot.get(rootKey), bByRoot.get(rootKey), graphB, radiusA, radiusB));
   const declared = branches.filter((branch) => branch.hasA);
   const declaredTotal = declared.length;
   const integrityMean = declaredTotal
@@ -274,7 +280,23 @@ export function comparePackBranches(packA, packB) {
   return compareBranches(graphA, graphB);
 }
 
-function compareBranch(branchA, branchB, liveGraph) {
+// The plain, artefact-free projection of a graph that the zero-import
+// blast-radius module consumes: `{ nodes: [...], edges: [...] }`.
+export function graphShape(graph) {
+  const nodes = [...(graph?.nodes?.values() || [])].map((node) => ({
+    key: node.key,
+    identityKey: node.identityKey,
+    kind: node.kind,
+    layer: node.layer || null,
+    label: labelOf(node),
+    virtual: !!node.virtual,
+    scaffold: isScaffoldNode(node),
+  }));
+  const edges = (graph?.edges || []).map(({ key, from, to, type, provenance }) => ({ key, from, to, type, provenance }));
+  return { nodes, edges };
+}
+
+function compareBranch(branchA, branchB, liveGraph, radiusA = new Map(), radiusB = new Map()) {
   if (!branchA && !branchB) throw new Error('compareBranch: at least one branch required');
 
   if (!branchA) {
@@ -293,7 +315,7 @@ function compareBranch(branchA, branchB, liveGraph) {
       edgeProvenance: branchB.edgeProvenance,
       missingRoles: [],
       counts: { aligned: 0, drifted: 0, declaredOnly: 0, liveOnly: liveNodes.length, unverifiable: 0 },
-      nodes: liveNodes.map((node) => nodeVerdict('live_only', null, node)),
+      nodes: liveNodes.map((node) => nodeVerdict('live_only', null, node, [], radiusFor(radiusB, node))),
     };
   }
 
@@ -323,7 +345,7 @@ function compareBranch(branchA, branchB, liveGraph) {
       const [{ node: bNode }] = exactB.splice(bi, 1);
       usedA.add(ai);
       usedB.add(bNode.key);
-      const verdict = nodeVerdict('aligned', aNodes[ai], bNode);
+      const verdict = nodeVerdict('aligned', aNodes[ai], bNode, [], radiusFor(radiusA, aNodes[ai]));
       nodeVerdicts.push(verdict);
       const w = nodeWeight(aNodes[ai]);
       possible += w;
@@ -348,7 +370,7 @@ function compareBranch(branchA, branchB, liveGraph) {
       }
       const [bNode] = remainingB.splice(best, 1);
       usedB.add(bNode.key);
-      const verdict = nodeVerdict('drifted', aNode, bNode, bestDeltas);
+      const verdict = nodeVerdict('drifted', aNode, bNode, bestDeltas, radiusFor(radiusA, aNode));
       nodeVerdicts.push(verdict);
       const w = nodeWeight(aNode);
       possible += w;
@@ -358,7 +380,7 @@ function compareBranch(branchA, branchB, liveGraph) {
     for (const { node: aNode } of remainingA) {
       const verifiable = canVerifyKind(aNode.kind, liveGraph);
       const status = verifiable ? 'declared_only' : 'unverifiable';
-      nodeVerdicts.push(nodeVerdict(status, aNode, null));
+      nodeVerdicts.push(nodeVerdict(status, aNode, null, [], radiusFor(radiusA, aNode)));
       if (verifiable) possible += nodeWeight(aNode);
     }
   }
@@ -368,7 +390,7 @@ function compareBranch(branchA, branchB, liveGraph) {
     if (aGroups.has(bNode.identityKey)) continue;
     if (isLiveOnlyInferredMetric(bNode, liveGraph)) continue;
     if (isScaffoldNode(bNode)) continue;
-    nodeVerdicts.push(nodeVerdict('live_only', null, bNode));
+    nodeVerdicts.push(nodeVerdict('live_only', null, bNode, [], radiusFor(radiusB, bNode)));
   }
 
   for (const missing of branchA.missingRoles || []) {
@@ -691,7 +713,7 @@ function groupBranchNodes(nodes) {
   return out;
 }
 
-function nodeVerdict(status, aNode, bNode, deltas = []) {
+function nodeVerdict(status, aNode, bNode, deltas = [], blastRadius = null) {
   const node = aNode || bNode;
   return {
     status,
@@ -704,7 +726,14 @@ function nodeVerdict(status, aNode, bNode, deltas = []) {
     bId: bNode?.artefact?.id || null,
     virtual: !!(aNode?.virtual || bNode?.virtual),
     deltas,
+    // Structural exposure (blast-radius.mjs summary): what would go blind if
+    // this node died. null when the graph index has no entry for it.
+    blastRadius,
   };
+}
+
+function radiusFor(index, node) {
+  return index?.get(node?.key) ?? null;
 }
 
 function nodeWeight(node) {

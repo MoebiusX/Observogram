@@ -11,8 +11,10 @@ import {
   buildBranch,
   buildDependencyGraph,
   comparePackBranches,
+  graphShape,
   requirementRoots,
 } from './lib/traceability-graph.mjs';
+import { DEFAULT_WEIGHTS, blastRadiusOf } from './lib/blast-radius.mjs';
 
 import { createHarness } from './lib/harness.mjs';
 const { assert, report } = createHarness();
@@ -265,6 +267,68 @@ process.stdout.write('\n--- live scaffold placeholders are not live evidence ---
   const cmp3 = comparePackBranches(adapted, adapt(realPack));
   assert(cmp3.rollup.undeclared === 1 && cmp3.rollup.total === 2,
          'a real live-only SLO still counts as undeclared', cmp3.rollup, { undeclared: 1, total: 2 });
+}
+
+process.stdout.write('\n--- blast radius rides along, scoring untouched ---\n');
+{
+  // graphShape: the artefact-free projection the zero-import module reads.
+  const shape = graphShape(graph);
+  assert(shape.nodes.length === graph.nodes.size && shape.edges.length === graph.edges.length,
+         'graphShape round-trips node and edge counts',
+         [shape.nodes.length, shape.edges.length], [graph.nodes.size, graph.edges.length]);
+  assert(shape.nodes.every((n) => Object.keys(n).join() === 'key,identityKey,kind,layer,label,virtual,scaffold'
+           && typeof n.key === 'string' && typeof n.kind === 'string' && typeof n.label === 'string'
+           && typeof n.virtual === 'boolean' && typeof n.scaffold === 'boolean' && !('artefact' in n)),
+         'graphShape nodes carry key/identityKey/kind/layer/label/virtual/scaffold and no artefact');
+  assert(shape.edges.every((e) => Object.keys(e).join() === 'key,from,to,type,provenance'), 'graphShape edges carry key/from/to/type/provenance');
+  assert(shape.nodes.some((n) => n.kind === 'metric' && n.virtual === true), 'virtual metric nodes survive the projection as virtual');
+
+  // The scrape job's structural exposure on the fixture graph itself.
+  const scrapeKey = [...graph.byKind.get('scrape_job')][0];
+  const direct = blastRadiusOf(shape, scrapeKey);
+  assert(direct?.summary.slos === 1 && direct.summary.alerts === 1 && direct.blinded.nodes.some((n) => n.kind === 'recording_rule'),
+         'on the fixture graph a dead scrape job blinds the SLO, its alert and the recording rule', direct?.summary);
+
+  // Every node verdict carries `blastRadius: summary | null`, appended last;
+  // in a self compare every node is non-scaffold, so every one has a summary.
+  const again = comparePackBranches(adapted, adapt(clone(pack)));
+  const nodesAll = again.branches.flatMap((b) => b.nodes);
+  const SUMMARY_KEYS = 'slos,alerts,panels,dashboards,routes,remediations,total';
+  const NODE_KEYS = 'status,key,kind,layer,label,weight,aId,bId,virtual,deltas,blastRadius';
+  assert(nodesAll.length > 0 && nodesAll.every((n) => Object.keys(n).join() === NODE_KEYS),
+         'blastRadius is the only new node-verdict field, appended after deltas', nodesAll.map((n) => Object.keys(n).join())[0], NODE_KEYS);
+  assert(nodesAll.every((n) => n.blastRadius === null || Object.keys(n.blastRadius).join() === SUMMARY_KEYS),
+         'blastRadius is a summary object or null');
+  assert(nodesAll.every((n) => n.blastRadius !== null && Object.values(n.blastRadius).every((v) => Number.isInteger(v) && v >= 0)),
+         'in a self compare every node has a computed summary of non-negative integers');
+  const scrape = nodesAll.find((n) => n.kind === 'scrape_job');
+  assert(scrape?.blastRadius?.slos === 1 && scrape.blastRadius.alerts === 1 && scrape.blastRadius.routes === 2 && scrape.blastRadius.panels === 1 && scrape.blastRadius.dashboards === 1,
+         'the scrape job node reports blinding 1 SLO, 1 alert, 2 routes, 1 panel, 1 dashboard', scrape?.blastRadius);
+  const route = nodesAll.find((n) => n.kind === 'alert_route');
+  assert(route?.blastRadius?.slos === 1 && route.blastRadius.alerts === 1 && route.blastRadius.total === 2,
+         'a route node reports the alert it would leave undelivered and the SLO it would leave unprotected', route?.blastRadius);
+  assert(nodesAll.every((n) => (DEFAULT_WEIGHTS[n.kind] ?? 0.5) === n.weight),
+         'DEFAULT_WEIGHTS in blast-radius.mjs mirrors the graph limb weights on every node kind in the fixture');
+
+  // The important pin: the scored quantities are byte-identical to what the
+  // assertions above already hold, on the same inputs.
+  assert(again.rollup.integrityMean === self.rollup.integrityMean && again.rollup.integrityMean === 1
+           && again.rollup.intact === 1 && again.rollup.declaredTotal === 1 && again.rollup.total === 1,
+         'rollup.integrityMean / intact / declaredTotal unchanged by the additive field', again.rollup);
+  assert(again.branches.every((b) => b.verdict === 'intact' && b.integrity === 1 && b.integrityPct === 100),
+         'branch verdict / integrity unchanged', again.branches.map((b) => [b.verdict, b.integrity]));
+  assert(nodesAll.every((n) => n.status === 'aligned') && again.branches[0].counts.aligned === nodesAll.length
+           && JSON.stringify(again.branches[0].counts) === JSON.stringify(self.branches[0].counts),
+         'every node status in the self compare is aligned and the counts are unchanged', again.branches[0].counts);
+  assert(noDashBranch.verdict === 'intact' && noDashBranch.nodes.some((n) => n.kind === 'panel' && n.status === 'unverifiable')
+           && noMetric.branches[0].nodes.some((n) => n.kind === 'metric' && n.status === 'declared_only')
+           && withMetric.branches[0].nodes.some((n) => n.kind === 'metric' && n.status === 'aligned')
+           && broken.branches[0].verdict === 'broken' && dupSelf.rollup.integrityMean === 1,
+         'the node statuses and verdicts pinned earlier in this suite still hold');
+  const declaredOnlyMetric = noMetric.branches[0].nodes.find((n) => n.kind === 'metric' && n.status === 'declared_only');
+  assert(declaredOnlyMetric?.blastRadius?.slos === 1, 'a declared_only metric carries the SLO it would blind (from the A-graph index)', declaredOnlyMetric?.blastRadius);
+  const brokenAlertless = broken.branches[0].nodes.find((n) => n.kind === 'slo');
+  assert(brokenAlertless?.blastRadius?.alerts === 0 && brokenAlertless.blastRadius.slos === 0, 'an SLO with no alert blinds no alert', brokenAlertless?.blastRadius);
 }
 
 report('traceability graph');
