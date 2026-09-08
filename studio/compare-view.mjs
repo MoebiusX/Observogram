@@ -1745,23 +1745,61 @@ export function renderDiagnosticTraceabilityGraph(graph) {
     broken: 'Broken',
     undeclared: 'Live-only',
   }[status] || status || 'Unknown');
+  // Ladder statuses (additive, unscored): on the wire but not doing its
+  // job, or a vantage that could not look. Never rendered as "missing".
+  const ladderLabelFor = (node) => ({
+    present_unhealthy: 'present but unhealthy',
+    present_stale: 'present but stale',
+    unobserved: `unobserved — ${node.ladder?.detail || 'the vantage could not look'}`,
+  }[node.ladder?.status] || null);
+  // What to show first when a card can only fit five: the readings that
+  // move the verdicts. branch.nodes arrive sorted by scored status alone,
+  // which would push an aligned-but-unhealthy node behind every live-only
+  // one and out of the cap.
+  const LOAD_BEARING_KINDS = new Set(['slo', 'sli', 'recording_rule', 'metric', 'burn_rate']);
+  const evidenceRank = (node) => {
+    const ladderStatus = node.ladder?.status || null;
+    // An unobserved node is declared_only by scored status, but the vantage
+    // could not look: it ranks as unobserved, not as missing.
+    if (ladderStatus === 'unobserved') return 6;
+    if (node.status === 'declared_only' && LOAD_BEARING_KINDS.has(node.kind)) return 0;
+    if (ladderStatus === 'present_unhealthy') return 1;
+    if (ladderStatus === 'present_stale') return 2;
+    if (node.status === 'drifted') return 3;
+    if (node.status === 'declared_only') return 4;
+    if (node.status === 'unverifiable') return 5;
+    if (node.status === 'live_only') return 7;
+    return 8;
+  };
   const evidenceFor = (branch) => {
-    const interesting = (branch.nodes || []).filter((node) =>
-      ['declared_only', 'drifted', 'unverifiable', 'live_only'].includes(node.status)
-    );
+    const interesting = (branch.nodes || [])
+      .filter((node) => ['declared_only', 'drifted', 'unverifiable', 'live_only'].includes(node.status) || ladderLabelFor(node))
+      .map((node, index) => ({ node, index }))
+      .sort((a, b) => (evidenceRank(a.node) - evidenceRank(b.node)) || (a.index - b.index))
+      .map(({ node }) => node);
     if (!interesting.length && branch.missingRoles?.length) {
       return branch.missingRoles.map((role) => `${role.role}: ${role.detail}`).join(' · ');
     }
     if (!interesting.length) return 'all load-bearing nodes aligned';
     return interesting.slice(0, 5).map((node) => {
-      const status = {
+      const base = {
         declared_only: 'missing live',
         drifted: 'drifted',
         unverifiable: 'unverifiable',
         live_only: 'live-only',
       }[node.status] || node.status;
+      // The ladder reading replaces "missing live" / "aligned" (it is the
+      // more honest word for that node) and rides beside the other labels.
+      const ladderLabel = ladderLabelFor(node);
+      const status = !ladderLabel
+        ? base
+        : ['aligned', 'declared_only'].includes(node.status) ? ladderLabel : `${base} · ${ladderLabel}`;
       const fields = node.deltas?.length ? ` (${node.deltas.map(d => d.field).slice(0, 3).join(', ')})` : '';
-      return `${node.kind}: ${node.label} · ${status}${fields}`;
+      // Structural exposure: what WOULD go blind if this declared node is
+      // really gone or wrong live — never a claim that it is blind now.
+      const slos = ['declared_only', 'drifted'].includes(node.status) ? Number(node.blastRadius?.slos) || 0 : 0;
+      const blinds = slos > 0 ? ` · blinds ${slos} SLO${slos === 1 ? '' : 's'}` : '';
+      return `${node.kind}: ${node.label} · ${status}${fields}${blinds}`;
     }).join(' · ') + (interesting.length > 5 ? ` · +${interesting.length - 5}` : '');
   };
   // Requirement-branch reconciliation (item 6): each chain card carries the
@@ -1795,6 +1833,7 @@ export function renderDiagnosticTraceabilityGraph(graph) {
         <span>${escapeHtml(String(branch.integrityPct ?? Math.round((branch.integrity || 0) * 100)))}% integrity</span>
         <span>${escapeHtml(branch.confidence === 'inferred' ? 'inferred edges' : 'declared edges')}</span>
         <span>${escapeHtml(`${branch.counts?.aligned || 0} aligned`)}</span>
+        ${branch.ladderVerdict ? `<span>${escapeHtml(`ladder: ${branch.ladderVerdict}`)}</span>` : ''}
       </div>
       <div class="diag-chain-evidence">${escapeHtml(evidenceFor(branch))}</div>
       ${actions}
@@ -1807,7 +1846,7 @@ export function renderDiagnosticTraceabilityGraph(graph) {
       <header class="diag-section-head">
         <span class="diag-section-num">2B.G</span>
         <span class="diag-section-title">Requirement Chains — SLO/SLI derivation integrity</span>
-        <span class="diag-section-meta">${rollup.intact}/${rollup.declaredTotal} intact · ${escapeHtml(fmtPct(rollup.integrityMean))}</span>
+        <span class="diag-section-meta">${rollup.intact}/${rollup.declaredTotal} intact · ${escapeHtml(fmtPct(rollup.integrityMean))}${rollup.ladder ? escapeHtml(` · ladder ${fmtPct(rollup.ladder.integrityMean)}`) : ''}</span>
       </header>
       <div class="diag-chain-rollup">
         <span class="diag-chain-rollup-cell is-intact"><strong>${rollup.intact}</strong> intact</span>

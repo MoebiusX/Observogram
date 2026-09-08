@@ -10,6 +10,7 @@
       "description": "Error rate is {{ $value | humanizePercentage }} (threshold: 5%)",
       "summary": "High error rate detected"
     },
+    "interval": "15s",
     "health": "ok",
     "lastEvaluation": "2026-06-12T13:16:33.245164177Z",
     "evaluationTime": 0.002521534,
@@ -26,6 +27,7 @@
       "description": "P99 latency is {{ $value | humanizeDuration }} (threshold: 2s)",
       "summary": "High P99 latency detected"
     },
+    "interval": "15s",
     "health": "ok",
     "lastEvaluation": "2026-06-12T13:16:33.247703519Z",
     "evaluationTime": 0.029914935,

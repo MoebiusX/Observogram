@@ -15,6 +15,7 @@ import {
   identityKeyOf,
 } from './artefact-model.mjs';
 import { extractPromqlMetricNames, parsePromqlDependencies } from './promql-lezer.mjs';
+import { blastRadiusIndex } from './blast-radius.mjs';
 
 const LAYER_ORDER = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'];
 
@@ -247,7 +248,17 @@ export function compareBranches(graphA, graphB) {
     .filter((rootKey) => aByRoot.has(rootKey) || !isScaffoldNode(graphB.nodes.get(bByRoot.get(rootKey).rootKey)))
     .sort();
 
-  const branches = rootKeys.map((rootKey) => compareBranch(aByRoot.get(rootKey), bByRoot.get(rootKey), graphB));
+  // Structural exposure per node, computed once per graph: what would go
+  // blind if the node died. Additive beside the scored fields.
+  const radiusA = blastRadiusIndex(graphShape(graphA));
+  const radiusB = blastRadiusIndex(graphShape(graphB));
+
+  // On-wire liveness (mcp.observed.*, the *_unhealthy lists, probe outcomes)
+  // parsed once from the live graph's annotations; feeds the additive
+  // per-node ladder beside the scored status.
+  const liveness = livenessContext(graphB);
+
+  const branches = rootKeys.map((rootKey) => compareBranch(aByRoot.get(rootKey), bByRoot.get(rootKey), graphB, radiusA, radiusB, liveness));
   const declared = branches.filter((branch) => branch.hasA);
   const declaredTotal = declared.length;
   const integrityMean = declaredTotal
@@ -264,6 +275,10 @@ export function compareBranches(graphA, graphB) {
     integrityMean,
     integrityPct: Math.round(integrityMean * 100),
   };
+  // Additive ladder rollup over the same declared branches. integrityMean
+  // and the intact/partial/broken/undeclared counts above are the scored
+  // quantities and stay exactly as they were.
+  rollup.ladder = ladderRollup(declared);
 
   return { branches, rollup };
 }
@@ -274,7 +289,23 @@ export function comparePackBranches(packA, packB) {
   return compareBranches(graphA, graphB);
 }
 
-function compareBranch(branchA, branchB, liveGraph) {
+// The plain, artefact-free projection of a graph that the zero-import
+// blast-radius module consumes: `{ nodes: [...], edges: [...] }`.
+export function graphShape(graph) {
+  const nodes = [...(graph?.nodes?.values() || [])].map((node) => ({
+    key: node.key,
+    identityKey: node.identityKey,
+    kind: node.kind,
+    layer: node.layer || null,
+    label: labelOf(node),
+    virtual: !!node.virtual,
+    scaffold: isScaffoldNode(node),
+  }));
+  const edges = (graph?.edges || []).map(({ key, from, to, type, provenance }) => ({ key, from, to, type, provenance }));
+  return { nodes, edges };
+}
+
+function compareBranch(branchA, branchB, liveGraph, radiusA = new Map(), radiusB = new Map(), liveness = livenessContext(liveGraph)) {
   if (!branchA && !branchB) throw new Error('compareBranch: at least one branch required');
 
   if (!branchA) {
@@ -289,11 +320,15 @@ function compareBranch(branchA, branchB, liveGraph) {
       verdict: 'undeclared',
       integrity: 0,
       integrityPct: 0,
+      // The ladder mirrors the scored fields on an undeclared branch.
+      ladderVerdict: 'undeclared',
+      ladderIntegrity: 0,
+      ladderIntegrityPct: 0,
       confidence: branchConfidence(branchB),
       edgeProvenance: branchB.edgeProvenance,
       missingRoles: [],
       counts: { aligned: 0, drifted: 0, declaredOnly: 0, liveOnly: liveNodes.length, unverifiable: 0 },
-      nodes: liveNodes.map((node) => nodeVerdict('live_only', null, node)),
+      nodes: liveNodes.map((node) => nodeVerdict('live_only', null, node, [], radiusFor(radiusB, node), ladderFor('live_only', null, node, liveness))),
     };
   }
 
@@ -301,6 +336,10 @@ function compareBranch(branchA, branchB, liveGraph) {
   const usedB = new Set();
   let achieved = 0;
   let possible = 0;
+  // Ladder accounting: same weights, kept beside the scored pair above and
+  // never folded into it (docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md).
+  let ladderAchieved = 0;
+  let ladderPossible = 0;
 
   const aGroups = groupBranchNodes(branchA.nodes);
   const bGroups = groupBranchNodes(branchB?.nodes || []);
@@ -323,11 +362,13 @@ function compareBranch(branchA, branchB, liveGraph) {
       const [{ node: bNode }] = exactB.splice(bi, 1);
       usedA.add(ai);
       usedB.add(bNode.key);
-      const verdict = nodeVerdict('aligned', aNodes[ai], bNode);
+      const verdict = nodeVerdict('aligned', aNodes[ai], bNode, [], radiusFor(radiusA, aNodes[ai]), ladderFor('aligned', aNodes[ai], bNode, liveness));
       nodeVerdicts.push(verdict);
       const w = nodeWeight(aNodes[ai]);
       possible += w;
       achieved += w;
+      ladderPossible += w;
+      ladderAchieved += w * ladderCredit(verdict.ladder);
     }
 
     const remainingA = aNodes
@@ -348,18 +389,29 @@ function compareBranch(branchA, branchB, liveGraph) {
       }
       const [bNode] = remainingB.splice(best, 1);
       usedB.add(bNode.key);
-      const verdict = nodeVerdict('drifted', aNode, bNode, bestDeltas);
+      const verdict = nodeVerdict('drifted', aNode, bNode, bestDeltas, radiusFor(radiusA, aNode), ladderFor('drifted', aNode, bNode, liveness));
       nodeVerdicts.push(verdict);
       const w = nodeWeight(aNode);
       possible += w;
       achieved += w * driftCredit(bestDeltas);
+      ladderPossible += w;
+      // A drifted node keeps its drift credit unless the wire says it is
+      // not doing its job either — then it earns no more than that.
+      ladderAchieved += w * Math.min(driftCredit(bestDeltas), ladderCredit(verdict.ladder));
     }
 
     for (const { node: aNode } of remainingA) {
       const verifiable = canVerifyKind(aNode.kind, liveGraph);
       const status = verifiable ? 'declared_only' : 'unverifiable';
-      nodeVerdicts.push(nodeVerdict(status, aNode, null));
+      const verdict = nodeVerdict(status, aNode, null, [], radiusFor(radiusA, aNode), ladderFor(status, aNode, null, liveness));
+      nodeVerdicts.push(verdict);
       if (verifiable) possible += nodeWeight(aNode);
+      // A node the vantage could not look for leaves the ladder denominator,
+      // exactly as an unverifiable kind leaves both.
+      if (verifiable && verdict.ladder.rung !== 'unobserved') {
+        ladderPossible += nodeWeight(aNode);
+        ladderAchieved += nodeWeight(aNode) * ladderCredit(verdict.ladder);
+      }
     }
   }
 
@@ -368,14 +420,16 @@ function compareBranch(branchA, branchB, liveGraph) {
     if (aGroups.has(bNode.identityKey)) continue;
     if (isLiveOnlyInferredMetric(bNode, liveGraph)) continue;
     if (isScaffoldNode(bNode)) continue;
-    nodeVerdicts.push(nodeVerdict('live_only', null, bNode));
+    nodeVerdicts.push(nodeVerdict('live_only', null, bNode, [], radiusFor(radiusB, bNode), ladderFor('live_only', null, bNode, liveness)));
   }
 
   for (const missing of branchA.missingRoles || []) {
     possible += missing.weight;
+    ladderPossible += missing.weight;
   }
 
   const integrity = possible === 0 ? 1 : round(achieved / possible, 4);
+  const ladderIntegrity = ladderPossible === 0 ? 1 : round(ladderAchieved / ladderPossible, 4);
   const counts = {
     aligned: nodeVerdicts.filter((node) => node.status === 'aligned').length,
     drifted: nodeVerdicts.filter((node) => node.status === 'drifted').length,
@@ -393,6 +447,7 @@ function compareBranch(branchA, branchB, liveGraph) {
     : counts.drifted > 0
       ? 'partial'
       : 'intact';
+  const ladderVerdict = branchLadderVerdict(nodeVerdicts, counts, hasMissingLoadBearingRole);
 
   return {
     rootKey: branchA.rootIdentityKey,
@@ -403,6 +458,9 @@ function compareBranch(branchA, branchB, liveGraph) {
     verdict,
     integrity,
     integrityPct: Math.round(integrity * 100),
+    ladderVerdict,
+    ladderIntegrity,
+    ladderIntegrityPct: Math.round(ladderIntegrity * 100),
     confidence: branchConfidence(branchA, branchB),
     edgeProvenance: combineProvenance(branchA.edgeProvenance, branchB?.edgeProvenance),
     missingRoles: branchA.missingRoles || [],
@@ -410,6 +468,7 @@ function compareBranch(branchA, branchB, liveGraph) {
     nodes: nodeVerdicts.sort((a, b) => `${statusRank(a.status)}:${a.kind}:${a.label}`.localeCompare(`${statusRank(b.status)}:${b.kind}:${b.label}`)),
   };
 }
+
 
 function flattenLayerArtefacts(pack) {
   const layers = pack?.layers || {};
@@ -691,7 +750,7 @@ function groupBranchNodes(nodes) {
   return out;
 }
 
-function nodeVerdict(status, aNode, bNode, deltas = []) {
+function nodeVerdict(status, aNode, bNode, deltas = [], blastRadius = null, ladder = null) {
   const node = aNode || bNode;
   return {
     status,
@@ -704,7 +763,19 @@ function nodeVerdict(status, aNode, bNode, deltas = []) {
     bId: bNode?.artefact?.id || null,
     virtual: !!(aNode?.virtual || bNode?.virtual),
     deltas,
+    // Structural exposure (blast-radius.mjs summary): what would go blind if
+    // this node died. null when the graph index has no entry for it.
+    blastRadius,
+    // On-wire liveness rung beside the scored status (see ladderFor): is the
+    // artefact merely present, or doing its job — or could the vantage not
+    // look at all. Unscored; null only when no ladder was computed.
+    ladder,
   };
+}
+
+
+function radiusFor(index, node) {
+  return index?.get(node?.key) ?? null;
 }
 
 function nodeWeight(node) {
@@ -752,6 +823,499 @@ function isLiveOnlyInferredMetric(node, liveGraph) {
 function hasMcpSource(graph) {
   const ann = graph?.meta?.annotations || {};
   return Object.keys(ann).some((key) => key.startsWith('mcp.'));
+}
+
+// ---------------------------------------------------------------------------
+// Per-node ladder (additive, unscored).
+//
+// The scored status answers "is the declared artefact in Pack B?". The
+// ladder answers the finer monitor-of-monitors question from what the live
+// fetcher wrote into Pack B's annotations — mcp.observed.* entries, the
+// mcp.discovered.*_unhealthy / scrape_jobs_down lists, mcp.probesFailed and
+// mcp.probesUnsupported, mcp.refreshedAt as "now":
+//
+//   unobserved < absent < exists < alive < healthy
+//
+// `present_unhealthy` and `present_stale` keep rung `exists`: the artefact
+// is on the wire, it is just not doing its job. `unobserved` means the
+// vantage could not look (probe family failed or not exposed) — never
+// "absent". Nothing here touches integrity / verdict / counts / status.
+// ---------------------------------------------------------------------------
+
+// Probe family whose answer would carry the kind. sli/slo are inferred from
+// EITHER recording rules or the metric inventory, so they are unobserved
+// only when both families are gone. Backends are not in this table: the
+// fetcher runs its version probes outside the probe cascade, so they never
+// appear in mcp.probesFailed / mcp.probesUnsupported — a backend's
+// aliveness is read from mcp.versions.<product> instead.
+const PROBE_FAMILIES_BY_KIND = {
+  scrape_job: ['scrape_configs'],
+  recording_rule: ['recording_rules'],
+  burn_rate: ['alert_rules'],
+  metric: ['metric_names'],
+  sli: ['recording_rules', 'metric_names'],
+  slo: ['recording_rules', 'metric_names'],
+  panel: ['dashboards'],
+  dashboard: ['dashboards'],
+};
+
+// The compiler names every burn-rate alerting rule
+// `<slo>_burn_<factor>x_<short>_<long>` (compile.mjs; a fractional factor's
+// `.` is squashed to `_`, so 14.4 reads `_burn_14_4x_`) and stamps the
+// linkage labels { slo, burn_rate, window_short, window_long } on it. The
+// live POL-* artefact carries only { slo, windows } — no rule names — so a
+// burn_rate node is linked to the observed alert rules by those labels
+// first (the fetcher carries them on the observation entry) and by the name
+// convention second, narrowed to the declared (factor, short, long) windows
+// when any rule matches one.
+const BURN_ALERT_NAME_RE = /^(.+)_burn_(\d+(?:_\d+)?)x_([0-9a-z]+)_([0-9a-z]+)$/;
+
+const DURATION_RE = /^(\d+(?:\.\d+)?(?:ms|s|m|h|d|w))+$/;
+const DURATION_PART_RE = /(\d+(?:\.\d+)?)(ms|s|m|h|d|w)/g;
+const DURATION_UNIT_SECONDS = { ms: 1e-3, s: 1, m: 60, h: 3600, d: 86400, w: 604800 };
+// A timestamp older than this many intervals reads present_stale.
+const STALE_INTERVALS = 2;
+// Without an interval to measure against, a timestamp older than this
+// reads present_stale; a younger one reads alive / healthy with the
+// ceiling named in the detail (a rule last evaluated days ago must not
+// read healthy just because its group interval is not on the wire).
+const STALE_CEILING_MS = 60 * 60 * 1000;
+const STALE_CEILING_TEXT = '1 h';
+// A timestamp this far past "now" is clock skew and caps the rung at
+// alive; sub-second negatives are ISO rounding and clamp to 0.
+const FUTURE_GRACE_MS = 1000;
+// Names shown inline before the list is elided.
+const DETAIL_NAME_CAP = 5;
+
+// Probe family whose observation instant is "now" for the kind's freshness.
+const OBSERVATION_FAMILY_BY_KIND = {
+  scrape_job: 'scrape_configs',
+  recording_rule: 'recording_rules',
+  burn_rate: 'alert_rules',
+};
+
+function livenessContext(liveGraph) {
+  const ann = liveGraph?.meta?.annotations || {};
+  const text = (key) => (typeof ann[key] === 'string' && ann[key] ? ann[key] : null);
+  return {
+    onWire: hasMcpSource(liveGraph),
+    refreshedAt: parseTimestamp(ann['mcp.refreshedAt']),
+    // The fetcher's own clock (tools/fetch-live-pack.mjs): when the fetch
+    // began and when each probe family answered. Older packs carry neither.
+    fetchStartedAt: parseTimestamp(ann['mcp.fetchStartedAt']),
+    observedAt: (family) => parseTimestamp(ann[`mcp.observedAt.${family}`]),
+    // A real (non-scaffold, non-virtual) node of the same identity in Pack
+    // B: the artefact IS in Pack B, just rooted under another chain.
+    liveTwin: (node) => [...(liveGraph?.byIdentity?.get(node?.identityKey) || [])]
+      .map((key) => liveGraph.nodes.get(key))
+      .some((twin) => twin && !twin.virtual && !isScaffoldNode(twin)),
+    scrapeTargets: annotationArray(ann['mcp.observed.scrape_targets']),
+    recordingRules: annotationArray(ann['mcp.observed.recording_rules']),
+    alertRules: annotationArray(ann['mcp.observed.alert_rules']),
+    scrapeJobsDown: annotationSet(ann['mcp.discovered.scrape_jobs_down']),
+    recordingRulesUnhealthy: annotationSet(ann['mcp.discovered.recording_rules_unhealthy']),
+    alertRulesUnhealthy: annotationSet(ann['mcp.discovered.alert_rules_unhealthy']),
+    slisUnhealthy: annotationSet(ann['mcp.discovered.slis_unhealthy']),
+    probesFailed: annotationSet(ann['mcp.probesFailed']),
+    probesUnsupported: annotationSet(ann['mcp.probesUnsupported']),
+    probesSucceeded: annotationSet(ann['mcp.probesSucceeded']),
+    probesEmpty: annotationSet(ann['mcp.probesEmpty']),
+    probeError: (family) => text(`mcp.probeErrors.${family}`),
+    version: (product) => text(`mcp.versions.${product}`),
+    // Names the MCP metric inventory attested (non-virtual METRIC-* nodes):
+    // a declared metric can be in Pack B yet outside a branch whose
+    // producing rule is gone — on the wire, not absent.
+    liveMetrics: new Set([...(liveGraph?.byKind?.get('metric') || [])]
+      .map((key) => liveGraph.nodes.get(key))
+      .filter((node) => node && !node.virtual)
+      .map((node) => metricName(node))),
+  };
+}
+
+function metricName(node) {
+  return String(node?.artefact?.spec?.name || labelOf(node) || '');
+}
+
+function ladder(rung, status, detail) {
+  return { rung, status, detail };
+}
+
+function ladderFor(status, aNode, bNode, liveness) {
+  if (status === 'unverifiable') return ladder('unobserved', null, 'not live-introspectable from any MCP vantage');
+  if (status === 'declared_only') return declaredOnlyLadder(aNode, liveness);
+  // aligned / drifted / live_only: the artefact is in Pack B — read its
+  // spec against what the wire reported about it (A fills a missing
+  // interval so freshness can still be judged).
+  return presentLadder(bNode, aNode, liveness);
+}
+
+function declaredOnlyLadder(aNode, liveness) {
+  if (!liveness.onWire) return ladder('absent', null, 'absent from Pack B (file-sourced; no on-wire liveness to consult)');
+  // Same identity in Pack B under another chain (the live pack rooted it
+  // elsewhere, so it is unpaired here): in Pack B, never "withheld".
+  const twin = liveness.liveTwin(aNode);
+  const observed = observationFor(aNode, null, liveness);
+  if (observed && (observed.found || observed.listed)) {
+    const present = presentLadder(aNode, null, liveness);
+    // Without a twin the fetcher withheld an artefact it DID observe from
+    // Pack B — a scrape job whose every target is down lands only in
+    // mcp.discovered.scrape_jobs_down. On the wire beats absent.
+    const where = twin ? 'on the wire and in Pack B under another chain' : 'on the wire but withheld from Pack B';
+    return ladder(present.rung, present.status, `${where}: ${present.detail}`);
+  }
+  // A metric the inventory attested is in Pack B; it fell out of THIS
+  // branch because the rule that sourced it is gone (its own rung says so).
+  if (aNode?.kind === 'metric' && liveness.liveMetrics.has(metricName(aNode))) {
+    return ladder('exists', null, 'in the live metric inventory, but not reachable from this branch in Pack B');
+  }
+  if (twin) return ladder('exists', null, 'in Pack B under another chain; not reachable from this branch');
+  const families = PROBE_FAMILIES_BY_KIND[aNode?.kind] || [];
+  const blind = families.filter((family) => liveness.probesFailed.has(family) || liveness.probesUnsupported.has(family));
+  if (families.length && blind.length === families.length) {
+    return ladder('unobserved', 'unobserved', blind.map((family) => probeFamilyDetail(family, liveness)).join('; '));
+  }
+  const answered = families.filter((family) => !blind.includes(family));
+  if (!answered.length) return ladder('absent', null, 'absent from Pack B');
+  const outcome = answered.every((family) => liveness.probesSucceeded.has(family) || liveness.probesEmpty.has(family))
+    ? 'answered without it'
+    : 'is not reported failed or unsupported';
+  return ladder('absent', null, `absent from Pack B; probe family ${answered.join(' / ')} ${outcome}`);
+}
+
+function probeFamilyDetail(family, liveness) {
+  if (liveness.probesFailed.has(family)) {
+    const error = liveness.probeError(family);
+    return `probe family ${family} failed${error ? ` (${error})` : ''}`;
+  }
+  return `probe family ${family} not exposed by this MCP tier`;
+}
+
+function presentLadder(node, fallbackNode, liveness) {
+  if (!liveness.onWire) return ladder('exists', null, 'no on-wire liveness (Pack B is not a live draft)');
+  const kind = node?.kind;
+  const spec = node?.artefact?.spec || {};
+  if (kind === 'sli') {
+    return liveness.slisUnhealthy.has(String(spec.id || ''))
+      ? ladder('exists', 'present_unhealthy', 'listed in mcp.discovered.slis_unhealthy: a recording rule feeding it is not evaluating')
+      : ladder('exists', null, 'liveness rides on its recording rules');
+  }
+  if (kind === 'slo') return ladder('exists', null, 'declaration; liveness rides on its SLI and alerts');
+  if (kind === 'backend') {
+    const product = compact(spec.product);
+    const version = product ? liveness.version(product) : null;
+    return version
+      ? ladder('alive', null, `mcp.versions.${product} = ${version}: the backend answered its version probe`)
+      : ladder('exists', null, 'no liveness field on the wire for this kind');
+  }
+  const observed = observationFor(node, fallbackNode, liveness);
+  if (!observed) return ladder('exists', null, 'no liveness field on the wire for this kind');
+  if (!observed.found) {
+    return observed.listed
+      ? ladder('exists', 'present_unhealthy', `${observed.name} ${observed.listedDetail}`)
+      : ladder('exists', null, `no ${observed.what} observation on the wire for ${observed.name}`);
+  }
+  const error = observed.errors[0] || null;
+  if (observed.listed || observed.healthy === false || error) {
+    const parts = [];
+    if (observed.healthy === false) parts.push(observed.unhealthyDetail);
+    else if (observed.listed) parts.push(observed.listedDetail);
+    if (error) parts.push(`lastError "${error}"`);
+    return ladder('exists', 'present_unhealthy', parts.join(', '));
+  }
+  // "Now" is the instant this observation's probe family answered; the
+  // caller's mcp.refreshedAt is the last resort and is named when used.
+  const now = observationNow(kind, liveness);
+  const age = observed.at != null && now.at != null ? now.at - observed.at : null;
+  const interval = observed.intervalSec;
+  const nowNote = now.fallback ? ` (now = ${now.fallback}; no mcp.observedAt on the wire)` : '';
+  // Health lead of an alive / healthy detail: the up count, or the down
+  // targets of a partially scraping job, or nothing reported.
+  const lead = observed.healthy === true ? observed.healthyDetail : observed.partialDetail || 'health not reported';
+  const sep = observed.healthy !== true && observed.partialDetail ? '; ' : ', ';
+  if (age != null && age < -FUTURE_GRACE_MS) {
+    return ladder('alive', null, `${lead}${sep}timestamp ${Math.round(-age / 1000)}s in the future (clock skew); freshness not judged${nowNote}`);
+  }
+  if (age != null && interval != null && age > STALE_INTERVALS * interval * 1000) {
+    return ladder('exists', 'present_stale', `${observed.timeField} ${formatAge(age)} ago > ${STALE_INTERVALS}× interval ${observed.intervalText}${nowNote}`);
+  }
+  if (age != null && interval == null && age > STALE_CEILING_MS) {
+    return ladder('exists', 'present_stale', `${observed.timeField} ${formatAge(age)} ago; interval unknown; older than the ${STALE_CEILING_TEXT} ceiling${nowNote}`);
+  }
+  const freshness = age != null && interval != null
+    ? `${observed.timeField} ${formatAge(age)} ago ≤ ${STALE_INTERVALS}× interval ${observed.intervalText}${nowNote}`
+    : age != null
+      ? `${observed.timeField} ${formatAge(age)} ago; interval unknown; ${STALE_CEILING_TEXT} ceiling applied${nowNote}`
+      : observed.at == null
+        ? `no ${observed.timeField} on the wire; staleness not judged`
+        : 'no fetch timestamp on the wire (mcp.refreshedAt missing); staleness not judged';
+  if (observed.healthy === true) return ladder('healthy', null, `${lead}, ${freshness}`);
+  return ladder('alive', null, `${lead}${sep}${freshness}`);
+}
+
+// "Now" for a freshness judgement: the instant the kind's probe family
+// answered, else the instant the fetch began, else the caller's
+// mcp.refreshedAt (older packs) — which server and journey stamp after the
+// fetch returns, so it can trail every observation by the whole fetch; the
+// detail names it when it is all there is.
+function observationNow(kind, liveness) {
+  const family = OBSERVATION_FAMILY_BY_KIND[kind];
+  const observed = family ? liveness.observedAt(family) : null;
+  if (observed != null) return { at: observed, fallback: null };
+  if (liveness.fetchStartedAt != null) return { at: liveness.fetchStartedAt, fallback: null };
+  if (liveness.refreshedAt != null) return { at: liveness.refreshedAt, fallback: 'mcp.refreshedAt' };
+  return { at: null, fallback: null };
+}
+
+// What the wire says about one node, or null when the kind has no liveness
+// field on the wire at all.
+function observationFor(node, fallbackNode, liveness) {
+  const kind = node?.kind;
+  const spec = node?.artefact?.spec || {};
+  const fallbackSpec = fallbackNode?.artefact?.spec || {};
+  if (kind === 'scrape_job') {
+    const job = String(spec.job || fallbackSpec.job || '');
+    const targets = liveness.scrapeTargets.filter((target) => String(target?.job || '') === job);
+    const down = targets.filter((target) => targetHealth(target?.health) === 'down');
+    const up = targets.filter((target) => targetHealth(target?.health) === 'up').length;
+    // The fetcher's own rule (scrapeJobDown): a job is down only when EVERY
+    // target is; a job with some targets down is still scraping.
+    const allDown = targets.length > 0 && down.length === targets.length;
+    const plural = targets.length === 1 ? '' : 's';
+    const listed = liveness.scrapeJobsDown.has(job);
+    return {
+      what: 'scrape target',
+      name: `job ${job}`,
+      listed,
+      listedDetail: 'listed in mcp.discovered.scrape_jobs_down',
+      found: targets.length > 0,
+      healthy: !targets.length ? null : allDown ? false : up === targets.length ? true : null,
+      unhealthyDetail: `health down on ${down.length}/${targets.length} target${plural}`,
+      healthyDetail: `health up on ${up}/${targets.length} target${plural}`,
+      partialDetail: down.length && !allDown
+        ? `${down.length}/${targets.length} targets down: ${nameList(down.map((target) => String(target?.instance || '?')))}`
+        : null,
+      // While a target is up, a lastError belongs to the down target the
+      // partial detail names, not to the job.
+      errors: up > 0 ? [] : targets.map((target) => target?.lastError).filter(Boolean).map(String),
+      at: latestTimestamp(targets.map((target) => target?.lastScrape)),
+      timeField: 'lastScrape',
+      ...intervalOf(spec.interval ?? fallbackSpec.interval),
+    };
+  }
+  if (kind === 'recording_rule') {
+    const name = String(spec.name || fallbackSpec.name || '');
+    const rules = liveness.recordingRules.filter((rule) => String(rule?.name || '') === name);
+    const listed = liveness.recordingRulesUnhealthy.has(name) ? [name] : [];
+    return ruleObservation(rules, `rule ${name}`, listed, 'mcp.discovered.recording_rules_unhealthy',
+      spec.interval ?? fallbackSpec.interval, false);
+  }
+  if (kind === 'burn_rate') {
+    const link = burnLink(spec.slo ?? fallbackSpec.slo, spec.windows ?? fallbackSpec.windows, liveness);
+    // The POL-* spec has no interval; the alert group's (carried on the
+    // observation entry by the fetcher) is the yardstick, else the ceiling.
+    return ruleObservation(link.rules, `alert rules of slo ${link.sloId}`, link.listedNames,
+      'mcp.discovered.alert_rules_unhealthy', link.interval, true);
+  }
+  return null;
+}
+
+// `listedNames` are the entries of `list` that name this node; `nameRules`
+// puts rule names in the details where the node's own name does not
+// already carry them (a burn_rate node links several rules).
+function ruleObservation(rules, name, listedNames, list, interval, nameRules) {
+  const healths = rules.map((rule) => ruleHealth(rule?.health));
+  const bad = rules.filter((rule) => ruleHealth(rule?.health) === false);
+  const firstBad = bad[0]?.health;
+  const badNames = nameRules && bad.length ? ` (${nameList(bad.map((rule) => String(rule?.name || '')))})` : '';
+  return {
+    what: 'rule',
+    name,
+    listed: listedNames.length > 0,
+    listedDetail: `listed in ${list}${nameRules && listedNames.length ? ` (${nameList(listedNames)})` : ''}`,
+    found: rules.length > 0,
+    healthy: !rules.length ? null : bad.length ? false : healths.every((health) => health === true) ? true : null,
+    unhealthyDetail: `health ${String(firstBad ?? '').trim().toLowerCase() || 'not ok'}${rules.length > 1 ? ` on ${bad.length}/${rules.length} rules` : ''}${badNames}`,
+    healthyDetail: rules.length > 1 ? `health ok on ${rules.length}/${rules.length} rules` : 'health ok',
+    partialDetail: null,
+    errors: rules.map((rule) => rule?.lastError).filter(Boolean).map(String),
+    at: latestTimestamp(rules.map((rule) => rule?.lastEvaluation)),
+    timeField: 'lastEvaluation',
+    ...intervalOf(interval),
+  };
+}
+
+// Links a declared burn_rate node to the observed alerting rules of its SLO
+// — by the compiler's linkage labels on the observation entry first, by the
+// rule name second — narrowed to the declared windows when any rule matches
+// one, else every rule of the SLO (a live pack that re-shaped the windows
+// still links). The unhealthy list carries names only, so it is narrowed
+// the same way: a linked rule's name (label-linked rules need not follow
+// the name convention), or a name that parses to this SLO and — when any
+// observed rule or listed name matches a declared window — to one of them.
+// The interval is the longest group interval the linked rules carry.
+function burnLink(sloRef, windows, liveness) {
+  const sloId = burnSlug(normalizeRef(sloRef, 'slos').replace(/^slos\./, ''));
+  const declared = new Set((Array.isArray(windows) ? windows : []).map((w) => burnWindowKey(w?.factor, w?.short, w?.long)));
+  const ofSlo = (burn) => !!burn && !!sloId && burn.slo === sloId;
+  const inDeclared = (burn) => declared.has(burnWindowKey(burn.factor, burn.short, burn.long));
+  const parsed = liveness.alertRules
+    .map((rule) => ({ rule, burn: parseBurnObservation(rule) }))
+    .filter(({ burn }) => ofSlo(burn));
+  const narrowed = parsed.filter(({ burn }) => inDeclared(burn));
+  const linked = narrowed.length ? narrowed : parsed;
+  const linkedNames = new Set(linked.map(({ rule }) => String(rule?.name || '')));
+  const listedOfSlo = [...liveness.alertRulesUnhealthy]
+    .map((name) => ({ name, burn: parseBurnAlertName(name) }))
+    .filter(({ name, burn }) => linkedNames.has(name) || ofSlo(burn));
+  const narrow = narrowed.length > 0 || listedOfSlo.some(({ burn }) => burn && inDeclared(burn));
+  const listedNames = listedOfSlo
+    .filter(({ name, burn }) => linkedNames.has(name) || !narrow || inDeclared(burn))
+    .map(({ name }) => name);
+  let interval = null;
+  for (const { rule } of linked) {
+    const seconds = durationSeconds(rule?.interval);
+    if (seconds != null && (interval == null || seconds > durationSeconds(interval))) interval = rule.interval;
+  }
+  return { sloId, rules: linked.map(({ rule }) => rule), listedNames, interval };
+}
+
+// The burn window an observed alerting rule serves: from the linkage
+// labels when the entry carries all four, else from the rule name.
+function parseBurnObservation(rule) {
+  const labels = rule?.labels && typeof rule.labels === 'object' ? rule.labels : null;
+  if (labels && labels.slo && labels.burn_rate && labels.window_short && labels.window_long) {
+    const factor = Number(labels.burn_rate);
+    if (Number.isFinite(factor)) {
+      return {
+        slo: burnSlug(normalizeRef(String(labels.slo), 'slos').replace(/^slos\./, '')),
+        factor,
+        short: String(labels.window_short).toLowerCase(),
+        long: String(labels.window_long).toLowerCase(),
+      };
+    }
+  }
+  return parseBurnAlertName(rule?.name);
+}
+
+function parseBurnAlertName(name) {
+  const match = BURN_ALERT_NAME_RE.exec(String(name || ''));
+  if (!match) return null;
+  return { slo: burnSlug(match[1]), factor: Number(match[2].replace('_', '.')), short: match[3], long: match[4] };
+}
+
+// One key per (factor, short, long) in the name convention's alphabet, so a
+// declared 14.4, a label "14.4" and a name `14_4x` all meet.
+function burnWindowKey(factor, short, long) {
+  return `${String(Number(factor)).replace('.', '_')}x_${String(short || '').toLowerCase()}_${String(long || '').toLowerCase()}`;
+}
+
+function nameList(names) {
+  const shown = names.slice(0, DETAIL_NAME_CAP).join(', ');
+  return names.length > DETAIL_NAME_CAP ? `${shown} +${names.length - DETAIL_NAME_CAP}` : shown;
+}
+
+// compile.mjs squashes every non-word character of the alert name to `_`,
+// so an SLO id with dashes must be compared in the same alphabet.
+function burnSlug(id) {
+  return String(id || '').toLowerCase().replace(/[^a-z0-9_]/g, '_');
+}
+
+// Prometheus target health 'up' | 'down'; anything else is no evidence.
+function targetHealth(value) {
+  const s = String(value ?? '').trim().toLowerCase();
+  return s === 'up' || s === 'down' ? s : null;
+}
+
+// Ruler health: true (ok), false (reported and not ok), null (not reported).
+function ruleHealth(value) {
+  if (value == null || value === '') return null;
+  return String(value).trim().toLowerCase() === 'ok';
+}
+
+function intervalOf(value) {
+  const intervalSec = durationSeconds(value);
+  return {
+    intervalSec,
+    intervalText: intervalSec == null ? null : typeof value === 'number' ? `${value}s` : String(value).trim(),
+  };
+}
+
+// '10s', '1m', '5m', '1h', '1h30m', a plain number or numeric string
+// (seconds — the fetcher's normInterval already renders those as strings).
+function durationSeconds(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : null;
+  const s = String(value).trim();
+  if (/^\d+(\.\d+)?$/.test(s)) return Number(s) > 0 ? Number(s) : null;
+  if (!DURATION_RE.test(s)) return null;
+  let total = 0;
+  for (const match of s.matchAll(DURATION_PART_RE)) total += parseFloat(match[1]) * DURATION_UNIT_SECONDS[match[2]];
+  return total > 0 ? total : null;
+}
+
+function parseTimestamp(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? (value > 1e12 ? value : value * 1000) : null;
+  const t = Date.parse(String(value));
+  return Number.isFinite(t) ? t : null;
+}
+
+function latestTimestamp(values) {
+  const times = values.map(parseTimestamp).filter((t) => t != null);
+  return times.length ? Math.max(...times) : null;
+}
+
+function formatAge(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.round(s / 60)}m`;
+  if (s < 86400) return `${Math.round(s / 3600)}h`;
+  return `${Math.round(s / 86400)}d`;
+}
+
+function annotationArray(value) {
+  let parsed = value;
+  if (typeof value === 'string') {
+    try { parsed = JSON.parse(value); } catch { return []; }
+  }
+  return Array.isArray(parsed) ? parsed.filter((entry) => entry && typeof entry === 'object') : [];
+}
+
+function annotationSet(value) {
+  const list = Array.isArray(value) ? value : String(value ?? '').split(',');
+  return new Set(list.map((entry) => String(entry).trim()).filter(Boolean));
+}
+
+function ladderCredit(ladder) {
+  if (!ladder) return 1;
+  if (ladder.status === 'present_unhealthy' || ladder.status === 'present_stale') return 0.25;
+  if (ladder.rung === 'absent' || ladder.rung === 'unobserved') return 0;
+  return 1;
+}
+
+function branchLadderVerdict(nodeVerdicts, counts, hasMissingLoadBearingRole) {
+  // live_only nodes are inventory the declaration never claimed: they move
+  // neither the scored verdict nor this one (nor ladderIntegrity).
+  const loadBearing = nodeVerdicts.filter((node) => node.status !== 'live_only' && isLoadBearingKind(node.kind));
+  if (hasMissingLoadBearingRole || loadBearing.some((node) => node.ladder?.rung === 'absent')) return 'broken';
+  if (counts.drifted > 0 || loadBearing.some((node) => node.ladder?.status === 'present_unhealthy' || node.ladder?.status === 'present_stale')) return 'degraded';
+  if (loadBearing.some((node) => node.ladder?.status === 'unobserved')) return 'unobserved';
+  return 'healthy';
+}
+
+function ladderRollup(declared) {
+  const count = (verdict) => declared.filter((branch) => branch.ladderVerdict === verdict).length;
+  const integrityMean = declared.length
+    ? round(declared.reduce((sum, branch) => sum + branch.ladderIntegrity, 0) / declared.length, 4)
+    : 1;
+  return {
+    healthy: count('healthy'),
+    degraded: count('degraded'),
+    broken: count('broken'),
+    unobserved: count('unobserved'),
+    integrityMean,
+    integrityPct: Math.round(integrityMean * 100),
+  };
 }
 
 function driftCredit(deltas) {
