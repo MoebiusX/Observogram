@@ -49,7 +49,7 @@ recording that drops it.
 
 | Fixture | Tool | Capabilities | Kind | Recorded / written |
 |---|---|---|---|---|
-| `vmalert_rules.json` | `vmalert_rules` | recording_rules + alert_rules | recording | 2026-09-08, Krystaline otel-mcp-server **authenticated tier** (VictoriaMetrics + vmalert); nothing scrubbed — annotations carry only public runbook URLs |
+| `vmalert_rules.json` | `vmalert_rules` | recording_rules + alert_rules | recording | 2026-09-08, Krystaline otel-mcp-server **authenticated tier** (VictoriaMetrics + vmalert); nothing scrubbed — the annotations carry rule descriptions and runbook URLs into the (private) krystalinex-core repo: references, not credentials, and the identical payload the credential-less public tier serves to any caller |
 | `metrics_alerts.empty.json` | `metrics_alerts` | the legitimate-empty case (`{groups: []}` — the real VM-ruler response that motivated the cascade order) | recording | 2026-06-12 |
 | `grafana_dashboards_search.json` | `grafana_dashboards_search` | dashboards | recording | 2026-06-12 |
 | `metrics_targets.json` | `metrics_targets` | scrape_configs | recording | 2026-06-12 (`alertmanager` target `down` with its `lastError`) — kept on purpose; the 2026-09-08 authenticated-tier recording has every target `up` |
