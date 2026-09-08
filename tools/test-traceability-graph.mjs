@@ -341,13 +341,24 @@ process.stdout.write('\n--- per-node ladder rides along, scoring untouched ---\n
   const NODE_KEYS = 'status,key,kind,layer,label,weight,aId,bId,virtual,deltas,blastRadius,ladder';
   const LADDER_ROLLUP_KEYS = 'healthy,degraded,broken,unobserved,integrityMean,integrityPct';
   // A live Pack B the way the fetcher annotates one: every probe family
-  // answered, the one target up, the rule and both burn alerts evaluating.
+  // answered (and stamped when), the one target up, the rule and both burn
+  // alerts evaluating. The observation instants equal refreshedAt here so
+  // ages read the same whichever "now" the ladder picks.
+  const OBSERVED_AT = {
+    'mcp.fetchStartedAt': REFRESHED_AT,
+    'mcp.observedAt.recording_rules': REFRESHED_AT,
+    'mcp.observedAt.alert_rules': REFRESHED_AT,
+    'mcp.observedAt.dashboards': REFRESHED_AT,
+    'mcp.observedAt.scrape_configs': REFRESHED_AT,
+    'mcp.observedAt.metric_names': REFRESHED_AT,
+  };
   const livePack = (overrides = {}, drop = []) => {
     const live = clone(pack);
     live.metadata.annotations = {
       ...live.metadata.annotations,
       'mcp.url': 'https://example.test/mcp',
       'mcp.refreshedAt': REFRESHED_AT,
+      ...OBSERVED_AT,
       'mcp.probesAttempted': 'recording_rules,alert_rules,dashboards,scrape_configs,metric_names',
       'mcp.probesSucceeded': 'recording_rules,alert_rules,dashboards,scrape_configs,metric_names',
       'mcp.probesEmpty': '',
@@ -397,8 +408,8 @@ process.stdout.write('\n--- per-node ladder rides along, scoring untouched ---\n
          'a rule the ruler reports ok and fresh reads rung healthy', ladderOf(healthy, 'recording_rule'));
   assert(ladderOf(healthy, 'scrape_job')?.rung === 'healthy' && ladderOf(healthy, 'scrape_job').detail === 'health up on 1/1 target, lastScrape 4s ago ≤ 2× interval 10s',
          'a scrape job whose target is up and fresh reads rung healthy (interval from the declared side)', ladderOf(healthy, 'scrape_job'));
-  assert(ladderOf(healthy, 'burn_rate')?.rung === 'healthy' && /^health ok on 2\/2 rules, lastEvaluation 20s ago; interval unknown, staleness not judged$/.test(ladderOf(healthy, 'burn_rate').detail),
-         'a burn-rate alert links to both live rules by the <slo>_burn_<N>x_<short>_<long> convention and is never judged stale', ladderOf(healthy, 'burn_rate'));
+  assert(ladderOf(healthy, 'burn_rate')?.rung === 'healthy' && ladderOf(healthy, 'burn_rate').detail === 'health ok on 2/2 rules, lastEvaluation 20s ago; interval unknown; 1 h ceiling applied',
+         'a burn-rate alert links to both live rules by the <slo>_burn_<N>x_<short>_<long> convention; without a group interval the 1 h ceiling applies', ladderOf(healthy, 'burn_rate'));
   assert(ladderOf(healthy, 'sli')?.rung === 'exists' && /rides on its recording rules/.test(ladderOf(healthy, 'sli').detail)
            && ladderOf(healthy, 'slo')?.rung === 'exists' && /rides on its SLI and alerts/.test(ladderOf(healthy, 'slo').detail)
            && ladderOf(healthy, 'metric')?.rung === 'exists' && /no liveness field on the wire/.test(ladderOf(healthy, 'metric').detail),
@@ -460,9 +471,9 @@ process.stdout.write('\n--- per-node ladder rides along, scoring untouched ---\n
     'mcp.discovered.alert_rules_unhealthy': ALERT_FAST,
   }));
   assert(ladderOf(badAlert, 'burn_rate')?.status === 'present_unhealthy'
-           && ladderOf(badAlert, 'burn_rate').detail === 'health err on 1/2 rules, lastError "vector contains metrics with the same labelset"'
+           && ladderOf(badAlert, 'burn_rate').detail === `health err on 1/2 rules (${ALERT_FAST}), lastError "vector contains metrics with the same labelset"`
            && badAlert.branches[0].ladderVerdict === 'degraded',
-         'a burn-rate alert with one unhealthy live rule reads present_unhealthy', ladderOf(badAlert, 'burn_rate'));
+         'a burn-rate alert with one unhealthy live rule reads present_unhealthy and names the failing rule', ladderOf(badAlert, 'burn_rate'));
 
   // Down target: the job is on the wire, every target down.
   const down = compare(livePack({
@@ -549,10 +560,200 @@ process.stdout.write('\n--- per-node ladder rides along, scoring untouched ---\n
            && unverifiablePanel.ladder.detail === 'not live-introspectable from any MCP vantage',
          'an unverifiable node reads rung unobserved with a null status', unverifiablePanel?.ladder);
 
+  // Observation time beats the caller's stamp (review A1): server and journey
+  // stamp mcp.refreshedAt AFTER the fetch returns, so on a slow fetch it
+  // trails every observation by the whole fetch. Here it trails by 60s: the
+  // scrape (4s old at a 10s interval) and the rule (12s old at 30s) would
+  // both read stale against it, and do not against mcp.observedAt.
+  const slowFetch = compare(livePack({ 'mcp.refreshedAt': ago(-60) }));
+  assert(ladderOf(slowFetch, 'scrape_job')?.rung === 'healthy' && ladderOf(slowFetch, 'scrape_job').detail === 'health up on 1/1 target, lastScrape 4s ago ≤ 2× interval 10s'
+           && ladderOf(slowFetch, 'recording_rule')?.rung === 'healthy' && ladderOf(slowFetch, 'recording_rule').detail === 'health ok, lastEvaluation 12s ago ≤ 2× interval 30s',
+         'a refreshedAt that trails the observation by more than 2× the interval does not make a fresh observation stale when mcp.observedAt is on the wire',
+         [ladderOf(slowFetch, 'scrape_job'), ladderOf(slowFetch, 'recording_rule')]);
+  assert(slowFetch.branches[0].ladderVerdict === 'healthy' && slowFetch.branches[0].ladderIntegrity === 1,
+         'the slow-fetch pack is ladder healthy at 1', [slowFetch.branches[0].ladderVerdict, slowFetch.branches[0].ladderIntegrity]);
+  // Without a per-family instant, mcp.fetchStartedAt is "now" — silently.
+  const startedOnly = compare(livePack({ 'mcp.refreshedAt': ago(-60) }, Object.keys(OBSERVED_AT).filter((k) => k !== 'mcp.fetchStartedAt')));
+  assert(ladderOf(startedOnly, 'recording_rule')?.rung === 'healthy' && ladderOf(startedOnly, 'recording_rule').detail === 'health ok, lastEvaluation 12s ago ≤ 2× interval 30s',
+         'mcp.fetchStartedAt is the second choice for "now" and is not named in the detail', ladderOf(startedOnly, 'recording_rule'));
+  // An older pack (neither instant on the wire): mcp.refreshedAt is all
+  // there is, the ladder still judges, and the detail names the fallback.
+  const oldPack = compare(livePack({}, Object.keys(OBSERVED_AT)));
+  assert(ladderOf(oldPack, 'recording_rule')?.rung === 'healthy'
+           && ladderOf(oldPack, 'recording_rule').detail === 'health ok, lastEvaluation 12s ago ≤ 2× interval 30s (now = mcp.refreshedAt; no mcp.observedAt on the wire)',
+         'a pack without fetcher instants falls back to mcp.refreshedAt and says so', ladderOf(oldPack, 'recording_rule'));
+  const oldStale = compare(livePack({
+    'mcp.observed.recording_rules': JSON.stringify([{ name: RULE, health: 'ok', lastError: null, lastEvaluation: ago(20 * 60), evaluationTime: 0.004 }]),
+  }, Object.keys(OBSERVED_AT)));
+  assert(ladderOf(oldStale, 'recording_rule')?.status === 'present_stale'
+           && ladderOf(oldStale, 'recording_rule').detail === 'lastEvaluation 20m ago > 2× interval 30s (now = mcp.refreshedAt; no mcp.observedAt on the wire)',
+         'a stale reading against the fallback clock names the fallback too', ladderOf(oldStale, 'recording_rule'));
+  // No fetch timestamp at all (A8): the observation is on the wire, "now" is not.
+  const noClock = compare(livePack({}, ['mcp.refreshedAt', ...Object.keys(OBSERVED_AT)]));
+  assert(ladderOf(noClock, 'recording_rule')?.rung === 'healthy'
+           && ladderOf(noClock, 'recording_rule').detail === 'health ok, no fetch timestamp on the wire (mcp.refreshedAt missing); staleness not judged',
+         'without any fetch timestamp the detail blames the missing mcp.refreshedAt, not the observation', ladderOf(noClock, 'recording_rule'));
+
+  // Clock skew (A10): a timestamp past "now" caps the rung at alive; a
+  // sub-second one is ISO rounding and clamps to 0s.
+  const skewed = compare(livePack({
+    'mcp.observed.recording_rules': JSON.stringify([{ name: RULE, health: 'ok', lastError: null, lastEvaluation: ago(-30), evaluationTime: 0.004 }]),
+  }));
+  assert(ladderOf(skewed, 'recording_rule')?.rung === 'alive' && ladderOf(skewed, 'recording_rule').status === null
+           && ladderOf(skewed, 'recording_rule').detail === 'health ok, timestamp 30s in the future (clock skew); freshness not judged',
+         'a lastEvaluation 30s in the future reads alive with a clock-skew detail, never healthy', ladderOf(skewed, 'recording_rule'));
+  const rounding = compare(livePack({
+    'mcp.observed.recording_rules': JSON.stringify([{ name: RULE, health: 'ok', lastError: null, lastEvaluation: ago(-0.5), evaluationTime: 0.004 }]),
+  }));
+  assert(ladderOf(rounding, 'recording_rule')?.rung === 'healthy' && ladderOf(rounding, 'recording_rule').detail === 'health ok, lastEvaluation 0s ago ≤ 2× interval 30s',
+         'a timestamp half a second past "now" is rounding, not skew', ladderOf(rounding, 'recording_rule'));
+
+  // Interval unknown (A6): a 1 h ceiling, not a free pass. Burn-rate rules
+  // carry no interval unless the fetcher kept the group's.
+  const ceiling = compare(livePack({
+    'mcp.observed.alert_rules': JSON.stringify([
+      { name: ALERT_FAST, health: 'ok', lastError: null, lastEvaluation: ago(3 * 86400), state: 'inactive', activeAt: null },
+      { name: ALERT_SLOW, health: 'ok', lastError: null, lastEvaluation: ago(3 * 86400), state: 'inactive', activeAt: null },
+    ]),
+  }));
+  assert(ladderOf(ceiling, 'burn_rate')?.rung === 'exists' && ladderOf(ceiling, 'burn_rate').status === 'present_stale'
+           && ladderOf(ceiling, 'burn_rate').detail === 'lastEvaluation 3d ago; interval unknown; older than the 1 h ceiling'
+           && ceiling.branches[0].ladderVerdict === 'degraded',
+         'alert rules last evaluated 3 d ago with no interval on the wire read present_stale by the 1 h ceiling', ladderOf(ceiling, 'burn_rate'));
+  const grouped = compare(livePack({
+    'mcp.observed.alert_rules': JSON.stringify([
+      { name: ALERT_FAST, health: 'ok', lastError: null, lastEvaluation: ago(20), state: 'inactive', activeAt: null, interval: '15s' },
+      { name: ALERT_SLOW, health: 'ok', lastError: null, lastEvaluation: ago(20), state: 'inactive', activeAt: null, interval: '1m' },
+    ]),
+  }));
+  assert(ladderOf(grouped, 'burn_rate')?.rung === 'healthy' && ladderOf(grouped, 'burn_rate').detail === 'health ok on 2/2 rules, lastEvaluation 20s ago ≤ 2× interval 1m',
+         'a group interval carried on the alert observation is the yardstick (the longest of the linked rules)', ladderOf(grouped, 'burn_rate'));
+  const groupedStale = compare(livePack({
+    'mcp.observed.alert_rules': JSON.stringify([
+      { name: ALERT_FAST, health: 'ok', lastError: null, lastEvaluation: ago(5 * 60), state: 'inactive', activeAt: null, interval: '1m' },
+      { name: ALERT_SLOW, health: 'ok', lastError: null, lastEvaluation: ago(5 * 60), state: 'inactive', activeAt: null, interval: '1m' },
+    ]),
+  }));
+  assert(ladderOf(groupedStale, 'burn_rate')?.status === 'present_stale' && ladderOf(groupedStale, 'burn_rate').detail === 'lastEvaluation 5m ago > 2× interval 1m',
+         'alert rules 5 m old at a 1 m group interval read present_stale well inside the ceiling', ladderOf(groupedStale, 'burn_rate'));
+
+  // Partially down job (A2): the fetcher calls a job down only when EVERY
+  // target is; one of two down is alive, named, and still fresh.
+  const partial = compare(livePack({
+    'mcp.observed.scrape_targets': JSON.stringify([
+      { job: 'checkout-api', instance: 'checkout-api:8080', health: 'up', lastScrape: ago(4), lastError: null },
+      { job: 'checkout-api', instance: 'checkout-api:8081', health: 'down', lastScrape: ago(4), lastError: 'connection refused' },
+    ]),
+  }));
+  assert(ladderOf(partial, 'scrape_job')?.rung === 'alive' && ladderOf(partial, 'scrape_job').status === null
+           && ladderOf(partial, 'scrape_job').detail === '1/2 targets down: checkout-api:8081; lastScrape 4s ago ≤ 2× interval 10s'
+           && partial.branches[0].ladderIntegrity === 1,
+         'a job with one of two targets down reads alive (not unhealthy) and names the down instance', ladderOf(partial, 'scrape_job'));
+  const allDown = compare(livePack({
+    'mcp.observed.scrape_targets': JSON.stringify([
+      { job: 'checkout-api', instance: 'checkout-api:8080', health: 'down', lastScrape: ago(4), lastError: 'connection refused' },
+      { job: 'checkout-api', instance: 'checkout-api:8081', health: 'down', lastScrape: ago(4), lastError: 'connection refused' },
+    ]),
+    'mcp.discovered.scrape_jobs_down': 'checkout-api',
+  }));
+  assert(ladderOf(allDown, 'scrape_job')?.status === 'present_unhealthy' && ladderOf(allDown, 'scrape_job').detail === 'health down on 2/2 targets, lastError "connection refused"',
+         'a job whose every target is down still reads present_unhealthy', ladderOf(allDown, 'scrape_job'));
+
+  // Fractional burn factors and label linkage (A4): the compiler names a
+  // 14.4x rule `_burn_14_4x_` and stamps { slo, burn_rate, window_short,
+  // window_long } on it; the ladder links by those labels first.
+  const fracA = clone(pack);
+  fracA.spec.policy.burn_rate_alerts[0].windows[0].factor = 14.4;
+  const ALERT_FRAC = 'checkout_latency_99_burn_14_4x_5m_1h';
+  const fracB = (alerts, unhealthy) => {
+    const live = livePack({ 'mcp.observed.alert_rules': JSON.stringify(alerts), 'mcp.discovered.alert_rules_unhealthy': unhealthy });
+    live.spec.policy.burn_rate_alerts[0].windows[0].factor = 14.4;
+    return live;
+  };
+  const fracByName = comparePackBranches(adapt(fracA), adapt(fracB([
+    { name: ALERT_FRAC, health: 'err', lastError: 'unknown function', lastEvaluation: ago(20), state: 'inactive', activeAt: null },
+    { name: ALERT_SLOW, health: 'ok', lastError: null, lastEvaluation: ago(20), state: 'inactive', activeAt: null },
+  ], ALERT_FRAC)));
+  assert(ladderOf(fracByName, 'burn_rate')?.status === 'present_unhealthy'
+           && ladderOf(fracByName, 'burn_rate').detail === `health err on 1/2 rules (${ALERT_FRAC}), lastError "unknown function"`,
+         'a failing 14.4x rule links by the `_burn_14_4x_` name and reads present_unhealthy', ladderOf(fracByName, 'burn_rate'));
+  const fracByLabels = comparePackBranches(adapt(fracA), adapt(fracB([
+    { name: 'CheckoutFastBurn', health: 'err', lastError: 'unknown function', lastEvaluation: ago(20), state: 'inactive', activeAt: null,
+      labels: { slo: 'ref:slos.checkout_latency_99', burn_rate: '14.4', window_short: '5m', window_long: '1h' } },
+    { name: ALERT_SLOW, health: 'ok', lastError: null, lastEvaluation: ago(20), state: 'inactive', activeAt: null },
+  ], 'CheckoutFastBurn')));
+  assert(ladderOf(fracByLabels, 'burn_rate')?.status === 'present_unhealthy'
+           && ladderOf(fracByLabels, 'burn_rate').detail === 'health err on 1/2 rules (CheckoutFastBurn), lastError "unknown function"',
+         'a rule with a free-form name links by its linkage labels and reads present_unhealthy', ladderOf(fracByLabels, 'burn_rate'));
+
+  // The unhealthy list is narrowed to the declared windows (A5): an
+  // undeclared 3x_1h_1d rule of the same SLO failing does not degrade the
+  // declared POL entry whose two windows are fine.
+  const ALERT_EXTRA = 'checkout_latency_99_burn_3x_1h_1d';
+  const extraAlert = compare(livePack({
+    'mcp.observed.alert_rules': JSON.stringify([
+      { name: ALERT_FAST, health: 'ok', lastError: null, lastEvaluation: ago(20), state: 'inactive', activeAt: null },
+      { name: ALERT_SLOW, health: 'ok', lastError: null, lastEvaluation: ago(20), state: 'inactive', activeAt: null },
+      { name: ALERT_EXTRA, health: 'err', lastError: 'unknown function', lastEvaluation: ago(20), state: 'inactive', activeAt: null },
+    ]),
+    'mcp.discovered.alert_rules_unhealthy': ALERT_EXTRA,
+  }));
+  assert(ladderOf(extraAlert, 'burn_rate')?.rung === 'healthy' && ladderOf(extraAlert, 'burn_rate').status === null && extraAlert.branches[0].ladderVerdict === 'healthy',
+         'an undeclared burn window of the same SLO failing does not make the declared entry present_unhealthy', ladderOf(extraAlert, 'burn_rate'));
+  const listedOnly = compare(livePack({ 'mcp.discovered.alert_rules_unhealthy': `${ALERT_EXTRA},${ALERT_FAST}` }, ['mcp.observed.alert_rules']));
+  assert(ladderOf(listedOnly, 'burn_rate')?.status === 'present_unhealthy'
+           && ladderOf(listedOnly, 'burn_rate').detail === `alert rules of slo checkout_latency_99 listed in mcp.discovered.alert_rules_unhealthy (${ALERT_FAST})`,
+         'with no observation entries the unhealthy list is still narrowed to the declared windows and names the rule', ladderOf(listedOnly, 'burn_rate'));
+
+  // live_only nodes never move the ladder verdict (A7): an undeclared rule
+  // feeding the SLI, failing on the wire, is inventory — not this chain's
+  // assurance.
+  const SHADOW = 'checkout:latency:shadow_5m';
+  const shadowPack = livePack({
+    'mcp.observed.recording_rules': JSON.stringify([
+      { name: RULE, health: 'ok', lastError: null, lastEvaluation: ago(12), evaluationTime: 0.004 },
+      { name: SHADOW, health: 'err', lastError: 'many-to-many matching not allowed', lastEvaluation: ago(12), evaluationTime: 0 },
+    ]),
+    'mcp.discovered.recording_rules_unhealthy': SHADOW,
+  });
+  shadowPack.spec.queries.recording_rules.push({ name: SHADOW, expr: 'ref:slis.checkout_latency', interval: '30s' });
+  const shadow = compare(shadowPack);
+  const shadowNode = shadow.branches[0].nodes.find((n) => n.status === 'live_only' && n.kind === 'recording_rule');
+  assert(shadowNode?.ladder.status === 'present_unhealthy' && shadow.branches[0].verdict === 'intact'
+           && shadow.branches[0].ladderVerdict === 'healthy' && shadow.branches[0].ladderIntegrity === 1,
+         'an undeclared live rule in err reads present_unhealthy on its own node but leaves ladderVerdict and ladderIntegrity unchanged',
+         [shadowNode?.ladder, shadow.branches[0].ladderVerdict, shadow.branches[0].ladderIntegrity], ['present_unhealthy', 'healthy', 1]);
+
+  // In Pack B under another chain: B re-identified the SLO, so A's chain has
+  // no B counterpart and every A node is declared_only — yet its rule and
+  // scrape job ARE in Pack B, rooted under the new SLO. Never "withheld".
+  const renamed = livePack();
+  renamed.spec.slos[0].id = 'checkout_latency_995';
+  renamed.spec.policy.burn_rate_alerts[0].slo = 'checkout_latency_995';
+  const other = compare(renamed);
+  const aBranch = other.branches.find((b) => b.hasA);
+  const ruleUnder = aBranch.nodes.find((n) => n.kind === 'recording_rule');
+  const scrapeUnder = aBranch.nodes.find((n) => n.kind === 'scrape_job');
+  assert(ruleUnder?.status === 'declared_only' && ruleUnder.ladder.rung === 'healthy'
+           && ruleUnder.ladder.detail === 'on the wire and in Pack B under another chain: health ok, lastEvaluation 12s ago ≤ 2× interval 30s',
+         'a declared_only rule whose live twin sits under another chain reads "in Pack B under another chain", not withheld', ruleUnder?.ladder);
+  assert(scrapeUnder?.status === 'declared_only'
+           && scrapeUnder.ladder.detail === 'on the wire and in Pack B under another chain: health up on 1/1 target, lastScrape 4s ago ≤ 2× interval 10s',
+         'the same for a declared_only scrape job with an up twin under another chain', scrapeUnder?.ladder);
+  const dashUnder = aBranch.nodes.find((n) => n.kind === 'dashboard');
+  assert(dashUnder?.status === 'declared_only' && dashUnder.ladder.rung === 'exists' && dashUnder.ladder.status === null
+           && dashUnder.ladder.detail === 'in Pack B under another chain; not reachable from this branch',
+         'a declared_only kind with no observation but a twin in Pack B reads exists under another chain, never absent', dashUnder?.ladder);
+  assert(withheldScrape.ladder.detail.startsWith('on the wire but withheld from Pack B:'),
+         'the all-down job the fetcher withheld (no twin in Pack B) keeps the withheld wording', withheldScrape.ladder.detail);
+
   // The pin: every scored quantity is byte-identical with and without the
   // liveness annotations on the same declarations.
   assert(scored(healthy) === scored(self) && scored(badRule) === scored(self) && scored(stale) === scored(self)
-           && scored(badAlert) === scored(self) && scored(down) === scored(self),
+           && scored(badAlert) === scored(self) && scored(down) === scored(self)
+           && scored(slowFetch) === scored(self) && scored(oldPack) === scored(self) && scored(noClock) === scored(self)
+           && scored(skewed) === scored(self) && scored(ceiling) === scored(self) && scored(partial) === scored(self)
+           && scored(allDown) === scored(self) && scored(extraAlert) === scored(self) && scored(listedOnly) === scored(self),
          'verdict / integrity / counts / node statuses / rollup.integrityMean are identical with and without the mcp.observed annotations',
          scored(badRule), scored(self));
   assert(healthy.rollup.integrityMean === self.rollup.integrityMean && badRule.rollup.integrityMean === 1 && stale.rollup.integrityMean === 1,

@@ -34,6 +34,14 @@
 // its remediation when the remediation dies (remediates). It is transitive —
 // a dead route means an undelivered alert means an unprotected SLO.
 //
+// Modelling call on `contains`. The consumer is the dashboard: it consumes
+// its panels, so a dead panel leaves a hole in every dashboard that shows
+// it. A dead dashboard takes its panels with it, but that loss is reported
+// through the dashboard's own node (its status and ladder), not as a blast
+// radius — so a dead dashboard blinds nothing here, by design. Reversing
+// the side would make every panel a consumer of its dashboard and count the
+// same loss twice on the card.
+//
 // Honesty rule. A blast radius is structural exposure computed from declared
 // edges. It says what WOULD go blind if a node died — never that something IS
 // blind. Liveness is a separate observation; this module never reads it.
@@ -190,8 +198,10 @@ function radius(prepared, key, table) {
   const byKind = {};
   for (const kind of Object.keys(counts).sort(compareKinds)) byKind[kind] = counts[kind];
 
-  // Protection losers are walked through blinded nodes (a blind alert
-  // protects nothing either) but only nodes not already blinded are listed.
+  // The protection walk runs over the protection edges alone, from the
+  // origin (a dead route → its alert → that alert's SLO); it does not pass
+  // through blinded nodes. A node the consumer walk already blinded is not
+  // listed a second time as unprotected — blind is the stronger reading.
   const unprotectedNodes = [...lostHops]
     .filter(([nodeKey]) => !blindedHops.has(nodeKey))
     .map(([nodeKey, hop]) => listing(nodes.get(nodeKey), hop))

@@ -76,18 +76,28 @@ that cannot show scrape configs loses 5 points it did nothing to earn.
 - **Trust in the on-wire signals.** `health` / `lastError` / `lastEvaluation`
   come from the ruler and target APIs as the MCP relays them. A tier that
   relays rule definitions but not evaluation state reads `alive` / `exists`
-  (credit 1), never worse — the ladder only lowers credit on positive evidence
-  of unhealth or staleness. Staleness needs both a timestamp and an interval;
-  either missing means no judgement.
+  (credit 1), never worse. The ladder lowers credit on what the wire reports
+  as not ok — which includes a rule `health: unknown` ("not yet evaluated",
+  counted unhealthy exactly as the fetcher's `*_unhealthy` lists count it) and
+  a job whose every target is down — and on staleness: a timestamp older than
+  2× the interval measured against the fetcher's own observation instant
+  (`mcp.observedAt.<family>`, never the caller's `mcp.refreshedAt` when that
+  instant is on the wire), or, with no interval on the wire, older than a 1 h
+  ceiling. A missing timestamp means no judgement; a partially down job and a
+  timestamp in the future cap at `alive`, never lower.
 - **Unobserved leaves the denominator, so a blind tier can score 100%.** The
   branch still reads `ladderVerdict: unobserved`, and the grade's Real-live
   evidence criteria already cap what a partial vantage can claim; the
   proposal should pair the switch with an "unobserved load-bearing nodes"
   line in the Drift-free detail so a perfect score under a blind vantage is
   never silent.
-- **Burn-rate linkage by naming convention.** Live POL entries carry no rule
-  names, so alert liveness is linked through `<slo>_burn_<factor>x_<short>_<long>`.
-  Alerts mapped through labels only cannot be linked and read `exists`.
+- **Burn-rate linkage.** Live POL entries carry no rule names, so alert
+  liveness is linked through the compiler's linkage labels the fetcher keeps
+  on the observation entry (`slo` / `burn_rate` / `window_short` /
+  `window_long`) first and the `<slo>_burn_<factor>x_<short>_<long>` name
+  second, narrowed to the declared windows. A rule with neither (a hand-written
+  alert on the same SLO) is not linked and the entry reads from whatever else
+  is linked, or `exists`.
 
 ## 5. Acceptance path (PHASE_1 guardrails)
 

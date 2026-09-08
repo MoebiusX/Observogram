@@ -385,6 +385,9 @@ assert(pAnn['mcp.discovered.recording_rules_unhealthy'] === 'svc_checkout:latenc
          && observed[0].name === 'CheckoutHighErrorRate' && observed[0].state === 'firing'
          && observed[0].health === 'ok' && observed[0].activeAt === '2026-06-05T23:50:00Z' && observed[0].lastError === null,
          'mcp.observed.alert_rules carries state/health/lastError/lastEvaluation/activeAt', observed);
+  assert(Object.keys(observed[0]).join() === 'name,health,lastError,lastEvaluation,state,activeAt,interval' && observed[0].interval === null,
+         'an alert observation entry carries interval (null when the adapter kept no group interval) and no labels key when the rule has no linkage labels',
+         Object.keys(observed[0]).join());
   assert(pAnn['mcp.discovered.alert_rules_unhealthy'] === undefined, 'no alert_rules_unhealthy list when every alert rule is healthy');
 }
 
@@ -679,6 +682,21 @@ assert(JSON.stringify(burnAlerts[0]?.windows) === JSON.stringify([
 ]), 'windows: deduped, short-window-first, name-pattern rule merged, factor a Number',
    burnAlerts[0]?.windows);
 
+// The observation entries carry the compiler's linkage labels — those four
+// keys and nothing else of the label set — so the graph ladder can link a
+// live rule to its declared window without the name convention.
+{
+  const observed = JSON.parse(bAnn['mcp.observed.alert_rules']);
+  const fast = observed.find(r => r.name === `${DISCOVERED_SLO}_burn_14x_5m_1h`);
+  assert(JSON.stringify(fast?.labels) === JSON.stringify({ slo: DISCOVERED_SLO, burn_rate: '14', window_short: '5m', window_long: '1h' }),
+         'mcp.observed.alert_rules entry carries labels { slo, burn_rate, window_short, window_long } only (severity/sli/service dropped)', fast?.labels);
+  const bare = observed.find(r => r.name === `${DISCOVERED_SLO}_burn_2x_6h_3d`);
+  assert(bare && !('labels' in bare), 'an entry whose rule has no linkage labels carries no labels key at all', Object.keys(bare || {}));
+  const forecast = observed.find(r => r.name === `${DISCOVERED_SLO}_forecast_linear_7d`);
+  assert(JSON.stringify(forecast?.labels) === JSON.stringify({ slo: DISCOVERED_SLO }),
+         'only the linkage keys present are carried (a forecast rule keeps just slo)', forecast?.labels);
+}
+
 // re-id of the inferred placeholder SLO + objective/window replacement.
 assert(burnProbed.spec.slos.some(s => s.id === DISCOVERED_SLO), 'inferred SLO re-identified to the discovered id');
 assert(!burnProbed.spec.slos.some(s => s.id === 'svc_checkout_availability_99'), 'placeholder SLO id no longer present');
@@ -776,6 +794,34 @@ assert(bAnn['mcp.discovered.alert_rules_severity_inferred'] === `${DISCOVERED_SL
          'mcp.observed.alert_rules carries per-rule health', observed);
   const pol = adapt(unhealthy).layers.L4.policy.filter(x => x.id.startsWith('POL-'));
   assert(pol.length === 1 && pol[0].source === 'Declared', 'adapter projects the unhealthy-fed burn alert as Declared (present, not attested)', pol.map(p => p.source), ['Declared']);
+}
+
+// Fractional burn factors: the compiler names a 14.4x rule `_burn_14_4x_`
+// (the `.` squashed to `_`), so the name pattern reads it back as 14.4;
+// and an adapted rule's group interval rides into the observation entry.
+{
+  const frac = buildCanonicalPack({
+    refreshedAt,
+    mcpUrl: 'https://fake-mcp.test/observability',
+    health: { services: [{ name: 'svc-checkout', criticality: 'tier-1' }] },
+    topology: { dependencies: [] }, anomaliesActive: {}, baselinesData: { baselines: [] },
+    probeResults: {
+      alert_rules: { tool: 'vmalert_rules', adapted: [
+        { name: 'svc_checkout_availability_99_burn_14_4x_5m_1h', expr: 'e', for: '2m', labels: { severity: 'critical' }, annotations: {},
+          interval: '15s', health: 'ok', state: 'inactive', lastEvaluation: '2026-06-06T00:00:00Z' },
+        { name: 'svc_checkout_availability_99_burn_6x_30m_6h', expr: 'e', for: '15m', labels: { severity: 'warning' }, annotations: {},
+          interval: '15s', health: 'ok', state: 'inactive', lastEvaluation: '2026-06-06T00:00:00Z' },
+      ] },
+    },
+    errors: {},
+  });
+  assert(validateCanonical(frac, SCHEMA).length === 0, 'fractional-factor pack validates (factor is a number > 1)');
+  const windows = frac.spec.policy.burn_rate_alerts[0]?.windows || [];
+  assert(windows.length === 2 && windows[0].factor === 14.4 && windows[0].short === '5m' && windows[1].factor === 6,
+         'a `_burn_14_4x_` rule maps by name to a 14.4 factor window', windows);
+  const observed = JSON.parse(frac.metadata.annotations['mcp.observed.alert_rules']);
+  assert(observed.every(r => r.interval === '15s') && observed.every(r => !('labels' in r)),
+         'the alert group interval rides into mcp.observed.alert_rules; severity alone yields no labels key', observed);
 }
 
 // Tiered SLOs on one SLI (99 and 99.9 — a realistic setup): the group
@@ -1679,8 +1725,20 @@ const SYN = (f) => {
     const unmatched = fetched.unmatchedTools.map(t => t.name);
     assert(!unmatched.includes('metrics_query') && !unmatched.includes('alertmanager_status') && !unmatched.includes('grafana_contact_points'),
            'answered step-2 tools are wired (not in unmatchedTools)', unmatched);
+    // The fetcher's own clock: when the fetch began and when each answering
+    // family was observed — independent of the caller's refreshedAt (here a
+    // fixed date years back), so a slow fetch never ages the observations.
+    const started = Date.parse(fetched.fetchStartedAt);
+    assert(Number.isFinite(started) && started > Date.parse(refreshedAt) && started <= Date.now(),
+           'fetchMcp returns fetchStartedAt as an ISO instant from its own clock, not the caller\'s refreshedAt', fetched.fetchStartedAt);
+    assert(Object.keys(fetched.observedAt).join() === 'metric_names' && Date.parse(fetched.observedAt.metric_names) >= started,
+           'observedAt carries one instant per family that answered (metric_names here; the unsupported families none), at or after fetchStartedAt', fetched.observedAt);
     const pack = buildCanonicalPack({ refreshedAt, mcpUrl: fake.url, ...fetched });
     const ann = pack.metadata.annotations;
+    assert(ann['mcp.fetchStartedAt'] === fetched.fetchStartedAt && ann['mcp.observedAt.metric_names'] === fetched.observedAt.metric_names
+             && ann['mcp.refreshedAt'] === refreshedAt && !Object.keys(ann).some(k => k.startsWith('mcp.observedAt.') && k !== 'mcp.observedAt.metric_names'),
+           'buildCanonicalPack writes mcp.fetchStartedAt and mcp.observedAt.<family> for answered families only, beside the caller\'s mcp.refreshedAt',
+           Object.keys(ann).filter(k => /fetchStartedAt|observedAt|refreshedAt/.test(k)));
     assert(ann['mcp.stack.status'] === 'sampled' && Number(ann['mcp.stack.sampled']) >= 2, 'end-to-end: mcp.stack.* written from the wire', [ann['mcp.stack.status'], ann['mcp.stack.sampled']]);
     assert(validateCanonical(pack, SCHEMA).length === 0, 'end-to-end pack validates');
     assert(Object.keys(ann).every(k => !k.startsWith('mcp.verified.') || !/stack|alertmanager|grafana\.(datasources|contact)/.test(k)),
@@ -1702,6 +1760,12 @@ const SYN = (f) => {
     assert(fetched.alertmanagerObserved === null && fetched.grafanaObserved === null, 'restricted tier → status surfaces null');
     const ann = buildCanonicalPack({ refreshedAt, mcpUrl: fakeR.url, ...fetched }).metadata.annotations;
     assert(ann['mcp.stack.reason'] === 'metrics_query not exposed by this MCP (restricted tier)', 'restricted tier reason annotated', ann['mcp.stack.reason']);
+    assert(typeof ann['mcp.fetchStartedAt'] === 'string' && !Object.keys(ann).some(k => k.startsWith('mcp.observedAt.')),
+           'a tier where no probe family answers still stamps mcp.fetchStartedAt and no mcp.observedAt.* at all', Object.keys(ann).filter(k => /StartedAt|observedAt/.test(k)));
+    // A caller that predates the fetcher clock (nothing passed) writes neither key.
+    const legacy = buildCanonicalPack({ refreshedAt, mcpUrl: fakeR.url, health: { services: [] }, topology: { dependencies: [] } }).metadata.annotations;
+    assert(legacy['mcp.fetchStartedAt'] === undefined && !Object.keys(legacy).some(k => k.startsWith('mcp.observedAt.')),
+           'without fetchStartedAt / observedAt inputs neither annotation is fabricated');
   } finally {
     await fakeR.close();
   }

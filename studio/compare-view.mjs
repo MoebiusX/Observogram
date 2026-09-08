@@ -1752,10 +1752,31 @@ export function renderDiagnosticTraceabilityGraph(graph) {
     present_stale: 'present but stale',
     unobserved: `unobserved — ${node.ladder?.detail || 'the vantage could not look'}`,
   }[node.ladder?.status] || null);
+  // What to show first when a card can only fit five: the readings that
+  // move the verdicts. branch.nodes arrive sorted by scored status alone,
+  // which would push an aligned-but-unhealthy node behind every live-only
+  // one and out of the cap.
+  const LOAD_BEARING_KINDS = new Set(['slo', 'sli', 'recording_rule', 'metric', 'burn_rate']);
+  const evidenceRank = (node) => {
+    const ladderStatus = node.ladder?.status || null;
+    // An unobserved node is declared_only by scored status, but the vantage
+    // could not look: it ranks as unobserved, not as missing.
+    if (ladderStatus === 'unobserved') return 6;
+    if (node.status === 'declared_only' && LOAD_BEARING_KINDS.has(node.kind)) return 0;
+    if (ladderStatus === 'present_unhealthy') return 1;
+    if (ladderStatus === 'present_stale') return 2;
+    if (node.status === 'drifted') return 3;
+    if (node.status === 'declared_only') return 4;
+    if (node.status === 'unverifiable') return 5;
+    if (node.status === 'live_only') return 7;
+    return 8;
+  };
   const evidenceFor = (branch) => {
-    const interesting = (branch.nodes || []).filter((node) =>
-      ['declared_only', 'drifted', 'unverifiable', 'live_only'].includes(node.status) || ladderLabelFor(node)
-    );
+    const interesting = (branch.nodes || [])
+      .filter((node) => ['declared_only', 'drifted', 'unverifiable', 'live_only'].includes(node.status) || ladderLabelFor(node))
+      .map((node, index) => ({ node, index }))
+      .sort((a, b) => (evidenceRank(a.node) - evidenceRank(b.node)) || (a.index - b.index))
+      .map(({ node }) => node);
     if (!interesting.length && branch.missingRoles?.length) {
       return branch.missingRoles.map((role) => `${role.role}: ${role.detail}`).join(' · ');
     }

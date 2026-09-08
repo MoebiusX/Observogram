@@ -860,20 +860,39 @@ const PROBE_FAMILIES_BY_KIND = {
 };
 
 // The compiler names every burn-rate alerting rule
-// `<slo>_burn_<factor>x_<short>_<long>` (compile.mjs) and the fetcher
-// recognises the same shape when it maps discovered alerts. The live POL-*
-// artefact carries only { slo, windows } — no rule names — so a burn_rate
-// node is linked to the observed alert rules by that convention on the SLO
-// id, narrowed to the declared (factor, short, long) windows when they
-// match. Rules the fetcher mapped through labels (labels.slo / burn_rate /
-// window_*) cannot be linked here: the observation entries carry no labels.
-const BURN_ALERT_NAME_RE = /^(.+)_burn_(\d+)x_([0-9a-z]+)_([0-9a-z]+)$/;
+// `<slo>_burn_<factor>x_<short>_<long>` (compile.mjs; a fractional factor's
+// `.` is squashed to `_`, so 14.4 reads `_burn_14_4x_`) and stamps the
+// linkage labels { slo, burn_rate, window_short, window_long } on it. The
+// live POL-* artefact carries only { slo, windows } — no rule names — so a
+// burn_rate node is linked to the observed alert rules by those labels
+// first (the fetcher carries them on the observation entry) and by the name
+// convention second, narrowed to the declared (factor, short, long) windows
+// when any rule matches one.
+const BURN_ALERT_NAME_RE = /^(.+)_burn_(\d+(?:_\d+)?)x_([0-9a-z]+)_([0-9a-z]+)$/;
 
 const DURATION_RE = /^(\d+(?:\.\d+)?(?:ms|s|m|h|d|w))+$/;
 const DURATION_PART_RE = /(\d+(?:\.\d+)?)(ms|s|m|h|d|w)/g;
 const DURATION_UNIT_SECONDS = { ms: 1e-3, s: 1, m: 60, h: 3600, d: 86400, w: 604800 };
 // A timestamp older than this many intervals reads present_stale.
 const STALE_INTERVALS = 2;
+// Without an interval to measure against, a timestamp older than this
+// reads present_stale; a younger one reads alive / healthy with the
+// ceiling named in the detail (a rule last evaluated days ago must not
+// read healthy just because its group interval is not on the wire).
+const STALE_CEILING_MS = 60 * 60 * 1000;
+const STALE_CEILING_TEXT = '1 h';
+// A timestamp this far past "now" is clock skew and caps the rung at
+// alive; sub-second negatives are ISO rounding and clamp to 0.
+const FUTURE_GRACE_MS = 1000;
+// Names shown inline before the list is elided.
+const DETAIL_NAME_CAP = 5;
+
+// Probe family whose observation instant is "now" for the kind's freshness.
+const OBSERVATION_FAMILY_BY_KIND = {
+  scrape_job: 'scrape_configs',
+  recording_rule: 'recording_rules',
+  burn_rate: 'alert_rules',
+};
 
 function livenessContext(liveGraph) {
   const ann = liveGraph?.meta?.annotations || {};
@@ -881,6 +900,15 @@ function livenessContext(liveGraph) {
   return {
     onWire: hasMcpSource(liveGraph),
     refreshedAt: parseTimestamp(ann['mcp.refreshedAt']),
+    // The fetcher's own clock (tools/fetch-live-pack.mjs): when the fetch
+    // began and when each probe family answered. Older packs carry neither.
+    fetchStartedAt: parseTimestamp(ann['mcp.fetchStartedAt']),
+    observedAt: (family) => parseTimestamp(ann[`mcp.observedAt.${family}`]),
+    // A real (non-scaffold, non-virtual) node of the same identity in Pack
+    // B: the artefact IS in Pack B, just rooted under another chain.
+    liveTwin: (node) => [...(liveGraph?.byIdentity?.get(node?.identityKey) || [])]
+      .map((key) => liveGraph.nodes.get(key))
+      .some((twin) => twin && !twin.virtual && !isScaffoldNode(twin)),
     scrapeTargets: annotationArray(ann['mcp.observed.scrape_targets']),
     recordingRules: annotationArray(ann['mcp.observed.recording_rules']),
     alertRules: annotationArray(ann['mcp.observed.alert_rules']),
@@ -923,19 +951,24 @@ function ladderFor(status, aNode, bNode, liveness) {
 
 function declaredOnlyLadder(aNode, liveness) {
   if (!liveness.onWire) return ladder('absent', null, 'absent from Pack B (file-sourced; no on-wire liveness to consult)');
-  // The fetcher withholds some artefacts it DID observe from Pack B — a
-  // scrape job whose every target is down lands only in
-  // mcp.discovered.scrape_jobs_down. On the wire beats absent.
+  // Same identity in Pack B under another chain (the live pack rooted it
+  // elsewhere, so it is unpaired here): in Pack B, never "withheld".
+  const twin = liveness.liveTwin(aNode);
   const observed = observationFor(aNode, null, liveness);
   if (observed && (observed.found || observed.listed)) {
     const present = presentLadder(aNode, null, liveness);
-    return ladder(present.rung, present.status, `on the wire but withheld from Pack B: ${present.detail}`);
+    // Without a twin the fetcher withheld an artefact it DID observe from
+    // Pack B — a scrape job whose every target is down lands only in
+    // mcp.discovered.scrape_jobs_down. On the wire beats absent.
+    const where = twin ? 'on the wire and in Pack B under another chain' : 'on the wire but withheld from Pack B';
+    return ladder(present.rung, present.status, `${where}: ${present.detail}`);
   }
   // A metric the inventory attested is in Pack B; it fell out of THIS
   // branch because the rule that sourced it is gone (its own rung says so).
   if (aNode?.kind === 'metric' && liveness.liveMetrics.has(metricName(aNode))) {
     return ladder('exists', null, 'in the live metric inventory, but not reachable from this branch in Pack B');
   }
+  if (twin) return ladder('exists', null, 'in Pack B under another chain; not reachable from this branch');
   const families = PROBE_FAMILIES_BY_KIND[aNode?.kind] || [];
   const blind = families.filter((family) => liveness.probesFailed.has(family) || liveness.probesUnsupported.has(family));
   if (families.length && blind.length === families.length) {
@@ -978,29 +1011,59 @@ function presentLadder(node, fallbackNode, liveness) {
   if (!observed) return ladder('exists', null, 'no liveness field on the wire for this kind');
   if (!observed.found) {
     return observed.listed
-      ? ladder('exists', 'present_unhealthy', `${observed.name} listed in ${observed.list}`)
+      ? ladder('exists', 'present_unhealthy', `${observed.name} ${observed.listedDetail}`)
       : ladder('exists', null, `no ${observed.what} observation on the wire for ${observed.name}`);
   }
   const error = observed.errors[0] || null;
   if (observed.listed || observed.healthy === false || error) {
     const parts = [];
     if (observed.healthy === false) parts.push(observed.unhealthyDetail);
-    else if (observed.listed) parts.push(`listed in ${observed.list}`);
+    else if (observed.listed) parts.push(observed.listedDetail);
     if (error) parts.push(`lastError "${error}"`);
     return ladder('exists', 'present_unhealthy', parts.join(', '));
   }
-  const age = observed.at != null && liveness.refreshedAt != null ? liveness.refreshedAt - observed.at : null;
+  // "Now" is the instant this observation's probe family answered; the
+  // caller's mcp.refreshedAt is the last resort and is named when used.
+  const now = observationNow(kind, liveness);
+  const age = observed.at != null && now.at != null ? now.at - observed.at : null;
   const interval = observed.intervalSec;
+  const nowNote = now.fallback ? ` (now = ${now.fallback}; no mcp.observedAt on the wire)` : '';
+  // Health lead of an alive / healthy detail: the up count, or the down
+  // targets of a partially scraping job, or nothing reported.
+  const lead = observed.healthy === true ? observed.healthyDetail : observed.partialDetail || 'health not reported';
+  const sep = observed.healthy !== true && observed.partialDetail ? '; ' : ', ';
+  if (age != null && age < -FUTURE_GRACE_MS) {
+    return ladder('alive', null, `${lead}${sep}timestamp ${Math.round(-age / 1000)}s in the future (clock skew); freshness not judged${nowNote}`);
+  }
   if (age != null && interval != null && age > STALE_INTERVALS * interval * 1000) {
-    return ladder('exists', 'present_stale', `${observed.timeField} ${formatAge(age)} ago > ${STALE_INTERVALS}× interval ${observed.intervalText}`);
+    return ladder('exists', 'present_stale', `${observed.timeField} ${formatAge(age)} ago > ${STALE_INTERVALS}× interval ${observed.intervalText}${nowNote}`);
+  }
+  if (age != null && interval == null && age > STALE_CEILING_MS) {
+    return ladder('exists', 'present_stale', `${observed.timeField} ${formatAge(age)} ago; interval unknown; older than the ${STALE_CEILING_TEXT} ceiling${nowNote}`);
   }
   const freshness = age != null && interval != null
-    ? `${observed.timeField} ${formatAge(age)} ago ≤ ${STALE_INTERVALS}× interval ${observed.intervalText}`
+    ? `${observed.timeField} ${formatAge(age)} ago ≤ ${STALE_INTERVALS}× interval ${observed.intervalText}${nowNote}`
     : age != null
-      ? `${observed.timeField} ${formatAge(age)} ago; interval unknown, staleness not judged`
-      : `no ${observed.timeField} on the wire; staleness not judged`;
-  if (observed.healthy === true) return ladder('healthy', null, `${observed.healthyDetail}, ${freshness}`);
-  return ladder('alive', null, `health not reported, ${freshness}`);
+      ? `${observed.timeField} ${formatAge(age)} ago; interval unknown; ${STALE_CEILING_TEXT} ceiling applied${nowNote}`
+      : observed.at == null
+        ? `no ${observed.timeField} on the wire; staleness not judged`
+        : 'no fetch timestamp on the wire (mcp.refreshedAt missing); staleness not judged';
+  if (observed.healthy === true) return ladder('healthy', null, `${lead}, ${freshness}`);
+  return ladder('alive', null, `${lead}${sep}${freshness}`);
+}
+
+// "Now" for a freshness judgement: the instant the kind's probe family
+// answered, else the instant the fetch began, else the caller's
+// mcp.refreshedAt (older packs) — which server and journey stamp after the
+// fetch returns, so it can trail every observation by the whole fetch; the
+// detail names it when it is all there is.
+function observationNow(kind, liveness) {
+  const family = OBSERVATION_FAMILY_BY_KIND[kind];
+  const observed = family ? liveness.observedAt(family) : null;
+  if (observed != null) return { at: observed, fallback: null };
+  if (liveness.fetchStartedAt != null) return { at: liveness.fetchStartedAt, fallback: null };
+  if (liveness.refreshedAt != null) return { at: liveness.refreshedAt, fallback: 'mcp.refreshedAt' };
+  return { at: null, fallback: null };
 }
 
 // What the wire says about one node, or null when the kind has no liveness
@@ -1012,19 +1075,28 @@ function observationFor(node, fallbackNode, liveness) {
   if (kind === 'scrape_job') {
     const job = String(spec.job || fallbackSpec.job || '');
     const targets = liveness.scrapeTargets.filter((target) => String(target?.job || '') === job);
-    const down = targets.filter((target) => targetHealth(target?.health) === 'down').length;
+    const down = targets.filter((target) => targetHealth(target?.health) === 'down');
     const up = targets.filter((target) => targetHealth(target?.health) === 'up').length;
+    // The fetcher's own rule (scrapeJobDown): a job is down only when EVERY
+    // target is; a job with some targets down is still scraping.
+    const allDown = targets.length > 0 && down.length === targets.length;
     const plural = targets.length === 1 ? '' : 's';
+    const listed = liveness.scrapeJobsDown.has(job);
     return {
       what: 'scrape target',
       name: `job ${job}`,
-      list: 'mcp.discovered.scrape_jobs_down',
-      listed: liveness.scrapeJobsDown.has(job),
+      listed,
+      listedDetail: 'listed in mcp.discovered.scrape_jobs_down',
       found: targets.length > 0,
-      healthy: !targets.length ? null : down ? false : up === targets.length ? true : null,
-      unhealthyDetail: `health down on ${down}/${targets.length} target${plural}`,
+      healthy: !targets.length ? null : allDown ? false : up === targets.length ? true : null,
+      unhealthyDetail: `health down on ${down.length}/${targets.length} target${plural}`,
       healthyDetail: `health up on ${up}/${targets.length} target${plural}`,
-      errors: targets.map((target) => target?.lastError).filter(Boolean).map(String),
+      partialDetail: down.length && !allDown
+        ? `${down.length}/${targets.length} targets down: ${nameList(down.map((target) => String(target?.instance || '?')))}`
+        : null,
+      // While a target is up, a lastError belongs to the down target the
+      // partial detail names, not to the job.
+      errors: up > 0 ? [] : targets.map((target) => target?.lastError).filter(Boolean).map(String),
       at: latestTimestamp(targets.map((target) => target?.lastScrape)),
       timeField: 'lastScrape',
       ...intervalOf(spec.interval ?? fallbackSpec.interval),
@@ -1033,33 +1105,38 @@ function observationFor(node, fallbackNode, liveness) {
   if (kind === 'recording_rule') {
     const name = String(spec.name || fallbackSpec.name || '');
     const rules = liveness.recordingRules.filter((rule) => String(rule?.name || '') === name);
-    return ruleObservation(rules, `rule ${name}`, liveness.recordingRulesUnhealthy.has(name),
-      'mcp.discovered.recording_rules_unhealthy', spec.interval ?? fallbackSpec.interval);
+    const listed = liveness.recordingRulesUnhealthy.has(name) ? [name] : [];
+    return ruleObservation(rules, `rule ${name}`, listed, 'mcp.discovered.recording_rules_unhealthy',
+      spec.interval ?? fallbackSpec.interval, false);
   }
   if (kind === 'burn_rate') {
-    const sloId = burnSlug(normalizeRef(spec.slo ?? fallbackSpec.slo, 'slos').replace(/^slos\./, ''));
-    const rules = burnAlertRulesFor(sloId, spec.windows ?? fallbackSpec.windows, liveness.alertRules);
-    const listed = [...liveness.alertRulesUnhealthy].some((name) => parseBurnAlertName(name)?.slo === sloId);
-    // Alert-rule group intervals are not on the wire and the POL-* spec has
-    // none, so a burn-rate alert is never judged stale.
-    return ruleObservation(rules, `alert rules of slo ${sloId}`, listed, 'mcp.discovered.alert_rules_unhealthy', null);
+    const link = burnLink(spec.slo ?? fallbackSpec.slo, spec.windows ?? fallbackSpec.windows, liveness);
+    // The POL-* spec has no interval; the alert group's (carried on the
+    // observation entry by the fetcher) is the yardstick, else the ceiling.
+    return ruleObservation(link.rules, `alert rules of slo ${link.sloId}`, link.listedNames,
+      'mcp.discovered.alert_rules_unhealthy', link.interval, true);
   }
   return null;
 }
 
-function ruleObservation(rules, name, listed, list, interval) {
+// `listedNames` are the entries of `list` that name this node; `nameRules`
+// puts rule names in the details where the node's own name does not
+// already carry them (a burn_rate node links several rules).
+function ruleObservation(rules, name, listedNames, list, interval, nameRules) {
   const healths = rules.map((rule) => ruleHealth(rule?.health));
-  const notOk = healths.filter((health) => health === false).length;
-  const firstBad = rules.find((rule) => ruleHealth(rule?.health) === false)?.health;
+  const bad = rules.filter((rule) => ruleHealth(rule?.health) === false);
+  const firstBad = bad[0]?.health;
+  const badNames = nameRules && bad.length ? ` (${nameList(bad.map((rule) => String(rule?.name || '')))})` : '';
   return {
     what: 'rule',
     name,
-    list,
-    listed,
+    listed: listedNames.length > 0,
+    listedDetail: `listed in ${list}${nameRules && listedNames.length ? ` (${nameList(listedNames)})` : ''}`,
     found: rules.length > 0,
-    healthy: !rules.length ? null : notOk ? false : healths.every((health) => health === true) ? true : null,
-    unhealthyDetail: `health ${String(firstBad ?? '').trim().toLowerCase() || 'not ok'}${rules.length > 1 ? ` on ${notOk}/${rules.length} rules` : ''}`,
+    healthy: !rules.length ? null : bad.length ? false : healths.every((health) => health === true) ? true : null,
+    unhealthyDetail: `health ${String(firstBad ?? '').trim().toLowerCase() || 'not ok'}${rules.length > 1 ? ` on ${bad.length}/${rules.length} rules` : ''}${badNames}`,
     healthyDetail: rules.length > 1 ? `health ok on ${rules.length}/${rules.length} rules` : 'health ok',
+    partialDetail: null,
     errors: rules.map((rule) => rule?.lastError).filter(Boolean).map(String),
     at: latestTimestamp(rules.map((rule) => rule?.lastEvaluation)),
     timeField: 'lastEvaluation',
@@ -1067,21 +1144,74 @@ function ruleObservation(rules, name, listed, list, interval) {
   };
 }
 
-function burnAlertRulesFor(sloId, windows, alertRules) {
-  if (!sloId) return [];
-  const parsed = alertRules
-    .map((rule) => ({ rule, burn: parseBurnAlertName(rule?.name) }))
-    .filter(({ burn }) => burn && burn.slo === sloId);
-  const declared = new Set((Array.isArray(windows) ? windows : [])
-    .map((w) => `${Number(w?.factor)}x_${String(w?.short || '').toLowerCase()}_${String(w?.long || '').toLowerCase()}`));
-  const narrowed = parsed.filter(({ burn }) => declared.has(`${burn.factor}x_${burn.short}_${burn.long}`));
-  return (narrowed.length ? narrowed : parsed).map(({ rule }) => rule);
+// Links a declared burn_rate node to the observed alerting rules of its SLO
+// — by the compiler's linkage labels on the observation entry first, by the
+// rule name second — narrowed to the declared windows when any rule matches
+// one, else every rule of the SLO (a live pack that re-shaped the windows
+// still links). The unhealthy list carries names only, so it is narrowed
+// the same way: a linked rule's name (label-linked rules need not follow
+// the name convention), or a name that parses to this SLO and — when any
+// observed rule or listed name matches a declared window — to one of them.
+// The interval is the longest group interval the linked rules carry.
+function burnLink(sloRef, windows, liveness) {
+  const sloId = burnSlug(normalizeRef(sloRef, 'slos').replace(/^slos\./, ''));
+  const declared = new Set((Array.isArray(windows) ? windows : []).map((w) => burnWindowKey(w?.factor, w?.short, w?.long)));
+  const ofSlo = (burn) => !!burn && !!sloId && burn.slo === sloId;
+  const inDeclared = (burn) => declared.has(burnWindowKey(burn.factor, burn.short, burn.long));
+  const parsed = liveness.alertRules
+    .map((rule) => ({ rule, burn: parseBurnObservation(rule) }))
+    .filter(({ burn }) => ofSlo(burn));
+  const narrowed = parsed.filter(({ burn }) => inDeclared(burn));
+  const linked = narrowed.length ? narrowed : parsed;
+  const linkedNames = new Set(linked.map(({ rule }) => String(rule?.name || '')));
+  const listedOfSlo = [...liveness.alertRulesUnhealthy]
+    .map((name) => ({ name, burn: parseBurnAlertName(name) }))
+    .filter(({ name, burn }) => linkedNames.has(name) || ofSlo(burn));
+  const narrow = narrowed.length > 0 || listedOfSlo.some(({ burn }) => burn && inDeclared(burn));
+  const listedNames = listedOfSlo
+    .filter(({ name, burn }) => linkedNames.has(name) || !narrow || inDeclared(burn))
+    .map(({ name }) => name);
+  let interval = null;
+  for (const { rule } of linked) {
+    const seconds = durationSeconds(rule?.interval);
+    if (seconds != null && (interval == null || seconds > durationSeconds(interval))) interval = rule.interval;
+  }
+  return { sloId, rules: linked.map(({ rule }) => rule), listedNames, interval };
+}
+
+// The burn window an observed alerting rule serves: from the linkage
+// labels when the entry carries all four, else from the rule name.
+function parseBurnObservation(rule) {
+  const labels = rule?.labels && typeof rule.labels === 'object' ? rule.labels : null;
+  if (labels && labels.slo && labels.burn_rate && labels.window_short && labels.window_long) {
+    const factor = Number(labels.burn_rate);
+    if (Number.isFinite(factor)) {
+      return {
+        slo: burnSlug(normalizeRef(String(labels.slo), 'slos').replace(/^slos\./, '')),
+        factor,
+        short: String(labels.window_short).toLowerCase(),
+        long: String(labels.window_long).toLowerCase(),
+      };
+    }
+  }
+  return parseBurnAlertName(rule?.name);
 }
 
 function parseBurnAlertName(name) {
   const match = BURN_ALERT_NAME_RE.exec(String(name || ''));
   if (!match) return null;
-  return { slo: burnSlug(match[1]), factor: Number(match[2]), short: match[3], long: match[4] };
+  return { slo: burnSlug(match[1]), factor: Number(match[2].replace('_', '.')), short: match[3], long: match[4] };
+}
+
+// One key per (factor, short, long) in the name convention's alphabet, so a
+// declared 14.4, a label "14.4" and a name `14_4x` all meet.
+function burnWindowKey(factor, short, long) {
+  return `${String(Number(factor)).replace('.', '_')}x_${String(short || '').toLowerCase()}_${String(long || '').toLowerCase()}`;
+}
+
+function nameList(names) {
+  const shown = names.slice(0, DETAIL_NAME_CAP).join(', ');
+  return names.length > DETAIL_NAME_CAP ? `${shown} +${names.length - DETAIL_NAME_CAP}` : shown;
 }
 
 // compile.mjs squashes every non-word character of the alert name to `_`,
@@ -1164,7 +1294,9 @@ function ladderCredit(ladder) {
 }
 
 function branchLadderVerdict(nodeVerdicts, counts, hasMissingLoadBearingRole) {
-  const loadBearing = nodeVerdicts.filter((node) => isLoadBearingKind(node.kind));
+  // live_only nodes are inventory the declaration never claimed: they move
+  // neither the scored verdict nor this one (nor ladderIntegrity).
+  const loadBearing = nodeVerdicts.filter((node) => node.status !== 'live_only' && isLoadBearingKind(node.kind));
   if (hasMissingLoadBearingRole || loadBearing.some((node) => node.ladder?.rung === 'absent')) return 'broken';
   if (counts.drifted > 0 || loadBearing.some((node) => node.ladder?.status === 'present_unhealthy' || node.ladder?.status === 'present_stale')) return 'degraded';
   if (loadBearing.some((node) => node.ladder?.status === 'unobserved')) return 'unobserved';
