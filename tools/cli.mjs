@@ -118,7 +118,10 @@ async function runJourneyCommand([sub, ...args]) {
       const tail = loadError ? `(definition does not load: ${loadError})`
         : !last ? '(never run)'
         : last.outcome === 'vantage-lost' ? `vantage-lost · ${last.startedAt} · ${last.error || 'live source unreachable'}`
-        : `${last.outcome} · ${last.startedAt} · alignment ${last.drift?.alignmentPct}% · ${journeyLib.stackStatusLine(last)} · ${journeyLib.chainStatusLine(last)}`;
+        : `${last.outcome} · ${last.startedAt} · alignment ${last.drift?.alignmentPct}% · ${journeyLib.stackStatusLine(last)} · ${journeyLib.chainStatusLine(last)}`
+          // Step 4: the top candidate cause, only when a chain got worse —
+          // a quiet run has nothing to explain.
+          + (journeyLib.transitionGotWorse(last) ? ` · ${journeyLib.causeLine(last)}` : '');
       console.log(`${n}\t${tail}`);
     }
     return;

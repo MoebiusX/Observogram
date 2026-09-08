@@ -626,6 +626,12 @@ try {
       { rootKey: 'slo::a', title: 'a', from: { verdict: 'partial', ladderVerdict: 'degraded' }, to: { verdict: 'intact', ladderVerdict: 'healthy' }, direction: 'better', nodes: { newlyDegraded: [], recovered: ['x'] } },
     ], appeared: [], disappeared: [], any: true },
     livePack: { kept: false, path: null, reason: 'Pack B is a file (x)' },
+    // Slice 4: the ranker's block as runJourney stores it.
+    causes: { transitions: null, causes: [
+      { rank: 1, kind: 'observogram-deploy', score: 0.9, evidence: 'deploy dep_smoke by local at 2026-09-08T10:05:00.000Z (upsert) touched payment', chains: ['slo::c'], nodes: ['payment'] },
+      { rank: 2, kind: 'config-drift', score: 0.8, evidence: 'burn-rate alert: b (burn_rate) drifted on windows[0].long — decision-bearing: windows[0].long', chains: ['slo::b'], nodes: ['burn-rate alert: b'] },
+    ], vantage: { changed: true, from: { vantage: 'full', failed: [], unsupported: [], toolsExposedCount: 12 }, to: { vantage: 'partial', failed: ['scrape_configs'], unsupported: [], toolsExposedCount: 12 }, detail: 'vantage full → partial · probe family scrape_configs newly failed (HTTP 502)' },
+    note: 'candidate causes ranked by evidence — not a root-cause verdict' },
   }, null, 2));
   const jList4 = await getJson(base, '/api/journeys');
   const chainLast = jList4.journeys.find(j => j.name === 'chain-seeded')?.lastRun;
@@ -638,6 +644,12 @@ try {
   assert(chainLast.chains.topExposure?.label === 'payment' && chainLast.chains.topExposure.kind === 'scrape_job' && chainLast.chains.topExposure.slos === 2 && chainLast.chains.topExposure.alerts === 2,
          'lastRun.chains.topExposure is the degraded node that blinds the most SLOs', chainLast.chains.topExposure);
   assert(JSON.stringify(chainLast.transition) === JSON.stringify({ any: true, changed: 2, worse: 1 }), 'lastRun.transition summarises any / changed / worse', chainLast.transition);
+  // Slice 4: the rank-1 candidate cause and the vantage marker ride on lastRun.
+  assert(chainLast.topCause && Object.keys(chainLast.topCause).join() === 'rank,kind,score,evidence,chains,nodes' && chainLast.topCause.rank === 1 && chainLast.topCause.kind === 'observogram-deploy' && chainLast.topCause.score === 0.9
+         && /^deploy dep_smoke by local/.test(chainLast.topCause.evidence) && chainLast.topCause.chains.join() === 'slo::c' && chainLast.topCause.nodes.join() === 'payment',
+         'GET /api/journeys lastRun.topCause is the rank-1 cause with its full shape', chainLast.topCause);
+  assert(chainLast.vantageChanged === true, 'lastRun.vantageChanged reads the vantage block beside the causes', chainLast.vantageChanged);
+  assert(seededLast.topCause === null && seededLast.vantageChanged === null, 'a record without a causes block reads topCause null and vantageChanged null', { t: seededLast.topCause, v: seededLast.vantageChanged });
   const chainRuns = await getJson(base, '/api/journeys/chain-seeded/runs?limit=5');
   assert(chainRuns.runs[0]?.branches?.length === 4 && chainRuns.runs[0].transition.changed.length === 2 && chainRuns.runs[0].livePack.kept === false,
          'GET /api/journeys/:name/runs hands the record through unchanged (branches, transition, livePack)');

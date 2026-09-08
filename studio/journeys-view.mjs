@@ -165,6 +165,7 @@ async function loadJourneysList(host) {
         ${j.loadError ? `<div class="journey-card-meta"><span class="journey-load-error" title="loadJourneyDef">definition does not load: ${escapeHtml(j.loadError)}</span></div>` : ''}
         ${renderStackChips(last?.stack ?? null, runs, stackLib)}
         ${renderChainsLine(last)}
+        ${renderCauseLine(last)}
         <div class="journey-runs">${renderRunsTable(runs)}</div>
         <div class="journey-result" hidden></div>
       </article>`;
@@ -245,6 +246,22 @@ function renderChainsLine(last) {
     ? ` <span class="journey-stack-mark">changed since previous run (${tr.worse ?? 0} worse)</span>`
     : '';
   return `<div class="journey-stack journey-chains"><span class="journey-stack-label">${escapeHtml(bits.join(' · '))}</span>${mark}</div>`;
+}
+
+// The rank-1 candidate cause of the last run (step 4) from GET
+// /api/journeys' lastRun.topCause — one muted line, worded as what it is:
+// a candidate ranked by evidence, not a verdict. A vantage change
+// (lastRun.vantageChanged) is a muted marker beside it, never a cause.
+// Nothing when the last run carries neither.
+function renderCauseLine(last) {
+  const top = last?.topCause && typeof last.topCause === 'object' ? last.topCause : null;
+  const vantage = last?.vantageChanged === true;
+  if (!top && !vantage) return '';
+  const cause = top
+    ? `<span class="journey-stack-label">candidate cause: [${escapeHtml(String(top.kind ?? '?'))}] ${escapeHtml(String(top.evidence ?? ''))} — not a verdict</span>`
+    : '';
+  const mark = vantage ? `${top ? ' ' : ''}<span class="journey-stack-mark">vantage changed</span>` : '';
+  return `<div class="journey-stack journey-cause">${cause}${mark}</div>`;
 }
 
 function renderRunsTable(runs) {

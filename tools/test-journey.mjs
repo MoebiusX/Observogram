@@ -34,6 +34,7 @@ const {
   pruneRunFiles, parseRunRetention, journeyRunRetention, JOURNEY_RUN_RETENTION_DEFAULT,
   formatStackValue, validateGateStack, stackStatusLine,
   chainStatusLine, liveVersions, livePackDecision, pruneLiveSnapshots, readLivePack, KEEP_LIVE_PACK_POLICIES, LIVE_PACK_PATH_RE,
+  causeLine, transitionGotWorse,
 } = await import('./lib/journey.mjs');
 const { STACK_SELF_METRIC_PROBES } = await import('./lib/contracts/stack-self-metrics.mjs');
 
@@ -798,6 +799,20 @@ try {
     assert(t2.livePack.kept === false && t2.livePack.path === null && t2.livePack.reason === `no transition since ${t1.startedAt}`, 'the identical run is not kept, naming the run it did not move from', t2.livePack);
     assert(liveFilesOf('fake-live').join() === stemOf(t1), 'no snapshot was written for the identical run', liveFilesOf('fake-live'));
     assert(/^live pack: not kept — no transition since /m.test(renderJourneyMarkdown(t2)) && /_no chain changed since /.test(renderJourneyMarkdown(t2)), 'markdown prints the not-kept decision and the quiet transition');
+    // Slice 4: Observogram's own deploy audit beside the runs (the server
+    // appends deploys.jsonl under the workspace root). One deploy inside
+    // the window (t2, t3] naming the recording rule the third run will see
+    // move, one long before the window naming the same rule, its verify
+    // line, and a torn line.
+    await new Promise(r => setTimeout(r, 5));
+    const depAt = new Date().toISOString();
+    const depItem = { artifact: 'payment:api_availability:ratio_5m', group: 'rules', ok: true, tookMs: 2 };
+    writeFileSync(join(TMP, 'deploys.jsonl'), [
+      JSON.stringify({ type: 'deploy', deployId: 'dep_out', at: '2000-01-01T00:00:00.000Z', actor: 'old', pack: { id: 'payment-service', version: '1.5.0' }, env: null, mcpUrl: fakeUrl, target: { product: 'prometheus' }, mode: 'upsert', dryRun: false, items: [depItem], summary: { total: 1, ok: 1, failed: 0 } }),
+      JSON.stringify({ type: 'deploy', deployId: 'dep_in', at: depAt, actor: 'carlos', pack: { id: 'payment-service', version: '1.5.0' }, env: null, mcpUrl: fakeUrl, target: { product: 'prometheus' }, mode: 'upsert', dryRun: false, items: [depItem], summary: { total: 1, ok: 1, failed: 0 } }),
+      JSON.stringify({ type: 'verify', deployId: 'dep_in', at: depAt, outcome: 'pending' }),
+      '{"type":"deploy","deployId":"dep_torn","at":"20',
+    ].join('\n') + '\n');
     fakeRules = true;
     await new Promise(r => setTimeout(r, 5));
     const t3 = await runJourney(loadJourneyDef('fake-live'));
@@ -814,6 +829,33 @@ try {
     const t3json = JSON.parse(JSON.stringify(readJourneyRuns('fake-live')[0]));
     assert(t3json.transition.any === true && t3json.livePack.kept === true && readLivePack('fake-live', t3json)?.metadata?.annotations?.['mcp.url'] === fakeUrl,
            'transition and livePack round-trip through the history file and readLivePack works from the persisted record');
+    // Slice 4: candidate causes. The first run has nothing to rank against,
+    // the identical run nothing to explain, the moved run finds the deploy
+    // inside the window — and the vantage change rides beside it.
+    const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert(t1.causes === null && /### Candidate causes — ranked by evidence, not a root-cause verdict\n\n_no previous run_/.test(renderJourneyMarkdown(t1)),
+           'the first run records causes null and its markdown says there is no previous run');
+    assert(t2.causes && typeof t2.causes === 'object' && Object.keys(t2.causes).join() === 'transitions,causes,vantage,note' && t2.causes.causes.length === 0
+           && t2.causes.note === 'candidate causes ranked by evidence — not a root-cause verdict' && t2.causes.vantage?.changed === false,
+           'an identical run records an empty cause list with the note and an unchanged vantage', t2.causes);
+    assert(new RegExp(`_no chain got worse since ${escapeRe(t1.startedAt)}_\n\nvantage: unchanged`).test(renderJourneyMarkdown(t2)), 'the quiet run\'s markdown says no chain got worse and the vantage is unchanged', renderJourneyMarkdown(t2).split('### Candidate causes')[1]);
+    const c3 = t3.causes;
+    assert(c3 && c3.causes.length === 1 && c3.causes[0].rank === 1 && c3.causes[0].kind === 'observogram-deploy' && c3.causes[0].score === 0.9,
+           'the moved run ranks the deploy inside the window first (0.9)', c3 && c3.causes);
+    assert(c3.causes[0].evidence === `deploy dep_in by carlos at ${depAt} (upsert) touched payment:api_availability:ratio_5m; verify: pending`,
+           'the deploy evidence names deployId, actor, at, mode, the artefact and the verify outcome merged from its verify line', c3.causes[0].evidence);
+    assert(!JSON.stringify(c3).includes('dep_out') && !JSON.stringify(c3).includes('dep_torn'), 'the deploy outside the window and the torn line never appear');
+    const availChain = t3.branches.find(b => b.title === 'api_availability_99_9');
+    assert(c3.causes[0].chains.join() === availChain.rootKey && c3.causes[0].nodes.join() === 'payment:api_availability:ratio_5m',
+           'the cause names the chain and the recording rule the deploy touched — not the SLI whose name the rule embeds, not the still-unobserved metric of the same name', { chains: c3.causes[0].chains, nodes: c3.causes[0].nodes });
+    assert(c3.vantage && c3.vantage.changed === true && /vantage lost → restricted/.test(c3.vantage.detail) && /probe family recording_rules now exposed/.test(c3.vantage.detail) && /4 → 5 MCP tools exposed/.test(c3.vantage.detail),
+           'the vantage block reports the family that now answers and the tool count — beside the causes, never among them', c3.vantage);
+    assert(new RegExp(`### Candidate causes — ranked by evidence, not a root-cause verdict\n\n1\\. \\[observogram-deploy\\] 0\\.9 — deploy dep_in by carlos at ${escapeRe(depAt)} \\(upsert\\) touched payment:api_availability:ratio_5m; verify: pending \\(chains: api_availability_99_9\\)\n\nvantage changed: vantage lost → restricted`).test(md3),
+           'markdown lists the ranked causes with their chains by title, then the vantage change', md3.split('### Candidate causes')[1]);
+    assert(JSON.stringify(t3json.causes) === JSON.stringify(c3), 'causes round-trip through the history file');
+    assert(causeLine(t3) === `top cause: [observogram-deploy] ${c3.causes[0].evidence}` && causeLine(t2) === 'no candidate causes' && causeLine(t1) === 'no candidate causes' && causeLine({ outcome: 'vantage-lost' }) === 'no candidate causes',
+           'causeLine reads the rank-1 cause or no candidate causes', causeLine(t3));
+    assert(transitionGotWorse(t3) === true && transitionGotWorse(t2) === false && transitionGotWorse(t1) === false && transitionGotWorse(null) === false, 'transitionGotWorse is true only for the moved run');
     // Gate failure without a transition: kept, reason 'gate failed'.
     const g1 = await runJourney(fakeDef('fake-gated', ['gate: { maxDeclaredNotLive: 0 }']));
     assert(g1.outcome === 'gate-failed' && g1.livePack.kept === true && g1.livePack.reason === 'first run (no previous record)', 'a gated journey keeps its first run for being first', g1.livePack);
@@ -866,6 +908,10 @@ try {
     // The CLI line shows the chains segment for a live journey too.
     const cliLive = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'list'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000 });
     assert(/^fake-live\tpass · .* · chains \d+\/\d+ intact · ladder \d+ healthy/m.test(cliLive.stdout), 'journey list prints the chains status for a live journey', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-live')));
+    assert(/^fake-live\t.* · top cause: \[observogram-deploy\] deploy dep_in by carlos at .* touched payment:api_availability:ratio_5m; verify: pending$/m.test(cliLive.stdout),
+           'journey list appends the top candidate cause to the journey whose chains got worse', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-live')));
+    assert(/^fake-always\t.* · ladder [^\n]*$/m.test(cliLive.stdout) && !/^fake-always\t.*top cause/m.test(cliLive.stdout) && !/^fake-always\t.*no candidate causes/m.test(cliLive.stdout),
+           'a journey whose chains did not get worse gets no cause segment at all', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-always')));
   } finally {
     await new Promise(r => fakeSrv.close(r));
   }

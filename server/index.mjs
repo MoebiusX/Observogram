@@ -61,7 +61,7 @@ import { orgWorkspaceRoot } from './tenancy.mjs';
 import { brandEnv } from '../tools/lib/brand-env.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
 import { stackSummary } from '../tools/lib/stack-evidence.mjs';
-import { chainSummary } from '../tools/lib/chain-history.mjs';
+import { chainSummary, topCause } from '../tools/lib/chain-history.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -866,6 +866,12 @@ app.get('/api/journeys', (req, res) => {
             changed: Array.isArray(lastRun.transition.changed) ? lastRun.transition.changed.length : 0,
             worse: Array.isArray(lastRun.transition.changed) ? lastRun.transition.changed.filter(c => c && c.direction === 'worse').length : 0,
           } : null,
+          // Step 4: the rank-1 candidate cause of the last run (a candidate
+          // ranked by evidence, never a root-cause verdict) and whether its
+          // vantage changed since the run before — reported beside the
+          // cause, never as one. null when the record carries no causes.
+          topCause: topCause(lastRun),
+          vantageChanged: lastRun.causes?.vantage?.changed ?? null,
         },
       };
     });

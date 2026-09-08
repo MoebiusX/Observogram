@@ -16,6 +16,7 @@ import { createHarness } from './lib/harness.mjs';
 import {
   DEGRADED_STATUSES, BRANCH_RECORD_CAPS, VERDICT_RANK, LADDER_VERDICT_RANK,
   isDegradedNode, degradedSeverity, branchRecordsFromGraph, chainSummary, transitionDirection, diffRunBranches,
+  CAUSE_KINDS, CAUSE_NOTE, CAUSE_SCORES, FAMILY_FOR_KIND, familyForKind, deploysInWindow, rankCauses, topCause,
 } from './lib/chain-history.mjs';
 
 const { assert, report } = createHarness();
@@ -214,5 +215,190 @@ assert(diffRunBranches({ branches: [{ rootKey: 'x', verdict: 'undeclared', ladde
   assert(dupe.changed.length === 1 && dupe.changed[0].from.verdict === 'intact' && dupe.changed[0].to.verdict === 'partial', 'a duplicated root key is compared once, first occurrence on each side', dupe.changed);
 }
 assert(JSON.stringify(diffRunBranches(prevRecord, curRecord)) === JSON.stringify(t), 'diffRunBranches is deterministic');
+
+// --- the cause tables ---
+assert(CAUSE_KINDS.join() === 'observogram-deploy,config-drift,backend-version,stack-self-metric', 'CAUSE_KINDS is the tie-break order: deploy, drift, version, stack sample', CAUSE_KINDS);
+assert(CAUSE_NOTE === 'candidate causes ranked by evidence — not a root-cause verdict', 'the note keeps the honesty vocabulary');
+assert(CAUSE_SCORES.deployTouchedNode === 0.9 && CAUSE_SCORES.deployTouchedPack === 0.6 && CAUSE_SCORES.driftDecisionBearing === 0.8 && CAUSE_SCORES.driftCosmetic === 0.4
+       && CAUSE_SCORES.versionOnRulerPath === 0.6 && CAUSE_SCORES.versionElsewhere === 0.3 && CAUSE_SCORES.stackSignal === 0.5, 'the scoring table is the documented one', CAUSE_SCORES);
+assert(FAMILY_FOR_KIND.scrape_job === 'scrape' && FAMILY_FOR_KIND.recording_rule === 'ruler' && FAMILY_FOR_KIND.burn_rate === 'ruler' && FAMILY_FOR_KIND.sli === 'ruler' && FAMILY_FOR_KIND.slo === 'ruler'
+       && FAMILY_FOR_KIND.alert_route === 'notify' && FAMILY_FOR_KIND.backend === 'tsdb' && FAMILY_FOR_KIND.otel === 'collector' && FAMILY_FOR_KIND.panel === 'dashboards' && FAMILY_FOR_KIND.dashboard === 'dashboards' && FAMILY_FOR_KIND.synthetic === 'synthetic',
+       'FAMILY_FOR_KIND maps every kind to the stack family that feeds it', FAMILY_FOR_KIND);
+assert(familyForKind('pipeline_exporter_logs') === 'collector' && familyForKind('pipeline_receiver') === 'collector' && familyForKind('metric') === null && familyForKind(null) === null && familyForKind('bogus') === null,
+       'familyForKind reads any pipeline_* kind as collector and knows no family for metric or unknown kinds');
+
+// --- deploysInWindow ---
+{
+  const dep = (deployId, at, patch = {}) => ({ type: 'deploy', deployId, at, actor: 'ci', pack: { id: 'p' }, mode: 'upsert', items: [], ...patch });
+  const log = [
+    dep('dep_b', '2026-09-08T10:10:00.000Z'), dep('dep_a', '2026-09-08T10:10:00.000Z'),
+    dep('dep_since', '2026-09-08T10:00:00.000Z'), dep('dep_until', '2026-09-08T10:15:00.000Z'), dep('dep_after', '2026-09-08T10:15:00.001Z'), dep('dep_before', '2026-09-08T09:59:59.999Z'),
+    { type: 'verify', deployId: 'dep_a', at: '2026-09-08T10:11:00.000Z', outcome: 'pending' }, { type: 'verify', deployId: 'dep_a', at: '2026-09-08T10:12:00.000Z', outcome: 'verified', transitions: {} },
+    dep('dep_noat', undefined), dep('dep_badat', 'yesterday'), { deployId: 'dep_notype', at: '2026-09-08T10:11:00.000Z' }, null, 'x', 7,
+  ];
+  const w = deploysInWindow(log, '2026-09-08T10:00:00.000Z', '2026-09-08T10:15:00.000Z');
+  assert(w.map(d => d.deployId).join() === 'dep_a,dep_b,dep_until', 'the window is (since, until]: since excluded, until included, sorted by at then deployId; verify lines, missing / unparseable at and non-objects left out', w.map(d => d.deployId));
+  assert(w[0].verify && w[0].verify.outcome === 'verified' && !('type' in w[0].verify) && !('deployId' in w[0].verify) && w[1].verify === undefined,
+         'the latest verify of a deploy is merged onto it as `verify` (type and deployId stripped); a deploy without one carries none', w[0].verify);
+  assert(!('verify' in log[1]), 'the merge never mutates the input record');
+  assert(deploysInWindow(log, null, '2026-09-08T10:15:00.000Z').map(d => d.deployId).join() === 'dep_before,dep_since,dep_a,dep_b,dep_until', 'since null → everything up to until', deploysInWindow(log, null, '2026-09-08T10:15:00.000Z').map(d => d.deployId));
+  assert(deploysInWindow(log, '2026-09-08T10:15:00.000Z', null).map(d => d.deployId).join() === 'dep_after', 'until null → everything after since');
+  assert(deploysInWindow(log, 'not a date', 'nor this').length === 6, 'unparseable bounds read as no bound (every deploy with a parseable at)', deploysInWindow(log, 'not a date', 'nor this').map(d => d.deployId));
+  assert(deploysInWindow(null, null, null).length === 0 && deploysInWindow('x', null, null).length === 0 && deploysInWindow([], null, null).length === 0, 'no log → []');
+  const kept = { ...dep('dep_v', '2026-09-08T10:10:00.000Z'), verify: { outcome: 'already' } };
+  assert(deploysInWindow([kept, { type: 'verify', deployId: 'dep_v', at: '2026-09-08T10:11:00.000Z', outcome: 'later' }], null, null)[0].verify.outcome === 'already', 'a deploy that already carries a verify keeps it');
+}
+
+// --- rankCauses ---
+const dn = (kind, label, patch = {}) => ({ key: `${kind}::${label}`, kind, label, status: 'declared_only', ladder: { rung: 'absent', status: null, detail: 'absent from Pack B' }, blastRadius: radius(1), deltaFields: [], ...patch });
+const fullProbes = { attempted: ['recording_rules', 'alert_rules', 'dashboards'], succeeded: ['recording_rules', 'alert_rules', 'dashboards'], empty: [], failed: [], unsupported: [] };
+const runBase = { outcome: 'pass', packA: { source: 'x', name: 'payment-service', version: '1.5.0' }, probes: fullProbes, probeErrors: {}, vantage: 'full', toolsExposedCount: 12 };
+const prevRun = { ...runBase, startedAt: '2026-09-08T10:00:00.000Z', versions: { prometheus: '2.53.0', grafana: '11.1.0' }, branches: [
+  { rootKey: 'slo::checkout', title: 'checkout', verdict: 'intact', ladderVerdict: 'healthy', degraded: [] },
+  { rootKey: 'slo::payments', title: 'payments', verdict: 'partial', ladderVerdict: 'degraded', degraded: [dn('panel', 'pay-panel')] },
+  { rootKey: 'slo::orders', title: 'orders', verdict: 'intact', ladderVerdict: 'healthy', degraded: [] },
+] };
+const curRun = { ...runBase, startedAt: '2026-09-08T10:15:00.000Z', versions: { prometheus: '2.54.0', grafana: '11.1.0' },
+  stackEvidence: { status: 'sampled', reason: null, rows: [
+    { id: 'rule_evaluation_failures', family: 'ruler', product: 'prometheus', value: 0.2, unit: 'per-second', direction: 'lower', outcome: 'data', hint: 'nonzero', at: null, referenceSli: null },
+    { id: 'notification_errors', family: 'notify', product: 'alertmanager', value: 3, unit: 'per-second', direction: 'lower', outcome: 'data', hint: 'nonzero', at: null, referenceSli: null },
+    { id: 'scrape_targets_down', family: 'scrape', product: 'prometheus', value: 0, unit: 'count', direction: 'lower', outcome: 'data', hint: null, at: null, referenceSli: null },
+    { id: 'tsdb_compaction_failures', family: 'tsdb', product: 'prometheus', value: null, unit: 'per-hour', direction: 'lower', outcome: 'empty', hint: null, at: null, referenceSli: null },
+  ], alertmanager: null, grafana: null },
+  branches: [
+    { rootKey: 'slo::checkout', title: 'checkout', verdict: 'broken', ladderVerdict: 'broken', degraded: [
+      dn('recording_rule', 'checkout:ratio'),
+      dn('burn_rate', 'burn-rate alert: checkout', { status: 'drifted', ladder: { rung: 'exists', status: null, detail: 'no liveness field' }, deltaFields: ['objective', 'labels.team'] }),
+    ] },
+    { rootKey: 'slo::payments', title: 'payments', verdict: 'partial', ladderVerdict: 'degraded', degraded: [dn('panel', 'pay-panel')] },
+    { rootKey: 'slo::orders', title: 'orders', verdict: 'intact', ladderVerdict: 'healthy', degraded: [] },
+  ] };
+const deployLog = [
+  { type: 'deploy', deployId: 'dep_in', at: '2026-09-08T10:05:00.000Z', actor: 'carlos', pack: { id: 'payment-service' }, mode: 'upsert', dryRun: false, items: [{ artifact: 'checkout:ratio', group: 'rules', ok: true, tookMs: 3 }], summary: { total: 1, ok: 1, failed: 0 } },
+  { type: 'verify', deployId: 'dep_in', at: '2026-09-08T10:06:00.000Z', outcome: 'verified' },
+  { type: 'deploy', deployId: 'dep_pack', at: '2026-09-08T10:07:00.000Z', actor: 'ci', pack: { id: 'payment-service' }, mode: 'upsert', items: [{ artifact: 'all', group: 'dashboards', ok: true }] },
+  { type: 'deploy', deployId: 'dep_other', at: '2026-09-08T10:08:00.000Z', actor: 'ci', pack: { id: 'other-pack' }, mode: 'upsert', items: [{ artifact: 'unrelated', ok: true }] },
+  { type: 'deploy', deployId: 'dep_dry', at: '2026-09-08T10:09:00.000Z', actor: 'ci', pack: { id: 'payment-service' }, mode: 'upsert', dryRun: true, items: [{ artifact: 'checkout:ratio', ok: true }] },
+  { type: 'deploy', deployId: 'dep_late', at: '2026-09-08T10:16:00.000Z', actor: 'ci', pack: { id: 'payment-service' }, mode: 'upsert', items: [{ artifact: 'checkout:ratio', ok: true }] },
+];
+const rc = rankCauses({ previous: prevRun, current: curRun, deploys: deploysInWindow(deployLog, prevRun.startedAt, curRun.startedAt) });
+assert(rc && Object.keys(rc).join() === 'transitions,causes,vantage,note' && rc.note === CAUSE_NOTE, 'rankCauses returns transitions, causes, vantage, note', Object.keys(rc || {}));
+assert(rc.transitions && rc.transitions.since === prevRun.startedAt && rc.transitions.changed.length === 1 && rc.transitions.changed[0].direction === 'worse', 'transitions is the diff of the two records', rc.transitions);
+assert(rc.causes.map(c => `${c.rank}:${c.kind}:${c.score}`).join() === '1:observogram-deploy:0.9,2:config-drift:0.8,3:observogram-deploy:0.6,4:backend-version:0.6,5:stack-self-metric:0.5',
+       'causes rank by score desc, then CAUSE_KINDS order on a tie (deploy 0.6 before version 0.6); ranks are 1-based', rc.causes.map(c => `${c.rank}:${c.kind}:${c.score}`));
+const c1 = rc.causes[0];
+assert(Object.keys(c1).join() === 'rank,kind,score,evidence,chains,nodes', 'a cause carries exactly rank, kind, score, evidence, chains, nodes', Object.keys(c1));
+assert(c1.evidence === 'deploy dep_in by carlos at 2026-09-08T10:05:00.000Z (upsert) touched checkout:ratio; verify: verified', 'deploy evidence names deployId, actor, at, mode, the matching artifact and the verify outcome', c1.evidence);
+assert(c1.chains.join() === 'slo::checkout' && c1.nodes.join() === 'checkout:ratio', 'a deploy cause lists the chains and nodes its items touched', { chains: c1.chains, nodes: c1.nodes });
+assert(rc.causes[1].evidence === 'burn-rate alert: checkout (burn_rate) drifted on objective, labels.team — decision-bearing: objective' && rc.causes[1].chains.join() === 'slo::checkout' && rc.causes[1].nodes.join() === 'burn-rate alert: checkout',
+       'a decision-bearing drift scores 0.8 and its evidence lists the fields', rc.causes[1].evidence);
+assert(rc.causes[2].evidence === 'deploy dep_pack by ci at 2026-09-08T10:07:00.000Z (upsert) wrote pack payment-service — no item names a degraded artefact' && rc.causes[2].chains.join() === 'slo::checkout' && rc.causes[2].nodes.length === 0,
+       'a deploy of the journey\'s pack whose items name no degraded artefact scores 0.6 over every chain that got worse', rc.causes[2]);
+assert(rc.causes[3].evidence === 'prometheus 2.53.0 → 2.54.0' && rc.causes[3].nodes.join() === 'burn-rate alert: checkout,checkout:ratio', 'a version change on the ruler / TSDB path scores 0.6 and names the rule nodes; an unchanged product (grafana) is no cause', rc.causes[3]);
+assert(rc.causes[4].evidence === 'rule_evaluation_failures = 0.2 per-second (ruler) — point-in-time sample' && rc.causes[4].nodes.join() === 'burn-rate alert: checkout,checkout:ratio',
+       'a non-zero stack row in the family feeding the moved kinds scores 0.5, phrased as a sample', rc.causes[4].evidence);
+assert(!rc.causes.some(c => /notification_errors|scrape_targets_down|tsdb_compaction/.test(c.evidence)), 'a non-zero row in an unrelated family (notify, no alert_route moved), a zero row and an empty row are no cause');
+assert(!rc.causes.some(c => /dep_other|dep_dry|dep_late/.test(c.evidence)), 'a deploy of another pack naming nothing, a dry run and a deploy outside the window are no cause');
+assert(rc.vantage && rc.vantage.changed === false && rc.vantage.detail === null && rc.vantage.from.vantage === 'full' && rc.vantage.to.toolsExposedCount === 12, 'an unchanged vantage reads changed: false with no detail', rc.vantage);
+assert(JSON.stringify(rankCauses({ previous: prevRun, current: curRun, deploys: deploysInWindow(deployLog, prevRun.startedAt, curRun.startedAt) })) === JSON.stringify(rc), 'rankCauses is deterministic');
+assert(JSON.stringify(rankCauses({ previous: prevRun, current: curRun, deploys: deploysInWindow(deployLog.slice().reverse(), prevRun.startedAt, curRun.startedAt) })) === JSON.stringify(rc), 'the deploy log order does not change the ranking');
+{
+  // Ties inside a kind break on evidence; the same evidence explaining two chains is one cause.
+  const cur2 = { ...curRun, branches: [...curRun.branches, { rootKey: 'slo::second', title: 'second', verdict: 'broken', ladderVerdict: 'broken', degraded: [dn('recording_rule', 'checkout:ratio')] }] };
+  const two = rankCauses({ previous: { ...prevRun, branches: [...prevRun.branches, { rootKey: 'slo::second', title: 'second', verdict: 'intact', ladderVerdict: 'healthy', degraded: [] }] }, current: cur2, deploys: [
+    { type: 'deploy', deployId: 'dep_z', at: '2026-09-08T10:05:00.000Z', actor: 'zed', pack: { id: 'x' }, mode: 'upsert', items: [{ artifact: 'checkout:ratio', ok: true }] },
+    { type: 'deploy', deployId: 'dep_a', at: '2026-09-08T10:05:00.000Z', actor: 'amy', pack: { id: 'x' }, mode: 'upsert', items: [{ artifact: 'checkout:ratio', ok: false, error: 'boom' }] },
+  ] });
+  assert(two.causes[0].evidence.startsWith('deploy dep_a by amy') && two.causes[0].evidence.includes('touched checkout:ratio (failed)') && two.causes[1].evidence.startsWith('deploy dep_z by zed'),
+         'two deploys at the same score order by evidence; a failed item is marked', two.causes.map(c => c.evidence));
+  assert(two.causes[0].chains.join() === 'slo::checkout,slo::second' && two.causes[0].nodes.join() === 'checkout:ratio', 'one evidence explaining two chains is one cause listing both, in record order', two.causes[0].chains);
+  // Rollbacks are named; aId matches exactly; 'all' and short stubs never match.
+  const rb = rankCauses({ previous: prevRun, current: { ...curRun, branches: [{ ...curRun.branches[0], degraded: [dn('recording_rule', 'checkout:ratio', { aId: 'rr-123' })] }, ...curRun.branches.slice(1)] }, deploys: [
+    { type: 'deploy', deployId: 'dep_rb', at: '2026-09-08T10:05:00.000Z', actor: 'carlos', pack: { id: 'x' }, mode: 'rollback', rollbackOf: 'dep_in', items: [{ artifact: 'rr-123', ok: true }, { artifact: 'all', ok: true }, { artifact: 'ch', ok: true }] },
+  ] });
+  const deployCauses = (r) => r.causes.filter(c => c.kind === 'observogram-deploy');
+  assert(deployCauses(rb).length === 1 && rb.causes[0].evidence === 'deploy dep_rb by carlos at 2026-09-08T10:05:00.000Z (rollback, rollback of dep_in) touched rr-123', 'a rollback is named as such; aId matches exactly; all and a two-letter stub match nothing', rb.causes.map(c => c.evidence));
+  // A deploy naming an artefact whose label embeds the SLI's name does not blame the SLI (containment runs one way).
+  const oneWay = rankCauses({ previous: prevRun, current: { ...curRun, branches: [{ ...curRun.branches[0], degraded: [dn('recording_rule', 'payment:api_availability:ratio_5m'), dn('sli', 'api_availability')] }, ...curRun.branches.slice(1)] }, deploys: [
+    { type: 'deploy', deployId: 'dep_rule', at: '2026-09-08T10:05:00.000Z', actor: 'ci', pack: { id: 'x' }, mode: 'upsert', items: [{ artifact: 'payment:api_availability:ratio_5m', ok: true }] },
+  ] });
+  assert(deployCauses(oneWay).length === 1 && oneWay.causes[0].kind === 'observogram-deploy' && oneWay.causes[0].nodes.join() === 'payment:api_availability:ratio_5m', 'label / key containment runs one way: the rule deploy names the rule, not the SLI whose name it embeds', oneWay.causes[0]?.nodes);
+  // Cosmetic drift 0.4; version 0.3 when nothing on the ruler path moved; a ratio row below 1 is a signal.
+  const cosmetic = rankCauses({ previous: prevRun, current: { ...curRun, versions: { prometheus: '2.54.0' }, stackEvidence: { status: 'sampled', rows: [
+      { id: 'scrape_success_ratio', family: 'scrape', value: 0.75, unit: 'ratio', direction: 'higher', outcome: 'data', hint: null }] },
+    branches: [{ ...curRun.branches[0], degraded: [dn('panel', 'checkout-panel', { status: 'drifted', deltaFields: ['title', 'gridPos'] }), dn('scrape_job', 'checkout-scrape')] }, ...curRun.branches.slice(1)] } });
+  assert(cosmetic.causes.map(c => `${c.kind}:${c.score}`).join() === 'stack-self-metric:0.5,config-drift:0.4,backend-version:0.3', 'a cosmetic-only drift scores 0.4, a version change off the ruler path 0.3 (no node named), a ratio row below 1 is a scrape signal', cosmetic.causes.map(c => `${c.kind}:${c.score}:${c.evidence}`));
+  assert(cosmetic.causes[1].evidence === 'checkout-panel (panel) drifted on title, gridPos — cosmetic only' && cosmetic.causes[2].nodes.length === 0 && cosmetic.causes[2].chains.join() === 'slo::checkout' && cosmetic.causes[0].evidence === 'scrape_success_ratio = 0.75 ratio (scrape) — point-in-time sample',
+         'evidence wording for cosmetic drift, an off-path version and a ratio sample', cosmetic.causes.map(c => c.evidence));
+  assert(rankCauses({ previous: prevRun, current: { ...curRun, branches: [{ ...curRun.branches[0], degraded: [dn('panel', 'checkout-panel', { status: 'drifted', deltaFields: [] })] }] } }).causes[0].evidence === 'checkout-panel (panel) drifted on fields not recorded — cosmetic only',
+         'a drifted node without recorded fields reads cosmetic (0.4), never decision-bearing');
+  // A node already degraded and unchanged in a chain that got worse is not blamed when another node moved; it is when the record cannot say which moved.
+  const stayed = { ...prevRun, branches: [{ rootKey: 'slo::checkout', title: 'checkout', verdict: 'partial', ladderVerdict: 'degraded', degraded: [dn('metric', 'old_metric')] }] };
+  const movedOne = { ...curRun, branches: [{ rootKey: 'slo::checkout', title: 'checkout', verdict: 'broken', ladderVerdict: 'broken', degraded: [dn('metric', 'old_metric'), dn('recording_rule', 'checkout:ratio')] }] };
+  const touchOld = [{ type: 'deploy', deployId: 'dep_old', at: '2026-09-08T10:05:00.000Z', actor: 'ci', pack: { id: 'x' }, mode: 'upsert', items: [{ artifact: 'old_metric', ok: true }] }];
+  assert(deployCauses(rankCauses({ previous: stayed, current: movedOne, deploys: touchOld })).length === 0, 'a deploy naming a node that did not move is no cause when the record says which node moved');
+  const sameNodes = { ...curRun, branches: [{ rootKey: 'slo::checkout', title: 'checkout', verdict: 'broken', ladderVerdict: 'broken', degraded: [dn('metric', 'old_metric')] }] };
+  const sameRanked = deployCauses(rankCauses({ previous: stayed, current: sameNodes, deploys: touchOld }));
+  assert(sameRanked.length === 1 && sameRanked[0].nodes.join() === 'old_metric', 'when the chain got worse but no recorded node moved, every degraded node is considered', sameRanked);
+  const ladderMoved = { ...curRun, branches: [{ rootKey: 'slo::checkout', title: 'checkout', verdict: 'partial', ladderVerdict: 'broken', degraded: [dn('metric', 'old_metric', { ladder: { rung: 'exists', status: 'present_unhealthy', detail: 'down' } }), dn('recording_rule', 'checkout:ratio')] }] };
+  assert(deployCauses(rankCauses({ previous: stayed, current: ladderMoved, deploys: touchOld }))[0]?.nodes.join() === 'old_metric', 'a node whose ladder status changed counts as moved');
+  // A chain that appeared already broken is considered with every degraded node.
+  const appeared = rankCauses({ previous: prevRun, current: { ...curRun, branches: [...prevRun.branches, { rootKey: 'slo::new', title: 'new', verdict: 'broken', ladderVerdict: 'broken', degraded: [dn('recording_rule', 'new:ratio')] }] }, deploys: [
+    { type: 'deploy', deployId: 'dep_new', at: '2026-09-08T10:05:00.000Z', actor: 'ci', pack: { id: 'x' }, mode: 'upsert', items: [{ artifact: 'new:ratio', ok: true }] }] });
+  assert(appeared.causes.map(c => `${c.kind}:${c.chains}`).join() === 'observogram-deploy:slo::new,backend-version:slo::new,stack-self-metric:slo::new',
+         'a chain that appeared broken contributes its degraded nodes (the deploy, the version change and the ruler sample on its rule)', appeared.causes.map(c => `${c.kind}:${c.chains}`));
+  assert(rankCauses({ previous: prevRun, current: { ...curRun, branches: [...prevRun.branches, { rootKey: 'slo::new', title: 'new', verdict: 'intact', ladderVerdict: 'healthy', degraded: [] }] } }).causes.length === 0, 'a chain that appeared healthy contributes nothing');
+}
+{
+  // Unobserved nodes never generate a cause — that movement is the vantage's, reported separately.
+  const lookedAway = { ...curRun, probes: { attempted: ['recording_rules', 'alert_rules', 'dashboards'], succeeded: ['alert_rules'], empty: [], failed: ['recording_rules'], unsupported: ['dashboards'] },
+    probeErrors: { recording_rules: 'HTTP 502' }, vantage: 'partial', toolsExposedCount: 9,
+    branches: [{ rootKey: 'slo::checkout', title: 'checkout', verdict: 'intact', ladderVerdict: 'unobserved', degraded: [dn('recording_rule', 'checkout:ratio', { ladder: { rung: 'unobserved', status: 'unobserved', detail: 'probe family recording_rules failed (HTTP 502)' } })] }, ...curRun.branches.slice(1)] };
+  const v = rankCauses({ previous: prevRun, current: lookedAway, deploys: deploysInWindow(deployLog, prevRun.startedAt, curRun.startedAt) });
+  assert(v.transitions.changed[0].direction === 'worse' && v.causes.length === 0, 'a chain that got worse only because the vantage looked away yields no cause — not the deploy in the window, not the version change', v.causes);
+  assert(v.vantage && Object.keys(v.vantage).join() === 'changed,from,to,detail' && v.vantage.changed === true, 'the vantage block reads changed', v.vantage);
+  assert(v.vantage.detail === 'vantage full → partial · probe family dashboards no longer exposed · probe family recording_rules newly failed (HTTP 502) · 12 → 9 MCP tools exposed',
+         'the vantage detail names the vantage word, each probe family that moved (with its error) and the tool count', v.vantage.detail);
+  assert(v.vantage.from.vantage === 'full' && v.vantage.from.failed.length === 0 && v.vantage.to.failed.join() === 'recording_rules' && v.vantage.to.unsupported.join() === 'dashboards' && v.vantage.to.toolsExposedCount === 9,
+         'from / to are the probe snapshots', v.vantage);
+  const back = rankCauses({ previous: lookedAway, current: { ...curRun, branches: prevRun.branches } });
+  assert(back.causes.length === 0 && back.vantage.detail === 'vantage partial → full · probe family dashboards now exposed · probe family recording_rules answers again · 9 → 12 MCP tools exposed',
+         'the way back reads answers again / now exposed; a better transition has no cause', back.vantage.detail);
+  // A previous run that lost its vantage: no chains to diff, causes [], vantage lost → full.
+  const lost = rankCauses({ previous: { startedAt: '2026-09-08T09:45:00.000Z', outcome: 'vantage-lost', error: 'ECONNREFUSED' }, current: curRun, deploys: deploysInWindow(deployLog, null, curRun.startedAt) });
+  assert(lost.transitions === null && lost.causes.length === 0 && lost.vantage.changed === true && lost.vantage.detail === 'vantage lost → full' && lost.vantage.from.vantage === 'lost',
+         'after a vantage loss there is nothing to diff: no cause, vantage lost → full (no per-family noise)', lost);
+  // File-sourced on both sides: no probe facts → vantage null.
+  const fileRun = (r) => ({ ...r, probes: { attempted: [], succeeded: [], empty: [], failed: [], unsupported: [] }, vantage: 'none', toolsExposedCount: null });
+  const files = rankCauses({ previous: fileRun(prevRun), current: fileRun(curRun) });
+  assert(files.vantage === null && files.causes.map(c => c.kind).join() === 'config-drift,backend-version,stack-self-metric', 'two file-sourced records carry no vantage block (null) while causes still rank (no deploys passed → drift, version, sample)', { v: files.vantage, kinds: files.causes.map(c => c.kind) });
+  assert(rankCauses({ previous: fileRun(prevRun), current: curRun }).vantage.detail === 'vantage none → full', 'a file-sourced previous and a live current read vantage none → full');
+}
+// No worse transition → no cause, whatever the deploys and versions say.
+assert(rankCauses({ previous: curRun, current: curRun, deploys: deploysInWindow(deployLog, null, null) }).causes.length === 0, 'an identical record has no cause');
+assert(rankCauses({ previous: curRun, current: prevRun, deploys: deploysInWindow(deployLog, null, null) }).causes.length === 0, 'a better transition has no cause');
+assert(rankCauses({ previous: null, current: curRun, deploys: deploysInWindow(deployLog, null, null) }).causes.length === 0 && rankCauses({ previous: null, current: curRun }).transitions === null, 'no previous record → no transitions, no cause');
+{
+  // Malformed input never throws.
+  let threw = null;
+  let out = null;
+  try {
+    rankCauses();
+    rankCauses({});
+    rankCauses({ previous: 'x', current: 3, deploys: 'nope' });
+    out = rankCauses({
+      previous: { branches: [{ rootKey: 'k', verdict: 'intact', ladderVerdict: 'healthy', degraded: 'x' }], versions: 'v', probes: 'p', stackEvidence: 4 },
+      current: { branches: [{ rootKey: 'k', verdict: 'broken', ladderVerdict: 'broken', degraded: [null, 4, { label: 3, kind: 7, status: 'drifted', deltaFields: 'objective', ladder: 'x' }, { key: 'metric::m', kind: 'metric' }] }], versions: { prometheus: 5 }, probes: { attempted: 'x', failed: [3] }, probeErrors: 'e', stackEvidence: { rows: [null, { id: 1, family: 2, value: 'x', outcome: 'data' }, { id: 'r', family: 'ruler', value: 1, outcome: 'data', direction: 'lower' }] }, toolsExposedCount: '9' },
+      deploys: [null, 5, 'x', { items: 'x' }, { type: 'deploy', at: 7, items: [null, { artifact: 9 }, { artifact: 'metric::m' }] }, { type: 'deploy', deployId: 3, actor: null, items: [{ artifact: 'm' }], pack: 'p', verify: 'v' }],
+    });
+    topCause(null); topCause('x'); topCause({ causes: 'x' }); topCause({ causes: { causes: 'x' } }); topCause({ causes: { causes: [null, 3] } });
+  } catch (e) { threw = e; }
+  assert(threw === null, 'malformed records, nodes, deploys, versions and stack rows never throw', threw && threw.message);
+  assert(out && out.causes.length >= 1 && out.causes.every(c => typeof c.evidence === 'string' && Array.isArray(c.chains) && Array.isArray(c.nodes)), 'malformed input still ranks what it can', out && out.causes);
+}
+// --- topCause ---
+assert(topCause({ causes: rc }) === rc.causes[0] && topCause(rc) === rc.causes[0], 'topCause reads the rank-1 cause from a run record (its causes block) or from a rankCauses result');
+assert(topCause({ causes: null }) === null && topCause({}) === null && topCause({ causes: { causes: [] } }) === null && topCause({ causes: { causes: [{ kind: 'bogus', evidence: 'x' }] } }) === null,
+       'topCause is null without causes, with an empty list and for an unknown kind');
 
 report('chain-history', 'all chain-history assertions pass.');

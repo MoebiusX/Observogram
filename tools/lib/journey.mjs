@@ -64,7 +64,7 @@ import { crawlFiles } from './crawler.mjs';
 import { baseWorkspacePath, brandEnv } from './brand-env.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from './contracts/stack-self-metrics.mjs';
 import { formatStackValue } from './stack-evidence.mjs';
-import { branchRecordsFromGraph, chainSummary, diffRunBranches } from './chain-history.mjs';
+import { branchRecordsFromGraph, chainSummary, diffRunBranches, rankCauses, deploysInWindow, topCause } from './chain-history.mjs';
 import { computeDiagnosticGrade, computePostureMatrix, partialLiveEvidence, DIAGNOSTIC_PASS_SCORE_THRESHOLD } from '../../studio/diagnostic-grade.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -758,6 +758,15 @@ export async function runJourney(def, { baseDir } = {}) {
     gate: { thresholds: def.gate || {}, breaches },
     outcome,
   };
+  // Step 4: candidate causes for the chains that got worse since the
+  // previous run — ranked over Observogram's own deploys inside the window
+  // (previous start, this start], the drift and version facts of this
+  // record and its stack samples (chain-history.mjs rankCauses). A vantage
+  // change rides beside them, never among them. null on the first run:
+  // nothing to explain yet.
+  record.causes = previousRun
+    ? rankCauses({ previous: previousRun, current: record, deploys: deploysInWindow(readDeployLog(), previousRun.startedAt ?? null, startedAt) })
+    : null;
   if (livePackError) record.historyError = livePackError;
 
   writeRunRecord(def.name, startedAt, record);
@@ -863,6 +872,26 @@ export function readJourneyRuns(name, { limit = 50 } = {}) {
   return out;
 }
 
+// Observogram's own deploy audit — server/workspace.mjs appends it as JSON
+// lines to deploys.jsonl under the same workspace root the runs live in.
+// Read here without importing server code (the engine stays
+// server-agnostic): every parseable line, deploy and verify alike, for
+// chain-history's deploysInWindow to window and merge. Missing file → [];
+// a torn or unparseable line is skipped, never fatal.
+function readDeployLog() {
+  let raw = '';
+  try { raw = readFileSync(join(workspaceRoot(), 'deploys.jsonl'), 'utf8'); } catch (_) { return []; }
+  const out = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const rec = JSON.parse(line);
+      if (rec && typeof rec === 'object' && !Array.isArray(rec)) out.push(rec);
+    } catch (_) {}
+  }
+  return out;
+}
+
 // ---------- report rendering ----------
 
 function probesLine(r) {
@@ -916,6 +945,7 @@ export function renderJourneyMarkdown(r) {
   lines.push(...stackEvidenceTable(r.stackEvidence));
   lines.push(...requirementChainsTable(r.branches));
   lines.push(...transitionsSection(r));
+  lines.push(...causesSection(r));
   if (r.gate.breaches.length) {
     lines.push('', '### Gate breaches', '');
     for (const b of r.gate.breaches) lines.push(`- **${b.criterion}** — ${b.detail}`);
@@ -997,6 +1027,42 @@ export function chainStatusLine(record) {
   const ladder = [`${s.ladder.healthy} healthy`];
   for (const k of ['degraded', 'broken', 'unobserved']) if (s.ladder[k] > 0) ladder.push(`${s.ladder[k]} ${k}`);
   return `chains ${s.intact}/${s.declaredTotal} intact · ladder ${ladder.join(' · ')}`;
+}
+
+// Step 4: the candidate causes of a worse transition, ranked by evidence
+// (chain-history.mjs rankCauses) — never a root-cause verdict, the heading
+// says so. A record written before the ranker existed (no `causes` key)
+// gets no section; null means there was no previous run to rank against.
+// The vantage line rides beside the causes, never among them.
+function causesSection(r) {
+  if (!Object.prototype.hasOwnProperty.call(r, 'causes')) return [];
+  const out = ['', '### Candidate causes — ranked by evidence, not a root-cause verdict', ''];
+  const c = r.causes;
+  if (!c || typeof c !== 'object') { out.push('_no previous run_'); return out; }
+  const list = Array.isArray(c.causes) ? c.causes.filter(x => x && typeof x === 'object') : [];
+  if (!list.length) out.push(`_no chain got worse since ${c.transitions?.since || r.transition?.since || 'the previous run'}_`);
+  const titles = new Map((Array.isArray(r.branches) ? r.branches : []).filter(b => b && typeof b === 'object').map(b => [String(b.rootKey), b.title || b.rootKey]));
+  for (const cause of list) {
+    const chains = Array.isArray(cause.chains) ? cause.chains.map(k => titles.get(String(k)) || k) : [];
+    out.push(`${cause.rank}. [${cause.kind}] ${cause.score} — ${cause.evidence}${chains.length ? ` (chains: ${chains.join(', ')})` : ''}`);
+  }
+  if (c.vantage && typeof c.vantage === 'object') out.push('', c.vantage.changed ? `vantage changed: ${c.vantage.detail}` : 'vantage: unchanged');
+  return out;
+}
+
+// The rank-1 candidate cause of a run record in a few words, for `packc
+// journey list`: 'top cause: [observogram-deploy] deploy dep_x by …' or
+// 'no candidate causes'. The CLI appends it only when a chain got worse.
+export function causeLine(record) {
+  const top = topCause(record);
+  return top ? `top cause: [${top.kind}] ${top.evidence}` : 'no candidate causes';
+}
+
+// Whether a run record's transition got worse (or its ranker found a
+// cause) — the CLI's condition for appending causeLine.
+export function transitionGotWorse(record) {
+  const changed = Array.isArray(record?.transition?.changed) ? record.transition.changed : [];
+  return changed.some(c => c && c.direction === 'worse') || topCause(record) !== null;
 }
 
 // The samples this run saw, one row each (cap STACK_REPORT_ROW_CAP). Only
