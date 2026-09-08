@@ -66,7 +66,13 @@ that cannot show scrape configs loses 5 points it did nothing to earn.
 - **Score discontinuity on existing journeys.** Runs recorded under schema 2
   and 3 are not comparable; the `gradeSchema` bump exists so the record can
   say so, and the journey transition logic should treat a schema change as a
-  reason, not a regression.
+  reason, not a regression. (Since slices 3–4 the run record carries
+  `transition` and `causes` — `tools/lib/chain-history.mjs` — but neither
+  reads `grade.schema`: `diffRunBranches` compares chain verdicts and ladder
+  verdicts only, and `rankCauses` knows deploys, drift, versions and stack
+  samples. The switch commit should make a schema change visible on the
+  record's transition surface rather than leave it as a step the ranker
+  cannot explain.)
 - **Trust in the on-wire signals.** `health` / `lastError` / `lastEvaluation`
   come from the ruler and target APIs as the MCP relays them. A tier that
   relays rule definitions but not evaluation state reads `alive` / `exists`

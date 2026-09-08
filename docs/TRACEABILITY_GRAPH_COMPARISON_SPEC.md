@@ -122,6 +122,33 @@ Per branch: `ladderVerdict` — `broken` (a load-bearing node absent, or a load-
 
 The scored quantities — `integrity`, `verdict`, `counts`, node `status`, `rollup.integrityMean` and the grade's Drift-free criterion — are unchanged by the ladder, pending `docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md`.
 
+### 5c. Blast radius (additive)
+
+Beside `status` and `ladder`, every node verdict carries `blastRadius` — the **structural exposure** of that node, computed from the declared edges by the zero-import `tools/lib/blast-radius.mjs` (`docs/VENDORING.md`): what WOULD go blind (its transitive consumers) and what WOULD lose protection if the node died. It is never a claim that anything IS blind — liveness is the ladder's business (§5b), and the module never reads it.
+
+Assurance flows along the declared edges; the **consumer** is the side that goes blind when the other side dies. For every edge type the consumer is the `from` side, except `materialises`, where the SLI consumes the recording rule's series:
+
+| edge type | from → to | consumer |
+|---|---|---|
+| `sli_of` | slo → sli | `from` (the SLO consumes its SLI) |
+| `materialises` | recording_rule → sli | `to` (the SLI consumes the rule's series) |
+| `sources` | sli \| recording_rule → metric | `from` |
+| `exported_by` | metric → scrape_job \| exporter | `from` |
+| `produced_by` | metric → backend | `from` |
+| `protects` | burn_rate → slo | `from` (the alert consumes the SLO's data path) |
+| `forecasts` | forecast → slo | `from` |
+| `visualises` | panel → sli \| slo | `from` |
+| `contains` | dashboard → panel | `from` |
+| `routes` | alert_route → burn_rate | `from` |
+| `remediates` | remediation → burn_rate | `from` |
+| `validates` | chaos \| synthetic → slo | `from` |
+
+**Protection** is a second, separate relation (`PROTECTION_SIDE`): the `to` side loses when the `from` side dies — an SLO loses its protection when its alert dies (`protects`), an alert loses delivery when its route dies (`routes`) and its remediation when the remediation dies (`remediates`). It is transitive: a dead route means an undelivered alert means an unprotected SLO. Edge types outside the tables carry no known direction and are ignored; edges whose endpoints are unknown are dropped. Scaffold placeholders never blind anything, are never traversed and are never listed. The walk is breadth-first over the reverse adjacency, cycle-safe, with deterministic ordering (hop, then `KIND_ORDER` — slo, sli, burn_rate, recording_rule, metric, scrape_job, backend, alert_route, remediation, forecast, panel, dashboard, chaos, synthetic — then label, then key).
+
+On the node verdict only the **summary** rides: `blastRadius: { slos, alerts, panels, dashboards, routes, remediations, total } | null` — `slos` counts the SLOs that would go blind plus those that would lose protection, `alerts` the burn-rate alerts that would go blind plus those that would lose delivery or remediation, `panels` / `dashboards` / `routes` / `remediations` the blinded ones by kind, `total` every blinded node plus the unprotected SLOs and alerts; `null` when the graph index has no entry for the node. `compareBranches` computes the index once per graph (`blastRadiusIndex(graphShape(graph))`): the A-graph index serves `aligned` / `drifted` / `declared_only` / `unverifiable` nodes, the B-graph index `live_only` ones. The full result — `blastRadiusOf(shape, key)` → `{ key, kind, label, blinded: { total, weight, byKind, nodes: [{ key, kind, label, hop }] (listing capped at 64; `total` and `byKind` uncapped) }, unprotected: { slos: [{ key, label, hop }], alerts: [...] }, summary }` — is available to any caller through `graphShape(graph)`; `weight` sums the §7 limb weights over the blinded nodes (unknown kind 0.5).
+
+Consumers: `studio/compare-view.mjs` appends `· blinds N SLO(s)` to `declared_only` / `drifted` nodes in the chain-card evidence line (a node that is missing or wrong live is the case where the exposure matters; an aligned node's exposure is not shown); `tools/lib/chain-history.mjs` keeps the summary on every degraded node of a journey run record, orders ties by `total` and picks the run's `topExposure` (most `slos`, then `alerts`, then `total`). Nothing here touches `integrity`, `verdict`, `counts`, node `status` or `rollup.integrityMean`.
+
 ---
 
 ## 6. Live-verifiability map (must be explicit)
@@ -184,6 +211,23 @@ export function compareBranches(graphA, graphB) -> {
 }
 ```
 `diffPacks` gains an optional structural pass; the studio's Diagnose view renders `branches` (per-requirement chain cards) above the flat buckets.
+
+Additive since 2026-09 (§5b, §5c; keys only ever added, never renamed or removed):
+```js
+export function graphShape(graph) -> {          // the artefact-free projection the zero-import blast-radius module reads
+  nodes: [{ key, identityKey, kind, layer, label, virtual, scaffold }],
+  edges: [{ key, from, to, type, provenance }],
+}
+// on every node verdict, appended after `deltas`:
+//   blastRadius: { slos, alerts, panels, dashboards, routes, remediations, total } | null   (§5c)
+//   ladder: { rung, status, detail }                                                       (§5b)
+// on every BranchVerdict, beside verdict / integrity / integrityPct:
+//   ladderVerdict: 'healthy' | 'degraded' | 'broken' | 'unobserved' | 'undeclared'
+//   ladderIntegrity, ladderIntegrityPct
+// on rollup, appended last:
+//   ladder: { healthy, degraded, broken, unobserved, integrityMean, integrityPct }
+```
+`tools/lib/blast-radius.mjs` (zero-import) exports `CONSUMER_SIDE`, `PROTECTION_SIDE`, `KIND_ORDER`, `DEFAULT_WEIGHTS`, `BLINDED_NODES_CAP`, `normalizeGraphShape(input)`, `blastRadiusOf(shape, key, { weights })` and `blastRadiusIndex(shape, { weights })` → `Map key → summary` (non-scaffold nodes, sorted key order). The scored quantities are pinned byte-identical with and without these fields (`tools/test-traceability-graph.mjs`).
 
 ---
 

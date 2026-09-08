@@ -307,6 +307,7 @@ gate:
     requireSampled: true        # breach unless the MCP tier let the run sample them
     rows:
       scrape_targets_down: { max: 0 }   # row ids come from the stack self-metrics table
+keepLivePack: transitions       # snapshot Pack B beside the run: transitions (default) · always · never
 ```
 
 ```bash
@@ -362,6 +363,28 @@ the fetched history, and a single muted chip with the reason when the tier
 could not sample — chips never carry an ok/error colour, because a sample
 is a signal, not a verdict.
 
+Each run also records its requirement chains: per chain the scored verdict
+beside the on-wire *ladder* verdict (is the artefact merely present, doing
+its job, or could the vantage not look — `unobserved` means the tier could
+not look, never "absent"; nothing scored changes), the degraded nodes with
+their *blast radius* (how many SLOs would go blind if that node really died
+— structural exposure, not a claim that they are blind), the product
+versions seen, and what moved since the previous run with the candidate
+causes the evidence can offer — Observogram's own deploys inside the window,
+decision-bearing drift, a backend version change, a stack self-metric signal
+— ranked by evidence, never a root-cause verdict; a change of the vantage
+itself is reported beside them, never as one. `keepLivePack` decides when
+Pack B is snapshotted under `runs/<journey>/live/` (by default on the first
+run, whenever a chain's verdict moved, on a gate failure, or after a vantage
+loss; orphaned snapshots are pruned with their records). `journey list`
+appends `chains 8/10 intact · ladder 7 healthy · 2 degraded` per journey
+and, only when a chain got worse, `top cause: [observogram-deploy] deploy
+dep_x by … touched …`. In the studio the Diagnose chain cards show the
+ladder verdict, name present-but-unhealthy / stale / unobserved nodes and
+say `blinds N SLOs` beside a missing or drifted one, and each Journeys card
+carries a plain-text chains line and a candidate-cause line — counts and
+muted markers, no colours.
+
 ## API Surface
 
 | Method | Path | Purpose |
@@ -383,7 +406,7 @@ is a signal, not a verdict.
 | `POST` | `/api/packs/:id/deploy-bulk` | Deploy selected compiled artifacts |
 | `POST` | `/api/packs/:id/deploy/:target` | Deploy one compiled target |
 | `DELETE` | `/api/uploads` | Clear uploaded/crawled/drafted packs |
-| `GET` | `/api/journeys` | Saved journeys with the last run (outcome, alignment, grade, breaches, `stack` summary) |
+| `GET` | `/api/journeys` | Saved journeys with the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`) |
 | `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series) |
 | `POST` | `/api/journeys/:name/run` | Run a saved journey now |
 | `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file |
@@ -400,7 +423,7 @@ studio/
   compare-view.mjs         Diagnostic Grade, drift, traceability entry points
   compile-view.mjs         Remediate, compile catalog, deploy surfaces
   layers-view.mjs          Discover Observogram and artifact cards
-  journeys-view.mjs        Saved journeys: capture, run-now, history, stack chips
+  journeys-view.mjs        Saved journeys: capture, run-now, history, stack chips, chains + cause lines
 
 tools/
   cli.mjs                  packc CLI (journey run / list, compile, …)
@@ -409,6 +432,8 @@ tools/
   validate-pack.mjs        Canonical pack validator
   lib/
     adapter.mjs            Canonical pack -> layered UI model
+    blast-radius.mjs       Blind-spot blast radius over the requirement graph (zero-import, vendorable)
+    chain-history.mjs      Requirement-chain records per run, transitions, candidate causes (zero-import, vendorable)
     compile.mjs            packc compiler
     conformance.mjs        Maturity rubric
     diff.mjs               Structural pack diff
@@ -445,6 +470,7 @@ deploy/k8s/
 - [`docs/DIAGNOSTIC_GRADE_FRAMEWORK.md`](docs/DIAGNOSTIC_GRADE_FRAMEWORK.md) - the eight coverage/trust criteria behind the Diagnose grade
 - [`docs/PHASE_1_VERDICT_TRUST_RESEARCH.md`](docs/PHASE_1_VERDICT_TRUST_RESEARCH.md) - draft research/spec for the verdict-trust phase
 - [`docs/TRACEABILITY_GRAPH_COMPARISON_SPEC.md`](docs/TRACEABILITY_GRAPH_COMPARISON_SPEC.md) - requirement-chain comparison semantics
+- [`docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md`](docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md) - proposal (not applied) for Drift-free to read the per-node ladder integrity
 - [`docs/USER_STORY_CRAWLER_PROVENANCE.md`](docs/USER_STORY_CRAWLER_PROVENANCE.md) - provenance requirements for deployable artifacts
 - [`docs/USER_STORY_REQUIRED_DEPLOYMENT_ENVIRONMENT.md`](docs/USER_STORY_REQUIRED_DEPLOYMENT_ENVIRONMENT.md) - backlog story for required crawl environment selection
 - [`docs/ADVANCED_FEATURE_AUDIT.md`](docs/ADVANCED_FEATURE_AUDIT.md) - per-view audit of the Advanced tools (References · Conformance · Schema · OTLP · Traceability · Atlas)
