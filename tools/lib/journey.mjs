@@ -33,6 +33,13 @@
 //     maxLiveAgeHours: 24
 //     failOnPartialEvidence: true   # any probe family FAILED → the verdict is not trustworthy
 //     maxUnhealthy: 0               # scrape jobs down + unhealthy rules observed on the wire
+//     stack:                        # step 3: thresholds on the stack self-metric SAMPLES
+//       requireSampled: true        #   breach unless the panel was sampled and a row answered data
+//       rows:                       #   per row id (contracts table), min/max on the sampled value
+//         scrape_success_ratio: { min: 0.9 }
+//         scrape_targets_down: { max: 0 }
+//     A stack breach is an early warning to a business owner — a
+//     point-in-time sample outside a declared band — never an SLO verdict.
 //
 // Vantage: when Pack B is a live MCP source and the fetch itself fails
 // (endpoint down, core tools unavailable), the run still leaves a record
@@ -40,7 +47,7 @@
 // total loss of the observation point is a point in the drift history,
 // not a hole in it.
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { resolve, join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from './mini-yaml.mjs';
@@ -50,7 +57,9 @@ import { evaluateConformance } from './conformance.mjs';
 import { diffPacks } from './diff.mjs';
 import { comparePackBranches } from './traceability-graph.mjs';
 import { crawlFiles } from './crawler.mjs';
-import { baseWorkspacePath } from './brand-env.mjs';
+import { baseWorkspacePath, brandEnv } from './brand-env.mjs';
+import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from './contracts/stack-self-metrics.mjs';
+import { formatStackValue } from './stack-evidence.mjs';
 import { computeDiagnosticGrade, computePostureMatrix, partialLiveEvidence, DIAGNOSTIC_PASS_SCORE_THRESHOLD } from '../../studio/diagnostic-grade.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -112,8 +121,37 @@ export function loadJourneyDef(ref) {
   def.name = def.name || sanitizeName(ref).replace(/\.journey\.yaml$/, '');
   if (!def.packA || (!def.packA.file && !def.packA.crawl)) throw new Error(`journey ${def.name}: packA needs file: or crawl:`);
   if (!def.packB || (!def.packB.file && !def.packB.mcp)) throw new Error(`journey ${def.name}: packB needs file: or mcp:`);
+  if (def.gate && typeof def.gate === 'object' && def.gate.stack !== undefined) validateGateStack(def.gate.stack, def.name);
   def.__source = source;
   return def;
+}
+
+// gate.stack is validated at load time, not at run time: a typo in a row
+// id would otherwise breach every run with "no sample" and read as a stack
+// problem. Ids are case-sensitive against the contracts table; min/max
+// must be finite numbers; an entry that declares neither has nothing to
+// check and is refused rather than silently passing.
+export function validateGateStack(stack, journeyName = '?') {
+  const where = `journey ${journeyName}: gate.stack`;
+  if (!stack || typeof stack !== 'object' || Array.isArray(stack)) throw new Error(`${where} must be a mapping`);
+  if (stack.requireSampled !== undefined && typeof stack.requireSampled !== 'boolean') {
+    throw new Error(`${where}.requireSampled must be true or false`);
+  }
+  if (stack.rows === undefined) return;
+  if (!stack.rows || typeof stack.rows !== 'object' || Array.isArray(stack.rows)) throw new Error(`${where}.rows must be a mapping of row id → { min, max }`);
+  for (const [id, entry] of Object.entries(stack.rows)) {
+    if (!STACK_ROW_BY_ID.has(id)) {
+      throw new Error(`${where}.rows names unknown row ${id}; known rows: ${STACK_SELF_METRIC_PROBES.map(r => r.id).join(', ')}`);
+    }
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error(`${where}.rows.${id} must be a mapping with min and/or max`);
+    for (const bound of ['min', 'max']) {
+      if (entry[bound] !== undefined && !(typeof entry[bound] === 'number' && Number.isFinite(entry[bound]))) {
+        throw new Error(`${where}.rows.${id}.${bound} must be a finite number`);
+      }
+    }
+    if (entry.min === undefined && entry.max === undefined) throw new Error(`${where}.rows.${id} declares neither min nor max — nothing to check`);
+    if (entry.min !== undefined && entry.max !== undefined && entry.min > entry.max) throw new Error(`${where}.rows.${id}: min ${entry.min} is above max ${entry.max}`);
+  }
 }
 
 // ---------- pack sources ----------
@@ -255,7 +293,158 @@ export function evaluateGate(gate, facts) {
         + (names.length ? `: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''}` : ''));
     }
   }
+  if (gate.stack && typeof gate.stack === 'object') evaluateStackGate(gate.stack, facts.stackEvidence, add);
   return breaches;
+}
+
+// Display formatting for a sampled value lives in the browser-safe
+// tools/lib/stack-evidence.mjs (the studio prints the same vocabulary);
+// re-exported here so the CLI and the tests keep one import.
+export { formatStackValue };
+
+// gate.stack — thresholds on the stack self-metric SAMPLES of this run.
+// Honesty rules: a threshold can only be checked against a row that
+// answered `data`; anything else (row absent, empty, failed, not in
+// inventory, not attempted, a file-sourced B with no evidence at all)
+// breaches as "no sample" rather than passing by absence. A breach is a
+// point-in-time sample outside a declared band — an early warning, never
+// an SLO verdict — and the detail says so.
+function evaluateStackGate(stack, evidence, add) {
+  const rows = Array.isArray(evidence?.rows) ? evidence.rows : [];
+  const byId = new Map(rows.map(r => [r.id, r]));
+  const isData = (r) => r && r.outcome === 'data' && typeof r.value === 'number' && Number.isFinite(r.value);
+  if (stack.requireSampled) {
+    const why = !evidence ? 'Pack B is not a live draft'
+      : evidence.status !== 'sampled' ? (evidence.reason || evidence.status)
+      : !rows.some(isData) ? 'sampled, but no row answered with data'
+      : null;
+    if (why) add('stack', `stack self-metrics not sampled (${why}) — the vantage cannot prove stack health`);
+  }
+  const thresholds = stack.rows && typeof stack.rows === 'object' ? stack.rows : {};
+  for (const [id, t] of Object.entries(thresholds)) {
+    // evaluateGate is exported and a host may compose a gate object
+    // without going through loadJourneyDef's validation: a threshold that
+    // cannot be checked breaches as such — it never passes by silence.
+    const invalid = invalidThreshold(t);
+    if (invalid) { add(`stack.${id}`, `threshold invalid (${invalid}) — cannot be checked`); continue; }
+    const row = byId.get(id);
+    if (!isData(row)) {
+      // A row the fetcher never wrote is one the sampler never attempted:
+      // on a not-attempted panel the tier reason is the whole story, on a
+      // sampled panel the call budget ran out or the row was not observed.
+      const outcome = !evidence ? 'no stack evidence'
+        : !row ? (evidence.status === 'not-attempted'
+          ? `not-attempted: ${evidence.reason || 'no reason recorded'}`
+          : 'not attempted by the sampler — call budget exhausted or row not observed')
+        : row.outcome === 'data' ? 'data without a numeric value' : row.outcome;
+      add(`stack.${id}`, `no sample for ${id} (${outcome}${row?.reason ? `: ${row.reason}` : ''}) — threshold cannot be checked`);
+      continue;
+    }
+    const min = t.min === undefined ? null : t.min;
+    const max = t.max === undefined ? null : t.max;
+    const belowMin = min !== null && row.value < min;
+    const aboveMax = max !== null && row.value > max;
+    if (belowMin || aboveMax) {
+      const unit = row.unit || 'value';
+      const shown = formatStackValue(row.value, unit);
+      const band = `[${min === null ? '-∞' : formatStackValue(min, unit)} … ${max === null ? '∞' : formatStackValue(max, unit)}]`;
+      // Display rounding can print the value equal to the bound it broke
+      // (0.0004/s max 0 → "0.000/s outside [-∞ … 0.000/s]"); the raw
+      // number keeps the explanation readable.
+      const raw = shown === formatStackValue(belowMin ? min : max, unit) ? ` (raw ${row.value})` : '';
+      add(`stack.${id}`, `${id} = ${shown}${raw} ${unit} outside ${band} — point-in-time sample, not an SLO verdict`);
+    }
+  }
+}
+
+// Why a declared row threshold cannot be evaluated, or null when it can.
+// Mirrors validateGateStack's rules at run time (finite numeric bounds,
+// at least one of them, min ≤ max).
+function invalidThreshold(t) {
+  if (!t || typeof t !== 'object' || Array.isArray(t)) return 'not a mapping with min and/or max';
+  for (const bound of ['min', 'max']) {
+    if (t[bound] !== undefined && !(typeof t[bound] === 'number' && Number.isFinite(t[bound]))) return `${bound} is not a finite number`;
+  }
+  if (t.min === undefined && t.max === undefined) return 'neither min nor max declared';
+  if (t.min !== undefined && t.max !== undefined && t.min > t.max) return `min ${t.min} is above max ${t.max}`;
+  return null;
+}
+
+// ---------- step 3: stack-health evidence (samples, kept per run) ----------
+//
+// The fetcher's step-2 panel rides on Pack B as JSON annotations
+// (mcp.observed.stack_metrics / .alertmanager / .grafana.*). Each run
+// keeps what it saw so the run history becomes the time series. Every
+// row is still a point-in-time sample: `hint` is the contracts' display
+// marker and `referenceSli` the vocabulary it follows — neither is a
+// verdict, and malformed JSON degrades to "no rows", never to health.
+const STACK_ROW_BY_ID = new Map(STACK_SELF_METRIC_PROBES.map(r => [r.id, r]));
+const STACK_EVIDENCE_ROW_CAP = 64;
+
+function parseJsonAnnotation(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try { return JSON.parse(value); } catch (_) { return null; }
+}
+
+function stackEvidenceRows(observed) {
+  return (Array.isArray(observed) ? observed : [])
+    .filter(r => r && typeof r === 'object' && typeof r.id === 'string' && r.id)
+    .slice(0, STACK_EVIDENCE_ROW_CAP)
+    .map(r => {
+      const def = STACK_ROW_BY_ID.get(r.id) || null;
+      const value = typeof r.value === 'number' && Number.isFinite(r.value) ? r.value : null;
+      const direction = def?.direction || r.direction || 'info';
+      return {
+        id: r.id,
+        family: def?.family || r.family || null,
+        product: r.product ?? null,
+        value,
+        unit: def?.unit || r.unit || null,
+        direction,
+        // A declared outcome is kept as it is; an outcome the contracts do
+        // not know is kept verbatim (never relabelled as a probe failure
+        // nothing reported — it is still never `data`), and a missing one
+        // reads 'unknown'.
+        outcome: STACK_OUTCOMES.includes(r.outcome) ? r.outcome
+          : (typeof r.outcome === 'string' && r.outcome.trim() ? r.outcome.trim() : 'unknown'),
+        hint: displayHint({ direction }, value),
+        at: typeof r.at === 'string' ? r.at : null,
+        // A row the table no longer declares keeps null: no vocabulary
+        // is claimed for a sample nothing maps any more.
+        referenceSli: def?.referenceSli ?? null,
+        ...(r.reason ? { reason: String(r.reason) } : {}),
+      };
+    });
+}
+
+function stackEvidenceFromAnnotations(ann) {
+  const status = ann['mcp.stack.status'];
+  if (status !== 'sampled' && status !== 'not-attempted') return null;
+  const am = parseJsonAnnotation(ann['mcp.observed.alertmanager']);
+  const dsRaw = parseJsonAnnotation(ann['mcp.observed.grafana.datasources']);
+  const cpRaw = parseJsonAnnotation(ann['mcp.observed.grafana.contact_points']);
+  const grafanaError = ann['mcp.observed.grafana.error'] ? String(ann['mcp.observed.grafana.error']) : null;
+  const datasources = (Array.isArray(dsRaw) ? dsRaw : []).filter(d => d && typeof d === 'object');
+  const hasGrafana = Array.isArray(dsRaw) || (cpRaw && typeof cpRaw === 'object') || grafanaError;
+  return {
+    status,
+    reason: status === 'not-attempted' ? String(ann['mcp.stack.reason'] || 'not attempted') : null,
+    rows: stackEvidenceRows(parseJsonAnnotation(ann['mcp.observed.stack_metrics'])),
+    alertmanager: am && typeof am === 'object' ? {
+      version: am.version ?? null,
+      clusterStatus: am.clusterStatus ?? null,
+      silencesActive: typeof am.silences?.active === 'number' ? am.silences.active : null,
+      error: am.error ? String(am.error) : null,
+    } : null,
+    grafana: hasGrafana ? {
+      datasources: Array.isArray(dsRaw) ? datasources.length : null,
+      // Only a health verdict of 'error' is unhealthy; 'unknown' means the
+      // health was never checked and must not read as either.
+      unhealthyDatasources: datasources.filter(d => d.health === 'error').map(d => String(d.name ?? d.uid ?? '?')),
+      contactPoints: cpRaw && typeof cpRaw === 'object' && typeof cpRaw.count === 'number' ? cpRaw.count : null,
+      error: grafanaError,
+    } : null,
+  };
 }
 
 // On-wire liveness facts read from Pack B's fetcher annotations
@@ -275,7 +464,8 @@ export function liveEvidenceFacts(canonicalB) {
   // Step 2 stack self-metrics counts (mcp.stack.*). status is null when
   // Pack B carries no panel (file-sourced, or a pre-step-2 refresh); the
   // counts are then 0 — an absence, never a healthy stack. No gate key
-  // reads these: a sample is a signal, not a verdict.
+  // reads the counts; gate.stack reads the samples in stackEvidence below,
+  // and even then a breach is an early warning, not a verdict.
   const stackStatus = ann['mcp.stack.status'] === 'sampled' || ann['mcp.stack.status'] === 'not-attempted'
     ? ann['mcp.stack.status'] : null;
   const stackCount = (k) => { const v = Number(ann[k]); return Number.isFinite(v) ? v : 0; };
@@ -302,6 +492,8 @@ export function liveEvidenceFacts(canonicalB) {
       failed: stackCount('mcp.stack.failed'),
       notAttempted: stackCount('mcp.stack.notAttempted'),
     },
+    // Step 3: the samples themselves (null when Pack B carries no panel).
+    stackEvidence: stackEvidenceFromAnnotations(ann),
   };
 }
 
@@ -423,6 +615,10 @@ export async function runJourney(def, { baseDir } = {}) {
     // Step 2 stack self-metric sample counts — recorded as a signal for the
     // drift-over-time series, never gated on.
     stack: live.stack,
+    // Step 3: the samples this run saw (rows + Alertmanager / Grafana
+    // status), null when Pack B carries no panel. Point-in-time evidence
+    // kept per run so the history is the time series; gate.stack reads it.
+    stackEvidence: live.stackEvidence,
     gate: { thresholds: def.gate || {}, breaches },
     outcome: breaches.length ? 'gate-failed' : 'pass',
   };
@@ -431,15 +627,76 @@ export async function runJourney(def, { baseDir } = {}) {
   return record;
 }
 
-// History: one JSON per run — the drift-over-time series. A write failure
-// is reported on the record, never thrown: the verdict already exists.
+// ---------- run history + retention ----------
+//
+// One JSON per run under runs/<journey>/ — the drift-over-time series the
+// journeys surface reads. Continuity is the point (a journey run from cron
+// every few minutes is the intended cadence), so the directory is bounded:
+// after every write it is pruned to the newest JOURNEY_RUN_RETENTION files.
+// Filenames are the ISO start time with ':' and '.' replaced, so their
+// lexical order IS their chronological order; "newest" needs no stat.
+export const JOURNEY_RUN_RETENTION_DEFAULT = 1000;
+
+// Defensive parse of the retention knob: a non-negative integer, else the
+// default. 0 means unlimited (no pruning). Exported so the policy is
+// testable without touching the environment.
+export function parseRunRetention(raw, fallback = JOURNEY_RUN_RETENTION_DEFAULT) {
+  if (raw === undefined || raw === null) return fallback;
+  const s = String(raw).trim();
+  if (!/^\d+$/.test(s)) return fallback;
+  const n = Number(s);
+  return Number.isSafeInteger(n) && n >= 0 ? n : fallback;
+}
+
+// Read at write time (not at import) so an operator's env change and a
+// test's env flip both take effect on the next run. OBSERVOGRAM_JOURNEY_RUN_RETENTION
+// (legacy TOMOGRAPH_* spelling honoured by brandEnv).
+export function journeyRunRetention() {
+  return parseRunRetention(brandEnv('JOURNEY_RUN_RETENTION') || undefined);
+}
+
+// The run filename shape writeRunRecord produces: the ISO start time with
+// ':' and '.' replaced by '-'. Only names of this shape are run records for
+// retention — a hand-dropped notes.json would otherwise sort after every
+// ISO name, count as the "newest" run and displace a real record.
+export const JOURNEY_RUN_FILE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.json$/;
+
+// Pure retention policy: given the run filenames of one journey and the
+// number to keep, return the names to delete, oldest first. keep <= 0 (or
+// a non-number) means unlimited → nothing is deleted. Files that are not
+// run records (JOURNEY_RUN_FILE_RE) are never candidates and never count.
+export function pruneRunFiles(files, keep) {
+  const n = Number(keep);
+  if (!Number.isFinite(n) || n <= 0) return [];
+  const runs = (Array.isArray(files) ? files : [])
+    .filter(f => typeof f === 'string' && JOURNEY_RUN_FILE_RE.test(f))
+    .sort();
+  const excess = runs.length - Math.floor(n);
+  return excess > 0 ? runs.slice(0, excess) : [];
+}
+
+// A write failure is reported on the record, never thrown: the verdict
+// already exists. Pruning likewise: a file that cannot be deleted is noted
+// as historyError and the run still counts.
 function writeRunRecord(name, startedAt, record) {
+  const dir = runsDir(name);
   try {
-    const dir = runsDir(name);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, `${startedAt.replace(/[:.]/g, '-')}.json`), JSON.stringify(record, null, 2));
   } catch (e) {
     record.historyError = e.message;
+    return;
+  }
+  const keep = journeyRunRetention();
+  if (keep <= 0) return;
+  const errors = [];
+  let victims = [];
+  try { victims = pruneRunFiles(readdirSync(dir), keep); } catch (e) { errors.push(`list ${dir}: ${e.message}`); }
+  for (const f of victims) {
+    try { unlinkSync(join(dir, f)); } catch (e) { errors.push(`prune ${f}: ${e.message}`); }
+  }
+  if (errors.length) {
+    record.historyError = [record.historyError, ...errors].filter(Boolean).join('; ');
   }
 }
 
@@ -504,10 +761,53 @@ export function renderJourneyMarkdown(r) {
     `| Stack self-metrics | ${stackLine(r)} |`,
     `| Took | ${r.tookMs}ms |`,
   ];
+  lines.push(...stackEvidenceTable(r.stackEvidence));
   if (r.gate.breaches.length) {
     lines.push('', '### Gate breaches', '');
     for (const b of r.gate.breaches) lines.push(`- **${b.criterion}** — ${b.detail}`);
   }
   lines.push('', '_Verification evidence (declared vs observed); not incident-validated._');
   return lines.join('\n');
+}
+
+// The samples this run saw, one row each (cap STACK_REPORT_ROW_CAP). Only
+// rendered when there are rows: a not-attempted or absent panel already
+// reads on the Stack self-metrics line above, and an empty table would
+// look like an empty (healthy) stack.
+const STACK_REPORT_ROW_CAP = 24;
+function stackEvidenceTable(se) {
+  const rows = Array.isArray(se?.rows) ? se.rows : [];
+  if (!rows.length) return [];
+  const cell = (v) => String(v ?? '-').replace(/\|/g, '\\|');
+  const out = [
+    '',
+    '### Stack self-metrics — point-in-time samples',
+    '',
+    '| id | family | value unit | outcome | hint | reference SLI |',
+    '|---|---|---|---|---|---|',
+  ];
+  for (const row of rows.slice(0, STACK_REPORT_ROW_CAP)) {
+    const value = row.outcome === 'data' && typeof row.value === 'number' ? `${formatStackValue(row.value, row.unit)} ${row.unit || ''}`.trim() : '-';
+    const outcome = row.outcome + (row.reason ? `: ${row.reason}` : '');
+    out.push(`| ${cell(row.id)} | ${cell(row.family)} | ${cell(value)} | ${cell(outcome)} | ${cell(row.hint)} | ${cell(row.referenceSli)} |`);
+  }
+  if (rows.length > STACK_REPORT_ROW_CAP) out.push('', `_${rows.length - STACK_REPORT_ROW_CAP} more row(s) not shown._`);
+  out.push('', "_Samples, not verdicts: each value is the stack's own self-metric at the moment of the run._");
+  return out;
+}
+
+// Stack status of a run record in a few words, for `packc journey list`:
+// 'stack sampled N' (rows that answered data), 'stack not attempted', or
+// 'stack none' when the record carries no panel at all. Pre-step-3
+// records (counts only) fall back to the fetcher's sampled count.
+export function stackStatusLine(record) {
+  const se = record?.stackEvidence;
+  if (se && typeof se === 'object') {
+    if (se.status !== 'sampled') return 'stack not attempted';
+    return `stack sampled ${(Array.isArray(se.rows) ? se.rows : []).filter(r => r.outcome === 'data').length}`;
+  }
+  const s = record?.stack;
+  if (s && s.status === 'sampled') return `stack sampled ${s.sampled ?? 0}`;
+  if (s && s.status === 'not-attempted') return 'stack not attempted';
+  return 'stack none';
 }

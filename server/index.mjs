@@ -47,7 +47,7 @@ import {
   loadWorkspacePacks, clearWorkspacePacks, workspaceInfo,
 } from './workspace.mjs';
 import {
-  listJourneys, loadJourneyDef, runJourney, readJourneyRuns, saveJourneyDef,
+  listJourneys, loadJourneyDef, runJourney, readJourneyRuns, saveJourneyDef, validateGateStack,
 } from '../tools/lib/journey.mjs';
 import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
 import { initAuth, authEnabled, readSession, maybeSeedDefaultAdmin, defaultAdminCredentialActive } from './auth.mjs';
@@ -60,6 +60,7 @@ import { setWorkspaceRootResolver } from '../tools/lib/journey.mjs';
 import { orgWorkspaceRoot } from './tenancy.mjs';
 import { brandEnv } from '../tools/lib/brand-env.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
+import { stackSummary } from '../tools/lib/stack-evidence.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -830,10 +831,15 @@ app.get('/api/journeys', (req, res) => {
   try {
     const journeys = listJourneys().map(name => {
       let def = null;
-      try { def = loadJourneyDef(name); } catch (_) {}
+      // A definition that fails to load is still listed, with the reason:
+      // a journey that can never run must not look like a healthy
+      // never-run one.
+      let loadError = null;
+      try { def = loadJourneyDef(name); } catch (e) { loadError = e.message; }
       const lastRun = readJourneyRuns(name, { limit: 1 })[0] || null;
       return {
         name,
+        loadError,
         packA: def?.packA?.crawl ? `crawl: ${def.packA.crawl.path}` : (def?.packA?.file || null),
         packB: def?.packB?.mcp ? `mcp: ${def.packB.mcp.url}` : (def?.packB?.file || null),
         gate: def?.gate || {},
@@ -844,6 +850,11 @@ app.get('/api/journeys', (req, res) => {
           alignmentPct: lastRun.drift?.alignmentPct ?? null,
           gradeScore: lastRun.grade?.score ?? null,
           breaches: lastRun.gate?.breaches?.length ?? 0,
+          // Step 3: the stack self-metric samples the last run saw —
+          // status, rows that answered data, best row per family. null
+          // when the record carries no stackEvidence (file-sourced B,
+          // pre-step-3 record): an absence, never a healthy stack.
+          stack: stackSummary(lastRun),
         },
       };
     });
@@ -916,6 +927,10 @@ app.post('/api/journeys/capture', (req, res) => {
     gate: (b.gate && typeof b.gate === 'object') ? b.gate : { minAlignmentPct: 85 },
   };
   try {
+    // The same validation loadJourneyDef applies: a captured gate that
+    // names an unknown stack row must be refused here (400), not saved as
+    // a journey that can never load.
+    if (def.gate.stack !== undefined) validateGateStack(def.gate.stack, name);
     const saved = saveJourneyDef(name, def, {
       banner: [
         `Captured from a studio session on ${new Date().toISOString()}.`,

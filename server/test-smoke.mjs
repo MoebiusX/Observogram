@@ -558,6 +558,43 @@ try {
   assert(jList2.journeys.find(j => j.name === 'smoke-journey')?.lastRun?.outcome === 'pass',
          'journey listing reflects the last run');
 
+  assert(jList2.journeys.find(j => j.name === 'smoke-journey')?.lastRun?.stack === null,
+         'a file-sourced Pack B leaves lastRun.stack null (absence, never a healthy stack)');
+
+  // Step 3: a run record carrying stackEvidence (seeded the way the runner
+  // writes it) surfaces lastRun.stack = { status, sampled, families }.
+  writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'stack-seeded.journey.yaml'), [
+    'name: stack-seeded',
+    `packA: { file: ${PAY.replaceAll('\\', '/')} }`,
+    `packB: { file: ${CUR.replaceAll('\\', '/')} }`,
+    'gate: { minAlignmentPct: 1 }',
+  ].join('\n'));
+  const seededAt = '2026-09-07T10:15:00.000Z';
+  mkdirSync(join(SMOKE_WORKSPACE, 'runs', 'stack-seeded'), { recursive: true });
+  writeFileSync(join(SMOKE_WORKSPACE, 'runs', 'stack-seeded', `${seededAt.replace(/[:.]/g, '-')}.json`), JSON.stringify({
+    journey: 'stack-seeded', startedAt: seededAt, tookMs: 5, outcome: 'pass',
+    grade: { score: 70, pass: true }, drift: { alignmentPct: 90 }, gate: { thresholds: { minAlignmentPct: 1 }, breaches: [] },
+    stack: { status: 'sampled', reason: null, sampled: 2, empty: 1, failed: 0, notAttempted: 0 },
+    stackEvidence: {
+      status: 'sampled', reason: null,
+      rows: [
+        { id: 'scrape_success_ratio', family: 'scrape', product: 'generic', value: null, unit: 'ratio', direction: 'higher', outcome: 'empty', hint: null, at: seededAt, referenceSli: 'prometheus-reference/scrape_success_ratio' },
+        { id: 'scrape_targets_down', family: 'scrape', product: 'generic', value: 2, unit: 'count', direction: 'lower', outcome: 'data', hint: 'nonzero', at: seededAt, referenceSli: null },
+        { id: 'notification_errors', family: 'notify', product: 'alertmanager', value: 0, unit: 'per-second', direction: 'lower', outcome: 'data', hint: null, at: seededAt, referenceSli: 'alertmanager-reference/notification_errors' },
+        { id: 'log_shipper_drops', family: 'logs', product: 'promtail', value: null, unit: 'per-second', direction: 'lower', outcome: 'not-in-inventory', hint: null, at: seededAt, referenceSli: null },
+      ],
+      alertmanager: null, grafana: null,
+    },
+  }, null, 2));
+  const jList3 = await getJson(base, '/api/journeys');
+  const seeded = jList3.journeys.find(j => j.name === 'stack-seeded')?.lastRun?.stack;
+  assert(seeded?.status === 'sampled' && seeded.sampled === 2 && seeded.reason === null,
+         'GET /api/journeys lastRun.stack carries the status and the rows that answered data', seeded);
+  assert(seeded?.families?.scrape?.id === 'scrape_targets_down' && seeded.families.scrape.value === 2 && seeded.families.scrape.hint === 'nonzero'
+         && seeded.families.notify?.value === 0 && seeded.families.logs?.outcome === 'not-in-inventory' && seeded.families.logs.value === null,
+         'lastRun.stack.families picks the data row per family and keeps the honest non-answer', seeded?.families);
+  assert(Object.keys(seeded?.families || {}).sort().join() === 'logs,notify,scrape', 'lastRun.stack.families lists only the families present', Object.keys(seeded?.families || {}));
+
   const jRun404 = await fetch(`${base}/api/journeys/never-saved/run`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
   });
@@ -579,6 +616,34 @@ try {
     body: JSON.stringify({ name: 'x', packAId: 'does-not-exist', packBId: 'production-curated' }),
   });
   assert(capBad.status === 404, 'capture with an unknown pack → 404');
+  // A captured gate is validated the way loadJourneyDef validates a file:
+  // an unknown stack row is refused (400), never saved as a journey that
+  // can never load.
+  const capStackBad = await fetch(`${base}/api/journeys/capture`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'captured-bad', packAId: 'payment-service', packBId: 'production-curated', gate: { minAlignmentPct: 1, stack: { rows: { nope_row: { max: 0 } } } } }),
+  });
+  const capStackBadBody = await capStackBad.json();
+  assert(capStackBad.status === 400 && /gate\.stack\.rows names unknown row nope_row/.test(capStackBadBody.error || ''),
+         'capture with an unknown stack row id → 400 naming the row', capStackBadBody);
+  assert(!(await getJson(base, '/api/journeys')).journeys.some(j => j.name === 'captured-bad'), 'the refused capture saved nothing');
+  const capStackOk = await fetch(`${base}/api/journeys/capture`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'captured-stack', packAId: 'payment-service', packBId: 'production-curated', gate: { minAlignmentPct: 1, stack: { requireSampled: true, rows: { scrape_targets_down: { max: 0 } } } } }),
+  }).then(r => r.json());
+  assert(capStackOk.ok === true, 'capture with a well-formed stack gate saves');
+  // A definition on disk that fails to load is listed with the reason.
+  writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'bad-id.journey.yaml'), [
+    'name: bad-id',
+    `packA: { file: ${PAY.replaceAll('\\', '/')} }`,
+    `packB: { file: ${CUR.replaceAll('\\', '/')} }`,
+    'gate:', '  stack:', '    rows:', '      nope_row: { max: 0 }',
+  ].join('\n'));
+  const jListBad = await getJson(base, '/api/journeys');
+  const badEntry = jListBad.journeys.find(j => j.name === 'bad-id');
+  assert(badEntry && /unknown row nope_row/.test(badEntry.loadError || '') && badEntry.lastRun === null,
+         'GET /api/journeys lists a definition that fails to load with loadError, so it never reads as a healthy never-run journey', badEntry);
+  assert(jListBad.journeys.find(j => j.name === 'smoke-journey')?.loadError === null, 'a healthy definition lists loadError null');
 
   // --- repo retrofeed (item 4, reverse remediation arrow) ---
   const rf = await fetch(`${base}/api/packs/payment-service/retrofeed`, {

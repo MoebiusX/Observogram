@@ -6335,8 +6335,35 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
   font: 11px/1.4 var(--mono);
   color: var(--ink-4);
 }
+/* A definition that fails to load (GET /api/journeys loadError): a config
+   fault, not a verdict — warn colour so it never reads as a healthy
+   never-run journey. */
+.journey-load-error { color: var(--warn, #d97706); }
 .journey-runs { margin-top: 10px; }
 .journey-runs-table { font: 11px/1.4 var(--mono); }
+/* Stack self-metric chips (step 3): point-in-time samples per family.
+   Deliberately no ok/err colour — a sample is a signal, never a verdict;
+   the 'nonzero' hint is a muted marker, not a red flag. */
+.journey-stack {
+  display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap;
+  margin-top: 8px;
+  font: 11px/1.4 var(--mono);
+  color: var(--ink-3);
+}
+.journey-stack-label { color: var(--ink-4); }
+.journey-stack-chip {
+  display: inline-flex; gap: 4px; align-items: baseline;
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--code-bg);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.journey-stack-chip.is-muted { color: var(--ink-4); border-style: dashed; }
+.journey-stack-family { color: var(--ink-4); }
+.journey-stack-mark { color: var(--ink-4); font-style: italic; }
+.journey-stack-runs { color: var(--ink-4); }
 .journey-result-pre {
   margin: 8px 0 0; padding: 8px 10px;
   background: var(--code-bg); border: 1px solid var(--line); border-radius: var(--r-md);

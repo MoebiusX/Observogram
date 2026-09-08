@@ -303,6 +303,10 @@ gate:
   maxLiveAgeHours: 24
   failOnPartialEvidence: true   # a probe family FAILED → the verdict is not trustworthy
   maxUnhealthy: 0               # scrape jobs down + rules failing to evaluate, as seen on the wire
+  stack:                        # thresholds on the stack's own self-metric samples (early warning)
+    requireSampled: true        # breach unless the MCP tier let the run sample them
+    rows:
+      scrape_targets_down: { max: 0 }   # row ids come from the stack self-metrics table
 ```
 
 ```bash
@@ -322,6 +326,41 @@ all, the run still writes an `outcome: vantage-lost` record before exiting
 same construct as the studio (requirement-chain integrity rides on the
 diff), so both report one score for one comparison. Secrets never live in
 journey files — MCP auth is referenced by env-var name.
+
+Run history is bounded so a journey on a cron cadence never fills the disk:
+after every run the journey's `runs/` directory is pruned to the newest
+`OBSERVOGRAM_JOURNEY_RUN_RETENTION` records (default `1000`; `0` = unlimited).
+A record that cannot be deleted is noted on the run as `historyError` — the
+verdict still stands. Scheduling itself stays external (cron, CI, a Windows
+scheduled task) by design. Each record of a live run also keeps the stack
+self-metric samples it saw (`stackEvidence`: the rows, plus the Alertmanager
+and Grafana status the MCP answered) — point-in-time signals kept per run so
+the history is the time series, never a verdict.
+
+The `stack:` gate block turns those samples into an early warning: `rows`
+declares a `min` / `max` band per row id (validated against the table when
+the journey loads — an unknown id is refused with the known ids listed), and
+`requireSampled: true` breaches when the tier could not sample at all, or
+sampled with no row answering data. A threshold can only be checked against
+a row that answered data; a row that was empty, failed, not in the
+inventory or absent breaches as *no sample* rather than passing by absence
+(on a restricted tier the breach carries the tier reason), and a threshold
+that is not a finite band breaches as *threshold invalid* instead of
+passing silently. A stack breach reads
+`scrape_targets_down = 2 count outside [-∞ … 0] — point-in-time sample, not
+an SLO verdict`: it is a signal to look, not an SLO verdict, and it never
+touches the grade. The report prints the samples in a *Stack self-metrics*
+table and `journey list` shows `stack sampled N` / `stack not attempted` /
+`stack none` per journey (a definition that fails to load prints why instead
+of looking never-run). In the studio (Advanced → Journeys) each card
+carries a "stack self-metrics — point-in-time samples" line: one chip per
+family with the last run's value — the row with a `nonzero` signal first,
+then lower-is-comfortable rows, so a healthy-looking ratio never hides a
+target that is down — a muted `nonzero` marker where a
+lower-is-comfortable row is above zero, `nonzero in N of last M runs` over
+the fetched history, and a single muted chip with the reason when the tier
+could not sample — chips never carry an ok/error colour, because a sample
+is a signal, not a verdict.
 
 ## API Surface
 
@@ -344,6 +383,10 @@ journey files — MCP auth is referenced by env-var name.
 | `POST` | `/api/packs/:id/deploy-bulk` | Deploy selected compiled artifacts |
 | `POST` | `/api/packs/:id/deploy/:target` | Deploy one compiled target |
 | `DELETE` | `/api/uploads` | Clear uploaded/crawled/drafted packs |
+| `GET` | `/api/journeys` | Saved journeys with the last run (outcome, alignment, grade, breaches, `stack` summary) |
+| `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series) |
+| `POST` | `/api/journeys/:name/run` | Run a saved journey now |
+| `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file |
 
 ## Repository Map
 
@@ -357,8 +400,10 @@ studio/
   compare-view.mjs         Diagnostic Grade, drift, traceability entry points
   compile-view.mjs         Remediate, compile catalog, deploy surfaces
   layers-view.mjs          Discover Observogram and artifact cards
+  journeys-view.mjs        Saved journeys: capture, run-now, history, stack chips
 
 tools/
+  cli.mjs                  packc CLI (journey run / list, compile, …)
   crawl-repo.mjs           CLI repo crawler
   fetch-live-pack.mjs      MCP live-pack fetcher
   validate-pack.mjs        Canonical pack validator
@@ -367,6 +412,8 @@ tools/
     compile.mjs            packc compiler
     conformance.mjs        Maturity rubric
     diff.mjs               Structural pack diff
+    journey.mjs            Journey definitions, runner, gate, run history (node-only)
+    stack-evidence.mjs     Stack self-metric history helpers (browser-safe, vendorable)
     traceability.mjs       Requirement chains
 
 examples/

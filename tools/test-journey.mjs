@@ -30,7 +30,10 @@ process.env.OBSERVOGRAM_WORKSPACE = TMP;
 const {
   loadJourneyDef, runJourney, listJourneys, readJourneyRuns,
   evaluateGate, renderJourneyMarkdown, liveEvidenceFacts,
+  pruneRunFiles, parseRunRetention, journeyRunRetention, JOURNEY_RUN_RETENTION_DEFAULT,
+  formatStackValue, validateGateStack, stackStatusLine,
 } = await import('./lib/journey.mjs');
+const { STACK_SELF_METRIC_PROBES } = await import('./lib/contracts/stack-self-metrics.mjs');
 
 // A TCP port nobody listens on: bind an ephemeral one, read it, release
 // it. Connecting to it afterwards is refused immediately — the fastest,
@@ -102,6 +105,64 @@ try {
   assert(runs2.length === 2, 'second run appends to history', runs2.length, 2);
   assert(runs2[0].startedAt > runs2[1].startedAt, 'history reads back newest first');
   assert(readdirSync(join(TMP, 'runs', 'pay-vs-curated')).length === 2, 'one JSON file per run on disk');
+  assert(rec.stackEvidence === null, 'file-sourced B carries no stack evidence — null, never an empty healthy panel', rec.stackEvidence);
+
+  // --- retention: the run directory is bounded (policy + effect) ---
+  assert(parseRunRetention(undefined) === JOURNEY_RUN_RETENTION_DEFAULT && JOURNEY_RUN_RETENTION_DEFAULT === 1000, 'retention defaults to 1000');
+  assert(parseRunRetention('250') === 250 && parseRunRetention(' 7 ') === 7, 'retention parses a non-negative integer');
+  assert(parseRunRetention('0') === 0, 'retention 0 parses as 0 (unlimited)');
+  assert(parseRunRetention('abc') === 1000 && parseRunRetention('-5') === 1000 && parseRunRetention('2.5') === 1000 && parseRunRetention('') === 1000,
+         'garbage, negative, fractional and empty retention values fall back to the default');
+  delete process.env.OBSERVOGRAM_JOURNEY_RUN_RETENTION;
+  delete process.env.TOMOGRAPH_JOURNEY_RUN_RETENTION;
+  assert(journeyRunRetention() === 1000, 'journeyRunRetention reads the default when the env var is unset');
+  process.env.OBSERVOGRAM_JOURNEY_RUN_RETENTION = '3';
+  assert(journeyRunRetention() === 3, 'journeyRunRetention reads OBSERVOGRAM_JOURNEY_RUN_RETENTION at call time');
+  const names = ['2026-01-03T00-00-00-000Z.json', '2026-01-01T00-00-00-000Z.json', 'notes.txt', 'notes.json', '2026-01-02T00-00-00-000Z.json', '2026-01-04T00-00-00-000Z.json'];
+  assert(pruneRunFiles(names, 3).join() === '2026-01-01T00-00-00-000Z.json', 'a hand-dropped notes.json is neither a candidate nor counted as the newest run', pruneRunFiles(names, 3));
+  assert(pruneRunFiles(names, 2).join() === '2026-01-01T00-00-00-000Z.json,2026-01-02T00-00-00-000Z.json', 'pruneRunFiles names the oldest run files beyond the keep count, oldest first', pruneRunFiles(names, 2));
+  assert(pruneRunFiles(names, 4).length === 0 && pruneRunFiles(names, 10).length === 0, 'pruneRunFiles deletes nothing at or under the keep count');
+  assert(pruneRunFiles(names, 0).length === 0 && pruneRunFiles(names, -1).length === 0 && pruneRunFiles(names, NaN).length === 0, 'keep 0 / negative / NaN means unlimited — nothing deleted');
+  assert(pruneRunFiles(names, 1).every(f => f.endsWith('.json')) && pruneRunFiles(names, 1).length === 3, 'non-run files are never pruned');
+  assert(pruneRunFiles(null, 1).length === 0, 'pruneRunFiles tolerates a missing list');
+  writeFileSync(join(TMP, 'journeys', 'retained.journey.yaml'), [
+    'name: retained',
+    `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`,
+    `packB: { file: ${PACK_B.replaceAll('\\', '/')} }`,
+  ].join('\n'));
+  const retainedDef = loadJourneyDef('retained');
+  const started = [];
+  for (let i = 0; i < 5; i++) {
+    const r = await runJourney(retainedDef);
+    started.push(r.startedAt);
+    assert(r.historyError === undefined, `retention run ${i + 1} reports no history error`, r.historyError);
+    await new Promise(res => setTimeout(res, 5));   // distinct millisecond filenames
+  }
+  const retainedFiles = readdirSync(join(TMP, 'runs', 'retained')).sort();
+  assert(retainedFiles.length === 3, 'retention 3 keeps exactly three run files after five runs', retainedFiles);
+  const keptStarts = readJourneyRuns('retained').map(r => r.startedAt);
+  assert(keptStarts.join() === [started[4], started[3], started[2]].join(), 'the newest three survive, newest first; the two oldest are deleted', { kept: keptStarts, started });
+  // A victim that cannot be deleted (a non-empty directory wearing a run
+  // filename) lands on the record as historyError; the run still lands.
+  const stuck = join(TMP, 'runs', 'retained', '0000-01-01T00-00-00-000Z.json');
+  mkdirSync(stuck, { recursive: true });
+  writeFileSync(join(stuck, 'blocker.txt'), 'not a run');
+  const stuckRun = await runJourney(retainedDef);
+  assert(typeof stuckRun.historyError === 'string' && /prune 0000-01-01T00-00-00-000Z\.json: /.test(stuckRun.historyError) && stuckRun.outcome === 'pass',
+         'a deletion failure is noted as historyError on the record, never thrown, and the verdict stands', stuckRun.historyError);
+  assert(readJourneyRuns('retained')[0]?.startedAt === stuckRun.startedAt, 'the run record itself still landed on disk beside the undeletable file');
+  assert(readdirSync(join(TMP, 'runs', 'retained')).filter(f => f !== '0000-01-01T00-00-00-000Z.json').length === 3, 'the deletable victim was still pruned around the stuck one');
+  rmSync(stuck, { recursive: true, force: true });
+  process.env.OBSERVOGRAM_JOURNEY_RUN_RETENTION = '0';
+  for (let i = 0; i < 2; i++) {
+    await runJourney(retainedDef);
+    await new Promise(res => setTimeout(res, 5));
+  }
+  assert(readdirSync(join(TMP, 'runs', 'retained')).length === 5, 'retention 0 is unlimited — nothing pruned', readdirSync(join(TMP, 'runs', 'retained')).length);
+  process.env.OBSERVOGRAM_JOURNEY_RUN_RETENTION = 'not-a-number';
+  await runJourney(retainedDef);
+  assert(readdirSync(join(TMP, 'runs', 'retained')).length === 6, 'an unparseable retention falls back to the default (1000) — nothing pruned at 6 files');
+  delete process.env.OBSERVOGRAM_JOURNEY_RUN_RETENTION;
 
   // --- gate breaches, each criterion ---
   const facts = { gradeScore: 60, gradePass: false, alignmentPct: 40, declaredNotLive: 7, liveNotDeclared: 2, drifted: 9, aligned: 10, liveAgeHours: 30 };
@@ -221,6 +282,23 @@ try {
     'mcp.stack.failed': '0',
     'mcp.stack.notInInventory': '9',
     'mcp.stack.notAttempted': '0',
+    // Step 3: the samples themselves, exactly as the fetcher annotates them
+    // (JSON strings; expr present on the wire, dropped on the record).
+    'mcp.observed.stack_metrics': JSON.stringify([
+      { id: 'scrape_success_ratio', family: 'scrape', product: 'generic', expr: 'sum(up) / count(up)', value: 0.95, unit: 'ratio', direction: 'higher', at: nowIso, outcome: 'data' },
+      { id: 'scrape_targets_down', family: 'scrape', product: 'generic', expr: 'count(up == 0) or (count(up) * 0)', value: 2, unit: 'count', direction: 'lower', at: nowIso, outcome: 'data' },
+      { id: 'rule_evaluation_failures', family: 'ruler', product: 'prometheus', expr: 'x', value: null, unit: 'per-second', direction: 'lower', at: nowIso, outcome: 'empty' },
+      { id: 'notification_errors', family: 'notify', product: 'alertmanager', expr: 'y', value: null, unit: 'per-second', direction: 'lower', at: nowIso, outcome: 'failed', reason: 'HTTP 500' },
+      { id: 'log_shipper_drops', family: 'logs', product: 'promtail', expr: 'z', value: null, unit: 'per-second', direction: 'lower', at: nowIso, outcome: 'not-in-inventory' },
+      { id: 'retired_row_zzz', family: 'tsdb', product: 'generic', expr: 'w', value: 1, unit: 'count', direction: 'lower', at: nowIso, outcome: 'data' },
+    ]),
+    'mcp.observed.alertmanager': JSON.stringify({ version: '0.27.0', uptime: '2h', clusterStatus: 'ready', silences: { active: 1, total: 4 } }),
+    'mcp.observed.grafana.datasources': JSON.stringify([
+      { uid: 'p1', name: 'Prometheus', type: 'prometheus', health: 'ok', message: null },
+      { uid: 'l1', name: 'Loki', type: 'loki', health: 'error', message: 'connection refused' },
+      { uid: 't1', name: 'Tempo', type: 'tempo', health: 'unknown', message: null },
+    ]),
+    'mcp.observed.grafana.contact_points': JSON.stringify({ count: 3, names: ['email', 'teams', 'pagerduty'] }),
   };
   const LIVE_B = join(TMP, 'live-b.pack.json');
   writeFileSync(LIVE_B, JSON.stringify(liveB, null, 2));
@@ -237,6 +315,54 @@ try {
     const rf = liveEvidenceFacts(restrictedB).stack;
     assert(rf.status === 'not-attempted' && rf.reason === 'metrics_query not exposed by this MCP (restricted tier)' && rf.sampled === 0 && rf.notAttempted === 24,
            'liveEvidenceFacts keeps a not-attempted panel with its reason', rf);
+    const rev = liveEvidenceFacts(restrictedB).stackEvidence;
+    assert(rev && rev.status === 'not-attempted' && rev.reason === 'metrics_query not exposed by this MCP (restricted tier)',
+           'stackEvidence keeps a not-attempted status with its reason (restricted tier reads not-attempted, never absent)', rev);
+    // An outcome the contracts do not declare is kept verbatim — never relabelled as a probe failure nothing reported.
+    const oddB = { ...liveB, metadata: { ...liveB.metadata, annotations: { ...liveB.metadata.annotations, 'mcp.observed.stack_metrics': JSON.stringify([
+      { id: 'scrape_targets_down', family: 'scrape', product: 'generic', value: 3, unit: 'count', direction: 'lower', at: nowIso, outcome: 'throttled' },
+      { id: 'scrape_success_ratio', family: 'scrape', product: 'generic', value: 0.5, unit: 'ratio', direction: 'higher', at: nowIso },
+    ]) } } };
+    const odd = liveEvidenceFacts(oddB).stackEvidence.rows;
+    assert(odd[0].outcome === 'throttled' && odd[1].outcome === 'unknown', 'an undeclared outcome is kept verbatim and a missing one reads unknown — neither becomes "failed"', odd.map(r => r.outcome));
+    assert(evaluateGate({ stack: { rows: { scrape_targets_down: { max: 0 } } } }, { stackEvidence: liveEvidenceFacts(oddB).stackEvidence })[0].detail.includes('(throttled)'),
+           'a threshold on a row with an undeclared outcome breaches as "no sample" naming that outcome');
+  }
+  // --- step 3: stackEvidence — the samples, enriched from the contracts table ---
+  const se = lf.stackEvidence;
+  assert(se && se.status === 'sampled' && se.reason === null, 'stackEvidence status is sampled with no reason', se && { status: se.status, reason: se.reason });
+  assert(Array.isArray(se.rows) && se.rows.length === 6, 'stackEvidence keeps every observed row', se.rows.length);
+  const byId = Object.fromEntries(se.rows.map(r => [r.id, r]));
+  assert(byId.scrape_success_ratio.value === 0.95 && byId.scrape_success_ratio.unit === 'ratio' && byId.scrape_success_ratio.direction === 'higher' && byId.scrape_success_ratio.outcome === 'data',
+         'a data row keeps value, unit, direction and outcome', byId.scrape_success_ratio);
+  assert(byId.scrape_success_ratio.referenceSli === 'prometheus-reference/scrape_success_ratio', 'referenceSli is looked up from the contracts table', byId.scrape_success_ratio.referenceSli);
+  assert(byId.scrape_success_ratio.hint === null && byId.scrape_targets_down.hint === 'nonzero', 'hint is the contracts display marker: nonzero only for a lower-is-better row above zero', { ratio: byId.scrape_success_ratio.hint, down: byId.scrape_targets_down.hint });
+  assert(byId.scrape_targets_down.referenceSli === null, 'a row the table maps to no reference SLI keeps null');
+  assert(se.rows.every(r => !('expr' in r)), 'expr is dropped from the record (the sample, not the query, is the evidence)');
+  assert(se.rows.every(r => r.at === nowIso && r.product), 'rows keep their sample time and product', se.rows.map(r => [r.at, r.product]));
+  assert(byId.rule_evaluation_failures.outcome === 'empty' && byId.rule_evaluation_failures.value === null && byId.rule_evaluation_failures.hint === null, 'an empty row has null value and no hint');
+  assert(byId.notification_errors.outcome === 'failed' && byId.notification_errors.reason === 'HTTP 500', 'a failed row keeps its reason', byId.notification_errors);
+  assert(byId.log_shipper_drops.outcome === 'not-in-inventory' && !('reason' in byId.log_shipper_drops), 'a not-in-inventory row is kept without inventing a reason');
+  assert(byId.retired_row_zzz && byId.retired_row_zzz.referenceSli === null && byId.retired_row_zzz.value === 1 && byId.retired_row_zzz.family === 'tsdb',
+         'a row the table no longer declares is kept with referenceSli null (its own family and unit stand)', byId.retired_row_zzz);
+  assert(se.alertmanager && se.alertmanager.version === '0.27.0' && se.alertmanager.clusterStatus === 'ready' && se.alertmanager.silencesActive === 1 && se.alertmanager.error === null,
+         'stackEvidence.alertmanager carries version, cluster status, active silences, no error', se.alertmanager);
+  assert(se.grafana && se.grafana.datasources === 3 && se.grafana.unhealthyDatasources.join() === 'Loki' && se.grafana.contactPoints === 3 && se.grafana.error === null,
+         'stackEvidence.grafana counts datasources, names only the error-health ones (unknown is unchecked, not unhealthy), counts contact points', se.grafana);
+  {
+    // Malformed JSON degrades to no rows — never to a fabricated panel.
+    const brokenB = { ...liveB, metadata: { ...liveB.metadata, annotations: { ...liveB.metadata.annotations, 'mcp.observed.stack_metrics': '[{not json', 'mcp.observed.alertmanager': '{{', 'mcp.observed.grafana.datasources': 'nope' } } };
+    const bev = liveEvidenceFacts(brokenB).stackEvidence;
+    assert(bev && bev.status === 'sampled' && bev.rows.length === 0 && bev.alertmanager === null, 'malformed stack_metrics / alertmanager JSON is tolerated: status kept, rows empty, alertmanager null', bev);
+    assert(bev.grafana && bev.grafana.datasources === null && bev.grafana.unhealthyDatasources.length === 0 && bev.grafana.contactPoints === 3,
+           'malformed datasources JSON reads as unknown count while the contact points still parse', bev.grafana);
+    const noGrafana = { ...liveB, metadata: { ...liveB.metadata, annotations: Object.fromEntries(Object.entries(liveB.metadata.annotations).filter(([k]) => !k.startsWith('mcp.observed.grafana') && k !== 'mcp.observed.alertmanager')) } };
+    const nev = liveEvidenceFacts(noGrafana).stackEvidence;
+    assert(nev.alertmanager === null && nev.grafana === null && nev.rows.length === 6, 'surfaces the fetcher never wrote are null on the evidence, not empty objects', { am: nev.alertmanager, g: nev.grafana });
+    const errGrafana = { ...liveB, metadata: { ...liveB.metadata, annotations: { ...noGrafana.metadata.annotations, 'mcp.observed.grafana.error': 'HTTP 503', 'mcp.observed.alertmanager': JSON.stringify({ version: null, uptime: null, clusterStatus: null, silences: null, error: 'timeout' }) } } };
+    const eev = liveEvidenceFacts(errGrafana).stackEvidence;
+    assert(eev.grafana && eev.grafana.error === 'HTTP 503' && eev.grafana.datasources === null && eev.alertmanager.error === 'timeout' && eev.alertmanager.silencesActive === null,
+           'an advertised-but-failing surface keeps its error, with null counts', { g: eev.grafana, am: eev.alertmanager });
   }
 
   writeFileSync(join(TMP, 'journeys', 'live-synthetic.journey.yaml'), [
@@ -257,7 +383,11 @@ try {
   assert(liveRec.probeErrors?.dashboards === 'HTTP 502 Bad Gateway', 'run record keeps the probe error text', liveRec.probeErrors);
   assert(liveRec.stack && liveRec.stack.status === 'sampled' && liveRec.stack.sampled === 12 && liveRec.stack.empty === 3 && liveRec.stack.failed === 0,
          'run record carries the stack self-metric counts', liveRec.stack);
-  assert(!liveRec.gate.breaches.some(b => /stack/i.test(b.criterion)), 'no gate criterion reads the stack sample — signal, not verdict');
+  assert(!liveRec.gate.breaches.some(b => /stack/i.test(b.criterion)), 'without a gate.stack block no stack criterion breaches — the sample stays a signal');
+  assert(liveRec.stackEvidence && liveRec.stackEvidence.status === 'sampled' && liveRec.stackEvidence.rows.length === 6 && liveRec.stackEvidence.alertmanager.version === '0.27.0' && liveRec.stackEvidence.grafana.unhealthyDatasources.join() === 'Loki',
+         'run record carries stackEvidence next to the stack counts', liveRec.stackEvidence && { status: liveRec.stackEvidence.status, rows: liveRec.stackEvidence.rows.length });
+  assert(JSON.parse(JSON.stringify(readJourneyRuns('live-synthetic')[0])).stackEvidence.rows.find(r => r.id === 'scrape_targets_down').hint === 'nonzero',
+         'stackEvidence round-trips through the run history file');
   assert(typeof liveRec.freshness.liveAgeHours === 'number', 'live-like B has a freshness age');
   const liveMd = renderJourneyMarkdown(liveRec);
   assert(/Live probes/.test(liveMd) && /failed: dashboards/.test(liveMd) && /not exposed: scrape_configs/.test(liveMd) && /vantage \*\*partial\*\*/.test(liveMd),
@@ -269,6 +399,172 @@ try {
          'markdown prints the not-attempted reason for a restricted tier');
   assert(/\*\*failOnPartialEvidence\*\*/.test(liveMd) && /\*\*maxUnhealthy\*\*/.test(liveMd), 'markdown lists both new breach types');
   assert(/no live probes \(file-sourced B\)/.test(renderJourneyMarkdown(rec)), 'file-sourced report says there were no live probes');
+
+  // --- step 3: gate key `stack` — thresholds on the samples ---
+  assert(formatStackValue(0.8333, 'ratio') === '83.3%' && formatStackValue(0.0041, 'per-second') === '0.004/s' && formatStackValue(0.04, 'per-hour') === '0.0/h'
+         && formatStackValue(7.44, 'seconds') === '7.4s' && formatStackValue(1.2, 'count') === '1' && formatStackValue(3, 'unknown-unit') === '3',
+         'formatStackValue formats each contracts unit', ['ratio', 'per-second', 'per-hour', 'seconds', 'count'].map(u => formatStackValue(1.23456, u)));
+  assert(formatStackValue(null, 'count') === '—' && formatStackValue(NaN, 'ratio') === '—' && formatStackValue('7', 'count') === '—', 'formatStackValue never prints a non-number as a number');
+  const sampled = { ...facts, stackEvidence: lf.stackEvidence };
+  const noStack = { ...facts, stackEvidence: null };
+  const notAttempted = { ...facts, stackEvidence: { status: 'not-attempted', reason: 'metrics_query not exposed by this MCP (restricted tier)', rows: [], alertmanager: null, grafana: null } };
+  const noData = { ...facts, stackEvidence: { ...lf.stackEvidence, rows: lf.stackEvidence.rows.filter(r => r.outcome !== 'data') } };
+  breaches = evaluateGate({ stack: { requireSampled: true } }, noStack);
+  assert(breaches.length === 1 && breaches[0].criterion === 'stack' && /not sampled \(Pack B is not a live draft\)/.test(breaches[0].detail) && /cannot prove stack health/.test(breaches[0].detail),
+         'requireSampled breaches on a file-sourced B (no stack evidence) and says the vantage cannot prove stack health', breaches);
+  breaches = evaluateGate({ stack: { requireSampled: true } }, notAttempted);
+  assert(breaches.length === 1 && breaches[0].criterion === 'stack' && /not sampled \(metrics_query not exposed by this MCP \(restricted tier\)\)/.test(breaches[0].detail),
+         'requireSampled breaches on a not-attempted panel with the reason', breaches);
+  breaches = evaluateGate({ stack: { requireSampled: true } }, noData);
+  assert(breaches.length === 1 && breaches[0].criterion === 'stack' && /no row answered with data/.test(breaches[0].detail),
+         'requireSampled breaches when the panel was sampled but no row answered data', breaches);
+  assert(evaluateGate({ stack: { requireSampled: true } }, sampled).length === 0, 'requireSampled passes when a row answered data');
+  assert(evaluateGate({ stack: { requireSampled: false } }, noStack).length === 0 && evaluateGate({ stack: {} }, noStack).length === 0, 'requireSampled: false / an empty stack block never breach');
+  assert(evaluateGate({ stack: { rows: { scrape_success_ratio: { min: 0.9 }, scrape_targets_down: { max: 5 } } } }, sampled).length === 0, 'row thresholds pass when the samples sit inside the band');
+  breaches = evaluateGate({ stack: { rows: { scrape_success_ratio: { min: 0.99 } } } }, sampled);
+  assert(breaches.length === 1 && breaches[0].criterion === 'stack.scrape_success_ratio' && /scrape_success_ratio = 95\.0% ratio outside \[99\.0% … ∞\]/.test(breaches[0].detail) && /point-in-time sample, not an SLO verdict/.test(breaches[0].detail),
+         'a min breach names the row, the formatted value with its unit, the band, and says it is a sample not an SLO verdict', breaches);
+  breaches = evaluateGate({ stack: { rows: { scrape_targets_down: { max: 0 } } } }, sampled);
+  assert(breaches.length === 1 && breaches[0].criterion === 'stack.scrape_targets_down' && /scrape_targets_down = 2 count outside \[-∞ … 0\]/.test(breaches[0].detail),
+         'a max breach formats a count as an integer with an open lower bound', breaches);
+  breaches = evaluateGate({ stack: { rows: { scrape_targets_down: { min: 0, max: 1 } } } }, sampled);
+  assert(breaches.length === 1 && /outside \[0 … 1\]/.test(breaches[0].detail), 'a two-sided band prints both bounds', breaches);
+  assert(evaluateGate({ stack: { rows: { scrape_targets_down: { max: 2 }, scrape_success_ratio: { min: 0.95, max: 0.95 } } } }, sampled).length === 0, 'boundary equality passes (< min / > max, never <= / >=)');
+  breaches = evaluateGate({ stack: { rows: { notification_errors: { max: 0 } } } }, sampled);
+  assert(breaches.length === 1 && breaches[0].criterion === 'stack.notification_errors' && /no sample for notification_errors \(failed: HTTP 500\) — threshold cannot be checked/.test(breaches[0].detail),
+         'a threshold on a row that did not answer data breaches as "no sample" with the outcome and reason — never passes by absence', breaches);
+  breaches = evaluateGate({ stack: { rows: { rule_evaluation_failures: { max: 0 } } } }, sampled);
+  assert(breaches.length === 1 && /no sample for rule_evaluation_failures \(empty\)/.test(breaches[0].detail), 'an empty row breaches a threshold as "no sample (empty)"', breaches);
+  breaches = evaluateGate({ stack: { rows: { log_shipper_drops: { max: 0 } } } }, sampled);
+  assert(breaches.length === 1 && /\(not-in-inventory\)/.test(breaches[0].detail), 'a not-in-inventory row breaches a threshold as "no sample"', breaches);
+  breaches = evaluateGate({ stack: { rows: { tsdb_compaction_failures: { max: 0 } } } }, sampled);
+  assert(breaches.length === 1 && breaches[0].criterion === 'stack.tsdb_compaction_failures' && /no sample for tsdb_compaction_failures \(not attempted by the sampler — call budget exhausted or row not observed\)/.test(breaches[0].detail),
+         'a threshold on a row absent from a sampled panel breaches honestly and names why the sampler has no row', breaches);
+  breaches = evaluateGate({ stack: { rows: { scrape_targets_down: { max: 0 } } } }, notAttempted);
+  assert(breaches.length === 1 && /no sample for scrape_targets_down \(not-attempted: metrics_query not exposed by this MCP \(restricted tier\)\)/.test(breaches[0].detail),
+         'a threshold on a not-attempted panel carries the tier reason — the breach reads as a tier limit, not a fetch hole', breaches);
+  // Display rounding must not print a breach as "0.000/s outside [-∞ … 0.000/s]".
+  {
+    const tiny = { ...facts, stackEvidence: { ...lf.stackEvidence, rows: [
+      { id: 'grafana_http_errors', family: 'dashboards', product: 'grafana', value: 0.0004, unit: 'per-second', direction: 'lower', outcome: 'data', hint: 'nonzero', at: nowIso, referenceSli: null },
+      { id: 'scrape_success_ratio', family: 'scrape', product: 'generic', value: 0.8999, unit: 'ratio', direction: 'higher', outcome: 'data', hint: null, at: nowIso, referenceSli: null },
+    ] } };
+    breaches = evaluateGate({ stack: { rows: { grafana_http_errors: { max: 0 }, scrape_success_ratio: { min: 0.9 } } } }, tiny);
+    assert(breaches.length === 2 && /grafana_http_errors = 0\.000\/s \(raw 0\.0004\) per-second outside \[-∞ … 0\.000\/s\]/.test(breaches[0].detail),
+           'a value that rounds to its max bound prints the raw number', breaches[0]);
+    assert(/scrape_success_ratio = 90\.0% \(raw 0\.8999\) ratio outside \[90\.0% … ∞\]/.test(breaches[1].detail),
+           'a value that rounds to its min bound prints the raw number', breaches[1]);
+    assert(!/raw/.test(evaluateGate({ stack: { rows: { scrape_targets_down: { max: 0 } } } }, sampled)[0].detail), 'no raw suffix when the formatted value already differs from the bound');
+  }
+  // evaluateGate is exported: a threshold it cannot check breaches, never passes by silence.
+  for (const [label, t, why] of [
+    ['NaN max', { max: NaN }, /max is not a finite number/],
+    ['Infinity bounds', { min: -Infinity, max: Infinity }, /min is not a finite number/],
+    ['a string bound', { max: '0' }, /max is not a finite number/],
+    ['neither bound', {}, /neither min nor max declared/],
+    ['min above max', { min: 5, max: 1 }, /min 5 is above max 1/],
+    ['a scalar entry', 0, /not a mapping/],
+  ]) {
+    breaches = evaluateGate({ stack: { rows: { scrape_targets_down: t } } }, sampled);
+    assert(breaches.length === 1 && breaches[0].criterion === 'stack.scrape_targets_down' && /^threshold invalid \(/.test(breaches[0].detail) && why.test(breaches[0].detail) && /cannot be checked/.test(breaches[0].detail),
+           `an unvalidated gate object with ${label} breaches as "threshold invalid"`, breaches);
+  }
+  breaches = evaluateGate({ stack: { rows: { scrape_targets_down: { max: 0 } } } }, noStack);
+  assert(breaches.length === 1 && /\(no stack evidence\)/.test(breaches[0].detail), 'a file-sourced B breaches a declared row threshold with "no stack evidence" (never silently passes)', breaches);
+  assert(evaluateGate({ stack: { rows: {} } }, noStack).length === 0, 'a file-sourced B with no declared row threshold never breaches stack.rows');
+  {
+    const infoRow = { id: 'tsdb_active_series', family: 'tsdb', product: 'prometheus', value: 120000, unit: 'count', direction: 'info', outcome: 'data', hint: null, at: nowIso, referenceSli: null };
+    const withInfo = { ...facts, stackEvidence: { ...lf.stackEvidence, rows: [...lf.stackEvidence.rows, infoRow] } };
+    breaches = evaluateGate({ stack: { rows: { tsdb_active_series: { max: 100000 } } } }, withInfo);
+    assert(breaches.length === 1 && /tsdb_active_series = 120000 count outside \[-∞ … 100000\]/.test(breaches[0].detail), 'an info-direction row may still carry a threshold', breaches);
+    assert(evaluateGate({ stack: { rows: { tsdb_active_series: { max: 200000 } } } }, withInfo).length === 0, 'an info row inside its band passes');
+    const nullValue = { ...facts, stackEvidence: { ...lf.stackEvidence, rows: [{ ...infoRow, value: null }] } };
+    breaches = evaluateGate({ stack: { rows: { tsdb_active_series: { max: 1 } } } }, nullValue);
+    assert(breaches.length === 1 && /data without a numeric value/.test(breaches[0].detail), 'a data row without a numeric value cannot be checked and says so', breaches);
+  }
+  breaches = evaluateGate({ stack: { requireSampled: true, rows: { scrape_targets_down: { max: 0 } } } }, notAttempted);
+  assert(breaches.map(b => b.criterion).join() === 'stack,stack.scrape_targets_down', 'requireSampled and a row threshold breach independently on a not-attempted panel', breaches.map(b => b.criterion));
+
+  // --- gate.stack definition validation ---
+  const known = STACK_SELF_METRIC_PROBES.map(r => r.id);
+  const badDef = (name, gateYaml) => {
+    writeFileSync(join(TMP, 'journeys', `${name}.journey.yaml`), [
+      `name: ${name}`,
+      `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`,
+      `packB: { file: ${LIVE_B.replaceAll('\\', '/')} }`,
+      ...gateYaml,
+    ].join('\n'));
+    try { loadJourneyDef(name); return null; } catch (e) { return e.message; }
+  };
+  let verr = badDef('bad-id', ['gate:', '  stack:', '    rows:', '      Scrape_Targets_Down: { max: 0 }']);
+  assert(/journey bad-id: gate\.stack\.rows names unknown row Scrape_Targets_Down; known rows: /.test(verr || '') && known.every(id => (verr || '').includes(id)),
+         'an unknown (case-sensitive) row id is refused at load time and the error lists every known row', verr);
+  verr = badDef('bad-nan', ['gate:', '  stack:', '    rows:', '      scrape_targets_down: { max: abc }']);
+  assert(/gate\.stack\.rows\.scrape_targets_down\.max must be a finite number/.test(verr || ''), 'a non-numeric bound is refused', verr);
+  verr = badDef('bad-empty', ['gate:', '  stack:', '    rows:', '      scrape_targets_down: {}']);
+  assert(/gate\.stack\.rows\.scrape_targets_down declares neither min nor max/.test(verr || ''), 'an entry with neither min nor max is refused', verr);
+  verr = badDef('bad-band', ['gate:', '  stack:', '    rows:', '      scrape_targets_down: { min: 5, max: 1 }']);
+  assert(/min 5 is above max 1/.test(verr || ''), 'min above max is refused', verr);
+  verr = badDef('bad-flag', ['gate:', '  stack:', '    requireSampled: yes-please']);
+  assert(/requireSampled must be true or false/.test(verr || ''), 'a non-boolean requireSampled is refused', verr);
+  verr = badDef('bad-shape', ['gate:', '  stack: 3']);
+  assert(/gate\.stack must be a mapping/.test(verr || ''), 'a scalar stack block is refused', verr);
+  assert(badDef('good-stack', ['gate:', '  stack:', '    requireSampled: true', '    rows:', '      scrape_success_ratio: { min: 0.9 }', '      scrape_targets_down: { max: 0 }']) === null,
+         'a well-formed stack block loads');
+  assert(loadJourneyDef('good-stack').gate.stack.rows.scrape_targets_down.max === 0, 'the loaded definition keeps the stack thresholds');
+  for (const [label, fn] of [
+    ['NaN', () => validateGateStack({ rows: { scrape_targets_down: { max: NaN } } }, 'x')],
+    ['Infinity', () => validateGateStack({ rows: { scrape_targets_down: { min: Infinity } } }, 'x')],
+    ['a string bound', () => validateGateStack({ rows: { scrape_targets_down: { max: '0' } } }, 'x')],
+    ['a list of rows', () => validateGateStack({ rows: ['scrape_targets_down'] }, 'x')],
+    ['a scalar entry', () => validateGateStack({ rows: { scrape_targets_down: 0 } }, 'x')],
+  ]) {
+    let m = null;
+    try { fn(); } catch (e) { m = e.message; }
+    assert(/journey x: gate\.stack/.test(m || ''), `validateGateStack refuses ${label}`, m);
+  }
+  assert((() => { try { validateGateStack({ requireSampled: false }, 'x'); validateGateStack({ rows: {} }, 'x'); return true; } catch { return false; } })(), 'validateGateStack accepts requireSampled alone and an empty rows map');
+  // The existing gate keys are untouched: a stack-free gate still loads without the block.
+  assert(loadJourneyDef('live-synthetic').gate.stack === undefined, 'a journey without gate.stack loads unchanged');
+
+  // --- a run with a stack gate: breaches land beside the others; report + CLI ---
+  writeFileSync(join(TMP, 'journeys', 'stack-gated.journey.yaml'), [
+    'name: stack-gated',
+    `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`,
+    `packB: { file: ${LIVE_B.replaceAll('\\', '/')} }`,
+    'env: prod',
+    'gate:',
+    '  maxUnhealthy: 10',
+    '  stack:',
+    '    requireSampled: true',
+    '    rows:',
+    '      scrape_success_ratio: { min: 0.9 }',
+    '      scrape_targets_down: { max: 0 }',
+    '      notification_errors: { max: 0 }',
+  ].join('\n'));
+  const gatedRec = await runJourney(loadJourneyDef('stack-gated'));
+  assert(gatedRec.outcome === 'gate-failed', 'a stack threshold breach fails the gate', gatedRec.outcome);
+  assert(gatedRec.gate.breaches.map(b => b.criterion).sort().join() === 'stack.notification_errors,stack.scrape_targets_down',
+         'only the breached rows appear: requireSampled satisfied, the ratio inside its band, the count and the failed row breach', gatedRec.gate.breaches.map(b => b.criterion));
+  assert(gatedRec.gate.thresholds.stack.rows.scrape_targets_down.max === 0, 'the record keeps the stack thresholds it was gated on');
+  const gatedMd = renderJourneyMarkdown(gatedRec);
+  assert(/### Stack self-metrics — point-in-time samples/.test(gatedMd) && /\| id \| family \| value unit \| outcome \| hint \| reference SLI \|/.test(gatedMd), 'markdown carries the stack self-metrics table with its header');
+  assert(/\| scrape_success_ratio \| scrape \| 95\.0% ratio \| data \| - \| prometheus-reference\/scrape_success_ratio \|/.test(gatedMd), 'a data row prints its formatted value, unit, outcome and reference SLI', gatedMd);
+  assert(/\| scrape_targets_down \| scrape \| 2 count \| data \| nonzero \| - \|/.test(gatedMd), 'the nonzero hint prints as text, a missing reference SLI as -', gatedMd);
+  assert(/\| notification_errors \| notify \| - \| failed: HTTP 500 \| - \| /.test(gatedMd), 'a failed row prints no value and its reason beside the outcome', gatedMd);
+  assert(/\| log_shipper_drops \| logs \| - \| not-in-inventory \|/.test(gatedMd), 'a not-in-inventory row prints its outcome, no value');
+  assert(/Samples, not verdicts/.test(gatedMd), 'the table is labelled samples, not verdicts');
+  assert(/- \*\*stack\.scrape_targets_down\*\* — scrape_targets_down = 2 count outside/.test(gatedMd) && /- \*\*stack\.notification_errors\*\* — no sample for notification_errors/.test(gatedMd),
+         'stack breaches are listed with the other gate breaches');
+  assert(!/### Stack self-metrics — point-in-time samples/.test(renderJourneyMarkdown(rec)), 'a file-sourced report has no stack table (no rows to show, no empty "healthy" table)');
+  {
+    const many = { ...gatedRec, stackEvidence: { ...gatedRec.stackEvidence, rows: Array.from({ length: 30 }, (_, i) => ({ ...gatedRec.stackEvidence.rows[0], id: `row_${i}` })) } };
+    const manyMd = renderJourneyMarkdown(many);
+    assert((manyMd.match(/^\| row_\d+ \|/gm) || []).length === 24 && /6 more row\(s\) not shown/.test(manyMd), 'the table is capped at 24 rows and says how many were left out');
+  }
+  assert(stackStatusLine(gatedRec) === 'stack sampled 3' && stackStatusLine(rec) === 'stack none' && stackStatusLine({ stackEvidence: { status: 'not-attempted', rows: [] } }) === 'stack not attempted'
+         && stackStatusLine({ stack: { status: 'sampled', sampled: 7 } }) === 'stack sampled 7' && stackStatusLine({ outcome: 'vantage-lost' }) === 'stack none',
+         'stackStatusLine reads sampled N (data rows) / not attempted / none, falling back to a pre-step-3 count-only record');
 
   // Studio parity: the studio's /api/diff attaches comparePackBranches to
   // the diff before grading; the journey must grade on the same construct.
@@ -333,6 +629,9 @@ try {
     env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000,
   });
   assert(/^lost\tvantage-lost · /m.test(cliList.stdout) && !/undefined%/.test(cliList.stdout), 'journey list shows vantage-lost without a fake alignment', cliList.stdout);
+  assert(/^stack-gated\tgate-failed · .* · stack sampled 3$/m.test(cliList.stdout), 'journey list prints the stack status (sampled N) per journey', cliList.stdout);
+  assert(/^pay-vs-curated\tpass · .* · stack none$/m.test(cliList.stdout), 'journey list prints stack none for a file-sourced journey', cliList.stdout);
+  assert(!/^lost\t.*stack/m.test(cliList.stdout), 'a vantage-lost line carries no stack status');
 
   // --- secrets discipline: authEnv must resolve or the run refuses ---
   writeFileSync(join(TMP, 'journeys', 'live.journey.yaml'), [
