@@ -184,6 +184,11 @@ const FULL_TOOLS = ['metrics_label_values', 'metrics_targets', 'vmalert_rules', 
 
 const tmp = mkdtempSync(join(tmpdir(), 'observogram-recorder-'));
 const fake = await startFakeMcp(FULL_TOOLS);
+// The fake's own host:port — what must never land in a committed file. A
+// backend URL INSIDE a replayed payload (Grafana's loopback address in a
+// failed check's error, on the local-stack recording) is payload, not
+// the MCP host, and is not what this guard is about.
+const fakeHost = new URL(fake.url).host;
 try {
   // ---- 1. report mode ----
   const reportDir = join(tmp, 'report');
@@ -259,7 +264,7 @@ try {
     const j = read(join('recorded-stack', f));
     assert(j._recorded?.tool === 'metrics_query' && typeof j._recorded.query === 'string' && j._recorded.row === f.replace(/\.json$/, ''),
       `${f}: carries _recorded provenance (tool, query, row)`, j._recorded);
-    assert(j._recorded.server === undefined && !JSON.stringify(j).includes('127.0.0.1'),
+    assert(j._recorded.server === undefined && !JSON.stringify(j).includes(fakeHost),
       `${f}: committed provenance names no server host (the maintainer's MCP hostname stays out of git)`, j._recorded);
     const v = validateResponseShape(capability('stack_self_metrics').responseShape, j);
     assert(v.ok, `${f}: satisfies the instant-vector shape`, v);
@@ -277,7 +282,7 @@ try {
     if (!existsSync(join(outDir, file))) continue;
     const j = read(file);
     assert(j._synthetic === undefined, `${file}: carries no _synthetic marker`);
-    assert(!JSON.stringify(j).includes('127.0.0.1'), `${file}: names no server host`);
+    assert(j._recorded?.server === undefined && !JSON.stringify(j).includes(fakeHost), `${file}: names no server host`);
     const v = validateResponseShape(capability(id).responseShape, j);
     assert(v.ok, `${file}: satisfies shape ${capability(id).responseShape}`, v);
   }

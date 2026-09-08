@@ -86,7 +86,13 @@ export const RESPONSE_SHAPES = Object.freeze({
       ['uid', 'id', 'name'],
     ],
   },
-  // Grafana contact points (provisioning API).
+  // Grafana contact points — the RECEIVERS API
+  // (/api/alertmanager/grafana/config/api/v1/receivers), which is what
+  // otel-mcp-server 1.8.0 answers (recorded 2026-09-08 on Grafana 12.4.4):
+  // { count, contactPoints: [{ name, active, integrations: [{ name,
+  // sendResolved, lastNotifyAttempt, lastNotifyAttemptDuration }] }] }.
+  // No uid, type or settings — no webhook URL or secret ever rides in it.
+  // `uid` stays tolerated for a provisioning-API-shaped server.
   'contact-points': {
     lists: ['contactPoints', 'contact_points', 'data', ''],
     itemAnyOf: [
@@ -109,11 +115,23 @@ export const RESPONSE_SHAPES = Object.freeze({
     ],
   },
   // Grafana datasource health check — a single verdict object.
+  //
+  // otel-mcp-server 1.8.0 (recorded 2026-09-08 over Grafana 12.4.4) wraps
+  // GET /api/datasources/uid/:uid/health as { datasource: {…}, health }:
+  // `health` is { supported: true, status: 'OK' | 'ERROR', message,
+  // details } when Grafana's endpoint answered 2xx, and { supported: false,
+  // error: 'HTTP <code>: <text> — <url>' } when it did not — Grafana answers
+  // a check that ran and FAILED (backend unreachable) with HTTP 400, an
+  // unknown uid with 500. The envelope is located first (`health`), then a
+  // Prometheus-API `data` wrapper, then a bare verdict at the root. The
+  // located object carries a verdict key (status | message | ok) or the
+  // support pair (supported | error): ONE key group, because the checker
+  // requires every group and the two forms share no key.
   'health-object': {
     object: true,
-    objectAt: ['data', ''],
+    objectAt: ['health', 'data', ''],
     anyOfKeys: [
-      ['status', 'message', 'ok'],
+      ['status', 'message', 'ok', 'supported', 'error'],
     ],
   },
 });
