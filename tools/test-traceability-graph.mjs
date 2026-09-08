@@ -294,9 +294,9 @@ process.stdout.write('\n--- blast radius rides along, scoring untouched ---\n');
   const again = comparePackBranches(adapted, adapt(clone(pack)));
   const nodesAll = again.branches.flatMap((b) => b.nodes);
   const SUMMARY_KEYS = 'slos,alerts,panels,dashboards,routes,remediations,total';
-  const NODE_KEYS = 'status,key,kind,layer,label,weight,aId,bId,virtual,deltas,blastRadius';
+  const NODE_KEYS = 'status,key,kind,layer,label,weight,aId,bId,virtual,deltas,blastRadius,ladder';
   assert(nodesAll.length > 0 && nodesAll.every((n) => Object.keys(n).join() === NODE_KEYS),
-         'blastRadius is the only new node-verdict field, appended after deltas', nodesAll.map((n) => Object.keys(n).join())[0], NODE_KEYS);
+         'blastRadius and ladder are the only new node-verdict fields, appended after deltas', nodesAll.map((n) => Object.keys(n).join())[0], NODE_KEYS);
   assert(nodesAll.every((n) => n.blastRadius === null || Object.keys(n.blastRadius).join() === SUMMARY_KEYS),
          'blastRadius is a summary object or null');
   assert(nodesAll.every((n) => n.blastRadius !== null && Object.values(n.blastRadius).every((v) => Number.isInteger(v) && v >= 0)),
@@ -329,6 +329,234 @@ process.stdout.write('\n--- blast radius rides along, scoring untouched ---\n');
   assert(declaredOnlyMetric?.blastRadius?.slos === 1, 'a declared_only metric carries the SLO it would blind (from the A-graph index)', declaredOnlyMetric?.blastRadius);
   const brokenAlertless = broken.branches[0].nodes.find((n) => n.kind === 'slo');
   assert(brokenAlertless?.blastRadius?.alerts === 0 && brokenAlertless.blastRadius.slos === 0, 'an SLO with no alert blinds no alert', brokenAlertless?.blastRadius);
+}
+
+process.stdout.write('\n--- per-node ladder rides along, scoring untouched ---\n');
+{
+  const REFRESHED_AT = '2026-09-07T10:00:00.000Z';
+  const ago = (seconds) => new Date(Date.parse(REFRESHED_AT) - seconds * 1000).toISOString();
+  const RULE = 'checkout:latency:ratio_5m';
+  const ALERT_FAST = 'checkout_latency_99_burn_14x_5m_1h';
+  const ALERT_SLOW = 'checkout_latency_99_burn_6x_30m_6h';
+  const NODE_KEYS = 'status,key,kind,layer,label,weight,aId,bId,virtual,deltas,blastRadius,ladder';
+  const LADDER_ROLLUP_KEYS = 'healthy,degraded,broken,unobserved,integrityMean,integrityPct';
+  // A live Pack B the way the fetcher annotates one: every probe family
+  // answered, the one target up, the rule and both burn alerts evaluating.
+  const livePack = (overrides = {}, drop = []) => {
+    const live = clone(pack);
+    live.metadata.annotations = {
+      ...live.metadata.annotations,
+      'mcp.url': 'https://example.test/mcp',
+      'mcp.refreshedAt': REFRESHED_AT,
+      'mcp.probesAttempted': 'recording_rules,alert_rules,dashboards,scrape_configs,metric_names',
+      'mcp.probesSucceeded': 'recording_rules,alert_rules,dashboards,scrape_configs,metric_names',
+      'mcp.probesEmpty': '',
+      'mcp.probesFailed': '',
+      'mcp.probesUnsupported': '',
+      'mcp.discovered.metric_names': '["checkout_latency_seconds_bucket","checkout_latency_seconds_count","checkout:latency:ratio_5m"]',
+      'mcp.discovered.metric_names_count': '3',
+      'mcp.observed.scrape_targets': JSON.stringify([
+        { job: 'checkout-api', instance: 'checkout-api:8080', health: 'up', lastScrape: ago(4), lastError: null },
+      ]),
+      'mcp.observed.recording_rules': JSON.stringify([
+        { name: RULE, health: 'ok', lastError: null, lastEvaluation: ago(12), evaluationTime: 0.004 },
+      ]),
+      'mcp.observed.alert_rules': JSON.stringify([
+        { name: ALERT_FAST, health: 'ok', lastError: null, lastEvaluation: ago(20), state: 'inactive', activeAt: null },
+        { name: ALERT_SLOW, health: 'ok', lastError: null, lastEvaluation: ago(20), state: 'inactive', activeAt: null },
+      ]),
+      'mcp.versions.prometheus': '2.53.0',
+      ...overrides,
+    };
+    for (const key of drop) delete live.metadata.annotations[key];
+    return live;
+  };
+  // The fetcher never projects a crawler scrape job: drop the fixture's so
+  // the declared job has nothing to pair with in B.
+  const withoutScrape = (live) => {
+    for (const key of ['crawler.discovered.scrape_jobs', 'crawler.discovered.scrape_jobs_count', 'crawler.discovered.scrape_job_origins']) {
+      delete live.metadata.annotations[key];
+    }
+    return live;
+  };
+  const compare = (live) => comparePackBranches(adapted, adapt(live));
+  const nodeOf = (cmp, kind) => cmp.branches[0].nodes.find((n) => n.kind === kind);
+  const ladderOf = (cmp, kind) => nodeOf(cmp, kind)?.ladder;
+  const scored = (cmp) => JSON.stringify({
+    rollup: { ...cmp.rollup, ladder: undefined },
+    branches: cmp.branches.map((b) => [b.verdict, b.integrity, b.integrityPct, b.counts, b.nodes.map((n) => `${n.status}:${n.key}`).sort()]),
+  });
+
+  // Healthy: every rung reads from the wire.
+  const healthy = compare(livePack());
+  const hb = healthy.branches[0];
+  assert(hb.nodes.every((n) => Object.keys(n).join() === NODE_KEYS && Object.keys(n.ladder).join() === 'rung,status,detail'),
+         'ladder { rung, status, detail } is appended after blastRadius on every node verdict', hb.nodes.map((n) => Object.keys(n).join())[0], NODE_KEYS);
+  assert(ladderOf(healthy, 'recording_rule')?.rung === 'healthy' && ladderOf(healthy, 'recording_rule').status === null
+           && ladderOf(healthy, 'recording_rule').detail === 'health ok, lastEvaluation 12s ago ≤ 2× interval 30s',
+         'a rule the ruler reports ok and fresh reads rung healthy', ladderOf(healthy, 'recording_rule'));
+  assert(ladderOf(healthy, 'scrape_job')?.rung === 'healthy' && ladderOf(healthy, 'scrape_job').detail === 'health up on 1/1 target, lastScrape 4s ago ≤ 2× interval 10s',
+         'a scrape job whose target is up and fresh reads rung healthy (interval from the declared side)', ladderOf(healthy, 'scrape_job'));
+  assert(ladderOf(healthy, 'burn_rate')?.rung === 'healthy' && /^health ok on 2\/2 rules, lastEvaluation 20s ago; interval unknown, staleness not judged$/.test(ladderOf(healthy, 'burn_rate').detail),
+         'a burn-rate alert links to both live rules by the <slo>_burn_<N>x_<short>_<long> convention and is never judged stale', ladderOf(healthy, 'burn_rate'));
+  assert(ladderOf(healthy, 'sli')?.rung === 'exists' && /rides on its recording rules/.test(ladderOf(healthy, 'sli').detail)
+           && ladderOf(healthy, 'slo')?.rung === 'exists' && /rides on its SLI and alerts/.test(ladderOf(healthy, 'slo').detail)
+           && ladderOf(healthy, 'metric')?.rung === 'exists' && /no liveness field on the wire/.test(ladderOf(healthy, 'metric').detail),
+         'sli / slo / metric read exists with a detail naming where their liveness rides');
+  assert(ladderOf(healthy, 'backend')?.rung === 'alive' && /mcp\.versions\.prometheus = 2\.53\.0/.test(ladderOf(healthy, 'backend').detail),
+         'a backend that answered its version probe reads alive', ladderOf(healthy, 'backend'));
+  assert(hb.ladderVerdict === 'healthy' && hb.ladderIntegrity === 1 && hb.ladderIntegrityPct === 100,
+         'self-compare of a healthy annotated pack: ladder healthy at integrity 1', [hb.ladderVerdict, hb.ladderIntegrity]);
+  assert(Object.keys(healthy.rollup.ladder).join() === LADDER_ROLLUP_KEYS
+           && JSON.stringify(healthy.rollup.ladder) === JSON.stringify({ healthy: 1, degraded: 0, broken: 0, unobserved: 0, integrityMean: 1, integrityPct: 100 }),
+         'rollup.ladder counts the healthy branch and means 1', healthy.rollup.ladder);
+  assert(Object.keys(healthy.rollup).join() === 'intact,partial,broken,undeclared,declaredTotal,total,integrityMean,integrityPct,ladder',
+         'ladder is the only new rollup key, appended last', Object.keys(healthy.rollup).join());
+
+  // Ladder credit arithmetic on the fixture branch: every node aligned, so
+  // the denominator is the sum of the branch's limb weights.
+  const possible = hb.nodes.reduce((sum, n) => sum + n.weight, 0);
+  const credit = (...weights) => Math.round(((possible - 0.75 * weights.reduce((a, b) => a + b, 0)) / possible) * 1e4) / 1e4;
+
+  // Unhealthy rule: on the wire, not evaluating — and the SLI it feeds with it.
+  const badRule = compare(livePack({
+    'mcp.observed.recording_rules': JSON.stringify([
+      { name: RULE, health: 'err', lastError: 'many-to-many matching not allowed', lastEvaluation: ago(12), evaluationTime: 0 },
+    ]),
+    'mcp.discovered.recording_rules_unhealthy': RULE,
+    'mcp.discovered.slis_unhealthy': 'checkout_latency',
+  }));
+  const badRuleNode = nodeOf(badRule, 'recording_rule');
+  assert(badRuleNode.status === 'aligned' && badRuleNode.ladder.rung === 'exists' && badRuleNode.ladder.status === 'present_unhealthy'
+           && badRuleNode.ladder.detail === 'health err, lastError "many-to-many matching not allowed"',
+         'a rule in recording_rules_unhealthy with a lastError stays aligned (scored) and reads present_unhealthy (ladder)', badRuleNode.ladder);
+  assert(ladderOf(badRule, 'sli')?.status === 'present_unhealthy' && /slis_unhealthy/.test(ladderOf(badRule, 'sli').detail),
+         'an SLI in slis_unhealthy reads present_unhealthy', ladderOf(badRule, 'sli'));
+  assert(badRule.branches[0].verdict === 'intact' && badRule.branches[0].integrity === 1 && badRule.branches[0].ladderVerdict === 'degraded'
+           && badRule.branches[0].ladderIntegrity === credit(2, 3),
+         'the scored verdict stays intact at integrity 1 while the ladder reads degraded with 0.25 credit on the rule and the SLI',
+         [badRule.branches[0].verdict, badRule.branches[0].integrity, badRule.branches[0].ladderVerdict, badRule.branches[0].ladderIntegrity], ['intact', 1, 'degraded', credit(2, 3)]);
+  assert(JSON.stringify(badRule.rollup.ladder) === JSON.stringify({ healthy: 0, degraded: 1, broken: 0, unobserved: 0, integrityMean: credit(2, 3), integrityPct: Math.round(credit(2, 3) * 100) }),
+         'rollup.ladder counts the degraded branch and means its ladder integrity', badRule.rollup.ladder);
+
+  // Stale rule: healthy, but last evaluated 20 minutes before refreshedAt at a 30s interval.
+  const stale = compare(livePack({
+    'mcp.observed.recording_rules': JSON.stringify([
+      { name: RULE, health: 'ok', lastError: null, lastEvaluation: ago(20 * 60), evaluationTime: 0.004 },
+    ]),
+  }));
+  assert(ladderOf(stale, 'recording_rule')?.rung === 'exists' && ladderOf(stale, 'recording_rule').status === 'present_stale'
+           && ladderOf(stale, 'recording_rule').detail === 'lastEvaluation 20m ago > 2× interval 30s',
+         'a rule last evaluated 20m ago at a 30s interval reads present_stale', ladderOf(stale, 'recording_rule'));
+  assert(stale.branches[0].verdict === 'intact' && stale.branches[0].ladderVerdict === 'degraded' && stale.branches[0].ladderIntegrity === credit(2),
+         'a stale load-bearing rule degrades the ladder verdict, not the scored one', [stale.branches[0].verdict, stale.branches[0].ladderVerdict, stale.branches[0].ladderIntegrity]);
+
+  // Unhealthy burn alert: linked by the name convention through alert_rules_unhealthy.
+  const badAlert = compare(livePack({
+    'mcp.observed.alert_rules': JSON.stringify([
+      { name: ALERT_FAST, health: 'err', lastError: 'vector contains metrics with the same labelset', lastEvaluation: ago(20), state: 'inactive', activeAt: null },
+      { name: ALERT_SLOW, health: 'ok', lastError: null, lastEvaluation: ago(20), state: 'inactive', activeAt: null },
+    ]),
+    'mcp.discovered.alert_rules_unhealthy': ALERT_FAST,
+  }));
+  assert(ladderOf(badAlert, 'burn_rate')?.status === 'present_unhealthy'
+           && ladderOf(badAlert, 'burn_rate').detail === 'health err on 1/2 rules, lastError "vector contains metrics with the same labelset"'
+           && badAlert.branches[0].ladderVerdict === 'degraded',
+         'a burn-rate alert with one unhealthy live rule reads present_unhealthy', ladderOf(badAlert, 'burn_rate'));
+
+  // Down target: the job is on the wire, every target down.
+  const down = compare(livePack({
+    'mcp.observed.scrape_targets': JSON.stringify([
+      { job: 'checkout-api', instance: 'checkout-api:8080', health: 'down', lastScrape: ago(4), lastError: 'connection refused' },
+    ]),
+    'mcp.discovered.scrape_jobs_down': 'checkout-api',
+  }));
+  assert(ladderOf(down, 'scrape_job')?.rung === 'exists' && ladderOf(down, 'scrape_job').status === 'present_unhealthy'
+           && ladderOf(down, 'scrape_job').detail === 'health down on 1/1 target, lastError "connection refused"',
+         'a scrape job with a down target reads present_unhealthy', ladderOf(down, 'scrape_job'));
+  assert(down.branches[0].ladderVerdict === 'healthy' && down.branches[0].ladderIntegrity === credit(1),
+         'a non-load-bearing unhealthy node costs ladder integrity without degrading the ladder verdict', [down.branches[0].ladderVerdict, down.branches[0].ladderIntegrity]);
+
+  // Unobserved: the scrape job is absent from B because this MCP tier does not expose scrape_configs.
+  const blind = compare(withoutScrape(livePack({
+    'mcp.probesSucceeded': 'recording_rules,alert_rules,dashboards,metric_names',
+    'mcp.probesUnsupported': 'scrape_configs',
+  }, ['mcp.observed.scrape_targets'])));
+  const blindScrape = nodeOf(blind, 'scrape_job');
+  assert(blindScrape.status === 'declared_only' && blindScrape.ladder.rung === 'unobserved' && blindScrape.ladder.status === 'unobserved'
+           && blindScrape.ladder.detail === 'probe family scrape_configs not exposed by this MCP tier',
+         'a declared scrape job absent from B while scrape_configs is unsupported reads unobserved, never absent', blindScrape.ladder);
+  assert(blind.branches[0].integrity === Math.round(((possible - 1) / possible) * 1e4) / 1e4 && blind.branches[0].integrity < 1
+           && blind.branches[0].ladderIntegrity === 1 && blind.branches[0].ladderVerdict === 'healthy',
+         'the scored integrity still penalises the declared_only node while the ladder leaves the unobserved one out of its denominator',
+         [blind.branches[0].integrity, blind.branches[0].ladderIntegrity], [Math.round(((possible - 1) / possible) * 1e4) / 1e4, 1]);
+
+  // Unobserved load-bearing: the rule is absent from B because the recording_rules probe failed.
+  const blindRulePack = livePack({
+    'mcp.probesSucceeded': 'alert_rules,dashboards,scrape_configs,metric_names',
+    'mcp.probesFailed': 'recording_rules',
+    'mcp.probeErrors.recording_rules': 'HTTP 502 Bad Gateway',
+  }, ['mcp.observed.recording_rules']);
+  blindRulePack.spec.queries.recording_rules = [];
+  const blindRule = compare(blindRulePack);
+  const blindRuleNode = nodeOf(blindRule, 'recording_rule');
+  assert(blindRuleNode.status === 'declared_only' && blindRuleNode.ladder.rung === 'unobserved'
+           && blindRuleNode.ladder.detail === 'probe family recording_rules failed (HTTP 502 Bad Gateway)',
+         'a failed probe family names itself and its error in the unobserved detail', blindRuleNode.ladder);
+  assert(blindRule.branches[0].verdict === 'broken' && blindRule.branches[0].ladderVerdict === 'unobserved'
+           && JSON.stringify(blindRule.rollup.ladder) === JSON.stringify({ healthy: 0, degraded: 0, broken: 0, unobserved: 1, integrityMean: 1, integrityPct: 100 }),
+         'a load-bearing unobserved node makes the ladder verdict unobserved while the scored verdict stays broken',
+         [blindRule.branches[0].verdict, blindRule.branches[0].ladderVerdict, blindRule.rollup.ladder]);
+
+  // Absent for real: the probe family answered and the rule is not there.
+  const goneRulePack = livePack({}, ['mcp.observed.recording_rules']);
+  goneRulePack.spec.queries.recording_rules = [];
+  const goneRule = compare(goneRulePack);
+  assert(nodeOf(goneRule, 'recording_rule').ladder.rung === 'absent' && nodeOf(goneRule, 'recording_rule').ladder.status === null
+           && nodeOf(goneRule, 'recording_rule').ladder.detail === 'absent from Pack B; probe family recording_rules answered without it'
+           && goneRule.branches[0].ladderVerdict === 'broken' && goneRule.rollup.ladder.broken === 1,
+         'a declared rule the answering probe family did not return reads absent and breaks the ladder', nodeOf(goneRule, 'recording_rule').ladder);
+
+  // On the wire but withheld from Pack B: a job whose every target is down
+  // is not in mcp.discovered.scrape_jobs, only in scrape_jobs_down.
+  const withheld = compare(withoutScrape(livePack({
+    'mcp.observed.scrape_targets': JSON.stringify([
+      { job: 'checkout-api', instance: 'checkout-api:8080', health: 'down', lastScrape: ago(4), lastError: 'connection refused' },
+    ]),
+    'mcp.discovered.scrape_jobs_down': 'checkout-api',
+  })));
+  const withheldScrape = nodeOf(withheld, 'scrape_job');
+  assert(withheldScrape.status === 'declared_only' && withheldScrape.ladder.rung === 'exists' && withheldScrape.ladder.status === 'present_unhealthy'
+           && withheldScrape.ladder.detail === 'on the wire but withheld from Pack B: health down on 1/1 target, lastError "connection refused"',
+         'a declared_only scrape job the fetcher observed down reads present_unhealthy, not absent', withheldScrape.ladder);
+
+  // File-sourced B: no on-wire liveness at all.
+  const fileB = compare(clone(pack));
+  assert(fileB.branches[0].nodes.every((n) => n.ladder.rung === 'exists' && n.ladder.status === null && n.ladder.detail === 'no on-wire liveness (Pack B is not a live draft)'),
+         'against a file-sourced Pack B every present node reads exists with the no-on-wire detail');
+  assert(fileB.branches[0].ladderVerdict === 'healthy' && fileB.rollup.ladder.integrityMean === 1,
+         'a file-sourced self compare is ladder healthy at 1', [fileB.branches[0].ladderVerdict, fileB.rollup.ladder.integrityMean]);
+  const fileNoAlert = clone(pack);
+  fileNoAlert.spec.policy.burn_rate_alerts = [];
+  const fileBroken = compare(fileNoAlert);
+  const fileBurn = nodeOf(fileBroken, 'burn_rate');
+  assert(fileBurn.status === 'declared_only' && fileBurn.ladder.rung === 'absent' && fileBurn.ladder.status === null
+           && fileBurn.ladder.detail === 'absent from Pack B (file-sourced; no on-wire liveness to consult)'
+           && fileBroken.branches[0].ladderVerdict === 'broken' && fileBroken.rollup.ladder.broken === 1,
+         'a declared burn-rate alert missing from a file-sourced B reads absent and breaks the ladder', [fileBurn.ladder, fileBroken.branches[0].ladderVerdict]);
+  const unverifiablePanel = noDashBranch.nodes.find((n) => n.kind === 'panel' && n.status === 'unverifiable');
+  assert(unverifiablePanel?.ladder.rung === 'unobserved' && unverifiablePanel.ladder.status === null
+           && unverifiablePanel.ladder.detail === 'not live-introspectable from any MCP vantage',
+         'an unverifiable node reads rung unobserved with a null status', unverifiablePanel?.ladder);
+
+  // The pin: every scored quantity is byte-identical with and without the
+  // liveness annotations on the same declarations.
+  assert(scored(healthy) === scored(self) && scored(badRule) === scored(self) && scored(stale) === scored(self)
+           && scored(badAlert) === scored(self) && scored(down) === scored(self),
+         'verdict / integrity / counts / node statuses / rollup.integrityMean are identical with and without the mcp.observed annotations',
+         scored(badRule), scored(self));
+  assert(healthy.rollup.integrityMean === self.rollup.integrityMean && badRule.rollup.integrityMean === 1 && stale.rollup.integrityMean === 1,
+         'rollup.integrityMean is unchanged by unhealthy or stale observations', [healthy.rollup.integrityMean, badRule.rollup.integrityMean, stale.rollup.integrityMean]);
 }
 
 report('traceability graph');

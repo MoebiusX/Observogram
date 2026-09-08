@@ -101,6 +101,27 @@ Align nodes by `(role, identityKey)` within the branch (not globally — this is
 
 Edges carry through: an edge present in A but absent in B (e.g. the SLO→alert link missing live) is a **broken limb**, scored by the limb's role weight (§7).
 
+### 5b. Per-node ladder (additive, unscored)
+
+Beside `status`, every node verdict carries `ladder: { rung, status, detail }`, read from the on-wire liveness the live fetcher writes into Pack B's annotations (`mcp.observed.scrape_targets` / `recording_rules` / `alert_rules`; the `mcp.discovered.*_unhealthy` and `scrape_jobs_down` lists; `mcp.probesFailed` / `mcp.probesUnsupported` with `mcp.probeErrors.<family>`; `mcp.refreshedAt` as "now"). It answers the monitor-of-monitors question the scored status cannot: is the artefact merely present, or doing its job — or could the vantage not look at all.
+
+| `ladder.rung` | `ladder.status` | Meaning |
+|---|---|---|
+| `unobserved` | `unobserved` | declared, absent from B, and the probe family that would carry the kind failed or is not exposed by this MCP tier — the vantage could not look; never "absent" |
+| `unobserved` | `null` | `unverifiable` kind — not live-introspectable from any MCP vantage |
+| `absent` | `null` | declared, absent from B, and the probe family answered without it (or B is file-sourced) |
+| `exists` | `null` | present; no liveness field on the wire for the kind (metric, panel, route…), or Pack B is not a live draft |
+| `exists` | `present_unhealthy` | present, but the ruler/target reports it unhealthy: health not ok / down, a `lastError`, or the name is in the matching `*_unhealthy` / `scrape_jobs_down` list |
+| `exists` | `present_stale` | present and healthy, but `lastEvaluation` / `lastScrape` is older than 2× the artefact's interval at `mcp.refreshedAt` |
+| `alive` | `null` | observation present and fresh, health not reported (or a backend that answered its version probe) |
+| `healthy` | `null` | observation present, health ok/up, no `lastError`, fresh (interval unknown → staleness not judged) |
+
+Evidence rules: scrape_job ↔ `scrape_targets` by `job`; recording_rule ↔ `recording_rules` by `name`; burn_rate ↔ `alert_rules` by the compiler's `<slo>_burn_<factor>x_<short>_<long>` naming convention on the SLO id, narrowed to the declared windows (the live POL entry carries no rule names); sli → `present_unhealthy` iff its id is in `slis_unhealthy`, else `exists` ("liveness rides on its recording rules"); slo → `exists` (declaration); backend → `alive` when `mcp.versions.<product>` is present. Kind → probe family: scrape_job → `scrape_configs`, recording_rule → `recording_rules`, burn_rate → `alert_rules`, metric → `metric_names`, panel/dashboard → `dashboards`, sli/slo → `recording_rules` OR `metric_names` (unobserved only when both are gone); backends have none (the version probes run outside the probe cascade). A `declared_only` artefact the fetcher observed but withheld from Pack B (a scrape job whose every target is down) reads from the observation, not `absent`. Intervals accept `10s` / `5m` / `1h` / plain seconds, B's value first then A's; a missing interval means no staleness judgement. Without any `mcp.` annotation every present node is `exists` — "no on-wire liveness (Pack B is not a live draft)".
+
+Per branch: `ladderVerdict` — `broken` (a load-bearing node absent, or a load-bearing role missing) > `degraded` (a load-bearing node present_unhealthy / present_stale, or any node drifted) > `unobserved` (a load-bearing node unobserved) > `healthy`; `undeclared` for live-only branches. `ladderIntegrity` / `ladderIntegrityPct` use the §7 weights: healthy / alive / exists credit 1, drifted keeps its drift credit (capped at 0.25 when also unhealthy or stale), present_unhealthy and present_stale credit 0.25, absent credit 0, unobserved nodes leave the denominator (as unverifiable ones do), missing roles as in §7. `rollup.ladder = { healthy, degraded, broken, unobserved, integrityMean, integrityPct }` over declared branches.
+
+The scored quantities — `integrity`, `verdict`, `counts`, node `status`, `rollup.integrityMean` and the grade's Drift-free criterion — are unchanged by the ladder, pending `docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md`.
+
 ---
 
 ## 6. Live-verifiability map (must be explicit)

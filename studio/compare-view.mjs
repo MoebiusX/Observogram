@@ -1745,21 +1745,34 @@ export function renderDiagnosticTraceabilityGraph(graph) {
     broken: 'Broken',
     undeclared: 'Live-only',
   }[status] || status || 'Unknown');
+  // Ladder statuses (additive, unscored): on the wire but not doing its
+  // job, or a vantage that could not look. Never rendered as "missing".
+  const ladderLabelFor = (node) => ({
+    present_unhealthy: 'present but unhealthy',
+    present_stale: 'present but stale',
+    unobserved: `unobserved — ${node.ladder?.detail || 'the vantage could not look'}`,
+  }[node.ladder?.status] || null);
   const evidenceFor = (branch) => {
     const interesting = (branch.nodes || []).filter((node) =>
-      ['declared_only', 'drifted', 'unverifiable', 'live_only'].includes(node.status)
+      ['declared_only', 'drifted', 'unverifiable', 'live_only'].includes(node.status) || ladderLabelFor(node)
     );
     if (!interesting.length && branch.missingRoles?.length) {
       return branch.missingRoles.map((role) => `${role.role}: ${role.detail}`).join(' · ');
     }
     if (!interesting.length) return 'all load-bearing nodes aligned';
     return interesting.slice(0, 5).map((node) => {
-      const status = {
+      const base = {
         declared_only: 'missing live',
         drifted: 'drifted',
         unverifiable: 'unverifiable',
         live_only: 'live-only',
       }[node.status] || node.status;
+      // The ladder reading replaces "missing live" / "aligned" (it is the
+      // more honest word for that node) and rides beside the other labels.
+      const ladderLabel = ladderLabelFor(node);
+      const status = !ladderLabel
+        ? base
+        : ['aligned', 'declared_only'].includes(node.status) ? ladderLabel : `${base} · ${ladderLabel}`;
       const fields = node.deltas?.length ? ` (${node.deltas.map(d => d.field).slice(0, 3).join(', ')})` : '';
       // Structural exposure: what WOULD go blind if this declared node is
       // really gone or wrong live — never a claim that it is blind now.
@@ -1799,6 +1812,7 @@ export function renderDiagnosticTraceabilityGraph(graph) {
         <span>${escapeHtml(String(branch.integrityPct ?? Math.round((branch.integrity || 0) * 100)))}% integrity</span>
         <span>${escapeHtml(branch.confidence === 'inferred' ? 'inferred edges' : 'declared edges')}</span>
         <span>${escapeHtml(`${branch.counts?.aligned || 0} aligned`)}</span>
+        ${branch.ladderVerdict ? `<span>${escapeHtml(`ladder: ${branch.ladderVerdict}`)}</span>` : ''}
       </div>
       <div class="diag-chain-evidence">${escapeHtml(evidenceFor(branch))}</div>
       ${actions}
@@ -1811,7 +1825,7 @@ export function renderDiagnosticTraceabilityGraph(graph) {
       <header class="diag-section-head">
         <span class="diag-section-num">2B.G</span>
         <span class="diag-section-title">Requirement Chains — SLO/SLI derivation integrity</span>
-        <span class="diag-section-meta">${rollup.intact}/${rollup.declaredTotal} intact · ${escapeHtml(fmtPct(rollup.integrityMean))}</span>
+        <span class="diag-section-meta">${rollup.intact}/${rollup.declaredTotal} intact · ${escapeHtml(fmtPct(rollup.integrityMean))}${rollup.ladder ? escapeHtml(` · ladder ${fmtPct(rollup.ladder.integrityMean)}`) : ''}</span>
       </header>
       <div class="diag-chain-rollup">
         <span class="diag-chain-rollup-cell is-intact"><strong>${rollup.intact}</strong> intact</span>
