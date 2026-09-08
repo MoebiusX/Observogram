@@ -13,8 +13,8 @@
           "duration": 0,
           "health": "ok",
           "lastError": null,
-          "evaluationTime": 0.000909864,
-          "lastEvaluation": "2026-06-12T13:15:34.975594063Z",
+          "evaluationTime": 0.002985121,
+          "lastEvaluation": "2026-09-08T07:00:34.982755749Z",
           "activeAt": null
         },
         {
@@ -25,8 +25,8 @@
           "duration": 0,
           "health": "ok",
           "lastError": null,
-          "evaluationTime": 0.000543262,
-          "lastEvaluation": "2026-06-12T13:15:34.976525676Z",
+          "evaluationTime": 0.0019871,
+          "lastEvaluation": "2026-09-08T07:00:34.985773129Z",
           "activeAt": null
         },
         {
@@ -37,8 +37,166 @@
           "duration": 0,
           "health": "ok",
           "lastError": null,
-          "evaluationTime": 0.001332167,
-          "lastEvaluation": "2026-06-12T13:15:34.977074984Z",
+          "evaluationTime": 0.002138755,
+          "lastEvaluation": "2026-09-08T07:00:34.98778236Z",
+          "activeAt": null
+        }
+      ]
+    },
+    {
+      "name": "finops:ingestion",
+      "file": "/etc/vmalert/recording-rules.yml",
+      "interval": 60,
+      "rules": [
+        {
+          "name": "finops:requests:rate_per_service_5m",
+          "type": "recording",
+          "state": "",
+          "query": "sum(rate(http_requests_total[5m])) by (job)\n",
+          "duration": 0,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.001500786,
+          "lastEvaluation": "2026-09-08T07:03:06.508908962Z",
+          "activeAt": null
+        },
+        {
+          "name": "finops:errors:rate_per_service_5m",
+          "type": "recording",
+          "state": "",
+          "query": "sum(rate(http_request_errors_total[5m])) by (job)\n",
+          "duration": 0,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.001245894,
+          "lastEvaluation": "2026-09-08T07:03:06.5104313Z",
+          "activeAt": null
+        },
+        {
+          "name": "finops:spans:exported_rate_5m",
+          "type": "recording",
+          "state": "",
+          "query": "sum(rate(otelcol_exporter_sent_spans_total[5m]))\n",
+          "duration": 0,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.000974187,
+          "lastEvaluation": "2026-09-08T07:03:06.511690472Z",
+          "activeAt": null
+        },
+        {
+          "name": "finops:spans:dropped_rate_5m",
+          "type": "recording",
+          "state": "",
+          "query": "sum(rate(otelcol_processor_dropped_spans_total[5m]))\n",
+          "duration": 0,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.00115134,
+          "lastEvaluation": "2026-09-08T07:03:06.512675455Z",
+          "activeAt": null
+        },
+        {
+          "name": "finops:spans:sampling_ratio",
+          "type": "recording",
+          "state": "",
+          "query": "(\n  sum(rate(otelcol_exporter_sent_spans_total[5m]))\n  / (\n    sum(rate(otelcol_exporter_sent_spans_total[5m]))\n    + sum(rate(otelcol_processor_dropped_spans_total[5m]))\n  )\n) or vector(1)\n",
+          "duration": 0,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.001207714,
+          "lastEvaluation": "2026-09-08T07:03:06.51384191Z",
+          "activeAt": null
+        },
+        {
+          "name": "finops:logs:bytes_rate_per_component_5m",
+          "type": "recording",
+          "state": "",
+          "query": "sum(rate(promtail_read_bytes_total[5m])) by (filename)\n",
+          "duration": 0,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.002663719,
+          "lastEvaluation": "2026-09-08T07:03:06.515075233Z",
+          "activeAt": null
+        }
+      ]
+    },
+    {
+      "name": "genai:operations",
+      "file": "/etc/vmalert/recording-rules.yml",
+      "interval": 30,
+      "rules": [
+        {
+          "name": "genai:client_operation_duration:p95_5m",
+          "type": "recording",
+          "state": "",
+          "query": "histogram_quantile(\n  0.95,\n  sum(rate(gen_ai_client_operation_duration_seconds_bucket[5m]))\n    by (le, provider, model, operation)\n)\n",
+          "duration": 0,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.001648869,
+          "lastEvaluation": "2026-09-08T07:03:38.625508452Z",
+          "activeAt": null
+        },
+        {
+          "name": "genai:client_operation_duration:p99_5m",
+          "type": "recording",
+          "state": "",
+          "query": "histogram_quantile(\n  0.99,\n  sum(rate(gen_ai_client_operation_duration_seconds_bucket[5m]))\n    by (le, provider, model, operation)\n)\n",
+          "duration": 0,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.001217347,
+          "lastEvaluation": "2026-09-08T07:03:38.627191521Z",
+          "activeAt": null
+        },
+        {
+          "name": "genai:client_operation:error_ratio_5m",
+          "type": "recording",
+          "state": "",
+          "query": "sum(rate(gen_ai_client_operations_total{status=~\"error|timeout\"}[5m]))\n  by (provider, model, operation)\n/\nclamp_min(\n  sum(rate(gen_ai_client_operations_total[5m]))\n    by (provider, model, operation),\n  0.000001\n)\n",
+          "duration": 0,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.002084359,
+          "lastEvaluation": "2026-09-08T07:03:38.628429052Z",
+          "activeAt": null
+        },
+        {
+          "name": "genai:client_token_usage:rate_1h",
+          "type": "recording",
+          "state": "",
+          "query": "sum(rate(gen_ai_client_token_usage_sum[1h]))\n  by (model, direction)\n",
+          "duration": 0,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.001770986,
+          "lastEvaluation": "2026-09-08T07:03:38.6305622Z",
+          "activeAt": null
+        },
+        {
+          "name": "genai:rca_analysis_duration:p95_5m",
+          "type": "recording",
+          "state": "",
+          "query": "histogram_quantile(\n  0.95,\n  sum(rate(kx_llm_analysis_duration_seconds_bucket[5m])) by (le)\n)\n",
+          "duration": 0,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.001506144,
+          "lastEvaluation": "2026-09-08T07:03:38.632374697Z",
+          "activeAt": null
+        },
+        {
+          "name": "genai:rca_analysis:failure_ratio_5m",
+          "type": "recording",
+          "state": "",
+          "query": "sum(rate(kx_llm_analysis_total{status=~\"failure|timeout\"}[5m]))\n  by (use_case)\n/\nclamp_min(\n  sum(rate(kx_llm_analysis_total[5m])) by (use_case),\n  0.000001\n)\n",
+          "duration": 0,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.002744143,
+          "lastEvaluation": "2026-09-08T07:03:38.63391313Z",
           "activeAt": null
         }
       ]
@@ -57,8 +215,8 @@
           "duration": 120,
           "health": "ok",
           "lastError": null,
-          "evaluationTime": 0.002521534,
-          "lastEvaluation": "2026-06-12T13:16:33.245164177Z",
+          "evaluationTime": 0.003051935,
+          "lastEvaluation": "2026-09-08T07:03:48.227986028Z",
           "activeAt": null,
           "annotations": {
             "description": "Error rate is {{ $value | humanizePercentage }} (threshold: 5%)",
@@ -74,12 +232,253 @@
           "duration": 300,
           "health": "ok",
           "lastError": null,
-          "evaluationTime": 0.029914935,
-          "lastEvaluation": "2026-06-12T13:16:33.247703519Z",
+          "evaluationTime": 0.002376765,
+          "lastEvaluation": "2026-09-08T07:03:48.231070112Z",
           "activeAt": null,
           "annotations": {
             "description": "P99 latency is {{ $value | humanizeDuration }} (threshold: 2s)",
             "summary": "High P99 latency detected"
+          }
+        },
+        {
+          "name": "HighLatencyP99Critical",
+          "type": "alerting",
+          "state": "inactive",
+          "severity": "critical",
+          "query": "histogram_quantile(0.99,\n  sum(rate(http_request_duration_seconds_bucket[5m])) by (le)\n) > 5\n",
+          "duration": 120,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.002587316,
+          "lastEvaluation": "2026-09-08T07:03:48.233484163Z",
+          "activeAt": null,
+          "annotations": {
+            "description": "P99 latency is {{ $value | humanizeDuration }} (threshold: 5s)",
+            "summary": "Critical P99 latency"
+          }
+        },
+        {
+          "name": "ServiceDown",
+          "type": "alerting",
+          "state": "inactive",
+          "severity": "critical",
+          "query": "up{job=~\"krystalinex-server|payment-processor\"} == 0",
+          "duration": 60,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.00141155,
+          "lastEvaluation": "2026-09-08T07:03:48.23609988Z",
+          "activeAt": null,
+          "annotations": {
+            "description": "The {{ $labels.job }} service has been unreachable for more than 1 minute",
+            "summary": "Service {{ $labels.job }} is down"
+          }
+        },
+        {
+          "name": "NoTraffic",
+          "type": "alerting",
+          "state": "inactive",
+          "severity": "warning",
+          "query": "sum(rate(http_requests_total[5m])) == 0\n",
+          "duration": 600,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.001425293,
+          "lastEvaluation": "2026-09-08T07:03:48.237535721Z",
+          "activeAt": null,
+          "annotations": {
+            "description": "No HTTP requests received in the last 10 minutes",
+            "summary": "No traffic detected"
+          }
+        }
+      ]
+    },
+    {
+      "name": "krystalinex.cold-wallet",
+      "file": "/etc/vmalert/alerting-rules.yml",
+      "interval": 15,
+      "rules": [
+        {
+          "name": "ColdWalletUnpricedFlows",
+          "type": "alerting",
+          "state": "inactive",
+          "severity": "warning",
+          "query": "sum(increase(kx_cold_flow_unpriced_total[15m])) by (direction) > 0\n",
+          "duration": 60,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.002001504,
+          "lastEvaluation": "2026-09-08T07:03:52.21460519Z",
+          "activeAt": null,
+          "annotations": {
+            "description": "{{ $value }} cold-wallet {{ $labels.direction }} settlement(s) in the last 15 minutes could not be valued in USD (no price-service quote at settlement time) — kx_cold_flow_value_usd_total and the Business Activity USD tiles under-count until the price feed is back.",
+            "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#coldwalletunpricedflows",
+            "summary": "Cold-wallet {{ $labels.direction }} settled without a USD price"
+          }
+        },
+        {
+          "name": "CustodyWebhookSignatureFailures",
+          "type": "alerting",
+          "state": "inactive",
+          "severity": "warning",
+          "query": "sum(increase(kx_custody_webhook_events_total{outcome=\"invalid_signature\"}[10m])) >= 3\n",
+          "duration": 60,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.001553573,
+          "lastEvaluation": "2026-09-08T07:03:52.216637079Z",
+          "activeAt": null,
+          "annotations": {
+            "description": "{{ $value }} custody webhook calls were rejected with an invalid HMAC signature in the last 10 minutes — a probe against the endpoint, or a CUSTODY_WEBHOOK_SECRET mismatch after a deploy (the simulator self-POST falls back to direct delivery, so settlements may still be completing).",
+            "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#custodywebhooksignaturefailures",
+            "summary": "Custody webhook signature failures"
+          }
+        },
+        {
+          "name": "CustodyWebhookSignatureFailures",
+          "type": "alerting",
+          "state": "inactive",
+          "severity": "critical",
+          "query": "sum(increase(kx_custody_webhook_events_total{outcome=\"invalid_signature\"}[10m])) > 20\n",
+          "duration": 60,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.001674042,
+          "lastEvaluation": "2026-09-08T07:03:52.218222516Z",
+          "activeAt": null,
+          "annotations": {
+            "description": "{{ $value }} invalid-signature custody webhook calls in 10 minutes — sustained probing of the settlement webhook (or every settlement is being rejected because the shared secret is wrong).",
+            "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#custodywebhooksignaturefailures",
+            "summary": "Custody webhook under signature brute-force"
+          }
+        },
+        {
+          "name": "CustodyWebhookErrors",
+          "type": "alerting",
+          "state": "inactive",
+          "severity": "warning",
+          "query": "sum(increase(kx_custody_webhook_events_total{outcome=\"error\"}[10m])) by (provider, event_type) > 0\n",
+          "duration": 60,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.00154094,
+          "lastEvaluation": "2026-09-08T07:03:52.219924116Z",
+          "activeAt": null,
+          "annotations": {
+            "description": "{{ $value }} {{ $labels.event_type }} event(s) from provider {{ $labels.provider }} threw inside the settlement handler in the last 10 minutes — the hold or the deposit credit may be stuck; check the server error log and the withdrawal_requests / transactions rows referenced by the events.",
+            "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#custodywebhookerrors",
+            "summary": "Custody webhook settlement errors ({{ $labels.provider }}/{{ $labels.event_type }})"
+          }
+        },
+        {
+          "name": "ColdWithdrawalStuckInFlight",
+          "type": "alerting",
+          "state": "inactive",
+          "severity": "critical",
+          "query": "kx_cold_withdrawals_in_flight > 0\n",
+          "duration": 1800,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.001383465,
+          "lastEvaluation": "2026-09-08T07:03:52.221491988Z",
+          "activeAt": null,
+          "annotations": {
+            "description": "{{ $value }} {{ $labels.asset }} cold withdrawal(s) have been queued/processing for more than 30 minutes (the demo settles in ~30 s) — customer funds are on hold with no settlement event arriving; the chain simulator or the custodian callback path is not delivering.",
+            "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#coldwithdrawalstuckinflight",
+            "summary": "{{ $labels.asset }} cold withdrawals stuck in flight"
+          }
+        },
+        {
+          "name": "ColdWithdrawalSettlementSlow",
+          "type": "alerting",
+          "state": "inactive",
+          "severity": "warning",
+          "query": "(\n  histogram_quantile(0.95,\n    sum(rate(kx_cold_withdrawal_settlement_seconds_bucket[30m])) by (le)\n  ) > 90\n)\nand\n(\n  sum(rate(kx_cold_withdrawal_settlement_seconds_count[30m])) > 0\n)\n",
+          "duration": 300,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.001258226,
+          "lastEvaluation": "2026-09-08T07:03:52.222901959Z",
+          "activeAt": null,
+          "annotations": {
+            "description": "p95 request-to-confirmed settlement latency over the last 30 minutes is {{ $value | humanizeDuration }} (threshold: 90 s; the demo design is ~30 s). A value of exactly 120 s means the p95 fell beyond the histogram's last bucket.",
+            "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#coldwithdrawalsettlementslow",
+            "summary": "Cold withdrawal settlement is slow (p95 over 30m)"
+          }
+        }
+      ]
+    },
+    {
+      "name": "krystalinex.container_health",
+      "file": "/etc/vmalert/alerting-rules.yml",
+      "interval": 15,
+      "rules": [
+        {
+          "name": "ContainerCrashLooping",
+          "type": "alerting",
+          "state": "inactive",
+          "severity": "critical",
+          "query": "rate(kube_pod_container_status_restarts_total[15m]) * 60 * 15 > 3",
+          "duration": 300,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.003667616,
+          "lastEvaluation": "2026-09-08T07:03:48.219617703Z",
+          "activeAt": null,
+          "annotations": {
+            "description": "A container has restarted multiple times in the last 15 minutes.",
+            "summary": "Container is crash-looping"
+          }
+        },
+        {
+          "name": "ContainerOOMKilled",
+          "type": "alerting",
+          "state": "inactive",
+          "severity": "warning",
+          "query": "kube_pod_container_status_last_terminated_reason{reason=\"OOMKilled\"} == 1",
+          "duration": 0,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.001223216,
+          "lastEvaluation": "2026-09-08T07:03:48.223326891Z",
+          "activeAt": null,
+          "annotations": {
+            "description": "A container was terminated due to OOM. Consider increasing memory limits.",
+            "summary": "Container was OOM killed"
+          }
+        },
+        {
+          "name": "PodNotReady",
+          "type": "alerting",
+          "state": "inactive",
+          "severity": "warning",
+          "query": "(min_over_time(kube_pod_status_ready{condition=\"true\", namespace=\"krystalinex\"}[5m]) == 0)\nand on(pod, namespace)\n(kube_pod_status_phase{phase=\"Running\", namespace=\"krystalinex\"} == 1)\n",
+          "duration": 600,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.005627373,
+          "lastEvaluation": "2026-09-08T07:03:48.224577881Z",
+          "activeAt": null,
+          "annotations": {
+            "description": "A pod has been in a non-ready state for more than 10 minutes.",
+            "summary": "Pod has been not ready for 10m"
+          }
+        },
+        {
+          "name": "DeploymentReplicasMismatch",
+          "type": "alerting",
+          "state": "inactive",
+          "severity": "warning",
+          "query": "kube_deployment_spec_replicas{namespace=\"krystalinex\"}\n  != kube_deployment_status_ready_replicas{namespace=\"krystalinex\"}\n",
+          "duration": 600,
+          "health": "ok",
+          "lastError": null,
+          "evaluationTime": 0.001809033,
+          "lastEvaluation": "2026-09-08T07:03:48.230248764Z",
+          "activeAt": null,
+          "annotations": {
+            "description": "A deployment does not have the desired number of ready replicas.",
+            "summary": "Deployment replica mismatch"
           }
         }
       ]

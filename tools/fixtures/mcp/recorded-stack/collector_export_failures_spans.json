@@ -1,6 +1,6 @@
 {
   "_recorded": {
-    "recordedAt": "2026-09-07T16:42:29.556Z",
+    "recordedAt": "2026-09-08T07:03:52.091Z",
     "tool": "metrics_query",
     "family": "collector",
     "row": "collector_export_failures_spans",
@@ -15,7 +15,7 @@
     {
       "metric": {},
       "value": [
-        1788799352,
+        1788851034,
         "0"
       ]
     }
