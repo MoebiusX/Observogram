@@ -116,7 +116,9 @@ JSON arrays (`annotationJson`) at 200 entries; error strings at 200 chars.
 
 | Key | Value | Meaning |
 |---|---|---|
-| `mcp.refreshedAt`, `mcp.url` | ISO time, URL | when and from where the pack was fetched |
+| `mcp.refreshedAt`, `mcp.url` | ISO time, URL | when and from where the pack was fetched (the caller's stamp — the studio's or the journey's) |
+| `mcp.fetchStartedAt` | ISO time | the fetcher's own clock: the instant this fetch began; the ladder's "now" for a family without `mcp.observedAt.<family>` (older packs fall back once more to `mcp.refreshedAt`, named in the detail) |
+| `mcp.observedAt.<family>` | ISO time | the instant each probe family answered (data or empty outcomes; `dashboards` re-stamped after detail enrichment) — "now" for the ladder's staleness judgement on that family's `mcp.observed.*`, so a `refreshedAt` trailing a fresh observation never reads stale |
 | `mcp.toolsCalled`, `mcp.toolsFailed` | comma list | core tools (`system_health`, …) called / errored |
 | `mcp.toolsExposed`, `mcp.toolsExposedCount`, `mcp.toolsUnmatched` | comma list, count | the `tools/list` inventory, and advertised tools with no probe pattern |
 | `mcp.probesAttempted` / `Succeeded` / `Empty` / `Failed` / `Unsupported` | comma list of probe families | outcome per family: answered with data / answered empty / every candidate errored / no candidate advertised by `tools/list` |
@@ -134,7 +136,7 @@ JSON arrays (`annotationJson`) at 200 entries; error strings at 200 chars.
 | `mcp.discovered.extended_surfaces`, `extended_surface_refs` | count, comma list | level-2 evidence surfaces |
 | `mcp.observed.scrape_targets` | JSON `[{job, instance, health, lastScrape, lastError}]` | every scrape target's on-wire health |
 | `mcp.observed.recording_rules` | JSON `[{name, health, lastError, lastEvaluation, evaluationTime}]` | every recording rule's evaluation state |
-| `mcp.observed.alert_rules` | JSON `[{name, state, health, lastError, lastEvaluation, activeAt}]` | every alerting rule's evaluation state |
+| `mcp.observed.alert_rules` | JSON `[{name, state, health, lastError, lastEvaluation, activeAt, interval?, labels?}]` | every alerting rule's evaluation state; `interval` is the group evaluation interval when the ruler reports one (the alert adapter keeps it too), `labels` the burn-rate linkage labels the compiler stamps — `{ slo, burn_rate, window_short, window_long }`, present keys only, omitted when none — so the ladder links a live rule to its declared window by labels first, name second |
 | `mcp.servicesDiscovered`, `mcp.activeAnomalies`, `mcp.baselinesComputed` | comma list, counts | `system_health` / anomaly tools answered (not a measurement of anything in `spec.baselines`) |
 | `mcp.capabilities.*`, `mcp.versions.<product>[.*]` | strings | `backend_capabilities` inventory and observed product versions |
 | `mcp.stack.status` | `sampled` \| `not-attempted` | the stack self-metrics panel (step 2, "Stack self-metrics (sampling)"): whether it was sampled at all — signals, never verdicts; written whenever the fetcher ran the step-2 sampler (a caller that predates step 2 writes nothing) |
@@ -218,18 +220,21 @@ all. Which annotation feeds which rung:
 
 | Annotation | Node kind | Ladder reading |
 |---|---|---|
-| `mcp.observed.scrape_targets` (matched by `job`) | `scrape_job` | `healthy` when every target is `up` and `lastScrape` is within 2× the declared interval at `mcp.refreshedAt`; `alive` when health is not reported; `present_unhealthy` on any `down` target or a `lastError`; `present_stale` when the newest `lastScrape` is older than 2× the interval |
+| `mcp.observed.scrape_targets` (matched by `job`) | `scrape_job` | `healthy` when every target is `up` and `lastScrape` is within 2× the declared interval at the observation clock; `alive` when health is not reported, and when only SOME targets are down (`n/m targets down: <instances>` — a down target's `lastError` is not the job's); `present_unhealthy` when EVERY target is down (the fetcher's `scrape_jobs_down` rule); `present_stale` when the newest `lastScrape` is older than 2× the interval |
 | `mcp.discovered.scrape_jobs_down` | `scrape_job` | `present_unhealthy` even when the job was withheld from Pack B (`declared_only` on the scored side) — on the wire beats absent |
 | `mcp.observed.recording_rules` (by `name`) + `mcp.discovered.recording_rules_unhealthy` | `recording_rule` | the same rules on `health` / `lastError` / `lastEvaluation` against the declared interval |
-| `mcp.observed.alert_rules` + `mcp.discovered.alert_rules_unhealthy` | `burn_rate` | linked by the compiler's `<slo>_burn_<factor>x_<short>_<long>` name convention on the SLO id, narrowed to the declared windows; never judged stale (group intervals are not on the wire) |
+| `mcp.observed.alert_rules` + `mcp.discovered.alert_rules_unhealthy` | `burn_rate` | linked by the observation's `labels` (`slo`, `burn_rate`, `window_short`, `window_long`) first, then by the compiler's `<slo>_burn_<factor>x_<short>_<long>` name convention on the SLO id (fractional factors accepted: `_burn_14_4x_` ↔ 14.4), narrowed to the declared windows — the `alert_rules_unhealthy` list is narrowed the same way and the detail names the matched / failing rule(s); judged stale against the longest linked `interval` when the entries carry one |
 | `mcp.discovered.slis_unhealthy` | `sli` | `present_unhealthy`; otherwise `exists` ("liveness rides on its recording rules") |
 | `mcp.versions.<product>` | `backend` | `alive` when the product answered its version probe |
 | `mcp.probesFailed` / `mcp.probesUnsupported` (+ `mcp.probeErrors.<family>`) | a declared kind absent from Pack B | `unobserved` when the family that would carry the kind failed or is not exposed (`scrape_configs`, `recording_rules`, `alert_rules`, `metric_names`, `dashboards`; sli / slo need both `recording_rules` and `metric_names` gone) — the vantage could not look, never "absent" |
-| `mcp.refreshedAt` | all | "now" for the staleness judgement; no interval or no timestamp means staleness is not judged |
+| `mcp.observedAt.<family>`, else `mcp.fetchStartedAt`, else `mcp.refreshedAt` | all | "now" for the staleness judgement — the instant the family answered, the fetch's own clock, or (older packs) the caller's refresh stamp, named in the detail only on that last fallback. No interval means `healthy` / `alive` only within a 1 h ceiling ("interval unknown; 1 h ceiling applied"), older reads `present_stale`; a timestamp more than 1 s past "now" reads `alive` with "timestamp <n>s in the future (clock skew); freshness not judged", never `healthy`; no clock at all means staleness is not judged ("no fetch timestamp on the wire (mcp.refreshedAt missing)" when the observation has a timestamp and the pack has none) |
 
 A pack without any `mcp.` annotation reads `exists` for every present node
-("no on-wire liveness"). Nothing the ladder reads changes `integrity`,
-`verdict`, node `status` or the grade; the switch is a proposal
+("no on-wire liveness"). A reported health of `unknown` stays
+`present_unhealthy` (consistent with the fetcher's unhealthy lists), and
+`ladderVerdict` ignores `live_only` nodes as the scored verdict does.
+Nothing the ladder reads changes `integrity`, `verdict`, node `status` or
+the grade; the switch is a proposal
 (`docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md`).
 
 ### Burn-rate alerts are mapped, never synthesised
@@ -455,9 +460,9 @@ helpers live in the zero-import `tools/lib/chain-history.mjs` (vendorable,
 | Field | Shape | Notes |
 |---|---|---|
 | `branches[]` | `{ rootKey, title, rootKind, verdict, ladderVerdict, integrityPct, ladderIntegrityPct, confidence, missingRoles: [names], degraded: [node], truncated? }` — `branchRecordsFromGraph(diff.traceabilityGraph)` | one per chain in the graph's order; `[]` when the graph has none. `verdict` / `integrityPct` / node `status` are copied from the graph verbatim; the ladder fields ride beside them, unscored |
-| `branches[].degraded[]` | `{ key, kind, label, status, ladder: { rung, status, detail } \| null, blastRadius: { slos, alerts, panels, dashboards, routes, remediations, total } \| null, deltaFields: [field] }` | only nodes whose scored status is `declared_only` / `drifted` / `live_only` or whose ladder status is `present_unhealthy` / `present_stale` / `unobserved`; aligned-and-healthy nodes and `unverifiable` ones (an honest blind spot of the vantage, not a degradation) are not recorded. Worst first: absent, present-but-unhealthy, present-but-stale, drifted, unobserved (reported after the wire's own findings), live-only; ties by blast-radius total then label. `blastRadius` is structural exposure — what WOULD go blind if the node died — never a claim that it is blind |
+| `branches[].degraded[]` | `{ key, kind, label, status, ladder: { rung, status, detail } \| null, blastRadius: { slos, alerts, panels, dashboards, routes, remediations, total } \| null, deltaFields: [field], aId, bId }` | only nodes whose scored status is `declared_only` / `drifted` / `live_only` or whose ladder status is `present_unhealthy` / `present_stale` / `unobserved`; aligned-and-healthy nodes and `unverifiable` ones (an honest blind spot of the vantage, not a degradation) are not recorded. Worst first: absent, present-but-unhealthy, present-but-stale, drifted, unobserved (reported after the wire's own findings), live-only; ties by blast-radius total then label. `blastRadius` is structural exposure — what WOULD go blind if the node died — never a claim that it is blind. `aId` / `bId` are the adapter's artefact ids on each side (`QRY-01`, `DASH-02`, …; `null` when the side has no artefact) so a deploy item naming an artefact by id matches exactly on the persisted record |
 | caps | 64 branches × 16 nodes × 6 delta fields (`BRANCH_RECORD_CAPS`) | a cut node list sets `truncated: true` on the branch; a cut branch list marks the in-memory array only (JSON drops it — a persisted record of exactly 64 branches may have been cut) |
-| `chains` | `{ declaredTotal, intact, partial, broken, undeclared, ladder: { healthy, degraded, broken, unobserved }, integrityPct, ladderIntegrityPct, degradedNodes, topExposure: { label, kind, slos, alerts } \| null }` — `chainSummary({ branches })` | counts over the declared chains; the integrities are means of the recorded per-branch percentages and `null` with no declared chain (an empty set is not 100 % healthy); `topExposure` is the degraded node that would blind the most SLOs (then alerts, then total), `null` when none would blind an SLO or an alert. `GET /api/journeys` recomputes it from the record with the same function |
+| `chains` | `{ declaredTotal, intact, partial, broken, undeclared, ladder: { healthy, degraded, broken, unobserved }, integrityPct, ladderIntegrityPct, degradedNodes, undeclaredNodes, topExposure: { label, kind, slos, alerts } \| null }` — `chainSummary({ branches })` | counts over the declared chains; the integrities are means of the recorded per-branch percentages and `null` with no declared chain (an empty set is not 100 % healthy); `degradedNodes` counts the recorded nodes of the DECLARED chains and `topExposure` is the one of them that would blind the most SLOs (then alerts, then total), `null` when none would blind an SLO or an alert; the live-only nodes of undeclared chains are inventory, not degraded assurance — counted apart as `undeclaredNodes`, never the top exposure. `GET /api/journeys` recomputes it from the record with the same function |
 | `versions` | `{ <product>: <version> }` or `null` — `liveVersions(canonicalB)` | the bare `mcp.versions.<product>` keys only (the provenance keys `mcp.versions.<product>.source` / `.commit` are not versions); `null` for a file-sourced B or when no version probe answered — an absence, never "unchanged" |
 
 The markdown report prints a `Requirement chains` table (`chain | verdict
@@ -498,55 +503,80 @@ run writes `runs/<journey>/live/<record stem>.json` (the record's own
 filename stem — `LIVE_PACK_PATH_RE`) and records `livePack: { kept: true,
 path: 'live/<stem>.json', bytes, reason }`; a run that keeps nothing records
 `{ kept: false, path: null, reason }`. A snapshot write failure lands on the
-record as `historyError`, never thrown — the verdict already exists.
+record as `historyError`, never thrown — the verdict already exists — and
+`livePack` then reads `{ kept: false, path: null, reason: 'snapshot write
+failed: <error>' }`, never the policy that asked for the snapshot. `never`
+writes none from now on; snapshots earlier runs kept stay until their
+records age out of retention.
 `readLivePack(name, record)` parses a snapshot back and is `null` when the
 record kept none, `livePack.path` is not the snapshot shape (a hand-edited
 path cannot point outside the journey's `live/` directory), or the file is
 gone or unparseable — a pruned snapshot reads as absent, never as an error.
 
 Retention is unchanged (`OBSERVOGRAM_JOURNEY_RUN_RETENTION`,
-`JOURNEY_RUN_FILE_RE`, `readJourneyRuns` still ignores `live/`) and now also
-prunes orphans: after the record prune, `pruneLiveSnapshots(recordFiles,
-liveFiles)` (pure) names the run-shaped files under `live/` whose record no
-longer exists — never a survivor's snapshot, never a file that is not of the
-run-record shape — and `writeRunRecord` deletes them, noting a failure as
-`historyError`. A journey that never kept a snapshot has no `live/`
-directory at all.
+`JOURNEY_RUN_FILE_RE`; `readJourneyRuns` reads only run-shaped files — a
+stray `notes.json` is never a record — and still ignores `live/`) and now
+also prunes retention victims: after the record prune,
+`pruneLiveSnapshots(recordFiles, liveFiles)` (pure) names the run-shaped
+files under `live/` that are OLDER than the oldest surviving record — never
+a survivor's snapshot, never a file that is not of the run-record shape, and
+never a newer stem that merely has no record yet (a cron run and a `POST
+/api/journeys/:name/run` can interleave; one writer's just-written snapshot
+must not be the other's orphan; with no surviving record nothing is named)
+— and `writeRunRecord` deletes them, noting a failure as `historyError`. A
+journey that never kept a snapshot has no `live/` directory at all.
 
 #### Transitions and candidate causes (`transition`, `causes`)
 
-`transition` is `diffRunBranches(previousRun, { branches })` against the
-newest record read *before* this run is written (so the diff is against
-history, never against itself):
+The run reads its history *before* it is written (so the diff is against
+history, never against itself) and picks two records from it: the
+**previous run** — the newest record whatever it holds — and the
+**baseline** — the newest record that CARRIES chains (`BASELINE_SCAN_LIMIT`
+= 25 records back; a vantage-lost record or one written before chains were
+recorded cannot be diffed). The chain diff, the versions and the deploy
+window are compared against the baseline; the vantage against the previous
+run. `transition` is `diffRunBranches(baseline, { branches })` plus what
+the run knows about the choice, and is never `null` on a new record:
 
 ```
 transition: {
-  since: <previous startedAt>,
+  reason: null,                       // a comparison was made
+  since: <baseline startedAt>,
   changed: [{ rootKey, title,
               from: { verdict, ladderVerdict }, to: { verdict, ladderVerdict },
               direction: 'worse' | 'better' | 'changed',
-              nodes: { newlyDegraded: [labels], recovered: [labels] } }],
+              nodes: { newlyDegraded: [labels], recovered: [labels] },
+              note: string | null }], // declared-side facts, see below
   appeared: [rootKey], disappeared: [rootKey],
-  any: boolean
-} | null
+  any: boolean,
+  skipped: [{ startedAt, outcome }]   // records newer than the baseline that carry no chains (cap 8)
+}
+// or, when nothing could be compared:
+transition: { reason: 'first run' | 'previous run lost its vantage' | 'previous runs carry no chain record',
+              since: null, changed: [], appeared: [], disappeared: [], any: false, skipped: [...] }
 ```
 
 A chain is `changed` when its verdict or ladder verdict differs; `direction`
 comes from the rank tables `intact < partial < broken` and `healthy <
 degraded < unobserved < broken` — `worse` when nothing improved and
 something got worse, `better` the mirror, `changed` when the two moved
-against each other or either side is `undeclared` / unknown. `null` on the
-first run and whenever either record carries no chains (a vantage-lost
-record, or one written before chains were recorded). A transition is a
-change between two point-in-time observations, never a cause.
+against each other or either side is `undeclared` / unknown. `note` names
+what the declared side says about the change when no recorded node moved:
+`declared side: missingRoles none → action` (a role the branch misses came
+or went) and / or `degraded list truncated (cap 16) — a node that moved may
+be unrecorded` (a list cut at the cap on either side). Records written
+before this pass carry `transition: null` on their first run; every reader
+tolerates both. A transition is a change between two point-in-time
+observations, never a cause.
 
-`causes` is `rankCauses({ previous, current, deploys })` whenever a previous
-record exists (`null` on the first run — nothing to explain yet):
+`causes` is `rankCauses({ previous, baseline, current, deploys })` without
+the ranker's own copy of the diff (`transition` above is the single
+persisted copy) whenever a previous record exists — `null` on the first
+run, nothing to explain yet:
 
 ```
 causes: {
-  transitions: <the same diff, or null>,
-  causes: [{ rank, kind, score, evidence, chains: [rootKey], nodes: [labels] }],
+  causes: [{ rank, kind, score, evidence, chains: [titles], rootKeys: [rootKey], nodes: [labels] }],
   vantage: { changed, from, to, detail } | null,
   note: 'candidate causes ranked by evidence — not a root-cause verdict'
 } | null
@@ -555,53 +585,76 @@ causes: {
 Only chains whose transition reads `worse` (and chains that appeared already
 partial / broken / degraded) are considered, and only the nodes the record
 can say moved — new on the current side, or the same identity with a
-different status / ladder status; every degraded node when the record
-cannot tell. A node the vantage could not look at (`unobserved`) generates
-no cause: a chain whose only movement is the vantage looking away yields
-none. The four kinds and their fixed scores (`CAUSE_SCORES`; a rank is
-explainable by reading the table):
+different status / ladder status. A node whose status and ladder status are
+identical on both sides did not move and is never blamed: when nothing
+recorded moved, the change is on the declared side (the transition entry's
+`note` says so) and the chain yields no cause. A node the vantage could not
+look at (`unobserved`) generates no cause: a chain whose only movement is
+the vantage looking away yields none. The four kinds and their fixed scores
+(`CAUSE_SCORES`; a rank is explainable by reading the table):
 
 | `kind` | Evidence | `score` |
 |---|---|---|
-| `observogram-deploy` | a deploy in the window `(previous.startedAt, current.startedAt]` from `deploys.jsonl` beside `runs/` (Observogram's own audit; the latest `verify` line is merged onto its deploy so the evidence names the outcome) whose item `artifact` names a moved node — contained in the node's label or key, case-insensitively, `dash:` dropped; stubs under three characters and `all` name nothing | 0.9 |
-| `observogram-deploy` | a deploy in the window that wrote the journey's pack (`pack.id` / `pack.name` against the record's `packA`) without naming a moved node | 0.6 |
+| `observogram-deploy` | a deploy in the window `(baseline.startedAt, current.startedAt]` from `deploys.jsonl` beside `runs/` (Observogram's own audit — only the trailing 8 MB are read, `DEPLOY_LOG_TAIL_BYTES`, the cut first line dropped; the latest `verify` line is merged onto its deploy so the evidence names the outcome; a baseline whose start time cannot be parsed gives an EMPTY window, never all of history) whose item names a moved node. The server persists compile SELECTORS on its items, so `runJourney` resolves each one against Pack A first (`resolveDeployArtifact`: `declared:<i>` → the i-th declared recording rule's name, `slo:<id>` → the SLO id, its SLI base and the SLI the pack binds it to, `dash:<id>` → the id, a bare name — a rollback's dashboard uid — → itself, `all` → nothing; carried as `resolved` beside `artifact`); the ranker then matches EXACTLY, never by substring — the selector or a resolved name equals the node's `aId` / `bId`, or a resolved name equals the node's label or an identity handle of its `kind::{json}` key (`id`, `name`, `record`, `slo`, `job`, `uid`) — and only when the item's `group` can write the node's kind (`DEPLOY_GROUP_KINDS`: `dashboards` / `restore` / `delete` → dashboard, panel; `rules` → recording_rule, burn_rate, sli, slo; `alerts` → burn_rate, alert_route; `alertmanager` → alert_route; `pipelines` → pipeline_*, otel; an unknown or missing group constrains nothing). Evidence: `touched declared:0 → payment:api_availability:ratio_5m` (a bare name that is the label reads as itself; `(failed)` marks an item that failed) | 0.9 |
+| `observogram-deploy` | a deploy in the window that wrote the journey's pack without an item naming a moved node — including a deploy whose only items are the group wildcard `all` (`wrote pack X (all rules) — no item names a moved artefact`). Needs the audit line's `pack.id` (the registry id — the pack FILE's stem) or `pack.name` to equal the record's `packA.name` (`metadata.name`) or `packA.id`: for a crawl-sourced Pack A, or a file whose stem differs from its `metadata.name`, this rung never fires | 0.6 |
 | `config-drift` | a moved node that `drifted` on a decision-bearing field (`objective`, `expr`, `route`, `window`, … — the graph's vocabulary, copied so the module stays zero-import) | 0.8 |
 | `config-drift` | drifted on cosmetic fields only, or on fields the record did not keep | 0.4 |
-| `backend-version` | a product both records reported with a different `versions.<product>`, when a moved node is a `backend` / `metric` / `recording_rule` / `burn_rate` (the ruler / TSDB path) | 0.6 |
-| `backend-version` | the same version change while a chain got worse elsewhere | 0.3 |
-| `stack-self-metric` | a `stackEvidence` row of the current record that answered data and reads as a signal (`nonzero` hint, a `lower` row above 0, a `higher` ratio below 1) in the family feeding a moved node's kind — scrape → `scrape_job`; ruler → `recording_rule` / `burn_rate` / `sli` / `slo`; notify → `alert_route`; tsdb → `backend` / `storage_metrics`; collector → `pipeline_*` / `otel`; dashboards → `panel` / `dashboard`; synthetic → `synthetic` | 0.5 |
+| `backend-version` | a product both records (baseline and current) reported with a different `versions.<product>`, when that product FEEDS the family of a moved node — `PRODUCT_FAMILIES`: prometheus / victoriametrics / thanos / mimir → scrape, ruler, tsdb; grafana → dashboards; alertmanager → notify; otel, otelcol → collector; loki, promtail → logs; jaeger, tempo → traces — crossed with `FAMILY_FOR_KIND` (`versionFeedsMovedKind`; a Grafana change on a Prometheus rule is not this rung) | 0.6 |
+| `backend-version` | the same version change while a chain got worse elsewhere, or a product outside the table | 0.3 |
+| `stack-self-metric` | a `stackEvidence` row of the current record that answered data and reads as a signal by direction and value alone (a `lower` row above 0, a `higher` ratio below 1 — the stored display hint is never consulted) in the family feeding a moved node's kind — scrape → `scrape_job`; ruler → `recording_rule` / `burn_rate` / `sli` / `slo`; notify → `alert_route`; tsdb → `backend` / `storage_metrics`; collector → `pipeline_*` / `otel`; dashboards → `panel` / `dashboard`; synthetic → `synthetic` | 0.5 |
 
 A version that appears or disappears between the records is a vantage
-matter, not a change; a `verify` record or a dry run changed nothing on the
-wire and is skipped. One cause per distinct evidence, aggregating every
-chain and node it explains; ordering is score, then kind order, then
-evidence text — deterministic. `vantage` names what changed about the
-vantage itself — `vantage lost → restricted`, `probe family recording_rules
-newly failed (HTTP 502)` / `no longer exposed` / `no longer probed` /
-`answers again` / `now exposed`, `4 → 5 MCP tools exposed` — and rides
-beside the causes, never among them; `null` when neither record carries
-vantage facts (two file-sourced runs).
+matter, not a change — and so is a flip to or from the literal `live` (the
+fetcher's word for "the product answered without a version number"): it
+is never a cause and rides in `vantage.detail` as `mcp.versions.<product>
+changed to/from live`. A `verify` record, a dry run or a line without
+`type: 'deploy'` changed nothing on the wire and is skipped. One cause per
+distinct evidence, aggregating every chain and node it explains; ordering
+is score, then kind order, then evidence text — deterministic; every
+evidence string collapses whitespace (labels, actor, deploy id, artifact
+and product came off the wire or the request). `vantage` names what
+changed about the vantage itself since the PREVIOUS run — `vantage lost →
+restricted`, `probe family recording_rules newly failed (HTTP 502)` / `no
+longer exposed` / `no longer probed` / `answers again` / `now exposed`,
+`4 → 5 MCP tools exposed`, the `live` flips — and rides beside the causes,
+never among them; `null` when neither record carries vantage facts (two
+file-sourced runs) and no version flipped.
 
 Surfaces: the markdown report's `Candidate causes — ranked by evidence, not
 a root-cause verdict` section (`_no previous run_`, `_no chain got worse
-since …_`, or `N. [kind] score — evidence (chains: titles)`, then `vantage
-changed: …` / `vantage: unchanged`) and `Transitions since previous run`
-(one line per changed chain with its direction and node lists, `appeared` /
-`disappeared`, then the live-pack decision); `packc journey list` appends
-`chainStatusLine(record)` after the stack segment (`chains 8/10 intact ·
-ladder 7 healthy · 2 degraded`, zero buckets omitted; `chains none`) and,
-only when a chain got worse or a cause was ranked, `causeLine(record)`
-(`top cause: [kind] evidence` / `no candidate causes`). `GET /api/journeys`
-puts on `lastRun`: `chains` (`chainSummary`, `null` without chains),
-`transition: { any, changed, worse } | null` (counts), `topCause` (the
-rank-1 cause object or `null`) and `vantageChanged` (`true` / `false` /
-`null` without a causes block); `GET /api/journeys/:name/runs` hands the
-record through unchanged. The studio's Journeys view prints one plain-text
-chains line per card (`requirement chains: N/M intact · ladder: h healthy ·
-d degraded · b broken · u unobserved · top exposure: <label> (<kind>)
-blinds N SLOs`, a muted `changed since previous run (W worse)` marker) and
-one cause line (`candidate cause: [kind] evidence — not a verdict`, a muted
-`vantage changed` marker) — counts and markers, no colours.
+since <baseline> (previous run <ts> lost its vantage — comparing against
+<baseline>)_` when a record was skipped, `_previous run <ts> lost its
+vantage — no earlier run carries chains to compare against — nothing to
+rank_` when nothing could be compared, or `N. [kind] score — evidence
+(chains: titles)`, then `vantage changed: …` / `vantage: unchanged`) and
+`Transitions since previous run` (`_previous run <ts> lost its vantage —
+comparing against <baseline>_` when a record was skipped, then one line per
+changed chain with its direction, node lists and `note`, `appeared` /
+`disappeared`, then the live-pack decision) — a run after an outage never
+claims "no previous run", and every value either section interpolates goes
+through `mdCell` (line breaks collapsed, `|` escaped, a line-leading `#` /
+`-` / `*` / `+` / `>` / `1.` neutralised: a label carrying `\n\n### Gate
+breaches` cannot forge a section; the gate-breach lines are escaped the
+same way). `packc journey list` appends `chainStatusLine(record)` after the
+stack segment (`chains 8/10 intact · ladder 7 healthy · 2 degraded`, zero
+buckets omitted; `chains 0 declared` when the record carries chains but
+declares none; `chains none (pre-step-4 record)` / `chains none (vantage
+lost)` when it carries no `branches`), only when a chain got worse or a
+cause was ranked `causeLine(record)` (`top cause: [kind] evidence` / `no
+candidate causes`), and whenever the vantage block says it changed
+`vantageLine(record)` (`vantage changed: <detail>`) — beside the cause,
+never as one. `GET /api/journeys` puts on `lastRun`: `chains`
+(`chainSummary`, `null` without chains), `transition: { any, changed, worse
+} | null` (counts), `topCause` (the rank-1 cause object or `null`) and
+`vantageChanged` (`true` / `false` / `null` without a causes block or with
+`vantage: null`); `GET /api/journeys/:name/runs` hands the record through
+unchanged. The studio's Journeys view prints one plain-text chains line per
+card (`requirement chains: N/M intact · ladder: h healthy · d degraded · b
+broken · u unobserved · top exposure: <label> (<kind>) blinds N SLOs`, then
+`· N live-only in undeclared chains` only when `undeclaredNodes` > 0, a
+muted `changed since previous run (W worse)` marker) and one cause line
+(`candidate cause: [kind] evidence — not a verdict`, a muted `vantage
+changed` marker) — counts and markers, no colours.
 
 #### Reading a run record
 
@@ -621,12 +674,16 @@ read it top to bottom:
    scrape_configs not exposed by this MCP tier`, `on the wire but withheld
    from Pack B: …`), and `blastRadius.slos` — how many SLOs would go blind if
    it really died. Exposure, not a claim that they are blind.
-5. `transition` — what moved since `since`, per chain, with a direction and
-   the nodes that newly degraded or recovered.
-6. `causes.causes[0]` — the top candidate with its evidence, and
-   `causes.vantage` — read it before believing any cause: a chain that got
-   worse while `vantage.changed` is `true` may only be the vantage looking
-   elsewhere.
+5. `transition` — what moved since `since` (the baseline: the newest earlier
+   record that carries chains), per chain, with a direction, the nodes that
+   newly degraded or recovered and a `note` when only the declared side
+   moved; `skipped` names the records passed over to reach the baseline,
+   `reason` says why nothing could be compared when that is the case.
+6. `causes.causes[0]` — the top candidate with its evidence (its `chains`
+   by title, `rootKeys` apart), and `causes.vantage` — read it before
+   believing any cause: a chain that got worse while `vantage.changed` is
+   `true` may only be the vantage looking elsewhere (a probe family gone, a
+   version flipping to or from `live`).
 7. `livePack` — whether Pack B was kept and why; `readLivePack(name, record)`
    returns it as it was observed.
 

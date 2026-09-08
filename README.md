@@ -376,10 +376,12 @@ decision-bearing drift, a backend version change, a stack self-metric signal
 itself is reported beside them, never as one. `keepLivePack` decides when
 Pack B is snapshotted under `runs/<journey>/live/` (by default on the first
 run, whenever a chain's verdict moved, on a gate failure, or after a vantage
-loss; orphaned snapshots are pruned with their records). `journey list`
-appends `chains 8/10 intact · ladder 7 healthy · 2 degraded` per journey
-and, only when a chain got worse, `top cause: [observogram-deploy] deploy
-dep_x by … touched …`. In the studio the Diagnose chain cards show the
+loss; snapshots are pruned with their records). `journey list`
+appends `chains 8/10 intact · ladder 7 healthy · 2 degraded` per journey,
+only when a chain got worse `top cause: [observogram-deploy] deploy
+dep_x by … touched …`, and whenever the vantage itself moved `vantage
+changed: vantage full → partial · …` — named beside the cause, never as
+one. In the studio the Diagnose chain cards show the
 ladder verdict, name present-but-unhealthy / stale / unobserved nodes and
 say `blinds N SLOs` beside a missing or drifted one, and each Journeys card
 carries a plain-text chains line and a candidate-cause line — counts and
