@@ -14,6 +14,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readdirSync, readFileSyn
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
 import { spawnSync } from 'node:child_process';
 import { createHarness } from './lib/harness.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
@@ -32,6 +33,7 @@ const {
   evaluateGate, renderJourneyMarkdown, liveEvidenceFacts,
   pruneRunFiles, parseRunRetention, journeyRunRetention, JOURNEY_RUN_RETENTION_DEFAULT,
   formatStackValue, validateGateStack, stackStatusLine,
+  chainStatusLine, liveVersions, livePackDecision, pruneLiveSnapshots, readLivePack, KEEP_LIVE_PACK_POLICIES, LIVE_PACK_PATH_RE,
 } = await import('./lib/journey.mjs');
 const { STACK_SELF_METRIC_PROBES } = await import('./lib/contracts/stack-self-metrics.mjs');
 
@@ -299,6 +301,11 @@ try {
       { uid: 't1', name: 'Tempo', type: 'tempo', health: 'unknown', message: null },
     ]),
     'mcp.observed.grafana.contact_points': JSON.stringify({ count: 3, names: ['email', 'teams', 'pagerduty'] }),
+    // Step 4: observed product versions (bare keys are versions; the
+    // provenance keys beside them are not).
+    'mcp.versions.prometheus': '2.53.0',
+    'mcp.versions.prometheus.source': 'buildinfo',
+    'mcp.versions.grafana': 'live',
   };
   const LIVE_B = join(TMP, 'live-b.pack.json');
   writeFileSync(LIVE_B, JSON.stringify(liveB, null, 2));
@@ -389,6 +396,63 @@ try {
   assert(JSON.parse(JSON.stringify(readJourneyRuns('live-synthetic')[0])).stackEvidence.rows.find(r => r.id === 'scrape_targets_down').hint === 'nonzero',
          'stackEvidence round-trips through the run history file');
   assert(typeof liveRec.freshness.liveAgeHours === 'number', 'live-like B has a freshness age');
+
+  // --- step 4: the record carries the requirement chains, their summary, the versions, the transition and the live-pack decision ---
+  {
+    const keys = Object.keys(liveRec);
+    assert(keys.slice(keys.indexOf('traceability'), keys.indexOf('traceability') + 6).join() === 'traceability,branches,chains,versions,transition,livePack',
+           'branches, chains, versions, transition and livePack follow traceability on the record', keys);
+    assert(Array.isArray(liveRec.branches) && liveRec.branches.length === liveRec.traceability.declaredTotal + liveRec.traceability.undeclared,
+           'branches holds one record per chain of the comparison', { branches: liveRec.branches.length, t: liveRec.traceability });
+    const b0 = liveRec.branches[0];
+    assert(Object.keys(b0).join() === 'rootKey,title,rootKind,verdict,ladderVerdict,integrityPct,ladderIntegrityPct,confidence,missingRoles,degraded',
+           'a persisted branch carries the chain-history shape', Object.keys(b0));
+    assert(b0.degraded.length > 0 && Object.keys(b0.degraded[0]).join() === 'key,kind,label,status,ladder,blastRadius,deltaFields' && b0.degraded[0].ladder.rung && b0.degraded[0].blastRadius && typeof b0.degraded[0].blastRadius.slos === 'number',
+           'a persisted degraded node carries status, ladder, blast radius and delta fields', b0.degraded[0]);
+    assert(liveRec.branches.some(b => b.degraded.some(d => d.ladder.status === 'unobserved' && /probe family dashboards failed/.test(d.ladder.detail))),
+           'the failed dashboards probe lands on the record as unobserved nodes, never as absent ones');
+    assert(liveRec.branches.every(b => b.degraded.every(d => d.status !== 'unverifiable')), 'unverifiable nodes (not live-introspectable) are not recorded as degraded');
+    const c = liveRec.chains;
+    assert(c && c.declaredTotal === liveRec.traceability.declaredTotal && c.intact === liveRec.traceability.intact && c.broken === liveRec.traceability.broken && c.undeclared === liveRec.traceability.undeclared,
+           'chains counts agree with the traceability rollup the grade was scored on', { chains: c, t: liveRec.traceability });
+    assert(c.ladder && typeof c.ladder.healthy === 'number' && typeof c.ladder.unobserved === 'number' && typeof c.degradedNodes === 'number' && c.degradedNodes > 0,
+           'chains carries the ladder counts and the degraded-node count', c);
+    assert(c.topExposure && typeof c.topExposure.label === 'string' && c.topExposure.slos > 0, 'chains names the top exposure (the degraded node that blinds the most SLOs)', c.topExposure);
+    assert(JSON.stringify(liveRec.versions) === JSON.stringify({ grafana: 'live', prometheus: '2.53.0' }), 'versions maps mcp.versions.<product> only (provenance keys excluded), sorted', liveRec.versions);
+    assert(rec.versions === null, 'a Pack B without version annotations records versions null, never {}', rec.versions);
+    assert(liveRec.transition === null, 'the first run of a journey has no transition (nothing to compare against)', liveRec.transition);
+    assert(JSON.stringify(liveRec.livePack) === JSON.stringify({ kept: false, path: null, reason: `Pack B is a file (${LIVE_B})` }),
+           'a file-sourced Pack B is never snapshotted, and the record says so', liveRec.livePack);
+    assert(!readdirSync(join(TMP, 'runs', 'live-synthetic')).includes('live'), 'no live/ directory is created for a file-sourced B');
+    const persisted = readJourneyRuns('live-synthetic')[0];
+    assert(persisted.branches.length === liveRec.branches.length && JSON.stringify(persisted.chains) === JSON.stringify(liveRec.chains) && persisted.transition === null,
+           'branches, chains and transition round-trip through the run history file');
+    await new Promise(r => setTimeout(r, 5));
+    const liveRec2 = await runJourney(loadJourneyDef('live-synthetic'));
+    assert(liveRec2.transition && liveRec2.transition.any === false && liveRec2.transition.since === liveRec.startedAt && liveRec2.transition.changed.length === 0,
+           'an identical second run reads transition.any false against the first run', liveRec2.transition);
+    assert(JSON.stringify(liveRec2.branches) === JSON.stringify(liveRec.branches), 'identical inputs record identical branches');
+    assert(liveRec2.livePack.kept === false && /^Pack B is a file/.test(liveRec2.livePack.reason), 'the file rule wins over the transition rule');
+    const md2 = renderJourneyMarkdown(liveRec2);
+    assert(/### Requirement chains/.test(md2) && /\| chain \| verdict \| ladder \| integrity \| ladder integrity \| worst node \|/.test(md2), 'markdown carries the requirement-chains table with its header');
+    assert(new RegExp(`\\| ${liveRec.branches[0].title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\| ${liveRec.branches[0].verdict} \\| ${liveRec.branches[0].ladderVerdict} \\| ${liveRec.branches[0].integrityPct}% \\| ${liveRec.branches[0].ladderIntegrityPct}% \\| `).test(md2),
+           'a chain row prints title, verdict, ladder verdict and both integrities', md2);
+    assert(/blinds \d+ SLOs?\)/.test(md2), 'the worst-node cell says how many SLOs it blinds');
+    assert(/### Transitions since previous run/.test(md2) && new RegExp(`_no chain changed since ${liveRec.startedAt.replace(/[.]/g, '\\.')}_`).test(md2), 'markdown says no chain changed since the previous run', md2);
+    assert(/_no previous run to compare_/.test(renderJourneyMarkdown(liveRec)), 'the first run\'s markdown says there is no previous run to compare');
+    assert(/^live pack: not kept — Pack B is a file/m.test(md2), 'markdown prints the live-pack decision with its reason', md2);
+    assert(!/### Requirement chains/.test(renderJourneyMarkdown({ ...liveRec, branches: [] })), 'no chains → no table (never an empty "all intact" table)');
+    {
+      const many = { ...liveRec, branches: Array.from({ length: 30 }, (_, i) => ({ ...liveRec.branches[0], title: `chain_${i}` })) };
+      const manyMd = renderJourneyMarkdown(many);
+      assert((manyMd.match(/^\| chain_\d+ \|/gm) || []).length === 24 && /6 more chain\(s\) not shown/.test(manyMd), 'the chains table is capped at 24 rows and says how many were left out');
+    }
+    assert(chainStatusLine(liveRec) === `chains ${c.intact}/${c.declaredTotal} intact · ladder ${c.ladder.healthy} healthy` + ['degraded', 'broken', 'unobserved'].filter(k => c.ladder[k] > 0).map(k => ` · ${c.ladder[k]} ${k}`).join(''),
+           'chainStatusLine reads intact/declared and the nonzero ladder buckets', chainStatusLine(liveRec));
+    assert(chainStatusLine({ branches: [{ verdict: 'intact', ladderVerdict: 'healthy', integrityPct: 100, ladderIntegrityPct: 100, degraded: [] }, { verdict: 'partial', ladderVerdict: 'degraded', integrityPct: 50, ladderIntegrityPct: 50, degraded: [] }] }) === 'chains 1/2 intact · ladder 1 healthy · 1 degraded'
+           && chainStatusLine({ outcome: 'vantage-lost' }) === 'chains none' && chainStatusLine({ branches: [] }) === 'chains none' && chainStatusLine({ branches: [{ verdict: 'undeclared', ladderVerdict: 'undeclared' }] }) === 'chains none',
+           'chainStatusLine omits zero buckets and reads none for a record without declared chains');
+  }
   const liveMd = renderJourneyMarkdown(liveRec);
   assert(/Live probes/.test(liveMd) && /failed: dashboards/.test(liveMd) && /not exposed: scrape_configs/.test(liveMd) && /vantage \*\*partial\*\*/.test(liveMd),
          'markdown prints the probes line with failed / not-exposed families and the vantage');
@@ -629,9 +693,182 @@ try {
     env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000,
   });
   assert(/^lost\tvantage-lost · /m.test(cliList.stdout) && !/undefined%/.test(cliList.stdout), 'journey list shows vantage-lost without a fake alignment', cliList.stdout);
-  assert(/^stack-gated\tgate-failed · .* · stack sampled 3$/m.test(cliList.stdout), 'journey list prints the stack status (sampled N) per journey', cliList.stdout);
-  assert(/^pay-vs-curated\tpass · .* · stack none$/m.test(cliList.stdout), 'journey list prints stack none for a file-sourced journey', cliList.stdout);
-  assert(!/^lost\t.*stack/m.test(cliList.stdout), 'a vantage-lost line carries no stack status');
+  // Step 4: the chains segment follows the stack segment on every run line.
+  assert(/^stack-gated\tgate-failed · .* · stack sampled 3 · chains \d+\/\d+ intact · ladder /m.test(cliList.stdout), 'journey list prints the stack status (sampled N) per journey, then the chains status', cliList.stdout);
+  assert(/^pay-vs-curated\tpass · .* · stack none · chains \d+\/\d+ intact · ladder \d+ healthy/m.test(cliList.stdout), 'journey list prints stack none for a file-sourced journey, then the chains status', cliList.stdout);
+  assert(!/^lost\t.*stack/m.test(cliList.stdout) && !/^lost\t.*chains/m.test(cliList.stdout), 'a vantage-lost line carries no stack or chains status');
+
+  // --- step 4: the live-pack snapshot (policy, files, pruning, read-back) ---
+  // Pure policy first: every branch of livePackDecision.
+  {
+    const prev = { startedAt: '2026-09-08T09:00:00.000Z', outcome: 'pass', branches: [] };
+    const quiet = { since: prev.startedAt, changed: [], appeared: [], disappeared: [], any: false };
+    const moved = { since: prev.startedAt, changed: [{ rootKey: 'x' }], appeared: ['y'], disappeared: [], any: true };
+    const d = (patch) => livePackDecision({ policy: undefined, previousRun: prev, transition: quiet, outcome: 'pass', packBIsFile: false, packBSource: 'mcp:http://x/mcp', ...patch });
+    assert(KEEP_LIVE_PACK_POLICIES.join() === 'transitions,always,never', 'the policies are transitions, always, never');
+    assert(d({ packBIsFile: true, packBSource: '/p/b.yaml' }).kept === false && d({ packBIsFile: true, packBSource: '/p/b.yaml', policy: 'always' }).reason === 'Pack B is a file (/p/b.yaml)',
+           'a file-sourced Pack B is never kept, even under always');
+    assert(d({ policy: 'never', transition: moved }).kept === false && d({ policy: 'never' }).reason === 'keepLivePack: never', 'never keeps nothing, even on a transition');
+    assert(d({ policy: 'always' }).kept === true && d({ policy: 'always' }).reason === 'keepLivePack: always', 'always keeps a quiet run');
+    assert(d({ previousRun: null, transition: null }).kept === true && d({ previousRun: null, transition: null }).reason === 'first run (no previous record)', 'transitions keeps the first run');
+    assert(d({ previousRun: { startedAt: 't0', outcome: 'vantage-lost' }, transition: null }).kept === true && /previous run t0 lost its vantage/.test(d({ previousRun: { startedAt: 't0', outcome: 'vantage-lost' }, transition: null }).reason),
+           'transitions keeps the run after a vantage loss');
+    assert(d({ previousRun: { startedAt: 't0', outcome: 'pass' }, transition: null }).kept === true && /carries no chain record to compare/.test(d({ previousRun: { startedAt: 't0', outcome: 'pass' }, transition: null }).reason),
+           'transitions keeps the run after a record that cannot be compared (pre-chain record)');
+    assert(d({ transition: moved }).kept === true && d({ transition: moved }).reason === `chains changed since ${prev.startedAt}: 1 changed · 1 appeared`, 'transitions keeps a run whose chains moved and says what moved');
+    assert(d({ outcome: 'gate-failed' }).kept === true && d({ outcome: 'gate-failed' }).reason === 'gate failed', 'transitions keeps a gate failure without a transition');
+    assert(d({}).kept === false && d({}).reason === `no transition since ${prev.startedAt}`, 'transitions drops a quiet passing run and names the previous run');
+    assert(d({ policy: 'bogus' }).reason === `no transition since ${prev.startedAt}`, 'an unknown policy reads as the default (transitions)');
+    assert(JSON.stringify(liveVersions({ metadata: { annotations: { 'mcp.versions.b': '1', 'mcp.versions.a': 'live', 'mcp.versions.a.source': 'x', 'mcp.versions.c': '', 'mcp.url': 'u' } } })) === JSON.stringify({ a: 'live', b: '1' })
+           && liveVersions({ metadata: { annotations: { 'mcp.versions.a.source': 'x' } } }) === null && liveVersions(null) === null,
+           'liveVersions keeps bare product keys with a value, sorted; provenance-only or no annotations read null');
+    assert(pruneLiveSnapshots(['2026-01-02T00-00-00-000Z.json', 'notes.json', 'live'], ['2026-01-01T00-00-00-000Z.json', '2026-01-02T00-00-00-000Z.json', 'notes.json', '2026-01-03T00-00-00-000Z.json']).join() === '2026-01-01T00-00-00-000Z.json,2026-01-03T00-00-00-000Z.json',
+           'pruneLiveSnapshots names the run-shaped live files whose record is gone — never a survivor, never a non-run file');
+    assert(pruneLiveSnapshots(null, ['2026-01-01T00-00-00-000Z.json']).join() === '2026-01-01T00-00-00-000Z.json' && pruneLiveSnapshots([], null).length === 0 && pruneLiveSnapshots(['x'], [3, null]).length === 0,
+           'pruneLiveSnapshots tolerates missing lists and non-string entries');
+    assert(LIVE_PACK_PATH_RE.test('live/2026-01-01T00-00-00-000Z.json') && !LIVE_PACK_PATH_RE.test('live/../x.json') && !LIVE_PACK_PATH_RE.test('2026-01-01T00-00-00-000Z.json'),
+           'only live/<run stem>.json is a snapshot path');
+  }
+  // A fake MCP that answers the core tools (and, when flipped, the
+  // recording-rules family) so Pack B is a real `mcp:` source. Answers are
+  // identical run to run unless `fakeRules` is set, so a chain transition
+  // is under the test's control.
+  let fakeRules = false;
+  const fakeSrv = createHttpServer(async (req, res) => {
+    let raw = '';
+    req.setEncoding('utf8');
+    for await (const chunk of req) raw += chunk;
+    let msg = {};
+    try { msg = JSON.parse(raw || '{}'); } catch (_) {}
+    const send = (result) => {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Mcp-Session-Id': 'journey-test-session' });
+      res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id ?? 1, result }));
+    };
+    if (msg.method === 'initialize') return send({ protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'fake-mcp' } });
+    if (msg.method === 'notifications/initialized') return send({});
+    if (msg.method === 'tools/list') {
+      return send({ tools: ['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines', ...(fakeRules ? ['list_recording_rules'] : [])].map(name => ({ name })) });
+    }
+    if (msg.method === 'tools/call') {
+      const name = msg.params?.name;
+      const result = name === 'system_health' ? { services: [] }
+        : name === 'system_topology' ? { dependencies: [] }
+        : name === 'anomalies_baselines' ? { baselines: [] }
+        : name === 'list_recording_rules' ? { groups: [{ name: 'payment', interval: '1m', rules: [{ record: 'payment:api_availability:ratio_5m', expr: 'sum(rate(http_server_request_duration_seconds_count{code!~"5.."}[5m])) / sum(rate(http_server_request_duration_seconds_count[5m]))', health: 'ok' }] }] }
+        : {};
+      return send({ content: [{ type: 'text', text: JSON.stringify(result) }] });
+    }
+    send({});
+  });
+  await new Promise(r => fakeSrv.listen(0, '127.0.0.1', r));
+  const fakeUrl = `http://127.0.0.1:${fakeSrv.address().port}/mcp`;
+  try {
+    const fakeDef = (name, extra = []) => {
+      writeFileSync(join(TMP, 'journeys', `${name}.journey.yaml`), [
+        `name: ${name}`,
+        `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`,
+        `packB: { mcp: { url: ${fakeUrl} } }`,
+        ...extra,
+      ].join('\n'));
+      return loadJourneyDef(name);
+    };
+    const liveDirOf = (name) => join(TMP, 'runs', name, 'live');
+    const liveFilesOf = (name) => { try { return readdirSync(liveDirOf(name)).sort(); } catch (_) { return []; } };
+    const stemOf = (r) => `${r.startedAt.replace(/[:.]/g, '-')}.json`;
+
+    // transitions (default): first run kept, identical run not, moved run kept, gate failure kept.
+    const t1 = await runJourney(fakeDef('fake-live'));
+    assert(t1.packB.source === `mcp:${fakeUrl}` && t1.outcome === 'pass' && t1.transition === null, 'the fake MCP answers as a live source; the first run has no transition', { src: t1.packB.source, o: t1.outcome, t: t1.transition });
+    assert(t1.livePack.kept === true && t1.livePack.path === `live/${stemOf(t1)}` && t1.livePack.bytes > 0 && t1.livePack.reason === 'first run (no previous record)',
+           'the first run keeps the live pack under live/<record stem>.json and says why', t1.livePack);
+    assert(liveFilesOf('fake-live').join() === stemOf(t1), 'the snapshot file exists beside the run directory', liveFilesOf('fake-live'));
+    assert(readdirSync(join(TMP, 'runs', 'fake-live')).sort().join() === `${stemOf(t1)},live` && readJourneyRuns('fake-live').length === 1,
+           'readJourneyRuns ignores the live/ directory (one record, not two)', readdirSync(join(TMP, 'runs', 'fake-live')));
+    const snap = readLivePack('fake-live', t1);
+    assert(snap && snap.metadata?.annotations?.['mcp.url'] === fakeUrl && snap.metadata?.name && Array.isArray(snap.spec?.slos ?? []),
+           'readLivePack round-trips the canonical Pack B (its annotations name the MCP)', snap && Object.keys(snap));
+    assert(Buffer.byteLength(readFileSync(join(liveDirOf('fake-live'), stemOf(t1)), 'utf8'), 'utf8') === t1.livePack.bytes,
+           'livePack.bytes is the size of the written snapshot', { bytes: t1.livePack.bytes, size: Buffer.byteLength(readFileSync(join(liveDirOf('fake-live'), stemOf(t1)), 'utf8'), 'utf8') });
+    assert(readLivePack('fake-live', { livePack: { kept: false, path: null } }) === null && readLivePack('fake-live', { livePack: { kept: true, path: 'live/../../x.json' } }) === null && readLivePack('fake-live', { livePack: { kept: true, path: 'live/1999-01-01T00-00-00-000Z.json' } }) === null,
+           'readLivePack is null for no snapshot, a path outside the snapshot shape, and a missing file');
+    assert(t1.versions === null || typeof t1.versions === 'object', 'versions is null or a map on a live source (the fake exposes no version probe)', t1.versions);
+    await new Promise(r => setTimeout(r, 5));
+    const t2 = await runJourney(loadJourneyDef('fake-live'));
+    assert(t2.transition && t2.transition.any === false && t2.transition.since === t1.startedAt, 'an identical second live run has no transition', t2.transition);
+    assert(t2.livePack.kept === false && t2.livePack.path === null && t2.livePack.reason === `no transition since ${t1.startedAt}`, 'the identical run is not kept, naming the run it did not move from', t2.livePack);
+    assert(liveFilesOf('fake-live').join() === stemOf(t1), 'no snapshot was written for the identical run', liveFilesOf('fake-live'));
+    assert(/^live pack: not kept — no transition since /m.test(renderJourneyMarkdown(t2)) && /_no chain changed since /.test(renderJourneyMarkdown(t2)), 'markdown prints the not-kept decision and the quiet transition');
+    fakeRules = true;
+    await new Promise(r => setTimeout(r, 5));
+    const t3 = await runJourney(loadJourneyDef('fake-live'));
+    assert(t3.transition && t3.transition.any === true && t3.transition.changed.length > 0 && t3.transition.since === t2.startedAt,
+           'exposing the recording-rules family moves chains (unobserved → absent is a ladder transition)', t3.transition && { any: t3.transition.any, changed: t3.transition.changed.map(c => [c.title, c.from, c.to, c.direction]) });
+    assert(t3.transition.changed.every(c => c.from.ladderVerdict === 'unobserved' || c.from.verdict !== c.to.verdict) && t3.transition.changed.some(c => c.direction === 'worse'),
+           'the vantage that now looks and sees nothing reads worse — not "changed", never a cause', t3.transition.changed.map(c => c.direction));
+    assert(t3.livePack.kept === true && new RegExp(`^chains changed since ${t2.startedAt.replace(/[.]/g, '\\.')}: \\d+ changed`).test(t3.livePack.reason) && t3.livePack.path === `live/${stemOf(t3)}`,
+           'the moved run keeps its live pack and the reason says what moved', t3.livePack);
+    assert(liveFilesOf('fake-live').join() === [stemOf(t1), stemOf(t3)].join(), 'the live directory holds the first and the moved run', liveFilesOf('fake-live'));
+    const md3 = renderJourneyMarkdown(t3);
+    assert(/### Transitions since previous run/.test(md3) && /→ .*\((worse|better|changed)\)/.test(md3) && /^live pack: kept \(live\/.*\.json, \d+ bytes\) — chains changed since/m.test(md3),
+           'markdown lists the transitions with their direction and the kept live pack', md3.split('### Transitions since previous run')[1]?.slice(0, 400));
+    const t3json = JSON.parse(JSON.stringify(readJourneyRuns('fake-live')[0]));
+    assert(t3json.transition.any === true && t3json.livePack.kept === true && readLivePack('fake-live', t3json)?.metadata?.annotations?.['mcp.url'] === fakeUrl,
+           'transition and livePack round-trip through the history file and readLivePack works from the persisted record');
+    // Gate failure without a transition: kept, reason 'gate failed'.
+    const g1 = await runJourney(fakeDef('fake-gated', ['gate: { maxDeclaredNotLive: 0 }']));
+    assert(g1.outcome === 'gate-failed' && g1.livePack.kept === true && g1.livePack.reason === 'first run (no previous record)', 'a gated journey keeps its first run for being first', g1.livePack);
+    await new Promise(r => setTimeout(r, 5));
+    const g2 = await runJourney(loadJourneyDef('fake-gated'));
+    assert(g2.outcome === 'gate-failed' && g2.transition.any === false && g2.livePack.kept === true && g2.livePack.reason === 'gate failed' && liveFilesOf('fake-gated').length === 2,
+           'a quiet run that fails the gate is kept with reason "gate failed"', g2.livePack);
+    // never / always / invalid.
+    const n1 = await runJourney(fakeDef('fake-never', ['keepLivePack: never']));
+    assert(n1.livePack.kept === false && n1.livePack.reason === 'keepLivePack: never' && !readdirSync(join(TMP, 'runs', 'fake-never')).includes('live'),
+           'keepLivePack: never writes nothing (no live/ directory at all)', n1.livePack);
+    const a1 = await runJourney(fakeDef('fake-always', ['keepLivePack: always']));
+    await new Promise(r => setTimeout(r, 5));
+    const a2 = await runJourney(loadJourneyDef('fake-always'));
+    assert(a1.livePack.kept === true && a2.livePack.kept === true && a2.livePack.reason === 'keepLivePack: always' && a2.transition.any === false && liveFilesOf('fake-always').length === 2,
+           'keepLivePack: always keeps a quiet identical run too', a2.livePack);
+    let policyErr = null;
+    try { fakeDef('fake-bad-policy', ['keepLivePack: sometimes']); } catch (e) { policyErr = e.message; }
+    assert(/journey fake-bad-policy: keepLivePack must be one of transitions, always, never \(got "sometimes"\)/.test(policyErr || ''), 'an unknown keepLivePack value is refused at load time, naming the allowed values', policyErr);
+    assert(loadJourneyDef('fake-live').keepLivePack === undefined, 'a journey without keepLivePack loads unchanged (the default applies at run time)');
+    // Pruning: retention drops records, then their orphaned snapshots — never a survivor's.
+    process.env.OBSERVOGRAM_JOURNEY_RUN_RETENTION = '2';
+    const orphan = '2000-01-01T00-00-00-000Z.json';
+    writeFileSync(join(liveDirOf('fake-always'), orphan), '{}');
+    writeFileSync(join(liveDirOf('fake-always'), 'notes.json'), '{}');
+    await new Promise(r => setTimeout(r, 5));
+    const a3 = await runJourney(loadJourneyDef('fake-always'));
+    assert(a3.historyError === undefined, 'pruning with snapshots reports no history error', a3.historyError);
+    const survivors = readdirSync(join(TMP, 'runs', 'fake-always')).filter(f => f !== 'live').sort();
+    assert(survivors.join() === [stemOf(a2), stemOf(a3)].join(), 'retention 2 keeps the two newest records', survivors);
+    assert(liveFilesOf('fake-always').join() === [stemOf(a2), stemOf(a3), 'notes.json'].join(),
+           'the pruned record\'s snapshot and the orphan are deleted; the survivors\' snapshots and a non-run file stay', liveFilesOf('fake-always'));
+    assert(readLivePack('fake-always', a2) !== null && readLivePack('fake-always', a1) === null, 'a surviving record still reads its snapshot; a pruned one reads null');
+    delete process.env.OBSERVOGRAM_JOURNEY_RUN_RETENTION;
+    // A snapshot that cannot be written lands as historyError, never thrown; the record still lands.
+    const blocked = join(liveDirOf('fake-never'));
+    mkdirSync(join(TMP, 'runs', 'fake-never'), { recursive: true });
+    writeFileSync(blocked, 'not a directory');
+    writeFileSync(join(TMP, 'journeys', 'fake-never.journey.yaml'), [
+      'name: fake-never',
+      `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`,
+      `packB: { mcp: { url: ${fakeUrl} } }`,
+      'keepLivePack: always',
+    ].join('\n'));
+    await new Promise(r => setTimeout(r, 5));
+    const blockedRun = await runJourney(loadJourneyDef('fake-never'));
+    assert(blockedRun.outcome === 'pass' && blockedRun.livePack.kept === false && /^live pack live\/.*\.json: /.test(blockedRun.historyError || '') && blockedRun.livePack.reason === 'keepLivePack: always',
+           'a snapshot write failure is noted as historyError on the record, the run still lands and livePack reads not kept', { lp: blockedRun.livePack, he: blockedRun.historyError });
+    assert(readJourneyRuns('fake-never')[0]?.startedAt === blockedRun.startedAt && readJourneyRuns('fake-never')[0].historyError === blockedRun.historyError, 'the persisted record carries the same historyError');
+    // The CLI line shows the chains segment for a live journey too.
+    const cliLive = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'list'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000 });
+    assert(/^fake-live\tpass · .* · chains \d+\/\d+ intact · ladder \d+ healthy/m.test(cliLive.stdout), 'journey list prints the chains status for a live journey', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-live')));
+  } finally {
+    await new Promise(r => fakeSrv.close(r));
+  }
 
   // --- secrets discipline: authEnv must resolve or the run refuses ---
   writeFileSync(join(TMP, 'journeys', 'live.journey.yaml'), [

@@ -164,6 +164,7 @@ async function loadJourneysList(host) {
         </div>
         ${j.loadError ? `<div class="journey-card-meta"><span class="journey-load-error" title="loadJourneyDef">definition does not load: ${escapeHtml(j.loadError)}</span></div>` : ''}
         ${renderStackChips(last?.stack ?? null, runs, stackLib)}
+        ${renderChainsLine(last)}
         <div class="journey-runs">${renderRunsTable(runs)}</div>
         <div class="journey-result" hidden></div>
       </article>`;
@@ -218,6 +219,32 @@ function renderStackChips(lastStack, runs, lib) {
     return `<span class="journey-stack-chip" title="${escapeHtml(title)}">${fam} ${escapeHtml(fmt(row.value, row.unit))}${mark}${history}</span>`;
   }).join('');
   return `<div class="journey-stack">${label}${chips}</div>`;
+}
+
+// Requirement chains of the last run (step 4) — one plain-text line from
+// GET /api/journeys' lastRun.chains (chainSummary over the record) and
+// lastRun.transition. Counts, not colours: the ladder buckets are on-wire
+// liveness beside the scored verdict, `unobserved` means the vantage could
+// not look, and "changed since previous run" is a transition between two
+// observations — a muted marker, never a cause. Nothing when the last run
+// carries no chains.
+function renderChainsLine(last) {
+  const c = last?.chains;
+  if (!c || typeof c !== 'object') return '';
+  const l = c.ladder || {};
+  const bits = [
+    `requirement chains: ${c.intact ?? 0}/${c.declaredTotal ?? 0} intact`,
+    `ladder: ${l.healthy ?? 0} healthy · ${l.degraded ?? 0} degraded · ${l.broken ?? 0} broken · ${l.unobserved ?? 0} unobserved`,
+  ];
+  if (c.topExposure && typeof c.topExposure === 'object') {
+    const t = c.topExposure;
+    bits.push(`top exposure: ${t.label} (${t.kind}) blinds ${t.slos} SLO${t.slos === 1 ? '' : 's'}`);
+  }
+  const tr = last.transition;
+  const mark = tr && tr.any
+    ? ` <span class="journey-stack-mark">changed since previous run (${tr.worse ?? 0} worse)</span>`
+    : '';
+  return `<div class="journey-stack journey-chains"><span class="journey-stack-label">${escapeHtml(bits.join(' · '))}</span>${mark}</div>`;
 }
 
 function renderRunsTable(runs) {

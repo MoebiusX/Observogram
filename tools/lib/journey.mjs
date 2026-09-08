@@ -40,6 +40,10 @@
 //         scrape_targets_down: { max: 0 }
 //     A stack breach is an early warning to a business owner — a
 //     point-in-time sample outside a declared band — never an SLO verdict.
+//   keepLivePack: transitions   # step 4: snapshot Pack B under runs/<name>/live/
+//                               #   transitions (default) — first run, any chain
+//                               #   verdict change, gate failure, or after a
+//                               #   vantage loss · always · never
 //
 // Vantage: when Pack B is a live MCP source and the fetch itself fails
 // (endpoint down, core tools unavailable), the run still leaves a record
@@ -60,6 +64,7 @@ import { crawlFiles } from './crawler.mjs';
 import { baseWorkspacePath, brandEnv } from './brand-env.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from './contracts/stack-self-metrics.mjs';
 import { formatStackValue } from './stack-evidence.mjs';
+import { branchRecordsFromGraph, chainSummary, diffRunBranches } from './chain-history.mjs';
 import { computeDiagnosticGrade, computePostureMatrix, partialLiveEvidence, DIAGNOSTIC_PASS_SCORE_THRESHOLD } from '../../studio/diagnostic-grade.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -122,9 +127,20 @@ export function loadJourneyDef(ref) {
   if (!def.packA || (!def.packA.file && !def.packA.crawl)) throw new Error(`journey ${def.name}: packA needs file: or crawl:`);
   if (!def.packB || (!def.packB.file && !def.packB.mcp)) throw new Error(`journey ${def.name}: packB needs file: or mcp:`);
   if (def.gate && typeof def.gate === 'object' && def.gate.stack !== undefined) validateGateStack(def.gate.stack, def.name);
+  if (def.keepLivePack !== undefined && !KEEP_LIVE_PACK_POLICIES.includes(def.keepLivePack)) {
+    throw new Error(`journey ${def.name}: keepLivePack must be one of ${KEEP_LIVE_PACK_POLICIES.join(', ')} (got ${JSON.stringify(def.keepLivePack)})`);
+  }
   def.__source = source;
   return def;
 }
+
+// Step 4: when the run keeps a snapshot of Pack B beside its record
+// (runs/<journey>/live/<stem>.json). `transitions` keeps the packs that
+// explain a change in the chain history; `always` keeps every one;
+// `never` keeps none. A file-sourced Pack B is never snapshotted — the
+// file is the snapshot.
+export const KEEP_LIVE_PACK_POLICIES = Object.freeze(['transitions', 'always', 'never']);
+export const KEEP_LIVE_PACK_DEFAULT = 'transitions';
 
 // gate.stack is validated at load time, not at run time: a typo in a row
 // id would otherwise breach every run with "no sample" and read as a stack
@@ -497,6 +513,90 @@ export function liveEvidenceFacts(canonicalB) {
   };
 }
 
+// ---------- step 4: chain history, versions, live-pack snapshot ----------
+
+// mcp.versions.<product> → value, from Pack B's fetcher annotations
+// (docs/MCP_INTEGRATION.md). Only the bare product keys — the provenance
+// keys (mcp.versions.<product>.source / .commit / …) are not versions.
+// null when the pack carries none (file-sourced B, or no version probe
+// answered): an absence, never "unchanged".
+export function liveVersions(canonicalB) {
+  const ann = canonicalB?.metadata?.annotations || {};
+  const out = {};
+  for (const key of Object.keys(ann).sort()) {
+    const m = /^mcp\.versions\.([^.]+)$/.exec(key);
+    if (m && ann[key] != null && String(ann[key]) !== '') out[m[1]] = String(ann[key]);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+// The snapshot decision for this run, before anything is written. Pure so
+// the policy is testable; `previousRun` is the newest record read before
+// this run's write (null on the first run). A previous record that carries
+// no chains (vantage lost, or written before chains were recorded) cannot
+// be diffed, so the pack is kept: a snapshot nobody can compare against is
+// cheaper than a transition nobody can explain.
+export function livePackDecision({ policy, previousRun, transition, outcome, packBIsFile, packBSource }) {
+  if (packBIsFile) return { kept: false, reason: `Pack B is a file (${packBSource})` };
+  const p = KEEP_LIVE_PACK_POLICIES.includes(policy) ? policy : KEEP_LIVE_PACK_DEFAULT;
+  if (p === 'never') return { kept: false, reason: 'keepLivePack: never' };
+  if (p === 'always') return { kept: true, reason: 'keepLivePack: always' };
+  if (!previousRun) return { kept: true, reason: 'first run (no previous record)' };
+  if (previousRun.outcome === 'vantage-lost') return { kept: true, reason: `previous run ${previousRun.startedAt || '?'} lost its vantage` };
+  if (!transition) return { kept: true, reason: `previous run ${previousRun.startedAt || '?'} carries no chain record to compare` };
+  if (transition.any) {
+    const bits = [];
+    if (transition.changed.length) bits.push(`${transition.changed.length} changed`);
+    if (transition.appeared.length) bits.push(`${transition.appeared.length} appeared`);
+    if (transition.disappeared.length) bits.push(`${transition.disappeared.length} disappeared`);
+    return { kept: true, reason: `chains changed since ${previousRun.startedAt || '?'}: ${bits.join(' · ')}` };
+  }
+  if (outcome === 'gate-failed') return { kept: true, reason: 'gate failed' };
+  return { kept: false, reason: `no transition since ${previousRun.startedAt || '?'}` };
+}
+
+// The snapshot filename shape beside a record: `live/<record stem>.json`.
+// Only this shape is ever read back or pruned — a hand-edited record path
+// cannot point outside the journey's live/ directory.
+export const LIVE_PACK_PATH_RE = /^live\/(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)\.json$/;
+const runStem = (startedAt) => String(startedAt).replace(/[:.]/g, '-');
+
+// Write Pack B's canonical JSON beside the record. Returns the livePack
+// field for the record; a failure lands as `error` (the caller notes it as
+// historyError) — the verdict already exists and is never thrown away.
+function writeLivePack(name, startedAt, canonical) {
+  const stem = runStem(startedAt);
+  const relPath = `live/${stem}.json`;
+  const dir = join(runsDir(name), 'live');
+  try {
+    const text = JSON.stringify(canonical, null, 2);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${stem}.json`), text);
+    return { path: relPath, bytes: Buffer.byteLength(text, 'utf8'), error: null };
+  } catch (e) {
+    return { path: null, bytes: null, error: `live pack ${relPath}: ${e.message}` };
+  }
+}
+
+// The parsed Pack B snapshot of a run record, or null when the record
+// kept none, the path is not the snapshot shape, or the file is gone /
+// unparseable (a pruned snapshot reads as absent, never as an error).
+export function readLivePack(name, record) {
+  const rel = record?.livePack?.path;
+  if (typeof rel !== 'string' || !LIVE_PACK_PATH_RE.test(rel)) return null;
+  try { return JSON.parse(readFileSync(join(runsDir(name), 'live', `${LIVE_PACK_PATH_RE.exec(rel)[1]}.json`), 'utf8')); } catch (_) { return null; }
+}
+
+// Pure: which files of live/ no longer have a run record. Only names of the
+// run-file shape are candidates; a snapshot whose record exists is never
+// named, whatever else the directory holds.
+export function pruneLiveSnapshots(recordFiles, liveFiles) {
+  const records = new Set((Array.isArray(recordFiles) ? recordFiles : []).filter(f => typeof f === 'string' && JOURNEY_RUN_FILE_RE.test(f)));
+  return (Array.isArray(liveFiles) ? liveFiles : [])
+    .filter(f => typeof f === 'string' && JOURNEY_RUN_FILE_RE.test(f) && !records.has(f))
+    .sort();
+}
+
 // ---------- the run ----------
 
 export async function runJourney(def, { baseDir } = {}) {
@@ -565,6 +665,26 @@ export async function runJourney(def, { baseDir } = {}) {
   };
   const breaches = evaluateGate(def.gate, facts);
   const rollup = diff.traceabilityGraph?.rollup || null;
+  const outcome = breaches.length ? 'gate-failed' : 'pass';
+
+  // Step 4: the per-chain verdicts this run saw, the previous record they
+  // are compared against (read BEFORE this run is written, so the diff is
+  // against history, never against itself) and the snapshot decision.
+  const branches = branchRecordsFromGraph(diff.traceabilityGraph);
+  const chains = chainSummary({ branches });
+  const previousRun = readJourneyRuns(def.name, { limit: 1 })[0] || null;
+  const transition = diffRunBranches(previousRun, { branches });
+  const livePackDecided = livePackDecision({
+    policy: def.keepLivePack, previousRun, transition, outcome,
+    packBIsFile: !!def.packB?.file, packBSource: b.source,
+  });
+  let livePack = { kept: false, path: null, reason: livePackDecided.reason };
+  let livePackError = null;
+  if (livePackDecided.kept) {
+    const written = writeLivePack(def.name, startedAt, b.canonical);
+    if (written.error) livePackError = written.error;
+    else livePack = { kept: true, path: written.path, bytes: written.bytes, reason: livePackDecided.reason };
+  }
 
   const record = {
     journey: def.name,
@@ -592,6 +712,22 @@ export async function runJourney(def, { baseDir } = {}) {
       integrityPct: rollup.integrityPct, intact: rollup.intact, partial: rollup.partial,
       broken: rollup.broken, undeclared: rollup.undeclared, declaredTotal: rollup.declaredTotal,
     } : null,
+    // Step 4: per requirement chain — the scored verdict, the on-wire ladder
+    // verdict and the degraded nodes with their blast radius (chain-history.mjs;
+    // caps 64 branches × 16 nodes, `truncated` marks a cut). [] when the
+    // graph has no branches.
+    branches,
+    // The listing summary over `branches` (counts, means, top exposure);
+    // GET /api/journeys recomputes the same function from the record.
+    chains,
+    // mcp.versions.<product> as Pack B reported them; null when none.
+    versions: liveVersions(b.canonical),
+    // What changed since the previous record's chains; null on the first
+    // run or when the previous record carries no chains (vantage lost).
+    transition,
+    // Whether Pack B was snapshotted beside this record and why (policy
+    // keepLivePack, default transitions). A file-sourced B is never kept.
+    livePack,
     conformance: { scorePercent: conformance.scorePercent, mustPercent: conformance.mustPercent, conformant: conformance.conformant, declaredTier: conformance.declaredTier },
     drift: {
       alignmentPct: facts.alignmentPct,
@@ -620,8 +756,9 @@ export async function runJourney(def, { baseDir } = {}) {
     // kept per run so the history is the time series; gate.stack reads it.
     stackEvidence: live.stackEvidence,
     gate: { thresholds: def.gate || {}, breaches },
-    outcome: breaches.length ? 'gate-failed' : 'pass',
+    outcome,
   };
+  if (livePackError) record.historyError = livePackError;
 
   writeRunRecord(def.name, startedAt, record);
   return record;
@@ -682,18 +819,33 @@ function writeRunRecord(name, startedAt, record) {
   const dir = runsDir(name);
   try {
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, `${startedAt.replace(/[:.]/g, '-')}.json`), JSON.stringify(record, null, 2));
+    writeFileSync(join(dir, `${runStem(startedAt)}.json`), JSON.stringify(record, null, 2));
   } catch (e) {
-    record.historyError = e.message;
+    record.historyError = [record.historyError, e.message].filter(Boolean).join('; ');
     return;
   }
   const keep = journeyRunRetention();
-  if (keep <= 0) return;
   const errors = [];
   let victims = [];
-  try { victims = pruneRunFiles(readdirSync(dir), keep); } catch (e) { errors.push(`list ${dir}: ${e.message}`); }
-  for (const f of victims) {
-    try { unlinkSync(join(dir, f)); } catch (e) { errors.push(`prune ${f}: ${e.message}`); }
+  if (keep > 0) {
+    try { victims = pruneRunFiles(readdirSync(dir), keep); } catch (e) { errors.push(`list ${dir}: ${e.message}`); }
+    for (const f of victims) {
+      try { unlinkSync(join(dir, f)); } catch (e) { errors.push(`prune ${f}: ${e.message}`); }
+    }
+  }
+  // Step 4: a live-pack snapshot outlives its record only until the next
+  // write — then it is an orphan and goes. Listed AFTER the record prune so
+  // the survivors are the records that still exist; a snapshot whose
+  // record exists is never touched. No live/ directory: nothing to do.
+  const liveDir = join(dir, 'live');
+  let liveFiles = null;
+  try { liveFiles = readdirSync(liveDir); } catch (_) { liveFiles = null; }
+  if (liveFiles) {
+    let orphans = [];
+    try { orphans = pruneLiveSnapshots(readdirSync(dir), liveFiles); } catch (e) { errors.push(`list ${dir}: ${e.message}`); }
+    for (const f of orphans) {
+      try { unlinkSync(join(liveDir, f)); } catch (e) { errors.push(`prune live/${f}: ${e.message}`); }
+    }
   }
   if (errors.length) {
     record.historyError = [record.historyError, ...errors].filter(Boolean).join('; ');
@@ -762,12 +914,89 @@ export function renderJourneyMarkdown(r) {
     `| Took | ${r.tookMs}ms |`,
   ];
   lines.push(...stackEvidenceTable(r.stackEvidence));
+  lines.push(...requirementChainsTable(r.branches));
+  lines.push(...transitionsSection(r));
   if (r.gate.breaches.length) {
     lines.push('', '### Gate breaches', '');
     for (const b of r.gate.breaches) lines.push(`- **${b.criterion}** — ${b.detail}`);
   }
   lines.push('', '_Verification evidence (declared vs observed); not incident-validated._');
   return lines.join('\n');
+}
+
+// Step 4: one row per requirement chain (cap CHAIN_REPORT_ROW_CAP), only
+// when the record carries chains — no table means no chains were declared
+// or recorded, never that every chain is intact. The worst node is the
+// first of the branch's degraded list (worst first by construction).
+const CHAIN_REPORT_ROW_CAP = 24;
+const mdCell = (v) => String(v ?? '-').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+function requirementChainsTable(branches) {
+  const rows = Array.isArray(branches) ? branches.filter(b => b && typeof b === 'object') : [];
+  if (!rows.length) return [];
+  const out = [
+    '',
+    '### Requirement chains',
+    '',
+    '| chain | verdict | ladder | integrity | ladder integrity | worst node |',
+    '|---|---|---|---|---|---|',
+  ];
+  for (const b of rows.slice(0, CHAIN_REPORT_ROW_CAP)) {
+    const worst = Array.isArray(b.degraded) && b.degraded[0] ? worstNodeCell(b.degraded[0]) : '-';
+    const more = Array.isArray(b.degraded) && b.degraded.length > 1 ? ` (+${b.degraded.length - 1}${b.truncated ? '+' : ''} more)` : (b.truncated ? ' (+more)' : '');
+    out.push(`| ${mdCell(b.title || b.rootKey)} | ${mdCell(b.verdict)} | ${mdCell(b.ladderVerdict)} | ${mdCell(b.integrityPct)}% | ${mdCell(b.ladderIntegrityPct)}% | ${mdCell(worst)}${more} |`);
+  }
+  if (rows.length > CHAIN_REPORT_ROW_CAP) out.push('', `_${rows.length - CHAIN_REPORT_ROW_CAP} more chain(s) not shown._`);
+  out.push('', '_Ladder columns are on-wire liveness beside the scored verdict — unscored; `unobserved` means the vantage could not look, never "absent"._');
+  return out;
+}
+
+function worstNodeCell(node) {
+  const bits = [String(node.status ?? '?')];
+  if (node.ladder?.detail) bits.push(String(node.ladder.detail));
+  const slos = node.blastRadius?.slos;
+  if (typeof slos === 'number') bits.push(`blinds ${slos} SLO${slos === 1 ? '' : 's'}`);
+  return `${node.label || node.key || '?'} (${bits.join(' · ')})`;
+}
+
+// What moved since the previous record, plus whether Pack B was kept.
+// A record written before transitions existed (no `transition` key) gets
+// no section; null means there was no previous record to compare.
+function transitionsSection(r) {
+  if (!Object.prototype.hasOwnProperty.call(r, 'transition') && !r.livePack) return [];
+  const out = ['', '### Transitions since previous run', ''];
+  const t = r.transition;
+  if (!t) {
+    out.push('_no previous run to compare_');
+  } else if (!t.any) {
+    out.push(`_no chain changed since ${t.since || 'the previous run'}_`);
+  } else {
+    for (const c of t.changed || []) {
+      const nodes = [];
+      if (c.nodes?.newlyDegraded?.length) nodes.push(`newly degraded: ${c.nodes.newlyDegraded.join(', ')}`);
+      if (c.nodes?.recovered?.length) nodes.push(`recovered: ${c.nodes.recovered.join(', ')}`);
+      out.push(`- **${c.title || c.rootKey}** — ${c.from?.verdict}/${c.from?.ladderVerdict} → ${c.to?.verdict}/${c.to?.ladderVerdict} (${c.direction})${nodes.length ? `; ${nodes.join('; ')}` : ''}`);
+    }
+    if (t.appeared?.length) out.push(`- appeared: ${t.appeared.join(', ')}`);
+    if (t.disappeared?.length) out.push(`- disappeared: ${t.disappeared.join(', ')}`);
+  }
+  if (r.livePack && typeof r.livePack === 'object') {
+    out.push('', r.livePack.kept
+      ? `live pack: kept (${r.livePack.path}, ${r.livePack.bytes} bytes) — ${r.livePack.reason}`
+      : `live pack: not kept — ${r.livePack.reason}`);
+  }
+  return out;
+}
+
+// Chain status of a run record in a few words, for `packc journey list`:
+// 'chains 8/10 intact · ladder 7 healthy · 2 degraded' (zero ladder
+// buckets other than healthy are omitted), or 'chains none' when the record
+// carries no chains or declares none.
+export function chainStatusLine(record) {
+  const s = chainSummary(record);
+  if (!s || !s.declaredTotal) return 'chains none';
+  const ladder = [`${s.ladder.healthy} healthy`];
+  for (const k of ['degraded', 'broken', 'unobserved']) if (s.ladder[k] > 0) ladder.push(`${s.ladder[k]} ${k}`);
+  return `chains ${s.intact}/${s.declaredTotal} intact · ladder ${ladder.join(' · ')}`;
 }
 
 // The samples this run saw, one row each (cap STACK_REPORT_ROW_CAP). Only

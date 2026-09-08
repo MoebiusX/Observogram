@@ -594,6 +594,53 @@ try {
          && seeded.families.notify?.value === 0 && seeded.families.logs?.outcome === 'not-in-inventory' && seeded.families.logs.value === null,
          'lastRun.stack.families picks the data row per family and keeps the honest non-answer', seeded?.families);
   assert(Object.keys(seeded?.families || {}).sort().join() === 'logs,notify,scrape', 'lastRun.stack.families lists only the families present', Object.keys(seeded?.families || {}));
+  const seededLast = jList3.journeys.find(j => j.name === 'stack-seeded')?.lastRun;
+  assert(seededLast && seededLast.chains === null && seededLast.transition === null, 'a record without branches reads lastRun.chains null and transition null', seededLast && { c: seededLast.chains, t: seededLast.transition });
+
+  // Step 4: a run record carrying requirement chains (seeded the way the
+  // runner writes them) surfaces lastRun.chains + lastRun.transition.
+  writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'chain-seeded.journey.yaml'), [
+    'name: chain-seeded',
+    `packA: { file: ${PAY.replaceAll('\\', '/')} }`,
+    `packB: { file: ${CUR.replaceAll('\\', '/')} }`,
+  ].join('\n'));
+  const chainAt = '2026-09-08T10:15:00.000Z';
+  mkdirSync(join(SMOKE_WORKSPACE, 'runs', 'chain-seeded'), { recursive: true });
+  writeFileSync(join(SMOKE_WORKSPACE, 'runs', 'chain-seeded', `${chainAt.replace(/[:.]/g, '-')}.json`), JSON.stringify({
+    journey: 'chain-seeded', startedAt: chainAt, tookMs: 5, outcome: 'pass',
+    grade: { score: 70, pass: true }, drift: { alignmentPct: 90 }, gate: { thresholds: {}, breaches: [] },
+    traceability: { integrityPct: 67, intact: 1, partial: 1, broken: 1, undeclared: 1, declaredTotal: 3 },
+    branches: [
+      { rootKey: 'slo::a', title: 'a', rootKind: 'slo', verdict: 'intact', ladderVerdict: 'healthy', integrityPct: 100, ladderIntegrityPct: 100, confidence: 'declared', missingRoles: [], degraded: [] },
+      { rootKey: 'slo::b', title: 'b', rootKind: 'slo', verdict: 'partial', ladderVerdict: 'degraded', integrityPct: 60, ladderIntegrityPct: 55, confidence: 'declared', missingRoles: [], degraded: [
+        { key: 'burn_rate::b', kind: 'burn_rate', label: 'burn-rate alert: b', status: 'drifted', ladder: { rung: 'exists', status: null, detail: 'no liveness field on the wire for this kind' }, blastRadius: { slos: 1, alerts: 0, panels: 0, dashboards: 0, routes: 2, remediations: 0, total: 3 }, deltaFields: ['windows[0].long'] },
+      ] },
+      { rootKey: 'slo::c', title: 'c', rootKind: 'slo', verdict: 'broken', ladderVerdict: 'broken', integrityPct: 40, ladderIntegrityPct: 30, confidence: 'inferred', missingRoles: ['action'], degraded: [
+        { key: 'scrape_job::payment', kind: 'scrape_job', label: 'payment', status: 'declared_only', ladder: { rung: 'exists', status: 'present_unhealthy', detail: 'on the wire but withheld from Pack B: every target down' }, blastRadius: { slos: 2, alerts: 2, panels: 1, dashboards: 1, routes: 2, remediations: 0, total: 8 }, deltaFields: [] },
+      ] },
+      { rootKey: 'slo::live', title: 'live', rootKind: 'slo', verdict: 'undeclared', ladderVerdict: 'undeclared', integrityPct: 0, ladderIntegrityPct: 0, confidence: 'inferred', missingRoles: [], degraded: [] },
+    ],
+    chains: null, versions: { prometheus: '2.53.0' },
+    transition: { since: '2026-09-08T10:00:00.000Z', changed: [
+      { rootKey: 'slo::c', title: 'c', from: { verdict: 'partial', ladderVerdict: 'degraded' }, to: { verdict: 'broken', ladderVerdict: 'broken' }, direction: 'worse', nodes: { newlyDegraded: ['payment'], recovered: [] } },
+      { rootKey: 'slo::a', title: 'a', from: { verdict: 'partial', ladderVerdict: 'degraded' }, to: { verdict: 'intact', ladderVerdict: 'healthy' }, direction: 'better', nodes: { newlyDegraded: [], recovered: ['x'] } },
+    ], appeared: [], disappeared: [], any: true },
+    livePack: { kept: false, path: null, reason: 'Pack B is a file (x)' },
+  }, null, 2));
+  const jList4 = await getJson(base, '/api/journeys');
+  const chainLast = jList4.journeys.find(j => j.name === 'chain-seeded')?.lastRun;
+  assert(chainLast?.chains && Object.keys(chainLast.chains).join() === 'declaredTotal,intact,partial,broken,undeclared,ladder,integrityPct,ladderIntegrityPct,degradedNodes,topExposure',
+         'GET /api/journeys lastRun.chains carries the chain summary shape', chainLast?.chains && Object.keys(chainLast.chains));
+  assert(chainLast.chains.declaredTotal === 3 && chainLast.chains.intact === 1 && chainLast.chains.partial === 1 && chainLast.chains.broken === 1 && chainLast.chains.undeclared === 1
+         && chainLast.chains.ladder.healthy === 1 && chainLast.chains.ladder.degraded === 1 && chainLast.chains.ladder.broken === 1 && chainLast.chains.ladder.unobserved === 0
+         && chainLast.chains.integrityPct === 67 && chainLast.chains.ladderIntegrityPct === 62 && chainLast.chains.degradedNodes === 2,
+         'lastRun.chains counts verdicts and ladder verdicts over the declared chains, means the integrities and counts degraded nodes', chainLast.chains);
+  assert(chainLast.chains.topExposure?.label === 'payment' && chainLast.chains.topExposure.kind === 'scrape_job' && chainLast.chains.topExposure.slos === 2 && chainLast.chains.topExposure.alerts === 2,
+         'lastRun.chains.topExposure is the degraded node that blinds the most SLOs', chainLast.chains.topExposure);
+  assert(JSON.stringify(chainLast.transition) === JSON.stringify({ any: true, changed: 2, worse: 1 }), 'lastRun.transition summarises any / changed / worse', chainLast.transition);
+  const chainRuns = await getJson(base, '/api/journeys/chain-seeded/runs?limit=5');
+  assert(chainRuns.runs[0]?.branches?.length === 4 && chainRuns.runs[0].transition.changed.length === 2 && chainRuns.runs[0].livePack.kept === false,
+         'GET /api/journeys/:name/runs hands the record through unchanged (branches, transition, livePack)');
 
   const jRun404 = await fetch(`${base}/api/journeys/never-saved/run`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',

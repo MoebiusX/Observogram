@@ -61,6 +61,7 @@ import { orgWorkspaceRoot } from './tenancy.mjs';
 import { brandEnv } from '../tools/lib/brand-env.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
 import { stackSummary } from '../tools/lib/stack-evidence.mjs';
+import { chainSummary } from '../tools/lib/chain-history.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -855,6 +856,16 @@ app.get('/api/journeys', (req, res) => {
           // when the record carries no stackEvidence (file-sourced B,
           // pre-step-3 record): an absence, never a healthy stack.
           stack: stackSummary(lastRun),
+          // Step 4: the requirement-chain summary of the last run (counts
+          // by verdict and ladder verdict, top exposure) and whether its
+          // chains moved since the run before. null when the record
+          // carries no chains / no previous run to compare.
+          chains: chainSummary(lastRun),
+          transition: lastRun.transition && typeof lastRun.transition === 'object' ? {
+            any: !!lastRun.transition.any,
+            changed: Array.isArray(lastRun.transition.changed) ? lastRun.transition.changed.length : 0,
+            worse: Array.isArray(lastRun.transition.changed) ? lastRun.transition.changed.filter(c => c && c.direction === 'worse').length : 0,
+          } : null,
         },
       };
     });
