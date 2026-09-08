@@ -1457,6 +1457,16 @@ const SYN = (f) => {
   delete j._synthetic; delete j._recorded;
   return j;
 };
+// The Grafana fixtures are the 2026-09-08 local-stack recording
+// (tools/fixtures/mcp/README.md, "Four evidence sources"): three
+// datasources, of which `Loki (absent)` points at a service the stack does
+// not run — its health answer is the primary file ({ supported: false,
+// error: 'HTTP 400 …' }: Grafana's "the check ran and failed"); every
+// other uid answers the passed check recorded as .ok.json. Expected values
+// below are read from the files that are replayed, never re-typed.
+const HEALTH_ERR = SYN('grafana_datasource_health.json');
+const HEALTH_OK = SYN('grafana_datasource_health.ok.json');
+const healthFor = (uid) => (uid === HEALTH_ERR.datasource?.uid ? HEALTH_ERR : HEALTH_OK);
 {
   const calls = [];
   const callTool = async (name, args = {}) => {
@@ -1464,11 +1474,7 @@ const SYN = (f) => {
     if (name === 'alertmanager_status') return SYN('alertmanager_status.json');
     if (name === 'alertmanager_silences') return SYN('alertmanager_silences.json');
     if (name === 'grafana_datasources') return SYN('grafana_datasources.json');
-    if (name === 'grafana_datasource_health') {
-      if (args.uid === 'synthetic-loki') return { status: 'ERROR', message: 'x'.repeat(400) };
-      if (args.uid === 'synthetic-jaeger') throw new Error('grafana_datasource_health: 502');
-      return SYN('grafana_datasource_health.json');
-    }
+    if (name === 'grafana_datasource_health') return healthFor(args.uid);
     if (name === 'grafana_contact_points') return SYN('grafana_contact_points.json');
     throw new Error(`unexpected tool ${name}`);
   };
@@ -1482,13 +1488,56 @@ const SYN = (f) => {
 
   const gf = await observeGrafana({ callTool, quiet: quietStub, discoveredToolNames: names, hasToolsList: true,
     datasourcesTool: 'grafana_datasources', datasourceHealthTool: 'grafana_datasource_health', contactPointsTool: 'grafana_contact_points' });
-  assert(gf.datasources.length === 3 && gf.datasources[0].uid === 'synthetic-prom' && gf.datasources[0].type === 'prometheus',
-         'grafana_datasources → [{uid,name,type}]', gf.datasources[0]);
-  assert(gf.datasources[0].health === 'ok' && gf.datasources[1].health === 'error' && gf.datasources[2].health === 'unknown',
-         'datasource health ok / error / unknown (tool errored)', gf.datasources.map(d => d.health));
-  assert(gf.datasources[1].message.length === 200, 'health message trimmed to 200 chars', gf.datasources[1].message.length, 200);
-  assert(gf.contactPoints.count === 2 && gf.contactPoints.names.join(',') === 'teams-sev1,email-oncall', 'grafana_contact_points → count + names', gf.contactPoints);
-  assert(calls.filter(c => c.name === 'grafana_datasource_health').length === 3, 'one health call per datasource uid', calls.filter(c => c.name === 'grafana_datasource_health').length, 3);
+  const dsList = SYN('grafana_datasources.json').datasources;
+  const cpList = SYN('grafana_contact_points.json').contactPoints;
+  const lokiUid = HEALTH_ERR.datasource.uid;
+  assert(gf.datasources.length === dsList.length && gf.datasources.every((d, i) => d.uid === dsList[i].uid && d.name === dsList[i].name && d.type === dsList[i].type),
+         'grafana_datasources → [{uid,name,type}] in the recorded order', gf.datasources);
+  const byUid = Object.fromEntries(gf.datasources.map(d => [d.uid, d]));
+  assert(byUid[lokiUid].health === 'error' && byUid[lokiUid].message === HEALTH_ERR.health.error,
+         'a { supported: false, error: "HTTP 400 …" } answer (Grafana: the check ran and failed) reads error, the error text as message', byUid[lokiUid]);
+  assert(dsList.filter(d => d.uid !== lokiUid).every(d => byUid[d.uid].health === 'ok' && byUid[d.uid].message === HEALTH_OK.health.message),
+         'a { supported: true, status: OK, message } answer reads ok with its message', gf.datasources.map(d => [d.name, d.health]));
+  const unhealthy = gf.datasources.filter(d => d.health === 'error').map(d => d.name);
+  assert(unhealthy.join(',') === HEALTH_ERR.datasource.name,
+         `the unhealthy datasources name exactly the recorded failed check (${HEALTH_ERR.datasource.name})`, unhealthy);
+  assert(gf.contactPoints.count === cpList.length && gf.contactPoints.names.join(',') === cpList.map(c => c.name).join(','),
+         'grafana_contact_points (receivers API: name + active + integrations, no uid) → count + names', gf.contactPoints);
+  assert(calls.filter(c => c.name === 'grafana_datasource_health').length === dsList.length, 'one health call per datasource uid', calls.filter(c => c.name === 'grafana_datasource_health').length, dsList.length);
+  assert(gf.toolsAnswered.join(',') === 'grafana_datasources,grafana_datasource_health,grafana_contact_points' && gf.error === null,
+         'all three Grafana tools answered; a failed check is a verdict, not a probe error', [gf.toolsAnswered, gf.error]);
+
+  // Edge cases on the same datasource list, verdicts typed by hand: a tool
+  // error (502) is unknown with the error; a 400-char message is trimmed to
+  // 200; an unsupported check that is NOT an HTTP 400 (a Grafana 500, a
+  // network error) is unknown — "not checked", never "not unhealthy" —
+  // keeping its message; a supported answer without a status is unknown.
+  const [u0, u1, u2] = dsList.map(d => d.uid);
+  const tEdge = async (name, args = {}) => {
+    if (name === 'grafana_datasources') return SYN('grafana_datasources.json');
+    if (name === 'grafana_datasource_health') {
+      if (args.uid === u0) throw new Error('grafana_datasource_health: 502');
+      if (args.uid === u1) return { status: 'ERROR', message: 'x'.repeat(400) };
+      return { datasource: { uid: u2 }, health: { supported: false, error: `HTTP 500: Internal Server Error — /api/datasources/uid/${u2}/health` } };
+    }
+    throw new Error(`unexpected tool ${name}`);
+  };
+  const gfEdge = await observeGrafana({ callTool: tEdge, quiet: quietStub, discoveredToolNames: names, hasToolsList: true,
+    datasourcesTool: 'grafana_datasources', datasourceHealthTool: 'grafana_datasource_health', contactPointsTool: null });
+  const edge = Object.fromEntries(gfEdge.datasources.map(d => [d.uid, d]));
+  assert(edge[u0].health === 'unknown' && /502/.test(edge[u0].message), 'a health tool error → unknown with the error as message', edge[u0]);
+  assert(edge[u1].health === 'error' && edge[u1].message.length === 200, 'health message trimmed to 200 chars', edge[u1].message.length, 200);
+  assert(edge[u2].health === 'unknown' && /HTTP 500/.test(edge[u2].message),
+         'supported: false without an HTTP 400 → unknown (not checked) with its message — never error, never ok', edge[u2]);
+  assert(gfEdge.toolsAnswered.includes('grafana_datasource_health') && gfEdge.error === null,
+         'the health tool counts as answered when any uid answered; a per-uid tool error stays on that datasource', [gfEdge.toolsAnswered, gfEdge.error]);
+  const tNoStatus = async (name) => (name === 'grafana_datasources'
+    ? { datasources: [{ uid: 'a', name: 'A', type: 'x' }] }
+    : { datasource: { uid: 'a' }, health: { supported: true, message: 'no status here' } });
+  const gfNoStatus = await observeGrafana({ callTool: tNoStatus, quiet: quietStub, discoveredToolNames: names, hasToolsList: true,
+    datasourcesTool: 'grafana_datasources', datasourceHealthTool: 'grafana_datasource_health', contactPointsTool: null });
+  assert(gfNoStatus.datasources[0].health === 'unknown' && gfNoStatus.datasources[0].message === 'no status here',
+         'supported: true without a status → unknown, message kept', gfNoStatus.datasources[0]);
 
   // Health cap: 12 datasources → only 10 health calls.
   const many = { datasources: Array.from({ length: 12 }, (_, i) => ({ uid: `ds-${i}`, name: `ds ${i}`, type: 'prometheus' })) };
@@ -1660,7 +1709,7 @@ const SYN = (f) => {
     if (name === 'alertmanager_status') return SYN('alertmanager_status.json');
     if (name === 'alertmanager_silences') return SYN('alertmanager_silences.json');
     if (name === 'grafana_datasources') return SYN('grafana_datasources.json');
-    if (name === 'grafana_datasource_health') return SYN('grafana_datasource_health.json');
+    if (name === 'grafana_datasource_health') return healthFor(args.uid);
     if (name === 'grafana_contact_points') return SYN('grafana_contact_points.json');
     return {};
   }, stackTools);
@@ -1674,8 +1723,11 @@ const SYN = (f) => {
            'end-to-end: victoriametrics seen via vm_app_version → its notification alias is preferred', notify);
     assert(rowById(fetched.stackSamples.rows, 'wal_corruptions').outcome === 'not-in-inventory',
            'end-to-end: the metric_names inventory gates eligibility', rowById(fetched.stackSamples.rows, 'wal_corruptions'));
-    assert(fetched.alertmanagerObserved.version === SYN('alertmanager_status.json').version && fetched.grafanaObserved.datasources.length === 3,
+    assert(fetched.alertmanagerObserved.version === SYN('alertmanager_status.json').version && fetched.grafanaObserved.datasources.length === SYN('grafana_datasources.json').datasources.length,
            'end-to-end: Alertmanager and Grafana status surfaces observed', [fetched.alertmanagerObserved?.version, fetched.grafanaObserved?.datasources?.length]);
+    assert(fetched.grafanaObserved.datasources.filter(d => d.health === 'error').map(d => d.name).join(',') === HEALTH_ERR.datasource.name
+           && fetched.grafanaObserved.datasources.filter(d => d.health === 'ok').length === fetched.grafanaObserved.datasources.length - 1,
+           'end-to-end: the recorded failed check reads error through the wire, every other datasource ok', fetched.grafanaObserved.datasources.map(d => [d.name, d.health]));
     const unmatched = fetched.unmatchedTools.map(t => t.name);
     assert(!unmatched.includes('metrics_query') && !unmatched.includes('alertmanager_status') && !unmatched.includes('grafana_contact_points'),
            'answered step-2 tools are wired (not in unmatchedTools)', unmatched);

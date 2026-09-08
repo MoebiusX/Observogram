@@ -967,20 +967,41 @@ export async function observeAlertmanager({
   return out;
 }
 
+// The verdict of one datasource, from the object the `health-object`
+// shape located (response-shapes.mjs describes the envelope) →
+// { health: 'ok' | 'error' | 'unknown', message }.
+//
+// otel-mcp-server answers { supported: true, status: 'OK' | 'ERROR',
+// message } when Grafana's health endpoint answered 2xx, and
+// { supported: false, error } when it did not. Grafana answers a check
+// that RAN and FAILED (backend unreachable) with HTTP 400 — verified
+// 2026-09-08 on Grafana 12.4.4; an unknown uid answers 500 — so an
+// unsupported answer whose error names HTTP 400 is a failed check:
+// 'error', with the error text as the message. Any other unsupported
+// answer (a 5xx, a network error, a datasource type with no check) is
+// 'unknown' with its message — "not checked", never "not unhealthy" —
+// and so is a supported answer that carries no status. Bare { status,
+// message } and { ok } verdicts read as before.
 function normDatasourceHealth(obj) {
+  if (obj?.supported === false) {
+    const reason = asString(obj.error) ?? asString(obj.message);
+    return { health: /\bHTTP 400\b/.test(reason || '') ? 'error' : 'unknown', message: reason };
+  }
   const status = typeof obj?.status === 'string' ? obj.status.toLowerCase() : null;
-  if (status === 'ok' || status === 'success' || obj?.ok === true) return 'ok';
-  if (status === 'error' || status === 'err' || obj?.ok === false) return 'error';
-  return 'unknown';
+  const message = trimError(obj?.message);
+  if (status === 'ok' || status === 'success' || obj?.ok === true) return { health: 'ok', message };
+  if (status === 'error' || status === 'err' || obj?.ok === false) return { health: 'error', message };
+  return { health: 'unknown', message };
 }
 
 // Grafana datasources (+ per-uid health, capped) and contact points →
 // { datasources: [{uid,name,type,health,message}] | null,
 //   contactPoints: { count, names } | null, toolsAnswered, error } or
 // null when NONE of the tools is advertised. Health is 'unknown' (no
-// verdict) when the health tool is not advertised, errored, or the
-// datasource is beyond the cap — an `unknown` is "not checked", never
-// "not unhealthy". An advertised tool that fails lands in `error` (see
+// verdict) when the health tool is not advertised, errored, Grafana
+// could not run the check (normDatasourceHealth), or the datasource is
+// beyond the cap — an `unknown` is "not checked", never "not unhealthy".
+// An advertised tool that fails lands in `error` (see
 // observeAlertmanager) and the result stays non-null.
 export async function observeGrafana({
   callTool, quiet, discoveredToolNames = null, hasToolsList = false,
@@ -1022,9 +1043,9 @@ export async function observeGrafana({
             if (!firstHealthError) firstHealthError = hErr;
             continue;
           }
-          const obj = locateObject('health-object', h) || {};
-          ds.health = normDatasourceHealth(obj);
-          ds.message = trimError(obj.message);
+          const verdict = normDatasourceHealth(locateObject('health-object', h) || {});
+          ds.health = verdict.health;
+          ds.message = verdict.message;
           healthAnswered = true;
         }
         if (healthAnswered) out.toolsAnswered.push(datasourceHealthTool);

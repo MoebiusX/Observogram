@@ -83,6 +83,29 @@ const tenDashboards = (() => {
   return { ...d, results };
 })();
 
+// Datasource health, MIXED across uids: the datasources fixture names the
+// uids the recorder asks about; the FIRST answers a non-OK verdict, every
+// other uid an OK one — so a --write run always has both cases to keep,
+// whichever verdict the primary fixture happens to carry. Each case
+// replays its recorded file when one exists (<tool>.ok.json /
+// <tool>.error.json, or the primary file when it is that case), else a
+// bare verdict.
+const datasourceUids = (() => {
+  const d = synthetic('grafana_datasources.json');
+  return (Array.isArray(d) ? d : (d.datasources || d.data || [])).map(x => x.uid);
+})();
+const healthByCase = (() => {
+  const primary = synthetic('grafana_datasource_health.json');
+  const doc = primary.health ?? primary.data ?? primary;
+  const primaryOk = doc.supported !== false && String(doc.status ?? '').toUpperCase() === 'OK';
+  const recorded = (f) => (existsSync(resolve(FIXTURES, f)) ? synthetic(f) : null);
+  return {
+    ok: recorded('grafana_datasource_health.ok.json') ?? (primaryOk ? primary : { status: 'OK', message: 'fake: healthy' }),
+    error: recorded('grafana_datasource_health.error.json') ?? (primaryOk ? { status: 'ERROR', message: 'fake: connection refused' } : primary),
+  };
+})();
+const healthAnswer = (uid) => (uid === datasourceUids[0] ? healthByCase.error : healthByCase.ok);
+
 // Handler returns { result } or { isError: true, text }. `reqUrl` is the
 // request path the fake saw (query string included) — one error echoes
 // it, the way an upstream proxy might, so the suite can prove a URL-borne
@@ -104,7 +127,7 @@ function answer(name, args, reqUrl = '') {
     case 'alertmanager_status': return synthetic('alertmanager_status.json');
     case 'alertmanager_silences': return synthetic('alertmanager_silences.json');
     case 'grafana_datasources': return synthetic('grafana_datasources.json');
-    case 'grafana_datasource_health': return synthetic('grafana_datasource_health.json');
+    case 'grafana_datasource_health': return healthAnswer(args?.uid);
     case 'grafana_contact_points': return synthetic('grafana_contact_points.json');
     case 'custom_tool_x': return { ok: true };
     default: return { isError: true, text: `unknown tool ${name}` };
@@ -161,6 +184,11 @@ const FULL_TOOLS = ['metrics_label_values', 'metrics_targets', 'vmalert_rules', 
 
 const tmp = mkdtempSync(join(tmpdir(), 'observogram-recorder-'));
 const fake = await startFakeMcp(FULL_TOOLS);
+// The fake's own host:port — what must never land in a committed file. A
+// backend URL INSIDE a replayed payload (Grafana's loopback address in a
+// failed check's error, on the local-stack recording) is payload, not
+// the MCP host, and is not what this guard is about.
+const fakeHost = new URL(fake.url).host;
 try {
   // ---- 1. report mode ----
   const reportDir = join(tmp, 'report');
@@ -180,7 +208,9 @@ try {
   assert(/tsdb\/tsdb_active_series\s+prometheus\s+data 123456 count/.test(rep.stdout), 'a count row reads its integer value');
   assert(/rows with data: 3\/24/.test(rep.stdout), 'the summary counts rows with data (3 of 24 on this fake: ratio, targets down = 0, active series)', rep.stdout.split('\n').find(l => l.includes('rows with data')));
   assert(/alertmanager_status: version .* — shape status-object ok/.test(rep.stdout), 'the Alertmanager status tool is summarised with its shape verdict');
-  assert(/grafana_datasource_health: .* (OK|answered)/.test(rep.stdout), 'datasource health is asked per uid');
+  const healthLine = rep.stdout.split('\n').find(l => l.includes('grafana_datasource_health:')) || '';
+  assert(/\bOK\b/.test(healthLine) && /\b(ERROR|not supported)\b/.test(healthLine), 'datasource health is asked per uid and the report prints each uid\'s verdict (an OK and a non-OK one here)', healthLine);
+  assert(new RegExp(`cases seen: ok \\(${datasourceUids[1]}\\), error \\(${datasourceUids[0]}\\)`).test(healthLine), 'the report names the first uid of each verdict it saw', healthLine);
   assert(/scrape_configs\s+metrics_targets answered/.test(rep.stdout) && /recording_rules\s+vmalert_rules answered/.test(rep.stdout), 'probe families report their winning tool');
   const vmCalls = fake.calls.filter(c => c.name === 'metrics_query' && String(c.arguments?.query).includes('vm_promscrape_targets'));
   assert(vmCalls.length === 0, 'not-in-inventory aliases are never called');
@@ -234,7 +264,7 @@ try {
     const j = read(join('recorded-stack', f));
     assert(j._recorded?.tool === 'metrics_query' && typeof j._recorded.query === 'string' && j._recorded.row === f.replace(/\.json$/, ''),
       `${f}: carries _recorded provenance (tool, query, row)`, j._recorded);
-    assert(j._recorded.server === undefined && !JSON.stringify(j).includes('127.0.0.1'),
+    assert(j._recorded.server === undefined && !JSON.stringify(j).includes(fakeHost),
       `${f}: committed provenance names no server host (the maintainer's MCP hostname stays out of git)`, j._recorded);
     const v = validateResponseShape(capability('stack_self_metrics').responseShape, j);
     assert(v.ok, `${f}: satisfies the instant-vector shape`, v);
@@ -252,11 +282,29 @@ try {
     if (!existsSync(join(outDir, file))) continue;
     const j = read(file);
     assert(j._synthetic === undefined, `${file}: carries no _synthetic marker`);
-    assert(!JSON.stringify(j).includes('127.0.0.1'), `${file}: names no server host`);
+    assert(j._recorded?.server === undefined && !JSON.stringify(j).includes(fakeHost), `${file}: names no server host`);
     const v = validateResponseShape(capability(id).responseShape, j);
     assert(v.ok, `${file}: satisfies shape ${capability(id).responseShape}`, v);
   }
-  assert(read('grafana_datasource_health.json')._recorded?.uid, 'datasource health names the uid it was asked for');
+  // Both health cases: the primary file is the FIRST uid's answer (non-OK
+  // on this fake); the first OK verdict from another uid is kept beside it
+  // with its uid and case; the non-OK case IS the primary answer, so no
+  // duplicate .error.json is written.
+  const health = read('grafana_datasource_health.json');
+  assert(health._recorded?.uid === datasourceUids[0] && health._recorded.case === undefined,
+    'datasource health: the primary file is the first uid\'s answer and names that uid', health._recorded);
+  const okFile = 'grafana_datasource_health.ok.json';
+  assert(existsSync(join(outDir, okFile)), `${okFile}: the first OK verdict from another uid is kept beside the primary file`);
+  if (existsSync(join(outDir, okFile))) {
+    const ok = read(okFile);
+    assert(ok._recorded?.case === 'ok' && ok._recorded.uid === datasourceUids[1], `${okFile}: provenance carries the uid and the case`, ok._recorded);
+    const v = validateResponseShape(capability('grafana_datasource_health').responseShape, ok);
+    assert(v.ok, `${okFile}: satisfies shape ${capability('grafana_datasource_health').responseShape}`, v);
+    const okDoc = ok.health ?? ok.data ?? ok;
+    assert(String(okDoc.status ?? '').toUpperCase() === 'OK' || okDoc.ok === true, `${okFile}: carries the OK verdict`, okDoc);
+  }
+  assert(!existsSync(join(outDir, 'grafana_datasource_health.error.json')),
+    'no .error.json when the non-OK case is the primary file itself (identical answers are not duplicated)');
 
   const walk = (dir) => readdirSync(dir, { withFileTypes: true })
     .flatMap(d => (d.isDirectory() ? walk(join(dir, d.name)) : [join(dir, d.name)]));

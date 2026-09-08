@@ -862,7 +862,10 @@ try {
       if (name === 'alertmanager_status') return SYN('alertmanager_status.json');
       if (name === 'alertmanager_silences') return SYN('alertmanager_silences.json');
       if (name === 'grafana_datasources') return SYN('grafana_datasources.json');
-      if (name === 'grafana_datasource_health') return SYN('grafana_datasource_health.json');
+      // Per uid, like the recording: the primary health file is the
+      // datasource Grafana could not check (HTTP 400 — a failed check), every
+      // other uid answers the passed check.
+      if (name === 'grafana_datasource_health') return args.uid === SYN('grafana_datasource_health.json').datasource?.uid ? SYN('grafana_datasource_health.json') : SYN('grafana_datasource_health.ok.json');
       if (name === 'grafana_contact_points') return SYN('grafana_contact_points.json');
       return {};
     });

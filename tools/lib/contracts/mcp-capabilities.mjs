@@ -220,21 +220,29 @@ export const CAPABILITIES = Object.freeze({
   grafana_datasources: {
     kind: 'evidence',
     responseShape: 'datasources',
-    // Grafana /api/datasources: [{ uid, name, type }].
+    // Grafana /api/datasources, wrapped by otel-mcp-server as
+    // { count, datasources: [{ id, uid, orgId, name, type, typeName,
+    // access, url, isDefault, readOnly, basicAuth, jsonData,
+    // secureJsonFields }] } (recorded 2026-09-08).
     candidates: [{ tool: 'grafana_datasources' }],
   },
   grafana_datasource_health: {
     kind: 'enrich',
     responseShape: 'health-object',
     // One call per datasource uid (capped by the caller) after
-    // grafana_datasources answers: { status, message }.
+    // grafana_datasources answers. otel-mcp-server 1.8.0 answers
+    // { datasource, health: { supported, status, message, details } };
+    // a check Grafana could not run is { supported: false, error } —
+    // HTTP 400 there is "the check ran and failed" (response-shapes.mjs).
     candidates: [{ tool: 'grafana_datasource_health' }],
   },
   grafana_contact_points: {
     kind: 'evidence',
     responseShape: 'contact-points',
-    // Grafana provisioning API /api/v1/provisioning/contact-points:
-    // [{ uid, name, type }].
+    // Grafana receivers API
+    // /api/alertmanager/grafana/config/api/v1/receivers, wrapped as
+    // { count, contactPoints: [{ name, active, integrations }] } — no
+    // uid, type or settings (recorded 2026-09-08, otel-mcp-server 1.8.0).
     candidates: [{ tool: 'grafana_contact_points' }],
   },
 });

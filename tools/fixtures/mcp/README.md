@@ -1,17 +1,19 @@
 # Recorded MCP response fixtures
 
 Real responses recorded 2026-06-12 through 2026-09-08 from the Krystaline
-otel-mcp-server, trimmed for size (fewer rules / targets / dashboards /
-metric names) with the field structure preserved verbatim — including
-authentic extras the adapters must tolerate (`health`, `lastEvaluation`, a
-`down` target with a populated `lastError`, dashboard `tags`/`folderUid`, …).
+otel-mcp-server tiers and — for the Grafana-backed tools — from the local
+Docker stack fronted by otel-mcp-server 1.8.0, trimmed for size (fewer
+rules / targets / dashboards / metric names) with the field structure
+preserved verbatim — including authentic extras the adapters must tolerate
+(`health`, `lastEvaluation`, a `down` target with a populated `lastError`,
+dashboard `tags`/`folderUid`, a datasource check Grafana could not run, …).
 
 These are the contract-test inputs for `tools/test-contract-shapes.mjs`:
 each fixture must satisfy its capability's declared response shape
 (`tools/lib/contracts/response-shapes.mjs` — critical fields required,
 extras allowed), and `adapt(fixture)` is pinned in `adapted/`.
 
-## Three evidence sources
+## Four evidence sources
 
 The fixtures here come from the table's live evidence sources. The
 public Krystaline tier answers through the MCP (what that stack happens to
@@ -31,11 +33,50 @@ exactly pinned version — which
 `npm run test:stack:live` (`tools/test-stack-live.mjs`) checks directly:
 every `requires` name on the product's own exposition, every lazily
 registered counter after a stimulus, every `expr` on a real Prometheus,
-every alias's `verified` stamp against the compose image. Nothing from the
-stack is committed as a fixture (its ledger is the git-ignored
+every alias's `verified` stamp against the compose image. Nothing from that
+suite is committed as a fixture (its ledger is the git-ignored
 `.tmp-stack-live-ledger.json`); the stamp on each alias and the
 "Live validation tier" section of `docs/MCP_INTEGRATION.md` carry that
 evidence.
+
+The fourth — and today the **only place the Grafana-backed tools answer**
+— is that same Docker stack fronted by a local **otel-mcp-server 1.8.0**
+(the Krystaline tiers either answer `HTTP 401` from Grafana or do not
+advertise the tools). Recorded 2026-09-08 into `grafana_datasources.json`,
+`grafana_datasource_health.json` (+ `.ok.json`) and
+`grafana_contact_points.json`; `grafana_dashboards_search.json` keeps its
+richer 2026-06-12 Krystaline recording (the stack answers the same
+`{ count, results }` shape with its single seeded dashboard). Reproduction:
+
+    docker compose -f docker/stack.compose.yaml up -d --wait
+    # in a checkout of otel-mcp-server v1.8.0 (no MCP auth keys configured):
+    PROMETHEUS_URL=http://127.0.0.1:18428 VMALERT_URL=http://127.0.0.1:18880 \
+      ALERTMANAGER_URL=http://127.0.0.1:19093 GRAFANA_URL=http://127.0.0.1:13030 \
+      GRAFANA_AUTH_BASIC=admin:admin node dist/index.js --http 3011
+    MCP_URL=http://127.0.0.1:3011/mcp npm run record-fixtures -- --write --out .tmp-recorded-local
+    # review .tmp-recorded-local/ (payloads untouched; add the _recorded
+    # scrubbed / server lines by hand), copy the files you keep here
+
+State seeded through the Grafana admin API on top of the provisioned
+`stack-prom` datasource (there is no seeding script; re-create it by hand):
+datasources `VictoriaMetrics (stack)` → `http://victoriametrics:8428` and
+`Loki (absent)` → `http://loki:3100` (no such service in the stack — the
+failed-check case), contact point `webhook-oncall` (webhook →
+`https://example.invalid/oncall`), dashboard `Orders availability (stack
+validation)`. Two things the recording proved that the hand-written files
+had wrong: `grafana_datasource_health` answers `{ datasource, health }`,
+where `health` is `{ supported: true, status: 'OK' | 'ERROR', message,
+details }` when Grafana's health endpoint answered 2xx and
+`{ supported: false, error: 'HTTP 400: Bad Request — <url>' }` when it did
+not (verified on Grafana 12.4.4: a datasource whose backend is unreachable
+answers `HTTP 400` on `/api/datasources/uid/:uid/health` — the check ran and
+failed; an unknown uid answers `HTTP 500`); and `grafana_contact_points`
+answers the **receivers API**
+(`/api/alertmanager/grafana/config/api/v1/receivers`: `{ count,
+contactPoints: [{ name, active, integrations: [{ name, sendResolved,
+lastNotifyAttempt, lastNotifyAttemptDuration }] }] }` — no `uid`, `type` or
+`settings`, so no webhook URL or secret ever rides in it), not the
+provisioning shape.
 
 ## Provenance
 
@@ -58,28 +99,33 @@ recording that drops it.
 | `synthetic/metrics_query.instant-vector.prometheus-api.json` | `metrics_query` | stack_self_metrics, build_info_versions | synthetic (`{ data: { result } }`, Prometheus API) | 2026-09-07 |
 | `alertmanager_status.json` | `alertmanager_status` | alertmanager_status (`status-object`) | recording — `_recorded.scrubbed` lists the trim: `config` (the full Alertmanager configuration: receivers, SMTP settings, internal hostnames) removed by hand, same as the 2026-09-07 recording it replaces; the shape needs only `version` / `uptime` / `cluster` | 2026-09-08, **authenticated tier** (Alertmanager 0.27.0) |
 | `synthetic/alertmanager_silences.json` | `alertmanager_silences` | alertmanager_silences (`silences`) | synthetic — the 2026-09-07 and 2026-09-08 recordings both came back `{ count: 0, silences: [] }` (no active silences), which pins nothing about the item fields, so the synthetic file stays until a recording with entries exists | 2026-09-07 |
-| `synthetic/grafana_datasources.json` | `grafana_datasources` | grafana_datasources (`datasources`) | synthetic | 2026-09-07 |
-| `synthetic/grafana_datasource_health.json` | `grafana_datasource_health` | grafana_datasource_health (`health-object`) | synthetic | 2026-09-07 |
-| `synthetic/grafana_contact_points.json` | `grafana_contact_points` | grafana_contact_points (`contact-points`) | synthetic | 2026-09-07 |
+| `grafana_datasources.json` | `grafana_datasources` | grafana_datasources (`datasources`) — the provisioned `stack-prom` plus the two admin-seeded datasources | recording — nothing scrubbed (`_recorded.scrubbed: []`; `jsonData` and `secureJsonFields` are empty on every datasource; the compose service hostnames are the stack's own); `_recorded.server` added by hand | 2026-09-08, **local stack** (otel-mcp-server 1.8.0 over `docker/stack.compose.yaml`, Grafana 12.4.4) |
+| `grafana_datasource_health.json` | `grafana_datasource_health` | grafana_datasource_health (`health-object`) — the primary file: uid `ffxm6mvg1ohkwc` (`Loki (absent)`), `{ supported: false, error: 'HTTP 400 …' }`, the check Grafana ran and failed | recording — nothing scrubbed; the loopback Grafana URL inside the error is the stack's own published port (payload, kept verbatim); `_recorded.server` by hand | 2026-09-08, **local stack** |
+| `grafana_datasource_health.ok.json` | `grafana_datasource_health` | grafana_datasource_health (`health-object`) — uid `stack-prom` (`Prometheus (stack)`), `_recorded.case: ok`: `{ supported: true, status: 'OK', message, details }` | recording — nothing scrubbed; `_recorded.server` by hand | 2026-09-08, **local stack** |
+| `grafana_contact_points.json` | `grafana_contact_points` | grafana_contact_points (`contact-points`) — the receivers API: `webhook-oncall` (one webhook integration) and Grafana's default `empty` | recording — nothing to scrub (the receivers shape carries no `uid`, `type` or `settings`); `_recorded.server` by hand | 2026-09-08, **local stack** |
 | `recorded-stack/<row id>.json` | `metrics_query` | stack_self_metrics — one instant vector per family that answered (`scrape_success_ratio`, `notification_errors`, `tsdb_active_series`, `collector_export_failures_spans` — the lazy-policy alias reading 0 on a collector whose `send_failed_spans` is absent —, `datasource_errors` — on this tier the row's first alias `grafana_datasource_request_total` is `not-in-inventory` (never called) and the row falls through to the proxy alias, so the file's provenance query is the `grafana_proxy_response_status_total` expression —, `log_shipper_drops`; ruler, synthetic and traces have no eligible alias on that tier); otel-mcp-server answers a flat Prometheus-style envelope `{ status, resultType, result }` | recording | 2026-09-08, **authenticated tier** (same six rows and outcomes as the 2026-09-07 public-tier recording it replaces) |
 
-The remaining synthetic files cover the Grafana-backed status tools
-(`grafana_datasources`, `grafana_datasource_health`, `grafana_contact_points`)
-and the instant-vector envelopes. Neither Krystaline tier can record them:
-on the public tier every Grafana-backed tool except `grafana_health` answers
-`HTTP 401` from Grafana (the tier carries no Grafana credentials), and the
-authenticated tier (recorded 2026-09-08, every issued key tried) does not
-advertise the Grafana-backed tools at all — its otel-mcp-server deployment
-has no Grafana integration configured. They stay synthetic until a tier that
-answers them exists. The 2026-06-12 recordings of `metrics_targets.json` and
+The remaining synthetic files are the silences and the two instant-vector
+envelopes. The Grafana-backed status tools (`grafana_datasources`,
+`grafana_datasource_health`, `grafana_contact_points`) are no longer
+synthetic: they are recorded from the local stack, the only tier that
+answers them — on the public Krystaline tier every Grafana-backed tool
+except `grafana_health` answers `HTTP 401` from Grafana (the tier carries no
+Grafana credentials), and the authenticated tier (recorded 2026-09-08, every
+issued key tried) does not advertise the Grafana-backed tools at all — its
+otel-mcp-server deployment has no Grafana integration configured. The
+2026-06-12 recordings of `metrics_targets.json` and
 `grafana_dashboards_search.json` were kept on purpose: the 2026-09-07 and
 2026-09-08 targets payloads have every target `up`, and the `down`
 Alertmanager target with its `lastError` is the case the liveness adapters
-are pinned against; the dashboard search answers on no recordable tier (401
-on public, not advertised on authenticated). Synthetic
-fixtures pin **shape only** (critical fields, tolerance, removal gate) — no
-`adapted/` goldens, because these capabilities have no `PROBES` adapter (the
-fetcher's `observeAlertmanager` / `observeGrafana` parse them directly).
+are pinned against; the dashboard search answers on no Krystaline tier (401
+on public, not advertised on authenticated) and the local stack's answer is
+the same `{ count, results }` shape with one seeded dashboard, so the richer
+recording stays. Synthetic fixtures pin **shape only** (critical fields,
+tolerance, removal gate) — no `adapted/` goldens, because these capabilities
+have no `PROBES` adapter (the fetcher's `observeAlertmanager` /
+`observeGrafana` parse them directly); the recorded status files are held to
+the same three assertions plus "carries no `_synthetic` marker".
 
 ## Recording against your MCP (`npm run record-fixtures`)
 
@@ -120,7 +166,7 @@ review copy alone.
 | `<metric_names tool>.json` (e.g. `metrics_label_values.json`) | the inventory payload | the list is replaced where the adapter found it: every name any alias `requires` (plus the `*_build_info` metrics) and the first 25 others, in the server's order |
 | `<tool>.json` for scrape targets, the winning rule tool(s), dashboard search | the raw payload | every list capped at 6 entries, recursively; keys and scalars untouched (a `count` may then disagree with its list — the existing convention) |
 | `recorded-stack/<row id>.json` | one `metrics_query` instant vector per family — the first row with data, else the first honest empty | lists capped at 6; `_recorded` provenance (`tool`, `family`, `row`, `product`, `query`, `outcome`, `value`) |
-| `alertmanager_status.json`, `alertmanager_silences.json`, `grafana_datasources.json`, `grafana_datasource_health.json` (first uid that answered), `grafana_contact_points.json` | the status payloads, only when the tool was advertised | lists capped at 6; `_recorded` provenance on object payloads |
+| `alertmanager_status.json`, `alertmanager_silences.json`, `grafana_datasources.json`, `grafana_datasource_health.json` (the first uid that answered; when other uids answered the other verdict, the first OK answer is written beside it as `grafana_datasource_health.ok.json` and/or the first non-OK one as `.error.json`, each with its `uid` and `case` in `_recorded`, skipped when identical to the primary file), `grafana_contact_points.json` | the status payloads, only when the tool was advertised | lists capped at 6; `_recorded` provenance on object payloads |
 
 A recorded `<tool>.json` at this top level **takes precedence** over
 `synthetic/<tool>.json` in `tools/test-contract-shapes.mjs`: the recorded

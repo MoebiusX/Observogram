@@ -479,16 +479,18 @@ returned data or an honest empty. `hasToolsList` is whether the `tools/list`
 RPC succeeded: a server advertising an empty list reads `not-attempted`
 (tier), not a string of `tools/call` failures.
 
-The table has three live evidence sources: the public Krystaline tier
+The table has four live evidence sources: the public Krystaline tier
 (2026-09-07) and the authenticated Krystaline tier (2026-09-08,
 `MCP_URL=https://www.krystaline.io/mcp` + `MCP_AUTH`) through this recorder,
-and the pinned stack of the real products through
-the live validation tier below; re-record when a product version moves.
+the pinned stack of the real products through the live validation tier
+below, and — for the Grafana-backed tools — that same stack fronted by a
+local otel-mcp-server 1.8.0 ("Local MCP over the Docker stack" below);
+re-record when a product version moves.
 The authenticated tier answers the same metrics / vmalert / Alertmanager
 surface as the public one (14 aliases `data` · 0 `failed` on the same
 2,682-name inventory) but advertises **no Grafana-backed tools** — its
-otel-mcp-server deployment carries no Grafana integration — so the Grafana
-status fixtures remain synthetic.
+otel-mcp-server deployment carries no Grafana integration — which is why
+the Grafana status fixtures come from the local stack.
 `npm run record-fixtures`
 (`tools/record-mcp-fixtures.mjs`, `MCP_URL` + optional `MCP_AUTH`) is the
 verification path — it reuses the fetcher's client and the registry for
@@ -583,6 +585,39 @@ blackbox, vmalert not scraped, a traces-only collector, a v2 Jaeger), 13 of 24
 rows with data. The authenticated tier (2026-09-08, `MCP_AUTH` bearer) is the
 third: the same backends and the same alias outcomes, recorded into
 `vmalert_rules.json`, `alertmanager_status.json` and `recorded-stack/`.
+
+#### Local MCP over the Docker stack
+
+The fourth evidence source (2026-09-08) is the same compose stack fronted
+by a local **otel-mcp-server 1.8.0** — today the only place the
+Grafana-backed tools answer (the public Krystaline tier answers `HTTP 401`
+from Grafana, the authenticated tier does not advertise them). With the
+stack up (`docker compose -f docker/stack.compose.yaml up -d --wait`),
+start the server from a checkout of otel-mcp-server v1.8.0 with no MCP auth
+keys — `PROMETHEUS_URL=http://127.0.0.1:18428 VMALERT_URL=http://127.0.0.1:18880
+ALERTMANAGER_URL=http://127.0.0.1:19093 GRAFANA_URL=http://127.0.0.1:13030
+GRAFANA_AUTH_BASIC=admin:admin node dist/index.js --http 3011` — then
+`MCP_URL=http://127.0.0.1:3011/mcp npm run record-fixtures -- --write --out
+.tmp-recorded-local`, review, and copy the files you keep into
+`tools/fixtures/mcp/` (the README there lists the admin-seeded state:
+datasources `VictoriaMetrics (stack)` and `Loki (absent)` → a service the
+stack does not run, contact point `webhook-oncall`, dashboard `Orders
+availability (stack validation)`). Two shape discoveries came out of it, and
+the contracts and `observeGrafana` now read the real product:
+`grafana_datasource_health` answers `{ datasource, health }`, where `health`
+is `{ supported: true, status: 'OK' | 'ERROR', message, details }` when
+Grafana's health endpoint answered 2xx and `{ supported: false, error: 'HTTP
+400: Bad Request — <url>' }` when it did not — Grafana 12.4.4 answers a check
+that ran and failed (backend unreachable) with `HTTP 400` and an unknown uid
+with `500`, so the fetcher reads `supported: false` + `HTTP 400` as `error`
+with the error text, any other `supported: false` as `unknown` (not checked,
+never "not unhealthy"), and a `supported: true` answer without a status as
+`unknown`; and `grafana_contact_points` answers the receivers API (`{ count,
+contactPoints: [{ name, active, integrations }] }` — no `uid`, `type` or
+`settings`), not the provisioning shape the synthetic fixture assumed. The
+recorder keeps both datasource-health verdicts when several uids answer
+(`grafana_datasource_health.json` is the first uid's answer, `.ok.json` /
+`.error.json` the first answer of the other case).
 
 ### Stack self-metrics (surfaces)
 
