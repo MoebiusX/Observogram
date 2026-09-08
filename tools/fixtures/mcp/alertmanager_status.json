@@ -1,8 +1,10 @@
 {
   "_recorded": {
-    "recordedAt": "2026-09-07T16:08:36.735Z",
+    "recordedAt": "2026-09-08T07:03:52.091Z",
     "tool": "alertmanager_status",
-    "trimmed": "config omitted (the full Alertmanager configuration: receivers, internal hostnames)"
+    "scrubbed": [
+      "config (the full Alertmanager configuration: receivers, SMTP settings, internal hostnames) — same trim as the 2026-09-07 public-tier recording"
+    ]
   },
   "version": "0.27.0",
   "uptime": "2026-08-31T20:21:26.668Z",

@@ -4,23 +4,119 @@
     "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"krystalinex\", container!=\"\"}[5m])) by (pod) * 3600\n",
     "interval": "5m",
     "health": "ok",
-    "lastEvaluation": "2026-06-12T13:15:34.975594063Z",
-    "evaluationTime": 0.000909864
+    "lastEvaluation": "2026-09-08T07:00:34.982755749Z",
+    "evaluationTime": 0.002985121
   },
   {
     "name": "finops:memory:usage_per_pod_gb_hours",
     "expr": "sum(container_memory_working_set_bytes{namespace=\"krystalinex\", container!=\"\"}) by (pod) / 1073741824\n",
     "interval": "5m",
     "health": "ok",
-    "lastEvaluation": "2026-06-12T13:15:34.976525676Z",
-    "evaluationTime": 0.000543262
+    "lastEvaluation": "2026-09-08T07:00:34.985773129Z",
+    "evaluationTime": 0.0019871
   },
   {
     "name": "finops:kong:overhead_seconds",
     "expr": "histogram_quantile(0.99,\n  sum(rate(kong_kong_latency_ms_bucket[5m])) by (le)\n) / 1000\n",
     "interval": "5m",
     "health": "ok",
-    "lastEvaluation": "2026-06-12T13:15:34.977074984Z",
-    "evaluationTime": 0.001332167
+    "lastEvaluation": "2026-09-08T07:00:34.98778236Z",
+    "evaluationTime": 0.002138755
+  },
+  {
+    "name": "finops:requests:rate_per_service_5m",
+    "expr": "sum(rate(http_requests_total[5m])) by (job)\n",
+    "interval": "1m",
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:06.508908962Z",
+    "evaluationTime": 0.001500786
+  },
+  {
+    "name": "finops:errors:rate_per_service_5m",
+    "expr": "sum(rate(http_request_errors_total[5m])) by (job)\n",
+    "interval": "1m",
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:06.5104313Z",
+    "evaluationTime": 0.001245894
+  },
+  {
+    "name": "finops:spans:exported_rate_5m",
+    "expr": "sum(rate(otelcol_exporter_sent_spans_total[5m]))\n",
+    "interval": "1m",
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:06.511690472Z",
+    "evaluationTime": 0.000974187
+  },
+  {
+    "name": "finops:spans:dropped_rate_5m",
+    "expr": "sum(rate(otelcol_processor_dropped_spans_total[5m]))\n",
+    "interval": "1m",
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:06.512675455Z",
+    "evaluationTime": 0.00115134
+  },
+  {
+    "name": "finops:spans:sampling_ratio",
+    "expr": "(\n  sum(rate(otelcol_exporter_sent_spans_total[5m]))\n  / (\n    sum(rate(otelcol_exporter_sent_spans_total[5m]))\n    + sum(rate(otelcol_processor_dropped_spans_total[5m]))\n  )\n) or vector(1)\n",
+    "interval": "1m",
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:06.51384191Z",
+    "evaluationTime": 0.001207714
+  },
+  {
+    "name": "finops:logs:bytes_rate_per_component_5m",
+    "expr": "sum(rate(promtail_read_bytes_total[5m])) by (filename)\n",
+    "interval": "1m",
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:06.515075233Z",
+    "evaluationTime": 0.002663719
+  },
+  {
+    "name": "genai:client_operation_duration:p95_5m",
+    "expr": "histogram_quantile(\n  0.95,\n  sum(rate(gen_ai_client_operation_duration_seconds_bucket[5m]))\n    by (le, provider, model, operation)\n)\n",
+    "interval": "30s",
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:38.625508452Z",
+    "evaluationTime": 0.001648869
+  },
+  {
+    "name": "genai:client_operation_duration:p99_5m",
+    "expr": "histogram_quantile(\n  0.99,\n  sum(rate(gen_ai_client_operation_duration_seconds_bucket[5m]))\n    by (le, provider, model, operation)\n)\n",
+    "interval": "30s",
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:38.627191521Z",
+    "evaluationTime": 0.001217347
+  },
+  {
+    "name": "genai:client_operation:error_ratio_5m",
+    "expr": "sum(rate(gen_ai_client_operations_total{status=~\"error|timeout\"}[5m]))\n  by (provider, model, operation)\n/\nclamp_min(\n  sum(rate(gen_ai_client_operations_total[5m]))\n    by (provider, model, operation),\n  0.000001\n)\n",
+    "interval": "30s",
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:38.628429052Z",
+    "evaluationTime": 0.002084359
+  },
+  {
+    "name": "genai:client_token_usage:rate_1h",
+    "expr": "sum(rate(gen_ai_client_token_usage_sum[1h]))\n  by (model, direction)\n",
+    "interval": "30s",
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:38.6305622Z",
+    "evaluationTime": 0.001770986
+  },
+  {
+    "name": "genai:rca_analysis_duration:p95_5m",
+    "expr": "histogram_quantile(\n  0.95,\n  sum(rate(kx_llm_analysis_duration_seconds_bucket[5m])) by (le)\n)\n",
+    "interval": "30s",
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:38.632374697Z",
+    "evaluationTime": 0.001506144
+  },
+  {
+    "name": "genai:rca_analysis:failure_ratio_5m",
+    "expr": "sum(rate(kx_llm_analysis_total{status=~\"failure|timeout\"}[5m]))\n  by (use_case)\n/\nclamp_min(\n  sum(rate(kx_llm_analysis_total[5m])) by (use_case),\n  0.000001\n)\n",
+    "interval": "30s",
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:38.63391313Z",
+    "evaluationTime": 0.002744143
   }
 ]

@@ -11,8 +11,8 @@
       "summary": "High error rate detected"
     },
     "health": "ok",
-    "lastEvaluation": "2026-06-12T13:16:33.245164177Z",
-    "evaluationTime": 0.002521534,
+    "lastEvaluation": "2026-09-08T07:03:48.227986028Z",
+    "evaluationTime": 0.003051935,
     "state": "inactive"
   },
   {
@@ -27,8 +27,222 @@
       "summary": "High P99 latency detected"
     },
     "health": "ok",
-    "lastEvaluation": "2026-06-12T13:16:33.247703519Z",
-    "evaluationTime": 0.029914935,
+    "lastEvaluation": "2026-09-08T07:03:48.231070112Z",
+    "evaluationTime": 0.002376765,
+    "state": "inactive"
+  },
+  {
+    "name": "HighLatencyP99Critical",
+    "expr": "histogram_quantile(0.99,\n  sum(rate(http_request_duration_seconds_bucket[5m])) by (le)\n) > 5\n",
+    "for": "2m",
+    "labels": {
+      "severity": "critical"
+    },
+    "annotations": {
+      "description": "P99 latency is {{ $value | humanizeDuration }} (threshold: 5s)",
+      "summary": "Critical P99 latency"
+    },
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:48.233484163Z",
+    "evaluationTime": 0.002587316,
+    "state": "inactive"
+  },
+  {
+    "name": "ServiceDown",
+    "expr": "up{job=~\"krystalinex-server|payment-processor\"} == 0",
+    "for": "1m",
+    "labels": {
+      "severity": "critical"
+    },
+    "annotations": {
+      "description": "The {{ $labels.job }} service has been unreachable for more than 1 minute",
+      "summary": "Service {{ $labels.job }} is down"
+    },
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:48.23609988Z",
+    "evaluationTime": 0.00141155,
+    "state": "inactive"
+  },
+  {
+    "name": "NoTraffic",
+    "expr": "sum(rate(http_requests_total[5m])) == 0\n",
+    "for": "10m",
+    "labels": {
+      "severity": "warning"
+    },
+    "annotations": {
+      "description": "No HTTP requests received in the last 10 minutes",
+      "summary": "No traffic detected"
+    },
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:48.237535721Z",
+    "evaluationTime": 0.001425293,
+    "state": "inactive"
+  },
+  {
+    "name": "ColdWalletUnpricedFlows",
+    "expr": "sum(increase(kx_cold_flow_unpriced_total[15m])) by (direction) > 0\n",
+    "for": "1m",
+    "labels": {
+      "severity": "warning"
+    },
+    "annotations": {
+      "description": "{{ $value }} cold-wallet {{ $labels.direction }} settlement(s) in the last 15 minutes could not be valued in USD (no price-service quote at settlement time) — kx_cold_flow_value_usd_total and the Business Activity USD tiles under-count until the price feed is back.",
+      "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#coldwalletunpricedflows",
+      "summary": "Cold-wallet {{ $labels.direction }} settled without a USD price"
+    },
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:52.21460519Z",
+    "evaluationTime": 0.002001504,
+    "state": "inactive"
+  },
+  {
+    "name": "CustodyWebhookSignatureFailures",
+    "expr": "sum(increase(kx_custody_webhook_events_total{outcome=\"invalid_signature\"}[10m])) >= 3\n",
+    "for": "1m",
+    "labels": {
+      "severity": "warning"
+    },
+    "annotations": {
+      "description": "{{ $value }} custody webhook calls were rejected with an invalid HMAC signature in the last 10 minutes — a probe against the endpoint, or a CUSTODY_WEBHOOK_SECRET mismatch after a deploy (the simulator self-POST falls back to direct delivery, so settlements may still be completing).",
+      "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#custodywebhooksignaturefailures",
+      "summary": "Custody webhook signature failures"
+    },
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:52.216637079Z",
+    "evaluationTime": 0.001553573,
+    "state": "inactive"
+  },
+  {
+    "name": "CustodyWebhookSignatureFailures",
+    "expr": "sum(increase(kx_custody_webhook_events_total{outcome=\"invalid_signature\"}[10m])) > 20\n",
+    "for": "1m",
+    "labels": {
+      "severity": "critical"
+    },
+    "annotations": {
+      "description": "{{ $value }} invalid-signature custody webhook calls in 10 minutes — sustained probing of the settlement webhook (or every settlement is being rejected because the shared secret is wrong).",
+      "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#custodywebhooksignaturefailures",
+      "summary": "Custody webhook under signature brute-force"
+    },
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:52.218222516Z",
+    "evaluationTime": 0.001674042,
+    "state": "inactive"
+  },
+  {
+    "name": "CustodyWebhookErrors",
+    "expr": "sum(increase(kx_custody_webhook_events_total{outcome=\"error\"}[10m])) by (provider, event_type) > 0\n",
+    "for": "1m",
+    "labels": {
+      "severity": "warning"
+    },
+    "annotations": {
+      "description": "{{ $value }} {{ $labels.event_type }} event(s) from provider {{ $labels.provider }} threw inside the settlement handler in the last 10 minutes — the hold or the deposit credit may be stuck; check the server error log and the withdrawal_requests / transactions rows referenced by the events.",
+      "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#custodywebhookerrors",
+      "summary": "Custody webhook settlement errors ({{ $labels.provider }}/{{ $labels.event_type }})"
+    },
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:52.219924116Z",
+    "evaluationTime": 0.00154094,
+    "state": "inactive"
+  },
+  {
+    "name": "ColdWithdrawalStuckInFlight",
+    "expr": "kx_cold_withdrawals_in_flight > 0\n",
+    "for": "30m",
+    "labels": {
+      "severity": "critical"
+    },
+    "annotations": {
+      "description": "{{ $value }} {{ $labels.asset }} cold withdrawal(s) have been queued/processing for more than 30 minutes (the demo settles in ~30 s) — customer funds are on hold with no settlement event arriving; the chain simulator or the custodian callback path is not delivering.",
+      "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#coldwithdrawalstuckinflight",
+      "summary": "{{ $labels.asset }} cold withdrawals stuck in flight"
+    },
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:52.221491988Z",
+    "evaluationTime": 0.001383465,
+    "state": "inactive"
+  },
+  {
+    "name": "ColdWithdrawalSettlementSlow",
+    "expr": "(\n  histogram_quantile(0.95,\n    sum(rate(kx_cold_withdrawal_settlement_seconds_bucket[30m])) by (le)\n  ) > 90\n)\nand\n(\n  sum(rate(kx_cold_withdrawal_settlement_seconds_count[30m])) > 0\n)\n",
+    "for": "5m",
+    "labels": {
+      "severity": "warning"
+    },
+    "annotations": {
+      "description": "p95 request-to-confirmed settlement latency over the last 30 minutes is {{ $value | humanizeDuration }} (threshold: 90 s; the demo design is ~30 s). A value of exactly 120 s means the p95 fell beyond the histogram's last bucket.",
+      "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#coldwithdrawalsettlementslow",
+      "summary": "Cold withdrawal settlement is slow (p95 over 30m)"
+    },
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:52.222901959Z",
+    "evaluationTime": 0.001258226,
+    "state": "inactive"
+  },
+  {
+    "name": "ContainerCrashLooping",
+    "expr": "rate(kube_pod_container_status_restarts_total[15m]) * 60 * 15 > 3",
+    "for": "5m",
+    "labels": {
+      "severity": "critical"
+    },
+    "annotations": {
+      "description": "A container has restarted multiple times in the last 15 minutes.",
+      "summary": "Container is crash-looping"
+    },
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:48.219617703Z",
+    "evaluationTime": 0.003667616,
+    "state": "inactive"
+  },
+  {
+    "name": "ContainerOOMKilled",
+    "expr": "kube_pod_container_status_last_terminated_reason{reason=\"OOMKilled\"} == 1",
+    "for": "5m",
+    "labels": {
+      "severity": "warning"
+    },
+    "annotations": {
+      "description": "A container was terminated due to OOM. Consider increasing memory limits.",
+      "summary": "Container was OOM killed"
+    },
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:48.223326891Z",
+    "evaluationTime": 0.001223216,
+    "state": "inactive"
+  },
+  {
+    "name": "PodNotReady",
+    "expr": "(min_over_time(kube_pod_status_ready{condition=\"true\", namespace=\"krystalinex\"}[5m]) == 0)\nand on(pod, namespace)\n(kube_pod_status_phase{phase=\"Running\", namespace=\"krystalinex\"} == 1)\n",
+    "for": "10m",
+    "labels": {
+      "severity": "warning"
+    },
+    "annotations": {
+      "description": "A pod has been in a non-ready state for more than 10 minutes.",
+      "summary": "Pod has been not ready for 10m"
+    },
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:48.224577881Z",
+    "evaluationTime": 0.005627373,
+    "state": "inactive"
+  },
+  {
+    "name": "DeploymentReplicasMismatch",
+    "expr": "kube_deployment_spec_replicas{namespace=\"krystalinex\"}\n  != kube_deployment_status_ready_replicas{namespace=\"krystalinex\"}\n",
+    "for": "10m",
+    "labels": {
+      "severity": "warning"
+    },
+    "annotations": {
+      "description": "A deployment does not have the desired number of ready replicas.",
+      "summary": "Deployment replica mismatch"
+    },
+    "health": "ok",
+    "lastEvaluation": "2026-09-08T07:03:48.230248764Z",
+    "evaluationTime": 0.001809033,
     "state": "inactive"
   }
 ]

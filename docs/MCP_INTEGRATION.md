@@ -441,9 +441,10 @@ plus the live evidence that confirmed them. The registry rows
 `grafana_contact_points` carry the tool names; the response shapes
 `instant-vector`, `status-object`, `silences`, `datasources`,
 `health-object` and `contact-points` pin the critical fields against the
-fixtures in `tools/fixtures/mcp/` — recordings from the public Krystaline
-tier where that tier answers, hand-written `synthetic/` files where it
-cannot (see that directory's README). Every sampled number is a
+fixtures in `tools/fixtures/mcp/` — recordings from the Krystaline tiers
+(public, and since 2026-09-08 the authenticated tier) where a tier answers,
+hand-written `synthetic/` files where none can (see that directory's
+README). Every sampled number is a
 point-in-time **signal, never a verdict**: nothing in this table creates a
 `Verified` stamp, an SLO verdict or a grade change, and on a restricted tier
 the answer is "not attempted" with the reason.
@@ -610,9 +611,16 @@ returned data or an honest empty. `hasToolsList` is whether the `tools/list`
 RPC succeeded: a server advertising an empty list reads `not-attempted`
 (tier), not a string of `tools/call` failures.
 
-The table has two live evidence sources (2026-09-07): the public Krystaline
-tier through this recorder, and the pinned stack of the real products through
+The table has three live evidence sources: the public Krystaline tier
+(2026-09-07) and the authenticated Krystaline tier (2026-09-08,
+`MCP_URL=https://www.krystaline.io/mcp` + `MCP_AUTH`) through this recorder,
+and the pinned stack of the real products through
 the live validation tier below; re-record when a product version moves.
+The authenticated tier answers the same metrics / vmalert / Alertmanager
+surface as the public one (14 aliases `data` · 0 `failed` on the same
+2,682-name inventory) but advertises **no Grafana-backed tools** — its
+otel-mcp-server deployment carries no Grafana integration — so the Grafana
+status fixtures remain synthetic.
 `npm run record-fixtures`
 (`tools/record-mcp-fixtures.mjs`, `MCP_URL` + optional `MCP_AUTH`) is the
 verification path — it reuses the fetcher's client and the registry for
@@ -704,7 +712,9 @@ Jaeger v2.18.0, Grafana 12.4.0, Alertmanager 0.27.0): after the correction it
 reads 14 aliases `data` · 0 `empty` · 0 `failed` · 18 honest
 `not-in-inventory` on its 2,682-name inventory (no Prometheus server, no
 blackbox, vmalert not scraped, a traces-only collector, a v2 Jaeger), 13 of 24
-rows with data.
+rows with data. The authenticated tier (2026-09-08, `MCP_AUTH` bearer) is the
+third: the same backends and the same alias outcomes, recorded into
+`vmalert_rules.json`, `alertmanager_status.json` and `recorded-stack/`.
 
 ### Stack self-metrics (surfaces)
 
