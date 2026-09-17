@@ -27,7 +27,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
-import { compile, TARGETS } from './lib/compile.mjs';
+import { compile, compileArtifact, TARGETS } from './lib/compile.mjs';
 import { createHarness } from './lib/harness.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -45,6 +45,8 @@ const UPDATE = process.argv.includes('--update');
 const PACKS = [
   { id: 'payment-service',    path: 'vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml' },
   { id: 'edge-hostile-names', path: 'tools/fixtures/compile/edge-hostile-names.pack.yaml' },
+  // Two SLOs on one SLI: the per-artifact matrix only (Grafana-managed uid/title uniqueness).
+  { id: 'shared-sli',         path: 'tools/fixtures/compile/shared-sli.pack.yaml', artifactsOnly: true },
 ];
 
 // ---------------------------------------------------------------------------
@@ -81,6 +83,28 @@ const MATRIX = [
   { target: 'grafana-dashboard', product: 'grafana',        version: '9.5',  band: 'grafana-9' },
 ];
 
+// ---------------------------------------------------------------------------
+// The per-artifact matrix: the studio's compileArtifact paths that no `compile()`
+// TARGET covers — the Grafana-managed flavour and the per-SLO Prometheus files —
+// pinned at the pack's own declared version (no product/version override). They
+// share the PromQL builders with the full rules file, so a builder change moves
+// their bytes too; without a golden that drift went unseen. `packs` limits a row
+// to the packs whose SLO it names.
+// ---------------------------------------------------------------------------
+const ARTIFACTS = [
+  { group: 'rules', flavor: 'grafana-managed', artifact: 'all' },
+  { group: 'rules', flavor: 'prometheus', artifact: 'slo:api_availability_99_9', packs: ['payment-service'] },
+  { group: 'rules', flavor: 'prometheus', artifact: 'slo:checkout_latency_99_5_p99_300ms', packs: ['payment-service'] },
+  { group: 'rules', flavor: 'grafana-managed', artifact: 'slo:checkout_latency_99_5_p99_300ms', packs: ['payment-service'] },
+  { group: 'rules', flavor: 'prometheus', artifact: 'slo:hostile_availability_99', packs: ['edge-hostile-names'] },
+];
+
+const artifactGoldenName = (packId, row) => {
+  // ':' is not a filename character on every platform; the artifact id keeps its shape otherwise.
+  const artifact = row.artifact.replace(/[^a-zA-Z0-9_.-]/g, '-');
+  return `${packId}__artifact__${row.group}-${row.flavor}-${artifact}.golden.yaml`;
+};
+
 const goldenName = (packId, row) => {
   const ext = TARGETS[row.target].extension;
   // '+' is awkward in shell globs and '.' fine in names; keep it simple/flat.
@@ -92,6 +116,7 @@ if (UPDATE) mkdirSync(GOLDEN_DIR, { recursive: true });
 
 let written = 0;
 for (const pack of PACKS) {
+  if (pack.artifactsOnly) continue;
   const canonical = parseYaml(readFileSync(resolve(ROOT, pack.path), 'utf8'));
 
   for (const row of MATRIX) {
@@ -144,9 +169,48 @@ for (const pack of PACKS) {
   }
 }
 
+for (const pack of PACKS) {
+  const canonical = parseYaml(readFileSync(resolve(ROOT, pack.path), 'utf8'));
+  for (const row of ARTIFACTS) {
+    if (row.packs && !row.packs.includes(pack.id)) continue;
+    const id = `${pack.id} · artifact ${row.group}/${row.flavor}/${row.artifact}`;
+    let result = null;
+    try {
+      result = compileArtifact(canonical, { group: row.group, flavor: row.flavor, artifact: row.artifact });
+    } catch (err) {
+      assert(false, `${id}: compiles without throwing`, String(err && err.message || err));
+      continue;
+    }
+    const actual = String(result.content);
+    assert(actual.length > 0, `${id}: emits non-empty content`);
+    const file = resolve(GOLDEN_DIR, artifactGoldenName(pack.id, row));
+    if (UPDATE) {
+      writeFileSync(file, actual);
+      written++;
+      continue;
+    }
+    let golden = null;
+    try { golden = readFileSync(file, 'utf8'); } catch (_) {}
+    if (golden === null) {
+      assert(false, `${id}: golden file exists (run \`node tools/test-golden-compile.mjs --update\` to create it)`, artifactGoldenName(pack.id, row));
+      continue;
+    }
+    if (actual === golden) {
+      assert(true, `${id}: output is byte-identical to the committed golden`);
+    } else {
+      const a = actual.split('\n'), g = golden.split('\n');
+      let line = 0;
+      while (line < Math.min(a.length, g.length) && a[line] === g[line]) line++;
+      assert(false,
+        `${id}: output drifted from the golden — if intended, regenerate with --update and review the golden diff in the same commit`,
+        { golden: artifactGoldenName(pack.id, row), firstDivergenceAtLine: line + 1, expected: g[line], actual: a[line] });
+    }
+  }
+}
+
 if (UPDATE) {
   process.stdout.write(`goldens updated (${written} files) — review git diff tools/fixtures/golden/compile/\n`);
   process.exit(0);
 }
 
-report('golden-compile', 'every (pack × target × band) artefact matches its golden byte-for-byte.');
+report('golden-compile', 'every (pack × target × band) and (pack × artifact) artefact matches its golden byte-for-byte.');

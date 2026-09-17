@@ -171,6 +171,7 @@ const basePromAlert = {
 };
 const rules3 = compilePrometheusRules(basePromAlert);
 assert(/keep_firing_for/.test(rules3), 'Prometheus 3.x burn alerts include keep_firing_for');
+assert(/>= 2\n\s*\)/.test(rules3), 'burn alerts carry the min-bad-samples floor on the short window');
 
 const basePromAlertOld = JSON.parse(JSON.stringify(basePromAlert));
 basePromAlertOld.spec.telemetry.backends[0].version.declared = '2.40';

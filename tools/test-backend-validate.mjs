@@ -174,6 +174,18 @@ function validatePack(fixture, canonical) {
         if (VALIDATORS.promtool) {
           const r = run(VALIDATORS.promtool, ['check', 'rules', file]);
           assert(r.ok, `promtool check rules · ${item.id} (${art.filename})`, r.out, 'exit 0');
+          // A fixture may ship promtool unit tests for its full rules file
+          // (`<fixture>.test.yml` next to `<fixture>.pack.yaml`): the policy
+          // PromQL's behaviour, not only its syntax (a healthy service must not
+          // page, a 100 % outage must). `rule_files` is resolved next to the
+          // test file, so it is copied beside the emitted rules.
+          const unit = fixture.path && item.id === 'all' ? join(ROOT, fixture.path.replace(/\.pack\.yaml$/, '.test.yml')) : null;
+          if (unit && existsSync(unit)) {
+            const testFile = join(dirname(file), 'unit.test.yml');
+            writeFileSync(testFile, readFileSync(unit, 'utf8').replace(/^(rule_files:\n\s+- ).*$/m, `$1${art.filename}`));
+            const t = run(VALIDATORS.promtool, ['test', 'rules', testFile]);
+            assert(t.ok, `promtool test rules · ${fixture.id} (${art.filename})`, t.out, 'SUCCESS');
+          }
         }
         if (VALIDATORS.mimirtool) {
           // `rules lint` rewrites the file in place — give it a copy.

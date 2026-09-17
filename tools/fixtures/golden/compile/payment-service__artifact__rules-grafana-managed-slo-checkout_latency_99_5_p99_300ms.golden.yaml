@@ -1,0 +1,315 @@
+# Grafana-managed rules — SLO checkout_latency_99_5_p99_300ms compiled from ObservabilityPack v1.2
+# Pack: payment-service · version 1.5.0
+# Format: Grafana 9+ provisioning YAML (apiVersion: 1).
+# Apply via: copy under provisioning/alerting/ OR POST to /api/v1/provisioning/alert-rules
+# Source of truth — DO NOT hand-edit. Re-emit from the pack.
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: payment_service_api_latency_p99_checkout_sli_recording
+    folder: observability-pack
+    interval: 30s
+    rules:
+      - uid: rec-payment_service-api_latency_-1f6dvj2
+        title: payment_service:api_latency_p99_checkout:error_ratio_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(payment_service:api_latency_p99_checkout:value_5m) > bool 0.3)[5m:30s]) / 10)
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          sli: api_latency_p99_checkout
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:api_latency_p99_checkout:error_ratio_5m
+          from: A
+        is_paused: false
+  - orgId: 1
+    name: payment_service_checkout_latency_99_5_p99_300ms_recording
+    folder: observability-pack
+    interval: 30s
+    rules:
+      - uid: rec-payment_service-api_latency_-1y7wx73
+        title: payment_service:api_latency_p99_checkout:value_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                histogram_quantile(0.99,
+                  sum by (le)(rate(http_server_request_duration_seconds_bucket{
+                    service_name="payment-service",
+                    http_route="/checkout"
+                  }[5m])))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: checkout_latency_99_5_p99_300ms
+          sli: api_latency_p99_checkout
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:api_latency_p99_checkout:value_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-errorbudget--1yskat6
+        title: payment_service:errorbudget:burn_5m{slo="checkout_latency_99_5_p99_300ms"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(payment_service:api_latency_p99_checkout:value_5m) > bool 0.3)[5m:30s]) / 10) / 0.005
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: checkout_latency_99_5_p99_300ms
+          sli: api_latency_p99_checkout
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:errorbudget:burn_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-errorbudget--14nvant
+        title: payment_service:errorbudget:burn_1h{slo="checkout_latency_99_5_p99_300ms"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(payment_service:api_latency_p99_checkout:value_5m) > bool 0.3)[1h:30s]) / 120) / 0.005
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: checkout_latency_99_5_p99_300ms
+          sli: api_latency_p99_checkout
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:errorbudget:burn_1h
+          from: A
+        is_paused: false
+  - orgId: 1
+    name: payment_service_checkout_latency_99_5_p99_300ms_burn
+    folder: observability-pack
+    interval: 30s
+    rules:
+      - uid: alr-checkout_latency_99_5_p99_30-1wx3oxl
+        title: checkout_latency_99_5_p99_300ms_burn_14x_5m_1h
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (
+                  (sum_over_time((max(payment_service:api_latency_p99_checkout:value_5m) > bool 0.3)[5m:30s]) / 10) > 0.07
+                ) and (
+                  (sum_over_time((max(payment_service:api_latency_p99_checkout:value_5m) > bool 0.3)[1h:30s]) / 120) > 0.07
+                ) and (
+                  sum_over_time((max(payment_service:api_latency_p99_checkout:value_5m) > bool 0.3)[5m:30s]) >= 2
+                )
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 2m
+        labels:
+          severity: SEV1
+          slo: checkout_latency_99_5_p99_300ms
+          sli: api_latency_p99_checkout
+          service: payment-service
+          burn_rate: "14"
+          window_short: 5m
+          window_long: 1h
+          pack: payment-service
+        annotations:
+          summary: Burn rate 14× on checkout_latency_99_5_p99_300ms
+          description: Both the 5m and 1h error ratios exceed 14× of the 0.500% error budget for checkout_latency_99_5_p99_300ms, with at least 2 bad samples in the 5m window.
+          slo_objective: 99.500%
+          slo_window: 30d
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-checkout_latency_99_5_p99_30-15itllh
+        title: checkout_latency_99_5_p99_300ms_burn_6x_30m_6h
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (
+                  (sum_over_time((max(payment_service:api_latency_p99_checkout:value_5m) > bool 0.3)[30m:30s]) / 60) > 0.03
+                ) and (
+                  (sum_over_time((max(payment_service:api_latency_p99_checkout:value_5m) > bool 0.3)[6h:30s]) / 720) > 0.03
+                ) and (
+                  sum_over_time((max(payment_service:api_latency_p99_checkout:value_5m) > bool 0.3)[30m:30s]) >= 2
+                )
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 5m
+        labels:
+          severity: SEV2
+          slo: checkout_latency_99_5_p99_300ms
+          sli: api_latency_p99_checkout
+          service: payment-service
+          burn_rate: "6"
+          window_short: 30m
+          window_long: 6h
+          pack: payment-service
+        annotations:
+          summary: Burn rate 6× on checkout_latency_99_5_p99_300ms
+          description: Both the 30m and 6h error ratios exceed 6× of the 0.500% error budget for checkout_latency_99_5_p99_300ms, with at least 2 bad samples in the 30m window.
+          slo_objective: 99.500%
+          slo_window: 30d
+          runbook: (supply runbook URL)
+        is_paused: false
+  - orgId: 1
+    name: payment_service_checkout_latency_99_5_p99_300ms_forecast
+    folder: observability-pack
+    interval: 5m
+    rules:
+      - uid: alr-checkout_latency_99_5_p99_30-1pbrofs
+        title: checkout_latency_99_5_p99_300ms_forecast_breach
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: predict_linear(payment_service:errorbudget:burn_1h{slo="checkout_latency_99_5_p99_300ms"}[1d], 86400) > 1 and min_over_time(payment_service:errorbudget:burn_1h{slo="checkout_latency_99_5_p99_300ms"}[2h]) > 1
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 15m
+        labels:
+          severity: SEV3
+          slo: checkout_latency_99_5_p99_300ms
+          kind: forecast
+          service: payment-service
+          sli: api_latency_p99_checkout
+          pack: payment-service
+        annotations:
+          summary: checkout_latency_99_5_p99_300ms has burned faster than its budget for 2h and its 1d trend projects a breach within 1d
+          method: linear on the 1h burn rate (pack declares percentile-of-history)
+          on_projected_breach: post_warning
+          horizon: 1d
+          horizon_declared: 3d
+        is_paused: false

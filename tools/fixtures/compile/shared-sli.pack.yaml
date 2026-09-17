@@ -1,0 +1,64 @@
+# =============================================================================
+# ObservabilityPack: shared-sli — per-artifact compile fixture.
+# -----------------------------------------------------------------------------
+# Two SLOs on ONE threshold SLI, plus a dash in the pack name. Pins the
+# Grafana-managed shape where every per-SLO record (value_5m, the errorbudget
+# burn rates) is emitted once per SLO and must keep a distinct uid/title
+# (provisioning rejects a file whose uids repeat), and where the SLI-level
+# error_ratio_5m is emitted once. Takes part in the artifact matrix only
+# (tools/test-golden-compile.mjs ARTIFACTS), not in the band matrix.
+# =============================================================================
+
+apiVersion: observability.platform/v1
+kind: ObservabilityPack
+
+metadata:
+  name: shared-sli
+  version: 0.1.0
+  binding: otel-prometheus-grafana
+  owners:
+    - team-platform
+  bindings:
+    service: shared-sli
+    environments: [prod]
+    criticality: tier-3
+
+spec:
+  telemetry:
+    backends:
+      - name: prom
+        signal: metrics
+        product: prometheus
+        version: { declared: "3.0" }
+
+  slis:
+    - id: lat
+      description: p99 request latency in seconds.
+      type: threshold
+      query: histogram_quantile(0.99, sum(rate(http_server_request_duration_seconds_bucket{service_name="shared-sli"}[5m])) by (le))
+      threshold: 0.5
+      unit: seconds
+
+  slos:
+    - id: lat_99
+      sli: lat
+      objective: 0.99
+      window: 30d
+    - id: lat_999
+      sli: lat
+      objective: 0.999
+      window: 30d
+
+  policy:
+    burn_rate_alerts:
+      - slo: lat_99
+        windows:
+          - { short: 5m, long: 1h, factor: 14, severity: SEV1 }
+      - slo: lat_999
+        windows:
+          - { short: 5m, long: 1h, factor: 14, severity: SEV1 }
+    forecasts:
+      - slo: lat_99
+        method: linear
+        horizon: 7d
+        on_projected_breach: open_ticket
