@@ -18,6 +18,8 @@
 //     symptom alerts (burn alerts painted every graph red for an hour after each incident).
 // Layout is computed by flow(): add panels in reading order, never by coordinates.
 
+import { metricPrefix } from '../burn-rules.mjs';
+
 export const DS = { type: 'prometheus', uid: 'prom' };
 export const LOKI = { type: 'loki', uid: 'loki' };
 export const TEMPO = { type: 'tempo', uid: 'tempo' };
@@ -46,7 +48,9 @@ export function configure(ctx) {
   const slos = pack.spec.slos || [];
   const label = ctx.sloLabel || Object.fromEntries(slos.map(s => [s.id, defaultSloLabel(pack, s)]));
   CTX = {
-    pack, svc: pack.metadata.name, packName: pack.metadata.name, packVersion: pack.metadata.version,
+    // svc is the metric-name prefix the generators emit (`payment-service` → `payment_service`);
+    // packName is the raw name used in label values.
+    pack, svc: metricPrefix(pack.metadata.name), packName: pack.metadata.name, packVersion: pack.metadata.version,
     displayName: ctx.displayName || humanize(pack.metadata.name),
     repoUrl: ctx.repoUrl, boards: ctx.boards || [],
     sloLabel: label,

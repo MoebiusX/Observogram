@@ -18,6 +18,7 @@ import {
   derivedSliTiles, derivedViewPanel, burnBars, burnCurves, burnThresholds, alertTimelines, alertTable, alertCounters,
   certTiles, mttdBars, mttrBars, certCounts, remediationTable, okAbove, C, DS,
 } from './lib.mjs';
+import { metricSafe, metricPrefix } from '../burn-rules.mjs';
 
 const basename = (p) => String(p).replace(/^file:\/\//, '').split('/').pop();
 export const unifiedIdOf = (pack) => `${pack.metadata.name}-unified`;
@@ -43,7 +44,9 @@ const backendProducts = (pack) => new Set((pack.spec.telemetry?.backends || []).
 const tileWidth = (n) => (n <= 6 ? 4 : 3);
 
 function pipelinesPanels(pack) {
-  const svc = pack.metadata.name;
+  // The metric-name prefix (`payment-service` → `payment_service`): every recording rule the
+  // generators emit is named with it, so a raw dashed name here would match no series.
+  const svc = metricPrefix(pack.metadata.name);
   const jobs = scrapeJobs(pack);
   return [
     row('§3-5 · Pipelines, storage and queries'),
@@ -156,7 +159,7 @@ export function genericBoards(pack, { module = null, repoUrl = null } = {}) {
         burnBars(null, 12, 8, sloIds),
         alertTimelines(12, 8)[1],
         ...burnCurves(12),
-        ts('Error ratio · 5 m, per SLI', [{ expr: `{__name__=~"${c.svc}:.*:error_ratio_5m"}`, legend: '{{__name__}}' }], { desc: 'Bad samples over expected samples in the last 5 minutes, per SLI.', unit: 'percentunit', many: true, rename: Object.fromEntries(pack.spec.slis.map(s => [`${c.svc}:${s.id}:error_ratio_5m`, s.id])) }),
+        ts('Error ratio · 5 m, per SLI', [{ expr: `{__name__=~"${c.svc}:.*:error_ratio_5m"}`, legend: '{{__name__}}' }], { desc: 'Bad events over the events that happened (counter SLIs) or bad samples over the expected samples (state and threshold SLIs) in the last 5 minutes, per SLI.', unit: 'percentunit', many: true, rename: Object.fromEntries(pack.spec.slis.map(s => [`${c.svc}:${metricSafe(s.id)}:error_ratio_5m`, s.id])) }),
         stat('Burn-rate alerts firing', `count(ALERTS{alertstate="firing", pack="${c.packName}", burn_rate!=""}) or vector(0)`, { decimals: 0, spark: false, thresholds: okAbove(1, 1), w: 6, h: 7 }),
         stat('Forecast alerts firing', `count(ALERTS{alertstate="firing", pack="${c.packName}", kind="forecast"}) or vector(0)`, { decimals: 0, spark: false, thresholds: okAbove(1, 1), w: 6, h: 7 }),
       ];
