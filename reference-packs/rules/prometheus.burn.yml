@@ -8,21 +8,18 @@ groups:
     interval: 30s
     rules:
       - record: prometheus:scrape_duration_p99:error_ratio_5m
-        expr: "(sum_over_time((max(prometheus:scrape_duration:p99_5m) > bool 5)[5m:15s]) / 20)"
+        expr: "(sum_over_time((max(prometheus:scrape_duration:p99_5m) > bool 5)[5m:30s]) / 10)"
         labels:
-          slo: scrape_duration_99_p99_5s
           sli: scrape_duration_p99
           service: prometheus
       - record: prometheus:query_latency_p99:error_ratio_5m
-        expr: "(sum_over_time((max(prometheus:query_latency:p99_5m) > bool 1)[5m:15s]) / 20)"
+        expr: "(sum_over_time((max(prometheus:query_latency:p99_5m) > bool 1)[5m:30s]) / 10)"
         labels:
-          slo: query_latency_99_p99_1s
           sli: query_latency_p99
           service: prometheus
       - record: prometheus:query_concurrent_saturation:error_ratio_5m
-        expr: "(sum_over_time((max(prometheus:query_concurrency:saturation_5m) > bool 0.8)[5m:15s]) / 20)"
+        expr: "(sum_over_time((max(prometheus:query_concurrency:saturation_5m) > bool 0.8)[5m:30s]) / 10)"
         labels:
-          slo: query_concurrency_99_under_80pct
           sli: query_concurrent_saturation
           service: prometheus
       - record: prometheus:errorbudget:burn_5m
@@ -38,13 +35,13 @@ groups:
           sli: scrape_success_ratio
           service: prometheus
       - record: prometheus:errorbudget:burn_5m
-        expr: "(sum_over_time((max(prometheus:scrape_duration:p99_5m) > bool 5)[5m:15s]) / 20) / 0.01"
+        expr: "(sum_over_time((max(prometheus:scrape_duration:p99_5m) > bool 5)[5m:30s]) / 10) / 0.01"
         labels:
           slo: scrape_duration_99_p99_5s
           sli: scrape_duration_p99
           service: prometheus
       - record: prometheus:errorbudget:burn_1h
-        expr: "(sum_over_time((max(prometheus:scrape_duration:p99_5m) > bool 5)[1h:15s]) / 240) / 0.01"
+        expr: "(sum_over_time((max(prometheus:scrape_duration:p99_5m) > bool 5)[1h:30s]) / 120) / 0.01"
         labels:
           slo: scrape_duration_99_p99_5s
           sli: scrape_duration_p99
@@ -74,25 +71,25 @@ groups:
           sli: rule_evaluation_success_ratio
           service: prometheus
       - record: prometheus:errorbudget:burn_5m
-        expr: "(sum_over_time((max(prometheus:query_latency:p99_5m) > bool 1)[5m:15s]) / 20) / 0.01"
+        expr: "(sum_over_time((max(prometheus:query_latency:p99_5m) > bool 1)[5m:30s]) / 10) / 0.01"
         labels:
           slo: query_latency_99_p99_1s
           sli: query_latency_p99
           service: prometheus
       - record: prometheus:errorbudget:burn_1h
-        expr: "(sum_over_time((max(prometheus:query_latency:p99_5m) > bool 1)[1h:15s]) / 240) / 0.01"
+        expr: "(sum_over_time((max(prometheus:query_latency:p99_5m) > bool 1)[1h:30s]) / 120) / 0.01"
         labels:
           slo: query_latency_99_p99_1s
           sli: query_latency_p99
           service: prometheus
       - record: prometheus:errorbudget:burn_5m
-        expr: "(sum_over_time((max(prometheus:query_concurrency:saturation_5m) > bool 0.8)[5m:15s]) / 20) / 0.01"
+        expr: "(sum_over_time((max(prometheus:query_concurrency:saturation_5m) > bool 0.8)[5m:30s]) / 10) / 0.01"
         labels:
           slo: query_concurrency_99_under_80pct
           sli: query_concurrent_saturation
           service: prometheus
       - record: prometheus:errorbudget:burn_1h
-        expr: "(sum_over_time((max(prometheus:query_concurrency:saturation_5m) > bool 0.8)[1h:15s]) / 240) / 0.01"
+        expr: "(sum_over_time((max(prometheus:query_concurrency:saturation_5m) > bool 0.8)[1h:30s]) / 120) / 0.01"
         labels:
           slo: query_concurrency_99_under_80pct
           sli: query_concurrent_saturation
@@ -178,11 +175,11 @@ groups:
       - alert: scrape_duration_99_p99_5s_burn_10x_10m_1h
         expr: |
           (
-            (sum_over_time((max(prometheus:scrape_duration:p99_5m) > bool 5)[10m:15s]) / 40) > 0.1
+            (sum_over_time((max(prometheus:scrape_duration:p99_5m) > bool 5)[10m:30s]) / 20) > 0.1
           ) and (
-            (sum_over_time((max(prometheus:scrape_duration:p99_5m) > bool 5)[1h:15s]) / 240) > 0.1
+            (sum_over_time((max(prometheus:scrape_duration:p99_5m) > bool 5)[1h:30s]) / 120) > 0.1
           ) and (
-            sum_over_time((max(prometheus:scrape_duration:p99_5m) > bool 5)[10m:15s]) >= 2
+            sum_over_time((max(prometheus:scrape_duration:p99_5m) > bool 5)[10m:30s]) >= 2
           )
         for: 5m
         labels:
@@ -202,11 +199,11 @@ groups:
       - alert: scrape_duration_99_p99_5s_burn_4x_1h_6h
         expr: |
           (
-            (sum_over_time((max(prometheus:scrape_duration:p99_5m) > bool 5)[1h:15s]) / 240) > 0.04
+            (sum_over_time((max(prometheus:scrape_duration:p99_5m) > bool 5)[1h:30s]) / 120) > 0.04
           ) and (
-            (sum_over_time((max(prometheus:scrape_duration:p99_5m) > bool 5)[6h:15s]) / 1440) > 0.04
+            (sum_over_time((max(prometheus:scrape_duration:p99_5m) > bool 5)[6h:30s]) / 720) > 0.04
           ) and (
-            sum_over_time((max(prometheus:scrape_duration:p99_5m) > bool 5)[1h:15s]) >= 2
+            sum_over_time((max(prometheus:scrape_duration:p99_5m) > bool 5)[1h:30s]) >= 2
           )
         for: 10m
         labels:
@@ -331,11 +328,11 @@ groups:
       - alert: query_latency_99_p99_1s_burn_14x_5m_1h
         expr: |
           (
-            (sum_over_time((max(prometheus:query_latency:p99_5m) > bool 1)[5m:15s]) / 20) > 0.14
+            (sum_over_time((max(prometheus:query_latency:p99_5m) > bool 1)[5m:30s]) / 10) > 0.14
           ) and (
-            (sum_over_time((max(prometheus:query_latency:p99_5m) > bool 1)[1h:15s]) / 240) > 0.14
+            (sum_over_time((max(prometheus:query_latency:p99_5m) > bool 1)[1h:30s]) / 120) > 0.14
           ) and (
-            sum_over_time((max(prometheus:query_latency:p99_5m) > bool 1)[5m:15s]) >= 2
+            sum_over_time((max(prometheus:query_latency:p99_5m) > bool 1)[5m:30s]) >= 2
           )
         for: 2m
         labels:
@@ -355,11 +352,11 @@ groups:
       - alert: query_latency_99_p99_1s_burn_6x_30m_6h
         expr: |
           (
-            (sum_over_time((max(prometheus:query_latency:p99_5m) > bool 1)[30m:15s]) / 120) > 0.06
+            (sum_over_time((max(prometheus:query_latency:p99_5m) > bool 1)[30m:30s]) / 60) > 0.06
           ) and (
-            (sum_over_time((max(prometheus:query_latency:p99_5m) > bool 1)[6h:15s]) / 1440) > 0.06
+            (sum_over_time((max(prometheus:query_latency:p99_5m) > bool 1)[6h:30s]) / 720) > 0.06
           ) and (
-            sum_over_time((max(prometheus:query_latency:p99_5m) > bool 1)[30m:15s]) >= 2
+            sum_over_time((max(prometheus:query_latency:p99_5m) > bool 1)[30m:30s]) >= 2
           )
         for: 5m
         labels:
@@ -382,11 +379,11 @@ groups:
       - alert: query_concurrency_99_under_80pct_burn_8x_15m_2h
         expr: |
           (
-            (sum_over_time((max(prometheus:query_concurrency:saturation_5m) > bool 0.8)[15m:15s]) / 60) > 0.08
+            (sum_over_time((max(prometheus:query_concurrency:saturation_5m) > bool 0.8)[15m:30s]) / 30) > 0.08
           ) and (
-            (sum_over_time((max(prometheus:query_concurrency:saturation_5m) > bool 0.8)[2h:15s]) / 480) > 0.08
+            (sum_over_time((max(prometheus:query_concurrency:saturation_5m) > bool 0.8)[2h:30s]) / 240) > 0.08
           ) and (
-            sum_over_time((max(prometheus:query_concurrency:saturation_5m) > bool 0.8)[15m:15s]) >= 2
+            sum_over_time((max(prometheus:query_concurrency:saturation_5m) > bool 0.8)[15m:30s]) >= 2
           )
         for: 5m
         labels:
@@ -406,11 +403,11 @@ groups:
       - alert: query_concurrency_99_under_80pct_burn_3x_1h_6h
         expr: |
           (
-            (sum_over_time((max(prometheus:query_concurrency:saturation_5m) > bool 0.8)[1h:15s]) / 240) > 0.03
+            (sum_over_time((max(prometheus:query_concurrency:saturation_5m) > bool 0.8)[1h:30s]) / 120) > 0.03
           ) and (
-            (sum_over_time((max(prometheus:query_concurrency:saturation_5m) > bool 0.8)[6h:15s]) / 1440) > 0.03
+            (sum_over_time((max(prometheus:query_concurrency:saturation_5m) > bool 0.8)[6h:30s]) / 720) > 0.03
           ) and (
-            sum_over_time((max(prometheus:query_concurrency:saturation_5m) > bool 0.8)[1h:15s]) >= 2
+            sum_over_time((max(prometheus:query_concurrency:saturation_5m) > bool 0.8)[1h:30s]) >= 2
           )
         for: 10m
         labels:

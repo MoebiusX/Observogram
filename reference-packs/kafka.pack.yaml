@@ -310,8 +310,9 @@ spec:
       - { name: kafka:produce_latency:p99_5m,               expr: ref:slis.produce_latency_p99,         interval: 30s }
       - { name: kafka:fetch_latency:p99_5m,                 expr: ref:slis.fetch_latency_p99,           interval: 30s }
       - { name: kafka:controller_elections:rate_1h,         expr: ref:slis.controller_election_rate,    interval: 1m }
-      - { name: kafka:errorbudget:burn_1h,                  expr: kafka:broker_availability:error_ratio_5m / (1 - 0.999), interval: 1m }
-      - { name: kafka:errorbudget:burn_6h,                  expr: kafka:broker_availability:error_ratio_5m / (1 - 0.999), interval: 1m }
+      # kafka:errorbudget:burn_5m / burn_1h are generated per SLO by the policy (tools/gen-burn-rules.mjs
+      # and the compiler) with labels { slo, sli, service }; an unlabelled declaration reading the
+      # labelled error_ratio_5m wrote the same series with a different value at the same timestamp.
 
     derived_views:
       - id: golden_signals_kafka

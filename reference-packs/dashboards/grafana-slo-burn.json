@@ -1166,7 +1166,7 @@
         "w": 12,
         "h": 7
       },
-      "description": "Bad samples over expected samples in the last 5 minutes, per SLI.",
+      "description": "Bad events over the events that happened (counter SLIs) or bad samples over the expected samples (state and threshold SLIs) in the last 5 minutes, per SLI.",
       "targets": [
         {
           "refId": "A",
