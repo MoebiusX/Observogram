@@ -12,8 +12,11 @@ The design rules the core enforces:
 - **Templates, not serialisers.** The reference pack is rewritten as text with exact-count
   anchors; a module's templates are `(ctx) => string` functions over the reference files. No
   YAML is re-serialised, so comments and layout survive.
-- **Anchors fail loudly.** Every substitution declares how many times it matches; a different
-  count is an error naming the anchor.
+- **Anchors fail loudly.** Every substitution declares how many times it matches in the
+  reference pack text; the counts are asserted there, all at once, before anything is applied,
+  so a different count is an error naming the anchor and an anchor that overlaps an earlier one
+  counts the same in every environment. A replacement must not introduce text a later anchor
+  matches (error naming that anchor).
 - **Environment is a label, not a pack name.** `metadata.name` stays what the pack says;
   the environment lives in the partition path, `site.json` and the labels the module emits.
 - **Secrets are references** (paths and names in the inventory), never values.
@@ -160,22 +163,29 @@ reads itself: `monitoring_host`, `exporter_poll_interval`, `canary_interval` on 
 ### Merge, inheritance, validation (`inventory.mjs`)
 
 - **Merge** (`mergeInventories`): `hosts` and `queue_managers` are concatenated (a duplicate
-  name across files is an error naming both files); `environments` keys are merged (the same
-  key in two files must be deep-equal); a file-level `env` applies only to that file's items,
-  kept as `source: { file, env }` on each merged item.
+  host name across files is an error naming both files; a duplicate queue-manager name within
+  one environment is an error naming both files, checked once the environments are resolved,
+  so `QM1` in prod and `QM1` in staging are two queue managers); `environments` keys are merged
+  (the same key in two files must be deep-equal); a file-level `env` applies only to that
+  file's items, kept as `source: { file, env }` on each merged item. Two files whose `pack:`
+  strings differ are an error for a library caller that did not choose the pack
+  (`run({ packChosen })`); the CLI always chooses it (`--pack`, or each file's `pack:` resolved
+  relative to that file), so one file per directory may spell the same pack differently.
 - **Inheritance** (`resolveEnvironments`): `host.env = host.env ?? file.env` (error when
   neither); `qm.env = qm.env ?? unique(env of qm.hosts) ?? file.env` (error when the hosts
   disagree, naming them; when `qm.env` differs from its hosts' env; when nothing resolves).
   Every error names the item and its file.
 - **Names**: every environment referenced (file `env`, host `env`, qm `env`, `environments`
   keys) must be in the pack's `metadata.bindings.environments`; the error quotes the pack's
-  list. Every environment with members needs an `environments.<env>` block (endpoints are
-  required to emit anything). A pack without `spec.environments.<env>` is a warning
+  list. Every environment with members (a host or a queue manager) needs an
+  `environments.<env>` block (endpoints are required to emit anything; a host-only environment
+  is rendered too, so it needs one). A pack without `spec.environments.<env>` is a warning
   (`--strict`: error).
 - **Semantics** (`validateInventory`): `rdqm-ha` needs at least 3 hosts and an `address`;
   `vantage: dual` with `profile: non-container` requires `params.native_port` on every queue
-  manager; `client_port` unique per `exporter_host`; `native_port` unique per host;
-  `address.host` unique per environment.
+  manager; `client_port` unique per `exporter_host` across environments (an exporter host is a
+  machine two environments may share; without an `exporter_host` the port is scoped to the
+  environment); `native_port` unique per host; `address.host` unique per environment.
 - **Adapter**: `--registry <file> --adapter <esm>`; the adapter exports `toInventory(raw)`
   (raw = the registry parsed as JSON or YAML) and its result goes through the same schema and
   semantic checks as a file.
@@ -187,7 +197,7 @@ Every hook is optional; every hook receives the `ctx` object first.
 | Hook | Returns |
 | --- | --- |
 | `paramsSchema` | `{ site, host, instance }` JSON Schema fragments spliced into the inventory schema |
-| `packSubstitutions(ctx)` | `[{ name, find, replace, count }]` exact-count anchors over the reference pack text (`find` a string, literal, or a RegExp with `$1` replacement) |
+| `packSubstitutions(ctx)` | `[{ name, find, replace, count }]` exact-count anchors over the reference pack text (`find` a string, literal, or a RegExp with `$1` replacement); counted on the reference before any is applied, applied in order, and a replacement must not introduce text a later anchor matches |
 | `packRemovals(ctx)` | `[{ key, value }]` list items dropped from the site pack (`dropItem`: from `- key: value`, block or flow form, to the end of that item, everywhere it appears) |
 | `runbooks(ctx)` | `{ sliId: runbookPath }` for the burn-rate alert annotations |
 | `templates(ctx)` | `{ path: string \| (ctx) => string }` or `[{ path, render }]` |

@@ -88,7 +88,9 @@ const module = opts.module ? await load(opts.module, 'module') : null;
 const adapter = opts.adapter ? await load(opts.adapter, 'adapter') : null;
 const registry = opts.registry ? read(resolve(opts.registry), 'registry') : undefined;
 
-const r = run({ pack, packText, schema, inventorySchema, inventories, env: opts.env ?? null, module, adapter, registry, repoUrl: opts['repo-url'] ?? null, strict: Boolean(opts.strict), lib });
+// packChosen: the pack is settled above (--pack, or the unique declared path), so inventories that
+// spell the same pack differently (one file per directory) are not a merge error
+const r = run({ pack, packText, schema, inventorySchema, inventories, env: opts.env ?? null, module, adapter, registry, repoUrl: opts['repo-url'] ?? null, strict: Boolean(opts.strict), lib, packChosen: true });
 for (const w of r.warnings) console.error(`warning: ${w}`);
 if (r.errors.length) { for (const e of r.errors) console.error(`✗ ${e}`); process.exit(r.usage ? 2 : 1); }
 

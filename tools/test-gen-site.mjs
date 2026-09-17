@@ -3,7 +3,9 @@
  * tools/test-gen-site.mjs
  *
  * gen-site core regression suite (tools/lib/site/*) on the fixtures under tools/fixtures/site/:
- *   T1 merge (two files → one model; duplicate queue manager → error)
+ *   T1 merge (two files → one model; a duplicate queue manager within one environment → error,
+ *      the same name in two environments → two queue managers; differing `pack:` strings are an
+ *      error only when the caller did not choose the pack)
  *   T2 environment inheritance (host env → qm; disagreeing hosts → error naming both; a host
  *      without env in a file without env → error)
  *   T3 environment names (an env outside metadata.bindings.environments → error quoting the
@@ -16,7 +18,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdtempSync, existsSync, readdirSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -65,12 +67,40 @@ test('T1 merge: two inventory files become one model; file-level env stays with 
   assert.equal(envs.prod.queue_managers[0].site, 'dc1');
 });
 
-test('T1 merge: a duplicate queue manager name is an error naming both files', () => {
-  const a = { inventory: 'v1', env: 'prod', queue_managers: [{ name: 'QM1', shape: 'host' }] };
-  const b = { inventory: 'v1', env: 'lab', queue_managers: [{ name: 'QM1', shape: 'container' }] };
-  const m = mergeInventories([{ name: 'a.yaml', doc: a }, { name: 'b.yaml', doc: b }]);
-  assert.equal(m.errors.length, 1);
-  assert.match(m.errors[0], /b\.yaml: queue manager QM1 is also declared in a\.yaml/);
+test('T1 merge: a duplicate queue manager name within one environment is an error naming both files; the same name in two environments is two queue managers', () => {
+  const block = { prod: { endpoints: { remote_write: 'http://x' }, params: { queue_pattern: 'x' } } };
+  const a = { inventory: 'v1', env: 'prod', environments: block, queue_managers: [{ name: 'QM1', shape: 'host' }] };
+  const b = { inventory: 'v1', env: 'prod', queue_managers: [{ name: 'QM1', shape: 'container' }] };
+  const same = mergeInventories([{ name: 'a.yaml', doc: a }, { name: 'b.yaml', doc: b }]);
+  assert.deepEqual(same.errors, [], 'the merge concatenates; the name check needs the resolved environments');
+  const dup = resolveEnvironments(same.inventory, pack);
+  assert.deepEqual(dup.errors, ['queue manager QM1 (b.yaml): also declared in a.yaml in environment prod']);
+  assert.deepEqual(validateInventory(same.inventory, pack, { schema: invSchema, module }).errors, dup.errors);
+  const twice = resolveEnvironments(mergeInventories(files({ ...a, queue_managers: [...a.queue_managers, ...b.queue_managers] })).inventory, pack);
+  assert.deepEqual(twice.errors, ['queue manager QM1 (f0): declared twice in environment prod']);
+  // a host name stays unique across the whole inventory (a host is a machine)
+  const hosts = mergeInventories([{ name: 'a.yaml', doc: { inventory: 'v1', env: 'prod', hosts: [{ name: 'h' }] } }, { name: 'b.yaml', doc: { inventory: 'v1', env: 'lab', hosts: [{ name: 'h' }] } }]);
+  assert.deepEqual(hosts.errors, ['b.yaml: host h is also declared in a.yaml']);
+  // design §2.3: QM1 in prod and QM1 in lab are different queue managers, rendered in two partitions
+  const prodQm1 = prodInv.replace('name: QMPAY1', 'name: QM1');
+  const r = run({ pack, packText, schema, inventorySchema: invSchema, inventories: [{ name: 'prod.inventory.yaml', text: prodQm1 }, { name: 'lab.inventory.yaml', text: labInv }], env: 'all', module, lib });
+  assert.deepEqual(r.errors, []);
+  assert.deepEqual(Object.keys(r.partitions).sort(), ['lab', 'prod']);
+  assert.ok(r.partitions.prod.files.some(f => f.path === 'qmgrs/QM1/exporter.yaml') && r.partitions.lab.files.some(f => f.path === 'qmgrs/QM1/exporter.yaml'));
+  assert.deepEqual(r.partitions.prod.manifest.queue_managers.map(q => q.name), ['QMORD1', 'QM1']);
+});
+
+test('T1 merge: inventories whose pack: strings differ are an error unless the caller chose the pack (--pack wins)', () => {
+  const inv = [{ name: 'a/lab.inventory.yaml', text: labInv }, { name: 'b/prod.inventory.yaml', text: prodInv.replace('pack: fixture.pack.yaml', 'pack: ../a/fixture.pack.yaml') }];
+  const l = loadAll(inv);
+  assert.deepEqual(l.errors, []);
+  assert.deepEqual(mergeInventories(l.files).errors, ['the inventories name different packs: fixture.pack.yaml, ../a/fixture.pack.yaml (pass --pack to choose)']);
+  assert.deepEqual(mergeInventories(l.files, { packChosen: true }).errors, []);
+  const refused = run({ pack, packText, schema, inventorySchema: invSchema, inventories: inv, env: 'all', module, lib });
+  assert.match(refused.errors[0], /the inventories name different packs/); assert.deepEqual(refused.partitions, {});
+  const chosen = run({ pack, packText, schema, inventorySchema: invSchema, inventories: inv, env: 'all', module, lib, packChosen: true });
+  assert.deepEqual(chosen.errors, []);
+  assert.deepEqual(Object.keys(chosen.partitions).sort(), ['lab', 'prod']);
 });
 
 test('T1 merge: the same environments key in two files must be deep-equal', () => {
@@ -136,6 +166,23 @@ test('T3 names: a queue manager env without an environments.<env> block is an er
   assert.match(s.errors[0], /no spec\.environments\.lab/);
 });
 
+test('T3 names: an environment with only a host needs its environments.<env> block too (it is selected and rendered)', () => {
+  const hostOnly = labInv.replace('  - { name: mq, site: lab, roles: [container] }\n', '  - { name: mq, site: lab, roles: [container] }\n  - { name: mon1.prod.internal, env: prod, roles: [monitoring] }\n');
+  assert.ok(/^hosts:\n {2}- \{ name: mq.*\n {2}- \{ name: mon1/m.test(hostOnly), 'the host lands in hosts[]');
+  const l = loadAll([{ name: 'lab.inventory.yaml', text: hostOnly }]);
+  assert.deepEqual(l.errors, []);
+  const v = validateInventory(mergeInventories(l.files).inventory, pack, { schema: invSchema, module });
+  assert.deepEqual(v.errors, ['environment prod: no environments.prod block in the inventory (endpoints are required to emit anything)']);
+  const r = run({ pack, packText, schema, inventorySchema: invSchema, inventories: [{ name: 'lab.inventory.yaml', text: hostOnly }], env: 'all', module, lib });
+  assert.deepEqual(r.errors, v.errors); assert.deepEqual(r.partitions, {});
+  // with the block, the host-only environment renders (no queue managers, a real params block)
+  const withBlock = hostOnly.replace('environments:\n', 'environments:\n  prod:\n    endpoints: { remote_write: https://mimir.prod.internal/api/v1/push }\n    params: { queue_pattern: "ORD\\\\..*" }\n');
+  const ok = run({ pack, packText, schema, inventorySchema: invSchema, inventories: [{ name: 'lab.inventory.yaml', text: withBlock }], env: 'all', module, lib });
+  assert.deepEqual(ok.errors, []);
+  assert.deepEqual(ok.partitions.prod.manifest.queue_managers, []); assert.equal(ok.partitions.prod.manifest.hosts.length, 1);
+  assert.ok(ok.partitions.prod.files.find(f => f.path === 'packs/fixture.pack.yaml').content.includes('queue=~"ORD\\..*"'), 'no queue=~"undefined"');
+});
+
 // ----------------------------------------------------------------- schema + semantics
 test('schema: module params are spliced in and unknown keys are rejected; core semantic checks fire', () => {
   const s = inventorySchema(invSchema, module);
@@ -163,6 +210,19 @@ test('schema: module params are spliced in and unknown keys are rejected; core s
   has(/queue manager B \(f0\): address\.host h1 is also used by queue manager A in environment prod/);
   has(/queue manager A \(f0\): client_port 9161 on exporter host mon is also used by queue manager HA/);
   has(/queue manager A \(f0\): native_port 9157 on host h1 is also used by queue manager HA/);
+});
+
+test('semantics: client_port is unique per exporter host across environments; without an exporter host it is scoped to the environment', () => {
+  const file = (env, host, qm, monitoring_host) => ({ inventory: 'v1', env, environments: { [env]: { endpoints: { remote_write: 'http://x' }, params: { queue_pattern: 'x', ...(monitoring_host ? { monitoring_host } : {}) } } },
+    hosts: [{ name: host }], queue_managers: [{ name: qm, shape: 'host', hosts: [host], address: { host, port: 1414 }, params: { client_port: 9161 } }] });
+  const shared = validateInventory(mergeInventories(files(file('prod', 'hp', 'A', 'mon'), file('lab', 'hl', 'B', 'mon'))).inventory, pack, { schema: invSchema, module });
+  assert.deepEqual(shared.errors, ['queue manager B (f1): client_port 9161 on exporter host mon is also used by queue manager A']);
+  const separate = validateInventory(mergeInventories(files(file('prod', 'hp', 'A', 'mon-prod'), file('lab', 'hl', 'B', 'mon-lab'))).inventory, pack, { schema: invSchema, module });
+  assert.deepEqual(separate.errors, []);
+  const unknown = validateInventory(mergeInventories(files(file('prod', 'hp', 'A'), file('lab', 'hl', 'B'))).inventory, pack, { schema: invSchema, module });
+  assert.deepEqual(unknown.errors, [], 'no exporter host known: the port collides only within one environment');
+  const unknownSameEnv = validateInventory(mergeInventories(files({ ...file('prod', 'hp', 'A'), queue_managers: [...file('prod', 'hp', 'A').queue_managers, ...file('prod', 'hp', 'B').queue_managers] })).inventory, pack, { schema: invSchema, module });
+  assert.ok(unknownSameEnv.errors.some(e => /queue manager B \(f0\): client_port 9161 on exporter host \(no exporter_host\) is also used by queue manager A/.test(e)), unknownSameEnv.errors.join('\n'));
 });
 
 test('adapter: a registry goes through toInventory() and the same checks', () => {
@@ -256,6 +316,26 @@ test('T8 counts: an anchor that matches a different number of times fails naming
   const broken = derivePack(packText, [{ name: 'kind', find: 'kind: ObservabilityPack', replace: 'kind: Nope', count: 1 }], [], { schema });
   assert.equal(broken.pack, null);
   assert.match(broken.errors[0], /derived pack: not a canonical ObservabilityPack/);
+});
+
+test('T8 counts: anchors are counted over the reference text, so an anchor an earlier one overlaps passes in every environment; a replacement that introduces text a later anchor matches fails', () => {
+  assert.equal(countMatches(packText, 'scrape_interval: 10s'), 1); assert.equal(countMatches(packText, 'interval: 10s'), 3);
+  const subs = (step) => [
+    { name: 'pipeline scrape_interval', find: 'scrape_interval: 10s', replace: `scrape_interval: ${step}`, count: 1 },
+    { name: 'recording interval', find: 'interval: 10s', replace: `interval: ${step}`, count: 3 },
+  ];
+  const lab = derivePack(packText, subs('10s'), [], { schema });
+  assert.deepEqual(lab.errors, []); assert.equal(lab.text, packText);
+  const prod = derivePack(packText, subs('30s'), [], { schema });
+  assert.deepEqual(prod.errors, [], 'the running text has 2 left after scrape_interval was rewritten; the reference has 3');
+  assert.equal(countMatches(prod.text, 'interval: 30s'), countMatches(packText, 'interval: 30s') + 3); assert.equal(countMatches(prod.text, 'interval: 10s'), 0);
+  assert.deepEqual(prod.applied, [{ name: 'pipeline scrape_interval', count: 1, changed: true }, { name: 'recording interval', count: 3, changed: true }]);
+  // a mismatch is still reported against the reference, whatever the order
+  assert.deepEqual(derivePack(packText, [subs('30s')[1], { ...subs('30s')[0], count: 2 }], [], { schema }).errors, ['anchor pipeline scrape_interval: expected 2 occurrences, found 1']);
+  // an earlier replacement that introduces text a later anchor matches is an error naming the later anchor
+  const introduced = derivePack(packText, [{ name: 'kind', find: 'kind: ObservabilityPack', replace: 'kind: ObservabilityPack # interval: 10s', count: 1 }, subs('30s')[1]], [], { schema });
+  assert.deepEqual(introduced.errors, ['anchor recording interval: an earlier substitution introduced text it matches (4 occurrences now, 3 in the reference)']);
+  assert.equal(introduced.text, null);
 });
 
 test('derive: dropItem removes a block item with its nested lines and a flow item, everywhere it appears', () => {
@@ -460,6 +540,29 @@ test('T5 CLI: usage and validation exit codes', () => {
   // a self-check failure is exit 1 with nothing written
   const out = mkdtempSync(join(tmpdir(), 'gen-site-'));
   try {
+    // one inventory per directory: the pack: strings differ but name the same file; --pack wins, and
+    // without --pack each is resolved relative to its own file
+    mkdirSync(join(out, 'a')); mkdirSync(join(out, 'b'));
+    writeFileSync(join(out, 'a', 'fixture.pack.yaml'), packText);
+    writeFileSync(join(out, 'a', 'lab.inventory.yaml'), labInv);
+    writeFileSync(join(out, 'b', 'prod.inventory.yaml'), prodInv.replace('pack: fixture.pack.yaml', 'pack: ../a/fixture.pack.yaml'));
+    const twoDirs = ['--inventory', join(out, 'a', 'lab.inventory.yaml'), '--inventory', join(out, 'b', 'prod.inventory.yaml'), '--module', resolve(FIX, 'module.mjs'), '--env', 'all', '--check'];
+    const withPack = cli(...twoDirs, '--pack', join(out, 'a', 'fixture.pack.yaml'));
+    assert.equal(withPack.status, 0, withPack.stderr); assert.match(withPack.stdout, /check ok: lab, prod/);
+    const resolved = cli(...twoDirs);
+    assert.equal(resolved.status, 0, resolved.stderr); assert.match(resolved.stdout, /check ok: lab, prod/);
+    writeFileSync(join(out, 'b', 'other.inventory.yaml'), [
+      'inventory: v1', 'env: prod', 'pack: other.pack.yaml',
+      'environments:', '  prod:', '    scrape_interval: 30s',
+      '    endpoints: { remote_write: https://mimir.prod.internal/api/v1/push }',
+      '    params: { queue_pattern: "ORD\\\\..*", monitoring_host: mon1.prod.internal, exporter_poll_interval: 30s }',
+      'hosts:', '  - { name: mqpay2.prod.internal, site: dc2 }',
+      'queue_managers:', '  - { name: QMPAY2, shape: host, hosts: [mqpay2.prod.internal], address: { host: mqpay2.prod.internal, port: 1415 }, params: { client_port: 9163 } }', '',
+    ].join('\n'));
+    const differ = cli('--inventory', join(out, 'a', 'lab.inventory.yaml'), '--inventory', join(out, 'b', 'other.inventory.yaml'), '--module', resolve(FIX, 'module.mjs'), '--env', 'all', '--check');
+    assert.equal(differ.status, 2, differ.stderr); assert.match(differ.stderr, /the inventories name different packs \(.*fixture\.pack\.yaml, .*other\.pack\.yaml\): pass --pack/);
+    const differChosen = cli('--inventory', join(out, 'a', 'lab.inventory.yaml'), '--inventory', join(out, 'b', 'other.inventory.yaml'), '--module', resolve(FIX, 'module.mjs'), '--env', 'all', '--check', '--pack', join(out, 'a', 'fixture.pack.yaml'));
+    assert.equal(differChosen.status, 0, differChosen.stderr);
     const badInv = join(out, 'bad.inventory.yaml');
     writeFileSync(badInv, labInv.replace('client_port: 9157', 'client_port: 9157, typo: 1'));
     const r = cli('--inventory', badInv, '--pack', resolve(FIX, 'fixture.pack.yaml'), '--module', resolve(FIX, 'module.mjs'), '--out', join(out, 'sites'));
