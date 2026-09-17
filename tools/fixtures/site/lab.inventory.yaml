@@ -1,0 +1,24 @@
+# gen-site test fixture: the lab as an inventory. Under it every fixture-module substitution
+# maps a value to itself, so the lab site pack equals fixture.pack.yaml byte for byte.
+inventory: v1
+env: lab
+pack: fixture.pack.yaml
+environments:
+  lab:
+    scrape_interval: 10s
+    vantage: dual
+    profile: container
+    endpoints: { remote_write: http://prometheus:9090/api/v1/write, loki: http://loki:3100/otlp, tempo: tempo:4317, alertmanager: http://alertmanager:9093, alert_sink: http://alert-sink:9095, otlp: http://otel-collector:4318, grafana: http://grafana:3000 }
+    receivers: { sev1: webhook://alert-sink, sev2: webhook://alert-sink, sev3: webhook://alert-sink }
+    params:
+      queue_pattern: "APP.*"
+      monitoring_host: mq-exporter
+      exporter_poll_interval: 10s
+hosts:
+  - { name: mq, site: lab, roles: [container] }
+queue_managers:
+  - name: QM1
+    shape: container
+    hosts: [ mq ]
+    address: { host: mq, port: 1414 }
+    params: { native_port: 9157, client_port: 9157 }
