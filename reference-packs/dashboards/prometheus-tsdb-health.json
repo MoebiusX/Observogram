@@ -51,6 +51,17 @@
   },
   "links": [
     {
+      "title": "Unified",
+      "type": "link",
+      "url": "/d/prometheus-unified",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
       "title": "Overview",
       "type": "link",
       "url": "/d/prometheus-overview",
@@ -102,7 +113,7 @@
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### Prometheus · Tsdb health\nSLIs wal_corruption_freshness, tsdb_compaction_success_ratio · SLOs tsdb_compaction_99_95. &nbsp;·&nbsp; pack `prometheus@1.0.0` &nbsp;·&nbsp; [Overview](/d/prometheus-overview?${__url_time_range}) · [Query engine](/d/prometheus-query-engine?${__url_time_range}) · **Tsdb health** · [Slo burn](/d/prometheus-slo-burn?${__url_time_range})",
+        "content": "### Prometheus · Tsdb health\nSLIs wal_corruption_freshness, tsdb_compaction_success_ratio · SLOs tsdb_compaction_99_95. &nbsp;·&nbsp; pack `prometheus@1.0.0` &nbsp;·&nbsp; [Unified](/d/prometheus-unified?${__url_time_range}) · [Overview](/d/prometheus-overview?${__url_time_range}) · [Query engine](/d/prometheus-query-engine?${__url_time_range}) · **Tsdb health** · [Slo burn](/d/prometheus-slo-burn?${__url_time_range})",
         "code": {
           "language": "plaintext",
           "showLineNumbers": false,

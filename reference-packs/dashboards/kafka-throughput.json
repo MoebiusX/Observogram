@@ -51,6 +51,17 @@
   },
   "links": [
     {
+      "title": "Unified",
+      "type": "link",
+      "url": "/d/kafka-unified",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
       "title": "Cluster overview",
       "type": "link",
       "url": "/d/kafka-cluster-overview",
@@ -102,7 +113,7 @@
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### Kafka · Throughput\nPer-resource rollup per_topic_throughput. &nbsp;·&nbsp; pack `kafka@1.0.0` &nbsp;·&nbsp; [Cluster overview](/d/kafka-cluster-overview?${__url_time_range}) · [Consumer lag](/d/kafka-consumer-lag?${__url_time_range}) · **Throughput** · [Slo burn](/d/kafka-slo-burn?${__url_time_range})",
+        "content": "### Kafka · Throughput\nPer-resource rollup per_topic_throughput. &nbsp;·&nbsp; pack `kafka@1.0.0` &nbsp;·&nbsp; [Unified](/d/kafka-unified?${__url_time_range}) · [Cluster overview](/d/kafka-cluster-overview?${__url_time_range}) · [Consumer lag](/d/kafka-consumer-lag?${__url_time_range}) · **Throughput** · [Slo burn](/d/kafka-slo-burn?${__url_time_range})",
         "code": {
           "language": "plaintext",
           "showLineNumbers": false,

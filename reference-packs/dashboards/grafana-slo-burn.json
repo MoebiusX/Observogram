@@ -52,6 +52,17 @@
   },
   "links": [
     {
+      "title": "Unified",
+      "type": "link",
+      "url": "/d/grafana-unified",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
       "title": "Overview",
       "type": "link",
       "url": "/d/grafana-overview",
@@ -103,7 +114,7 @@
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### Grafana · Slo burn\nError-budget burn per SLO on the fast and slow windows, and the burn-rate / forecast alert history. &nbsp;·&nbsp; pack `grafana@1.0.0` &nbsp;·&nbsp; [Overview](/d/grafana-overview?${__url_time_range}) · [Alerting health](/d/grafana-alerting-health?${__url_time_range}) · [Plugins and auth](/d/grafana-plugins-and-auth?${__url_time_range}) · **Slo burn**",
+        "content": "### Grafana · Slo burn\nError-budget burn per SLO on the fast and slow windows, and the burn-rate / forecast alert history. &nbsp;·&nbsp; pack `grafana@1.0.0` &nbsp;·&nbsp; [Unified](/d/grafana-unified?${__url_time_range}) · [Overview](/d/grafana-overview?${__url_time_range}) · [Alerting health](/d/grafana-alerting-health?${__url_time_range}) · [Plugins and auth](/d/grafana-plugins-and-auth?${__url_time_range}) · **Slo burn**",
         "code": {
           "language": "plaintext",
           "showLineNumbers": false,

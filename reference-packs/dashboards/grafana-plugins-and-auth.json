@@ -51,6 +51,17 @@
   },
   "links": [
     {
+      "title": "Unified",
+      "type": "link",
+      "url": "/d/grafana-unified",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
       "title": "Overview",
       "type": "link",
       "url": "/d/grafana-overview",
@@ -102,7 +113,7 @@
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### Grafana · Plugins and auth\nSLIs plugin_request_success_ratio, login_success_ratio · SLOs plugin_request_99_9, login_success_99_9. &nbsp;·&nbsp; pack `grafana@1.0.0` &nbsp;·&nbsp; [Overview](/d/grafana-overview?${__url_time_range}) · [Alerting health](/d/grafana-alerting-health?${__url_time_range}) · **Plugins and auth** · [Slo burn](/d/grafana-slo-burn?${__url_time_range})",
+        "content": "### Grafana · Plugins and auth\nSLIs plugin_request_success_ratio, login_success_ratio · SLOs plugin_request_99_9, login_success_99_9. &nbsp;·&nbsp; pack `grafana@1.0.0` &nbsp;·&nbsp; [Unified](/d/grafana-unified?${__url_time_range}) · [Overview](/d/grafana-overview?${__url_time_range}) · [Alerting health](/d/grafana-alerting-health?${__url_time_range}) · **Plugins and auth** · [Slo burn](/d/grafana-slo-burn?${__url_time_range})",
         "code": {
           "language": "plaintext",
           "showLineNumbers": false,

@@ -52,6 +52,17 @@
   },
   "links": [
     {
+      "title": "Unified",
+      "type": "link",
+      "url": "/d/prometheus-unified",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
       "title": "Overview",
       "type": "link",
       "url": "/d/prometheus-overview",
@@ -103,7 +114,7 @@
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### Prometheus · Slo burn\nError-budget burn per SLO on the fast and slow windows, and the burn-rate / forecast alert history. &nbsp;·&nbsp; pack `prometheus@1.0.0` &nbsp;·&nbsp; [Overview](/d/prometheus-overview?${__url_time_range}) · [Query engine](/d/prometheus-query-engine?${__url_time_range}) · [Tsdb health](/d/prometheus-tsdb-health?${__url_time_range}) · **Slo burn**",
+        "content": "### Prometheus · Slo burn\nError-budget burn per SLO on the fast and slow windows, and the burn-rate / forecast alert history. &nbsp;·&nbsp; pack `prometheus@1.0.0` &nbsp;·&nbsp; [Unified](/d/prometheus-unified?${__url_time_range}) · [Overview](/d/prometheus-overview?${__url_time_range}) · [Query engine](/d/prometheus-query-engine?${__url_time_range}) · [Tsdb health](/d/prometheus-tsdb-health?${__url_time_range}) · **Slo burn**",
         "code": {
           "language": "plaintext",
           "showLineNumbers": false,
