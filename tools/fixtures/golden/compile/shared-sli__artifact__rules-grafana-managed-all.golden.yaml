@@ -1,0 +1,397 @@
+# Grafana-managed rules compiled from ObservabilityPack v1.2
+# Pack: shared-sli · version 0.1.0
+# Format: Grafana 9+ provisioning YAML (apiVersion: 1).
+# Apply via: copy under provisioning/alerting/ OR POST to /api/v1/provisioning/alert-rules
+# Source of truth — DO NOT hand-edit. Re-emit from the pack.
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: shared_sli_recording
+    folder: observability-pack
+    interval: 30s
+    rules:
+      - uid: rec-shared_sli-lat-value_5m-slo-lat_99
+        title: shared_sli:lat:value_5m{slo="lat_99"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: histogram_quantile(0.99, sum(rate(http_server_request_duration_seconds_bucket{service_name="shared-sli"}[5m])) by (le))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: lat_99
+          sli: lat
+          service: shared-sli
+        annotations: {}
+        record:
+          metric: shared_sli:lat:value_5m
+          from: A
+        is_paused: false
+      - uid: rec-shared_sli-lat-error_ratio_5m
+        title: shared_sli:lat:error_ratio_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(shared_sli:lat:value_5m) > bool 0.5)[5m:30s]) / 10)
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          sli: lat
+          service: shared-sli
+        annotations: {}
+        record:
+          metric: shared_sli:lat:error_ratio_5m
+          from: A
+        is_paused: false
+      - uid: rec-shared_sli-errorbudget-burn_-1boa8pt
+        title: shared_sli:errorbudget:burn_5m{slo="lat_99"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(shared_sli:lat:value_5m) > bool 0.5)[5m:30s]) / 10) / 0.01
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: lat_99
+          sli: lat
+          service: shared-sli
+        annotations: {}
+        record:
+          metric: shared_sli:errorbudget:burn_5m
+          from: A
+        is_paused: false
+      - uid: rec-shared_sli-errorbudget-burn_-1siin54
+        title: shared_sli:errorbudget:burn_1h{slo="lat_99"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(shared_sli:lat:value_5m) > bool 0.5)[1h:30s]) / 120) / 0.01
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: lat_99
+          sli: lat
+          service: shared-sli
+        annotations: {}
+        record:
+          metric: shared_sli:errorbudget:burn_1h
+          from: A
+        is_paused: false
+      - uid: rec-shared_sli-lat-value_5m-slo-lat_999
+        title: shared_sli:lat:value_5m{slo="lat_999"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: histogram_quantile(0.99, sum(rate(http_server_request_duration_seconds_bucket{service_name="shared-sli"}[5m])) by (le))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: lat_999
+          sli: lat
+          service: shared-sli
+        annotations: {}
+        record:
+          metric: shared_sli:lat:value_5m
+          from: A
+        is_paused: false
+      - uid: rec-shared_sli-errorbudget-burn_-05newy0
+        title: shared_sli:errorbudget:burn_5m{slo="lat_999"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(shared_sli:lat:value_5m) > bool 0.5)[5m:30s]) / 10) / 0.001
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: lat_999
+          sli: lat
+          service: shared-sli
+        annotations: {}
+        record:
+          metric: shared_sli:errorbudget:burn_5m
+          from: A
+        is_paused: false
+      - uid: rec-shared_sli-errorbudget-burn_-167twlf
+        title: shared_sli:errorbudget:burn_1h{slo="lat_999"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(shared_sli:lat:value_5m) > bool 0.5)[1h:30s]) / 120) / 0.001
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: lat_999
+          sli: lat
+          service: shared-sli
+        annotations: {}
+        record:
+          metric: shared_sli:errorbudget:burn_1h
+          from: A
+        is_paused: false
+  - orgId: 1
+    name: shared_sli_lat_99_burn
+    folder: observability-pack
+    interval: 30s
+    rules:
+      - uid: alr-lat_99_burn_14x_5m_1h
+        title: lat_99_burn_14x_5m_1h
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (
+                  (sum_over_time((max(shared_sli:lat:value_5m) > bool 0.5)[5m:30s]) / 10) > 0.14
+                ) and (
+                  (sum_over_time((max(shared_sli:lat:value_5m) > bool 0.5)[1h:30s]) / 120) > 0.14
+                ) and (
+                  sum_over_time((max(shared_sli:lat:value_5m) > bool 0.5)[5m:30s]) >= 2
+                )
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 2m
+        labels:
+          severity: SEV1
+          slo: lat_99
+          sli: lat
+          service: shared-sli
+          burn_rate: "14"
+          window_short: 5m
+          window_long: 1h
+          pack: shared-sli
+        annotations:
+          summary: Burn rate 14× on lat_99
+          description: Both the 5m and 1h error ratios exceed 14× of the 1.000% error budget for lat_99, with at least 2 bad samples in the 5m window.
+          slo_objective: 99.000%
+          slo_window: 30d
+          runbook: (supply runbook URL)
+        is_paused: false
+  - orgId: 1
+    name: shared_sli_lat_999_burn
+    folder: observability-pack
+    interval: 30s
+    rules:
+      - uid: alr-lat_999_burn_14x_5m_1h
+        title: lat_999_burn_14x_5m_1h
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (
+                  (sum_over_time((max(shared_sli:lat:value_5m) > bool 0.5)[5m:30s]) / 10) > 0.014
+                ) and (
+                  (sum_over_time((max(shared_sli:lat:value_5m) > bool 0.5)[1h:30s]) / 120) > 0.014
+                ) and (
+                  sum_over_time((max(shared_sli:lat:value_5m) > bool 0.5)[5m:30s]) >= 2
+                )
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 2m
+        labels:
+          severity: SEV1
+          slo: lat_999
+          sli: lat
+          service: shared-sli
+          burn_rate: "14"
+          window_short: 5m
+          window_long: 1h
+          pack: shared-sli
+        annotations:
+          summary: Burn rate 14× on lat_999
+          description: Both the 5m and 1h error ratios exceed 14× of the 0.100% error budget for lat_999, with at least 2 bad samples in the 5m window.
+          slo_objective: 99.900%
+          slo_window: 30d
+          runbook: (supply runbook URL)
+        is_paused: false
+  - orgId: 1
+    name: shared_sli_forecast
+    folder: observability-pack
+    interval: 5m
+    rules:
+      - uid: alr-lat_99_forecast_breach
+        title: lat_99_forecast_breach
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: predict_linear(shared_sli:errorbudget:burn_1h{slo="lat_99"}[1d], 86400) > 1 and min_over_time(shared_sli:errorbudget:burn_1h{slo="lat_99"}[2h]) > 1
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 15m
+        labels:
+          severity: SEV2
+          slo: lat_99
+          kind: forecast
+          service: shared-sli
+          sli: lat
+          pack: shared-sli
+        annotations:
+          summary: lat_99 has burned faster than its budget for 2h and its 1d trend projects a breach within 1d
+          method: linear on the 1h burn rate
+          on_projected_breach: open_ticket
+          horizon: 1d
+          horizon_declared: 7d
+        is_paused: false

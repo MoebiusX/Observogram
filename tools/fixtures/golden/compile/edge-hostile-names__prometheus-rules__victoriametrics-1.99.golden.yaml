@@ -25,7 +25,18 @@ groups:
           sli: latência_p99_süccess
           service: edge-hostile-names
       - record: edge_hostile_names:lat_ncia_p99_s_ccess:error_ratio_5m
-        expr: 1 - edge_hostile_names:lat_ncia_p99_s_ccess:ratio_5m
+        expr: ((((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m]))) - (sum(increase(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[5m])))) or (sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m])))) / clamp_min((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m]))), 1))
+        labels:
+          sli: latência_p99_süccess
+          service: edge-hostile-names
+      - record: edge_hostile_names:errorbudget:burn_5m
+        expr: ((((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m]))) - (sum(increase(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[5m])))) or (sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m])))) / clamp_min((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m]))), 1)) / 0.01
+        labels:
+          slo: hostile_availability_99
+          sli: latência_p99_süccess
+          service: edge-hostile-names
+      - record: edge_hostile_names:errorbudget:burn_1h
+        expr: ((((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[1h]))) - (sum(increase(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[1h])))) or (sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[1h])))) / clamp_min((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[1h]))), 1)) / 0.01
         labels:
           slo: hostile_availability_99
           sli: latência_p99_süccess
@@ -44,7 +55,14 @@ groups:
     interval: 30s
     rules:
       - alert: hostile_availability_99_burn_14x_5m_1h
-        expr: ((1 - (sum(rate(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[5m]))) / (sum(rate(http_requests_total{path=~"/api/v1/.*\\d+"}[5m])))) > 0.14) and ((1 - (sum(rate(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[1h]))) / (sum(rate(http_requests_total{path=~"/api/v1/.*\\d+"}[1h])))) > 0.14)
+        expr: |
+          (
+            ((((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m]))) - (sum(increase(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[5m])))) or (sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m])))) / clamp_min((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m]))), 1)) > 0.14
+          ) and (
+            ((((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[1h]))) - (sum(increase(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[1h])))) or (sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[1h])))) / clamp_min((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[1h]))), 1)) > 0.14
+          ) and (
+            (((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m]))) - (sum(increase(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[5m])))) or (sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m])))) >= 2
+          )
         for: 2m
         labels:
           severity: SEV1
@@ -54,14 +72,22 @@ groups:
           burn_rate: "14"
           window_short: 5m
           window_long: 1h
+          pack: edge-hostile-names
         annotations:
           summary: Burn rate 14× on hostile_availability_99
-          description: Both the 5m and 1h error rates exceed 14× of the 1.000% error budget for hostile_availability_99.
+          description: Both the 5m and 1h error ratios exceed 14× of the 1.000% error budget for hostile_availability_99, with at least 2 bad samples in the 5m window.
           slo_objective: 99.000%
           slo_window: 30d
           runbook: (supply runbook URL)
       - alert: hostile_availability_99_burn_6x_30m_6h
-        expr: ((1 - (sum(rate(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[30m]))) / (sum(rate(http_requests_total{path=~"/api/v1/.*\\d+"}[30m])))) > 0.06) and ((1 - (sum(rate(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[6h]))) / (sum(rate(http_requests_total{path=~"/api/v1/.*\\d+"}[6h])))) > 0.06)
+        expr: |
+          (
+            ((((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[30m]))) - (sum(increase(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[30m])))) or (sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[30m])))) / clamp_min((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[30m]))), 1)) > 0.06
+          ) and (
+            ((((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[6h]))) - (sum(increase(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[6h])))) or (sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[6h])))) / clamp_min((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[6h]))), 1)) > 0.06
+          ) and (
+            (((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[30m]))) - (sum(increase(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[30m])))) or (sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[30m])))) >= 2
+          )
         for: 5m
         labels:
           severity: SEV2
@@ -71,9 +97,10 @@ groups:
           burn_rate: "6"
           window_short: 30m
           window_long: 6h
+          pack: edge-hostile-names
         annotations:
           summary: Burn rate 6× on hostile_availability_99
-          description: Both the 30m and 6h error rates exceed 6× of the 1.000% error budget for hostile_availability_99.
+          description: Both the 30m and 6h error ratios exceed 6× of the 1.000% error budget for hostile_availability_99, with at least 2 bad samples in the 30m window.
           slo_objective: 99.000%
           slo_window: 30d
           runbook: (supply runbook URL)

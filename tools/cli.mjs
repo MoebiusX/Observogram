@@ -72,7 +72,9 @@ async function runCompile(args) {
 
   const out = compile(canonical, target);
   // The artefact text goes to stdout (pipe-friendly); the provenance line
-  // goes to stderr so redirecting stdout yields a clean artefact file.
+  // and any compile warnings go to stderr so redirecting stdout yields a
+  // clean artefact file.
+  for (const w of out.warnings || []) console.error(`warning: ${w}`);
   const p = out.profile || {};
   console.error(
     `# ${out.filename}  (${out.contentType})  ` +

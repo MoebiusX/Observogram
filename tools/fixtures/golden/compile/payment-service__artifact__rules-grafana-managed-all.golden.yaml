@@ -1,0 +1,1452 @@
+# Grafana-managed rules compiled from ObservabilityPack v1.2
+# Pack: payment-service · version 1.5.0
+# Format: Grafana 9+ provisioning YAML (apiVersion: 1).
+# Apply via: copy under provisioning/alerting/ OR POST to /api/v1/provisioning/alert-rules
+# Source of truth — DO NOT hand-edit. Re-emit from the pack.
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: payment_service_recording
+    folder: observability-pack
+    interval: 30s
+    rules:
+      - uid: rec-payment_service-api_availabi-16chy4y
+        title: payment_service:api_availability:good_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                sum(rate(http_server_request_duration_seconds_count{
+                  service_name="payment-service",
+                  http_response_status_code!~"5.."
+                }[5m]))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: api_availability_99_9
+          sli: api_availability
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:api_availability:good_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-api_availabi-1yq2kez
+        title: payment_service:api_availability:total_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                sum(rate(http_server_request_duration_seconds_count{
+                  service_name="payment-service"
+                }[5m]))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: api_availability_99_9
+          sli: api_availability
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:api_availability:total_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-api_availabi-0chk7ps
+        title: payment_service:api_availability:ratio_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: payment_service:api_availability:good_5m / payment_service:api_availability:total_5m
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: api_availability_99_9
+          sli: api_availability
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:api_availability:ratio_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-api_availabi-0gcfagn
+        title: payment_service:api_availability:error_ratio_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: ((((sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[5m]))) - (sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service", http_response_status_code!~"5.." }[5m])))) or (sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[5m])))) / clamp_min((sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[5m]))), 1))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          sli: api_availability
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:api_availability:error_ratio_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-errorbudget--1la95d4
+        title: payment_service:errorbudget:burn_5m{slo="api_availability_99_9"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: ((((sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[5m]))) - (sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service", http_response_status_code!~"5.." }[5m])))) or (sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[5m])))) / clamp_min((sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[5m]))), 1)) / 0.001
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: api_availability_99_9
+          sli: api_availability
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:errorbudget:burn_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-errorbudget--0e6mswn
+        title: payment_service:errorbudget:burn_1h{slo="api_availability_99_9"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: ((((sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[1h]))) - (sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service", http_response_status_code!~"5.." }[1h])))) or (sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[1h])))) / clamp_min((sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[1h]))), 1)) / 0.001
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: api_availability_99_9
+          sli: api_availability
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:errorbudget:burn_1h
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-api_latency_-0sz1lj2
+        title: payment_service:api_latency_p99:value_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                histogram_quantile(0.99,
+                  sum by (le)(rate(http_server_request_duration_seconds_bucket{
+                    service_name="payment-service"
+                  }[5m])))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: api_latency_99_p99_500ms
+          sli: api_latency_p99
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:api_latency_p99:value_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-api_latency_-1rgwxej
+        title: payment_service:api_latency_p99:error_ratio_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(payment_service:api_latency_p99:value_5m) > bool 0.5)[5m:30s]) / 10)
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          sli: api_latency_p99
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:api_latency_p99:error_ratio_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-errorbudget--0szw6b6
+        title: payment_service:errorbudget:burn_5m{slo="api_latency_99_p99_500ms"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(payment_service:api_latency_p99:value_5m) > bool 0.5)[5m:30s]) / 10) / 0.01
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: api_latency_99_p99_500ms
+          sli: api_latency_p99
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:errorbudget:burn_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-errorbudget--128vyq7
+        title: payment_service:errorbudget:burn_1h{slo="api_latency_99_p99_500ms"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(payment_service:api_latency_p99:value_5m) > bool 0.5)[1h:30s]) / 120) / 0.01
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: api_latency_99_p99_500ms
+          sli: api_latency_p99
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:errorbudget:burn_1h
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-api_latency_-1y7wx73
+        title: payment_service:api_latency_p99_checkout:value_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                histogram_quantile(0.99,
+                  sum by (le)(rate(http_server_request_duration_seconds_bucket{
+                    service_name="payment-service",
+                    http_route="/checkout"
+                  }[5m])))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: checkout_latency_99_5_p99_300ms
+          sli: api_latency_p99_checkout
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:api_latency_p99_checkout:value_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-api_latency_-1f6dvj2
+        title: payment_service:api_latency_p99_checkout:error_ratio_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(payment_service:api_latency_p99_checkout:value_5m) > bool 0.3)[5m:30s]) / 10)
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          sli: api_latency_p99_checkout
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:api_latency_p99_checkout:error_ratio_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-errorbudget--1yskat6
+        title: payment_service:errorbudget:burn_5m{slo="checkout_latency_99_5_p99_300ms"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(payment_service:api_latency_p99_checkout:value_5m) > bool 0.3)[5m:30s]) / 10) / 0.005
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: checkout_latency_99_5_p99_300ms
+          sli: api_latency_p99_checkout
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:errorbudget:burn_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-errorbudget--14nvant
+        title: payment_service:errorbudget:burn_1h{slo="checkout_latency_99_5_p99_300ms"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(payment_service:api_latency_p99_checkout:value_5m) > bool 0.3)[1h:30s]) / 120) / 0.005
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: checkout_latency_99_5_p99_300ms
+          sli: api_latency_p99_checkout
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:errorbudget:burn_1h
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-consumer_fre-00tzu6o
+        title: payment_service:consumer_freshness:value_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                max(messaging_kafka_consumer_lag_seconds{
+                  service_name="payment-service",
+                  messaging_consumer_group="payment-settler"
+                })
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: consumer_freshness_99_under_60s
+          sli: consumer_freshness
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:consumer_freshness:value_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-consumer_fre-0263825
+        title: payment_service:consumer_freshness:error_ratio_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(payment_service:consumer_freshness:value_5m) > bool 60)[5m:30s]) / 10)
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          sli: consumer_freshness
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:consumer_freshness:error_ratio_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-errorbudget--1omjpa3
+        title: payment_service:errorbudget:burn_5m{slo="consumer_freshness_99_under_60s"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(payment_service:consumer_freshness:value_5m) > bool 60)[5m:30s]) / 10) / 0.01
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: consumer_freshness_99_under_60s
+          sli: consumer_freshness
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:errorbudget:burn_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-errorbudget--16vr2sw
+        title: payment_service:errorbudget:burn_1h{slo="consumer_freshness_99_under_60s"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(payment_service:consumer_freshness:value_5m) > bool 60)[1h:30s]) / 120) / 0.01
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: consumer_freshness_99_under_60s
+          sli: consumer_freshness
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:errorbudget:burn_1h
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-consumer_pro-0l4j13w
+        title: payment_service:consumer_processing_success:good_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                sum(rate(messaging_process_duration_seconds_count{
+                  service_name="payment-service",
+                  messaging_operation="process",
+                  messaging_outcome="ok"
+                }[5m]))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: consumer_success_99_95
+          sli: consumer_processing_success
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:consumer_processing_success:good_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-consumer_pro-0ewj98x
+        title: payment_service:consumer_processing_success:total_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                sum(rate(messaging_process_duration_seconds_count{
+                  service_name="payment-service",
+                  messaging_operation="process"
+                }[5m]))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: consumer_success_99_95
+          sli: consumer_processing_success
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:consumer_processing_success:total_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-consumer_pro-0uuims2
+        title: payment_service:consumer_processing_success:ratio_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: payment_service:consumer_processing_success:good_5m / payment_service:consumer_processing_success:total_5m
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: consumer_success_99_95
+          sli: consumer_processing_success
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:consumer_processing_success:ratio_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-consumer_pro-0c2jixx
+        title: payment_service:consumer_processing_success:error_ratio_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: ((((sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[5m]))) - (sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process", messaging_outcome="ok" }[5m])))) or (sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[5m])))) / clamp_min((sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[5m]))), 1))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          sli: consumer_processing_success
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:consumer_processing_success:error_ratio_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-errorbudget--09vqg8h
+        title: payment_service:errorbudget:burn_5m{slo="consumer_success_99_95"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: ((((sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[5m]))) - (sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process", messaging_outcome="ok" }[5m])))) or (sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[5m])))) / clamp_min((sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[5m]))), 1)) / 0.0005
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: consumer_success_99_95
+          sli: consumer_processing_success
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:errorbudget:burn_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-errorbudget--12ui5ys
+        title: payment_service:errorbudget:burn_1h{slo="consumer_success_99_95"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: ((((sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[1h]))) - (sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process", messaging_outcome="ok" }[1h])))) or (sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[1h])))) / clamp_min((sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[1h]))), 1)) / 0.0005
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: consumer_success_99_95
+          sli: consumer_processing_success
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:errorbudget:burn_1h
+          from: A
+        is_paused: false
+      - uid: rec-payment-api_availability-ratio_5m
+        title: payment:api_availability:ratio_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                ((
+                  sum(rate(http_server_request_duration_seconds_count{
+                  service_name="payment-service",
+                  http_response_status_code!~"5.."
+                }[5m]))
+                ) / (
+                  sum(rate(http_server_request_duration_seconds_count{
+                  service_name="payment-service"
+                }[5m]))
+                ))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels: {}
+        annotations: {}
+        record:
+          metric: payment:api_availability:ratio_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment-api_errorbudget-burn_1h
+        title: payment:api_errorbudget:burn_1h
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (1 - payment:api_availability:ratio_5m) / (1 - 0.999)
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels: {}
+        annotations: {}
+        record:
+          metric: payment:api_errorbudget:burn_1h
+          from: A
+        is_paused: false
+      - uid: rec-payment-checkout_latency-p99_5m
+        title: payment:checkout_latency:p99_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (histogram_quantile(0.99,
+                  sum by (le)(rate(http_server_request_duration_seconds_bucket{
+                    service_name="payment-service",
+                    http_route="/checkout"
+                  }[5m]))))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels: {}
+        annotations: {}
+        record:
+          metric: payment:checkout_latency:p99_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment-consumer_lag-seconds_max_5m
+        title: payment:consumer_lag:seconds_max_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (max(messaging_kafka_consumer_lag_seconds{
+                  service_name="payment-service",
+                  messaging_consumer_group="payment-settler"
+                }))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels: {}
+        annotations: {}
+        record:
+          metric: payment:consumer_lag:seconds_max_5m
+          from: A
+        is_paused: false
+  - orgId: 1
+    name: payment_service_api_availability_99_9_burn
+    folder: observability-pack
+    interval: 30s
+    rules:
+      - uid: alr-api_availability_99_9_burn_14x_5m_1h
+        title: api_availability_99_9_burn_14x_5m_1h
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (
+                  ((((sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[5m]))) - (sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service", http_response_status_code!~"5.." }[5m])))) or (sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[5m])))) / clamp_min((sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[5m]))), 1)) > 0.014
+                ) and (
+                  ((((sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[1h]))) - (sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service", http_response_status_code!~"5.." }[1h])))) or (sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[1h])))) / clamp_min((sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[1h]))), 1)) > 0.014
+                ) and (
+                  (((sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[5m]))) - (sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service", http_response_status_code!~"5.." }[5m])))) or (sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[5m])))) >= 2
+                )
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 2m
+        labels:
+          severity: SEV1
+          slo: api_availability_99_9
+          sli: api_availability
+          service: payment-service
+          burn_rate: "14"
+          window_short: 5m
+          window_long: 1h
+          pack: payment-service
+        annotations:
+          summary: Burn rate 14× on api_availability_99_9
+          description: Both the 5m and 1h error ratios exceed 14× of the 0.100% error budget for api_availability_99_9, with at least 2 bad samples in the 5m window.
+          slo_objective: 99.900%
+          slo_window: 30d
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-api_availability_99_9_burn_6x_30m_6h
+        title: api_availability_99_9_burn_6x_30m_6h
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (
+                  ((((sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[30m]))) - (sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service", http_response_status_code!~"5.." }[30m])))) or (sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[30m])))) / clamp_min((sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[30m]))), 1)) > 0.006
+                ) and (
+                  ((((sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[6h]))) - (sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service", http_response_status_code!~"5.." }[6h])))) or (sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[6h])))) / clamp_min((sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[6h]))), 1)) > 0.006
+                ) and (
+                  (((sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[30m]))) - (sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service", http_response_status_code!~"5.." }[30m])))) or (sum(increase(http_server_request_duration_seconds_count{ service_name="payment-service" }[30m])))) >= 2
+                )
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 5m
+        labels:
+          severity: SEV2
+          slo: api_availability_99_9
+          sli: api_availability
+          service: payment-service
+          burn_rate: "6"
+          window_short: 30m
+          window_long: 6h
+          pack: payment-service
+        annotations:
+          summary: Burn rate 6× on api_availability_99_9
+          description: Both the 30m and 6h error ratios exceed 6× of the 0.100% error budget for api_availability_99_9, with at least 2 bad samples in the 30m window.
+          slo_objective: 99.900%
+          slo_window: 30d
+          runbook: (supply runbook URL)
+        is_paused: false
+  - orgId: 1
+    name: payment_service_checkout_latency_99_5_p99_300ms_burn
+    folder: observability-pack
+    interval: 30s
+    rules:
+      - uid: alr-checkout_latency_99_5_p99_30-1wx3oxl
+        title: checkout_latency_99_5_p99_300ms_burn_14x_5m_1h
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (
+                  (sum_over_time((max(payment_service:api_latency_p99_checkout:value_5m) > bool 0.3)[5m:30s]) / 10) > 0.07
+                ) and (
+                  (sum_over_time((max(payment_service:api_latency_p99_checkout:value_5m) > bool 0.3)[1h:30s]) / 120) > 0.07
+                ) and (
+                  sum_over_time((max(payment_service:api_latency_p99_checkout:value_5m) > bool 0.3)[5m:30s]) >= 2
+                )
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 2m
+        labels:
+          severity: SEV1
+          slo: checkout_latency_99_5_p99_300ms
+          sli: api_latency_p99_checkout
+          service: payment-service
+          burn_rate: "14"
+          window_short: 5m
+          window_long: 1h
+          pack: payment-service
+        annotations:
+          summary: Burn rate 14× on checkout_latency_99_5_p99_300ms
+          description: Both the 5m and 1h error ratios exceed 14× of the 0.500% error budget for checkout_latency_99_5_p99_300ms, with at least 2 bad samples in the 5m window.
+          slo_objective: 99.500%
+          slo_window: 30d
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-checkout_latency_99_5_p99_30-15itllh
+        title: checkout_latency_99_5_p99_300ms_burn_6x_30m_6h
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (
+                  (sum_over_time((max(payment_service:api_latency_p99_checkout:value_5m) > bool 0.3)[30m:30s]) / 60) > 0.03
+                ) and (
+                  (sum_over_time((max(payment_service:api_latency_p99_checkout:value_5m) > bool 0.3)[6h:30s]) / 720) > 0.03
+                ) and (
+                  sum_over_time((max(payment_service:api_latency_p99_checkout:value_5m) > bool 0.3)[30m:30s]) >= 2
+                )
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 5m
+        labels:
+          severity: SEV2
+          slo: checkout_latency_99_5_p99_300ms
+          sli: api_latency_p99_checkout
+          service: payment-service
+          burn_rate: "6"
+          window_short: 30m
+          window_long: 6h
+          pack: payment-service
+        annotations:
+          summary: Burn rate 6× on checkout_latency_99_5_p99_300ms
+          description: Both the 30m and 6h error ratios exceed 6× of the 0.500% error budget for checkout_latency_99_5_p99_300ms, with at least 2 bad samples in the 30m window.
+          slo_objective: 99.500%
+          slo_window: 30d
+          runbook: (supply runbook URL)
+        is_paused: false
+  - orgId: 1
+    name: payment_service_consumer_freshness_99_under_60s_burn
+    folder: observability-pack
+    interval: 30s
+    rules:
+      - uid: alr-consumer_freshness_99_under_-09t5c14
+        title: consumer_freshness_99_under_60s_burn_10x_10m_1h
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (
+                  (sum_over_time((max(payment_service:consumer_freshness:value_5m) > bool 60)[10m:30s]) / 20) > 0.1
+                ) and (
+                  (sum_over_time((max(payment_service:consumer_freshness:value_5m) > bool 60)[1h:30s]) / 120) > 0.1
+                ) and (
+                  sum_over_time((max(payment_service:consumer_freshness:value_5m) > bool 60)[10m:30s]) >= 2
+                )
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 5m
+        labels:
+          severity: SEV2
+          slo: consumer_freshness_99_under_60s
+          sli: consumer_freshness
+          service: payment-service
+          burn_rate: "10"
+          window_short: 10m
+          window_long: 1h
+          pack: payment-service
+        annotations:
+          summary: Burn rate 10× on consumer_freshness_99_under_60s
+          description: Both the 10m and 1h error ratios exceed 10× of the 1.000% error budget for consumer_freshness_99_under_60s, with at least 2 bad samples in the 10m window.
+          slo_objective: 99.000%
+          slo_window: 30d
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-consumer_freshness_99_under_-1tgt30n
+        title: consumer_freshness_99_under_60s_burn_4x_1h_6h
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (
+                  (sum_over_time((max(payment_service:consumer_freshness:value_5m) > bool 60)[1h:30s]) / 120) > 0.04
+                ) and (
+                  (sum_over_time((max(payment_service:consumer_freshness:value_5m) > bool 60)[6h:30s]) / 720) > 0.04
+                ) and (
+                  sum_over_time((max(payment_service:consumer_freshness:value_5m) > bool 60)[1h:30s]) >= 2
+                )
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 10m
+        labels:
+          severity: SEV3
+          slo: consumer_freshness_99_under_60s
+          sli: consumer_freshness
+          service: payment-service
+          burn_rate: "4"
+          window_short: 1h
+          window_long: 6h
+          pack: payment-service
+        annotations:
+          summary: Burn rate 4× on consumer_freshness_99_under_60s
+          description: Both the 1h and 6h error ratios exceed 4× of the 1.000% error budget for consumer_freshness_99_under_60s, with at least 2 bad samples in the 1h window.
+          slo_objective: 99.000%
+          slo_window: 30d
+          runbook: (supply runbook URL)
+        is_paused: false
+  - orgId: 1
+    name: payment_service_consumer_success_99_95_burn
+    folder: observability-pack
+    interval: 30s
+    rules:
+      - uid: alr-consumer_success_99_95_burn_-1i1ycn4
+        title: consumer_success_99_95_burn_14x_5m_1h
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (
+                  ((((sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[5m]))) - (sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process", messaging_outcome="ok" }[5m])))) or (sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[5m])))) / clamp_min((sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[5m]))), 1)) > 0.007
+                ) and (
+                  ((((sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[1h]))) - (sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process", messaging_outcome="ok" }[1h])))) or (sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[1h])))) / clamp_min((sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[1h]))), 1)) > 0.007
+                ) and (
+                  (((sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[5m]))) - (sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process", messaging_outcome="ok" }[5m])))) or (sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[5m])))) >= 2
+                )
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 2m
+        labels:
+          severity: SEV1
+          slo: consumer_success_99_95
+          sli: consumer_processing_success
+          service: payment-service
+          burn_rate: "14"
+          window_short: 5m
+          window_long: 1h
+          pack: payment-service
+        annotations:
+          summary: Burn rate 14× on consumer_success_99_95
+          description: Both the 5m and 1h error ratios exceed 14× of the 0.050% error budget for consumer_success_99_95, with at least 2 bad samples in the 5m window.
+          slo_objective: 99.950%
+          slo_window: 30d
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-consumer_success_99_95_burn_-1y53lr4
+        title: consumer_success_99_95_burn_6x_30m_6h
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (
+                  ((((sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[30m]))) - (sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process", messaging_outcome="ok" }[30m])))) or (sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[30m])))) / clamp_min((sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[30m]))), 1)) > 0.003
+                ) and (
+                  ((((sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[6h]))) - (sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process", messaging_outcome="ok" }[6h])))) or (sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[6h])))) / clamp_min((sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[6h]))), 1)) > 0.003
+                ) and (
+                  (((sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[30m]))) - (sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process", messaging_outcome="ok" }[30m])))) or (sum(increase(messaging_process_duration_seconds_count{ service_name="payment-service", messaging_operation="process" }[30m])))) >= 2
+                )
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 5m
+        labels:
+          severity: SEV2
+          slo: consumer_success_99_95
+          sli: consumer_processing_success
+          service: payment-service
+          burn_rate: "6"
+          window_short: 30m
+          window_long: 6h
+          pack: payment-service
+        annotations:
+          summary: Burn rate 6× on consumer_success_99_95
+          description: Both the 30m and 6h error ratios exceed 6× of the 0.050% error budget for consumer_success_99_95, with at least 2 bad samples in the 30m window.
+          slo_objective: 99.950%
+          slo_window: 30d
+          runbook: (supply runbook URL)
+        is_paused: false
+  - orgId: 1
+    name: payment_service_forecast
+    folder: observability-pack
+    interval: 5m
+    rules:
+      - uid: alr-api_availability_99_9_foreca-1ypom0e
+        title: api_availability_99_9_forecast_breach
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: predict_linear(payment_service:errorbudget:burn_1h{slo="api_availability_99_9"}[1d], 86400) > 1 and min_over_time(payment_service:errorbudget:burn_1h{slo="api_availability_99_9"}[2h]) > 1
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 15m
+        labels:
+          severity: SEV2
+          slo: api_availability_99_9
+          kind: forecast
+          service: payment-service
+          sli: api_availability
+          pack: payment-service
+        annotations:
+          summary: api_availability_99_9 has burned faster than its budget for 2h and its 1d trend projects a breach within 1d
+          method: linear on the 1h burn rate (pack declares holt-winters)
+          on_projected_breach: open_ticket
+          horizon: 1d
+          horizon_declared: 7d
+        is_paused: false
+      - uid: alr-checkout_latency_99_5_p99_30-1pbrofs
+        title: checkout_latency_99_5_p99_300ms_forecast_breach
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: predict_linear(payment_service:errorbudget:burn_1h{slo="checkout_latency_99_5_p99_300ms"}[1d], 86400) > 1 and min_over_time(payment_service:errorbudget:burn_1h{slo="checkout_latency_99_5_p99_300ms"}[2h]) > 1
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 15m
+        labels:
+          severity: SEV3
+          slo: checkout_latency_99_5_p99_300ms
+          kind: forecast
+          service: payment-service
+          sli: api_latency_p99_checkout
+          pack: payment-service
+        annotations:
+          summary: checkout_latency_99_5_p99_300ms has burned faster than its budget for 2h and its 1d trend projects a breach within 1d
+          method: linear on the 1h burn rate (pack declares percentile-of-history)
+          on_projected_breach: post_warning
+          horizon: 1d
+          horizon_declared: 3d
+        is_paused: false

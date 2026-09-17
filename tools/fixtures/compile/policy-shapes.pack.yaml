@@ -1,0 +1,113 @@
+# =============================================================================
+# ObservabilityPack: policy-shapes — the SLI shapes the policy PromQL had to
+# learn on a live queue manager and in review, compiled and checked by promtool
+# (tools/test-backend-validate.mjs: `promtool check rules` on every catalog item
+# and `promtool test rules` with policy-shapes.test.yml next to this file).
+# -----------------------------------------------------------------------------
+#   probe_ok     state SLI whose comparison is already boolean (`>= bool 1`):
+#                boolify must leave the token whole (`> bool = bool 1` was a parse error)
+#   instance_up  state SLI grouped `by (instance)`: burn per instance
+#   derived_ok   counter SLI whose good is derived by subtraction: no empty-good
+#                fill (a healthy service without the error counter is not an outage)
+#   direct_ok    counter SLI whose good is a selector: the fill stays (a 100 % outage,
+#                every request 5xx, still alerts)
+#   sub_ok       counter SLI over a subquery range `[5m:1m]`: read as counters, the
+#                subquery resolution kept
+#   route_ok     counter SLI whose good groups `by (route)` but whose total does not:
+#                the legs never match, so no fill (with it, a healthy service read as a
+#                permanent 100 % outage); warned, empty on any input
+#   count_ok     `count(<state> == 1) / count(<state>)`, the common hand-written
+#                availability: read as sum(<state> == bool 1), the down instance burns
+# =============================================================================
+
+apiVersion: observability.platform/v1
+kind: ObservabilityPack
+
+metadata:
+  name: policy-shapes
+  version: 0.1.0
+  binding: otel-prometheus-grafana
+  owners:
+    - team-platform
+  bindings:
+    service: policy-shapes
+    environments: [prod]
+    criticality: tier-3
+
+spec:
+  telemetry:
+    backends:
+      - name: prom
+        signal: metrics
+        product: prometheus
+        version: { declared: "3.0" }
+
+  slis:
+    - id: probe_ok
+      description: Blackbox probes that succeed, over probes.
+      type: ratio
+      good: sum(probe_success{job="bb"} >= bool 1)
+      total: count(probe_success{job="bb"})
+    - id: instance_up
+      description: Per-instance availability.
+      type: ratio
+      good: sum by (instance) (up{job="x"} == 1)
+      total: count by (instance) (up{job="x"})
+    - id: derived_ok
+      description: Requests minus errors, over requests.
+      type: ratio
+      good: sum(rate(all_total{job="x"}[5m])) - sum(rate(err_total{job="x"}[5m]))
+      total: sum(rate(all_total{job="x"}[5m]))
+    - id: direct_ok
+      description: Non-5xx requests over requests.
+      type: ratio
+      good: sum(rate(all_total{job="x",code!~"5.."}[5m]))
+      total: sum(rate(all_total{job="x"}[5m]))
+    - id: sub_ok
+      description: Successful requests over requests, read through a subquery.
+      type: ratio
+      good: sum(rate(ok_total{job="x"}[5m:1m]))
+      total: sum(rate(all_total{job="x"}[5m:1m]))
+    - id: route_ok
+      description: Per-route successes over all requests (a label-set mismatch).
+      type: ratio
+      good: sum by (route) (rate(route_ok_total{job="r"}[5m]))
+      total: sum(rate(route_all_total{job="r"}[5m]))
+    - id: count_ok
+      description: Targets that are up, counted.
+      type: ratio
+      good: count(up{job="c"} == 1)
+      total: count(up{job="c"})
+
+  slos:
+    - { id: probe_99,    sli: probe_ok,    objective: 0.99, window: 30d }
+    - { id: instance_99, sli: instance_up, objective: 0.99, window: 30d }
+    - { id: derived_99,  sli: derived_ok,  objective: 0.99, window: 30d }
+    - { id: direct_99,   sli: direct_ok,   objective: 0.99, window: 30d }
+    - { id: sub_99,      sli: sub_ok,      objective: 0.99, window: 30d }
+    - { id: route_99,    sli: route_ok,    objective: 0.99, window: 30d }
+    - { id: count_99,    sli: count_ok,    objective: 0.99, window: 30d }
+
+  policy:
+    burn_rate_alerts:
+      - slo: probe_99
+        windows:
+          - { short: 5m, long: 1h, factor: 14, severity: SEV1 }
+      - slo: instance_99
+        windows:
+          - { short: 5m, long: 1h, factor: 14, severity: SEV1 }
+      - slo: derived_99
+        windows:
+          - { short: 5m, long: 1h, factor: 14, severity: SEV1 }
+      - slo: direct_99
+        windows:
+          - { short: 5m, long: 1h, factor: 14, severity: SEV1 }
+      - slo: sub_99
+        windows:
+          - { short: 5m, long: 1h, factor: 14, severity: SEV1 }
+      - slo: route_99
+        windows:
+          - { short: 5m, long: 1h, factor: 14, severity: SEV1 }
+      - slo: count_99
+        windows:
+          - { short: 5m, long: 1h, factor: 14, severity: SEV1 }

@@ -28,7 +28,16 @@ PromQL corrections measured on a live queue manager (mq-observability-pack): bad
 or bad-over-happened error ratios, a floor of two bad samples on the short window, forecasts on
 the sustained 1 h burn, a horizon capped at the regression window, and severity from
 `on_projected_breach`. State comparisons written as filters (`up == 1`) are rewritten to the
-boolean form the ratio needs, with a warning naming the SLI.
+boolean form the ratio needs, with a warning naming the SLI. A counter SLI whose good leg is a
+selector keeps alerting through a 100 % outage (`(total - good) or total`); a good leg derived by
+arithmetic (`sum(rate(all)) - sum(rate(err))`, as in grafana's and prometheus's packs) gets no such
+fill, because it is empty whenever the subtracted counter has never been exposed and the fill
+would page a healthy service — the generator warns and the fix belongs in the pack
+(`or vector(0)` on the subtracted leg). The compiler (`tools/lib/compile.mjs`,
+`packc compile <pack> prometheus-rules` and the studio's per-SLO and Grafana-managed rules) calls
+the same module, so it emits the same PromQL for the same SLI (a threshold SLI is read from the
+pack's own `ref:slis.<id>` recording rule here and from the compiler's `<svc>:<sli>:value_5m` there,
+in both cases at the recorded series' interval so each recorded point counts once).
 
 ## What the generated output revealed about the packs (2026-09-17)
 

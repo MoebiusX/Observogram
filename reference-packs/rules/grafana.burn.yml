@@ -10,29 +10,26 @@ groups:
       - record: grafana:http_request_latency_p99:error_ratio_5m
         expr: "(sum_over_time((max(grafana:http_request:p99_5m) > bool 1)[5m:30s]) / 10)"
         labels:
-          slo: http_request_latency_99_p99_1s
           sli: http_request_latency_p99
           service: grafana
       - record: grafana:datasource_proxy_latency_p99:error_ratio_5m
         expr: "(sum_over_time((max(grafana:datasource_proxy:p99_5m) > bool 2)[5m:30s]) / 10)"
         labels:
-          slo: datasource_proxy_latency_99_p99_2s
           sli: datasource_proxy_latency_p99
           service: grafana
       - record: grafana:database_query_latency_p99:error_ratio_5m
         expr: "(sum_over_time((max(grafana:database_query:p99_5m) > bool 0.5)[5m:30s]) / 10)"
         labels:
-          slo: database_query_99_p99_500ms
           sli: database_query_latency_p99
           service: grafana
       - record: grafana:errorbudget:burn_5m
-        expr: "(((sum(increase(grafana_http_request_duration_seconds_count[5m]))) - (sum(increase(grafana_http_request_duration_seconds_count{status_code!~\"5..\"}[5m])))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count[5m]))), 1)) / 0.001"
+        expr: "((((sum(increase(grafana_http_request_duration_seconds_count[5m]))) - (sum(increase(grafana_http_request_duration_seconds_count{status_code!~\"5..\"}[5m])))) or (sum(increase(grafana_http_request_duration_seconds_count[5m])))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count[5m]))), 1)) / 0.001"
         labels:
           slo: http_request_success_99_9
           sli: http_request_success_ratio
           service: grafana
       - record: grafana:errorbudget:burn_1h
-        expr: "(((sum(increase(grafana_http_request_duration_seconds_count[1h]))) - (sum(increase(grafana_http_request_duration_seconds_count{status_code!~\"5..\"}[1h])))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count[1h]))), 1)) / 0.001"
+        expr: "((((sum(increase(grafana_http_request_duration_seconds_count[1h]))) - (sum(increase(grafana_http_request_duration_seconds_count{status_code!~\"5..\"}[1h])))) or (sum(increase(grafana_http_request_duration_seconds_count[1h])))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count[1h]))), 1)) / 0.001"
         labels:
           slo: http_request_success_99_9
           sli: http_request_success_ratio
@@ -50,13 +47,13 @@ groups:
           sli: http_request_latency_p99
           service: grafana
       - record: grafana:errorbudget:burn_5m
-        expr: "(((sum(increase(grafana_datasource_request_total[5m]))) - (sum(increase(grafana_datasource_request_total{code!~\"5..\"}[5m])))) / clamp_min((sum(increase(grafana_datasource_request_total[5m]))), 1)) / 0.005"
+        expr: "((((sum(increase(grafana_datasource_request_total[5m]))) - (sum(increase(grafana_datasource_request_total{code!~\"5..\"}[5m])))) or (sum(increase(grafana_datasource_request_total[5m])))) / clamp_min((sum(increase(grafana_datasource_request_total[5m]))), 1)) / 0.005"
         labels:
           slo: datasource_proxy_99_5
           sli: datasource_proxy_success_ratio
           service: grafana
       - record: grafana:errorbudget:burn_1h
-        expr: "(((sum(increase(grafana_datasource_request_total[1h]))) - (sum(increase(grafana_datasource_request_total{code!~\"5..\"}[1h])))) / clamp_min((sum(increase(grafana_datasource_request_total[1h]))), 1)) / 0.005"
+        expr: "((((sum(increase(grafana_datasource_request_total[1h]))) - (sum(increase(grafana_datasource_request_total{code!~\"5..\"}[1h])))) or (sum(increase(grafana_datasource_request_total[1h])))) / clamp_min((sum(increase(grafana_datasource_request_total[1h]))), 1)) / 0.005"
         labels:
           slo: datasource_proxy_99_5
           sli: datasource_proxy_success_ratio
@@ -98,13 +95,13 @@ groups:
           sli: alerting_rule_evaluation_success_ratio
           service: grafana
       - record: grafana:errorbudget:burn_5m
-        expr: "(((sum(increase(grafana_plugin_request_total[5m]))) - (sum(increase(grafana_plugin_request_total{status=\"ok\"}[5m])))) / clamp_min((sum(increase(grafana_plugin_request_total[5m]))), 1)) / 0.001"
+        expr: "((((sum(increase(grafana_plugin_request_total[5m]))) - (sum(increase(grafana_plugin_request_total{status=\"ok\"}[5m])))) or (sum(increase(grafana_plugin_request_total[5m])))) / clamp_min((sum(increase(grafana_plugin_request_total[5m]))), 1)) / 0.001"
         labels:
           slo: plugin_request_99_9
           sli: plugin_request_success_ratio
           service: grafana
       - record: grafana:errorbudget:burn_1h
-        expr: "(((sum(increase(grafana_plugin_request_total[1h]))) - (sum(increase(grafana_plugin_request_total{status=\"ok\"}[1h])))) / clamp_min((sum(increase(grafana_plugin_request_total[1h]))), 1)) / 0.001"
+        expr: "((((sum(increase(grafana_plugin_request_total[1h]))) - (sum(increase(grafana_plugin_request_total{status=\"ok\"}[1h])))) or (sum(increase(grafana_plugin_request_total[1h])))) / clamp_min((sum(increase(grafana_plugin_request_total[1h]))), 1)) / 0.001"
         labels:
           slo: plugin_request_99_9
           sli: plugin_request_success_ratio
@@ -127,11 +124,11 @@ groups:
       - alert: http_request_success_99_9_burn_14x_5m_1h
         expr: |
           (
-            (((sum(increase(grafana_http_request_duration_seconds_count[5m]))) - (sum(increase(grafana_http_request_duration_seconds_count{status_code!~"5.."}[5m])))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count[5m]))), 1)) > 0.014
+            ((((sum(increase(grafana_http_request_duration_seconds_count[5m]))) - (sum(increase(grafana_http_request_duration_seconds_count{status_code!~"5.."}[5m])))) or (sum(increase(grafana_http_request_duration_seconds_count[5m])))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count[5m]))), 1)) > 0.014
           ) and (
-            (((sum(increase(grafana_http_request_duration_seconds_count[1h]))) - (sum(increase(grafana_http_request_duration_seconds_count{status_code!~"5.."}[1h])))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count[1h]))), 1)) > 0.014
+            ((((sum(increase(grafana_http_request_duration_seconds_count[1h]))) - (sum(increase(grafana_http_request_duration_seconds_count{status_code!~"5.."}[1h])))) or (sum(increase(grafana_http_request_duration_seconds_count[1h])))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count[1h]))), 1)) > 0.014
           ) and (
-            ((sum(increase(grafana_http_request_duration_seconds_count[5m]))) - (sum(increase(grafana_http_request_duration_seconds_count{status_code!~"5.."}[5m])))) >= 2
+            (((sum(increase(grafana_http_request_duration_seconds_count[5m]))) - (sum(increase(grafana_http_request_duration_seconds_count{status_code!~"5.."}[5m])))) or (sum(increase(grafana_http_request_duration_seconds_count[5m])))) >= 2
           )
         for: 2m
         labels:
@@ -151,11 +148,11 @@ groups:
       - alert: http_request_success_99_9_burn_6x_30m_6h
         expr: |
           (
-            (((sum(increase(grafana_http_request_duration_seconds_count[30m]))) - (sum(increase(grafana_http_request_duration_seconds_count{status_code!~"5.."}[30m])))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count[30m]))), 1)) > 0.006
+            ((((sum(increase(grafana_http_request_duration_seconds_count[30m]))) - (sum(increase(grafana_http_request_duration_seconds_count{status_code!~"5.."}[30m])))) or (sum(increase(grafana_http_request_duration_seconds_count[30m])))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count[30m]))), 1)) > 0.006
           ) and (
-            (((sum(increase(grafana_http_request_duration_seconds_count[6h]))) - (sum(increase(grafana_http_request_duration_seconds_count{status_code!~"5.."}[6h])))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count[6h]))), 1)) > 0.006
+            ((((sum(increase(grafana_http_request_duration_seconds_count[6h]))) - (sum(increase(grafana_http_request_duration_seconds_count{status_code!~"5.."}[6h])))) or (sum(increase(grafana_http_request_duration_seconds_count[6h])))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count[6h]))), 1)) > 0.006
           ) and (
-            ((sum(increase(grafana_http_request_duration_seconds_count[30m]))) - (sum(increase(grafana_http_request_duration_seconds_count{status_code!~"5.."}[30m])))) >= 2
+            (((sum(increase(grafana_http_request_duration_seconds_count[30m]))) - (sum(increase(grafana_http_request_duration_seconds_count{status_code!~"5.."}[30m])))) or (sum(increase(grafana_http_request_duration_seconds_count[30m])))) >= 2
           )
         for: 5m
         labels:
@@ -229,11 +226,11 @@ groups:
       - alert: datasource_proxy_99_5_burn_14x_5m_1h
         expr: |
           (
-            (((sum(increase(grafana_datasource_request_total[5m]))) - (sum(increase(grafana_datasource_request_total{code!~"5.."}[5m])))) / clamp_min((sum(increase(grafana_datasource_request_total[5m]))), 1)) > 0.07
+            ((((sum(increase(grafana_datasource_request_total[5m]))) - (sum(increase(grafana_datasource_request_total{code!~"5.."}[5m])))) or (sum(increase(grafana_datasource_request_total[5m])))) / clamp_min((sum(increase(grafana_datasource_request_total[5m]))), 1)) > 0.07
           ) and (
-            (((sum(increase(grafana_datasource_request_total[1h]))) - (sum(increase(grafana_datasource_request_total{code!~"5.."}[1h])))) / clamp_min((sum(increase(grafana_datasource_request_total[1h]))), 1)) > 0.07
+            ((((sum(increase(grafana_datasource_request_total[1h]))) - (sum(increase(grafana_datasource_request_total{code!~"5.."}[1h])))) or (sum(increase(grafana_datasource_request_total[1h])))) / clamp_min((sum(increase(grafana_datasource_request_total[1h]))), 1)) > 0.07
           ) and (
-            ((sum(increase(grafana_datasource_request_total[5m]))) - (sum(increase(grafana_datasource_request_total{code!~"5.."}[5m])))) >= 2
+            (((sum(increase(grafana_datasource_request_total[5m]))) - (sum(increase(grafana_datasource_request_total{code!~"5.."}[5m])))) or (sum(increase(grafana_datasource_request_total[5m])))) >= 2
           )
         for: 2m
         labels:
@@ -253,11 +250,11 @@ groups:
       - alert: datasource_proxy_99_5_burn_6x_30m_6h
         expr: |
           (
-            (((sum(increase(grafana_datasource_request_total[30m]))) - (sum(increase(grafana_datasource_request_total{code!~"5.."}[30m])))) / clamp_min((sum(increase(grafana_datasource_request_total[30m]))), 1)) > 0.03
+            ((((sum(increase(grafana_datasource_request_total[30m]))) - (sum(increase(grafana_datasource_request_total{code!~"5.."}[30m])))) or (sum(increase(grafana_datasource_request_total[30m])))) / clamp_min((sum(increase(grafana_datasource_request_total[30m]))), 1)) > 0.03
           ) and (
-            (((sum(increase(grafana_datasource_request_total[6h]))) - (sum(increase(grafana_datasource_request_total{code!~"5.."}[6h])))) / clamp_min((sum(increase(grafana_datasource_request_total[6h]))), 1)) > 0.03
+            ((((sum(increase(grafana_datasource_request_total[6h]))) - (sum(increase(grafana_datasource_request_total{code!~"5.."}[6h])))) or (sum(increase(grafana_datasource_request_total[6h])))) / clamp_min((sum(increase(grafana_datasource_request_total[6h]))), 1)) > 0.03
           ) and (
-            ((sum(increase(grafana_datasource_request_total[30m]))) - (sum(increase(grafana_datasource_request_total{code!~"5.."}[30m])))) >= 2
+            (((sum(increase(grafana_datasource_request_total[30m]))) - (sum(increase(grafana_datasource_request_total{code!~"5.."}[30m])))) or (sum(increase(grafana_datasource_request_total[30m])))) >= 2
           )
         for: 5m
         labels:
@@ -433,11 +430,11 @@ groups:
       - alert: plugin_request_99_9_burn_8x_15m_2h
         expr: |
           (
-            (((sum(increase(grafana_plugin_request_total[15m]))) - (sum(increase(grafana_plugin_request_total{status="ok"}[15m])))) / clamp_min((sum(increase(grafana_plugin_request_total[15m]))), 1)) > 0.008
+            ((((sum(increase(grafana_plugin_request_total[15m]))) - (sum(increase(grafana_plugin_request_total{status="ok"}[15m])))) or (sum(increase(grafana_plugin_request_total[15m])))) / clamp_min((sum(increase(grafana_plugin_request_total[15m]))), 1)) > 0.008
           ) and (
-            (((sum(increase(grafana_plugin_request_total[2h]))) - (sum(increase(grafana_plugin_request_total{status="ok"}[2h])))) / clamp_min((sum(increase(grafana_plugin_request_total[2h]))), 1)) > 0.008
+            ((((sum(increase(grafana_plugin_request_total[2h]))) - (sum(increase(grafana_plugin_request_total{status="ok"}[2h])))) or (sum(increase(grafana_plugin_request_total[2h])))) / clamp_min((sum(increase(grafana_plugin_request_total[2h]))), 1)) > 0.008
           ) and (
-            ((sum(increase(grafana_plugin_request_total[15m]))) - (sum(increase(grafana_plugin_request_total{status="ok"}[15m])))) >= 2
+            (((sum(increase(grafana_plugin_request_total[15m]))) - (sum(increase(grafana_plugin_request_total{status="ok"}[15m])))) or (sum(increase(grafana_plugin_request_total[15m])))) >= 2
           )
         for: 5m
         labels:
@@ -457,11 +454,11 @@ groups:
       - alert: plugin_request_99_9_burn_3x_1h_6h
         expr: |
           (
-            (((sum(increase(grafana_plugin_request_total[1h]))) - (sum(increase(grafana_plugin_request_total{status="ok"}[1h])))) / clamp_min((sum(increase(grafana_plugin_request_total[1h]))), 1)) > 0.003
+            ((((sum(increase(grafana_plugin_request_total[1h]))) - (sum(increase(grafana_plugin_request_total{status="ok"}[1h])))) or (sum(increase(grafana_plugin_request_total[1h])))) / clamp_min((sum(increase(grafana_plugin_request_total[1h]))), 1)) > 0.003
           ) and (
-            (((sum(increase(grafana_plugin_request_total[6h]))) - (sum(increase(grafana_plugin_request_total{status="ok"}[6h])))) / clamp_min((sum(increase(grafana_plugin_request_total[6h]))), 1)) > 0.003
+            ((((sum(increase(grafana_plugin_request_total[6h]))) - (sum(increase(grafana_plugin_request_total{status="ok"}[6h])))) or (sum(increase(grafana_plugin_request_total[6h])))) / clamp_min((sum(increase(grafana_plugin_request_total[6h]))), 1)) > 0.003
           ) and (
-            ((sum(increase(grafana_plugin_request_total[1h]))) - (sum(increase(grafana_plugin_request_total{status="ok"}[1h])))) >= 2
+            (((sum(increase(grafana_plugin_request_total[1h]))) - (sum(increase(grafana_plugin_request_total{status="ok"}[1h])))) or (sum(increase(grafana_plugin_request_total[1h])))) >= 2
           )
         for: 10m
         labels:

@@ -1707,6 +1707,51 @@ const SYN = (f) => {
   }
 }
 
+// ---------- sli-inference: the compiler's policy records round-trip ----------
+// compile.mjs emits `<svc>:<sli>:value_5m` + `<svc>:<sli>:error_ratio_5m` for a
+// threshold SLI and `<svc>:errorbudget:burn_5m|1h` per SLO; reading those back
+// must give the threshold SLI and no spurious `svc_errorbudget` SLI.
+{
+  const { inferSlisFromRecordingRules, ruleNameToSliId, ruleNameToSloId } = await import('./lib/sli-inference.mjs');
+  const threshold = inferSlisFromRecordingRules([
+    { name: 'svc:x:value_5m', expr: 'max(lag)' },
+    { name: 'svc:x:error_ratio_5m', expr: '(sum_over_time((max(svc:x:value_5m) > bool 60)[5m:30s]) / 10)' },
+  ]);
+  assert(threshold.length === 1 && threshold[0].sli.type === 'threshold' && threshold[0].sli.query === 'max(lag)',
+         'value_5m + error_ratio_5m round-trips as one threshold SLI', threshold.map(x => `${x.sli.id}:${x.sli.type}`), ['svc_x:threshold']);
+  assert(threshold[0]?.sli.threshold === 60 && !('unit' in threshold[0].sli),
+         'the threshold is read back from the compiled `> bool 60` comparison, no placeholder unit', threshold[0]?.sli, { threshold: 60 });
+  const fractional = inferSlisFromRecordingRules([
+    { name: 'svc:lat:value_5m', expr: 'histogram_quantile(0.99, x)' },
+    { name: 'svc:lat:error_ratio_5m', expr: '(sum_over_time((max(svc:lat:value_5m) > bool 0.5)[5m:30s]) / 10)' },
+  ]);
+  assert(fractional[0]?.sli.threshold === 0.5, 'a fractional threshold is read back', fractional[0]?.sli.threshold, 0.5);
+  // A foreign value_* / error_ratio_* pair (the error ratio does not read the value series)
+  // keeps the pre-existing ratio-family inference.
+  const foreign = inferSlisFromRecordingRules([
+    { name: 'svc:y:value_5m', expr: 'max(y)' },
+    { name: 'svc:y:error_ratio_5m', expr: '1 - svc:y:ratio_5m' },
+  ]);
+  assert(foreign.length === 1 && foreign[0].sli.type === 'ratio' && foreign[0].sli.good === '1 - svc:y:ratio_5m' && foreign[0].sli.total === '1',
+         'a hand-written value_*/error_ratio_* pair still infers the ratio family', foreign.map(x => `${x.sli.id}:${x.sli.type}`), ['svc_y:ratio']);
+  const valueOnly = inferSlisFromRecordingRules([{ name: 'svc:z:value_5m', expr: 'max(z)' }]);
+  assert(valueOnly[0]?.sli.type === 'threshold' && valueOnly[0].sli.threshold === 1 && valueOnly[0].sli.unit === 'ratio',
+         'a lone value_* record keeps the placeholder threshold', valueOnly[0]?.sli);
+  const policy = inferSlisFromRecordingRules([
+    { name: 'svc:errorbudget:burn_5m', expr: '(...) / 0.01' },
+    { name: 'svc:errorbudget:burn_1h', expr: '(...) / 0.01' },
+  ]);
+  assert(policy.length === 0, 'errorbudget policy records infer no SLI', policy.map(x => x.sli.id), []);
+  assert(ruleNameToSliId('svc:errorbudget:burn_1h') === null && ruleNameToSloId('svc:errorbudget:burn_1h') === null,
+         'errorbudget records name no SLI or SLO');
+  assert(ruleNameToSliId('svc:x:value_5m') === 'svc_x', 'ordinary records still name their SLI');
+  const ratio = inferSlisFromRecordingRules([
+    { name: 'svc:r:good_5m', expr: 'g' }, { name: 'svc:r:total_5m', expr: 't' },
+    { name: 'svc:r:ratio_5m', expr: 'g / t' }, { name: 'svc:r:error_ratio_5m', expr: '1 - r' },
+  ]);
+  assert(ratio.length === 1 && ratio[0].sli.type === 'ratio' && ratio[0].sli.good === 'g', 'good/total still infer a ratio SLI');
+}
+
 // ---------- summary ----------
 
 report('fetcher');

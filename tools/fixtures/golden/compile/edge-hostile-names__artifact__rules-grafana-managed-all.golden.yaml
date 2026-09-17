@@ -1,0 +1,341 @@
+# Grafana-managed rules compiled from ObservabilityPack v1.2
+# Pack: edge-hostile-names · version 0.1.0
+# Format: Grafana 9+ provisioning YAML (apiVersion: 1).
+# Apply via: copy under provisioning/alerting/ OR POST to /api/v1/provisioning/alert-rules
+# Source of truth — DO NOT hand-edit. Re-emit from the pack.
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: edge_hostile_names_recording
+    folder: observability-pack
+    interval: 30s
+    rules:
+      - uid: rec-edge_hostile_names-lat_ncia_-0mg2idf
+        title: edge_hostile_names:lat_ncia_p99_s_ccess:good_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: sum(rate(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[5m]))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: hostile_availability_99
+          sli: latência_p99_süccess
+          service: edge-hostile-names
+        annotations: {}
+        record:
+          metric: edge_hostile_names:lat_ncia_p99_s_ccess:good_5m
+          from: A
+        is_paused: false
+      - uid: rec-edge_hostile_names-lat_ncia_-0jema40
+        title: edge_hostile_names:lat_ncia_p99_s_ccess:total_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: sum(rate(http_requests_total{path=~"/api/v1/.*\\d+"}[5m]))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: hostile_availability_99
+          sli: latência_p99_süccess
+          service: edge-hostile-names
+        annotations: {}
+        record:
+          metric: edge_hostile_names:lat_ncia_p99_s_ccess:total_5m
+          from: A
+        is_paused: false
+      - uid: rec-edge_hostile_names-lat_ncia_-0dfp5ev
+        title: edge_hostile_names:lat_ncia_p99_s_ccess:ratio_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: edge_hostile_names:lat_ncia_p99_s_ccess:good_5m / edge_hostile_names:lat_ncia_p99_s_ccess:total_5m
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: hostile_availability_99
+          sli: latência_p99_süccess
+          service: edge-hostile-names
+        annotations: {}
+        record:
+          metric: edge_hostile_names:lat_ncia_p99_s_ccess:ratio_5m
+          from: A
+        is_paused: false
+      - uid: rec-edge_hostile_names-lat_ncia_-0lbzmys
+        title: edge_hostile_names:lat_ncia_p99_s_ccess:error_ratio_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: ((((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m]))) - (sum(increase(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[5m])))) or (sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m])))) / clamp_min((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m]))), 1))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          sli: latência_p99_süccess
+          service: edge-hostile-names
+        annotations: {}
+        record:
+          metric: edge_hostile_names:lat_ncia_p99_s_ccess:error_ratio_5m
+          from: A
+        is_paused: false
+      - uid: rec-edge_hostile_names-errorbudg-1oy1fec
+        title: edge_hostile_names:errorbudget:burn_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: ((((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m]))) - (sum(increase(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[5m])))) or (sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m])))) / clamp_min((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m]))), 1)) / 0.01
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: hostile_availability_99
+          sli: latência_p99_süccess
+          service: edge-hostile-names
+        annotations: {}
+        record:
+          metric: edge_hostile_names:errorbudget:burn_5m
+          from: A
+        is_paused: false
+      - uid: rec-edge_hostile_names-errorbudg-1qcc1v3
+        title: edge_hostile_names:errorbudget:burn_1h
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: ((((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[1h]))) - (sum(increase(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[1h])))) or (sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[1h])))) / clamp_min((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[1h]))), 1)) / 0.01
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: hostile_availability_99
+          sli: latência_p99_süccess
+          service: edge-hostile-names
+        annotations: {}
+        record:
+          metric: edge_hostile_names:errorbudget:burn_1h
+          from: A
+        is_paused: false
+      - uid: rec-edge-hostile_ratio-5m
+        title: edge:hostile_ratio:5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                ((
+                  sum(rate(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[5m]))
+                ) / (
+                  sum(rate(http_requests_total{path=~"/api/v1/.*\\d+"}[5m]))
+                ))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          team: platform "core" team
+          note: "value with: colon, #hash and — dash"
+        annotations: {}
+        record:
+          metric: edge:hostile_ratio:5m
+          from: A
+        is_paused: false
+  - orgId: 1
+    name: edge_hostile_names_hostile_availability_99_burn
+    folder: observability-pack
+    interval: 30s
+    rules:
+      - uid: alr-hostile_availability_99_burn-186z8k5
+        title: hostile_availability_99_burn_14x_5m_1h
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (
+                  ((((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m]))) - (sum(increase(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[5m])))) or (sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m])))) / clamp_min((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m]))), 1)) > 0.14
+                ) and (
+                  ((((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[1h]))) - (sum(increase(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[1h])))) or (sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[1h])))) / clamp_min((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[1h]))), 1)) > 0.14
+                ) and (
+                  (((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m]))) - (sum(increase(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[5m])))) or (sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[5m])))) >= 2
+                )
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 2m
+        labels:
+          severity: SEV1
+          slo: hostile_availability_99
+          sli: latência_p99_süccess
+          service: edge-hostile-names
+          burn_rate: "14"
+          window_short: 5m
+          window_long: 1h
+          pack: edge-hostile-names
+        annotations:
+          summary: Burn rate 14× on hostile_availability_99
+          description: Both the 5m and 1h error ratios exceed 14× of the 1.000% error budget for hostile_availability_99, with at least 2 bad samples in the 5m window.
+          slo_objective: 99.000%
+          slo_window: 30d
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-hostile_availability_99_burn-1kqihtt
+        title: hostile_availability_99_burn_6x_30m_6h
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (
+                  ((((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[30m]))) - (sum(increase(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[30m])))) or (sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[30m])))) / clamp_min((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[30m]))), 1)) > 0.06
+                ) and (
+                  ((((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[6h]))) - (sum(increase(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[6h])))) or (sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[6h])))) / clamp_min((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[6h]))), 1)) > 0.06
+                ) and (
+                  (((sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[30m]))) - (sum(increase(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[30m])))) or (sum(increase(http_requests_total{path=~"/api/v1/.*\\d+"}[30m])))) >= 2
+                )
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 5m
+        labels:
+          severity: SEV2
+          slo: hostile_availability_99
+          sli: latência_p99_süccess
+          service: edge-hostile-names
+          burn_rate: "6"
+          window_short: 30m
+          window_long: 6h
+          pack: edge-hostile-names
+        annotations:
+          summary: Burn rate 6× on hostile_availability_99
+          description: Both the 30m and 6h error ratios exceed 6× of the 1.000% error budget for hostile_availability_99, with at least 2 bad samples in the 30m window.
+          slo_objective: 99.000%
+          slo_window: 30d
+          runbook: (supply runbook URL)
+        is_paused: false

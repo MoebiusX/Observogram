@@ -316,6 +316,11 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
         // is not deployable JSON).
         const artifact = item.artifact
           || (item.group === 'dashboards' && item.dashboardId ? `dash:${item.dashboardId}` : 'all');
+        // Rules: `all` (the full file, groups `<svc>_recording` / `<svc>_<slo>_burn` /
+        // `<svc>_forecast`) and `slo:<id>` (groups `<svc>_<sli>_sli_recording` /
+        // `<svc>_<slo>_recording` / `_burn` / `_forecast`) record the same series
+        // under disjoint group names, so a ruler keyed by (namespace, group) must
+        // receive one or the other, never both, in one namespace.
         const compiled = compileArtifact(overlaid, {
           group: item.group,
           flavor: (product === 'grafana' && item.group === 'rules') ? 'grafana-managed' : item.flavor,
