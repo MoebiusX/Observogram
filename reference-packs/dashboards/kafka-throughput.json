@@ -1,0 +1,195 @@
+{
+  "uid": "kafka-throughput",
+  "title": "Kafka — Throughput",
+  "description": "Kafka per-resource view.",
+  "tags": [
+    "kafka",
+    "pack"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "liveNow": false,
+  "refresh": "30s",
+  "fiscalYearStartMonth": 0,
+  "weekStart": "",
+  "timepicker": {
+    "refresh_intervals": [
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m"
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": [
+      {
+        "name": "Symptom alerts",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prom"
+        },
+        "enable": true,
+        "hide": false,
+        "iconColor": "#F0616D",
+        "expr": "ALERTS{alertstate=\"firing\", pack=\"kafka\", burn_rate=\"\", kind=\"\"}",
+        "step": "10s",
+        "titleFormat": "{{alertname}}",
+        "textFormat": "{{severity}} · {{qmgr}} {{queue}}"
+      }
+    ]
+  },
+  "links": [
+    {
+      "title": "Cluster overview",
+      "type": "link",
+      "url": "/d/kafka-cluster-overview",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
+      "title": "Consumer lag",
+      "type": "link",
+      "url": "/d/kafka-consumer-lag",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
+      "title": "Slo burn",
+      "type": "link",
+      "url": "/d/kafka-slo-burn",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 2
+      },
+      "transparent": true,
+      "options": {
+        "mode": "markdown",
+        "content": "### Kafka · Throughput\nPer-resource rollup per_topic_throughput. &nbsp;·&nbsp; pack `kafka@1.0.0` &nbsp;·&nbsp; [Cluster overview](/d/kafka-cluster-overview?${__url_time_range}) · [Consumer lag](/d/kafka-consumer-lag?${__url_time_range}) · **Throughput** · [Slo burn](/d/kafka-slo-burn?${__url_time_range})",
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Per topic throughput",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 2,
+        "w": 12,
+        "h": 7
+      },
+      "description": "Per-resource rollup of kafka_server_BrokerTopicMetrics_messagesinpersec by topic (pack derived view per_topic_throughput).",
+      "pack": {
+        "binds_to": [
+          "ref:queries.per_topic_throughput"
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (topic) (kafka_server_BrokerTopicMetrics_messagesinpersec)",
+          "legendFormat": "{{topic}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "pointSize": 4,
+            "spanNulls": 30000,
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "axisPlacement": "auto",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3DD68C",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    }
+  ]
+}
