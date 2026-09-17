@@ -236,6 +236,34 @@ test('adapter: a registry goes through toInventory() and the same checks', () =>
   assert.match(noAdapter.errors[0], /an adapter exporting toInventory\(raw\) is required/);
 });
 
+test('schema: an omitted params block is validated as {} so a module\'s required site/host/instance params fire; run() exits with an error and writes no file', () => {
+  // the fixture module requires site.queue_pattern; a scratch module also requires a host and an instance param
+  const strictModule = { ...module, paramsSchema: { ...module.paramsSchema,
+    host: { type: 'object', required: ['rack'], additionalProperties: false, properties: { rack: { type: 'string' } } },
+    instance: { ...module.paramsSchema.instance, required: ['client_port'] } } };
+  const withQm = { inventory: 'v1', env: 'prod', environments: { prod: { endpoints: { remote_write: 'http://x' } } },
+    hosts: [{ name: 'h1' }], queue_managers: [{ name: 'Q', shape: 'host', hosts: ['h1'], address: { host: 'h1', port: 1414 } }] };
+  const v = validateInventory(mergeInventories(files(withQm)).inventory, pack, { schema: invSchema, module: strictModule });
+  assert.deepEqual(v.errors, [
+    "inventory: $.environments.prod.params: missing required key 'queue_pattern'",
+    "inventory: $.hosts[0].params: missing required key 'rack'",
+    "inventory: $.queue_managers[0].params: missing required key 'client_port'",
+  ]);
+  // written as {} the schema pass reports the same three, once each
+  const empty = { ...withQm, environments: { prod: { ...withQm.environments.prod, params: {} } }, hosts: [{ name: 'h1', params: {} }], queue_managers: [{ ...withQm.queue_managers[0], params: {} }] };
+  assert.deepEqual(validateInventory(mergeInventories(files(empty)).inventory, pack, { schema: invSchema, module: strictModule }).errors, v.errors);
+  // a host-only environment whose block has no params is checked too; a block without members is not rendered and is left alone
+  const hostOnly = { inventory: 'v1', env: 'prod', environments: { prod: { endpoints: { remote_write: 'http://x' } }, lab: { endpoints: { remote_write: 'http://y' } } }, hosts: [{ name: 'h1' }] };
+  assert.deepEqual(validateInventory(mergeInventories(files(hostOnly)).inventory, pack, { schema: invSchema, module }).errors, ["inventory: $.environments.prod.params: missing required key 'queue_pattern'"]);
+  // with the params present nothing new fires, and without a module the placeholders stay permissive
+  assert.deepEqual(validateInventory(mergeInventories(files({ ...withQm, environments: { prod: { ...withQm.environments.prod, params: { queue_pattern: 'x' } } } })).inventory, pack, { schema: invSchema, module }).errors, []);
+  assert.deepEqual(validateInventory(mergeInventories(files(withQm)).inventory, pack, { schema: invSchema }).errors, []);
+  // end to end: the run stops before rendering, so no emitted file carries an undefined param
+  const r = run({ pack, packText, schema, inventorySchema: invSchema, inventories: [{ name: 'x.yaml', doc: withQm }], env: 'prod', module, lib });
+  assert.deepEqual(r.errors, ["inventory: $.environments.prod.params: missing required key 'queue_pattern'"]);
+  assert.deepEqual(r.partitions, {});
+});
+
 // ----------------------------------------------------------------- timing
 test('timing: the §5.1 formulas at step 10 (lab) reproduce the lab literals', () => {
   const t = timing(pack, 'lab', { scrape_interval: '10s', params: { exporter_poll_interval: '10s' } });

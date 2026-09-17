@@ -292,8 +292,8 @@ export function resolveEnvironments(inventory, pack) {
 export function validateInventory(inventory, pack, { schema = null, module = null, strict = false } = {}) {
   const errors = [], warnings = [];
   if (!isObj(inventory)) return { errors: ['inventory: not a mapping'], warnings };
-  if (schema) {
-    const full = inventorySchema(schema, module);
+  const full = schema ? inventorySchema(schema, module) : null;
+  if (full) {
     const strip = ({ source: _source, ...rest }) => rest;
     const doc = { inventory: inventory.inventory, environments: inventory.environments || {}, hosts: list(inventory.hosts).map(strip), queue_managers: list(inventory.queue_managers).map(strip) };
     errors.push(...schemaErrors(doc, full, 'inventory'));
@@ -308,6 +308,24 @@ export function validateInventory(inventory, pack, { schema = null, module = nul
   const { envs, errors: resolveErrors } = resolveEnvironments(inventory, pack);
   for (const e of resolveErrors) if (!errors.includes(e)) errors.push(e);
   const hostByName = new Map(list(inventory.hosts).map(h => [h.name, h]));
+
+  // An absent `params` key is the empty block: resolveEnvironments defaults it to {} and the
+  // module renders from it, so the module's `required` site/host/instance params must fire
+  // whether the block is omitted or written as `{}`. The schema pass above only sees keys that
+  // exist; this validates the default in its place, under the same path, for every
+  // environment with members and every host and queue manager.
+  if (full) {
+    const blocks = isObj(inventory.environments) ? inventory.environments : {};
+    const defaulted = (owner, def, path) => {
+      if (!isObj(owner) || owner.params !== undefined) return;
+      const found = [];
+      validate({}, { $ref: `#/$defs/${def}` }, path, found, full);
+      errors.push(...found.map(e => `inventory: ${e}`));
+    };
+    for (const env of Object.keys(envs)) if (isObj(blocks[env])) defaulted(blocks[env], PARAM_DEFS.site, `$.environments.${env}.params`);
+    list(inventory.hosts).forEach((h, i) => defaulted(h, PARAM_DEFS.host, `$.hosts[${i}].params`));
+    list(inventory.queue_managers).forEach((qm, i) => defaulted(qm, PARAM_DEFS.instance, `$.queue_managers[${i}].params`));
+  }
 
   // client_port is unique per exporter host across environments: the exporter host is a machine
   // two environments may share (design §2.3). Without an exporter host the port is scoped to the
