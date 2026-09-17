@@ -52,6 +52,17 @@
   },
   "links": [
     {
+      "title": "Unified",
+      "type": "link",
+      "url": "/d/kafka-unified",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
       "title": "Cluster overview",
       "type": "link",
       "url": "/d/kafka-cluster-overview",
@@ -103,7 +114,7 @@
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### Kafka · Slo burn\nError-budget burn per SLO on the fast and slow windows, and the burn-rate / forecast alert history. &nbsp;·&nbsp; pack `kafka@1.0.0` &nbsp;·&nbsp; [Cluster overview](/d/kafka-cluster-overview?${__url_time_range}) · [Consumer lag](/d/kafka-consumer-lag?${__url_time_range}) · [Throughput](/d/kafka-throughput?${__url_time_range}) · **Slo burn**",
+        "content": "### Kafka · Slo burn\nError-budget burn per SLO on the fast and slow windows, and the burn-rate / forecast alert history. &nbsp;·&nbsp; pack `kafka@1.0.0` &nbsp;·&nbsp; [Unified](/d/kafka-unified?${__url_time_range}) · [Cluster overview](/d/kafka-cluster-overview?${__url_time_range}) · [Consumer lag](/d/kafka-consumer-lag?${__url_time_range}) · [Throughput](/d/kafka-throughput?${__url_time_range}) · **Slo burn**",
         "code": {
           "language": "plaintext",
           "showLineNumbers": false,

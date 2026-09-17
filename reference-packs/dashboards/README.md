@@ -9,14 +9,19 @@ node tools/gen-burn-rules.mjs  --pack reference-packs/grafana.pack.yaml     # �
 npm run test:gen                                                            # every reference pack, bindings and policy coverage
 ```
 
-How a pack becomes boards (`tools/lib/dashboards/generic.mjs`): one dashboard per
-`spec.dashboards[]` entry. A `source:` entry gets, in the pack's own section order, the SLI
-tiles and error-budget burn of the SLIs and SLOs its `panel_bindings` declare, its bound derived
-views, and, on the first board, the validation row (certification metrics for `pack=<name>`),
-the policy and alerting row, the remediation table, the pipeline row and the logs and traces
-row for the backends the pack declares. `template: ref:platform/slo-burn-template` becomes a
-burn board for `params.slos`; `ref:platform/per-resource-template` a board for `params.view`.
-Every declared binding must be bound by a panel or nothing is written.
+How a pack becomes boards (`tools/lib/dashboards/generic.mjs`). First, always, the **Unified
+Observability** board `<name>-unified`: the whole pack on one page in the pack's own section
+order, §1-2 every SLI tile and every SLO's error-budget burn, §10 the validation that proves
+them (certification verdict, MTTD and MTTR per alert for `pack=<name>`, the synthetic checks as
+declared), §7-8 policy and alerting (counters, state timelines, firing table), §9 the
+remediation table, the signals behind the SLIs (the pack's derived views, plus whatever a pack
+module adds), §3-5 the pipeline, then logs and traces for the backends the pack declares. Then
+one board per `spec.dashboards[]` entry: a `source:` entry gets exactly what its
+`panel_bindings` declare (SLI tiles, error-budget burn for bound SLOs, bound derived views) and
+the alert timelines; `template: ref:platform/slo-burn-template` becomes a burn board for
+`params.slos`; `ref:platform/per-resource-template` a board for `params.view`. Every declared
+binding must be bound by a panel, and the unified board must bind every SLI and SLO, or nothing
+is written.
 
 The burn rules (`tools/lib/burn-rules.mjs`) follow the compiler's naming and labels with the five
 PromQL corrections measured on a live queue manager (mq-observability-pack): bad-over-expected
@@ -32,9 +37,9 @@ prometheus pack, a live evaluation with the pack's recording rules loaded:
 
 | pack | boards | panels | burn rules | promtool | Grafana import | notes |
 |---|---|---|---|---|---|---|
-| grafana | 4 | 65 | 19 + 16 + 2 | ok | 4/4 | 7 of the 12 metric names its SLIs use are not among the 459 `grafana_*` names Grafana 12.4.11 exposed: `grafana_database_query_duration_seconds_bucket`, `grafana_alerting_rule_evaluations_total`, `grafana_alerting_rule_evaluation_failures_total`, `grafana_api_login_post`, `grafana_api_login_oauth`, `grafana_api_login_saml`, `grafana_user_login_errors_total` (that instance had no alert rules and no logins yet, which may explain the alerting and login counters; the database query-duration histogram has no near name at all) |
-| kafka | 4 | 59 | 16 + 12 + 3 | ok | 4/4 | two state-style SLIs use filter comparisons (`up{job="kafka-broker"} == 1`, `in_sync_replica == replicas`) and are rewritten to `== bool`; no Kafka was available to execute against |
-| prometheus | 4 | 66 | 19 + 16 + 2 | ok | 4/4 | `scrape_duration_seconds` is a gauge and `prometheus_engine_query_duration_seconds` a summary: the two `_bucket` histograms the latency SLIs name do not exist, so those SLIs evaluate to nothing; `sum(up == 1)` rewritten to `== bool` |
+| grafana | 5 (unified + 4 declared) | 83 | 19 + 16 + 2 | ok | 5/5 | 7 of the 12 metric names its SLIs use are not among the 459 `grafana_*` names Grafana 12.4.11 exposed: `grafana_database_query_duration_seconds_bucket`, `grafana_alerting_rule_evaluations_total`, `grafana_alerting_rule_evaluation_failures_total`, `grafana_api_login_post`, `grafana_api_login_oauth`, `grafana_api_login_saml`, `grafana_user_login_errors_total` (that instance had no alert rules and no logins yet, which may explain the alerting and login counters; the database query-duration histogram has no near name at all) |
+| kafka | 5 (unified + 4 declared) | 75 | 16 + 12 + 3 | ok | 5/5 | two state-style SLIs use filter comparisons (`up{job="kafka-broker"} == 1`, `in_sync_replica == replicas`) and are rewritten to `== bool`; no Kafka was available to execute against |
+| prometheus | 5 (unified + 4 declared) | 84 | 19 + 16 + 2 | ok | 5/5 | `scrape_duration_seconds` is a gauge and `prometheus_engine_query_duration_seconds` a summary: the two `_bucket` histograms the latency SLIs name do not exist, so those SLIs evaluate to nothing; `sum(up == 1)` rewritten to `== bool` |
 
 Common to all three: `validation.chaos_experiments[].expected_alerts` name alerts
 (`grafana-http-5xx-burn-fast`, `kafka-broker-availability-burn-fast`, ...) that no compiler

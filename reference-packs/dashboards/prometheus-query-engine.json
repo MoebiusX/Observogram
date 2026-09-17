@@ -51,6 +51,17 @@
   },
   "links": [
     {
+      "title": "Unified",
+      "type": "link",
+      "url": "/d/prometheus-unified",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
       "title": "Overview",
       "type": "link",
       "url": "/d/prometheus-overview",
@@ -102,7 +113,7 @@
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### Prometheus · Query engine\nSLIs query_latency_p99, query_concurrent_saturation · SLOs query_latency_99_p99_1s. &nbsp;·&nbsp; pack `prometheus@1.0.0` &nbsp;·&nbsp; [Overview](/d/prometheus-overview?${__url_time_range}) · **Query engine** · [Tsdb health](/d/prometheus-tsdb-health?${__url_time_range}) · [Slo burn](/d/prometheus-slo-burn?${__url_time_range})",
+        "content": "### Prometheus · Query engine\nSLIs query_latency_p99, query_concurrent_saturation · SLOs query_latency_99_p99_1s. &nbsp;·&nbsp; pack `prometheus@1.0.0` &nbsp;·&nbsp; [Unified](/d/prometheus-unified?${__url_time_range}) · [Overview](/d/prometheus-overview?${__url_time_range}) · **Query engine** · [Tsdb health](/d/prometheus-tsdb-health?${__url_time_range}) · [Slo burn](/d/prometheus-slo-burn?${__url_time_range})",
         "code": {
           "language": "plaintext",
           "showLineNumbers": false,

@@ -32,8 +32,23 @@ for (const packPath of PACKS) {
 
   test(`${name}: dashboards cover every declared board and binding`, () => {
     const boards = genericBoards(pack);
-    assert.equal(boards.length, pack.spec.dashboards.length);
+    const unifiedId = `${name}-unified`;
+    const declaresUnified = pack.spec.dashboards.some(d => d.id === unifiedId);
+    assert.equal(boards.length, pack.spec.dashboards.length + (declaresUnified ? 0 : 1), 'one board per declared dashboard plus the unified board');
     assert.deepEqual(checkBindings(pack, boards), []);
+    // the unified board is the pack on one page: every SLI and SLO bound, in the pack's section order
+    const unified = boards.find(b => b.id === unifiedId);
+    assert.ok(unified, 'unified board generated');
+    assert.equal(unified.file, `${unifiedId}.json`);
+    const rows = unified.dashboard.panels.filter(p => p.type === 'row').map(p => p.title);
+    assert.match(rows[0], /Contract/);
+    assert.ok(rows.some(r => /Policy and alerting/.test(r)), 'unified board has the policy row');
+    if ((pack.spec.validation?.chaos_experiments || []).length) assert.ok(rows.some(r => /MTTD, MTTR/.test(r)), 'unified board has the validation row');
+    if ((pack.spec.validation?.synthetic_checks || []).length) assert.ok(rows.some(r => /synthetic/.test(r)), 'unified board lists the synthetic checks');
+    assert.ok(rows.some(r => /Pipelines/.test(r)) && rows.some(r => /Logs and traces/.test(r)), 'unified board ends with pipelines, logs and traces');
+    const bound = new Set(unified.dashboard.panels.flatMap(p => p.pack?.binds_to || []));
+    for (const s of pack.spec.slis) assert.ok(bound.has(`slis.${s.id}`), `unified binds slis.${s.id}`);
+    for (const s of pack.spec.slos) assert.ok(bound.has(`slos.${s.id}`), `unified binds slos.${s.id}`);
     for (const b of boards) {
       assert.equal(b.dashboard.uid, b.id);
       assert.ok(b.file.endsWith('.json'));
@@ -49,9 +64,13 @@ for (const packPath of PACKS) {
       assert.equal(round.panels.length, b.dashboard.panels.length);
       assert.equal(round.schemaVersion, 41);
     }
-    const sources = pack.spec.dashboards.filter(d => d.source);
-    const primary = boards.find(b => b.id === sources[0].id);
-    assert.ok(primary.dashboard.panels.some(p => p.type === 'row' && /Policy and alerting/.test(p.title)), 'primary board has the policy row');
+    // a declared board carries exactly what it declares: its bindings and the alert timelines
+    for (const d of pack.spec.dashboards.filter(x => x.source)) {
+      const b = boards.find(x => x.id === d.id);
+      const bound = new Set(b.dashboard.panels.flatMap(p => p.pack?.binds_to || []));
+      for (const x of d.panel_bindings || []) assert.ok(bound.has(x.binds_to), `${d.id} binds ${x.binds_to}`);
+      assert.ok(b.dashboard.panels.some(p => p.type === 'row' && /Alerting/.test(p.title)), `${d.id} has the alerting row`);
+    }
   });
 
   test(`${name}: burn rules cover the policy with the corrected PromQL`, () => {
