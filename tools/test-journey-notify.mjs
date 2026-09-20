@@ -24,6 +24,19 @@ const { assert, report } = createHarness();
 const src = readFileSync(new URL('./lib/journey-notify.mjs', import.meta.url), 'utf8');
 assert(!/^\s*import\s/m.test(src), 'journey-notify.mjs is zero-import (browser-safe, previewable by the studio)');
 assert(!/from\s+'node:/.test(src) && !/process\.env/.test(src) && !/\bprocess\./.test(src) && !/\bfetch\(/.test(src), 'journey-notify.mjs reads no node: module, no environment and never touches the wire');
+// Fix round 0: a raw U+0000 once sat inside the causeKey template literal
+// (the tool-transport trap) — git classed the module as binary (no line
+// diff, no blame) and /lib served a control byte to the browser. Byte-wise
+// check, written without escape sequences so the guard itself cannot regress
+// the same way: only TAB, LF and CR are allowed below 0x20.
+{
+  const controlBytes = [];
+  for (let i = 0; i < src.length; i++) {
+    const c = src.charCodeAt(i);
+    if (c < 0x20 && c !== 9 && c !== 10 && c !== 13) controlBytes.push({ offset: i, code: c });
+  }
+  assert(controlBytes.length === 0, 'journey-notify.mjs contains no control byte (git must diff it as text)', controlBytes.slice(0, 3));
+}
 
 // --- the vocabulary ---
 assert(NOTIFY_POLICIES.join() === 'transitions,breach,always' && Object.isFrozen(NOTIFY_POLICIES) && NOTIFY_DEFAULT_POLICY === 'transitions', 'policies: transitions (default) · breach · always');
@@ -95,6 +108,11 @@ const withCause = (startedAt, causes, vantageChanged = false) => worse(startedAt
   c3.transition = { ...c3.transition, changed: [] };
   assert(notifyDecision({ record: c3, previousRun: c1 }).triggers.join() === 'new candidate cause', 'a second, new cause beside a known one sends');
   assert(newCandidateCauses(c3, c1).length === 1 && newCandidateCauses(c3, c1)[0].kind === 'version-change' && newCandidateCauses(c1, null).length === 1, 'newCandidateCauses compares by kind + evidence');
+  // The key is the JSON pair, not a concatenation: the same characters split
+  // differently between kind and evidence are two different causes.
+  const split1 = withCause('t4', [{ kind: 'deploy', evidence: 'x|dep_in' }]);
+  const split2 = withCause('t5', [{ kind: 'deploy|x', evidence: 'dep_in' }]);
+  assert(newCandidateCauses(split2, split1).length === 1 && newCandidateCauses(split1, split1).length === 0, 'kind/evidence boundaries matter: a shifted split is a new cause, the same pair is not');
   const v = notifyDecision({ record: withCause('t2', [], true), previousRun: pass('t1') });
   assert(v.triggers.join() === 'chain got worse,vantage changed', 'a vantage change is a trigger of its own (never a cause)', v);
   const vOnly = pass('t2', { causes: { causes: [], vantage: { changed: true, from: 'full', to: 'partial', detail: 'probe family recording_rules newly failed' }, note: 'n' } });
