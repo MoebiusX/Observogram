@@ -61,8 +61,11 @@ spec:
           #             app.kubernetes.io/name: observabilitypack-studio
           containers:
             - name: journeys
-              # Same image as the studio; the base kustomization's `images:`
-              # retag applies here too.
+              # Same image as the studio. The base kustomization's `images:`
+              # retag does NOT reach a component's resources (a transformer
+              # applies to the kustomization that declares it), so
+              # deploy/k8s-journeys/kustomization.yaml repeats the `images:`
+              # entry; tools/test-deploy-manifests.mjs pins it to the base's.
               image: observogram:0.4.0
               imagePullPolicy: IfNotPresent
               workingDir: /app

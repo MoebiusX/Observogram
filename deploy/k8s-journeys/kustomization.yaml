@@ -13,8 +13,10 @@
 # component's PVC and CronJob would render namespace-less (and land in the
 # kubeconfig's current namespace, typically `default`) while the patched studio
 # Deployment in `observability` claims a PVC that does not exist there —
-# pod Pending on an unbound claim. tools/test-deploy-manifests.mjs pins both
-# values equal to the base's.
+# pod Pending on an unbound claim. The same holds for `images:`: the base's
+# retag would leave the CronJob on whatever tag the component file says, so
+# the entry is repeated here too. tools/test-deploy-manifests.mjs pins all
+# three values equal to the base's.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -25,6 +27,10 @@ resources:
 
 components:
   - ../k8s/components/journeys
+
+images:
+  - name: observogram
+    newTag: 0.4.0
 
 labels:
   - pairs:

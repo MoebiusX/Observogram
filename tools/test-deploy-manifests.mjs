@@ -101,7 +101,11 @@ const overlay = docs['../k8s-journeys/kustomization.yaml'];
          'the fleet cadence is */15 with concurrencyPolicy Forbid and bounded history', cron.spec);
   assert(js.backoffLimit === 0 && js.activeDeadlineSeconds === 900 && pod.restartPolicy === 'Never', 'backoffLimit 0, activeDeadlineSeconds 900, restartPolicy Never — a gate failure is not retried', { b: js.backoffLimit, a: js.activeDeadlineSeconds, r: pod.restartPolicy });
   assert(JSON.stringify(c.command) === JSON.stringify(['node', 'tools/cli.mjs', 'journey', 'run', '--all']) && c.workingDir === '/app', 'the command is node tools/cli.mjs journey run --all in /app (packc is not on PATH)', c.command);
-  assert(/^observogram:/.test(c.image) && c.image === docs['deployment-studio.yaml'].spec.template.spec.containers[0].image, 'the CronJob uses the studio image (same name:tag, so the base retag applies)', c.image);
+  assert(/^observogram:/.test(c.image) && c.image === docs['deployment-studio.yaml'].spec.template.spec.containers[0].image, 'the CronJob uses the studio image (same name:tag as the studio Deployment file)', c.image);
+  // Fix round 1: the base's `images:` retag is a transformer of the base kustomization and
+  // does not reach the component's CronJob; the overlay repeats it (same class as namespace/labels).
+  assert(JSON.stringify(overlay.images) === JSON.stringify(base.images) && overlay.images[0].name === 'observogram',
+         'the overlay repeats the base images retag so the CronJob follows the same tag as the studio', { overlay: overlay.images, base: base.images });
   assert(pod.securityContext.runAsNonRoot === true && pod.securityContext.runAsUser === 1000 && pod.securityContext.runAsGroup === 1000 && c.securityContext.allowPrivilegeEscalation === false && c.securityContext.capabilities.drop.join() === 'ALL',
          'the same securityContext as the studio');
   // Fix round 0: a freshly provisioned PVC is root:root 0755 with most
