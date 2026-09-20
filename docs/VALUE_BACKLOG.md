@@ -200,6 +200,19 @@ Canonical example: *"repo vs live drift check"* — crawl
   SLO verdict), and the journeys panel reads the bounded run history
   (`OBSERVOGRAM_JOURNEY_RUN_RETENTION`) as the time series; scheduling stays
   external as decided here.
+- *Status 2026-09-20 (step 5, early-warning delivery):* delivered — the
+  `notify:` webhook (`urlEnv` / `authEnv` names only; `transitions` ·
+  `breach` · `always`; one bounded, once-retried POST recorded as
+  `record.notify`, written after the record itself is on disk), the
+  `schedule:` declaration with `packc journey schedule <name>` printing the
+  cron line, the Windows `schtasks` command, a GitHub Actions workflow and a
+  Kubernetes CronJob from it, `packc journey run --all`, and the opt-in
+  kustomize component `deploy/k8s/components/journeys` (workspace PVC +
+  fleet CronJob + studio mount, applied via `deploy/k8s-journeys`). The
+  in-process timer was considered and **not chosen**: it would put a
+  scheduler, its retries and its clock inside the studio and make the
+  studio's uptime the journey's uptime; every scheduler the snippets target
+  already exists.
 
 ### 12. Identity · tenancy · hosted posture *(plan ratification pending — 2026-06-12)*
 The v1 non-goal ("multi-tenant persistence") activates as its own
