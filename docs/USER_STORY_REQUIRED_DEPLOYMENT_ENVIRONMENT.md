@@ -3,7 +3,7 @@
 ## Story
 
 As an operator generating an ObservabilityPack from a repository, I must choose
-the deployment environment being inspected, so Tomograph compares declared
+the deployment environment being inspected, so Observogram compares declared
 artefacts against the matching live runtime instead of blending Docker Desktop,
 local Kubernetes, generic Kubernetes, and EKS surfaces into one pack.
 

@@ -1,0 +1,39 @@
+{
+  "title": "hostile-overview",
+  "uid": "obs-pack-edge_hostile_names-host-0jzd6ws",
+  "description": "Compiled from edge-hostile-names pack. Do not hand-edit — re-emit from the pack.",
+  "tags": [
+    "observability-pack",
+    "edge_hostile_names",
+    "obs-pack-id:hostile-overview"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "panels": [],
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": [
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "enable": true,
+        "name": "Annotations & Alerts",
+        "target": {
+          "matchAny": false,
+          "tags": [],
+          "type": "dashboard"
+        }
+      }
+    ]
+  }
+}

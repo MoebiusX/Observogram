@@ -149,3 +149,39 @@ gating tags, env overlay, adapter purity (no mutation across calls), and the
 SLO -> SLI -> metrics -> exporter/scrape -> dashboard -> alert chain.
 
 `tools/test-packs.mjs` runs the adapter against every `packs/*.pack.yaml`, validates schema + asserts pack-specific conformance bands.
+
+## Previous format — layered JSON (upconvert)
+
+The inverse-direction sibling lives in `tools/lib/legacy.mjs`: it detects the
+pre-v1.2 layered "studio-shape" JSON (the original pack format — working
+examples in `examples/legacy/`) and upconverts it into a canonical v1.2
+manifest, so the one canonical pipeline serves old packs too.
+
+```js
+import { isLegacyLayeredPack, upconvertLegacyPack } from './tools/lib/legacy.mjs';
+
+if (isLegacyLayeredPack(parsed)) {
+  const { canonical, report } = upconvertLegacyPack(parsed);
+  // report = { format, service, mapped, scaffolded, notes }
+}
+```
+
+Wired in at the ingestion gate (`POST /api/validate` — uploads convert
+transparently; the response carries the `legacy` report) and as a CLI
+(`npm run upconvert-legacy <file> [-o out.pack.json]`).
+
+Conversion contract:
+
+- **Lossless** — every legacy artefact is kept verbatim in
+  `metadata.annotations["legacy.artefact.<LAYER>.<ID>"]`.
+- **Honest** — the layered format never carried machine detail (exprs,
+  windows, channels); every placeholder a schema-required field forces is
+  marked `crawler.scaffold.<symbol>` so it projects as Scaffold, never
+  Declared. Legacy `GAP` items are always scaffolds. (`sourceOf` honours a
+  second prefix, `mcp.scaffold.<symbol>`, for the placeholders the live
+  fetcher is forced to invent — see `MCP_INTEGRATION.md`.)
+- **Deterministic** — same input, same manifest (timestamps only via
+  `opts.now`).
+
+`tools/test-legacy-pack.mjs` gates the four restored examples on every
+`npm test`.

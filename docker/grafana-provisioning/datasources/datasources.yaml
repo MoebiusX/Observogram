@@ -1,0 +1,14 @@
+# A Prometheus datasource for the validation Grafana. The URL doesn't
+# need to answer — Grafana only requires the datasource to EXIST for
+# alert-rule provisioning to accept rules that reference it. The MCP
+# bridge maps the compiler's ${DS_PROMETHEUS} placeholder to this uid
+# (the same job otel-mcp-server's GRAFANA_URL/datasource config does in
+# a real deployment).
+apiVersion: 1
+datasources:
+  - name: Prometheus (validation)
+    uid: obs-pack-prom
+    type: prometheus
+    access: proxy
+    url: http://prometheus.invalid:9090
+    isDefault: true

@@ -1,0 +1,1571 @@
+{
+  "uid": "prometheus-slo-burn",
+  "title": "Prometheus — Slo burn",
+  "description": "Multi-window burn rates and forecasts for 6 Prometheus SLOs.",
+  "tags": [
+    "prometheus",
+    "pack",
+    "slo"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "liveNow": false,
+  "refresh": "30s",
+  "fiscalYearStartMonth": 0,
+  "weekStart": "",
+  "timepicker": {
+    "refresh_intervals": [
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m"
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": [
+      {
+        "name": "Symptom alerts",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prom"
+        },
+        "enable": true,
+        "hide": false,
+        "iconColor": "#F0616D",
+        "expr": "ALERTS{alertstate=\"firing\", pack=\"prometheus\", burn_rate=\"\", kind=\"\"}",
+        "step": "10s",
+        "titleFormat": "{{alertname}}",
+        "textFormat": "{{severity}} · {{qmgr}} {{queue}}"
+      }
+    ]
+  },
+  "links": [
+    {
+      "title": "Unified",
+      "type": "link",
+      "url": "/d/prometheus-unified",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
+      "title": "Overview",
+      "type": "link",
+      "url": "/d/prometheus-overview",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
+      "title": "Query engine",
+      "type": "link",
+      "url": "/d/prometheus-query-engine",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
+      "title": "Tsdb health",
+      "type": "link",
+      "url": "/d/prometheus-tsdb-health",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 2
+      },
+      "transparent": true,
+      "options": {
+        "mode": "markdown",
+        "content": "### Prometheus · Slo burn\nError-budget burn per SLO on the fast and slow windows, and the burn-rate / forecast alert history. &nbsp;·&nbsp; pack `prometheus@1.0.0` &nbsp;·&nbsp; [Unified](/d/prometheus-unified?${__url_time_range}) · [Overview](/d/prometheus-overview?${__url_time_range}) · [Query engine](/d/prometheus-query-engine?${__url_time_range}) · [Tsdb health](/d/prometheus-tsdb-health?${__url_time_range}) · **Slo burn**",
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Scrape success ratio · burn 1 h",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 2,
+        "w": 4,
+        "h": 4
+      },
+      "description": "1 h burn rate of Scrape success ratio · 99.9 % (objective 0.999 over 30d).",
+      "pack": {
+        "binds_to": [
+          "slos.scrape_success_99_9"
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "prometheus:errorbudget:burn_1h{slo=\"scrape_success_99_9\"}",
+          "instant": false,
+          "range": true,
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3DD68C",
+                "value": null
+              },
+              {
+                "color": "#F5B14C",
+                "value": 6
+              },
+              {
+                "color": "#F0616D",
+                "value": 14
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "orientation": "auto",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Wal corruption freshness · burn 1 h",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 2,
+        "w": 4,
+        "h": 4
+      },
+      "description": "1 h burn rate of Wal corruption freshness · 99.99 % (objective 0.9999 over 30d).",
+      "pack": {
+        "binds_to": [
+          "slos.wal_integrity_99_99"
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "prometheus:errorbudget:burn_1h{slo=\"wal_integrity_99_99\"}",
+          "instant": false,
+          "range": true,
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3DD68C",
+                "value": null
+              },
+              {
+                "color": "#F5B14C",
+                "value": 6
+              },
+              {
+                "color": "#F0616D",
+                "value": 14
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "orientation": "auto",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Rule evaluation success ratio · burn 1 h",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 2,
+        "w": 4,
+        "h": 4
+      },
+      "description": "1 h burn rate of Rule evaluation success ratio · 99.95 % (objective 0.9995 over 30d).",
+      "pack": {
+        "binds_to": [
+          "slos.rule_evaluation_99_95"
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "prometheus:errorbudget:burn_1h{slo=\"rule_evaluation_99_95\"}",
+          "instant": false,
+          "range": true,
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3DD68C",
+                "value": null
+              },
+              {
+                "color": "#F5B14C",
+                "value": 6
+              },
+              {
+                "color": "#F0616D",
+                "value": 14
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "orientation": "auto",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Query latency p99 · burn 1 h",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 2,
+        "w": 4,
+        "h": 4
+      },
+      "description": "1 h burn rate of Query latency p99 · 99 % (objective 0.99 over 30d).",
+      "pack": {
+        "binds_to": [
+          "slos.query_latency_99_p99_1s"
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "prometheus:errorbudget:burn_1h{slo=\"query_latency_99_p99_1s\"}",
+          "instant": false,
+          "range": true,
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3DD68C",
+                "value": null
+              },
+              {
+                "color": "#F5B14C",
+                "value": 6
+              },
+              {
+                "color": "#F0616D",
+                "value": 14
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "orientation": "auto",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Alertmanager notification success ratio · burn 1 h",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 2,
+        "w": 4,
+        "h": 4
+      },
+      "description": "1 h burn rate of Alertmanager notification success ratio · 99.9 % (objective 0.999 over 30d).",
+      "pack": {
+        "binds_to": [
+          "slos.alertmanager_delivery_99_9"
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "prometheus:errorbudget:burn_1h{slo=\"alertmanager_delivery_99_9\"}",
+          "instant": false,
+          "range": true,
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3DD68C",
+                "value": null
+              },
+              {
+                "color": "#F5B14C",
+                "value": 6
+              },
+              {
+                "color": "#F0616D",
+                "value": 14
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "orientation": "auto",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Tsdb compaction success ratio · burn 1 h",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 2,
+        "w": 4,
+        "h": 4
+      },
+      "description": "1 h burn rate of Tsdb compaction success ratio · 99.95 % (objective 0.9995 over 30d).",
+      "pack": {
+        "binds_to": [
+          "slos.tsdb_compaction_99_95"
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "prometheus:errorbudget:burn_1h{slo=\"tsdb_compaction_99_95\"}",
+          "instant": false,
+          "range": true,
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3DD68C",
+                "value": null
+              },
+              {
+                "color": "#F5B14C",
+                "value": 3
+              },
+              {
+                "color": "#F0616D",
+                "value": 6
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "orientation": "auto",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 8,
+      "type": "bargauge",
+      "title": "Error-budget burn · last hour",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 12,
+        "h": 8
+      },
+      "description": "1 h error-budget burn rate per SLO: 1× consumes the budget exactly over the SLO window; amber at the smallest factor that alerts for that SLO, red at the largest (spec.policy).",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "prometheus:errorbudget:burn_1h",
+          "instant": true,
+          "legendFormat": "{{slo}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "max": 20,
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#8B98A9",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "scrape_success_99_9"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Scrape success ratio · 99.9 %"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#3DD68C",
+                      "value": null
+                    },
+                    {
+                      "color": "#F5B14C",
+                      "value": 6
+                    },
+                    {
+                      "color": "#F0616D",
+                      "value": 14
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "wal_integrity_99_99"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Wal corruption freshness · 99.99 %"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#3DD68C",
+                      "value": null
+                    },
+                    {
+                      "color": "#F5B14C",
+                      "value": 6
+                    },
+                    {
+                      "color": "#F0616D",
+                      "value": 14
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rule_evaluation_99_95"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Rule evaluation success ratio · 99.95 %"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#3DD68C",
+                      "value": null
+                    },
+                    {
+                      "color": "#F5B14C",
+                      "value": 6
+                    },
+                    {
+                      "color": "#F0616D",
+                      "value": 14
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "query_latency_99_p99_1s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Query latency p99 · 99 %"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#3DD68C",
+                      "value": null
+                    },
+                    {
+                      "color": "#F5B14C",
+                      "value": 6
+                    },
+                    {
+                      "color": "#F0616D",
+                      "value": 14
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "alertmanager_delivery_99_9"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Alertmanager notification success ratio · 99.9 %"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#3DD68C",
+                      "value": null
+                    },
+                    {
+                      "color": "#F5B14C",
+                      "value": 6
+                    },
+                    {
+                      "color": "#F0616D",
+                      "value": 14
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "tsdb_compaction_99_95"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Tsdb compaction success ratio · 99.95 %"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#3DD68C",
+                      "value": null
+                    },
+                    {
+                      "color": "#F5B14C",
+                      "value": 3
+                    },
+                    {
+                      "color": "#F0616D",
+                      "value": 6
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "valueMode": "color",
+        "namePlacement": "left",
+        "showUnfilled": true,
+        "sizing": "auto",
+        "minVizWidth": 8,
+        "minVizHeight": 14,
+        "maxVizHeight": 26,
+        "legend": {
+          "showLegend": false
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "state-timeline",
+      "title": "Burn-rate & forecast alerts · pending / firing",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 6,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Multi-window burn-rate alerts (fast windows page, slow windows linger after incidents) and forecasts.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(2 * max by (alertname) (ALERTS{pack=\"prometheus\", alertstate=\"firing\", burn_rate!=\"\"})) or max by (alertname) (ALERTS{pack=\"prometheus\", alertstate=\"pending\", burn_rate!=\"\"}) or label_replace(vector(0), \"alertname\", \"no alert\", \"\", \"\")",
+          "legendFormat": "{{alertname}}"
+        },
+        {
+          "refId": "B",
+          "expr": "(2 * max by (alertname) (ALERTS{pack=\"prometheus\", alertstate=\"firing\", kind=\"forecast\"})) or max by (alertname) (ALERTS{pack=\"prometheus\", alertstate=\"pending\", kind=\"forecast\"})",
+          "legendFormat": "{{alertname}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#4B5563"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "quiet",
+                  "color": "#1E3A34"
+                },
+                "1": {
+                  "text": "PENDING",
+                  "color": "#F5B14C"
+                },
+                "2": {
+                  "text": "FIRING",
+                  "color": "#F0616D"
+                }
+              }
+            }
+          ],
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 78
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "mergeValues": true,
+        "showValue": "never",
+        "alignValue": "center",
+        "rowHeight": 0.82,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Burn rate · 5 m window",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Fast window: reacts within minutes; pages when both it and the slow window exceed the factor. Hover for per-SLO values.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "prometheus:errorbudget:burn_5m",
+          "legendFormat": "{{slo}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "pointSize": 4,
+            "spanNulls": 30000,
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "axisPlacement": "auto",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "#8B98A9",
+                "value": 1
+              },
+              {
+                "color": "#F0616D",
+                "value": 14
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "scrape_success_99_9"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Scrape success ratio"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "scrape_duration_99_p99_5s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Scrape duration p99"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "wal_integrity_99_99"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Wal corruption freshness"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rule_evaluation_99_95"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Rule evaluation success ratio"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "query_latency_99_p99_1s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Query latency p99"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "query_concurrency_99_under_80pct"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Query concurrent saturation"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "alertmanager_delivery_99_9"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Alertmanager notification success ratio"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "tsdb_compaction_99_95"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Tsdb compaction success ratio"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Burn rate · 1 h window",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 14,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Slow window: keeps burning for up to an hour after an incident by design.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "prometheus:errorbudget:burn_1h",
+          "legendFormat": "{{slo}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "pointSize": 4,
+            "spanNulls": 30000,
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "axisPlacement": "auto",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "#8B98A9",
+                "value": 1
+              },
+              {
+                "color": "#F0616D",
+                "value": 6
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "scrape_success_99_9"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Scrape success ratio"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "scrape_duration_99_p99_5s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Scrape duration p99"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "wal_integrity_99_99"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Wal corruption freshness"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rule_evaluation_99_95"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Rule evaluation success ratio"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "query_latency_99_p99_1s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Query latency p99"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "query_concurrency_99_under_80pct"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Query concurrent saturation"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "alertmanager_delivery_99_9"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Alertmanager notification success ratio"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "tsdb_compaction_99_95"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Tsdb compaction success ratio"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Error ratio · 5 m, per SLI",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 12,
+        "h": 7
+      },
+      "description": "Bad events over the events that happened (counter SLIs) or bad samples over the expected samples (state and threshold SLIs) in the last 5 minutes, per SLI.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{__name__=~\"prometheus:.*:error_ratio_5m\"}",
+          "legendFormat": "{{__name__}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "pointSize": 4,
+            "spanNulls": 30000,
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "axisPlacement": "auto",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3DD68C",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "prometheus:scrape_success_ratio:error_ratio_5m"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "scrape_success_ratio"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "prometheus:scrape_duration_p99:error_ratio_5m"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "scrape_duration_p99"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "prometheus:wal_corruption_freshness:error_ratio_5m"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "wal_corruption_freshness"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "prometheus:rule_evaluation_success_ratio:error_ratio_5m"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "rule_evaluation_success_ratio"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "prometheus:query_latency_p99:error_ratio_5m"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "query_latency_p99"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "prometheus:query_concurrent_saturation:error_ratio_5m"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "query_concurrent_saturation"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "prometheus:alertmanager_notification_success_ratio:error_ratio_5m"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "alertmanager_notification_success_ratio"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "prometheus:tsdb_compaction_success_ratio:error_ratio_5m"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "tsdb_compaction_success_ratio"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "Burn-rate alerts firing",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 22,
+        "w": 6,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(ALERTS{alertstate=\"firing\", pack=\"prometheus\", burn_rate!=\"\"}) or vector(0)",
+          "instant": true,
+          "range": false,
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3DD68C",
+                "value": null
+              },
+              {
+                "color": "#F5B14C",
+                "value": 1
+              },
+              {
+                "color": "#F0616D",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "orientation": "auto",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 15,
+      "type": "stat",
+      "title": "Forecast alerts firing",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 22,
+        "w": 6,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(ALERTS{alertstate=\"firing\", pack=\"prometheus\", kind=\"forecast\"}) or vector(0)",
+          "instant": true,
+          "range": false,
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3DD68C",
+                "value": null
+              },
+              {
+                "color": "#F5B14C",
+                "value": 1
+              },
+              {
+                "color": "#F0616D",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "orientation": "auto",
+        "showPercentChange": false
+      }
+    }
+  ]
+}

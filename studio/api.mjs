@@ -8,8 +8,45 @@
 
 import { state } from './state.mjs';
 
+// Session-authenticated mutations must carry this header (CSRF defence
+// in identity mode — see server/auth.mjs). Sent on every studio request;
+// the server ignores it outside identity mode.
+export const CSRF_HEADER = { 'X-Observogram-CSRF': '1' };
+
+// Active org (Stage 2 tenancy — server/tenancy.mjs). When the server has
+// orgs.json, every /api call carries X-Observogram-Org so the request runs
+// in that org's workspace. Resolved at boot from /auth/me memberships +
+// the persisted choice; null outside tenancy mode.
+let activeOrg = null;
+export function setActiveOrg(id) {
+  activeOrg = id || null;
+  try {
+    if (activeOrg) localStorage.setItem('studioOrg.v1', activeOrg);
+    else localStorage.removeItem('studioOrg.v1');
+  } catch (_) {}
+}
+export function getActiveOrg() { return activeOrg; }
+export function savedOrg() { try { return localStorage.getItem('studioOrg.v1') || null; } catch (_) { return null; } }
+
+// The headers every session-authenticated studio request needs: CSRF
+// always, the active org when tenancy is on. Raw fetch() call sites use
+// this too — one source of truth.
+export function authHeaders() {
+  return { ...CSRF_HEADER, ...(activeOrg ? { 'X-Observogram-Org': activeOrg } : {}) };
+}
+
 export async function api(path, opts = {}) {
-  const r = await fetch(path, { headers: { Accept: 'application/json' }, ...opts });
+  // Merge headers instead of replacing them, so callers passing their own
+  // Content-Type keep Accept + the CSRF/org headers.
+  const r = await fetch(path, {
+    ...opts,
+    headers: { Accept: 'application/json', ...authHeaders(), ...(opts.headers || {}) },
+  });
+  if (r.status === 401) {
+    // Identity mode: the server points at the login page — go there.
+    const body = await r.clone().json().catch(() => null);
+    if (body?.login) { window.location.assign(body.login); throw new Error('signed out — redirecting to login'); }
+  }
   if (!r.ok) {
     const body = await r.text().catch(() => '');
     throw new Error(`${r.status} ${r.statusText} on ${path}${body ? ': ' + body.slice(0, 200) : ''}`);
@@ -33,7 +70,7 @@ export async function validateUploaded(body, contentType, env) {
   const q = env ? `?env=${encodeURIComponent(env)}` : '';
   const r = await fetch(`/api/validate${q}`, {
     method: 'POST',
-    headers: { 'Content-Type': contentType, Accept: 'application/json' },
+    headers: { 'Content-Type': contentType, Accept: 'application/json', ...authHeaders() },
     body,
   });
   // /api/validate reports schema failures as JSON with a non-2xx status, so

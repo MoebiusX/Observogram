@@ -2,7 +2,7 @@
 
 ## Story
 
-As an SRE reviewing a Tomograph remediation plan, I want every deployable
+As an SRE reviewing a Observogram remediation plan, I want every deployable
 artifact to show where it came from and what depends on it, so that I only
 deploy source-backed observability changes and can explain why each change is
 needed.

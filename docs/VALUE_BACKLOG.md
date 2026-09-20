@@ -1,6 +1,6 @@
 # Value Backlog
 
-Prioritized product backlog for Tomograph's next iterations, distilled from
+Prioritized product backlog for Observogram's next iterations, distilled from
 the 2026-06 audits ([ADVANCED_FEATURE_AUDIT.md](ADVANCED_FEATURE_AUDIT.md),
 [REFACTORING_PLAN.md](REFACTORING_PLAN.md)), the live-drift remediation
 work, and the 2026-06-10 deep-analysis pass (post-deploy re-verify and
@@ -83,6 +83,22 @@ side by side and offer the targeted fix (deploy the missing rule, adopt the
 live threshold, retire the stale alert) — remediation at requirement
 granularity instead of artefact granularity.
 
+- *Status 2026-09-08:* the chain cards now carry more than the scored
+  verdict — beside it the on-wire ladder verdict (present but unhealthy /
+  stale, or `unobserved` when the vantage could not look), and on every
+  missing or drifted node its blast radius (`blinds N SLOs`: what WOULD go
+  blind if it really died — exposure, never a claim that it is blind).
+  Every journey run keeps a per-chain record (`branches`: verdict, ladder
+  verdict, both integrities, the degraded nodes worst first with their
+  ladder reading and blast-radius summary), diffs it against the previous
+  run (`transition`) and ranks the candidate causes the evidence can offer
+  (`causes` — Observogram's own deploys in the window, decision-bearing
+  drift, a backend version change, a stack self-metric signal; never a
+  root-cause verdict, the vantage's own change reported beside them).
+  Nothing scored changed (`docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md` is
+  the proposal to switch). Still open here: the acting surface at
+  requirement granularity beyond the two per-chain arrows.
+
 ## P2 — Make it a product, not a session (active)
 
 ### 10. Workspace persistence + auth + audit + rollback *(designed 2026-06-10)*
@@ -91,8 +107,8 @@ Gate. Design constraint: stay **file-first, zero new runtime deps,
 local-first** — a workspace directory + append-only JSONL + one optional
 bearer token, not a database + user accounts.
 
-**A. Workspace persistence** — `.tomograph/` (gitignored;
-`TOMOGRAPH_WORKSPACE` to relocate): `packs/<id>.pack.yaml` (id = the
+**A. Workspace persistence** — `.observogram/` (gitignored;
+`OBSERVOGRAM_WORKSPACE` to relocate): `packs/<id>.pack.yaml` (id = the
 existing deterministic content hash, so **zero client changes**),
 `packs/index.json` (label/source/createdAt/lastUsedAt),
 `deploys.jsonl`, `snapshots/<deployId>/`. `registerUploadedPack` writes
@@ -102,7 +118,7 @@ Fixes the restart-loses-everything and silent-eviction gaps. Effort: S.
 
 **B. Auth — one token, three postures.** (1) Local default: loopback bind,
 no auth, zero friction. (2) Exposed: if `HOST` ≠ loopback and no
-`TOMOGRAPH_API_TOKEN` set → **fail closed** on write routes with a clear
+`OBSERVOGRAM_API_TOKEN` set → **fail closed** on write routes with a clear
 message; with the token set, require `Authorization: Bearer` on mutating
 routes only (validate-register, crawl, draft, deploy, deploy-bulk,
 DELETE /uploads). (3) Never store MCP write tokens server-side — keep the
@@ -146,8 +162,8 @@ Canonical example: *"repo vs live drift check"* — crawl
 (alignment ≥ 85%, grade PASS, declared-not-live = 0).
 
 - **Definition is a file** (shareable, committable):
-  `.tomograph/journeys/<name>.journey.yaml` in the workspace, or a
-  `tomograph.journey.yaml` committed in the service repo. Secrets never
+  `.observogram/journeys/<name>.journey.yaml` in the workspace, or a
+  `observogram.journey.yaml` committed in the service repo. Secrets never
   inline — reference an env var name (`mcpAuthEnv: KRYSTALINE_MCP_TOKEN`).
 - **Runner is the CLI**, headless: `packc journey run <name>` — composes
   the engines that already run headless today (crawler, fetch-live-pack,
@@ -159,10 +175,10 @@ Canonical example: *"repo vs live drift check"* — crawl
   Task Scheduler command, a GitHub Actions workflow (the existing
   refresh-live-pack.yml is already half of this journey). Keeps the
   zero-dep, local-first posture.
-- **Every run appends history**: `.tomograph/runs/<journey>/<ts>.json`
+- **Every run appends history**: `.observogram/runs/<journey>/<ts>.json`
   with the summary (alignment %, grade score, bucket counts, breached
   criteria). History unlocks the real prize: **drift over time** — a
-  sparkline/chart of alignment per journey turns Tomograph from a
+  sparkline/chart of alignment per journey turns Observogram from a
   point-in-time scanner into a monitoring instrument for observability
   posture itself, and makes drift *velocity* visible ("alignment dropped
   6 points since Tuesday's deploy").
@@ -178,17 +194,42 @@ Canonical example: *"repo vs live drift check"* — crawl
   draft→diff→grade pipeline the verify phase uses).
 - Effort: M (CLI command + run-record writer ~200 lines reusing existing
   engines; studio panel ~150; schedule-snippet emitters trivial).
+- *Status 2026-09-07:* drift over time now includes the stack's own
+  self-metric samples — every live run keeps them as `stackEvidence`, the
+  opt-in `gate.stack` block breaches on them as an early warning (never an
+  SLO verdict), and the journeys panel reads the bounded run history
+  (`OBSERVOGRAM_JOURNEY_RUN_RETENTION`) as the time series; scheduling stays
+  external as decided here.
+
+### 12. Identity · tenancy · hosted posture *(plan ratification pending — 2026-06-12)*
+The v1 non-goal ("multi-tenant persistence") activates as its own
+stream: **sign in → land in your org → see only your services** —
+packs, journeys, deploys, audit, MCP endpoints all org-scoped,
+enforced server-side. Four stages, each shippable alone: OIDC identity
+(attaches at the existing `requireAuth` / `observogramActor` seam; the
+bearer token becomes the service-account path), workspace-per-org
+tenancy (the `workspaceRoot()` seam — file-first machinery unchanged),
+roles (viewer / operator / admin) + org-scoped MCP endpoints (write
+tokens stay pass-through, never stored), hosted hardening. Carries its
+own CI gate set (dex IdP container, authz matrix, tenancy-isolation
+proofs, local-mode zero-change regression). One scoped dependency
+exception proposed: `openid-client` confined to `server/auth.mjs` —
+everything else stays `node:` builtins. Full design, efforts (~2
+weeks), and the three maintainer decisions:
+[PRODUCTIZATION_PLAN.md](PRODUCTIZATION_PLAN.md). Effort: L.
 
 ## P3 — Make the verdict more trustworthy *(under research — re-enters the queue when the maintainer's research lands)*
 
 ### 1. Diagnostic-grade validation against incident ground truth
-The grade claims "diagnostic-grade" on eight structural criteria. Close the
+The grade claims "diagnostic-grade" on seven scored structural criteria
+(grade schema 2; Actionable is observed but informational). Close the
 loop with reality: for services with incident history, check whether the
 signals the pack declares would have detected/explained real incidents
 (MTTD vs `mttd_target`, alert fired vs incident start, runbook referenced).
 Even a manual back-test template against 3–5 historical incidents would
 turn the grade from a posture score into a validated claim — and tell us
-which of the eight criteria actually predict diagnosability.
+which criteria actually predict diagnosability — including whether the
+informational Actionable check earns its way back into the score on evidence.
 
 ### 2. Runtime attestation / freshness evidence
 Today "Verified" means the live MCP scan saw the artefact at fetch time.
@@ -196,6 +237,24 @@ Strengthen the evidence: per-artefact freshness (rule last evaluated,
 dashboard last rendered, alert route last exercised), carried in pack
 annotations and surfaced in Traceability buckets and the Fresh criterion.
 Turns "it exists in production" into "it is alive in production".
+
+- *Status 2026-09-08:* the per-artefact reading exists as the **per-node
+  ladder** (`unobserved < absent < exists < alive < healthy`, with
+  `present_unhealthy` / `present_stale` statuses) read from the on-wire
+  annotations the fetcher already writes — target health and `lastScrape`,
+  rule health / `lastError` / `lastEvaluation` against the declared
+  interval, the `*_unhealthy` lists, the probe outcomes, `mcp.versions.*`
+  for backends — and carried per branch (`ladderVerdict`,
+  `ladderIntegrity`) and per journey run. It is **unscored**: the Fresh and
+  Drift-free criteria are unchanged, pending the maintainer-reviewed
+  `docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md` (gradeSchema 3). Not yet
+  evidenced: dashboard last rendered, alert route last exercised — no MCP
+  tool exposes either, so a present panel, dashboard or route reads
+  `exists` ("no liveness field on the wire for this kind"); a missing panel
+  or dashboard reads `absent` or `unobserved` by the `dashboards` probe
+  family, and a missing route reads `absent` (no probe family carries
+  routes) — or the kind is `unverifiable` when the tier showed no live
+  route at all.
 
 ### 3. Richer semantic parsing: PromQL, dashboards, scrape, Alertmanager
 Drift matching is structural-plus-PromQL today. Deepen the semantic layer:

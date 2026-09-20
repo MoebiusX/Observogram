@@ -1,0 +1,765 @@
+{
+  "id": "production-live",
+  "name": "Production — Live (MCP)",
+  "badge": "LIVE",
+  "description": "Refreshed from otel-mcp-server. LIVE = verified by telemetry; BAU = claimed in repo but not directly verifiable from MCP surface.",
+  "liveness": {
+    "refreshedAt": "2026-06-05T22:55:20.301Z",
+    "mcpUrl": "https://www.krystaline.io/mcp/public",
+    "toolsCalled": [
+      "system_health",
+      "system_topology",
+      "anomalies_active",
+      "anomalies_baselines"
+    ],
+    "toolsFailed": {},
+    "servicesDiscovered": [
+      "kx-exchange",
+      "kx-matcher",
+      "kx-wallet"
+    ],
+    "baselinesComputed": 0,
+    "activeAnomalies": 17,
+    "embedded": false
+  },
+  "layers": {
+    "L1": [
+      {
+        "id": "SLI-01",
+        "source": "BAU",
+        "title": "Availability SLI",
+        "desc": "Service up ratio across service-*.",
+        "tool": "Prometheus",
+        "tags": [
+          "availability"
+        ]
+      },
+      {
+        "id": "SLI-02",
+        "source": "BAU",
+        "title": "Latency SLI (P99)",
+        "desc": "P99 request latency.",
+        "tool": "Prometheus",
+        "tags": [
+          "latency"
+        ]
+      },
+      {
+        "id": "SLO-01",
+        "source": "BAU",
+        "title": "Availability SLO 99.9%",
+        "desc": "Monthly window.",
+        "tool": "PromQL",
+        "tags": [
+          "SLO"
+        ]
+      },
+      {
+        "id": "SLO-02",
+        "source": "BAU",
+        "title": "Latency SLO P99 < 2s",
+        "desc": "Predictive burn.",
+        "tool": "PromQL",
+        "tags": [
+          "SLO"
+        ]
+      },
+      {
+        "id": "EBP-01",
+        "source": "BAU",
+        "title": "Error-budget policy (predict_linear)",
+        "desc": "24h forecast rule.",
+        "tool": "PromQL",
+        "tags": [
+          "policy"
+        ]
+      }
+    ],
+    "L2": [
+      {
+        "id": "COL-01",
+        "source": "BAU",
+        "title": "Prometheus scrape — 12 targets",
+        "desc": "Targets not exposed via MCP.",
+        "tool": "Prometheus",
+        "tags": [
+          "metrics",
+          "scrape",
+          "unverified"
+        ]
+      },
+      {
+        "id": "COL-02",
+        "source": "LIVE",
+        "title": "OTel Collector pipeline",
+        "desc": "OTLP receive · batch · export to Jaeger + Prometheus.",
+        "tool": "OTel Collector",
+        "tags": [
+          "otel",
+          "pipeline"
+        ],
+        "mcp": {
+          "verified": true,
+          "source": "system_health",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {
+            "services": 3,
+            "totalSpans": 39,
+            "healthyServices": 2
+          }
+        }
+      },
+      {
+        "id": "COL-03",
+        "source": "LIVE",
+        "title": "Jaeger trace agent",
+        "desc": "system_topology shows 0 spans into jaeger from unknown.",
+        "tool": "Jaeger",
+        "tags": [
+          "traces"
+        ],
+        "mcp": {
+          "verified": true,
+          "source": "system_topology",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {
+            "jaegerInboundCalls": 0,
+            "sourceService": null
+          }
+        }
+      },
+      {
+        "id": "COL-04",
+        "source": "BAU",
+        "title": "Loki log shipping",
+        "desc": "Not exposed via MCP.",
+        "tool": "Loki + promtail",
+        "tags": [
+          "logs",
+          "unverified"
+        ]
+      },
+      {
+        "id": "COL-05",
+        "source": "LIVE",
+        "title": "Health-check probes",
+        "desc": "system_health responds; 3 services reporting.",
+        "tool": "kube-state-metrics",
+        "tags": [
+          "health"
+        ],
+        "mcp": {
+          "verified": true,
+          "source": "system_health",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {
+            "services": [
+              "kx-exchange",
+              "kx-matcher",
+              "kx-wallet"
+            ],
+            "allHealthy": false,
+            "lastPolled": "2026-06-05T22:55:21.251Z"
+          }
+        }
+      },
+      {
+        "id": "COL-X1",
+        "source": "LIVE",
+        "title": "Service: kx-exchange",
+        "desc": "Live: critical, P50 ~22072ms, 28 spans, 17 anomalies.",
+        "tool": "OTel + Prometheus",
+        "tags": [
+          "service",
+          "discovered"
+        ],
+        "mcp": {
+          "verified": true,
+          "source": "system_health",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {
+            "status": "critical",
+            "avgDuration": 22072.32,
+            "spanCount": 28,
+            "activeAnomalies": 17,
+            "lastSeen": "2026-06-05T22:54:56.157Z"
+          }
+        }
+      },
+      {
+        "id": "COL-X2",
+        "source": "LIVE",
+        "title": "Service: kx-matcher",
+        "desc": "Live: healthy, P50 ~167ms, 3 spans, 0 anomalies.",
+        "tool": "OTel + Prometheus",
+        "tags": [
+          "service",
+          "discovered",
+          "sparse-traces"
+        ],
+        "mcp": {
+          "verified": true,
+          "source": "system_health",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {
+            "status": "healthy",
+            "avgDuration": 167.09,
+            "spanCount": 3,
+            "activeAnomalies": 0,
+            "lastSeen": "2026-06-05T22:54:56.157Z"
+          }
+        }
+      },
+      {
+        "id": "COL-X3",
+        "source": "LIVE",
+        "title": "Service: kx-wallet",
+        "desc": "Live: healthy, P50 ~136ms, 8 spans, 0 anomalies.",
+        "tool": "OTel + Prometheus",
+        "tags": [
+          "service",
+          "discovered"
+        ],
+        "mcp": {
+          "verified": true,
+          "source": "system_health",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {
+            "status": "healthy",
+            "avgDuration": 135.5,
+            "spanCount": 8,
+            "activeAnomalies": 0,
+            "lastSeen": "2026-06-05T22:54:56.156Z"
+          }
+        }
+      },
+      {
+        "id": "STO-01",
+        "source": "BAU",
+        "title": "Prometheus TSDB (15d)",
+        "desc": "Local TSDB.",
+        "tool": "Prometheus",
+        "tags": [
+          "storage",
+          "unverified"
+        ]
+      },
+      {
+        "id": "STO-02",
+        "source": "BAU",
+        "title": "Jaeger storage backend",
+        "desc": "Implied by COL-03.",
+        "tool": "Jaeger",
+        "tags": [
+          "storage",
+          "traces"
+        ]
+      },
+      {
+        "id": "STO-03",
+        "source": "BAU",
+        "title": "Loki chunk store",
+        "desc": "Filesystem-backed.",
+        "tool": "Loki",
+        "tags": [
+          "storage",
+          "logs",
+          "unverified"
+        ]
+      },
+      {
+        "id": "STO-04",
+        "source": "GAP",
+        "title": "Long-term metrics (>15d)",
+        "desc": "Confirmed gap.",
+        "tool": "—",
+        "tags": [
+          "retention",
+          "audit-blocker"
+        ],
+        "mcp": {
+          "verified": false,
+          "source": "inferred",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {}
+        }
+      }
+    ],
+    "L3": [
+      {
+        "id": "QRY-01",
+        "source": "BAU",
+        "title": "Recording rules — SLI burn",
+        "desc": "Not exposed.",
+        "tool": "PromQL",
+        "tags": [
+          "recording",
+          "unverified"
+        ]
+      },
+      {
+        "id": "QRY-02",
+        "source": "BAU",
+        "title": "predict_linear forecasts",
+        "desc": "Not exposed.",
+        "tool": "PromQL",
+        "tags": [
+          "forecast",
+          "unverified"
+        ]
+      },
+      {
+        "id": "DASH-01",
+        "source": "BAU",
+        "title": "Grafana — Service Overview",
+        "desc": "Not exposed.",
+        "tool": "Grafana",
+        "tags": [
+          "dashboard",
+          "unverified"
+        ]
+      },
+      {
+        "id": "DASH-02",
+        "source": "BAU",
+        "title": "Grafana — RabbitMQ + Redis",
+        "desc": "Not exposed.",
+        "tool": "Grafana",
+        "tags": [
+          "dashboard",
+          "unverified"
+        ]
+      },
+      {
+        "id": "DASH-03",
+        "source": "BAU",
+        "title": "Grafana — SLO & Error Budget",
+        "desc": "Not exposed.",
+        "tool": "Grafana",
+        "tags": [
+          "dashboard",
+          "unverified"
+        ]
+      },
+      {
+        "id": "QRY-03",
+        "source": "GAP",
+        "title": "Trace-to-log correlation queries",
+        "desc": "Confirmed gap.",
+        "tool": "—",
+        "tags": [
+          "correlation"
+        ],
+        "mcp": {
+          "verified": false,
+          "source": "inferred",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {}
+        }
+      },
+      {
+        "id": "TOPO-X1",
+        "source": "LIVE",
+        "title": "Live dependency map",
+        "desc": "system_topology returned 6 edges.",
+        "tool": "system_topology",
+        "tags": [
+          "topology",
+          "discovered"
+        ],
+        "mcp": {
+          "verified": true,
+          "source": "system_topology",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {
+            "edges": 6,
+            "services": 4,
+            "detail": [
+              {
+                "parent": "kx-gateway",
+                "child": "kx-gateway",
+                "callCount": 1267
+              },
+              {
+                "parent": "kx-gateway",
+                "child": "kx-exchange",
+                "callCount": 181
+              },
+              {
+                "parent": "kx-exchange",
+                "child": "bayesian-service",
+                "callCount": 122
+              },
+              {
+                "parent": "bayesian-service",
+                "child": "bayesian-service",
+                "callCount": 490
+              },
+              {
+                "parent": "kx-exchange",
+                "child": "kx-exchange",
+                "callCount": 6980
+              },
+              {
+                "parent": "kx-wallet",
+                "child": "kx-gateway",
+                "callCount": 166
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "L4": {
+      "policy": [
+        {
+          "id": "POL-01",
+          "source": "BAU",
+          "title": "Burn-rate alerting policy (implicit)",
+          "desc": "Not exposed.",
+          "tool": "Prometheus rules",
+          "tags": [
+            "policy",
+            "unverified"
+          ]
+        }
+      ],
+      "alerting": [
+        {
+          "id": "ALR-01",
+          "source": "BAU",
+          "title": "HighErrorRate",
+          "desc": "Not directly verifiable.",
+          "tool": "Alertmanager",
+          "tags": [
+            "alert",
+            "critical"
+          ]
+        },
+        {
+          "id": "ALR-02",
+          "source": "BAU",
+          "title": "ServiceDown",
+          "desc": "Not directly verifiable.",
+          "tool": "Alertmanager",
+          "tags": [
+            "alert",
+            "critical"
+          ]
+        },
+        {
+          "id": "ALR-03",
+          "source": "BAU",
+          "title": "PodNotReady",
+          "desc": "Not directly verifiable.",
+          "tool": "Alertmanager",
+          "tags": [
+            "alert"
+          ]
+        },
+        {
+          "id": "ALR-04",
+          "source": "BAU",
+          "title": "OOMKilled",
+          "desc": "Not directly verifiable.",
+          "tool": "Alertmanager",
+          "tags": [
+            "alert"
+          ]
+        },
+        {
+          "id": "ALR-05",
+          "source": "BAU",
+          "title": "LatencyBudgetExhaustion",
+          "desc": "Not directly verifiable.",
+          "tool": "Alertmanager",
+          "tags": [
+            "alert",
+            "SLO"
+          ]
+        },
+        {
+          "id": "ALR-06",
+          "source": "BAU",
+          "title": "ContainerCrashLooping",
+          "desc": "Not directly verifiable.",
+          "tool": "Alertmanager",
+          "tags": [
+            "alert"
+          ]
+        },
+        {
+          "id": "ALR-07",
+          "source": "LIVE",
+          "title": "Anomaly detector (trace)",
+          "desc": "anomalies_active: 17 active anomalies. amount detector disabled.",
+          "tool": "otel-mcp anomalies",
+          "tags": [
+            "alert",
+            "anomaly"
+          ],
+          "mcp": {
+            "verified": true,
+            "source": "anomalies_active",
+            "refreshedAt": "2026-06-05T22:55:20.301Z",
+            "evidence": {
+              "traceAnomaliesActive": 17,
+              "traceAnomaliesRecent": 17,
+              "amountDetectorEnabled": false
+            }
+          }
+        }
+      ],
+      "healing": [
+        {
+          "id": "HEAL-01",
+          "source": "GAP",
+          "title": "Runbook automation",
+          "desc": "Confirmed gap.",
+          "tool": "—",
+          "tags": [
+            "automation"
+          ],
+          "mcp": {
+            "verified": false,
+            "source": "inferred",
+            "refreshedAt": "2026-06-05T22:55:20.301Z",
+            "evidence": {}
+          }
+        },
+        {
+          "id": "HEAL-02",
+          "source": "GAP",
+          "title": "HPA / scale guardrails",
+          "desc": "Confirmed gap.",
+          "tool": "—",
+          "tags": [
+            "autoscale"
+          ],
+          "mcp": {
+            "verified": false,
+            "source": "inferred",
+            "refreshedAt": "2026-06-05T22:55:20.301Z",
+            "evidence": {}
+          }
+        },
+        {
+          "id": "HEAL-03",
+          "source": "GAP",
+          "title": "Circuit breakers / shedding",
+          "desc": "Confirmed gap.",
+          "tool": "—",
+          "tags": [
+            "resilience"
+          ],
+          "mcp": {
+            "verified": false,
+            "source": "inferred",
+            "refreshedAt": "2026-06-05T22:55:20.301Z",
+            "evidence": {}
+          }
+        }
+      ]
+    },
+    "L5": [
+      {
+        "id": "VAL-01",
+        "source": "LIVE",
+        "title": "Anomaly baselines (live)",
+        "desc": "anomalies_baselines: 0 baselines computed, 0 status=normal.",
+        "tool": "otel-mcp-server",
+        "tags": [
+          "anomaly",
+          "verified"
+        ],
+        "mcp": {
+          "verified": true,
+          "source": "anomalies_baselines",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {
+            "totalBaselines": 0,
+            "normalStatus": 0,
+            "services": [],
+            "maxSampleCount": 0
+          }
+        }
+      },
+      {
+        "id": "VAL-02",
+        "source": "GAP",
+        "title": "Chaos testing",
+        "desc": "No chaos tooling visible to MCP.",
+        "tool": "—",
+        "tags": [
+          "chaos"
+        ],
+        "mcp": {
+          "verified": false,
+          "source": "inferred",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {}
+        }
+      },
+      {
+        "id": "VAL-03",
+        "source": "GAP",
+        "title": "Synthetic probes",
+        "desc": "No probe data.",
+        "tool": "—",
+        "tags": [
+          "synthetic"
+        ],
+        "mcp": {
+          "verified": false,
+          "source": "inferred",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {}
+        }
+      },
+      {
+        "id": "VAL-04",
+        "source": "GAP",
+        "title": "MTTD/MTTR baselines",
+        "desc": "No incident pipeline.",
+        "tool": "—",
+        "tags": [
+          "SRE-metric"
+        ],
+        "mcp": {
+          "verified": false,
+          "source": "inferred",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {}
+        }
+      },
+      {
+        "id": "VAL-05",
+        "source": "GAP",
+        "title": "Daily conformance scan",
+        "desc": "No conformance endpoint.",
+        "tool": "—",
+        "tags": [
+          "conformance"
+        ],
+        "mcp": {
+          "verified": false,
+          "source": "inferred",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {}
+        }
+      }
+    ],
+    "GOV": [
+      {
+        "id": "GOV-01",
+        "source": "LIVE",
+        "title": "MCP-driven reports",
+        "desc": "MCP tools reachable; studio is itself a consumer.",
+        "tool": "otel-mcp-server",
+        "tags": [
+          "report",
+          "meta"
+        ],
+        "mcp": {
+          "verified": true,
+          "source": "mcp.reachable",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {
+            "toolsReachable": [
+              "system_health",
+              "system_topology",
+              "anomalies_active",
+              "anomalies_baselines"
+            ],
+            "toolsFailed": []
+          }
+        }
+      },
+      {
+        "id": "GOV-02",
+        "source": "GAP",
+        "title": "ZK proof verification logs",
+        "desc": "zk_stats and zk_solvency endpoints return HTTP 404 on the public proxy.",
+        "tool": "—",
+        "tags": [
+          "compliance",
+          "crypto",
+          "endpoint-missing"
+        ],
+        "mcp": {
+          "verified": false,
+          "source": "zk_stats",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {
+            "httpStatus": 404,
+            "endpoint": "/api/public/zk/stats"
+          }
+        }
+      },
+      {
+        "id": "GOV-03",
+        "source": "GAP",
+        "title": "Conformance score (daily)",
+        "desc": "No automated MUST/SHOULD score.",
+        "tool": "—",
+        "tags": [
+          "conformance"
+        ],
+        "mcp": {
+          "verified": false,
+          "source": "inferred",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {}
+        }
+      },
+      {
+        "id": "GOV-04",
+        "source": "GAP",
+        "title": "Audit evidence pipeline",
+        "desc": "No SOC2/ISO27001 evidence export.",
+        "tool": "—",
+        "tags": [
+          "audit"
+        ],
+        "mcp": {
+          "verified": false,
+          "source": "inferred",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {}
+        }
+      },
+      {
+        "id": "GOV-05",
+        "source": "GAP",
+        "title": "Incident & postmortem rollups",
+        "desc": "No MTTD/MTTR trend store.",
+        "tool": "—",
+        "tags": [
+          "post-mortem"
+        ],
+        "mcp": {
+          "verified": false,
+          "source": "inferred",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {}
+        }
+      },
+      {
+        "id": "GOV-06",
+        "source": "GAP",
+        "title": "Cohort reports",
+        "desc": "No per-team / per-tier rollups.",
+        "tool": "—",
+        "tags": [
+          "cohort"
+        ],
+        "mcp": {
+          "verified": false,
+          "source": "inferred",
+          "refreshedAt": "2026-06-05T22:55:20.301Z",
+          "evidence": {}
+        }
+      }
+    ]
+  }
+}

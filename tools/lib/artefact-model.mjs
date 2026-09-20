@@ -25,6 +25,8 @@
 //
 // Pure ESM, no Node APIs — the studio imports this same file in the browser.
 
+import { canonicalizePromql } from './promql-canon.mjs';
+
 // ---------------------------------------------------------------------------
 // Normalisation primitives
 // ---------------------------------------------------------------------------
@@ -63,7 +65,12 @@ const EXPR_KEYS = new Set(['expr', 'query', 'promql', 'expression']);
 const SLI_EXPR_KEYS = new Set(['good', 'total', 'query']);
 
 function normalizeExpr(s) {
-  return String(s).replace(/\s+/g, ' ').trim();
+  // Whitespace collapse (the long-standing baseline) plus the ratified
+  // Workstream B orderings — selector matcher order, by/without label
+  // order — applied only when the expression parses cleanly. Parse
+  // failures fall back to the conservative comparison; see
+  // tools/lib/promql-canon.mjs for the contract and its fences.
+  return canonicalizePromql(s).text;
 }
 
 function stripRef(s) {
@@ -180,9 +187,15 @@ const IDENTITY = {
   // deploy the same collector wiring.
   backend:      (s) => ({ product: low(s.product), signal: low(s.signal) }),
 
+  // spec.otel is a singular required object and the adapter emits at most one
+  // artefact (fixed OTEL-01 id), so the empty identity is a deliberate
+  // singleton-per-pack invariant, not an accidental collision.
   otel:         () => ({}),
 
-  // Pipeline stages identify by what they do, not by position.
+  // Pipeline stages identify by what they do, not by position. Same-named
+  // stages (the collector's `batch/2` convention) share one identity on
+  // purpose: config differences are drift of the same stage, and duplicate
+  // instances survive via the diff's occurrence ordinals.
   pipeline_receiver:          (s) => ({ name: low(s.name) }),
   pipeline_processor:         (s) => ({ name: low(s.name) }),
   pipeline_exporter_metrics:  (s) => ({ signal: 'metrics', target: low(s.kind) }),
@@ -220,8 +233,17 @@ const IDENTITY = {
 
   burn_rate:    (s) => ({ slo: stripRef(s.slo) }),
   forecast:     (s) => ({ slo: stripRef(s.slo) }),
+  // Routes key on severity alone, on purpose. Live and crawled packs
+  // fabricate channel kinds when routing cannot be introspected (fetch-live's
+  // SEV1 msteams placeholder, the crawler's unmapped-receiver stub), so
+  // putting channel kinds into identity would turn those evidence gaps into
+  // false "missing in production" verdicts. Channel changes surface as
+  // decision-bearing drift on the paired route instead; same-severity
+  // duplicates survive via the diff's occurrence ordinals and `collisions`.
   alert_route:  (s) => ({ severity: low(s.severity) }),
   remediation:  (s) => ({ trigger: low(s.trigger) }),
+  // spec.baselines is a singular object (fixed BASE-01 id, at most one per
+  // pack) — empty identity is the documented singleton invariant, like otel.
   baselines:    () => ({}),
   chaos:        (s) => ({ id: low(s.id) }),
   synthetic:    (s) => ({ id: low(s.id) }),
@@ -253,6 +275,28 @@ export function modelOf(artefact) {
   return { kind, identity, behavior };
 }
 
+// Spec fields that carry a symbolic reference to another artefact. The
+// `ref:` prefix is authoring syntax — `slo: ref:x` and `slo: x` bind to the
+// same SLO — so IDENTITY already strips it (stripRef); behaviour must agree
+// or a burn alert pairs with itself and then reads as drifted on its own
+// binding. `expr` counts only when the whole value is a reference
+// (`ref:slis.x`), never inside a real expression.
+const REF_KEYS = ['slo', 'sli', 'trigger', 'error_budget_policy'];
+
+// Pure: returns a shallow copy of `spec` with the leading `ref:` removed
+// from the reference-bearing fields. Never mutates its input.
+function stripRefFields(spec) {
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return spec;
+  const out = { ...spec };
+  for (const k of REF_KEYS) {
+    if (typeof out[k] === 'string') out[k] = out[k].replace(/^ref:/, '');
+  }
+  if (typeof out.expr === 'string' && /^ref:[a-z0-9_.:-]+$/i.test(out.expr.trim())) {
+    out.expr = out.expr.trim().replace(/^ref:/, '');
+  }
+  return out;
+}
+
 function behaviorFor(kind, spec) {
   if (kind === 'metric') {
     return canonicalize({ name: spec.name });
@@ -260,7 +304,7 @@ function behaviorFor(kind, spec) {
   if (kind === 'scrape_job') {
     return canonicalize({ job: spec.job });
   }
-  return canonicalize(spec);
+  return canonicalize(stripRefFields(spec));
 }
 
 // Stable primitive key for pairing. A Map needs a string key, so we serialise
@@ -316,6 +360,9 @@ function isExpressionReferenceOnly(value) {
   const s = normalizeExpr(value ?? '');
   if (!s) return true;
   if (/^ref:[a-z0-9_.:-]+$/i.test(s)) return true;
+  // behaviorFor strips the `ref:` prefix before this check runs on the
+  // behaviour fields, so the bare symbolic form counts as reference-only too.
+  if (/^(?:slis|slos)\.[a-z0-9_.:-]+$/i.test(s)) return true;
   if (/^[a-z_:][a-z0-9_:]*(\{[^{}]*\})?$/i.test(s)) return true;
   if (/^(?:\d+(?:\.\d+)?|true|false)$/i.test(s)) return true;
   return false;

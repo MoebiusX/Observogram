@@ -5,7 +5,8 @@
 // be a process-scoped Map: every restart lost the user's working set. This
 // module gives that registry a durable home without changing its contract:
 //
-//   .tomograph/                      (gitignored; TOMOGRAPH_WORKSPACE relocates)
+//   .observogram/                    (gitignored; OBSERVOGRAM_WORKSPACE relocates;
+//                                     a pre-rebrand .tomograph/ keeps working)
 //     packs/<id>.pack.yaml           one inspectable YAML file per pack
 //     packs/index.json               id → { label, source, createdAt, lastUsedAt }
 //
@@ -18,24 +19,49 @@
 //     never silently re-mint an id. A hand-edited workspace file keeps its
 //     id — that's documented behaviour, not drift detection's job.
 //   - Env is read lazily (at call time, not module load) so tests can point
-//     TOMOGRAPH_WORKSPACE at a temp dir before booting the server.
+//     OBSERVOGRAM_WORKSPACE at a temp dir before booting the server.
 //   - Sync fs on the write paths (files are tens of KB); lastUsedAt touches
 //     are debounced and the timer is unref'd so the process can still exit.
+//   - Durability over trust in any single syscall (2026-06-11 incident: a
+//     transient boot-time read failure cascaded into a wiped index). Files
+//     are replaced atomically (tmp + rename), index flushes MERGE with the
+//     on-disk copy instead of clobbering it, and index entries are pruned
+//     only on positive evidence the pack file is gone — never because a
+//     listing or read transiently failed.
 
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, rmSync, existsSync, statSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, renameSync, rmSync, existsSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
+import { orgWorkspaceRoot } from './tenancy.mjs';
 
 const PACK_SUFFIX = '.pack.yaml';
 
+// Stage 2 tenancy: the root is context-aware — <workspace>/orgs/<orgId>/
+// inside a request that carries an org, the flat workspace otherwise
+// (byte-identical v1 behaviour when tenancy is off). See server/tenancy.mjs.
 function workspaceRoot() {
-  return resolve(process.env.TOMOGRAPH_WORKSPACE || '.tomograph');
+  return orgWorkspaceRoot();
 }
 function packsDir()  { return join(workspaceRoot(), 'packs'); }
 function indexPath() { return join(packsDir(), 'index.json'); }
 
 function ensureDirs() {
   mkdirSync(packsDir(), { recursive: true });
+}
+
+// Replace-via-rename so a process killed mid-write can never leave a torn
+// index.json or pack file behind (rename is atomic on POSIX; on Windows it
+// maps to MoveFileEx(MOVEFILE_REPLACE_EXISTING)). The tmp name carries the
+// pid so two processes flushing concurrently don't trample each other's
+// staging file.
+function writeFileAtomic(path, data) {
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, data);
+  try { renameSync(tmp, path); }
+  catch (e) {
+    try { rmSync(tmp, { force: true }); } catch (_) {}
+    throw e;
+  }
 }
 
 // ---------- index ----------
@@ -46,39 +72,89 @@ function ensureDirs() {
 // index entry without a file is dropped, an orphan file is adopted.
 
 function readIndex() {
+  let raw;
+  try { raw = readFileSync(indexPath(), 'utf8'); }
+  catch (e) {
+    // ENOENT is the normal first-boot case. Anything else (EPERM/EBUSY from
+    // an AV scanner, a torn handle, ...) is a TRANSIENT failure that must be
+    // loud: silently treating it as "empty index" is how a boot once wiped
+    // the registry metadata (2026-06-11 incident).
+    if (e.code !== 'ENOENT') {
+      process.stderr.write(`[workspace] index read failed (${e.code || e.message}); treating as empty\n`);
+    }
+    return {};
+  }
   try {
-    const data = JSON.parse(readFileSync(indexPath(), 'utf8'));
+    const data = JSON.parse(raw);
     return (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
-  } catch (_) { return {}; }
+  } catch (e) {
+    process.stderr.write(`[workspace] index.json is corrupt (${e.message}); rebuilding from pack files\n`);
+    return {};
+  }
 }
 
-let pendingIndex = null;   // in-memory copy once loaded; mutations write through
-let flushTimer = null;
+// In-memory index state is keyed BY ROOT: with tenancy on, each org has
+// its own workspace subtree, and a process-wide single cache would bleed
+// one org's index (ids, labels, deletions) into another's flush. The
+// per-root record holds exactly the state the old module-level variables
+// did.
+const rootState = new Map();    // root → { pendingIndex, deletedIds, flushTimer }
+
+function stateFor(root = workspaceRoot()) {
+  let s = rootState.get(root);
+  if (!s) { s = { pendingIndex: null, deletedIds: new Set(), flushTimer: null }; rootState.set(root, s); }
+  return s;
+}
 
 function index() {
-  if (!pendingIndex) pendingIndex = readIndex();
-  return pendingIndex;
+  const s = stateFor();
+  if (!s.pendingIndex) s.pendingIndex = readIndex();
+  return s.pendingIndex;
 }
 
-function flushIndexNow() {
-  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-  if (!pendingIndex) return;
-  ensureDirs();
-  writeFileSync(indexPath(), JSON.stringify(pendingIndex, null, 2));
+function flushIndexNow({ merge = true, root = workspaceRoot() } = {}) {
+  const s = stateFor(root);
+  if (s.flushTimer) { clearTimeout(s.flushTimer); s.flushTimer = null; }
+  if (!s.pendingIndex) return;
+  const idxPath = join(root, 'packs', 'index.json');
+  mkdirSync(join(root, 'packs'), { recursive: true });
+  if (merge) {
+    // index.json is shared state: a dying process's debounced timer, a
+    // sibling server, or a boot whose first read transiently failed can all
+    // hold an in-memory copy that never saw entries other writers added.
+    // Fold the on-disk entries back in before the whole-file rewrite so a
+    // flush is never destructive; deletions made in this process are tracked
+    // in deletedIds so they still win over the merge.
+    let disk = {};
+    try {
+      const data = JSON.parse(readFileSync(idxPath, 'utf8'));
+      if (data && typeof data === 'object' && !Array.isArray(data)) disk = data;
+    } catch (_) {}
+    for (const [id, meta] of Object.entries(disk)) {
+      if (!(id in s.pendingIndex) && !s.deletedIds.has(id)) s.pendingIndex[id] = meta;
+    }
+  }
+  writeFileAtomic(idxPath, JSON.stringify(s.pendingIndex, null, 2));
+  s.deletedIds.clear();
 }
 
 function scheduleIndexFlush() {
-  if (flushTimer) clearTimeout(flushTimer);
-  flushTimer = setTimeout(() => { flushTimer = null; flushIndexNow(); }, 1500);
+  const s = stateFor();
+  const root = workspaceRoot();
+  if (s.flushTimer) clearTimeout(s.flushTimer);
+  // The debounced flush must land in the SAME org workspace it was
+  // scheduled from — the timer fires outside any request context, so the
+  // root is captured here, not re-resolved at fire time.
+  s.flushTimer = setTimeout(() => { s.flushTimer = null; flushIndexNow({ root }); }, 1500);
   // Never keep the process alive just to persist a lastUsedAt touch.
-  if (typeof flushTimer.unref === 'function') flushTimer.unref();
+  if (typeof s.flushTimer.unref === 'function') s.flushTimer.unref();
 }
 
 // ---------- public API ----------
 
 export function saveWorkspacePack(id, { canonical, label, source, createdAt, lastUsedAt } = {}) {
   ensureDirs();
-  writeFileSync(join(packsDir(), id + PACK_SUFFIX), emitYaml(canonical || {}));
+  writeFileAtomic(join(packsDir(), id + PACK_SUFFIX), emitYaml(canonical || {}));
   index()[id] = {
     label: label || null,
     source: source || 'upload',
@@ -91,6 +167,7 @@ export function saveWorkspacePack(id, { canonical, label, source, createdAt, las
 export function deleteWorkspacePack(id) {
   try { rmSync(join(packsDir(), id + PACK_SUFFIX), { force: true }); } catch (_) {}
   delete index()[id];
+  stateFor().deletedIds.add(id);
   flushIndexNow();
 }
 
@@ -111,35 +188,70 @@ export function loadWorkspacePacks() {
   ensureDirs();
   const idx = index();
   const out = [];
-  let files = [];
-  try { files = readdirSync(packsDir()).filter(f => f.endsWith(PACK_SUFFIX)); } catch (_) {}
-  const seen = new Set();
-  for (const file of files) {
+  let files = null;   // null = listing failed, NOT "directory is empty"
+  try { files = readdirSync(packsDir()).filter(f => f.endsWith(PACK_SUFFIX)); }
+  catch (e) {
+    // A transient listing failure (AV scanner, EBUSY, ...) must not present
+    // as an empty workspace — fall back to the filenames the index already
+    // knows about and try to read them directly. Pruning is disabled below:
+    // "could not list" is not evidence that anything is gone.
+    process.stderr.write(`[workspace] could not list ${packsDir()} (${e.code || e.message}); falling back to index entries\n`);
+  }
+  const listingOk = files !== null;
+  const candidates = listingOk ? files : Object.keys(idx).map(id => id + PACK_SUFFIX);
+  const seen = new Set();   // ids whose pack file demonstrably exists, parseable or not
+  let adopted = false;
+  for (const file of candidates) {
     const id = file.slice(0, -PACK_SUFFIX.length);
+    let raw;
+    try { raw = readFileSync(join(packsDir(), file), 'utf8'); }
+    catch (e) {
+      // In the fallback path a missing file just means a dangling index
+      // entry (pruned next time the listing works); anything else is worth
+      // a line — every skip here is a pack the catalog will be missing.
+      if (listingOk || e.code !== 'ENOENT') {
+        process.stderr.write(`[workspace] could not read pack ${file}: ${e.code || e.message}\n`);
+      }
+      continue;
+    }
+    seen.add(id);   // the file exists even if it turns out not to parse
     let canonical;
-    try { canonical = parseYaml(readFileSync(join(packsDir(), file), 'utf8')); }
+    try { canonical = parseYaml(raw); }
     catch (e) {
       process.stderr.write(`[workspace] skipping unparseable pack ${file}: ${e.message}\n`);
       continue;
     }
-    if (!canonical || typeof canonical !== 'object') continue;
-    seen.add(id);
+    if (!canonical || typeof canonical !== 'object') {
+      process.stderr.write(`[workspace] skipping pack ${file}: parsed to ${canonical === null ? 'null' : typeof canonical}, not an object\n`);
+      continue;
+    }
     const meta = idx[id];
     if (!meta) {
       // Orphan file (e.g. copied in by hand) — adopt it with file mtime.
       let mtime = Date.now();
       try { mtime = statSync(join(packsDir(), file)).mtimeMs; } catch (_) {}
       idx[id] = { label: null, source: 'workspace', createdAt: mtime, lastUsedAt: mtime };
+      adopted = true;
     }
     const m = idx[id];
     out.push({ id, canonical, label: m.label, source: m.source, createdAt: m.createdAt, lastUsedAt: m.lastUsedAt });
   }
-  // Index entries whose pack file vanished are dropped.
+  // Index entries whose pack file vanished are dropped — but only on
+  // positive evidence: the listing succeeded AND an individual existence
+  // check agrees the file is gone. An unreadable or unparseable file keeps
+  // its entry (the pack file may recover; its label/source/createdAt must
+  // not be lost to a transient error and re-minted by orphan adoption).
   let pruned = false;
-  for (const id of Object.keys(idx)) {
-    if (!seen.has(id)) { delete idx[id]; pruned = true; }
+  if (listingOk) {
+    for (const id of Object.keys(idx)) {
+      if (seen.has(id)) continue;
+      if (existsSync(join(packsDir(), id + PACK_SUFFIX))) continue;
+      delete idx[id];
+      stateFor().deletedIds.add(id);   // a deliberate drop must win over merge-on-flush
+      pruned = true;
+    }
   }
-  if (pruned || out.some(p => !readIndex()[p.id])) flushIndexNow();
+  if (pruned || adopted) flushIndexNow();
   out.sort((a, b) => (a.lastUsedAt || 0) - (b.lastUsedAt || 0));
   return out;
 }
@@ -151,8 +263,12 @@ export function clearWorkspacePacks() {
       if (f.endsWith(PACK_SUFFIX)) { rmSync(join(packsDir(), f), { force: true }); dropped++; }
     }
   } catch (_) {}
-  pendingIndex = {};
-  flushIndexNow();
+  const s = stateFor();
+  s.pendingIndex = {};
+  s.deletedIds.clear();
+  // Reset means reset: replace the file outright, no merge — merging would
+  // resurrect the very entries the user just asked to clear.
+  flushIndexNow({ merge: false });
   return dropped;
 }
 
@@ -250,11 +366,13 @@ export function readDeploySnapshot(deployId) {
 // Test hook: force any debounced index write to land now.
 export function flushWorkspaceIndex() { flushIndexNow(); }
 
-// Test hook: drop the in-memory index cache so a re-pointed
-// TOMOGRAPH_WORKSPACE takes effect within the same process.
+// Test hook: drop the in-memory index caches so a re-pointed
+// OBSERVOGRAM_WORKSPACE takes effect within the same process.
 export function resetWorkspaceCache() {
-  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-  pendingIndex = null;
+  for (const s of rootState.values()) {
+    if (s.flushTimer) { clearTimeout(s.flushTimer); s.flushTimer = null; }
+  }
+  rootState.clear();
 }
 
 export function workspaceInfo() {

@@ -1,0 +1,39 @@
+{
+  "_recorded": {
+    "recordedAt": "2026-09-08T08:19:28.479Z",
+    "tool": "grafana_datasource_health",
+    "uid": "stack-prom",
+    "case": "ok",
+    "scrubbed": [],
+    "reviewed": "jsonData and secureJsonFields empty; nothing to scrub",
+    "server": "otel-mcp-server 1.8.0 over docker/stack.compose.yaml (Grafana 12.4.4), admin-seeded state"
+  },
+  "datasource": {
+    "id": 1,
+    "uid": "stack-prom",
+    "orgId": 1,
+    "name": "Prometheus (stack)",
+    "type": "prometheus",
+    "access": "proxy",
+    "url": "http://prometheus:9090/",
+    "isDefault": true,
+    "readOnly": true,
+    "basicAuth": false,
+    "withCredentials": false,
+    "jsonData": {},
+    "secureJsonFields": [],
+    "version": 1,
+    "apiVersion": ""
+  },
+  "health": {
+    "supported": true,
+    "details": {
+      "application": "Prometheus",
+      "features": {
+        "rulerApiEnabled": false
+      }
+    },
+    "message": "Successfully queried the Prometheus API.",
+    "status": "OK"
+  }
+}

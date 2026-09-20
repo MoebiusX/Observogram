@@ -18,7 +18,7 @@ So the following are refinements toward v1.3/v2.0, not corrections.
 
 This is the most important limitation. §8 conformance "scans every registered pack" — but it scans the **manifest**, statically. A pack can score 100% MUST-conformant and be completely drifted from the deployed system: the dashboard was hand-edited, the alert was silenced in Alertmanager, the chaos schedule is failing every run. The standard has **no concept of "verified" vs "declared"**, no freshness/attestation primitive, and no requirement that conformance evidence be *recent*.
 
-That this exact gap is what Tomograph's "diagnostic grade" had to bolt on (declared-vs-verified, `mcp.refreshedAt`, drift tolerance) is the tell: the trust model lives in the renderer, not the spec.
+That this exact gap is what Observogram's "diagnostic grade" had to bolt on (declared-vs-verified, `mcp.refreshedAt`, drift tolerance) is the tell: the trust model lives in the renderer, not the spec.
 
 **Add — an attestation/evidence block as a first-class L5 concern:**
 
@@ -78,7 +78,7 @@ The schema is good, but several MUSTs live only in prose or the daily scanner, n
 - **SemConv floor.** `otel.semconv` is pattern-checked (`X.Y.Z`) but the `>= 1.26.0` floor (§5.3 MUST) is **not** in the schema — it's prose + scanner only.
 - **Cross-reference integrity.** `binds_to`, `ref:`, `trigger:` resolution is explicitly lint-only (§6.2). Acknowledged, but it means a schema-valid pack can be referentially broken — most consumers will need to re-implement the resolver (as the studio did).
 - **`resource_attributes.required` is enum-locked** to 8 values. A team can't declare a genuinely service-specific required attribute as "required" without it being demoted to free-text `custom`.
-- **The rubric isn't shipped as data.** The 29-clause maturity model is a markdown table plus a sample `packscan-result.yaml`. Every implementer re-encodes the clauses (Tomograph hand-curated them in `conformance.mjs`). Ship a machine-readable `rubric.yaml` (clause id, tier, MUST/SHOULD, JSON-path/CEL check, `introduced_in`, `enforced_from`) as the canonical artifact so scanner and studio share one source of truth — and so the §8 "90-day grace window" for new clauses is actually implementable.
+- **The rubric isn't shipped as data.** The 29-clause maturity model is a markdown table plus a sample `packscan-result.yaml`. Every implementer re-encodes the clauses (Observogram hand-curated them in `conformance.mjs`). Ship a machine-readable `rubric.yaml` (clause id, tier, MUST/SHOULD, JSON-path/CEL check, `introduced_in`, `enforced_from`) as the canonical artifact so scanner and studio share one source of truth — and so the §8 "90-day grace window" for new clauses is actually implementable.
 - **The product registry isn't shipped.** §5.12.1 promises an "open product registry recognised by lint," but no registry file exists in the repo — implementers guess valid `product` slugs.
 
 ---
@@ -118,6 +118,6 @@ The spec claims a binding-independent model with pluggable bindings (§1.2), but
 
 ## 9. One structural observation
 
-The recurring theme across §2, §4.1, and §6 is the same: **v1.2 is an excellent description of a desired state, but thin on the machinery that ties the description to reality** — attestation, error-budget semantics, cross-service edges, binding neutrality. That's exactly the seam a renderer/scanner (Tomograph) is currently papering over. Folding those primitives back into the spec is what would let *any* conformant implementation — not just this studio — make trustworthy claims.
+The recurring theme across §2, §4.1, and §6 is the same: **v1.2 is an excellent description of a desired state, but thin on the machinery that ties the description to reality** — attestation, error-budget semantics, cross-service edges, binding neutrality. That's exactly the seam a renderer/scanner (Observogram) is currently papering over. Folding those primitives back into the spec is what would let *any* conformant implementation — not just this studio — make trustworthy claims.
 
 *Prepared from the vendored, checksummed v1.2 copy under `vendor/observability-pack-spec/v1.2/`. Line/section references are to `spec.md` and `docs/maturity-model.md` at commit `d13532b`.*

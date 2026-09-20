@@ -283,7 +283,7 @@ const { canonical, summary, evidence } = crawlFiles(FIXTURE, {
 assert(canonical.apiVersion === 'observability.platform/v1', 'apiVersion is v1');
 assert(canonical.kind === 'ObservabilityPack',                 'kind is ObservabilityPack');
 assert(canonical.metadata.name === 'payments',                 'metadata.name = repo name');
-assert(canonical.metadata.annotations['tomograph.diff.scopeMode'] === 'service',
+assert(canonical.metadata.annotations['observogram.diff.scopeMode'] === 'service',
        'crawler annotates default live-drift scope mode');
 assert(canonical.metadata.bindings.criticality === 'tier-2',
   `tier-2 inferred from rules+dashboards+alerting (got ${canonical.metadata.bindings.criticality}; discovered ${JSON.stringify(summary.discovered)})`);
@@ -361,7 +361,7 @@ const familyScope = crawlFiles(FIXTURE, {
   diffScopeMode: 'family',
   now: '2026-06-05T00:00:00.000Z',
 });
-assert(familyScope.canonical.metadata.annotations['tomograph.diff.scopeMode'] === 'family',
+assert(familyScope.canonical.metadata.annotations['observogram.diff.scopeMode'] === 'family',
        'crawler honors live-drift scope override');
 
 // ---------- validate against spec v1.2 ----------
@@ -776,5 +776,61 @@ assert(togProdProducts.has('prometheus'),
   'prod scan (EKS overlay out of scope) keeps Prometheus — the toggle is environment-specific');
 assert(togProdProducts.has('victoriametrics'),
   'prod scan still reads base-values backends');
+
+// ---------- unresolved ${VAR} placeholders in alerting channels ----------
+//
+// Regression for the 2026-06-10 finding: a webhook whose entire value is a
+// deploy-time placeholder (`${AUTO_REMEDIATION_WEBHOOK_URL}`) produced a
+// pack that failed the crawler's own schema (`format: uri`). Contract:
+// pure-placeholder channels are excluded from the declared spec and
+// recorded as evidence; placeholders EMBEDDED in a URI-shaped value
+// (https://ntfy.sh/${TOPIC}) stay declared; the output always validates.
+const PLACEHOLDER_FIXTURE = {
+  'alertmanager.yml': `route:
+  receiver: oncall
+  routes:
+    - match: { severity: critical }
+      receiver: oncall
+    - match: { severity: warning }
+      receiver: auto-remediation
+    - match: { severity: info }
+      receiver: ntfy
+receivers:
+  - name: oncall
+    msteams_configs:
+      - channel_url: '#oncall'
+  - name: auto-remediation
+    webhook_configs:
+      - url: '\${AUTO_REMEDIATION_WEBHOOK_URL}'
+  - name: ntfy
+    webhook_configs:
+      - url: 'https://ntfy.sh/\${NTFY_TOPIC}?priority=urgent'
+`,
+  'rules.yml': `groups:
+  - name: g
+    rules:
+      - record: app:availability:ratio
+        expr: sum(rate(ok_total[5m]))
+`,
+};
+const ph = crawlFiles(PLACEHOLDER_FIXTURE, { repoName: 'placeholder-app', now: '2026-06-10T00:00:00.000Z' });
+assert(validateCanonical(ph.canonical, SCHEMA).length === 0,
+  'pack with placeholder channels passes the schema — the crawler never emits output that fails its own validation',
+  validateCanonical(ph.canonical, SCHEMA).slice(0, 2));
+const phRoutes = ph.canonical.spec.alerting.routes;
+const allChannelValues = phRoutes.flatMap(r => r.channels.map(c => c.webhook || c.msteams || c.email || c.voice || ''));
+assert(!allChannelValues.some(v => v === '${AUTO_REMEDIATION_WEBHOOK_URL}'),
+  'pure-placeholder webhook is NOT declared as a route channel', allChannelValues);
+assert(allChannelValues.some(v => v.startsWith('https://ntfy.sh/')),
+  'URI-shaped value with an embedded placeholder stays declared');
+assert(ph.summary.omitted.unresolvedChannels.length === 1,
+  'the excluded channel is recorded in summary.omitted.unresolvedChannels',
+  ph.summary.omitted.unresolvedChannels);
+assert(ph.summary.warnings.some(w => /unresolved \$\{VAR\} placeholder/.test(w)),
+  'the crawl summary warns about the exclusion');
+assert(ph.canonical.metadata.annotations['crawler.unresolvedChannelCount'] === '1',
+  'annotation carries the unresolved-channel count');
+assert(/AUTO_REMEDIATION_WEBHOOK_URL/.test(ph.canonical.metadata.annotations['crawler.unresolved.alerting'] || ''),
+  'annotation preserves the placeholder as evidence');
 
 report('crawler');

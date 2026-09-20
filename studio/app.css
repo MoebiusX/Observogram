@@ -1,5 +1,5 @@
 /* ============================================================
-   Tomograph v0.3 — the Observability Compiler
+   Observogram v0.3 — the Observability Compiler
    Visual identity: hairline grid · monospaced data · layer-numbered
    sections · slide-in drawer.
 
@@ -62,6 +62,7 @@
 
   /* Neutrals */
   --ink:    #0F1B2D;
+  --ink-1:  #0F1B2D;   /* alias of --ink: widely referenced; SVG fill needs it defined */
   --ink-2:  #1F3A5F;
   --ink-3:  #4A4A4A;
   --ink-4:  #6B6B6B;
@@ -76,7 +77,7 @@
   --code-bg:    #FBFBF8;
   --pass-bg:    #F0FDF4;  --pass-border: #15803D;
   --fail-bg:    #FFFAF8;  --fail-border: #DC2626;
-  --warn-bg:    #FFFCF0;
+  --warn-bg:    #FFFCF0;  --warn:        #B45309;
   --error-bg:   #FEF2F2;  --error-text:  #7F1D1D;
   --error-border: #FCA5A5;
   --dot-rgba:   rgba(15, 27, 45, 0.04);   /* paper texture */
@@ -131,6 +132,7 @@
   --crit-tier-3: #94A3B8;
 
   --ink:    #E5E8EC;
+  --ink-1:  #E5E8EC;   /* alias of --ink (see :root) */
   --ink-2:  #B6BFCB;
   --ink-3:  #9AA3AD;
   --ink-4:  #788396;
@@ -144,7 +146,7 @@
   --code-bg:    #11192A;
   --pass-bg:    #102A1A;  --pass-border: #34D399;
   --fail-bg:    #2A1414;  --fail-border: #F87171;
-  --warn-bg:    #2A2510;
+  --warn-bg:    #2A2510;  --warn:        #FBBF24;
   --error-bg:   #2A1414;  --error-text:  #FCA5A5;
   --error-border: #7F1D1D;
   --dot-rgba:   rgba(255, 255, 255, 0.04);
@@ -785,6 +787,13 @@ a:hover { color: var(--ink); }
   padding: 1px 4px;
   border-radius: 3px;
 }
+/* Step 2 stack self-metrics block — a second summary table under the
+   discovery rows, introduced by one muted heading line. */
+.crawl-stack-heading {
+  margin: 10px 0 2px;
+  font: italic 11px/1.5 var(--serif);
+  color: var(--ink-4);
+}
 .crawl-inferred {
   margin-top: 6px;
   font: italic 11px/1.5 var(--serif);
@@ -1136,6 +1145,30 @@ a:hover { color: var(--ink); }
   font-family: var(--mono); color: var(--ink-4); font-size: 12px;
   text-transform: uppercase; letter-spacing: 0.1em;
 }
+
+/* Comparison-in-flight — the diff over big packs takes real seconds;
+   motion says "working", a static line says "hung". */
+.loading-compare {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  color: var(--ink-3);
+}
+.loading-compare strong { color: var(--ink-1); font-weight: 600; }
+.loading-compare-sub { font-size: 11px; color: var(--ink-4); }
+.compare-spinner {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 3px solid var(--line-2);
+  border-top-color: var(--CMP, #A77BFB);
+  animation: compare-spin 0.8s linear infinite;
+}
+@keyframes compare-spin { to { transform: rotate(360deg); } }
+.loading-compare-retry { margin-top: 4px; }
 #layer-view .error {
   padding: 16px 18px;
   border-left: 3px solid var(--src-Missing);
@@ -1900,6 +1933,97 @@ a:hover { color: var(--ink); }
   background: rgba(178, 34, 34, 0.08);
 }
 
+/* Instrument-grade tiers — shared by the head chip and the ladder.
+   a = clinical-and-above (green), b = professional (amber),
+   c = field (orange), d = consumer (red), ref = reference grades
+   the score can't reach (neutral). */
+.tier-a   { --tier: 46, 110, 50; }
+.tier-b   { --tier: 180, 120, 0; }
+.tier-c   { --tier: 205, 92, 8; }
+.tier-d   { --tier: 178, 34, 34; }
+.tier-ref { --tier: 110, 120, 140; }
+.diag-report-status.grade-chip {
+  color: rgb(var(--tier));
+  border-color: rgb(var(--tier));
+  background: rgba(var(--tier), 0.08);
+  letter-spacing: 0.1em;
+}
+
+/* One-line narrative under the head-line: what THIS grade means and the
+   distance to the diagnostic bar. Maintainer-ratified context — a grade
+   is never shown without its sentence. */
+.diag-grade-blurb {
+  margin: 4px 0 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-3);
+  max-width: 70ch;
+}
+/* What the scale derives from — restores the ratified grade-ladder note
+   dropped when the scale was pinned beside the header. */
+.grade-ladder-note {
+  margin: 8px 2px 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-4);
+}
+
+/* The grade ladder — sits BESIDE the verdict summary. The header chip
+   repeats the letter ON PURPOSE: the chip + label + blurb are the
+   narrative that makes the highlighted rung legible. Inside
+   .diag-report-head so the drift/posture bands — inserted right after
+   the header — can never push it below the fold. */
+.diag-report-head {
+  display: flex;
+  gap: 28px;
+  align-items: flex-start;
+}
+.diag-head-main { flex: 1 1 auto; min-width: 0; }
+.diag-grade-scale { flex: 0 0 360px; }
+.grade-ladder {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.grade-rung {
+  display: grid;
+  grid-template-columns: 36px 1fr auto;
+  align-items: baseline;
+  column-gap: 10px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line-2);
+  cursor: default;
+}
+.grade-rung:last-child { border-bottom: 0; }
+.grade-rung-letter {
+  font: 800 13.5px/1 var(--mono);
+  color: rgb(var(--tier));
+}
+.grade-rung-label {
+  font: 600 12.5px/1.3 var(--sans);
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.grade-rung-range {
+  font: 11px/1.3 var(--mono);
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.grade-rung.is-current {
+  background: rgba(var(--tier), 0.07);
+  border-left: 3px solid rgb(var(--tier));
+  padding-left: 5px;
+}
+.grade-rung.is-current .grade-rung-label { color: var(--ink-1); font-weight: 700; }
+.grade-rung.is-current .grade-rung-range { color: rgb(var(--tier)); font-weight: 700; }
+.grade-rung.is-unreachable { opacity: 0.5; }
+@media (max-width: 900px) {
+  .diag-report-head { flex-direction: column; gap: 14px; }
+  .diag-grade-scale { flex: 1 1 auto; width: 100%; }
+}
+
 /* Summary table — Score / Coverage / Trust / Verified rows ------ */
 .diag-summary {
   width: 100%;
@@ -2189,19 +2313,41 @@ a:hover { color: var(--ink); }
 }
 .drift-legend-risk {
   grid-column: 2 / -1;
-  font: 10.5px/1.25 var(--mono);
-  color: var(--ink-3);
+  font: 11px/1.25 var(--mono);
+  color: var(--ink-2);
 }
 .drift-legend-hint {
   grid-column: 2 / -1;
-  font: 11px/1.35 var(--sans);
-  color: var(--ink-4);
+  font: 11.5px/1.35 var(--sans);
+  color: var(--ink-3);
 }
 .drift-risk-note {
   margin: -2px 2px 12px;
   max-width: 940px;
-  font: 11px/1.45 var(--mono);
-  color: var(--ink-4);
+  font: 11.5px/1.45 var(--mono);
+  color: var(--ink-3);
+}
+
+/* Partial live evidence — a thin Pack B (failed MCP probes) makes every
+   drift number below suspect; this must be impossible to miss. */
+.drift-partial-banner {
+  margin: 0 0 14px;
+  max-width: 940px;
+  padding: 10px 14px;
+  border: 1.5px solid rgb(205, 92, 8);
+  border-left-width: 5px;
+  border-radius: var(--r-md);
+  background: rgba(205, 92, 8, 0.08);
+  font: 12.5px/1.5 var(--sans);
+  color: var(--ink-1);
+}
+.drift-partial-banner code { font: 11.5px var(--mono); color: rgb(205, 92, 8); }
+.drift-partial-key {
+  display: inline-block;
+  margin-right: 8px;
+  font: 800 11px/1 var(--mono);
+  letter-spacing: 0.1em;
+  color: rgb(205, 92, 8);
 }
 
 .drift-table {
@@ -2361,6 +2507,14 @@ a:hover { color: var(--ink); }
 .diag-evidence-table tr.is-partial .e-status { color: rgb(180, 120, 0); }
 .diag-evidence-table tr.is-fail .e-status { color: rgb(178, 34, 34); }
 .diag-evidence-table tr:hover { background: var(--ink-bg); }
+
+/* Informational rows/sections (grade schema 2: operability is observed,
+   never scored) — neutral ink so a missing runbook doesn't read as grade
+   damage, while the observation itself stays fully visible. */
+.diag-evidence-table tr.is-info .e-status { color: var(--ink-3); }
+.diag-section-info .diag-crit-table tr.is-fail .c-pip,
+.diag-section-info .diag-crit-table tr.is-pass .c-pip { color: var(--ink-3); }
+.diag-section-info .diag-section-meta { color: var(--ink-3); }
 
 
 /* Legacy diagnostic-grade-* rules retained below for safety while
@@ -6131,6 +6285,32 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
 }
 .deploy-hist-verify { color: var(--ink-3); margin-left: 6px; }
 
+/* Requirement-branch reconciliation actions on chain cards (item 6). */
+.diag-chain-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.diag-chain-actions .ctrl-btn { font-size: 11px; padding: 3px 9px; }
+.diag-chain-result { margin-top: 8px; }
+
+/* Bidirectional remediation actions on the drift drill (item 4). */
+.drift-actions {
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+  margin: 12px 0 4px;
+}
+.drift-retrofeed-result {
+  flex-basis: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--card);
+  padding: 10px 14px;
+  font: 12px/1.5 var(--mono);
+}
+.drift-retrofeed-head { margin: 0 0 6px; color: var(--ink-2); }
+.drift-retrofeed-head.is-error { color: var(--err, #b91c1c); }
+.drift-retrofeed-list { margin: 0 0 6px; padding-left: 16px; list-style: none; }
+.drift-retrofeed-skips { margin: 6px 0; color: var(--ink-3); }
+.drift-retrofeed-skips ul { margin: 4px 0 0; padding-left: 16px; }
+.drift-retrofeed-dl { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0 0; }
+.drift-retrofeed-note { font: 11px/1.4 var(--sans); color: var(--ink-4); }
+
 /* Journeys view (item 11) — saved drift checks with trend sparklines. */
 .journeys-capture-bar { display: flex; gap: 10px; align-items: center; margin: 0 0 16px; }
 .journeys-capture-bar .layers-search-input { max-width: 320px; }
@@ -6146,6 +6326,7 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
 .journey-outcome { font: 12px/1.2 var(--mono); color: var(--ink-3); }
 .journey-outcome.is-pass { color: var(--ok, #16a34a); }
 .journey-outcome.is-fail { color: var(--err, #b91c1c); }
+.journey-outcome.is-lost { color: var(--warn, #d97706); }
 .journey-spark { width: 120px; height: 28px; flex: none; }
 .journey-run-btn { margin-left: auto; }
 .journey-card-meta {
@@ -6154,8 +6335,35 @@ body[data-mode="home"] #layer-view { padding: 0; background: var(--paper); }
   font: 11px/1.4 var(--mono);
   color: var(--ink-4);
 }
+/* A definition that fails to load (GET /api/journeys loadError): a config
+   fault, not a verdict — warn colour so it never reads as a healthy
+   never-run journey. */
+.journey-load-error { color: var(--warn, #d97706); }
 .journey-runs { margin-top: 10px; }
 .journey-runs-table { font: 11px/1.4 var(--mono); }
+/* Stack self-metric chips (step 3): point-in-time samples per family.
+   Deliberately no ok/err colour — a sample is a signal, never a verdict;
+   the 'nonzero' hint is a muted marker, not a red flag. */
+.journey-stack {
+  display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap;
+  margin-top: 8px;
+  font: 11px/1.4 var(--mono);
+  color: var(--ink-3);
+}
+.journey-stack-label { color: var(--ink-4); }
+.journey-stack-chip {
+  display: inline-flex; gap: 4px; align-items: baseline;
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--code-bg);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.journey-stack-chip.is-muted { color: var(--ink-4); border-style: dashed; }
+.journey-stack-family { color: var(--ink-4); }
+.journey-stack-mark { color: var(--ink-4); font-style: italic; }
+.journey-stack-runs { color: var(--ink-4); }
 .journey-result-pre {
   margin: 8px 0 0; padding: 8px 10px;
   background: var(--code-bg); border: 1px solid var(--line); border-radius: var(--r-md);
@@ -7087,7 +7295,7 @@ body.chrome-observa .upload-popover-divider {
 /* The main view sits beneath the chrome — extend it edge-to-edge
    so the content can claim the full width promised in the mockup.
    The content area KEEPS its existing light/cream engineering-tool
-   aesthetic — the dark navy stays in the chrome only. Tomograph is
+   aesthetic — the dark navy stays in the chrome only. Observogram is
    an audit tool; the content is the audit, and audits are read on
    paper, not on a marketing site. */
 body.chrome-observa #layer-view {
@@ -7112,7 +7320,7 @@ body.chrome-observa #layer-view {
 }
 
 /* =============================================================
-   DISCOVER — TOMOGRAM SCAN dashboard (dark mission control)
+   DISCOVER — OBSERVOGRAM SCAN dashboard (dark mission control)
    ============================================================= */
 body.chrome-observa .disco {
   display: grid;
@@ -7477,3 +7685,406 @@ body.chrome-observa .disco {
   .section-grid { grid-template-columns: 1fr; }
   .drawer { width: 100vw; }
 }
+
+/* ============================================================
+   MISSION CONTROL — the Diagnose verdict page bands and the
+   Remediate triage queue (2026-06 redesign synthesis).
+   .mc-* are shared atoms (tiles, chips, action strips, panels);
+   .diag-head-drag is the biggest-drag header column; .rq-* is the
+   triage queue. Dark-first glow via color-mix on the theme tokens;
+   the light theme keeps the same accents on tinted grounds.
+   ============================================================ */
+
+.diag-report, .compile-view, .rq-band {
+  --pr-green:  #10B981;
+  --pr-blue:   #3B82F6;
+  --pr-purple: #8B5CF6;
+  --pr-amber:  #F59E0B;
+  --pr-red:    #EF4444;
+  --pr-cyan:   #06B6D4;
+  --pr-gray:   #64748B;
+}
+[data-theme="dark"] .diag-report,
+[data-theme="dark"] .compile-view,
+[data-theme="dark"] .rq-band {
+  --pr-green:  #34D399;
+  --pr-blue:   #60A5FA;
+  --pr-purple: #A78BFA;
+  --pr-amber:  #FBBF24;
+  --pr-red:    #F87171;
+  --pr-cyan:   #22D3EE;
+  --pr-gray:   #94A3B8;
+}
+
+/* ---------- prototype switcher pill (?proto only) ---------- */
+.proto-switcher {
+  position: fixed; left: 16px; bottom: 16px; z-index: 60;
+  display: flex; align-items: center; gap: 4px;
+  padding: 5px 8px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 999px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+  font-family: var(--mono); font-size: 11px;
+}
+.proto-switcher-key { color: var(--ink-4); letter-spacing: 0.12em; margin-right: 2px; }
+.proto-switcher-btn {
+  display: inline-block; text-align: center;
+  padding: 3px 9px; border-radius: 999px;
+  color: var(--ink-2); text-decoration: none; border: 1px solid transparent;
+}
+.proto-switcher-btn.is-active { background: var(--CMP); color: #fff; font-weight: 700; }
+.proto-switcher-btn.is-exit { color: var(--ink-4); }
+.proto-switcher-btn.is-exit:hover { border-color: var(--line); background: var(--hover); }
+
+/* ---------- biggest-drag header column ---------- */
+.diag-head-drag {
+  flex: 1 1 300px;
+  min-width: 0;
+  border-left: 2px solid var(--pr-red, #EF4444);
+  padding: 2px 0 2px 14px;
+  align-self: flex-start;
+}
+.diag-head-drag.is-clean { border-left-color: var(--pr-green, #10B981); }
+.diag-drag-eyebrow {
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  letter-spacing: 0.14em; color: var(--ink-4);
+}
+.diag-drag-lede { margin: 5px 0 0; font-size: 13.5px; line-height: 1.5; }
+.diag-drag-n { font-family: var(--mono); font-size: 17px; color: var(--pr-red, #EF4444); }
+.diag-head-drag.is-clean .diag-drag-n { color: var(--pr-green, #10B981); }
+.diag-drag-projection {
+  margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: var(--ink-2);
+  padding: 7px 10px; border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--BLD) 9%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--BLD) 40%, transparent);
+}
+
+/* ---------- shared atoms ----------
+   The widget atoms verdict-ui.mjs emits (.mc-chip, .mc-fix, .mc-tile*,
+   .mc-spark, .mc-donut-center, .mc-verification-note) live in
+   verdict-ui.css so downstream studios can vendor them with the module
+   (docs/VENDORING.md). Only view-level atoms remain here. */
+.mc-lnum {
+  display: inline-block; min-width: 26px; text-align: center;
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  padding: 1px 4px; border-radius: var(--r-sm);
+  color: var(--ink-3); background: var(--line-2);
+}
+
+.mc-act {
+  appearance: none; cursor: pointer;
+  font-family: var(--mono); font-size: 12px; font-weight: 600;
+  padding: 8px 14px; border-radius: var(--r-md);
+  color: var(--ink); background: var(--card); border: 1px solid var(--line);
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.05s;
+}
+.mc-act:hover { border-color: var(--CMP); box-shadow: 0 0 0 3px color-mix(in srgb, var(--CMP) 18%, transparent); }
+.mc-act:active { transform: translateY(1px); }
+.mc-act:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+.mc-act.is-primary {
+  color: #fff; background: var(--BLD); border-color: var(--BLD);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--BLD) 35%, transparent);
+}
+.mc-act.is-primary:hover { box-shadow: 0 0 26px color-mix(in srgb, var(--BLD) 55%, transparent); }
+.mc-act.is-quiet { border-color: transparent; color: var(--ink-3); }
+.mc-act.is-mini { padding: 3px 9px; font-size: 11px; }
+
+.mc-actionbar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  padding: 10px 12px; margin: 14px 0;
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+}
+.mc-actionbar .drift-retrofeed-result { flex-basis: 100%; }
+.mc-deploybar {
+  position: sticky; bottom: 12px; z-index: 20;
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+  padding: 12px 14px; margin-top: 18px;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.18);
+}
+.mc-deploybar-projection { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); max-width: 70ch; }
+
+/* ---------- panel grid ---------- */
+.mc-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px; margin-top: 4px;
+}
+.mc-panel {
+  --acc: var(--CMP);
+  border: 1px solid color-mix(in srgb, var(--acc) 26%, var(--line));
+  border-radius: var(--r-lg); background: var(--card); padding: 11px 13px 12px;
+  position: relative; overflow: hidden;
+}
+.mc-panel::after {
+  content: ''; position: absolute; inset: 0 0 auto 0; height: 2px;
+  background: linear-gradient(90deg, var(--acc), transparent 70%);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--acc) 60%, transparent);
+}
+.mc-panel.is-cmp    { --acc: var(--CMP); }
+.mc-panel.is-blue   { --acc: var(--pr-blue); }
+.mc-panel.is-green  { --acc: var(--pr-green); }
+.mc-panel.is-amber  { --acc: var(--pr-amber); }
+.mc-panel.is-red    { --acc: var(--pr-red); }
+.mc-panel.is-cyan   { --acc: var(--pr-cyan); }
+.mc-panel.is-purple { --acc: var(--pr-purple); }
+.mc-panel.is-gray   { --acc: var(--pr-gray); }
+.mc-panel.is-wide, .mc-panel.is-expanded { grid-column: 1 / -1; }
+.mc-panel-head { display: flex; gap: 8px; align-items: center; }
+.mc-panel-num {
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  color: var(--acc); border: 1px solid color-mix(in srgb, var(--acc) 45%, transparent);
+  border-radius: var(--r-sm); padding: 1px 5px;
+}
+.mc-panel-title { font-weight: 700; font-size: 13px; letter-spacing: 0.02em; flex: 1; }
+.mc-panel-micro { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); display: flex; gap: 6px; align-items: center; }
+.mc-panel-toggle {
+  appearance: none; border: 1px solid var(--line); background: transparent; color: var(--ink-3);
+  border-radius: var(--r-sm); cursor: pointer; font-size: 11px; padding: 1px 6px;
+}
+.mc-panel-toggle:hover { border-color: var(--acc); color: var(--acc); }
+.mc-panel-q { font-size: 11px; color: var(--ink-4); font-style: italic; margin: 2px 0 8px; }
+.mc-panel-note { font-size: 11.5px; color: var(--ink-3); line-height: 1.45; }
+.mc-panel-detail { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 8px; }
+.mc-panel-detail .diag-section { margin: 0; }
+
+.mc-lattice { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.mc-lattice figure { margin: 0; text-align: center; }
+.mc-lattice figcaption { font-family: var(--mono); font-size: 10px; color: var(--ink-4); margin-top: 4px; }
+.mc-lattice .mc-donut { width: 96px; height: 96px; }
+.mc-lattice-legend { list-style: none; margin: 0; padding: 0; font-family: var(--mono); font-size: 11px; color: var(--ink-2); display: flex; flex-direction: column; gap: 4px; }
+.mc-lattice-legend .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 7px; }
+
+.mc-strata { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.mc-strata th, .mc-strata td { padding: 3.5px 7px; border-bottom: 1px solid var(--line-2); text-align: right; font-family: var(--mono); }
+.mc-strata th:first-child { text-align: left; font-family: var(--sans); font-weight: 600; }
+.mc-strata thead th { font-size: 9.5px; color: var(--ink-4); letter-spacing: 0.08em; }
+.mc-strata tbody tr { background: color-mix(in srgb, var(--pr-red) calc(var(--heat, 0) * 9%), transparent); }
+.mc-strata tr.is-quiet { opacity: 0.55; }
+.mc-strata td.is-aligned { color: var(--pr-green); }
+.mc-strata td.is-drifted { color: var(--pr-purple); }
+.mc-strata td.is-decl    { color: var(--pr-red); }
+.mc-strata td.is-shadow  { color: var(--pr-amber); }
+.mc-strata-detail { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); padding: 3px 0; }
+.mc-oos-inline { font-size: 10px; color: var(--ink-4); }
+
+.mc-cells { display: flex; gap: 8px; flex-wrap: wrap; }
+.mc-cell {
+  font-family: var(--mono); font-size: 11px; padding: 6px 10px; border-radius: var(--r-md);
+  border: 1px solid var(--line);
+}
+.mc-cell strong { font-size: 15px; margin-right: 3px; }
+.mc-cell.is-pass    { color: var(--pr-green); border-color: color-mix(in srgb, var(--pr-green) 40%, transparent); }
+.mc-cell.is-partial { color: var(--pr-amber); border-color: color-mix(in srgb, var(--pr-amber) 40%, transparent); }
+.mc-cell.is-fail    { color: var(--pr-red);   border-color: color-mix(in srgb, var(--pr-red) 40%, transparent); }
+.mc-cell.is-info    { color: var(--pr-gray);  border-color: color-mix(in srgb, var(--pr-gray) 40%, transparent); }
+
+.mc-crit { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.mc-crit li { display: flex; gap: 9px; align-items: center; font-size: 12.5px; }
+.mc-crit-name { font-weight: 600; }
+.mc-crit-name.mc-mono { font-family: var(--mono); font-weight: 400; font-size: 11px; color: var(--ink-2); }
+
+/* ---------- triage queue (Remediate) ---------- */
+.rq-band { margin-bottom: 18px; }
+.rq-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; padding: 4px 2px; }
+.rq-eyebrow {
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+  letter-spacing: 0.14em; color: var(--BLD);
+}
+.rq-title { font-weight: 700; font-size: 15px; }
+.rq-sub { font-size: 12px; color: var(--ink-4); font-style: italic; }
+.rq-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 4px 0 8px; }
+.rq-filters { display: flex; gap: 6px; flex-wrap: wrap; }
+.rq-filter {
+  appearance: none; cursor: pointer;
+  font-family: var(--mono); font-size: 11px;
+  padding: 4px 10px; border-radius: 999px;
+  color: var(--ink-2); background: var(--card); border: 1px solid var(--line);
+}
+.rq-filter:hover { border-color: var(--BLD); }
+.rq-filter.is-active { color: #fff; background: var(--BLD); border-color: var(--BLD); font-weight: 700; }
+.rq-filter-n { opacity: 0.75; margin-left: 3px; }
+.rq-table { width: 100%; border-collapse: collapse; font-size: 12.5px; background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); }
+.rq-table th, .rq-table td { padding: 6px 8px; border-bottom: 1px solid var(--line-2); text-align: left; }
+.rq-table thead th { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; color: var(--ink-4); text-transform: uppercase; }
+.rq-table tr.is-deselected { opacity: 0.45; }
+.rq-label { font-weight: 600; }
+.rq-fields { font-family: var(--mono); font-size: 10.5px; color: var(--pr-purple); margin-left: 7px; }
+.rq-w { font-family: var(--mono); }
+
+@media (max-width: 1100px) {
+  .diag-report-head { flex-wrap: wrap; }
+  .diag-head-drag { flex-basis: 100%; order: 3; }
+}
+
+/* Identity chip + account menu — only present in identity postures
+   (see setupIdentityChip). Popover follows the upload-popover idiom. */
+.hdr-user { position: relative; display: inline-flex; align-items: center; gap: 6px; }
+.hdr-user-btn {
+  max-width: 26ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hdr-user-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 50;
+  min-width: 220px;
+  padding: 6px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: 0 10px 32px rgba(0,0,0,0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.hdr-user-menu[hidden] { display: none; }
+.hdr-user-menu-id {
+  padding: 8px 12px 10px;
+  font: 11px/1.5 var(--mono);
+  color: var(--ink-3);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+.hdr-user-menu-id strong { color: var(--ink-1); font-weight: 600; }
+.hdr-user-menu-mode { display: block; color: var(--ink-4); }
+.hdr-user-menu-item {
+  display: block;
+  padding: 9px 12px;
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-sm);
+  text-align: left;
+  cursor: pointer;
+  font: 600 12px/1 var(--mono);
+  color: var(--ink-2);
+  text-decoration: none;
+  transition: background 100ms;
+}
+.hdr-user-menu-item:hover { background: var(--hover); color: var(--ink); }
+.hdr-user-menu-item:focus-visible { outline: 2px solid var(--CMP); outline-offset: 1px; }
+
+/* ============================================================
+   SERVICE GATE — the post-sign-in landing (which service are
+   you working on?) + the always-visible active-service chip in
+   the OBSERVA bar. docs/PRODUCTIZATION_PLAN.md Stage 1 UX.
+   ============================================================ */
+.svc-gate {
+  max-width: 880px;
+  margin: 9vh auto 0;
+  padding: 0 28px;
+}
+.svc-gate-eyebrow {
+  font: 700 11px/1 var(--mono);
+  letter-spacing: 0.22em;
+  color: var(--CMP);
+}
+.svc-gate-title {
+  font-family: var(--serif);
+  font-size: 42px;
+  font-weight: 600;
+  margin: 14px 0 4px;
+  color: var(--ink);
+}
+.svc-gate-sub {
+  font-size: 16px;
+  color: var(--ink-3);
+  margin: 0 0 30px;
+}
+.svc-gate-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+.svc-gate-card {
+  appearance: none;
+  text-align: left;
+  cursor: pointer;
+  padding: 18px 20px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line);
+  background:
+    radial-gradient(120% 100% at 0% 0%, color-mix(in srgb, var(--CMP) 7%, transparent), transparent 60%),
+    var(--card);
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.05s;
+}
+.svc-gate-card:hover {
+  border-color: var(--CMP);
+  box-shadow: 0 0 22px color-mix(in srgb, var(--CMP) 22%, transparent);
+}
+.svc-gate-card:active { transform: translateY(1px); }
+.svc-gate-name {
+  display: block;
+  font: 700 15px/1.3 var(--mono);
+  color: var(--ink);
+  margin-bottom: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.svc-gate-meta {
+  display: block;
+  font-size: 11.5px;
+  color: var(--ink-4);
+}
+.svc-gate-new {
+  appearance: none;
+  margin-top: 26px;
+  padding: 8px 2px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  border-bottom: 1px dashed var(--line);
+}
+.svc-gate-new:hover { color: var(--CMP); border-bottom-color: var(--CMP); }
+
+/* Active-service chip in the OBSERVA bar. */
+.observa-service {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 14px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--CMP) 45%, transparent);
+  background: color-mix(in srgb, var(--CMP) 10%, transparent);
+  align-self: center;
+}
+.observa-service-key {
+  font: 700 9px/1 var(--mono);
+  letter-spacing: 0.16em;
+  color: var(--ink-4);
+}
+.observa-service-name {
+  font: 700 12.5px/1 var(--mono);
+  color: var(--CMP);
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.observa-service[hidden] { display: none; }
+
+/* Stage 2 tenancy — active-org indicator/switcher in the header */
+.hdr-org { display: inline-flex; align-items: center; gap: 6px; margin-right: 10px; }
+.hdr-org .ctrl-key { font-size: 9px; letter-spacing: .14em; color: var(--ink-3, #788396); }
+.hdr-org-name { font-family: var(--mono, 'IBM Plex Mono', monospace); font-size: 11px; font-weight: 600; }
+.hdr-org select {
+  background: transparent; color: inherit; border: 1px solid var(--line, #2a3548);
+  border-radius: 5px; padding: 3px 6px; font-size: 11px;
+  font-family: var(--mono, 'IBM Plex Mono', monospace); cursor: pointer;
+}
+.observa-org { margin-right: 2px; }
+.observa-org-select {
+  background: transparent; color: inherit; border: 0; padding: 0;
+  font: inherit; font-family: var(--mono, 'IBM Plex Mono', monospace);
+  font-size: 12px; font-weight: 600; cursor: pointer; outline-offset: 2px;
+}
+.observa-org-select option { color: #0f1623; }

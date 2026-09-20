@@ -1,0 +1,12 @@
+# One recording rule and one always-firing alert so vmalert_* metrics exist
+# and vmalert sends notifications to Alertmanager.
+groups:
+  - name: stack-validation
+    interval: 5s
+    rules:
+      - record: stack:vm_rows:sum
+        expr: sum(vm_rows)
+      - alert: VmalertAlwaysFiring
+        expr: vector(1) > 0
+        labels:
+          severity: test

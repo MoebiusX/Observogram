@@ -1,0 +1,23 @@
+{
+  "_recorded": {
+    "recordedAt": "2026-09-08T07:03:52.091Z",
+    "tool": "metrics_query",
+    "family": "tsdb",
+    "row": "tsdb_active_series",
+    "product": "victoriametrics",
+    "query": "sum(vm_cache_entries{type=\"storage/hour_metric_ids\"})",
+    "outcome": "data",
+    "value": 37280
+  },
+  "status": "success",
+  "resultType": "vector",
+  "result": [
+    {
+      "metric": {},
+      "value": [
+        1788851034,
+        "37280"
+      ]
+    }
+  ]
+}

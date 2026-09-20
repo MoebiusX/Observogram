@@ -20,17 +20,29 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
+
+      # Pinned backend-validator binaries (promtool / amtool /
+      # otelcol-contrib) — cached by the pin versions baked into the
+      # fetch script, so the ~300MB download happens once per bump.
+      - name: Cache backend validators
+        uses: actions/cache@v6
+        with:
+          path: .tools
+          key: validators-${{ runner.os }}-${{ hashFiles('tools/fetch-validators.mjs') }}
+
+      - name: Fetch backend validators (pinned, sha256-verified)
+        run: npm run fetch-validators
 
       - name: Audit runtime dependencies (high+)
         run: npm audit --omit=dev --audit-level=high
@@ -62,12 +74,15 @@ jobs:
       - name: Validate canonical example against spec v1.2 schema
         run: npm run validate
 
+      - name: Backend validation — strict (promtool / amtool / otelcol-contrib)
+        run: npm run test:backend:strict
+
       - name: Regression suites + coverage (adapt / fetch / packs / compile / profiles / crawl / server)
         run: npm run coverage
 
       - name: Upload coverage (lcov)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-lcov
           path: coverage/lcov.info
@@ -76,3 +91,23 @@ jobs:
       - name: Smoke-check studio HTML is parseable
         run: |
           node -e "const fs=require('fs');const html=fs.readFileSync('studio/index.html','utf8');if(!html.includes('</html>'))process.exit(1);console.log('studio html ok ('+html.length+' bytes)')"
+
+  # T4 — the product-story round trip against a REAL Grafana:
+  # compile → deploy-bulk (real MCP path) → fetch-live → diff → aligned.
+  # Separate job: needs docker; the validate job stays fast.
+  backend-live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20   # pulls Grafana 12.4.4 + 13.0.2 images cold
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Round trip vs live Grafana (strict)
+        run: npm run test:backend:live:strict

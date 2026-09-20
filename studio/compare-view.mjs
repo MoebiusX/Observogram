@@ -4,17 +4,19 @@
 // the Diagnose sub-views (benchmark, drift drill, posture matrix, diagnostic
 // grade, traceability), and the side-by-side Compare view. The largest single
 // cluster; its many functions cross-call each other, so they live together.
-// Orchestration-coupled: imports the re-render entrypoints, the card opener,
-// and a couple of pack helpers back from app.mjs + drawer.mjs.
+// Re-render / loader / modal entrypoints come through the studio host seam
+// (host.mjs); a couple of pack helpers are still imported back from app.mjs
+// and the card opener from drawer.mjs (safe call-time cycles).
 
 import { state } from './state.mjs';
 import { api } from './api.mjs';
 import { escapeHtml, toast } from './util.mjs';
 import { LAYER_DEFS, L4_SUBGROUPS } from './constants.mjs';
 import { openDrawer } from './drawer.mjs';
-import { defaultEnvFor, loadPackB, openDeployModal, renderMainView, renderTabs, refresh } from './app.mjs';
+import { defaultEnvFor, refresh } from './app.mjs';
+import { host as appHost } from './host.mjs';
 import { cardKey } from './layers-view.mjs';
-import { diffEntryLabel } from './artifact-model.mjs';
+import { diffEntryLabel, deploySelectionFromEntries, deploySurfaceForArtefact, prettyDiffKey } from './artifact-model.mjs';
 import {
   POSTURE_LAYERS,
   POSTURE_MECHANISMS_PER_LAYER,
@@ -25,8 +27,16 @@ import {
   layerItemsFor,
   criterionScore,
   diagnosticAuditStatus,
+  INSTRUMENT_GRADE_SCALE,
+  instrumentGradeFor,
   isScaffoldDiffEntry,
+  partialLiveEvidence,
 } from './diagnostic-grade.mjs';
+import { catalogEntryFor, LAYERS_FOR_DIFF } from './compare-catalog.mjs';
+
+// Re-exported: these two lived here before moving to compare-catalog.mjs
+// (kept importable from the view for compile-view.mjs and proto-shared.mjs).
+export { catalogEntryFor, LAYERS_FOR_DIFF };
 
 // ---------- compare view ----------
 
@@ -45,24 +55,66 @@ function defaultCompareB() {
   return state.catalog.find(p => p.ok && p.id !== state.selectedPackId)?.id || null;
 }
 
+// The selection tuple a diff is computed for. loadDiff stamps it on the
+// result as `__for`, and diffMatchesSelection() re-checks it at read time.
+// This guard is load-bearing: many flows swap Pack A / env A without
+// touching state.diff (header pickers, service fallback, uploads), and
+// adapter ids are positional (SLI-01, DASH-02…), so a stale diff would
+// confidently mislabel the new pack's cards instead of failing closed.
+function diffSelection() {
+  return {
+    a: state.selectedPackId || null,
+    b: state.compareBId || null,
+    aEnv: state.selectedEnv || null,
+    bEnv: state.compareBEnv || null,
+    scopeMode: activeDiffScopeMode(),
+    service: state.selectedService || null,
+  };
+}
+
+export function diffMatchesSelection(diff) {
+  const f = diff?.__for;
+  if (!f) return false;
+  const sel = diffSelection();
+  return f.a === sel.a && f.b === sel.b && f.aEnv === sel.aEnv &&
+    f.bEnv === sel.bEnv && f.scopeMode === sel.scopeMode && f.service === sel.service;
+}
+
+// One in-flight fetch per selection tuple — concurrent renders while a
+// diff loads share the request instead of stampeding the server.
+let diffInFlight = null;
+
 export async function loadDiff() {
   if (!state.selectedPackId || !state.compareBId) { state.diff = null; return; }
-  const params = new URLSearchParams({ a: state.selectedPackId, b: state.compareBId });
-  if (state.selectedEnv) params.set('aEnv', state.selectedEnv);
-  if (state.compareBEnv) params.set('bEnv', state.compareBEnv);
-  params.set('scopeMode', activeDiffScopeMode());
-  if (state.selectedService) params.set('service', state.selectedService);
-  try {
-    const result = await api(`/api/diff?${params}`);
-    // Sanity-check the shape so a stale server returning some other JSON
-    // doesn't crash later renderers.
-    if (!result || !result.summary || !result.layers) {
-      throw new Error('server returned an unexpected shape — restart `npm run dev`?');
+  const requested = diffSelection();
+  const key = JSON.stringify(requested);
+  if (diffInFlight?.key === key) return diffInFlight.promise;
+  const params = new URLSearchParams({ a: requested.a, b: requested.b });
+  if (requested.aEnv) params.set('aEnv', requested.aEnv);
+  if (requested.bEnv) params.set('bEnv', requested.bEnv);
+  params.set('scopeMode', requested.scopeMode);
+  if (requested.service) params.set('service', requested.service);
+  const promise = (async () => {
+    let next;
+    try {
+      const result = await api(`/api/diff?${params}`);
+      // Sanity-check the shape so a stale server returning some other JSON
+      // doesn't crash later renderers.
+      if (!result || !result.summary || !result.layers) {
+        throw new Error('server returned an unexpected shape — restart `npm run dev`?');
+      }
+      next = result;
+    } catch (e) {
+      next = { error: e.message };
     }
-    state.diff = result;
-  } catch (e) {
-    state.diff = { error: e.message };
-  }
+    next.__for = requested;
+    // A slow response for a superseded selection must not clobber the
+    // current one — drop it and let the current selection's own fetch win.
+    if (JSON.stringify(diffSelection()) === key) state.diff = next;
+    if (diffInFlight?.key === key) diffInFlight = null;
+  })();
+  diffInFlight = { key, promise };
+  return promise;
 }
 
 export function activeDiffScopeMode() {
@@ -84,8 +136,8 @@ export async function refreshDiff() {
   // dispatches on state.packB directly, so nulling it here just forced
   // a redundant network round-trip AND silently broke the view nav's
   // "Compare/Atlas appear when B is loaded" rule on every diff refresh.
-  renderTabs();
-  renderMainView();
+  appHost.renderTabs();
+  appHost.renderMainView();
 }
 
 // ============================================================
@@ -94,13 +146,21 @@ export async function refreshDiff() {
 //
 // Compare shows raw deltas per layer. Useful for engineers reading the
 // diff first-hand, but it leaves the harder question — "what should I do
-// about this?" — to the reader. Traceability answers that by binning
-// every artefact across both packs into one of four buckets:
+// about this?" — to the reader. Traceability answers that by re-binning
+// the server diff's buckets (behavioural identity matching + contract
+// agreement — the same engine behind the Diagnose verdict) into four
+// actionable piles:
 //
-//   Aligned             both packs have it AND the shape matches
+//   Aligned             shared identity AND the behavioural contract agrees
 //   Declared, not verified   only in pack A (the manifest)
 //   Verified, not declared   only in pack B (live)
-//   Stale declaration   both packs have it but the shapes diverge
+//   Stale declaration   shared identity but the deployed contract diverges
+//
+// Live artefacts the diff parks as out-of-scope (families or services
+// Pack A never declares) are excluded here, and scaffold placeholders are
+// parked the same way the drift drill parks them — so these buckets
+// reconcile with the drill's UNLENSED totals. The drill additionally
+// applies the active product lens; this view deliberately does not.
 //
 // Convention: Pack A is treated as the manifest ("declared"), Pack B as
 // the live signal ("verified"). The unlock means either pack can be in
@@ -121,53 +181,37 @@ export async function refreshDiff() {
 
 const TRACE_LAYERS = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'];
 
-// Strip volatile fields before comparing two artefacts for shape equality.
-function stripVolatileArt(art) {
-  if (!art || typeof art !== 'object') return art;
-  // _sub is the L4 sub-group marker we added for flattening.
-  // annotations include MCP refresh timestamps and source tags that
-  // legitimately differ between repo and live.
-  const { _sub, annotations, ...rest } = art;
-  return rest;
-}
-
-function artefactsShapeEqual(a, b) {
-  try { return JSON.stringify(stripVolatileArt(a)) === JSON.stringify(stripVolatileArt(b)); }
-  catch (_) { return false; }
-}
-
-// Walk both packs and bin every artefact key into a bucket. The key is
-// `${layer}::${compareKeyOf(art)}` so the same id in two different
-// layers doesn't collide.
-function categorizeTrace(packA, packB) {
-  const buckets = { aligned: [], declaredNotVerified: [], verifiedNotDeclared: [], stale: [] };
+// Re-bin the server diff's buckets into the four traceability piles.
+// Identity pairing and aligned-vs-drifted both come from the behavioural
+// engine (identityKeyOf + deltasOf, server-side) — never re-derived here
+// with id or shape equality, which mis-binned renamed backends and
+// volatile-field differences. `key` is the entry's behavioural identity
+// key; findingKey namespaces it per layer for the suppress/resolve prefs.
+function categorizeTrace(diff) {
+  const buckets = { aligned: [], declaredNotVerified: [], verifiedNotDeclared: [], stale: [], scaffoldParked: 0 };
+  const tier = state.pack?.meta?.criticality || state.packB?.meta?.criticality || 'tier-3';
+  // Suppress/resolve prefs persist on findingKey. Collision entries carry
+  // order-dependent #NN ordinals (the diff's pairing order can reshuffle
+  // them between live redrafts), so those keys get the embedded artefact's
+  // own symbol appended — best-effort stability, not a guarantee.
+  const findingKeyFor = (L, e, art) =>
+    /#\d+$/.test(e.key) ? `${L}::${e.key}::${art?.defines || art?.id || ''}` : `${L}::${e.key}`;
   for (const L of TRACE_LAYERS) {
-    const aItems = layerItemsFor(packA, L);
-    const bItems = layerItemsFor(packB, L);
-    const aMap = new Map();
-    const bMap = new Map();
-    for (const it of aItems) {
-      const k = compareKeyOf(it);
-      if (k) aMap.set(k, it);
+    const bucket = diff?.layers?.[L];
+    if (!bucket) continue;
+    for (const e of bucket.inBoth || []) {
+      if (isScaffoldDiffEntry(e)) { buckets.scaffoldParked++; continue; }
+      const row = { layer: L, key: e.key, findingKey: findingKeyFor(L, e, e.a), a: e.a, b: e.b, deltas: e.deltas || [], tier };
+      if (e.match === 'drifted') buckets.stale.push(row);
+      else buckets.aligned.push(row);
     }
-    for (const it of bItems) {
-      const k = compareKeyOf(it);
-      if (k) bMap.set(k, it);
+    for (const e of bucket.onlyInA || []) {
+      if (isScaffoldDiffEntry(e)) { buckets.scaffoldParked++; continue; }
+      buckets.declaredNotVerified.push({ layer: L, key: e.key, findingKey: findingKeyFor(L, e, e.artefact), a: e.artefact, tier });
     }
-    const allKeys = new Set([...aMap.keys(), ...bMap.keys()]);
-    for (const k of allKeys) {
-      const a = aMap.get(k);
-      const b = bMap.get(k);
-      const findingKey = `${L}::${k}`;
-      const layerTier = packA?.meta?.criticality || packB?.meta?.criticality || 'tier-3';
-      if (a && b) {
-        if (artefactsShapeEqual(a, b)) buckets.aligned.push({ layer: L, key: k, findingKey, a, b, tier: layerTier });
-        else buckets.stale.push({ layer: L, key: k, findingKey, a, b, tier: layerTier });
-      } else if (a) {
-        buckets.declaredNotVerified.push({ layer: L, key: k, findingKey, a, tier: layerTier });
-      } else {
-        buckets.verifiedNotDeclared.push({ layer: L, key: k, findingKey, b, tier: layerTier });
-      }
+    for (const e of bucket.onlyInB || []) {
+      if (isScaffoldDiffEntry(e)) { buckets.scaffoldParked++; continue; }
+      buckets.verifiedNotDeclared.push({ layer: L, key: e.key, findingKey: findingKeyFor(L, e, e.artefact), b: e.artefact, tier });
     }
   }
   return buckets;
@@ -186,10 +230,10 @@ function traceFindingSeverity(bucket, finding) {
 }
 
 const BUCKET_META = {
-  aligned:             { label: 'Aligned',                blurb: 'Declared in repo AND shape matches in live. Nothing to do.' },
+  aligned:             { label: 'Aligned',                blurb: 'Same behavioural identity AND the deployed contract agrees. Nothing to do.' },
   declaredNotVerified: { label: 'Declared, not verified', blurb: 'In the repo manifest but absent from live. Stale spec, or live collection broken.' },
   verifiedNotDeclared: { label: 'Verified, not declared', blurb: 'Live signal exists with no entry in the repo. Drift or out-of-band telemetry.' },
-  stale:               { label: 'Stale declaration',      blurb: 'Both sides have it, but the live shape diverges from the declared shape. Reconcile.' },
+  stale:               { label: 'Stale declaration',      blurb: 'Same behavioural identity, but the deployed contract diverges from the declared one. Reconcile.' },
 };
 
 function ensureTracePrefs() {
@@ -234,7 +278,7 @@ export function renderTraceabilityView(host) {
   const requirementBlock = renderRequirementTraceabilityBlock(state.pack);
   if (requirementBlock) section.appendChild(requirementBlock);
 
-  if (!state.packB) {
+  if (!state.packB && !state.compareBId) {
     if (!requirementBlock) {
       section.innerHTML = '<div class="placeholder">No SLI/SLO requirements found in this pack.</div>';
     }
@@ -242,7 +286,56 @@ export function renderTraceabilityView(host) {
     return;
   }
 
-  const buckets = categorizeTrace(state.pack, state.packB);
+  // The buckets come from the server diff (behavioural matching). A Pack B
+  // pick normally loads it already, but guard the races: diff still in
+  // flight, stale for the current selection, or failed — never fall back
+  // to a client-side re-derivation.
+  const diffCurrent = !!state.diff && diffMatchesSelection(state.diff);
+  const haveDiff = diffCurrent && !state.diff.error && !!state.diff.layers;
+  if (!state.packB || !haveDiff) {
+    const notice = document.createElement('div');
+    if (diffCurrent && state.diff?.error) {
+      notice.className = 'error';
+      notice.textContent = `Diff failed: ${state.diff.error}`;
+      section.appendChild(notice);
+      host.appendChild(section);
+      return;
+    }
+    if (!state.selectedPackId) {
+      // Pack A never registered with the server (edge upload path) — the
+      // diff endpoint can't compare it, so fail honestly rather than
+      // re-entering this branch on every render.
+      notice.className = 'error';
+      notice.textContent = 'Traceability needs Pack A registered on the server — re-upload or rescan it, then retry.';
+      section.appendChild(notice);
+      host.appendChild(section);
+      return;
+    }
+    notice.className = 'placeholder loading-compare';
+    notice.innerHTML = `
+      <span class="compare-spinner" aria-hidden="true"></span>
+      <span>Comparing <strong>${escapeHtml(state.pack?.name || 'pack A')}</strong> against <strong>${escapeHtml(String(state.compareBId))}</strong>…</span>
+      <span class="loading-compare-sub">matching artefacts by behavioural identity — large packs take a few seconds</span>
+    `;
+    section.appendChild(notice);
+    host.appendChild(section);
+    Promise.all([
+      state.packB ? Promise.resolve() : appHost.loadPackB(),
+      haveDiff ? Promise.resolve() : loadDiff(),
+    ]).then(() => {
+      // Re-render only when the load actually progressed; re-entering this
+      // branch with nothing changed would spin a synchronous render loop.
+      if (state.packB && state.diff) { appHost.renderTabs(); appHost.renderMainView(); return; }
+      notice.classList.remove('loading-compare');
+      notice.textContent = 'Comparison failed to load — pick Pack B again or reload.';
+    }).catch((e) => {
+        notice.classList.remove('loading-compare');
+        notice.textContent = `Comparison failed to load: ${e?.message || 'unknown error'}`;
+      });
+    return;
+  }
+
+  const buckets = categorizeTrace(state.diff);
   const suppressedSet = new Set(state.tracePrefs.suppressed);
   const resolvedSet   = new Set(state.tracePrefs.resolved);
 
@@ -263,12 +356,17 @@ export function renderTraceabilityView(host) {
 
   const lede = document.createElement('div');
   lede.className = 'trace-lede';
+  const outOfScopeTotal = TRACE_LAYERS.reduce((n, L) => n + (state.diff.layers[L]?.outOfScope?.length || 0), 0);
   lede.innerHTML = `
     Pack A is treated as the manifest (<em>declared</em>) and Pack B as the live signal (<em>verified</em>).
-    Every artefact lands in one of four buckets; per-row actions persist locally so suppressions and
-    resolutions survive a refresh.
+    Artefacts are paired by <em>behavioural identity</em> (what they do, not what they're named) and land in
+    one of four buckets; per-row actions persist locally so suppressions and resolutions survive a refresh.
+    Dashboard panels are compared at dashboard granularity, not listed individually.
+    ${outOfScopeTotal ? `${outOfScopeTotal} live artefact${outOfScopeTotal === 1 ? '' : 's'} outside this pack's scope ${outOfScopeTotal === 1 ? 'is' : 'are'} parked by the live-scope setting below.` : ''}
+    ${buckets.scaffoldParked ? `${buckets.scaffoldParked} scaffold placeholder${buckets.scaffoldParked === 1 ? '' : 's'} (crawler stubs, not deployed contract) ${buckets.scaffoldParked === 1 ? 'is' : 'are'} parked, matching the drift drill.` : ''}
   `;
   section.appendChild(lede);
+  section.appendChild(renderLiveScopeControl({ standalone: true }));
 
   // Headline cards — one per bucket. Click to scroll to its section.
   const headlineGrid = document.createElement('div');
@@ -291,7 +389,7 @@ export function renderTraceabilityView(host) {
     card.onclick = () => {
       if (!state.traceOpen) state.traceOpen = {};
       state.traceOpen[key] = !state.traceOpen[key];
-      renderMainView();
+      appHost.renderMainView();
     };
     headlineGrid.appendChild(card);
   }
@@ -432,7 +530,7 @@ function renderRequirementChain(chain) {
   lanes.appendChild(renderRtLane('exporter', chain.exporters?.map(e => e.title || e.id), 'missing'));
   lanes.appendChild(renderRtLane('scrape', scrapeTraceLabels(chain.scrapeJobs), 'missing'));
   lanes.appendChild(renderRtLane('dashboard', dashboardTraceLabels(chain.dashboards), 'missing'));
-  lanes.appendChild(renderRtLane('alert', chain.alerts?.map(a => a.name), 'missing'));
+  lanes.appendChild(renderRtLane('alert', chain.alerts?.map(a => alertTraceLabel(a)), 'missing'));
   row.appendChild(lanes);
 
   if (chain.gaps?.length || chain.notes?.length) {
@@ -491,6 +589,13 @@ function metricTraceLabel(metric) {
   return `${metric.name}${metric.verified === false ? ' (unverified)' : ''}`;
 }
 
+// A live alerting rule the ruler reports unhealthy is listed (it exists)
+// but flagged: it is not alert evidence and does not close the gap.
+function alertTraceLabel(alert) {
+  if (!alert) return '';
+  return `${alert.name}${alert.verified === false ? ' (unhealthy)' : ''}`;
+}
+
 function scrapeTraceLabels(scrape) {
   if (!scrape) return [];
   if (Array.isArray(scrape.items) && scrape.items.length) return scrape.items.map(j => j.name);
@@ -518,8 +623,12 @@ function renderTraceRow(bucketKey, finding, resolvedSet) {
   // Side primary — for declaredNotVerified use A, for verifiedNotDeclared use B,
   // for stale + aligned use A (it's the manifest).
   const primary = (bucketKey === 'verifiedNotDeclared') ? finding.b : finding.a;
-  const title = primary?.title || primary?.id || primary?.defines || finding.key;
-  const sub   = primary?.desc || primary?.tool || '';
+  const title = primary?.title || primary?.id || primary?.defines || prettyDiffKey(finding.key);
+  // For stale rows the engine already names the diverging contract fields —
+  // surface them so "reconcile" starts from the actual deltas.
+  const driftFields = (finding.deltas || []).map(d => d.field).filter(Boolean);
+  const sub = [primary?.desc || primary?.tool || '', driftFields.length ? `drift: ${driftFields.join(', ')}` : '']
+    .filter(Boolean).join(' · ');
 
   row.innerHTML = `
     <div class="trace-row-pill">
@@ -529,7 +638,7 @@ function renderTraceRow(bucketKey, finding, resolvedSet) {
     <div class="trace-row-body">
       <div class="trace-row-title">${escapeHtml(String(title || finding.key))}</div>
       <div class="trace-row-sub">${escapeHtml(sub)}</div>
-      <div class="trace-row-key"><code>${escapeHtml(finding.findingKey)}</code></div>
+      <div class="trace-row-key"><code>${escapeHtml(`${finding.layer} · ${prettyDiffKey(finding.key)}`)}</code></div>
     </div>
     <div class="trace-row-actions">
       <button type="button" class="trace-action" data-act="open" title="Open the artefact drawer on the Layers view">open</button>
@@ -542,20 +651,23 @@ function renderTraceRow(bucketKey, finding, resolvedSet) {
     state.view = 'layers';
     state.layerFilter = finding.layer === 'L4' ? 'L4' : finding.layer;
     state.activeLayer = finding.layer;
-    state.activeCardKey = finding.key;
-    renderTabs();
-    renderMainView();
-    // Open the drawer for the artefact if we can find it.
+    // The diff entry embeds the artefact it paired — locate the loaded
+    // pack's copy by id (falling back to the embedded copy) so the drawer
+    // opens regardless of which keyspace the diff entry's key lives in.
+    const embedded = (bucketKey === 'verifiedNotDeclared') ? finding.b : finding.a;
     const pack = (bucketKey === 'verifiedNotDeclared') ? state.packB : state.pack;
     const items = layerItemsFor(pack, finding.layer);
-    const art = items.find(it => compareKeyOf(it) === finding.key);
+    const art = items.find(it => it.id === embedded?.id) || embedded;
+    state.activeCardKey = art ? cardKey(finding.layer, art._sub || null, art.id) : null;
+    appHost.renderTabs();
+    appHost.renderMainView();
     if (art) {
       const layerDef = LAYER_DEFS.find(d => d.id === finding.layer) || { id: finding.layer };
-      try { openDrawer(art, layerDef, null); } catch (_) {}
+      try { openDrawer(art, layerDef, art._sub || null); } catch (_) {}
     }
   };
-  row.querySelector('[data-act="resolve"]').onclick = () => { toggleTraceResolved(finding.findingKey); renderMainView(); };
-  row.querySelector('[data-act="suppress"]').onclick = () => { toggleTraceSuppressed(finding.findingKey); renderMainView(); };
+  row.querySelector('[data-act="resolve"]').onclick = () => { toggleTraceResolved(finding.findingKey); appHost.renderMainView(); };
+  row.querySelector('[data-act="suppress"]').onclick = () => { toggleTraceSuppressed(finding.findingKey); appHost.renderMainView(); };
   return row;
 }
 
@@ -564,8 +676,9 @@ function renderTraceRow(bucketKey, finding, resolvedSet) {
 //
 // A focused destination — answers "how does PACK A's posture for
 // <product> compare to PACK B as the reference?" Built on the same
-// machinery as Compare (productSurface lens + buildCompareKeySets)
-// but framed as a scorecard rather than a free-form side-by-side.
+// machinery as Compare (productSurface lens + the server diff's
+// behavioural buckets) but framed as a scorecard rather than a
+// free-form side-by-side.
 //
 //   ┌─────────────────────────────────────────────────────────────┐
 //   │  BENCHMARK: krystaline-live  vs  grafana-reference          │
@@ -616,7 +729,7 @@ function renderDiagnoseSubnav(active) {
     btn.addEventListener('click', () => {
       if (state.diagnoseSub === t.id) return;
       state.diagnoseSub = t.id;
-      renderMainView();
+      appHost.renderMainView();
     });
     nav.appendChild(btn);
   }
@@ -646,17 +759,50 @@ export function renderBenchmarkView(view) {
 
   // If the user picked a Pack B but it (or the diff) hasn't loaded yet,
   // fetch them and re-render so the comparison enriches the verdict.
-  if (state.compareBId && (!haveB || (!state.diff && !state.diff?.error))) {
+  // The diff over big packs takes real seconds — show motion so it reads
+  // as "working", not "hung". And NEVER hang on failure: a rejected fetch
+  // renders an honest error with a retry instead of an eternal spinner.
+  // A diff computed for a different selection (pack A swapped, env
+  // flipped, scope changed) must count as missing, not render — see
+  // diffMatchesSelection. When Pack A has no server id the diff can never
+  // load, so skip the fetch branch and render the Pack-A-only verdict.
+  const diffCurrent = !!state.diff && diffMatchesSelection(state.diff);
+  if (state.compareBId && state.selectedPackId && (!haveB || !diffCurrent)) {
     const loading = document.createElement('div');
-    loading.className = 'placeholder';
-    loading.textContent = 'Loading comparison pack…';
+    loading.className = 'placeholder loading-compare';
+    loading.innerHTML = `
+      <span class="compare-spinner" aria-hidden="true"></span>
+      <span>Comparing <strong>${escapeHtml(state.pack?.name || 'pack A')}</strong> against <strong>${escapeHtml(String(state.compareBId))}</strong>…</span>
+      <span class="loading-compare-sub">matching artefacts by behavioural identity — large packs take a few seconds</span>
+    `;
     scaffold.appendChild(loading);
     Promise.all([
-      haveB ? Promise.resolve() : loadPackB(),
-      (state.diff && !state.diff.error) ? Promise.resolve() : loadDiff(),
-    ]).then(() => { renderTabs(); renderMainView(); });
+      haveB ? Promise.resolve() : appHost.loadPackB(),
+      diffCurrent ? Promise.resolve() : loadDiff(),
+    ]).then(() => {
+      // Only re-render on progress — re-entering this branch unchanged
+      // would spin a synchronous render loop.
+      if (state.packB && state.diff) { appHost.renderTabs(); appHost.renderMainView(); return; }
+      loading.classList.remove('loading-compare');
+      loading.innerHTML = `
+        <span>Comparison failed to load.</span>
+        <button type="button" class="ctrl-btn loading-compare-retry">retry</button>
+      `;
+      loading.querySelector('.loading-compare-retry')?.addEventListener('click', () => appHost.renderMainView());
+    })
+      .catch((e) => {
+        loading.classList.remove('loading-compare');
+        loading.innerHTML = `
+          <span>Comparison failed to load: ${escapeHtml(e?.message || 'unknown error')}</span>
+          <button type="button" class="ctrl-btn loading-compare-retry">retry</button>
+        `;
+        loading.querySelector('.loading-compare-retry')?.addEventListener('click', () => appHost.renderMainView());
+      });
     return;
   }
+  // Past the gate: the diff is either current or unavailable for this
+  // selection — never hand a stale one to the grade or the drill.
+  const diffSafe = diffCurrent ? state.diff : null;
 
   // Auto-apply the lens when Pack B is a *-reference catalogue pack.
   // Picking grafana-reference IS choosing the Grafana benchmark; no
@@ -679,7 +825,7 @@ export function renderBenchmarkView(view) {
 
   // THE verdict — diagnostic-grade YES/NO from coverage (2A) + trust /
   // drift (2B), Pack A alone. Always leads the view.
-  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, state.diff);
+  const diagnostic = computeDiagnosticGrade(state.pack, state.packB, posture, state.compareBId, diffSafe);
   const verdict = renderDiagnosticGradeVerdict(diagnostic, lens, state.packB);
   scaffold.appendChild(verdict);
 
@@ -701,7 +847,7 @@ export function renderBenchmarkView(view) {
   } else {
     // Pack B present — render the true side-by-side A-vs-B drill (drift
     // cells / gap deltas) as the lead evidence beneath the verdict.
-    placeCompareBand(renderDriftDrill(state.diff, state.packB, state.compareBId, lens));
+    placeCompareBand(renderDriftDrill(diffSafe, state.packB, state.compareBId, lens));
     placeCompareBand(renderLiveScopeControl({ standalone: true }));
   }
 
@@ -776,6 +922,8 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
       ...rawOnlyInA.filter(e => isScaffoldDiffEntry(e)),
       ...rawOnlyInB.filter(e => isScaffoldDiffEntry(e)),
       ...bucket.inBoth.filter(e => passesLens(e, 'a') && isScaffoldDiffEntry(e)),
+      // The engine parks placeholders before pairing (diffPacks `scaffold`).
+      ...(bucket.scaffold || []).filter(e => passesLens(e, e.side || 'b')),
     ];
     // Live members of a family this pack declares nothing of — the rest of the
     // platform inventory. Shown muted, never counted as drift.
@@ -925,11 +1073,24 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
     ? ` <span class="drift-lens-note">· lens: ${escapeHtml(LENS_PRODUCTS.find(lp => lp.slug === lens)?.label || lens)}</span>`
     : '';
 
+  // A thin live draft (some probes 503'd) silently inflates declared-not-
+  // live into garbage. Say so LOUDLY before anyone reads the numbers.
+  const liveEvidence = partialLiveEvidence(packB);
+  const partialBanner = liveEvidence.partial ? `
+    <div class="drift-partial-banner">
+      <span class="drift-partial-key">⚠ PARTIAL LIVE EVIDENCE</span>
+      ${liveEvidence.failed.length} of ${liveEvidence.attempted.length} probe${liveEvidence.failed.length === 1 ? '' : 's'} failed during the live draft
+      (<code>${escapeHtml(liveEvidence.failed.join(', '))}</code>) — the live endpoint was likely mid-deploy or overloaded.
+      Pack B may be missing whole surfaces, so <strong>"${escapeHtml(frame.aLabel)}" is probably overstated</strong>.
+      Redraft from MCP before acting on this drift.${(liveEvidence.unsupported || []).length ? ` restricted MCP tier — not exposed: ${escapeHtml(liveEvidence.unsupported.join(', '))}` : ''}
+    </div>` : '';
+
   wrap.innerHTML = `
     <div class="benchmark-block-head">
       <span class="benchmark-block-eyebrow">${frame.eyebrow}</span>
       ${frame.lede}${lensNote}
     </div>
+    ${partialBanner}
     <div class="drift-charts">
       <figure class="drift-chart">
         ${donut([{ value: totAligned, color: C_ALIGNED }, { value: weighted.totalBadness, color: 'var(--ink-4)' }], weighted.healthPct + '%')}
@@ -960,9 +1121,98 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
       <tbody>${layerRowsHtml}</tbody>
     </table>
     ${totScaffold ? `<p class="drift-oos-note">${totScaffold} schema-required scaffold artefact${totScaffold === 1 ? '' : 's'} had no source evidence in the selected environment. Shown in the pack, excluded from drift badness.</p>` : ''}
-    ${totOOS ? `<p class="drift-oos-note">${totOOS} live artefact${totOOS === 1 ? '' : 's'} out of declared scope — members of families <strong>${escapeHtml(bName)}</strong> runs but your pack doesn't declare (the rest of the platform inventory). Shown for context, not counted as drift.</p>` : ''}
+    ${totOOS ? `<p class="drift-oos-note">${totOOS} live artefact${totOOS === 1 ? '' : 's'} out of declared scope — members of families <strong>${escapeHtml(bName)}</strong> runs but your pack doesn't declare (the rest of the platform inventory). Shown for context, not counted as drift.
+      <button type="button" class="ctrl-link drift-oos-widen" title="Switch the live scope to 'All live' so the parked inventory is classified instead of parked">show them — widen scope</button></p>` : ''}
   `;
+  // Parked ≠ ignored: one click reclassifies the out-of-scope inventory.
+  wrap.querySelector('.drift-oos-widen')?.addEventListener('click', () => {
+    state.diffScopeMode = 'all';
+    state.diff = null;
+    refreshDiff();
+  });
+
+  // ---------- bidirectional remediation actions (item 4) ----------
+  // The two arrows, right where the gaps are diagnosed. Forward (drift mode
+  // only): compile + deploy the declared-not-live set — preset → deploy
+  // modal. Reverse (both modes): adopt the onlyInB entries back into the
+  // declared pack — live shadow signals in drift mode, the target's
+  // declarations in gap/benchmark mode. In gap mode onlyInA means "beyond
+  // target", so there is nothing to push.
+  if (totA > 0 || totB > 0) {
+    const actions = document.createElement('div');
+    actions.className = 'drift-actions';
+    const onlyInAArts = rows.flatMap(r => r.onlyInA.map(e => e.artefact).filter(Boolean));
+    const deployable = mode === 'drift'
+      ? deploySelectionFromEntries(onlyInAArts.map(a => deploySurfaceForArtefact(a)))
+      : { identities: new Set(), rows: 0 };
+    const rfLabel = mode === 'drift'
+      ? `⤵ Retrofeed ${totB} shadow signal${totB === 1 ? '' : 's'} to the pack`
+      : `⤵ Adopt ${totB} declaration${totB === 1 ? '' : 's'} from ${escapeHtml(bName)}`;
+    actions.innerHTML = `
+      ${mode === 'drift' && totA > 0 && deployable.identities.size ? `
+        <button type="button" class="ctrl-btn" id="drift-deploy-missing"
+          title="Open the deploy modal preselected with the deployable declared-not-live artefacts (${deployable.rows} rule/dashboard row${deployable.rows === 1 ? '' : 's'})">
+          ⇪ Deploy the missing set (${deployable.identities.size})</button>` : ''}
+      ${totB > 0 ? `
+        <button type="button" class="ctrl-btn" id="drift-retrofeed"
+          title="Adopt the ${mode === 'drift' ? 'live-not-declared shadow signals' : 'target pack’s missing declarations'} into your pack — download the additions and the updated pack for a repo PR">
+          ${rfLabel}</button>` : ''}
+      <div class="drift-retrofeed-result" hidden></div>
+    `;
+    wrap.appendChild(actions);
+    actions.querySelector('#drift-deploy-missing')?.addEventListener('click', () => {
+      appHost.openDeployModal({ packId: state.selectedPackId, presetIdentities: deployable.identities });
+    });
+    actions.querySelector('#drift-retrofeed')?.addEventListener('click', (ev) =>
+      runRetrofeed(ev.currentTarget, actions.querySelector('.drift-retrofeed-result')));
+  }
   return wrap;
+}
+
+// Call the retrofeed endpoint for the current A/B pair and render the
+// outcome: what was adopted, what was skipped (with reasons), and the two
+// downloads — the additions fragment and the full updated pack — ready to
+// commit back to the service repo.
+export async function runRetrofeed(btn, host, { keys, scopeMode } = {}) {
+  btn.disabled = true;
+  try {
+    const r = await api(`/api/packs/${encodeURIComponent(state.selectedPackId)}/retrofeed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        packBId: state.compareBId,
+        aEnv: state.selectedEnv || undefined,
+        bEnv: state.compareBEnv || undefined,
+        // Branch-scoped calls pass explicit keys — the keys ARE the scope,
+        // so the diff runs unscoped lest scope-mode park them out of reach.
+        scopeMode: scopeMode || activeDiffScopeMode(),
+        service: state.selectedService || undefined,
+        keys: Array.isArray(keys) && keys.length ? keys : undefined,
+      }),
+    });
+    const dl = (label, text, filename) => {
+      const url = URL.createObjectURL(new Blob([text], { type: 'application/x-yaml' }));
+      return `<a class="ctrl-btn ctrl-link" href="${url}" download="${escapeHtml(filename)}">${escapeHtml(label)}</a>`;
+    };
+    const slug = (state.pack?.meta?.name || state.selectedPackId || 'pack').replace(/[^a-z0-9-]+/gi, '-');
+    host.innerHTML = `
+      <p class="drift-retrofeed-head">Adopted <strong>${r.summary.adopted}</strong> of ${r.summary.candidates} shadow signal${r.summary.candidates === 1 ? '' : 's'}${r.summary.skipped ? ` · ${r.summary.skipped} skipped` : ''}</p>
+      ${r.adopted.length ? `<ul class="drift-retrofeed-list">${r.adopted.map(a => `<li>＋ <code>${escapeHtml(a.kind)}</code> ${escapeHtml(String(a.id ?? ''))}</li>`).join('')}</ul>` : ''}
+      ${r.skipped.length ? `<details class="drift-retrofeed-skips"><summary>${r.skipped.length} skipped — why</summary><ul>${r.skipped.map(s => `<li><code>${escapeHtml(s.kind || '?')}</code> — ${escapeHtml(s.reason)}</li>`).join('')}</ul></details>` : ''}
+      ${r.adopted.length ? `<p class="drift-retrofeed-dl">
+          ${dl('⬇ additions fragment', r.fragmentYaml, `${slug}.retrofeed-fragment.yaml`)}
+          ${dl('⬇ updated pack', r.updatedPackYaml, `${slug}.pack.yaml`)}
+          <span class="drift-retrofeed-note">commit the updated pack to the service repo (it carries observogram.retrofeed.* provenance), then re-scan to confirm the gap closed</span>
+        </p>` : ''}
+    `;
+    host.hidden = false;
+    toast(r.summary.adopted ? `Retrofeed: ${r.summary.adopted} shadow signal(s) adopted` : 'Nothing adoptable — see the skip reasons', r.summary.adopted ? '' : 'error');
+  } catch (e) {
+    host.innerHTML = `<p class="drift-retrofeed-head is-error">Retrofeed failed: ${escapeHtml(e.message)}</p>`;
+    host.hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ============================================================
@@ -995,7 +1245,7 @@ const POSTURE_MECHANISMS_GLOBAL = [
 // classifyArtefactLayer / classifyArtefactMechanism / computePostureMatrix
 // now live in studio/diagnostic-grade.mjs (imported above).
 
-function renderPostureMatrix(posture) {
+export function renderPostureMatrix(posture) {
   const wrap = document.createElement('div');
   wrap.className = 'benchmark-block posture-matrix-block';
   const cellVal = (layer, mech) => {
@@ -1059,7 +1309,7 @@ function renderPostureMatrix(posture) {
   return wrap;
 }
 
-function renderPostureNarrative(posture) {
+export function renderPostureNarrative(posture) {
   // Template-driven (no LLM). For each layer, count how many of the
   // 10 layer-specific mechanisms are present (declared OR evidence),
   // then map to a sentence.
@@ -1148,33 +1398,38 @@ function renderPostureNarrative(posture) {
 // ============================================================
 // Diagnostic-grade verdict — the CEO question, made answerable.
 //
-// "Is our observability diagnostic-grade?" answered as eight pass/fail
-// criteria split into two equally-weighted halves:
+// "Is our observability diagnostic-grade?" answered as seven scored
+// pass/fail criteria (grade schema 2) plus one informational row:
 //
 //   2A — COVERAGE (vs Observability Contract)
 //        "Are we observing the right signals?"
-//        Five criteria evaluated on Pack A against Pack B (the
+//        Four criteria evaluated on Pack A against Pack B (the
 //        contract / "what good looks like"):
 //          1. Multi-modal    — metrics + logs + traces flowing
 //          2. Correlated     — tracecontext + log_correlation
 //          3. Calibrated     — baselines + SLOs w/ numeric objectives
 //          4. Comprehensive  — posture matrix ≥ 50% across layers
-//          5. Actionable     — remediation runbooks declared
 //
 //   2B — TRUST (signal integrity)
 //        "Can we trust what the signals show?"
 //        Three criteria evaluated on Pack A's live evidence:
-//          6. Chaos-validated — chaos experiments declared
-//          7. Drift-free      — declared artefacts match live state
+//          5. Chaos-validated — chaos experiments declared
+//          6. Drift-free      — declared artefacts match live state
 //                               (MCP probe success / total ratio)
-//          8. Fresh           — mcp.refreshedAt within staleness window
+//          7. Fresh           — mcp.refreshedAt within staleness window
 //
-// Overall score (out of 8) → verdict word. Most criteria are binary;
+//   2C — OPERABILITY (informational, never scored)
+//        Actionable — remediation runbooks declared. Response readiness
+//        of the overall solution, not diagnostic capability; reclassified
+//        out of the scored grade 2026-06-10 (maintainer-ratified).
+//
+// Overall score (out of 7) → verdict word. Most criteria are binary;
 // drift-free contributes fractional credit equal to weighted fidelity.
-//   >85% → Diagnostic-grade
-//   >=5 → Almost diagnostic-grade
-//   >=3 → Not yet diagnostic-grade
-//   <3  → Far from diagnostic-grade
+// Verdict bands are percentages so they survive schema changes:
+//   >85%   → Diagnostic-grade (same bar as the audit PASS stamp)
+//   >=62.5% → Almost diagnostic-grade
+//   >=37.5% → Not yet diagnostic-grade
+//   below  → Far from diagnostic-grade
 // ============================================================
 
 // Diagnose view — rendered as a compliance report, not a pitch deck.
@@ -1187,6 +1442,7 @@ function renderDiagnosticGradeVerdict(diagnostic, lens, packB) {
 
   const cov = diagnostic.coverage;
   const trust = diagnostic.trust;
+  const operability = diagnostic.operability || { criteria: [], informational: true, note: '' };
   const overall = diagnostic.overall;
 
   const pct = (passed, total) => total === 0 ? 0 : Math.round((passed / total) * 100);
@@ -1199,11 +1455,13 @@ function renderDiagnosticGradeVerdict(diagnostic, lens, packB) {
   const trustPct = pct(trust.passed, trust.total);
   const chainBlock = renderDiagnosticTraceabilityGraph(diagnostic.traceabilityGraph);
 
-  // Single binary verdict in audit terms: PASS when the score is >85%.
-  // Individual failed criteria still render below as evidence and gaps.
+  // The audit (PASS when score >85%) stays the machine contract — journey
+  // gates and run records key off it. What USERS see is the instrument
+  // grade: the metrology-style letter the score lands on. The two can
+  // never disagree: A begins strictly above the audit bar.
   const audit = overall.audit || diagnosticAuditStatus(overall.passed, overall.total);
   const passes = audit.passes;
-  const status = audit.status;
+  const ig = overall.instrumentGrade || instrumentGradeFor(audit.scorePctExact);
 
   // Compact mono row builder for the summary block.
   const summaryRow = (label, value, hint, state) => `
@@ -1250,7 +1508,9 @@ function renderDiagnosticGradeVerdict(diagnostic, lens, packB) {
   // For an audit tool this is the most important section, not the least.
   const evidenceRows = [];
   // Collect from criteria themselves — each criterion encodes an evidence assertion.
-  const C = (key, label) => cov.criteria.find(c => c.key === key) || trust.criteria.find(c => c.key === key);
+  const C = (key, label) => cov.criteria.find(c => c.key === key)
+    || trust.criteria.find(c => c.key === key)
+    || operability.criteria.find(c => c.key === key);
   const rowFor = (field, exp, obs, pass, score) => ({
     field, exp, obs, pass, score,
   });
@@ -1274,11 +1534,11 @@ function renderDiagnosticGradeVerdict(diagnostic, lens, packB) {
     'average ≥ 50% observed',
     C('comprehensive')?.detail || '—',
     C('comprehensive')?.pass));
-  evidenceRows.push(rowFor(
+  evidenceRows.push({ ...rowFor(
     'spec.remediation[]',
-    '≥ 1 remediation runbook declared',
+    '≥ 1 remediation runbook declared (informational — not scored)',
     C('actionable')?.detail || '—',
-    C('actionable')?.pass));
+    C('actionable')?.pass), informational: true });
   evidenceRows.push(rowFor(
     'spec.validation.chaos_experiments[]',
     '≥ 1 chaos experiment declared',
@@ -1308,34 +1568,68 @@ function renderDiagnosticGradeVerdict(diagnostic, lens, packB) {
       </thead>
       <tbody>
         ${evidenceRows.map(r => `
-          <tr class="${criterionState(r)}">
+          <tr class="${r.informational ? 'is-info' : criterionState(r)}">
             <td class="e-field">${escapeHtml(r.field)}</td>
             <td class="e-exp">${escapeHtml(r.exp)}</td>
             <td class="e-obs">${escapeHtml(r.obs)}</td>
-            <td class="e-status">${criterionStatus(r)}</td>
+            <td class="e-status">${r.informational ? (r.pass ? 'YES · INFO' : 'NO · INFO') : criterionStatus(r)}</td>
           </tr>
         `).join('')}
       </tbody>
     </table>
   `;
 
+  // The instrument-grade ladder: every rung rendered top (best) → bottom,
+  // the rung the score lands on highlighted. The grade is NEVER shown
+  // naked — the header chip carries letter + class, the rung labels carry
+  // the metrology vocabulary, and the ladder note explains what the scale
+  // derives from. (These narrative pieces are maintainer-ratified —
+  // 2026-06-11: "grades cannot be put into context without some
+  // narrative". Do not strip them to de-duplicate.)
+  const ladderHtml = `
+    <ul class="grade-ladder">
+      ${INSTRUMENT_GRADE_SCALE.map(g => {
+        const current = g.letter === ig.letter;
+        const unreachable = g.minPct === null;
+        const tip = g.blurb + (unreachable ? ` Requires ${g.requires}.` : '') + (current ? ` ← this pack: ${overallPct}%.` : '');
+        return `
+        <li class="grade-rung tier-${g.tier} ${current ? 'is-current' : ''} ${unreachable ? 'is-unreachable' : ''}" title="${escapeHtml(tip)}">
+          <span class="grade-rung-letter">${escapeHtml(g.letter)}</span>
+          <span class="grade-rung-label">${escapeHtml(g.label)}</span>
+          <span class="grade-rung-range">${escapeHtml(g.range)}</span>
+        </li>`;
+      }).join('')}
+    </ul>
+    <p class="grade-ladder-note">Grades derive from the verification score — A starts strictly above the ${audit.threshold}% audit bar, so the letter and the machine PASS/FAIL always agree. Verification evidence, not incident-validation. A++ needs external reference evidence this instrument cannot produce alone.</p>
+  `;
+
   wrap.innerHTML = `
     <header class="diag-report-head">
-      <div class="diag-report-head-line">
-        <span class="diag-report-eyebrow">DIAGNOSTIC GRADE</span>
-        <span class="diag-report-status diag-${passes ? 'pass' : 'fail'}">${status}</span>
+      <div class="diag-head-main">
+        <div class="diag-report-head-line">
+          <span class="diag-report-eyebrow">DIAGNOSTIC GRADE</span>
+          <span class="diag-report-status grade-chip tier-${escapeHtml(ig.tier)}" title="${escapeHtml(ig.blurb || '')}">${escapeHtml(ig.letter)} · ${escapeHtml(ig.label)}</span>
+        </div>
+        <p class="diag-grade-blurb">${escapeHtml(ig.blurb || '')} Diagnostic-grade (A) begins above ${audit.threshold}%${passes ? '' : ` — this pack is ${(audit.threshold - audit.scorePctExact).toFixed(1)} pp below the bar`}.</p>
+        <table class="diag-summary">
+          <colgroup><col><col><col></colgroup>
+          <tbody>
+            ${summaryRow('Score',    `<span class="diag-pct">${overallPct}%</span> <span class="diag-frac">${fmtScore(overall.passed)}/${overall.total}</span>`, bar(overallPct))}
+            ${summaryRow('Coverage', `<span class="diag-pct">${covPct}%</span> <span class="diag-frac">${fmtScore(cov.passed)}/${cov.total}</span>`,       bar(covPct))}
+            ${summaryRow('Trust',    `<span class="diag-pct">${trustPct}%</span> <span class="diag-frac">${fmtScore(trust.passed)}/${trust.total}</span>`, bar(trustPct))}
+            ${summaryRow('Audit',    `<span class="${passes ? 'diag-yes' : 'diag-no'}">${audit.status}</span>`, `gate contract: PASS above ${audit.threshold}% (A and better)`)}
+            ${summaryRow('Verified', trust.hasMcpSource ? '<span class="diag-yes">YES</span>' : '<span class="diag-no">NO</span>',
+                         trust.hasMcpSource ? 'live signal present' : 'connect MCP or scan live to verify',
+                         trust.hasMcpSource ? '' : 'is-warn')}
+          </tbody>
+        </table>
       </div>
-      <table class="diag-summary">
-        <colgroup><col><col><col></colgroup>
-        <tbody>
-          ${summaryRow('Score',    `<span class="diag-pct">${overallPct}%</span> <span class="diag-frac">${fmtScore(overall.passed)}/${overall.total}</span>`, bar(overallPct))}
-          ${summaryRow('Coverage', `<span class="diag-pct">${covPct}%</span> <span class="diag-frac">${fmtScore(cov.passed)}/${cov.total}</span>`,       bar(covPct))}
-          ${summaryRow('Trust',    `<span class="diag-pct">${trustPct}%</span> <span class="diag-frac">${fmtScore(trust.passed)}/${trust.total}</span>`, bar(trustPct))}
-          ${summaryRow('Verified', trust.hasMcpSource ? '<span class="diag-yes">YES</span>' : '<span class="diag-no">NO</span>',
-                       trust.hasMcpSource ? 'live signal present' : 'connect MCP or scan live to verify',
-                       trust.hasMcpSource ? '' : 'is-warn')}
-        </tbody>
-      </table>
+      <!-- The scale sits BESIDE the summary, inside the header block —
+           other bands (drift drill, posture) are inserted directly after
+           the header, so anything below it gets pushed off-screen. -->
+      <aside class="diag-grade-scale">
+        ${ladderHtml}
+      </aside>
     </header>
 
     <section class="diag-section">
@@ -1362,13 +1656,26 @@ function renderDiagnosticGradeVerdict(diagnostic, lens, packB) {
       ${critTable(trust.criteria)}
     </section>
 
+    <section class="diag-section diag-section-info">
+      <header class="diag-section-head">
+        <span class="diag-section-num">2C</span>
+        <span class="diag-section-title">Operability — can oncall act on what it sees?</span>
+        <span class="diag-section-meta">informational · not scored</span>
+      </header>
+      <div class="diag-banner">
+        <span class="diag-banner-key">INFO</span>
+        ${escapeHtml(operability.note || 'response readiness, not diagnostic capability — observed, displayed, never scored')}
+      </div>
+      ${critTable(operability.criteria)}
+    </section>
+
     ${chainBlock}
 
     <section class="diag-section">
       <header class="diag-section-head">
         <span class="diag-section-num">⊜</span>
         <span class="diag-section-title">Evidence — expected vs observed</span>
-        <span class="diag-section-meta">${fmtScore(evidenceRows.reduce((n, r) => n + criterionScore(r), 0))}/${evidenceRows.length} evidence score</span>
+        <span class="diag-section-meta">${fmtScore(evidenceRows.filter(r => !r.informational).reduce((n, r) => n + criterionScore(r), 0))}/${evidenceRows.filter(r => !r.informational).length} evidence score · +${evidenceRows.filter(r => r.informational).length} informational</span>
       </header>
       ${evidenceTable}
     </section>
@@ -1376,7 +1683,58 @@ function renderDiagnosticGradeVerdict(diagnostic, lens, packB) {
   return wrap;
 }
 
-function renderDiagnosticTraceabilityGraph(graph) {
+// ---------- requirement-branch reconciliation (item 6) ----------
+
+// Branches rendered in the current chain block, keyed by a per-render ref.
+// The block is a static HTML string inside the grade view, so its buttons
+// resolve their branch through this index via one delegated listener.
+const chainBranchIndex = new Map();
+let chainActionsWired = false;
+
+// Families the retrofeed engine can re-declare (mirrors
+// tools/lib/retrofeed.mjs FAMILIES). Branch adopt buttons only count these
+// — offering panels/metrics would honestly skip, but offering nothing
+// adoptable at all is just noise.
+const ADOPTABLE_KINDS = new Set(['sli', 'slo', 'backend', 'recording_rule', 'derived_view', 'dashboard', 'alert_route', 'burn_rate']);
+const adoptableLiveOnly = (branch) =>
+  (branch.nodes || []).filter(n => n.status === 'live_only' && !n.virtual && ADOPTABLE_KINDS.has(n.kind));
+
+// Find a layered artefact by its positional id (SLO-03, QRY-07, DASH-01 …)
+// across every layer, including L4's keyed subgroups.
+function layeredArtefactById(pack, id) {
+  if (!id || !pack?.layers) return null;
+  for (const v of Object.values(pack.layers)) {
+    const arr = Array.isArray(v) ? v : Object.values(v || {}).flat();
+    const hit = arr.find(a => a?.id === id);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function wireChainActions() {
+  if (chainActionsWired) return;
+  chainActionsWired = true;
+  document.addEventListener('click', (ev) => {
+    const deployBtn = ev.target.closest?.('.diag-chain-deploy');
+    const adoptBtn = ev.target.closest?.('.diag-chain-adopt');
+    if (!deployBtn && !adoptBtn) return;
+    const btn = deployBtn || adoptBtn;
+    const branch = chainBranchIndex.get(btn.dataset.branch);
+    if (!branch) return;
+    if (deployBtn) {
+      const declaredOnly = (branch.nodes || []).filter(n => n.status === 'declared_only' && !n.virtual);
+      const deployable = deploySelectionFromEntries(
+        declaredOnly.map(n => deploySurfaceForArtefact(layeredArtefactById(state.pack, n.aId))));
+      appHost.openDeployModal({ packId: state.selectedPackId, presetIdentities: deployable.identities });
+    } else {
+      const keys = adoptableLiveOnly(branch).map(n => n.key);
+      const host = btn.closest('.diag-chain-card')?.querySelector('.diag-chain-result');
+      if (host) runRetrofeed(btn, host, { keys, scopeMode: 'off' });
+    }
+  });
+}
+
+export function renderDiagnosticTraceabilityGraph(graph) {
   const branches = Array.isArray(graph?.branches) ? graph.branches : [];
   const rollup = graph?.rollup;
   if (!rollup || !branches.length) return '';
@@ -1387,26 +1745,85 @@ function renderDiagnosticTraceabilityGraph(graph) {
     broken: 'Broken',
     undeclared: 'Live-only',
   }[status] || status || 'Unknown');
+  // Ladder statuses (additive, unscored): on the wire but not doing its
+  // job, or a vantage that could not look. Never rendered as "missing".
+  const ladderLabelFor = (node) => ({
+    present_unhealthy: 'present but unhealthy',
+    present_stale: 'present but stale',
+    unobserved: `unobserved — ${node.ladder?.detail || 'the vantage could not look'}`,
+  }[node.ladder?.status] || null);
+  // What to show first when a card can only fit five: the readings that
+  // move the verdicts. branch.nodes arrive sorted by scored status alone,
+  // which would push an aligned-but-unhealthy node behind every live-only
+  // one and out of the cap.
+  const LOAD_BEARING_KINDS = new Set(['slo', 'sli', 'recording_rule', 'metric', 'burn_rate']);
+  const evidenceRank = (node) => {
+    const ladderStatus = node.ladder?.status || null;
+    // An unobserved node is declared_only by scored status, but the vantage
+    // could not look: it ranks as unobserved, not as missing.
+    if (ladderStatus === 'unobserved') return 6;
+    if (node.status === 'declared_only' && LOAD_BEARING_KINDS.has(node.kind)) return 0;
+    if (ladderStatus === 'present_unhealthy') return 1;
+    if (ladderStatus === 'present_stale') return 2;
+    if (node.status === 'drifted') return 3;
+    if (node.status === 'declared_only') return 4;
+    if (node.status === 'unverifiable') return 5;
+    if (node.status === 'live_only') return 7;
+    return 8;
+  };
   const evidenceFor = (branch) => {
-    const interesting = (branch.nodes || []).filter((node) =>
-      ['declared_only', 'drifted', 'unverifiable', 'live_only'].includes(node.status)
-    );
+    const interesting = (branch.nodes || [])
+      .filter((node) => ['declared_only', 'drifted', 'unverifiable', 'live_only'].includes(node.status) || ladderLabelFor(node))
+      .map((node, index) => ({ node, index }))
+      .sort((a, b) => (evidenceRank(a.node) - evidenceRank(b.node)) || (a.index - b.index))
+      .map(({ node }) => node);
     if (!interesting.length && branch.missingRoles?.length) {
       return branch.missingRoles.map((role) => `${role.role}: ${role.detail}`).join(' · ');
     }
     if (!interesting.length) return 'all load-bearing nodes aligned';
     return interesting.slice(0, 5).map((node) => {
-      const status = {
+      const base = {
         declared_only: 'missing live',
         drifted: 'drifted',
         unverifiable: 'unverifiable',
         live_only: 'live-only',
       }[node.status] || node.status;
+      // The ladder reading replaces "missing live" / "aligned" (it is the
+      // more honest word for that node) and rides beside the other labels.
+      const ladderLabel = ladderLabelFor(node);
+      const status = !ladderLabel
+        ? base
+        : ['aligned', 'declared_only'].includes(node.status) ? ladderLabel : `${base} · ${ladderLabel}`;
       const fields = node.deltas?.length ? ` (${node.deltas.map(d => d.field).slice(0, 3).join(', ')})` : '';
-      return `${node.kind}: ${node.label} · ${status}${fields}`;
+      // Structural exposure: what WOULD go blind if this declared node is
+      // really gone or wrong live — never a claim that it is blind now.
+      const slos = ['declared_only', 'drifted'].includes(node.status) ? Number(node.blastRadius?.slos) || 0 : 0;
+      const blinds = slos > 0 ? ` · blinds ${slos} SLO${slos === 1 ? '' : 's'}` : '';
+      return `${node.kind}: ${node.label} · ${status}${fields}${blinds}`;
     }).join(' · ') + (interesting.length > 5 ? ` · +${interesting.length - 5}` : '');
   };
-  const cards = branches.map((branch) => `
+  // Requirement-branch reconciliation (item 6): each chain card carries the
+  // two remediation arrows scoped to ITS OWN nodes — deploy the branch's
+  // declared-not-live artefacts, adopt its live-only ones. Buttons are
+  // data-driven (the chain block is a static HTML string) and resolved
+  // through chainBranchIndex by a delegated listener.
+  chainBranchIndex.clear();
+  const cards = branches.map((branch, bi) => {
+    const ref = `b${bi}`;
+    chainBranchIndex.set(ref, branch);
+    const liveOnly = adoptableLiveOnly(branch);
+    const declaredOnly = (branch.nodes || []).filter(n => n.status === 'declared_only' && !n.virtual);
+    const deployable = deploySelectionFromEntries(
+      declaredOnly.map(n => deploySurfaceForArtefact(layeredArtefactById(state.pack, n.aId))));
+    const actions = (deployable.identities.size || liveOnly.length) ? `
+      <div class="diag-chain-actions">
+        ${deployable.identities.size ? `<button type="button" class="ctrl-btn diag-chain-deploy" data-branch="${ref}"
+            title="Deploy this requirement's declared-not-live artefacts (${deployable.rows} row${deployable.rows === 1 ? '' : 's'})">⇪ deploy missing (${deployable.identities.size})</button>` : ''}
+        ${liveOnly.length ? `<button type="button" class="ctrl-btn diag-chain-adopt" data-branch="${ref}"
+            title="Adopt this requirement's live-only artefacts back into the declared pack">⤵ adopt live-only (${liveOnly.length})</button>` : ''}
+      </div>
+      <div class="drift-retrofeed-result diag-chain-result" hidden></div>` : '';
+    return `
     <article class="diag-chain-card diag-chain-${escapeHtml(branch.verdict)}">
       <div class="diag-chain-head">
         <span class="diag-chain-title">${escapeHtml(branch.title || branch.rootKey || 'requirement')}</span>
@@ -1416,16 +1833,20 @@ function renderDiagnosticTraceabilityGraph(graph) {
         <span>${escapeHtml(String(branch.integrityPct ?? Math.round((branch.integrity || 0) * 100)))}% integrity</span>
         <span>${escapeHtml(branch.confidence === 'inferred' ? 'inferred edges' : 'declared edges')}</span>
         <span>${escapeHtml(`${branch.counts?.aligned || 0} aligned`)}</span>
+        ${branch.ladderVerdict ? `<span>${escapeHtml(`ladder: ${branch.ladderVerdict}`)}</span>` : ''}
       </div>
       <div class="diag-chain-evidence">${escapeHtml(evidenceFor(branch))}</div>
+      ${actions}
     </article>
-  `).join('');
+  `;
+  }).join('');
+  wireChainActions();
   return `
     <section class="diag-section diag-chain-section">
       <header class="diag-section-head">
         <span class="diag-section-num">2B.G</span>
         <span class="diag-section-title">Requirement Chains — SLO/SLI derivation integrity</span>
-        <span class="diag-section-meta">${rollup.intact}/${rollup.declaredTotal} intact · ${escapeHtml(fmtPct(rollup.integrityMean))}</span>
+        <span class="diag-section-meta">${rollup.intact}/${rollup.declaredTotal} intact · ${escapeHtml(fmtPct(rollup.integrityMean))}${rollup.ladder ? escapeHtml(` · ladder ${fmtPct(rollup.ladder.integrityMean)}`) : ''}</span>
       </header>
       <div class="diag-chain-rollup">
         <span class="diag-chain-rollup-cell is-intact"><strong>${rollup.intact}</strong> intact</span>
@@ -1438,7 +1859,7 @@ function renderDiagnosticTraceabilityGraph(graph) {
   `;
 }
 
-function renderBenchmarkHeadline(posture, lens) {
+export function renderBenchmarkHeadline(posture, lens) {
   const head = document.createElement('div');
   head.className = 'benchmark-head';
 
@@ -1490,7 +1911,7 @@ function renderBenchmarkHeadline(posture, lens) {
 // coverage. Three concentric slices: declared / evidence / absent.
 // Glanceable summary the audience reads in 2 seconds.
 // ============================================================
-function renderPosturePieRow(posture) {
+export function renderPosturePieRow(posture) {
   const wrap = document.createElement('div');
   wrap.className = 'benchmark-block posture-pie-row-block';
 
@@ -1548,220 +1969,6 @@ function renderPosturePieRow(posture) {
   return wrap;
 }
 
-// ============================================================
-// Footprint accordion — collapses the artefact-identity scorecard
-// that used to lead the view. Default closed. For power users who
-// want the raw N/M counts vs the reference's artefact set.
-// ============================================================
-function renderFootprintAccordion(score) {
-  const wrap = document.createElement('details');
-  wrap.className = 'benchmark-footprint-accordion';
-  const overall = score.overall;
-  const pct = overall.bTotal === 0 ? 0 : Math.round((overall.matched / overall.bTotal) * 100);
-  const layerRows = score.byLayer.map(L => `
-    <div class="benchmark-footprint-row">
-      <span class="benchmark-footprint-layer">${escapeHtml(L.layer)}</span>
-      <span class="benchmark-footprint-counts">${L.aTotal} / ${L.bTotal}</span>
-      <span class="benchmark-footprint-pct">${L.bTotal === 0 ? '—' : Math.round((L.matched / L.bTotal) * 100) + '%'}</span>
-    </div>
-  `).join('');
-  wrap.innerHTML = `
-    <summary class="benchmark-footprint-summary">
-      <span class="benchmark-footprint-eyebrow">FOOTPRINT</span>
-      Raw artefact-identity comparison · ${overall.matched}/${overall.bTotal} reference IDs matched (${pct}%)
-      <span class="benchmark-footprint-chevron">▾</span>
-    </summary>
-    <div class="benchmark-footprint-body">
-      <div class="benchmark-footprint-caveat">
-        Identity-match comparison: counts artefacts whose IDs appear in BOTH packs. Useful for spotting drift against a curated baseline, NOT for assessing posture (see matrix above).
-      </div>
-      <div class="benchmark-footprint-layers">${layerRows}</div>
-    </div>
-  `;
-  return wrap;
-}
-
-function renderBenchmarkHeader(score, lens) {
-  const head = document.createElement('div');
-  head.className = 'benchmark-head';
-  const lensLabel = lens === 'all' ? 'All artefacts' : (LENS_PRODUCTS.find(lp => lp.slug === lens)?.label || lens);
-  head.innerHTML = `
-    <div class="benchmark-head-eyebrow">BENCHMARK</div>
-    <div class="benchmark-head-title">
-      <span class="benchmark-head-pack benchmark-head-pack-a">${escapeHtml(state.pack?.name || state.pack?.id || 'Pack A')}</span>
-      <span class="benchmark-head-vs">vs</span>
-      <span class="benchmark-head-pack benchmark-head-pack-b">${escapeHtml(state.packB?.name || state.packB?.id || 'Pack B')}</span>
-    </div>
-    <div class="benchmark-head-meta">
-      Lens · <strong>${escapeHtml(lensLabel)}</strong>
-      ${lens === 'all'
-        ? '<span class="benchmark-head-hint">Tip: pick a product lens for an apples-to-apples scorecard.</span>'
-        : `<span class="benchmark-head-hint">Scoring only artefacts in ${escapeHtml(lensLabel)}'s surface.</span>`}
-    </div>
-  `;
-  return head;
-}
-
-function renderBenchmarkScorecard(score) {
-  const wrap = document.createElement('div');
-  wrap.className = 'benchmark-scorecard';
-  const overall = score.overall;
-  const pct = overall.bTotal === 0 ? 0 : Math.round((overall.matched / overall.bTotal) * 100);
-  const pctClass = pct >= 75 ? 'is-good' : pct >= 40 ? 'is-warn' : 'is-poor';
-
-  // Per-layer rows: each shows A/B counts + a tiny coverage bar
-  const layerRows = score.byLayer.map(L => {
-    const lpct = L.bTotal === 0 ? null : Math.round((L.matched / L.bTotal) * 100);
-    const bar = lpct === null ? '<span class="benchmark-layer-bar benchmark-layer-bar-empty"></span>' :
-      `<span class="benchmark-layer-bar">
-         <span class="benchmark-layer-bar-fill" style="width:${lpct}%"></span>
-       </span>`;
-    return `
-      <div class="benchmark-layer-row">
-        <span class="benchmark-layer-num">${escapeHtml(L.layer)}</span>
-        <span class="benchmark-layer-counts">
-          <span class="benchmark-layer-a">${L.aTotal}</span>
-          <span class="benchmark-layer-sep">/</span>
-          <span class="benchmark-layer-b">${L.bTotal}</span>
-        </span>
-        ${bar}
-        <span class="benchmark-layer-pct">${lpct === null ? '—' : lpct + '%'}</span>
-      </div>
-    `;
-  }).join('');
-
-  // Live version sidebar — pulled from mcp.versions.* annotations
-  // so the demo narrative ("the platform is running Grafana 12.4.0,
-  // declared in the live pack") sits right next to the scorecard.
-  const ann = state.pack?.meta?.annotations || state.pack?.metadata?.annotations || {};
-  const liveVersions = [];
-  for (const [k, v] of Object.entries(ann)) {
-    const m = /^mcp\.versions\.([a-z0-9_-]+)$/.exec(k);
-    if (m) liveVersions.push({ product: m[1], version: v });
-  }
-  const liveVersionsHtml = liveVersions.length
-    ? `<div class="benchmark-meta-sub-head">Live versions</div>` +
-      liveVersions.map(lv =>
-        `<div class="benchmark-meta-live-row"><strong>${escapeHtml(lv.product)}</strong><span>${escapeHtml(lv.version)}</span></div>`
-      ).join('')
-    : '<div class="benchmark-meta-empty"><em>No live versions captured</em></div>';
-
-  wrap.innerHTML = `
-    <div class="benchmark-scorecard-grid">
-      <div class="benchmark-card benchmark-card-overall">
-        <div class="benchmark-card-key">Coverage</div>
-        <div class="benchmark-card-pct ${pctClass}">${pct}%</div>
-        <div class="benchmark-card-sub">${overall.matched} of ${overall.bTotal} reference artefacts present in your live pack</div>
-      </div>
-      <div class="benchmark-card benchmark-card-layers">
-        <div class="benchmark-card-key">Per-layer (live / ref)</div>
-        ${layerRows}
-      </div>
-      <div class="benchmark-card benchmark-card-meta">
-        <div class="benchmark-card-key">Evidence</div>
-        <div class="benchmark-meta-line"><strong>${score.verifiedCount}</strong> artefacts verified by MCP</div>
-        ${liveVersionsHtml}
-      </div>
-    </div>
-  `;
-  return wrap;
-}
-
-function renderBenchmarkMissing(score) {
-  const wrap = document.createElement('div');
-  wrap.className = 'benchmark-callout benchmark-callout-missing';
-  const top = score.missing.slice(0, 10);
-  wrap.innerHTML = `
-    <div class="benchmark-callout-head">
-      <span class="benchmark-callout-eyebrow">MISSING</span>
-      Items the reference recommends, not present in your live pack
-      <span class="benchmark-callout-count">${score.missing.length}</span>
-    </div>
-    ${top.length === 0
-      ? '<div class="benchmark-callout-empty">Nothing missing — your live pack covers everything the reference recommends. 🎯</div>'
-      : '<ul class="benchmark-callout-list">' + top.map(m => `
-          <li>
-            <span class="benchmark-callout-layer">${escapeHtml(m.layer)}</span>
-            <span class="benchmark-callout-title">${escapeHtml(m.title)}</span>
-            ${m.id ? `<span class="benchmark-callout-id">${escapeHtml(m.id)}</span>` : ''}
-          </li>
-        `).join('') + '</ul>'}
-    ${score.missing.length > 10 ? `<div class="benchmark-callout-more">+ ${score.missing.length - 10} more</div>` : ''}
-  `;
-  return wrap;
-}
-
-function renderBenchmarkExtras(score) {
-  const wrap = document.createElement('div');
-  wrap.className = 'benchmark-callout benchmark-callout-extras';
-  const top = score.extras.slice(0, 5);
-  wrap.innerHTML = `
-    <div class="benchmark-callout-head">
-      <span class="benchmark-callout-eyebrow">EXTRAS</span>
-      In your live pack, not in the reference
-      <span class="benchmark-callout-count">${score.extras.length}</span>
-    </div>
-    ${top.length === 0
-      ? '<div class="benchmark-callout-empty">No extras in scope.</div>'
-      : '<ul class="benchmark-callout-list">' + top.map(m => `
-          <li>
-            <span class="benchmark-callout-layer">${escapeHtml(m.layer)}</span>
-            <span class="benchmark-callout-title">${escapeHtml(m.title)}</span>
-            ${m.id ? `<span class="benchmark-callout-id">${escapeHtml(m.id)}</span>` : ''}
-          </li>
-        `).join('') + '</ul>'}
-    ${score.extras.length > 5 ? `<div class="benchmark-callout-more">+ ${score.extras.length - 5} more</div>` : ''}
-  `;
-  return wrap;
-}
-
-// Pure: walks both packs under the lens, returns scorecard data.
-function computeBenchmarkScorecard(packA, packB, lens) {
-  const byLayer = [];
-  const missing = [];   // in B, not in A
-  const extras  = [];   // in A, not in B
-  let overallA = 0, overallB = 0, overallMatched = 0, verifiedCount = 0;
-  const sets = buildCompareKeySets();
-
-  // Walk B's annotations to count "verified by MCP" markers (any
-  // artefact whose mcp.verified.<sym> stamp is present).
-  const annA = packA?.meta?.annotations || packA?.metadata?.annotations || {};
-  for (const k of Object.keys(annA)) {
-    if (/^mcp\.verified\./.test(k)) verifiedCount++;
-  }
-
-  for (const L of LAYERS_FOR_DIFF) {
-    const aItems = layerItemsFor(packA, L).filter(a => productSurface(a, lens, packA));
-    const bItems = layerItemsFor(packB, L).filter(a => productSurface(a, lens, packB));
-    const aKeys = new Set(aItems.map(a => compareKeyOf(a)));
-    const bKeys = new Set(bItems.map(a => compareKeyOf(a)));
-
-    let matched = 0;
-    for (const b of bItems) {
-      const k = compareKeyOf(b);
-      if (aKeys.has(k)) matched++;
-      else missing.push({ layer: L, key: k, id: b.id || '', title: b.title || k });
-    }
-    for (const a of aItems) {
-      const k = compareKeyOf(a);
-      if (!bKeys.has(k)) extras.push({ layer: L, key: k, id: a.id || '', title: a.title || k });
-    }
-
-    byLayer.push({ layer: L, aTotal: aItems.length, bTotal: bItems.length, matched });
-    overallA += aItems.length;
-    overallB += bItems.length;
-    overallMatched += matched;
-  }
-
-  return {
-    overall: { aTotal: overallA, bTotal: overallB, matched: overallMatched },
-    byLayer,
-    missing,
-    extras,
-    verifiedCount,
-  };
-}
-
 function renderCompareView(view) {
   if (!state.compareBId) state.compareBId = defaultCompareB();
   if (!state.compareBEnv) state.compareBEnv = defaultEnvFor(state.compareBId);
@@ -1778,12 +1985,22 @@ function renderCompareView(view) {
 
   const haveA = !!state.pack;
   const haveB = !!state.packB;
-  const haveDiff = !!state.diff && !state.diff.error;
+  // Stale diffs (computed for a different pack/env/scope selection) count
+  // as missing so this view can never classify against the wrong packs.
+  const diffCurrent = !!state.diff && diffMatchesSelection(state.diff);
+  const haveDiff = diffCurrent && !state.diff.error;
   if (!haveA || !haveB || !haveDiff) {
-    if (state.diff?.error) {
+    if (diffCurrent && state.diff?.error) {
       const err = document.createElement('div');
       err.className = 'error';
       err.textContent = `Diff failed: ${state.diff.error}`;
+      scaffold.appendChild(err);
+      return;
+    }
+    if (!state.selectedPackId) {
+      const err = document.createElement('div');
+      err.className = 'error';
+      err.textContent = 'Compare needs Pack A registered on the server — re-upload or rescan it, then retry.';
       scaffold.appendChild(err);
       return;
     }
@@ -1792,9 +2009,15 @@ function renderCompareView(view) {
     loading.textContent = 'Loading both packs…';
     scaffold.appendChild(loading);
     Promise.all([
-      haveB    ? Promise.resolve() : loadPackB(),
+      haveB    ? Promise.resolve() : appHost.loadPackB(),
       haveDiff ? Promise.resolve() : loadDiff(),
-    ]).then(() => { renderTabs(); renderMainView(); })
+    ]).then(() => {
+      // Only re-render on progress — see the twin guards in the grade and
+      // traceability views; an unchanged re-entry would loop.
+      if (state.packB && state.diff) { appHost.renderTabs(); appHost.renderMainView(); return; }
+      loading.className = 'error';
+      loading.textContent = 'Comparison failed to load — pick Pack B again or reload.';
+    })
       .catch((e) => {
         loading.className = 'error';
         loading.textContent = `Failed to load packs: ${e.message}`;
@@ -1823,14 +2046,33 @@ function renderCompareView(view) {
 }
 
 function buildCompareKeySets() {
-  const keysOnlyInA = {}, keysInBoth = {}, keysOnlyInB = {};
+  // Diff entry keys are behavioural identity keys (identityKeyOf, server-side)
+  // — a keyspace the client can't rebuild from `defines`/id. Every entry
+  // embeds the artefact object(s) it paired though, and artefact ids are
+  // unique within a pack side, so cards classify by id per side instead.
+  // Out-of-scope live artefacts stay unclassified on purpose — the summary
+  // arithmetic excludes them too.
+  const aStatus = {}, bStatus = {};
   for (const L of LAYERS_FOR_DIFF) {
-    const bucket = state.diff.layers[L] || { onlyInA: [], onlyInB: [], inBoth: [] };
-    keysOnlyInA[L] = new Set(bucket.onlyInA.map(x => x.key));
-    keysOnlyInB[L] = new Set(bucket.onlyInB.map(x => x.key));
-    keysInBoth[L]  = new Set(bucket.inBoth.map(x => x.key));
+    const bucket = state.diff.layers[L] || {};
+    const a = new Map(), b = new Map();
+    for (const e of bucket.inBoth || []) {
+      if (e.a?.id) a.set(e.a.id, 'both');
+      if (e.b?.id) b.set(e.b.id, 'both');
+    }
+    for (const e of bucket.onlyInA || []) if (e.artefact?.id) a.set(e.artefact.id, 'only');
+    for (const e of bucket.onlyInB || []) if (e.artefact?.id) b.set(e.artefact.id, 'only');
+    aStatus[L] = a;
+    bStatus[L] = b;
   }
-  return { keysOnlyInA, keysInBoth, keysOnlyInB };
+  return { aStatus, bStatus };
+}
+
+// 'both' | 'only' | null for one card. null = not part of the comparison
+// (panels are excluded from the diff; out-of-scope live artefacts are parked).
+function compareStatusFor(side, L, art, sets) {
+  const byId = side === 'a' ? sets.aStatus[L] : sets.bStatus[L];
+  return (art?.id && byId?.get(art.id)) || null;
 }
 
 // New: stacked PACK A + PACK B header band, side-by-side.
@@ -1866,16 +2108,6 @@ function renderComparePackHeaders() {
 
   wrap.appendChild(renderComparePackHeader('b', state.packB, state.diff?.b));
   return wrap;
-}
-
-// Return the catalog entry for a pack id — the source of truth for
-// the human-readable label, version, criticality, environments. The
-// per-pack metadata.name in the YAML may DIFFER from the catalog
-// label (e.g. catalog "Target advanced (tier-1 reference)" vs YAML
-// metadata.name "platform-edge"); the catalog label is what the
-// user picked from the dropdown, so it wins for display.
-export function catalogEntryFor(packId) {
-  return (state.catalog || []).find(p => p.id === packId) || null;
 }
 
 function uploadedSourceHint(p) {
@@ -1977,13 +2209,13 @@ function renderComparePackHeader(side, pack, diffMeta) {
       state.compareBEnv = defaultEnvFor(newId);
       state.diff = null; state.packB = null;
       refreshDiff();
-      renderTabs(); renderMainView();
+      appHost.renderTabs(); appHost.renderMainView();
     }
   };
   const envSel = card.querySelector('.cpc-env-select');
   if (envSel) envSel.onchange = () => {
     if (side === 'a') { state.selectedEnv = envSel.value || null; refresh(); }
-    else { state.compareBEnv = envSel.value || null; state.packB = null; state.diff = null; refreshDiff(); renderTabs(); renderMainView(); }
+    else { state.compareBEnv = envSel.value || null; state.packB = null; state.diff = null; refreshDiff(); appHost.renderTabs(); appHost.renderMainView(); }
   };
   // Wire the action buttons. Evaluate opens the maturity popover;
   // coverage opens a layer-by-layer count breakdown.
@@ -1995,7 +2227,7 @@ function renderComparePackHeader(side, pack, diffMeta) {
   if (depBtn) depBtn.onclick = (e) => {
     e.stopPropagation();
     const packId = (side === 'a') ? state.selectedPackId : state.compareBId;
-    openDeployModal({ packId });
+    appHost.openDeployModal({ packId });
   };
   return card;
 }
@@ -2242,7 +2474,7 @@ function renderCompareFilters() {
     { id: 'all',   label: 'All',       hint: 'Every artefact from both packs, side by side.' },
     { id: 'onlyA', label: 'Only in A', hint: 'Artefacts present in pack A but not in pack B. Right column is empty.' },
     { id: 'onlyB', label: 'Only in B', hint: 'Artefacts present in pack B but not in pack A. Left column is empty.' },
-    { id: 'both',  label: 'In both',   hint: 'Artefacts present in both packs (matched by `defines` symbol or id).' },
+    { id: 'both',  label: 'In both',   hint: 'Artefacts present in both packs (matched by behavioural identity — the same deployed control, whatever it is named).' },
     { id: 'a-b',   label: 'A − B',     hint: 'Set difference: every artefact in A, minus anything also in B.' },
     { id: 'a+b',   label: 'A + B',     hint: 'Union: combined view of both packs without duplication.' },
   ];
@@ -2254,7 +2486,7 @@ function renderCompareFilters() {
     b.dataset.slice = s.id;
     b.textContent = s.label;
     b.title = s.hint;
-    b.onclick = () => { state.compareSlice = s.id; renderMainView(); };
+    b.onclick = () => { state.compareSlice = s.id; appHost.renderMainView(); };
     wrap.appendChild(b);
   }
   // Lens — scopes the comparison to one product's surface. When the user
@@ -2285,7 +2517,7 @@ function renderCompareFilters() {
   lensSel.onchange = () => {
     state.compareLens = lensSel.value;
     lensSel.dataset.lens = lensSel.value;
-    renderMainView();
+    appHost.renderMainView();
   };
   lensWrap.appendChild(lensSel);
   wrap.appendChild(lensWrap);
@@ -2302,7 +2534,7 @@ function renderCompareFilters() {
     if (pending) cancelAnimationFrame(pending);
     pending = requestAnimationFrame(() => {
       state.compareSearch = search.value;
-      renderMainView();
+      appHost.renderMainView();
       // After re-render, restore focus + cursor (renderMainView wipes the DOM).
       const fresh = document.querySelector('.compare-search-input');
       if (fresh) { fresh.focus(); fresh.setSelectionRange(search.value.length, search.value.length); }
@@ -2312,7 +2544,7 @@ function renderCompareFilters() {
   return wrap;
 }
 
-function renderLiveScopeControl({ standalone = false } = {}) {
+export function renderLiveScopeControl({ standalone = false } = {}) {
   const modes = [
     {
       id: 'service',
@@ -2428,7 +2660,7 @@ export { layerItemsFor } from './diagnostic-grade.mjs';
 //
 // Returns true/false. Falls through to true when the lens is 'all'
 // or when no product is specified.
-function productSurface(art, product, pack) {
+export function productSurface(art, product, pack) {
   if (!product || product === 'all') return true;
   if (!art) return false;
   const p = product.toLowerCase();
@@ -2538,9 +2770,9 @@ function filterCompareItems(items, L, side, sets) {
   const sidePack = side === 'a' ? state.pack : state.packB;
   return items.filter(art => {
     if (lens !== 'all' && !productSurface(art, lens, sidePack)) return false;
-    const k = compareKeyOf(art);
-    const inBoth = sets.keysInBoth[L]?.has(k);
-    const onlySide = side === 'a' ? sets.keysOnlyInA[L]?.has(k) : sets.keysOnlyInB[L]?.has(k);
+    const status = compareStatusFor(side, L, art, sets);
+    const inBoth = status === 'both';
+    const onlySide = status === 'only';
     let sliceOk = true;
     switch (slice) {
       case 'onlyA': sliceOk = side === 'a' && onlySide; break;
@@ -2574,8 +2806,11 @@ function renderCompareLayerColumn(side, L, items, sets) {
   return col;
 }
 
-export const LAYERS_FOR_DIFF = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'];
-
+// Raw symbolic key — referenced ONLY by the benchmark footprint's
+// deliberately naive "reference IDs matched" scorecard, which is currently
+// unwired (its callers were stripped in 59e366c; kept pending cleanup).
+// Everything that claims comparison semantics goes through the server
+// diff's behavioural buckets instead (see buildCompareKeySets).
 function compareKeyOf(art) {
   return art?.defines || art?.id || '';
 }
@@ -2650,11 +2885,9 @@ function renderCompareSideLayer(def, items, side, sets, isL4) {
 }
 
 function renderCompareCard(artefact, def, sublayerKey, side, sets) {
-  const k = compareKeyOf(artefact);
-  const inBoth   = sets.keysInBoth[def.id]?.has(k);
-  const onlyA    = sets.keysOnlyInA?.[def.id]?.has(k);
-  const onlyB    = sets.keysOnlyInB?.[def.id]?.has(k);
-  const isOnlySide = side === 'a' ? onlyA : onlyB;
+  const status = compareStatusFor(side, def.id, artefact, sets);
+  const inBoth = status === 'both';
+  const isOnlySide = status === 'only';
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'card compare-side-card';
@@ -2670,8 +2903,7 @@ function renderCompareCard(artefact, def, sublayerKey, side, sets) {
   // Comparison status pill — what this card means in the diff.
   let statusPill = '';
   if (inBoth) statusPill = '<span class="diff-chip chip-both">in both</span>';
-  else if (onlyA) statusPill = `<span class="diff-chip chip-only-a">only in A</span>`;
-  else if (onlyB) statusPill = `<span class="diff-chip chip-only-b">only in B</span>`;
+  else if (isOnlySide) statusPill = `<span class="diff-chip chip-only-${side}">only in ${side.toUpperCase()}</span>`;
 
   // Source pill — Declared/Verified/Missing (what the studio's
   // per-artefact taxonomy already says about this card's status in

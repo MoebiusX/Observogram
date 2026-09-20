@@ -11,8 +11,20 @@ coverage/
 .nyc_output/
 
 # Local workspace — persisted packs, deploy audit, journey runs.
-# Per-machine state, never source. TOMOGRAPH_WORKSPACE relocates it.
+# Per-machine state, never source. OBSERVOGRAM_WORKSPACE relocates it
+# (.tomograph/ is the pre-rebrand name; existing ones keep working).
+.observogram/
 .tomograph/
+
+# Pinned backend-validator binaries + compiled-artifact scratch
+# (fetch-validators.mjs / test-backend-validate.mjs). Dev tooling,
+# fetched on demand, never source.
+.tools/
+
+# The full metric-name inventory `npm run record-fixtures -- --write` keeps
+# beside the trimmed tools/fixtures/mcp/ copy: a review aid (thousands of
+# names from a real stack), never a fixture. Covered by .tmp-* below too.
+.tmp-mcp-metric-names.json
 
 # Ad-hoc test/debug dumps created during fetcher + adapter probing.
 # These are scratch artefacts, not source of truth.
@@ -40,3 +52,6 @@ docs/archive/TOMOGRAPH_MIGRATION_CHECKLIST.md
 
 # Superseded scratch versions of the brand/architecture diagrams.
 docs/diagrams/_prev*
+
+# Generated provisioning files for the T2 provisioning-load test.
+docker/.t2-provisioning/

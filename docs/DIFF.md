@@ -4,12 +4,12 @@
 drift/gap view exposed by `GET /api/diff?a=<packId>&b=<packId>`.
 
 The comparison is directional: **A is the declared pack under review, B is the
-reference or live pack**. Tomograph reports in-scope drift for A against B and
+reference or live pack**. Observogram reports in-scope drift for A against B and
 keeps unrelated live inventory in a separate `outOfScope` bucket.
 
 ## The Claim
 
-Tomograph separates two questions:
+Observogram separates two questions:
 
 1. **Identity:** is this the same control?
 2. **Agreement:** do both sides declare the same contract for that control?
@@ -35,18 +35,19 @@ Representative identities:
 | Panel | dashboard parent + `binds_to` target |
 | Pipeline receiver/processor | stage name |
 | Pipeline exporter | signal + exporter kind |
-| Alert route | severity, with duplicate identities preserved |
+| Alert route | severity, with duplicates preserved via occurrence ordinals. Channel kinds deliberately stay OUT of identity — live connectors fabricate them when routing cannot be introspected — and surface as decision-bearing drift instead |
 | L2X profiling/network/policy | product |
 | L2X mesh/collection | product + role |
 
-The precise phrasing matters: Tomograph matches on behaviour. For reliability
+The precise phrasing matters: Observogram matches on behaviour. For reliability
 contract artefacts, the declared id is the behavioural handle by design.
 
 ## Collision Handling
 
 Multiple artefacts in one pack can share the same identity key: multiple SEV2
-routes, duplicate dashboard ids, or more than one Prometheus metrics backend.
-`diffPacks` groups by identity instead of using a last-write-wins `Map`.
+routes, duplicate dashboard ids, same-named pipeline stages, or more than one
+Prometheus metrics backend. `diffPacks` groups by identity instead of using a
+last-write-wins `Map`.
 
 Within each identity group it:
 
@@ -56,8 +57,30 @@ Within each identity group it:
 3. Leaves surplus controls visible as `onlyInA` or `onlyInB`.
 
 Duplicate entries receive stable occurrence suffixes such as
-`alert_route::{"severity":"sev2"}#02`, so counts preserve artefacts instead of
+`dashboard::{"id":"overview"}#02`, so counts preserve artefacts instead of
 collapsing them to identity classes.
+
+The result also carries a top-level `collisions` array — one entry per
+identity key held by more than one artefact on either side:
+
+```js
+{ layer, kind, key, aCount, bCount }
+```
+
+The buckets already preserve every instance; `collisions` is the explicit
+fail-loud surface, so callers (including downstream vendors who bucket by
+`identityKeyOf` themselves) never have to infer collisions from `#NN` key
+suffixes. `buildDependencyGraph` exposes the same surface as
+`graph.collisions` (`{ key, kind, count }`). `otel` and `baselines` keep
+deliberately empty identities: the spec makes them singular objects, so at
+most one exists per pack and their `{}` identity cannot collide.
+
+Alert-route identity precision was evaluated and deliberately declined:
+`fetch-live-pack.mjs` and the crawler fabricate a channel kind (an msteams
+placeholder) when live routing cannot be introspected, so channel-kind
+identity would split declared routes from their live placeholders and report
+them falsely missing in production. Severity-keyed identity keeps that pair
+matched, with the channel difference reported as decision-bearing drift.
 
 ## Agreement
 
@@ -77,8 +100,24 @@ Normalisation rules:
 - Arrays are normalised element-wise, sorted, and empty arrays are treated like
   absent fields.
 - Empty `null`, `undefined`, `''`, `{}`, and `[]` values are dropped.
-- Expressions in `expr`, `query`, `promql`, and `expression` collapse
-  whitespace only. Tomograph does not do semantic PromQL equivalence.
+- Expressions in `expr`, `query`, `promql`, and `expression` are
+  order-canonicalized when the expression parses cleanly (parser-proven):
+  selector matcher order (`{b="2",a="1"}` ≡ `{a="1",b="2"}`), aggregation
+  grouping label order (`sum by (a,b)` ≡ `sum by (b,a)`), structural
+  whitespace (`rate( x [5m] )` ≡ `rate(x[5m])`), and whitespace around the
+  symbolic binary operators `+ * / % ^ == != <= >= < > =~ !~`
+  (`a / b` ≡ `a/b`, `rate(x[5m]) > 0.5` ≡ `rate(x[5m])>0.5`). `-` is never
+  tightened (unary/binary ambiguity) and keyword operators (`and`, `or`,
+  `unless`, `bool`, `offset`, `by`, `on`, …) keep the space that bounds
+  them. Anything that fails to parse falls back to whitespace collapse only
+  — recorded as `textual-fallback` by `tools/lib/promql-canon.mjs`.
+  Explicit non-goals (per `PHASE_1_VERDICT_TRUST_RESEARCH.md` Workstream B):
+  no algebraic rewrites, no binary-expression or vector-matching
+  reordering, no regex equivalence, no histogram folding.
+- A leading `ref:` on the reference-bearing fields `slo`, `sli`, `trigger`,
+  `error_budget_policy` — and on `expr` when the whole value is a reference
+  (`ref:slis.x`) — is authoring syntax, not behaviour: `slo: ref:x` and
+  `slo: x` compare equal, matching what identity already does.
 - `version` blocks compare by `declared` when present.
 - Deployment/presentation fields are stripped:
 
@@ -98,10 +137,21 @@ Each layer (`L1`, `L2`, `L2X`, `L3`, `L4`, `L5`, `GOV`) contains:
 | `onlyInB` | B has it in a family A participates in; A does not |
 | `inBoth` | same identity on both sides, with `aligned` or `drifted` verdict |
 | `outOfScope` | B has it, but A declares nothing in that artefact family |
+| `scaffold` | a placeholder (`source: Scaffold`) on either side — parked before pairing, never counted; entries carry `side` (`a`/`b`) and `artefact` |
 
 `outOfScope` prevents a single-service drift view from being flooded by the
 rest of a platform's live inventory. It is reported, but excluded from the
 in-scope ratios.
+
+`scaffold` holds the schema-forced placeholders the crawler
+(`crawler.scaffold.<symbol>`) or the live fetcher (`mcp.scaffold.<symbol>`)
+had to invent. A placeholder is neither a declaration nor live evidence, so
+it is removed from both sides **before** identity pairing: a declared
+burn-rate alert never reads `aligned` (or `drifted`) against the live pack's
+fallback entry — even when both carry the compiler's default windows on the
+same SLO — and a repo placeholder never reads `declared, not live`. A real
+live artefact whose repo counterpart is only a placeholder reads `live, not
+declared` as it should. `summary.scaffold` counts the parked entries.
 
 ## Summary Ratios
 
@@ -112,7 +162,7 @@ reported separately.
 - `alignment = aligned / union`: true agreement ratio.
 
 The strongest diagnostic signal is the gap between them: high Jaccard and low
-alignment means Tomograph found the same controls, but their definitions drift.
+alignment means Observogram found the same controls, but their definitions drift.
 
 ## Weighted Drift Fidelity
 
@@ -127,6 +177,25 @@ The Diagnose view does not score every delta equally. It uses weighted badness:
 | Live, not declared | 0.15 | shadow signal: useful inventory gap, but less dangerous than false reassurance |
 | Out-of-scope live | 0.0 | excluded platform inventory |
 | Scaffold | 0.0 | schema-required fallback with no source evidence |
+
+`Scaffold` is the adapter's projection of a placeholder stamp on either side:
+`crawler.scaffold.<symbol>` from the repo crawler, `mcp.scaffold.<symbol>` from
+the live fetcher (the `spec.otel` block, collector receivers/processors,
+logs/traces exporters, fallback backends, the `platform-overview` stub, the
+SEV1 route, baselines, guessed SLI/SLOs and the burn-rate placeholder — see
+`MCP_INTEGRATION.md`). Both sides can therefore contribute parked artefacts:
+`diffPacks` moves them to the `scaffold` bucket before pairing (see
+[Buckets](#buckets)), the requirement-chain comparison
+(`comparePackBranches`) refuses a `Scaffold` live node as evidence — a
+declared node against it reads `declared_only`, and a placeholder is never a
+`live_only` node or an `undeclared` branch root — and the requirement
+traceability chain skips a scaffold burn-rate entry when deciding
+`missing_alert_evidence`. A live-pack placeholder therefore never weighs in
+as `Live, not declared` and a repo scaffold never as `Declared, not live` on
+**any** path: the diff-bucket grade, the requirement-chain grade the studio
+and the journey CLI score on, and the journey's `alignmentPct` /
+`declaredNotLive` gate facts (`isScaffoldDiffEntry` still filters older
+diffs that carry no `scaffold` bucket).
 
 Weighted fidelity is:
 
@@ -157,6 +226,16 @@ diffPacks(aLayered, bLayered); // directional drift report
 `tools/test-diff.mjs` verifies:
 
 - pack-vs-self preserves every artefact, including duplicate identity keys;
-- duplicate SEV2 routes survive as distinct controls;
+- duplicate SEV2 routes survive as distinct controls, and every duplicated
+  identity group is reported once on `collisions` with its layer and counts;
+- a declared route pairs with the live connector's fabricated placeholder
+  route as channel drift, never as missing-in-live;
 - surplus duplicate controls are reported as drift rather than dropped;
 - empty arrays normalise like absent fields.
+
+`tools/test-packs.mjs` additionally asserts the self-diff invariant —
+`diffPacks(pack, pack)` preserves every flat-comparable artefact with
+alignment and Jaccard 1.0 — for every bundled example and reference pack,
+including the crawled `krystaline-repo-carlos.pack.yaml` with its real
+identity collisions. `tools/test-traceability-graph.mjs` covers duplicate
+identity keys in the dependency graph and branch comparison.

@@ -1,0 +1,28 @@
+{
+  "id": "demo-skeleton",
+  "name": "Demo Skeleton",
+  "badge": "DEMO",
+  "description": "Minimal example pack — 1 artefact per layer. Useful as a starting template.",
+  "layers": {
+    "L1": [
+      { "id": "SLI-DEMO", "source": "BAU", "title": "Demo availability SLI", "desc": "Replace me with real SLIs.", "tool": "Prometheus", "tags": ["template"] }
+    ],
+    "L2": [
+      { "id": "COL-DEMO", "source": "BAU", "title": "Demo collector", "desc": "Replace me with real collection artefacts.", "tool": "OTel Collector", "tags": ["template"] }
+    ],
+    "L3": [
+      { "id": "QRY-DEMO", "source": "GAP", "title": "Demo recording rule", "desc": "No queries defined yet.", "tool": "-", "tags": ["template","gap"] }
+    ],
+    "L4": {
+      "policy":   [{ "id": "POL-DEMO", "source": "BAU", "title": "Demo policy", "desc": "Burn-rate policy stub.", "tool": "rules", "tags": ["template"] }],
+      "alerting": [{ "id": "ALR-DEMO", "source": "BAU", "title": "Demo alert",  "desc": "Stub alert.",          "tool": "Alertmanager", "tags": ["template"] }],
+      "healing":  [{ "id": "HEAL-DEMO","source": "GAP", "title": "Demo self-heal","desc": "Not wired.",          "tool": "-",            "tags": ["template","gap"] }]
+    },
+    "L5": [
+      { "id": "VAL-DEMO", "source": "GAP", "title": "Demo validation", "desc": "No chaos/synthetic yet.", "tool": "-", "tags": ["template","gap"] }
+    ],
+    "GOV": [
+      { "id": "GOV-DEMO", "source": "GAP", "title": "Demo governance", "desc": "No conformance scan.", "tool": "-", "tags": ["template","gap"] }
+    ]
+  }
+}

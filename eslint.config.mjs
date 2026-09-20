@@ -1,4 +1,4 @@
-// ESLint flat config for Tomograph.
+// ESLint flat config for Observogram.
 //
 // Intent: catch real correctness problems (undeclared names, unreachable
 // code, duplicate object keys, broken regex, etc.) — NOT enforce a style.

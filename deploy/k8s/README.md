@@ -1,19 +1,19 @@
-# Deploying Tomograph to Kubernetes
+# Deploying Observogram to Kubernetes
 
-Tomograph is a single Express server ([server/index.mjs](../../server/index.mjs))
+Observogram is a single Express server ([server/index.mjs](../../server/index.mjs))
 that serves the studio UI and the `/api/*` routes from one process. The
 deploy is correspondingly small: one Deployment, one Service, one Ingress.
 
 ```bash
 # 1. Build the image from the repo root.
-docker build -t tomograph:0.3.0 .
+docker build -t observogram:0.4.0 .
 
 # 2. Make it visible to your cluster.
 #    docker-desktop: nothing to do.
-#    kind:           kind load docker-image tomograph:0.3.0
-#    remote:         docker tag tomograph:0.3.0 <registry>/tomograph:0.3.0
-#                    docker push <registry>/tomograph:0.3.0
-#                    cd deploy/k8s && kustomize edit set image tomograph=<registry>/tomograph:0.3.0
+#    kind:           kind load docker-image observogram:0.4.0
+#    remote:         docker tag observogram:0.4.0 <registry>/observogram:0.4.0
+#                    docker push <registry>/observogram:0.4.0
+#                    cd deploy/k8s && kustomize edit set image observogram=<registry>/observogram:0.4.0
 
 # 3. Apply (from the repo root).
 kubectl create namespace observability --dry-run=client -o yaml | kubectl apply -f -
@@ -38,6 +38,13 @@ docroot. That architecture is gone:
 
 ## Knobs
 
+- **Auth (required)** — binding to `0.0.0.0` fails closed without it.
+  Uncomment in [deployment-studio.yaml](deployment-studio.yaml):
+  `OBSERVOGRAM_ADMIN_PASSWORD` seeds the `admin` sign-in on first boot
+  (the loopback `admin/admin` default is never seeded off-loopback),
+  and/or `OBSERVOGRAM_API_TOKEN` for service-account/CI access. OIDC
+  (`OBSERVOGRAM_OIDC_*`) also satisfies the requirement — see
+  [.env.example](../../.env.example).
 - `GITHUB_TOKEN` (optional) — uncomment in
   [deployment-studio.yaml](deployment-studio.yaml) to raise GitHub rate
   limits / allow private repos for `POST /api/crawl-github`.

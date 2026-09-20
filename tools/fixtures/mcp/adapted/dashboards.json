@@ -1,0 +1,72 @@
+[
+  {
+    "id": "kx-genai-operations",
+    "provider": {
+      "kind": "grafana",
+      "version": "12.0",
+      "schemaVersion": 41
+    },
+    "folder": "KrystalineX",
+    "source": "grafana:///grafana/d/kx-genai-operations/genai-operations-overview",
+    "params": {
+      "uid": "kx-genai-operations",
+      "title": "GenAI Operations Overview",
+      "url": "/grafana/d/kx-genai-operations/genai-operations-overview",
+      "uri": "db/genai-operations-overview",
+      "tags": [
+        "ai-sre",
+        "genai",
+        "krystalinex",
+        "overview"
+      ],
+      "folderUid": "krystalinex",
+      "type": "dash-db"
+    }
+  },
+  {
+    "id": "kx-predictive-finops",
+    "provider": {
+      "kind": "grafana",
+      "version": "12.0",
+      "schemaVersion": 41
+    },
+    "folder": "KrystalineX",
+    "source": "grafana:///grafana/d/kx-predictive-finops/krystalinex-predictive-and-finops",
+    "params": {
+      "uid": "kx-predictive-finops",
+      "title": "KrystalineX Predictive & FinOps",
+      "url": "/grafana/d/kx-predictive-finops/krystalinex-predictive-and-finops",
+      "uri": "db/krystalinex-predictive-and-finops",
+      "tags": [
+        "finops",
+        "krystalinex",
+        "predictive"
+      ],
+      "folderUid": "krystalinex",
+      "type": "dash-db"
+    }
+  },
+  {
+    "id": "krystalinex-unified",
+    "provider": {
+      "kind": "grafana",
+      "version": "12.0",
+      "schemaVersion": 41
+    },
+    "folder": "KrystalineX",
+    "source": "grafana:///grafana/d/krystalinex-unified/krystalinex-unified-observability-2026",
+    "params": {
+      "uid": "krystalinex-unified",
+      "title": "KrystalineX Unified Observability 2026",
+      "url": "/grafana/d/krystalinex-unified/krystalinex-unified-observability-2026",
+      "uri": "db/krystalinex-unified-observability-2026",
+      "tags": [
+        "krystalinex",
+        "observability",
+        "unified"
+      ],
+      "folderUid": "krystalinex",
+      "type": "dash-db"
+    }
+  }
+]

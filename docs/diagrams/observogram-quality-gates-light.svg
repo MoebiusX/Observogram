@@ -1,0 +1,150 @@
+<svg viewBox="0 0 1240 780" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, system-ui, sans-serif">
+<title>Observogram quality gates (light), verified at commit 795f122</title>
+<desc>Every hand-off between Observogram components is guarded by an input/output gate: schema, golden, backend attestation (T1), deploy snapshot, live-evidence honesty, the T4 round trip, weighted trust, and the audit bar. Side panels list what the gates caught on first run and how CI enforces them.</desc>
+<style>
+  .pg{fill:#f6f8fc;}
+  .h1{fill:#0f172a;font-size:24px;font-weight:800;letter-spacing:-.2px;}
+  .h2{fill:#64748b;font-size:12.5px;}
+  .sec{fill:#475569;font-size:12px;font-weight:800;letter-spacing:.12em;}
+  .row{fill:#ffffff;stroke:#d3dcea;stroke-width:1.2;}
+  .gnum{fill:#7c3aed;font-size:11px;font-weight:800;}
+  .gname{fill:#1e293b;font-size:13px;font-weight:700;}
+  .gmech{fill:#64748b;font-size:11px;}
+  .flow{fill:#94a3b8;font-size:10px;font-weight:600;}
+  .ok{fill:#047857;font-size:10.5px;font-weight:800;letter-spacing:.04em;}
+  .okchip{fill:#ecfdf5;stroke:#10b981;stroke-width:1.2;}
+  .panel{fill:#ffffff;stroke:#d3dcea;stroke-width:1.3;}
+  .pt{fill:#475569;font-size:12px;font-weight:800;letter-spacing:.06em;}
+  .pi{fill:#64748b;font-size:10.6px;}
+  .red{fill:#b91c1c;}
+  .note{fill:#94a3b8;font-size:10px;}
+  .i{fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;}
+</style>
+<defs>
+  <symbol id="g-shield" viewBox="0 0 24 24"><path class="i" d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path class="i" d="M9 12l2 2 4-4"/></symbol>
+  <symbol id="g-bug" viewBox="0 0 24 24"><circle class="i" cx="12" cy="13" r="5"/><path class="i" d="M12 8V5M8.5 9.5L6 7M15.5 9.5L18 7M7 13H4M20 13h-3M8.5 16.5L6 19M15.5 16.5L18 19"/></symbol>
+  <symbol id="g-ci" viewBox="0 0 24 24"><circle class="i" cx="12" cy="12" r="9"/><path class="i" d="M8.5 12.5l2.5 2.5 4.5-5"/></symbol>
+</defs>
+
+<rect class="pg" x="0" y="0" width="1240" height="780"/>
+
+<use href="#g-shield" x="28" y="24" width="26" height="26" color="#7c3aed"/>
+<text class="h1" x="66" y="44">Quality gates — every hand-off attested</text>
+<text class="h2" x="66" y="64">input/output contracts between components · enforced in CI on every push · verified at HEAD 795f122</text>
+
+<!-- ============ SECTION A · COMPILE PATH ============ -->
+<text class="sec" x="28" y="104">COMPILE PATH · author → live</text>
+
+<g><!-- G1 -->
+  <rect class="row" x="28" y="116" width="742" height="62" rx="9"/>
+  <text class="gnum" x="44" y="140">G1</text><text class="gname" x="72" y="140">Schema gate</text>
+  <text class="flow" x="44" y="158">repo / pack → canonical IR</text>
+  <text class="gmech" x="240" y="140">vendored spec v1.2, checksummed + pinned (sync-spec:check)</text>
+  <text class="gmech" x="240" y="156">only schema-valid packs register — invalid packs never enter the catalog</text>
+  <rect class="okchip" x="688" y="130" width="66" height="20" rx="10"/><text class="ok" x="700" y="144">CI ✓</text>
+</g>
+<g><!-- G2 -->
+  <rect class="row" x="28" y="186" width="742" height="62" rx="9"/>
+  <text class="gnum" x="44" y="210">G2</text><text class="gname" x="72" y="210">Golden output gate</text>
+  <text class="flow" x="44" y="228">crawler · adapter · diff</text>
+  <text class="gmech" x="240" y="210">decompiler/IR/diff outputs locked byte-stable against golden fixtures</text>
+  <text class="gmech" x="240" y="226">any output change must be intentional (test:golden — explicit --update)</text>
+  <rect class="okchip" x="688" y="200" width="66" height="20" rx="10"/><text class="ok" x="700" y="214">CI ✓</text>
+</g>
+<g><!-- G3 -->
+  <rect class="row" x="28" y="256" width="742" height="76" rx="9"/>
+  <text class="gnum" x="44" y="280">G3</text><text class="gname" x="72" y="280">Backend attestation (T1)</text>
+  <text class="flow" x="44" y="298">compile → artifacts</text>
+  <text class="gmech" x="240" y="280">every emitted artifact accepted by ITS platform's own validator:</text>
+  <text class="gmech" x="240" y="296">promtool 3.5.3 LTS · amtool 0.32.2 · otelcol-contrib 0.154.0 (pinned, sha256-verified)</text>
+  <text class="gmech" x="240" y="312">165 artifacts × 8 packs (incl. adversarial + 60-SLO scale fixtures) · strict mode</text>
+  <rect class="okchip" x="688" y="276" width="66" height="20" rx="10"/><text class="ok" x="700" y="290">CI ✓</text>
+</g>
+<g><!-- G4 -->
+  <rect class="row" x="28" y="340" width="742" height="62" rx="9"/>
+  <text class="gnum" x="44" y="364">G4</text><text class="gname" x="72" y="364">Deploy gate</text>
+  <text class="flow" x="44" y="382">artifacts → live platform</text>
+  <text class="gmech" x="240" y="364">pre-deploy snapshot = guaranteed rollback point (strict mode refuses without one)</text>
+  <text class="gmech" x="240" y="380">per-row results · append-only audit (deploys.jsonl) · SSRF-guarded MCP endpoint</text>
+  <rect class="okchip" x="688" y="354" width="66" height="20" rx="10"/><text class="ok" x="694" y="368">ship ✓</text>
+</g>
+
+<!-- ============ SECTION B · VERIFY LOOP ============ -->
+<text class="sec" x="28" y="442">VERIFY LOOP · live → verdict</text>
+
+<g><!-- G5 -->
+  <rect class="row" x="28" y="454" width="742" height="62" rx="9"/>
+  <text class="gnum" x="44" y="478">G5</text><text class="gname" x="72" y="478">Live-evidence gate</text>
+  <text class="flow" x="44" y="496">platform → live pack</text>
+  <text class="gmech" x="240" y="478">every MCP probe recorded; a failed probe ⇒ loud PARTIAL LIVE EVIDENCE banner</text>
+  <text class="gmech" x="240" y="494">drift counts become upper bounds — a flaky endpoint can never manufacture certainty</text>
+  <rect class="okchip" x="688" y="468" width="66" height="20" rx="10"/><text class="ok" x="694" y="482">ship ✓</text>
+</g>
+<g><!-- G6 -->
+  <rect class="row" x="28" y="524" width="742" height="76" rx="9"/>
+  <text class="gnum" x="44" y="548">G6</text><text class="gname" x="72" y="548">Round-trip gate (T4)</text>
+  <text class="flow" x="44" y="566">deploy → fetch → diff</text>
+  <text class="gmech" x="240" y="548">the product story executed against a REAL Grafana 12.4.4 in CI:</text>
+  <text class="gmech" x="240" y="564">compile → real deploy path → fetch live state back → diff engine</text>
+  <text class="gmech" x="240" y="580">result: 24/24 deployed artifacts confirmed live · 0 decision-bearing drift</text>
+  <rect class="okchip" x="688" y="544" width="66" height="20" rx="10"/><text class="ok" x="700" y="558">CI ✓</text>
+</g>
+<g><!-- G7 -->
+  <rect class="row" x="28" y="608" width="742" height="62" rx="9"/>
+  <text class="gnum" x="44" y="632">G7</text><text class="gname" x="72" y="632">Trust gate</text>
+  <text class="flow" x="44" y="650">diff → drift fidelity</text>
+  <text class="gmech" x="240" y="632">weights: missing 1.0 · drifted 0.5 (1.0 decision / 0.1 cosmetic) · shadow 0.15</text>
+  <text class="gmech" x="240" y="648">scaffold + out-of-scope inventory excluded honestly, shown not counted</text>
+  <rect class="okchip" x="688" y="622" width="66" height="20" rx="10"/><text class="ok" x="694" y="636">ship ✓</text>
+</g>
+<g><!-- G8 -->
+  <rect class="row" x="28" y="678" width="742" height="62" rx="9"/>
+  <text class="gnum" x="44" y="702">G8</text><text class="gname" x="72" y="702">Audit gate</text>
+  <text class="flow" x="44" y="720">grade → verdict</text>
+  <text class="gmech" x="240" y="702">machine PASS strictly &gt;85% · instrument grade A anchored above the same bar</text>
+  <text class="gmech" x="240" y="718">grade schema versioned — score discontinuities always explainable · locked by verdict tests</text>
+  <rect class="okchip" x="688" y="692" width="66" height="20" rx="10"/><text class="ok" x="700" y="706">CI ✓</text>
+</g>
+
+<!-- ============ SIDE PANELS ============ -->
+<g><!-- caught -->
+  <rect class="panel" x="794" y="104" width="418" height="332" rx="10"/>
+  <use href="#g-bug" x="810" y="120" width="18" height="18" color="#b91c1c"/>
+  <text class="pt" x="836" y="134">WHAT THE GATES CAUGHT · first runs</text>
+  <text class="pi red" x="810" y="160" font-weight="700">9 real compiler bug classes — found by the gates,</text>
+  <text class="pi red" x="810" y="175" font-weight="700">fixed the same day, locked by regression tests:</text>
+  <text class="pi" x="810" y="199">· burn-rate alerts emitted invalid PromQL on EVERY ratio SLO</text>
+  <text class="pi" x="810" y="216">· every emitted Alertmanager config rejected (secrets-as-URLs)</text>
+  <text class="pi" x="810" y="233">· rule-uid collisions — deploys silently overwrote each other,</text>
+  <text class="pi" x="810" y="248">&#160;&#160;only the last rule survived in Grafana</text>
+  <text class="pi" x="810" y="265">· dashboard uids over Grafana's 40-char limit (all rejected)</text>
+  <text class="pi" x="810" y="282">· removed `jaeger` exporter emitted verbatim · empty required blocks</text>
+  <text class="pi" x="810" y="299">· signal-restricted components wired into wrong pipelines</text>
+  <text class="pi" x="810" y="316">· unicode ids broke rule names + ref resolution</text>
+  <text class="pi" x="810" y="333">· scalar SLI legs range-selected (rate(1[5m]))</text>
+  <text class="pi" x="810" y="350">· round-trip identity loss — deployed dashboards diffed as</text>
+  <text class="pi" x="810" y="365">&#160;&#160;missing forever (fixed via obs-pack-id provenance tag)</text>
+  <text class="note" x="810" y="395">None of these were visible to shape tests — only the real</text>
+  <text class="note" x="810" y="410">backends could refuse the files. That is the argument for T1/T4.</text>
+</g>
+
+<g><!-- enforcement -->
+  <rect class="panel" x="794" y="454" width="418" height="286" rx="10"/>
+  <use href="#g-ci" x="810" y="470" width="18" height="18" color="#047857"/>
+  <text class="pt" x="836" y="484">ENFORCEMENT · GitHub Actions, every push</text>
+  <text class="pi" x="810" y="510" font-weight="700" fill="#1e293b">validate job</text>
+  <text class="pi" x="810" y="527">lint 0 errors · 19 test suites · coverage · dep audit (high+)</text>
+  <text class="pi" x="810" y="544">spec checksums · golden gate · backend attestation (T1) strict</text>
+  <text class="pi" x="810" y="561">validator binaries cached on their sha256 pins</text>
+  <text class="pi" x="810" y="588" font-weight="700" fill="#1e293b">backend-live job (docker)</text>
+  <text class="pi" x="810" y="605">disposable Grafana 12.4.4 · T4 round trip strict</text>
+  <text class="pi" x="810" y="622">MCP gateway bridge = the only test scaffolding; every other</text>
+  <text class="pi" x="810" y="639">layer under test is production code</text>
+  <line x1="810" y1="658" x2="1196" y2="658" stroke="#d3dcea"/>
+  <text class="pi" x="810" y="680" font-weight="700" fill="#1e293b">developer loop</text>
+  <text class="pi" x="810" y="697">npm run fetch-validators → test:backend → test:backend:live</text>
+  <text class="note" x="810" y="722">missing tooling skips LOUDLY locally · --strict in CI fails instead</text>
+</g>
+
+<text class="note" x="28" y="764">Observogram · docs/TEST_PLAN_COMPILER_VALIDITY.md — tiers T0–T4 · T2 (Grafana 13 matrix) and T3 (behavioral promtool fixtures) are the next planned gates</text>
+</svg>

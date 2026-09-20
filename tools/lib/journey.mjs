@@ -31,8 +31,27 @@
 //     maxDeclaredNotLive: 0
 //     maxDrifted: 5
 //     maxLiveAgeHours: 24
+//     failOnPartialEvidence: true   # any probe family FAILED → the verdict is not trustworthy
+//     maxUnhealthy: 0               # scrape jobs down + unhealthy rules observed on the wire
+//     stack:                        # step 3: thresholds on the stack self-metric SAMPLES
+//       requireSampled: true        #   breach unless the panel was sampled and a row answered data
+//       rows:                       #   per row id (contracts table), min/max on the sampled value
+//         scrape_success_ratio: { min: 0.9 }
+//         scrape_targets_down: { max: 0 }
+//     A stack breach is an early warning to a business owner — a
+//     point-in-time sample outside a declared band — never an SLO verdict.
+//   keepLivePack: transitions   # step 4: snapshot Pack B under runs/<name>/live/
+//                               #   transitions (default) — first run, any chain
+//                               #   verdict change, gate failure, or after a
+//                               #   vantage loss · always · never
+//
+// Vantage: when Pack B is a live MCP source and the fetch itself fails
+// (endpoint down, core tools unavailable), the run still leaves a record
+// with outcome 'vantage-lost' before the error propagates (exit 2) — a
+// total loss of the observation point is a point in the drift history,
+// not a hole in it.
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync, openSync, readSync, closeSync } from 'node:fs';
 import { resolve, join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from './mini-yaml.mjs';
@@ -40,14 +59,29 @@ import { validateCanonical } from './validator.mjs';
 import { adapt } from './adapter.mjs';
 import { evaluateConformance } from './conformance.mjs';
 import { diffPacks } from './diff.mjs';
+import { comparePackBranches } from './traceability-graph.mjs';
 import { crawlFiles } from './crawler.mjs';
-import { computeDiagnosticGrade, computePostureMatrix, DIAGNOSTIC_PASS_SCORE_THRESHOLD } from '../../studio/diagnostic-grade.mjs';
+import { baseWorkspacePath, brandEnv } from './brand-env.mjs';
+import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from './contracts/stack-self-metrics.mjs';
+import { formatStackValue } from './stack-evidence.mjs';
+import { branchRecordsFromGraph, chainSummary, diffRunBranches, rankCauses, deploysInWindow, topCause } from './chain-history.mjs';
+import { computeDiagnosticGrade, computePostureMatrix, partialLiveEvidence, DIAGNOSTIC_PASS_SCORE_THRESHOLD } from '../../studio/diagnostic-grade.mjs';
+import { sliBaseOfSloId } from '../../studio/verify-deploy.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = JSON.parse(readFileSync(
   resolve(__dirname, '../../vendor/observability-pack-spec/v1.2/observability-pack.schema.json'), 'utf8'));
 
-function workspaceRoot() { return resolve(process.env.TOMOGRAPH_WORKSPACE || '.tomograph'); }
+// The engine stays server-agnostic: by default the root comes from env
+// (flat workspace), but a host can inject a context-aware resolver —
+// the server wires Stage 2 tenancy (workspace-per-org) through here at
+// boot without this module importing any server code.
+let workspaceRootResolver = null;
+export function setWorkspaceRootResolver(fn) { workspaceRootResolver = typeof fn === 'function' ? fn : null; }
+function workspaceRoot() {
+  if (workspaceRootResolver) return workspaceRootResolver();
+  return baseWorkspacePath();
+}
 function journeysDir()   { return join(workspaceRoot(), 'journeys'); }
 function runsDir(name)   { return join(workspaceRoot(), 'runs', sanitizeName(name)); }
 function sanitizeName(n) { return String(n).replace(/[^A-Za-z0-9._-]/g, '_'); }
@@ -93,8 +127,54 @@ export function loadJourneyDef(ref) {
   def.name = def.name || sanitizeName(ref).replace(/\.journey\.yaml$/, '');
   if (!def.packA || (!def.packA.file && !def.packA.crawl)) throw new Error(`journey ${def.name}: packA needs file: or crawl:`);
   if (!def.packB || (!def.packB.file && !def.packB.mcp)) throw new Error(`journey ${def.name}: packB needs file: or mcp:`);
+  if (def.gate && typeof def.gate === 'object' && def.gate.stack !== undefined) validateGateStack(def.gate.stack, def.name);
+  if (def.keepLivePack !== undefined && !KEEP_LIVE_PACK_POLICIES.includes(def.keepLivePack)) {
+    throw new Error(`journey ${def.name}: keepLivePack must be one of ${KEEP_LIVE_PACK_POLICIES.join(', ')} (got ${JSON.stringify(def.keepLivePack)})`);
+  }
   def.__source = source;
   return def;
+}
+
+// Step 4: when the run keeps a snapshot of Pack B beside its record
+// (runs/<journey>/live/<stem>.json). `transitions` keeps the packs that
+// explain a change in the chain history; `always` keeps every one;
+// `never` writes none from now on (snapshots earlier runs kept stay until
+// their records age out of retention). A file-sourced Pack B is never
+// snapshotted — the file is the snapshot.
+export const KEEP_LIVE_PACK_POLICIES = Object.freeze(['transitions', 'always', 'never']);
+export const KEEP_LIVE_PACK_DEFAULT = 'transitions';
+
+// How many records back the run looks for a baseline that carries chains
+// (readJourneyRuns limit), and how many skipped records a transition names.
+export const BASELINE_SCAN_LIMIT = 25;
+const TRANSITION_SKIPPED_CAP = 8;
+
+// gate.stack is validated at load time, not at run time: a typo in a row
+// id would otherwise breach every run with "no sample" and read as a stack
+// problem. Ids are case-sensitive against the contracts table; min/max
+// must be finite numbers; an entry that declares neither has nothing to
+// check and is refused rather than silently passing.
+export function validateGateStack(stack, journeyName = '?') {
+  const where = `journey ${journeyName}: gate.stack`;
+  if (!stack || typeof stack !== 'object' || Array.isArray(stack)) throw new Error(`${where} must be a mapping`);
+  if (stack.requireSampled !== undefined && typeof stack.requireSampled !== 'boolean') {
+    throw new Error(`${where}.requireSampled must be true or false`);
+  }
+  if (stack.rows === undefined) return;
+  if (!stack.rows || typeof stack.rows !== 'object' || Array.isArray(stack.rows)) throw new Error(`${where}.rows must be a mapping of row id → { min, max }`);
+  for (const [id, entry] of Object.entries(stack.rows)) {
+    if (!STACK_ROW_BY_ID.has(id)) {
+      throw new Error(`${where}.rows names unknown row ${id}; known rows: ${STACK_SELF_METRIC_PROBES.map(r => r.id).join(', ')}`);
+    }
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error(`${where}.rows.${id} must be a mapping with min and/or max`);
+    for (const bound of ['min', 'max']) {
+      if (entry[bound] !== undefined && !(typeof entry[bound] === 'number' && Number.isFinite(entry[bound]))) {
+        throw new Error(`${where}.rows.${id}.${bound} must be a finite number`);
+      }
+    }
+    if (entry.min === undefined && entry.max === undefined) throw new Error(`${where}.rows.${id} declares neither min nor max — nothing to check`);
+    if (entry.min !== undefined && entry.max !== undefined && entry.min > entry.max) throw new Error(`${where}.rows.${id}: min ${entry.min} is above max ${entry.max}`);
+  }
 }
 
 // ---------- pack sources ----------
@@ -108,7 +188,7 @@ function loadPackFile(path, baseDir) {
 
 // Minimal repo walk for the crawl source — mirrors tools/crawl-repo.mjs's
 // filters (that script runs main() on import, so it can't be imported).
-const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'out', '.tomograph', 'coverage', 'vendor']);
+const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'out', '.observogram', '.tomograph', 'coverage', 'vendor']);
 const SCAN_EXT = /\.(ya?ml|json|cs|go|java|py|ts|tsx|js|mjs|rs|kt)$/i;
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
@@ -165,10 +245,18 @@ async function resolvePackB(def) {
   // Imported lazily: fetch-live-pack is the heaviest module and only the
   // live path needs it. Composition mirrors the server's draft route.
   const { fetchMcp, buildCanonicalPack } = await import('../fetch-live-pack.mjs');
-  const fetched = await fetchMcp({ mcpUrl: m.url, mcpAuth });
-  const refreshedAt = new Date().toISOString();
-  const canonical = buildCanonicalPack({ refreshedAt, mcpUrl: m.url, ...fetched });
-  return { canonical, source: `mcp:${m.url}` };
+  try {
+    const fetched = await fetchMcp({ mcpUrl: m.url, mcpAuth });
+    const refreshedAt = new Date().toISOString();
+    const canonical = buildCanonicalPack({ refreshedAt, mcpUrl: m.url, ...fetched });
+    return { canonical, source: `mcp:${m.url}` };
+  } catch (e) {
+    // The vantage point itself failed (unreachable, core tools missing,
+    // unbuildable answer) — distinct from the configuration errors above,
+    // which never reach the wire and leave no run record.
+    e.vantageLost = true;
+    throw e;
+  }
 }
 
 // ---------- gate ----------
@@ -201,7 +289,326 @@ export function evaluateGate(gate, facts) {
       add('maxLiveAgeHours', `live evidence is ${facts.liveAgeHours.toFixed(1)}h old (max ${gate.maxLiveAgeHours}h)`);
     }
   }
+  // Vantage-aware criteria. A failed probe family is a hole of unknown
+  // size in the live evidence: whatever the diff says about that family
+  // is unverifiable, so a verdict built on it must not pass a gate that
+  // asked for whole evidence. (An EMPTY probe is an honest zero and an
+  // UNSUPPORTED one a restricted tier — neither breaches on its own; the
+  // one exception is a vantage that is entirely lost.)
+  if (gate.failOnPartialEvidence) {
+    const failed = facts.probes?.failed || [];
+    if (failed.length) {
+      add('failOnPartialEvidence', `live evidence is partial: probes failed: ${failed.join(', ')} — verdict not trustworthy`);
+    } else if (facts.vantage === 'lost') {
+      const unsupported = facts.probes?.unsupported || [];
+      add('failOnPartialEvidence', `live evidence is lost: no probe family answered (not exposed: ${unsupported.join(', ') || '-'}) — verdict not trustworthy`);
+    }
+  }
+  if (Number.isFinite(gate.maxUnhealthy)) {
+    const down = facts.scrapeJobsDown ?? 0;
+    const unhealthy = facts.unhealthyRules ?? 0;
+    if (down + unhealthy > gate.maxUnhealthy) {
+      const names = [
+        ...(facts.scrapeJobsDownNames || []).map(n => `job ${n} down`),
+        ...(facts.unhealthyRuleNames || []).map(n => `rule ${n} unhealthy`),
+      ];
+      add('maxUnhealthy', `${down} scrape job(s) down + ${unhealthy} unhealthy rule(s) observed on the wire (max ${gate.maxUnhealthy})`
+        + (names.length ? `: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''}` : ''));
+    }
+  }
+  if (gate.stack && typeof gate.stack === 'object') evaluateStackGate(gate.stack, facts.stackEvidence, add);
   return breaches;
+}
+
+// Display formatting for a sampled value lives in the browser-safe
+// tools/lib/stack-evidence.mjs (the studio prints the same vocabulary);
+// re-exported here so the CLI and the tests keep one import.
+export { formatStackValue };
+
+// gate.stack — thresholds on the stack self-metric SAMPLES of this run.
+// Honesty rules: a threshold can only be checked against a row that
+// answered `data`; anything else (row absent, empty, failed, not in
+// inventory, not attempted, a file-sourced B with no evidence at all)
+// breaches as "no sample" rather than passing by absence. A breach is a
+// point-in-time sample outside a declared band — an early warning, never
+// an SLO verdict — and the detail says so.
+function evaluateStackGate(stack, evidence, add) {
+  const rows = Array.isArray(evidence?.rows) ? evidence.rows : [];
+  const byId = new Map(rows.map(r => [r.id, r]));
+  const isData = (r) => r && r.outcome === 'data' && typeof r.value === 'number' && Number.isFinite(r.value);
+  if (stack.requireSampled) {
+    const why = !evidence ? 'Pack B is not a live draft'
+      : evidence.status !== 'sampled' ? (evidence.reason || evidence.status)
+      : !rows.some(isData) ? 'sampled, but no row answered with data'
+      : null;
+    if (why) add('stack', `stack self-metrics not sampled (${why}) — the vantage cannot prove stack health`);
+  }
+  const thresholds = stack.rows && typeof stack.rows === 'object' ? stack.rows : {};
+  for (const [id, t] of Object.entries(thresholds)) {
+    // evaluateGate is exported and a host may compose a gate object
+    // without going through loadJourneyDef's validation: a threshold that
+    // cannot be checked breaches as such — it never passes by silence.
+    const invalid = invalidThreshold(t);
+    if (invalid) { add(`stack.${id}`, `threshold invalid (${invalid}) — cannot be checked`); continue; }
+    const row = byId.get(id);
+    if (!isData(row)) {
+      // A row the fetcher never wrote is one the sampler never attempted:
+      // on a not-attempted panel the tier reason is the whole story, on a
+      // sampled panel the call budget ran out or the row was not observed.
+      const outcome = !evidence ? 'no stack evidence'
+        : !row ? (evidence.status === 'not-attempted'
+          ? `not-attempted: ${evidence.reason || 'no reason recorded'}`
+          : 'not attempted by the sampler — call budget exhausted or row not observed')
+        : row.outcome === 'data' ? 'data without a numeric value' : row.outcome;
+      add(`stack.${id}`, `no sample for ${id} (${outcome}${row?.reason ? `: ${row.reason}` : ''}) — threshold cannot be checked`);
+      continue;
+    }
+    const min = t.min === undefined ? null : t.min;
+    const max = t.max === undefined ? null : t.max;
+    const belowMin = min !== null && row.value < min;
+    const aboveMax = max !== null && row.value > max;
+    if (belowMin || aboveMax) {
+      const unit = row.unit || 'value';
+      const shown = formatStackValue(row.value, unit);
+      const band = `[${min === null ? '-∞' : formatStackValue(min, unit)} … ${max === null ? '∞' : formatStackValue(max, unit)}]`;
+      // Display rounding can print the value equal to the bound it broke
+      // (0.0004/s max 0 → "0.000/s outside [-∞ … 0.000/s]"); the raw
+      // number keeps the explanation readable.
+      const raw = shown === formatStackValue(belowMin ? min : max, unit) ? ` (raw ${row.value})` : '';
+      add(`stack.${id}`, `${id} = ${shown}${raw} ${unit} outside ${band} — point-in-time sample, not an SLO verdict`);
+    }
+  }
+}
+
+// Why a declared row threshold cannot be evaluated, or null when it can.
+// Mirrors validateGateStack's rules at run time (finite numeric bounds,
+// at least one of them, min ≤ max).
+function invalidThreshold(t) {
+  if (!t || typeof t !== 'object' || Array.isArray(t)) return 'not a mapping with min and/or max';
+  for (const bound of ['min', 'max']) {
+    if (t[bound] !== undefined && !(typeof t[bound] === 'number' && Number.isFinite(t[bound]))) return `${bound} is not a finite number`;
+  }
+  if (t.min === undefined && t.max === undefined) return 'neither min nor max declared';
+  if (t.min !== undefined && t.max !== undefined && t.min > t.max) return `min ${t.min} is above max ${t.max}`;
+  return null;
+}
+
+// ---------- step 3: stack-health evidence (samples, kept per run) ----------
+//
+// The fetcher's step-2 panel rides on Pack B as JSON annotations
+// (mcp.observed.stack_metrics / .alertmanager / .grafana.*). Each run
+// keeps what it saw so the run history becomes the time series. Every
+// row is still a point-in-time sample: `hint` is the contracts' display
+// marker and `referenceSli` the vocabulary it follows — neither is a
+// verdict, and malformed JSON degrades to "no rows", never to health.
+const STACK_ROW_BY_ID = new Map(STACK_SELF_METRIC_PROBES.map(r => [r.id, r]));
+const STACK_EVIDENCE_ROW_CAP = 64;
+
+function parseJsonAnnotation(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try { return JSON.parse(value); } catch (_) { return null; }
+}
+
+function stackEvidenceRows(observed) {
+  return (Array.isArray(observed) ? observed : [])
+    .filter(r => r && typeof r === 'object' && typeof r.id === 'string' && r.id)
+    .slice(0, STACK_EVIDENCE_ROW_CAP)
+    .map(r => {
+      const def = STACK_ROW_BY_ID.get(r.id) || null;
+      const value = typeof r.value === 'number' && Number.isFinite(r.value) ? r.value : null;
+      const direction = def?.direction || r.direction || 'info';
+      return {
+        id: r.id,
+        family: def?.family || r.family || null,
+        product: r.product ?? null,
+        value,
+        unit: def?.unit || r.unit || null,
+        direction,
+        // A declared outcome is kept as it is; an outcome the contracts do
+        // not know is kept verbatim (never relabelled as a probe failure
+        // nothing reported — it is still never `data`), and a missing one
+        // reads 'unknown'.
+        outcome: STACK_OUTCOMES.includes(r.outcome) ? r.outcome
+          : (typeof r.outcome === 'string' && r.outcome.trim() ? r.outcome.trim() : 'unknown'),
+        hint: displayHint({ direction }, value),
+        at: typeof r.at === 'string' ? r.at : null,
+        // A row the table no longer declares keeps null: no vocabulary
+        // is claimed for a sample nothing maps any more.
+        referenceSli: def?.referenceSli ?? null,
+        ...(r.reason ? { reason: String(r.reason) } : {}),
+      };
+    });
+}
+
+function stackEvidenceFromAnnotations(ann) {
+  const status = ann['mcp.stack.status'];
+  if (status !== 'sampled' && status !== 'not-attempted') return null;
+  const am = parseJsonAnnotation(ann['mcp.observed.alertmanager']);
+  const dsRaw = parseJsonAnnotation(ann['mcp.observed.grafana.datasources']);
+  const cpRaw = parseJsonAnnotation(ann['mcp.observed.grafana.contact_points']);
+  const grafanaError = ann['mcp.observed.grafana.error'] ? String(ann['mcp.observed.grafana.error']) : null;
+  const datasources = (Array.isArray(dsRaw) ? dsRaw : []).filter(d => d && typeof d === 'object');
+  const hasGrafana = Array.isArray(dsRaw) || (cpRaw && typeof cpRaw === 'object') || grafanaError;
+  return {
+    status,
+    reason: status === 'not-attempted' ? String(ann['mcp.stack.reason'] || 'not attempted') : null,
+    rows: stackEvidenceRows(parseJsonAnnotation(ann['mcp.observed.stack_metrics'])),
+    alertmanager: am && typeof am === 'object' ? {
+      version: am.version ?? null,
+      clusterStatus: am.clusterStatus ?? null,
+      silencesActive: typeof am.silences?.active === 'number' ? am.silences.active : null,
+      error: am.error ? String(am.error) : null,
+    } : null,
+    grafana: hasGrafana ? {
+      datasources: Array.isArray(dsRaw) ? datasources.length : null,
+      // Only a health verdict of 'error' is unhealthy; 'unknown' means the
+      // health was never checked and must not read as either.
+      unhealthyDatasources: datasources.filter(d => d.health === 'error').map(d => String(d.name ?? d.uid ?? '?')),
+      contactPoints: cpRaw && typeof cpRaw === 'object' && typeof cpRaw.count === 'number' ? cpRaw.count : null,
+      error: grafanaError,
+    } : null,
+  };
+}
+
+// On-wire liveness facts read from Pack B's fetcher annotations
+// (docs/MCP_INTEGRATION.md). A file-sourced Pack B carries none: every
+// list is empty, counts are 0, toolsExposedCount is null — absence of
+// evidence is reported as absence, never as health.
+export function liveEvidenceFacts(canonicalB) {
+  const ann = canonicalB?.metadata?.annotations || {};
+  const list = (k) => String(ann[k] || '').split(',').map(x => x.trim()).filter(Boolean);
+  const ev = partialLiveEvidence(canonicalB);
+  const scrapeJobsDownNames = list('mcp.discovered.scrape_jobs_down');
+  const unhealthyRuleNames = [
+    ...list('mcp.discovered.recording_rules_unhealthy'),
+    ...list('mcp.discovered.alert_rules_unhealthy'),
+  ];
+  const exposed = Number(ann['mcp.toolsExposedCount']);
+  // Step 2 stack self-metrics counts (mcp.stack.*). status is null when
+  // Pack B carries no panel (file-sourced, or a pre-step-2 refresh); the
+  // counts are then 0 — an absence, never a healthy stack. No gate key
+  // reads the counts; gate.stack reads the samples in stackEvidence below,
+  // and even then a breach is an early warning, not a verdict.
+  const stackStatus = ann['mcp.stack.status'] === 'sampled' || ann['mcp.stack.status'] === 'not-attempted'
+    ? ann['mcp.stack.status'] : null;
+  const stackCount = (k) => { const v = Number(ann[k]); return Number.isFinite(v) ? v : 0; };
+  return {
+    probes: {
+      attempted: ev.attempted,
+      succeeded: list('mcp.probesSucceeded'),
+      empty: ev.empty,
+      failed: ev.failed,
+      unsupported: ev.unsupported,
+    },
+    probeErrors: ev.errors,
+    vantage: ev.vantage,
+    toolsExposedCount: ann['mcp.toolsExposedCount'] != null && String(ann['mcp.toolsExposedCount']) !== '' && Number.isFinite(exposed) ? exposed : null,
+    scrapeJobsDown: scrapeJobsDownNames.length,
+    scrapeJobsDownNames,
+    unhealthyRules: unhealthyRuleNames.length,
+    unhealthyRuleNames,
+    stack: {
+      status: stackStatus,
+      reason: stackStatus === 'not-attempted' ? String(ann['mcp.stack.reason'] || 'not attempted') : null,
+      sampled: stackCount('mcp.stack.sampled'),
+      empty: stackCount('mcp.stack.empty'),
+      failed: stackCount('mcp.stack.failed'),
+      notAttempted: stackCount('mcp.stack.notAttempted'),
+    },
+    // Step 3: the samples themselves (null when Pack B carries no panel).
+    stackEvidence: stackEvidenceFromAnnotations(ann),
+  };
+}
+
+// ---------- step 4: chain history, versions, live-pack snapshot ----------
+
+// mcp.versions.<product> → value, from Pack B's fetcher annotations
+// (docs/MCP_INTEGRATION.md). Only the bare product keys — the provenance
+// keys (mcp.versions.<product>.source / .commit / …) are not versions.
+// null when the pack carries none (file-sourced B, or no version probe
+// answered): an absence, never "unchanged".
+export function liveVersions(canonicalB) {
+  const ann = canonicalB?.metadata?.annotations || {};
+  const out = {};
+  for (const key of Object.keys(ann).sort()) {
+    const m = /^mcp\.versions\.([^.]+)$/.exec(key);
+    if (m && ann[key] != null && String(ann[key]) !== '') out[m[1]] = String(ann[key]);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+// The snapshot decision for this run, before anything is written. Pure so
+// the policy is testable; `previousRun` is the newest record read before
+// this run's write (null on the first run). A previous record that carries
+// no chains (vantage lost, or written before chains were recorded) cannot
+// be diffed, so the pack is kept: a snapshot nobody can compare against is
+// cheaper than a transition nobody can explain.
+export function livePackDecision({ policy, previousRun, transition, outcome, packBIsFile, packBSource }) {
+  if (packBIsFile) return { kept: false, reason: `Pack B is a file (${packBSource})` };
+  const p = KEEP_LIVE_PACK_POLICIES.includes(policy) ? policy : KEEP_LIVE_PACK_DEFAULT;
+  if (p === 'never') return { kept: false, reason: 'keepLivePack: never' };
+  if (p === 'always') return { kept: true, reason: 'keepLivePack: always' };
+  if (!previousRun) return { kept: true, reason: 'first run (no previous record)' };
+  if (previousRun.outcome === 'vantage-lost') return { kept: true, reason: `previous run ${previousRun.startedAt || '?'} lost its vantage` };
+  if (!transition) return { kept: true, reason: `previous run ${previousRun.startedAt || '?'} carries no chain record to compare` };
+  if (transition.any) {
+    const bits = [];
+    if (transition.changed.length) bits.push(`${transition.changed.length} changed`);
+    if (transition.appeared.length) bits.push(`${transition.appeared.length} appeared`);
+    if (transition.disappeared.length) bits.push(`${transition.disappeared.length} disappeared`);
+    return { kept: true, reason: `chains changed since ${previousRun.startedAt || '?'}: ${bits.join(' · ')}` };
+  }
+  if (outcome === 'gate-failed') return { kept: true, reason: 'gate failed' };
+  return { kept: false, reason: `no transition since ${previousRun.startedAt || '?'}` };
+}
+
+// The snapshot filename shape beside a record: `live/<record stem>.json`.
+// Only this shape is ever read back or pruned — a hand-edited record path
+// cannot point outside the journey's live/ directory.
+export const LIVE_PACK_PATH_RE = /^live\/(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)\.json$/;
+const runStem = (startedAt) => String(startedAt).replace(/[:.]/g, '-');
+
+// Write Pack B's canonical JSON beside the record. Returns the livePack
+// field for the record; a failure lands as `error` (the caller notes it as
+// historyError) — the verdict already exists and is never thrown away.
+function writeLivePack(name, startedAt, canonical) {
+  const stem = runStem(startedAt);
+  const relPath = `live/${stem}.json`;
+  const dir = join(runsDir(name), 'live');
+  try {
+    const text = JSON.stringify(canonical, null, 2);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${stem}.json`), text);
+    return { path: relPath, bytes: Buffer.byteLength(text, 'utf8'), error: null };
+  } catch (e) {
+    return { path: null, bytes: null, error: `live pack ${relPath}: ${e.message}` };
+  }
+}
+
+// The parsed Pack B snapshot of a run record, or null when the record
+// kept none, the path is not the snapshot shape, or the file is gone /
+// unparseable (a pruned snapshot reads as absent, never as an error).
+export function readLivePack(name, record) {
+  const rel = record?.livePack?.path;
+  if (typeof rel !== 'string' || !LIVE_PACK_PATH_RE.test(rel)) return null;
+  try { return JSON.parse(readFileSync(join(runsDir(name), 'live', `${LIVE_PACK_PATH_RE.exec(rel)[1]}.json`), 'utf8')); } catch (_) { return null; }
+}
+
+// Pure: which files of live/ belong to records retention has already
+// dropped — the run-shaped names OLDER than the oldest surviving record.
+// Never a survivor's snapshot, never a file that is not of the run shape,
+// and never a snapshot newer than the oldest record that merely has no
+// record YET: two writers (a cron run and POST /api/journeys/:name/run)
+// can interleave, and one's just-written snapshot must not be another's
+// orphan. With no surviving record nothing is older than one — nothing is
+// named.
+export function pruneLiveSnapshots(recordFiles, liveFiles) {
+  const records = (Array.isArray(recordFiles) ? recordFiles : []).filter(f => typeof f === 'string' && JOURNEY_RUN_FILE_RE.test(f)).sort();
+  if (!records.length) return [];
+  const oldest = records[0];
+  return (Array.isArray(liveFiles) ? liveFiles : [])
+    .filter(f => typeof f === 'string' && JOURNEY_RUN_FILE_RE.test(f) && f < oldest)
+    .sort();
 }
 
 // ---------- the run ----------
@@ -212,7 +619,28 @@ export async function runJourney(def, { baseDir } = {}) {
   const t0 = Date.now();
 
   const a = await resolvePackA(def, def.__baseDir);
-  const b = await resolvePackB(def);
+  let b;
+  try {
+    b = await resolvePackB(def);
+  } catch (e) {
+    // Only a LIVE source that reached the wire can lose its vantage; a
+    // missing pack file or an unset authEnv is a configuration error and
+    // leaves no record.
+    if (def.packB?.mcp && e?.vantageLost) {
+      writeRunRecord(def.name, startedAt, {
+        journey: def.name,
+        startedAt,
+        tookMs: Date.now() - t0,
+        outcome: 'vantage-lost',
+        error: String(e.message || e),
+        packA: { source: a.source, name: a.canonical?.metadata?.name || null, version: a.canonical?.metadata?.version || null },
+        packB: { source: `mcp:${def.packB.mcp.url}` },
+        scope: { env: def.env || null, service: def.service || null, scopeMode: def.scopeMode || null },
+        gate: { thresholds: def.gate || {}, breaches: [] },
+      });
+    }
+    throw e;
+  }
 
   for (const [label, pack] of [['packA', a.canonical], ['packB', b.canonical]]) {
     const errors = validateCanonical(pack, SCHEMA);
@@ -221,12 +649,21 @@ export async function runJourney(def, { baseDir } = {}) {
 
   const layeredA = adapt(a.canonical, { environment: def.env || undefined });
   const layeredB = adapt(b.canonical, {});
-  const diff = diffPacks(layeredA, layeredB, { scopeMode: def.scopeMode, service: def.service });
+  // Same construct as the studio's /api/diff: the requirement-chain
+  // comparison rides on the diff, and the grade's Drift-free criterion
+  // reads it when declared commitments exist. Without it the CLI would
+  // grade on raw diff buckets while the studio graded on chain integrity
+  // — two scores for one comparison.
+  const diff = {
+    ...diffPacks(layeredA, layeredB, { scopeMode: def.scopeMode, service: def.service }),
+    traceabilityGraph: comparePackBranches(layeredA, layeredB),
+  };
   const conformance = evaluateConformance(a.canonical);
   const posture = computePostureMatrix(layeredA, layeredB);
   const grade = computeDiagnosticGrade(layeredA, layeredB, posture, null, diff);
 
   const liveRefreshedAt = b.canonical?.metadata?.annotations?.['mcp.refreshedAt'] || null;
+  const live = liveEvidenceFacts(b.canonical);
   // grade.overall.audit is the canonical PASS/FAIL contract (score > 85%).
   const audit = grade.overall?.audit || { scorePctExact: 0, passes: false };
   const facts = {
@@ -238,8 +675,46 @@ export async function runJourney(def, { baseDir } = {}) {
     drifted: diff.summary?.drifted ?? 0,
     aligned: diff.summary?.aligned ?? 0,
     liveAgeHours: hoursSince(liveRefreshedAt),
+    ...live,
   };
   const breaches = evaluateGate(def.gate, facts);
+  const rollup = diff.traceabilityGraph?.rollup || null;
+  const outcome = breaches.length ? 'gate-failed' : 'pass';
+
+  // Step 4: the per-chain verdicts this run saw, the records they are
+  // compared against (read BEFORE this run is written, so the diff is
+  // against history, never against itself) and the snapshot decision.
+  // `previousRun` is the newest record whatever it holds — the vantage is
+  // compared against it; `baseline` is the newest record that carries
+  // chains (a vantage-lost or pre-chain record in between cannot be
+  // diffed) — the chain diff, the deploy window and the versions are
+  // compared against it. The records between them are named on the
+  // transition as `skipped`, so a run after an outage never claims "no
+  // previous run" nor compares against nothing.
+  const branches = branchRecordsFromGraph(diff.traceabilityGraph);
+  const chains = chainSummary({ branches });
+  const recent = readJourneyRuns(def.name, { limit: BASELINE_SCAN_LIMIT });
+  const previousRun = recent[0] || null;
+  const baseline = recent.find(r => r && typeof r === 'object' && Array.isArray(r.branches)) || null;
+  const skipped = (baseline ? recent.slice(0, recent.indexOf(baseline)) : recent)
+    .slice(0, TRANSITION_SKIPPED_CAP)
+    .map(r => ({ startedAt: typeof r?.startedAt === 'string' ? r.startedAt : null, outcome: typeof r?.outcome === 'string' ? r.outcome : null }));
+  const diffed = diffRunBranches(baseline, { branches });
+  const transition = diffed
+    ? { ...diffed, skipped, reason: null }
+    : { reason: !previousRun ? 'first run' : previousRun.outcome === 'vantage-lost' ? 'previous run lost its vantage' : 'previous runs carry no chain record',
+        since: null, changed: [], appeared: [], disappeared: [], any: false, skipped };
+  const livePackDecided = livePackDecision({
+    policy: def.keepLivePack, previousRun, transition: diffed, outcome,
+    packBIsFile: !!def.packB?.file, packBSource: b.source,
+  });
+  let livePack = { kept: false, path: null, reason: livePackDecided.reason };
+  let livePackError = null;
+  if (livePackDecided.kept) {
+    const written = writeLivePack(def.name, startedAt, b.canonical);
+    if (written.error) { livePackError = written.error; livePack = { kept: false, path: null, reason: `snapshot write failed: ${written.error}` }; }
+    else livePack = { kept: true, path: written.path, bytes: written.bytes, reason: livePackDecided.reason };
+  }
 
   const record = {
     journey: def.name,
@@ -249,7 +724,42 @@ export async function runJourney(def, { baseDir } = {}) {
     packA: { source: a.source, name: a.canonical?.metadata?.name || null, version: a.canonical?.metadata?.version || null },
     packB: { source: b.source, name: b.canonical?.metadata?.name || null, version: b.canonical?.metadata?.version || null, refreshedAt: liveRefreshedAt },
     scope: { env: def.env || null, service: def.service || null, scopeMode: def.scopeMode || null },
-    grade: { score: facts.gradeScore, pass: facts.gradePass, threshold: DIAGNOSTIC_PASS_SCORE_THRESHOLD },
+    // schema identifies which scoring construct produced the score, so a
+    // step in the gradeScore series is explainable as re-scoring vs reality
+    // (schema 1: 8 scored criteria incl. Actionable; schema 2: 7 — Actionable
+    // is informational operability).
+    grade: {
+      score: facts.gradeScore, pass: facts.gradePass, threshold: DIAGNOSTIC_PASS_SCORE_THRESHOLD,
+      schema: grade.gradeSchema ?? 1,
+      letter: grade.overall?.instrumentGrade?.letter ?? null,
+      letterLabel: grade.overall?.instrumentGrade?.label ?? null,
+      // Which construct Drift-free was scored on: requirement-chain
+      // integrity (studio parity) when declared commitments exist, else
+      // the diff buckets. Explains a score step across a pack change.
+      driftConstruct: rollup && rollup.declaredTotal > 0 ? 'requirement-chain' : 'diff-buckets',
+    },
+    traceability: rollup ? {
+      integrityPct: rollup.integrityPct, intact: rollup.intact, partial: rollup.partial,
+      broken: rollup.broken, undeclared: rollup.undeclared, declaredTotal: rollup.declaredTotal,
+    } : null,
+    // Step 4: per requirement chain — the scored verdict, the on-wire ladder
+    // verdict and the degraded nodes with their blast radius (chain-history.mjs;
+    // caps 64 branches × 16 nodes, `truncated` marks a cut). [] when the
+    // graph has no branches.
+    branches,
+    // The listing summary over `branches` (counts, means, top exposure);
+    // GET /api/journeys recomputes the same function from the record.
+    chains,
+    // mcp.versions.<product> as Pack B reported them; null when none.
+    versions: liveVersions(b.canonical),
+    // What changed since the baseline record's chains (`since`), the
+    // records skipped to reach it, and — when nothing could be compared —
+    // why (`reason`: first run · previous run lost its vantage · previous
+    // runs carry no chain record); `reason` is null on a comparison.
+    transition,
+    // Whether Pack B was snapshotted beside this record and why (policy
+    // keepLivePack, default transitions). A file-sourced B is never kept.
+    livePack,
     conformance: { scorePercent: conformance.scorePercent, mustPercent: conformance.mustPercent, conformant: conformance.conformant, declaredTier: conformance.declaredTier },
     drift: {
       alignmentPct: facts.alignmentPct,
@@ -258,27 +768,151 @@ export async function runJourney(def, { baseDir } = {}) {
       declaredNotLive: facts.declaredNotLive,
       liveNotDeclared: facts.liveNotDeclared,
       outOfScope: diff.summary?.outOfScope ?? 0,
+      // Placeholders parked on either side (never paired, never counted).
+      scaffold: diff.summary?.scaffold ?? 0,
     },
     freshness: { liveAgeHours: facts.liveAgeHours, refreshedAt: liveRefreshedAt },
+    // On-wire liveness of the vantage point itself (Pack B annotations).
+    // probes.* are family NAMES so a breach can say which hole it saw.
+    probes: live.probes,
+    probeErrors: live.probeErrors,
+    vantage: live.vantage,
+    toolsExposedCount: live.toolsExposedCount,
+    scrapeJobsDown: live.scrapeJobsDown,
+    unhealthyRules: live.unhealthyRules,
+    // Step 2 stack self-metric sample counts — recorded as a signal for the
+    // drift-over-time series, never gated on.
+    stack: live.stack,
+    // Step 3: the samples this run saw (rows + Alertmanager / Grafana
+    // status), null when Pack B carries no panel. Point-in-time evidence
+    // kept per run so the history is the time series; gate.stack reads it.
+    stackEvidence: live.stackEvidence,
     gate: { thresholds: def.gate || {}, breaches },
-    outcome: breaches.length ? 'gate-failed' : 'pass',
+    outcome,
   };
-
-  // History: one JSON per run — the drift-over-time series.
-  try {
-    const dir = runsDir(def.name);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, `${startedAt.replace(/[:.]/g, '-')}.json`), JSON.stringify(record, null, 2));
-  } catch (e) {
-    record.historyError = e.message;
+  // Step 4: candidate causes for the chains that got worse since the
+  // baseline — ranked over Observogram's own deploys inside the window
+  // (baseline start, this start] with every item's artifact selector
+  // resolved against Pack A (the ranker matches names exactly, never by
+  // substring), the drift and version facts of this record and its stack
+  // samples (chain-history.mjs rankCauses). A vantage change rides beside
+  // them, never among them. A baseline whose start time cannot be parsed
+  // gives an EMPTY window — never all of history. The ranker's own copy of
+  // the diff is dropped: `transition` above is the single persisted copy.
+  // null on the first run: nothing to explain yet.
+  if (previousRun) {
+    const sinceIso = (baseline || previousRun).startedAt;
+    const deploys = typeof sinceIso === 'string' && Number.isFinite(Date.parse(sinceIso))
+      ? resolveDeployItems(deploysInWindow(readDeployLog(), sinceIso, startedAt), a.canonical)
+      : [];
+    const { transitions: _transitions, ...causes } = rankCauses({ previous: previousRun, baseline, current: record, deploys });
+    record.causes = causes;
+  } else {
+    record.causes = null;
   }
+  if (livePackError) record.historyError = livePackError;
+
+  writeRunRecord(def.name, startedAt, record);
   return record;
 }
 
+// ---------- run history + retention ----------
+//
+// One JSON per run under runs/<journey>/ — the drift-over-time series the
+// journeys surface reads. Continuity is the point (a journey run from cron
+// every few minutes is the intended cadence), so the directory is bounded:
+// after every write it is pruned to the newest JOURNEY_RUN_RETENTION files.
+// Filenames are the ISO start time with ':' and '.' replaced, so their
+// lexical order IS their chronological order; "newest" needs no stat.
+export const JOURNEY_RUN_RETENTION_DEFAULT = 1000;
+
+// Defensive parse of the retention knob: a non-negative integer, else the
+// default. 0 means unlimited (no pruning). Exported so the policy is
+// testable without touching the environment.
+export function parseRunRetention(raw, fallback = JOURNEY_RUN_RETENTION_DEFAULT) {
+  if (raw === undefined || raw === null) return fallback;
+  const s = String(raw).trim();
+  if (!/^\d+$/.test(s)) return fallback;
+  const n = Number(s);
+  return Number.isSafeInteger(n) && n >= 0 ? n : fallback;
+}
+
+// Read at write time (not at import) so an operator's env change and a
+// test's env flip both take effect on the next run. OBSERVOGRAM_JOURNEY_RUN_RETENTION
+// (legacy TOMOGRAPH_* spelling honoured by brandEnv).
+export function journeyRunRetention() {
+  return parseRunRetention(brandEnv('JOURNEY_RUN_RETENTION') || undefined);
+}
+
+// The run filename shape writeRunRecord produces: the ISO start time with
+// ':' and '.' replaced by '-'. Only names of this shape are run records for
+// retention — a hand-dropped notes.json would otherwise sort after every
+// ISO name, count as the "newest" run and displace a real record.
+export const JOURNEY_RUN_FILE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.json$/;
+
+// Pure retention policy: given the run filenames of one journey and the
+// number to keep, return the names to delete, oldest first. keep <= 0 (or
+// a non-number) means unlimited → nothing is deleted. Files that are not
+// run records (JOURNEY_RUN_FILE_RE) are never candidates and never count.
+export function pruneRunFiles(files, keep) {
+  const n = Number(keep);
+  if (!Number.isFinite(n) || n <= 0) return [];
+  const runs = (Array.isArray(files) ? files : [])
+    .filter(f => typeof f === 'string' && JOURNEY_RUN_FILE_RE.test(f))
+    .sort();
+  const excess = runs.length - Math.floor(n);
+  return excess > 0 ? runs.slice(0, excess) : [];
+}
+
+// A write failure is reported on the record, never thrown: the verdict
+// already exists. Pruning likewise: a file that cannot be deleted is noted
+// as historyError and the run still counts.
+function writeRunRecord(name, startedAt, record) {
+  const dir = runsDir(name);
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${runStem(startedAt)}.json`), JSON.stringify(record, null, 2));
+  } catch (e) {
+    record.historyError = [record.historyError, e.message].filter(Boolean).join('; ');
+    return;
+  }
+  const keep = journeyRunRetention();
+  const errors = [];
+  let victims = [];
+  if (keep > 0) {
+    try { victims = pruneRunFiles(readdirSync(dir), keep); } catch (e) { errors.push(`list ${dir}: ${e.message}`); }
+    for (const f of victims) {
+      try { unlinkSync(join(dir, f)); } catch (e) { errors.push(`prune ${f}: ${e.message}`); }
+    }
+  }
+  // Step 4: a live-pack snapshot outlives its record only until the next
+  // write — then it is a retention victim and goes. Listed AFTER the record
+  // prune so the survivors are the records that still exist; only
+  // snapshots older than the oldest survivor are named (pruneLiveSnapshots),
+  // so a concurrent writer's just-written snapshot is never touched. No
+  // live/ directory: nothing to do.
+  const liveDir = join(dir, 'live');
+  let liveFiles = null;
+  try { liveFiles = readdirSync(liveDir); } catch (_) { liveFiles = null; }
+  if (liveFiles) {
+    let orphans = [];
+    try { orphans = pruneLiveSnapshots(readdirSync(dir), liveFiles); } catch (e) { errors.push(`list ${dir}: ${e.message}`); }
+    for (const f of orphans) {
+      try { unlinkSync(join(liveDir, f)); } catch (e) { errors.push(`prune live/${f}: ${e.message}`); }
+    }
+  }
+  if (errors.length) {
+    record.historyError = [record.historyError, ...errors].filter(Boolean).join('; ');
+  }
+}
+
+// The run records of a journey, newest first. Only files of the run shape
+// (JOURNEY_RUN_FILE_RE) are records: a hand-dropped notes.json would
+// otherwise sort after every ISO name and become the "previous run".
 export function readJourneyRuns(name, { limit = 50 } = {}) {
   const dir = runsDir(name);
   let files = [];
-  try { files = readdirSync(dir).filter(f => f.endsWith('.json')).sort().reverse(); } catch (_) { return []; }
+  try { files = readdirSync(dir).filter(f => JOURNEY_RUN_FILE_RE.test(f)).sort().reverse(); } catch (_) { return []; }
   const out = [];
   for (const f of files.slice(0, limit)) {
     try { out.push(JSON.parse(readFileSync(join(dir, f), 'utf8'))); } catch (_) {}
@@ -286,9 +920,119 @@ export function readJourneyRuns(name, { limit = 50 } = {}) {
   return out;
 }
 
+// Observogram's own deploy audit — server/workspace.mjs appends it as JSON
+// lines to deploys.jsonl under the same workspace root the runs live in.
+// Read here without importing server code (the engine stays
+// server-agnostic): every parseable line, deploy and verify alike, for
+// chain-history's deploysInWindow to window and merge. The log is
+// append-only and unbounded, and a run only needs the window since its
+// baseline, so only the trailing DEPLOY_LOG_TAIL_BYTES are read (the
+// partial first line of the tail is dropped): a 250 MB audit costs one
+// run 8 MB, not 2 s and 80 MB of heap. Missing file → []; a torn or
+// unparseable line is skipped, never fatal.
+export const DEPLOY_LOG_TAIL_BYTES = 8 * 1024 * 1024;
+
+export function readDeployLog() {
+  let raw = '';
+  try {
+    const path = join(workspaceRoot(), 'deploys.jsonl');
+    const size = statSync(path).size;
+    if (size <= DEPLOY_LOG_TAIL_BYTES) {
+      raw = readFileSync(path, 'utf8');
+    } else {
+      const fd = openSync(path, 'r');
+      try {
+        const buf = Buffer.alloc(DEPLOY_LOG_TAIL_BYTES);
+        const got = readSync(fd, buf, 0, DEPLOY_LOG_TAIL_BYTES, size - DEPLOY_LOG_TAIL_BYTES);
+        raw = buf.toString('utf8', 0, got);
+      } finally { closeSync(fd); }
+      const nl = raw.indexOf('\n');
+      raw = nl < 0 ? '' : raw.slice(nl + 1);
+    }
+  } catch (_) { return []; }
+  const out = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const rec = JSON.parse(line);
+      if (rec && typeof rec === 'object' && !Array.isArray(rec)) out.push(rec);
+    } catch (_) {}
+  }
+  return out;
+}
+
+// The names a deploy item's `artifact` selector stands for in Pack A — the
+// selectors the server persists on its audit lines (server/routes/deploy.mjs
+// writes the compile selector: `all`, `declared:<i>`, `slo:<id>`,
+// `dash:<id>`; a rollback writes the bare dashboard uid). Resolved here,
+// where the pack is in memory, following the studio's post-deploy verifier
+// (studio/verify-deploy.mjs): `declared:<i>` → the i-th declared recording
+// rule's name; `slo:<id>` → the SLO id, its SLI base and the SLI the pack
+// binds it to; `dash:<id>` → the dashboard id; a bare name → itself; `all`
+// and an unresolvable index → nothing (a group-wide write is the pack-level
+// touch the ranker scores on its own). Names only — the ranker matches
+// them exactly.
+export function resolveDeployArtifact(artifact, canonicalA) {
+  const a = String(artifact ?? '').trim();
+  const low = a.toLowerCase();
+  if (!a || low === 'all') return [];
+  const spec = canonicalA?.spec || {};
+  if (low.startsWith('declared:')) {
+    const idx = /^declared:(\d+)$/i.exec(a);
+    const name = idx ? (Array.isArray(spec.queries?.recording_rules) ? spec.queries.recording_rules[Number(idx[1])]?.name : null) : null;
+    return typeof name === 'string' && name ? [name] : [];
+  }
+  if (low.startsWith('slo:')) {
+    const id = a.slice(4);
+    if (!id) return [];
+    const slo = (Array.isArray(spec.slos) ? spec.slos : []).find(s => s && typeof s === 'object' && s.id === id);
+    const sli = typeof slo?.sli === 'string' ? slo.sli.replace(/^slis\./, '') : '';
+    return [...new Set([id, sliBaseOfSloId(id), sli].filter(Boolean))];
+  }
+  if (low.startsWith('dash:')) return a.slice(5) ? [a.slice(5)] : [];
+  return [a];
+}
+
+// Every item of every windowed deploy, with `resolved` beside its
+// `artifact` for the ranker. Records are copied, never mutated.
+function resolveDeployItems(deploys, canonicalA) {
+  return deploys.map(d => (d && typeof d === 'object' && Array.isArray(d.items)
+    ? { ...d, items: d.items.map(it => (it && typeof it === 'object' && !Array.isArray(it) ? { ...it, resolved: resolveDeployArtifact(it.artifact, canonicalA) } : it)) }
+    : d));
+}
+
 // ---------- report rendering ----------
 
+function probesLine(r) {
+  const p = r.probes;
+  if (!p || !p.attempted?.length) return (!r.vantage || r.vantage === 'none') ? 'no live probes (file-sourced B)' : `vantage ${r.vantage}`;
+  const fam = (xs) => (xs && xs.length) ? xs.join(', ') : '-';
+  return `${p.attempted.length} attempted · succeeded: ${fam(p.succeeded)} · empty: ${fam(p.empty)} · **failed: ${fam(p.failed)}** · not exposed: ${fam(p.unsupported)} · vantage **${r.vantage}**`
+    + (r.toolsExposedCount != null ? ` · ${r.toolsExposedCount} MCP tools exposed` : '');
+}
+
+function stackLine(r) {
+  const s = r.stack;
+  if (!s || !s.status) return 'no stack sample (file-sourced B or pre-step-2 refresh)';
+  if (s.status === 'not-attempted') return `not attempted (${s.reason || 'no reason recorded'})`;
+  return `sampled ${s.sampled ?? 0} · empty ${s.empty ?? 0} · failed ${s.failed ?? 0}`;
+}
+
 export function renderJourneyMarkdown(r) {
+  if (r.outcome === 'vantage-lost') {
+    return [
+      `## ⚠️ Journey \`${r.journey}\` — VANTAGE LOST`,
+      '',
+      `| | |`,
+      `|---|---|`,
+      `| Declared (A) | \`${r.packA?.name || '?'}@${r.packA?.version || '?'}\` — ${r.packA?.source || '?'} |`,
+      `| Live (B) | ${r.packB?.source || '?'} — **unreachable** |`,
+      `| Error | ${r.error || '?'} |`,
+      `| Took | ${r.tookMs ?? '?'}ms |`,
+      '',
+      '_No verdict: the live vantage point did not answer, so nothing about the declared artefacts could be verified. Recorded so the loss is a point in history, not a gap._',
+    ].join('\n');
+  }
   const icon = r.outcome === 'pass' ? '✅' : '❌';
   const lines = [
     `## ${icon} Journey \`${r.journey}\` — ${r.outcome === 'pass' ? 'PASS' : 'GATE FAILED'}`,
@@ -298,16 +1042,245 @@ export function renderJourneyMarkdown(r) {
     `| Declared (A) | \`${r.packA.name || '?'}@${r.packA.version || '?'}\` — ${r.packA.source} |`,
     `| Live/reference (B) | \`${r.packB.name || '?'}@${r.packB.version || '?'}\` — ${r.packB.source} |`,
     `| Scope | env=${r.scope.env || '-'} service=${r.scope.service || '-'} mode=${r.scope.scopeMode || 'default'} |`,
-    `| Diagnostic grade | **${r.grade.score}%** (${r.grade.pass ? 'PASS' : 'FAIL'}, bar ${r.grade.threshold}%) |`,
+    `| Diagnostic grade | **${r.grade.letter ? `${r.grade.letter} · ${r.grade.letterLabel} · ` : ''}${r.grade.score}%** (${r.grade.pass ? 'PASS' : 'FAIL'}, bar ${r.grade.threshold}%) |`,
     `| Conformance | ${r.conformance.scorePercent}% (${r.conformance.declaredTier}, ${r.conformance.conformant ? 'conformant' : 'not conformant'}) |`,
     `| Alignment | **${r.drift.alignmentPct}%** — ${r.drift.aligned} aligned · ${r.drift.drifted} drifted · ${r.drift.declaredNotLive} declared-not-live · ${r.drift.liveNotDeclared} live-not-declared |`,
     `| Live freshness | ${r.freshness.liveAgeHours === null ? 'no refresh timestamp' : r.freshness.liveAgeHours.toFixed(1) + 'h old'} |`,
+    `| Live probes | ${probesLine(r)} |`,
+    `| On-wire health | ${r.scrapeJobsDown ?? 0} scrape job(s) down · ${r.unhealthyRules ?? 0} unhealthy rule(s) |`,
+    `| Stack self-metrics | ${stackLine(r)} |`,
     `| Took | ${r.tookMs}ms |`,
   ];
+  lines.push(...stackEvidenceTable(r.stackEvidence));
+  lines.push(...requirementChainsTable(r.branches));
+  lines.push(...transitionsSection(r));
+  lines.push(...causesSection(r));
   if (r.gate.breaches.length) {
     lines.push('', '### Gate breaches', '');
-    for (const b of r.gate.breaches) lines.push(`- **${b.criterion}** — ${b.detail}`);
+    for (const b of r.gate.breaches) lines.push(`- **${mdCell(b.criterion)}** — ${mdCell(b.detail)}`);
   }
   lines.push('', '_Verification evidence (declared vs observed); not incident-validated._');
   return lines.join('\n');
+}
+
+// Every value interpolated into the report that came off the wire or the
+// request (labels, titles, actor, deploy ids, artifacts, evidence, probe
+// errors) goes through mdCell: `|` is escaped, a line break collapses to a
+// space so a value cannot open a new line, and a leading markdown marker
+// (`#`, `-`, `*`, `+`, `>`, `1.`) is neutralised so it cannot forge a
+// heading or a list item even at a line start.
+const mdCell = (v) => String(v ?? '-')
+  .replace(/\r?\n|\r/g, ' ')
+  .replace(/\|/g, '\\|')
+  .replace(/^(\s*)([#\-*+>]|\d+\.)/, '$1\\$2');
+
+// Step 4: one row per requirement chain (cap CHAIN_REPORT_ROW_CAP), only
+// when the record carries chains — no table means no chains were declared
+// or recorded, never that every chain is intact. The worst node is the
+// first of the branch's degraded list (worst first by construction).
+const CHAIN_REPORT_ROW_CAP = 24;
+function requirementChainsTable(branches) {
+  const rows = Array.isArray(branches) ? branches.filter(b => b && typeof b === 'object') : [];
+  if (!rows.length) return [];
+  const out = [
+    '',
+    '### Requirement chains',
+    '',
+    '| chain | verdict | ladder | integrity | ladder integrity | worst node |',
+    '|---|---|---|---|---|---|',
+  ];
+  for (const b of rows.slice(0, CHAIN_REPORT_ROW_CAP)) {
+    const worst = Array.isArray(b.degraded) && b.degraded[0] ? worstNodeCell(b.degraded[0]) : '-';
+    const more = Array.isArray(b.degraded) && b.degraded.length > 1 ? ` (+${b.degraded.length - 1}${b.truncated ? '+' : ''} more)` : (b.truncated ? ' (+more)' : '');
+    out.push(`| ${mdCell(b.title || b.rootKey)} | ${mdCell(b.verdict)} | ${mdCell(b.ladderVerdict)} | ${mdCell(b.integrityPct)}% | ${mdCell(b.ladderIntegrityPct)}% | ${mdCell(worst)}${more} |`);
+  }
+  if (rows.length > CHAIN_REPORT_ROW_CAP) out.push('', `_${rows.length - CHAIN_REPORT_ROW_CAP} more chain(s) not shown._`);
+  out.push('', '_Ladder columns are on-wire liveness beside the scored verdict — unscored; `unobserved` means the vantage could not look, never "absent"._');
+  return out;
+}
+
+function worstNodeCell(node) {
+  const bits = [String(node.status ?? '?')];
+  if (node.ladder?.detail) bits.push(String(node.ladder.detail));
+  const slos = node.blastRadius?.slos;
+  if (typeof slos === 'number') bits.push(`blinds ${slos} SLO${slos === 1 ? '' : 's'}`);
+  return `${node.label || node.key || '?'} (${bits.join(' · ')})`;
+}
+
+// What a transition was compared against, in words: null when it was the
+// immediately previous run (or there is nothing to say), else the run(s)
+// skipped to reach the baseline — `previous run <ts> lost its vantage —
+// comparing against <baseline ts>`. Older records (no `skipped`) say nothing.
+function baselineNote(t) {
+  const skipped = Array.isArray(t?.skipped) ? t.skipped.filter(s => s && typeof s === 'object') : [];
+  if (!skipped.length || !t.since) return null;
+  const first = skipped[0];
+  const what = first.outcome === 'vantage-lost' ? 'lost its vantage' : 'carries no chain record';
+  const more = skipped.length > 1 ? ` (and ${skipped.length - 1} more skipped)` : '';
+  return `previous run ${mdCell(first.startedAt || '?')} ${what}${more} — comparing against ${mdCell(t.since)}`;
+}
+
+// Why a transition could not be made, in words (transition.reason).
+function noComparisonNote(t) {
+  const skipped = Array.isArray(t?.skipped) ? t.skipped.filter(s => s && typeof s === 'object') : [];
+  const ts = skipped[0]?.startedAt ? mdCell(skipped[0].startedAt) : null;
+  if (t.reason === 'first run') return 'no previous run to compare';
+  if (t.reason === 'previous run lost its vantage') return `previous run ${ts || '?'} lost its vantage — no earlier run carries chains to compare against`;
+  if (t.reason === 'previous runs carry no chain record') return `previous run${skipped.length > 1 ? 's' : ''} ${ts ? `${ts} ` : ''}carr${skipped.length > 1 ? 'y' : 'ies'} no chain record to compare against (pre-step-4 record${skipped.length > 1 ? 's' : ''})`;
+  return `nothing to compare: ${mdCell(t.reason)}`;
+}
+
+// What moved since the baseline record, plus whether Pack B was kept.
+// A record written before transitions existed (no `transition` key) gets
+// no section; null (older records) or a `reason` means nothing could be
+// compared — and the section says why, never "no previous run" when one
+// exists. Every interpolated value goes through mdCell.
+function transitionsSection(r) {
+  if (!Object.prototype.hasOwnProperty.call(r, 'transition') && !r.livePack) return [];
+  const out = ['', '### Transitions since previous run', ''];
+  const t = r.transition;
+  if (!t || typeof t !== 'object') {
+    out.push('_no previous run to compare_');
+  } else if (t.reason) {
+    out.push(`_${noComparisonNote(t)}_`);
+  } else {
+    const note = baselineNote(t);
+    if (note) out.push(`_${note}_`, '');
+    if (!t.any) {
+      out.push(`_no chain changed since ${mdCell(t.since || 'the previous run')}_`);
+    } else {
+      for (const c of (Array.isArray(t.changed) ? t.changed : []).filter(x => x && typeof x === 'object')) {
+        const nodes = [];
+        if (c.nodes?.newlyDegraded?.length) nodes.push(`newly degraded: ${c.nodes.newlyDegraded.map(mdCell).join(', ')}`);
+        if (c.nodes?.recovered?.length) nodes.push(`recovered: ${c.nodes.recovered.map(mdCell).join(', ')}`);
+        if (c.note) nodes.push(mdCell(c.note));
+        out.push(`- **${mdCell(c.title || c.rootKey)}** — ${mdCell(c.from?.verdict)}/${mdCell(c.from?.ladderVerdict)} → ${mdCell(c.to?.verdict)}/${mdCell(c.to?.ladderVerdict)} (${mdCell(c.direction)})${nodes.length ? `; ${nodes.join('; ')}` : ''}`);
+      }
+      if (t.appeared?.length) out.push(`- appeared: ${t.appeared.map(mdCell).join(', ')}`);
+      if (t.disappeared?.length) out.push(`- disappeared: ${t.disappeared.map(mdCell).join(', ')}`);
+    }
+  }
+  if (r.livePack && typeof r.livePack === 'object') {
+    out.push('', r.livePack.kept
+      ? `live pack: kept (${mdCell(r.livePack.path)}, ${mdCell(r.livePack.bytes)} bytes) — ${mdCell(r.livePack.reason)}`
+      : `live pack: not kept — ${mdCell(r.livePack.reason)}`);
+  }
+  return out;
+}
+
+// Chain status of a run record in a few words, for `packc journey list`:
+// 'chains 8/10 intact · ladder 7 healthy · 2 degraded' (zero ladder
+// buckets other than healthy are omitted); 'chains 0 declared' when the
+// record carries chains but declares none; 'chains none (pre-step-4
+// record)' when it carries no `branches` at all; 'chains none (vantage
+// lost)' for a vantage-lost record.
+export function chainStatusLine(record) {
+  if (record && typeof record === 'object' && record.outcome === 'vantage-lost') return 'chains none (vantage lost)';
+  const s = chainSummary(record);
+  if (!s) return 'chains none (pre-step-4 record)';
+  if (!s.declaredTotal) return 'chains 0 declared';
+  const ladder = [`${s.ladder.healthy} healthy`];
+  for (const k of ['degraded', 'broken', 'unobserved']) if (s.ladder[k] > 0) ladder.push(`${s.ladder[k]} ${k}`);
+  return `chains ${s.intact}/${s.declaredTotal} intact · ladder ${ladder.join(' · ')}`;
+}
+
+// Step 4: the candidate causes of a worse transition, ranked by evidence
+// (chain-history.mjs rankCauses) — never a root-cause verdict, the heading
+// says so. A record written before the ranker existed (no `causes` key)
+// gets no section; null means there was no previous run to rank against.
+// The vantage line rides beside the causes, never among them. Every
+// interpolated value goes through mdCell.
+function causesSection(r) {
+  if (!Object.prototype.hasOwnProperty.call(r, 'causes')) return [];
+  const out = ['', '### Candidate causes — ranked by evidence, not a root-cause verdict', ''];
+  const c = r.causes;
+  if (!c || typeof c !== 'object') { out.push('_no previous run_'); return out; }
+  const list = Array.isArray(c.causes) ? c.causes.filter(x => x && typeof x === 'object') : [];
+  const t = r.transition && typeof r.transition === 'object' ? r.transition : null;
+  if (!list.length) {
+    if (t?.reason) out.push(`_${noComparisonNote(t)} — nothing to rank_`);
+    else {
+      const note = baselineNote(t);
+      out.push(`_no chain got worse since ${mdCell(t?.since || c.transitions?.since || 'the previous run')}${note ? ` (${note})` : ''}_`);
+    }
+  }
+  const titles = new Map((Array.isArray(r.branches) ? r.branches : []).filter(b => b && typeof b === 'object').map(b => [String(b.rootKey), b.title || b.rootKey]));
+  for (const cause of list) {
+    // `chains` are titles since the review pass; an older record's root
+    // keys are mapped to titles here.
+    const chains = Array.isArray(cause.chains) ? cause.chains.map(k => mdCell(titles.get(String(k)) || k)) : [];
+    // rank and score are the ranker's numbers (the rank IS the list
+    // marker); only a non-number stands in for them goes through mdCell.
+    const numCell = (v) => (typeof v === 'number' && Number.isFinite(v) ? String(v) : mdCell(v));
+    out.push(`${numCell(cause.rank)}. [${mdCell(cause.kind)}] ${numCell(cause.score)} — ${mdCell(cause.evidence)}${chains.length ? ` (chains: ${chains.join(', ')})` : ''}`);
+  }
+  if (c.vantage && typeof c.vantage === 'object') out.push('', c.vantage.changed ? `vantage changed: ${mdCell(c.vantage.detail)}` : 'vantage: unchanged');
+  return out;
+}
+
+// The rank-1 candidate cause of a run record in a few words, for `packc
+// journey list`: 'top cause: [observogram-deploy] deploy dep_x by …' or
+// 'no candidate causes'. The CLI appends it only when a chain got worse.
+export function causeLine(record) {
+  const top = topCause(record);
+  return top ? `top cause: [${top.kind}] ${top.evidence}` : 'no candidate causes';
+}
+
+// The vantage change of a run record in a few words, for `packc journey
+// list`: 'vantage changed: vantage full → partial · …' when the ranker's
+// vantage block says it changed, else null (nothing to append). A vantage
+// change is never a cause — it rides beside the cause segment.
+export function vantageLine(record) {
+  const v = record?.causes?.vantage;
+  if (!v || typeof v !== 'object' || v.changed !== true) return null;
+  return `vantage changed: ${String(v.detail ?? '').replace(/\s+/g, ' ').trim() || 'detail not recorded'}`;
+}
+
+// Whether a run record's transition got worse (or its ranker found a
+// cause) — the CLI's condition for appending causeLine.
+export function transitionGotWorse(record) {
+  const changed = Array.isArray(record?.transition?.changed) ? record.transition.changed : [];
+  return changed.some(c => c && c.direction === 'worse') || topCause(record) !== null;
+}
+
+// The samples this run saw, one row each (cap STACK_REPORT_ROW_CAP). Only
+// rendered when there are rows: a not-attempted or absent panel already
+// reads on the Stack self-metrics line above, and an empty table would
+// look like an empty (healthy) stack.
+const STACK_REPORT_ROW_CAP = 24;
+function stackEvidenceTable(se) {
+  const rows = Array.isArray(se?.rows) ? se.rows : [];
+  if (!rows.length) return [];
+  const cell = (v) => String(v ?? '-').replace(/\|/g, '\\|');
+  const out = [
+    '',
+    '### Stack self-metrics — point-in-time samples',
+    '',
+    '| id | family | value unit | outcome | hint | reference SLI |',
+    '|---|---|---|---|---|---|',
+  ];
+  for (const row of rows.slice(0, STACK_REPORT_ROW_CAP)) {
+    const value = row.outcome === 'data' && typeof row.value === 'number' ? `${formatStackValue(row.value, row.unit)} ${row.unit || ''}`.trim() : '-';
+    const outcome = row.outcome + (row.reason ? `: ${row.reason}` : '');
+    out.push(`| ${cell(row.id)} | ${cell(row.family)} | ${cell(value)} | ${cell(outcome)} | ${cell(row.hint)} | ${cell(row.referenceSli)} |`);
+  }
+  if (rows.length > STACK_REPORT_ROW_CAP) out.push('', `_${rows.length - STACK_REPORT_ROW_CAP} more row(s) not shown._`);
+  out.push('', "_Samples, not verdicts: each value is the stack's own self-metric at the moment of the run._");
+  return out;
+}
+
+// Stack status of a run record in a few words, for `packc journey list`:
+// 'stack sampled N' (rows that answered data), 'stack not attempted', or
+// 'stack none' when the record carries no panel at all. Pre-step-3
+// records (counts only) fall back to the fetcher's sampled count.
+export function stackStatusLine(record) {
+  const se = record?.stackEvidence;
+  if (se && typeof se === 'object') {
+    if (se.status !== 'sampled') return 'stack not attempted';
+    return `stack sampled ${(Array.isArray(se.rows) ? se.rows : []).filter(r => r.outcome === 'data').length}`;
+  }
+  const s = record?.stack;
+  if (s && s.status === 'sampled') return `stack sampled ${s.sampled ?? 0}`;
+  if (s && s.status === 'not-attempted') return 'stack not attempted';
+  return 'stack none';
 }

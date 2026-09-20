@@ -1,13 +1,15 @@
-# Tomograph
+# Observogram
 
-**Tomograph is the observability compiler and diagnostic workspace for
+*(formerly **Tomograph** — pre-rebrand env vars, headers, workspaces, and pack annotations keep working; see docs/CHANGELOG.md.)*
+
+**Observogram is the observability compiler and diagnostic workspace for
 ObservabilityPack spec v1.2.**
 
 It answers one operational question:
 
 > Is this service's observability diagnostic-grade?
 
-Tomograph checks that in two parts:
+Observogram checks that in two parts:
 
 1. **Coverage** - are we observing the right signals for the service's
    observability goals and OLA?
@@ -24,7 +26,7 @@ Use a repo scan, a live MCP scan, or an uploaded pack to create an
 ObservabilityPack. Compare the declared repo posture with the live production
 posture. Then compile and deploy the delta through the platform tools.
 
-In Tomograph, the OLA is represented as an observability contract inside the
+In Observogram, the OLA is represented as an observability contract inside the
 pack: criticality, SLOs, SLIs, telemetry bindings, rules, dashboards, alerts,
 runbooks, and validation expectations. A repo-derived pack captures what the
 service declares. A live MCP-derived pack captures what production verifies.
@@ -46,7 +48,7 @@ drift:
 - live telemetry exists, but no OLA or runbook says why it matters
 - the team cannot explain whether the service is truly diagnosable
 
-Tomograph treats observability as a compiled contract. The pack is the source
+Observogram treats observability as a compiled contract. The pack is the source
 of truth. Native artifacts are generated from it. Live systems are scanned back
 into pack shape. The diff between declared and live is the operational truth.
 
@@ -60,7 +62,7 @@ Create or load a pack:
 - generate a live pack from an OpenTelemetry MCP server
 - upload a canonical YAML or JSON ObservabilityPack
 
-The Discover view renders the observability tomogram across the layered model:
+The Discover view renders the observability Observogram across the layered model:
 
 - L1 Contract: SLIs and SLOs
 - L2 Telemetry: OTel, backends, collectors, pipelines
@@ -69,28 +71,52 @@ The Discover view renders the observability tomogram across the layered model:
 - L5 Validation: baselines, synthetics, chaos, release checks
 - GOV: ownership and governance metadata
 
-![Tomograph Discover view showing the layered observability inventory](docs/img/xray-discover.png)
+![Observogram Discover view showing the layered observability inventory](docs/img/xray-discover.png)
 
 ### 2. Diagnose - Can We Trust It?
 
 Load the declared repo pack as **Pack A** and the live production pack as
-**Pack B**. Tomograph computes the Diagnostic Grade:
+**Pack B**. Observogram computes the Diagnostic Grade:
 
-- **Score**: total criteria passed out of 8
-- **Coverage**: five checks for "are we observing the right things?"
+- **Score**: total criteria passed out of 7
+- **Coverage**: four checks for "are we observing the right things?"
 - **Trust**: three checks for "can we trust what the signals show?"
+- **Operability**: one informational check (Actionable — runbooks linked),
+  displayed but never scored
 - **Verified**: whether a live MCP signal is present
 
-The Diagnostic Grade passes when the overall score is greater than 85%. Failed
-criteria remain visible as evidence. A pack can therefore pass the grade while
-still showing drift that belongs in Remediate.
+The score maps onto a metrology-style **instrument grade** — the rating users
+actually read; the full ladder renders on the grade card with the current rung
+highlighted:
 
-The eight checks are:
+| Grade | Class | Score band |
+|---|---|---|
+| A++ | Calibration / Reference Grade | — (needs external reference benchmarking) |
+| A+ | Laboratory / Research Grade | ≥ 95% |
+| A | Diagnostic / Clinical Grade | > 85% (the audit bar) |
+| B+ | Inspection Grade | ≥ 75% |
+| B | Industrial Grade | ≥ 62.5% |
+| C | Field Grade | ≥ 37.5% |
+| D | Consumer Grade | < 37.5% |
 
-| Area | Criteria |
-|---|---|
-| Coverage | Multi-modal, Correlated, Calibrated, Comprehensive, Actionable |
-| Trust | Chaos-validated, Drift-free, Fresh |
+The machine contract is unchanged: the audit **passes when the score is
+greater than 85%** — i.e. exactly when the grade is A or better; the letter
+and PASS/FAIL can never disagree. Failed criteria remain visible as evidence.
+A pack can therefore pass the grade while still showing drift that belongs in
+Remediate.
+
+The checks are (grade schema 2):
+
+| Area | Criteria | Scored |
+|---|---|---|
+| Coverage | Multi-modal, Correlated, Calibrated, Comprehensive | yes |
+| Trust | Chaos-validated, Drift-free, Fresh | yes |
+| Operability | Actionable | no — informational |
+
+Runbooks measure response readiness of the overall solution, not diagnostic
+capability — a perfectly diagnostic system tells you what is wrong even when
+nobody wrote the response script. The runbook gap stays visible on the grade
+card and in the posture matrix; it just no longer costs diagnostic credit.
 
 The drift drill shows:
 
@@ -103,11 +129,11 @@ The drift drill shows:
 Traceability shows requirement chains from SLO to SLI, metrics, recording
 rules, exporters, scrape evidence, dashboards, alerts, and runbooks.
 
-![Tomograph Diagnose view showing Diagnostic Grade and live drift buckets](docs/img/xray-diagnose-drift.png)
+![Observogram Diagnose view showing Diagnostic Grade and live drift buckets](docs/img/xray-diagnose-drift.png)
 
 ### 3. Remediate - Fix The Gaps
 
-Tomograph compiles the pack delta into native backend artifacts:
+Observogram compiles the pack delta into native backend artifacts:
 
 - Prometheus recording and alerting rules
 - Grafana-managed rules
@@ -119,39 +145,55 @@ Deployable artifacts can be pushed through an MCP write target. Non-deployable
 or inferred artifacts remain visible as manual follow-up, not silent production
 changes.
 
-![Tomograph Remediate view showing the Pack A minus Pack B deploy delta](docs/img/xray-remediate.png)
+![Observogram Remediate view showing the Pack A minus Pack B deploy delta](docs/img/xray-remediate.png)
 
 ## Quickstart
 
 ```bash
-git clone https://github.com/MoebiusX/tomograph.git
-cd tomograph
+git clone https://github.com/MoebiusX/Observogram.git
+cd Observogram
 npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:8000`.
+Open `http://127.0.0.1:8000` and sign in with **admin / admin** — first
+boot seeds this default user and asks for a password change at sign-in
+(skippable for now; it asks again each sign-in until a real password
+lands — or change it any time from the account menu, top right). From
+there it's a signed-in app: your packs, deploy audit and run history
+belong to you. (`OBSERVOGRAM_AUTH=off` skips login entirely
+for a throwaway open sandbox.)
 
 ### Security Posture
 
-One token, three postures:
-
-1. **Local (default).** The server binds to `127.0.0.1` and runs with no
-   authentication — a zero-friction local workspace.
-2. **Exposed with a token.** Set `TOMOGRAPH_API_TOKEN=<secret>` and bind
+1. **Local (default).** The server binds to `127.0.0.1` and ships like
+   Grafana: first boot seeds a default `admin` user (password `admin`,
+   change asked at every sign-in until it lands — skippable per
+   session). The default credential is
+   loopback-only — the server refuses to bind beyond loopback until it
+   is changed; container/network first boots seed a real secret with
+   `OBSERVOGRAM_ADMIN_PASSWORD` instead. `OBSERVOGRAM_AUTH=off` restores
+   the pre-0.5 open mode: no login, a zero-friction local workspace.
+2. **Exposed with a token.** Set `OBSERVOGRAM_API_TOKEN=<secret>` and bind
    wherever you need (`HOST=0.0.0.0`). Mutating `/api/*` routes (crawl,
    draft, validate-register, deploy, verify, reset) then require
    `Authorization: Bearer <secret>`; read routes stay open. Set
-   `TOMOGRAPH_API_TOKEN_LABEL=<team-or-owner>` to stamp the deploy audit
+   `OBSERVOGRAM_API_TOKEN_LABEL=<team-or-owner>` to stamp the deploy audit
    log with the token's ownership — the secret itself never lands in any
-   log.
-3. **Exposed without a token.** The server **refuses to start** with a
-   clear message. `TOMOGRAPH_INSECURE_NO_AUTH=1` overrides knowingly (it
+   log. A token configured on a fresh workspace suppresses the
+   default-admin seed: the token is the expressed auth intent.
+3. **Exposed without any auth.** The server **refuses to start** with a
+   clear message. `OBSERVOGRAM_INSECURE_NO_AUTH=1` overrides knowingly (it
    logs a loud warning) for trusted-network demos only.
+
+Real users and SSO: `npm run users` manages locally-defined accounts,
+`OBSERVOGRAM_OIDC_*` wires any OIDC provider, and `npm run orgs` arms
+workspace-per-org tenancy — see
+[docs/PRODUCTIZATION_PLAN.md](docs/PRODUCTIZATION_PLAN.md).
 
 MCP write tokens are unrelated to the API token: they pass through per
 request and are never stored server-side. Registered packs and the deploy
-audit live in the `.tomograph/` workspace (`TOMOGRAPH_WORKSPACE`
+audit live in the `.observogram/` workspace (`OBSERVOGRAM_WORKSPACE`
 relocates it).
 
 Useful local checks:
@@ -169,8 +211,8 @@ npm run test
 The whole app is one Express process, so the container story is one image:
 
 ```bash
-docker build -t tomograph:0.3.0 .
-docker run --rm -p 8000:8000 tomograph:0.3.0
+docker build -t observogram:0.4.0 .
+docker run --rm -p 8000:8000 observogram:0.4.0
 ```
 
 Kubernetes manifests (Deployment + Service + Ingress, applied with Kustomize)
@@ -210,6 +252,14 @@ npm run fetch-live
 ```
 
 The default output is the ignored local file `examples/production-live.pack.yaml`.
+When the MCP exposes `metrics_query`, the fetch also samples the observability
+stack's own self-metrics (scrape, ruler, notify, tsdb, collector, dashboards,
+synthetic, logs, traces) as point-in-time signals — never verdicts, stamps or
+grade inputs; on a restricted tier the pack says `not-attempted` and why.
+`npm run record-fixtures` verifies the alias table behind that sample against
+your endpoint (report only; `-- --write` records fixtures), and
+`npm run test:stack:live` re-verifies every alias against the real products at
+pinned versions in Docker (`docker/stack.compose.yaml`; skips without Docker).
 
 See [`docs/MCP_INTEGRATION.md`](docs/MCP_INTEGRATION.md) for the live fetch and
 write-back contract.
@@ -241,7 +291,7 @@ The UI exposes the same path through **Remediate -> Compile & Deploy**.
 Freeze a comparison as a journey file and run it on demand or on a schedule:
 
 ```yaml
-# .tomograph/journeys/repo-vs-live.journey.yaml
+# .observogram/journeys/repo-vs-live.journey.yaml
 name: repo-vs-live
 packA:
   crawl: { path: ../my-service, name: my-service, env: prod }
@@ -251,6 +301,13 @@ gate:
   minAlignmentPct: 85
   requireGradePass: true
   maxLiveAgeHours: 24
+  failOnPartialEvidence: true   # a probe family FAILED → the verdict is not trustworthy
+  maxUnhealthy: 0               # scrape jobs down + rules failing to evaluate, as seen on the wire
+  stack:                        # thresholds on the stack's own self-metric samples (early warning)
+    requireSampled: true        # breach unless the MCP tier let the run sample them
+    rows:
+      scrape_targets_down: { max: 0 }   # row ids come from the stack self-metrics table
+keepLivePack: transitions       # snapshot Pack B beside the run: transitions (default) · always · never
 ```
 
 ```bash
@@ -262,8 +319,73 @@ node tools/cli.mjs journey list                      # journeys + last outcome
 Exit codes follow the gate contract: `0` verdict passes, `1` gate failed,
 `2` tooling/config error — so the same command is a cron job, a Windows
 scheduled task, or a CI gate. Every run appends a JSON record under
-`.tomograph/runs/<journey>/` (the drift-over-time series). Secrets never
-live in journey files — MCP auth is referenced by env-var name.
+`.observogram/runs/<journey>/` (the drift-over-time series), including the
+vantage of the live source itself (`probes`, `vantage`, `toolsExposedCount`,
+`scrapeJobsDown`, `unhealthyRules`). When the live MCP does not answer at
+all, the run still writes an `outcome: vantage-lost` record before exiting
+`2` — the loss is a point in the history, not a gap. The CLI grades on the
+same construct as the studio (requirement-chain integrity rides on the
+diff), so both report one score for one comparison. Secrets never live in
+journey files — MCP auth is referenced by env-var name.
+
+Run history is bounded so a journey on a cron cadence never fills the disk:
+after every run the journey's `runs/` directory is pruned to the newest
+`OBSERVOGRAM_JOURNEY_RUN_RETENTION` records (default `1000`; `0` = unlimited).
+A record that cannot be deleted is noted on the run as `historyError` — the
+verdict still stands. Scheduling itself stays external (cron, CI, a Windows
+scheduled task) by design. Each record of a live run also keeps the stack
+self-metric samples it saw (`stackEvidence`: the rows, plus the Alertmanager
+and Grafana status the MCP answered) — point-in-time signals kept per run so
+the history is the time series, never a verdict.
+
+The `stack:` gate block turns those samples into an early warning: `rows`
+declares a `min` / `max` band per row id (validated against the table when
+the journey loads — an unknown id is refused with the known ids listed), and
+`requireSampled: true` breaches when the tier could not sample at all, or
+sampled with no row answering data. A threshold can only be checked against
+a row that answered data; a row that was empty, failed, not in the
+inventory or absent breaches as *no sample* rather than passing by absence
+(on a restricted tier the breach carries the tier reason), and a threshold
+that is not a finite band breaches as *threshold invalid* instead of
+passing silently. A stack breach reads
+`scrape_targets_down = 2 count outside [-∞ … 0] — point-in-time sample, not
+an SLO verdict`: it is a signal to look, not an SLO verdict, and it never
+touches the grade. The report prints the samples in a *Stack self-metrics*
+table and `journey list` shows `stack sampled N` / `stack not attempted` /
+`stack none` per journey (a definition that fails to load prints why instead
+of looking never-run). In the studio (Advanced → Journeys) each card
+carries a "stack self-metrics — point-in-time samples" line: one chip per
+family with the last run's value — the row with a `nonzero` signal first,
+then lower-is-comfortable rows, so a healthy-looking ratio never hides a
+target that is down — a muted `nonzero` marker where a
+lower-is-comfortable row is above zero, `nonzero in N of last M runs` over
+the fetched history, and a single muted chip with the reason when the tier
+could not sample — chips never carry an ok/error colour, because a sample
+is a signal, not a verdict.
+
+Each run also records its requirement chains: per chain the scored verdict
+beside the on-wire *ladder* verdict (is the artefact merely present, doing
+its job, or could the vantage not look — `unobserved` means the tier could
+not look, never "absent"; nothing scored changes), the degraded nodes with
+their *blast radius* (how many SLOs would go blind if that node really died
+— structural exposure, not a claim that they are blind), the product
+versions seen, and what moved since the previous run with the candidate
+causes the evidence can offer — Observogram's own deploys inside the window,
+decision-bearing drift, a backend version change, a stack self-metric signal
+— ranked by evidence, never a root-cause verdict; a change of the vantage
+itself is reported beside them, never as one. `keepLivePack` decides when
+Pack B is snapshotted under `runs/<journey>/live/` (by default on the first
+run, whenever a chain's verdict moved, on a gate failure, or after a vantage
+loss; snapshots are pruned with their records). `journey list`
+appends `chains 8/10 intact · ladder 7 healthy · 2 degraded` per journey,
+only when a chain got worse `top cause: [observogram-deploy] deploy
+dep_x by … touched …`, and whenever the vantage itself moved `vantage
+changed: vantage full → partial · …` — named beside the cause, never as
+one. In the studio the Diagnose chain cards show the
+ladder verdict, name present-but-unhealthy / stale / unobserved nodes and
+say `blinds N SLOs` beside a missing or drifted one, and each Journeys card
+carries a plain-text chains line and a candidate-cause line — counts and
+muted markers, no colours.
 
 ## API Surface
 
@@ -286,6 +408,10 @@ live in journey files — MCP auth is referenced by env-var name.
 | `POST` | `/api/packs/:id/deploy-bulk` | Deploy selected compiled artifacts |
 | `POST` | `/api/packs/:id/deploy/:target` | Deploy one compiled target |
 | `DELETE` | `/api/uploads` | Clear uploaded/crawled/drafted packs |
+| `GET` | `/api/journeys` | Saved journeys with the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`) |
+| `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series) |
+| `POST` | `/api/journeys/:name/run` | Run a saved journey now |
+| `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file |
 
 ## Repository Map
 
@@ -298,17 +424,23 @@ studio/
   app.mjs                  Browser app shell and three-step workflow
   compare-view.mjs         Diagnostic Grade, drift, traceability entry points
   compile-view.mjs         Remediate, compile catalog, deploy surfaces
-  layers-view.mjs          Discover tomogram and artifact cards
+  layers-view.mjs          Discover Observogram and artifact cards
+  journeys-view.mjs        Saved journeys: capture, run-now, history, stack chips, chains + cause lines
 
 tools/
+  cli.mjs                  packc CLI (journey run / list, compile, …)
   crawl-repo.mjs           CLI repo crawler
   fetch-live-pack.mjs      MCP live-pack fetcher
   validate-pack.mjs        Canonical pack validator
   lib/
     adapter.mjs            Canonical pack -> layered UI model
+    blast-radius.mjs       Blind-spot blast radius over the requirement graph (zero-import, vendorable)
+    chain-history.mjs      Requirement-chain records per run, transitions, candidate causes (zero-import, vendorable)
     compile.mjs            packc compiler
     conformance.mjs        Maturity rubric
     diff.mjs               Structural pack diff
+    journey.mjs            Journey definitions, runner, gate, run history (node-only)
+    stack-evidence.mjs     Stack self-metric history helpers (browser-safe, vendorable)
     traceability.mjs       Requirement chains
 
 examples/
@@ -340,12 +472,16 @@ deploy/k8s/
 - [`docs/DIAGNOSTIC_GRADE_FRAMEWORK.md`](docs/DIAGNOSTIC_GRADE_FRAMEWORK.md) - the eight coverage/trust criteria behind the Diagnose grade
 - [`docs/PHASE_1_VERDICT_TRUST_RESEARCH.md`](docs/PHASE_1_VERDICT_TRUST_RESEARCH.md) - draft research/spec for the verdict-trust phase
 - [`docs/TRACEABILITY_GRAPH_COMPARISON_SPEC.md`](docs/TRACEABILITY_GRAPH_COMPARISON_SPEC.md) - requirement-chain comparison semantics
+- [`docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md`](docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md) - proposal (not applied) for Drift-free to read the per-node ladder integrity
 - [`docs/USER_STORY_CRAWLER_PROVENANCE.md`](docs/USER_STORY_CRAWLER_PROVENANCE.md) - provenance requirements for deployable artifacts
 - [`docs/USER_STORY_REQUIRED_DEPLOYMENT_ENVIRONMENT.md`](docs/USER_STORY_REQUIRED_DEPLOYMENT_ENVIRONMENT.md) - backlog story for required crawl environment selection
 - [`docs/ADVANCED_FEATURE_AUDIT.md`](docs/ADVANCED_FEATURE_AUDIT.md) - per-view audit of the Advanced tools (References · Conformance · Schema · OTLP · Traceability · Atlas)
 - [`docs/VALUE_BACKLOG.md`](docs/VALUE_BACKLOG.md) - prioritized product backlog for the next iterations
+- [`docs/gen-site.md`](docs/gen-site.md) - gen-site: inventory v1, the module contract, the timing model and the CLI that renders one partition per environment
 - [`docs/REFACTORING_PLAN.md`](docs/REFACTORING_PLAN.md) - maintainability refactor backlog from the 2026-06 audit
 - [`docs/BRANCHING.md`](docs/BRANCHING.md) - the branching model: lanes, per-commit bar, multi-writer rules, promotion cadence
+- [`docs/VENDORING.md`](docs/VENDORING.md) - vendoring the verdict/diff engines into a downstream studio, and how to stay current
+- [`docs/UI_CONVENTIONS.md`](docs/UI_CONVENTIONS.md) - studio view-module conventions: the host seam, loader/renderer split, render signatures, CSS zones
 
 Superseded planning docs live in [`docs/archive/`](docs/archive/README.md).
 

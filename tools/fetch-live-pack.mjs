@@ -37,9 +37,15 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emit as emitYaml } from './lib/mini-yaml.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
-import { inferSlisFromRecordingRules } from './lib/sli-inference.mjs';
+import { inferSlisFromRecordingRules, ruleNameToSliId } from './lib/sli-inference.mjs';
 import { materializeL2XFromBackends } from './lib/l2x.mjs';
 import { serviceSlug as slug } from './lib/slug.mjs';
+import { probeCandidates, capabilityTool, candidateTool, BUILD_INFO_PROBES } from './lib/contracts/mcp-capabilities.mjs';
+import { validateResponseShape, locateObjectPayload } from './lib/contracts/response-shapes.mjs';
+import {
+  STACK_SELF_METRIC_PROBES, STACK_FAMILIES, eligibleAliases, productPreferenceOrder, bestOutcome,
+} from './lib/contracts/stack-self-metrics.mjs';
+import { brandEnv } from './lib/brand-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = resolve(__dirname, '..', 'vendor', 'observability-pack-spec', `v${SPEC_VERSION}`, 'observability-pack.schema.json');
@@ -49,13 +55,37 @@ const MCP_URL_DEFAULT  = process.env.MCP_URL  || 'https://mcp.example.com/observ
 const OUTPUT           = process.env.OUTPUT   || 'examples/production-live.pack.yaml';
 const MCP_AUTH_DEFAULT = process.env.MCP_AUTH || null;
 const PACK_NAME        = (process.env.PACK_NAME || 'production-live').toLowerCase();
-const GRAFANA_DASHBOARD_SEARCH_LIMIT = Math.min(Number(process.env.TOMOGRAPH_GRAFANA_DASHBOARD_LIMIT || 100) || 100, 500);
-const GRAFANA_DASHBOARD_PANEL_LIMIT  = Math.min(Number(process.env.TOMOGRAPH_GRAFANA_PANEL_LIMIT || 500) || 500, 500);
-const GRAFANA_DASHBOARD_INCLUDE_JSON = !/^(0|false|no|off)$/i.test(process.env.TOMOGRAPH_GRAFANA_INCLUDE_JSON || 'true');
+const GRAFANA_DASHBOARD_SEARCH_LIMIT = Math.min(Number(brandEnv('GRAFANA_DASHBOARD_LIMIT') || 100) || 100, 500);
+const GRAFANA_DASHBOARD_PANEL_LIMIT  = Math.min(Number(brandEnv('GRAFANA_PANEL_LIMIT') || 500) || 500, 500);
+const GRAFANA_DASHBOARD_INCLUDE_JSON = !/^(0|false|no|off)$/i.test(brandEnv('GRAFANA_INCLUDE_JSON') || 'true');
 const JSON_ANNOTATION_BLOCK_LENGTH = 4096;
 // Per-request MCP timeout. Without it a hung endpoint stalls the fetch (and
 // the server's /api/refresh-live caller) forever. Capped at 5 minutes.
-const MCP_TIMEOUT_MS = Math.min(Number(process.env.TOMOGRAPH_MCP_TIMEOUT_MS || 30_000) || 30_000, 300_000);
+const MCP_TIMEOUT_MS = Math.min(Number(brandEnv('MCP_TIMEOUT_MS') || 30_000) || 30_000, 300_000);
+
+// Single-tool capability names resolved ONCE from the contract registry
+// (tools/lib/contracts/mcp-capabilities.mjs). The registry owns every MCP
+// tool name; this file never hardcodes one — tools/test-contract-guard.mjs
+// enforces that. Rename a tool upstream → edit the registry row, not this file.
+const TOOL = {
+  backendCapabilities: capabilityTool('backend_capabilities'),
+  systemHealth:        capabilityTool('system_health'),
+  systemTopology:      capabilityTool('system_topology'),
+  anomaliesActive:     capabilityTool('anomalies_active'),
+  anomaliesBaselines:  capabilityTool('anomalies_baselines'),
+  dashboardSearch:     candidateTool('dashboards', 'search'),
+  dashboardDetail:     capabilityTool('dashboard_detail'),
+  grafanaHealth:       capabilityTool('grafana_version'),
+  metricsQuery:        capabilityTool('build_info_versions'),
+  tracesServices:      capabilityTool('traces_alive'),
+  // Step 2 — stack self-metrics + status surfaces (signals, never verdicts).
+  stackSelfMetrics:        capabilityTool('stack_self_metrics'),
+  alertmanagerStatus:      capabilityTool('alertmanager_status'),
+  alertmanagerSilences:    capabilityTool('alertmanager_silences'),
+  grafanaDatasources:      capabilityTool('grafana_datasources'),
+  grafanaDatasourceHealth: capabilityTool('grafana_datasource_health'),
+  grafanaContactPoints:    capabilityTool('grafana_contact_points'),
+};
 
 function annotationJson(value) {
   const compact = JSON.stringify(value);
@@ -170,18 +200,336 @@ function pickCriticality(services) {
   return 'tier-2';
 }
 
+// ============================================================
+// Burn-rate alert mapping — discovered alerting rules → spec.policy
+// ============================================================
+
+// The compiler squashes the `.` of a fractional factor to `_` when it
+// names the rule (14.4 → `_burn_14_4x_`), so the factor group accepts
+// `<int>` or `<int>_<frac>`; burnFactor() reads it back as a number.
+const BURN_ALERT_NAME_RE = /^(.+)_burn_(\d+(?:_\d+)?)x_([0-9a-z]+)_([0-9a-z]+)$/;
+const burnFactor = (text) => Number(String(text).replace('_', '.'));
+const SPEC_DURATION_RE = /^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h|d|w|mo|y))+$/;
+const SLO_WINDOWS_ALLOWED = new Set(['7d', '28d', '30d', '90d']);
+const DURATION_UNIT_SECONDS = { ns: 1e-9, us: 1e-6, ms: 1e-3, s: 1, m: 60, h: 3600, d: 86400, w: 604800, mo: 2628000, y: 31536000 };
+
+function durationToSeconds(d) {
+  if (typeof d !== 'string') return null;
+  let total = 0;
+  const re = /([0-9]+(?:\.[0-9]+)?)(ns|us|ms|s|m|h|d|w|mo|y)/g;
+  let m;
+  while ((m = re.exec(d)) !== null) total += parseFloat(m[1]) * (DURATION_UNIT_SECONDS[m[2]] || 0);
+  return total || null;
+}
+
+// Strip the trailing objective digits an SLO id carries
+// (`svc_checkout_availability_99_9` → `svc_checkout_availability`) so a
+// discovered SLO and an inferred placeholder can be matched on the SLI
+// base they share.
+function sloBase(id) {
+  return String(id || '').replace(/(_\d+)+$/, '');
+}
+
+// Severity must land in the spec enum. SEVn passes through; the common
+// Prometheus vocabularies are mapped; anything else falls back on the
+// burn factor (the multi-window playbook convention: 14x pages, 6x
+// warns). Callers record when the fallback fired so the pack never
+// presents an inferred severity as an observed one.
+const SEVERITY_ALIASES = {
+  CRITICAL: 'SEV1', PAGE: 'SEV1', P1: 'SEV1',
+  HIGH: 'SEV2', WARNING: 'SEV2', WARN: 'SEV2', P2: 'SEV2',
+  MEDIUM: 'SEV3', TICKET: 'SEV3', P3: 'SEV3',
+  INFO: 'SEV4', LOW: 'SEV4', P4: 'SEV4',
+};
+function normaliseSeverity(value, factor) {
+  const s = String(value ?? '').trim().toUpperCase();
+  if (/^SEV[1-4]$/.test(s)) return { severity: s, inferred: false };
+  if (SEVERITY_ALIASES[s]) return { severity: SEVERITY_ALIASES[s], inferred: false };
+  return { severity: factor >= 10 ? 'SEV1' : factor >= 5 ? 'SEV2' : 'SEV3', inferred: true };
+}
+
+function parseBurnAlert(alert) {
+  const labels = alert?.labels && typeof alert.labels === 'object' ? alert.labels : {};
+  const name = typeof alert?.name === 'string' ? alert.name : '';
+  let slo, factor, short, long;
+  if (labels.slo && labels.burn_rate && labels.window_short && labels.window_long) {
+    slo = String(labels.slo);
+    factor = Number(labels.burn_rate);
+    short = String(labels.window_short);
+    long = String(labels.window_long);
+  } else {
+    const m = BURN_ALERT_NAME_RE.exec(name);
+    if (!m) return null;
+    slo = m[1];
+    factor = burnFactor(m[2]);
+    short = m[3];
+    long = m[4];
+  }
+  slo = slo.replace(/^ref:/, '').replace(/^slos\./, '');
+  if (!Number.isFinite(factor) || factor <= 1) return null;
+  if (!SPEC_DURATION_RE.test(short) || !SPEC_DURATION_RE.test(long)) return null;
+  const { severity, inferred } = normaliseSeverity(labels.severity, factor);
+  return { name, slo, factor, short, long, severity, severityInferred: inferred, annotations: alert?.annotations || {} };
+}
+
+function parseObjectivePercent(value) {
+  const m = /^\s*([0-9]+(?:\.[0-9]+)?)\s*%\s*$/.exec(String(value ?? ''));
+  if (!m) return null;
+  const objective = Math.round((parseFloat(m[1]) / 100) * 1e6) / 1e6;
+  return objective > 0 && objective < 1 ? objective : null;
+}
+
+// Schema Slug: the id a re-identified SLO takes must still validate.
+const SLUG_RE = /^[a-z][a-z0-9_-]*[a-z0-9]$/;
+const SLUG_MAX_LENGTH = 64;
+const isSlug = (id) => typeof id === 'string' && id.length <= SLUG_MAX_LENGTH && SLUG_RE.test(id);
+
+/**
+ * Map discovered alerting rules onto spec.policy.burn_rate_alerts.
+ *
+ * Groups burn-rate rules by SLO id and resolves each group against the
+ * inferred `slos` in two passes: groups whose id EXACTLY matches an
+ * inferred SLO bind first and claim it; only then does a group that
+ * merely shares an SLI base re-identify a still-unclaimed placeholder.
+ * (One pass used to let a `x_99_9` group re-identify the SLO a `x_99`
+ * group had already bound — the exact group's entry then pointed at an
+ * id that no longer existed.) Both paths take the objective/window from
+ * the rule annotations when they carry them; a re-id is refused when the
+ * discovered id is not a valid schema Slug. MUTATES `slos` in place for
+ * the re-id so every later consumer sees the discovered id. Drops what
+ * the schema cannot represent.
+ *
+ * Returns { alerts, unmapped, severityInferred, reidentified, attested,
+ * unhealthyIndexes, unhealthySlos }:
+ *   reidentified     — { oldId: newId } for placeholders re-identified
+ *   attested         — discovered ids that exactly matched an inferred SLO
+ *   unhealthyIndexes — entries in `alerts` fed by at least one rule whose
+ *                      reported health is not 'ok'
+ *   unhealthySlos    — the SLO ids of those groups (an SLO evidenced only
+ *                      by a failing rule must not read Verified)
+ */
+export function mapDiscoveredBurnAlerts(alerts, slos) {
+  const groups = new Map();  // slo id → { windows, seen, objective, window }
+  const severityInferred = [];
+  for (const alert of alerts || []) {
+    if (alert?.labels?.kind === 'forecast') continue;
+    const parsed = parseBurnAlert(alert);
+    if (!parsed) continue;
+    if (parsed.severityInferred && parsed.name) severityInferred.push(parsed.name);
+    let g = groups.get(parsed.slo);
+    if (!g) {
+      g = { windows: [], seen: new Set(), objective: null, window: null, unhealthy: false };
+      groups.set(parsed.slo, g);
+    }
+    // A rule the ruler reports as unhealthy (health present and not
+    // 'ok') still maps — it EXISTS — but the entry it lands in must not
+    // read Verified: a rule that fails to evaluate is not paging anyone.
+    if (ruleHealthy(alert) === false) g.unhealthy = true;
+    const key = `${parsed.short}|${parsed.long}|${parsed.factor}|${parsed.severity}`;
+    if (!g.seen.has(key)) {
+      g.seen.add(key);
+      g.windows.push({ short: parsed.short, long: parsed.long, factor: parsed.factor, severity: parsed.severity });
+    }
+    if (g.objective == null) g.objective = parseObjectivePercent(parsed.annotations.slo_objective);
+    if (g.window == null && SLO_WINDOWS_ALLOWED.has(String(parsed.annotations.slo_window))) {
+      g.window = String(parsed.annotations.slo_window);
+    }
+  }
+
+  const applyEvidence = (slo, g) => {
+    if (g.objective != null) slo.objective = g.objective;
+    if (g.window) slo.window = g.window;
+  };
+
+  // Pass 1 — exact matches claim their SLO before any re-id can move it.
+  const resolved = new Map();  // discoveredId → slo | null
+  const claimed = new Set();
+  const attested = [];
+  for (const [discoveredId, g] of groups) {
+    const slo = slos.find(s => s.id === discoveredId);
+    if (!slo) continue;
+    claimed.add(slo);
+    resolved.set(discoveredId, slo);
+    attested.push(discoveredId);
+    applyEvidence(slo, g);
+  }
+  // Pass 2 — re-identify an unclaimed placeholder sharing the SLI base.
+  const reidentified = {};
+  for (const [discoveredId, g] of groups) {
+    if (resolved.has(discoveredId)) continue;
+    let slo = null;
+    if (isSlug(discoveredId)) {
+      const candidate = slos.find(s => !claimed.has(s) && sloBase(s.id) === sloBase(discoveredId));
+      if (candidate) {
+        claimed.add(candidate);
+        reidentified[candidate.id] = discoveredId;
+        candidate.id = discoveredId;
+        applyEvidence(candidate, g);
+        slo = candidate;
+      }
+    }
+    resolved.set(discoveredId, slo);
+  }
+
+  const alertsOut = [];
+  const unmapped = [];
+  const unhealthyIndexes = [];  // indexes into alertsOut fed by an unhealthy rule
+  const unhealthySlos = [];
+  for (const [discoveredId, g] of groups) {
+    const slo = resolved.get(discoveredId);
+    // The SLO's own stamp follows the group's health whether or not the
+    // group is representable below.
+    if (slo && g.unhealthy) unhealthySlos.push(slo.id);
+    // Schema: >= 2 windows per entry. A single-window group is a real
+    // alert we cannot represent — report it rather than pad it.
+    if (!slo || g.windows.length < 2) {
+      unmapped.push(discoveredId);
+      continue;
+    }
+    const windows = g.windows
+      .map((w, i) => ({ w, i, s: durationToSeconds(w.short) ?? Infinity }))
+      .sort((x, y) => (x.s - y.s) || (x.i - y.i))
+      .map(x => x.w);
+    if (g.unhealthy) unhealthyIndexes.push(alertsOut.length);
+    alertsOut.push({ slo: slo.id, windows });
+  }
+  return { alerts: alertsOut, unmapped, severityInferred, reidentified, attested, unhealthyIndexes, unhealthySlos };
+}
+
 function defaultBaselines(criticality) {
   if (criticality === 'tier-1') return { mttd_target_p50: '2m', mttr_target_p50: '30m' };
   if (criticality === 'tier-2') return { mttd_target_p50: '5m', mttr_target_p50: '2h' };
   return { mttd_target_p50: '15m', mttr_target_p50: '1d' };
 }
 
-function durationFromMs(ms, fallback) {
-  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return fallback;
-  if (ms < 1000) return `${Math.max(1, Math.round(ms))}ms`;
-  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
-  return `${Math.max(1, Math.round(ms / 60_000))}m`;
+// ============================================================
+// On-wire liveness — what the MCP reports about whether an artefact is
+// currently DOING its job, as opposed to merely existing. Scrape targets
+// carry health/lastScrape/lastError; rules carry health/lastError/
+// lastEvaluation (and state/activeAt for alerting rules). The probe
+// adapters keep these on the adapted objects; buildCanonicalPack strips
+// them before anything enters the schema-validated spec and writes them
+// to mcp.observed.* / mcp.discovered.*_unhealthy annotations instead.
+// ============================================================
+
+// Cap on entries written into a single mcp.observed.* JSON annotation.
+const OBSERVATION_LIMIT = 200;
+// Cap on a single lastError string inside those annotations.
+const OBSERVED_ERROR_LENGTH = 200;
+
+const trimError = (v) => (v == null || v === '' ? null : String(v).slice(0, OBSERVED_ERROR_LENGTH));
+
+// Prometheus target health is 'up' | 'down' | 'unknown'; anything we do
+// not recognise reads as null (no evidence either way).
+function normTargetHealth(v) {
+  const s = String(v ?? '').trim().toLowerCase();
+  return s === 'up' || s === 'down' ? s : null;
 }
+
+// Rule health as reported by the ruler ('ok' | 'err' | 'unknown').
+// Returns true (healthy), false (health present and not ok) or null (no
+// health information at all). Only `false` withholds a verified stamp.
+function ruleHealthy(rule) {
+  if (rule?.health == null || rule.health === '') return null;
+  return String(rule.health).trim().toLowerCase() === 'ok';
+}
+
+// Observation fields the rule adapters carry when the ruler reports
+// them. Everything outside this list (name/expr/interval/labels/for/
+// annotations) is the rule DEFINITION and goes into the spec.
+const RECORDING_OBSERVATION_FIELDS = ['health', 'lastError', 'lastEvaluation', 'evaluationTime'];
+const ALERT_OBSERVATION_FIELDS = [...RECORDING_OBSERVATION_FIELDS, 'state', 'activeAt'];
+
+function pickPresent(source, fields) {
+  const out = {};
+  for (const f of fields) {
+    if (source?.[f] != null && source[f] !== '') out[f] = source[f];
+  }
+  return out;
+}
+
+// A discovered recording rule reduced to what the schema admits
+// (name/expr/interval/labels) — the observation fields live in
+// mcp.observed.recording_rules.
+function stripRuleObservation(rule) {
+  const out = { name: rule.name, expr: rule.expr };
+  if (rule.interval != null) out.interval = rule.interval;
+  if (rule.labels != null) out.labels = rule.labels;
+  return out;
+}
+
+// Burn-rate linkage labels the compiler stamps on every alerting rule it
+// emits. An alert observation carries these (and only these) so the graph
+// ladder can link a live rule to its declared POL-* window by labels
+// before falling back to the `<slo>_burn_<factor>x_<short>_<long>` name.
+const BURN_LINK_LABELS = ['slo', 'burn_rate', 'window_short', 'window_long'];
+
+// One entry of mcp.observed.recording_rules / mcp.observed.alert_rules.
+// Every key is present (null when the ruler did not report it) so the
+// reader never has to guess whether a field was absent or unknown. The
+// one exception is `labels` on an alerting entry: present only when at
+// least one burn-linkage label is, and holding only those keys.
+function ruleObservation(rule, kind) {
+  const base = {
+    name: rule?.name ?? null,
+    health: rule?.health ?? null,
+    lastError: trimError(rule?.lastError),
+    lastEvaluation: rule?.lastEvaluation ?? null,
+  };
+  if (kind === 'alerting') {
+    const out = {
+      ...base,
+      state: rule?.state ?? null,
+      activeAt: rule?.activeAt ?? null,
+      // Group evaluation interval (the alert adapter keeps it) — the
+      // ladder's staleness yardstick for alerting rules.
+      interval: rule?.interval ?? null,
+    };
+    const labels = {};
+    for (const key of BURN_LINK_LABELS) {
+      const value = rule?.labels?.[key];
+      if (value != null && value !== '') labels[key] = String(value);
+    }
+    if (Object.keys(labels).length) out.labels = labels;
+    return out;
+  }
+  return { ...base, evaluationTime: rule?.evaluationTime ?? null };
+}
+
+function unhealthyRuleNames(rules) {
+  return (rules || [])
+    .filter(r => ruleHealthy(r) === false)
+    .map(r => r.name)
+    .filter(Boolean);
+}
+
+// scrape_configs adapted payloads come in two shapes: the legacy job-name
+// string[] (older probe results, pre-populated test fixtures) and the
+// per-job target list [{job, targets:[{instance, health, lastScrape,
+// lastError}]}]. Normalise both to the latter; a legacy name carries no
+// targets and therefore no evidence of being down.
+function normalizeScrapeJobs(adapted) {
+  if (!Array.isArray(adapted)) return [];
+  const out = [];
+  for (const entry of adapted) {
+    if (typeof entry === 'string') {
+      if (entry) out.push({ job: entry, targets: [] });
+    } else if (entry && typeof entry === 'object' && entry.job) {
+      out.push({ job: String(entry.job), targets: Array.isArray(entry.targets) ? entry.targets : [] });
+    }
+  }
+  return out;
+}
+
+// A job is DOWN only when it has targets and every one of them reports
+// health 'down'. Unknown health (null) is not evidence of failure.
+const scrapeJobDown = (job) => job.targets.length > 0 && job.targets.every(t => t.health === 'down');
+
+// Value written under every mcp.scaffold.<symbol> key the fetcher stamps
+// on a schema-forced placeholder. Same convention as crawler.scaffold.*:
+// a short human sentence saying WHY the entry exists and that nothing
+// attested it. The adapter keys on the prefix, not the value.
+const SCAFFOLD_NOTE = 'schema-required fallback; not attested by any MCP tool';
 
 // ============================================================
 // Capability inventory — otel-mcp-server's `backend_capabilities`
@@ -294,6 +642,14 @@ function specSlug(s, fallback = 'item') {
 }
 
 function dashboardIdFrom(item, fallback = 'dashboard') {
+  // Dashboards deployed by Observogram self-identify via the obs-pack-id
+  // tag (uids are capped + fingerprinted, so they can't carry the
+  // declared id). Honouring the tag closes the deploy→fetch→diff round
+  // trip with the SAME canonical id the source pack declares; dashboards
+  // without the tag keep the existing uid-first derivation.
+  const tags = item?.tags || item?.dashboard?.tags || [];
+  const idTag = (Array.isArray(tags) ? tags : []).find(t => String(t).startsWith('obs-pack-id:'));
+  if (idTag) return specSlug(String(idTag).slice('obs-pack-id:'.length), 'dash');
   const source = item?.dashboard?.uid || item?.uid || item?.id || item?.dashboard?.title || item?.title || fallback;
   return specSlug(source, 'dash');
 }
@@ -385,6 +741,364 @@ function dashboardFromGrafanaDetail(detail, searchItem = {}) {
   };
 }
 
+// ============================================================
+// Step 2 — stack self-metrics sampler + Alertmanager / Grafana status
+// observers. SIGNALS, NEVER VERDICTS: nothing in this section calls
+// markVerified / markScaffold, nothing here changes a grade. Every row
+// is a point-in-time sample with an honest outcome; on a restricted
+// tier the answer is "not attempted" with the reason, never "absent".
+// ============================================================
+
+const STACK_NOT_EXPOSED = (tool) => `${tool} not exposed by this MCP (restricted tier)`;
+const STACK_BUDGET_EXHAUSTED = 'call budget exhausted';
+const STACK_ALIAS_CALLS_PER_ROW = 2;
+const STACK_MAX_CALLS = 48;
+const STACK_OBSERVED_ROWS = 64;
+const GRAFANA_DATASOURCE_HEALTH_LIMIT = 10;
+const GRAFANA_CONTACT_POINT_NAMES = 32;
+
+// Locate an instant vector's result array in either envelope
+// (otel-mcp-server `{ result }`, Prometheus API `{ data: { result } }`).
+function instantVectorResult(response) {
+  if (Array.isArray(response?.result)) return response.result;
+  if (Array.isArray(response?.data?.result)) return response.data.result;
+  return null;
+}
+
+// One instant-vector answer → { outcome, value, reason }. An empty array
+// is `empty` (the backend says "no series"); a first sample whose value
+// is missing or non-finite (NaN, +Inf, -Inf) is `empty` with a reason —
+// for EVERY unit: a series-only answer (metric identities, no sample) is
+// never counted as a value, because every `count` row is an aggregation
+// that returns one series and "1" would be a fabricated number, not a
+// sample. Exported so the recorder (tools/record-mcp-fixtures.mjs) reads
+// a live answer exactly the way the sampler does.
+export function sampleFromInstantVector(row, response) {
+  const result = instantVectorResult(response);
+  if (result === null) {
+    const v = validateResponseShape('instant-vector', response);
+    return { outcome: 'failed', value: null, reason: trimError(v.reason || 'response is not an instant vector') };
+  }
+  if (result.length === 0) return { outcome: 'empty', value: null, reason: null };
+  const raw = result[0]?.value?.[1];
+  if (raw === undefined) {
+    return { outcome: 'empty', value: null, reason: 'first series carries no sample value' };
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    return { outcome: 'empty', value: null, reason: `non-finite sample value ${String(raw).slice(0, 16)}` };
+  }
+  return { outcome: 'data', value, reason: null };
+}
+
+// How far a metric-name inventory can be trusted. The inventory is
+// EVIDENCE OF PRESENCE (a name in it exists), never proof of absence: the
+// `metric_names` tool has no completeness contract (no `limit`, no
+// truncation marker — the recorded reference fixture is a 25-name
+// subset), so a name missing from it may simply be beyond the server's
+// cap. The one anchor every Prometheus-compatible backend exposes is
+// `up`; an inventory without it is provably incomplete and gates nothing.
+// Returns { size, trusted, reason }; `size` is null without an inventory.
+// Exported so the recorder prints the same verdict next to its counts.
+export function stackInventoryTrust(inventory) {
+  const inv = inventory == null ? null
+    : inventory instanceof Set ? inventory
+    : new Set(Array.isArray(inventory) ? inventory.filter(n => typeof n === 'string') : []);
+  if (!inv) return { set: null, size: null, trusted: false, reason: 'no metric inventory' };
+  if (!inv.has('up')) {
+    return { set: inv, size: inv.size, trusted: false, reason: `the ${inv.size}-name inventory lacks \`up\` (present on every Prometheus-compatible backend) — treated as incomplete` };
+  }
+  return { set: inv, size: inv.size, trusted: true, reason: null };
+}
+
+// Sample the stack self-metric alias table through `metrics_query`.
+//
+// Policy (docs/MCP_INTEGRATION.md "Stack self-metrics (sampling)"):
+//   • attempt only when the query tool is available — a tools/list
+//     inventory must advertise it; a server with no tools/list at all is
+//     attempted (older servers). Otherwise status 'not-attempted'.
+//   • with a metric-name inventory an alias is eligible when EVERY name
+//     in its `requires` is present; eligible aliases are tried first (all
+//     of them — the inventory is evidence they exist, so no per-row cap).
+//   • a row with NO eligible alias is 'not-in-inventory' (no call) only
+//     when the inventory is TRUSTED (stackInventoryTrust: it carries
+//     `up`). An untrusted inventory (lacks `up`, or none at all) never
+//     asserts absence: the row falls back to the bounded cascade — the
+//     preference-ordered aliases, at most STACK_ALIAS_CALLS_PER_ROW calls
+//     — and records `empty` / `failed` honestly.
+//   • aliases are ordered generic-first, then products already seen
+//     (build_info / grafana_health / traces_services / capabilities).
+//   • a global budget of `maxCalls` metrics_query calls; rows beyond it
+//     are 'not-attempted' with the reason 'call budget exhausted'.
+//   • every call goes through `quiet` under the family name
+//     'stack_self_metrics' (probeFailures); the per-row reason keeps the
+//     row's own last error message.
+// Returns { status, reason, rows, callsMade, inventory: { size, trusted,
+// reason } }. Rows are never 'ok'.
+export async function sampleStackSelfMetrics({
+  callTool,
+  quiet,
+  metricsQueryTool,
+  inventory = null,
+  seenProducts = [],
+  discoveredToolNames = null,
+  hasToolsList = false,
+  refreshedAt,
+  maxCalls = STACK_MAX_CALLS,
+  rows = STACK_SELF_METRIC_PROBES,
+} = {}) {
+  const at = refreshedAt || new Date().toISOString();
+  const record = (row, extra) => ({
+    id: row.id, family: row.family, product: null, expr: null, value: null,
+    unit: row.unit, direction: row.direction, at, ...extra,
+  });
+  const trust = stackInventoryTrust(inventory);
+  const inventoryInfo = { size: trust.size, trusted: trust.trusted, reason: trust.reason };
+  const advertised = !hasToolsList || (discoveredToolNames?.has?.(metricsQueryTool) ?? false);
+  if (!advertised) {
+    const reason = STACK_NOT_EXPOSED(metricsQueryTool);
+    return {
+      status: 'not-attempted', reason, callsMade: 0, inventory: inventoryInfo,
+      rows: rows.map(row => record(row, { outcome: 'not-attempted', reason })),
+    };
+  }
+  const inv = trust.set;
+  const seen = seenProducts instanceof Set ? seenProducts : new Set(seenProducts || []);
+  const quietly = quiet || (async (_name, fn) => { try { return await fn(); } catch { return null; } });
+
+  let callsMade = 0;
+  const out = [];
+  for (const row of rows) {
+    const eligible = eligibleAliases(row, inv);
+    const required = [...new Set(row.aliases.flatMap(a => a.requires))];
+    let ordered;
+    let inventoryNote = null;
+    if (inv && eligible.length > 0) {
+      // Evidence-backed aliases (their metrics are IN the inventory):
+      // every one may be tried within the global budget.
+      ordered = productPreferenceOrder({ aliases: eligible }, seen);
+    } else if (inv && trust.trusted) {
+      out.push(record(row, {
+        outcome: 'not-in-inventory',
+        reason: `no alias whose required metrics are in the ${inv.size}-name inventory this MCP returned (${required.join(', ')})`,
+      }));
+      continue;
+    } else {
+      // No inventory, or one that cannot prove absence: bounded cascade.
+      ordered = productPreferenceOrder(row, seen).slice(0, STACK_ALIAS_CALLS_PER_ROW);
+      if (inv) inventoryNote = `required metrics absent from the ${inv.size}-name inventory (${trust.reason}); queried anyway`;
+    }
+    let last = null;
+    for (const alias of ordered) {
+      if (callsMade >= maxCalls) break;
+      callsMade += 1;
+      let err = null;
+      const response = await quietly('stack_self_metrics', async () => {
+        try { return await callTool(metricsQueryTool, { query: alias.expr }); }
+        catch (e) { err = e; throw e; }
+      });
+      const sample = response == null
+        ? { outcome: 'failed', value: null, reason: trimError(err?.message || 'tool returned no response') }
+        : sampleFromInstantVector(row, response);
+      const reason = sample.outcome === 'empty' && inventoryNote
+        ? (sample.reason ? `${sample.reason}; ${inventoryNote}` : inventoryNote)
+        : sample.reason;
+      last = record(row, { product: alias.product, expr: alias.expr, ...sample, reason });
+      if (sample.outcome === 'data') break;
+    }
+    out.push(last || record(row, { outcome: 'not-attempted', reason: STACK_BUDGET_EXHAUSTED }));
+  }
+  return { status: 'sampled', reason: null, rows: out, callsMade, inventory: inventoryInfo };
+}
+
+const asString = (v) => (typeof v === 'string' && v.length ? v.slice(0, OBSERVED_ERROR_LENGTH) : null);
+
+// The payload object of an object shape — the SAME document the shape
+// validated (envelope-first, see response-shapes.mjs), never "the first
+// object at the root": a `{ status: 'success', data: {...} }` wrapper must
+// not read as the status document itself.
+function locateObject(shapeId, response) {
+  return locateObjectPayload(shapeId, response);
+}
+
+// Run one advertised status tool through `quiet`, returning
+// { response, error } — the error is the tool's own message (trimmed) or
+// the shape reason when the answer did not satisfy `shapeId`, so a
+// surface that is advertised but fails is reported as FAILED, never as
+// "not exposed".
+async function statusCall({ quietly, callTool, tool, args, shapeId }) {
+  let err = null;
+  const resp = await quietly(tool, async () => {
+    try { return await callTool(tool, args); }
+    catch (e) { err = e; throw e; }
+  });
+  if (resp == null) return { response: null, error: trimError(err?.message || `${tool} returned no response`) };
+  const v = validateResponseShape(shapeId, resp);
+  if (!v.ok) return { response: null, error: trimError(`${tool}: unexpected shape — ${v.reason || 'critical field missing'}`) };
+  return { response: resp, error: null };
+}
+
+// First array at the declared list paths of a list shape, or null.
+function locateList(response, paths) {
+  for (const p of paths) {
+    const v = p === '' ? response : response?.[p];
+    if (Array.isArray(v)) return v;
+  }
+  return null;
+}
+
+// Alertmanager status + silences → { version, uptime, clusterStatus,
+// silences: { active, total } | null, toolsAnswered, error } or null when
+// NEITHER tool is advertised (not exposed — a tier fact). A tool that is
+// advertised but fails (HTTP error, timeout, bad shape) is reported:
+// `error` carries the trimmed message(s) and the result is non-null even
+// when nothing answered, so the surface reads "probe failed", never
+// "not exposed". Each tool is guarded by the tools/list inventory when
+// one exists and called through `quiet`.
+export async function observeAlertmanager({
+  callTool, quiet, discoveredToolNames = null, hasToolsList = false,
+  statusTool, silencesTool,
+} = {}) {
+  const advertised = (name) => !!name && (!hasToolsList || (discoveredToolNames?.has?.(name) ?? false));
+  const quietly = quiet || (async (_name, fn) => { try { return await fn(); } catch { return null; } });
+  const out = { version: null, uptime: null, clusterStatus: null, silences: null, toolsAnswered: [], error: null };
+  const errors = [];
+  let attempted = false;
+
+  if (advertised(statusTool)) {
+    attempted = true;
+    const { response: resp, error } = await statusCall({ quietly, callTool, tool: statusTool, shapeId: 'status-object' });
+    if (error) errors.push(error);
+    else {
+      const obj = locateObject('status-object', resp) || {};
+      out.version = asString(obj.versionInfo?.version) ?? asString(obj.version);
+      out.uptime = asString(obj.uptime);
+      out.clusterStatus = asString(obj.cluster?.status) ?? asString(obj.clusterStatus) ?? asString(obj.status);
+      out.toolsAnswered.push(statusTool);
+    }
+  }
+  if (advertised(silencesTool)) {
+    attempted = true;
+    const { response: resp, error } = await statusCall({ quietly, callTool, tool: silencesTool, shapeId: 'silences' });
+    if (error) errors.push(error);
+    else {
+      const list = locateList(resp, ['silences', 'data', '']) || [];
+      const state = (s) => s?.status?.state ?? s?.state ?? null;
+      out.silences = { active: list.filter(s => state(s) === 'active').length, total: list.length };
+      out.toolsAnswered.push(silencesTool);
+    }
+  }
+  if (!attempted) return null;
+  out.error = errors.length ? trimError(errors.join('; ')) : null;
+  return out;
+}
+
+// The verdict of one datasource, from the object the `health-object`
+// shape located (response-shapes.mjs describes the envelope) →
+// { health: 'ok' | 'error' | 'unknown', message }.
+//
+// otel-mcp-server answers { supported: true, status: 'OK' | 'ERROR',
+// message } when Grafana's health endpoint answered 2xx, and
+// { supported: false, error } when it did not. Grafana answers a check
+// that RAN and FAILED (backend unreachable) with HTTP 400 — verified
+// 2026-09-08 on Grafana 12.4.4; an unknown uid answers 500 — so an
+// unsupported answer whose error names HTTP 400 is a failed check:
+// 'error', with the error text as the message. Any other unsupported
+// answer (a 5xx, a network error, a datasource type with no check) is
+// 'unknown' with its message — "not checked", never "not unhealthy" —
+// and so is a supported answer that carries no status. Bare { status,
+// message } and { ok } verdicts read as before.
+function normDatasourceHealth(obj) {
+  if (obj?.supported === false) {
+    const reason = asString(obj.error) ?? asString(obj.message);
+    return { health: /\bHTTP 400\b/.test(reason || '') ? 'error' : 'unknown', message: reason };
+  }
+  const status = typeof obj?.status === 'string' ? obj.status.toLowerCase() : null;
+  const message = trimError(obj?.message);
+  if (status === 'ok' || status === 'success' || obj?.ok === true) return { health: 'ok', message };
+  if (status === 'error' || status === 'err' || obj?.ok === false) return { health: 'error', message };
+  return { health: 'unknown', message };
+}
+
+// Grafana datasources (+ per-uid health, capped) and contact points →
+// { datasources: [{uid,name,type,health,message}] | null,
+//   contactPoints: { count, names } | null, toolsAnswered, error } or
+// null when NONE of the tools is advertised. Health is 'unknown' (no
+// verdict) when the health tool is not advertised, errored, Grafana
+// could not run the check (normDatasourceHealth), or the datasource is
+// beyond the cap — an `unknown` is "not checked", never "not unhealthy".
+// An advertised tool that fails lands in `error` (see
+// observeAlertmanager) and the result stays non-null.
+export async function observeGrafana({
+  callTool, quiet, discoveredToolNames = null, hasToolsList = false,
+  datasourcesTool, datasourceHealthTool, contactPointsTool,
+  healthLimit = GRAFANA_DATASOURCE_HEALTH_LIMIT,
+} = {}) {
+  const advertised = (name) => !!name && (!hasToolsList || (discoveredToolNames?.has?.(name) ?? false));
+  const quietly = quiet || (async (_name, fn) => { try { return await fn(); } catch { return null; } });
+  const out = { datasources: null, contactPoints: null, toolsAnswered: [], error: null };
+  const errors = [];
+  let attempted = false;
+
+  if (advertised(datasourcesTool)) {
+    attempted = true;
+    const { response: resp, error } = await statusCall({ quietly, callTool, tool: datasourcesTool, shapeId: 'datasources' });
+    if (error) errors.push(error);
+    else {
+      const list = (locateList(resp, ['datasources', 'data', '']) || [])
+        .filter(d => d && typeof d === 'object')
+        .slice(0, OBSERVATION_LIMIT)
+        .map(d => ({
+          uid: asString(d.uid) ?? (d.id != null ? String(d.id) : null),
+          name: asString(d.name),
+          type: asString(d.type),
+          health: 'unknown',
+          message: null,
+        }));
+      out.toolsAnswered.push(datasourcesTool);
+      if (advertised(datasourceHealthTool)) {
+        let healthAnswered = false;
+        let firstHealthError = null;
+        for (const ds of list.filter(d => d.uid).slice(0, healthLimit)) {
+          const { response: h, error: hErr } = await statusCall({
+            quietly, callTool, tool: datasourceHealthTool, args: { uid: ds.uid }, shapeId: 'health-object',
+          });
+          if (hErr) {
+            ds.health = 'unknown';
+            ds.message = hErr;
+            if (!firstHealthError) firstHealthError = hErr;
+            continue;
+          }
+          const verdict = normDatasourceHealth(locateObject('health-object', h) || {});
+          ds.health = verdict.health;
+          ds.message = verdict.message;
+          healthAnswered = true;
+        }
+        if (healthAnswered) out.toolsAnswered.push(datasourceHealthTool);
+        else if (firstHealthError) errors.push(firstHealthError);
+      }
+      out.datasources = list;
+    }
+  }
+  if (advertised(contactPointsTool)) {
+    attempted = true;
+    const { response: resp, error } = await statusCall({ quietly, callTool, tool: contactPointsTool, shapeId: 'contact-points' });
+    if (error) errors.push(error);
+    else {
+      const list = (locateList(resp, ['contactPoints', 'contact_points', 'data', '']) || [])
+        .filter(c => c && typeof c === 'object');
+      out.contactPoints = {
+        count: list.length,
+        names: list.map(c => asString(c.name) ?? asString(c.uid)).filter(Boolean).slice(0, GRAFANA_CONTACT_POINT_NAMES),
+      };
+      out.toolsAnswered.push(contactPointsTool);
+    }
+  }
+  if (!attempted) return null;
+  out.error = errors.length ? trimError(errors.join('; ')) : null;
+  return out;
+}
+
 export function buildCanonicalPack({
   refreshedAt,
   mcpUrl,
@@ -393,12 +1107,21 @@ export function buildCanonicalPack({
   anomaliesActive = {},
   baselinesData = {},
   probeResults = {},
+  probeFailures = {},
   errors = {},
+  // Fetcher clock: when the fetch began and when each probe family
+  // answered. Null / empty when the caller predates them (nothing written).
+  fetchStartedAt = null,
+  observedAt = null,
   discoveredTools = [],
   unmatchedTools = [],
   capabilities = null,
   liveVersions = {},
   ruleEvidence = { firingAlerts: [], recordingRuleNames: [] },
+  // Step 2 — null when the caller predates the sampler (nothing written).
+  stackSamples = null,
+  alertmanagerObserved = null,
+  grafanaObserved = null,
   packName = PACK_NAME,
 } = {}) {
   // Destructuring defaults only fire for `undefined`. The MCP probe
@@ -411,6 +1134,7 @@ export function buildCanonicalPack({
   anomaliesActive = anomaliesActive || {};
   baselinesData   = baselinesData   || {};
   probeResults    = probeResults    || {};
+  probeFailures   = probeFailures   || {};
   errors          = errors          || {};
 
   const services = Array.isArray(health.services) ? health.services : [];
@@ -420,7 +1144,7 @@ export function buildCanonicalPack({
 
   // ---- metadata ----
   // Core tools that were called regardless of probes.
-  const coreCalled = ['system_health','system_topology','anomalies_active','anomalies_baselines'].filter(n => !errors[n]);
+  const coreCalled = [TOOL.systemHealth, TOOL.systemTopology, TOOL.anomaliesActive, TOOL.anomaliesBaselines].filter(n => !errors[n]);
   // Probe tool that actually responded (per probe).
   const probeAnswered = Object.entries(probeResults)
     .filter(([_, v]) => v?.tool)
@@ -449,6 +1173,31 @@ export function buildCanonicalPack({
   const probesSucceeded = probesByOutcome('data');
   const probesEmpty     = probesByOutcome('empty');
   const probesFailed    = probesByOutcome('failed');
+  // unsupported — tools/list answered and NO candidate for the family is
+  // exposed: a restricted MCP tier, not an outage. Distinct from `failed`
+  // (we asked, nothing answered) so the studio never blames a deploy for
+  // a surface the server simply doesn't offer.
+  const probesUnsupported = probesByOutcome('unsupported');
+  // Last error per probe family: fetchMcp keys probeFailures by candidate
+  // tool NAME; map each name back to its family through the candidate
+  // list the probe loop recorded in `attempted`. The last erroring
+  // candidate wins (it is the one the cascade gave up on). Only FAILED
+  // families get an entry: the key documents WHY a family got no answer,
+  // so a family whose later candidate answered (after an earlier one
+  // errored) must not carry one — it would name a family that is listed
+  // in mcp.probesSucceeded.
+  const probeErrors = {};
+  for (const [family, v] of Object.entries(probeResults || {})) {
+    // An unsupported family never called anything: its `attempted` is
+    // the full candidate list, so a same-named tool that errored for a
+    // DIFFERENT family must not be blamed on it.
+    if (classify(v) !== 'failed') continue;
+    const attempted = Array.isArray(v?.attempted) ? v.attempted : [];
+    for (const name of attempted) {
+      const msg = probeFailures[name];
+      if (typeof msg === 'string' && msg) probeErrors[family] = trimError(msg);
+    }
+  }
 
   const annotations = {
     'mcp.refreshedAt':         refreshedAt,
@@ -463,7 +1212,11 @@ export function buildCanonicalPack({
     // distinct from "— not attempted".
     'mcp.probesEmpty':         probesEmpty.join(','),
     'mcp.probesFailed':        probesFailed.join(','),
+    'mcp.probesUnsupported':   probesUnsupported.join(','),
     'mcp.servicesDiscovered':  serviceNames.join(','),
+    // Count of anomaly baselines the tool returned — evidence that
+    // anomalies_baselines answered, NOT an MTTD/MTTR measurement.
+    // spec.baselines is always a platform default (see below).
     'mcp.baselinesComputed':   String((baselinesData.baselines || []).length),
     'mcp.activeAnomalies':     String(anomaliesActive?.traceAnomalies?.active?.length || 0),
     // tools/list inventory — the honest record of what the MCP advertised.
@@ -474,6 +1227,22 @@ export function buildCanonicalPack({
     // the user can name what to wire next.
     'mcp.toolsUnmatched':      unmatchedTools.map(t => t.name).join(','),
   };
+  // WHY a probe family got no answer — the last candidate's error message,
+  // trimmed like every other observed error. Absent when nothing errored.
+  for (const [family, msg] of Object.entries(probeErrors)) {
+    annotations[`mcp.probeErrors.${family}`] = msg;
+  }
+  // The fetcher's own clock. mcp.refreshedAt is whatever the caller
+  // stamped (server and journey stamp it after the fetch returns), so
+  // freshness judgements on mcp.observed.* read mcp.observedAt.<family>
+  // first — the instant that family's answer arrived — then
+  // mcp.fetchStartedAt, and only then mcp.refreshedAt.
+  if (typeof fetchStartedAt === 'string' && fetchStartedAt) {
+    annotations['mcp.fetchStartedAt'] = fetchStartedAt;
+  }
+  for (const [family, at] of Object.entries(observedAt || {})) {
+    if (typeof at === 'string' && at) annotations[`mcp.observedAt.${family}`] = at;
+  }
   // Per-probe count annotations — ANY probe with an array result, whether
   // empty or populated, lands here so the studio can read "0" honestly.
   for (const [k, v] of Object.entries(probeResults || {})) {
@@ -482,11 +1251,89 @@ export function buildCanonicalPack({
     }
   }
 
+  // ---- step 2: stack self-metrics + status surfaces (signals, never verdicts) ----
+  // Written only when the caller sampled (a null input predates step 2 and
+  // writes nothing). No markVerified / markScaffold in this block: a
+  // sampled number is evidence about the stack's own health at one
+  // instant, not an attestation of any pack artefact.
+  const stepTwoTools = [];
+  if (stackSamples && typeof stackSamples === 'object') {
+    const rows = Array.isArray(stackSamples.rows) ? stackSamples.rows : [];
+    const count = (o) => String(rows.filter(r => r?.outcome === o).length);
+    annotations['mcp.stack.status'] = stackSamples.status === 'sampled' ? 'sampled' : 'not-attempted';
+    if (annotations['mcp.stack.status'] !== 'sampled') {
+      annotations['mcp.stack.reason'] = trimError(stackSamples.reason) || 'not attempted';
+    }
+    annotations['mcp.stack.sampled']        = count('data');
+    annotations['mcp.stack.empty']          = count('empty');
+    annotations['mcp.stack.failed']         = count('failed');
+    annotations['mcp.stack.notInInventory'] = count('not-in-inventory');
+    annotations['mcp.stack.notAttempted']   = count('not-attempted');
+    const families = STACK_FAMILIES
+      .map(f => [f, bestOutcome(rows.filter(r => r?.family === f).map(r => r.outcome))])
+      .filter(([, best]) => best)
+      .map(([f, best]) => `${f}:${best}`);
+    annotations['mcp.stack.families'] = families.join(',');
+    const observed = rows
+      .filter(r => r && r.outcome !== 'not-attempted')
+      .slice(0, STACK_OBSERVED_ROWS)
+      .map(r => ({
+        id: r.id, family: r.family, product: r.product ?? null, expr: r.expr ?? null,
+        value: typeof r.value === 'number' ? r.value : null, unit: r.unit, direction: r.direction,
+        at: r.at ?? refreshedAt, outcome: r.outcome,
+        ...(r.reason ? { reason: trimError(r.reason) } : {}),
+      }));
+    if (observed.length) annotations['mcp.observed.stack_metrics'] = annotationJson(observed);
+    if (rows.some(r => r?.outcome === 'data' || r?.outcome === 'empty')) stepTwoTools.push(TOOL.stackSelfMetrics);
+  }
+  // A non-null observer result means the surface was ADVERTISED; `error`
+  // carries what an advertised tool failed with, so the surfaces can say
+  // "probe failed: …" instead of mistaking a failure for a tier limit.
+  if (alertmanagerObserved && typeof alertmanagerObserved === 'object') {
+    annotations['mcp.observed.alertmanager'] = annotationJson({
+      version: alertmanagerObserved.version ?? null,
+      uptime: alertmanagerObserved.uptime ?? null,
+      clusterStatus: alertmanagerObserved.clusterStatus ?? null,
+      silences: alertmanagerObserved.silences ?? null,
+      ...(alertmanagerObserved.error ? { error: trimError(alertmanagerObserved.error) } : {}),
+    });
+    stepTwoTools.push(...(alertmanagerObserved.toolsAnswered || []));
+  }
+  if (grafanaObserved && typeof grafanaObserved === 'object') {
+    if (Array.isArray(grafanaObserved.datasources)) {
+      annotations['mcp.observed.grafana.datasources'] = annotationJson(grafanaObserved.datasources);
+    }
+    if (grafanaObserved.contactPoints && typeof grafanaObserved.contactPoints === 'object') {
+      annotations['mcp.observed.grafana.contact_points'] = annotationJson(grafanaObserved.contactPoints);
+    }
+    if (grafanaObserved.error) {
+      annotations['mcp.observed.grafana.error'] = trimError(grafanaObserved.error);
+    }
+    stepTwoTools.push(...(grafanaObserved.toolsAnswered || []));
+  }
+  if (stepTwoTools.length) {
+    const called = annotations['mcp.toolsCalled'].split(',').filter(Boolean);
+    for (const t of stepTwoTools) if (typeof t === 'string' && t && !called.includes(t)) called.push(t);
+    annotations['mcp.toolsCalled'] = called.join(',');
+  }
+
   // Per-artefact verification markers (only for items derived from a tool that
   // actually responded).
   const markVerified = (sym) => { annotations[`mcp.verified.${sym}`] = refreshedAt; };
+  // Per-artefact scaffold markers: schema-forced placeholders the fetcher
+  // had to invent and NO tool attested. The adapter projects them as
+  // Scaffold (never Declared, never Verified) so the grade parks them —
+  // the live counterpart of crawler.scaffold.<symbol>. The symbol MUST be
+  // the exact string the adapter's adapt* function passes to sourceOf.
+  const markScaffold = (sym, note = SCAFFOLD_NOTE) => { annotations[`mcp.scaffold.${sym}`] = note; };
 
   // ---- spec.otel ----
+  // The whole block is a guess: nothing the MCP exposes tells us the
+  // semconv version, SDK languages, sampling policy or propagators.
+  // system_health answering used to stamp mcp.verified.otel — that was
+  // false assurance (a healthy service list says nothing about the SDK
+  // configuration). The block is a scaffold; only the metric inventory
+  // (mcp.verified.otel.metrics, stamped below) is real evidence.
   const otelSection = {
     semconv: '1.27.0',
     resource_attributes: { required: ['service.name'] },
@@ -496,7 +1343,7 @@ export function buildCanonicalPack({
       propagators: ['tracecontext'],
     },
   };
-  if (!errors.system_health) markVerified('otel');
+  markScaffold('otel');
 
   // ---- spec.telemetry.backends ----
   // When the MCP exposes backend_capabilities, drive backends from the
@@ -507,12 +1354,23 @@ export function buildCanonicalPack({
   // older MCPs still produce a valid pack.
   const backends = [];
   const seenIds = new Set();
-  const pushBackend = (b, verifiedBy) => {
+  // `verifiedBy` is the tool whose answer attested the backend (a tool
+  // name, checked against `errors`) or `true` when the evidence was
+  // established elsewhere (a live version capture). A fallback entry
+  // with no evidence at all is stamped mcp.scaffold.telemetry.backends.<id>.
+  const pushBackend = (b, verifiedBy, { fallback = false } = {}) => {
     if (seenIds.has(b.id)) return;
     seenIds.add(b.id);
     backends.push(b);
-    if (verifiedBy && !errors[verifiedBy]) markVerified(`telemetry.backends.${b.id}`);
+    const attested = verifiedBy === true || (typeof verifiedBy === 'string' && !errors[verifiedBy]);
+    if (attested) markVerified(`telemetry.backends.${b.id}`);
+    else if (fallback) markScaffold(`telemetry.backends.${b.id}`);
   };
+  // A live version capture (grafana_health, `*_build_info` metrics,
+  // traces_services) is positive proof the product is up — the only
+  // evidence the fallback backends below can lean on.
+  const productAttested = (...products) =>
+    products.some(p => liveVersions?.[p]?.declared || liveVersions?.[p]?.alive);
 
   // Capability-derived inventory annotations (one row per skill+backend)
   // get stamped regardless of whether the entry becomes a telemetry
@@ -580,19 +1438,26 @@ export function buildCanonicalPack({
           signal,
           product: productSlug,
           ...(Object.keys(version).length ? { version } : {}),
-        }, 'backend_capabilities');
+        }, TOOL.backendCapabilities);
       }
     }
   }
 
   // Fallback / floor: ensure the headline platform backends are
   // always present even when backend_capabilities was unavailable.
-  // (Schema requires at least one telemetry backend.)
+  // (Schema requires at least one telemetry backend.) Each entry is a
+  // GUESS unless something attested the product: a build_info version
+  // capture for the metrics store (system_health answering used to
+  // count — it does not; a healthy service list says nothing about
+  // which metrics backend exists), the topology naming jaeger or
+  // traces_services answering for traces. Nothing attests Elasticsearch.
   if (backends.length === 0) {
-    pushBackend({ id: 'metrics-prom', signal: 'metrics', product: 'prometheus' }, 'system_health');
-    pushBackend({ id: 'logs-elastic', signal: 'logs',    product: 'elasticsearch' }, null);
+    pushBackend({ id: 'metrics-prom', signal: 'metrics', product: 'prometheus' },
+                productAttested('prometheus', 'victoriametrics', 'mimir'), { fallback: true });
+    pushBackend({ id: 'logs-elastic', signal: 'logs',    product: 'elasticsearch' }, null, { fallback: true });
+    const jaegerInTopology = (topology?.dependencies || []).some(d => (d.child || '').includes('jaeger'));
     pushBackend({ id: 'traces-jaeger', signal: 'traces', product: 'jaeger' },
-                (topology?.dependencies || []).some(d => (d.child || '').includes('jaeger')) ? 'system_topology' : null);
+                jaegerInTopology ? TOOL.systemTopology : productAttested('jaeger'), { fallback: true });
   }
 
   // Capability inventory annotations — the studio renders these on
@@ -657,7 +1522,33 @@ export function buildCanonicalPack({
   }
 
   // Probes drive multiple downstream sections — hoist their results.
-  const discoveredRules = probeResults?.recording_rules?.adapted || [];
+  // The adapted rules carry on-wire evaluation state (health, lastError,
+  // lastEvaluation, …) that the schema forbids inside spec.queries: keep
+  // the raw list for the observation annotations and the per-rule health
+  // lookup, and strip it before the rules feed inference or the spec.
+  const discoveredRulesRaw = Array.isArray(probeResults?.recording_rules?.adapted)
+    ? probeResults.recording_rules.adapted.filter(r => r && typeof r === 'object' && r.name)
+    : [];
+  const discoveredRules = discoveredRulesRaw.map(stripRuleObservation);
+  // Health per rule NAME, any-unhealthy-wins: the ruler can report the
+  // same name twice (one group evaluating, another failing), and a Map
+  // with last-wins semantics let the healthy copy stamp both spec entries
+  // Verified while mcp.discovered.recording_rules_unhealthy named the rule.
+  const recordingRuleHealth = new Map();
+  for (const r of discoveredRulesRaw) {
+    const h = ruleHealthy(r);
+    const prev = recordingRuleHealth.get(r.name);
+    if (prev === false) continue;
+    if (h === false || prev == null) recordingRuleHealth.set(r.name, h);
+  }
+  if (discoveredRulesRaw.length) {
+    annotations['mcp.observed.recording_rules'] = annotationJson(
+      discoveredRulesRaw.slice(0, OBSERVATION_LIMIT).map(r => ruleObservation(r, 'recording')));
+    const unhealthy = unhealthyRuleNames(discoveredRulesRaw);
+    if (unhealthy.length) {
+      annotations['mcp.discovered.recording_rules_unhealthy'] = unhealthy.slice(0, 64).join(',');
+    }
+  }
 
   // Second, independent source of the platform's recorded SLO series: the
   // metric-inventory grep (metrics_label_values/__name__ filtered to the
@@ -695,13 +1586,28 @@ export function buildCanonicalPack({
   const slos = [];
   const inferredFromRules = inferSlisFromRecordingRules(recordedRules);
   if (inferredFromRules.length) {
+    // An SLI is Verified only when NONE of the recorded rules it was
+    // inferred from is reported unhealthy by the ruler: an SLI whose
+    // total/ratio series are not being produced is not measuring
+    // anything, whatever the rule definitions say. Inventory-grepped
+    // series carry no health and attest as before.
+    const slisUnhealthy = [];
     for (const { sli, slo } of inferredFromRules) {
       slis.push(sli);
       slos.push(slo);
+      const feeding = discoveredRulesRaw.filter(r => ruleNameToSliId(r.name) === sli.id);
+      if (feeding.some(r => recordingRuleHealth.get(r.name) === false)) {
+        slisUnhealthy.push(sli.id);
+        continue;
+      }
       markVerified(`slis.${sli.id}`);
     }
+    if (slisUnhealthy.length) {
+      annotations['mcp.discovered.slis_unhealthy'] = slisUnhealthy.slice(0, 64).join(',');
+    }
   } else if (serviceSlugs.length === 0) {
-    // Pack must have >= 1 SLI / SLO; stub a generic platform availability target.
+    // Pack must have >= 1 SLI / SLO; stub a generic platform availability
+    // target. Nothing attested it — scaffold, never Verified.
     slis.push({
       id: 'platform_availability',
       description: 'Platform availability — no services discovered by MCP.',
@@ -716,7 +1622,12 @@ export function buildCanonicalPack({
       window: '30d',
       error_budget_policy: 'ref:platform/default-budget',
     });
+    markScaffold('slis.platform_availability');
+    markScaffold('slos.platform_availability_99');
   } else {
+    // Per-service availability GUESSES. A service name from system_health
+    // is not evidence that anyone measures its availability — these used
+    // to be stamped Verified, which was false assurance. Scaffold.
     for (const name of serviceSlugs) {
       const sliId = `${name.replace(/-/g, '_')}_availability`;
       const sloId = `${sliId}_99`;
@@ -735,11 +1646,17 @@ export function buildCanonicalPack({
         window: '30d',
         error_budget_policy: 'ref:platform/default-budget',
       });
-      markVerified(`slis.${sliId}`);
+      markScaffold(`slis.${sliId}`);
+      markScaffold(`slos.${sloId}`);
     }
   }
 
   // ---- spec.pipelines ----
+  // Hard-coded collector topology: no MCP tool exposes the collector
+  // config, so every stage is a guess. The metrics exporter is the one
+  // exception — scrape targets or a metric inventory prove metrics DO
+  // reach the store; that stamp is written further down and the
+  // scaffold marker for it only when neither piece of evidence arrived.
   const pipelines = {
     receivers:  [{ name: 'otlp' }],
     processors: [{ name: 'memory_limiter' }, { name: 'batch' }],
@@ -749,6 +1666,10 @@ export function buildCanonicalPack({
       traces:  { kind: 'jaeger' },
     },
   };
+  pipelines.receivers.forEach((_, i) => markScaffold(`pipelines.receivers[${i}]`));
+  pipelines.processors.forEach((_, i) => markScaffold(`pipelines.processors[${i}]`));
+  markScaffold('pipelines.exporters.logs');
+  markScaffold('pipelines.exporters.traces');
 
   // ---- spec.queries.recording_rules ----
   // PREFER the platform's real recorded series (rules API or inventory
@@ -760,7 +1681,20 @@ export function buildCanonicalPack({
     // ns:metric:op. Anything that doesn't can't go in spec.queries —
     // skip those (and they'll surface in the warnings).
     recordingRules = recordedRules.filter(r => RULE_NAME_RE.test(r.name));
-    markVerified('queries.recording_rules');
+    // The adapter projects each rule from sourceOf('queries.recording_rules[<i>]'),
+    // so the evidence has to be stamped per index — and only for rules the
+    // ruler reports healthy (or reports nothing about: inventory-grepped
+    // series carry no health). A rule with health 'err' EXISTS but is not
+    // producing its series; it stays Declared. The group-level stamp is
+    // kept for readers of the aggregate symbol, as long as at least one
+    // rule earned an indexed stamp.
+    let anyRuleAttested = false;
+    recordingRules.forEach((r, i) => {
+      if (recordingRuleHealth.get(r.name) === false) return;
+      markVerified(`queries.recording_rules[${i}]`);
+      anyRuleAttested = true;
+    });
+    if (anyRuleAttested) markVerified('queries.recording_rules');
   } else {
     recordingRules = slos.map(s => ({
       name: `platform:${s.sli}:ratio_5m`,
@@ -785,33 +1719,97 @@ export function buildCanonicalPack({
     if (Array.isArray(probeResults?.dashboards?.detailErrors) && probeResults.dashboards.detailErrors.length) {
       annotations['mcp.discovered.dashboard_detail_errors'] = probeResults.dashboards.detailErrors.slice(0, 64).join(',');
     }
+    // The adapter reads sourceOf(`dashboards.<id>`); the aggregate key
+    // alone left every discovered dashboard projecting as Declared.
     markVerified('dashboards');
+    for (const d of dashboards) if (d?.id) markVerified(`dashboards.${d.id}`);
   } else {
+    // Schema-forced stub (dashboards minItems 1). Symbol matches the
+    // adapter's `dashboards.<id>`.
     dashboards = [{
       id: 'platform-overview',
       provider: { kind: 'grafana' },
       folder: 'platform',
       source: 'file://dashboards/platform-overview.json',
     }];
+    markScaffold('dashboards.platform-overview');
   }
 
   // ---- spec.policy.burn_rate_alerts ----
-  // Per-SLO multi-window pattern is always synthesized — even when the
-  // MCP exposes flat alert rules, those rarely encode the short/long
-  // window decomposition the spec requires. We DO surface the
-  // discovered alert NAMES in metadata.annotations.mcp.discovered.alert_rules
-  // so the SRE can see what currently fires.
-  const burnRateAlerts = slos.map(s => ({
-    slo: s.id,
-    windows: [
-      { short: '5m',  long: '1h', factor: 14, severity: 'SEV1' },
-      { short: '30m', long: '6h', factor: 6,  severity: 'SEV2' },
-    ],
-  }));
-  const discoveredAlertNames = (probeResults?.alert_rules?.adapted || []).map(a => a.name).filter(Boolean);
+  // Burn-rate alerts are MAPPED from the alerting rules the MCP actually
+  // exposes — never synthesised per SLO. A synthesised two-window entry
+  // stamped Verified was the textbook false assurance: the pack claimed
+  // production paged on budget burn when nothing of the kind existed.
+  // Rules emitted by our own compiler carry the {slo, burn_rate,
+  // window_short, window_long, severity} labels; anything else is
+  // recognised by the compiler's `<slo>_burn_<N>x_<short>_<long>` name.
+  // Forecast rules (labels.kind=forecast) and plain threshold alerts are
+  // left where they are — their NAMES still surface in
+  // mcp.discovered.alert_rule_names so the SRE can see what fires.
+  const discoveredAlerts = Array.isArray(probeResults?.alert_rules?.adapted)
+    ? probeResults.alert_rules.adapted.filter(a => a && typeof a === 'object')
+    : [];
+  const discoveredAlertNames = discoveredAlerts.map(a => a.name).filter(Boolean);
   if (discoveredAlertNames.length) {
     annotations['mcp.discovered.alert_rule_names'] = discoveredAlertNames.slice(0, 64).join(',');
-    markVerified('policy.burn_rate_alerts');
+  }
+  if (discoveredAlerts.length) {
+    // On-wire evaluation state of every alerting rule the ruler exposed
+    // (state/health/lastError/lastEvaluation/activeAt) — the schema has
+    // no home for it, so it lives beside the names.
+    annotations['mcp.observed.alert_rules'] = annotationJson(
+      discoveredAlerts.slice(0, OBSERVATION_LIMIT).map(a => ruleObservation(a, 'alerting')));
+    const unhealthy = unhealthyRuleNames(discoveredAlerts);
+    if (unhealthy.length) {
+      annotations['mcp.discovered.alert_rules_unhealthy'] = unhealthy.slice(0, 64).join(',');
+    }
+  }
+  const burnMapping = mapDiscoveredBurnAlerts(discoveredAlerts, slos);
+  let burnRateAlerts = burnMapping.alerts;
+  // An entry fed by a rule the ruler reports unhealthy still maps (the
+  // rule exists) but earns no indexed stamp — it reads Declared, never
+  // Verified, until the rule evaluates again.
+  const unhealthyBurn = new Set(burnMapping.unhealthyIndexes || []);
+  burnRateAlerts.forEach((_, i) => { if (!unhealthyBurn.has(i)) markVerified(`policy.burn_rate_alerts[${i}]`); });
+  // An SLO a discovered burn group bound to — re-identified from a
+  // placeholder or matched exactly — took its objective/window from the
+  // live rule's annotations: the SLO now has MCP evidence. Drop the
+  // scaffold marker (under the old id for a re-id) and attest the SLO,
+  // UNLESS the only evidence is a rule the ruler reports unhealthy — the
+  // burn entry itself is withheld from Verified for that reason, and the
+  // SLO it evidences must not read better than the rule that evidences
+  // it. The SLI stays whatever it was.
+  const unhealthySlos = new Set(burnMapping.unhealthySlos || []);
+  const attestSlo = (id) => {
+    delete annotations[`mcp.scaffold.slos.${id}`];
+    if (!unhealthySlos.has(id)) markVerified(`slos.${id}`);
+  };
+  for (const [oldId, newId] of Object.entries(burnMapping.reidentified || {})) {
+    delete annotations[`mcp.scaffold.slos.${oldId}`];
+    attestSlo(newId);
+  }
+  for (const id of burnMapping.attested || []) attestSlo(id);
+  if (burnMapping.unmapped.length) {
+    annotations['mcp.discovered.alert_rules_unmapped'] = burnMapping.unmapped.slice(0, 64).join(',');
+  }
+  if (burnMapping.severityInferred.length) {
+    annotations['mcp.discovered.alert_rules_severity_inferred'] = burnMapping.severityInferred.slice(0, 64).join(',');
+  }
+  if (burnRateAlerts.length === 0) {
+    // The schema forces policy.burn_rate_alerts to hold >= 1 entry with
+    // >= 2 windows. Emit ONE placeholder on the first SLO and mark it a
+    // scaffold (same convention as crawler.scaffold.*) so the adapter
+    // projects it as Scaffold — never Declared, never Verified — and the
+    // grade parks it instead of counting it as live evidence.
+    burnRateAlerts = [{
+      slo: slos[0].id,
+      windows: [
+        { short: '5m',  long: '1h', factor: 14, severity: 'SEV1' },
+        { short: '30m', long: '6h', factor: 6,  severity: 'SEV2' },
+      ],
+    }];
+    markScaffold('policy.burn_rate_alerts[0]',
+      'schema-required fallback; no burn-rate alerting rule discovered via MCP');
   }
 
   // Rule-evidence fallback annotations — what we found when the standard
@@ -825,7 +1823,7 @@ export function buildCanonicalPack({
     annotations['mcp.discovered.alerts_firing.count'] = String(names.length);
     annotations['mcp.discovered.alerts_firing.total_firings'] = String(totalFirings);
     annotations['mcp.discovered.alerts_firing.names'] = names.slice(0, 64).join(',');
-    annotations['mcp.discovered.alerts_firing.source'] = 'metrics_query/ALERTS';
+    annotations['mcp.discovered.alerts_firing.source'] = `${TOOL.metricsQuery}/ALERTS`;
     markVerified('policy.alerts_firing');
   }
   if (Array.isArray(ruleEvidence?.recordingRuleNames) && ruleEvidence.recordingRuleNames.length) {
@@ -843,11 +1841,35 @@ export function buildCanonicalPack({
   // the MCP confirmed is currently exported / scraped. This is exactly
   // what the user pushed back on: metrics being exported are observable
   // and must be surfaced.
-  const scrapeJobs = probeResults?.scrape_configs?.adapted;
-  if (Array.isArray(scrapeJobs) && scrapeJobs.length) {
-    annotations['mcp.discovered.scrape_jobs'] = scrapeJobs.slice(0, 64).join(',');
-    markVerified('telemetry.scrape');
-    markVerified('pipelines.exporters.metrics');
+  //
+  // A job name is not evidence that anything is being scraped: only jobs
+  // with at least one target reporting health 'up' (or no health at all)
+  // land in mcp.discovered.scrape_jobs and attest telemetry.scrape /
+  // pipelines.exporters.metrics. Jobs whose every target is 'down' are
+  // listed in mcp.discovered.scrape_jobs_down, and every target's health,
+  // lastScrape and lastError is kept in mcp.observed.scrape_targets.
+  const scrapeJobs = normalizeScrapeJobs(probeResults?.scrape_configs?.adapted);
+  if (scrapeJobs.length) {
+    const upJobs = scrapeJobs.filter(j => !scrapeJobDown(j)).map(j => j.job);
+    const downJobs = scrapeJobs.filter(scrapeJobDown).map(j => j.job);
+    const observedTargets = scrapeJobs.flatMap(j => j.targets.map(t => ({
+      job: j.job,
+      instance: t.instance ?? null,
+      health: t.health ?? null,
+      lastScrape: t.lastScrape ?? null,
+      lastError: trimError(t.lastError),
+    }))).slice(0, OBSERVATION_LIMIT);
+    if (upJobs.length) {
+      annotations['mcp.discovered.scrape_jobs'] = upJobs.slice(0, 64).join(',');
+      markVerified('telemetry.scrape');
+      markVerified('pipelines.exporters.metrics');
+    }
+    if (downJobs.length) {
+      annotations['mcp.discovered.scrape_jobs_down'] = downJobs.slice(0, 64).join(',');
+    }
+    if (observedTargets.length) {
+      annotations['mcp.observed.scrape_targets'] = annotationJson(observedTargets);
+    }
   }
   const metricNames = probeResults?.metric_names?.adapted;
   if (Array.isArray(metricNames) && metricNames.length) {
@@ -859,31 +1881,37 @@ export function buildCanonicalPack({
     markVerified('otel.metrics');
     markVerified('pipelines.exporters.metrics');
   }
+  // No scrape target and no metric inventory → the metrics exporter is
+  // as much a guess as the other two.
+  if (!annotations['mcp.verified.pipelines.exporters.metrics']) markScaffold('pipelines.exporters.metrics');
 
   // ---- spec.alerting ----
+  // Schema-forced route (alerting.routes minItems 1). No MCP tool reads
+  // the Alertmanager config, so the SEV1 → Teams route is a guess.
   const alerting = {
     routes: [{
       severity: 'SEV1',
       channels: [{ msteams: '#platform-oncall' }],
     }],
   };
+  markScaffold('alerting.routes[0]');
 
   // ---- spec.baselines ----
-  // Prefer MCP-supplied data; fall back to platform defaults for the
-  // declared criticality.
+  // Platform defaults for the declared criticality, stamped scaffold.
+  // The fetcher used to derive mttd_target_p50 from the smallest
+  // anomalies_baselines thresholdMs and stamp the block Verified — but a
+  // latency anomaly threshold (e.g. 90ms) is not a time-to-detect target,
+  // and nothing the MCP exposes measures MTTD/MTTR. mcp.baselinesComputed
+  // (above) still records how many anomaly baselines the tool returned:
+  // evidence the tool answered, NOT an MTTD measurement.
   const fallback = defaultBaselines(criticality);
-  const baselinesNormal = (baselinesData.baselines || [])
-    .map(b => b.thresholdMs).filter(n => typeof n === 'number');
-  const mttdFromData = baselinesNormal.length
-    ? durationFromMs(Math.min(...baselinesNormal), fallback.mttd_target_p50)
-    : fallback.mttd_target_p50;
   const baselines = {
-    mttd_target_p50: mttdFromData,
+    mttd_target_p50: fallback.mttd_target_p50,
     mttr_target_p50: fallback.mttr_target_p50,
-    measurement_source: 'mcp.anomalies_baselines',
+    measurement_source: 'platform-default',
     review_cadence: 'weekly',
   };
-  if (!errors.anomalies_baselines) markVerified('baselines');
+  markScaffold('baselines');
 
   // ---- spec.validation ----
   // Empty — MCP can't directly attest chaos / synthetics.
@@ -960,15 +1988,9 @@ function normInterval(v) {
 export const PROBES = [
   {
     name: 'recording_rules',
-    // VictoriaMetrics stacks expose recorded series + their PromQL via
-    // `vmalert_rules` (type=recording carries the real `query` body and the
-    // group `interval`). It is tried FIRST because on VM-backed clusters the
-    // Prometheus ruler endpoint (`metrics_alerts` / `/api/v1/rules`) returns
-    // EMPTY — which previously forced a name-only inventory fallback that
-    // stubbed each expr as the bare series name. Prometheus /api/v1/rules
-    // returns BOTH recording and alert rules in one payload; our adapt
-    // filters to record-only rules.
-    candidates: ['vmalert_rules', 'metrics_alerts', 'list_recording_rules', 'prometheus_recording_rules', 'metrics_recording_rules', 'mimir_recording_rules', 'rules_list_recording', 'prometheus_rules', 'rules_list'],
+    // Candidate list + fallback-order rationale live in the contract
+    // registry (tools/lib/contracts/mcp-capabilities.mjs).
+    candidates: probeCandidates('recording_rules'),
     target: 'spec.queries.recording_rules',
     adapt: (response) => {
       // Common shapes:
@@ -988,6 +2010,10 @@ export const PROBES = [
             expr: r.expr || r.query || '',
             ...(interval ? { interval } : {}),
             ...(r.labels ? { labels: r.labels } : {}),
+            // On-wire evaluation state (VMAlert / Prometheus /api/v1/rules).
+            // Stripped before the rule enters spec.queries; surfaced via
+            // mcp.observed.recording_rules and the per-index verified stamps.
+            ...pickPresent(r, RECORDING_OBSERVATION_FIELDS),
           };
         })
         .filter(r => r.expr);
@@ -995,18 +2021,13 @@ export const PROBES = [
   },
   {
     name: 'alert_rules',
-    // VMAlert (`vmalert_rules` type=alerting) carries the real alert `query`,
-    // `severity`, and `for`/`duration`; tried FIRST for the same reason as
-    // recording_rules (the Prometheus ruler comes back empty on VM stacks).
-    // metrics_alerts (Prometheus /api/v1/rules) and grafana_alert_rules
-    // (Grafana unified alerting) are the next canonical names; alertmanager_alerts
-    // surfaces FIRING alerts (not declarations) but counts as evidence the
-    // alerting stack works.
-    candidates: ['vmalert_rules', 'metrics_alerts', 'grafana_alert_rules', 'alertmanager_alerts', 'list_alert_rules', 'prometheus_alert_rules', 'metrics_alert_rules', 'mimir_alert_rules', 'rules_list_alerting', 'prometheus_alerts'],
+    // Candidate list + fallback-order rationale live in the contract
+    // registry (tools/lib/contracts/mcp-capabilities.mjs).
+    candidates: probeCandidates('alert_rules'),
     target: 'spec.policy.burn_rate_alerts',
     adapt: (response) => {
       const groups = response?.groups || response?.data?.groups || [];
-      const flat = response?.rules || groups.flatMap(g => (g.rules || []).map(r => ({ ...r, _group: g.name })));
+      const flat = response?.rules || groups.flatMap(g => (g.rules || []).map(r => ({ ...r, _group: g.name, _interval: g.interval })));
       // We can't fully reconstruct multi-window burn-rate semantics
       // from a flat rule, but we CAN capture the alert as a forecast
       // signal — the user can re-shape via the studio later.
@@ -1015,29 +2036,33 @@ export const PROBES = [
         // Prometheus uses an `alert` field; the `!== 'recording'` guard keeps
         // VMAlert recording rules (name set, no `record`) out of this bucket.
         .filter(r => r.type === 'alerting' || r.alert || (r.name && !r.record && r.type !== 'recording'))
-        .map(r => ({
-          name: r.alert || r.name,
-          expr: r.expr || r.query || '',
-          for: r.for || (r.duration ? secondsToPromDuration(r.duration) : null) || '5m',
-          labels: r.labels || (r.severity ? { severity: r.severity } : {}),
-          annotations: r.annotations || {},
-        }));
+        .map(r => {
+          // Group evaluation interval, kept like the recording adapter
+          // does: it never enters spec.policy (mapDiscoveredBurnAlerts
+          // reads slo/windows only) but rides into mcp.observed.alert_rules
+          // as the staleness yardstick for the rule.
+          const interval = normInterval(r.interval ?? r._interval);
+          return {
+            name: r.alert || r.name,
+            expr: r.expr || r.query || '',
+            for: r.for || (r.duration ? secondsToPromDuration(r.duration) : null) || '5m',
+            labels: r.labels || (r.severity ? { severity: r.severity } : {}),
+            annotations: r.annotations || {},
+            ...(interval ? { interval } : {}),
+            // On-wire evaluation state: health/lastError/lastEvaluation plus
+            // the alerting state and activeAt (Prometheus nests activeAt per
+            // active alert instance; take the first). Never enters the spec.
+            ...pickPresent({ ...r, activeAt: r.activeAt ?? r.alerts?.[0]?.activeAt }, ALERT_OBSERVATION_FIELDS),
+          };
+        });
     },
   },
   {
     name: 'dashboards',
-    // grafana_dashboards_search is the canonical otel-mcp-server tool
-    // (Grafana skill). The others are legacy / community-MCP names.
-    candidates: [
-      { name: 'grafana_dashboards_search', args: { type: 'dash-db', limit: GRAFANA_DASHBOARD_SEARCH_LIMIT } },
-      'grafana_dashboard_get',
-      'list_dashboards',
-      'grafana_dashboards',
-      'grafana_list_dashboards',
-      'grafana_search_dashboards',
-      'dashboards_list',
-      'grafana_search',
-    ],
+    // Candidate list + fallback-order rationale live in the contract
+    // registry; the env-tunable search limit is injected here because the
+    // data-only contracts layer doesn't read process.env.
+    candidates: probeCandidates('dashboards', { grafanaDashboardSearchLimit: GRAFANA_DASHBOARD_SEARCH_LIMIT }),
     target: 'spec.dashboards',
     adapt: (response) => {
       // otel-mcp-server's grafana_dashboards_search returns:
@@ -1048,9 +2073,9 @@ export const PROBES = [
   },
   {
     name: 'scrape_configs',
-    // metrics_targets is the canonical otel-mcp-server tool (metrics skill);
-    // returns the Prometheus /api/v1/targets shape. The rest are legacy.
-    candidates: ['metrics_targets', 'list_scrape_configs', 'prometheus_scrape_configs', 'prometheus_targets', 'metrics_scrape_jobs', 'list_metric_jobs'],
+    // Candidate list + fallback-order rationale live in the contract
+    // registry (tools/lib/contracts/mcp-capabilities.mjs).
+    candidates: probeCandidates('scrape_configs'),
     target: 'spec.telemetry.scrape_evidence',   // annotation-only; no schema field
     adapt: (response) => {
       // otel-mcp-server's metrics_targets returns:
@@ -1065,32 +2090,34 @@ export const PROBES = [
         Array.isArray(response) && response,
       ];
       const targets = candidateArrays.find(Boolean) || [];
-      const jobs = new Set();
+      // One entry per job carrying every target's on-wire health, so the
+      // pack builder can tell a job that IS scraping from one whose every
+      // target is down — a job name alone was false assurance.
+      const byJob = new Map();
       for (const t of targets) {
-        const j = t.labels?.job || t.job;
-        if (j) jobs.add(j);
+        const job = t?.labels?.job || t?.job;
+        if (!job) continue;
+        let entry = byJob.get(job);
+        if (!entry) { entry = { job, targets: [] }; byJob.set(job, entry); }
+        const instance = t.labels?.instance || t.instance || t.scrapeUrl || null;
+        const health = normTargetHealth(t.health);
+        if (entry.targets.some(x => x.instance === instance && x.health === health)) continue;
+        entry.targets.push({
+          instance,
+          health,
+          lastScrape: t.lastScrape ?? null,
+          lastError: t.lastError == null || t.lastError === '' ? null : String(t.lastError),
+        });
       }
-      return [...jobs];
+      return [...byJob.values()];
     },
   },
   {
     name: 'metric_names',
-    // Candidates ordered by likelihood. Candidates can be either a bare
-    // tool name (no args needed) or `{ name, args }` when the tool
-    // requires arguments to enumerate metric names:
-    //   metrics_label_values  — canonical otel-mcp-server name; needs
-    //     { label: '__name__' } to enumerate metric names
-    //   metrics_metadata      — requires { metric: '<name>' } per metric,
-    //     so it's the FALLBACK only (chicken-and-egg)
-    //   the rest are legacy / community-MCP names
-    candidates: [
-      { name: 'metrics_label_values', args: { label: '__name__' } },
-      'list_metrics',
-      'prometheus_metric_names',
-      'metrics_inventory',
-      'mimir_metric_names',
-      'metrics_metadata',
-    ],
+    // Candidate list + fallback-order rationale live in the contract
+    // registry. Candidates are either a bare tool name (no args) or
+    // `{ name, args }` when the tool needs arguments to enumerate names.
+    candidates: probeCandidates('metric_names'),
     target: 'spec.otel.metric_inventory',
     adapt: (response) => {
       // otel-mcp-server metrics_label_values shape:
@@ -1115,8 +2142,16 @@ export const PROBES = [
   },
 ];
 
-export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
+export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null } = {}) {
   if (!mcpUrl) throw new Error('fetchMcp: mcpUrl required');
+  // When THIS fetch began, and when each probe family answered — the
+  // fetcher's own clock, independent of whatever `refreshedAt` the caller
+  // stamps (server and journey stamp it AFTER the fetch returns, so a slow
+  // fetch would otherwise read every fresh scrape as stale). The graph
+  // ladder takes mcp.observedAt.<family> as "now" for that family's
+  // observations, then mcp.fetchStartedAt, then mcp.refreshedAt.
+  const fetchStartedAt = new Date().toISOString();
+  const observedAt = {};
   const { rpc, notify, callTool } = createMcpClient({ mcpUrl, mcpAuth });
   const errors = {};
   const safe = async (name, fn) => {
@@ -1144,14 +2179,14 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
         try { return await fn(); }
         catch (e2) {
           if (!probeFailures[name]) probeFailures[name] = e2.message;
-          if (process.env.TOMOGRAPH_DEBUG) {
+          if (brandEnv('DEBUG')) {
             process.stderr.write(`[fetch-live-pack] probe ${name} failed twice: ${e2.message}\n`);
           }
           return null;
         }
       }
       if (!probeFailures[name]) probeFailures[name] = e.message;
-      if (process.env.TOMOGRAPH_DEBUG) {
+      if (brandEnv('DEBUG')) {
         process.stderr.write(`[fetch-live-pack] probe ${name} failed: ${e.message}\n`);
       }
       return null;
@@ -1161,7 +2196,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
   const initialized = await rpc('initialize', {
     protocolVersion: '2025-06-18',
     capabilities: {},
-    clientInfo: { name: 'tomograph-fetcher', version: '0.3.0' },
+    clientInfo: { name: 'observogram-fetcher', version: '0.4.0' },
   }).then(() => true).catch(() => false);
   if (initialized) await notify('notifications/initialized').catch(() => {});
 
@@ -1182,16 +2217,16 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
   // VersionSpec was designed around. Call it up-front; downstream
   // builders use it to (a) declare telemetry.backends[] with real
   // version blocks and (b) surface the full inventory to the studio.
-  const capabilitiesRaw = discoveredToolNames.has('backend_capabilities')
-    ? await safe('backend_capabilities', () => callTool('backend_capabilities'))
+  const capabilitiesRaw = discoveredToolNames.has(TOOL.backendCapabilities)
+    ? await safe(TOOL.backendCapabilities, () => callTool(TOOL.backendCapabilities))
     : null;
   const capabilities = capabilitiesRaw ? parseBackendCapabilities(capabilitiesRaw) : null;
 
   const [health, topology, anomaliesActive, baselinesData] = await Promise.all([
-    safe('system_health',       () => callTool('system_health')),
-    safe('system_topology',     () => callTool('system_topology')),
-    safe('anomalies_active',    () => callTool('anomalies_active')),
-    safe('anomalies_baselines', () => callTool('anomalies_baselines')),
+    safe(TOOL.systemHealth,       () => callTool(TOOL.systemHealth)),
+    safe(TOOL.systemTopology,     () => callTool(TOOL.systemTopology)),
+    safe(TOOL.anomaliesActive,    () => callTool(TOOL.anomaliesActive)),
+    safe(TOOL.anomaliesBaselines, () => callTool(TOOL.anomaliesBaselines)),
   ]);
 
   if (!health || !topology) {
@@ -1285,6 +2320,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
           rawSize: JSON.stringify(response).length,
           outcome: 'data',
         };
+        observedAt[probe.name] = new Date().toISOString();
         return;
       }
       // Empty result. Remember it but keep looking — another candidate
@@ -1301,6 +2337,8 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
         rawSize: firstEmpty.rawSize,
         outcome: 'empty',
       };
+      // An honest zero is still an observation made at this instant.
+      observedAt[probe.name] = new Date().toISOString();
       return;
     }
     probeResults[probe.name] = {
@@ -1314,10 +2352,10 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
   // raw sanitized Grafana JSON when the MCP exposes it. Enrich the winning
   // dashboard probe with one grafana_dashboard_get call per UID.
   if (
-    probeResults.dashboards?.tool === 'grafana_dashboards_search' &&
-    discoveredToolNames.has('grafana_dashboard_get')
+    probeResults.dashboards?.tool === TOOL.dashboardSearch &&
+    discoveredToolNames.has(TOOL.dashboardDetail)
   ) {
-    const searchResponse = await cachedCall('grafana_dashboards_search', {
+    const searchResponse = await cachedCall(TOOL.dashboardSearch, {
       type: 'dash-db',
       limit: GRAFANA_DASHBOARD_SEARCH_LIMIT,
     });
@@ -1330,7 +2368,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
         detailed.push(dashboardFromSearchItem(item));
         continue;
       }
-      const detail = await cachedCall('grafana_dashboard_get', {
+      const detail = await cachedCall(TOOL.dashboardDetail, {
         uid,
         include_json: GRAFANA_DASHBOARD_INCLUDE_JSON,
         panel_limit: GRAFANA_DASHBOARD_PANEL_LIMIT,
@@ -1345,16 +2383,18 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
     if (detailed.length) {
       probeResults.dashboards = {
         ...probeResults.dashboards,
-        tool: 'grafana_dashboards_search+grafana_dashboard_get',
+        tool: `${TOOL.dashboardSearch}+${TOOL.dashboardDetail}`,
         attempted: [
           ...(probeResults.dashboards.attempted || []),
-          'grafana_dashboard_get',
+          TOOL.dashboardDetail,
         ].filter((v, i, a) => a.indexOf(v) === i),
         adapted: detailed,
         rawSize: JSON.stringify(detailed).length,
         outcome: 'data',
         detailErrors,
       };
+      // The family's observation is now the enriched one.
+      observedAt.dashboards = new Date().toISOString();
     }
   }
 
@@ -1376,55 +2416,29 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
   const liveVersions = {};
 
   // Grafana — grafana_health returns {version, commit, database, orgId}.
-  if (discoveredToolNames.has('grafana_health')) {
-    const r = await quiet('grafana_health', () => callTool('grafana_health'));
+  if (discoveredToolNames.has(TOOL.grafanaHealth)) {
+    const r = await quiet(TOOL.grafanaHealth, () => callTool(TOOL.grafanaHealth));
     if (r && typeof r.version === 'string') {
-      liveVersions.grafana = { declared: r.version, commit: r.commit || null, source: 'grafana_health' };
+      liveVersions.grafana = { declared: r.version, commit: r.commit || null, source: TOOL.grafanaHealth };
     }
   }
 
   // Metrics-query-based version probes — each backend that publishes a
-  // `*_build_info` metric (Prometheus convention) gets a probe here. We
-  // run them in parallel since each is independent. The label that
-  // carries the version differs by product:
-  //
-  //   vm_app_version       → labels { short_version, version }
-  //   prometheus_build_info → labels { version, revision, branch }
-  //   loki_build_info       → labels { version, revision }
-  //   alertmanager_build_info → labels { version, revision }
-  //   tempo_build_info      → labels { version, revision }
-  //   cortex_build_info     → labels { version, revision } (Mimir uses the
-  //                              cortex_ prefix from its Cortex heritage)
-  //   grafana_build_info    → labels { version, edition, branch }
-  //                              (we also have grafana_health above; this
-  //                              is the metric fallback for installs that
-  //                              don't expose the health tool)
-  //
-  // For each, the same shape: query the metric, take the first result's
-  // labels, capture { declared, source } plus any provenance labels
-  // (revision, edition, branch). When the result is empty, the backend
-  // either isn't scraped or doesn't publish that metric — both are
-  // legitimate negatives that the studio chip should NOT mark as live.
-  if (discoveredToolNames.has('metrics_query')) {
-    const buildInfoProbes = [
-      // product slug, metric name, version-label (in priority order)
-      { product: 'victoriametrics', metric: 'vm_app_version',           versionLabels: ['short_version', 'version'], extra: ['version'] },
-      { product: 'prometheus',      metric: 'prometheus_build_info',    versionLabels: ['version'],                  extra: ['revision', 'branch'] },
-      { product: 'loki',            metric: 'loki_build_info',          versionLabels: ['version'],                  extra: ['revision', 'branch'] },
-      { product: 'alertmanager',    metric: 'alertmanager_build_info',  versionLabels: ['version'],                  extra: ['revision', 'branch'] },
-      { product: 'tempo',           metric: 'tempo_build_info',         versionLabels: ['version'],                  extra: ['revision', 'branch'] },
-      { product: 'mimir',           metric: 'cortex_build_info',        versionLabels: ['version'],                  extra: ['revision', 'branch'] },
-      // grafana_build_info is a metric fallback for the rare case where
-      // grafana_health isn't exposed; harmless if it duplicates because
-      // grafana_health stamps first and we don't overwrite below.
-      { product: 'grafana',         metric: 'grafana_build_info',       versionLabels: ['version'],                  extra: ['edition', 'branch'] },
-    ];
-
-    await Promise.all(buildInfoProbes.map(async (probe) => {
+  // `*_build_info` metric (Prometheus convention) gets a row in
+  // BUILD_INFO_PROBES (contract registry); the per-product metric and
+  // version-label facts live there. We run them in parallel since each is
+  // independent. For each, the same shape: query the metric, take the
+  // first result's labels, capture { declared, source } plus any
+  // provenance labels (revision, edition, branch). When the result is
+  // empty, the backend either isn't scraped or doesn't publish that
+  // metric — both are legitimate negatives that the studio chip should
+  // NOT mark as live.
+  if (discoveredToolNames.has(TOOL.metricsQuery)) {
+    await Promise.all(BUILD_INFO_PROBES.map(async (probe) => {
       // Skip if a richer source (e.g. grafana_health) already populated this product.
       if (liveVersions[probe.product]) return;
-      const resp = await quiet(`metrics_query.${probe.metric}`,
-        () => callTool('metrics_query', { query: probe.metric }));
+      const resp = await quiet(`${TOOL.metricsQuery}.${probe.metric}`,
+        () => callTool(TOOL.metricsQuery, { query: probe.metric }));
       const series = resp?.result?.[0]?.metric;
       if (!series) return;
       let declared = null;
@@ -1435,7 +2449,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
         }
       }
       if (!declared) return;
-      const info = { declared, source: `metrics_query/${probe.metric}` };
+      const info = { declared, source: `${TOOL.metricsQuery}/${probe.metric}` };
       for (const x of (probe.extra || [])) {
         if (typeof series[x] === 'string' && series[x] !== declared) info[x] = series[x];
       }
@@ -1464,8 +2478,8 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
   // backend in the capability inventory (typically Jaeger) — never
   // light up all of them, which would falsely claim Tempo/Zipkin/etc.
   // are running.
-  if (discoveredToolNames.has('traces_services')) {
-    const tr = await quiet('traces_services', () => callTool('traces_services'));
+  if (discoveredToolNames.has(TOOL.tracesServices)) {
+    const tr = await quiet(TOOL.tracesServices, () => callTool(TOOL.tracesServices));
     if (tr && Array.isArray(tr.services) && tr.services.length) {
       const services = tr.services.map(s => String(s).toLowerCase());
       const tracesBackends = (capabilities?.skills || [])
@@ -1481,13 +2495,56 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
       if (winner && !liveVersions[winner]) {
         liveVersions[winner] = {
           alive: true,
-          source: 'traces_services',
+          source: TOOL.tracesServices,
           serviceCount: tr.services.length,
           disambiguatedBy: matched ? 'service-name-match' : 'capability-inventory-first',
         };
       }
     }
   }
+
+  // ----------------------------------------------------------------
+  // Step 2 — sample the stack's own self-metrics and the Alertmanager /
+  // Grafana status surfaces. Runs AFTER the version probes so the
+  // product preference knows which products are already seen. Signals
+  // only: nothing below feeds a Verified stamp.
+  // ----------------------------------------------------------------
+  // "tools/list answered" is whether the RPC succeeded, not whether the
+  // parsed set is non-empty: a server that advertises an EMPTY list has
+  // told us the tier (nothing exposed) and reads not-attempted, not a
+  // string of tools/call failures.
+  const hasToolsList = toolsList != null && Array.isArray(toolsList.tools);
+  const seenProducts = new Set(Object.keys(liveVersions));
+  for (const s of (capabilities?.skills || [])) {
+    for (const b of (s?.backends || [])) {
+      const p = BACKEND_TO_PRODUCT[b?.backend];
+      if (p) seenProducts.add(p);
+    }
+  }
+  const metricNamesProbe = probeResults?.metric_names;
+  const stackInventory = metricNamesProbe?.outcome === 'data' && Array.isArray(metricNamesProbe.adapted)
+    ? metricNamesProbe.adapted
+    : null;
+  const stackSamples = await sampleStackSelfMetrics({
+    callTool, quiet,
+    metricsQueryTool: TOOL.stackSelfMetrics,
+    inventory: stackInventory,
+    seenProducts,
+    discoveredToolNames,
+    hasToolsList,
+    refreshedAt: refreshedAt || new Date().toISOString(),
+  });
+  const alertmanagerObserved = await observeAlertmanager({
+    callTool, quiet, discoveredToolNames, hasToolsList,
+    statusTool: TOOL.alertmanagerStatus,
+    silencesTool: TOOL.alertmanagerSilences,
+  });
+  const grafanaObserved = await observeGrafana({
+    callTool, quiet, discoveredToolNames, hasToolsList,
+    datasourcesTool: TOOL.grafanaDatasources,
+    datasourceHealthTool: TOOL.grafanaDatasourceHealth,
+    contactPointsTool: TOOL.grafanaContactPoints,
+  });
 
   // ----------------------------------------------------------------
   // Rule-evidence fallback (Phase 6) — capture rule existence even when
@@ -1522,9 +2579,9 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
   const alertProbe = probeResults?.alert_rules;
   const alertPrimaryEmpty = alertProbe &&
     (alertProbe.outcome === 'empty' || (Array.isArray(alertProbe.adapted) && alertProbe.adapted.length === 0));
-  if (alertPrimaryEmpty && discoveredToolNames.has('metrics_query')) {
-    const r = await quiet('metrics_query.ALERTS',
-      () => callTool('metrics_query', { query: 'count by (alertname, severity, team, alertgroup) (ALERTS{alertstate="firing"})' }));
+  if (alertPrimaryEmpty && discoveredToolNames.has(TOOL.metricsQuery)) {
+    const r = await quiet(`${TOOL.metricsQuery}.ALERTS`,
+      () => callTool(TOOL.metricsQuery, { query: 'count by (alertname, severity, team, alertgroup) (ALERTS{alertstate="firing"})' }));
     const series = Array.isArray(r?.result) ? r.result : [];
     for (const s of series) {
       const m = s?.metric || {};
@@ -1568,39 +2625,53 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null } = {}) {
     Object.values(probeResults)
       .flatMap(r => String(r?.tool || '').split('+'))
       .filter(Boolean)
-      .concat(['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines'])
+      .concat([TOOL.systemHealth, TOOL.systemTopology, TOOL.anomaliesActive, TOOL.anomaliesBaselines])
   );
   // Version probes count as "wired" too — surface them so they don't
   // show up as "not yet probed" in the unmatched panel.
-  if (liveVersions.grafana?.source === 'grafana_health') allMatchedNames.add('grafana_health');
+  if (liveVersions.grafana?.source === TOOL.grafanaHealth) allMatchedNames.add(TOOL.grafanaHealth);
   // metrics_query gets used for build_info probes across many products
   // (vm_app_version, loki_build_info, alertmanager_build_info, …).
   // If ANY of them landed, the tool is "wired."
   const metricBuiltSourced = Object.values(liveVersions).some(v =>
-    typeof v?.source === 'string' && v.source.startsWith('metrics_query/'));
-  if (metricBuiltSourced) allMatchedNames.add('metrics_query');
+    typeof v?.source === 'string' && v.source.startsWith(`${TOOL.metricsQuery}/`));
+  if (metricBuiltSourced) allMatchedNames.add(TOOL.metricsQuery);
   // traces_services availability probe — wired when any trace product
   // captured an `alive: true` entry via it.
-  const tracesAlive = Object.values(liveVersions).some(v => v?.source === 'traces_services');
-  if (tracesAlive) allMatchedNames.add('traces_services');
+  const tracesAlive = Object.values(liveVersions).some(v => v?.source === TOOL.tracesServices);
+  if (tracesAlive) allMatchedNames.add(TOOL.tracesServices);
+  // Step 2 surfaces are wired when they answered: the stack sampler when
+  // at least one row came back with data or an honest empty; the status
+  // observers for each tool that answered.
+  if (stackSamples.rows.some(r => r.outcome === 'data' || r.outcome === 'empty')) {
+    allMatchedNames.add(TOOL.stackSelfMetrics);
+  }
+  for (const t of (alertmanagerObserved?.toolsAnswered || [])) allMatchedNames.add(t);
+  for (const t of (grafanaObserved?.toolsAnswered || [])) allMatchedNames.add(t);
   const unmatchedTools = discoveredTools.filter(t => !allMatchedNames.has(t.name));
 
   return {
     health, topology, anomaliesActive, baselinesData,
     probeResults, errors,
+    fetchStartedAt,             // ISO instant this fetch began (the fetcher's own clock)
+    observedAt,                 // { <probe family>: ISO instant the family answered } — data or empty outcomes only
+    probeFailures,              // { <candidate tool name>: last error message } — why a probe got no answer
     discoveredTools,            // full list from tools/list (or empty if unsupported)
     unmatchedTools,             // tools the MCP exposes that we don't probe yet
     capabilities,               // parsed backend_capabilities inventory (or null)
     liveVersions,               // { <product>: { declared, ...meta } } from authoritative endpoints
     ruleEvidence,               // { firingAlerts, recordingRuleNames } — fallback evidence
+    stackSamples,               // { status, reason, rows, callsMade } — stack self-metric samples (signals)
+    alertmanagerObserved,       // { version, uptime, clusterStatus, silences, toolsAnswered } or null
+    grafanaObserved,            // { datasources, contactPoints, toolsAnswered } or null
   };
 }
 
 // Convenience entrypoint used by the CLI + the server: end-to-end build,
 // validate, and (optionally) write to disk. Returns the canonical pack.
 export async function buildAndValidate({ mcpUrl, mcpAuth, packName, refreshedAt }) {
-  const fetched = await fetchMcp({ mcpUrl, mcpAuth });
   const at = refreshedAt || new Date().toISOString();
+  const fetched = await fetchMcp({ mcpUrl, mcpAuth, refreshedAt: at });
   const pack = buildCanonicalPack({ refreshedAt: at, mcpUrl, packName, ...fetched });
   const errors = validateCanonical(pack, SCHEMA);
   if (errors.length) {

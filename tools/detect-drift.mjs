@@ -292,7 +292,7 @@ function computeDrift(packA, packB) {
 
 function renderMarkdown(report, labels) {
   const lines = [];
-  lines.push(`# Tomograph drift report`);
+  lines.push(`# Observogram drift report`);
   lines.push('');
   lines.push(`Comparing **${labels.b}** against **${labels.a}**.`);
   lines.push('');

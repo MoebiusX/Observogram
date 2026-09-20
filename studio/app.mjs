@@ -15,7 +15,7 @@ import {
   DISCO_SLAB_ACCENT, discoGradeLetter, discoGradeWord,
 } from './constants.mjs';
 import { state, $, $$, persistence } from './state.mjs';
-import { api, loadCatalog, validateUploaded } from './api.mjs';
+import { api, loadCatalog, validateUploaded, authHeaders, setActiveOrg, getActiveOrg, savedOrg } from './api.mjs';
 import {
   effectiveFocus, focusedPackId, focusedEnv, focusedPack,
   focusedConformance, setFocusedConformance,
@@ -38,6 +38,8 @@ import { renderJourneysView } from './journeys-view.mjs';
 import { renderBenchmarkView, renderComparePicker, renderTraceabilityView, refreshDiff, loadDiff, LENS_PRODUCTS, activeDiffScopeMode } from './compare-view.mjs';
 import { catalogToDeployManifest } from './artifact-model.mjs';
 import { computeDeployTransitions } from './verify-deploy.mjs';
+import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-view.mjs';
+import { initHost } from './host.mjs';
 
 // `state`, the `$`/`$$` DOM helpers and the persistence layer now live in
 // studio/state.mjs (imported above).
@@ -297,6 +299,7 @@ function renderServiceSelect() {
     sel.appendChild(opt);
   }
   sel.value = state.selectedService || '';
+  updateObservaServiceChip();
   sel.onchange = () => {
     state.selectedService = sel.value || null;
     const currentA = state.catalog.find(p => p.id === state.selectedPackId);
@@ -366,23 +369,36 @@ function renderPackBSelect() {
   const cat = state.catalog || [];
   const ex  = state._examplesCache || [];
   const seen = new Set();
-  const options = [];
+  const options = [];      // packs in the active service (or live aggregates)
+  const crossService = []; // everything else — still comparable, grouped apart
   for (const p of [...cat, ...ex]) {
     if (!p?.id || !p.ok) continue;
     if (p.id === state.selectedPackId) continue;
-    // The ACTIVE Pack B is always representable, even when it wouldn't
-    // pass the service filter (e.g. a reference pack loaded via the
-    // References → Benchmark CTA) — a select must show its own value.
-    if (p.id !== state.compareBId
-        && !packMatchesService(p, state.selectedService, { side: 'b' })) continue;
     if (seen.has(p.id)) continue;
     seen.add(p.id);
-    options.push(p);
+    // Same-service packs (and live aggregates) lead the list; packs from
+    // OTHER services remain selectable under their own group — comparing
+    // across services is a sanctioned flow (legacy imports each derive
+    // their own service from the old pack id; live aggregates span many),
+    // and the diff's service scope keeps unrelated inventory honest.
+    // The ACTIVE Pack B is always representable wherever it falls — a
+    // select must show its own value.
+    if (p.id === state.compareBId || packMatchesService(p, state.selectedService, { side: 'b' })) {
+      options.push(p);
+    } else {
+      crossService.push(p);
+    }
   }
   // Sort by label so the list is stable across re-renders.
-  options.sort((a, b) => (a.label || a.id).localeCompare(b.label || b.id));
+  const byLabel = (a, b) => (a.label || a.id).localeCompare(b.label || b.id);
+  options.sort(byLabel);
+  crossService.sort(byLabel);
+  const opt = (p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(packSelectLabel(p))}</option>`;
   sel.innerHTML = '<option value="">— none —</option>'
-    + options.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(packSelectLabel(p))}</option>`).join('');
+    + options.map(opt).join('')
+    + (crossService.length
+        ? `<optgroup label="other services">${crossService.map(opt).join('')}</optgroup>`
+        : '');
   sel.value = state.compareBId || '';
   sel.onchange = () => {
     const newId = sel.value || null;
@@ -685,7 +701,11 @@ export function renderMainView() {
   // Persistence: every mutation chain ends here, so this is the single
   // hook for the debounced write. Cheap when suspended (boot phase).
   persistence.schedule();
-  if (state.mode === 'home') { renderHomeView(); return; }
+  if (state.mode === 'home') {
+    if (state.homeVariant === 'gate') renderServiceGate();
+    else renderHomeView();
+    return;
+  }
   if (!state.pack) {
     // In the workspace but no pack yet. Discover ("what do we have?") is
     // where you LOAD or GENERATE a pack — so its empty state IS the three
@@ -705,11 +725,17 @@ export function renderMainView() {
   switch (state.view) {
     case 'benchmark':                                         // legacy alias
     case 'compare-artefacts':                                 // removed view → report
-    case 'compare':            renderBenchmarkView(view); return;
+    case 'compare':
+      // The redesign synthesis runs ONLY behind ?proto (maintainer call,
+      // 2026-06-11) — without the query param production is untouched.
+      if (protoActive()) { renderProtoDiagnose(view); return; }
+      renderBenchmarkView(view); return;
     case 'traceability':       renderTraceabilityView(view); return;
     case 'atlas':              renderAtlasView(view); return;
     case 'conformance':        view.appendChild(renderConformanceView()); return;
-    case 'compile':            renderCompileView(view); return;
+    case 'compile':
+      if (protoActive()) { renderProtoRemediate(view); return; }
+      renderCompileView(view); return;
     case 'schema':             renderSchemaView(view); return;
     case 'otlp':               renderOtlpView(view); return;
     case 'references':         renderReferencesView(view); return;
@@ -725,7 +751,7 @@ export function renderMainView() {
 }
 
 // ============================================================
-// DISCOVER — the TOMOGRAM SCAN dashboard.
+// DISCOVER — the OBSERVOGRAM SCAN dashboard.
 //
 // Three-column mission-control layout:
 //   LEFT   — pack overview (manifest identity) + pack catalog
@@ -880,7 +906,11 @@ async function handleFile(file) {
     renderMeta();
     renderTabs();
     renderMainView();
-    toast(`Loaded ${file.name}`);
+    if (res.legacy) {
+      toast(`Loaded ${file.name} — previous (layered JSON) format upconverted to canonical v1.2: ${res.legacy.mapped} artefacts mapped, ${res.legacy.scaffolded} scaffolds`);
+    } else {
+      toast(`Loaded ${file.name}`);
+    }
   } catch (e) {
     toast(`Failed to upload: ${e.message}`, 'error');
   }
@@ -937,7 +967,7 @@ function setupUpload() {
         // doHomeMcpConnect that the home button calls. The friendly
         // label is held on the panel via a data-attribute so the
         // adopt handler can pass it through to the API.
-        window._tomographQuickLabel = 'Krystaline (live MCP draft)';
+        window._observogramQuickLabel = 'Krystaline (live MCP draft)';
         const newFromLive = document.getElementById('draft-mcp-btn');
         if (newFromLive) newFromLive.click();
         setTimeout(() => {
@@ -950,7 +980,7 @@ function setupUpload() {
       }
       if (action === 'quick-krystalinex-repo') {
         // Open the scan-a-repo panel and pre-fill the GitHub URL field.
-        window._tomographQuickLabel = 'KrystalineX (repo scan)';
+        window._observogramQuickLabel = 'KrystalineX (repo scan)';
         const scanBtn = document.getElementById('crawl-btn');
         if (scanBtn) scanBtn.click();
         setTimeout(() => {
@@ -1020,11 +1050,11 @@ export async function refresh() {
 // ============================================================
 // OBSERVA chrome — the three-tab top bar from the demo mockup.
 //
-// Replaces the legacy header (Tomograph logo + dense pack-picker row +
+// Replaces the legacy header (Observogram logo + dense pack-picker row +
 // meta strip + view-nav + layer chips) with a single clean chrome:
 //
 //   ┌──────────────────────────────────────────────────────────────────┐
-//   │ [logo] TOMOGRAPH    ① Layers       ② Comparison    ③ ObsOps     │
+//   │ [logo] OBSERVOGRAM    ① Layers       ② Comparison    ③ ObsOps     │
 //   │                       What's in...   Is it good...   Compile &  │
 //   │                                                                  │
 //   │                                          Projects · Alerts · AD  │
@@ -1040,7 +1070,7 @@ export async function refresh() {
 // question, the small workflow word beneath identifies the act the
 // product takes to answer it. This is the load-bearing framing —
 // most observability tools organize around data types or products;
-// Tomograph organizes around three questions that map onto a workflow
+// Observogram organizes around three questions that map onto a workflow
 // people already understand from medicine:
 //
 //     Discover  →  Diagnose  →  Remediate
@@ -1055,7 +1085,7 @@ const OBSERVA_TABS = [
     label: 'What Do We Have?',
     sub: 'Discover',
     techName: 'Layers',
-    tagline: 'the Observability Tomogram',
+    tagline: 'the Observogram Scan',
     accent: 'tab-blue',
   },
   {
@@ -1102,7 +1132,7 @@ function installObservaChrome() {
   hdr.className = 'observa-hdr';
   hdr.innerHTML = `
     <div class="observa-hdr-inner">
-      <a class="observa-brand" href="/" aria-label="Tomograph home">
+      <a class="observa-brand" href="/" aria-label="Observogram home">
         <span class="observa-logo" aria-hidden="true">
           <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
             <defs>
@@ -1118,7 +1148,7 @@ function installObservaChrome() {
           </svg>
         </span>
         <span class="observa-brand-text">
-          <span class="observa-wordmark">TOMO<strong>GRAPH</strong></span>
+          <span class="observa-wordmark">OBSERVO<strong>GRAM</strong></span>
           <span class="observa-tagline">
             <span class="observa-tagline-step">Discover</span>
             <span class="observa-tagline-dot">·</span>
@@ -1128,6 +1158,22 @@ function installObservaChrome() {
           </span>
         </span>
       </a>
+
+      <!-- The active org (Stage 2 tenancy) — same rule as the SERVICE
+           chip: which workspace Observogram is reading must never be a
+           mystery. Becomes a switcher when the user has several orgs. -->
+      <span class="observa-service observa-org" id="observa-org" hidden>
+        <span class="observa-service-key">ORG</span>
+        <span class="observa-service-name" id="observa-org-name"></span>
+      </span>
+
+      <!-- The active service — always visible once chosen (the gate or
+           the header SERVICE selector set it). "Observogram is configured
+           for MY service" must never be a mystery. -->
+      <span class="observa-service" id="observa-service" hidden>
+        <span class="observa-service-key">SERVICE</span>
+        <span class="observa-service-name" id="observa-service-name"></span>
+      </span>
 
       <nav class="observa-tabs" role="tablist" aria-label="Primary">
         ${OBSERVA_TABS.map(t => `
@@ -1160,6 +1206,10 @@ function installObservaChrome() {
                 <span class="observa-adv-item-sub">${escapeHtml(a.sub)}</span>
               </button>
             `).join('')}
+            <button type="button" class="observa-adv-item observa-adv-about" role="menuitem" data-action="about">
+              <span class="observa-adv-item-label">About Observogram</span>
+              <span class="observa-adv-item-sub" id="observa-about-sub">version &amp; build</span>
+            </button>
           </div>
         </div>
       </div>
@@ -1231,7 +1281,11 @@ function installObservaChrome() {
   });
   window.addEventListener('resize', () => { if (advMenu && !advMenu.hidden) positionAdv(); });
   hdr.querySelectorAll('.observa-adv-item').forEach(item => {
-    item.addEventListener('click', () => { closeAdv(); routeTo(item.dataset.view); });
+    item.addEventListener('click', () => {
+      closeAdv();
+      if (item.dataset.action === 'about') { openAboutModal(); return; }
+      routeTo(item.dataset.view);
+    });
   });
   // Arrow-key navigation within the menu (standard menu pattern).
   advMenu?.addEventListener('keydown', (e) => {
@@ -1275,14 +1329,20 @@ async function boot() {
   // Mount the new chrome FIRST so the user sees the demo shape even
   // while the catalog loads.
   installObservaChrome();
+  // Identity + active org BEFORE the first /api call — with tenancy on,
+  // /api/packs answers from the active org's workspace, so the org
+  // header has to be resolved before the catalog loads.
+  await loadIdentity();
+  resolveActiveOrg();
   try { await loadCatalog(); }
   catch (e) {
-    document.body.innerHTML = `<pre class="json" style="margin:48px;max-width:800px">Failed to reach Tomograph's API.\n\n${escapeHtml(e.message)}\n\nMake sure the server is running: \`node server/index.mjs\` or \`npm run serve\`.</pre>`;
+    document.body.innerHTML = `<pre class="json" style="margin:48px;max-width:800px">Failed to reach Observogram's API.\n\n${escapeHtml(e.message)}\n\nMake sure the server is running: \`node server/index.mjs\` or \`npm run serve\`.</pre>`;
     return;
   }
 
   setupUpload();
   setupTheme();
+  setupIdentityChip();
   setupResetButton();
   setupExportButton();
   // Eagerly fetch /api/examples so the Pack B picker has the archived
@@ -1363,9 +1423,121 @@ function goHome() {
   // would be weird with no pack loaded yet).
   state.view = 'layers';
   state.layerFilter = 'all';
+  // A signed-in user has services — home for them is "which service are
+  // you working on?", not the marketing hero. The hero stays for local
+  // mode and for true cold starts (no services yet); the gate links to
+  // it for "start something new".
+  state.homeVariant = (state.identity?.authenticated && serviceCatalogue().length) ? 'gate' : 'hero';
   applyModeChrome();
-  renderHomeView();
+  if (state.homeVariant === 'gate') renderServiceGate();
+  else renderHomeView();
   persistence.schedule();
+}
+
+// ============================================================
+// SERVICE GATE — the post-sign-in landing. The user's services
+// (from the same catalogue the header SERVICE selector reads),
+// one click from "signed in" to "Observogram configured for my
+// service". docs/PRODUCTIZATION_PLAN.md Stage 1 UX.
+// ============================================================
+
+function renderServiceGate() {
+  const view = $('#layer-view');
+  if (!view) return;
+  const services = serviceCatalogue();
+  const who = state.identity?.name || state.identity?.email || state.identity?.sub || '';
+  view.innerHTML = `
+    <section class="svc-gate">
+      <div class="svc-gate-eyebrow">OBSERVOGRAM · THE OBSERVABILITY COMPILER</div>
+      <h1 class="svc-gate-title">Welcome back${who ? `, ${escapeHtml(who.split(' ')[0])}` : ''}.</h1>
+      <p class="svc-gate-sub">Which service are you working on?</p>
+      <div class="svc-gate-grid">
+        ${services.map(s => `
+          <button type="button" class="svc-gate-card" data-service="${escapeHtml(s.key)}">
+            <span class="svc-gate-name">${escapeHtml(s.label)}</span>
+            <span class="svc-gate-meta">${s.packCount} pack${s.packCount === 1 ? '' : 's'}${s.liveCount ? ` · ${s.liveCount} live draft${s.liveCount === 1 ? '' : 's'}` : ''}</span>
+          </button>`).join('')}
+      </div>
+      <button type="button" class="svc-gate-new" id="svc-gate-new">+ start something new — connect an MCP endpoint, upload or scan a repo</button>
+    </section>
+  `;
+  view.querySelectorAll('.svc-gate-card').forEach(card => {
+    card.addEventListener('click', () => enterServiceWorkspace(card.dataset.service));
+  });
+  view.querySelector('#svc-gate-new')?.addEventListener('click', () => {
+    state.homeVariant = 'hero';
+    renderHomeView();
+  });
+}
+
+// Reflect the active service into the always-visible OBSERVA-bar chip.
+// Called wherever the selection can change (service select, analyze
+// mode entry, mode chrome) — hidden on home where no service is active.
+function updateObservaOrgChip() {
+  const chip = document.getElementById('observa-org');
+  if (!chip) return;
+  const orgs = state.identity?.orgs || [];
+  const active = orgs.find(o => o.id === getActiveOrg()) || orgs[0];
+  if (!active) { chip.hidden = true; return; }
+  const name = document.getElementById('observa-org-name');
+  if (orgs.length > 1 && !chip.querySelector('select')) {
+    const sel = document.createElement('select');
+    sel.className = 'observa-org-select';
+    sel.setAttribute('aria-label', 'Active organisation');
+    for (const o of orgs) {
+      const opt = document.createElement('option');
+      opt.value = o.id;
+      opt.textContent = o.name || o.id;
+      sel.appendChild(opt);
+    }
+    sel.addEventListener('change', () => {
+      setActiveOrg(sel.value);
+      // Every view is a projection of the active org's workspace — a
+      // clean re-boot is the honest refresh.
+      window.location.reload();
+    });
+    name.replaceWith(sel);
+  }
+  const sel = chip.querySelector('select');
+  if (sel) sel.value = active.id;
+  else name.textContent = active.name || active.id;
+  chip.title = `organisation: ${active.id} (role: ${active.role || 'member'})`;
+  chip.hidden = false;
+}
+
+function updateObservaServiceChip() {
+  updateObservaOrgChip();
+  const chip = document.getElementById('observa-service');
+  if (!chip) return;
+  const name = document.getElementById('observa-service-name');
+  const services = serviceCatalogue();
+  const active = services.find(s => s.key === state.selectedService);
+  if (state.mode === 'home' || !active) { chip.hidden = true; return; }
+  name.textContent = active.label;
+  chip.hidden = false;
+}
+
+// One click on a service card → Observogram configured for that service:
+// service selected, its most recent pack loaded as Pack A, Discover open.
+function enterServiceWorkspace(serviceKey) {
+  if (!serviceKey) return;
+  state.selectedService = serviceKey;
+  // Catalog order is oldest→newest (workspace registry order, new
+  // registrations appended) — the LAST match is the freshest. Prefer the
+  // declared (non-aggregate) pack; an aggregate live draft is a usable
+  // fallback when it's all the service has.
+  const matches = state.catalog.filter(p => p.ok && packMatchesService(p, serviceKey, { side: 'a' }));
+  const declared = matches.filter(p => !isLiveAggregatePack(p));
+  const pack = declared[declared.length - 1] || matches[matches.length - 1]
+    || state.catalog.filter(p => p.ok && packMatchesService(p, serviceKey, { side: 'b' })).pop();
+  if (!pack) {
+    // A service with nothing loadable (e.g. example-derived) — fall back
+    // to the hero so the user can bring a pack in.
+    state.homeVariant = 'hero';
+    renderHomeView();
+    return;
+  }
+  enterAnalyzeMode(pack.id, defaultEnvFor(pack.id));
 }
 
 function enterAnalyzeMode(packId, env) {
@@ -1405,6 +1577,7 @@ function enterCompareMode(aId, aEnv, bId, bEnv) {
 // new pack.
 function applyModeChrome() {
   const isHome = state.mode === 'home';
+  updateObservaServiceChip();
   // Under the OBSERVA chrome the pack/env selectors are PINNED as a
   // permanent master row — they are the user's primary controls and
   // must never be hidden by view. Only the legacy (non-chrome) layout
@@ -1448,7 +1621,7 @@ function setupResetButton() {
   const btn = $('#reset-btn');
   if (!btn) return;
   btn.onclick = async () => {
-    const ok = confirm('Reset Tomograph?\n\n' +
+    const ok = confirm('Reset Observogram?\n\n' +
       'This will:\n' +
       '  • drop every uploaded / scanned / drafted pack from the server\n' +
       '  • clear saved view + filter + focus + trace preferences from localStorage\n' +
@@ -1567,7 +1740,7 @@ function renderDiscoverEmpty(view) {
       <header class="discover-empty-head">
         <h2 class="discover-empty-title">What do we have?</h2>
         <p class="discover-empty-lede">
-          Load or generate an ObservabilityPack to draw its tomogram — the
+          Load or generate an ObservabilityPack to draw its observogram — the
           per-layer inventory of every contract, signal, dashboard, alert
           and check that makes up this service's observability posture.
         </p>
@@ -1673,12 +1846,12 @@ function renderHomeView() {
 
   view.innerHTML = `
     <section class="home-hero">
-      <div class="home-hero-eyebrow">tomograph · the observability compiler</div>
+      <div class="home-hero-eyebrow">observogram · the observability compiler</div>
       <h2 class="home-hero-title">Map your observability platform in seconds.</h2>
       <p class="home-hero-lede">
         Scan a service repo to capture what it <em>declares</em>, then draft
         from a live OpenTelemetry MCP server to capture what the platform
-        <em>verifies</em> — Tomograph diffs the two and shows you exactly where
+        <em>verifies</em> — Observogram diffs the two and shows you exactly where
         they drift. Connect below to begin, or scan a repo from Discover.
       </p>
 
@@ -1774,18 +1947,18 @@ async function doHomeMcpConnect() {
   try {
     const r = await fetch('/api/draft-from-mcp', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
         mcpUrl: url,
         mcpAuth: auth || undefined,
         // Forward the quick-start friendly label when the user came
-        // through the Upload popover. window._tomographQuickLabel is
+        // through the Upload popover. window._observogramQuickLabel is
         // cleared after consumption so manual draft-from-mcp from the
         // panel keeps the auto-generated label.
-        label: window._tomographQuickLabel || undefined,
+        label: window._observogramQuickLabel || undefined,
       }),
     });
-    if (window._tomographQuickLabel) window._tomographQuickLabel = null;
+    if (window._observogramQuickLabel) window._observogramQuickLabel = null;
     const ct = r.headers.get('content-type') || '';
     if (!ct.includes('application/json')) {
       throw new Error(`server returned ${r.status} ${ct || 'no content-type'}`);
@@ -1825,7 +1998,7 @@ function renderHomeMcpCapabilities(out, host) {
   const backends = s.backends ?? 0;
 
   // tools/list inventory: the full set of tools the MCP advertised, and the
-  // subset Tomograph doesn't yet have a probe pattern for. These come from
+  // subset Observogram doesn't yet have a probe pattern for. These come from
   // the post-rename fetcher that calls `tools/list` instead of guessing.
   const toolsExposed   = (ann['mcp.toolsExposed']   || '').split(',').filter(Boolean);
   const toolsUnmatched = (ann['mcp.toolsUnmatched'] || '').split(',').filter(Boolean);
@@ -1926,7 +2099,7 @@ function renderHomeMcpCapabilities(out, host) {
 // Render the skill → backend → product → version matrix the MCP
 // exposes via `backend_capabilities`. The signal-class skills
 // (metrics/logs/traces/profiles + alerting/dashboards) lead because
-// they're what drive Tomograph's L1–L4 projection; the rest follow
+// they're what drive Observogram's L1–L4 projection; the rest follow
 // in a compact tail.
 //
 // When `liveVersions` carries an authoritative live version for a
@@ -2081,12 +2254,26 @@ function renderMcpBadge(status) {
     return;
   }
   const stale = status.refreshedAt && (Date.now() - Date.parse(status.refreshedAt) > MCP_STALE_HOURS * 3600_000);
-  const errored = (status.toolsFailed || '').trim() !== '';
+  const toolsFailed = (status.toolsFailed || '').trim();
+  // A probe family that got no answer is a hole in the live picture —
+  // the badge goes red for it exactly as for a failed core tool.
+  const probesFailed = (status.probesFailed || '').trim();
+  // Families this MCP tier doesn't expose at all: a restriction, not an
+  // error — named in the title, never a colour state of its own.
+  const probesUnsupported = (status.probesUnsupported || '').trim();
+  const errored = toolsFailed !== '' || probesFailed !== '';
   btn.dataset.mcpState = errored ? 'error' : stale ? 'stale' : 'fresh';
   ageEl.textContent = fmtRelative(status.refreshedAt) || '—';
-  btn.title = errored
-    ? `MCP refresh had errors (${status.toolsFailed})`
+  const errorBits = [
+    toolsFailed ? `tools: ${toolsFailed}` : '',
+    probesFailed ? `probes with no answer: ${probesFailed}` : '',
+  ].filter(Boolean);
+  const title = errored
+    ? `MCP refresh had errors (${errorBits.join('; ')})`
     : `Last refresh ${fmtRelative(status.refreshedAt)} from ${status.url || 'unknown'}`;
+  btn.title = probesUnsupported
+    ? `${title} · restricted tier: families ${probesUnsupported} not exposed`
+    : title;
 }
 
 function renderMcpStatusBody(status) {
@@ -2101,6 +2288,8 @@ function renderMcpStatusBody(status) {
     ['mcp url',    status.url || '—'],
     ['tools called',  status.toolsCalled || '—'],
     ['tools failed',  status.toolsFailed || 'none'],
+    ['probes failed', status.probesFailed || 'none'],
+    ['not exposed',   status.probesUnsupported || 'none'],
     ['services',   status.servicesDiscovered || '—'],
     ['baselines',  status.baselinesComputed || '0'],
     ['anomalies',  status.activeAnomalies   || '0'],
@@ -2144,7 +2333,7 @@ async function refreshLive() {
   try {
     const r = await fetch('/api/refresh-live', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ mcpUrl: url, mcpAuth: auth || undefined }),
     });
     // Read as text first so we can surface a useful error if the server
@@ -2507,7 +2696,7 @@ async function doCrawl() {
   try {
     const r = await fetch('/api/crawl', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(body),
     });
     const ct = r.headers.get('content-type') || '';
@@ -2550,9 +2739,9 @@ async function doCrawlFromGithub() {
     diffScopeMode: $('#crawl-diff-scope')?.value || 'service',
     // Quick-start cases pass a friendly label via the global so the
     // picker doesn't read "moebiusx-krystalinex" but the human name.
-    label:      window._tomographQuickLabel || undefined,
+    label:      window._observogramQuickLabel || undefined,
   };
-  if (window._tomographQuickLabel) window._tomographQuickLabel = null;
+  if (window._observogramQuickLabel) window._observogramQuickLabel = null;
   const crit = $('#crawl-criticality').value;
   if (crit) body.criticality = crit;
 
@@ -2562,7 +2751,7 @@ async function doCrawlFromGithub() {
   try {
     const r = await fetch('/api/crawl-github', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(body),
     });
     const ct = r.headers.get('content-type') || '';
@@ -2909,7 +3098,7 @@ async function doRollback(deployId, packId, btn) {
   try {
     const r = await api(`/api/deploys/${encodeURIComponent(deployId)}/rollback`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...authHeaders() },
       body: JSON.stringify({ mcpUrl: url, mcpAuth: auth || undefined }),
     });
     const manualNote = r.manual?.length ? ` · ${r.manual.length} manual step${r.manual.length === 1 ? '' : 's'}` : '';
@@ -3147,7 +3336,7 @@ async function doDeployBulk() {
     const path = `/api/packs/${encodeURIComponent(deployModalState.packId)}/deploy-bulk?${qs}`;
     const r = await fetch(path, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
         mcpUrl: url, mcpAuth: auth || undefined,
         targetProduct: product, targetVersion: version, targetFolder: folder || undefined,
@@ -3227,7 +3416,7 @@ export async function startDeployVerify({ deployId, packId, env, mcpUrl, mcpAuth
         document.createTextNode(`check ${attempt}/${VERIFY_DELAYS_MS.length}: drafting live state…`));
       const out = await api('/api/draft-from-mcp', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...authHeaders() },
         body: JSON.stringify({ mcpUrl, mcpAuth }),
       });
       if (!out.ok) throw new Error(out.error || 'MCP draft failed');
@@ -3262,7 +3451,7 @@ export async function startDeployVerify({ deployId, packId, env, mcpUrl, mcpAuth
     try {
       await fetch(`/api/deploys/${encodeURIComponent(deployId)}/verify`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           outcome: last.summary.outcome,
           summary: last.summary,
@@ -3443,7 +3632,7 @@ async function doDraftFromMcp() {
   try {
     const r = await fetch('/api/draft-from-mcp', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ mcpUrl: url, mcpAuth: auth || undefined, packName: name || undefined }),
     });
     const ct = r.headers.get('content-type') || '';
@@ -3462,6 +3651,119 @@ async function doDraftFromMcp() {
   } finally {
     goBtn.disabled = false;
   }
+}
+
+// Step 2 — the stack's own self-metrics (docs/MCP_INTEGRATION.md,
+// mcp.stack.* / mcp.observed.*). Every number is a point-in-time sample
+// read straight from the server summary: signal, not verdict. Absent when
+// the fetcher predates step 2 (summary.stack == null). `row` is the
+// caller's table-row helper so the markup matches the rows above; a
+// sampled row adds the row id / product as a hint line (plain, never the
+// purple "fallback evidence" tint — a sample is not fallback evidence).
+const STACK_OUTCOME_RANK = ['data', 'empty', 'failed', 'not-in-inventory', 'not-attempted'];
+
+function formatStackValue(value, unit) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+  switch (unit) {
+    case 'ratio':      return `${(value * 100).toFixed(1)}%`;
+    case 'per-second': return `${value.toFixed(3)}/s`;
+    case 'per-hour':   return `${value.toFixed(1)}/h`;
+    case 'seconds':    return `${value.toFixed(1)}s`;
+    case 'count':      return String(Math.round(value));
+    default:           return String(value);
+  }
+}
+
+function stackOutcomeText(outcome, reason) {
+  switch (outcome) {
+    case 'empty':            return '— empty';
+    case 'failed':           return reason ? `— probe failed: ${reason}` : '— probe failed';
+    case 'not-in-inventory': return '— not in inventory';
+    case 'not-attempted':    return `— not attempted: ${reason || 'not attempted'}`;
+    default:                 return `— ${outcome || 'unknown'}`;
+  }
+}
+
+function renderStackSelfMetricsBlock(summary, row) {
+  const sampledRow = (label, value, hint) =>
+    `<tr><td>${escapeHtml(label)}<span class="row-evidence-hint">${escapeHtml(hint)}</span></td><td>${escapeHtml(String(value))}</td></tr>`;
+  const stack = summary?.stack;
+  const am = summary?.alertmanager;
+  const gf = summary?.grafana;
+  if (!stack && !am && !gf) return '';
+  const rank = (o) => { const i = STACK_OUTCOME_RANK.indexOf(o); return i < 0 ? STACK_OUTCOME_RANK.length : i; };
+  const lines = [];
+  if (!stack) {
+    lines.push(row('stack self-metrics', '— not sampled by this fetcher', true));
+  } else if (stack.status !== 'sampled') {
+    // The server's reason is the source of truth (today: the tier).
+    lines.push(row('stack self-metrics', `— not attempted: ${stack.reason || 'metrics_query not exposed by this MCP tier'}`, true));
+  } else {
+    const rows = Array.isArray(stack.rows) ? stack.rows : [];
+    for (const [family, familyOutcome] of Object.entries(stack.families || {})) {
+      // The family's best row: outcome rank first, then the table order.
+      const best = rows
+        .map((r, i) => ({ r, i }))
+        .filter(({ r }) => r.family === family)
+        .sort((a, b) => rank(a.r.outcome) - rank(b.r.outcome) || a.i - b.i)[0]?.r;
+      if (!best) {
+        // A family with no observed row was never reached: its rows were
+        // counted not-attempted (call budget), not listed.
+        lines.push(row(family, stackOutcomeText(familyOutcome, familyOutcome === 'not-attempted' ? 'call budget exhausted' : null), true));
+        continue;
+      }
+      const hint = `${best.id}${best.product && best.product !== 'generic' ? ` · ${best.product}` : ''}`;
+      if (best.outcome === 'data') {
+        const text = formatStackValue(best.value, best.unit) + (best.hint === 'nonzero' ? ' · nonzero' : '');
+        lines.push(sampledRow(family, text, hint));
+      } else {
+        lines.push(row(family, stackOutcomeText(best.outcome, best.reason), true));
+      }
+    }
+  }
+  // "— not exposed" is reserved for a surface the MCP did not advertise
+  // (summary null). An advertised tool that failed carries `error` and
+  // reads "probe failed" — a failure must never look like a tier limit.
+  if (am) {
+    const answered = am.version || am.silences || am.clusterStatus || am.uptime;
+    if (!answered && am.error) {
+      lines.push(row('alertmanager', `— probe failed: ${am.error}`, true));
+    } else {
+      const silences = am.silences ? `${am.silences.active} active silence${am.silences.active === 1 ? '' : 's'}` : 'silences not answered';
+      lines.push(row('alertmanager', `${am.version ? `v${am.version}` : 'version unknown'} · ${silences}${am.error ? ` · probe failed: ${am.error}` : ''}`));
+    }
+  } else {
+    lines.push(row('alertmanager', '— not exposed', true));
+  }
+  if (gf) {
+    if (Array.isArray(gf.datasources)) {
+      // Three buckets, never two: `unknown` means the health of that
+      // datasource was NOT checked (health tool not exposed / errored /
+      // beyond the cap) — "0 unhealthy" is printed only when at least one
+      // datasource actually got a verdict.
+      const label = (d) => d.name || d.uid || '?';
+      const errors = gf.datasources.filter(d => d.health === 'error').map(label);
+      const unchecked = gf.datasources.filter(d => d.health !== 'ok' && d.health !== 'error').map(label);
+      const checked = gf.datasources.length - unchecked.length;
+      let text;
+      if (gf.datasources.length === 0) text = '0';
+      else if (checked === 0) text = `${gf.datasources.length} · health not checked (grafana_datasource_health not exposed or did not answer)`;
+      else {
+        text = `${gf.datasources.length} · ${errors.length} error${errors.length ? `: ${errors.join(', ')}` : ''}`
+          + (unchecked.length ? ` · ${unchecked.length} unchecked: ${unchecked.join(', ')}` : '');
+      }
+      lines.push(row('datasources', text));
+    }
+    if (gf.contactPoints) lines.push(row('contact points', gf.contactPoints.count));
+    if (gf.error) lines.push(row('grafana', `— probe failed: ${gf.error}`, true));
+  } else {
+    lines.push(row('grafana', '— not exposed', true));
+  }
+  return `
+    <div class="crawl-stack-heading">stack self-metrics — point-in-time sample, signal not verdict</div>
+    <table class="crawl-summary-table">
+      ${lines.join('')}
+    </table>`;
 }
 
 function renderDraftMcpResult(out) {
@@ -3492,17 +3794,23 @@ function renderDraftMcpResult(out) {
   const probesS = new Set(d.probesSucceeded || []);
   const probesE = new Set(d.probesEmpty || []);
   const probesF = new Set(d.probesFailed || []);
-  // Three distinct outcomes when a probe was attempted:
-  //   data     — MCP responded with real content → show count
-  //   empty    — MCP responded with empty payload → "0 (none configured)"
-  //              honest zero, e.g. Krystaline has no Prometheus rules
-  //   failed   — every candidate errored / 503'd → "— probe failed"
-  //              transient or systemic, not the same as zero
+  const probesU = new Set(d.probesUnsupported || []);
+  const probeErrors = d.probeErrors || {};
+  // Four distinct outcomes when a probe was attempted:
+  //   data        — MCP responded with real content → show count
+  //   empty       — MCP responded with empty payload → "0 (none configured)"
+  //                 honest zero, e.g. Krystaline has no Prometheus rules
+  //   failed      — every candidate errored / 503'd → "— probe failed"
+  //                 transient or systemic, not the same as zero
+  //   unsupported — tools/list exposes no candidate for the family →
+  //                 "— not exposed by this MCP": a tier restriction, not
+  //                 an outage; nothing to retry.
   const probeRow = (label, key, value) => {
     if (!probesA.has(key)) return '';
     if (probesS.has(key))  return row(label, value || 0);
     if (probesE.has(key))  return row(label, `0 — none configured`, true);
-    if (probesF.has(key))  return row(label, '— probe failed', true);
+    if (probesU.has(key))  return row(label, '— not exposed by this MCP', true);
+    if (probesF.has(key))  return row(label, probeErrors[key] ? `— probe failed: ${probeErrors[key]}` : '— probe failed', true);
     // Older packs (pre-Phase 5) don't have probesEmpty/probesFailed
     // annotations; fall back to the original behaviour.
     return row(label, '— probed, none found', true);
@@ -3531,6 +3839,20 @@ function renderDraftMcpResult(out) {
         `via colon-pattern grep over metric inventory`,
       )
     : '';
+  // On-wire liveness rows — only when the MCP reported something NOT
+  // doing its job: scrape jobs whose every target is down, rules the
+  // ruler reports as failing to evaluate. These jobs/rules exist but are
+  // not counted as evidence above (the fetcher withholds their stamps).
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const scrapeJobsDown = d.scrapeJobsDown || [];
+  const rulesUnhealthy = [...(d.recordingRulesUnhealthy || []), ...(d.alertRulesUnhealthy || [])];
+  const scrapeDownRow = scrapeJobsDown.length
+    ? row(`${plural(scrapeJobsDown.length, 'scrape job')} down`, scrapeJobsDown.join(', '))
+    : '';
+  const rulesUnhealthyRow = rulesUnhealthy.length
+    ? row(`${plural(rulesUnhealthy.length, 'rule')} unhealthy`, rulesUnhealthy.join(', '))
+    : '';
+  const stackBlock = renderStackSelfMetricsBlock(out.summary, row);
   $('#draft-mcp-result-summary').innerHTML = `
     <h4>what the MCP attested</h4>
     <table class="crawl-summary-table">
@@ -3543,12 +3865,15 @@ function renderDraftMcpResult(out) {
       ${alertEvidenceRow}
       ${probeRow('dashboards',      'dashboards',      d.dashboards)}
       ${probeRow('scrape jobs',     'scrape_configs',  (d.scrapeJobs || []).length)}
+      ${scrapeDownRow}
+      ${rulesUnhealthyRow}
       ${probeRow('metric names',    'metric_names',    d.metricNamesCount)}
     </table>
+    ${stackBlock}
     ${alertsFiringCount > 0 || recordingFallbackCount > 0 ? `
       <div class="crawl-evidence-note">
         Rows in italic = fallback evidence. The standard rule endpoints came back empty,
-        but Tomograph found evidence in metric data: firing alerts via the
+        but Observogram found evidence in metric data: firing alerts via the
         <code>ALERTS</code> series, recording rules via metric names following the
         <code>&lt;ns&gt;:&lt;metric&gt;:&lt;op&gt;</code> convention.
       </div>
@@ -3625,6 +3950,152 @@ function setupMcpPanel() {
 // ---------- theme ----------
 
 // ---------- theme ----------
+// ---------- about / version ----------
+//
+// /healthz carries { version, build, node } (server/version.mjs). Fetched
+// once at boot, displayed in the Advanced menu foot, the header subtitle,
+// and the About modal — "what exactly is running?" should never need a
+// terminal.
+let serverVersion = null;
+
+async function loadVersion() {
+  try {
+    const r = await fetch('/healthz');
+    if (r.ok) serverVersion = await r.json();
+  } catch (_) { /* offline boot path already handles the error */ }
+  const label = serverVersion ? `v${serverVersion.version} · build ${serverVersion.build}` : null;
+  if (!label) return;
+  const sub = document.getElementById('observa-about-sub');
+  if (sub) sub.textContent = label;
+  const hdrSub = document.querySelector('.hdr-sub');
+  if (hdrSub && !hdrSub.textContent.includes('build')) hdrSub.textContent += ` · ${label}`;
+  const brand = document.querySelector('.observa-brand');
+  if (brand) brand.title = `Observogram ${label}`;
+}
+
+function openAboutModal() {
+  document.getElementById('about-modal')?.remove();
+  const v = serverVersion || {};
+  const row = (k, val) => val ? `<div class="about-row"><span class="about-key">${k}</span><span class="about-val">${escapeHtml(String(val))}</span></div>` : '';
+  const overlay = document.createElement('div');
+  overlay.id = 'about-modal';
+  overlay.className = 'about-overlay';
+  overlay.innerHTML = `
+    <div class="about-card" role="dialog" aria-modal="true" aria-label="About Observogram">
+      <div class="about-brand">Observo<i>gram</i></div>
+      <div class="about-tagline">the observability compiler</div>
+      <div class="about-version">${escapeHtml(v.version ? `v${v.version}` : 'version unknown')}<span class="about-build">${escapeHtml(v.build ? ` · build ${v.build}` : '')}</span></div>
+      <div class="about-rows">
+        ${row('spec', v.specVersion ? `ObservabilityPack v${v.specVersion}` : null)}
+        ${row('server', v.node ? `node ${v.node}` : null)}
+        ${row('identity', state.identity?.mode || 'local (no sign-in)')}
+        ${state.identity?.orgs?.length ? row('org', state.identity.orgs.map(o => o.name || o.id).join(' · ')) : ''}
+      </div>
+      <a class="about-link" href="https://github.com/MoebiusX/Observogram/blob/develop/docs/CHANGELOG.md" target="_blank" rel="noopener">changelog</a>
+      <button type="button" class="about-close" aria-label="Close">esc</button>
+    </div>
+  `;
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector('.about-close').addEventListener('click', close);
+  overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  document.body.appendChild(overlay);
+  overlay.querySelector('.about-close').focus();
+}
+
+// /auth/me → state.identity. Local mode: the endpoint 404s and identity
+// stays null — every downstream check degrades to today's behaviour.
+async function loadIdentity() {
+  try {
+    const r = await fetch('/auth/me');
+    if (!r.ok) return null;
+    state.identity = await r.json();
+    return state.identity;
+  } catch (_) { return null; }
+}
+
+// Stage 2 tenancy: pick the active org from the session's memberships
+// (/auth/me carries them when orgs.json is armed) — the persisted choice
+// when still valid, the first membership otherwise. Outside tenancy mode
+// this is a no-op and no org header is ever sent.
+function resolveActiveOrg() {
+  const orgs = state.identity?.orgs || [];
+  if (!orgs.length) { setActiveOrg(null); return; }
+  const saved = savedOrg();
+  setActiveOrg((orgs.find(o => o.id === saved) || orgs[0]).id);
+}
+
+// Identity chip — only renders when the server runs in an identity
+// posture and a session exists.
+function setupIdentityChip() {
+  const me = state.identity;
+  if (!me?.authenticated) return;
+  const anchor = $('#theme-toggle');
+  if (!anchor || document.getElementById('hdr-user')) return;
+
+  // Org indicator — a switcher when the user belongs to several orgs, a
+  // static label for exactly one. Switching reloads: every view is a
+  // projection of the active org's workspace, so a clean re-boot is the
+  // honest refresh.
+  const orgs = me.orgs || [];
+  if (orgs.length && !document.getElementById('hdr-org')) {
+    const wrap = document.createElement('span');
+    wrap.id = 'hdr-org';
+    wrap.className = 'hdr-org';
+    if (orgs.length > 1) {
+      wrap.innerHTML = `<span class="ctrl-key">ORG</span>`;
+      const sel = document.createElement('select');
+      sel.setAttribute('aria-label', 'Active organisation');
+      for (const o of orgs) {
+        const opt = document.createElement('option');
+        opt.value = o.id;
+        opt.textContent = o.name || o.id;
+        if (o.id === getActiveOrg()) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      sel.addEventListener('change', () => {
+        setActiveOrg(sel.value);
+        window.location.reload();
+      });
+      wrap.appendChild(sel);
+    } else {
+      const active = orgs[0];
+      wrap.innerHTML = `<span class="ctrl-key">ORG</span><span class="hdr-org-name">${escapeHtml(active.name || active.id)}</span>`;
+      wrap.title = `organisation: ${active.id}`;
+    }
+    anchor.parentNode.insertBefore(wrap, anchor);
+  }
+
+  // Account menu: who you are, change password (stand-alone mode — OIDC
+  // passwords belong to the IdP), sign out.
+  const chip = document.createElement('span');
+  chip.id = 'hdr-user';
+  chip.className = 'hdr-user';
+  // Deliberately NOT role="menu"/"menuitem": that ARIA contract demands
+  // arrow-key navigation this popover doesn't implement. Plain links and
+  // buttons are natively focusable and honest about what this is.
+  chip.innerHTML = `
+    <button type="button" class="ctrl-btn hdr-user-btn" aria-expanded="false"
+            title="signed in as ${escapeHtml(me.email || me.sub)} (${escapeHtml(me.mode)})">⏣ ${escapeHtml(me.name || me.email || me.sub)} ▾</button>
+    <div class="hdr-user-menu" hidden>
+      <div class="hdr-user-menu-id">signed in as <strong>${escapeHtml(me.email || me.sub)}</strong><span class="hdr-user-menu-mode">${escapeHtml(me.mode)}</span></div>
+      ${me.mode === 'local-users' ? '<a class="hdr-user-menu-item" href="/auth/change-password">change password…</a>' : ''}
+      <button type="button" class="hdr-user-menu-item hdr-user-out">sign out</button>
+    </div>
+  `;
+  const menuBtn = chip.querySelector('.hdr-user-btn');
+  const menu = chip.querySelector('.hdr-user-menu');
+  const setOpen = (open) => { menu.hidden = !open; menuBtn.setAttribute('aria-expanded', String(open)); };
+  menuBtn.addEventListener('click', () => setOpen(menu.hidden));
+  document.addEventListener('click', (e) => { if (!chip.contains(e.target)) setOpen(false); });
+  chip.addEventListener('keydown', (e) => { if (e.key === 'Escape') { setOpen(false); menuBtn.focus(); } });
+  chip.querySelector('.hdr-user-out').addEventListener('click', async () => {
+    await fetch('/auth/logout', { method: 'POST', headers: { ...authHeaders() } }).catch(() => {});
+    window.location.assign('/auth/login');
+  });
+  anchor.parentNode.insertBefore(chip, anchor);
+}
+
 // The inline script in <head> already applied the persisted/system theme
 // before paint. Here we wire the toggle and keep the studio in sync with
 // the system preference if the user hasn't pinned one.
@@ -3656,5 +4127,11 @@ function setupTheme() {
 }
 
 // ---------- helpers ----------
+
+// Fill the studio-wide host seam (studio/host.mjs) — view modules reach the
+// re-render / loader / modal entrypoints through it instead of importing
+// app.mjs (docs/VENDORING.md, docs/UI_CONVENTIONS.md). Function declarations
+// hoist, so binding them here (before boot) is safe.
+initHost({ loadPackB, openDeployModal, renderMainView, renderTabs });
 
 boot();

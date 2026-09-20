@@ -1,0 +1,451 @@
+{
+  "id": "production-curated",
+  "name": "Production \u2014 Curated",
+  "badge": "PROD",
+  "description": "3-node Kubernetes cluster \u00b7 OTel + Prometheus + Jaeger + Loki \u00b7 12 scrape targets \u00b7 MCP exposure enabled.",
+  "layers": {
+    "L1": [
+      {
+        "id": "SLI-01",
+        "source": "BAU",
+        "title": "Availability SLI",
+        "desc": "Service up ratio across order-service, wallet-service, matching-engine, api-gateway.",
+        "tool": "Prometheus",
+        "tags": [
+          "availability"
+        ]
+      },
+      {
+        "id": "SLI-02",
+        "source": "BAU",
+        "title": "Latency SLI (P99)",
+        "desc": "P99 request latency across critical paths. Currently 424 ms.",
+        "tool": "Prometheus",
+        "tags": [
+          "latency"
+        ]
+      },
+      {
+        "id": "SLO-01",
+        "source": "BAU",
+        "title": "Availability SLO 99.9%",
+        "desc": "Monthly window. Currently at 100% budget remaining.",
+        "tool": "PromQL",
+        "tags": [
+          "SLO"
+        ]
+      },
+      {
+        "id": "SLO-02",
+        "source": "BAU",
+        "title": "Latency SLO P99 < 2s",
+        "desc": "Predictive burn alert firing \u2014 14.2% budget remaining.",
+        "tool": "PromQL",
+        "tags": [
+          "SLO",
+          "at-risk"
+        ]
+      },
+      {
+        "id": "EBP-01",
+        "source": "BAU",
+        "title": "Error-budget policy (predict_linear)",
+        "desc": "24h forecast rule for burn. No explicit policy doc yet.",
+        "tool": "PromQL",
+        "tags": [
+          "policy"
+        ]
+      }
+    ],
+    "L2": [
+      {
+        "id": "COL-01",
+        "source": "BAU",
+        "title": "Prometheus scrape \u2014 12 targets",
+        "desc": "core-server, payment-processor, Kong, Grafana, Jaeger, OTEL Collector, Prometheus, RabbitMQ, Redis, kube-state-metrics, node-exporter \u00d72.",
+        "tool": "Prometheus",
+        "tags": [
+          "metrics",
+          "scrape"
+        ]
+      },
+      {
+        "id": "COL-02",
+        "source": "BAU",
+        "title": "OTel Collector pipeline",
+        "desc": "OTLP receive \u00b7 batch \u00b7 export to Jaeger + Prometheus.",
+        "tool": "OTel Collector",
+        "tags": [
+          "otel",
+          "pipeline"
+        ]
+      },
+      {
+        "id": "COL-03",
+        "source": "BAU",
+        "title": "Jaeger trace agent",
+        "desc": "Distributed trace ingest across service-* services. 19 spans/exchange.",
+        "tool": "Jaeger",
+        "tags": [
+          "traces"
+        ]
+      },
+      {
+        "id": "COL-04",
+        "source": "BAU",
+        "title": "Loki log shipping",
+        "desc": "promtail per node \u2192 Loki. Single-tenant.",
+        "tool": "Loki + promtail",
+        "tags": [
+          "logs"
+        ]
+      },
+      {
+        "id": "COL-05",
+        "source": "BAU",
+        "title": "Health-check probes",
+        "desc": "kube-state-metrics + node-exporter for cluster signals.",
+        "tool": "kube-state-metrics",
+        "tags": [
+          "health"
+        ]
+      },
+      {
+        "id": "STO-01",
+        "source": "BAU",
+        "title": "Prometheus TSDB (15d)",
+        "desc": "Local TSDB, 15-day retention. No remote_write yet.",
+        "tool": "Prometheus",
+        "tags": [
+          "storage",
+          "retention"
+        ]
+      },
+      {
+        "id": "STO-02",
+        "source": "BAU",
+        "title": "Jaeger storage backend",
+        "desc": "In-cluster trace store.",
+        "tool": "Jaeger",
+        "tags": [
+          "storage",
+          "traces"
+        ]
+      },
+      {
+        "id": "STO-03",
+        "source": "BAU",
+        "title": "Loki chunk store",
+        "desc": "Filesystem-backed, single tenant.",
+        "tool": "Loki",
+        "tags": [
+          "storage",
+          "logs"
+        ]
+      },
+      {
+        "id": "STO-04",
+        "source": "GAP",
+        "title": "Long-term metrics (>15d)",
+        "desc": "No Thanos / Mimir / remote_write. Audit & quarterly trend reporting blocked.",
+        "tool": "\u2014",
+        "tags": [
+          "retention",
+          "audit-blocker"
+        ]
+      }
+    ],
+    "L3": [
+      {
+        "id": "QRY-01",
+        "source": "BAU",
+        "title": "Recording rules \u2014 SLI burn",
+        "desc": "rate(...) and burn-rate windows materialized via Prometheus rules.",
+        "tool": "PromQL",
+        "tags": [
+          "recording"
+        ]
+      },
+      {
+        "id": "QRY-02",
+        "source": "BAU",
+        "title": "predict_linear forecasts",
+        "desc": "Drives LatencyBudgetExhaustion predictive alert.",
+        "tool": "PromQL",
+        "tags": [
+          "forecast"
+        ]
+      },
+      {
+        "id": "DASH-01",
+        "source": "BAU",
+        "title": "Grafana \u2014 Service Overview",
+        "desc": "Per-service latency, error rate, throughput.",
+        "tool": "Grafana",
+        "tags": [
+          "dashboard"
+        ]
+      },
+      {
+        "id": "DASH-02",
+        "source": "BAU",
+        "title": "Grafana \u2014 RabbitMQ + Redis",
+        "desc": "Queue backlog, broker health, cache hit ratio.",
+        "tool": "Grafana",
+        "tags": [
+          "dashboard"
+        ]
+      },
+      {
+        "id": "DASH-03",
+        "source": "BAU",
+        "title": "Grafana \u2014 SLO & Error Budget",
+        "desc": "Availability + latency budget burn-down.",
+        "tool": "Grafana",
+        "tags": [
+          "dashboard",
+          "SLO"
+        ]
+      },
+      {
+        "id": "QRY-03",
+        "source": "GAP",
+        "title": "Trace-to-log correlation queries",
+        "desc": "Manual correlation only. No exemplars wired.",
+        "tool": "\u2014",
+        "tags": [
+          "correlation"
+        ]
+      }
+    ],
+    "L4": {
+      "policy": [
+        {
+          "id": "POL-01",
+          "source": "BAU",
+          "title": "Burn-rate alerting policy (implicit)",
+          "desc": "Fast + slow burn rules baked into Prometheus rules. No separate policy spec.",
+          "tool": "Prometheus rules",
+          "tags": [
+            "SLO",
+            "policy"
+          ]
+        }
+      ],
+      "alerting": [
+        {
+          "id": "ALR-01",
+          "source": "BAU",
+          "title": "HighErrorRate",
+          "desc": "5xx > 5% over 5m, critical.",
+          "tool": "Alertmanager",
+          "tags": [
+            "alert",
+            "critical"
+          ]
+        },
+        {
+          "id": "ALR-02",
+          "source": "BAU",
+          "title": "ServiceDown",
+          "desc": "Scrape target down 1m, critical.",
+          "tool": "Alertmanager",
+          "tags": [
+            "alert",
+            "critical"
+          ]
+        },
+        {
+          "id": "ALR-03",
+          "source": "BAU",
+          "title": "PodNotReady",
+          "desc": "Currently firing on 2 stale pods (rollout artefacts).",
+          "tool": "Alertmanager",
+          "tags": [
+            "alert",
+            "firing"
+          ]
+        },
+        {
+          "id": "ALR-04",
+          "source": "BAU",
+          "title": "OOMKilled",
+          "desc": "Container OOM detection.",
+          "tool": "Alertmanager",
+          "tags": [
+            "alert"
+          ]
+        },
+        {
+          "id": "ALR-05",
+          "source": "BAU",
+          "title": "LatencyBudgetExhaustion",
+          "desc": "Predictive burn (predict_linear). Currently firing.",
+          "tool": "Alertmanager",
+          "tags": [
+            "alert",
+            "firing",
+            "SLO"
+          ]
+        },
+        {
+          "id": "ALR-06",
+          "source": "BAU",
+          "title": "ContainerCrashLooping",
+          "desc": "CrashLoopBackOff detection.",
+          "tool": "Alertmanager",
+          "tags": [
+            "alert"
+          ]
+        }
+      ],
+      "healing": [
+        {
+          "id": "HEAL-01",
+          "source": "GAP",
+          "title": "Runbook automation",
+          "desc": "No Argo Rollouts / Event-driven remediation wired. Manual ops.",
+          "tool": "\u2014",
+          "tags": [
+            "automation"
+          ]
+        },
+        {
+          "id": "HEAL-02",
+          "source": "GAP",
+          "title": "HPA / scale guardrails",
+          "desc": "No documented autoscaling triggers tied to SLOs.",
+          "tool": "\u2014",
+          "tags": [
+            "autoscale"
+          ]
+        },
+        {
+          "id": "HEAL-03",
+          "source": "GAP",
+          "title": "Circuit breakers / shedding",
+          "desc": "Kong has rate-limit, no SLO-coupled shedding.",
+          "tool": "\u2014",
+          "tags": [
+            "resilience"
+          ]
+        }
+      ]
+    },
+    "L5": [
+      {
+        "id": "VAL-01",
+        "source": "BAU",
+        "title": "Anomaly baselines (partial)",
+        "desc": "system skill exposes mean/stdDev span baselines. Trace + amount detectors active.",
+        "tool": "otel-mcp-server",
+        "tags": [
+          "anomaly"
+        ]
+      },
+      {
+        "id": "VAL-02",
+        "source": "GAP",
+        "title": "Chaos testing",
+        "desc": "No pod-kill / network-delay drills.",
+        "tool": "\u2014",
+        "tags": [
+          "chaos"
+        ]
+      },
+      {
+        "id": "VAL-03",
+        "source": "GAP",
+        "title": "Synthetic probes",
+        "desc": "No canary / journey probes.",
+        "tool": "\u2014",
+        "tags": [
+          "synthetic"
+        ]
+      },
+      {
+        "id": "VAL-04",
+        "source": "GAP",
+        "title": "MTTD/MTTR baselines",
+        "desc": "No tracked SLA on detect / resolve.",
+        "tool": "\u2014",
+        "tags": [
+          "SRE-metric"
+        ]
+      },
+      {
+        "id": "VAL-05",
+        "source": "GAP",
+        "title": "Daily conformance scan",
+        "desc": "No MUST/SHOULD scoring against the schema.",
+        "tool": "\u2014",
+        "tags": [
+          "conformance"
+        ]
+      }
+    ],
+    "GOV": [
+      {
+        "id": "GOV-01",
+        "source": "BAU",
+        "title": "MCP-driven on-demand reports",
+        "desc": "AI agent generates ad-hoc reports via 32 MCP tools across 6 skills.",
+        "tool": "otel-mcp-server",
+        "tags": [
+          "report"
+        ]
+      },
+      {
+        "id": "GOV-02",
+        "source": "BAU",
+        "title": "ZK proof verification logs",
+        "desc": "Groth16 proof verification stats \u2014 optional, depends on whether ZK is in scope.",
+        "tool": "zk-proofs",
+        "tags": [
+          "compliance",
+          "crypto"
+        ]
+      },
+      {
+        "id": "GOV-03",
+        "source": "GAP",
+        "title": "Conformance score (daily)",
+        "desc": "No automated MUST/SHOULD score.",
+        "tool": "\u2014",
+        "tags": [
+          "conformance"
+        ]
+      },
+      {
+        "id": "GOV-04",
+        "source": "GAP",
+        "title": "Audit evidence pipeline",
+        "desc": "No SOC2 / ISO27001 evidence export.",
+        "tool": "\u2014",
+        "tags": [
+          "audit"
+        ]
+      },
+      {
+        "id": "GOV-05",
+        "source": "GAP",
+        "title": "Incident & postmortem rollups",
+        "desc": "No MTTD/MTTR trend store.",
+        "tool": "\u2014",
+        "tags": [
+          "post-mortem"
+        ]
+      },
+      {
+        "id": "GOV-06",
+        "source": "GAP",
+        "title": "Cohort reports",
+        "desc": "No per-team / per-tier conformance rollups.",
+        "tool": "\u2014",
+        "tags": [
+          "cohort"
+        ]
+      }
+    ]
+  }
+}

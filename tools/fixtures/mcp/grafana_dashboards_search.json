@@ -1,0 +1,54 @@
+{
+  "count": 3,
+  "results": [
+    {
+      "id": 2401549135908864,
+      "uid": "kx-genai-operations",
+      "title": "GenAI Operations Overview",
+      "type": "dash-db",
+      "folderUid": "krystalinex",
+      "folderTitle": "KrystalineX",
+      "url": "/grafana/d/kx-genai-operations/genai-operations-overview",
+      "uri": "db/genai-operations-overview",
+      "tags": [
+        "ai-sre",
+        "genai",
+        "krystalinex",
+        "overview"
+      ],
+      "isStarred": false
+    },
+    {
+      "id": 2401551304364032,
+      "uid": "kx-predictive-finops",
+      "title": "KrystalineX Predictive & FinOps",
+      "type": "dash-db",
+      "folderUid": "krystalinex",
+      "folderTitle": "KrystalineX",
+      "url": "/grafana/d/kx-predictive-finops/krystalinex-predictive-and-finops",
+      "uri": "db/krystalinex-predictive-and-finops",
+      "tags": [
+        "finops",
+        "krystalinex",
+        "predictive"
+      ],
+      "isStarred": false
+    },
+    {
+      "id": 2401551702822912,
+      "uid": "krystalinex-unified",
+      "title": "KrystalineX Unified Observability 2026",
+      "type": "dash-db",
+      "folderUid": "krystalinex",
+      "folderTitle": "KrystalineX",
+      "url": "/grafana/d/krystalinex-unified/krystalinex-unified-observability-2026",
+      "uri": "db/krystalinex-unified-observability-2026",
+      "tags": [
+        "krystalinex",
+        "observability",
+        "unified"
+      ],
+      "isStarred": false
+    }
+  ]
+}

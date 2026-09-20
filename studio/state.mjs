@@ -15,6 +15,12 @@ export const state = {
   // Compare (two packs). Once chosen, mode becomes 'single' or 'compare'
   // and the header bar + tabs appear. Logo click returns to 'home'.
   mode: 'home',
+  // Which home renders: 'gate' (signed-in service picker) or 'hero'
+  // (the marketing/connect landing). Authenticated users with services
+  // land on the gate; local mode keeps the hero. Never persisted.
+  homeVariant: 'hero',
+  // /auth/me result (identity postures only; null in local mode).
+  identity: null,
   catalog: [],
   selectedService: null,
   selectedPackId: null,
@@ -39,8 +45,10 @@ export const state = {
   compileArtifactB: 'all',      // mirrors compileArtifact for B
   compileContentB: null,        // mirrors compileContent for B
   // Traceability view preferences (persisted via Direction 3). Keys are
-  // `${layer}::${key}` strings — see compareKeyOf. Suppressed findings
-  // are hidden from their bucket; resolved findings render as resolved.
+  // `${layer}::${behavioural identity key}` strings — see categorizeTrace
+  // in compare-view.mjs (collision entries append the artefact symbol).
+  // Suppressed findings are hidden from their bucket; resolved findings
+  // render as resolved.
   tracePrefs: { suppressed: [], resolved: [] },
   traceOpen: { aligned: false, declaredNotVerified: true, verifiedNotDeclared: true, stale: true },
   // Per-section Expand toggles — each L2/L3 section hides its detail-level
@@ -75,7 +83,7 @@ export const state = {
                                // provider.kind=grafana, anything whose mcp.source.<id>
                                // annotation came from a grafana_* tool, and any artefact
                                // that refs a surface backend). 'all' disables the filter.
-  diffScopeMode: '',           // '' means use Pack A's tomograph.diff.scopeMode annotation
+  diffScopeMode: '',           // '' means use Pack A's observogram.diff.scopeMode annotation
                                // or the service-scoped default. Otherwise:
                                // 'service' | 'family' | 'all'.
   diff: null,                  // last fetched /api/diff result

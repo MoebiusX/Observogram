@@ -1,6 +1,6 @@
 # MCP Integration
 
-Tomograph uses MCP for two jobs:
+Observogram uses MCP for two jobs:
 
 1. **Read live production posture** and reconstruct it as an ObservabilityPack.
 2. **Write selected remediation artifacts** back to the observability platform.
@@ -39,12 +39,12 @@ diagnostic-grade drift:
 | Metrics | metric inventory and names observed from the live platform |
 | Scrape jobs | Prometheus/VictoriaMetrics scrape evidence |
 | Recording rules | full rule names and expressions where the MCP exposes them |
-| Alert rules | Grafana/Prometheus alerting rules and burn-rate alerts |
+| Alert rules | Grafana/Prometheus alerting rules; burn-rate alerts are mapped from them per SLO, never synthesised |
 | Dashboards | Grafana dashboard metadata plus dashboard bodies, panels, variables, and targets |
-| Baselines | MTTD/MTTR and anomaly-derived evidence when available |
+| Baselines | none yet — MTTD/MTTR are platform defaults stamped `Scaffold`; anomaly baselines are only counted (`mcp.baselinesComputed`) |
 | Backend versions | observed platform products and versions |
 
-This is what lets Tomograph compare declared repo artifacts against live
+This is what lets Observogram compare declared repo artifacts against live
 production artifacts instead of only checking whether a live endpoint responded.
 
 ## Verification Annotations
@@ -57,28 +57,975 @@ metadata:
   annotations:
     mcp.refreshedAt: "2026-06-09T00:09:14.730Z"
     mcp.url: "https://otel-mcp.example.com/mcp"
-    mcp.toolsCalled: "system_health,vmalert_rules,grafana_dashboards_search,grafana_dashboard_get,metrics_label_values,metrics_targets"
-    mcp.toolsFailed: ""
+    mcp.toolsCalled: "system_health,vmalert_rules,metrics_label_values,metrics_targets"
+    mcp.toolsFailed: ""                              # core tools only; probe families are accounted below
+    mcp.toolsExposed: "system_health,vmalert_rules,metrics_label_values,metrics_targets,grafana_dashboards_search,…"
+    mcp.toolsExposedCount: "14"
+    mcp.toolsUnmatched: "logs_search"                # advertised, no probe pattern yet
     mcp.probesAttempted: "recording_rules,alert_rules,dashboards,metric_names,scrape_configs"
-    mcp.probesSucceeded: "recording_rules,alert_rules,dashboards,metric_names,scrape_configs"
-    mcp.probesEmpty: ""
-    mcp.probesFailed: ""
+    mcp.probesSucceeded: "recording_rules,alert_rules,metric_names,scrape_configs"
+    mcp.probesEmpty: ""                              # a probe answered with an empty list
+    mcp.probesFailed: "dashboards"                   # every candidate errored — a hole of unknown size
+    mcp.probesUnsupported: ""                        # e.g. "traces_services" when tools/list exposes no candidate — a restricted tier, not an outage
+    mcp.probeErrors.dashboards: "HTTP 502 Bad Gateway"   # last erroring candidate of a FAILED family only (trimmed to 200 chars)
 
-    mcp.verified.otel: "2026-06-09T00:09:14.730Z"
+    mcp.verified.otel.metrics: "2026-06-09T00:09:14.730Z"
     mcp.verified.telemetry.scrape: "2026-06-09T00:09:14.730Z"
-    mcp.verified.queries.recording_rules: "2026-06-09T00:09:14.730Z"
-    mcp.verified.dashboards: "2026-06-09T00:09:14.730Z"
-    mcp.verified.policy.burn_rate_alerts: "2026-06-09T00:09:14.730Z"
+    mcp.verified.pipelines.exporters.metrics: "2026-06-09T00:09:14.730Z"
+    mcp.verified.queries.recording_rules: "2026-06-09T00:09:14.730Z"      # aggregate: at least one rule earned an indexed stamp
+    mcp.verified.queries.recording_rules[0]: "2026-06-09T00:09:14.730Z"   # per rule, withheld when the ruler reports it unhealthy
+    mcp.verified.slis.svc_checkout_availability: "2026-06-09T00:09:14.730Z"   # withheld when a feeding rule is unhealthy
+    mcp.verified.slos.svc_checkout_availability_99_9: "2026-06-09T00:09:14.730Z"   # bound by a discovered burn-rate group (exact id or re-identified)
+    mcp.verified.policy.burn_rate_alerts[0]: "2026-06-09T00:09:14.730Z"  # per mapped entry, never unindexed
+    mcp.verified.dashboards: "2026-06-09T00:09:14.730Z"                   # aggregate
+    mcp.verified.dashboards.kx-genai-operations: "2026-06-09T00:09:14.730Z"   # per discovered dashboard (the symbol the adapter reads)
+
+    mcp.discovered.alert_rule_names: "svc_checkout_availability_99_9_burn_14x_5m_1h,..."
+    mcp.discovered.alert_rules_unmapped: "svc_payments_latency_99"
+    mcp.discovered.scrape_jobs: "node-exporter,grafana,otel-collector"
+    mcp.discovered.scrape_jobs_down: "alertmanager"
+    mcp.discovered.alert_rules_unhealthy: "HighLatencyP99"
+    mcp.discovered.slis_unhealthy: "svc_payments_latency"      # SLIs whose feeding recorded rule is unhealthy (only when non-empty; likewise recording_rules_unhealthy, alert_rules_severity_inferred)
+    mcp.observed.scrape_targets: '[{"job":"alertmanager","instance":"kx-alertmanager:9093","health":"down","lastScrape":"…","lastError":"dial tcp4 …: connection refused"}, …]'
+    mcp.observed.recording_rules: '[{"name":"finops:cpu:usage_per_pod_5m","health":"ok","lastError":null,"lastEvaluation":"…","evaluationTime":0.0009}, …]'
+    mcp.observed.alert_rules: '[{"name":"HighLatencyP99","health":"err","lastError":"…","lastEvaluation":"…","state":"inactive","activeAt":null}, …]'
+    mcp.baselinesComputed: "2"
+
+    mcp.scaffold.otel: "schema-required fallback; not attested by any MCP tool"
+    mcp.scaffold.pipelines.receivers[0]: "schema-required fallback; not attested by any MCP tool"
+    mcp.scaffold.pipelines.processors[0]: "schema-required fallback; not attested by any MCP tool"
+    mcp.scaffold.pipelines.exporters.logs: "schema-required fallback; not attested by any MCP tool"
+    mcp.scaffold.pipelines.exporters.traces: "schema-required fallback; not attested by any MCP tool"
+    mcp.scaffold.telemetry.backends.logs-elastic: "schema-required fallback; not attested by any MCP tool"
+    mcp.scaffold.alerting.routes[0]: "schema-required fallback; not attested by any MCP tool"
+    mcp.scaffold.baselines: "schema-required fallback; not attested by any MCP tool"
+    mcp.scaffold.policy.burn_rate_alerts[0]: "schema-required fallback; no burn-rate alerting rule discovered via MCP"
 ```
 
 The adapter promotes artifacts with matching `mcp.verified.<symbol>` keys to
-`Verified`. The Diagnostic Grade uses these annotations to decide whether a
-fresh live signal exists.
+`Verified`, and projects `mcp.scaffold.<symbol>` keys (the live-side
+counterpart of `crawler.scaffold.<symbol>`) as `Scaffold` — a schema-forced
+placeholder the MCP did not attest, parked by the grade rather than counted.
+The Diagnostic Grade uses these annotations to decide whether a fresh live
+signal exists.
+
+### Annotation reference
+
+Every key the fetcher writes, by family. Comma lists are capped at 64 names;
+JSON arrays (`annotationJson`) at 200 entries; error strings at 200 chars.
+
+| Key | Value | Meaning |
+|---|---|---|
+| `mcp.refreshedAt`, `mcp.url` | ISO time, URL | when and from where the pack was fetched (the caller's stamp — the studio's or the journey's) |
+| `mcp.fetchStartedAt` | ISO time | the fetcher's own clock: the instant this fetch began; the ladder's "now" for a family without `mcp.observedAt.<family>` (older packs fall back once more to `mcp.refreshedAt`, named in the detail) |
+| `mcp.observedAt.<family>` | ISO time | the instant each probe family answered (data or empty outcomes; `dashboards` re-stamped after detail enrichment) — "now" for the ladder's staleness judgement on that family's `mcp.observed.*`, so a `refreshedAt` trailing a fresh observation never reads stale |
+| `mcp.toolsCalled`, `mcp.toolsFailed` | comma list | core tools (`system_health`, …) called / errored |
+| `mcp.toolsExposed`, `mcp.toolsExposedCount`, `mcp.toolsUnmatched` | comma list, count | the `tools/list` inventory, and advertised tools with no probe pattern |
+| `mcp.probesAttempted` / `Succeeded` / `Empty` / `Failed` / `Unsupported` | comma list of probe families | outcome per family: answered with data / answered empty / every candidate errored / no candidate advertised by `tools/list` |
+| `mcp.probeErrors.<family>` | string | last erroring candidate's message, written only for a family whose outcome is `failed` (a family whose later candidate answered carries none — it is in `probesSucceeded`) |
+| `mcp.verified.<symbol>` | `refreshedAt` | the adapter projects the artefact as `Verified`; indexed for per-entry lists (`queries.recording_rules[<i>]`, `policy.burn_rate_alerts[<i>]`), per id for dashboards (`dashboards.<id>`, beside the aggregate `dashboards`) |
+| `mcp.scaffold.<symbol>` | note string (same convention as `crawler.scaffold.*`) | schema-forced placeholder no tool attested; projects as `Scaffold` |
+| `mcp.discovered.<family>` | count | array length of a probe's adapted result, `"0"` when it answered empty |
+| `mcp.discovered.scrape_jobs` / `scrape_jobs_down` | comma list of job names | jobs with at least one target up (or of unknown health) / jobs whose every target is down |
+| `mcp.discovered.recording_rules_unhealthy` / `alert_rules_unhealthy` | comma list of rule names | rules whose reported `health` is not `ok` |
+| `mcp.discovered.alert_rule_names` | comma list | every alerting rule name the MCP exposed |
+| `mcp.discovered.alert_rules_unmapped` / `alert_rules_severity_inferred` | comma list | burn-rate groups the schema cannot represent / rules whose severity came from the burn factor |
+| `mcp.discovered.metric_names`, `_count`, `_sample` | JSON, count, comma list | the metric inventory |
+| `mcp.discovered.dashboard_panels`, `dashboard_raw_json`, `dashboard_detail_errors` | counts, comma list | dashboard body capture |
+| `mcp.discovered.alerts_firing.*`, `recording_rules_via_inventory.*` | counts, names, source | `ALERTS` series and rule names recovered from the metric inventory |
+| `mcp.discovered.extended_surfaces`, `extended_surface_refs` | count, comma list | level-2 evidence surfaces |
+| `mcp.observed.scrape_targets` | JSON `[{job, instance, health, lastScrape, lastError}]` | every scrape target's on-wire health |
+| `mcp.observed.recording_rules` | JSON `[{name, health, lastError, lastEvaluation, evaluationTime}]` | every recording rule's evaluation state |
+| `mcp.observed.alert_rules` | JSON `[{name, state, health, lastError, lastEvaluation, activeAt, interval?, labels?}]` | every alerting rule's evaluation state; `interval` is the group evaluation interval when the ruler reports one (the alert adapter keeps it too), `labels` the burn-rate linkage labels the compiler stamps — `{ slo, burn_rate, window_short, window_long }`, present keys only, omitted when none — so the ladder links a live rule to its declared window by labels first, name second |
+| `mcp.servicesDiscovered`, `mcp.activeAnomalies`, `mcp.baselinesComputed` | comma list, counts | `system_health` / anomaly tools answered (not a measurement of anything in `spec.baselines`) |
+| `mcp.capabilities.*`, `mcp.versions.<product>[.*]` | strings | `backend_capabilities` inventory and observed product versions |
+| `mcp.stack.status` | `sampled` \| `not-attempted` | the stack self-metrics panel (step 2, "Stack self-metrics (sampling)"): whether it was sampled at all — signals, never verdicts; written whenever the fetcher ran the step-2 sampler (a caller that predates step 2 writes nothing) |
+| `mcp.stack.reason` | string | only when `not-attempted`: why (`metrics_query not exposed by this MCP (restricted tier)`) |
+| `mcp.stack.sampled` / `empty` / `failed` / `notInInventory` / `notAttempted` | counts (strings) | rows per outcome (`data` rows are `sampled`) |
+| `mcp.stack.families` | comma list of `<family>:<best outcome>` | best outcome per family, `data > empty > failed > not-in-inventory > not-attempted` |
+| `mcp.observed.stack_metrics` | JSON `[{id, family, product, expr, value, unit, direction, at, outcome, reason?}]` | attempted and `not-in-inventory` rows (cap 64); `not-attempted` rows are counted, not listed |
+| `mcp.observed.alertmanager` | JSON `{version, uptime, clusterStatus, silences, error?}` | written when `alertmanager_status` / `alertmanager_silences` was ADVERTISED; `error` carries the trimmed failure of an advertised tool that did not answer — a failure, not a tier limit |
+| `mcp.observed.grafana.datasources`, `mcp.observed.grafana.contact_points` | JSON `[{uid, name, type, health: ok\|error\|unknown, message}]`, `{count, names}` | `unknown` health means NOT CHECKED (health tool not exposed / errored / beyond the 10-uid cap), never "not unhealthy" |
+| `mcp.observed.grafana.error` | string | the trimmed failure of an advertised Grafana status tool that did not answer |
+| `mcp.observed.alertmanager` | JSON `{version, uptime, clusterStatus, silences: {active, total} \| null}` | Alertmanager status surface (`alertmanager_status` + `alertmanager_silences`) |
+| `mcp.observed.grafana.datasources` | JSON `[{uid, name, type, health, message}]` | Grafana datasources with their health (`ok` \| `error` \| `unknown`, message trimmed to 200 chars) |
+| `mcp.observed.grafana.contact_points` | JSON `{count, names}` | Grafana contact points (names capped at 32) |
+
+### What the fetcher invents, and how it says so
+
+The pack schema forces sections no MCP tool can attest. Every such entry the
+fetcher has to invent is stamped `mcp.scaffold.<symbol>` (the symbol is the
+one the adapter passes to `sourceOf`) and never `mcp.verified.<symbol>`:
+
+| Placeholder | Symbol | Becomes `Verified` when |
+|---|---|---|
+| `spec.otel` (semconv, SDK languages, sampling, propagators) | `otel` | never — only `otel.metrics` is stamped, from the metric inventory |
+| Collector receiver / processors | `pipelines.receivers[0]`, `pipelines.processors[<i>]` | never |
+| Logs / traces exporters | `pipelines.exporters.logs`, `pipelines.exporters.traces` | never |
+| Metrics exporter | `pipelines.exporters.metrics` | scrape targets or a metric inventory came back |
+| Fallback backends (no `backend_capabilities`) | `telemetry.backends.metrics-prom` / `logs-elastic` / `traces-jaeger` | a `*_build_info` capture for prometheus/victoriametrics/mimir; the topology names jaeger or `traces_services` answered; never for elasticsearch |
+| Per-service availability SLI/SLO guesses, `platform_availability` | `slis.<id>`, `slos.<id>` | never as guesses — SLIs inferred from real recorded rules are `Verified` (unless a feeding rule is unhealthy); an SLO bound by a discovered burn-rate group — exact id or re-identified — drops its scaffold marker and is `Verified` unless that group is fed by an unhealthy rule (then `Declared`) |
+| Dashboard stub | `dashboards.platform-overview` | never (discovered dashboards replace it, each stamped `dashboards.<id>`) |
+| SEV1 → Teams route | `alerting.routes[0]` | never |
+| Baselines | `baselines` | never |
+| Burn-rate placeholder | `policy.burn_rate_alerts[0]` | never (mapped rules replace it) |
+
+`spec.baselines` is always the platform default for the declared criticality
+(`measurement_source: platform-default`). Earlier builds derived
+`mttd_target_p50` from the smallest `anomalies_baselines` `thresholdMs` — a
+latency-anomaly threshold is not a time-to-detect target, so that derivation is
+gone. `mcp.baselinesComputed` still counts the anomaly baselines the tool
+returned: it is evidence the tool answered, **not** an MTTD measurement.
+
+Known limitation: SLOs inferred from recorded rules carry a placeholder
+objective (`0.99`) and window (`30d`) unless a discovered burn-rate group
+binds them (exact id or re-identification, which also applies the rule's
+`slo_objective` / `slo_window` evidence); the SLI is `Verified` (the recorded
+series exist and evaluate), the SLO stays `Declared` — the rule evidences the
+measurement, the objective is a guess until a burn-rate rule names it.
+
+### On-wire liveness: scrape targets and rule health
+
+Existing is not the same as working. The probes keep what the MCP reports
+about whether each artefact is currently doing its job, and the fetcher
+withholds `Verified` where it is not:
+
+| Signal | Annotation | Effect on evidence |
+|---|---|---|
+| Every scrape target's `job`, `instance`, `health`, `lastScrape`, `lastError` (trimmed to 200 chars; at most 200 entries) | `mcp.observed.scrape_targets` (JSON) | none — the record |
+| Scrape jobs with at least one target `up` (or of unknown health) | `mcp.discovered.scrape_jobs` | attest `telemetry.scrape` and `pipelines.exporters.metrics` |
+| Scrape jobs whose **every** target is `down` | `mcp.discovered.scrape_jobs_down` | no stamp; when no job is up the metrics exporter falls back to its scaffold marker |
+| Each recording rule's `health`, `lastError`, `lastEvaluation`, `evaluationTime` (at most 200) | `mcp.observed.recording_rules` (JSON) | none — the record |
+| Recording rules whose reported `health` is not `ok` | `mcp.discovered.recording_rules_unhealthy` | no `mcp.verified.queries.recording_rules[<i>]` stamp for that index (the rule still lands in `spec.queries`, projected `Declared`); the group stamp `mcp.verified.queries.recording_rules` is kept only when at least one rule is healthy or carries no health |
+| Each alerting rule's `state`, `health`, `lastError`, `lastEvaluation`, `activeAt` (at most 200) | `mcp.observed.alert_rules` (JSON) | none — the record |
+| Alerting rules whose reported `health` is not `ok` | `mcp.discovered.alert_rules_unhealthy` | a burn-rate group fed by such a rule still maps but earns no `mcp.verified.policy.burn_rate_alerts[<i>]` stamp (projected `Declared`), and the SLO it bound is not stamped either; the requirement chain lists the rule with `verified: false` / `health: err` and does not let it close `missing_alert_evidence` |
+| SLIs inferred from recorded rules of which at least one is unhealthy | `mcp.discovered.slis_unhealthy` | no `mcp.verified.slis.<id>` stamp (projected `Declared`) — an SLI whose total/ratio series are not being produced is not measuring anything |
+
+Health the ruler did not report reads `null` in the observed arrays and is
+**not** treated as unhealthy — only an explicit non-`ok` health withholds a
+stamp. Older probe results that carried only job names still count as
+(health-less) scrape evidence. The draft summary in the studio lists
+`N scrape jobs down: …` and `N rules unhealthy: …` when either is non-empty.
+
+Rule health is keyed by rule NAME with any-unhealthy-wins semantics: when the
+ruler reports the same name from two groups (one evaluating, one failing) the
+rule is unhealthy, so neither spec entry is stamped and the SLI inferred from
+it stays `Declared`.
+
+The requirement-chain comparison reads the same annotations a second time,
+for the **per-node ladder** beside each node's scored status
+(`docs/TRACEABILITY_GRAPH_COMPARISON_SPEC.md` §5b — additive, unscored): is
+the artefact merely present, doing its job, or could the vantage not look at
+all. Which annotation feeds which rung:
+
+| Annotation | Node kind | Ladder reading |
+|---|---|---|
+| `mcp.observed.scrape_targets` (matched by `job`) | `scrape_job` | `healthy` when every target is `up` and `lastScrape` is within 2× the declared interval at the observation clock; `alive` when health is not reported, and when only SOME targets are down (`n/m targets down: <instances>` — a down target's `lastError` is not the job's); `present_unhealthy` when EVERY target is down (the fetcher's `scrape_jobs_down` rule); `present_stale` when the newest `lastScrape` is older than 2× the interval |
+| `mcp.discovered.scrape_jobs_down` | `scrape_job` | `present_unhealthy` even when the job was withheld from Pack B (`declared_only` on the scored side) — on the wire beats absent |
+| `mcp.observed.recording_rules` (by `name`) + `mcp.discovered.recording_rules_unhealthy` | `recording_rule` | the same rules on `health` / `lastError` / `lastEvaluation` against the declared interval |
+| `mcp.observed.alert_rules` + `mcp.discovered.alert_rules_unhealthy` | `burn_rate` | linked by the observation's `labels` (`slo`, `burn_rate`, `window_short`, `window_long`) first, then by the compiler's `<slo>_burn_<factor>x_<short>_<long>` name convention on the SLO id (fractional factors accepted: `_burn_14_4x_` ↔ 14.4), narrowed to the declared windows — the `alert_rules_unhealthy` list is narrowed the same way and the detail names the matched / failing rule(s); judged stale against the longest linked `interval` when the entries carry one |
+| `mcp.discovered.slis_unhealthy` | `sli` | `present_unhealthy`; otherwise `exists` ("liveness rides on its recording rules") |
+| `mcp.versions.<product>` | `backend` | `alive` when the product answered its version probe |
+| `mcp.probesFailed` / `mcp.probesUnsupported` (+ `mcp.probeErrors.<family>`) | a declared kind absent from Pack B | `unobserved` when the family that would carry the kind failed or is not exposed (`scrape_configs`, `recording_rules`, `alert_rules`, `metric_names`, `dashboards`; sli / slo need both `recording_rules` and `metric_names` gone) — the vantage could not look, never "absent" |
+| `mcp.observedAt.<family>`, else `mcp.fetchStartedAt`, else `mcp.refreshedAt` | all | "now" for the staleness judgement — the instant the family answered, the fetch's own clock, or (older packs) the caller's refresh stamp, named in the detail only on that last fallback. No interval means `healthy` / `alive` only within a 1 h ceiling ("interval unknown; 1 h ceiling applied"), older reads `present_stale`; a timestamp more than 1 s past "now" reads `alive` with "timestamp <n>s in the future (clock skew); freshness not judged", never `healthy`; no clock at all means staleness is not judged ("no fetch timestamp on the wire (mcp.refreshedAt missing)" when the observation has a timestamp and the pack has none) |
+
+A pack without any `mcp.` annotation reads `exists` for every present node
+("no on-wire liveness"). A reported health of `unknown` stays
+`present_unhealthy` (consistent with the fetcher's unhealthy lists), and
+`ladderVerdict` ignores `live_only` nodes as the scored verdict does.
+Nothing the ladder reads changes `integrity`, `verdict`, node `status` or
+the grade; the switch is a proposal
+(`docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md`).
+
+### Burn-rate alerts are mapped, never synthesised
+
+`spec.policy.burn_rate_alerts` is built only from the alerting rules the MCP
+actually exposes. Rules emitted by the Observogram compiler carry the
+`slo`, `burn_rate`, `window_short`, `window_long` and `severity` labels; any
+other rule is recognised by the compiler's `<slo>_burn_<N>x_<short>_<long>`
+name. Rules are grouped per SLO (identical windows deduplicated, short window
+first) and each emitted entry is stamped `mcp.verified.policy.burn_rate_alerts[<i>]`.
+
+- Groups are resolved in two passes. A group whose id exactly matches an
+  inferred SLO binds it first and claims it. Only then does a group that
+  merely shares an SLI base (inferred `svc_checkout_availability_99` vs.
+  discovered `svc_checkout_availability_99_9`) re-identify a still-unclaimed
+  placeholder to the discovered id — so with tiered SLOs on one SLI (`_99`
+  and `_99_9`) the exact group keeps its SLO and the other is reported
+  unmapped, never a dangling `slo` ref. Both paths replace the placeholder
+  objective/window from the rule's `slo_objective` (`99.900%` → `0.999`) and
+  `slo_window` annotations, drop the SLO's scaffold marker and stamp
+  `mcp.verified.slos.<id>` — unless the group is fed by an unhealthy rule.
+  A re-id is refused (group unmapped) when the discovered id is not a valid
+  schema Slug (`^[a-z][a-z0-9_-]*[a-z0-9]$`, at most 64 chars).
+- Forecast rules (`labels.kind=forecast`) and plain threshold alerts are not
+  burn-rate alerts; their names still surface in `mcp.discovered.alert_rule_names`.
+- A burn group for an SLO nobody inferred, or one with a single window (the
+  schema requires two), is not representable and is listed in
+  `mcp.discovered.alert_rules_unmapped` instead of being padded.
+- A rule with no recognisable severity gets one from its burn factor
+  (`>= 10x` SEV1, `>= 5x` SEV2, else SEV3) and is listed in
+  `mcp.discovered.alert_rules_severity_inferred`.
+- When nothing maps, the schema still forces one entry: a two-window
+  placeholder on the first SLO, stamped `mcp.scaffold.policy.burn_rate_alerts[0]`
+  and never `Verified`.
 
 Dashboard search alone is not enough for diagnostic drift. The fetcher uses
 `grafana_dashboards_search` to find dashboard UIDs, then calls
-`grafana_dashboard_get` for each UID so Tomograph captures panels, variables,
+`grafana_dashboard_get` for each UID so Observogram captures panels, variables,
 targets, and sanitized dashboard JSON.
+
+### Journeys read the vantage, and can gate on it
+
+A saved journey (`tools/lib/journey.mjs`, `packc journey run`) whose Pack B is
+an `mcp:` source reads the annotations above into its run record:
+
+| Record field | Source annotations |
+|---|---|
+| `probes.attempted / succeeded / empty / failed / unsupported` | `mcp.probesAttempted`, `mcp.probesSucceeded`, `mcp.probesEmpty`, `mcp.probesFailed`, `mcp.probesUnsupported` (family names) |
+| `probeErrors.<family>` | `mcp.probeErrors.<family>` |
+| `vantage` | derived — `full` / `partial` / `restricted` / `lost` / `none` (same rule as `partialLiveEvidence`) |
+| `toolsExposedCount` | `mcp.toolsExposedCount` (`null` when absent) |
+| `scrapeJobsDown` | count of `mcp.discovered.scrape_jobs_down` |
+| `unhealthyRules` | count of `mcp.discovered.recording_rules_unhealthy` + `mcp.discovered.alert_rules_unhealthy` |
+
+A file-sourced Pack B carries none of these: the lists are empty, the counts
+`0`, the vantage `none` — absence of evidence is reported as absence.
+
+Two gate keys act on them:
+
+```yaml
+gate:
+  failOnPartialEvidence: true   # breach when any probe family FAILED (a hole of unknown size),
+                                # or when the vantage is entirely lost; EMPTY and UNSUPPORTED
+                                # families never breach on their own
+  maxUnhealthy: 0               # breach when scrapeJobsDown + unhealthyRules exceeds N
+```
+
+When the fetch itself fails (endpoint unreachable, core tools unavailable) the
+journey writes a run record with `outcome: vantage-lost` and the error before
+rethrowing — the CLI still exits `2`, the studio still answers 502 — so a total
+loss of the observation point shows in the drift history instead of leaving a
+gap. Configuration errors (missing pack file, unset `authEnv`) never reach the
+wire and leave no record.
+
+The journey grades on the same construct as the studio: the requirement-chain
+comparison (`comparePackBranches`) is attached to the diff as
+`traceabilityGraph` before `computeDiagnosticGrade`, and the record's
+`grade.driftConstruct` says which construct scored Drift-free
+(`requirement-chain` when declared commitments exist, else `diff-buckets`).
+
+#### Run-history retention
+
+Every run appends one JSON record under `runs/<journey>/` in the workspace;
+the filename is the ISO start time, so lexical order is chronological order.
+Continuity is the goal (a cron cadence of minutes is the intended use), so
+the directory is bounded: after each write `writeRunRecord` prunes it to the
+newest `OBSERVOGRAM_JOURNEY_RUN_RETENTION` files (`brandEnv`, legacy
+`TOMOGRAPH_*` spelling honoured; default `1000`; `0` = unlimited; anything
+that is not a non-negative integer falls back to the default). The policy is
+the pure `pruneRunFiles(files, keep)` (returns the names to delete, oldest
+first; only names of the run-record shape `JOURNEY_RUN_FILE_RE` —
+`<ISO start time with : and . as ->.json` — are candidates or counted, so a
+hand-dropped `notes.json` neither displaces a record nor is deleted) and the knob is read at
+write time by `journeyRunRetention()`. A file that cannot be deleted is
+recorded on the run as `historyError`, never thrown — the verdict already
+exists. `readJourneyRuns(name, { limit })` is unchanged: newest first, at
+most `limit` parsed.
+
+#### Stack-health evidence on the run record (`stackEvidence`)
+
+Next to the step-2 `stack` counts, each record keeps the samples the run saw
+so the history is the time series (step 3). `stackEvidence` is `null` when
+Pack B carries no `mcp.stack.status` (file-sourced, or a pre-step-2
+refresh) — never an empty "healthy" panel — and otherwise:
+
+| Field | Source | Notes |
+|---|---|---|
+| `status`, `reason` | `mcp.stack.status`, `mcp.stack.reason` | `not-attempted` keeps its reason (a restricted tier reads not-attempted, never absent) |
+| `rows[]` | `mcp.observed.stack_metrics` (cap 64) | `{ id, family, product, value, unit, direction, outcome, hint, at, referenceSli, reason? }` — `expr` is dropped; `hint` is the contracts' display-only `displayHint` and `referenceSli` the table's reference-pack SLI, both looked up by `id` in `STACK_SELF_METRIC_PROBES`; a row the table no longer declares keeps `referenceSli: null` |
+| `alertmanager` | `mcp.observed.alertmanager` | `{ version, clusterStatus, silencesActive, error }` or `null` when the surface was not advertised |
+| `grafana` | `mcp.observed.grafana.datasources` / `.contact_points` / `.error` | `{ datasources, unhealthyDatasources: [names], contactPoints, error }` or `null`; only a health verdict of `error` is unhealthy (`unknown` was never checked) |
+
+Malformed JSON in any of those annotations degrades to `rows: []` /
+`null` for that surface — the status survives, nothing is fabricated. A row
+outcome the contracts do not declare is kept verbatim (a missing one reads
+`unknown`) — never relabelled as a probe failure nothing reported; it is
+still never `data`. The `stack` gate key below is the only *gate* reader
+(the history helpers, `GET /api/journeys` and the studio chips read the
+record too, none of them as a verdict); a sample stays a signal, and a
+breach is an early warning, not a verdict.
+
+#### Gate key `stack`: thresholds on the samples
+
+```yaml
+gate:
+  stack:
+    requireSampled: true          # breach unless the panel was sampled AND a row answered data
+    rows:                         # per row id of STACK_SELF_METRIC_PROBES (case-sensitive)
+      scrape_success_ratio: { min: 0.9 }
+      scrape_targets_down: { max: 0 }
+      tsdb_active_series: { max: 2000000 }   # an `info` row may carry a threshold too
+```
+
+`loadJourneyDef` validates the block (`validateGateStack(stack, name)`):
+an unknown row id throws `journey <name>: gate.stack.rows names unknown row
+<id>; known rows: …`, `min` / `max` must be finite numbers when present, an
+entry with neither is refused (nothing to check), `min > max` is refused,
+and `requireSampled` must be a boolean. `POST /api/journeys/capture` runs
+the same validation on a captured gate before saving (400 with the message),
+so a capture never creates a journey that cannot load; a definition on disk
+that fails to load is still listed by `GET /api/journeys` with `loadError`
+(and by `packc journey list` as `definition does not load: …`) rather than
+looking like a healthy never-run journey. The studio's capture default gate
+stays `{ minAlignmentPct: 85 }`; the block is opt-in and every existing key
+is unchanged.
+
+`evaluateGate` reads `facts.stackEvidence` and breaches with the criteria
+`stack` and `stack.<id>`:
+
+| Condition | Criterion | Detail |
+|---|---|---|
+| `requireSampled` and `stackEvidence` is `null` (file-sourced B) | `stack` | `stack self-metrics not sampled (Pack B is not a live draft) — the vantage cannot prove stack health` |
+| `requireSampled` and `status` is `not-attempted` | `stack` | `stack self-metrics not sampled (<reason>) — the vantage cannot prove stack health` |
+| `requireSampled` and no row has outcome `data` | `stack` | `stack self-metrics not sampled (sampled, but no row answered with data) — …` |
+| `rows.<id>` and the entry is not a finite band (a bound that is not a finite number, neither bound, `min > max`, not a mapping) — a gate object composed without `loadJourneyDef` | `stack.<id>` | `threshold invalid (<why>) — cannot be checked` |
+| `rows.<id>` and the row's outcome is not `data` (or `data` with no number) | `stack.<id>` | `no sample for <id> (<outcome>[: reason]) — threshold cannot be checked` |
+| `rows.<id>` and the row is absent from the record | `stack.<id>` | `no sample for <id> (no stack evidence)` for a file-sourced B; `no sample for <id> (not-attempted: <reason>)` on a not-attempted panel (the tier reason, so the breach reads as a tier limit, not a fetch hole); `no sample for <id> (not attempted by the sampler — call budget exhausted or row not observed)` on a sampled panel |
+| `rows.<id>` and `value < min` or `value > max` | `stack.<id>` | `<id> = <value> <unit> outside [min … max] — point-in-time sample, not an SLO verdict`; when display rounding prints the value equal to the bound it broke (`0.0004/s` against `max: 0`) the raw number follows: `<id> = 0.000/s (raw 0.0004) per-second outside [-∞ … 0.000/s]` |
+
+Honesty rules: thresholds compare numbers only and equality passes
+(`< min` / `> max`); a file-sourced Pack B never breaches `stack.rows` unless
+a threshold is declared — then it breaches with `no sample (no stack
+evidence)` instead of passing by absence; nothing here touches the grade or
+creates a `Verified` stamp. Values print through the pure
+`formatStackValue(value, unit)` (`ratio` → `83.3%`, `per-second` →
+`0.004/s`, `per-hour` → `0.0/h`, `seconds` → `7.4s`, `count` → `1`; a
+non-number prints `—`), bounds in the same unit.
+
+Surfaces: `renderJourneyMarkdown` adds a `Stack self-metrics — point-in-time
+samples` table (`id | family | value unit | outcome | hint | reference SLI`,
+capped at 24 rows, only when the run has rows) and lists stack breaches
+with the others; `packc journey list` appends `stackStatusLine(record)` —
+`stack sampled N` (rows that answered data), `stack not attempted`, or
+`stack none` — to each line.
+
+#### History helpers: the run history as a time series
+
+`tools/lib/stack-evidence.mjs` is the browser-safe reader of that history
+(pure functions, imports only the contracts table; the studio loads it
+from `/lib/stack-evidence.mjs`, the server and a vendoring studio import
+it directly — see `docs/VENDORING.md`):
+
+| Helper | Returns | Honesty rule |
+|---|---|---|
+| `stackSeries(runs, rowId)` | oldest → newest `[{ at, value, outcome, hint }]` for one row (`runs` may be newest-first as `readJourneyRuns` returns them; sorted by `startedAt`) | a run without `stackEvidence` or without that row is a gap and is skipped, never interpolated; a non-data outcome is kept with `value: null` so the series shows when the probe stopped answering |
+| `latestByFamily(record)` | `{ <family>: { id, value, unit, direction, outcome, hint, referenceSli, reason? } }` | per family the row that answered `data` (with a number) wins; among data rows the early-warning signal surfaces first — a `nonzero` hint, then a row the table declares before a retired one, then `lower` before `higher` / `info` — and the contracts table order breaks the rest, so a leading `higher` / `info` row (`scrape_success_ratio`, `tsdb_active_series`) never hides a lower-is-better row that carries signal; among non-answers the table order decides; `{}` without evidence |
+| `stackSummary(record)` | `{ status, reason, sampled, families }` or `null` | `null` when the record has no `stackEvidence` — an absence, never a healthy stack; `sampled` counts rows that answered data |
+| `nonzeroRuns(series)` | count of data samples with the display hint `nonzero` | a count of runs, not a verdict — "nonzero in N of the last M runs" is an early-warning phrase |
+| `stackPostureBudget(series, { objective, cadenceMs, windowMs, isBad? })` | `{ samples, bad, fraction, allowance, measurable, note }` | the cadence heuristic: the window allows `(1 − objective) × window / cadence` bad samples and a sampled posture is only `measurable` when that allowance is ≥ 10 (99.99 % over 30 d at a 15 min cadence allows 0.29 — not measurable; 99 % over 7 d at 5 min allows 20.16 — measurable); `fraction = good / samples`, `null` with no data sample; the note says "signal, not verdict" in every branch |
+| `formatStackValue(value, unit)`, `stackOutcomeLabel(outcome)` | the shared display vocabulary (`83.3%`, `0.004/s`, `0.0/h`, `7.4s`, `1`, `—`; `empty` / `probe failed` / `not in inventory` / `not attempted`) | one formatter for the CLI, the report and the studio |
+
+Surfaces: `GET /api/journeys` puts `stackSummary(lastRun)` on
+`lastRun.stack` (`null` for a file-sourced B); the studio's Journeys view
+renders a `stack self-metrics — point-in-time samples` line under each
+card — one chip per family (value in its unit, or the honest non-answer),
+the `nonzero` hint as a muted marker, the row id and reference SLI in the
+chip's title, and for lower-is-comfortable rows `nonzero in N of last M
+runs` over the 20 fetched runs; a `not-attempted` panel is one muted chip
+with the reason; a `sampled` panel where no row answered is one muted
+`sampled, but no row answered` chip. No chip carries an ok/error colour: a
+sample is a signal, and the runs table lists `stack` / `stack.<id>`
+breaches like any other. The families are always taken from the newest
+fetched run — an older run's evidence never stands in for a last run that
+carried none (vantage lost, file-sourced B), so a file-vs-file journey
+renders no stack line at all. The view loads the helper module at call
+time from the server's `/lib` mount; a host that does not mount
+`tools/lib` at `/lib` still renders the chips from `lastRun.stack`
+(families only: no `nonzero in N of last M runs` history, and values print
+as raw numbers — a ratio reads `0.95`, not `95.0%` — because the formatter
+lives in the helper module). A card whose definition fails to load shows
+`definition does not load: <loadError>` under its meta line.
+
+#### Requirement chains on the run record (`branches`, `chains`, `versions`)
+
+Step 4 keeps, per run, what the requirement-chain comparison saw — the
+scored verdict and the on-wire ladder verdict per chain, and the nodes worth
+recording with their blast radius — so the history can say what changed and
+a snapshot of Pack B can be kept for the runs that explain a change. The
+helpers live in the zero-import `tools/lib/chain-history.mjs` (vendorable,
+`docs/VENDORING.md`); the runner writes the fields right after
+`traceability`:
+
+| Field | Shape | Notes |
+|---|---|---|
+| `branches[]` | `{ rootKey, title, rootKind, verdict, ladderVerdict, integrityPct, ladderIntegrityPct, confidence, missingRoles: [names], degraded: [node], truncated? }` — `branchRecordsFromGraph(diff.traceabilityGraph)` | one per chain in the graph's order; `[]` when the graph has none. `verdict` / `integrityPct` / node `status` are copied from the graph verbatim; the ladder fields ride beside them, unscored |
+| `branches[].degraded[]` | `{ key, kind, label, status, ladder: { rung, status, detail } \| null, blastRadius: { slos, alerts, panels, dashboards, routes, remediations, total } \| null, deltaFields: [field], aId, bId }` | only nodes whose scored status is `declared_only` / `drifted` / `live_only` or whose ladder status is `present_unhealthy` / `present_stale` / `unobserved`; aligned-and-healthy nodes and `unverifiable` ones (an honest blind spot of the vantage, not a degradation) are not recorded. Worst first: absent, present-but-unhealthy, present-but-stale, drifted, unobserved (reported after the wire's own findings), live-only; ties by blast-radius total then label. `blastRadius` is structural exposure — what WOULD go blind if the node died — never a claim that it is blind. `aId` / `bId` are the adapter's artefact ids on each side (`QRY-01`, `DASH-02`, …; `null` when the side has no artefact) so a deploy item naming an artefact by id matches exactly on the persisted record |
+| caps | 64 branches × 16 nodes × 6 delta fields (`BRANCH_RECORD_CAPS`) | a cut node list sets `truncated: true` on the branch; a cut branch list marks the in-memory array only (JSON drops it — a persisted record of exactly 64 branches may have been cut) |
+| `chains` | `{ declaredTotal, intact, partial, broken, undeclared, ladder: { healthy, degraded, broken, unobserved }, integrityPct, ladderIntegrityPct, degradedNodes, undeclaredNodes, topExposure: { label, kind, slos, alerts } \| null }` — `chainSummary({ branches })` | counts over the declared chains; the integrities are means of the recorded per-branch percentages and `null` with no declared chain (an empty set is not 100 % healthy); `degradedNodes` counts the recorded nodes of the DECLARED chains and `topExposure` is the one of them that would blind the most SLOs (then alerts, then total), `null` when none would blind an SLO or an alert; the live-only nodes of undeclared chains are inventory, not degraded assurance — counted apart as `undeclaredNodes`, never the top exposure. `GET /api/journeys` recomputes it from the record with the same function |
+| `versions` | `{ <product>: <version> }` or `null` — `liveVersions(canonicalB)` | the bare `mcp.versions.<product>` keys only (the provenance keys `mcp.versions.<product>.source` / `.commit` are not versions); `null` for a file-sourced B or when no version probe answered — an absence, never "unchanged" |
+
+The markdown report prints a `Requirement chains` table (`chain | verdict
+| ladder | integrity | ladder integrity | worst node`, capped at 24 rows,
+the worst node being the first of the branch's degraded list with its ladder
+detail and `blinds N SLOs`) only when the record carries chains — no table
+means none were declared or recorded, never that every chain is intact.
+
+#### Live-pack snapshots (`keepLivePack`, `livePack`)
+
+A run can keep Pack B's canonical JSON beside its record, so a transition in
+the history can be re-read against the pack it was observed on. The
+definition key decides:
+
+```yaml
+keepLivePack: transitions   # transitions (default) · always · never
+```
+
+`loadJourneyDef` refuses any other value (`keepLivePack must be one of
+transitions, always, never`). The pure, exported `livePackDecision({ policy,
+previousRun, transition, outcome, packBIsFile, packBSource })` is applied in
+this order — the first rule that fires names the reason on the record:
+
+| Rule | `kept` | `reason` |
+|---|---|---|
+| Pack B is a file | `false` | `Pack B is a file (<source>)` — the file is the snapshot, whatever the policy |
+| `never` | `false` | `keepLivePack: never` |
+| `always` | `true` | `keepLivePack: always` |
+| no previous record | `true` | `first run (no previous record)` |
+| the previous record lost its vantage | `true` | `previous run <startedAt> lost its vantage` |
+| the previous record carries no chains (pre-chain record) | `true` | `previous run <startedAt> carries no chain record to compare` — a snapshot nobody can compare against is cheaper than a transition nobody can explain |
+| `transition.any` | `true` | `chains changed since <startedAt>: N changed · N appeared · N disappeared` |
+| `outcome` is `gate-failed` | `true` | `gate failed` |
+| otherwise | `false` | `no transition since <startedAt>` |
+
+An unknown policy value reaching the decision reads as the default. A kept
+run writes `runs/<journey>/live/<record stem>.json` (the record's own
+filename stem — `LIVE_PACK_PATH_RE`) and records `livePack: { kept: true,
+path: 'live/<stem>.json', bytes, reason }`; a run that keeps nothing records
+`{ kept: false, path: null, reason }`. A snapshot write failure lands on the
+record as `historyError`, never thrown — the verdict already exists — and
+`livePack` then reads `{ kept: false, path: null, reason: 'snapshot write
+failed: <error>' }`, never the policy that asked for the snapshot. `never`
+writes none from now on; snapshots earlier runs kept stay until their
+records age out of retention.
+`readLivePack(name, record)` parses a snapshot back and is `null` when the
+record kept none, `livePack.path` is not the snapshot shape (a hand-edited
+path cannot point outside the journey's `live/` directory), or the file is
+gone or unparseable — a pruned snapshot reads as absent, never as an error.
+
+Retention is unchanged (`OBSERVOGRAM_JOURNEY_RUN_RETENTION`,
+`JOURNEY_RUN_FILE_RE`; `readJourneyRuns` reads only run-shaped files — a
+stray `notes.json` is never a record — and still ignores `live/`) and now
+also prunes retention victims: after the record prune,
+`pruneLiveSnapshots(recordFiles, liveFiles)` (pure) names the run-shaped
+files under `live/` that are OLDER than the oldest surviving record — never
+a survivor's snapshot, never a file that is not of the run-record shape, and
+never a newer stem that merely has no record yet (a cron run and a `POST
+/api/journeys/:name/run` can interleave; one writer's just-written snapshot
+must not be the other's orphan; with no surviving record nothing is named)
+— and `writeRunRecord` deletes them, noting a failure as `historyError`. A
+journey that never kept a snapshot has no `live/` directory at all.
+
+#### Transitions and candidate causes (`transition`, `causes`)
+
+The run reads its history *before* it is written (so the diff is against
+history, never against itself) and picks two records from it: the
+**previous run** — the newest record whatever it holds — and the
+**baseline** — the newest record that CARRIES chains (`BASELINE_SCAN_LIMIT`
+= 25 records back; a vantage-lost record or one written before chains were
+recorded cannot be diffed). The chain diff, the versions and the deploy
+window are compared against the baseline; the vantage against the previous
+run. `transition` is `diffRunBranches(baseline, { branches })` plus what
+the run knows about the choice, and is never `null` on a new record:
+
+```
+transition: {
+  reason: null,                       // a comparison was made
+  since: <baseline startedAt>,
+  changed: [{ rootKey, title,
+              from: { verdict, ladderVerdict }, to: { verdict, ladderVerdict },
+              direction: 'worse' | 'better' | 'changed',
+              nodes: { newlyDegraded: [labels], recovered: [labels] },
+              note: string | null }], // declared-side facts, see below
+  appeared: [rootKey], disappeared: [rootKey],
+  any: boolean,
+  skipped: [{ startedAt, outcome }]   // records newer than the baseline that carry no chains (cap 8)
+}
+// or, when nothing could be compared:
+transition: { reason: 'first run' | 'previous run lost its vantage' | 'previous runs carry no chain record',
+              since: null, changed: [], appeared: [], disappeared: [], any: false, skipped: [...] }
+```
+
+A chain is `changed` when its verdict or ladder verdict differs; `direction`
+comes from the rank tables `intact < partial < broken` and `healthy <
+degraded < unobserved < broken` — `worse` when nothing improved and
+something got worse, `better` the mirror, `changed` when the two moved
+against each other or either side is `undeclared` / unknown. `note` names
+what the declared side says about the change when no recorded node moved:
+`declared side: missingRoles none → action` (a role the branch misses came
+or went) and / or `degraded list truncated (cap 16) — a node that moved may
+be unrecorded` (a list cut at the cap on either side). Records written
+before this pass carry `transition: null` on their first run; every reader
+tolerates both. A transition is a change between two point-in-time
+observations, never a cause.
+
+`causes` is `rankCauses({ previous, baseline, current, deploys })` without
+the ranker's own copy of the diff (`transition` above is the single
+persisted copy) whenever a previous record exists — `null` on the first
+run, nothing to explain yet:
+
+```
+causes: {
+  causes: [{ rank, kind, score, evidence, chains: [titles], rootKeys: [rootKey], nodes: [labels] }],
+  vantage: { changed, from, to, detail } | null,
+  note: 'candidate causes ranked by evidence — not a root-cause verdict'
+} | null
+```
+
+Only chains whose transition reads `worse` (and chains that appeared already
+partial / broken / degraded) are considered, and only the nodes the record
+can say moved — new on the current side, or the same identity with a
+different status / ladder status. A node whose status and ladder status are
+identical on both sides did not move and is never blamed: when nothing
+recorded moved, the change is on the declared side (the transition entry's
+`note` says so) and the chain yields no cause. A node the vantage could not
+look at (`unobserved`) generates no cause: a chain whose only movement is
+the vantage looking away yields none. The four kinds and their fixed scores
+(`CAUSE_SCORES`; a rank is explainable by reading the table):
+
+| `kind` | Evidence | `score` |
+|---|---|---|
+| `observogram-deploy` | a deploy in the window `(baseline.startedAt, current.startedAt]` from `deploys.jsonl` beside `runs/` (Observogram's own audit — only the trailing 8 MB are read, `DEPLOY_LOG_TAIL_BYTES`, the cut first line dropped; the latest `verify` line is merged onto its deploy so the evidence names the outcome; a baseline whose start time cannot be parsed gives an EMPTY window, never all of history) whose item names a moved node. The server persists compile SELECTORS on its items, so `runJourney` resolves each one against Pack A first (`resolveDeployArtifact`: `declared:<i>` → the i-th declared recording rule's name, `slo:<id>` → the SLO id, its SLI base and the SLI the pack binds it to, `dash:<id>` → the id, a bare name — a rollback's dashboard uid — → itself, `all` → nothing; carried as `resolved` beside `artifact`); the ranker then matches EXACTLY, never by substring — the selector or a resolved name equals the node's `aId` / `bId`, or a resolved name equals the node's label or an identity handle of its `kind::{json}` key (`id`, `name`, `record`, `slo`, `job`, `uid`) — and only when the item's `group` can write the node's kind (`DEPLOY_GROUP_KINDS`: `dashboards` / `restore` / `delete` → dashboard, panel; `rules` → recording_rule, burn_rate, sli, slo; `alerts` → burn_rate, alert_route; `alertmanager` → alert_route; `pipelines` → pipeline_*, otel; an unknown or missing group constrains nothing). Evidence: `touched declared:0 → payment:api_availability:ratio_5m` (a bare name that is the label reads as itself; `(failed)` marks an item that failed) | 0.9 |
+| `observogram-deploy` | a deploy in the window that wrote the journey's pack without an item naming a moved node — including a deploy whose only items are the group wildcard `all` (`wrote pack X (all rules) — no item names a moved artefact`). Needs the audit line's `pack.id` (the registry id — the pack FILE's stem) or `pack.name` to equal the record's `packA.name` (`metadata.name`) or `packA.id`: for a crawl-sourced Pack A, or a file whose stem differs from its `metadata.name`, this rung never fires | 0.6 |
+| `config-drift` | a moved node that `drifted` on a decision-bearing field (`objective`, `expr`, `route`, `window`, … — the graph's vocabulary, copied so the module stays zero-import) | 0.8 |
+| `config-drift` | drifted on cosmetic fields only, or on fields the record did not keep | 0.4 |
+| `backend-version` | a product both records (baseline and current) reported with a different `versions.<product>`, when that product FEEDS the family of a moved node — `PRODUCT_FAMILIES`: prometheus / victoriametrics / thanos / mimir → scrape, ruler, tsdb; grafana → dashboards; alertmanager → notify; otel, otelcol → collector; loki, promtail → logs; jaeger, tempo → traces — crossed with `FAMILY_FOR_KIND` (`versionFeedsMovedKind`; a Grafana change on a Prometheus rule is not this rung) | 0.6 |
+| `backend-version` | the same version change while a chain got worse elsewhere, or a product outside the table | 0.3 |
+| `stack-self-metric` | a `stackEvidence` row of the current record that answered data and reads as a signal by direction and value alone (a `lower` row above 0, a `higher` ratio below 1 — the stored display hint is never consulted) in the family feeding a moved node's kind — scrape → `scrape_job`; ruler → `recording_rule` / `burn_rate` / `sli` / `slo`; notify → `alert_route`; tsdb → `backend` / `storage_metrics`; collector → `pipeline_*` / `otel`; dashboards → `panel` / `dashboard`; synthetic → `synthetic` | 0.5 |
+
+A version that appears or disappears between the records is a vantage
+matter, not a change — and so is a flip to or from the literal `live` (the
+fetcher's word for "the product answered without a version number"): it
+is never a cause and rides in `vantage.detail` as `mcp.versions.<product>
+changed to/from live`. A `verify` record, a dry run or a line without
+`type: 'deploy'` changed nothing on the wire and is skipped. One cause per
+distinct evidence, aggregating every chain and node it explains; ordering
+is score, then kind order, then evidence text — deterministic; every
+evidence string collapses whitespace (labels, actor, deploy id, artifact
+and product came off the wire or the request). `vantage` names what
+changed about the vantage itself since the PREVIOUS run — `vantage lost →
+restricted`, `probe family recording_rules newly failed (HTTP 502)` / `no
+longer exposed` / `no longer probed` / `answers again` / `now exposed`,
+`4 → 5 MCP tools exposed`, the `live` flips — and rides beside the causes,
+never among them; `null` when neither record carries vantage facts (two
+file-sourced runs) and no version flipped.
+
+Surfaces: the markdown report's `Candidate causes — ranked by evidence, not
+a root-cause verdict` section (`_no previous run_`, `_no chain got worse
+since <baseline> (previous run <ts> lost its vantage — comparing against
+<baseline>)_` when a record was skipped, `_previous run <ts> lost its
+vantage — no earlier run carries chains to compare against — nothing to
+rank_` when nothing could be compared, or `N. [kind] score — evidence
+(chains: titles)`, then `vantage changed: …` / `vantage: unchanged`) and
+`Transitions since previous run` (`_previous run <ts> lost its vantage —
+comparing against <baseline>_` when a record was skipped, then one line per
+changed chain with its direction, node lists and `note`, `appeared` /
+`disappeared`, then the live-pack decision) — a run after an outage never
+claims "no previous run", and every value either section interpolates goes
+through `mdCell` (line breaks collapsed, `|` escaped, a line-leading `#` /
+`-` / `*` / `+` / `>` / `1.` neutralised: a label carrying `\n\n### Gate
+breaches` cannot forge a section; the gate-breach lines are escaped the
+same way). `packc journey list` appends `chainStatusLine(record)` after the
+stack segment (`chains 8/10 intact · ladder 7 healthy · 2 degraded`, zero
+buckets omitted; `chains 0 declared` when the record carries chains but
+declares none; `chains none (pre-step-4 record)` / `chains none (vantage
+lost)` when it carries no `branches`), only when a chain got worse or a
+cause was ranked `causeLine(record)` (`top cause: [kind] evidence` / `no
+candidate causes`), and whenever the vantage block says it changed
+`vantageLine(record)` (`vantage changed: <detail>`) — beside the cause,
+never as one. `GET /api/journeys` puts on `lastRun`: `chains`
+(`chainSummary`, `null` without chains), `transition: { any, changed, worse
+} | null` (counts), `topCause` (the rank-1 cause object or `null`) and
+`vantageChanged` (`true` / `false` / `null` without a causes block or with
+`vantage: null`); `GET /api/journeys/:name/runs` hands the record through
+unchanged. The studio's Journeys view prints one plain-text chains line per
+card (`requirement chains: N/M intact · ladder: h healthy · d degraded · b
+broken · u unobserved · top exposure: <label> (<kind>) blinds N SLOs`, then
+`· N live-only in undeclared chains` only when `undeclaredNodes` > 0, a
+muted `changed since previous run (W worse)` marker) and one cause line
+(`candidate cause: [kind] evidence — not a verdict`, a muted `vantage
+changed` marker) — counts and markers, no colours.
+
+#### Reading a run record
+
+Open `runs/<journey>/<stem>.json` (or `GET /api/journeys/<name>/runs`) and
+read it top to bottom:
+
+1. `outcome` and `gate.breaches` — did the run pass its own gate.
+2. `traceability` — the scored chain rollup the grade used; `grade.score`
+   and `grade.driftConstruct` say what scored it.
+3. `branches[]` — per chain, `verdict` (scored: is the declared artefact in
+   Pack B) beside `ladderVerdict` (on-wire: is it doing its job, or could the
+   vantage not look). A chain that is `intact` and `degraded` is present but
+   unhealthy or stale somewhere; `broken` and `unobserved` means the scored
+   side blames production for what may be the instrument's blind spot.
+4. `branches[].degraded[0]` — the worst node: its `status`, its `ladder.detail`
+   in the fetcher's words (`health err, lastError "…"`, `probe family
+   scrape_configs not exposed by this MCP tier`, `on the wire but withheld
+   from Pack B: …`), and `blastRadius.slos` — how many SLOs would go blind if
+   it really died. Exposure, not a claim that they are blind.
+5. `transition` — what moved since `since` (the baseline: the newest earlier
+   record that carries chains), per chain, with a direction, the nodes that
+   newly degraded or recovered and a `note` when only the declared side
+   moved; `skipped` names the records passed over to reach the baseline,
+   `reason` says why nothing could be compared when that is the case.
+6. `causes.causes[0]` — the top candidate with its evidence (its `chains`
+   by title, `rootKeys` apart), and `causes.vantage` — read it before
+   believing any cause: a chain that got worse while `vantage.changed` is
+   `true` may only be the vantage looking elsewhere (a probe family gone, a
+   version flipping to or from `live`).
+7. `livePack` — whether Pack B was kept and why; `readLivePack(name, record)`
+   returns it as it was observed.
+
+### Stack self-metrics (registry)
+
+`tools/lib/contracts/stack-self-metrics.mjs` is the data-only alias table the
+step-2 sampler reads to acquire the observability stack's *own* health
+signals through `metrics_query`: 24 rows across nine families (`scrape`,
+`ruler`, `notify`, `tsdb`, `collector`, `dashboards`, `synthetic`, `logs`,
+`traces`), each with a plain-English `signal`, a `unit`, a display-only
+`direction`, an optional `referenceSli` naming the reference-pack SLI whose
+vocabulary it follows (`prometheus-reference/scrape_success_ratio`, …), an
+ordered list of product `aliases` (`{ product, expr, requires, verified }` —
+an alias is eligible only when every name in `requires` is in the metric
+inventory; `verified` is the pinned product image whose real exposition
+carried every required name and whose PromQL evaluated the `expr`, as
+`<image:tag> <exposition|TSDB inventory|probe output> + PromQL, <date>`),
+and a `source` naming the upstream documentation the metric names come from
+plus the live evidence that confirmed them. The registry rows
+`stack_self_metrics`, `alertmanager_status`, `alertmanager_silences`,
+`grafana_datasources`, `grafana_datasource_health` and
+`grafana_contact_points` carry the tool names; the response shapes
+`instant-vector`, `status-object`, `silences`, `datasources`,
+`health-object` and `contact-points` pin the critical fields against the
+fixtures in `tools/fixtures/mcp/` — recordings from the Krystaline tiers
+(public, and since 2026-09-08 the authenticated tier) where a tier answers,
+hand-written `synthetic/` files where none can (see that directory's
+README). Every sampled number is a
+point-in-time **signal, never a verdict**: nothing in this table creates a
+`Verified` stamp, an SLO verdict or a grade change, and on a restricted tier
+the answer is "not attempted" with the reason.
+
+Three known discrepancies, documented rather than fixed (the reference packs
+are out of scope): (1) the reference pack's `scrape_duration_p99` is written
+over `scrape_duration_seconds_bucket`, but Prometheus exposes
+`scrape_duration_seconds` as a per-target gauge with no histogram, so the
+row `scrape_duration_max` samples `max(scrape_duration_seconds)` and points
+at the reference SLI for vocabulary only; (2) the reference pack's
+`query_latency_p99` is written over
+`prometheus_engine_query_duration_seconds_bucket`, but Prometheus registers
+`prometheus_engine_query_duration_seconds` as a **summary** (objectives 0.5 /
+0.9 / 0.99, labels `slice` / `quantile`) with no `_bucket` series, so the
+row `query_latency_p99` reads
+`max(prometheus_engine_query_duration_seconds{slice="inner_eval",quantile="0.99"})`;
+(3) the reference pack's `datasource_proxy_success_ratio` is written over
+`grafana_datasource_request_total`, which Grafana 12.4.4 registers only on
+the first datasource request — but that request is any rule evaluation, any
+`/api/ds/query` (the path dashboards and Grafana-managed rules use) or any
+legacy proxied query, so every Grafana with one dashboard or one rule has
+it. The row `datasource_errors` reads the reference name
+`grafana_datasource_request_total{code=~"5.."}` **first** (strict
+`requires`) and keeps the pre-registered `grafana_proxy_response_status_total`
+(present at startup with `code="500"` at 0) as the **fallback** for a
+Grafana whose inventory lacks the reference name, because the proxy counter
+observes only the legacy `/api/datasources/proxy/...` path: on 12.4.4 an
+`/api/ds/query` increments `grafana_datasource_request_total` and leaves
+every proxy counter untouched, and the sampler stops at the first alias
+with data — the other order would read a systematically blind 0 on a
+Grafana whose queries fail through `/api/ds/query`.
+
+Rows that must read zero when healthy carry a **presence-guarded zero** —
+`count(up == 0) or (count(up) * 0)` for the count rows
+(`scrape_targets_down`, `synthetic_probe_failures`),
+`sum(rate(m{code=~"5.."}[5m])) or (count(m) * 0)` for the Grafana 5xx rate
+rows — so a healthy stack reads `0` rather than an empty vector while a
+backend without the metric still reads `empty` (`or vector(0)` would
+fabricate "0 down" where nothing is scraped); the ratio is
+`sum(up) / count(up)` for the same reason. **Lazily-registered counters**
+take the same guard one step further. The OpenTelemetry Collector creates
+`otelcol_exporter_send_failed_<kind>` and `otelcol_receiver_refused_<kind>`
+only when the first export / receive happens (0.115.1, observed
+before/after a forced failure: registered together with `sent_<kind>` /
+`accepted_<kind>`; 10 metric names at startup — a stable count — and 39 the
+moment the three `send_failed_*` names register after one OTLP request per
+kind, with more following as the dead exporter retries: 48 families some
+minutes later) or, on 0.154.0, plausibly only on the first failure
+(`send_failed_spans` absent while `sent_spans` is present on the public
+tier, read-only — consistent with registration on the first failure; no
+failure was forced there), so strict `requires` on the counter
+would read `not-in-inventory` on a healthy collector forever. Those six
+aliases therefore `require` the sibling that registers with or before the
+counter (`otelcol_exporter_sent_<kind>`, `otelcol_receiver_accepted_<kind>`)
+and end with `or (count(<sibling>) * 0)`: a collector that has exported
+reads 0 failures unless the counter exists, a collector that never exported
+that signal reads `not-in-inventory` (no evidence either way), and a renamed
+counter on a future collector renames the sibling too, so the alias falls to
+`not-in-inventory` instead of a false 0. Every other counter the table reads
+is pre-registered at 0 by its product and keeps strict `requires`:
+client_golang registers `prometheus_*`, `alertmanager_*`, `promtail_*` and
+`jaeger_collector_*` at startup; VictoriaMetrics' own `metrics` library
+registers `vm_*` at startup and vmalert's `*_rules_errors_total` per
+**loaded** rule (per-rule label sets — a rule-less vmalert exposes none,
+which is an honest `not-in-inventory`: no ruler work to observe). All are
+present on the pinned stack's exposition; the live suite asserts
+startup-vs-stimulus only for the collector and Grafana (the two services it
+recreates), the other products' startup state was observed by hand once.
+
+Names pinned against live exposition (2026-09-07, see "Live validation
+tier" below): no `_total` suffix on any otelcol internal-telemetry name
+(0.115.1 and 0.154.0 alike); `otelcol_processor_dropped_*` exist on no
+current collector in either spelling (removed by the processorhelper
+rework), so the former `collector_dropped_*` rows are now
+`collector_refused_{metrics,spans,logs}` over the receiver counters — the
+current-generation "the collector is losing telemetry" signal;
+`collector_queue_saturation` takes the per-exporter max on both sides
+(`queue_size` carries `data_type` and `queue_capacity` does not on 0.115.1,
+both do on 0.154.0); vmalert's plural `vmalert_*_rules_errors_total`;
+`jaeger_collector_spans_dropped_total` on Jaeger v1's admin port (a Jaeger
+v2 is an otelcol distribution and answers through the collector rows, the
+jaeger alias reading an honest `not-in-inventory` there). Resolvers:
+`probeRows()`, `rowsForFamily(family)`, `eligibleAliases(row, inventory)`,
+`productPreferenceOrder(row, seenProducts)`, `displayHint(row, value)`,
+`bestOutcome(outcomes)`; integrity is pinned by `npm run test:stack`, the
+live evidence by `npm run test:stack:live`.
+
+### Stack self-metrics (sampling)
+
+`sampleStackSelfMetrics(...)` in `tools/fetch-live-pack.mjs` walks the alias
+table once per fetch, after the version probes (so the product preference
+knows what is already seen). The policy:
+
+- **Attempt only when `metrics_query` is available.** When `tools/list`
+  answered, it must advertise the tool; a server with no `tools/list` at all
+  (older servers) is attempted. Otherwise the panel is `not-attempted` with
+  the reason `metrics_query not exposed by this MCP (restricted tier)` — every
+  row carries that outcome, zero calls are made, nothing is "absent".
+- **Inventory: evidence of presence, never of absence.** When the
+  `metric_names` probe answered with data, its list is the inventory: an
+  alias is eligible when *every* name in its `requires` is present, and
+  eligible aliases are tried first — all of them, since the inventory is
+  evidence they exist (no per-row cap on that path). A row with **no**
+  eligible alias is `not-in-inventory` (no call; the reason names the
+  inventory size and the required names) **only when the inventory is
+  trusted**: `stackInventoryTrust(inventory)` trusts a list that carries `up`
+  (present on every Prometheus-compatible backend). The `metric_names` tool
+  has no completeness contract (no `limit`, no truncation marker; the
+  recorded reference fixture is a 25-name subset without `up`), so an
+  inventory without `up` — or an empty one — is treated as incomplete and
+  gates nothing: those rows fall back to the bounded cascade and read
+  `empty` / `failed` / `data` honestly, with `queried anyway` and the
+  inventory size in the reason of an empty answer. Without an inventory at
+  all (probe failed / empty / unsupported) every alias is eligible on the
+  bounded cascade. The sampler result carries `inventory: { size, trusted,
+  reason }` (not annotated) and the recorder prints the same verdict.
+- **Product preference.** A row's eligible aliases are ordered `generic`
+  first, then products already seen in `liveVersions` (build_info,
+  `grafana_health`, `traces_services`) or in the `backend_capabilities`
+  inventory, then the rest in declared order.
+- **Bounded cascade.** Without a trusted inventory at most 2 calls per row,
+  stopping at the first alias that returns data; an `empty` or `failed`
+  answer falls through to the next alias and the last outcome is recorded.
+- **Global budget.** 48 `metrics_query` calls per panel; rows beyond it are
+  `not-attempted` with the reason `call budget exhausted`.
+- **Every call goes through `quiet()`** under the family name
+  `stack_self_metrics` (so `probeFailures.stack_self_metrics` keeps the first
+  error); each row keeps its own last error as `reason`.
+- **Parsing.** An instant vector in either envelope (`{ result }` or
+  `{ data: { result } }`); the value is `Number(result[0].value[1])`. An empty
+  array, a series without a sample, or `NaN` / `+Inf` / `-Inf` is `empty`
+  (value `null`) — for every unit: a series-only answer is never counted as
+  a value, because every `count` row is an aggregation returning one series
+  and "1" would be a fabricated number; a non-vector answer is `failed` with
+  the shape reason. The count rows' presence-guarded zero (registry section
+  above) is what lets a healthy stack read `0` instead of `empty`.
+- **Outcomes** are exactly `data | empty | failed | not-in-inventory |
+  not-attempted` — a row is never "ok". No `Verified` stamp, no `Scaffold`
+  marker, no grade input is produced by any of it; `displayHint(row, value)`
+  (`nonzero` for a lower-is-better row above zero) is a display helper the
+  server may compute, never something the pack stores.
+
+The Alertmanager and Grafana status rows ride the same fetch
+(`observeAlertmanager`, `observeGrafana`), each tool guarded by the
+`tools/list` inventory when one exists and called through `quiet()`:
+`alertmanager_status` → `{ version, uptime, clusterStatus }`;
+`alertmanager_silences` → `{ active, total }`; `grafana_datasources` →
+`[{ uid, name, type }]` then `grafana_datasource_health` per uid (at most 10,
+called with `{ uid }`) → `health: ok | error | unknown` plus a message trimmed
+to 200 chars (`unknown` means NOT CHECKED — the health tool is not
+advertised, errored, or the datasource is beyond the cap — and is never
+folded into "not unhealthy"); `grafana_contact_points` → a count and up to 32
+names. Object payloads are located **envelope-first** (`locateObjectPayload`,
+the same rule `validateResponseShape` applies): a Prometheus-API-style
+`{ status: 'success', data: {...} }` wrapper is read from its inner document,
+so a wrapped `{ status: 'ERROR' }` health verdict reads `error`, never `ok`.
+Each observer returns `null` only when none of its tools is advertised (a
+tier fact); an advertised tool that fails (HTTP error, timeout, bad shape)
+yields a non-null result carrying `error` — annotated as
+`mcp.observed.alertmanager.error` / `mcp.observed.grafana.error` — so the
+surfaces say "probe failed", never "not exposed". Tools that answered join
+`mcp.toolsCalled`; the sampler's tool joins only when at least one row
+returned data or an honest empty. `hasToolsList` is whether the `tools/list`
+RPC succeeded: a server advertising an empty list reads `not-attempted`
+(tier), not a string of `tools/call` failures.
+
+The table has four live evidence sources: the public Krystaline tier
+(2026-09-07) and the authenticated Krystaline tier (2026-09-08,
+`MCP_URL=https://www.krystaline.io/mcp` + `MCP_AUTH`) through this recorder,
+the pinned stack of the real products through the live validation tier
+below, and — for the Grafana-backed tools — that same stack fronted by a
+local otel-mcp-server 1.8.0 ("Local MCP over the Docker stack" below);
+re-record when a product version moves.
+The authenticated tier answers the same metrics / vmalert / Alertmanager
+surface as the public one (14 aliases `data` · 0 `failed` on the same
+2,682-name inventory) but advertises **no Grafana-backed tools** — its
+otel-mcp-server deployment carries no Grafana integration — which is why
+the Grafana status fixtures come from the local stack.
+`npm run record-fixtures`
+(`tools/record-mcp-fixtures.mjs`, `MCP_URL` + optional `MCP_AUTH`) is the
+verification path — it reuses the fetcher's client and the registry for
+every tool name, never prints or stores the token, and by default only
+**reports**: the `tools/list` surface with its drift against the registry,
+the metric inventory, and for every alias of every row whether its
+`requires` are all in the inventory plus the value read the way the sampler
+reads it (`data <value>` / `empty` / `FAILED <reason>` /
+`not-in-inventory (missing …)` / `not-attempted (restricted tier)`), then the
+status tools. `-- --write` records the fixtures `tools/fixtures/mcp/README.md`
+prescribes (the trimmed inventory that keeps every required name, the probe
+payloads, one instant vector per family under `recorded-stack/`, the status
+tools) and a recorded file takes precedence over its synthetic copy in the
+shapes suite; the full inventory goes to the git-ignored
+`.tmp-mcp-metric-names.json`. Afterwards: `node
+tools/test-contract-shapes.mjs --update`, then `npm test`.
+
+The annotation keys the sampler writes (`mcp.stack.*`,
+`mcp.observed.stack_metrics`, `mcp.observed.alertmanager`,
+`mcp.observed.grafana.*`) are listed once, in the annotation reference
+above; they are written only when the fetch sampled — a caller that predates
+step 2 writes none of them.
+
+### Live validation tier
+
+`docker/stack.compose.yaml` (`name: observogram-stack`; every port bound to
+127.0.0.1, every image tag pinned, the port block disjoint from the validate
+stack's) runs every product the table names: Prometheus v2.55.1 scraping all
+of them plus a blackbox probe job, Alertmanager v0.27.0 with a dead webhook
+receiver, VictoriaMetrics v1.113.0 scraping itself and a dead target, vmalert
+v1.113.0, otel-collector-contrib 0.115.1 with a `debug` exporter beside an
+OTLP exporter to a dead endpoint, Grafana 12.4.4 with a provisioned
+Prometheus datasource and one always-firing alert rule, blackbox-exporter
+v0.25.0, promtail 3.3.2 tailing a sample file into a dead Loki, and Jaeger
+all-in-one 1.62.0 — deliberate faults so every failure counter exists and
+moves on a fresh stack. `npm run test:stack:live` (`tools/test-stack-live.mjs`;
+`:strict` turns the no-Docker skip into a failure; **not** part of
+`npm test`) brings it up, recreates the collector and Grafana so neither
+carries a previous run's stimulus (the collector's "at startup" name set is
+then exact; Grafana's is snapshotted the moment its recreate returns, which
+is "before the suite's stimulus" — the provisioned 10s rule is Grafana's
+own first datasource request, so `grafana_datasource_request_total` /
+`grafana_alerting_rule_*` can already be present on a slow start; reported,
+never asserted), waits for every scrape job and for the rate windows, then
+for **every alias of every row** asserts: (a) every `requires`
+name is a metric family on the product's own exposition — `/metrics`, the
+Prometheus TSDB name inventory for the scrape-synthesised `up` /
+`scrape_duration_seconds` (which never appear on Prometheus' own
+`/metrics`), the blackbox `/probe` output for `probe_success`, the vmalert
+service for `vmalert_*`; (b) every lazily-registered counter the `expr`
+reads beyond `requires` is present **after** the stimulus (one OTLP/HTTP
+request per signal kind into the collector; one query through Grafana's
+legacy datasource proxy and one through `/api/ds/query`, so both counter
+paths are exercised) — that is what proves the counter's name; (c) the alias's
+`verified` stamp names the compose image of the product it was checked on;
+(d) the `expr` evaluates on the real Prometheus with no PromQL error, the
+answer read through the fetcher's own `sampleFromInstantVector`. The
+collector's and Grafana's name sets before and after the stimulus are
+printed (the lazy-registration probe), and the ledger — alias |
+product@version | exposition | query — goes to the git-ignored
+`.tmp-stack-live-ledger.json`. The stack is left running (`docker compose
+-f docker/stack.compose.yaml down -v` removes it); run one suite at a time —
+two concurrent runs recreate the collector and Grafana under each other.
+Note that `otel/opentelemetry-collector-contrib:0.115.1` self-reports
+`service_version="0.115.0"` in `target_info` and on every `otelcol_*`
+series; the `verified` stamps and the ledger's product@version use the
+image tag.
+
+Verification ledger, 2026-09-07 — 32 aliases: 32 ✓ exposition (lazy
+counters included), 32 stamps matching their image, 32 `data` / 0 `empty` /
+0 PromQL errors:
+
+| product @ version | aliases verified |
+|---|---|
+| Prometheus `prom/prometheus:v2.55.1` | `scrape_success_ratio`, `scrape_targets_down` [generic], `scrape_duration_max` (TSDB inventory); `rule_evaluation_failures` [prometheus], `rule_evaluation_staleness`, `notification_errors` [prometheus], `notifications_sent` [prometheus], `tsdb_active_series` [prometheus], `tsdb_compaction_failures`, `wal_corruptions`, `query_latency_p99` |
+| VictoriaMetrics `victoriametrics/victoria-metrics:v1.113.0` | `scrape_targets_down` [victoriametrics], `tsdb_active_series` [victoriametrics] |
+| vmalert `victoriametrics/vmalert:v1.113.0` | `rule_evaluation_failures` [victoriametrics], `notification_errors` [victoriametrics] |
+| Alertmanager `prom/alertmanager:v0.27.0` | `notification_errors` [alertmanager], `notifications_sent` [alertmanager], `active_silences` |
+| OpenTelemetry Collector `otel/opentelemetry-collector-contrib:0.115.1` | `collector_export_failures_{metrics,spans,logs}`, `collector_refused_{metrics,spans,logs}` (six lazy counters, present after the stimulus), `collector_queue_saturation` |
+| Grafana `grafana/grafana:12.4.4` | `rule_evaluation_failures` [grafana], `datasource_errors` (both aliases: the reference `grafana_datasource_request_total` first, the proxy-only counter as fallback), `grafana_http_errors` |
+| blackbox-exporter `prom/blackbox-exporter:v0.25.0` | `synthetic_probe_failures` (probe output) |
+| promtail `grafana/promtail:3.3.2` | `log_shipper_drops` |
+| Jaeger `jaegertracing/all-in-one:1.62.0` | `trace_collector_drops` |
+
+The public Krystaline tier (read-only:
+`MCP_URL=https://www.krystaline.io/mcp/public npm run record-fixtures`) is
+the second evidence source, at other versions (otel-collector 0.154.0,
+Jaeger v2.18.0, Grafana 12.4.0, Alertmanager 0.27.0): after the correction it
+reads 14 aliases `data` · 0 `empty` · 0 `failed` · 18 honest
+`not-in-inventory` on its 2,682-name inventory (no Prometheus server, no
+blackbox, vmalert not scraped, a traces-only collector, a v2 Jaeger), 13 of 24
+rows with data. The authenticated tier (2026-09-08, `MCP_AUTH` bearer) is the
+third: the same backends and the same alias outcomes, recorded into
+`vmalert_rules.json`, `alertmanager_status.json` and `recorded-stack/`.
+
+#### Local MCP over the Docker stack
+
+The fourth evidence source (2026-09-08) is the same compose stack fronted
+by a local **otel-mcp-server 1.8.0** — today the only place the
+Grafana-backed tools answer (the public Krystaline tier answers `HTTP 401`
+from Grafana, the authenticated tier does not advertise them). With the
+stack up (`docker compose -f docker/stack.compose.yaml up -d --wait`),
+start the server from a checkout of otel-mcp-server v1.8.0 with no MCP auth
+keys — `PROMETHEUS_URL=http://127.0.0.1:18428 VMALERT_URL=http://127.0.0.1:18880
+ALERTMANAGER_URL=http://127.0.0.1:19093 GRAFANA_URL=http://127.0.0.1:13030
+GRAFANA_AUTH_BASIC=admin:admin node dist/index.js --http 3011` — then
+`MCP_URL=http://127.0.0.1:3011/mcp npm run record-fixtures -- --write --out
+.tmp-recorded-local`, review, and copy the files you keep into
+`tools/fixtures/mcp/` (the README there lists the admin-seeded state:
+datasources `VictoriaMetrics (stack)` and `Loki (absent)` → a service the
+stack does not run, contact point `webhook-oncall`, dashboard `Orders
+availability (stack validation)`). Two shape discoveries came out of it, and
+the contracts and `observeGrafana` now read the real product:
+`grafana_datasource_health` answers `{ datasource, health }`, where `health`
+is `{ supported: true, status: 'OK' | 'ERROR', message, details }` when
+Grafana's health endpoint answered 2xx and `{ supported: false, error: 'HTTP
+400: Bad Request — <url>' }` when it did not — Grafana 12.4.4 answers a check
+that ran and failed (backend unreachable) with `HTTP 400` and an unknown uid
+with `500`, so the fetcher reads `supported: false` + `HTTP 400` as `error`
+with the error text, any other `supported: false` as `unknown` (not checked,
+never "not unhealthy"), and a `supported: true` answer without a status as
+`unknown`; and `grafana_contact_points` answers the receivers API (`{ count,
+contactPoints: [{ name, active, integrations }] }` — no `uid`, `type` or
+`settings`), not the provisioning shape the synthetic fixture assumed. The
+recorder keeps both datasource-health verdicts when several uids answer
+(`grafana_datasource_health.json` is the first uid's answer, `.ok.json` /
+`.error.json` the first answer of the other case).
+
+### Stack self-metrics (surfaces)
+
+The same annotations are read back, never re-sampled, on three surfaces:
+
+- `POST /api/draft-from-mcp` — `summary.stack = { status, reason, sampled, empty, failed, notInInventory, notAttempted, families: { <family>: <best outcome> }, rows: [{ id, family, product, value, unit, direction, outcome, hint, reason? }] }` parsed from `mcp.stack.*` and `mcp.observed.stack_metrics`; `hint` is the contracts' display-only `displayHint` (`'nonzero'` when a lower-is-comfortable row is above zero, else `null`) and is computed here, never stored. `summary.alertmanager = { version, uptime, clusterStatus, silences, error }` and `summary.grafana = { datasources, healthChecked, contactPoints, error }` come from the `mcp.observed.*` JSON; each is `null` only when the surface was not advertised (or the fetcher predates step 2) — an advertised tool that failed keeps the summary with `error` set, and the server adds a `… status probe failed — <error>` warning. `healthChecked` counts the datasources that actually got a verdict; `health: 'unknown'` stays visible as "not checked". A `not-attempted` panel adds the warning `Stack self-metrics not attempted — metrics_query not exposed by this MCP tier.` (or `— <reason>.` for any other reason).
+- `GET /api/live-status` — `stackStatus` (`sampled` | `not-attempted` | `null`) and `stackSampled` (number).
+- The studio draft summary renders a "stack self-metrics — point-in-time sample, signal not verdict" block under the discovery rows: one row per family in `families` showing the family's best row (ratios as a percent, per-second to three decimals, seconds to one, counts as integers, `· nonzero` when hinted) or its outcome (`— empty`, `— probe failed: …`, `— not in inventory`; a family with no observed row reads `— not attempted: call budget exhausted`), a single `— not attempted: <summary.stack.reason>` row on a not-attempted panel, then `alertmanager: v<version> · N active silences` (`— probe failed: <error>` when advertised but failing), `datasources: N · M error: <names> · K unchecked: <names>` — or `N · health not checked (grafana_datasource_health not exposed or did not answer)` when no datasource got a verdict; `0 unhealthy`-style wording is never printed for a surface nothing checked — and `contact points: N`. `— not exposed` is reserved for a surface the MCP did not advertise.
+- Journeys — `liveEvidenceFacts(canonicalB).stack = { status, reason, sampled, empty, failed, notAttempted }` (status `null` and zero counts for a file-sourced Pack B) rides on the run record as `stack` and prints one `Stack self-metrics` line in the markdown report; since step 3 the record also keeps the samples themselves as `stackEvidence` (see "Stack-health evidence on the run record" above), the report prints them as a table, and the opt-in `gate.stack` block (`requireSampled`, per-row `min` / `max`) breaches on them as an early warning — the counts are never gated on, and no breach is an SLO verdict.
 
 ## Diagnostic Drift Semantics
 
@@ -98,9 +1045,9 @@ still rendered as evidence and usually becomes the Remediate plan.
 ## Write Path: Deploy Through MCP
 
 The Remediate deploy flow compiles selected pack artifacts and sends them to an
-MCP write target. For Grafana, Tomograph uses:
+MCP write target. For Grafana, Observogram uses:
 
-| Tomograph artifact | MCP tool |
+| Observogram artifact | MCP tool |
 |---|---|
 | Grafana-managed recording rules | `grafana_create_alert_rule` |
 | Grafana-managed alerting rules | `grafana_create_alert_rule` |
@@ -118,13 +1065,13 @@ not in the browser.
 MCP_ENABLE_WRITES=true
 GRAFANA_URL=https://grafana.example.net
 GRAFANA_AUTH_TOKEN=glsa_...
-MCP_AUTH_KEYS='{"keys":[{"id":"tomograph","key":"sk-tomograph-prod"}]}'
+MCP_AUTH_KEYS='{"keys":[{"id":"observogram","key":"sk-observogram-prod"}]}'
 ```
 
-The Tomograph deploy modal receives the MCP client key, for example:
+The Observogram deploy modal receives the MCP client key, for example:
 
 ```text
-sk-tomograph-prod
+sk-observogram-prod
 ```
 
 Grafana permissions:

@@ -1,5 +1,18 @@
 # Artefact-Matching Correctness Audit
 
+> **Point-in-time record (2026-06-09) — findings since resolved.** F2 (the
+> last-write-wins drop) was fixed in the same commit that added this audit
+> (`4c5bae4`): the diff now groups identity keys, preserves duplicates with
+> `#NN` occurrence ordinals, and — as of the collision-reporting change —
+> surfaces every duplicated key on `diffPacks().collisions`. F6's empty-array
+> asymmetry was fixed alongside it. The "no PromQL semantic equivalence"
+> limitation has since been narrowed by parser-proven canonicalisation
+> (`tools/lib/promql-canon.mjs`). Alert-route identity deliberately remains
+> severity-keyed — live connectors fabricate channel kinds for unresolved
+> routing, so channel precision belongs to drift, not identity. See
+> `docs/DIFF.md` for current behaviour; the text below is preserved as
+> written.
+
 **Scope:** `tools/lib/diff.mjs` + `tools/lib/artefact-model.mjs` (the structural/behavioural matcher), checked against `docs/DIFF.md`.
 **Why:** pre-flight for a national CIO talk — confirm the matching claims are sound and not overstated.
 **Method:** code review of the real implementation + an executable audit harness exercising the actual `adapt → diffPacks` path on the bundled example packs and a synthetic stress pack.

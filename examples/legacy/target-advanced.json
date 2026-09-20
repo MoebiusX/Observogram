@@ -1,0 +1,644 @@
+{
+  "id": "target-advanced",
+  "name": "Target \u2014 Advanced",
+  "badge": "TARGET",
+  "description": "Adds continuous profiling, eBPF, AIOps anomaly detection at scale, SLO-coupled self-healing, chaos + synthetic, and a conformance-driven governance pipeline.",
+  "layers": {
+    "L1": [
+      {
+        "id": "SLI-01",
+        "source": "BAU",
+        "title": "Availability SLI",
+        "desc": "Carried forward.",
+        "tool": "Prometheus",
+        "tags": [
+          "availability"
+        ]
+      },
+      {
+        "id": "SLI-02",
+        "source": "BAU",
+        "title": "Latency SLI (P99)",
+        "desc": "Carried forward.",
+        "tool": "Prometheus",
+        "tags": [
+          "latency"
+        ]
+      },
+      {
+        "id": "SLO-01",
+        "source": "BAU",
+        "title": "Availability SLO 99.9%",
+        "desc": "Carried forward.",
+        "tool": "PromQL",
+        "tags": [
+          "SLO"
+        ]
+      },
+      {
+        "id": "SLO-02",
+        "source": "BAU",
+        "title": "Latency SLO P99 < 2s",
+        "desc": "Carried forward.",
+        "tool": "PromQL",
+        "tags": [
+          "SLO"
+        ]
+      },
+      {
+        "id": "SLI-03",
+        "source": "SLA",
+        "title": "Settlement Latency SLI",
+        "desc": "End-to-end order \u2192 fill \u2192 settle. Contractual.",
+        "tool": "OTel + PromQL",
+        "tags": [
+          "SLA",
+          "latency"
+        ]
+      },
+      {
+        "id": "SLO-03",
+        "source": "SLA",
+        "title": "Order Fill Rate SLO 99.95%",
+        "desc": "Matching engine outcome SLO. Contractual.",
+        "tool": "PromQL",
+        "tags": [
+          "SLA",
+          "SLO"
+        ]
+      },
+      {
+        "id": "SLI-04",
+        "source": "NEW",
+        "title": "ZK Proof Verification SLI",
+        "desc": "Proof generation success rate over rolling window.",
+        "tool": "zk-proofs",
+        "tags": [
+          "crypto",
+          "proof"
+        ]
+      },
+      {
+        "id": "EBP-01",
+        "source": "BAU",
+        "title": "Error-budget policy (predict_linear)",
+        "desc": "Carried forward.",
+        "tool": "PromQL",
+        "tags": [
+          "policy"
+        ]
+      },
+      {
+        "id": "EBP-02",
+        "source": "NEW",
+        "title": "Tier rubric (MUST / SHOULD)",
+        "desc": "Per-service tier; gates release if MUST coverage < 100%.",
+        "tool": "policy-as-code",
+        "tags": [
+          "governance",
+          "release-gate"
+        ]
+      }
+    ],
+    "L2": [
+      {
+        "id": "COL-01",
+        "source": "BAU",
+        "title": "Prometheus scrape \u2014 12 targets",
+        "desc": "Carried forward.",
+        "tool": "Prometheus",
+        "tags": [
+          "metrics"
+        ]
+      },
+      {
+        "id": "COL-02",
+        "source": "BAU",
+        "title": "OTel Collector pipeline",
+        "desc": "Carried forward, with tail sampling.",
+        "tool": "OTel Collector",
+        "tags": [
+          "otel"
+        ]
+      },
+      {
+        "id": "COL-03",
+        "source": "BAU",
+        "title": "Jaeger trace agent",
+        "desc": "Carried forward.",
+        "tool": "Jaeger",
+        "tags": [
+          "traces"
+        ]
+      },
+      {
+        "id": "COL-04",
+        "source": "BAU",
+        "title": "Loki log shipping",
+        "desc": "Carried forward, multi-tenant.",
+        "tool": "Loki",
+        "tags": [
+          "logs"
+        ]
+      },
+      {
+        "id": "COL-05",
+        "source": "BAU",
+        "title": "Health-check probes",
+        "desc": "Carried forward.",
+        "tool": "kube-state-metrics",
+        "tags": [
+          "health"
+        ]
+      },
+      {
+        "id": "COL-06",
+        "source": "NEW",
+        "title": "Continuous profiling",
+        "desc": "Always-on CPU/memory profiles per service (eBPF, zero-instrumentation).",
+        "tool": "Pyroscope / Parca",
+        "tags": [
+          "profile",
+          "eBPF"
+        ]
+      },
+      {
+        "id": "COL-07",
+        "source": "NEW",
+        "title": "eBPF network observability",
+        "desc": "L7-aware flow, retry rate, redirect detection.",
+        "tool": "Beyla / Hubble",
+        "tags": [
+          "eBPF",
+          "network"
+        ]
+      },
+      {
+        "id": "COL-08",
+        "source": "NEW",
+        "title": "Tail sampling policy",
+        "desc": "Keep slow + error traces, sample successes 1:100.",
+        "tool": "OTel Collector",
+        "tags": [
+          "sampling"
+        ]
+      },
+      {
+        "id": "COL-09",
+        "source": "NEW",
+        "title": "Elasticsearch enablement",
+        "desc": "Re-enable es_* skills for archive search + ad-hoc query.",
+        "tool": "Elasticsearch",
+        "tags": [
+          "search",
+          "re-enable"
+        ]
+      },
+      {
+        "id": "STO-01",
+        "source": "BAU",
+        "title": "Prometheus TSDB (15d hot)",
+        "desc": "Hot tier only after migration.",
+        "tool": "Prometheus",
+        "tags": [
+          "storage"
+        ]
+      },
+      {
+        "id": "STO-02",
+        "source": "BAU",
+        "title": "Jaeger storage backend",
+        "desc": "Migrated under Tempo (below).",
+        "tool": "Jaeger",
+        "tags": [
+          "storage"
+        ]
+      },
+      {
+        "id": "STO-03",
+        "source": "BAU",
+        "title": "Loki chunk store",
+        "desc": "Object-storage backed.",
+        "tool": "Loki",
+        "tags": [
+          "storage"
+        ]
+      },
+      {
+        "id": "STO-04",
+        "source": "NEW",
+        "title": "Long-term metrics (Thanos / Mimir)",
+        "desc": "remote_write to object storage; 13-month retention; downsampled rollups.",
+        "tool": "Thanos or Mimir",
+        "tags": [
+          "retention",
+          "audit"
+        ]
+      },
+      {
+        "id": "STO-05",
+        "source": "NEW",
+        "title": "Grafana Tempo (traces)",
+        "desc": "Cost-efficient trace storage with TraceQL.",
+        "tool": "Tempo",
+        "tags": [
+          "traces",
+          "cost"
+        ]
+      }
+    ],
+    "L3": [
+      {
+        "id": "QRY-01",
+        "source": "BAU",
+        "title": "Recording rules \u2014 SLI burn",
+        "desc": "Carried forward, generated via Sloth.",
+        "tool": "Sloth + PromQL",
+        "tags": [
+          "recording"
+        ]
+      },
+      {
+        "id": "QRY-02",
+        "source": "BAU",
+        "title": "predict_linear forecasts",
+        "desc": "Carried forward.",
+        "tool": "PromQL",
+        "tags": [
+          "forecast"
+        ]
+      },
+      {
+        "id": "DASH-01",
+        "source": "BAU",
+        "title": "Grafana \u2014 Service Overview",
+        "desc": "Carried forward.",
+        "tool": "Grafana",
+        "tags": [
+          "dashboard"
+        ]
+      },
+      {
+        "id": "DASH-02",
+        "source": "BAU",
+        "title": "Grafana \u2014 RabbitMQ + Redis",
+        "desc": "Carried forward.",
+        "tool": "Grafana",
+        "tags": [
+          "dashboard"
+        ]
+      },
+      {
+        "id": "DASH-03",
+        "source": "BAU",
+        "title": "Grafana \u2014 SLO & Error Budget",
+        "desc": "Carried forward.",
+        "tool": "Grafana",
+        "tags": [
+          "dashboard"
+        ]
+      },
+      {
+        "id": "QRY-03",
+        "source": "NEW",
+        "title": "Trace-to-log correlation (exemplars)",
+        "desc": "Exemplars wired in Prom \u2192 click metric \u2192 trace \u2192 logs.",
+        "tool": "Grafana + OTel",
+        "tags": [
+          "correlation"
+        ]
+      },
+      {
+        "id": "QRY-04",
+        "source": "NEW",
+        "title": "AIOps anomaly detection",
+        "desc": "Multi-signal anomaly detection on top of system skill baselines.",
+        "tool": "otel-mcp + ML",
+        "tags": [
+          "anomaly",
+          "AIOps"
+        ]
+      },
+      {
+        "id": "DASH-04",
+        "source": "NEW",
+        "title": "Service topology auto-discovery",
+        "desc": "Live dependency graph with health overlays.",
+        "tool": "Hubble / Kiali",
+        "tags": [
+          "topology",
+          "dashboard"
+        ]
+      },
+      {
+        "id": "DASH-05",
+        "source": "NEW",
+        "title": "Flame-graph profile views",
+        "desc": "Per-service CPU/memory profiles, regression detection.",
+        "tool": "Pyroscope UI",
+        "tags": [
+          "profile",
+          "dashboard"
+        ]
+      },
+      {
+        "id": "DASH-06",
+        "source": "NEW",
+        "title": "Cost-per-tenant dashboard",
+        "desc": "Observability cost broken down by tenant/service.",
+        "tool": "OpenCost",
+        "tags": [
+          "cost",
+          "FinOps"
+        ]
+      }
+    ],
+    "L4": {
+      "policy": [
+        {
+          "id": "POL-01",
+          "source": "BAU",
+          "title": "Burn-rate alerting policy",
+          "desc": "Now formalised in policy-as-code spec.",
+          "tool": "Sloth spec",
+          "tags": [
+            "policy"
+          ]
+        },
+        {
+          "id": "POL-02",
+          "source": "NEW",
+          "title": "Release-gate policy (SLO-coupled)",
+          "desc": "CI gate: refuse rollout if burn-rate > threshold.",
+          "tool": "Argo Rollouts + Flagger",
+          "tags": [
+            "release-gate"
+          ]
+        },
+        {
+          "id": "POL-03",
+          "source": "NEW",
+          "title": "Notification routing matrix",
+          "desc": "Severity \u00d7 team \u00d7 business-hours routing rules.",
+          "tool": "Alertmanager routes",
+          "tags": [
+            "routing"
+          ]
+        }
+      ],
+      "alerting": [
+        {
+          "id": "ALR-01",
+          "source": "BAU",
+          "title": "HighErrorRate",
+          "desc": "Carried forward.",
+          "tool": "Alertmanager",
+          "tags": [
+            "alert"
+          ]
+        },
+        {
+          "id": "ALR-02",
+          "source": "BAU",
+          "title": "ServiceDown",
+          "desc": "Carried forward.",
+          "tool": "Alertmanager",
+          "tags": [
+            "alert"
+          ]
+        },
+        {
+          "id": "ALR-03",
+          "source": "BAU",
+          "title": "PodNotReady",
+          "desc": "Carried forward.",
+          "tool": "Alertmanager",
+          "tags": [
+            "alert"
+          ]
+        },
+        {
+          "id": "ALR-04",
+          "source": "BAU",
+          "title": "OOMKilled",
+          "desc": "Carried forward.",
+          "tool": "Alertmanager",
+          "tags": [
+            "alert"
+          ]
+        },
+        {
+          "id": "ALR-05",
+          "source": "BAU",
+          "title": "LatencyBudgetExhaustion",
+          "desc": "Carried forward.",
+          "tool": "Alertmanager",
+          "tags": [
+            "alert",
+            "SLO"
+          ]
+        },
+        {
+          "id": "ALR-06",
+          "source": "BAU",
+          "title": "ContainerCrashLooping",
+          "desc": "Carried forward.",
+          "tool": "Alertmanager",
+          "tags": [
+            "alert"
+          ]
+        },
+        {
+          "id": "ALR-07",
+          "source": "NEW",
+          "title": "AnomalyDetected (trace)",
+          "desc": "Span duration > baseline mean + 3\u03c3 for >5min.",
+          "tool": "otel-mcp anomalies",
+          "tags": [
+            "alert",
+            "anomaly"
+          ]
+        },
+        {
+          "id": "ALR-08",
+          "source": "NEW",
+          "title": "ProfileRegression",
+          "desc": "CPU profile diff > 20% vs 7d baseline.",
+          "tool": "Pyroscope",
+          "tags": [
+            "alert",
+            "profile"
+          ]
+        },
+        {
+          "id": "ALR-09",
+          "source": "SLA",
+          "title": "SettlementSLOBreach",
+          "desc": "SLA-driven, contractual.",
+          "tool": "Alertmanager",
+          "tags": [
+            "alert",
+            "SLA"
+          ]
+        }
+      ],
+      "healing": [
+        {
+          "id": "HEAL-01",
+          "source": "NEW",
+          "title": "Runbook automation",
+          "desc": "Event-driven remediation; runbook-as-code with audit trail.",
+          "tool": "Argo Events + Rundeck",
+          "tags": [
+            "automation"
+          ]
+        },
+        {
+          "id": "HEAL-02",
+          "source": "NEW",
+          "title": "HPA / KEDA scale guardrails",
+          "desc": "SLO-aware autoscaling; scale on burn-rate trend.",
+          "tool": "KEDA",
+          "tags": [
+            "autoscale"
+          ]
+        },
+        {
+          "id": "HEAL-03",
+          "source": "NEW",
+          "title": "Circuit breakers + load shedding",
+          "desc": "Envoy/Kong outlier detection + adaptive concurrency.",
+          "tool": "Envoy / Kong",
+          "tags": [
+            "resilience"
+          ]
+        },
+        {
+          "id": "HEAL-04",
+          "source": "NEW",
+          "title": "Auto-rollback on SLO burn",
+          "desc": "Argo Rollouts analysis pulls Prom; reverts on regression.",
+          "tool": "Argo Rollouts",
+          "tags": [
+            "rollback"
+          ]
+        }
+      ]
+    },
+    "L5": [
+      {
+        "id": "VAL-01",
+        "source": "BAU",
+        "title": "Anomaly baselines",
+        "desc": "Carried forward and extended to all spans.",
+        "tool": "otel-mcp-server",
+        "tags": [
+          "anomaly"
+        ]
+      },
+      {
+        "id": "VAL-02",
+        "source": "NEW",
+        "title": "Chaos experiments",
+        "desc": "Weekly pod-kill, net-delay, network-partition drills.",
+        "tool": "Chaos Mesh",
+        "tags": [
+          "chaos"
+        ]
+      },
+      {
+        "id": "VAL-03",
+        "source": "NEW",
+        "title": "Synthetic probes",
+        "desc": "TLS / DNS / journey canaries every 1m from 3 regions.",
+        "tool": "Grafana Synthetic / Blackbox",
+        "tags": [
+          "synthetic"
+        ]
+      },
+      {
+        "id": "VAL-04",
+        "source": "NEW",
+        "title": "MTTD / MTTR baselines",
+        "desc": "p50 detect \u2264 2 min; p95 resolve \u2264 30 min.",
+        "tool": "incident pipeline",
+        "tags": [
+          "SRE-metric"
+        ]
+      },
+      {
+        "id": "VAL-05",
+        "source": "NEW",
+        "title": "Daily conformance scan",
+        "desc": "MUST / SHOULD score across L1\u2013L4 per service.",
+        "tool": "policy-as-code",
+        "tags": [
+          "conformance"
+        ]
+      }
+    ],
+    "GOV": [
+      {
+        "id": "GOV-01",
+        "source": "BAU",
+        "title": "MCP-driven reports",
+        "desc": "Carried forward, scheduled cadence.",
+        "tool": "otel-mcp-server",
+        "tags": [
+          "report"
+        ]
+      },
+      {
+        "id": "GOV-02",
+        "source": "BAU",
+        "title": "ZK proof verification logs",
+        "desc": "Carried forward.",
+        "tool": "zk-proofs",
+        "tags": [
+          "crypto"
+        ]
+      },
+      {
+        "id": "GOV-03",
+        "source": "NEW",
+        "title": "Conformance score (daily, public)",
+        "desc": "Published per-service; gates release.",
+        "tool": "policy-as-code",
+        "tags": [
+          "conformance"
+        ]
+      },
+      {
+        "id": "GOV-04",
+        "source": "SLA",
+        "title": "Audit evidence pipeline",
+        "desc": "SOC2 + ISO27001 evidence export, signed snapshots.",
+        "tool": "compliance pipeline",
+        "tags": [
+          "audit",
+          "SLA"
+        ]
+      },
+      {
+        "id": "GOV-05",
+        "source": "NEW",
+        "title": "Incident & postmortem rollups",
+        "desc": "MTTD/MTTR trends + cohort cuts.",
+        "tool": "incident pipeline",
+        "tags": [
+          "post-mortem"
+        ]
+      },
+      {
+        "id": "GOV-06",
+        "source": "NEW",
+        "title": "Cohort reports",
+        "desc": "Per team / tier / domain rollups, monthly.",
+        "tool": "reporting",
+        "tags": [
+          "cohort"
+        ]
+      }
+    ]
+  }
+}

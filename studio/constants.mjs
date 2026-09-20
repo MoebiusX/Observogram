@@ -17,6 +17,8 @@ export const LAYER_DEFS = [
   { id: 'GOV', num: 'GOV', name: 'Governance' },
 ];
 
+// NOTE: diagnostic-grade.mjs inlines its own private copy of this array so
+// it can stay zero-dependency for downstream vendoring — keep the two in sync.
 export const L4_SUBGROUPS = [
   { key: 'policy',   label: 'Policy' },
   { key: 'alerting', label: 'Alerting' },

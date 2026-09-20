@@ -1,0 +1,15 @@
+# One recording rule and one always-firing alerting rule so the
+# prometheus_rule_* metrics exist and notifications flow to Alertmanager
+# (whose receiver is a dead webhook — see alertmanager.yml).
+groups:
+  - name: stack-validation
+    interval: 5s
+    rules:
+      - record: stack:up:sum
+        expr: sum(up)
+      - alert: StackValidationAlwaysFiring
+        expr: vector(1) > 0
+        labels:
+          severity: test
+        annotations:
+          summary: always fires so the notification path is exercised

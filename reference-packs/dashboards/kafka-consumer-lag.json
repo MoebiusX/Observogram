@@ -1,0 +1,890 @@
+{
+  "uid": "kafka-consumer-lag",
+  "title": "Kafka — Consumer lag",
+  "description": "Kafka pack board \"Consumer lag\": SLIs consumer_group_lag_seconds · SLOs consumer_lag_99_under_60s · views per_consumergroup_lag.",
+  "tags": [
+    "kafka",
+    "pack"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "liveNow": false,
+  "refresh": "30s",
+  "fiscalYearStartMonth": 0,
+  "weekStart": "",
+  "timepicker": {
+    "refresh_intervals": [
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m"
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": [
+      {
+        "name": "Symptom alerts",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prom"
+        },
+        "enable": true,
+        "hide": false,
+        "iconColor": "#F0616D",
+        "expr": "ALERTS{alertstate=\"firing\", pack=\"kafka\", burn_rate=\"\", kind=\"\"}",
+        "step": "10s",
+        "titleFormat": "{{alertname}}",
+        "textFormat": "{{severity}} · {{qmgr}} {{queue}}"
+      }
+    ]
+  },
+  "links": [
+    {
+      "title": "Unified",
+      "type": "link",
+      "url": "/d/kafka-unified",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
+      "title": "Cluster overview",
+      "type": "link",
+      "url": "/d/kafka-cluster-overview",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
+      "title": "Throughput",
+      "type": "link",
+      "url": "/d/kafka-throughput",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
+      "title": "Slo burn",
+      "type": "link",
+      "url": "/d/kafka-slo-burn",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 2
+      },
+      "transparent": true,
+      "options": {
+        "mode": "markdown",
+        "content": "### Kafka · Consumer lag\nSLIs consumer_group_lag_seconds · SLOs consumer_lag_99_under_60s · views per_consumergroup_lag. &nbsp;·&nbsp; pack `kafka@1.0.0` &nbsp;·&nbsp; [Unified](/d/kafka-unified?${__url_time_range}) · [Cluster overview](/d/kafka-cluster-overview?${__url_time_range}) · **Consumer lag** · [Throughput](/d/kafka-throughput?${__url_time_range}) · [Slo burn](/d/kafka-slo-burn?${__url_time_range})",
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "row",
+      "title": "§1-2 · Contract — SLIs and SLOs",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 2,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Consumer group lag seconds",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 3,
+        "w": 4,
+        "h": 4
+      },
+      "description": "Maximum consumer-group lag (in seconds equivalent), per critical consumer group. Computed by dividing message-count lag by the consumer's rolling consumption rate. SLO 99 % over 7d.",
+      "pack": {
+        "binds_to": [
+          "slis.consumer_group_lag_seconds"
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(kafka:consumer_lag:seconds_max_5m)",
+          "instant": false,
+          "range": true,
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3DD68C",
+                "value": null
+              },
+              {
+                "color": "#F5B14C",
+                "value": 60
+              },
+              {
+                "color": "#F0616D",
+                "value": 120
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "orientation": "auto",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 4,
+      "type": "bargauge",
+      "title": "Error-budget burn · last hour",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 3,
+        "w": 12,
+        "h": 8
+      },
+      "description": "1 h error-budget burn rate per SLO: 1× consumes the budget exactly over the SLO window; amber at the smallest factor that alerts for that SLO, red at the largest (spec.policy).",
+      "pack": {
+        "binds_to": [
+          "slos.consumer_lag_99_under_60s"
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kafka:errorbudget:burn_1h",
+          "instant": true,
+          "legendFormat": "{{slo}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "max": 20,
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#8B98A9",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "consumer_lag_99_under_60s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Consumer group lag seconds · 99 %"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#3DD68C",
+                      "value": null
+                    },
+                    {
+                      "color": "#F5B14C",
+                      "value": 4
+                    },
+                    {
+                      "color": "#F0616D",
+                      "value": 10
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "valueMode": "color",
+        "namePlacement": "left",
+        "showUnfilled": true,
+        "sizing": "auto",
+        "minVizWidth": 8,
+        "minVizHeight": 14,
+        "maxVizHeight": 26,
+        "legend": {
+          "showLegend": false
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Burn rate · 5 m window",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 3,
+        "w": 6,
+        "h": 8
+      },
+      "description": "Fast window: reacts within minutes; pages when both it and the slow window exceed the factor. Hover for per-SLO values.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kafka:errorbudget:burn_5m",
+          "legendFormat": "{{slo}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "pointSize": 4,
+            "spanNulls": 30000,
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "axisPlacement": "auto",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "#8B98A9",
+                "value": 1
+              },
+              {
+                "color": "#F0616D",
+                "value": 14
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "broker_availability_99_9"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Broker availability"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "partition_health_99_95"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Partition replica health"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "consumer_lag_99_under_60s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Consumer group lag seconds"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "produce_latency_99_p99_100ms"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Produce latency p99"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "fetch_latency_99_p99_50ms"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Fetch latency p99"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "controller_stability_99_under_1ph"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Controller election rate"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Burn rate · 1 h window",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 11,
+        "w": 6,
+        "h": 8
+      },
+      "description": "Slow window: keeps burning for up to an hour after an incident by design.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "kafka:errorbudget:burn_1h",
+          "legendFormat": "{{slo}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "pointSize": 4,
+            "spanNulls": 30000,
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "axisPlacement": "auto",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "#8B98A9",
+                "value": 1
+              },
+              {
+                "color": "#F0616D",
+                "value": 6
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "broker_availability_99_9"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Broker availability"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "partition_health_99_95"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Partition replica health"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "consumer_lag_99_under_60s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Consumer group lag seconds"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "produce_latency_99_p99_100ms"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Produce latency p99"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "fetch_latency_99_p99_50ms"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Fetch latency p99"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "controller_stability_99_under_1ph"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Controller election rate"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "row",
+      "title": "§5 · Derived views",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 19,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Per consumergroup lag",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 12,
+        "h": 7
+      },
+      "description": "SLI consumer_group_lag_seconds by consumergroup (pack derived view per_consumergroup_lag).",
+      "pack": {
+        "binds_to": [
+          "ref:queries.per_consumergroup_lag"
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (consumergroup) ( kafka_consumergroup_lag / (rate(kafka_consumergroup_current_offset[5m]) > 0) )",
+          "legendFormat": "{{consumergroup}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "pointSize": 4,
+            "spanNulls": 30000,
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "axisPlacement": "auto",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3DD68C",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "Alerting",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 27,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 10,
+      "type": "state-timeline",
+      "title": "Symptom alerts · pending / firing",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 12,
+        "h": 6
+      },
+      "description": "State of every symptom alert of the pack over the time range.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(2 * max by (alertname) (ALERTS{pack=\"kafka\", alertstate=\"firing\", burn_rate=\"\", kind=\"\"})) or max by (alertname) (ALERTS{pack=\"kafka\", alertstate=\"pending\", burn_rate=\"\", kind=\"\"}) or label_replace(vector(0), \"alertname\", \"no alert\", \"\", \"\")",
+          "legendFormat": "{{alertname}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#4B5563"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "quiet",
+                  "color": "#1E3A34"
+                },
+                "1": {
+                  "text": "PENDING",
+                  "color": "#F5B14C"
+                },
+                "2": {
+                  "text": "FIRING",
+                  "color": "#F0616D"
+                }
+              }
+            }
+          ],
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 78
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "mergeValues": true,
+        "showValue": "never",
+        "alignValue": "center",
+        "rowHeight": 0.82,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "state-timeline",
+      "title": "Burn-rate & forecast alerts · pending / firing",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 28,
+        "w": 12,
+        "h": 6
+      },
+      "description": "Multi-window burn-rate alerts (fast windows page, slow windows linger after incidents) and forecasts.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(2 * max by (alertname) (ALERTS{pack=\"kafka\", alertstate=\"firing\", burn_rate!=\"\"})) or max by (alertname) (ALERTS{pack=\"kafka\", alertstate=\"pending\", burn_rate!=\"\"}) or label_replace(vector(0), \"alertname\", \"no alert\", \"\", \"\")",
+          "legendFormat": "{{alertname}}"
+        },
+        {
+          "refId": "B",
+          "expr": "(2 * max by (alertname) (ALERTS{pack=\"kafka\", alertstate=\"firing\", kind=\"forecast\"})) or max by (alertname) (ALERTS{pack=\"kafka\", alertstate=\"pending\", kind=\"forecast\"})",
+          "legendFormat": "{{alertname}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#4B5563"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "quiet",
+                  "color": "#1E3A34"
+                },
+                "1": {
+                  "text": "PENDING",
+                  "color": "#F5B14C"
+                },
+                "2": {
+                  "text": "FIRING",
+                  "color": "#F0616D"
+                }
+              }
+            }
+          ],
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 78
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "mergeValues": true,
+        "showValue": "never",
+        "alignValue": "center",
+        "rowHeight": 0.82,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    }
+  ]
+}

@@ -17,11 +17,14 @@
 
 // `<service>:<metric>:<op>` — Prometheus recording-rule naming convention.
 const RULE_NAME_RE = /^([a-z][a-z0-9_]*):([a-z][a-z0-9_]*):([a-z0-9_]+)$/;
+// The compiler's policy records (`<service>:errorbudget:burn_5m|1h`, one series
+// per SLO) share the metric segment `errorbudget`; it is reserved and never an SLI.
+const POLICY_SEGMENT = 'errorbudget';
 
 /** Canonical SLI id contributed by a recording rule, or null. */
 export function ruleNameToSliId(name) {
   const m = RULE_NAME_RE.exec(typeof name === 'string' ? name : '');
-  if (!m) return null;
+  if (!m || m[2] === POLICY_SEGMENT) return null;
   return `${m[1]}_${m[2]}`.toLowerCase();
 }
 
@@ -47,6 +50,7 @@ export function inferSlisFromRecordingRules(rules) {
     const m = RULE_NAME_RE.exec(r.name);
     if (!m) continue;
     const [, service, metric, op] = m;
+    if (metric === POLICY_SEGMENT) continue;
     const key = `${service}:${metric}`;
     if (!byBase.has(key)) byBase.set(key, { service, metric, ops: {} });
     byBase.get(key).ops[op] = r;
@@ -60,6 +64,13 @@ export function inferSlisFromRecordingRules(rules) {
     const goodKey = Object.keys(ops).find(k => /^good_/.test(k));
     const totalKey = Object.keys(ops).find(k => /^total_/.test(k));
     const ratioKey = Object.keys(ops).find(k => /^ratio_/.test(k) || /^error_ratio_/.test(k));
+    // The compiler's threshold shape: `value_*` plus an `error_ratio_*` whose expr reads
+    // the value series (`sum_over_time((max(<value series>) > bool <threshold>)[w:step]) / n`).
+    // Only that shape flips to a threshold SLI, with the threshold read back from the
+    // comparison; any other value_*/error_ratio_* pair keeps the ratio-family inference.
+    const valueKey = Object.keys(ops).find(k => /^value_/.test(k));
+    const errorRatioKey = valueKey && Object.keys(ops).find(k => /^error_ratio_/.test(k) && String(ops[k].expr || '').includes(ops[valueKey].name));
+    const compiledThreshold = errorRatioKey ? /> bool (\d+(?:\.\d+)?)/.exec(ops[errorRatioKey].expr) : null;
     if (goodKey && totalKey) {
       sli = {
         id: sliId,
@@ -67,6 +78,15 @@ export function inferSlisFromRecordingRules(rules) {
         type: 'ratio',
         good:  ops[goodKey].expr,
         total: ops[totalKey].expr,
+      };
+    } else if (errorRatioKey) {
+      sli = {
+        id: sliId,
+        description: `Inferred from recording rules ${ops[valueKey].name} and ${ops[errorRatioKey].name}.`,
+        type: 'threshold',
+        query: ops[valueKey].expr,
+        threshold: compiledThreshold ? Number(compiledThreshold[1]) : 1,
+        ...(compiledThreshold ? {} : { unit: 'ratio' }),
       };
     } else if (ratioKey) {
       // We have a ratio recording rule directly. Treat it as the SLI's

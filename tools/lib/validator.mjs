@@ -156,7 +156,9 @@ export function gatekeep(pack) {
       `not a canonical ObservabilityPack v${SPEC_VERSION} manifest. ` +
       `Expected apiVersion: ${REQUIRED_API_VERSION}, kind: ${REQUIRED_KIND}. ` +
       `Got apiVersion: ${JSON.stringify(pack?.apiVersion)}, kind: ${JSON.stringify(pack?.kind)}. ` +
-      `See vendor/observability-pack-spec/v${SPEC_VERSION}/spec.md for the canonical shape.`
+      `See vendor/observability-pack-spec/v${SPEC_VERSION}/spec.md for the canonical shape. ` +
+      `Previous-format (layered JSON) packs upconvert with \`npm run upconvert-legacy <file>\` ` +
+      `— or just upload them in the studio, which converts them automatically (see examples/legacy/).`
     );
   }
   return null;

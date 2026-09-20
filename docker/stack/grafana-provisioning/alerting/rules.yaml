@@ -1,0 +1,38 @@
+# One always-firing Grafana-managed alert rule so Grafana's ruler path is
+# exercised: its grafana_alerting_rule_evaluation_* counters are
+# label-vectored per org and register only once an org evaluates a rule.
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: stack-validation
+    folder: stack-validation
+    interval: 10s
+    rules:
+      - uid: stack-validation-always
+        title: StackValidationAlwaysFiring
+        condition: B
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: test
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: stack-prom
+            model:
+              refId: A
+              expr: vector(1)
+              instant: true
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]

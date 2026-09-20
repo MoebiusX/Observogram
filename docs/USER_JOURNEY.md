@@ -1,6 +1,6 @@
 # User Journey
 
-Tomograph has one product journey:
+Observogram has one product journey:
 
 ```text
 Discover -> Diagnose -> Remediate
@@ -18,7 +18,7 @@ that answer.
 
 | Step | User question | Product answer |
 |---|---|---|
-| Discover | What do we have? | Render the observability tomogram from a repo, live scan, or pack. |
+| Discover | What do we have? | Render the observogram from a repo, live scan, or pack. |
 | Diagnose | Can we trust it? | Score coverage and trust; show declared-vs-live drift. |
 | Remediate | How do we fix it? | Compile and deploy the source-backed delta. |
 
@@ -33,7 +33,7 @@ analysis: References, Conformance, Schema, OTLP Coverage, Traceability, Atlas.
 
 ## OLA And Observability Contract
 
-The OLA is the service's observability intent. Tomograph represents that intent
+The OLA is the service's observability intent. Observogram represents that intent
 as a canonical ObservabilityPack:
 
 - criticality and ownership
@@ -87,7 +87,8 @@ Re-run live scan and compare again
 
 ## Diagnostic Grade Contract
 
-The Diagnostic Grade is the top-level answer. It is scored from eight criteria:
+The Diagnostic Grade is the top-level answer. It is scored from seven
+criteria (grade schema 2), plus one informational operability check:
 
 ### Coverage - Are We Observing The Right Things?
 
@@ -96,20 +97,43 @@ The Diagnostic Grade is the top-level answer. It is scored from eight criteria:
    correlation.
 3. **Calibrated** - SLOs have numeric objectives and baselines exist.
 4. **Comprehensive** - coverage spans the major service layers.
-5. **Actionable** - alerts lead to a runbook or remediation path.
 
 ### Trust - Can We Trust What The Signals Show?
 
-6. **Chaos-validated** - recovery has fault-injection evidence.
-7. **Drift-free** - declared artifacts match live state.
-8. **Fresh** - the live signal was verified recently.
+5. **Chaos-validated** - recovery has fault-injection evidence.
+6. **Drift-free** - declared artifacts match live state.
+7. **Fresh** - the live signal was verified recently.
 
-The displayed verdict is:
+### Operability - Can Oncall Act On What It Sees? (informational, not scored)
+
+- **Actionable** - alerts lead to a runbook or remediation path. This
+  measures response readiness of the overall observability solution, not
+  diagnostic capability, so it is observed and displayed but never moves
+  the score (reclassified 2026-06-10; journey run records carry
+  `grade.schema` so score history steps are explainable).
+
+The audit verdict (the machine contract journeys gate on) is:
 
 ```text
 PASS when score > 85%
 FAIL otherwise
 ```
+
+The displayed verdict is the **instrument grade** the score lands on,
+rendered as a full ladder with the current rung highlighted:
+
+| Grade | Class | Score band |
+|---|---|---|
+| A++ | Calibration / Reference Grade | not score-reachable (external benchmarking) |
+| A+ | Laboratory / Research Grade | ≥ 95% |
+| A | Diagnostic / Clinical Grade | > 85% — anchored to the audit bar |
+| B+ | Inspection Grade | ≥ 75% |
+| B | Industrial Grade | ≥ 62.5% |
+| C | Field Grade | ≥ 37.5% |
+| D | Consumer Grade | < 37.5% |
+
+A or better and audit PASS are by construction the same statement. Journey
+run records carry `grade.letter` alongside `grade.score`.
 
 Failed criteria still render as evidence. A score can pass while drift remains
 visible. That is intentional: the grade answers whether the posture is

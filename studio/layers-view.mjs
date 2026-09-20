@@ -1,9 +1,10 @@
 // studio/layers-view.mjs
 //
-// Discover — the tomogram scan dashboard — plus the layered Discover view it
-// drills into: the per-layer sections, the Expand toggles, the domain/search
-// filters, and the artefact cards (renderCard/cardKey, shared with the drawer
-// and compare views). Orchestration-coupled to app.mjs + drawer.mjs.
+// Discover — the observogram scan dashboard — plus the layered Discover view
+// it drills into: the per-layer sections, the Expand toggles, the domain/
+// search filters, and the artefact cards (renderCard/cardKey, shared with the
+// drawer and compare views). Re-renders via the host seam (host.mjs); still
+// imports scan helpers back from app.mjs and the drawer opener (safe cycles).
 
 import { state, $, $$, persistence } from './state.mjs';
 import { LAYER_DEFS, L4_SUBGROUPS, DOMAIN_DEFS, DISCO_SLAB_ACCENT, discoGradeLetter, discoGradeWord } from './constants.mjs';
@@ -11,7 +12,8 @@ import { effectiveFocus, focusedPack, focusedConformance } from './focus.mjs';
 import { escapeHtml, toast } from './util.mjs';
 import { openDrawer } from './drawer.mjs';
 import { LENS_PRODUCTS } from './compare-view.mjs';
-import { buildSymbolTable, defaultEnvFor, layerArtefactCount, renderLayerFilterChips, renderMainView, renderTabs, refresh, runBenchmark } from './app.mjs';
+import { buildSymbolTable, defaultEnvFor, layerArtefactCount, renderLayerFilterChips, refresh, runBenchmark } from './app.mjs';
+import { host as appHost } from './host.mjs';
 
 export function renderDiscoverDashboard(view) {
   view.innerHTML = '';
@@ -132,7 +134,7 @@ export function renderDiscoverDashboard(view) {
         <section class="disco-panel disco-scanner-panel">
           <div class="disco-scanner-head">
             <div>
-              <div class="disco-scanner-title">TOMOGRAM SCAN</div>
+              <div class="disco-scanner-title">OBSERVOGRAM SCAN</div>
               <div class="disco-scanner-sub">layered observability view</div>
             </div>
             <div class="disco-scan-status">
@@ -143,7 +145,7 @@ export function renderDiscoverDashboard(view) {
           </div>
 
           <div class="disco-scanner-stage">
-            <img class="disco-scanner-img" src="/assets/tomogram-hero.png" alt="Observability tomogram scan"
+            <img class="disco-scanner-img" src="/assets/observogram-hero.png" alt="Observogram scan"
                  onerror="this.classList.add('is-missing')">
             <div class="disco-scanner-fallback">
               ${LAYER_DEFS.filter(d => d.id !== 'L2X' || layerArtefactCount('L2X') > 0).map(d => {
@@ -512,7 +514,7 @@ function renderSection(def, items, opts = {}) {
       toggle.className = 'section-expand-toggle' + (on ? ' is-on' : '');
       toggle.title = b.title;
       toggle.innerHTML = `<span class="section-expand-glyph" aria-hidden="true">${on ? '⊟' : '⊞'}</span> ${on ? 'Hide' : 'Expand'} ${escapeHtml(b.label)} <span class="section-expand-count">${b.items.length}</span>`;
-      toggle.onclick = () => { state[b.key] = !state[b.key]; persistence.schedule(); renderMainView(); };
+      toggle.onclick = () => { state[b.key] = !state[b.key]; persistence.schedule(); appHost.renderMainView(); };
       head.appendChild(toggle);
     }
   }

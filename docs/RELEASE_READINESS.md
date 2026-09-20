@@ -1,6 +1,6 @@
 # Release Readiness
 
-This document defines the V1 release gate for Tomograph. The gate is centered
+This document defines the V1 release gate for Observogram. The gate is centered
 on the product promise:
 
 ```text
@@ -16,7 +16,7 @@ the demo.
 
 The release question is:
 
-> Can Tomograph prove whether a service is diagnostic-grade, explain the gaps,
+> Can Observogram prove whether a service is diagnostic-grade, explain the gaps,
 > and produce the next deployable observability fix?
 
 ## Required Capabilities
@@ -41,12 +41,24 @@ PASS when score > 85%
 FAIL otherwise
 ```
 
-The eight criteria are:
+Users see the score as a metrology-style instrument grade (D < 37.5% · C ≥
+37.5% · B ≥ 62.5% · B+ ≥ 75% · A > 85% · A+ ≥ 95%; A++ requires
+external reference evidence and is not score-reachable). A is anchored
+strictly above the audit bar, so "A or better" and PASS are the same
+statement — gates and run records keep keying off PASS/FAIL.
 
-| Area | Criteria |
-|---|---|
-| Coverage | Multi-modal, Correlated, Calibrated, Comprehensive, Actionable |
-| Trust | Chaos-validated, Drift-free, Fresh |
+The seven scored criteria are (grade schema 2, ratified 2026-06-10):
+
+| Area | Criteria | Scored |
+|---|---|---|
+| Coverage | Multi-modal, Correlated, Calibrated, Comprehensive | yes |
+| Trust | Chaos-validated, Drift-free, Fresh | yes |
+| Operability | Actionable (runbooks linked) | no — informational |
+
+Actionable was reclassified out of the scored grade because runbooks measure
+response readiness of the overall observability solution, not diagnostic
+capability. It remains observed and displayed on the grade card (section 2C)
+and keeps a scored home in the posture matrix's runbook mechanism column.
 
 A passing grade does not hide drift. Remaining failed criteria,
 declared-not-live artifacts, drifted artifacts, and live-only artifacts stay

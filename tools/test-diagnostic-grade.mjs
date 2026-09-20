@@ -4,6 +4,9 @@ import {
   computeDiagnosticGrade,
   computeWeightedDeltaRisk,
   diagnosticAuditStatus,
+  INSTRUMENT_GRADE_SCALE,
+  instrumentGradeFor,
+  partialLiveEvidence,
 } from '../studio/diagnostic-grade.mjs';
 
 function assert(condition, message, details) {
@@ -18,7 +21,8 @@ function closeTo(actual, expected, epsilon = 1e-9) {
 }
 
 function criterion(result, key) {
-  return [...result.coverage.criteria, ...result.trust.criteria].find((item) => item.key === key);
+  return [...result.coverage.criteria, ...result.trust.criteria, ...result.operability.criteria]
+    .find((item) => item.key === key);
 }
 
 function baseRepoPack() {
@@ -112,6 +116,31 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
   assert(overEightyFive.status === 'PASS', 'scores above 85% should pass', overEightyFive);
 }
 
+// Instrument-grade scale: the letter the score lands on. A is anchored
+// strictly above the audit bar so the letter and PASS/FAIL never disagree.
+{
+  assert(instrumentGradeFor(0).letter === 'D', '0% is Consumer Grade');
+  assert(instrumentGradeFor(37.4).letter === 'D', 'just under 37.5% stays Consumer Grade');
+  assert(instrumentGradeFor(37.5).letter === 'C', '37.5% reaches Field Grade');
+  assert(instrumentGradeFor(62.5).letter === 'B', '62.5% reaches Industrial Grade');
+  assert(instrumentGradeFor(75).letter === 'B+', '75% reaches Inspection Grade');
+  assert(instrumentGradeFor(85).letter === 'B+', 'exactly 85% is still Inspection Grade — A requires strictly more than the audit bar');
+  assert(instrumentGradeFor(85.01).letter === 'A', 'above the audit bar is Diagnostic / Clinical Grade');
+  assert(instrumentGradeFor(95).letter === 'A+', '95% reaches Laboratory / Research Grade');
+  assert(instrumentGradeFor(100).letter === 'A+', 'a perfect verification score caps at A+ — A++ needs external reference evidence');
+  const unreachable = INSTRUMENT_GRADE_SCALE.filter((g) => g.minPct === null).map((g) => g.letter);
+  assert(unreachable.length === 1 && unreachable[0] === 'A++',
+         'exactly A++ is not score-reachable (the metrology S rung was dropped as unpragmatic)', unreachable);
+  assert(!INSTRUMENT_GRADE_SCALE.some((g) => g.letter === 'S'), 'no Primary Standard rung — absurd for an observability instrument');
+  // The letter can never contradict the audit verdict.
+  for (const pct of [0, 37.5, 62.5, 75, 84.9, 85, 85.01, 92, 95, 100]) {
+    const passes = pct > 85;
+    const letter = instrumentGradeFor(pct).letter;
+    const aOrBetter = ['A', 'A+'].includes(letter);
+    assert(passes === aOrBetter, `at ${pct}%: audit ${passes ? 'PASS' : 'FAIL'} must match grade ${letter}`, { pct, letter });
+  }
+}
+
 {
   const result = computeDiagnosticGrade(
     baseRepoPack(),
@@ -124,10 +153,16 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
 
   assert(result.overall.audit.status === 'PASS', 'high traceability integrity plus fresh live evidence should pass', result.overall);
   assert(result.overall.verdict.word === 'Diagnostic-grade', 'passing verdict should be diagnostic-grade', result.overall.verdict);
-  assert(result.coverage.passed === 5, 'all five coverage clauses should pass', result.coverage);
+  assert(result.gradeSchema === 2, 'grade schema 2: Actionable is informational operability', result.gradeSchema);
+  assert(result.coverage.passed === 4 && result.coverage.total === 4, 'all four coverage clauses should pass (schema 2)', result.coverage);
+  assert(result.overall.total === 7, 'overall total is 7 scored criteria (4 coverage + 3 trust)', result.overall);
   assert(closeTo(result.trust.passed, 2.9), 'trust score should include fractional drift fidelity', result.trust);
   assert(criterion(result, 'drift-free').pass === true, '0.90 traceability integrity should satisfy drift-free');
   assert(closeTo(criterion(result, 'drift-free').score, 0.9), 'drift-free score should equal integrity mean');
+  assert(result.overall.instrumentGrade.letter === 'A+', '6.9/7 = 98.6% lands on Laboratory / Research Grade', result.overall.instrumentGrade);
+  assert(result.operability.informational === true, 'operability section is marked informational', result.operability);
+  assert(criterion(result, 'actionable')?.informational === true, 'actionable criterion carries the informational flag');
+  assert(!result.coverage.criteria.some((c) => c.key === 'actionable'), 'actionable must not appear among scored coverage criteria');
 }
 
 {
@@ -140,10 +175,37 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
     { nowMs },
   );
 
-  assert(closeTo(result.overall.passed, 6.8), 'boundary setup should score exactly 6.8/8', result.overall);
-  assert(result.overall.audit.status === 'FAIL', 'exactly 85% should not pass the diagnostic-grade audit', result.overall.audit);
-  assert(result.overall.verdict.word === 'Almost diagnostic-grade', '85% boundary should remain almost diagnostic-grade', result.overall.verdict);
+  assert(closeTo(result.overall.passed, 5.8), 'sub-threshold setup should score 5.8/7 (4 coverage + chaos 1 + drift 0.8, fresh fails)', result.overall);
+  assert(result.overall.audit.scorePctExact < 85, 'sub-threshold score should land below the 85% gate', result.overall.audit);
+  assert(result.overall.audit.status === 'FAIL', 'below 85% should not pass the diagnostic-grade audit', result.overall.audit);
+  assert(result.overall.verdict.word === 'Almost diagnostic-grade', 'sub-threshold score in the 62.5–85% band reads almost diagnostic-grade', result.overall.verdict);
+  assert(result.overall.instrumentGrade.letter === 'B+', '5.8/7 = 82.9% lands on Inspection Grade', result.overall.instrumentGrade);
   assert(criterion(result, 'fresh').pass === false, 'missing refreshedAt should fail freshness');
+}
+
+// The heart of grade schema 2: runbooks (Actionable) are observed and
+// reported, but can NEVER move the diagnostic score in either direction.
+{
+  const withRunbook = baseRepoPack();
+  const withoutRunbook = baseRepoPack();
+  withoutRunbook.layers.L4 = {};
+
+  const args = (packA) => [
+    packA,
+    livePack({ 'mcp.refreshedAt': '2026-06-09T11:00:00Z' }),
+    fullPosture(),
+    'production-live',
+    traceabilityDiff(0.9),
+    { nowMs },
+  ];
+  const a = computeDiagnosticGrade(...args(withRunbook));
+  const b = computeDiagnosticGrade(...args(withoutRunbook));
+
+  assert(criterion(a, 'actionable').pass === true, 'runbook declared should observe actionable = yes');
+  assert(criterion(b, 'actionable').pass === false, 'no runbook should observe actionable = no');
+  assert(closeTo(a.overall.passed, b.overall.passed), 'removing every runbook must not change the diagnostic score', { with: a.overall, without: b.overall });
+  assert(a.overall.total === b.overall.total, 'scored criterion count is independent of runbooks');
+  assert(a.overall.audit.status === b.overall.audit.status, 'PASS/FAIL must be independent of runbooks');
 }
 
 {
@@ -207,6 +269,168 @@ const nowMs = Date.parse('2026-06-09T12:00:00Z');
 
   assert(criterion(result, 'drift-free').pass === false, '40% empty/failed probes should fail fallback drift tolerance');
   assert(closeTo(criterion(result, 'drift-free').score, 0.6), 'failed probe fallback should still award fractional evidence credit');
+}
+
+// Partial live evidence — a live draft that lost probes to 503s must be
+// flagged so a thin Pack B can't masquerade as massive drift.
+{
+  const liveDraft = (extra) => ({ meta: { annotations: {
+    'mcp.url': 'https://example.test/mcp',
+    'mcp.probesAttempted': 'metrics,recording_rules,alert_rules,dashboards,routes',
+    'mcp.probesSucceeded': 'dashboards,routes',
+    ...extra,
+  } } });
+
+  const partial = partialLiveEvidence(liveDraft({ 'mcp.probesFailed': 'metrics,recording_rules,alert_rules' }));
+  assert(partial.partial === true, 'failed probes on a live draft mark the evidence PARTIAL', partial);
+  assert(partial.failed.length === 3 && partial.attempted.length === 5, 'failed/attempted probe lists parse from annotations', partial);
+
+  const emptyOnly = partialLiveEvidence(liveDraft({ 'mcp.probesEmpty': 'metrics' }));
+  assert(emptyOnly.partial === false, 'empty probes are honest zeros, NOT partial evidence', emptyOnly);
+
+  const clean = partialLiveEvidence(liveDraft({}));
+  assert(clean.partial === false, 'a clean live draft is not partial', clean);
+
+  const filePack = partialLiveEvidence({ meta: { annotations: { 'mcp.probesFailed': 'x' } } });
+  assert(filePack.partial === false, 'non-live packs (no mcp.url) never claim partial live evidence', filePack);
+
+  assert(partialLiveEvidence(null).partial === false, 'null pack is handled');
+
+  // Additive keys: unsupported families, per-family errors, vantage.
+  assert(clean.vantage === 'full' && clean.unsupported.length === 0 && Object.keys(clean.errors).length === 0,
+         'a clean live draft has vantage full, no unsupported families, no errors', clean);
+  assert(partial.vantage === 'partial', 'failed probes give vantage partial', partial.vantage);
+  assert(emptyOnly.vantage === 'full', 'empty probes do not degrade the vantage', emptyOnly.vantage);
+  assert(filePack.vantage === 'none', 'non-live packs have vantage none', filePack.vantage);
+  assert(partialLiveEvidence(null).vantage === 'none', 'null pack has vantage none');
+
+  const restricted = partialLiveEvidence(liveDraft({ 'mcp.probesUnsupported': 'metrics,routes' }));
+  assert(restricted.vantage === 'restricted' && restricted.partial === false,
+         'unsupported families without failures give vantage restricted and do NOT mark the evidence partial', restricted);
+  assert(restricted.unsupported.join(',') === 'metrics,routes', 'unsupported families parse from mcp.probesUnsupported', restricted.unsupported);
+
+  const mixed = partialLiveEvidence(liveDraft({
+    'mcp.probesFailed': 'metrics',
+    'mcp.probesUnsupported': 'routes',
+    'mcp.probeErrors.metrics': 'HTTP 503 Service Unavailable',
+  }));
+  assert(mixed.vantage === 'partial' && mixed.partial === true,
+         'a failure outranks an unsupported family: vantage partial', mixed);
+  assert(mixed.errors.metrics === 'HTTP 503 Service Unavailable' && Object.keys(mixed.errors).length === 1,
+         'per-family errors are read from mcp.probeErrors.<family>', mixed.errors);
+
+  const lost = partialLiveEvidence(liveDraft({
+    'mcp.probesAttempted': 'metrics,routes,dashboards',
+    'mcp.probesFailed': 'metrics,routes',
+    'mcp.probesUnsupported': 'dashboards',
+  }));
+  assert(lost.vantage === 'lost' && lost.partial === true,
+         'every attempted family failed or unsupported gives vantage lost', lost);
+
+  const allUnsupported = partialLiveEvidence(liveDraft({
+    'mcp.probesAttempted': 'metrics,routes',
+    'mcp.probesUnsupported': 'metrics,routes',
+  }));
+  assert(allUnsupported.vantage === 'lost' && allUnsupported.partial === false,
+         'an MCP that exposes none of the probed families is lost, yet not partial (nothing failed)', allUnsupported);
+
+  const nothingAttempted = partialLiveEvidence({ meta: { annotations: { 'mcp.url': 'https://example.test/mcp' } } });
+  assert(nothingAttempted.vantage === 'full', 'a live draft without probe annotations (older pack) reads full, not lost', nothingAttempted);
+}
+
+// Fresh names the vantage: a refresh whose every probe family failed is
+// still a refresh (pass stays a staleness test), but the detail must not
+// read as a fresh look at production.
+{
+  const lost = computeDiagnosticGrade(
+    baseRepoPack(),
+    livePack({
+      'mcp.url': 'https://example.test/mcp',
+      'mcp.refreshedAt': '2026-06-09T11:00:00Z',
+      'mcp.probesAttempted': 'recording_rules,alert_rules,dashboards',
+      'mcp.probesFailed': 'recording_rules,alert_rules',
+      'mcp.probesUnsupported': 'dashboards',
+    }),
+    fullPosture(),
+    'production-live',
+    null,
+    { nowMs },
+  );
+  const freshLost = criterion(lost, 'fresh');
+  assert(freshLost.pass === true, 'fresh pass/fail stays a staleness test (scoring unchanged)', freshLost);
+  assert(/vantage lost/.test(freshLost.detail) && /failed: recording_rules, alert_rules/.test(freshLost.detail)
+         && /not exposed: dashboards/.test(freshLost.detail),
+         'fresh detail says the vantage was lost and names the failed / not-exposed families', freshLost.detail);
+
+  const partial = computeDiagnosticGrade(
+    baseRepoPack(),
+    livePack({
+      'mcp.url': 'https://example.test/mcp',
+      'mcp.refreshedAt': '2026-06-09T11:00:00Z',
+      'mcp.probesAttempted': 'recording_rules,alert_rules,dashboards',
+      'mcp.probesSucceeded': 'recording_rules,alert_rules',
+      'mcp.probesFailed': 'dashboards',
+    }),
+    fullPosture(),
+    'production-live',
+    null,
+    { nowMs },
+  );
+  const freshPartial = criterion(partial, 'fresh');
+  assert(freshPartial.pass === true && /vantage partial: failed dashboards/.test(freshPartial.detail),
+         'fresh detail names a partial vantage and its failed families', freshPartial.detail);
+
+  const full = computeDiagnosticGrade(
+    baseRepoPack(),
+    livePack({ 'mcp.url': 'https://example.test/mcp', 'mcp.refreshedAt': '2026-06-09T11:00:00Z', 'mcp.probesAttempted': 'a', 'mcp.probesSucceeded': 'a' }),
+    fullPosture(), 'production-live', null, { nowMs },
+  );
+  assert(!/vantage/.test(criterion(full, 'fresh').detail), 'a full vantage adds nothing to the fresh detail', criterion(full, 'fresh').detail);
+}
+
+// ---------- prettyDiffKey (studio/artifact-model.mjs) ----------
+// The studio's display renderer for behavioural identity keys. One case
+// per identity shape in tools/lib/artefact-model.mjs's IDENTITY table,
+// plus ordinals, singletons, and the legacy `family:<name>` keyspace.
+{
+  const { prettyDiffKey } = await import('../studio/artifact-model.mjs');
+  const cases = [
+    ['sli::{"id":"checkout_availability"}', 'checkout_availability'],
+    ['recording_rule::{"record":"slo:checkout:ratio"}', 'slo:checkout:ratio'],
+    ['burn_rate::{"slo":"api_99"}', 'burn-rate alert: api_99'],
+    ['forecast::{"slo":"api_99"}', 'forecast alert: api_99'],
+    ['alert_route::{"severity":"sev1"}', 'SEV1 route'],
+    ['alert_route::{"severity":"sev1"}#02', 'SEV1 route#02'],
+    ['backend::{"product":"prometheus","signal":"metrics"}', 'prometheus · metrics'],
+    ['storage_metrics::{"backend":"prometheus","signal":"metrics"}', 'metrics storage: prometheus'],
+    ['mesh::{"product":"envoy","role":"proxy"}', 'envoy · proxy'],
+    ['profiling::{"product":"pyroscope"}', 'pyroscope'],
+    ['pipeline_exporter_metrics::{"signal":"metrics","target":"prometheusremotewrite"}', 'metrics: prometheusremotewrite'],
+    ['scrape_job::{"job":"node"}', 'node'],
+    ['metric::{"name":"http_requests_total"}', 'http_requests_total'],
+    ['imports::{"ref":"stdlib/base"}', 'stdlib/base'],
+    ['remediation::{"trigger":"disk_pressure"}', 'on disk_pressure'],
+    ['otel::{}', 'otel::{}'],                    // singleton — whole key beats bare braces
+    ['recording_rule:legacy_name', 'legacy_name'], // pre-behavioural keyspace still readable
+    ['', ''],
+  ];
+  for (const [key, want] of cases) {
+    const got = prettyDiffKey(key);
+    assert(got === want, `prettyDiffKey(${JSON.stringify(key)}) renders ${JSON.stringify(want)}`, got);
+  }
+}
+
+// ---------- the vendoring seam (docs/VENDORING.md) ----------
+// Downstream studios vendor these files verbatim; an import creeping in
+// breaks their build, not ours — so CI holds the line here.
+{
+  const { readFileSync } = await import('node:fs');
+  for (const f of ['studio/diagnostic-grade.mjs', 'studio/artifact-model.mjs']) {
+    const src = readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+    if (/^\s*import\s/m.test(src)) {
+      throw new Error(`${f} must stay zero-import — it is vendored verbatim by downstream studios (docs/VENDORING.md)`);
+    }
+  }
 }
 
 console.log('all diagnostic-grade assertions pass.');

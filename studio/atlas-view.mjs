@@ -11,7 +11,8 @@ import { escapeHtml } from './util.mjs';
 import { api } from './api.mjs';
 import { openDrawer } from './drawer.mjs';
 import { renderComparePicker, loadDiff } from './compare-view.mjs';
-import { loadPackB, CROSS_PACK_VARIANTS, renderMainView, renderTabs } from './app.mjs';
+import { CROSS_PACK_VARIANTS } from './app.mjs';
+import { host as appHost } from './host.mjs';
 
 export function renderAtlasView(view) {
   const hasB = !!state.packB;
@@ -54,8 +55,8 @@ export function renderAtlasView(view) {
     b.textContent = v;
     b.onclick = () => {
       state.atlasVariant = v;
-      renderTabs();
-      renderMainView();
+      appHost.renderTabs();
+      appHost.renderMainView();
     };
     pills.appendChild(b);
   }
@@ -96,14 +97,14 @@ export function renderAtlasView(view) {
   const atlasOpts = {
     morph: state.atlasMorph,
     arborView: state.arborView || 'A',
-    onArborViewChange: (v) => { state.arborView = v; renderMainView(); },
+    onArborViewChange: (v) => { state.arborView = v; appHost.renderMainView(); },
     onArtefactClick: (artefact, layerId) => openDrawer(artefact, { id: layerId }, null),
   };
   const dataset = datasetFor();
   if (!dataset.b) {
     stage.innerHTML = '<div class="placeholder">Loading pack B…</div>';
     Promise.all([
-      state.packB ? Promise.resolve() : loadPackB(),
+      state.packB ? Promise.resolve() : appHost.loadPackB(),
       state.diff  ? Promise.resolve() : loadDiff(),
     ]).then(() => {
       renderAtlas(state.atlasVariant, stage, datasetFor(), atlasOpts);

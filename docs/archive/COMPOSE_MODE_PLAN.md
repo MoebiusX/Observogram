@@ -1,13 +1,13 @@
 # Compose Mode — visual pack authoring
 
-A new mode in Tomograph where you build a pack by composing
+A new mode in Observogram where you build a pack by composing
 pre-defined artefact blocks instead of writing YAML. The block library
 is sourced from the reference catalogue (curated packs per service
 type), the studio's own template inventory, and the user's previous
 packs.
 
 User framing:
-> "Author packs with the help of the Tomograph UI, where from a
+> "Author packs with the help of the Observogram UI, where from a
 > repository of SLIs/SLOs, one would drag and drop to Layer 1, and
 > evolve the pack from there."
 
@@ -102,7 +102,7 @@ Three-pane layout, full-screen mode (own view in the view nav):
 
 | Source | What's in it |
 |---|---|
-| **Tomograph standard library** | ~40 curated atomic templates (availability SLI, latency-p99 SLI, ratio recording rule, burn-rate alert fast / slow, …) shipped with the studio. Versioned alongside the spec. |
+| **Observogram standard library** | ~40 curated atomic templates (availability SLI, latency-p99 SLI, ratio recording rule, burn-rate alert fast / slow, …) shipped with the studio. Versioned alongside the spec. |
 | **Reference catalogue** | Each pack in `MoebiusX/otel-observability-pack-catalogue` exposed as a draggable whole-pack + as individual draggable artefacts. "Drag the Kafka tier-2 broker-availability SLI" = the catalogue authoritative version. |
 | **User history** | Every pack the user has previously composed. Dragging an artefact from a past pack copies it (deep clone, fresh id) into the new pack. |
 | **Inline custom** | "+ Create artefact" button in the library — opens a blank inspector for ad-hoc authoring. |
@@ -114,7 +114,7 @@ Three-pane layout, full-screen mode (own view in the view nav):
 ### Server endpoints
 
 ```
-GET  /api/library/standard          — Tomograph's standard library JSON
+GET  /api/library/standard          — Observogram's standard library JSON
 GET  /api/library/catalogue/:packId — catalogue pack exposed as draggable blocks
 GET  /api/library/history           — the user's previously composed packs
 POST /api/library/save              — save a card or layer as a personal template
@@ -222,7 +222,7 @@ A 2-minute walkthrough:
 7. **1:45** — Validates against the spec. ✓ Done.
 
 The framing in the demo: *"You don't write packs. You compose them from
-proven blocks the catalogue maintains for you, and Tomograph keeps the
+proven blocks the catalogue maintains for you, and Observogram keeps the
 shape valid as you go."*
 
 ---

@@ -1,0 +1,136 @@
+# Minimal ObservabilityPack for the gen-site tests (tools/test-gen-site.mjs).
+# One state-style ratio SLI with an SLO and two policy windows, one threshold SLI with a
+# recording rule, a recording_rules list with the GENERATED marker, and pipelines with a 10 s
+# scrape step. Under the lab inventory every fixture-module substitution maps a value to
+# itself, so the lab site pack must be byte-identical to this file.
+
+apiVersion: observability.platform/v1
+kind: ObservabilityPack
+
+metadata:
+  name: fixture
+  version: 0.1.0
+  owners: [team-platform-sre]
+  bindings:
+    service: fixture
+    environments: [prod, lab]
+    criticality: tier-3
+
+spec:
+  otel:
+    semconv: "1.27.0"
+    resource_attributes:
+      required: [service.name, deployment.environment]
+    sdk:
+      languages: [node]
+      sampling: { policy: parentbased_traceidratio, ratio: 1.0 }
+      propagators: [tracecontext]
+
+  environments:
+    prod:
+      target: bare-k8s
+      overrides:
+        storage.metrics.retention: 13mo
+        prometheus.scrape_interval: 30s
+        exporter.poll_interval: 30s
+        alerts.symptom.for: 2m
+        alerts.burn_rate.for.short_5m: 2m
+        alerts.burn_rate.for.short_30m: 5m
+        alerts.burn_rate.for.short_1h: 10m
+        alertmanager.group_wait: 30s
+        alertmanager.group_wait.sev1: 10s
+    lab:
+      target: bare-k8s
+      overrides:
+        storage.metrics.retention: 2d
+
+  slis:
+    - id: qmgr_up
+      type: ratio
+      description: Fraction of queue managers whose endpoint is scraped successfully.
+      good: |
+        sum(up{job="fixture-native"} == bool 1)
+      total: |
+        count(up{job="fixture-native"})
+    - id: queue_depth_headroom
+      type: threshold
+      description: Highest depth / max depth across application queues.
+      query: |
+        max by (qmgr, queue) (
+          last_over_time(fixture_queue_depth{job="fixture-exporter", queue=~"APP.*"}[30s])
+            / last_over_time(fixture_queue_max_depth{job="fixture-exporter"}[30s])
+        )
+      threshold: 0.8
+      unit: ratio
+
+  slos:
+    - { id: qmgr_up_99_9, sli: qmgr_up, objective: 0.999, window: 30d, error_budget_policy: ref:platform/std-budget-policy }
+
+  pipelines:
+    receivers:
+      - name: prometheus
+        scrape_configs:
+          - job_name: fixture-native
+            scrape_interval: 10s
+            static_configs:
+              - targets: [mq:9157]
+    processors:
+      - name: batch
+        timeout: 2s
+    exporters:
+      metrics: { kind: prometheusremotewrite, endpoint: http://prometheus:9090/api/v1/write }
+      logs: { kind: otlphttp, endpoints: [http://loki:3100/otlp] }
+      traces: { kind: otlp, endpoint: tempo:4317 }
+
+  queries:
+    recording_rules:
+      - { name: fixture:qmgr_up:ratio_5m,          expr: ref:slis.qmgr_up,              interval: 10s }
+      - { name: fixture:queue_depth_headroom:ratio, expr: ref:slis.queue_depth_headroom, interval: 10s }
+      # --- error-budget rules, GENERATED from spec.policy by gen-site ----
+      # fixture:errorbudget:burn_{5m,1h}{slo} for every SLO; expressions must match the emitted
+      # prometheus/rules/fixture.burn.yml verbatim.
+      - name: fixture:errorbudget:burn_5m
+        expr: '(sum(sum_over_time((1 - (up{job="fixture-native"} == bool 1))[5m:10s])) / ((count(up{job="fixture-native"})) * 30)) / 0.001'
+        interval: 30s
+        labels: { slo: qmgr_up_99_9, sli: qmgr_up, service: fixture }
+      - name: fixture:errorbudget:burn_1h
+        expr: '(sum(sum_over_time((1 - (up{job="fixture-native"} == bool 1))[1h:10s])) / ((count(up{job="fixture-native"})) * 360)) / 0.001'
+        interval: 30s
+        labels: { slo: qmgr_up_99_9, sli: qmgr_up, service: fixture }
+
+  dashboards:
+    - id: fixture-overview
+      provider: { kind: grafana, schemaVersion: 41 }
+      source: file://dashboards/fixture-overview.json
+      panel_bindings:
+        - { panel: sli-qmgr-up, binds_to: slis.qmgr_up }
+        - { panel: slo-qmgr-up, binds_to: slos.qmgr_up_99_9 }
+
+  policy:
+    burn_rate_alerts:
+      - slo: qmgr_up_99_9
+        windows:
+          - { short: 5m,  long: 1h, factor: 14, severity: SEV1 }
+          - { short: 30m, long: 6h, factor: 6,  severity: SEV2 }
+
+  alerting:
+    routes:
+      - severity: SEV1
+        channels:
+          - { webhook: "http://alert-sink:9095/webhook" }
+
+  baselines:
+    mttd_target_p50: 1m
+    mttr_target_p50: 5m
+
+  validation:
+    chaos_experiments:
+      - id: qmgr-down
+        engine: litmus
+        target: fixture-qmgr
+        steady_state_hypothesis: ref:slos.qmgr_up_99_9
+        fault: { kind: container-stop, duration: 90s }
+        expected_alerts: [ FixtureQueueManagerDown ]
+        expected_mttd: 60s
+        schedule: weekly
+        environment: lab

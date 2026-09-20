@@ -1,0 +1,158 @@
+# Disposable validation stack for the stack self-metric alias table
+# (tools/lib/contracts/stack-self-metrics.mjs) — NEVER production.
+#
+# Every product the table names, at an exactly pinned version, wired so
+# each alias's `requires` names can be checked against the product's real
+# /metrics exposition and each `expr` evaluated by a real Prometheus:
+#
+#   docker compose -f docker/stack.compose.yaml up -d --wait
+#   npm run test:stack:live          # tools/test-stack-live.mjs
+#
+# Deliberate faults keep the failure counters moving on a fresh stack: a
+# dead Alertmanager webhook, a dead OTLP export target, a dead Loki, a dead
+# VictoriaMetrics scrape target, an always-firing alert in both rulers.
+# Every port is bound to loopback only. The port block (127.0.0.1:1xxxx)
+# is disjoint from docker/validate.compose.yaml (13000 / 13013 / 13002).
+# Every mount is read-only: a product must never be able to write into the
+# tracked ./stack tree. ONE SUITE RUN AT A TIME — the suite force-recreates
+# otel-collector and grafana, and two concurrent runs recreate them under
+# each other and corrupt each other's before/after name sets.
+name: observogram-stack
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=2h
+    ports:
+      - "127.0.0.1:19090:9090"
+    volumes:
+      - ./stack/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./stack/prometheus.rules.yml:/etc/prometheus/prometheus.rules.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9090/-/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    ports:
+      - "127.0.0.1:19093:9093"
+    volumes:
+      - ./stack/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9093/-/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.113.0
+    command:
+      - -promscrape.config=/etc/vm/scrape.yml
+      - -selfScrapeInterval=5s
+      - -retentionPeriod=1d
+    ports:
+      - "127.0.0.1:18428:8428"
+    volumes:
+      - ./stack/vm-scrape.yml:/etc/vm/scrape.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8428/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  vmalert:
+    image: victoriametrics/vmalert:v1.113.0
+    command:
+      - -datasource.url=http://victoriametrics:8428
+      - -remoteWrite.url=http://victoriametrics:8428
+      - -notifier.url=http://alertmanager:9093
+      - -rule=/etc/vmalert/rules.yml
+      - -evaluationInterval=5s
+    ports:
+      - "127.0.0.1:18880:8880"
+    volumes:
+      - ./stack/vmalert.rules.yml:/etc/vmalert/rules.yml:ro
+    depends_on:
+      victoriametrics:
+        condition: service_healthy
+      alertmanager:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8880/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # Scratch image (no shell) — no healthcheck; `--wait` waits for running.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    command: ["--config=/etc/otelcol/config.yaml"]
+    ports:
+      - "127.0.0.1:18888:8888"   # internal telemetry (/metrics)
+      - "127.0.0.1:14318:4318"   # OTLP/HTTP — the live suite sends one request here
+    volumes:
+      - ./stack/otelcol.yaml:/etc/otelcol/config.yaml:ro
+
+  grafana:
+    image: grafana/grafana:12.4.4
+    ports:
+      - "127.0.0.1:13030:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+    volumes:
+      - ./stack/grafana-provisioning:/etc/grafana/provisioning:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/api/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 45
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    command:
+      - --config.file=/etc/blackbox/blackbox.yml
+    ports:
+      - "127.0.0.1:19115:9115"
+    volumes:
+      - ./stack/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9115/-/healthy"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # Debian-slim image without wget/curl — no healthcheck.
+  promtail:
+    image: grafana/promtail:3.3.2
+    command:
+      - -config.file=/etc/promtail/promtail.yml
+    ports:
+      - "127.0.0.1:19080:9080"
+    volumes:
+      - ./stack/promtail.yml:/etc/promtail/promtail.yml:ro
+      - ./stack/promtail-sample.txt:/var/log/observogram-sample.log:ro
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "127.0.0.1:14269:14269"   # admin: /metrics
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:14269/"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

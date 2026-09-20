@@ -1,0 +1,275 @@
+{
+  "apiVersion": "observability.platform/v1",
+  "kind": "ObservabilityPack",
+  "metadata": {
+    "name": "golden",
+    "version": "0.1.0-crawled",
+    "binding": "otel-elastic-prometheus-grafana",
+    "owners": [
+      "team-platform"
+    ],
+    "bindings": {
+      "service": "golden",
+      "environments": [
+        "prod"
+      ],
+      "criticality": "tier-2"
+    },
+    "labels": {
+      "source": "crawler"
+    },
+    "annotations": {
+      "crawler.discoveredAt": "2026-01-01T00:00:00.000Z",
+      "crawler.filesScanned": "6",
+      "crawler.filesIncluded": "6",
+      "crawler.filesExcludedByEnvironment": "0",
+      "crawler.filesClassified": "6",
+      "crawler.environmentProfile": "prod",
+      "observogram.diff.scopeMode": "service",
+      "crawler.tierInferred": "tier-2",
+      "crawler.warningCount": "3",
+      "crawler.syntheticRecordingRulesSkipped": "1",
+      "crawler.extendedSurfaces": "0",
+      "crawler.scaffoldCount": "4",
+      "crawler.unresolvedChannelCount": "1",
+      "crawler.unresolved.alerting": "SEV2:${GOLDEN_HOOK_URL} (alertmanager.yml)",
+      "crawler.discovered.metric_names": "[\"golden:availability:good\",\"golden:availability:total\",\"http_requests_total\"]",
+      "crawler.discovered.metric_names_count": "3",
+      "crawler.discovered.metric_origins": "{\"golden:availability:good\":{\"file\":\"prometheus/rules.yml#slo/golden:availability:good\",\"service\":\"\",\"type\":\"recording-rule-output\",\"help\":\"\",\"labels\":[],\"source_name\":\"\",\"origin_kind\":\"recording-rule-output\",\"confidence\":\"declared\",\"candidate\":false,\"query\":\"sum(rate(http_requests_total{code!~\\\"5..\\\"}[5m]))\",\"used_by\":[\"recording_rule:golden:availability:good\",\"alert:GoldenAvailabilityBurnFast\",\"dashboard:golden-overview/availability\"],\"references\":[{\"kind\":\"recording-rule-output\",\"name\":\"golden:availability:good\",\"file\":\"prometheus/rules.yml#slo/golden:availability:good\"},{\"kind\":\"alert-rule\",\"name\":\"GoldenAvailabilityBurnFast\",\"file\":\"prometheus/rules.yml#slo/GoldenAvailabilityBurnFast\"},{\"kind\":\"dashboard-panel\",\"name\":\"availability\",\"file\":\"dashboards/golden.json#availability\"}]},\"golden:availability:total\":{\"file\":\"prometheus/rules.yml#slo/golden:availability:total\",\"service\":\"\",\"type\":\"recording-rule-output\",\"help\":\"\",\"labels\":[],\"source_name\":\"\",\"origin_kind\":\"recording-rule-output\",\"confidence\":\"declared\",\"candidate\":false,\"query\":\"sum(rate(http_requests_total[5m]))\",\"used_by\":[\"recording_rule:golden:availability:total\",\"alert:GoldenAvailabilityBurnFast\",\"dashboard:golden-overview/availability\"],\"references\":[{\"kind\":\"recording-rule-output\",\"name\":\"golden:availability:total\",\"file\":\"prometheus/rules.yml#slo/golden:availability:total\"},{\"kind\":\"alert-rule\",\"name\":\"GoldenAvailabilityBurnFast\",\"file\":\"prometheus/rules.yml#slo/GoldenAvailabilityBurnFast\"},{\"kind\":\"dashboard-panel\",\"name\":\"availability\",\"file\":\"dashboards/golden.json#availability\"}]},\"http_requests_total\":{\"file\":\"src/metrics.ts\",\"service\":\"golden\",\"type\":\"counter\",\"help\":\"requests\",\"labels\":[\"code\"],\"source_name\":\"\",\"origin_kind\":\"source-code\",\"confidence\":\"declared\",\"candidate\":false,\"query\":\"\",\"used_by\":[\"recording_rule:golden:availability:good\",\"recording_rule:golden:availability:total\"],\"references\":[{\"kind\":\"recording-rule\",\"name\":\"golden:availability:good\",\"file\":\"prometheus/rules.yml#slo/golden:availability:good\"},{\"kind\":\"recording-rule\",\"name\":\"golden:availability:total\",\"file\":\"prometheus/rules.yml#slo/golden:availability:total\"}]}}",
+      "crawler.scaffold.pipelines.exporters.logs": "schema-required fallback; no source evidence found in selected environment",
+      "crawler.scaffold.pipelines.exporters.traces": "schema-required fallback; no source evidence found in selected environment",
+      "crawler.scaffold.baselines": "schema-required fallback; no source evidence found in selected environment",
+      "crawler.scaffold.validation.synthetic_checks.golden-health-canary": "schema-required fallback; no source evidence found in selected environment"
+    }
+  },
+  "spec": {
+    "otel": {
+      "semconv": "1.26.0",
+      "resource_attributes": {
+        "required": [
+          "service.name"
+        ]
+      },
+      "sdk": {
+        "languages": [
+          "go"
+        ],
+        "sampling": {
+          "policy": "parentbased_traceidratio",
+          "ratio": 0.1
+        },
+        "propagators": [
+          "tracecontext"
+        ]
+      }
+    },
+    "slis": [
+      {
+        "id": "golden_availability",
+        "description": "Inferred from recording rule golden:availability:good.",
+        "type": "threshold",
+        "query": "sum(rate(http_requests_total{code!~\"5..\"}[5m]))",
+        "threshold": 1,
+        "unit": "ratio"
+      }
+    ],
+    "slos": [
+      {
+        "id": "golden_availability_99",
+        "sli": "golden_availability",
+        "objective": 0.99,
+        "window": "30d",
+        "error_budget_policy": "ref:platform/default-budget"
+      }
+    ],
+    "pipelines": {
+      "receivers": [
+        {
+          "name": "otlp"
+        }
+      ],
+      "processors": [
+        {
+          "name": "batch"
+        }
+      ],
+      "exporters": {
+        "metrics": {
+          "kind": "prometheusremotewrite"
+        },
+        "logs": {
+          "kind": "elasticsearch"
+        },
+        "traces": {
+          "kind": "jaeger"
+        }
+      }
+    },
+    "queries": {
+      "recording_rules": [
+        {
+          "name": "golden:availability:good",
+          "expr": "sum(rate(http_requests_total{code!~\"5..\"}[5m]))"
+        },
+        {
+          "name": "golden:availability:total",
+          "expr": "sum(rate(http_requests_total[5m]))"
+        }
+      ]
+    },
+    "dashboards": [
+      {
+        "id": "golden-overview",
+        "provider": {
+          "kind": "grafana",
+          "version": "1",
+          "schemaVersion": 41
+        },
+        "folder": "crawled",
+        "source": "file://dashboards/golden.json",
+        "params": {
+          "title": "Golden Overview",
+          "uid": "golden-overview",
+          "panel_count": 1,
+          "query_panel_count": 1,
+          "panels": [
+            {
+              "panel": "availability",
+              "title": "Availability",
+              "expr": "golden:availability:good / golden:availability:total",
+              "refId": "",
+              "datasource": "",
+              "metrics": [
+                "golden:availability:good",
+                "golden:availability:total"
+              ],
+              "binds_to": "slis.golden_availability",
+              "binding_confidence": "declared-inferred",
+              "binding_reason": "requirement id text, recording rule name, keywords:golden|availability|good|total"
+            }
+          ]
+        },
+        "panel_bindings": [
+          {
+            "panel": "Availability",
+            "binds_to": "slis.golden_availability"
+          }
+        ]
+      }
+    ],
+    "policy": {
+      "burn_rate_alerts": [
+        {
+          "slo": "golden_availability_99",
+          "windows": [
+            {
+              "short": "5m",
+              "long": "1h",
+              "factor": 14,
+              "severity": "SEV1"
+            },
+            {
+              "short": "30m",
+              "long": "6h",
+              "factor": 6,
+              "severity": "SEV2"
+            }
+          ]
+        }
+      ]
+    },
+    "alerting": {
+      "routes": [
+        {
+          "severity": "SEV2",
+          "channels": [
+            {
+              "msteams": "#golden-oncall"
+            }
+          ]
+        },
+        {
+          "severity": "SEV1",
+          "channels": [
+            {
+              "msteams": "#golden-oncall"
+            }
+          ]
+        },
+        {
+          "severity": "SEV3",
+          "channels": [
+            {
+              "webhook": "https://ntfy.sh/${GOLDEN_TOPIC}?priority=high"
+            }
+          ]
+        }
+      ]
+    },
+    "baselines": {
+      "mttd_target_p50": "15m",
+      "mttr_target_p50": "1d",
+      "review_cadence": "monthly"
+    },
+    "validation": {
+      "synthetic_checks": [
+        {
+          "id": "golden-health-canary",
+          "kind": "blackbox-exporter",
+          "target": "https://golden.example.com/health",
+          "interval": "1m",
+          "on_fail_severity": "SEV3"
+        }
+      ]
+    },
+    "telemetry": {
+      "backends": [
+        {
+          "id": "metrics-prometheus",
+          "signal": "metrics",
+          "product": "prometheus",
+          "endpoints": [
+            "http://prometheus:9090"
+          ],
+          "auth": {
+            "kind": "none"
+          },
+          "version": {
+            "declared": "2.51.0",
+            "gating": "off"
+          }
+        },
+        {
+          "id": "dashboards-grafana",
+          "signal": "dashboards",
+          "product": "grafana",
+          "endpoints": [
+            "http://grafana:3000"
+          ],
+          "auth": {
+            "kind": "none"
+          },
+          "version": {
+            "declared": "12.0.0",
+            "gating": "off"
+          }
+        },
+        {
+          "id": "logs-loki",
+          "signal": "logs",
+          "product": "loki",
+          "endpoints": [
+            "http://loki:3100"
+          ],
+          "auth": {
+            "kind": "none"
+          },
+          "version": {
+            "declared": "3.0.0",
+            "gating": "off"
+          }
+        }
+      ]
+    }
+  }
+}

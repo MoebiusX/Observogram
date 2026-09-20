@@ -1,0 +1,187 @@
+# promtool unit tests for the compiled policy-shapes pack (tools/test-backend-validate.mjs
+# copies this file next to the compiled `policy_shapes.rules.yaml` and runs
+# `promtool test rules` on it when promtool is installed; CI is --strict).
+#
+# 1. derived good, healthy service, error counter never exposed → no alert, no burn sample
+#    (with the empty-good fill this read as a 100 % outage: burn_5m 100×, SEV1 for 2m)
+# 2. selector good, 100 % outage (every request 5xx, no non-5xx series ever) → the fill
+#    keeps the alert firing
+# 3. per-instance state SLI: the instance that is down burns, the other does not
+# 4. an already-boolean `>= bool 1` state SLI evaluates (a parse error would fail the load)
+# 5. good grouped `by (route)`, total ungrouped, zero errors → no burn sample, no alert (with
+#    the empty-good fill the mismatch read as a permanent 100 % outage: burn_5m 100×, SEV1)
+# 6. `count(up == 1) / count(up)`: two targets, one down → the SLO burns and pages; both up → 0
+rule_files:
+  - policy_shapes.rules.yaml
+
+evaluation_interval: 30s
+
+tests:
+  - interval: 30s
+    input_series:
+      - series: 'all_total{job="x"}'
+        values: '0+10x720'
+    promql_expr_test:
+      - expr: policy_shapes:errorbudget:burn_5m{slo="derived_99"}
+        eval_time: 1h30m
+        exp_samples: []
+      - expr: policy_shapes:derived_ok:error_ratio_5m
+        eval_time: 1h30m
+        exp_samples: []
+    alert_rule_test:
+      - alertname: derived_99_burn_14x_5m_1h
+        eval_time: 1h30m
+        exp_alerts: []
+
+  - interval: 30s
+    input_series:
+      - series: 'all_total{job="x",code="500"}'
+        values: '0+10x720'
+    promql_expr_test:
+      - expr: policy_shapes:errorbudget:burn_5m{slo="direct_99"}
+        eval_time: 1h30m
+        exp_samples:
+          - labels: 'policy_shapes:errorbudget:burn_5m{slo="direct_99",sli="direct_ok",service="policy-shapes"}'
+            value: 100
+    alert_rule_test:
+      - alertname: direct_99_burn_14x_5m_1h
+        eval_time: 1h30m
+        exp_alerts:
+          - exp_labels:
+              severity: SEV1
+              slo: direct_99
+              sli: direct_ok
+              service: policy-shapes
+              burn_rate: "14"
+              window_short: 5m
+              window_long: 1h
+              pack: policy-shapes
+            exp_annotations:
+              summary: Burn rate 14× on direct_99
+              description: Both the 5m and 1h error ratios exceed 14× of the 1.000% error budget for direct_99, with at least 2 bad samples in the 5m window.
+              slo_objective: 99.000%
+              slo_window: 30d
+              runbook: (supply runbook URL)
+
+  - interval: 30s
+    input_series:
+      - series: 'up{job="x",instance="a"}'
+        values: '1x720'
+      - series: 'up{job="x",instance="b"}'
+        values: '0x720'
+    promql_expr_test:
+      # (`> bool 50` rather than the exact 100×: a 2.x engine evaluates a `[5m:30s]`
+      # subquery over 11 points, a 3.x one over 10, so the down instance reads 110× there)
+      - expr: policy_shapes:errorbudget:burn_5m{slo="instance_99"} > bool 50
+        eval_time: 1h30m
+        exp_samples:
+          - labels: '{instance="a",slo="instance_99",sli="instance_up",service="policy-shapes"}'
+            value: 0
+          - labels: '{instance="b",slo="instance_99",sli="instance_up",service="policy-shapes"}'
+            value: 1
+    alert_rule_test:
+      - alertname: instance_99_burn_14x_5m_1h
+        eval_time: 1h30m
+        exp_alerts:
+          - exp_labels:
+              instance: b
+              severity: SEV1
+              slo: instance_99
+              sli: instance_up
+              service: policy-shapes
+              burn_rate: "14"
+              window_short: 5m
+              window_long: 1h
+              pack: policy-shapes
+            exp_annotations:
+              summary: Burn rate 14× on instance_99
+              description: Both the 5m and 1h error ratios exceed 14× of the 1.000% error budget for instance_99, with at least 2 bad samples in the 5m window.
+              slo_objective: 99.000%
+              slo_window: 30d
+              runbook: (supply runbook URL)
+
+  - interval: 30s
+    input_series:
+      - series: 'probe_success{job="bb",instance="p"}'
+        values: '1x720'
+    promql_expr_test:
+      - expr: policy_shapes:errorbudget:burn_5m{slo="probe_99"}
+        eval_time: 1h30m
+        exp_samples:
+          - labels: 'policy_shapes:errorbudget:burn_5m{slo="probe_99",sli="probe_ok",service="policy-shapes"}'
+            value: 0
+    alert_rule_test:
+      - alertname: probe_99_burn_14x_5m_1h
+        eval_time: 1h30m
+        exp_alerts: []
+
+  - interval: 30s
+    input_series:
+      - series: 'route_ok_total{job="r",route="a"}'
+        values: '0+10x720'
+      - series: 'route_ok_total{job="r",route="b"}'
+        values: '0+10x720'
+      - series: 'route_all_total{job="r"}'
+        values: '0+20x720'
+    promql_expr_test:
+      - expr: policy_shapes:errorbudget:burn_5m{slo="route_99"}
+        eval_time: 1h30m
+        exp_samples: []
+      - expr: policy_shapes:route_ok:error_ratio_5m
+        eval_time: 1h30m
+        exp_samples: []
+    alert_rule_test:
+      - alertname: route_99_burn_14x_5m_1h
+        eval_time: 1h30m
+        exp_alerts: []
+
+  - interval: 30s
+    input_series:
+      - series: 'up{job="c",instance="a"}'
+        values: '1x720'
+      - series: 'up{job="c",instance="b"}'
+        values: '0x720'
+    promql_expr_test:
+      # one of two targets down: half the samples are bad, 50× the 1 % budget (2.x engines read
+      # 11 points in a [5m:30s] subquery, 3.x read 10: `> bool 40` covers both)
+      - expr: policy_shapes:errorbudget:burn_5m{slo="count_99"} > bool 40
+        eval_time: 1h30m
+        exp_samples:
+          - labels: '{slo="count_99",sli="count_ok",service="policy-shapes"}'
+            value: 1
+    alert_rule_test:
+      - alertname: count_99_burn_14x_5m_1h
+        eval_time: 1h30m
+        exp_alerts:
+          - exp_labels:
+              severity: SEV1
+              slo: count_99
+              sli: count_ok
+              service: policy-shapes
+              burn_rate: "14"
+              window_short: 5m
+              window_long: 1h
+              pack: policy-shapes
+            exp_annotations:
+              summary: Burn rate 14× on count_99
+              description: Both the 5m and 1h error ratios exceed 14× of the 1.000% error budget for count_99, with at least 2 bad samples in the 5m window.
+              slo_objective: 99.000%
+              slo_window: 30d
+              runbook: (supply runbook URL)
+
+  - interval: 30s
+    input_series:
+      - series: 'up{job="c",instance="a"}'
+        values: '1x720'
+      - series: 'up{job="c",instance="b"}'
+        values: '1x720'
+    promql_expr_test:
+      - expr: policy_shapes:errorbudget:burn_5m{slo="count_99"}
+        eval_time: 1h30m
+        exp_samples:
+          - labels: 'policy_shapes:errorbudget:burn_5m{slo="count_99",sli="count_ok",service="policy-shapes"}'
+            value: 0
+    alert_rule_test:
+      - alertname: count_99_burn_14x_5m_1h
+        eval_time: 1h30m
+        exp_alerts: []

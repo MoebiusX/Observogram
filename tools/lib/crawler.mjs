@@ -421,7 +421,7 @@ export function crawlFiles(filesInput, opts = {}) {
     },
     inferred: { slis: 0, slos: 0, baselines: false, tier: null },
     warnings: [],
-    omitted: { syntheticRecordingRules: [] },
+    omitted: { syntheticRecordingRules: [], unresolvedChannels: [] },
     scaffold: [],
   };
   if (envScope.applied) {
@@ -674,6 +674,10 @@ export function crawlFiles(filesInput, opts = {}) {
   if (summary.omitted.syntheticRecordingRules.length) {
     summary.warnings.push(`Skipped ${summary.omitted.syntheticRecordingRules.length} synthetic recording rule candidate(s) with no source provenance. Add source Prometheus/Grafana rules or compile them explicitly before deploying.`);
   }
+  if (summary.omitted.unresolvedChannels.length) {
+    const n = summary.omitted.unresolvedChannels.length;
+    summary.warnings.push(`Excluded ${n} alerting channel(s) whose value is an unresolved \${VAR} placeholder (deploy-time substitution). They are recorded as evidence in crawler.unresolved.* annotations, not declared as routes — resolve the variable or declare a literal URL to include them.`);
+  }
 
   inferDashboardPanelBindings(dashboards, sliMap, sloMap, recordingRules, summary);
 
@@ -723,12 +727,19 @@ export function crawlFiles(filesInput, opts = {}) {
         'crawler.filesExcludedByEnvironment': String(summary.files.excludedByEnvironment),
         'crawler.filesClassified': String(summary.files.classified),
         'crawler.environmentProfile': envScope.profile || '',
-        'tomograph.diff.scopeMode': diffScopeMode,
+        'observogram.diff.scopeMode': diffScopeMode,
         'crawler.tierInferred':    tier,
         'crawler.warningCount':    String(summary.warnings.length),
         'crawler.syntheticRecordingRulesSkipped': String(summary.omitted.syntheticRecordingRules.length),
         'crawler.extendedSurfaces': String(summary.discovered.extendedSurfaces),
         'crawler.scaffoldCount':   String(scaffoldSymbols.length),
+        // Channels excluded for unresolved ${VAR} placeholders — evidence
+        // of declared intent the crawler could not resolve at crawl time.
+        ...(summary.omitted.unresolvedChannels.length ? {
+          'crawler.unresolvedChannelCount': String(summary.omitted.unresolvedChannels.length),
+          'crawler.unresolved.alerting': summary.omitted.unresolvedChannels
+            .map(u => `${u.severity || '?'}:${u.value}${u.source ? ` (${u.source})` : ''}`).join(' · '),
+        } : {}),
         ...metricAnnotations,
         ...scrapeAnnotations,
         ...scaffoldAnnotations,
@@ -797,7 +808,7 @@ export function crawlToYaml(filesInput, opts) {
     `# =============================================================================`,
     '',
   ].join('\n');
-  return { yaml: banner + emitYaml(canonical), summary, evidence };
+  return { yaml: banner + emitYaml(canonical), canonical, summary, evidence };
 }
 
 // ============================================================
@@ -1828,7 +1839,7 @@ function walkAlertmanager(f, routes, evidence, summary) {
     if (!obj?.route) continue;
     // Walk top-level route + its children. Each route → one entry per severity.
     const collected = [];
-    walkRoute(obj.route, collected, obj.receivers || []);
+    walkRoute(obj.route, collected, obj.receivers || [], summary.omitted.unresolvedChannels, f.relPath);
     for (const r of collected) {
       const id = `ALR-${routes.length + 1}`;
       routes.push(r);
@@ -1838,18 +1849,38 @@ function walkAlertmanager(f, routes, evidence, summary) {
   }
 }
 
-function walkRoute(route, out, receivers) {
+function walkRoute(route, out, receivers, unresolved, relPath) {
   const sev = route.match?.severity || route.match_re?.severity || route.matchers?.find?.(m => /severity/i.test(m))?.split('=')?.[1]?.replace(/"/g, '');
   const recvName = route.receiver;
   const recv = receivers.find(r => r.name === recvName);
-  const channels = recv ? receiverChannels(recv) : [];
-  if (sev || channels.length) {
-    out.push({
-      severity: normalizeSeverity(sev),
-      channels: channels.length ? channels : [{ msteams: `#${recvName || 'oncall'}` }],
-    });
+  const before = unresolved.length;
+  const channels = recv ? receiverChannels(recv, unresolved, { severity: normalizeSeverity(sev), source: relPath }) : [];
+  const droppedHere = unresolved.length - before;
+  if (channels.length) {
+    out.push({ severity: normalizeSeverity(sev), channels });
+  } else if ((sev || recvName) && droppedHere === 0) {
+    // Receiver kinds we can't map → keep the route on a synthetic Teams
+    // placeholder (long-standing behaviour for unmapped receivers). But
+    // when this receiver's channels were EXCLUDED as unresolved ${VAR}
+    // placeholders, fabricating a channel here would over-declare: the
+    // route stays out of the declared spec and lives on as evidence in
+    // the crawler.unresolved.* annotations instead.
+    out.push({ severity: normalizeSeverity(sev), channels: [{ msteams: `#${recvName || 'oncall'}` }] });
   }
-  for (const child of route.routes || []) walkRoute(child, out, receivers);
+  for (const child of route.routes || []) walkRoute(child, out, receivers, unresolved, relPath);
+}
+
+// Does this channel value carry an unresolved deploy-time placeholder
+// (${VAR}) AND fail the spec's URI shape? Embedded placeholders inside an
+// otherwise URI-shaped value (https://ntfy.sh/${TOPIC}?…) still parse as a
+// webhook target and stay declared. A value that is ONLY a placeholder has
+// no scheme, cannot pass `format: uri`, and must not be declared as a real
+// channel — the crawler records it as evidence instead of emitting a pack
+// that fails its own schema.
+const CHANNEL_URI_RE = /^[a-z][a-z0-9+.-]*:\S+$/i;   // mirrors validator.mjs URI_RE
+function isUnresolvedChannelValue(value) {
+  const v = String(value || '');
+  return v.includes('${') && !CHANNEL_URI_RE.test(v);
 }
 
 // Map Prometheus / Alertmanager severity labels to the spec v1.2
@@ -1867,16 +1898,28 @@ function normalizeSeverity(s) {
   return 'SEV2';
 }
 
-function receiverChannels(recv) {
+function receiverChannels(recv, unresolved = [], ctx = {}) {
   // Spec Channel allows only: msteams, voice, whatsapp, email, webhook.
   // Map Alertmanager's broader vocabulary onto that closed set; flag
   // anything we couldn't map as a webhook with a placeholder URL.
+  // Webhook URLs that are unresolved ${VAR} placeholders are screened out
+  // (see isUnresolvedChannelValue) and recorded for the evidence
+  // annotation — the crawler must never emit a pack that fails its own
+  // schema.
   const out = [];
+  const webhook = (url, fallback) => {
+    const v = url || fallback;
+    if (isUnresolvedChannelValue(v)) {
+      unresolved.push({ receiver: recv.name || null, severity: ctx.severity || null, value: String(v), source: ctx.source || null });
+      return;
+    }
+    out.push({ webhook: v });
+  };
   if (Array.isArray(recv.email_configs))     out.push(...recv.email_configs.map(c => ({ email: c.to || `oncall@${recv.name || 'example'}.com` })));
   if (Array.isArray(recv.msteams_configs))   out.push(...recv.msteams_configs.map(c => ({ msteams: c.channel_url || `#${recv.name || 'oncall'}` })));
-  if (Array.isArray(recv.webhook_configs))   out.push(...recv.webhook_configs.map(c => ({ webhook: c.url || 'https://hooks.example.com/oncall' })));
+  if (Array.isArray(recv.webhook_configs))   for (const c of recv.webhook_configs) webhook(c.url, 'https://hooks.example.com/oncall');
   if (Array.isArray(recv.pagerduty_configs)) out.push({ voice: `pagerduty:${recv.name || 'oncall'}` });
-  if (Array.isArray(recv.slack_configs))     out.push(...recv.slack_configs.map(c => ({ webhook: c.api_url || `https://hooks.slack.example.com/${c.channel || 'oncall'}` })));
+  if (Array.isArray(recv.slack_configs))     for (const c of recv.slack_configs) webhook(c.api_url, `https://hooks.slack.example.com/${c.channel || 'oncall'}`);
   return out;
 }
 

@@ -1,0 +1,107 @@
+# =============================================================================
+# ObservabilityPack: edge-hostile-names — adversarial compile fixture.
+# -----------------------------------------------------------------------------
+# Exercises the escaping paths of every emitter: unicode and quotes in
+# descriptions and label values, regex metacharacters in PromQL label
+# matchers, template-looking strings, and a receiver name with spaces.
+# The pack is schema-valid on purpose; if any backend validator rejects
+# the COMPILED output, the compiler's quoting/escaping is the bug.
+# See docs/TEST_PLAN_COMPILER_VALIDITY.md §4.
+# =============================================================================
+
+apiVersion: observability.platform/v1
+kind: ObservabilityPack
+
+metadata:
+  name: edge-hostile-names
+  version: 0.1.0
+  binding: otel-elastic-prometheus-grafana
+  owners:
+    - team-platform
+  bindings:
+    service: edge-hostile-names
+    environments: [prod]
+    criticality: tier-3
+  labels:
+    purpose: adversarial-fixture
+
+spec:
+
+  otel:
+    semconv: "1.26.0"
+    resource_attributes:
+      required:
+        - service.name
+    sdk:
+      languages: [go]
+      sampling:
+        policy: parentbased_traceidratio
+        ratio: 0.1
+      propagators: [tracecontext]
+
+  slis:
+    - id: latência_p99_süccess
+      type: ratio
+      description: 'Ratio with "double quotes", a backslash \, unicode (latência · 成功率) and {{template-ish}} braces.'
+      good:  sum(rate(http_requests_total{status_code!~"5..",path=~"/api/v1/.*\\d+",method="GET"}[5m]))
+      total: sum(rate(http_requests_total{path=~"/api/v1/.*\\d+"}[5m]))
+
+  slos:
+    - id: hostile_availability_99
+      sli: latência_p99_süccess
+      objective: 0.99
+      window: 30d
+      error_budget_policy: ref:platform/default-budget
+
+  pipelines:
+    receivers:
+      - name: otlp
+    processors:
+      - name: batch
+    exporters:
+      metrics: { kind: prometheusremotewrite }
+      logs:    { kind: elasticsearch }
+      traces:  { kind: otlp }
+
+  queries:
+    recording_rules:
+      - name: edge:hostile_ratio:5m
+        expr: ref:slis.latência_p99_süccess
+        labels:
+          team: 'platform "core" team'
+          note: 'value with: colon, #hash and — dash'
+
+  dashboards:
+    - id: hostile-overview
+      provider: { kind: grafana }
+      folder: 'Demo "Quoted" Folder'
+      source: file://dashboards/hostile-overview.json
+
+  policy:
+    burn_rate_alerts:
+      - slo: hostile_availability_99
+        windows:
+          - { short: 5m,  long: 1h, factor: 14, severity: SEV1 }
+          - { short: 30m, long: 6h, factor: 6,  severity: SEV2 }
+
+  alerting:
+    routes:
+      - severity: SEV1
+        channels:
+          - { msteams: '#oncall — "alerts" & escalations' }
+      - severity: SEV2
+        channels:
+          - { email: 'team+alerts@example.com' }
+
+  baselines:
+    mttd_target_p50: 15m
+    mttr_target_p50: 1d
+    review_cadence: monthly
+
+  validation:
+    synthetic_checks:
+      - id: hostile-health-canary
+        kind: blackbox-exporter
+        target: https://demo.example.com/health?q=a&b=c
+        interval: 1m
+        on_fail_severity: SEV3

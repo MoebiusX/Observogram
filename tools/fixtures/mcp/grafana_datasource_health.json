@@ -1,0 +1,31 @@
+{
+  "_recorded": {
+    "recordedAt": "2026-09-08T08:19:28.479Z",
+    "tool": "grafana_datasource_health",
+    "uid": "ffxm6mvg1ohkwc",
+    "scrubbed": [],
+    "reviewed": "jsonData and secureJsonFields empty; the loopback Grafana URL in the failed check's error is the stack's own published port, kept verbatim",
+    "server": "otel-mcp-server 1.8.0 over docker/stack.compose.yaml (Grafana 12.4.4), admin-seeded state"
+  },
+  "datasource": {
+    "id": 3,
+    "uid": "ffxm6mvg1ohkwc",
+    "orgId": 1,
+    "name": "Loki (absent)",
+    "type": "loki",
+    "access": "proxy",
+    "url": "http://loki:3100/",
+    "isDefault": false,
+    "readOnly": false,
+    "basicAuth": false,
+    "withCredentials": false,
+    "jsonData": {},
+    "secureJsonFields": [],
+    "version": 1,
+    "apiVersion": ""
+  },
+  "health": {
+    "supported": false,
+    "error": "HTTP 400: Bad Request — http://127.0.0.1:13030/api/datasources/uid/ffxm6mvg1ohkwc/health"
+  }
+}

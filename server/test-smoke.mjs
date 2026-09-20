@@ -6,16 +6,22 @@
  * route, asserts response shape, then kills the server. Exit 0 = pass.
  */
 
-import { mkdtempSync, rmSync, readdirSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve as resolvePath } from 'node:path';
+import { mkdtempSync, rmSync, readdirSync, existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { join, dirname, resolve as resolvePath } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 
 // Redirect the pack workspace to a temp dir BEFORE the server boots, so
-// smoke-test registrations never pollute the repo's .tomograph/. Workspace
+// smoke-test registrations never pollute the repo's .observogram/. Workspace
 // resolution is lazy (read at start(), not at import), which is what makes
 // this ordering work despite the hoisted import below.
-const SMOKE_WORKSPACE = mkdtempSync(join(tmpdir(), 'tomograph-smoke-ws-'));
-process.env.TOMOGRAPH_WORKSPACE = SMOKE_WORKSPACE;
+const SMOKE_WORKSPACE = mkdtempSync(join(tmpdir(), 'observogram-smoke-ws-'));
+process.env.OBSERVOGRAM_WORKSPACE = SMOKE_WORKSPACE;
+// This suite asserts the OPEN posture (every route reachable without a
+// session). Without the off switch, first boot would seed a default
+// admin (Grafana-style bootstrap) and 401 everything — this line IS the
+// open-mode regression assertion the productization plan promises.
+process.env.OBSERVOGRAM_AUTH = 'off';
 
 import { start } from './index.mjs';
 import { createServer } from 'node:http';
@@ -40,7 +46,9 @@ async function getText(base, path) {
   return r.text();
 }
 
-async function startFakeMcp(toolNames) {
+// `handler(name, args)` answers tools/call when given; the default echoes
+// { ok, name } (enough for the deploy path, whose tools return opaque ids).
+async function startFakeMcp(toolNames, handler = null) {
   const calls = [];
   const srv = createServer(async (req, res) => {
     let raw = '';
@@ -65,7 +73,8 @@ async function startFakeMcp(toolNames) {
     }
     if (msg.method === 'tools/call') {
       calls.push(msg.params);
-      send({ content: [{ type: 'text', text: JSON.stringify({ ok: true, name: msg.params?.name }) }] });
+      const answer = handler ? handler(msg.params?.name, msg.params?.arguments || {}) : { ok: true, name: msg.params?.name };
+      send({ content: [{ type: 'text', text: JSON.stringify(answer) }] });
       return;
     }
     send({});
@@ -89,6 +98,8 @@ try {
   const health = await getJson(base, '/healthz');
   assert(health.ok === true, 'GET /healthz returns ok');
   assert(health.specVersion === '1.2', 'GET /healthz reports specVersion 1.2');
+  assert(/^\d+\.\d+\.\d+/.test(health.version || ''), 'GET /healthz carries the app version', health.version);
+  assert(typeof health.build === 'string' && health.build.length > 0, 'GET /healthz carries the build identifier', health.build);
 
   // /api/packs catalog — empty by design as of Phase 7q (the studio
   // boots empty; user opens packs from disk via Upload / crawler /
@@ -386,9 +397,9 @@ try {
   assert(!/hunter2/.test(badUrlBody.error || ''), 'unparseable-mcpUrl error redacts credentials', badUrlBody.error);
 
   // SSRF guard — local/private addresses are allowed by default (the fake-MCP
-  // tests below depend on that) but refused when TOMOGRAPH_ALLOW_LOCAL_MCP=0.
+  // tests below depend on that) but refused when OBSERVOGRAM_ALLOW_LOCAL_MCP=0.
   // The server runs in-process, so flipping process.env takes effect live.
-  process.env.TOMOGRAPH_ALLOW_LOCAL_MCP = '0';
+  process.env.OBSERVOGRAM_ALLOW_LOCAL_MCP = '0';
   try {
     for (const blocked of ['http://127.0.0.1:9999/mcp', 'http://localhost:9999/mcp',
                            'http://169.254.169.254/latest/meta-data/', 'http://[::1]:9999/mcp',
@@ -397,7 +408,7 @@ try {
       assert(r.status === 400, `ALLOW_LOCAL_MCP=0 blocks ${blocked} → 400`, r.status, 400);
     }
   } finally {
-    delete process.env.TOMOGRAPH_ALLOW_LOCAL_MCP;
+    delete process.env.OBSERVOGRAM_ALLOW_LOCAL_MCP;
   }
 
   // POST /api/packs/:id/deploy/:target — unknown pack → 404
@@ -469,8 +480,8 @@ try {
   const authRaw = await getJson(base, '/api/packs/payment-service/canonical');
   delete authRaw.__effectiveEnvironment;
   delete authRaw.__effective;
-  process.env.TOMOGRAPH_API_TOKEN = 'smoke-secret';
-  process.env.TOMOGRAPH_API_TOKEN_LABEL = 'smoke-ci';
+  process.env.OBSERVOGRAM_API_TOKEN = 'smoke-secret';
+  process.env.OBSERVOGRAM_API_TOKEN_LABEL = 'smoke-ci';
   const openRead = await fetch(`${base}/api/packs`);
   assert(openRead.status === 200, 'token set: GET routes stay open without auth');
   const denied = await fetch(`${base}/api/validate`, {
@@ -478,7 +489,7 @@ try {
   });
   assert(denied.status === 401, 'token set: mutating route without bearer → 401');
   assert((denied.headers.get('www-authenticate') || '').includes('Bearer'), '401 carries WWW-Authenticate: Bearer');
-  assert(/TOMOGRAPH_API_TOKEN/.test((await denied.json()).error || ''), '401 error names the env var to set');
+  assert(/OBSERVOGRAM_API_TOKEN/.test((await denied.json()).error || ''), '401 error names the env var to set');
   const wrongTok = await fetch(`${base}/api/validate`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer not-the-secret' },
     body: JSON.stringify(authRaw),
@@ -499,8 +510,8 @@ try {
   const authedRec = authedAudit.deploys.find(d => d.deployId === authedDeploy.deployId);
   assert(authedRec?.actor === 'smoke-ci', 'audit actor is the token label', authedRec?.actor, 'smoke-ci');
   assert(!JSON.stringify(authedRec).includes('smoke-secret'), 'the token secret never lands in the audit log');
-  delete process.env.TOMOGRAPH_API_TOKEN;
-  delete process.env.TOMOGRAPH_API_TOKEN_LABEL;
+  delete process.env.OBSERVOGRAM_API_TOKEN;
+  delete process.env.OBSERVOGRAM_API_TOKEN_LABEL;
   const reopened = await fetch(`${base}/api/validate`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(authRaw),
   });
@@ -509,13 +520,13 @@ try {
   // --- fail-closed startup (10B): exposed bind without a token refuses to boot. ---
   let exposedRefused = null;
   try { await start({ host: '0.0.0.0', port: 0, silent: true }); exposedRefused = false; }
-  catch (e) { exposedRefused = /TOMOGRAPH_API_TOKEN/.test(e.message); }
+  catch (e) { exposedRefused = /OBSERVOGRAM_API_TOKEN/.test(e.message); }
   assert(exposedRefused === true, 'binding 0.0.0.0 without a token fails closed with a clear message');
-  process.env.TOMOGRAPH_INSECURE_NO_AUTH = '1';
+  process.env.OBSERVOGRAM_INSECURE_NO_AUTH = '1';
   const insecureSrv = await start({ host: '0.0.0.0', port: 0, silent: true });
-  assert(!!insecureSrv.address(), 'TOMOGRAPH_INSECURE_NO_AUTH=1 overrides knowingly (with a loud warning)');
+  assert(!!insecureSrv.address(), 'OBSERVOGRAM_INSECURE_NO_AUTH=1 overrides knowingly (with a loud warning)');
   await new Promise(r => insecureSrv.close(r));
-  delete process.env.TOMOGRAPH_INSECURE_NO_AUTH;
+  delete process.env.OBSERVOGRAM_INSECURE_NO_AUTH;
 
   // --- saved journeys API (item 11, studio surface) ---
   const PAY = resolvePath('vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml');
@@ -547,6 +558,124 @@ try {
   assert(jList2.journeys.find(j => j.name === 'smoke-journey')?.lastRun?.outcome === 'pass',
          'journey listing reflects the last run');
 
+  assert(jList2.journeys.find(j => j.name === 'smoke-journey')?.lastRun?.stack === null,
+         'a file-sourced Pack B leaves lastRun.stack null (absence, never a healthy stack)');
+
+  // Step 3: a run record carrying stackEvidence (seeded the way the runner
+  // writes it) surfaces lastRun.stack = { status, sampled, families }.
+  writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'stack-seeded.journey.yaml'), [
+    'name: stack-seeded',
+    `packA: { file: ${PAY.replaceAll('\\', '/')} }`,
+    `packB: { file: ${CUR.replaceAll('\\', '/')} }`,
+    'gate: { minAlignmentPct: 1 }',
+  ].join('\n'));
+  const seededAt = '2026-09-07T10:15:00.000Z';
+  mkdirSync(join(SMOKE_WORKSPACE, 'runs', 'stack-seeded'), { recursive: true });
+  writeFileSync(join(SMOKE_WORKSPACE, 'runs', 'stack-seeded', `${seededAt.replace(/[:.]/g, '-')}.json`), JSON.stringify({
+    journey: 'stack-seeded', startedAt: seededAt, tookMs: 5, outcome: 'pass',
+    grade: { score: 70, pass: true }, drift: { alignmentPct: 90 }, gate: { thresholds: { minAlignmentPct: 1 }, breaches: [] },
+    stack: { status: 'sampled', reason: null, sampled: 2, empty: 1, failed: 0, notAttempted: 0 },
+    stackEvidence: {
+      status: 'sampled', reason: null,
+      rows: [
+        { id: 'scrape_success_ratio', family: 'scrape', product: 'generic', value: null, unit: 'ratio', direction: 'higher', outcome: 'empty', hint: null, at: seededAt, referenceSli: 'prometheus-reference/scrape_success_ratio' },
+        { id: 'scrape_targets_down', family: 'scrape', product: 'generic', value: 2, unit: 'count', direction: 'lower', outcome: 'data', hint: 'nonzero', at: seededAt, referenceSli: null },
+        { id: 'notification_errors', family: 'notify', product: 'alertmanager', value: 0, unit: 'per-second', direction: 'lower', outcome: 'data', hint: null, at: seededAt, referenceSli: 'alertmanager-reference/notification_errors' },
+        { id: 'log_shipper_drops', family: 'logs', product: 'promtail', value: null, unit: 'per-second', direction: 'lower', outcome: 'not-in-inventory', hint: null, at: seededAt, referenceSli: null },
+      ],
+      alertmanager: null, grafana: null,
+    },
+  }, null, 2));
+  const jList3 = await getJson(base, '/api/journeys');
+  const seeded = jList3.journeys.find(j => j.name === 'stack-seeded')?.lastRun?.stack;
+  assert(seeded?.status === 'sampled' && seeded.sampled === 2 && seeded.reason === null,
+         'GET /api/journeys lastRun.stack carries the status and the rows that answered data', seeded);
+  assert(seeded?.families?.scrape?.id === 'scrape_targets_down' && seeded.families.scrape.value === 2 && seeded.families.scrape.hint === 'nonzero'
+         && seeded.families.notify?.value === 0 && seeded.families.logs?.outcome === 'not-in-inventory' && seeded.families.logs.value === null,
+         'lastRun.stack.families picks the data row per family and keeps the honest non-answer', seeded?.families);
+  assert(Object.keys(seeded?.families || {}).sort().join() === 'logs,notify,scrape', 'lastRun.stack.families lists only the families present', Object.keys(seeded?.families || {}));
+  const seededLast = jList3.journeys.find(j => j.name === 'stack-seeded')?.lastRun;
+  assert(seededLast && seededLast.chains === null && seededLast.transition === null, 'a record without branches reads lastRun.chains null and transition null', seededLast && { c: seededLast.chains, t: seededLast.transition });
+
+  // Step 4: a run record carrying requirement chains (seeded the way the
+  // runner writes them) surfaces lastRun.chains + lastRun.transition.
+  writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'chain-seeded.journey.yaml'), [
+    'name: chain-seeded',
+    `packA: { file: ${PAY.replaceAll('\\', '/')} }`,
+    `packB: { file: ${CUR.replaceAll('\\', '/')} }`,
+  ].join('\n'));
+  const chainAt = '2026-09-08T10:15:00.000Z';
+  mkdirSync(join(SMOKE_WORKSPACE, 'runs', 'chain-seeded'), { recursive: true });
+  writeFileSync(join(SMOKE_WORKSPACE, 'runs', 'chain-seeded', `${chainAt.replace(/[:.]/g, '-')}.json`), JSON.stringify({
+    journey: 'chain-seeded', startedAt: chainAt, tookMs: 5, outcome: 'pass',
+    grade: { score: 70, pass: true }, drift: { alignmentPct: 90 }, gate: { thresholds: {}, breaches: [] },
+    traceability: { integrityPct: 67, intact: 1, partial: 1, broken: 1, undeclared: 1, declaredTotal: 3 },
+    branches: [
+      { rootKey: 'slo::a', title: 'a', rootKind: 'slo', verdict: 'intact', ladderVerdict: 'healthy', integrityPct: 100, ladderIntegrityPct: 100, confidence: 'declared', missingRoles: [], degraded: [] },
+      { rootKey: 'slo::b', title: 'b', rootKind: 'slo', verdict: 'partial', ladderVerdict: 'degraded', integrityPct: 60, ladderIntegrityPct: 55, confidence: 'declared', missingRoles: [], degraded: [
+        { key: 'burn_rate::b', kind: 'burn_rate', label: 'burn-rate alert: b', status: 'drifted', ladder: { rung: 'exists', status: null, detail: 'no liveness field on the wire for this kind' }, blastRadius: { slos: 1, alerts: 0, panels: 0, dashboards: 0, routes: 2, remediations: 0, total: 3 }, deltaFields: ['windows[0].long'] },
+      ] },
+      { rootKey: 'slo::c', title: 'c', rootKind: 'slo', verdict: 'broken', ladderVerdict: 'broken', integrityPct: 40, ladderIntegrityPct: 30, confidence: 'inferred', missingRoles: ['action'], degraded: [
+        { key: 'scrape_job::payment', kind: 'scrape_job', label: 'payment', status: 'declared_only', ladder: { rung: 'exists', status: 'present_unhealthy', detail: 'on the wire but withheld from Pack B: every target down' }, blastRadius: { slos: 2, alerts: 2, panels: 1, dashboards: 1, routes: 2, remediations: 0, total: 8 }, deltaFields: [] },
+      ] },
+      { rootKey: 'slo::live', title: 'live', rootKind: 'slo', verdict: 'undeclared', ladderVerdict: 'undeclared', integrityPct: 0, ladderIntegrityPct: 0, confidence: 'inferred', missingRoles: [], degraded: [] },
+    ],
+    chains: null, versions: { prometheus: '2.53.0' },
+    transition: { since: '2026-09-08T10:00:00.000Z', changed: [
+      { rootKey: 'slo::c', title: 'c', from: { verdict: 'partial', ladderVerdict: 'degraded' }, to: { verdict: 'broken', ladderVerdict: 'broken' }, direction: 'worse', nodes: { newlyDegraded: ['payment'], recovered: [] } },
+      { rootKey: 'slo::a', title: 'a', from: { verdict: 'partial', ladderVerdict: 'degraded' }, to: { verdict: 'intact', ladderVerdict: 'healthy' }, direction: 'better', nodes: { newlyDegraded: [], recovered: ['x'] } },
+    ], appeared: [], disappeared: [], any: true },
+    livePack: { kept: false, path: null, reason: 'Pack B is a file (x)' },
+    // Slice 4: the ranker's block as runJourney stores it — `transition`
+    // above is the single copy of the diff (the block carries none) and
+    // a cause names its chains by title with the identity keys apart.
+    causes: { causes: [
+      { rank: 1, kind: 'observogram-deploy', score: 0.9, evidence: 'deploy dep_smoke by local at 2026-09-08T10:05:00.000Z (upsert) touched payment', chains: ['c'], rootKeys: ['slo::c'], nodes: ['payment'] },
+      { rank: 2, kind: 'config-drift', score: 0.8, evidence: 'burn-rate alert: b (burn_rate) drifted on windows[0].long — decision-bearing: windows[0].long', chains: ['b'], rootKeys: ['slo::b'], nodes: ['burn-rate alert: b'] },
+    ], vantage: { changed: true, from: { vantage: 'full', failed: [], unsupported: [], toolsExposedCount: 12 }, to: { vantage: 'partial', failed: ['scrape_configs'], unsupported: [], toolsExposedCount: 12 }, detail: 'vantage full → partial · probe family scrape_configs newly failed (HTTP 502)' },
+    note: 'candidate causes ranked by evidence — not a root-cause verdict' },
+  }, null, 2));
+  const jList4 = await getJson(base, '/api/journeys');
+  const chainLast = jList4.journeys.find(j => j.name === 'chain-seeded')?.lastRun;
+  assert(chainLast?.chains && Object.keys(chainLast.chains).join() === 'declaredTotal,intact,partial,broken,undeclared,ladder,integrityPct,ladderIntegrityPct,degradedNodes,undeclaredNodes,topExposure',
+         'GET /api/journeys lastRun.chains carries the chain summary shape', chainLast?.chains && Object.keys(chainLast.chains));
+  assert(chainLast.chains.declaredTotal === 3 && chainLast.chains.intact === 1 && chainLast.chains.partial === 1 && chainLast.chains.broken === 1 && chainLast.chains.undeclared === 1
+         && chainLast.chains.ladder.healthy === 1 && chainLast.chains.ladder.degraded === 1 && chainLast.chains.ladder.broken === 1 && chainLast.chains.ladder.unobserved === 0
+         && chainLast.chains.integrityPct === 67 && chainLast.chains.ladderIntegrityPct === 62 && chainLast.chains.degradedNodes === 2 && chainLast.chains.undeclaredNodes === 0,
+         'lastRun.chains counts verdicts and ladder verdicts over the declared chains, means the integrities and counts degraded nodes (undeclared chains apart)', chainLast.chains);
+  assert(chainLast.chains.topExposure?.label === 'payment' && chainLast.chains.topExposure.kind === 'scrape_job' && chainLast.chains.topExposure.slos === 2 && chainLast.chains.topExposure.alerts === 2,
+         'lastRun.chains.topExposure is the degraded node that blinds the most SLOs', chainLast.chains.topExposure);
+  assert(JSON.stringify(chainLast.transition) === JSON.stringify({ any: true, changed: 2, worse: 1 }), 'lastRun.transition summarises any / changed / worse', chainLast.transition);
+  // Slice 4: the rank-1 candidate cause and the vantage marker ride on lastRun.
+  assert(chainLast.topCause && Object.keys(chainLast.topCause).join() === 'rank,kind,score,evidence,chains,rootKeys,nodes' && chainLast.topCause.rank === 1 && chainLast.topCause.kind === 'observogram-deploy' && chainLast.topCause.score === 0.9
+         && /^deploy dep_smoke by local/.test(chainLast.topCause.evidence) && chainLast.topCause.chains.join() === 'c' && chainLast.topCause.rootKeys.join() === 'slo::c' && chainLast.topCause.nodes.join() === 'payment',
+         'GET /api/journeys lastRun.topCause is the rank-1 cause with its full shape (chains by title, rootKeys apart)', chainLast.topCause);
+  assert(chainLast.vantageChanged === true, 'lastRun.vantageChanged reads the vantage block beside the causes', chainLast.vantageChanged);
+  assert(seededLast.topCause === null && seededLast.vantageChanged === null, 'a record without a causes block reads topCause null and vantageChanged null', { t: seededLast.topCause, v: seededLast.vantageChanged });
+  // A causes block whose vantage is null (two file-sourced runs carry no
+  // vantage facts) reads vantageChanged null — never false, never true.
+  writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'vantage-null-seeded.journey.yaml'), [
+    'name: vantage-null-seeded',
+    `packA: { file: ${PAY.replaceAll('\\', '/')} }`,
+    `packB: { file: ${CUR.replaceAll('\\', '/')} }`,
+  ].join('\n'));
+  const vnAt = '2026-09-08T10:20:00.000Z';
+  mkdirSync(join(SMOKE_WORKSPACE, 'runs', 'vantage-null-seeded'), { recursive: true });
+  writeFileSync(join(SMOKE_WORKSPACE, 'runs', 'vantage-null-seeded', `${vnAt.replace(/[:.]/g, '-')}.json`), JSON.stringify({
+    journey: 'vantage-null-seeded', startedAt: vnAt, tookMs: 5, outcome: 'pass',
+    grade: { score: 70, pass: true }, drift: { alignmentPct: 90 }, gate: { thresholds: {}, breaches: [] },
+    branches: [], chains: null, versions: null,
+    transition: { since: '2026-09-08T10:00:00.000Z', changed: [], appeared: [], disappeared: [], any: false, skipped: [], reason: null },
+    livePack: { kept: false, path: null, reason: 'Pack B is a file (x)' },
+    causes: { causes: [], vantage: null, note: 'candidate causes ranked by evidence — not a root-cause verdict' },
+  }, null, 2));
+  const vnLast = (await getJson(base, '/api/journeys')).journeys.find(j => j.name === 'vantage-null-seeded')?.lastRun;
+  assert(vnLast && vnLast.topCause === null && vnLast.vantageChanged === null && vnLast.transition && vnLast.transition.any === false && vnLast.chains && vnLast.chains.declaredTotal === 0,
+         'a causes block with vantage null reads vantageChanged null (not false); an empty branch list reads chains with 0 declared', vnLast && { t: vnLast.topCause, v: vnLast.vantageChanged, tr: vnLast.transition, c: vnLast.chains });
+  const chainRuns = await getJson(base, '/api/journeys/chain-seeded/runs?limit=5');
+  assert(chainRuns.runs[0]?.branches?.length === 4 && chainRuns.runs[0].transition.changed.length === 2 && chainRuns.runs[0].livePack.kept === false,
+         'GET /api/journeys/:name/runs hands the record through unchanged (branches, transition, livePack)');
+
   const jRun404 = await fetch(`${base}/api/journeys/never-saved/run`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
   });
@@ -568,6 +697,71 @@ try {
     body: JSON.stringify({ name: 'x', packAId: 'does-not-exist', packBId: 'production-curated' }),
   });
   assert(capBad.status === 404, 'capture with an unknown pack → 404');
+  // A captured gate is validated the way loadJourneyDef validates a file:
+  // an unknown stack row is refused (400), never saved as a journey that
+  // can never load.
+  const capStackBad = await fetch(`${base}/api/journeys/capture`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'captured-bad', packAId: 'payment-service', packBId: 'production-curated', gate: { minAlignmentPct: 1, stack: { rows: { nope_row: { max: 0 } } } } }),
+  });
+  const capStackBadBody = await capStackBad.json();
+  assert(capStackBad.status === 400 && /gate\.stack\.rows names unknown row nope_row/.test(capStackBadBody.error || ''),
+         'capture with an unknown stack row id → 400 naming the row', capStackBadBody);
+  assert(!(await getJson(base, '/api/journeys')).journeys.some(j => j.name === 'captured-bad'), 'the refused capture saved nothing');
+  const capStackOk = await fetch(`${base}/api/journeys/capture`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'captured-stack', packAId: 'payment-service', packBId: 'production-curated', gate: { minAlignmentPct: 1, stack: { requireSampled: true, rows: { scrape_targets_down: { max: 0 } } } } }),
+  }).then(r => r.json());
+  assert(capStackOk.ok === true, 'capture with a well-formed stack gate saves');
+  // A definition on disk that fails to load is listed with the reason.
+  writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'bad-id.journey.yaml'), [
+    'name: bad-id',
+    `packA: { file: ${PAY.replaceAll('\\', '/')} }`,
+    `packB: { file: ${CUR.replaceAll('\\', '/')} }`,
+    'gate:', '  stack:', '    rows:', '      nope_row: { max: 0 }',
+  ].join('\n'));
+  const jListBad = await getJson(base, '/api/journeys');
+  const badEntry = jListBad.journeys.find(j => j.name === 'bad-id');
+  assert(badEntry && /unknown row nope_row/.test(badEntry.loadError || '') && badEntry.lastRun === null,
+         'GET /api/journeys lists a definition that fails to load with loadError, so it never reads as a healthy never-run journey', badEntry);
+  assert(jListBad.journeys.find(j => j.name === 'smoke-journey')?.loadError === null, 'a healthy definition lists loadError null');
+
+  // --- repo retrofeed (item 4, reverse remediation arrow) ---
+  const rf = await fetch(`${base}/api/packs/payment-service/retrofeed`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ packBId: 'production-curated', scopeMode: 'off' }),
+  }).then(r => r.json());
+  assert(rf.ok === true && rf.summary.adopted > 0, 'retrofeed adopts live shadow signals', rf.summary);
+  assert(rf.summary.candidates === rf.summary.adopted + rf.summary.skipped,
+         'every candidate is accounted for (adopted + skipped)', rf.summary);
+  assert(typeof rf.fragmentYaml === 'string' && rf.fragmentYaml.includes('spec:'),
+         'retrofeed returns the additions as a YAML fragment');
+  // The law: the updated pack must round-trip through the validator.
+  const rfValidate = await fetch(`${base}/api/validate?source=retrofeed-roundtrip`, {
+    method: 'POST', headers: { 'Content-Type': 'text/yaml' }, body: rf.updatedPackYaml,
+  }).then(r => r.json());
+  assert(rfValidate.ok === true, 'the retrofed pack validates end-to-end through /api/validate', rfValidate.errors?.slice(0, 2));
+  // keys filter narrows the adoption set.
+  const oneKey = rf.adopted[0]?.key;
+  const rfOne = await fetch(`${base}/api/packs/payment-service/retrofeed`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ packBId: 'production-curated', scopeMode: 'off', keys: [oneKey] }),
+  }).then(r => r.json());
+  assert(rfOne.ok === true && rfOne.summary.candidates === 1,
+         'keys[] filter narrows retrofeed to the chosen entries', rfOne.summary);
+  const rf404 = await fetch(`${base}/api/packs/payment-service/retrofeed`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ packBId: 'nope' }),
+  });
+  assert(rf404.status === 404, 'retrofeed with unknown pack B → 404');
+  // Branch-scoped keys arrive from the traceability graph, which applies
+  // its own #NN occurrence suffixing — matching must be suffix-tolerant.
+  const rfSuffixed = await fetch(`${base}/api/packs/payment-service/retrofeed`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ packBId: 'production-curated', scopeMode: 'off', keys: [`${oneKey}#07`] }),
+  }).then(r => r.json());
+  assert(rfSuffixed.ok === true && rfSuffixed.summary.candidates === 1,
+         'keys[] matching tolerates #NN occurrence suffixes (traceability keyspace)', rfSuffixed.summary);
 
   // Deploy v2 — target product / version / scope wiring
   const matrix = await getJson(base, '/api/deploy/matrix');
@@ -730,6 +924,158 @@ try {
     assert(typeof liveStatus.refreshedAt === 'string' || liveStatus.refreshedAt === null,
            'live-status surfaces refreshedAt when present');
   }
+  // Probe-outcome honesty on the badge: when a live pack exists, the
+  // status carries the failed AND the unsupported probe families as the
+  // same comma-string shape as toolsFailed. The live pack is an ignored
+  // runtime file (examples/production-live.pack.yaml); when the working
+  // tree has none, plant a minimal one for the assertion and remove it
+  // afterwards — never overwrite a real refresh.
+  {
+    const livePackPath = resolvePath(dirname(fileURLToPath(import.meta.url)), '..', 'examples', 'production-live.pack.yaml');
+    const planted = !existsSync(livePackPath);
+    if (planted) {
+      writeFileSync(livePackPath, [
+        'apiVersion: observability.pack/v1',
+        'kind: ObservabilityPack',
+        'metadata:',
+        '  name: production-live',
+        '  annotations:',
+        '    mcp.refreshedAt: "2026-06-06T00:00:00Z"',
+        '    mcp.url: "https://fake-mcp.test/observability"',
+        '    mcp.toolsFailed: ""',
+        '    mcp.probesFailed: "dashboards"',
+        '    mcp.probesUnsupported: "scrape_configs,metric_names"',
+        '    mcp.probeErrors.dashboards: "HTTP 502 Bad Gateway"',
+        '    mcp.stack.status: "sampled"',
+        '    mcp.stack.sampled: "7"',
+        'spec: {}',
+        '',
+      ].join('\n'));
+    }
+    try {
+      const withPack = await getJson(base, '/api/live-status');
+      assert(withPack.present === true, 'live-status reports present with a live pack on disk');
+      assert(typeof withPack.probesFailed === 'string' && typeof withPack.probesUnsupported === 'string',
+             'live-status carries probesFailed and probesUnsupported as comma strings',
+             [withPack.probesFailed, withPack.probesUnsupported]);
+      assert((withPack.stackStatus === null || typeof withPack.stackStatus === 'string') && typeof withPack.stackSampled === 'number',
+             'live-status carries stackStatus (string|null) and stackSampled (number)',
+             [withPack.stackStatus, withPack.stackSampled]);
+      if (planted) {
+        assert(withPack.probesFailed === 'dashboards' && withPack.probesUnsupported === 'scrape_configs,metric_names',
+               'live-status reads mcp.probesFailed / mcp.probesUnsupported straight from the pack annotations',
+               [withPack.probesFailed, withPack.probesUnsupported]);
+        assert(withPack.stackStatus === 'sampled' && withPack.stackSampled === 7,
+               'live-status reads mcp.stack.status / mcp.stack.sampled straight from the pack annotations',
+               [withPack.stackStatus, withPack.stackSampled]);
+      }
+    } finally {
+      if (planted) rmSync(livePackPath, { force: true });
+    }
+  }
+
+  // POST /api/draft-from-mcp — step 2 stack self-metrics on the summary.
+  // A fake MCP that advertises metrics_query + the status tools answers a
+  // few instant vectors; the summary must carry stack / alertmanager /
+  // grafana as point-in-time samples (outcomes, hints), never a verdict.
+  {
+    // Recorded fixture first (tools/fixtures/mcp/<tool>.json), synthetic
+    // fallback — the fixtures README's precedence rule; authoring metadata
+    // stripped because a server would not send it.
+    const SYN = (f) => {
+      const base = resolvePath(dirname(fileURLToPath(import.meta.url)), '..', 'tools', 'fixtures', 'mcp');
+      const recorded = resolvePath(base, f);
+      const j = JSON.parse(readFileSync(existsSync(recorded) ? recorded : resolvePath(base, 'synthetic', f), 'utf8'));
+      delete j._synthetic; delete j._recorded;
+      return j;
+    };
+    const stackTools = [
+      'system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines',
+      'metrics_query', 'metrics_label_values', 'alertmanager_status', 'alertmanager_silences',
+      'grafana_datasources', 'grafana_datasource_health', 'grafana_contact_points',
+    ];
+    const fakeStack = await startFakeMcp(stackTools, (name, args) => {
+      if (name === 'system_health') return { services: [] };
+      if (name === 'system_topology') return { dependencies: [] };
+      if (name === 'anomalies_active') return {};
+      if (name === 'anomalies_baselines') return { baselines: [] };
+      if (name === 'metrics_label_values') return { values: ['up', 'vmalert_alerts_send_errors_total', 'prometheus_notifications_errors_total'] };
+      if (name === 'metrics_query') {
+        if (args.query === 'sum(up) / count(up)') return { result: [{ metric: {}, value: [1, '0.9'] }] };
+        if (args.query === 'sum(rate(prometheus_notifications_errors_total[5m]))') return { result: [{ metric: {}, value: [1, '0.25'] }] };
+        return { result: [] };
+      }
+      if (name === 'alertmanager_status') return SYN('alertmanager_status.json');
+      if (name === 'alertmanager_silences') return SYN('alertmanager_silences.json');
+      if (name === 'grafana_datasources') return SYN('grafana_datasources.json');
+      // Per uid, like the recording: the primary health file is the
+      // datasource Grafana could not check (HTTP 400 — a failed check), every
+      // other uid answers the passed check.
+      if (name === 'grafana_datasource_health') return args.uid === SYN('grafana_datasource_health.json').datasource?.uid ? SYN('grafana_datasource_health.json') : SYN('grafana_datasource_health.ok.json');
+      if (name === 'grafana_contact_points') return SYN('grafana_contact_points.json');
+      return {};
+    });
+    try {
+      const draft = await (await postJson('/api/draft-from-mcp', { mcpUrl: fakeStack.url })).json();
+      assert(draft.ok === true, 'draft-from-mcp against the stack fake succeeds', draft.error);
+      const st = draft.summary?.stack;
+      assert(st && st.status === 'sampled', 'summary.stack.status is sampled when metrics_query is advertised', st);
+      assert(['sampled', 'empty', 'failed', 'notInInventory', 'notAttempted'].every(k => typeof st[k] === 'number'),
+             'summary.stack carries the five counts as numbers', st);
+      assert(st.sampled >= 2 && st.notInInventory >= 1, 'summary.stack counts: two sampled rows, inventory-gated rows not in inventory', st);
+      assert(st.families && st.families.scrape === 'data' && st.families.notify === 'data',
+             'summary.stack.families maps family → best outcome', st.families);
+      const byId = Object.fromEntries((st.rows || []).map(r => [r.id, r]));
+      assert(byId.scrape_success_ratio && byId.scrape_success_ratio.value === 0.9 && byId.scrape_success_ratio.unit === 'ratio' && byId.scrape_success_ratio.outcome === 'data' && byId.scrape_success_ratio.hint === null,
+             'summary.stack.rows carries the sampled ratio with unit and a null hint (higher-is-better)', byId.scrape_success_ratio);
+      assert(byId.notification_errors && byId.notification_errors.value === 0.25 && byId.notification_errors.hint === 'nonzero' && byId.notification_errors.direction === 'lower',
+             'summary.stack.rows: a lower-is-comfortable row above zero carries the display hint nonzero', byId.notification_errors);
+      assert(byId.wal_corruptions && byId.wal_corruptions.outcome === 'not-in-inventory' && byId.wal_corruptions.value === null,
+             'summary.stack.rows: inventory-gated rows read not-in-inventory with a null value', byId.wal_corruptions);
+      assert((st.rows || []).every(r => !('verified' in r) && ['data', 'empty', 'failed', 'not-in-inventory', 'not-attempted'].includes(r.outcome)),
+             'stack rows are outcomes only — never ok / verified');
+      const am = draft.summary?.alertmanager;
+      assert(am && am.version === SYN('alertmanager_status.json').version && am.silences && typeof am.silences.active === 'number',
+             'summary.alertmanager carries version and the active-silence count', am);
+      const gf = draft.summary?.grafana;
+      assert(gf && Array.isArray(gf.datasources) && gf.datasources.length === 3 && gf.datasources.every(d => ['ok', 'error', 'unknown'].includes(d.health)),
+             'summary.grafana.datasources carries the datasources with a normalised health', gf);
+      assert(gf.contactPoints && typeof gf.contactPoints.count === 'number' && Array.isArray(gf.contactPoints.names),
+             'summary.grafana.contactPoints carries count and names', gf.contactPoints);
+      assert(gf.healthChecked === 3 && gf.error === null && am.error === null,
+             'summary.grafana.healthChecked counts the datasources that got a verdict; no probe error when every status tool answered', [gf.healthChecked, gf.error, am.error]);
+      assert(!(draft.summary.warnings || []).some(w => /status probe failed/.test(w)), 'no probe-failed warning when the status tools answered');
+      assert(!(draft.summary.warnings || []).some(w => /Stack self-metrics not attempted/.test(w)),
+             'no not-attempted warning when the panel was sampled');
+      assert(Object.keys(draft.annotations || {}).every(k => !k.startsWith('mcp.verified.') || !/stack|alertmanager|grafana\.(datasources|contact)/.test(k)),
+             'no Verified stamp names a stack / Alertmanager / Grafana surface');
+    } finally {
+      await fakeStack.close();
+    }
+
+    // Restricted tier: tools/list without metrics_query → not attempted,
+    // with the reason on the summary and one honest warning.
+    const fakeRestricted = await startFakeMcp(['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines'], (name) => {
+      if (name === 'system_health') return { services: [] };
+      if (name === 'system_topology') return { dependencies: [] };
+      return {};
+    });
+    try {
+      const draft = await (await postJson('/api/draft-from-mcp', { mcpUrl: fakeRestricted.url })).json();
+      assert(draft.ok === true, 'draft-from-mcp against the restricted fake succeeds', draft.error);
+      const st = draft.summary?.stack;
+      assert(st && st.status === 'not-attempted' && st.reason === 'metrics_query not exposed by this MCP (restricted tier)',
+             'restricted tier → summary.stack.status not-attempted with the tier reason', st);
+      assert(st.sampled === 0 && st.rows.length === 0 && Object.values(st.families).every(o => o === 'not-attempted'),
+             'restricted tier → zero sampled, no rows, every family not-attempted', st);
+      assert((draft.summary.warnings || []).includes('Stack self-metrics not attempted — metrics_query not exposed by this MCP tier.'),
+             'restricted tier → the not-attempted warning', draft.summary.warnings);
+      assert(draft.summary.alertmanager === null && draft.summary.grafana === null,
+             'restricted tier → alertmanager / grafana summaries are null (not exposed), never fabricated');
+    } finally {
+      await fakeRestricted.close();
+    }
+  }
 
   // POST /api/refresh-live — missing mcpUrl
   const badRefresh = await fetch(`${base}/api/refresh-live`, {
@@ -766,7 +1112,7 @@ try {
   assert(typeof validateRes.conformance?.scorePercent === 'number', 'validate response includes conformance report');
 
   // Workspace persistence (10A): registering a pack writes it through to
-  // the .tomograph/ workspace as an inspectable YAML file + index entry.
+  // the .observogram/ workspace as an inspectable YAML file + index entry.
   const registeredId = validateRes.registered?.id;
   assert(typeof registeredId === 'string' && registeredId.length > 0, 'validate returns a registered pack id');
   const wsPackFile = join(SMOKE_WORKSPACE, 'packs', `${registeredId}.pack.yaml`);
@@ -792,7 +1138,7 @@ try {
 
   // GET / returns the studio shell
   const html = await getText(base, '/');
-  assert(html.includes('<title>Tomograph'), 'GET / returns studio shell');
+  assert(html.includes('<title>Observogram'), 'GET / returns studio shell');
   assert(html.includes('/app.mjs'), 'shell loads app.mjs');
   assert(html.includes('/app.css'), 'shell loads app.css');
 
@@ -819,7 +1165,7 @@ try {
   assert(crawlOut.ok === true, 'crawl ok');
   assert(crawlOut.canonical?.apiVersion === 'observability.platform/v1', 'crawl emits canonical v1');
   assert(crawlOut.canonical?.metadata?.name === 'smoke-crawl', 'crawl honors repoName');
-  assert(crawlOut.canonical?.metadata?.annotations?.['tomograph.diff.scopeMode'] === 'family',
+  assert(crawlOut.canonical?.metadata?.annotations?.['observogram.diff.scopeMode'] === 'family',
          'crawl honors requested live-drift scope mode');
   assert(crawlOut.summary?.comparison?.diffScopeMode === 'family',
          'crawl summary echoes requested live-drift scope mode');

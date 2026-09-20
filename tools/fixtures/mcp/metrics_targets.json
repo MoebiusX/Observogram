@@ -1,0 +1,47 @@
+{
+  "activeTargets": 6,
+  "targets": [
+    {
+      "job": "node-exporter",
+      "instance": "192.168.1.34:9100",
+      "health": "up",
+      "lastScrape": "2026-06-12T13:16:04.658Z",
+      "lastError": null
+    },
+    {
+      "job": "alertmanager",
+      "instance": "kx-krystalinex-alertmanager:9093",
+      "health": "down",
+      "lastScrape": "2026-06-12T13:16:04.249Z",
+      "lastError": "cannot perform request to \"http://kx-krystalinex-alertmanager:9093/alertmanager/metrics\": Get \"http://kx-krystalinex-alertmanager:9093/alertmanager/metrics\": dial tcp4 10.96.4.190:9093: connect: connection refused; try -enableTCP6 command-line flag for dialing ipv6 addresses"
+    },
+    {
+      "job": "grafana",
+      "instance": "kx-krystalinex-grafana:3000",
+      "health": "up",
+      "lastScrape": "2026-06-12T13:15:46.521Z",
+      "lastError": null
+    },
+    {
+      "job": "otel-collector",
+      "instance": "kx-krystalinex-otel-collector:8888",
+      "health": "up",
+      "lastScrape": "2026-06-12T13:16:10.395Z",
+      "lastError": null
+    },
+    {
+      "job": "payment-processor",
+      "instance": "kx-krystalinex-payment-processor:3001",
+      "health": "up",
+      "lastScrape": "2026-06-12T13:16:10.707Z",
+      "lastError": null
+    },
+    {
+      "job": "victoriametrics",
+      "instance": "localhost:8428",
+      "health": "up",
+      "lastScrape": "2026-06-12T13:16:04.199Z",
+      "lastError": null
+    }
+  ]
+}

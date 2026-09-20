@@ -2,7 +2,7 @@
 
 This runbook is for the Krystaline dry run on June 10, 2026.
 
-The purpose is to demonstrate the main Tomograph value loop:
+The purpose is to demonstrate the main Observogram value loop:
 
 ```text
 Discover -> Diagnose -> Remediate -> Validate again
@@ -13,12 +13,12 @@ The demo question is:
 > Is our observability diagnostic-grade?
 
 The OLA is represented by the repo-derived ObservabilityPack. The live MCP pack
-is production evidence. The dry run is valuable only when Tomograph compares
+is production evidence. The dry run is valuable only when Observogram compares
 those two things directly.
 
 ## Success Criteria
 
-The dry run is successful when Tomograph can show all of the following:
+The dry run is successful when Observogram can show all of the following:
 
 - repo-derived Pack A loads cleanly
 - live MCP-derived Pack B loads cleanly
@@ -117,7 +117,7 @@ Confirm the selector identifies the file source:
 krystalinex-core · v0.1.0-crawled · from krystaline.service.repo.yaml
 ```
 
-Review the tomogram layers quickly:
+Review the observogram layers quickly:
 
 - L1 Contract
 - L2 Telemetry
@@ -146,12 +146,19 @@ Open **Diagnose - Can We Trust It?**
 Expected current shape:
 
 ```text
-DIAGNOSTIC GRADE PASS
-Score    88% 7.04/8
-Coverage 100% 5/5
+DIAGNOSTIC GRADE    A · DIAGNOSTIC / CLINICAL GRADE
+Score    86% 6.04/7
+Coverage 100% 4/4
 Trust    68% 2.04/3
+Audit    PASS (bar: above 85% — A and better)
 Verified YES live signal present
 ```
+
+(Grade schema 2: seven scored criteria; the Actionable check renders
+separately under 2C Operability as informational. The headline stamp is
+the instrument grade — D/C/B/B+/A/A+ with A++ shown as a reference-only
+rung — and the full ladder renders below the summary with the current
+rung highlighted.)
 
 The exact live snapshot may change. The interpretation remains:
 
@@ -164,12 +171,14 @@ Explain the two diagnostic questions:
 1. Are we monitoring the right things?
 2. Is what we say we monitor actually active in production?
 
-Name the eight checks when asked how the grade is calculated:
+Name the checks when asked how the grade is calculated (seven scored, one
+informational):
 
-| Area | Checks |
-|---|---|
-| Coverage | Multi-modal, Correlated, Calibrated, Comprehensive, Actionable |
-| Trust | Chaos-validated, Drift-free, Fresh |
+| Area | Checks | Scored |
+|---|---|---|
+| Coverage | Multi-modal, Correlated, Calibrated, Comprehensive | yes |
+| Trust | Chaos-validated, Drift-free, Fresh | yes |
+| Operability | Actionable | no — informational |
 
 Then explain the drift buckets:
 
@@ -247,7 +256,7 @@ Required MCP server environment:
 MCP_ENABLE_WRITES=true
 GRAFANA_URL=https://grafana.example.net
 GRAFANA_AUTH_TOKEN=glsa_...
-MCP_AUTH_KEYS='{"keys":[{"id":"tomograph","key":"sk-tomograph-prod"}]}'
+MCP_AUTH_KEYS='{"keys":[{"id":"observogram","key":"sk-observogram-prod"}]}'
 ```
 
 ## Post-Deploy Validation
@@ -263,7 +272,7 @@ After deploy:
 The expected story is not "everything is perfect." The expected story is:
 
 ```text
-Tomograph found the gap, compiled the fix, deployed the source-backed delta,
+Observogram found the gap, compiled the fix, deployed the source-backed delta,
 and verified the new live state.
 ```
 

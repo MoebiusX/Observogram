@@ -2,7 +2,7 @@
 /**
  * server/index.mjs
  *
- * Express server for Tomograph v0.3+.
+ * Express server for Observogram v0.3+.
  *
  * Responsibilities:
  *   - Serve the studio HTML/CSS/JS shell from studio/.
@@ -33,23 +33,35 @@ import { fileURLToPath } from 'node:url';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
 import { adapt, listEnvironments, applyEnvironmentOverlay } from '../tools/lib/adapter.mjs';
+import { isLegacyLayeredPack, upconvertLegacyPack } from '../tools/lib/legacy.mjs';
 import { validateCanonical, SPEC_VERSION } from '../tools/lib/validator.mjs';
 import { evaluateConformance, RUBRIC } from '../tools/lib/conformance.mjs';
 import { crawlFiles, crawlToYaml } from '../tools/lib/crawler.mjs';
-import { fetchMcp, buildCanonicalPack, createMcpClient } from '../tools/fetch-live-pack.mjs';
+import { fetchMcp, buildCanonicalPack } from '../tools/fetch-live-pack.mjs';
 import { diffPacks } from '../tools/lib/diff.mjs';
 import { comparePackBranches } from '../tools/lib/traceability-graph.mjs';
 import { compile, listTargets, compileCatalog, compileArtifact } from '../tools/lib/compile.mjs';
 import { makeZip } from '../tools/lib/zip.mjs';
 import {
   saveWorkspacePack, deleteWorkspacePack, touchWorkspacePack,
-  loadWorkspacePacks, clearWorkspacePacks,
-  appendDeployRecord, appendDeployVerify, readDeployRecords,
-  saveDeploySnapshot, readDeploySnapshot, workspaceInfo,
+  loadWorkspacePacks, clearWorkspacePacks, workspaceInfo,
 } from './workspace.mjs';
 import {
-  listJourneys, loadJourneyDef, runJourney, readJourneyRuns, saveJourneyDef,
+  listJourneys, loadJourneyDef, runJourney, readJourneyRuns, saveJourneyDef, validateGateStack,
 } from '../tools/lib/journey.mjs';
+import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
+import { initAuth, authEnabled, readSession, maybeSeedDefaultAdmin, defaultAdminCredentialActive } from './auth.mjs';
+import { validateMcpUrl, redactCredentials } from './mcp-url.mjs';
+import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
+import { deployRoutes } from './routes/deploy.mjs';
+import { versionInfo } from './version.mjs';
+import { tenancyEnabled, orgsForUser, orgExists, runWithOrg, currentOrg, readOrgs, migrateFlatWorkspace } from './tenancy.mjs';
+import { setWorkspaceRootResolver } from '../tools/lib/journey.mjs';
+import { orgWorkspaceRoot } from './tenancy.mjs';
+import { brandEnv } from '../tools/lib/brand-env.mjs';
+import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
+import { stackSummary } from '../tools/lib/stack-evidence.mjs';
+import { chainSummary, topCause } from '../tools/lib/chain-history.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -151,12 +163,39 @@ function loadPackFile(relPath) {
 // server can't refer back to.
 //
 // Capped at MAX_UPLOADS to bound memory; oldest entry evicted on overflow.
-// Backed by the .tomograph/ workspace (server/workspace.mjs): every
+// Backed by the workspace directory (server/workspace.mjs): every
 // registration writes through to disk and start() rehydrates the map, so
 // crawled / drafted / uploaded packs survive restarts. Eviction at the cap
 // prunes both the map and the disk copy (retention by least-recently-used).
-const UPLOADED_PACKS = new Map();   // id → { canonical, source, createdAt }
+// With tenancy on, each org has its own registry — a process-wide map
+// would leak one org's packs into another's catalog, which is exactly
+// what the Stage 2 isolation gate forbids. Scope key '' is the flat
+// (tenancy-off) workspace; org scopes rehydrate lazily from their own
+// workspace subtree on first touch.
+const UPLOAD_REGISTRIES = new Map();   // scope ('' | orgId) → Map(id → { canonical, source, createdAt })
 const MAX_UPLOADS = 200;
+
+function uploadsMap() {
+  const scope = (tenancyEnabled() && currentOrg()) || '';
+  let m = UPLOAD_REGISTRIES.get(scope);
+  if (!m) {
+    m = new Map();
+    UPLOAD_REGISTRIES.set(scope, m);
+    if (scope) {
+      // First touch of this org in this process: rehydrate from its own
+      // workspace subtree (loadWorkspacePacks resolves the org root from
+      // the request's AsyncLocalStorage context).
+      try {
+        for (const p of loadWorkspacePacks()) {
+          if (!m.has(p.id)) m.set(p.id, { canonical: p.canonical, source: p.source, label: p.label, createdAt: p.createdAt });
+        }
+      } catch (e) {
+        process.stderr.write(`[workspace] org '${scope}' rehydrate failed: ${e.message}\n`);
+      }
+    }
+  }
+  return m;
+}
 
 function slugify(s) {
   return String(s || 'pack')
@@ -185,33 +224,34 @@ function registerUploadedPack(canonical, source, label) {
   // delete + re-insert refreshes its LRU position without minting a new
   // id. That makes re-upload safe (no duplicate entries) AND keeps the
   // user's pick alive when they're actively working with that pack.
-  if (UPLOADED_PACKS.has(id)) UPLOADED_PACKS.delete(id);
+  const uploads = uploadsMap();
+  if (uploads.has(id)) uploads.delete(id);
   // ALSO drop any older entry whose friendly label collides with the
   // new one. This is how the quick-start cases stay deduplicated:
   // a second "KrystalineX (repo scan)" replaces the first instead of
   // accumulating clones in the picker.
   if (label) {
-    for (const [otherId, rec] of [...UPLOADED_PACKS.entries()]) {
+    for (const [otherId, rec] of [...uploads.entries()]) {
       if (rec.label === label && otherId !== id) {
-        UPLOADED_PACKS.delete(otherId);
+        uploads.delete(otherId);
         deleteWorkspacePack(otherId);
       }
     }
   }
   const rec = { canonical, source: source || 'upload', label, createdAt: Date.now() };
-  UPLOADED_PACKS.set(id, rec);
+  uploads.set(id, rec);
   saveWorkspacePack(id, rec);
   // Evict the oldest if we've blown the cap — disk copy goes with it.
-  while (UPLOADED_PACKS.size > MAX_UPLOADS) {
-    const oldestKey = UPLOADED_PACKS.keys().next().value;
-    UPLOADED_PACKS.delete(oldestKey);
+  while (uploads.size > MAX_UPLOADS) {
+    const oldestKey = uploads.keys().next().value;
+    uploads.delete(oldestKey);
     deleteWorkspacePack(oldestKey);
   }
   return id;
 }
 
 function uploadedMeta(id) {
-  const upl = UPLOADED_PACKS.get(id);
+  const upl = uploadsMap().get(id);
   if (!upl) return null;
   touchWorkspacePack(id);   // keeps lastUsedAt-based retention honest (debounced)
   return {
@@ -272,7 +312,8 @@ function serviceMetadata(canonical) {
   add(bindings.service);
   add(bindings.namespace);
   add(annotations['mcp.servicesDiscovered']);
-  add(annotations['tomograph.services']);
+  add(annotations['observogram.services']);
+  add(annotations['tomograph.services']);   // legacy namespace (pre-rebrand packs)
   return {
     service: bindings.service || canonical?.metadata?.name || '',
     namespace: bindings.namespace || bindings.service || canonical?.metadata?.name || '',
@@ -284,66 +325,9 @@ function readEnv(query) {
   return typeof query.env === 'string' && query.env ? query.env : null;
 }
 
-// ---------- MCP URL validation (SSRF guard) ----------
-//
-// Every deploy / draft / refresh endpoint fetches a caller-supplied mcpUrl
-// server-side, which is a server-side request forgery vector if the URL is
-// taken on faith. validateMcpUrl() is the single gate:
-//   - only http(s) is accepted (no file:, ftp:, gopher:, ...);
-//   - localhost / private / link-local addresses are allowed by default
-//     (a local MCP server is the normal dev setup) but logged per use;
-//     set TOMOGRAPH_ALLOW_LOCAL_MCP=0 to turn them into 400s when the
-//     studio is exposed beyond the developer's own machine;
-//   - the returned safeUrl has credentials stripped — stderr logs must use
-//     it (or redactCredentials), never the raw URL.
-// Hostnames that RESOLVE to private addresses are not caught (no DNS
-// lookup here); the literal-IP check covers hex/decimal/octal IPv4 forms
-// because the WHATWG URL parser normalises those to dotted-decimal.
-
-const PRIVATE_V4 = [
-  /^127\./, /^10\./, /^192\.168\./, /^169\.254\./, /^0\./,
-  /^172\.(1[6-9]|2\d|3[01])\./,
-];
-
-function isLocalOrPrivateHost(hostname) {
-  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  if (host === 'localhost' || host.endsWith('.localhost')) return true;
-  if (PRIVATE_V4.some(re => re.test(host))) return true;
-  // IPv6: loopback/unspecified, unique-local fc00::/7, link-local fe80::/10,
-  // and IPv4-mapped forms of any of the above.
-  if (host === '::1' || host === '::') return true;
-  if (/^f[cd]/.test(host) || /^fe[89ab]/.test(host)) return true;
-  if (host.startsWith('::ffff:')) return isLocalOrPrivateHost(host.slice(7));
-  return false;
-}
-
-function redactCredentials(text) {
-  return String(text).replace(/\/\/[^/\s@]+@/g, '//***@');
-}
-
-// Returns { safeUrl } when the URL is fetchable, { error } when it must be
-// rejected with a 400. safeUrl is the parsed URL with credentials removed.
-function validateMcpUrl(raw) {
-  let url;
-  try {
-    url = new URL(raw);
-  } catch {
-    return { error: `mcpUrl is not a valid URL: ${redactCredentials(raw)}` };
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    return { error: `mcpUrl must be http or https; got scheme '${url.protocol.replace(/:$/, '')}'` };
-  }
-  url.username = '';
-  url.password = '';
-  const safeUrl = url.href;
-  if (isLocalOrPrivateHost(url.hostname)) {
-    if (process.env.TOMOGRAPH_ALLOW_LOCAL_MCP === '0') {
-      return { error: `mcpUrl targets a local/private address (${url.hostname}), which TOMOGRAPH_ALLOW_LOCAL_MCP=0 forbids` };
-    }
-    process.stderr.write(`[mcp-url] note: ${safeUrl} targets a local/private address; set TOMOGRAPH_ALLOW_LOCAL_MCP=0 to refuse these\n`);
-  }
-  return { safeUrl };
-}
+// MCP URL validation (SSRF guard) lives in server/mcp-url.mjs — every
+// deploy / draft / refresh endpoint goes through validateMcpUrl(), and
+// stderr logs use redactCredentials()/safeUrl, never the raw URL.
 
 // Returns a canonical object with the env overlay applied to spec.* AND
 // effective criticality/target propagated up to metadata.bindings so the
@@ -376,20 +360,20 @@ app.set('trust proxy', false);
 //
 // One token, three postures:
 //   1. Local (default): loopback bind, no token, no auth — zero friction.
-//   2. Exposed + TOMOGRAPH_API_TOKEN set: mutating /api/* routes require
+//   2. Exposed + OBSERVOGRAM_API_TOKEN set: mutating /api/* routes require
 //      `Authorization: Bearer <token>`. Reads stay open. Once a token is
 //      set it is enforced regardless of bind address — a reverse proxy
 //      makes everything look local, so a loopback bypass would undermine
 //      the token exactly when it matters.
 //   3. Exposed + no token: the server REFUSES TO START (fail closed; see
-//      start()). TOMOGRAPH_INSECURE_NO_AUTH=1 is the explicit, loudly
+//      start()). OBSERVOGRAM_INSECURE_NO_AUTH=1 is the explicit, loudly
 //      logged override for trusted-network demos.
 // MCP write tokens are unrelated and never stored here — they pass
 // through per request. The audit log records the token's ownership label
-// (TOMOGRAPH_API_TOKEN_LABEL), never the secret.
+// (OBSERVOGRAM_API_TOKEN_LABEL), never the secret.
 
-function apiToken() { return (process.env.TOMOGRAPH_API_TOKEN || '').trim(); }
-function apiTokenLabel() { return (process.env.TOMOGRAPH_API_TOKEN_LABEL || '').trim() || 'token'; }
+function apiToken() { return brandEnv('API_TOKEN'); }
+function apiTokenLabel() { return brandEnv('API_TOKEN_LABEL') || 'token'; }
 
 function tokenEquals(candidate, token) {
   // Constant-time compare over digests so length differences leak nothing.
@@ -399,27 +383,101 @@ function tokenEquals(candidate, token) {
 }
 
 // Who performed a mutating request — the audit log's actor field.
-function actorForRequest(req) { return req?.tomographActor || 'local'; }
+function actorForRequest(req) { return req?.observogramActor || 'local'; }
 
 app.use((req, res, next) => {
+  if (req.path.startsWith('/auth/')) return next();   // the login flow itself
   const token = apiToken();
-  if (!token) return next();   // posture 1/3 — enforced at start(), not here
+  const identity = authEnabled();                     // OIDC or stand-alone users
+  if (!token && !identity) return next();             // posture 1/3 — local, no friction
+  const isApi = req.path.startsWith('/api/');
   const mutating = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
-  if (!mutating || !req.path.startsWith('/api/')) return next();
+
+  // Bearer token: the service-account / CI path — works in every posture.
   const m = /^Bearer\s+(.+)$/i.exec(req.headers.authorization || '');
-  if (m && tokenEquals(m[1].trim(), token)) {
-    req.tomographActor = apiTokenLabel();
+  if (m && token && tokenEquals(m[1].trim(), token)) {
+    req.observogramActor = apiTokenLabel();
+    req.observogramBearer = true;
     return next();
   }
-  res.set('WWW-Authenticate', 'Bearer realm="tomograph"');
+
+  if (identity) {
+    const session = readSession(req);
+    if (session) {
+      // Cookie-authenticated mutations require the custom header —
+      // cross-origin pages can't set one without a CORS preflight, so
+      // SameSite=Lax + this check closes the CSRF window. The legacy
+      // X-Tomograph-CSRF spelling stays accepted for pre-rebrand clients.
+      const csrf = req.headers['x-observogram-csrf'] || req.headers['x-tomograph-csrf'];
+      if (mutating && isApi && csrf !== '1') {
+        return res.status(403).json({ ok: false, error: 'missing X-Observogram-CSRF header on a session-authenticated mutation' });
+      }
+      req.observogramActor = session.email || session.sub;
+      req.observogramSub = session.sub;   // tenancy middleware resolves org membership by sub
+      return next();
+    }
+    // Identity mode protects ALL /api data (reads included) — "your
+    // services" is enforced server-side. The static studio shell stays
+    // open so the client can land and redirect to the login page.
+    if (isApi) {
+      return res.status(401).json({ ok: false, error: 'unauthorized: sign in required', login: '/auth/login' });
+    }
+    return next();
+  }
+
+  // Token-only posture (no identity configured): original 10B contract —
+  // mutating /api routes require the bearer, reads stay open.
+  if (!mutating || !isApi) return next();
+  res.set('WWW-Authenticate', 'Bearer realm="observogram"');
   return res.status(401).json({
     ok: false,
-    error: 'unauthorized: mutating /api routes require `Authorization: Bearer <TOMOGRAPH_API_TOKEN>`',
+    error: 'unauthorized: mutating /api routes require `Authorization: Bearer <OBSERVOGRAM_API_TOKEN>`',
   });
+});
+
+// ---------- tenancy (Stage 2 — workspace-per-org) ----------
+//
+// Armed when <workspace>/orgs.json exists (server/tenancy.mjs). Every
+// /api request then runs inside an AsyncLocalStorage org context, and
+// workspaceRoot() everywhere underneath answers <workspace>/orgs/<id>/.
+// The org comes from the X-Observogram-Org header (or ?org=; the legacy
+// X-Tomograph-Org spelling still works), defaulting to the user's first
+// membership; membership is enforced here — Stage 3 adds per-route roles
+// on top of this same seam.
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/') || !tenancyEnabled()) return next();
+  const requested = String(req.headers['x-observogram-org'] || req.headers['x-tomograph-org'] || req.query.org || '').trim();
+  let orgId;
+  if (req.observogramBearer) {
+    // The bearer is the deployment-level service account: it may target
+    // any existing org explicitly; without a header it falls back to
+    // 'default' (the migration org) or, failing that, the first org in
+    // orgs.json — so single-org deployments never need the header.
+    orgId = requested || (orgExists('default') ? 'default' : Object.keys(readOrgs())[0] || 'default');
+    if (!orgExists(orgId)) {
+      return res.status(403).json({ ok: false, error: `unknown org '${orgId}'` });
+    }
+  } else {
+    const memberships = orgsForUser(req.observogramSub);
+    if (!memberships.length) {
+      return res.status(403).json({ ok: false, error: 'no org membership — ask an admin to add you to orgs.json' });
+    }
+    orgId = requested || memberships[0].id;
+    if (!memberships.some(o => o.id === orgId)) {
+      return res.status(403).json({ ok: false, error: `not a member of org '${orgId}'` });
+    }
+  }
+  res.set('X-Observogram-Org', orgId);   // echo so the client always knows the active org
+  return runWithOrg(orgId, next);
 });
 
 app.use(express.json({ limit: '16mb' }));   // /api/crawl can carry a whole repo's worth of YAML
 app.use(express.text({ type: ['application/x-yaml', 'text/yaml', 'text/plain'], limit: '4mb' }));
+app.use(express.urlencoded({ extended: false, limit: '64kb' }));   // /auth/login form
+
+// Identity routes (/auth/*) — inert in local mode; throws fail-closed at
+// boot when OIDC is configured incompletely. See server/auth.mjs.
+initAuth(app);
 
 // Express's PayloadTooLargeError is thrown by the body parsers BEFORE
 // any of our handlers run, and the default error path returns HTML.
@@ -442,6 +500,7 @@ app.use((err, req, res, next) => {
 app.get('/healthz', (req, res) => {
   res.json({
     ok: true,
+    ...versionInfo(),   // version, build, node — "what exactly is running?"
     specVersion: SPEC_VERSION,
     schemaPath: `vendor/observability-pack-spec/v${SPEC_VERSION}/observability-pack.schema.json`,
   });
@@ -452,17 +511,30 @@ app.get('/healthz', (req, res) => {
 // pairs this with a localStorage.clear() + reload. No body, no params.
 // Returns the number of entries dropped so the client can echo it.
 app.delete('/api/uploads', (req, res) => {
-  const dropped = UPLOADED_PACKS.size;
-  UPLOADED_PACKS.clear();
+  const uploads = uploadsMap();
+  const dropped = uploads.size;
+  uploads.clear();
   clearWorkspacePacks();   // reset means reset — the disk copies go too
   res.json({ ok: true, dropped });
+});
+
+// Stage 2 tenancy: the orgs visible to this request. Sessions see their
+// memberships (role recorded for Stage 3, not yet enforced); the bearer
+// service account sees every org. `active` echoes the request's resolved
+// org so clients never have to guess which workspace they're in.
+app.get('/api/orgs', (req, res) => {
+  if (!tenancyEnabled()) return res.json({ ok: true, tenancy: false, orgs: [], active: null });
+  const orgs = req.observogramBearer
+    ? Object.entries(readOrgs()).map(([id, o]) => ({ id, name: o?.name || id, role: 'service-account' }))
+    : orgsForUser(req.observogramSub);
+  res.json({ ok: true, tenancy: true, orgs, active: currentOrg() });
 });
 
 app.get('/api/packs', (req, res) => {
   // Catalog + in-memory uploads. Uploaded packs lead the list so the
   // picker surfaces them at the top — they're the user's just-created
   // work and most likely what they want to interact with next.
-  const uploads = [...UPLOADED_PACKS.keys()].map(id => catalogEntryForUpload(id)).filter(Boolean);
+  const uploads = [...uploadsMap().keys()].map(id => catalogEntryForUpload(id)).filter(Boolean);
   res.json({ packs: [...uploads, ...PACK_CATALOG.map(catalogEntry)] });
 });
 
@@ -578,7 +650,8 @@ app.get('/api/diff', (req, res) => {
   try {
     const aCanonical = loadPackCanonical(aMeta);
     const bCanonical = loadPackCanonical(bMeta);
-    const annotatedScopeMode = aCanonical.metadata?.annotations?.['tomograph.diff.scopeMode'];
+    const annotatedScopeMode = aCanonical.metadata?.annotations?.['observogram.diff.scopeMode']
+      ?? aCanonical.metadata?.annotations?.['tomograph.diff.scopeMode'];   // legacy namespace
     const scopeMode = requestedScopeMode || annotatedScopeMode;
     const aLayered = adapt(aCanonical, { environment: aEnv });
     const bLayered = adapt(bCanonical, { environment: bEnv });
@@ -692,333 +765,82 @@ app.get('/api/packs/:id/export.zip', (req, res) => {
   }
 });
 
-// Deploy matrix — what's deployable, to which products, with what default
-// MCP tool. Spec §9's reference table lists more targets but for now we
-// only ship deploy paths to Grafana 12/13 (the version floor the spec
-// requires and the only platform where the rules + dashboards land
-// through a single unified API). OTel Collector + standalone
-// Alertmanager remain download-only; the compile output is still
-// emitted for hand-off, just not deployable from the UI.
-
-const DEPLOY_PRODUCTS = ['grafana'];
-const DEPLOY_VERSIONS = {
-  grafana: ['12', '13'],
-};
-const RULES_SCOPES = ['both', 'recording', 'alerting'];
-const GRAFANA_ALERT_RULE_TOOL = 'grafana_create_alert_rule';
-const GRAFANA_DASHBOARD_TOOL = 'grafana_create_dashboard';
-const GRAFANA_FOLDER_DEFAULT = 'observability-pack';
-
-// (product, target) → default MCP tool name. The server lets the client
-// override via body.mcpTool; this dispatch supplies the convention.
-function defaultDeployTool({ product, target, scope }) {
-  if (product === 'grafana') {
-    if (target === 'prometheus-rules') {
-      return GRAFANA_ALERT_RULE_TOOL;
-    }
-    if (target === 'grafana-dashboard') return GRAFANA_DASHBOARD_TOOL;
-  }
-  return null;   // not deployable
-}
-
-async function discoverMcpToolNames(rpc) {
-  try {
-    const out = await rpc('tools/list');
-    return (out?.tools || []).map(t => t?.name).filter(Boolean).sort();
-  } catch (_) {
-    return null;
-  }
-}
-
-function deployToolMissingError(tool, availableTools) {
-  const related = (availableTools || [])
-    .filter(t => /apply|deploy|create|upsert|write|provision|grafana|rule|dashboard/i.test(t))
-    .slice(0, 18);
-  let hint = 'Configure a Grafana write-capable MCP gateway, or add a compatible deploy adapter before retrying.';
-  if (tool === GRAFANA_ALERT_RULE_TOOL) {
-    hint = 'For otel-mcp-server, set MCP_ENABLE_WRITES=true, configure GRAFANA_URL and GRAFANA_AUTH_TOKEN with alert.provisioning:write on the MCP server, and pass a valid MCP client key in Tomograph when MCP_AUTH_KEYS is configured.';
-  } else if (tool === GRAFANA_DASHBOARD_TOOL) {
-    hint = 'For otel-mcp-server, set MCP_ENABLE_WRITES=true, configure GRAFANA_URL and GRAFANA_AUTH_TOKEN with dashboards:write on the MCP server, and pass a valid MCP client key in Tomograph when MCP_AUTH_KEYS is configured.';
-  }
-  const suffix = related.length
-    ? ` Advertised related tools: ${related.join(', ')}.`
-    : ' No related write-capable tools were advertised.';
-  return `MCP endpoint does not expose required deploy tool '${tool}'.${suffix} ${hint}`;
-}
-
-function targetIsDeployable(target) {
-  return target === 'prometheus-rules' || target === 'grafana-dashboard';
-}
-
-app.get('/api/deploy/matrix', (req, res) => {
-  // Surface the deployable targets + products + versions so the client
-  // can drive the UI from one source of truth.
-  res.json({
-    products: DEPLOY_PRODUCTS,
-    versions: DEPLOY_VERSIONS,
-    scopes: RULES_SCOPES,
-    targets: {
-      'prometheus-rules': {
-        deployable: true,
-        products: ['grafana'],
-        scopable: true,
-        scopes: RULES_SCOPES,
-        description: 'Recording + multi-window burn-rate alerting rules, applied via Grafana\'s unified alerting (Mimir-compatible) ruler.',
-      },
-      'grafana-dashboard': {
-        deployable: true,
-        products: ['grafana'],
-        scopable: false,
-        description: 'Grafana 12/13 dashboard JSON, applied via the dashboards API.',
-      },
-      'otel-collector': {
-        deployable: false,
-        reason: 'OTel Collector configs are environment-specific; emit and apply via your own deploy pipeline (kustomize / helm).',
-      },
-      'alertmanager': {
-        deployable: false,
-        reason: 'Standalone Alertmanager deploys are handled out-of-band; routes are folded into Grafana unified alerting for now.',
-      },
-    },
-  });
-});
-
-// Filter a prometheus-rules YAML payload down to recording rules only or
-// alerting rules only. This lives in the deploy path (not in compile)
-// because the compiled output remains canonical; scope is a deploy-time
-// concern.
-function filterPromRulesScope(yamlText, scope) {
-  if (!scope || scope === 'both') return yamlText;
-  // Parse with our mini YAML, drop rules of the other kind, re-emit.
-  // We keep the comment banner the compiler put at the top.
-  const headerMatch = yamlText.match(/^(\s*#[^\n]*\n)+/);
-  const header = headerMatch ? headerMatch[0] : '';
-  const obj = parseYaml(yamlText.replace(/^(\s*#[^\n]*\n)+/, ''));
-  if (!obj?.groups) return yamlText;
-  const wantKey = scope === 'recording' ? 'record' : 'alert';
-  obj.groups = obj.groups
-    .map(g => ({ ...g, rules: (g.rules || []).filter(r => wantKey in r) }))
-    .filter(g => (g.rules || []).length > 0);
-  return header + emitYaml(obj);
-}
-
-function scopeMatchesGrafanaRule(rule, scope) {
-  if (!scope || scope === 'both') return true;
-  const isRecording = !!rule?.record;
-  return scope === 'recording' ? isRecording : !isRecording;
-}
-
-function normalizeGrafanaProvisioningRule(rule, group = {}, folder = '') {
-  const out = { ...(rule || {}) };
-  if (out.noDataState === undefined && out.no_data_state !== undefined) {
-    out.noDataState = out.no_data_state;
-    delete out.no_data_state;
-  }
-  if (out.execErrState === undefined && out.exec_err_state !== undefined) {
-    out.execErrState = out.exec_err_state;
-    delete out.exec_err_state;
-  }
-  if (out.isPaused === undefined && out.is_paused !== undefined) {
-    out.isPaused = out.is_paused;
-    delete out.is_paused;
-  }
-  if (out.folderUID === undefined) {
-    out.folderUID = folder || group.folderUID || group.folderUid || group.folder || GRAFANA_FOLDER_DEFAULT;
-  }
-  if (out.ruleGroup === undefined) {
-    out.ruleGroup = group.name || 'observability-pack';
-  }
-  return out;
-}
-
-function grafanaRulesFromProvisioningYaml(yamlText, { scope = 'both', folder = '' } = {}) {
-  const obj = parseYaml(String(yamlText || '').replace(/^(\s*#[^\n]*\n)+/, ''));
-  const groups = Array.isArray(obj?.groups) ? obj.groups : [];
-  const rules = [];
-  for (const group of groups) {
-    for (const rule of (Array.isArray(group?.rules) ? group.rules : [])) {
-      if (!scopeMatchesGrafanaRule(rule, scope)) continue;
-      rules.push(normalizeGrafanaProvisioningRule(rule, group, folder));
-    }
-  }
-  return rules;
-}
-
-function dashboardFromCompiledJson(jsonText) {
-  const dashboard = JSON.parse(jsonText);
-  if (!dashboard || typeof dashboard !== 'object' || Array.isArray(dashboard)) {
-    throw new Error('compiled dashboard did not produce a Grafana dashboard object');
-  }
-  return dashboard;
-}
-
-function buildNativeDeployCalls({ target, compiled, scope, folder, tool, mode = 'upsert', dryRun = false, message }) {
-  if (tool === GRAFANA_ALERT_RULE_TOOL) {
-    const rules = grafanaRulesFromProvisioningYaml(compiled.content, { scope, folder });
-    if (!rules.length) {
-      throw new Error(`no Grafana-managed ${scope && scope !== 'both' ? scope + ' ' : ''}rules found in compiled artefact`);
-    }
-    return rules.map(rule => ({
-      tool,
-      args: { rule, mode, dry_run: dryRun },
-      bytes: JSON.stringify(rule).length,
-      name: rule.title || rule.uid || rule.record?.metric || 'rule',
-      kind: rule.record ? 'recording' : 'alerting',
-    }));
-  }
-  if (tool === GRAFANA_DASHBOARD_TOOL) {
-    const dashboard = dashboardFromCompiledJson(compiled.content);
-    return [{
-      tool,
-      args: {
-        dashboard,
-        folder_uid: folder || undefined,
-        message: message || undefined,
-        mode,
-        dry_run: dryRun,
-      },
-      bytes: JSON.stringify(dashboard).length,
-      name: dashboard.title || dashboard.uid || compiled.filename,
-      kind: 'dashboard',
-    }];
-  }
-  return null;
-}
-
-// ----------------------------------------------------------------
-// POST /api/packs/:id/deploy-bulk — multi-artefact deploy.
-// Body: {
-//   mcpUrl, mcpAuth?,
-//   targetProduct, targetVersion, targetFolder?,
-//   items: [{ group, flavor?, artifact?, dashboardId?, scope? }, ...]
-// }
-// Iterates items, compiling each via compileArtifact() and pushing
-// to the MCP tool the dispatcher chooses based on group + flavor.
-// Returns per-item ok/error so the UI can show partial success
-// instead of failing the whole batch.
-// ----------------------------------------------------------------
-// Deploy ids — sortable, unique-enough handles for the audit log and the
-// post-deploy verify write-back. Not a secret, not a content hash.
-function newDeployId() {
-  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  return `dep_${ts}_${Math.random().toString(36).slice(2, 6)}`;
-}
-
-// Pre-deploy snapshot capture (10D). Reads the live state of everything the
-// deploy is about to touch, through the SAME MCP session that will write:
-//   - dashboards: grafana_dashboard_get per uid — fully restorable later
-//     (restore = upsert the captured JSON back). A read error most likely
-//     means the dashboard doesn't exist yet (this deploy CREATES it), whose
-//     rollback is a delete — recorded honestly, never guessed.
-//   - rules: one grafana_alert_rules listing as evidence. Per-rule restore
-//     is not yet automated (the listing shape isn't contractual across
-//     backends), so rules roll back manually WITH receipts.
-// Snapshot problems never block the deploy unless strictSnapshot is on.
-async function captureDeploySnapshot({ deployId, callTool, availableTools, items, dryRun, folder, safeMcpUrl }) {
-  if (dryRun) return { status: 'skipped', itemCount: 0 };
-  const meta = { deployId, at: new Date().toISOString(), mcpUrl: safeMcpUrl, folder: folder || null, items: [] };
-  const files = {};
-  let captured = 0, problems = 0;
-
-  if (items.some(i => i.group === 'rules')) {
-    if (availableTools && availableTools.includes('grafana_alert_rules')) {
-      try {
-        files['alert-rules'] = await callTool('grafana_alert_rules', {});
-        meta.items.push({ ref: 'rules', kind: 'rules-listing', preState: 'captured', file: 'alert-rules', restore: 'manual' });
-        captured++;
-      } catch (e) {
-        meta.items.push({ ref: 'rules', kind: 'rules-listing', preState: 'error', error: redactCredentials(String(e.message)), restore: 'manual' });
-        problems++;
-      }
-    } else {
-      meta.items.push({ ref: 'rules', kind: 'rules-listing', preState: 'unavailable', restore: 'manual' });
-      problems++;
-    }
-  }
-
-  for (const item of items.filter(i => i.group === 'dashboards' && i.dashboardId)) {
-    const uid = String(item.dashboardId);
-    if (!(availableTools && availableTools.includes('grafana_dashboard_get'))) {
-      meta.items.push({ ref: uid, kind: 'dashboard', preState: 'unavailable', restore: 'manual' });
-      problems++;
-      continue;
-    }
-    try {
-      files[`dashboard-${uid}`] = await callTool('grafana_dashboard_get', { uid, include_json: true });
-      meta.items.push({ ref: uid, kind: 'dashboard', preState: 'captured', file: `dashboard-${uid}`, restore: 'redeploy' });
-      captured++;
-    } catch (e) {
-      // A create, not a capture failure: rollback of a create is a delete.
-      meta.items.push({ ref: uid, kind: 'dashboard', preState: 'absent', error: redactCredentials(String(e.message)), restore: 'delete' });
-    }
-  }
-
-  meta.status = meta.items.length === 0 ? 'empty'
-    : problems === 0 ? 'captured'
-    : captured > 0 ? 'partial'
-    : 'unavailable';
-  try { saveDeploySnapshot(deployId, meta, files); }
-  catch (e) {
-    meta.status = 'failed';
-    process.stderr.write(`[deploy-bulk]   snapshot write failed: ${e.message}\n`);
-  }
-  return { status: meta.status, itemCount: meta.items.length };
-}
-
-// GET /api/deploys — the audit trail (VALUE_BACKLOG 10C). Newest first;
-// ?pack=<id> filters, ?limit=N caps (default 50). Records include the
-// post-deploy verify outcome once item 9 writes it back.
-app.get('/api/deploys', (req, res) => {
-  const packId = typeof req.query.pack === 'string' && req.query.pack ? req.query.pack : undefined;
-  const limit = Math.max(1, Math.min(500, parseInt(req.query.limit, 10) || 50));
-  try {
-    res.json({ deploys: readDeployRecords({ packId, limit }) });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// POST /api/deploys/:deployId/verify — the post-deploy re-verify outcome
-// (VALUE_BACKLOG item 9) written back into the audit trail. Appended as its
-// own record and merged at read time; the original deploy line is never
-// rewritten. A verify outcome is read-path evidence — "deployed" stays
-// distinct from "verified live" (Phase 1 language contract).
-app.post('/api/deploys/:deployId/verify', (req, res) => {
-  const deployId = String(req.params.deployId || '');
-  if (!/^dep_[A-Za-z0-9_-]+$/.test(deployId)) {
-    return res.status(400).json({ ok: false, error: 'malformed deployId' });
-  }
-  const known = readDeployRecords({ limit: 0 }).some(d => d.deployId === deployId);
-  if (!known) return res.status(404).json({ ok: false, error: `unknown deployId: ${deployId}` });
-  const b = req.body || {};
-  try {
-    appendDeployVerify(deployId, {
-      outcome: typeof b.outcome === 'string' ? b.outcome : 'unknown',
-      summary: (b.summary && typeof b.summary === 'object') ? b.summary : null,
-      transitions: Array.isArray(b.transitions) ? b.transitions.slice(0, 200) : null,
-      packB: typeof b.packB === 'string' ? b.packB : null,
-      refreshedAt: typeof b.refreshedAt === 'string' ? b.refreshedAt : null,
-      attempts: Number.isFinite(b.attempts) ? b.attempts : null,
-      alignment: Number.isFinite(b.alignment) ? b.alignment : null,
-    });
-    res.json({ ok: true, deployId });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
+// Deploy domain routes (matrix, audit trail, verify write-back, rollback
+// plan/execute, bulk + single deploy) live in server/routes/deploy.mjs;
+// the shaping transforms in server/deploy-helpers.mjs. The pack-registry
+// seam is injected until the registry extraction slice.
+app.use(deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readEnv, actorForRequest, contentHash }));
 
 // ---------- saved journeys (VALUE_BACKLOG item 11, studio surface) ----------
 
 // GET /api/journeys — every saved journey with its definition summary and
 // last-run outcome, for the studio panel.
+// POST /api/packs/:id/retrofeed — the reverse remediation arrow
+// (VALUE_BACKLOG item 4): adopt live shadow signals (the diff's onlyInB)
+// back into the declared pack. Recomputes the diff server-side (never
+// trusts client-supplied artefacts), returns the additions as a fragment,
+// the full updated pack YAML, and an honest skipped-list. The updated pack
+// is schema-validated before it leaves — retrofeed must never hand out a
+// pack that fails its own spec.
+app.post('/api/packs/:id/retrofeed', (req, res) => {
+  const metaA = findPackMeta(req.params.id);
+  if (!metaA) return res.status(404).json({ ok: false, error: `unknown pack: ${req.params.id}` });
+  const b = req.body || {};
+  const metaB = findPackMeta(String(b.packBId || ''));
+  if (!metaB) return res.status(404).json({ ok: false, error: `unknown pack B: ${b.packBId}` });
+  try {
+    const canonicalA = loadPackCanonical(metaA);
+    const canonicalB = loadPackCanonical(metaB);
+    const aEnv = typeof b.aEnv === 'string' && b.aEnv ? b.aEnv : null;
+    const bEnv = typeof b.bEnv === 'string' && b.bEnv ? b.bEnv : null;
+    const diff = diffPacks(
+      adapt(canonicalA, { environment: aEnv }),
+      adapt(canonicalB, { environment: bEnv }),
+      { scopeMode: typeof b.scopeMode === 'string' ? b.scopeMode : undefined,
+        service: typeof b.service === 'string' ? b.service : undefined },
+    );
+    let entries = Object.values(diff.layers || {}).flatMap(l => l.onlyInB || []);
+    if (Array.isArray(b.keys) && b.keys.length) {
+      // Suffix-tolerant: diff entries and traceability-branch nodes both use
+      // identity keys, but each applies its own `#NN` occurrence suffixing —
+      // match on the base identity so branch-scoped retrofeed always finds
+      // its entries.
+      const baseOf = (k) => String(k).replace(/#\d+$/, '');
+      const want = new Set(b.keys.map(baseOf));
+      entries = entries.filter(e => want.has(baseOf(e.key)));
+    }
+    const { adopted, skipped, updatedCanonical, fragment } =
+      retrofeedShadowSignals(canonicalA, entries, { now: new Date().toISOString() });
+    // Tripwire (the crawler incident's law, applied here too).
+    const errs = validateCanonical(updatedCanonical, SCHEMA);
+    if (errs.length) {
+      return res.status(500).json({ ok: false, error: 'retrofeed produced a pack that fails the schema — this is a bug, please report it', details: errs.slice(0, 5) });
+    }
+    res.json({
+      ok: true,
+      summary: { candidates: entries.length, adopted: adopted.length, skipped: skipped.length },
+      adopted, skipped,
+      fragmentYaml: fragment ? emitYaml(fragment) : null,
+      updatedPackYaml: emitYaml(updatedCanonical),
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.get('/api/journeys', (req, res) => {
   try {
     const journeys = listJourneys().map(name => {
       let def = null;
-      try { def = loadJourneyDef(name); } catch (_) {}
+      // A definition that fails to load is still listed, with the reason:
+      // a journey that can never run must not look like a healthy
+      // never-run one.
+      let loadError = null;
+      try { def = loadJourneyDef(name); } catch (e) { loadError = e.message; }
       const lastRun = readJourneyRuns(name, { limit: 1 })[0] || null;
       return {
         name,
+        loadError,
         packA: def?.packA?.crawl ? `crawl: ${def.packA.crawl.path}` : (def?.packA?.file || null),
         packB: def?.packB?.mcp ? `mcp: ${def.packB.mcp.url}` : (def?.packB?.file || null),
         gate: def?.gate || {},
@@ -1029,6 +851,27 @@ app.get('/api/journeys', (req, res) => {
           alignmentPct: lastRun.drift?.alignmentPct ?? null,
           gradeScore: lastRun.grade?.score ?? null,
           breaches: lastRun.gate?.breaches?.length ?? 0,
+          // Step 3: the stack self-metric samples the last run saw —
+          // status, rows that answered data, best row per family. null
+          // when the record carries no stackEvidence (file-sourced B,
+          // pre-step-3 record): an absence, never a healthy stack.
+          stack: stackSummary(lastRun),
+          // Step 4: the requirement-chain summary of the last run (counts
+          // by verdict and ladder verdict, top exposure) and whether its
+          // chains moved since the run before. null when the record
+          // carries no chains / no previous run to compare.
+          chains: chainSummary(lastRun),
+          transition: lastRun.transition && typeof lastRun.transition === 'object' ? {
+            any: !!lastRun.transition.any,
+            changed: Array.isArray(lastRun.transition.changed) ? lastRun.transition.changed.length : 0,
+            worse: Array.isArray(lastRun.transition.changed) ? lastRun.transition.changed.filter(c => c && c.direction === 'worse').length : 0,
+          } : null,
+          // Step 4: the rank-1 candidate cause of the last run (a candidate
+          // ranked by evidence, never a root-cause verdict) and whether its
+          // vantage changed since the run before — reported beside the
+          // cause, never as one. null when the record carries no causes.
+          topCause: topCause(lastRun),
+          vantageChanged: lastRun.causes?.vantage?.changed ?? null,
         },
       };
     });
@@ -1101,6 +944,10 @@ app.post('/api/journeys/capture', (req, res) => {
     gate: (b.gate && typeof b.gate === 'object') ? b.gate : { minAlignmentPct: 85 },
   };
   try {
+    // The same validation loadJourneyDef applies: a captured gate that
+    // names an unknown stack row must be refused here (400), not saved as
+    // a journey that can never load.
+    if (def.gate.stack !== undefined) validateGateStack(def.gate.stack, name);
     const saved = saveJourneyDef(name, def, {
       banner: [
         `Captured from a studio session on ${new Date().toISOString()}.`,
@@ -1114,473 +961,6 @@ app.post('/api/journeys/capture', (req, res) => {
     res.status(400).json({ ok: false, error: e.message });
   }
 });
-
-// GET /api/deploys/:deployId/rollback-plan — what a rollback WOULD do
-// (10D). No MCP contact: derived from the snapshot taken at deploy time.
-app.get('/api/deploys/:deployId/rollback-plan', (req, res) => {
-  const deployId = String(req.params.deployId || '');
-  if (!/^dep_[A-Za-z0-9_-]+$/.test(deployId)) return res.status(400).json({ ok: false, error: 'malformed deployId' });
-  const snap = readDeploySnapshot(deployId);
-  if (!snap) return res.json({ ok: true, deployId, canRollback: false, reason: 'no snapshot was taken for this deploy (dry run, or pre-10D record)', plan: [] });
-  const plan = (snap.meta.items || []).map(it => {
-    if (it.kind === 'dashboard' && it.preState === 'captured') {
-      return { ref: it.ref, kind: it.kind, action: 'restore', detail: 'upsert the captured pre-deploy dashboard JSON' };
-    }
-    if (it.kind === 'dashboard' && it.restore === 'delete') {
-      return { ref: it.ref, kind: it.kind, action: 'delete', detail: 'created by this deploy — removed via grafana_delete_dashboard when the MCP advertises it, manual otherwise' };
-    }
-    return { ref: it.ref, kind: it.kind, action: 'manual', detail: it.kind === 'rules-listing' ? 'pre-deploy rule listing saved as evidence; per-rule restore is not yet automated' : `pre-state ${it.preState}` };
-  });
-  res.json({ ok: true, deployId, canRollback: plan.some(p => p.action === 'restore'), snapshotStatus: snap.meta.status, plan });
-});
-
-// POST /api/deploys/:deployId/rollback — restore the pre-deploy snapshot
-// (10D). Updates restore by re-upserting captured state through the same
-// write tools; creates need delete tools the MCP doesn't expose yet and are
-// returned as manual steps with exact identities. The rollback is itself a
-// deploy-shaped act and lands in the audit log with `rollbackOf`.
-app.post('/api/deploys/:deployId/rollback', async (req, res) => {
-  const rollbackOf = String(req.params.deployId || '');
-  if (!/^dep_[A-Za-z0-9_-]+$/.test(rollbackOf)) return res.status(400).json({ ok: false, error: 'malformed deployId' });
-  const original = readDeployRecords({ limit: 0 }).find(d => d.deployId === rollbackOf);
-  if (!original) return res.status(404).json({ ok: false, error: `unknown deployId: ${rollbackOf}` });
-  const snap = readDeploySnapshot(rollbackOf);
-  if (!snap || !['captured', 'partial'].includes(snap.meta.status)) {
-    return res.status(409).json({ ok: false, error: `no usable snapshot for ${rollbackOf} (status: ${snap?.meta?.status || 'none'}) — nothing to restore from` });
-  }
-  const b = req.body || {};
-  const mcpUrl = typeof b.mcpUrl === 'string' ? b.mcpUrl.trim() : '';
-  if (!mcpUrl) return res.status(400).json({ ok: false, error: 'mcpUrl required in JSON body' });
-  const { error: mcpUrlError, safeUrl: safeMcpUrl } = validateMcpUrl(mcpUrl);
-  if (mcpUrlError) return res.status(400).json({ ok: false, error: mcpUrlError });
-  const dryRun = b.dryRun === true || b.dry_run === true;
-
-  const t0 = Date.now();
-  const { rpc, callTool } = createMcpClient({ mcpUrl, mcpAuth: typeof b.mcpAuth === 'string' ? b.mcpAuth : null });
-  await rpc('initialize', {
-    protocolVersion: '2025-06-18',
-    capabilities: {},
-    clientInfo: { name: 'observabilitypack-studio-rollback', version: '0.3.0' },
-  }).catch(() => {});
-  const availableTools = await discoverMcpToolNames(rpc);
-
-  const results = [];
-  const manual = [];
-  for (const it of snap.meta.items || []) {
-    if (it.kind === 'dashboard' && it.preState === 'captured') {
-      const itStart = Date.now();
-      const raw = snap.readFile(it.file);
-      // Defensive unwrap: tools differ in whether they wrap the dashboard.
-      const dashboard = raw?.dashboard || raw?.json || raw;
-      if (!dashboard || typeof dashboard !== 'object') {
-        results.push({ ref: it.ref, action: 'restore', ok: false, error: 'snapshot file unreadable' });
-        continue;
-      }
-      try {
-        if (availableTools && !availableTools.includes(GRAFANA_DASHBOARD_TOOL)) throw new Error(`${GRAFANA_DASHBOARD_TOOL} not advertised by this MCP`);
-        const result = await callTool(GRAFANA_DASHBOARD_TOOL, {
-          dashboard,
-          folder_uid: snap.meta.folder || undefined,
-          message: `Tomograph rollback of ${rollbackOf}`,
-          mode: 'upsert',
-          dry_run: dryRun,
-        });
-        results.push({ ref: it.ref, action: 'restore', ok: true, tookMs: Date.now() - itStart, result });
-      } catch (e) {
-        results.push({ ref: it.ref, action: 'restore', ok: false, error: redactCredentials(String(e.message)), tookMs: Date.now() - itStart });
-      }
-    } else if (it.kind === 'dashboard' && it.restore === 'delete') {
-      if (availableTools && availableTools.includes('grafana_delete_dashboard')) {
-        const itStart = Date.now();
-        try {
-          const result = await callTool('grafana_delete_dashboard', { uid: it.ref, dry_run: dryRun });
-          results.push({ ref: it.ref, action: 'delete', ok: true, tookMs: Date.now() - itStart, result });
-        } catch (e) {
-          results.push({ ref: it.ref, action: 'delete', ok: false, error: redactCredentials(String(e.message)), tookMs: Date.now() - itStart });
-        }
-      } else {
-        manual.push({ ref: it.ref, kind: it.kind, why: 'created by the deploy; the MCP does not advertise grafana_delete_dashboard — remove it by hand' });
-      }
-    } else {
-      manual.push({ ref: it.ref, kind: it.kind, why: it.kind === 'rules-listing' ? 'per-rule restore is not yet automated — the pre-deploy listing is saved as evidence in the snapshot' : `pre-state ${it.preState}` });
-    }
-  }
-
-  const okCount = results.filter(r => r.ok).length;
-  const failCount = results.length - okCount;
-  const deployId = newDeployId();
-  try {
-    appendDeployRecord({
-      deployId,
-      at: new Date().toISOString(),
-      actor: actorForRequest(req),
-      rollbackOf,
-      pack: original.pack || null,
-      env: original.env || null,
-      mcpUrl: safeMcpUrl,
-      target: original.target || null,
-      mode: 'rollback',
-      dryRun,
-      items: results.map(r => ({ artifact: r.ref, group: r.action, ok: r.ok, tookMs: r.tookMs || 0, ...(r.error ? { error: r.error } : {}) })),
-      summary: { total: results.length, ok: okCount, failed: failCount },
-      tookMs: Date.now() - t0,
-    });
-  } catch (e) {
-    process.stderr.write(`[rollback]   audit append failed: ${e.message}\n`);
-  }
-  res.status(failCount > 0 && okCount === 0 && results.length > 0 ? 502 : 200).json({
-    ok: failCount === 0,
-    deployId,
-    rollbackOf,
-    dryRun,
-    results,
-    manual,
-    summary: { total: results.length, ok: okCount, failed: failCount, manual: manual.length },
-    tookMs: Date.now() - t0,
-  });
-});
-
-app.post('/api/packs/:id/deploy-bulk', async (req, res) => {
-  const meta = findPackMeta(req.params.id);
-  if (!meta) return res.status(404).json({ ok: false, error: `unknown pack: ${req.params.id}` });
-  const body = req.body || {};
-  const mcpUrl  = typeof body.mcpUrl  === 'string' ? body.mcpUrl.trim() : '';
-  const mcpAuth = typeof body.mcpAuth === 'string' ? body.mcpAuth : null;
-  const product = (typeof body.targetProduct === 'string' && body.targetProduct.trim()) ? body.targetProduct.trim() : 'grafana';
-  const version = (typeof body.targetVersion === 'string' && body.targetVersion.trim()) ? body.targetVersion.trim() : '12';
-  const folder  = typeof body.targetFolder === 'string' ? body.targetFolder.trim() : '';
-  const mode = ['create', 'upsert', 'update'].includes(body.mode) ? body.mode : 'upsert';
-  const dryRun = body.dryRun === true || body.dry_run === true;
-  const items = Array.isArray(body.items) ? body.items : null;
-  const env = readEnv(req.query);
-
-  if (!mcpUrl) return res.status(400).json({ ok: false, error: 'mcpUrl required in JSON body' });
-  const { error: mcpUrlError, safeUrl: safeMcpUrl } = validateMcpUrl(mcpUrl);
-  if (mcpUrlError) return res.status(400).json({ ok: false, error: mcpUrlError });
-  if (!items || items.length === 0) return res.status(400).json({ ok: false, error: 'items array required and must be non-empty' });
-  if (!DEPLOY_PRODUCTS.includes(product)) return res.status(400).json({ ok: false, error: `unsupported target product: ${product}` });
-  if (!DEPLOY_VERSIONS[product]?.includes(version)) return res.status(400).json({ ok: false, error: `unsupported ${product} version: ${version}` });
-
-  const t0 = Date.now();
-  const canonical = loadPackCanonical(meta);
-  const { canonical: overlaid } = overlaidCanonical(canonical, env);
-
-  // Map item.group → legacy target id used by defaultDeployTool.
-  const targetFor = (group) => {
-    if (group === 'rules') return 'prometheus-rules';
-    if (group === 'dashboards') return 'grafana-dashboard';
-    return group;
-  };
-
-  const { rpc, callTool } = createMcpClient({ mcpUrl, mcpAuth });
-  await rpc('initialize', {
-    protocolVersion: '2025-06-18',
-    capabilities: {},
-    clientInfo: { name: 'observabilitypack-studio-deploy-bulk', version: '0.3.0' },
-  }).catch(() => {});
-  const availableTools = await discoverMcpToolNames(rpc);
-  const missingTools = new Set();
-
-  // Pre-deploy snapshot (10D): capture the live state of everything we are
-  // about to overwrite BEFORE the first write, so rollback always has a
-  // pre-state — or an honest record that the artefact didn't exist yet.
-  const deployId = newDeployId();
-  const strictSnapshot = body.strictSnapshot === true || process.env.TOMOGRAPH_STRICT_SNAPSHOT === '1';
-  const snapshot = await captureDeploySnapshot({ deployId, callTool, availableTools, items, dryRun, folder, safeMcpUrl });
-  if (strictSnapshot && !['captured', 'empty', 'skipped'].includes(snapshot.status)) {
-    return res.status(412).json({
-      ok: false, deployId,
-      error: `pre-deploy snapshot is '${snapshot.status}' and strict snapshot mode is on — refusing to deploy without a rollback point. ` +
-             `Fix the read path (grafana_dashboard_get / grafana_alert_rules) or retry without strictSnapshot.`,
-      snapshot: { status: snapshot.status, items: snapshot.itemCount },
-    });
-  }
-
-  const results = [];
-  process.stderr.write(`[deploy-bulk] ${meta.id} -> ${safeMcpUrl} (${items.length} item${items.length === 1 ? '' : 's'}, ${product} ${version}, snapshot ${snapshot.status})\n`);
-
-  for (const item of items) {
-    const itStart = Date.now();
-    const itemTarget = targetFor(item.group);
-    try {
-      // The deploy modal's dashboard rows carry only dashboardId; the
-      // compiler addresses single dashboards as `dash:<id>` (bare 'all'
-      // would compile the comment-annotated multi-dashboard bundle, which
-      // is not deployable JSON).
-      const artifact = item.artifact
-        || (item.group === 'dashboards' && item.dashboardId ? `dash:${item.dashboardId}` : 'all');
-      const compiled = compileArtifact(overlaid, {
-        group: item.group,
-        flavor: (product === 'grafana' && item.group === 'rules') ? 'grafana-managed' : item.flavor,
-        artifact,
-        dashboardId: item.dashboardId,
-      });
-      const scope = item.scope || (itemTarget === 'prometheus-rules' ? 'both' : undefined);
-      const tool = defaultDeployTool({ product, target: itemTarget, scope });
-      if (!tool) {
-        results.push({ item, ok: false, error: `no default deploy tool for (${product}, ${itemTarget})`, tookMs: Date.now() - itStart });
-        continue;
-      }
-      if (availableTools && !availableTools.includes(tool)) {
-        missingTools.add(tool);
-        results.push({ item, ok: false, tool, error: deployToolMissingError(tool, availableTools), tookMs: Date.now() - itStart });
-        continue;
-      }
-      const nativeCalls = buildNativeDeployCalls({
-        target: itemTarget,
-        compiled,
-        scope,
-        folder,
-        tool,
-        mode,
-        dryRun,
-        message: `Tomograph deploy ${meta.id}@${overlaid?.metadata?.version || '?'}`,
-      });
-      if (!nativeCalls) {
-        results.push({ item, ok: false, tool, error: `no native deploy adapter for '${tool}'`, tookMs: Date.now() - itStart });
-        continue;
-      }
-      const callResults = [];
-      for (const call of nativeCalls) {
-        callResults.push({
-          name: call.name,
-          kind: call.kind,
-          result: await callTool(call.tool, call.args),
-        });
-      }
-      results.push({
-        item,
-        ok: true,
-        tool,
-        mode,
-        dryRun,
-        operations: nativeCalls.length,
-        bytes: nativeCalls.reduce((sum, c) => sum + c.bytes, 0),
-        tookMs: Date.now() - itStart,
-        result: callResults,
-      });
-    } catch (e) {
-      results.push({ item, ok: false, error: e.message, tookMs: Date.now() - itStart });
-    }
-  }
-  const totalMs = Date.now() - t0;
-  const okCount = results.filter(r => r.ok).length;
-  const failCount = results.length - okCount;
-  process.stderr.write(`[deploy-bulk]   done in ${totalMs}ms: ${okCount} ok / ${failCount} failed\n`);
-  try {
-    appendDeployRecord({
-      deployId,
-      at: new Date().toISOString(),
-      actor: actorForRequest(req),
-      pack: { id: meta.id, version: canonical?.metadata?.version || null, contentHash: contentHash(canonical) },
-      env: env || null,
-      mcpUrl: safeMcpUrl,
-      target: { product, version, folder: folder || null },
-      mode, dryRun,
-      snapshot: { status: snapshot.status, items: snapshot.itemCount },
-      items: results.map(r => ({
-        ...(r.item || {}),
-        ok: !!r.ok,
-        tool: r.tool || null,
-        operations: r.operations || 0,
-        bytes: r.bytes || 0,
-        tookMs: r.tookMs || 0,
-        ...(r.error ? { error: redactCredentials(String(r.error)) } : {}),
-      })),
-      summary: { total: results.length, ok: okCount, failed: failCount },
-      tookMs: totalMs,
-    });
-  } catch (e) {
-    process.stderr.write(`[deploy-bulk]   audit append failed: ${e.message}\n`);
-  }
-  res.status(failCount > 0 && okCount === 0 ? 502 : 200).json({
-    ok: failCount === 0,
-    deployId,
-    results,
-    summary: { total: results.length, ok: okCount, failed: failCount },
-    targetProduct: product,
-    targetVersion: version,
-    targetFolder: folder || null,
-    mode,
-    dryRun,
-    missingTools: [...missingTools],
-    mcpToolsAvailable: availableTools,
-    env,
-    tookMs: totalMs,
-  });
-});
-
-app.post('/api/packs/:id/deploy/:target', async (req, res) => {
-  const meta = findPackMeta(req.params.id);
-  if (!meta) return res.status(404).json({ ok: false, error: `unknown pack: ${req.params.id}` });
-
-  const target = req.params.target;
-  if (!targetIsDeployable(target)) {
-    return res.status(400).json({
-      ok: false, target,
-      error: `deploy not supported for target '${target}'. Deploy is currently limited to Grafana 12/13 — see GET /api/deploy/matrix.`,
-    });
-  }
-
-  const body = req.body || {};
-  const mcpUrl  = typeof body.mcpUrl  === 'string' ? body.mcpUrl.trim()  : '';
-  const mcpAuth = typeof body.mcpAuth === 'string' ? body.mcpAuth        : null;
-  const product = (typeof body.targetProduct === 'string' && body.targetProduct.trim())
-    ? body.targetProduct.trim() : 'grafana';
-  const version = (typeof body.targetVersion === 'string' && body.targetVersion.trim())
-    ? body.targetVersion.trim() : '12';
-  const folder = typeof body.targetFolder === 'string' ? body.targetFolder.trim() : '';
-  const mode = ['create', 'upsert', 'update'].includes(body.mode) ? body.mode : 'upsert';
-  const dryRun = body.dryRun === true || body.dry_run === true;
-  const scope = (target === 'prometheus-rules' && typeof body.scope === 'string' && RULES_SCOPES.includes(body.scope))
-    ? body.scope : (target === 'prometheus-rules' ? 'both' : undefined);
-
-  if (!DEPLOY_PRODUCTS.includes(product)) {
-    return res.status(400).json({ ok: false, error: `unsupported target product: ${product}. Known: ${DEPLOY_PRODUCTS.join(', ')}.` });
-  }
-  if (!DEPLOY_VERSIONS[product]?.includes(version)) {
-    return res.status(400).json({ ok: false, error: `unsupported ${product} version: ${version}. Known: ${(DEPLOY_VERSIONS[product] || []).join(', ')}.` });
-  }
-
-  const mcpTool = (typeof body.mcpTool === 'string' && body.mcpTool.trim())
-    ? body.mcpTool.trim()
-    : defaultDeployTool({ product, target, scope });
-  if (!mcpTool) {
-    return res.status(400).json({ ok: false, error: 'no default deploy tool for this (product, target) combination; pass mcpTool in body.' });
-  }
-
-  const env = readEnv(req.query);
-  const dashboardId = typeof req.query.dashboardId === 'string' ? req.query.dashboardId : undefined;
-  if (!mcpUrl) return res.status(400).json({ ok: false, error: 'mcpUrl required in JSON body' });
-  const { error: mcpUrlError, safeUrl: safeMcpUrl } = validateMcpUrl(mcpUrl);
-  if (mcpUrlError) return res.status(400).json({ ok: false, error: mcpUrlError });
-
-  const t0 = Date.now();
-  let canonical = null;   // hoisted: the catch-path audit record reads it
-  try {
-    canonical = loadPackCanonical(meta);
-    const { canonical: overlaid } = overlaidCanonical(canonical, env);
-    const nativeTool = mcpTool === GRAFANA_ALERT_RULE_TOOL || mcpTool === GRAFANA_DASHBOARD_TOOL;
-    const compiled = (mcpTool === GRAFANA_ALERT_RULE_TOOL && product === 'grafana' && target === 'prometheus-rules')
-      ? compileArtifact(overlaid, { group: 'rules', flavor: 'grafana-managed', artifact: 'all' })
-      : compile(overlaid, target, { dashboardId });
-
-    // For rules deploy, apply the scope filter (recording-only / alerting-only).
-    const payload = (target === 'prometheus-rules')
-      ? filterPromRulesScope(compiled.content, scope)
-      : compiled.content;
-
-    process.stderr.write(`[deploy] ${meta.id}@${canonical.metadata?.version || '?'} -> ${safeMcpUrl} via ${mcpTool} ` +
-      `(${product} ${version}, target=${target}, scope=${scope || '—'}, env=${env || 'none'}, mode=${mode}, ${payload.length}b)\n`);
-
-    const { rpc, callTool } = createMcpClient({ mcpUrl, mcpAuth });
-    await rpc('initialize', {
-      protocolVersion: '2025-06-18',
-      capabilities: {},
-      clientInfo: { name: 'observabilitypack-studio-deploy', version: '0.3.0' },
-    }).catch(() => {});
-
-    const availableTools = await discoverMcpToolNames(rpc);
-    if (availableTools && !availableTools.includes(mcpTool)) {
-      throw new Error(deployToolMissingError(mcpTool, availableTools));
-    }
-
-    let result;
-    let bytes = payload.length;
-    let operations = 1;
-    if (nativeTool) {
-      const nativeCalls = buildNativeDeployCalls({
-        target,
-        compiled,
-        scope,
-        folder,
-        tool: mcpTool,
-        mode,
-        dryRun,
-        message: `Tomograph deploy ${meta.id}@${canonical.metadata?.version || '?'}`,
-      });
-      result = [];
-      operations = nativeCalls.length;
-      bytes = nativeCalls.reduce((sum, c) => sum + c.bytes, 0);
-      for (const call of nativeCalls) {
-        result.push({
-          name: call.name,
-          kind: call.kind,
-          result: await callTool(call.tool, call.args),
-        });
-      }
-    } else {
-      const args = {
-        payload,
-        content_type: compiled.contentType,
-        environment: env || undefined,
-        filename: compiled.filename,
-        pack_source: `${meta.id}@${canonical.metadata?.version || '?'}`,
-        target,
-        target_product: product,
-        target_version: version,
-        scope: scope || undefined,
-        folder: folder || undefined,
-      };
-      result = await callTool(mcpTool, args);
-    }
-
-    const tookMs = Date.now() - t0;
-    process.stderr.write(`[deploy]   ok in ${tookMs}ms\n`);
-    const deployId = auditSingleDeploy({
-      meta, canonical, env, safeMcpUrl, product, version, folder, mode, dryRun,
-      actor: actorForRequest(req),
-      item: { target, scope: scope || null, ok: true, tool: mcpTool, operations, bytes, tookMs },
-    });
-    res.json({
-      ok: true,
-      deployId,
-      target, env, tool: mcpTool, mcpUrl,
-      targetProduct: product, targetVersion: version, scope: scope || null, targetFolder: folder || null,
-      mode, dryRun, operations,
-      filename: compiled.filename,
-      bytes,
-      tookMs,
-      result,
-    });
-  } catch (e) {
-    const tookMs = Date.now() - t0;
-    process.stderr.write(`[deploy]   error in ${tookMs}ms: ${redactCredentials(e.message)}\n`);
-    const deployId = auditSingleDeploy({
-      meta, canonical, env, safeMcpUrl, product, version, folder, mode, dryRun,
-      actor: actorForRequest(req),
-      item: { target, scope: scope || null, ok: false, tool: mcpTool, tookMs, error: redactCredentials(String(e.message)) },
-    });
-    res.status(502).json({ ok: false, deployId, error: e.message, tool: mcpTool, target,
-      targetProduct: product, targetVersion: version, scope: scope || null, targetFolder: folder || null,
-      mode, dryRun, env, tookMs });
-  }
-});
-
-// One audit record for the single-artefact deploy route — same shape as a
-// bulk record with exactly one item, so /api/deploys consumers see a
-// uniform stream. Audit failures never fail the deploy response.
-function auditSingleDeploy({ meta, canonical, env, safeMcpUrl, product, version, folder, mode, dryRun, item, actor }) {
-  const deployId = newDeployId();
-  try {
-    appendDeployRecord({
-      deployId,
-      at: new Date().toISOString(),
-      actor: actor || 'local',
-      pack: { id: meta.id, version: canonical?.metadata?.version || null, contentHash: contentHash(canonical) },
-      env: env || null,
-      mcpUrl: safeMcpUrl,
-      target: { product, version, folder: folder || null },
-      mode, dryRun,
-      items: [item],
-      summary: { total: 1, ok: item.ok ? 1 : 0, failed: item.ok ? 0 : 1 },
-      tookMs: item.tookMs || 0,
-    });
-  } catch (err) {
-    process.stderr.write(`[deploy]   audit append failed: ${err.message}\n`);
-  }
-  return deployId;
-}
 
 app.get('/api/packs/:id/compile/:target', (req, res) => {
   const meta = findPackMeta(req.params.id);
@@ -1628,6 +1008,109 @@ app.get('/api/maturity-rubric', (req, res) => {
 // creates it in the working tree.
 const LIVE_PACK_PATH = 'examples/production-live.pack.yaml';
 
+// ---------- step 2: stack self-metrics summary (signal, never verdict) ----------
+//
+// The fetcher stamps mcp.stack.* counts and mcp.observed.* JSON blocks
+// (docs/MCP_INTEGRATION.md). This turns them back into the shape the
+// studio's draft review renders. Nothing here is a threshold: `hint` is
+// the contracts' display-only 'nonzero' marker, and every row keeps the
+// outcome the sampler recorded (data | empty | failed | not-in-inventory
+// | not-attempted) so an absent number is shown as absent.
+function parseJsonAnnotation(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try { return JSON.parse(value); } catch { return null; }
+}
+
+const STACK_ROW_BY_ID = new Map(STACK_SELF_METRIC_PROBES.map(r => [r.id, r]));
+
+function stackSummaryFromAnnotations(ann) {
+  const status = ann['mcp.stack.status'];
+  if (status !== 'sampled' && status !== 'not-attempted') return null;
+  const n = (k) => { const v = Number(ann[k]); return Number.isFinite(v) ? v : 0; };
+  const families = {};
+  for (const entry of String(ann['mcp.stack.families'] || '').split(',').filter(Boolean)) {
+    const [family, outcome] = entry.split(':');
+    if (family && STACK_OUTCOMES.includes(outcome)) families[family] = outcome;
+  }
+  const observed = parseJsonAnnotation(ann['mcp.observed.stack_metrics']);
+  const rows = (Array.isArray(observed) ? observed : [])
+    .filter(r => r && typeof r === 'object' && typeof r.id === 'string')
+    .map(r => {
+      const def = STACK_ROW_BY_ID.get(r.id);
+      const value = typeof r.value === 'number' && Number.isFinite(r.value) ? r.value : null;
+      const direction = def?.direction || r.direction || 'info';
+      return {
+        id: r.id,
+        family: def?.family || r.family || null,
+        product: r.product ?? null,
+        value,
+        unit: def?.unit || r.unit || null,
+        direction,
+        outcome: STACK_OUTCOMES.includes(r.outcome) ? r.outcome : 'failed',
+        hint: displayHint({ direction }, value),
+        ...(r.reason ? { reason: String(r.reason) } : {}),
+      };
+    });
+  return {
+    status,
+    reason: status === 'not-attempted' ? (ann['mcp.stack.reason'] || 'not attempted') : null,
+    sampled: n('mcp.stack.sampled'),
+    empty: n('mcp.stack.empty'),
+    failed: n('mcp.stack.failed'),
+    notInInventory: n('mcp.stack.notInInventory'),
+    notAttempted: n('mcp.stack.notAttempted'),
+    families,
+    rows,
+  };
+}
+
+// A null summary means the surface was NOT ADVERTISED by the MCP (a tier
+// fact). An advertised tool that failed still yields a summary, carrying
+// `error` — the studio words that as "probe failed", never "not exposed".
+function alertmanagerSummaryFromAnnotations(ann) {
+  const o = parseJsonAnnotation(ann['mcp.observed.alertmanager']);
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
+  const silences = o.silences && typeof o.silences === 'object'
+    ? { active: Number(o.silences.active ?? 0) || 0, total: Number(o.silences.total ?? 0) || 0 }
+    : null;
+  return {
+    version: o.version == null ? null : String(o.version),
+    uptime: o.uptime == null ? null : String(o.uptime),
+    clusterStatus: o.clusterStatus == null ? null : String(o.clusterStatus),
+    silences,
+    error: o.error == null ? null : String(o.error).slice(0, 200),
+  };
+}
+
+function grafanaSummaryFromAnnotations(ann) {
+  const ds = parseJsonAnnotation(ann['mcp.observed.grafana.datasources']);
+  const cp = parseJsonAnnotation(ann['mcp.observed.grafana.contact_points']);
+  const err = ann['mcp.observed.grafana.error'];
+  if (!Array.isArray(ds) && !(cp && typeof cp === 'object') && !err) return null;
+  // Health stays three-valued on the summary: `unknown` is "not checked"
+  // (health tool not exposed / errored / beyond the cap) and must never be
+  // folded into the non-error bucket — `healthChecked` counts the
+  // datasources that actually got a verdict.
+  const datasources = Array.isArray(ds)
+    ? ds.filter(d => d && typeof d === 'object').map(d => ({
+        uid: d.uid == null ? null : String(d.uid),
+        name: d.name == null ? null : String(d.name),
+        type: d.type == null ? null : String(d.type),
+        health: d.health === 'ok' || d.health === 'error' ? d.health : 'unknown',
+        message: d.message == null ? null : String(d.message).slice(0, 200),
+      }))
+    : null;
+  const contactPoints = cp && typeof cp === 'object' && !Array.isArray(cp)
+    ? { count: Number(cp.count ?? 0) || 0, names: Array.isArray(cp.names) ? cp.names.map(String) : [] }
+    : null;
+  return {
+    datasources,
+    healthChecked: datasources ? datasources.filter(d => d.health !== 'unknown').length : 0,
+    contactPoints,
+    error: err == null ? null : String(err).slice(0, 200),
+  };
+}
+
 app.get('/api/live-status', (req, res) => {
   try {
     const abs = resolve(ROOT, LIVE_PACK_PATH);
@@ -1640,6 +1123,14 @@ app.get('/api/live-status', (req, res) => {
       url:                a['mcp.url']                || null,
       toolsCalled:        a['mcp.toolsCalled']        || '',
       toolsFailed:        a['mcp.toolsFailed']        || '',
+      // Probe-outcome honesty: families that got no answer (a hole) vs
+      // families this MCP tier simply doesn't expose (a restriction).
+      probesFailed:       a['mcp.probesFailed']       || '',
+      probesUnsupported:  a['mcp.probesUnsupported']  || '',
+      // Step 2 stack self-metrics: 'sampled' | 'not-attempted' | null (a
+      // pack refreshed before step 2 carries no panel at all).
+      stackStatus:        a['mcp.stack.status']        || null,
+      stackSampled:       Number(a['mcp.stack.sampled'] || 0),
       servicesDiscovered: a['mcp.servicesDiscovered'] || '',
       baselinesComputed:  a['mcp.baselinesComputed']  || '0',
       activeAnomalies:    a['mcp.activeAnomalies']    || '0',
@@ -1690,6 +1181,12 @@ app.post('/api/draft-from-mcp', async (req, res) => {
     const probesSucceeded = (ann['mcp.probesSucceeded'] || '').split(',').filter(Boolean);
     const probesEmpty     = (ann['mcp.probesEmpty']     || '').split(',').filter(Boolean);
     const probesFailed    = (ann['mcp.probesFailed']    || '').split(',').filter(Boolean);
+    const probesUnsupported = (ann['mcp.probesUnsupported'] || '').split(',').filter(Boolean);
+    // Why a family got no answer — the fetcher's last candidate error.
+    const probeErrors = {};
+    for (const [k, v] of Object.entries(ann)) {
+      if (k.startsWith('mcp.probeErrors.') && v) probeErrors[k.slice('mcp.probeErrors.'.length)] = String(v);
+    }
 
     // Parse the capability inventory (skill → backend → product → versions)
     // out of the flat annotation set the fetcher stamped. The studio's
@@ -1731,17 +1228,32 @@ app.post('/api/draft-from-mcp', async (req, res) => {
         alertRules:      Number(ann['mcp.discovered.alert_rules'] || 0),
         dashboards:      Number(ann['mcp.discovered.dashboards'] || (pack.spec?.dashboards || []).length),
         scrapeJobs:     (ann['mcp.discovered.scrape_jobs'] || '').split(',').filter(Boolean),
+        // On-wire liveness: jobs whose every target is down, and rules the
+        // ruler reports as failing to evaluate. Names, so the studio can
+        // say WHICH ones — the pack's mcp.observed.* annotations carry the
+        // per-target / per-rule detail.
+        scrapeJobsDown:         (ann['mcp.discovered.scrape_jobs_down'] || '').split(',').filter(Boolean),
+        recordingRulesUnhealthy: (ann['mcp.discovered.recording_rules_unhealthy'] || '').split(',').filter(Boolean),
+        alertRulesUnhealthy:    (ann['mcp.discovered.alert_rules_unhealthy'] || '').split(',').filter(Boolean),
         metricNamesCount: Number(ann['mcp.discovered.metric_names_count'] || 0),
         // tools/list inventory — what the MCP advertised vs what we matched
         toolsExposed:    (ann['mcp.toolsExposed']    || '').split(',').filter(Boolean),
         toolsUnmatched:  (ann['mcp.toolsUnmatched']  || '').split(',').filter(Boolean),
         probesAttempted, probesSucceeded, probesEmpty, probesFailed,
+        probesUnsupported, probeErrors,
       },
       // Full backend_capabilities inventory — the version-gating contract.
       // When null, the MCP didn't expose backend_capabilities (older
       // server). When set, the studio renders the full skill → backend →
       // product → version matrix on connect.
       capabilities,
+      // Step 2: the stack's own self-metrics and the Alertmanager /
+      // Grafana status surfaces — point-in-time samples the studio shows
+      // under "signal, not verdict". null when the fetcher predates step 2
+      // (or the surface wasn't advertised); never a Verified stamp.
+      stack: stackSummaryFromAnnotations(ann),
+      alertmanager: alertmanagerSummaryFromAnnotations(ann),
+      grafana: grafanaSummaryFromAnnotations(ann),
       warnings: [],
       tier: pack.metadata?.bindings?.criticality || 'tier-3',
     };
@@ -1752,7 +1264,26 @@ app.post('/api/draft-from-mcp', async (req, res) => {
     if ((summary.discovered.toolsFailed || []).length) {
       summary.warnings.push(`MCP tools that failed: ${summary.discovered.toolsFailed.join(', ')}`);
     }
-    const attemptedNothing = (k) => probesAttempted.includes(k) && !probesSucceeded.includes(k);
+    // A family the MCP doesn't expose at all is a tier restriction, not an
+    // empty answer — one honest line, never the per-family "returned empty"
+    // narrative below.
+    if (probesUnsupported.length) {
+      summary.warnings.push(`Restricted MCP tier — families not exposed by this server: ${probesUnsupported.join(', ')}.`);
+    }
+    // The stack panel is gated on metrics_query alone; a restricted tier
+    // reads "not attempted", never "healthy" and never "absent".
+    if (summary.stack && summary.stack.status === 'not-attempted') {
+      summary.warnings.push(/not exposed/.test(summary.stack.reason || '')
+        ? 'Stack self-metrics not attempted — metrics_query not exposed by this MCP tier.'
+        : `Stack self-metrics not attempted — ${summary.stack.reason || 'no reason recorded'}.`);
+    }
+    if (summary.alertmanager?.error) {
+      summary.warnings.push(`Alertmanager status probe failed — ${summary.alertmanager.error}`);
+    }
+    if (summary.grafana?.error) {
+      summary.warnings.push(`Grafana status probe failed — ${summary.grafana.error}`);
+    }
+    const attemptedNothing = (k) => probesAttempted.includes(k) && !probesSucceeded.includes(k) && !probesUnsupported.includes(k);
     if (attemptedNothing('recording_rules')) {
       summary.warnings.push('Recording-rule probes returned empty. The SLI/SLO sections were synthesised from system_health — if your platform has Prometheus/Mimir rules, the MCP isn\'t exposing them yet.');
     }
@@ -1969,69 +1500,7 @@ app.post('/api/crawl', (req, res) => {
 //
 // Bandwidth guards: max 200 files, max 16 MB total, max 1 MB per file.
 // ----------------------------------------------------------------
-function parseGithubUrl(input) {
-  if (typeof input !== 'string' || !input.trim()) return null;
-  const cleaned = input.trim().replace(/\.git$/, '').replace(/\/$/, '');
-  // owner/repo bare form
-  const bare = /^([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/.exec(cleaned);
-  if (bare) return { owner: bare[1], repo: bare[2] };
-  // Full URL form
-  const url = /github\.com[/:]([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)(?:\/tree\/([A-Za-z0-9._/-]+))?/.exec(cleaned);
-  if (url) return { owner: url[1], repo: url[2], ref: url[3] };
-  return null;
-}
-
-// Files the crawler will actually look at — keep the network round
-// trips down by filtering BEFORE downloading.
-function isCrawlerFile(path) {
-  if (typeof path !== 'string') return false;
-  const p = path.toLowerCase();
-  if (p.includes('node_modules/') || p.includes('.git/') || p.startsWith('.git/')) return false;
-  const sourceMetricCandidate =
-    /\.(cjs|mjs|js|jsx|ts|tsx|py|go|java|kt|rs|cs)$/.test(p) &&
-    !/(\.test\.|\.spec\.|\.d\.ts$|package-lock|yarn\.lock|pnpm-lock|tokenizer\.json)/.test(p) &&
-    /(metrics?|prometheus|observability|telemetry|instrumentation|monitor|otel|mcp|bayesian|processor)/.test(p);
-  return (
-    sourceMetricCandidate ||
-    /(^|\/)(application|bootstrap)[\w.-]*\.ya?ml$/.test(p) ||
-    /(^|\/)docker[-_]compose[a-z0-9._-]*\.(ya?ml)$/.test(p) ||
-    /(^|\/)compose[a-z0-9._-]*\.(ya?ml)$/.test(p) ||
-    /\.rules\.(ya?ml)$/.test(p) ||
-    /(^|\/)prometheus[a-z0-9._-]*\.(ya?ml)$/.test(p) ||
-    /(^|\/)alertmanager[a-z0-9._-]*\.(ya?ml)$/.test(p) ||
-    /(^|\/)otel[a-z0-9._-]*config[a-z0-9._-]*\.(ya?ml)$/.test(p) ||
-    /(^|\/)otelcol[a-z0-9._-]*\.(ya?ml)$/.test(p) ||
-    /(^|\/)collector[a-z0-9._-]*\.(ya?ml)$/.test(p) ||
-    /(^|\/)chart\.(ya?ml)$/.test(p) ||
-    /(^|\/)values[\w.-]*\.(ya?ml)$/.test(p) ||
-    /(^|\/)templates\/.*\.(ya?ml)$/.test(p) ||
-    /(^|\/)k8s\/.*\.(ya?ml)$/.test(p) ||
-    /(^|\/)dashboards?\/.*\.json$/.test(p) ||
-    /(^|\/)grafana\/.*\.json$/.test(p) ||
-    /\.dashboard\.json$/.test(p) ||
-    /(^|\/)kustomization\.(ya?ml)$/.test(p)
-  );
-}
-
-async function ghFetch(path, init = {}) {
-  const headers = {
-    'Accept': 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'tomograph-crawler/1.0',
-    ...(init.headers || {}),
-  };
-  if (process.env.GITHUB_TOKEN) {
-    headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
-  }
-  const res = await fetch(`https://api.github.com${path}`, { ...init, headers });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    const err = new Error(`GitHub ${res.status} on ${path}: ${body.slice(0, 200)}`);
-    err.status = res.status;
-    throw err;
-  }
-  return res;
-}
+// parseGithubUrl / isCrawlerFile / ghFetch live in server/github-crawl.mjs.
 
 app.post('/api/crawl-github', async (req, res) => {
   const body = req.body || {};
@@ -2181,6 +1650,14 @@ app.post('/api/validate', (req, res) => {
     } else {
       return res.status(400).json({ ok: false, errors: ['expected JSON body or text/yaml body'] });
     }
+    // Previous pack format — the pre-v1.2 layered JSON (examples/legacy/).
+    // Upconvert at the gate so everything downstream (validator, adapter,
+    // conformance, compile, deploy, diff) stays one canonical pipeline.
+    // The response carries the conversion report so the client can say so.
+    let legacyReport = null;
+    if (isLegacyLayeredPack(canonical)) {
+      ({ canonical, report: legacyReport } = upconvertLegacyPack(canonical, { now: new Date().toISOString() }));
+    }
     const errors = validateCanonical(canonical, SCHEMA);
     if (errors.length) return res.json({ ok: false, errors });
     const env = readEnv(req.query);
@@ -2195,7 +1672,7 @@ app.post('/api/validate', (req, res) => {
     // mcp URL); falls back to the canonical's metadata.name.
     const sourceHint = typeof req.query.source === 'string' && req.query.source ? req.query.source : null;
     const id = registerUploadedPack(canonical, sourceHint || canonical.metadata?.name || 'upload');
-    res.json({ ok: true, adapted, conformance, registered: { id, source: sourceHint || null } });
+    res.json({ ok: true, adapted, conformance, registered: { id, source: sourceHint || null }, ...(legacyReport ? { legacy: legacyReport } : {}) });
   } catch (e) {
     res.status(400).json({ ok: false, errors: [e.message] });
   }
@@ -2227,13 +1704,13 @@ app.get(/^(?!\/api\/).*/, (req, res, next) => {
 
 const PORT = Number(process.env.PORT || 8000);
 // Loopback by default — matching the documented contract. Exposing the
-// studio (HOST=0.0.0.0) requires TOMOGRAPH_API_TOKEN; see start().
+// studio (HOST=0.0.0.0) requires OBSERVOGRAM_API_TOKEN; see start().
 const HOST = process.env.HOST || '127.0.0.1';
 
 export { app };
-// Rehydrate the upload registry from the .tomograph/ workspace. Runs once
-// per process, inside start() (not at module load) so tests can point
-// TOMOGRAPH_WORKSPACE at a temp dir before booting. Entries arrive oldest
+// Rehydrate the upload registry from the workspace (.observogram/). Runs
+// once per process, inside start() (not at module load) so tests can point
+// OBSERVOGRAM_WORKSPACE at a temp dir before booting. Entries arrive oldest
 // lastUsedAt first, preserving the map's LRU insertion order.
 let workspaceRehydrated = false;
 function rehydrateUploadsFromWorkspace(silent) {
@@ -2242,8 +1719,8 @@ function rehydrateUploadsFromWorkspace(silent) {
   let restored = 0;
   try {
     for (const p of loadWorkspacePacks()) {
-      if (UPLOADED_PACKS.has(p.id)) continue;
-      UPLOADED_PACKS.set(p.id, { canonical: p.canonical, source: p.source, label: p.label, createdAt: p.createdAt });
+      if (uploadsMap().has(p.id)) continue;
+      uploadsMap().set(p.id, { canonical: p.canonical, source: p.source, label: p.label, createdAt: p.createdAt });
       restored++;
     }
   } catch (e) {
@@ -2258,20 +1735,57 @@ function isLoopbackHost(h) {
 }
 
 export function start({ port = PORT, host = HOST, silent = false } = {}) {
-  // Fail closed (10B): binding beyond loopback with no API token would
+  // Grafana-style first boot: nothing configured → seed admin/admin,
+  // change asked at every sign-in until it lands (skippable per
+  // session). Backs off from any expressed intent
+  // (OIDC, users file, API token, tenancy, OBSERVOGRAM_AUTH=off) — see
+  // maybeSeedDefaultAdmin in server/auth.mjs.
+  maybeSeedDefaultAdmin({
+    log: (m) => { if (!silent) process.stdout.write(m + '\n'); },
+    wouldExpose: !isLoopbackHost(host),
+  });
+  // Fail closed (10B): binding beyond loopback with no auth at all would
   // expose every write route — crawl, draft, deploy — to the network.
-  if (!isLoopbackHost(host) && !apiToken()) {
-    if (process.env.TOMOGRAPH_INSECURE_NO_AUTH === '1') {
+  // Identity (OIDC or stand-alone users) satisfies the requirement just
+  // like the API token does.
+  if (!isLoopbackHost(host) && !apiToken() && !authEnabled()) {
+    if (brandEnv('INSECURE_NO_AUTH') === '1') {
       process.stderr.write(
-        `[studio] WARNING: bound to ${host} with NO auth (TOMOGRAPH_INSECURE_NO_AUTH=1). ` +
+        `[studio] WARNING: bound to ${host} with NO auth (OBSERVOGRAM_INSECURE_NO_AUTH=1). ` +
         `Every write route is open to the network. Do not run this posture outside a trusted network.\n`);
     } else {
       return Promise.reject(new Error(
         `refusing to bind to ${host} without auth: mutating /api routes would be open to the network.\n` +
-        `  Set TOMOGRAPH_API_TOKEN=<secret> (clients send Authorization: Bearer <secret>),\n` +
-        `  or bind to loopback (HOST=127.0.0.1), or set TOMOGRAPH_INSECURE_NO_AUTH=1 to override knowingly.`));
+        `  Set OBSERVOGRAM_API_TOKEN=<secret> (clients send Authorization: Bearer <secret>),\n` +
+        `  or seed a sign-in with OBSERVOGRAM_ADMIN_PASSWORD=<secret> (user 'admin'),\n` +
+        `  or bind to loopback (HOST=127.0.0.1), or set OBSERVOGRAM_INSECURE_NO_AUTH=1 to override knowingly.`));
     }
   }
+  // The seeded default credential is loopback-only, without exception:
+  // admin/admin reachable from the network is how Grafana instances end
+  // up on Shodan. Completing the password change clears this — skipping
+  // it does not (the guard stays armed until a real password lands).
+  if (!isLoopbackHost(host) && defaultAdminCredentialActive()) {
+    return Promise.reject(new Error(
+      `refusing to bind to ${host} while the seeded default admin password is unchanged.\n` +
+      `  Sign in once on loopback (admin / admin) to set a real password,\n` +
+      `  or seed a fresh workspace with OBSERVOGRAM_ADMIN_PASSWORD=<secret>.`));
+  }
+  // Tenancy (Stage 2) sits ON TOP of identity: orgs.json without a way
+  // to know who the user is cannot enforce membership — fail closed with
+  // the fix in the message, same posture as incomplete OIDC config.
+  if (tenancyEnabled() && !authEnabled()) {
+    return Promise.reject(new Error(
+      'orgs.json found but no identity is configured: tenancy needs to know who the user is.\n' +
+      '  Configure OIDC (OBSERVOGRAM_OIDC_*) or stand-alone users (users.json / npm run users),\n' +
+      '  or remove orgs.json to run the flat single-tenant workspace.'));
+  }
+  // One-shot, idempotent: a deployment whose flat workspace predates
+  // tenancy gets its state moved to orgs/default/ when orgs.json appears.
+  migrateFlatWorkspace({ log: (m) => { if (!silent) process.stdout.write(m + '\n'); } });
+  // Journeys/runs live in the engine (tools/lib/journey.mjs) — wire its
+  // root through the same context-aware resolver the registry uses.
+  setWorkspaceRootResolver(orgWorkspaceRoot);
   rehydrateUploadsFromWorkspace(silent);
   return new Promise((resolveListen, reject) => {
     const srv = app.listen(port, host, () => {
@@ -2296,7 +1810,7 @@ if (invokedDirectly) {
     if (e && e.code === 'EADDRINUSE') {
       process.stderr.write(
         `[studio] port ${PORT} is already in use.\n` +
-        `         Another Tomograph instance is probably running. Stop it, or:\n` +
+        `         Another Observogram instance is probably running. Stop it, or:\n` +
         `           PORT=8001 npm run dev\n`
       );
     } else {
