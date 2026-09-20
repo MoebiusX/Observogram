@@ -339,3 +339,290 @@ groups:
           slo_window: 30d
           runbook: (supply runbook URL)
         is_paused: false
+  - orgId: 1
+    name: edge_hostile_names_assurance
+    folder: observability-pack
+    interval: 30s
+    rules:
+      - uid: alr-edge_hostile_names_watchdog
+        title: Watchdog
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: vector(1)
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          severity: none
+          kind: assurance
+          instrument: watchdog
+          service: edge-hostile-names
+          pack: edge-hostile-names
+        annotations:
+          summary: edge-hostile-names assurance watchdog — always firing
+          description: "Dead-man contract for pack edge-hostile-names: this alert fires continuously by construction. Route alertname=\"Watchdog\", pack=\"edge-hostile-names\" to a heartbeat receiver and page when the heartbeat STOPS — silence means the ruler, Alertmanager or the notification path is down. Until a heartbeat route is added at deploy time it falls to the compiled Alertmanager's null receiver."
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-edge_hostile_names_ruler_sil-151g66c
+        title: edge_hostile_names_ruler_silent_prometheus
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: absent_over_time(prometheus_rule_group_last_evaluation_timestamp_seconds[5m])
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 10m
+        labels:
+          severity: SEV2
+          kind: assurance
+          instrument: ruler/prometheus
+          service: edge-hostile-names
+          pack: edge-hostile-names
+        annotations:
+          summary: prometheus ruler instrument silent for edge-hostile-names
+          description: "prometheus_rule_group_last_evaluation_timestamp_seconds has not been scraped for 5m (10m sustained): the prometheus ruler that evaluates edge-hostile-names's rules is not exposing itself — stopped, unscraped or renamed. Its rules are unproven while this fires. (Stack self-metric row rule_evaluation_staleness.)"
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-edge_hostile_names_notify_si-09j53yj
+        title: edge_hostile_names_notify_silent_prometheus
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: absent_over_time(prometheus_notifications_sent_total[5m])
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 10m
+        labels:
+          severity: SEV2
+          kind: assurance
+          instrument: notify/prometheus
+          service: edge-hostile-names
+          pack: edge-hostile-names
+        annotations:
+          summary: prometheus notify instrument silent for edge-hostile-names
+          description: "prometheus_notifications_sent_total has not been scraped for 5m (10m sustained): the prometheus notify that delivers edge-hostile-names's rules is not exposing itself — stopped, unscraped or renamed. Its rules are unproven while this fires. (Stack self-metric row notifications_sent.)"
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-edge_hostile_names_ruler_sta-1h6ki7k
+        title: edge_hostile_names_ruler_stale_prometheus
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: max(time() - prometheus_rule_group_last_evaluation_timestamp_seconds) > 120
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 2m
+        labels:
+          severity: SEV3
+          kind: assurance
+          instrument: ruler/prometheus
+          service: edge-hostile-names
+          pack: edge-hostile-names
+        annotations:
+          summary: prometheus rule evaluation stale for edge-hostile-names
+          description: "The newest rule-group evaluation is older than 120s for 2m: edge-hostile-names's recording rules and burn alerts are being evaluated late. Caveat: a fully stopped ruler cannot evaluate this alert — the Watchdog covers that case. (Stack self-metric row rule_evaluation_staleness.)"
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-edge_hostile_names_ruler_err-11ozhje
+        title: edge_hostile_names_ruler_errors_prometheus
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: increase(prometheus_rule_evaluation_failures_total[5m]) > 0
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 2m
+        labels:
+          severity: SEV3
+          kind: assurance
+          instrument: ruler/prometheus
+          service: edge-hostile-names
+          pack: edge-hostile-names
+        annotations:
+          summary: prometheus rule evaluation errors for edge-hostile-names
+          description: "prometheus_rule_evaluation_failures_total increased in the last 5m for 2m: some of edge-hostile-names's rules fail to evaluate — a failing rule records nothing and its burn alert can never fire. (Stack self-metric row rule_evaluation_failures.)"
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-edge_hostile_names_notify_er-0kt1rt9
+        title: edge_hostile_names_notify_errors_prometheus
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: increase(prometheus_notifications_errors_total[5m]) > 0
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 2m
+        labels:
+          severity: SEV3
+          kind: assurance
+          instrument: notify/prometheus
+          service: edge-hostile-names
+          pack: edge-hostile-names
+        annotations:
+          summary: prometheus notification errors for edge-hostile-names
+          description: "prometheus_notifications_errors_total increased in the last 5m for 2m: prometheus failed to deliver notifications — edge-hostile-names's alerts may fire unseen. (Stack self-metric row notification_errors.)"
+          runbook: (supply runbook URL)
+        is_paused: false

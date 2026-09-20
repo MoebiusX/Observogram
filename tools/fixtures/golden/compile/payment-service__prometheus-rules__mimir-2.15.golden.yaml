@@ -456,3 +456,31 @@ groups:
           on_projected_breach: post_warning
           horizon: 1d
           horizon_declared: 3d
+  - name: payment_service_assurance
+    interval: 30s
+    rules:
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+          kind: assurance
+          instrument: watchdog
+          service: payment-service
+          pack: payment-service
+        annotations:
+          summary: payment-service assurance watchdog — always firing
+          description: "Dead-man contract for pack payment-service: this alert fires continuously by construction. Route alertname=\"Watchdog\", pack=\"payment-service\" to a heartbeat receiver and page when the heartbeat STOPS — silence means the ruler, Alertmanager or the notification path is down. Until a heartbeat route is added at deploy time it falls to the compiled Alertmanager's null receiver."
+          runbook: (supply runbook URL)
+      - alert: payment_service_scrape_target_down
+        expr: up{job=~"payment-api"} == 0
+        for: 2m
+        labels:
+          severity: SEV2
+          kind: assurance
+          instrument: scrape
+          service: payment-service
+          pack: payment-service
+        annotations:
+          summary: A declared scrape target of payment-service is down
+          description: "up == 0 for {{ $labels.job }}/{{ $labels.instance }} for 2m. The pack declares scrape job(s) payment-api: every SLI, recording rule and burn alert of payment-service reading them is blind while this fires."
+          runbook: (supply runbook URL)

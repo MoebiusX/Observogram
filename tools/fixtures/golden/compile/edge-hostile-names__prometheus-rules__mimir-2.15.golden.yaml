@@ -106,3 +106,18 @@ groups:
           slo_objective: 99.000%
           slo_window: 30d
           runbook: (supply runbook URL)
+  - name: edge_hostile_names_assurance
+    interval: 30s
+    rules:
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+          kind: assurance
+          instrument: watchdog
+          service: edge-hostile-names
+          pack: edge-hostile-names
+        annotations:
+          summary: edge-hostile-names assurance watchdog — always firing
+          description: "Dead-man contract for pack edge-hostile-names: this alert fires continuously by construction. Route alertname=\"Watchdog\", pack=\"edge-hostile-names\" to a heartbeat receiver and page when the heartbeat STOPS — silence means the ruler, Alertmanager or the notification path is down. Until a heartbeat route is added at deploy time it falls to the compiled Alertmanager's null receiver."
+          runbook: (supply runbook URL)

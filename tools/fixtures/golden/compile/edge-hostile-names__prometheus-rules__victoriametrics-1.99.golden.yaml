@@ -104,3 +104,70 @@ groups:
           slo_objective: 99.000%
           slo_window: 30d
           runbook: (supply runbook URL)
+  - name: edge_hostile_names_assurance
+    interval: 30s
+    rules:
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+          kind: assurance
+          instrument: watchdog
+          service: edge-hostile-names
+          pack: edge-hostile-names
+        annotations:
+          summary: edge-hostile-names assurance watchdog — always firing
+          description: "Dead-man contract for pack edge-hostile-names: this alert fires continuously by construction. Route alertname=\"Watchdog\", pack=\"edge-hostile-names\" to a heartbeat receiver and page when the heartbeat STOPS — silence means the ruler, Alertmanager or the notification path is down. Until a heartbeat route is added at deploy time it falls to the compiled Alertmanager's null receiver."
+          runbook: (supply runbook URL)
+      - alert: edge_hostile_names_ruler_silent_victoriametrics
+        expr: absent_over_time(vmalert_recording_rules_errors_total[5m]) or absent_over_time(vmalert_alerting_rules_errors_total[5m])
+        for: 10m
+        labels:
+          severity: SEV2
+          kind: assurance
+          instrument: ruler/victoriametrics
+          service: edge-hostile-names
+          pack: edge-hostile-names
+        annotations:
+          summary: victoriametrics ruler instrument silent for edge-hostile-names
+          description: "vmalert_recording_rules_errors_total / vmalert_alerting_rules_errors_total has not been scraped for 5m (10m sustained): the victoriametrics ruler that evaluates edge-hostile-names's rules is not exposing itself — stopped, unscraped or renamed. Its rules are unproven while this fires. (Stack self-metric row rule_evaluation_failures.)"
+          runbook: (supply runbook URL)
+      - alert: edge_hostile_names_notify_silent_victoriametrics
+        expr: absent_over_time(vmalert_alerts_send_errors_total[5m])
+        for: 10m
+        labels:
+          severity: SEV2
+          kind: assurance
+          instrument: notify/victoriametrics
+          service: edge-hostile-names
+          pack: edge-hostile-names
+        annotations:
+          summary: victoriametrics notify instrument silent for edge-hostile-names
+          description: "vmalert_alerts_send_errors_total has not been scraped for 5m (10m sustained): the victoriametrics notify that delivers edge-hostile-names's rules is not exposing itself — stopped, unscraped or renamed. Its rules are unproven while this fires. (Stack self-metric row notification_errors.)"
+          runbook: (supply runbook URL)
+      - alert: edge_hostile_names_ruler_errors_victoriametrics
+        expr: sum(increase(vmalert_recording_rules_errors_total[5m])) + sum(increase(vmalert_alerting_rules_errors_total[5m])) > 0
+        for: 2m
+        labels:
+          severity: SEV3
+          kind: assurance
+          instrument: ruler/victoriametrics
+          service: edge-hostile-names
+          pack: edge-hostile-names
+        annotations:
+          summary: victoriametrics rule evaluation errors for edge-hostile-names
+          description: "vmalert_recording_rules_errors_total + vmalert_alerting_rules_errors_total increased in the last 5m for 2m: some of edge-hostile-names's rules fail to evaluate — a failing rule records nothing and its burn alert can never fire. (Stack self-metric row rule_evaluation_failures.)"
+          runbook: (supply runbook URL)
+      - alert: edge_hostile_names_notify_errors_victoriametrics
+        expr: increase(vmalert_alerts_send_errors_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: SEV3
+          kind: assurance
+          instrument: notify/victoriametrics
+          service: edge-hostile-names
+          pack: edge-hostile-names
+        annotations:
+          summary: victoriametrics notification errors for edge-hostile-names
+          description: "vmalert_alerts_send_errors_total increased in the last 5m for 2m: victoriametrics failed to deliver notifications — edge-hostile-names's alerts may fire unseen. (Stack self-metric row notification_errors.)"
+          runbook: (supply runbook URL)

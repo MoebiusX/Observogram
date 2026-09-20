@@ -12,6 +12,7 @@
 import {
   parseDiffKey, sliBaseOfSloId, matcherForDeployItem, computeDeployTransitions,
 } from '../studio/verify-deploy.mjs';
+import { catalogToDeployManifest } from '../studio/artifact-model.mjs';
 import { createHarness } from './lib/harness.mjs';
 
 const { assert, report } = createHarness();
@@ -45,6 +46,25 @@ assert(sloRecM.match === 'fuzzy', 'per-SLO recording matcher is marked fuzzy');
 assert(sloRecM.test({ record: 'payment:settlement_latency:ratio_5m' }), 'fuzzy matcher hits SLI-base rules');
 assert(!sloRecM.test({ record: 'payment:other_metric:ratio_5m' }), 'fuzzy matcher rejects unrelated rules');
 assert(matcherForDeployItem({ type: 'recording' }) === null, 'matcher without an id is null');
+// Step 5: the assurance row — recognised structurally (kind=assurance on an alert_rule identity),
+// never as a burn alert; the burn matcher is untouched.
+const assuranceM = matcherForDeployItem({ type: 'alert', id: 'assurance', artifact: 'assurance' });
+assert(assuranceM.kinds.join() === 'alert_rule' && assuranceM.match === 'exact' && assuranceM.test({ labels: { kind: 'assurance' } }) && assuranceM.test({ kind: 'assurance' }),
+       'assurance matcher keys on alert_rule identities labelled kind=assurance');
+assert(!assuranceM.test({ slo: 'settlement_latency_99' }) && !assuranceM.kinds.includes('burn_rate') && !alertM.test({ kind: 'assurance' }),
+       'the assurance matcher never matches a burn alert and the burn matcher never matches an assurance alert');
+{
+  const manifest = catalogToDeployManifest({ groups: [{ id: 'rules', flavors: [{ id: 'prometheus', deployable: true }], items: [
+    { id: 'all', kind: 'rules-bundle' },
+    { id: 'assurance', kind: 'rules-assurance', label: 'Assurance · watchdog + instrument liveness', subtitle: '7 alerts · generic, prometheus' },
+    { id: 'slo:x_99', kind: 'rules-slo', sloId: 'x_99', label: 'SLO · x_99' },
+  ] }] });
+  const row = manifest.find(r => r.key === 'rules:alert:assurance');
+  assert(row && row.type === 'alert' && row.id === 'assurance' && row.group === 'rules' && row.flavor === 'prometheus' && row.artifact === 'assurance' && row.scope === 'alerting' && row.deployable === true && row.source === 'Repo' && row.name === 'Assurance · watchdog + instrument liveness',
+         'catalogToDeployManifest maps the rules-assurance item to one alerting row rules:alert:assurance', row);
+  assert(manifest.filter(r => r.type === 'alert').length === 2 && matcherForDeployItem(row).kinds.join() === 'alert_rule' && matcherForDeployItem(manifest.find(r => r.key === 'rules:alert:slo:x_99')).kinds.join() === 'burn_rate',
+         'the manifest carries the assurance row beside the per-SLO alert row, each with its own matcher');
+}
 
 // ---------- fixtures ----------
 const k = (kind, idn, n) => `${kind}::${JSON.stringify(idn)}${n ? `#0${n}` : ''}`;

@@ -52,6 +52,7 @@
     "lint:contracts": "node --check tools/lib/contracts/mcp-capabilities.mjs && node --check tools/lib/contracts/response-shapes.mjs && node --check tools/lib/contracts/stack-self-metrics.mjs",
     "lint:schedule": "node --check tools/lib/schedule.mjs",
     "lint:schedule-snippets": "node --check tools/lib/schedule-snippets.mjs",
+    "lint:assurance": "node --check tools/lib/assurance-rules.mjs",
     "lint:journey-notify": "node --check tools/lib/journey-notify.mjs",
     "adapt": "node tools/adapt-spec-pack.mjs",
     "crawl": "node tools/crawl-repo.mjs",

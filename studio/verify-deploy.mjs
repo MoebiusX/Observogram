@@ -45,6 +45,15 @@ export function matcherForDeployItem(item) {
     return { kinds: ['dashboard'], match: 'exact', test: (idn) => idn?.id === id };
   }
   if (type === 'alert') {
+    // Step 5: the assurance row (Watchdog + instrument liveness). The graph
+    // carries no artefact node for a non-burn alert today (the live fetcher
+    // lands them only in mcp.discovered.alert_rule_names), so this matcher
+    // is structural: it recognises an alert_rule identity labelled
+    // kind=assurance and never a burn alert — an assurance deploy therefore
+    // reads `pending` until a diff kind exists for it, never `verified`.
+    if (id === 'assurance') {
+      return { kinds: ['alert_rule'], match: 'exact', test: (idn) => idn?.labels?.kind === 'assurance' || idn?.kind === 'assurance' };
+    }
     return { kinds: ['burn_rate'], match: 'exact', test: (idn) => idn?.slo === id };
   }
   if (type === 'recording') {
