@@ -1,0 +1,25 @@
+# Strategic-merge patch on the studio Deployment: mount the workspace PVC at
+# /workspace and point OBSERVOGRAM_WORKSPACE at it. This is the other half of
+# the prerequisite — the CronJob (cronjob-journeys.yaml) writes to exactly this
+# path, so the Journeys view shows its runs. Without this patch the studio
+# would keep its in-container workspace (ephemeral, and /app/.observogram is
+# not even creatable by uid 1000) and never see a scheduled run.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: observabilitypack-studio
+spec:
+  template:
+    spec:
+      containers:
+        - name: studio
+          env:
+            - name: OBSERVOGRAM_WORKSPACE
+              value: /workspace
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: observabilitypack-studio-workspace

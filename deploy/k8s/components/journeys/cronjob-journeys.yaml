@@ -1,0 +1,98 @@
+# The fleet CronJob: every saved journey, in sequence, every 15 minutes.
+# Per-journey cadences (a journey's own schedule:) come from
+#   packc journey schedule <name> --format k8s
+# which prints one CronJob for that journey with the same wiring as below.
+#
+# Why backoffLimit 0 / restartPolicy Never: exit 1 (gate failed) is the
+# early-warning OUTCOME of a run, not a retryable fault — a retry would append
+# a duplicate record to the history. `kubectl get jobs` therefore shows a gate
+# failure as a failed Job: that is the intended signal, not something to fix.
+# concurrencyPolicy Forbid keeps two fleets out of one workspace (a `run now`
+# from the studio interleaving with a scheduled run is tolerated by the
+# runner's prune logic).
+#
+# packc is not on PATH inside the image (`npm ci --omit=dev` never links the
+# package bin), hence `node tools/cli.mjs`.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: observabilitypack-studio-journeys
+  labels:
+    app.kubernetes.io/name: observabilitypack-studio
+    app.kubernetes.io/component: journeys
+spec:
+  schedule: "*/15 * * * *"
+  # timeZone: Europe/Madrid          # cluster default (UTC) when omitted
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 900
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: observabilitypack-studio
+            app.kubernetes.io/component: journeys
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000           # `node` user in the official node image
+            runAsGroup: 1000
+          # With a ReadWriteOnce PVC (pvc-workspace.yaml) the pod must land on
+          # the studio's node, or the volume attach fails — uncomment:
+          # affinity:
+          #   podAffinity:
+          #     requiredDuringSchedulingIgnoredDuringExecution:
+          #       - topologyKey: kubernetes.io/hostname
+          #         labelSelector:
+          #           matchLabels:
+          #             app.kubernetes.io/name: observabilitypack-studio
+          containers:
+            - name: journeys
+              # Same image as the studio; the base kustomization's `images:`
+              # retag applies here too.
+              image: observogram:0.4.0
+              imagePullPolicy: IfNotPresent
+              workingDir: /app
+              command: ["node", "tools/cli.mjs", "journey", "run", "--all"]
+              env:
+                # MUST equal the studio's OBSERVOGRAM_WORKSPACE
+                # (patch-studio-workspace.yaml). Tenancy: when
+                # <workspace>/orgs.json exists, point the CronJob at the org
+                # root instead — OBSERVOGRAM_WORKSPACE=/workspace/orgs/<orgId>
+                # (the CLI resolves the flat root only).
+                - name: OBSERVOGRAM_WORKSPACE
+                  value: /workspace
+                # - name: OBSERVOGRAM_JOURNEY_RUN_RETENTION   # records kept per journey (default 1000)
+                #   value: "1000"
+                # - name: OBSERVOGRAM_MCP_TIMEOUT_MS          # per-request MCP timeout (default 30000)
+                #   value: "30000"
+                # The env var NAMES your journeys reference (packB.mcp.authEnv,
+                # notify.urlEnv, notify.authEnv) are bound HERE, from Secrets —
+                # never as a literal value:
+                # - name: MY_MCP_TOKEN
+                #   valueFrom:
+                #     secretKeyRef: { name: journey-secrets, key: MY_MCP_TOKEN }
+                # - name: MY_JOURNEY_WEBHOOK_URL
+                #   valueFrom:
+                #     secretKeyRef: { name: journey-secrets, key: MY_JOURNEY_WEBHOOK_URL }
+                # - name: MY_JOURNEY_WEBHOOK_TOKEN
+                #   valueFrom:
+                #     secretKeyRef: { name: journey-secrets, key: MY_JOURNEY_WEBHOOK_TOKEN }
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: { drop: ["ALL"] }
+              resources:
+                requests: { cpu: 25m,  memory: 96Mi }
+                limits:   { cpu: 500m, memory: 384Mi }
+              volumeMounts:
+                - name: workspace
+                  mountPath: /workspace
+          volumes:
+            - name: workspace
+              persistentVolumeClaim:
+                claimName: observabilitypack-studio-workspace

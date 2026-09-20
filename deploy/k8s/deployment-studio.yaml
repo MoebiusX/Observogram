@@ -7,7 +7,9 @@
 # in the same process. Live MCP drafting is interactive (POST
 # /api/draft-from-mcp); the MCP URL and auth key are supplied by the user in
 # the studio UI per request, so there is no fetcher sidecar, no MCP secret,
-# and no refresh CronJob in this deploy.
+# and no refresh CronJob in the base; the opt-in `components/journeys`
+# (kubectl apply -k deploy/k8s-journeys) adds a workspace PVC and a
+# journeys CronJob — scheduling delegated to Kubernetes, never a timer here.
 #
 # Image: built from the repo-root Dockerfile (see kustomization.yaml).
 # ─────────────────────────────────────────────────────────────────────────────
