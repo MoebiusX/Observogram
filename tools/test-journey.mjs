@@ -1431,6 +1431,12 @@ try {
              '--json yields { name, source, schedule, placeholder, envNames, snippets }', { keys: Object.keys(j), sched: j.schedule, env: j.envNames });
       const sJsonOne = packc(['journey', 'schedule', 'sched-env', '--json', '--format', 'k8s'], TMP2, secretEnv);
       assert(Object.keys(JSON.parse(sJsonOne.stdout).snippets).join() === 'k8s', '--json --format k8s narrows the snippets');
+      // Fix round 0: the flag-first order took the --format VALUE as the journey name (exit 2, "journey not found: cron").
+      const sFlagFirst = packc(['journey', 'schedule', '--format', 'cron', 'sched-env'], TMP2, secretEnv);
+      assert(sFlagFirst.status === 0 && sFlagFirst.stdout === sCron.stdout && sFlagFirst.stderr === '', 'schedule --format cron <name> (flag first) prints exactly what <name> --format cron prints', { status: sFlagFirst.status, err: sFlagFirst.stderr });
+      const sFlagMid = packc(['journey', 'schedule', '--json', '--format', 'k8s', 'sched-env'], TMP2, secretEnv);
+      assert(sFlagMid.status === 0 && JSON.parse(sFlagMid.stdout).name === 'sched-env' && Object.keys(JSON.parse(sFlagMid.stdout).snippets).join() === 'k8s', 'both flags before the name still resolve the journey');
+      assert(packc(['journey', 'schedule', '--format', 'cron'], TMP2, secretEnv).status === 2, 'a --format value alone is not a journey name (usage, exit 2)');
       const sPh = packc(['journey', 'schedule', 'all-fail'], TMP2);
       assert(sPh.status === 0 && /^packc journey schedule: all-fail declares no schedule: — printing the placeholder \*\/15 \* \* \* \*; edit before installing$/m.test(sPh.stderr) && (sPh.stdout.match(/placeholder, edit before installing/g) || []).length === 4 && /^\*\/15 \* \* \* \* cd /m.test(sPh.stdout) && /schedule: not set in .*all-fail\.journey\.yaml — placeholder/.test(sPh.stdout),
              'without schedule: every snippet carries the marked placeholder, stderr says so, exit 0', { status: sPh.status, err: sPh.stderr });

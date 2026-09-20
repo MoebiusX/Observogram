@@ -186,9 +186,12 @@ async function runJourneyCommand([sub, ...args]) {
   // stderr note says so (exit 0 — nothing fabricated is presented as the
   // journey's cadence).
   if (sub === 'schedule') {
-    const ref = args.find(a => !a.startsWith('--'));
-    const asJson = args.includes('--json');
+    // `--format` takes a value: skip that slot when locating the journey ref,
+    // so `schedule --format cron <name>` and `schedule <name> --format cron`
+    // both work (fix round 0: the former read `cron` as the journey name).
     const fmtIdx = args.indexOf('--format');
+    const ref = args.find((a, i) => !a.startsWith('--') && !(fmtIdx >= 0 && i === fmtIdx + 1));
+    const asJson = args.includes('--json');
     const format = fmtIdx >= 0 ? String(args[fmtIdx + 1] || '') : 'all';
     if (!ref) { console.error('usage: packc journey schedule <name|path/to/file.journey.yaml> [--format cron|schtasks|actions|k8s|all] [--json]'); process.exit(2); }
     const snippetsLib = await import('./lib/schedule-snippets.mjs');
