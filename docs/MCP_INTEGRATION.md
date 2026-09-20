@@ -686,6 +686,112 @@ read it top to bottom:
    version flipping to or from `live`).
 7. `livePack` — whether Pack B was kept and why; `readLivePack(name, record)`
    returns it as it was observed.
+8. `notify` — the delivery outcome of the run (`{ status: sent | skipped |
+   failed, reason, triggers, httpStatus, attempts, tookMs, urlEnv, error }`),
+   `null` when the definition has no `notify:` block. A record WITHOUT the key
+   was written before delivery (a crash between the two writes, or a
+   pre-step-5 runner) — readers print nothing for it, never "skipped".
+
+#### Delegated scheduling (`schedule:`)
+
+Scheduling is delegated, not built (docs/VALUE_BACKLOG.md item 11 — an
+in-process timer was considered and not chosen): nothing in the server or
+the runner fires a journey. The journey merely **declares** its cadence:
+
+```yaml
+schedule: "*/15 * * * *"                          # 5-field cron
+# schedule: { cron: "0 */2 * * *", timezone: Europe/Madrid }
+# schedule: { every: 15m }                        # <N>m | <N>h | <N>d
+stackBudget: { objective: 0.99, window: 30d }     # optional, pairs with the cadence
+```
+
+`tools/lib/schedule.mjs` (browser-safe, served at `/lib`) parses it at load
+time — a 4-field cron, an out-of-range field, an unknown sub-key or a
+`15s` interval is a load-time configuration error (`journey <name>:
+schedule must be a 5-field cron expression, { cron, timezone? } or { every:
+<N>m|<N>h|<N>d } — … (got …)`; `journey list` prints it, `GET /api/journeys`
+puts it in `loadError`, capture answers 400). A cadence (`cadenceMs`) is
+derived only from a regular shape (`* * * * *`, `*/N`, `M */N`, `M H`,
+`M H * * D`, `every:`); an irregular cron yields `cadenceMs: null` with the
+note `irregular cron: cadence not derivable — posture budget not computed`,
+and `every: 45m` keeps its cadence but yields `cron: null` (snippets print
+its command as a comment) — nothing is ever guessed.
+
+`packc journey schedule <name> [--format cron|schtasks|actions|k8s|all]
+[--json]` prints the ready-made artefact for each scheduler from that block
+(`tools/lib/schedule-snippets.mjs`): a crontab line (`CRON_TZ` when a
+timezone is declared), a `schtasks /Create` command (exact shapes only —
+anything else prints the DAILY form with `REM … translate by hand`), a
+GitHub Actions workflow (history on a runner is per job, not a studio
+workspace) and one Kubernetes CronJob wired to the workspace PVC of
+`deploy/k8s/components/journeys`. Secrets appear only as env-var NAMES
+(`export NAME=<set in your environment>`, `${{ secrets.NAME }}`,
+`secretKeyRef`). Without a `schedule:` every snippet carries the literal
+placeholder `*/15 * * * *`, marked `schedule: not set in <file> —
+placeholder, edit before installing`, and stderr says so (exit 0).
+
+`packc journey run --all` runs every saved journey in sequence in one
+workspace (exit = the worst: 0 pass · 1 gate failed · 2 error, an
+unloadable definition included); it is what the fleet CronJob runs. The
+retention rule above still bounds the history, and the prune logic tolerates
+a scheduled run interleaving with a `POST /api/journeys/:name/run` (two
+writers never touch each other's just-written record or snapshot; two
+fleets are kept apart by the CronJob's `concurrencyPolicy: Forbid`).
+
+With a cadence and a `stackBudget`, the Journeys view prints one muted line
+per gated stack row — `<row> posture over the last N runs: <b bad of n
+sampled runs; the window allows x bad samples at this cadence — a sampled
+posture, signal, not verdict>` — computed in the browser from the run
+history with `stackPostureBudget` (see *History helpers*). Nothing enters
+`gate`, `outcome` or any score.
+
+#### Notify on transitions (`notify:`)
+
+```yaml
+notify:
+  urlEnv: MY_JOURNEY_WEBHOOK_URL     # env var NAME holding the POST URL (required)
+  authEnv: MY_JOURNEY_WEBHOOK_TOKEN  # optional → Authorization: Bearer <value>
+  on: transitions                    # transitions (default) · breach · always
+  format: json                       # json · text (one line + markdown body)
+  timeoutMs: 5000                    # per attempt, clamped to [1000, 60000]; one retry
+  studioUrl: https://studio.example  # optional non-secret literal → links in the payload
+```
+
+Secrets never live in a journey file: a literal `url:` / `token:` /
+`headers:` is refused at load (`notify.url is not allowed — reference an env
+var name with urlEnv (secrets never live in a journey file)`); the env vars
+are resolved at RUN time only, and an unset one refuses to run exactly like
+an unset `packB.mcp.authEnv` (exit 2, no record).
+
+The decision is pure (`tools/lib/journey-notify.mjs`, browser-safe):
+`always` posts every run; `breach` posts a gate-failed or vantage-lost run
+and once when the breach clears; `transitions` (the default) posts when the
+outcome changed, a chain got worse (`transition.changed[].direction ===
+'worse'`), a new candidate cause appeared (kind + evidence not on the
+previous run) or the vantage changed — a first run is a baseline, not a
+transition (skipped; deliberately unlike `keepLivePack`, which snapshots
+the first run), and a vantage-lost run after a vantage-lost run is skipped
+(nobody is paged every 15 minutes for one outage).
+
+The payload (`kind: observogram.journey`, `version: 1`) copies the record —
+`transition`, `causes` (with its *not a root-cause verdict* note), `chains`,
+trimmed `stack` rows, `grade`, `drift`, `gate.breaches`, `packs` with
+`//user:pass@` redacted — plus `reason`, `triggers`, a one-line `text`
+(`<journey>: <outcome> · <chain line> · <cause line> · <vantage line>`) and
+`links` when `studioUrl` is set. It never carries a definition key, an env
+value or a `historyError` path. The POST is bounded: one `AbortController`
+per attempt, a second attempt only after a network error / timeout, a 429 or
+a 5xx (any other 4xx is final), worst case 2 × `timeoutMs` + connect.
+
+Order on disk: the record is written FIRST, then posted, then rewritten with
+`notify` (same stem) — a record on disk before anything touches the wire.
+The outcome never changes the exit code (a failed delivery on a passing run
+still exits 0). `renderJourneyMarkdown` ends with `notify: sent (202) —
+<reason>` / `notify: skipped — …` / `notify: failed after N attempts —
+<error>`; `journey list` appends ` · notify <status>`; `GET /api/journeys`
+carries `notify` as names (`{ urlEnv, authEnv, on, format }`) and
+`lastRun.notify` as `{ status, httpStatus, reason }`; the Journeys view
+prints `notify: sent (202) · <reason>`.
 
 ### Stack self-metrics (registry)
 

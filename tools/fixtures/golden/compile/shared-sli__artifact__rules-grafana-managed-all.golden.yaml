@@ -395,3 +395,290 @@ groups:
           horizon: 1d
           horizon_declared: 7d
         is_paused: false
+  - orgId: 1
+    name: shared_sli_assurance
+    folder: observability-pack
+    interval: 30s
+    rules:
+      - uid: alr-shared_sli_watchdog
+        title: Watchdog
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: vector(1)
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          severity: none
+          kind: assurance
+          instrument: watchdog
+          service: shared-sli
+          pack: shared-sli
+        annotations:
+          summary: shared-sli assurance watchdog — always firing
+          description: "Dead-man contract for pack shared-sli: this alert fires continuously by construction. Route alertname=\"Watchdog\", pack=\"shared-sli\" to a heartbeat receiver and page when the heartbeat STOPS — silence means the ruler, Alertmanager or the notification path is down. Until a heartbeat route is added at deploy time it falls to the compiled Alertmanager's null receiver."
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-shared_sli_ruler_silent_prometheus
+        title: shared_sli_ruler_silent_prometheus
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: absent_over_time(prometheus_rule_group_last_evaluation_timestamp_seconds[5m])
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 10m
+        labels:
+          severity: SEV2
+          kind: assurance
+          instrument: ruler/prometheus
+          service: shared-sli
+          pack: shared-sli
+        annotations:
+          summary: prometheus ruler instrument silent for shared-sli
+          description: "prometheus_rule_group_last_evaluation_timestamp_seconds has not been scraped for 5m (10m sustained): the prometheus ruler that evaluates shared-sli's rules is not exposing itself — stopped, unscraped or renamed. Its rules are unproven while this fires. (Stack self-metric row rule_evaluation_staleness.)"
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-shared_sli_notify_silent_prometheus
+        title: shared_sli_notify_silent_prometheus
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: absent_over_time(prometheus_notifications_sent_total[5m])
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 10m
+        labels:
+          severity: SEV2
+          kind: assurance
+          instrument: notify/prometheus
+          service: shared-sli
+          pack: shared-sli
+        annotations:
+          summary: prometheus notify instrument silent for shared-sli
+          description: "prometheus_notifications_sent_total has not been scraped for 5m (10m sustained): the prometheus notify that delivers shared-sli's rules is not exposing itself — stopped, unscraped or renamed. Its rules are unproven while this fires. (Stack self-metric row notifications_sent.)"
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-shared_sli_ruler_stale_prometheus
+        title: shared_sli_ruler_stale_prometheus
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: max(time() - prometheus_rule_group_last_evaluation_timestamp_seconds) > 120
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 2m
+        labels:
+          severity: SEV3
+          kind: assurance
+          instrument: ruler/prometheus
+          service: shared-sli
+          pack: shared-sli
+        annotations:
+          summary: prometheus rule evaluation stale for shared-sli
+          description: "The newest rule-group evaluation is older than 120s for 2m: shared-sli's recording rules and burn alerts are being evaluated late. Caveat: a fully stopped ruler cannot evaluate this alert — the Watchdog covers that case. (Stack self-metric row rule_evaluation_staleness.)"
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-shared_sli_ruler_errors_prometheus
+        title: shared_sli_ruler_errors_prometheus
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: increase(prometheus_rule_evaluation_failures_total[5m]) > 0
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 2m
+        labels:
+          severity: SEV3
+          kind: assurance
+          instrument: ruler/prometheus
+          service: shared-sli
+          pack: shared-sli
+        annotations:
+          summary: prometheus rule evaluation errors for shared-sli
+          description: "prometheus_rule_evaluation_failures_total increased in the last 5m for 2m: some of shared-sli's rules fail to evaluate — a failing rule records nothing and its burn alert can never fire. (Stack self-metric row rule_evaluation_failures.)"
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-shared_sli_notify_errors_prometheus
+        title: shared_sli_notify_errors_prometheus
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: increase(prometheus_notifications_errors_total[5m]) > 0
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 2m
+        labels:
+          severity: SEV3
+          kind: assurance
+          instrument: notify/prometheus
+          service: shared-sli
+          pack: shared-sli
+        annotations:
+          summary: prometheus notification errors for shared-sli
+          description: "prometheus_notifications_errors_total increased in the last 5m for 2m: prometheus failed to deliver notifications — shared-sli's alerts may fire unseen. (Stack self-metric row notification_errors.)"
+          runbook: (supply runbook URL)
+        is_paused: false

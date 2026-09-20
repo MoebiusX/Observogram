@@ -24,6 +24,14 @@ async function stackEvidenceLib() {
   if (!_stackLib) _stackLib = await import('/lib/stack-evidence.mjs');
   return _stackLib;
 }
+// tools/lib/schedule.mjs — the same parser the server used for the
+// journey's schedule: (step 5); only windowMs is needed here, for the
+// posture-budget line. Loaded the same way, degrading to "no line".
+let _scheduleLib = null;
+async function scheduleLib() {
+  if (!_scheduleLib) _scheduleLib = await import('/lib/schedule.mjs');
+  return _scheduleLib;
+}
 
 // Tiny inline SVG sparkline over alignment % (0–100). Oldest → newest,
 // left → right. Pure presentation; returns '' below two points.
@@ -133,12 +141,14 @@ async function loadJourneysList(host) {
   // Fetch each journey's recent runs for the sparkline (small N, parallel).
   const runsByName = {};
   let stackLib = null;
+  let schedLib = null;
   await Promise.all([
     ...journeys.map(async j => {
       try { runsByName[j.name] = (await api(`/api/journeys/${encodeURIComponent(j.name)}/runs?limit=20`)).runs; }
       catch (_) { runsByName[j.name] = []; }
     }),
     (async () => { try { stackLib = await stackEvidenceLib(); } catch { stackLib = null; } })(),
+    (async () => { try { schedLib = await scheduleLib(); } catch { schedLib = null; } })(),
   ]);
 
   host.innerHTML = journeys.map(j => {
@@ -164,8 +174,10 @@ async function loadJourneysList(host) {
         </div>
         ${j.loadError ? `<div class="journey-card-meta"><span class="journey-load-error" title="loadJourneyDef">definition does not load: ${escapeHtml(j.loadError)}</span></div>` : ''}
         ${renderStackChips(last?.stack ?? null, runs, stackLib)}
+        ${renderPostureLines(j, runs, stackLib, schedLib)}
         ${renderChainsLine(last)}
         ${renderCauseLine(last)}
+        ${renderNotifyLine(last)}
         <div class="journey-runs">${renderRunsTable(runs)}</div>
         <div class="journey-result" hidden></div>
       </article>`;
@@ -265,6 +277,39 @@ function renderCauseLine(last) {
     : '';
   const mark = vantage ? `${top ? ' ' : ''}<span class="journey-stack-mark">vantage changed</span>` : '';
   return `<div class="journey-stack journey-cause">${cause}${mark}</div>`;
+}
+
+// Step 5: the sampled posture budget per gated stack row — SIGNAL, NOT
+// VERDICT (the function's own note says so in both branches). Computed
+// here from the fetched run history with the same browser-safe helpers the
+// server would use (stack-evidence.mjs stackPostureBudget) and the cadence
+// GET /api/journeys derived from the journey's schedule:. One muted line
+// per row in gate.stack.rows; nothing without a schedule or a budget; when
+// the cadence could not be derived (irregular cron) the parser's note is
+// printed instead. Nothing here enters gate, outcome or any score.
+function renderPostureLines(j, runs, lib, schedLib) {
+  const rows = j?.gate?.stack?.rows && typeof j.gate.stack.rows === 'object' ? Object.keys(j.gate.stack.rows) : [];
+  if (!rows.length || !j?.schedule) return '';
+  const line = (text) => `<div class="journey-stack journey-posture"><span class="journey-stack-label">${escapeHtml(text)}</span></div>`;
+  if (!j.schedule.cadenceMs) return j.schedule.cadenceNote ? line(`stack posture: ${j.schedule.cadenceNote}`) : '';
+  if (!lib || !schedLib || !j.stackBudget || typeof lib.stackPostureBudget !== 'function') return '';
+  const windowMs = schedLib.windowMs(j.stackBudget.window);
+  if (!windowMs) return '';
+  return rows.map(rowId => {
+    const b = lib.stackPostureBudget(lib.stackSeries(runs, rowId), { objective: j.stackBudget.objective, cadenceMs: j.schedule.cadenceMs, windowMs });
+    return line(`${rowId} posture over the last ${runs.length} runs: ${b.note}`);
+  }).join('');
+}
+
+// Step 5: the delivery outcome of the last run (GET /api/journeys'
+// lastRun.notify) — one muted plain-text line, `notify: sent (202) ·
+// <reason>`. Nothing when the record carries no notify object (no notify
+// block, or a record written before delivery — never "skipped").
+function renderNotifyLine(last) {
+  const n = last?.notify;
+  if (!n || typeof n !== 'object' || !n.status) return '';
+  const status = `${n.status}${n.httpStatus != null ? ` (${n.httpStatus})` : ''}`;
+  return `<div class="journey-stack journey-notify"><span class="journey-stack-label">${escapeHtml(`notify: ${status}${n.reason ? ` · ${n.reason}` : ''}`)}</span></div>`;
 }
 
 function renderRunsTable(runs) {

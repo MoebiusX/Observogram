@@ -219,7 +219,8 @@ Kubernetes manifests (Deployment + Service + Ingress, applied with Kustomize)
 live in [`deploy/k8s/`](deploy/k8s/README.md):
 
 ```bash
-kubectl apply -k deploy/k8s
+kubectl apply -k deploy/k8s            # the studio
+kubectl apply -k deploy/k8s-journeys   # + the opt-in journeys CronJob and its workspace PVC (deploy/k8s/README.md)
 ```
 
 ## Common Operations
@@ -286,6 +287,20 @@ curl "http://127.0.0.1:8000/api/packs/<pack-id>/compile-artifact?group=rules&fla
 
 The UI exposes the same path through **Remediate -> Compile & Deploy**.
 
+**Assurance rules.** Every compiled rules file (Prometheus and Grafana-managed)
+ends with a `<svc>_assurance` group that monitors the monitors: an always-firing
+`Watchdog` (route it to a heartbeat receiver and page when the heartbeat stops),
+`<svc>_scrape_target_down` over the pack's declared scrape jobs, and instrument
+liveness / degradation alerts (`<svc>_ruler_silent_prometheus`,
+`_notify_silent_prometheus`, `_ruler_stale_`, `_ruler_errors_`,
+`_notify_errors_`; `vmalert_*` rows under VictoriaMetrics, Alertmanager and
+Grafana rows only when the pack declares them) built from the stack self-metric
+alias table. Opt out per pack with the annotation
+`observogram.assurance: watchdog-only | off` (default `on`). The catalog lists it
+as the `assurance` item with its own file. See
+[`docs/ASSURANCE_RULES.md`](docs/ASSURANCE_RULES.md) for the rules and a sample
+heartbeat route.
+
 ### Saved Journeys — Repeatable Drift Checks
 
 Freeze a comparison as a journey file and run it on demand or on a schedule:
@@ -308,12 +323,22 @@ gate:
     rows:
       scrape_targets_down: { max: 0 }   # row ids come from the stack self-metrics table
 keepLivePack: transitions       # snapshot Pack B beside the run: transitions (default) · always · never
+schedule: "*/15 * * * *"        # the cadence it is MEANT to run at — declared, never fired from here
+                                #   also { cron, timezone } or { every: 15m }
+stackBudget: { objective: 0.99, window: 30d }   # posture budget the Journeys view prints per gated stack row (signal, not verdict)
+notify:                         # early-warning delivery: one bounded POST per run
+  urlEnv: MY_JOURNEY_WEBHOOK_URL     # env var NAME holding the URL (a literal url: is refused)
+  authEnv: MY_JOURNEY_WEBHOOK_TOKEN  # optional → Authorization: Bearer <value>
+  on: transitions                    # transitions (default) · breach · always
+  format: json                       # json · text (one line + markdown body, ntfy-style)
 ```
 
 ```bash
 node tools/cli.mjs journey run repo-vs-live          # markdown report
 node tools/cli.mjs journey run repo-vs-live --json   # automation output
-node tools/cli.mjs journey list                      # journeys + last outcome
+node tools/cli.mjs journey run --all                 # every saved journey in sequence (exit = the worst)
+node tools/cli.mjs journey schedule repo-vs-live     # cron · schtasks · GitHub Actions · CronJob snippets from schedule:
+node tools/cli.mjs journey list                      # journeys + last outcome (+ notify status)
 ```
 
 Exit codes follow the gate contract: `0` verdict passes, `1` gate failed,
@@ -333,7 +358,15 @@ after every run the journey's `runs/` directory is pruned to the newest
 `OBSERVOGRAM_JOURNEY_RUN_RETENTION` records (default `1000`; `0` = unlimited).
 A record that cannot be deleted is noted on the run as `historyError` — the
 verdict still stands. Scheduling itself stays external (cron, CI, a Windows
-scheduled task) by design. Each record of a live run also keeps the stack
+scheduled task, a Kubernetes CronJob) by design — `packc journey schedule
+<name>` prints the ready-made snippet for each from the journey's `schedule:`
+(`--format cron|schtasks|actions|k8s`), with secrets only ever as env-var
+names, and the opt-in [`deploy/k8s-journeys`](deploy/k8s/README.md) overlay
+runs `journey run --all` as a CronJob against the studio's workspace PVC.
+`notify:` posts a run to a webhook only when it says something new
+(`transitions`: outcome changed, a chain got worse, a new candidate cause, the
+vantage changed; `breach`; `always`) — the outcome lands on the record as
+`notify` and never changes the exit code. Each record of a live run also keeps the stack
 self-metric samples it saw (`stackEvidence`: the rows, plus the Alertmanager
 and Grafana status the MCP answered) — point-in-time signals kept per run so
 the history is the time series, never a verdict.
@@ -408,7 +441,7 @@ muted markers, no colours.
 | `POST` | `/api/packs/:id/deploy-bulk` | Deploy selected compiled artifacts |
 | `POST` | `/api/packs/:id/deploy/:target` | Deploy one compiled target |
 | `DELETE` | `/api/uploads` | Clear uploaded/crawled/drafted packs |
-| `GET` | `/api/journeys` | Saved journeys with the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`) |
+| `GET` | `/api/journeys` | Saved journeys with their `schedule` (parsed: `cron`, `timezone`, `every`, `cadenceMs`, `cadenceNote`), `stackBudget`, `notify` (env-var names + policy, never a URL) and the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`, `notify` `{ status, httpStatus, reason }`) |
 | `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series) |
 | `POST` | `/api/journeys/:name/run` | Run a saved journey now |
 | `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file |

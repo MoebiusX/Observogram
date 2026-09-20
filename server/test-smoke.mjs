@@ -596,6 +596,50 @@ try {
   assert(Object.keys(seeded?.families || {}).sort().join() === 'logs,notify,scrape', 'lastRun.stack.families lists only the families present', Object.keys(seeded?.families || {}));
   const seededLast = jList3.journeys.find(j => j.name === 'stack-seeded')?.lastRun;
   assert(seededLast && seededLast.chains === null && seededLast.transition === null, 'a record without branches reads lastRun.chains null and transition null', seededLast && { c: seededLast.chains, t: seededLast.transition });
+  const plainEntry = jList3.journeys.find(j => j.name === 'stack-seeded');
+  assert(plainEntry.schedule === null && plainEntry.stackBudget === null && plainEntry.notify === null && plainEntry.lastRun.notify === null,
+         'without schedule:/stackBudget:/notify: the listing reads null for all three and lastRun.notify null (the seeded record carries no notify)', { s: plainEntry.schedule, b: plainEntry.stackBudget, n: plainEntry.notify, ln: plainEntry.lastRun.notify });
+
+  // Step 5: schedule / stackBudget / notify on the listing — names and the
+  // parsed cadence only; the delivery outcome of the last run beside it.
+  writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'delivery-seeded.journey.yaml'), [
+    'name: delivery-seeded',
+    `packA: { file: ${PAY.replaceAll('\\', '/')} }`,
+    `packB: { file: ${CUR.replaceAll('\\', '/')} }`,
+    'gate: { minAlignmentPct: 1, stack: { rows: { scrape_targets_down: { max: 0 } } } }',
+    'schedule: "*/15 * * * *"',
+    'stackBudget: { objective: 0.99, window: 30d }',
+    'notify: { urlEnv: SMOKE_HOOK_URL, authEnv: SMOKE_HOOK_TOKEN, on: breach, format: text }',
+  ].join('\n'));
+  const deliveredAt = '2026-09-20T10:15:00.000Z';
+  mkdirSync(join(SMOKE_WORKSPACE, 'runs', 'delivery-seeded'), { recursive: true });
+  writeFileSync(join(SMOKE_WORKSPACE, 'runs', 'delivery-seeded', `${deliveredAt.replace(/[:.]/g, '-')}.json`), JSON.stringify({
+    journey: 'delivery-seeded', startedAt: deliveredAt, tookMs: 5, outcome: 'gate-failed',
+    grade: { score: 70, pass: true }, drift: { alignmentPct: 90 }, gate: { thresholds: {}, breaches: [{ criterion: 'stack.scrape_targets_down', detail: 'scrape_targets_down = 2 count outside [-∞ … 0] — point-in-time sample, not an SLO verdict' }] },
+    stackEvidence: { status: 'sampled', reason: null, rows: [{ id: 'scrape_targets_down', family: 'scrape', product: 'generic', value: 2, unit: 'count', direction: 'lower', outcome: 'data', hint: 'nonzero', at: deliveredAt, referenceSli: null }], alertmanager: null, grafana: null },
+    notify: { status: 'sent', reason: 'gate failed: stack.scrape_targets_down', triggers: ['gate-failed:stack.scrape_targets_down'], httpStatus: 202, attempts: 1, tookMs: 12, urlEnv: 'SMOKE_HOOK_URL', error: null },
+  }, null, 2));
+  const delivered = (await getJson(base, '/api/journeys')).journeys.find(j => j.name === 'delivery-seeded');
+  assert(delivered && delivered.loadError === null && JSON.stringify(delivered.schedule) === JSON.stringify({ cron: '*/15 * * * *', timezone: null, every: null, cadenceMs: 900000, cadenceNote: null }),
+         'GET /api/journeys carries the parsed schedule with cadenceMs 900000', delivered && { e: delivered.loadError, s: delivered.schedule });
+  assert(JSON.stringify(delivered.stackBudget) === JSON.stringify({ objective: 0.99, window: '30d' }), 'GET /api/journeys carries stackBudget as declared', delivered.stackBudget);
+  assert(JSON.stringify(delivered.notify) === JSON.stringify({ urlEnv: 'SMOKE_HOOK_URL', authEnv: 'SMOKE_HOOK_TOKEN', on: 'breach', format: 'text' }) && !/http/.test(JSON.stringify(delivered.notify)),
+         'GET /api/journeys carries the notify block as env var NAMES + policy knobs — no URL, no value', delivered.notify);
+  assert(JSON.stringify(delivered.lastRun.notify) === JSON.stringify({ status: 'sent', httpStatus: 202, reason: 'gate failed: stack.scrape_targets_down' }), 'lastRun.notify is { status, httpStatus, reason }', delivered.lastRun.notify);
+  assert(!JSON.stringify(delivered.lastRun.notify).includes('SMOKE_HOOK') && !JSON.stringify(delivered).includes('triggers'), 'lastRun.notify is the trimmed summary (no env name, no triggers)');
+  const capNotifyBad = await fetch(`${base}/api/journeys/capture`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'captured-notify-bad', packAId: 'payment-service', packBId: 'production-curated', notify: { url: 'https://hooks.example/x' } }),
+  });
+  const capNotifyBadBody = await capNotifyBad.json();
+  assert(capNotifyBad.status === 400 && /notify\.url is not allowed — reference an env var name with urlEnv/.test(capNotifyBadBody.error || ''), 'capture with a literal notify.url → 400 with the env-var alternative', capNotifyBadBody);
+  const capNotifyOk = await fetch(`${base}/api/journeys/capture`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'captured-notify', packAId: 'payment-service', packBId: 'production-curated', notify: { urlEnv: 'SMOKE_HOOK_URL', on: 'always' }, schedule: { every: '2h' } }),
+  }).then(r => r.json());
+  const capturedNotify = (await getJson(base, '/api/journeys')).journeys.find(j => j.name === 'captured-notify');
+  assert(capNotifyOk.ok === true && capturedNotify?.notify?.urlEnv === 'SMOKE_HOOK_URL' && capturedNotify.notify.on === 'always' && capturedNotify.notify.format === 'json' && capturedNotify.schedule?.every === '2h' && capturedNotify.schedule.cadenceMs === 7200000,
+         'capture persists notify (names) and an every: schedule; the listing reads them back', capturedNotify && { n: capturedNotify.notify, s: capturedNotify.schedule });
 
   // Step 4: a run record carrying requirement chains (seeded the way the
   // runner writes them) surfaces lastRun.chains + lastRun.transition.
@@ -713,6 +757,24 @@ try {
     body: JSON.stringify({ name: 'captured-stack', packAId: 'payment-service', packBId: 'production-curated', gate: { minAlignmentPct: 1, stack: { requireSampled: true, rows: { scrape_targets_down: { max: 0 } } } } }),
   }).then(r => r.json());
   assert(capStackOk.ok === true, 'capture with a well-formed stack gate saves');
+  // Step 5: schedule / stackBudget ride through capture and are validated
+  // the way loadJourneyDef validates a file (400 on a malformed block).
+  const capSched = await fetch(`${base}/api/journeys/capture`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'captured-sched', packAId: 'payment-service', packBId: 'production-curated', gate: { minAlignmentPct: 1 }, schedule: '*/15 * * * *', stackBudget: { objective: 0.99, window: '30d' } }),
+  }).then(r => r.json());
+  assert(capSched.ok === true, 'capture with schedule + stackBudget saves');
+  const capSchedText = readFileSync(join(SMOKE_WORKSPACE, 'journeys', 'captured-sched.journey.yaml'), 'utf8');
+  assert(/^schedule: "\*\/15 \* \* \* \*"$/m.test(capSchedText) && /^stackBudget:\n {2}objective: 0\.99\n {2}window: 30d$/m.test(capSchedText),
+         'the captured file carries the cron quoted and the budget as a mapping', capSchedText);
+  const capSchedBad = await fetch(`${base}/api/journeys/capture`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'captured-sched-bad', packAId: 'payment-service', packBId: 'production-curated', schedule: '*/15 * * *' }),
+  });
+  const capSchedBadBody = await capSchedBad.json();
+  assert(capSchedBad.status === 400 && /journey captured-sched-bad: schedule must be a 5-field cron expression/.test(capSchedBadBody.error || ''),
+         'capture with a 4-field schedule → 400 naming the journey', capSchedBadBody);
+  assert(!(await getJson(base, '/api/journeys')).journeys.some(j => j.name === 'captured-sched-bad'), 'the refused schedule capture saved nothing');
   // A definition on disk that fails to load is listed with the reason.
   writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'bad-id.journey.yaml'), [
     'name: bad-id',

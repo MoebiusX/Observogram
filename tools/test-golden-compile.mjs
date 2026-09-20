@@ -97,6 +97,9 @@ const ARTIFACTS = [
   { group: 'rules', flavor: 'prometheus', artifact: 'slo:checkout_latency_99_5_p99_300ms', packs: ['payment-service'] },
   { group: 'rules', flavor: 'grafana-managed', artifact: 'slo:checkout_latency_99_5_p99_300ms', packs: ['payment-service'] },
   { group: 'rules', flavor: 'prometheus', artifact: 'slo:hostile_availability_99', packs: ['edge-hostile-names'] },
+  // Step 5: the assurance group as its own file (the per-item file the studio deploys), both flavours.
+  { group: 'rules', flavor: 'prometheus', artifact: 'assurance', packs: ['payment-service'] },
+  { group: 'rules', flavor: 'grafana-managed', artifact: 'assurance', packs: ['payment-service'] },
 ];
 
 const artifactGoldenName = (packId, row) => {

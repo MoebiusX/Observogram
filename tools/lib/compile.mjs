@@ -44,6 +44,7 @@
 import { emit as emitYaml } from './mini-yaml.mjs';
 import { resolveProfile } from './profiles.mjs';
 import { fileSlug as slug } from './slug.mjs';
+import { assuranceMode, buildAssuranceRules, assuranceProducts, declaredScrapeJobs, ASSURANCE_GROUP_INTERVAL } from './assurance-rules.mjs';
 import {
   metricSafe, metricPrefix, packStepSeconds, sliLegs, burnAlertExpr, errorBudgetRecordingRules,
   sliErrorRatioRule, forecastExpr, forecastHorizon, forecastSeverity, forFor, MIN_BAD_SAMPLES,
@@ -220,6 +221,11 @@ function policyContext(canonical, opts = {}) {
     minBadSamples: opts.minBadSamples ?? MIN_BAD_SAMPLES,
     runbooks: opts.runbooks || {},
     warn: (m) => { if (!sink || seen.has(m)) return; seen.add(m); sink(m); },
+    // Step 5: the metrics profile the assurance group reads its product rows
+    // from (prometheus_* vs vmalert_*), and the group's on | watchdog-only |
+    // off mode (opts.assurance, else the observogram.assurance annotation).
+    profile,
+    assurance: assuranceMode(canonical, opts, (m) => { if (!sink || seen.has(m)) return; seen.add(m); sink(m); }),
   };
 }
 // Threshold SLIs are read from the compiler's own recorded value series, sampled
@@ -293,6 +299,16 @@ export function compilePrometheusRules(canonical, opts = {}) {
   }
   if (forecastRules.length) {
     groups.push({ name: `${svc}_forecast`, interval: '5m', rules: forecastRules });
+  }
+
+  // ----- assurance (step 5) -----
+  // Watchdog + declared-job target-down + instrument liveness from the
+  // stack self-metric alias table (tools/lib/assurance-rules.mjs). Default
+  // on; metadata.annotations["observogram.assurance"] or opts.assurance
+  // turns it to watchdog-only / off. No keep_firing_for on any of them.
+  const assuranceRules = buildAssuranceRules(canonical, ctx, { profile: ctx.profile, mode: ctx.assurance });
+  if (assuranceRules.length) {
+    groups.push({ name: `${svc}_assurance`, interval: ASSURANCE_GROUP_INTERVAL, rules: assuranceRules });
   }
 
   const out = {
@@ -725,12 +741,16 @@ function buildGrafanaRecordingRule(rec, { uidKey = rec.record } = {}) {
   };
 }
 
-function buildGrafanaAlertRule(alert) {
+// `uidKey` / `forDefault` (step 5) mirror buildGrafanaRecordingRule's uidKey:
+// existing callers pass nothing, so burn/forecast uids and `for` are
+// byte-identical; the assurance group keys its uids by `<svc>_<alert>` (no
+// cross-pack collision in the shared folder) and gives the Watchdog for: 0s.
+function buildGrafanaAlertRule(alert, { uidKey = alert.alert, forDefault = '5m' } = {}) {
   // Grafana-managed alert rule: a Prometheus query in refId A and a
   // threshold expression in refId B that evaluates A > 0. The original
   // expr already encodes the threshold, so we test "result > 0".
   return {
-    uid: grafanaRuleUid('alr', alert.alert),
+    uid: grafanaRuleUid('alr', uidKey),
     title: alert.alert,
     condition: 'B',
     data: [
@@ -739,7 +759,7 @@ function buildGrafanaAlertRule(alert) {
     ],
     no_data_state: 'OK',
     exec_err_state: 'Error',
-    for: alert.for || '5m',
+    for: alert.for || forDefault,
     labels: alert.labels || {},
     annotations: alert.annotations || {},
     is_paused: false,
@@ -799,8 +819,18 @@ export function compileGrafanaManagedRules(canonical, opts = {}) {
   }
   if (forecastRules.length) groups.push(grafanaGroupOf(`${svc}_forecast`, forecastRules, '5m'));
 
+  // Assurance (step 5): the same rules as the Prometheus flavour, uids keyed
+  // by <svc>_<alert> (unique across packs in the shared folder), the
+  // Watchdog with for: 0s.
+  const assuranceRules = buildAssuranceRules(canonical, ctx, { profile: ctx.profile, mode: ctx.assurance });
+  if (assuranceRules.length) groups.push(grafanaGroupOf(`${svc}_assurance`, assuranceRules.map(r => grafanaAssuranceRule(svc, r)), ASSURANCE_GROUP_INTERVAL));
+
   return bannerForGrafana('Grafana-managed rules', canonical) + emitYaml({ apiVersion: 1, groups });
 }
+
+// The uid key is `<svc>_<alert>`; the non-Watchdog alert names already carry
+// the svc prefix, so they are used as they are (no `<svc>_<svc>_` doubling).
+const grafanaAssuranceRule = (svc, r) => buildGrafanaAlertRule(r, { uidKey: r.alert.startsWith(`${svc}_`) ? r.alert : `${svc}_${r.alert}`, forDefault: '0s' });
 
 // A per-SLO Grafana-managed file deploys by uid (server/deploy-helpers.mjs
 // upserts one rule per uid, ruleGroup = the group name), so its recording rules
@@ -835,6 +865,27 @@ export function compileSloGrafanaManagedRules(canonical, sloId, opts = {}) {
 }
 
 // ----------------------------------------------------------------
+// The assurance group as its own file (step 5) — the per-item file the
+// studio deploys (catalog item `assurance`, kind rules-assurance). Same
+// rules as the full file's `<svc>_assurance` group; off → an empty
+// groups list, never a fabricated rule.
+// ----------------------------------------------------------------
+
+export function compileAssurancePrometheusRules(canonical, opts = {}) {
+  const ctx = policyContext(canonical, opts);
+  const rules = buildAssuranceRules(canonical, ctx, { profile: ctx.profile, mode: ctx.assurance });
+  const groups = rules.length ? [{ name: `${ctx.svc}_assurance`, interval: ASSURANCE_GROUP_INTERVAL, rules }] : [];
+  return banner('Prometheus rules — assurance', canonical) + emitYaml({ groups });
+}
+
+export function compileAssuranceGrafanaManagedRules(canonical, opts = {}) {
+  const ctx = policyContext(canonical, { ...opts, keepFiringFor: false });
+  const rules = buildAssuranceRules(canonical, ctx, { profile: ctx.profile, mode: ctx.assurance });
+  const groups = rules.length ? [grafanaGroupOf(`${ctx.svc}_assurance`, rules.map(r => grafanaAssuranceRule(ctx.svc, r)), ASSURANCE_GROUP_INTERVAL)] : [];
+  return bannerForGrafana('Grafana-managed rules — assurance', canonical) + emitYaml({ apiVersion: 1, groups });
+}
+
+// ----------------------------------------------------------------
 // Compile catalog — enumerates every individually compilable
 // artifact in the pack. The studio renders this as a left-nav tree;
 // each leaf identifies its target platform explicitly so the
@@ -858,6 +909,18 @@ export function compileCatalog(canonical) {
     // threshold SLOs (which now burn), for distribution/custom ones (which don't)
     // and for records the pack declares itself (deduplicated, as in the files).
     const ctx = policyContext(canonical);
+    // Step 5: the assurance group as its own item (the per-item file the
+    // studio deploys), unless the pack turned it off.
+    if (ctx.assurance !== 'off') {
+      const assurance = buildAssuranceRules(canonical, ctx, { profile: ctx.profile, mode: ctx.assurance });
+      const products = ctx.assurance === 'watchdog-only' ? [] : assuranceProducts(canonical, ctx.profile, declaredScrapeJobs(canonical));
+      rulesItems.push({
+        id: 'assurance',
+        kind: 'rules-assurance',
+        label: 'Assurance · watchdog + instrument liveness',
+        subtitle: `${assurance.length} alert${assurance.length === 1 ? '' : 's'}${products.length ? ` · ${products.join(', ')}` : ' · watchdog only'}`,
+      });
+    }
     for (const slo of canonical.spec.slos || []) {
       const { sliLevel, sloLevel } = splitRecordingRulesForSlo(canonical, slo, ctx);
       const recCount = sliLevel.length + sloLevel.length;
@@ -976,8 +1039,14 @@ export function compileArtifact(canonical, { group, flavor, artifact, dashboardI
         const idx = parseInt(artifact.slice(9), 10);
         return { contentType: 'application/x-yaml', filename: `${serviceSlug(canonical)}.declared-${idx}.rules.yaml`, content: compileDeclaredPrometheusRule(canonical, idx) };
       }
+      if (artifact === 'assurance') {
+        return { contentType: 'application/x-yaml', filename: `${serviceSlug(canonical)}.assurance.rules.yaml`, content: compileAssurancePrometheusRules(canonical, opts) };
+      }
     }
     if (flavor === 'grafana-managed') {
+      if (artifact === 'assurance') {
+        return { contentType: 'application/x-yaml', filename: `${serviceSlug(canonical)}.assurance.grafana-rules.yaml`, content: compileAssuranceGrafanaManagedRules(canonical, opts) };
+      }
       if (!artifact || artifact === 'all') {
         return { contentType: 'application/x-yaml', filename: `${serviceSlug(canonical)}.grafana-rules.yaml`, content: compileGrafanaManagedRules(canonical, opts) };
       }

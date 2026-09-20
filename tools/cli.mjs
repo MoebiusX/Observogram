@@ -93,6 +93,8 @@ Usage:
   packc x-ray    <repo-dir>       Crawl a repo into a draft pack
   packc compile  <file> [target]  Compile a pack into a backend artefact
   packc journey  run <name>       Run a saved drift check (exit 0 pass · 1 gate-failed · 2 error)
+  packc journey  run --all        Run every saved journey in sequence (exit = the worst of them)
+  packc journey  schedule <name>  Print cron / schtasks / GitHub Actions / CronJob snippets from its schedule:
   packc journey  list             List saved journeys + their last outcome
   packc serve                     Boot the studio (Express server)
   observogram                     Same as \`packc serve\`
@@ -117,15 +119,20 @@ async function runJourneyCommand([sub, ...args]) {
       // never-run journey.
       let loadError = null;
       try { journeyLib.loadJourneyDef(n); } catch (e) { loadError = e.message; }
+      // Step 5: the delivery outcome of the last run, only when the record
+      // carries a notify object (a record written without one says nothing
+      // — never "skipped").
+      const notifySeg = last && journeyLib.notifyStatusLine(last) ? ` · ${journeyLib.notifyStatusLine(last)}` : '';
       const tail = loadError ? `(definition does not load: ${loadError})`
         : !last ? '(never run)'
-        : last.outcome === 'vantage-lost' ? `vantage-lost · ${last.startedAt} · ${last.error || 'live source unreachable'}`
+        : last.outcome === 'vantage-lost' ? `vantage-lost · ${last.startedAt} · ${last.error || 'live source unreachable'}${notifySeg}`
         : `${last.outcome} · ${last.startedAt} · alignment ${last.drift?.alignmentPct}% · ${journeyLib.stackStatusLine(last)} · ${journeyLib.chainStatusLine(last)}`
           // Step 4: the top candidate cause, only when a chain got worse —
           // a quiet run has nothing to explain — and, whenever the vantage
           // itself changed, that change beside it (never as a cause).
           + (journeyLib.transitionGotWorse(last) ? ` · ${journeyLib.causeLine(last)}` : '')
-          + (journeyLib.vantageLine(last) ? ` · ${journeyLib.vantageLine(last)}` : '');
+          + (journeyLib.vantageLine(last) ? ` · ${journeyLib.vantageLine(last)}` : '')
+          + notifySeg;
       console.log(`${n}\t${tail}`);
     }
     return;
@@ -133,7 +140,35 @@ async function runJourneyCommand([sub, ...args]) {
   if (sub === 'run') {
     const ref = args.find(a => !a.startsWith('--'));
     const asJson = args.includes('--json');
-    if (!ref) { console.error('usage: packc journey run <name|path/to/file.journey.yaml> [--json]'); process.exit(2); }
+    // Step 5: `run --all` — every saved journey, sequentially, in one
+    // workspace (the CronJob's `concurrencyPolicy: Forbid` keeps two
+    // fleets apart; an interleaved POST /api/journeys/:name/run is
+    // tolerated by the prune logic). One journey's failure never stops the
+    // loop; the exit code is the worst of them (0 pass · 1 gate failed ·
+    // 2 error, a definition that does not load included).
+    if (args.includes('--all') && !ref) {
+      const names = journeyLib.listJourneys();
+      if (!names.length) { console.log('(no journeys saved — add .observogram/journeys/<name>.journey.yaml)'); process.exit(0); }
+      const results = [];
+      let worst = 0;
+      for (const n of names) {
+        let record = null, error = null, exitCode;
+        try {
+          record = await journeyLib.runJourney(journeyLib.loadJourneyDef(n));
+          exitCode = record.outcome === 'pass' ? 0 : 1;
+        } catch (e) {
+          error = e.message;
+          exitCode = 2;
+          console.error(`packc journey ${n}: ${e.message}`);
+        }
+        if (!asJson) process.stdout.write(`## journey ${n}\n\n${record ? journeyLib.renderJourneyMarkdown(record) : `_error: ${error}_`}\n\n`);
+        results.push({ name: n, record, error, exitCode });
+        worst = Math.max(worst, exitCode);
+      }
+      if (asJson) process.stdout.write(JSON.stringify(results, null, 2) + '\n');
+      process.exit(worst);
+    }
+    if (!ref) { console.error('usage: packc journey run <name|path/to/file.journey.yaml> [--json] | packc journey run --all [--json]'); process.exit(2); }
     try {
       const def = journeyLib.loadJourneyDef(ref);
       const record = await journeyLib.runJourney(def);
@@ -144,7 +179,53 @@ async function runJourneyCommand([sub, ...args]) {
       process.exit(2);
     }
   }
-  console.error('usage: packc journey <run|list> …');
+  // Step 5: `schedule <name|path> [--format cron|schtasks|actions|k8s|all] [--json]`
+  // — the delegated form of scheduling (VALUE_BACKLOG 11): ready-made
+  // snippets from the journey's schedule:. Without a schedule: every
+  // snippet carries the placeholder */15 * * * *, marked as such, and a
+  // stderr note says so (exit 0 — nothing fabricated is presented as the
+  // journey's cadence).
+  if (sub === 'schedule') {
+    // `--format` takes a value: skip that slot when locating the journey ref,
+    // so `schedule --format cron <name>` and `schedule <name> --format cron`
+    // both work (fix round 0: the former read `cron` as the journey name).
+    const fmtIdx = args.indexOf('--format');
+    const ref = args.find((a, i) => !a.startsWith('--') && !(fmtIdx >= 0 && i === fmtIdx + 1));
+    const asJson = args.includes('--json');
+    const format = fmtIdx >= 0 ? String(args[fmtIdx + 1] || '') : 'all';
+    if (!ref) { console.error('usage: packc journey schedule <name|path/to/file.journey.yaml> [--format cron|schtasks|actions|k8s|all] [--json]'); process.exit(2); }
+    const snippetsLib = await import('./lib/schedule-snippets.mjs');
+    if (format !== 'all' && !snippetsLib.SNIPPET_FORMATS.includes(format)) { console.error(`packc journey schedule: unknown --format ${format} (cron | schtasks | actions | k8s | all)`); process.exit(2); }
+    let def;
+    try { def = journeyLib.loadJourneyDef(ref); } catch (e) { console.error(`packc journey: ${e.message}`); process.exit(2); }
+    const { parseSchedule } = await import('./lib/schedule.mjs');
+    const { brandEnv } = await import('./lib/brand-env.mjs');
+    const parsed = def.schedule === undefined || def.schedule === null ? null : parseSchedule(def.schedule);
+    const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
+    const envNames = [...new Set([def.packB?.mcp?.authEnv, def.notify?.urlEnv, def.notify?.authEnv].filter(Boolean))];
+    const input = {
+      name: def.name,
+      cron: parsed?.cron ?? null, timezone: parsed?.timezone ?? null, every: parsed?.every ?? null, cadenceNote: parsed?.cadenceNote ?? null,
+      envNames,
+      nodePath: process.execPath, cliPath: resolve(ROOT, 'tools/cli.mjs'), cwd: process.cwd(),
+      workspace: brandEnv('WORKSPACE') || '.observogram',
+      image: `observogram:${pkg.version}`, namespace: 'observability',
+      retention: brandEnv('JOURNEY_RUN_RETENTION') || null,
+      placeholder: !parsed,
+      source: def.__source || null,
+    };
+    if (!parsed) console.error(`packc journey schedule: ${def.name} declares no schedule: — printing the placeholder ${snippetsLib.PLACEHOLDER_CRON}; edit before installing`);
+    const snippets = snippetsLib.scheduleSnippets(input);
+    if (asJson) {
+      process.stdout.write(JSON.stringify({ name: def.name, source: def.__source || null, schedule: parsed, placeholder: !parsed, envNames, snippets: format === 'all' ? snippets : { [format]: snippets[format] } }, null, 2) + '\n');
+      process.exit(0);
+    }
+    if (format !== 'all') { process.stdout.write(snippets[format]); process.exit(0); }
+    const titles = { cron: 'cron', schtasks: 'schtasks (Windows Task Scheduler)', actions: 'github-actions', k8s: 'kubernetes-cronjob' };
+    for (const f of snippetsLib.SNIPPET_FORMATS) process.stdout.write(`## ${titles[f]}\n\n${snippets[f]}\n`);
+    process.exit(0);
+  }
+  console.error('usage: packc journey <run|schedule|list> …');
   process.exit(2);
 }
 

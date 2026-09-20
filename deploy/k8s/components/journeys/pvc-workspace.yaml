@@ -1,0 +1,30 @@
+# The workspace both the studio and the journeys CronJob mount at
+# OBSERVOGRAM_WORKSPACE=/workspace: journeys/<name>.journey.yaml, runs/<name>/
+# (one JSON per run + live/ snapshots), deploys.jsonl, users.json, packs/.
+#
+# Access mode: ReadWriteOnce is what every storage class offers. With RWO the
+# CronJob pod must land on the studio's node or its volume attach fails —
+# cronjob-journeys.yaml carries the podAffinity for that, commented; uncomment
+# it (or switch to ReadWriteMany where the storage class offers it, and drop
+# the affinity).
+#
+# Sizing: 1Gi is a placeholder, not a measurement. The workspace grows as
+#   journeys × OBSERVOGRAM_JOURNEY_RUN_RETENTION (default 1000)
+#            × (one run record + an optional live/ snapshot of Pack B)
+# Measure one record and one snapshot from a real run of YOUR journeys
+# (`ls -l <workspace>/runs/<name>/` after the first scheduled run) and size
+# from that — no number here is invented.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: observabilitypack-studio-workspace
+  labels:
+    app.kubernetes.io/name: observabilitypack-studio
+    app.kubernetes.io/component: journeys
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  # storageClassName: <your class>   # omit to use the cluster default

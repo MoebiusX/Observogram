@@ -44,6 +44,32 @@
 //                               #   transitions (default) — first run, any chain
 //                               #   verdict change, gate failure, or after a
 //                               #   vantage loss · always · never
+//   schedule: "*/15 * * * *"    # step 5: the cadence this journey is MEANT to run at.
+//                               #   Scheduling is delegated, not built (VALUE_BACKLOG 11):
+//                               #   nothing in the server or this module fires it —
+//                               #   `packc journey schedule <name>` prints the cron /
+//                               #   schtasks / GitHub Actions / CronJob snippet from it,
+//                               #   and the journeys view derives the cadence a sampled
+//                               #   posture budget needs. Also { cron, timezone? } or
+//                               #   { every: <N>m|<N>h|<N>d } (tools/lib/schedule.mjs).
+//   stackBudget: { objective: 0.99, window: 30d }
+//                               # optional, pairs with schedule: the sampled posture
+//                               #   budget the journeys view prints per gated stack row
+//                               #   (stack-evidence.mjs stackPostureBudget) — a posture
+//                               #   line, signal not verdict, never a gate.
+//   notify:                     # step 5: early-warning delivery — one bounded POST per run
+//     urlEnv: MY_JOURNEY_WEBHOOK_URL     # env var NAME holding the URL (required; a literal
+//                                        #   url:/token:/headers: is refused at load)
+//     authEnv: MY_JOURNEY_WEBHOOK_TOKEN  # optional; Authorization: Bearer <value>
+//     on: transitions                    # transitions (default) | breach | always
+//     format: json                       # json (default) | text (one line + markdown body)
+//     timeoutMs: 5000                    # per attempt, clamp [1000, 60000]; one retry on
+//                                        #   network error / 429 / 5xx (worst case 2× + connect)
+//     studioUrl: https://studio.example  # optional non-secret literal → links in the payload
+//   The decision table and the payload live in tools/lib/journey-notify.mjs
+//   (browser-safe); env vars are resolved at RUN time only, never at load,
+//   and the outcome lands on the record as `notify` — written AFTER the
+//   record itself is on disk (write → post → rewrite).
 //
 // Vantage: when Pack B is a live MCP source and the fetch itself fails
 // (endpoint down, core tools unavailable), the run still leaves a record
@@ -64,6 +90,13 @@ import { crawlFiles } from './crawler.mjs';
 import { baseWorkspacePath, brandEnv } from './brand-env.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from './contracts/stack-self-metrics.mjs';
 import { formatStackValue } from './stack-evidence.mjs';
+import { parseSchedule, windowMs } from './schedule.mjs';
+import {
+  NOTIFY_POLICIES, NOTIFY_DEFAULT_POLICY, NOTIFY_FORMATS, NOTIFY_DEFAULT_FORMAT,
+  NOTIFY_TIMEOUT_DEFAULT_MS, NOTIFY_TIMEOUT_MIN_MS, NOTIFY_TIMEOUT_MAX_MS,
+  NOTIFY_KEYS, NOTIFY_FORBIDDEN_KEYS, ENV_NAME_RE,
+  notifyDecision, buildNotifyPayload, renderNotifyText, redactUrlCredentials,
+} from './journey-notify.mjs';
 import { branchRecordsFromGraph, chainSummary, diffRunBranches, rankCauses, deploysInWindow, topCause } from './chain-history.mjs';
 import { computeDiagnosticGrade, computePostureMatrix, partialLiveEvidence, DIAGNOSTIC_PASS_SCORE_THRESHOLD } from '../../studio/diagnostic-grade.mjs';
 import { sliBaseOfSloId } from '../../studio/verify-deploy.mjs';
@@ -131,8 +164,170 @@ export function loadJourneyDef(ref) {
   if (def.keepLivePack !== undefined && !KEEP_LIVE_PACK_POLICIES.includes(def.keepLivePack)) {
     throw new Error(`journey ${def.name}: keepLivePack must be one of ${KEEP_LIVE_PACK_POLICIES.join(', ')} (got ${JSON.stringify(def.keepLivePack)})`);
   }
+  // Step 5: a typo'd or malformed schedule / stackBudget block is a
+  // load-time configuration error (CLI `list` prints it, GET /api/journeys
+  // puts it in loadError, capture answers 400) — never a run that silently
+  // has no cadence.
+  if (def.schedule !== undefined) validateSchedule(def.schedule, def.name);
+  if (def.stackBudget !== undefined) validateStackBudget(def.stackBudget, def.name);
+  if (def.notify !== undefined) validateNotify(def.notify, def.name);
   def.__source = source;
   return def;
+}
+
+// Step 5: the notify policy vocabulary, re-exported from the browser-safe
+// module so the CLI, the server and the tests keep one import.
+export { NOTIFY_POLICIES, NOTIFY_DEFAULT_POLICY, NOTIFY_FORMATS, NOTIFY_TIMEOUT_DEFAULT_MS };
+
+// Step 5: `notify:` — validated at load time. Secrets never live in a
+// journey file: a literal url/token/headers key is refused with the env-var
+// alternative named; urlEnv (and authEnv) must be env var NAMES, which are
+// resolved at run time only (resolveNotifyTarget), never here.
+export function validateNotify(value, journeyName = '?') {
+  const where = `journey ${journeyName}: notify`;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${where} must be a mapping with urlEnv (got ${JSON.stringify(value)})`);
+  for (const k of Object.keys(value)) {
+    if (NOTIFY_FORBIDDEN_KEYS[k]) throw new Error(`${where}.${k} is not allowed — ${NOTIFY_FORBIDDEN_KEYS[k]} (secrets never live in a journey file)`);
+    if (!NOTIFY_KEYS.includes(k)) throw new Error(`${where}.${k} is not a known key (known: ${NOTIFY_KEYS.join(', ')})`);
+  }
+  if (typeof value.urlEnv !== 'string' || !ENV_NAME_RE.test(value.urlEnv)) throw new Error(`${where}.urlEnv must name an environment variable (got ${JSON.stringify(value.urlEnv)})`);
+  if (value.authEnv !== undefined && (typeof value.authEnv !== 'string' || !ENV_NAME_RE.test(value.authEnv))) throw new Error(`${where}.authEnv must name an environment variable (got ${JSON.stringify(value.authEnv)})`);
+  if (value.on !== undefined && !NOTIFY_POLICIES.includes(value.on)) throw new Error(`${where}.on must be one of ${NOTIFY_POLICIES.join(', ')} (got ${JSON.stringify(value.on)})`);
+  if (value.format !== undefined && !NOTIFY_FORMATS.includes(value.format)) throw new Error(`${where}.format must be one of ${NOTIFY_FORMATS.join(', ')} (got ${JSON.stringify(value.format)})`);
+  if (value.timeoutMs !== undefined && !(Number.isInteger(value.timeoutMs) && value.timeoutMs > 0)) throw new Error(`${where}.timeoutMs must be a positive integer (ms; clamped to [${NOTIFY_TIMEOUT_MIN_MS}, ${NOTIFY_TIMEOUT_MAX_MS}]) (got ${JSON.stringify(value.timeoutMs)})`);
+  if (value.studioUrl !== undefined) {
+    if (typeof value.studioUrl !== 'string' || !/^https?:\/\/[^\s@/]+(?:\/\S*)?$/.test(value.studioUrl)) {
+      throw new Error(`${where}.studioUrl must be a plain http(s) URL without credentials (got ${JSON.stringify(value.studioUrl)})`);
+    }
+  }
+  return value;
+}
+
+// Step 5: the run-time target of a notify block — env vars resolved NOW,
+// kept in a local by the caller, never on `def` or the record. An unset
+// urlEnv/authEnv is a configuration error of the same class as
+// packB.mcp.authEnv (exit 2, no record). null when the definition has no
+// notify block.
+export function resolveNotifyTarget(def) {
+  const n = def?.notify;
+  if (!n) return null;
+  const url = process.env[n.urlEnv];
+  if (!url) throw new Error(`journey ${def.name}: notify.urlEnv names ${n.urlEnv}, but that env var is not set`);
+  const auth = n.authEnv ? (process.env[n.authEnv] || null) : null;
+  if (n.authEnv && !auth) throw new Error(`journey ${def.name}: notify.authEnv names ${n.authEnv}, but that env var is not set`);
+  const format = NOTIFY_FORMATS.includes(n.format) ? n.format : NOTIFY_DEFAULT_FORMAT;
+  const raw = Number.isInteger(n.timeoutMs) ? n.timeoutMs : NOTIFY_TIMEOUT_DEFAULT_MS;
+  return {
+    url,
+    headers: {
+      'Content-Type': format === 'text' ? 'text/plain; charset=utf-8' : 'application/json',
+      ...(auth ? { Authorization: `Bearer ${auth}` } : {}),
+    },
+    on: NOTIFY_POLICIES.includes(n.on) ? n.on : NOTIFY_DEFAULT_POLICY,
+    format,
+    timeoutMs: Math.min(NOTIFY_TIMEOUT_MAX_MS, Math.max(NOTIFY_TIMEOUT_MIN_MS, raw)),
+    urlEnv: n.urlEnv,
+    studioUrl: typeof n.studioUrl === 'string' ? n.studioUrl.replace(/\/+$/, '') : null,
+  };
+}
+
+// Step 5: the bounded POST. One AbortController per attempt; attempt 2
+// only after a network error / timeout, a 429 or a 5xx — any other 4xx is
+// final (the receiver understood and refused). Never throws: the verdict
+// already exists and a notification failure must never change it.
+// `fetchImpl` is injectable for tests.
+export async function postNotification({ url, headers = {}, body = '', timeoutMs = NOTIFY_TIMEOUT_DEFAULT_MS, fetchImpl = globalThis.fetch } = {}) {
+  const t0 = Date.now();
+  let httpStatus = null;
+  let error = null;
+  let attempts = 0;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    attempts = attempt;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const res = await fetchImpl(url, { method: 'POST', headers, body, signal: ac.signal, redirect: 'manual' });
+      httpStatus = typeof res?.status === 'number' ? res.status : null;
+      // Drain the body so the connection can be reused/closed; still under
+      // this attempt's timer.
+      try { await res.arrayBuffer(); } catch { /* body is not the evidence */ }
+      if (res.ok) return { sent: true, httpStatus, attempts, tookMs: Date.now() - t0, error: null };
+      error = `HTTP ${httpStatus}`;
+      if (!(httpStatus === 429 || httpStatus >= 500)) break;
+    } catch (e) {
+      error = ac.signal.aborted ? `timeout after ${timeoutMs}ms` : redactUrlCredentials(String(e?.cause?.message || e?.message || e));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return { sent: false, httpStatus, attempts, tookMs: Date.now() - t0, error };
+}
+
+// The one-line summary a notification leads with:
+// `<journey>: <outcome> · <chain line> · <cause line> · <vantage line>`.
+function notifyTextLine(record) {
+  const bits = [`${record.journey}: ${record.outcome}`];
+  if (record.outcome === 'vantage-lost') bits.push(redactUrlCredentials(record.error || 'live source unreachable'));
+  else bits.push(chainStatusLine(record));
+  if (transitionGotWorse(record)) bits.push(causeLine(record));
+  const v = vantageLine(record);
+  if (v) bits.push(v);
+  return bits.join(' · ');
+}
+
+// Step 5: decide, build, post — and report on the record as `notify`:
+// { status: sent|skipped|failed, reason, triggers, httpStatus, attempts,
+//   tookMs, urlEnv, error }. The URL itself never lands on the record —
+// only the env var NAME. Never throws: a thrown notifier lands in `error`.
+export async function deliverNotification(def, target, record, previousRun, notifier = postNotification) {
+  if (!target) return null;
+  const decision = notifyDecision({ policy: target.on, record, previousRun });
+  const base = { status: 'skipped', reason: decision.reason, triggers: decision.triggers, httpStatus: null, attempts: 0, tookMs: 0, urlEnv: target.urlEnv, error: null };
+  if (!decision.send) return base;
+  const links = target.studioUrl
+    ? { runs: `${target.studioUrl}/api/journeys/${encodeURIComponent(def.name)}/runs?limit=1`, journey: `${target.studioUrl}/#journeys` }
+    : {};
+  const payload = buildNotifyPayload({ record, previousRun, decision, links, text: notifyTextLine(record) });
+  const body = target.format === 'text' ? renderNotifyText(payload) : JSON.stringify(payload);
+  try {
+    const r = await notifier({ url: target.url, headers: target.headers, body, timeoutMs: target.timeoutMs });
+    return {
+      ...base,
+      status: r?.sent ? 'sent' : 'failed',
+      httpStatus: typeof r?.httpStatus === 'number' ? r.httpStatus : null,
+      attempts: typeof r?.attempts === 'number' ? r.attempts : 0,
+      tookMs: typeof r?.tookMs === 'number' ? r.tookMs : 0,
+      error: r?.sent ? null : redactUrlCredentials(r?.error ?? 'notifier returned no result'),
+    };
+  } catch (e) {
+    return { ...base, status: 'failed', attempts: 1, error: redactUrlCredentials(String(e?.message || e)) };
+  }
+}
+
+// Step 5: `schedule:` — delegated to tools/lib/schedule.mjs (the studio
+// uses the same parser at /lib). Throws `journey <name>: schedule must be
+// …` with the offending value.
+export function validateSchedule(value, journeyName = '?') {
+  try { return parseSchedule(value); }
+  catch (e) { throw new Error(`journey ${journeyName}: ${e.message}`); }
+}
+
+// Step 5: `stackBudget: { objective, window }` — the inputs of a sampled
+// posture budget (stack-evidence.mjs stackPostureBudget). Stored as
+// declared; objective in [0, 1), window <N>m|<N>h|<N>d; nothing else.
+export function validateStackBudget(value, journeyName = '?') {
+  const where = `journey ${journeyName}: stackBudget`;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${where} must be a mapping { objective, window } (got ${JSON.stringify(value)})`);
+  for (const k of Object.keys(value)) {
+    if (k !== 'objective' && k !== 'window') throw new Error(`${where}.${k} is not a known key (known: objective, window)`);
+  }
+  if (!(typeof value.objective === 'number' && Number.isFinite(value.objective) && value.objective >= 0 && value.objective < 1)) {
+    throw new Error(`${where}.objective must be a number in [0, 1) (got ${JSON.stringify(value.objective)})`);
+  }
+  if (typeof value.window !== 'string' || windowMs(value.window) === null) {
+    throw new Error(`${where}.window must be <N>m, <N>h or <N>d (got ${JSON.stringify(value.window)})`);
+  }
+  return { objective: value.objective, window: value.window };
 }
 
 // Step 4: when the run keeps a snapshot of Pack B beside its record
@@ -613,10 +808,14 @@ export function pruneLiveSnapshots(recordFiles, liveFiles) {
 
 // ---------- the run ----------
 
-export async function runJourney(def, { baseDir } = {}) {
+export async function runJourney(def, { baseDir, notifier = postNotification } = {}) {
   def.__baseDir = baseDir || (def.__source ? dirname(def.__source) : '.');
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
+  // Step 5: the notify target is resolved before anything else — an unset
+  // urlEnv/authEnv is a configuration error (exit 2, no record), like an
+  // unset packB.mcp.authEnv. Kept in this local only.
+  const notifyTarget = resolveNotifyTarget(def);
 
   const a = await resolvePackA(def, def.__baseDir);
   let b;
@@ -627,7 +826,8 @@ export async function runJourney(def, { baseDir } = {}) {
     // missing pack file or an unset authEnv is a configuration error and
     // leaves no record.
     if (def.packB?.mcp && e?.vantageLost) {
-      writeRunRecord(def.name, startedAt, {
+      const previousRun = readJourneyRuns(def.name, { limit: 1 })[0] || null;
+      const lost = {
         journey: def.name,
         startedAt,
         tookMs: Date.now() - t0,
@@ -637,7 +837,14 @@ export async function runJourney(def, { baseDir } = {}) {
         packB: { source: `mcp:${def.packB.mcp.url}` },
         scope: { env: def.env || null, service: def.service || null, scopeMode: def.scopeMode || null },
         gate: { thresholds: def.gate || {}, breaches: [] },
-      });
+      };
+      // Same write → post → rewrite order as the main path (see below).
+      if (!notifyTarget) lost.notify = null;
+      writeRunRecord(def.name, startedAt, lost);
+      if (notifyTarget) {
+        lost.notify = await deliverNotification(def, notifyTarget, lost, previousRun, notifier);
+        writeRunRecord(def.name, startedAt, lost);
+      }
     }
     throw e;
   }
@@ -812,7 +1019,18 @@ export async function runJourney(def, { baseDir } = {}) {
   }
   if (livePackError) record.historyError = livePackError;
 
+  // Step 5: early-warning delivery. `notify` is appended AFTER causes /
+  // historyError (the pinned key run is untouched) and the record is on
+  // disk BEFORE anything touches the wire: write → post → rewrite (same
+  // stem, overwrite; pruning is idempotent). Readers must treat a record
+  // WITHOUT a `notify` key as "unknown" (a crash between the two writes),
+  // never as "skipped"; `null` means the definition has no notify block.
+  if (!notifyTarget) record.notify = null;
   writeRunRecord(def.name, startedAt, record);
+  if (notifyTarget) {
+    record.notify = await deliverNotification(def, notifyTarget, record, previousRun, notifier);
+    writeRunRecord(def.name, startedAt, record);
+  }
   return record;
 }
 
@@ -1031,6 +1249,7 @@ export function renderJourneyMarkdown(r) {
       `| Took | ${r.tookMs ?? '?'}ms |`,
       '',
       '_No verdict: the live vantage point did not answer, so nothing about the declared artefacts could be verified. Recorded so the loss is a point in history, not a gap._',
+      ...notifyLines(r),
     ].join('\n');
   }
   const icon = r.outcome === 'pass' ? '✅' : '❌';
@@ -1059,8 +1278,29 @@ export function renderJourneyMarkdown(r) {
     lines.push('', '### Gate breaches', '');
     for (const b of r.gate.breaches) lines.push(`- **${mdCell(b.criterion)}** — ${mdCell(b.detail)}`);
   }
+  lines.push(...notifyLines(r));
   lines.push('', '_Verification evidence (declared vs observed); not incident-validated._');
   return lines.join('\n');
+}
+
+// Step 5: the delivery outcome of a run in one line — only when the
+// record carries a `notify` object. `null` (no notify block) prints
+// nothing; a record WITHOUT the key (written before delivery, or by a
+// pre-step-5 runner) prints nothing either — never "skipped".
+function notifyLines(r) {
+  const n = r?.notify;
+  if (!n || typeof n !== 'object') return [];
+  if (n.status === 'sent') return ['', `notify: sent (${mdCell(n.httpStatus ?? '?')}) — ${mdCell(n.reason)}`];
+  if (n.status === 'failed') return ['', `notify: failed after ${mdCell(n.attempts ?? 0)} attempt${n.attempts === 1 ? '' : 's'} — ${mdCell(n.error || 'no error recorded')}`];
+  return ['', `notify: ${mdCell(n.status)} — ${mdCell(n.reason)}`];
+}
+
+// The same in a few words, for `packc journey list`: 'notify sent' /
+// 'notify skipped' / 'notify failed', or null when the record carries no
+// notify object (nothing to append).
+export function notifyStatusLine(record) {
+  const n = record?.notify;
+  return n && typeof n === 'object' && typeof n.status === 'string' ? `notify ${n.status}` : null;
 }
 
 // Every value interpolated into the report that came off the wire or the

@@ -164,6 +164,22 @@ export function catalogToDeployManifest(catalog) {
             deployable,
             source: 'Repo',
           });
+        } else if (it.kind === 'rules-assurance') {
+          // Step 5: the assurance group (Watchdog + instrument liveness) as
+          // one alerting row — its own compiled file, deployed like a per-SLO
+          // alert file.
+          out.push({
+            key: 'rules:alert:assurance',
+            type: 'alert',
+            name: it.label,
+            id: 'assurance',
+            group: 'rules',
+            flavor: 'prometheus',
+            artifact: 'assurance',
+            scope: 'alerting',
+            deployable,
+            source: 'Repo',
+          });
         }
       }
     } else if (g.id === 'dashboards') {

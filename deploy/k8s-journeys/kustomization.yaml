@@ -1,0 +1,37 @@
+# Base deploy + the opt-in scheduled-journeys component (workspace PVC,
+# journeys CronJob, studio workspace mount):
+#   kubectl apply -k deploy/k8s-journeys
+# `kubectl apply -k deploy/k8s` (the base) stays byte-identical.
+#
+# Why a sibling directory and not deploy/k8s/overlays/journeys: kustomize
+# refuses a kustomization whose resource is a PARENT directory ("cycle
+# detected: candidate root … contains visited root …"), and the base must stay
+# where it is. The component itself lives under deploy/k8s/components/.
+#
+# `namespace:` and `labels:` are repeated from the base ON PURPOSE: the base's
+# transformers apply to the base's own resources only, so without them the
+# component's PVC and CronJob would render namespace-less (and land in the
+# kubeconfig's current namespace, typically `default`) while the patched studio
+# Deployment in `observability` claims a PVC that does not exist there —
+# pod Pending on an unbound claim. The same holds for `images:`: the base's
+# retag would leave the CronJob on whatever tag the component file says, so
+# the entry is repeated here too. tools/test-deploy-manifests.mjs pins all
+# three values equal to the base's.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: observability
+
+resources:
+  - ../k8s
+
+components:
+  - ../k8s/components/journeys
+
+images:
+  - name: observogram
+    newTag: 0.4.0
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: observabilitypack-studio

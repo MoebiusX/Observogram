@@ -1,0 +1,33 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Opt-in component: scheduled journeys (roadmap step 5 — early-warning
+# delivery). Scheduling is DELEGATED to Kubernetes (docs/VALUE_BACKLOG.md item
+# 11): there is no timer in the studio; a CronJob runs `packc journey run --all`
+# against the SAME workspace the studio reads, so every run lands in the
+# Journeys view.
+#
+# Not applied by `kubectl apply -k deploy/k8s`. Use the sibling overlay
+# (kustomize refuses an overlay nested under the base it references):
+#   kubectl apply -k deploy/k8s-journeys
+#
+# What it adds:
+#   pvc-workspace.yaml           a PVC for the workspace (journeys/, runs/, deploys.jsonl)
+#   cronjob-journeys.yaml        the fleet CronJob (*/15 by default) running every saved journey
+#   patch-studio-workspace.yaml  mounts the same PVC into the studio at the same path
+#
+# Hard prerequisite: BOTH processes mount the same PVC at the same
+# OBSERVOGRAM_WORKSPACE (/workspace) — a CronJob writing to a path the studio
+# does not read produces records nobody sees (and /app/.observogram is not
+# creatable by uid 1000: the image only chowns /app/examples).
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - pvc-workspace.yaml
+  - cronjob-journeys.yaml
+
+patches:
+  - path: patch-studio-workspace.yaml
+    target:
+      kind: Deployment
+      name: observabilitypack-studio

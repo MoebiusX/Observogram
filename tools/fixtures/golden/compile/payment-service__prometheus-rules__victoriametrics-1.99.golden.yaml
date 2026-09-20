@@ -448,3 +448,83 @@ groups:
           on_projected_breach: post_warning
           horizon: 1d
           horizon_declared: 3d
+  - name: payment_service_assurance
+    interval: 30s
+    rules:
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+          kind: assurance
+          instrument: watchdog
+          service: payment-service
+          pack: payment-service
+        annotations:
+          summary: payment-service assurance watchdog — always firing
+          description: "Dead-man contract for pack payment-service: this alert fires continuously by construction. Route alertname=\"Watchdog\", pack=\"payment-service\" to a heartbeat receiver and page when the heartbeat STOPS — silence means the ruler, Alertmanager or the notification path is down. Until a heartbeat route is added at deploy time it falls to the compiled Alertmanager's null receiver."
+          runbook: (supply runbook URL)
+      - alert: payment_service_scrape_target_down
+        expr: up{job=~"payment-api"} == 0
+        for: 2m
+        labels:
+          severity: SEV2
+          kind: assurance
+          instrument: scrape
+          service: payment-service
+          pack: payment-service
+        annotations:
+          summary: A declared scrape target of payment-service is down
+          description: "up == 0 for {{ $labels.job }}/{{ $labels.instance }} for 2m. The pack declares scrape job(s) payment-api: every SLI, recording rule and burn alert of payment-service reading them is blind while this fires."
+          runbook: (supply runbook URL)
+      - alert: payment_service_ruler_silent_victoriametrics
+        expr: absent_over_time(vmalert_recording_rules_errors_total[5m]) or absent_over_time(vmalert_alerting_rules_errors_total[5m])
+        for: 10m
+        labels:
+          severity: SEV2
+          kind: assurance
+          instrument: ruler/victoriametrics
+          service: payment-service
+          pack: payment-service
+        annotations:
+          summary: victoriametrics ruler instrument silent for payment-service
+          description: "vmalert_recording_rules_errors_total / vmalert_alerting_rules_errors_total has not been scraped for 5m (10m sustained): the victoriametrics ruler that evaluates payment-service's rules is not exposing itself — stopped, unscraped or renamed. Its rules are unproven while this fires. (Stack self-metric row rule_evaluation_failures.)"
+          runbook: (supply runbook URL)
+      - alert: payment_service_notify_silent_victoriametrics
+        expr: absent_over_time(vmalert_alerts_send_errors_total[5m])
+        for: 10m
+        labels:
+          severity: SEV2
+          kind: assurance
+          instrument: notify/victoriametrics
+          service: payment-service
+          pack: payment-service
+        annotations:
+          summary: victoriametrics notify instrument silent for payment-service
+          description: "vmalert_alerts_send_errors_total has not been scraped for 5m (10m sustained): the victoriametrics notify that delivers payment-service's rules is not exposing itself — stopped, unscraped or renamed. Its rules are unproven while this fires. (Stack self-metric row notification_errors.)"
+          runbook: (supply runbook URL)
+      - alert: payment_service_ruler_errors_victoriametrics
+        expr: sum(increase(vmalert_recording_rules_errors_total[5m])) + sum(increase(vmalert_alerting_rules_errors_total[5m])) > 0
+        for: 2m
+        labels:
+          severity: SEV3
+          kind: assurance
+          instrument: ruler/victoriametrics
+          service: payment-service
+          pack: payment-service
+        annotations:
+          summary: victoriametrics rule evaluation errors for payment-service
+          description: "vmalert_recording_rules_errors_total + vmalert_alerting_rules_errors_total increased in the last 5m for 2m: some of payment-service's rules fail to evaluate — a failing rule records nothing and its burn alert can never fire. (Stack self-metric row rule_evaluation_failures.)"
+          runbook: (supply runbook URL)
+      - alert: payment_service_notify_errors_victoriametrics
+        expr: increase(vmalert_alerts_send_errors_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: SEV3
+          kind: assurance
+          instrument: notify/victoriametrics
+          service: payment-service
+          pack: payment-service
+        annotations:
+          summary: victoriametrics notification errors for payment-service
+          description: "vmalert_alerts_send_errors_total increased in the last 5m for 2m: victoriametrics failed to deliver notifications — payment-service's alerts may fire unseen. (Stack self-metric row notification_errors.)"
+          runbook: (supply runbook URL)

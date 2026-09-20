@@ -48,6 +48,7 @@ import {
 } from './workspace.mjs';
 import {
   listJourneys, loadJourneyDef, runJourney, readJourneyRuns, saveJourneyDef, validateGateStack,
+  validateSchedule, validateStackBudget, validateNotify,
 } from '../tools/lib/journey.mjs';
 import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
 import { initAuth, authEnabled, readSession, maybeSeedDefaultAdmin, defaultAdminCredentialActive } from './auth.mjs';
@@ -61,6 +62,8 @@ import { orgWorkspaceRoot } from './tenancy.mjs';
 import { brandEnv } from '../tools/lib/brand-env.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
 import { stackSummary } from '../tools/lib/stack-evidence.mjs';
+import { parseSchedule } from '../tools/lib/schedule.mjs';
+import { NOTIFY_DEFAULT_POLICY, NOTIFY_DEFAULT_FORMAT } from '../tools/lib/journey-notify.mjs';
 import { chainSummary, topCause } from '../tools/lib/chain-history.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -828,6 +831,14 @@ app.post('/api/packs/:id/retrofeed', (req, res) => {
   }
 });
 
+// Step 5: the declared schedule, parsed; null without one. A definition
+// that loaded has already been validated, so this cannot throw — guarded
+// anyway: a listing must never fail on one journey's cadence.
+function parsedSchedule(def) {
+  if (!def || def.schedule === undefined || def.schedule === null) return null;
+  try { return parseSchedule(def.schedule); } catch { return null; }
+}
+
 app.get('/api/journeys', (req, res) => {
   try {
     const journeys = listJourneys().map(name => {
@@ -845,12 +856,26 @@ app.get('/api/journeys', (req, res) => {
         packB: def?.packB?.mcp ? `mcp: ${def.packB.mcp.url}` : (def?.packB?.file || null),
         gate: def?.gate || {},
         scope: { env: def?.env || null, service: def?.service || null, scopeMode: def?.scopeMode || null },
+        // Step 5: the declared cadence (parsed the way the CLI parses it —
+        // cadenceMs null with a note for an irregular cron), the posture
+        // budget inputs and the notify block as env var NAMES only. No
+        // computation here: the journeys view derives the posture line
+        // from the run history with the same browser-safe helpers.
+        schedule: parsedSchedule(def),
+        stackBudget: def?.stackBudget ?? null,
+        notify: def?.notify ? { urlEnv: def.notify.urlEnv, authEnv: def.notify.authEnv ?? null, on: def.notify.on ?? NOTIFY_DEFAULT_POLICY, format: def.notify.format ?? NOTIFY_DEFAULT_FORMAT } : null,
         lastRun: lastRun && {
           startedAt: lastRun.startedAt,
           outcome: lastRun.outcome,
           alignmentPct: lastRun.drift?.alignmentPct ?? null,
           gradeScore: lastRun.grade?.score ?? null,
           breaches: lastRun.gate?.breaches?.length ?? 0,
+          // Step 5: the delivery outcome of the last run — status, HTTP
+          // status, reason. null when the record carries no notify object
+          // (no notify block, or a record written before delivery).
+          notify: lastRun.notify && typeof lastRun.notify === 'object'
+            ? { status: lastRun.notify.status ?? null, httpStatus: lastRun.notify.httpStatus ?? null, reason: lastRun.notify.reason ?? null }
+            : null,
           // Step 3: the stack self-metric samples the last run saw —
           // status, rows that answered data, best row per family. null
           // when the record carries no stackEvidence (file-sourced B,
@@ -942,12 +967,20 @@ app.post('/api/journeys/capture', (req, res) => {
     ...(b.service ? { service: String(b.service) } : {}),
     ...(b.scopeMode ? { scopeMode: String(b.scopeMode) } : {}),
     gate: (b.gate && typeof b.gate === 'object') ? b.gate : { minAlignmentPct: 85 },
+    // Step 5: the delivery keys ride through when the body carries them.
+    ...(b.schedule !== undefined ? { schedule: b.schedule } : {}),
+    ...(b.stackBudget !== undefined ? { stackBudget: b.stackBudget } : {}),
+    ...(b.notify !== undefined ? { notify: b.notify } : {}),
   };
   try {
     // The same validation loadJourneyDef applies: a captured gate that
     // names an unknown stack row must be refused here (400), not saved as
-    // a journey that can never load.
+    // a journey that can never load — likewise a malformed schedule or
+    // stackBudget block.
     if (def.gate.stack !== undefined) validateGateStack(def.gate.stack, name);
+    if (def.schedule !== undefined) validateSchedule(def.schedule, name);
+    if (def.stackBudget !== undefined) validateStackBudget(def.stackBudget, name);
+    if (def.notify !== undefined) validateNotify(def.notify, name);
     const saved = saveJourneyDef(name, def, {
       banner: [
         `Captured from a studio session on ${new Date().toISOString()}.`,

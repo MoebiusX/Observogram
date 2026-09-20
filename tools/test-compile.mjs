@@ -26,6 +26,8 @@ import { compile, compilePrometheusRules, compileOtelCollector,
   compileAlertmanager, compileGrafanaDashboard, listTargets, TARGETS,
   compileSloPrometheusRules, compileGrafanaManagedRules, compileCatalog, compileArtifact } from './lib/compile.mjs';
 import { compileBurnRules, metricPrefix } from './lib/burn-rules.mjs';
+import { metricNamesOf, ASSURANCE_MODES, ASSURANCE_ANNOTATION } from './lib/assurance-rules.mjs';
+import { STACK_SELF_METRIC_PROBES } from './lib/contracts/stack-self-metrics.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -215,6 +217,7 @@ process.stdout.write('\n[policy PromQL] burn-rules.mjs is the single source\n');
   const rules = doc.groups.flatMap(g => g.rules);
   const alerts = rules.filter(r => r.alert);
   const burnAlerts = alerts.filter(a => a.labels?.burn_rate);
+  const assuranceAlerts = alerts.filter(a => a.labels?.kind === 'assurance');
   const records = rules.filter(r => r.record);
   const groupsByName = Object.fromEntries(doc.groups.map(g => [g.name, g]));
 
@@ -290,7 +293,8 @@ process.stdout.write('\n[policy PromQL] burn-rules.mjs is the single source\n');
   };
   const customWarnings = [];
   const customDoc = parseRules(compilePrometheusRules(customPack, { onWarning: (m) => customWarnings.push(m) }));
-  const customRules = customDoc.groups.flatMap(g => g.rules);
+  // (the assurance group aside — step 5 adds it to every file; it is pinned in section 15)
+  const customRules = customDoc.groups.flatMap(g => g.rules).filter(r => r.labels?.kind !== 'assurance');
   assert(customRules.length === 1 && customRules[0].record === 'custom_only:c1:value_5m', 'a custom SLI gets value_5m only', customRules.map(r => r.record || r.alert), ['custom_only:c1:value_5m']);
   assert(customWarnings.length === 1, 'the custom SLI is warned about once', customWarnings, 1);
 
@@ -356,8 +360,13 @@ process.stdout.write('\n[policy PromQL] burn-rules.mjs is the single source\n');
     const theirs = declaredSeries(sliId);
     return theirs ? expr.split(theirs).join(`payment_service:${sli.id.replace(/[^a-zA-Z0-9_]/g, '_')}:value_5m`) : null;
   };
-  const shared = alerts.filter(a => genAlerts[a.alert]);
-  assert(shared.length === alerts.length && shared.length === 10, 'the generator and the compiler emit the same alert names (8 burn + 2 forecast)', shared.length, 10);
+  // Step 5: the parity holds over the POLICY alerts (burn + forecast); the assurance group is the
+  // compiler's own (the generator is not extended — mq-observability-pack's ibmmq.burn.yml and the
+  // reference packs' *.burn.yml stay as they are).
+  const policyAlerts = alerts.filter(a => a.labels?.burn_rate || a.labels?.kind === 'forecast');
+  const shared = policyAlerts.filter(a => genAlerts[a.alert]);
+  assert(shared.length === policyAlerts.length && shared.length === 10, 'the generator and the compiler emit the same policy alert names (8 burn + 2 forecast)', shared.length, 10);
+  assert(alerts.length === policyAlerts.length + assuranceAlerts.length, 'every other alert of the full file is an assurance alert', alerts.length - policyAlerts.length - assuranceAlerts.length, 0);
   const differing = shared.filter(a => normalise(genAlerts[a.alert].expr, a.labels.sli) !== a.expr).map(a => a.alert);
   assert(differing.length === 0, 'every shared alert has byte-identical expr modulo the threshold series name', differing, []);
   assert(shared.filter(a => a.labels.burn_rate && sliOf(a.labels.sli)?.type === 'threshold').length === 4, 'four threshold burn alerts took part in the comparison');
@@ -383,7 +392,8 @@ process.stdout.write('\n[policy PromQL] burn-rules.mjs is the single source\n');
   const burnOf = (p, opts) => {
     const warnings = [];
     const doc = parseRules(compilePrometheusRules(p, { ...opts, onWarning: (m) => warnings.push(m) }));
-    const a = doc.groups.flatMap(g => g.rules).find(r => r.alert);
+    // the first POLICY alert (step 5 adds an assurance group to every file; its Watchdog is not the burn alert under test)
+    const a = doc.groups.flatMap(g => g.rules).find(r => r.alert && r.labels?.kind !== 'assurance');
     return { expr: a?.expr, for: a?.for, alert: a, records: doc.groups.flatMap(g => g.rules).filter(r => r.record), warnings };
   };
   const bare = burnOf(shapePack({ type: 'ratio', good: 'good_total', total: 'req_total' }));
@@ -625,6 +635,143 @@ process.stdout.write('\n[policy PromQL] burn-rules.mjs is the single source\n');
     assert(!hErr && cat?.groups.find(g => g.id === 'rules').items.find(i => i.id === 'slo:api_availability_99_9')?.subtitle === '6 recording · 2 burn-rate · 1 forecast',
            `horizon ${horizon}: compileCatalog counts the forecast without throwing`, hErr?.message || cat?.groups.find(g => g.id === 'rules').items.find(i => i.id === 'slo:api_availability_99_9')?.subtitle);
   }
+}
+
+// 15. Step 5 — the `<svc>_assurance` group: Watchdog, declared-job target-down, instrument liveness
+// from the stack self-metric alias table. Default on; product-gated; opt-out by annotation.
+{
+  const pack = parseYaml(readFileSync(resolve(ROOT, FIXTURES[0].path), 'utf8'));
+  const stripBanner = (text) => text.replace(/^(#[^\n]*\n)+/, '');
+  const rulesOf = (text) => parseYaml(stripBanner(text));
+  const doc = rulesOf(compilePrometheusRules(pack));
+  const groupsByName = Object.fromEntries(doc.groups.map(g => [g.name, g]));
+  const alerts = doc.groups.flatMap(g => g.rules).filter(r => r.alert);
+  const assuranceAlerts = alerts.filter(a => a.labels?.kind === 'assurance');
+  const ag = groupsByName.payment_service_assurance;
+  assert(ag && ag.interval === '30s' && ag.rules.length === 7 && doc.groups[doc.groups.length - 1] === ag,
+         'payment-service emits a payment_service_assurance group at 30s with seven rules, last in the file', ag && ag.rules.map(r => r.alert));
+  assert(assuranceAlerts.map(a => a.alert).join() === 'Watchdog,payment_service_scrape_target_down,payment_service_ruler_silent_prometheus,payment_service_notify_silent_prometheus,payment_service_ruler_stale_prometheus,payment_service_ruler_errors_prometheus,payment_service_notify_errors_prometheus',
+         'the assurance rules come in a fixed order: Watchdog, target-down, silent (ruler, notify), degraded (stale, ruler errors, notify errors)', assuranceAlerts.map(a => a.alert));
+  const wd = ag.rules[0];
+  assert(wd.alert === 'Watchdog' && wd.expr === 'vector(1)' && !('for' in wd) && wd.labels.severity === 'none' && wd.labels.kind === 'assurance' && wd.labels.instrument === 'watchdog' && wd.labels.pack === 'payment-service' && wd.labels.service === 'payment-service',
+         'the Watchdog is vector(1), no for, severity none, kind assurance, instrument watchdog, pack/service labels', wd);
+  assert(/heartbeat receiver/.test(wd.annotations.description) && /alertname="Watchdog", pack="payment-service"/.test(wd.annotations.description) && /null receiver/.test(wd.annotations.description) && wd.annotations.summary === 'payment-service assurance watchdog — always firing',
+         'the Watchdog annotations state the dead-man contract and the null-receiver default');
+  const td = ag.rules[1];
+  assert(td.alert === 'payment_service_scrape_target_down' && td.expr === 'up{job=~"payment-api"} == 0' && td.for === '2m' && td.labels.severity === 'SEV2' && td.labels.instrument === 'scrape' && /payment-api/.test(td.annotations.description),
+         'target-down selects the declared job with =~ even for one job, for 2m, SEV2', td);
+  assert(ag.rules.every(r => r.labels.kind === 'assurance' && r.labels.pack === 'payment-service' && r.labels.service === 'payment-service' && !('keep_firing_for' in r) && typeof r.annotations.summary === 'string' && typeof r.annotations.description === 'string' && r.annotations.runbook === '(supply runbook URL)'),
+         'every assurance rule carries kind/pack/service labels, summary/description/runbook and never keep_firing_for');
+  const byName = Object.fromEntries(ag.rules.map(r => [r.alert, r]));
+  assert(byName.payment_service_ruler_silent_prometheus.expr === 'absent_over_time(prometheus_rule_group_last_evaluation_timestamp_seconds[5m])' && byName.payment_service_ruler_silent_prometheus.for === '10m' && byName.payment_service_ruler_silent_prometheus.labels.severity === 'SEV2' && byName.payment_service_ruler_silent_prometheus.labels.instrument === 'ruler/prometheus',
+         'ruler_silent_prometheus watches the last-evaluation timestamp (from rule_evaluation_staleness), 10m, SEV2', byName.payment_service_ruler_silent_prometheus);
+  assert(byName.payment_service_notify_silent_prometheus.expr === 'absent_over_time(prometheus_notifications_sent_total[5m])' && byName.payment_service_notify_silent_prometheus.for === '10m' && byName.payment_service_notify_silent_prometheus.labels.instrument === 'notify/prometheus',
+         'notify_silent_prometheus watches prometheus_notifications_sent_total (from notifications_sent)', byName.payment_service_notify_silent_prometheus);
+  assert(!ag.rules.some(r => /rule_evaluation_failures_total\[5m\]\)$/.test(r.expr) && /absent_over_time/.test(r.expr)) && ag.rules.filter(r => /_silent_/.test(r.alert)).length === 2,
+         'rule_evaluation_failures / notification_errors produce no second silent alert (one per family/product)');
+  assert(byName.payment_service_ruler_stale_prometheus.expr === 'max(time() - prometheus_rule_group_last_evaluation_timestamp_seconds) > 120' && byName.payment_service_ruler_stale_prometheus.for === '2m' && byName.payment_service_ruler_stale_prometheus.labels.severity === 'SEV3' && /Watchdog covers/.test(byName.payment_service_ruler_stale_prometheus.annotations.description),
+         'ruler_stale_prometheus: > 120 s since the last evaluation, 2m, SEV3, with the stopped-ruler caveat', byName.payment_service_ruler_stale_prometheus);
+  assert(byName.payment_service_ruler_errors_prometheus.expr === 'increase(prometheus_rule_evaluation_failures_total[5m]) > 0' && byName.payment_service_notify_errors_prometheus.expr === 'increase(prometheus_notifications_errors_total[5m]) > 0' && byName.payment_service_notify_errors_prometheus.for === '2m' && byName.payment_service_notify_errors_prometheus.labels.severity === 'SEV3',
+         'ruler_errors / notify_errors read increase() over 5m, 2m, SEV3');
+  const allRequires = new Set(STACK_SELF_METRIC_PROBES.flatMap(r => r.aliases.flatMap(a => a.requires || [])).concat(['up']));
+  const usedNames = [...new Set(assuranceAlerts.flatMap(a => metricNamesOf(a.expr)))];
+  assert(usedNames.length >= 5 && usedNames.every(n => allRequires.has(n)), 'every metric name an assurance expr reads is a requires[] name of the stack self-metric table (or up)', usedNames.filter(n => !allRequires.has(n)), []);
+  assert(assuranceAlerts.every(a => !/\brate\(/.test(a.expr)), 'no assurance expr uses rate() (absent_over_time / increase / time / vector only)');
+  // several jobs, regex-escaped, de-duplicated
+  const jobs = JSON.parse(JSON.stringify(pack));
+  jobs.spec.pipelines.receivers.find(r => Array.isArray(r.scrape_configs)).scrape_configs.push({ job_name: 'api.v2+beta', scrape_interval: '15s' }, { job_name: 'payment-api', scrape_interval: '30s' });
+  const jobsTd = rulesOf(compilePrometheusRules(jobs)).groups.flatMap(g => g.rules).find(r => r.alert === 'payment_service_scrape_target_down');
+  assert(jobsTd.expr === 'up{job=~"payment-api|api\\\\.v2\\\\+beta"} == 0' && /payment-api, api\.v2\+beta/.test(jobsTd.annotations.description), 'target-down lists every declared job once, escaped for RE2 inside a PromQL string (two backslashes on the wire)', jobsTd.expr);
+  // Fix round 0: a single backslash (`api\.v2`) was an invalid PromQL string escape — promtool rejected the
+  // ENTIRE rules file ("unknown escape sequence U+002E"). The matcher must be a valid escaped string literal
+  // (Go/JSON escape vocabulary) whose VALUE is the single-backslash RE2 pattern that matches the jobs literally.
+  const tdMatcher = jobsTd.expr.match(/^up\{job=~"(.*)"\} == 0$/)[1];
+  let tdRe2; try { tdRe2 = JSON.parse('"' + tdMatcher + '"'); } catch { tdRe2 = null; }
+  assert(tdRe2 === 'payment-api|api\\.v2\\+beta', 'the job matcher unescapes (Go/JSON escapes only) to the single-backslash RE2 pattern', tdMatcher);
+  assert(tdRe2 !== null && new RegExp(`^(?:${tdRe2})$`).test('api.v2+beta') && new RegExp(`^(?:${tdRe2})$`).test('payment-api') && !new RegExp(`^(?:${tdRe2})$`).test('apiXv2+beta') && !new RegExp(`^(?:${tdRe2})$`).test('api.v2beta'),
+         'the RE2 pattern matches the declared job names literally and nothing else');
+  const jobsGm = parseYaml(stripBanner(compileGrafanaManagedRules(jobs))).groups.flatMap(g => g.rules).find(r => r.title === 'payment_service_scrape_target_down');
+  assert(jobsGm && jobsGm.data[0].model.expr === jobsTd.expr, 'the Grafana-managed flavour carries the same two-backslash expr', jobsGm?.data?.[0]?.model?.expr);
+  const jobsArtifact = compileArtifact(jobs, { group: 'rules', flavor: 'prometheus', artifact: 'assurance' }).content;
+  assert(jobsArtifact.split('\n').some(l => l === '        expr: up{job=~"payment-api|api\\\\.v2\\\\+beta"} == 0'), 'the emitted YAML line is a plain scalar with the two backslashes intact (mini-yaml does not re-escape it)', jobsArtifact.split('\n').filter(l => /scrape_target_down|up\{job/.test(l)));
+  const noJobs = JSON.parse(JSON.stringify(pack));
+  for (const r of noJobs.spec.pipelines.receivers) delete r.scrape_configs;
+  assert(!rulesOf(compilePrometheusRules(noJobs)).groups.flatMap(g => g.rules).some(r => r.alert === 'payment_service_scrape_target_down'), 'no declared scrape job → no target-down rule (an instrument nobody scrapes would fire forever)');
+  // product gating: prometheus rows on payment-service; vmalert_* under victoriametrics; generic-only under mimir
+  const names = (text) => rulesOf(text).groups.flatMap(g => g.rules).filter(r => r.labels?.kind === 'assurance').map(r => r.alert);
+  const vm = rulesOf(compile(pack, 'prometheus-rules', { product: 'victoriametrics', version: '1.99' }).content);
+  const vmA = Object.fromEntries(vm.groups.flatMap(g => g.rules).filter(r => r.labels?.kind === 'assurance').map(r => [r.alert, r]));
+  assert(Object.keys(vmA).join() === 'Watchdog,payment_service_scrape_target_down,payment_service_ruler_silent_victoriametrics,payment_service_notify_silent_victoriametrics,payment_service_ruler_errors_victoriametrics,payment_service_notify_errors_victoriametrics',
+         'under victoriametrics the group carries the vmalert_* rows (no staleness row exists for VM) and no prometheus_* row', Object.keys(vmA));
+  assert(vmA.payment_service_ruler_silent_victoriametrics.expr === 'absent_over_time(vmalert_recording_rules_errors_total[5m]) or absent_over_time(vmalert_alerting_rules_errors_total[5m])'
+         && vmA.payment_service_notify_silent_victoriametrics.expr === 'absent_over_time(vmalert_alerts_send_errors_total[5m])'
+         && vmA.payment_service_ruler_errors_victoriametrics.expr === 'sum(increase(vmalert_recording_rules_errors_total[5m])) + sum(increase(vmalert_alerting_rules_errors_total[5m])) > 0'
+         && vmA.payment_service_notify_errors_victoriametrics.expr === 'increase(vmalert_alerts_send_errors_total[5m]) > 0',
+         'the VM rows: a multi-requires alias becomes `or` of absents / a sum of increases', Object.values(vmA).map(r => r.expr));
+  assert(!Object.values(vmA).some(r => /prometheus_/.test(r.expr)) && !Object.values(vmA).some(r => 'keep_firing_for' in r), 'no prometheus_* name and no keep_firing_for under VM');
+  assert(names(compile(pack, 'prometheus-rules', { product: 'mimir', version: '2.15' }).content).join() === 'Watchdog,payment_service_scrape_target_down', 'under mimir only the generic rows remain (Watchdog + target-down)');
+  assert(names(compile(pack, 'prometheus-rules', { product: 'prometheus', version: '2.30' }).content).join() === names(compilePrometheusRules(pack)).join(), 'the prometheus bands emit the same assurance rules (no band-dependent knob)');
+  // alertmanager rows only with an alertmanager backend
+  const withAm = JSON.parse(JSON.stringify(pack));
+  withAm.spec.telemetry.backends.push({ signal: 'alerting', product: 'alertmanager', version: { declared: '0.27' } });
+  const amA = Object.fromEntries(rulesOf(compilePrometheusRules(withAm)).groups.flatMap(g => g.rules).filter(r => r.labels?.kind === 'assurance').map(r => [r.alert, r]));
+  assert(amA.payment_service_notify_silent_alertmanager?.expr === 'absent_over_time(alertmanager_notifications_total[5m])' && amA.payment_service_notify_errors_alertmanager?.expr === 'increase(alertmanager_notifications_failed_total[5m]) > 0' && !('payment_service_ruler_silent_alertmanager' in amA),
+         'an alertmanager backend adds notify_silent_alertmanager / notify_errors_alertmanager (no ruler row)', Object.keys(amA));
+  assert(!assuranceAlerts.some(a => /alertmanager/.test(a.alert)), 'without an alertmanager backend no alertmanager row is emitted');
+  // grafana rows only with a /grafana/ scrape job; a backend alone warns
+  const withGrafanaJob = JSON.parse(JSON.stringify(pack));
+  withGrafanaJob.spec.pipelines.receivers.find(r => Array.isArray(r.scrape_configs)).scrape_configs.push({ job_name: 'grafana', scrape_interval: '30s' });
+  const gA = Object.fromEntries(rulesOf(compilePrometheusRules(withGrafanaJob)).groups.flatMap(g => g.rules).filter(r => r.labels?.kind === 'assurance').map(r => [r.alert, r]));
+  assert(gA.payment_service_ruler_silent_grafana?.expr === 'absent_over_time(grafana_alerting_rule_evaluation_failures_total[5m])' && gA.payment_service_ruler_errors_grafana?.expr === 'increase(grafana_alerting_rule_evaluation_failures_total[5m]) > 0' && gA.payment_service_scrape_target_down.expr === 'up{job=~"payment-api|grafana"} == 0',
+         'a grafana scrape job adds ruler_silent_grafana / ruler_errors_grafana and joins target-down', Object.keys(gA));
+  const withGrafanaBackend = JSON.parse(JSON.stringify(pack));
+  withGrafanaBackend.spec.telemetry.backends.push({ signal: 'dashboards', product: 'grafana', version: { declared: '12.0' } });
+  const gWarnings = [];
+  const gbNames = names(compilePrometheusRules(withGrafanaBackend, { onWarning: (m) => gWarnings.push(m) }));
+  assert(!gbNames.some(n => /grafana/.test(n)) && gWarnings.some(w => /assurance: grafana is declared as a backend but no scrape job names it/.test(w)),
+         'a grafana backend without a scrape job emits no grafana row and warns', { names: gbNames, warnings: gWarnings });
+  // opt-out: annotation off / watchdog-only, opts override, unknown value
+  const off = JSON.parse(JSON.stringify(pack)); off.metadata.annotations = { ...(off.metadata.annotations || {}), [ASSURANCE_ANNOTATION]: 'off' };
+  const offDoc = rulesOf(compilePrometheusRules(off));
+  assert(!offDoc.groups.some(g => g.name === 'payment_service_assurance') && offDoc.groups.length === doc.groups.length - 1 && !compileCatalog(off).groups.find(g => g.id === 'rules').items.some(i => i.id === 'assurance'),
+         'observogram.assurance: off removes the group and the catalog item, everything else unchanged', offDoc.groups.map(g => g.name));
+  assert(JSON.stringify(offDoc.groups) === JSON.stringify(doc.groups.filter(g => g.name !== 'payment_service_assurance')), 'the other groups are byte-identical with and without the assurance group');
+  const wo = JSON.parse(JSON.stringify(pack)); wo.metadata.annotations = { ...(wo.metadata.annotations || {}), [ASSURANCE_ANNOTATION]: 'watchdog-only' };
+  assert(names(compilePrometheusRules(wo)).join() === 'Watchdog' && compileCatalog(wo).groups.find(g => g.id === 'rules').items.find(i => i.id === 'assurance').subtitle === '1 alert · watchdog only',
+         'watchdog-only leaves exactly the Watchdog', names(compilePrometheusRules(wo)));
+  assert(names(compilePrometheusRules(pack, { assurance: 'off' })).length === 0 && names(compilePrometheusRules(off, { assurance: 'on' })).length === 7, 'opts.assurance overrides the annotation both ways');
+  const bogus = JSON.parse(JSON.stringify(pack)); bogus.metadata.annotations = { ...(bogus.metadata.annotations || {}), [ASSURANCE_ANNOTATION]: 'sometimes' };
+  const bWarnings = [];
+  assert(names(compilePrometheusRules(bogus, { onWarning: (m) => bWarnings.push(m) })).length === 7 && bWarnings.some(w => /observogram\.assurance: unknown mode "sometimes"/.test(w)) && ASSURANCE_MODES.join() === 'on,watchdog-only,off',
+         'an unknown mode warns and reads as on', bWarnings);
+  // per-SLO files carry no assurance group (:586 stays: per-SLO group names are disjoint from the full file's)
+  assert(!rulesOf(compileSloPrometheusRules(pack, 'api_availability_99_9')).groups.some(g => /_assurance$/.test(g.name)), 'a per-SLO Prometheus file carries no assurance group');
+  // Grafana-managed: same exprs, uids unique across two packs in one folder, Watchdog for: 0s
+  const gm = rulesOf(compileGrafanaManagedRules(pack));
+  const gmA = gm.groups.find(g => g.name === 'payment_service_assurance');
+  assert(gmA && gmA.interval === '30s' && gmA.rules.length === 7 && gmA.rules[0].uid === 'alr-payment_service_watchdog' && gmA.rules[0].for === '0s' && gmA.rules[0].title === 'Watchdog' && gmA.rules[0].data[0].model.expr === 'vector(1)',
+         'Grafana-managed carries the assurance group with the Watchdog at uid alr-payment_service_watchdog and for: 0s', gmA && gmA.rules.map(r => [r.uid, r.for]));
+  assert(gmA.rules.slice(1).map(r => r.for).join() === '2m,10m,10m,2m,2m,2m' && gmA.rules.every((r, i) => r.data[0].model.expr === ag.rules[i].expr && r.title === ag.rules[i].alert), 'the other rules keep their Prometheus for: and exprs');
+  assert(!rulesOf(compileSloPrometheusRules(pack, 'api_availability_99_9')).groups.some(g => /_assurance$/.test(g.name)), 'per-SLO Grafana-managed files carry no assurance group either');
+  const sharedSli = parseYaml(readFileSync(resolve(ROOT, 'tools/fixtures/compile/shared-sli.pack.yaml'), 'utf8'));
+  const gmShared = rulesOf(compileGrafanaManagedRules(sharedSli)).groups.find(g => /_assurance$/.test(g.name));
+  const uidsA = new Set(gmA.rules.map(r => r.uid)), uidsB = gmShared.rules.map(r => r.uid);
+  assert(uidsB.length > 0 && uidsB.every(u => !uidsA.has(u)) && new Set(uidsB).size === uidsB.length && gmShared.rules[0].uid === 'alr-shared_sli_watchdog',
+         'two packs compiled into the same folder get disjoint assurance uids (the Watchdog uid is keyed by svc)', { a: [...uidsA], b: uidsB });
+  // catalog + artifacts
+  const cat = compileCatalog(pack).groups.find(g => g.id === 'rules').items;
+  assert(cat[0].id === 'all' && cat[0].subtitle === '5 SLO(s) · 4 declared' && cat[1].id === 'assurance' && cat[1].kind === 'rules-assurance' && cat[1].label === 'Assurance · watchdog + instrument liveness' && cat[1].subtitle === '7 alerts · generic, prometheus' && cat[2].kind === 'rules-slo',
+         'the catalog lists the assurance item after all and before the per-SLO items; the all subtitle is unchanged', cat.slice(0, 3));
+  const artProm = compileArtifact(pack, { group: 'rules', flavor: 'prometheus', artifact: 'assurance' });
+  const artGm = compileArtifact(pack, { group: 'rules', flavor: 'grafana-managed', artifact: 'assurance' });
+  assert(artProm.filename === 'payment_service.assurance.rules.yaml' && rulesOf(artProm.content).groups.length === 1 && rulesOf(artProm.content).groups[0].name === 'payment_service_assurance' && JSON.stringify(rulesOf(artProm.content).groups[0]) === JSON.stringify(ag),
+         'compileArtifact(assurance, prometheus) is a one-group file identical to the full file\'s group', artProm.filename);
+  assert(artGm.filename === 'payment_service.assurance.grafana-rules.yaml' && rulesOf(artGm.content).apiVersion === 1 && JSON.stringify(rulesOf(artGm.content).groups[0]) === JSON.stringify(gmA),
+         'compileArtifact(assurance, grafana-managed) is a one-group provisioning file identical to the full file\'s group', artGm.filename);
+  assert(rulesOf(compileArtifact(off, { group: 'rules', flavor: 'prometheus', artifact: 'assurance' }).content).groups.length === 0, 'the assurance artifact of an opted-out pack has no group (never a fabricated rule)');
+  // lab timings
+  const lab = rulesOf(compilePrometheusRules(pack, { lab: true })).groups.find(g => g.name === 'payment_service_assurance').rules;
+  assert(lab.slice(1).map(r => r.for).join() === '30s,2m,2m,30s,30s,30s', 'lab: for 30s (fast) / 2m (silent)', lab.map(r => r.for));
 }
 
 // The reference packs through the compiler: Grafana provisioning rejects a file whose uids or
