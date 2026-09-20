@@ -1374,8 +1374,83 @@ try {
   assert(/OBSERVOGRAM_TEST_NO_SUCH_TOKEN/.test(authErr || '') && /not set/.test(authErr || ''),
          'unresolved authEnv refuses to run and names the env var');
   assert(readJourneyRuns('live').length === 0, 'an unset authEnv never reached the wire — no vantage-lost record');
+
+  // --- step 5: packc journey run --all and packc journey schedule (own workspaces, file-vs-file: no servers needed) ---
+  {
+    const TMP2 = mkdtempSync(join(tmpdir(), 'observogram-journey-all-'));
+    const TMP3 = mkdtempSync(join(tmpdir(), 'observogram-journey-none-'));
+    const A = PACK_A.replaceAll('\\', '/');
+    const B = PACK_B.replaceAll('\\', '/');
+    const packc = (args, ws, extraEnv = {}) => spawnSync(process.execPath, [resolve('tools/cli.mjs'), ...args], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: ws, ...extraEnv }, encoding: 'utf8', timeout: 120_000 });
+    try {
+      mkdirSync(join(TMP2, 'journeys'), { recursive: true });
+      writeFileSync(join(TMP2, 'journeys', 'all-pass.journey.yaml'), ['name: all-pass', `packA: { file: ${A} }`, `packB: { file: ${B} }`, 'gate: { minAlignmentPct: 1 }', 'schedule: "30 4 * * 1"'].join('\n'));
+      writeFileSync(join(TMP2, 'journeys', 'all-fail.journey.yaml'), ['name: all-fail', `packA: { file: ${A} }`, `packB: { file: ${B} }`, 'gate: { minAlignmentPct: 101 }'].join('\n'));
+      writeFileSync(join(TMP2, 'journeys', 'all-broken.journey.yaml'), ['name: all-broken', `packA: { file: ${A} }`, `packB: { file: ${B} }`, 'schedule: "*/15 * * *"'].join('\n'));
+      // (k) run --all: three sections, the unloadable one on stderr, exit = worst (2).
+      const all3 = packc(['journey', 'run', '--all'], TMP2);
+      assert(all3.status === 2, 'run --all over pass + gate-failed + unloadable exits 2 (the worst)', { status: all3.status, err: all3.stderr });
+      assert((all3.stdout.match(/^## journey /gm) || []).length === 3 && /^## journey all-pass\n\n## ✅ Journey `all-pass` — PASS/m.test(all3.stdout) && /^## journey all-fail\n\n## ❌ Journey `all-fail` — GATE FAILED/m.test(all3.stdout) && /^## journey all-broken\n\n_error: journey all-broken: schedule must be/m.test(all3.stdout),
+             'stdout carries one ## journey section per journey, the unloadable one as an error line', all3.stdout.split('\n').filter(l => l.startsWith('## ')));
+      assert(/^packc journey all-broken: journey all-broken: schedule must be a 5-field cron expression/m.test(all3.stderr), 'stderr names the unloadable journey and why', all3.stderr);
+      assert(readJourneyRunsIn(TMP2, 'all-pass').length === 1 && readJourneyRunsIn(TMP2, 'all-fail').length === 1 && readJourneyRunsIn(TMP2, 'all-broken').length === 0, 'the loadable journeys ran (one record each); the broken one left none');
+      rmSync(join(TMP2, 'journeys', 'all-broken.journey.yaml'));
+      const all2 = packc(['journey', 'run', '--all'], TMP2);
+      assert(all2.status === 1 && (all2.stdout.match(/^## journey /gm) || []).length === 2 && all2.stderr === '', 'pass + gate-failed only → exit 1, two sections, nothing on stderr', { status: all2.status, err: all2.stderr });
+      const allJson = packc(['journey', 'run', '--all', '--json'], TMP2);
+      const arr = JSON.parse(allJson.stdout);
+      assert(allJson.status === 1 && Array.isArray(arr) && arr.map(r => r.name).join() === 'all-fail,all-pass' && arr.map(r => r.exitCode).join() === '1,0' && arr.every(r => r.record && r.error === null) && arr[0].record.outcome === 'gate-failed' && !/^## journey/m.test(allJson.stdout),
+             '--json yields an array of { name, record, error, exitCode } and no markdown', { status: allJson.status, arr: arr.map(r => [r.name, r.exitCode, r.error]) });
+      assert(readJourneyRunsIn(TMP2, 'all-pass').length === 3, 'each --all run appends to every journey\'s history');
+      const none = packc(['journey', 'run', '--all'], TMP3);
+      assert(none.status === 0 && /^\(no journeys saved — add \.observogram\/journeys\/<name>\.journey\.yaml\)$/m.test(none.stdout), 'run --all over zero journeys prints the existing no-journeys line and exits 0', { status: none.status, out: none.stdout });
+      // (l) schedule: every format, --json, the placeholder + stderr note, the exits.
+      writeFileSync(join(TMP2, 'journeys', 'sched-env.journey.yaml'), ['name: sched-env', `packA: { file: ${A} }`, 'packB: { mcp: { url: https://mcp.example.invalid/mcp, authEnv: MY_MCP_TOKEN } }', 'schedule: { cron: "0 */2 * * *", timezone: Europe/Madrid }', 'notify: { urlEnv: MY_HOOK_URL, authEnv: MY_HOOK_TOKEN }'].join('\n'));
+      const secretEnv = { MY_HOOK_URL: 'https://hooks.example/s3cr3t-value', MY_HOOK_TOKEN: 's3cr3t-token', MY_MCP_TOKEN: 's3cr3t-mcp' };
+      const pkgVersion = JSON.parse(readFileSync(resolve('package.json'), 'utf8')).version;
+      const sAll = packc(['journey', 'schedule', 'sched-env'], TMP2, secretEnv);
+      assert(sAll.status === 0 && sAll.stderr === '' && /^## cron$/m.test(sAll.stdout) && /^## schtasks \(Windows Task Scheduler\)$/m.test(sAll.stdout) && /^## github-actions$/m.test(sAll.stdout) && /^## kubernetes-cronjob$/m.test(sAll.stdout),
+             'schedule <name> prints the four snippet sections and nothing on stderr', { status: sAll.status, err: sAll.stderr, heads: sAll.stdout.split('\n').filter(l => l.startsWith('## ')) });
+      assert(!/s3cr3t/.test(sAll.stdout), 'no env VALUE reaches the snippets (only names)');
+      const sCron = packc(['journey', 'schedule', 'sched-env', '--format', 'cron'], TMP2, secretEnv);
+      assert(sCron.status === 0 && /^CRON_TZ=Europe\/Madrid$/m.test(sCron.stdout) && /^0 \*\/2 \* \* \* cd /m.test(sCron.stdout) && /^# export MY_MCP_TOKEN=<set in your environment>$/m.test(sCron.stdout) && /^# export MY_HOOK_URL=<set in your environment>$/m.test(sCron.stdout) && /^# export MY_HOOK_TOKEN=<set in your environment>$/m.test(sCron.stdout) && !/^## /m.test(sCron.stdout),
+             '--format cron prints the crontab line with CRON_TZ, the workspace and the env names from packB.mcp.authEnv + notify', sCron.stdout);
+      assert(/OBSERVOGRAM_WORKSPACE='?[^ ]*observogram-journey-all-/.test(sCron.stdout), 'the cron line sets the workspace the CLI was run with', sCron.stdout.split('\n').find(l => l.startsWith('0 ')));
+      const sTask = packc(['journey', 'schedule', 'sched-env', '--format', 'schtasks'], TMP2, secretEnv);
+      assert(sTask.status === 0 && /^schtasks \/Create \/TN "Observogram\\sched-env" \/TR "\\"[^"]*node(\.exe)?\\" \\"[^"]*cli\.mjs\\" journey run sched-env" \/SC HOURLY \/MO 2 \/ST 00:00 \/F$/m.test(sTask.stdout) && /^REM setx MY_HOOK_URL <set in your environment>/m.test(sTask.stdout),
+             '--format schtasks prints the Task Scheduler command with the real node and cli paths', sTask.stdout);
+      const sAct = packc(['journey', 'schedule', 'sched-env', '--format', 'actions'], TMP2, secretEnv);
+      assert(sAct.status === 0 && parseYaml(sAct.stdout).on.schedule[0].cron === '0 */2 * * *' && parseYaml(sAct.stdout).jobs.journey.steps[3].env.MY_HOOK_URL === '${{ secrets.MY_HOOK_URL }}', '--format actions prints a parseable workflow binding the env names to secrets');
+      const sK8s = packc(['journey', 'schedule', 'sched-env', '--format', 'k8s'], TMP2, secretEnv);
+      const k = parseYaml(sK8s.stdout);
+      assert(sK8s.status === 0 && k.kind === 'CronJob' && k.spec.schedule === '0 */2 * * *' && k.spec.timeZone === 'Europe/Madrid' && k.spec.jobTemplate.spec.template.spec.containers[0].image === `observogram:${pkgVersion}` && k.spec.jobTemplate.spec.template.spec.containers[0].env.some(e => e.name === 'MY_HOOK_URL' && e.valueFrom.secretKeyRef.key === 'MY_HOOK_URL'),
+             '--format k8s prints a CronJob with the package version as the image tag and secretKeyRefs for the env names', sK8s.stdout.slice(0, 300));
+      const sJson = packc(['journey', 'schedule', 'sched-env', '--json'], TMP2, secretEnv);
+      const j = JSON.parse(sJson.stdout);
+      assert(sJson.status === 0 && j.name === 'sched-env' && j.schedule.cadenceMs === 7200000 && j.schedule.timezone === 'Europe/Madrid' && j.placeholder === false && j.envNames.join() === 'MY_MCP_TOKEN,MY_HOOK_URL,MY_HOOK_TOKEN' && Object.keys(j.snippets).join() === 'cron,schtasks,actions,k8s' && !/s3cr3t/.test(sJson.stdout),
+             '--json yields { name, source, schedule, placeholder, envNames, snippets }', { keys: Object.keys(j), sched: j.schedule, env: j.envNames });
+      const sJsonOne = packc(['journey', 'schedule', 'sched-env', '--json', '--format', 'k8s'], TMP2, secretEnv);
+      assert(Object.keys(JSON.parse(sJsonOne.stdout).snippets).join() === 'k8s', '--json --format k8s narrows the snippets');
+      const sPh = packc(['journey', 'schedule', 'all-fail'], TMP2);
+      assert(sPh.status === 0 && /^packc journey schedule: all-fail declares no schedule: — printing the placeholder \*\/15 \* \* \* \*; edit before installing$/m.test(sPh.stderr) && (sPh.stdout.match(/placeholder, edit before installing/g) || []).length === 4 && /^\*\/15 \* \* \* \* cd /m.test(sPh.stdout) && /schedule: not set in .*all-fail\.journey\.yaml — placeholder/.test(sPh.stdout),
+             'without schedule: every snippet carries the marked placeholder, stderr says so, exit 0', { status: sPh.status, err: sPh.stderr });
+      assert(JSON.parse(packc(['journey', 'schedule', 'all-fail', '--json'], TMP2).stdout).placeholder === true && JSON.parse(packc(['journey', 'schedule', 'all-fail', '--json'], TMP2).stdout).schedule === null, '--json reports placeholder true and schedule null');
+      assert(packc(['journey', 'schedule', 'sched-env', '--format', 'nope'], TMP2, secretEnv).status === 2 && packc(['journey', 'schedule', 'no-such'], TMP2).status === 2 && packc(['journey', 'schedule'], TMP2).status === 2, 'an unknown format, an unknown journey and a missing name exit 2');
+      const help = packc(['help'], TMP2);
+      assert(/packc journey {2}run --all/.test(help.stdout) && /packc journey {2}schedule <name>/.test(help.stdout), 'help lists run --all and schedule');
+    } finally {
+      rmSync(TMP2, { recursive: true, force: true });
+      rmSync(TMP3, { recursive: true, force: true });
+    }
+  }
 } finally {
   rmSync(TMP, { recursive: true, force: true });
+}
+
+// Run records of a journey in another workspace root (the --all tests use
+// their own), newest first — the same shape readJourneyRuns reads.
+function readJourneyRunsIn(root, name) {
+  try { return readdirSync(join(root, 'runs', name)).filter(f => /^\d{4}-.*Z\.json$/.test(f)).sort().reverse().map(f => JSON.parse(readFileSync(join(root, 'runs', name, f), 'utf8'))); } catch { return []; }
 }
 
 report('journey', 'all saved-journey assertions pass.');
