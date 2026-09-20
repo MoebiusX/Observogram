@@ -22,6 +22,8 @@ promises to keep stable.
 | [`tools/lib/protocols.mjs`](../tools/lib/protocols.mjs) | pure data | the versioned protocol/feature canon |
 | [`tools/lib/stack-evidence.mjs`](../tools/lib/stack-evidence.mjs) | imports `contracts/stack-self-metrics.mjs` only | pure history helpers over journey run records — `stackSeries`, `latestByFamily`, `stackSummary`, `stackPostureBudget`, `nonzeroRuns`, `formatStackValue`, `stackOutcomeLabel`; explicit inputs, no Node APIs, every output a point-in-time signal |
 | [`tools/lib/contracts/stack-self-metrics.mjs`](../tools/lib/contracts/stack-self-metrics.mjs) | pure data + lookups | the stack self-metric alias table `stack-evidence.mjs` orders by — copy the two together |
+| [`tools/lib/blast-radius.mjs`](../tools/lib/blast-radius.mjs) | **zero-import** (CI-asserted) | the blind-spot blast radius over the requirement graph — `CONSUMER_SIDE` / `PROTECTION_SIDE`, `normalizeGraphShape`, `blastRadiusOf`, `blastRadiusIndex`; input is the plain `{ nodes: [{ key, identityKey, kind, layer, label, virtual, scaffold }], edges: [{ from, to, type, provenance }] }` that `graphShape(graph)` in `traceability-graph.mjs` projects (nodes also accepted as a Map or a keyed object); structural exposure only — what WOULD go blind — it never reads liveness |
+| [`tools/lib/chain-history.mjs`](../tools/lib/chain-history.mjs) | **zero-import** (CI-asserted) | requirement-chain verdicts over time — `branchRecordsFromGraph` over a `compareBranches` result, then `chainSummary`, `diffRunBranches`, `rankCauses({ previous, current, deploys, baseline? })`, `deploysInWindow`, `topCause` over journey run records (`{ startedAt, outcome, branches, versions, stackEvidence, probes, … }`) and deploy audit lines, plus the vocabulary tables the ranker reads (`CAUSE_KINDS`, `CAUSE_SCORES`, `FAMILY_FOR_KIND` / `familyForKind`, `PRODUCT_FAMILIES` / `familiesForProduct`, `DEPLOY_GROUP_KINDS`, `deployArtifactNames`); a host that holds the declared pack resolves deploy selectors itself and passes them as `item.resolved` (the way `journey.mjs` does); nothing here scores, every function is pure and never throws |
 | [`studio/diagnostic-grade.mjs`](../studio/diagnostic-grade.mjs) | **zero-import** (CI-asserted) | the grade engine: coverage/trust criteria, posture matrix, weighted delta risk, instrument-grade scale |
 | [`studio/artifact-model.mjs`](../studio/artifact-model.mjs) | **zero-import** (CI-asserted) | behavioural identity + deploy-surface model per artefact family |
 | [`studio/constants.mjs`](../studio/constants.mjs) | pure data | the display vocabulary (layers, domains, grade banding) |
@@ -32,7 +34,28 @@ promises to keep stable.
 | [`studio/proto-synthesis.mjs`](../studio/proto-synthesis.mjs) | host-injected callbacks | the ratified Diagnose/Remediate synthesis view |
 
 `tools/test-diagnostic-grade.mjs` fails CI if an import ever creeps into the
-two zero-import modules, so the seam cannot erode silently.
+two studio zero-import modules, and `tools/test-blast-radius.mjs` /
+`tools/test-chain-history.mjs` guard theirs the same way (no `import`, no
+`node:` module, no `process`), so the seams cannot erode silently.
+
+**Additive keys on `compareBranches` output.** `tools/lib/traceability-graph.mjs`
+itself is not in the vendorable set (it imports the PromQL parser), but its
+result is the `diff.traceabilityGraph` a vendored `computeDiagnosticGrade`
+scores Drift-free on and the input `branchRecordsFromGraph` reads, so its
+shape is part of this contract. Since 2026-09 it keeps its original shape
+and gains optional keys a downstream host may ignore: on every node verdict
+`blastRadius` (the blast-radius `summary` — `{ slos, alerts, panels,
+dashboards, routes, remediations, total }` — or `null`) and `ladder`
+(`{ rung, status, detail }`), appended after `deltas`; on every branch
+`ladderVerdict`, `ladderIntegrity` and `ladderIntegrityPct` beside
+`verdict` / `integrity` / `integrityPct`; on the rollup `ladder = { healthy,
+degraded, broken, unobserved, integrityMean, integrityPct }`, appended last.
+`integrity`, `verdict`, `counts`, node `status` and `rollup.integrityMean`
+are byte-identical with and without the annotations the ladder reads
+(pinned in `tools/test-traceability-graph.mjs`), and Drift-free still reads
+`rollup.integrityMean` — the switch to `rollup.ladder.integrityMean` is a
+proposal (`docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md`, gradeSchema 3), not
+applied. Keys are only ever added here, never renamed or removed.
 
 **Additive keys on `partialLiveEvidence(packB)`.** The result keeps its
 original shape (`isLiveDraft`, `failed`, `empty`, `attempted`, `partial` —
@@ -122,6 +145,7 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
      tools/lib/promql-canon.mjs tools/lib/promql.mjs \
      tools/lib/protocols.mjs \
      tools/lib/stack-evidence.mjs tools/lib/contracts/stack-self-metrics.mjs \
+     tools/lib/blast-radius.mjs tools/lib/chain-history.mjs \
      studio/diagnostic-grade.mjs studio/artifact-model.mjs \
      studio/constants.mjs studio/verdict-ui.mjs studio/verdict-ui.css \
      studio/compare-catalog.mjs studio/host.mjs studio/proto-synthesis.mjs

@@ -1,0 +1,29 @@
+{
+  "_recorded": {
+    "recordedAt": "2026-09-08T08:19:28.479Z",
+    "tool": "grafana_contact_points",
+    "scrubbed": [],
+    "reviewed": "the receivers API carries no uid, type or settings, so no webhook URL or secret to scrub",
+    "server": "otel-mcp-server 1.8.0 over docker/stack.compose.yaml (Grafana 12.4.4), admin-seeded state"
+  },
+  "count": 2,
+  "contactPoints": [
+    {
+      "name": "webhook-oncall",
+      "active": true,
+      "integrations": [
+        {
+          "name": "webhook",
+          "sendResolved": true,
+          "lastNotifyAttempt": "0001-01-01T00:00:00.000Z",
+          "lastNotifyAttemptDuration": "0s"
+        }
+      ]
+    },
+    {
+      "name": "empty",
+      "active": true,
+      "integrations": []
+    }
+  ]
+}

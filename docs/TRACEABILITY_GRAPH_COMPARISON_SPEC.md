@@ -101,6 +101,58 @@ Align nodes by `(role, identityKey)` within the branch (not globally — this is
 
 Edges carry through: an edge present in A but absent in B (e.g. the SLO→alert link missing live) is a **broken limb**, scored by the limb's role weight (§7).
 
+### 5b. Per-node ladder (additive, unscored)
+
+Beside `status`, every node verdict carries `ladder: { rung, status, detail }`, read from the on-wire liveness the live fetcher writes into Pack B's annotations (`mcp.observed.scrape_targets` / `recording_rules` / `alert_rules`; the `mcp.discovered.*_unhealthy` and `scrape_jobs_down` lists; `mcp.probesFailed` / `mcp.probesUnsupported` with `mcp.probeErrors.<family>`). "Now" for a freshness judgement is the fetcher's own clock: `mcp.observedAt.<family>` (the instant that probe family answered — `scrape_configs` for scrape jobs, `recording_rules` for rules, `alert_rules` for burn-rate alerts), else `mcp.fetchStartedAt`, else the caller's `mcp.refreshedAt` (older packs; the server and journey stamp it after the fetch returns, so it can trail every observation by the whole fetch — the detail names it when it is all there is: `(now = mcp.refreshedAt; no mcp.observedAt on the wire)`). It answers the monitor-of-monitors question the scored status cannot: is the artefact merely present, or doing its job — or could the vantage not look at all.
+
+| `ladder.rung` | `ladder.status` | Meaning |
+|---|---|---|
+| `unobserved` | `unobserved` | declared, absent from B, and the probe family that would carry the kind failed or is not exposed by this MCP tier — the vantage could not look; never "absent" |
+| `unobserved` | `null` | `unverifiable` kind — not live-introspectable from any MCP vantage |
+| `absent` | `null` | declared, absent from B, and the probe family answered without it (or B is file-sourced) |
+| `exists` | `null` | present; no liveness field on the wire for the kind (metric, panel, route…), or Pack B is not a live draft |
+| `exists` | `present_unhealthy` | present, but the ruler/target reports it unhealthy: rule health not `ok` (`err` — and `unknown`, "not yet evaluated", which the fetcher's `*_unhealthy` lists count the same way), a `lastError`, EVERY target of the job down (the fetcher's `scrapeJobDown`), or the name is in the matching `*_unhealthy` / `scrape_jobs_down` list |
+| `exists` | `present_stale` | present — healthy or alive — but `lastEvaluation` / `lastScrape` is older than 2× the artefact's interval at "now", or, with no interval on the wire, older than the 1 h ceiling |
+| `alive` | `null` | observation present and fresh, health not reported; a scrape job with some (not all) targets down (`n/m targets down: <instances>`); a timestamp past "now" by more than 1 s (`timestamp <n>s in the future (clock skew); freshness not judged` — never `healthy`); or a backend that answered its version probe |
+| `healthy` | `null` | observation present, health ok / every target up, no `lastError`, fresh: within 2× the interval, or — interval unknown — within the 1 h ceiling (the detail says `interval unknown; 1 h ceiling applied`) |
+
+Evidence rules: scrape_job ↔ `scrape_targets` by `job`; recording_rule ↔ `recording_rules` by `name`; burn_rate ↔ `alert_rules` on the SLO id by the compiler's linkage labels carried on the observation entry (`labels: { slo, burn_rate, window_short, window_long }`, only the keys present) first and by the `<slo>_burn_<factor>x_<short>_<long>` naming convention second (a fractional factor reads `14_4x` in the name, `14.4` in the label and the declared window — all three meet), narrowed to the declared windows when any rule matches one (the live POL entry carries no rule names). The `alert_rules_unhealthy` list is names only, so it is narrowed the same way — a linked rule's name, or a name that parses to this SLO and, when anything matched a declared window, to one of them — and the detail names the matched rule(s): an undeclared `3x_1h_1d` rule of the same SLO failing does not degrade a POL entry whose two declared windows are fine. Burn-rate freshness uses the alert group's interval when the observation entry carries `interval` (the fetcher keeps it), else the ceiling. sli → `present_unhealthy` iff its id is in `slis_unhealthy`, else `exists` ("liveness rides on its recording rules"); slo → `exists` (declaration); backend → `alive` when `mcp.versions.<product>` is present. Kind → probe family: scrape_job → `scrape_configs`, recording_rule → `recording_rules`, burn_rate → `alert_rules`, metric → `metric_names`, panel/dashboard → `dashboards`, sli/slo → `recording_rules` OR `metric_names` (unobserved only when both are gone); backends have none (the version probes run outside the probe cascade). A `declared_only` artefact whose live twin (same identity) sits in Pack B under ANOTHER chain — the live pack rooted it elsewhere — reads from the observation with the detail `on the wire and in Pack B under another chain: …` (or `in Pack B under another chain; not reachable from this branch` for a kind with no observation); only when no such twin exists does one the fetcher observed but withheld from Pack B (a scrape job whose every target is down) read `on the wire but withheld from Pack B: …`. Intervals accept `10s` / `5m` / `1h` / plain seconds, B's value first then A's. When the observation carries no timestamp the detail says `no lastEvaluation on the wire; staleness not judged`; when no fetch timestamp is on the wire at all it says `no fetch timestamp on the wire (mcp.refreshedAt missing); staleness not judged`. Without any `mcp.` annotation every present node is `exists` — "no on-wire liveness (Pack B is not a live draft)".
+
+Limitation — fetcher caps: `mcp.observed.*` carries at most 200 entries per family and `mcp.discovered.scrape_jobs` / `*_unhealthy` at most 64 names (`tools/fetch-live-pack.mjs`), with no truncation marker on the wire. A declared job or rule beyond the cap has no observation and reads `absent … probe family … answered without it` although the family did answer with it; a truncation marker is a later fetcher change.
+
+Per branch: `ladderVerdict` — `broken` (a load-bearing node absent, or a load-bearing role missing) > `degraded` (a load-bearing node present_unhealthy / present_stale, or any node drifted) > `unobserved` (a load-bearing node unobserved) > `healthy`; `undeclared` for live-only branches. `live_only` nodes carry a ladder of their own but move neither the ladder verdict nor `ladderIntegrity`, exactly as they move neither scored quantity: an undeclared live rule failing is inventory, not this chain's assurance. `ladderIntegrity` / `ladderIntegrityPct` use the §7 weights: healthy / alive / exists credit 1, drifted keeps its drift credit (capped at 0.25 when also unhealthy or stale), present_unhealthy and present_stale credit 0.25, absent credit 0, unobserved nodes leave the denominator (as unverifiable ones do), missing roles as in §7. `rollup.ladder = { healthy, degraded, broken, unobserved, integrityMean, integrityPct }` over declared branches.
+
+The scored quantities — `integrity`, `verdict`, `counts`, node `status`, `rollup.integrityMean` and the grade's Drift-free criterion — are unchanged by the ladder, pending `docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md`.
+
+### 5c. Blast radius (additive)
+
+Beside `status` and `ladder`, every node verdict carries `blastRadius` — the **structural exposure** of that node, computed from the declared edges by the zero-import `tools/lib/blast-radius.mjs` (`docs/VENDORING.md`): what WOULD go blind (its transitive consumers) and what WOULD lose protection if the node died. It is never a claim that anything IS blind — liveness is the ladder's business (§5b), and the module never reads it.
+
+Assurance flows along the declared edges; the **consumer** is the side that goes blind when the other side dies. For every edge type the consumer is the `from` side, except `materialises`, where the SLI consumes the recording rule's series:
+
+| edge type | from → to | consumer |
+|---|---|---|
+| `sli_of` | slo → sli | `from` (the SLO consumes its SLI) |
+| `materialises` | recording_rule → sli | `to` (the SLI consumes the rule's series) |
+| `sources` | sli \| recording_rule → metric | `from` |
+| `exported_by` | metric → scrape_job \| exporter | `from` |
+| `produced_by` | metric → backend | `from` |
+| `protects` | burn_rate → slo | `from` (the alert consumes the SLO's data path) |
+| `forecasts` | forecast → slo | `from` |
+| `visualises` | panel → sli \| slo | `from` |
+| `contains` | dashboard → panel | `from` |
+| `routes` | alert_route → burn_rate | `from` |
+| `remediates` | remediation → burn_rate | `from` |
+| `validates` | chaos \| synthetic → slo | `from` |
+
+**Protection** is a second, separate relation (`PROTECTION_SIDE`): the `to` side loses when the `from` side dies — an SLO loses its protection when its alert dies (`protects`), an alert loses delivery when its route dies (`routes`) and its remediation when the remediation dies (`remediates`). It is transitive: a dead route means an undelivered alert means an unprotected SLO. Edge types outside the tables carry no known direction and are ignored; edges whose endpoints are unknown are dropped. Scaffold placeholders never blind anything, are never traversed and are never listed. The walk is breadth-first over the reverse adjacency, cycle-safe, with deterministic ordering (hop, then `KIND_ORDER` — slo, sli, burn_rate, recording_rule, metric, scrape_job, backend, alert_route, remediation, forecast, panel, dashboard, chaos, synthetic — then label, then key).
+
+On the node verdict only the **summary** rides: `blastRadius: { slos, alerts, panels, dashboards, routes, remediations, total } | null` — `slos` counts the SLOs that would go blind plus those that would lose protection, `alerts` the burn-rate alerts that would go blind plus those that would lose delivery or remediation, `panels` / `dashboards` / `routes` / `remediations` the blinded ones by kind, `total` every blinded node plus the unprotected SLOs and alerts; `null` when the graph index has no entry for the node. `compareBranches` computes the index once per graph (`blastRadiusIndex(graphShape(graph))`): the A-graph index serves `aligned` / `drifted` / `declared_only` / `unverifiable` nodes, the B-graph index `live_only` ones. The full result — `blastRadiusOf(shape, key)` → `{ key, kind, label, blinded: { total, weight, byKind, nodes: [{ key, kind, label, hop }] (listing capped at 64; `total` and `byKind` uncapped) }, unprotected: { slos: [{ key, label, hop }], alerts: [...] }, summary }` — is available to any caller through `graphShape(graph)`; `weight` sums the §7 limb weights over the blinded nodes (unknown kind 0.5).
+
+Consumers: `studio/compare-view.mjs` appends `· blinds N SLO(s)` to `declared_only` / `drifted` nodes in the chain-card evidence line (a node that is missing or wrong live is the case where the exposure matters; an aligned node's exposure is not shown), and orders the evidence line before its five-node cap by what moves the verdicts — declared_only load-bearing, then present_unhealthy, present_stale, drifted, declared_only (other kinds), unverifiable, unobserved, live_only — so an aligned-but-unhealthy node is never pushed out by live-only inventory; `tools/lib/chain-history.mjs` keeps the summary on every degraded node of a journey run record, orders ties by `total` and picks the run's `topExposure` (most `slos`, then `alerts`, then `total`). Nothing here touches `integrity`, `verdict`, `counts`, node `status` or `rollup.integrityMean`.
+
+Payload: `blastRadius` and `ladder` on every node verdict grow the `/api/diff` traceability graph by up to +88% on the largest example pair (krystaline → target-advanced: 148 KB → 279 KB). Accepted for now; a per-node summary is already the compact form, and trimming would go through the chain-card consumer, not the verdict shape.
+
 ---
 
 ## 6. Live-verifiability map (must be explicit)
@@ -163,6 +215,23 @@ export function compareBranches(graphA, graphB) -> {
 }
 ```
 `diffPacks` gains an optional structural pass; the studio's Diagnose view renders `branches` (per-requirement chain cards) above the flat buckets.
+
+Additive since 2026-09 (§5b, §5c; keys only ever added, never renamed or removed):
+```js
+export function graphShape(graph) -> {          // the artefact-free projection the zero-import blast-radius module reads
+  nodes: [{ key, identityKey, kind, layer, label, virtual, scaffold }],
+  edges: [{ key, from, to, type, provenance }],
+}
+// on every node verdict, appended after `deltas`:
+//   blastRadius: { slos, alerts, panels, dashboards, routes, remediations, total } | null   (§5c)
+//   ladder: { rung, status, detail }                                                       (§5b)
+// on every BranchVerdict, beside verdict / integrity / integrityPct:
+//   ladderVerdict: 'healthy' | 'degraded' | 'broken' | 'unobserved' | 'undeclared'
+//   ladderIntegrity, ladderIntegrityPct
+// on rollup, appended last:
+//   ladder: { healthy, degraded, broken, unobserved, integrityMean, integrityPct }
+```
+`tools/lib/blast-radius.mjs` (zero-import) exports `CONSUMER_SIDE`, `PROTECTION_SIDE`, `KIND_ORDER`, `DEFAULT_WEIGHTS`, `BLINDED_NODES_CAP`, `normalizeGraphShape(input)`, `blastRadiusOf(shape, key, { weights })` and `blastRadiusIndex(shape, { weights })` → `Map key → summary` (non-scaffold nodes, sorted key order). The scored quantities are pinned byte-identical with and without these fields (`tools/test-traceability-graph.mjs`).
 
 ---
 

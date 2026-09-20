@@ -204,7 +204,11 @@ function pickCriticality(services) {
 // Burn-rate alert mapping — discovered alerting rules → spec.policy
 // ============================================================
 
-const BURN_ALERT_NAME_RE = /^(.+)_burn_(\d+)x_([0-9a-z]+)_([0-9a-z]+)$/;
+// The compiler squashes the `.` of a fractional factor to `_` when it
+// names the rule (14.4 → `_burn_14_4x_`), so the factor group accepts
+// `<int>` or `<int>_<frac>`; burnFactor() reads it back as a number.
+const BURN_ALERT_NAME_RE = /^(.+)_burn_(\d+(?:_\d+)?)x_([0-9a-z]+)_([0-9a-z]+)$/;
+const burnFactor = (text) => Number(String(text).replace('_', '.'));
 const SPEC_DURATION_RE = /^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h|d|w|mo|y))+$/;
 const SLO_WINDOWS_ALLOWED = new Set(['7d', '28d', '30d', '90d']);
 const DURATION_UNIT_SECONDS = { ns: 1e-9, us: 1e-6, ms: 1e-3, s: 1, m: 60, h: 3600, d: 86400, w: 604800, mo: 2628000, y: 31536000 };
@@ -257,7 +261,7 @@ function parseBurnAlert(alert) {
     const m = BURN_ALERT_NAME_RE.exec(name);
     if (!m) return null;
     slo = m[1];
-    factor = Number(m[2]);
+    factor = burnFactor(m[2]);
     short = m[3];
     long = m[4];
   }
@@ -454,9 +458,17 @@ function stripRuleObservation(rule) {
   return out;
 }
 
+// Burn-rate linkage labels the compiler stamps on every alerting rule it
+// emits. An alert observation carries these (and only these) so the graph
+// ladder can link a live rule to its declared POL-* window by labels
+// before falling back to the `<slo>_burn_<factor>x_<short>_<long>` name.
+const BURN_LINK_LABELS = ['slo', 'burn_rate', 'window_short', 'window_long'];
+
 // One entry of mcp.observed.recording_rules / mcp.observed.alert_rules.
 // Every key is present (null when the ruler did not report it) so the
-// reader never has to guess whether a field was absent or unknown.
+// reader never has to guess whether a field was absent or unknown. The
+// one exception is `labels` on an alerting entry: present only when at
+// least one burn-linkage label is, and holding only those keys.
 function ruleObservation(rule, kind) {
   const base = {
     name: rule?.name ?? null,
@@ -465,7 +477,21 @@ function ruleObservation(rule, kind) {
     lastEvaluation: rule?.lastEvaluation ?? null,
   };
   if (kind === 'alerting') {
-    return { ...base, state: rule?.state ?? null, activeAt: rule?.activeAt ?? null };
+    const out = {
+      ...base,
+      state: rule?.state ?? null,
+      activeAt: rule?.activeAt ?? null,
+      // Group evaluation interval (the alert adapter keeps it) — the
+      // ladder's staleness yardstick for alerting rules.
+      interval: rule?.interval ?? null,
+    };
+    const labels = {};
+    for (const key of BURN_LINK_LABELS) {
+      const value = rule?.labels?.[key];
+      if (value != null && value !== '') labels[key] = String(value);
+    }
+    if (Object.keys(labels).length) out.labels = labels;
+    return out;
   }
   return { ...base, evaluationTime: rule?.evaluationTime ?? null };
 }
@@ -967,20 +993,41 @@ export async function observeAlertmanager({
   return out;
 }
 
+// The verdict of one datasource, from the object the `health-object`
+// shape located (response-shapes.mjs describes the envelope) →
+// { health: 'ok' | 'error' | 'unknown', message }.
+//
+// otel-mcp-server answers { supported: true, status: 'OK' | 'ERROR',
+// message } when Grafana's health endpoint answered 2xx, and
+// { supported: false, error } when it did not. Grafana answers a check
+// that RAN and FAILED (backend unreachable) with HTTP 400 — verified
+// 2026-09-08 on Grafana 12.4.4; an unknown uid answers 500 — so an
+// unsupported answer whose error names HTTP 400 is a failed check:
+// 'error', with the error text as the message. Any other unsupported
+// answer (a 5xx, a network error, a datasource type with no check) is
+// 'unknown' with its message — "not checked", never "not unhealthy" —
+// and so is a supported answer that carries no status. Bare { status,
+// message } and { ok } verdicts read as before.
 function normDatasourceHealth(obj) {
+  if (obj?.supported === false) {
+    const reason = asString(obj.error) ?? asString(obj.message);
+    return { health: /\bHTTP 400\b/.test(reason || '') ? 'error' : 'unknown', message: reason };
+  }
   const status = typeof obj?.status === 'string' ? obj.status.toLowerCase() : null;
-  if (status === 'ok' || status === 'success' || obj?.ok === true) return 'ok';
-  if (status === 'error' || status === 'err' || obj?.ok === false) return 'error';
-  return 'unknown';
+  const message = trimError(obj?.message);
+  if (status === 'ok' || status === 'success' || obj?.ok === true) return { health: 'ok', message };
+  if (status === 'error' || status === 'err' || obj?.ok === false) return { health: 'error', message };
+  return { health: 'unknown', message };
 }
 
 // Grafana datasources (+ per-uid health, capped) and contact points →
 // { datasources: [{uid,name,type,health,message}] | null,
 //   contactPoints: { count, names } | null, toolsAnswered, error } or
 // null when NONE of the tools is advertised. Health is 'unknown' (no
-// verdict) when the health tool is not advertised, errored, or the
-// datasource is beyond the cap — an `unknown` is "not checked", never
-// "not unhealthy". An advertised tool that fails lands in `error` (see
+// verdict) when the health tool is not advertised, errored, Grafana
+// could not run the check (normDatasourceHealth), or the datasource is
+// beyond the cap — an `unknown` is "not checked", never "not unhealthy".
+// An advertised tool that fails lands in `error` (see
 // observeAlertmanager) and the result stays non-null.
 export async function observeGrafana({
   callTool, quiet, discoveredToolNames = null, hasToolsList = false,
@@ -1022,9 +1069,9 @@ export async function observeGrafana({
             if (!firstHealthError) firstHealthError = hErr;
             continue;
           }
-          const obj = locateObject('health-object', h) || {};
-          ds.health = normDatasourceHealth(obj);
-          ds.message = trimError(obj.message);
+          const verdict = normDatasourceHealth(locateObject('health-object', h) || {});
+          ds.health = verdict.health;
+          ds.message = verdict.message;
           healthAnswered = true;
         }
         if (healthAnswered) out.toolsAnswered.push(datasourceHealthTool);
@@ -1062,6 +1109,10 @@ export function buildCanonicalPack({
   probeResults = {},
   probeFailures = {},
   errors = {},
+  // Fetcher clock: when the fetch began and when each probe family
+  // answered. Null / empty when the caller predates them (nothing written).
+  fetchStartedAt = null,
+  observedAt = null,
   discoveredTools = [],
   unmatchedTools = [],
   capabilities = null,
@@ -1180,6 +1231,17 @@ export function buildCanonicalPack({
   // trimmed like every other observed error. Absent when nothing errored.
   for (const [family, msg] of Object.entries(probeErrors)) {
     annotations[`mcp.probeErrors.${family}`] = msg;
+  }
+  // The fetcher's own clock. mcp.refreshedAt is whatever the caller
+  // stamped (server and journey stamp it after the fetch returns), so
+  // freshness judgements on mcp.observed.* read mcp.observedAt.<family>
+  // first — the instant that family's answer arrived — then
+  // mcp.fetchStartedAt, and only then mcp.refreshedAt.
+  if (typeof fetchStartedAt === 'string' && fetchStartedAt) {
+    annotations['mcp.fetchStartedAt'] = fetchStartedAt;
+  }
+  for (const [family, at] of Object.entries(observedAt || {})) {
+    if (typeof at === 'string' && at) annotations[`mcp.observedAt.${family}`] = at;
   }
   // Per-probe count annotations — ANY probe with an array result, whether
   // empty or populated, lands here so the studio can read "0" honestly.
@@ -1965,7 +2027,7 @@ export const PROBES = [
     target: 'spec.policy.burn_rate_alerts',
     adapt: (response) => {
       const groups = response?.groups || response?.data?.groups || [];
-      const flat = response?.rules || groups.flatMap(g => (g.rules || []).map(r => ({ ...r, _group: g.name })));
+      const flat = response?.rules || groups.flatMap(g => (g.rules || []).map(r => ({ ...r, _group: g.name, _interval: g.interval })));
       // We can't fully reconstruct multi-window burn-rate semantics
       // from a flat rule, but we CAN capture the alert as a forecast
       // signal — the user can re-shape via the studio later.
@@ -1974,17 +2036,25 @@ export const PROBES = [
         // Prometheus uses an `alert` field; the `!== 'recording'` guard keeps
         // VMAlert recording rules (name set, no `record`) out of this bucket.
         .filter(r => r.type === 'alerting' || r.alert || (r.name && !r.record && r.type !== 'recording'))
-        .map(r => ({
-          name: r.alert || r.name,
-          expr: r.expr || r.query || '',
-          for: r.for || (r.duration ? secondsToPromDuration(r.duration) : null) || '5m',
-          labels: r.labels || (r.severity ? { severity: r.severity } : {}),
-          annotations: r.annotations || {},
-          // On-wire evaluation state: health/lastError/lastEvaluation plus
-          // the alerting state and activeAt (Prometheus nests activeAt per
-          // active alert instance; take the first). Never enters the spec.
-          ...pickPresent({ ...r, activeAt: r.activeAt ?? r.alerts?.[0]?.activeAt }, ALERT_OBSERVATION_FIELDS),
-        }));
+        .map(r => {
+          // Group evaluation interval, kept like the recording adapter
+          // does: it never enters spec.policy (mapDiscoveredBurnAlerts
+          // reads slo/windows only) but rides into mcp.observed.alert_rules
+          // as the staleness yardstick for the rule.
+          const interval = normInterval(r.interval ?? r._interval);
+          return {
+            name: r.alert || r.name,
+            expr: r.expr || r.query || '',
+            for: r.for || (r.duration ? secondsToPromDuration(r.duration) : null) || '5m',
+            labels: r.labels || (r.severity ? { severity: r.severity } : {}),
+            annotations: r.annotations || {},
+            ...(interval ? { interval } : {}),
+            // On-wire evaluation state: health/lastError/lastEvaluation plus
+            // the alerting state and activeAt (Prometheus nests activeAt per
+            // active alert instance; take the first). Never enters the spec.
+            ...pickPresent({ ...r, activeAt: r.activeAt ?? r.alerts?.[0]?.activeAt }, ALERT_OBSERVATION_FIELDS),
+          };
+        });
     },
   },
   {
@@ -2074,6 +2144,14 @@ export const PROBES = [
 
 export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null } = {}) {
   if (!mcpUrl) throw new Error('fetchMcp: mcpUrl required');
+  // When THIS fetch began, and when each probe family answered — the
+  // fetcher's own clock, independent of whatever `refreshedAt` the caller
+  // stamps (server and journey stamp it AFTER the fetch returns, so a slow
+  // fetch would otherwise read every fresh scrape as stale). The graph
+  // ladder takes mcp.observedAt.<family> as "now" for that family's
+  // observations, then mcp.fetchStartedAt, then mcp.refreshedAt.
+  const fetchStartedAt = new Date().toISOString();
+  const observedAt = {};
   const { rpc, notify, callTool } = createMcpClient({ mcpUrl, mcpAuth });
   const errors = {};
   const safe = async (name, fn) => {
@@ -2242,6 +2320,7 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null } = 
           rawSize: JSON.stringify(response).length,
           outcome: 'data',
         };
+        observedAt[probe.name] = new Date().toISOString();
         return;
       }
       // Empty result. Remember it but keep looking — another candidate
@@ -2258,6 +2337,8 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null } = 
         rawSize: firstEmpty.rawSize,
         outcome: 'empty',
       };
+      // An honest zero is still an observation made at this instant.
+      observedAt[probe.name] = new Date().toISOString();
       return;
     }
     probeResults[probe.name] = {
@@ -2312,6 +2393,8 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null } = 
         outcome: 'data',
         detailErrors,
       };
+      // The family's observation is now the enriched one.
+      observedAt.dashboards = new Date().toISOString();
     }
   }
 
@@ -2570,6 +2653,8 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null } = 
   return {
     health, topology, anomaliesActive, baselinesData,
     probeResults, errors,
+    fetchStartedAt,             // ISO instant this fetch began (the fetcher's own clock)
+    observedAt,                 // { <probe family>: ISO instant the family answered } — data or empty outcomes only
     probeFailures,              // { <candidate tool name>: last error message } — why a probe got no answer
     discoveredTools,            // full list from tools/list (or empty if unsupported)
     unmatchedTools,             // tools the MCP exposes that we don't probe yet

@@ -33,6 +33,10 @@
  *   <fixtures>/<tool>.json             scrape targets, the winning rule
  *                                      tool, dashboard search, and the
  *                                      status tools that were advertised
+ *                                      (datasource health: the first uid's
+ *                                      answer; when other uids answered the
+ *                                      other verdict, <tool>.ok.json and/or
+ *                                      <tool>.error.json beside it)
  *   <fixtures>/recorded-stack/<row>.json one metrics_query instant vector
  *                                      per family (first row with data,
  *                                      else the first honest empty)
@@ -227,17 +231,42 @@ const alertmanagerSilences = await statusTool('alertmanager_silences');
 const grafanaDatasources = await statusTool('grafana_datasources');
 const grafanaContactPoints = await statusTool('grafana_contact_points');
 
-// One datasource-health answer is enough for a fixture; the report lists
-// every uid it asked about (capped like the fetcher).
-const datasourceHealth = { id: 'grafana_datasource_health', tool: capabilityTool('grafana_datasource_health'), advertised: false, asked: [], response: null, uid: null, error: null };
+// The verdict one datasource-health answer carries, read where the
+// fetcher's `health-object` shape looks for it: otel-mcp-server's
+// { datasource, health: { supported, status, message } } envelope (a
+// check Grafana could not run answers { supported: false, error }), a
+// Prometheus-API { data: { status } } wrapper, or a bare { status }.
+// `case` is 'ok' for a check that ran and passed and 'error' for any other
+// answer (a failed check, an unsupported one, no status at all) — the
+// two-way split that decides which answers a recording keeps; `label` is
+// what the report prints for the uid.
+function healthVerdict(response) {
+  const doc = [response?.health, response?.data, response].find(v => v && typeof v === 'object' && !Array.isArray(v)
+    && ['status', 'supported', 'message', 'ok'].some(k => v[k] !== undefined)) || null;
+  if (!doc) return { case: 'error', label: response ? 'answered' : null };
+  if (doc.supported === false) return { case: 'error', label: `not supported (${trimError(doc.error ?? doc.message) ?? 'no reason given'})` };
+  const status = typeof doc.status === 'string' ? doc.status : (doc.ok === true ? 'OK' : (doc.ok === false ? 'ERROR' : null));
+  return { case: status && status.toUpperCase() === 'OK' ? 'ok' : 'error', label: status ?? 'answered' };
+}
+
+// The datasource-health fixture is the FIRST uid's answer; the report
+// lists every uid asked about (capped like the fetcher). When several
+// uids answer, the first OK verdict and the first non-OK one are kept as
+// well — written as <tool>.ok.json / <tool>.error.json unless identical
+// to the primary file — so both cases of the real product can be
+// replayed from a recording.
+const datasourceHealth = { id: 'grafana_datasource_health', tool: capabilityTool('grafana_datasource_health'), advertised: false, asked: [], response: null, uid: null, cases: { ok: null, error: null }, error: null };
 if (grafanaDatasources.response && advertised(datasourceHealth.tool)) {
   datasourceHealth.advertised = true;
   const raw = grafanaDatasources.response;
   const list = Array.isArray(raw) ? raw : (raw?.datasources || raw?.data || []);
   for (const ds of (Array.isArray(list) ? list : []).filter(d => d?.uid).slice(0, HEALTH_LIMIT)) {
     const r = await attempt(() => callTool(datasourceHealth.tool, { uid: ds.uid }));
-    datasourceHealth.asked.push({ uid: ds.uid, name: ds.name ?? null, error: r.error, status: r.response?.status ?? r.response?.data?.status ?? null });
-    if (!datasourceHealth.response && r.response) { datasourceHealth.response = r.response; datasourceHealth.uid = ds.uid; }
+    const verdict = healthVerdict(r.response);
+    datasourceHealth.asked.push({ uid: ds.uid, name: ds.name ?? null, error: r.error, status: verdict.label });
+    if (!r.response) continue;
+    if (!datasourceHealth.response) { datasourceHealth.response = r.response; datasourceHealth.uid = ds.uid; }
+    if (!datasourceHealth.cases[verdict.case]) datasourceHealth.cases[verdict.case] = { uid: ds.uid, response: r.response };
   }
 }
 
@@ -309,7 +338,8 @@ out(`  ${describeStatus(alertmanagerStatus, (r) => `version ${r?.versionInfo?.ve
 out(`  ${describeStatus(alertmanagerSilences, (r) => `${asList(r, ['silences', 'data']).length} silences`)}`);
 out(`  ${describeStatus(grafanaDatasources, (r) => `${asList(r, ['datasources', 'data']).length} datasources`)}`);
 if (datasourceHealth.advertised) {
-  out(`  ${datasourceHealth.tool}: ${datasourceHealth.asked.map(a => `${a.name || a.uid} ${a.error ? 'FAILED' : (a.status ?? 'answered')}`).join(', ') || 'no uid to ask about'}${datasourceHealth.response ? ` — ${shapeVerdict('grafana_datasource_health', datasourceHealth.response)}` : ''}`);
+  const kept = Object.entries(datasourceHealth.cases).filter(([, c]) => c).map(([kind, c]) => `${kind} (${c.uid})`);
+  out(`  ${datasourceHealth.tool}: ${datasourceHealth.asked.map(a => `${a.name || a.uid} ${a.error ? 'FAILED' : (a.status ?? 'answered')}`).join(', ') || 'no uid to ask about'}${datasourceHealth.response ? ` — ${shapeVerdict('grafana_datasource_health', datasourceHealth.response)}` : ''}${kept.length ? `; cases seen: ${kept.join(', ')}` : ''}`);
 } else {
   out(`  ${datasourceHealth.tool}: ${grafanaDatasources.response ? 'not advertised' : 'skipped (no datasource list)'}`);
 }
@@ -423,10 +453,18 @@ for (const s of [alertmanagerStatus, alertmanagerSilences, grafanaDatasources, g
   writeJson(resolve(OUT_DIR, `${s.tool}.json`), Array.isArray(payload) ? payload : { _recorded: provenance({ tool: s.tool }), ...payload });
 }
 if (datasourceHealth.response) {
-  writeJson(resolve(OUT_DIR, `${datasourceHealth.tool}.json`), {
-    _recorded: provenance({ tool: datasourceHealth.tool, uid: datasourceHealth.uid }),
-    ...trimLists(datasourceHealth.response),
-  });
+  const healthFile = (suffix) => resolve(OUT_DIR, `${datasourceHealth.tool}${suffix}.json`);
+  const primary = trimLists(datasourceHealth.response);
+  writeJson(healthFile(''), { _recorded: provenance({ tool: datasourceHealth.tool, uid: datasourceHealth.uid }), ...primary });
+  // The other verdict(s), each from the first uid that answered it —
+  // skipped when it IS the primary file's answer (same uid, or the same
+  // payload), so a single-verdict server writes one file as before.
+  for (const [kind, kept] of Object.entries(datasourceHealth.cases)) {
+    if (!kept || kept.uid === datasourceHealth.uid) continue;
+    const payload = trimLists(kept.response);
+    if (JSON.stringify(payload) === JSON.stringify(primary)) continue;
+    writeJson(healthFile(`.${kind}`), { _recorded: provenance({ tool: datasourceHealth.tool, uid: kept.uid, case: kind }), ...payload });
+  }
 }
 
 out();

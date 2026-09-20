@@ -1,0 +1,57 @@
+{
+  "_recorded": {
+    "recordedAt": "2026-09-08T08:19:28.479Z",
+    "tool": "grafana_datasources",
+    "scrubbed": [],
+    "reviewed": "jsonData and secureJsonFields are empty on every datasource; the compose service hostnames are the stack's own, kept verbatim",
+    "server": "otel-mcp-server 1.8.0 over docker/stack.compose.yaml (Grafana 12.4.4), admin-seeded state"
+  },
+  "count": 3,
+  "datasources": [
+    {
+      "id": 3,
+      "uid": "ffxm6mvg1ohkwc",
+      "orgId": 1,
+      "name": "Loki (absent)",
+      "type": "loki",
+      "typeName": "Loki",
+      "access": "proxy",
+      "url": "http://loki:3100/",
+      "isDefault": false,
+      "readOnly": false,
+      "basicAuth": false,
+      "jsonData": {},
+      "secureJsonFields": []
+    },
+    {
+      "id": 1,
+      "uid": "stack-prom",
+      "orgId": 1,
+      "name": "Prometheus (stack)",
+      "type": "prometheus",
+      "typeName": "Prometheus",
+      "access": "proxy",
+      "url": "http://prometheus:9090/",
+      "isDefault": true,
+      "readOnly": true,
+      "basicAuth": false,
+      "jsonData": {},
+      "secureJsonFields": []
+    },
+    {
+      "id": 2,
+      "uid": "dfxm6mv8jzg8wd",
+      "orgId": 1,
+      "name": "VictoriaMetrics (stack)",
+      "type": "prometheus",
+      "typeName": "Prometheus",
+      "access": "proxy",
+      "url": "http://victoriametrics:8428/",
+      "isDefault": false,
+      "readOnly": false,
+      "basicAuth": false,
+      "jsonData": {},
+      "secureJsonFields": []
+    }
+  ]
+}

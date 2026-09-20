@@ -83,6 +83,22 @@ side by side and offer the targeted fix (deploy the missing rule, adopt the
 live threshold, retire the stale alert) — remediation at requirement
 granularity instead of artefact granularity.
 
+- *Status 2026-09-08:* the chain cards now carry more than the scored
+  verdict — beside it the on-wire ladder verdict (present but unhealthy /
+  stale, or `unobserved` when the vantage could not look), and on every
+  missing or drifted node its blast radius (`blinds N SLOs`: what WOULD go
+  blind if it really died — exposure, never a claim that it is blind).
+  Every journey run keeps a per-chain record (`branches`: verdict, ladder
+  verdict, both integrities, the degraded nodes worst first with their
+  ladder reading and blast-radius summary), diffs it against the previous
+  run (`transition`) and ranks the candidate causes the evidence can offer
+  (`causes` — Observogram's own deploys in the window, decision-bearing
+  drift, a backend version change, a stack self-metric signal; never a
+  root-cause verdict, the vantage's own change reported beside them).
+  Nothing scored changed (`docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md` is
+  the proposal to switch). Still open here: the acting surface at
+  requirement granularity beyond the two per-chain arrows.
+
 ## P2 — Make it a product, not a session (active)
 
 ### 10. Workspace persistence + auth + audit + rollback *(designed 2026-06-10)*
@@ -221,6 +237,24 @@ Strengthen the evidence: per-artefact freshness (rule last evaluated,
 dashboard last rendered, alert route last exercised), carried in pack
 annotations and surfaced in Traceability buckets and the Fresh criterion.
 Turns "it exists in production" into "it is alive in production".
+
+- *Status 2026-09-08:* the per-artefact reading exists as the **per-node
+  ladder** (`unobserved < absent < exists < alive < healthy`, with
+  `present_unhealthy` / `present_stale` statuses) read from the on-wire
+  annotations the fetcher already writes — target health and `lastScrape`,
+  rule health / `lastError` / `lastEvaluation` against the declared
+  interval, the `*_unhealthy` lists, the probe outcomes, `mcp.versions.*`
+  for backends — and carried per branch (`ladderVerdict`,
+  `ladderIntegrity`) and per journey run. It is **unscored**: the Fresh and
+  Drift-free criteria are unchanged, pending the maintainer-reviewed
+  `docs/SCORING_PROPOSAL_LADDER_INTEGRITY.md` (gradeSchema 3). Not yet
+  evidenced: dashboard last rendered, alert route last exercised — no MCP
+  tool exposes either, so a present panel, dashboard or route reads
+  `exists` ("no liveness field on the wire for this kind"); a missing panel
+  or dashboard reads `absent` or `unobserved` by the `dashboards` probe
+  family, and a missing route reads `absent` (no probe family carries
+  routes) — or the kind is `unverifiable` when the tier showed no live
+  route at all.
 
 ### 3. Richer semantic parsing: PromQL, dashboards, scrape, Alertmanager
 Drift matching is structural-plus-PromQL today. Deepen the semantic layer:
