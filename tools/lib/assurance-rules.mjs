@@ -121,7 +121,12 @@ export function assuranceProducts(canonical, profile, jobs = [], warn = () => {}
   return products;
 }
 
-const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// Escape for TWO contexts at once: RE2 (each job name is a regex alternative)
+// AND the PromQL double-quoted string it sits in, where only Go escapes are
+// legal — a lone `\.` is "unknown escape sequence" and rejects the WHOLE rules
+// file at load (every burn/forecast rule of the pack with it). Two backslashes
+// on the wire: PromQL unescapes them to one, RE2 then sees `\.` (fix round 0).
+const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\\\$&');
 
 const aliasFor = (rowId, product) => {
   const row = ROW_BY_ID.get(rowId);

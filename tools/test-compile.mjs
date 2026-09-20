@@ -681,7 +681,19 @@ process.stdout.write('\n[policy PromQL] burn-rules.mjs is the single source\n');
   const jobs = JSON.parse(JSON.stringify(pack));
   jobs.spec.pipelines.receivers.find(r => Array.isArray(r.scrape_configs)).scrape_configs.push({ job_name: 'api.v2+beta', scrape_interval: '15s' }, { job_name: 'payment-api', scrape_interval: '30s' });
   const jobsTd = rulesOf(compilePrometheusRules(jobs)).groups.flatMap(g => g.rules).find(r => r.alert === 'payment_service_scrape_target_down');
-  assert(jobsTd.expr === 'up{job=~"payment-api|api\\.v2\\+beta"} == 0' && /payment-api, api\.v2\+beta/.test(jobsTd.annotations.description), 'target-down lists every declared job once, regex-escaped', jobsTd.expr);
+  assert(jobsTd.expr === 'up{job=~"payment-api|api\\\\.v2\\\\+beta"} == 0' && /payment-api, api\.v2\+beta/.test(jobsTd.annotations.description), 'target-down lists every declared job once, escaped for RE2 inside a PromQL string (two backslashes on the wire)', jobsTd.expr);
+  // Fix round 0: a single backslash (`api\.v2`) was an invalid PromQL string escape — promtool rejected the
+  // ENTIRE rules file ("unknown escape sequence U+002E"). The matcher must be a valid escaped string literal
+  // (Go/JSON escape vocabulary) whose VALUE is the single-backslash RE2 pattern that matches the jobs literally.
+  const tdMatcher = jobsTd.expr.match(/^up\{job=~"(.*)"\} == 0$/)[1];
+  let tdRe2; try { tdRe2 = JSON.parse('"' + tdMatcher + '"'); } catch { tdRe2 = null; }
+  assert(tdRe2 === 'payment-api|api\\.v2\\+beta', 'the job matcher unescapes (Go/JSON escapes only) to the single-backslash RE2 pattern', tdMatcher);
+  assert(tdRe2 !== null && new RegExp(`^(?:${tdRe2})$`).test('api.v2+beta') && new RegExp(`^(?:${tdRe2})$`).test('payment-api') && !new RegExp(`^(?:${tdRe2})$`).test('apiXv2+beta') && !new RegExp(`^(?:${tdRe2})$`).test('api.v2beta'),
+         'the RE2 pattern matches the declared job names literally and nothing else');
+  const jobsGm = parseYaml(stripBanner(compileGrafanaManagedRules(jobs))).groups.flatMap(g => g.rules).find(r => r.title === 'payment_service_scrape_target_down');
+  assert(jobsGm && jobsGm.data[0].model.expr === jobsTd.expr, 'the Grafana-managed flavour carries the same two-backslash expr', jobsGm?.data?.[0]?.model?.expr);
+  const jobsArtifact = compileArtifact(jobs, { group: 'rules', flavor: 'prometheus', artifact: 'assurance' }).content;
+  assert(jobsArtifact.split('\n').some(l => l === '        expr: up{job=~"payment-api|api\\\\.v2\\\\+beta"} == 0'), 'the emitted YAML line is a plain scalar with the two backslashes intact (mini-yaml does not re-escape it)', jobsArtifact.split('\n').filter(l => /scrape_target_down|up\{job/.test(l)));
   const noJobs = JSON.parse(JSON.stringify(pack));
   for (const r of noJobs.spec.pipelines.receivers) delete r.scrape_configs;
   assert(!rulesOf(compilePrometheusRules(noJobs)).groups.flatMap(g => g.rules).some(r => r.alert === 'payment_service_scrape_target_down'), 'no declared scrape job → no target-down rule (an instrument nobody scrapes would fire forever)');
