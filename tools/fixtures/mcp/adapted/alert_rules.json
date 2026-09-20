@@ -44,6 +44,7 @@
       "description": "P99 latency is {{ $value | humanizeDuration }} (threshold: 5s)",
       "summary": "Critical P99 latency"
     },
+    "interval": "15s",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:48.233484163Z",
     "evaluationTime": 0.002587316,
@@ -60,6 +61,7 @@
       "description": "The {{ $labels.job }} service has been unreachable for more than 1 minute",
       "summary": "Service {{ $labels.job }} is down"
     },
+    "interval": "15s",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:48.23609988Z",
     "evaluationTime": 0.00141155,
@@ -76,6 +78,7 @@
       "description": "No HTTP requests received in the last 10 minutes",
       "summary": "No traffic detected"
     },
+    "interval": "15s",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:48.237535721Z",
     "evaluationTime": 0.001425293,
@@ -93,6 +96,7 @@
       "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#coldwalletunpricedflows",
       "summary": "Cold-wallet {{ $labels.direction }} settled without a USD price"
     },
+    "interval": "15s",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:52.21460519Z",
     "evaluationTime": 0.002001504,
@@ -110,6 +114,7 @@
       "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#custodywebhooksignaturefailures",
       "summary": "Custody webhook signature failures"
     },
+    "interval": "15s",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:52.216637079Z",
     "evaluationTime": 0.001553573,
@@ -127,6 +132,7 @@
       "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#custodywebhooksignaturefailures",
       "summary": "Custody webhook under signature brute-force"
     },
+    "interval": "15s",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:52.218222516Z",
     "evaluationTime": 0.001674042,
@@ -144,6 +150,7 @@
       "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#custodywebhookerrors",
       "summary": "Custody webhook settlement errors ({{ $labels.provider }}/{{ $labels.event_type }})"
     },
+    "interval": "15s",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:52.219924116Z",
     "evaluationTime": 0.00154094,
@@ -161,6 +168,7 @@
       "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#coldwithdrawalstuckinflight",
       "summary": "{{ $labels.asset }} cold withdrawals stuck in flight"
     },
+    "interval": "15s",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:52.221491988Z",
     "evaluationTime": 0.001383465,
@@ -178,6 +186,7 @@
       "runbook_url": "https://github.com/MoebiusX/krystalinex-core/blob/main/docs/observability/06_COLD_WALLET_ALERTS.md#coldwithdrawalsettlementslow",
       "summary": "Cold withdrawal settlement is slow (p95 over 30m)"
     },
+    "interval": "15s",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:52.222901959Z",
     "evaluationTime": 0.001258226,
@@ -194,6 +203,7 @@
       "description": "A container has restarted multiple times in the last 15 minutes.",
       "summary": "Container is crash-looping"
     },
+    "interval": "15s",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:48.219617703Z",
     "evaluationTime": 0.003667616,
@@ -210,6 +220,7 @@
       "description": "A container was terminated due to OOM. Consider increasing memory limits.",
       "summary": "Container was OOM killed"
     },
+    "interval": "15s",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:48.223326891Z",
     "evaluationTime": 0.001223216,
@@ -226,6 +237,7 @@
       "description": "A pod has been in a non-ready state for more than 10 minutes.",
       "summary": "Pod has been not ready for 10m"
     },
+    "interval": "15s",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:48.224577881Z",
     "evaluationTime": 0.005627373,
@@ -242,6 +254,7 @@
       "description": "A deployment does not have the desired number of ready replicas.",
       "summary": "Deployment replica mismatch"
     },
+    "interval": "15s",
     "health": "ok",
     "lastEvaluation": "2026-09-08T07:03:48.230248764Z",
     "evaluationTime": 0.001809033,
