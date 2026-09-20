@@ -70,7 +70,15 @@ kubectl apply -k deploy/k8s              # the base alone stays byte-identical
 
 (The overlay is a sibling directory, not `deploy/k8s/overlays/…`: kustomize
 refuses a kustomization whose resource is a parent directory — "cycle
-detected" — and the base must stay where it is.)
+detected" — and the base must stay where it is. It repeats the base's
+`namespace: observability` and `app.kubernetes.io/part-of` label on purpose:
+the base's transformers apply to the base's own resources only, so without
+them the component's PVC and CronJob would render namespace-less — landing in
+your kubeconfig's current namespace while the patched studio Deployment in
+`observability` waits on a claim that does not exist there. Every document of
+`kubectl kustomize deploy/k8s-journeys` carries the namespace;
+`tools/test-deploy-manifests.mjs` pins the overlay's values equal to the
+base's.)
 
 What the component adds ([components/journeys](components/journeys)):
 
@@ -107,5 +115,7 @@ root only).
 Validation: CI runs no kustomize/kubeconform. The manifests are checked
 structurally by `tools/test-deploy-manifests.mjs` (`npm run
 test:deploy-manifests` — parses every file, pins the shared PVC/mount/env on
-both sides, the non-retry contract and the no-literal-secret rule) and
-rendered by hand with `kubectl kustomize deploy/k8s-journeys`.
+both sides, the overlay's namespace/labels, the non-retry contract and the
+no-literal-secret rule) and rendered by hand with `kubectl kustomize
+deploy/k8s-journeys` (check that every `kind:` in the output is followed by
+`namespace: observability`).

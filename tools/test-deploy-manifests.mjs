@@ -76,6 +76,18 @@ const overlay = docs['../k8s-journeys/kustomization.yaml'];
   assert(comp.apiVersion === 'kustomize.config.k8s.io/v1alpha1' && comp.kind === 'Component' && comp.resources.join() === 'pvc-workspace.yaml,cronjob-journeys.yaml' && comp.patches[0].path === 'patch-studio-workspace.yaml' && comp.patches[0].target.kind === 'Deployment' && comp.patches[0].target.name === 'observabilitypack-studio',
          'the component is a kustomize Component with the PVC, the CronJob and the studio patch', comp);
   assert(overlay.kind === 'Kustomization' && overlay.resources.join() === '../k8s' && overlay.components.join() === '../k8s/components/journeys', 'the sibling overlay is base + component', overlay);
+  // Fix round 0: the base's namespace/labels transformers apply to the base's
+  // own resources only. Without its own `namespace:` the overlay rendered the
+  // PVC and the CronJob namespace-less (→ the kubeconfig's current namespace)
+  // while the patched studio Deployment in `observability` claimed a PVC that
+  // did not exist there (pod Pending on an unbound claim).
+  const base = docs['kustomization.yaml'];
+  assert(overlay.namespace === base.namespace && overlay.namespace === 'observability',
+         'the overlay repeats the base namespace so the component\'s PVC and CronJob land beside the studio Deployment', { overlay: overlay.namespace, base: base.namespace });
+  assert(JSON.stringify(overlay.labels) === JSON.stringify(base.labels) && overlay.labels[0].pairs['app.kubernetes.io/part-of'] === 'observabilitypack-studio',
+         'the overlay repeats the base part-of label pair for the component\'s resources', { overlay: overlay.labels, base: base.labels });
+  assert(!pvc.metadata.namespace && !cron.metadata.namespace,
+         'the component files themselves stay namespace-less (the overlay transformer sets it — one place)');
   assert(pvc.kind === 'PersistentVolumeClaim' && pvc.metadata.name === K8S_WORKSPACE_PVC && pvc.spec.accessModes.join() === 'ReadWriteOnce' && pvc.spec.resources.requests.storage === '1Gi', 'the PVC is named as the snippets emitter expects, RWO, 1Gi placeholder', pvc);
   assert(/1Gi is a placeholder, not a measurement/.test(readFileSync(join(K8S, 'components/journeys/pvc-workspace.yaml'), 'utf8')) && /journeys × OBSERVOGRAM_JOURNEY_RUN_RETENTION/.test(readFileSync(join(K8S, 'components/journeys/pvc-workspace.yaml'), 'utf8')),
          'the PVC file states the sizing formula and that 1Gi is a placeholder');
