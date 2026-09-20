@@ -8,6 +8,11 @@
 //
 // The re-render entrypoint comes through the studio host seam (host.mjs);
 // all host bindings are call-time only.
+//
+// Advanced → Neuron (neuron-view.mjs) composes the same pieces — the
+// loader `loadJourneysData`, the capture bar and the cards
+// (`renderJourneyCards`) — under its fleet tiles and charts, so a card
+// reads the same in both places.
 
 import { state } from './state.mjs';
 import { api } from './api.mjs';
@@ -84,7 +89,7 @@ export function renderJourneysView(view) {
 
 // "Save this comparison as a journey" — enabled when the session holds an
 // A/B pair; the server resolves both to durable sources.
-function renderCaptureBar(host) {
+export function renderCaptureBar(host) {
   if (!host) return;
   const ready = !!(state.selectedPackId && state.compareBId);
   if (!ready) {
@@ -124,32 +129,51 @@ function renderCaptureBar(host) {
   };
 }
 
-async function loadJourneysList(host) {
-  if (!host) return;
-  let journeys = [];
-  try {
-    ({ journeys } = await api('/api/journeys'));
-  } catch (e) {
-    host.innerHTML = `<div class="refs-empty refs-error">Couldn't load journeys: ${escapeHtml(e.message)}</div>`;
-    return;
-  }
-  if (!journeys.length) {
-    host.innerHTML = `<div class="refs-empty">No journeys saved yet. Capture one above, or add
-      <code>.observogram/journeys/&lt;name&gt;.journey.yaml</code> by hand.</div>`;
-    return;
-  }
-  // Fetch each journey's recent runs for the sparkline (small N, parallel).
+// The data behind the cards: the listing, each journey's newest `limit`
+// runs (newest first, as the API hands them; a failed history reads as
+// empty) and the two browser-safe helper modules (null when they fail to
+// load). Throws when the listing itself cannot be read. `fetchFn` is
+// injectable (docs/UI_CONVENTIONS.md §2).
+export async function loadJourneysData({ fetchFn = api, limit = 20 } = {}) {
+  const { journeys = [] } = await fetchFn('/api/journeys');
   const runsByName = {};
   let stackLib = null;
   let schedLib = null;
   await Promise.all([
     ...journeys.map(async j => {
-      try { runsByName[j.name] = (await api(`/api/journeys/${encodeURIComponent(j.name)}/runs?limit=20`)).runs; }
+      try { runsByName[j.name] = (await fetchFn(`/api/journeys/${encodeURIComponent(j.name)}/runs?limit=${limit}`)).runs || []; }
       catch (_) { runsByName[j.name] = []; }
     }),
     (async () => { try { stackLib = await stackEvidenceLib(); } catch { stackLib = null; } })(),
     (async () => { try { schedLib = await scheduleLib(); } catch { schedLib = null; } })(),
   ]);
+  return { journeys, runsByName, stackLib, schedLib };
+}
+
+async function loadJourneysList(host) {
+  if (!host) return;
+  let data;
+  try {
+    data = await loadJourneysData();
+  } catch (e) {
+    host.innerHTML = `<div class="refs-empty refs-error">Couldn't load journeys: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  renderJourneyCards(host, data);
+}
+
+// The cards, one per journey: definition summary, last outcome, sparkline,
+// run-now, the stack / posture / chains / cause / notify lines and the
+// history table. `onRun(name)` runs after a run-now completes — the Neuron
+// view refreshes its whole model from it; without it the list reloads
+// itself.
+export function renderJourneyCards(host, { journeys = [], runsByName = {}, stackLib = null, schedLib = null } = {}, { onRun = null } = {}) {
+  if (!host) return;
+  if (!journeys.length) {
+    host.innerHTML = `<div class="refs-empty">No journeys saved yet. Capture one above, or add
+      <code>.observogram/journeys/&lt;name&gt;.journey.yaml</code> by hand.</div>`;
+    return;
+  }
 
   host.innerHTML = journeys.map(j => {
     const runs = runsByName[j.name] || [];
@@ -184,7 +208,7 @@ async function loadJourneysList(host) {
   }).join('');
 
   host.querySelectorAll('.journey-run-btn').forEach(btn => {
-    btn.onclick = () => runJourneyNow(btn.dataset.journey, host, btn);
+    btn.onclick = () => runJourneyNow(btn.dataset.journey, host, btn, onRun);
   });
 }
 
@@ -331,7 +355,8 @@ function renderRunsTable(runs) {
     <tbody>${rows}</tbody></table>`;
 }
 
-async function runJourneyNow(name, listHost, btn) {
+async function runJourneyNow(name, listHost, btn, onRun = null) {
+  const after = () => (typeof onRun === 'function' ? onRun(name) : loadJourneysList(listHost));
   const card = listHost.querySelector(`.journey-card[data-journey="${CSS.escape(name)}"]`);
   const resultEl = card?.querySelector('.journey-result');
   btn.disabled = true;
@@ -354,12 +379,12 @@ async function runJourneyNow(name, listHost, btn) {
       }, null, 2))}</pre>`;
     }
     // Refresh the whole list so the sparkline + history pick up the run.
-    loadJourneysList(listHost);
+    after();
   } catch (e) {
     toast(`Run failed: ${e.message}`, 'error');
     btn.disabled = false;
     btn.textContent = '▶ run now';
     // A live source that did not answer still left a vantage-lost record.
-    loadJourneysList(listHost);
+    after();
   }
 }

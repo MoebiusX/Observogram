@@ -89,6 +89,12 @@ export const state = {
   diff: null,                  // last fetched /api/diff result
   packB: null,                 // B's full layered pack (for atlases)
   atlasVariant: 'strata',      // 'strata' | 'periodic' | 'constellation' | 'skyline' | 'transit' | 'arbor'
+  // Advanced → Neuron: the focused journey (null → the one that most needs
+  // eyes, neuron-model.mjs defaultFocus), how many newest runs per journey
+  // the series keep, and which fleet metric the trend chart draws.
+  neuronJourney: null,
+  neuronWindow: 50,            // 20 | 50 | 100 | 200
+  neuronMetric: 'alignment',   // 'alignment' | 'grade'
   atlasMorph: 0,               // 0..1 for the constellation slider
   arborView: 'A',              // 'A' | 'B' | 'both' — arbor side-by-side toggle
   compileTarget: 'prometheus-rules',
@@ -128,6 +134,7 @@ const PERSIST_FIELDS = [
   'compareSlice', 'compareSearch', 'compareLens', 'diffScopeMode',
   'viewFocus',
   'atlasVariant', 'arborView',
+  'neuronJourney', 'neuronWindow', 'neuronMetric',
   'compileGroup', 'compileFlavor', 'compileArtifact',
   'compileGroupB', 'compileFlavorB', 'compileArtifactB',
   'tracePrefs',

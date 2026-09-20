@@ -34,7 +34,7 @@ import { renderCompileView, loadDeployMatrix } from './compile-view.mjs';
 import { openDrawer, closeDrawer } from './drawer.mjs';
 import { renderDiscoverDashboard, renderLayersView, renderCard, cardKey } from './layers-view.mjs';
 import { renderAtlasView } from './atlas-view.mjs';
-import { renderJourneysView } from './journeys-view.mjs';
+import { renderNeuronView } from './neuron-view.mjs';
 import { renderBenchmarkView, renderComparePicker, renderTraceabilityView, refreshDiff, loadDiff, LENS_PRODUCTS, activeDiffScopeMode } from './compare-view.mjs';
 import { catalogToDeployManifest } from './artifact-model.mjs';
 import { computeDeployTransitions } from './verify-deploy.mjs';
@@ -85,10 +85,13 @@ async function rehydrateFromPersistence() {
   // Permitted views: the three workflow tabs + the Advanced deep tools.
   // Anything else (legacy 'benchmark', the removed 'compare-artefacts')
   // routes to the compliance report so we never strand the user.
-  const PERMITTED_VIEWS = new Set(['layers', 'compare', 'compile', 'conformance', 'schema', 'otlp', 'traceability', 'atlas', 'references', 'journeys']);
+  // 'journeys' (the pre-Neuron Advanced item) is accepted and routed to
+  // Neuron, which carries the journey cards among its panels.
+  const PERMITTED_VIEWS = new Set(['layers', 'compare', 'compile', 'conformance', 'schema', 'otlp', 'traceability', 'atlas', 'references', 'neuron', 'journeys']);
   if (state.view && !PERMITTED_VIEWS.has(state.view)) {
     state.view = 'compare';
   }
+  if (state.view === 'journeys') state.view = 'neuron';
   if (typeof saved.layerFilter === 'string')   state.layerFilter = saved.layerFilter;
   if (typeof saved.compareSlice === 'string')  state.compareSlice = saved.compareSlice;
   if (typeof saved.compareSearch === 'string') state.compareSearch = saved.compareSearch;
@@ -715,6 +718,10 @@ export function renderMainView() {
     // References (Advanced) is a catalogue browser — it renders without a
     // pack loaded; the per-reference benchmark action then needs Pack A.
     if (state.view === 'references') { renderReferencesView(view); return; }
+    // Neuron (Advanced) reads the saved journeys and their run history from
+    // the workspace — no pack needs to be loaded; only the capture bar
+    // asks for an A/B pair.
+    if (state.view === 'neuron' || state.view === 'journeys') { renderNeuronView(view); return; }
     renderNeedPackPrompt(view); return;
   }
 
@@ -739,7 +746,8 @@ export function renderMainView() {
     case 'schema':             renderSchemaView(view); return;
     case 'otlp':               renderOtlpView(view); return;
     case 'references':         renderReferencesView(view); return;
-    case 'journeys':           renderJourneysView(view); return;
+    case 'journeys':                                          // pre-Neuron alias
+    case 'neuron':             renderNeuronView(view); return;
     case 'layers':
     default:
       // Discover ("What Do We Have?") IS the real layer inventory —
@@ -1114,13 +1122,16 @@ const OBSERVA_TABS = [
 // chrome button (styled like the old action cluster) that opens a menu.
 // Each routes to a view that already exists in the dispatcher.
 const OBSERVA_ADV = [
+  // Neuron first: the monitor-of-monitors surface (journeys, chains, causes,
+  // stack posture, delivery, trends) — the Journeys item it replaces lives
+  // on as a route alias.
+  { id: 'neuron',       label: 'Neuron',       sub: 'observability control · journeys · chains · causes · posture · trends' },
   { id: 'references',   label: 'References',   sub: 'catalogue reference packs · benchmark vs best practice' },
   { id: 'conformance',  label: 'Conformance',  sub: 'maturity rubric · MUST/SHOULD per tier' },
   { id: 'schema',       label: 'Schema',       sub: 'canonical YAML + v1.2 validation' },
   { id: 'otlp',         label: 'OTLP Coverage', sub: 'receiver protocols · per-signal exporters' },
   { id: 'traceability', label: 'Traceability', sub: 'repo vs live · declared / verified / stale' },
   { id: 'atlas',        label: 'Atlas',        sub: 'visual atlases · strata · periodic · skyline' },
-  { id: 'journeys',     label: 'Journeys',     sub: 'saved drift checks · run history · trends' },
 ];
 const OBSERVA_ADV_VIEWS = new Set(OBSERVA_ADV.map(a => a.id));
 
