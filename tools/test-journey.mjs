@@ -15,7 +15,7 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import { createHarness } from './lib/harness.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { adapt } from './lib/adapter.mjs';
@@ -35,7 +35,9 @@ const {
   formatStackValue, validateGateStack, stackStatusLine,
   chainStatusLine, liveVersions, livePackDecision, pruneLiveSnapshots, readLivePack, KEEP_LIVE_PACK_POLICIES, LIVE_PACK_PATH_RE,
   causeLine, transitionGotWorse, resolveDeployArtifact,
+  notifyStatusLine, postNotification, resolveNotifyTarget, validateNotify, NOTIFY_POLICIES, NOTIFY_TIMEOUT_DEFAULT_MS,
 } = await import('./lib/journey.mjs');
+const { chainGotWorse } = await import('./lib/journey-notify.mjs');
 const { STACK_SELF_METRIC_PROBES } = await import('./lib/contracts/stack-self-metrics.mjs');
 
 // A TCP port nobody listens on: bind an ephemeral one, read it, release
@@ -841,6 +843,9 @@ try {
            'exposing the recording-rules family moves chains (unobserved → absent is a ladder transition)', t3.transition && { any: t3.transition.any, changed: t3.transition.changed.map(c => [c.title, c.from, c.to, c.direction]) });
     assert(t3.transition.changed.every(c => c.from.ladderVerdict === 'unobserved' || c.from.verdict !== c.to.verdict) && t3.transition.changed.some(c => c.direction === 'worse'),
            'the vantage that now looks and sees nothing reads worse — not "changed", never a cause', t3.transition.changed.map(c => c.direction));
+    // Step 5: journey-notify's zero-import worse predicate agrees with transitionGotWorse on every recorded run.
+    assert([t1, t2, t3].every(r => chainGotWorse(r) === transitionGotWorse(r)) && chainGotWorse(t3) === true && chainGotWorse(t2) === false,
+           'journey-notify chainGotWorse is pinned equal to journey.mjs transitionGotWorse over the step-4 records', [t1, t2, t3].map(r => [chainGotWorse(r), transitionGotWorse(r)]));
     assert(t3.livePack.kept === true && new RegExp(`^chains changed since ${t2.startedAt.replace(/[.]/g, '\\.')}: \\d+ changed`).test(t3.livePack.reason) && t3.livePack.path === `live/${stemOf(t3)}`,
            'the moved run keeps its live pack and the reason says what moved', t3.livePack);
     assert(liveFilesOf('fake-live').join() === [stemOf(t1), stemOf(t3)].join(), 'the live directory holds the first and the moved run', liveFilesOf('fake-live'));
@@ -1078,6 +1083,284 @@ try {
            'a journey whose chains did not get worse gets no cause segment at all', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-always')));
   } finally {
     await new Promise(r => fakeSrv.close(r));
+  }
+
+  // --- step 5: notify — the wire, against a node:http receiver ---
+  // A fake webhook on 127.0.0.1 that records every request and answers
+  // per `mode`: 202 · 500-then-202 · 500-500 · 400 (final) · hang beyond
+  // the timeout. Its URL and a token travel ONLY through env vars.
+  {
+    const hits = [];
+    let mode = 'ok';
+    let flakyLeft = 0;
+    const hung = new Set();
+    const rx = createHttpServer(async (req, res) => {
+      let raw = '';
+      req.setEncoding('utf8');
+      for await (const c of req) raw += c;
+      hits.push({ method: req.method, url: req.url, headers: req.headers, body: raw });
+      if (mode === 'hang') { hung.add(res); return; }
+      if (mode === 'down') { res.writeHead(500); res.end('nope'); return; }
+      if (mode === 'reject') { res.writeHead(400); res.end('bad'); return; }
+      if (mode === 'flaky' && flakyLeft > 0) { flakyLeft--; res.writeHead(500); res.end('retry'); return; }
+      res.writeHead(202, { 'Content-Type': 'application/json' });
+      res.end('{"ok":true}');
+    });
+    await new Promise(r => rx.listen(0, '127.0.0.1', r));
+    const rxUrl = `http://127.0.0.1:${rx.address().port}/hook`;
+    process.env.OBSERVOGRAM_TEST_WEBHOOK_URL = rxUrl;
+    process.env.OBSERVOGRAM_TEST_WEBHOOK_TOKEN = 'tok-secret-123';
+    // A second fake MCP (same shape as the step-4 one above, which is closed
+    // by now): answers are identical run to run until `rulesExposed` flips,
+    // which makes the recording-rule chains go unobserved → absent — a
+    // `worse` transition under the test's control, exactly as t2 → t3.
+    let rulesExposed = false;
+    const mcp = createHttpServer(async (req, res) => {
+      let raw = '';
+      req.setEncoding('utf8');
+      for await (const chunk of req) raw += chunk;
+      let msg = {};
+      try { msg = JSON.parse(raw || '{}'); } catch { /* not JSON */ }
+      const send = (result) => { res.writeHead(200, { 'Content-Type': 'application/json', 'Mcp-Session-Id': 'notify-test-session' }); res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id ?? 1, result })); };
+      if (msg.method === 'initialize') return send({ protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'fake-mcp-notify' } });
+      if (msg.method === 'notifications/initialized') return send({});
+      if (msg.method === 'tools/list') return send({ tools: ['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines', ...(rulesExposed ? ['list_recording_rules'] : [])].map(name => ({ name })) });
+      if (msg.method === 'tools/call') {
+        const name = msg.params?.name;
+        const result = name === 'system_health' ? { services: [] } : name === 'system_topology' ? { dependencies: [] } : name === 'anomalies_baselines' ? { baselines: [] }
+          : name === 'list_recording_rules' ? { groups: [{ name: 'payment', interval: '1m', rules: [{ record: 'payment:api_availability:ratio_5m', expr: 'sum(rate(http_server_request_duration_seconds_count{code!~"5.."}[5m])) / sum(rate(http_server_request_duration_seconds_count[5m]))', health: 'ok' }] }] }
+          : {};
+        return send({ content: [{ type: 'text', text: JSON.stringify(result) }] });
+      }
+      send({});
+    });
+    await new Promise(r => mcp.listen(0, '127.0.0.1', r));
+    const mcpUrl = `http://127.0.0.1:${mcp.address().port}/mcp`;
+    const MCP_B = `packB: { mcp: { url: ${mcpUrl} } }`;
+    const A = PACK_A.replaceAll('\\', '/');
+    const FILE_B = `packB: { file: ${LIVE_B.replaceAll('\\', '/')} }`;
+    const notifyDef = (name, packBLine, notifyLines = [], extra = []) => {
+      writeFileSync(join(TMP, 'journeys', `${name}.journey.yaml`), [
+        `name: ${name}`, `packA: { file: ${A} }`, packBLine, 'env: prod', ...extra,
+        'notify:', '  urlEnv: OBSERVOGRAM_TEST_WEBHOOK_URL', '  authEnv: OBSERVOGRAM_TEST_WEBHOOK_TOKEN', '  timeoutMs: 1000', ...notifyLines,
+      ].join('\n'));
+      return loadJourneyDef(name);
+    };
+    // The CLI, asynchronously: both fakes live in THIS process, so a
+    // spawnSync would block the event loop they answer from.
+    const runCli = (args) => new Promise((res) => {
+      const child = spawn(process.execPath, [resolve('tools/cli.mjs'), ...args], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP } });
+      let stdout = '', stderr = '';
+      child.stdout.on('data', d => { stdout += d; });
+      child.stderr.on('data', d => { stderr += d; });
+      child.on('close', (status) => res({ status, stdout, stderr }));
+    });
+    const loadErr = (name, lines) => {
+      writeFileSync(join(TMP, 'journeys', `${name}.journey.yaml`), [`name: ${name}`, `packA: { file: ${A} }`, `packB: { file: ${LIVE_B.replaceAll('\\', '/')} }`, ...lines].join('\n'));
+      try { loadJourneyDef(name); return null; } catch (e) { return e.message; }
+    };
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    try {
+      // (h) secrets never live in a journey file: literal keys are refused at load, naming the env-var alternative.
+      assert(loadErr('notify-literal', ['notify: { url: https://hooks.example/x }']) === 'journey notify-literal: notify.url is not allowed — reference an env var name with urlEnv (secrets never live in a journey file)',
+             'a literal notify.url is refused at load with the pinned message', loadErr('notify-literal', ['notify: { url: https://hooks.example/x }']));
+      assert(/notify\.token is not allowed — reference an env var name with authEnv/.test(loadErr('notify-token', ['notify: { urlEnv: X, token: abc }']) || ''), 'a literal notify.token is refused');
+      assert(/notify\.headers is not allowed/.test(loadErr('notify-headers', ['notify:', '  urlEnv: X', '  headers:', '    X-Key: abc']) || ''), 'a literal notify.headers block is refused');
+      assert(/notify\.webhook is not a known key \(known: urlEnv, authEnv, on, format, timeoutMs, studioUrl\)/.test(loadErr('notify-unknown', ['notify: { urlEnv: X, webhook: y }']) || ''), 'an unknown notify key is named with the known ones');
+      assert(/notify\.urlEnv must name an environment variable \(got undefined\)/.test(loadErr('notify-nourl', ['notify: { on: always }']) || ''), 'urlEnv is required');
+      assert(/notify\.urlEnv must name an environment variable \(got "https:\/\/x"\)/.test(loadErr('notify-urlval', ['notify: { urlEnv: https://x }']) || ''), 'urlEnv must be an env var NAME, not a URL');
+      assert(/notify\.on must be one of transitions, breach, always \(got "sometimes"\)/.test(loadErr('notify-on', ['notify: { urlEnv: X, on: sometimes }']) || ''), 'notify.on is closed over the three policies');
+      assert(/notify\.format must be one of json, text \(got "xml"\)/.test(loadErr('notify-fmt', ['notify: { urlEnv: X, format: xml }']) || ''), 'notify.format is json or text');
+      assert(/notify\.timeoutMs must be a positive integer/.test(loadErr('notify-to', ['notify: { urlEnv: X, timeoutMs: fast }']) || ''), 'notify.timeoutMs must be an integer');
+      assert(/notify\.studioUrl must be a plain http\(s\) URL without credentials/.test(loadErr('notify-studio', ['notify: { urlEnv: X, studioUrl: https://u:p@studio.example }']) || ''), 'studioUrl refuses userinfo');
+      assert(/notify must be a mapping with urlEnv/.test(loadErr('notify-scalar', ['notify: yes']) || ''), 'a scalar notify block is refused');
+      assert(loadErr('notify-ok', ['notify: { urlEnv: X, authEnv: Y, on: breach, format: text, timeoutMs: 2000, studioUrl: https://studio.example/ }']) === null, 'a well-formed notify block loads (env vars are NOT resolved at load)');
+      assert(NOTIFY_POLICIES.join() === 'transitions,breach,always' && NOTIFY_TIMEOUT_DEFAULT_MS === 5000, 'journey.mjs re-exports the notify vocabulary');
+      assert(validateNotify({ urlEnv: 'X' }, 'z').urlEnv === 'X', 'validateNotify returns the block');
+      // resolveNotifyTarget: env resolved at run time, timeout clamped, headers built, URL kept out of the definition.
+      {
+        const t = resolveNotifyTarget({ name: 'r', notify: { urlEnv: 'OBSERVOGRAM_TEST_WEBHOOK_URL', authEnv: 'OBSERVOGRAM_TEST_WEBHOOK_TOKEN', timeoutMs: 10, studioUrl: 'https://studio.example/' } });
+        assert(t.url === rxUrl && t.headers.Authorization === 'Bearer tok-secret-123' && t.headers['Content-Type'] === 'application/json' && t.timeoutMs === 1000 && t.on === 'transitions' && t.format === 'json' && t.urlEnv === 'OBSERVOGRAM_TEST_WEBHOOK_URL' && t.studioUrl === 'https://studio.example',
+               'resolveNotifyTarget reads the env vars, clamps a tiny timeout up to 1000, defaults on/format and trims the studio URL', t);
+        assert(resolveNotifyTarget({ name: 'r', notify: { urlEnv: 'OBSERVOGRAM_TEST_WEBHOOK_URL', timeoutMs: 999999, format: 'text' } }).timeoutMs === 60000 && resolveNotifyTarget({ name: 'r', notify: { urlEnv: 'OBSERVOGRAM_TEST_WEBHOOK_URL', format: 'text' } }).headers['Content-Type'] === 'text/plain; charset=utf-8'
+               && resolveNotifyTarget({ name: 'r', notify: { urlEnv: 'OBSERVOGRAM_TEST_WEBHOOK_URL' } }).timeoutMs === 5000 && !('Authorization' in resolveNotifyTarget({ name: 'r', notify: { urlEnv: 'OBSERVOGRAM_TEST_WEBHOOK_URL' } }).headers),
+               'timeout clamps down to 60000 and defaults to 5000; text format sets text/plain; no authEnv → no Authorization header');
+        assert(resolveNotifyTarget({ name: 'r' }) === null && resolveNotifyTarget(null) === null, 'no notify block → null target');
+        let e1 = null; try { resolveNotifyTarget({ name: 'r', notify: { urlEnv: 'OBSERVOGRAM_TEST_NO_SUCH_URL' } }); } catch (e) { e1 = e.message; }
+        assert(e1 === 'journey r: notify.urlEnv names OBSERVOGRAM_TEST_NO_SUCH_URL, but that env var is not set', 'an unset urlEnv throws naming the var', e1);
+        let e2 = null; try { resolveNotifyTarget({ name: 'r', notify: { urlEnv: 'OBSERVOGRAM_TEST_WEBHOOK_URL', authEnv: 'OBSERVOGRAM_TEST_NO_SUCH_TOKEN' } }); } catch (e) { e2 = e.message; }
+        assert(e2 === 'journey r: notify.authEnv names OBSERVOGRAM_TEST_NO_SUCH_TOKEN, but that env var is not set', 'an unset authEnv throws naming the var', e2);
+      }
+      // postNotification alone, with an injected fetch: 4xx is final, 429/5xx/network retry once, never throws.
+      {
+        const calls = [];
+        const fake = (answers) => async (url, init) => { calls.push({ url, init }); const a = answers.shift(); if (a instanceof Error) throw a; return { ok: a >= 200 && a < 300, status: a, arrayBuffer: async () => new ArrayBuffer(0) }; };
+        const r404 = await postNotification({ url: 'http://x/', body: '{}', timeoutMs: 1000, fetchImpl: fake([404]) });
+        assert(r404.sent === false && r404.httpStatus === 404 && r404.attempts === 1 && r404.error === 'HTTP 404', 'a 404 is final: one attempt', r404);
+        const r429 = await postNotification({ url: 'http://x/', body: '{}', timeoutMs: 1000, fetchImpl: fake([429, 200]) });
+        assert(r429.sent === true && r429.httpStatus === 200 && r429.attempts === 2 && r429.error === null, '429 then 200: two attempts, sent', r429);
+        const rNet = await postNotification({ url: 'http://x/', body: '{}', timeoutMs: 1000, fetchImpl: fake([new Error('fetch failed'), new Error('fetch failed')]) });
+        assert(rNet.sent === false && rNet.httpStatus === null && rNet.attempts === 2 && rNet.error === 'fetch failed', 'two network errors: two attempts, failed, never thrown', rNet);
+        const rCred = await postNotification({ url: 'http://x/', body: '{}', timeoutMs: 1000, fetchImpl: fake([new Error('connect to https://u:p@h/ refused'), new Error('connect to https://u:p@h/ refused')]) });
+        assert(rCred.error === 'connect to https://***@h/ refused', 'a network error message arrives with credentials redacted', rCred.error);
+        assert(calls.every(c => c.init.method === 'POST' && c.init.signal && c.init.redirect === 'manual'), 'every attempt is a POST with its own abort signal and no redirect following');
+      }
+      // (g) unset urlEnv at RUN time → throws naming the var, no record (same class as packB.mcp.authEnv).
+      {
+        writeFileSync(join(TMP, 'journeys', 'notify-unset.journey.yaml'), [`name: notify-unset`, `packA: { file: ${A} }`, `packB: { file: ${LIVE_B.replaceAll('\\', '/')} }`, 'notify: { urlEnv: OBSERVOGRAM_TEST_NO_SUCH_URL }'].join('\n'));
+        let unsetErr = null;
+        try { await runJourney(loadJourneyDef('notify-unset')); } catch (e) { unsetErr = e.message; }
+        assert(unsetErr === 'journey notify-unset: notify.urlEnv names OBSERVOGRAM_TEST_NO_SUCH_URL, but that env var is not set', 'an unset urlEnv refuses to run and names the env var', unsetErr);
+        assert(readJourneyRuns('notify-unset').length === 0 && hits.length === 0, 'an unset urlEnv never reached the wire — no record, no POST');
+      }
+      // (a) first run: transitions (default) → skipped, nothing on the wire; the record carries notify (env NAME only).
+      const n1 = await runJourney(notifyDef('notified', MCP_B));
+      assert(n1.outcome === 'pass' && n1.packB.source === `mcp:${mcpUrl}` && n1.notify && n1.notify.status === 'skipped' && n1.notify.reason === 'first run: no previous run to compare against' && n1.notify.attempts === 0 && n1.notify.httpStatus === null && n1.notify.urlEnv === 'OBSERVOGRAM_TEST_WEBHOOK_URL' && n1.notify.error === null,
+             'the first run (live source) is skipped as a baseline; notify carries status/reason/attempts and the env NAME', n1.notify);
+      assert(hits.length === 0, 'a skipped decision posts nothing');
+      await sleep(5);
+      const n1b = await runJourney(loadJourneyDef('notified'));
+      assert(n1b.transition.any === false && n1b.notify.status === 'skipped' && n1b.notify.reason === `no transition since ${n1.startedAt}` && hits.length === 0, 'an identical second run is skipped, naming the run nothing moved from', n1b.notify);
+      assert(!JSON.stringify(n1.notify).includes(rxUrl) && !JSON.stringify(n1.notify).includes('tok-secret'), 'the URL and the token never land on the record');
+      assert(Object.keys(n1.notify).join() === 'status,reason,triggers,httpStatus,attempts,tookMs,urlEnv,error', 'record.notify carries the documented shape', Object.keys(n1.notify));
+      {
+        const keys = Object.keys(n1);
+        assert(keys.slice(keys.indexOf('traceability'), keys.indexOf('traceability') + 6).join() === 'traceability,branches,chains,versions,transition,livePack' && keys[keys.length - 1] === 'notify' && keys.indexOf('notify') > keys.indexOf('causes'),
+               'notify is the last key, after causes — the pinned key run is untouched', keys);
+        assert(n1.grade.schema === 2, 'grade.schema stays 2 with notify: present');
+        const persisted = readJourneyRuns('notified').find(r => r.startedAt === n1.startedAt);
+        assert(persisted && JSON.stringify(persisted.notify) === JSON.stringify(n1.notify) && Object.keys(persisted).slice(-2).join() === 'causes,notify', 'the on-disk record carries the same notify (second write), as its last key', persisted && { disk: persisted.notify, mem: n1.notify });
+      }
+      // (i) scored quantities are byte-identical with and without notify:/schedule: on the same inputs.
+      {
+        writeFileSync(join(TMP, 'journeys', 'plain-twin.journey.yaml'), [`name: plain-twin`, `packA: { file: ${A} }`, MCP_B, 'env: prod'].join('\n'));
+        const twin = await runJourney(loadJourneyDef('plain-twin'));
+        assert(twin.notify === null, 'a definition without notify: records notify null (not configured — distinct from a missing key)');
+        const twinDisk = readJourneyRuns('plain-twin')[0];
+        assert('notify' in twinDisk && twinDisk.notify === null, 'notify null is persisted on the first (only) write');
+        writeFileSync(join(TMP, 'journeys', 'sched-twin.journey.yaml'), [`name: sched-twin`, `packA: { file: ${A} }`, MCP_B, 'env: prod', 'schedule: "*/15 * * * *"', 'stackBudget: { objective: 0.99, window: 30d }', 'notify: { urlEnv: OBSERVOGRAM_TEST_WEBHOOK_URL, on: always }'].join('\n'));
+        const sched = await runJourney(loadJourneyDef('sched-twin'));
+        const scored = (r) => JSON.stringify({ grade: r.grade, traceability: r.traceability, branches: r.branches, chains: r.chains, drift: r.drift, conformance: r.conformance, outcome: r.outcome, breaches: r.gate.breaches });
+        assert(scored(twin) === scored(n1) && scored(sched) === scored(n1), 'grade, traceability, branches, chains, drift, conformance and outcome are identical with and without notify:/schedule:/stackBudget:', { twin: scored(twin).length, n1: scored(n1).length });
+        assert(JSON.stringify(sched.branches) === JSON.stringify(n1.branches) && sched.grade.schema === 2, 'identical inputs record identical branches whatever the delivery keys say');
+        assert(sched.notify.status === 'sent' && hits.length === 1 && JSON.parse(hits[0].body).journey === 'sched-twin' && !('schedule' in JSON.parse(hits[0].body)), 'on: always posts the first run; the payload carries no definition keys');
+        hits.length = 0;
+      }
+      // (b) the run after the vantage starts exposing recording rules (unobserved → absent: worse) → one POST, bearer auth, JSON payload, 202, one attempt.
+      rulesExposed = true;
+      await sleep(5);
+      const n2 = await runJourney(loadJourneyDef('notified'));
+      assert(n2.outcome === 'pass' && n2.transition.any === true && n2.transition.changed.some(c => c.direction === 'worse'),
+             'fixture: exposing the recording-rules family moves chains (worse)', { any: n2.transition.any, dirs: n2.transition.changed.map(c => c.direction), v: n2.causes?.vantage });
+      assert(n2.notify.status === 'sent' && n2.notify.httpStatus === 202 && n2.notify.attempts === 1 && n2.notify.error === null && n2.notify.triggers.includes('chain got worse') && n2.notify.triggers[0] === 'chain got worse' && n2.notify.reason === n2.notify.triggers.join(' · ') && typeof n2.notify.tookMs === 'number',
+             'the transition is sent: 202 on the first attempt with the triggers named (chain got worse first)', n2.notify);
+      assert(n2.notify.triggers.includes('vantage changed') === (n2.causes?.vantage?.changed === true), 'the vantage-changed trigger follows the ranker\'s vantage block', { t: n2.notify.triggers, v: n2.causes?.vantage?.changed });
+      assert(hits.length === 1 && hits[0].method === 'POST' && hits[0].url === '/hook' && hits[0].headers.authorization === 'Bearer tok-secret-123' && hits[0].headers['content-type'] === 'application/json',
+             'exactly one POST, Authorization: Bearer <authEnv value>, Content-Type: application/json', hits.map(h => [h.method, h.url, h.headers.authorization, h.headers['content-type']]));
+      {
+        const body = JSON.parse(hits[0].body);
+        assert(body.kind === 'observogram.journey' && body.version === 1 && body.journey === 'notified' && body.runId === n2.startedAt.replace(/[:.]/g, '-') && body.startedAt === n2.startedAt && body.outcome === 'pass' && body.previousOutcome === 'pass' && body.reason === n2.notify.reason && body.triggers.join() === n2.notify.triggers.join(),
+               'the body parses to the payload: kind, version, journey, runId, outcome, previous outcome, reason, triggers', { kind: body.kind, runId: body.runId, prev: body.previousOutcome, triggers: body.triggers });
+        assert(JSON.stringify(body.transition) === JSON.stringify(n2.transition) && JSON.stringify(body.causes) === JSON.stringify(n2.causes) && JSON.stringify(body.chains) === JSON.stringify(n2.chains) && body.stack.length === n2.stackEvidence.rows.length && body.grade.score === n2.grade.score && body.drift.alignmentPct === n2.drift.alignmentPct,
+               'transition, causes, chains, stack rows, grade and drift are the record\'s own');
+        assert(body.packs.a.name === 'payment-service' && body.packs.b.source === `mcp:${mcpUrl}` && JSON.stringify(body.links) === '{}' && body.text.startsWith('notified: pass · chains ') && (/ · vantage changed: /.test(body.text) === (n2.causes?.vantage?.changed === true)),
+               'packs, empty links (no studioUrl) and the one-line text (chain line, vantage line when the vantage moved) ride along', { packs: body.packs, text: body.text });
+        assert(!/tok-secret-123|OBSERVOGRAM_TEST_WEBHOOK|urlEnv|authEnv/.test(hits[0].body), 'no env value and no definition key reaches the wire');
+      }
+      assert(JSON.stringify(readJourneyRuns('notified')[0].notify) === JSON.stringify(n2.notify) && readJourneyRuns('notified')[0].startedAt === n2.startedAt, 'the newest on-disk record carries the same notify');
+      // (j) markdown last line and the CLI list tail.
+      {
+        const md = renderJourneyMarkdown(n2);
+        const mdLines = md.split('\n');
+        assert(mdLines[mdLines.length - 3] === `notify: sent (202) — ${n2.notify.reason}` && mdLines[mdLines.length - 1] === '_Verification evidence (declared vs observed); not incident-validated._',
+               'markdown ends with the notify line right before the evidence footer', mdLines.slice(-4));
+        assert(/\nnotify: skipped — first run: no previous run to compare against\n/.test(renderJourneyMarkdown(n1)), 'a skipped delivery prints its reason');
+        assert(!/notify:/.test(renderJourneyMarkdown({ ...n1, notify: null })) && !/notify:/.test(renderJourneyMarkdown((({ notify: _n, ...rest }) => rest)(n1))), 'notify null and a record without the key print no notify line (never "skipped")');
+        assert(notifyStatusLine(n2) === 'notify sent' && notifyStatusLine(n1) === 'notify skipped' && notifyStatusLine({ notify: null }) === null && notifyStatusLine({}) === null, 'notifyStatusLine reads the status or nothing');
+        const cliN = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'list'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000 });
+        assert(/^notified\tpass · .* · chains \d+\/\d+ intact · ladder [^\n]* · notify sent$/m.test(cliN.stdout), 'journey list appends notify sent as the last segment (after cause / vantage)', cliN.stdout.split('\n').filter(l => l.startsWith('notified')));
+        assert(/^plain-twin\tpass · [^\n]*$/m.test(cliN.stdout) && !/^plain-twin\t.*notify/m.test(cliN.stdout), 'a journey without notify: gets no notify segment');
+      }
+      // (c) 500 then 202 → two attempts, sent.
+      mode = 'flaky'; flakyLeft = 1; hits.length = 0;
+      await sleep(5);
+      const n3 = await runJourney(notifyDef('notified', MCP_B, ['  on: always']));
+      assert(n3.notify.status === 'sent' && n3.notify.attempts === 2 && n3.notify.httpStatus === 202 && hits.length === 2, 'a 500 is retried once: attempts 2, sent on the 202', { n: n3.notify, hits: hits.length });
+      // (d) 500-500 → failed after 2 attempts; the CLI exit code follows the outcome only.
+      mode = 'down'; hits.length = 0;
+      await sleep(5);
+      const cliDown = await runCli(['journey', 'run', 'notified']);
+      assert(cliDown.status === 0 && /\nnotify: failed after 2 attempts — HTTP 500\n/.test(cliDown.stdout), 'a failed delivery leaves the CLI exit code at 0 (pass) and prints the failure', { status: cliDown.status, tail: cliDown.stdout.split('\n').slice(-4), err: cliDown.stderr });
+      const n4 = readJourneyRuns('notified')[0];
+      assert(n4.notify.status === 'failed' && n4.notify.attempts === 2 && n4.notify.httpStatus === 500 && n4.notify.error === 'HTTP 500' && hits.length === 2, 'the record says failed after 2 attempts with the last status', n4.notify);
+      assert(!/tok-secret-123/.test(cliDown.stdout + cliDown.stderr), 'the CLI output never echoes the token');
+      // 4xx is final: one attempt.
+      mode = 'reject'; hits.length = 0;
+      await sleep(5);
+      const n4b = await runJourney(loadJourneyDef('notified'));
+      assert(n4b.notify.status === 'failed' && n4b.notify.attempts === 1 && n4b.notify.httpStatus === 400 && hits.length === 1, 'a 400 is final: one attempt, failed', n4b.notify);
+      // (e) a hung receiver → failed within 2 × timeout + slack; the record is there.
+      mode = 'hang'; hits.length = 0;
+      await sleep(5);
+      const n5 = await runJourney(loadJourneyDef('notified'));
+      assert(n5.notify.status === 'failed' && n5.notify.attempts === 2 && n5.notify.error === 'timeout after 1000ms' && n5.notify.tookMs < 3500 && n5.notify.httpStatus === null,
+             'a hung receiver times out per attempt (1000 ms × 2) and the run still lands', n5.notify);
+      assert(readJourneyRuns('notified')[0].startedAt === n5.startedAt && readJourneyRuns('notified')[0].notify.status === 'failed', 'the hung delivery is on the record');
+      for (const r of hung) r.destroy();
+      hung.clear();
+      mode = 'ok'; hits.length = 0;
+      // A notifier that throws lands in error, never out of runJourney.
+      {
+        await sleep(5);
+        const boom = await runJourney(loadJourneyDef('notified'), { notifier: async () => { throw new Error('boom at https://u:p@h/'); } });
+        assert(boom.outcome === 'pass' && boom.notify.status === 'failed' && boom.notify.error === 'boom at https://***@h/' && boom.notify.attempts === 1, 'a thrown notifier is recorded as failed with a redacted error', boom.notify);
+      }
+      // (f) on: breach — a gate-failed run sends with the criteria as triggers; a passing first run is skipped; text format.
+      {
+        const bf = await runJourney(notifyDef('notify-breach', FILE_B, ['  on: breach'], ['gate: { minAlignmentPct: 101 }']));
+        assert(bf.outcome === 'gate-failed' && bf.notify.status === 'sent' && bf.notify.triggers.join() === 'gate-failed:minAlignmentPct' && bf.notify.reason === 'gate failed: minAlignmentPct' && hits.length === 1,
+               'on: breach posts a gate-failed run with one trigger per breached criterion', bf.notify);
+        const bfBody = JSON.parse(hits[0].body);
+        assert(bfBody.outcome === 'gate-failed' && bfBody.gate.breaches.length === 1 && bfBody.gate.breaches[0].criterion === 'minAlignmentPct' && bfBody.text.startsWith('notify-breach: gate-failed · chains '), 'the breach payload carries the breaches and the text line');
+        hits.length = 0;
+        const bp = await runJourney(notifyDef('notify-breach-pass', FILE_B, ['  on: breach']));
+        assert(bp.outcome === 'pass' && bp.notify.status === 'skipped' && bp.notify.reason === 'outcome pass, no breach to clear' && hits.length === 0, 'on: breach skips a passing run', bp.notify);
+        const tx = await runJourney(notifyDef('notify-text', FILE_B, ['  on: always', '  format: text', '  studioUrl: https://studio.example/']));
+        assert(tx.notify.status === 'sent' && hits.length === 1 && hits[0].headers['content-type'] === 'text/plain; charset=utf-8' && hits[0].body.startsWith('notify-text: pass · chains ') && /\n\nreason: policy always\n/.test(hits[0].body) && /\nruns: https:\/\/studio\.example\/api\/journeys\/notify-text\/runs\?limit=1\njourney: https:\/\/studio\.example\/#journeys\n$/.test(hits[0].body),
+               'format: text posts text/plain — the one-liner, the reason and the studio links', { ct: hits[0]?.headers['content-type'], body: hits[0]?.body.slice(0, 200) });
+        hits.length = 0;
+      }
+      // (j) a vantage-lost run with notify: the loss is posted once (breach), the record carries notify after gate, the list pin holds.
+      {
+        const lostPort = await closedLoopbackPort();
+        writeFileSync(join(TMP, 'journeys', 'lost-notify.journey.yaml'), [`name: lost-notify`, `packA: { file: ${A} }`, `packB: { mcp: { url: http://127.0.0.1:${lostPort}/mcp } }`, 'notify: { urlEnv: OBSERVOGRAM_TEST_WEBHOOK_URL, on: breach, timeoutMs: 1000 }'].join('\n'));
+        let lostErr = null;
+        try { await runJourney(loadJourneyDef('lost-notify')); } catch (e) { lostErr = e; }
+        assert(lostErr && lostErr.vantageLost === true, 'the run still throws (exit 2) after posting the loss');
+        const lostRec = readJourneyRuns('lost-notify')[0];
+        assert(lostRec && lostRec.outcome === 'vantage-lost' && lostRec.notify && lostRec.notify.status === 'sent' && lostRec.notify.triggers.join() === 'vantage-lost' && Object.keys(lostRec).indexOf('notify') === Object.keys(lostRec).indexOf('gate') + 1,
+               'the vantage-lost record carries notify sent right after gate', lostRec && { keys: Object.keys(lostRec), n: lostRec.notify });
+        assert(hits.length === 1 && JSON.parse(hits[0].body).outcome === 'vantage-lost' && /ECONNREFUSED|refused|fetch failed/i.test(JSON.parse(hits[0].body).error || '') && JSON.parse(hits[0].body).text.startsWith('lost-notify: vantage-lost · '),
+               'the loss is posted once with the error and the text line', hits.map(h => h.body.slice(0, 160)));
+        assert(/\nnotify: sent \(202\) — vantage lost$/.test(renderJourneyMarkdown(lostRec)), 'the vantage-lost markdown ends with the notify line');
+        const cliL = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'list'], { env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP }, encoding: 'utf8', timeout: 60_000 });
+        assert(/^lost-notify\tvantage-lost · [^\n]* · notify sent$/m.test(cliL.stdout) && /^lost\tvantage-lost · /m.test(cliL.stdout), 'journey list appends notify sent to the vantage-lost line; the plain vantage-lost pin is intact', cliL.stdout.split('\n').filter(l => l.startsWith('lost')));
+        hits.length = 0;
+        // transitions: a second loss in a row is skipped — nobody is paged twice for one outage.
+        writeFileSync(join(TMP, 'journeys', 'lost-notify.journey.yaml'), [`name: lost-notify`, `packA: { file: ${A} }`, `packB: { mcp: { url: http://127.0.0.1:${lostPort}/mcp } }`, 'notify: { urlEnv: OBSERVOGRAM_TEST_WEBHOOK_URL, timeoutMs: 1000 }'].join('\n'));
+        await sleep(5);
+        try { await runJourney(loadJourneyDef('lost-notify')); } catch { /* vantage lost again */ }
+        const again = readJourneyRuns('lost-notify')[0];
+        assert(again.startedAt !== lostRec.startedAt && again.notify.status === 'skipped' && again.notify.reason === `still vantage-lost since ${lostRec.startedAt}` && hits.length === 0, 'a repeated vantage loss under transitions is skipped, naming the first loss', again.notify);
+      }
+    } finally {
+      if (typeof rx.closeAllConnections === 'function') rx.closeAllConnections();
+      await new Promise(r => rx.close(r));
+      if (typeof mcp.closeAllConnections === 'function') mcp.closeAllConnections();
+      await new Promise(r => mcp.close(r));
+      delete process.env.OBSERVOGRAM_TEST_WEBHOOK_URL;
+      delete process.env.OBSERVOGRAM_TEST_WEBHOOK_TOKEN;
+    }
   }
 
   // --- secrets discipline: authEnv must resolve or the run refuses ---

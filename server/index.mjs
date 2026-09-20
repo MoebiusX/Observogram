@@ -48,7 +48,7 @@ import {
 } from './workspace.mjs';
 import {
   listJourneys, loadJourneyDef, runJourney, readJourneyRuns, saveJourneyDef, validateGateStack,
-  validateSchedule, validateStackBudget,
+  validateSchedule, validateStackBudget, validateNotify,
 } from '../tools/lib/journey.mjs';
 import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
 import { initAuth, authEnabled, readSession, maybeSeedDefaultAdmin, defaultAdminCredentialActive } from './auth.mjs';
@@ -946,6 +946,7 @@ app.post('/api/journeys/capture', (req, res) => {
     // Step 5: the delivery keys ride through when the body carries them.
     ...(b.schedule !== undefined ? { schedule: b.schedule } : {}),
     ...(b.stackBudget !== undefined ? { stackBudget: b.stackBudget } : {}),
+    ...(b.notify !== undefined ? { notify: b.notify } : {}),
   };
   try {
     // The same validation loadJourneyDef applies: a captured gate that
@@ -955,6 +956,7 @@ app.post('/api/journeys/capture', (req, res) => {
     if (def.gate.stack !== undefined) validateGateStack(def.gate.stack, name);
     if (def.schedule !== undefined) validateSchedule(def.schedule, name);
     if (def.stackBudget !== undefined) validateStackBudget(def.stackBudget, name);
+    if (def.notify !== undefined) validateNotify(def.notify, name);
     const saved = saveJourneyDef(name, def, {
       banner: [
         `Captured from a studio session on ${new Date().toISOString()}.`,

@@ -117,15 +117,20 @@ async function runJourneyCommand([sub, ...args]) {
       // never-run journey.
       let loadError = null;
       try { journeyLib.loadJourneyDef(n); } catch (e) { loadError = e.message; }
+      // Step 5: the delivery outcome of the last run, only when the record
+      // carries a notify object (a record written without one says nothing
+      // — never "skipped").
+      const notifySeg = last && journeyLib.notifyStatusLine(last) ? ` · ${journeyLib.notifyStatusLine(last)}` : '';
       const tail = loadError ? `(definition does not load: ${loadError})`
         : !last ? '(never run)'
-        : last.outcome === 'vantage-lost' ? `vantage-lost · ${last.startedAt} · ${last.error || 'live source unreachable'}`
+        : last.outcome === 'vantage-lost' ? `vantage-lost · ${last.startedAt} · ${last.error || 'live source unreachable'}${notifySeg}`
         : `${last.outcome} · ${last.startedAt} · alignment ${last.drift?.alignmentPct}% · ${journeyLib.stackStatusLine(last)} · ${journeyLib.chainStatusLine(last)}`
           // Step 4: the top candidate cause, only when a chain got worse —
           // a quiet run has nothing to explain — and, whenever the vantage
           // itself changed, that change beside it (never as a cause).
           + (journeyLib.transitionGotWorse(last) ? ` · ${journeyLib.causeLine(last)}` : '')
-          + (journeyLib.vantageLine(last) ? ` · ${journeyLib.vantageLine(last)}` : '');
+          + (journeyLib.vantageLine(last) ? ` · ${journeyLib.vantageLine(last)}` : '')
+          + notifySeg;
       console.log(`${n}\t${tail}`);
     }
     return;
