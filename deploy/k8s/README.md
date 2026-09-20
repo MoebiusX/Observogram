@@ -98,7 +98,16 @@ What the component adds ([components/journeys](components/journeys)):
   (`packB.mcp.authEnv`, `notify.urlEnv`, `notify.authEnv`) are bound there
   from Secrets (`secretKeyRef`, commented stanzas) — never as literals.
 - `patch-studio-workspace.yaml` — mounts the same PVC into the studio at the
-  same path and sets its `OBSERVOGRAM_WORKSPACE`.
+  same path, sets its `OBSERVOGRAM_WORKSPACE` and adds `fsGroup: 1000` to the
+  studio pod.
+
+Volume ownership: both pods run as uid 1000 and set `fsGroup: 1000`
+(`fsGroupChangePolicy: OnRootMismatch`). A freshly provisioned PVC is
+root:root 0755 with most CSI/hostPath provisioners; without the fsGroup
+neither process could create `journeys/` or write `runs/` — the prerequisite
+below would be met and the feature would still do nothing (EACCES in the
+CronJob log). The per-journey CronJob printed by `packc journey schedule
+--format k8s` carries the same field.
 
 **Hard prerequisite:** BOTH processes mount the same PVC at the same
 `OBSERVOGRAM_WORKSPACE` (`/workspace`). A CronJob writing to a path the studio

@@ -216,6 +216,8 @@ export function k8sCronJobManifest(i) {
     '        metadata:', '          labels:', '            app.kubernetes.io/name: observabilitypack-studio', '            app.kubernetes.io/component: journeys',
     '        spec:', '          restartPolicy: Never',
     '          securityContext:', '            runAsNonRoot: true', '            runAsUser: 1000', '            runAsGroup: 1000',
+    '            # A fresh PVC is root:root 0755 — without fsGroup uid 1000 cannot write the workspace (EACCES).',
+    '            fsGroup: 1000', '            fsGroupChangePolicy: OnRootMismatch',
     `          # With a ReadWriteOnce PVC the pod must land on the studio's node — uncomment:`,
     '          # affinity:', '          #   podAffinity:', '          #     requiredDuringSchedulingIgnoredDuringExecution:',
     '          #       - topologyKey: kubernetes.io/hostname', '          #         labelSelector:', '          #           matchLabels:',

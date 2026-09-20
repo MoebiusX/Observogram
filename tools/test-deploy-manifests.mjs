@@ -104,6 +104,14 @@ const overlay = docs['../k8s-journeys/kustomization.yaml'];
   assert(/^observogram:/.test(c.image) && c.image === docs['deployment-studio.yaml'].spec.template.spec.containers[0].image, 'the CronJob uses the studio image (same name:tag, so the base retag applies)', c.image);
   assert(pod.securityContext.runAsNonRoot === true && pod.securityContext.runAsUser === 1000 && pod.securityContext.runAsGroup === 1000 && c.securityContext.allowPrivilegeEscalation === false && c.securityContext.capabilities.drop.join() === 'ALL',
          'the same securityContext as the studio');
+  // Fix round 0: a freshly provisioned PVC is root:root 0755 with most
+  // provisioners; without fsGroup neither uid-1000 process can write it.
+  assert(pod.securityContext.fsGroup === 1000 && pod.securityContext.fsGroupChangePolicy === 'OnRootMismatch',
+         'the CronJob pod sets fsGroup 1000 (OnRootMismatch) so uid 1000 can write a fresh workspace volume', pod.securityContext);
+  const patchPodSc = patch.spec.template.spec.securityContext;
+  assert(patchPodSc && patchPodSc.fsGroup === 1000 && patchPodSc.fsGroupChangePolicy === 'OnRootMismatch' && Object.keys(patchPodSc).join() === 'fsGroup,fsGroupChangePolicy',
+         'the studio patch adds the same fsGroup to the studio pod and nothing else of the securityContext (runAsUser/Group stay the base ones)', patchPodSc);
+  assert(!('fsGroup' in docs['deployment-studio.yaml'].spec.template.spec.securityContext), 'the base studio Deployment is untouched (fsGroup comes from the component patch only)');
   const cronEnv = Object.fromEntries(c.env.map(e => [e.name, e]));
   const patchC = patch.spec.template.spec.containers[0];
   const patchEnv = Object.fromEntries(patchC.env.map(e => [e.name, e]));
@@ -141,6 +149,9 @@ for (const [rel, doc] of Object.entries(docs)) {
          'packc journey schedule --format k8s mounts the same PVC at the same workspace path as the component');
   assert(one.spec.concurrencyPolicy === cron.spec.concurrencyPolicy && one.spec.jobTemplate.spec.backoffLimit === cron.spec.jobTemplate.spec.backoffLimit && one.spec.jobTemplate.spec.template.spec.restartPolicy === cron.spec.jobTemplate.spec.template.spec.restartPolicy && c1.image === cron.spec.jobTemplate.spec.template.spec.containers[0].image,
          'and carries the same non-retry contract and image');
+  const compPodSc = cron.spec.jobTemplate.spec.template.spec.securityContext;
+  assert(one.spec.jobTemplate.spec.template.spec.securityContext.fsGroup === compPodSc.fsGroup && one.spec.jobTemplate.spec.template.spec.securityContext.fsGroupChangePolicy === compPodSc.fsGroupChangePolicy,
+         'and the same fsGroup as the component CronJob');
   assert(envs(one).filter(e => /(TOKEN|URL)$/.test(e.name) && 'value' in e).length === 0, 'and binds env names by secretKeyRef only');
 }
 

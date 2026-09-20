@@ -135,6 +135,7 @@ const S45 = withSched({ every: '45m' });
   const c = pod.containers[0];
   assert(js.backoffLimit === 0 && js.activeDeadlineSeconds === 900 && pod.restartPolicy === 'Never', 'k8s: backoffLimit 0, activeDeadlineSeconds 900, restartPolicy Never (a gate failure is not retried)');
   assert(pod.securityContext.runAsNonRoot === true && pod.securityContext.runAsUser === 1000 && c.securityContext.allowPrivilegeEscalation === false && c.securityContext.capabilities.drop.join() === 'ALL', 'k8s: the same securityContext as the studio');
+  assert(pod.securityContext.fsGroup === 1000 && pod.securityContext.fsGroupChangePolicy === 'OnRootMismatch', 'k8s: fsGroup 1000 so uid 1000 can write a freshly provisioned workspace PVC');
   assert(c.image === 'observogram:0.4.0' && c.workingDir === '/app' && JSON.stringify(c.command) === JSON.stringify(['node', 'tools/cli.mjs', 'journey', 'run', 'repo-vs-live']), 'k8s: image observogram:<version>, workingDir /app, command node tools/cli.mjs journey run <name>', c.command);
   const env = Object.fromEntries(c.env.map(e => [e.name, e]));
   assert(env.OBSERVOGRAM_WORKSPACE.value === '/workspace' && env.OBSERVOGRAM_JOURNEY_RUN_RETENTION.value === '500', 'k8s: OBSERVOGRAM_WORKSPACE=/workspace and the retention knob when given');

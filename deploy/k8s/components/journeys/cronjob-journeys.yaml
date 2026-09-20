@@ -42,6 +42,14 @@ spec:
             runAsNonRoot: true
             runAsUser: 1000           # `node` user in the official node image
             runAsGroup: 1000
+            # A freshly provisioned PVC is root:root 0755 with most CSI /
+            # hostPath provisioners: without fsGroup uid 1000 cannot create
+            # /workspace/journeys and `journey run --all` fails with EACCES.
+            # The studio patch sets the same fsGroup (the studio writes runs/
+            # too). OnRootMismatch skips the recursive chown once the root
+            # already belongs to the group.
+            fsGroup: 1000
+            fsGroupChangePolicy: OnRootMismatch
           # With a ReadWriteOnce PVC (pvc-workspace.yaml) the pod must land on
           # the studio's node, or the volume attach fails — uncomment:
           # affinity:
