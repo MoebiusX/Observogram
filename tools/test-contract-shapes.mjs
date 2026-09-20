@@ -122,24 +122,37 @@ for (const c of CASES) {
   assert(!vBroken.ok, `${c.capability}: shape check FAILS when critical fields are removed`, vBroken);
 }
 
-// ---------- SYNTHETIC fixtures (step 2 surfaces) ----------
+// ---------- step-2 surface fixtures: RECORDED or SYNTHETIC ----------
 //
-// tools/fixtures/mcp/synthetic/ holds HAND-WRITTEN samples (each carries a
-// top-level `_synthetic` marker) for shapes no recording exists for yet —
-// see the fixtures README, "Provenance". Only the shape contract
-// is pinned here (SHAPE / TOLERANT / CRITICAL); there are no adapted
-// goldens because these capabilities have no PROBES adapter (the fetcher's
-// observeAlertmanager / observeGrafana parse them directly).
+// A RECORDING at the fixtures top level (the tool's own name, written by
+// `npm run record-fixtures -- --write`) is tested with the shape contract
+// (SHAPE / TOLERANT / CRITICAL) plus "carries no `_synthetic` marker".
+// Where no recording exists yet, tools/fixtures/mcp/synthetic/ holds a
+// HAND-WRITTEN sample carrying a top-level `_synthetic` marker — see the
+// fixtures README, "Provenance". Shape only: there are no adapted goldens
+// because these capabilities have no PROBES adapter (the fetcher's
+// observeAlertmanager / observeGrafana parse them directly). The stack
+// instant vectors the recorder writes land in recorded-stack/ (checked
+// below).
 //
-// A RECORDING takes precedence: when `npm run record-fixtures -- --write`
-// has put <fixture> at the fixtures top level (the tool's own name), that
-// file is tested instead — same three assertions, plus "carries no
-// `_synthetic` marker" — and the synthetic copy is ignored. The stack
-// instant vectors it records land in recorded-stack/ (checked below).
+// The Grafana files are the 2026-09-08 local-stack recording
+// (otel-mcp-server 1.8.0 over docker/stack.compose.yaml): datasource
+// health in BOTH cases — the primary file is a check Grafana could not
+// run ({ supported: false, error: 'HTTP 400 …' }, the Loki datasource
+// whose backend the stack does not run) and .ok.json a passed one.
 const SYNTHETIC_DIR = resolve(FIXTURE_DIR, 'synthetic');
 // Status payloads may be a bare list (Alertmanager /api/v2/silences) or an
 // envelope; the breakers reach the list either way.
 const listIn = (f, ...keys) => (Array.isArray(f) ? f : (keys.map(k => f[k]).find(Array.isArray) || []));
+// A health verdict may live under `health` (otel-mcp-server), `data`
+// (Prometheus-API wrapper) or at the root; the breaker removes every
+// verdict key wherever it is.
+const breakHealth = (f) => {
+  for (const o of [f, f.data, f.health]) {
+    if (!o || typeof o !== 'object') continue;
+    for (const k of ['status', 'message', 'ok', 'supported', 'error']) delete o[k];
+  }
+};
 const SYNTHETIC_CASES = [
   { capability: 'stack_self_metrics', fixture: 'metrics_query.instant-vector.json',
     breakCriticals: (f) => f.result.forEach(r => { delete r.metric; delete r.value; delete r.values; }) },
@@ -153,8 +166,8 @@ const SYNTHETIC_CASES = [
     breakCriticals: (f) => listIn(f, 'silences', 'data').forEach(s => { delete s.id; delete s.status; delete s.matchers; }) },
   { capability: 'grafana_datasources', fixture: 'grafana_datasources.json',
     breakCriticals: (f) => listIn(f, 'datasources', 'data').forEach(d => { delete d.uid; delete d.id; delete d.name; }) },
-  { capability: 'grafana_datasource_health', fixture: 'grafana_datasource_health.json',
-    breakCriticals: (f) => { delete f.status; delete f.message; delete f.ok; if (f.data && typeof f.data === 'object') { delete f.data.status; delete f.data.message; delete f.data.ok; } } },
+  { capability: 'grafana_datasource_health', fixture: 'grafana_datasource_health.json', breakCriticals: breakHealth },
+  { capability: 'grafana_datasource_health', fixture: 'grafana_datasource_health.ok.json', breakCriticals: breakHealth },
   { capability: 'grafana_contact_points', fixture: 'grafana_contact_points.json',
     breakCriticals: (f) => listIn(f, 'contactPoints', 'contact_points', 'data').forEach(c => { delete c.name; delete c.uid; }) },
 ];
@@ -239,6 +252,18 @@ const bareStatus = { versionInfo: { version: '0.27.0' }, cluster: { status: 'rea
 assert(locateObjectPayload('status-object', bareStatus) === bareStatus,
   'status-object: a bare document whose `data` carries no status key still locates at the root');
 assert(locateObjectPayload('health-object', { silences: [] }) === null, 'locateObjectPayload is null when no candidate carries the key group');
+// The recorded otel-mcp-server envelope { datasource, health }: the located
+// payload is the `health` document in both cases — the passed check and
+// the one Grafana could not run ({ supported: false, error }) — never the
+// root, whose `datasource` carries no verdict.
+for (const f of ['grafana_datasource_health.json', 'grafana_datasource_health.ok.json']) {
+  const rec = JSON.parse(readFileSync(resolve(FIXTURE_DIR, f), 'utf8'));
+  assert(rec.health && locateObjectPayload('health-object', rec) === rec.health,
+    `health-object: ${f} locates the \`health\` document of the { datasource, health } envelope`, locateObjectPayload('health-object', rec));
+}
+const unsupported = { datasource: { uid: 'x' }, health: { supported: false, error: 'HTTP 400: Bad Request — …' } };
+assert(validateResponseShape('health-object', unsupported).ok && locateObjectPayload('health-object', unsupported) === unsupported.health,
+  'health-object: a { supported: false, error } answer (no status / message / ok) is a located verdict');
 assert(locateObjectPayload('silences', { silences: [] }) === null, 'locateObjectPayload is null for list shapes');
 const vArray = validateResponseShape('health-object', [{ status: 'OK' }]);
 assert(!vArray.ok, 'health-object: a list is not an object payload', vArray);
