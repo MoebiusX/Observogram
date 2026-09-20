@@ -627,6 +627,16 @@ try {
          'GET /api/journeys carries the notify block as env var NAMES + policy knobs — no URL, no value', delivered.notify);
   assert(JSON.stringify(delivered.lastRun.notify) === JSON.stringify({ status: 'sent', httpStatus: 202, reason: 'gate failed: stack.scrape_targets_down' }), 'lastRun.notify is { status, httpStatus, reason }', delivered.lastRun.notify);
   assert(!JSON.stringify(delivered.lastRun.notify).includes('SMOKE_HOOK') && !JSON.stringify(delivered).includes('triggers'), 'lastRun.notify is the trimmed summary (no env name, no triggers)');
+  // The Neuron view's schedule route mirrors `packc journey schedule --json`.
+  const sched = await getJson(base, '/api/journeys/delivery-seeded/schedule');
+  assert(sched.ok === true && sched.schedule?.cron === '*/15 * * * *' && sched.placeholder === false, 'GET /api/journeys/:name/schedule carries the parsed schedule', sched.schedule);
+  assert(JSON.stringify(Object.keys(sched.snippets || {}).sort()) === JSON.stringify(['actions', 'cron', 'k8s', 'schtasks']), 'the schedule route emits the four snippet formats', Object.keys(sched.snippets || {}));
+  assert(/\*\/15 \* \* \* \*/.test(sched.snippets.cron) && /delivery-seeded/.test(sched.snippets.cron), 'the cron snippet carries the journey cadence and name', sched.snippets.cron);
+  assert(JSON.stringify(sched.envNames) === JSON.stringify(['SMOKE_HOOK_URL', 'SMOKE_HOOK_TOKEN']) && /SMOKE_HOOK_URL/.test(JSON.stringify(sched.snippets)), 'env var NAMES ride along and the snippets bind them by name', sched.envNames);
+  const schedPlain = await getJson(base, '/api/journeys/smoke-journey/schedule');
+  assert(schedPlain.placeholder === true && schedPlain.schedule === null && /\*\/15 \* \* \* \*/.test(schedPlain.snippets.cron), 'without schedule: the route says placeholder and uses the placeholder cadence', { p: schedPlain.placeholder, s: schedPlain.schedule });
+  const schedMissing = await fetch(`${base}/api/journeys/no-such-journey/schedule`);
+  assert(schedMissing.status === 404, 'the schedule route 404s for an unknown journey', schedMissing.status);
   const capNotifyBad = await fetch(`${base}/api/journeys/capture`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: 'captured-notify-bad', packAId: 'payment-service', packBId: 'production-curated', notify: { url: 'https://hooks.example/x' } }),
