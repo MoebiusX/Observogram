@@ -713,6 +713,24 @@ try {
     body: JSON.stringify({ name: 'captured-stack', packAId: 'payment-service', packBId: 'production-curated', gate: { minAlignmentPct: 1, stack: { requireSampled: true, rows: { scrape_targets_down: { max: 0 } } } } }),
   }).then(r => r.json());
   assert(capStackOk.ok === true, 'capture with a well-formed stack gate saves');
+  // Step 5: schedule / stackBudget ride through capture and are validated
+  // the way loadJourneyDef validates a file (400 on a malformed block).
+  const capSched = await fetch(`${base}/api/journeys/capture`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'captured-sched', packAId: 'payment-service', packBId: 'production-curated', gate: { minAlignmentPct: 1 }, schedule: '*/15 * * * *', stackBudget: { objective: 0.99, window: '30d' } }),
+  }).then(r => r.json());
+  assert(capSched.ok === true, 'capture with schedule + stackBudget saves');
+  const capSchedText = readFileSync(join(SMOKE_WORKSPACE, 'journeys', 'captured-sched.journey.yaml'), 'utf8');
+  assert(/^schedule: "\*\/15 \* \* \* \*"$/m.test(capSchedText) && /^stackBudget:\n {2}objective: 0\.99\n {2}window: 30d$/m.test(capSchedText),
+         'the captured file carries the cron quoted and the budget as a mapping', capSchedText);
+  const capSchedBad = await fetch(`${base}/api/journeys/capture`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'captured-sched-bad', packAId: 'payment-service', packBId: 'production-curated', schedule: '*/15 * * *' }),
+  });
+  const capSchedBadBody = await capSchedBad.json();
+  assert(capSchedBad.status === 400 && /journey captured-sched-bad: schedule must be a 5-field cron expression/.test(capSchedBadBody.error || ''),
+         'capture with a 4-field schedule → 400 naming the journey', capSchedBadBody);
+  assert(!(await getJson(base, '/api/journeys')).journeys.some(j => j.name === 'captured-sched-bad'), 'the refused schedule capture saved nothing');
   // A definition on disk that fails to load is listed with the reason.
   writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'bad-id.journey.yaml'), [
     'name: bad-id',

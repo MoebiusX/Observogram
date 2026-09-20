@@ -48,6 +48,7 @@ import {
 } from './workspace.mjs';
 import {
   listJourneys, loadJourneyDef, runJourney, readJourneyRuns, saveJourneyDef, validateGateStack,
+  validateSchedule, validateStackBudget,
 } from '../tools/lib/journey.mjs';
 import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
 import { initAuth, authEnabled, readSession, maybeSeedDefaultAdmin, defaultAdminCredentialActive } from './auth.mjs';
@@ -942,12 +943,18 @@ app.post('/api/journeys/capture', (req, res) => {
     ...(b.service ? { service: String(b.service) } : {}),
     ...(b.scopeMode ? { scopeMode: String(b.scopeMode) } : {}),
     gate: (b.gate && typeof b.gate === 'object') ? b.gate : { minAlignmentPct: 85 },
+    // Step 5: the delivery keys ride through when the body carries them.
+    ...(b.schedule !== undefined ? { schedule: b.schedule } : {}),
+    ...(b.stackBudget !== undefined ? { stackBudget: b.stackBudget } : {}),
   };
   try {
     // The same validation loadJourneyDef applies: a captured gate that
     // names an unknown stack row must be refused here (400), not saved as
-    // a journey that can never load.
+    // a journey that can never load — likewise a malformed schedule or
+    // stackBudget block.
     if (def.gate.stack !== undefined) validateGateStack(def.gate.stack, name);
+    if (def.schedule !== undefined) validateSchedule(def.schedule, name);
+    if (def.stackBudget !== undefined) validateStackBudget(def.stackBudget, name);
     const saved = saveJourneyDef(name, def, {
       banner: [
         `Captured from a studio session on ${new Date().toISOString()}.`,

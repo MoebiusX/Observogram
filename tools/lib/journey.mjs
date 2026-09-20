@@ -44,6 +44,19 @@
 //                               #   transitions (default) — first run, any chain
 //                               #   verdict change, gate failure, or after a
 //                               #   vantage loss · always · never
+//   schedule: "*/15 * * * *"    # step 5: the cadence this journey is MEANT to run at.
+//                               #   Scheduling is delegated, not built (VALUE_BACKLOG 11):
+//                               #   nothing in the server or this module fires it —
+//                               #   `packc journey schedule <name>` prints the cron /
+//                               #   schtasks / GitHub Actions / CronJob snippet from it,
+//                               #   and the journeys view derives the cadence a sampled
+//                               #   posture budget needs. Also { cron, timezone? } or
+//                               #   { every: <N>m|<N>h|<N>d } (tools/lib/schedule.mjs).
+//   stackBudget: { objective: 0.99, window: 30d }
+//                               # optional, pairs with schedule: the sampled posture
+//                               #   budget the journeys view prints per gated stack row
+//                               #   (stack-evidence.mjs stackPostureBudget) — a posture
+//                               #   line, signal not verdict, never a gate.
 //
 // Vantage: when Pack B is a live MCP source and the fetch itself fails
 // (endpoint down, core tools unavailable), the run still leaves a record
@@ -64,6 +77,7 @@ import { crawlFiles } from './crawler.mjs';
 import { baseWorkspacePath, brandEnv } from './brand-env.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from './contracts/stack-self-metrics.mjs';
 import { formatStackValue } from './stack-evidence.mjs';
+import { parseSchedule, windowMs } from './schedule.mjs';
 import { branchRecordsFromGraph, chainSummary, diffRunBranches, rankCauses, deploysInWindow, topCause } from './chain-history.mjs';
 import { computeDiagnosticGrade, computePostureMatrix, partialLiveEvidence, DIAGNOSTIC_PASS_SCORE_THRESHOLD } from '../../studio/diagnostic-grade.mjs';
 import { sliBaseOfSloId } from '../../studio/verify-deploy.mjs';
@@ -131,8 +145,40 @@ export function loadJourneyDef(ref) {
   if (def.keepLivePack !== undefined && !KEEP_LIVE_PACK_POLICIES.includes(def.keepLivePack)) {
     throw new Error(`journey ${def.name}: keepLivePack must be one of ${KEEP_LIVE_PACK_POLICIES.join(', ')} (got ${JSON.stringify(def.keepLivePack)})`);
   }
+  // Step 5: a typo'd or malformed schedule / stackBudget block is a
+  // load-time configuration error (CLI `list` prints it, GET /api/journeys
+  // puts it in loadError, capture answers 400) — never a run that silently
+  // has no cadence.
+  if (def.schedule !== undefined) validateSchedule(def.schedule, def.name);
+  if (def.stackBudget !== undefined) validateStackBudget(def.stackBudget, def.name);
   def.__source = source;
   return def;
+}
+
+// Step 5: `schedule:` — delegated to tools/lib/schedule.mjs (the studio
+// uses the same parser at /lib). Throws `journey <name>: schedule must be
+// …` with the offending value.
+export function validateSchedule(value, journeyName = '?') {
+  try { return parseSchedule(value); }
+  catch (e) { throw new Error(`journey ${journeyName}: ${e.message}`); }
+}
+
+// Step 5: `stackBudget: { objective, window }` — the inputs of a sampled
+// posture budget (stack-evidence.mjs stackPostureBudget). Stored as
+// declared; objective in [0, 1), window <N>m|<N>h|<N>d; nothing else.
+export function validateStackBudget(value, journeyName = '?') {
+  const where = `journey ${journeyName}: stackBudget`;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${where} must be a mapping { objective, window } (got ${JSON.stringify(value)})`);
+  for (const k of Object.keys(value)) {
+    if (k !== 'objective' && k !== 'window') throw new Error(`${where}.${k} is not a known key (known: objective, window)`);
+  }
+  if (!(typeof value.objective === 'number' && Number.isFinite(value.objective) && value.objective >= 0 && value.objective < 1)) {
+    throw new Error(`${where}.objective must be a number in [0, 1) (got ${JSON.stringify(value.objective)})`);
+  }
+  if (typeof value.window !== 'string' || windowMs(value.window) === null) {
+    throw new Error(`${where}.window must be <N>m, <N>h or <N>d (got ${JSON.stringify(value.window)})`);
+  }
+  return { objective: value.objective, window: value.window };
 }
 
 // Step 4: when the run keeps a snapshot of Pack B beside its record
