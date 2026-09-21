@@ -98,7 +98,7 @@ const out = resolve(opts.out || 'sites');
 const write = !(opts.check || opts['dry-run']);
 for (const [env, p] of Object.entries(r.partitions)) {
   const m = p.manifest;
-  console.log(`${env}: ${m.queue_managers.length} queue manager${m.queue_managers.length === 1 ? '' : 's'}, ${m.hosts.length} host${m.hosts.length === 1 ? '' : 's'}, ${p.files.length} files → ${write ? resolve(out, env) : '(not written)'} (step ${m.timing.step}s, vantage ${m.vantage}, profile ${m.profile}, burn ${m.burn.alerts} alerts/${m.burn.recording} recording${m.removed.length ? `, removed ${m.removed.join('; ')}` : ''})`);
+  console.log(`${env}: ${m.instances.length} ${m.instance_kind.title}${m.instances.length === 1 ? '' : 's'}, ${m.hosts.length} host${m.hosts.length === 1 ? '' : 's'}, ${p.files.length} files → ${write ? resolve(out, env) : '(not written)'} (step ${m.timing.step}s, vantage ${m.vantage}, profile ${m.profile}, burn ${m.burn.alerts} alerts/${m.burn.recording} recording${m.removed.length ? `, removed ${m.removed.join('; ')}` : ''})`);
   if (opts['dry-run']) for (const f of p.files) console.log(`  ${env}/${f.path}`);
   if (write) for (const f of p.files) { const target = resolve(out, env, f.path); mkdirSync(dirname(target), { recursive: true }); writeFileSync(target, f.content); }
 }

@@ -126,6 +126,7 @@ async function runJourneyCommand([sub, ...args]) {
       // carries a notify object (a record written without one says nothing
       // — never "skipped").
       const notifySeg = last && journeyLib.notifyStatusLine(last) ? ` · ${journeyLib.notifyStatusLine(last)}` : '';
+      const inventorySeg = last && journeyLib.inventoryStatusLine(last) ? ` · ${journeyLib.inventoryStatusLine(last)}` : '';
       const tail = loadError ? `(definition does not load: ${loadError})`
         : !last ? '(never run)'
         : last.outcome === 'vantage-lost' ? `vantage-lost · ${last.startedAt} · ${last.error || 'live source unreachable'}${notifySeg}`
@@ -135,7 +136,7 @@ async function runJourneyCommand([sub, ...args]) {
           // itself changed, that change beside it (never as a cause).
           + (journeyLib.transitionGotWorse(last) ? ` · ${journeyLib.causeLine(last)}` : '')
           + (journeyLib.vantageLine(last) ? ` · ${journeyLib.vantageLine(last)}` : '')
-          + notifySeg;
+          + inventorySeg + notifySeg;
       console.log(`${n}\t${tail}`);
     }
     return;

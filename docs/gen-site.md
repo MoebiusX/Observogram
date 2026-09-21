@@ -38,11 +38,17 @@ schema never changes for a new pack or registry, only the module and the adapter
 | Key | Meaning |
 | --- | --- |
 | `inventory: v1` | required |
-| `env` | file-level default environment for this file's hosts and queue managers |
+| `env` | file-level default environment for this file's hosts and instances |
 | `pack` | reference pack path, relative to the inventory file (`--pack` wins) |
 | `environments.<name>` | per-environment wiring: `scrape_interval`, `vantage: single\|dual` (default `dual`), `profile: container\|non-container` (default `container`), `endpoints{remote_write, loki, tempo, alertmanager, alert_sink, otlp, grafana}`, `receivers{sev1, sev2, sev3}`, `secrets{receiver → secret path}`, `repo_url`, `rule_labels`, `params{}` (module site params) |
 | `hosts[]` | `name`, `env` (inherits the file's), `site` (free label), `roles[]` (informative), `params{}` (module host params) |
-| `queue_managers[]` | `name`, `shape: container\|host\|multi-instance\|rdqm-ha\|rdqm-dr`, `env`, `hosts[]` (names from `hosts[]`), `address{host, port}`, `exporter_host` (default: the environment's `params.monitoring_host`), `params{}` (module instance params) |
+| `instances[]` | the things the pack monitors — the module names the key (`module.instances.key`; the IBM MQ module keeps `queue_managers[]`): `name`, `shape` (a free string the module may require and constrain, e.g. `container\|host\|multi-instance\|rdqm-ha\|rdqm-dr`), `env`, `hosts[]` (names from `hosts[]`), `address{host, port}`, `exporter_host` (default: the environment's `params.monitoring_host`), `params{}` (module instance params) |
+
+What an instance *is* comes from the module, not the core: `module.instances = { key, kind,
+label, title, schema }` names the collection key, the kind the expected sets and the inventory
+series use (`qmgr`, `broker`, `cluster` …), the label the live series carry, the title error
+messages print, and a JSON Schema fragment merged into the `Instance` definition. Without a
+module the key is `instances`, the kind `instance`, and `shape` is optional.
 
 A fleet with two environments in one file:
 
@@ -162,30 +168,37 @@ reads itself: `monitoring_host`, `exporter_poll_interval`, `canary_interval` on 
 
 ### Merge, inheritance, validation (`inventory.mjs`)
 
-- **Merge** (`mergeInventories`): `hosts` and `queue_managers` are concatenated (a duplicate
-  host name across files is an error naming both files; a duplicate queue-manager name within
-  one environment is an error naming both files, checked once the environments are resolved,
-  so `QM1` in prod and `QM1` in staging are two queue managers); `environments` keys are merged
-  (the same key in two files must be deep-equal); a file-level `env` applies only to that
-  file's items, kept as `source: { file, env }` on each merged item. Two files whose `pack:`
-  strings differ are an error for a library caller that did not choose the pack
-  (`run({ packChosen })`); the CLI always chooses it (`--pack`, or each file's `pack:` resolved
-  relative to that file), so one file per directory may spell the same pack differently.
+- **Merge** (`mergeInventories(files, { packChosen, module })`): `hosts` and the instances
+  (under the module's key) are concatenated (a duplicate host name across files is an error
+  naming both files; a duplicate instance name within one environment is an error naming both
+  files, checked once the environments are resolved, so `QM1` in prod and `QM1` in staging are
+  two instances); `environments` keys are merged (the same key in two files must be
+  deep-equal); a file-level `env` applies only to that file's items, kept as
+  `source: { file, env }` on each merged item. The merged model carries `instanceKind` (the
+  module's descriptor) and `instances`, plus the same array under the module's key when it
+  differs. Two files whose `pack:` strings differ are an error for a library caller that did
+  not choose the pack (`run({ packChosen })`); the CLI always chooses it (`--pack`, or each
+  file's `pack:` resolved relative to that file), so one file per directory may spell the same
+  pack differently.
 - **Inheritance** (`resolveEnvironments`): `host.env = host.env ?? file.env` (error when
-  neither); `qm.env = qm.env ?? unique(env of qm.hosts) ?? file.env` (error when the hosts
-  disagree, naming them; when `qm.env` differs from its hosts' env; when nothing resolves).
-  Every error names the item and its file.
-- **Names**: every environment referenced (file `env`, host `env`, qm `env`, `environments`
-  keys) must be in the pack's `metadata.bindings.environments`; the error quotes the pack's
-  list. Every environment with members (a host or a queue manager) needs an
+  neither); `instance.env = instance.env ?? unique(env of its hosts) ?? file.env` (error when
+  the hosts disagree, naming them; when the instance's `env` differs from its hosts' env; when
+  nothing resolves). Every error names the item and its file.
+- **Names**: every environment referenced (file `env`, host `env`, instance `env`,
+  `environments` keys) must be in the pack's `metadata.bindings.environments`; the error quotes
+  the pack's list. Every environment with members (a host or an instance) needs an
   `environments.<env>` block (endpoints are required to emit anything; a host-only environment
   is rendered too, so it needs one). A pack without `spec.environments.<env>` is a warning
   (`--strict`: error).
-- **Semantics** (`validateInventory`): `rdqm-ha` needs at least 3 hosts and an `address`;
-  `vantage: dual` with `profile: non-container` requires `params.native_port` on every queue
-  manager; `client_port` unique per `exporter_host` across environments (an exporter host is a
-  machine two environments may share; without an `exporter_host` the port is scoped to the
-  environment); `native_port` unique per host; `address.host` unique per environment.
+- **Semantics** (`validateInventory`): the core checks what every inventory shares — every
+  `hosts[]` reference exists, `address.host` is one instance's per environment, the module's
+  required params fire even when a `params` block is omitted. The product's own rules come from
+  `module.checkInventory({ inventory, envs, hostByName, itemLabel, instanceKind })`, which
+  returns error strings: the IBM MQ module (and the test fixture module) check there that
+  `rdqm-ha` has at least 3 hosts and an `address`, that `vantage: dual` with
+  `profile: non-container` has `params.native_port` on every queue manager, that
+  `client_port` is unique per `exporter_host` across environments (without an `exporter_host`
+  the port is scoped to the environment) and `native_port` per host.
 - **Adapter**: `--registry <file> --adapter <esm>`; the adapter exports `toInventory(raw)`
   (raw = the registry parsed as JSON or YAML) and its result goes through the same schema and
   semantic checks as a file.
@@ -196,12 +209,15 @@ Every hook is optional; every hook receives the `ctx` object first.
 
 | Hook | Returns |
 | --- | --- |
+| `instances` | `{ key, kind, label, title, schema }` — what an instance is: the inventory key (default `instances`), the kind name (`qmgr`, `broker` …; default `instance`), the live label (default: the kind), the title in messages, a schema fragment merged into `Instance` |
 | `paramsSchema` | `{ site, host, instance }` JSON Schema fragments spliced into the inventory schema |
+| `checkInventory({ inventory, envs, hostByName, itemLabel, instanceKind })` | the product's own inventory rules → `string[]` of errors (a throwing hook is one error) |
+| `expectedKinds(ctx)` | `{ kind: { title, label, jobs, names, by, query, per, min } }` merged over the built-in expected kinds (below) |
 | `packSubstitutions(ctx)` | `[{ name, find, replace, count }]` exact-count anchors over the reference pack text (`find` a string, literal, or a RegExp with `$1` replacement); counted on the reference before any is applied, applied in order, and a replacement must not introduce text a later anchor matches |
 | `packRemovals(ctx)` | `[{ key, value }]` list items dropped from the site pack (`dropItem`: from `- key: value`, block or flow form, to the end of that item, everywhere it appears) |
 | `runbooks(ctx)` | `{ sliId: runbookPath }` for the burn-rate alert annotations |
 | `templates(ctx)` | `{ path: string \| (ctx) => string }` or `[{ path, render }]` |
-| `perQmgr(ctx, qm)` | the same shape, once per queue manager of the environment |
+| `perInstance(ctx, instance)` | the same shape, once per instance of the environment (`perQmgr` is accepted as the legacy name) |
 | `boards({ pack, lib, repoUrl, site })` | dashboards `[{ id, file, dashboard }]` (gen-dashboards' shape), checked with `checkBindings` |
 | `dashboardOptions(ctx)` | the `site` object `boards()` receives (default: the manifest) |
 | `harness(ctx)` | stored as `manifest.harness` (what a certification harness reads from `site.json`) |
@@ -213,15 +229,15 @@ Every hook is optional; every hook receives the `ctx` object first.
 | Field | Content |
 | --- | --- |
 | `env`, `lab`, `strict`, `environments` | the environment name, `env === 'lab'`, the strict flag, every selected environment |
-| `envModel` | the resolved environment: `scrape_interval`, `vantage`, `profile`, `endpoints`, `receivers`, `secrets`, `repo_url`, `rule_labels`, `params`, `hosts[]`, `queue_managers[]` |
+| `envModel` | the resolved environment: `scrape_interval`, `vantage`, `profile`, `endpoints`, `receivers`, `secrets`, `repo_url`, `rule_labels`, `params`, `hosts[]`, `instances[]` (also under the module's key), `instanceKind` |
 | `refPack`, `refPackText` | the reference pack (object, text) |
 | `pack`, `packText` | the derived site pack; the reference pack while `packSubstitutions`/`packRemovals` run |
 | `timing` | the Timing object below |
 | `vantage`, `profile`, `p` (alias `params`), `endpoints`, `receivers`, `secrets`, `repoUrl`, `ruleLabels` | shortcuts into the environment |
-| `qmgrs[]`, `hosts[]` | the members; each queue manager carries its resolved `env`, `exporter_host` and `site` |
-| `siteOf(qm)` | the site label of a queue manager's hosts |
+| `instances[]`, `hosts[]`, `instanceKind` | the members and the module's descriptor; each instance carries its resolved `env`, `exporter_host` and `site` (`qmgrs` is the same array under its legacy name) |
+| `siteOf(instance)` | the site label of an instance's hosts |
 | `burn` | `{ groups, recording, forecasts, warnings, step }` from `compileBurnRules` (after derivation) |
-| `manifest` | the `site.json` object (after it is built; templates may read it) |
+| `manifest` | the `site.json` object (after it is built; templates may read it), including `expected` |
 | `lib` | the dashboards library handed to `boards()` |
 
 Per environment the core: builds the timing model; derives the site pack
@@ -230,12 +246,48 @@ Per environment the core: builds the timing model; derives the site pack
 splices `packSnippet(recording)` into the site pack's `spec.queries.recording_rules` between
 the `# --- error-budget rules, GENERATED …` marker and the end of the list, and re-validates;
 asserts that every burn alert's `for:` equals the override declared for its short window;
-renders templates, per-queue-manager templates and dashboards; writes `site.json`; runs the
-module's checks. Any error leaves that environment with no files, and the CLI writes nothing.
+renders templates, per-instance templates and dashboards; emits the inventory rules unless a
+template already did; writes `site.json`; runs the module's checks. Any error leaves that
+environment with no files, and the CLI writes nothing.
 
 Output tree per environment (`<out>/<env>/`): `site.json`, `packs/<name>.pack.yaml`,
-`prometheus/rules/<name>.burn.yml`, `grafana/dashboards/<file>` and whatever the module's
-templates return.
+`prometheus/rules/<name>.burn.yml`, `prometheus/rules/<name>.inventory.yml`,
+`grafana/dashboards/<file>` and whatever the module's templates return.
+
+## Expected sets and inventory rules (`expected.mjs`)
+
+Every partition publishes what the inventory says should be reporting, so the monitor of the
+monitors can ask "is the right number of things being monitored?" against a declared answer.
+`site.json` carries:
+
+```json
+"expected": {
+  "generated_from": "gen-site inventory v1", "environment": "prod", "series_prefix": "ibmmq:inventory:",
+  "kinds": {
+    "qmgr": { "title": "queue manager", "label": "qmgr", "series": "ibmmq:inventory:qmgr", "jobs": ["ibmmq-exporter", "ibmmq-native"],
+              "names": ["QMORD1", "QMPAY1"], "by": { "QMORD1": { "site": "dc1", "hosts": ["…"], "shape": "rdqm-ha" } } },
+    "host": { "title": "host", "label": "host", "series": "ibmmq:inventory:host", "jobs": [], "names": ["…"], "by": { } },
+    "queue": { "title": "queue", "label": "queue", "per": "qmgr", "query": "count by (qmgr) (…)", "min": { "QMORD1": 12 } }
+  }
+}
+```
+
+- **Enumerated kinds** carry `names`: the module's instance kind is always there; `host` when the
+  module lists it in `expectedKinds` (`host: {}` or `host: { jobs }` — only where some scrape job
+  labels `up` with `host`; the fixture module opts in, the IBM MQ module does not). Each gets a recording series `<svc>:inventory:<kind>` (`vector(1)`, one per name, labelled
+  `<label>=<name>, environment=<env>` plus `site`/`shape` when known) and `jobs`, the scrape
+  jobs whose `up` series carry that label on the live side (`[]` = any job). The module adds
+  `jobs` (and may add enumerated kinds of its own) through `expectedKinds(ctx)`.
+- **Counted kinds** carry a `query` (PromQL grouped `by (<per>)`, e.g. queues per queue manager)
+  and optional `min` floors per parent: the inventory cannot enumerate them, so a journey
+  reports the live count and breaches only below the floor.
+- The core emits `prometheus/rules/<name>.inventory.yml` with the enumerated series unless a
+  module template already produced that path (the IBM MQ module does; under a single vantage it
+  adds its `IBMMQQueueManagerSilent` join); an alert can join them the same way
+  (`<series> unless on (<label>) up`).
+- A journey (`inventory: { site: <partition>/site.json }`, see the README) compares these sets
+  with the live `up` series through the MCP and records, per kind, expected / observed /
+  silent / unexpected.
 
 ## The timing model (`timing.mjs`)
 
@@ -297,14 +349,17 @@ members).
 (`bindings.environments: [prod, lab]`, prod overrides with the closed vocabulary, one ratio and
 one threshold SLI, one SLO with two policy windows, a `recording_rules` list with the GENERATED
 marker, a 10 s pipeline step), a prod inventory with a file-level `env`, a lab inventory, and a
-fixture module (params schema, exact-count substitutions, one template, per-queue-manager
-files, a self-check, no boards). Under the lab inventory every substitution maps a value to
-itself, and the test asserts the lab site pack is byte-identical to the fixture pack.
+fixture module (an instances descriptor that calls them queue managers, params schema, the
+product's inventory rules in `checkInventory`, `expectedKinds`, exact-count substitutions, one
+template, per-instance files, a self-check, no boards). Under the lab inventory every
+substitution maps a value to itself, and the test asserts the lab site pack is byte-identical
+to the fixture pack.
 
 ## Vendoring
 
-The core is `tools/lib/site/{inventory.schema.json,inventory.mjs,timing.mjs,derive.mjs,run.mjs}`.
-It imports only `../mini-yaml.mjs`, `../validator.mjs`, `../burn-rules.mjs` and
+The core is `tools/lib/site/{inventory.schema.json,inventory.mjs,expected.mjs,timing.mjs,derive.mjs,run.mjs}`.
+It imports only `../mini-yaml.mjs`, `../validator.mjs`, `../slug.mjs` (`metricPrefix`, the
+metric-name prefix the inventory series use), `../burn-rules.mjs` and
 `../dashboards/generic.mjs`, by relative path, so a downstream copy under
 `vendor/observogram/lib/site/` works unchanged next to the already vendored siblings. The
 core reads no files: the host passes the pack text, the pack schema and the inventory schema in.

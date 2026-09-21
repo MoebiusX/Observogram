@@ -41,6 +41,7 @@ import { inferSlisFromRecordingRules, ruleNameToSliId } from './lib/sli-inferenc
 import { materializeL2XFromBackends } from './lib/l2x.mjs';
 import { serviceSlug as slug } from './lib/slug.mjs';
 import { probeCandidates, capabilityTool, candidateTool, BUILD_INFO_PROBES } from './lib/contracts/mcp-capabilities.mjs';
+import { promqlForKind } from './lib/inventory-coverage.mjs';
 import { validateResponseShape, locateObjectPayload } from './lib/contracts/response-shapes.mjs';
 import {
   STACK_SELF_METRIC_PROBES, STACK_FAMILIES, eligibleAliases, productPreferenceOrder, bestOutcome,
@@ -2711,4 +2712,61 @@ async function main() {
 const invokedDirectly = resolve(process.argv[1] || '') === resolve(fileURLToPath(import.meta.url));
 if (invokedDirectly) {
   main().catch(e => { process.stderr.write(`[fetch-live-pack] FATAL: ${e.message}\n`); process.exit(1); });
+}
+
+// ============================================================
+// Inventory coverage — the live half of "is the right number of things being monitored?".
+// The rendered site's `expected` block (tools/lib/site/expected.mjs, in site.json) says what
+// the inventory declares per kind; this asks the MCP's metrics query tool, once per kind, for
+// the `up` series by that kind's label (enumerated kinds) or the site's own count query
+// (counted kinds), and hands the reduced instant vectors to tools/lib/inventory-coverage.mjs
+// for the arithmetic. Same client, handshake, tools/list gating and instant-vector reading as
+// the stack sampler above; the tool name comes from the capability registry, never a literal.
+// Returns { status: 'checked' | 'not-attempted', reason, tool, callsMade, observations:
+// { [kind]: { values: { [labelValue]: number }, query, series?, error? } } }. A kind whose
+// query failed carries `error` and empty values — a fact the record keeps, never a zero.
+// ============================================================
+export async function observeInventory({ mcpUrl, mcpAuth = null, expected, kinds = null, maxCalls = 16 } = {}) {
+  if (!mcpUrl) throw new Error('observeInventory: mcpUrl required');
+  const wanted = expected && expected.kinds ? Object.entries(expected.kinds).filter(([k]) => !kinds || kinds.includes(k)) : [];
+  const tool = TOOL.stackSelfMetrics;
+  const { rpc, notify, callTool } = createMcpClient({ mcpUrl, mcpAuth });
+  const initialized = await rpc('initialize', {
+    protocolVersion: '2025-06-18',
+    capabilities: {},
+    clientInfo: { name: 'observogram-inventory', version: '0.4.0' },
+  }).then(() => true).catch(() => false);
+  if (initialized) await notify('notifications/initialized').catch(() => {});
+  const toolsList = await rpc('tools/list').catch(() => null);
+  const hasToolsList = Array.isArray(toolsList?.tools);
+  const advertised = new Set(hasToolsList ? toolsList.tools.map(t => t.name) : []);
+  if (hasToolsList && !advertised.has(tool)) {
+    return { status: 'not-attempted', reason: STACK_NOT_EXPOSED(tool), tool, callsMade: 0, observations: {} };
+  }
+  const observations = {};
+  let callsMade = 0;
+  for (const [k, spec] of wanted) {
+    const { query, by } = promqlForKind(spec);
+    if (callsMade >= maxCalls) { observations[k] = { values: {}, query, error: `call budget of ${maxCalls} exhausted` }; continue; }
+    callsMade += 1;
+    try {
+      const response = await callTool(tool, { query });
+      const result = instantVectorResult(response);
+      if (result === null) {
+        const v = validateResponseShape('instant-vector', response);
+        observations[k] = { values: {}, query, error: trimError(v.reason || 'response is not an instant vector') };
+        continue;
+      }
+      const values = {};
+      for (const s of result) {
+        const name = s?.metric?.[by];
+        const v = Number(s?.value?.[1]);
+        if (typeof name === 'string' && name && Number.isFinite(v)) values[name] = v;
+      }
+      observations[k] = { values, query, series: result.length };
+    } catch (e) {
+      observations[k] = { values: {}, query, error: trimError(e?.message || String(e)) };
+    }
+  }
+  return { status: 'checked', reason: null, tool, callsMade, observations };
 }

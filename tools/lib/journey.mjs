@@ -91,6 +91,7 @@ import { baseWorkspacePath, brandEnv } from './brand-env.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from './contracts/stack-self-metrics.mjs';
 import { formatStackValue } from './stack-evidence.mjs';
 import { parseSchedule, windowMs } from './schedule.mjs';
+import { validateInventoryBlock, validateGateInventory, expectedFromSite, buildInventoryRecord, evaluateInventoryGate, inventorySummary, inventoryStatusLine, unknownKinds } from './inventory-coverage.mjs';
 import {
   NOTIFY_POLICIES, NOTIFY_DEFAULT_POLICY, NOTIFY_FORMATS, NOTIFY_DEFAULT_FORMAT,
   NOTIFY_TIMEOUT_DEFAULT_MS, NOTIFY_TIMEOUT_MIN_MS, NOTIFY_TIMEOUT_MAX_MS,
@@ -161,6 +162,9 @@ export function loadJourneyDef(ref) {
   if (!def.packA || (!def.packA.file && !def.packA.crawl)) throw new Error(`journey ${def.name}: packA needs file: or crawl:`);
   if (!def.packB || (!def.packB.file && !def.packB.mcp)) throw new Error(`journey ${def.name}: packB needs file: or mcp:`);
   if (def.gate && typeof def.gate === 'object' && def.gate.stack !== undefined) validateGateStack(def.gate.stack, def.name);
+  // Inventory coverage: a malformed inventory: or gate.inventory block is a load-time error too.
+  if (def.gate && typeof def.gate === 'object' && def.gate.inventory !== undefined) validateGateInventory(def.gate.inventory, def.name);
+  if (def.inventory !== undefined) validateInventoryBlock(def.inventory, def.name);
   if (def.keepLivePack !== undefined && !KEEP_LIVE_PACK_POLICIES.includes(def.keepLivePack)) {
     throw new Error(`journey ${def.name}: keepLivePack must be one of ${KEEP_LIVE_PACK_POLICIES.join(', ')} (got ${JSON.stringify(def.keepLivePack)})`);
   }
@@ -454,6 +458,60 @@ async function resolvePackB(def) {
   }
 }
 
+// ---------- inventory coverage ----------
+//
+// `inventory: { site, kinds? }` on the journey names a gen-site partition's site.json (relative
+// to the journey file); its `expected` block is what the inventory declares per kind. The live
+// half comes from fetch-live-pack.mjs observeInventory (the `up` series by label through the
+// MCP); tools/lib/inventory-coverage.mjs does the arithmetic and the gate. A file-sourced Pack B
+// has no live series (not-attempted, said so); a site that cannot be read or carries no
+// expected block is `failed` with the reason; an MCP without the metrics query tool is
+// not-attempted with the tier reason. Never touches the grade or the alignment.
+async function observeInventoryCoverage(def, checkedAt) {
+  const site = def.inventory.site;
+  const kinds = def.inventory.kinds || null;
+  let manifest;
+  try { manifest = JSON.parse(readFileSync(resolve(def.__baseDir || '.', site), 'utf8')); }
+  catch (e) { return buildInventoryRecord({ site, expected: null, status: 'failed', reason: `cannot read ${site}: ${e.message}`, checkedAt }); }
+  const expected = expectedFromSite(manifest);
+  if (!expected) return buildInventoryRecord({ site, expected: null, status: 'failed', reason: `${site} carries no expected block (render the partition with gen-site)`, checkedAt });
+  const unknown = unknownKinds(expected, kinds);
+  if (unknown.length) return buildInventoryRecord({ site, expected, kinds, checkedAt });   // failed, naming the unknown kinds — no wire call
+  if (!def.packB?.mcp) return buildInventoryRecord({ site, expected, kinds, status: 'not-attempted', reason: 'file-sourced Pack B: no live series to compare', checkedAt });
+  const m = def.packB.mcp;
+  const mcpAuth = m.authEnv ? (process.env[m.authEnv] || null) : null;
+  const { observeInventory } = await import('../fetch-live-pack.mjs');
+  let obs;
+  try { obs = await observeInventory({ mcpUrl: m.url, mcpAuth, expected, kinds }); }
+  catch (e) { return buildInventoryRecord({ site, expected, kinds, status: 'failed', reason: `inventory observation failed: ${e.message}`, checkedAt }); }
+  if (obs.status !== 'checked') return buildInventoryRecord({ site, expected, kinds, status: obs.status, reason: obs.reason, checkedAt });
+  return buildInventoryRecord({ site, expected, observations: obs.observations, kinds, checkedAt });
+}
+
+// The markdown section: one row per kind of the record's inventory block.
+function inventoryTable(r) {
+  const inv = r?.inventory;
+  if (!inv || typeof inv !== 'object') return [];
+  const lines = [
+    '',
+    `### Inventory coverage — ${mdCell(inv.status)}${inv.reason ? ` (${mdCell(inv.reason)})` : ''}${inv.site ? ` · ${mdCell(inv.site)}` : ''}`,
+    '',
+    '| kind | expected | up | down | silent | unexpected | coverage |',
+    '|---|---|---|---|---|---|---|',
+  ];
+  for (const [k, c] of Object.entries(inv.kinds || {})) {
+    if (c.mode === 'counted') {
+      lines.push(`| ${mdCell(k)} (${mdCell(c.title)}, per ${mdCell(c.per || '?')}) | ${Object.keys(c.min || {}).length} floor(s) | ${c.total === null || c.total === undefined ? '—' : `total ${c.total}`} | — | — | ${c.below?.length ? `${c.below.length} below floor` : (c.missing?.length ? `no count for ${mdCell(c.missing.join(', '))}` : '—')} | ${mdCell(c.status)}${c.error ? ` — ${mdCell(c.error)}` : ''} |`);
+    } else {
+      lines.push(`| ${mdCell(k)} (${mdCell(c.title)}) | ${c.expected} | ${c.up ?? '—'} | ${c.down?.length ? mdCell(c.down.join(', ')) : '—'} | ${c.silent?.length ? mdCell(c.silent.join(', ')) : '—'} | ${c.unexpected?.length ? mdCell(c.unexpected.join(', ')) : '—'} | ${mdCell(c.status)}${c.coveragePct === null || c.coveragePct === undefined ? '' : ` · ${c.coveragePct}%`}${c.error ? ` — ${mdCell(c.error)}` : ''} |`);
+    }
+  }
+  lines.push('', '_Inventoried vs answering, as a point-in-time comparison of the site\'s expected sets with the live `up` series — never an SLO verdict._');
+  return lines;
+}
+
+export { inventoryStatusLine, inventorySummary };
+
 // ---------- gate ----------
 
 function hoursSince(iso) {
@@ -512,6 +570,7 @@ export function evaluateGate(gate, facts) {
     }
   }
   if (gate.stack && typeof gate.stack === 'object') evaluateStackGate(gate.stack, facts.stackEvidence, add);
+  if (gate.inventory && typeof gate.inventory === 'object') evaluateInventoryGate(gate.inventory, facts.inventory ?? null, add);
   return breaches;
 }
 
@@ -871,6 +930,8 @@ export async function runJourney(def, { baseDir, notifier = postNotification } =
 
   const liveRefreshedAt = b.canonical?.metadata?.annotations?.['mcp.refreshedAt'] || null;
   const live = liveEvidenceFacts(b.canonical);
+  // Inventory coverage (inventory-coverage.mjs): the site's expected sets against the live up series.
+  const inventory = def.inventory ? await observeInventoryCoverage(def, startedAt) : null;
   // grade.overall.audit is the canonical PASS/FAIL contract (score > 85%).
   const audit = grade.overall?.audit || { scorePctExact: 0, passes: false };
   const facts = {
@@ -883,6 +944,7 @@ export async function runJourney(def, { baseDir, notifier = postNotification } =
     aligned: diff.summary?.aligned ?? 0,
     liveAgeHours: hoursSince(liveRefreshedAt),
     ...live,
+    inventory,
   };
   const breaches = evaluateGate(def.gate, facts);
   const rollup = diff.traceabilityGraph?.rollup || null;
@@ -994,6 +1056,8 @@ export async function runJourney(def, { baseDir, notifier = postNotification } =
     // status), null when Pack B carries no panel. Point-in-time evidence
     // kept per run so the history is the time series; gate.stack reads it.
     stackEvidence: live.stackEvidence,
+    // Inventory coverage per kind (null when the journey declares no inventory: block).
+    inventory,
     gate: { thresholds: def.gate || {}, breaches },
     outcome,
   };
@@ -1268,9 +1332,11 @@ export function renderJourneyMarkdown(r) {
     `| Live probes | ${probesLine(r)} |`,
     `| On-wire health | ${r.scrapeJobsDown ?? 0} scrape job(s) down · ${r.unhealthyRules ?? 0} unhealthy rule(s) |`,
     `| Stack self-metrics | ${stackLine(r)} |`,
+    `| Inventory coverage | ${inventoryStatusLine(r) ?? 'not declared'} |`,
     `| Took | ${r.tookMs}ms |`,
   ];
   lines.push(...stackEvidenceTable(r.stackEvidence));
+  lines.push(...inventoryTable(r));
   lines.push(...requirementChainsTable(r.branches));
   lines.push(...transitionsSection(r));
   lines.push(...causesSection(r));

@@ -201,7 +201,25 @@ function renderTiles(model) {
       note: `${delivery.failed || 0} failed · ${delivery.skipped || 0} skipped${delivery.unknown ? ` · ${delivery.unknown} unknown` : ''} · ${Math.max(0, noNotify)} without notify` })}
     ${tile({ label: 'stack signal', value: f.stackSignal.length, unit: `journey${f.stackSignal.length === 1 ? '' : 's'}`, acc: f.stackSignal.length ? 'is-amber' : 'is-gray',
       note: f.stackSignal.length ? `a lower-is-comfortable self-metric read nonzero on the last run: ${escapeHtml(few(f.stackSignal))} — signal, not verdict` : 'no nonzero lower-is-comfortable sample on the last runs' })}
+    ${inventoryTile(f.inventory)}
   </div>`;
+}
+
+// Inventory coverage across the fleet (neuron-model.mjs fleetInventory): the largest
+// enumerated kind headlines as up / inventoried, the other kinds and the counted totals follow,
+// and the journeys whose last run could not check are named. No block anywhere: said so.
+function inventoryTile(inv) {
+  if (!inv || !inv.journeys) {
+    return tile({ label: 'inventory coverage', value: '—', acc: 'is-gray', note: 'no journey declares an inventory: block (a gen-site partition\'s site.json) — whether the right number of things is monitored is not being checked' });
+  }
+  const kinds = Object.entries(inv.kinds).sort((a, b) => b[1].expected - a[1].expected);
+  const [k, t] = kinds[0] || [null, null];
+  const rest = kinds.slice(1).map(([kk, tt]) => `${tt.up}/${tt.expected} ${escapeHtml(kk)}`);
+  const counted = Object.entries(inv.counted).map(([, tt]) => `${tt.total} ${escapeHtml(tt.title)}${tt.total === 1 ? '' : 's'}${tt.below ? ` (${tt.below} below floor)` : ''}`);
+  const holes = t ? [t.down ? `${t.down} down` : null, t.silent ? `${t.silent} silent` : null, t.unexpected ? `${t.unexpected} unexpected` : null].filter(Boolean) : [];
+  const unchecked = inv.unchecked.length ? `<span class="journey-load-error">${inv.unchecked.length} unchecked: ${escapeHtml(few(inv.unchecked))}</span>` : '';
+  const note = [...holes, ...rest, ...counted, unchecked].filter(Boolean).join(' · ') || `${inv.journeys} journey${inv.journeys === 1 ? '' : 's'} checked`;
+  return tile({ label: 'inventory coverage', value: t ? `${t.up}/${t.expected}` : '—', unit: t ? `${escapeHtml(k)} up` : '', acc: !t ? 'is-gray' : (t.silent || t.down) ? 'is-amber' : 'is-green', warn: !!(t && (t.silent || t.down)), note });
 }
 
 function outcomeBar(o) {
@@ -394,9 +412,59 @@ function renderFocus(d, model, charts, stackLib, schedLib) {
         ${panel('Run duration', 'wall clock per run', dur.svg)}
       </div>
       ${renderBlast(d, charts)}
+      ${renderInventory(d, charts)}
       ${d.stackRows.length ? `<h4 class="nrn-sub-title">Stack self-metrics per run <span class="nrn-muted">— what the monitoring stack said about itself when the journey looked</span></h4><div class="nrn-grid nrn-grid-stack">${stackPanels}</div>${stackNote}` : `<p class="nrn-muted">No stack self-metric samples in the window${last?.stackEvidence?.status === 'not-attempted' ? ` — last run: not attempted (${escapeHtml(last.stackEvidence.reason || 'no reason recorded')})` : ' (file-sourced Pack B, or a tier that exposes no metrics_query)'}.</p>`}
       ${renderLatestDetails(d)}
     </div>`;
+}
+
+// Inventory coverage of the journey in focus: per enumerated kind a line of inventoried vs up
+// per run (points only where the record checked that kind), then the newest record's table —
+// up, down (targeted but every target down), silent (no up series at all), unexpected
+// (answering but not inventoried), and the counted kinds' totals against their floors.
+function renderInventory(d, charts) {
+  const inv = d.inventory;
+  if (!inv || (!inv.latest && !Object.keys(inv.series || {}).length)) return '';
+  const latest = inv.latest;
+  const panels = Object.entries(inv.series || {}).filter(([, s]) => s.length).map(([k, s]) => {
+    const spec = latest?.kinds?.[k];
+    const maxV = Math.max(1, ...s.map((p) => Math.max(p.expected, p.up + p.unexpected)));
+    const { yMax, yTicks } = countTicks(maxV);
+    const title = (p) => `${p.up}/${p.expected} up · ${p.down} down · ${p.silent} silent · ${p.unexpected} unexpected${p.t ? ` · ${new Date(p.t).toLocaleString()}` : ''}`;
+    const chart = charts.lineChart({ series: [
+      { name: 'inventoried', points: s.map((p) => ({ t: p.t, v: p.expected, title: title(p) })), color: MUTED },
+      { name: 'up', points: s.map((p) => ({ t: p.t, v: p.up, title: title(p) })), color: ACCENT },
+    ], yMin: 0, yMax, yTicks, yFormat: (v) => String(v), ariaLabel: `${d.name}: ${k} inventoried vs up per run`, h: 150 });
+    const last = s[s.length - 1];
+    return panel(`<code>${escapeHtml(k)}</code> ${escapeHtml(spec?.title || '')}`, `${last.up}/${last.expected} up · ${last.down} down · ${last.silent} silent · ${last.unexpected} unexpected${last.coveragePct !== null ? ` · ${last.coveragePct}%` : ''}`, chart.svg,
+      `<div class="nrn-legend"><span class="nrn-legend-item is-static"><span class="nrn-legend-swatch" style="background:${MUTED}"></span>inventoried</span><span class="nrn-legend-item is-static"><span class="nrn-legend-swatch" style="background:${ACCENT}"></span>up</span></div>`);
+  }).join('');
+  return `<h4 class="nrn-sub-title">Inventory coverage <span class="nrn-muted">— the site's expected sets against the live up series: is the right number of things being monitored?</span></h4>
+    ${panels ? `<div class="nrn-grid nrn-grid-inventory">${panels}</div>` : ''}
+    ${latest ? inventoryTable(latest) : ''}`;
+}
+
+function inventoryTable(inv) {
+  const head = `<p class="nrn-muted">newest record: <strong>${escapeHtml(inv.status)}</strong>${inv.reason ? ` — ${escapeHtml(inv.reason)}` : ''}${inv.site ? ` · ${escapeHtml(inv.site)}` : ''}${inv.environment ? ` · ${escapeHtml(inv.environment)}` : ''}</p>`;
+  const rows = Object.entries(inv.kinds || {}).map(([k, c]) => (c.mode === 'counted'
+    ? [
+      `<code>${escapeHtml(k)}</code> ${escapeHtml(c.title || '')} <span class="nrn-muted">per ${escapeHtml(c.per || '?')}</span>`,
+      `${Object.keys(c.min || {}).length} floor${Object.keys(c.min || {}).length === 1 ? '' : 's'}`,
+      c.total === null || c.total === undefined ? '—' : `total ${c.total}`,
+      '—', '—',
+      (c.below || []).length ? `<em>${escapeHtml(c.below.map((b) => `${b.parent}: ${b.count} < ${b.min}`).join(', '))}</em>` : ((c.missing || []).length ? `<em>no count for ${escapeHtml(c.missing.join(', '))}</em>` : '—'),
+      escapeHtml(c.status),
+    ]
+    : [
+      `<code>${escapeHtml(k)}</code> ${escapeHtml(c.title || '')}`,
+      String(c.expected ?? '—'),
+      c.up === null || c.up === undefined ? '—' : String(c.up),
+      (c.down || []).length ? escapeHtml(c.down.join(', ')) : '—',
+      (c.silent || []).length ? `<em>${escapeHtml(c.silent.join(', '))}</em>` : '—',
+      (c.unexpected || []).length ? escapeHtml(c.unexpected.join(', ')) : '—',
+      `${escapeHtml(c.status)}${c.coveragePct !== null && c.coveragePct !== undefined ? ` · ${c.coveragePct}%` : ''}`,
+    ]));
+  return head + tbl(['kind', 'inventoried', 'up', 'down', 'silent', 'unexpected / below floor', 'status'], rows);
 }
 
 function renderLatestDetails(d) {

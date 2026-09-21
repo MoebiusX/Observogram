@@ -24,7 +24,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
-import { loadInventories, mergeInventories, resolveEnvironments, validateInventory, inventorySchema } from './lib/site/inventory.mjs';
+import { loadInventories, mergeInventories, resolveEnvironments, validateInventory, inventorySchema, instancesOf } from './lib/site/inventory.mjs';
 import { timing, dur, durM, readOverrides, OVERRIDE_KEYS } from './lib/site/timing.mjs';
 import { derivePack, assertCounts, dropItem, splicePackSnippet, countMatches } from './lib/site/derive.mjs';
 import { run, selectEnvironments } from './lib/site/run.mjs';
@@ -39,6 +39,8 @@ const invSchema = JSON.parse(readFileSync(resolve(ROOT, 'tools', 'lib', 'site', 
 const packText = readFix('fixture.pack.yaml');
 const pack = parseYaml(packText);
 const module = await import(pathToFileURL(resolve(FIX, 'module.mjs')).href);
+// The module owns the instances key (queue_managers in the fixture), so every merge carries it.
+const merge = (f, opts = {}) => mergeInventories(f, { module, ...opts });
 const prodInv = readFix('prod.inventory.yaml');
 const labInv = readFix('lab.inventory.yaml');
 const files = (...docs) => docs.map((d, i) => ({ name: `f${i}`, doc: d }));
@@ -48,7 +50,7 @@ const loadAll = (inputs) => loadInventories(inputs, { schema: invSchema, module 
 test('T1 merge: two inventory files become one model; file-level env stays with its file', () => {
   const l = loadAll([{ name: 'prod.inventory.yaml', text: prodInv }, { name: 'lab.inventory.yaml', text: labInv }]);
   assert.deepEqual(l.errors, []);
-  const m = mergeInventories(l.files);
+  const m = merge(l.files);
   assert.deepEqual(m.errors, []);
   assert.equal(m.inventory.hosts.length, 5);
   assert.equal(m.inventory.queue_managers.length, 3);
@@ -71,15 +73,15 @@ test('T1 merge: a duplicate queue manager name within one environment is an erro
   const block = { prod: { endpoints: { remote_write: 'http://x' }, params: { queue_pattern: 'x' } } };
   const a = { inventory: 'v1', env: 'prod', environments: block, queue_managers: [{ name: 'QM1', shape: 'host' }] };
   const b = { inventory: 'v1', env: 'prod', queue_managers: [{ name: 'QM1', shape: 'container' }] };
-  const same = mergeInventories([{ name: 'a.yaml', doc: a }, { name: 'b.yaml', doc: b }]);
+  const same = merge([{ name: 'a.yaml', doc: a }, { name: 'b.yaml', doc: b }]);
   assert.deepEqual(same.errors, [], 'the merge concatenates; the name check needs the resolved environments');
   const dup = resolveEnvironments(same.inventory, pack);
   assert.deepEqual(dup.errors, ['queue manager QM1 (b.yaml): also declared in a.yaml in environment prod']);
   assert.deepEqual(validateInventory(same.inventory, pack, { schema: invSchema, module }).errors, dup.errors);
-  const twice = resolveEnvironments(mergeInventories(files({ ...a, queue_managers: [...a.queue_managers, ...b.queue_managers] })).inventory, pack);
+  const twice = resolveEnvironments(merge(files({ ...a, queue_managers: [...a.queue_managers, ...b.queue_managers] })).inventory, pack);
   assert.deepEqual(twice.errors, ['queue manager QM1 (f0): declared twice in environment prod']);
   // a host name stays unique across the whole inventory (a host is a machine)
-  const hosts = mergeInventories([{ name: 'a.yaml', doc: { inventory: 'v1', env: 'prod', hosts: [{ name: 'h' }] } }, { name: 'b.yaml', doc: { inventory: 'v1', env: 'lab', hosts: [{ name: 'h' }] } }]);
+  const hosts = merge([{ name: 'a.yaml', doc: { inventory: 'v1', env: 'prod', hosts: [{ name: 'h' }] } }, { name: 'b.yaml', doc: { inventory: 'v1', env: 'lab', hosts: [{ name: 'h' }] } }]);
   assert.deepEqual(hosts.errors, ['b.yaml: host h is also declared in a.yaml']);
   // design §2.3: QM1 in prod and QM1 in lab are different queue managers, rendered in two partitions
   const prodQm1 = prodInv.replace('name: QMPAY1', 'name: QM1');
@@ -94,8 +96,8 @@ test('T1 merge: inventories whose pack: strings differ are an error unless the c
   const inv = [{ name: 'a/lab.inventory.yaml', text: labInv }, { name: 'b/prod.inventory.yaml', text: prodInv.replace('pack: fixture.pack.yaml', 'pack: ../a/fixture.pack.yaml') }];
   const l = loadAll(inv);
   assert.deepEqual(l.errors, []);
-  assert.deepEqual(mergeInventories(l.files).errors, ['the inventories name different packs: fixture.pack.yaml, ../a/fixture.pack.yaml (pass --pack to choose)']);
-  assert.deepEqual(mergeInventories(l.files, { packChosen: true }).errors, []);
+  assert.deepEqual(merge(l.files).errors, ['the inventories name different packs: fixture.pack.yaml, ../a/fixture.pack.yaml (pass --pack to choose)']);
+  assert.deepEqual(merge(l.files, { packChosen: true }).errors, []);
   const refused = run({ pack, packText, schema, inventorySchema: invSchema, inventories: inv, env: 'all', module, lib });
   assert.match(refused.errors[0], /the inventories name different packs/); assert.deepEqual(refused.partitions, {});
   const chosen = run({ pack, packText, schema, inventorySchema: invSchema, inventories: inv, env: 'all', module, lib, packChosen: true });
@@ -105,16 +107,16 @@ test('T1 merge: inventories whose pack: strings differ are an error unless the c
 
 test('T1 merge: the same environments key in two files must be deep-equal', () => {
   const env = { endpoints: { remote_write: 'http://x' } };
-  const ok = mergeInventories(files({ inventory: 'v1', environments: { prod: env } }, { inventory: 'v1', environments: { prod: { ...env } } }));
+  const ok = merge(files({ inventory: 'v1', environments: { prod: env } }, { inventory: 'v1', environments: { prod: { ...env } } }));
   assert.deepEqual(ok.errors, []);
-  const bad = mergeInventories(files({ inventory: 'v1', environments: { prod: env } }, { inventory: 'v1', environments: { prod: { endpoints: { remote_write: 'http://y' } } } }));
+  const bad = merge(files({ inventory: 'v1', environments: { prod: env } }, { inventory: 'v1', environments: { prod: { endpoints: { remote_write: 'http://y' } } } }));
   assert.match(bad.errors[0], /environments\.prod is also declared in f0 with different content/);
 });
 
 // ----------------------------------------------------------------- T2 inheritance
 test('T2 inheritance: a queue manager without env takes the unique env of its hosts, before the file env', () => {
   const doc = { inventory: 'v1', env: 'lab', environments: { prod: {}, lab: {} }, hosts: [{ name: 'h1', env: 'prod' }, { name: 'h2', env: 'prod' }], queue_managers: [{ name: 'Q', shape: 'host', hosts: ['h1', 'h2'] }] };
-  const { envs, errors } = resolveEnvironments(mergeInventories(files(doc)).inventory, pack);
+  const { envs, errors } = resolveEnvironments(merge(files(doc)).inventory, pack);
   assert.deepEqual(errors, []);
   assert.equal(envs.prod.queue_managers[0].env, 'prod');
   assert.equal(envs.lab, undefined);
@@ -122,20 +124,20 @@ test('T2 inheritance: a queue manager without env takes the unique env of its ho
 
 test('T2 inheritance: hosts that disagree on env are an error naming both hosts', () => {
   const doc = { inventory: 'v1', environments: { prod: {}, lab: {} }, hosts: [{ name: 'h1', env: 'prod' }, { name: 'h2', env: 'lab' }], queue_managers: [{ name: 'Q', shape: 'host', hosts: ['h1', 'h2'] }] };
-  const { errors } = resolveEnvironments(mergeInventories(files(doc)).inventory, pack);
+  const { errors } = resolveEnvironments(merge(files(doc)).inventory, pack);
   assert.equal(errors.length, 1);
   assert.match(errors[0], /queue manager Q \(f0\): its hosts disagree on env: h1=prod, h2=lab/);
 });
 
 test('T2 inheritance: qm.env that differs from its hosts env is an error', () => {
   const doc = { inventory: 'v1', environments: { prod: {}, lab: {} }, hosts: [{ name: 'h1', env: 'prod' }], queue_managers: [{ name: 'Q', env: 'lab', shape: 'host', hosts: ['h1'] }] };
-  const { errors } = resolveEnvironments(mergeInventories(files(doc)).inventory, pack);
+  const { errors } = resolveEnvironments(merge(files(doc)).inventory, pack);
   assert.match(errors[0], /queue manager Q \(f0\): env lab differs from its hosts' env prod \(h1\)/);
 });
 
 test('T2 inheritance: a host without env in a file without env is an error naming the host', () => {
   const doc = { inventory: 'v1', environments: { prod: {} }, hosts: [{ name: 'orphan' }], queue_managers: [{ name: 'Q', shape: 'host', hosts: ['orphan'] }] };
-  const { errors } = resolveEnvironments(mergeInventories(files(doc)).inventory, pack);
+  const { errors } = resolveEnvironments(merge(files(doc)).inventory, pack);
   assert.ok(errors.some(e => /host orphan \(f0\): no env and its file declares none/.test(e)), errors.join('\n'));
   assert.ok(errors.some(e => /queue manager Q \(f0\): no env, no hosts with an env, and its file declares none/.test(e)), errors.join('\n'));
 });
@@ -143,26 +145,26 @@ test('T2 inheritance: a host without env in a file without env is an error namin
 // ----------------------------------------------------------------- T3 names
 test('T3 names: an environment outside metadata.bindings.environments is an error quoting the pack list', () => {
   const doc = { inventory: 'v1', env: 'uat', environments: { uat: { endpoints: { remote_write: 'http://x' } } }, hosts: [{ name: 'h1' }], queue_managers: [{ name: 'Q', shape: 'host', hosts: ['h1'] }] };
-  const v = validateInventory(mergeInventories(files(doc)).inventory, pack, { schema: invSchema, module });
+  const v = validateInventory(merge(files(doc)).inventory, pack, { schema: invSchema, module });
   assert.ok(v.errors.some(e => e === "environment uat: not in the pack's metadata.bindings.environments [prod, lab]"), v.errors.join('\n'));
 });
 
 test('T3 names: an environments.<env> block alone is checked against the pack list too', () => {
   const doc = { inventory: 'v1', env: 'lab', environments: { lab: {}, uat: {} }, hosts: [{ name: 'h1' }], queue_managers: [{ name: 'Q', shape: 'container', hosts: ['h1'] }] };
-  const v = validateInventory(mergeInventories(files(doc)).inventory, pack, { schema: invSchema, module });
+  const v = validateInventory(merge(files(doc)).inventory, pack, { schema: invSchema, module });
   assert.ok(v.errors.some(e => /environment uat: not in the pack's metadata\.bindings\.environments \[prod, lab\]/.test(e)), v.errors.join('\n'));
 });
 
 test('T3 names: a queue manager env without an environments.<env> block is an error; a pack without spec.environments.<env> is a warning (error under strict)', () => {
   const doc = { inventory: 'v1', env: 'prod', hosts: [{ name: 'h1' }], queue_managers: [{ name: 'Q', shape: 'host', hosts: ['h1'] }] };
-  const v = validateInventory(mergeInventories(files(doc)).inventory, pack, { schema: invSchema, module });
+  const v = validateInventory(merge(files(doc)).inventory, pack, { schema: invSchema, module });
   assert.ok(v.errors.some(e => /environment prod: no environments\.prod block in the inventory/.test(e)), v.errors.join('\n'));
   const packNoEnv = { ...pack, spec: { ...pack.spec, environments: {} } };
   const ok = { inventory: 'v1', env: 'lab', environments: { lab: { endpoints: { remote_write: 'http://x' }, params: { queue_pattern: 'APP.*' } } }, hosts: [{ name: 'h1' }], queue_managers: [{ name: 'Q', shape: 'container', hosts: ['h1'] }] };
-  const w = validateInventory(mergeInventories(files(ok)).inventory, packNoEnv, { schema: invSchema, module });
+  const w = validateInventory(merge(files(ok)).inventory, packNoEnv, { schema: invSchema, module });
   assert.deepEqual(w.errors, []);
   assert.match(w.warnings[0], /environment lab: the pack has no spec\.environments\.lab/);
-  const s = validateInventory(mergeInventories(files(ok)).inventory, packNoEnv, { schema: invSchema, module, strict: true });
+  const s = validateInventory(merge(files(ok)).inventory, packNoEnv, { schema: invSchema, module, strict: true });
   assert.match(s.errors[0], /no spec\.environments\.lab/);
 });
 
@@ -171,7 +173,7 @@ test('T3 names: an environment with only a host needs its environments.<env> blo
   assert.ok(/^hosts:\n {2}- \{ name: mq.*\n {2}- \{ name: mon1/m.test(hostOnly), 'the host lands in hosts[]');
   const l = loadAll([{ name: 'lab.inventory.yaml', text: hostOnly }]);
   assert.deepEqual(l.errors, []);
-  const v = validateInventory(mergeInventories(l.files).inventory, pack, { schema: invSchema, module });
+  const v = validateInventory(merge(l.files).inventory, pack, { schema: invSchema, module });
   assert.deepEqual(v.errors, ['environment prod: no environments.prod block in the inventory (endpoints are required to emit anything)']);
   const r = run({ pack, packText, schema, inventorySchema: invSchema, inventories: [{ name: 'lab.inventory.yaml', text: hostOnly }], env: 'all', module, lib });
   assert.deepEqual(r.errors, v.errors); assert.deepEqual(r.partitions, {});
@@ -202,7 +204,7 @@ test('schema: module params are spliced in and unknown keys are rejected; core s
       { name: 'A', shape: 'host', hosts: ['h1'], address: { host: 'h1', port: 1414 }, params: { native_port: 9157, client_port: 9161 } },
       { name: 'B', shape: 'host', hosts: ['h2'], address: { host: 'h1', port: 1415 } },
     ] };
-  const v = validateInventory(mergeInventories(files(sem)).inventory, pack, { schema: invSchema, module });
+  const v = validateInventory(merge(files(sem)).inventory, pack, { schema: invSchema, module });
   const has = (re) => assert.ok(v.errors.some(e => re.test(e)), `expected ${re}\n${v.errors.join('\n')}`);
   has(/queue manager HA \(f0\): shape rdqm-ha needs at least 3 hosts, has 2/);
   has(/queue manager HA \(f0\): shape rdqm-ha needs an address/);
@@ -215,13 +217,13 @@ test('schema: module params are spliced in and unknown keys are rejected; core s
 test('semantics: client_port is unique per exporter host across environments; without an exporter host it is scoped to the environment', () => {
   const file = (env, host, qm, monitoring_host) => ({ inventory: 'v1', env, environments: { [env]: { endpoints: { remote_write: 'http://x' }, params: { queue_pattern: 'x', ...(monitoring_host ? { monitoring_host } : {}) } } },
     hosts: [{ name: host }], queue_managers: [{ name: qm, shape: 'host', hosts: [host], address: { host, port: 1414 }, params: { client_port: 9161 } }] });
-  const shared = validateInventory(mergeInventories(files(file('prod', 'hp', 'A', 'mon'), file('lab', 'hl', 'B', 'mon'))).inventory, pack, { schema: invSchema, module });
+  const shared = validateInventory(merge(files(file('prod', 'hp', 'A', 'mon'), file('lab', 'hl', 'B', 'mon'))).inventory, pack, { schema: invSchema, module });
   assert.deepEqual(shared.errors, ['queue manager B (f1): client_port 9161 on exporter host mon is also used by queue manager A']);
-  const separate = validateInventory(mergeInventories(files(file('prod', 'hp', 'A', 'mon-prod'), file('lab', 'hl', 'B', 'mon-lab'))).inventory, pack, { schema: invSchema, module });
+  const separate = validateInventory(merge(files(file('prod', 'hp', 'A', 'mon-prod'), file('lab', 'hl', 'B', 'mon-lab'))).inventory, pack, { schema: invSchema, module });
   assert.deepEqual(separate.errors, []);
-  const unknown = validateInventory(mergeInventories(files(file('prod', 'hp', 'A'), file('lab', 'hl', 'B'))).inventory, pack, { schema: invSchema, module });
+  const unknown = validateInventory(merge(files(file('prod', 'hp', 'A'), file('lab', 'hl', 'B'))).inventory, pack, { schema: invSchema, module });
   assert.deepEqual(unknown.errors, [], 'no exporter host known: the port collides only within one environment');
-  const unknownSameEnv = validateInventory(mergeInventories(files({ ...file('prod', 'hp', 'A'), queue_managers: [...file('prod', 'hp', 'A').queue_managers, ...file('prod', 'hp', 'B').queue_managers] })).inventory, pack, { schema: invSchema, module });
+  const unknownSameEnv = validateInventory(merge(files({ ...file('prod', 'hp', 'A'), queue_managers: [...file('prod', 'hp', 'A').queue_managers, ...file('prod', 'hp', 'B').queue_managers] })).inventory, pack, { schema: invSchema, module });
   assert.ok(unknownSameEnv.errors.some(e => /queue manager B \(f0\): client_port 9161 on exporter host \(no exporter_host\) is also used by queue manager A/.test(e)), unknownSameEnv.errors.join('\n'));
 });
 
@@ -243,7 +245,7 @@ test('schema: an omitted params block is validated as {} so a module\'s required
     instance: { ...module.paramsSchema.instance, required: ['client_port'] } } };
   const withQm = { inventory: 'v1', env: 'prod', environments: { prod: { endpoints: { remote_write: 'http://x' } } },
     hosts: [{ name: 'h1' }], queue_managers: [{ name: 'Q', shape: 'host', hosts: ['h1'], address: { host: 'h1', port: 1414 } }] };
-  const v = validateInventory(mergeInventories(files(withQm)).inventory, pack, { schema: invSchema, module: strictModule });
+  const v = validateInventory(merge(files(withQm)).inventory, pack, { schema: invSchema, module: strictModule });
   assert.deepEqual(v.errors, [
     "inventory: $.environments.prod.params: missing required key 'queue_pattern'",
     "inventory: $.hosts[0].params: missing required key 'rack'",
@@ -251,13 +253,13 @@ test('schema: an omitted params block is validated as {} so a module\'s required
   ]);
   // written as {} the schema pass reports the same three, once each
   const empty = { ...withQm, environments: { prod: { ...withQm.environments.prod, params: {} } }, hosts: [{ name: 'h1', params: {} }], queue_managers: [{ ...withQm.queue_managers[0], params: {} }] };
-  assert.deepEqual(validateInventory(mergeInventories(files(empty)).inventory, pack, { schema: invSchema, module: strictModule }).errors, v.errors);
+  assert.deepEqual(validateInventory(merge(files(empty)).inventory, pack, { schema: invSchema, module: strictModule }).errors, v.errors);
   // a host-only environment whose block has no params is checked too; a block without members is not rendered and is left alone
   const hostOnly = { inventory: 'v1', env: 'prod', environments: { prod: { endpoints: { remote_write: 'http://x' } }, lab: { endpoints: { remote_write: 'http://y' } } }, hosts: [{ name: 'h1' }] };
-  assert.deepEqual(validateInventory(mergeInventories(files(hostOnly)).inventory, pack, { schema: invSchema, module }).errors, ["inventory: $.environments.prod.params: missing required key 'queue_pattern'"]);
+  assert.deepEqual(validateInventory(merge(files(hostOnly)).inventory, pack, { schema: invSchema, module }).errors, ["inventory: $.environments.prod.params: missing required key 'queue_pattern'"]);
   // with the params present nothing new fires, and without a module the placeholders stay permissive
-  assert.deepEqual(validateInventory(mergeInventories(files({ ...withQm, environments: { prod: { ...withQm.environments.prod, params: { queue_pattern: 'x' } } } })).inventory, pack, { schema: invSchema, module }).errors, []);
-  assert.deepEqual(validateInventory(mergeInventories(files(withQm)).inventory, pack, { schema: invSchema }).errors, []);
+  assert.deepEqual(validateInventory(merge(files({ ...withQm, environments: { prod: { ...withQm.environments.prod, params: { queue_pattern: 'x' } } } })).inventory, pack, { schema: invSchema, module }).errors, []);
+  assert.deepEqual(validateInventory(merge(files(withQm)).inventory, pack, { schema: invSchema }).errors, []);
   // end to end: the run stops before rendering, so no emitted file carries an undefined param
   const r = run({ pack, packText, schema, inventorySchema: invSchema, inventories: [{ name: 'x.yaml', doc: withQm }], env: 'prod', module, lib });
   assert.deepEqual(r.errors, ["inventory: $.environments.prod.params: missing required key 'queue_pattern'"]);
@@ -480,9 +482,9 @@ test('run: the lab site pack is byte-identical to the reference; prod carries th
 });
 
 test('run: environment selection, usage errors, module checks, strict warnings, no module', () => {
-  assert.deepEqual(selectEnvironments({ prod: { queue_managers: [1], hosts: [] }, lab: { queue_managers: [1], hosts: [] } }, null), { selected: [], error: '--env is required: the inventory contains 2 environments (prod, lab); pass one of them or --env all', usage: true });
-  assert.deepEqual(selectEnvironments({ prod: { queue_managers: [1], hosts: [] } }, null).selected, ['prod']);
-  assert.equal(selectEnvironments({ prod: { queue_managers: [1], hosts: [] } }, 'lab').usage, true);
+  assert.deepEqual(selectEnvironments({ prod: { instances: [1], hosts: [] }, lab: { instances: [1], hosts: [] } }, null), { selected: [], error: '--env is required: the inventory contains 2 environments (prod, lab); pass one of them or --env all', usage: true });
+  assert.deepEqual(selectEnvironments({ prod: { instances: [1], hosts: [] } }, null).selected, ['prod']);
+  assert.equal(selectEnvironments({ prod: { instances: [1], hosts: [] } }, 'lab').usage, true);
   let r = runAll({ env: null });
   assert.equal(r.usage, true); assert.match(r.errors[0], /--env is required/); assert.deepEqual(r.partitions, {});
   r = runAll({ env: 'prod' });
@@ -512,10 +514,18 @@ test('run: environment selection, usage errors, module checks, strict warnings, 
   r = runAll({ module: { ...module, templates: () => ({ 'site.json': 'x' }) } });
   assert.ok(r.errors.some(e => /file site\.json: emitted twice/.test(e)), r.errors.join('\n'));
   // no module: site pack, burn rules and manifest only; the site pack keeps the lab literals
-  r = run({ pack, packText, schema, inventorySchema: invSchema, inventories: [{ name: 'lab.inventory.yaml', text: labInv }], env: 'lab', lib });
+  // (without a module the collection is `instances`, the kind `instance`, and the core still emits the inventory rules)
+  const plainInv = labInv.replace(/^queue_managers:/m, 'instances:');
+  r = run({ pack, packText, schema, inventorySchema: invSchema, inventories: [{ name: 'lab.inventory.yaml', text: plainInv }], env: 'lab', lib });
   assert.deepEqual(r.errors, []);
-  assert.deepEqual(r.partitions.lab.files.map(f => f.path), ['packs/fixture.pack.yaml', 'prometheus/rules/fixture.burn.yml', 'site.json']);
-  assert.equal(r.partitions.lab.files[0].content, packText);
+  assert.deepEqual(r.partitions.lab.files.map(f => f.path), ['packs/fixture.pack.yaml', 'prometheus/rules/fixture.burn.yml', 'prometheus/rules/fixture.inventory.yml', 'site.json']);
+  assert.deepEqual(r.partitions.lab.manifest.instance_kind, { key: 'instances', kind: 'instance', label: 'instance', title: 'instance' });
+  assert.deepEqual(r.partitions.lab.manifest.expected.kinds.instance.names, ['QM1']);
+  assert.match(r.partitions.lab.files[2].content, /record: fixture:inventory:instance\n\s+expr: vector\(1\)\n\s+labels: \{ instance: QM1, environment: lab/);
+  // a queue_managers: file without a module is a schema error, not a silently empty fleet
+  r = run({ pack, packText, schema, inventorySchema: invSchema, inventories: [{ name: 'lab.inventory.yaml', text: labInv }], env: 'lab', lib });
+  assert.ok(r.errors.some(e => /unknown property 'queue_managers'/.test(e)), r.errors.join('\n'));
+  assert.equal(runAll({ inventories: [{ name: 'lab.inventory.yaml', text: labInv }], env: 'lab' }).partitions.lab.files[0].content, packText);
   // the fleet hook runs only with --env all and more than one environment
   const fleet = { ...module, fleet: (ctxs) => ({ 'alertmanager.fleet.yml': ctxs.map(c => c.env).join(',') + '\n' }) };
   r = runAll({ module: fleet });
@@ -525,6 +535,71 @@ test('run: environment selection, usage errors, module checks, strict warnings, 
   r = runAll({ inventories: [{ name: 'x.yaml', text: 'inventory: v1\nenv: uat\nqueue_managers: [{ name: Q, shape: host }]\n' }] });
   assert.ok(r.errors.some(e => /environment uat: not in the pack's metadata\.bindings\.environments \[prod, lab\]/.test(e)), r.errors.join('\n'));
   assert.deepEqual(r.partitions, {});
+});
+
+// ----------------------------------------------------------------- instances, expected sets, inventory rules
+test('instances: the module descriptor names the collection, the kind, the label and the title; bad descriptors are module errors', () => {
+  assert.deepEqual(instancesOf(null), { key: 'instances', kind: 'instance', label: 'instance', title: 'instance', schema: null });
+  assert.deepEqual(instancesOf({ instances: { kind: 'broker' } }), { key: 'instances', kind: 'broker', label: 'broker', title: 'broker', schema: null });
+  assert.deepEqual(instancesOf(module), { key: 'queue_managers', kind: 'qmgr', label: 'qmgr', title: 'queue manager', schema: module.instances.schema });
+  assert.throws(() => instancesOf({ instances: { key: 'bad key' } }), /module\.instances\.key must be an identifier/);
+  assert.throws(() => instancesOf({ instances: { label: '9x' } }), /module\.instances\.label must be an identifier/);
+  assert.throws(() => instancesOf({ instances: { schema: 'nope' } }), /module\.instances\.schema/);
+  // the schema follows the descriptor: the collection under the module's key, the fragment merged into Instance
+  const s = inventorySchema(invSchema, module);
+  assert.ok(s.properties.queue_managers && !s.properties.instances, 'collection renamed');
+  assert.deepEqual(s.$defs.Instance.required, ['name', 'shape']);
+  assert.deepEqual(s.$defs.Instance.properties.shape.enum, ['container', 'host', 'multi-instance', 'rdqm-ha', 'rdqm-dr']);
+  const plain = inventorySchema(invSchema);
+  assert.ok(plain.properties.instances && !plain.properties.queue_managers);
+  assert.deepEqual(plain.$defs.Instance.required, ['name'], 'without a module shape is optional and free');
+  // the merged model and every environment carry instances and the module's key as an alias (the same array)
+  const m = merge(files(parseYaml(labInv))).inventory;
+  assert.equal(m.queue_managers, m.instances);
+  assert.deepEqual(m.instanceKind, { key: 'queue_managers', kind: 'qmgr', label: 'qmgr', title: 'queue manager' });
+  const { envs } = resolveEnvironments(m, pack);
+  assert.equal(envs.lab.queue_managers, envs.lab.instances);
+  // the product's rules come from module.checkInventory; a throwing hook is one error, not a crash
+  const throwing = { ...module, checkInventory: () => { throw new Error('boom'); } };
+  assert.ok(validateInventory(m, pack, { schema: invSchema, module: throwing }).errors.includes('module.checkInventory: boom'));
+  assert.deepEqual(validateInventory(m, pack, { schema: invSchema, module: { ...module, checkInventory: undefined } }).errors, [], 'no hook, no product rules');
+});
+
+test('expected: site.json carries the expected sets per kind and the core emits the inventory rules unless a template did', () => {
+  const r = runAll({ env: 'prod' });
+  assert.deepEqual(r.errors, []);
+  const m = r.partitions.prod.manifest;
+  assert.deepEqual(m.instance_kind, { key: 'queue_managers', kind: 'qmgr', label: 'qmgr', title: 'queue manager' });
+  assert.equal(m.queue_managers, m.instances, 'the alias is the same list');
+  assert.equal(m.expected.series_prefix, 'fixture:inventory:');
+  assert.equal(m.expected.environment, 'prod');
+  const q = m.expected.kinds.qmgr;
+  assert.deepEqual([q.title, q.label, q.series, q.jobs, q.names], ['queue manager', 'qmgr', 'fixture:inventory:qmgr', ['exporter'], ['QMORD1', 'QMPAY1']]);
+  assert.equal(q.by.QMORD1.site, m.instances[0].site);
+  assert.equal(m.expected.kinds.host.names.length, 4);
+  assert.equal(m.expected.kinds.host.series, 'fixture:inventory:host');
+  const queue = m.expected.kinds.queue;
+  assert.equal(queue.per, 'qmgr');
+  assert.match(queue.query, /fixture_queue_depth\{queue=~"/);
+  assert.equal(queue.series, null, 'a counted kind has no inventory series');
+  const inv = r.partitions.prod.files.find(f => f.path === 'prometheus/rules/fixture.inventory.yml');
+  assert.ok(inv, 'the default inventory rules file is emitted');
+  assert.equal((inv.content.match(/record: fixture:inventory:qmgr/g) || []).length, 2);
+  assert.equal((inv.content.match(/record: fixture:inventory:host/g) || []).length, 4);
+  assert.match(inv.content, /labels: \{ qmgr: QMORD1, environment: prod/);
+  assert.match(inv.content, /name: fixture\.inventory\n\s+interval: /);
+  assert.ok(m.files.includes('prometheus/rules/fixture.inventory.yml'));
+  // a module that renders that path keeps its own file
+  const own = runAll({ env: 'prod', module: { ...module, templates: (c) => ({ ...module.templates(c), 'prometheus/rules/fixture.inventory.yml': 'custom\n' }) } });
+  assert.deepEqual(own.errors, []);
+  assert.equal(own.partitions.prod.files.find(f => f.path === 'prometheus/rules/fixture.inventory.yml').content, 'custom\n');
+  // the legacy perQmgr hook still renders per instance
+  const legacy = runAll({ env: 'prod', module: { ...module, perInstance: undefined, perQmgr: module.perInstance } });
+  assert.deepEqual(legacy.errors, []);
+  assert.ok(legacy.partitions.prod.files.some(f => f.path === 'qmgrs/QMORD1/exporter.yaml'));
+  // expectedKinds is validated: a counted kind needs per
+  const bad = runAll({ env: 'prod', module: { ...module, expectedKinds: () => ({ topic: { query: 'count(x)' } }) } });
+  assert.ok(bad.errors.some(e => /expectedKinds\.topic: a counted kind \(query\) needs per/.test(e)), bad.errors.join('\n'));
 });
 
 // ----------------------------------------------------------------- T5 the CLI
@@ -541,8 +616,8 @@ test('T5 CLI: --env all writes <out>/prod and <out>/lab and nothing else; --env 
     assert.equal(readFileSync(join(out, 'lab', 'packs', 'fixture.pack.yaml'), 'utf8'), packText);
     assert.ok(existsSync(join(out, 'prod', 'qmgrs', 'QMPAY1', 'exporter.yaml')));
     assert.ok(existsSync(join(out, 'prod', 'site.json')) && existsSync(join(out, 'prod', 'prometheus', 'rules', 'fixture.burn.yml')));
-    assert.match(r.stdout, /^prod: 2 queue managers, 4 hosts, 7 files → /m);
-    assert.match(r.stdout, /^lab: 1 queue manager, 1 host, 6 files → /m);
+    assert.match(r.stdout, /^prod: 2 queue managers, 4 hosts, 8 files → /m);
+    assert.match(r.stdout, /^lab: 1 queue manager, 1 host, 7 files → /m);
     const omitted = cli(...INV, '--out', out, '--check');
     assert.equal(omitted.status, 2, omitted.stderr);
     assert.match(omitted.stderr, /--env is required: the inventory contains 2 environments \(prod, lab\)/);
@@ -561,7 +636,7 @@ test('T5 CLI: usage and validation exit codes', () => {
   assert.equal(cli('--inventory', resolve(FIX, 'lab.inventory.yaml'), '--registry', 'x.json').status, 2, '--registry without --adapter');
   assert.equal(cli('--inventory', resolve(FIX, 'lab.inventory.yaml'), '--bogus', '1').status, 2);
   const missing = cli(...INV, '--env', 'staging', '--check');
-  assert.equal(missing.status, 2); assert.match(missing.stderr, /--env staging: no host or queue manager/);
+  assert.equal(missing.status, 2); assert.match(missing.stderr, /--env staging: no host or instance/);
   // the pack comes from the inventory's pack: field, relative to the inventory file; --pack wins
   const explicit = cli('--inventory', resolve(FIX, 'lab.inventory.yaml'), '--pack', resolve(FIX, 'fixture.pack.yaml'), '--module', resolve(FIX, 'module.mjs'), '--check');
   assert.equal(explicit.status, 0, explicit.stderr);

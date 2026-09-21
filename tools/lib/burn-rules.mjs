@@ -70,7 +70,7 @@
 //
 // Plain ESM, browser-safe (the studio imports compile.mjs): only ./slug.mjs is imported.
 
-import { fileSlug } from './slug.mjs';
+import { fileSlug, metricPrefix } from './slug.mjs';
 
 // Whitespace is collapsed OUTSIDE string literals only: a label value such as `route="/a  b"`
 // (or one carrying a newline) is part of the selector and must survive byte for byte,
@@ -120,7 +120,8 @@ export const metricSafe = (id) => String(id ?? '').replace(/[^a-zA-Z0-9_]/g, '_'
 /** The metric-name prefix of a pack: its file slug with `_` for `-` (`payment-service` →
  *  `payment_service`; a raw `payment-service:errorbudget:burn_1h` is rejected by promtool 2.55 and
  *  parsed as `payment - service:...` by 3.14). Equals compile.mjs's serviceSlug for every input. */
-export const metricPrefix = (name) => fileSlug(String(name ?? 'pack'), 'pack').replace(/-/g, '_');
+// metricPrefix lives in slug.mjs (a leaf the site core can vendor alone); re-exported here for every existing importer.
+export { metricPrefix };
 
 export const MIN_BAD_SAMPLES = 2;                       // deviation 2
 export const RECORD_WINDOWS = ['5m', '1h'];

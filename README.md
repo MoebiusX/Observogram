@@ -331,6 +331,10 @@ notify:                         # early-warning delivery: one bounded POST per r
   authEnv: MY_JOURNEY_WEBHOOK_TOKEN  # optional → Authorization: Bearer <value>
   on: transitions                    # transitions (default) · breach · always
   format: json                       # json · text (one line + markdown body, ntfy-style)
+inventory:                      # is the right number of things being monitored? (gen-site partition)
+  site: ../sites/prod/site.json      # its `expected` block: names per kind, counted kinds with floors
+  kinds: [qmgr, host]                # optional subset
+# and under gate:  inventory: { maxSilent: 0, maxDown: 0, maxUnexpected: 0, minCoveragePct: 100 }
 ```
 
 ```bash
@@ -395,6 +399,27 @@ lower-is-comfortable row is above zero, `nonzero in N of last M runs` over
 the fetched history, and a single muted chip with the reason when the tier
 could not sample — chips never carry an ok/error colour, because a sample
 is a signal, not a verdict.
+
+**Inventory coverage.** A journey that names a gen-site partition (`inventory: { site:
+<partition>/site.json }`, relative to the journey file) compares the site's `expected` sets
+(`docs/gen-site.md`: per kind the inventoried names — queue managers, brokers, and hosts where
+the module says `up` carries a `host` label — and counted kinds such as queues per queue manager with floors) against the live `up` series read
+through the MCP's metrics query tool, once per kind. The record carries
+`inventory: { status, reason, kinds }`: per enumerated kind *up*, *down* (targeted, every
+target down), *silent* (no `up` series at all — the site's own Silent alert asks the same
+question in Prometheus), *unexpected* (answering but not inventoried) and a coverage
+percentage; per counted kind the live count per parent against the floors. A file-sourced
+Pack B is `not-attempted` (no live series), an MCP without the tool `not-attempted` with the
+tier reason, an unreadable site `failed` with the reason, a `kinds` entry the site does not
+declare `failed` naming it, and a kind whose query failed `failed` with no numbers (a failed
+query is not an outage of every name). `gate.inventory` turns it into a
+verdict: `requireChecked` (default `true`) breaches when coverage could not be checked,
+`maxSilent` / `maxDown` / `maxUnexpected` / `minCoveragePct` per enumerated kind, and a
+counted kind's floors breach whenever undercut; `kinds` narrows the gate. The report prints an
+*Inventory coverage* line and a per-kind table, `journey list` an `inventory 11/12 qmgr …`
+segment, `GET /api/journeys` the summary as `lastRun.inventory`, and Advanced → Neuron a
+fleet tile, per-kind coverage over time for the journey in focus and the newest record's
+table. Coverage never touches the grade or the alignment.
 
 Each run also records its requirement chains: per chain the scored verdict
 beside the on-wire *ladder* verdict (is the artefact merely present, doing
@@ -481,7 +506,7 @@ be tested without a browser. The view needs no pack loaded.
 | `POST` | `/api/packs/:id/deploy-bulk` | Deploy selected compiled artifacts |
 | `POST` | `/api/packs/:id/deploy/:target` | Deploy one compiled target |
 | `DELETE` | `/api/uploads` | Clear uploaded/crawled/drafted packs |
-| `GET` | `/api/journeys` | Saved journeys with their `schedule` (parsed: `cron`, `timezone`, `every`, `cadenceMs`, `cadenceNote`), `stackBudget`, `notify` (env-var names + policy, never a URL) and the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`, `notify` `{ status, httpStatus, reason }`) |
+| `GET` | `/api/journeys` | Saved journeys with their `schedule` (parsed: `cron`, `timezone`, `every`, `cadenceMs`, `cadenceNote`), `stackBudget`, `notify` (env-var names + policy, never a URL) and the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`, `notify` `{ status, httpStatus, reason }`, `inventory` `{ status, reason, environment, kinds }`) |
 | `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series) |
 | `GET` | `/api/journeys/:name/schedule` | The parsed `schedule:` and the cron / schtasks / GitHub Actions / CronJob snippets (env var names only; `placeholder: true` without a schedule) |
 | `POST` | `/api/journeys/:name/run` | Run a saved journey now |
