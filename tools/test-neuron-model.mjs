@@ -202,6 +202,37 @@ test('blastRadiusNodes: declared chains only, one entry per node with every chai
   assert.equal(m.fleet.chains.degradedNodes, 0, 'run() fixtures carry no degradedNodes count');
 });
 
+test('inventory coverage: per-journey series from the records, fleet sums from the listing summaries', () => {
+  const invRec = (up, silent, unexpected, status = 'checked') => ({ status, reason: null, site: 's', environment: 'prod', kinds: {
+    qmgr: { mode: 'enumerated', title: 'queue manager', status, expected: 3, observed: 3 - silent.length, up: up.length, upNames: up, down: [], silent, unexpected, coveragePct: Math.round((up.length / 3) * 1000) / 10 },
+    queue: { mode: 'counted', title: 'queue', status, total: 7, counts: { QM1: 7 }, min: { QM1: 5 }, below: [], missing: [] },
+  } });
+  const summary = (inv) => ({ status: inv.status, reason: null, environment: 'prod', kinds: {
+    qmgr: { mode: 'enumerated', title: 'queue manager', status: inv.status, expected: 3, up: inv.kinds.qmgr.up, down: 0, silent: inv.kinds.qmgr.silent.length, unexpected: inv.kinds.qmgr.unexpected.length, coveragePct: inv.kinds.qmgr.coveragePct },
+    queue: { mode: 'counted', title: 'queue', status: inv.status, total: 7, below: 0, missing: 0 },
+  } });
+  const A = [run(0, { inventory: invRec(['QM1'], ['QM2', 'QM3'], []) }), run(1, { inventory: invRec(['QM1', 'QM2', 'QM3'], [], ['QMX']) })];
+  const B = [run(0, { inventory: invRec([], [], [], 'not-attempted') })];
+  const C = [run(0)];
+  const journeys = [
+    entry('a', A, { lastRun: { ...entry('a', A).lastRun, inventory: summary(A[1].inventory) } }),
+    entry('b', B, { lastRun: { ...entry('b', B).lastRun, inventory: summary(B[0].inventory) } }),
+    entry('c', C),
+  ];
+  const m = buildNeuronModel({ journeys, runsByName: { a: A, b: B, c: C } });
+  assert.deepEqual(m.perJourney.a.inventory.series.qmgr.map(p => [p.up, p.silent, p.unexpected, p.coveragePct]), [[1, 2, 0, 33.3], [3, 0, 1, 100]]);
+  assert.equal(m.perJourney.a.inventory.latest.kinds.qmgr.unexpected[0], 'QMX');
+  assert.deepEqual(m.perJourney.b.inventory.series.qmgr, [], 'a not-attempted record carries no coverage point');
+  assert.equal(m.perJourney.b.inventory.latest.status, 'not-attempted');
+  assert.equal(m.perJourney.c.inventory.latest, null);
+  assert.deepEqual(m.perJourney.c.inventory.series, {});
+  assert.equal(m.fleet.inventory.journeys, 2, 'c declares no block and does not count');
+  assert.deepEqual(m.fleet.inventory.unchecked, ['b']);
+  assert.deepEqual(m.fleet.inventory.kinds.qmgr, { title: 'queue manager', expected: 3, up: 3, down: 0, silent: 0, unexpected: 1, journeys: 1, coveragePct: 100 });
+  assert.deepEqual(m.fleet.inventory.counted.queue, { title: 'queue', total: 7, below: 0, missing: 0, journeys: 1 });
+  assert.deepEqual(buildNeuronModel({ journeys: [entry('c', C)], runsByName: { c: C } }).fleet.inventory, { journeys: 0, unchecked: [], kinds: {}, counted: {} });
+});
+
 test('OUTCOMES is the record vocabulary', () => {
   assert.deepEqual([...OUTCOMES], ['pass', 'gate-failed', 'vantage-lost']);
 });

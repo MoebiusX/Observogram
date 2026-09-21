@@ -23,6 +23,7 @@
 // Everything returned is plain JSON-able data.
 
 import { stackSeries, latestByFamily } from './stack-evidence.mjs';
+import { inventorySeries } from './inventory-coverage.mjs';
 
 export const OUTCOMES = Object.freeze(['pass', 'gate-failed', 'vantage-lost']);
 export const LADDER_KEYS = Object.freeze(['healthy', 'degraded', 'broken', 'unobserved']);
@@ -218,6 +219,7 @@ export function buildJourneyDetail(journey, runs) {
     stackRows: rows,
     exposure: exposureSeries(sorted),
     blast: blastRadiusNodes(latest),
+    inventory: inventoryDetail(sorted),
     breachFrequency: countBy(sorted.flatMap(breachesOf), (b) => b.criterion),
     latest: latest ? {
       startedAt: latest.startedAt ?? null,
@@ -336,6 +338,7 @@ export function buildNeuronModel({ journeys = [], runsByName = {}, window = NEUR
       delivery,
       stackSignal,
       vantageChanged: withRun.filter((j) => j.lastRun.vantageChanged === true).map((j) => j.name),
+      inventory: fleetInventory(lastRuns, withRun.map((j) => j.name)),
     },
     series: {
       alignment: list.map((j) => ({ name: j.name, points: perJourney[j.name].alignment })),
@@ -362,6 +365,49 @@ export function buildNeuronModel({ journeys = [], runsByName = {}, window = NEUR
 // selection vanished): the one that most needs eyes — a chain got worse,
 // then gate-failed, then vantage-lost, then the lowest alignment, then the
 // first by name. null with no journeys.
+// Inventory coverage per journey: the enumerated kinds' coverage series over the window
+// (inventory-coverage.mjs inventorySeries: only checked records carry a point) and the newest
+// record's block as it is (any status), so the table can say "not attempted" honestly.
+export function inventoryDetail(runs) {
+  const sorted = sortRunsOldestFirst(runs);
+  const newest = sorted.length ? sorted[sorted.length - 1] : null;
+  const latest = newest && isRecord(newest.inventory) ? newest.inventory : null;
+  const kinds = new Set();
+  for (const r of sorted) {
+    for (const [k, c] of Object.entries(isRecord(r.inventory?.kinds) ? r.inventory.kinds : {})) if (isRecord(c) && c.mode === 'enumerated') kinds.add(k);
+  }
+  return { latest, series: Object.fromEntries([...kinds].map((k) => [k, inventorySeries(sorted, k)])) };
+}
+
+// The fleet's inventory coverage from the listing summaries (lastRun.inventory): per
+// enumerated kind the sums of inventoried / up / down / silent / unexpected across the journeys
+// whose last run checked that kind, per counted kind the totals and the floors undercut, and
+// the journeys whose last run could not check (not-attempted, failed, partial). Journeys
+// without an inventory: block do not count at all — absence, never coverage.
+export function fleetInventory(lastRuns, names = []) {
+  const kinds = {}, counted = {};
+  const withBlock = [], unchecked = [];
+  (Array.isArray(lastRuns) ? lastRuns : []).forEach((r, i) => {
+    const inv = isRecord(r?.inventory) ? r.inventory : null;
+    if (!inv) return;
+    const name = names[i] ?? String(i);
+    withBlock.push(name);
+    if (inv.status !== 'checked') unchecked.push(name);
+    for (const [k, c] of Object.entries(isRecord(inv.kinds) ? inv.kinds : {})) {
+      if (!isRecord(c) || c.status !== 'checked') continue;
+      if (c.mode === 'counted') {
+        const t = counted[k] || (counted[k] = { title: c.title ?? k, total: 0, below: 0, missing: 0, journeys: 0 });
+        t.total += num(c.total) ?? 0; t.below += num(c.below) ?? 0; t.missing += num(c.missing) ?? 0; t.journeys += 1;
+      } else {
+        const t = kinds[k] || (kinds[k] = { title: c.title ?? k, expected: 0, up: 0, down: 0, silent: 0, unexpected: 0, journeys: 0 });
+        t.expected += num(c.expected) ?? 0; t.up += num(c.up) ?? 0; t.down += num(c.down) ?? 0; t.silent += num(c.silent) ?? 0; t.unexpected += num(c.unexpected) ?? 0; t.journeys += 1;
+      }
+    }
+  });
+  for (const t of Object.values(kinds)) t.coveragePct = t.expected ? Math.round((t.up / t.expected) * 1000) / 10 : null;
+  return { journeys: withBlock.length, unchecked, kinds, counted };
+}
+
 export function defaultFocus(model) {
   const names = Object.keys(model?.perJourney || {});
   if (!names.length) return null;
