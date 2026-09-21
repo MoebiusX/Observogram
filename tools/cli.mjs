@@ -47,9 +47,12 @@ function delegate(relPath, args) {
 }
 
 async function runCompile(args) {
-  const [file, target] = args;
+  // The third positional is the dashboard id for grafana-dashboard (the
+  // target's own descriptor says "pass the dashboard id as an arg"); without
+  // it the compiler picks the first declared board, else the unified one.
+  const [file, target, dashboardId] = args;
   if (!file) {
-    console.error('usage: packc compile <file> [target]');
+    console.error('usage: packc compile <file> [target] [dashboardId]');
     process.exit(2);
   }
   const { compile, listTargets } = await import('../tools/lib/compile.mjs');
@@ -70,7 +73,7 @@ async function runCompile(args) {
     process.exit(2);
   }
 
-  const out = compile(canonical, target);
+  const out = compile(canonical, target, dashboardId ? { dashboardId } : {});
   // The artefact text goes to stdout (pipe-friendly); the provenance line
   // and any compile warnings go to stderr so redirecting stdout yields a
   // clean artefact file.

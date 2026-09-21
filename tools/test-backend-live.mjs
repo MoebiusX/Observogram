@@ -184,12 +184,13 @@ async function main() {
     // ---- authoritative read-back straight from Grafana ----
     const gfAuth = { headers: { Authorization: `Basic ${Buffer.from(GRAFANA_AUTH).toString('base64')}` } };
     const search = await api(GRAFANA_URL, '/api/search?type=dash-db&limit=200', gfAuth);
-    // Compiled dashboards carry title = dash.id; uids are capped +
-    // fingerprinted, so titles are the stable read-back identity.
-    const liveDashTitles = new Set((search || []).map(d => d.title));
+    // Compiled dashboards carry uid = dash.id (the one-engine boards link to
+    // each other at /d/<id>; the title is the human "<Service> — <Board>"),
+    // so the uid is the stable read-back identity.
+    const liveDashUids = new Set((search || []).map(d => d.uid));
     for (const id of dashboardIds) {
-      assert(liveDashTitles.has(id),
-        `dashboard '${id}' exists in Grafana after deploy`, [...liveDashTitles].join(','), id);
+      assert(liveDashUids.has(id),
+        `dashboard '${id}' exists in Grafana after deploy`, [...liveDashUids].join(','), id);
     }
     const provisioned = await api(GRAFANA_URL, '/api/v1/provisioning/alert-rules', gfAuth);
     const liveRuleTitles = new Set((provisioned || []).map(r => r.title));
@@ -298,8 +299,8 @@ async function main() {
         const emitted = JSON.parse(await apiText(base,
           `/api/packs/${encodeURIComponent(packAId)}/compile-artifact?env=prod&group=dashboards&flavor=grafana&artifact=${encodeURIComponent('dash:' + id)}`));
         const live = await api(target.url, `/api/dashboards/uid/${encodeURIComponent(emitted.uid)}`, gfAuthOf());
-        assert(live?.dashboard?.title === id,
-          `${target.name}: '${id}' retrievable by emitted uid, title intact`, live?.dashboard?.title, id);
+        assert(live?.dashboard?.uid === id && live?.dashboard?.title === emitted.title,
+          `${target.name}: '${id}' retrievable by emitted uid (= the id), title intact`, `${live?.dashboard?.uid} / ${live?.dashboard?.title}`, `${id} / ${emitted.title}`);
         assert((live?.dashboard?.panels || []).length === (emitted.panels || []).length,
           `${target.name}: '${id}' panel count survives import`, (live?.dashboard?.panels || []).length, (emitted.panels || []).length);
         const sv = live?.dashboard?.schemaVersion;

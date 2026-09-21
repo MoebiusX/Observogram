@@ -194,7 +194,12 @@ export function catalogToDeployManifest(catalog) {
           group: 'dashboards',
           flavor: 'grafana',
           dashboardId: it.dashboardId,
-          deployable,
+          // A generated board the pack does not declare (the unified board on
+          // a pack without it in spec.dashboards[]) compiles and downloads but
+          // is not deployed from here: it would come back as undeclared drift
+          // and never verify. The catalog says so in its subtitle.
+          deployable: deployable && !it.generated,
+          generated: !!it.generated,
           source: 'Repo',
         });
       }
