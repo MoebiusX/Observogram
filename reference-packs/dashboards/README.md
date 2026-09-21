@@ -55,3 +55,12 @@ Common to all three: `validation.chaos_experiments[].expected_alerts` name alert
 emits; the policy alerts are `<slo>_burn_<factor>x_<short>_<long>`. Each pack also declares a
 hand-written `<svc>:errorbudget:burn_1h` recording rule for a single SLO without an `slo` label,
 alongside the per-SLO labelled ones the generator produces.
+
+The compiler emits these same boards. `compile(pack, 'grafana-dashboard', { dashboardId })`,
+the studio's Dashboards group under Fix The Gaps and `packc compile … grafana-dashboard` all
+run `genericBoards` and add only the platform contract on top — the Grafana version profile
+(schemaVersion floor, the bare-uid datasource form below Grafana 10), the `${DS_PROMETHEUS}` /
+`${DS_LOKI}` / `${DS_TEMPO}` placeholders the MCP gateway maps to its datasources (pass
+`datasourceUids` to pin real ones), and the `observability-pack` / `obs-pack-id:<id>` tags.
+`tools/test-gen-pack.mjs` pins that: with the lab's uids every JSON in this directory is the
+compiler's board, byte for byte apart from the added tags.

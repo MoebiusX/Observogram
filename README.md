@@ -386,7 +386,7 @@ an SLO verdict`: it is a signal to look, not an SLO verdict, and it never
 touches the grade. The report prints the samples in a *Stack self-metrics*
 table and `journey list` shows `stack sampled N` / `stack not attempted` /
 `stack none` per journey (a definition that fails to load prints why instead
-of looking never-run). In the studio (Advanced → Journeys) each card
+of looking never-run). In the studio (Advanced → Neuron, the journey cards) each card
 carries a "stack self-metrics — point-in-time samples" line: one chip per
 family with the last run's value — the row with a `nonzero` signal first,
 then lower-is-comfortable rows, so a healthy-looking ratio never hides a
@@ -416,9 +416,49 @@ dep_x by … touched …`, and whenever the vantage itself moved `vantage
 changed: vantage full → partial · …` — named beside the cause, never as
 one. In the studio the Diagnose chain cards show the
 ladder verdict, name present-but-unhealthy / stale / unobserved nodes and
-say `blinds N SLOs` beside a missing or drifted one, and each Journeys card
-carries a plain-text chains line and a candidate-cause line — counts and
-muted markers, no colours.
+say `blinds N SLOs` beside a missing or drifted one, and each journey card
+under Advanced → Neuron carries a plain-text chains line and a
+candidate-cause line — counts and muted markers, no colours.
+
+### Neuron — the monitor of the monitors, as one page
+
+**Advanced → Neuron** reads every saved journey as one instrument. A toolbar
+picks the window (the newest 20 / 50 / 100 / 200 runs per journey), the trend
+metric (alignment or grade), the journey in focus, and offers **run all**
+(every journey in sequence, the studio form of `packc journey run --all`).
+Fleet tiles give the last word: journeys (scheduled · notify · stack-gated ·
+broken definitions), last outcomes with a pass / gate-failed / vantage-lost
+bar, fleet alignment and grade (the mean of each journey's last value, with a
+*paired* delta against the run before), requirement chains intact / declared
+with the four ladder buckets, journeys whose chains got worse, the widest
+exposure across the fleet, delivery sent / failed / skipped, and the journeys
+whose last run carried a nonzero lower-is-comfortable stack sample. Six
+fleet panels follow — alignment or grade over time per journey (a time axis
+when the records carry times; a vantage-lost run is a gap, never a 0), an
+outcome heatmap newest-right, breached criteria and candidate-cause kinds over
+every run in the window, blind-spot exposure over time (the SLOs the widest
+degraded artefact would blind, per journey) and the widest exposures across
+the fleet's newest records as stacked bars (SLOs · alerts · other consumers
+that would go blind — structural exposure on the requirement graph, never a
+claim that they are blind). Then the journey in focus (chosen, or the one that
+most needs eyes: a chain getting worse, then gate-failed, then vantage-lost,
+then the lowest alignment): alignment and grade per run, the ladder buckets
+per run as stacked bars in a neutral ramp, scored vs ladder integrity, run
+duration, the blast radius of the newest record (every degraded node of a
+declared chain once, with the chains it degrades, as a stacked bar) with the
+widest node's exposure per run, one small step chart per stack self-metric row in a single ink
+colour (a ring on `nonzero` samples, a hollow marker where the probe did not
+answer, the posture-budget note under gated rows), and the newest record
+opened up — requirement chains with their degraded nodes and blast radius,
+the ranked candidate causes with the vantage beside them, the transition
+since the run before, the gate, drift / grade / conformance / freshness, the
+stack evidence table with the Alertmanager and Grafana status, the vantage,
+backend versions, delivery, and the schedule with its cron / schtasks /
+GitHub Actions / CronJob snippets (`GET /api/journeys/:name/schedule`, loaded
+on demand). The saved-journey cards close the page. The charts are
+zero-dependency inline SVG (`tools/lib/svg-charts.mjs`); the numbers come
+from one pure model (`tools/lib/neuron-model.mjs`), so what the page says can
+be tested without a browser. The view needs no pack loaded.
 
 ## API Surface
 
@@ -443,6 +483,7 @@ muted markers, no colours.
 | `DELETE` | `/api/uploads` | Clear uploaded/crawled/drafted packs |
 | `GET` | `/api/journeys` | Saved journeys with their `schedule` (parsed: `cron`, `timezone`, `every`, `cadenceMs`, `cadenceNote`), `stackBudget`, `notify` (env-var names + policy, never a URL) and the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`, `notify` `{ status, httpStatus, reason }`) |
 | `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series) |
+| `GET` | `/api/journeys/:name/schedule` | The parsed `schedule:` and the cron / schtasks / GitHub Actions / CronJob snippets (env var names only; `placeholder: true` without a schedule) |
 | `POST` | `/api/journeys/:name/run` | Run a saved journey now |
 | `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file |
 
@@ -458,7 +499,8 @@ studio/
   compare-view.mjs         Diagnostic Grade, drift, traceability entry points
   compile-view.mjs         Remediate, compile catalog, deploy surfaces
   layers-view.mjs          Discover Observogram and artifact cards
-  journeys-view.mjs        Saved journeys: capture, run-now, history, stack chips, chains + cause lines
+  neuron-view.mjs          Advanced → Neuron: fleet tiles, trend / heatmap / bar panels, the journey in focus, the newest record opened up
+  journeys-view.mjs        Saved journeys: capture, run-now, history, stack chips, chains + cause lines (the cards Neuron composes)
 
 tools/
   cli.mjs                  packc CLI (journey run / list, compile, …)

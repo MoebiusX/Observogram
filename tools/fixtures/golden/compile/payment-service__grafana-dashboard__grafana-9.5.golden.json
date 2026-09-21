@@ -1,8 +1,10 @@
 {
-  "title": "payment-overview",
-  "uid": "obs-pack-payment_service-payment-0ay93iv",
-  "description": "Compiled from payment-service pack. Do not hand-edit — re-emit from the pack.",
+  "uid": "payment-overview",
+  "title": "Payment service — Payment overview",
+  "description": "Payment service pack board \"Payment overview\": SLIs api_availability, api_latency_p99, consumer_freshness · SLOs api_availability_99_9.",
   "tags": [
+    "payment-service",
+    "pack",
     "observability-pack",
     "payment_service",
     "obs-pack-id:payment-overview"
@@ -10,259 +12,872 @@
   "timezone": "browser",
   "schemaVersion": 39,
   "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "liveNow": false,
   "refresh": "30s",
+  "fiscalYearStartMonth": 0,
+  "weekStart": "",
+  "timepicker": {
+    "refresh_intervals": [
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m"
+    ]
+  },
   "time": {
-    "from": "now-6h",
+    "from": "now-1h",
     "to": "now"
   },
-  "panels": [
-    {
-      "id": 5,
-      "title": "api_availability_99_9",
-      "type": "stat",
-      "datasource": "${DS_PROMETHEUS}",
-      "gridPos": {
-        "x": 0,
-        "y": 0,
-        "w": 6,
-        "h": 4
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "payment_service:api_availability:ratio_5m",
-          "legendFormat": "api_availability_99_9"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "decimals": 2,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 0.994
-              },
-              {
-                "color": "green",
-                "value": 0.999
-              }
-            ]
-          }
-        }
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "background",
-        "graphMode": "area"
-      }
-    },
-    {
-      "id": 1,
-      "title": "sli-api-availability",
-      "type": "timeseries",
-      "datasource": "${DS_PROMETHEUS}",
-      "gridPos": {
-        "x": 0,
-        "y": 4,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "payment_service:api_availability:ratio_5m",
-          "legendFormat": "api_availability"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1,
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 12,
-            "lineWidth": 2,
-            "pointSize": 3
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      }
-    },
-    {
-      "id": 2,
-      "title": "sli-api-latency-p99",
-      "type": "timeseries",
-      "datasource": "${DS_PROMETHEUS}",
-      "gridPos": {
-        "x": 12,
-        "y": 4,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "histogram_quantile(0.99,\n  sum by (le)(rate(http_server_request_duration_seconds_bucket{\n    service_name=\"payment-service\"\n  }[5m])))",
-          "legendFormat": "api_latency_p99"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 12,
-            "lineWidth": 2,
-            "pointSize": 3
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      }
-    },
-    {
-      "id": 3,
-      "title": "sli-consumer-freshness",
-      "type": "timeseries",
-      "datasource": "${DS_PROMETHEUS}",
-      "gridPos": {
-        "x": 0,
-        "y": 12,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max(messaging_kafka_consumer_lag_seconds{\n  service_name=\"payment-service\",\n  messaging_consumer_group=\"payment-settler\"\n})",
-          "legendFormat": "consumer_freshness"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 12,
-            "lineWidth": 2,
-            "pointSize": 3
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      }
-    },
-    {
-      "id": 4,
-      "title": "slo-api-availability",
-      "type": "timeseries",
-      "datasource": "${DS_PROMETHEUS}",
-      "gridPos": {
-        "x": 12,
-        "y": 12,
-        "w": 12,
-        "h": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "payment_service:api_availability:ratio_5m",
-          "legendFormat": "api_availability"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1,
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 12,
-            "lineWidth": 2,
-            "pointSize": 3,
-            "thresholdsStyle": {
-              "mode": "line"
-            }
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 0.999
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      }
-    }
-  ],
   "templating": {
     "list": []
   },
   "annotations": {
     "list": [
       {
+        "name": "Symptom alerts",
         "datasource": "${DS_PROMETHEUS}",
         "enable": true,
-        "name": "Annotations & Alerts",
-        "target": {
-          "matchAny": false,
-          "tags": [],
-          "type": "dashboard"
-        }
+        "hide": false,
+        "iconColor": "#F0616D",
+        "expr": "ALERTS{alertstate=\"firing\", pack=\"payment-service\", burn_rate=\"\", kind=\"\"}",
+        "step": "10s",
+        "titleFormat": "{{alertname}}",
+        "textFormat": "{{severity}} · {{qmgr}} {{queue}}"
       }
     ]
-  }
+  },
+  "links": [
+    {
+      "title": "Unified",
+      "type": "link",
+      "url": "/d/payment-service-unified",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
+      "title": "Payment slo burn",
+      "type": "link",
+      "url": "/d/payment-slo-burn",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
+      "title": "Payment deployment",
+      "type": "link",
+      "url": "/d/payment-deployment",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
+      "title": "Payment customer impact",
+      "type": "link",
+      "url": "/d/payment-customer-impact",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "asDropdown": false,
+      "tags": []
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 2
+      },
+      "transparent": true,
+      "options": {
+        "mode": "markdown",
+        "content": "### Payment service · Payment overview\nSLIs api_availability, api_latency_p99, consumer_freshness · SLOs api_availability_99_9. &nbsp;·&nbsp; pack `payment-service@1.5.0` &nbsp;·&nbsp; [Unified](/d/payment-service-unified?${__url_time_range}) · **Payment overview** · [Payment slo burn](/d/payment-slo-burn?${__url_time_range}) · [Payment deployment](/d/payment-deployment?${__url_time_range}) · [Payment customer impact](/d/payment-customer-impact?${__url_time_range})",
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "row",
+      "title": "§1-2 · Contract — SLIs and SLOs",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {
+        "x": 0,
+        "y": 2,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Api availability",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {
+        "x": 0,
+        "y": 3,
+        "w": 4,
+        "h": 4
+      },
+      "description": "HTTP responses that are not 5xx, over total responses. SLO 99.9 % over 30d.",
+      "pack": {
+        "binds_to": [
+          "slis.api_availability"
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "payment:api_availability:ratio_5m",
+          "instant": false,
+          "range": true,
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#F0616D",
+                "value": null
+              },
+              {
+                "color": "#F5B14C",
+                "value": 0.989
+              },
+              {
+                "color": "#3DD68C",
+                "value": 0.999
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "orientation": "auto",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Api latency p99",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {
+        "x": 4,
+        "y": 3,
+        "w": 4,
+        "h": 4
+      },
+      "description": "99th-percentile API latency, server-side. SLO 99 % over 30d.",
+      "pack": {
+        "binds_to": [
+          "slis.api_latency_p99"
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(histogram_quantile(0.99, sum by (le)(rate(http_server_request_duration_seconds_bucket{ service_name=\"payment-service\" }[5m]))))",
+          "instant": false,
+          "range": true,
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3DD68C",
+                "value": null
+              },
+              {
+                "color": "#F5B14C",
+                "value": 0.5
+              },
+              {
+                "color": "#F0616D",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "orientation": "auto",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Consumer freshness",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {
+        "x": 8,
+        "y": 3,
+        "w": 4,
+        "h": 4
+      },
+      "description": "Consumer lag for the settlement topic. SLO 99 % over 30d.",
+      "pack": {
+        "binds_to": [
+          "slis.consumer_freshness"
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(payment:consumer_lag:seconds_max_5m)",
+          "instant": false,
+          "range": true,
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3DD68C",
+                "value": null
+              },
+              {
+                "color": "#F5B14C",
+                "value": 60
+              },
+              {
+                "color": "#F0616D",
+                "value": 120
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "orientation": "auto",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 6,
+      "type": "bargauge",
+      "title": "Error-budget burn · last hour",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {
+        "x": 12,
+        "y": 3,
+        "w": 12,
+        "h": 8
+      },
+      "description": "1 h error-budget burn rate per SLO: 1× consumes the budget exactly over the SLO window; amber at the smallest factor that alerts for that SLO, red at the largest (spec.policy).",
+      "pack": {
+        "binds_to": [
+          "slos.api_availability_99_9"
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "payment_service:errorbudget:burn_1h",
+          "instant": true,
+          "legendFormat": "{{slo}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "max": 20,
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#8B98A9",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "api_availability_99_9"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Api availability · 99.9 %"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#3DD68C",
+                      "value": null
+                    },
+                    {
+                      "color": "#F5B14C",
+                      "value": 6
+                    },
+                    {
+                      "color": "#F0616D",
+                      "value": 14
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "valueMode": "color",
+        "namePlacement": "left",
+        "showUnfilled": true,
+        "sizing": "auto",
+        "minVizWidth": 8,
+        "minVizHeight": 14,
+        "maxVizHeight": 26,
+        "legend": {
+          "showLegend": false
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Burn rate · 5 m window",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {
+        "x": 0,
+        "y": 11,
+        "w": 6,
+        "h": 8
+      },
+      "description": "Fast window: reacts within minutes; pages when both it and the slow window exceed the factor. Hover for per-SLO values.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "payment_service:errorbudget:burn_5m",
+          "legendFormat": "{{slo}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "pointSize": 4,
+            "spanNulls": 30000,
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "axisPlacement": "auto",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "#8B98A9",
+                "value": 1
+              },
+              {
+                "color": "#F0616D",
+                "value": 14
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "api_availability_99_9"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Api availability"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "api_latency_99_p99_500ms"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Api latency p99"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "checkout_latency_99_5_p99_300ms"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Api latency p99 checkout"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "consumer_freshness_99_under_60s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Consumer freshness"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "consumer_success_99_95"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Consumer processing success"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Burn rate · 1 h window",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {
+        "x": 6,
+        "y": 11,
+        "w": 6,
+        "h": 8
+      },
+      "description": "Slow window: keeps burning for up to an hour after an incident by design.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "payment_service:errorbudget:burn_1h",
+          "legendFormat": "{{slo}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "pointSize": 4,
+            "spanNulls": 30000,
+            "axisBorderShow": false,
+            "axisSoftMin": 0,
+            "axisPlacement": "auto",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "#8B98A9",
+                "value": 1
+              },
+              {
+                "color": "#F0616D",
+                "value": 6
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "api_availability_99_9"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Api availability"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "api_latency_99_p99_500ms"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Api latency p99"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "checkout_latency_99_5_p99_300ms"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Api latency p99 checkout"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "consumer_freshness_99_under_60s"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Consumer freshness"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "consumer_success_99_95"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Consumer processing success"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "Alerting",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {
+        "x": 0,
+        "y": 19,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 10,
+      "type": "state-timeline",
+      "title": "Symptom alerts · pending / firing",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 12,
+        "h": 6
+      },
+      "description": "State of every symptom alert of the pack over the time range.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(2 * max by (alertname) (ALERTS{pack=\"payment-service\", alertstate=\"firing\", burn_rate=\"\", kind=\"\"})) or max by (alertname) (ALERTS{pack=\"payment-service\", alertstate=\"pending\", burn_rate=\"\", kind=\"\"}) or label_replace(vector(0), \"alertname\", \"no alert\", \"\", \"\")",
+          "legendFormat": "{{alertname}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#4B5563"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "quiet",
+                  "color": "#1E3A34"
+                },
+                "1": {
+                  "text": "PENDING",
+                  "color": "#F5B14C"
+                },
+                "2": {
+                  "text": "FIRING",
+                  "color": "#F0616D"
+                }
+              }
+            }
+          ],
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 78
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "mergeValues": true,
+        "showValue": "never",
+        "alignValue": "center",
+        "rowHeight": 0.82,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "state-timeline",
+      "title": "Burn-rate & forecast alerts · pending / firing",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {
+        "x": 12,
+        "y": 20,
+        "w": 12,
+        "h": 6
+      },
+      "description": "Multi-window burn-rate alerts (fast windows page, slow windows linger after incidents) and forecasts.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(2 * max by (alertname) (ALERTS{pack=\"payment-service\", alertstate=\"firing\", burn_rate!=\"\"})) or max by (alertname) (ALERTS{pack=\"payment-service\", alertstate=\"pending\", burn_rate!=\"\"}) or label_replace(vector(0), \"alertname\", \"no alert\", \"\", \"\")",
+          "legendFormat": "{{alertname}}"
+        },
+        {
+          "refId": "B",
+          "expr": "(2 * max by (alertname) (ALERTS{pack=\"payment-service\", alertstate=\"firing\", kind=\"forecast\"})) or max by (alertname) (ALERTS{pack=\"payment-service\", alertstate=\"pending\", kind=\"forecast\"})",
+          "legendFormat": "{{alertname}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#4B5563"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "quiet",
+                  "color": "#1E3A34"
+                },
+                "1": {
+                  "text": "PENDING",
+                  "color": "#F5B14C"
+                },
+                "2": {
+                  "text": "FIRING",
+                  "color": "#F0616D"
+                }
+              }
+            }
+          ],
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 78
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "mergeValues": true,
+        "showValue": "never",
+        "alignValue": "center",
+        "rowHeight": 0.82,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    }
+  ]
 }

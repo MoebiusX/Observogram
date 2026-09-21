@@ -63,6 +63,7 @@ import { brandEnv } from '../tools/lib/brand-env.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
 import { stackSummary } from '../tools/lib/stack-evidence.mjs';
 import { parseSchedule } from '../tools/lib/schedule.mjs';
+import { scheduleSnippets } from '../tools/lib/schedule-snippets.mjs';
 import { NOTIFY_DEFAULT_POLICY, NOTIFY_DEFAULT_FORMAT } from '../tools/lib/journey-notify.mjs';
 import { chainSummary, topCause } from '../tools/lib/chain-history.mjs';
 
@@ -911,6 +912,37 @@ app.get('/api/journeys/:name/runs', (req, res) => {
   try {
     res.json({ runs: readJourneyRuns(req.params.name, { limit }) });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/journeys/:name/schedule — the delegated form of scheduling
+// (VALUE_BACKLOG 11) for the Neuron view: the parsed schedule: and the
+// ready-made cron / schtasks / GitHub Actions / CronJob snippets, built
+// with the same inputs and emitters as `packc journey schedule <name>
+// --json`. Env var NAMES only — no snippet ever carries a value. Without
+// a schedule: every snippet uses the placeholder cadence and `placeholder`
+// says so (nothing fabricated is presented as the journey's cadence). 404
+// for an unknown or unloadable journey.
+app.get('/api/journeys/:name/schedule', (req, res) => {
+  let def;
+  try { def = loadJourneyDef(req.params.name); }
+  catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
+  try {
+    const parsed = parsedSchedule(def);
+    const envNames = [...new Set([def.packB?.mcp?.authEnv, def.notify?.urlEnv, def.notify?.authEnv].filter(Boolean))];
+    const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
+    const snippets = scheduleSnippets({
+      name: def.name,
+      cron: parsed?.cron ?? null, timezone: parsed?.timezone ?? null, every: parsed?.every ?? null, cadenceNote: parsed?.cadenceNote ?? null,
+      envNames,
+      nodePath: process.execPath, cliPath: resolve(ROOT, 'tools/cli.mjs'), cwd: process.cwd(),
+      workspace: brandEnv('WORKSPACE') || '.observogram',
+      image: `observogram:${pkg.version}`, namespace: 'observability',
+      retention: brandEnv('JOURNEY_RUN_RETENTION') || null,
+      placeholder: !parsed,
+      source: def.__source || null,
+    });
+    res.json({ ok: true, name: def.name, schedule: parsed, placeholder: !parsed, envNames, snippets });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 // POST /api/journeys/:name/run — execute now. HTTP 200 even when the gate

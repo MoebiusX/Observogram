@@ -128,7 +128,8 @@ function check(file) {
                'target-advanced dashboards pin Grafana 12 schemaVersion (41)',
                parsed.schemaVersion, 41);
       }
-      assert(parsed.uid?.startsWith('obs-pack-'), 'grafana uid prefixed obs-pack-');
+      assert(parsed.uid === dashId, 'grafana uid is the dashboard id (the boards link to each other at /d/<id>)', parsed.uid, dashId);
+      assert(parsed.tags?.includes(`obs-pack-id:${dashId}`), 'grafana dashboard carries the obs-pack-id tag');
       assert(Array.isArray(parsed.panels), 'grafana panels is an array');
       assert(parsed.tags?.includes('observability-pack'), 'grafana dashboard tagged observability-pack');
       // If the dashboard has panel bindings, the compiled panels should

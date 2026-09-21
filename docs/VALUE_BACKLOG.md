@@ -213,6 +213,16 @@ Canonical example: *"repo vs live drift check"* — crawl
   scheduler, its retries and its clock inside the studio and make the
   studio's uptime the journey's uptime; every scheduler the snippets target
   already exists.
+- *Status 2026-09-20 (studio surface, second pass):* the journeys panel
+  becomes **Advanced → Neuron** — the fleet read as one instrument (tiles,
+  alignment / grade over time per journey, an outcome heatmap, breached
+  criteria and candidate-cause kinds), one journey in focus (ladder buckets
+  and integrity per run, stack self-metric rows as small multiples, run
+  duration, the newest record opened up to its chains, causes, transition,
+  gate, stack evidence, vantage, versions, delivery and schedule snippets)
+  and the cards below. Pure model `tools/lib/neuron-model.mjs`, zero-dep SVG
+  `tools/lib/svg-charts.mjs`, `GET /api/journeys/:name/schedule`. Still no
+  scheduler in the server.
 
 ### 12. Identity · tenancy · hosted posture *(plan ratification pending — 2026-06-12)*
 The v1 non-goal ("multi-tenant persistence") activates as its own

@@ -18,6 +18,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { genericBoards, checkBindings } from './lib/dashboards/generic.mjs';
+import { compileGrafanaDashboard } from './lib/compile.mjs';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -495,4 +496,30 @@ test('the committed reference-pack rules and dashboards are what the generators 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('one engine: packc compile … grafana-dashboard emits the committed reference boards byte for byte', () => {
+  // compileGrafanaDashboard is genericBoards plus the platform contract (the version
+  // profile, the datasource placeholders, the tags). With the lab's datasource uids
+  // pinned — what the committed boards carry — every board is the same object, so the
+  // studio deploys exactly what gen-dashboards wrote and the lab validated live.
+  const lab = { prometheus: 'prom', loki: 'loki', tempo: 'tempo' };
+  const dashDir = resolve(ROOT, 'reference-packs', 'dashboards');
+  for (const packPath of PACKS) {
+    const pack = load(packPath);
+    const name = pack.metadata.name;
+    const files = readdirSync(dashDir).filter(f => f.startsWith(`${name}-`) && f.endsWith('.json'));
+    assert.ok(files.length >= 2, `${name}: committed boards found`);
+    for (const f of files) {
+      const committed = JSON.parse(readFileSync(join(dashDir, f), 'utf8'));
+      const compiled = JSON.parse(compileGrafanaDashboard(pack, committed.uid, { datasourceUids: lab }));
+      for (const t of committed.tags) assert.ok(compiled.tags.includes(t), `${f}: generator tag ${t} kept`);
+      assert.ok(compiled.tags.includes('observability-pack') && compiled.tags.includes(`obs-pack-id:${committed.uid}`), `${f}: platform tags added`);
+      assert.deepEqual({ ...compiled, tags: committed.tags }, committed, `${f}: the compiler's board differs from the generator's`);
+    }
+  }
+  // Without pinned uids the compiler emits the gateway placeholders the MCP bridge maps.
+  const placeholder = JSON.parse(compileGrafanaDashboard(load(PACKS[0]), `${load(PACKS[0]).metadata.name}-unified`));
+  const dsUids = new Set(placeholder.panels.flatMap(p => [p.datasource?.uid, ...(p.targets || []).map(t => t.datasource?.uid)]).filter(Boolean));
+  assert.ok(dsUids.has('${DS_PROMETHEUS}') && !dsUids.has('prom'), 'placeholders replace the lab uid');
 });

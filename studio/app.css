@@ -8088,3 +8088,123 @@ body.chrome-observa .disco {
   font-size: 12px; font-weight: 600; cursor: pointer; outline-offset: 2px;
 }
 .observa-org-select option { color: #0f1623; }
+
+/* ============================================================
+   Advanced → Neuron (.nrn-*) — the observability control neuron as one
+   surface: fleet tiles (verdict-ui's .mc-tile atoms), SVG trend / heatmap /
+   bar panels, the journey in focus, then the saved-journey cards. Colour
+   rules: outcomes (pass / gate failed / vantage lost) are the only verdict
+   colours; stack samples are drawn in one ink colour; ladder buckets use a
+   neutral ramp. Tokens: --NRN is the view accent, overridden in dark.
+   ============================================================ */
+.neuron-view {
+  --NRN: #0F766E; --NRN-bg: #CCFBF1; --NRN-tint: #F0FDFA;
+  --accent: var(--NRN); --accent-bg: var(--NRN-bg); --accent-tint: var(--NRN-tint);
+  padding: 24px 28px 40px;
+}
+[data-theme="dark"] .neuron-view { --NRN: #2DD4BF; --NRN-bg: #113B36; --NRN-tint: #0B2A27; }
+.nrn-head { max-width: 860px; }
+.nrn-title-sub { font: 500 13px/1 var(--mono); color: var(--ink-4); margin-left: 8px; letter-spacing: 0.04em; }
+.nrn-toolbar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin: 0 0 12px; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--card);
+  font: 11.5px/1.4 var(--mono); color: var(--ink-3);
+}
+.nrn-ctl { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-4); }
+.nrn-select {
+  font: 12px var(--mono); padding: 3px 6px;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--card); color: var(--ink-1);
+}
+.nrn-toolbar-spacer { flex: 1; }
+.nrn-muted { color: var(--ink-4); font: 11px/1.5 var(--mono); margin: 4px 0 0; }
+.nrn-empty { max-width: 860px; }
+.nrn-tiles { margin: 0 0 12px; }
+.nrn-tiles .mc-tile { min-width: 180px; flex: 1 1 180px; }
+.nrn-tiles .mc-tile-note { line-height: 1.45; }
+.nrn-bar { display: inline-flex; width: 64px; height: 6px; border-radius: 3px; overflow: hidden; vertical-align: middle; margin-right: 6px; background: var(--line-2); }
+.nrn-bar-seg { display: block; height: 100%; }
+.nrn-bar-seg.is-pass { background: var(--pass-border, #15803D); }
+.nrn-bar-seg.is-gate-failed { background: var(--fail-border, #DC2626); }
+.nrn-bar-seg.is-vantage-lost { background: var(--warn, #B45309); }
+
+.nrn-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; }
+.nrn-grid-stack { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+.nrn-panel {
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--card);
+  padding: 10px 12px; min-width: 0;
+}
+.nrn-panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.nrn-panel-title { font: 700 12px/1.3 var(--sans); color: var(--ink-1); }
+.nrn-panel-title code { font: 700 11.5px/1.3 var(--mono); }
+.nrn-panel-note { font: 10.5px/1.4 var(--mono); color: var(--ink-4); }
+.nrn-svg { display: block; width: 100%; height: auto; }
+.nrn-svg-step { max-height: 96px; }
+
+.nrn-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; }
+.nrn-legend-item {
+  border: 0; background: none; padding: 0; cursor: pointer;
+  display: inline-flex; gap: 5px; align-items: center;
+  font: 11px/1.4 var(--mono); color: var(--ink-3);
+}
+.nrn-legend-item.is-static { cursor: default; }
+.nrn-legend-item.is-focus { color: var(--ink-1); font-weight: 700; }
+.nrn-legend-item:not(.is-static):hover { color: var(--accent); }
+.nrn-legend-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex: none; border: 1px solid rgba(0,0,0,0.08); }
+
+.nrn-heat { display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; align-items: center; font: 11px/1.4 var(--mono); }
+.nrn-heat-name { border: 0; background: none; padding: 0; color: var(--ink-2); cursor: pointer; text-align: left; font: inherit; }
+.nrn-heat-name:hover { color: var(--accent); }
+.nrn-heat-name.is-focus { font-weight: 700; color: var(--ink-1); }
+.nrn-heat-row { display: flex; gap: 2px; flex-wrap: nowrap; overflow: hidden; justify-content: flex-end; min-height: 14px; align-items: center; }
+.nrn-heat-legend { display: flex; gap: 6px 10px; align-items: center; flex-wrap: wrap; margin-top: 8px; font: 10.5px/1.4 var(--mono); color: var(--ink-4); }
+.nrn-cell { width: 10px; height: 14px; border-radius: 2px; flex: none; background: var(--line-2); }
+.nrn-cell.is-pass { background: var(--pass-border, #15803D); }
+.nrn-cell.is-gate-failed { background: var(--fail-border, #DC2626); }
+.nrn-cell.is-vantage-lost { background: var(--warn, #B45309); }
+.nrn-cell.is-unknown { background: var(--ink-5); }
+.nrn-cell.is-none { background: transparent; border: 1px dashed var(--line); box-sizing: border-box; }
+
+.nrn-section-title { margin: 20px 0 8px; font: 700 14px/1.3 var(--sans); color: var(--ink-1); }
+.nrn-sub-title { margin: 14px 0 6px; font: 700 12px/1.3 var(--sans); color: var(--ink-2); }
+.nrn-sub-title .nrn-muted { font-weight: 400; }
+.nrn-focus {
+  border: 1px solid var(--accent); border-radius: var(--r-md); background: var(--accent-tint);
+  padding: 12px 14px;
+}
+.nrn-focus .nrn-panel { background: var(--card); }
+.nrn-focus-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.nrn-run-focus { margin-left: auto; }
+.nrn-focus .journey-card-meta { margin: 6px 0 10px; }
+
+.nrn-details { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 6px; }
+.nrn-details > summary { cursor: pointer; font: 700 11.5px/1.6 var(--mono); color: var(--ink-2); }
+.nrn-details > summary .nrn-muted { font-weight: 400; margin: 0 0 0 6px; }
+.nrn-details-body { padding: 4px 0 4px 2px; overflow-x: auto; }  /* wide chain tables scroll inside the block, not the page */
+.nrn-table { width: 100%; border-collapse: collapse; font: 11px/1.45 var(--mono); margin-top: 6px; }
+.nrn-table th, .nrn-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line-2); vertical-align: top; }
+.nrn-table th { color: var(--ink-4); font-weight: 600; white-space: nowrap; }
+.nrn-table td code { font: inherit; }
+.nrn-list { margin: 0; padding-left: 14px; }
+.nrn-kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; font: 11px/1.5 var(--mono); margin: 6px 0 0; }
+.nrn-kv dt { color: var(--ink-4); }
+.nrn-kv dd { margin: 0; color: var(--ink-2); word-break: break-word; }
+.nrn-pre {
+  margin: 6px 0 0; padding: 8px 10px;
+  background: var(--code-bg); border: 1px solid var(--line); border-radius: var(--r-md);
+  font: 11px/1.5 var(--mono); max-height: 340px; overflow: auto; white-space: pre;
+}
+.nrn-tabs { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.nrn-tab.is-active { border-color: var(--accent); color: var(--accent); }
+.nrn-where {
+  margin-top: 22px; max-width: 860px;
+  font: 11.5px/1.65 var(--mono); color: var(--ink-4);
+  border-top: 1px dashed var(--line); padding-top: 10px;
+}
+.nrn-where code { color: var(--ink-3); }
+/* verdict-ui's .mc-tile atoms read the --pr-* palette, which app.css scopes
+   to the mission-control views (.diag-report / .compile-view / .rq-band);
+   the neuron defines the same palette so its tiles render alike. */
+.neuron-view { --pr-green: #10B981; --pr-blue: #3B82F6; --pr-purple: #8B5CF6; --pr-amber: #F59E0B; --pr-red: #EF4444; --pr-cyan: #06B6D4; --pr-gray: #64748B; }
+[data-theme="dark"] .neuron-view { --pr-green: #34D399; --pr-blue: #60A5FA; --pr-purple: #A78BFA; --pr-amber: #FBBF24; --pr-red: #F87171; --pr-cyan: #22D3EE; --pr-gray: #94A3B8; }
