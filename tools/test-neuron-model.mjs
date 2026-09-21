@@ -4,8 +4,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  OUTCOMES, LADDER_KEYS, sortRunsOldestFirst, metricPoints, ladderSeries, stackRowSeries,
-  buildJourneyDetail, buildNeuronModel, defaultFocus,
+  OUTCOMES, LADDER_KEYS, BLAST_FIELDS, sortRunsOldestFirst, metricPoints, ladderSeries, stackRowSeries,
+  blastRadiusNodes, exposureSeries, buildJourneyDetail, buildNeuronModel, defaultFocus,
 } from './lib/neuron-model.mjs';
 
 const T0 = Date.parse('2026-09-20T10:00:00.000Z');
@@ -168,6 +168,38 @@ test('defaultFocus: a chain getting worse wins, then gate-failed, vantage-lost, 
   assert.equal(defaultFocus(mk([['a', [run(0, { outcome: 'gate-failed' })]], ['z', [worse]]])), 'z');
   assert.equal(defaultFocus(mk([])), null);
   assert.equal(defaultFocus(buildNeuronModel({ journeys: [entry('only', [])], runsByName: {} })), 'only');
+});
+
+test('blastRadiusNodes: declared chains only, one entry per node with every chain, widest first; exposureSeries per run', () => {
+  const node = (key, kind, slos, alerts, total, extra = {}) => ({ key, kind, label: key, status: 'declared_only', ladder: { rung: 'absent', status: null, detail: null }, blastRadius: { slos, alerts, panels: 0, dashboards: 0, routes: 0, remediations: 0, total }, ...extra });
+  const br = (title, verdict, degraded) => ({ rootKey: `k:${title}`, title, rootKind: 'slo', verdict, ladderVerdict: verdict === 'intact' ? 'healthy' : 'broken', integrityPct: 50, ladderIntegrityPct: 50, confidence: 'verified', missingRoles: [], degraded });
+  const rec = run(0, { branches: [
+    br('A', 'broken', [node('backend', 'backend', 5, 4, 39), node('rec1', 'recording_rule', 1, 1, 10)]),
+    br('B', 'partial', [node('backend', 'backend', 5, 4, 39), node('alert1', 'alert_rule', 2, 3, 5, { status: 'drifted', ladder: { rung: 'alive', status: 'present_stale', detail: 'x' } })]),
+    br('U', 'undeclared', [node('live-only', 'metric', 9, 9, 9)]),
+    br('I', 'intact', []),
+  ] });
+  const nodes = blastRadiusNodes(rec);
+  assert.deepEqual(nodes.map(n => n.key), ['backend', 'alert1', 'rec1'], 'live-only node of the undeclared chain excluded; sorted by SLOs, then alerts');
+  assert.deepEqual(nodes[0].chains, ['A', 'B'], 'one entry, both chains');
+  assert.equal(nodes[0].total, 39);
+  assert.equal(nodes[1].ladderStatus, 'present_stale');
+  assert.deepEqual(Object.keys(nodes[0]).filter(k => BLAST_FIELDS.includes(k)), [...BLAST_FIELDS]);
+  assert.deepEqual(blastRadiusNodes({}), []);
+  assert.deepEqual(blastRadiusNodes(null), []);
+
+  const noTop = run(2); noTop.chains = { ...noTop.chains, topExposure: null, degradedNodes: 0 };
+  const exp = exposureSeries([run(0), lost(1), noTop]);
+  assert.equal(exp.length, 2, 'the vantage-lost run carries no chains and is skipped');
+  assert.deepEqual(exp.map(e => [e.slos, e.alerts, e.degradedNodes]), [[2, 3, 0], [0, 0, 0]]);
+  assert.equal(exp[0].label, 'rules.yml');
+
+  const m = buildNeuronModel({ journeys: [entry('a', [rec]), entry('b', [run(0)])], runsByName: { a: [rec], b: [run(0)] } });
+  assert.deepEqual(m.fleet.exposures.map(n => [n.journey, n.key, n.slos]), [['a', 'backend', 5], ['a', 'alert1', 2], ['a', 'rec1', 1]], 'fleet exposures carry the journey; b has no branches');
+  assert.equal(m.perJourney.a.blast.length, 3);
+  assert.equal(m.perJourney.b.blast.length, 0);
+  assert.deepEqual(m.series.exposure.find(s => s.name === 'a').points.map(p => p.v), [2]);
+  assert.equal(m.fleet.chains.degradedNodes, 0, 'run() fixtures carry no degradedNodes count');
 });
 
 test('OUTCOMES is the record vocabulary', () => {

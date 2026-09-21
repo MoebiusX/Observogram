@@ -44,6 +44,16 @@ const LADDER_KEYS = ['healthy', 'degraded', 'broken', 'unobserved'];
 const LADDER_COLORS = ['var(--NRN, #0F766E)', 'var(--ink-5, #9AA3AD)', 'var(--ink-2, #1F3A5F)', 'var(--line, #D4D9DF)'];
 const ACCENT = 'var(--NRN, #0F766E)';
 const MUTED = 'var(--ink-4, #6B6B6B)';
+// Blast radius segments: what would go blind if the node died. Structural
+// exposure, not a claim that it is blind — so no verdict colour: the accent
+// for SLOs, ink for alerts, a light grey for the other consumers.
+const BLAST_KEYS = ['SLOs', 'alerts', 'other consumers (panels · dashboards · routes · remediations)'];
+const BLAST_COLORS = [ACCENT, 'var(--ink-2, #1F3A5F)', 'var(--ink-5, #9AA3AD)'];
+const MAX_BLAST_ROWS = 12;
+const blastLegend = () => `<div class="nrn-legend">${BLAST_KEYS.map((k, i) => `<span class="nrn-legend-item is-static"><span class="nrn-legend-swatch" style="background:${BLAST_COLORS[i]}"></span>${escapeHtml(k)}</span>`).join('')}</div>`;
+const blastItem = (n, label) => ({ label, values: [n.slos, n.alerts, Math.max(0, n.total - n.slos - n.alerts)], note: `${n.status || ''}${n.ladderStatus ? ` · ${n.ladderStatus}` : ''} · in ${n.chains.length} chain${n.chains.length === 1 ? '' : 's'}: ${n.chains.join(', ')} · ${n.panels} panels · ${n.dashboards} dashboards · ${n.routes} routes · ${n.remediations} remediations` });
+// Integer y ticks for small counts; the chart's own nice ticks above that.
+const countTicks = (maxV) => (maxV <= 6 ? { yMax: Math.max(1, maxV), yTicks: Array.from({ length: Math.max(1, maxV) + 1 }, (_, i) => i) } : { yMax: null, yTicks: null });
 const MAX_STACK_PANELS = 12;
 
 let _libs = null;
@@ -183,7 +193,7 @@ function renderTiles(model) {
     ${tile({ label: 'fleet alignment', value: pct(f.alignment.mean), unit: f.alignment.mean === null ? '' : '%', acc: 'is-blue', delta: f.alignment.delta === null ? null : `${signed(f.alignment.delta)} pts vs the run before (paired)`, note: `mean of the last run of ${f.alignment.n} journey${f.alignment.n === 1 ? '' : 's'} with a value` })}
     ${tile({ label: 'fleet grade', value: pct(f.grade.mean), unit: f.grade.mean === null ? '' : '%', acc: 'is-blue', delta: f.grade.delta === null ? null : `${signed(f.grade.delta)} pts vs the run before (paired)`, note: `verification score · ${f.grade.n} journey${f.grade.n === 1 ? '' : 's'}` })}
     ${tile({ label: 'requirement chains', value: f.chains.declaredTotal ? `${f.chains.intact}/${f.chains.declaredTotal}` : '—', unit: chainsPct === null ? '' : `${chainsPct}% intact`, acc: 'is-cyan',
-      note: `ladder: ${f.chains.ladder.healthy} healthy · ${f.chains.ladder.degraded} degraded · ${f.chains.ladder.broken} broken · ${f.chains.ladder.unobserved} unobserved${f.chains.integrityPct !== null ? ` · integrity ${f.chains.integrityPct}% scored / ${pct(f.chains.ladderIntegrityPct)}% ladder` : ''}` })}
+      note: `ladder: ${f.chains.ladder.healthy} healthy · ${f.chains.ladder.degraded} degraded · ${f.chains.ladder.broken} broken · ${f.chains.ladder.unobserved} unobserved${f.chains.integrityPct !== null ? ` · integrity ${f.chains.integrityPct}% scored / ${pct(f.chains.ladderIntegrityPct)}% ladder` : ''}${f.chains.degradedNodes ? ` · ${f.chains.degradedNodes} degraded node${f.chains.degradedNodes === 1 ? '' : 's'}` : ''}` })}
     ${tile({ label: 'getting worse', value: f.chains.worse.length, acc: f.chains.worse.length ? 'is-red' : 'is-gray', warn: !!f.chains.worse.length, note: f.chains.worse.length ? `chains moved down since the run before: ${escapeHtml(few(f.chains.worse))}` : 'no chain moved down on the last runs' })}
     ${tile({ label: 'widest exposure', value: f.topExposure ? f.topExposure.slos : '—', unit: f.topExposure ? `SLO${f.topExposure.slos === 1 ? '' : 's'} blinded` : '', acc: f.topExposure && f.topExposure.slos > 0 ? 'is-amber' : 'is-gray',
       note: f.topExposure ? `${escapeHtml(f.topExposure.label)} (${escapeHtml(f.topExposure.kind)}) · ${escapeHtml(f.topExposure.journey)}${f.topExposure.alerts ? ` · ${f.topExposure.alerts} alerts` : ''}` : 'no degraded node blinds an SLO' })}
@@ -227,7 +237,58 @@ function renderFleetPanels(model, ui, charts) {
     ${panel('Outcomes, newest right', `last ${model.heatmap.columns || 0} runs per journey`, heat)}
     ${panel('Breached criteria', `count over every run in the window`, breach)}
     ${panel('Candidate cause kinds', `ranked by evidence — not root-cause verdicts`, causes)}
+    ${renderFleetBlast(model, ui, charts)}
   </div>`;
+}
+
+// Blast radius at fleet level: exposure over time (the SLOs the widest
+// degraded artefact would blind, per journey) and the widest exposures
+// across the newest records, ranked.
+function renderFleetBlast(model, ui, charts) {
+  const series = model.series.exposure.map((s, i) => ({ ...s, color: charts.seriesColor(i) }));
+  const maxV = Math.max(0, ...series.flatMap((s) => s.points.map((p) => p.v ?? 0)));
+  const { yMax, yTicks } = countTicks(maxV);
+  const hasPoints = series.some((s) => s.points.length);
+  const over = hasPoints
+    ? charts.lineChart({ series: [...series.filter((s) => s.name !== ui.focus), ...series.filter((s) => s.name === ui.focus)], yMin: 0, yMax, yTicks, yFormat: (v) => String(v), ariaLabel: `SLOs the widest degraded artefact would blind, per journey over the last ${model.window} runs`, h: 180 }).svg
+      + `<div class="nrn-legend">${series.map((s) => `<button type="button" class="nrn-legend-item${s.name === ui.focus ? ' is-focus' : ''}" data-focus="${escapeHtml(s.name)}"><span class="nrn-legend-swatch" style="background:${s.color}"></span>${escapeHtml(s.name)}</button>`).join('')}</div>`
+    : '<p class="nrn-muted">no run in the window carries requirement chains</p>';
+  const ex = model.fleet.exposures;
+  const widest = ex.length
+    ? charts.stackedBarH({ items: ex.map((n) => blastItem(n, `${n.label} [${n.kind}] · ${n.journey}`)), keys: BLAST_KEYS, colors: BLAST_COLORS, ariaLabel: 'widest exposures across the fleet, newest records' }).svg + blastLegend()
+    : '<p class="nrn-muted">no degraded node blinds an SLO or an alert on the newest records</p>';
+  return `
+    ${panel('Blind-spot exposure over time', 'SLOs the widest degraded artefact would blind · structural, not a claim they are blind', over)}
+    ${panel('Widest exposures, newest records', `degraded nodes of declared chains · what goes blind if the node dies${ex.length >= 12 ? ' · top 12' : ''}`, widest)}`;
+}
+
+// Blast radius of the journey in focus: every degraded node of the newest
+// record's declared chains as a stacked bar, and exposure per run.
+function renderBlast(d, charts) {
+  const blast = d.blast || [];
+  const top = blast.slice(0, MAX_BLAST_ROWS);
+  const bars = blast.length
+    ? charts.stackedBarH({ items: top.map((n) => blastItem(n, `${n.label} [${n.kind}]`)), keys: BLAST_KEYS, colors: BLAST_COLORS, ariaLabel: `${d.name}: blast radius of the degraded nodes, newest record` }).svg
+      + blastLegend()
+      + (blast.length > MAX_BLAST_ROWS ? `<p class="nrn-muted">${blast.length - MAX_BLAST_ROWS} more degraded node${blast.length - MAX_BLAST_ROWS === 1 ? '' : 's'} with a narrower radius — the requirement-chains table lists them all.</p>` : '')
+    : `<p class="nrn-muted">${d.latest ? 'no degraded node in the newest record\'s declared chains — nothing would go blind that is not already declared missing' : 'no run yet'}</p>`;
+  const exp = d.exposure || [];
+  const maxV = Math.max(0, ...exp.map((e) => Math.max(e.slos, e.alerts)));
+  const { yMax, yTicks } = countTicks(maxV);
+  const title = (e) => `${e.slos} SLO${e.slos === 1 ? '' : 's'} · ${e.alerts} alert${e.alerts === 1 ? '' : 's'} · ${e.degradedNodes} degraded node${e.degradedNodes === 1 ? '' : 's'}${e.label ? ` · widest: ${e.label}` : ''}${e.t ? ` · ${new Date(e.t).toLocaleString()}` : ''}`;
+  const perRun = exp.length
+    ? charts.lineChart({ series: [
+      { name: 'SLOs blinded by the widest node', points: exp.map((e) => ({ t: e.t, v: e.slos, title: title(e) })), color: ACCENT },
+      { name: 'alerts blinded by the widest node', points: exp.map((e) => ({ t: e.t, v: e.alerts, title: title(e) })), color: MUTED },
+    ], yMin: 0, yMax, yTicks, yFormat: (v) => String(v), ariaLabel: `${d.name}: exposure per run`, h: 160 }).svg
+      + `<div class="nrn-legend"><span class="nrn-legend-item is-static"><span class="nrn-legend-swatch" style="background:${ACCENT}"></span>SLOs blinded by the widest degraded node</span><span class="nrn-legend-item is-static"><span class="nrn-legend-swatch" style="background:${MUTED}"></span>alerts blinded by it</span></div>`
+      + `<p class="nrn-muted">latest: ${escapeHtml(title(exp[exp.length - 1]))}</p>`
+    : '<p class="nrn-muted">no run in the window carries requirement chains</p>';
+  return `<h4 class="nrn-sub-title">Blast radius <span class="nrn-muted">— what would go blind if a degraded artefact died: structural exposure on the requirement graph, never a claim that it is blind</span></h4>
+    <div class="nrn-grid nrn-grid-blast">
+      ${panel('Degraded nodes by radius, newest record', `${blast.length} degraded node${blast.length === 1 ? '' : 's'} in declared chains · one bar per node, SLOs · alerts · other consumers`, bars)}
+      ${panel('Exposure per run', 'the widest degraded node\'s radius, run by run', perRun)}
+    </div>`;
 }
 
 function renderHeatmap(model, ui) {
@@ -332,6 +393,7 @@ function renderFocus(d, model, charts, stackLib, schedLib) {
         ${integrity ? panel('Chain integrity', 'mean per run', integrity) : ''}
         ${panel('Run duration', 'wall clock per run', dur.svg)}
       </div>
+      ${renderBlast(d, charts)}
       ${d.stackRows.length ? `<h4 class="nrn-sub-title">Stack self-metrics per run <span class="nrn-muted">— what the monitoring stack said about itself when the journey looked</span></h4><div class="nrn-grid nrn-grid-stack">${stackPanels}</div>${stackNote}` : `<p class="nrn-muted">No stack self-metric samples in the window${last?.stackEvidence?.status === 'not-attempted' ? ` — last run: not attempted (${escapeHtml(last.stackEvidence.reason || 'no reason recorded')})` : ' (file-sourced Pack B, or a tier that exposes no metrics_query)'}.</p>`}
       ${renderLatestDetails(d)}
     </div>`;

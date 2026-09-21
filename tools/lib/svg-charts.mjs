@@ -199,6 +199,37 @@ export function barChartH({ items = [], w = 640, rowH = 18, labelW = 220, max = 
   return { svg: parts.join(''), rows: rows.length, max: hi };
 }
 
+// Horizontal STACKED bars: label left, one segment per key in order, the
+// total at the end. Negative / non-numeric slots count as 0.
+//   items: [{ label, values: [n, …], note? }]
+export function stackedBarH({ items = [], keys = [], colors = [], w = 640, rowH = 18, labelW = 240, max = null, ariaLabel = 'stacked bars', cls = 'nrn-svg', valueFormat = (v) => String(v) } = {}) {
+  const rows = items.filter((it) => it && Array.isArray(it.values)).map((it) => {
+    const values = it.values.map((v) => (isNum(v) && v > 0 ? v : 0));
+    return { ...it, values, total: values.reduce((s, v) => s + v, 0) };
+  });
+  const hi = isNum(max) && max > 0 ? max : Math.max(1, ...rows.map((r) => r.total));
+  const h = Math.max(rowH, rows.length * rowH + 4);
+  const x0 = labelW, x1 = w - 44;
+  const parts = [open(w, h, cls, ariaLabel)];
+  rows.forEach((r, i) => {
+    const y = 2 + i * rowH;
+    const label = String(r.label ?? '');
+    const shown = label.length > 38 ? `${label.slice(0, 37)}…` : label;
+    parts.push(`<text x="${fx(x0 - 6)}" y="${fx(y + rowH * 0.68)}" text-anchor="end" font-size="10" font-family="${FONT}" fill="${INK}"><title>${esc(r.note ? `${label} — ${r.note}` : label)}</title>${esc(shown)}</text>`);
+    let acc = 0;
+    r.values.forEach((v, k) => {
+      if (v <= 0) return;
+      const xs = x0 + (acc / hi) * (x1 - x0);
+      const bw = (v / hi) * (x1 - x0);
+      parts.push(`<rect x="${fx(xs)}" y="${fx(y + 3)}" width="${fx(bw)}" height="${fx(rowH - 7)}" fill="${colors[k] || seriesColor(k)}" opacity="0.9"><title>${esc(`${label}: ${keys[k] ?? k} ${valueFormat(v)}`)}</title></rect>`);
+      acc += v;
+    });
+    parts.push(`<text x="${fx(x0 + (r.total / hi) * (x1 - x0) + 4)}" y="${fx(y + rowH * 0.68)}" font-size="10" font-family="${FONT}" fill="${INK_MUTED}">${esc(valueFormat(r.total))}</text>`);
+  });
+  parts.push('</svg>');
+  return { svg: parts.join(''), rows: rows.length, max: hi };
+}
+
 // One stack-sample row over runs: a step line in one ink colour, a hollow
 // marker where the probe did not answer (its outcome in the tooltip) and a
 // small ring on `nonzero` samples. Signal, not verdict — by construction.

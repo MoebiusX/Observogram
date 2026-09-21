@@ -432,15 +432,21 @@ bar, fleet alignment and grade (the mean of each journey's last value, with a
 *paired* delta against the run before), requirement chains intact / declared
 with the four ladder buckets, journeys whose chains got worse, the widest
 exposure across the fleet, delivery sent / failed / skipped, and the journeys
-whose last run carried a nonzero lower-is-comfortable stack sample. Four
+whose last run carried a nonzero lower-is-comfortable stack sample. Six
 fleet panels follow — alignment or grade over time per journey (a time axis
 when the records carry times; a vantage-lost run is a gap, never a 0), an
 outcome heatmap newest-right, breached criteria and candidate-cause kinds over
-every run in the window. Then the journey in focus (chosen, or the one that
+every run in the window, blind-spot exposure over time (the SLOs the widest
+degraded artefact would blind, per journey) and the widest exposures across
+the fleet's newest records as stacked bars (SLOs · alerts · other consumers
+that would go blind — structural exposure on the requirement graph, never a
+claim that they are blind). Then the journey in focus (chosen, or the one that
 most needs eyes: a chain getting worse, then gate-failed, then vantage-lost,
 then the lowest alignment): alignment and grade per run, the ladder buckets
 per run as stacked bars in a neutral ramp, scored vs ladder integrity, run
-duration, one small step chart per stack self-metric row in a single ink
+duration, the blast radius of the newest record (every degraded node of a
+declared chain once, with the chains it degrades, as a stacked bar) with the
+widest node's exposure per run, one small step chart per stack self-metric row in a single ink
 colour (a ring on `nonzero` samples, a hollow marker where the probe did not
 answer, the posture-budget note under gated rows), and the newest record
 opened up — requirement chains with their degraded nodes and blast radius,

@@ -146,6 +146,54 @@ export function stackRowSeries(runs) {
 // then higher-is-good, then info.
 const directionRank = (d) => (d === 'lower' ? 0 : d === 'higher' ? 1 : d === 'info' ? 2 : 3);
 
+// The blast radius a record keeps per degraded node (chain-history.mjs
+// blastSummary): the transitive consumers that would go blind if the node
+// died — structural exposure, never a claim that they are blind.
+export const BLAST_FIELDS = Object.freeze(['slos', 'alerts', 'panels', 'dashboards', 'routes', 'remediations', 'total']);
+const compareBlast = (a, b) => (b.slos - a.slos) || (b.alerts - a.alerts) || (b.total - a.total) || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0);
+
+// Every degraded node of the record's DECLARED chains, once, widest first
+// (SLOs, then alerts, then total, then label), with every chain it degrades.
+// Nodes of undeclared chains are live-only inventory and are left out, as
+// chainSummary leaves them out of topExposure. [] without branches.
+export function blastRadiusNodes(record) {
+  const branches = Array.isArray(record?.branches) ? record.branches.filter(isRecord) : [];
+  const acc = new Map();
+  for (const b of branches) {
+    if (b.verdict === 'undeclared') continue;
+    const title = String(b.title || b.rootKey || '?');
+    for (const n of (Array.isArray(b.degraded) ? b.degraded : []).filter(isRecord)) {
+      const id = typeof n.key === 'string' && n.key ? n.key : `${n.kind ?? '?'}:${n.label ?? '?'}`;
+      const radius = isRecord(n.blastRadius) ? n.blastRadius : {};
+      const cur = acc.get(id) || {
+        key: id, label: String(n.label ?? n.key ?? '?'), kind: String(n.kind ?? 'unknown'),
+        status: n.status ?? null, ladderStatus: n.ladder?.status ?? null, chains: [],
+        ...Object.fromEntries(BLAST_FIELDS.map((f) => [f, 0])),
+      };
+      for (const f of BLAST_FIELDS) cur[f] = Math.max(cur[f], num(radius[f]) ?? 0);
+      if (!cur.chains.includes(title)) cur.chains.push(title);
+      acc.set(id, cur);
+    }
+  }
+  return [...acc.values()].sort(compareBlast);
+}
+
+// Exposure per run from the chain summary runJourney stores: the SLOs and
+// alerts the widest degraded node would blind (0 when no degraded node
+// blinds anything), how many nodes are degraded, and which node is widest.
+// Runs without chains are skipped, not zeroed.
+export function exposureSeries(runs) {
+  return sortRunsOldestFirst(runs)
+    .filter((r) => isRecord(r.chains))
+    .map((r) => ({
+      t: startedMs(r),
+      slos: num(r.chains.topExposure?.slos) ?? 0,
+      alerts: num(r.chains.topExposure?.alerts) ?? 0,
+      degradedNodes: num(r.chains.degradedNodes) ?? 0,
+      label: r.chains.topExposure?.label ?? null,
+    }));
+}
+
 // The per-journey slice: series and the newest record's detail blocks.
 export function buildJourneyDetail(journey, runs) {
   const sorted = sortRunsOldestFirst(runs);
@@ -168,6 +216,8 @@ export function buildJourneyDetail(journey, runs) {
     durations: sorted.map((r) => ({ t: startedMs(r), v: num(r.tookMs) })),
     ladder: ladderSeries(sorted),
     stackRows: rows,
+    exposure: exposureSeries(sorted),
+    blast: blastRadiusNodes(latest),
     breachFrequency: countBy(sorted.flatMap(breachesOf), (b) => b.criterion),
     latest: latest ? {
       startedAt: latest.startedAt ?? null,
@@ -252,6 +302,12 @@ export function buildNeuronModel({ journeys = [], runsByName = {}, window = NEUR
 
   const allRuns = list.flatMap((j) => runsOf(j.name).map((r) => ({ journey: j.name, r })));
   const columns = Math.max(0, ...list.map((j) => runsOf(j.name).length));
+  // The widest exposures across the fleet's newest records: degraded nodes
+  // that would blind at least one SLO or alert, with their journey.
+  const exposures = list.flatMap((j) => perJourney[j.name].blast.map((n) => ({ ...n, journey: j.name })))
+    .filter((n) => n.slos > 0 || n.alerts > 0)
+    .sort(compareBlast)
+    .slice(0, 12);
 
   return {
     window: win,
@@ -273,8 +329,10 @@ export function buildNeuronModel({ journeys = [], runsByName = {}, window = NEUR
         worse: withRun.filter((j) => (num(j.lastRun.transition?.worse) ?? 0) > 0).map((j) => j.name),
         integrityPct: mean(chainsList.map((c) => num(c.integrityPct))),
         ladderIntegrityPct: mean(chainsList.map((c) => num(c.ladderIntegrityPct))),
+        degradedNodes: chainsList.reduce((s, c) => s + (num(c.degradedNodes) ?? 0), 0),
       },
       topExposure,
+      exposures,
       delivery,
       stackSignal,
       vantageChanged: withRun.filter((j) => j.lastRun.vantageChanged === true).map((j) => j.name),
@@ -282,6 +340,9 @@ export function buildNeuronModel({ journeys = [], runsByName = {}, window = NEUR
     series: {
       alignment: list.map((j) => ({ name: j.name, points: perJourney[j.name].alignment })),
       grade: list.map((j) => ({ name: j.name, points: perJourney[j.name].grade })),
+      // SLOs the widest degraded node would blind, per run (runs without
+      // chains carry no point).
+      exposure: list.map((j) => ({ name: j.name, points: perJourney[j.name].exposure.map((e) => ({ t: e.t, v: e.slos })) })),
     },
     heatmap: {
       columns,

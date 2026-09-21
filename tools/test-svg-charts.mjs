@@ -2,7 +2,7 @@
 // Neuron view: gaps stay gaps, time vs index axes, escaping, bar arithmetic.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { niceTicks, fmtTime, timeTicks, lineChart, stackedBarChart, barChartH, stepChart, legendHtml, seriesColor, PALETTE } from './lib/svg-charts.mjs';
+import { niceTicks, fmtTime, timeTicks, lineChart, stackedBarChart, barChartH, stackedBarH, stepChart, legendHtml, seriesColor, PALETTE } from './lib/svg-charts.mjs';
 
 const count = (s, re) => (s.match(re) || []).length;
 const T0 = Date.parse('2026-09-20T10:00:00.000Z');
@@ -73,6 +73,21 @@ test('barChartH: rows, implicit max, truncation, escaping, explicit max', () => 
   assert.ok(r.svg.includes(`${'x'.repeat(33)}…`), 'long labels are cut with an ellipsis');
   assert.ok(r.svg.includes(`${long} — n`), 'the full label and note stay in the tooltip');
   assert.equal(barChartH({ items: [{ label: 'a', value: 1 }], max: 10 }).max, 10);
+});
+
+test('stackedBarH: one rect per positive segment, total label, implicit max, truncation, escaping', () => {
+  const r = stackedBarH({ items: [{ label: 'metrics-prom [backend] · a<b', values: [5, 4, 30], note: 'declared_only' }, { label: 'x', values: [0, 1, null] }, { label: 'skip' }], keys: ['SLOs', 'alerts', 'other'] });
+  assert.equal(r.rows, 2);
+  assert.equal(r.max, 39);
+  assert.equal(count(r.svg, /<rect /g), 4, '3 segments on the first row, 1 on the second');
+  assert.ok(r.svg.includes('>39<') && r.svg.includes('>1<'), 'totals at the end of each row');
+  assert.ok(r.svg.includes('a&lt;b: SLOs 5'), 'segment tooltips name the key and are escaped');
+  assert.ok(r.svg.includes(' — declared_only'), 'the note rides in the label tooltip');
+  assert.ok(!r.svg.includes('<b'));
+  const long = stackedBarH({ items: [{ label: 'y'.repeat(60), values: [1] }], max: 10 });
+  assert.ok(long.svg.includes(`${'y'.repeat(37)}…`));
+  assert.equal(long.max, 10);
+  assert.equal(stackedBarH({ items: [] }).rows, 0);
 });
 
 test('stepChart: hollow marker for a missing sample, ring for nonzero, steps between values', () => {
