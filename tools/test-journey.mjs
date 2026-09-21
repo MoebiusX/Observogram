@@ -36,6 +36,7 @@ const {
   chainStatusLine, liveVersions, livePackDecision, pruneLiveSnapshots, readLivePack, KEEP_LIVE_PACK_POLICIES, LIVE_PACK_PATH_RE,
   causeLine, transitionGotWorse, resolveDeployArtifact,
   notifyStatusLine, postNotification, resolveNotifyTarget, validateNotify, NOTIFY_POLICIES, NOTIFY_TIMEOUT_DEFAULT_MS,
+inventorySummary, inventoryStatusLine,
 } = await import('./lib/journey.mjs');
 const { chainGotWorse } = await import('./lib/journey-notify.mjs');
 const { STACK_SELF_METRIC_PROBES } = await import('./lib/contracts/stack-self-metrics.mjs');
@@ -743,6 +744,16 @@ try {
   // identical run to run unless `fakeRules` is set, so a chain transition
   // is under the test's control.
   let fakeRules = false;
+  // Inventory coverage: when set, the fake advertises the metrics query tool and answers the
+  // journey's per-kind queries — QM1 up, QM2 down, QMX not inventoried; host h1 only; 3 queues on QM1.
+  let fakeInventory = false;
+  const fakeMetrics = (query) => {
+    const q = String(query || '');
+    if (/^max by \(qmgr\)/.test(q)) return { result: [{ metric: { qmgr: 'QM1' }, value: [0, '1'] }, { metric: { qmgr: 'QM2' }, value: [0, '0'] }, { metric: { qmgr: 'QMX' }, value: [0, '1'] }] };
+    if (/^max by \(host\)/.test(q)) return { result: [{ metric: { host: 'h1' }, value: [0, '1'] }] };
+    if (/^count by \(qmgr\)/.test(q)) return { result: [{ metric: { qmgr: 'QM1' }, value: [0, '3'] }] };
+    return { result: [] };
+  };
   const fakeSrv = createHttpServer(async (req, res) => {
     let raw = '';
     req.setEncoding('utf8');
@@ -756,7 +767,7 @@ try {
     if (msg.method === 'initialize') return send({ protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'fake-mcp' } });
     if (msg.method === 'notifications/initialized') return send({});
     if (msg.method === 'tools/list') {
-      return send({ tools: ['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines', ...(fakeRules ? ['list_recording_rules'] : [])].map(name => ({ name })) });
+      return send({ tools: ['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines', ...(fakeRules ? ['list_recording_rules'] : []), ...(fakeInventory ? ['metrics_query'] : [])].map(name => ({ name })) });
     }
     if (msg.method === 'tools/call') {
       const name = msg.params?.name;
@@ -764,6 +775,7 @@ try {
         : name === 'system_topology' ? { dependencies: [] }
         : name === 'anomalies_baselines' ? { baselines: [] }
         : name === 'list_recording_rules' ? { groups: [{ name: 'payment', interval: '1m', rules: [{ record: 'payment:api_availability:ratio_5m', expr: 'sum(rate(http_server_request_duration_seconds_count{code!~"5.."}[5m])) / sum(rate(http_server_request_duration_seconds_count[5m]))', health: 'ok' }] }] }
+        : name === 'metrics_query' ? fakeMetrics(msg.params?.arguments?.query)
         : {};
       return send({ content: [{ type: 'text', text: JSON.stringify(result) }] });
     }
@@ -1081,6 +1093,55 @@ try {
            'once the run after the outage is the newest, the line carries the vantage change and no cause segment (nothing got worse against t3)', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-live')));
     assert(/^fake-always\t.* · ladder [^\n]*$/m.test(cliLive.stdout) && !/^fake-always\t.*top cause/m.test(cliLive.stdout) && !/^fake-always\t.*no candidate causes/m.test(cliLive.stdout),
            'a journey whose chains did not get worse gets no cause segment at all', cliLive.stdout.split('\n').filter(l => l.startsWith('fake-always')));
+    // ---------- inventory coverage: the site's expected sets against the fake MCP's up series ----------
+    mkdirSync(join(TMP, 'sites', 'prod'), { recursive: true });
+    writeFileSync(join(TMP, 'sites', 'prod', 'site.json'), readFileSync(resolve('tools/fixtures/site/prod.site.expected.json'), 'utf8'));
+    // load-time validation
+    let threw = null;
+    try { fakeDef('inv-bad-block', ['inventory: sites/prod/site.json']); } catch (e) { threw = e.message; }
+    assert(/journey inv-bad-block: inventory must be a mapping/.test(threw || ''), 'a scalar inventory: block is a load error', threw);
+    threw = null;
+    try { fakeDef('inv-bad-gate', ['inventory: { site: ../sites/prod/site.json }', 'gate: { inventory: { maxSilent: -1 } }']); } catch (e) { threw = e.message; }
+    assert(/gate\.inventory\.maxSilent must be a non-negative integer/.test(threw || ''), 'a bad gate.inventory is a load error', threw);
+    // the MCP does not advertise the metrics query tool: not-attempted, and requireChecked (the default) breaches
+    fakeInventory = false;
+    const invNa = await runJourney(fakeDef('inv-na', ['inventory: { site: ../sites/prod/site.json }', 'gate: { minAlignmentPct: 1, inventory: { maxSilent: 0 } }']));
+    assert(invNa.inventory?.status === 'not-attempted' && /metrics_query/.test(invNa.inventory.reason || ''), 'without the metrics tool the inventory block is not-attempted with the tier reason', invNa.inventory);
+    assert(invNa.inventory.site === '../sites/prod/site.json' && invNa.inventory.environment === 'prod' && Object.keys(invNa.inventory.kinds).join() === 'qmgr,host,queue', 'the record names the site, the environment and every kind', invNa.inventory);
+    assert(invNa.inventory.kinds.qmgr.status === 'not-attempted' && invNa.inventory.kinds.qmgr.expected === 3 && invNa.inventory.kinds.qmgr.up === null, 'a not-attempted kind keeps its expected count and no observed numbers', invNa.inventory.kinds.qmgr);
+    assert(invNa.outcome === 'gate-failed' && invNa.gate.breaches.some(b => b.criterion === 'inventory' && /not-attempted/.test(b.detail)), 'requireChecked (default) breaches when coverage could not be checked', invNa.gate.breaches);
+    // the MCP answers: up / down / silent / unexpected per kind, floors on the counted kind, the gate names each
+    fakeInventory = true;
+    const inv = await runJourney(fakeDef('inv-live', ['inventory: { site: ../sites/prod/site.json }', 'gate: { minAlignmentPct: 1, inventory: { maxSilent: 0, maxDown: 0, maxUnexpected: 0 } }']));
+    assert(inv.inventory.status === 'checked' && inv.inventory.reason === null, 'with the metrics tool every kind is checked', inv.inventory);
+    const q = inv.inventory.kinds.qmgr;
+    assert(q.expected === 3 && q.up === 1 && JSON.stringify(q.upNames) === '["QM1"]' && JSON.stringify(q.down) === '["QM2"]' && JSON.stringify(q.silent) === '["QM3"]' && JSON.stringify(q.unexpected) === '["QMX"]' && q.coveragePct === 33.3,
+           'qmgr: QM1 up, QM2 targeted but down, QM3 silent, QMX answering but not inventoried', q);
+    assert(JSON.stringify(inv.inventory.kinds.host.silent) === '["h2"]' && inv.inventory.kinds.host.up === 1, 'host: h2 silent (no up series carries host=h2)', inv.inventory.kinds.host);
+    const qu = inv.inventory.kinds.queue;
+    assert(qu.mode === 'counted' && qu.total === 3 && JSON.stringify(qu.below) === '[{"parent":"QM1","count":3,"min":5}]' && qu.missing.length === 0, 'queue: 3 counted on QM1, below its floor of 5', qu);
+    const crits = inv.gate.breaches.map(b => b.criterion).sort();
+    assert(JSON.stringify(crits) === JSON.stringify(['inventory.host.silent', 'inventory.qmgr.down', 'inventory.qmgr.silent', 'inventory.qmgr.unexpected', 'inventory.queue.min']), 'the gate names every hole per kind, and the floor', crits);
+    assert(inv.gate.breaches.find(b => b.criterion === 'inventory.qmgr.silent').detail.includes('QM3'), 'a breach names the silent item');
+    const md = renderJourneyMarkdown(inv);
+    assert(/\| Inventory coverage \| inventory 1\/3 qmgr \(1 down, 1 silent, 1 unexpected\) · 1\/2 host \(1 silent\) · 3 queues \(1 below floor\) \|/.test(md), 'the report carries the inventory line', md.split('\n').find(l => /Inventory coverage \|/.test(l)));
+    assert(/### Inventory coverage — checked/.test(md) && /\| qmgr \(queue manager\) \| 3 \| 1 \| QM2 \| QM3 \| QMX \| 33\.3% \|/.test(md), 'the report carries the per-kind table', md.split('\n').filter(l => /^\| (qmgr|host|queue)/.test(l)).join('\n'));
+    const listed = inventorySummary(inv);
+    assert(listed.status === 'checked' && listed.kinds.qmgr.silent === 1 && listed.kinds.qmgr.unexpected === 1 && listed.kinds.queue.below === 1 && listed.kinds.queue.total === 3, 'inventorySummary is the listing shape', listed);
+    assert(inventoryStatusLine(inv) === 'inventory 1/3 qmgr (1 down, 1 silent, 1 unexpected) · 1/2 host (1 silent) · 3 queues (1 below floor)', 'inventoryStatusLine', inventoryStatusLine(inv));
+    // kinds narrows both the observation and the record; a gate that does not ask for a kind ignores it
+    const invHost = await runJourney(fakeDef('inv-host', ['inventory: { site: ../sites/prod/site.json, kinds: [host] }', 'gate: { minAlignmentPct: 1, inventory: { maxSilent: 5 } }']));
+    assert(Object.keys(invHost.inventory.kinds).join() === 'host' && invHost.outcome === 'pass', 'kinds: [host] observes and records the host kind only', invHost.inventory);
+    // an unreadable site is failed with the reason; requireChecked breaches, requireChecked: false does not
+    const invMissing = await runJourney(fakeDef('inv-missing', ['inventory: { site: ../sites/nope/site.json }', 'gate: { minAlignmentPct: 1, inventory: { requireChecked: false } }']));
+    assert(invMissing.inventory.status === 'failed' && /cannot read \.\.\/sites\/nope\/site\.json/.test(invMissing.inventory.reason) && invMissing.outcome === 'pass', 'a missing site.json is failed with the reason; requireChecked: false lets the run pass', invMissing.inventory);
+    // a file-sourced Pack B has no live series: not-attempted, said so
+    writeFileSync(join(TMP, 'journeys', 'inv-file.journey.yaml'), ['name: inv-file', `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`, `packB: { file: ${PACK_A.replaceAll('\\', '/')} }`, 'inventory: { site: ../sites/prod/site.json }', 'gate: { minAlignmentPct: 1 }'].join('\n'));
+    const invFile = await runJourney(loadJourneyDef('inv-file'));
+    assert(invFile.inventory.status === 'not-attempted' && /file-sourced Pack B/.test(invFile.inventory.reason) && invFile.outcome === 'pass', 'a file-sourced B is not-attempted and, without gate.inventory, never breaches', invFile.inventory);
+    // no inventory block: the record carries null and the listing summary is null
+    assert(t1.inventory === null && inventorySummary(t1) === null && inventoryStatusLine(t1) === null, 'a journey without inventory: records null', t1.inventory);
+    fakeInventory = false;
   } finally {
     await new Promise(r => fakeSrv.close(r));
   }

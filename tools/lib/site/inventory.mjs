@@ -147,7 +147,7 @@ function parseRegistry(registry) {
  */
 export function loadInventories(inputs, { schema, module = null, adapter = null, registry = undefined } = {}) {
   const files = [], errors = [];
-  let full = null;
+  let full;
   try { full = schema ? inventorySchema(schema, module) : null; } catch (e) { return { files, errors: [String(e.message || e)] }; }
   list(inputs).forEach((input, i) => {
     let f;

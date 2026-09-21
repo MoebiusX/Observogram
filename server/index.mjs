@@ -66,6 +66,7 @@ import { parseSchedule } from '../tools/lib/schedule.mjs';
 import { scheduleSnippets } from '../tools/lib/schedule-snippets.mjs';
 import { NOTIFY_DEFAULT_POLICY, NOTIFY_DEFAULT_FORMAT } from '../tools/lib/journey-notify.mjs';
 import { chainSummary, topCause } from '../tools/lib/chain-history.mjs';
+import { inventorySummary } from '../tools/lib/inventory-coverage.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -898,6 +899,9 @@ app.get('/api/journeys', (req, res) => {
           // cause, never as one. null when the record carries no causes.
           topCause: topCause(lastRun),
           vantageChanged: lastRun.causes?.vantage?.changed ?? null,
+          // Inventory coverage of the last run (inventory-coverage.mjs inventorySummary): status,
+          // reason and per kind expected / up / down / silent / unexpected. null without a block.
+          inventory: inventorySummary(lastRun),
         },
       };
     });
