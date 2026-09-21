@@ -357,7 +357,8 @@ to the fixture pack.
 ## Vendoring
 
 The core is `tools/lib/site/{inventory.schema.json,inventory.mjs,expected.mjs,timing.mjs,derive.mjs,run.mjs}`.
-It imports only `../mini-yaml.mjs`, `../validator.mjs`, `../burn-rules.mjs` and
+It imports only `../mini-yaml.mjs`, `../validator.mjs`, `../slug.mjs` (`metricPrefix`, the
+metric-name prefix the inventory series use), `../burn-rules.mjs` and
 `../dashboards/generic.mjs`, by relative path, so a downstream copy under
 `vendor/observogram/lib/site/` works unchanged next to the already vendored siblings. The
 core reads no files: the host passes the pack text, the pack schema and the inventory schema in.

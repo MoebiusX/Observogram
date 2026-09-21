@@ -20,7 +20,7 @@
 // min } }` and is merged over the two built-in kinds (a module may add `jobs` to its instance
 // kind, or add counted kinds); every field is validated here.
 
-import { metricPrefix } from '../burn-rules.mjs';
+import { metricPrefix } from '../slug.mjs';
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const list = (v) => (Array.isArray(v) ? v : []);
