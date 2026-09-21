@@ -272,8 +272,9 @@ monitors can ask "is the right number of things being monitored?" against a decl
 }
 ```
 
-- **Enumerated kinds** carry `names`: the module's instance kind and `host` are always there;
-  each gets a recording series `<svc>:inventory:<kind>` (`vector(1)`, one per name, labelled
+- **Enumerated kinds** carry `names`: the module's instance kind is always there; `host` when the
+  module lists it in `expectedKinds` (`host: {}` or `host: { jobs }` — only where some scrape job
+  labels `up` with `host`; the fixture module opts in, the IBM MQ module does not). Each gets a recording series `<svc>:inventory:<kind>` (`vector(1)`, one per name, labelled
   `<label>=<name>, environment=<env>` plus `site`/`shape` when known) and `jobs`, the scrape
   jobs whose `up` series carry that label on the live side (`[]` = any job). The module adds
   `jobs` (and may add enumerated kinds of its own) through `expectedKinds(ctx)`.
@@ -281,8 +282,8 @@ monitors can ask "is the right number of things being monitored?" against a decl
   and optional `min` floors per parent: the inventory cannot enumerate them, so a journey
   reports the live count and breaches only below the floor.
 - The core emits `prometheus/rules/<name>.inventory.yml` with the enumerated series unless a
-  module template already produced that path (the IBM MQ module does, adding its
-  `IBMMQQueueManagerSilent` join); an alert can join them the same way
+  module template already produced that path (the IBM MQ module does; under a single vantage it
+  adds its `IBMMQQueueManagerSilent` join); an alert can join them the same way
   (`<series> unless on (<label>) up`).
 - A journey (`inventory: { site: <partition>/site.json }`, see the README) compares these sets
   with the live `up` series through the MCP and records, per kind, expected / observed /

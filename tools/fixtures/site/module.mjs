@@ -83,6 +83,8 @@ export function checkInventory({ envs, itemLabel }) {
 export function expectedKinds(ctx) {
   return {
     qmgr: { jobs: ['exporter'] },
+    // hosts are observable in the fixture fleet (its host agents label `up` with host=), so opt in
+    host: { jobs: [] },
     queue: {
       title: 'queue', label: 'queue', per: 'qmgr',
       query: `count by (qmgr) (last_over_time(fixture_queue_depth{queue=~"${ctx.p.queue_pattern}"}[5m]))`,

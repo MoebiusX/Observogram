@@ -1125,7 +1125,13 @@ try {
     assert(inv.gate.breaches.find(b => b.criterion === 'inventory.qmgr.silent').detail.includes('QM3'), 'a breach names the silent item');
     const md = renderJourneyMarkdown(inv);
     assert(/\| Inventory coverage \| inventory 1\/3 qmgr \(1 down, 1 silent, 1 unexpected\) · 1\/2 host \(1 silent\) · 3 queues \(1 below floor\) \|/.test(md), 'the report carries the inventory line', md.split('\n').find(l => /Inventory coverage \|/.test(l)));
-    assert(/### Inventory coverage — checked/.test(md) && /\| qmgr \(queue manager\) \| 3 \| 1 \| QM2 \| QM3 \| QMX \| 33\.3% \|/.test(md), 'the report carries the per-kind table', md.split('\n').filter(l => /^\| (qmgr|host|queue)/.test(l)).join('\n'));
+    assert(/### Inventory coverage — checked/.test(md) && /\| qmgr \(queue manager\) \| 3 \| 1 \| QM2 \| QM3 \| QMX \| checked · 33\.3% \|/.test(md), 'the report carries the per-kind table', md.split('\n').filter(l => /^\| (qmgr|host|queue)/.test(l)).join('\n'));
+    // the CLI listing carries the same segment on the pass / gate-failed line
+    const cliInv = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'list'], { cwd: process.cwd(), encoding: 'utf8', env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP } });
+    assert(cliInv.status === 0 && /^inv-live\tgate-failed · .* · inventory 1\/3 qmgr \(1 down, 1 silent, 1 unexpected\) · 1\/2 host \(1 silent\) · 3 queues \(1 below floor\)/m.test(cliInv.stdout), 'packc journey list prints the inventory segment for a run that carries a block', cliInv.stdout.split('\n').find(l => l.startsWith('inv-live')) || cliInv.stderr);
+    // a kinds: entry the site does not declare is a named failure before any wire call
+    const invTypo = await runJourney(fakeDef('inv-typo', ['inventory: { site: ../sites/prod/site.json, kinds: [qmgrs] }', 'gate: { minAlignmentPct: 1, inventory: { maxSilent: 0 } }']));
+    assert(invTypo.inventory.status === 'failed' && /inventory\.kinds names qmgrs — not in \.\.\/sites\/prod\/site\.json's expected block \(kinds: qmgr, host, queue\)/.test(invTypo.inventory.reason) && invTypo.outcome === 'gate-failed', 'kinds naming an unknown kind fails with the known kinds named, and requireChecked breaches', invTypo.inventory);
     const listed = inventorySummary(inv);
     assert(listed.status === 'checked' && listed.kinds.qmgr.silent === 1 && listed.kinds.qmgr.unexpected === 1 && listed.kinds.queue.below === 1 && listed.kinds.queue.total === 3, 'inventorySummary is the listing shape', listed);
     assert(inventoryStatusLine(inv) === 'inventory 1/3 qmgr (1 down, 1 silent, 1 unexpected) · 1/2 host (1 silent) · 3 queues (1 below floor)', 'inventoryStatusLine', inventoryStatusLine(inv));

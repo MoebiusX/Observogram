@@ -91,7 +91,7 @@ import { baseWorkspacePath, brandEnv } from './brand-env.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from './contracts/stack-self-metrics.mjs';
 import { formatStackValue } from './stack-evidence.mjs';
 import { parseSchedule, windowMs } from './schedule.mjs';
-import { validateInventoryBlock, validateGateInventory, expectedFromSite, buildInventoryRecord, evaluateInventoryGate, inventorySummary, inventoryStatusLine } from './inventory-coverage.mjs';
+import { validateInventoryBlock, validateGateInventory, expectedFromSite, buildInventoryRecord, evaluateInventoryGate, inventorySummary, inventoryStatusLine, unknownKinds } from './inventory-coverage.mjs';
 import {
   NOTIFY_POLICIES, NOTIFY_DEFAULT_POLICY, NOTIFY_FORMATS, NOTIFY_DEFAULT_FORMAT,
   NOTIFY_TIMEOUT_DEFAULT_MS, NOTIFY_TIMEOUT_MIN_MS, NOTIFY_TIMEOUT_MAX_MS,
@@ -475,6 +475,8 @@ async function observeInventoryCoverage(def, checkedAt) {
   catch (e) { return buildInventoryRecord({ site, expected: null, status: 'failed', reason: `cannot read ${site}: ${e.message}`, checkedAt }); }
   const expected = expectedFromSite(manifest);
   if (!expected) return buildInventoryRecord({ site, expected: null, status: 'failed', reason: `${site} carries no expected block (render the partition with gen-site)`, checkedAt });
+  const unknown = unknownKinds(expected, kinds);
+  if (unknown.length) return buildInventoryRecord({ site, expected, kinds, checkedAt });   // failed, naming the unknown kinds — no wire call
   if (!def.packB?.mcp) return buildInventoryRecord({ site, expected, kinds, status: 'not-attempted', reason: 'file-sourced Pack B: no live series to compare', checkedAt });
   const m = def.packB.mcp;
   const mcpAuth = m.authEnv ? (process.env[m.authEnv] || null) : null;
@@ -499,9 +501,9 @@ function inventoryTable(r) {
   ];
   for (const [k, c] of Object.entries(inv.kinds || {})) {
     if (c.mode === 'counted') {
-      lines.push(`| ${mdCell(k)} (${mdCell(c.title)}, per ${mdCell(c.per || '?')}) | ${Object.keys(c.min || {}).length} floor(s) | total ${c.total ?? '—'} | — | — | ${c.below?.length ? `${c.below.length} below floor` : '—'} | ${mdCell(c.status)} |`);
+      lines.push(`| ${mdCell(k)} (${mdCell(c.title)}, per ${mdCell(c.per || '?')}) | ${Object.keys(c.min || {}).length} floor(s) | ${c.total === null || c.total === undefined ? '—' : `total ${c.total}`} | — | — | ${c.below?.length ? `${c.below.length} below floor` : (c.missing?.length ? `no count for ${mdCell(c.missing.join(', '))}` : '—')} | ${mdCell(c.status)}${c.error ? ` — ${mdCell(c.error)}` : ''} |`);
     } else {
-      lines.push(`| ${mdCell(k)} (${mdCell(c.title)}) | ${c.expected} | ${c.up ?? '—'} | ${c.down?.length ? mdCell(c.down.join(', ')) : '—'} | ${c.silent?.length ? mdCell(c.silent.join(', ')) : '—'} | ${c.unexpected?.length ? mdCell(c.unexpected.join(', ')) : '—'} | ${c.coveragePct === null || c.coveragePct === undefined ? '—' : `${c.coveragePct}%`} |`);
+      lines.push(`| ${mdCell(k)} (${mdCell(c.title)}) | ${c.expected} | ${c.up ?? '—'} | ${c.down?.length ? mdCell(c.down.join(', ')) : '—'} | ${c.silent?.length ? mdCell(c.silent.join(', ')) : '—'} | ${c.unexpected?.length ? mdCell(c.unexpected.join(', ')) : '—'} | ${mdCell(c.status)}${c.coveragePct === null || c.coveragePct === undefined ? '' : ` · ${c.coveragePct}%`}${c.error ? ` — ${mdCell(c.error)}` : ''} |`);
     }
   }
   lines.push('', '_Inventoried vs answering, as a point-in-time comparison of the site\'s expected sets with the live `up` series — never an SLO verdict._');

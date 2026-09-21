@@ -402,15 +402,17 @@ is a signal, not a verdict.
 
 **Inventory coverage.** A journey that names a gen-site partition (`inventory: { site:
 <partition>/site.json }`, relative to the journey file) compares the site's `expected` sets
-(`docs/gen-site.md`: per kind the inventoried names — queue managers, brokers, hosts — and
-counted kinds such as queues per queue manager with floors) against the live `up` series read
+(`docs/gen-site.md`: per kind the inventoried names — queue managers, brokers, and hosts where
+the module says `up` carries a `host` label — and counted kinds such as queues per queue manager with floors) against the live `up` series read
 through the MCP's metrics query tool, once per kind. The record carries
 `inventory: { status, reason, kinds }`: per enumerated kind *up*, *down* (targeted, every
 target down), *silent* (no `up` series at all — the site's own Silent alert asks the same
 question in Prometheus), *unexpected* (answering but not inventoried) and a coverage
 percentage; per counted kind the live count per parent against the floors. A file-sourced
 Pack B is `not-attempted` (no live series), an MCP without the tool `not-attempted` with the
-tier reason, an unreadable site `failed` with the reason. `gate.inventory` turns it into a
+tier reason, an unreadable site `failed` with the reason, a `kinds` entry the site does not
+declare `failed` naming it, and a kind whose query failed `failed` with no numbers (a failed
+query is not an outage of every name). `gate.inventory` turns it into a
 verdict: `requireChecked` (default `true`) breaches when coverage could not be checked,
 `maxSilent` / `maxDown` / `maxUnexpected` / `minCoveragePct` per enumerated kind, and a
 counted kind's floors breach whenever undercut; `kinds` narrows the gate. The report prints an

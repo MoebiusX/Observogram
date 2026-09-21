@@ -92,21 +92,33 @@ export function promqlForKind(spec) {
 }
 const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// The kind's block with NO numbers — what a kind that was not observed (not attempted, or a
+// query that failed) carries: the expected count stays, nothing reads as 0 or as silent.
+function emptyKind(spec, status, error = null) {
+  const base = { mode: isCounted(spec) ? 'counted' : 'enumerated', title: spec.title, label: spec.label, status, error };
+  if (isCounted(spec)) return { ...base, per: spec.per, query: spec.query, total: null, counts: {}, min: spec.min || {}, below: [], missing: Object.keys(spec.min || {}).filter(p => (spec.min || {})[p] > 0) };
+  return { ...base, series: spec.series, jobs: spec.jobs, expected: spec.names.length, observed: null, up: null, upNames: [], down: [], silent: [], unexpected: [], coveragePct: null };
+}
+
 /**
  * Coverage of one kind from its observation `{ values: { [labelValue]: number }, error }`
- * (values = the instant vector reduced by the `by` label). Returns the record block for the kind.
+ * (values = the instant vector reduced by the `by` label). Returns the record block for the
+ * kind. An observation with `error` (the query failed) is `failed` with no numbers — a failed
+ * query is not an outage of every name.
  */
 export function coverageOfKind(spec, observation) {
   const values = isRecord(observation?.values) ? observation.values : {};
   const error = observation?.error ? String(observation.error) : null;
+  if (error) return emptyKind(spec, 'failed', error);
   if (isCounted(spec)) {
     const counts = Object.fromEntries(Object.entries(values).filter(([, v]) => Number.isFinite(v)).map(([k, v]) => [k, v]));
     const floors = spec.min || {};
     const below = Object.entries(floors).filter(([p, m]) => Number.isFinite(counts[p]) && counts[p] < m).map(([p, m]) => ({ parent: p, count: counts[p], min: m }));
-    const missing = Object.keys(floors).filter(p => !Number.isFinite(counts[p]));
+    // a parent with no series at all has no count; `count by` cannot say 0, so a floor of 0 is met
+    const missing = Object.keys(floors).filter(p => !Number.isFinite(counts[p]) && floors[p] > 0);
     return {
       mode: 'counted', title: spec.title, label: spec.label, per: spec.per, query: spec.query,
-      status: error ? 'failed' : 'checked', error,
+      status: 'checked', error: null,
       total: Object.values(counts).reduce((s, v) => s + v, 0), counts, min: floors, below, missing,
     };
   }
@@ -118,11 +130,17 @@ export function coverageOfKind(spec, observation) {
   const unexpected = Object.keys(values).filter(n => !set.has(n)).sort();
   return {
     mode: 'enumerated', title: spec.title, label: spec.label, series: spec.series, jobs: spec.jobs,
-    status: error ? 'failed' : 'checked', error,
+    status: 'checked', error: null,
     expected: names.length, observed: names.length - silent.length,
     up: up.length, upNames: up, down, silent, unexpected,
     coveragePct: names.length ? Math.round((up.length / names.length) * 1000) / 10 : null,
   };
+}
+
+/** The kinds a journey's `kinds:` names that the site does not declare; [] when none or no filter. */
+export function unknownKinds(expected, kinds) {
+  if (!expected || !Array.isArray(kinds)) return [];
+  return kinds.filter(k => !isRecord(expected.kinds?.[k]));
 }
 
 /**
@@ -132,12 +150,19 @@ export function coverageOfKind(spec, observation) {
  * `not-attempted`. `status` / `reason` override (file-sourced B, no metrics tool, unreadable site).
  */
 export function buildInventoryRecord({ site = null, expected, observations = {}, kinds = null, status = null, reason = null, checkedAt = null } = {}) {
+  // A `kinds:` entry the site does not declare is a configuration error, named — never a
+  // silently empty check that reads as not-attempted.
+  const unknown = unknownKinds(expected, kinds);
+  if (unknown.length && !status) {
+    status = 'failed';
+    reason = `inventory.kinds names ${unknown.join(', ')} — not in ${site || 'the site'}'s expected block (kinds: ${Object.keys(expected.kinds).join(', ') || 'none'})`;
+  }
   const wanted = expected ? Object.keys(expected.kinds).filter(k => !kinds || kinds.includes(k)) : [];
   const out = {};
   for (const k of wanted) {
     const spec = expected.kinds[k];
     const obs = observations?.[k];
-    out[k] = obs ? coverageOfKind(spec, obs) : { mode: isCounted(spec) ? 'counted' : 'enumerated', title: spec.title, label: spec.label, status: 'not-attempted', error: null, ...(isCounted(spec) ? { total: null, counts: {}, min: spec.min || {}, below: [], missing: Object.keys(spec.min || {}) } : { expected: spec.names.length, observed: null, up: null, upNames: [], down: [], silent: [], unexpected: [], coveragePct: null }) };
+    out[k] = obs ? coverageOfKind(spec, obs) : emptyKind(spec, 'not-attempted');
   }
   let derived = status;
   if (!derived) {

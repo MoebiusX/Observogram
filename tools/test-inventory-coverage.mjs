@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   INVENTORY_STATUSES, validateInventoryBlock, validateGateInventory, expectedFromSite, promqlForKind,
-  coverageOfKind, buildInventoryRecord, evaluateInventoryGate, inventorySummary, inventoryStatusLine, inventorySeries,
+  coverageOfKind, buildInventoryRecord, evaluateInventoryGate, inventorySummary, inventoryStatusLine, inventorySeries, unknownKinds,
 } from './lib/inventory-coverage.mjs';
 
 const SITE = {
@@ -57,8 +57,13 @@ test('coverageOfKind: up / down / silent / unexpected for an enumerated kind; fl
   assert.deepEqual(c.unexpected, ['QMNEW9']);
   assert.equal(c.coveragePct, 33.3);
   assert.equal(c.status, 'checked');
-  const failed = coverageOfKind(e.kinds.qmgr, { values: {}, error: 'HTTP 502' });
-  assert.equal(failed.status, 'failed'); assert.equal(failed.error, 'HTTP 502'); assert.deepEqual(failed.silent, ['QMORD1', 'QMPAY1', 'QMFIN1']);
+  const failed = coverageOfKind(e.kinds.qmgr, { values: { QMORD1: 1 }, error: 'HTTP 502' });
+  assert.equal(failed.status, 'failed'); assert.equal(failed.error, 'HTTP 502');
+  assert.deepEqual([failed.expected, failed.up, failed.observed, failed.silent, failed.coveragePct], [3, null, null, [], null], 'a failed query is not an outage: no numbers, nothing silent');
+  const failedCounted = coverageOfKind(e.kinds.queue, { values: {}, error: 'timeout' });
+  assert.deepEqual([failedCounted.status, failedCounted.total, failedCounted.below, failedCounted.missing], ['failed', null, [], ['QMORD1', 'QMPAY1']]);
+  const zeroFloor = coverageOfKind({ ...e.kinds.queue, min: { QMORD1: 0, QMPAY1: 4 } }, { values: {} });
+  assert.deepEqual(zeroFloor.missing, ['QMPAY1'], 'a floor of 0 is met by a parent with no series (count by cannot say 0)');
   const q = coverageOfKind(e.kinds.queue, { values: { QMORD1: 12, QMPAY1: 3 } });
   assert.equal(q.mode, 'counted');
   assert.equal(q.total, 15);
@@ -80,12 +85,19 @@ test('buildInventoryRecord: status from the kinds, the not-attempted shape, over
   assert.equal(partial.status, 'partial'); assert.match(partial.reason, /host: timeout/);
   const none = buildInventoryRecord({ expected: e, observations: {} });
   assert.equal(none.status, 'not-attempted');
-  assert.deepEqual(none.kinds.qmgr, { mode: 'enumerated', title: 'queue manager', label: 'qmgr', status: 'not-attempted', error: null, expected: 3, observed: null, up: null, upNames: [], down: [], silent: [], unexpected: [], coveragePct: null });
+  assert.deepEqual(none.kinds.qmgr, { mode: 'enumerated', title: 'queue manager', label: 'qmgr', series: e.kinds.qmgr.series, jobs: e.kinds.qmgr.jobs, status: 'not-attempted', error: null, expected: 3, observed: null, up: null, upNames: [], down: [], silent: [], unexpected: [], coveragePct: null }, 'the not-attempted shape keeps the expected count and the series/jobs, no numbers');
   assert.deepEqual(none.kinds.queue.missing, ['QMORD1', 'QMPAY1']);
   const sub = buildInventoryRecord({ expected: e, observations: obs, kinds: ['qmgr'] });
   assert.deepEqual(Object.keys(sub.kinds), ['qmgr']);
   const over = buildInventoryRecord({ expected: e, observations: {}, status: 'not-attempted', reason: 'file-sourced Pack B' });
   assert.equal(over.reason, 'file-sourced Pack B');
+  // a kinds: entry the site does not declare is a named failure, not an empty not-attempted
+  const typo = buildInventoryRecord({ site: 'sites/prod/site.json', expected: e, observations: obs, kinds: ['qmgrs', 'host'] });
+  assert.equal(typo.status, 'failed');
+  assert.equal(typo.reason, "inventory.kinds names qmgrs — not in sites/prod/site.json's expected block (kinds: qmgr, host, queue)");
+  assert.deepEqual(Object.keys(typo.kinds), ['host'], 'the kinds that do exist are still recorded');
+  assert.deepEqual(unknownKinds(e, ['qmgr']), []);
+  assert.deepEqual(unknownKinds(e, null), []);
   assert.equal(buildInventoryRecord({ expected: e, observations: obs, status: 'weird' }).status, 'failed', 'an unknown status reads failed');
   assert.deepEqual([...INVENTORY_STATUSES], ['checked', 'partial', 'not-attempted', 'failed']);
 });
