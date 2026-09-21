@@ -12,7 +12,9 @@
 //                      the full file does, gated by the same profile knob)
 //   otel-collector     OTel Collector config (receivers/processors/exporters)
 //   alertmanager       Alertmanager route tree + receivers
-//   grafana-dashboard  Grafana 12/13 dashboard JSON (one pack section per call)
+//   grafana-dashboard  Grafana dashboard JSON from the pack's boards (./dashboards/generic.mjs:
+//                      the Unified Observability board, then one per spec.dashboards[] entry),
+//                      shaped for the declared Grafana version
 //
 // Two policy facts that cross artefacts:
 //   - Forecast alerts carry the severity of their `on_projected_breach`
@@ -49,6 +51,7 @@ import {
   metricSafe, metricPrefix, packStepSeconds, sliLegs, burnAlertExpr, errorBudgetRecordingRules,
   sliErrorRatioRule, forecastExpr, forecastHorizon, forecastSeverity, forFor, MIN_BAD_SAMPLES,
 } from './burn-rules.mjs';
+import { genericBoards, checkBindings, unifiedIdOf } from './dashboards/generic.mjs';
 
 // ============================================================
 // Helpers — ref resolution, slug normalisation, expression building
@@ -965,10 +968,24 @@ export function compileCatalog(canonical) {
   }
 
   // ---- Dashboards group ----
-  if (dashboards.length) {
+  // Every pack gets the Unified Observability board (dashboards/generic.mjs),
+  // so the group exists even for a pack that declares no dashboards[].
+  {
+    const unifiedId = unifiedIdOf(canonical);
+    const declaredUnified = dashboards.some(d => d.id === unifiedId);
+    const total = dashboards.length + (declaredUnified ? 0 : 1);
     const dashItems = [
-      { id: 'all', kind: 'dashboards-bundle', label: 'All dashboards · bundle', subtitle: `${dashboards.length} dashboard(s)` },
+      { id: 'all', kind: 'dashboards-bundle', label: 'All dashboards · bundle', subtitle: `${total} dashboard(s)` },
     ];
+    if (!declaredUnified) {
+      dashItems.push({
+        id: `dash:${unifiedId}`,
+        kind: 'dashboard',
+        label: unifiedId,
+        subtitle: 'Unified Observability · generated for every pack',
+        dashboardId: unifiedId,
+      });
+    }
     for (const d of dashboards) {
       dashItems.push({
         id: `dash:${d.id}`,
@@ -981,7 +998,7 @@ export function compileCatalog(canonical) {
     groups.push({
       id: 'dashboards',
       label: 'Dashboards',
-      blurb: 'Grafana 12/13 dashboard JSON, one per spec.dashboards[] entry.',
+      blurb: 'Grafana dashboard JSON — the Unified Observability board for every pack, then one per spec.dashboards[] entry; the same generator as gen-dashboards and the reference packs.',
       flavors: [{ id: 'grafana', label: 'Grafana 12 / 13', platform: 'Grafana dashboards API',
                   description: 'Native Grafana dashboard JSON. Import via Grafana UI, dashboards API, or grafana-cli.',
                   contentType: 'application/json', extension: 'json', deployable: true }],
@@ -1070,9 +1087,11 @@ export function compileArtifact(canonical, { group, flavor, artifact, dashboardI
       // comments naming each. The output is one file the engineer can
       // split, not multi-file (kept simple for the v1 of per-artifact UI).
       const parts = [];
-      for (const d of canonical?.spec?.dashboards || []) {
-        parts.push(`/* === ${d.id} === */`);
-        parts.push(compileGrafanaDashboard(canonical, d.id));
+      const unifiedId = unifiedIdOf(canonical);
+      const ids = [unifiedId, ...(canonical?.spec?.dashboards || []).map(d => d.id).filter(id => id !== unifiedId)];
+      for (const id of ids) {
+        parts.push(`/* === ${id} === */`);
+        parts.push(compileGrafanaDashboard(canonical, id));
       }
       return { contentType: 'application/json', filename: `${serviceSlug(canonical)}.dashboards.bundle.json`, content: parts.join('\n\n') };
     }
@@ -1393,171 +1412,89 @@ export function compileOtelCollector(canonical, opts = {}) {
 }
 
 // ============================================================
-// 4) Grafana dashboard JSON — one per dashboards[] entry.
+// 4) Grafana dashboard JSON — the pack's boards, ONE engine.
 //
-// Target: Grafana 12 / 13 (the spec's required-support floor). The
-// default schemaVersion is GRAFANA_DEFAULT_SCHEMA_VERSION below; packs
-// MAY pin their own via `dashboards[].provider.schemaVersion` (the
-// schema floor is 30, so older Grafana installs still validate) but
-// the compiler's default emits a dashboard whose schema lines up with
-// Grafana 12's migration table and is forward-compatible with 13.
+// The boards come from ./dashboards/generic.mjs — the same generator behind
+// `gen-dashboards.mjs`, the committed reference-pack boards and the MQ lab's
+// certified boards: always the Unified Observability board `<name>-unified`
+// (the whole pack in its own section order), then one per `spec.dashboards[]`
+// entry (a `source:` entry gets what its `panel_bindings` declare, a
+// `slo-burn-template` becomes a burn board, a `per-resource-template` a
+// rollup board). checkBindings refuses a board whose declared binding no
+// panel honours — a pack error, never a silently thinner board.
 //
-// Panel format pinned to features stable across 12 → 13:
-//   - datasource as `{type, uid}` (object form, mandatory since v10)
-//   - fieldConfig.defaults.thresholds in `mode: 'absolute'` with steps
-//   - timeseries options/legend in the post-v10 shape
+// What this layer adds is the platform contract:
+//   - the Grafana version profile: `dashboards[].provider` (or an explicit
+//     override) decides the schemaVersion floor, the datasource form
+//     (`{type, uid}` since v10, a bare uid string before) and whether query
+//     targets repeat their datasource — applied as a rewrite of the generated
+//     board, so one generator serves every band;
+//   - the datasource placeholders `${DS_PROMETHEUS}` / `${DS_LOKI}` /
+//     `${DS_TEMPO}` the MCP gateway maps to its configured datasources
+//     (grafana-mcp-bridge.mjs mirrors that mapping); `opts.datasourceUids`
+//     pins real uids instead (the reference packs and the lab use `prom`);
+//   - the tags the platform reads: `observability-pack`, the service slug,
+//     `obs-pack-id:<id>`;
+//   - the uid IS the dashboard id (the generator's contract — boards link to
+//     each other at /d/<id>), capped the Grafana way only when an id exceeds
+//     40 characters (with a warning). The deploy path captures pre-state by
+//     `dashboardId`, so the board it writes and the uid it looks up agree.
 // ============================================================
 
 const GRAFANA_DEFAULT_SCHEMA_VERSION = 41;   // Grafana 12.x baseline
+const GRAFANA_UID_MAX = 40;
+const DATASOURCE_PLACEHOLDERS = Object.freeze({ prometheus: '${DS_PROMETHEUS}', loki: '${DS_LOKI}', tempo: '${DS_TEMPO}' });
 
 export function compileGrafanaDashboard(canonical, dashboardId, opts = {}) {
-  const dash = (canonical?.spec?.dashboards || []).find(d => d.id === dashboardId);
-  if (!dash) throw new Error(`dashboard not found: ${dashboardId}`);
-  const svc = nameOf(canonical);
+  const dashboards = canonical?.spec?.dashboards || [];
+  const unifiedId = unifiedIdOf(canonical);
+  const declared = dashboards.find(d => d.id === dashboardId) || null;
+  if (!declared && dashboardId !== unifiedId) throw new Error(`dashboard not found: ${dashboardId}`);
+  // The generated unified board is shaped for the first declared dashboard's provider.
+  const dash = declared || { id: unifiedId, provider: dashboards[0]?.provider };
   const svcS = serviceSlug(canonical);
-
-  // Resolve the Grafana version profile from the dashboard's declared
-  // provider (or an explicit override). The profile decides the datasource
-  // form (object since v10, bare string before) and the dashboard
-  // schemaVersion floor when the pack doesn't pin one.
   const profile = opts.profile || resolveProfile(dash.provider?.kind || 'grafana', opts.version ?? dash.provider?.version);
-  const k = profile.knobs;
-  // Pre-v10 Grafana referenced datasources by their bare uid string; v10+
-  // requires the { type, uid } object. Emitting the wrong form makes panels
-  // fail to bind on the real install — a genuine version behaviour.
-  const dsMetrics = k.datasourceForm === 'string'
-    ? DEFAULT_DATASOURCE_UID
-    : { type: 'prometheus', uid: DEFAULT_DATASOURCE_UID };
-  // Whether each query target repeats its datasource (post-v10) or inherits
-  // it from the panel (pre-v10).
-  const targetDs = k.panelTargetDatasource === false ? undefined : dsMetrics;
-  const panels = [];
-  let panelId = 0;
-  let row = 0;
-  const cols = 2;
-  const w = 12, h = 8;
-
-  const bindings = dash.panel_bindings || [];
-  for (let i = 0; i < bindings.length; i++) {
-    const b = bindings[i];
-    const target = b.binds_to || '';
-    const isSli = /^slis\./.test(target);
-    const isSlo = /^slos\./.test(target);
-    const sli = isSli ? findSli(canonical, target) : (isSlo ? findSli(canonical, findSlo(canonical, target)?.sli) : null);
-    const slo = isSlo ? findSlo(canonical, target) : null;
-    const sliId = sli?.id;
-
-    panelId++;
-    const x = (i % cols) * w;
-    const y = Math.floor(i / cols) * h;
-
-    const panel = {
-      id: panelId,
-      title: b.panel || target,
-      type: 'timeseries',
-      datasource: dsMetrics,
-      gridPos: { x, y, w, h },
-      targets: [{
-        refId: 'A',
-        datasource: targetDs,
-        expr: sli && sli.type === 'ratio'
-          ? `${svcS}:${sliId}:ratio_${RATE_WINDOW_RECORD}`
-          : (sli ? sliExpression(sli) : `# unresolved: ${target}`),
-        legendFormat: sliId || target,
-      }],
-      fieldConfig: {
-        defaults: {
-          ...(sli && sli.type === 'ratio'
-            ? { unit: 'percentunit', min: 0, max: 1 }
-            : { unit: sli?.unit === 'seconds' ? 's' : 'short' }),
-          custom: { drawStyle: 'line', fillOpacity: 12, lineWidth: 2, pointSize: 3 },
-        },
-        overrides: [],
-      },
-      options: { legend: { displayMode: 'list', placement: 'bottom' }, tooltip: { mode: 'multi' } },
-    };
-
-    // SLO panels get the objective rendered as a threshold line.
-    if (slo) {
-      panel.fieldConfig.defaults.thresholds = {
-        mode: 'absolute',
-        steps: [
-          { color: 'red',   value: null },
-          { color: 'green', value: slo.objective },
-        ],
-      };
-      panel.fieldConfig.defaults.custom.thresholdsStyle = { mode: 'line' };
-    }
-
-    panels.push(panel);
-  }
-
-  // Always lead with a "SLO status" stat row when the dashboard binds at
-  // least one SLO — it's the at-a-glance the on-call wants first.
-  const sloBindings = bindings.filter(b => /^slos\./.test(b.binds_to));
-  if (sloBindings.length) {
-    const statPanels = sloBindings.map((b, i) => {
-      const slo = findSlo(canonical, b.binds_to);
-      const sli = slo ? findSli(canonical, slo.sli) : null;
-      panelId++;
-      return {
-        id: panelId,
-        title: slo?.id || b.binds_to,
-        type: 'stat',
-        datasource: dsMetrics,
-        gridPos: { x: (i % 4) * 6, y: 0, w: 6, h: 4 },
-        targets: [{
-          refId: 'A',
-          datasource: targetDs,
-          expr: sli && sli.type === 'ratio' ? `${svcS}:${metricSafe(sli.id)}:ratio_${RATE_WINDOW_RECORD}` : '',
-          legendFormat: slo?.id,
-        }],
-        fieldConfig: {
-          defaults: {
-            unit: 'percentunit', decimals: 2,
-            thresholds: {
-              mode: 'absolute',
-              steps: [
-                { color: 'red',   value: null },
-                { color: 'orange', value: (slo?.objective || 0.99) - 0.005 },
-                { color: 'green', value: slo?.objective || 0.99 },
-              ],
-            },
-          },
-        },
-        options: { reduceOptions: { calcs: ['lastNotNull'] }, colorMode: 'background', graphMode: 'area' },
-      };
-    });
-    // Shift the rest of the panels down by 4 rows.
-    for (const p of panels) p.gridPos.y += 4;
-    panels.unshift(...statPanels);
-  }
-
-  const out = {
-    title: dash.id,
-    // Grafana rejects uids over 40 chars — same capped builder as rules
-    // (T4 caught the uncapped template: every payment-service dashboard
-    // uid was 41+ chars and the dashboards API refused all of them).
-    uid: grafanaUid('obs-pack', `${svcS}-${dash.id}`),
-    description: `Compiled from ${nameOf(canonical)} pack. Do not hand-edit — re-emit from the pack.`,
-    // The obs-pack-id tag carries the pack-declared identity THROUGH the
-    // platform: uids are capped/fingerprinted, so the live fetcher reads
-    // this tag to give the dashboard the same canonical id the source
-    // pack declares — that's what makes the deploy→fetch→diff round trip
-    // close as ALIGNED instead of an id-mismatched pair.
-    tags: ['observability-pack', svcS, `obs-pack-id:${dash.id}`],
-    timezone: 'browser',
-    // The pack MAY pin schemaVersion explicitly; otherwise the resolved
-    // Grafana profile supplies the version-correct value.
-    schemaVersion: dash.provider?.schemaVersion ?? k.schemaVersion ?? GRAFANA_DEFAULT_SCHEMA_VERSION,
-    version: 1,
-    refresh: '30s',
-    time: { from: 'now-6h', to: 'now' },
-    panels,
-    templating: { list: [] },
-    annotations: { list: [{ datasource: dsMetrics, enable: true, name: 'Annotations & Alerts', target: { matchAny: false, tags: [], type: 'dashboard' } }] },
-  };
+  const boards = genericBoards(canonical, { module: opts.module || null, repoUrl: opts.repoUrl || null });
+  const problems = checkBindings(canonical, boards).filter(p => p.startsWith(`${dashboardId}:`));
+  if (problems.length) throw new Error(`dashboard ${dashboardId} cannot be compiled: ${problems.join('; ')}`);
+  const board = boards.find(b => b.id === dashboardId)?.dashboard;
+  if (!board) throw new Error(`dashboard not generated: ${dashboardId}`);
+  const out = applyGrafanaProfile(board, {
+    knobs: profile.knobs || {}, pinnedSchemaVersion: dash.provider?.schemaVersion,
+    datasourceUids: opts.datasourceUids, svcS, dashboardId, onWarning: opts.onWarning,
+  });
   return JSON.stringify(out, null, 2);
+}
+
+// The platform contract applied to a generated board — pure, returns a copy.
+function applyGrafanaProfile(board, { knobs = {}, pinnedSchemaVersion, datasourceUids, svcS, dashboardId, onWarning } = {}) {
+  const out = JSON.parse(JSON.stringify(board));
+  const uidFor = (type, uid) => datasourceUids?.[type] ?? DATASOURCE_PLACEHOLDERS[type] ?? uid;
+  const rewriteDs = (ds) => {
+    if (!ds || typeof ds !== 'object') return ds;
+    const uid = uidFor(ds.type, ds.uid);
+    return knobs.datasourceForm === 'string' ? uid : { ...ds, uid };
+  };
+  const walkPanel = (p) => {
+    if (!p || typeof p !== 'object') return;
+    if (p.datasource !== undefined) p.datasource = rewriteDs(p.datasource);
+    for (const t of Array.isArray(p.targets) ? p.targets : []) {
+      if (knobs.panelTargetDatasource === false) delete t.datasource;
+      else if (t.datasource !== undefined) t.datasource = rewriteDs(t.datasource);
+    }
+    for (const sub of Array.isArray(p.panels) ? p.panels : []) walkPanel(sub);
+  };
+  for (const p of Array.isArray(out.panels) ? out.panels : []) walkPanel(p);
+  for (const a of Array.isArray(out.annotations?.list) ? out.annotations.list : []) if (a.datasource !== undefined) a.datasource = rewriteDs(a.datasource);
+  for (const v of Array.isArray(out.templating?.list) ? out.templating.list : []) if (v.datasource !== undefined) v.datasource = rewriteDs(v.datasource);
+  out.schemaVersion = pinnedSchemaVersion ?? knobs.schemaVersion ?? out.schemaVersion ?? GRAFANA_DEFAULT_SCHEMA_VERSION;
+  out.tags = [...new Set([...(Array.isArray(out.tags) ? out.tags : []), 'observability-pack', svcS, `obs-pack-id:${dashboardId}`])];
+  if (typeof out.uid === 'string' && out.uid.length > GRAFANA_UID_MAX) {
+    const capped = grafanaUid('obs-pack', out.uid);
+    if (typeof onWarning === 'function') onWarning(`dashboard ${dashboardId}: uid longer than ${GRAFANA_UID_MAX} characters — emitted as ${capped}; the other boards still link to /d/${out.uid}`);
+    out.uid = capped;
+  }
+  return out;
 }
 
 // ============================================================
@@ -1607,7 +1544,7 @@ export const TARGETS = {
   },
   'grafana-dashboard': {
     label: 'Grafana dashboard',
-    description: 'Grafana dashboard JSON, emitted at the schemaVersion of the pack-declared Grafana version. One per `spec.dashboards[]` entry; pass the dashboard id as an arg.',
+    description: 'Grafana dashboard JSON from the pack\'s boards — the Unified Observability board `<name>-unified`, then one per `spec.dashboards[]` entry — emitted at the schemaVersion of the pack-declared Grafana version; pass the dashboard id as an arg.',
     contentType: 'application/json',
     extension: 'json',
     family: 'grafana-dashboard',

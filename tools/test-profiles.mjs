@@ -147,11 +147,13 @@ const baseDash = {
 
 const dash12 = JSON.parse(compileGrafanaDashboard(baseDash, 'DASH-1'));
 assert(dash12.schemaVersion === 41, 'dashboard compiled for Grafana 12 -> schemaVersion 41', dash12.schemaVersion, 41);
-assert(typeof dash12.panels[0].datasource === 'object', 'Grafana 12 emits object datasource');
+// The generated boards open with a text header (no datasource): read the first panel that has one.
+const firstDs = (d) => d.panels.find(p => p.datasource !== undefined)?.datasource;
+assert(typeof firstDs(dash12) === 'object', 'Grafana 12 emits object datasource');
 
 const dash9 = JSON.parse(compileGrafanaDashboard(baseDash, 'DASH-1', { version: '9.5' }));
 assert(dash9.schemaVersion === 37, 'override to Grafana 9 -> schemaVersion 37', dash9.schemaVersion, 37);
-assert(typeof dash9.panels[0].datasource === 'string', 'Grafana 9 emits bare-uid datasource', typeof dash9.panels[0].datasource, 'string');
+assert(typeof firstDs(dash9) === 'string', 'Grafana 9 emits bare-uid datasource', typeof firstDs(dash9), 'string');
 assert(dash9.schemaVersion !== dash12.schemaVersion, 'same pack compiles differently across Grafana versions');
 
 // Prometheus keep_firing_for gating
