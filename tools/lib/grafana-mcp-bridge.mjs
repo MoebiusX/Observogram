@@ -27,6 +27,7 @@ export async function startGrafanaMcpBridge({
   grafanaUrl,
   auth = 'admin:admin',                 // basic auth user:pass
   datasourceUid = 'obs-pack-prom',      // the provisioned datasource the gateway maps to
+  datasourceUids = null,                // optional { loki, tempo, … } uids for the other dashboard placeholders
 } = {}) {
   const base = String(grafanaUrl).replace(/\/+$/, '');
   const authHeader = `Basic ${Buffer.from(auth).toString('base64')}`;
@@ -66,7 +67,36 @@ export async function startGrafanaMcpBridge({
 
   // The gateway's datasource mapping: the compiler emits the
   // ${DS_PROMETHEUS} placeholder; the gateway substitutes its configured
-  // datasource. Applied to alert-rule query nodes (never __expr__).
+  // datasource. Applied to alert-rule query nodes (never __expr__) and, below,
+  // to dashboard panels.
+  //
+  // Dashboards: every `datasource` in panels (rows included), query targets,
+  // annotations and template variables whose uid is a `${…}` placeholder gets
+  // the configured datasource — the Prometheus one this bridge is given;
+  // `${DS_LOKI}` / `${DS_TEMPO}` are mapped only when `datasourceUids` names
+  // a uid for that type, otherwise they reach Grafana as they are (a
+  // Prometheus-only validation Grafana has nothing to map them to).
+  const uidByType = { prometheus: datasourceUid, ...(datasourceUids || {}) };
+  const isPlaceholder = (uid) => typeof uid === 'string' && /^\$\{.*\}$/.test(uid);
+  function mapDs(ds) {
+    if (typeof ds === 'string') return isPlaceholder(ds) ? (uidByType.prometheus || ds) : ds;
+    if (!ds || typeof ds !== 'object' || !isPlaceholder(ds.uid)) return ds;
+    const mapped = uidByType[ds.type];
+    return mapped ? { ...ds, uid: mapped } : ds;
+  }
+  function mapDashboardDatasources(dashboard) {
+    const out = JSON.parse(JSON.stringify(dashboard));
+    const walk = (p) => {
+      if (!p || typeof p !== 'object') return;
+      if (p.datasource !== undefined) p.datasource = mapDs(p.datasource);
+      for (const t of Array.isArray(p.targets) ? p.targets : []) if (t.datasource !== undefined) t.datasource = mapDs(t.datasource);
+      for (const sub of Array.isArray(p.panels) ? p.panels : []) walk(sub);
+    };
+    for (const p of Array.isArray(out.panels) ? out.panels : []) walk(p);
+    for (const a of Array.isArray(out.annotations?.list) ? out.annotations.list : []) if (a.datasource !== undefined) a.datasource = mapDs(a.datasource);
+    for (const v of Array.isArray(out.templating?.list) ? out.templating.list : []) if (v.datasource !== undefined) v.datasource = mapDs(v.datasource);
+    return out;
+  }
   function mapDatasources(rule) {
     const out = JSON.parse(JSON.stringify(rule));
     for (const q of out.data || []) {
@@ -94,7 +124,7 @@ export async function startGrafanaMcpBridge({
       if (dry_run) return { ok: true, dryRun: true };
       if (folder_uid) await ensureFolder(folder_uid);
       const r = await gf('POST', '/api/dashboards/db', {
-        dashboard,
+        dashboard: mapDashboardDatasources(dashboard),
         folderUid: folder_uid || undefined,
         overwrite: mode !== 'create',
         message: message || 'observogram t4 round trip',

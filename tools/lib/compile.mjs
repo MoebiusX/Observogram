@@ -971,8 +971,12 @@ export function compileCatalog(canonical) {
   // Every pack gets the Unified Observability board (dashboards/generic.mjs),
   // so the group exists even for a pack that declares no dashboards[].
   {
-    const unifiedId = unifiedIdOf(canonical);
-    const declaredUnified = dashboards.some(d => d.id === unifiedId);
+    const unifiedId = unifiedIdOrNull(canonical);
+    // A generated board the pack does not declare is compilable and
+    // downloadable, but not deployable from the studio: deployed, it would
+    // come back from the live side as undeclared drift and never verify.
+    // Declaring it in spec.dashboards[] makes it a contract item like any other.
+    const declaredUnified = !unifiedId || dashboards.some(d => d.id === unifiedId);
     const total = dashboards.length + (declaredUnified ? 0 : 1);
     const dashItems = [
       { id: 'all', kind: 'dashboards-bundle', label: 'All dashboards · bundle', subtitle: `${total} dashboard(s)` },
@@ -982,8 +986,9 @@ export function compileCatalog(canonical) {
         id: `dash:${unifiedId}`,
         kind: 'dashboard',
         label: unifiedId,
-        subtitle: 'Unified Observability · generated for every pack',
+        subtitle: 'Unified Observability · generated for every pack · declare it in spec.dashboards[] to deploy and verify it',
         dashboardId: unifiedId,
+        generated: true,
       });
     }
     for (const d of dashboards) {
@@ -1041,7 +1046,8 @@ export function compileCatalog(canonical) {
 // ----------------------------------------------------------------
 
 // Extra keys (step, lab, minBadSamples, runbooks, onWarning, product, version, ...)
-// are forwarded to the rules compilers.
+// are forwarded to the rules compilers and to the dashboard compiler
+// (onWarning, datasourceUids, module, repoUrl).
 export function compileArtifact(canonical, { group, flavor, artifact, dashboardId, ...opts }) {
   if (group === 'rules') {
     if (flavor === 'prometheus' || !flavor) {
@@ -1087,17 +1093,18 @@ export function compileArtifact(canonical, { group, flavor, artifact, dashboardI
       // comments naming each. The output is one file the engineer can
       // split, not multi-file (kept simple for the v1 of per-artifact UI).
       const parts = [];
-      const unifiedId = unifiedIdOf(canonical);
-      const ids = [unifiedId, ...(canonical?.spec?.dashboards || []).map(d => d.id).filter(id => id !== unifiedId)];
+      const unifiedId = unifiedIdOrNull(canonical);
+      const ids = [...(unifiedId ? [unifiedId] : []), ...(canonical?.spec?.dashboards || []).map(d => d.id).filter(id => id !== unifiedId)];
       for (const id of ids) {
         parts.push(`/* === ${id} === */`);
-        parts.push(compileGrafanaDashboard(canonical, id));
+        parts.push(compileGrafanaDashboard(canonical, id, opts));
       }
       return { contentType: 'application/json', filename: `${serviceSlug(canonical)}.dashboards.bundle.json`, content: parts.join('\n\n') };
     }
     if (artifact.startsWith('dash:')) {
       const id = artifact.slice(5);
-      return { contentType: 'application/json', filename: `${serviceSlug(canonical)}.${slug(id)}.json`, content: compileGrafanaDashboard(canonical, id) };
+      // opts ride along (onWarning for the uid cap, datasourceUids, module, repoUrl).
+      return { contentType: 'application/json', filename: `${serviceSlug(canonical)}.${slug(id)}.json`, content: compileGrafanaDashboard(canonical, id, opts) };
     }
   }
   if (group === 'pipelines') {
@@ -1443,6 +1450,13 @@ export function compileOtelCollector(canonical, opts = {}) {
 
 const GRAFANA_DEFAULT_SCHEMA_VERSION = 41;   // Grafana 12.x baseline
 const GRAFANA_UID_MAX = 40;
+
+// The unified board's id, null for a pack without metadata.name (the catalog
+// tolerates such a pack; compileGrafanaDashboard itself needs the name).
+const unifiedIdOrNull = (canonical) => (canonical?.metadata?.name ? unifiedIdOf(canonical) : null);
+// The board an id-less call means: the first declared board (what the
+// goldens pin), else the unified board every pack has — never `undefined`.
+const defaultDashboardId = (canonical, opts) => opts?.dashboardId || canonical?.spec?.dashboards?.[0]?.id || unifiedIdOrNull(canonical) || 'dashboard';
 const DATASOURCE_PLACEHOLDERS = Object.freeze({ prometheus: '${DS_PROMETHEUS}', loki: '${DS_LOKI}', tempo: '${DS_TEMPO}' });
 
 export function compileGrafanaDashboard(canonical, dashboardId, opts = {}) {
@@ -1548,8 +1562,8 @@ export const TARGETS = {
     contentType: 'application/json',
     extension: 'json',
     family: 'grafana-dashboard',
-    suggestedFile: (canonical, opts) => `${serviceSlug(canonical)}.${slug(opts?.dashboardId || 'dashboard')}.json`,
-    compile: (canonical, opts) => compileGrafanaDashboard(canonical, opts?.dashboardId || canonical?.spec?.dashboards?.[0]?.id, opts),
+    suggestedFile: (canonical, opts) => `${serviceSlug(canonical)}.${slug(defaultDashboardId(canonical, opts))}.json`,
+    compile: (canonical, opts) => compileGrafanaDashboard(canonical, defaultDashboardId(canonical, opts), opts),
   },
 };
 

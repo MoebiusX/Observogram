@@ -498,11 +498,11 @@ test('the committed reference-pack rules and dashboards are what the generators 
   }
 });
 
-test('one engine: packc compile … grafana-dashboard emits the committed reference boards byte for byte', () => {
+test('one engine: packc compile … grafana-dashboard emits the committed reference boards (the same object, tags aside)', () => {
   // compileGrafanaDashboard is genericBoards plus the platform contract (the version
   // profile, the datasource placeholders, the tags). With the lab's datasource uids
   // pinned — what the committed boards carry — every board is the same object, so the
-  // studio deploys exactly what gen-dashboards wrote and the lab validated live.
+  // studio compiles exactly what gen-dashboards wrote and the lab validated live.
   const lab = { prometheus: 'prom', loki: 'loki', tempo: 'tempo' };
   const dashDir = resolve(ROOT, 'reference-packs', 'dashboards');
   for (const packPath of PACKS) {

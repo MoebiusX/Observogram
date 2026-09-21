@@ -63,4 +63,4 @@ run `genericBoards` and add only the platform contract on top — the Grafana ve
 `${DS_LOKI}` / `${DS_TEMPO}` placeholders the MCP gateway maps to its datasources (pass
 `datasourceUids` to pin real ones), and the `observability-pack` / `obs-pack-id:<id>` tags.
 `tools/test-gen-pack.mjs` pins that: with the lab's uids every JSON in this directory is the
-compiler's board, byte for byte apart from the added tags.
+compiler's board, the same object apart from the added tags.

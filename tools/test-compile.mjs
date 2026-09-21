@@ -142,6 +142,32 @@ function check(file) {
     }
   }
 
+  // ---------- one engine: the unified board, the id-less default, opts forwarding ----------
+  if (file.id === 'payment-service') {
+    const cat = compileCatalog(canonical);
+    const dg = (cat.groups || []).find(g => g.id === 'dashboards');
+    const uni = dg?.items.find(i => i.id === 'dash:payment-service-unified');
+    assert(!!uni && uni.generated === true && uni.dashboardId === 'payment-service-unified',
+           'the catalog lists the generated unified board, flagged generated', uni);
+    assert(dg && dg.items[1] === uni, 'the unified board comes right after the bundle item');
+    const bundle = compileArtifact(canonical, { group: 'dashboards', flavor: 'grafana', artifact: 'all' });
+    assert(bundle.content.startsWith('/* === payment-service-unified === */'), 'the bundle starts with the unified board');
+    // A pack that declares no dashboards[]: the id-less target compiles the unified board (it used to throw).
+    const bare = parseYaml(readFileSync(resolve(ROOT, 'tools/fixtures/compile/policy-shapes.pack.yaml'), 'utf8'));
+    const out0 = compile(bare, 'grafana-dashboard');
+    assert(JSON.parse(out0.content).uid === `${bare.metadata.name}-unified` && out0.filename.endsWith(`${bare.metadata.name}-unified.json`),
+           'id-less compile() of a pack without dashboards[] yields the unified board', out0.filename);
+    // opts reach the dashboard compiler through compileArtifact: the >40-char uid cap warns, pinned uids replace the placeholder.
+    const longId = 'payment-overview-with-a-very-long-dashboard-identifier';
+    const wide = JSON.parse(JSON.stringify(canonical)); wide.spec.dashboards[0].id = longId;
+    const warnings = [];
+    const art = compileArtifact(wide, { group: 'dashboards', flavor: 'grafana', artifact: 'dash:' + longId, onWarning: (m) => warnings.push(m) });
+    assert(JSON.parse(art.content).uid.length <= 40 && warnings.some(w => w.includes('uid longer than 40')),
+           'compileArtifact forwards onWarning; the capped uid warns', warnings);
+    const pinned = compileArtifact(canonical, { group: 'dashboards', flavor: 'grafana', artifact: 'dash:payment-overview', datasourceUids: { prometheus: 'prom' } });
+    assert(pinned.content.includes('"uid": "prom"') && !pinned.content.includes('${DS_PROMETHEUS}'), 'compileArtifact forwards datasourceUids');
+  }
+
   // ---------- dispatcher ----------
   const out = compile(canonical, 'prometheus-rules');
   assert(out.target === 'prometheus-rules', 'dispatcher echoes target');
