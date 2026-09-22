@@ -215,7 +215,7 @@ test('routes and validation off: absent sections, the rubric says what is missin
   assert.ok(failingMust(noSlos.canonical).includes('L1.MUST.availability_slo'));
 });
 
-test('SLI selection: a subset, an unknown id, an SLI above the tier', () => {
+test('SLI selection: a subset, an unknown id, an SLI above the tier is excluded and reported', () => {
   const sub = build(byId.prometheus, 'tier-2', { toggles: { slis: ['scrape_success_ratio', 'query_latency_p99'] } });
   assert.deepEqual(sub.canonical.spec.slis.map(s => s.id), ['scrape_success_ratio', 'query_latency_p99']);
   assert.deepEqual(validateCanonical(sub.canonical, SCHEMA), []);
@@ -225,7 +225,15 @@ test('SLI selection: a subset, an unknown id, an SLI above the tier', () => {
   assert.ok(sub.canonical.spec.dashboards.some(d => d.id === 'prometheus-query-engine'));
   assert.ok(!sub.canonical.spec.dashboards.some(d => d.id === 'prometheus-tsdb-health'));
   assert.throws(() => build(byId.prometheus, 'tier-3', { toggles: { slis: ['nope'] } }), /unknown SLI nope/);
-  assert.throws(() => build(byId.prometheus, 'tier-3', { toggles: { slis: ['wal_corruption_freshness'] } }), /needs a higher tier/);
+  // the tier dropped after the SLIs were ticked: the tier-1 SLI is excluded, the rest builds, the warning says which
+  const above = build(byId.prometheus, 'tier-3', { toggles: { slis: ['scrape_success_ratio', 'wal_corruption_freshness'] } });
+  assert.deepEqual(above.canonical.spec.slis.map(s => s.id), ['scrape_success_ratio']);
+  assert.equal(above.canonical.metadata.annotations['library.slis'], 'scrape_success_ratio');
+  assert.deepEqual(above.warnings.filter(w => w.kind === 'sli-excluded').map(w => w.sli), ['wal_corruption_freshness']);
+  assert.match(above.warnings.find(w => w.kind === 'sli-excluded').message, /needs tier-1 and the pack is tier-3: excluded/);
+  assert.deepEqual(validateCanonical(above.canonical, SCHEMA), []);
+  // nothing left after the exclusion is the one fatal case
+  assert.throws(() => build(byId.prometheus, 'tier-3', { toggles: { slis: ['wal_corruption_freshness'] } }), /at least one SLI must stay selected \(wal_corruption_freshness: above tier-3\)/);
   assert.throws(() => build(byId.prometheus, 'tier-3', { toggles: { slis: [] } }), /at least one SLI/);
   assert.throws(() => instantiatePack(byId.kafka, { name: 'x', tier: 'tier-4' }), /unknown tier/);
   assert.throws(() => instantiatePack(byId.kafka, { tier: 'tier-3' }), /service name/);
@@ -372,6 +380,10 @@ test('packc init builds a pack: YAML on stdout, todos on stderr, exit 0; a secti
   assert.equal(grammar.status, 1, 'an SLI that does not parse once the values are in is an invalid pack');
   assert.match(grammar.stderr, /warning \[promql\]: SLI \S+ is not valid PromQL after parameter substitution/);
   assert.match(grammar.stderr, /^promql: \d+ SLI expression\(s\) do not parse/m);
+  const above = cli('--entry', 'prometheus', '--tier', 'tier-3', '--name', 'prom', '--slis', 'scrape_success_ratio,wal_corruption_freshness');
+  assert.equal(above.status, 0, above.stderr);
+  assert.match(above.stderr, /warning \[sli-excluded\]: SLI wal_corruption_freshness needs tier-1 and the pack is tier-3/);
+  assert.match(above.stderr, /1 SLI\(s\)/);
   const json = cli('--entry', 'http-service', '--tier', 'tier-3', '--name', 'checkout-api', '--json', '--param', 'health_url=https://checkout.example.internal/health');
   assert.equal(json.status, 0, json.stderr);
   const payload = JSON.parse(json.stdout);

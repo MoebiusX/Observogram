@@ -162,10 +162,13 @@ constants: LIBRARY_FORMAT ('v1'), TIERS, ENTRY_KINDS, EVIDENCE_STATUSES, SLI_TYP
            BURN_PROFILES, SCAFFOLD_PARAMS, SEMCONV_VERSION
 ```
 
-`instantiatePack` throws on a usage error (unknown tier, an SLI above the tier, an
-unknown SLI, no entry, a param key that is not a parameter of the instantiation, a
-param value that is not a string, number or boolean) and never on an entry that
-validates. A mistyped param is never dropped silently: the error lists the known keys.
+`instantiatePack` throws on a usage error (unknown tier, an unknown SLI, no entry, a
+param key that is not a parameter of the instantiation, a param value that is not a
+string, number or boolean) and never on an entry that validates. A mistyped param is
+never dropped silently: the error lists the known keys. A selected SLI whose `minTier`
+the tier does not reach is **excluded, not fatal**: it comes back as a `warnings` entry
+of kind `sli-excluded` and the rest of the selection builds (the tier changes after the
+SLIs were ticked, SELECT then GENERATE); only a selection with nothing left throws.
 
 **Params and PromQL.** A param value is spliced verbatim into label matchers, scrape
 targets and endpoints, so a string carrying a double quote, a backslash or a control

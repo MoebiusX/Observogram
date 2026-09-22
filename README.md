@@ -349,7 +349,8 @@ schema: valid (spec v1.2)
 ```
 
 The pack goes to stdout or `--out`; the todo list and the conformance line go to
-stderr. `--slis a,b` keeps a subset of the tier's SLIs; `--no-dashboards`,
+stderr. `--slis a,b` keeps a subset of the tier's SLIs (an id above the tier is dropped
+with a `warning [sli-excluded]`); `--no-dashboards`,
 `--no-policy`, `--no-routes`, `--no-validation`, `--no-slos` leave that section out
 (the schema and the rubric then both say what is missing, exit `1`); `--entry
 kafka,http-service` composes several entries into one pack; `--json` returns

@@ -832,7 +832,8 @@ function clausesFor(symbol, canonical, tier) {
  *   → { canonical, todos: [{ path, fields, what, clause, clauses, params }], provenance,
  *       warnings: [{ kind, message, sli?, field? }] }
  *   (one todo per parked artefact; `fields` lists its placeholder fields; SLO ids are sloIdFor(sliId, objective);
- *   `promql` is the PromQL parser used on every resolved SLI expression — a `promql` warning per failure)
+ *   `promql` is the PromQL parser used on every resolved SLI expression — a `promql` warning per failure;
+ *   a selected SLI above the tier is dropped with an `sli-excluded` warning, an unknown one throws)
  *
  * Several entries compose into one pack (a service that runs on Kafka AND
  * exposes HTTP): SLI, view, board, probe and chaos ids are prefixed with the
@@ -860,11 +861,17 @@ export function instantiatePack(entryOrEntries, opts = {}) {
   for (const k of SECTION_TOGGLES) toggles[k] = toggles[k] !== false;
   const requested = Array.isArray(opts.toggles?.slis) ? opts.toggles.slis : (Array.isArray(opts.slis) ? opts.slis : null);
   const selected = new Set(requested || defaults.slis);
-  for (const id of selected) if (!defaults.slis.includes(id)) {
-    const known = entries.flatMap(en => (en.slis || []).map(s => (prefixed ? `${metricPrefix(en.id)}_${s.id}` : s.id)));
-    throw new Error(known.includes(id) ? `SLI ${id} needs a higher tier than ${tier}` : `unknown SLI ${id} (known: ${known.join(', ')})`);
+  // An SLI the tier does not reach is excluded and reported, never fatal: the tier changes after the
+  // SLIs were ticked (SELECT then GENERATE) and the rest of the selection must survive it.
+  const excluded = [];
+  const known = entries.flatMap(en => (en.slis || []).map(s => ({ id: prefixed ? `${metricPrefix(en.id)}_${s.id}` : s.id, minTier: s.minTier })));
+  for (const id of [...selected]) if (!defaults.slis.includes(id)) {
+    const k = known.find(x => x.id === id);
+    if (!k) throw new Error(`unknown SLI ${id} (known: ${known.map(x => x.id).join(', ')})`);
+    selected.delete(id);
+    excluded.push({ kind: 'sli-excluded', sli: id, message: `SLI ${id} needs ${k.minTier} and the pack is ${tier}: excluded (raise the tier or drop it from the selection)` });
   }
-  if (!selected.size) throw new Error('instantiatePack: at least one SLI must stay selected');
+  if (!selected.size) throw new Error(`instantiatePack: at least one SLI must stay selected${excluded.length ? ` (${excluded.map(w => w.sli).join(', ')}: above ${tier})` : ''}`);
   toggles.slis = [...selected];
 
   const fragments = entries.map(en => entryFragment(en, { tier, selectedSlis: selected, prefixed }));
@@ -873,7 +880,7 @@ export function instantiatePack(entryOrEntries, opts = {}) {
   const rows = paramTable(entries, prefixed);
   const { values, provided } = resolveParams(rows, checkParams(opts.params || {}, rows), { service, environment, tier });
   const { canonical, todos: paramTodos, used } = resolvePlaceholders(draft, { rows, values, provided });
-  const warnings = promqlWarnings(canonical, opts.promql);
+  const warnings = [...excluded, ...promqlWarnings(canonical, opts.promql)];
 
   // Merge the scaffold's own todos with the placeholder todos: ONE todo per artefact (symbol),
   // its fields listed, so `library.todo.<symbol>` is one annotation per parked artefact.
