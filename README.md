@@ -211,6 +211,7 @@ npm run test
 The whole app is one Express process, so the container story is one image:
 
 ```bash
+npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
 docker build -t observogram:0.4.0 .
 docker run --rm -p 8000:8000 observogram:0.4.0
 ```
@@ -222,6 +223,30 @@ live in [`deploy/k8s/`](deploy/k8s/README.md):
 kubectl apply -k deploy/k8s            # the studio
 kubectl apply -k deploy/k8s-journeys   # + the opt-in journeys CronJob and its workspace PVC (deploy/k8s/README.md)
 ```
+
+### Which Build Am I Running?
+
+There is no build step — the studio is served from the checkout — so the
+identity of a running Observogram is the commit it was started from, and
+one reader (`tools/lib/build-info.mjs`) answers everywhere:
+
+- the studio footer: `v0.4.0 · build 975 · 9c4f827 · develop` (hover for
+  the commit date and the source), the same label on Advanced → About;
+- `packc --version` prints that label (`--version --json` the fields);
+- `GET /api/version` returns `{ version, build, commit, branch, dirty, date,
+  source, label }` — public, `Cache-Control: no-store`, so a proxy never
+  pins an old build to a new process; `/healthz` keeps its composite
+  `build: "975.9c4f827"`.
+
+The **build number is the commit count on the branch** (`git rev-list
+--count HEAD`): it climbs with every commit, so two studios can be compared
+at a glance; the **sha** is what makes it unique (two branches can share a
+count); **dirty** means the tree had uncommitted changes when the process
+started — the code running is not exactly that commit. For a copy without
+`.git` (a tarball, a container image) run `npm run build:stamp` in the
+checkout first: it writes a git-ignored `build.json` that the reader falls
+back to (`source: file`); with neither, the answer is package.json's version
+and `build unknown` (`source: package`) — never a guess.
 
 ## Common Operations
 
@@ -490,6 +515,7 @@ be tested without a browser. The view needs no pack loaded.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/healthz` | Health and vendored spec version |
+| `GET` | `/api/version` | Which build is this: version, build (commit count), commit, branch, dirty, date, source, label — public, no-store |
 | `GET` | `/api/packs` | In-memory and catalog pack registry |
 | `GET` | `/api/examples` | Bundled example packs |
 | `GET` | `/api/references` | Curated catalogue reference packs |
