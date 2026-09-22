@@ -116,6 +116,21 @@ artefact, its placeholder fields listed), where
 `clauses` names the conformance clauses the placeholder artefact holds up, so
 VALIDATE can say "passes, on a placeholder".
 
+**A placeholder-laden pack is reported conformant.** `tools/lib/conformance.mjs` reads
+no annotations, so a pager route of `pagerduty://<svc>`, a generic pod-failure chaos
+experiment or an unwritten runbook satisfy their clauses like real ones: a kafka tier-2
+pack with its todos untouched scores `MUST 15/15` through `POST /api/validate` and
+`GET /api/packs/<id>/conformance` with no key that mentions a placeholder, and at tier-1
+10 of the 25 MUST clauses pass on one. That is exactly how a crawler stub behaves today
+(aligned on purpose: the placeholder is parked as *Scaffold*, never graded as declared and
+unverified), and only `validationSummary(canonical, todos).onPlaceholder` — what
+`packc init` prints as "N clause(s) pass on a placeholder" — tells the two apart. Slice 2
+must carry it, not rediscover it: the VALIDATE step shows a third state, *pass
+(placeholder)*, for those clauses; the register hand-off keeps the todos with the pack
+(they are already in `metadata.annotations`, so nothing is lost); `/api/validate` attaches
+`onPlaceholder` whenever `library.todo.*` annotations exist. A pack whose placeholders
+were never filled is conformant on paper and pages nobody.
+
 **Provenance**: `metadata.annotations['library.source'] = '<entry id>@<entry version>'`
 (comma-joined when composed), `library.format`, `library.tier`, `library.environment`,
 `library.toggles`, `library.slis`, `library.params` (the overrides), `library.evidence`
@@ -225,7 +240,8 @@ quote is one) — the convention of `tools/validate-pack.mjs` and `packc journey
   `loadLibrary`), `GET /api/library/:id`, `GET /api/library/requirements/:tier`,
   `POST /api/library/instantiate` (the `instantiatePack` inputs → `{ canonical, todos,
   provenance, schemaErrors, summary }`), `POST /api/library/register` (the produced pack
-  into the upload registry → a pack id for "Open in Discover"). A `BUILD_TABS`
+  into the upload registry → a pack id for "Open in Discover"; the VALIDATE step and the
+  hand-off carry `summary.onPlaceholder`, see Placeholders). A `BUILD_TABS`
   triple beside `OBSERVA_TABS` in `studio/app.mjs`, one view module per step under the
   loader / model / renderer split of docs/UI_CONVENTIONS.md (the model functions are
   this engine, already testable under `node:test`), the compile previews through the
@@ -249,3 +265,8 @@ quote is one) — the convention of `tools/validate-pack.mjs` and `packc journey
   judgement, not measured; the per-tier table in each entry is the place to argue.
 - The archetypes' semconv spellings need one live exposition (slice 3) before the
   `semconv` status can become `recorded-live`.
+- Should `evaluateConformance` itself learn the placeholder state — a clause held up only
+  by `crawler.scaffold.*` / `library.todo.*` artefacts reported as *pass (placeholder)* —
+  so the CLI, the API and the studio agree without each attaching `onPlaceholder`? Today
+  the rubric is annotation-blind by design and the distinction lives in the engine's
+  `validationSummary`; the crawler's stubs would gain the same honesty.
