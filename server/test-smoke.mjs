@@ -108,16 +108,19 @@ try {
   assert((verRes.headers.get('cache-control') || '') === 'no-store', 'GET /api/version is Cache-Control: no-store', verRes.headers.get('cache-control'), 'no-store');
   assert(/application\/json/.test(verRes.headers.get('content-type') || ''), 'GET /api/version is JSON');
   assert(ver.version === health.version, '/api/version and /healthz agree on the version', ver.version, health.version);
-  for (const k of ['version', 'build', 'commit', 'branch', 'dirty', 'date', 'source', 'label']) {
+  for (const k of ['version', 'build', 'commit', 'branch', 'dirty', 'date', 'shallow', 'source', 'label']) {
     assert(k in ver, `GET /api/version carries ${k}`);
   }
   assert(['git', 'file', 'package'].includes(ver.source), '/api/version source is git | file | package', ver.source);
-  assert(typeof ver.dirty === 'boolean', '/api/version dirty is a boolean', ver.dirty);
+  assert(typeof ver.dirty === 'boolean' && typeof ver.shallow === 'boolean', '/api/version dirty and shallow are booleans', { dirty: ver.dirty, shallow: ver.shallow });
   assert(ver.build === null || Number.isInteger(ver.build), '/api/version build is an integer or null', ver.build);
   assert(typeof ver.label === 'string' && ver.label.startsWith(`v${ver.version} · build `), '/api/version label starts with the version and the build', ver.label);
-  if (ver.source === 'git') {
+  if (ver.source === 'git' && !ver.shallow) {
     assert(Number.isInteger(ver.build) && ver.build > 0 && /^[0-9a-f]{7,}$/.test(ver.commit || ''), 'from git: build is a commit count and commit a short sha', { build: ver.build, commit: ver.commit });
     assert(health.build.startsWith(`${ver.build}.${ver.commit}`), '/healthz composite build is <build>.<sha> from the same reader', health.build, `${ver.build}.${ver.commit}`);
+  } else if (ver.source === 'git') {
+    // CI's default checkout is shallow: no count to report, the sha still is
+    assert(ver.build === null && /^[0-9a-f]{7,}$/.test(ver.commit || '') && health.build.startsWith(ver.commit), 'from a shallow clone: build null, the sha carries /healthz', { build: ver.build, commit: ver.commit, health: health.build });
   }
   const shellHtml = await getText(base, '/');
   assert(/<span id="build-label"[^>]*>v[^<]+<\/span>/.test(shellHtml), 'the served shell carries the footer build-label span with its fallback');

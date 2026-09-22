@@ -3,10 +3,11 @@
 // The footer's `<span id="build-label">` ships a fallback (package.json's
 // version, pinned by tools/test-build-info.mjs) and is filled at boot from
 // GET /api/version — public, no-store, served by server/build-info.mjs:
-// { version, build, commit, branch, dirty, date, source, label }. The text
-// becomes the label ('v0.4.0 · build 975 · 9c4f827 · develop'), the title
-// the commit date and where the answer came from ('source: git' | 'file'
-// | 'package'). When the fetch fails the fallback stays — a stale server
+// { version, build, commit, branch, dirty, date, shallow, source, label }.
+// The text becomes the label ('v0.4.0 · build 975 · 9c4f827 · develop'),
+// the title the commit date and where the answer came from ('source: git'
+// | 'file' | 'package', plus a note when the checkout is a shallow clone
+// with no history to count). When the fetch fails the fallback stays — a stale server
 // without the route answers the HTML shell, which api() reports as an
 // error, so nothing is ever painted from a guess.
 //
@@ -37,10 +38,11 @@ export function buildLabelModel(info) {
   const shortLabel = `v${version ?? '?'} · build ${build ?? 'unknown'}`;
   const source = ['git', 'file', 'package'].includes(info.source) ? info.source : 'unknown';
   const date = typeof info.date === 'string' && info.date ? info.date : null;
-  const title = `${date ?? 'commit date unknown'} · source: ${source}`;
+  const shallow = info.shallow === true;
+  const title = `${date ?? 'commit date unknown'} · source: ${source}${shallow ? ' · shallow clone: no history to count' : ''}`;
   const commit = typeof info.commit === 'string' && info.commit ? info.commit : null;
   const branch = typeof info.branch === 'string' && info.branch ? info.branch : null;
-  return { label, shortLabel, title, version, build, commit, branch, dirty: info.dirty === true, source, date };
+  return { label, shortLabel, title, version, build, commit, branch, dirty: info.dirty === true, shallow, source, date };
 }
 
 // Renderer: paints the model into the span; no fetch, no state.

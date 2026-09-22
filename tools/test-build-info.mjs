@@ -45,8 +45,8 @@ try {
   const bareInfo = readBuildInfo(bare);
   assert(bareInfo.source === 'package', 'no git, no stamp → source package', bareInfo.source, 'package');
   assert(bareInfo.version === '9.9.9', 'package source still carries package.json version', bareInfo.version, '9.9.9');
-  assert(bareInfo.build === null && bareInfo.commit === null && bareInfo.branch === null && bareInfo.date === null && bareInfo.dirty === false,
-    'package source: build/commit/branch/date null, dirty false', bareInfo);
+  assert(bareInfo.build === null && bareInfo.commit === null && bareInfo.branch === null && bareInfo.date === null && bareInfo.dirty === false && bareInfo.shallow === false,
+    'package source: build/commit/branch/date null, dirty and shallow false', bareInfo);
   assert(buildLabel(bareInfo) === 'v9.9.9 · build unknown', 'buildLabel without a build number', buildLabel(bareInfo), 'v9.9.9 · build unknown');
   assert(buildShortLabel(bareInfo) === 'v9.9.9 · build unknown', 'buildShortLabel without a build number', buildShortLabel(bareInfo));
 
@@ -77,7 +77,8 @@ try {
   const develop = { version: '0.4.0', build: 975, commit: '9c4f827', branch: 'develop', dirty: false, date: null, source: 'git' };
   assert(buildLabel(develop) === 'v0.4.0 · build 975 · 9c4f827 · develop', 'buildLabel: clean git', buildLabel(develop));
   assert(buildLabel({ ...develop, dirty: true }) === 'v0.4.0 · build 975 · 9c4f827 · develop · dirty', 'buildLabel: dirty appends', buildLabel({ ...develop, dirty: true }));
-  assert(buildLabel({ ...develop, build: null }) === 'v0.4.0 · build unknown', 'buildLabel: null build says unknown, nothing else', buildLabel({ ...develop, build: null }));
+  assert(buildLabel({ ...develop, build: null }) === 'v0.4.0 · build unknown · 9c4f827 · develop', 'buildLabel: null build says unknown, then what is known', buildLabel({ ...develop, build: null }));
+  assert(buildLabel({ ...develop, build: null, shallow: true }) === 'v0.4.0 · build unknown · 9c4f827 · develop · shallow', 'buildLabel: a shallow clone says so', buildLabel({ ...develop, build: null, shallow: true }));
   assert(buildLabel({ ...develop, branch: null }) === 'v0.4.0 · build 975 · 9c4f827', 'buildLabel: no branch, no trailing separator', buildLabel({ ...develop, branch: null }));
   assert(buildShortLabel(develop) === 'v0.4.0 · build 975', 'buildShortLabel: version + build only', buildShortLabel(develop));
   assert(/^v0\.4\.0\b/.test(buildLabel(develop)), 'the version is the first token of the label');
@@ -155,6 +156,23 @@ try {
     // the stamp is a JSON side file, never an executable
     const stampJson = execFileSync(process.execPath, [STAMP, '--root', repo, '--json'], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', windowsHide: true });
     assert(JSON.parse(stampJson).build === 3, 'stamp-build --json echoes the stamp', stampJson.trim());
+
+    // a shallow clone (CI's default checkout) has no history to count:
+    // build unknown, commit and branch known — and stamp-build refuses to
+    // bake the clone depth in as a build number
+    const shallow = join(SCRATCH, 'shallow');
+    git(SCRATCH, 'clone', '-q', '--depth', '1', `file://${repo.replace(/\\/g, '/')}`, shallow);
+    const shallowInfo = readBuildInfo(shallow);
+    assert(shallowInfo.source === 'git' && shallowInfo.shallow === true, 'a shallow clone reads source git, shallow true', shallowInfo);
+    assert(shallowInfo.build === null && shallowInfo.commit === sha && shallowInfo.branch === branch && shallowInfo.dirty === false,
+      'a shallow clone: build null (the depth is not the count), commit and branch known', shallowInfo);
+    assert(buildLabel(shallowInfo) === `v9.9.9 · build unknown · ${sha} · ${branch} · shallow`, 'buildLabel: shallow clone', buildLabel(shallowInfo));
+    writeFileSync(join(shallow, BUILD_FILE), JSON.stringify({ build: 1, commit: sha }));
+    let shallowStamp = null;
+    try { execFileSync(process.execPath, [STAMP, '--root', shallow], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }); shallowStamp = { status: 0 }; }
+    catch (e) { shallowStamp = { status: e.status, err: String(e.stderr) }; }
+    assert(shallowStamp.status === 2 && /shallow clone/.test(shallowStamp.err || '') && /fetch-depth: 0/.test(shallowStamp.err || '') && !existsSync(join(shallow, BUILD_FILE)),
+      'stamp-build refuses a shallow clone: exit 2, names the fix, removes the build.json that lay there', shallowStamp);
   }
 
   // ---- this repository ----
@@ -163,7 +181,8 @@ try {
   assert(here.version === pkg.version, 'the default root is this repo: version is package.json\'s', here.version, pkg.version);
   assert(['git', 'file', 'package'].includes(here.source), 'source is one of git | file | package', here.source);
   if (here.source === 'git') {
-    assert(Number.isInteger(here.build) && here.build > 0, 'this checkout: build is a positive integer', here.build);
+    if (here.shallow) assert(here.build === null, 'this checkout is a shallow clone: build is null, not the depth', here.build, null);
+    else assert(Number.isInteger(here.build) && here.build > 0, 'this checkout: build is a positive integer', here.build);
     assert(/^[0-9a-f]{7,}$/.test(here.commit || ''), 'this checkout: commit is a short sha', here.commit);
   }
   assert(buildInfo() === here, 'the default root is memoised too');

@@ -234,8 +234,8 @@ one reader (`server/build-info.mjs`) answers everywhere:
   the commit date and the source), the same label on Advanced → About;
 - `packc --version` prints that label (`--version --json` the fields);
 - `GET /api/version` returns `{ version, build, commit, branch, dirty, date,
-  source, label }` — public, `Cache-Control: no-store`, so a proxy never
-  pins an old build to a new process; `/healthz` keeps its composite
+  shallow, source, label }` — public, `Cache-Control: no-store`, so a proxy
+  never pins an old build to a new process; `/healthz` keeps its composite
   `build: "975.9c4f827"`.
 
 The **build number is the commit count on the branch** (`git rev-list
@@ -247,6 +247,12 @@ started — the code running is not exactly that commit. For a copy without
 checkout first: it writes a git-ignored `build.json` that the reader falls
 back to (`source: file`); with neither, the answer is package.json's version
 and `build unknown` (`source: package`) — never a guess.
+
+A **shallow clone** (`git clone --depth 1`; `actions/checkout` fetches one
+commit by default) has no history to count, so it reads `build unknown ·
+<sha> · <branch> · shallow` (`shallow: true`) rather than the clone depth,
+and `npm run build:stamp` refuses it (exit 2) until the history is there —
+`fetch-depth: 0` in the workflow, `git fetch --unshallow` locally.
 
 ## Common Operations
 
@@ -515,7 +521,7 @@ be tested without a browser. The view needs no pack loaded.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/healthz` | Health and vendored spec version |
-| `GET` | `/api/version` | Which build is this: version, build (commit count), commit, branch, dirty, date, source, label — public, no-store |
+| `GET` | `/api/version` | Which build is this: version, build (commit count), commit, branch, dirty, date, shallow, source, label — public, no-store |
 | `GET` | `/api/packs` | In-memory and catalog pack registry |
 | `GET` | `/api/examples` | Bundled example packs |
 | `GET` | `/api/references` | Curated catalogue reference packs |

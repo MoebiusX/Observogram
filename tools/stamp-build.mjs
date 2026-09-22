@@ -13,6 +13,9 @@
 // image and .dockerignore excludes it). Exit 2 when there is nothing to
 // stamp (no git, not a repo): the honest answer is then package.json's
 // "build unknown", never a stale file — so a stale build.json is removed.
+// A shallow clone (actions/checkout's default fetch-depth: 1) is refused
+// the same way: its commit count is the clone depth, which would bake
+// "build 1" into every image built from CI — fetch the history first.
 //
 //   node tools/stamp-build.mjs [--root <dir>] [--json]
 
@@ -36,6 +39,13 @@ if (info.source !== 'git') {
   } else {
     process.stderr.write(`stamp-build: nothing to stamp — no git metadata under ${ROOT} (${info.source}).\n`);
   }
+  process.exit(2);
+}
+
+if (info.shallow) {
+  const lying = existsSync(target);
+  if (lying) unlinkSync(target);
+  process.stderr.write(`stamp-build: ${ROOT} is a shallow clone — its commit count is the clone depth, not a build number, so nothing was stamped${lying ? ` (the ${BUILD_FILE} lying there was removed)` : ''}. Fetch the history first (actions/checkout: fetch-depth: 0; locally: git fetch --unshallow) and stamp again.\n`);
   process.exit(2);
 }
 

@@ -4013,6 +4013,7 @@ function openAboutModal() {
         ${row('commit', b?.commit ? [b.commit, b.branch, b.dirty ? 'dirty' : null].filter(Boolean).join(' · ') : null)}
         ${row('committed', b?.date)}
         ${row('source', b?.source && b.source !== 'unknown' ? b.source : null)}
+        ${row('history', b?.shallow ? 'shallow clone — no commit count' : null)}
         ${row('spec', v.specVersion ? `ObservabilityPack v${v.specVersion}` : null)}
         ${row('server', v.node ? `node ${v.node}` : null)}
         ${row('identity', state.identity?.mode || 'local (no sign-in)')}
