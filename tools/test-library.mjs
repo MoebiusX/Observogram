@@ -31,6 +31,7 @@ import {
   validationSummary, symbolOf, TIERS, SECTION_TOGGLES, SCAFFOLD_PARAMS, EVIDENCE_STATUSES,
 } from './lib/library.mjs';
 import { loadLibrary, findEntry } from '../server/library.mjs';
+import { parsePromqlDependencies as lezer } from './lib/promql-lezer.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const GOLDEN_DIR = resolve(ROOT, 'tools/fixtures/library');
@@ -41,7 +42,8 @@ const EXPECTED_ENTRIES = ['alertmanager', 'grafana', 'http-service', 'ibm-mq', '
 const library = loadLibrary();
 const entries = library.entries;
 const byId = Object.fromEntries(entries.map(e => [e.id, e]));
-const build = (entry, tier, extra = {}) => instantiatePack(entry, { name: `svc-${Array.isArray(entry) ? 'composed' : entry.id}`, tier, environment: 'prod', ...extra });
+// Every build in this suite runs the Lezer grammar over the resolved SLI expressions (what packc init does).
+const build = (entry, tier, extra = {}) => instantiatePack(entry, { name: `svc-${Array.isArray(entry) ? 'composed' : entry.id}`, tier, environment: 'prod', promql: lezer, ...extra });
 const failingMust = (canonical) => evaluateConformance(canonical).clauses.filter(c => c.applies && c.severity === 'MUST' && !c.pass).map(c => c.id).sort();
 
 test('the library loads: ten entries, no errors', () => {
@@ -117,11 +119,12 @@ test('defaultToggles: every section on, the SLIs the tier reaches', () => {
 // ---------------------------------------------------------------------------
 for (const entry of entries) for (const tier of TIERS) {
   test(`${entry.id} @ ${tier}: validates, compiles on every target, boards bind, conformance holds, provenance and todos agree`, () => {
-    const { canonical, todos, provenance } = build(entry, tier);
+    const { canonical, todos, provenance, warnings } = build(entry, tier);
     const id = `${entry.id}@${tier}`;
 
-    // schema
+    // schema, and every SLI expression parses under the Lezer grammar with the defaults in
     assert.deepEqual(validateCanonical(canonical, SCHEMA), [], `${id} schema`);
+    assert.deepEqual(warnings.filter(w => w.kind === 'promql'), [], `${id}: every resolved SLI expression is valid PromQL`);
     assert.equal(canonical.metadata.bindings.criticality, tier);
     assert.ok(canonical.spec.slis.length >= 1 && canonical.spec.slos.length === canonical.spec.slis.length, `${id} one SLO per SLI`);
 
@@ -260,6 +263,21 @@ test('params: an unknown key or a non-scalar value is an error, never a silent d
   assert.throws(() => instantiatePack([byId.kafka, byId['http-service']], { name: 'orders', tier: 'tier-3', params: { 'http-service.broker_job': 'b' } }), /unknown param http-service\.broker_job/);
 });
 
+test('params: a value cannot break the PromQL it is spliced into', () => {
+  // the characters that end or escape a label matcher are refused at the source (the API throws, the CLI exits 2)
+  assert.throws(() => build(byId.kafka, 'tier-3', { params: { broker_job: 'brokers"}' } }), /param broker_job: a value may not contain a double quote/);
+  assert.throws(() => build(byId.kafka, 'tier-3', { params: { broker_job: 'a\\b' } }), /param broker_job: a value may not contain/);
+  assert.throws(() => build(byId.kafka, 'tier-3', { params: { broker_job: 'a\nb' } }), /param broker_job: a value may not contain/);
+  // a value that lands outside a matcher (the collector's counter-name suffix) is caught by the grammar: one `promql` warning per broken expression
+  const broken = build(byId['otel-collector'], 'tier-2', { params: { suffix: ')' } });
+  const bad = broken.warnings.filter(w => w.kind === 'promql');
+  assert.ok(bad.length >= 1, JSON.stringify(broken.warnings));
+  assert.ok(bad.every(w => w.sli && w.field && /is not valid PromQL after parameter substitution \(near /.test(w.message)), JSON.stringify(bad));
+  assert.deepEqual(build(byId['otel-collector'], 'tier-2', { params: { suffix: '_total' } }).warnings.filter(w => w.kind === 'promql'), [], 'the documented value parses');
+  // without a parser the engine cannot check the grammar and says nothing about it (the browser-safe default)
+  assert.deepEqual(instantiatePack(byId['otel-collector'], { name: 'col', tier: 'tier-2', params: { suffix: ')' } }).warnings.filter(w => w.kind === 'promql'), []);
+});
+
 test('symbolOf maps pack paths to the adapter\'s artefact ids', () => {
   const root = { spec: { validation: { synthetic_checks: [{ id: 'probe' }] }, telemetry: { backends: [{ id: 'metrics-prom' }] } } };
   assert.deepEqual(symbolOf(['spec', 'alerting', 'routes', 0, 'channels', 1, 'voice'], root), { symbol: 'alerting.routes[0]', field: 'channels.1.voice' });
@@ -347,10 +365,18 @@ test('packc init builds a pack: YAML on stdout, todos on stderr, exit 0; a secti
   const typo = cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--param', 'pager_servce=pagerduty://x', '--param', 'nope=1');
   assert.equal(typo.status, 2, 'a mistyped --param key is a usage error');
   assert.match(typo.stderr, /unknown param pager_servce, nope \(known: /);
+  const quoted = cli('--entry', 'kafka', '--tier', 'tier-3', '--name', 'orders', '--param', 'broker_job=brokers"}');
+  assert.equal(quoted.status, 2, 'a quote in a --param value is a usage error');
+  assert.match(quoted.stderr, /param broker_job: a value may not contain a double quote/);
+  const grammar = cli('--entry', 'otel-collector', '--tier', 'tier-2', '--name', 'col', '--param', 'suffix=)');
+  assert.equal(grammar.status, 1, 'an SLI that does not parse once the values are in is an invalid pack');
+  assert.match(grammar.stderr, /warning \[promql\]: SLI \S+ is not valid PromQL after parameter substitution/);
+  assert.match(grammar.stderr, /^promql: \d+ SLI expression\(s\) do not parse/m);
   const json = cli('--entry', 'http-service', '--tier', 'tier-3', '--name', 'checkout-api', '--json', '--param', 'health_url=https://checkout.example.internal/health');
   assert.equal(json.status, 0, json.stderr);
   const payload = JSON.parse(json.stdout);
   assert.deepEqual(payload.schemaErrors, []);
+  assert.deepEqual(payload.warnings.filter(w => w.kind === 'promql'), []);
   assert.equal(payload.summary.must.passed, 9);
   assert.ok(!payload.todos.some(t => t.params.includes('health_url')));
 });

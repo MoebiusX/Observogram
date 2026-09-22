@@ -353,8 +353,10 @@ stderr. `--slis a,b` keeps a subset of the tier's SLIs; `--no-dashboards`,
 `--no-policy`, `--no-routes`, `--no-validation`, `--no-slos` leave that section out
 (the schema and the rubric then both say what is missing, exit `1`); `--entry
 kafka,http-service` composes several entries into one pack; `--json` returns
-`{ canonical, todos, provenance, schemaErrors, summary }`. Exit codes: `0` ok,
-`1` the pack does not validate, `2` usage error. Every produced pack carries
+`{ canonical, todos, provenance, warnings, schemaErrors, summary }`. Exit codes: `0` ok,
+`1` the pack does not validate (the schema, or an SLI that no longer parses once the
+`--param` values are in), `2` usage error (an unknown `--param` key, a value carrying a
+quote). Every produced pack carries
 `metadata.annotations["library.source"] = "<entry>@<version>"` and one
 `library.todo.<artefact>` per placeholder, which the studio parks as *Scaffold* the
 way it parks a crawler stub. `npm run test:library` proves every entry at every

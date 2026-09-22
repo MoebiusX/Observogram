@@ -147,10 +147,11 @@ libraryIndex(entries)                           → [{ id, kind, title, product,
 tierRequirements(tier)                          → the conformance clauses that apply at the tier
                                                   ({ id, dimension, severity, minTier, description, specRef })
 defaultToggles(entryOrEntries, tier)            → { slis: [ids], slos, policy, routes, dashboards, validation }
-instantiatePack(entryOrEntries, { name, tier, environment, owners, params, toggles })
+instantiatePack(entryOrEntries, { name, tier, environment, owners, params, toggles, promql })
                                                 → { canonical, todos: [{ path, fields, what, clause, clauses, params }],
                                                     provenance: { entry, version, entries, source, tier, environment,
-                                                                  toggles, params, placeholders }, warnings }
+                                                                  toggles, params, placeholders },
+                                                    warnings: [{ kind, message, sli?, field? }] }
 tierScaffold({ tier, service, environment, owners, fragments, toggles })
                                                 → { canonical (with ${param} placeholders), todos }   (the one scaffold)
 validationSummary(canonical, todos)             → { tier, conformant, must, should, passing[], onPlaceholder[], failing[] }
@@ -164,7 +165,19 @@ constants: LIBRARY_FORMAT ('v1'), TIERS, ENTRY_KINDS, EVIDENCE_STATUSES, SLI_TYP
 `instantiatePack` throws on a usage error (unknown tier, an SLI above the tier, an
 unknown SLI, no entry, a param key that is not a parameter of the instantiation, a
 param value that is not a string, number or boolean) and never on an entry that
-validates. A mistyped param is never dropped silently: the error lists the known keys. Several entries compose
+validates. A mistyped param is never dropped silently: the error lists the known keys.
+
+**Params and PromQL.** A param value is spliced verbatim into label matchers, scrape
+targets and endpoints, so a string carrying a double quote, a backslash or a control
+character is refused (a usage error; `--param 'broker_job=brokers"}'` once produced
+`up{job="brokers"}"} == bool 1` in a pack that validated and passed every MUST). Every
+resolved SLI expression is then parsed with the parser given as `promql`: `packc init`
+passes the Lezer grammar (`tools/lib/promql-lezer.mjs`, an npm import, Node-only) and a
+failure is a `warnings` entry of kind `promql`, which makes the CLI exit 1. The
+browser-safe core (`tools/lib/promql.mjs`) extracts dependencies and reports no grammar
+error, so a caller with no parser gets no `promql` warning: the studio (slice 2) runs the
+instantiation through the API, where Node passes the grammar. `warnings` is what GENERATE
+shows beside the todos. Several entries compose
 into one pack: ids are prefixed with the entry id (`kafka_broker_availability`,
 `http-service-…` boards), entry params are addressed as `<entry>.<param>` (a bare
 `<param>` reaches every entry that declares it), the scaffold sections are shared.
@@ -184,10 +197,11 @@ packc init --entry <id>[,<id>] --tier tier-2 --name <svc> [--env <env>] [--owner
            [--out <file>] [--json] [--library <dir>]
 ```
 
-YAML to stdout (or `--out`), the todo list and the conformance line to stderr; exit
-`0` ok, `1` the produced pack does not validate against the v1.2 schema (a section
-toggled off) or an entry fails validation, `2` usage error — the convention of
-`tools/validate-pack.mjs` and `packc journey`.
+YAML to stdout (or `--out`), the todo list, the warnings and the conformance line to
+stderr; exit `0` ok, `1` the produced pack does not validate against the v1.2 schema (a
+section toggled off), an SLI is not valid PromQL once the `--param` values are in, or an
+entry fails validation, `2` usage error (an unknown `--param` key or a value carrying a
+quote is one) — the convention of `tools/validate-pack.mjs` and `packc journey`.
 
 ## What the next slices add
 

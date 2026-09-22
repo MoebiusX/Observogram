@@ -47,7 +47,9 @@
 //
 // PURE and browser-safe (served at /lib to the studio in slice 2): no
 // node:* imports, no process.env, no filesystem. server/library.mjs reads
-// the entries from disk and hands them here.
+// the entries from disk and hands them here, and the PromQL grammar check
+// is a parser handed in (opts.promql: the Lezer wrapper in Node) for the
+// same reason.
 
 import { parse as parseYaml } from './mini-yaml.mjs';
 import { RUBRIC, TIER_RANK, evaluateConformance } from './conformance.mjs';
@@ -110,6 +112,8 @@ export const SCAFFOLD_PARAMS = Object.freeze([
 const BUILTIN_PARAMS = ['service', 'environment', 'tier'];
 /** The compiler's policy records are `<service>:errorbudget:burn_<w>`; an SLI of that id would write the same series (tools/lib/sli-inference.mjs reserves it). */
 const POLICY_SEGMENT = 'errorbudget';
+/** A param value is spliced verbatim into label matchers (`job="${x}"`), targets and endpoints: a quote or a backslash ends or escapes the matcher, a control character (newline, tab, DEL) breaks the line. */
+const forbiddenInParam = (v) => [...String(v)].some(ch => ch === '"' || ch === '\\' || ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f);
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -397,8 +401,29 @@ function checkParams(userParams, rows) {
   if (unknown.length) throw new Error(`unknown param ${unknown.join(', ')} (known: ${known.sort().join(', ')})`);
   for (const [k, v] of Object.entries(userParams)) {
     if (!['string', 'number', 'boolean'].includes(typeof v)) throw new Error(`param ${k}: expected a string, number or boolean, got ${v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v}`);
+    if (typeof v === 'string' && forbiddenInParam(v)) throw new Error(`param ${k}: a value may not contain a double quote, a backslash or a control character (it is spliced verbatim into PromQL label matchers, scrape targets and endpoints)`);
   }
   return userParams;
+}
+
+/**
+ * Every SLI expression, with the params in, must still be PromQL. The parser is an input: packc
+ * init passes the Lezer grammar (tools/lib/promql-lezer.mjs, an npm import and so not for the
+ * browser); the browser-safe core in tools/lib/promql.mjs extracts dependencies and reports no
+ * grammar error, so without a parser no `promql` warning can arise and the caller has to run the
+ * check where Node is. A `promql` warning means the pack must not ship as it is.
+ */
+function promqlWarnings(canonical, promql) {
+  if (typeof promql !== 'function') return [];
+  const out = [];
+  for (const s of canonical.spec.slis) for (const field of ['good', 'total', 'query']) {
+    if (typeof s[field] !== 'string') continue;
+    const parsed = promql(s[field]);
+    if (!parsed || parsed.parseOk !== false) continue;
+    const where = (parsed.errors || []).map(e => (e && e.text ? `near ${JSON.stringify(e.text)}` : String(e?.message || e))).join(', ');
+    out.push({ kind: 'promql', sli: s.id, field, message: `SLI ${s.id}.${field} is not valid PromQL after parameter substitution (${where}): ${s[field].replace(/\s+/g, ' ')}` });
+  }
+  return out;
 }
 
 /** Effective parameter values: user value (by key, or bare id for an entry param) else the default with the built-ins applied. */
@@ -803,9 +828,11 @@ function clausesFor(symbol, canonical, tier) {
 }
 
 /**
- * instantiatePack(entry | entries, { name, tier, environment, owners, params, toggles })
- *   → { canonical, todos: [{ path, fields, what, clause, clauses, params }], provenance, warnings }
- *   (one todo per parked artefact; `fields` lists its placeholder fields; SLO ids are sloIdFor(sliId, objective))
+ * instantiatePack(entry | entries, { name, tier, environment, owners, params, toggles, promql })
+ *   → { canonical, todos: [{ path, fields, what, clause, clauses, params }], provenance,
+ *       warnings: [{ kind, message, sli?, field? }] }
+ *   (one todo per parked artefact; `fields` lists its placeholder fields; SLO ids are sloIdFor(sliId, objective);
+ *   `promql` is the PromQL parser used on every resolved SLI expression — a `promql` warning per failure)
  *
  * Several entries compose into one pack (a service that runs on Kafka AND
  * exposes HTTP): SLI, view, board, probe and chaos ids are prefixed with the
@@ -846,6 +873,7 @@ export function instantiatePack(entryOrEntries, opts = {}) {
   const rows = paramTable(entries, prefixed);
   const { values, provided } = resolveParams(rows, checkParams(opts.params || {}, rows), { service, environment, tier });
   const { canonical, todos: paramTodos, used } = resolvePlaceholders(draft, { rows, values, provided });
+  const warnings = promqlWarnings(canonical, opts.promql);
 
   // Merge the scaffold's own todos with the placeholder todos: ONE todo per artefact (symbol),
   // its fields listed, so `library.todo.<symbol>` is one annotation per parked artefact.
@@ -886,7 +914,7 @@ export function instantiatePack(entryOrEntries, opts = {}) {
     params: Object.fromEntries(rows.map(r => [r.key, values[r.key]])),
     placeholders: used,   // the placeholder params that landed in the pack at their default (each is a todo)
   };
-  return { canonical, todos, provenance, warnings: [] };
+  return { canonical, todos, provenance, warnings };
 }
 
 /**

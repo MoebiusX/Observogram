@@ -12,7 +12,9 @@
  * The pack (YAML) goes to stdout or --out; the todo list and the validation summary go to
  * stderr, so `packc init … > pack.yaml` yields a clean file. Exit codes follow the repo's
  * tools (tools/validate-pack.mjs, packc journey): 0 ok · 1 the produced pack does not
- * validate against the v1.2 schema, or an entry fails validateLibraryEntry · 2 usage error.
+ * validate against the v1.2 schema, an SLI is not valid PromQL once the --param values are in
+ * (the Lezer grammar, tools/lib/promql-lezer.mjs), or an entry fails validateLibraryEntry ·
+ * 2 usage error (a --param value carrying a quote, a backslash or a control character is one).
  *
  * Node-only: reads the library from disk through server/library.mjs; every decision is in
  * tools/lib/library.mjs (pure).
@@ -25,6 +27,7 @@ import { emit as emitYaml } from './lib/mini-yaml.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
 import { instantiatePack, libraryIndex, validationSummary, TIERS, SECTION_TOGGLES, SCAFFOLD_PARAMS } from './lib/library.mjs';
 import { loadLibrary, findEntry } from '../server/library.mjs';
+import { parsePromqlDependencies as parsePromql } from './lib/promql-lezer.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -156,16 +159,16 @@ function main() {
   if (o.slis) toggles.slis = o.slis;
   let result;
   try {
-    result = instantiatePack(entries, { name: o.name, tier: o.tier, environment: o.env, owners: o.owners, params: o.params, toggles });
+    result = instantiatePack(entries, { name: o.name, tier: o.tier, environment: o.env, owners: o.owners, params: o.params, toggles, promql: parsePromql });
   } catch (e) {
     usageError(e.message);
   }
-  const { canonical, todos, provenance } = result;
+  const { canonical, todos, provenance, warnings } = result;
   const schemaErrors = validateCanonical(canonical, SCHEMA);
   const summary = validationSummary(canonical, todos);
 
   if (o.json) {
-    const payload = JSON.stringify({ canonical, todos, provenance, schemaErrors, summary }, null, 2) + '\n';
+    const payload = JSON.stringify({ canonical, todos, provenance, warnings, schemaErrors, summary }, null, 2) + '\n';
     if (o.out) writeFileSync(resolve(process.cwd(), o.out), payload); else process.stdout.write(payload);
   } else {
     const yaml = `# ObservabilityPack ${canonical.metadata.name} — built by packc init from ${provenance.source} at ${provenance.tier}\n# Todos: ${todos.length} (metadata.annotations library.todo.*). Spec v${SPEC_VERSION}.\n` + emitYaml(canonical);
@@ -180,13 +183,14 @@ function main() {
     err(`todos (${todos.length}) — placeholders only the team can fill:`);
     for (const t of todos) err(`  - ${t.path}: ${t.what}${t.clauses.length ? `  [${t.clauses.join(', ')}]` : ''}`);
   }
+  for (const w of warnings) err(`warning [${w.kind}]: ${w.message}`);
+  const broken = warnings.filter(w => w.kind === 'promql');
   if (schemaErrors.length) {
     err(`schema: the produced pack does not validate against spec v${SPEC_VERSION} (${schemaErrors.length}):`);
     for (const s of schemaErrors) err(`  ${s}`);
-    process.exit(1);
-  }
-  err(`schema: valid (spec v${SPEC_VERSION})`);
-  process.exit(0);
+  } else err(`schema: valid (spec v${SPEC_VERSION})`);
+  if (broken.length) err(`promql: ${broken.length} SLI expression(s) do not parse once the --param values are in (above)`);
+  process.exit(schemaErrors.length || broken.length ? 1 : 0);
 }
 
 main();
