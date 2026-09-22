@@ -420,6 +420,10 @@
         "maxVizHeight": 26,
         "legend": {
           "showLegend": false
+        },
+        "text": {
+          "titleSize": 16,
+          "valueSize": 28
         }
       }
     },

@@ -120,11 +120,11 @@ export function gauge(title, expr, { desc, unit = 'percent', min = 0, max = 100,
   });
 }
 /** Horizontal bars, one per series: how close each item is to its limit. */
-export function bargauge(title, expr, { binds, desc, legend = '__auto', unit = 'none', min = 0, max, decimals, thresholds, overrides = [], w = 12, h = 8 } = {}) {
+export function bargauge(title, expr, { binds, desc, legend = '__auto', unit = 'none', min = 0, max, decimals, thresholds, overrides = [], w = 12, h = 8, text } = {}) {
   return base('bargauge', title, { binds, desc, w, h }, {
     targets: [{ refId: 'A', expr, instant: true, legendFormat: legend }],
     fieldConfig: { defaults: { unit, min, max, decimals, color: { mode: 'thresholds' }, thresholds: { mode: 'absolute', steps: thresholds || neutral } }, overrides },
-    options: { reduceOptions: { calcs: ['lastNotNull'], fields: '', values: false }, orientation: 'horizontal', displayMode: 'gradient', valueMode: 'color', namePlacement: 'left', showUnfilled: true, sizing: 'auto', minVizWidth: 8, minVizHeight: 14, maxVizHeight: 26, legend: { showLegend: false } },
+    options: { reduceOptions: { calcs: ['lastNotNull'], fields: '', values: false }, orientation: 'horizontal', displayMode: 'gradient', valueMode: 'color', namePlacement: 'left', showUnfilled: true, sizing: 'auto', minVizWidth: 8, minVizHeight: 14, maxVizHeight: 26, legend: { showLegend: false }, ...(text ? { text } : {}) },
   });
 }
 /**
@@ -281,6 +281,10 @@ export const burnBars = (binds, w = 12, h = 8, sloIds) => {
   const slos = subset ? named : all;
   return bargauge('Error-budget burn · last hour', `${c.svc}:errorbudget:burn_1h${subset ? `{slo=~"${slos.map(s => s.id).join('|')}"}` : ''}`, {
     binds, legend: '{{slo}}', decimals: 1, min: 0, max: 20, w, h,
+    // Grafana scales a bar gauge's name and value with the panel height: two or three bars in an
+    // 8-high panel came out as 60 px truncated names (measured on grafana-plugins-and-auth), so a
+    // gauge with few bars pins its text; a full column of eight sizes itself sensibly.
+    text: slos.length <= 3 ? { titleSize: 16, valueSize: 28 } : undefined,
     desc: '1 h error-budget burn rate per SLO: 1× consumes the budget exactly over the SLO window; amber at the smallest factor that alerts for that SLO, red at the largest (spec.policy).',
     overrides: slos.map(s => { const { warn, bad } = burnFactors(s.id); return byName(s.id, { displayName: c.sloLabel[s.id], thresholds: { mode: 'absolute', steps: okAbove(warn, bad) } }); }),
   });
