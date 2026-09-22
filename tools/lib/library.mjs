@@ -784,7 +784,8 @@ function clausesFor(symbol, canonical, tier) {
 
 /**
  * instantiatePack(entry | entries, { name, tier, environment, owners, params, toggles })
- *   → { canonical, todos: [{ path, field, what, clause, clauses, params }], provenance, warnings }
+ *   → { canonical, todos: [{ path, fields, what, clause, clauses, params }], provenance, warnings }
+ *   (one todo per parked artefact; `fields` lists its placeholder fields; SLO ids are sloIdFor(sliId, objective))
  *
  * Several entries compose into one pack (a service that runs on Kafka AND
  * exposes HTTP): SLI, view, board, probe and chaos ids are prefixed with the

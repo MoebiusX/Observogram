@@ -155,7 +155,10 @@ tierScaffold({ tier, service, environment, owners, fragments, toggles })
                                                 → { canonical (with ${param} placeholders), todos }   (the one scaffold)
 validationSummary(canonical, todos)             → { tier, conformant, must, should, passing[], onPlaceholder[], failing[] }
 symbolOf(path, root)                            → { symbol, field }   (the adapter's artefact id for a pack path)
-constants: TIERS, ENTRY_KINDS, EVIDENCE_STATUSES, SECTION_TOGGLES, BURN_PROFILES, SCAFFOLD_PARAMS, SEMCONV_VERSION
+sloIdFor(sliId, objective)                      → '<sli>_<pct>'        (broker_availability, 0.999 → broker_availability_99_9:
+                                                                        the SLO id of an SLI, derived here, never re-implemented)
+constants: LIBRARY_FORMAT ('v1'), TIERS, ENTRY_KINDS, EVIDENCE_STATUSES, SLI_TYPES, SLO_WINDOWS, SECTION_TOGGLES,
+           BURN_PROFILES, SCAFFOLD_PARAMS, SEMCONV_VERSION
 ```
 
 `instantiatePack` throws on a usage error (unknown tier, an SLI above the tier, an
