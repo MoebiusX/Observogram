@@ -6,7 +6,9 @@
 // library index (GET /api/library), the tier's clauses (GET
 // /api/library/requirements/:tier), the last instantiate response — and
 // returns plain data for the step renderers. No state reads, no fetches, no
-// DOM: the model layer is the testable layer (docs/UI_CONVENTIONS.md §2).
+// DOM: this is the layer tools/test-build-model.mjs exercises under
+// node:test, against a real instantiate response captured once from the
+// running server (tools/fixtures/build/). docs/UI_CONVENTIONS.md §2.
 //
 // Nothing here re-implements the engine: the tier's clauses are the rubric
 // the API returns, an SLI's reachability is its minTier against the tier

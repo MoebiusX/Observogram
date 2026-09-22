@@ -133,6 +133,29 @@ try {
   });
   assert(r.status !== 401 && r.status !== 403, 'bearer token still works alongside identity', r.status, 'not 401/403');
 
+  // ---- the BUILD journey routes carry the same posture as /api/validate ----
+  r = await fetch(`${base}/api/library`);
+  j = await r.json();
+  assert(r.status === 401 && j.login === '/auth/login', 'GET /api/library requires sign-in in identity mode', r.status, 401);
+  r = await fetch(`${base}/api/library/requirements/tier-2`);
+  assert(r.status === 401, 'GET /api/library/requirements/:tier requires sign-in in identity mode', r.status, 401);
+  r = await fetch(`${base}/api/library/instantiate`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ entries: ['kafka'], name: 'orders', tier: 'tier-3' }),
+  });
+  assert(r.status === 401, 'POST /api/library/instantiate without a session → 401', r.status, 401);
+  r = await fetch(`${base}/api/library/instantiate`, {
+    method: 'POST', headers: { Cookie: session, 'Content-Type': 'application/json' }, body: JSON.stringify({ entries: ['kafka'], name: 'orders', tier: 'tier-3' }),
+  });
+  assert(r.status === 403, 'session POST /api/library/instantiate WITHOUT the CSRF header → 403', r.status, 403);
+  r = await fetch(`${base}/api/library/instantiate`, {
+    method: 'POST', headers: { Cookie: session, 'Content-Type': 'application/json', 'X-Observogram-CSRF': '1' }, body: JSON.stringify({ entries: ['kafka'], name: 'orders', tier: 'tier-3' }),
+  });
+  j = await r.json();
+  assert(r.status === 200 && j.ok === true && j.canonical?.metadata?.name === 'orders', 'session POST /api/library/instantiate WITH the CSRF header answers', r.status, 200);
+  r = await fetch(`${base}/api/library`, { headers: { Cookie: session } });
+  j = await r.json();
+  assert(r.ok && j.entries?.length === 10, 'GET /api/library answers with a session', r.status, 200);
+
   // ---- signed-in self-service password change (account menu) ----
   r = await fetch(`${base}/auth/change-password`, { headers: { Cookie: session } });
   const changePage = await r.text();
