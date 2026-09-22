@@ -149,8 +149,8 @@
       "gridPos": {
         "x": 0,
         "y": 3,
-        "w": 4,
-        "h": 4
+        "w": 6,
+        "h": 8
       },
       "description": "Fraction of WAL corruption events per total WAL operations. Healthy Prometheus instances should have ZERO WAL corruptions across any window. Non-zero values indicate disk faults. SLO 99.99 % over 30d.",
       "pack": {
@@ -221,10 +221,10 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 4,
+        "x": 6,
         "y": 3,
-        "w": 4,
-        "h": 4
+        "w": 6,
+        "h": 8
       },
       "description": "Fraction of TSDB compaction operations that succeeded. Compaction failures lead to disk bloat and eventually OOM kills if uncorrected. SLO 99.95 % over 30d.",
       "pack": {
@@ -295,7 +295,7 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 8,
+        "x": 12,
         "y": 3,
         "w": 12,
         "h": 8
@@ -309,7 +309,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "prometheus:errorbudget:burn_1h",
+          "expr": "prometheus:errorbudget:burn_1h{slo=~\"tsdb_compaction_99_95\"}",
           "instant": true,
           "legendFormat": "{{slo}}"
         }
@@ -387,6 +387,10 @@
         "maxVizHeight": 26,
         "legend": {
           "showLegend": false
+        },
+        "text": {
+          "titleSize": 16,
+          "valueSize": 28
         }
       }
     },
@@ -401,7 +405,7 @@
       "gridPos": {
         "x": 0,
         "y": 11,
-        "w": 6,
+        "w": 12,
         "h": 8
       },
       "description": "Fast window: reacts within minutes; pages when both it and the slow window exceed the factor. Hover for per-SLO values.",
@@ -578,9 +582,9 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 6,
+        "x": 12,
         "y": 11,
-        "w": 6,
+        "w": 12,
         "h": 8
       },
       "description": "Slow window: keeps burning for up to an hour after an incident by design.",

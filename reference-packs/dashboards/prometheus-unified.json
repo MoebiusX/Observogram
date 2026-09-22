@@ -2072,31 +2072,6 @@
     },
     {
       "id": 30,
-      "type": "text",
-      "title": "Golden signals prometheus",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prom"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 48,
-        "w": 24,
-        "h": 3
-      },
-      "transparent": false,
-      "options": {
-        "mode": "markdown",
-        "content": "Derived view `golden_signals_prometheus`: no metric or SLI to render.",
-        "code": {
-          "language": "plaintext",
-          "showLineNumbers": false,
-          "showMiniMap": false
-        }
-      }
-    },
-    {
-      "id": 31,
       "type": "timeseries",
       "title": "Per job scrape health",
       "datasource": {
@@ -2105,7 +2080,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 51,
+        "y": 48,
         "w": 12,
         "h": 7
       },
@@ -2177,7 +2152,7 @@
       }
     },
     {
-      "id": 32,
+      "id": 31,
       "type": "timeseries",
       "title": "Per rule eval failures",
       "datasource": {
@@ -2186,7 +2161,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 51,
+        "y": 48,
         "w": 12,
         "h": 7
       },
@@ -2254,6 +2229,31 @@
         "tooltip": {
           "mode": "multi",
           "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 32,
+      "type": "text",
+      "title": "Golden signals prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 55,
+        "w": 24,
+        "h": 3
+      },
+      "transparent": false,
+      "options": {
+        "mode": "markdown",
+        "content": "Derived view `golden_signals_prometheus`: no metric or SLI to render.",
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
         }
       }
     },

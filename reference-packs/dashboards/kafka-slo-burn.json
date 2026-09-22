@@ -133,7 +133,7 @@
       "gridPos": {
         "x": 0,
         "y": 2,
-        "w": 4,
+        "w": 5,
         "h": 4
       },
       "description": "1 h burn rate of Broker availability · 99.9 % (objective 0.999 over 30d).",
@@ -205,9 +205,9 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 4,
+        "x": 5,
         "y": 2,
-        "w": 4,
+        "w": 5,
         "h": 4
       },
       "description": "1 h burn rate of Partition replica health · 99.95 % (objective 0.9995 over 30d).",
@@ -279,9 +279,9 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 8,
+        "x": 10,
         "y": 2,
-        "w": 4,
+        "w": 5,
         "h": 4
       },
       "description": "1 h burn rate of Consumer group lag seconds · 99 % (objective 0.99 over 7d).",
@@ -353,9 +353,9 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 12,
+        "x": 15,
         "y": 2,
-        "w": 4,
+        "w": 5,
         "h": 4
       },
       "description": "1 h burn rate of Produce latency p99 · 99 % (objective 0.99 over 30d).",
@@ -427,7 +427,7 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 16,
+        "x": 20,
         "y": 2,
         "w": 4,
         "h": 4
@@ -510,7 +510,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "kafka:errorbudget:burn_1h",
+          "expr": "kafka:errorbudget:burn_1h{slo=~\"broker_availability_99_9|partition_health_99_95|consumer_lag_99_under_60s|produce_latency_99_p99_100ms|fetch_latency_99_p99_50ms\"}",
           "instant": true,
           "legendFormat": "{{slo}}"
         }

@@ -149,8 +149,8 @@
       "gridPos": {
         "x": 0,
         "y": 3,
-        "w": 4,
-        "h": 4
+        "w": 6,
+        "h": 8
       },
       "description": "Fraction of plugin requests (datasource and app plugins) that completed without error. Plugin failures often surface as broken panels before the plugin itself is suspected. SLO 99.9 % over 30d.",
       "pack": {
@@ -221,10 +221,10 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 4,
+        "x": 6,
         "y": 3,
-        "w": 4,
-        "h": 4
+        "w": 6,
+        "h": 8
       },
       "description": "Fraction of form logins (POST /login) answered 200 in the window, from Grafana's own HTTP request histogram; a window with no login reads no data rather than NaN (the total leg keeps only series with a positive rate). Grafana also counts logins per client in grafana_authn_authn_successful_login_total{client} and grafana_authn_authn_failed_login_total{client} (both defined at 12.4.11; the failed one has no series until a login fails): that pair would also cover OAuth / SAML clients, but a failed login was not exercised in the lab while the HTTP pair was executed end to end (see the evidence). grafana_api_login_post_total counts successes only (per pkg/api/login.go). Scope: the login page (Grafana's own password path); OAuth and SAML callbacks are not in this ratio. Sudden drops mean Grafana's login path is failing and need fast triage even if signed-in sessions still work. SLO 99.9 % over 7d.",
       "pack": {
@@ -295,7 +295,7 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 8,
+        "x": 12,
         "y": 3,
         "w": 12,
         "h": 8
@@ -310,7 +310,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "grafana:errorbudget:burn_1h",
+          "expr": "grafana:errorbudget:burn_1h{slo=~\"plugin_request_99_9|login_success_99_9\"}",
           "instant": true,
           "legendFormat": "{{slo}}"
         }
@@ -420,6 +420,10 @@
         "maxVizHeight": 26,
         "legend": {
           "showLegend": false
+        },
+        "text": {
+          "titleSize": 16,
+          "valueSize": 28
         }
       }
     },
@@ -434,7 +438,7 @@
       "gridPos": {
         "x": 0,
         "y": 11,
-        "w": 6,
+        "w": 12,
         "h": 8
       },
       "description": "Fast window: reacts within minutes; pages when both it and the slow window exceed the factor. Hover for per-SLO values.",
@@ -611,9 +615,9 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 6,
+        "x": 12,
         "y": 11,
-        "w": 6,
+        "w": 12,
         "h": 8
       },
       "description": "Slow window: keeps burning for up to an hour after an incident by design.",

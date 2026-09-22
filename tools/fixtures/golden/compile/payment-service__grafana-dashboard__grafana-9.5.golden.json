@@ -140,7 +140,7 @@
       "gridPos": {
         "x": 0,
         "y": 3,
-        "w": 4,
+        "w": 8,
         "h": 4
       },
       "description": "HTTP responses that are not 5xx, over total responses. SLO 99.9 % over 30d.",
@@ -209,9 +209,9 @@
       "title": "Api latency p99",
       "datasource": "${DS_PROMETHEUS}",
       "gridPos": {
-        "x": 4,
+        "x": 8,
         "y": 3,
-        "w": 4,
+        "w": 8,
         "h": 4
       },
       "description": "99th-percentile API latency, server-side. SLO 99 % over 30d.",
@@ -280,9 +280,9 @@
       "title": "Consumer freshness",
       "datasource": "${DS_PROMETHEUS}",
       "gridPos": {
-        "x": 8,
+        "x": 16,
         "y": 3,
-        "w": 4,
+        "w": 8,
         "h": 4
       },
       "description": "Consumer lag for the settlement topic. SLO 99 % over 30d.",
@@ -351,8 +351,8 @@
       "title": "Error-budget burn · last hour",
       "datasource": "${DS_PROMETHEUS}",
       "gridPos": {
-        "x": 12,
-        "y": 3,
+        "x": 0,
+        "y": 7,
         "w": 12,
         "h": 8
       },
@@ -365,7 +365,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "payment_service:errorbudget:burn_1h",
+          "expr": "payment_service:errorbudget:burn_1h{slo=~\"api_availability_99_9\"}",
           "instant": true,
           "legendFormat": "{{slo}}"
         }
@@ -443,6 +443,10 @@
         "maxVizHeight": 26,
         "legend": {
           "showLegend": false
+        },
+        "text": {
+          "titleSize": 16,
+          "valueSize": 28
         }
       }
     },
@@ -452,8 +456,8 @@
       "title": "Burn rate · 5 m window",
       "datasource": "${DS_PROMETHEUS}",
       "gridPos": {
-        "x": 0,
-        "y": 11,
+        "x": 12,
+        "y": 7,
         "w": 6,
         "h": 8
       },
@@ -592,8 +596,8 @@
       "title": "Burn rate · 1 h window",
       "datasource": "${DS_PROMETHEUS}",
       "gridPos": {
-        "x": 6,
-        "y": 11,
+        "x": 18,
+        "y": 7,
         "w": 6,
         "h": 8
       },
@@ -733,7 +737,7 @@
       "datasource": "${DS_PROMETHEUS}",
       "gridPos": {
         "x": 0,
-        "y": 19,
+        "y": 15,
         "w": 24,
         "h": 1
       },
@@ -747,7 +751,7 @@
       "datasource": "${DS_PROMETHEUS}",
       "gridPos": {
         "x": 0,
-        "y": 20,
+        "y": 16,
         "w": 12,
         "h": 6
       },
@@ -814,7 +818,7 @@
       "datasource": "${DS_PROMETHEUS}",
       "gridPos": {
         "x": 12,
-        "y": 20,
+        "y": 16,
         "w": 12,
         "h": 6
       },

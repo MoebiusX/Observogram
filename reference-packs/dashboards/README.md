@@ -26,6 +26,27 @@ the alert timelines; `template: ref:platform/slo-burn-template` becomes a burn b
 binding must be bound by a panel, and the unified board must bind every SLI and SLO, or nothing
 is written.
 
+Layout (`tools/lib/dashboards/lib.mjs` `flow()`, `splitWidths`, `tileRows`, `viewWidths`): panels
+are added in reading order and every visual row is 24 columns wide at one height — nothing wraps
+alone and no hole sits under a short tile. A run of n SLI or SLO tiles takes `tileRows(n)`: rows of
+at most eight, each `splitWidths(count)` (5 → 5,5,5,5,4; 7 → 4,4,4,3,3,3,3; 8 → 3×8; 9 → 5,5,5,5,4
+over 6,6,6,6), so no tile is narrower than w3; a lone tile is not stretched to w24 but sits w6 h8
+beside its trend (the SLI over time with its objective or threshold dashed) or, on a burn board,
+beside the alert timeline. Derived views take `viewWidths(n)` (1 → 24; 2 → 12,12; 3 → 8,8,8; more
+in pairs of 12, an odd count closing with a trio of 8), the graphs first and any note view w24
+under them; a view on a trio row is w8 and gets the bottom list legend instead of the right-hand
+table. The contract block — the unified board's and a source board's — is shaped by how many SLIs
+and SLOs it holds: three or more SLIs get tile rows of their own above the bar gauge (w12) and the
+two burn curves (w6); two sit at h8 beside the bar gauge with the curves w12 below; one SLI with
+one SLO puts the tile, that SLO's burn tile and both curves at w6 on one row (a one-bar gauge has
+nothing to compare with); one SLI with several SLOs puts the tile beside a w18 bar gauge; no SLI
+leaves the bar gauge and the curves; no SLO leaves the tiles. The bar gauge of a bound board is
+filtered to the SLOs it binds (`{slo=~"a|b"}`); the unified board's, which binds every SLO, is
+the bare series, and so is a bar gauge whose list names no SLO. A binding that names no SLI or SLO
+of the pack is reported by `checkBindings`. `npm run test:gen` asserts the invariant on every
+board of every reference pack and on synthetic packs with 1, 2, 3, 5, 7, 9, 12, 13 and 25 SLIs
+and 1, 3, 4 and 5 derived views, and pins the shapes above.
+
 The burn rules (`tools/lib/burn-rules.mjs`) follow the compiler's naming and labels with the five
 PromQL corrections measured on a live queue manager (mq-observability-pack): bad-over-expected
 or bad-over-happened error ratios, a floor of two bad samples on the short window, forecasts on

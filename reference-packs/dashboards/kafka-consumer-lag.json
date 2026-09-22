@@ -149,8 +149,8 @@
       "gridPos": {
         "x": 0,
         "y": 3,
-        "w": 4,
-        "h": 4
+        "w": 6,
+        "h": 8
       },
       "description": "Maximum consumer-group lag (in seconds equivalent), per critical consumer group. Computed by dividing message-count lag by the consumer's rolling consumption rate. SLO 99 % over 7d.",
       "pack": {
@@ -214,19 +214,19 @@
     },
     {
       "id": 4,
-      "type": "bargauge",
-      "title": "Error-budget burn · last hour",
+      "type": "stat",
+      "title": "Consumer group lag seconds · burn 1 h",
       "datasource": {
         "type": "prometheus",
         "uid": "prom"
       },
       "gridPos": {
-        "x": 4,
+        "x": 6,
         "y": 3,
-        "w": 12,
+        "w": 6,
         "h": 8
       },
-      "description": "1 h error-budget burn rate per SLO: 1× consumes the budget exactly over the SLO window; amber at the smallest factor that alerts for that SLO, red at the largest (spec.policy).",
+      "description": "1 h burn rate of Consumer group lag seconds · 99 % (objective 0.99 over 7d).",
       "pack": {
         "binds_to": [
           "slos.consumer_lag_99_under_60s"
@@ -235,17 +235,17 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "kafka:errorbudget:burn_1h",
-          "instant": true,
-          "legendFormat": "{{slo}}"
+          "expr": "kafka:errorbudget:burn_1h{slo=\"consumer_lag_99_under_60s\"}",
+          "instant": false,
+          "range": true,
+          "legendFormat": "__auto"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "none",
-          "min": 0,
-          "max": 20,
           "decimals": 1,
+          "mappings": [],
           "color": {
             "mode": "thresholds"
           },
@@ -253,46 +253,21 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "#8B98A9",
+                "color": "#3DD68C",
                 "value": null
+              },
+              {
+                "color": "#F5B14C",
+                "value": 4
+              },
+              {
+                "color": "#F0616D",
+                "value": 10
               }
             ]
           }
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "consumer_lag_99_under_60s"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Consumer group lag seconds · 99 %"
-              },
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "#3DD68C",
-                      "value": null
-                    },
-                    {
-                      "color": "#F5B14C",
-                      "value": 4
-                    },
-                    {
-                      "color": "#F0616D",
-                      "value": 10
-                    }
-                  ]
-                }
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "options": {
         "reduceOptions": {
@@ -302,18 +277,13 @@
           "fields": "",
           "values": false
         },
-        "orientation": "horizontal",
-        "displayMode": "gradient",
-        "valueMode": "color",
-        "namePlacement": "left",
-        "showUnfilled": true,
-        "sizing": "auto",
-        "minVizWidth": 8,
-        "minVizHeight": 14,
-        "maxVizHeight": 26,
-        "legend": {
-          "showLegend": false
-        }
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "orientation": "auto",
+        "showPercentChange": false
       }
     },
     {
@@ -325,7 +295,7 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 16,
+        "x": 12,
         "y": 3,
         "w": 6,
         "h": 8
@@ -480,8 +450,8 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 0,
-        "y": 11,
+        "x": 18,
+        "y": 3,
         "w": 6,
         "h": 8
       },
@@ -636,7 +606,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 19,
+        "y": 11,
         "w": 24,
         "h": 1
       },
@@ -653,8 +623,8 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 20,
-        "w": 12,
+        "y": 12,
+        "w": 24,
         "h": 7
       },
       "description": "SLI consumer_group_lag_seconds by consumergroup (pack derived view per_consumergroup_lag).",
@@ -734,7 +704,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 27,
+        "y": 19,
         "w": 24,
         "h": 1
       },
@@ -751,7 +721,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 28,
+        "y": 20,
         "w": 12,
         "h": 6
       },
@@ -821,7 +791,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 28,
+        "y": 20,
         "w": 12,
         "h": 6
       },
