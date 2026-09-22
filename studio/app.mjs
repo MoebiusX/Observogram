@@ -1340,6 +1340,10 @@ async function boot() {
   // Mount the new chrome FIRST so the user sees the demo shape even
   // while the catalog loads.
   installObservaChrome();
+  // What exactly is running? Fire-and-forget: /healthz fills the About
+  // entry, the header subtitle and the brand tooltip once it answers, and
+  // never blocks boot. (The call was lost in the merge that landed About.)
+  loadVersion();
   // Identity + active org BEFORE the first /api call — with tenancy on,
   // /api/packs answers from the active org's workspace, so the org
   // header has to be resolved before the catalog loads.
