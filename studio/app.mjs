@@ -43,13 +43,14 @@ import { initHost } from './host.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
   BUILD_STEPS, TIERS as BUILD_TIERS, selectValid as buildSelectValid, buildStepReachability, clampStep as clampBuildStep,
-  buildSelectModel, buildRailModel,
+  buildSelectModel, buildGenerateModel, buildRailModel,
 } from './build-model.mjs';
 import {
   loadLibrary as loadBuildLibrary, libraryCache as buildLibraryCache, loadRequirements as loadBuildRequirements,
   requirementsCache as buildRequirementsCache, instantiate as instantiateBuild,
 } from './build-api.mjs';
 import { renderBuildSelect, renderClauseRail } from './build-select-view.mjs';
+import { renderBuildGenerate } from './build-generate-view.mjs';
 
 // `state`, the `$`/`$$` DOM helpers and the persistence layer now live in
 // studio/state.mjs (imported above).
@@ -1632,7 +1633,7 @@ function updateObservaServiceChip() {
   const name = document.getElementById('observa-service-name');
   const services = serviceCatalogue();
   const active = services.find(s => s.key === state.selectedService);
-  if (state.mode === 'home' || !active) { chip.hidden = true; return; }
+  if (state.mode === 'home' || state.mode === 'build' || !active) { chip.hidden = true; return; }
   name.textContent = active.label;
   chip.hidden = false;
 }
@@ -2023,6 +2024,9 @@ function renderBuildView(view) {
   stepEl.className = 'build-step-host';
   main.appendChild(stepEl);
   switch (b.step) {
+    case 'generate':
+      renderBuildGenerate(stepEl, buildGenerateModel({ build: b, library }), host);
+      return;
     case 'select':
     default:
       renderBuildSelect(stepEl, buildSelectModel({ build: b, library, requirements: buildRequirementsCache() }), host);
