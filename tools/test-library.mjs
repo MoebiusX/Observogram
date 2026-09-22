@@ -26,6 +26,7 @@ import { compile, TARGETS } from './lib/compile.mjs';
 import { genericBoards, checkBindings } from './lib/dashboards/generic.mjs';
 import { evaluateConformance, RUBRIC } from './lib/conformance.mjs';
 import { adapt } from './lib/adapter.mjs';
+import { compileBurnRules } from './lib/burn-rules.mjs';
 import {
   parseLibraryEntry, validateLibraryEntry, libraryIndex, tierRequirements, defaultToggles, instantiatePack,
   validationSummary, symbolOf, TIERS, SECTION_TOGGLES, SCAFFOLD_PARAMS, EVIDENCE_STATUSES,
@@ -125,6 +126,10 @@ for (const entry of entries) for (const tier of TIERS) {
     // schema, and every SLI expression parses under the Lezer grammar with the defaults in
     assert.deepEqual(validateCanonical(canonical, SCHEMA), [], `${id} schema`);
     assert.deepEqual(warnings.filter(w => w.kind === 'promql'), [], `${id}: every resolved SLI expression is valid PromQL`);
+    // the burn-rule generator's warnings reach the caller, and no entry ships a leg the generator has to guard or rewrite
+    const burn = warnings.filter(w => w.kind === 'burn-rules').map(w => w.message);
+    assert.deepEqual(burn, compileBurnRules(canonical).warnings, `${id}: the burn-rules warnings are the generator's own`);
+    assert.deepEqual(burn.filter(m => /derived by arithmetic|rewritten to bool/.test(m)), [], `${id}: good legs guarded (or vector(0)) and comparisons bool`);
     assert.equal(canonical.metadata.bindings.criticality, tier);
     assert.ok(canonical.spec.slis.length >= 1 && canonical.spec.slos.length === canonical.spec.slis.length, `${id} one SLO per SLI`);
 
@@ -284,6 +289,16 @@ test('params: a value cannot break the PromQL it is spliced into', () => {
   assert.deepEqual(build(byId['otel-collector'], 'tier-2', { params: { suffix: '_total' } }).warnings.filter(w => w.kind === 'promql'), [], 'the documented value parses');
   // without a parser the engine cannot check the grammar and says nothing about it (the browser-safe default)
   assert.deepEqual(instantiatePack(byId['otel-collector'], { name: 'col', tier: 'tier-2', params: { suffix: ')' } }).warnings.filter(w => w.kind === 'promql'), []);
+});
+
+test('warnings: the burn-rule generator\'s direction warning on a ratio-unit threshold is surfaced, and none when the SLOs are off', () => {
+  // queue_depth_headroom is depth / MAXDEPTH with an upper bound of 0.8 — the direction is right, and the generator's
+  // "unit ratio suggests a floor" heuristic cannot know that: the warning is the generator's and the caller must see it
+  const mq = build(byId['ibm-mq'], 'tier-2');
+  assert.ok(mq.warnings.some(w => w.kind === 'burn-rules' && /queue_depth_headroom.*upper bound/.test(w.message)), JSON.stringify(mq.warnings));
+  assert.deepEqual(build(byId['ibm-mq'], 'tier-2', { toggles: { slos: false } }).warnings.filter(w => w.kind === 'burn-rules'), []);
+  const prom = build(byId.prometheus, 'tier-1');
+  assert.deepEqual(prom.warnings.filter(w => w.kind === 'burn-rules' && /rule_evaluation_success_ratio|notification_success_ratio|tsdb_compaction_success_ratio|wal_corruption_freshness|scrape_success_ratio/.test(w.message)), [], 'the prometheus legs are guarded');
 });
 
 test('symbolOf maps pack paths to the adapter\'s artefact ids', () => {

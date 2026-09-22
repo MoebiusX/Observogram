@@ -180,7 +180,12 @@ failure is a `warnings` entry of kind `promql`, which makes the CLI exit 1. The
 browser-safe core (`tools/lib/promql.mjs`) extracts dependencies and reports no grammar
 error, so a caller with no parser gets no `promql` warning: the studio (slice 2) runs the
 instantiation through the API, where Node passes the grammar. `warnings` is what GENERATE
-shows beside the todos. Several entries compose
+shows beside the todos; its kinds: `promql` (the pack must not ship), `sli-excluded` (an
+SLI above the tier was dropped), `burn-rules` (the burn-rule generator's own warnings on
+the produced policy — `tools/lib/burn-rules.mjs` compiled once at build time, so a
+subtracted good leg without a presence guard or a ratio-unit threshold it reads as an
+upper bound is seen when the pack is made, not when its alerts stay silent; the shipped
+entries draw none of the guardable ones, the suite checks). Several entries compose
 into one pack: ids are prefixed with the entry id (`kafka_broker_availability`,
 `http-service-…` boards), entry params are addressed as `<entry>.<param>` (a bare
 `<param>` reaches every entry that declares it), the scaffold sections are shared.

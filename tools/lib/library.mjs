@@ -54,6 +54,7 @@
 import { parse as parseYaml } from './mini-yaml.mjs';
 import { RUBRIC, TIER_RANK, evaluateConformance } from './conformance.mjs';
 import { fileSlug, metricPrefix } from './slug.mjs';
+import { compileBurnRules } from './burn-rules.mjs';
 
 // ---------------------------------------------------------------------------
 // Constants — the entry format and the scaffold's fixed vocabulary
@@ -828,12 +829,25 @@ function clausesFor(symbol, canonical, tier) {
 }
 
 /**
+ * The burn-rule generator's own warnings on the produced pack (tools/lib/burn-rules.mjs, the same
+ * generator gen-burn-rules.mjs runs): a good leg derived by arithmetic without a presence guard,
+ * a comparison it has to rewrite to bool, a threshold whose unit suggests a floor the spec cannot
+ * express. Measured failure modes of the policy, so the caller sees them at build time rather
+ * than when the alerts stay silent. Nothing to compile when the SLOs are off.
+ */
+function burnRuleWarnings(canonical) {
+  if (!Array.isArray(canonical.spec.slos) || !canonical.spec.slos.length) return [];
+  return compileBurnRules(canonical).warnings.map(message => ({ kind: 'burn-rules', message }));
+}
+
+/**
  * instantiatePack(entry | entries, { name, tier, environment, owners, params, toggles, promql })
  *   → { canonical, todos: [{ path, fields, what, clause, clauses, params }], provenance,
  *       warnings: [{ kind, message, sli?, field? }] }
  *   (one todo per parked artefact; `fields` lists its placeholder fields; SLO ids are sloIdFor(sliId, objective);
  *   `promql` is the PromQL parser used on every resolved SLI expression — a `promql` warning per failure;
- *   a selected SLI above the tier is dropped with an `sli-excluded` warning, an unknown one throws)
+ *   a selected SLI above the tier is dropped with an `sli-excluded` warning, an unknown one throws;
+ *   the burn-rule generator's warnings on the produced policy come back as kind `burn-rules`)
  *
  * Several entries compose into one pack (a service that runs on Kafka AND
  * exposes HTTP): SLI, view, board, probe and chaos ids are prefixed with the
@@ -880,7 +894,7 @@ export function instantiatePack(entryOrEntries, opts = {}) {
   const rows = paramTable(entries, prefixed);
   const { values, provided } = resolveParams(rows, checkParams(opts.params || {}, rows), { service, environment, tier });
   const { canonical, todos: paramTodos, used } = resolvePlaceholders(draft, { rows, values, provided });
-  const warnings = [...excluded, ...promqlWarnings(canonical, opts.promql)];
+  const warnings = [...excluded, ...promqlWarnings(canonical, opts.promql), ...burnRuleWarnings(canonical)];
 
   // Merge the scaffold's own todos with the placeholder todos: ONE todo per artefact (symbol),
   // its fields listed, so `library.todo.<symbol>` is one annotation per parked artefact.

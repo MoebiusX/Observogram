@@ -30,6 +30,12 @@ evidence:
     The HTTP request histogram resolves nothing below its first bucket: a healthy server reads a p99 of
     0.099 s (0.99 × 0.1), meaning "p99 ≤ 0.1 s", not a measured latency; the 1 s objective sits on the
     le="1.0" bound where the comparison is exact.
+    Two guards this entry adds to the reference pack's forms, both asked for by the burn-rule generator
+    (tools/lib/burn-rules.mjs warns on the unguarded originals): the four good legs that subtract a
+    failure counter wrap it in `(… or vector(0))`, because a counter with no series yet (no failure
+    ever recorded) would empty the leg and read as a total outage; and the up comparison is written
+    `== bool 1`, the form the generator rewrites it to anyway. Same metric names, same semantics on a
+    server where the counters exist; the reference pack is to be fixed upstream with this evidence.
   gaps:
     - The 2026-09-22 measurement ran on 3.14.0 only; scrape_duration_seconds was seen on 2.55.1 (2026-09-07 inventory) and the HTTP histogram is source-verified at v2.55.1, not measured there.
 params:
@@ -71,7 +77,7 @@ slis:
     metrics: [up]
     evidence: { status: recorded-live, source: "prometheus.md §10 — sum(up == bool 1) / count(up) = 1 on 3.14.0; up confirmed on v2.55.1 TSDB inventory (stack-self-metrics scrape_success_ratio)" }
     good: |
-      sum(up == 1)
+      sum(up == bool 1)
     total: |
       count(up)
     slo:
@@ -103,7 +109,7 @@ slis:
     evidence: { status: recorded-live, source: "prometheus.md §10 — good leg 7.997/s on 3.14.0; both counters confirmed on v2.55.1 (stack-self-metrics rule_evaluation_failures)" }
     good: |
       sum(rate(prometheus_rule_evaluations_total[5m])) -
-        sum(rate(prometheus_rule_evaluation_failures_total[5m]))
+        (sum(rate(prometheus_rule_evaluation_failures_total[5m])) or vector(0))
     total: |
       sum(rate(prometheus_rule_evaluations_total[5m]))
     slo:
@@ -160,7 +166,7 @@ slis:
     evidence: { status: recorded-live, source: "prometheus.md §10 — both counters present, legs = 0 with no alert sent in the window; confirmed on v2.55.1 (stack-self-metrics notification_errors, notifications_sent)" }
     good: |
       sum(rate(prometheus_notifications_sent_total[5m])) -
-        sum(rate(prometheus_notifications_errors_total[5m]))
+        (sum(rate(prometheus_notifications_errors_total[5m])) or vector(0))
     total: |
       sum(rate(prometheus_notifications_sent_total[5m]))
     slo:
@@ -185,7 +191,7 @@ slis:
     evidence: { status: recorded-live, source: "prometheus.md §10 — counters present, legs = 0 with no compaction in the window; prometheus_tsdb_compactions_failed_total confirmed on v2.55.1 (stack-self-metrics tsdb_compaction_failures)" }
     good: |
       sum(rate(prometheus_tsdb_compactions_total[1h])) -
-        sum(rate(prometheus_tsdb_compactions_failed_total[1h]))
+        (sum(rate(prometheus_tsdb_compactions_failed_total[1h])) or vector(0))
     total: |
       sum(rate(prometheus_tsdb_compactions_total[1h]))
     slo:
@@ -217,7 +223,7 @@ slis:
     evidence: { status: recorded-live, source: "prometheus.md §10 — sum(rate(prometheus_tsdb_wal_truncations_total[5m])) = 0.0034/s on 3.14.0; prometheus_tsdb_wal_corruptions_total confirmed on v2.55.1 (stack-self-metrics wal_corruptions)" }
     good: |
       sum(rate(prometheus_tsdb_wal_truncations_total[5m])) -
-        sum(rate(prometheus_tsdb_wal_corruptions_total[5m]))
+        (sum(rate(prometheus_tsdb_wal_corruptions_total[5m])) or vector(0))
     total: |
       sum(rate(prometheus_tsdb_wal_truncations_total[5m]))
     slo:

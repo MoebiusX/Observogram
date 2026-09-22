@@ -97,7 +97,12 @@ plain list item must not contain `: ` (it would parse as a mapping) — use ` �
 2. **PromQL is derived, not rewritten.** For the four evidence-backed products the
    expressions are the reference / MQ pack's, with scrape jobs and names as parameters;
    for the contract-seeded products they are the alias table's expressions with its
-   presence guards; for the archetypes the semconv names in Prometheus spelling.
+   presence guards; for the archetypes the semconv names in Prometheus spelling. The one
+   derivation allowed beyond parameters is the guard the burn-rule generator asks for
+   (`(… or vector(0))` on a subtracted failure counter, `== bool` on a comparison),
+   stated in the entry's `evidence.notes`; `instantiatePack` returns the generator's
+   remaining warnings as `warnings` of kind `burn-rules` and the suite fails an entry
+   whose legs still draw the arithmetic or bool warning.
 3. **Instantiable at every tier.** Every entry needs at least one ratio SLI at
    `tier-3` (L1.MUST.availability_slo) and one threshold SLI by `tier-2`
    (L1.MUST.latency_slo); with the scaffold, every applicable MUST passes at every
