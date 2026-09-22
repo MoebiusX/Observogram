@@ -149,8 +149,8 @@
       "gridPos": {
         "x": 0,
         "y": 3,
-        "w": 4,
-        "h": 4
+        "w": 6,
+        "h": 8
       },
       "description": "Maximum consumer-group lag (in seconds equivalent), per critical consumer group. Computed by dividing message-count lag by the consumer's rolling consumption rate. SLO 99 % over 7d.",
       "pack": {
@@ -221,9 +221,9 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 4,
+        "x": 6,
         "y": 3,
-        "w": 12,
+        "w": 6,
         "h": 8
       },
       "description": "1 h error-budget burn rate per SLO: 1× consumes the budget exactly over the SLO window; amber at the smallest factor that alerts for that SLO, red at the largest (spec.policy).",
@@ -235,7 +235,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "kafka:errorbudget:burn_1h",
+          "expr": "kafka:errorbudget:burn_1h{slo=~\"consumer_lag_99_under_60s\"}",
           "instant": true,
           "legendFormat": "{{slo}}"
         }
@@ -325,7 +325,7 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 16,
+        "x": 12,
         "y": 3,
         "w": 6,
         "h": 8
@@ -480,8 +480,8 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 0,
-        "y": 11,
+        "x": 18,
+        "y": 3,
         "w": 6,
         "h": 8
       },
@@ -636,7 +636,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 19,
+        "y": 11,
         "w": 24,
         "h": 1
       },
@@ -653,8 +653,8 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 20,
-        "w": 12,
+        "y": 12,
+        "w": 24,
         "h": 7
       },
       "description": "SLI consumer_group_lag_seconds by consumergroup (pack derived view per_consumergroup_lag).",
@@ -734,7 +734,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 27,
+        "y": 19,
         "w": 24,
         "h": 1
       },
@@ -751,7 +751,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 28,
+        "y": 20,
         "w": 12,
         "h": 6
       },
@@ -821,7 +821,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 28,
+        "y": 20,
         "w": 12,
         "h": 6
       },

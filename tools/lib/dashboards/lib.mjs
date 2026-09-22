@@ -16,7 +16,13 @@
 //     dashed SLO threshold lines, table legends with last/max where there are many series;
 //   * a header banner with cross-board navigation; rows without emoji; annotations only for
 //     symptom alerts (burn alerts painted every graph red for an hour after each incident).
-// Layout is computed by flow(): add panels in reading order, never by coordinates.
+// Layout is computed by flow(): add panels in reading order, never by coordinates. Every visual
+// row is 24 columns wide and every panel on it has the same height, so nothing wraps alone and
+// no hole sits under a short tile: a run of n tiles takes splitWidths(n) (floor plus the
+// remainder on the first tiles: 5 → 5,5,5,5,4; 7 → 4,4,4,3,3,3,3), derived views viewWidths(n)
+// (1 → 24; 2 → 12,12; 3 → 8,8,8; more → pairs of 12, closing with a trio of 8 when odd), and a
+// source board's contract block is shaped by how many SLIs it binds (generic.mjs contractPanels).
+// A text note (an undeclared or unrenderable view) is always w24 on a row of its own.
 
 import { metricPrefix } from '../burn-rules.mjs';
 
@@ -191,6 +197,27 @@ export function header(name, blurb, uid) {
 }
 
 // ---------------------------------------------------------------- layout & envelope
+/**
+ * n widths that sum to `total` and differ by at most one: the floor, with the remainder spread
+ * over the first tiles (5 → 5,5,5,5,4; 7 → 4,4,4,3,3,3,3; 6 → 4×6; 8 → 3×8; 1 → 24). n ≤ 0 gives
+ * [] and n > total gives n ones (Grafana's narrowest column), never a zero-width panel.
+ */
+export const splitWidths = (n, total = 24) => {
+  if (!(n > 0)) return [];
+  if (n > total) return Array(n).fill(1);
+  const floor = Math.floor(total / n), rem = total % n;
+  return Array.from({ length: n }, (_, i) => floor + (i < rem ? 1 : 0));
+};
+/**
+ * Widths for n derived-view time series: one takes the row, two share it, three make a trio;
+ * from four on they come in pairs of 12, and an odd count closes with a trio of 8 so the last
+ * row is as full as the others (5 → 12,12,8,8,8).
+ */
+export const viewWidths = (n) => {
+  if (!(n > 0)) return [];
+  if (n <= 3) return splitWidths(n);
+  return n % 2 === 0 ? Array(n).fill(12) : [...Array(n - 3).fill(12), 8, 8, 8];
+};
 // Flow layout: left-to-right in 24-column lines in the order given; a row always starts a line.
 export function flow(items, startY = 0) {
   let x = 0, y = startY, lineH = 0;
@@ -225,9 +252,15 @@ export function dashboard(uid, title, panels, tags, { templating = { list: [] },
 // so a quiet period renders as a calm baseline instead of Grafana's "no time field" notice.
 export const alertState = (sel, baseline = true) => { const p = ctx().packName; return `(2 * max by (alertname) (ALERTS{pack="${p}", alertstate="firing", ${sel}})) or max by (alertname) (ALERTS{pack="${p}", alertstate="pending", ${sel}})${baseline ? ' or label_replace(vector(0), "alertname", "no alert", "", "")' : ''}`; };
 
+/**
+ * The 1 h burn per SLO as a bar gauge. `sloIds` narrows it to the SLOs a board binds
+ * (`{slo=~"a|b"}`, ids are identifiers); when it names every SLO of the pack — or is not given —
+ * the expression is the bare series, so the unified boards and a module's own boards are unchanged.
+ */
 export const burnBars = (binds, w = 12, h = 8, sloIds) => {
   const c = ctx(); const slos = c.pack.spec.slos.filter(s => !sloIds || sloIds.includes(s.id));
-  return bargauge('Error-budget burn · last hour', `${c.svc}:errorbudget:burn_1h`, {
+  const subset = sloIds && c.pack.spec.slos.some(s => !sloIds.includes(s.id));
+  return bargauge('Error-budget burn · last hour', `${c.svc}:errorbudget:burn_1h${subset ? `{slo=~"${slos.map(s => s.id).join('|')}"}` : ''}`, {
     binds, legend: '{{slo}}', decimals: 1, min: 0, max: 20, w, h,
     desc: '1 h error-budget burn rate per SLO: 1× consumes the budget exactly over the SLO window; amber at the smallest factor that alerts for that SLO, red at the largest (spec.policy).',
     overrides: slos.map(s => { const { warn, bad } = burnFactors(s.id); return byName(s.id, { displayName: c.sloLabel[s.id], thresholds: { mode: 'absolute', steps: okAbove(warn, bad) } }); }),
@@ -312,21 +345,26 @@ const UNIT = { seconds: 's', ratio: 'percentunit', percent: 'percent', bytes: 'b
  * One stat tile per SLI, derived from the pack: ratio SLIs colour against the objective of the
  * first SLO on them (amber under it, red ten budgets below); threshold SLIs colour against the
  * threshold (amber at it, red at twice it). A pack module can replace these with hand-written tiles.
+ * `widths` gives each tile its own width (splitWidths(n) fills the row exactly); `w` is one width
+ * for all of them; `h` the tiles' height (8 when a tile shares a row with the burn panels).
  */
-export function derivedSliTiles(pack, sliIds, { w = 3 } = {}) {
+export function derivedSliTiles(pack, sliIds, { w = 3, h = 4, widths } = {}) {
   const slis = (pack.spec.slis || []).filter(s => !sliIds || sliIds.includes(s.id));
-  return slis.map(sli => {
+  return slis.map((sli, i) => {
     const slo = (pack.spec.slos || []).find(s => s.sli === sli.id);
     const desc = strip(sli.description || '') + (slo ? ` SLO ${pct(slo.objective)} over ${slo.window}.` : '');
+    const tw = widths?.[i] ?? w;
     if (sli.type === 'ratio') {
       const obj = Number(slo?.objective ?? 0.99), budget = 1 - obj;
-      return stat(humanize(sli.id).replace(/ ratio$/i, ''), sliExpr(pack, sli), { binds: `slis.${sli.id}`, desc, unit: 'percentunit', decimals: 2, thresholds: okBelow(obj, Math.max(0, obj - 10 * budget)), w });
+      return stat(humanize(sli.id).replace(/ ratio$/i, ''), sliExpr(pack, sli), { binds: `slis.${sli.id}`, desc, unit: 'percentunit', decimals: 2, thresholds: okBelow(obj, Math.max(0, obj - 10 * budget)), w: tw, h });
     }
     const t = Number(sli.threshold);
     const unit = UNIT[sli.unit] ?? 'none';
-    return stat(humanize(sli.id), sliExpr(pack, sli), { binds: `slis.${sli.id}`, desc, unit, decimals: unit === 's' ? 2 : unit === 'percentunit' ? 1 : 0, thresholds: okAbove(t, t * 2), w });
+    return stat(humanize(sli.id), sliExpr(pack, sli), { binds: `slis.${sli.id}`, desc, unit, decimals: unit === 's' ? 2 : unit === 'percentunit' ? 1 : 0, thresholds: okAbove(t, t * 2), w: tw, h });
   });
 }
+/** Whether derivedViewPanel renders a view as a time series (a metric, or an SLI the pack declares) rather than a note. */
+export const viewRenders = (pack, view) => Boolean(view?.params?.metric || (pack.spec.slis || []).some(s => s.id === view?.params?.sli));
 /**
  * A derived view (`spec.queries.derived_views[]` bound to ref:platform/per-resource-rollup):
  * `metric` + `by` becomes a per-label time series (rate for counters), `sli` + `by` the SLI's
@@ -334,20 +372,22 @@ export function derivedSliTiles(pack, sliIds, { w = 3 } = {}) {
  * counter is still rated, and the selector drops series the rollup should not show — the
  * JMX exporter's broker-wide `kafka_server_brokertopicmetrics_messagesin_total` has no `topic`
  * label and would otherwise appear as a `{}` series equal to the sum of the others (measured).
+ * `w` is the panel's width (viewWidths(n) for a run of views); a view with neither a metric nor
+ * a declared SLI is a w24 note on a row of its own, whatever `w` says.
  */
-export function derivedViewPanel(pack, view, binds) {
+export function derivedViewPanel(pack, view, binds, { w } = {}) {
   const by = (view.params?.by || []).join(', ');
   const legend = (view.params?.by || []).map(b => `{{${b}}}`).join(' ') || '__auto';
   const title = humanize(view.id);
+  if (!viewRenders(pack, view)) return text(`Derived view \`${view.id}\`: no metric or SLI to render.`, { title, h: 3 });
   if (view.params?.metric) {
     const m = view.params.metric;
     const counter = /_total(\{[^}]*\})?$/.test(m);
     const expr = counter ? `sum by (${by}) (rate(${m}[5m]))` : `max by (${by}) (${m})`;
-    return ts(title, [{ expr, legend }], { binds, desc: `Per-resource rollup of ${m} by ${by} (pack derived view ${view.id}).`, many: true, unit: counter ? 'ops' : 'none' });
+    return ts(title, [{ expr, legend }], { binds, desc: `Per-resource rollup of ${m} by ${by} (pack derived view ${view.id}).`, many: true, unit: counter ? 'ops' : 'none', w });
   }
   const sli = (pack.spec.slis || []).find(s => s.id === view.params?.sli);
-  if (!sli) return text(`Derived view \`${view.id}\`: no metric or SLI to render.`, { title, h: 3 });
   const grouped = (e) => strip(e).replace(/\bsum\(/g, `sum by (${by}) (`).replace(/\bcount\(/g, `count by (${by}) (`).replace(/\bmax\(/g, `max by (${by}) (`);
   const expr = sli.type === 'ratio' ? `(${grouped(sli.good)}) / (${grouped(sli.total)})` : grouped(sli.query || sli.expression);
-  return ts(title, [{ expr, legend }], { binds, desc: `SLI ${sli.id} by ${by} (pack derived view ${view.id}).`, many: true, unit: sli.type === 'ratio' ? 'percentunit' : (UNIT[sli.unit] ?? 'none') });
+  return ts(title, [{ expr, legend }], { binds, desc: `SLI ${sli.id} by ${by} (pack derived view ${view.id}).`, many: true, unit: sli.type === 'ratio' ? 'percentunit' : (UNIT[sli.unit] ?? 'none'), w });
 }

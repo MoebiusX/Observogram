@@ -149,7 +149,7 @@
       "gridPos": {
         "x": 0,
         "y": 3,
-        "w": 4,
+        "w": 6,
         "h": 4
       },
       "description": "Fraction of HTTP requests returning non-5xx responses. Excludes intentional 4xx (auth failures, validation errors) by treating only 5xx as the failure class. SLO 99.9 % over 30d.",
@@ -221,9 +221,9 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 4,
+        "x": 6,
         "y": 3,
-        "w": 4,
+        "w": 6,
         "h": 4
       },
       "description": "99th-percentile HTTP request latency, server-side, across all handlers. SLO 99 % over 30d.",
@@ -295,9 +295,9 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 8,
+        "x": 12,
         "y": 3,
-        "w": 4,
+        "w": 6,
         "h": 4
       },
       "description": "Fraction of datasource proxy requests (Grafana → Prometheus / Loki / Tempo / Elasticsearch / Influx etc.) that returned a non-5xx response. Failures here are the leading indicator that dashboards will break. SLO 99.5 % over 30d.",
@@ -369,9 +369,9 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 12,
+        "x": 18,
         "y": 3,
-        "w": 4,
+        "w": 6,
         "h": 4
       },
       "description": "99th-percentile latency of Grafana's internal database queries (the metadata / dashboards / users / orgs store). Slow database queries directly degrade the UI and alerting evaluation. Prerequisite: grafana_database_queries_duration_seconds is exposed only with [database] instrument_queries = true (GF_DATABASE_INSTRUMENT_QUERIES), which is off by default; without it this SLI reads nothing. SLO 99 % over 30d.",
@@ -458,7 +458,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "grafana:errorbudget:burn_1h",
+          "expr": "grafana:errorbudget:burn_1h{slo=~\"http_request_success_99_9|datasource_proxy_99_5\"}",
           "instant": true,
           "legendFormat": "{{slo}}"
         }

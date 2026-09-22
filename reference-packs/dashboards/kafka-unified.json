@@ -1810,31 +1810,6 @@
     },
     {
       "id": 28,
-      "type": "text",
-      "title": "Golden signals kafka",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prom"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 47,
-        "w": 24,
-        "h": 3
-      },
-      "transparent": false,
-      "options": {
-        "mode": "markdown",
-        "content": "Derived view `golden_signals_kafka`: no metric or SLI to render.",
-        "code": {
-          "language": "plaintext",
-          "showLineNumbers": false,
-          "showMiniMap": false
-        }
-      }
-    },
-    {
-      "id": 29,
       "type": "timeseries",
       "title": "Per topic throughput",
       "datasource": {
@@ -1843,7 +1818,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 50,
+        "y": 47,
         "w": 12,
         "h": 7
       },
@@ -1915,7 +1890,7 @@
       }
     },
     {
-      "id": 30,
+      "id": 29,
       "type": "timeseries",
       "title": "Per consumergroup lag",
       "datasource": {
@@ -1924,7 +1899,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 50,
+        "y": 47,
         "w": 12,
         "h": 7
       },
@@ -1992,6 +1967,31 @@
         "tooltip": {
           "mode": "multi",
           "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 30,
+      "type": "text",
+      "title": "Golden signals kafka",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prom"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 54,
+        "w": 24,
+        "h": 3
+      },
+      "transparent": false,
+      "options": {
+        "mode": "markdown",
+        "content": "Derived view `golden_signals_kafka`: no metric or SLI to render.",
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
         }
       }
     },

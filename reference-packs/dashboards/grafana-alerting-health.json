@@ -149,8 +149,8 @@
       "gridPos": {
         "x": 0,
         "y": 3,
-        "w": 4,
-        "h": 4
+        "w": 6,
+        "h": 8
       },
       "description": "Fraction of unified alerting rule evaluations that succeeded vs. attempted. Failures here mean alerts FIRE-OR-NOT incorrectly and downstream notification reliability is undermined. SLO 99.95 % over 30d.",
       "pack": {
@@ -221,9 +221,9 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 4,
+        "x": 6,
         "y": 3,
-        "w": 12,
+        "w": 6,
         "h": 8
       },
       "description": "1 h error-budget burn rate per SLO: 1× consumes the budget exactly over the SLO window; amber at the smallest factor that alerts for that SLO, red at the largest (spec.policy).",
@@ -235,7 +235,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "grafana:errorbudget:burn_1h",
+          "expr": "grafana:errorbudget:burn_1h{slo=~\"alerting_evaluation_99_95\"}",
           "instant": true,
           "legendFormat": "{{slo}}"
         }
@@ -325,7 +325,7 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 16,
+        "x": 12,
         "y": 3,
         "w": 6,
         "h": 8
@@ -504,8 +504,8 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 0,
-        "y": 11,
+        "x": 18,
+        "y": 3,
         "w": 6,
         "h": 8
       },
@@ -684,7 +684,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 19,
+        "y": 11,
         "w": 24,
         "h": 1
       },
@@ -701,7 +701,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 20,
+        "y": 12,
         "w": 12,
         "h": 6
       },
@@ -771,7 +771,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 20,
+        "y": 12,
         "w": 12,
         "h": 6
       },

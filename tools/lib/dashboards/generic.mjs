@@ -13,8 +13,12 @@
 // becomes a real burn board for `params.slos`; `ref:platform/per-resource-template` a board for
 // `params.view`. A pack module (tools/gen-dashboards.mjs --module) can replace the derived SLI
 // tiles with hand-written ones, add synthetic panels, and add signal rows per board id.
+//
+// Every row the generator emits is 24 columns wide with one height (lib.mjs header): SLI and
+// SLO tiles take splitWidths(n), derived views viewWidths(n), and a source board's contract block
+// is shaped by how many SLIs it binds (contractPanels).
 import {
-  configure, ctx, humanize, row, text, stat, ts, logs, traces, header, dashboard, resetIds,
+  configure, ctx, humanize, row, text, stat, ts, logs, traces, header, dashboard, resetIds, splitWidths, viewWidths, viewRenders,
   derivedSliTiles, derivedViewPanel, burnBars, burnCurves, burnThresholds, alertTimelines, alertTable, alertCounters,
   certTiles, mttdBars, mttrBars, certCounts, remediationTable, okAbove, C, DS,
 } from './lib.mjs';
@@ -41,7 +45,6 @@ function bindings(d) {
 }
 const scrapeJobs = (pack) => (pack.spec.pipelines?.receivers || []).flatMap(r => (r.scrape_configs || []).map(s => s.job_name)).filter(Boolean);
 const backendProducts = (pack) => new Set((pack.spec.telemetry?.backends || []).map(b => b.product));
-const tileWidth = (n) => (n <= 6 ? 4 : 3);
 /** The pack declares a certification feed: a scrape job named `certification` (what the MQ harness's alert-sink is scraped as). */
 const hasCertificationFeed = (pack) => scrapeJobs(pack).includes('certification');
 
@@ -102,8 +105,9 @@ function syntheticTable(pack) {
   const rows = checks.map(c => `| \`${c.id}\` | ${c.kind || '-'} | \`${c.target || '-'}\` | ${c.interval || '-'} | ${(c.assertions || []).map(fmt).join('; ') || '-'} | ${c.on_fail_severity || '-'} |`);
   return text(`| Check | Kind | Target | Interval | Assertions | On fail |\n|---|---|---|---|---|---|\n${rows.join('\n')}\n\n<small>Declared in the pack's \`validation.synthetic_checks\`; the pack module supplies the panels that show the probes' own metrics.</small>`, { title: 'Synthetic checks · as declared', h: Math.min(3 + checks.length, 8) });
 }
-const sloTiles = (pack, sloIds) => { const c = ctx(); return pack.spec.slos.filter(s => sloIds.includes(s.id)).map(s =>
-  stat(`${c.sloRename[s.id]} · burn 1 h`, `${c.svc}:errorbudget:burn_1h{slo="${s.id}"}`, { binds: `slos.${s.id}`, desc: `1 h burn rate of ${c.sloLabel[s.id]} (objective ${s.objective} over ${s.window}).`, decimals: 1, thresholds: burnThresholds(s.id), w: tileWidth(sloIds.length) })); };
+/** One burn tile per SLO of a burn-template board, the run filling its row (8 SLOs → 8 × w3). */
+const sloTiles = (pack, sloIds) => { const c = ctx(); const slos = pack.spec.slos.filter(s => sloIds.includes(s.id)); const widths = splitWidths(slos.length); return slos.map((s, i) =>
+  stat(`${c.sloRename[s.id]} · burn 1 h`, `${c.svc}:errorbudget:burn_1h{slo="${s.id}"}`, { binds: `slos.${s.id}`, desc: `1 h burn rate of ${c.sloLabel[s.id]} (objective ${s.objective} over ${s.window}).`, decimals: 1, thresholds: burnThresholds(s.id), w: widths[i] })); };
 
 /**
  * Build every board for a pack: the unified board first, then one per `spec.dashboards[]` entry.
@@ -122,8 +126,35 @@ export function genericBoards(pack, { module = null, repoUrl = null } = {}) {
   const synth = pack.spec.validation?.synthetic_checks || [];
   const views = Object.fromEntries((pack.spec.queries?.derived_views || []).map(v => [v.id, v]));
   const allSlis = (pack.spec.slis || []).map(s => s.id), allSlos = (pack.spec.slos || []).map(s => s.id);
-  const tiles = (ids) => (module?.sliTiles ? module.sliTiles(pack, ids) : derivedSliTiles(pack, ids, { w: tileWidth(ids.length) }));
-  const viewPanel = (v) => (views[v] ? derivedViewPanel(pack, views[v], `ref:queries.${v}`) : text(`Derived view \`${v}\` is bound but not declared in spec.queries.derived_views.`, { title: humanize(v), h: 3 }));
+  // SLI tiles fill their row (splitWidths) unless the module draws its own; a source board that
+  // binds one or two SLIs puts them at the burn panels' height so the contract block is one row.
+  const tiles = (ids, { widths = splitWidths(ids.length), h = 4 } = {}) => (module?.sliTiles ? module.sliTiles(pack, ids) : derivedSliTiles(pack, ids, { widths, h }));
+  // Derived views: the ones that render as time series share rows by viewWidths (graphs first),
+  // then every note — an undeclared or unrenderable view — takes a w24 row of its own.
+  const viewPanels = (ids) => {
+    const graphs = ids.filter(v => views[v] && viewRenders(pack, views[v])), widths = viewWidths(graphs.length);
+    const notes = ids.filter(v => !graphs.includes(v));
+    return [
+      ...graphs.map((v, i) => derivedViewPanel(pack, views[v], `ref:queries.${v}`, { w: widths[i] })),
+      ...notes.map(v => (views[v] ? derivedViewPanel(pack, views[v], `ref:queries.${v}`) : text(`Derived view \`${v}\` is bound but not declared in spec.queries.derived_views.`, { title: humanize(v), h: 3 }))),
+    ];
+  };
+  // A source board's §1-2 block, by the number of SLIs it binds (N) when it binds SLOs too:
+  // N ≥ 3 the tiles on a row of their own, then the bar gauge w12 with the two burn curves w6;
+  // N = 2 both tiles w6 h8 beside the bar gauge w12, the curves w12 on the next row;
+  // N = 1 the tile, the bar gauge and the two curves w6 h8 on one row; N = 0 the bar gauge and
+  // the curves. Without bound SLOs: the tiles only. The bar gauge is filtered to the bound SLOs.
+  const contractPanels = (b) => {
+    const n = b.slis.length;
+    if (!n && !b.slos.length) return [];
+    const head = row('§1-2 · Contract — SLIs and SLOs');
+    if (!b.slos.length) return [head, ...tiles(b.slis)];
+    const bars = (w) => burnBars(b.slos.map(s => `slos.${s}`), w, 8, b.slos);
+    if (n === 0) return [head, bars(12), ...burnCurves(6, 'hidden')];
+    if (n === 1) return [head, ...tiles(b.slis, { widths: [6], h: 8 }), bars(6), ...burnCurves(6, 'hidden')];
+    if (n === 2) return [head, ...tiles(b.slis, { widths: [6, 6], h: 8 }), bars(12), ...burnCurves(12, 'hidden')];
+    return [head, ...tiles(b.slis), bars(12), ...burnCurves(6, 'hidden')];
+  };
   const out = [];
 
   // ---------------------------------------------------------------- unified (pack order)
@@ -139,7 +170,7 @@ export function genericBoards(pack, { module = null, repoUrl = null } = {}) {
     ...alertCounters(4), alertTimelines(12, 4)[0], alertTable(12, 8), alertTimelines(12, 8)[1],
     ...((pack.spec.remediation || []).length ? [row('§9 · Remediation — runbooks and guardrails'), remediationTable()] : []),
     ...(module?.signals?.[unifiedId] || []),
-    ...(Object.keys(views).length ? [row('Signals — the pack\'s derived views'), ...Object.keys(views).map(viewPanel)] : []),
+    ...(Object.keys(views).length ? [row('Signals — the pack\'s derived views'), ...viewPanels(Object.keys(views))] : []),
     ...pipelinesPanels(pack),
     ...logsTracesPanels(pack),
   ];
@@ -159,9 +190,8 @@ export function genericBoards(pack, { module = null, repoUrl = null } = {}) {
       const blurb = [b.slis.length ? `SLIs ${b.slis.join(', ')}` : null, b.slos.length ? `SLOs ${b.slos.join(', ')}` : null, b.views.length ? `views ${b.views.join(', ')}` : null].filter(Boolean).join(' · ') || 'Pack-declared board.';
       const panels = [
         header(title, `${blurb}.`, d.id),
-        ...(b.slis.length || b.slos.length ? [row('§1-2 · Contract — SLIs and SLOs'), ...tiles(b.slis)] : []),
-        ...(b.slos.length ? [burnBars(b.slos.map(s => `slos.${s}`), 12, 8, b.slos), ...burnCurves(6, 'hidden')] : []),
-        ...(b.views.length ? [row('§5 · Derived views'), ...b.views.map(viewPanel)] : []),
+        ...contractPanels(b),
+        ...(b.views.length ? [row('§5 · Derived views'), ...viewPanels(b.views)] : []),
         row('Alerting'), ...alertTimelines(12, 6),
         ...(module?.signals?.[d.id] || []),
       ];
@@ -186,7 +216,7 @@ export function genericBoards(pack, { module = null, repoUrl = null } = {}) {
     }
     if (/per-resource-template$/.test(tpl)) {
       const v = views[d.params?.view];
-      const panels = [header(title, v ? `Per-resource rollup ${v.id}.` : 'Per-resource rollup.', d.id), v ? derivedViewPanel(pack, v, `ref:queries.${v.id}`) : text(`Derived view \`${d.params?.view}\` is not declared in spec.queries.derived_views.`, { title, h: 3 })];
+      const panels = [header(title, v ? `Per-resource rollup ${v.id}.` : 'Per-resource rollup.', d.id), v ? derivedViewPanel(pack, v, `ref:queries.${v.id}`, { w: 24 }) : text(`Derived view \`${d.params?.view}\` is not declared in spec.queries.derived_views.`, { title, h: 3 })];
       out.push({ id: d.id, file: `${d.id}.json`, dashboard: dashboard(d.id, `${c.displayName} — ${title}`, panels, tags, { description: `${c.displayName} per-resource view.` }) });
       continue;
     }

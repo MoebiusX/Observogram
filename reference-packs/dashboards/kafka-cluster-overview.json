@@ -149,7 +149,7 @@
       "gridPos": {
         "x": 0,
         "y": 3,
-        "w": 4,
+        "w": 6,
         "h": 4
       },
       "description": "Fraction of brokers reporting ready vs. cluster's declared broker count. SLO 99.9 % over 30d.",
@@ -221,9 +221,9 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 4,
+        "x": 6,
         "y": 3,
-        "w": 4,
+        "w": 6,
         "h": 4
       },
       "description": "Fraction of partitions whose in-sync replica count equals their replica count. The comparison is `== bool` (1 per healthy partition): the filter form keeps the left-hand value, the ISR count, and sums to 3 x partitions on a healthy replication-factor-3 cluster (the burn generator always emitted the bool form; the pack's recording rule carried the filter form until 2026-09-22 — indistinguishable on the lab's replication factor 1). SLO 99.95 % over 30d.",
@@ -295,9 +295,9 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 8,
+        "x": 12,
         "y": 3,
-        "w": 4,
+        "w": 6,
         "h": 4
       },
       "description": "99th-percentile total time of Produce requests on the broker (queue, local, remote/replication wait, response send), in seconds: what a producer waits for an ack. Kafka publishes its request-time histograms through JMX as per-quantile gauges (no _bucket series exist); with the Strimzi rule set the 0.99 quantile of kafka.network:type=RequestMetrics, name=TotalTimeMs is kafka_network_requestmetrics_totaltimems{quantile=\"0.99\"}, in milliseconds. SLO 99 % over 30d.",
@@ -369,9 +369,9 @@
         "uid": "prom"
       },
       "gridPos": {
-        "x": 12,
+        "x": 18,
         "y": 3,
-        "w": 4,
+        "w": 6,
         "h": 4
       },
       "description": "99th-percentile local (broker processing) time of FetchConsumer requests, in seconds. LocalTimeMs, not TotalTimeMs: a consumer fetch is a long poll, and TotalTimeMs is dominated by the wait in purgatory for the next record (RemoteTimeMs). Measured on the lab: on the 10 msg/s topic the TotalTimeMs p99 is 102 ms (the gap between records); on an idle partition it is fetch.max.wait.ms — 500 ms by default, seen as the 503 ms p999 during the producer's restart gaps — both above the 50 ms objective with no broker fault, while LocalTimeMs p99 is 0-1 ms. Same JMX-quantile shape as produce_latency_p99, milliseconds. SLO 99 % over 30d.",
@@ -458,7 +458,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "kafka:errorbudget:burn_1h",
+          "expr": "kafka:errorbudget:burn_1h{slo=~\"broker_availability_99_9|partition_health_99_95\"}",
           "instant": true,
           "legendFormat": "{{slo}}"
         }
