@@ -1,0 +1,208 @@
+apiVersion: observability.platform/v1
+kind: ObservabilityPack
+metadata:
+  name: checkout-api
+  version: 0.1.0
+  binding: otel-grafanalabs
+  owners:
+    - checkout-api-owners
+  imports:
+    - ref: platform/std-budget-policy@2.1
+  bindings:
+    service: checkout-api
+    environments:
+      - prod
+    criticality: tier-3
+  labels:
+    source: library
+    tier: tier-3
+    library.entries: http-service
+  annotations:
+    library.source: http-service@1.0.0
+    library.format: v1
+    library.tier: tier-3
+    library.environment: prod
+    library.toggles: slos,policy,routes,dashboards,validation
+    library.slis: availability
+    library.params: "{}"
+    library.evidence: http-service:semconv
+    library.evidence.slis.availability: "semconv: OTel semconv v1.27.0 HTTP metrics + Prometheus compatibility naming; spelling not verified live in this repo (evidence.notes)"
+    library.todoCount: "13"
+    library.todo.alerting.routes[0]: "channels.0.msteams: Chat channel for SEV1/SEV2: placeholder '#checkout-api-oncall' (param oncall_channel) — The Teams channel the SEV1 and SEV2 routes post to."
+    library.todo.alerting.routes[1]: "channels.0.msteams: Chat channel for SEV1/SEV2: placeholder '#checkout-api-oncall' (param oncall_channel) — The Teams channel the SEV1 and SEV2 routes post to."
+    library.todo.alerting.routes[2]: "channels.0.msteams: Chat channel for SEV3: placeholder '#checkout-api-team' (param team_channel) — The Teams channel the SEV3 route posts to."
+    library.todo.baselines: "mttd_target_p50: MTTD / MTTR targets are the tier-3 defaults, not measured: set them from the service's incident history"
+    library.todo.metadata.owners: "owners defaulted to 'checkout-api-owners': name the owning team(s)"
+    library.todo.pipelines.exporters.logs: "endpoints.0: Loki OTLP ingest endpoint: placeholder 'http://loki:3100/otlp' (param logs_otlp_endpoint) — Where the collector pushes logs over OTLP/HTTP (pipelines.exporters.logs)."
+    library.todo.pipelines.exporters.metrics: "endpoint: Prometheus remote-write URL: placeholder 'http://prometheus:9090/api/v1/write' (param remote_write_url) — Where the collector remote-writes metrics (pipelines.exporters.metrics)."
+    library.todo.pipelines.exporters.traces: "endpoint: Tempo OTLP ingest endpoint: placeholder 'tempo:4317' (param traces_otlp_endpoint) — Where the collector pushes traces over OTLP/gRPC (pipelines.exporters.traces)."
+    library.todo.storage.metrics: "remote_write.0.url: Prometheus remote-write URL: placeholder 'http://prometheus:9090/api/v1/write' (param remote_write_url) — Where the collector remote-writes metrics (pipelines.exporters.metrics)."
+    library.todo.telemetry.backends.logs-loki: "endpoints.0: Loki endpoint: placeholder 'http://loki:3100' (param logs_endpoint) — Where the logs backend answers (telemetry.backends logs-loki)."
+    library.todo.telemetry.backends.metrics-prom: "endpoints.0: Prometheus query endpoint: placeholder 'http://prometheus:9090' (param metrics_endpoint) — Where the metrics backend answers PromQL (telemetry.backends metrics-prom)."
+    library.todo.telemetry.backends.traces-tempo: "endpoints.0: Tempo endpoint: placeholder 'http://tempo:3200' (param traces_endpoint) — Where the traces backend answers (telemetry.backends traces-tempo)."
+    library.todo.validation.synthetic_checks.health-probe: "target: Health endpoint URL: placeholder 'http://checkout-api:8080/health' (param health_url) — The URL the blackbox probe hits to prove the service answers."
+spec:
+  otel:
+    semconv: 1.27.0
+    resource_attributes:
+      required:
+        - service.name
+        - deployment.environment
+    sdk:
+      languages:
+        - go
+      sampling:
+        policy: parentbased_traceidratio
+        ratio: 0.1
+      propagators:
+        - tracecontext
+        - baggage
+  telemetry:
+    backends:
+      - id: metrics-prom
+        signal: metrics
+        product: prometheus
+        version:
+          declared: "3.14"
+          min: "2.53"
+          gating: warn
+        endpoints:
+          - http://prometheus:9090
+        default: true
+      - id: logs-loki
+        signal: logs
+        product: loki
+        version:
+          declared: "3.7"
+          min: "3.0"
+          gating: warn
+        endpoints:
+          - http://loki:3100
+        default: true
+      - id: traces-tempo
+        signal: traces
+        product: tempo
+        version:
+          declared: "2.10"
+          min: "2.5"
+          gating: warn
+        endpoints:
+          - http://tempo:3200
+        default: true
+  environments:
+    prod:
+      criticality: tier-3
+      backends:
+        metrics: metrics-prom
+        logs: logs-loki
+        traces: traces-tempo
+  slis:
+    - id: availability
+      type: ratio
+      description: Fraction of HTTP requests not answered with a 5xx status, from the request-duration histogram's _count series (semconv http.server.request.duration, label http_response_status_code).
+      semconv_metric: http.server.request.duration
+      good: sum(rate(http_server_request_duration_seconds_count{job="checkout-api",http_response_status_code!~"5.."}[5m]))
+      total: sum(rate(http_server_request_duration_seconds_count{job="checkout-api"}[5m]))
+  slos:
+    - id: availability_99
+      sli: availability
+      objective: 0.99
+      window: 30d
+      error_budget_policy: ref:platform/std-budget-policy
+  pipelines:
+    receivers:
+      - name: otlp
+        protocols:
+          - grpc
+          - http
+        endpoint: 0.0.0.0:4317
+    processors:
+      - name: memory_limiter
+        limit_percentage: 80
+      - name: batch
+        timeout: 10s
+    exporters:
+      metrics:
+        kind: prometheusremotewrite
+        endpoint: http://prometheus:9090/api/v1/write
+        external_labels:
+          service: checkout-api
+      logs:
+        kind: otlphttp
+        endpoints:
+          - http://loki:3100/otlp
+      traces:
+        kind: otlp
+        endpoint: tempo:4317
+  storage:
+    metrics:
+      backend: prometheus
+      version: "3.14"
+      retention: 15d
+      remote_write:
+        - url: http://prometheus:9090/api/v1/write
+    logs:
+      backend: loki
+      version: "3.7"
+      retention: 7d
+    traces:
+      backend: tempo
+      version: "2.10"
+      retention: 3d
+      sampling: head-based
+  queries:
+    recording_rules:
+      - name: checkout_api:availability:ratio_5m
+        expr: ref:slis.availability
+        interval: 30s
+  dashboards:
+    - id: checkout-api-overview
+      provider:
+        kind: grafana
+        version: "12.4"
+        schemaVersion: 41
+      folder: checkout-api
+      source: file://dashboards/checkout-api-overview.json
+      panel_bindings:
+        - panel: slis-availability
+          binds_to: slis.availability
+        - panel: slos-availability-99
+          binds_to: slos.availability_99
+  policy:
+    burn_rate_alerts:
+      - slo: availability_99
+        windows:
+          - short: 5m
+            long: 1h
+            factor: 14
+            severity: SEV2
+          - short: 30m
+            long: 6h
+            factor: 6
+            severity: SEV3
+  alerting:
+    routes:
+      - severity: SEV1
+        channels:
+          - msteams: "#checkout-api-oncall"
+      - severity: SEV2
+        channels:
+          - msteams: "#checkout-api-oncall"
+      - severity: SEV3
+        channels:
+          - msteams: "#checkout-api-team"
+    dedup: ref:platform/std-dedup
+  baselines:
+    mttd_target_p50: 15m
+    mttr_target_p50: 1d
+    review_cadence: monthly
+  validation:
+    synthetic_checks:
+      - id: health-probe
+        kind: blackbox-exporter
+        target: http://checkout-api:8080/health
+        interval: 1m
+        assertions:
+          - status_code: 200
+          - latency_lt: 1s
+        on_fail_severity: SEV2

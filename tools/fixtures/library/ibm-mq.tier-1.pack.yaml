@@ -1,0 +1,777 @@
+apiVersion: observability.platform/v1
+kind: ObservabilityPack
+metadata:
+  name: payments-mq
+  version: 0.1.0
+  binding: otel-grafanalabs
+  owners:
+    - team-payments
+  imports:
+    - ref: platform/std-budget-policy@2.1
+  bindings:
+    service: payments-mq
+    environments:
+      - prod
+    criticality: tier-1
+  labels:
+    source: library
+    tier: tier-1
+    library.entries: ibm-mq
+  annotations:
+    library.source: ibm-mq@1.0.0
+    library.format: v1
+    library.tier: tier-1
+    library.environment: prod
+    library.toggles: slos,policy,routes,dashboards,validation
+    library.slis: qmgr_process_up,qmgr_reachability,queue_depth_headroom,oldest_message_age,dlq_depth,canary_success,canary_roundtrip_p99,log_write_latency
+    library.params: "{}"
+    library.evidence: ibm-mq:recorded-live
+    library.evidence.slis.qmgr_process_up: "recorded-live: ibmmq.md §1, §5 — qmgr-down chaos measured (container-stop, MTTD 40-45 s); up{job=\"ibmmq-native\"} in the live inventory"
+    library.evidence.slis.qmgr_reachability: "recorded-live: ibmmq.md §1, §4, §5 — ibmmq_qmgr_status in the live inventory; listener-stopped chaos measured (listener + both SVRCONN channels force-stopped)"
+    library.evidence.slis.queue_depth_headroom: "recorded-live: ibmmq.md §1, §4, §5 — both gauges in the live inventory; queue-full chaos (200 puts on a MAXDEPTH(200) queue) measured"
+    library.evidence.slis.oldest_message_age: "recorded-live: ibmmq.md §1, §4, §5 — gauge in the live inventory (MONQ(HIGH)); consumer-stall chaos measured at 99.6 s and 117.9 s"
+    library.evidence.slis.dlq_depth: "recorded-live: ibmmq.md §1, §5 — dlq-poison chaos (3 puts to the DEADQ) measured"
+    library.evidence.slis.canary_success: "recorded-live: ibmmq.md §1, §4 — the canary's OTLP counter as stored (add_metric_suffixes → _total); the empty-good-series case seen live 2026-09-16"
+    library.evidence.slis.canary_roundtrip_p99: "recorded-live: ibmmq.md §4 — the canary's OTLP histogram as stored; ibmmq-live-metrics-2026-09-16.md"
+    library.evidence.slis.log_write_latency: "recorded-live: ibmmq.md §4 — ibmmq_qmgr_log_write_latency_seconds on both jobs in the live inventory"
+    library.todoCount: "27"
+    library.todo.alerting.routes[0]: "channels.0.msteams: Chat channel for SEV1/SEV2: placeholder '#payments-mq-oncall' (param oncall_channel) — The Teams channel the SEV1 and SEV2 routes post to. · channels.1.voice: Voice (pager) target for SEV1: placeholder 'pagerduty://payments-mq' (param pager_service) — The voice channel of the SEV1 route (tier-2 and tier-1; L4.MUST.tier1_voice_route)."
+    library.todo.alerting.routes[1]: "channels.0.msteams: Chat channel for SEV1/SEV2: placeholder '#payments-mq-oncall' (param oncall_channel) — The Teams channel the SEV1 and SEV2 routes post to. · channels.1.voice: Voice (pager) target for SEV2: placeholder 'pagerduty://payments-mq-low' (param pager_service_low) — The voice channel of the SEV2 route (tier-1)."
+    library.todo.alerting.routes[2]: "channels.0.msteams: Chat channel for SEV3: placeholder '#payments-mq-team' (param team_channel) — The Teams channel the SEV3 route posts to."
+    library.todo.baselines: "mttd_target_p50: MTTD / MTTR targets are the tier-1 defaults, not measured: set them from the service's incident history"
+    library.todo.pipelines.exporters.logs: "endpoints.0: Loki OTLP ingest endpoint: placeholder 'http://loki:3100/otlp' (param logs_otlp_endpoint) — Where the collector pushes logs over OTLP/HTTP (pipelines.exporters.logs)."
+    library.todo.pipelines.exporters.metrics: "endpoint: Prometheus remote-write URL: placeholder 'http://prometheus:9090/api/v1/write' (param remote_write_url) — Where the collector remote-writes metrics (pipelines.exporters.metrics)."
+    library.todo.pipelines.exporters.traces: "endpoint: Tempo OTLP ingest endpoint: placeholder 'tempo:4317' (param traces_otlp_endpoint) — Where the collector pushes traces over OTLP/gRPC (pipelines.exporters.traces)."
+    library.todo.pipelines.receivers[1]: "scrape_configs.0.static_configs.0.targets.0: Native /metrics target: placeholder 'mq:9157' (param native_target) — host:port of the queue manager container's native metrics endpoint. · scrape_configs.1.static_configs.0.targets.0: mq_prometheus target: placeholder 'mq-exporter:9157' (param exporter_target) — host:port of mq_prometheus."
+    library.todo.remediation[0]: "runbook: write the runbook file://<runbook_dir>/qmgr-down.md"
+    library.todo.remediation[1]: "runbook: write the runbook file://<runbook_dir>/qmgr-unreachable.md"
+    library.todo.remediation[2]: "runbook: write the runbook file://<runbook_dir>/queue-depth.md"
+    library.todo.remediation[3]: "runbook: write the runbook file://<runbook_dir>/consumer-stalled.md"
+    library.todo.remediation[4]: "runbook: write the runbook file://<runbook_dir>/dlq.md"
+    library.todo.storage.metrics: "remote_write.0.url: Prometheus remote-write URL: placeholder 'http://prometheus:9090/api/v1/write' (param remote_write_url) — Where the collector remote-writes metrics (pipelines.exporters.metrics)."
+    library.todo.telemetry.backends.logs-loki: "endpoints.0: Loki endpoint: placeholder 'http://loki:3100' (param logs_endpoint) — Where the logs backend answers (telemetry.backends logs-loki)."
+    library.todo.telemetry.backends.metrics-prom: "endpoints.0: Prometheus query endpoint: placeholder 'http://prometheus:9090' (param metrics_endpoint) — Where the metrics backend answers PromQL (telemetry.backends metrics-prom)."
+    library.todo.telemetry.backends.traces-tempo: "endpoints.0: Tempo endpoint: placeholder 'http://tempo:3200' (param traces_endpoint) — Where the traces backend answers (telemetry.backends traces-tempo)."
+    library.todo.validation.chaos_experiments.canary-roundtrip-p99-degradation: "target: Chaos target workload: placeholder 'payments-mq' (param chaos_target) — The workload the generic chaos experiments inject faults into (entries with their own chaos templates name their own targets). · fault: generic network-latency fault chosen by SLI type: replace it with the fault that actually degrades canary_roundtrip_p99"
+    library.todo.validation.chaos_experiments.canary-success-degradation: "target: Chaos target workload: placeholder 'payments-mq' (param chaos_target) — The workload the generic chaos experiments inject faults into (entries with their own chaos templates name their own targets). · fault: generic pod-failure fault chosen by SLI type: replace it with the fault that actually degrades canary_success"
+    library.todo.validation.chaos_experiments.consumer-stall: "target: Queue manager workload (chaos target): placeholder 'ibmmq-qmgr' (param qmgr_workload) — The queue manager container / pod the chaos experiments stop."
+    library.todo.validation.chaos_experiments.dlq-poison: "target: Queue manager workload (chaos target): placeholder 'ibmmq-qmgr' (param qmgr_workload) — The queue manager container / pod the chaos experiments stop."
+    library.todo.validation.chaos_experiments.listener-stopped: "target: Queue manager workload (chaos target): placeholder 'ibmmq-qmgr' (param qmgr_workload) — The queue manager container / pod the chaos experiments stop."
+    library.todo.validation.chaos_experiments.log-write-latency-degradation: "target: Chaos target workload: placeholder 'payments-mq' (param chaos_target) — The workload the generic chaos experiments inject faults into (entries with their own chaos templates name their own targets). · fault: generic network-latency fault chosen by SLI type: replace it with the fault that actually degrades log_write_latency"
+    library.todo.validation.chaos_experiments.qmgr-down: "target: Queue manager workload (chaos target): placeholder 'ibmmq-qmgr' (param qmgr_workload) — The queue manager container / pod the chaos experiments stop."
+    library.todo.validation.chaos_experiments.qmgr-down-prod: "target: Queue manager workload (chaos target): placeholder 'ibmmq-qmgr' (param qmgr_workload) — The queue manager container / pod the chaos experiments stop. · schedule: weekly production chaos (tier-1): confirm the blast radius and the change-freeze rules before enabling it"
+    library.todo.validation.chaos_experiments.queue-full: "target: Queue manager workload (chaos target): placeholder 'ibmmq-qmgr' (param qmgr_workload) — The queue manager container / pod the chaos experiments stop."
+    library.todo.validation.synthetic_checks.put-get-canary: "target: Canary queue: placeholder 'APP.CANARY' (param canary_queue) — The queue the put/get canary round-trips on (mq-canary from mq-observability-pack)."
+spec:
+  otel:
+    semconv: 1.27.0
+    resource_attributes:
+      required:
+        - service.name
+        - service.namespace
+        - service.version
+        - service.instance.id
+        - deployment.environment
+      custom:
+        - mq.qmgr.name
+        - messaging.system
+    sdk:
+      languages:
+        - node
+        - java
+        - go
+      sampling:
+        policy: parentbased_traceidratio
+        ratio: 1
+      propagators:
+        - tracecontext
+        - baggage
+      log_correlation: true
+  telemetry:
+    backends:
+      - id: metrics-prom
+        signal: metrics
+        product: prometheus
+        version:
+          declared: "3.14"
+          min: "2.53"
+          gating: enforce
+        endpoints:
+          - http://prometheus:9090
+        default: true
+      - id: logs-loki
+        signal: logs
+        product: loki
+        version:
+          declared: "3.7"
+          min: "3.0"
+          gating: enforce
+        endpoints:
+          - http://loki:3100
+        default: true
+      - id: traces-tempo
+        signal: traces
+        product: tempo
+        version:
+          declared: "2.10"
+          min: "2.5"
+          gating: enforce
+        endpoints:
+          - http://tempo:3200
+        default: true
+  environments:
+    prod:
+      criticality: tier-1
+      backends:
+        metrics: metrics-prom
+        logs: logs-loki
+        traces: traces-tempo
+  slis:
+    - id: qmgr_process_up
+      type: ratio
+      description: Fraction of queue managers whose native metrics endpoint is scraped successfully.
+      semconv_metric: ibmmq.qmgr.up
+      good: sum(up{job="ibmmq-native"} == bool 1)
+      total: count(up{job="ibmmq-native"})
+    - id: qmgr_reachability
+      type: ratio
+      description: Fraction of queue managers reporting status RUNNING (2) to a client connected over a SVRCONN channel.
+      semconv_metric: ibmmq.qmgr.status
+      good: sum(ibmmq_qmgr_status{job="ibmmq-exporter"} == bool 2)
+      total: count(ibmmq_qmgr_status{job="ibmmq-exporter"})
+    - id: queue_depth_headroom
+      type: threshold
+      description: Highest current depth / MAXDEPTH across application queues. 1.0 means MQRC_Q_FULL for producers.
+      semconv_metric: ibmmq.queue.depth
+      query: |
+        max by (qmgr, queue) (
+          last_over_time(ibmmq_queue_depth{job="ibmmq-exporter", queue=~"APP.*"}[30s])
+            / last_over_time(ibmmq_queue_attribute_max_depth{job="ibmmq-exporter", queue=~"APP.*"}[30s])
+        )
+      threshold: 0.8
+      unit: ratio
+    - id: oldest_message_age
+      type: threshold
+      description: Age in seconds of the oldest message on each application queue (DIS QSTATUS MSGAGE, needs MONQ). The MQ equivalent of consumer lag in seconds.
+      semconv_metric: ibmmq.queue.oldest_message_age
+      query: |
+        max by (qmgr, queue) (
+          last_over_time(ibmmq_queue_oldest_message_age{job="ibmmq-exporter", queue=~"APP.*", queue!="APP.DLQ"}[30s])
+        )
+      threshold: 60
+      unit: seconds
+    - id: dlq_depth
+      type: threshold
+      description: Messages parked on the dead-letter queue. Any non-zero value is a delivery failure that needs a human.
+      semconv_metric: ibmmq.queue.depth
+      query: max by (qmgr) (last_over_time(ibmmq_queue_depth{job="ibmmq-exporter", queue="APP.DLQ"}[30s]))
+      threshold: 0
+      unit: messages
+    - id: canary_success
+      type: ratio
+      description: Fraction of synthetic put→get round-trips that returned the matching payload within 5 s. `or vector(0)` on the good side is deliberate — when every attempt fails there is no result="ok" series at all.
+      semconv_metric: mq.canary.attempts
+      good: (sum(rate(mq_canary_attempts_total{result="ok"}[5m])) or vector(0))
+      total: sum(rate(mq_canary_attempts_total[5m]))
+    - id: canary_roundtrip_p99
+      type: threshold
+      description: 99th-percentile put→get round-trip latency of the canary, client-observed.
+      semconv_metric: mq.canary.roundtrip.duration
+      query: |
+        histogram_quantile(0.99,
+          sum by (le) (rate(mq_canary_roundtrip_duration_seconds_bucket{result="ok"}[5m])))
+      threshold: 0.5
+      unit: seconds
+    - id: log_write_latency
+      type: threshold
+      description: Average recovery-log write latency. Persistent-message throughput is bounded by this number.
+      semconv_metric: ibmmq.qmgr.log.write_latency
+      query: max by (qmgr) (last_over_time(ibmmq_qmgr_log_write_latency_seconds{job="ibmmq-exporter"}[30s]))
+      threshold: 0.02
+      unit: seconds
+  slos:
+    - id: qmgr_process_up_99_9
+      sli: qmgr_process_up
+      objective: 0.999
+      window: 30d
+      error_budget_policy: ref:platform/std-budget-policy
+    - id: qmgr_reachability_99_9
+      sli: qmgr_reachability
+      objective: 0.999
+      window: 30d
+      error_budget_policy: ref:platform/std-budget-policy
+    - id: queue_depth_headroom_99_9
+      sli: queue_depth_headroom
+      objective: 0.999
+      window: 30d
+      error_budget_policy: ref:platform/std-budget-policy
+    - id: oldest_message_age_99
+      sli: oldest_message_age
+      objective: 0.99
+      window: 7d
+      error_budget_policy: ref:platform/std-budget-policy
+    - id: dlq_depth_99_9
+      sli: dlq_depth
+      objective: 0.999
+      window: 30d
+      error_budget_policy: ref:platform/std-budget-policy
+    - id: canary_success_99_9
+      sli: canary_success
+      objective: 0.999
+      window: 30d
+      error_budget_policy: ref:platform/std-budget-policy
+    - id: canary_roundtrip_p99_99
+      sli: canary_roundtrip_p99
+      objective: 0.99
+      window: 30d
+      error_budget_policy: ref:platform/std-budget-policy
+    - id: log_write_latency_99
+      sli: log_write_latency
+      objective: 0.99
+      window: 7d
+      error_budget_policy: ref:platform/std-budget-policy
+  pipelines:
+    receivers:
+      - name: otlp
+        protocols:
+          - grpc
+          - http
+        endpoint: 0.0.0.0:4317
+      - name: prometheus
+        scrape_configs:
+          - job_name: ibmmq-native
+            scrape_interval: 10s
+            honor_labels: true
+            static_configs:
+              -
+                targets:
+                  - mq:9157
+          - job_name: ibmmq-exporter
+            scrape_interval: 10s
+            static_configs:
+              -
+                targets:
+                  - mq-exporter:9157
+    processors:
+      - name: memory_limiter
+        limit_percentage: 80
+      - name: batch
+        timeout: 10s
+      - name: resource
+        attributes:
+          - key: deployment.environment
+            value: prod
+            action: upsert
+      - name: tail_sampling
+        decision_wait: 10s
+        policies:
+          - name: errors
+            type: status_code
+            status_codes:
+              - ERROR
+          - name: slow
+            type: latency
+            threshold_ms: 1000
+          - name: baseline
+            type: probabilistic
+            sampling_percentage: 10
+    exporters:
+      metrics:
+        kind: prometheusremotewrite
+        endpoint: http://prometheus:9090/api/v1/write
+        external_labels:
+          service: payments-mq
+      logs:
+        kind: otlphttp
+        endpoints:
+          - http://loki:3100/otlp
+      traces:
+        kind: otlp
+        endpoint: tempo:4317
+  storage:
+    metrics:
+      backend: prometheus
+      version: "3.14"
+      retention: 13mo
+      remote_write:
+        - url: http://prometheus:9090/api/v1/write
+    logs:
+      backend: loki
+      version: "3.7"
+      retention: 90d
+    traces:
+      backend: tempo
+      version: "2.10"
+      retention: 14d
+      sampling: tail-based
+  queries:
+    recording_rules:
+      - name: payments_mq:qmgr_process_up:ratio_5m
+        expr: ref:slis.qmgr_process_up
+        interval: 30s
+      - name: payments_mq:qmgr_reachability:ratio_5m
+        expr: ref:slis.qmgr_reachability
+        interval: 30s
+      - name: payments_mq:queue_depth_headroom:value_5m
+        expr: ref:slis.queue_depth_headroom
+        interval: 30s
+      - name: payments_mq:oldest_message_age:value_5m
+        expr: ref:slis.oldest_message_age
+        interval: 30s
+      - name: payments_mq:dlq_depth:value_5m
+        expr: ref:slis.dlq_depth
+        interval: 30s
+      - name: payments_mq:canary_success:ratio_5m
+        expr: ref:slis.canary_success
+        interval: 30s
+      - name: payments_mq:canary_roundtrip_p99:value_5m
+        expr: ref:slis.canary_roundtrip_p99
+        interval: 30s
+      - name: payments_mq:log_write_latency:value_5m
+        expr: ref:slis.log_write_latency
+        interval: 30s
+    derived_views:
+      - id: golden_signals_payments_mq
+        bind: ref:platform/golden-signals-view
+        params:
+          service: payments-mq
+      - id: per_queue_depth
+        bind: ref:platform/per-resource-rollup
+        params:
+          metric: ibmmq_queue_depth
+          by:
+            - qmgr
+            - queue
+      - id: per_channel_status
+        bind: ref:platform/per-resource-rollup
+        params:
+          metric: ibmmq_channel_status_squash
+          by:
+            - qmgr
+            - channel
+            - type
+  dashboards:
+    - id: payments-mq-overview
+      provider:
+        kind: grafana
+        version: "12.4"
+        schemaVersion: 41
+      folder: payments-mq
+      source: file://dashboards/payments-mq-overview.json
+      panel_bindings:
+        - panel: slis-qmgr-process-up
+          binds_to: slis.qmgr_process_up
+        - panel: slis-qmgr-reachability
+          binds_to: slis.qmgr_reachability
+        - panel: slis-queue-depth-headroom
+          binds_to: slis.queue_depth_headroom
+        - panel: slis-oldest-message-age
+          binds_to: slis.oldest_message_age
+        - panel: slis-dlq-depth
+          binds_to: slis.dlq_depth
+        - panel: slis-canary-success
+          binds_to: slis.canary_success
+        - panel: slis-canary-roundtrip-p99
+          binds_to: slis.canary_roundtrip_p99
+        - panel: slis-log-write-latency
+          binds_to: slis.log_write_latency
+        - panel: slos-qmgr-process-up-99-9
+          binds_to: slos.qmgr_process_up_99_9
+        - panel: slos-qmgr-reachability-99-9
+          binds_to: slos.qmgr_reachability_99_9
+        - panel: slos-queue-depth-headroom-99-9
+          binds_to: slos.queue_depth_headroom_99_9
+        - panel: slos-oldest-message-age-99
+          binds_to: slos.oldest_message_age_99
+        - panel: slos-dlq-depth-99-9
+          binds_to: slos.dlq_depth_99_9
+        - panel: slos-canary-success-99-9
+          binds_to: slos.canary_success_99_9
+        - panel: slos-canary-roundtrip-p99-99
+          binds_to: slos.canary_roundtrip_p99_99
+        - panel: slos-log-write-latency-99
+          binds_to: slos.log_write_latency_99
+    - id: payments-mq-slo-burn
+      provider:
+        kind: grafana
+        version: "12.4"
+        schemaVersion: 41
+      folder: payments-mq
+      template: ref:platform/slo-burn-template
+      params:
+        slos:
+          - qmgr_process_up_99_9
+          - qmgr_reachability_99_9
+          - queue_depth_headroom_99_9
+          - oldest_message_age_99
+          - dlq_depth_99_9
+          - canary_success_99_9
+          - canary_roundtrip_p99_99
+          - log_write_latency_99
+    - id: payments-mq-deployment-overlay
+      provider:
+        kind: grafana
+        version: "12.4"
+        schemaVersion: 41
+      folder: payments-mq
+      source: file://dashboards/payments-mq-deployment-overlay.json
+      panel_bindings:
+        - panel: slis-qmgr-process-up
+          binds_to: slis.qmgr_process_up
+        - panel: slis-qmgr-reachability
+          binds_to: slis.qmgr_reachability
+        - panel: slis-queue-depth-headroom
+          binds_to: slis.queue_depth_headroom
+        - panel: slis-oldest-message-age
+          binds_to: slis.oldest_message_age
+        - panel: slis-dlq-depth
+          binds_to: slis.dlq_depth
+        - panel: slis-canary-success
+          binds_to: slis.canary_success
+        - panel: slis-canary-roundtrip-p99
+          binds_to: slis.canary_roundtrip_p99
+        - panel: slis-log-write-latency
+          binds_to: slis.log_write_latency
+    - id: payments-mq-customer-impact
+      provider:
+        kind: grafana
+        version: "12.4"
+        schemaVersion: 41
+      folder: payments-mq
+      source: file://dashboards/payments-mq-customer-impact.json
+      panel_bindings:
+        - panel: slos-qmgr-process-up-99-9
+          binds_to: slos.qmgr_process_up_99_9
+        - panel: slos-qmgr-reachability-99-9
+          binds_to: slos.qmgr_reachability_99_9
+        - panel: slos-queue-depth-headroom-99-9
+          binds_to: slos.queue_depth_headroom_99_9
+        - panel: slos-oldest-message-age-99
+          binds_to: slos.oldest_message_age_99
+        - panel: slos-dlq-depth-99-9
+          binds_to: slos.dlq_depth_99_9
+        - panel: slos-canary-success-99-9
+          binds_to: slos.canary_success_99_9
+        - panel: slos-canary-roundtrip-p99-99
+          binds_to: slos.canary_roundtrip_p99_99
+        - panel: slos-log-write-latency-99
+          binds_to: slos.log_write_latency_99
+    - id: ibmmq-queues
+      provider:
+        kind: grafana
+        version: "12.4"
+        schemaVersion: 41
+      folder: payments-mq
+      source: file://dashboards/ibmmq-queues.json
+      panel_bindings:
+        - panel: slis-queue-depth-headroom
+          binds_to: slis.queue_depth_headroom
+        - panel: slis-oldest-message-age
+          binds_to: slis.oldest_message_age
+        - panel: slis-dlq-depth
+          binds_to: slis.dlq_depth
+        - panel: view-per-queue-depth
+          binds_to: ref:queries.per_queue_depth
+    - id: ibmmq-channels
+      provider:
+        kind: grafana
+        version: "12.4"
+        schemaVersion: 41
+      folder: payments-mq
+      source: file://dashboards/ibmmq-channels.json
+      panel_bindings:
+        - panel: slis-qmgr-reachability
+          binds_to: slis.qmgr_reachability
+        - panel: view-per-channel-status
+          binds_to: ref:queries.per_channel_status
+  policy:
+    burn_rate_alerts:
+      - slo: qmgr_process_up_99_9
+        windows:
+          - short: 5m
+            long: 1h
+            factor: 14
+            severity: SEV1
+          - short: 30m
+            long: 6h
+            factor: 6
+            severity: SEV2
+      - slo: qmgr_reachability_99_9
+        windows:
+          - short: 5m
+            long: 1h
+            factor: 14
+            severity: SEV1
+          - short: 30m
+            long: 6h
+            factor: 6
+            severity: SEV2
+      - slo: queue_depth_headroom_99_9
+        windows:
+          - short: 5m
+            long: 1h
+            factor: 14
+            severity: SEV1
+          - short: 30m
+            long: 6h
+            factor: 6
+            severity: SEV2
+      - slo: oldest_message_age_99
+        windows:
+          - short: 10m
+            long: 1h
+            factor: 10
+            severity: SEV2
+          - short: 1h
+            long: 6h
+            factor: 4
+            severity: SEV3
+      - slo: dlq_depth_99_9
+        windows:
+          - short: 10m
+            long: 1h
+            factor: 10
+            severity: SEV2
+          - short: 1h
+            long: 6h
+            factor: 4
+            severity: SEV3
+      - slo: canary_success_99_9
+        windows:
+          - short: 5m
+            long: 1h
+            factor: 14
+            severity: SEV1
+          - short: 30m
+            long: 6h
+            factor: 6
+            severity: SEV2
+      - slo: canary_roundtrip_p99_99
+        windows:
+          - short: 5m
+            long: 1h
+            factor: 14
+            severity: SEV2
+          - short: 30m
+            long: 6h
+            factor: 6
+            severity: SEV3
+      - slo: log_write_latency_99
+        windows:
+          - short: 15m
+            long: 2h
+            factor: 8
+            severity: SEV2
+          - short: 1h
+            long: 6h
+            factor: 3
+            severity: SEV3
+    forecasts:
+      - slo: qmgr_process_up_99_9
+        method: holt-winters
+        horizon: 7d
+        on_projected_breach: open_ticket
+      - slo: queue_depth_headroom_99_9
+        method: linear
+        horizon: 1d
+        on_projected_breach: page_oncall
+      - slo: oldest_message_age_99
+        method: percentile-of-history
+        horizon: 3d
+        on_projected_breach: post_warning
+  alerting:
+    routes:
+      - severity: SEV1
+        channels:
+          - msteams: "#payments-mq-oncall"
+          - voice: pagerduty://payments-mq
+      - severity: SEV2
+        channels:
+          - msteams: "#payments-mq-oncall"
+          - voice: pagerduty://payments-mq-low
+      - severity: SEV3
+        channels:
+          - msteams: "#payments-mq-team"
+    dedup: ref:platform/std-dedup
+    suppress:
+      - maintenance_windows
+      - deploy_freezes
+  remediation:
+    - trigger: alert:ibmmq-queue-manager-down
+      runbook: file://runbooks/qmgr-down.md
+      automation: argo-workflow://restart-qmgr-with-nha-quorum-check
+      guardrails:
+        max_invocations_per_hour: 2
+        requires_human_above: SEV1
+        rollback_on_failure: true
+        cooldown_after_success: 30m
+        circuit_breaker:
+          failures: 2
+          window: 1h
+    - trigger: alert:ibmmq-queue-manager-unreachable
+      runbook: file://runbooks/qmgr-unreachable.md
+      automation: argo-workflow://start-listener-and-channels
+      guardrails:
+        max_invocations_per_hour: 3
+        requires_human_above: SEV1
+        rollback_on_failure: false
+        cooldown_after_success: 15m
+    - trigger: alert:ibmmq-queue-full
+      runbook: file://runbooks/queue-depth.md
+      automation: argo-workflow://consumer-scale-out
+      guardrails:
+        max_invocations_per_hour: 3
+        requires_human_above: SEV1
+        rollback_on_failure: true
+        cooldown_after_success: 15m
+    - trigger: alert:ibmmq-oldest-message-age-high
+      runbook: file://runbooks/consumer-stalled.md
+      automation: argo-workflow://consumer-scale-out
+      guardrails:
+        max_invocations_per_hour: 3
+        requires_human_above: SEV2
+        rollback_on_failure: true
+        cooldown_after_success: 15m
+    - trigger: alert:ibmmq-dead-letter-queue-not-empty
+      runbook: file://runbooks/dlq.md
+      automation: manual-only
+      guardrails:
+        max_invocations_per_hour: 1
+        requires_human_above: SEV3
+        rollback_on_failure: true
+        cooldown_after_success: 30m
+  baselines:
+    mttd_target_p50: 2m
+    mttd_target_p95: 5m
+    mttr_target_p50: 30m
+    mttr_target_p95: 1h
+    measurement_source: incident-mgmt + alertmanager firing timestamps
+    review_cadence: monthly
+    regression_gate: block_release_if_either_breaches_target
+  validation:
+    synthetic_checks:
+      - id: put-get-canary
+        kind: k6
+        target: mq(1414)/APP.CANARY
+        interval: 10s
+        assertions:
+          - put_success: true
+          - round_trip_latency_lt: 500ms
+        on_fail_severity: SEV1
+        otel_instrumentation: true
+    chaos_experiments:
+      - id: qmgr-down
+        engine: litmus
+        target: ibmmq-qmgr
+        steady_state_hypothesis: ref:slos.qmgr_process_up_99_9
+        fault:
+          kind: container-stop
+          duration: 90s
+        expected_alerts:
+          - qmgr_process_up_99_9_burn_14x_5m_1h
+        expected_mttd: 90s
+        schedule: monthly
+        environment: staging
+      - id: listener-stopped
+        engine: litmus
+        target: ibmmq-qmgr
+        steady_state_hypothesis: ref:slos.qmgr_reachability_99_9
+        fault:
+          kind: mqsc
+          command: STOP LISTENER('SYSTEM.LISTENER.TCP.1'); STOP CHANNEL('DEV.APP.SVRCONN') MODE(FORCE); STOP CHANNEL('DEV.ADMIN.SVRCONN') MODE(FORCE)
+          duration: 90s
+        expected_alerts:
+          - qmgr_reachability_99_9_burn_14x_5m_1h
+        expected_mttd: 90s
+        schedule: monthly
+        environment: staging
+      - id: queue-full
+        engine: litmus
+        target: ibmmq-qmgr
+        steady_state_hypothesis: ref:slos.queue_depth_headroom_99_9
+        fault:
+          kind: flood
+          queue: APP.BURST
+          count: 200
+          duration: 60s
+        expected_alerts:
+          - queue_depth_headroom_99_9_burn_14x_5m_1h
+        expected_mttd: 60s
+        schedule: monthly
+        environment: staging
+      - id: consumer-stall
+        engine: litmus
+        target: ibmmq-qmgr
+        steady_state_hypothesis: ref:slos.oldest_message_age_99
+        fault:
+          kind: container-stop
+          duration: 150s
+        expected_alerts:
+          - oldest_message_age_99_burn_10x_10m_1h
+        expected_mttd: 150s
+        schedule: monthly
+        environment: staging
+      - id: dlq-poison
+        engine: litmus
+        target: ibmmq-qmgr
+        steady_state_hypothesis: ref:slos.dlq_depth_99_9
+        fault:
+          kind: put-to-dlq
+          count: 3
+          duration: 60s
+        expected_alerts:
+          - dlq_depth_99_9_burn_10x_10m_1h
+        expected_mttd: 60s
+        schedule: monthly
+        environment: staging
+      - id: canary-success-degradation
+        engine: chaos-mesh
+        target: payments-mq
+        steady_state_hypothesis: ref:slos.canary_success_99_9
+        fault:
+          kind: pod-failure
+          fraction: 0.5
+          duration: 5m
+        expected_alerts:
+          - canary_success_99_9_burn_14x_5m_1h
+        expected_mttd: 5m
+        schedule: monthly
+        environment: staging
+      - id: canary-roundtrip-p99-degradation
+        engine: chaos-mesh
+        target: payments-mq
+        steady_state_hypothesis: ref:slos.canary_roundtrip_p99_99
+        fault:
+          kind: network-latency
+          latency: 500ms
+          duration: 5m
+        expected_alerts:
+          - canary_roundtrip_p99_99_burn_14x_5m_1h
+        expected_mttd: 5m
+        schedule: monthly
+        environment: staging
+      - id: log-write-latency-degradation
+        engine: chaos-mesh
+        target: payments-mq
+        steady_state_hypothesis: ref:slos.log_write_latency_99
+        fault:
+          kind: network-latency
+          latency: 500ms
+          duration: 5m
+        expected_alerts:
+          - log_write_latency_99_burn_8x_15m_2h
+        expected_mttd: 5m
+        schedule: monthly
+        environment: staging
+      - id: qmgr-down-prod
+        engine: litmus
+        target: ibmmq-qmgr
+        steady_state_hypothesis: ref:slos.qmgr_process_up_99_9
+        fault:
+          kind: container-stop
+          duration: 90s
+        expected_alerts:
+          - qmgr_process_up_99_9_burn_14x_5m_1h
+        expected_mttd: 90s
+        schedule: weekly
+        environment: prod
