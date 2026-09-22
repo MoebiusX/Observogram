@@ -14,7 +14,7 @@ import {
   LAYER_DEFS, L4_SUBGROUPS, DOMAIN_DEFS,
   DISCO_SLAB_ACCENT, discoGradeLetter, discoGradeWord,
 } from './constants.mjs';
-import { state, $, $$, persistence } from './state.mjs';
+import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } from './state.mjs';
 import { api, loadCatalog, validateUploaded, authHeaders, setActiveOrg, getActiveOrg, savedOrg } from './api.mjs';
 import {
   effectiveFocus, focusedPackId, focusedEnv, focusedPack,
@@ -40,6 +40,16 @@ import { catalogToDeployManifest } from './artifact-model.mjs';
 import { computeDeployTransitions } from './verify-deploy.mjs';
 import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-view.mjs';
 import { initHost } from './host.mjs';
+// The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
+import {
+  BUILD_STEPS, TIERS as BUILD_TIERS, selectValid as buildSelectValid, buildStepReachability, clampStep as clampBuildStep,
+  buildSelectModel, buildRailModel,
+} from './build-model.mjs';
+import {
+  loadLibrary as loadBuildLibrary, libraryCache as buildLibraryCache, loadRequirements as loadBuildRequirements,
+  requirementsCache as buildRequirementsCache, instantiate as instantiateBuild,
+} from './build-api.mjs';
+import { renderBuildSelect, renderClauseRail } from './build-select-view.mjs';
 
 // `state`, the `$`/`$$` DOM helpers and the persistence layer now live in
 // studio/state.mjs (imported above).
@@ -65,6 +75,14 @@ function setViewFocus(focus) {
 async function rehydrateFromPersistence() {
   const saved = persistence.read();
   if (!saved) return false;
+  // The BUILD draft: inputs only (state.mjs BUILD_PERSIST_FIELDS); the
+  // canonical is re-instantiated from them, never read back. A session
+  // that was building resumes on its step whether or not a pack was open.
+  if (saved.build && typeof saved.build === 'object') restoreBuildDraft(saved.build);
+  if (saved.mode === 'build') {
+    enterBuildMode(state.build.step);
+    return true;
+  }
   const allKnown = [...(state.catalog || []), ...(state._examplesCache || [])];
   const aMeta = allKnown.find(p => p.id === saved.selectedPackId);
   if (!aMeta) {
@@ -709,6 +727,10 @@ export function renderMainView() {
     else renderHomeView();
     return;
   }
+  // The BUILD journey renders its own three steps (Select · Generate ·
+  // Validate) under BUILD_TABS; nothing below applies until "Open in
+  // Discover" hands the produced pack to the analysis journey.
+  if (state.mode === 'build') { renderBuildView(view); return; }
   if (!state.pack) {
     // In the workspace but no pack yet. Discover ("what do we have?") is
     // where you LOAD or GENERATE a pack — so its empty state IS the three
@@ -969,6 +991,11 @@ function setupUpload() {
         fileInput.click();
         return;
       }
+      if (action === 'build-library') {
+        // No pack to upload yet: the BUILD journey makes one from the library.
+        enterBuildMode('select');
+        return;
+      }
       if (action === 'quick-krystaline') {
         // Same flow as the home's MCP connect → adopt path, just driven
         // programmatically. We pre-fill the URL and trigger the same
@@ -1135,6 +1162,95 @@ const OBSERVA_ADV = [
 ];
 const OBSERVA_ADV_VIEWS = new Set(OBSERVA_ADV.map(a => a.id));
 
+// The BUILD journey's three cards (docs/BUILD_JOURNEY.md): the same shape as
+// OBSERVA_TABS and the same accents, rendered by the same header renderer
+// whenever state.mode is 'build'. A card is reachable when the previous
+// step's inputs are valid (build-model.mjs buildStepReachability).
+export const BUILD_TABS = [
+  {
+    id: 'select',
+    n: '1',
+    label: 'What Are We Building?',
+    sub: 'Select',
+    techName: 'Library',
+    tagline: 'Service, tier & library',
+    accent: 'tab-blue',
+  },
+  {
+    id: 'generate',
+    n: '2',
+    label: 'What Should It Watch?',
+    sub: 'Generate',
+    techName: 'Instantiate',
+    tagline: 'SLIs, SLOs, policy, boards',
+    accent: 'tab-magenta',
+  },
+  {
+    id: 'validate',
+    n: '3',
+    label: 'Does It Hold Up?',
+    sub: 'Validate',
+    techName: 'Conformance',
+    tagline: 'Conformance & artifacts',
+    accent: 'tab-emerald',
+  },
+];
+
+// Which tab list the header shows: the analysis journey unless we are building.
+function activeTabSet() { return state.mode === 'build' ? 'build' : 'observa'; }
+function tabListFor(set) { return set === 'build' ? BUILD_TABS : OBSERVA_TABS; }
+
+function observaTabHtml(t) {
+  return `
+    <button type="button" role="tab" class="observa-tab ${t.accent}" data-view="${t.id}"
+            aria-selected="false" title="${escapeHtml(t.techName + ' — ' + t.tagline)}">
+      <span class="observa-tab-num">${t.n}</span>
+      <span class="observa-tab-text">
+        <span class="observa-tab-eyebrow">${escapeHtml(t.sub)}</span>
+        <span class="observa-tab-title">${escapeHtml(t.label)}</span>
+        <span class="observa-tab-tagline">${escapeHtml(t.tagline)}</span>
+      </span>
+    </button>`;
+}
+
+// (Re)render the header's tab cards for the active set. Idempotent per set:
+// the buttons are rebuilt only when the set changes (analysis ↔ build), so
+// the analysis journey's chrome is untouched while nobody is building.
+function syncObservaTabs() {
+  const nav = document.querySelector('.observa-tabs');
+  if (!nav) return;
+  const set = activeTabSet();
+  if (nav.dataset.set === set) return;
+  nav.dataset.set = set;
+  nav.innerHTML = tabListFor(set).map(observaTabHtml).join('');
+  for (const btn of nav.querySelectorAll('.observa-tab')) {
+    btn.addEventListener('click', () => (set === 'build' ? goToBuildStep(btn.dataset.view) : routeTo(btn.dataset.view)));
+  }
+  // The brand tagline names the journey on screen.
+  const steps = document.querySelectorAll('.observa-tagline-step');
+  const words = tabListFor(set).map(t => t.sub);
+  steps.forEach((el, i) => { if (words[i]) el.textContent = words[i]; });
+  document.body.classList.toggle('chrome-build', set === 'build');
+}
+
+// Route a header tab (or an Advanced item) to the existing view dispatcher.
+function routeTo(id) {
+  if (!id) return;
+  // Clicking any tab leaves the landing/reset hero (or the BUILD journey)
+  // and enters the workspace. Without this the no-pack state stays
+  // mode='home' and every tab would keep rendering the landing hero (the
+  // bug behind "why is Discover like the landing hero page?"). The pack is
+  // still null until the user loads one — Discover's empty state handles that.
+  if (state.mode === 'home' || state.mode === 'build') state.mode = 'single';
+  state.view = id;
+  state.activeCardKey = null;
+  state.activeLayer = ({ compile: 'COMPILE', conformance: 'CONF', schema: 'CONF', atlas: 'ATLAS', layers: state.layerFilter !== 'all' ? state.layerFilter : 'L1' })[id] || 'L1';
+  applyModeChrome();
+  paintObservaActiveTab();
+  renderTabs();
+  renderMainView();
+}
+
 function installObservaChrome() {
   if (document.querySelector('.observa-hdr')) return;
   document.body.classList.add('chrome-observa');
@@ -1186,19 +1302,7 @@ function installObservaChrome() {
         <span class="observa-service-name" id="observa-service-name"></span>
       </span>
 
-      <nav class="observa-tabs" role="tablist" aria-label="Primary">
-        ${OBSERVA_TABS.map(t => `
-          <button type="button" role="tab" class="observa-tab ${t.accent}" data-view="${t.id}"
-                  aria-selected="false" title="${escapeHtml(t.techName + ' — ' + t.tagline)}">
-            <span class="observa-tab-num">${t.n}</span>
-            <span class="observa-tab-text">
-              <span class="observa-tab-eyebrow">${escapeHtml(t.sub)}</span>
-              <span class="observa-tab-title">${escapeHtml(t.label)}</span>
-              <span class="observa-tab-tagline">${escapeHtml(t.tagline)}</span>
-            </span>
-          </button>
-        `).join('')}
-      </nav>
+      <nav class="observa-tabs" role="tablist" aria-label="Primary"></nav>
 
       <div class="observa-actions" aria-label="Advanced tools">
         <div class="observa-adv-wrap">
@@ -1228,26 +1332,9 @@ function installObservaChrome() {
   `;
   document.body.insertBefore(hdr, document.body.firstChild);
 
-  // Wire tab clicks → route to the existing view dispatcher.
-  const routeTo = (id) => {
-    if (!id) return;
-    // Clicking any tab leaves the landing/reset hero and enters the
-    // workspace. Without this the no-pack state stays mode='home' and
-    // every tab would keep rendering the landing hero (the bug behind
-    // "why is Discover like the landing hero page?"). The pack is still
-    // null until the user loads one — Discover's empty state handles that.
-    if (state.mode === 'home') state.mode = 'single';
-    state.view = id;
-    state.activeCardKey = null;
-    state.activeLayer = ({ compile: 'COMPILE', conformance: 'CONF', schema: 'CONF', atlas: 'ATLAS', layers: state.layerFilter !== 'all' ? state.layerFilter : 'L1' })[id] || 'L1';
-    applyModeChrome();
-    paintObservaActiveTab();
-    renderTabs();
-    renderMainView();
-  };
-  for (const btn of hdr.querySelectorAll('.observa-tab')) {
-    btn.addEventListener('click', () => routeTo(btn.dataset.view));
-  }
+  // The tab cards: the analysis journey's three (or the BUILD journey's
+  // three in build mode), one renderer — syncObservaTabs wires the clicks.
+  syncObservaTabs();
 
   // Wire the Advanced menu — deep tools off the main workflow.
   const advToggle = hdr.querySelector('.observa-adv-toggle');
@@ -1318,6 +1405,22 @@ function installObservaChrome() {
 }
 
 function paintObservaActiveTab() {
+  syncObservaTabs();
+  if (state.mode === 'build') {
+    // BUILD: the current step is the active card; a step is reachable when
+    // the previous step's inputs are valid, locked otherwise.
+    const reach = buildStepReachability(state.build);
+    for (const btn of document.querySelectorAll('.observa-tab')) {
+      const id = btn.dataset.view;
+      const isActive = id === state.build.step;
+      btn.classList.toggle('is-active', isActive);
+      btn.classList.toggle('is-locked', !reach[id]);
+      btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      btn.setAttribute('aria-disabled', reach[id] ? 'false' : 'true');
+    }
+    document.querySelector('.observa-adv-toggle')?.classList.remove('is-active');
+    return;
+  }
   const v = state.view || 'layers';
   const active = (v === 'benchmark' || v === 'compare-artefacts') ? 'compare' : v;
   const advActive = OBSERVA_ADV_VIEWS.has(v);
@@ -1330,6 +1433,8 @@ function paintObservaActiveTab() {
     // and NOT on the landing screen.
     const isActive = !onLanding && !advActive && btn.dataset.view === active;
     btn.classList.toggle('is-active', isActive);
+    btn.classList.remove('is-locked');
+    btn.removeAttribute('aria-disabled');
     btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
   }
   const advToggle = document.querySelector('.observa-adv-toggle');
@@ -1469,7 +1574,10 @@ function renderServiceGate() {
             <span class="svc-gate-meta">${s.packCount} pack${s.packCount === 1 ? '' : 's'}${s.liveCount ? ` · ${s.liveCount} live draft${s.liveCount === 1 ? '' : 's'}` : ''}</span>
           </button>`).join('')}
       </div>
-      <button type="button" class="svc-gate-new" id="svc-gate-new">+ start something new — connect an MCP endpoint, upload or scan a repo</button>
+      <div class="svc-gate-actions">
+        <button type="button" class="svc-gate-new" id="svc-gate-new">+ start something new — connect an MCP endpoint, upload or scan a repo</button>
+        <button type="button" class="svc-gate-new svc-gate-build" id="svc-gate-build">⬡ build a pack — select service, tier &amp; library, generate, validate</button>
+      </div>
     </section>
   `;
   view.querySelectorAll('.svc-gate-card').forEach(card => {
@@ -1479,6 +1587,7 @@ function renderServiceGate() {
     state.homeVariant = 'hero';
     renderHomeView();
   });
+  view.querySelector('#svc-gate-build')?.addEventListener('click', () => enterBuildMode('select'));
 }
 
 // Reflect the active service into the always-visible OBSERVA-bar chip.
@@ -1587,7 +1696,9 @@ function enterCompareMode(aId, aEnv, bId, bEnv) {
 // api) stay visible because they're the entry points to creating a
 // new pack.
 function applyModeChrome() {
-  const isHome = state.mode === 'home';
+  // The BUILD journey hides the pack controls like home does: there is no
+  // pack until "Open in Discover" registers one.
+  const isHome = state.mode === 'home' || state.mode === 'build';
   updateObservaServiceChip();
   // Under the OBSERVA chrome the pack/env selectors are PINNED as a
   // permanent master row — they are the user's primary controls and
@@ -1687,6 +1798,236 @@ function setupHomeAffordance() {
   brand.style.cursor = 'pointer';
   brand.title = 'Return home';
   brand.onclick = () => goHome();
+}
+
+// ============================================================
+// The BUILD journey — Select · Generate · Validate (docs/BUILD_JOURNEY.md,
+// slice 2). The controller: state.build is the draft, the step modules
+// render it (build-select-view / build-generate-view / build-validate-view,
+// renderer-only), build-model.mjs computes what they show, build-api.mjs
+// talks to the six /api/library routes. Every change to the draft
+// re-instantiates through the API (debounced), because the PromQL grammar
+// check is Node-only; the result feeds the clause rail the three steps share.
+// ============================================================
+
+// Restore a persisted draft (inputs only) over the defaults.
+function restoreBuildDraft(saved) {
+  const next = defaultBuildState();
+  for (const k of BUILD_PERSIST_FIELDS) {
+    if (saved[k] === undefined || saved[k] === null) continue;
+    if (k === 'toggles' && typeof saved[k] === 'object') { next.toggles = { ...next.toggles, ...saved[k] }; continue; }
+    if (k === 'params' && typeof saved[k] === 'object' && !Array.isArray(saved[k])) { next.params = { ...saved[k] }; continue; }
+    if (k === 'entries' && Array.isArray(saved[k])) { next.entries = saved[k].filter(x => typeof x === 'string'); continue; }
+    if (k === 'slis' && Array.isArray(saved[k])) { next.slis = saved[k].filter(x => typeof x === 'string'); continue; }
+    if (k === 'step' && !BUILD_STEPS.includes(saved[k])) continue;
+    if (k === 'tier' && !BUILD_TIERS.includes(saved[k])) continue;
+    if (['name', 'owners', 'environment', 'registeredId', 'step', 'tier'].includes(k) && typeof saved[k] === 'string') next[k] = saved[k];
+  }
+  state.build = next;
+}
+
+export function enterBuildMode(step) {
+  state.mode = 'build';
+  state.activeCardKey = null;
+  state.build.step = clampBuildStep(state.build, step || state.build.step);
+  applyModeChrome();
+  paintObservaActiveTab();
+  renderTabs();
+  renderMainView();
+  // SELECT shows what each tier requires and the rail the chosen tier's
+  // clauses; the draft needs a result if it is already complete (a reload
+  // lands here with inputs and no canonical).
+  for (const t of BUILD_TIERS) ensureBuildRequirements(t);
+  if (!state.build.result && buildSelectValid(state.build)) scheduleBuildInstantiate(0);
+  persistence.schedule();
+}
+
+// Leave the journey without a hand-off: back to the pack that was open, or home.
+function exitBuildMode() {
+  if (state.mode !== 'build') return;
+  if (state.selectedPackId) { state.mode = 'single'; state.view = 'layers'; enterAnalyzeMode(state.selectedPackId, state.selectedEnv); return; }
+  goHome();
+}
+
+function goToBuildStep(step) {
+  if (!BUILD_STEPS.includes(step)) return;
+  const reach = buildStepReachability(state.build);
+  if (!reach[step]) {
+    toast(step === 'generate' ? 'Complete the selection first — a service name, a tier and at least one library entry.'
+      : 'Generate a pack with at least one SLI first.', 'error');
+    return;
+  }
+  if (state.mode !== 'build') { enterBuildMode(step); return; }
+  state.build.step = step;
+  state.build.preview = null;
+  paintObservaActiveTab();
+  renderMainView();
+  window.scrollTo({ top: 0 });
+}
+
+// A tier's clauses, loaded once per tier; the view repaints when they land
+// (SELECT shows what every tier requires, the rail the chosen tier's).
+function ensureBuildRequirements(tier) {
+  if (!tier || buildRequirementsCache()[tier]) return;
+  loadBuildRequirements(tier).then(() => { if (state.mode === 'build') rerenderBuild(); })
+    .catch(e => toast(`Could not load the ${tier} requirements: ${e.message}`, 'error'));
+}
+
+// Debounced re-instantiation. Stale answers are dropped by sequence, so a
+// fast second edit never paints an older pack over a newer one.
+let buildSeq = 0;
+let buildTimer = null;
+function scheduleBuildInstantiate(delay = 350) {
+  if (buildTimer) clearTimeout(buildTimer);
+  buildTimer = setTimeout(runBuildInstantiate, delay);
+}
+async function runBuildInstantiate() {
+  buildTimer = null;
+  const b = state.build;
+  if (!buildSelectValid(b)) {
+    if (b.result || b.error || b.pending) { b.result = null; b.error = null; b.pending = false; rerenderBuild(); }
+    return;
+  }
+  const seq = ++buildSeq;
+  b.pending = true;
+  paintBuildPending(true);
+  let res;
+  try { res = await instantiateBuild(b); }
+  catch (e) { res = { ok: false, errors: [e.message] }; }
+  if (seq !== buildSeq || state.build !== b) return;
+  b.pending = false;
+  if (res?.ok) {
+    b.result = {
+      canonical: res.canonical, canonicalYaml: res.canonicalYaml || '', todos: res.todos || [], warnings: res.warnings || [],
+      summary: res.summary || null, conformance: res.conformance || null, schemaErrors: res.schemaErrors || [], provenance: res.provenance || null,
+    };
+    b.error = null;
+  } else {
+    b.result = null;
+    b.error = res?.errors || [res?.error || 'instantiation failed'];
+  }
+  b.preview = null;   // compiled from the previous canonical
+  // A step that is no longer reachable (every SLI unticked) falls back.
+  b.step = clampBuildStep(b, b.step);
+  rerenderBuild();
+  persistence.schedule();
+}
+function paintBuildPending(on) {
+  document.querySelector('.build-rail')?.classList.toggle('is-pending', on);
+  document.querySelector('.build-shell')?.classList.toggle('is-pending', on);
+}
+
+// Re-render the build view keeping the focused input focused (a typed name
+// or an inline param re-instantiates and repaints while the caret is in it).
+function rerenderBuild() {
+  if (state.mode !== 'build') return;
+  const el = document.activeElement;
+  const key = el?.dataset?.focusKey || null;
+  const sel = key && typeof el.selectionStart === 'number' ? [el.selectionStart, el.selectionEnd] : null;
+  const scrollY = window.scrollY;
+  paintObservaActiveTab();
+  renderMainView();
+  if (key) {
+    const next = document.querySelector(`[data-focus-key="${CSS.escape(key)}"]`);
+    if (next) {
+      next.focus({ preventScroll: true });
+      if (sel && typeof next.setSelectionRange === 'function') { try { next.setSelectionRange(sel[0], sel[1]); } catch { /* not a text input */ } }
+    }
+  }
+  window.scrollTo({ top: scrollY });
+}
+
+// The actions the step renderers call (they never import app.mjs).
+const buildActions = {
+  // Merge a patch into the draft; text fields re-instantiate after a pause,
+  // structural changes repaint at once.
+  update(patch, { rerender = false, reinstantiate = true, delay } = {}) {
+    Object.assign(state.build, patch);
+    if (rerender) rerenderBuild();
+    if (reinstantiate) scheduleBuildInstantiate(delay);
+    persistence.schedule();
+  },
+  setTier(tier) {
+    if (!BUILD_TIERS.includes(tier) || tier === state.build.tier) return;
+    state.build.tier = tier;
+    ensureBuildRequirements(tier);
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+  },
+  toggleEntry(id) {
+    const b = state.build;
+    b.entries = b.entries.includes(id) ? b.entries.filter(x => x !== id) : [...b.entries, id];
+    // The SLI selection is per entry set: a new composition starts from the tier's defaults.
+    b.slis = null;
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+  },
+  setParam(key, value) {
+    const b = state.build;
+    const v = String(value ?? '').trim();
+    const params = { ...b.params };
+    if (v === '') delete params[key]; else params[key] = v;
+    if (JSON.stringify(params) === JSON.stringify(b.params)) return;
+    b.params = params;
+    scheduleBuildInstantiate(0);
+    persistence.schedule();
+  },
+  setSli(key, on, allKeys) {
+    const b = state.build;
+    const current = new Set(Array.isArray(b.slis) ? b.slis : allKeys);
+    if (on) current.add(key); else current.delete(key);
+    b.slis = [...current];
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+  },
+  setToggle(section, on) {
+    const b = state.build;
+    b.toggles = { ...b.toggles, [section]: !!on };
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+  },
+  setStep: goToBuildStep,
+  exit: exitBuildMode,
+};
+
+// The build view: the step on the left, the tier's clause rail on the right.
+function renderBuildView(view) {
+  const b = state.build;
+  const shell = document.createElement('div');
+  shell.className = `build-shell build-step-${b.step}${b.pending ? ' is-pending' : ''}`;
+  const main = document.createElement('div');
+  main.className = 'build-main';
+  const rail = document.createElement('aside');
+  rail.className = 'build-rail';
+  shell.append(main, rail);
+  view.appendChild(shell);
+
+  const library = buildLibraryCache();
+  if (!library) {
+    main.innerHTML = '<div class="placeholder">Loading the library…</div>';
+    loadBuildLibrary().then(() => { if (state.mode === 'build') rerenderBuild(); })
+      .catch(e => { main.innerHTML = `<div class="error">Could not load the pack library: ${escapeHtml(e.message)}</div>`; });
+    return;
+  }
+  const clauses = buildRequirementsCache()[b.tier] || [];
+  if (!clauses.length) ensureBuildRequirements(b.tier);
+  renderClauseRail(rail, buildRailModel({ build: b, clauses }));
+
+  const host = { renderMainView, renderTabs, build: buildActions };
+  const exitBar = document.createElement('div');
+  exitBar.className = 'build-exit';
+  exitBar.innerHTML = `<button type="button" class="build-exit-btn" title="Leave the BUILD journey">← ${state.selectedPackId ? 'back to the open pack' : 'back to Discover · Diagnose · Remediate'}</button>`;
+  exitBar.querySelector('button').addEventListener('click', exitBuildMode);
+  main.appendChild(exitBar);
+  const stepEl = document.createElement('div');
+  stepEl.className = 'build-step-host';
+  main.appendChild(stepEl);
+  switch (b.step) {
+    case 'select':
+    default:
+      renderBuildSelect(stepEl, buildSelectModel({ build: b, library, requirements: buildRequirementsCache() }), host);
+      return;
+  }
 }
 
 // Hero / home screen — two big affordances. Mode-aware.
@@ -1912,6 +2253,11 @@ function renderHomeView() {
             <span class="home-alt-label">Scan a service repo</span>
             <span class="home-alt-sub">walks Prom / OTel / Grafana / AM configs · or a GitHub URL</span>
           </button>
+          <button id="home-shortcut-build" type="button" class="home-alt-btn home-alt-build">
+            <span class="home-alt-key" aria-hidden="true">⬡</span>
+            <span class="home-alt-label">Build a pack</span>
+            <span class="home-alt-sub">no pack yet? select service, tier &amp; library · generate · validate</span>
+          </button>
         </div>
       </div>
     </section>
@@ -1929,6 +2275,7 @@ function renderHomeView() {
   };
   $('#home-shortcut-upload').onclick = () => $('#upload-btn')?.click();
   $('#home-shortcut-crawl').onclick  = () => $('#crawl-btn')?.click();
+  $('#home-shortcut-build').onclick  = () => enterBuildMode('select');
 }
 
 async function doHomeMcpConnect() {
