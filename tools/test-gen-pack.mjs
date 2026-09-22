@@ -138,6 +138,40 @@ for (const packPath of PACKS) {
   });
 }
 
+test('the §10 certification tiles render only for a pack that declares the certification scrape job', () => {
+  // The MQ harness's alert-sink is scraped as job `certification`; the reference packs declare no
+  // such job. The per-pack test above only checks the row header, which the note branch renders
+  // too, so a regression dropping the tiles for a pack WITH the feed would pass without this.
+  const section = (pack) => {
+    const panels = genericBoards(pack).find(b => b.id === `${pack.metadata.name}-unified`).dashboard.panels;
+    const i = panels.findIndex(p => p.type === 'row' && /MTTD, MTTR/.test(p.title));
+    assert.ok(i >= 0, 'the validation row exists');
+    const j = panels.findIndex((p, k) => k > i && p.type === 'row');
+    return panels.slice(i + 1, j < 0 ? panels.length : j);
+  };
+  const committed = load('reference-packs/kafka.pack.yaml');
+  const note = section(committed);
+  assert.equal(note.length, 1, 'one panel under the row without a feed');
+  assert.equal(note[0].type, 'text');
+  assert.equal(note[0].title, 'No certification feed');
+  assert.match(JSON.stringify(note[0]), /declares 4 chaos experiments \(chaos-mesh; staging, prod\) but no certification pipeline — a scrape job named `certification` — so nothing feeds MTTD, MTTR or a verdict here\./);
+  const withJob = (job) => {
+    const p = structuredClone(committed);
+    p.spec.pipelines.receivers.find(r => r.scrape_configs).scrape_configs.push({ job_name: job, static_configs: [{ targets: ['sink:9095'] }] });
+    return p;
+  };
+  const tiles = section(withJob('certification'));
+  assert.ok(!tiles.some(p => p.type === 'text'), 'no note when the feed exists');
+  assert.equal(tiles.length, 14, 'six verdict tiles, two bar gauges, six counters');
+  const titles = tiles.map(p => p.title);
+  for (const t of ['Last certification', 'Certified', 'MTTD p50', 'MTTD p95', 'MTTD per expected alert · against its budget', 'Resolution after recovery · per alert', 'Conformance passed', 'Synthetic passed', 'Chaos passed', 'Checks failed', 'Run duration', 'Webhooks in the ledger']) assert.ok(titles.includes(t), `${t} rendered`);
+  for (const p of tiles) for (const t of p.targets || []) assert.ok(/job="certification"/.test(t.expr) && /pack="kafka"/.test(t.expr), `${p.title} reads this pack's certification feed: ${t.expr}`);
+  // the job name is exact: one that merely starts with it is not the feed
+  const near = section(withJob('certification-x'));
+  assert.equal(near.length, 1);
+  assert.equal(near[0].type, 'text');
+});
+
 test('a derived view rates a counter with or without a label selector, and reads anything else as a gauge', () => {
   // The selector is how a pack drops a series the rollup must not show: the JMX exporter's
   // broker-wide kafka_server_brokertopicmetrics_messagesin_total has no topic label and rendered
