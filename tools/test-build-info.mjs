@@ -173,6 +173,16 @@ try {
     catch (e) { shallowStamp = { status: e.status, err: String(e.stderr) }; }
     assert(shallowStamp.status === 2 && /shallow clone/.test(shallowStamp.err || '') && /fetch-depth: 0/.test(shallowStamp.err || '') && !existsSync(join(shallow, BUILD_FILE)),
       'stamp-build refuses a shallow clone: exit 2, names the fix, removes the build.json that lay there', shallowStamp);
+
+    // a detached HEAD (a CI checkout of a tag or a PR merge ref) is on no branch
+    const detached = join(SCRATCH, 'detached');
+    cpSync(repo, detached, { recursive: true });
+    git(detached, 'checkout', '-q', '--detach', 'HEAD~1');
+    const detSha = git(detached, 'rev-parse', '--short', 'HEAD');
+    const detInfo = readBuildInfo(detached);
+    assert(detInfo.source === 'git' && detInfo.branch === null && detInfo.build === 2 && detInfo.commit === detSha,
+      'a detached HEAD reads branch null with the count and sha of that commit', detInfo);
+    assert(buildLabel(detInfo) === `v9.9.9 · build 2 · ${detSha} · dirty`, 'buildLabel: a detached HEAD carries no branch token (never the literal HEAD)', buildLabel(detInfo));
   }
 
   // ---- this repository ----

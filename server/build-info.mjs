@@ -10,7 +10,8 @@
 //           branches can share a number, so it is never unique on its own …
 //   commit  `git log -1 --format=%h` — … the sha is what makes it unique
 //           (the same abbreviation as `rev-parse --short`).
-//   branch  `git rev-parse --abbrev-ref HEAD` ('HEAD' when detached).
+//   branch  `git rev-parse --abbrev-ref HEAD`; null on a detached HEAD (a
+//           CI checkout of a tag or a PR merge ref is not on a branch).
 //   dirty   `git status --porcelain` non-empty: uncommitted or untracked
 //           files — the running code is NOT exactly that commit.
 //   date    `git log -1 --format=%cI` — the commit's ISO-8601 date.
@@ -87,7 +88,7 @@ function fromGit(root, version) {
   const shallow = shallowFlag === 'true';
   const count = shallow ? null : git(root, ['rev-list', '--count', 'HEAD']);
   const build = /^\d+$/.test(count || '') ? Number(count) : null;
-  const branch = ref || null;
+  const branch = ref && ref !== 'HEAD' ? ref : null;   // detached: not on a branch
   const status = git(root, ['status', '--porcelain']);
   return { version, build, commit, branch, dirty: status == null ? false : status.length > 0, date: date || null, shallow, source: 'git' };
 }
