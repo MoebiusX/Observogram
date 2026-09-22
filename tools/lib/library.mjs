@@ -384,6 +384,23 @@ function paramTable(entries, prefixed) {
   return rows;
 }
 
+/**
+ * The caller's params, checked before anything is substituted: every key must be a parameter of
+ * this instantiation (a scaffold param, `<entry>.<param>`, or a bare entry param) and every value
+ * a scalar. A mistyped key was silently dropped once (the pack kept its placeholder and the todo
+ * still named the right key); an object was spliced in as '[object Object]'.
+ */
+function checkParams(userParams, rows) {
+  if (!isObj(userParams)) throw new Error('instantiatePack: params must be an object of key → string | number | boolean');
+  const known = uniq([...rows.map(r => r.key), ...rows.filter(r => r.entry).map(r => r.id)]);
+  const unknown = Object.keys(userParams).filter(k => !known.includes(k));
+  if (unknown.length) throw new Error(`unknown param ${unknown.join(', ')} (known: ${known.sort().join(', ')})`);
+  for (const [k, v] of Object.entries(userParams)) {
+    if (!['string', 'number', 'boolean'].includes(typeof v)) throw new Error(`param ${k}: expected a string, number or boolean, got ${v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v}`);
+  }
+  return userParams;
+}
+
 /** Effective parameter values: user value (by key, or bare id for an entry param) else the default with the built-ins applied. */
 function resolveParams(rows, userParams, builtins) {
   const values = {};
@@ -827,7 +844,7 @@ export function instantiatePack(entryOrEntries, opts = {}) {
   const { canonical: draft, todos: scaffoldTodos } = tierScaffold({ tier, service, environment, owners, fragments, toggles });
 
   const rows = paramTable(entries, prefixed);
-  const { values, provided } = resolveParams(rows, opts.params || {}, { service, environment, tier });
+  const { values, provided } = resolveParams(rows, checkParams(opts.params || {}, rows), { service, environment, tier });
   const { canonical, todos: paramTodos, used } = resolvePlaceholders(draft, { rows, values, provided });
 
   // Merge the scaffold's own todos with the placeholder todos: ONE todo per artefact (symbol),

@@ -162,7 +162,9 @@ constants: LIBRARY_FORMAT ('v1'), TIERS, ENTRY_KINDS, EVIDENCE_STATUSES, SLI_TYP
 ```
 
 `instantiatePack` throws on a usage error (unknown tier, an SLI above the tier, an
-unknown SLI, no entry) and never on an entry that validates. Several entries compose
+unknown SLI, no entry, a param key that is not a parameter of the instantiation, a
+param value that is not a string, number or boolean) and never on an entry that
+validates. A mistyped param is never dropped silently: the error lists the known keys. Several entries compose
 into one pack: ids are prefixed with the entry id (`kafka_broker_availability`,
 `http-service-…` boards), entry params are addressed as `<entry>.<param>` (a bare
 `<param>` reaches every entry that declares it), the scaffold sections are shared.

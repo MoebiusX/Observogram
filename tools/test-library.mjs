@@ -243,6 +243,23 @@ test('params: an override removes the todo and is recorded; a placeholder defaul
   assert.ok(SCAFFOLD_PARAMS.every(p => p.id in set.provenance.params));
 });
 
+test('params: an unknown key or a non-scalar value is an error, never a silent drop', () => {
+  assert.throws(() => build(byId.kafka, 'tier-2', { params: { pager_servce: 'pagerduty://x' } }), /unknown param pager_servce \(known: .*pager_service/);
+  assert.throws(() => build(byId.kafka, 'tier-2', { params: { nope: 1 } }), /unknown param nope/);
+  assert.throws(() => build(byId.kafka, 'tier-2', { params: { exporter_job: { a: 1 } } }), /param exporter_job: expected a string, number or boolean, got object/);
+  assert.throws(() => build(byId.kafka, 'tier-2', { params: { exporter_job: ['a'] } }), /got array/);
+  assert.throws(() => build(byId.kafka, 'tier-2', { params: { exporter_job: null } }), /got null/);
+  assert.throws(() => build(byId.kafka, 'tier-2', { params: ['a'] }), /params must be an object/);
+  // numbers and booleans are the scalars an entry may declare as defaults: accepted, stringified, recorded
+  const num = build(byId.kafka, 'tier-2', { params: { broker_job: 42 } });
+  assert.match(num.canonical.spec.slis[0].good, /job="42"/);
+  assert.deepEqual(JSON.parse(num.canonical.metadata.annotations['library.params']), { broker_job: '42' });
+  // composed: `<entry>.<param>` reaches one entry, a bare entry param every entry that declares it, and nothing else exists
+  const composed = instantiatePack([byId.kafka, byId['http-service']], { name: 'orders', tier: 'tier-3', params: { 'kafka.broker_job': 'b', job: 'api' } });
+  assert.deepEqual(JSON.parse(composed.canonical.metadata.annotations['library.params']), { 'kafka.broker_job': 'b', 'http-service.job': 'api' });
+  assert.throws(() => instantiatePack([byId.kafka, byId['http-service']], { name: 'orders', tier: 'tier-3', params: { 'http-service.broker_job': 'b' } }), /unknown param http-service\.broker_job/);
+});
+
 test('symbolOf maps pack paths to the adapter\'s artefact ids', () => {
   const root = { spec: { validation: { synthetic_checks: [{ id: 'probe' }] }, telemetry: { backends: [{ id: 'metrics-prom' }] } } };
   assert.deepEqual(symbolOf(['spec', 'alerting', 'routes', 0, 'channels', 1, 'voice'], root), { symbol: 'alerting.routes[0]', field: 'channels.1.voice' });
@@ -327,6 +344,9 @@ test('packc init builds a pack: YAML on stdout, todos on stderr, exit 0; a secti
   assert.equal(cli('--entry', 'kafka', '--tier', 'tier-9', '--name', 'x').status, 2);
   assert.equal(cli('--entry', 'kafka', '--tier', 'tier-2').status, 2);
   assert.equal(cli('--bogus').status, 2);
+  const typo = cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--param', 'pager_servce=pagerduty://x', '--param', 'nope=1');
+  assert.equal(typo.status, 2, 'a mistyped --param key is a usage error');
+  assert.match(typo.stderr, /unknown param pager_servce, nope \(known: /);
   const json = cli('--entry', 'http-service', '--tier', 'tier-3', '--name', 'checkout-api', '--json', '--param', 'health_url=https://checkout.example.internal/health');
   assert.equal(json.status, 0, json.stderr);
   const payload = JSON.parse(json.stdout);
