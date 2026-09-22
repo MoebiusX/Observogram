@@ -196,6 +196,13 @@ request and are never stored server-side. Registered packs and the deploy
 audit live in the `.observogram/` workspace (`OBSERVOGRAM_WORKSPACE`
 relocates it).
 
+Two read routes answer without a session in every posture: `/healthz`
+(probes) and `GET /api/version` — version, build, commit, branch, dirty,
+date, shallow, source — which the studio footer reads before anyone signs
+in. Neither carries a secret, but the second does tell an anonymous client
+which branch a hosted studio runs and whether its tree was dirty; see
+[Which Build Am I Running?](#which-build-am-i-running).
+
 Useful local checks:
 
 ```bash
@@ -240,19 +247,21 @@ one reader (`server/build-info.mjs`) answers everywhere:
   the commit date and the source), the same label on Advanced → About;
 - `packc --version` prints that label (`--version --json` the fields);
 - `GET /api/version` returns `{ version, build, commit, branch, dirty, date,
-  shallow, source, label }` — public, `Cache-Control: no-store`, so a proxy
-  never pins an old build to a new process; `/healthz` keeps its composite
-  `build: "975.9c4f827"`.
+  shallow, source, label }` — readable without a session (Security
+  Posture), `Cache-Control: no-store`, so a proxy never pins an old build
+  to a new process; `/healthz` keeps its composite `build: "975.9c4f827"`.
 
 The **build number is the commit count on the branch** (`git rev-list
 --count HEAD`): it climbs with every commit, so two studios can be compared
 at a glance; the **sha** is what makes it unique (two branches can share a
-count); **dirty** means the tree had uncommitted changes when the process
-started — the code running is not exactly that commit. For a copy without
+count); **dirty** means git listed uncommitted or untracked files
+(`git status --porcelain`) when the process started — the code running is
+not exactly that commit. For a copy without
 `.git` (a tarball, a container image) run `npm run build:stamp` in the
 checkout first: it writes a git-ignored `build.json` that the reader falls
-back to (`source: file`); with neither, the answer is package.json's version
-and `build unknown` (`source: package`) — never a guess.
+back to (`source: file`; run again inside such a copy it keeps that file —
+it is the copy's only identity); with neither, the answer is package.json's
+version and `build unknown` (`source: package`) — never a guess.
 
 A **shallow clone** (`git clone --depth 1`; `actions/checkout` fetches one
 commit by default) has no history to count, so it reads `build unknown ·
