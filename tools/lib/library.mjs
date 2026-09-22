@@ -111,6 +111,12 @@ export const SCAFFOLD_PARAMS = Object.freeze([
   { id: 'chaos_target', label: 'Chaos target workload', default: '${service}', placeholder: true, description: 'The workload the generic chaos experiments inject faults into (entries with their own chaos templates name their own targets).' },
   { id: 'probe_target', label: 'Health probe target', default: 'http://${service}:8080/health', placeholder: true, description: 'The URL the fallback blackbox probe hits (entries with their own synthetic templates do not use it).' },
   { id: 'runbook_dir', label: 'Runbook directory', default: 'runbooks', placeholder: false, description: 'Directory the remediation runbook paths point into (file://<dir>/<name>.md).' },
+  // The backend versions the pack declares (telemetry.backends[].version.declared, storage.<signal>.version) are the
+  // team's to state; the scaffold cannot know them and tier-1 gates on the version block (gating: enforce). `min` is
+  // not a parameter: it is the floor the scaffold's wiring and the library's PromQL are known to work from.
+  { id: 'prometheus_version', label: 'Prometheus version you run', default: '3.14', placeholder: true, description: 'The version of the Prometheus that stores the metrics (telemetry.backends metrics-prom version.declared, storage.metrics.version); min stays 2.53, the floor the expressions are known to work from, and tier-1 enforces the block.' },
+  { id: 'loki_version', label: 'Loki version you run', default: '3.7', placeholder: true, description: 'The version of the Loki that stores the logs (telemetry.backends logs-loki version.declared, storage.logs.version); min stays 3.0.' },
+  { id: 'tempo_version', label: 'Tempo version you run', default: '2.10', placeholder: true, description: 'The version of the Tempo that stores the traces (telemetry.backends traces-tempo version.declared, storage.traces.version); min stays 2.5.' },
 ]);
 const BUILTIN_PARAMS = ['service', 'environment', 'tier'];
 /** The compiler's policy records are `<service>:errorbudget:burn_<w>`; an SLI of that id would write the same series (tools/lib/sli-inference.mjs reserves it). */
@@ -558,9 +564,9 @@ export function tierScaffold({ tier, service, environment, owners, fragments, to
   // ----- telemetry backends (Prometheus + Loki + Tempo: the otel-grafanalabs binding) -----
   const gating = t1 ? 'enforce' : 'warn';
   const backends = [
-    { id: 'metrics-prom', signal: 'metrics', product: 'prometheus', version: { declared: '3.14', min: '2.53', gating }, endpoints: ['${metrics_endpoint}'], default: true },
-    { id: 'logs-loki', signal: 'logs', product: 'loki', version: { declared: '3.7', min: '3.0', gating }, endpoints: ['${logs_endpoint}'], default: true },
-    { id: 'traces-tempo', signal: 'traces', product: 'tempo', version: { declared: '2.10', min: '2.5', gating }, endpoints: ['${traces_endpoint}'], default: true },
+    { id: 'metrics-prom', signal: 'metrics', product: 'prometheus', version: { declared: '${prometheus_version}', min: '2.53', gating }, endpoints: ['${metrics_endpoint}'], default: true },
+    { id: 'logs-loki', signal: 'logs', product: 'loki', version: { declared: '${loki_version}', min: '3.0', gating }, endpoints: ['${logs_endpoint}'], default: true },
+    { id: 'traces-tempo', signal: 'traces', product: 'tempo', version: { declared: '${tempo_version}', min: '2.5', gating }, endpoints: ['${traces_endpoint}'], default: true },
   ];
 
   // ----- environments -----
@@ -592,9 +598,9 @@ export function tierScaffold({ tier, service, environment, owners, fragments, to
   // ----- storage -----
   const ret = RETENTION[tier];
   const storage = {
-    metrics: { backend: 'prometheus', version: '3.14', retention: ret.metrics, remote_write: [{ url: '${remote_write_url}' }] },
-    logs: { backend: 'loki', version: '3.7', retention: ret.logs },
-    traces: { backend: 'tempo', version: '2.10', retention: ret.traces, sampling: t1 ? 'tail-based' : 'head-based' },
+    metrics: { backend: 'prometheus', version: '${prometheus_version}', retention: ret.metrics, remote_write: [{ url: '${remote_write_url}' }] },
+    logs: { backend: 'loki', version: '${loki_version}', retention: ret.logs },
+    traces: { backend: 'tempo', version: '${tempo_version}', retention: ret.traces, sampling: t1 ? 'tail-based' : 'head-based' },
   };
 
   // ----- L1: SLIs and SLOs -----

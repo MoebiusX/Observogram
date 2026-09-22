@@ -65,7 +65,7 @@ rubric filtered by `minTier`.
 | Section | tier-3 | tier-2 adds | tier-1 adds |
 |---|---|---|---|
 | otel | semconv 1.27.0, `service.name` + `deployment.environment`, head sampling 0.1 | `service.namespace`, `service.version`, `log_correlation: true` | `service.instance.id` (5 attrs), head ratio 1.0 (tail sampling decides) |
-| telemetry.backends | Prometheus + Loki + Tempo, `gating: warn` | — | `gating: enforce` |
+| telemetry.backends | Prometheus + Loki + Tempo, `gating: warn`; the declared versions are placeholder params (`prometheus_version`, `loki_version`, `tempo_version`), `min` the scaffold floor | — | `gating: enforce` |
 | pipelines | otlp receiver, prometheus receiver with the entries' scrape jobs, memory_limiter + batch, three exporters (prometheusremotewrite, otlphttp → Loki, otlp → Tempo) | resource processor | tail_sampling processor |
 | storage | 15d / 7d / 3d, head-based | 90d / 30d / 7d | 13mo / 90d / 14d, tail-based |
 | queries | one `ref:slis.<id>` recording rule per SLI (`<svc>:<sli>:ratio_5m` / `value_5m`, the compiler's own names, deduplicated by it) + the entries' views | golden-signals view | — |
@@ -95,7 +95,11 @@ meaningless); `policy: false` keeps the SLOs and drops the burn alerts and forec
 flagged `placeholder: true` (the scaffold's: `oncall_channel`, `team_channel`,
 `pager_service`, `pager_service_low`, `metrics_endpoint`, `remote_write_url`,
 `logs_endpoint`, `logs_otlp_endpoint`, `traces_endpoint`, `traces_otlp_endpoint`,
-`chaos_target`, `probe_target`; the entries': scrape targets, bootstrap addresses,
+`chaos_target`, `probe_target`, and the backend versions the pack declares —
+`prometheus_version`, `loki_version`, `tempo_version` (`version.declared` on each
+backend and `storage.<signal>.version`; `min` stays the scaffold's floor 2.53 / 3.0 / 2.5,
+what the wiring and the PromQL are known to work from, and tier-1 enforces the block);
+the entries': scrape targets, bootstrap addresses,
 workloads, canary queues). Left at its default it is written into the pack as a
 plausible value **and** reported as a todo at the artefact where it landed, plus the
 scaffold's own todos (an unwritten runbook, baseline targets, a generic chaos fault,

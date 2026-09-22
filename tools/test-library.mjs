@@ -330,6 +330,23 @@ test('remediation triggers are the SLO\'s fast burn alert, derived from the prof
   assert.equal(generic[0].automation, 'manual-only');
 });
 
+test('the backend versions are placeholders: a todo on each backend and storage entry until the team states them', () => {
+  const dflt = build(byId.kafka, 'tier-1');
+  for (const [backend, storage, param] of [['metrics-prom', 'metrics', 'prometheus_version'], ['logs-loki', 'logs', 'loki_version'], ['traces-tempo', 'traces', 'tempo_version']]) {
+    const b = dflt.todos.find(t => t.path === `telemetry.backends.${backend}`);
+    assert.ok(b && b.fields.includes('version.declared') && b.params.includes(param), `${backend}: ${JSON.stringify(b)}`);
+    const s = dflt.todos.find(t => t.path === `storage.${storage}`);
+    assert.ok(s && s.fields.includes('version') && s.params.includes(param), `storage.${storage}: ${JSON.stringify(s)}`);
+  }
+  const set = build(byId.kafka, 'tier-1', { params: { prometheus_version: '3.5', loki_version: '3.4', tempo_version: '2.8' } });
+  assert.equal(set.canonical.spec.telemetry.backends[0].version.declared, '3.5');
+  assert.equal(set.canonical.spec.telemetry.backends[0].version.min, '2.53', 'min is the scaffold floor, not a parameter');
+  assert.equal(set.canonical.spec.storage.traces.version, '2.8');
+  assert.ok(!set.todos.some(t => t.params.some(p => /_version$/.test(p))));
+  assert.ok(!set.todos.some(t => t.path === 'storage.logs' || t.path === 'storage.traces'), 'nothing else is a placeholder on those two');
+  assert.deepEqual(validateCanonical(set.canonical, SCHEMA), []);
+});
+
 test('symbolOf maps pack paths to the adapter\'s artefact ids', () => {
   const root = { spec: { validation: { synthetic_checks: [{ id: 'probe' }] }, telemetry: { backends: [{ id: 'metrics-prom' }] } } };
   assert.deepEqual(symbolOf(['spec', 'alerting', 'routes', 0, 'channels', 1, 'voice'], root), { symbol: 'alerting.routes[0]', field: 'channels.1.voice' });

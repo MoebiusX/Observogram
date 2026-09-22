@@ -338,11 +338,11 @@ $ node tools/cli.mjs init --entry kafka --tier tier-2 --name orders-kafka --owne
     --param pager_service=pagerduty://orders --out orders-kafka.pack.yaml
 packc init: orders-kafka@tier-2 from kafka@1.0.0 — 5 SLI(s), sections slos:on policy:on routes:on dashboards:on validation:on → orders-kafka.pack.yaml
 conformance @ tier-2: MUST 15/15, SHOULD 1/1 (4 clause(s) pass on a placeholder)
-todos (18) — placeholders only the team can fill:
+todos (20) — placeholders only the team can fill:
   - alerting.routes[0]: channels.0.msteams: Chat channel for SEV1/SEV2: placeholder '#orders-kafka-oncall' (param oncall_channel) — …
   - baselines: mttd_target_p50: MTTD / MTTR targets are the tier-2 defaults, not measured: set them from the service's incident history
   - remediation[0]: runbook: write the runbook file://<runbook_dir>/broker-down.md
-  - telemetry.backends.metrics-prom: endpoints.0: Prometheus query endpoint: placeholder 'http://prometheus:9090' (param metrics_endpoint) — …  [L2.MUST.metrics_logs_traces_backends]
+  - telemetry.backends.metrics-prom: version.declared: Prometheus version you run: placeholder '3.14' (param prometheus_version) — … · endpoints.0: Prometheus query endpoint: placeholder 'http://prometheus:9090' (param metrics_endpoint) — …  [L2.MUST.metrics_logs_traces_backends]
   - validation.synthetic_checks.produce-consume-canary: target: Bootstrap servers: placeholder 'kafka.kafka:9092' (param bootstrap) — …  [L5.MUST.synthetic_probe]
   …
 schema: valid (spec v1.2)
