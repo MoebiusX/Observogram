@@ -54,6 +54,34 @@ into pack shape. The diff between declared and live is the operational truth.
 
 ## Main Journey
 
+### No pack yet? Build one
+
+A second, parallel journey for a service that has no pack: **Build** — three
+steps in the same visual language as the three below, reached from the home
+hero, the service gate or the upload popover ("Build from the library…"), and
+ending where Discover begins ([`docs/BUILD_JOURNEY.md`](docs/BUILD_JOURNEY.md)):
+
+1. **Select - What Are We Building?** — the service name, owners and
+   environment, its criticality tier (each with the conformance clauses it
+   requires) and one or more library entries: products it runs on (Kafka,
+   Prometheus, Grafana, IBM MQ, Alertmanager, Loki, Tempo, the OTel Collector,
+   every one with its evidence badge) or an archetype for a service built from
+   scratch (HTTP service, queue consumer — OTel semconv).
+2. **Generate - What Should It Watch?** — the SLIs per entry (an SLI above the
+   tier is shown disabled with the tier it needs) with the objective and window
+   each gets at this tier, the section toggles (SLOs, policy, routes, dashboards,
+   validation), the pack YAML. Every change regenerates the pack through the API
+   and the rail on the right shows which of the tier's clauses it holds up.
+3. **Validate - Does It Hold Up?** — the conformance verdict at the tier with
+   three clause states (pass · pass on a placeholder · fail), the schema
+   verdict, the warnings, the todos grouped by artefact with the parameter that
+   fills each one editable inline, the compiled artefacts (Prometheus rules,
+   OTel Collector, Alertmanager, Grafana dashboards) previewed and downloadable,
+   and **Open in Discover**, which registers the pack the way an upload is
+   registered and hands it to the journey below — saying how many placeholders
+   remain. A placeholder-laden pack is conformant on paper; the third state and
+   the todos are what tell it from a real one.
+
 ### 1. Discover - What Do We Have?
 
 Create or load a pack:
@@ -308,9 +336,10 @@ for a service built from scratch), a criticality tier and a name, and `packc ini
 instantiates the library entries into a canonical v1.2 pack that validates,
 compiles through every target and passes every MUST clause of the tier — with the
 values only the team can fill (pager service, chaos target, endpoints) reported as
-todos, never hidden. The engine behind it is the first slice of the BUILD journey
-([`docs/BUILD_JOURNEY.md`](docs/BUILD_JOURNEY.md)); the entries and their evidence
-bar are in [`library/README.md`](library/README.md).
+todos, never hidden. The same engine drives the studio's Build journey (Select ·
+Generate · Validate, see "Main Journey" above) through `/api/library/*`; the
+contract is [`docs/BUILD_JOURNEY.md`](docs/BUILD_JOURNEY.md) and the entries and
+their evidence bar are in [`library/README.md`](library/README.md).
 
 ```bash
 $ node tools/cli.mjs init --list
@@ -561,7 +590,13 @@ be tested without a browser. The view needs no pack loaded.
 | `GET` | `/api/diff?a=&b=` | Repo/live or pack/pack structural diff |
 | `GET` | `/api/packs/:id/compile-catalog` | Per-artifact compile tree |
 | `GET` | `/api/packs/:id/compile-artifact` | Compile one artifact or group |
-| `POST` | `/api/validate` | Validate and register uploaded YAML/JSON |
+| `POST` | `/api/validate` | Validate and register uploaded YAML/JSON (`summary.onPlaceholder` when the pack carries `library.todo.*` annotations) |
+| `GET` | `/api/library` | The pack library index (`entries`, the scaffold `params`, the files that did not load) — the BUILD journey's SELECT step |
+| `GET` | `/api/library/requirements/:tier` | The conformance clauses that apply at a tier (the rubric filtered by `minTier`; 400 names the known tiers) |
+| `GET` | `/api/library/:id` | One library entry: its index row plus the full SLI templates and params (404 names the known entries) |
+| `POST` | `/api/library/instantiate` | `{ entries, name, tier, environment, owners, params, toggles }` → `canonical`, `canonicalYaml`, `todos`, `provenance`, `warnings`, `schemaErrors`, `summary`, `conformance` (an engine usage error is 400, never 500) |
+| `POST` | `/api/library/compile` | `{ canonical, target }` → one compiled artefact (`label`, `contentType`, `artifact { filename, content, warnings, profile }`), nothing registered |
+| `POST` | `/api/library/register` | `{ canonical, source? }` → the upload registry as `/api/validate` registers (`registered { id, source }`, `adapted`, `conformance`, `summary`) — "Open in Discover" |
 | `POST` | `/api/crawl` | Draft a pack from uploaded repo files |
 | `POST` | `/api/crawl-github` | Draft a pack from a GitHub URL |
 | `POST` | `/api/draft-from-mcp` | Draft a live pack from an MCP endpoint |
@@ -589,12 +624,18 @@ studio/
   layers-view.mjs          Discover Observogram and artifact cards
   neuron-view.mjs          Advanced → Neuron: fleet tiles, trend / heatmap / bar panels, the journey in focus, the newest record opened up
   journeys-view.mjs        Saved journeys: capture, run-now, history, stack chips, chains + cause lines (the cards Neuron composes)
+  build-model.mjs          The BUILD journey's pure models (select / generate / validate, the clause checklist's three states, step reachability)
+  build-api.mjs            The BUILD journey's loaders over /api/library/* (fetchFn injectable)
+  build-select-view.mjs    BUILD step 1 — Select (service, tier, library entries, params) + the clause rail the three steps share
+  build-generate-view.mjs  BUILD step 2 — Generate (SLI toggles, objectives at the tier, section toggles, the pack YAML)
+  build-validate-view.mjs  BUILD step 3 — Validate (verdict, todos by artefact with inline params, artefacts, Open in Discover)
 
 tools/
   cli.mjs                  packc CLI (journey run / list, compile, init, …)
   crawl-repo.mjs           CLI repo crawler
   fetch-live-pack.mjs      MCP live-pack fetcher
   pack-init.mjs            packc init: build a pack from the library (list / show / instantiate)
+  test-build-model.mjs     The BUILD journey's studio models over captured API responses (tools/fixtures/build/)
   validate-pack.mjs        Canonical pack validator
   lib/
     adapter.mjs            Canonical pack -> layered UI model

@@ -68,6 +68,15 @@ the testable layer).
   model*, not via a `focus.mjs` import.
 - `host` — the app callbacks, defaulting to the module-level `appHost` when
   the view isn't vendored.
+- A journey with its own actions (the BUILD steps: `update`, `setTier`,
+  `toggleEntry`, `setParam`, `setSli`, `setToggle`, `setStep`, `preview`,
+  `openInDiscover`, …) rides them on that argument as a namespace
+  (`host.build`), built by app.mjs's controller and handed to the renderer at
+  the call site — never added to `host.mjs` (convention 1: the host stays the
+  four stable hooks) and never reached by importing app.mjs. The renderer
+  stays testable: the models it draws are pure (`studio/build-model.mjs`,
+  `tools/test-build-model.mjs`), and the actions are whatever the caller
+  passes.
 
 ## 4. CSS: one class-prefix per functional zone, split files only along the vendoring seam
 

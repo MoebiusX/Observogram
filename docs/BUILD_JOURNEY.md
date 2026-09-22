@@ -4,7 +4,8 @@ A second, parallel journey beside Discover · Diagnose · Remediate, for teams t
 have no pack yet. Three steps in the same visual language, ending where the
 existing journey begins. This document is the contract between the engine
 (slice 1, shipped: `tools/lib/library.mjs`, `library/`, `packc init`) and the
-studio + API that slice 2 builds on top of it. Precedent, superseded by this
+studio + API built on top of it (slice 2, shipped: `/api/library/*`, `BUILD_TABS`,
+`studio/build-*.mjs` — see "Slice 2" below). Precedent, superseded by this
 design: [archive/COMPOSE_MODE_PLAN.md](archive/COMPOSE_MODE_PLAN.md) (drag-and-drop
 authoring from a block library — the library is now data, the canvas is the
 generated pack) and [archive/REFERENCE_CATALOGUE_PLAN.md](archive/REFERENCE_CATALOGUE_PLAN.md)
@@ -161,7 +162,7 @@ parseLibraryEntry(textOrObject)                 → entry            (mini-yaml 
 validateLibraryEntry(entry)                     → errors: string[] ([] when sound)
 libraryIndex(entries)                           → [{ id, kind, title, product, version, summary, tags,
                                                      evidence { status, verifiedOn, sources[], gaps[] },
-                                                     params[], slis[] { id, type, minTier, evidence, metrics, objectives },
+                                                     params[], slis[] { id, type, minTier, evidence, metrics, objectives, windows },
                                                      sliCountByTier, tiers }]
 tierRequirements(tier)                          → the conformance clauses that apply at the tier
                                                   ({ id, dimension, severity, minTier, description, specRef })
@@ -174,6 +175,10 @@ instantiatePack(entryOrEntries, { name, tier, environment, owners, params, toggl
 tierScaffold({ tier, service, environment, owners, fragments, toggles })
                                                 → { canonical (with ${param} placeholders), todos }   (the one scaffold)
 validationSummary(canonical, todos)             → { tier, conformant, must, should, passing[], onPlaceholder[], failing[] }
+todosFromAnnotations(canonical)                 → the todo list rebuilt from the pack's library.todo.* annotations
+                                                  (clauses derived from the pack; what /api/validate and the register
+                                                  hand-off feed validationSummary with)
+hasLibraryTodos(canonical)                      → whether a pack carries library.todo.* annotations
 symbolOf(path, root)                            → { symbol, field }   (the adapter's artefact id for a pack path)
 sloIdFor(sliId, objective)                      → '<sli>_<pct>'        (broker_availability, 0.999 → broker_availability_99_9:
                                                                         the SLO id of an SLI, derived here, never re-implemented)
@@ -234,18 +239,66 @@ latency SLO at tier-2: `packc journey`'s "gate failed", so a CI caller can tell 
 entry fails validation, `2` usage error (an unknown `--param` key or a value carrying a
 quote is one) — the convention of `tools/validate-pack.mjs` and `packc journey`.
 
+## Slice 2 — the studio journey and the API (shipped)
+
+**The API** (`server/index.mjs`, registered after the write-route auth and tenancy
+middleware, so the routes carry the posture of `POST /api/validate` and `POST /api/crawl`:
+open in local mode, a session + CSRF header or a bearer in identity mode; the library is
+read from disk once per process):
+
+| Route | Contract |
+|---|---|
+| `GET /api/library` | `{ ok, entries: libraryIndex(loadLibrary().entries), scaffoldParams: SCAFFOLD_PARAMS, errors }` — the scaffold params ride along because every instantiation has them and SELECT lists the selection's full parameter table |
+| `GET /api/library/requirements/:tier` | `{ ok, tier, clauses: tierRequirements(tier) }`; 400 naming the known tiers |
+| `GET /api/library/:id` | `{ ok, entry: <index row>, params, scaffoldParams, slis (full templates: metrics, good/total or query/threshold, per-tier slo, burn, evidence, why, chaos, remediation), description, evidence, otel, telemetry }`; 404 naming the known entries |
+| `POST /api/library/instantiate` | body `{ entries: [ids] \| id, name, tier, environment, owners, params, toggles }` → `{ ok, canonical, canonicalYaml, todos, provenance, warnings, schemaErrors (validateCanonical), summary (validationSummary), conformance (evaluateConformance of the env-overlaid canonical, exactly as /api/validate computes it) }`; Node passes the Lezer grammar as `opts.promql` like `packc init`; an engine usage error is `400 { ok: false, errors }`, never 500 |
+| `POST /api/library/compile` | body `{ canonical, target, dashboardId? }` → `{ ok, target, label, description, contentType, artifact: { filename, content, warnings, profile } }` through `compile.mjs`, nothing registered; 400 naming the known targets, 400 when the pack will not compile as toggled |
+| `POST /api/library/register` | body `{ canonical, source? }` → `registerUploadedPack` exactly as /api/validate (source hint `library:<entries>@<tier>` when none given) → `{ ok, registered: { id, source }, adapted, conformance, summary }`; a schema-invalid canonical is `400 { ok: false, errors }` |
+
+`POST /api/validate` attaches `summary` (with `onPlaceholder`) whenever the canonical
+carries `library.todo.*` annotations. That needed the todos to be recoverable from a
+pack: `todosFromAnnotations(canonical)` (engine, new export) rebuilds `{ path, fields,
+what, clause, clauses, params }` from the annotations, the clauses derived from the pack
+itself (`clausesFor` learned the scaffold's one non-derivable clause, the tier-1 release
+gate the baseline todo holds up; clause lists are sorted so both paths produce the same
+list — verified for every entry at every tier and for a composed pack). `hasLibraryTodos`
+says whether a pack carries any.
+
+**The studio.** `state.mode === 'build'`; `BUILD_TABS` beside `OBSERVA_TABS` in
+`studio/app.mjs` (the same `{ id, n, label, sub, techName, tagline, accent }` shape and the
+same three accents), rendered by the one header renderer — the nav is rebuilt only when
+the active set changes, a step card is reachable when the previous step's inputs are valid
+(`buildStepReachability`), the current step is highlighted like today's active tab. Entry
+points: a "Build a pack" card beside the hero's two, a "build a pack" action beside the
+gate's "start something new", "Build from the library…" in the upload popover; the logo
+returns home; an Advanced item or an analysis tab leaves build mode into the workspace.
+Nothing in Discover / Diagnose / Remediate changed.
+
+| Module | Role |
+|---|---|
+| `studio/build-model.mjs` | the pure models — `buildSelectModel`, `buildGenerateModel`, `buildValidateModel`, `buildClauseChecklist(clauses, summary)` (three states: `pass`, `placeholder`, `fail`; `pending` without a summary), `buildRailModel`, `buildStepReachability`, `clampStep`, `paramRows`, `groupTodos`, `instantiateBody`, `summarizeWarnings`; every input explicit, no state, no fetch |
+| `studio/build-api.mjs` | the loaders — `loadLibrary`, `loadRequirements` (cached per tier), `loadEntry`, `loadTargets`, `instantiate`, `compilePreview`, `registerBuiltPack`; `fetchFn` injectable, a 4xx JSON body is an answer |
+| `studio/build-select-view.mjs` | SELECT + the clause rail the three steps share (`renderClauseRail`) |
+| `studio/build-generate-view.mjs` | GENERATE |
+| `studio/build-validate-view.mjs` | VALIDATE and the hand-off |
+| `studio/app.mjs` | the controller: `enterBuildMode`, the debounced, sequence-guarded re-instantiation on every change, the `host.build` actions the renderers call (never an import of app.mjs), `openInDiscover` |
+
+`state.build` holds the draft (`name, owners, environment, tier, entries, params, slis,
+toggles, result, preview, registeredId`) and survives a reload through the existing
+persistence whitelist — inputs only (`BUILD_PERSIST_FIELDS`); the canonical is
+re-instantiated on reload, never stored. Objectives and windows are shown read-only;
+overriding an objective is a later slice.
+
+**Deviations from the contract above, all additive.** `instantiate` also returns
+`canonicalYaml` (the preview and the download without a browser YAML emitter) and
+`conformance`; `GET /api/library` also returns `scaffoldParams`; `libraryIndex` rows carry
+`windows` per tier beside `objectives` (GENERATE shows both); `POST /api/library/compile`
+exists so VALIDATE previews without registering; the studio does not import
+`/lib/library.mjs` — the tier's clauses come from the requirements route (three tiny,
+cached requests) and every instantiation goes through the API.
+
 ## What the next slices add
 
-- **Slice 2 — the studio journey and the API.** `GET /api/library` (`libraryIndex` of
-  `loadLibrary`), `GET /api/library/:id`, `GET /api/library/requirements/:tier`,
-  `POST /api/library/instantiate` (the `instantiatePack` inputs → `{ canonical, todos,
-  provenance, schemaErrors, summary }`), `POST /api/library/register` (the produced pack
-  into the upload registry → a pack id for "Open in Discover"; the VALIDATE step and the
-  hand-off carry `summary.onPlaceholder`, see Placeholders). A `BUILD_TABS`
-  triple beside `OBSERVA_TABS` in `studio/app.mjs`, one view module per step under the
-  loader / model / renderer split of docs/UI_CONVENTIONS.md (the model functions are
-  this engine, already testable under `node:test`), the compile previews through the
-  existing compile catalog.
 - **Slice 3.** Seeding SELECT from a repo scan or a live MCP draft (the crawler's
   discovered backends and scrape jobs pre-select entries and fill params); live
   metric-name verification of an entry's `metrics[]` through the MCP capability
