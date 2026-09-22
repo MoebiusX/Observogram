@@ -68,11 +68,13 @@ export function adapt(canonical, opts = {}) {
   // schema constrains metadata.annotations to {string: string}).
   const annotations = canonical.metadata?.annotations || {};
   const verifyPrefix = 'mcp.verified.';
-  // Scaffold markers come from two writers: the crawler (schema-forced
-  // placeholders with no repo evidence) and the live fetcher (schema-
-  // forced placeholders the MCP did not attest). Both project as
+  // Scaffold markers come from three writers: the crawler (schema-forced
+  // placeholders with no repo evidence), the live fetcher (schema-forced
+  // placeholders the MCP did not attest) and the library (an artefact whose
+  // value only the team can fill — a route target, a chaos target, a backend
+  // endpoint; tools/lib/library.mjs, `library.todo.<symbol>`). All project as
   // Scaffold — never Declared — so the grade parks them.
-  const scaffoldPrefixes = ['crawler.scaffold.', 'mcp.scaffold.'];
+  const scaffoldPrefixes = ['crawler.scaffold.', 'mcp.scaffold.', 'library.todo.'];
 
   const ctx = {
     spec,
