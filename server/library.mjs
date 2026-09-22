@@ -41,13 +41,18 @@ export function listLibraryFiles(root = defaultLibraryRoot()) {
 /**
  * loadLibrary({ root }) → { root, entries, errors }
  *   entries  the entries that parsed AND validated, each with `__file` (path relative to root)
- *   errors   [{ file, errors: [string] }] for the files that did not (a parse error is one error string)
+ *   errors   [{ file, errors: [string] }] for the files that did not (a parse error is one error string);
+ *            a root that is not a directory is one error on the root itself (file = root), never an empty library
  * A duplicate entry id across files is an error on the later file, which is dropped.
  */
 export function loadLibrary({ root = defaultLibraryRoot() } = {}) {
   const entries = [];
   const errors = [];
   const seen = new Map();
+  // An install without library/ (or a wrong --library) must say why every --entry is unknown.
+  let rootStat = null;
+  try { rootStat = statSync(root); } catch { /* reported below */ }
+  if (!rootStat || !rootStat.isDirectory()) return { root, entries, errors: [{ file: root, errors: [`library root not found: ${root} (the package ships library/ beside server/ and tools/; --library <dir> selects another)`] }] };
   for (const file of listLibraryFiles(root)) {
     const rel = relative(root, file).replace(/\\/g, '/');
     let entry;

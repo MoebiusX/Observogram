@@ -454,10 +454,19 @@ test('packc init builds a pack: YAML on stdout, todos on stderr, exit 0; a secti
   assert.ok(!payload.todos.some(t => t.params.includes('health_url')));
 });
 
-test('findEntry and an unknown library root', () => {
+test('findEntry; a missing library root is an error that names it; the package ships library/', () => {
   assert.equal(findEntry(library, 'kafka').id, 'kafka');
   assert.equal(findEntry(library, 'nope'), null);
-  const empty = loadLibrary({ root: resolve(ROOT, 'tools/fixtures/does-not-exist') });
-  assert.deepEqual(empty.entries, []);
-  assert.deepEqual(empty.errors, []);
+  const missing = loadLibrary({ root: resolve(ROOT, 'tools/fixtures/does-not-exist') });
+  assert.deepEqual(missing.entries, []);
+  assert.equal(missing.errors.length, 1);
+  assert.equal(missing.errors[0].file, missing.root);
+  assert.match(missing.errors[0].errors[0], /library root not found: .*does-not-exist/);
+  const r = cli('--library', 'tools/fixtures/does-not-exist', '--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders');
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /library root not found/);
+  assert.match(cli('--library', 'tools/fixtures/does-not-exist', '--list').stderr, /library root not found/);
+  // an installed `packc init` is only its entries: library/ must be in the npm files list (it was not; --list printed an empty table)
+  const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
+  assert.ok(pkg.files.includes('library/'), `package.json files: ${pkg.files.join(', ')}`);
 });

@@ -94,7 +94,7 @@ function printList(library) {
     const c = r.sliCountByTier;
     process.stdout.write(`${pad(r.id, w.id)}  ${pad(r.kind, w.kind)}  ${pad(r.version, 7)}  ${pad(r.evidence.status, w.ev)}  ${pad(`${c['tier-3']}/${c['tier-2']}/${c['tier-1']}`, 13)}  ${r.title}\n`);
   }
-  for (const err of library.errors) process.stderr.write(`packc init: ${err.file} skipped: ${err.errors.join('; ')}\n`);
+  for (const err of library.errors) process.stderr.write(err.file === library.root ? `packc init: ${err.errors.join('; ')}\n` : `packc init: ${err.file} skipped: ${err.errors.join('; ')}\n`);
 }
 
 function printShow(entry) {
@@ -126,11 +126,13 @@ function main() {
   const o = parseArgs(process.argv.slice(2));
   if (o.help) { process.stdout.write(USAGE + '\n'); process.exit(0); }
   const library = loadLibrary(o.library ? { root: resolve(process.cwd(), o.library) } : {});
+  const rootError = library.errors.find(e => e.file === library.root);
 
   if (o.list) { printList(library); process.exit(0); }
   if (o.show) {
     const entry = findEntry(library, o.show);
     if (!entry) {
+      if (rootError) usageError(rootError.errors[0]);
       const bad = library.errors.find(e => e.file.includes(`/${o.show}.library.yaml`) || e.file.endsWith(`${o.show}.library.yaml`));
       if (bad) { process.stderr.write(`packc init: entry ${o.show} does not validate:\n  ${bad.errors.join('\n  ')}\n`); process.exit(1); }
       usageError(`unknown entry ${o.show} (packc init --list)`);
@@ -148,6 +150,7 @@ function main() {
   for (const id of ids) {
     const entry = findEntry(library, id);
     if (!entry) {
+      if (rootError) usageError(rootError.errors[0]);
       const bad = library.errors.find(e => e.file.endsWith(`${id}.library.yaml`));
       if (bad) { process.stderr.write(`packc init: entry ${id} does not validate:\n  ${bad.errors.join('\n  ')}\n`); process.exit(1); }
       usageError(`unknown entry ${id} (packc init --list)`);

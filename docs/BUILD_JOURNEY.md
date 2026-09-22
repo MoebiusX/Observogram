@@ -195,9 +195,11 @@ into one pack: ids are prefixed with the entry id (`kafka_broker_availability`,
 `<param>` reaches every entry that declares it), the scaffold sections are shared.
 
 Node side, `server/library.mjs`: `loadLibrary({ root })` → `{ root, entries, errors }`
-(reads `library/**/*.library.yaml`, parses and validates each, drops duplicates),
-`findEntry`, `listLibraryFiles`, `defaultLibraryRoot`. Nothing under `tools/lib`
-touches the filesystem.
+(reads `library/**/*.library.yaml`, parses and validates each, drops duplicates; a root
+that is not a directory is one error on the root itself, never an empty library, so an
+install without `library/` says why every entry is unknown), `findEntry`,
+`listLibraryFiles`, `defaultLibraryRoot`. `library/` ships in the npm package (`files`)
+beside `server/` and `tools/`. Nothing under `tools/lib` touches the filesystem.
 
 ## The CLI
 

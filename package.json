@@ -15,7 +15,8 @@
     "studio/",
     "tools/",
     "vendor/",
-    "examples/"
+    "examples/",
+    "library/"
   ],
   "repository": {
     "type": "git",
