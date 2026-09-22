@@ -108,6 +108,8 @@ export const SCAFFOLD_PARAMS = Object.freeze([
   { id: 'runbook_dir', label: 'Runbook directory', default: 'runbooks', placeholder: false, description: 'Directory the remediation runbook paths point into (file://<dir>/<name>.md).' },
 ]);
 const BUILTIN_PARAMS = ['service', 'environment', 'tier'];
+/** The compiler's policy records are `<service>:errorbudget:burn_<w>`; an SLI of that id would write the same series (tools/lib/sli-inference.mjs reserves it). */
+const POLICY_SEGMENT = 'errorbudget';
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -211,6 +213,7 @@ export function validateLibraryEntry(entry) {
       const at = `slis[${i}]`;
       if (!isObj(s)) { e(`${at}: not an object`); continue; }
       if (typeof s.id !== 'string' || !/^[a-z][a-z0-9_]*$/.test(s.id)) e(`${at}.id: expected [a-z][a-z0-9_]*, got ${JSON.stringify(s.id)}`);
+      else if (s.id === POLICY_SEGMENT) e(`${at}.id: '${POLICY_SEGMENT}' is the compiler's reserved policy-record segment (<service>:errorbudget:burn_5m|1h, tools/lib/sli-inference.mjs); an SLI of that id would collide with it`);
       else if (sliIds.has(s.id)) e(`${at}.id: duplicate '${s.id}'`);
       else sliIds.add(s.id);
       if (!SLI_TYPES.includes(s.type)) e(`${at}.type: expected ${SLI_TYPES.join('|')}, got ${JSON.stringify(s.type)}`);

@@ -71,6 +71,10 @@ test('validateLibraryEntry names what is wrong', () => {
   const scaffoldClash = JSON.parse(JSON.stringify(ok));
   scaffoldClash.params.push({ id: 'chaos_target', label: 'x', default: 'y', description: 'z' });
   assert.ok(validateLibraryEntry(scaffoldClash).some(e => e.includes('scaffold or built-in')));
+  const reserved = JSON.parse(JSON.stringify(ok));
+  reserved.slis[0].id = 'errorbudget';   // the compiler's <svc>:errorbudget:burn_* policy records
+  assert.ok(validateLibraryEntry(reserved).some(e => e.includes("slis[0].id: 'errorbudget'") && e.includes('reserved')));
+  for (const en of entries) for (const s of en.slis) assert.notEqual(s.id, 'errorbudget', `${en.id}.${s.id}`);
   assert.equal(typeof parseLibraryEntry('library: v1\nid: x\n').id, 'string');
   assert.throws(() => parseLibraryEntry(42));
 });
