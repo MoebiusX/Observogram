@@ -301,6 +301,65 @@ as the `assurance` item with its own file. See
 [`docs/ASSURANCE_RULES.md`](docs/ASSURANCE_RULES.md) for the rules and a sample
 heartbeat route.
 
+### Build A Pack From The Library
+
+For a service that has no pack yet: pick the products it runs on (or an archetype
+for a service built from scratch), a criticality tier and a name, and `packc init`
+instantiates the library entries into a canonical v1.2 pack that validates,
+compiles through every target and passes every MUST clause of the tier — with the
+values only the team can fill (pager service, chaos target, endpoints) reported as
+todos, never hidden. The engine behind it is the first slice of the BUILD journey
+([`docs/BUILD_JOURNEY.md`](docs/BUILD_JOURNEY.md)); the entries and their evidence
+bar are in [`library/README.md`](library/README.md).
+
+```bash
+$ node tools/cli.mjs init --list
+entry           kind       version  evidence       SLIs t3/t2/t1  title
+alertmanager    product    1.0.0    recorded-live  2/3/4          Alertmanager
+grafana         product    1.0.0    recorded-live  2/6/8          Grafana
+ibm-mq          product    1.0.0    recorded-live  2/6/8          IBM MQ
+kafka           product    1.0.0    recorded-live  2/5/6          Apache Kafka
+loki            product    1.0.0    recorded-live  1/2/4          Grafana Loki
+otel-collector  product    1.0.0    recorded-live  1/4/6          OpenTelemetry Collector
+prometheus      product    1.0.0    recorded-live  2/6/8          Prometheus
+tempo           product    1.0.0    recorded-live  1/2/4          Grafana Tempo
+http-service    archetype  1.0.0    semconv        1/2/4          HTTP service (OTel semconv)
+queue-consumer  archetype  1.0.0    semconv        1/2/4          Queue consumer (OTel semconv)
+
+$ node tools/cli.mjs init --show alertmanager      # params, SLIs per tier, objectives, evidence
+alertmanager@1.0.0 — Alertmanager (product, product alertmanager)
+  Availability, notification delivery success and failure rate, and silence count of a Prometheus Alertmanager.
+
+evidence: recorded-live (verified 2026-09-07)
+  - tools/lib/contracts/stack-self-metrics.mjs — rows notification_errors, notifications_sent, active_silences (…)
+  …
+
+$ node tools/cli.mjs init --entry kafka --tier tier-2 --name orders-kafka --owner team-orders \
+    --param pager_service=pagerduty://orders --out orders-kafka.pack.yaml
+packc init: orders-kafka@tier-2 from kafka@1.0.0 — 5 SLI(s), sections slos:on policy:on routes:on dashboards:on validation:on → orders-kafka.pack.yaml
+conformance @ tier-2: MUST 15/15, SHOULD 1/1 (4 clause(s) pass on a placeholder)
+todos (18) — placeholders only the team can fill:
+  - alerting.routes[0]: channels.0.msteams: Chat channel for SEV1/SEV2: placeholder '#orders-kafka-oncall' (param oncall_channel) — …
+  - baselines: mttd_target_p50: MTTD / MTTR targets are the tier-2 defaults, not measured: set them from the service's incident history
+  - remediation[0]: runbook: write the runbook file://<runbook_dir>/broker-down.md
+  - telemetry.backends.metrics-prom: endpoints.0: Prometheus query endpoint: placeholder 'http://prometheus:9090' (param metrics_endpoint) — …  [L2.MUST.metrics_logs_traces_backends]
+  - validation.synthetic_checks.produce-consume-canary: target: Bootstrap servers: placeholder 'kafka.kafka:9092' (param bootstrap) — …  [L5.MUST.synthetic_probe]
+  …
+schema: valid (spec v1.2)
+```
+
+The pack goes to stdout or `--out`; the todo list and the conformance line go to
+stderr. `--slis a,b` keeps a subset of the tier's SLIs; `--no-dashboards`,
+`--no-policy`, `--no-routes`, `--no-validation`, `--no-slos` leave that section out
+(the schema and the rubric then both say what is missing, exit `1`); `--entry
+kafka,http-service` composes several entries into one pack; `--json` returns
+`{ canonical, todos, provenance, schemaErrors, summary }`. Exit codes: `0` ok,
+`1` the pack does not validate, `2` usage error. Every produced pack carries
+`metadata.annotations["library.source"] = "<entry>@<version>"` and one
+`library.todo.<artefact>` per placeholder, which the studio parks as *Scaffold* the
+way it parks a crawler stub. `npm run test:library` proves every entry at every
+tier (schema, four compile targets, dashboard bindings, conformance, goldens).
+
 ### Saved Journeys — Repeatable Drift Checks
 
 Freeze a comparison as a journey file and run it on demand or on a schedule:
@@ -517,6 +576,7 @@ be tested without a browser. The view needs no pack loaded.
 ```text
 server/
   index.mjs                Express API, upload registry, compile/deploy routes
+  library.mjs              Loads library/**/*.library.yaml from disk (the Node side of the BUILD engine)
   test-smoke.mjs           End-to-end route smoke tests
 
 studio/
@@ -528,9 +588,10 @@ studio/
   journeys-view.mjs        Saved journeys: capture, run-now, history, stack chips, chains + cause lines (the cards Neuron composes)
 
 tools/
-  cli.mjs                  packc CLI (journey run / list, compile, …)
+  cli.mjs                  packc CLI (journey run / list, compile, init, …)
   crawl-repo.mjs           CLI repo crawler
   fetch-live-pack.mjs      MCP live-pack fetcher
+  pack-init.mjs            packc init: build a pack from the library (list / show / instantiate)
   validate-pack.mjs        Canonical pack validator
   lib/
     adapter.mjs            Canonical pack -> layered UI model
@@ -540,6 +601,7 @@ tools/
     conformance.mjs        Maturity rubric
     diff.mjs               Structural pack diff
     journey.mjs            Journey definitions, runner, gate, run history (node-only)
+    library.mjs            The BUILD journey engine: entries, tier scaffold, instantiation, todos, provenance (browser-safe)
     stack-evidence.mjs     Stack self-metric history helpers (browser-safe, vendorable)
     traceability.mjs       Requirement chains
 
@@ -556,6 +618,10 @@ reference-packs/
   prometheus.pack.yaml
   grafana.pack.yaml
 
+library/                   The pack library packc init builds from (docs/BUILD_JOURNEY.md, library/README.md)
+  products/                kafka · prometheus · grafana · ibm-mq · alertmanager · loki · tempo · otel-collector (.library.yaml)
+  archetypes/              http-service · queue-consumer (OTel semconv v1.27.0)
+
 deploy/k8s/
   kustomization.yaml       Kustomize entry point (see deploy/k8s/README.md)
 ```
@@ -569,6 +635,7 @@ deploy/k8s/
 - [`docs/MODEL.md`](docs/MODEL.md) - the layered observability model (L1–L5, L2X, GOV)
 - [`docs/DIFF.md`](docs/DIFF.md) - structural alignment and drift model
 - [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md) - maturity rubric scoring
+- [`docs/BUILD_JOURNEY.md`](docs/BUILD_JOURNEY.md) - the BUILD journey (Select · Generate · Validate): the pack library, the tier scaffold, placeholders and provenance, the engine API and `packc init`
 - [`docs/DIAGNOSTIC_GRADE_FRAMEWORK.md`](docs/DIAGNOSTIC_GRADE_FRAMEWORK.md) - the eight coverage/trust criteria behind the Diagnose grade
 - [`docs/PHASE_1_VERDICT_TRUST_RESEARCH.md`](docs/PHASE_1_VERDICT_TRUST_RESEARCH.md) - draft research/spec for the verdict-trust phase
 - [`docs/TRACEABILITY_GRAPH_COMPARISON_SPEC.md`](docs/TRACEABILITY_GRAPH_COMPARISON_SPEC.md) - requirement-chain comparison semantics
