@@ -214,8 +214,8 @@
     },
     {
       "id": 4,
-      "type": "bargauge",
-      "title": "Error-budget burn · last hour",
+      "type": "stat",
+      "title": "Alerting rule evaluation success ratio · burn 1 h",
       "datasource": {
         "type": "prometheus",
         "uid": "prom"
@@ -226,7 +226,7 @@
         "w": 6,
         "h": 8
       },
-      "description": "1 h error-budget burn rate per SLO: 1× consumes the budget exactly over the SLO window; amber at the smallest factor that alerts for that SLO, red at the largest (spec.policy).",
+      "description": "1 h burn rate of Alerting rule evaluation success ratio · 99.95 % (objective 0.9995 over 30d).",
       "pack": {
         "binds_to": [
           "slos.alerting_evaluation_99_95"
@@ -235,17 +235,17 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "grafana:errorbudget:burn_1h{slo=~\"alerting_evaluation_99_95\"}",
-          "instant": true,
-          "legendFormat": "{{slo}}"
+          "expr": "grafana:errorbudget:burn_1h{slo=\"alerting_evaluation_99_95\"}",
+          "instant": false,
+          "range": true,
+          "legendFormat": "__auto"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "none",
-          "min": 0,
-          "max": 20,
           "decimals": 1,
+          "mappings": [],
           "color": {
             "mode": "thresholds"
           },
@@ -253,46 +253,21 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "#8B98A9",
+                "color": "#3DD68C",
                 "value": null
+              },
+              {
+                "color": "#F5B14C",
+                "value": 6
+              },
+              {
+                "color": "#F0616D",
+                "value": 14
               }
             ]
           }
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "alerting_evaluation_99_95"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Alerting rule evaluation success ratio · 99.95 %"
-              },
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "#3DD68C",
-                      "value": null
-                    },
-                    {
-                      "color": "#F5B14C",
-                      "value": 6
-                    },
-                    {
-                      "color": "#F0616D",
-                      "value": 14
-                    }
-                  ]
-                }
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "options": {
         "reduceOptions": {
@@ -302,18 +277,13 @@
           "fields": "",
           "values": false
         },
-        "orientation": "horizontal",
-        "displayMode": "gradient",
-        "valueMode": "color",
-        "namePlacement": "left",
-        "showUnfilled": true,
-        "sizing": "auto",
-        "minVizWidth": 8,
-        "minVizHeight": 14,
-        "maxVizHeight": 26,
-        "legend": {
-          "showLegend": false
-        }
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "orientation": "auto",
+        "showPercentChange": false
       }
     },
     {

@@ -18,11 +18,15 @@
 //     symptom alerts (burn alerts painted every graph red for an hour after each incident).
 // Layout is computed by flow(): add panels in reading order, never by coordinates. Every visual
 // row is 24 columns wide and every panel on it has the same height, so nothing wraps alone and
-// no hole sits under a short tile: a run of n tiles takes splitWidths(n) (floor plus the
-// remainder on the first tiles: 5 → 5,5,5,5,4; 7 → 4,4,4,3,3,3,3), derived views viewWidths(n)
-// (1 → 24; 2 → 12,12; 3 → 8,8,8; more → pairs of 12, closing with a trio of 8 when odd), and a
-// source board's contract block is shaped by how many SLIs it binds (generic.mjs contractPanels).
-// A text note (an undeclared or unrenderable view) is always w24 on a row of its own.
+// no hole sits under a short tile: a run of n tiles takes tileRows(n) — rows of at most eight,
+// each splitWidths(count) (floor plus the remainder on the first tiles: 5 → 5,5,5,5,4;
+// 7 → 4,4,4,3,3,3,3; 9 → 5,5,5,5,4 over 6,6,6,6), so no tile is narrower than w3; a lone tile is
+// not stretched to the row but sits w6 h8 beside its trend (derivedSliTrend) or, on a burn board,
+// beside the alert timeline; derived views take viewWidths(n) (1 → 24; 2 → 12,12; 3 → 8,8,8;
+// more → pairs of 12, closing with a trio of 8 when odd — a view on a trio row is w8, below the
+// width at which ts() switches to a table legend, so it gets the bottom list legend); and a
+// source board's contract block is shaped by how many SLIs and SLOs it binds (generic.mjs
+// contractBlock). A text note (an undeclared or unrenderable view) is always w24 on a row of its own.
 
 import { metricPrefix } from '../burn-rules.mjs';
 
@@ -209,6 +213,17 @@ export const splitWidths = (n, total = 24) => {
   return Array.from({ length: n }, (_, i) => floor + (i < rem ? 1 : 0));
 };
 /**
+ * n tiles in rows of at most `perRow` (default eight, so no tile is narrower than w3): the
+ * fewest rows, with counts that differ by at most one and the larger rows first, each row
+ * splitWidths(count). 9 → [5,5,5,5,4], [6,6,6,6]; 12 → two rows of 4×6; 13 → 7 + 6; 25 →
+ * 7 + 6 + 6 + 6. Returns the rows; `.flat()` is the per-tile width list flow() lays out.
+ */
+export const tileRows = (n, perRow = 8) => {
+  if (!(n > 0)) return [];
+  const rows = Math.ceil(n / perRow), floor = Math.floor(n / rows), rem = n % rows;
+  return Array.from({ length: rows }, (_, i) => splitWidths(floor + (i < rem ? 1 : 0)));
+};
+/**
  * Widths for n derived-view time series: one takes the row, two share it, three make a trio;
  * from four on they come in pairs of 12, and an odd count closes with a trio of 8 so the last
  * row is as full as the others (5 → 12,12,8,8,8).
@@ -254,17 +269,31 @@ export const alertState = (sel, baseline = true) => { const p = ctx().packName; 
 
 /**
  * The 1 h burn per SLO as a bar gauge. `sloIds` narrows it to the SLOs a board binds
- * (`{slo=~"a|b"}`, ids are identifiers); when it names every SLO of the pack — or is not given —
- * the expression is the bare series, so the unified boards and a module's own boards are unchanged.
+ * (`{slo=~"a|b"}`, ids are identifiers); when it names every SLO of the pack, matches none of
+ * them, or is not given, the expression is the bare series (every SLO), so the unified boards and
+ * a module's own boards are unchanged and no board ever carries the empty selector `{slo=~""}`.
+ * The overrides (label and thresholds per SLO) follow the same list.
  */
 export const burnBars = (binds, w = 12, h = 8, sloIds) => {
-  const c = ctx(); const slos = c.pack.spec.slos.filter(s => !sloIds || sloIds.includes(s.id));
-  const subset = sloIds && c.pack.spec.slos.some(s => !sloIds.includes(s.id));
+  const c = ctx(); const all = c.pack.spec.slos || [];
+  const named = all.filter(s => sloIds?.includes(s.id));
+  const subset = named.length > 0 && named.length < all.length;
+  const slos = subset ? named : all;
   return bargauge('Error-budget burn · last hour', `${c.svc}:errorbudget:burn_1h${subset ? `{slo=~"${slos.map(s => s.id).join('|')}"}` : ''}`, {
     binds, legend: '{{slo}}', decimals: 1, min: 0, max: 20, w, h,
     desc: '1 h error-budget burn rate per SLO: 1× consumes the budget exactly over the SLO window; amber at the smallest factor that alerts for that SLO, red at the largest (spec.policy).',
     overrides: slos.map(s => { const { warn, bad } = burnFactors(s.id); return byName(s.id, { displayName: c.sloLabel[s.id], thresholds: { mode: 'absolute', steps: okAbove(warn, bad) } }); }),
   });
+};
+/**
+ * One stat per SLO with its 1 h burn, coloured by the SLO's own policy factors: the tiles of a
+ * burn-template board, and what stands in for the bar gauge when a board binds a single SLO
+ * (one bar has nothing to compare with and sat in a mostly empty panel). `widths` per tile
+ * (tileRows(n).flat() fills the rows), `h` their height.
+ */
+export const burnTiles = (sloIds, { widths = tileRows(sloIds.length).flat(), h = 4 } = {}) => {
+  const c = ctx(); const slos = (c.pack.spec.slos || []).filter(s => sloIds.includes(s.id));
+  return slos.map((s, i) => stat(`${c.sloRename[s.id]} · burn 1 h`, `${c.svc}:errorbudget:burn_1h{slo="${s.id}"}`, { binds: `slos.${s.id}`, desc: `1 h burn rate of ${c.sloLabel[s.id]} (objective ${s.objective} over ${s.window}).`, decimals: 1, thresholds: burnThresholds(s.id), w: widths[i] ?? 4, h }));
 };
 export const burnCurves = (w, legend = 'auto') => { const c = ctx(); return [
   ts('Burn rate · 5 m window', [{ expr: `${c.svc}:errorbudget:burn_5m`, legend: '{{slo}}' }], { desc: 'Fast window: reacts within minutes; pages when both it and the slow window exceed the factor. Hover for per-SLO values.', unit: 'short', decimals: 1, w, h: 8, legend, rename: c.sloRename, lines: [{ value: 1, color: C.slate }, { value: 14, color: C.red }] }),
@@ -361,6 +390,24 @@ export function derivedSliTiles(pack, sliIds, { w = 3, h = 4, widths } = {}) {
     const t = Number(sli.threshold);
     const unit = UNIT[sli.unit] ?? 'none';
     return stat(humanize(sli.id), sliExpr(pack, sli), { binds: `slis.${sli.id}`, desc, unit, decimals: unit === 's' ? 2 : unit === 'percentunit' ? 1 : 0, thresholds: okAbove(t, t * 2), w: tw, h });
+  });
+}
+/**
+ * The SLI over time with its line to hold — the objective of the first SLO on a ratio SLI, the
+ * threshold of a threshold SLI — dashed across it. It completes the row of a lone tile: a single
+ * SLI stretched to w24 was a banner-wide number with a sparkline, so the tile sits w6 h8 beside
+ * this graph instead.
+ */
+export function derivedSliTrend(pack, sli, { w = 18, h = 8 } = {}) {
+  const slo = (pack.spec.slos || []).find(s => s.sli === sli.id);
+  const ratio = sli.type === 'ratio';
+  const unit = ratio ? 'percentunit' : (UNIT[sli.unit] ?? 'none');
+  const line = ratio ? (slo ? Number(slo.objective) : NaN) : Number(sli.threshold);
+  const title = ratio ? humanize(sli.id).replace(/ ratio$/i, '') : humanize(sli.id);
+  return ts(`${title} · over time`, [{ expr: sliExpr(pack, sli), legend: sli.id }], {
+    binds: `slis.${sli.id}`, desc: `${strip(sli.description || '')}${Number.isFinite(line) ? ` The dashed line is the ${ratio ? `objective ${pct(line)}` : `threshold ${line}`}.` : ''}`.trim(),
+    unit, decimals: unit === 's' ? 2 : unit === 'percentunit' ? 2 : 0, legend: 'hidden', w, h,
+    lines: Number.isFinite(line) ? [{ value: line, color: C.amber }] : undefined,
   });
 }
 /** Whether derivedViewPanel renders a view as a time series (a metric, or an SLI the pack declares) rather than a note. */
