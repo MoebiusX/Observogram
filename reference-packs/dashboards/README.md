@@ -59,6 +59,19 @@ emits; the policy alerts are `<slo>_burn_<factor>x_<short>_<long>`. Each pack al
 hand-written `<svc>:errorbudget:burn_1h` recording rule for a single SLO without an `slo` label,
 alongside the per-SLO labelled ones the generator produces.
 
+**2026-09-22.** The table above describes the packs as they were on 2026-09-17. On 2026-09-22 the
+three packs' SLIs were re-pointed at names the lab exposes — measured on Prometheus 3.14.0,
+Grafana 12.4.11 and Apache Kafka 3.9.2 (KRaft, Strimzi JMX rule set, kafka_exporter 1.10.0):
+prometheus' two latency SLIs (`quantile_over_time` over the `scrape_duration_seconds` gauge; the
+`/api/v1/query*` handlers of `prometheus_http_request_duration_seconds_bucket`), grafana's database
+query histogram (`grafana_database_queries_duration_seconds_bucket`, needs `instrument_queries`),
+login ratio (`POST /login` answered 200 over all `POST /login`) and guarded alerting-evaluation
+leg, and kafka's JMX names (`kafka_network_requestmetrics_{totaltimems,localtimems}{quantile="0.99"}`,
+`kafka_controller_kafkacontroller_newactivecontrollerscount`,
+`kafka_server_brokertopicmetrics_messagesin_total`). Every expression and its live result is in
+`docs/catalogue-evidence/{prometheus,grafana,kafka}.md`, "Measured live — 2026-09-22"; the
+certification row of the unified boards became the text note described above on the same day.
+
 The compiler emits these same boards. `compile(pack, 'grafana-dashboard', { dashboardId })`,
 the studio's Dashboards group under Fix The Gaps and `packc compile … grafana-dashboard` all
 run `genericBoards` and add only the platform contract on top — the Grafana version profile
