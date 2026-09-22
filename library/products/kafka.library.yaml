@@ -1,0 +1,270 @@
+# Library entry: Apache Kafka (cluster + consumer groups)
+# Derived from reference-packs/kafka.pack.yaml (1.0.0); every metric name was read from a
+# live KRaft broker on 2026-09-22 (docs/catalogue-evidence/kafka.md §1). PromQL is the
+# reference pack's, with the broker scrape job as a parameter.
+library: v1
+id: kafka
+kind: product
+version: 1.0.0
+title: Apache Kafka
+product: kafka
+summary: Broker availability, partition replication, consumer-group lag, produce/fetch latency and controller stability of a Kafka cluster.
+description: |
+  A Kafka 3.x (KRaft) cluster scraped two ways: the JMX Prometheus exporter with the Strimzi
+  kafka-metrics.yaml rule set on every broker (kafka_network_*, kafka_controller_*,
+  kafka_server_*) and kafka_exporter (danielqsj) for topic, partition and consumer-group
+  state (kafka_topic_*, kafka_consumergroup_*). Both jobs are declared as scrape configs of the
+  collector's prometheus receiver.
+tags: [messaging, streaming]
+derivedFrom: reference-packs/kafka.pack.yaml@1.0.0
+evidence:
+  status: recorded-live
+  verifiedOn: 2026-09-22
+  sources:
+    - reference-packs/kafka.pack.yaml (1.0.0) — the SLIs, SLOs, burn windows, chaos and synthetic set this entry parameterises
+    - docs/catalogue-evidence/kafka.md §1 "Measured live — 2026-09-22" — apache/kafka:3.9.2 (KRaft, one node, RF 1) with jmx_prometheus_javaagent 1.6.0 + the Strimzi kafka-metrics.yaml rule set and kafka_exporter 1.10.0, scraped by Prometheus 3.14.0; every family and the pack's expressions executed
+    - Strimzi kafka-metrics.yaml rule set (strimzi-kafka-operator examples/metrics, main @ 4286954) — the JMX → Prometheus name mapping (lowercaseOutputName)
+    - Kafka 3.9 operations documentation (kafka.apache.org/documentation/#monitoring) — the MBeans behind the JMX names
+  notes: |
+    Measured on one combined broker+controller node with replication factor 1: partition_replica_health
+    never saw an ISR shortfall and controller_election_rate never saw an election (kafka.md §1.6). The
+    PromQL forms were executed; the multi-node semantics rest on the 3.9 documentation and source.
+  gaps:
+    - Multi-broker behaviour (ISR shortfall, a real controller election) was not observed in the lab.
+    - Strimzi-managed pod discovery is not modelled; the scrape jobs are static targets you point at your brokers and exporter.
+params:
+  - id: broker_job
+    label: Broker scrape job
+    default: kafka-broker
+    description: The job label of the JMX exporter scrape (one target per broker, port 9404 with the Strimzi javaagent).
+  - id: broker_targets
+    label: Broker JMX exporter targets
+    default: kafka-broker.kafka:9404
+    placeholder: true
+    description: host:port of every broker's JMX Prometheus exporter (comma-separated in the scrape config).
+  - id: exporter_job
+    label: kafka_exporter scrape job
+    default: kafka-exporter
+    description: The job label of the kafka_exporter scrape (topic, partition and consumer-group state).
+  - id: exporter_target
+    label: kafka_exporter target
+    default: kafka-exporter.kafka:9308
+    placeholder: true
+    description: host:port of kafka_exporter.
+  - id: bootstrap
+    label: Bootstrap servers
+    default: kafka.kafka:9092
+    placeholder: true
+    description: The bootstrap address the synthetic produce/consume canary connects to.
+  - id: broker_workload
+    label: Broker workload (chaos target)
+    default: kafka-broker
+    placeholder: true
+    description: The broker workload (StatefulSet / pods) the chaos experiments target.
+  - id: consumer_workload
+    label: Consumer workload (chaos target)
+    default: kafka-consumer
+    placeholder: true
+    description: The consumer workload the consumer-overload experiment floods.
+otel:
+  languages: [java, go, node]
+  custom_attributes: [kafka.cluster.id, kafka.broker.id]
+telemetry:
+  scrape_jobs:
+    - job_name: "${broker_job}"
+      scrape_interval: 30s
+      targets: ["${broker_targets}"]
+    - job_name: "${exporter_job}"
+      scrape_interval: 30s
+      targets: ["${exporter_target}"]
+slis:
+  - id: broker_availability
+    type: ratio
+    minTier: tier-3
+    description: Fraction of brokers reporting ready vs. the cluster's declared broker count.
+    why: A broker that does not answer its scrape is the first and cheapest sign of a cluster losing capacity; every other SLI reads through this one.
+    unit: ratio
+    semconv_metric: kafka.broker.up
+    metrics: [up]
+    evidence: { status: recorded-live, source: "kafka.md §1.4 — up{job=\"kafka-broker\"} = 1 on the lab (one target)" }
+    good: |
+      sum(up{job="${broker_job}"} == bool 1)
+    total: |
+      count(up{job="${broker_job}"})
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.999, tier-3: 0.99 }
+      window: 30d
+    burn: availability
+    chaos:
+      id: broker-pod-kill
+      engine: chaos-mesh
+      target: "${broker_workload}"
+      fault: { kind: pod-failure, fraction: 0.33, duration: 90s }
+      expected_mttd: 90s
+      minTier: tier-2
+    remediation:
+      trigger: alert:kafka-broker-down
+      runbook: broker-down
+      automation: argo-workflow://restart-broker-with-quorum-check
+      guardrails: { max_invocations_per_hour: 2, requires_human_above: SEV1, rollback_on_failure: true, cooldown_after_success: 30m, circuit_breaker: { failures: 2, window: 1h } }
+      minTier: tier-2
+  - id: consumer_group_lag_seconds
+    type: threshold
+    minTier: tier-3
+    description: Maximum consumer-group lag in seconds equivalent, per consumer group (message-count lag over the group's rolling consumption rate).
+    why: Lag in seconds is what a downstream team feels; a lag in messages means nothing without the rate it drains at.
+    unit: seconds
+    semconv_metric: messaging.kafka.consumer.lag
+    metrics: [kafka_consumergroup_lag, kafka_consumergroup_current_offset]
+    evidence: { status: recorded-live, source: "kafka.md §1.3-1.4 — kafka_exporter 1.10.0 families and the expression executed (two consumer groups)" }
+    query: |
+      max by (consumergroup) (
+        kafka_consumergroup_lag /
+          (rate(kafka_consumergroup_current_offset[5m]) > 0)
+      )
+    threshold: 60
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: saturation
+    forecast: { method: percentile-of-history, horizon: 3d, on_projected_breach: post_warning, minTier: tier-1 }
+    chaos:
+      id: consumer-group-overload
+      engine: chaos-mesh
+      target: "${consumer_workload}"
+      fault: { kind: producer-flood, multiplier: 5, duration: 10m }
+      expected_mttd: 5m
+      minTier: tier-1
+    remediation:
+      trigger: alert:kafka-consumer-lag-burn
+      runbook: consumer-lag
+      automation: argo-workflow://consumer-group-scale-out
+      guardrails: { max_invocations_per_hour: 3, requires_human_above: SEV2, rollback_on_failure: true, cooldown_after_success: 15m }
+      minTier: tier-1
+  - id: partition_replica_health
+    type: ratio
+    minTier: tier-2
+    description: Fraction of partitions whose in-sync replica count equals their replica count (== bool, one per healthy partition).
+    why: Under-replicated partitions are the silent precursor of data loss on the next broker failure.
+    unit: ratio
+    semconv_metric: kafka.partition.in_sync_replicas
+    metrics: [kafka_topic_partition_in_sync_replica, kafka_topic_partition_replicas]
+    evidence: { status: recorded-live, source: "kafka.md §1.3-1.4 — both families present and the bool form executed; an ISR shortfall itself was not observable on RF 1 (§1.6)" }
+    good: |
+      sum(kafka_topic_partition_in_sync_replica == bool kafka_topic_partition_replicas)
+    total: |
+      count(kafka_topic_partition_replicas)
+    slo:
+      objective: { tier-1: 0.9995, tier-2: 0.9995, tier-3: 0.999 }
+      window: 30d
+    burn: availability
+    forecast: { method: holt-winters, horizon: 7d, on_projected_breach: open_ticket, minTier: tier-1 }
+    chaos:
+      id: broker-network-partition
+      engine: chaos-mesh
+      target: "${broker_workload}"
+      fault: { kind: network-partition, duration: 3m }
+      expected_mttd: 2m
+      minTier: tier-2
+    remediation:
+      trigger: alert:kafka-partition-under-replicated
+      runbook: under-replicated-partitions
+      automation: argo-workflow://reassign-partitions-with-throttle
+      guardrails: { max_invocations_per_hour: 1, requires_human_above: SEV2, rollback_on_failure: false, cooldown_after_success: 1h }
+      minTier: tier-2
+  - id: produce_latency_p99
+    type: threshold
+    minTier: tier-2
+    description: 99th-percentile total time of Produce requests on the broker, in seconds (queue, local, replication wait, response send) — what a producer waits for an ack.
+    why: Kafka publishes request-time histograms as per-quantile JMX gauges (no _bucket series); the 0.99 quantile of TotalTimeMs for Produce is the producer-side ack latency.
+    unit: seconds
+    semconv_metric: kafka.broker.request.latency
+    metrics: [kafka_network_requestmetrics_totaltimems]
+    evidence: { status: recorded-live, source: "kafka.md §1.2, §1.4 — kafka_network_requestmetrics_totaltimems{request=\"Produce\",quantile=\"0.99\"} read from the JMX exposition and the expression executed" }
+    query: |
+      max(kafka_network_requestmetrics_totaltimems{request="Produce",quantile="0.99"}) / 1000
+    threshold: 0.1
+    slo:
+      objective: 0.99
+      window: 30d
+    burn: latency
+    chaos:
+      id: produce-latency-spike
+      engine: chaos-mesh
+      target: "${broker_workload}"
+      fault: { kind: disk-io-latency, fraction: 0.5, duration: 5m }
+      expected_mttd: 5m
+      minTier: tier-1
+  - id: fetch_latency_p99
+    type: threshold
+    minTier: tier-2
+    description: 99th-percentile local (broker processing) time of FetchConsumer requests, in seconds.
+    why: LocalTimeMs, not TotalTimeMs — a consumer fetch is a long poll and its total time is dominated by waiting for the next record (measured 102 ms on a 10 msg/s topic, fetch.max.wait.ms on an idle one).
+    unit: seconds
+    semconv_metric: kafka.broker.request.latency
+    metrics: [kafka_network_requestmetrics_localtimems]
+    evidence: { status: recorded-live, source: "kafka.md §1.2, §1.4 — the LocalTimeMs quantile gauge and the expression executed; the TotalTimeMs trap measured" }
+    query: |
+      max(kafka_network_requestmetrics_localtimems{request="FetchConsumer",quantile="0.99"}) / 1000
+    threshold: 0.05
+    slo:
+      objective: 0.99
+      window: 30d
+    burn: latency
+  - id: controller_election_rate
+    type: threshold
+    minTier: tier-1
+    description: Controller elections per hour, from the per-node NewActiveControllersCount gauge (max across nodes, never sum).
+    why: Controller churn signals broker instability or network trouble before broker availability moves; one election moves the count on every controller node, so the rate is taken per node and combined with max.
+    unit: events_per_hour
+    semconv_metric: kafka.controller.election.rate
+    metrics: [kafka_controller_kafkacontroller_newactivecontrollerscount]
+    evidence: { status: recorded-live, source: "kafka.md §1.2, §1.4 — the gauge read at 1 after a clean start and the rate expression executed; a real election was not observed (§1.6)" }
+    query: |
+      max(rate(kafka_controller_kafkacontroller_newactivecontrollerscount[1h])) * 3600
+    threshold: 1
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: slow
+    remediation:
+      trigger: alert:kafka-controller-churn
+      runbook: controller-churn
+      automation: manual-only
+      guardrails: { max_invocations_per_hour: 1, requires_human_above: SEV2 }
+      minTier: tier-1
+views:
+  - id: per_topic_throughput
+    bind: ref:platform/per-resource-rollup
+    params: { metric: "kafka_server_brokertopicmetrics_messagesin_total{topic!=\"\"}", by: [topic] }
+    minTier: tier-2
+  - id: per_consumergroup_lag
+    bind: ref:platform/per-resource-rollup
+    params: { sli: consumer_group_lag_seconds, by: [consumergroup] }
+    minTier: tier-3
+dashboards:
+  - id: kafka-consumer-lag
+    minTier: tier-3
+    binds: [slis.consumer_group_lag_seconds, slos.consumer_group_lag_seconds, views.per_consumergroup_lag]
+  - id: kafka-throughput
+    minTier: tier-2
+    binds: [views.per_topic_throughput]
+synthetic:
+  - id: produce-consume-canary
+    kind: k6
+    target: "${bootstrap}"
+    interval: 1m
+    assertions:
+      - { produce_success: true }
+      - { round_trip_latency_lt: 500ms }
+    on_fail_severity: SEV2
+    minTier: tier-3
+  - id: consumer-group-health
+    kind: k6
+    target: "${bootstrap}"
+    interval: 1m
+    assertions:
+      - { consumer_groups_assigned: true }
+      - { current_offset_advancing: true }
+    on_fail_severity: SEV2
+    minTier: tier-2

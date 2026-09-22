@@ -1,0 +1,292 @@
+# Library entry: Prometheus (the metrics store that observes everything else)
+# Derived from reference-packs/prometheus.pack.yaml (1.0.0). Names are Prometheus's own
+# self-metrics (prometheus_* on /metrics plus the up / scrape_duration_seconds series it
+# writes per scrape); the SLI expressions were executed on 3.14.0 on 2026-09-22
+# (docs/catalogue-evidence/prometheus.md §10). Monitor it from a SEPARATE Meta-Prometheus.
+library: v1
+id: prometheus
+kind: product
+version: 1.0.0
+title: Prometheus
+product: prometheus
+summary: Scrape success and duration, rule evaluation, query latency and saturation, Alertmanager delivery, WAL and compaction health of a Prometheus server.
+description: |
+  Prometheus 2.x / 3.x observed through its own /metrics, scraped by a separate Meta-Prometheus
+  (the pack assumes that pattern; a Prometheus that only monitors itself cannot page for its own
+  death). The eight SLIs are the reference pack's vital signs, tiered: scrape success and rule
+  evaluation at tier-3, the latency and delivery signals at tier-2, WAL integrity and query
+  saturation at tier-1.
+tags: [observability, metrics-store]
+derivedFrom: reference-packs/prometheus.pack.yaml@1.0.0
+evidence:
+  status: recorded-live
+  verifiedOn: 2026-09-22
+  sources:
+    - reference-packs/prometheus.pack.yaml (1.0.0) — the SLIs, SLOs, burn windows, chaos and synthetic set this entry parameterises
+    - docs/catalogue-evidence/prometheus.md §10 "Measured live — 2026-09-22" — Prometheus 3.14.0 scraping itself as job prometheus-self; every SLI expression executed (the two latency SLIs rewritten that day after their old names returned 0 series)
+    - tools/lib/contracts/stack-self-metrics.mjs (SRC.prometheus) — prometheus_* names confirmed on prom/prometheus:v2.55.1 (2026-09-07 stack exposition + PromQL)
+    - Prometheus documentation, "Jobs and instances" (up, scrape_duration_seconds are generated per scrape) and web/web.go at v2.55.1 (prometheus_http_request_duration_seconds histogram, buckets .1-120)
+  notes: |
+    The HTTP request histogram resolves nothing below its first bucket: a healthy server reads a p99 of
+    0.099 s (0.99 × 0.1), meaning "p99 ≤ 0.1 s", not a measured latency; the 1 s objective sits on the
+    le="1.0" bound where the comparison is exact.
+  gaps:
+    - The 2026-09-22 measurement ran on 3.14.0 only; scrape_duration_seconds was seen on 2.55.1 (2026-09-07 inventory) and the HTTP histogram is source-verified at v2.55.1, not measured there.
+params:
+  - id: self_job
+    label: Self-scrape job
+    default: prometheus-self
+    description: The job label under which the Meta-Prometheus scrapes this Prometheus's /metrics (the up-based SLIs read every target; this job carries the prometheus_* series).
+  - id: self_target
+    label: Prometheus /metrics target
+    default: prometheus:9090
+    placeholder: true
+    description: host:port of the Prometheus under observation, scraped by the Meta-Prometheus.
+  - id: api_url
+    label: Query API base URL
+    default: http://prometheus:9090
+    placeholder: true
+    description: The base URL the synthetic probes call (/api/v1/query, /-/healthy, /-/ready).
+  - id: workload
+    label: Prometheus workload (chaos target)
+    default: prometheus-server
+    placeholder: true
+    description: The Prometheus workload (StatefulSet / pods) the chaos experiments target.
+otel:
+  languages: [go]
+  custom_attributes: [prometheus.role, prometheus.cluster]
+telemetry:
+  scrape_jobs:
+    - job_name: "${self_job}"
+      scrape_interval: 15s
+      targets: ["${self_target}"]
+slis:
+  - id: scrape_success_ratio
+    type: ratio
+    minTier: tier-3
+    description: Fraction of scrape attempts that succeeded (target up == 1).
+    why: Every downstream signal is only as good as the scrapes behind it; targets going down is the earliest and broadest symptom.
+    unit: ratio
+    semconv_metric: prometheus.target.scrape.success
+    metrics: [up]
+    evidence: { status: recorded-live, source: "prometheus.md §10 — sum(up == bool 1) / count(up) = 1 on 3.14.0; up confirmed on v2.55.1 TSDB inventory (stack-self-metrics scrape_success_ratio)" }
+    good: |
+      sum(up == 1)
+    total: |
+      count(up)
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.999, tier-3: 0.99 }
+      window: 30d
+    burn: availability
+    forecast: { method: percentile-of-history, horizon: 3d, on_projected_breach: post_warning, minTier: tier-1 }
+    chaos:
+      id: prom-pod-kill
+      engine: chaos-mesh
+      target: "${workload}"
+      fault: { kind: pod-failure, fraction: 0.5, duration: 60s }
+      expected_mttd: 2m
+      minTier: tier-2
+    remediation:
+      trigger: alert:prometheus-scrape-failures-burn
+      runbook: scrape-failures
+      automation: argo-workflow://restart-failing-scrapers
+      guardrails: { max_invocations_per_hour: 2, requires_human_above: SEV2, rollback_on_failure: true, cooldown_after_success: 15m, circuit_breaker: { failures: 2, window: 1h } }
+      minTier: tier-2
+  - id: rule_evaluation_success_ratio
+    type: ratio
+    minTier: tier-3
+    description: Fraction of recording / alerting rule evaluations that succeeded vs. attempted.
+    why: A rule that fails to evaluate is an alert that never fires and a recorded SLI that never updates — the failure mode nothing else reports.
+    unit: ratio
+    semconv_metric: prometheus.rule.evaluation.success
+    metrics: [prometheus_rule_evaluations_total, prometheus_rule_evaluation_failures_total]
+    evidence: { status: recorded-live, source: "prometheus.md §10 — good leg 7.997/s on 3.14.0; both counters confirmed on v2.55.1 (stack-self-metrics rule_evaluation_failures)" }
+    good: |
+      sum(rate(prometheus_rule_evaluations_total[5m])) -
+        sum(rate(prometheus_rule_evaluation_failures_total[5m]))
+    total: |
+      sum(rate(prometheus_rule_evaluations_total[5m]))
+    slo:
+      objective: { tier-1: 0.9995, tier-2: 0.9995, tier-3: 0.999 }
+      window: 30d
+    burn: availability
+    remediation:
+      trigger: alert:prometheus-rule-eval-failures-burn
+      runbook: rule-evaluation-failures
+      automation: argo-workflow://reload-prometheus-config
+      guardrails: { max_invocations_per_hour: 3, requires_human_above: SEV2, rollback_on_failure: true, cooldown_after_success: 10m }
+      minTier: tier-2
+  - id: scrape_duration_p99
+    type: threshold
+    minTier: tier-2
+    description: 99th percentile of the per-target scrape duration over the last 5 minutes, across every target (scrape_duration_seconds is a per-target gauge, so the percentile is taken with quantile_over_time).
+    why: Slow scrapes precede scrape timeouts and missing samples; the gauge exists for every target Prometheus scrapes.
+    unit: seconds
+    semconv_metric: prometheus.target.scrape.duration
+    metrics: [scrape_duration_seconds]
+    evidence: { status: recorded-live, source: "prometheus.md §10 — max(quantile_over_time(0.99, scrape_duration_seconds[5m])) = 1.213 s on 3.14.0; 0 _bucket series exist for it" }
+    query: |
+      max(quantile_over_time(0.99, scrape_duration_seconds[5m]))
+    threshold: 5
+    slo:
+      objective: 0.99
+      window: 30d
+    burn: saturation
+  - id: query_latency_p99
+    type: threshold
+    minTier: tier-2
+    description: 99th-percentile latency of the HTTP query API (/api/v1/query and /api/v1/query_range) from the server's own request-duration histogram.
+    why: This is what a Grafana panel waits for; the engine's prometheus_engine_query_duration_seconds is a summary with no _bucket series.
+    unit: seconds
+    semconv_metric: prometheus.query.duration
+    metrics: [prometheus_http_request_duration_seconds_bucket]
+    evidence: { status: recorded-live, source: "prometheus.md §10 — 150 bucket series on 3.14.0 and the expression executed (0.099 s = the first bucket bound); histogram source-verified at v2.55.1 web/web.go" }
+    query: |
+      histogram_quantile(0.99,
+        sum by (le)(rate(prometheus_http_request_duration_seconds_bucket{handler=~"/api/v1/query|/api/v1/query_range"}[5m])))
+    threshold: 1
+    slo:
+      objective: 0.99
+      window: 30d
+    burn: latency
+  - id: alertmanager_notification_success_ratio
+    type: ratio
+    minTier: tier-2
+    description: Fraction of alert notifications successfully delivered to Alertmanager from this Prometheus.
+    why: Failures here mean alerts FIRE but never reach their channels — a silent SLO breach.
+    unit: ratio
+    semconv_metric: prometheus.alertmanager.notification.success
+    metrics: [prometheus_notifications_sent_total, prometheus_notifications_errors_total]
+    evidence: { status: recorded-live, source: "prometheus.md §10 — both counters present, legs = 0 with no alert sent in the window; confirmed on v2.55.1 (stack-self-metrics notification_errors, notifications_sent)" }
+    good: |
+      sum(rate(prometheus_notifications_sent_total[5m])) -
+        sum(rate(prometheus_notifications_errors_total[5m]))
+    total: |
+      sum(rate(prometheus_notifications_sent_total[5m]))
+    slo:
+      objective: 0.999
+      window: 30d
+    burn: availability
+    chaos:
+      id: alertmanager-network-isolate
+      engine: chaos-mesh
+      target: "${workload}"
+      fault: { kind: network-partition, target: alertmanager, duration: 3m }
+      expected_mttd: 2m
+      minTier: tier-1
+  - id: tsdb_compaction_success_ratio
+    type: ratio
+    minTier: tier-2
+    description: Fraction of TSDB compaction operations that succeeded (1 h rate).
+    why: Compaction failures lead to disk bloat and eventually OOM kills if uncorrected.
+    unit: ratio
+    semconv_metric: prometheus.tsdb.compaction.success
+    metrics: [prometheus_tsdb_compactions_total, prometheus_tsdb_compactions_failed_total]
+    evidence: { status: recorded-live, source: "prometheus.md §10 — counters present, legs = 0 with no compaction in the window; prometheus_tsdb_compactions_failed_total confirmed on v2.55.1 (stack-self-metrics tsdb_compaction_failures)" }
+    good: |
+      sum(rate(prometheus_tsdb_compactions_total[1h])) -
+        sum(rate(prometheus_tsdb_compactions_failed_total[1h]))
+    total: |
+      sum(rate(prometheus_tsdb_compactions_total[1h]))
+    slo:
+      objective: 0.9995
+      window: 30d
+    burn: slow
+    forecast: { method: holt-winters, horizon: 7d, on_projected_breach: open_ticket, minTier: tier-1 }
+    chaos:
+      id: prom-disk-pressure
+      engine: chaos-mesh
+      target: "${workload}"
+      fault: { kind: disk-fill, percentage: 90, duration: 10m }
+      expected_mttd: 10m
+      minTier: tier-2
+    remediation:
+      trigger: alert:prometheus-tsdb-compaction-failures
+      runbook: tsdb-compaction
+      automation: argo-workflow://trigger-manual-compaction
+      guardrails: { max_invocations_per_hour: 1, requires_human_above: SEV2, rollback_on_failure: false, cooldown_after_success: 1h }
+      minTier: tier-2
+  - id: wal_corruption_freshness
+    type: ratio
+    minTier: tier-1
+    description: WAL truncations minus WAL corruptions over WAL truncations (5 m rate). A healthy instance has zero corruptions in any window.
+    why: Non-zero WAL corruption is disk-fault territory and data loss; it never auto-remediates.
+    unit: ratio
+    semconv_metric: prometheus.wal.corruption.count
+    metrics: [prometheus_tsdb_wal_truncations_total, prometheus_tsdb_wal_corruptions_total]
+    evidence: { status: recorded-live, source: "prometheus.md §10 — sum(rate(prometheus_tsdb_wal_truncations_total[5m])) = 0.0034/s on 3.14.0; prometheus_tsdb_wal_corruptions_total confirmed on v2.55.1 (stack-self-metrics wal_corruptions)" }
+    good: |
+      sum(rate(prometheus_tsdb_wal_truncations_total[5m])) -
+        sum(rate(prometheus_tsdb_wal_corruptions_total[5m]))
+    total: |
+      sum(rate(prometheus_tsdb_wal_truncations_total[5m]))
+    slo:
+      objective: 0.9999
+      window: 30d
+    burn: availability
+    remediation:
+      trigger: alert:prometheus-wal-corruption
+      runbook: wal-corruption
+      automation: manual-only
+      guardrails: { max_invocations_per_hour: 1, requires_human_above: SEV1 }
+      minTier: tier-1
+  - id: query_concurrent_saturation
+    type: threshold
+    minTier: tier-1
+    description: Concurrent query slots in use as a fraction of the limit.
+    why: Sustained saturation above 80 % is query-engine backpressure and the prelude to "concurrent query limit reached" errors.
+    unit: ratio
+    semconv_metric: prometheus.query.concurrency.saturation
+    metrics: [prometheus_engine_queries, prometheus_engine_queries_concurrent_max]
+    evidence: { status: recorded-live, source: "prometheus.md §10 — query-concurrency saturation = 0 on 3.14.0 (both gauges present)" }
+    query: |
+      max(
+        prometheus_engine_queries / prometheus_engine_queries_concurrent_max
+      )
+    threshold: 0.8
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: slow
+    chaos:
+      id: prom-query-flood
+      engine: chaos-mesh
+      target: "${workload}"
+      fault: { kind: http-flood, target_path: /api/v1/query, qps: 200, duration: 5m }
+      expected_mttd: 5m
+      minTier: tier-1
+views:
+  - id: per_job_scrape_health
+    bind: ref:platform/per-resource-rollup
+    params: { sli: scrape_success_ratio, by: [job] }
+    minTier: tier-3
+  - id: per_rule_eval_failures
+    bind: ref:platform/per-resource-rollup
+    params: { metric: prometheus_rule_evaluation_failures_total, by: [rule_group] }
+    minTier: tier-2
+dashboards:
+  - id: prometheus-query-engine
+    minTier: tier-2
+    binds: [slis.query_latency_p99, slos.query_latency_p99]
+  - id: prometheus-tsdb-health
+    minTier: tier-2
+    binds: [slis.tsdb_compaction_success_ratio, slos.tsdb_compaction_success_ratio]
+synthetic:
+  - id: prom-ready-probe
+    kind: blackbox-exporter
+    target: "${api_url}/-/ready"
+    interval: 30s
+    assertions:
+      - { status_code: 200 }
+    on_fail_severity: SEV2
+    minTier: tier-3
+  - id: prom-api-canary
+    kind: blackbox-exporter
+    target: "${api_url}/api/v1/query?query=up"
+    interval: 1m
+    assertions:
+      - { status_code: 200 }
+      - { latency_lt: 1s }
+      - { body_contains: "\"status\":\"success\"" }
+    on_fail_severity: SEV2
+    minTier: tier-2

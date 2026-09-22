@@ -1,0 +1,144 @@
+# Library entry (archetype): an HTTP service built from scratch, instrumented with the
+# OpenTelemetry SDK and observed through the HTTP server metrics of the OpenTelemetry Semantic
+# Conventions v1.27.0 (the version the pack pins; the HTTP conventions have been stable since
+# v1.23.0). Metric names are the semconv names in their Prometheus exposition spelling:
+#   http.server.request.duration (Histogram, unit s)  → http_server_request_duration_seconds_{bucket,count,sum}
+#   http.server.active_requests  (UpDownCounter, {request}) → http_server_active_requests
+#   attribute http.response.status_code → label http_response_status_code
+#   attribute http.request.method       → label http_request_method
+# following the OpenTelemetry "Prometheus and OpenMetrics Compatibility" rules (dots → underscores,
+# the unit appended as a suffix, `_bucket` per histogram bucket, no `_total` on a non-monotonic sum),
+# which is what the collector's prometheus / prometheusremotewrite exporters and Prometheus's OTLP
+# receiver produce. The pack's own `job` label is the resource's service.name.
+library: v1
+id: http-service
+kind: archetype
+version: 1.0.0
+title: HTTP service (OTel semconv)
+summary: Availability (non-5xx ratio), p99 request latency and in-flight saturation of an HTTP server instrumented with the OpenTelemetry SDK, in semconv v1.27.0 names.
+description: |
+  For a service that has no pack yet and exposes HTTP: three SLIs read from the OpenTelemetry HTTP
+  server metrics (semconv v1.27.0) after the collector or Prometheus's OTLP receiver has translated
+  them to the Prometheus exposition. Availability is the fraction of requests not answered 5xx
+  (from the histogram's _count series), latency the p99 of the request-duration histogram, and
+  saturation the number of in-flight requests. Route-level and 4xx views are deliberately not SLIs.
+tags: [archetype, http, semconv]
+evidence:
+  status: semconv
+  verifiedOn: null
+  sources:
+    - OpenTelemetry Semantic Conventions v1.27.0, "Semantic Conventions for HTTP Metrics" — http.server.request.duration (Histogram, s; attributes http.request.method, http.response.status_code, url.scheme, http.route, error.type) and http.server.active_requests (UpDownCounter, {request}); stable since v1.23.0 (vendor/observability-pack-spec/v1.2/spec.md pins otel.semconv "1.27.0")
+    - OpenTelemetry specification, "Prometheus and OpenMetrics Compatibility" (Metrics Data Model) — the exposition naming rules applied above (dots to underscores, unit suffix, `_bucket` / `_count` / `_sum` for histograms, `_total` only on monotonic sums; attribute keys dot-to-underscore)
+  notes: |
+    NOT verified against a live exposition in this repository: neither repo records a series named
+    http_server_request_duration_seconds_bucket (the repo's crawler stub and demo pack use the
+    client-library name http_requests_total instead). The spelling is derived from the two documents
+    above; confirm it on your collector's actual output (slice 3, MCP metric-name verification)
+    before trusting the numbers. Exporters configured with add_metric_suffixes: false, or SDKs
+    exporting without the unit suffix, produce http_server_request_duration_bucket instead —
+    the `duration_metric` parameter takes that spelling.
+  gaps:
+    - No live exposition of the semconv HTTP metrics is recorded in either repository; evidence is the semconv and the Prometheus-compatibility spec only.
+    - A traffic (throughput) SLI is not declared; the per_route_traffic view shows it without an objective.
+params:
+  - id: job
+    label: Service job label
+    default: "${service}"
+    description: The `job` label of the service's series (the resource's service.name after the OTLP → Prometheus translation).
+  - id: duration_metric
+    label: Request-duration histogram base name
+    default: http_server_request_duration_seconds
+    description: The exposition name of http.server.request.duration without the _bucket / _count suffix (drop `_seconds` when the exporter does not append units).
+  - id: health_url
+    label: Health endpoint URL
+    default: "http://${service}:8080/health"
+    placeholder: true
+    description: The URL the blackbox probe hits to prove the service answers.
+otel:
+  languages: [go]
+slis:
+  - id: availability
+    type: ratio
+    minTier: tier-3
+    description: Fraction of HTTP requests not answered with a 5xx status, from the request-duration histogram's _count series (semconv http.server.request.duration, label http_response_status_code).
+    why: The request that fails is the one the caller sees; 4xx are the caller's errors and stay out of the failure class.
+    unit: ratio
+    semconv_metric: http.server.request.duration
+    metrics: [http_server_request_duration_seconds_count]
+    evidence: { status: semconv, source: "OTel semconv v1.27.0 HTTP metrics + Prometheus compatibility naming; spelling not verified live in this repo (evidence.notes)" }
+    good: |
+      sum(rate(${duration_metric}_count{job="${job}",http_response_status_code!~"5.."}[5m]))
+    total: |
+      sum(rate(${duration_metric}_count{job="${job}"}[5m]))
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.995, tier-3: 0.99 }
+      window: 30d
+    burn: availability
+  - id: latency_p99
+    type: threshold
+    minTier: tier-2
+    description: 99th-percentile server-side request duration in seconds, from the semconv http.server.request.duration histogram.
+    why: The latency the caller waits for, before any client-side timeout; the semconv histogram's default buckets resolve 5 ms to 10 s.
+    unit: seconds
+    semconv_metric: http.server.request.duration
+    metrics: [http_server_request_duration_seconds_bucket]
+    evidence: { status: semconv, source: "OTel semconv v1.27.0 HTTP metrics + Prometheus compatibility naming; spelling not verified live in this repo (evidence.notes)" }
+    query: |
+      histogram_quantile(0.99,
+        sum by (le)(rate(${duration_metric}_bucket{job="${job}"}[5m])))
+    threshold: 0.5
+    slo:
+      objective: 0.99
+      window: 30d
+    burn: latency
+  - id: in_flight_saturation
+    type: threshold
+    minTier: tier-1
+    description: In-flight HTTP requests (semconv http.server.active_requests), against a ceiling of 100 per instance.
+    why: Saturation is the golden signal the other two cannot show until it is too late; the ceiling is a starting point to size from the load tests.
+    unit: requests
+    semconv_metric: http.server.active_requests
+    metrics: [http_server_active_requests]
+    evidence: { status: semconv, source: "OTel semconv v1.27.0 HTTP metrics (http.server.active_requests, UpDownCounter — no _total) + Prometheus compatibility naming; not verified live" }
+    query: |
+      max by (instance) (http_server_active_requests{job="${job}"})
+    threshold: 100
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: slow
+  - id: error_rate
+    type: threshold
+    minTier: tier-1
+    description: 5xx responses per second (the same histogram _count series filtered to status 5xx), a domain SLI beside the ratio.
+    why: A ratio hides a burst of errors under a lot of traffic; the absolute rate is what a downstream sees.
+    unit: per_second
+    semconv_metric: http.server.request.duration
+    metrics: [http_server_request_duration_seconds_count]
+    evidence: { status: semconv, source: "OTel semconv v1.27.0 HTTP metrics + Prometheus compatibility naming; spelling not verified live in this repo" }
+    query: |
+      sum(rate(${duration_metric}_count{job="${job}",http_response_status_code=~"5.."}[5m])) or vector(0)
+    threshold: 1
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: saturation
+views:
+  - id: per_route_latency
+    bind: ref:platform/per-resource-rollup
+    params: { sli: latency_p99, by: [http_route] }
+    minTier: tier-2
+  - id: per_route_traffic
+    bind: ref:platform/per-resource-rollup
+    params: { metric: "${duration_metric}_count", by: [http_route, http_request_method] }
+    minTier: tier-2
+synthetic:
+  - id: health-probe
+    kind: blackbox-exporter
+    target: "${health_url}"
+    interval: 1m
+    assertions:
+      - { status_code: 200 }
+      - { latency_lt: 1s }
+    on_fail_severity: SEV2
+    minTier: tier-3

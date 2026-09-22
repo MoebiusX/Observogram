@@ -1,0 +1,138 @@
+# Library entry: Grafana Loki (log store)
+# Seeded from tools/lib/contracts/stack-self-metrics.mjs. Neither repository records a Loki
+# exposition (no loki_* series beyond loki_build_info in tools/fixtures/mcp), so this entry
+# observes Loki from the outside with names that ARE recorded: the Prometheus-generated `up`
+# for the Loki scrape job (the mq-observability-pack lab scrapes Loki as job `loki`), and the
+# log path INTO Loki — the OpenTelemetry Collector's log-record export and receive counters
+# (rows collector_export_failures_logs, collector_refused_logs) and the promtail drop counter
+# (row log_shipper_drops), all verified on the pinned stack on 2026-09-07. No loki_* request
+# metric is named because none is in the evidence; see evidence.gaps.
+library: v1
+id: loki
+kind: product
+version: 1.0.0
+title: Grafana Loki
+product: loki
+summary: Availability of a Loki log store and the health of the log path into it — collector export failures, records refused at the collector, shipper drops.
+description: |
+  Loki as the pack's logs backend, observed by the series the evidence records: the scrape target's
+  `up`, and the ingest path — the OpenTelemetry Collector's otelcol_exporter_send_failed_log_records /
+  otelcol_receiver_refused_log_records (lazily registered; the SLIs carry the contract's
+  presence-guarded zero) and, where promtail ships files, promtail_dropped_entries_total. A log
+  store that is up but whose feeders drop records is the failure mode this entry catches.
+tags: [observability, logs]
+evidence:
+  status: recorded-live
+  verifiedOn: 2026-09-07
+  sources:
+    - tools/lib/contracts/stack-self-metrics.mjs — rows collector_export_failures_logs and collector_refused_logs (otel/opentelemetry-collector-contrib:0.115.1 exposition + PromQL, 2026-09-07; lazy registration observed), log_shipper_drops (grafana/promtail:3.3.2, 2026-09-07), scrape_success_ratio (up on prom/prometheus:v2.55.1 TSDB inventory)
+    - mq-observability-pack stack/prometheus/prometheus.yml — job loki (loki:3100) scraped by Prometheus 3.14.0; the lab ships logs to Loki over OTLP (packs/ibmmq.pack.yaml exporters.logs otlphttp → loki:3100/otlp)
+    - docs/MCP_INTEGRATION.md "Lazily-registered counters" — why the collector rows require the sibling counter and end with `or (count(<sibling>) * 0)`
+  notes: |
+    The only Loki-native series in either repository is loki_build_info (tools/fixtures/mcp, the
+    version probe of tools/lib/contracts/mcp-capabilities.mjs). Loki's own request-duration and
+    ingester metrics are deliberately NOT named here: no exposition of them is recorded, and the
+    library does not guess spellings. Add them from a live exposition (slice 3, MCP metric-name
+    verification) when one is recorded.
+  gaps:
+    - No Loki-side request-latency or ingestion-rate SLI; the tier-2 threshold SLIs are drop / failure rates on the path into Loki, not latencies, and say so.
+    - Loki itself was not measured; `up{job="loki"}` is the Prometheus-generated series of the lab's scrape job.
+params:
+  - id: job
+    label: Loki scrape job
+    default: loki
+    description: The job label of the Loki /metrics scrape.
+  - id: target
+    label: Loki /metrics target
+    default: loki:3100
+    placeholder: true
+    description: host:port of Loki (its /metrics endpoint).
+  - id: base_url
+    label: Loki base URL
+    default: http://loki:3100
+    placeholder: true
+    description: The base URL the synthetic probe calls (/ready).
+otel:
+  languages: [go]
+telemetry:
+  scrape_jobs:
+    - job_name: "${job}"
+      scrape_interval: 15s
+      targets: ["${target}"]
+slis:
+  - id: availability
+    type: ratio
+    minTier: tier-3
+    description: Fraction of Loki scrape targets that are up.
+    why: The store must answer before any log line can; `up` is the one Loki-side series the evidence records.
+    unit: ratio
+    metrics: [up]
+    evidence: { status: recorded-live, source: "stack-self-metrics scrape_success_ratio (up, 2026-09-07); mq-observability-pack prometheus.yml job loki" }
+    good: |
+      sum(up{job="${job}"} == bool 1)
+    total: |
+      count(up{job="${job}"})
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.999, tier-3: 0.99 }
+      window: 30d
+    burn: availability
+    remediation:
+      trigger: alert:loki-down
+      runbook: loki-down
+      automation: manual-only
+      guardrails: { max_invocations_per_hour: 1, requires_human_above: SEV2 }
+      minTier: tier-2
+  - id: log_export_failures
+    type: threshold
+    minTier: tier-2
+    description: Log records per second the OpenTelemetry Collector failed to export to Loki (0 when the collector has exported logs and the failure counter does not exist yet — the contract's presence-guarded zero).
+    why: The collector is the last hop before Loki; failed exports are lost log lines and the first sign Loki is refusing or unreachable. A drop rate, not a latency (evidence.gaps).
+    unit: per_second
+    metrics: [otelcol_exporter_send_failed_log_records, otelcol_exporter_sent_log_records]
+    evidence: { status: recorded-live, source: "stack-self-metrics collector_export_failures_logs: verified on otel/opentelemetry-collector-contrib:0.115.1 exposition + PromQL, 2026-09-07 (lazy registration observed)" }
+    query: |
+      sum(rate(otelcol_exporter_send_failed_log_records[5m])) or (count(otelcol_exporter_sent_log_records) * 0)
+    threshold: 0
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: saturation
+  - id: log_records_refused
+    type: threshold
+    minTier: tier-1
+    description: Log records per second refused at the collector's receiver (the current-generation "the collector is losing telemetry" signal; presence-guarded on the accepted counter).
+    why: Backpressure from Loki shows up as refusals at the receiver before it shows up as export failures.
+    unit: per_second
+    metrics: [otelcol_receiver_refused_log_records, otelcol_receiver_accepted_log_records]
+    evidence: { status: recorded-live, source: "stack-self-metrics collector_refused_logs: verified on otel/opentelemetry-collector-contrib:0.115.1, 2026-09-07" }
+    query: |
+      sum(rate(otelcol_receiver_refused_log_records[5m])) or (count(otelcol_receiver_accepted_log_records) * 0)
+    threshold: 0
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: slow
+  - id: shipper_drops
+    type: threshold
+    minTier: tier-1
+    description: promtail dropped entries per second (only where promtail ships files into Loki).
+    why: Drops at the shipper are invisible to Loki and to the collector; promtail counts them itself.
+    unit: per_second
+    metrics: [promtail_dropped_entries_total]
+    evidence: { status: recorded-live, source: "stack-self-metrics log_shipper_drops: verified on grafana/promtail:3.3.2 exposition + PromQL, 2026-09-07 (pre-registered at 0)" }
+    query: |
+      sum(rate(promtail_dropped_entries_total[5m]))
+    threshold: 0
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: slow
+synthetic:
+  - id: loki-ready-probe
+    kind: blackbox-exporter
+    target: "${base_url}/ready"
+    interval: 1m
+    assertions:
+      - { status_code: 200 }
+    on_fail_severity: SEV2
+    minTier: tier-3
