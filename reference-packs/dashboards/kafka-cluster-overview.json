@@ -374,7 +374,7 @@
         "w": 4,
         "h": 4
       },
-      "description": "99th-percentile local (broker processing) time of FetchConsumer requests, in seconds. LocalTimeMs, not TotalTimeMs: a consumer fetch's total time includes the long-poll wait (fetch.max.wait.ms, 500 ms by default) whenever the topic has nothing new, so TotalTimeMs p99 sits near 100 ms on an idle topic and would breach the 50 ms objective without any broker fault (measured). Same JMX-quantile shape as produce_latency_p99, milliseconds. SLO 99 % over 30d.",
+      "description": "99th-percentile local (broker processing) time of FetchConsumer requests, in seconds. LocalTimeMs, not TotalTimeMs: a consumer fetch is a long poll, and TotalTimeMs is dominated by the wait in purgatory for the next record (RemoteTimeMs). Measured on the lab: on the 10 msg/s topic the TotalTimeMs p99 is 102 ms (the gap between records); on an idle partition it is fetch.max.wait.ms — 500 ms by default, seen as the 503 ms p999 during the producer's restart gaps — both above the 50 ms objective with no broker fault, while LocalTimeMs p99 is 0-1 ms. Same JMX-quantile shape as produce_latency_p99, milliseconds. SLO 99 % over 30d.",
       "pack": {
         "binds_to": [
           "slis.fetch_latency_p99"

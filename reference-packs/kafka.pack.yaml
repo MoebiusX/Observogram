@@ -38,7 +38,7 @@ metadata:
   annotations:
     catalogue_id: messaging/kafka
     docs: https://kafka.apache.org/documentation/
-    target_versions: kafka 3.x KRaft, Strimzi 0.40+ (JMX names per the Strimzi kafka-metrics.yaml rule set; measured live on Apache Kafka 3.9.2 + jmx_prometheus_javaagent 1.6.0 + kafka_exporter 1.10.0, 2026-09-22)
+    target_versions: kafka 3.x KRaft, Strimzi 0.40+ (JMX names per the Strimzi kafka-metrics.yaml rule set; measured live 2026-09-22 on apache/kafka:3.9.2 — the lab's image pin, the broker exposes no version series under this rule set — with jmx_prometheus_javaagent 1.6.0 and kafka_exporter 1.10.0, both read from their build_info)
     evidence: docs/catalogue-evidence/kafka.md
     promote_for_certification: tier-2
     instruments: kafka-broker, kafka-controller, kafka-producer, kafka-consumer
@@ -131,7 +131,7 @@ spec:
   # names the Strimzi rule set (examples/metrics/kafka-metrics.yaml,
   # lowercaseOutputName: true) produces: kafka_network_requestmetrics_*,
   # kafka_controller_kafkacontroller_*, kafka_server_brokertopicmetrics_*. Every
-  # name was read from a live Kafka 3.9.2 KRaft broker on 2026-09-22
+  # name was read from a live KRaft broker (apache/kafka:3.9.2 image) on 2026-09-22
   # (docs/catalogue-evidence/kafka.md, "Measured live").
   # ---------------------------------------------------------------------------
   slis:
@@ -199,11 +199,14 @@ spec:
       type: threshold
       description: |
         99th-percentile local (broker processing) time of FetchConsumer requests,
-        in seconds. LocalTimeMs, not TotalTimeMs: a consumer fetch's total time
-        includes the long-poll wait (fetch.max.wait.ms, 500 ms by default) whenever
-        the topic has nothing new, so TotalTimeMs p99 sits near 100 ms on an idle
-        topic and would breach the 50 ms objective without any broker fault
-        (measured). Same JMX-quantile shape as produce_latency_p99, milliseconds.
+        in seconds. LocalTimeMs, not TotalTimeMs: a consumer fetch is a long poll,
+        and TotalTimeMs is dominated by the wait in purgatory for the next record
+        (RemoteTimeMs). Measured on the lab: on the 10 msg/s topic the TotalTimeMs
+        p99 is 102 ms (the gap between records); on an idle partition it is
+        fetch.max.wait.ms — 500 ms by default, seen as the 503 ms p999 during the
+        producer's restart gaps — both above the 50 ms objective with no broker
+        fault, while LocalTimeMs p99 is 0-1 ms. Same JMX-quantile shape as
+        produce_latency_p99, milliseconds.
       semconv_metric: kafka.broker.request.latency
       query: |
         max(kafka_network_requestmetrics_localtimems{request="FetchConsumer",quantile="0.99"}) / 1000
