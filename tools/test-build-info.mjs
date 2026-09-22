@@ -19,7 +19,7 @@ import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { buildInfo, buildLabel, buildShortLabel, readBuildInfo, BUILD_FILE } from '../server/build-info.mjs';
-import { buildLabelModel, renderBuildLabel } from '../studio/build-label.mjs';
+import { loadBuildInfo, loadHealth, buildLabelModel, renderBuildLabel, renderVersionChrome } from '../studio/build-label.mjs';
 import { createHarness } from './lib/harness.mjs';
 
 const { assert, report } = createHarness();
@@ -121,6 +121,35 @@ try {
   assert(span.textContent === 'v0.4.0' && span.title === 'fallback', 'renderBuildLabel: null model leaves the fallback');
   renderBuildLabel(span, model);
   assert(span.textContent === model.label && span.title === model.title, 'renderBuildLabel: paints label + title', span);
+  // the loaders take an injectable fetchFn and never throw
+  const answered = { version: '0.4.0', build: 975, source: 'git', label: 'v0.4.0 · build 975' };
+  assert(await loadBuildInfo({ fetchFn: async (p) => (p === '/api/version' ? answered : null) }) === answered, 'loadBuildInfo: returns the server\'s /api/version object');
+  assert(await loadBuildInfo({ fetchFn: async () => { throw new Error('502'); } }) === null, 'loadBuildInfo: a failed fetch is null, not a throw');
+  assert(await loadBuildInfo({ fetchFn: async () => 'not an object' }) === null, 'loadBuildInfo: a non-object answer is null');
+  const health = { version: '0.4.0', build: '975.9c4f827', node: 'v22.0.0', specVersion: '1.2' };
+  assert(await loadHealth({ fetchFn: async (p) => (p === '/healthz' ? health : null) }) === health, 'loadHealth: returns the server\'s /healthz object');
+  assert(await loadHealth({ fetchFn: async () => { throw new Error('offline'); } }) === null, 'loadHealth: a failed fetch is null');
+  // the chrome renderer paints every target it finds, appends the header subtitle once, skips what is missing
+  const nodes = {
+    '#build-label': { textContent: 'v0.4.0', title: 'fallback' },
+    '#observa-about-sub': { textContent: 'version unknown' },
+    '.hdr-sub': { textContent: 'the observability compiler' },
+    '.observa-brand': { title: '' },
+  };
+  const doc = { querySelector: (sel) => nodes[sel] ?? null };
+  renderVersionChrome(doc, null);
+  assert(nodes['#build-label'].textContent === 'v0.4.0' && nodes['#observa-about-sub'].textContent === 'version unknown' && nodes['.hdr-sub'].textContent === 'the observability compiler',
+    'renderVersionChrome: a null model paints nothing (the fallbacks stay)');
+  renderVersionChrome(doc, model);
+  assert(nodes['#build-label'].textContent === model.label && nodes['#build-label'].title === model.title, 'renderVersionChrome: the footer span', nodes['#build-label']);
+  assert(nodes['#observa-about-sub'].textContent === model.label, 'renderVersionChrome: the About entry carries the full label', nodes['#observa-about-sub'].textContent);
+  assert(nodes['.hdr-sub'].textContent === `the observability compiler · ${model.shortLabel}`, 'renderVersionChrome: the header subtitle gets the short label', nodes['.hdr-sub'].textContent);
+  assert(nodes['.observa-brand'].title === `Observogram ${model.label}`, 'renderVersionChrome: the brand tooltip', nodes['.observa-brand'].title);
+  renderVersionChrome(doc, model);
+  assert(nodes['.hdr-sub'].textContent === `the observability compiler · ${model.shortLabel}`, 'renderVersionChrome: painting twice appends the subtitle once', nodes['.hdr-sub'].textContent);
+  let threw = false;
+  try { renderVersionChrome({ querySelector: () => null }, model); } catch { threw = true; }
+  assert(!threw, 'renderVersionChrome: missing targets are skipped, never thrown on');
 
   // ---- a real repository ----
   if (!haveGit) {

@@ -40,7 +40,7 @@ import { catalogToDeployManifest } from './artifact-model.mjs';
 import { computeDeployTransitions } from './verify-deploy.mjs';
 import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-view.mjs';
 import { initHost } from './host.mjs';
-import { loadBuildInfo, buildLabelModel, renderBuildLabel } from './build-label.mjs';
+import { loadBuildInfo, loadHealth, buildLabelModel, renderVersionChrome } from './build-label.mjs';
 
 // `state`, the `$`/`$$` DOM helpers and the persistence layer now live in
 // studio/state.mjs (imported above).
@@ -3968,32 +3968,24 @@ function setupMcpPanel() {
 // ---------- theme ----------
 // ---------- about / version ----------
 //
-// Which build is this studio? GET /api/version (server/build-info.mjs,
-// read through studio/build-label.mjs) names the commit the server was
-// started from — 'v0.4.0 · build 975 · 9c4f827 · develop'; /healthz adds
-// the spec version and the node runtime for the About modal. Fetched once
-// at boot (fire-and-forget), painted into the footer span, the Advanced
-// menu's About entry, the header subtitle and the brand tooltip — "what
-// exactly is running?" should never need a terminal. When the server does
-// not answer, the footer keeps its package.json fallback.
+// Which build is this studio? GET /api/version (server/build-info.mjs)
+// names the commit the server was started from — 'v0.4.0 · build 975 ·
+// 9c4f827 · develop'; /healthz adds the spec version and the node runtime
+// for the About modal. studio/build-label.mjs owns the pieces
+// (docs/UI_CONVENTIONS.md §2: loaders, a pure model, renderers); this is
+// only their composition, run once at boot, fire-and-forget: the footer
+// span, the Advanced menu's About entry, the header subtitle and the brand
+// tooltip get painted — "what exactly is running?" should never need a
+// terminal. When the server does not answer, the footer keeps its
+// package.json fallback.
 let serverVersion = null;   // /healthz: { version, build, node, specVersion }
 let serverBuild = null;     // buildLabelModel(/api/version)
 
 async function loadVersion() {
-  const [info, health] = await Promise.all([
-    loadBuildInfo(),
-    fetch('/healthz').then(r => (r.ok ? r.json() : null)).catch(() => null),
-  ]);
+  const [info, health] = await Promise.all([loadBuildInfo(), loadHealth()]);
   serverVersion = health;
   serverBuild = buildLabelModel(info);
-  if (!serverBuild) return;
-  renderBuildLabel($('#build-label'), serverBuild);
-  const sub = document.getElementById('observa-about-sub');
-  if (sub) sub.textContent = serverBuild.label;
-  const hdrSub = document.querySelector('.hdr-sub');
-  if (hdrSub && !hdrSub.textContent.includes('build')) hdrSub.textContent += ` · ${serverBuild.shortLabel}`;
-  const brand = document.querySelector('.observa-brand');
-  if (brand) brand.title = `Observogram ${serverBuild.label}`;
+  renderVersionChrome(document, serverBuild);
 }
 
 function openAboutModal() {

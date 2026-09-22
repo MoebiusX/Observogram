@@ -7,16 +7,18 @@
 // The text becomes the label ('v0.4.0 · build 975 · 9c4f827 · develop'),
 // the title the commit date and where the answer came from ('source: git'
 // | 'file' | 'package', plus a note when the checkout is a shallow clone
-// with no history to count). When the fetch fails the fallback stays — a stale server
-// without the route answers the HTML shell, which api() reports as an
-// error, so nothing is ever painted from a guess.
+// with no history to count). When the fetch fails the fallback stays — a
+// stale server without the route answers the HTML shell, which api()
+// reports as an error, so nothing is ever painted from a guess.
 //
-// docs/UI_CONVENTIONS.md §2–3: loader (fetch + normalise, fetchFn injectable)
-// → model (pure, testable under node:test) → renderer (container, model).
+// docs/UI_CONVENTIONS.md §2–3: loaders (fetch + normalise, fetchFn
+// injectable) → model (pure, testable under node:test) → renderers
+// (container, model). app.mjs's loadVersion() is only the composition:
+// loadBuildInfo + loadHealth → buildLabelModel → renderVersionChrome.
 
 import { api } from './api.mjs';
 
-// Loader: the server's answer, or null when it cannot be had.
+// Loader: /api/version, or null when it cannot be had.
 export async function loadBuildInfo({ fetchFn = api } = {}) {
   try {
     const info = await fetchFn('/api/version');
@@ -26,8 +28,19 @@ export async function loadBuildInfo({ fetchFn = api } = {}) {
   }
 }
 
+// Loader: /healthz — { version, build, node, specVersion } — the About
+// modal's spec and runtime rows; null when it cannot be had.
+export async function loadHealth({ fetchFn = api } = {}) {
+  try {
+    const health = await fetchFn('/healthz');
+    return health && typeof health === 'object' ? health : null;
+  } catch {
+    return null;
+  }
+}
+
 // Model: what the footer shows. Null when there is nothing trustworthy to
-// show (the renderer then leaves the fallback alone).
+// show (the renderers then leave the fallback alone).
 export function buildLabelModel(info) {
   if (!info || typeof info !== 'object') return null;
   const version = typeof info.version === 'string' && info.version ? info.version : null;
@@ -45,9 +58,24 @@ export function buildLabelModel(info) {
   return { label, shortLabel, title, version, build, commit, branch, dirty: info.dirty === true, shallow, source, date };
 }
 
-// Renderer: paints the model into the span; no fetch, no state.
+// Renderer: the footer span alone; no fetch, no state.
 export function renderBuildLabel(container, model) {
   if (!container || !model) return;
   container.textContent = model.label;
   container.title = model.title;
+}
+
+// Renderer: every place the label lives — the footer span, the About entry
+// in the Advanced menu, the header subtitle (the short form, appended once)
+// and the brand tooltip. `container` is what to search (document at
+// runtime, a stub headlessly); a target that is not there is skipped.
+export function renderVersionChrome(container, model) {
+  if (!container || !model) return;
+  renderBuildLabel(container.querySelector('#build-label'), model);
+  const sub = container.querySelector('#observa-about-sub');
+  if (sub) sub.textContent = model.label;
+  const hdrSub = container.querySelector('.hdr-sub');
+  if (hdrSub && !hdrSub.textContent.includes('build')) hdrSub.textContent += ` · ${model.shortLabel}`;
+  const brand = container.querySelector('.observa-brand');
+  if (brand) brand.title = `Observogram ${model.label}`;
 }
