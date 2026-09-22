@@ -25,7 +25,7 @@ import {
   focusedCompileFlavor, setFocusedCompileFlavor,
   focusedCompileArtifact, setFocusedCompileArtifact,
 } from './focus.mjs';
-import { escapeHtml, toast, fmtRelative, installDialogFocusTrap } from './util.mjs';
+import { escapeHtml, toast, fmtRelative, installDialogFocusTrap, downloadText } from './util.mjs';
 import { renderSchemaView } from './schema-view.mjs';
 import { renderConformanceView } from './conformance-view.mjs';
 import { renderOtlpView } from './otlp-view.mjs';
@@ -43,14 +43,16 @@ import { initHost } from './host.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
   BUILD_STEPS, TIERS as BUILD_TIERS, selectValid as buildSelectValid, buildStepReachability, clampStep as clampBuildStep,
-  buildSelectModel, buildGenerateModel, buildRailModel,
+  buildSelectModel, buildGenerateModel, buildValidateModel, buildRailModel, placeholdersRemaining,
 } from './build-model.mjs';
 import {
   loadLibrary as loadBuildLibrary, libraryCache as buildLibraryCache, loadRequirements as loadBuildRequirements,
-  requirementsCache as buildRequirementsCache, instantiate as instantiateBuild,
+  requirementsCache as buildRequirementsCache, instantiate as instantiateBuild, compilePreview as compileBuildPreview,
+  registerBuiltPack, loadTargets as loadBuildTargets,
 } from './build-api.mjs';
 import { renderBuildSelect, renderClauseRail } from './build-select-view.mjs';
 import { renderBuildGenerate } from './build-generate-view.mjs';
+import { renderBuildValidate } from './build-validate-view.mjs';
 
 // `state`, the `$`/`$$` DOM helpers and the persistence layer now live in
 // studio/state.mjs (imported above).
@@ -1840,8 +1842,11 @@ export function enterBuildMode(step) {
   // lands here with inputs and no canonical).
   for (const t of BUILD_TIERS) ensureBuildRequirements(t);
   if (!state.build.result && buildSelectValid(state.build)) scheduleBuildInstantiate(0);
+  // VALIDATE draws one artefact card per compile target.
+  if (!buildTargets) loadBuildTargets().then(t => { buildTargets = t; if (state.mode === 'build' && state.build.step === 'validate') rerenderBuild(); }).catch(() => { buildTargets = []; });
   persistence.schedule();
 }
+let buildTargets = null;
 
 // Leave the journey without a hand-off: back to the pack that was open, or home.
 function exitBuildMode() {
@@ -1989,6 +1994,65 @@ const buildActions = {
   },
   setStep: goToBuildStep,
   exit: exitBuildMode,
+  // VALIDATE: one compile target previewed from the generated canonical —
+  // nothing registered, nothing deployed.
+  async preview(target) {
+    const b = state.build;
+    if (!b.result) return;
+    b.preview = { target, label: target, filename: '', content: null, loading: true };
+    rerenderBuild();
+    const canonical = b.result.canonical;
+    let res;
+    try { res = await compileBuildPreview(canonical, target); }
+    catch (e) { res = { ok: false, error: e.message }; }
+    if (state.build !== b || b.result?.canonical !== canonical || b.preview?.target !== target) return;
+    b.preview = res?.ok
+      ? { target, label: res.label, filename: res.artifact.filename, contentType: res.contentType, content: res.artifact.content, warnings: res.artifact.warnings || [], profile: res.artifact.profile || null }
+      : { target, label: target, filename: '', content: null, error: res?.error || (res?.errors || []).join('; ') || 'compile failed' };
+    rerenderBuild();
+  },
+  async downloadArtifact(target) {
+    const b = state.build;
+    if (!b.result) return;
+    const p = b.preview?.target === target && b.preview.content != null ? b.preview : null;
+    if (p) { downloadText(p.filename, p.content, p.contentType); return; }
+    try {
+      const res = await compileBuildPreview(b.result.canonical, target);
+      if (!res?.ok) throw new Error(res?.error || 'compile failed');
+      downloadText(res.artifact.filename, res.artifact.content, res.contentType);
+    } catch (e) { toast(`Could not compile ${target}: ${e.message}`, 'error'); }
+  },
+  // The hand-off: register the pack the way an upload is registered and
+  // switch to the analysis journey with it selected — Discover, the layers
+  // view — saying how many placeholders remain (the todos travel with the
+  // pack in metadata.annotations; the summary keeps onPlaceholder honest).
+  async openInDiscover() {
+    const b = state.build;
+    if (!b.result) return;
+    const canonical = b.result.canonical;
+    let res;
+    try { res = await registerBuiltPack(canonical); }
+    catch (e) { res = { ok: false, errors: [e.message] }; }
+    if (!res?.ok) { toast(`Could not register the pack: ${(res?.errors || [res?.error || 'unknown error']).join('; ')}`, 'error'); return; }
+    const id = res.registered.id;
+    b.registeredId = id;
+    const left = placeholdersRemaining(b.result);
+    const onPh = res.summary?.onPlaceholder?.length || 0;
+    try { await loadCatalog(); } catch (e) { toast(`Registered, but the catalog did not refresh: ${e.message}`, 'error'); }
+    state.pack = res.adapted;
+    state.conformance = res.conformance;
+    state.symbolTable = buildSymbolTable(res.adapted);
+    state.uploadedSource = res.registered.source;
+    state.mode = 'single';
+    state.view = 'layers';
+    state.layerFilter = 'all';
+    const env = canonical.metadata?.annotations?.['library.environment'] || defaultEnvFor(id);
+    enterAnalyzeMode(id, env);
+    paintObservaActiveTab();
+    toast(left
+      ? `Opened ${canonical.metadata.name} in Discover — ${left} placeholder${left === 1 ? '' : 's'} remain${left === 1 ? 's' : ''} (${b.result.todos.length} todo${b.result.todos.length === 1 ? '' : 's'}; ${onPh} clause${onPh === 1 ? '' : 's'} pass${onPh === 1 ? 'es' : ''} on one). They travel with the pack as library.todo.* annotations.`
+      : `Opened ${canonical.metadata.name} in Discover — every placeholder filled; ${b.result.todos.length} scaffold todo${b.result.todos.length === 1 ? '' : 's'} left.`);
+  },
 };
 
 // The build view: the step on the left, the tier's clause rail on the right.
@@ -2024,6 +2088,9 @@ function renderBuildView(view) {
   stepEl.className = 'build-step-host';
   main.appendChild(stepEl);
   switch (b.step) {
+    case 'validate':
+      renderBuildValidate(stepEl, buildValidateModel({ build: b, library, clauses, targets: buildTargets || [] }), host);
+      return;
     case 'generate':
       renderBuildGenerate(stepEl, buildGenerateModel({ build: b, library }), host);
       return;

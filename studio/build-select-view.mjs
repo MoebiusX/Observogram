@@ -73,16 +73,19 @@ function tierCardHtml(t) {
     </label>`;
 }
 
-export function paramRowHtml(p, { compact = false } = {}) {
-  const focusKey = `param:${p.key}`;
+// One param as an input (the same param may fill several todos on VALIDATE:
+// idSuffix keeps the ids and focus keys distinct while they share the key).
+export function paramRowHtml(p, { compact = false, idSuffix = '' } = {}) {
+  const focusKey = `param:${p.key}${idSuffix ? `@${idSuffix}` : ''}`;
+  const id = `bp-${idSuffix ? `${idSuffix}-` : ''}${p.key}`;
   return `
     <div class="build-param${p.placeholder ? ' is-placeholder' : ''}${p.atDefault ? '' : ' is-set'}" data-param="${escapeHtml(p.key)}">
-      <label class="build-param-label" for="bp-${escapeHtml(p.key)}">
+      <label class="build-param-label" for="${escapeHtml(id)}">
         <span class="build-param-name">${escapeHtml(p.label)}</span>
         <span class="build-param-key">${escapeHtml(p.key)}${p.entry ? '' : ' · scaffold'}</span>
         ${p.placeholder ? `<span class="build-param-flag" title="left at its default this value is written into the pack AND reported as a todo">${p.atDefault ? 'placeholder → todo' : 'placeholder filled'}</span>` : ''}
       </label>
-      <input id="bp-${escapeHtml(p.key)}" class="build-param-input" type="text" data-focus-key="${escapeHtml(focusKey)}"
+      <input id="${escapeHtml(id)}" class="build-param-input" type="text" data-focus-key="${escapeHtml(focusKey)}"
              value="${escapeHtml(p.value ?? '')}" placeholder="${escapeHtml(String(p.default ?? ''))}" autocomplete="off" spellcheck="false">
       ${compact ? '' : `<span class="build-param-desc">${escapeHtml(p.description)}</span>`}
     </div>`;
