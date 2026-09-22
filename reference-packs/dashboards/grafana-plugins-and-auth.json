@@ -226,7 +226,7 @@
         "w": 4,
         "h": 4
       },
-      "description": "Fraction of login attempts that succeeded. Sudden drops indicate an IDP outage (SAML / OAuth provider down) and need fast triage even if downstream observability is unaffected. SLO 99.9 % over 7d.",
+      "description": "Fraction of form logins (POST /login) answered 200, from Grafana's own HTTP request histogram: the one counter pair that exists before any login has failed. grafana_api_login_post_total and grafana_authn_authn_successful_login_total count successes only (no failure counterpart exists on 12.4.11), so they cannot form a ratio. Sudden drops indicate an IDP outage (SAML / OAuth provider down) and need fast triage even if downstream observability is unaffected. SLO 99.9 % over 7d.",
       "pack": {
         "binds_to": [
           "slis.login_success_ratio"

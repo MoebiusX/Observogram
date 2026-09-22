@@ -1,8 +1,8 @@
 # =============================================================================
 # ObservabilityPack: grafana
 # -----------------------------------------------------------------------------
-# State-of-the-art reference pack for Grafana 11.x — the visualisation and
-# unified alerting layer that sits on top of Prometheus / Mimir / Loki /
+# State-of-the-art reference pack for Grafana 11.x and 12.x — the visualisation
+# and unified alerting layer that sits on top of Prometheus / Mimir / Loki /
 # Tempo / Elasticsearch. Covers HTTP API health, datasource proxy success,
 # database query latency, dashboard render latency, unified alerting rule
 # evaluation, plugin request reliability, and authentication.
@@ -38,10 +38,11 @@ metadata:
   annotations:
     catalogue_id: observability/grafana
     docs: https://grafana.com/docs/grafana/latest/
-    target_versions: grafana 11.x, 10.4 LTS
+    target_versions: grafana 12.x, 11.x, 10.4 LTS (SLI queries measured live on 12.4.11 OSS, 2026-09-22)
     evidence: docs/catalogue-evidence/grafana.md
     paired_with: observability/prometheus
     promote_for_certification: tier-2
+    prerequisites: "database_query_latency_p99 needs [database] instrument_queries = true (GF_DATABASE_INSTRUMENT_QUERIES=true; off by default) or grafana_database_queries_duration_seconds is never exposed; alerting_rule_evaluation_success_ratio needs at least one Grafana-managed alert rule (the evaluation counters appear with the first rule); login_success_ratio counts form logins (POST /login) only"
 
 spec:
 
@@ -211,10 +212,13 @@ spec:
         99th-percentile latency of Grafana's internal database queries
         (the metadata / dashboards / users / orgs store). Slow database
         queries directly degrade the UI and alerting evaluation.
+        Prerequisite: grafana_database_queries_duration_seconds is exposed only
+        with [database] instrument_queries = true (GF_DATABASE_INSTRUMENT_QUERIES),
+        which is off by default; without it this SLI reads nothing.
       semconv_metric: grafana.database.query.duration
       query: |
         histogram_quantile(0.99,
-          sum by (le)(rate(grafana_database_query_duration_seconds_bucket[5m])))
+          sum by (le)(rate(grafana_database_queries_duration_seconds_bucket[5m])))
       threshold: 0.5
       unit: seconds
 
@@ -228,7 +232,7 @@ spec:
       semconv_metric: grafana.alerting.rule.evaluation.success
       good: |
         sum(rate(grafana_alerting_rule_evaluations_total[5m])) -
-          sum(rate(grafana_alerting_rule_evaluation_failures_total[5m]))
+          (sum(rate(grafana_alerting_rule_evaluation_failures_total[5m])) or vector(0))
       total: |
         sum(rate(grafana_alerting_rule_evaluations_total[5m]))
 
@@ -249,19 +253,18 @@ spec:
     - id: login_success_ratio
       type: ratio
       description: |
-        Fraction of login attempts that succeeded. Sudden drops indicate
-        an IDP outage (SAML / OAuth provider down) and need fast triage
-        even if downstream observability is unaffected.
+        Fraction of form logins (POST /login) answered 200, from Grafana's own
+        HTTP request histogram: the one counter pair that exists before any
+        login has failed. grafana_api_login_post_total and
+        grafana_authn_authn_successful_login_total count successes only (no
+        failure counterpart exists on 12.4.11), so they cannot form a ratio.
+        Sudden drops indicate an IDP outage (SAML / OAuth provider down) and
+        need fast triage even if downstream observability is unaffected.
       semconv_metric: grafana.auth.login.success
       good: |
-        sum(rate(grafana_api_login_post[5m])) +
-          sum(rate(grafana_api_login_oauth[5m])) +
-          sum(rate(grafana_api_login_saml[5m]))
+        sum(rate(grafana_http_request_duration_seconds_count{handler="/login",method="POST",status_code="200"}[5m]))
       total: |
-        sum(rate(grafana_api_login_post[5m])) +
-          sum(rate(grafana_api_login_oauth[5m])) +
-          sum(rate(grafana_api_login_saml[5m])) +
-          sum(rate(grafana_user_login_errors_total[5m]))
+        sum(rate(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[5m]))
 
   # ---------------------------------------------------------------------------
   # 2. SLOs
