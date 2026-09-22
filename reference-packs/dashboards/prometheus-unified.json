@@ -227,7 +227,7 @@
         "w": 3,
         "h": 4
       },
-      "description": "99th-percentile target scrape duration. High values indicate slow targets or network degradation. SLO 99 % over 30d.",
+      "description": "99th percentile of the per-target scrape duration over the last 5 minutes, across every target. scrape_duration_seconds is a per-target gauge Prometheus writes with each scrape (there is no scrape-duration histogram on any Prometheus release), so the percentile is taken over its samples with quantile_over_time. High values indicate slow targets or network degradation. SLO 99 % over 30d.",
       "pack": {
         "binds_to": [
           "slis.scrape_duration_p99"
@@ -449,7 +449,7 @@
         "w": 3,
         "h": 4
       },
-      "description": "99th-percentile query duration (PromQL queries via /api/v1/query and /api/v1/query_range). SLO 99 % over 30d.",
+      "description": "99th-percentile latency of the HTTP query API (/api/v1/query and /api/v1/query_range) from the server's own request-duration histogram prometheus_http_request_duration_seconds, present on 2.x and 3.x. The engine's prometheus_engine_query_duration_seconds is a summary (no _bucket series); the 3.x-only prometheus_engine_query_duration_histogram_seconds_bucket would give the engine-side view on 3.x alone. This is what a Grafana panel waits for. SLO 99 % over 30d.",
       "pack": {
         "binds_to": [
           "slis.query_latency_p99"

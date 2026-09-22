@@ -2,9 +2,9 @@
 
 Every non-obvious choice in [`reference-packs/prometheus.pack.yaml`](../../reference-packs/prometheus.pack.yaml) is grounded in a public, citeable source. This document is the audit trail.
 
-**Pack target:** Prometheus 2.45+ (current LTS line through 2.55).
+**Pack target:** Prometheus 2.45+ (LTS line through 2.55) and 3.x; every SLI query measured live on 3.14.0 (§10).
 **Tier:** tier-2 (production BAU floor).
-**Last reviewed:** 2026-06-06.
+**Last reviewed:** 2026-09-22 (live measurement; content review 2026-06-06).
 
 ---
 
@@ -34,7 +34,9 @@ When Prometheus A goes down, A cannot fire an "A is down" alert. Meta-Prometheus
 - Grafana Cloud Mimir self-monitoring docs
 
 ### `scrape_duration_p99` (threshold)
-**What it measures:** 99th-percentile scrape duration via `scrape_duration_seconds_bucket`.
+**What it measures:** the 99th percentile of the per-target scrape duration over the last 5 minutes, across all targets: `max(quantile_over_time(0.99, scrape_duration_seconds[5m]))`.
+
+**PromQL metric:** `scrape_duration_seconds`, a per-target **gauge** Prometheus writes with every scrape. There is no `scrape_duration_seconds_bucket` on any Prometheus release (this document claimed one until 2026-09-22; `count(scrape_duration_seconds_bucket)` returns 0 series on 3.14.0, §10), so the percentile is taken over the gauge's samples with `quantile_over_time`, not with `histogram_quantile`.
 
 **Rationale:** slow scrapes are the leading indicator of target degradation, network issues, or oversized exporters. The 5s threshold reflects the Prometheus default `scrape_timeout`; values consistently above this mean targets are about to start failing scrapes outright.
 
@@ -56,7 +58,9 @@ When Prometheus A goes down, A cannot fire an "A is down" alert. Meta-Prometheus
 - Prometheus Operations Guide — section "Rule files and recording rules"
 
 ### `query_latency_p99` (threshold)
-**What it measures:** 99th-percentile latency for PromQL queries via `prometheus_engine_query_duration_seconds_bucket`.
+**What it measures:** 99th-percentile latency of the query HTTP API: `histogram_quantile(0.99, sum by (le)(rate(prometheus_http_request_duration_seconds_bucket{handler=~"/api/v1/query|/api/v1/query_range"}[5m])))`.
+
+**PromQL metric:** `prometheus_http_request_duration_seconds` (a histogram with a `handler` label, present on 2.x and 3.x; 150 bucket series over 15 handlers on 3.14.0, §10). The engine's own `prometheus_engine_query_duration_seconds` is a **summary** (labels `slice`, `quantile`; 12 series on 3.14.0) and has no `_bucket` series, so the `histogram_quantile` over `prometheus_engine_query_duration_seconds_bucket` this document cited until 2026-09-22 could never evaluate. Prometheus 3.x adds `prometheus_engine_query_duration_histogram_seconds` (20 `_bucket` series on 3.14.0) — the engine-side alternative, **3.x only**, noted here and not used because the pack also targets 2.x. The HTTP-handler histogram includes engine time plus response encoding: it is the latency a Grafana panel actually waits for.
 
 **Rationale:** drives all downstream UX: Grafana dashboard render time, alert firing latency, automated incident-response queries. The 1s threshold is the Grafana recommended ceiling for dashboard interactivity.
 
@@ -149,7 +153,7 @@ WAL corruption is **data-loss territory**. Auto-remediation here risks deleting 
 
 - **Prometheus federation** as a separate observability concern — when federation is used, additional SLIs on federation lag are needed; this pack treats it as out-of-scope for the BAU floor.
 - **Thanos/Cortex/Mimir comparison** — these are separate products with their own packs.
-- **Prometheus 3.x changes** — when 3.x ships and goes LTS, this pack revs to track the new metric names.
+- **Prometheus 3.x-only metrics** — every query in the pack uses names present on both 2.x and 3.x; the 3.x-only engine histogram `prometheus_engine_query_duration_histogram_seconds` is recorded in §2 as the alternative for `query_latency_p99` and deliberately not used.
 
 These omissions are intentional, not gaps. They keep the pack focused on the operational core that every Prometheus deployment must monitor.
 
@@ -157,8 +161,30 @@ These omissions are intentional, not gaps. They keep the pack focused on the ope
 
 ## 9. Pack lifecycle
 
-- **Last reviewed:** 2026-06-06
+- **Last reviewed:** 2026-09-22 (SLI queries measured live, §10); content review 2026-06-06
 - **Review cadence:** monthly (Cowork agent audits citation freshness; quarterly human review for content)
-- **Backward compatibility:** SLI / SLO ids stable; PromQL metric names may evolve with Prometheus 3.x
+- **Backward compatibility:** SLI / SLO ids and recording-rule names stable (unchanged on 2026-09-22); the two latency SLI queries were re-pointed at names Prometheus exposes
 
 For changes, file a PR against this evidence document AND the pack YAML simultaneously. Reviewers must verify all citations resolve.
+
+---
+
+## 10. Measured live — 2026-09-22
+
+**Where:** the mq-observability-pack lab (loopback-only): Prometheus 3.14.0 scraping itself as job `prometheus-self` (`prometheus_build_info{version="3.14.0", goversion="go1.26.6"}`), the reference pack's recording rules from origin/develop 54223dd loaded as `rules-reference/prometheus.recording.yml`. Read-only instant queries against `/api/v1/query`, 2026-09-22T14:01Z. "N series" is the instant-vector size, values as returned.
+
+| expression | result |
+|---|---|
+| `count(scrape_duration_seconds_bucket)` | **0 series** — no scrape-duration histogram exists; `scrape_duration_seconds` is a per-target gauge |
+| `count(prometheus_engine_query_duration_seconds_bucket)` | **0 series** — the engine metric is a summary |
+| `count(prometheus_engine_query_duration_seconds)` | 12 series (slices × quantiles) |
+| `count(prometheus_engine_query_duration_histogram_seconds_bucket)` | 20 series — the 3.x-only engine histogram, noted in §2, not used |
+| `count(prometheus_http_request_duration_seconds_bucket)` | 150 series (15 handlers × 10 buckets) |
+| `max(quantile_over_time(0.99, scrape_duration_seconds[5m]))` | 1 series, **1.213 s** (the slowest of 11 jobs; threshold 5 s) |
+| `histogram_quantile(0.99, sum by (le)(rate(prometheus_http_request_duration_seconds_bucket{handler=~"/api/v1/query\|/api/v1/query_range"}[5m])))` | 1 series, **0.099 s** (threshold 1 s) |
+| `sum by (handler)(rate(prometheus_http_request_duration_seconds_count{handler=~"/api/v1/query\|/api/v1/query_range"}[5m]))` | 2 series: `/api/v1/query` 0.131/s, `/api/v1/query_range` 0.024/s (Grafana's panels and the lab's own checks are the callers) |
+| `prometheus:scrape_duration:p99_5m`, `prometheus:query_latency:p99_5m` (rules of the pack at 54223dd) | **0 series each** — the only two empty `prometheus:*` records of the 21 loaded |
+
+The six other SLIs answered with data on the same run: `sum(up == bool 1) / count(up)` = 1; `sum(rate(prometheus_tsdb_wal_truncations_total[5m]))` = 0.0034/s; rule evaluations good leg = 7.997/s; query-concurrency saturation = 0; notification and compaction legs = 0 with their counters present (no alert sent and no compaction in the window).
+
+**Not verified in this run:** the new expressions on a Prometheus 2.x server (only 3.14.0 was available; `scrape_duration_seconds` was seen on 2.55.1 in the 2026-09-07 inventory kept in `tools/lib/contracts/stack-self-metrics.mjs`, `prometheus_http_request_duration_seconds` was not checked there).

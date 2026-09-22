@@ -822,13 +822,18 @@ point-in-time **signal, never a verdict**: nothing in this table creates a
 `Verified` stamp, an SLO verdict or a grade change, and on a restricted tier
 the answer is "not attempted" with the reason.
 
-Three known discrepancies, documented rather than fixed (the reference packs
-are out of scope): (1) the reference pack's `scrape_duration_p99` is written
+Three known discrepancies, documented here; items 1 and 2 were fixed in the
+reference pack on 2026-09-22 (`scrape_duration_p99` now reads
+`max(quantile_over_time(0.99, scrape_duration_seconds[5m]))` and
+`query_latency_p99` the `/api/v1/query*` handlers of
+`prometheus_http_request_duration_seconds_bucket`, see
+docs/catalogue-evidence/prometheus.md §10) while the rows keep the aliases
+below: (1) the reference pack's `scrape_duration_p99` was written
 over `scrape_duration_seconds_bucket`, but Prometheus exposes
 `scrape_duration_seconds` as a per-target gauge with no histogram, so the
 row `scrape_duration_max` samples `max(scrape_duration_seconds)` and points
 at the reference SLI for vocabulary only; (2) the reference pack's
-`query_latency_p99` is written over
+`query_latency_p99` was written over
 `prometheus_engine_query_duration_seconds_bucket`, but Prometheus registers
 `prometheus_engine_query_duration_seconds` as a **summary** (objectives 0.5 /
 0.9 / 0.99, labels `slice` / `quantile`) with no `_bucket` series, so the
