@@ -78,15 +78,15 @@ What that shape means:
 | `fetch_latency_p99` | `max(kafka_network_requestmetrics_localtimems{request="FetchConsumer",quantile="0.99"}) / 1000` | 1 series, **0 s** (0 ms at millisecond resolution; threshold 0.05 s) |
 | — why not TotalTimeMs | `max(kafka_network_requestmetrics_totaltimems{request="FetchConsumer",quantile="0.99"}) / 1000` | **0.103 s** on a healthy broker: a consumer fetch's total time includes the long-poll wait (`fetch.max.wait.ms`) whenever the partition has nothing new, so it would breach the 50 ms objective on any idle topic |
 | — Produce local time, for scale | `max(kafka_network_requestmetrics_localtimems{request="Produce",quantile="0.99"}) / 1000` | 0.001 s |
-| `controller_election_rate` | `sum(rate(kafka_controller_kafkacontroller_newactivecontrollerscount[1h])) * 3600` | 1 series, **0** (the count has been 1 since start) |
+| `controller_election_rate` | `max(rate(kafka_controller_kafkacontroller_newactivecontrollerscount[1h])) * 3600` | 1 series, **0** — the count has been 1 since start (min and max over 6 h = 1, 0 resets). `sum(...)` returns the same 0: `count(kafka_controller_kafkacontroller_newactivecontrollerscount)` = 1 (one combined node), so the lab cannot show the per-node multiplication `max` exists for (§1.6, §2). Prometheus 3.14 annotates the query "metric might not be a counter, name does not end in _total" — cosmetic: the Strimzi rules type the MBean's growing `Value` as a gauge |
 | `per_topic_throughput` | `sum by (topic)(rate(kafka_server_brokertopicmetrics_messagesin_total{topic!=""}[5m]))` | 3 series: `orders` 49.0/s, `payments` 9.81/s, `__consumer_offsets` 5.99/s (14:40Z). Without the selector the same query returns a fourth series `{}` = 64.8/s — the broker-wide MBean, exported without a `topic` label, equal to the sum of the three (5.99 + 49.0 + 9.81 = 64.8) — which doubled the panel's visual total; the view filters it |
 | `broker_availability` | `sum(up{job="kafka-broker"} == bool 1) / count(up{job="kafka-broker"})` | 1 series, **1** |
-| `partition_replica_health` | `sum(kafka_topic_partition_in_sync_replica == bool kafka_topic_partition_replicas) / count(kafka_topic_partition_replicas)` | 1 series, **1** |
+| `partition_replica_health` | `sum(kafka_topic_partition_in_sync_replica == bool kafka_topic_partition_replicas) / count(kafka_topic_partition_replicas)` | 1 series, **1**. The filter form the pack carried until the review of 2026-09-22 (`==` without `bool`, which the live Prometheus had loaded verbatim as `kafka:partition_health:ratio_5m` from `rules-reference/kafka.recording.yml`) also reads 1 here, because every ISR count is 1 (`count_values("isr", kafka_topic_partition_in_sync_replica)` → `{isr="1"}` 56); on replication factor 3 it sums ISR counts and reads 3. The semantics, shown live on a metric whose values are not 1: `sum(kafka_consumergroup_current_offset == kafka_consumergroup_current_offset)` = 182740, `sum(... == bool ...)` = 6 = `count(...)` (14:40Z) |
 | `consumer_group_lag_seconds` | `max by (consumergroup)(kafka_consumergroup_lag / (rate(kafka_consumergroup_current_offset[5m]) > 0))` | 2 series: `orders-consumers` **1.76 s**, `payments-consumers` **1.57 s** (per-partition offset rates 16.0–16.5/s and 2.8–3.8/s; lags 0–29 messages; threshold 60 s) |
 | the pack at 54223dd | `kafka:produce_latency:p99_5m`, `kafka:fetch_latency:p99_5m`, `kafka:controller_elections:rate_1h` | **0 series each**; `kafka:consumer_lag:seconds_max_5m` 2 series, `kafka:broker_availability:ratio_5m` 1, `kafka:partition_health:ratio_5m` 1 (13 `kafka:*` records loaded) |
 | the pack's former names | `kafka_server_RequestMetrics_localtime_ms_bucket`, `kafka_controller_ControllerStats_election_rate`, `kafka_server_BrokerTopicMetrics_messagesinpersec` | **0 series each** |
 
-The burn-rate rules (`reference-packs/rules/kafka.burn.yml`) did not change with this correction: a threshold SLI is read through its `kafka:<sli>:…` recording rule, so only the pack's SLI queries and the dashboard tiles carry the new names.
+The burn-rate rules (`reference-packs/rules/kafka.burn.yml`) did not change with this correction: a threshold SLI is read through its `kafka:<sli>:…` recording rule, so only the pack's SLI queries and the dashboard tiles carry the new names. Nor did they change with the review's `== bool` and `max()` corrections: the generator already emitted the bool form for the state-style ratio, and the election rate is read through `kafka:controller_elections:rate_1h`.
 
 ### 1.5 What this document claimed before 2026-09-22 that was wrong
 
@@ -101,7 +101,9 @@ The burn-rate rules (`reference-packs/rules/kafka.burn.yml`) did not change with
 ### 1.6 Not verified in this run
 
 - Multi-broker behaviour: one node, replication factor 1, so `partition_replica_health` can never see an ISR shortfall here and `broker_availability` has one target.
-- A real controller election (the count stayed at 1); `sum(rate(...[1h])) * 3600` was executed but the step from 1 to 2 was not observed.
+- A real controller election (the count stayed at 1); `max(rate(...[1h])) * 3600` (and the `sum` form) were executed but the step from 1 to 2 was not observed.
+- The per-node semantics of `NewActiveControllersCount`: one combined node, so `sum` and `max` across nodes are indistinguishable here. The choice of `max` rests on the 3.9 ops documentation and on `QuorumController.handleLeaderChange` in the 3.9.2 source (§2), not on a measurement.
+- `partition_replica_health` on replication factor > 1: the filter form would sum ISR counts (§1.4); not observable on RF 1, the PromQL semantics were shown live on another metric.
 - Strimzi-managed discovery labels (`strimzi_io_*`, the operator's PodMonitor): the lab scrapes static targets.
 - The ZooKeeper-mode `ControllerStats` families on a 3.x broker with ZooKeeper (not run).
 
@@ -132,7 +134,7 @@ The pack declares six SLIs as the *operational vital signs* of a Kafka cluster. 
 - Confluent, *Monitoring Kafka in Production* — section "Replication and ISR metrics"
 - Apache Kafka KIP-101 (Leader epoch + replication safety) — https://cwiki.apache.org/confluence/display/KAFKA/KIP-101+-+Alter+Replication+Protocol+to+use+Leader+Epoch+rather+than+High+Watermark+for+Truncation
 
-**PromQL metrics:** `kafka_topic_partition_in_sync_replica` and `kafka_topic_partition_replicas` from `kafka_exporter` (§1.3), matched one-to-one on `topic` / `partition`. The ratio of `in_sync_replica == replicas` is the canonical Strimzi pattern; the burn-rate generator rewrites the filter comparison to `== bool`.
+**PromQL metrics:** `kafka_topic_partition_in_sync_replica` and `kafka_topic_partition_replicas` from `kafka_exporter` (§1.3), matched one-to-one on `topic` / `partition`. The good leg compares with `== bool` so each healthy partition counts 1: a filter comparison (`==` alone) keeps the left-hand value — the ISR count — and sums to 3 × partitions on a healthy replication-factor-3 cluster (§1.4 shows the semantics live). The burn-rate generator always rewrote the filter form to `== bool` in the burn rules; the pack's own recording rule `kafka:partition_health:ratio_5m` does **not** get that rewrite (a ratio SLI is expanded verbatim) and carried the filter form until 2026-09-22.
 
 ### `consumer_group_lag_seconds` (threshold)
 **What it measures:** maximum consumer-group lag, expressed as seconds (message-count lag divided by the consumer's rolling commit rate).
@@ -182,7 +184,7 @@ The pack declares six SLIs as the *operational vital signs* of a Kafka cluster. 
 - Apache Kafka, *Operations — Monitoring*, KRaft controller metrics (`kafka.controller:type=KafkaController,name=NewActiveControllersCount`)
 - Confluent, *Monitoring Kafka in Production* — section "Controller metrics"
 
-**PromQL metric:** `kafka_controller_kafkacontroller_newactivecontrollerscount` — a count of active-controller changes that only grows (1 after a clean start), exported by the Strimzi rules as a gauge; `rate()` over it is the election rate. The ZooKeeper-era `ControllerStats` election meter the pack named until 2026-09-22 does not exist on KRaft (§1.2, §1.5).
+**PromQL metric:** `kafka_controller_kafkacontroller_newactivecontrollerscount` — exported by the Strimzi rules as a gauge although the MBean's value only grows (1 after a clean start). **The count is per node.** The Kafka 3.9 operations documentation (`docs/ops.html`, row *Number Of New Controller Elections*) says: "Counts the number of times this node has seen a new controller elected. A transition to the "no leader" state is not counted here. If the same controller as before becomes active, that still counts." In the 3.9.2 source, `QuorumController.handleLeaderChange` calls `controllerMetrics.incrementNewActiveControllers()` whenever `newLeader.leaderId().isPresent()`, outside the `newLeader.isLeader(nodeId)` branches — the raft listener every controller node runs, active and standby. One election therefore moves the count on every controller node, and the SLI takes `max(rate(...))` across nodes: `sum` would report N elections per election on an N-controller quorum (3 on the Strimzi deployment the rule set ships with, `KafkaNodePool controller replicas: 3`) and breach the 1/h threshold on a single election. Not measured — the lab has one node (§1.6). The ZooKeeper-era `ControllerStats` election meter the pack named until 2026-09-22 does not exist on KRaft (§1.2, §1.5).
 
 **Threshold of 1 election/hour:** any non-zero rate over a sustained window indicates instability; 1/hour is the BAU alert floor.
 

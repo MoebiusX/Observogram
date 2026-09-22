@@ -227,7 +227,7 @@
         "w": 4,
         "h": 4
       },
-      "description": "Fraction of partitions where all in-sync replicas (ISRs) are present, vs. total partitions. SLO 99.95 % over 30d.",
+      "description": "Fraction of partitions whose in-sync replica count equals their replica count. The comparison is `== bool` (1 per healthy partition): the filter form keeps the left-hand value, the ISR count, and sums to 3 x partitions on a healthy replication-factor-3 cluster (the burn generator always emitted the bool form; the pack's recording rule carried the filter form until 2026-09-22 — indistinguishable on the lab's replication factor 1). SLO 99.95 % over 30d.",
       "pack": {
         "binds_to": [
           "slis.partition_replica_health"
@@ -523,7 +523,7 @@
         "w": 4,
         "h": 4
       },
-      "description": "Controller elections per hour, from the KRaft controller's NewActiveControllersCount (kafka.controller:type=KafkaController), a monotonically increasing count of active-controller changes that the Strimzi rule set exposes as the gauge kafka_controller_kafkacontroller_newactivecontrollerscount (1 after a clean start, +1 per election). The ZooKeeper-era kafka.controller:type=ControllerStats,name=LeaderElectionRateAndTimeMs meter this SLI used to name does not exist on a KRaft broker; the only ControllerStats family left is UncleanLeaderElectionsPerSec. Elevated controller churn signals broker instability or network issues that haven't yet shown up in broker-availability metrics. SLO 99 % over 7d.",
+      "description": "Controller elections per hour. Each controller node counts every active-controller change it observes in kafka.controller:type=KafkaController,name=NewActiveControllersCount (\"the number of times this node has seen a new controller elected\", Kafka 3.9 ops docs; QuorumController.handleLeaderChange increments it on every node running the raft listener, active and standby — verified in the 3.9.2 source, not measured: the lab has one node), exposed by the Strimzi rule set as the gauge kafka_controller_kafkacontroller_newactivecontrollerscount (1 after a clean start). One election moves the count on every controller node, so the rate is taken per node and combined with max, never sum: summed, a 3-controller quorum reads 3 elections per election against a threshold of 1/h. The ZooKeeper-era kafka.controller:type=ControllerStats,name=LeaderElectionRateAndTimeMs meter this SLI used to name does not exist on a KRaft broker; the only ControllerStats family left is UncleanLeaderElectionsPerSec. Elevated controller churn signals broker instability or network issues that haven't yet shown up in broker-availability metrics. SLO 99 % over 7d.",
       "pack": {
         "binds_to": [
           "slis.controller_election_rate"

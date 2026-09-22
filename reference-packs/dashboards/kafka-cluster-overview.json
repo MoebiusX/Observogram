@@ -226,7 +226,7 @@
         "w": 4,
         "h": 4
       },
-      "description": "Fraction of partitions where all in-sync replicas (ISRs) are present, vs. total partitions. SLO 99.95 % over 30d.",
+      "description": "Fraction of partitions whose in-sync replica count equals their replica count. The comparison is `== bool` (1 per healthy partition): the filter form keeps the left-hand value, the ISR count, and sums to 3 x partitions on a healthy replication-factor-3 cluster (the burn generator always emitted the bool form; the pack's recording rule carried the filter form until 2026-09-22 — indistinguishable on the lab's replication factor 1). SLO 99.95 % over 30d.",
       "pack": {
         "binds_to": [
           "slis.partition_replica_health"
