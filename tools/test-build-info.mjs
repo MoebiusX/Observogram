@@ -55,10 +55,12 @@ try {
   try { execFileSync(process.execPath, [STAMP, '--root', bare], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }); stampStatus = 0; }
   catch (e) { stampStatus = e.status; }
   assert(stampStatus === 2 && !existsSync(join(bare, BUILD_FILE)), 'stamp-build on a git-less tree exits 2 and writes nothing', { stampStatus, exists: existsSync(join(bare, BUILD_FILE)) });
-  // …and removes a stale one rather than leave a lie behind
-  writeFileSync(join(bare, BUILD_FILE), JSON.stringify({ build: 1, commit: 'stale00' }));
-  try { execFileSync(process.execPath, [STAMP, '--root', bare], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }); } catch { /* exit 2 is the point */ }
-  assert(!existsSync(join(bare, BUILD_FILE)), 'stamp-build removes a stale build.json from a git-less tree');
+  // …and removes an unreadable one rather than leave it to mislead the next reader
+  writeFileSync(join(bare, BUILD_FILE), '{ not json');
+  let unreadable = null;
+  try { execFileSync(process.execPath, [STAMP, '--root', bare], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }); unreadable = { status: 0 }; }
+  catch (e) { unreadable = { status: e.status, err: String(e.stderr) }; }
+  assert(unreadable.status === 2 && /unreadable/.test(unreadable.err || '') && !existsSync(join(bare, BUILD_FILE)), 'stamp-build removes an unreadable build.json from a git-less tree (exit 2)', unreadable);
 
   // ---- the stamp file read on its own ----
   const stampedOnly = join(SCRATCH, 'stamped-only');
@@ -159,6 +161,13 @@ try {
     assert(copied.build === 3 && copied.commit === sha && copied.branch === branch && copied.dirty === true && copied.date === stamped.date,
       'the copy reads the stamped fields', copied);
     assert(buildLabel(copied) === `v9.9.9 · build 3 · ${sha} · ${branch} · dirty`, 'buildLabel from the stamp equals the git label', buildLabel(copied));
+    // re-running the stamp in the copy keeps the file: it is the copy's only identity
+    const before = readFileSync(join(copy, BUILD_FILE), 'utf8');
+    const kept = execFileSync(process.execPath, [STAMP, '--root', copy], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', windowsHide: true });
+    assert(/^kept existing build\.json: v9\.9\.9 · build 3 · /.test(kept), 'stamp-build in a git-less copy keeps a readable stamp (exit 0) and says so', kept.trim());
+    assert(readFileSync(join(copy, BUILD_FILE), 'utf8') === before && readBuildInfo(copy).source === 'file', 'the kept stamp is byte-identical and still read', readBuildInfo(copy));
+    const keptJson = execFileSync(process.execPath, [STAMP, '--root', copy, '--json'], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', windowsHide: true });
+    assert(JSON.parse(keptJson).kept === true && JSON.parse(keptJson).build === 3, 'stamp-build --json reports kept: true for a kept stamp', keptJson.trim());
     // the stamp is a JSON side file, never an executable
     const stampJson = execFileSync(process.execPath, [STAMP, '--root', repo, '--json'], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', windowsHide: true });
     assert(JSON.parse(stampJson).build === 3, 'stamp-build --json echoes the stamp', stampJson.trim());

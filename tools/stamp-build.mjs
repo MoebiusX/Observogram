@@ -10,12 +10,19 @@
 //
 // Run it on the host, in the checkout, before the copy — the Dockerfile
 // copies build.json* next to package.json (there is no .git inside the
-// image and .dockerignore excludes it). Exit 2 when there is nothing to
-// stamp (no git, not a repo): the honest answer is then package.json's
-// "build unknown", never a stale file — so a stale build.json is removed.
-// A shallow clone (actions/checkout's default fetch-depth: 1) is refused
-// the same way: its commit count is the clone depth, which would bake
-// "build 1" into every image built from CI — fetch the history first.
+// image and .dockerignore excludes it). What happens depends on the tree:
+//
+//   a checkout with history     the stamp is written (exit 0)
+//   a shallow clone             refused (exit 2): its commit count is the
+//                               clone depth — actions/checkout's default
+//                               fetch-depth: 1 would bake "build 1" into
+//                               every image — so fetch the history first;
+//                               a build.json lying there is removed
+//   a git-less copy, stamped    kept as it is (exit 0): the file IS the
+//                               copy's identity and nothing newer exists
+//   a git-less copy, unstamped  nothing to stamp (exit 2); an unreadable
+//                               build.json is removed rather than left to
+//                               mislead the next reader
 //
 //   node tools/stamp-build.mjs [--root <dir>] [--json]
 
@@ -32,12 +39,20 @@ const asJson = args.includes('--json');
 const info = readBuildInfo(ROOT);
 const target = join(ROOT, BUILD_FILE);
 
-if (info.source !== 'git') {
+// A git-less copy that already carries a readable stamp: keep it — the
+// file is the copy's identity and there is nothing newer to replace it.
+if (info.source === 'file') {
+  if (asJson) process.stdout.write(JSON.stringify({ file: target, kept: true, ...info }) + '\n');
+  else process.stdout.write(`kept existing ${BUILD_FILE}: ${buildLabel(info)}\n`);
+  process.exit(0);
+}
+
+if (info.source === 'package') {
   if (existsSync(target)) {
     unlinkSync(target);
-    process.stderr.write(`stamp-build: removed a stale ${BUILD_FILE} — this tree has no git metadata to stamp (${info.source}).\n`);
+    process.stderr.write(`stamp-build: removed an unreadable ${BUILD_FILE} — nothing under ${ROOT} says which commit this is (no git metadata).\n`);
   } else {
-    process.stderr.write(`stamp-build: nothing to stamp — no git metadata under ${ROOT} (${info.source}).\n`);
+    process.stderr.write(`stamp-build: nothing to stamp — no git metadata under ${ROOT}.\n`);
   }
   process.exit(2);
 }
