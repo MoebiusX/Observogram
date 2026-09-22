@@ -40,6 +40,7 @@ import { catalogToDeployManifest } from './artifact-model.mjs';
 import { computeDeployTransitions } from './verify-deploy.mjs';
 import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-view.mjs';
 import { initHost } from './host.mjs';
+import { loadBuildInfo, buildLabelModel, renderBuildLabel } from './build-label.mjs';
 
 // `state`, the `$`/`$$` DOM helpers and the persistence layer now live in
 // studio/state.mjs (imported above).
@@ -1340,9 +1341,9 @@ async function boot() {
   // Mount the new chrome FIRST so the user sees the demo shape even
   // while the catalog loads.
   installObservaChrome();
-  // What exactly is running? Fire-and-forget: /healthz fills the About
-  // entry, the header subtitle and the brand tooltip once it answers, and
-  // never blocks boot. (The call was lost in the merge that landed About.)
+  // Which build is this? Fire-and-forget: fills the footer span, the About
+  // entry, the header subtitle and the brand tooltip. /api/version is
+  // public, so it needs neither identity nor org — and never blocks boot.
   loadVersion();
   // Identity + active org BEFORE the first /api call — with tenancy on,
   // /api/packs answers from the active org's workspace, so the org
@@ -3967,30 +3968,38 @@ function setupMcpPanel() {
 // ---------- theme ----------
 // ---------- about / version ----------
 //
-// /healthz carries { version, build, node } (server/version.mjs). Fetched
-// once at boot, displayed in the Advanced menu foot, the header subtitle,
-// and the About modal — "what exactly is running?" should never need a
-// terminal.
-let serverVersion = null;
+// Which build is this studio? GET /api/version (tools/lib/build-info.mjs,
+// read through studio/build-label.mjs) names the commit the server was
+// started from — 'v0.4.0 · build 975 · 9c4f827 · develop'; /healthz adds
+// the spec version and the node runtime for the About modal. Fetched once
+// at boot (fire-and-forget), painted into the footer span, the Advanced
+// menu's About entry, the header subtitle and the brand tooltip — "what
+// exactly is running?" should never need a terminal. When the server does
+// not answer, the footer keeps its package.json fallback.
+let serverVersion = null;   // /healthz: { version, build, node, specVersion }
+let serverBuild = null;     // buildLabelModel(/api/version)
 
 async function loadVersion() {
-  try {
-    const r = await fetch('/healthz');
-    if (r.ok) serverVersion = await r.json();
-  } catch (_) { /* offline boot path already handles the error */ }
-  const label = serverVersion ? `v${serverVersion.version} · build ${serverVersion.build}` : null;
-  if (!label) return;
+  const [info, health] = await Promise.all([
+    loadBuildInfo(),
+    fetch('/healthz').then(r => (r.ok ? r.json() : null)).catch(() => null),
+  ]);
+  serverVersion = health;
+  serverBuild = buildLabelModel(info);
+  if (!serverBuild) return;
+  renderBuildLabel($('#build-label'), serverBuild);
   const sub = document.getElementById('observa-about-sub');
-  if (sub) sub.textContent = label;
+  if (sub) sub.textContent = serverBuild.label;
   const hdrSub = document.querySelector('.hdr-sub');
-  if (hdrSub && !hdrSub.textContent.includes('build')) hdrSub.textContent += ` · ${label}`;
+  if (hdrSub && !hdrSub.textContent.includes('build')) hdrSub.textContent += ` · ${serverBuild.shortLabel}`;
   const brand = document.querySelector('.observa-brand');
-  if (brand) brand.title = `Observogram ${label}`;
+  if (brand) brand.title = `Observogram ${serverBuild.label}`;
 }
 
 function openAboutModal() {
   document.getElementById('about-modal')?.remove();
   const v = serverVersion || {};
+  const b = serverBuild;
   const row = (k, val) => val ? `<div class="about-row"><span class="about-key">${k}</span><span class="about-val">${escapeHtml(String(val))}</span></div>` : '';
   const overlay = document.createElement('div');
   overlay.id = 'about-modal';
@@ -3999,8 +4008,11 @@ function openAboutModal() {
     <div class="about-card" role="dialog" aria-modal="true" aria-label="About Observogram">
       <div class="about-brand">Observo<i>gram</i></div>
       <div class="about-tagline">the observability compiler</div>
-      <div class="about-version">${escapeHtml(v.version ? `v${v.version}` : 'version unknown')}<span class="about-build">${escapeHtml(v.build ? ` · build ${v.build}` : '')}</span></div>
+      <div class="about-version">${escapeHtml(b ? `v${b.version ?? '?'}` : v.version ? `v${v.version}` : 'version unknown')}<span class="about-build">${escapeHtml(b ? ` · build ${b.build ?? 'unknown'}` : v.build ? ` · build ${v.build}` : '')}</span></div>
       <div class="about-rows">
+        ${row('commit', b?.commit ? [b.commit, b.branch, b.dirty ? 'dirty' : null].filter(Boolean).join(' · ') : null)}
+        ${row('committed', b?.date)}
+        ${row('source', b?.source && b.source !== 'unknown' ? b.source : null)}
         ${row('spec', v.specVersion ? `ObservabilityPack v${v.specVersion}` : null)}
         ${row('server', v.node ? `node ${v.node}` : null)}
         ${row('identity', state.identity?.mode || 'local (no sign-in)')}
