@@ -597,7 +597,7 @@ spec:
       - maintenance_windows
       - deploy_freezes
   remediation:
-    - trigger: alert:ibmmq-queue-manager-down
+    - trigger: alert:qmgr_process_up_99_9_burn_14x_5m_1h
       runbook: file://runbooks/qmgr-down.md
       automation: argo-workflow://restart-qmgr-with-nha-quorum-check
       guardrails:
@@ -608,7 +608,7 @@ spec:
         circuit_breaker:
           failures: 2
           window: 1h
-    - trigger: alert:ibmmq-queue-manager-unreachable
+    - trigger: alert:qmgr_reachability_99_9_burn_14x_5m_1h
       runbook: file://runbooks/qmgr-unreachable.md
       automation: argo-workflow://start-listener-and-channels
       guardrails:
@@ -616,7 +616,7 @@ spec:
         requires_human_above: SEV1
         rollback_on_failure: false
         cooldown_after_success: 15m
-    - trigger: alert:ibmmq-queue-full
+    - trigger: alert:queue_depth_headroom_99_9_burn_14x_5m_1h
       runbook: file://runbooks/queue-depth.md
       automation: argo-workflow://consumer-scale-out
       guardrails:
@@ -624,7 +624,7 @@ spec:
         requires_human_above: SEV1
         rollback_on_failure: true
         cooldown_after_success: 15m
-    - trigger: alert:ibmmq-oldest-message-age-high
+    - trigger: alert:oldest_message_age_99_burn_10x_10m_1h
       runbook: file://runbooks/consumer-stalled.md
       automation: argo-workflow://consumer-scale-out
       guardrails:
@@ -632,7 +632,7 @@ spec:
         requires_human_above: SEV2
         rollback_on_failure: true
         cooldown_after_success: 15m
-    - trigger: alert:ibmmq-dead-letter-queue-not-empty
+    - trigger: alert:dlq_depth_99_9_burn_10x_10m_1h
       runbook: file://runbooks/dlq.md
       automation: manual-only
       guardrails:

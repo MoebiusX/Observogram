@@ -93,7 +93,6 @@ slis:
       expected_mttd: 2m
       minTier: tier-2
     remediation:
-      trigger: alert:prometheus-scrape-failures-burn
       runbook: scrape-failures
       automation: argo-workflow://restart-failing-scrapers
       guardrails: { max_invocations_per_hour: 2, requires_human_above: SEV2, rollback_on_failure: true, cooldown_after_success: 15m, circuit_breaker: { failures: 2, window: 1h } }
@@ -117,7 +116,6 @@ slis:
       window: 30d
     burn: availability
     remediation:
-      trigger: alert:prometheus-rule-eval-failures-burn
       runbook: rule-evaluation-failures
       automation: argo-workflow://reload-prometheus-config
       guardrails: { max_invocations_per_hour: 3, requires_human_above: SEV2, rollback_on_failure: true, cooldown_after_success: 10m }
@@ -207,7 +205,6 @@ slis:
       expected_mttd: 10m
       minTier: tier-2
     remediation:
-      trigger: alert:prometheus-tsdb-compaction-failures
       runbook: tsdb-compaction
       automation: argo-workflow://trigger-manual-compaction
       guardrails: { max_invocations_per_hour: 1, requires_human_above: SEV2, rollback_on_failure: false, cooldown_after_success: 1h }
@@ -231,7 +228,6 @@ slis:
       window: 30d
     burn: availability
     remediation:
-      trigger: alert:prometheus-wal-corruption
       runbook: wal-corruption
       automation: manual-only
       guardrails: { max_invocations_per_hour: 1, requires_human_above: SEV1 }

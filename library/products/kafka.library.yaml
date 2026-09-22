@@ -103,7 +103,6 @@ slis:
       expected_mttd: 90s
       minTier: tier-2
     remediation:
-      trigger: alert:kafka-broker-down
       runbook: broker-down
       automation: argo-workflow://restart-broker-with-quorum-check
       guardrails: { max_invocations_per_hour: 2, requires_human_above: SEV1, rollback_on_failure: true, cooldown_after_success: 30m, circuit_breaker: { failures: 2, window: 1h } }
@@ -136,7 +135,6 @@ slis:
       expected_mttd: 5m
       minTier: tier-1
     remediation:
-      trigger: alert:kafka-consumer-lag-burn
       runbook: consumer-lag
       automation: argo-workflow://consumer-group-scale-out
       guardrails: { max_invocations_per_hour: 3, requires_human_above: SEV2, rollback_on_failure: true, cooldown_after_success: 15m }
@@ -167,7 +165,6 @@ slis:
       expected_mttd: 2m
       minTier: tier-2
     remediation:
-      trigger: alert:kafka-partition-under-replicated
       runbook: under-replicated-partitions
       automation: argo-workflow://reassign-partitions-with-throttle
       guardrails: { max_invocations_per_hour: 1, requires_human_above: SEV2, rollback_on_failure: false, cooldown_after_success: 1h }
@@ -228,7 +225,6 @@ slis:
       window: 7d
     burn: slow
     remediation:
-      trigger: alert:kafka-controller-churn
       runbook: controller-churn
       automation: manual-only
       guardrails: { max_invocations_per_hour: 1, requires_human_above: SEV2 }

@@ -40,7 +40,7 @@ otel { languages[], custom_attributes[] }
 telemetry { scrape_jobs[] { job_name, scrape_interval, targets[], minTier }, receivers[] }
 slis[] { id, type, minTier, description, why, unit, metrics[], evidence { status, source },
          good/total | query/threshold, slo { objective per tier, window per tier }, burn,
-         forecast?, chaos?, remediation? }
+         forecast?, chaos?, remediation? { runbook, automation, guardrails, minTier — no trigger: derived } }
 views[] · dashboards[] { id, minTier, binds[] } · synthetic[] { …, minTier }
 ```
 
@@ -72,7 +72,7 @@ rubric filtered by `minTier`.
 | dashboards | `<svc>-overview` (every SLI and SLO) + the entries' boards | `<svc>-slo-burn` (burn template, every SLO) | `<svc>-deployment-overlay` (SLIs), `<svc>-customer-impact` (SLOs) |
 | policy | two-window burn alerts per SLO from the SLI's profile (availability / latency / saturation / slow), severities demoted one step | severities as declared | forecast on an availability SLO |
 | alerting | SEV1/SEV2 → chat, SEV3 → team chat, dedup | SEV1 voice, suppress contexts | SEV2 voice |
-| remediation | — | the entries' templates | a generic manual-only one when the entries have none |
+| remediation | — | the entries' templates, each triggered by its SLI's fast burn alert under the compiler's name (`alert:<slo>_burn_<factor>x_<short>_<long>`): the alerts a library pack compiles, so the trigger resolves like a chaos `expected_alert` does | a generic manual-only one on the first SLO when the entries have none |
 | baselines | tier defaults | + p95 targets, `warn_only` | `block_release_if_either_breaches_target` |
 | validation | the entries' probes (or a fallback blackbox probe) | the entries' chaos experiments, monthly in staging (a generic one when none) | one experiment per SLO, the first one again weekly in prod, the first probe `otel_instrumentation: true` |
 

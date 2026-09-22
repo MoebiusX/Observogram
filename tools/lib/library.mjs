@@ -12,8 +12,10 @@
 //
 //   1. An ENTRY contributes what is product-specific: SLI templates (metric
 //      names + PromQL, a minTier, per-tier SLO objectives, a burn profile),
-//      scrape jobs, product dashboards, derived views, synthetic probes and
-//      chaos templates, with an evidence block per entry and per SLI
+//      scrape jobs, product dashboards, derived views, synthetic probes, chaos
+//      and remediation templates (a remediation's trigger is derived: the
+//      SLI's fast burn alert, the only alerts a library pack compiles), with
+//      an evidence block per entry and per SLI
 //      (recorded-live | reference-pack | upstream-docs | semconv).
 //   2. The TIER SCAFFOLD (tierScaffold, one function shared by every entry)
 //      produces the structural sections a tier needs — otel, telemetry
@@ -273,7 +275,9 @@ export function validateLibraryEntry(entry) {
         const r = s.remediation;
         if (!isObj(r)) e(`${at}.remediation: an object`);
         else {
-          if (typeof r.trigger !== 'string' || !/^alert:[a-z0-9-]+$/.test(r.trigger)) e(`${at}.remediation.trigger: expected alert:<kebab-name>`);
+          // The trigger is derived: a library pack compiles burn-rate (and forecast) alerts and nothing else,
+          // so a template naming a product's symptom alert would key the remediation to an alert that never fires.
+          if ('trigger' in r) e(`${at}.remediation.trigger: not a template field — the trigger is the SLI's fast burn alert by the compiler's name (alert:<slo>_burn_<factor>x_<short>_<long>), the only alerts a library pack compiles`);
           if (typeof r.runbook !== 'string' || !/^[a-z0-9-]+$/.test(r.runbook)) e(`${at}.remediation.runbook: the runbook file stem (kebab-case)`);
           if (typeof r.automation !== 'string' || !r.automation.trim()) e(`${at}.remediation.automation: required (an automation URI or manual-only)`);
           if (r.minTier != null && !TIERS.includes(r.minTier)) e(`${at}.remediation.minTier: expected a tier`);
@@ -655,10 +659,13 @@ export function tierScaffold({ tier, service, environment, owners, fragments, to
     const items = fragments.flatMap(f => f.remediation);
     if (!items.length && t1 && slis.length) {
       const x = slis[0];
-      items.push({ trigger: `alert:${kebab(x.sloId)}-burn-fast`, runbook: `${kebab(x.id)}`, automation: 'manual-only', generic: true, sli: x });
+      items.push({ runbook: `${kebab(x.id)}`, automation: 'manual-only', generic: true, sli: x });
     }
+    // Triggered by the SLI's fast burn alert under the compiler's name (tools/lib/compile.mjs): the alerts a
+    // library pack actually compiles. The entries' symptom-alert names resolved in the reference packs only
+    // because those repos ship rule files; here 0 of 21 did.
     remediation = items.map(r => ({
-      trigger: r.trigger,
+      trigger: `alert:${burnAlertName(r.sli.sloId, r.sli.windows[0])}`,
       runbook: `file://\${runbook_dir}/${r.runbook}.md`,
       automation: r.automation,
       guardrails: { max_invocations_per_hour: 1, requires_human_above: 'SEV2', rollback_on_failure: true, cooldown_after_success: '30m', ...(r.guardrails || {}) },

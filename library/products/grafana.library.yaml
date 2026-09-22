@@ -86,7 +86,6 @@ slis:
       expected_mttd: 2m
       minTier: tier-2
     remediation:
-      trigger: alert:grafana-http-errors-burn
       runbook: http-errors
       automation: argo-workflow://restart-grafana-with-readiness-check
       guardrails: { max_invocations_per_hour: 2, requires_human_above: SEV2, rollback_on_failure: true, cooldown_after_success: 15m, circuit_breaker: { failures: 2, window: 1h } }
@@ -168,7 +167,6 @@ slis:
       window: 30d
     burn: availability
     remediation:
-      trigger: alert:grafana-alerting-evaluation-burn
       runbook: alerting-evaluation-failures
       automation: manual-only
       guardrails: { max_invocations_per_hour: 1, requires_human_above: SEV2 }

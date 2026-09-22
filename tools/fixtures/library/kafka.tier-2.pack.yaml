@@ -408,7 +408,7 @@ spec:
       - maintenance_windows
       - deploy_freezes
   remediation:
-    - trigger: alert:kafka-broker-down
+    - trigger: alert:broker_availability_99_9_burn_14x_5m_1h
       runbook: file://runbooks/broker-down.md
       automation: argo-workflow://restart-broker-with-quorum-check
       guardrails:
@@ -419,7 +419,7 @@ spec:
         circuit_breaker:
           failures: 2
           window: 1h
-    - trigger: alert:kafka-partition-under-replicated
+    - trigger: alert:partition_replica_health_99_95_burn_14x_5m_1h
       runbook: file://runbooks/under-replicated-partitions.md
       automation: argo-workflow://reassign-partitions-with-throttle
       guardrails:

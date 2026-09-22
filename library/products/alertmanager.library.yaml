@@ -72,7 +72,6 @@ slis:
       window: 30d
     burn: availability
     remediation:
-      trigger: alert:alertmanager-down
       runbook: alertmanager-down
       automation: manual-only
       guardrails: { max_invocations_per_hour: 1, requires_human_above: SEV2 }

@@ -74,6 +74,9 @@ test('validateLibraryEntry names what is wrong', () => {
   const scaffoldClash = JSON.parse(JSON.stringify(ok));
   scaffoldClash.params.push({ id: 'chaos_target', label: 'x', default: 'y', description: 'z' });
   assert.ok(validateLibraryEntry(scaffoldClash).some(e => e.includes('scaffold or built-in')));
+  const declaredTrigger = JSON.parse(JSON.stringify(ok));
+  declaredTrigger.slis[0].remediation.trigger = 'alert:kafka-broker-down';   // the reference pack's symptom alert: no library pack compiles it
+  assert.ok(validateLibraryEntry(declaredTrigger).some(e => e.includes('remediation.trigger: not a template field')));
   const reserved = JSON.parse(JSON.stringify(ok));
   reserved.slis[0].id = 'errorbudget';   // the compiler's <svc>:errorbudget:burn_* policy records
   assert.ok(validateLibraryEntry(reserved).some(e => e.includes("slis[0].id: 'errorbudget'") && e.includes('reserved')));
@@ -142,6 +145,11 @@ for (const entry of entries) for (const tier of TIERS) {
       const json = compile(canonical, 'grafana-dashboard', { dashboardId: d.id });
       assert.equal(JSON.parse(json.content).uid, d.id, `${id} board ${d.id}`);
     }
+    // every remediation trigger and every chaos expected_alert names an alert the compiled rules carry, verbatim
+    const compiledAlerts = new Set([...compile(canonical, 'prometheus-rules').content.matchAll(/^\s*-\s*alert:\s*(\S+)\s*$/gm)].map(m => m[1]));
+    for (const r of canonical.spec.remediation || []) assert.ok(compiledAlerts.has(r.trigger.replace(/^alert:/, '')), `${id}: remediation trigger ${r.trigger} is an alert the pack compiles (${[...compiledAlerts].join(', ')})`);
+    for (const c of canonical.spec.validation?.chaos_experiments || []) for (const a of c.expected_alerts) assert.ok(compiledAlerts.has(a), `${id}: chaos ${c.id} expects ${a}, compiled: ${[...compiledAlerts].join(', ')}`);
+    if (tier === 'tier-1') assert.ok((canonical.spec.remediation || []).length >= 1, `${id}: at least one remediation at tier-1 (L4.MUST.tier1_at_least_one_automation)`);
 
     // boards
     const boards = genericBoards(canonical);
@@ -299,6 +307,19 @@ test('warnings: the burn-rule generator\'s direction warning on a ratio-unit thr
   assert.deepEqual(build(byId['ibm-mq'], 'tier-2', { toggles: { slos: false } }).warnings.filter(w => w.kind === 'burn-rules'), []);
   const prom = build(byId.prometheus, 'tier-1');
   assert.deepEqual(prom.warnings.filter(w => w.kind === 'burn-rules' && /rule_evaluation_success_ratio|notification_success_ratio|tsdb_compaction_success_ratio|wal_corruption_freshness|scrape_success_ratio/.test(w.message)), [], 'the prometheus legs are guarded');
+});
+
+test('remediation triggers are the SLO\'s fast burn alert, derived from the profile, at both tiers that carry one', () => {
+  const t2 = build(byId.kafka, 'tier-2').canonical.spec.remediation.map(r => r.trigger);
+  assert.deepEqual(t2, ['alert:broker_availability_99_9_burn_14x_5m_1h', 'alert:partition_replica_health_99_95_burn_14x_5m_1h']);
+  const t1 = build(byId.kafka, 'tier-1').canonical.spec.remediation.map(r => r.trigger);
+  assert.ok(t1.includes('alert:consumer_group_lag_seconds_99_burn_10x_10m_1h'), 'the saturation profile: 10x over 10m/1h');
+  assert.ok(t1.includes('alert:controller_election_rate_99_burn_8x_15m_2h'), 'the slow profile: 8x over 15m/2h');
+  // an entry with no remediation template at tier-1 gets the generic manual-only one, on its first SLO's fast alert
+  const generic = build(byId['http-service'], 'tier-1').canonical.spec.remediation;
+  assert.equal(generic.length, 1);
+  assert.equal(generic[0].trigger, `alert:${build(byId['http-service'], 'tier-1').canonical.spec.slos[0].id}_burn_14x_5m_1h`);
+  assert.equal(generic[0].automation, 'manual-only');
 });
 
 test('symbolOf maps pack paths to the adapter\'s artefact ids', () => {

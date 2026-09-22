@@ -66,14 +66,20 @@ slis:
     burn: availability      # availability | latency | saturation | slow, or explicit windows
     forecast: { method: holt-winters, horizon: 7d, on_projected_breach: open_ticket, minTier: tier-1 }
     chaos: { id: broker-pod-kill, engine: chaos-mesh, target: "${broker_workload}", fault: { kind: pod-failure, fraction: 0.33, duration: 90s }, expected_mttd: 90s, minTier: tier-2 }
-    remediation: { trigger: alert:kafka-broker-down, runbook: broker-down, automation: argo-workflow://..., guardrails: { ... }, minTier: tier-2 }
+    remediation: { runbook: broker-down, automation: argo-workflow://..., guardrails: { ... }, minTier: tier-2 }
+                            # no trigger: it is derived — alert:<slo>_burn_<factor>x_<short>_<long>, this SLI's fast burn alert
 views:       [ { id: per_topic_throughput, bind: ref:platform/per-resource-rollup, params: { metric: ..., by: [topic] }, minTier: tier-2 } ]
 dashboards:  [ { id: kafka-consumer-lag, minTier: tier-3, binds: [slis.consumer_group_lag_seconds, slos.consumer_group_lag_seconds, views.per_consumergroup_lag] } ]
 synthetic:   [ { id: produce-consume-canary, kind: k6, target: "${bootstrap}", interval: 1m, assertions: [...], on_fail_severity: SEV2, minTier: tier-3 } ]
 ```
 
 `slos.<sli id>` in a board binding means "the SLO of that SLI" (SLO ids are derived:
-`<sli>_<objective>`, e.g. `broker_availability_99_9`). `${service}`, `${environment}`
+`<sli>_<objective>`, e.g. `broker_availability_99_9`). A remediation template names no
+trigger: a library pack compiles burn-rate and forecast alerts and nothing else, so the
+scaffold keys every remediation to its SLI's fast burn alert under the compiler's name
+(`alert:broker_availability_99_9_burn_14x_5m_1h`), and `validateLibraryEntry` rejects a
+`trigger` in the template — the reference packs' symptom-alert names resolve in their own
+repositories only because those ship rule files. `${service}`, `${environment}`
 and `${tier}` are built-ins; the scaffold's own parameters (`oncall_channel`,
 `pager_service`, `metrics_endpoint`, `chaos_target`, …) are listed by
 `packc init --show <entry>`. A parameter flagged `placeholder: true` that is left at

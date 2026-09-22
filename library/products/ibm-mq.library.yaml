@@ -113,7 +113,6 @@ slis:
       expected_mttd: 90s
       minTier: tier-2
     remediation:
-      trigger: alert:ibmmq-queue-manager-down
       runbook: qmgr-down
       automation: argo-workflow://restart-qmgr-with-nha-quorum-check
       guardrails: { max_invocations_per_hour: 2, requires_human_above: SEV1, rollback_on_failure: true, cooldown_after_success: 30m, circuit_breaker: { failures: 2, window: 1h } }
@@ -143,7 +142,6 @@ slis:
       expected_mttd: 90s
       minTier: tier-2
     remediation:
-      trigger: alert:ibmmq-queue-manager-unreachable
       runbook: qmgr-unreachable
       automation: argo-workflow://start-listener-and-channels
       guardrails: { max_invocations_per_hour: 3, requires_human_above: SEV1, rollback_on_failure: false, cooldown_after_success: 15m }
@@ -176,7 +174,6 @@ slis:
       expected_mttd: 60s
       minTier: tier-2
     remediation:
-      trigger: alert:ibmmq-queue-full
       runbook: queue-depth
       automation: argo-workflow://consumer-scale-out
       guardrails: { max_invocations_per_hour: 3, requires_human_above: SEV1, rollback_on_failure: true, cooldown_after_success: 15m }
@@ -208,7 +205,6 @@ slis:
       expected_mttd: 150s
       minTier: tier-2
     remediation:
-      trigger: alert:ibmmq-oldest-message-age-high
       runbook: consumer-stalled
       automation: argo-workflow://consumer-scale-out
       guardrails: { max_invocations_per_hour: 3, requires_human_above: SEV2, rollback_on_failure: true, cooldown_after_success: 15m }
@@ -237,7 +233,6 @@ slis:
       expected_mttd: 60s
       minTier: tier-2
     remediation:
-      trigger: alert:ibmmq-dead-letter-queue-not-empty
       runbook: dlq
       automation: manual-only
       guardrails: { max_invocations_per_hour: 1, requires_human_above: SEV3 }

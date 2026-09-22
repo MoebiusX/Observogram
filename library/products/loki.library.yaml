@@ -77,7 +77,6 @@ slis:
       window: 30d
     burn: availability
     remediation:
-      trigger: alert:loki-down
       runbook: loki-down
       automation: manual-only
       guardrails: { max_invocations_per_hour: 1, requires_human_above: SEV2 }
