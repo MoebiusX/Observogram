@@ -62,6 +62,23 @@ try {
   catch (e) { unreadable = { status: e.status, err: String(e.stderr) }; }
   assert(unreadable.status === 2 && /unreadable/.test(unreadable.err || '') && !existsSync(join(bare, BUILD_FILE)), 'stamp-build removes an unreadable build.json from a git-less tree (exit 2)', unreadable);
 
+  // ---- the tool's own arguments: a typo must never stamp the wrong tree ----
+  const hadOwnStamp = existsSync(join(ROOT, BUILD_FILE));
+  const runStamp = (...extra) => {
+    try { execFileSync(process.execPath, [STAMP, ...extra], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }); return { status: 0 }; }
+    catch (e) { return { status: e.status, err: String(e.stderr) }; }
+  };
+  const bareRoot = runStamp('--root');
+  assert(bareRoot.status === 3 && /usage:/.test(bareRoot.err || '') && existsSync(join(ROOT, BUILD_FILE)) === hadOwnStamp,
+    'stamp-build --root without a value exits 3 with the usage and stamps nothing (not this checkout)', bareRoot);
+  assert(runStamp('--root', '--json').status === 3, 'stamp-build --root followed by a flag exits 3');
+  const noPkg = join(SCRATCH, 'no-package');
+  mkdirSync(noPkg);
+  const noPkgRun = runStamp('--root', noPkg);
+  assert(noPkgRun.status === 3 && /package\.json/.test(noPkgRun.err || '') && !existsSync(join(noPkg, BUILD_FILE)), 'stamp-build refuses a root without package.json (exit 3)', noPkgRun);
+  const strayRun = runStamp('--root', bare, '--bogus');
+  assert(strayRun.status === 3 && /--bogus/.test(strayRun.err || ''), 'stamp-build refuses an unknown argument (exit 3)', strayRun);
+
   // ---- the stamp file read on its own ----
   const stampedOnly = join(SCRATCH, 'stamped-only');
   mkdirSync(stampedOnly);

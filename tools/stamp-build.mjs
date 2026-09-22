@@ -31,10 +31,22 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readBuildInfo, buildLabel, BUILD_FILE } from '../server/build-info.mjs';
 
+const USAGE = 'usage: node tools/stamp-build.mjs [--root <dir>] [--json]';
+const refuse = (why) => { process.stderr.write(`stamp-build: ${why}\n${USAGE}\n`); process.exit(3); };
+
 const args = process.argv.slice(2);
-const rootArg = args.includes('--root') ? args[args.indexOf('--root') + 1] : null;
-const ROOT = rootArg ? resolve(process.cwd(), rootArg) : resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const asJson = args.includes('--json');
+const rootAt = args.indexOf('--root');
+let ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+if (rootAt !== -1) {
+  const value = args[rootAt + 1];
+  // A bare --root must never fall back to THIS checkout and stamp the wrong tree.
+  if (!value || value.startsWith('--')) refuse('--root needs a directory');
+  ROOT = resolve(process.cwd(), value);
+}
+const stray = args.filter((a, i) => a !== '--json' && a !== '--root' && !(rootAt !== -1 && i === rootAt + 1));
+if (stray.length) refuse(`unknown argument ${stray[0]}`);
+if (!existsSync(join(ROOT, 'package.json'))) refuse(`${ROOT} has no package.json — not a tree to stamp`);
 
 const info = readBuildInfo(ROOT);
 const target = join(ROOT, BUILD_FILE);
