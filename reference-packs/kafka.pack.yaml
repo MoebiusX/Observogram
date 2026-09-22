@@ -342,9 +342,12 @@ spec:
         bind: ref:platform/per-resource-rollup
         # The Strimzi rule set exposes kafka.server:type=BrokerTopicMetrics,name=MessagesInPerSec as
         # the counter kafka_server_brokertopicmetrics_messagesin_total{topic}; the generator rates a
-        # _total name (sum by (topic) (rate(...[5m]))). The series with no topic label is the
-        # broker-wide total (the same MBean without the topic key).
-        params: { metric: kafka_server_brokertopicmetrics_messagesin_total, by: [topic] }
+        # _total name (sum by (topic) (rate(...[5m]))). The same MBean without the topic key is the
+        # broker-wide total, exported as a series with no topic label: unfiltered it renders as a
+        # fourth "topic" {} equal to the sum of the others (measured), so the selector drops it.
+        params:
+          metric: kafka_server_brokertopicmetrics_messagesin_total{topic!=""}
+          by: [topic]
       - id: per_consumergroup_lag
         bind: ref:platform/per-resource-rollup
         params: { sli: consumer_group_lag_seconds, by: [consumergroup] }

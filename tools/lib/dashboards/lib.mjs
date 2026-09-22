@@ -330,7 +330,10 @@ export function derivedSliTiles(pack, sliIds, { w = 3 } = {}) {
 /**
  * A derived view (`spec.queries.derived_views[]` bound to ref:platform/per-resource-rollup):
  * `metric` + `by` becomes a per-label time series (rate for counters), `sli` + `by` the SLI's
- * legs grouped by the label.
+ * legs grouped by the label. `metric` may carry a label selector (`x_total{topic!=""}`): a
+ * counter is still rated, and the selector drops series the rollup should not show — the
+ * JMX exporter's broker-wide `kafka_server_brokertopicmetrics_messagesin_total` has no `topic`
+ * label and would otherwise appear as a `{}` series equal to the sum of the others (measured).
  */
 export function derivedViewPanel(pack, view, binds) {
   const by = (view.params?.by || []).join(', ');
@@ -338,8 +341,9 @@ export function derivedViewPanel(pack, view, binds) {
   const title = humanize(view.id);
   if (view.params?.metric) {
     const m = view.params.metric;
-    const expr = /_total$/.test(m) ? `sum by (${by}) (rate(${m}[5m]))` : `max by (${by}) (${m})`;
-    return ts(title, [{ expr, legend }], { binds, desc: `Per-resource rollup of ${m} by ${by} (pack derived view ${view.id}).`, many: true, unit: /_total$/.test(m) ? 'ops' : 'none' });
+    const counter = /_total(\{[^}]*\})?$/.test(m);
+    const expr = counter ? `sum by (${by}) (rate(${m}[5m]))` : `max by (${by}) (${m})`;
+    return ts(title, [{ expr, legend }], { binds, desc: `Per-resource rollup of ${m} by ${by} (pack derived view ${view.id}).`, many: true, unit: counter ? 'ops' : 'none' });
   }
   const sli = (pack.spec.slis || []).find(s => s.id === view.params?.sli);
   if (!sli) return text(`Derived view \`${view.id}\`: no metric or SLI to render.`, { title, h: 3 });
