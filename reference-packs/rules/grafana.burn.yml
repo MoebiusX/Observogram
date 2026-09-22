@@ -107,13 +107,13 @@ groups:
           sli: plugin_request_success_ratio
           service: grafana
       - record: grafana:errorbudget:burn_5m
-        expr: "((((sum(increase(grafana_http_request_duration_seconds_count{handler=\"/login\",method=\"POST\"}[5m]))) - (sum(increase(grafana_http_request_duration_seconds_count{handler=\"/login\",method=\"POST\",status_code=\"200\"}[5m])))) or (sum(increase(grafana_http_request_duration_seconds_count{handler=\"/login\",method=\"POST\"}[5m])))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count{handler=\"/login\",method=\"POST\"}[5m]))), 1)) / 0.001"
+        expr: "((((sum(increase(grafana_http_request_duration_seconds_count{handler=\"/login\",method=\"POST\"}[5m]) > 0)) - (sum(increase(grafana_http_request_duration_seconds_count{handler=\"/login\",method=\"POST\",status_code=\"200\"}[5m])))) or (sum(increase(grafana_http_request_duration_seconds_count{handler=\"/login\",method=\"POST\"}[5m]) > 0))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count{handler=\"/login\",method=\"POST\"}[5m]) > 0)), 1)) / 0.001"
         labels:
           slo: login_success_99_9
           sli: login_success_ratio
           service: grafana
       - record: grafana:errorbudget:burn_1h
-        expr: "((((sum(increase(grafana_http_request_duration_seconds_count{handler=\"/login\",method=\"POST\"}[1h]))) - (sum(increase(grafana_http_request_duration_seconds_count{handler=\"/login\",method=\"POST\",status_code=\"200\"}[1h])))) or (sum(increase(grafana_http_request_duration_seconds_count{handler=\"/login\",method=\"POST\"}[1h])))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count{handler=\"/login\",method=\"POST\"}[1h]))), 1)) / 0.001"
+        expr: "((((sum(increase(grafana_http_request_duration_seconds_count{handler=\"/login\",method=\"POST\"}[1h]) > 0)) - (sum(increase(grafana_http_request_duration_seconds_count{handler=\"/login\",method=\"POST\",status_code=\"200\"}[1h])))) or (sum(increase(grafana_http_request_duration_seconds_count{handler=\"/login\",method=\"POST\"}[1h]) > 0))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count{handler=\"/login\",method=\"POST\"}[1h]) > 0)), 1)) / 0.001"
         labels:
           slo: login_success_99_9
           sli: login_success_ratio
@@ -481,11 +481,11 @@ groups:
       - alert: login_success_99_9_burn_14x_5m_1h
         expr: |
           (
-            ((((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[5m]))) - (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST",status_code="200"}[5m])))) or (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[5m])))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[5m]))), 1)) > 0.014
+            ((((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[5m]) > 0)) - (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST",status_code="200"}[5m])))) or (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[5m]) > 0))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[5m]) > 0)), 1)) > 0.014
           ) and (
-            ((((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[1h]))) - (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST",status_code="200"}[1h])))) or (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[1h])))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[1h]))), 1)) > 0.014
+            ((((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[1h]) > 0)) - (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST",status_code="200"}[1h])))) or (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[1h]) > 0))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[1h]) > 0)), 1)) > 0.014
           ) and (
-            (((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[5m]))) - (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST",status_code="200"}[5m])))) or (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[5m])))) >= 2
+            (((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[5m]) > 0)) - (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST",status_code="200"}[5m])))) or (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[5m]) > 0))) >= 2
           )
         for: 2m
         labels:
@@ -505,11 +505,11 @@ groups:
       - alert: login_success_99_9_burn_6x_30m_6h
         expr: |
           (
-            ((((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[30m]))) - (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST",status_code="200"}[30m])))) or (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[30m])))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[30m]))), 1)) > 0.006
+            ((((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[30m]) > 0)) - (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST",status_code="200"}[30m])))) or (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[30m]) > 0))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[30m]) > 0)), 1)) > 0.006
           ) and (
-            ((((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[6h]))) - (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST",status_code="200"}[6h])))) or (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[6h])))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[6h]))), 1)) > 0.006
+            ((((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[6h]) > 0)) - (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST",status_code="200"}[6h])))) or (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[6h]) > 0))) / clamp_min((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[6h]) > 0)), 1)) > 0.006
           ) and (
-            (((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[30m]))) - (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST",status_code="200"}[30m])))) or (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[30m])))) >= 2
+            (((sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[30m]) > 0)) - (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST",status_code="200"}[30m])))) or (sum(increase(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[30m]) > 0))) >= 2
           )
         for: 5m
         labels:
