@@ -361,6 +361,7 @@ export function libraryIndex(entries) {
       id: s.id, type: s.type, minTier: s.minTier, unit: s.unit, description: s.description,
       evidence: s.evidence?.status || null, metrics: [...(s.metrics || [])],
       objectives: Object.fromEntries(TIERS.map(t => [t, perTier(s.slo?.objective, t, null)])),
+      windows: Object.fromEntries(TIERS.map(t => [t, perTier(s.slo?.window, t, null)])),
     }));
     return {
       id: entry.id, kind: entry.kind, title: entry.title, product: entry.product || null, version: entry.version,
@@ -837,6 +838,8 @@ function clausesFor(symbol, canonical, tier) {
   } else if (/^pipelines\.receivers\[/.test(symbol)) {
     const i = Number(/\[(\d+)\]/.exec(symbol)[1]);
     if (canonical.spec.pipelines?.receivers?.[i]?.name === 'otlp') out.push('L2.MUST.otlp_receiver');
+  } else if (symbol === 'baselines') {
+    if (t1) out.push('L5.SHOULD.tier1_release_gate');   // the scaffold's baseline todo holds up the release gate at tier-1
   }
   return out;
 }
@@ -921,7 +924,7 @@ export function instantiatePack(entryOrEntries, opts = {}) {
     for (const p of t.params || []) m.params.add(p);
   }
   const todos = [...merged.values()].map(m => {
-    const clauses = uniq([...m.clauses, ...clausesFor(m.symbol, canonical, tier)]);
+    const clauses = uniq([...m.clauses, ...clausesFor(m.symbol, canonical, tier)]).sort();   // sorted: todosFromAnnotations reproduces the same list
     return { path: m.symbol, fields: m.fields, what: m.what.join(' · '), clause: clauses[0] || null, clauses, params: [...m.params] };
   }).sort((a, b) => a.path.localeCompare(b.path));
 
@@ -968,4 +971,35 @@ export function validationSummary(canonical, todos = []) {
     onPlaceholder: applicable.filter(c => c.pass && byClause.has(c.id)).map(c => ({ id: c.id, severity: c.severity, todos: byClause.get(c.id).map(t => t.path) })),
     failing: applicable.filter(c => !c.pass).map(c => ({ id: c.id, severity: c.severity, description: c.description, todos: (byClause.get(c.id) || []).map(t => t.path) })),
   };
+}
+
+const TODO_PREFIX = 'library.todo.';
+const TODO_PARAM_RE = /\(param ([a-zA-Z_][a-zA-Z0-9_.-]*)\)/g;
+
+/** Whether a pack carries `library.todo.<symbol>` annotations (a library-built pack with placeholders left). */
+export function hasLibraryTodos(canonical) {
+  return Object.keys(canonical?.metadata?.annotations || {}).some(k => k.startsWith(TODO_PREFIX));
+}
+
+/**
+ * Recover the todo list from a pack's `library.todo.<symbol>` annotations, so a pack that arrives
+ * as YAML (an upload of what packc init wrote, the register hand-off) reads like a fresh
+ * instantiation: `{ path, fields, what, clause, clauses, params }` per parked artefact, the clauses
+ * derived from the pack itself (clausesFor) and the params from the annotation text. The tier is
+ * `library.tier`, falling back to the declared criticality. `validationSummary(canonical,
+ * todosFromAnnotations(canonical)).onPlaceholder` is then what /api/validate attaches.
+ */
+export function todosFromAnnotations(canonical) {
+  const ann = canonical?.metadata?.annotations || {};
+  const tier = TIERS.includes(ann['library.tier']) ? ann['library.tier'] : (canonical?.metadata?.bindings?.criticality || DEFAULT_TIER);
+  return Object.entries(ann)
+    .filter(([k, v]) => k.startsWith(TODO_PREFIX) && typeof v === 'string')
+    .map(([k, what]) => {
+      const path = k.slice(TODO_PREFIX.length);
+      const fields = uniq(what.split(' · ').map(part => /^([a-zA-Z0-9_.[\]-]+): /.exec(part)?.[1]).filter(Boolean));
+      const params = uniq([...what.matchAll(TODO_PARAM_RE)].map(m => m[1]));
+      const clauses = canonical?.spec ? uniq(clausesFor(path, canonical, tier)).sort() : [];
+      return { path, fields, what, clause: clauses[0] || null, clauses, params };
+    })
+    .sort((a, b) => a.path.localeCompare(b.path));
 }

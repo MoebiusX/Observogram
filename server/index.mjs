@@ -19,7 +19,13 @@
  *   GET  /api/packs/:id/canonical         Canonical manifest + env overlay (?env=<name>)
  *   GET  /api/packs/:id/conformance       Maturity-rubric scoring (?env=<name>)
  *   GET  /api/maturity-rubric             Rubric metadata (clause definitions)
- *   POST /api/validate                    Validate uploaded JSON/YAML body
+ *   POST /api/validate                    Validate uploaded JSON/YAML body (summary.onPlaceholder for a library-built pack)
+ *   GET  /api/library                     The pack library index (BUILD journey, docs/BUILD_JOURNEY.md)
+ *   GET  /api/library/requirements/:tier  The conformance clauses that apply at a tier
+ *   GET  /api/library/:id                 One library entry: index row + full SLI templates and params
+ *   POST /api/library/instantiate         Library entries + name/tier/env/owners/params/toggles → canonical pack, todos, summary
+ *   POST /api/library/compile             { canonical, target } → one compiled artefact, nothing registered
+ *   POST /api/library/register            { canonical, source? } → the upload registry (as /api/validate registers)
  *
  * Env:
  *   PORT   default 8000
@@ -40,8 +46,14 @@ import { crawlFiles, crawlToYaml } from '../tools/lib/crawler.mjs';
 import { fetchMcp, buildCanonicalPack } from '../tools/fetch-live-pack.mjs';
 import { diffPacks } from '../tools/lib/diff.mjs';
 import { comparePackBranches } from '../tools/lib/traceability-graph.mjs';
-import { compile, listTargets, compileCatalog, compileArtifact } from '../tools/lib/compile.mjs';
+import { compile, listTargets, compileCatalog, compileArtifact, TARGETS } from '../tools/lib/compile.mjs';
 import { makeZip } from '../tools/lib/zip.mjs';
+import { loadLibrary, findEntry } from './library.mjs';
+import {
+  libraryIndex, tierRequirements, instantiatePack, validationSummary, todosFromAnnotations, hasLibraryTodos,
+  TIERS, SCAFFOLD_PARAMS,
+} from '../tools/lib/library.mjs';
+import { parsePromqlDependencies as parsePromql } from '../tools/lib/promql-lezer.mjs';
 import {
   saveWorkspacePack, deleteWorkspacePack, touchWorkspacePack,
   loadWorkspacePacks, clearWorkspacePacks, workspaceInfo,
@@ -1741,7 +1753,185 @@ app.post('/api/validate', (req, res) => {
     // mcp URL); falls back to the canonical's metadata.name.
     const sourceHint = typeof req.query.source === 'string' && req.query.source ? req.query.source : null;
     const id = registerUploadedPack(canonical, sourceHint || canonical.metadata?.name || 'upload');
-    res.json({ ok: true, adapted, conformance, registered: { id, source: sourceHint || null }, ...(legacyReport ? { legacy: legacyReport } : {}) });
+    // A library-built pack (docs/BUILD_JOURNEY.md, Placeholders) is conformant
+    // on paper: the rubric reads no annotations, so a pager route of
+    // `pagerduty://<svc>` satisfies its clause like a real one. Only the
+    // engine's summary tells the clauses that pass on a placeholder from the
+    // rest — attached whenever the pack carries library.todo.* annotations.
+    const summary = librarySummaryFor(overlaid);
+    res.json({ ok: true, adapted, conformance, registered: { id, source: sourceHint || null }, ...(summary ? { summary } : {}), ...(legacyReport ? { legacy: legacyReport } : {}) });
+  } catch (e) {
+    res.status(400).json({ ok: false, errors: [e.message] });
+  }
+});
+
+// ----------------------------------------------------------------
+// The BUILD journey API (docs/BUILD_JOURNEY.md, slice 2) — the studio's
+// Select · Generate · Validate steps over the engine in tools/lib/library.mjs.
+// Registered here, after the write-route auth and tenancy middleware, so
+// they carry the same posture as POST /api/validate and POST /api/crawl:
+// open in local mode, a session or bearer in identity mode. The library is
+// read from disk once per process (server/library.mjs); nothing here
+// touches the filesystem afterwards.
+// ----------------------------------------------------------------
+
+let LIBRARY = null;
+function library() {
+  if (!LIBRARY) LIBRARY = loadLibrary();
+  return LIBRARY;
+}
+
+// validationSummary over the todos a pack's own annotations carry — null
+// when the pack is not library-built (or has no placeholders left).
+function librarySummaryFor(canonical) {
+  if (!hasLibraryTodos(canonical)) return null;
+  try { return validationSummary(canonical, todosFromAnnotations(canonical)); }
+  catch { return null; }
+}
+
+const knownEntryIds = () => library().entries.map(e => e.id).join(', ');
+const tierError = (tier) => `unknown tier ${JSON.stringify(tier)} (known: ${TIERS.join(', ')})`;
+
+// GET /api/library — the index the SELECT step lists (libraryIndex of loadLibrary)
+// plus the scaffold's own params (every instantiation has them) and the files
+// that did not load, so an entry missing from the list is never a mystery.
+app.get('/api/library', (req, res) => {
+  const lib = library();
+  res.json({ ok: true, entries: libraryIndex(lib.entries), scaffoldParams: SCAFFOLD_PARAMS, errors: lib.errors });
+});
+
+// GET /api/library/requirements/:tier — the conformance clauses that apply at
+// the tier (tierRequirements: the rubric filtered by minTier, never a second one).
+app.get('/api/library/requirements/:tier', (req, res) => {
+  const tier = req.params.tier;
+  if (!TIERS.includes(tier)) return res.status(400).json({ ok: false, error: tierError(tier) });
+  res.json({ ok: true, tier, clauses: tierRequirements(tier) });
+});
+
+// GET /api/library/:id — one entry: its index row (what the step needs) plus
+// the full SLI templates and params (what a details drawer needs).
+app.get('/api/library/:id', (req, res) => {
+  const entry = findEntry(library(), req.params.id);
+  if (!entry) return res.status(404).json({ ok: false, error: `unknown library entry ${JSON.stringify(req.params.id)} (known: ${knownEntryIds()})` });
+  const [row] = libraryIndex([entry]);
+  res.json({
+    ok: true,
+    entry: row,
+    params: JSON.parse(JSON.stringify(entry.params || [])),
+    scaffoldParams: SCAFFOLD_PARAMS,
+    slis: JSON.parse(JSON.stringify(entry.slis || [])),
+    description: entry.description || '',
+    evidence: JSON.parse(JSON.stringify(entry.evidence || {})),
+    otel: JSON.parse(JSON.stringify(entry.otel || {})),
+    telemetry: JSON.parse(JSON.stringify(entry.telemetry || {})),
+  });
+});
+
+// The entries a request names: `entries: [ids]` or `id` / `entry`; a 400 names
+// the unknown one and the known ones.
+function resolveRequestedEntries(body) {
+  const raw = Array.isArray(body.entries) ? body.entries
+    : typeof body.entries === 'string' ? body.entries.split(',')
+    : typeof body.id === 'string' ? [body.id]
+    : typeof body.entry === 'string' ? body.entry.split(',')
+    : [];
+  const ids = raw.map(s => String(s).trim()).filter(Boolean);
+  if (!ids.length) return { error: 'expected `entries: [<library entry id>, …]` (GET /api/library lists them)' };
+  const entries = [];
+  for (const id of ids) {
+    const entry = findEntry(library(), id);
+    if (!entry) return { error: `unknown library entry ${JSON.stringify(id)} (known: ${knownEntryIds()})` };
+    entries.push(entry);
+  }
+  return { entries };
+}
+
+// POST /api/library/instantiate — body { entries | id, name, tier, environment,
+// owners, params, toggles } → the engine's result plus what VALIDATE reads:
+// schemaErrors (validateCanonical), summary (validationSummary), conformance
+// (evaluateConformance of the env-overlaid canonical, as /api/validate computes
+// it) and the pack as YAML for the preview and the download. Node passes the
+// Lezer PromQL grammar, as packc init does, so a broken SLI expression comes
+// back as a `promql` warning. A usage error from the engine is 400, never 500.
+app.post('/api/library/instantiate', (req, res) => {
+  const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : null;
+  if (!body) return res.status(400).json({ ok: false, errors: ['expected a JSON body { entries, name, tier, environment, owners, params, toggles }'] });
+  const picked = resolveRequestedEntries(body);
+  if (picked.error) return res.status(400).json({ ok: false, errors: [picked.error] });
+  if (body.tier !== undefined && !TIERS.includes(body.tier)) return res.status(400).json({ ok: false, errors: [tierError(body.tier)] });
+  const owners = Array.isArray(body.owners) ? body.owners.map(String)
+    : typeof body.owners === 'string' ? body.owners.split(',').map(s => s.trim()).filter(Boolean)
+    : [];
+  const params = (body.params && typeof body.params === 'object' && !Array.isArray(body.params)) ? body.params : {};
+  const toggles = (body.toggles && typeof body.toggles === 'object' && !Array.isArray(body.toggles)) ? body.toggles : {};
+  let result;
+  try {
+    result = instantiatePack(picked.entries, {
+      name: body.name, tier: body.tier, environment: body.environment, owners, params, toggles, promql: parsePromql,
+    });
+  } catch (e) {
+    return res.status(400).json({ ok: false, errors: [e.message] });
+  }
+  const { canonical, todos, provenance, warnings } = result;
+  const schemaErrors = validateCanonical(canonical, SCHEMA);
+  const summary = validationSummary(canonical, todos);
+  const { canonical: overlaid } = overlaidCanonical(canonical, provenance.environment);
+  const conformance = evaluateConformance(overlaid);
+  const canonicalYaml = `# ObservabilityPack ${canonical.metadata.name} — built from the library (${provenance.source}) at ${provenance.tier}\n# Todos: ${todos.length} (metadata.annotations library.todo.*). Spec v${SPEC_VERSION}.\n` + emitYaml(canonical);
+  res.json({ ok: true, canonical, canonicalYaml, todos, provenance, warnings, schemaErrors, summary, conformance });
+});
+
+// POST /api/library/compile — body { canonical, target, dashboardId? } → one
+// compiled artefact through tools/lib/compile.mjs, so VALIDATE previews the
+// Prometheus rules, the collector config, the Alertmanager routes and the
+// Grafana boards without registering anything.
+app.post('/api/library/compile', (req, res) => {
+  const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {};
+  const target = body.target;
+  if (!TARGETS[target]) return res.status(400).json({ ok: false, error: `unknown compile target ${JSON.stringify(target)} (known: ${Object.keys(TARGETS).join(', ')})` });
+  const canonical = body.canonical;
+  if (!canonical || typeof canonical !== 'object' || Array.isArray(canonical) || !canonical.spec) {
+    return res.status(400).json({ ok: false, error: 'expected `canonical`: a canonical ObservabilityPack object (the instantiate response carries one)' });
+  }
+  try {
+    const opts = typeof body.dashboardId === 'string' && body.dashboardId ? { dashboardId: body.dashboardId } : {};
+    const out = compile(canonical, target, opts);
+    res.json({
+      ok: true, target, label: TARGETS[target].label, description: TARGETS[target].description, contentType: out.contentType,
+      artifact: { filename: out.filename, content: out.content, warnings: out.warnings, profile: out.profile },
+    });
+  } catch (e) {
+    // A pack that will not compile (a section toggled off, a board it does
+    // not declare) is the caller's input, not a server fault.
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/library/register — body { canonical, source? } → the pack into the
+// upload registry exactly as POST /api/validate registers one (registerUploadedPack),
+// so "Open in Discover" hands Discover an ordinary registered pack. The source hint
+// defaults to `library:<entries>@<tier>`; the todos travel in metadata.annotations
+// and the summary says which clauses still pass on a placeholder.
+app.post('/api/library/register', (req, res) => {
+  const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {};
+  const canonical = body.canonical;
+  if (!canonical || typeof canonical !== 'object' || Array.isArray(canonical)) {
+    return res.status(400).json({ ok: false, errors: ['expected `canonical`: a canonical ObservabilityPack object'] });
+  }
+  try {
+    const errors = validateCanonical(canonical, SCHEMA);
+    if (errors.length) return res.status(400).json({ ok: false, errors });
+    const ann = canonical.metadata?.annotations || {};
+    const entryIds = String(ann['library.source'] || '').split(',').map(s => s.split('@')[0].trim()).filter(Boolean);
+    const defaultSource = `library:${entryIds.join(',') || canonical.metadata?.name || 'pack'}@${ann['library.tier'] || canonical.metadata?.bindings?.criticality || 'tier-3'}`;
+    const source = typeof body.source === 'string' && body.source.trim() ? body.source.trim() : defaultSource;
+    const env = readEnv(req.query) || ann['library.environment'] || null;
+    const adapted = adapt(canonical, { environment: env });
+    const { canonical: overlaid } = overlaidCanonical(canonical, env);
+    const conformance = evaluateConformance(overlaid);
+    const summary = librarySummaryFor(overlaid) || validationSummary(overlaid, []);
+    const id = registerUploadedPack(canonical, source);
+    res.json({ ok: true, registered: { id, source }, adapted, conformance, summary });
   } catch (e) {
     res.status(400).json({ ok: false, errors: [e.message] });
   }
