@@ -101,7 +101,7 @@ function printShow(entry) {
   out.push(`  ${row.summary}`);
   out.push('');
   out.push(`evidence: ${row.evidence.status}${row.evidence.verifiedOn ? ` (verified ${row.evidence.verifiedOn})` : ''}`);
-  for (const s of entry.evidence.sources) out.push(`  - ${s}`);
+  for (const s of row.evidence.sources) out.push(`  - ${s}`);
   if (row.evidence.gaps.length) { out.push('  gaps:'); for (const g of row.evidence.gaps) out.push(`  - ${g}`); }
   out.push('');
   out.push('params (entry):');

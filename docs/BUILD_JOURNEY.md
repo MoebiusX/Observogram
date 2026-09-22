@@ -141,7 +141,7 @@ have no latency SLI; their tier-2 threshold SLIs are failure / drop rates and sa
 parseLibraryEntry(textOrObject)                 → entry            (mini-yaml when given text)
 validateLibraryEntry(entry)                     → errors: string[] ([] when sound)
 libraryIndex(entries)                           → [{ id, kind, title, product, version, summary, tags,
-                                                     evidence { status, verifiedOn, sources, gaps },
+                                                     evidence { status, verifiedOn, sources[], gaps[] },
                                                      params[], slis[] { id, type, minTier, evidence, metrics, objectives },
                                                      sliCountByTier, tiers }]
 tierRequirements(tier)                          → the conformance clauses that apply at the tier

@@ -84,7 +84,7 @@ test('libraryIndex lists products first, with SLIs per tier that grow with the t
     assert.ok(r.sliCountByTier['tier-3'] >= 1 && r.sliCountByTier['tier-2'] >= r.sliCountByTier['tier-3'] && r.sliCountByTier['tier-1'] >= r.sliCountByTier['tier-2'], r.id);
     assert.deepEqual(r.tiers, TIERS);
     assert.ok(r.slis.every(s => TIERS.includes(s.minTier) && EVIDENCE_STATUSES.includes(s.evidence) && s.metrics.length), r.id);
-    assert.ok(r.evidence.sources >= 1, r.id);
+    assert.ok(Array.isArray(r.evidence.sources) && r.evidence.sources.length >= 1 && r.evidence.sources.every(x => typeof x === 'string'), `${r.id}: evidence.sources is the list of citations, not a count`);
   }
   assert.equal(idx.find(r => r.id === 'kafka').product, 'kafka');
   assert.equal(idx.find(r => r.id === 'http-service').product, null);

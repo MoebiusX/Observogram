@@ -347,7 +347,7 @@ export function libraryIndex(entries) {
     return {
       id: entry.id, kind: entry.kind, title: entry.title, product: entry.product || null, version: entry.version,
       summary: entry.summary, tags: [...(entry.tags || [])],
-      evidence: { status: entry.evidence?.status || null, verifiedOn: entry.evidence?.verifiedOn || null, sources: (entry.evidence?.sources || []).length, gaps: [...(entry.evidence?.gaps || [])] },
+      evidence: { status: entry.evidence?.status || null, verifiedOn: entry.evidence?.verifiedOn || null, sources: [...(entry.evidence?.sources || [])], gaps: [...(entry.evidence?.gaps || [])] },
       params: (entry.params || []).map(p => ({ id: p.id, label: p.label, default: p.default, placeholder: !!p.placeholder, description: p.description })),
       slis,
       sliCountByTier: Object.fromEntries(TIERS.map(t => [t, slis.filter(s => atTier(t, s.minTier)).length])),
