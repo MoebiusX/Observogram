@@ -72,6 +72,12 @@ try {
   assert(buildLabel(stampedInfo) === 'v9.9.9 · build 42 · abcdef0 · release', 'buildLabel from a stamp', buildLabel(stampedInfo));
   writeFileSync(join(stampedOnly, BUILD_FILE), '{ not json');
   assert(readBuildInfo(stampedOnly).source === 'package', 'a corrupt build.json falls through to package', readBuildInfo(stampedOnly).source, 'package');
+  // a stamped build number is a non-negative safe integer or nothing
+  for (const [raw, want] of [[-1, null], [1e21, null], ['99999999999999999999', null], [3.5, null], [' 42 ', null], [true, null], ['42', 42], [7, 7], [0, 0]]) {
+    writeFileSync(join(stampedOnly, BUILD_FILE), JSON.stringify({ build: raw, commit: 'abcdef0' }));
+    const got = readBuildInfo(stampedOnly).build;
+    assert(got === want, `build.json build ${JSON.stringify(raw)} reads ${want === null ? 'null' : want}`, got, want);
+  }
 
   // ---- label formatting on hand-made info ----
   const develop = { version: '0.4.0', build: 975, commit: '9c4f827', branch: 'develop', dirty: false, date: null, source: 'git' };

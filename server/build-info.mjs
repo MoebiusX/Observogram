@@ -86,21 +86,26 @@ function fromGit(root, version) {
   const [commit, date] = (git(root, ['log', '-1', '--format=%h%n%cI']) || '').split(/\r?\n/);
   if (!commit) return null;
   const shallow = shallowFlag === 'true';
-  const count = shallow ? null : git(root, ['rev-list', '--count', 'HEAD']);
-  const build = /^\d+$/.test(count || '') ? Number(count) : null;
+  const build = shallow ? null : asBuild(git(root, ['rev-list', '--count', 'HEAD']));
   const branch = ref && ref !== 'HEAD' ? ref : null;   // detached: not on a branch
   const status = git(root, ['status', '--porcelain']);
   return { version, build, commit, branch, dirty: status == null ? false : status.length > 0, date: date || null, shallow, source: 'git' };
 }
 
+// A build number — git's count or a stamp's — is a non-negative safe
+// integer, or a string of digits that is one; anything else is null, so a
+// hand-written build.json can only say what git could have said.
+function asBuild(value) {
+  const n = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
+  return Number.isSafeInteger(n) && n >= 0 ? n : null;
+}
+
 function fromFile(root, version) {
   const stamped = readJson(join(root, BUILD_FILE));
   if (!stamped || typeof stamped !== 'object') return null;
-  const build = Number.isInteger(stamped.build) ? stamped.build
-    : /^\d+$/.test(String(stamped.build ?? '')) ? Number(stamped.build) : null;
   return {
     version: version ?? (typeof stamped.version === 'string' ? stamped.version : null),
-    build,
+    build: asBuild(stamped.build),
     commit: typeof stamped.commit === 'string' && stamped.commit ? stamped.commit : null,
     branch: typeof stamped.branch === 'string' && stamped.branch ? stamped.branch : null,
     dirty: stamped.dirty === true,
