@@ -213,8 +213,14 @@ The whole app is one Express process, so the container story is one image:
 ```bash
 npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
 docker build -t observogram:0.4.0 .
-docker run --rm -p 8000:8000 observogram:0.4.0
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.4.0
 ```
+
+The image binds `0.0.0.0`, so it needs a seeded sign-in (or
+`OBSERVOGRAM_API_TOKEN`) to start — see Security Posture above. Its workspace
+is `/app/.observogram` (owned by the `node` user the container runs as);
+mount a volume there, or point `OBSERVOGRAM_WORKSPACE` at one, to keep users
+and packs across containers.
 
 Kubernetes manifests (Deployment + Service + Ingress, applied with Kustomize)
 live in [`deploy/k8s/`](deploy/k8s/README.md):

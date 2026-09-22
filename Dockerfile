@@ -1,7 +1,11 @@
 # Observogram — studio + API in one Express server (server/index.mjs).
 #
-# Build:  docker build -t observogram:0.4.0 .
-# Run:    docker run --rm -p 8000:8000 observogram:0.4.0
+# Build:  npm run build:stamp && docker build -t observogram:0.4.0 .
+# Run:    docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.4.0
+#         (the image binds 0.0.0.0, and the server refuses to start off
+#         loopback without a seeded sign-in or OBSERVOGRAM_API_TOKEN; the
+#         workspace lives at /app/.observogram — mount a volume there or
+#         point OBSERVOGRAM_WORKSPACE at one to keep users and packs)
 # Open:   http://127.0.0.1:8000
 #
 # The k8s manifests under deploy/k8s/ expect this image; see deploy/k8s/README.md.
@@ -42,8 +46,13 @@ COPY vendor/ vendor/
 COPY examples/ examples/
 COPY reference-packs/ reference-packs/
 
-# POST /api/refresh-live writes examples/production-live.pack.yaml at runtime.
-RUN chown -R node:node /app/examples
+# The server runs as `node` (below) and writes two places under /app:
+#   .observogram/  the workspace — users.json and the session secret at
+#                  first boot, registered packs, the deploy audit; without
+#                  this directory the first boot dies with EACCES seeding
+#                  the admin user (OBSERVOGRAM_WORKSPACE relocates it)
+#   examples/      POST /api/refresh-live writes production-live.pack.yaml
+RUN mkdir -p /app/.observogram && chown -R node:node /app/.observogram /app/examples
 
 USER node
 ENV HOST=0.0.0.0 PORT=8000
