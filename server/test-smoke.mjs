@@ -22,6 +22,12 @@ process.env.OBSERVOGRAM_WORKSPACE = SMOKE_WORKSPACE;
 // admin (Grafana-style bootstrap) and 401 everything — this line IS the
 // open-mode regression assertion the productization plan promises.
 process.env.OBSERVOGRAM_AUTH = 'off';
+// /healthz's composite build must come from the reader, not from a
+// BUILD override exported in the shell that runs the suite (the /healthz
+// vs /api/version assertions below compare the two). server/version.mjs
+// resolves on first request, so this still lands before it reads.
+delete process.env.OBSERVOGRAM_BUILD;
+delete process.env.TOMOGRAPH_BUILD;
 
 import { start } from './index.mjs';
 import { createServer } from 'node:http';

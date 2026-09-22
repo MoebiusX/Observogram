@@ -12,7 +12,10 @@
 // a CI run number or tag baked into an image (Dockerfile ARG/ENV) that a
 // deployment wants to see on /healthz. It never changes /api/version.
 //
-// Resolved once at module load — build-info memoises the git calls.
+// Resolved on first use, not at import: the suites pin their environment
+// after the hoisted `import './index.mjs'` has run (workspace, auth
+// posture — and BUILD, so an OBSERVOGRAM_BUILD exported in the shell
+// cannot change what they assert). build-info memoises the git calls.
 
 import { brandEnv } from '../tools/lib/brand-env.mjs';
 import { buildInfo } from './build-info.mjs';
@@ -25,14 +28,20 @@ function compositeBuild(info) {
   return `${info.build != null ? `${info.build}.` : ''}${info.commit || '?'}${dirty}`;
 }
 
-const BUILD = buildInfo();
-const INFO = Object.freeze({
-  version: BUILD.version || '0.0.0',
-  build: compositeBuild(BUILD),
-  node: process.version,
-});
+let INFO = null;
+function resolved() {
+  if (!INFO) {
+    const build = buildInfo();
+    INFO = Object.freeze({
+      version: build.version || '0.0.0',
+      build: compositeBuild(build),
+      node: process.version,
+    });
+  }
+  return INFO;
+}
 
-export function versionInfo() { return INFO; }
+export function versionInfo() { return resolved(); }
 
 // The display form: `v0.4.0 · build 975.9c4f827`
-export function versionLabel() { return `v${INFO.version} · build ${INFO.build}`; }
+export function versionLabel() { const i = resolved(); return `v${i.version} · build ${i.build}`; }
