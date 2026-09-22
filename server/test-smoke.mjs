@@ -101,7 +101,7 @@ try {
   assert(/^\d+\.\d+\.\d+/.test(health.version || ''), 'GET /healthz carries the app version', health.version);
   assert(typeof health.build === 'string' && health.build.length > 0, 'GET /healthz carries the build identifier', health.build);
 
-  // /api/version — which build is this? (tools/lib/build-info.mjs)
+  // /api/version — which build is this? (server/build-info.mjs)
   const verRes = await fetch(`${base}/api/version`);
   const ver = await verRes.json();
   assert(verRes.status === 200 && ver.ok === true, 'GET /api/version answers 200 ok');

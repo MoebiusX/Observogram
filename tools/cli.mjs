@@ -24,7 +24,7 @@ import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, basename } from 'node:path';
-import { buildInfo, buildLabel } from './lib/build-info.mjs';
+import { buildInfo, buildLabel } from '../server/build-info.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -265,7 +265,7 @@ switch (command) {
   case '-v': {
     // Which build is this? 'v0.4.0 · build 975 · 9c4f827 · develop' — the
     // version stays the first token, so `packc --version | grep 0.4.0`
-    // still works; `--json` is the structured form (tools/lib/build-info.mjs).
+    // still works; `--json` is the structured form (server/build-info.mjs).
     const info = buildInfo();
     if (rest.includes('--json')) console.log(JSON.stringify({ ...info, label: buildLabel(info) }, null, 2));
     else console.log(buildLabel(info));

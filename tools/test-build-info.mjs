@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * tools/test-build-info.mjs — which build is this? (tools/lib/build-info.mjs,
+ * tools/test-build-info.mjs — which build is this? (server/build-info.mjs,
  * tools/stamp-build.mjs, studio/build-label.mjs)
  *
  * A throwaway git repository with three commits must read build 3 with
@@ -18,7 +18,7 @@ import { execFileSync } from 'node:child_process';
 import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { buildInfo, buildLabel, buildShortLabel, readBuildInfo, BUILD_FILE } from './lib/build-info.mjs';
+import { buildInfo, buildLabel, buildShortLabel, readBuildInfo, BUILD_FILE } from '../server/build-info.mjs';
 import { buildLabelModel, renderBuildLabel } from '../studio/build-label.mjs';
 import { createHarness } from './lib/harness.mjs';
 

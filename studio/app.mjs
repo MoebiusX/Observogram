@@ -3968,7 +3968,7 @@ function setupMcpPanel() {
 // ---------- theme ----------
 // ---------- about / version ----------
 //
-// Which build is this studio? GET /api/version (tools/lib/build-info.mjs,
+// Which build is this studio? GET /api/version (server/build-info.mjs,
 // read through studio/build-label.mjs) names the commit the server was
 // started from — 'v0.4.0 · build 975 · 9c4f827 · develop'; /healthz adds
 // the spec version and the node runtime for the About modal. Fetched once

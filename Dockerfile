@@ -11,7 +11,7 @@ FROM node:22-alpine
 # it), so stamp the checkout on the host BEFORE building: `npm run
 # build:stamp` writes build.json (git-ignored) with the commit count, sha,
 # branch, dirty flag and date, and the COPY below carries it next to
-# package.json. tools/lib/build-info.mjs then answers the studio footer,
+# package.json. server/build-info.mjs then answers the studio footer,
 # GET /api/version and /healthz from that file (source 'file'); without it
 # they say "build unknown" — never a guess.
 #   npm run build:stamp && docker build -t observogram:0.4.0 .

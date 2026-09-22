@@ -1,4 +1,4 @@
-// tools/lib/build-info.mjs — which build is this?
+// server/build-info.mjs — which build is this?
 //
 // One answer for the studio footer, `packc --version`, GET /api/version and
 // /healthz: the commit a running Observogram was started from. There is no
@@ -24,8 +24,11 @@
 // Every git call is guarded: no git binary, no repository, a repository that
 // is not THIS tree (a git-less copy extracted inside some other checkout
 // must not report that checkout's commits) all fall through. Node built-ins
-// only. Node-only module (child_process): imported by server/ and the CLI,
-// never by the studio — the browser reads GET /api/version instead.
+// only — and Node-only (child_process), which is why this lives under
+// server/ and not tools/lib/: that directory is served to the browser at
+// /lib and must stay free of node:* imports (.github/copilot-instructions.md,
+// browser-safety rule). Imported by server/, the CLI and the stamp tool;
+// the studio reads GET /api/version instead.
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync, realpathSync } from 'node:fs';
@@ -34,7 +37,7 @@ import { fileURLToPath } from 'node:url';
 
 export const BUILD_FILE = 'build.json';
 
-const DEFAULT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const DEFAULT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 // Per-root memo: git is spawned once at first use, `refresh: true` re-reads.
 const cache = new Map();

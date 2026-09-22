@@ -56,7 +56,7 @@ import { validateMcpUrl, redactCredentials } from './mcp-url.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
 import { versionInfo } from './version.mjs';
-import { buildInfo, buildLabel } from '../tools/lib/build-info.mjs';
+import { buildInfo, buildLabel } from './build-info.mjs';
 import { tenancyEnabled, orgsForUser, orgExists, runWithOrg, currentOrg, readOrgs, migrateFlatWorkspace } from './tenancy.mjs';
 import { setWorkspaceRootResolver } from '../tools/lib/journey.mjs';
 import { orgWorkspaceRoot } from './tenancy.mjs';
@@ -365,7 +365,7 @@ app.set('trust proxy', false);
 // ---------- which build is this? ----------
 //
 // GET /api/version — the commit this process was started from
-// (tools/lib/build-info.mjs): { version, build, commit, branch, dirty,
+// (server/build-info.mjs): { version, build, commit, branch, dirty,
 // date, source } plus the display `label`. Registered BEFORE the auth and
 // tenancy middlewares on purpose: it is public like the static shell (the
 // footer fills itself from it before anyone signs in) and holds nothing

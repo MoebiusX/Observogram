@@ -2,7 +2,7 @@
 //
 // The footer's `<span id="build-label">` ships a fallback (package.json's
 // version, pinned by tools/test-build-info.mjs) and is filled at boot from
-// GET /api/version — public, no-store, served by tools/lib/build-info.mjs:
+// GET /api/version — public, no-store, served by server/build-info.mjs:
 // { version, build, commit, branch, dirty, date, source, label }. The text
 // becomes the label ('v0.4.0 · build 975 · 9c4f827 · develop'), the title
 // the commit date and where the answer came from ('source: git' | 'file'

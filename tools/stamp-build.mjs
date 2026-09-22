@@ -2,7 +2,7 @@
 // tools/stamp-build.mjs — `npm run build:stamp`
 //
 // Writes build.json (git-ignored) at the repo root with the same fields
-// tools/lib/build-info.mjs reads from git — build, commit, branch, dirty,
+// server/build-info.mjs reads from git — build, commit, branch, dirty,
 // date, version — for a checkout that will be copied somewhere without
 // .git: a tarball, a container image. buildInfo() finds no git there and
 // reads the file instead (source 'file'), so the studio footer, packc
@@ -19,7 +19,7 @@
 import { writeFileSync, unlinkSync, existsSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readBuildInfo, buildLabel, BUILD_FILE } from './lib/build-info.mjs';
+import { readBuildInfo, buildLabel, BUILD_FILE } from '../server/build-info.mjs';
 
 const args = process.argv.slice(2);
 const rootArg = args.includes('--root') ? args[args.indexOf('--root') + 1] : null;

@@ -228,7 +228,7 @@ kubectl apply -k deploy/k8s-journeys   # + the opt-in journeys CronJob and its w
 
 There is no build step — the studio is served from the checkout — so the
 identity of a running Observogram is the commit it was started from, and
-one reader (`tools/lib/build-info.mjs`) answers everywhere:
+one reader (`server/build-info.mjs`) answers everywhere:
 
 - the studio footer: `v0.4.0 · build 975 · 9c4f827 · develop` (hover for
   the commit date and the source), the same label on Advanced → About;

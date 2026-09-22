@@ -4,7 +4,7 @@
 // `<build>.<sha>` (+`+dirty` for an uncommitted tree) that /healthz has
 // carried since 0.4 — kept stable for probes and dashboards that parse it.
 // The structured form (build, commit, branch, dirty, date, source) is
-// GET /api/version, and both come from ONE reader, tools/lib/build-info.mjs:
+// GET /api/version, and both come from ONE reader, server/build-info.mjs:
 // git (a checkout, a worktree), else build.json (`npm run build:stamp`, for
 // a copy without .git), else package.json alone ('untracked' here).
 //
@@ -15,7 +15,7 @@
 // Resolved once at module load — build-info memoises the git calls.
 
 import { brandEnv } from '../tools/lib/brand-env.mjs';
-import { buildInfo } from '../tools/lib/build-info.mjs';
+import { buildInfo } from './build-info.mjs';
 
 function compositeBuild(info) {
   const fromEnv = brandEnv('BUILD');
