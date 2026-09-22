@@ -8,7 +8,8 @@
 //   build   `git rev-list --count HEAD` — an integer that climbs with every
 //           commit on the branch (975 on develop the day this landed). Two
 //           branches can share a number, so it is never unique on its own …
-//   commit  `git rev-parse --short HEAD` — … the sha is what makes it unique.
+//   commit  `git log -1 --format=%h` — … the sha is what makes it unique
+//           (the same abbreviation as `rev-parse --short`).
 //   branch  `git rev-parse --abbrev-ref HEAD` ('HEAD' when detached).
 //   dirty   `git status --porcelain` non-empty: uncommitted or untracked
 //           files — the running code is NOT exactly that commit.
@@ -67,17 +68,23 @@ function samePath(a, b) {
   return norm(a) === norm(b);
 }
 
+// Four spawns per read (each one costs ~100 ms on Windows, whatever it
+// asks): rev-parse answers two questions at once — the top-level directory
+// and the branch — and fails as a whole (null) when there is no git, no
+// repository or no commit yet; log -1 gives the short sha and the commit
+// date in one go; then the count and the status.
 function fromGit(root, version) {
-  const top = git(root, ['rev-parse', '--show-toplevel']);
-  if (!top || !samePath(top, root)) return null;      // no git, no repo, or somebody else's
-  const commit = git(root, ['rev-parse', '--short', 'HEAD']);
-  if (!commit) return null;                             // a repo with no commit yet
+  const facts = git(root, ['rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD']);
+  if (!facts) return null;
+  const [top, ref] = facts.split(/\r?\n/);
+  if (!top || !samePath(top, root)) return null;      // somebody else's repository
+  const [commit, date] = (git(root, ['log', '-1', '--format=%h%n%cI']) || '').split(/\r?\n/);
+  if (!commit) return null;
   const count = git(root, ['rev-list', '--count', 'HEAD']);
   const build = /^\d+$/.test(count || '') ? Number(count) : null;
-  const branch = git(root, ['rev-parse', '--abbrev-ref', 'HEAD']) || null;
+  const branch = ref || null;
   const status = git(root, ['status', '--porcelain']);
-  const date = git(root, ['log', '-1', '--format=%cI']) || null;
-  return { version, build, commit, branch, dirty: status == null ? false : status.length > 0, date, source: 'git' };
+  return { version, build, commit, branch, dirty: status == null ? false : status.length > 0, date: date || null, source: 'git' };
 }
 
 function fromFile(root, version) {
