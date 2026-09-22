@@ -12,9 +12,11 @@
  * The pack (YAML) goes to stdout or --out; the todo list and the validation summary go to
  * stderr, so `packc init … > pack.yaml` yields a clean file. Exit codes follow the repo's
  * tools (tools/validate-pack.mjs, packc journey): 0 ok · 1 the produced pack does not
- * validate against the v1.2 schema, an SLI is not valid PromQL once the --param values are in
- * (the Lezer grammar, tools/lib/promql-lezer.mjs), or an entry fails validateLibraryEntry ·
- * 2 usage error (a --param value carrying a quote, a backslash or a control character is one).
+ * validate against the v1.2 schema, fails a MUST clause of its tier (a section toggled off, a
+ * --slis selection with no latency SLO: `packc journey`'s "gate failed", so a CI caller can tell
+ * MUST 14/15 from 15/15), an SLI is not valid PromQL once the --param values are in (the Lezer
+ * grammar, tools/lib/promql-lezer.mjs), or an entry fails validateLibraryEntry · 2 usage error
+ * (a --param value carrying a quote, a backslash or a control character is one).
  *
  * Node-only: reads the library from disk through server/library.mjs; every decision is in
  * tools/lib/library.mjs (pure).
@@ -188,12 +190,15 @@ function main() {
   }
   for (const w of warnings) err(`warning [${w.kind}]: ${w.message}`);
   const broken = warnings.filter(w => w.kind === 'promql');
+  const mustFailing = summary.failing.filter(f => f.severity === 'MUST');
   if (schemaErrors.length) {
     err(`schema: the produced pack does not validate against spec v${SPEC_VERSION} (${schemaErrors.length}):`);
     for (const s of schemaErrors) err(`  ${s}`);
   } else err(`schema: valid (spec v${SPEC_VERSION})`);
   if (broken.length) err(`promql: ${broken.length} SLI expression(s) do not parse once the --param values are in (above)`);
-  process.exit(schemaErrors.length || broken.length ? 1 : 0);
+  // A schema-valid pack that fails a MUST of its own tier is not a pack to ship: exit 1, like `packc journey` on a failed gate.
+  if (mustFailing.length) err(`conformance: ${mustFailing.length} MUST clause(s) fail at ${summary.tier} (above) — the pack is not conformant at its tier`);
+  process.exit(schemaErrors.length || broken.length || mustFailing.length ? 1 : 0);
 }
 
 main();

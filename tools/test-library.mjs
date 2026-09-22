@@ -414,7 +414,7 @@ test('packc init --list and --show', () => {
   assert.match(show.stdout, /recorded-live/);
   assert.match(show.stdout, /\[placeholder → todo\]/);
 });
-test('packc init builds a pack: YAML on stdout, todos on stderr, exit 0; a section off exits 1; usage errors exit 2', () => {
+test('packc init builds a pack: YAML on stdout, todos on stderr, exit 0; a section off or a failing MUST exits 1; usage errors exit 2', () => {
   const ok = cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders-kafka');
   assert.equal(ok.status, 0, ok.stderr);
   const pack = parseYaml(ok.stdout);
@@ -427,6 +427,13 @@ test('packc init builds a pack: YAML on stdout, todos on stderr, exit 0; a secti
   assert.equal(off.status, 1);
   assert.match(off.stderr, /L3\.MUST\.service_overview_dashboard/);
   assert.match(off.stderr, /schema: the produced pack does not validate/);
+  // schema-valid, but a MUST of the tier fails (no latency SLO at tier-2): exit 1, so CI can tell MUST 14/15 from 15/15
+  const noLatency = cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--slis', 'broker_availability');
+  assert.equal(noLatency.status, 1, noLatency.stderr);
+  assert.match(noLatency.stderr, /MUST 14\/15/);
+  assert.match(noLatency.stderr, /L1\.MUST\.latency_slo/);
+  assert.match(noLatency.stderr, /schema: valid/);
+  assert.match(noLatency.stderr, /^conformance: 1 MUST clause\(s\) fail at tier-2/m);
   assert.equal(cli('--entry', 'nope', '--tier', 'tier-2', '--name', 'x').status, 2);
   assert.equal(cli('--entry', 'kafka', '--tier', 'tier-9', '--name', 'x').status, 2);
   assert.equal(cli('--entry', 'kafka', '--tier', 'tier-2').status, 2);

@@ -355,9 +355,9 @@ with a `warning [sli-excluded]`); `--no-dashboards`,
 (the schema and the rubric then both say what is missing, exit `1`); `--entry
 kafka,http-service` composes several entries into one pack; `--json` returns
 `{ canonical, todos, provenance, warnings, schemaErrors, summary }`. Exit codes: `0` ok,
-`1` the pack does not validate (the schema, or an SLI that no longer parses once the
-`--param` values are in), `2` usage error (an unknown `--param` key, a value carrying a
-quote). Every produced pack carries
+`1` the pack does not validate (the schema, a MUST clause of its tier — `MUST 14/15` is
+never exit 0 — or an SLI that no longer parses once the `--param` values are in), `2`
+usage error (an unknown `--param` key, a value carrying a quote). Every produced pack carries
 `metadata.annotations["library.source"] = "<entry>@<version>"` and one
 `library.todo.<artefact>` per placeholder, which the studio parks as *Scaffold* the
 way it parks a crawler stub. `npm run test:library` proves every entry at every
