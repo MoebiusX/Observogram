@@ -38,7 +38,7 @@ metadata:
   annotations:
     catalogue_id: messaging/kafka
     docs: https://kafka.apache.org/documentation/
-    target_versions: kafka 3.x, Strimzi 0.40+
+    target_versions: kafka 3.x KRaft, Strimzi 0.40+ (JMX names per the Strimzi kafka-metrics.yaml rule set; measured live on Apache Kafka 3.9.2 + jmx_prometheus_javaagent 1.6.0 + kafka_exporter 1.10.0, 2026-09-22)
     evidence: docs/catalogue-evidence/kafka.md
     promote_for_certification: tier-2
     instruments: kafka-broker, kafka-controller, kafka-producer, kafka-consumer
@@ -127,7 +127,12 @@ spec:
 
   # ---------------------------------------------------------------------------
   # 1. SLIs — Kafka's five operational vital signs.
-  # PromQL uses standard kafka_exporter + JMX exporter metric names.
+  # PromQL uses kafka_exporter (danielqsj) names and the JMX Prometheus exporter
+  # names the Strimzi rule set (examples/metrics/kafka-metrics.yaml,
+  # lowercaseOutputName: true) produces: kafka_network_requestmetrics_*,
+  # kafka_controller_kafkacontroller_*, kafka_server_brokertopicmetrics_*. Every
+  # name was read from a live Kafka 3.9.2 KRaft broker on 2026-09-22
+  # (docs/catalogue-evidence/kafka.md, "Measured live").
   # ---------------------------------------------------------------------------
   slis:
 
@@ -170,25 +175,32 @@ spec:
     # --- Producer / consumer request latency ---
     - id: produce_latency_p99
       type: threshold
-      description: 99th-percentile latency of Produce requests, server-side.
+      description: |
+        99th-percentile total time of Produce requests on the broker (queue,
+        local, remote/replication wait, response send), in seconds: what a
+        producer waits for an ack. Kafka publishes its request-time histograms
+        through JMX as per-quantile gauges (no _bucket series exist); with the
+        Strimzi rule set the 0.99 quantile of kafka.network:type=RequestMetrics,
+        name=TotalTimeMs is kafka_network_requestmetrics_totaltimems{quantile="0.99"},
+        in milliseconds.
       semconv_metric: kafka.broker.request.latency
       query: |
-        histogram_quantile(0.99,
-          sum by (le)(
-            rate(kafka_server_RequestMetrics_localtime_ms_bucket{request="Produce"}[5m])
-          ))
+        max(kafka_network_requestmetrics_totaltimems{request="Produce",quantile="0.99"}) / 1000
       threshold: 0.1
       unit: seconds
 
     - id: fetch_latency_p99
       type: threshold
-      description: 99th-percentile latency of FetchConsumer requests, server-side.
+      description: |
+        99th-percentile local (broker processing) time of FetchConsumer requests,
+        in seconds. LocalTimeMs, not TotalTimeMs: a consumer fetch's total time
+        includes the long-poll wait (fetch.max.wait.ms, 500 ms by default) whenever
+        the topic has nothing new, so TotalTimeMs p99 sits near 100 ms on an idle
+        topic and would breach the 50 ms objective without any broker fault
+        (measured). Same JMX-quantile shape as produce_latency_p99, milliseconds.
       semconv_metric: kafka.broker.request.latency
       query: |
-        histogram_quantile(0.99,
-          sum by (le)(
-            rate(kafka_server_RequestMetrics_localtime_ms_bucket{request="FetchConsumer"}[5m])
-          ))
+        max(kafka_network_requestmetrics_localtimems{request="FetchConsumer",quantile="0.99"}) / 1000
       threshold: 0.05
       unit: seconds
 
@@ -196,12 +208,20 @@ spec:
     - id: controller_election_rate
       type: threshold
       description: |
-        Rate of controller elections per hour. Elevated controller
-        churn signals broker instability or network issues that haven't
-        yet shown up in broker-availability metrics.
+        Controller elections per hour, from the KRaft controller's
+        NewActiveControllersCount (kafka.controller:type=KafkaController), a
+        monotonically increasing count of active-controller changes that the
+        Strimzi rule set exposes as the gauge
+        kafka_controller_kafkacontroller_newactivecontrollerscount (1 after a
+        clean start, +1 per election). The ZooKeeper-era
+        kafka.controller:type=ControllerStats,name=LeaderElectionRateAndTimeMs
+        meter this SLI used to name does not exist on a KRaft broker; the only
+        ControllerStats family left is UncleanLeaderElectionsPerSec. Elevated
+        controller churn signals broker instability or network issues that
+        haven't yet shown up in broker-availability metrics.
       semconv_metric: kafka.controller.election.rate
       query: |
-        sum(rate(kafka_controller_ControllerStats_election_rate[1h])) * 3600
+        sum(rate(kafka_controller_kafkacontroller_newactivecontrollerscount[1h])) * 3600
       threshold: 1
       unit: events_per_hour
 
@@ -320,7 +340,11 @@ spec:
         params: { service: kafka }
       - id: per_topic_throughput
         bind: ref:platform/per-resource-rollup
-        params: { metric: kafka_server_BrokerTopicMetrics_messagesinpersec, by: [topic] }
+        # The Strimzi rule set exposes kafka.server:type=BrokerTopicMetrics,name=MessagesInPerSec as
+        # the counter kafka_server_brokertopicmetrics_messagesin_total{topic}; the generator rates a
+        # _total name (sum by (topic) (rate(...[5m]))). The series with no topic label is the
+        # broker-wide total (the same MBean without the topic key).
+        params: { metric: kafka_server_brokertopicmetrics_messagesin_total, by: [topic] }
       - id: per_consumergroup_lag
         bind: ref:platform/per-resource-rollup
         params: { sli: consumer_group_lag_seconds, by: [consumergroup] }

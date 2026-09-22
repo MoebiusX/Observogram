@@ -375,7 +375,7 @@
         "w": 4,
         "h": 4
       },
-      "description": "99th-percentile latency of Produce requests, server-side. SLO 99 % over 30d.",
+      "description": "99th-percentile total time of Produce requests on the broker (queue, local, remote/replication wait, response send), in seconds: what a producer waits for an ack. Kafka publishes its request-time histograms through JMX as per-quantile gauges (no _bucket series exist); with the Strimzi rule set the 0.99 quantile of kafka.network:type=RequestMetrics, name=TotalTimeMs is kafka_network_requestmetrics_totaltimems{quantile=\"0.99\"}, in milliseconds. SLO 99 % over 30d.",
       "pack": {
         "binds_to": [
           "slis.produce_latency_p99"
@@ -449,7 +449,7 @@
         "w": 4,
         "h": 4
       },
-      "description": "99th-percentile latency of FetchConsumer requests, server-side. SLO 99 % over 30d.",
+      "description": "99th-percentile local (broker processing) time of FetchConsumer requests, in seconds. LocalTimeMs, not TotalTimeMs: a consumer fetch's total time includes the long-poll wait (fetch.max.wait.ms, 500 ms by default) whenever the topic has nothing new, so TotalTimeMs p99 sits near 100 ms on an idle topic and would breach the 50 ms objective without any broker fault (measured). Same JMX-quantile shape as produce_latency_p99, milliseconds. SLO 99 % over 30d.",
       "pack": {
         "binds_to": [
           "slis.fetch_latency_p99"
@@ -523,7 +523,7 @@
         "w": 4,
         "h": 4
       },
-      "description": "Rate of controller elections per hour. Elevated controller churn signals broker instability or network issues that haven't yet shown up in broker-availability metrics. SLO 99 % over 7d.",
+      "description": "Controller elections per hour, from the KRaft controller's NewActiveControllersCount (kafka.controller:type=KafkaController), a monotonically increasing count of active-controller changes that the Strimzi rule set exposes as the gauge kafka_controller_kafkacontroller_newactivecontrollerscount (1 after a clean start, +1 per election). The ZooKeeper-era kafka.controller:type=ControllerStats,name=LeaderElectionRateAndTimeMs meter this SLI used to name does not exist on a KRaft broker; the only ControllerStats family left is UncleanLeaderElectionsPerSec. Elevated controller churn signals broker instability or network issues that haven't yet shown up in broker-availability metrics. SLO 99 % over 7d.",
       "pack": {
         "binds_to": [
           "slis.controller_election_rate"
@@ -1847,7 +1847,7 @@
         "w": 12,
         "h": 7
       },
-      "description": "Per-resource rollup of kafka_server_BrokerTopicMetrics_messagesinpersec by topic (pack derived view per_topic_throughput).",
+      "description": "Per-resource rollup of kafka_server_brokertopicmetrics_messagesin_total by topic (pack derived view per_topic_throughput).",
       "pack": {
         "binds_to": [
           "ref:queries.per_topic_throughput"
@@ -1856,13 +1856,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (topic) (kafka_server_BrokerTopicMetrics_messagesinpersec)",
+          "expr": "sum by (topic) (rate(kafka_server_brokertopicmetrics_messagesin_total[5m]))",
           "legendFormat": "{{topic}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
+          "unit": "ops",
           "color": {
             "mode": "palette-classic"
           },
