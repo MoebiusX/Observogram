@@ -108,6 +108,14 @@ function goodIsDerived(expr) {
     .replace(/\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/g, '0');
   return /\b(and|or|unless)\b/.test(bare) || /[)\]}\w]\s*[-+*]/.test(bare);
 }
+// A derived good whose subtracted leg already carries the fill the warning below asks for
+// (`sum(rate(all)) - (sum(rate(err)) or vector(0))`): the difference is defined whenever total
+// is, and advising the guard again would be wrong advice for the pack that took it (the
+// grafana reference pack's alerting SLI, 2026-09-22). Looked for outside string literals.
+function derivationGuarded(expr) {
+  const bare = String(expr).split(STRING_LITERAL).map((seg, i) => (i % 2 ? '""' : seg)).join('');
+  return /\bor\s+vector\(\s*0\s*\)/.test(bare);
+}
 // Legs no event count can be derived from: a per-second rate of the last two samples, or a
 // derivative / delta of a gauge — increase() has no meaning for them.
 const UNCOUNTABLE = /\b(irate|deriv|delta|idelta)\(/;
@@ -405,7 +413,7 @@ export function sliLegs(sli, w, ctx = {}) {
       // difference matches nothing, so the fill would be the whole total — a permanent 100 %
       // outage on a healthy service (measured: zero errors, burn_5m 100×, SEV1). Warned, no fill.
       const derived = goodIsDerived(good);
-      if (derived) warn(`SLI ${id}: good is derived by arithmetic; a good leg matching nothing cannot be told from a 100 % outage, add "or vector(0)" to the subtracted leg in the pack`);
+      if (derived && !derivationGuarded(good)) warn(`SLI ${id}: good is derived by arithmetic; a good leg matching nothing cannot be told from a 100 % outage, add "or vector(0)" to the subtracted leg in the pack`);
       const mismatch = !derived && groupingMismatch(id, aggregation(good), aggregation(total), warn);
       const diff = `((${toInc(total)}) - (${toInc(good)}))`;
       const bad = derived || mismatch ? diff : `(${diff} or (${toInc(total)}))`, denom = `clamp_min((${toInc(total)}), 1)`;
