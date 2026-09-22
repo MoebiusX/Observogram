@@ -309,6 +309,14 @@ test('warnings: the burn-rule generator\'s direction warning on a ratio-unit thr
   assert.deepEqual(prom.warnings.filter(w => w.kind === 'burn-rules' && /rule_evaluation_success_ratio|notification_success_ratio|tsdb_compaction_success_ratio|wal_corruption_freshness|scrape_success_ratio/.test(w.message)), [], 'the prometheus legs are guarded');
 });
 
+test('queue-consumer filters the receive operation on messaging.operation.type, the semconv enum, never on messaging.operation.name', () => {
+  // semconv v1.27.0: messaging.operation.type ∈ { publish, create, receive, process, settle }; messaging.operation.name is the
+  // system-specific operation name (poll, ack, send), so a filter on it selects nothing under the standard the entry cites
+  const receive = build(byId['queue-consumer'], 'tier-1').canonical.spec.slis.find(s => s.id === 'receive_duration_p99');
+  assert.match(receive.query, /messaging_operation_type="receive"/);
+  for (const en of entries) for (const s of en.slis) for (const f of ['good', 'total', 'query']) if (s[f]) assert.doesNotMatch(String(s[f]), /messaging_operation_name/, `${en.id}.${s.id}.${f}`);
+});
+
 test('remediation triggers are the SLO\'s fast burn alert, derived from the profile, at both tiers that carry one', () => {
   const t2 = build(byId.kafka, 'tier-2').canonical.spec.remediation.map(r => r.trigger);
   assert.deepEqual(t2, ['alert:broker_availability_99_9_burn_14x_5m_1h', 'alert:partition_replica_health_99_95_burn_14x_5m_1h']);

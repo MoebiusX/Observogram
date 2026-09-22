@@ -5,8 +5,10 @@
 #   messaging.client.consumed.messages   (Counter, {message}) → messaging_client_consumed_messages_total
 #   messaging.process.duration           (Histogram, s)       → messaging_process_duration_seconds_{bucket,count,sum}
 #   messaging.client.operation.duration  (Histogram, s)       → messaging_client_operation_duration_seconds_{bucket,count,sum}
-#   attributes messaging.system, messaging.destination.name, messaging.operation.name, error.type
-#     → labels messaging_system, messaging_destination_name, messaging_operation_name, error_type
+#   attributes messaging.system, messaging.destination.name, messaging.operation.type, error.type
+#     → labels messaging_system, messaging_destination_name, messaging_operation_type, error_type
+#   (messaging.operation.type is the enum publish | create | receive | process | settle;
+#    messaging.operation.name is the system-specific name — poll, ack, send — and is never a filter here)
 # following the OpenTelemetry "Prometheus and OpenMetrics Compatibility" rules (dots → underscores,
 # unit suffix, `_total` on monotonic sums, `_bucket` per histogram bucket). error.type is set only
 # when an operation failed, so `error_type=""` selects the successes.
@@ -29,7 +31,7 @@ evidence:
   status: semconv
   verifiedOn: null
   sources:
-    - OpenTelemetry Semantic Conventions v1.27.0, "Semantic Conventions for Messaging Metrics" — messaging.client.operation.duration (Histogram, s), messaging.client.consumed.messages (Counter, {message}), messaging.process.duration (Histogram, s); attributes messaging.system, messaging.destination.name, messaging.operation.name, messaging.consumer.group.name, error.type
+    - OpenTelemetry Semantic Conventions v1.27.0, "Semantic Conventions for Messaging Metrics" — messaging.client.operation.duration (Histogram, s), messaging.client.consumed.messages (Counter, {message}), messaging.process.duration (Histogram, s); attributes messaging.system, messaging.destination.name, messaging.operation.type (enum — publish, create, receive, process, settle; the receive filter), messaging.consumer.group.name, error.type — messaging.operation.name is the system-specific operation name (poll, ack, send) and no SLI filters on it
     - OpenTelemetry Semantic Conventions v1.27.0, "Semantic Conventions for Messaging Spans" — messaging.system as an open enum (the MQ evidence doc §7 uses "ibmmq" the same way)
     - OpenTelemetry specification, "Prometheus and OpenMetrics Compatibility" — the exposition naming rules applied above
   notes: |
@@ -103,7 +105,7 @@ slis:
   - id: receive_duration_p99
     type: threshold
     minTier: tier-1
-    description: 99th-percentile duration of the receive operation in seconds (semconv messaging.client.operation.duration, messaging.operation.name = receive).
+    description: 99th-percentile duration of the receive operation in seconds (semconv messaging.client.operation.duration filtered on messaging.operation.type = receive, the enum value; messaging.operation.name is the system-specific name and would select nothing).
     why: The broker-side leg of the consumer's latency; slow receives with fast processing point at the broker, not the code.
     unit: seconds
     semconv_metric: messaging.client.operation.duration
@@ -111,7 +113,7 @@ slis:
     evidence: { status: semconv, source: "OTel semconv v1.27.0 messaging metrics + Prometheus compatibility naming; not verified live" }
     query: |
       histogram_quantile(0.99,
-        sum by (le)(rate(messaging_client_operation_duration_seconds_bucket{job="${job}",messaging_system="${messaging_system}",messaging_operation_name="receive"}[5m])))
+        sum by (le)(rate(messaging_client_operation_duration_seconds_bucket{job="${job}",messaging_system="${messaging_system}",messaging_operation_type="receive"}[5m])))
     threshold: 0.5
     slo:
       objective: 0.99
