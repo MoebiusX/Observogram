@@ -47,15 +47,19 @@
 // `metrics_query`. `tools/record-mcp-fixtures.mjs` re-verifies against any
 // MCP; `npm run test:stack:live` re-verifies against the stack.
 //
-// KNOWN DISCREPANCIES (documented, not fixed — the reference packs are
-// out of scope here):
-//   1. reference-packs/prometheus `scrape_duration_p99` is written over
+// KNOWN DISCREPANCIES (the rows keep their own aliases; items 1 and 2
+// describe reference-packs/prometheus as it was until 2026-09-22, when its
+// two latency SLIs were re-pointed at `max(quantile_over_time(0.99,
+// scrape_duration_seconds[5m]))` and the `/api/v1/query*` handlers of
+// `prometheus_http_request_duration_seconds_bucket` —
+// docs/catalogue-evidence/prometheus.md §10):
+//   1. reference-packs/prometheus `scrape_duration_p99` was written over
 //      `scrape_duration_seconds_bucket`, but Prometheus exposes
 //      `scrape_duration_seconds` as a per-target GAUGE (no histogram) — the
 //      reference pack's histogram_quantile can never answer. Row
 //      `scrape_duration_max` therefore samples `max(scrape_duration_seconds)`
 //      and points at the reference SLI only for vocabulary.
-//   2. reference-packs/prometheus `query_latency_p99` is written over
+//   2. reference-packs/prometheus `query_latency_p99` was written over
 //      `prometheus_engine_query_duration_seconds_bucket`, but Prometheus
 //      registers `prometheus_engine_query_duration_seconds` as a SUMMARY
 //      (promql/engine.go: SummaryVec with objectives 0.5 / 0.9 / 0.99 and

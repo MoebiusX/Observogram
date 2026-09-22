@@ -489,6 +489,12 @@ process.stdout.write('\n[policy PromQL] burn-rules.mjs is the single source\n');
   assert(!derived.records.find(r => r.record === 'shape:errorbudget:burn_5m').expr.includes(' or ('), 'its errorbudget records carry no fill either');
   const derivedOr = burnOf(shapePack({ type: 'ratio', good: 'sum(rate(a[5m])) or sum(rate(b[5m]))', total: 'sum(rate(a[5m]))' }));
   assert(!derivedOr.expr.includes(') or (sum(increase(a[5m]))))') && derivedOr.warnings.length === 1, 'a good joined with `or` counts as derived');
+  // a subtracted leg that already carries `or vector(0)` took the advice: still derived (no fill), no warning
+  const guarded = burnOf(shapePack({ type: 'ratio', good: 'sum(rate(all_total[5m])) - (sum(rate(err_total[5m])) or vector(0))', total: 'sum(rate(all_total[5m]))' }));
+  assert(!guarded.expr.includes(' or (sum(increase(all_total') && guarded.expr.includes('(sum(increase(err_total[5m])) or vector(0))') && guarded.warnings.length === 0,
+         'a guarded subtraction gets no empty-good fill and no "add or vector(0)" warning', [guarded.expr.split('\n')[5], guarded.warnings]);
+  const guardedStr = burnOf(shapePack({ type: 'ratio', good: 'sum(rate(all_total{note="or vector(0)"}[5m])) - sum(rate(err_total[5m]))', total: 'sum(rate(all_total[5m]))' }));
+  assert(guardedStr.warnings.length === 1 && /or vector\(0\)/.test(guardedStr.warnings[0]), 'the guard is looked for outside string literals only');
   // a numeric literal in a label value or an exponent is not an operator
   const notDerived = burnOf(shapePack({ type: 'ratio', good: 'sum(rate(ok{le="1e-3", path="/a-b"}[5m]))', total: 'sum(rate(all[5m]))' }));
   assert((notDerived.expr.match(/ or \(/g) || []).length === 3 && notDerived.warnings.length === 0, 'a selector good with `-` inside strings keeps the fill');

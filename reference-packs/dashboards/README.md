@@ -12,8 +12,11 @@ npm run test:gen                                                            # ev
 How a pack becomes boards (`tools/lib/dashboards/generic.mjs`). First, always, the **Unified
 Observability** board `<name>-unified`: the whole pack on one page in the pack's own section
 order, §1-2 every SLI tile and every SLO's error-budget burn, §10 the validation that proves
-them (certification verdict, MTTD and MTTR per alert for `pack=<name>`, the synthetic checks as
-declared), §7-8 policy and alerting (counters, state timelines, firing table), §9 the
+them (the certification verdict, MTTD and MTTR per alert from `{job="certification", pack=<name>}`
+— rendered only when the pack declares a scrape job named `certification`, as the MQ pack does;
+a pack with chaos experiments and no such feed gets the row header and one text panel saying
+so, never empty tiles — and the synthetic checks as declared), §7-8 policy and alerting
+(counters, state timelines, firing table), §9 the
 remediation table, the signals behind the SLIs (the pack's derived views, plus whatever a pack
 module adds), §3-5 the pipeline, then logs and traces for the backends the pack declares. Then
 one board per `spec.dashboards[]` entry: a `source:` entry gets exactly what its
@@ -55,6 +58,21 @@ Common to all three: `validation.chaos_experiments[].expected_alerts` name alert
 emits; the policy alerts are `<slo>_burn_<factor>x_<short>_<long>`. Each pack also declares a
 hand-written `<svc>:errorbudget:burn_1h` recording rule for a single SLO without an `slo` label,
 alongside the per-SLO labelled ones the generator produces.
+
+**2026-09-22.** The table above describes the packs as they were on 2026-09-17. On 2026-09-22 the
+three packs' SLIs were re-pointed at names the lab exposes — measured on Prometheus 3.14.0,
+Grafana 12.4.11 and `apache/kafka:3.9.2` (the lab's image pin; KRaft, Strimzi JMX rule set,
+kafka_exporter 1.10.0):
+prometheus' two latency SLIs (`quantile_over_time` over the `scrape_duration_seconds` gauge; the
+`/api/v1/query*` handlers of `prometheus_http_request_duration_seconds_bucket`), grafana's database
+query histogram (`grafana_database_queries_duration_seconds_bucket`, needs `instrument_queries`),
+login ratio (`POST /login` answered 200 over all `POST /login`, absent rather than NaN in a
+window without a login) and guarded alerting-evaluation leg, and kafka's JMX names
+(`kafka_network_requestmetrics_{totaltimems,localtimems}{quantile="0.99"}`,
+`kafka_controller_kafkacontroller_newactivecontrollerscount` taken per node with `max`,
+`kafka_server_brokertopicmetrics_messagesin_total{topic!=""}` without the broker-wide series). Every expression and its live result is in
+`docs/catalogue-evidence/{prometheus,grafana,kafka}.md`, "Measured live — 2026-09-22"; the
+certification row of the unified boards became the text note described above on the same day.
 
 The compiler emits these same boards. `compile(pack, 'grafana-dashboard', { dashboardId })`,
 the studio's Dashboards group under Fix The Gaps and `packc compile … grafana-dashboard` all

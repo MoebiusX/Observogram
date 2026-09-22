@@ -135,7 +135,7 @@
         "w": 12,
         "h": 7
       },
-      "description": "Per-resource rollup of kafka_server_BrokerTopicMetrics_messagesinpersec by topic (pack derived view per_topic_throughput).",
+      "description": "Per-resource rollup of kafka_server_brokertopicmetrics_messagesin_total{topic!=\"\"} by topic (pack derived view per_topic_throughput).",
       "pack": {
         "binds_to": [
           "ref:queries.per_topic_throughput"
@@ -144,13 +144,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (topic) (kafka_server_BrokerTopicMetrics_messagesinpersec)",
+          "expr": "sum by (topic) (rate(kafka_server_brokertopicmetrics_messagesin_total{topic!=\"\"}[5m]))",
           "legendFormat": "{{topic}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
+          "unit": "ops",
           "color": {
             "mode": "palette-classic"
           },

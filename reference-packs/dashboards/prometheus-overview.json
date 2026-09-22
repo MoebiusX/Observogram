@@ -374,7 +374,7 @@
         "w": 4,
         "h": 4
       },
-      "description": "99th-percentile query duration (PromQL queries via /api/v1/query and /api/v1/query_range). SLO 99 % over 30d.",
+      "description": "99th-percentile latency of the HTTP query API (/api/v1/query and /api/v1/query_range) from the server's own request-duration histogram prometheus_http_request_duration_seconds{handler}, buckets 0.1 .. 120 s (measured on 3.14.0; defined the same way at 2.55.1 per web/web.go). The histogram resolves nothing below its first bucket: a healthy server reads 0.099 s (0.99 x 0.1, every request in le=\"0.1\"), meaning \"p99 <= 0.1 s\"; the 1 s objective sits on the le=\"1.0\" bound, where the comparison is exact. The engine's prometheus_engine_query_duration_seconds is a summary (no _bucket series); the 3.x-only prometheus_engine_query_duration_histogram_seconds_bucket would give the engine-side view on 3.x alone. This is what a Grafana panel waits for. SLO 99 % over 30d.",
       "pack": {
         "binds_to": [
           "slis.query_latency_p99"

@@ -226,7 +226,7 @@
         "w": 4,
         "h": 4
       },
-      "description": "Fraction of login attempts that succeeded. Sudden drops indicate an IDP outage (SAML / OAuth provider down) and need fast triage even if downstream observability is unaffected. SLO 99.9 % over 7d.",
+      "description": "Fraction of form logins (POST /login) answered 200 in the window, from Grafana's own HTTP request histogram; a window with no login reads no data rather than NaN (the total leg keeps only series with a positive rate). Grafana also counts logins per client in grafana_authn_authn_successful_login_total{client} and grafana_authn_authn_failed_login_total{client} (both defined at 12.4.11; the failed one has no series until a login fails): that pair would also cover OAuth / SAML clients, but a failed login was not exercised in the lab while the HTTP pair was executed end to end (see the evidence). grafana_api_login_post_total counts successes only (per pkg/api/login.go). Scope: the login page (Grafana's own password path); OAuth and SAML callbacks are not in this ratio. Sudden drops mean Grafana's login path is failing and need fast triage even if signed-in sessions still work. SLO 99.9 % over 7d.",
       "pack": {
         "binds_to": [
           "slis.login_success_ratio"

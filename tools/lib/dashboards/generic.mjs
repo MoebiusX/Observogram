@@ -42,6 +42,25 @@ function bindings(d) {
 const scrapeJobs = (pack) => (pack.spec.pipelines?.receivers || []).flatMap(r => (r.scrape_configs || []).map(s => s.job_name)).filter(Boolean);
 const backendProducts = (pack) => new Set((pack.spec.telemetry?.backends || []).map(b => b.product));
 const tileWidth = (n) => (n <= 6 ? 4 : 3);
+/** The pack declares a certification feed: a scrape job named `certification` (what the MQ harness's alert-sink is scraped as). */
+const hasCertificationFeed = (pack) => scrapeJobs(pack).includes('certification');
+
+/**
+ * §10 validation row. The certification tiles read `{job="certification", pack="<name>"}` (lib.mjs
+ * `certSel`; the pack matcher stays, or the MQ harness's verdict would show on every other pack's
+ * board), so on a pack no harness certifies every tile is empty. The tiles are rendered only when
+ * the pack declares that feed; a pack with chaos experiments and no feed gets the row header and
+ * one text panel that says exactly that (the same note pattern as logsTracesPanels).
+ */
+function validationPanels(pack) {
+  const chaos = pack.spec.validation?.chaos_experiments || [];
+  if (!chaos.length) return [];
+  const head = row('§10 · Validation — MTTD, MTTR and certification');
+  if (hasCertificationFeed(pack)) return [head, ...certTiles(), mttdBars(12, 8), mttrBars(12, 8), ...certCounts()];
+  const engines = [...new Set(chaos.map(e => e.engine).filter(Boolean))], envs = [...new Set(chaos.map(e => e.environment).filter(Boolean))];
+  const where = [engines.length ? engines.join(', ') : null, envs.length ? envs.join(', ') : null].filter(Boolean).join('; ');
+  return [head, text(`The pack declares ${chaos.length} chaos experiment${chaos.length === 1 ? '' : 's'}${where ? ` (${where})` : ''} but no certification pipeline — a scrape job named \`certification\` — so nothing feeds MTTD, MTTR or a verdict here.`, { title: 'No certification feed', h: 3 })];
+}
 
 function pipelinesPanels(pack) {
   // The metric-name prefix (`payment-service` → `payment_service`): every recording rule the
@@ -100,7 +119,6 @@ export function genericBoards(pack, { module = null, repoUrl = null } = {}) {
   const overrides = module?.configure ? module.configure(pack) : {};
   configure({ pack, repoUrl, ...overrides, boards: [[unifiedId, 'Unified'], ...dashboards.filter(d => d.id !== unifiedId).map(d => [d.id, titleOf(pack, d)])] });
   const c = ctx();
-  const chaos = pack.spec.validation?.chaos_experiments || [];
   const synth = pack.spec.validation?.synthetic_checks || [];
   const views = Object.fromEntries((pack.spec.queries?.derived_views || []).map(v => [v.id, v]));
   const allSlis = (pack.spec.slis || []).map(s => s.id), allSlos = (pack.spec.slos || []).map(s => s.id);
@@ -115,7 +133,7 @@ export function genericBoards(pack, { module = null, repoUrl = null } = {}) {
     row('§1-2 · Contract — SLIs and SLOs'),
     ...tiles(allSlis),
     ...(allSlos.length ? [burnBars(allSlos.map(s => `slos.${s}`), 12, 8), ...burnCurves(6, 'hidden')] : []),
-    ...(chaos.length ? [row('§10 · Validation — MTTD, MTTR and certification'), ...certTiles(), mttdBars(12, 8), mttrBars(12, 8), ...certCounts()] : []),
+    ...validationPanels(pack),
     ...(synth.length || module?.synthetic ? [row('§10 · Validation — synthetic checks'), ...(module?.synthetic ? module.synthetic(pack) : []), ...(synth.length ? [syntheticTable(pack)] : [])] : []),
     row('§7-8 · Policy and alerting'),
     ...alertCounters(4), alertTimelines(12, 4)[0], alertTable(12, 8), alertTimelines(12, 8)[1],

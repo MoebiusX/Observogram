@@ -18,6 +18,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { genericBoards, checkBindings } from './lib/dashboards/generic.mjs';
+import { derivedViewPanel } from './lib/dashboards/lib.mjs';
 import { compileGrafanaDashboard } from './lib/compile.mjs';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -136,6 +137,63 @@ for (const packPath of PACKS) {
     }
   });
 }
+
+test('the §10 certification tiles render only for a pack that declares the certification scrape job', () => {
+  // The MQ harness's alert-sink is scraped as job `certification`; the reference packs declare no
+  // such job. The per-pack test above only checks the row header, which the note branch renders
+  // too, so a regression dropping the tiles for a pack WITH the feed would pass without this.
+  const section = (pack) => {
+    const panels = genericBoards(pack).find(b => b.id === `${pack.metadata.name}-unified`).dashboard.panels;
+    const i = panels.findIndex(p => p.type === 'row' && /MTTD, MTTR/.test(p.title));
+    assert.ok(i >= 0, 'the validation row exists');
+    const j = panels.findIndex((p, k) => k > i && p.type === 'row');
+    return panels.slice(i + 1, j < 0 ? panels.length : j);
+  };
+  const committed = load('reference-packs/kafka.pack.yaml');
+  const note = section(committed);
+  assert.equal(note.length, 1, 'one panel under the row without a feed');
+  assert.equal(note[0].type, 'text');
+  assert.equal(note[0].title, 'No certification feed');
+  assert.match(JSON.stringify(note[0]), /declares 4 chaos experiments \(chaos-mesh; staging, prod\) but no certification pipeline — a scrape job named `certification` — so nothing feeds MTTD, MTTR or a verdict here\./);
+  const withJob = (job) => {
+    const p = structuredClone(committed);
+    p.spec.pipelines.receivers.find(r => r.scrape_configs).scrape_configs.push({ job_name: job, static_configs: [{ targets: ['sink:9095'] }] });
+    return p;
+  };
+  const tiles = section(withJob('certification'));
+  assert.ok(!tiles.some(p => p.type === 'text'), 'no note when the feed exists');
+  assert.equal(tiles.length, 14, 'six verdict tiles, two bar gauges, six counters');
+  const titles = tiles.map(p => p.title);
+  for (const t of ['Last certification', 'Certified', 'MTTD p50', 'MTTD p95', 'MTTD per expected alert · against its budget', 'Resolution after recovery · per alert', 'Conformance passed', 'Synthetic passed', 'Chaos passed', 'Checks failed', 'Run duration', 'Webhooks in the ledger']) assert.ok(titles.includes(t), `${t} rendered`);
+  for (const p of tiles) for (const t of p.targets || []) assert.ok(/job="certification"/.test(t.expr) && /pack="kafka"/.test(t.expr), `${p.title} reads this pack's certification feed: ${t.expr}`);
+  // the job name is exact: one that merely starts with it is not the feed
+  const near = section(withJob('certification-x'));
+  assert.equal(near.length, 1);
+  assert.equal(near[0].type, 'text');
+});
+
+test('a derived view rates a counter with or without a label selector, and reads anything else as a gauge', () => {
+  // The selector is how a pack drops a series the rollup must not show: the JMX exporter's
+  // broker-wide kafka_server_brokertopicmetrics_messagesin_total has no topic label and rendered
+  // as a fourth "topic" {} equal to the sum of the others (measured 2026-09-22, kafka.md §1.4).
+  const pack = { metadata: { name: 'x', version: '0' }, spec: { slis: [] } };
+  const panel = (metric) => derivedViewPanel(pack, { id: 'per_topic', params: { metric, by: ['topic'] } }, 'ref:queries.per_topic');
+  const selected = panel('kafka_server_brokertopicmetrics_messagesin_total{topic!=""}');
+  assert.equal(selected.targets[0].expr, 'sum by (topic) (rate(kafka_server_brokertopicmetrics_messagesin_total{topic!=""}[5m]))');
+  assert.equal(selected.fieldConfig.defaults.unit, 'ops');
+  const bare = panel('kafka_server_brokertopicmetrics_messagesin_total');
+  assert.equal(bare.targets[0].expr, 'sum by (topic) (rate(kafka_server_brokertopicmetrics_messagesin_total[5m]))');
+  assert.equal(bare.fieldConfig.defaults.unit, 'ops');
+  const gauge = panel('kafka_log_size{topic!=""}');
+  assert.equal(gauge.targets[0].expr, 'max by (topic) (kafka_log_size{topic!=""})');
+  assert.equal(gauge.fieldConfig.defaults.unit, 'none');
+  // the committed kafka pack carries the selector, so its throughput board never shows the {} series
+  const kafka = load('reference-packs/kafka.pack.yaml');
+  const view = kafka.spec.queries.derived_views.find(v => v.id === 'per_topic_throughput');
+  assert.equal(view.params.metric, 'kafka_server_brokertopicmetrics_messagesin_total{topic!=""}');
+  const throughput = genericBoards(kafka).find(b => b.id === 'kafka-throughput');
+  assert.ok(throughput.dashboard.panels.some(p => (p.targets || []).some(t => t.expr === 'sum by (topic) (rate(kafka_server_brokertopicmetrics_messagesin_total{topic!=""}[5m]))')), 'kafka-throughput rates the selected counter');
+});
 
 test('dashboards for a dash-named pack read the slugged metric prefix everywhere', () => {
   // payment-service: every recording rule the generators and the compiler emit is payment_service:*
