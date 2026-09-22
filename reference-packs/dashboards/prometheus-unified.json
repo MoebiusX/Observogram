@@ -1443,8 +1443,8 @@
     },
     {
       "id": 15,
-      "type": "stat",
-      "title": "Last certification",
+      "type": "text",
+      "title": "No certification feed",
       "datasource": {
         "type": "prometheus",
         "uid": "prom"
@@ -1452,1048 +1452,22 @@
       "gridPos": {
         "x": 0,
         "y": 16,
-        "w": 4,
-        "h": 4
+        "w": 24,
+        "h": 3
       },
-      "description": "Verdict of the last `npm run certify` published to the alert-sink: PASS, WARN, FAIL or ERROR.",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max(mq_cert_verdict_code{job=\"certification\", pack=\"prometheus\"})",
-          "instant": true,
-          "range": false,
-          "legendFormat": "__auto"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "PASS",
-                  "color": "#3DD68C"
-                },
-                "1": {
-                  "text": "WARN",
-                  "color": "#F5B14C"
-                },
-                "2": {
-                  "text": "FAIL",
-                  "color": "#F0616D"
-                },
-                "3": {
-                  "text": "ERROR",
-                  "color": "#F0616D"
-                }
-              }
-            }
-          ],
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#3DD68C",
-                "value": null
-              },
-              {
-                "color": "#F5B14C",
-                "value": 1
-              },
-              {
-                "color": "#F0616D",
-                "value": 2
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
+      "transparent": false,
       "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "background_solid",
-        "graphMode": "none",
-        "textMode": "value",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "orientation": "auto",
-        "showPercentChange": false
+        "mode": "markdown",
+        "content": "The pack declares 4 chaos experiments (chaos-mesh; staging) but no certification pipeline — a scrape job named `certification` — so nothing feeds MTTD, MTTR or a verdict here.",
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        }
       }
     },
     {
       "id": 16,
-      "type": "stat",
-      "title": "Certified",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prom"
-      },
-      "gridPos": {
-        "x": 4,
-        "y": 16,
-        "w": 4,
-        "h": 4
-      },
-      "description": "When the last certification run finished.",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max(mq_cert_run_timestamp_seconds{job=\"certification\", pack=\"prometheus\"}) * 1000",
-          "instant": true,
-          "range": false,
-          "legendFormat": "__auto"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "dateTimeFromNow",
-          "mappings": [],
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#8B98A9",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "none",
-        "graphMode": "none",
-        "textMode": "value",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "orientation": "auto",
-        "showPercentChange": false
-      }
-    },
-    {
-      "id": 17,
-      "type": "stat",
-      "title": "MTTD p50",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prom"
-      },
-      "gridPos": {
-        "x": 8,
-        "y": 16,
-        "w": 4,
-        "h": 4
-      },
-      "description": "Median time from fault injection to the alert webhook, across every expected alert of the chaos suite. Baseline p50 2 min (pack spec.baselines).",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max(mq_cert_mttd_quantile_seconds{job=\"certification\", pack=\"prometheus\", quantile=\"0.5\"})",
-          "instant": true,
-          "range": false,
-          "legendFormat": "__auto"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "suffix: s",
-          "decimals": 1,
-          "mappings": [],
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#3DD68C",
-                "value": null
-              },
-              {
-                "color": "#F5B14C",
-                "value": 120
-              },
-              {
-                "color": "#F0616D",
-                "value": 300
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "value",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "orientation": "auto",
-        "showPercentChange": false
-      }
-    },
-    {
-      "id": 18,
-      "type": "stat",
-      "title": "MTTD p95",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prom"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 16,
-        "w": 4,
-        "h": 4
-      },
-      "description": "95th percentile time to detect. Baseline p95 5 min.",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max(mq_cert_mttd_quantile_seconds{job=\"certification\", pack=\"prometheus\", quantile=\"0.95\"})",
-          "instant": true,
-          "range": false,
-          "legendFormat": "__auto"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "suffix: s",
-          "decimals": 1,
-          "mappings": [],
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#3DD68C",
-                "value": null
-              },
-              {
-                "color": "#F5B14C",
-                "value": 300
-              },
-              {
-                "color": "#F0616D",
-                "value": 600
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "value",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "orientation": "auto",
-        "showPercentChange": false
-      }
-    },
-    {
-      "id": 19,
-      "type": "stat",
-      "title": "MTTR p50 · resolution",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prom"
-      },
-      "gridPos": {
-        "x": 16,
-        "y": 16,
-        "w": 4,
-        "h": 4
-      },
-      "description": "Median time from the recovery action to the resolved webhook: the observability system's share of MTTR (it excludes the human/automation fix time). Baseline MTTR p50 30 min.",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max(mq_cert_mttr_quantile_seconds{job=\"certification\", pack=\"prometheus\", quantile=\"0.5\"})",
-          "instant": true,
-          "range": false,
-          "legendFormat": "__auto"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "suffix: s",
-          "decimals": 1,
-          "mappings": [],
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#3DD68C",
-                "value": null
-              },
-              {
-                "color": "#F5B14C",
-                "value": 1800
-              },
-              {
-                "color": "#F0616D",
-                "value": 3600
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "value",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "orientation": "auto",
-        "showPercentChange": false
-      }
-    },
-    {
-      "id": 20,
-      "type": "stat",
-      "title": "MTTR p95 · resolution",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prom"
-      },
-      "gridPos": {
-        "x": 20,
-        "y": 16,
-        "w": 4,
-        "h": 4
-      },
-      "description": "95th percentile resolution after recovery. Baseline MTTR p95 60 min.",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max(mq_cert_mttr_quantile_seconds{job=\"certification\", pack=\"prometheus\", quantile=\"0.95\"})",
-          "instant": true,
-          "range": false,
-          "legendFormat": "__auto"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "suffix: s",
-          "decimals": 1,
-          "mappings": [],
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#3DD68C",
-                "value": null
-              },
-              {
-                "color": "#F5B14C",
-                "value": 3600
-              },
-              {
-                "color": "#F0616D",
-                "value": 7200
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "value",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "orientation": "auto",
-        "showPercentChange": false
-      }
-    },
-    {
-      "id": 21,
-      "type": "bargauge",
-      "title": "MTTD per expected alert · against its budget",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prom"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 20,
-        "w": 12,
-        "h": 8
-      },
-      "description": "Time from injection to the firing webhook for each expected alert in the last run; amber from 75 % of the experiment's expected_mttd, red at the budget.",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "mq_cert_mttd_seconds{job=\"certification\", pack=\"prometheus\"}",
-          "instant": true,
-          "legendFormat": "{{experiment}} · {{alertname}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "suffix: s",
-          "min": 0,
-          "max": 720,
-          "decimals": 1,
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#8B98A9",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "prom-pod-kill · prometheus-scrape-failures-burn-fast"
-            },
-            "properties": [
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "#3DD68C",
-                      "value": null
-                    },
-                    {
-                      "color": "#F5B14C",
-                      "value": 90
-                    },
-                    {
-                      "color": "#F0616D",
-                      "value": 120
-                    }
-                  ]
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "prom-disk-pressure · prometheus-tsdb-compaction-burn"
-            },
-            "properties": [
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "#3DD68C",
-                      "value": null
-                    },
-                    {
-                      "color": "#F5B14C",
-                      "value": 450
-                    },
-                    {
-                      "color": "#F0616D",
-                      "value": 600
-                    }
-                  ]
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "prom-query-flood · prometheus-query-concurrency-burn"
-            },
-            "properties": [
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "#3DD68C",
-                      "value": null
-                    },
-                    {
-                      "color": "#F5B14C",
-                      "value": 225
-                    },
-                    {
-                      "color": "#F0616D",
-                      "value": 300
-                    }
-                  ]
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "alertmanager-network-isolate · prometheus-alertmanager-delivery-burn-fast"
-            },
-            "properties": [
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "#3DD68C",
-                      "value": null
-                    },
-                    {
-                      "color": "#F5B14C",
-                      "value": 90
-                    },
-                    {
-                      "color": "#F0616D",
-                      "value": 120
-                    }
-                  ]
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "horizontal",
-        "displayMode": "gradient",
-        "valueMode": "color",
-        "namePlacement": "left",
-        "showUnfilled": true,
-        "sizing": "auto",
-        "minVizWidth": 8,
-        "minVizHeight": 14,
-        "maxVizHeight": 26,
-        "legend": {
-          "showLegend": false
-        }
-      }
-    },
-    {
-      "id": 22,
-      "type": "bargauge",
-      "title": "Resolution after recovery · per alert",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prom"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 20,
-        "w": 12,
-        "h": 8
-      },
-      "description": "Time from the recovery action to the resolved webhook in the last run (Prometheus resolve + Alertmanager group_interval + webhook).",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "mq_cert_mttr_seconds{job=\"certification\", pack=\"prometheus\"}",
-          "instant": true,
-          "legendFormat": "{{experiment}} · {{alertname}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "suffix: s",
-          "min": 0,
-          "max": 120,
-          "decimals": 1,
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#3DD68C",
-                "value": null
-              },
-              {
-                "color": "#F5B14C",
-                "value": 60
-              },
-              {
-                "color": "#F0616D",
-                "value": 120
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "horizontal",
-        "displayMode": "gradient",
-        "valueMode": "color",
-        "namePlacement": "left",
-        "showUnfilled": true,
-        "sizing": "auto",
-        "minVizWidth": 8,
-        "minVizHeight": 14,
-        "maxVizHeight": 26,
-        "legend": {
-          "showLegend": false
-        }
-      }
-    },
-    {
-      "id": 23,
-      "type": "stat",
-      "title": "Conformance passed",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prom"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 28,
-        "w": 4,
-        "h": 4
-      },
-      "description": "C1-C10: does the stack implement the pack?",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(mq_cert_checks{job=\"certification\", pack=\"prometheus\", suite=\"conformance\", status=\"PASS\"})",
-          "instant": true,
-          "range": false,
-          "legendFormat": "__auto"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 0,
-          "mappings": [],
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#8B98A9",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "none",
-        "graphMode": "none",
-        "textMode": "value",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "orientation": "auto",
-        "showPercentChange": false
-      }
-    },
-    {
-      "id": 24,
-      "type": "stat",
-      "title": "Synthetic passed",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prom"
-      },
-      "gridPos": {
-        "x": 4,
-        "y": 28,
-        "w": 4,
-        "h": 4
-      },
-      "description": "S1-S6: canary, orders flow, no symptom or fast-window burn alert firing.",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(mq_cert_checks{job=\"certification\", pack=\"prometheus\", suite=\"synthetic\", status=\"PASS\"})",
-          "instant": true,
-          "range": false,
-          "legendFormat": "__auto"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 0,
-          "mappings": [],
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#8B98A9",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "none",
-        "graphMode": "none",
-        "textMode": "value",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "orientation": "auto",
-        "showPercentChange": false
-      }
-    },
-    {
-      "id": 25,
-      "type": "stat",
-      "title": "Chaos passed",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prom"
-      },
-      "gridPos": {
-        "x": 8,
-        "y": 28,
-        "w": 4,
-        "h": 4
-      },
-      "description": "Experiments whose alerts fired within budget, resolved after recovery, and whose hypothesis SLI moved as declared.",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(mq_cert_checks{job=\"certification\", pack=\"prometheus\", suite=\"chaos\", status=\"PASS\"})",
-          "instant": true,
-          "range": false,
-          "legendFormat": "__auto"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 0,
-          "mappings": [],
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#8B98A9",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "none",
-        "graphMode": "none",
-        "textMode": "value",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "orientation": "auto",
-        "showPercentChange": false
-      }
-    },
-    {
-      "id": 26,
-      "type": "stat",
-      "title": "Checks failed",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prom"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 28,
-        "w": 4,
-        "h": 4
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(mq_cert_checks{job=\"certification\", pack=\"prometheus\", status=~\"FAIL|ERROR\"}) or vector(0)",
-          "instant": true,
-          "range": false,
-          "legendFormat": "__auto"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 0,
-          "mappings": [],
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#3DD68C",
-                "value": null
-              },
-              {
-                "color": "#F5B14C",
-                "value": 1
-              },
-              {
-                "color": "#F0616D",
-                "value": 1
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "value",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "orientation": "auto",
-        "showPercentChange": false
-      }
-    },
-    {
-      "id": 27,
-      "type": "stat",
-      "title": "Run duration",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prom"
-      },
-      "gridPos": {
-        "x": 16,
-        "y": 28,
-        "w": 4,
-        "h": 4
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max(mq_cert_run_duration_seconds{job=\"certification\", pack=\"prometheus\"})",
-          "instant": true,
-          "range": false,
-          "legendFormat": "__auto"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "decimals": 0,
-          "mappings": [],
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#8B98A9",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "none",
-        "graphMode": "none",
-        "textMode": "value",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "orientation": "auto",
-        "showPercentChange": false
-      }
-    },
-    {
-      "id": 28,
-      "type": "stat",
-      "title": "Webhooks in the ledger",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prom"
-      },
-      "gridPos": {
-        "x": 20,
-        "y": 28,
-        "w": 4,
-        "h": 4
-      },
-      "description": "Alertmanager webhook events held by the alert-sink (MTTD is measured from their receipt time).",
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max(mq_alert_sink_events{job=\"certification\", pack=\"prometheus\"})",
-          "instant": true,
-          "range": false,
-          "legendFormat": "__auto"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 0,
-          "mappings": [],
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#8B98A9",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "none",
-        "graphMode": "none",
-        "textMode": "value",
-        "justifyMode": "center",
-        "wideLayout": true,
-        "orientation": "auto",
-        "showPercentChange": false
-      }
-    },
-    {
-      "id": 29,
       "type": "row",
       "title": "§10 · Validation — synthetic checks",
       "datasource": {
@@ -2502,7 +1476,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 32,
+        "y": 19,
         "w": 24,
         "h": 1
       },
@@ -2510,7 +1484,7 @@
       "panels": []
     },
     {
-      "id": 30,
+      "id": 17,
       "type": "text",
       "title": "Synthetic checks · as declared",
       "datasource": {
@@ -2519,7 +1493,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 33,
+        "y": 20,
         "w": 24,
         "h": 6
       },
@@ -2535,7 +1509,7 @@
       }
     },
     {
-      "id": 31,
+      "id": 18,
       "type": "row",
       "title": "§7-8 · Policy and alerting",
       "datasource": {
@@ -2544,7 +1518,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 39,
+        "y": 26,
         "w": 24,
         "h": 1
       },
@@ -2552,7 +1526,7 @@
       "panels": []
     },
     {
-      "id": 32,
+      "id": 19,
       "type": "stat",
       "title": "Symptom alerts firing",
       "datasource": {
@@ -2561,7 +1535,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 40,
+        "y": 27,
         "w": 4,
         "h": 4
       },
@@ -2620,7 +1594,7 @@
       }
     },
     {
-      "id": 33,
+      "id": 20,
       "type": "stat",
       "title": "Burn-rate alerts firing",
       "datasource": {
@@ -2629,7 +1603,7 @@
       },
       "gridPos": {
         "x": 4,
-        "y": 40,
+        "y": 27,
         "w": 4,
         "h": 4
       },
@@ -2688,7 +1662,7 @@
       }
     },
     {
-      "id": 34,
+      "id": 21,
       "type": "stat",
       "title": "Forecast alerts firing",
       "datasource": {
@@ -2697,7 +1671,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 40,
+        "y": 27,
         "w": 4,
         "h": 4
       },
@@ -2756,7 +1730,7 @@
       }
     },
     {
-      "id": 35,
+      "id": 22,
       "type": "state-timeline",
       "title": "Symptom alerts · pending / firing",
       "datasource": {
@@ -2765,7 +1739,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 40,
+        "y": 27,
         "w": 12,
         "h": 4
       },
@@ -2826,7 +1800,7 @@
       }
     },
     {
-      "id": 37,
+      "id": 24,
       "type": "table",
       "title": "Firing pack alerts",
       "datasource": {
@@ -2835,7 +1809,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 44,
+        "y": 31,
         "w": 12,
         "h": 8
       },
@@ -2963,7 +1937,7 @@
       }
     },
     {
-      "id": 39,
+      "id": 26,
       "type": "state-timeline",
       "title": "Burn-rate & forecast alerts · pending / firing",
       "datasource": {
@@ -2972,7 +1946,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 44,
+        "y": 31,
         "w": 12,
         "h": 8
       },
@@ -3038,7 +2012,7 @@
       }
     },
     {
-      "id": 40,
+      "id": 27,
       "type": "row",
       "title": "§9 · Remediation — runbooks and guardrails",
       "datasource": {
@@ -3047,7 +2021,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 52,
+        "y": 39,
         "w": 24,
         "h": 1
       },
@@ -3055,7 +2029,7 @@
       "panels": []
     },
     {
-      "id": 41,
+      "id": 28,
       "type": "text",
       "title": "Remediation · runbooks and guardrails",
       "datasource": {
@@ -3064,7 +2038,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 53,
+        "y": 40,
         "w": 24,
         "h": 7
       },
@@ -3080,7 +2054,7 @@
       }
     },
     {
-      "id": 42,
+      "id": 29,
       "type": "row",
       "title": "Signals — the pack's derived views",
       "datasource": {
@@ -3089,7 +2063,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 60,
+        "y": 47,
         "w": 24,
         "h": 1
       },
@@ -3097,7 +2071,7 @@
       "panels": []
     },
     {
-      "id": 43,
+      "id": 30,
       "type": "text",
       "title": "Golden signals prometheus",
       "datasource": {
@@ -3106,7 +2080,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 61,
+        "y": 48,
         "w": 24,
         "h": 3
       },
@@ -3122,7 +2096,7 @@
       }
     },
     {
-      "id": 44,
+      "id": 31,
       "type": "timeseries",
       "title": "Per job scrape health",
       "datasource": {
@@ -3131,7 +2105,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 64,
+        "y": 51,
         "w": 12,
         "h": 7
       },
@@ -3203,7 +2177,7 @@
       }
     },
     {
-      "id": 45,
+      "id": 32,
       "type": "timeseries",
       "title": "Per rule eval failures",
       "datasource": {
@@ -3212,7 +2186,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 64,
+        "y": 51,
         "w": 12,
         "h": 7
       },
@@ -3284,7 +2258,7 @@
       }
     },
     {
-      "id": 46,
+      "id": 33,
       "type": "row",
       "title": "§3-5 · Pipelines, storage and queries",
       "datasource": {
@@ -3293,7 +2267,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 71,
+        "y": 58,
         "w": 24,
         "h": 1
       },
@@ -3301,7 +2275,7 @@
       "panels": []
     },
     {
-      "id": 47,
+      "id": 34,
       "type": "stat",
       "title": "TSDB series",
       "datasource": {
@@ -3310,7 +2284,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 72,
+        "y": 59,
         "w": 4,
         "h": 5
       },
@@ -3362,7 +2336,7 @@
       }
     },
     {
-      "id": 48,
+      "id": 35,
       "type": "stat",
       "title": "Samples appended / s",
       "datasource": {
@@ -3371,7 +2345,7 @@
       },
       "gridPos": {
         "x": 4,
-        "y": 72,
+        "y": 59,
         "w": 4,
         "h": 5
       },
@@ -3422,7 +2396,7 @@
       }
     },
     {
-      "id": 49,
+      "id": 36,
       "type": "stat",
       "title": "Recording rules producing",
       "datasource": {
@@ -3431,7 +2405,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 72,
+        "y": 59,
         "w": 4,
         "h": 5
       },
@@ -3483,7 +2457,7 @@
       }
     },
     {
-      "id": 50,
+      "id": 37,
       "type": "timeseries",
       "title": "Scrape duration by job",
       "datasource": {
@@ -3492,7 +2466,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 72,
+        "y": 59,
         "w": 12,
         "h": 5
       },
@@ -3556,7 +2530,7 @@
       }
     },
     {
-      "id": 51,
+      "id": 38,
       "type": "timeseries",
       "title": "Collector · exported per second",
       "datasource": {
@@ -3565,7 +2539,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 77,
+        "y": 64,
         "w": 12,
         "h": 6
       },
@@ -3685,7 +2659,7 @@
       }
     },
     {
-      "id": 52,
+      "id": 39,
       "type": "timeseries",
       "title": "Collector · export failures per second",
       "datasource": {
@@ -3694,7 +2668,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 77,
+        "y": 64,
         "w": 12,
         "h": 6
       },
@@ -3784,7 +2758,7 @@
       }
     },
     {
-      "id": 53,
+      "id": 40,
       "type": "row",
       "title": "Logs and traces",
       "datasource": {
@@ -3793,7 +2767,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 83,
+        "y": 70,
         "w": 24,
         "h": 1
       },
@@ -3801,7 +2775,7 @@
       "panels": []
     },
     {
-      "id": 54,
+      "id": 41,
       "type": "table",
       "title": "Recent traces",
       "datasource": {
@@ -3810,7 +2784,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 84,
+        "y": 71,
         "w": 24,
         "h": 8
       },

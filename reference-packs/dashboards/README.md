@@ -12,8 +12,11 @@ npm run test:gen                                                            # ev
 How a pack becomes boards (`tools/lib/dashboards/generic.mjs`). First, always, the **Unified
 Observability** board `<name>-unified`: the whole pack on one page in the pack's own section
 order, §1-2 every SLI tile and every SLO's error-budget burn, §10 the validation that proves
-them (certification verdict, MTTD and MTTR per alert for `pack=<name>`, the synthetic checks as
-declared), §7-8 policy and alerting (counters, state timelines, firing table), §9 the
+them (the certification verdict, MTTD and MTTR per alert from `{job="certification", pack=<name>}`
+— rendered only when the pack declares a scrape job named `certification`, as the MQ pack does;
+a pack with chaos experiments and no such feed gets the row header and one text panel saying
+so, never empty tiles — and the synthetic checks as declared), §7-8 policy and alerting
+(counters, state timelines, firing table), §9 the
 remediation table, the signals behind the SLIs (the pack's derived views, plus whatever a pack
 module adds), §3-5 the pipeline, then logs and traces for the backends the pack declares. Then
 one board per `spec.dashboards[]` entry: a `source:` entry gets exactly what its
