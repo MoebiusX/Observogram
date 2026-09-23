@@ -845,6 +845,8 @@ export function buildStackModel({ adapted = null, checklist = null, requirements
       },
       maturity,
       dimmed: offSections.length > 0, offSections,
+      // A failing clause explained by a section off elsewhere (SLOs off: the chaos experiments have no SLO to test) — a chip on the head says why.
+      notes: sectionNotes(clauses, toggles, offSections),
       expanded: !!expanded?.[def.id],
       // The detail artefacts Discover folds behind its Expand toggles (panels, queries, live evidence), shown on demand.
       detailOpen: !!expanded?.[`${def.id}/detail`],
@@ -989,33 +991,83 @@ export function paramSubgroup(row) {
 }
 
 /**
- * The clauses a section holds up — what switching it off drops: the slab(s) the section
- * feeds (SECTION_SLABS, L4 per subgroup), narrowed where a slab carries more than the
- * section — dashboards off leaves the recording rules and the derived views (measured:
- * exactly the two dashboard clauses fail at tier-2), validation off leaves the baselines'
- * release gate.
+ * The clauses a section's absence can fail — its scope: the clauses of the slab(s) it feeds
+ * (L4 per subgroup), narrowed where a slab carries more than the section (dashboards off
+ * leaves the recording rules and the derived views, validation off leaves the baselines'
+ * release gate), and for SLOs everything that references an SLO elsewhere: the policy
+ * (dropped with them) and the chaos experiments, whose steady-state hypothesis is an SLO.
  */
-const SECTION_CLAUSE_FILTER = { dashboards: /dashboard/, validation: /probe|chaos|synthetic/ };
+const SECTION_SCOPE = {
+  slos: (c) => c.dimension === 'L1' || (c.dimension === 'L4' && clauseSubgroup(c.id) === 'policy') || (c.dimension === 'L5' && /chaos/.test(String(c.id))),
+  policy: (c) => c.dimension === 'L4' && clauseSubgroup(c.id) === 'policy',
+  routes: (c) => c.dimension === 'L4' && clauseSubgroup(c.id) === 'alerting',
+  dashboards: (c) => c.dimension === 'L3' && /dashboard/.test(String(c.id)),
+  validation: (c) => c.dimension === 'L5' && /probe|chaos|synthetic/.test(String(c.id)),
+};
+/**
+ * Clauses quantified per SLO ("each SLO has …"): with no SLO to check they hold, so SLOs
+ * off is not expected to drop them. Measured against tools/lib/conformance.mjs at every
+ * tier (tools/test-build-model.mjs instantiates with each section off and compares): the
+ * burn-alert clause and the chaos-per-SLO clause keep passing with SLOs off, while the
+ * availability / latency / domain SLO clauses, the forecast and the staging / weekly chaos fail.
+ */
+const VACUOUS_WITHOUT_SLOS = new Set(['L4.MUST.multi_window_burn_rate', 'L5.MUST.tier1_chaos_for_each_slo']);
+const evaluated = (clauses) => (clauses || []).some(c => c.state && c.state !== 'pending');
+
+/** The clauses a section off is expected to drop — its scope minus what holds vacuously. */
 export function sectionClauses(section, clauses) {
-  const slabs = SECTION_SLABS[section] || [];
-  const narrow = SECTION_CLAUSE_FILTER[section];
-  return (clauses || []).filter(c => slabs.some(([l, sg]) => c.dimension === l && (sg === null || clauseSubgroup(c.id) === sg)) && (!narrow || narrow.test(String(c.id))));
+  const inScope = SECTION_SCOPE[section];
+  if (!inScope) return [];
+  return (clauses || []).filter(c => inScope(c) && !(section === 'slos' && VACUOUS_WITHOUT_SLOS.has(c.id)));
 }
 
-/** One section switch as the sheet draws it: its state, whether it is meaningful, and the consequence of switching it off in one line. */
+/**
+ * What a section off actually dropped: the clauses in its scope the checklist marks failing —
+ * the engine's answer, never a prediction. Before the engine has answered (no clause carries
+ * a state yet) the expectation stands in.
+ */
+export function sectionDrops(section, clauses) {
+  const inScope = SECTION_SCOPE[section];
+  if (!inScope) return [];
+  if (!evaluated(clauses)) return sectionClauses(section, clauses);
+  return (clauses || []).filter(c => inScope(c) && c.state === 'fail');
+}
+
+/** A head chip for a slab that fails because of a section switched off elsewhere (SLOs off: the chaos experiments have no SLO to test). */
+const SECTION_NOTE = { slos: 'no SLO to test' };
+export function sectionNotes(clauses, toggles, offSections = []) {
+  const failing = (sec) => (clauses || []).filter(c => c.state === 'fail' && SECTION_SCOPE[sec](c));
+  return Object.keys(SECTION_SCOPE)
+    .filter(sec => toggles?.[sec] === false && !offSections.includes(sec) && failing(sec).length)
+    .map(sec => {
+      const labels = failing(sec).map(c => clauseGhostLabel(c.id));
+      const def = SECTION_TOGGLES.find(t => t.id === sec);
+      return { section: sec, text: SECTION_NOTE[sec] || `${sec} off`, why: `${def?.label || sec} off — ${labels.join(', ')} ${labels.length === 1 ? 'fails' : 'fail'} without it` };
+    });
+}
+
+/**
+ * One section switch as the sheet draws it: its state, whether it is meaningful, and its
+ * consequence in one line — while on, what switching it off is expected to drop
+ * (`expected`); once off, what the engine actually failed among those (`drops`, from the
+ * checklist), so the line never disagrees with the stack.
+ */
 export function sectionSwitch(section, build, clauses) {
   const def = SECTION_TOGGLES.find(t => t.id === section) || { id: section, label: section, hint: '' };
   // Policy without SLOs is meaningless: the engine drops it, so the switch reads off, and cannot be flipped.
   const disabled = section === 'policy' && build?.toggles?.slos === false;
   const on = !disabled && build?.toggles?.[section] !== false;
-  const drops = sectionClauses(section, clauses).map(c => ({ id: c.id, label: clauseGhostLabel(c.id), severity: c.severity, state: c.state || null }));
+  const row = (c) => ({ id: c.id, label: clauseGhostLabel(c.id), severity: c.severity, state: c.state || null });
+  const expected = sectionClauses(section, clauses).map(row);
+  const measured = !on && evaluated(clauses);
+  const drops = on ? expected : sectionDrops(section, clauses).map(row);
   const labels = drops.map(d => d.label).join(', ');
   let consequence;
-  if (section === 'slos') consequence = `off also drops the burn alerts (policy)${drops.length ? ` — ${plural(drops.length, 'clause')} go with it: ${labels}` : ''}`;
-  else if (disabled) consequence = 'meaningless without SLOs — dropped with them';
-  else if (drops.length) consequence = `off drops ${plural(drops.length, 'clause')} of the tier: ${labels}`;
-  else consequence = 'no clause of the tier rests on it — the section is still absent from the pack when off';
-  return { id: section, label: def.label, hint: def.hint, on, disabled, consequence, drops, focusKey: `toggle:${section}` };
+  if (disabled) consequence = 'meaningless without SLOs — dropped with them';
+  else if (on) consequence = drops.length ? `off is expected to drop ${plural(drops.length, 'clause')} of the tier: ${labels}` : 'no clause of the tier rests on it — the section is still absent from the pack when off';
+  else if (!measured) consequence = drops.length ? `off — expected to drop ${plural(drops.length, 'clause')} of the tier: ${labels}` : 'off — no clause of the tier rests on it; the section is absent from the pack';
+  else consequence = drops.length ? `off — ${plural(drops.length, 'clause')} fail${drops.length === 1 ? 's' : ''} with it: ${labels}` : 'off — no clause of the tier fails with it; the section is absent from the pack';
+  return { id: section, label: def.label, hint: def.hint, on, disabled, consequence, drops, expected, measured, focusKey: `toggle:${section}` };
 }
 
 /**
@@ -1164,7 +1216,7 @@ export function buildSheetModel({ layerId, build, library, requirements = [], st
   });
   const slab = stackModel.slabs.find(s => s.id === layerId) || {
     id: layerId, num: def.num, name: def.name, state: 'neutral', stateText: 'no clause applies', why: [], clauses: [], artefacts: [], ghosts: [], todos: [],
-    counts: { artefacts: 0, scaffold: 0, verified: 0, detail: 0, ghosts: 0, todos: 0, clauses: 0 }, maturity: { total: 0, pass: 0, placeholder: 0, fail: 0, pending: 0 }, dimmed: false, offSections: [], subgroups: null,
+    counts: { artefacts: 0, scaffold: 0, verified: 0, detail: 0, ghosts: 0, todos: 0, clauses: 0 }, maturity: { total: 0, pass: 0, placeholder: 0, fail: 0, pending: 0 }, dimmed: false, offSections: [], notes: [], subgroups: null,
   };
   const layerParams = params.filter(p => paramLayer(p) === layerId);
   const groupsFor = () => {
@@ -1198,7 +1250,7 @@ export function buildSheetModel({ layerId, build, library, requirements = [], st
   return {
     layerId, num: slab.num, name: slab.name, title: `${slab.num} · ${slab.name}`, question: LAYER_QUESTIONS[layerId] || '',
     mode, readOnly: mode !== 'edit', compose: mode === 'preview', step: build?.step || null, tier: build?.tier || null,
-    state: slab.state, stateText: slab.stateText, why: slab.why || [], dimmed: !!slab.dimmed, offSections: slab.offSections || [],
+    state: slab.state, stateText: slab.stateText, why: slab.why || [], dimmed: !!slab.dimmed, offSections: slab.offSections || [], notes: slab.notes || [],
     clauses, counts: { ...slab.counts, clauses: slab.maturity },
     switches, rolodex, paramGroups: groupsFor(), lists, compiled,
     todos: mode === 'verify' ? (slab.todos || []) : [],

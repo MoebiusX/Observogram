@@ -33,7 +33,7 @@ import {
   placeholdersRemaining, groupTodos, buildVerifyModel, reachableSliKeys, retargetSlis, splitBuildErrors, isStale, resolveBuiltins,
   buildStackModel, sliCandidates, artefactSymbol, todoLayer, clauseGhostLabel, clauseSubgroup, slabState, isDetailArtefact, CLAUSE_GHOSTS,
   todoFocusSuffix, focusFallbackSelectors, enterStep, stepAfterInstantiate,
-  buildDefinitionModel, buildSheetModel, rolodexItems, addSliSelection, paramLayer, paramSubgroup, sectionClauses, sectionSwitch, sheetLists,
+  buildDefinitionModel, buildSheetModel, rolodexItems, addSliSelection, paramLayer, paramSubgroup, sectionClauses, sectionDrops, sectionNotes, sectionSwitch, sheetLists,
   sheetModeFor, stackExpanded, sheetFocusSuffix, LAYER_QUESTIONS, LAYER_SWITCHES,
 } from '../studio/build-model.mjs';
 import {
@@ -1319,24 +1319,85 @@ test('paramLayer places every param of the drive on one sheet; sectionClauses na
   assert.deepEqual(rows.filter(p => paramSubgroup(p) === 'healing').map(p => p.key), ['runbook_dir']);
   assert.equal(paramLayer(null), 'L2');
   // What each section holds up at tier-2 — the consequence a switch states.
-  const ids = (s) => sectionClauses(s, T2).map(c => c.id);
-  assert.deepEqual(ids('slos'), ['L1.MUST.availability_slo', 'L1.MUST.latency_slo', 'L1.MUST.sli_covered_by_slo', 'L4.MUST.multi_window_burn_rate']);
+  const ids = (s, req = T2) => sectionClauses(s, req).map(c => c.id);
+  // SLOs off: the L1 clauses and the chaos in staging (its steady-state hypothesis is an SLO) — not the burn-alert clause, which is quantified per SLO and holds with none.
+  assert.deepEqual(ids('slos'), ['L1.MUST.availability_slo', 'L1.MUST.latency_slo', 'L1.MUST.sli_covered_by_slo', 'L5.MUST.tier2_chaos_staging']);
+  assert.deepEqual(ids('slos', REQUIREMENTS['tier-3']), ['L1.MUST.availability_slo', 'L1.MUST.sli_covered_by_slo']);
+  assert.deepEqual(ids('slos', REQUIREMENTS['tier-1']), ['L1.MUST.availability_slo', 'L1.MUST.latency_slo', 'L1.SHOULD.domain_slo', 'L1.MUST.sli_covered_by_slo', 'L4.SHOULD.forecast_on_availability', 'L5.MUST.tier2_chaos_staging', 'L5.MUST.tier1_weekly_prod_chaos'], 'tier-1: the forecast and the weekly chaos too; chaos-per-SLO holds with no SLO');
   assert.deepEqual(ids('policy'), ['L4.MUST.multi_window_burn_rate']);
   assert.deepEqual(ids('routes'), [], 'no route clause below tier-1 (the SEV1 voice route is tier-1)');
   assert.deepEqual(ids('dashboards'), ['L3.MUST.service_overview_dashboard', 'L3.MUST.slo_burn_dashboard'], 'the recording rules and the derived view stay when dashboards go');
   assert.deepEqual(ids('validation'), ['L5.MUST.synthetic_probe', 'L5.MUST.tier2_chaos_staging']);
   assert.deepEqual(ids('dashboards'), DASHBOARDS_OFF_SUMMARY.failing.map(f => f.id), 'what the switch says it drops is what the engine reports failing');
   assert.equal(sectionClauses('routes', REQUIREMENTS['tier-1']).map(c => c.id).join(), 'L4.MUST.tier1_voice_route');
-  // The switch model: state, the consequence in one line, disabled when meaningless.
+  assert.deepEqual(sectionClauses('nope', T2), []);
+  // The switch model: state, the consequence in one line (an expectation while on), disabled when meaningless.
   const on = defaultBuildState();
   const slos = sectionSwitch('slos', on, T2);
-  assert.deepEqual([slos.id, slos.label, slos.on, slos.disabled, slos.focusKey], ['slos', 'SLOs', true, false, 'toggle:slos']);
-  assert.equal(slos.consequence, 'off also drops the burn alerts (policy) — 4 clauses go with it: availability SLO, latency SLO, every SLI under an SLO, multi-window burn alerts');
-  assert.equal(sectionSwitch('dashboards', on, T2).consequence, 'off drops 2 clauses of the tier: service overview board, SLO burn board');
+  assert.deepEqual([slos.id, slos.label, slos.on, slos.disabled, slos.measured, slos.focusKey], ['slos', 'SLOs', true, false, false, 'toggle:slos']);
+  assert.equal(slos.consequence, 'off is expected to drop 4 clauses of the tier: availability SLO, latency SLO, every SLI under an SLO, chaos in staging');
+  assert.deepEqual(slos.expected, slos.drops);
+  assert.equal(sectionSwitch('dashboards', on, T2).consequence, 'off is expected to drop 2 clauses of the tier: service overview board, SLO burn board');
   assert.equal(sectionSwitch('routes', on, T2).consequence, 'no clause of the tier rests on it — the section is still absent from the pack when off');
   const noSlos = { ...on, toggles: { ...on.toggles, slos: false } };
   assert.deepEqual([sectionSwitch('policy', noSlos, T2).disabled, sectionSwitch('policy', noSlos, T2).consequence], [true, 'meaningless without SLOs — dropped with them']);
-  assert.equal(sectionSwitch('dashboards', { ...on, toggles: { ...on.toggles, dashboards: false } }, T2).on, false);
+  const dashOff = { ...on, toggles: { ...on.toggles, dashboards: false } };
+  const pendingOff = sectionSwitch('dashboards', dashOff, T2);
+  assert.deepEqual([pendingOff.on, pendingOff.measured, pendingOff.consequence], [false, false, 'off — expected to drop 2 clauses of the tier: service overview board, SLO burn board'], 'off before the engine answered: still an expectation');
+  const measuredOff = sectionSwitch('dashboards', dashOff, buildClauseChecklist(T2, DASHBOARDS_OFF_SUMMARY).items.map(i => ({ ...T2.find(c => c.id === i.id), state: i.state })));
+  assert.deepEqual([measuredOff.measured, measuredOff.consequence], [true, 'off — 2 clauses fail with it: service overview board, SLO burn board'], 'off and evaluated: the engine\'s set');
+  assert.equal(sectionSwitch('routes', { ...on, toggles: { ...on.toggles, routes: false } }, buildClauseChecklist(T2, FIXTURE.summary).items.map(i => ({ ...T2.find(c => c.id === i.id), state: i.state }))).consequence, 'off — no clause of the tier fails with it; the section is absent from the pack');
+});
+
+// The engine with one section off at a time: what the switch says it drops must be what
+// tools/lib/conformance.mjs actually fails — the same in-process instantiation the fixture uses.
+test('a section switched off says exactly what the engine fails — every section at tier-2, SLOs at every tier; L5 says "no SLO to test"', () => {
+  const engineFailing = (tier, section) => instantiateInProcess({ ...INPUTS, tier, toggles: { [section]: false } }).summary.failing.map(f => f.id).sort();
+  const stackWith = (tier, section, res) => {
+    const req = REQUIREMENTS[tier];
+    const toggles = { ...defaultBuildState().toggles, [section]: false };
+    return buildStackModel({ adapted: res.adapted, requirements: req, checklist: buildClauseChecklist(req, res.summary), todos: res.todos, params: [], mode: 'compile', toggles });
+  };
+  for (const section of SECTION_TOGGLES.map(t => t.id)) {
+    const res = instantiateInProcess({ ...INPUTS, toggles: { [section]: false } });
+    const failing = res.summary.failing.map(f => f.id).sort();
+    assert.deepEqual(sectionClauses(section, T2).map(c => c.id).sort(), failing, `${section}: the expectation stated while on is the engine's failing set`);
+    const stack = stackWith('tier-2', section, res);
+    const tierClauses = stack.slabs.flatMap(s => s.clauses);
+    const sw = sectionSwitch(section, { toggles: { [section]: false } }, tierClauses);
+    assert.deepEqual([sw.on, sw.measured], [false, true]);
+    assert.deepEqual(sw.drops.map(d => d.id).sort(), failing, `${section}: the consequence stated while off is the engine's failing set`);
+    assert.deepEqual(sectionDrops(section, tierClauses).map(c => c.id).sort(), failing);
+  }
+  // SLOs off in detail: the burn-alert clause keeps passing (quantified per SLO), L5's chaos in staging fails; the switch, the slab chip and the sheet say so.
+  const res = instantiateInProcess({ ...INPUTS, toggles: { slos: false } });
+  const failing = res.summary.failing.map(f => f.id);
+  assert.deepEqual(failing, ['L1.MUST.availability_slo', 'L1.MUST.latency_slo', 'L1.MUST.sli_covered_by_slo', 'L5.MUST.tier2_chaos_staging']);
+  assert.ok(res.summary.passing.includes('L4.MUST.multi_window_burn_rate'), 'the engine passes the burn-alert clause with no SLO to alert on');
+  const stack = stackWith('tier-2', 'slos', res);
+  const tierClauses = stack.slabs.flatMap(s => s.clauses);
+  const sw = sectionSwitch('slos', { toggles: { ...defaultBuildState().toggles, slos: false } }, tierClauses);
+  assert.equal(sw.consequence, 'off — 4 clauses fail with it: availability SLO, latency SLO, every SLI under an SLO, chaos in staging');
+  assert.ok(!sw.drops.some(d => d.id === 'L4.MUST.multi_window_burn_rate'));
+  const by = Object.fromEntries(stack.slabs.map(s => [s.id, s]));
+  assert.deepEqual([by.L1.dimmed, by.L1.offSections, by.L1.state], [true, ['slos'], 'fail']);
+  assert.deepEqual([by.L4.dimmed, by.L4.offSections, by.L4.state, by.L4.notes], [true, ['slos'], 'pass', []], 'L4 dims with the policy; its clause holds vacuously');
+  assert.deepEqual([by.L5.dimmed, by.L5.offSections, by.L5.state], [false, [], 'fail']);
+  assert.deepEqual(by.L5.notes, [{ section: 'slos', text: 'no SLO to test', why: 'SLOs off — chaos in staging fails without it' }], 'the L5 head explains a failure that stems from SLOs off');
+  assert.deepEqual(sectionNotes(by.L5.clauses, { slos: true }), [], 'no note while SLOs are on');
+  assert.deepEqual(sectionNotes(by.L5.clauses, { slos: false, validation: false }, ['validation']), [{ section: 'slos', text: 'no SLO to test', why: 'SLOs off — chaos in staging fails without it' }], 'a section that already dims the slab is not repeated as a note');
+  const stackHtml = buildStackHtml(stack);
+  assert.ok(stackHtml.includes('<span class="build-slab-off build-slab-note" title="SLOs off — chaos in staging fails without it">no SLO to test</span>'));
+  assert.equal((stackHtml.match(/build-slab-note/g) || []).length, 1, 'the note is on L5 only');
+  const b = draft({ toggles: { ...defaultBuildState().toggles, slos: false }, result: { ...draft().result, summary: res.summary, adapted: res.adapted, todos: res.todos } });
+  const l5 = buildSheetModel({ layerId: 'L5', build: b, library: LIBRARY, requirements: T2, stack, mode: 'edit' });
+  assert.deepEqual(l5.notes, by.L5.notes);
+  assert.ok(buildSheetHtml(l5).includes('title="SLOs off — chaos in staging fails without it">no SLO to test</span>'));
+  const l1 = buildSheetModel({ layerId: 'L1', build: b, library: LIBRARY, requirements: T2, stack, mode: 'edit' });
+  assert.equal(l1.switches[0].consequence, sw.consequence);
+  assert.ok(buildSheetHtml(l1).includes('<span class="build-switch-consequence is-off">off — 4 clauses fail with it: availability SLO, latency SLO, every SLI under an SLO, chaos in staging</span>'));
+  // SLOs at the other tiers: the expectation is the engine's set there too.
+  for (const tier of ['tier-3', 'tier-1']) assert.deepEqual(sectionClauses('slos', REQUIREMENTS[tier]).map(c => c.id).sort(), engineFailing(tier, 'slos'), `slos at ${tier}`);
 });
 
 test('buildSheetModel: per layer the title and its question, the clauses with their state, the switches, the params, the lists read from the pack', () => {
@@ -1374,7 +1435,7 @@ test('buildSheetModel: per layer the title and its question, the clauses with th
   assert.deepEqual(l2.todos, [], 'edit mode draws no todo (they are filled on Verify)');
   // L3: the Dashboards switch and its consequence; boards, views, rules.
   const l3 = sheet('L3');
-  assert.deepEqual(l3.switches.map(s => [s.id, s.on, s.consequence]), [['dashboards', true, 'off drops 2 clauses of the tier: service overview board, SLO burn board']]);
+  assert.deepEqual(l3.switches.map(s => [s.id, s.on, s.consequence]), [['dashboards', true, 'off is expected to drop 2 clauses of the tier: service overview board, SLO burn board']]);
   assert.deepEqual(l3.lists.map(l => [l.id, l.items.length]), [['boards', 4], ['views', 5], ['rules', 7]]);
   assert.deepEqual(l3.lists[0].items.map(i => i.title), ['orders-api-overview', 'orders-api-slo-burn', 'kafka-kafka-consumer-lag', 'kafka-kafka-throughput']);
   assert.deepEqual(l3.lists[0].items[0].meta, ['14 bindings']);
@@ -1394,7 +1455,7 @@ test('buildSheetModel: per layer the title and its question, the clauses with th
   assert.deepEqual([noSlos.switches[0].disabled, noSlos.switches[0].on], [true, false], 'policy is meaningless without SLOs: disabled, and off with them');
   // L5: the Validation switch; probes, chaos, baselines; the target params.
   const l5 = sheet('L5');
-  assert.deepEqual(l5.switches.map(s => [s.id, s.consequence]), [['validation', 'off drops 2 clauses of the tier: synthetic probe, chaos in staging']]);
+  assert.deepEqual(l5.switches.map(s => [s.id, s.consequence]), [['validation', 'off is expected to drop 2 clauses of the tier: synthetic probe, chaos in staging']]);
   assert.deepEqual(l5.lists.map(l => [l.id, l.items.length]), [['probes', 3], ['chaos', 2], ['baselines', 1]]);
   assert.deepEqual(l5.lists[0].items[0].meta, ['k6', 'kafka.kafka:9092', 'every 1m', 'SEV2']);
   assert.deepEqual(l5.lists[1].items[0].meta, ['chaos-mesh', 'on kafka-broker', 'pod-failure', 'monthly', 'staging', 'MTTD 90s']);
@@ -1461,7 +1522,7 @@ test('renderBuildSheet draws the dialog headlessly: the ARIA, the title and ques
   assert.ok(l1.includes('1 / 10'));
   // The SLOs switch with its consequence in one line.
   assert.ok(l1.includes('role="switch" class="build-switch" aria-checked="true" aria-label="SLOs section" data-focus-key="toggle:slos" data-toggle="slos"'));
-  assert.ok(l1.includes('off also drops the burn alerts (policy) — 4 clauses go with it'));
+  assert.ok(l1.includes('off is expected to drop 4 clauses of the tier: availability SLO, latency SLO, every SLI under an SLO, chaos in staging'));
   assert.ok(!l1.includes('data-compose'), 'no compose action on COMPILE');
   // Every product: a foreign card is dashed, its switch says it selects the product.
   const all = html('L1', 'edit', draft({ rolodexAll: true }));
@@ -1479,7 +1540,7 @@ test('renderBuildSheet draws the dialog headlessly: the ARIA, the title and ques
   const off = html('L3', 'edit', draft({ toggles: { ...defaultBuildState().toggles, dashboards: false }, result: { ...draft().result, summary: DASHBOARDS_OFF_SUMMARY } }));
   assert.ok(off.includes('class="build-sheet is-edit is-fail is-dimmed"') && off.includes('<span class="build-slab-off">dashboards off</span>'));
   assert.ok(off.includes('aria-checked="false" aria-label="Dashboards section"'));
-  assert.ok(off.includes('<span class="build-switch-consequence is-off">off — drops 2 clauses of the tier: service overview board, SLO burn board</span>'));
+  assert.ok(off.includes('<span class="build-switch-consequence is-off">off — 2 clauses fail with it: service overview board, SLO burn board</span>'), 'off and evaluated: the engine\'s failing set, not a prediction');
   assert.equal((off.match(/<li class="build-rail-clause is-fail"/g) || []).length, 2);
   // L4: two switches, the channel params, the routes list.
   const l4 = html('L4');

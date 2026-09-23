@@ -61,7 +61,7 @@ function switchRowHtml(s, model) {
       <div class="build-switch-text">
         <span class="build-switch-label" id="build-switch-${escapeHtml(s.id)}">${escapeHtml(s.label)}</span>
         <span class="build-switch-hint">${escapeHtml(s.hint)}</span>
-        <span class="build-switch-consequence${s.on ? '' : ' is-off'}">${escapeHtml(s.on ? s.consequence : `off — ${s.consequence.replace(/^off /, '')}`)}</span>
+        <span class="build-switch-consequence${s.on ? '' : ' is-off'}">${escapeHtml(s.consequence)}</span>
       </div>
       ${switchHtml({ on: s.on, disabled: s.disabled || readOnly, reason: s.disabled ? 'meaningless without SLOs' : readOnly ? READ_ONLY_REASON[model.mode] : null, label: `${s.label} section`, focusKey: s.focusKey, data: { toggle: s.id } })}
     </div>`;
@@ -169,6 +169,7 @@ export function buildSheetHtml(model) {
         <div class="build-sheet-verdict">
           <span class="build-slab-verdict is-${escapeHtml(model.state)}"><b aria-hidden="true">${STATE_GLYPH[model.state]}</b> ${escapeHtml(model.stateText)}</span>
           ${model.offSections.map(s => `<span class="build-slab-off">${escapeHtml(s)} off</span>`).join('')}
+          ${model.notes.map(n => `<span class="build-slab-off build-slab-note" title="${escapeHtml(n.why)}">${escapeHtml(n.text)}</span>`).join('')}
           ${model.counts.artefacts ? `<span class="build-sheet-artefacts">${plural(model.counts.artefacts, 'artefact')}${model.counts.scaffold ? ` · ${model.counts.scaffold} scaffold` : ''}</span>` : ''}
         </div>
       </header>

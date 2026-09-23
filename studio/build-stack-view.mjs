@@ -137,6 +137,7 @@ function slabHtml(slab, mode) {
           <span class="section-name">${escapeHtml(slab.name)}</span>
           <span class="build-slab-verdict is-${slab.state}"><b aria-hidden="true">${STATE_GLYPH[slab.state]}</b> ${escapeHtml(slab.stateText)}</span>
           ${slab.offSections.length && !slab.subgroups ? `<span class="build-slab-off">${slab.offSections.map(s => `${escapeHtml(s)} off`).join(' · ')}</span>` : ''}
+          ${(slab.notes || []).map(n => `<span class="build-slab-off build-slab-note" title="${escapeHtml(n.why)}">${escapeHtml(n.text)}</span>`).join('')}
           <span class="build-slab-toggle">${escapeHtml(question)}</span>
         </button>
         ${detail}
