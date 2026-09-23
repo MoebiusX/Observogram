@@ -505,8 +505,13 @@ and the cards, a translucent sheet surface (`backdrop-filter: blur(20px) saturat
 over the card colour, a solid `--card` where unsupported), soft layered shadows, hairline
 separators, real switches with a sliding knob, a segmented control with a sliding thumb, a
 large title + subtitle in the sheet, one accent per layer (the layer token) used sparingly
-— the sheet's border and accent bar, the on-state of its switches, its ids — the studio's
-sans for controls and the mono for ids, 200 ms ease-out motion for the sheet's entrance
+— the sheet's border and accent bar, the on-state of its switches, its ids (as text — the
+eyebrow, the ids, a selected card's state — the accent is mixed 65 % towards ink,
+`--accent-text`, so a 10 px id clears WCAG AA in every layer and both themes; the raw light
+L1 amber reads 3.3:1); text at or below 12 px on the column and the sheet is `--ink-3`
+(`--ink-4` reads 4.27:1 on the dark card), `--ink-5` is never a text colour there, and the
+test computes every text colour of the block against its surface from the tokens — the
+studio's sans for controls and the mono for ids, 200 ms ease-out motion for the sheet's entrance
 (on the render that opens it only — `is-entering`, a one-shot the controller sets in
 `openSheet`; a re-render while it stays open rebuilds the panel without the class and never
 replays the slide), the thumb, the knob and the cards, with `prefers-reduced-motion`

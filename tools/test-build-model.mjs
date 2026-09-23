@@ -1707,8 +1707,8 @@ test('the stylesheet carries the language: the translucent sheet with a solid fa
   assert.ok(reduced.includes('scroll-behavior: auto'));
   // No colour literal beyond the theme tokens and the shadows' neutral rgba in the new block (both themes follow).
   const axis = CSS_TEXT.slice(CSS_TEXT.indexOf('==== The axis'));
-  const literals = [...axis.matchAll(/#[0-9a-fA-F]{3,6}\b/g)].map(m => m[0]).filter(h => !['#fff', '#64748B', '#0891b2', '#db2777', '#0d9488'].includes(h));
-  assert.deepEqual(literals, [], 'the axis styles use the tokens (white knobs, the Scaffold grey and the step accents\' fallbacks aside)');
+  const literals = [...axis.matchAll(/#[0-9a-fA-F]{3,6}\b/g)].map(m => m[0]).filter(h => !['#fff', '#0891b2', '#db2777', '#0d9488'].includes(h));
+  assert.deepEqual(literals, [], 'the axis styles use the tokens (white knobs and the step accents\' fallbacks aside)');
   assert.ok(/\[data-theme="dark"\] \.build-sheet \{/.test(axis) && /\[data-theme="dark"\] \.build-chip\.is-selected/.test(axis), 'the dark theme adjusts the shadows and the chip fill');
 });
 
@@ -1819,4 +1819,50 @@ test('the rolodex moves one card by the buttons and the arrow keys — instantly
   await wait();
   assert.equal(stuck.track.scrollLeft, 0, 'never below zero, and no write when the target is where the track already is');
   assert.equal(stuck.calls.length, 2, 'a scroll to the current offset is not issued');
+});
+
+test('the sheet and the definition column read at WCAG AA in both themes: every text colour of the axis block against its surface, the accent mixed towards ink for text', () => {
+  const tokensOf = (block) => { const m = CSS_TEXT.match(new RegExp(`(?:^|\\n)${block}\\s*\\{([\\s\\S]*?)\\n\\}`)); assert.ok(m, `${block} token block`); return Object.fromEntries([...m[1].matchAll(/--([\w-]+):\s*(#[0-9a-fA-F]{6})\b/g)].map(t => [t[1], t[2]])); };
+  const themes = {
+    light: { ...tokensOf(':root'), chrome: tokensOf('html\\[data-theme="light"\\] body\\.chrome-observa')['obs-bg'] },
+    dark: { ...tokensOf('\\[data-theme="dark"\\]'), chrome: tokensOf('body\\.chrome-observa')['obs-bg'] },
+  };
+  const lum = (hex) => { const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(v => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const contrast = (a, b) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+  // color-mix(in srgb, A p%, B): a per-channel blend of the gamma-encoded values.
+  const mix = (a, b, p) => '#' + [1, 3, 5].map(i => Math.round(parseInt(a.slice(i, i + 2), 16) * p + parseInt(b.slice(i, i + 2), 16) * (1 - p)).toString(16).padStart(2, '0')).join('');
+  const LAYERS = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'];
+  const axis = CSS_TEXT.slice(CSS_TEXT.indexOf('==== The axis'));
+  const rules = [...axis.matchAll(/(?:^|\n)([^@{}\n][^{}]*?)\s*\{([^{}]*)\}/g)].map(m => ({ sel: m[1].trim(), body: m[2] }));
+  assert.ok(rules.length > 100, `the axis block parsed (${rules.length} rules)`);
+  const sizeOf = (body) => { const m = body.match(/font(?:-size)?:[^;]*?(\d+(?:\.\d+)?)px/); return m ? Number(m[1]) : null; };
+  const weightOf = (body) => Number(body.match(/font:\s*(?:italic\s+)?(\d{3})\s/)?.[1] || 400);
+  const large = (body) => { const s = sizeOf(body); return s != null && (s >= 18.66 || (s >= 14 && weightOf(body) >= 700)); };
+  const offenders = [];
+  for (const r of rules) {
+    if (/\.build-evidence-dot/.test(r.sel)) continue;                 // a dot: its color feeds the currentColor halo, not text
+    if (/\.build-slab-add|\.build-rolodex-nav/.test(r.sel)) continue; // glyph buttons (+ ‹ ›), not text
+    const min = large(r.body) ? 3 : 4.5;
+    const check = (label, colour, surface, name) => { const ratio = contrast(colour, surface); if (ratio < min) offenders.push(`${r.sel}: ${label} ${ratio.toFixed(2)}:1 (${name}, needs ${min})`); };
+    const tok = r.body.match(/(?:^|[;{\s])color:\s*var\(--(ink-[1-5]|accent|accent-text|warn|fail-border|pass-border|crit-tier-[1-3]|BLD-text)\)/)?.[1];
+    const mixed = r.body.match(/(?:^|[;{\s])color:\s*color-mix\(in srgb, var\(--([\w-]+)\) (\d+)%, var\(--ink\)\)/);
+    if (!tok && !mixed) continue;
+    for (const [name, t] of Object.entries(themes)) {
+      if (mixed) { check(`mix(--${mixed[1]})`, mix(t[mixed[1]], t.ink, Number(mixed[2]) / 100), t.card, name); continue; }
+      if (tok === 'accent' || tok === 'accent-text') { for (const L of LAYERS) check(`${tok} ${L}`, tok === 'accent' ? t[L] : mix(t[L], t.ink, 0.65), t.card, name); continue; }
+      // The neutrals sit on the card (the sheet, the chips, the summary), the chrome (the column) and --line-2 (the segmented control).
+      const surfaces = /^ink-/.test(tok) ? { card: t.card, chrome: t.chrome, 'line-2': t['line-2'] } : { card: t.card };
+      for (const [s, hex] of Object.entries(surfaces)) check(`--${tok} on ${s}`, t[tok], hex, name);
+    }
+  }
+  assert.deepEqual(offenders, [], 'every text colour the axis block names clears AA on its surface');
+  // The accent as text is the 65 % mix (the raw light L1 amber is 3.4:1 on the card); the eyebrow, the ids and a selected card's state use it.
+  assert.ok(/\.build-slab, \.build-sheet \{ --accent-text: color-mix\(in srgb, var\(--accent\) 65%, var\(--ink\)\); \}/.test(axis));
+  for (const sel of ['.build-sheet-eyebrow', '.build-sheet-item-id', '.build-rolo-type', '.build-rolo-card.is-selected .build-rolo-state']) assert.match(cssRule(sel), /color:\s*var\(--accent-text\)/, `${sel} is accent text`);
+  assert.ok(contrast(themes.light.L1, themes.light.card) < 4.5 && contrast(themes.dark['ink-4'], themes.dark.card) < 4.5, 'the ratios the review measured, for the record');
+  // The shared rows the sheet draws (the clause row, the param rows, the todos) hold the same bar.
+  assert.match(cssRule('.build-rail-id'), /font:\s*11px[^;]*;\s*color:\s*var\(--ink-3\)/, 'the clause id is 11 px --ink-3, not 9.5 px --ink-5');
+  for (const sel of ['.build-param-key', '.build-param-desc', '.build-todo-manual', '.build-slab-todos-head', '.build-rail-clause.is-pending .build-rail-glyph', '.build-rail-clause.is-pending .build-rail-desc']) assert.match(cssRule(sel), /color:\s*var\(--ink-3\)/, `${sel} is --ink-3`);
+  assert.match(cssRule('.build-todo-card'), /color:\s*var\(--accent-text, var\(--ink-3\)\)/);
+  assert.ok(!/color:\s*var\(--ink-5\)/.test(axis.replace(/\.build-evidence-dot[^\n]*/g, '')), '--ink-5 is never a text colour on the axis (the dot aside)');
 });

@@ -8289,10 +8289,10 @@ body.chrome-observa .disco {
 .build-param.is-placeholder.is-set { border-left-color: var(--pass-border); }
 .build-param-label { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; cursor: pointer; }
 .build-param-name { font: 600 12px/1.3 var(--sans); color: var(--ink); }
-.build-param-key { font: 10.5px/1.3 var(--mono); color: var(--ink-5); }
+.build-param-key { font: 10.5px/1.3 var(--mono); color: var(--ink-3); }
 .build-param-flag { margin-left: auto; font: 600 9px/1.3 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--warn); }
 .build-param.is-set .build-param-flag { color: var(--pass-border); }
-.build-param-desc { font: italic 11px/1.45 var(--serif); color: var(--ink-4); }
+.build-param-desc { font: italic 11px/1.45 var(--serif); color: var(--ink-3); }
 .build-param-input::placeholder { color: var(--ink-5); font-style: italic; }
 /* A value the engine refused: the row carries the reason, the flag says so, the input is marked invalid. */
 .build-param.is-error, .build-param.is-placeholder.is-error { border-color: var(--error-border); border-left: 3px solid var(--error-border); }
@@ -8323,11 +8323,12 @@ body.chrome-observa .disco {
 .build-rail-clause.is-pass .build-rail-glyph { color: var(--pass-border); }
 .build-rail-clause.is-placeholder .build-rail-glyph { color: var(--warn); }
 .build-rail-clause.is-fail .build-rail-glyph { color: var(--fail-border); }
-.build-rail-clause.is-pending .build-rail-glyph { color: var(--ink-5); }
+.build-rail-clause.is-pending .build-rail-glyph { color: var(--ink-3); }
 .build-rail-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .build-rail-desc { font: 11px/1.35 var(--sans); color: var(--ink-2); }
-.build-rail-clause.is-pending .build-rail-desc { color: var(--ink-4); }
-.build-rail-id { font: 9.5px/1.4 var(--mono); color: var(--ink-5); word-break: break-all; }
+.build-rail-clause.is-pending .build-rail-desc { color: var(--ink-3); }
+/* 11 px --ink-3: the row is drawn on the sheet and the summary now; the 9.5 px --ink-5 id read 2.4–2.5:1. */
+.build-rail-id { font: 11px/1.4 var(--mono); color: var(--ink-3); word-break: break-all; }
 .build-rail-id em { color: var(--warn); font-style: normal; }
 .build-warnings { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 .build-warning-group { padding: 8px 12px; border-radius: var(--r-md); background: var(--warn-bg); border-left: 3px solid var(--warn); }
@@ -8380,7 +8381,7 @@ body.chrome-observa .disco {
 .build-todo-path { font: 600 11.5px/1.4 var(--mono); color: var(--ink); background: transparent; padding: 0; }
 .build-todo-clause { font: 10px/1.4 var(--mono); color: var(--warn); background: var(--warn-bg); padding: 1px 6px; border-radius: 8px; }
 .build-todo-what { margin: 6px 0 0; padding-left: 16px; font: 11px/1.5 var(--serif); color: var(--ink-3); }
-.build-todo-manual { margin-top: 6px; font: italic 11px/1.4 var(--serif); color: var(--ink-4); }
+.build-todo-manual { margin-top: 6px; font: italic 11px/1.4 var(--serif); color: var(--ink-3); }
 .build-todo-params { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px 12px; margin-top: 8px; }
 .build-todo-params .build-param { padding: 8px 10px; }
 
@@ -8498,9 +8499,9 @@ body.chrome-observa .disco {
 /* Todos pinned on a slab (VERIFY). */
 .build-slab-todos { padding: 10px 12px 12px; border: 1px solid var(--accent); border-top: 0; background: var(--accent-tint); }
 .build-slab-sub .build-slab-todos { margin-top: 8px; border: 0; padding: 0; background: transparent; }
-.build-slab-todos-head { font: 600 10px/1.3 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-4); margin-bottom: 6px; }
+.build-slab-todos-head { font: 600 10px/1.3 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
 .build-slab-todos-head span { display: block; margin-top: 2px; font: italic 11px/1.4 var(--serif); letter-spacing: 0; text-transform: none; }
-.build-todo-card { font: 600 10px/1.4 var(--mono); color: var(--accent, var(--ink-3)); background: var(--card); border: 1px solid var(--line-2); padding: 1px 6px; border-radius: 8px; }
+.build-todo-card { font: 600 10px/1.4 var(--mono); color: var(--accent-text, var(--ink-3)); background: var(--card); border: 1px solid var(--line-2); padding: 1px 6px; border-radius: 8px; }
 .build-todo.is-flash { box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 45%, transparent); transition: box-shadow 200ms ease; }
 
 /* Per-layer maturity bars (VERIFY's conformance card): clause counts per dimension, pass on a placeholder its own segment. */
@@ -8570,10 +8571,13 @@ body.chrome-observa .disco {
 .build-def-inner { display: flex; flex-direction: column; gap: 28px; }
 .build-def-group + .build-def-group { padding-top: 24px; border-top: 1px solid var(--line-2); }
 .build-def-key { display: block; margin: 0 0 12px; font: 600 10.5px/1.4 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); }
-.build-def-sub { display: block; margin-top: 3px; font: italic 11.5px/1.45 var(--serif); letter-spacing: 0; text-transform: none; color: var(--ink-4); }
+/* Text at or below 12 px on the column and the sheet is --ink-3: --ink-4 reads 4.27:1 on the dark card and
+   4.3–4.4:1 on the light chrome, below AA; --ink-5 is never a text colour here (the dot and hairlines only).
+   tools/test-build-model.mjs computes the ratios from the tokens for every rule of this block. */
+.build-def-sub { display: block; margin-top: 3px; font: italic 11.5px/1.45 var(--serif); letter-spacing: 0; text-transform: none; color: var(--ink-3); }
 .build-def-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .build-def-field + .build-def-field { margin-top: 12px; }
-.build-def-label { font: 600 10px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-4); }
+.build-def-label { font: 600 10px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); }
 .build-def-field input {
   width: 100%; padding: 9px 12px; box-sizing: border-box;
   font: 13px/1.4 var(--mono); background: var(--card); color: var(--ink);
@@ -8582,7 +8586,7 @@ body.chrome-observa .disco {
 }
 .build-def-field input:focus { outline: none; border-color: var(--BLD); box-shadow: 0 0 0 3px color-mix(in srgb, var(--BLD) 22%, transparent); }
 .build-def-field input:focus-visible { outline: 2px solid var(--BLD); outline-offset: 1px; }
-.build-def-hint { font: italic 11px/1.4 var(--serif); color: var(--ink-4); min-height: 15px; }
+.build-def-hint { font: italic 11px/1.4 var(--serif); color: var(--ink-3); min-height: 15px; }
 .build-def-hint code { font: 10.5px/1.4 var(--mono); background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
 .build-def-needed { margin-top: 12px; font: italic 12px/1.5 var(--serif); color: var(--warn); }
 
@@ -8599,7 +8603,7 @@ body.chrome-observa .disco {
 .build-seg-btn {
   position: relative; z-index: 1; appearance: none; border: 0; background: none; cursor: pointer;
   display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 4px 7px; border-radius: 10px;
-  color: var(--ink-4); font: inherit; transition: color 200ms ease-out;
+  color: var(--ink-3); font: inherit; transition: color 200ms ease-out;
 }
 .build-seg-btn:hover { color: var(--ink-2); }
 .build-seg-btn:focus-visible { outline: 2px solid var(--BLD); outline-offset: -2px; }
@@ -8607,16 +8611,17 @@ body.chrome-observa .disco {
 .build-seg-counts { display: flex; flex-direction: column; align-items: center; gap: 1px; font: 9.5px/1.2 var(--mono); letter-spacing: 0.04em; white-space: nowrap; }
 .build-seg-counts b { font-weight: 500; }
 .build-seg-btn[aria-checked="true"] { color: var(--ink); }
-.build-seg-btn[aria-checked="true"][data-tier="tier-1"] .build-seg-name { color: var(--crit-tier-1); }
-.build-seg-btn[aria-checked="true"][data-tier="tier-2"] .build-seg-name { color: var(--crit-tier-2); }
-.build-seg-btn[aria-checked="true"][data-tier="tier-3"] .build-seg-name { color: var(--crit-tier-3); }
+/* The chosen segment's name in its criticality colour, mixed towards ink: the raw tier-2 amber reads 3.4:1 on the light thumb. */
+.build-seg-btn[aria-checked="true"][data-tier="tier-1"] .build-seg-name { color: color-mix(in srgb, var(--crit-tier-1) 65%, var(--ink)); }
+.build-seg-btn[aria-checked="true"][data-tier="tier-2"] .build-seg-name { color: color-mix(in srgb, var(--crit-tier-2) 65%, var(--ink)); }
+.build-seg-btn[aria-checked="true"][data-tier="tier-3"] .build-seg-name { color: color-mix(in srgb, var(--crit-tier-3) 65%, var(--ink)); }
 .build-seg-blurb { margin: 12px 0 0; font: italic 12px/1.5 var(--serif); color: var(--ink-3); }
 .build-seg-blurb b { font: 600 11px/1 var(--mono); font-style: normal; color: var(--ink); margin-right: 4px; }
 
 /* The library chips: products, then archetypes; a selected chip is filled. */
-.build-chip-kind { margin: 14px 0 8px; font: 600 9.5px/1.3 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-4); }
+.build-chip-kind { margin: 14px 0 8px; font: 600 9.5px/1.3 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); }
 .build-def-library .build-def-key + .build-chip-kind { margin-top: 0; }
-.build-chip-kind span { font: italic 11px/1.3 var(--serif); letter-spacing: 0; text-transform: none; margin-left: 6px; color: var(--ink-5); }
+.build-chip-kind span { font: italic 11px/1.3 var(--serif); letter-spacing: 0; text-transform: none; margin-left: 6px; color: var(--ink-3); }
 .build-chips { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .build-chip {
   display: flex; flex-direction: column; gap: 5px; min-width: 0; text-align: left; cursor: pointer;
@@ -8629,7 +8634,7 @@ body.chrome-observa .disco {
 [data-theme="dark"] .build-chip.is-selected { background: color-mix(in srgb, var(--BLD) 14%, var(--card)); }
 .build-chip-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
 .build-chip-title { font: 600 12.5px/1.3 var(--sans); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.build-chip-meta { display: flex; justify-content: space-between; gap: 6px; font: 10px/1.3 var(--mono); color: var(--ink-4); }
+.build-chip-meta { display: flex; justify-content: space-between; gap: 6px; font: 10px/1.3 var(--mono); color: var(--ink-3); }
 .build-chip.is-selected .build-chip-slis { color: var(--BLD-text); }
 .build-chip-ph { color: var(--warn); }
 .build-evidence-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--ink-5); color: var(--ink-5); box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 18%, transparent); }
@@ -8644,7 +8649,7 @@ body.chrome-observa .disco {
 .build-summary.is-fail, .build-summary.is-error { border-color: color-mix(in srgb, var(--fail-border) 50%, var(--line)); }
 .build-summary.is-pending .build-summary-counts, .build-summary.is-pending .build-summary-failing { opacity: 0.55; transition: opacity 200ms ease-out; }
 .build-summary .build-def-key { margin: 0; display: flex; justify-content: space-between; gap: 8px; }
-.build-summary-tier { font-weight: 400; letter-spacing: 0.04em; color: var(--ink-4); text-transform: none; }
+.build-summary-tier { font-weight: 400; letter-spacing: 0.04em; color: var(--ink-3); text-transform: none; }
 .build-summary-status { font: italic 12.5px/1.4 var(--serif); color: var(--ink-3); }
 .build-summary.is-ok .build-summary-status { color: var(--pass-border); }
 .build-summary.is-fail .build-summary-status, .build-summary.is-error .build-summary-status { color: var(--fail-border); }
@@ -8653,8 +8658,8 @@ body.chrome-observa .disco {
 .build-summary-count.is-pass b { color: var(--pass-border); }
 .build-summary-count.is-placeholder b { color: var(--warn); }
 .build-summary-count.is-fail b { color: var(--fail-border); }
-.build-summary-sub { font: 600 10px/1.3 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-4); margin-bottom: 4px; }
-.build-summary-sub span { letter-spacing: 0.02em; text-transform: none; font-weight: 400; color: var(--ink-5); margin-left: 4px; }
+.build-summary-sub { font: 600 10px/1.3 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 4px; }
+.build-summary-sub span { letter-spacing: 0.02em; text-transform: none; font-weight: 400; color: var(--ink-3); margin-left: 4px; }
 .build-summary-ph { font: italic 11px/1.45 var(--serif); color: var(--warn); }
 .build-summary-foot { display: flex; flex-wrap: wrap; gap: 6px 12px; padding-top: 10px; border-top: 1px solid var(--line-2); font: 10.5px/1.4 var(--mono); color: var(--ink-3); }
 .build-summary-foot b { color: var(--ink); }
@@ -8662,8 +8667,8 @@ body.chrome-observa .disco {
 .build-summary-todos b { color: var(--warn); }
 
 /* ---- The slab head opens the layer's sheet: the question as the affordance, a '+' at the right. ---- */
-.build-slab-toggle { margin-left: auto; font: italic 11px/1.3 var(--serif); color: var(--ink-4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.build-slab-edge:hover .build-slab-toggle { color: var(--accent); }
+.build-slab-toggle { margin-left: auto; font: italic 11px/1.3 var(--serif); color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.build-slab-edge:hover .build-slab-toggle { color: var(--accent-text); }
 .build-slab-add {
   align-self: center; margin: 0 10px 0 0; width: 28px; height: 28px; flex: 0 0 auto;
   border-radius: 50%; border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); background: var(--card); color: var(--accent);
@@ -8707,12 +8712,15 @@ body.chrome-observa .disco {
 .build-sheet[data-layer="L4"]  { --accent: var(--L4);  --accent-bg: var(--L4-bg);  --accent-tint: var(--L4-tint); }
 .build-sheet[data-layer="L5"]  { --accent: var(--L5);  --accent-bg: var(--L5-bg);  --accent-tint: var(--L5-tint); }
 .build-sheet[data-layer="GOV"] { --accent: var(--GOV); --accent-bg: var(--GOV-bg); --accent-tint: var(--GOV-tint); }
+/* The accent as a text colour: mixed 65 % towards ink, so a 10 px id or eyebrow clears AA on the card in
+   every layer and both themes (the raw light L1 amber reads 3.3:1); the raw accent stays for bars, borders and knobs. */
+.build-slab, .build-sheet { --accent-text: color-mix(in srgb, var(--accent) 65%, var(--ink)); }
 .build-sheet:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent), 0 12px 32px -12px rgba(15, 27, 45, 0.22), 0 40px 80px -32px rgba(15, 27, 45, 0.35); }
 @keyframes build-sheet-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
 @keyframes build-fade { from { opacity: 0; } to { opacity: 1; } }
 .build-sheet-head { position: relative; padding: 26px 28px 18px; border-bottom: 1px solid var(--line-2); display: flex; flex-direction: column; gap: 6px; }
 .build-sheet-head::before { content: ''; position: absolute; left: 28px; top: 0; width: 44px; height: 3px; border-radius: 0 0 3px 3px; background: var(--accent); }
-.build-sheet-eyebrow { font: 600 10px/1.3 var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); }
+.build-sheet-eyebrow { font: 600 10px/1.3 var(--mono); letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent-text); }
 .build-sheet-title { margin: 0; padding-right: 64px; font: 500 28px/1.1 var(--serif); letter-spacing: -0.01em; color: var(--ink); }
 .build-sheet-question { margin: 0; font: 15px/1.4 var(--sans); color: var(--ink-3); }
 .build-sheet-close {
@@ -8724,17 +8732,17 @@ body.chrome-observa .disco {
 .build-sheet-close:hover { color: var(--ink); border-color: var(--ink-3); background: var(--hover); }
 .build-sheet-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .build-sheet-verdict { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
-.build-sheet-artefacts { font: 10.5px/1.4 var(--mono); color: var(--ink-4); }
+.build-sheet-artefacts { font: 10.5px/1.4 var(--mono); color: var(--ink-3); }
 .build-sheet-body { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 8px 28px 32px; display: flex; flex-direction: column; gap: 28px; scrollbar-width: thin; }
 .build-sheet-section { padding-top: 24px; border-top: 1px solid var(--line-2); }
 .build-sheet-body > :first-child, .build-sheet-compose + .build-sheet-section, .build-sheet-note + .build-sheet-section, .build-note + .build-sheet-section { border-top: 0; padding-top: 16px; }
 .build-sheet-section-head { display: flex; flex-direction: column; gap: 3px; margin-bottom: 12px; }
 .build-sheet-section-head.is-row { flex-direction: row; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; }
 .build-sheet-section-head h3 { margin: 0; font: 600 11px/1.4 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); display: flex; align-items: baseline; gap: 10px; }
-.build-sheet-count { font: 500 10.5px/1.4 var(--mono); letter-spacing: 0.02em; text-transform: none; color: var(--ink-4); }
-.build-sheet-sub { font: italic 11.5px/1.45 var(--serif); color: var(--ink-4); }
-.build-sheet-empty { padding: 12px 14px; border: 1px dashed var(--line); border-radius: 12px; font: italic 12px/1.5 var(--serif); color: var(--ink-4); }
-.build-sheet-note { margin: 0; font: italic 11.5px/1.5 var(--serif); color: var(--ink-4); }
+.build-sheet-count { font: 500 10.5px/1.4 var(--mono); letter-spacing: 0.02em; text-transform: none; color: var(--ink-3); }
+.build-sheet-sub { font: italic 11.5px/1.45 var(--serif); color: var(--ink-3); }
+.build-sheet-empty { padding: 12px 14px; border: 1px dashed var(--line); border-radius: 12px; font: italic 12px/1.5 var(--serif); color: var(--ink-3); }
+.build-sheet-note { margin: 0; font: italic 11.5px/1.5 var(--serif); color: var(--ink-3); }
 .build-sheet-body > .build-sheet-note:first-child { margin-top: 16px; }
 .build-sheet-compose {
   display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 16px; margin-top: 16px;
@@ -8747,12 +8755,12 @@ body.chrome-observa .disco {
 .build-sheet-items { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
 .build-sheet-item { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; padding: 9px 0; border-top: 1px solid var(--line-2); }
 .build-sheet-item:first-child { border-top: 0; }
-.build-sheet-item-id { font: 600 10.5px/1.4 var(--mono); letter-spacing: 0.04em; color: var(--accent); word-break: break-all; }
+.build-sheet-item-id { font: 600 10.5px/1.4 var(--mono); letter-spacing: 0.04em; color: var(--accent-text); word-break: break-all; }
 .build-sheet-item-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .build-sheet-item-title { font: 500 12.5px/1.35 var(--mono); color: var(--ink); word-break: break-word; }
 .build-sheet-item-desc { font: 11.5px/1.4 var(--sans); color: var(--ink-3); word-break: break-word; }
-.build-sheet-item-meta { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 8px; font: 10px/1.4 var(--mono); color: var(--ink-4); max-width: 210px; }
-.build-sheet-scaffold { color: #64748B; border: 1px dashed #64748B; padding: 0 5px; border-radius: 8px; text-transform: uppercase; letter-spacing: 0.08em; font-size: 9px; }
+.build-sheet-item-meta { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 8px; font: 10px/1.4 var(--mono); color: var(--ink-3); max-width: 210px; }
+.build-sheet-scaffold { color: var(--ink-3); border: 1px dashed currentColor; padding: 0 5px; border-radius: 8px; text-transform: uppercase; letter-spacing: 0.08em; font-size: 9px; }
 .build-sheet-item.is-scaffold .build-sheet-item-title { color: var(--ink-3); }
 .build-sheet-owners { display: flex; flex-wrap: wrap; gap: 6px; }
 .build-sheet-owners span { padding: 4px 10px; border-radius: 999px; background: var(--accent-tint); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); font: 12px/1.3 var(--mono); color: var(--ink); }
@@ -8767,9 +8775,9 @@ body.chrome-observa .disco {
 .build-switch-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .build-switch-label { font: 600 13.5px/1.3 var(--sans); color: var(--ink); }
 .build-switch-hint { font: 11.5px/1.4 var(--sans); color: var(--ink-3); }
-.build-switch-consequence { font: italic 11px/1.45 var(--serif); color: var(--ink-4); }
+.build-switch-consequence { font: italic 11px/1.45 var(--serif); color: var(--ink-3); }
 .build-switch-consequence.is-off { color: var(--fail-border); }
-.build-switch-row.is-disabled .build-switch-label { color: var(--ink-4); }
+.build-switch-row.is-disabled .build-switch-label { color: var(--ink-3); }
 .build-switch {
   flex: 0 0 auto; position: relative; width: 44px; height: 26px; padding: 0; border-radius: 13px; border: 0; cursor: pointer;
   background: var(--ink-5); transition: background 200ms ease-out;
@@ -8809,23 +8817,23 @@ body.chrome-observa .disco {
 .build-rolo-card.is-foreign { border-style: dashed; }
 .build-rolo-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .build-rolo-id { font: 600 14px/1.3 var(--mono); color: var(--ink); word-break: break-all; }
-.build-rolo-type { color: var(--accent); }
+.build-rolo-type { color: var(--accent-text); }
 .build-rolo-product { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font: 600 11.5px/1.3 var(--sans); color: var(--ink-2); }
-.build-rolo-foreign { font: italic 10.5px/1.3 var(--serif); font-weight: 400; color: var(--ink-4); }
+.build-rolo-foreign { font: italic 10.5px/1.3 var(--serif); font-weight: 400; color: var(--ink-3); }
 .build-rolo-desc { margin: 0; font: 12px/1.5 var(--serif); color: var(--ink-3); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .build-rolo-metrics { display: flex; flex-wrap: wrap; gap: 4px; }
 .build-rolo-metrics code { font: 10.5px/1.4 var(--mono); background: var(--code-bg); border: 1px solid var(--line-2); padding: 1px 6px; border-radius: 6px; color: var(--ink-3); word-break: break-all; }
 .build-rolo-objective { display: flex; flex-direction: column; gap: 2px; padding-top: 6px; }
 .build-rolo-objective b { font: 500 34px/1 var(--serif); letter-spacing: -0.02em; color: var(--ink); }
 .build-rolo-objective b.build-rolo-needs { font-size: 22px; color: var(--crit-tier-1); }
-.build-rolo-objective span { font: 11px/1.4 var(--mono); color: var(--ink-4); }
-.build-rolo-tiers { display: flex; flex-wrap: wrap; gap: 4px 12px; font: 10px/1.4 var(--mono); color: var(--ink-5); }
+.build-rolo-objective span { font: 11px/1.4 var(--mono); color: var(--ink-3); }
+.build-rolo-tiers { display: flex; flex-wrap: wrap; gap: 4px 12px; font: 11px/1.4 var(--mono); color: var(--ink-3); }
 .build-rolo-tiers span b { font-weight: 600; color: inherit; }
 .build-rolo-tiers .is-current { color: var(--ink-2); }
 .build-rolo-tiers .is-unreachable { text-decoration: line-through; }
 .build-rolo-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--line-2); }
-.build-rolo-state { font: 600 10.5px/1.3 var(--mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-4); }
-.build-rolo-card.is-selected .build-rolo-state { color: var(--accent); }
+.build-rolo-state { font: 600 10.5px/1.3 var(--mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3); }
+.build-rolo-card.is-selected .build-rolo-state { color: var(--accent-text); }
 .build-rolo-card.is-disabled .build-rolo-state { color: var(--crit-tier-1); }
 .build-rolodex-nav {
   position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 32px; height: 32px; border-radius: 50%;
@@ -8838,7 +8846,7 @@ body.chrome-observa .disco {
 .build-rolodex-nav.is-next { right: -10px; }
 .build-rolodex-nav:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
 .build-rolodex-nav:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.build-rolodex-counter { text-align: center; font: 10.5px/1.4 var(--mono); color: var(--ink-4); }
+.build-rolodex-counter { text-align: center; font: 10.5px/1.4 var(--mono); color: var(--ink-3); }
 
 @media (max-width: 760px) {
   .build-sheet { top: auto; right: 0; left: 0; bottom: 0; width: auto; max-height: 86vh; border-radius: 16px 16px 0 0; }
