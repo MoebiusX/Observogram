@@ -152,13 +152,23 @@ function slabHtml(slab, mode) {
     </section>`;
 }
 
+/** The stack as HTML — what a step template embeds; wireBuildStack(container, model, host) wires it once in the DOM. */
+export function buildStackHtml(model) {
+  return `<div class="build-stack" data-mode="${escapeHtml(model.mode)}">${model.slabs.map(s => slabHtml(s, model.mode)).join('')}</div>`;
+}
+
 /**
- * render(container, model, host) — the stack. `model` is buildStackModel's output;
- * host.build.update / setParam are the only actions it calls.
+ * render(container, model, host) — the stack on its own. `model` is
+ * buildStackModel's output; host.build.update / setParam are the only actions it calls.
  */
 export function renderBuildStack(container, model, host = appHost) {
+  container.innerHTML = buildStackHtml(model);
+  wireBuildStack(container, model, host);
+}
+
+/** The stack's handlers: the slab heads (clauses), the detail toggles, the todo pins, the param inputs. */
+export function wireBuildStack(container, model, host = appHost) {
   const act = host.build;
-  container.innerHTML = `<div class="build-stack" data-mode="${escapeHtml(model.mode)}">${model.slabs.map(s => slabHtml(s, model.mode)).join('')}</div>`;
 
   // The open slabs live in the draft (never persisted); the DOM flips at once, the
   // next re-render reads the draft back through the model.

@@ -33,6 +33,8 @@ export function defaultBuildState() {
     pending: false,           // an instantiate is in flight
     preview: null,            // { target, label, filename, contentType, content, warnings } — the VERIFY artefact open
     registeredId: null,       // the id VERIFY's "Continue …" exit registered
+    stackOpen: {},            // { [layerId]: true, [`${layerId}/detail`]: true } — the stack's open slabs (UI state, never persisted)
+    railOpen: false,          // the clause rail's full list open (UI state, never persisted)
   };
 }
 // The build fields that survive a reload (never `result`, `preview`, `error`, `pending`).

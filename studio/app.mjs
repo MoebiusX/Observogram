@@ -1969,6 +1969,8 @@ async function runBuildInstantiate() {
     b.result = {
       canonical: res.canonical, canonicalYaml: res.canonicalYaml || '', todos: res.todos || [], warnings: res.warnings || [],
       summary: res.summary || null, conformance: res.conformance || null, schemaErrors: res.schemaErrors || [], provenance: res.provenance || null,
+      // The adapter's layered projection — what the stack draws and what Discover will show.
+      adapted: res.adapted || null,
     };
     b.error = null;
     b.preview = null;   // compiled from the previous canonical
@@ -2151,9 +2153,9 @@ function renderBuildView(view) {
   }
   const clauses = buildRequirementsCache()[b.tier] || [];
   if (!clauses.length) ensureBuildRequirements(b.tier);
-  renderClauseRail(rail, buildRailModel({ build: b, clauses }));
-
   const host = { renderMainView, renderTabs, build: buildActions };
+  renderClauseRail(rail, buildRailModel({ build: b, clauses }), host);
+
   const exitBar = document.createElement('div');
   exitBar.className = 'build-exit';
   exitBar.innerHTML = `<button type="button" class="build-exit-btn" title="Leave the BUILD journey">← ${state.selectedPackId ? 'back to the open pack' : 'back to Discover · Diagnose · Remediate'}</button>`;

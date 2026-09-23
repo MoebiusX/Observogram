@@ -16,6 +16,7 @@ import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { BUILD_STEPS, MAX_SERVICE_SLUG } from './build-model.mjs';
 import { evidenceBadge, paramRowHtml, wireParamInputs } from './build-atoms.mjs';
+import { buildStackHtml, wireBuildStack } from './build-stack-view.mjs';
 
 // The atoms the three steps share moved to build-atoms.mjs (the stack view draws
 // them too); re-exported here so the step views keep one import for them.
@@ -80,9 +81,11 @@ export function instantiateErrorHtml(error, { stale = false, where = 'below' } =
 export function renderBuildDefine(container, model, host = appHost) {
   const act = host.build;
   const entriesCount = model.selectedEntries.length;
+  const stack = model.stack;
+  const candidates = stack.slabs.reduce((n, s) => n + s.ghosts.filter(g => g.kind === 'sli').length, 0);
   container.innerHTML = `
     <section class="build-step build-define">
-      ${stepHeadHtml('define', 'What are we observing?', 'Name the service, pick its criticality tier and the library entries it runs on — products with an evidence bar, or an archetype for a service built from scratch. The rail on the right lists what the tier requires and fills in as soon as the selection is complete.')}
+      ${stepHeadHtml('define', 'What are we observing?', 'Name the service, pick its criticality tier and the library entries it runs on — products with an evidence bar, or an archetype for a service built from scratch. The tier draws the silhouette of the pack it demands, layer by layer; the entries drop their SLIs onto L1; the edges light up as soon as the selection compiles.')}
 
       <div class="build-fields">
         <label class="build-field">
@@ -121,6 +124,13 @@ export function renderBuildDefine(container, model, host = appHost) {
         ${model.libraryErrors.length ? `<div class="build-note build-note-warn">${model.libraryErrors.length} library file${model.libraryErrors.length === 1 ? '' : 's'} did not load: ${model.libraryErrors.map(e => `<code>${escapeHtml(e.file)}</code>`).join(', ')}</div>` : ''}
       </div>
 
+      <div class="build-stack-wrap build-silhouette">
+        <div class="build-section-key">The stack ${escapeHtml(model.tier || '')} requires
+          <span class="build-section-sub">${stack.counts.clauses.total} clause${stack.counts.clauses.total === 1 ? '' : 's'} over ${stack.slabs.filter(s => s.counts.clauses).length} layers — one ghost card per clause the tier applies in that dimension; ${candidates ? `the selection’s ${candidates} SLI${candidates === 1 ? '' : 's'} and the SLO each gets at ${escapeHtml(model.tier || 'this tier')} on L1 (ticking is on Compile)` : 'pick an entry and its SLIs land on L1 with the SLO each gets'}. Change the tier and the silhouette reshapes${stack.counts.clauses.pending < stack.counts.clauses.total ? '; the edges carry the compiled pack’s verdict per layer — click one for its clauses' : ''}.</span>
+        </div>
+        ${buildStackHtml(stack)}
+      </div>
+
       ${entriesCount ? `
       ${instantiateErrorHtml(model.error, { stale: model.stale, where: 'below' })}
       <details class="build-params-wrap" ${model.params.some(p => !p.atDefault || p.error) ? 'open' : ''}>
@@ -143,6 +153,7 @@ export function renderBuildDefine(container, model, host = appHost) {
   container.querySelectorAll('input[name="build-tier"]').forEach(r => r.addEventListener('change', () => act.setTier(r.value)));
   container.querySelectorAll('.build-entry').forEach(b => b.addEventListener('click', () => act.toggleEntry(b.dataset.entry)));
   wireParamInputs(container, act);
+  wireBuildStack(container, stack, host);
   byId('build-next').addEventListener('click', () => act.setStep('compile'));
 }
 
