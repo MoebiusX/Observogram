@@ -43,7 +43,7 @@ import { initHost } from './host.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
   BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, enterStep as enterBuildStep, stepAfterInstantiate as buildStepAfterInstantiate, focusFallbackSelectors, instantiateBody as buildInstantiateBody,
-  buildDefineModel, buildCompileModel, buildVerifyModel, buildDefinitionModel, buildSheetModel, buildClauseChecklist, buildStatusLine, sheetModeFor, addSliSelection, placeholdersRemaining, retargetSlis, retargetOverrides,
+  buildDefineModel, buildCompileModel, buildVerifyModel, buildDefinitionModel, buildSheetModel, buildClauseChecklist, buildStatusLine, sheetModeFor, addSliSelection, placeholdersRemaining, retargetSlis, retargetSlisForEntries, retargetOverrides,
 } from './build-model.mjs';
 import { fieldValueFor, OVERRIDE_FIELDS as BUILD_OVERRIDE_FIELDS } from './build-copies-model.mjs';
 import {
@@ -2112,9 +2112,9 @@ const buildActions = {
     const b = state.build;
     const prevEntries = [...b.entries];
     b.entries = b.entries.includes(id) ? b.entries.filter(x => x !== id) : [...b.entries, id];
-    // The SLI selection is per entry set: a new composition starts from the tier's defaults. The overrides
-    // follow their SLIs: re-keyed for the new composition, and an entry that leaves takes its SLIs' with it.
-    b.slis = null;
+    // The other entries keep exactly the SLIs they had, re-keyed for the new composition; an entry that leaves
+    // takes its SLIs (and their overrides) with it, one that joins brings the tier's defaults of its own.
+    b.slis = retargetSlisForEntries({ build: b, library: buildLibraryCache() }, prevEntries);
     b.overrides = retargetOverrides({ build: b, library: buildLibraryCache() }, prevEntries);
     b.customOpen = {};
     rerenderBuild();

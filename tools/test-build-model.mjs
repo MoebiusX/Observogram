@@ -35,7 +35,7 @@ import {
   todoFocusSuffix, focusFallbackSelectors, enterStep, stepAfterInstantiate,
   buildDefinitionModel, buildSheetModel, rolodexItems, addSliSelection, paramLayer, paramSubgroup, sectionClauses, sectionDrops, sectionNotes, sectionSwitch, sheetLists,
   sheetModeFor, stackExpanded, sheetFocusSuffix, LAYER_QUESTIONS, LAYER_SWITCHES, buildStatusLine,
-  isSeeded, allSliKeys, selectedSliKeys, retargetOverrides, effectiveOverrides, seedCardModel, customisedMap, WARNING_KINDS, SEEDED_NOTE,
+  isSeeded, allSliKeys, selectedSliKeys, retargetOverrides, retargetSlisForEntries, effectiveOverrides, seedCardModel, customisedMap, WARNING_KINDS, SEEDED_NOTE,
 } from '../studio/build-model.mjs';
 import {
   OVERRIDE_FIELDS, SLO_WINDOWS, PROMQL_FIELDS, overrideFor, customisedFields, promqlEdited, effectiveSli, customEffective, percentText, ratioOf, slugifySliId,
@@ -494,6 +494,33 @@ test('retargetSlis: an explicit SLI list keeps every SLI of the selected entries
   // no previous tier (a draft restored from an older session): a key of a deselected entry is dropped, an above-tier key stays, nothing is added
   assert.deepEqual(retargetSlis(draft({ tier: 'tier-2', slis: ['kafka_broker_availability', 'kafka_controller_election_rate', 'ibm_mq_qmgr_process_up'] }), LIBRARY), ['kafka_broker_availability', 'kafka_controller_election_rate']);
   assert.deepEqual(retargetSlis(draft({ entries: ['kafka'], slis: ['kafka_broker_availability', 'http_service_availability'] }), LIBRARY), [], 'the keys of a composition that is gone are not this composition\'s (re-keyed by the caller)');
+});
+
+test('retargetSlisForEntries: toggling an entry keeps the other entries\' picks — an above-tier add and an un-tick survive an entry leaving and coming back; a joining entry brings its defaults; nulling only when nothing user-made is left', () => {
+  const all2 = reachableSliKeys(draft({ tier: 'tier-2' }), LIBRARY);
+  // The measured case: kafka + http-service, controller_election_rate (tier-1) picked on kafka, http_service_latency_p99 un-ticked.
+  const picks = [...all2.filter(k => k !== 'http_service_latency_p99'), 'kafka_controller_election_rate'];
+  // http-service leaves: kafka's picks stay, re-keyed to the bare ids; http-service's go with it.
+  const kafkaOnly = retargetSlisForEntries({ build: draft({ entries: ['kafka'], slis: picks }), library: LIBRARY }, ['kafka', 'http-service']);
+  assert.deepEqual(kafkaOnly, ['broker_availability', 'consumer_group_lag_seconds', 'partition_replica_health', 'produce_latency_p99', 'fetch_latency_p99', 'controller_election_rate'], 'the above-tier pick survives; the keys are bare');
+  // http-service comes back: it brings the tier's defaults of its own (both SLIs — the un-tick was its and left with it), kafka's pick is still there.
+  const back = retargetSlisForEntries({ build: draft({ entries: ['kafka', 'http-service'], slis: kafkaOnly }), library: LIBRARY }, ['kafka']);
+  assert.deepEqual([...back].sort(), [...all2, 'kafka_controller_election_rate'].sort());
+  // A third entry joins with the picks in place: the pick and the un-tick on the other two survive, the newcomer's defaults come in.
+  const three = retargetSlisForEntries({ build: draft({ entries: ['kafka', 'http-service', 'prometheus'], slis: picks }), library: LIBRARY }, ['kafka', 'http-service']);
+  assert.ok(three.includes('kafka_controller_election_rate') && !three.includes('http_service_latency_p99'), 'A\'s picks survive B joining');
+  const promDefaults = reachableSliKeys(draft({ entries: ['prometheus'] }), LIBRARY).map(k => `prometheus_${k}`);
+  assert.ok(promDefaults.length >= 2 && promDefaults.every(k => three.includes(k)), 'the joining entry\'s tier defaults are ticked');
+  assert.ok(!three.some(k => k.startsWith('prometheus_') && !promDefaults.includes(k)), 'and only those');
+  // The third entry leaves again: back to exactly the picks.
+  assert.deepEqual([...retargetSlisForEntries({ build: draft({ entries: ['kafka', 'http-service'], slis: three }), library: LIBRARY }, ['kafka', 'http-service', 'prometheus'])].sort(), [...picks].sort());
+  // Nothing user-made left: the list collapses to the defaults (null); a never-edited list stays null.
+  assert.equal(retargetSlisForEntries({ build: draft({ entries: ['kafka', 'http-service'], slis: ['broker_availability', 'consumer_group_lag_seconds', 'partition_replica_health', 'produce_latency_p99', 'fetch_latency_p99'] }), library: LIBRARY }, ['kafka']), null, 'kafka\'s defaults plus http-service\'s defaults = the defaults');
+  assert.equal(retargetSlisForEntries({ build: draft({ entries: ['kafka'], slis: null }), library: LIBRARY }, ['kafka', 'http-service']), null);
+  // Pure.
+  const b = draft({ entries: ['kafka'], slis: picks });
+  retargetSlisForEntries({ build: b, library: LIBRARY }, ['kafka', 'http-service']);
+  assert.deepEqual(b.slis, picks);
 });
 
 test('retargetOverrides: an override follows its SLI across a composition change — re-keyed when a second entry joins, dropped with an entry that leaves, an unknown key kept', () => {

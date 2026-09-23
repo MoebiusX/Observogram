@@ -670,7 +670,10 @@ what the pack carries from them (*9 SLIs in the pack · 1 from a higher tier · 
 conformance **summary** stays live on every step: it is the grading, not the seed.
 Re-seeding loses nothing the user made — overrides, custom SLIs, params and toggles persist
 across a tier or entry change (an override follows its SLI when the composition re-keys the
-ids, `retargetOverrides`; an SLI whose entry is deselected drops with its overrides) — and
+ids, `retargetOverrides`; the SLI picks of the other entries follow the same way,
+`retargetSlisForEntries` — an entry that joins brings the tier's defaults of its own, an SLI
+whose entry is deselected drops with its overrides, and the explicit list collapses to the
+defaults only when nothing user-made is left in it) — and
 the DEFINE column says so once seeded, in one line: *Seeded. Changing the tier re-grades the
 pack and refreshes library defaults; your customisations stay. Removing a product drops its
 SLIs.* `buildStepReachability`: COMPILE needs a valid definition **and** `seeded`; VERIFY

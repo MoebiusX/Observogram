@@ -302,6 +302,38 @@ export function retargetSlis(build, library, prevTier) {
   return all.filter(k => keep.has(k));
 }
 
+/** The SLI keys of an entry set as that set composes them → [entryId, sliId]: what a key meant before a composition change. */
+function sliOwners(entries, library) {
+  const rows = library?.entries || [];
+  const composed = entries.length > 1;
+  const owner = new Map();
+  for (const id of entries) for (const s of (rows.find(r => r.id === id)?.slis || [])) owner.set(sliKey(id, s.id, composed), [id, s.id]);
+  return owner;
+}
+
+/**
+ * The explicit SLI list after the entry set changed (`prevEntries` → build.entries): every pick of a
+ * still-selected entry stays — re-keyed for the new composition (one entry to two prefixes every id, and
+ * back) — a key of an entry that left drops with it (the note on DEFINE says so), and an entry that joins
+ * brings the tier's defaults of its own. The list collapses to null only when nothing user-made is left in it
+ * (it equals the new composition's defaults); a never-edited list stays null. Nulling the list on every entry
+ * change reset the OTHER entries' picks (measured: with kafka + http-service, an above-tier kafka pick and an
+ * un-ticked http-service SLI, deselecting and reselecting kafka lost the pick and re-ticked the SLI). Pure.
+ */
+export function retargetSlisForEntries({ build, library }, prevEntries) {
+  if (!Array.isArray(build?.slis)) return null;
+  const prev = Array.isArray(prevEntries) ? prevEntries : (build?.entries || []);
+  const now = build?.entries || [];
+  const composed = now.length > 1;
+  const owner = sliOwners(prev, library);
+  const keep = new Set();
+  for (const k of build.slis) { const hit = owner.get(k); if (hit && now.includes(hit[0])) keep.add(sliKey(hit[0], hit[1], composed)); }
+  const joined = { ...build, entries: now.filter(id => !prev.includes(id)) };
+  for (const k of reachableSliKeys(joined, library)) keep.add(sliKey(...sliOwners(joined.entries, library).get(k), composed));
+  const slis = allSliKeys(build, library).filter(k => keep.has(k));
+  return sameSet(slis, reachableSliKeys(build, library)) ? null : slis;
+}
+
 /**
  * The overrides after the entry set changed (`prevEntries` → build.entries): the SLI ids the pack carries are
  * prefixed once several entries compose, so an override keyed `broker_availability` becomes
@@ -310,11 +342,8 @@ export function retargetSlis(build, library, prevTier) {
  * it is (the engine reports an unknown one as a warning). Pure: a new object.
  */
 export function retargetOverrides({ build, library }, prevEntries) {
-  const rows = library?.entries || [];
   const prev = Array.isArray(prevEntries) ? prevEntries : (build?.entries || []);
-  const prevComposed = prev.length > 1;
-  const owner = new Map();
-  for (const id of prev) for (const s of (rows.find(r => r.id === id)?.slis || [])) owner.set(sliKey(id, s.id, prevComposed), [id, s.id]);
+  const owner = sliOwners(prev, library);
   const now = build?.entries || [];
   const composed = now.length > 1;
   const out = {};
