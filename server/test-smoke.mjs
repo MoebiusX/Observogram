@@ -1433,6 +1433,10 @@ try {
   const regBad = await postLib('/api/library/register', { canonical: { apiVersion: 'x' } });
   const regBadBody = await regBad.json();
   assert(regBad.status === 400 && regBadBody.ok === false && Array.isArray(regBadBody.errors), 'register of a non-canonical → 400 { ok:false, errors }', regBad.status, 400);
+  // A canonical without library annotations registered here is labelled like an upload (metadata.name), never library:<name>@<tier>.
+  const regPlain = await (await postLib('/api/library/register', { canonical: authRaw })).json();
+  assert(regPlain.ok === true && regPlain.registered.source === authRaw.metadata.name && !/^library:/.test(regPlain.registered.source),
+    'register of a plain pack defaults the source hint to metadata.name, not library:…', regPlain.registered?.source, authRaw.metadata?.name);
 
   // POST /api/validate carries summary.onPlaceholder for a library-built pack — and not for a plain one.
   const valLib = await (await postLib('/api/validate', inst.canonical)).json();

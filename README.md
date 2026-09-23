@@ -596,7 +596,7 @@ be tested without a browser. The view needs no pack loaded.
 | `GET` | `/api/library/:id` | One library entry: its index row plus the full SLI templates and params (404 names the known entries) |
 | `POST` | `/api/library/instantiate` | `{ entries, name, tier, environment, owners, params, toggles }` → `canonical`, `canonicalYaml`, `todos`, `provenance`, `warnings`, `schemaErrors`, `summary`, `conformance` (an engine usage error is 400, never 500) |
 | `POST` | `/api/library/compile` | `{ canonical, target }` → one compiled artefact (`label`, `contentType`, `artifact { filename, content, warnings, profile }`), nothing registered |
-| `POST` | `/api/library/register` | `{ canonical, source? }` → the upload registry as `/api/validate` registers (`registered { id, source }`, `adapted`, `conformance`, `summary`) — "Open in Discover" |
+| `POST` | `/api/library/register` | `{ canonical, source? }` → the upload registry as `/api/validate` registers (`registered { id, source }`, `adapted`, `conformance`, `summary`; the source defaults to `library:<entries>@<tier>` for a library-built pack, `metadata.name` otherwise) — "Open in Discover" |
 | `POST` | `/api/crawl` | Draft a pack from uploaded repo files |
 | `POST` | `/api/crawl-github` | Draft a pack from a GitHub URL |
 | `POST` | `/api/draft-from-mcp` | Draft a live pack from an MCP endpoint |

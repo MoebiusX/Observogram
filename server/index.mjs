@@ -1910,8 +1910,10 @@ app.post('/api/library/compile', (req, res) => {
 // POST /api/library/register — body { canonical, source? } → the pack into the
 // upload registry exactly as POST /api/validate registers one (registerUploadedPack),
 // so "Open in Discover" hands Discover an ordinary registered pack. The source hint
-// defaults to `library:<entries>@<tier>`; the todos travel in metadata.annotations
-// and the summary says which clauses still pass on a placeholder.
+// defaults to `library:<entries>@<tier>` for a library-built pack (one carrying
+// library.source) and to metadata.name for anything else, as /api/validate labels an
+// upload; the todos travel in metadata.annotations and the summary says which
+// clauses still pass on a placeholder.
 app.post('/api/library/register', (req, res) => {
   const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {};
   const canonical = body.canonical;
@@ -1922,8 +1924,11 @@ app.post('/api/library/register', (req, res) => {
     const errors = validateCanonical(canonical, SCHEMA);
     if (errors.length) return res.status(400).json({ ok: false, errors });
     const ann = canonical.metadata?.annotations || {};
-    const entryIds = String(ann['library.source'] || '').split(',').map(s => s.split('@')[0].trim()).filter(Boolean);
-    const defaultSource = `library:${entryIds.join(',') || canonical.metadata?.name || 'pack'}@${ann['library.tier'] || canonical.metadata?.bindings?.criticality || 'tier-3'}`;
+    const libSource = typeof ann['library.source'] === 'string' && ann['library.source'].trim() ? ann['library.source'].trim() : null;
+    const entryIds = libSource ? libSource.split(',').map(s => s.split('@')[0].trim()).filter(Boolean) : [];
+    const defaultSource = libSource
+      ? `library:${entryIds.join(',') || 'pack'}@${ann['library.tier'] || canonical.metadata?.bindings?.criticality || 'tier-3'}`
+      : (canonical.metadata?.name || 'upload');
     const source = typeof body.source === 'string' && body.source.trim() ? body.source.trim() : defaultSource;
     const env = readEnv(req.query) || ann['library.environment'] || null;
     const adapted = adapt(canonical, { environment: env });
