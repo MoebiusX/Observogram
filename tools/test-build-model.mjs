@@ -44,7 +44,7 @@ import { renderBuildCompile } from '../studio/build-compile-view.mjs';
 import { renderBuildVerify } from '../studio/build-verify-view.mjs';
 import { renderBuildStack, buildStackHtml, wireBuildStack } from '../studio/build-stack-view.mjs';
 import { artefactCardHtml } from '../studio/card-html.mjs';
-import { revealTodo } from '../studio/build-atoms.mjs';
+import { revealTodo, clauseRowHtml } from '../studio/build-atoms.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const FIX = resolve(ROOT, 'tools/fixtures/build');
@@ -1082,4 +1082,31 @@ test('the compact rail: the failing and the placeholder clauses folded out, the 
   assert.deepEqual(b.stackOpen, {});
   assert.equal(b.railOpen, false);
   for (const k of ['stackOpen', 'railOpen']) assert.ok(!BUILD_PERSIST_FIELDS.includes(k), `${k} must not persist`);
+});
+
+test('the rail and a slab draw the same clause row: one function, so a placeholder\'s todos and a failing clause\'s read alike in both', () => {
+  const rowOf = (html, id) => { const m = html.match(new RegExp(`<li class="build-rail-clause is-\\w+" title="${id.replace(/\./g, '\\.')}[^"]*">[\\s\\S]*?</li>`)); return m && m[0]; };
+  const rail = stubContainer();
+  renderClauseRail(rail, buildRailModel({ build: draft(), clauses: T2 }), { build: {} });
+  const stack = buildStackHtml(stackOf());
+  for (const id of ['L2.MUST.metrics_exporter', 'L5.MUST.synthetic_probe', 'L1.MUST.availability_slo']) {
+    const r = rowOf(rail.innerHTML, id), s = rowOf(stack, id);
+    assert.ok(r && s, `${id} drawn on both`);
+    assert.equal(r, s, `${id}: the rail's row is the slab's row`);
+  }
+  const ph = rowOf(stack, 'L2.MUST.metrics_exporter');
+  assert.match(ph, /is-placeholder/);
+  assert.match(ph, /<em>on \d+ placeholders?: [^<]+<\/em>/, 'a placeholder pass names its todos');
+  // A failing clause: the rail's failing block and the slab's list, the same row.
+  const off = stubContainer();
+  renderClauseRail(off, buildRailModel({ build: draft({ result: { ...draft().result, summary: DASHBOARDS_OFF_SUMMARY } }), clauses: T2 }), { build: {} });
+  const offStack = buildStackHtml(stackOf({ checklist: buildClauseChecklist(T2, DASHBOARDS_OFF_SUMMARY) }));
+  const failRail = rowOf(off.innerHTML, 'L3.MUST.service_overview_dashboard'), failSlab = rowOf(offStack, 'L3.MUST.service_overview_dashboard');
+  assert.ok(failRail && failSlab && failRail === failSlab);
+  assert.match(failRail, /is-fail/);
+  assert.equal((off.innerHTML.match(/L3\.MUST\.service_overview_dashboard — fails/g) || []).length, 2, 'listed under failing and under all clauses, the same row');
+  // The one function, on its own: a failing clause with todos names them; escaping at the seam.
+  const withTodos = clauseRowHtml({ id: 'L4.MUST.x', state: 'fail', severity: 'MUST', description: 'd', todos: ['alerting.routes[0]', 'a <b>'] });
+  assert.ok(withTodos.includes('<em>alerting.routes[0], a &lt;b&gt;</em>') && !withTodos.includes('<b>'));
+  assert.ok(!clauseRowHtml({ id: 'L1.MUST.y', state: 'pass', severity: 'MUST', description: 'd', todos: [] }).includes('<em>'));
 });

@@ -15,7 +15,7 @@
 import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { BUILD_STEPS, MAX_SERVICE_SLUG } from './build-model.mjs';
-import { evidenceBadge, paramRowHtml, wireParamInputs } from './build-atoms.mjs';
+import { evidenceBadge, paramRowHtml, wireParamInputs, clauseRowHtml, STATE_GLYPH } from './build-atoms.mjs';
 import { buildStackHtml, wireBuildStack } from './build-stack-view.mjs';
 
 // The atoms the three steps share moved to build-atoms.mjs (the stack view draws
@@ -158,21 +158,9 @@ export function renderBuildDefine(container, model, host = appHost) {
 }
 
 // ---------- the clause rail (steps 1-3) ----------
+// The rows are build-atoms clauseRowHtml — the same row a slab's clause list draws.
 
-const STATE_GLYPH = { pass: '✓', placeholder: '◐', fail: '✗', pending: '○' };
-const STATE_WORD = { pass: 'passes', placeholder: 'passes on a placeholder', fail: 'fails', pending: 'not evaluated yet' };
 const DIM_NAME = { L1: 'Contract', L2: 'Telemetry', L2X: 'Extended', L3: 'Insight', L4: 'Action', L5: 'Validation', GOV: 'Governance' };
-
-function railClauseHtml(i) {
-  return `
-    <li class="build-rail-clause is-${i.state}" title="${escapeHtml(`${i.id} — ${STATE_WORD[i.state]}${i.todos.length ? ` · ${i.todos.join(', ')}` : ''}`)}">
-      <span class="build-rail-glyph" aria-hidden="true">${STATE_GLYPH[i.state]}</span>
-      <span class="build-rail-text">
-        <span class="build-rail-desc">${escapeHtml(i.description)}</span>
-        <span class="build-rail-id"><span class="build-sev build-sev-${i.severity.toLowerCase()}">${i.severity}</span> ${escapeHtml(i.id)}${i.state === 'placeholder' ? ` · <em>on ${i.todos.length} placeholder${i.todos.length === 1 ? '' : 's'}</em>` : ''}</span>
-      </span>
-    </li>`;
-}
 
 /**
  * render(container, railModel, host) — the compact summary of the tier's clauses:
@@ -205,7 +193,7 @@ export function renderClauseRail(container, rail, host = appHost) {
     ${rail.failing.length ? `
     <div class="build-rail-failing">
       <div class="build-rail-dim">failing <span>the red edges on the stack</span></div>
-      <ul class="build-rail-clauses">${rail.failing.map(railClauseHtml).join('')}</ul>
+      <ul class="build-rail-clauses">${rail.failing.map(clauseRowHtml).join('')}</ul>
     </div>` : ''}
     ${rail.onPlaceholder.length ? `<div class="build-rail-ph-note">${rail.onPlaceholder.length} clause${rail.onPlaceholder.length === 1 ? ' passes' : 's pass'} only on a placeholder — the amber edges on the stack; the todos on those slabs are the difference.</div>` : ''}
     <details class="build-rail-all"${rail.expanded ? ' open' : ''}>
@@ -214,7 +202,7 @@ export function renderClauseRail(container, rail, host = appHost) {
         ${c.groups.map(g => `
           <div class="build-rail-group">
             <div class="build-rail-dim">${escapeHtml(g.dimension)} <span>${escapeHtml(DIM_NAME[g.dimension] || '')}</span></div>
-            <ul class="build-rail-clauses">${g.items.map(railClauseHtml).join('')}</ul>
+            <ul class="build-rail-clauses">${g.items.map(clauseRowHtml).join('')}</ul>
           </div>`).join('')}
       </div>
     </details>

@@ -23,10 +23,8 @@ import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { artefactCardHtml } from './card-html.mjs';
 import { todoFocusSuffix } from './build-model.mjs';
-import { evidenceBadge, todoHtml, wireParamInputs, revealTodo } from './build-atoms.mjs';
+import { evidenceBadge, todoHtml, wireParamInputs, revealTodo, clauseRowHtml, STATE_GLYPH, STATE_WORD } from './build-atoms.mjs';
 
-export const STATE_GLYPH = { pass: '✓', placeholder: '◐', fail: '✗', pending: '○', neutral: '·' };
-export const STATE_WORD = { pass: 'passes', placeholder: 'passes on a placeholder', fail: 'fails', pending: 'not evaluated yet', neutral: 'no clause applies' };
 const SOURCE_TITLE = {
   Required: 'required by the tier — the pack does not exist yet',
   Missing: 'required by the tier, not present in the pack as toggled',
@@ -72,18 +70,12 @@ function artefactCardHtmlInStack(a, mode) {
     </div>`;
 }
 
+// The slab's clause list: the rail's rows (one function, build-atoms clauseRowHtml), folded until the head is clicked.
 function clausesHtml(slab) {
   if (!slab.clauses.length) return '';
   return `
     <ul class="build-rail-clauses build-slab-clauses" ${slab.expanded ? '' : 'hidden'}>
-      ${slab.clauses.map(i => `
-        <li class="build-rail-clause is-${i.state}" title="${escapeHtml(`${i.id} — ${STATE_WORD[i.state]}${i.todos.length ? ` · ${i.todos.join(', ')}` : ''}`)}">
-          <span class="build-rail-glyph" aria-hidden="true">${STATE_GLYPH[i.state]}</span>
-          <span class="build-rail-text">
-            <span class="build-rail-desc">${escapeHtml(i.description)}</span>
-            <span class="build-rail-id"><span class="build-sev build-sev-${i.severity.toLowerCase()}">${i.severity}</span> ${escapeHtml(i.id)}${i.state === 'placeholder' ? ` · <em>on ${plural(i.todos.length, 'placeholder')}: ${escapeHtml(i.todos.join(', '))}</em>` : ''}${i.state === 'fail' && i.todos.length ? ` · <em>${escapeHtml(i.todos.join(', '))}</em>` : ''}</span>
-          </span>
-        </li>`).join('')}
+      ${slab.clauses.map(clauseRowHtml).join('')}
     </ul>`;
 }
 

@@ -49,6 +49,31 @@ export function wireParamInputs(container, act, selector = '.build-param-input')
   });
 }
 
+// ---------- the clause row (the rail and the slabs) ----------
+
+export const STATE_GLYPH = { pass: '✓', placeholder: '◐', fail: '✗', pending: '○', neutral: '·' };
+export const STATE_WORD = { pass: 'passes', placeholder: 'passes on a placeholder', fail: 'fails', pending: 'not evaluated yet', neutral: 'no clause applies' };
+
+/**
+ * One clause of the checklist as a row — the glyph of its state, the rubric's description,
+ * the severity and id, and the todos it rests on (a placeholder pass names them; a failing
+ * clause names them when the summary gives any). The rail's lists and a slab's folded clause
+ * list draw the same row through this one function.
+ */
+export function clauseRowHtml(i) {
+  const todos = i.todos || [];
+  const rest = i.state === 'placeholder' ? ` · <em>on ${todos.length} placeholder${todos.length === 1 ? '' : 's'}: ${escapeHtml(todos.join(', '))}</em>`
+    : i.state === 'fail' && todos.length ? ` · <em>${escapeHtml(todos.join(', '))}</em>` : '';
+  return `
+    <li class="build-rail-clause is-${i.state}" title="${escapeHtml(`${i.id} — ${STATE_WORD[i.state]}${todos.length ? ` · ${todos.join(', ')}` : ''}`)}">
+      <span class="build-rail-glyph" aria-hidden="true">${STATE_GLYPH[i.state]}</span>
+      <span class="build-rail-text">
+        <span class="build-rail-desc">${escapeHtml(i.description)}</span>
+        <span class="build-rail-id"><span class="build-sev build-sev-${i.severity.toLowerCase()}">${i.severity}</span> ${escapeHtml(i.id)}${rest}</span>
+      </span>
+    </li>`;
+}
+
 /** Bring a rendered todo into view — scroll, a short flash, the caret in its first input (a pin's click, a jump from another step). */
 export function revealTodo(todoEl) {
   if (!todoEl) return false;
