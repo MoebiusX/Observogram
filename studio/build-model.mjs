@@ -1329,6 +1329,10 @@ export function rolodexItems({ build, library, all = false }) {
   const explicit = Array.isArray(build?.slis) ? new Set(build.slis) : null;
   const promqlWarnings = (build?.result?.warnings || []).filter(w => w.kind === 'promql');
   const warningFor = (key) => promqlWarnings.find(w => w.sli === key)?.message || null;
+  // The engine's usage errors on a card's copies (`override <sli>.<field>`, `custom <id>.<field>`), on the card whether
+  // or not its face is open: closed, the card carried no mark and the user had to guess which one to Customise.
+  const errs = splitBuildErrors(build?.error);
+  const errorsFor = (key, custom) => { const e = custom ? errs.byCustom[key] : errs.byOverride[key]; return e && Object.keys(e).length ? e : null; };
   const item = (en, s, entrySelected) => {
     const composed = entrySelected ? chosen.length > 1 : chosen.length + 1 > 1;
     const key = sliKey(en.id, s.id, composed);
@@ -1353,6 +1357,7 @@ export function rolodexItems({ build, library, all = false }) {
       focusKey: `sli:${en.id}:${s.id}`,
       promqlWarning: selected ? warningFor(key) : null,
       open: !!build?.customOpen?.[key],
+      errors: selected ? errorsFor(key, false) : null, errorFields: selected ? Object.keys(errorsFor(key, false) || {}) : [],
     };
   };
   const customItem = (def) => {
@@ -1366,6 +1371,7 @@ export function rolodexItems({ build, library, all = false }) {
       objective: eff.objective, objectiveLabel: fmtObjective(eff.objective), window: eff.window,
       override: {}, customised: [], customisedLabel: null, effective: eff, defaults: {},
       tiers: [], focusKey: `sli:custom:${def.id}`, promqlWarning: warningFor(def.id), open: !!build?.customOpen?.[def.id],
+      errors: errorsFor(def.id, true), errorFields: Object.keys(errorsFor(def.id, true) || {}),
     };
   };
   return [

@@ -80,7 +80,7 @@ function editFaceHtml(face) {
 }
 
 function rolodexCardHtml(it, model) {
-  const cls = ['build-rolo-card', it.selected ? 'is-selected' : '', it.entrySelected ? '' : 'is-foreign', it.aboveTier ? 'is-above' : '', it.custom ? 'is-custom' : '', it.customised.length ? 'is-customised' : '', it.face ? 'is-open' : ''].filter(Boolean).join(' ');
+  const cls = ['build-rolo-card', it.selected ? 'is-selected' : '', it.entrySelected ? '' : 'is-foreign', it.aboveTier ? 'is-above' : '', it.custom ? 'is-custom' : '', it.customised.length ? 'is-customised' : '', it.errorFields?.length ? 'is-error' : '', it.face ? 'is-open' : ''].filter(Boolean).join(' ');
   const readOnly = model.readOnly;
   const stateWord = it.custom ? 'in the pack · custom' : it.selected ? 'in the pack' : it.entrySelected ? 'not in the pack' : `adds ${it.entryTitle}`;
   const label = `${it.id} of ${it.entryTitle}${it.custom ? ' — remove your SLI from the pack' : it.selected ? ' — remove from the pack' : it.entrySelected ? ' — add to the pack' : ` — add to the pack (selects ${it.entryTitle} too)`}${it.aboveTier ? ` (from the ${it.profileTier} profile)` : ''}`;
@@ -92,6 +92,7 @@ function rolodexCardHtml(it, model) {
         <span class="build-rolo-chips">
           ${it.aboveTier ? `<span class="build-rolo-chip is-above" title="${escapeHtml(`this SLI's own tier is ${it.profileTier}: it starts from that profile's objective and window — add it if you need it, the tier is a seed, not a gate`)}">${escapeHtml(it.note)}</span>` : ''}
           ${it.custom ? '<span class="build-rolo-chip is-custom" title="written in the studio — not a library SLI">custom</span>' : it.customised.length ? `<span class="build-rolo-chip is-customised" title="${escapeHtml(it.customisedLabel)}">customised</span>` : ''}
+          ${it.errorFields?.length ? `<span class="build-rolo-chip is-error" title="${escapeHtml(Object.entries(it.errors || {}).map(([f, why]) => `${f || 'sli'}: ${why}`).join(' · '))}">rejected: ${escapeHtml(it.errorFields.map(f => f || 'sli').join(', '))}</span>` : ''}
           <span class="type-pill build-rolo-type">${escapeHtml(it.type)}</span>
         </span>
       </header>

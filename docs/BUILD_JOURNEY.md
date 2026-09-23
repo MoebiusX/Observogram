@@ -694,7 +694,12 @@ clears that override; the card's face shows the overridden objective large as to
 *customised* chip, and once an expression is edited the evidence badge reads *custom* with
 the line *edited — the library's evidence no longer applies*; an engine `promql` warning for
 that SLI is printed on the card; the engine's `override <sli>.<field>: …` error lands under
-the field it names (`splitBuildErrors.byOverride`). Edits commit on change (Enter or leaving
+the field it names (`splitBuildErrors.byOverride`) — and stays visible with the face or the
+sheet closed: the card is marked (`is-error`, a *rejected: window* chip with the reason in
+its title), the controller opens the card's face when the error arrives, and the step's
+compile note names the value and the card to open (*1 customised value rejected —
+kafka_produce_latency_p99.window: open Customise on its card on the L1 sheet*,
+`rejectedCopies`). Edits commit on change (Enter or leaving
 the field; a first Esc inside a face or form field leaves the field and lands on the card's
 Customise / Done button, the next Esc closes the sheet — never mid-edit under a PromQL
 textarea) through `setOverride(sliId, field, value)` / `clearOverride(sliId, field)` (the

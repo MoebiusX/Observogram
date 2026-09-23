@@ -47,7 +47,7 @@ import {
 } from '../studio/build-api.mjs';
 import { defaultBuildState, BUILD_PERSIST_FIELDS } from '../studio/state.mjs';
 import { LAYER_DEFS, L4_SUBGROUPS } from '../studio/constants.mjs';
-import { renderBuildDefine } from '../studio/build-define-view.mjs';
+import { renderBuildDefine, rejectedCopies } from '../studio/build-define-view.mjs';
 import { renderBuildCompile } from '../studio/build-compile-view.mjs';
 import { renderBuildVerify } from '../studio/build-verify-view.mjs';
 import { renderBuildStack, buildStackHtml, wireBuildStack } from '../studio/build-stack-view.mjs';
@@ -613,6 +613,23 @@ test('the stale note on each step says where the rejected value is marked, in on
   // Two rejected values pluralise the whole phrase.
   const two = draft({ error: ['param kafka.bootstrap: a value may not contain a double quote', 'param remote_write_url: a value may not contain a backslash'] });
   assert.ok(render(renderBuildCompile, buildCompileModel({ build: two, library: LIBRARY, clauses: T2 })).includes('2 parameter values rejected — marked on their rows on its layer sheet'));
+  // A rejected customised value is named with the card to open — with the face closed, and with the sheet closed (the note said only "the last compilation failed"; measured live).
+  const winErr = 'override kafka_produce_latency_p99.window: the window is one of 7d | 28d | 30d | 90d (the schema\'s SLO windows), got "30x"';
+  const closed = copiesDraft({ error: [winErr], overrides: { kafka_produce_latency_p99: { objective: 0.995, window: '30x' } } });
+  const compileNote = render(renderBuildCompile, buildCompileModel({ build: closed, library: LIBRARY, clauses: T2 }));
+  assert.ok(compileNote.includes('The last compilation failed — the pack shown is the previous one.</strong> 1 customised value rejected — kafka_produce_latency_p99.window: open Customise on its card on the L1 sheet, the field carries the reason</div>'), compileNote.match(/build-note-err[^<]*<strong>[^<]*<\/strong>[^<]*/)?.[0]);
+  assert.ok(render(renderBuildDefine, buildDefineModel({ build: closed, library: LIBRARY, requirements: REQUIREMENTS })).includes('1 customised value rejected — kafka_produce_latency_p99.window: open Customise'), 'DEFINE names it too');
+  assert.deepEqual(rejectedCopies(splitBuildErrors([winErr, 'override kafka_produce_latency_p99.objective: x', 'custom checkout_success.good: y', 'custom checkout_success: z', 'custom[0].id: w'])), ['kafka_produce_latency_p99.window', 'kafka_produce_latency_p99.objective', 'custom checkout_success.good', 'custom checkout_success'], 'per field; a whole-SLI error once; the form\'s own (custom[i]) errors are the form\'s, not a card\'s');
+  assert.ok(render(renderBuildCompile, buildCompileModel({ build: copiesDraft({ error: [winErr, 'override kafka_produce_latency_p99.objective: the objective is a number in (0, 1)'] }), library: LIBRARY, clauses: T2 })).includes('2 customised values rejected — kafka_produce_latency_p99.window, kafka_produce_latency_p99.objective: open Customise on their cards on the L1 sheet'));
+  // The card carries the mark whether or not its face is open: is-error and a 'rejected: window' chip with the reason in its title.
+  const closedItems = rolodexItems({ build: closed, library: LIBRARY });
+  assert.deepEqual([closedItems.find(i => i.key === 'kafka_produce_latency_p99').errorFields, closedItems.find(i => i.key === 'kafka_produce_latency_p99').errors, closedItems.find(i => i.key === 'kafka_broker_availability').errorFields], [['window'], { window: 'the window is one of 7d | 28d | 30d | 90d (the schema\'s SLO windows), got "30x"' }, []]);
+  const closedSheet = buildSheetHtml(buildSheetModel({ layerId: 'L1', build: closed, library: LIBRARY, requirements: T2, mode: 'edit' }));
+  assert.ok(closedSheet.includes('class="build-rolo-card is-selected is-customised is-error" data-snap-card data-sli="kafka_produce_latency_p99"'), 'the face is closed: the card is still marked');
+  assert.ok(closedSheet.includes('<span class="build-rolo-chip is-error" title="window: the window is one of 7d | 28d | 30d | 90d (the schema&#39;s SLO windows), got &quot;30x&quot;">rejected: window</span>') || closedSheet.includes('<span class="build-rolo-chip is-error" title="window: the window is one of 7d | 28d | 30d | 90d (the schema\'s SLO windows), got &quot;30x&quot;">rejected: window</span>'));
+  const customErr = copiesDraft({ error: ['custom checkout_success.good: the PromQL must be a non-empty string'] });
+  assert.ok(buildSheetHtml(buildSheetModel({ layerId: 'L1', build: customErr, library: LIBRARY, requirements: T2, mode: 'edit' })).includes('class="build-rolo-card is-selected is-custom is-error" data-snap-card data-sli="checkout_success"'), 'a custom SLI\'s card too');
+  assert.ok(!buildSheetHtml(buildSheetModel({ layerId: 'L1', build: copiesDraft(), library: LIBRARY, requirements: T2, mode: 'edit' })).includes('is-error'), 'no error: no mark');
   // The sheet that carries the rejected value says so, and its row carries the reason.
   const l5 = buildSheetHtml(buildSheetModel({ layerId: 'L5', build: stale, library: LIBRARY, requirements: T2, mode: 'edit' }));
   assert.ok(l5.includes('1 parameter value on this layer rejected by the last compilation — the pack shown is the previous one'));

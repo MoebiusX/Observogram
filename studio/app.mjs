@@ -44,7 +44,7 @@ import { initHost } from './host.mjs';
 import {
   BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, enterStep as enterBuildStep, stepAfterInstantiate as buildStepAfterInstantiate, focusFallbackSelectors, instantiateBody as buildInstantiateBody,
   buildDefineModel, buildCompileModel, buildVerifyModel, buildDefinitionModel, buildSheetModel, buildClauseChecklist, buildStatusLine, sheetModeFor, addSliSelection, placeholdersRemaining, retargetSlis, retargetSlisForEntries, retargetOverrides,
-  restoreBuildDraft as restoreBuildDraftModel,
+  restoreBuildDraft as restoreBuildDraftModel, splitBuildErrors,
 } from './build-model.mjs';
 import { fieldValueFor } from './build-copies-model.mjs';
 import {
@@ -2007,6 +2007,11 @@ async function runBuildInstantiate() {
     // typed so far is lost. Dropping the result here once bounced the user
     // from Validate to Generate, the one step without parameter inputs.
     b.error = res?.errors || [res?.error || 'instantiation failed'];
+    // A rejected customised value opens its card's face, so the field that carries the reason is in view the
+    // moment the L1 sheet is (closed, the card carried no mark and the note said only that the compilation failed).
+    const split = splitBuildErrors(b.error);
+    const keys = [...Object.keys(split.byOverride), ...Object.keys(split.byCustom).filter(Boolean)];
+    if (keys.length) b.customOpen = { ...(b.customOpen || {}), ...Object.fromEntries(keys.map(k => [k, true])) };
   }
   // A step that is no longer reachable falls back — only when there is no
   // pack to read: a kept pack keeps its step. A step waited for (a reload on

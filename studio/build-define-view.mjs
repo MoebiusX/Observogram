@@ -38,11 +38,24 @@ export function stepHeadHtml(step, title, lede) {
     </header>`;
 }
 
-/** The last instantiation's usage errors as one note: the general ones spelled out, the rejected params counted (their rows carry the reason). */
+/** The rejected copies of the last instantiation, as `<sli>.<field>` (a custom SLI's whole-SLI error as `<id>`). */
+export function rejectedCopies(error) {
+  // byCustom[''] holds the '+ Custom SLI' form's own errors (`custom[i]…`): the form shows them, no card does.
+  const list = (map, prefix) => Object.entries(map || {}).filter(([sli]) => sli).flatMap(([sli, fields]) => Object.keys(fields || {}).map(f => `${prefix}${sli}${f ? `.${f}` : ''}`));
+  return [...list(error?.byOverride, ''), ...list(error?.byCustom, 'custom ')];
+}
+
+/**
+ * The last instantiation's usage errors as one note: the general ones spelled out, the rejected params counted
+ * (their rows carry the reason), the rejected customised values named with the card to open — a closed face or
+ * sheet showed only "the last compilation failed" and the user had to guess which card to Customise.
+ */
 export function instantiateErrorHtml(error, { stale = false, where = 'below' } = {}) {
   if (!error) return '';
   const parts = [...error.general.map(escapeHtml)];
   if (error.paramCount) parts.push(`${error.paramCount} parameter value${error.paramCount === 1 ? '' : 's'} rejected — marked on ${error.paramCount === 1 ? 'its row' : 'their rows'} ${where}`);
+  const copies = rejectedCopies(error);
+  if (copies.length) parts.push(`${copies.length} customised value${copies.length === 1 ? '' : 's'} rejected — ${escapeHtml(copies.join(', '))}: open Customise on ${copies.length === 1 ? 'its card' : 'their cards'} on the L1 sheet, the field carries the reason`);
   return `<div class="build-note build-note-err" role="alert"><strong>The last compilation failed${stale ? ' — the pack shown is the previous one' : ''}.</strong> ${parts.join(' · ')}</div>`;
 }
 

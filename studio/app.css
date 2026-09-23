@@ -8887,6 +8887,8 @@ body.chrome-observa .disco {
 .build-rolo-chip.is-above { border-style: dashed; color: var(--ink-3); }
 .build-rolo-chip.is-customised { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-tint); }
 .build-rolo-chip.is-custom { color: var(--accent-text); border-color: var(--accent); background: var(--accent-tint); }
+.build-rolo-chip.is-error { color: var(--error-text); border-color: var(--error-border); background: var(--error-bg); }
+.build-rolo-card.is-error { border-color: var(--error-border); }
 .build-rolo-card.is-above { border-style: dashed; }
 .build-rolo-card.is-above.is-selected { border-style: solid; }
 .build-rolo-card.is-open { flex-basis: min(420px, 92%); }
