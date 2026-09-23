@@ -710,6 +710,26 @@ test('packc init builds a pack: YAML on stdout, todos on stderr, exit 0; a secti
   assert.doesNotMatch(above.stderr, /sli-excluded/);
   assert.match(above.stderr, /2 SLI\(s\)/);
   assert.ok(parseYaml(above.stdout).spec.slis.some(x => x.id === 'wal_corruption_freshness'));
+  const alias = cli('--entry', 'prometheus', '--tier', 'tier-3', '--name', 'prom', '--sli', 'scrape_success_ratio', '--sli', 'wal_corruption_freshness');
+  assert.equal(alias.status, 0, alias.stderr);
+  assert.match(alias.stderr, /2 SLI\(s\)/);
+  // --override <sli>.<field>=<value>: objective, window, threshold (queries are edited in the studio or the pack file)
+  const ov = cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.objective=0.995', '--override', 'produce_latency_p99.window=7d', '--override', 'produce_latency_p99.threshold=0.25');
+  assert.equal(ov.status, 0, ov.stderr);
+  const ovPack = parseYaml(ov.stdout);
+  assert.deepEqual(ovPack.spec.slos.find(x => x.sli === 'produce_latency_p99'), { id: 'produce_latency_p99_99_5', sli: 'produce_latency_p99', objective: 0.995, window: '7d', error_budget_policy: 'ref:platform/std-budget-policy' });
+  assert.equal(ovPack.spec.slis.find(x => x.id === 'produce_latency_p99').threshold, 0.25);
+  assert.equal(ovPack.metadata.annotations['library.customised.slis.produce_latency_p99'], 'objective,window,threshold');
+  assert.match(ov.stderr, /1 customised/);
+  assert.equal(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.query=up').status, 2, 'a query is not a CLI override');
+  assert.match(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.query=up').stderr, /--override takes objective, window or threshold/);
+  assert.equal(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.objective=abc').status, 2, 'a number is required');
+  assert.equal(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.window=30x').status, 2, 'the engine\'s usage error is exit 2');
+  assert.match(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.window=30x').stderr, /override produce_latency_p99\.window: the window is one of 7d \| 28d \| 30d \| 90d/);
+  assert.equal(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'nodot=1').status, 2);
+  const absent = cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'controller_election_rate.objective=0.5');
+  assert.equal(absent.status, 0, 'an override for an SLI not in the pack is a warning');
+  assert.match(absent.stderr, /warning \[override\]: override controller_election_rate: the SLI is not in the pack \(not selected\)/);
   const json = cli('--entry', 'http-service', '--tier', 'tier-3', '--name', 'checkout-api', '--json', '--param', 'health_url=https://checkout.example.internal/health');
   assert.equal(json.status, 0, json.stderr);
   const payload = JSON.parse(json.stdout);
