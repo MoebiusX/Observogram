@@ -1420,8 +1420,13 @@ try {
   assert(instOff.summary.failing.map(f => f.id).sort().join(',') === 'L3.MUST.service_overview_dashboard,L3.MUST.slo_burn_dashboard', 'dashboards off → exactly the two L3 dashboard clauses fail', instOff.summary.failing.map(f => f.id));
   assert(instOff.schemaErrors.some(e => /dashboards/.test(e)), 'dashboards off → the schema reports the missing key', instOff.schemaErrors);
   assert(instOff.adapted?.layers?.L1?.length === 4 && !instOff.adapted.layers.L3.some(a => /^DASH-/.test(a.id)), 'dashboards off → adapted has no DASH card and L1 follows the SLI selection (2 SLIs + 2 SLOs)', JSON.stringify({ L1: instOff.adapted?.layers?.L1?.length, dash: instOff.adapted?.layers?.L3?.filter(a => /^DASH-/.test(a.id)).length }));
-  const instExcluded = await (await postLib('/api/library/instantiate', { ...instBody, toggles: { slis: ['kafka_broker_availability', 'kafka_controller_election_rate'] } })).json();
-  assert(instExcluded.ok === true && instExcluded.warnings.some(w => w.kind === 'sli-excluded' && w.sli === 'kafka_controller_election_rate'), 'an SLI above the tier comes back as an sli-excluded warning, not a 400', instExcluded.warnings);
+  // The tier is a seed, not a gate: a tier-1 SLI in a tier-2 pack is in it, with its own profile's objective and an SLO; no warning.
+  const instAbove = await (await postLib('/api/library/instantiate', { ...instBody, toggles: { slis: ['kafka_broker_availability', 'kafka_produce_latency_p99', 'kafka_controller_election_rate'] } })).json();
+  assert(instAbove.ok === true && instAbove.warnings.length === 0 && instAbove.canonical.spec.slis.some(x => x.id === 'kafka_controller_election_rate'), 'an SLI above the tier is simply in the pack (no sli-excluded warning)', JSON.stringify(instAbove.warnings));
+  const aboveSlo = instAbove.canonical.spec.slos.find(x => x.sli === 'kafka_controller_election_rate');
+  assert(aboveSlo && aboveSlo.id === 'kafka_controller_election_rate_99' && aboveSlo.objective === 0.99 && aboveSlo.window === '7d', 'the above-tier SLI carries the SLO of its own (tier-1) profile', JSON.stringify(aboveSlo));
+  assert(instAbove.provenance.slis.kafka_controller_election_rate.aboveTier === true && instAbove.provenance.slis.kafka_controller_election_rate.profileTier === 'tier-1', 'provenance.slis says which profile an above-tier SLI starts from', JSON.stringify(instAbove.provenance.slis.kafka_controller_election_rate));
+  assert(instAbove.summary.must.passed === 15 && instAbove.schemaErrors.length === 0, 'the rubric still grades the pack at tier-2 and the schema holds', JSON.stringify([instAbove.summary.must, instAbove.schemaErrors]));
   // Usage errors are 400 { ok:false, errors }, never 500.
   const badCases = [
     [{ ...instBody, entries: ['nope'] }, /unknown library entry "nope"/, 'unknown entry'],
@@ -1429,7 +1434,7 @@ try {
     [{ ...instBody, name: '' }, /service name is required/, 'missing name'],
     [{ ...instBody, params: { nope: '1' } }, /unknown param|not a parameter|nope/, 'unknown param key'],
     [{ ...instBody, params: { 'kafka.broker_job': 'a"b' } }, /quote|"/, 'a quote in a param value'],
-    [{ ...instBody, toggles: { slis: ['kafka_controller_election_rate'] } }, /at least one SLI/, 'a selection with nothing left at the tier'],
+    [{ ...instBody, toggles: { slis: [] } }, /at least one SLI must stay selected \(or a custom SLI added\)/, 'a selection with nothing left and no custom SLI'],
     [{}, /entries/, 'an empty body'],
   ];
   for (const [body, re, label] of badCases) {

@@ -12,6 +12,10 @@
  * the dashboard clauses fail; policy off → exactly the burn-rate clause), composition, SLI
  * selection, param overrides, the adapter parking placeholders as Scaffold, the CLI, and three
  * goldens under tools/fixtures/library/ (regenerate: `node tools/test-library.mjs --update`).
+ * Then the seed and the copies (docs/BUILD_JOURNEY.md "The seed and the copies"): any SLI at any
+ * tier with the per-tier walk, overrides over the library's SLIs (the SLO id follows the objective,
+ * an edited expression drops the evidence, the usage errors and the warning), custom SLIs in every
+ * section the scaffold derives, and the rubric counting them like any SLI.
  */
 
 import { test } from 'node:test';
@@ -29,7 +33,8 @@ import { adapt } from './lib/adapter.mjs';
 import { compileBurnRules } from './lib/burn-rules.mjs';
 import {
   parseLibraryEntry, validateLibraryEntry, libraryIndex, tierRequirements, defaultToggles, instantiatePack,
-  validationSummary, symbolOf, todosFromAnnotations, hasLibraryTodos, TIERS, SECTION_TOGGLES, SCAFFOLD_PARAMS, EVIDENCE_STATUSES, MAX_PARAM_LENGTH,
+  validationSummary, symbolOf, todosFromAnnotations, hasLibraryTodos, sloIdFor, TIERS, SECTION_TOGGLES, SCAFFOLD_PARAMS, EVIDENCE_STATUSES, MAX_PARAM_LENGTH,
+  OVERRIDE_FIELDS, CUSTOM_FIELDS, DEFAULT_BURN_PROFILE, BURN_PROFILES, SLI_KEY_RE, CUSTOM_ID_RE,
 } from './lib/library.mjs';
 import { loadLibrary, findEntry } from '../server/library.mjs';
 import { parsePromqlDependencies as lezer } from './lib/promql-lezer.mjs';
@@ -234,7 +239,7 @@ test('routes and validation off: absent sections, the rubric says what is missin
   assert.ok(failingMust(noSlos.canonical).includes('L1.MUST.availability_slo'));
 });
 
-test('SLI selection: a subset, an unknown id, an SLI above the tier is excluded and reported', () => {
+test('SLI selection: a subset, an unknown id; an SLI above the tier is simply selected — the tier is a seed, not a gate', () => {
   const sub = build(byId.prometheus, 'tier-2', { toggles: { slis: ['scrape_success_ratio', 'query_latency_p99'] } });
   assert.deepEqual(sub.canonical.spec.slis.map(s => s.id), ['scrape_success_ratio', 'query_latency_p99']);
   assert.deepEqual(validateCanonical(sub.canonical, SCHEMA), []);
@@ -244,18 +249,49 @@ test('SLI selection: a subset, an unknown id, an SLI above the tier is excluded 
   assert.ok(sub.canonical.spec.dashboards.some(d => d.id === 'prometheus-query-engine'));
   assert.ok(!sub.canonical.spec.dashboards.some(d => d.id === 'prometheus-tsdb-health'));
   assert.throws(() => build(byId.prometheus, 'tier-3', { toggles: { slis: ['nope'] } }), /unknown SLI nope/);
-  // the tier dropped after the SLIs were ticked: the tier-1 SLI is excluded, the rest builds, the warning says which
+  // a tier-1 SLI in a tier-3 pack: in the pack with its own profile's objective, an SLO, no warning, no exclusion
   const above = build(byId.prometheus, 'tier-3', { toggles: { slis: ['scrape_success_ratio', 'wal_corruption_freshness'] } });
-  assert.deepEqual(above.canonical.spec.slis.map(s => s.id), ['scrape_success_ratio']);
-  assert.equal(above.canonical.metadata.annotations['library.slis'], 'scrape_success_ratio');
-  assert.deepEqual(above.warnings.filter(w => w.kind === 'sli-excluded').map(w => w.sli), ['wal_corruption_freshness']);
-  assert.match(above.warnings.find(w => w.kind === 'sli-excluded').message, /needs tier-1 and the pack is tier-3: excluded/);
+  assert.deepEqual(above.canonical.spec.slis.map(s => s.id), ['scrape_success_ratio', 'wal_corruption_freshness']);
+  assert.equal(above.canonical.metadata.annotations['library.slis'], 'scrape_success_ratio,wal_corruption_freshness');
+  assert.deepEqual(above.warnings.filter(w => w.kind === 'sli-excluded'), [], 'the kind is retired: nothing is excluded');
+  const wal = byId.prometheus.slis.find(x => x.id === 'wal_corruption_freshness');
+  const walObjective = typeof wal.slo.objective === 'number' ? wal.slo.objective : wal.slo.objective['tier-1'];
+  assert.deepEqual(above.canonical.spec.slos.find(x => x.sli === 'wal_corruption_freshness'), { id: sloIdFor('wal_corruption_freshness', walObjective), sli: 'wal_corruption_freshness', objective: walObjective, window: typeof wal.slo.window === 'string' ? wal.slo.window : wal.slo.window['tier-1'], error_budget_policy: 'ref:platform/std-budget-policy' });
+  assert.deepEqual(above.provenance.slis.wal_corruption_freshness.aboveTier, true);
+  assert.equal(above.provenance.slis.wal_corruption_freshness.profileTier, 'tier-1');
+  assert.equal(above.provenance.slis.scrape_success_ratio.aboveTier, false);
   assert.deepEqual(validateCanonical(above.canonical, SCHEMA), []);
-  // nothing left after the exclusion is the one fatal case
-  assert.throws(() => build(byId.prometheus, 'tier-3', { toggles: { slis: ['wal_corruption_freshness'] } }), /at least one SLI must stay selected \(wal_corruption_freshness: above tier-3\)/);
-  assert.throws(() => build(byId.prometheus, 'tier-3', { toggles: { slis: [] } }), /at least one SLI/);
+  assert.deepEqual(failingMust(above.canonical), [], 'the rubric still grades at tier-3; the extra SLI simply counts');
+  // the SLI's own tier features keep their gating against the pack's tier: no tier-1 forecast in a tier-3 pack
+  assert.ok(!(above.canonical.spec.policy.forecasts || []).length, 'a forecast is a tier feature, not the SLI');
+  // the one fatal case: nothing selected and nothing custom
+  assert.throws(() => build(byId.prometheus, 'tier-3', { toggles: { slis: [] } }), /at least one SLI must stay selected \(or a custom SLI added\)/);
   assert.throws(() => instantiatePack(byId.kafka, { name: 'x', tier: 'tier-4' }), /unknown tier/);
   assert.throws(() => instantiatePack(byId.kafka, { tier: 'tier-3' }), /service name/);
+  // defaultToggles is unchanged by the seed: the tier's own SLIs, nothing above it
+  assert.deepEqual(defaultToggles(byId.prometheus, 'tier-3').slis, byId.prometheus.slis.filter(x => x.minTier === 'tier-3').map(x => x.id));
+});
+
+test('the per-tier walk: a value declared for the stricter tiers only is what a lower tier starts with', () => {
+  const walk = JSON.parse(JSON.stringify(byId.kafka));
+  const prh = walk.slis.find(x => x.id === 'partition_replica_health');   // minTier tier-2
+  prh.slo.objective = { 'tier-1': 0.9999, 'tier-2': 0.9995 };             // nothing for tier-3: allowed below the minTier
+  prh.slo.window = { 'tier-1': '7d', 'tier-2': '28d' };
+  assert.deepEqual(validateLibraryEntry(walk), [], 'a per-tier map may leave out a tier below the SLI\'s minTier');
+  // tier-3 adds the tier-2 SLI: it takes tier-2's value (the first declared walking towards the stricter tiers)
+  const t3 = instantiatePack(walk, { name: 'orders', tier: 'tier-3', toggles: { slis: ['broker_availability', 'partition_replica_health'] } });
+  assert.deepEqual(t3.canonical.spec.slos.find(x => x.sli === 'partition_replica_health'), { id: 'partition_replica_health_99_95', sli: 'partition_replica_health', objective: 0.9995, window: '28d', error_budget_policy: 'ref:platform/std-budget-policy' });
+  assert.deepEqual(libraryIndex([walk])[0].slis.find(x => x.id === 'partition_replica_health').objectives, { 'tier-3': 0.9995, 'tier-2': 0.9995, 'tier-1': 0.9999 }, 'the index reads through the walk too');
+  // declared for tier-1 only: a tier-2 pack starts with the tier-1 objective
+  prh.slo.objective = { 'tier-1': 0.9999 };
+  prh.minTier = 'tier-1';
+  assert.deepEqual(validateLibraryEntry(walk), []);
+  const t2 = instantiatePack(walk, { name: 'orders', tier: 'tier-2', toggles: { slis: ['broker_availability', 'produce_latency_p99', 'partition_replica_health'] } });
+  assert.equal(t2.canonical.spec.slos.find(x => x.sli === 'partition_replica_health').objective, 0.9999);
+  assert.equal(t2.canonical.spec.slos.find(x => x.sli === 'partition_replica_health').id, 'partition_replica_health_99_99');
+  // a map that leaves out a tier the SLI reaches is still an entry error
+  prh.minTier = 'tier-2';
+  assert.ok(validateLibraryEntry(walk).some(e => /slo\.objective\[tier-2\]: required/.test(e)));
 });
 
 test('params: an override removes the todo and is recorded; a placeholder default is a todo at the artefact it landed on', () => {
@@ -410,6 +446,190 @@ test('todosFromAnnotations: the tier-1 baseline todo holds up the release gate o
 });
 
 // ---------------------------------------------------------------------------
+// The copies: overrides over the library's SLIs, custom SLIs (docs/BUILD_JOURNEY.md "The seed and the copies").
+// ---------------------------------------------------------------------------
+const composed = () => [byId.kafka, byId['http-service']];
+const orders = (extra = {}) => instantiatePack(composed(), { name: 'orders-api', tier: 'tier-2', environment: 'prod', owners: ['team-orders'], promql: lezer, ...extra });
+const CUSTOM_RATIO = { id: 'checkout_success', type: 'ratio', good: 'sum(rate(checkout_ok_total[5m]))', total: 'sum(rate(checkout_total[5m]))', objective: 0.999, window: '30d' };
+const CUSTOM_THRESHOLD = { id: 'checkout_p99', type: 'threshold', query: 'histogram_quantile(0.99, sum by (le)(rate(checkout_seconds_bucket[5m])))', threshold: 0.3, objective: 0.99, window: '7d', unit: 'seconds', description: 'Checkout p99' };
+
+test('overrides: the objective changes the SLO id, the burn alerts and the bindings; the window the SLO; the threshold the SLI — the evidence stays the library\'s', () => {
+  const dflt = orders();
+  const set = orders({ overrides: { kafka_produce_latency_p99: { objective: 0.995, window: '7d', threshold: 0.25 }, http_service_availability: { objective: 0.9999 } } });
+  assert.deepEqual(validateCanonical(set.canonical, SCHEMA), []);
+  assert.deepEqual(failingMust(set.canonical), []);
+  assert.deepEqual(set.warnings, []);
+  const slo = set.canonical.spec.slos.find(x => x.sli === 'kafka_produce_latency_p99');
+  assert.deepEqual(slo, { id: 'kafka_produce_latency_p99_99_5', sli: 'kafka_produce_latency_p99', objective: 0.995, window: '7d', error_budget_policy: 'ref:platform/std-budget-policy' });
+  assert.equal(set.canonical.spec.slis.find(x => x.id === 'kafka_produce_latency_p99').threshold, 0.25);
+  assert.equal(dflt.canonical.spec.slis.find(x => x.id === 'kafka_produce_latency_p99').threshold, 0.1, 'the library default, untouched elsewhere');
+  assert.equal(set.canonical.spec.slos.find(x => x.sli === 'http_service_availability').id, 'http_service_availability_99_99');
+  // the policy and the boards follow the new SLO id; the old id is nowhere
+  assert.ok(set.canonical.spec.policy.burn_rate_alerts.some(a => a.slo === 'kafka_produce_latency_p99_99_5'));
+  assert.ok(!JSON.stringify(set.canonical.spec).includes('kafka_produce_latency_p99_99"'));
+  assert.ok(set.canonical.spec.dashboards[0].panel_bindings.some(p => p.binds_to === 'slos.kafka_produce_latency_p99_99_5'));
+  assert.ok(set.canonical.spec.dashboards.find(d => d.id === 'orders-api-slo-burn').params.slos.includes('kafka_produce_latency_p99_99_5'));
+  const compiledAlerts = compile(set.canonical, 'prometheus-rules').content;
+  assert.match(compiledAlerts, /kafka_produce_latency_p99_99_5_burn_14x_5m_1h/);
+  assert.deepEqual(checkBindings(set.canonical, genericBoards(set.canonical)), []);
+  // provenance: what was customised, the library evidence kept (the expression is still the library's)
+  const p = set.provenance.slis.kafka_produce_latency_p99;
+  assert.deepEqual([p.library.source, p.library.entry, p.library.sli, p.customised, p.custom, p.evidence.status], ['kafka@1.0.0', 'kafka', 'produce_latency_p99', ['objective', 'window', 'threshold'], false, 'recorded-live']);
+  assert.deepEqual(set.provenance.overrides, { kafka_produce_latency_p99: { objective: 0.995, window: '7d', threshold: 0.25 }, http_service_availability: { objective: 0.9999 } });
+  assert.equal(set.canonical.metadata.annotations['library.customised.slis.kafka_produce_latency_p99'], 'objective,window,threshold');
+  assert.deepEqual(JSON.parse(set.canonical.metadata.annotations['library.overrides']), set.provenance.overrides);
+  assert.equal(set.canonical.metadata.annotations['library.evidence.slis.kafka_produce_latency_p99'], dflt.canonical.metadata.annotations['library.evidence.slis.kafka_produce_latency_p99']);
+  assert.equal(dflt.provenance.slis.kafka_produce_latency_p99.customised.length, 0);
+  assert.ok(!('library.overrides' in dflt.canonical.metadata.annotations) && !('library.custom' in dflt.canonical.metadata.annotations), 'nothing customised: no annotation');
+  // a description and a unit are copies too
+  const words = orders({ overrides: { kafka_produce_latency_p99: { description: 'Produce ack latency, p99', unit: 's' } } });
+  assert.deepEqual([words.canonical.spec.slis.find(x => x.id === 'kafka_produce_latency_p99').description, words.canonical.spec.slis.find(x => x.id === 'kafka_produce_latency_p99').unit], ['Produce ack latency, p99', 's']);
+  // an above-tier SLI can be customised like any other
+  const aboveOv = orders({ toggles: { slis: [...defaultToggles(composed(), 'tier-2').slis, 'kafka_controller_election_rate'] }, overrides: { kafka_controller_election_rate: { objective: 0.95 } } });
+  assert.equal(aboveOv.canonical.spec.slos.find(x => x.sli === 'kafka_controller_election_rate').id, 'kafka_controller_election_rate_95');
+  assert.deepEqual(validateCanonical(aboveOv.canonical, SCHEMA), []);
+  // todosFromAnnotations still rebuilds the same todo list on a customised pack
+  assert.deepEqual(todosFromAnnotations(set.canonical), [...set.todos].sort(byPath));
+});
+
+test('overrides: an edited expression replaces the library\'s PromQL and drops its evidence to custom, honestly', () => {
+  const q = orders({ overrides: { kafka_produce_latency_p99: { query: 'histogram_quantile(0.99, sum by (le)(rate(produce_seconds_bucket[5m])))' }, http_service_availability: { good: 'sum(rate(http_ok_total[5m]))', total: 'sum(rate(http_total[5m]))' } } });
+  assert.deepEqual(validateCanonical(q.canonical, SCHEMA), []);
+  assert.deepEqual(q.warnings.filter(w => w.kind === 'promql'), []);
+  assert.equal(q.canonical.spec.slis.find(x => x.id === 'kafka_produce_latency_p99').query, 'histogram_quantile(0.99, sum by (le)(rate(produce_seconds_bucket[5m])))');
+  const av = q.canonical.spec.slis.find(x => x.id === 'http_service_availability');
+  assert.deepEqual([av.good, av.total], ['sum(rate(http_ok_total[5m]))', 'sum(rate(http_total[5m]))']);
+  assert.ok(!('semconv_metric' in av), 'the semconv claim was the template\'s expression\'s: dropped with it');
+  assert.deepEqual(q.provenance.slis.kafka_produce_latency_p99.evidence, { status: 'custom', source: 'edited in the studio', note: 'the library evidence no longer applies' });
+  assert.deepEqual(q.provenance.slis.kafka_produce_latency_p99.customised, ['query']);
+  assert.deepEqual(q.provenance.slis.http_service_availability.customised, ['good', 'total']);
+  assert.equal(q.canonical.metadata.annotations['library.evidence.slis.kafka_produce_latency_p99'], 'custom: edited in the studio — the library evidence no longer applies');
+  assert.equal(q.provenance.slis.kafka_broker_availability.evidence.status, 'recorded-live', 'the others keep theirs');
+  // a broken override is a promql warning like a broken param (the grammar runs on the pack as written)
+  const bad = orders({ overrides: { kafka_produce_latency_p99: { query: 'sum(rate(x[5m])' } } });
+  assert.ok(bad.warnings.some(w => w.kind === 'promql' && w.sli === 'kafka_produce_latency_p99' && w.field === 'query'), JSON.stringify(bad.warnings));
+  // a threshold whose unit reads as a ratio still draws the generator's own warning
+  assert.ok(orders({ overrides: { kafka_produce_latency_p99: { unit: 'ratio', threshold: 1 } } }).warnings.some(w => w.kind === 'burn-rules' && /kafka_produce_latency_p99/.test(w.message)));
+});
+
+test('overrides: the usage errors name the field, and an override for an SLI not in the pack is a warning', () => {
+  const err = (overrides) => { try { orders({ overrides }); } catch (e) { return e.message; } return null; };
+  assert.match(err({ kafka_produce_latency_p99: { nope: 1 } }), /^override kafka_produce_latency_p99\.nope: unknown field \(the fields are objective, window, threshold, query, good, total, description, unit\)$/);
+  assert.match(err({ kafka_produce_latency_p99: { window: '30x' } }), /^override kafka_produce_latency_p99\.window: the window is one of 7d \| 28d \| 30d \| 90d \(the schema's SLO windows\), got "30x"$/);
+  assert.match(err({ kafka_produce_latency_p99: { window: '14d' } }), /the schema's SLO windows/, 'the schema\'s enum, not any duration');
+  assert.match(err({ kafka_produce_latency_p99: { objective: 1 } }), /^override kafka_produce_latency_p99\.objective: the objective is a number in \(0, 1\)/);
+  assert.match(err({ kafka_produce_latency_p99: { objective: '0.99' } }), /the objective is a number/);
+  assert.match(err({ kafka_produce_latency_p99: { threshold: 'x' } }), /^override kafka_produce_latency_p99\.threshold: the threshold is a finite number/);
+  assert.match(err({ kafka_produce_latency_p99: { threshold: Infinity } }), /finite number/);
+  assert.match(err({ kafka_broker_availability: { threshold: 1 } }), /^override kafka_broker_availability\.threshold: a ratio SLI has no threshold/);
+  assert.match(err({ kafka_broker_availability: { query: 'up' } }), /^override kafka_broker_availability\.query: a ratio SLI has good and total, not a query$/);
+  assert.match(err({ kafka_produce_latency_p99: { good: 'up' } }), /^override kafka_produce_latency_p99\.good: a threshold SLI has a query, not good$/);
+  assert.match(err({ kafka_produce_latency_p99: { query: '' } }), /the PromQL must be a non-empty string/);
+  assert.match(err({ kafka_produce_latency_p99: { query: 'up{job="${job}"}' } }), /^override kafka_produce_latency_p99\.query: the PromQL may not carry a \$\{…\} placeholder \(\$\{job\}\)/);
+  assert.match(err({ kafka_produce_latency_p99: { query: 'x'.repeat(MAX_PARAM_LENGTH + 1) } }), new RegExp(`may not exceed ${MAX_PARAM_LENGTH} characters \\(${MAX_PARAM_LENGTH + 1} given\\)`));
+  assert.match(err({ kafka_produce_latency_p99: { unit: 'x'.repeat(65) } }), /the unit may not exceed 64 characters/);
+  assert.match(err({ kafka_produce_latency_p99: { comparison: '<' } }), /^override kafka_produce_latency_p99\.comparison: not a field: an ObservabilityPack v1\.2 threshold is an upper bound/);
+  assert.match(err({ kafka_produce_latency_p99: 'x' }), /^override kafka_produce_latency_p99: expected an object of fields, got string$/);
+  assert.match(err({ kafka_produce_latency_p99: null }), /got null/);
+  assert.match(err('x'), /overrides must be an object/);
+  assert.match(err(['x']), /overrides must be an object/);
+  // prototype pollution: the polluting keys are refused as keys and as fields, and nothing is read through the chain
+  assert.match(err(JSON.parse('{"__proto__": {"objective": 0.5}}')), /^override __proto__: not an SLI id/);
+  assert.match(err({ constructor: { objective: 0.5 } }), /^override constructor: not an SLI id/);
+  assert.match(err({ prototype: { objective: 0.5 } }), /^override prototype: not an SLI id/);
+  assert.match(err({ 'Kafka-Produce': { objective: 0.5 } }), /not an SLI id/);
+  assert.match(err({ kafka_produce_latency_p99: JSON.parse('{"__proto__": {"objective": 0.5}}') }), /^override kafka_produce_latency_p99\.__proto__: refused$/);
+  assert.equal(SLI_KEY_RE.test('a'.repeat(64)), true);
+  assert.equal(SLI_KEY_RE.test('a'.repeat(65)), false);
+  assert.deepEqual(OVERRIDE_FIELDS, ['objective', 'window', 'threshold', 'query', 'good', 'total', 'description', 'unit']);
+  // not in the pack: a warning of kind override, the rest builds unchanged
+  const w = orders({ overrides: { nope_sli: { objective: 0.5 }, kafka_controller_election_rate: { objective: 0.5 }, kafka_produce_latency_p99: {} } });
+  assert.deepEqual(w.warnings.map(x => [x.kind, x.sli]), [['override', 'nope_sli'], ['override', 'kafka_controller_election_rate']]);
+  assert.match(w.warnings[0].message, /^override nope_sli: the SLI is not in the pack \(unknown\)/);
+  assert.match(w.warnings[1].message, /not in the pack \(not selected\)/);
+  assert.deepEqual(w.provenance.overrides, {}, 'an empty override and the warned ones apply nothing');
+  assert.deepEqual(w.canonical.spec.slos, orders().canonical.spec.slos);
+  // Object.hasOwn semantics: a key inherited by the overrides object is never applied
+  const inherited = Object.create({ kafka_produce_latency_p99: { objective: 0.5 } });
+  assert.equal(orders({ overrides: inherited }).canonical.spec.slos.find(x => x.sli === 'kafka_produce_latency_p99').objective, 0.99);
+});
+
+test('custom SLIs: a ratio and a threshold one land in slis, slos, the recording rules, the policy, the bindings; the schema and the rubric count them like any SLI', () => {
+  const c = orders({ custom: [CUSTOM_RATIO, CUSTOM_THRESHOLD] });
+  assert.deepEqual(validateCanonical(c.canonical, SCHEMA), []);
+  assert.deepEqual(c.warnings, []);
+  assert.deepEqual(failingMust(c.canonical), []);
+  const ids = c.canonical.spec.slis.map(x => x.id);
+  assert.deepEqual(ids.slice(-2), ['checkout_success', 'checkout_p99'], 'after the library SLIs');
+  assert.equal(c.canonical.spec.slis.length, 9);
+  assert.deepEqual(c.canonical.spec.slis.find(x => x.id === 'checkout_success'), { id: 'checkout_success', type: 'ratio', description: 'custom ratio SLI — written in the studio', good: CUSTOM_RATIO.good, total: CUSTOM_RATIO.total });
+  assert.deepEqual(c.canonical.spec.slis.find(x => x.id === 'checkout_p99'), { id: 'checkout_p99', type: 'threshold', description: 'Checkout p99', query: CUSTOM_THRESHOLD.query, threshold: 0.3, unit: 'seconds' });
+  assert.deepEqual(c.canonical.spec.slos.find(x => x.sli === 'checkout_success'), { id: 'checkout_success_99_9', sli: 'checkout_success', objective: 0.999, window: '30d', error_budget_policy: 'ref:platform/std-budget-policy' });
+  assert.deepEqual(c.canonical.spec.slos.find(x => x.sli === 'checkout_p99'), { id: 'checkout_p99_99', sli: 'checkout_p99', objective: 0.99, window: '7d', error_budget_policy: 'ref:platform/std-budget-policy' });
+  assert.deepEqual(c.canonical.spec.queries.recording_rules.slice(-2), [{ name: 'orders_api:checkout_success:ratio_5m', expr: 'ref:slis.checkout_success', interval: '30s' }, { name: 'orders_api:checkout_p99:value_5m', expr: 'ref:slis.checkout_p99', interval: '30s' }]);
+  // the burn alerts from the default profile: availability for a ratio, latency for a threshold (the profile a template without `burn` takes)
+  assert.deepEqual(DEFAULT_BURN_PROFILE, { ratio: 'availability', threshold: 'latency' });
+  assert.deepEqual(c.canonical.spec.policy.burn_rate_alerts.find(a => a.slo === 'checkout_success_99_9').windows, BURN_PROFILES.availability);
+  assert.deepEqual(c.canonical.spec.policy.burn_rate_alerts.find(a => a.slo === 'checkout_p99_99').windows, BURN_PROFILES.latency);
+  const overview = c.canonical.spec.dashboards[0];
+  for (const b of ['slis.checkout_success', 'slis.checkout_p99', 'slos.checkout_success_99_9', 'slos.checkout_p99_99']) assert.ok(overview.panel_bindings.some(p => p.binds_to === b), b);
+  assert.ok(c.canonical.spec.dashboards.find(d => d.id === 'orders-api-slo-burn').params.slos.includes('checkout_p99_99'));
+  assert.deepEqual(checkBindings(c.canonical, genericBoards(c.canonical)), []);
+  for (const target of Object.keys(TARGETS)) assert.ok(compile(c.canonical, target).content.length > 0, target);
+  assert.match(compile(c.canonical, 'prometheus-rules').content, /checkout_success_99_9_burn_14x_5m_1h/);
+  // provenance and annotations
+  assert.deepEqual(c.provenance.slis.checkout_success, { library: { source: 'custom', entry: null, sli: null }, evidence: { status: 'custom', source: 'written in the studio' }, customised: [], custom: true, aboveTier: false });
+  assert.deepEqual(c.provenance.custom, ['checkout_success', 'checkout_p99']);
+  assert.equal(c.canonical.metadata.annotations['library.custom'], 'checkout_success,checkout_p99');
+  assert.equal(c.canonical.metadata.annotations['library.evidence.slis.checkout_success'], 'custom: written in the studio');
+  assert.equal(c.canonical.metadata.annotations['library.slis'], defaultToggles(composed(), 'tier-2').slis.join(','), 'library.slis stays the library selection');
+  assert.equal(c.canonical.metadata.labels['library.entries'], 'kafka,http-service', 'the custom fragment is no entry');
+  assert.equal(c.canonical.metadata.annotations['library.source'], 'kafka@1.0.0,http-service@1.0.0');
+  // the rubric is not bent: a pack of one custom ratio SLI and nothing else from the library fails the latency clause at tier-2, like any pack without a threshold SLI
+  const only = orders({ toggles: { slis: [] }, custom: [CUSTOM_RATIO] });
+  assert.deepEqual(only.canonical.spec.slis.map(x => x.id), ['checkout_success']);
+  assert.deepEqual(failingMust(only.canonical), ['L1.MUST.latency_slo']);
+  assert.deepEqual(validateCanonical(only.canonical, SCHEMA), []);
+  // at tier-1 a custom ratio SLI can carry the forecast and the generic remediation like any first SLO
+  const t1 = instantiatePack(byId['http-service'], { name: 'checkout', tier: 'tier-1', toggles: { slis: [] }, custom: [CUSTOM_RATIO, CUSTOM_THRESHOLD] });
+  assert.equal(t1.canonical.spec.policy.forecasts[0].slo, 'checkout_success_99_9');
+  assert.deepEqual(validateCanonical(t1.canonical, SCHEMA), []);
+  assert.deepEqual(failingMust(t1.canonical), []);
+  assert.deepEqual(todosFromAnnotations(c.canonical), [...c.todos].sort(byPath));
+});
+
+test('custom SLIs: the usage errors — a duplicate or clashing id, a missing field, a bad type, an unknown field, comparison', () => {
+  const err = (custom) => { try { orders({ custom }); } catch (e) { return e.message; } return null; };
+  assert.match(err([CUSTOM_RATIO, CUSTOM_RATIO]), /^custom checkout_success\.id: declared twice in custom$/);
+  assert.match(err([{ ...CUSTOM_RATIO, id: 'kafka_broker_availability' }]), /^custom kafka_broker_availability\.id: clashes with the library SLI kafka_broker_availability of kafka in the pack/);
+  assert.equal(orders({ toggles: { slis: ['kafka_produce_latency_p99'] }, custom: [{ ...CUSTOM_RATIO, id: 'kafka_broker_availability' }] }).canonical.spec.slis.length, 2, 'a library id not in the pack is free');
+  assert.match(err([{ ...CUSTOM_RATIO, id: 'A' }]), /^custom\[0\]\.id: a slug of 2 to 63 characters is required/);
+  assert.match(err([{ ...CUSTOM_RATIO, id: 'a' }]), /a slug of 2 to 63 characters/);
+  assert.match(err([{ ...CUSTOM_RATIO, id: 'errorbudget' }]), /reserved policy-record segment/);
+  assert.match(err([{ ...CUSTOM_RATIO, id: '__proto__' }]), /^custom\[0\]\.id: a slug/);
+  assert.match(err([{ ...CUSTOM_RATIO, type: 'distribution' }]), /^custom checkout_success\.type: expected ratio \| threshold/);
+  const { window: _w, ...noWindow } = CUSTOM_RATIO;
+  assert.match(err([noWindow]), /^custom checkout_success\.window: required for a ratio SLI$/);
+  const { objective: _o, ...noObjective } = CUSTOM_THRESHOLD;
+  assert.match(err([noObjective]), /^custom checkout_p99\.objective: required for a threshold SLI$/);
+  const { total: _t, ...noTotal } = CUSTOM_RATIO;
+  assert.match(err([noTotal]), /^custom checkout_success\.total: required for a ratio SLI$/);
+  const { threshold: _th, ...noThreshold } = CUSTOM_THRESHOLD;
+  assert.match(err([noThreshold]), /^custom checkout_p99\.threshold: required for a threshold SLI$/);
+  assert.match(err([{ ...CUSTOM_RATIO, query: 'up' }]), /^custom checkout_success\.query: a ratio SLI has good and total, not a query$/);
+  assert.match(err([{ ...CUSTOM_THRESHOLD, comparison: '<' }]), /^custom checkout_p99\.comparison: not a field: an ObservabilityPack v1\.2 threshold is an upper bound/);
+  assert.match(err([{ ...CUSTOM_RATIO, nope: 1 }]), /^custom checkout_success\.nope: unknown field \(the fields are id, type, objective, window, threshold, query, good, total, description, unit\)$/);
+  assert.match(err([{ ...CUSTOM_RATIO, window: '30x' }]), /^custom checkout_success\.window: the window is one of 7d \| 28d \| 30d \| 90d/);
+  assert.match(err([{ ...CUSTOM_RATIO, good: 'sum(${x})' }]), /may not carry a \$\{…\} placeholder/);
+  assert.match(err(['x']), /^custom\[0\]: expected an object, got string$/);
+  assert.match(err({ id: 'x' }), /custom must be a list/);
+  assert.equal(CUSTOM_ID_RE.test('checkout_success'), true);
+  assert.deepEqual(CUSTOM_FIELDS, ['id', 'type', ...OVERRIDE_FIELDS]);
+  // a custom SLI's PromQL is parsed like any other: a broken one is a promql warning, not a usage error
+  assert.ok(orders({ custom: [{ ...CUSTOM_RATIO, good: 'sum(rate(x[5m])' }] }).warnings.some(w => w.kind === 'promql' && w.sli === 'checkout_success' && w.field === 'good'));
+});
+
+// ---------------------------------------------------------------------------
 // Goldens: three packs byte-stable (node tools/test-library.mjs --update regenerates them).
 // ---------------------------------------------------------------------------
 const GOLDENS = [
@@ -484,10 +704,12 @@ test('packc init builds a pack: YAML on stdout, todos on stderr, exit 0; a secti
   assert.equal(grammar.status, 1, 'an SLI that does not parse once the values are in is an invalid pack');
   assert.match(grammar.stderr, /warning \[promql\]: SLI \S+ is not valid PromQL after parameter substitution/);
   assert.match(grammar.stderr, /^promql: \d+ SLI expression\(s\) do not parse/m);
+  // --slis (or --sli) accepts any SLI of the chosen entries: a tier-1 SLI in a tier-3 pack is in it, no warning
   const above = cli('--entry', 'prometheus', '--tier', 'tier-3', '--name', 'prom', '--slis', 'scrape_success_ratio,wal_corruption_freshness');
   assert.equal(above.status, 0, above.stderr);
-  assert.match(above.stderr, /warning \[sli-excluded\]: SLI wal_corruption_freshness needs tier-1 and the pack is tier-3/);
-  assert.match(above.stderr, /1 SLI\(s\)/);
+  assert.doesNotMatch(above.stderr, /sli-excluded/);
+  assert.match(above.stderr, /2 SLI\(s\)/);
+  assert.ok(parseYaml(above.stdout).spec.slis.some(x => x.id === 'wal_corruption_freshness'));
   const json = cli('--entry', 'http-service', '--tier', 'tier-3', '--name', 'checkout-api', '--json', '--param', 'health_url=https://checkout.example.internal/health');
   assert.equal(json.status, 0, json.stderr);
   const payload = JSON.parse(json.stdout);

@@ -1238,7 +1238,109 @@
       "kafka.bootstrap",
       "http-service.health_url",
       "kafka.broker_workload"
-    ]
+    ],
+    "overrides": {},
+    "custom": [],
+    "slis": {
+      "kafka_broker_availability": {
+        "library": {
+          "source": "kafka@1.0.0",
+          "entry": "kafka",
+          "sli": "broker_availability"
+        },
+        "evidence": {
+          "status": "recorded-live",
+          "source": "kafka.md §1.4 — up{job=\"kafka-broker\"} = 1 on the lab (one target)"
+        },
+        "customised": [],
+        "custom": false,
+        "aboveTier": false
+      },
+      "kafka_consumer_group_lag_seconds": {
+        "library": {
+          "source": "kafka@1.0.0",
+          "entry": "kafka",
+          "sli": "consumer_group_lag_seconds"
+        },
+        "evidence": {
+          "status": "recorded-live",
+          "source": "kafka.md §1.3-1.4 — kafka_exporter 1.10.0 families and the expression executed (two consumer groups)"
+        },
+        "customised": [],
+        "custom": false,
+        "aboveTier": false
+      },
+      "kafka_partition_replica_health": {
+        "library": {
+          "source": "kafka@1.0.0",
+          "entry": "kafka",
+          "sli": "partition_replica_health"
+        },
+        "evidence": {
+          "status": "recorded-live",
+          "source": "kafka.md §1.3-1.4 — both families present and the bool form executed; an ISR shortfall itself was not observable on RF 1 (§1.6)"
+        },
+        "customised": [],
+        "custom": false,
+        "aboveTier": false
+      },
+      "kafka_produce_latency_p99": {
+        "library": {
+          "source": "kafka@1.0.0",
+          "entry": "kafka",
+          "sli": "produce_latency_p99"
+        },
+        "evidence": {
+          "status": "recorded-live",
+          "source": "kafka.md §1.2, §1.4 — kafka_network_requestmetrics_totaltimems{request=\"Produce\",quantile=\"0.99\"} read from the JMX exposition and the expression executed"
+        },
+        "customised": [],
+        "custom": false,
+        "aboveTier": false
+      },
+      "kafka_fetch_latency_p99": {
+        "library": {
+          "source": "kafka@1.0.0",
+          "entry": "kafka",
+          "sli": "fetch_latency_p99"
+        },
+        "evidence": {
+          "status": "recorded-live",
+          "source": "kafka.md §1.2, §1.4 — the LocalTimeMs quantile gauge and the expression executed; the TotalTimeMs trap measured"
+        },
+        "customised": [],
+        "custom": false,
+        "aboveTier": false
+      },
+      "http_service_availability": {
+        "library": {
+          "source": "http-service@1.0.0",
+          "entry": "http-service",
+          "sli": "availability"
+        },
+        "evidence": {
+          "status": "semconv",
+          "source": "OTel semconv v1.27.0 HTTP metrics + Prometheus compatibility naming; spelling not verified live in this repo (evidence.notes)"
+        },
+        "customised": [],
+        "custom": false,
+        "aboveTier": false
+      },
+      "http_service_latency_p99": {
+        "library": {
+          "source": "http-service@1.0.0",
+          "entry": "http-service",
+          "sli": "latency_p99"
+        },
+        "evidence": {
+          "status": "semconv",
+          "source": "OTel semconv v1.27.0 HTTP metrics + Prometheus compatibility naming; spelling not verified live in this repo (evidence.notes)"
+        },
+        "customised": [],
+        "custom": false,
+        "aboveTier": false
+      }
+    }
   },
   "warnings": [],
   "schemaErrors": [],
