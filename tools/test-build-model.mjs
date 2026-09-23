@@ -689,7 +689,7 @@ test('buildStackModel: the slabs are LAYER_DEFS in order, L2X only with an artef
   const s = stackOf();
   assert.deepEqual(s.slabs.map(x => x.id), LAYER_DEFS.map(d => d.id), 'tier-2 has an L2X clause, so every layer is a slab');
   assert.deepEqual(s.slabs.map(x => [x.num, x.name]), LAYER_DEFS.map(d => [d.num, d.name]), 'the names are the canonical layer names');
-  assert.ok(s.slabs.every(x => /^#[0-9a-f]{6}$/i.test(x.accent)), 'the accents are the Discover slab accents');
+  assert.ok(s.slabs.every(x => !('accent' in x)), 'no colour in the model: a slab\'s colour is its layer token (.section[data-layer]) in the stylesheet');
   assert.equal(s.compiled, true);
   assert.equal(s.counts.slabs, 7);
   // No L2X clause and no L2X artefact: no L2X slab.
@@ -976,7 +976,8 @@ test('renderBuildStack draws the slabs headlessly in Discover\'s card markup: th
   const html = container.innerHTML;
   assert.ok(html.includes('<div class="build-stack" data-mode="verify">'));
   for (const d of LAYER_DEFS) assert.ok(html.includes(`data-layer="${d.id}"`), d.id);
-  assert.ok(html.includes('class="section build-slab is-pass" data-layer="L1"'));
+  assert.ok(html.includes('class="section build-slab is-pass" data-layer="L1">'), 'the layer token does the colouring: no inline style on a slab');
+  assert.ok(!html.includes('style="--slab'));
   assert.ok(html.includes('class="section build-slab is-placeholder" data-layer="L2"'));
   assert.ok(html.includes('class="section build-slab is-neutral is-empty" data-layer="GOV"') || html.includes('class="section build-slab is-neutral" data-layer="GOV"'));
   // Discover's card body: the same head / title / foot classes, the source pill, the gating chip on a backend.

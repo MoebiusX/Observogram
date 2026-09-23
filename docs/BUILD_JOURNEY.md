@@ -386,8 +386,9 @@ palette and tints as Discover, and the three steps are three states of one pictu
 
 **Modules.** `studio/build-model.mjs` `buildStackModel({ adapted, checklist, requirements,
 candidates, todos, params, mode, toggles, expanded })` → ordered slabs `[{ id, num, name,
-accent, state, clauses[], artefacts[], ghosts[], todos[], subgroups? (L4: policy · alerting ·
-self-healing), counts, maturity, dimmed, offSections, expanded }]` — L2X only when it has an
+state, clauses[], artefacts[], ghosts[], todos[], subgroups? (L4: policy · alerting ·
+self-healing), counts, maturity, dimmed, offSections, expanded }]` (a slab's colour is its
+layer token, `.section[data-layer]`, never a field of the model) — L2X only when it has an
 artefact or a clause, GOV neutral, every input explicit, no state reads (tested under
 `node:test` in `tools/test-build-model.mjs`, including that the artefact list is the one the
 adapter gives Discover for the same canonical). `studio/build-stack-view.mjs`

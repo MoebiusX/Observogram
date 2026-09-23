@@ -22,10 +22,11 @@
 // list Discover shows for the same canonical), the rubric filtered by tier
 // (the silhouette: one ghost per clause), the clause checklist (the slab
 // edges and the maturity bars) and the todo list (pinned to the slab of the
-// artefact each names). The layer names and accents are the studio's
-// constants; nothing is invented here.
+// artefact each names). The layer names are the studio's constants (a
+// slab's colour is its layer token, .section[data-layer], in the
+// stylesheet); nothing is invented here.
 
-import { LAYER_DEFS, L4_SUBGROUPS, DISCO_SLAB_ACCENT } from './constants.mjs';
+import { LAYER_DEFS, L4_SUBGROUPS } from './constants.mjs';
 
 export const BUILD_STEPS = ['define', 'compile', 'verify'];
 /** Least stringent first — the order the engine lists them and the DEFINE step shows them. */
@@ -566,7 +567,7 @@ export function buildVerifyModel({ build, library, clauses, targets }) {
     checklist,
     stack,
     // The per-layer maturity bars on the verdict card: clause counts per dimension.
-    maturity: stack.slabs.filter(sl => sl.maturity.total > 0).map(sl => ({ id: sl.id, num: sl.num, name: sl.name, accent: sl.accent, state: sl.state, ...sl.maturity })),
+    maturity: stack.slabs.filter(sl => sl.maturity.total > 0).map(sl => ({ id: sl.id, num: sl.num, name: sl.name, state: sl.state, ...sl.maturity })),
     schema: { ok: schemaOk, errors: r?.schemaErrors || [] },
     warnings: summarizeWarnings(r?.warnings || []),
     blocking,
@@ -755,7 +756,7 @@ const pct = (n, total) => (total ? Math.round((n / total) * 100) : 0);
  *   toggles       the section toggles: a slab whose section is off is `dimmed` (its clauses go red on the edge by themselves)
  *   expanded      { [layerId]: true } — which slabs show their clause list
  *
- * Each slab: { id, num, name, accent, state, stateText, clauses, artefacts, ghosts, todos,
+ * Each slab: { id, num, name, state, stateText, clauses, artefacts, ghosts, todos,
  * subgroups (L4), counts, maturity, dimmed, offSections, expanded, why, present }. L2X is
  * present only when it has an artefact or a clause; GOV has no clause and is neutral.
  * Nothing here is invented: the artefacts are the adapter's, untouched (each gains its
@@ -837,7 +838,7 @@ export function buildStackModel({ adapted = null, checklist = null, requirements
     const state = slabState(clauses);
     const offSections = offFor(def.id, undefined);
     slabs.push({
-      id: def.id, num: def.num, name: def.name, accent: DISCO_SLAB_ACCENT[def.id] || '#64748b',
+      id: def.id, num: def.num, name: def.name,
       state, stateText: slabStateText(state, m),
       clauses, artefacts, ghosts, todos: slabTodos, subgroups,
       counts: {

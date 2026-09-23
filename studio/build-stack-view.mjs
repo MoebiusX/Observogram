@@ -134,7 +134,7 @@ function slabHtml(slab, mode) {
     ? `<button type="button" class="section-expand-toggle build-slab-detail${slab.detailOpen ? ' is-on' : ''}" data-detail="${escapeHtml(slab.id)}" title="the detail artefacts Discover folds behind Expand — panels, queries, live evidence"><span class="section-expand-glyph" aria-hidden="true">${slab.detailOpen ? '⊟' : '⊞'}</span> ${slab.detailOpen ? 'Hide' : 'Expand'} detail <span class="section-expand-count">${slab.counts.detail}</span></button>`
     : '';
   return `
-    <section class="section build-slab is-${slab.state}${slab.dimmed ? ' is-dimmed' : ''}${slab.present || slab.ghosts.length ? '' : ' is-empty'}${slab.expanded ? ' is-expanded' : ''}" data-layer="${escapeHtml(slab.id)}" style="--slab:${escapeHtml(slab.accent)}">
+    <section class="section build-slab is-${slab.state}${slab.dimmed ? ' is-dimmed' : ''}${slab.present || slab.ghosts.length ? '' : ' is-empty'}${slab.expanded ? ' is-expanded' : ''}" data-layer="${escapeHtml(slab.id)}">
       <div class="section-head build-slab-head">
         <button type="button" class="build-slab-edge" data-slab="${escapeHtml(slab.id)}" aria-expanded="${slab.expanded ? 'true' : 'false'}" title="${escapeHtml(slab.why.length ? slab.why.join('\n') : `${slab.num} ${slab.name}: ${slab.stateText}`)}">
           <span class="section-num">${escapeHtml(slab.num)}</span>
