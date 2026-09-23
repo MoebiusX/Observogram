@@ -15,7 +15,8 @@
     "studio/",
     "tools/",
     "vendor/",
-    "examples/"
+    "examples/",
+    "library/"
   ],
   "repository": {
     "type": "git",
@@ -99,7 +100,7 @@
     "test:retrofeed": "node tools/test-retrofeed.mjs",
     "test:auth": "node server/test-auth-local.mjs && node server/test-auth-oidc.mjs",
     "users": "node tools/user-admin.mjs",
-    "test": "node --test tools/test-adapt.mjs tools/test-backend-validate.mjs tools/test-blast-radius.mjs tools/test-build-info.mjs tools/test-chain-history.mjs tools/test-compile.mjs tools/test-contract-guard.mjs tools/test-contract-shapes.mjs tools/test-crawl.mjs tools/test-deploy-manifests.mjs tools/test-diagnostic-grade.mjs tools/test-diff.mjs tools/test-fetch-live.mjs tools/test-golden-compile.mjs tools/test-gen-pack.mjs tools/test-gen-site.mjs tools/test-golden-crawl.mjs tools/test-inventory-coverage.mjs tools/test-journey.mjs tools/test-journey-notify.mjs tools/test-legacy-pack.mjs tools/test-neuron-model.mjs tools/test-packs.mjs tools/test-profiles.mjs tools/test-promql.mjs tools/test-promql-canon.mjs tools/test-record-fixtures.mjs tools/test-retrofeed.mjs tools/test-schedule.mjs tools/test-schedule-snippets.mjs tools/test-stack-evidence.mjs tools/test-stack-self-metrics.mjs tools/test-studio-graph.mjs tools/test-svg-charts.mjs tools/test-traceability-graph.mjs tools/test-verify-deploy.mjs tools/test-zip.mjs server/test-auth-local.mjs server/test-auth-oidc.mjs server/test-deploy-helpers.mjs server/test-mcp-url.mjs server/test-tenancy.mjs server/test-workspace.mjs server/test-smoke.mjs",
+    "test": "node --test server/test-auth-local.mjs server/test-auth-oidc.mjs server/test-deploy-helpers.mjs server/test-mcp-url.mjs server/test-smoke.mjs server/test-tenancy.mjs server/test-workspace.mjs tools/test-adapt.mjs tools/test-backend-validate.mjs tools/test-blast-radius.mjs tools/test-build-info.mjs tools/test-build-model.mjs tools/test-chain-history.mjs tools/test-compile.mjs tools/test-contract-guard.mjs tools/test-contract-shapes.mjs tools/test-crawl.mjs tools/test-deploy-manifests.mjs tools/test-diagnostic-grade.mjs tools/test-diff.mjs tools/test-fetch-live.mjs tools/test-gen-pack.mjs tools/test-gen-site.mjs tools/test-golden-compile.mjs tools/test-golden-crawl.mjs tools/test-inventory-coverage.mjs tools/test-journey-notify.mjs tools/test-journey.mjs tools/test-legacy-pack.mjs tools/test-library.mjs tools/test-neuron-model.mjs tools/test-packs.mjs tools/test-profiles.mjs tools/test-promql-canon.mjs tools/test-promql.mjs tools/test-record-fixtures.mjs tools/test-retrofeed.mjs tools/test-schedule-snippets.mjs tools/test-schedule.mjs tools/test-stack-evidence.mjs tools/test-stack-self-metrics.mjs tools/test-studio-graph.mjs tools/test-svg-charts.mjs tools/test-traceability-graph.mjs tools/test-verify-deploy.mjs tools/test-zip.mjs",
     "lint": "eslint .",
     "coverage": "c8 npm test",
     "sync-spec": "node tools/sync-spec.mjs",
@@ -112,7 +113,13 @@
     "gen:site": "node tools/gen-site.mjs",
     "lint:gen": "node --check tools/gen-dashboards.mjs && node --check tools/gen-burn-rules.mjs && node --check tools/gen-site.mjs && node --check tools/lib/dashboards/lib.mjs && node --check tools/lib/dashboards/generic.mjs && node --check tools/lib/burn-rules.mjs && node --check tools/lib/site/inventory.mjs && node --check tools/lib/site/timing.mjs && node --check tools/lib/site/derive.mjs && node --check tools/lib/site/run.mjs",
     "test:gen": "node tools/test-gen-pack.mjs",
-    "test:gen-site": "node tools/test-gen-site.mjs"
+    "test:gen-site": "node tools/test-gen-site.mjs",
+    "lint:library": "node --check tools/lib/library.mjs && node --check server/library.mjs && node --check tools/pack-init.mjs",
+    "test:library": "node tools/test-library.mjs",
+    "test:library:update": "node tools/test-library.mjs --update",
+    "lint:build": "node --check studio/build-model.mjs && node --check studio/build-api.mjs && node --check studio/build-define-view.mjs && node --check studio/build-compile-view.mjs && node --check studio/build-verify-view.mjs && node --check tools/test-build-model.mjs",
+    "test:build": "node --test tools/test-build-model.mjs",
+    "test:build:update": "node tools/test-build-model.mjs --update"
   },
   "c8": {
     "reporter": [

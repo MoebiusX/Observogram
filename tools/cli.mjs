@@ -11,6 +11,7 @@
 //   packc adapt    <file> [env]       → tools/adapt-spec-pack.mjs
 //   packc x-ray    <repo-dir>         → tools/crawl-repo.mjs
 //   packc compile  <file> [target]    → tools/lib/compile.mjs (programmatic)
+//   packc init     …                  → tools/pack-init.mjs (build a pack from the library)
 //   packc serve                       → server/index.mjs (boots the studio)
 //   observogram                       → same as `serve`
 //
@@ -96,6 +97,9 @@ Usage:
   packc adapt    <file> [env]     Adapt a pack into the layered projection
   packc x-ray    <repo-dir>       Crawl a repo into a draft pack
   packc compile  <file> [target]  Compile a pack into a backend artefact
+  packc init     --list           List the library entries (products and archetypes) a pack can be built from
+  packc init     --show <entry>   An entry's params, SLIs per tier, per-tier objectives and evidence
+  packc init     --entry <id> --tier <tier> --name <svc>  Build a pack from the library (YAML to stdout, todos to stderr)
   packc journey  run <name>       Run a saved drift check (exit 0 pass · 1 gate-failed · 2 error)
   packc journey  run --all        Run every saved journey in sequence (exit = the worst of them)
   packc journey  schedule <name>  Print cron / schtasks / GitHub Actions / CronJob snippets from its schedule:
@@ -248,6 +252,9 @@ switch (command) {
     break;
   case 'compile':
     await runCompile(rest);
+    break;
+  case 'init':
+    delegate('tools/pack-init.mjs', rest);
     break;
   case 'journey':
     await runJourneyCommand(rest);

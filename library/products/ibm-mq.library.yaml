@@ -1,0 +1,315 @@
+# Library entry: IBM MQ queue manager
+# Derived from the certified pack of MoebiusX/mq-observability-pack (packs/ibmmq.pack.yaml
+# 0.2.0): the SLIs, objectives, burn windows, chaos experiments and canary were exercised
+# end to end against a real queue manager on 2026-09-16 (docs/catalogue-evidence/ibmmq.md,
+# reports/cert-report). Metric names are IBM's (mq-metric-samples / the container's native
+# endpoint), never renamed.
+library: v1
+id: ibm-mq
+kind: product
+version: 1.0.0
+title: IBM MQ
+product: ibmmq
+summary: Queue manager process liveness vs. client reachability, queue depth headroom, oldest message age, dead-letter queue, put/get canary and recovery-log latency of an IBM MQ queue manager.
+description: |
+  An IBM MQ 9.4 LTS / 10.0 queue manager observed from two Prometheus sources: the container's
+  native /metrics (qmgr level, MQ_ENABLE_METRICS=true, job ibmmq-native) and mq_prometheus
+  (ibm-messaging/mq-metric-samples) connected as an MQ client over a SVRCONN channel for queue
+  and channel detail (job ibmmq-exporter). The disagreement between the two is the differential
+  diagnosis: the process lives (native up) but clients cannot reach it (exporter status not RUNNING).
+  Exporter gauges are read through last_over_time(...[30s]) because mq_prometheus exposes a
+  publication-derived gauge only on scrapes where a $SYS publication arrived. The canary SLIs need
+  the mq-canary from that repository (mq_canary_* OTLP counters through the collector).
+tags: [messaging, queueing]
+derivedFrom: mq-observability-pack/packs/ibmmq.pack.yaml@0.2.0
+evidence:
+  status: recorded-live
+  verifiedOn: 2026-09-16
+  sources:
+    - mq-observability-pack packs/ibmmq.pack.yaml (0.2.0) — the certified pack this entry parameterises
+    - mq-observability-pack docs/catalogue-evidence/ibmmq.md §1 (SLI selection), §2 (thresholds and objectives), §4 (metric-name catalogue, live-verified 2026-09-16 against icr.io/ibm-messaging/mq:10.0.0.5-r1 + mq_prometheus v6.0.0), §5 (chaos), §8 (burn-rate policy measured live)
+    - mq-observability-pack docs/catalogue-evidence/ibmmq-live-metrics-2026-09-16.md — the 88 native and 175 exporter names as scraped / stored
+    - mq-observability-pack reports/cert-report (npm run certify, first certified live 2026-09-16) — every chaos experiment's MTTD measured
+    - ibm-messaging/mq-metric-samples and mq-golang mqmetric (the ibmmq_* name mapping); IBM Docs "Metrics published by the IBM MQ container"
+  notes: |
+    The queue objects (APP.*, APP.DLQ as the DEADQ, MONQ(HIGH) so oldest_message_age exists) and the
+    canary are that repository's stack; the queue name pattern and the DLQ name are parameters here.
+  gaps:
+    - The $SYS count elements are per-interval deltas with overrideCType false in the lab; this entry's SLIs do not depend on them either way.
+    - Multi-queue-manager topologies (NHA / RDQM) were not exercised; the SLIs aggregate by qmgr and work per queue manager.
+params:
+  - id: native_job
+    label: Native metrics scrape job
+    default: ibmmq-native
+    description: The job label of the queue manager container's native /metrics scrape (port 9157, MQ_ENABLE_METRICS=true, honor_labels).
+  - id: native_target
+    label: Native /metrics target
+    default: mq:9157
+    placeholder: true
+    description: host:port of the queue manager container's native metrics endpoint.
+  - id: exporter_job
+    label: mq_prometheus scrape job
+    default: ibmmq-exporter
+    description: The job label of the mq_prometheus (mq-metric-samples) scrape — the MQ client view.
+  - id: exporter_target
+    label: mq_prometheus target
+    default: mq-exporter:9157
+    placeholder: true
+    description: host:port of mq_prometheus.
+  - id: queue_pattern
+    label: Application queue pattern
+    default: APP.*
+    description: The regex of the application queues the depth and message-age SLIs read (the queues MONQ is enabled on).
+  - id: dlq
+    label: Dead-letter queue
+    default: APP.DLQ
+    description: The queue manager's DEADQ; any message on it is a delivery failure.
+  - id: canary_queue
+    label: Canary queue
+    default: APP.CANARY
+    placeholder: true
+    description: The queue the put/get canary round-trips on (mq-canary from mq-observability-pack).
+  - id: qmgr_workload
+    label: Queue manager workload (chaos target)
+    default: ibmmq-qmgr
+    placeholder: true
+    description: The queue manager container / pod the chaos experiments stop.
+otel:
+  languages: [node, java, go]
+  custom_attributes: [mq.qmgr.name, messaging.system]
+telemetry:
+  scrape_jobs:
+    - job_name: "${native_job}"
+      scrape_interval: 10s
+      honor_labels: true
+      targets: ["${native_target}"]
+    - job_name: "${exporter_job}"
+      scrape_interval: 10s
+      targets: ["${exporter_target}"]
+slis:
+  - id: qmgr_process_up
+    type: ratio
+    minTier: tier-3
+    description: Fraction of queue managers whose native metrics endpoint is scraped successfully.
+    why: The process is alive; IBMMQQueueManagerDown fired in 40-45 s on this SLI in the certified lab.
+    unit: ratio
+    semconv_metric: ibmmq.qmgr.up
+    metrics: [up]
+    evidence: { status: recorded-live, source: "ibmmq.md §1, §5 — qmgr-down chaos measured (container-stop, MTTD 40-45 s); up{job=\"ibmmq-native\"} in the live inventory" }
+    good: |
+      sum(up{job="${native_job}"} == bool 1)
+    total: |
+      count(up{job="${native_job}"})
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.999, tier-3: 0.99 }
+      window: 30d
+    burn: availability
+    forecast: { method: holt-winters, horizon: 7d, on_projected_breach: open_ticket, minTier: tier-1 }
+    chaos:
+      id: qmgr-down
+      engine: litmus
+      target: "${qmgr_workload}"
+      fault: { kind: container-stop, duration: 90s }
+      expected_mttd: 90s
+      minTier: tier-2
+    remediation:
+      runbook: qmgr-down
+      automation: argo-workflow://restart-qmgr-with-nha-quorum-check
+      guardrails: { max_invocations_per_hour: 2, requires_human_above: SEV1, rollback_on_failure: true, cooldown_after_success: 30m, circuit_breaker: { failures: 2, window: 1h } }
+      minTier: tier-2
+  - id: qmgr_reachability
+    type: ratio
+    minTier: tier-3
+    description: Fraction of queue managers reporting status RUNNING (2) to a client connected over a SVRCONN channel.
+    why: Diverges from qmgr_process_up when the listener, channel, CHLAUTH or CONNAUTH is broken while the process lives — the differential diagnosis.
+    unit: ratio
+    semconv_metric: ibmmq.qmgr.status
+    metrics: [ibmmq_qmgr_status]
+    evidence: { status: recorded-live, source: "ibmmq.md §1, §4, §5 — ibmmq_qmgr_status in the live inventory; listener-stopped chaos measured (listener + both SVRCONN channels force-stopped)" }
+    good: |
+      sum(ibmmq_qmgr_status{job="${exporter_job}"} == bool 2)
+    total: |
+      count(ibmmq_qmgr_status{job="${exporter_job}"})
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.999, tier-3: 0.99 }
+      window: 30d
+    burn: availability
+    chaos:
+      id: listener-stopped
+      engine: litmus
+      target: "${qmgr_workload}"
+      fault: { kind: mqsc, command: "STOP LISTENER('SYSTEM.LISTENER.TCP.1'); STOP CHANNEL('DEV.APP.SVRCONN') MODE(FORCE); STOP CHANNEL('DEV.ADMIN.SVRCONN') MODE(FORCE)", duration: 90s }
+      expected_mttd: 90s
+      minTier: tier-2
+    remediation:
+      runbook: qmgr-unreachable
+      automation: argo-workflow://start-listener-and-channels
+      guardrails: { max_invocations_per_hour: 3, requires_human_above: SEV1, rollback_on_failure: false, cooldown_after_success: 15m }
+      minTier: tier-2
+  - id: queue_depth_headroom
+    type: threshold
+    minTier: tier-2
+    description: Highest current depth / MAXDEPTH across application queues. 1.0 means MQRC_Q_FULL for producers.
+    why: A full queue turns producers' puts into errors; headroom is the earliest warning and the forecast target.
+    unit: ratio
+    semconv_metric: ibmmq.queue.depth
+    metrics: [ibmmq_queue_depth, ibmmq_queue_attribute_max_depth]
+    evidence: { status: recorded-live, source: "ibmmq.md §1, §4, §5 — both gauges in the live inventory; queue-full chaos (200 puts on a MAXDEPTH(200) queue) measured" }
+    query: |
+      max by (qmgr, queue) (
+        last_over_time(ibmmq_queue_depth{job="${exporter_job}", queue=~"${queue_pattern}"}[30s])
+          / last_over_time(ibmmq_queue_attribute_max_depth{job="${exporter_job}", queue=~"${queue_pattern}"}[30s])
+      )
+    threshold: 0.8
+    slo:
+      objective: 0.999
+      window: 30d
+    burn: availability
+    forecast: { method: linear, horizon: 1d, on_projected_breach: page_oncall, minTier: tier-1 }
+    chaos:
+      id: queue-full
+      engine: litmus
+      target: "${qmgr_workload}"
+      fault: { kind: flood, queue: APP.BURST, count: 200, duration: 60s }
+      expected_mttd: 60s
+      minTier: tier-2
+    remediation:
+      runbook: queue-depth
+      automation: argo-workflow://consumer-scale-out
+      guardrails: { max_invocations_per_hour: 3, requires_human_above: SEV1, rollback_on_failure: true, cooldown_after_success: 15m }
+      minTier: tier-2
+  - id: oldest_message_age
+    type: threshold
+    minTier: tier-2
+    description: Age in seconds of the oldest message on each application queue (DIS QSTATUS MSGAGE, needs MONQ). The MQ equivalent of consumer lag in seconds.
+    why: A stalled consumer shows here first; measured MTTD 100-118 s because 60 s of age must accrue before the threshold is reachable.
+    unit: seconds
+    semconv_metric: ibmmq.queue.oldest_message_age
+    metrics: [ibmmq_queue_oldest_message_age]
+    evidence: { status: recorded-live, source: "ibmmq.md §1, §4, §5 — gauge in the live inventory (MONQ(HIGH)); consumer-stall chaos measured at 99.6 s and 117.9 s" }
+    query: |
+      max by (qmgr, queue) (
+        last_over_time(ibmmq_queue_oldest_message_age{job="${exporter_job}", queue=~"${queue_pattern}", queue!="${dlq}"}[30s])
+      )
+    threshold: 60
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: saturation
+    forecast: { method: percentile-of-history, horizon: 3d, on_projected_breach: post_warning, minTier: tier-1 }
+    chaos:
+      id: consumer-stall
+      engine: litmus
+      target: "${qmgr_workload}"
+      fault: { kind: container-stop, duration: 150s }
+      expected_mttd: 150s
+      minTier: tier-2
+    remediation:
+      runbook: consumer-stalled
+      automation: argo-workflow://consumer-scale-out
+      guardrails: { max_invocations_per_hour: 3, requires_human_above: SEV2, rollback_on_failure: true, cooldown_after_success: 15m }
+      minTier: tier-2
+  - id: dlq_depth
+    type: threshold
+    minTier: tier-2
+    description: Messages parked on the dead-letter queue. Any non-zero value is a delivery failure that needs a human.
+    why: A message on the DLQ of a payments queue manager may be money; it is never auto-purged.
+    unit: messages
+    semconv_metric: ibmmq.queue.depth
+    metrics: [ibmmq_queue_depth]
+    evidence: { status: recorded-live, source: "ibmmq.md §1, §5 — dlq-poison chaos (3 puts to the DEADQ) measured" }
+    query: |
+      max by (qmgr) (last_over_time(ibmmq_queue_depth{job="${exporter_job}", queue="${dlq}"}[30s]))
+    threshold: 0
+    slo:
+      objective: 0.999
+      window: 30d
+    burn: saturation
+    chaos:
+      id: dlq-poison
+      engine: litmus
+      target: "${qmgr_workload}"
+      fault: { kind: put-to-dlq, count: 3, duration: 60s }
+      expected_mttd: 60s
+      minTier: tier-2
+    remediation:
+      runbook: dlq
+      automation: manual-only
+      guardrails: { max_invocations_per_hour: 1, requires_human_above: SEV3 }
+      minTier: tier-2
+  - id: canary_success
+    type: ratio
+    minTier: tier-2
+    description: Fraction of synthetic put→get round-trips that returned the matching payload within 5 s. `or vector(0)` on the good side is deliberate — when every attempt fails there is no result="ok" series at all.
+    why: The only SLI that proves an application can do work end to end; needs the mq-canary (mq_canary_* OTLP counters through the collector).
+    unit: ratio
+    semconv_metric: mq.canary.attempts
+    metrics: [mq_canary_attempts_total]
+    evidence: { status: recorded-live, source: "ibmmq.md §1, §4 — the canary's OTLP counter as stored (add_metric_suffixes → _total); the empty-good-series case seen live 2026-09-16" }
+    good: |
+      (sum(rate(mq_canary_attempts_total{result="ok"}[5m])) or vector(0))
+    total: |
+      sum(rate(mq_canary_attempts_total[5m]))
+    slo:
+      objective: 0.999
+      window: 30d
+    burn: availability
+  - id: canary_roundtrip_p99
+    type: threshold
+    minTier: tier-1
+    description: 99th-percentile put→get round-trip latency of the canary, client-observed.
+    why: Latency as an application sees it, through the listener, channel and queue manager together.
+    unit: seconds
+    semconv_metric: mq.canary.roundtrip.duration
+    metrics: [mq_canary_roundtrip_duration_seconds_bucket]
+    evidence: { status: recorded-live, source: "ibmmq.md §4 — the canary's OTLP histogram as stored; ibmmq-live-metrics-2026-09-16.md" }
+    query: |
+      histogram_quantile(0.99,
+        sum by (le) (rate(mq_canary_roundtrip_duration_seconds_bucket{result="ok"}[5m])))
+    threshold: 0.5
+    slo:
+      objective: 0.99
+      window: 30d
+    burn: latency
+  - id: log_write_latency
+    type: threshold
+    minTier: tier-1
+    description: Average recovery-log write latency. Persistent-message throughput is bounded by this number.
+    why: The disk behind the queue manager; served by both the native endpoint and the exporter.
+    unit: seconds
+    semconv_metric: ibmmq.qmgr.log.write_latency
+    metrics: [ibmmq_qmgr_log_write_latency_seconds]
+    evidence: { status: recorded-live, source: "ibmmq.md §4 — ibmmq_qmgr_log_write_latency_seconds on both jobs in the live inventory" }
+    query: |
+      max by (qmgr) (last_over_time(ibmmq_qmgr_log_write_latency_seconds{job="${exporter_job}"}[30s]))
+    threshold: 0.02
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: slow
+views:
+  - id: per_queue_depth
+    bind: ref:platform/per-resource-rollup
+    params: { metric: ibmmq_queue_depth, by: [qmgr, queue] }
+    minTier: tier-2
+  - id: per_channel_status
+    bind: ref:platform/per-resource-rollup
+    params: { metric: ibmmq_channel_status_squash, by: [qmgr, channel, type] }
+    minTier: tier-2
+dashboards:
+  - id: ibmmq-queues
+    minTier: tier-2
+    binds: [slis.queue_depth_headroom, slis.oldest_message_age, slis.dlq_depth, views.per_queue_depth]
+  - id: ibmmq-channels
+    minTier: tier-2
+    binds: [slis.qmgr_reachability, views.per_channel_status]
+synthetic:
+  - id: put-get-canary
+    kind: k6
+    target: "mq(1414)/${canary_queue}"
+    interval: 10s
+    assertions:
+      - { put_success: true }
+      - { round_trip_latency_lt: 500ms }
+    on_fail_severity: SEV1
+    minTier: tier-3

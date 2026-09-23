@@ -1,0 +1,135 @@
+# Library entry: Prometheus Alertmanager
+# Seeded from tools/lib/contracts/stack-self-metrics.mjs (rows notification_errors,
+# notifications_sent, active_silences; SRC.alertmanager). Every alias there carries the stamp
+# "prom/alertmanager:v0.27.0 exposition + PromQL, 2026-09-07": the names were read off the
+# product's own /metrics on the pinned docker stack and the expressions evaluated on the real
+# Prometheus (docs/MCP_INTEGRATION.md, "Live validation tier"), so the status is recorded-live.
+library: v1
+id: alertmanager
+kind: product
+version: 1.0.0
+title: Alertmanager
+product: alertmanager
+summary: Availability, notification delivery success and failure rate, and silence count of a Prometheus Alertmanager.
+description: |
+  Alertmanager observed through its own /metrics (alertmanager_* families, pre-registered at 0 by
+  client_golang), scraped by Prometheus. Four signals: the scrape is up, notifications succeed,
+  notification failures per second stay at zero, and active silences stay below a ceiling (a silence
+  is a deliberate blind spot; too many of them hide outages).
+tags: [observability, alerting]
+evidence:
+  status: recorded-live
+  verifiedOn: 2026-09-07
+  sources:
+    - tools/lib/contracts/stack-self-metrics.mjs — rows notification_errors, notifications_sent, active_silences (aliases product alertmanager, verified on prom/alertmanager:v0.27.0 exposition + PromQL, 2026-09-07; also present on the public Krystaline tier, Alertmanager 0.27.0)
+    - docs/MCP_INTEGRATION.md "Live validation tier" — docker/stack.compose.yaml, tools/test-stack-live.mjs re-verify every alias against the pinned images
+    - docker/stack/prometheus.yml — job alertmanager — up{job="alertmanager"} is the Prometheus-generated series for that target (the generic up alias, verified on the stack's TSDB inventory)
+    - Prometheus Alertmanager self-metrics documentation (/metrics) — alertmanager_notifications_total, alertmanager_notifications_failed_total{integration,reason}, alertmanager_silences{state}
+  notes: |
+    notification_success_ratio subtracts the failed counter from the total with an `or vector(0)`
+    guard on the subtracted leg (both are pre-registered at 0 on 0.27.0; the guard keeps the ratio
+    defined on a release that registers the failed counter lazily).
+  gaps:
+    - No latency SLI — neither repo records an Alertmanager notification-latency exposition; the tier-2 threshold SLI is the failure rate (a threshold on failures per second), not a latency, and says so.
+    - Only 0.27.0 was measured (stack and public tier).
+params:
+  - id: job
+    label: Alertmanager scrape job
+    default: alertmanager
+    description: The job label of the Alertmanager /metrics scrape.
+  - id: target
+    label: Alertmanager /metrics target
+    default: alertmanager:9093
+    placeholder: true
+    description: host:port of the Alertmanager.
+  - id: base_url
+    label: Alertmanager base URL
+    default: http://alertmanager:9093
+    placeholder: true
+    description: The base URL the synthetic probe calls (/-/ready).
+otel:
+  languages: [go]
+telemetry:
+  scrape_jobs:
+    - job_name: "${job}"
+      scrape_interval: 15s
+      targets: ["${target}"]
+slis:
+  - id: availability
+    type: ratio
+    minTier: tier-3
+    description: Fraction of Alertmanager scrape targets that are up.
+    why: An Alertmanager that is not scraped is one nobody can prove is delivering pages.
+    unit: ratio
+    metrics: [up]
+    evidence: { status: recorded-live, source: "stack-self-metrics scrape_success_ratio: up verified on prom/prometheus:v2.55.1 TSDB inventory, 2026-09-07; docker/stack/prometheus.yml job alertmanager" }
+    good: |
+      sum(up{job="${job}"} == bool 1)
+    total: |
+      count(up{job="${job}"})
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.999, tier-3: 0.99 }
+      window: 30d
+    burn: availability
+    remediation:
+      runbook: alertmanager-down
+      automation: manual-only
+      guardrails: { max_invocations_per_hour: 1, requires_human_above: SEV2 }
+      minTier: tier-2
+  - id: notification_success_ratio
+    type: ratio
+    minTier: tier-3
+    description: Fraction of notifications Alertmanager attempted that did not fail (notifications_total minus notifications_failed_total, the failed leg guarded with `or vector(0)`).
+    why: A page that Alertmanager could not deliver is an outage nobody hears about; this is the delivery leg of every alert in the pack.
+    unit: ratio
+    metrics: [alertmanager_notifications_total, alertmanager_notifications_failed_total]
+    evidence: { status: recorded-live, source: "stack-self-metrics notification_errors (alertmanager alias) and notifications_sent: both counters verified on prom/alertmanager:v0.27.0 exposition + PromQL, 2026-09-07" }
+    good: |
+      sum(rate(alertmanager_notifications_total[5m])) -
+        (sum(rate(alertmanager_notifications_failed_total[5m])) or vector(0))
+    total: |
+      sum(rate(alertmanager_notifications_total[5m]))
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.999, tier-3: 0.99 }
+      window: 30d
+    burn: availability
+    forecast: { method: holt-winters, horizon: 7d, on_projected_breach: open_ticket, minTier: tier-1 }
+  - id: notification_failures
+    type: threshold
+    minTier: tier-2
+    description: Alert notification send failures per second (not a latency — the entry has no evidence-backed Alertmanager latency metric; see evidence.gaps).
+    why: Zero is the only acceptable steady state; a non-zero rate names the integration and reason labels to chase.
+    unit: per_second
+    metrics: [alertmanager_notifications_failed_total]
+    evidence: { status: recorded-live, source: "stack-self-metrics notification_errors, alias alertmanager: sum(rate(alertmanager_notifications_failed_total[5m])) verified on prom/alertmanager:v0.27.0, 2026-09-07" }
+    query: |
+      sum(rate(alertmanager_notifications_failed_total[5m]))
+    threshold: 0
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: saturation
+  - id: active_silences
+    type: threshold
+    minTier: tier-1
+    description: Active silences, against a ceiling of 20 (each silence is a deliberate blind spot).
+    why: Silences left behind after incidents are the usual reason a repeat outage pages nobody; the ceiling is a starting point, not a measurement.
+    unit: count
+    metrics: [alertmanager_silences]
+    evidence: { status: recorded-live, source: "stack-self-metrics active_silences: sum(alertmanager_silences{state=\"active\"}) verified on prom/alertmanager:v0.27.0, 2026-09-07" }
+    query: |
+      sum(alertmanager_silences{state="active"})
+    threshold: 20
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: slow
+synthetic:
+  - id: alertmanager-ready-probe
+    kind: blackbox-exporter
+    target: "${base_url}/-/ready"
+    interval: 30s
+    assertions:
+      - { status_code: 200 }
+    on_fail_severity: SEV2
+    minTier: tier-3

@@ -10,11 +10,42 @@
 export const $  = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
+// The BUILD journey's inputs (docs/BUILD_JOURNEY.md, slice 2): Define ·
+// Compile · Verify over the pack library. `slis: null` means "every SLI the
+// tier reaches" (the engine's defaultToggles) until the user unticks one;
+// `params` holds only the overrides (a value equal to the default is deleted
+// so the placeholder stays a placeholder). `result` is the last instantiate
+// response and is never persisted — the canonical is re-instantiated on
+// reload from the inputs, which are.
+export function defaultBuildState() {
+  return {
+    step: 'define',           // 'define' | 'compile' | 'verify'
+    name: '',
+    owners: '',               // comma-separated, parsed by the model
+    environment: 'prod',
+    tier: 'tier-2',
+    entries: [],              // library entry ids, in selection order
+    params: {},               // { [paramKey]: value } overrides only
+    slis: null,               // null → the tier's defaults; [ids] once edited
+    toggles: { slos: true, policy: true, routes: true, dashboards: true, validation: true },
+    result: null,             // { canonical, canonicalYaml, todos, warnings, summary, conformance, schemaErrors, provenance }
+    error: null,              // [messages] from a 400 instantiate
+    pending: false,           // an instantiate is in flight
+    preview: null,            // { target, label, filename, contentType, content, warnings } — the VERIFY artefact open
+    registeredId: null,       // the id VERIFY's "Continue …" exit registered
+  };
+}
+// The build fields that survive a reload (never `result`, `preview`, `error`, `pending`).
+export const BUILD_PERSIST_FIELDS = ['step', 'name', 'owners', 'environment', 'tier', 'entries', 'params', 'slis', 'toggles', 'registeredId'];
+
 export const state = {
   // 'home' starts the studio empty; user picks Analyze (one pack) or
   // Compare (two packs). Once chosen, mode becomes 'single' or 'compare'
   // and the header bar + tabs appear. Logo click returns to 'home'.
+  // 'build' is the BUILD journey (Define · Compile · Verify) — the
+  // header then renders BUILD_TABS through the same renderer.
   mode: 'home',
+  build: defaultBuildState(),
   // Which home renders: 'gate' (signed-in service picker) or 'hero'
   // (the marketing/connect landing). Authenticated users with services
   // land on the gate; local mode keeps the hero. Never persisted.
@@ -127,6 +158,8 @@ export const state = {
 // pack that vanished from the catalog just drops silently.
 const PERSIST_KEY = 'studioState.v1';
 const PERSIST_FIELDS = [
+  'mode',                        // only 'build' is acted on at rehydrate; the pack ids decide the rest
+  'build',                       // snapshotted through BUILD_PERSIST_FIELDS (inputs only, never the canonical)
   'selectedService',
   'selectedPackId', 'selectedEnv',
   'compareBId', 'compareBEnv',
@@ -158,6 +191,9 @@ export const persistence = {
     if (this._suspended) return;
     const snap = {};
     for (const k of PERSIST_FIELDS) snap[k] = state[k];
+    // The build draft persists as inputs only: the instantiate result (a
+    // ~20 KB canonical plus its YAML) is re-derived on reload, never stored.
+    snap.build = Object.fromEntries(BUILD_PERSIST_FIELDS.map(k => [k, state.build?.[k]]));
     try { localStorage.setItem(PERSIST_KEY, JSON.stringify(snap)); } catch (_) {}
   },
   schedule() {

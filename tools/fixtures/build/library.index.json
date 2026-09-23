@@ -1,0 +1,2016 @@
+{
+  "ok": true,
+  "entries": [
+    {
+      "id": "alertmanager",
+      "kind": "product",
+      "title": "Alertmanager",
+      "product": "alertmanager",
+      "version": "1.0.0",
+      "summary": "Availability, notification delivery success and failure rate, and silence count of a Prometheus Alertmanager.",
+      "tags": [
+        "observability",
+        "alerting"
+      ],
+      "evidence": {
+        "status": "recorded-live",
+        "verifiedOn": "2026-09-07",
+        "sources": [
+          "tools/lib/contracts/stack-self-metrics.mjs — rows notification_errors, notifications_sent, active_silences (aliases product alertmanager, verified on prom/alertmanager:v0.27.0 exposition + PromQL, 2026-09-07; also present on the public Krystaline tier, Alertmanager 0.27.0)",
+          "docs/MCP_INTEGRATION.md \"Live validation tier\" — docker/stack.compose.yaml, tools/test-stack-live.mjs re-verify every alias against the pinned images",
+          "docker/stack/prometheus.yml — job alertmanager — up{job=\"alertmanager\"} is the Prometheus-generated series for that target (the generic up alias, verified on the stack's TSDB inventory)",
+          "Prometheus Alertmanager self-metrics documentation (/metrics) — alertmanager_notifications_total, alertmanager_notifications_failed_total{integration,reason}, alertmanager_silences{state}"
+        ],
+        "gaps": [
+          "No latency SLI — neither repo records an Alertmanager notification-latency exposition; the tier-2 threshold SLI is the failure rate (a threshold on failures per second), not a latency, and says so.",
+          "Only 0.27.0 was measured (stack and public tier)."
+        ]
+      },
+      "params": [
+        {
+          "id": "job",
+          "label": "Alertmanager scrape job",
+          "default": "alertmanager",
+          "placeholder": false,
+          "description": "The job label of the Alertmanager /metrics scrape."
+        },
+        {
+          "id": "target",
+          "label": "Alertmanager /metrics target",
+          "default": "alertmanager:9093",
+          "placeholder": true,
+          "description": "host:port of the Alertmanager."
+        },
+        {
+          "id": "base_url",
+          "label": "Alertmanager base URL",
+          "default": "http://alertmanager:9093",
+          "placeholder": true,
+          "description": "The base URL the synthetic probe calls (/-/ready)."
+        }
+      ],
+      "slis": [
+        {
+          "id": "availability",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Fraction of Alertmanager scrape targets that are up.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "up"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "notification_success_ratio",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Fraction of notifications Alertmanager attempted that did not fail (notifications_total minus notifications_failed_total, the failed leg guarded with `or vector(0)`).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "alertmanager_notifications_total",
+            "alertmanager_notifications_failed_total"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "notification_failures",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "per_second",
+          "description": "Alert notification send failures per second (not a latency — the entry has no evidence-backed Alertmanager latency metric; see evidence.gaps).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "alertmanager_notifications_failed_total"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        },
+        {
+          "id": "active_silences",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "count",
+          "description": "Active silences, against a ceiling of 20 (each silence is a deliberate blind spot).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "alertmanager_silences"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        }
+      ],
+      "sliCountByTier": {
+        "tier-3": 2,
+        "tier-2": 3,
+        "tier-1": 4
+      },
+      "tiers": [
+        "tier-3",
+        "tier-2",
+        "tier-1"
+      ]
+    },
+    {
+      "id": "grafana",
+      "kind": "product",
+      "title": "Grafana",
+      "product": "grafana",
+      "version": "1.0.0",
+      "summary": "HTTP success and latency, datasource proxy success and latency, unified-alerting evaluation, plugin requests, form login and internal database latency of a Grafana server.",
+      "tags": [
+        "observability",
+        "dashboards"
+      ],
+      "evidence": {
+        "status": "recorded-live",
+        "verifiedOn": "2026-09-22",
+        "sources": [
+          "reference-packs/grafana.pack.yaml (1.0.0) — the SLIs, SLOs, burn windows, chaos and synthetic set this entry parameterises",
+          "docs/catalogue-evidence/grafana.md §10 \"Measured live — 2026-09-22\" — Grafana 12.4.11 OSS scraped by Prometheus 3.14.0 with GF_DATABASE_INSTRUMENT_QUERIES=true, one Grafana-managed rule and a login canary; every SLI expression executed",
+          "tools/lib/contracts/stack-self-metrics.mjs (SRC.grafana) — grafana_http_request_duration_seconds, grafana_datasource_request_total and grafana_alerting_rule_evaluation_failures_total confirmed on grafana/grafana:12.4.4 (2026-09-07 stack exposition + PromQL)",
+          "Grafana documentation, \"Grafana metrics\" (internal /metrics)"
+        ],
+        "gaps": [
+          "OAuth / SAML logins are outside login_success_ratio (no IdP in the lab); a failed form login was not exercised.",
+          "Only 12.4.11 was measured on 2026-09-22 (12.4.4 on 2026-09-07); 10.4 and 11.x rest on the documentation."
+        ]
+      },
+      "params": [
+        {
+          "id": "job",
+          "label": "Grafana scrape job",
+          "default": "grafana",
+          "placeholder": false,
+          "description": "The job label of the Grafana /metrics scrape."
+        },
+        {
+          "id": "target",
+          "label": "Grafana /metrics target",
+          "default": "grafana:3000",
+          "placeholder": true,
+          "description": "host:port of the Grafana server (its /metrics endpoint)."
+        },
+        {
+          "id": "base_url",
+          "label": "Grafana base URL",
+          "default": "http://grafana:3000",
+          "placeholder": true,
+          "description": "The base URL the synthetic probes call (/api/health, /login)."
+        },
+        {
+          "id": "workload",
+          "label": "Grafana workload (chaos target)",
+          "default": "grafana",
+          "placeholder": true,
+          "description": "The Grafana workload (Deployment / pods) the chaos experiments target."
+        }
+      ],
+      "slis": [
+        {
+          "id": "http_request_success_ratio",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Fraction of HTTP requests returning non-5xx responses (4xx are intentional and excluded from the failure class).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "grafana_http_request_duration_seconds_count"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "datasource_proxy_success_ratio",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Fraction of datasource requests (Grafana → Prometheus / Loki / Tempo / …) that returned a non-5xx response.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "grafana_datasource_request_total"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.995,
+            "tier-1": 0.995
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "http_request_latency_p99",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "seconds",
+          "description": "99th-percentile HTTP request latency, server-side, across all handlers.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "grafana_http_request_duration_seconds_bucket"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "datasource_proxy_latency_p99",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "seconds",
+          "description": "99th-percentile datasource request latency.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "grafana_datasource_request_duration_seconds_bucket"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "alerting_rule_evaluation_success_ratio",
+          "type": "ratio",
+          "minTier": "tier-2",
+          "unit": "ratio",
+          "description": "Fraction of unified-alerting rule evaluations that succeeded vs. attempted (the failures counter is lazy and guarded with `or vector(0)`).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "grafana_alerting_rule_evaluations_total",
+            "grafana_alerting_rule_evaluation_failures_total"
+          ],
+          "objectives": {
+            "tier-3": 0.9995,
+            "tier-2": 0.9995,
+            "tier-1": 0.9995
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "plugin_request_success_ratio",
+          "type": "ratio",
+          "minTier": "tier-2",
+          "unit": "ratio",
+          "description": "Fraction of plugin requests (datasource and app plugins) that completed without error.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "grafana_plugin_request_total"
+          ],
+          "objectives": {
+            "tier-3": 0.999,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "login_success_ratio",
+          "type": "ratio",
+          "minTier": "tier-1",
+          "unit": "ratio",
+          "description": "Fraction of form logins (POST /login) answered 200 in the window, from Grafana's own HTTP request histogram; a window with no login reads no data rather than NaN.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "grafana_http_request_duration_seconds_count"
+          ],
+          "objectives": {
+            "tier-3": 0.999,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        },
+        {
+          "id": "database_query_latency_p99",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "seconds",
+          "description": "99th-percentile latency of Grafana's internal database queries (dashboards, users, orgs store). Exposed only with [database] instrument_queries = true.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "grafana_database_queries_duration_seconds_bucket"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        }
+      ],
+      "sliCountByTier": {
+        "tier-3": 2,
+        "tier-2": 6,
+        "tier-1": 8
+      },
+      "tiers": [
+        "tier-3",
+        "tier-2",
+        "tier-1"
+      ]
+    },
+    {
+      "id": "ibm-mq",
+      "kind": "product",
+      "title": "IBM MQ",
+      "product": "ibmmq",
+      "version": "1.0.0",
+      "summary": "Queue manager process liveness vs. client reachability, queue depth headroom, oldest message age, dead-letter queue, put/get canary and recovery-log latency of an IBM MQ queue manager.",
+      "tags": [
+        "messaging",
+        "queueing"
+      ],
+      "evidence": {
+        "status": "recorded-live",
+        "verifiedOn": "2026-09-16",
+        "sources": [
+          "mq-observability-pack packs/ibmmq.pack.yaml (0.2.0) — the certified pack this entry parameterises",
+          "mq-observability-pack docs/catalogue-evidence/ibmmq.md §1 (SLI selection), §2 (thresholds and objectives), §4 (metric-name catalogue, live-verified 2026-09-16 against icr.io/ibm-messaging/mq:10.0.0.5-r1 + mq_prometheus v6.0.0), §5 (chaos), §8 (burn-rate policy measured live)",
+          "mq-observability-pack docs/catalogue-evidence/ibmmq-live-metrics-2026-09-16.md — the 88 native and 175 exporter names as scraped / stored",
+          "mq-observability-pack reports/cert-report (npm run certify, first certified live 2026-09-16) — every chaos experiment's MTTD measured",
+          "ibm-messaging/mq-metric-samples and mq-golang mqmetric (the ibmmq_* name mapping); IBM Docs \"Metrics published by the IBM MQ container\""
+        ],
+        "gaps": [
+          "The $SYS count elements are per-interval deltas with overrideCType false in the lab; this entry's SLIs do not depend on them either way.",
+          "Multi-queue-manager topologies (NHA / RDQM) were not exercised; the SLIs aggregate by qmgr and work per queue manager."
+        ]
+      },
+      "params": [
+        {
+          "id": "native_job",
+          "label": "Native metrics scrape job",
+          "default": "ibmmq-native",
+          "placeholder": false,
+          "description": "The job label of the queue manager container's native /metrics scrape (port 9157, MQ_ENABLE_METRICS=true, honor_labels)."
+        },
+        {
+          "id": "native_target",
+          "label": "Native /metrics target",
+          "default": "mq:9157",
+          "placeholder": true,
+          "description": "host:port of the queue manager container's native metrics endpoint."
+        },
+        {
+          "id": "exporter_job",
+          "label": "mq_prometheus scrape job",
+          "default": "ibmmq-exporter",
+          "placeholder": false,
+          "description": "The job label of the mq_prometheus (mq-metric-samples) scrape — the MQ client view."
+        },
+        {
+          "id": "exporter_target",
+          "label": "mq_prometheus target",
+          "default": "mq-exporter:9157",
+          "placeholder": true,
+          "description": "host:port of mq_prometheus."
+        },
+        {
+          "id": "queue_pattern",
+          "label": "Application queue pattern",
+          "default": "APP.*",
+          "placeholder": false,
+          "description": "The regex of the application queues the depth and message-age SLIs read (the queues MONQ is enabled on)."
+        },
+        {
+          "id": "dlq",
+          "label": "Dead-letter queue",
+          "default": "APP.DLQ",
+          "placeholder": false,
+          "description": "The queue manager's DEADQ; any message on it is a delivery failure."
+        },
+        {
+          "id": "canary_queue",
+          "label": "Canary queue",
+          "default": "APP.CANARY",
+          "placeholder": true,
+          "description": "The queue the put/get canary round-trips on (mq-canary from mq-observability-pack)."
+        },
+        {
+          "id": "qmgr_workload",
+          "label": "Queue manager workload (chaos target)",
+          "default": "ibmmq-qmgr",
+          "placeholder": true,
+          "description": "The queue manager container / pod the chaos experiments stop."
+        }
+      ],
+      "slis": [
+        {
+          "id": "qmgr_process_up",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Fraction of queue managers whose native metrics endpoint is scraped successfully.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "up"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "qmgr_reachability",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Fraction of queue managers reporting status RUNNING (2) to a client connected over a SVRCONN channel.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "ibmmq_qmgr_status"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "queue_depth_headroom",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "ratio",
+          "description": "Highest current depth / MAXDEPTH across application queues. 1.0 means MQRC_Q_FULL for producers.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "ibmmq_queue_depth",
+            "ibmmq_queue_attribute_max_depth"
+          ],
+          "objectives": {
+            "tier-3": 0.999,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "oldest_message_age",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "seconds",
+          "description": "Age in seconds of the oldest message on each application queue (DIS QSTATUS MSGAGE, needs MONQ). The MQ equivalent of consumer lag in seconds.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "ibmmq_queue_oldest_message_age"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        },
+        {
+          "id": "dlq_depth",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "messages",
+          "description": "Messages parked on the dead-letter queue. Any non-zero value is a delivery failure that needs a human.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "ibmmq_queue_depth"
+          ],
+          "objectives": {
+            "tier-3": 0.999,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "canary_success",
+          "type": "ratio",
+          "minTier": "tier-2",
+          "unit": "ratio",
+          "description": "Fraction of synthetic put→get round-trips that returned the matching payload within 5 s. `or vector(0)` on the good side is deliberate — when every attempt fails there is no result=\"ok\" series at all.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "mq_canary_attempts_total"
+          ],
+          "objectives": {
+            "tier-3": 0.999,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "canary_roundtrip_p99",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "seconds",
+          "description": "99th-percentile put→get round-trip latency of the canary, client-observed.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "mq_canary_roundtrip_duration_seconds_bucket"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "log_write_latency",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "seconds",
+          "description": "Average recovery-log write latency. Persistent-message throughput is bounded by this number.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "ibmmq_qmgr_log_write_latency_seconds"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        }
+      ],
+      "sliCountByTier": {
+        "tier-3": 2,
+        "tier-2": 6,
+        "tier-1": 8
+      },
+      "tiers": [
+        "tier-3",
+        "tier-2",
+        "tier-1"
+      ]
+    },
+    {
+      "id": "kafka",
+      "kind": "product",
+      "title": "Apache Kafka",
+      "product": "kafka",
+      "version": "1.0.0",
+      "summary": "Broker availability, partition replication, consumer-group lag, produce/fetch latency and controller stability of a Kafka cluster.",
+      "tags": [
+        "messaging",
+        "streaming"
+      ],
+      "evidence": {
+        "status": "recorded-live",
+        "verifiedOn": "2026-09-22",
+        "sources": [
+          "reference-packs/kafka.pack.yaml (1.0.0) — the SLIs, SLOs, burn windows, chaos and synthetic set this entry parameterises",
+          "docs/catalogue-evidence/kafka.md §1 \"Measured live — 2026-09-22\" — apache/kafka:3.9.2 (KRaft, one node, RF 1) with jmx_prometheus_javaagent 1.6.0 + the Strimzi kafka-metrics.yaml rule set and kafka_exporter 1.10.0, scraped by Prometheus 3.14.0; every family and the pack's expressions executed",
+          "Strimzi kafka-metrics.yaml rule set (strimzi-kafka-operator examples/metrics, main @ 4286954) — the JMX → Prometheus name mapping (lowercaseOutputName)",
+          "Kafka 3.9 operations documentation (kafka.apache.org/documentation/#monitoring) — the MBeans behind the JMX names"
+        ],
+        "gaps": [
+          "Multi-broker behaviour (ISR shortfall, a real controller election) was not observed in the lab.",
+          "Strimzi-managed pod discovery is not modelled; the scrape jobs are static targets you point at your brokers and exporter."
+        ]
+      },
+      "params": [
+        {
+          "id": "broker_job",
+          "label": "Broker scrape job",
+          "default": "kafka-broker",
+          "placeholder": false,
+          "description": "The job label of the JMX exporter scrape (one target per broker, port 9404 with the Strimzi javaagent)."
+        },
+        {
+          "id": "broker_targets",
+          "label": "Broker JMX exporter targets",
+          "default": "kafka-broker.kafka:9404",
+          "placeholder": true,
+          "description": "host:port of every broker's JMX Prometheus exporter (comma-separated in the scrape config)."
+        },
+        {
+          "id": "exporter_job",
+          "label": "kafka_exporter scrape job",
+          "default": "kafka-exporter",
+          "placeholder": false,
+          "description": "The job label of the kafka_exporter scrape (topic, partition and consumer-group state)."
+        },
+        {
+          "id": "exporter_target",
+          "label": "kafka_exporter target",
+          "default": "kafka-exporter.kafka:9308",
+          "placeholder": true,
+          "description": "host:port of kafka_exporter."
+        },
+        {
+          "id": "bootstrap",
+          "label": "Bootstrap servers",
+          "default": "kafka.kafka:9092",
+          "placeholder": true,
+          "description": "The bootstrap address the synthetic produce/consume canary connects to."
+        },
+        {
+          "id": "broker_workload",
+          "label": "Broker workload (chaos target)",
+          "default": "kafka-broker",
+          "placeholder": true,
+          "description": "The broker workload (StatefulSet / pods) the chaos experiments target."
+        },
+        {
+          "id": "consumer_workload",
+          "label": "Consumer workload (chaos target)",
+          "default": "kafka-consumer",
+          "placeholder": true,
+          "description": "The consumer workload the consumer-overload experiment floods."
+        }
+      ],
+      "slis": [
+        {
+          "id": "broker_availability",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Fraction of brokers reporting ready vs. the cluster's declared broker count.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "up"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "consumer_group_lag_seconds",
+          "type": "threshold",
+          "minTier": "tier-3",
+          "unit": "seconds",
+          "description": "Maximum consumer-group lag in seconds equivalent, per consumer group (message-count lag over the group's rolling consumption rate).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "kafka_consumergroup_lag",
+            "kafka_consumergroup_current_offset"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        },
+        {
+          "id": "partition_replica_health",
+          "type": "ratio",
+          "minTier": "tier-2",
+          "unit": "ratio",
+          "description": "Fraction of partitions whose in-sync replica count equals their replica count (== bool, one per healthy partition).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "kafka_topic_partition_in_sync_replica",
+            "kafka_topic_partition_replicas"
+          ],
+          "objectives": {
+            "tier-3": 0.999,
+            "tier-2": 0.9995,
+            "tier-1": 0.9995
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "produce_latency_p99",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "seconds",
+          "description": "99th-percentile total time of Produce requests on the broker, in seconds (queue, local, replication wait, response send) — what a producer waits for an ack.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "kafka_network_requestmetrics_totaltimems"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "fetch_latency_p99",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "seconds",
+          "description": "99th-percentile local (broker processing) time of FetchConsumer requests, in seconds.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "kafka_network_requestmetrics_localtimems"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "controller_election_rate",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "events_per_hour",
+          "description": "Controller elections per hour, from the per-node NewActiveControllersCount gauge (max across nodes, never sum).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "kafka_controller_kafkacontroller_newactivecontrollerscount"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        }
+      ],
+      "sliCountByTier": {
+        "tier-3": 2,
+        "tier-2": 5,
+        "tier-1": 6
+      },
+      "tiers": [
+        "tier-3",
+        "tier-2",
+        "tier-1"
+      ]
+    },
+    {
+      "id": "loki",
+      "kind": "product",
+      "title": "Grafana Loki",
+      "product": "loki",
+      "version": "1.0.0",
+      "summary": "Availability of a Loki log store and the health of the log path into it — collector export failures, records refused at the collector, shipper drops.",
+      "tags": [
+        "observability",
+        "logs"
+      ],
+      "evidence": {
+        "status": "recorded-live",
+        "verifiedOn": "2026-09-07",
+        "sources": [
+          "tools/lib/contracts/stack-self-metrics.mjs — rows collector_export_failures_logs and collector_refused_logs (otel/opentelemetry-collector-contrib:0.115.1 exposition + PromQL, 2026-09-07; lazy registration observed), log_shipper_drops (grafana/promtail:3.3.2, 2026-09-07), scrape_success_ratio (up on prom/prometheus:v2.55.1 TSDB inventory)",
+          "mq-observability-pack stack/prometheus/prometheus.yml — job loki (loki:3100) scraped by Prometheus 3.14.0; the lab ships logs to Loki over OTLP (packs/ibmmq.pack.yaml exporters.logs otlphttp → loki:3100/otlp)",
+          "docs/MCP_INTEGRATION.md \"Lazily-registered counters\" — why the collector rows require the sibling counter and end with `or (count(<sibling>) * 0)`"
+        ],
+        "gaps": [
+          "No Loki-side request-latency or ingestion-rate SLI; the tier-2 threshold SLIs are drop / failure rates on the path into Loki, not latencies, and say so.",
+          "Loki itself was not measured; `up{job=\"loki\"}` is the Prometheus-generated series of the lab's scrape job."
+        ]
+      },
+      "params": [
+        {
+          "id": "job",
+          "label": "Loki scrape job",
+          "default": "loki",
+          "placeholder": false,
+          "description": "The job label of the Loki /metrics scrape."
+        },
+        {
+          "id": "target",
+          "label": "Loki /metrics target",
+          "default": "loki:3100",
+          "placeholder": true,
+          "description": "host:port of Loki (its /metrics endpoint)."
+        },
+        {
+          "id": "base_url",
+          "label": "Loki base URL",
+          "default": "http://loki:3100",
+          "placeholder": true,
+          "description": "The base URL the synthetic probe calls (/ready)."
+        }
+      ],
+      "slis": [
+        {
+          "id": "availability",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Fraction of Loki scrape targets that are up.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "up"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "log_export_failures",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "per_second",
+          "description": "Log records per second the OpenTelemetry Collector failed to export to Loki (0 when the collector has exported logs and the failure counter does not exist yet — the contract's presence-guarded zero).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "otelcol_exporter_send_failed_log_records",
+            "otelcol_exporter_sent_log_records"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        },
+        {
+          "id": "log_records_refused",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "per_second",
+          "description": "Log records per second refused at the collector's receiver (the current-generation \"the collector is losing telemetry\" signal; presence-guarded on the accepted counter).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "otelcol_receiver_refused_log_records",
+            "otelcol_receiver_accepted_log_records"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        },
+        {
+          "id": "shipper_drops",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "per_second",
+          "description": "promtail dropped entries per second (only where promtail ships files into Loki).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "promtail_dropped_entries_total"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        }
+      ],
+      "sliCountByTier": {
+        "tier-3": 1,
+        "tier-2": 2,
+        "tier-1": 4
+      },
+      "tiers": [
+        "tier-3",
+        "tier-2",
+        "tier-1"
+      ]
+    },
+    {
+      "id": "otel-collector",
+      "kind": "product",
+      "title": "OpenTelemetry Collector",
+      "product": "opentelemetry-collector",
+      "version": "1.0.0",
+      "summary": "Availability, export failures per signal, records refused at the receivers and exporter queue saturation of an OpenTelemetry Collector.",
+      "tags": [
+        "observability",
+        "collection"
+      ],
+      "evidence": {
+        "status": "recorded-live",
+        "verifiedOn": "2026-09-07",
+        "sources": [
+          "tools/lib/contracts/stack-self-metrics.mjs — rows collector_export_failures_metrics / _spans / _logs, collector_refused_metrics / _spans / _logs, collector_queue_saturation (otel/opentelemetry-collector-contrib:0.115.1 exposition + PromQL, 2026-09-07; 0.154.0 on the public Krystaline tier), scrape_success_ratio (up)",
+          "docs/MCP_INTEGRATION.md \"Lazily-registered counters\" — the registration behaviour measured before/after a forced failure and the presence-guard policy",
+          "docker/stack/prometheus.yml — job otel-collector — up{job=\"otel-collector\"} is the Prometheus-generated series for that target",
+          "OpenTelemetry Collector documentation, \"Internal telemetry\" (otelcol_exporter_sent_<kind>, send_failed_<kind>, receiver_accepted_<kind>, refused_<kind>, exporter_queue_size / queue_capacity)"
+        ],
+        "gaps": [
+          "No latency SLI — the collector's internal telemetry has no request-duration histogram in the evidence; the tier-2 threshold SLIs are failure rates and say so.",
+          "The `suffix` parameter (`_total`) is documented from the MQ lab's boards, not measured on a scraped collector."
+        ]
+      },
+      "params": [
+        {
+          "id": "job",
+          "label": "Collector scrape job",
+          "default": "otel-collector",
+          "placeholder": false,
+          "description": "The job label of the collector's internal-telemetry scrape (port 8888 by default)."
+        },
+        {
+          "id": "target",
+          "label": "Collector telemetry target",
+          "default": "otel-collector:8888",
+          "placeholder": true,
+          "description": "host:port of the collector's internal telemetry endpoint."
+        },
+        {
+          "id": "suffix",
+          "label": "Counter name suffix",
+          "default": "",
+          "placeholder": false,
+          "description": "`_total` when the collector's own telemetry reaches Prometheus through remote-write with add_metric_suffixes (the MQ lab); empty when Prometheus scrapes the collector directly (the measured stack)."
+        }
+      ],
+      "slis": [
+        {
+          "id": "availability",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Fraction of collector scrape targets that are up.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "up"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "metric_export_failures",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "per_second",
+          "description": "Metric points per second the collector failed to export (presence-guarded on the sent counter).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "otelcol_exporter_send_failed_metric_points",
+            "otelcol_exporter_sent_metric_points"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        },
+        {
+          "id": "span_export_failures",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "per_second",
+          "description": "Spans per second the collector failed to export (presence-guarded on the sent counter).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "otelcol_exporter_send_failed_spans",
+            "otelcol_exporter_sent_spans"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        },
+        {
+          "id": "log_export_failures",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "per_second",
+          "description": "Log records per second the collector failed to export (presence-guarded on the sent counter).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "otelcol_exporter_send_failed_log_records",
+            "otelcol_exporter_sent_log_records"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        },
+        {
+          "id": "queue_saturation",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "ratio",
+          "description": "Fill ratio of the fullest exporter queue (max across exporters; per-exporter max on both sides because queue_size is per data_type on 0.115.1).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "otelcol_exporter_queue_size",
+            "otelcol_exporter_queue_capacity"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        },
+        {
+          "id": "metrics_refused",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "per_second",
+          "description": "Metric points per second refused at the receivers (presence-guarded on the accepted counter).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "otelcol_receiver_refused_metric_points",
+            "otelcol_receiver_accepted_metric_points"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        }
+      ],
+      "sliCountByTier": {
+        "tier-3": 1,
+        "tier-2": 4,
+        "tier-1": 6
+      },
+      "tiers": [
+        "tier-3",
+        "tier-2",
+        "tier-1"
+      ]
+    },
+    {
+      "id": "prometheus",
+      "kind": "product",
+      "title": "Prometheus",
+      "product": "prometheus",
+      "version": "1.0.0",
+      "summary": "Scrape success and duration, rule evaluation, query latency and saturation, Alertmanager delivery, WAL and compaction health of a Prometheus server.",
+      "tags": [
+        "observability",
+        "metrics-store"
+      ],
+      "evidence": {
+        "status": "recorded-live",
+        "verifiedOn": "2026-09-22",
+        "sources": [
+          "reference-packs/prometheus.pack.yaml (1.0.0) — the SLIs, SLOs, burn windows, chaos and synthetic set this entry parameterises",
+          "docs/catalogue-evidence/prometheus.md §10 \"Measured live — 2026-09-22\" — Prometheus 3.14.0 scraping itself as job prometheus-self; every SLI expression executed (the two latency SLIs rewritten that day after their old names returned 0 series)",
+          "tools/lib/contracts/stack-self-metrics.mjs (SRC.prometheus) — prometheus_* names confirmed on prom/prometheus:v2.55.1 (2026-09-07 stack exposition + PromQL)",
+          "Prometheus documentation, \"Jobs and instances\" (up, scrape_duration_seconds are generated per scrape) and web/web.go at v2.55.1 (prometheus_http_request_duration_seconds histogram, buckets .1-120)"
+        ],
+        "gaps": [
+          "The 2026-09-22 measurement ran on 3.14.0 only; scrape_duration_seconds was seen on 2.55.1 (2026-09-07 inventory) and the HTTP histogram is source-verified at v2.55.1, not measured there."
+        ]
+      },
+      "params": [
+        {
+          "id": "self_job",
+          "label": "Self-scrape job",
+          "default": "prometheus-self",
+          "placeholder": false,
+          "description": "The job label under which the Meta-Prometheus scrapes this Prometheus's /metrics (the up-based SLIs read every target; this job carries the prometheus_* series)."
+        },
+        {
+          "id": "self_target",
+          "label": "Prometheus /metrics target",
+          "default": "prometheus:9090",
+          "placeholder": true,
+          "description": "host:port of the Prometheus under observation, scraped by the Meta-Prometheus."
+        },
+        {
+          "id": "api_url",
+          "label": "Query API base URL",
+          "default": "http://prometheus:9090",
+          "placeholder": true,
+          "description": "The base URL the synthetic probes call (/api/v1/query, /-/healthy, /-/ready)."
+        },
+        {
+          "id": "workload",
+          "label": "Prometheus workload (chaos target)",
+          "default": "prometheus-server",
+          "placeholder": true,
+          "description": "The Prometheus workload (StatefulSet / pods) the chaos experiments target."
+        }
+      ],
+      "slis": [
+        {
+          "id": "scrape_success_ratio",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Fraction of scrape attempts that succeeded (target up == 1).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "up"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "rule_evaluation_success_ratio",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Fraction of recording / alerting rule evaluations that succeeded vs. attempted.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "prometheus_rule_evaluations_total",
+            "prometheus_rule_evaluation_failures_total"
+          ],
+          "objectives": {
+            "tier-3": 0.999,
+            "tier-2": 0.9995,
+            "tier-1": 0.9995
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "scrape_duration_p99",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "seconds",
+          "description": "99th percentile of the per-target scrape duration over the last 5 minutes, across every target (scrape_duration_seconds is a per-target gauge, so the percentile is taken with quantile_over_time).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "scrape_duration_seconds"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "query_latency_p99",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "seconds",
+          "description": "99th-percentile latency of the HTTP query API (/api/v1/query and /api/v1/query_range) from the server's own request-duration histogram.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "prometheus_http_request_duration_seconds_bucket"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "alertmanager_notification_success_ratio",
+          "type": "ratio",
+          "minTier": "tier-2",
+          "unit": "ratio",
+          "description": "Fraction of alert notifications successfully delivered to Alertmanager from this Prometheus.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "prometheus_notifications_sent_total",
+            "prometheus_notifications_errors_total"
+          ],
+          "objectives": {
+            "tier-3": 0.999,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "tsdb_compaction_success_ratio",
+          "type": "ratio",
+          "minTier": "tier-2",
+          "unit": "ratio",
+          "description": "Fraction of TSDB compaction operations that succeeded (1 h rate).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "prometheus_tsdb_compactions_total",
+            "prometheus_tsdb_compactions_failed_total"
+          ],
+          "objectives": {
+            "tier-3": 0.9995,
+            "tier-2": 0.9995,
+            "tier-1": 0.9995
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "wal_corruption_freshness",
+          "type": "ratio",
+          "minTier": "tier-1",
+          "unit": "ratio",
+          "description": "WAL truncations minus WAL corruptions over WAL truncations (5 m rate). A healthy instance has zero corruptions in any window.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "prometheus_tsdb_wal_truncations_total",
+            "prometheus_tsdb_wal_corruptions_total"
+          ],
+          "objectives": {
+            "tier-3": 0.9999,
+            "tier-2": 0.9999,
+            "tier-1": 0.9999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "query_concurrent_saturation",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "ratio",
+          "description": "Concurrent query slots in use as a fraction of the limit.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "prometheus_engine_queries",
+            "prometheus_engine_queries_concurrent_max"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        }
+      ],
+      "sliCountByTier": {
+        "tier-3": 2,
+        "tier-2": 6,
+        "tier-1": 8
+      },
+      "tiers": [
+        "tier-3",
+        "tier-2",
+        "tier-1"
+      ]
+    },
+    {
+      "id": "tempo",
+      "kind": "product",
+      "title": "Grafana Tempo",
+      "product": "tempo",
+      "version": "1.0.0",
+      "summary": "Availability of a Tempo trace store and the health of the span path into it — collector export failures, spans refused at the collector, exporter queue saturation.",
+      "tags": [
+        "observability",
+        "traces"
+      ],
+      "evidence": {
+        "status": "recorded-live",
+        "verifiedOn": "2026-09-07",
+        "sources": [
+          "tools/lib/contracts/stack-self-metrics.mjs — rows collector_export_failures_spans, collector_refused_spans, collector_queue_saturation (otel/opentelemetry-collector-contrib:0.115.1 exposition + PromQL, 2026-09-07; queue_size / queue_capacity grouping measured on 0.115.1 and 0.154.0), scrape_success_ratio (up on prom/prometheus:v2.55.1 TSDB inventory)",
+          "mq-observability-pack stack/prometheus/prometheus.yml — job tempo (tempo:3200) scraped by Prometheus 3.14.0; packs/ibmmq.pack.yaml exporters.traces otlp → tempo:4317",
+          "docs/MCP_INTEGRATION.md \"Lazily-registered counters\""
+        ],
+        "gaps": [
+          "No Tempo-side query-latency or ingestion SLI; the tier-2 threshold SLIs are failure / saturation signals on the path into Tempo, not latencies, and say so.",
+          "Tempo itself was not measured; `up{job=\"tempo\"}` is the Prometheus-generated series of the lab's scrape job.",
+          "The exporter-name filter on the queue-saturation SLI (`exporter=~\"otlp.*\"`) is the library's addition to the verified unfiltered form; the label exists on both measured collectors."
+        ]
+      },
+      "params": [
+        {
+          "id": "job",
+          "label": "Tempo scrape job",
+          "default": "tempo",
+          "placeholder": false,
+          "description": "The job label of the Tempo /metrics scrape."
+        },
+        {
+          "id": "target",
+          "label": "Tempo /metrics target",
+          "default": "tempo:3200",
+          "placeholder": true,
+          "description": "host:port of Tempo (its /metrics endpoint)."
+        },
+        {
+          "id": "base_url",
+          "label": "Tempo base URL",
+          "default": "http://tempo:3200",
+          "placeholder": true,
+          "description": "The base URL the synthetic probe calls (/ready)."
+        },
+        {
+          "id": "traces_exporter",
+          "label": "Collector traces exporter name (regex)",
+          "default": "otlp.*",
+          "placeholder": false,
+          "description": "The collector exporter that pushes spans to Tempo (the `exporter` label of otelcol_exporter_queue_size)."
+        }
+      ],
+      "slis": [
+        {
+          "id": "availability",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Fraction of Tempo scrape targets that are up.",
+          "evidence": "recorded-live",
+          "metrics": [
+            "up"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.999,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "span_export_failures",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "per_second",
+          "description": "Spans per second the OpenTelemetry Collector failed to export to Tempo (0 when the collector has exported spans and the failure counter does not exist yet — presence-guarded).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "otelcol_exporter_send_failed_spans",
+            "otelcol_exporter_sent_spans"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        },
+        {
+          "id": "spans_refused",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "per_second",
+          "description": "Spans per second refused at the collector's receiver (presence-guarded on the accepted counter).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "otelcol_receiver_refused_spans",
+            "otelcol_receiver_accepted_spans"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        },
+        {
+          "id": "export_queue_saturation",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "ratio",
+          "description": "Fill ratio of the collector's traces exporter queue (fullest queue of the matching exporters).",
+          "evidence": "recorded-live",
+          "metrics": [
+            "otelcol_exporter_queue_size",
+            "otelcol_exporter_queue_capacity"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        }
+      ],
+      "sliCountByTier": {
+        "tier-3": 1,
+        "tier-2": 2,
+        "tier-1": 4
+      },
+      "tiers": [
+        "tier-3",
+        "tier-2",
+        "tier-1"
+      ]
+    },
+    {
+      "id": "http-service",
+      "kind": "archetype",
+      "title": "HTTP service (OTel semconv)",
+      "product": null,
+      "version": "1.0.0",
+      "summary": "Availability (non-5xx ratio), p99 request latency and in-flight saturation of an HTTP server instrumented with the OpenTelemetry SDK, in semconv v1.27.0 names.",
+      "tags": [
+        "archetype",
+        "http",
+        "semconv"
+      ],
+      "evidence": {
+        "status": "semconv",
+        "verifiedOn": null,
+        "sources": [
+          "OpenTelemetry Semantic Conventions v1.27.0, \"Semantic Conventions for HTTP Metrics\" — http.server.request.duration (Histogram, s; attributes http.request.method, http.response.status_code, url.scheme, http.route, error.type) and http.server.active_requests (UpDownCounter, {request}); stable since v1.23.0 (vendor/observability-pack-spec/v1.2/spec.md pins otel.semconv \"1.27.0\")",
+          "OpenTelemetry specification, \"Prometheus and OpenMetrics Compatibility\" (Metrics Data Model) — the exposition naming rules applied above (dots to underscores, unit suffix, `_bucket` / `_count` / `_sum` for histograms, `_total` only on monotonic sums; attribute keys dot-to-underscore)"
+        ],
+        "gaps": [
+          "No live exposition of the semconv HTTP metrics is recorded in either repository; evidence is the semconv and the Prometheus-compatibility spec only.",
+          "A traffic (throughput) SLI is not declared; the per_route_traffic view shows it without an objective."
+        ]
+      },
+      "params": [
+        {
+          "id": "job",
+          "label": "Service job label",
+          "default": "${service}",
+          "placeholder": false,
+          "description": "The `job` label of the service's series (the resource's service.name after the OTLP → Prometheus translation)."
+        },
+        {
+          "id": "duration_metric",
+          "label": "Request-duration histogram base name",
+          "default": "http_server_request_duration_seconds",
+          "placeholder": false,
+          "description": "The exposition name of http.server.request.duration without the _bucket / _count suffix (drop `_seconds` when the exporter does not append units)."
+        },
+        {
+          "id": "health_url",
+          "label": "Health endpoint URL",
+          "default": "http://${service}:8080/health",
+          "placeholder": true,
+          "description": "The URL the blackbox probe hits to prove the service answers."
+        }
+      ],
+      "slis": [
+        {
+          "id": "availability",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Fraction of HTTP requests not answered with a 5xx status, from the request-duration histogram's _count series (semconv http.server.request.duration, label http_response_status_code).",
+          "evidence": "semconv",
+          "metrics": [
+            "http_server_request_duration_seconds_count"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.995,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "latency_p99",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "seconds",
+          "description": "99th-percentile server-side request duration in seconds, from the semconv http.server.request.duration histogram.",
+          "evidence": "semconv",
+          "metrics": [
+            "http_server_request_duration_seconds_bucket"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "in_flight_saturation",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "requests",
+          "description": "In-flight HTTP requests (semconv http.server.active_requests), against a ceiling of 100 per instance.",
+          "evidence": "semconv",
+          "metrics": [
+            "http_server_active_requests"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        },
+        {
+          "id": "error_rate",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "per_second",
+          "description": "5xx responses per second (the same histogram _count series filtered to status 5xx), a domain SLI beside the ratio.",
+          "evidence": "semconv",
+          "metrics": [
+            "http_server_request_duration_seconds_count"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        }
+      ],
+      "sliCountByTier": {
+        "tier-3": 1,
+        "tier-2": 2,
+        "tier-1": 4
+      },
+      "tiers": [
+        "tier-3",
+        "tier-2",
+        "tier-1"
+      ]
+    },
+    {
+      "id": "queue-consumer",
+      "kind": "archetype",
+      "title": "Queue consumer (OTel semconv)",
+      "product": null,
+      "version": "1.0.0",
+      "summary": "Consume success ratio, p99 processing duration, p99 receive-operation duration and processing error rate of a message consumer instrumented with the OpenTelemetry SDK, in semconv v1.27.0 names.",
+      "tags": [
+        "archetype",
+        "messaging",
+        "semconv"
+      ],
+      "evidence": {
+        "status": "semconv",
+        "verifiedOn": null,
+        "sources": [
+          "OpenTelemetry Semantic Conventions v1.27.0, \"Semantic Conventions for Messaging Metrics\" — messaging.client.operation.duration (Histogram, s), messaging.client.consumed.messages (Counter, {message}), messaging.process.duration (Histogram, s); attributes messaging.system, messaging.destination.name, messaging.operation.type (enum — publish, create, receive, process, settle; the receive filter), messaging.consumer.group.name, error.type — messaging.operation.name is the system-specific operation name (poll, ack, send) and no SLI filters on it",
+          "OpenTelemetry Semantic Conventions v1.27.0, \"Semantic Conventions for Messaging Spans\" — messaging.system as an open enum (the MQ evidence doc §7 uses \"ibmmq\" the same way)",
+          "OpenTelemetry specification, \"Prometheus and OpenMetrics Compatibility\" — the exposition naming rules applied above"
+        ],
+        "gaps": [
+          "No live exposition of the semconv messaging metrics is recorded in either repository.",
+          "No lag SLI — lag is product-specific (compose with the kafka or ibm-mq entry).",
+          "The messaging metrics were not stable at v1.27.0; a consumer instrumented with a later SDK may expose different names."
+        ]
+      },
+      "params": [
+        {
+          "id": "job",
+          "label": "Consumer job label",
+          "default": "${service}",
+          "placeholder": false,
+          "description": "The `job` label of the consumer's series (the resource's service.name after the OTLP → Prometheus translation)."
+        },
+        {
+          "id": "messaging_system",
+          "label": "Messaging system",
+          "default": "kafka",
+          "placeholder": false,
+          "description": "The messaging.system attribute value the consumer sets (kafka, rabbitmq, jms, ibmmq, …), used as the messaging_system label filter."
+        },
+        {
+          "id": "destination",
+          "label": "Destination name (regex)",
+          "default": ".*",
+          "placeholder": false,
+          "description": "The messaging.destination.name values (queue or topic) the SLIs read, as a regex."
+        },
+        {
+          "id": "canary_target",
+          "label": "Canary target",
+          "default": "${service}-canary",
+          "placeholder": true,
+          "description": "What the synthetic produce-then-observe canary points at (broker address and destination)."
+        }
+      ],
+      "slis": [
+        {
+          "id": "consume_success",
+          "type": "ratio",
+          "minTier": "tier-3",
+          "unit": "ratio",
+          "description": "Fraction of consumed messages whose operation carried no error.type (semconv messaging.client.consumed.messages; error.type is set only on failure, so an empty error_type label is a success).",
+          "evidence": "semconv",
+          "metrics": [
+            "messaging_client_consumed_messages_total"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.995,
+            "tier-1": 0.999
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "process_duration_p99",
+          "type": "threshold",
+          "minTier": "tier-2",
+          "unit": "seconds",
+          "description": "99th-percentile per-message processing duration in seconds (semconv messaging.process.duration).",
+          "evidence": "semconv",
+          "metrics": [
+            "messaging_process_duration_seconds_bucket"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "receive_duration_p99",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "seconds",
+          "description": "99th-percentile duration of the receive operation in seconds (semconv messaging.client.operation.duration filtered on messaging.operation.type = receive, the enum value; messaging.operation.name is the system-specific name and would select nothing).",
+          "evidence": "semconv",
+          "metrics": [
+            "messaging_client_operation_duration_seconds_bucket"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "30d",
+            "tier-2": "30d",
+            "tier-1": "30d"
+          }
+        },
+        {
+          "id": "processing_errors",
+          "type": "threshold",
+          "minTier": "tier-1",
+          "unit": "per_second",
+          "description": "Consumed messages per second whose operation carried an error.type.",
+          "evidence": "semconv",
+          "metrics": [
+            "messaging_client_consumed_messages_total"
+          ],
+          "objectives": {
+            "tier-3": 0.99,
+            "tier-2": 0.99,
+            "tier-1": 0.99
+          },
+          "windows": {
+            "tier-3": "7d",
+            "tier-2": "7d",
+            "tier-1": "7d"
+          }
+        }
+      ],
+      "sliCountByTier": {
+        "tier-3": 1,
+        "tier-2": 2,
+        "tier-1": 4
+      },
+      "tiers": [
+        "tier-3",
+        "tier-2",
+        "tier-1"
+      ]
+    }
+  ],
+  "scaffoldParams": [
+    {
+      "id": "oncall_channel",
+      "label": "Chat channel for SEV1/SEV2",
+      "default": "#${service}-oncall",
+      "placeholder": true,
+      "description": "The Teams channel the SEV1 and SEV2 routes post to."
+    },
+    {
+      "id": "team_channel",
+      "label": "Chat channel for SEV3",
+      "default": "#${service}-team",
+      "placeholder": true,
+      "description": "The Teams channel the SEV3 route posts to."
+    },
+    {
+      "id": "pager_service",
+      "label": "Voice (pager) target for SEV1",
+      "default": "pagerduty://${service}",
+      "placeholder": true,
+      "description": "The voice channel of the SEV1 route (tier-2 and tier-1; L4.MUST.tier1_voice_route)."
+    },
+    {
+      "id": "pager_service_low",
+      "label": "Voice (pager) target for SEV2",
+      "default": "pagerduty://${service}-low",
+      "placeholder": true,
+      "description": "The voice channel of the SEV2 route (tier-1)."
+    },
+    {
+      "id": "metrics_endpoint",
+      "label": "Prometheus query endpoint",
+      "default": "http://prometheus:9090",
+      "placeholder": true,
+      "description": "Where the metrics backend answers PromQL (telemetry.backends metrics-prom)."
+    },
+    {
+      "id": "remote_write_url",
+      "label": "Prometheus remote-write URL",
+      "default": "http://prometheus:9090/api/v1/write",
+      "placeholder": true,
+      "description": "Where the collector remote-writes metrics (pipelines.exporters.metrics)."
+    },
+    {
+      "id": "logs_endpoint",
+      "label": "Loki endpoint",
+      "default": "http://loki:3100",
+      "placeholder": true,
+      "description": "Where the logs backend answers (telemetry.backends logs-loki)."
+    },
+    {
+      "id": "logs_otlp_endpoint",
+      "label": "Loki OTLP ingest endpoint",
+      "default": "http://loki:3100/otlp",
+      "placeholder": true,
+      "description": "Where the collector pushes logs over OTLP/HTTP (pipelines.exporters.logs)."
+    },
+    {
+      "id": "traces_endpoint",
+      "label": "Tempo endpoint",
+      "default": "http://tempo:3200",
+      "placeholder": true,
+      "description": "Where the traces backend answers (telemetry.backends traces-tempo)."
+    },
+    {
+      "id": "traces_otlp_endpoint",
+      "label": "Tempo OTLP ingest endpoint",
+      "default": "tempo:4317",
+      "placeholder": true,
+      "description": "Where the collector pushes traces over OTLP/gRPC (pipelines.exporters.traces)."
+    },
+    {
+      "id": "chaos_target",
+      "label": "Chaos target workload",
+      "default": "${service}",
+      "placeholder": true,
+      "description": "The workload the generic chaos experiments inject faults into (entries with their own chaos templates name their own targets)."
+    },
+    {
+      "id": "probe_target",
+      "label": "Health probe target",
+      "default": "http://${service}:8080/health",
+      "placeholder": true,
+      "description": "The URL the fallback blackbox probe hits (entries with their own synthetic templates do not use it)."
+    },
+    {
+      "id": "runbook_dir",
+      "label": "Runbook directory",
+      "default": "runbooks",
+      "placeholder": false,
+      "description": "Directory the remediation runbook paths point into (file://<dir>/<name>.md)."
+    },
+    {
+      "id": "prometheus_version",
+      "label": "Prometheus version you run",
+      "default": "3.14",
+      "placeholder": true,
+      "description": "The version of the Prometheus that stores the metrics (telemetry.backends metrics-prom version.declared, storage.metrics.version); min stays 2.53, the floor the expressions are known to work from, and tier-1 enforces the block."
+    },
+    {
+      "id": "loki_version",
+      "label": "Loki version you run",
+      "default": "3.7",
+      "placeholder": true,
+      "description": "The version of the Loki that stores the logs (telemetry.backends logs-loki version.declared, storage.logs.version); min stays 3.0."
+    },
+    {
+      "id": "tempo_version",
+      "label": "Tempo version you run",
+      "default": "2.10",
+      "placeholder": true,
+      "description": "The version of the Tempo that stores the traces (telemetry.backends traces-tempo version.declared, storage.traces.version); min stays 2.5."
+    }
+  ],
+  "errors": []
+}

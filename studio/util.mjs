@@ -43,6 +43,19 @@ export function installDialogFocusTrap() {
   });
 }
 
+// Hand the browser a file to save (a pack YAML, a compiled artefact).
+export function downloadText(filename, text, contentType = 'text/plain') {
+  const blob = new Blob([text], { type: contentType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 // "5s ago" / "12m ago" / "3h ago" / "2d ago" from an ISO timestamp.
 export function fmtRelative(iso) {
   if (!iso) return '';

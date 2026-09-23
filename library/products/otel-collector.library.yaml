@@ -1,0 +1,173 @@
+# Library entry: OpenTelemetry Collector
+# Seeded from tools/lib/contracts/stack-self-metrics.mjs (rows collector_export_failures_*,
+# collector_refused_*, collector_queue_saturation; SRC.otelcol). Every otelcol alias carries the
+# stamp "otel/opentelemetry-collector-contrib:0.115.1 exposition + PromQL, 2026-09-07": the names
+# were read off the collector's internal-telemetry endpoint on the pinned docker stack (and seen
+# on 0.154.0 on the public tier) — recorded-live. No `_total` suffix on any observed collector.
+library: v1
+id: otel-collector
+kind: product
+version: 1.0.0
+title: OpenTelemetry Collector
+product: opentelemetry-collector
+summary: Availability, export failures per signal, records refused at the receivers and exporter queue saturation of an OpenTelemetry Collector.
+description: |
+  The collector observed through its internal telemetry (otelcol_* families, scraped by Prometheus).
+  Its exporter and receiver counters register lazily — at the first export / receive, or on some
+  releases at the first failure — so every SLI here requires the always-present sibling and ends
+  with the contract's presence-guarded zero: a collector that has exported reads 0 failures unless
+  the failure counter exists, and a collector that never exported that signal reads no data.
+  The names carry no `_total` suffix on any observed collector; a deployment whose collector
+  self-telemetry is pushed through prometheusremotewrite with add_metric_suffixes on sees them
+  with `_total` (the mq-observability-pack boards read otelcol_exporter_sent_metric_points_total)
+  — the `suffix` parameter appends it.
+tags: [observability, collection]
+evidence:
+  status: recorded-live
+  verifiedOn: 2026-09-07
+  sources:
+    - tools/lib/contracts/stack-self-metrics.mjs — rows collector_export_failures_metrics / _spans / _logs, collector_refused_metrics / _spans / _logs, collector_queue_saturation (otel/opentelemetry-collector-contrib:0.115.1 exposition + PromQL, 2026-09-07; 0.154.0 on the public Krystaline tier), scrape_success_ratio (up)
+    - docs/MCP_INTEGRATION.md "Lazily-registered counters" — the registration behaviour measured before/after a forced failure and the presence-guard policy
+    - docker/stack/prometheus.yml — job otel-collector — up{job="otel-collector"} is the Prometheus-generated series for that target
+    - OpenTelemetry Collector documentation, "Internal telemetry" (otelcol_exporter_sent_<kind>, send_failed_<kind>, receiver_accepted_<kind>, refused_<kind>, exporter_queue_size / queue_capacity)
+  notes: |
+    otelcol_processor_dropped_<kind> exist on no current collector (processorhelper rework); the
+    receiver refused counters are the current-generation loss signal. otelcol_exporter_queue_size
+    carries a data_type label on 0.115.1 that queue_capacity lacks, hence the per-exporter max
+    grouping of the saturation SLI.
+  gaps:
+    - No latency SLI — the collector's internal telemetry has no request-duration histogram in the evidence; the tier-2 threshold SLIs are failure rates and say so.
+    - The `suffix` parameter (`_total`) is documented from the MQ lab's boards, not measured on a scraped collector.
+params:
+  - id: job
+    label: Collector scrape job
+    default: otel-collector
+    description: The job label of the collector's internal-telemetry scrape (port 8888 by default).
+  - id: target
+    label: Collector telemetry target
+    default: otel-collector:8888
+    placeholder: true
+    description: host:port of the collector's internal telemetry endpoint.
+  - id: suffix
+    label: Counter name suffix
+    default: ""
+    description: "`_total` when the collector's own telemetry reaches Prometheus through remote-write with add_metric_suffixes (the MQ lab); empty when Prometheus scrapes the collector directly (the measured stack)."
+otel:
+  languages: [go]
+telemetry:
+  scrape_jobs:
+    - job_name: "${job}"
+      scrape_interval: 15s
+      targets: ["${target}"]
+slis:
+  - id: availability
+    type: ratio
+    minTier: tier-3
+    description: Fraction of collector scrape targets that are up.
+    why: When the collector dies every `up == 0` selector it fed is empty, not zero; its own scrape is the one series that still says so.
+    unit: ratio
+    metrics: [up]
+    evidence: { status: recorded-live, source: "stack-self-metrics scrape_success_ratio (up, 2026-09-07); docker/stack/prometheus.yml job otel-collector" }
+    good: |
+      sum(up{job="${job}"} == bool 1)
+    total: |
+      count(up{job="${job}"})
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.999, tier-3: 0.99 }
+      window: 30d
+    burn: availability
+    remediation:
+      runbook: collector-down
+      automation: manual-only
+      guardrails: { max_invocations_per_hour: 1, requires_human_above: SEV2 }
+      minTier: tier-2
+  - id: metric_export_failures
+    type: threshold
+    minTier: tier-2
+    description: Metric points per second the collector failed to export (presence-guarded on the sent counter).
+    why: Failed metric exports are the SLIs of every other pack going blind; a failure rate, not a latency (evidence.gaps).
+    unit: per_second
+    metrics: [otelcol_exporter_send_failed_metric_points, otelcol_exporter_sent_metric_points]
+    evidence: { status: recorded-live, source: "stack-self-metrics collector_export_failures_metrics: verified on otel/opentelemetry-collector-contrib:0.115.1, 2026-09-07" }
+    query: |
+      sum(rate(otelcol_exporter_send_failed_metric_points${suffix}[5m])) or (count(otelcol_exporter_sent_metric_points${suffix}) * 0)
+    threshold: 0
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: saturation
+  - id: span_export_failures
+    type: threshold
+    minTier: tier-2
+    description: Spans per second the collector failed to export (presence-guarded on the sent counter).
+    why: Lost spans are broken traces; the counter registers at the first export (0.115.1) or the first failure (0.154.0), which the guard absorbs.
+    unit: per_second
+    metrics: [otelcol_exporter_send_failed_spans, otelcol_exporter_sent_spans]
+    evidence: { status: recorded-live, source: "stack-self-metrics collector_export_failures_spans: verified on 0.115.1, 2026-09-07; 0.154.0 public tier" }
+    query: |
+      sum(rate(otelcol_exporter_send_failed_spans${suffix}[5m])) or (count(otelcol_exporter_sent_spans${suffix}) * 0)
+    threshold: 0
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: saturation
+  - id: log_export_failures
+    type: threshold
+    minTier: tier-2
+    description: Log records per second the collector failed to export (presence-guarded on the sent counter).
+    why: Lost log records are the lines an incident review will not find.
+    unit: per_second
+    metrics: [otelcol_exporter_send_failed_log_records, otelcol_exporter_sent_log_records]
+    evidence: { status: recorded-live, source: "stack-self-metrics collector_export_failures_logs: verified on 0.115.1, 2026-09-07" }
+    query: |
+      sum(rate(otelcol_exporter_send_failed_log_records${suffix}[5m])) or (count(otelcol_exporter_sent_log_records${suffix}) * 0)
+    threshold: 0
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: saturation
+  - id: queue_saturation
+    type: threshold
+    minTier: tier-1
+    description: Fill ratio of the fullest exporter queue (max across exporters; per-exporter max on both sides because queue_size is per data_type on 0.115.1).
+    why: A filling queue is a backend falling behind before a single item is dropped.
+    unit: ratio
+    metrics: [otelcol_exporter_queue_size, otelcol_exporter_queue_capacity]
+    evidence: { status: recorded-live, source: "stack-self-metrics collector_queue_saturation: verified on 0.115.1, 2026-09-07 (grouping measured on 0.115.1 and 0.154.0)" }
+    query: |
+      max(max by (exporter, instance, job) (otelcol_exporter_queue_size) / max by (exporter, instance, job) (otelcol_exporter_queue_capacity))
+    threshold: 0.8
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: slow
+  - id: metrics_refused
+    type: threshold
+    minTier: tier-1
+    description: Metric points per second refused at the receivers (presence-guarded on the accepted counter).
+    why: The current-generation loss signal — the processor drop counters exist on no current collector.
+    unit: per_second
+    metrics: [otelcol_receiver_refused_metric_points, otelcol_receiver_accepted_metric_points]
+    evidence: { status: recorded-live, source: "stack-self-metrics collector_refused_metrics: verified on 0.115.1, 2026-09-07" }
+    query: |
+      sum(rate(otelcol_receiver_refused_metric_points${suffix}[5m])) or (count(otelcol_receiver_accepted_metric_points${suffix}) * 0)
+    threshold: 0
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: slow
+views:
+  - id: per_exporter_sent
+    bind: ref:platform/per-resource-rollup
+    params: { metric: otelcol_exporter_sent_metric_points, by: [exporter] }
+    minTier: tier-2
+synthetic:
+  - id: collector-otlp-probe
+    kind: blackbox-exporter
+    target: "http://${target}/metrics"
+    interval: 1m
+    assertions:
+      - { status_code: 200 }
+      - { body_contains: otelcol_ }
+    on_fail_severity: SEV2
+    minTier: tier-3

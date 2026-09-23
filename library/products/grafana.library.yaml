@@ -1,0 +1,254 @@
+# Library entry: Grafana (dashboards, datasource proxy, unified alerting, plugins, login)
+# Derived from reference-packs/grafana.pack.yaml (1.0.0); every SLI expression was executed
+# on Grafana 12.4.11 OSS on 2026-09-22 (docs/catalogue-evidence/grafana.md §10).
+library: v1
+id: grafana
+kind: product
+version: 1.0.0
+title: Grafana
+product: grafana
+summary: HTTP success and latency, datasource proxy success and latency, unified-alerting evaluation, plugin requests, form login and internal database latency of a Grafana server.
+description: |
+  Grafana 10.4 / 11 / 12 observed through its internal /metrics (grafana_* families), scraped by
+  Prometheus. The eight SLIs are the reference pack's vital signs, tiered: the HTTP and datasource
+  success ratios at tier-3, the latencies, alerting evaluation and plugins at tier-2, login and the
+  internal database at tier-1 (the database histogram needs [database] instrument_queries = true).
+tags: [observability, dashboards]
+derivedFrom: reference-packs/grafana.pack.yaml@1.0.0
+evidence:
+  status: recorded-live
+  verifiedOn: 2026-09-22
+  sources:
+    - reference-packs/grafana.pack.yaml (1.0.0) — the SLIs, SLOs, burn windows, chaos and synthetic set this entry parameterises
+    - docs/catalogue-evidence/grafana.md §10 "Measured live — 2026-09-22" — Grafana 12.4.11 OSS scraped by Prometheus 3.14.0 with GF_DATABASE_INSTRUMENT_QUERIES=true, one Grafana-managed rule and a login canary; every SLI expression executed
+    - tools/lib/contracts/stack-self-metrics.mjs (SRC.grafana) — grafana_http_request_duration_seconds, grafana_datasource_request_total and grafana_alerting_rule_evaluation_failures_total confirmed on grafana/grafana:12.4.4 (2026-09-07 stack exposition + PromQL)
+    - Grafana documentation, "Grafana metrics" (internal /metrics)
+  notes: |
+    grafana_datasource_request_total is registered on the first datasource request (any rule evaluation,
+    any /api/ds/query); grafana_alerting_rule_evaluation_failures_total per org on the first evaluation
+    (the SLI guards it with `or vector(0)`); grafana_database_queries_duration_seconds only with
+    instrument_queries on. A window without a form login reads no data for login_success_ratio rather
+    than NaN (the total leg keeps only a positive rate).
+  gaps:
+    - OAuth / SAML logins are outside login_success_ratio (no IdP in the lab); a failed form login was not exercised.
+    - Only 12.4.11 was measured on 2026-09-22 (12.4.4 on 2026-09-07); 10.4 and 11.x rest on the documentation.
+params:
+  - id: job
+    label: Grafana scrape job
+    default: grafana
+    description: The job label of the Grafana /metrics scrape.
+  - id: target
+    label: Grafana /metrics target
+    default: grafana:3000
+    placeholder: true
+    description: host:port of the Grafana server (its /metrics endpoint).
+  - id: base_url
+    label: Grafana base URL
+    default: http://grafana:3000
+    placeholder: true
+    description: The base URL the synthetic probes call (/api/health, /login).
+  - id: workload
+    label: Grafana workload (chaos target)
+    default: grafana
+    placeholder: true
+    description: The Grafana workload (Deployment / pods) the chaos experiments target.
+otel:
+  languages: [go]
+  custom_attributes: [grafana.org.id]
+telemetry:
+  scrape_jobs:
+    - job_name: "${job}"
+      scrape_interval: 15s
+      targets: ["${target}"]
+slis:
+  - id: http_request_success_ratio
+    type: ratio
+    minTier: tier-3
+    description: Fraction of HTTP requests returning non-5xx responses (4xx are intentional and excluded from the failure class).
+    why: Grafana's front door; a 5xx here is every dashboard and every API client failing at once.
+    unit: ratio
+    semconv_metric: http.server.request.duration
+    metrics: [grafana_http_request_duration_seconds_count]
+    evidence: { status: recorded-live, source: "grafana.md §10 — HTTP success ratio 1 on 12.4.11; grafana_http_request_duration_seconds_count confirmed on 12.4.4 (stack-self-metrics grafana_http_errors)" }
+    good: |
+      sum(rate(grafana_http_request_duration_seconds_count{status_code!~"5.."}[5m]))
+    total: |
+      sum(rate(grafana_http_request_duration_seconds_count[5m]))
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.999, tier-3: 0.99 }
+      window: 30d
+    burn: availability
+    chaos:
+      id: grafana-pod-kill
+      engine: chaos-mesh
+      target: "${workload}"
+      fault: { kind: pod-failure, fraction: 0.5, duration: 60s }
+      expected_mttd: 2m
+      minTier: tier-2
+    remediation:
+      runbook: http-errors
+      automation: argo-workflow://restart-grafana-with-readiness-check
+      guardrails: { max_invocations_per_hour: 2, requires_human_above: SEV2, rollback_on_failure: true, cooldown_after_success: 15m, circuit_breaker: { failures: 2, window: 1h } }
+      minTier: tier-2
+  - id: datasource_proxy_success_ratio
+    type: ratio
+    minTier: tier-3
+    description: Fraction of datasource requests (Grafana → Prometheus / Loki / Tempo / …) that returned a non-5xx response.
+    why: The leading indicator that dashboards will break — panels fail here before anyone sees a red panel.
+    unit: ratio
+    semconv_metric: grafana.datasource.proxy.success
+    metrics: [grafana_datasource_request_total]
+    evidence: { status: recorded-live, source: "grafana.md §10 — datasource proxy success 1 on 12.4.11; grafana_datasource_request_total confirmed on 12.4.4 (stack-self-metrics datasource_errors: registered on the first datasource request)" }
+    good: |
+      sum(rate(grafana_datasource_request_total{code!~"5.."}[5m]))
+    total: |
+      sum(rate(grafana_datasource_request_total[5m]))
+    slo:
+      objective: { tier-1: 0.995, tier-2: 0.995, tier-3: 0.99 }
+      window: 30d
+    burn: availability
+    chaos:
+      id: datasource-backend-partition
+      engine: chaos-mesh
+      target: "${workload}"
+      fault: { kind: network-partition, target: prometheus, duration: 3m }
+      expected_mttd: 2m
+      minTier: tier-1
+  - id: http_request_latency_p99
+    type: threshold
+    minTier: tier-2
+    description: 99th-percentile HTTP request latency, server-side, across all handlers.
+    why: The page-load latency every user feels, from Grafana's own request histogram.
+    unit: seconds
+    semconv_metric: http.server.request.duration
+    metrics: [grafana_http_request_duration_seconds_bucket]
+    evidence: { status: recorded-live, source: "grafana.md §10 — HTTP p99 0.024 s on 12.4.11 (histogram family confirmed on 12.4.4)" }
+    query: |
+      histogram_quantile(0.99,
+        sum by (le)(rate(grafana_http_request_duration_seconds_bucket[5m])))
+    threshold: 1
+    slo:
+      objective: 0.99
+      window: 30d
+    burn: latency
+  - id: datasource_proxy_latency_p99
+    type: threshold
+    minTier: tier-2
+    description: 99th-percentile datasource request latency.
+    why: Slow datasources make every panel slow; this isolates the backend leg from Grafana's own rendering.
+    unit: seconds
+    semconv_metric: grafana.datasource.proxy.duration
+    metrics: [grafana_datasource_request_duration_seconds_bucket]
+    evidence: { status: recorded-live, source: "grafana.md §10 — datasource p99 0.0093 s on 12.4.11" }
+    query: |
+      histogram_quantile(0.99,
+        sum by (le)(rate(grafana_datasource_request_duration_seconds_bucket[5m])))
+    threshold: 2
+    slo:
+      objective: 0.99
+      window: 30d
+    burn: latency
+  - id: alerting_rule_evaluation_success_ratio
+    type: ratio
+    minTier: tier-2
+    description: Fraction of unified-alerting rule evaluations that succeeded vs. attempted (the failures counter is lazy and guarded with `or vector(0)`).
+    why: A Grafana-managed rule that fails to evaluate fires-or-not incorrectly; notification reliability is only as good as this ratio.
+    unit: ratio
+    semconv_metric: grafana.alerting.rule.evaluation.success
+    metrics: [grafana_alerting_rule_evaluations_total, grafana_alerting_rule_evaluation_failures_total]
+    evidence: { status: recorded-live, source: "grafana.md §10 — 7 grafana_alerting_rule_evaluation* families on 12.4.11, 0.100 evaluations/s, guarded ratio 1; failures counter confirmed on 12.4.4 (stack-self-metrics rule_evaluation_failures)" }
+    good: |
+      sum(rate(grafana_alerting_rule_evaluations_total[5m])) -
+        (sum(rate(grafana_alerting_rule_evaluation_failures_total[5m])) or vector(0))
+    total: |
+      sum(rate(grafana_alerting_rule_evaluations_total[5m]))
+    slo:
+      objective: 0.9995
+      window: 30d
+    burn: availability
+    remediation:
+      runbook: alerting-evaluation-failures
+      automation: manual-only
+      guardrails: { max_invocations_per_hour: 1, requires_human_above: SEV2 }
+      minTier: tier-2
+  - id: plugin_request_success_ratio
+    type: ratio
+    minTier: tier-2
+    description: Fraction of plugin requests (datasource and app plugins) that completed without error.
+    why: Plugin failures surface as broken panels before the plugin itself is suspected.
+    unit: ratio
+    semconv_metric: grafana.plugin.request.success
+    metrics: [grafana_plugin_request_total]
+    evidence: { status: recorded-live, source: "grafana.md §10 — plugin success 1 on 12.4.11" }
+    good: |
+      sum(rate(grafana_plugin_request_total{status="ok"}[5m]))
+    total: |
+      sum(rate(grafana_plugin_request_total[5m]))
+    slo:
+      objective: 0.999
+      window: 30d
+    burn: availability
+  - id: login_success_ratio
+    type: ratio
+    minTier: tier-1
+    description: Fraction of form logins (POST /login) answered 200 in the window, from Grafana's own HTTP request histogram; a window with no login reads no data rather than NaN.
+    why: Sudden drops mean Grafana's login path is failing and need fast triage even while signed-in sessions still work.
+    unit: ratio
+    semconv_metric: grafana.auth.login.success
+    metrics: [grafana_http_request_duration_seconds_count]
+    evidence: { status: recorded-live, source: "grafana.md §10 — the POST /login series and the guarded ratio executed end to end with a login canary on 12.4.11 (0 NaN, 8 absent samples over 40 min)" }
+    good: |
+      sum(rate(grafana_http_request_duration_seconds_count{handler="/login",method="POST",status_code="200"}[5m]))
+    total: |
+      sum(rate(grafana_http_request_duration_seconds_count{handler="/login",method="POST"}[5m]) > 0)
+    slo:
+      objective: 0.999
+      window: 7d
+    burn: availability
+  - id: database_query_latency_p99
+    type: threshold
+    minTier: tier-1
+    description: 99th-percentile latency of Grafana's internal database queries (dashboards, users, orgs store). Exposed only with [database] instrument_queries = true.
+    why: Slow metadata queries degrade the UI and alerting evaluation together; the histogram exists only when instrument_queries is on — declare the prerequisite.
+    unit: seconds
+    semconv_metric: grafana.database.query.duration
+    metrics: [grafana_database_queries_duration_seconds_bucket]
+    evidence: { status: recorded-live, source: "grafana.md §10 — 22 bucket series with instrument_queries on, p99 0.0085 s on 12.4.11 (the singular family the pack once named never existed)" }
+    query: |
+      histogram_quantile(0.99,
+        sum by (le)(rate(grafana_database_queries_duration_seconds_bucket[5m])))
+    threshold: 0.5
+    slo:
+      objective: 0.99
+      window: 30d
+    burn: latency
+views:
+  - id: per_handler_latency
+    bind: ref:platform/per-resource-rollup
+    params: { metric: grafana_http_request_duration_seconds_count, by: [handler] }
+    minTier: tier-2
+dashboards:
+  - id: grafana-alerting-health
+    minTier: tier-2
+    binds: [slis.alerting_rule_evaluation_success_ratio, slos.alerting_rule_evaluation_success_ratio]
+  - id: grafana-plugins-and-auth
+    minTier: tier-1
+    binds: [slis.plugin_request_success_ratio, slis.login_success_ratio, slos.plugin_request_success_ratio, slos.login_success_ratio]
+synthetic:
+  - id: grafana-health-probe
+    kind: blackbox-exporter
+    target: "${base_url}/api/health"
+    interval: 30s
+    assertions:
+      - { status_code: 200 }
+    on_fail_severity: SEV2
+    minTier: tier-3
+  - id: grafana-login-canary
+    kind: k6
+    target: "${base_url}/login"
+    interval: 5m
+    assertions:
+      - { status_code: 200 }
+      - { latency_lt: 2s }
+    on_fail_severity: SEV2
+    minTier: tier-1

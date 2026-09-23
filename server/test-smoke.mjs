@@ -1363,12 +1363,142 @@ try {
   assert(/too large/i.test(tooBigBody.error || ''),
          '413 error message names the size problem');
 
+  // ---- The BUILD journey API (docs/BUILD_JOURNEY.md, slice 2) ----
+  const postLib = (path, body) => fetch(`${base}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+  // GET /api/library — the index the DEFINE step lists.
+  const libIndex = await getJson(base, '/api/library');
+  assert(libIndex.ok === true && Array.isArray(libIndex.entries), 'GET /api/library returns { ok, entries[] }');
+  assert(libIndex.entries.length === 10, 'GET /api/library lists the ten shipped entries', libIndex.entries.length, 10);
+  assert(libIndex.entries[0].kind === 'product' && libIndex.entries.at(-1).kind === 'archetype', 'library index lists products first, archetypes last');
+  assert(Array.isArray(libIndex.scaffoldParams) && libIndex.scaffoldParams.length === 16, 'library index carries the 16 scaffold params', libIndex.scaffoldParams?.length, 16);
+  assert(Array.isArray(libIndex.errors) && libIndex.errors.length === 0, 'library index reports no file errors', libIndex.errors);
+  const kafkaRow = libIndex.entries.find(e => e.id === 'kafka');
+  assert(kafkaRow && kafkaRow.sliCountByTier['tier-2'] === 5 && kafkaRow.evidence.status === 'recorded-live', 'index row carries sliCountByTier + evidence status');
+  assert(kafkaRow.slis.every(s => s.objectives && s.windows), 'index SLIs carry objectives AND windows per tier');
+
+  // GET /api/library/requirements/:tier — the rubric filtered by minTier.
+  const reqT2 = await getJson(base, '/api/library/requirements/tier-2');
+  assert(reqT2.ok === true && reqT2.tier === 'tier-2' && reqT2.clauses.length === 16, 'GET /api/library/requirements/tier-2 returns the 16 clauses', reqT2.clauses?.length, 16);
+  assert(reqT2.clauses.filter(c => c.severity === 'MUST').length === 15, 'tier-2 requirements: 15 MUST');
+  const reqBad = await fetch(`${base}/api/library/requirements/tier-9`);
+  const reqBadBody = await reqBad.json();
+  assert(reqBad.status === 400 && reqBadBody.ok === false && /tier-3, tier-2, tier-1/.test(reqBadBody.error || ''), 'unknown tier → 400 naming the known tiers', reqBadBody.error);
+
+  // GET /api/library/:id — one entry, index row + full templates.
+  const kafkaEntry = await getJson(base, '/api/library/kafka');
+  assert(kafkaEntry.ok === true && kafkaEntry.entry?.id === 'kafka', 'GET /api/library/kafka returns the index row as entry');
+  assert(Array.isArray(kafkaEntry.params) && kafkaEntry.params.length === 7, 'GET /api/library/kafka carries the 7 entry params', kafkaEntry.params?.length, 7);
+  assert(Array.isArray(kafkaEntry.slis) && kafkaEntry.slis.length === 6 && kafkaEntry.slis[0].good && kafkaEntry.slis[0].slo && kafkaEntry.slis[0].why, 'GET /api/library/kafka carries the full SLI templates (good/total, slo, why)');
+  const entryMissing = await fetch(`${base}/api/library/nope`);
+  const entryMissingBody = await entryMissing.json();
+  assert(entryMissing.status === 404 && /known:.*kafka/.test(entryMissingBody.error || ''), 'unknown entry → 404 naming the known entries', entryMissingBody.error);
+
+  // POST /api/library/instantiate — the drive's inputs.
+  const instBody = { entries: ['kafka', 'http-service'], name: 'orders-api', tier: 'tier-2', environment: 'prod', owners: ['team-orders'] };
+  const instRes = await postLib('/api/library/instantiate', instBody);
+  assert(instRes.status === 200, 'POST /api/library/instantiate → 200', instRes.status, 200);
+  const inst = await instRes.json();
+  assert(inst.ok === true && inst.canonical?.metadata?.name === 'orders-api', 'instantiate returns the canonical');
+  assert(typeof inst.canonicalYaml === 'string' && inst.canonicalYaml.includes('apiVersion'), 'instantiate returns canonicalYaml');
+  assert(Array.isArray(inst.todos) && inst.todos.length === 21, 'instantiate returns the 21 todos of kafka+http-service@tier-2', inst.todos?.length, 21);
+  assert(inst.todos.every(t => t.path && Array.isArray(t.clauses) && Array.isArray(t.params)), 'each todo carries path, clauses, params');
+  assert(inst.provenance?.source === 'kafka@1.0.0,http-service@1.0.0' && inst.provenance.tier === 'tier-2', 'instantiate returns the provenance');
+  assert(Array.isArray(inst.warnings) && inst.warnings.length === 0, 'instantiate: no warnings on the shipped entries (the Lezer grammar ran)', inst.warnings);
+  assert(Array.isArray(inst.schemaErrors) && inst.schemaErrors.length === 0, 'instantiate: the pack validates against the schema', inst.schemaErrors);
+  assert(inst.summary?.must?.passed === 15 && inst.summary.must.total === 15, 'instantiate summary: MUST 15/15 at tier-2', inst.summary?.must);
+  assert(inst.summary.onPlaceholder.length === 4, 'instantiate summary: 4 clauses pass on a placeholder', inst.summary.onPlaceholder.length, 4);
+  assert(inst.conformance?.declaredTier === 'tier-2' && inst.conformance.mustPercent === 100, 'instantiate conformance is evaluated on the env-overlaid canonical');
+  assert(inst.canonical.spec.slis.length === 7, 'instantiate: 7 SLIs (5 kafka + 2 http-service at tier-2)', inst.canonical.spec.slis.length, 7);
+  // The toggles: an SLI unticked, dashboards off → exactly the dashboard clauses fail and the schema says why.
+  const instOff = await (await postLib('/api/library/instantiate', { ...instBody, toggles: { dashboards: false, slis: ['kafka_broker_availability', 'kafka_produce_latency_p99'] } })).json();
+  assert(instOff.ok === true && instOff.canonical.spec.slis.length === 2, 'instantiate honours toggles.slis', instOff.canonical?.spec?.slis?.length, 2);
+  assert(instOff.summary.failing.map(f => f.id).sort().join(',') === 'L3.MUST.service_overview_dashboard,L3.MUST.slo_burn_dashboard', 'dashboards off → exactly the two L3 dashboard clauses fail', instOff.summary.failing.map(f => f.id));
+  assert(instOff.schemaErrors.some(e => /dashboards/.test(e)), 'dashboards off → the schema reports the missing key', instOff.schemaErrors);
+  const instExcluded = await (await postLib('/api/library/instantiate', { ...instBody, toggles: { slis: ['kafka_broker_availability', 'kafka_controller_election_rate'] } })).json();
+  assert(instExcluded.ok === true && instExcluded.warnings.some(w => w.kind === 'sli-excluded' && w.sli === 'kafka_controller_election_rate'), 'an SLI above the tier comes back as an sli-excluded warning, not a 400', instExcluded.warnings);
+  // Usage errors are 400 { ok:false, errors }, never 500.
+  const badCases = [
+    [{ ...instBody, entries: ['nope'] }, /unknown library entry "nope"/, 'unknown entry'],
+    [{ ...instBody, tier: 'tier-7' }, /unknown tier "tier-7"/, 'unknown tier'],
+    [{ ...instBody, name: '' }, /service name is required/, 'missing name'],
+    [{ ...instBody, params: { nope: '1' } }, /unknown param|not a parameter|nope/, 'unknown param key'],
+    [{ ...instBody, params: { 'kafka.broker_job': 'a"b' } }, /quote|"/, 'a quote in a param value'],
+    [{ ...instBody, toggles: { slis: ['kafka_controller_election_rate'] } }, /at least one SLI/, 'a selection with nothing left at the tier'],
+    [{}, /entries/, 'an empty body'],
+  ];
+  for (const [body, re, label] of badCases) {
+    const r = await postLib('/api/library/instantiate', body);
+    const j = await r.json();
+    assert(r.status === 400 && j.ok === false && Array.isArray(j.errors) && re.test(j.errors.join(' ')), `instantiate usage error (${label}) → 400 { ok:false, errors }`, `${r.status} ${JSON.stringify(j.errors)}`, `400 ${re}`);
+  }
+
+  // POST /api/library/compile — every target from the generated canonical, nothing registered.
+  const packsBefore = (await getJson(base, '/api/packs')).packs.length;
+  for (const target of ['prometheus-rules', 'otel-collector', 'alertmanager', 'grafana-dashboard']) {
+    const c = await (await postLib('/api/library/compile', { canonical: inst.canonical, target })).json();
+    assert(c.ok === true && c.target === target && typeof c.label === 'string' && typeof c.contentType === 'string', `POST /api/library/compile ${target} → ok, label, contentType`);
+    assert(typeof c.artifact?.filename === 'string' && typeof c.artifact.content === 'string' && c.artifact.content.length > 100 && Array.isArray(c.artifact.warnings), `compile ${target} returns artifact { filename, content, warnings }`);
+  }
+  assert((await getJson(base, '/api/packs')).packs.length === packsBefore, 'compile previews register nothing');
+  const compileBad = await postLib('/api/library/compile', { canonical: inst.canonical, target: 'nope' });
+  const compileBadBody = await compileBad.json();
+  assert(compileBad.status === 400 && /prometheus-rules, otel-collector, alertmanager, grafana-dashboard/.test(compileBadBody.error || ''), 'unknown compile target → 400 naming the known targets', compileBadBody.error);
+  const compileNoCanonical = await postLib('/api/library/compile', { target: 'alertmanager' });
+  assert(compileNoCanonical.status === 400, 'compile without a canonical → 400', compileNoCanonical.status, 400);
+
+  // POST /api/library/register — into the upload registry, as /api/validate registers.
+  const reg = await (await postLib('/api/library/register', { canonical: inst.canonical })).json();
+  assert(reg.ok === true && /^uploaded-orders-api-[0-9a-f]{8}$/.test(reg.registered?.id || ''), 'POST /api/library/register returns an uploaded-* id', reg.registered?.id);
+  assert(reg.registered.source === 'library:kafka,http-service@tier-2', 'register defaults the source hint to library:<entries>@<tier>', reg.registered.source);
+  assert(reg.adapted?.meta?.apiVersion === 'observability.platform/v1' && typeof reg.conformance?.mustPercent === 'number', 'register returns adapted + conformance like /api/validate');
+  assert(reg.summary?.onPlaceholder?.length === 4, 'register returns the summary with onPlaceholder', reg.summary?.onPlaceholder?.length, 4);
+  const regList = (await getJson(base, '/api/packs')).packs;
+  const regRow = regList.find(p => p.id === reg.registered.id);
+  assert(!!regRow && regRow.source === 'uploaded' && regRow.description === 'Uploaded pack — library:kafka,http-service@tier-2', 'the registered pack is in the catalog as an upload, its description carrying the source hint', regRow && [regRow.source, regRow.description]);
+  const regConf = await getJson(base, `/api/packs/${reg.registered.id}/conformance`);
+  assert(regConf.declaredTier === 'tier-2' && regConf.mustPercent === 100, 'the registered pack answers /api/packs/:id/conformance like an upload');
+  const regAgain = await (await postLib('/api/library/register', { canonical: inst.canonical, source: 'my-source' })).json();
+  assert(regAgain.registered.id === reg.registered.id && regAgain.registered.source === 'my-source', 'register is idempotent on content and honours an explicit source');
+  const regBad = await postLib('/api/library/register', { canonical: { apiVersion: 'x' } });
+  const regBadBody = await regBad.json();
+  assert(regBad.status === 400 && regBadBody.ok === false && Array.isArray(regBadBody.errors), 'register of a non-canonical → 400 { ok:false, errors }', regBad.status, 400);
+  // A canonical without library annotations registered here is labelled like an upload (metadata.name), never library:<name>@<tier>.
+  const regPlain = await (await postLib('/api/library/register', { canonical: authRaw })).json();
+  assert(regPlain.ok === true && regPlain.registered.source === authRaw.metadata.name && !/^library:/.test(regPlain.registered.source),
+    'register of a plain pack defaults the source hint to metadata.name, not library:…', regPlain.registered?.source, authRaw.metadata?.name);
+
+  // POST /api/validate carries summary.onPlaceholder for a library-built pack — and not for a plain one.
+  const valLib = await (await postLib('/api/validate', inst.canonical)).json();
+  assert(valLib.ok === true && valLib.summary?.onPlaceholder?.length === 4, '/api/validate of a library pack attaches summary.onPlaceholder', valLib.summary?.onPlaceholder?.length, 4);
+  assert(valLib.registered.id === reg.registered.id, '/api/validate registers the same id as /api/library/register (same content)');
+  const valPlain = await (await postLib('/api/validate', authRaw)).json();
+  assert(valPlain.ok === true && valPlain.summary === undefined, '/api/validate of a plain pack carries no summary');
+  await fetch(`${base}/api/uploads`, { method: 'DELETE' });
+
+  // The studio ships the journey.
+  const shellBuild = await getText(base, '/');
+  assert(shellBuild.includes('data-action="build-library"'), 'shell: the upload popover offers Build from the library…');
+  for (const mod of ['build-model.mjs', 'build-api.mjs', 'build-define-view.mjs', 'build-compile-view.mjs', 'build-verify-view.mjs']) {
+    const r = await fetch(`${base}/${mod}`);
+    assert(r.status === 200, `/${mod} served`, r.status, 200);
+  }
+
   // Static assets
   const css = await getText(base, '/app.css');
   assert(css.includes('--L2X:'), '/app.css served with L2X palette');
   assert(css.includes('.crawl-dropzone'), '/app.css ships crawl-dropzone styles');
+  assert(css.includes('.build-rail'), '/app.css ships the BUILD journey styles');
   const js = await getText(base, '/app.mjs');
   assert(js.includes('LAYER_DEFS'), '/app.mjs served');
+  assert(js.includes('BUILD_TABS'), '/app.mjs ships BUILD_TABS');
+  // The header's cards follow the mode: every mode transition passes through applyModeChrome, which
+  // must repaint them — leaving the BUILD journey once left the build cards up over the home hero.
+  const fnBody = (name) => (js.split(`function ${name}(`)[1] || '').split('\n}\n')[0];
+  assert(fnBody('applyModeChrome').includes('paintObservaActiveTab()'), 'app.mjs: applyModeChrome repaints the header cards (build ↔ analysis)');
+  // The visible brand is the OBSERVA chrome's <a class="observa-brand" href="/">: the home affordance must bind it,
+  // or a click reloads the page and a persisted build mode resumes the journey instead of returning home.
+  assert(fnBody('setupHomeAffordance').includes('.observa-brand') && fnBody('setupHomeAffordance').includes('goHome()'), 'app.mjs: setupHomeAffordance binds .observa-brand → goHome');
   assert(js.includes('setupCrawlPanel'), '/app.mjs wires setupCrawlPanel');
   assert(js.includes('renderCrawlResult'), '/app.mjs ships renderCrawlResult');
   assert(js.includes('setupDraftFromMcpPanel'), '/app.mjs wires setupDraftFromMcpPanel (Phase 7n)');

@@ -1,0 +1,151 @@
+# Library entry (archetype): a queue / topic consumer built from scratch, instrumented with the
+# OpenTelemetry SDK and observed through the messaging client metrics of the OpenTelemetry
+# Semantic Conventions v1.27.0 (the version the pack pins). Metric names are the semconv names in
+# their Prometheus exposition spelling:
+#   messaging.client.consumed.messages   (Counter, {message}) → messaging_client_consumed_messages_total
+#   messaging.process.duration           (Histogram, s)       → messaging_process_duration_seconds_{bucket,count,sum}
+#   messaging.client.operation.duration  (Histogram, s)       → messaging_client_operation_duration_seconds_{bucket,count,sum}
+#   attributes messaging.system, messaging.destination.name, messaging.operation.type, error.type
+#     → labels messaging_system, messaging_destination_name, messaging_operation_type, error_type
+#   (messaging.operation.type is the enum publish | create | receive | process | settle;
+#    messaging.operation.name is the system-specific name — poll, ack, send — and is never a filter here)
+# following the OpenTelemetry "Prometheus and OpenMetrics Compatibility" rules (dots → underscores,
+# unit suffix, `_total` on monotonic sums, `_bucket` per histogram bucket). error.type is set only
+# when an operation failed, so `error_type=""` selects the successes.
+library: v1
+id: queue-consumer
+kind: archetype
+version: 1.0.0
+title: Queue consumer (OTel semconv)
+summary: Consume success ratio, p99 processing duration, p99 receive-operation duration and processing error rate of a message consumer instrumented with the OpenTelemetry SDK, in semconv v1.27.0 names.
+description: |
+  For a consumer that has no pack yet: four SLIs read from the OpenTelemetry messaging client
+  metrics (semconv v1.27.0) after translation to the Prometheus exposition. Availability is the
+  fraction of consumed messages whose operation carried no error.type; latency is the p99 of the
+  per-message processing duration; the receive-operation duration and the error rate are the tier-1
+  additions. The messaging system (kafka, rabbitmq, jms, …) is a parameter used as a label filter.
+  Consumer LAG is product-specific (Kafka's kafka_consumergroup_lag, MQ's oldest message age) and
+  lives in the product entries: compose this archetype with one of them for lag.
+tags: [archetype, messaging, semconv]
+evidence:
+  status: semconv
+  verifiedOn: null
+  sources:
+    - OpenTelemetry Semantic Conventions v1.27.0, "Semantic Conventions for Messaging Metrics" — messaging.client.operation.duration (Histogram, s), messaging.client.consumed.messages (Counter, {message}), messaging.process.duration (Histogram, s); attributes messaging.system, messaging.destination.name, messaging.operation.type (enum — publish, create, receive, process, settle; the receive filter), messaging.consumer.group.name, error.type — messaging.operation.name is the system-specific operation name (poll, ack, send) and no SLI filters on it
+    - OpenTelemetry Semantic Conventions v1.27.0, "Semantic Conventions for Messaging Spans" — messaging.system as an open enum (the MQ evidence doc §7 uses "ibmmq" the same way)
+    - OpenTelemetry specification, "Prometheus and OpenMetrics Compatibility" — the exposition naming rules applied above
+  notes: |
+    NOT verified against a live exposition in this repository. The messaging metrics were still
+    marked development (not stable) at v1.27.0 and their names moved between releases
+    (messaging.client.published.messages of 1.27.0 became messaging.client.sent.messages in a later
+    release; this entry uses none of the publish-side names). The spelling of the consumed-messages
+    counter, the process-duration histogram and the error.type / messaging.system attributes is
+    derived from the semconv v1.27.0 document and the Prometheus-compatibility rules; confirm it on
+    your collector's actual output (slice 3, MCP metric-name verification) before trusting the numbers.
+  gaps:
+    - No live exposition of the semconv messaging metrics is recorded in either repository.
+    - No lag SLI — lag is product-specific (compose with the kafka or ibm-mq entry).
+    - The messaging metrics were not stable at v1.27.0; a consumer instrumented with a later SDK may expose different names.
+params:
+  - id: job
+    label: Consumer job label
+    default: "${service}"
+    description: The `job` label of the consumer's series (the resource's service.name after the OTLP → Prometheus translation).
+  - id: messaging_system
+    label: Messaging system
+    default: kafka
+    description: The messaging.system attribute value the consumer sets (kafka, rabbitmq, jms, ibmmq, …), used as the messaging_system label filter.
+  - id: destination
+    label: Destination name (regex)
+    default: ".*"
+    description: The messaging.destination.name values (queue or topic) the SLIs read, as a regex.
+  - id: canary_target
+    label: Canary target
+    default: "${service}-canary"
+    placeholder: true
+    description: What the synthetic produce-then-observe canary points at (broker address and destination).
+otel:
+  languages: [go]
+  custom_attributes: [messaging.system]
+slis:
+  - id: consume_success
+    type: ratio
+    minTier: tier-3
+    description: Fraction of consumed messages whose operation carried no error.type (semconv messaging.client.consumed.messages; error.type is set only on failure, so an empty error_type label is a success).
+    why: A message the consumer failed on is work not done; this counts every message the SDK saw, without needing the application's own counters.
+    unit: ratio
+    semconv_metric: messaging.client.consumed.messages
+    metrics: [messaging_client_consumed_messages_total]
+    evidence: { status: semconv, source: "OTel semconv v1.27.0 messaging metrics + Prometheus compatibility naming; spelling not verified live in this repo (evidence.notes)" }
+    good: |
+      sum(rate(messaging_client_consumed_messages_total{job="${job}",messaging_system="${messaging_system}",messaging_destination_name=~"${destination}",error_type=""}[5m]))
+    total: |
+      sum(rate(messaging_client_consumed_messages_total{job="${job}",messaging_system="${messaging_system}",messaging_destination_name=~"${destination}"}[5m]))
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.995, tier-3: 0.99 }
+      window: 30d
+    burn: availability
+  - id: process_duration_p99
+    type: threshold
+    minTier: tier-2
+    description: 99th-percentile per-message processing duration in seconds (semconv messaging.process.duration).
+    why: Processing time is what turns into lag; it is the consumer's own latency, independent of the broker.
+    unit: seconds
+    semconv_metric: messaging.process.duration
+    metrics: [messaging_process_duration_seconds_bucket]
+    evidence: { status: semconv, source: "OTel semconv v1.27.0 messaging metrics + Prometheus compatibility naming; spelling not verified live in this repo (evidence.notes)" }
+    query: |
+      histogram_quantile(0.99,
+        sum by (le)(rate(messaging_process_duration_seconds_bucket{job="${job}",messaging_system="${messaging_system}",messaging_destination_name=~"${destination}"}[5m])))
+    threshold: 1
+    slo:
+      objective: 0.99
+      window: 30d
+    burn: latency
+  - id: receive_duration_p99
+    type: threshold
+    minTier: tier-1
+    description: 99th-percentile duration of the receive operation in seconds (semconv messaging.client.operation.duration filtered on messaging.operation.type = receive, the enum value; messaging.operation.name is the system-specific name and would select nothing).
+    why: The broker-side leg of the consumer's latency; slow receives with fast processing point at the broker, not the code.
+    unit: seconds
+    semconv_metric: messaging.client.operation.duration
+    metrics: [messaging_client_operation_duration_seconds_bucket]
+    evidence: { status: semconv, source: "OTel semconv v1.27.0 messaging metrics + Prometheus compatibility naming; not verified live" }
+    query: |
+      histogram_quantile(0.99,
+        sum by (le)(rate(messaging_client_operation_duration_seconds_bucket{job="${job}",messaging_system="${messaging_system}",messaging_operation_type="receive"}[5m])))
+    threshold: 0.5
+    slo:
+      objective: 0.99
+      window: 30d
+    burn: latency
+  - id: processing_errors
+    type: threshold
+    minTier: tier-1
+    description: Consumed messages per second whose operation carried an error.type.
+    why: A ratio hides a burst of failures under high throughput; the absolute rate is what a dead-letter queue fills at.
+    unit: per_second
+    semconv_metric: messaging.client.consumed.messages
+    metrics: [messaging_client_consumed_messages_total]
+    evidence: { status: semconv, source: "OTel semconv v1.27.0 messaging metrics + Prometheus compatibility naming; not verified live" }
+    query: |
+      sum(rate(messaging_client_consumed_messages_total{job="${job}",messaging_system="${messaging_system}",messaging_destination_name=~"${destination}",error_type!=""}[5m])) or vector(0)
+    threshold: 1
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: saturation
+views:
+  - id: per_destination_throughput
+    bind: ref:platform/per-resource-rollup
+    params: { metric: "messaging_client_consumed_messages_total{job=\"${job}\"}", by: [messaging_destination_name] }
+    minTier: tier-2
+synthetic:
+  - id: consume-canary
+    kind: k6
+    target: "${canary_target}"
+    interval: 1m
+    assertions:
+      - { message_consumed_within: 30s }
+    on_fail_severity: SEV2
+    minTier: tier-3
