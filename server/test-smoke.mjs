@@ -22,6 +22,12 @@ process.env.OBSERVOGRAM_WORKSPACE = SMOKE_WORKSPACE;
 // admin (Grafana-style bootstrap) and 401 everything — this line IS the
 // open-mode regression assertion the productization plan promises.
 process.env.OBSERVOGRAM_AUTH = 'off';
+// /healthz's composite build must come from the reader, not from a
+// BUILD override exported in the shell that runs the suite (the /healthz
+// vs /api/version assertions below compare the two). server/version.mjs
+// resolves on first request, so this still lands before it reads.
+delete process.env.OBSERVOGRAM_BUILD;
+delete process.env.TOMOGRAPH_BUILD;
 
 import { start } from './index.mjs';
 import { createServer } from 'node:http';
@@ -100,6 +106,30 @@ try {
   assert(health.specVersion === '1.2', 'GET /healthz reports specVersion 1.2');
   assert(/^\d+\.\d+\.\d+/.test(health.version || ''), 'GET /healthz carries the app version', health.version);
   assert(typeof health.build === 'string' && health.build.length > 0, 'GET /healthz carries the build identifier', health.build);
+
+  // /api/version — which build is this? (server/build-info.mjs)
+  const verRes = await fetch(`${base}/api/version`);
+  const ver = await verRes.json();
+  assert(verRes.status === 200 && ver.ok === true, 'GET /api/version answers 200 ok');
+  assert((verRes.headers.get('cache-control') || '') === 'no-store', 'GET /api/version is Cache-Control: no-store', verRes.headers.get('cache-control'), 'no-store');
+  assert(/application\/json/.test(verRes.headers.get('content-type') || ''), 'GET /api/version is JSON');
+  assert(ver.version === health.version, '/api/version and /healthz agree on the version', ver.version, health.version);
+  for (const k of ['version', 'build', 'commit', 'branch', 'dirty', 'date', 'shallow', 'source', 'label']) {
+    assert(k in ver, `GET /api/version carries ${k}`);
+  }
+  assert(['git', 'file', 'package'].includes(ver.source), '/api/version source is git | file | package', ver.source);
+  assert(typeof ver.dirty === 'boolean' && typeof ver.shallow === 'boolean', '/api/version dirty and shallow are booleans', { dirty: ver.dirty, shallow: ver.shallow });
+  assert(ver.build === null || Number.isInteger(ver.build), '/api/version build is an integer or null', ver.build);
+  assert(typeof ver.label === 'string' && ver.label.startsWith(`v${ver.version} · build `), '/api/version label starts with the version and the build', ver.label);
+  if (ver.source === 'git' && !ver.shallow) {
+    assert(Number.isInteger(ver.build) && ver.build > 0 && /^[0-9a-f]{7,}$/.test(ver.commit || ''), 'from git: build is a commit count and commit a short sha', { build: ver.build, commit: ver.commit });
+    assert(health.build.startsWith(`${ver.build}.${ver.commit}`), '/healthz composite build is <build>.<sha> from the same reader', health.build, `${ver.build}.${ver.commit}`);
+  } else if (ver.source === 'git') {
+    // CI's default checkout is shallow: no count to report, the sha still is
+    assert(ver.build === null && /^[0-9a-f]{7,}$/.test(ver.commit || '') && health.build.startsWith(ver.commit), 'from a shallow clone: build null, the sha carries /healthz', { build: ver.build, commit: ver.commit, health: health.build });
+  }
+  const shellHtml = await getText(base, '/');
+  assert(/<span id="build-label"[^>]*>v[^<]+<\/span>/.test(shellHtml), 'the served shell carries the footer build-label span with its fallback');
 
   // /api/packs catalog — empty by design as of Phase 7q (the studio
   // boots empty; user opens packs from disk via Upload / crawler /

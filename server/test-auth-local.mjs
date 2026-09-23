@@ -59,6 +59,12 @@ try {
   r = await fetch(`${base}/healthz`);
   assert(r.ok, '/healthz stays open (probes)');
 
+  r = await fetch(`${base}/api/version`);
+  j = await r.json();
+  assert(r.status === 200 && j.ok === true && typeof j.label === 'string' && 'build' in j,
+    '/api/version stays open in identity mode (the footer fills before sign-in)', r.status, 200);
+  assert(r.headers.get('cache-control') === 'no-store', '/api/version is no-store in identity mode too', r.headers.get('cache-control'), 'no-store');
+
   r = await fetch(`${base}/`);
   assert(r.ok, 'studio shell stays open (client redirects to login)');
 
@@ -328,6 +334,9 @@ try {
 
   let r = await fetch(`${base2}/api/packs`);
   assert(r.status === 401, 'the seeded posture protects the API like any identity mode', r.status, 401);
+
+  r = await fetch(`${base2}/api/version`);
+  assert(r.status === 200 && (await r.json()).ok === true, 'auth on, no token, no session: /api/version still answers 200', r.status, 200);
 
   // The default credential is loopback-only, without exception.
   let guardErr = null;

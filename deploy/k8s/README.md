@@ -5,8 +5,8 @@ that serves the studio UI and the `/api/*` routes from one process. The
 deploy is correspondingly small: one Deployment, one Service, one Ingress.
 
 ```bash
-# 1. Build the image from the repo root.
-docker build -t observogram:0.4.0 .
+# 1. Stamp the checkout (build.json says which commit the image is), then build it from the repo root.
+npm run build:stamp && docker build -t observogram:0.4.0 .
 
 # 2. Make it visible to your cluster.
 #    docker-desktop: nothing to do.
