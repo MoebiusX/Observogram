@@ -22,7 +22,7 @@
 import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { artefactCardHtml } from './card-html.mjs';
-import { evidenceBadge, todoHtml, wireParamInputs } from './build-atoms.mjs';
+import { evidenceBadge, todoHtml, wireParamInputs, revealTodo } from './build-atoms.mjs';
 
 export const STATE_GLYPH = { pass: '✓', placeholder: '◐', fail: '✗', pending: '○', neutral: '·' };
 export const STATE_WORD = { pass: 'passes', placeholder: 'passes on a placeholder', fail: 'fails', pending: 'not evaluated yet', neutral: 'no clause applies' };
@@ -56,13 +56,18 @@ export function ghostCardHtml(g) {
     </div>`;
 }
 
-/** A real artefact: Discover's card body, Scaffold dashed, a pin when a todo names it, folded when it is detail. */
-function artefactCardHtmlInStack(a) {
+/**
+ * A real artefact: Discover's card body, Scaffold dashed, a pin when a todo names it, folded
+ * when it is detail. The todos are drawn on VERIFY only, so elsewhere the pin is a jump
+ * (data-jump) to that step, where its todo is.
+ */
+function artefactCardHtmlInStack(a, mode) {
   const cls = ['card', a.source === 'Scaffold' ? 'is-scaffold' : '', a.todoPath ? 'has-todo' : '', a.detail ? 'is-detail' : ''].filter(Boolean).join(' ');
+  const jump = mode !== 'verify';
   return `
     <div class="${cls}" data-artefact="${escapeHtml(a.id)}"${a.symbol ? ` data-symbol="${escapeHtml(a.symbol)}"` : ''}>
       ${artefactCardHtml(a)}
-      ${a.todoPath ? `<button type="button" class="build-card-pin" data-todo-path="${escapeHtml(a.todoPath)}" title="${escapeHtml(`todo: ${a.todoPath} — a placeholder value the team must fill`)}">todo</button>` : ''}
+      ${a.todoPath ? `<button type="button" class="build-card-pin" data-todo-path="${escapeHtml(a.todoPath)}"${jump ? ' data-jump="verify"' : ''} title="${escapeHtml(`todo: ${a.todoPath} — a placeholder value the team must fill${jump ? ', on Verify' : ''}`)}">todo</button>` : ''}
     </div>`;
 }
 
@@ -81,9 +86,9 @@ function clausesHtml(slab) {
     </ul>`;
 }
 
-function gridHtml(artefacts, ghosts, { l4 = false } = {}) {
+function gridHtml(artefacts, ghosts, mode, { l4 = false } = {}) {
   if (!artefacts.length && !ghosts.length) return '';
-  return `<div class="section-grid${l4 ? ' section-grid-l4' : ''}">${artefacts.map(artefactCardHtmlInStack).join('')}${ghosts.map(ghostCardHtml).join('')}</div>`;
+  return `<div class="section-grid${l4 ? ' section-grid-l4' : ''}">${artefacts.map(a => artefactCardHtmlInStack(a, mode)).join('')}${ghosts.map(ghostCardHtml).join('')}</div>`;
 }
 
 function todosHtml(slab, todos, keyPrefix) {
@@ -122,11 +127,11 @@ function slabHtml(slab, mode) {
     body = slab.subgroups.map(sg => `
       <div class="build-slab-sub subgroup${sg.offSections.length ? ' is-off' : ''}" data-subgroup="${escapeHtml(sg.key)}">
         <h4 class="subgroup-head">L4.${escapeHtml(sg.key)} · ${escapeHtml(sg.label)}${sg.offSections.length ? ` <span class="build-slab-off">${sg.offSections.map(s => `${escapeHtml(s)} off`).join(' · ')}</span>` : ''}</h4>
-        ${gridHtml(visible(sg.artefacts), sg.ghosts, { l4: true }) || `<div class="empty">${mode === 'define' ? (sg.ghosts.length ? '' : `no ${escapeHtml(sg.label.toLowerCase())} clause at this tier`) : `no ${escapeHtml(sg.label.toLowerCase())} declared`}</div>`}
+        ${gridHtml(visible(sg.artefacts), sg.ghosts, mode, { l4: true }) || `<div class="empty">${mode === 'define' ? (sg.ghosts.length ? '' : `no ${escapeHtml(sg.label.toLowerCase())} clause at this tier`) : `no ${escapeHtml(sg.label.toLowerCase())} declared`}</div>`}
         ${mode === 'verify' ? todosHtml(slab, sg.todos, `${slab.id}${sg.key}`) : ''}
       </div>`).join('');
   } else {
-    const grid = gridHtml(visible(slab.artefacts), slab.ghosts);
+    const grid = gridHtml(visible(slab.artefacts), slab.ghosts, mode);
     const empty = emptyText(slab, mode);
     body = grid || (empty ? `<div class="empty">${escapeHtml(empty)}</div>` : '');
     if (mode === 'verify') body += todosHtml(slab, slab.todos, slab.id);
@@ -192,14 +197,14 @@ export function wireBuildStack(container, model, host = appHost) {
     slab.detailOpen = !slab.detailOpen;
     act?.update?.({ stackOpen: openMap() }, { rerender: true, reinstantiate: false });
   }));
+  // A pin reveals its todo on this step; where the todos are not drawn (COMPILE) it
+  // asks the controller for the step that has them, which reveals the todo after the render.
   container.querySelectorAll('.build-card-pin').forEach(pin => pin.addEventListener('click', (e) => {
     e.stopPropagation();
-    const todo = container.querySelector(`[data-todo="${CSS.escape(pin.dataset.todoPath)}"]`);
-    if (!todo) return;
-    todo.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    todo.classList.add('is-flash');
-    setTimeout(() => todo.classList.remove('is-flash'), 1200);
-    todo.querySelector('.build-param-input')?.focus({ preventScroll: true });
+    const path = pin.dataset.todoPath;
+    const todo = container.querySelector(`[data-todo="${CSS.escape(path)}"]`);
+    if (todo) revealTodo(todo);
+    else if (pin.dataset.jump) act?.setStep?.(pin.dataset.jump, { todo: path });
   }));
   // Only the stack's own inputs: a step that wires its parameter section itself must not see them wired twice.
   if (act) wireParamInputs(container, act, '.build-stack .build-param-input');

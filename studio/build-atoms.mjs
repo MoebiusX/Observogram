@@ -49,6 +49,16 @@ export function wireParamInputs(container, act, selector = '.build-param-input')
   });
 }
 
+/** Bring a rendered todo into view — scroll, a short flash, the caret in its first input (a pin's click, a jump from another step). */
+export function revealTodo(todoEl) {
+  if (!todoEl) return false;
+  todoEl.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+  todoEl.classList.add('is-flash');
+  setTimeout(() => todoEl.classList.remove('is-flash'), 1200);
+  todoEl.querySelector('.build-param-input')?.focus({ preventScroll: true });
+  return true;
+}
+
 const PLACEHOLDER_GLYPH = '◐';
 
 // "channels.0.msteams: Chat channel for SEV1/SEV2: placeholder '#x' (param oncall_channel) — The Teams…"

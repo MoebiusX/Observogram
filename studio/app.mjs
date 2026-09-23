@@ -53,6 +53,7 @@ import {
 import { renderBuildDefine, renderClauseRail } from './build-define-view.mjs';
 import { renderBuildCompile } from './build-compile-view.mjs';
 import { renderBuildVerify } from './build-verify-view.mjs';
+import { revealTodo } from './build-atoms.mjs';
 import { loadBuildInfo, loadHealth, buildLabelModel, renderVersionChrome } from './build-label.mjs';
 
 // `state`, the `$`/`$$` DOM helpers and the persistence layer now live in
@@ -1914,7 +1915,9 @@ function exitBuildMode() {
   goHome();
 }
 
-function goToBuildStep(step) {
+// `todo` (a todo path) lands the step on that todo instead of its top — a card's
+// pin on COMPILE, whose todo is drawn on VERIFY only.
+function goToBuildStep(step, { todo = null } = {}) {
   if (!BUILD_STEPS.includes(step)) return;
   const reach = buildStepReachability(state.build);
   if (!reach[step]) {
@@ -1927,6 +1930,7 @@ function goToBuildStep(step) {
   state.build.preview = null;
   paintObservaActiveTab();
   renderMainView();
+  if (todo && revealTodo(document.querySelector(`.build-step [data-todo="${CSS.escape(todo)}"]`))) return;
   window.scrollTo({ top: 0 });
 }
 

@@ -39,8 +39,9 @@ import {
 import { defaultBuildState, BUILD_PERSIST_FIELDS } from '../studio/state.mjs';
 import { LAYER_DEFS, L4_SUBGROUPS } from '../studio/constants.mjs';
 import { renderBuildDefine, renderClauseRail } from '../studio/build-define-view.mjs';
-import { renderBuildStack, buildStackHtml } from '../studio/build-stack-view.mjs';
+import { renderBuildStack, buildStackHtml, wireBuildStack } from '../studio/build-stack-view.mjs';
 import { artefactCardHtml } from '../studio/card-html.mjs';
+import { revealTodo } from '../studio/build-atoms.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const FIX = resolve(ROOT, 'tools/fixtures/build');
@@ -950,6 +951,33 @@ test('renderBuildStack draws the slabs headlessly in Discover\'s card markup: th
   const hostile = [{ id: 'L1.MUST.x', dimension: 'L1', severity: 'MUST', minTier: 'tier-3', description: 'a <img src=x onerror="1"> clause' }];
   const hh = buildStackHtml(buildStackModel({ requirements: hostile, checklist: buildClauseChecklist(hostile, null), mode: 'define' }));
   assert.ok(!hh.includes('<img') && hh.includes('a &lt;img src=x onerror=&quot;1&quot;&gt; clause'));
+});
+
+test('a card\'s todo pin reveals its todo on VERIFY and, where the todos are not drawn, jumps to Verify on that todo', () => {
+  // COMPILE draws the pin as a jump (its todo lives on VERIFY); VERIFY draws it plain.
+  const compile = buildStackHtml(stackOf({ mode: 'compile' }));
+  assert.ok(compile.includes('class="build-card-pin" data-todo-path="alerting.routes[0]" data-jump="verify" title="todo: alerting.routes[0] — a placeholder value the team must fill, on Verify"'));
+  const verify = buildStackHtml(stackOf());
+  assert.ok(verify.includes('class="build-card-pin" data-todo-path="alerting.routes[0]" title="todo: alerting.routes[0] — a placeholder value the team must fill"'));
+  assert.ok(!verify.includes('data-jump='), 'no jump where the todos are on the page');
+  // The handler, through a container that has one pin and (VERIFY) its todo or (COMPILE) none.
+  globalThis.CSS ??= { escape: (s) => String(s).replace(/["\\]/g, '\\$&') };
+  const fakePin = (jump) => { const h = {}; return { dataset: { todoPath: 'alerting.routes[0]', ...(jump ? { jump: 'verify' } : {}) }, addEventListener: (t, fn) => { h[t] = fn; }, fire: () => h.click({ stopPropagation() {} }) }; };
+  const fakeTodo = () => { const cls = new Set(); let focused = false; return { classList: { add: (c) => cls.add(c), remove: (c) => cls.delete(c), has: (c) => cls.has(c) }, scrollIntoView() {}, querySelector: () => ({ focus() { focused = true; } }), get focused() { return focused; } }; };
+  const container = (pin, todo) => ({ querySelectorAll: (sel) => (sel === '.build-card-pin' ? [pin] : []), querySelector: (sel) => (sel.startsWith('[data-todo=') ? todo : null) });
+  const calls = [];
+  const host = { build: { setStep: (...a) => calls.push(a), update() {} } };
+  const onVerify = fakePin(false), todo = fakeTodo();
+  wireBuildStack(container(onVerify, todo), stackOf(), host);
+  onVerify.fire();
+  assert.ok(todo.classList.has('is-flash') && todo.focused, 'VERIFY: the todo is flashed and its input focused');
+  assert.deepEqual(calls, [], 'VERIFY: no step change');
+  const onCompile = fakePin(true);
+  wireBuildStack(container(onCompile, null), stackOf({ mode: 'compile' }), host);
+  onCompile.fire();
+  assert.deepEqual(calls, [['verify', { todo: 'alerting.routes[0]' }]], 'COMPILE: the click goes to Verify, on that todo');
+  // revealTodo on its own: false with nothing to reveal, so the caller falls back to the top of the step.
+  assert.equal(revealTodo(null), false);
 });
 
 test('artefactCardHtml is the one card body: Discover\'s head, chip, pill, title, desc, foot — and the flags only the caller knows', () => {
