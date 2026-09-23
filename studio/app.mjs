@@ -1734,6 +1734,14 @@ function applyModeChrome() {
   // pack's manifest + compiled artefacts).
   const exportBtn = $('#export-btn');
   if (exportBtn) exportBtn.hidden = isHome || !focusedPackId();
+  // The header's cards follow the mode too: leaving the BUILD journey through
+  // its exit bar (goHome, or enterAnalyzeMode when a pack was open) once left
+  // the three build cards up, the last step highlighted and the tagline
+  // reading "Select · Generate · Validate" over the home hero, because only
+  // routeTo and openInDiscover repainted them. Every mode transition passes
+  // through here, so this is where the set is swapped (idempotent: the nav
+  // is rebuilt only when the set changes).
+  paintObservaActiveTab();
 }
 
 // RESET button — clears EVERYTHING (server uploads + client persistence)

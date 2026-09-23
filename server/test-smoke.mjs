@@ -1462,6 +1462,10 @@ try {
   const js = await getText(base, '/app.mjs');
   assert(js.includes('LAYER_DEFS'), '/app.mjs served');
   assert(js.includes('BUILD_TABS'), '/app.mjs ships BUILD_TABS');
+  // The header's cards follow the mode: every mode transition passes through applyModeChrome, which
+  // must repaint them — leaving the BUILD journey once left the build cards up over the home hero.
+  const fnBody = (name) => (js.split(`function ${name}(`)[1] || '').split('\n}\n')[0];
+  assert(fnBody('applyModeChrome').includes('paintObservaActiveTab()'), 'app.mjs: applyModeChrome repaints the header cards (build ↔ analysis)');
   assert(js.includes('setupCrawlPanel'), '/app.mjs wires setupCrawlPanel');
   assert(js.includes('renderCrawlResult'), '/app.mjs ships renderCrawlResult');
   assert(js.includes('setupDraftFromMcpPanel'), '/app.mjs wires setupDraftFromMcpPanel (Phase 7n)');
