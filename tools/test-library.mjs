@@ -738,6 +738,11 @@ test('packc init builds a pack: YAML on stdout, todos on stderr, exit 0; a secti
   assert.equal(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.window=30x').status, 2, 'the engine\'s usage error is exit 2');
   assert.match(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.window=30x').stderr, /override produce_latency_p99\.window: the window is one of 7d \| 28d \| 30d \| 90d/);
   assert.equal(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'nodot=1').status, 2);
+  // a polluting key reaches the engine and is refused there (a plain object swallowed __proto__ silently: exit 0, nothing customised)
+  const proto = cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', '__proto__.objective=0.5');
+  assert.equal(proto.status, 2, proto.stderr);
+  assert.match(proto.stderr, /override __proto__: not an SLI id/);
+  assert.match(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'constructor.objective=0.5').stderr, /override constructor: not an SLI id/);
   const absent = cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'controller_election_rate.objective=0.5');
   assert.equal(absent.status, 0, 'an override for an SLI not in the pack is a warning');
   assert.match(absent.stderr, /warning \[override\]: override controller_election_rate: the SLI is not in the pack \(not selected\)/);

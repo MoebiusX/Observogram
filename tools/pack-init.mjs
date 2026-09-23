@@ -62,7 +62,9 @@ function usageError(msg) {
 }
 
 function parseArgs(argv) {
-  const o = { owners: [], params: {}, overrides: {}, off: new Set() };
+  // A null-prototype map: `--override __proto__.objective=0.5` must reach the engine (which refuses the key), not
+  // set the plain object's prototype and vanish (measured: exit 0, nothing customised, no warning).
+  const o = { owners: [], params: {}, overrides: Object.create(null), off: new Set() };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (BOOL_FLAGS.has(a)) {
