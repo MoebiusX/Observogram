@@ -32,7 +32,7 @@ export function defaultBuildState() {
     error: null,              // [messages] from a 400 instantiate
     pending: false,           // an instantiate is in flight
     preview: null,            // { target, label, filename, contentType, content, warnings } — the VERIFY artefact open
-    registeredId: null,       // the id "Open in Discover" registered
+    registeredId: null,       // the id VERIFY's "Continue …" exit registered
   };
 }
 // The build fields that survive a reload (never `result`, `preview`, `error`, `pending`).

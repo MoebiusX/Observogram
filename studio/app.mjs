@@ -1743,7 +1743,7 @@ function enterCompareMode(aId, aEnv, bId, bEnv) {
 // new pack.
 function applyModeChrome() {
   // The BUILD journey hides the pack controls like home does: there is no
-  // pack until "Open in Discover" registers one.
+  // pack until VERIFY's "Continue with visible gaps" (or "Continue to Discover") registers one.
   const isHome = state.mode === 'home' || state.mode === 'build';
   updateObservaServiceChip();
   // Under the OBSERVA chrome the pack/env selectors are PINNED as a

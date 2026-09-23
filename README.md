@@ -651,7 +651,7 @@ be tested without a browser. The view needs no pack loaded.
 | `GET` | `/api/library/:id` | One library entry: its index row plus the full SLI templates and params (404 names the known entries) |
 | `POST` | `/api/library/instantiate` | `{ entries, name, tier, environment, owners, params, toggles }` → `canonical`, `canonicalYaml`, `todos`, `provenance`, `warnings`, `schemaErrors`, `summary`, `conformance` (an engine usage error is 400, never 500) |
 | `POST` | `/api/library/compile` | `{ canonical, target }` → one compiled artefact (`label`, `contentType`, `artifact { filename, content, warnings, profile }`), nothing registered |
-| `POST` | `/api/library/register` | `{ canonical, source? }` → the upload registry as `/api/validate` registers (`registered { id, source }`, `adapted`, `conformance`, `summary`; the source defaults to `library:<entries>@<tier>` for a library-built pack, `metadata.name` otherwise) — "Open in Discover" |
+| `POST` | `/api/library/register` | `{ canonical, source? }` → the upload registry as `/api/validate` registers (`registered { id, source }`, `adapted`, `conformance`, `summary`; the source defaults to `library:<entries>@<tier>` for a library-built pack, `metadata.name` otherwise) — "VERIFY's "Continue with visible gaps"" |
 | `POST` | `/api/crawl` | Draft a pack from uploaded repo files |
 | `POST` | `/api/crawl-github` | Draft a pack from a GitHub URL |
 | `POST` | `/api/draft-from-mcp` | Draft a live pack from an MCP endpoint |
@@ -683,7 +683,7 @@ studio/
   build-api.mjs            The BUILD journey's loaders over /api/library/* (fetchFn injectable)
   build-define-view.mjs    BUILD step 1 — Define (service, tier, library entries, params) + the clause rail the three steps share
   build-compile-view.mjs  BUILD step 2 — Compile (SLI toggles, objectives at the tier, section toggles, the pack YAML)
-  build-verify-view.mjs  BUILD step 3 — Verify (verdict, todos by artefact with inline params, artefacts, Open in Discover)
+  build-verify-view.mjs  BUILD step 3 — Verify (verdict, todos by artefact with inline params, artefacts, Continue with visible gaps)
 
 tools/
   cli.mjs                  packc CLI (journey run / list, compile, init, …)
