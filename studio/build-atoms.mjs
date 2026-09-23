@@ -21,23 +21,55 @@ export function evidenceBadge(status, verifiedOn) {
   return `<span class="build-evidence build-evidence-${escapeHtml(status)}" title="${escapeHtml(title)}">${escapeHtml(EVIDENCE_LABEL[status] || status)}</span>`;
 }
 
+/** The evidence as a dot (the definition column's chips): the badge's colour, the status in the title and for a screen reader. */
+export function evidenceDot(status, verifiedOn) {
+  if (!status) return '';
+  const word = EVIDENCE_LABEL[status] || status;
+  const title = verifiedOn ? `${word} · verified ${verifiedOn}` : word;
+  return `<span class="build-evidence-dot build-evidence-${escapeHtml(status)}" title="${escapeHtml(title)}" role="img" aria-label="${escapeHtml(`evidence: ${title}`)}"></span>`;
+}
+
+/**
+ * A real switch (role=switch, a sliding knob) for the section toggles and the rolodex's
+ * add / remove: `on` its state, `disabled` with `reason` when it cannot be flipped (an SLI
+ * above the tier, policy without SLOs), `label` its accessible name, `data-*` what the
+ * wiring reads back. The knob is CSS; the button is the whole control.
+ */
+export function switchHtml({ on, disabled = false, reason = null, label, focusKey = null, data = {}, small = false } = {}) {
+  const attrs = Object.entries(data).map(([k, v]) => ` data-${escapeHtml(k)}="${escapeHtml(v)}"`).join('');
+  return `<button type="button" role="switch" class="build-switch${small ? ' is-small' : ''}" aria-checked="${on ? 'true' : 'false'}" aria-label="${escapeHtml(label)}"${disabled ? ` disabled aria-disabled="true"${reason ? ` title="${escapeHtml(reason)}"` : ''}` : ''}${focusKey ? ` data-focus-key="${escapeHtml(focusKey)}"` : ''}${attrs}><span class="build-switch-knob" aria-hidden="true"></span></button>`;
+}
+
 // One param as an input (the same param may fill several todos on VERIFY:
 // idSuffix keeps the ids and focus keys distinct while they share the key).
-export function paramRowHtml(p, { compact = false, idSuffix = '' } = {}) {
+// `readOnly` draws the row as the preview and VERIFY show it — the value the
+// pack carries as a code span instead of the input, the same label block
+// (name, key, the scaffold mark, the placeholder / rejected flag with its
+// title), so the two variants cannot drift.
+export function paramRowHtml(p, { compact = false, idSuffix = '', readOnly = false } = {}) {
   const focusKey = `param:${p.key}${idSuffix ? `@${idSuffix}` : ''}`;
   const id = `bp-${idSuffix ? `${idSuffix}-` : ''}${p.key}`;
+  const cls = `build-param${readOnly ? ' build-param-read' : ''}${p.placeholder ? ' is-placeholder' : ''}${p.atDefault ? '' : ' is-set'}${p.error ? ' is-error' : ''}`;
   return `
-    <div class="build-param${p.placeholder ? ' is-placeholder' : ''}${p.atDefault ? '' : ' is-set'}${p.error ? ' is-error' : ''}" data-param="${escapeHtml(p.key)}">
-      <label class="build-param-label" for="${escapeHtml(id)}">
+    <div class="${cls}" data-param="${escapeHtml(p.key)}">
+      ${paramLabelHtml(p, readOnly ? null : id)}
+      ${readOnly
+        ? `<code class="build-param-value">${escapeHtml(String(p.effective ?? ''))}</code>`
+        : `<input id="${escapeHtml(id)}" class="build-param-input" type="text" data-focus-key="${escapeHtml(focusKey)}"${p.error ? ' aria-invalid="true"' : ''}
+             value="${escapeHtml(p.value ?? '')}" placeholder="${escapeHtml(String(p.hint ?? p.default ?? ''))}" autocomplete="off" spellcheck="false">`}
+      ${p.error ? `<span class="build-param-error" role="alert">${escapeHtml(p.error)}</span>` : ''}
+      ${compact || readOnly ? '' : `<span class="build-param-desc">${escapeHtml(p.description)}</span>`}
+    </div>`;
+}
+
+/** The label block of a param row, written once: a <label for> when the row has an input, a <span> when it is read-only. */
+export function paramLabelHtml(p, forId = null) {
+  const inner = `
         <span class="build-param-name">${escapeHtml(p.label)}</span>
         <span class="build-param-key">${escapeHtml(p.key)}${p.entry ? '' : ' · scaffold'}</span>
         ${p.error ? '<span class="build-param-flag is-error">rejected</span>' : p.placeholder ? `<span class="build-param-flag" title="left at its default this value is written into the pack AND reported as a todo">${p.atDefault ? 'placeholder → todo' : 'placeholder filled'}</span>` : ''}
-      </label>
-      <input id="${escapeHtml(id)}" class="build-param-input" type="text" data-focus-key="${escapeHtml(focusKey)}"${p.error ? ' aria-invalid="true"' : ''}
-             value="${escapeHtml(p.value ?? '')}" placeholder="${escapeHtml(String(p.hint ?? p.default ?? ''))}" autocomplete="off" spellcheck="false">
-      ${p.error ? `<span class="build-param-error" role="alert">${escapeHtml(p.error)}</span>` : ''}
-      ${compact ? '' : `<span class="build-param-desc">${escapeHtml(p.description)}</span>`}
-    </div>`;
+      `;
+  return forId ? `<label class="build-param-label" for="${escapeHtml(forId)}">${inner}</label>` : `<span class="build-param-label">${inner}</span>`;
 }
 
 /** Param inputs commit on change (Enter / blur), so typing never re-renders under the caret. `selector` narrows which inputs (the stack wires only its own). */

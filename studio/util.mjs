@@ -24,12 +24,20 @@ export function toast(message, kind = '') {
   toast._t = setTimeout(() => { el.hidden = true; }, 4000);
 }
 
-// Keep keyboard focus inside the topmost open dialog. Installed once at
-// boot; covers every [role="dialog"] panel without per-dialog wiring.
-export function installDialogFocusTrap() {
-  document.addEventListener('keydown', (e) => {
+// The dialogs the Tab trap covers: every open [role="dialog"] that does not
+// declare itself non-modal. A panel with aria-modal="false" (the Build
+// layer sheet: a side panel over the stack, the definition column and the
+// other slab heads stay live) is left alone — Tab walks the page as usual
+// and the panel keeps its own Esc and focus return.
+export const TRAPPED_DIALOGS = '[role="dialog"]:not([hidden]):not([aria-modal="false"])';
+
+// Keep keyboard focus inside the topmost open modal dialog. Installed once
+// at boot; covers every trapped [role="dialog"] panel without per-dialog
+// wiring. `doc` is the document (injectable for the headless test).
+export function installDialogFocusTrap(doc = document) {
+  doc.addEventListener('keydown', (e) => {
     if (e.key !== 'Tab') return;
-    const open = document.querySelectorAll('[role="dialog"]:not([hidden])');
+    const open = doc.querySelectorAll(TRAPPED_DIALOGS);
     const dialog = open[open.length - 1];
     if (!dialog) return;
     const focusables = [...dialog.querySelectorAll(
@@ -37,9 +45,9 @@ export function installDialogFocusTrap() {
     )].filter(el => el.offsetParent !== null);
     if (!focusables.length) { e.preventDefault(); dialog.focus?.(); return; }
     const first = focusables[0], last = focusables[focusables.length - 1];
-    if (!dialog.contains(document.activeElement)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); return; }
-    if (!e.shiftKey && document.activeElement === last)       { e.preventDefault(); first.focus(); }
-    else if (e.shiftKey && document.activeElement === first)  { e.preventDefault(); last.focus(); }
+    if (!dialog.contains(doc.activeElement)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); return; }
+    if (!e.shiftKey && doc.activeElement === last)       { e.preventDefault(); first.focus(); }
+    else if (e.shiftKey && doc.activeElement === first)  { e.preventDefault(); last.focus(); }
   });
 }
 

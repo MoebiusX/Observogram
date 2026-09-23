@@ -1,17 +1,19 @@
 // studio/build-compile-view.mjs
 //
-// BUILD step 2 — COMPILE, "What should we watch?": the control area — per-entry
-// SLI toggles (an SLI above the tier is shown disabled with the tier it
-// needs), the SLO objective and window each SLI gets at this tier (the
-// library's per-tier defaults, read-only — overriding an objective is a later
-// slice), the section toggles (SLOs, policy + routes, dashboards, validation)
-// — over the canvas: the layer stack of the instantiated pack, drawn through
-// the adapter exactly as Discover will draw it (its real artefacts per layer,
-// the slab edges in the clause states, a ghost card for a clause still unmet,
-// Scaffold on the placeholder artefacts, a section switched off dimming its
-// slab), with the warnings and the schema verdict above it and the pack YAML
-// as a collapsible below it. Every change re-instantiates through the API
-// (the controller debounces) and the stack and the rail re-render from the
+// BUILD step 2 — COMPILE, "What should we watch?": the layer stack of the
+// instantiated pack is the surface, drawn through the adapter exactly as
+// Discover will draw it (its real artefacts per layer, the slab edges in the
+// clause states, a ghost card for a clause still unmet, Scaffold on the
+// placeholder artefacts, a section switched off dimming its slab with an
+// 'off' chip on its head). Composition happens on the layer sheets: click a
+// slab and its sheet opens with the layer's clauses and options — the SLI
+// rolodex and the SLOs switch on L1, the scrape jobs and endpoints on L2,
+// the Dashboards switch on L3, Policy and Routes on L4, Validation on L5
+// (build-sheet-view.mjs). The SLI rows and the sections grid that used to
+// sit above the stack live there now. Above the stack: the summary line, the
+// warnings and the schema verdict; below it: the pack YAML as a collapsible.
+// Every change re-instantiates through the API (the controller debounces)
+// and the stack, the sheet and the definition column re-render from the
 // result.
 //
 // Renderer only (docs/UI_CONVENTIONS.md §2-3): render(container, model, host)
@@ -20,27 +22,7 @@
 import { escapeHtml, downloadText } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { stepHeadHtml, instantiateErrorHtml } from './build-define-view.mjs';
-import { evidenceBadge } from './build-atoms.mjs';
 import { buildStackHtml, wireBuildStack } from './build-stack-view.mjs';
-
-function sliRowHtml(s) {
-  const disabled = !s.reachable;
-  return `
-    <label class="build-sli${disabled ? ' is-disabled' : ''}${s.checked ? ' is-checked' : ''}" data-sli="${escapeHtml(s.key)}" title="${escapeHtml(`${disabled ? `needs ${s.minTier} · ` : ''}${s.metrics.join(', ')}`)}">
-      <input type="checkbox" ${s.checked ? 'checked' : ''} ${disabled ? 'disabled' : ''} aria-label="${escapeHtml(s.key)}">
-      <span class="build-sli-main">
-        <span class="build-sli-id">${escapeHtml(s.id)}</span>
-        <span class="build-sli-desc">${escapeHtml(s.description)}</span>
-      </span>
-      <span class="build-sli-type type-pill">${escapeHtml(s.type)}</span>
-      <span class="build-sli-evidence">${evidenceBadge(s.evidence)}</span>
-      <span class="build-sli-slo">
-        ${disabled
-          ? `<span class="build-sli-needs">needs ${escapeHtml(s.minTier)}</span>`
-          : `<span class="build-sli-objective">${escapeHtml(s.objectiveLabel)}</span><span class="build-sli-window">over ${escapeHtml(s.window || '—')}</span>`}
-      </span>
-    </label>`;
-}
 
 function warningsHtml(groups) {
   if (!groups.length) return '';
@@ -58,41 +40,17 @@ function warningsHtml(groups) {
 export function renderBuildCompile(container, model, host = appHost) {
   const act = host.build;
   const r = model.result;
-  const allKeys = model.groups.flatMap(g => g.slis.filter(s => s.reachable).map(s => s.key));
   const stack = model.stack;
   const lit = stack.counts.litSlabs;
+  const k = model.counts;
   container.innerHTML = `
     <section class="build-step build-compile">
-      ${stepHeadHtml('compile', 'What should we watch?', `Tick the SLIs the pack should carry — the library’s objectives and windows at <strong>${escapeHtml(model.tier)}</strong> are shown beside each one — and the sections it should contain. Every change recompiles the pack and redraws it below, layer by layer, exactly as Discover will show it; each slab’s edge says which of the tier’s clauses that layer holds up, and on what.`)}
-
-      ${model.groups.map(g => `
-        <div class="build-sli-group">
-          <div class="build-section-key">${escapeHtml(g.title)} ${evidenceBadge(g.evidence)}
-            <span class="build-section-sub">${g.slis.filter(s => s.checked).length} of ${g.slis.filter(s => s.reachable).length} SLI${g.slis.filter(s => s.reachable).length === 1 ? '' : 's'} at ${escapeHtml(model.tier)} selected${g.slis.some(s => !s.reachable) ? ` · ${g.slis.filter(s => !s.reachable).length} above the tier` : ''}${model.composed ? ` · ids prefixed <code>${escapeHtml(g.slis[0]?.key.slice(0, g.slis[0].key.length - g.slis[0].id.length) || '')}</code> in the pack` : ''}</span>
-          </div>
-          <div class="build-sli-list">
-            <div class="build-sli-head" aria-hidden="true"><span></span><span>SLI</span><span>type</span><span>evidence</span><span>objective · window at ${escapeHtml(model.tier)}</span></div>
-            ${g.slis.map(sliRowHtml).join('')}
-          </div>
-        </div>`).join('')}
-      <p class="build-footnote">Objectives and windows are the library’s per-tier defaults (each entry’s <code>slo.objective</code> table); overriding an objective is a later slice. The SLO id is derived from the SLI and the objective (<code>broker_availability_99_9</code>).</p>
-
-      <div class="build-toggles">
-        <div class="build-section-key">Sections <span class="build-section-sub">a section switched off is absent from the pack: the schema and the rubric then both say what is missing — nothing is faked to keep a clause green</span></div>
-        <div class="build-toggle-row">
-          ${model.toggles.map(t => `
-            <label class="build-toggle${t.on ? ' is-on' : ''}${t.disabled ? ' is-disabled' : ''}" data-toggle="${escapeHtml(t.id)}" title="${escapeHtml(t.hint)}">
-              <input type="checkbox" ${t.on ? 'checked' : ''} ${t.disabled ? 'disabled' : ''} aria-label="${escapeHtml(t.label)} section">
-              <span class="build-toggle-label">${escapeHtml(t.label)}</span>
-              <span class="build-toggle-hint">${escapeHtml(t.hint)}</span>
-            </label>`).join('')}
-        </div>
-      </div>
+      ${stepHeadHtml('compile', 'What should we watch?', `The pack, layer by layer, exactly as Discover will show it. Click a layer to compose it: L1 holds the SLI rolodex — <strong>${k.checked} of ${k.reachable}</strong> SLI${k.reachable === 1 ? '' : 's'} at <strong>${escapeHtml(model.tier)}</strong> in the pack — and the SLOs switch; L2 the scrape jobs and endpoints; L3 the boards; L4 the burn policy and the routes; L5 the probes and chaos. Every change recompiles the pack and redraws it; each slab’s edge says which of the tier’s clauses that layer holds up, and on what.`)}
 
       <div class="build-result build-stack-wrap">
         <div class="build-section-key">The pack, layer by layer <span class="build-section-sub">${model.pending ? 'recompiling…' : r ? `${r.sliCount} SLI${r.sliCount === 1 ? '' : 's'} · ${r.sloCount} SLO${r.sloCount === 1 ? '' : 's'} · ${stack.counts.artefacts} artefact${stack.counts.artefacts === 1 ? '' : 's'} on ${lit} of ${stack.counts.slabs} layers${stack.counts.scaffold ? ` · ${stack.counts.scaffold} scaffold (a placeholder value the team fills)` : ''}${stack.counts.ghosts ? ` · ${stack.counts.ghosts} clause${stack.counts.ghosts === 1 ? '' : 's'} unmet` : ''} · ${r.todoCount} todo${r.todoCount === 1 ? '' : 's'} · ${r.warningCount} warning${r.warningCount === 1 ? '' : 's'} · schema ${r.schemaOk ? 'valid' : `${r.schemaErrors.length} error${r.schemaErrors.length === 1 ? '' : 's'}`}${model.stale ? ' · previous pack' : ''} — the same artefacts, ids and titles Discover will show for this pack` : model.error ? 'the last generation failed' : 'nothing generated yet — the silhouette below fills in as soon as the pack compiles'}</span></div>
-        ${instantiateErrorHtml(model.error, { stale: model.stale, where: 'on Define and Verify (this step has no parameter inputs)' })}
-        ${!model.atLeastOne ? '<div class="build-note build-note-warn">At least one SLI must stay selected — the pack cannot be generated without one.</div>' : ''}
+        ${instantiateErrorHtml(model.error, { stale: model.stale, where: 'on its layer sheet (L2 · L4 · L5) and under its todo on Verify' })}
+        ${!model.atLeastOne ? '<div class="build-note build-note-warn">At least one SLI must stay in the pack — open L1 and add one; the pack cannot be generated without one.</div>' : ''}
         ${r && !r.schemaOk ? `<div class="build-note build-note-warn"><strong>Schema:</strong> the pack does not validate against spec v1.2 as toggled — ${r.schemaErrors.slice(0, 4).map(e => escapeHtml(e)).join('; ')}${r.schemaErrors.length > 4 ? ` … +${r.schemaErrors.length - 4}` : ''}</div>` : ''}
         ${r ? warningsHtml(r.warnings) : ''}
         ${buildStackHtml(stack)}
@@ -111,12 +69,6 @@ export function renderBuildCompile(container, model, host = appHost) {
       </footer>
     </section>`;
 
-  container.querySelectorAll('.build-sli input[type="checkbox"]').forEach(cb => {
-    cb.addEventListener('change', () => act.setSli(cb.closest('.build-sli').dataset.sli, cb.checked, allKeys));
-  });
-  container.querySelectorAll('.build-toggle input[type="checkbox"]').forEach(cb => {
-    cb.addEventListener('change', () => act.setToggle(cb.closest('.build-toggle').dataset.toggle, cb.checked));
-  });
   container.querySelector('#build-yaml-download')?.addEventListener('click', () => downloadText(r.fileName, r.yaml, 'application/x-yaml'));
   wireBuildStack(container, stack, host);
   container.querySelector('#build-back').addEventListener('click', () => act.setStep('define'));

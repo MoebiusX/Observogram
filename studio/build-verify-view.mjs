@@ -58,7 +58,7 @@ export function renderBuildVerify(container, model, host = appHost) {
   const stack = model.stack;
   container.innerHTML = `
     <section class="build-step build-verify">
-      ${stepHeadHtml('verify', 'Is it ready to use?', `The pack as generated, read three ways: the tier’s conformance rubric (which clauses pass, which pass only on a placeholder, which fail — per layer), the v1.2 schema, and the artefacts it compiles to. The todos sit on the layer they live on; fill a placeholder inline and the pack regenerates; when it holds up, continue to Discover.`)}
+      ${stepHeadHtml('verify', 'Is it ready to use?', `The pack as generated, read three ways: the tier’s conformance rubric (which clauses pass, which pass only on a placeholder, which fail — per layer), the v1.2 schema, and the artefacts it compiles to. The todos sit on the layer they live on — on the slab and on its sheet (click the layer); fill a placeholder inline and the pack regenerates; when it holds up, continue to Discover.`)}
 
       ${!model.ready && !model.error ? `<div class="build-note">${model.pending ? 'Compiling…' : 'Nothing compiled yet — go back to Compile.'}</div>` : ''}
       ${instantiateErrorHtml(model.error, { stale: model.stale, where: 'below, under its todo' })}
@@ -99,7 +99,7 @@ export function renderBuildVerify(container, model, host = appHost) {
       ${model.ready ? `
       <div class="build-todos build-stack-wrap">
         <div class="build-section-key">The pack, layer by layer — with its todos <span class="build-count">${model.todoCount}</span>
-          <span class="build-section-sub">each todo sits on the slab of the artefact it names (routes and runbooks on L4, backends, pipelines and storage on L2, probes, chaos and baselines on L5) — placeholders and scaffold defaults only the team can fill, <b>${model.placeholdersRemaining}</b> placeholder param${model.placeholdersRemaining === 1 ? '' : 's'} still at their default. Fill one inline (Enter or leave the field) and the pack regenerates; a todo whose value is filled disappears and its card stops being Scaffold. A slab’s edge is the rubric’s verdict for that layer; click it for the clauses.</span>
+          <span class="build-section-sub">each todo sits on the slab of the artefact it names (routes and runbooks on L4, backends, pipelines and storage on L2, probes, chaos and baselines on L5) — placeholders and scaffold defaults only the team can fill, <b>${model.placeholdersRemaining}</b> placeholder param${model.placeholdersRemaining === 1 ? '' : 's'} still at their default. Fill one inline (Enter or leave the field) and the pack regenerates; a todo whose value is filled disappears and its card stops being Scaffold. A slab’s edge is the rubric’s verdict for that layer; click the layer for its clauses, its options as compiled and its todos on one sheet.</span>
         </div>
         ${model.todoCount ? '' : '<div class="build-note build-note-ok">No todos: every placeholder is filled and the scaffold has nothing left to hand over.</div>'}
         ${buildStackHtml(stack)}

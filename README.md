@@ -67,36 +67,53 @@ A second, parallel journey for a service that has no pack: **Build** — three
 steps in the same visual language as the three below, reached from the home
 hero, the service gate or the upload popover ("Build from the library…"), and
 ending where Discover begins ([`docs/BUILD_JOURNEY.md`](docs/BUILD_JOURNEY.md)).
-Centre stage on every step is **the layer stack of the pack being compiled** —
-L1 Contract · L2 Telemetry · L3 Insight · L4 Action (policy · alerting ·
-self-healing) · L5 Validation · GOV — drawn through the same adapter and the
-same artefact cards Discover uses, so what you build is exactly what Discover
-shows afterwards. Each slab's edge carries the rubric's verdict for that layer
-(green pass, amber pass on a placeholder, red fail — naming the clause), a
-placeholder artefact is *Scaffold*, and a clause the tier still needs is a
-ghost card on its slab:
+**The pack is the axis** of the screen on every step: a sticky **definition
+column** on the left — the service, the tier as a segmented control (each
+segment with its MUST · SHOULD counts), the library entries as chips, the
+conformance summary (pass · on a placeholder · fail, the failing clauses,
+todos and placeholders left) — and, as the main surface, **the layer stack of
+the pack being compiled** — L1 Contract · L2 Telemetry · L3 Insight · L4 Action
+(policy · alerting · self-healing) · L5 Validation · GOV — drawn through the
+same adapter and the same artefact cards Discover uses, so what you build is
+exactly what Discover shows afterwards. Each slab's edge carries the rubric's
+verdict for that layer (green pass, amber pass on a placeholder, red fail —
+naming the clause), a placeholder artefact is *Scaffold*, and a clause the tier
+still needs is a ghost card on its slab. **Click a layer and its sheet opens**
+over the stack with the layer's question, its clauses at the tier and what you
+can add on that layer: the SLI rolodex and the SLOs switch on L1 (*What should
+we measure?*), the scrape jobs, backends and endpoints on L2 (*Where does the
+telemetry flow?*), the Dashboards switch and the boards on L3 (*How do we see
+it?*), the burn policy, the routes with their channels and the remediation on
+L4 (*What happens when it breaks?*), the probes and chaos experiments on L5
+(*How do we prove it?*), the owners and imports on GOV (*Who owns it?*):
 
-1. **Define - What Are We Observing?** — the service name, owners and
-   environment, its criticality tier and one or more library entries: products
-   it runs on (Kafka, Prometheus, Grafana, IBM MQ, Alertmanager, Loki, Tempo,
-   the OTel Collector, every one with its evidence badge) or an archetype for a
-   service built from scratch (HTTP service, queue consumer — OTel semconv). The
-   tier draws the **silhouette** of the pack it demands — one ghost card per
-   clause on each slab, reshaping as the tier changes — and the entries drop
-   their SLIs and the SLO each gets onto L1.
-2. **Compile - What Should We Watch?** — the SLIs per entry (an SLI above the
-   tier is shown disabled with the tier it needs) with the objective and window
-   each gets at this tier and the section toggles (SLOs, policy, routes,
-   dashboards, validation) as the control area; below it the **live stack** of
-   the instantiated pack, its real artefacts per layer with the edges in the
-   clause states — untick an SLI and L1 loses its card, switch dashboards off
-   and L3 dims with its clauses red; the pack YAML as a collapsible underneath.
+1. **Define - What Are We Observing?** — in the definition column: the service
+   name, owners and environment, its criticality tier and one or more library
+   entries: products it runs on (Kafka, Prometheus, Grafana, IBM MQ,
+   Alertmanager, Loki, Tempo, the OTel Collector, every one with its evidence
+   dot) or an archetype for a service built from scratch (HTTP service, queue
+   consumer — OTel semconv). The tier draws the **silhouette** of the pack it
+   demands — one ghost card per clause on each slab, reshaping as the tier
+   changes — and the entries drop their SLIs and the SLO each gets onto L1; a
+   layer's sheet opens in preview, with *Compose in Compile →*.
+2. **Compile - What Should We Watch?** — the **live stack** of the instantiated
+   pack, its real artefacts per layer with the edges in the clause states, and
+   the sheets where composition happens: on L1 the **SLI rolodex** — a
+   scroll-snapping carousel of SLI cards from the selected entries (every
+   product's behind a filter; adding one from a product not yet selected
+   selects it too), each with its objective and window at the tier and an add /
+   remove switch, *needs tier-1* when above the tier — and the SLOs switch;
+   section switches on L3, L4 and L5 that say which clauses they drop; the
+   params on the layer they shape. Remove an SLI and L1 loses its card, switch
+   dashboards off and L3 dims with its clauses red and an *off* chip on its
+   head; the pack YAML as a collapsible underneath.
 3. **Verify - Is It Ready to Use?** — the conformance verdict at the tier with
    three clause states (pass · pass on a placeholder · fail) and a **maturity
    bar per layer**, the schema verdict, the warnings, the stack again with the
    **todos pinned to the slab of the artefact each names** (routes and runbooks
    on L4, backends and pipelines on L2, probes and chaos on L5) and the parameter
-   that fills each one editable inline, the compiled artefacts (Prometheus rules,
+   that fills each one editable inline — on the slab and on the layer's sheet,
+   read-only otherwise — the compiled artefacts (Prometheus rules,
    OTel Collector, Alertmanager, Grafana dashboards) previewed and downloadable,
    and **Ready to continue?** — *Resolve or adjust* returns to Define; *Continue
    with visible gaps* (*Continue to Discover* when none remain) registers the pack
@@ -693,11 +710,14 @@ studio/
   layers-view.mjs          Discover Observogram and artifact cards
   neuron-view.mjs          Advanced → Neuron: fleet tiles, trend / heatmap / bar panels, the journey in focus, the newest record opened up
   journeys-view.mjs        Saved journeys: capture, run-now, history, stack chips, chains + cause lines (the cards Neuron composes)
-  build-model.mjs          The BUILD journey's pure models (select / generate / validate, the clause checklist's three states, step reachability)
+  build-model.mjs          The BUILD journey's pure models (define / compile / verify, the stack, the definition column, the layer sheet, the clause checklist's three states, step reachability)
   build-api.mjs            The BUILD journey's loaders over /api/library/* (fetchFn injectable)
-  build-define-view.mjs    BUILD step 1 — Define (service, tier, library entries, params) + the clause rail the three steps share
-  build-compile-view.mjs  BUILD step 2 — Compile (SLI toggles, objectives at the tier, section toggles, the pack YAML)
-  build-verify-view.mjs  BUILD step 3 — Verify (verdict, todos by artefact with inline params, artefacts, Continue with visible gaps)
+  build-definition-view.mjs  BUILD — the definition column on every step (service, the tier as a segmented control, the entries as chips, the conformance summary)
+  build-sheet-view.mjs     BUILD — the per-layer sheet (the layer's question and clauses, the L1 SLI rolodex, the section switches, the params, the lists; preview · edit · verify)
+  build-stack-view.mjs     BUILD — the layer stack of the pack being compiled (Discover's cards; a slab head opens its sheet)
+  build-define-view.mjs    BUILD step 1 — Define (the silhouette) + the step head and error note the three steps share
+  build-compile-view.mjs  BUILD step 2 — Compile (the live stack, the warnings, the pack YAML)
+  build-verify-view.mjs  BUILD step 3 — Verify (verdict, the stack with its todos, artefacts, Continue with visible gaps)
 
 tools/
   cli.mjs                  packc CLI (journey run / list, compile, init, …)

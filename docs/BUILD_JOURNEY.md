@@ -316,11 +316,13 @@ Nothing in Discover / Diagnose / Remediate changed.
 
 | Module | Role |
 |---|---|
-| `studio/build-model.mjs` | the pure models — `buildDefineModel`, `buildCompileModel`, `buildVerifyModel`, `buildClauseChecklist(clauses, summary)` (three states: `pass`, `placeholder`, `fail`; `pending` without a summary), `buildRailModel`, `buildStepReachability`, `clampStep`, `paramRows`, `groupTodos`, `instantiateBody`, `summarizeWarnings`; every input explicit, no state, no fetch |
+| `studio/build-model.mjs` | the pure models — `buildDefineModel`, `buildCompileModel`, `buildVerifyModel`, `buildClauseChecklist(clauses, summary)` (three states: `pass`, `placeholder`, `fail`; `pending` without a summary), `buildDefinitionModel`, `buildSheetModel`, `buildStackModel`, `rolodexItems`, `addSliSelection`, `sectionClauses` / `sectionDrops` / `sectionNotes`, `buildStepReachability`, `clampStep`, `paramRows`, `groupTodos`, `instantiateBody`, `summarizeWarnings`; every input explicit, no state, no fetch |
 | `studio/build-api.mjs` | the loaders — `loadLibrary`, `loadRequirements` (cached per tier), `loadEntry`, `loadTargets`, `instantiate`, `compilePreview`, `registerBuiltPack`; `fetchFn` injectable, a 4xx JSON body is an answer |
-| `studio/build-define-view.mjs` | DEFINE + the clause rail the three steps share (`renderClauseRail`) |
-| `studio/build-compile-view.mjs` | COMPILE |
+| `studio/build-define-view.mjs` | DEFINE (the silhouette) + the step head and the compilation-error note the three steps share |
+| `studio/build-compile-view.mjs` | COMPILE (the live stack, the warnings, the YAML) |
 | `studio/build-verify-view.mjs` | VERIFY and the hand-off |
+| `studio/build-definition-view.mjs` | the definition column on every step ("The axis" below) |
+| `studio/build-sheet-view.mjs` | the per-layer sheet ("The axis" below) |
 | `studio/app.mjs` | the controller: `enterBuildMode`, the debounced, sequence-guarded re-instantiation on every change, the `host.build` actions the renderers call (never an import of app.mjs), `openInDiscover` |
 
 `state.build` holds the draft (`name, owners, environment, tier, entries, params, slis,
@@ -414,6 +416,135 @@ both call, so the markup is written once.
 3. **The tomograph (planned).** The isometric slab stack with an acquisition animation —
    slabs lighting up as content arrives — and the landings' miniature stacks (a pack's
    silhouette on its picker row).
+
+## The axis: the pack is the axis of the Build screen
+
+The scan put the stack on every step but left the controls where slice 2 had them:
+DEFINE was a form with a silhouette under it, COMPILE an SLI table and a toggle grid over
+the stack, and the tier's clauses sat in a rail on the right. From this slice on the
+screen has one axis — **the pack** — and two columns on all three steps:
+
+- **LEFT, the definition column** (about 320 px, sticky; `studio/build-definition-view.mjs`,
+  `buildDefinitionModel({ build, library, requirements, checklist })`): what the pack *is*.
+  The service (name, owners, environment); the tier as a **segmented control** (tier-3 ·
+  tier-2 · tier-1, each segment with its MUST · SHOULD counts, the chosen tier's one-line
+  blurb beneath, a thumb that slides — `role=radiogroup`, arrow keys move); the library
+  entries as **chips** in a grid (products, then archetypes; title, evidence dot, SLIs at
+  this tier; a selected chip is filled — `aria-pressed`); and the **conformance summary**
+  that replaced the rail entirely: status, the three counts (pass · on a placeholder · fail),
+  the failing clauses named (the red edges on the stack), how many pass only on a
+  placeholder, todos, warnings and placeholders left. `renderClauseRail` and `buildRailModel`
+  are retired; the summary is part of the column. The column is rebuilt on every re-render,
+  so the summary is not a live region itself: its settled status goes as one line
+  (`buildStatusLine`: *conformant at tier-2 · 12 pass · 4 on a placeholder · 0 fail*) to a
+  persistent visually-hidden `role=status` node outside the view (`#build-status`), written
+  only when it changes — never while the engine is still answering.
+- **RIGHT, the stack** is the main surface, full remaining width: the slabs of the scan,
+  unchanged in what they show. A slab head — or its **`+`** — opens the layer's sheet.
+
+**The per-layer sheet** (`studio/build-sheet-view.mjs`, `buildSheetModel({ layerId, build,
+library, requirements, stack, checklist, mode })`): *what you can add on each layer pops up
+when you click that layer.* A non-modal side panel anchored to the right edge over the
+stack — `role=dialog`, `aria-labelledby` its title, `aria-modal=false`, Esc closes, focus
+moves into the panel when it opens and returns to the slab head when it closes, the stack
+stays visible and dimmed (a scrim over the main column; the slab heads stay above it, so a
+click on another head switches the sheet; the definition column stays live — for the
+keyboard too: the studio's Tab trap, `installDialogFocusTrap`, skips an `aria-modal=false`
+dialog, so Tab walks on from the sheet to the heads and the column instead of cycling
+inside it), one sheet at a time, the open layer remembered in UI state
+(`state.build.sheetOpen`, never persisted). A
+large title (`L1 · Contract`) and the layer's question, then the layer's clauses at the tier
+with their state (the same `clauseRowHtml` the summary draws), then the layer's options —
+always what the pack actually carries, read from `adapted` (or the silhouette), never a
+made-up menu:
+
+| Layer | Question | Options on the sheet |
+|---|---|---|
+| L1 Contract | What should we measure? | the **SLI rolodex** — a horizontally scroll-snapping carousel of SLI cards (CSS `scroll-snap`, the arrow buttons and the arrow keys move one card, the card in view is emphasised and `aria-current`) drawn from the selected entries and, behind the *show every product* switch, from the whole library (`rolodexItems`); each card: the SLI id, its product with the evidence badge, the type pill, the metric names, the objective and window **at the current tier** large and the other tiers muted, an add / remove **switch** (`role=switch`), *needs tier-1* when above the tier (disabled, with the reason). Adding an SLI from a product not yet selected selects that product too — one action, `addSli(entryId, sliId)` in the controller, `addSliSelection` its pure part (the entry joins, the SLI is ticked, the rest of the selection is kept and re-keyed for the new composition). Below the rolodex the **SLOs** switch with its consequence in one line (*off is expected to drop 4 clauses of the tier: availability SLO, latency SLO, every SLI under an SLO, chaos in staging*; once off, *off — 4 clauses fail with it: …*, the engine's set — the burn-alert clause is not among them: quantified per SLO, it holds with none, while the chaos experiments lose the SLO their steady-state hypothesis names, so L5 fails and its head says *no SLO to test*); the SLOs in the pack listed |
+| L2 Telemetry | Where does the telemetry flow? | the products' scrape jobs (job, targets, interval — from the prometheus receiver), the receivers, the backends (declared / min version, gating, endpoints), the exporters, the storage, the instrumentation contract; the **params** the layer shapes, editable (`paramRowHtml`): the entries' scrape targets and selectors, the scaffold's endpoints and backend versions. L2 has no switch |
+| L3 Insight | How do we see it? | the **Dashboards** switch (*off is expected to drop 2 clauses of the tier: service overview board, SLO burn board* — exactly what the engine reports failing once it is off), the boards the pack carries (the overview, the burn board at tier-2+, the entries' boards, the tier-1 boards), the derived views, the recording rules |
+| L4 Action | What happens when it breaks? | the **Policy** switch (the burn windows per SLO listed, `14× 5m/1h SEV1 · 6× 30m/6h SEV2`; disabled and off when SLOs are off — meaningless without them), the **Routes** switch with the channel **params** (oncall, team, pager, pager-low), the routes listed with their channels, the remediation templates with their runbook and automation, the runbook directory param |
+| L5 Validation | How do we prove it? | the **Validation** switch (*off is expected to drop … synthetic probe, chaos in staging*), the probes (kind, target, interval, severity) and the chaos experiments (engine, target, fault, schedule, environment, expected MTTD) with their target **params**, the baselines |
+| GOV Governance | Who owns it? | the owners (the definition column's field, shown read-only) and the imports |
+
+Where a param is edited is decided once (`paramLayer`): the scaffold's channels, pagers and
+runbook directory on L4, its chaos and probe targets on L5, its endpoints and backend versions
+on L2; an entry's params on L5 when they name a workload, a canary, a probe or a bootstrap
+address, on L2 otherwise. Every param of the drive's selection lands on exactly one sheet
+(the test asserts the partition covers `paramRows`). A section switch states its consequence
+in one line: while on, what switching it off is *expected* to drop (`sectionClauses`: the
+clauses in the section's scope — the slab(s) it feeds, narrowed where the slab carries more
+than the section, dashboards off leaving the recording rules and the derived views; for SLOs
+also the policy and the chaos experiments, which reference an SLO — minus the clauses
+quantified per SLO, which hold with none: the burn alert per SLO, the chaos per SLO); once
+off, what the engine actually failed among those (`sectionDrops`, read from the checklist),
+so the line never disagrees with the stack. The test instantiates with each section off and
+asserts both readings equal the engine's failing set. A section off dims its slab, puts an
+*off* chip on its head and turns its clauses red, as before; a slab that fails because of a
+section off elsewhere — L5 with SLOs off — carries a chip that says why (`sectionNotes`:
+*no SLO to test*, the failing clauses in its title).
+
+**One component on the three steps** (`sheetModeFor(step)`): on **COMPILE** the sheet is
+editable — this is where composition happens, so the SLI rows table and the SECTIONS toggle
+grid are gone from the step; COMPILE keeps its summary line, the stack and the YAML
+collapsible. On **DEFINE** it opens in **preview** — the requirements and the candidates,
+every switch disabled, the params read-only, and a *Compose in Compile →* action that
+switches step and reopens the same layer (`setStep('compile', { sheet })`); the silhouette
+stays the axis on DEFINE, whose main column is now the silhouette alone (the fields, the
+tier and the entries moved into the column; the params list moved to the L2 / L4 / L5
+sheets). On **VERIFY** it is read-only and shows the layer's pinned todos with their inline
+params — the same `todoHtml` the slabs draw, keyed `param:<key>@<layer>/sheet/<todo path>`
+so a filled todo takes only its own inputs away; VERIFY keeps the verdict cards, the
+maturity bars, the artefacts strip and *Ready to continue?*. The sheet writes through the
+existing actions only (`setSli` / `addSli`, `setToggle`, `setParam`, `toggleEntry`,
+`setTier`) and re-instantiation redraws the stack, the sheet and the column; the scroll
+offsets of the sheet body and the rolodex track survive the redraw (`[data-scroll-key]`,
+keyed per layer — `sheet:L1`, `rolodex:L1` — so a switch flipped mid-list keeps its place
+while a newly opened layer starts at its top), a focused rolodex card is re-centred, and a
+sheet input whose todo disappeared hands focus
+to the sheet's next input, then its close control (`focusFallbackSelectors`).
+
+**The language.** Generous spacing between groups (24–32 px), 14–16 px radii on the sheet
+and the cards, a translucent sheet surface (`backdrop-filter: blur(20px) saturate(140%)`
+over the card colour, a solid `--card` where unsupported), soft layered shadows, hairline
+separators, real switches with a sliding knob, a segmented control with a sliding thumb, a
+large title + subtitle in the sheet, one accent per layer (the layer token) used sparingly
+— the sheet's border and accent bar, the on-state of its switches, its ids (as text — the
+eyebrow, the ids, a selected card's state — the accent is mixed 65 % towards ink,
+`--accent-text`, so a 10 px id clears WCAG AA in every layer and both themes; the raw light
+L1 amber reads 3.3:1); text at or below 12 px on the column and the sheet is `--ink-3`
+(`--ink-4` reads 4.27:1 on the dark card), `--ink-5` is never a text colour there, and the
+test computes every text colour of the block against its surface from the tokens — the
+studio's sans for controls and the mono for ids, 200 ms ease-out motion for the sheet's entrance
+(on the render that opens it only — `is-entering`, a one-shot the controller sets in
+`openSheet`; a re-render while it stays open rebuilds the panel without the class and never
+replays the slide), the thumb, the knob and the cards, with `prefers-reduced-motion`
+respected (no animation, no transition, `scroll-behavior: auto`), visible focus everywhere,
+both themes through the tokens only. Restraint: no 3D flips, no parallax, no new gradients.
+
+**Honest gaps stay.** *Pass on a placeholder* never reads as plain green — on the summary,
+on the slab edge and in the sheet's verdict pill; a section switched off says which clauses
+fail with it — the engine's set, not a prediction — and a slab that fails because of it
+says why; a param the engine refused is marked on its sheet row with the reason and the
+sheet says how many were rejected; an SLI above the tier says the tier it needs.
+
+**Tests** (`tools/test-build-model.mjs`): `buildDefinitionModel` (fields, segments with
+counts, chips, the summary in its ok / fail / pending / error / idle states), the
+definition column headless (ARIA of the radiogroup and the chips, the summary, the wiring —
+a segment click, arrow keys, a chip), `rolodexItems` (objective at the tier, the other
+tiers, above-tier disabled with the reason, the filter, composed keys), `addSliSelection`
+(the IBM MQ scenario: three entries, the seven kept plus one; one entry to two re-keys;
+completing the defaults collapses to null; above the tier refused; pure), `paramLayer`
+partitioning every param, `sectionClauses` matching the engine's dashboards-off failures,
+`sectionSwitch` consequences, `buildSheetModel` per layer (title, question, clauses,
+switches, param groups, lists read from the fixture, the modes), the sheet headless per mode
+(dialog ARIA, the rolodex cards incl. the disabled one, the switches, read-only params in
+preview, the todos on verify, escaping at the seam), the sheet's handlers through fake
+elements (close, scrim, Esc, compose, the section and rolodex switches incl. a foreign SLI
+through `addSli`, the filter), the slab head's `aria-haspopup` and `+`, `stackExpanded`, the
+sheet focus fallbacks, one clause row for the summary and the sheet, and the stylesheet
+(the translucent surface with its fallback, the accent per layer, the thumb and knob
+motion, the snap, the reduced-motion block, no colour literal beyond the tokens).
 
 ## What the next slices add
 

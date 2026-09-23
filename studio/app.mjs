@@ -43,16 +43,18 @@ import { initHost } from './host.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
   BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, enterStep as enterBuildStep, stepAfterInstantiate as buildStepAfterInstantiate, focusFallbackSelectors,
-  buildDefineModel, buildCompileModel, buildVerifyModel, buildRailModel, placeholdersRemaining, retargetSlis,
+  buildDefineModel, buildCompileModel, buildVerifyModel, buildDefinitionModel, buildSheetModel, buildClauseChecklist, buildStatusLine, sheetModeFor, addSliSelection, placeholdersRemaining, retargetSlis,
 } from './build-model.mjs';
 import {
   loadLibrary as loadBuildLibrary, libraryCache as buildLibraryCache, loadRequirements as loadBuildRequirements,
   requirementsCache as buildRequirementsCache, instantiate as instantiateBuild, compilePreview as compileBuildPreview,
   registerBuiltPack, loadTargets as loadBuildTargets,
 } from './build-api.mjs';
-import { renderBuildDefine, renderClauseRail } from './build-define-view.mjs';
+import { renderBuildDefine } from './build-define-view.mjs';
 import { renderBuildCompile } from './build-compile-view.mjs';
 import { renderBuildVerify } from './build-verify-view.mjs';
+import { renderBuildDefinition } from './build-definition-view.mjs';
+import { renderBuildSheet } from './build-sheet-view.mjs';
 import { revealTodo } from './build-atoms.mjs';
 import { loadBuildInfo, loadHealth, buildLabelModel, renderVersionChrome } from './build-label.mjs';
 
@@ -1918,8 +1920,11 @@ function exitBuildMode() {
 }
 
 // `todo` (a todo path) lands the step on that todo instead of its top — a card's
-// pin on COMPILE, whose todo is drawn on VERIFY only.
-function goToBuildStep(step, { todo = null } = {}) {
+// pin on COMPILE, whose todo is drawn on VERIFY only. `sheet` (a layer id) lands
+// it with that layer's sheet open — DEFINE's "Compose in Compile →" reopens the
+// layer it previewed; an open sheet otherwise stays open across steps (one
+// component on the three steps, its mode follows the step).
+function goToBuildStep(step, { todo = null, sheet } = {}) {
   if (!BUILD_STEPS.includes(step)) return;
   const reach = buildStepReachability(state.build);
   if (!reach[step]) {
@@ -1931,10 +1936,31 @@ function goToBuildStep(step, { todo = null } = {}) {
   state.build.step = step;
   state.build.wantedStep = null;   // an explicit choice supersedes a step still waited for
   state.build.preview = null;
+  if (sheet !== undefined) {
+    buildSheetEntering = !!sheet && sheet !== state.build.sheetOpen;   // reopening the same layer on another step is not an opening
+    state.build.sheetOpen = sheet;
+    if (sheet) buildFocusNext = '.build-sheet';
+  }
   paintObservaActiveTab();
   renderMainView();
+  focusAfterRender();
   if (todo && revealTodo(document.querySelector(`.build-step [data-todo="${CSS.escape(todo)}"]`))) return;
-  window.scrollTo({ top: 0 });
+  if (!sheet) window.scrollTo({ top: 0 });
+}
+
+// A one-shot focus target for the render that follows: the sheet when it opens, the
+// slab head it belongs to when it closes (focus moves in and returns).
+let buildFocusNext = null;
+// A one-shot for the render that opens a layer's sheet: that render draws the sheet with
+// `is-entering` (the 200 ms entrance); every later re-render while it stays open — a
+// switch flipped, a param committed, a settled keystroke — rebuilds it without the class,
+// so the entrance never replays (measured: it slid in six times per SLI switch flip).
+let buildSheetEntering = false;
+function focusAfterRender() {
+  if (!buildFocusNext) return;
+  const el = document.querySelector(buildFocusNext);
+  buildFocusNext = null;
+  el?.focus({ preventScroll: true });
 }
 
 // A tier's clauses, loaded once per tier; the view repaints when they land
@@ -1997,22 +2023,30 @@ async function runBuildInstantiate() {
   persistence.schedule();
 }
 function paintBuildPending(on) {
-  document.querySelector('.build-rail')?.classList.toggle('is-pending', on);
+  document.querySelector('.build-summary')?.classList.toggle('is-pending', on);
   document.querySelector('.build-shell')?.classList.toggle('is-pending', on);
 }
 
 // Re-render the build view keeping the focused input focused (a typed name
 // or an inline param re-instantiates and repaints while the caret is in it).
 // When the input is gone — a filled todo disappears with its inputs — focus
-// moves to the nearest thing on the same slab rather than falling to <body>.
+// moves to the nearest thing on the same slab (or on the sheet) rather than
+// falling to <body>. The scroll offsets of the sheet body and the rolodex
+// track ([data-scroll-key]) survive too, so a switch flipped mid-list does
+// not throw the list back to its top; a focused rolodex card is re-centred.
 function rerenderBuild() {
   if (state.mode !== 'build') return;
   const el = document.activeElement;
   const key = el?.dataset?.focusKey || null;
   const sel = key && typeof el.selectionStart === 'number' ? [el.selectionStart, el.selectionEnd] : null;
   const scrollY = window.scrollY;
+  const scrolls = Object.fromEntries([...document.querySelectorAll('[data-scroll-key]')].map(n => [n.dataset.scrollKey, [n.scrollTop, n.scrollLeft]]));
   paintObservaActiveTab();
   renderMainView();
+  for (const n of document.querySelectorAll('[data-scroll-key]')) {
+    const s = scrolls[n.dataset.scrollKey];
+    if (s) { n.scrollTop = s[0]; n.scrollLeft = s[1]; }
+  }
   if (key) {
     let next = document.querySelector(`[data-focus-key="${CSS.escape(key)}"]`);
     let caret = sel;
@@ -2023,8 +2057,12 @@ function rerenderBuild() {
     if (next) {
       next.focus({ preventScroll: true });
       if (caret && typeof next.setSelectionRange === 'function') { try { next.setSelectionRange(caret[0], caret[1]); } catch { /* not a text input */ } }
+      const card = next.closest?.('[data-snap-card]');
+      const track = card?.closest('[data-scroll-key]');
+      if (card && track) track.scrollLeft = card.offsetLeft - (track.clientWidth - card.offsetWidth) / 2;
     }
   }
+  focusAfterRender();
   window.scrollTo({ top: scrollY });
 }
 
@@ -2083,6 +2121,36 @@ const buildActions = {
     b.toggles = { ...b.toggles, [section]: !!on };
     rerenderBuild();
     scheduleBuildInstantiate(0);
+  },
+  // The rolodex's one action for an SLI of a product not yet selected: the entry joins
+  // the selection and the SLI is ticked, the rest of the selection kept (re-keyed for
+  // the new composition). Pure part: addSliSelection.
+  addSli(entryId, sliId) {
+    const b = state.build;
+    const next = addSliSelection({ build: b, library: buildLibraryCache() }, entryId, sliId);
+    if (!next.changed) { if (next.reason) toast(`${sliId}: ${next.reason}`, 'error'); return; }
+    b.entries = next.entries;
+    b.slis = next.slis;
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+  },
+  // The layer sheet: one at a time, remembered on the draft (never persisted); focus
+  // moves into the sheet when it opens and returns to the slab head when it closes.
+  openSheet(layerId) {
+    const b = state.build;
+    if (!layerId) return;
+    buildSheetEntering = layerId !== b.sheetOpen;
+    b.sheetOpen = layerId;
+    buildFocusNext = '.build-sheet';
+    rerenderBuild();
+  },
+  closeSheet() {
+    const b = state.build;
+    if (!b.sheetOpen) return;
+    const layer = b.sheetOpen;
+    b.sheetOpen = null;
+    buildFocusNext = `.build-slab[data-layer="${CSS.escape(layer)}"] .build-slab-edge`;
+    rerenderBuild();
   },
   setStep: goToBuildStep,
   exit: exitBuildMode,
@@ -2147,16 +2215,25 @@ const buildActions = {
   },
 };
 
-// The build view: the step on the left, the tier's clause rail on the right.
+// The build view — the pack is the axis (docs/BUILD_JOURNEY.md "The axis"): the
+// definition column on the left (service, tier, entries, the conformance summary,
+// sticky), the step with the stack as the main surface on the right, and, when a
+// layer is open, its sheet over the stack (one component on the three steps; its
+// mode follows the step: preview · edit · verify).
 function renderBuildView(view) {
   const b = state.build;
   const shell = document.createElement('div');
-  shell.className = `build-shell build-step-${b.step}${b.pending ? ' is-pending' : ''}`;
+  shell.className = `build-shell build-step-${b.step}${b.pending ? ' is-pending' : ''}${b.sheetOpen ? ' has-sheet' : ''}`;
+  const exitBar = document.createElement('div');
+  exitBar.className = 'build-exit';
+  exitBar.innerHTML = `<button type="button" class="build-exit-btn" title="Leave the BUILD journey">← ${state.selectedPackId ? 'back to the open pack' : 'back to Discover · Diagnose · Remediate'}</button>`;
+  exitBar.querySelector('button').addEventListener('click', exitBuildMode);
+  const def = document.createElement('aside');
+  def.className = 'build-def';
+  def.setAttribute('aria-label', 'Pack definition');
   const main = document.createElement('div');
   main.className = 'build-main';
-  const rail = document.createElement('aside');
-  rail.className = 'build-rail';
-  shell.append(main, rail);
+  shell.append(exitBar, def, main);
   view.appendChild(shell);
 
   const library = buildLibraryCache();
@@ -2166,31 +2243,54 @@ function renderBuildView(view) {
       .catch(e => { main.innerHTML = `<div class="error">Could not load the pack library: ${escapeHtml(e.message)}</div>`; });
     return;
   }
-  const clauses = buildRequirementsCache()[b.tier] || [];
+  const requirements = buildRequirementsCache();
+  const clauses = requirements[b.tier] || [];
   if (!clauses.length) ensureBuildRequirements(b.tier);
   const host = { renderMainView, renderTabs, build: buildActions };
-  renderClauseRail(rail, buildRailModel({ build: b, clauses }), host);
+  const checklist = buildClauseChecklist(clauses, b.result?.summary || null);
+  const definition = buildDefinitionModel({ build: b, library, requirements, checklist });
+  renderBuildDefinition(def, definition, host);
+  // The status line goes to the one persistent live region (#build-status, outside this
+  // re-rendered tree) and only when it changed: the summary block itself is rebuilt on every
+  // re-render, so a live region on it announced nothing, or the whole block after each keystroke.
+  const status = buildStatusLine(definition.summary);
+  const live = document.getElementById('build-status');
+  if (live && status && live.textContent !== status) live.textContent = status;
 
-  const exitBar = document.createElement('div');
-  exitBar.className = 'build-exit';
-  exitBar.innerHTML = `<button type="button" class="build-exit-btn" title="Leave the BUILD journey">← ${state.selectedPackId ? 'back to the open pack' : 'back to Discover · Diagnose · Remediate'}</button>`;
-  exitBar.querySelector('button').addEventListener('click', exitBuildMode);
-  main.appendChild(exitBar);
   const stepEl = document.createElement('div');
   stepEl.className = 'build-step-host';
   main.appendChild(stepEl);
+  let stack;
   switch (b.step) {
-    case 'verify':
-      renderBuildVerify(stepEl, buildVerifyModel({ build: b, library, clauses, targets: buildTargets || [] }), host);
-      return;
-    case 'compile':
-      renderBuildCompile(stepEl, buildCompileModel({ build: b, library, clauses }), host);
-      return;
+    case 'verify': {
+      const m = buildVerifyModel({ build: b, library, clauses, targets: buildTargets || [] });
+      stack = m.stack;
+      renderBuildVerify(stepEl, m, host);
+      break;
+    }
+    case 'compile': {
+      const m = buildCompileModel({ build: b, library, clauses });
+      stack = m.stack;
+      renderBuildCompile(stepEl, m, host);
+      break;
+    }
     case 'define':
-    default:
-      renderBuildDefine(stepEl, buildDefineModel({ build: b, library, requirements: buildRequirementsCache() }), host);
-      return;
+    default: {
+      const m = buildDefineModel({ build: b, library, requirements });
+      stack = m.stack;
+      renderBuildDefine(stepEl, m, host);
+      break;
+    }
   }
+  if (b.sheetOpen) {
+    // In the main column: the scrim dims the stack only (the definition column stays live),
+    // the panel itself is fixed to the viewport's right edge.
+    const sheetEl = document.createElement('div');
+    sheetEl.className = 'build-sheet-host';
+    main.appendChild(sheetEl);
+    renderBuildSheet(sheetEl, buildSheetModel({ layerId: b.sheetOpen, build: b, library, requirements: clauses, stack, checklist, mode: sheetModeFor(b.step), entering: buildSheetEntering }), host);
+  }
+  buildSheetEntering = false;   // the entrance plays once
 }
 
 // Hero / home screen — two big affordances. Mode-aware.
