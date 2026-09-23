@@ -8210,8 +8210,8 @@ body.chrome-observa .disco {
 [data-theme="dark"] .neuron-view { --pr-green: #34D399; --pr-blue: #60A5FA; --pr-purple: #A78BFA; --pr-amber: #FBBF24; --pr-red: #F87171; --pr-cyan: #22D3EE; --pr-gray: #94A3B8; }
 
 /* =============================================================
-   BUILD — the BUILD journey (docs/BUILD_JOURNEY.md): Select · Generate ·
-   Validate. Zone prefix .build-* (docs/UI_CONVENTIONS.md §4). Reuses the
+   BUILD — the BUILD journey (docs/BUILD_JOURNEY.md): Define · Compile ·
+   Verify. Zone prefix .build-* (docs/UI_CONVENTIONS.md §4). Reuses the
    studio tokens (--card / --line / --ink-* / --pass-bg / --fail-bg /
    --warn-bg / --crit-tier-*) and the header's tab accents, so the three
    step cards look like the analysis journey's three.
@@ -8416,7 +8416,7 @@ body.chrome-observa .disco {
 .build-rail-warnings.is-blocking b { color: var(--fail-border); }
 .build-rail-todos b { color: var(--warn); }
 
-/* GENERATE — SLI rows per entry, section toggles, the generated pack. */
+/* COMPILE — SLI rows per entry, section toggles, the generated pack. */
 .build-sli-group { margin-top: 4px; }
 .build-sli-list { display: flex; flex-direction: column; gap: 4px; }
 .build-sli-head, .build-sli {
@@ -8474,7 +8474,7 @@ body.chrome-observa .disco {
 .build-yaml-actions { margin: 8px 0; }
 .build-yaml-pre { max-height: 520px; }
 
-/* VALIDATE — the three verdicts, the todos by artefact, the artefact cards. */
+/* VERIFY — the three verdicts, the todos by artefact, the artefact cards. */
 .build-verdicts { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
 @media (max-width: 1080px) { .build-verdicts { grid-template-columns: 1fr; } }
 .build-verdict { padding: 14px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; border-top: 3px solid var(--line); }

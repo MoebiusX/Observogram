@@ -61,18 +61,18 @@ steps in the same visual language as the three below, reached from the home
 hero, the service gate or the upload popover ("Build from the library…"), and
 ending where Discover begins ([`docs/BUILD_JOURNEY.md`](docs/BUILD_JOURNEY.md)):
 
-1. **Select - What Are We Observing?** — the service name, owners and
+1. **Define - What Are We Observing?** — the service name, owners and
    environment, its criticality tier (each with the conformance clauses it
    requires) and one or more library entries: products it runs on (Kafka,
    Prometheus, Grafana, IBM MQ, Alertmanager, Loki, Tempo, the OTel Collector,
    every one with its evidence badge) or an archetype for a service built from
    scratch (HTTP service, queue consumer — OTel semconv).
-2. **Generate - What Should It Watch?** — the SLIs per entry (an SLI above the
+2. **Compile - What Should We Watch?** — the SLIs per entry (an SLI above the
    tier is shown disabled with the tier it needs) with the objective and window
    each gets at this tier, the section toggles (SLOs, policy, routes, dashboards,
    validation), the pack YAML. Every change regenerates the pack through the API
    and the rail on the right shows which of the tier's clauses it holds up.
-3. **Validate - Does It Hold Up?** — the conformance verdict at the tier with
+3. **Verify - Is It Ready to Use?** — the conformance verdict at the tier with
    three clause states (pass · pass on a placeholder · fail), the schema
    verdict, the warnings, the todos grouped by artefact with the parameter that
    fills each one editable inline, the compiled artefacts (Prometheus rules,
@@ -382,8 +382,8 @@ for a service built from scratch), a criticality tier and a name, and `packc ini
 instantiates the library entries into a canonical v1.2 pack that validates,
 compiles through every target and passes every MUST clause of the tier — with the
 values only the team can fill (pager service, chaos target, endpoints) reported as
-todos, never hidden. The same engine drives the studio's Build journey (Select ·
-Generate · Validate, see "Main Journey" above) through `/api/library/*`; the
+todos, never hidden. The same engine drives the studio's Build journey (Define ·
+Compile · Verify, see "Main Journey" above) through `/api/library/*`; the
 contract is [`docs/BUILD_JOURNEY.md`](docs/BUILD_JOURNEY.md) and the entries and
 their evidence bar are in [`library/README.md`](library/README.md).
 
@@ -638,7 +638,7 @@ be tested without a browser. The view needs no pack loaded.
 | `GET` | `/api/packs/:id/compile-catalog` | Per-artifact compile tree |
 | `GET` | `/api/packs/:id/compile-artifact` | Compile one artifact or group |
 | `POST` | `/api/validate` | Validate and register uploaded YAML/JSON (`summary.onPlaceholder` when the pack carries `library.todo.*` annotations) |
-| `GET` | `/api/library` | The pack library index (`entries`, `scaffoldParams`, `errors`: the files that did not load) — the BUILD journey's SELECT step |
+| `GET` | `/api/library` | The pack library index (`entries`, `scaffoldParams`, `errors`: the files that did not load) — the BUILD journey's DEFINE step |
 | `GET` | `/api/library/requirements/:tier` | The conformance clauses that apply at a tier (the rubric filtered by `minTier`; 400 names the known tiers) |
 | `GET` | `/api/library/:id` | One library entry: its index row plus the full SLI templates and params (404 names the known entries) |
 | `POST` | `/api/library/instantiate` | `{ entries, name, tier, environment, owners, params, toggles }` → `canonical`, `canonicalYaml`, `todos`, `provenance`, `warnings`, `schemaErrors`, `summary`, `conformance` (an engine usage error is 400, never 500) |
@@ -673,9 +673,9 @@ studio/
   journeys-view.mjs        Saved journeys: capture, run-now, history, stack chips, chains + cause lines (the cards Neuron composes)
   build-model.mjs          The BUILD journey's pure models (select / generate / validate, the clause checklist's three states, step reachability)
   build-api.mjs            The BUILD journey's loaders over /api/library/* (fetchFn injectable)
-  build-select-view.mjs    BUILD step 1 — Select (service, tier, library entries, params) + the clause rail the three steps share
-  build-generate-view.mjs  BUILD step 2 — Generate (SLI toggles, objectives at the tier, section toggles, the pack YAML)
-  build-validate-view.mjs  BUILD step 3 — Validate (verdict, todos by artefact with inline params, artefacts, Open in Discover)
+  build-define-view.mjs    BUILD step 1 — Define (service, tier, library entries, params) + the clause rail the three steps share
+  build-compile-view.mjs  BUILD step 2 — Compile (SLI toggles, objectives at the tier, section toggles, the pack YAML)
+  build-verify-view.mjs  BUILD step 3 — Verify (verdict, todos by artefact with inline params, artefacts, Open in Discover)
 
 tools/
   cli.mjs                  packc CLI (journey run / list, compile, init, …)
@@ -726,7 +726,7 @@ deploy/k8s/
 - [`docs/MODEL.md`](docs/MODEL.md) - the layered observability model (L1–L5, L2X, GOV)
 - [`docs/DIFF.md`](docs/DIFF.md) - structural alignment and drift model
 - [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md) - maturity rubric scoring
-- [`docs/BUILD_JOURNEY.md`](docs/BUILD_JOURNEY.md) - the BUILD journey (Select · Generate · Validate): the pack library, the tier scaffold, placeholders and provenance, the engine API and `packc init`
+- [`docs/BUILD_JOURNEY.md`](docs/BUILD_JOURNEY.md) - the BUILD journey (Define · Compile · Verify): the pack library, the tier scaffold, placeholders and provenance, the engine API and `packc init`
 - [`docs/DIAGNOSTIC_GRADE_FRAMEWORK.md`](docs/DIAGNOSTIC_GRADE_FRAMEWORK.md) - the eight coverage/trust criteria behind the Diagnose grade
 - [`docs/PHASE_1_VERDICT_TRUST_RESEARCH.md`](docs/PHASE_1_VERDICT_TRUST_RESEARCH.md) - draft research/spec for the verdict-trust phase
 - [`docs/TRACEABILITY_GRAPH_COMPARISON_SPEC.md`](docs/TRACEABILITY_GRAPH_COMPARISON_SPEC.md) - requirement-chain comparison semantics

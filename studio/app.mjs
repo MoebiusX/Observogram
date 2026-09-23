@@ -42,17 +42,17 @@ import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-
 import { initHost } from './host.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
-  BUILD_STEPS, TIERS as BUILD_TIERS, selectValid as buildSelectValid, buildStepReachability, clampStep as clampBuildStep,
-  buildSelectModel, buildGenerateModel, buildValidateModel, buildRailModel, placeholdersRemaining, retargetSlis,
+  BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, clampStep as clampBuildStep,
+  buildDefineModel, buildCompileModel, buildVerifyModel, buildRailModel, placeholdersRemaining, retargetSlis,
 } from './build-model.mjs';
 import {
   loadLibrary as loadBuildLibrary, libraryCache as buildLibraryCache, loadRequirements as loadBuildRequirements,
   requirementsCache as buildRequirementsCache, instantiate as instantiateBuild, compilePreview as compileBuildPreview,
   registerBuiltPack, loadTargets as loadBuildTargets,
 } from './build-api.mjs';
-import { renderBuildSelect, renderClauseRail } from './build-select-view.mjs';
-import { renderBuildGenerate } from './build-generate-view.mjs';
-import { renderBuildValidate } from './build-validate-view.mjs';
+import { renderBuildDefine, renderClauseRail } from './build-define-view.mjs';
+import { renderBuildCompile } from './build-compile-view.mjs';
+import { renderBuildVerify } from './build-verify-view.mjs';
 import { loadBuildInfo, loadHealth, buildLabelModel, renderVersionChrome } from './build-label.mjs';
 
 // `state`, the `$`/`$$` DOM helpers and the persistence layer now live in
@@ -731,13 +731,13 @@ export function renderMainView() {
     else renderHomeView();
     return;
   }
-  // The BUILD journey renders its own three steps (Select · Generate ·
-  // Validate) under BUILD_TABS; nothing below applies until "Open in
+  // The BUILD journey renders its own three steps (Define · Compile ·
+  // Verify) under BUILD_TABS; nothing below applies until "Open in
   // Discover" hands the produced pack to the analysis journey.
   if (state.mode === 'build') { renderBuildView(view); return; }
   if (!state.pack) {
     // In the workspace but no pack yet. Discover ("what do we have?") is
-    // where you LOAD or GENERATE a pack — so its empty state IS the three
+    // where you LOAD or COMPILE a pack — so its empty state IS the three
     // load options, never the marketing hero. Diagnose/Remediate need a
     // pack first, so they point the user back to Discover.
     if (state.view === 'layers') { renderDiscoverEmpty(view); return; }
@@ -997,7 +997,7 @@ function setupUpload() {
       }
       if (action === 'build-library') {
         // No pack to upload yet: the BUILD journey makes one from the library.
-        enterBuildMode('select');
+        enterBuildMode('define');
         return;
       }
       if (action === 'quick-krystaline') {
@@ -1172,30 +1172,30 @@ const OBSERVA_ADV_VIEWS = new Set(OBSERVA_ADV.map(a => a.id));
 // step's inputs are valid (build-model.mjs buildStepReachability).
 export const BUILD_TABS = [
   {
-    id: 'select',
+    id: 'define',
     n: '1',
     label: 'What Are We Observing?',
-    sub: 'Select',
+    sub: 'Define',
     techName: 'Library',
     tagline: 'Service, tier & library',
     accent: 'tab-blue',
   },
   {
-    id: 'generate',
+    id: 'compile',
     n: '2',
-    label: 'What Should It Watch?',
-    sub: 'Generate',
+    label: 'What Should We Watch?',
+    sub: 'Compile',
     techName: 'Instantiate',
-    tagline: 'SLIs, SLOs, policy, boards',
+    tagline: 'Pack & deployable artifacts',
     accent: 'tab-magenta',
   },
   {
-    id: 'validate',
+    id: 'verify',
     n: '3',
-    label: 'Does It Hold Up?',
-    sub: 'Validate',
+    label: 'Is It Ready to Use?',
+    sub: 'Verify',
     techName: 'Conformance',
-    tagline: 'Conformance & artifacts',
+    tagline: 'Conformance & placeholders',
     accent: 'tab-emerald',
   },
 ];
@@ -1595,7 +1595,7 @@ function renderServiceGate() {
     state.homeVariant = 'hero';
     renderHomeView();
   });
-  view.querySelector('#svc-gate-build')?.addEventListener('click', () => enterBuildMode('select'));
+  view.querySelector('#svc-gate-build')?.addEventListener('click', () => enterBuildMode('define'));
 }
 
 // Reflect the active service into the always-visible OBSERVA-bar chip.
@@ -1742,7 +1742,7 @@ function applyModeChrome() {
   // The header's cards follow the mode too: leaving the BUILD journey through
   // its exit bar (goHome, or enterAnalyzeMode when a pack was open) once left
   // the three build cards up, the last step highlighted and the tagline
-  // reading "Select · Generate · Validate" over the home hero, because only
+  // reading "Define · Compile · Verify" over the home hero, because only
   // routeTo and openInDiscover repainted them. Every mode transition passes
   // through here, so this is where the set is swapped (idempotent: the nav
   // is rebuilt only when the set changes).
@@ -1824,9 +1824,9 @@ function setupHomeAffordance() {
 }
 
 // ============================================================
-// The BUILD journey — Select · Generate · Validate (docs/BUILD_JOURNEY.md,
+// The BUILD journey — Define · Compile · Verify (docs/BUILD_JOURNEY.md,
 // slice 2). The controller: state.build is the draft, the step modules
-// render it (build-select-view / build-generate-view / build-validate-view,
+// render it (build-define-view / build-compile-view / build-verify-view,
 // renderer-only), build-model.mjs computes what they show, build-api.mjs
 // talks to the six /api/library routes. Every change to the draft
 // re-instantiates through the API (debounced), because the PromQL grammar
@@ -1857,13 +1857,13 @@ export function enterBuildMode(step) {
   paintObservaActiveTab();
   renderTabs();
   renderMainView();
-  // SELECT shows what each tier requires and the rail the chosen tier's
+  // DEFINE shows what each tier requires and the rail the chosen tier's
   // clauses; the draft needs a result if it is already complete (a reload
   // lands here with inputs and no canonical).
   for (const t of BUILD_TIERS) ensureBuildRequirements(t);
-  if (!state.build.result && buildSelectValid(state.build)) scheduleBuildInstantiate(0);
-  // VALIDATE draws one artefact card per compile target.
-  if (!buildTargets) loadBuildTargets().then(t => { buildTargets = t; if (state.mode === 'build' && state.build.step === 'validate') rerenderBuild(); }).catch(() => { buildTargets = []; });
+  if (!state.build.result && buildDefineValid(state.build)) scheduleBuildInstantiate(0);
+  // VERIFY draws one artefact card per compile target.
+  if (!buildTargets) loadBuildTargets().then(t => { buildTargets = t; if (state.mode === 'build' && state.build.step === 'verify') rerenderBuild(); }).catch(() => { buildTargets = []; });
   persistence.schedule();
 }
 let buildTargets = null;
@@ -1879,7 +1879,7 @@ function goToBuildStep(step) {
   if (!BUILD_STEPS.includes(step)) return;
   const reach = buildStepReachability(state.build);
   if (!reach[step]) {
-    toast(step === 'generate' ? 'Complete the selection first — a service name, a tier and at least one library entry.'
+    toast(step === 'compile' ? 'Complete the selection first — a service name, a tier and at least one library entry.'
       : 'Generate a pack with at least one SLI first.', 'error');
     return;
   }
@@ -1892,7 +1892,7 @@ function goToBuildStep(step) {
 }
 
 // A tier's clauses, loaded once per tier; the view repaints when they land
-// (SELECT shows what every tier requires, the rail the chosen tier's).
+// (DEFINE shows what every tier requires, the rail the chosen tier's).
 function ensureBuildRequirements(tier) {
   if (!tier || buildRequirementsCache()[tier]) return;
   loadBuildRequirements(tier).then(() => { if (state.mode === 'build') rerenderBuild(); })
@@ -1910,7 +1910,7 @@ function scheduleBuildInstantiate(delay = 350) {
 async function runBuildInstantiate() {
   buildTimer = null;
   const b = state.build;
-  if (!buildSelectValid(b)) {
+  if (!buildDefineValid(b)) {
     if (b.result || b.error || b.pending) { b.result = null; b.error = null; b.pending = false; rerenderBuild(); }
     return;
   }
@@ -2030,7 +2030,7 @@ const buildActions = {
   },
   setStep: goToBuildStep,
   exit: exitBuildMode,
-  // VALIDATE: one compile target previewed from the generated canonical —
+  // VERIFY: one compile target previewed from the generated canonical —
   // nothing registered, nothing deployed.
   async preview(target) {
     const b = state.build;
@@ -2124,15 +2124,15 @@ function renderBuildView(view) {
   stepEl.className = 'build-step-host';
   main.appendChild(stepEl);
   switch (b.step) {
-    case 'validate':
-      renderBuildValidate(stepEl, buildValidateModel({ build: b, library, clauses, targets: buildTargets || [] }), host);
+    case 'verify':
+      renderBuildVerify(stepEl, buildVerifyModel({ build: b, library, clauses, targets: buildTargets || [] }), host);
       return;
-    case 'generate':
-      renderBuildGenerate(stepEl, buildGenerateModel({ build: b, library }), host);
+    case 'compile':
+      renderBuildCompile(stepEl, buildCompileModel({ build: b, library }), host);
       return;
-    case 'select':
+    case 'define':
     default:
-      renderBuildSelect(stepEl, buildSelectModel({ build: b, library, requirements: buildRequirementsCache() }), host);
+      renderBuildDefine(stepEl, buildDefineModel({ build: b, library, requirements: buildRequirementsCache() }), host);
       return;
   }
 }
@@ -2382,7 +2382,7 @@ function renderHomeView() {
   };
   $('#home-shortcut-upload').onclick = () => $('#upload-btn')?.click();
   $('#home-shortcut-crawl').onclick  = () => $('#crawl-btn')?.click();
-  $('#home-shortcut-build').onclick  = () => enterBuildMode('select');
+  $('#home-shortcut-build').onclick  = () => enterBuildMode('define');
 }
 
 async function doHomeMcpConnect() {

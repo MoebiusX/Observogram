@@ -1782,7 +1782,7 @@ app.post('/api/validate', (req, res) => {
 
 // ----------------------------------------------------------------
 // The BUILD journey API (docs/BUILD_JOURNEY.md, slice 2) — the studio's
-// Select · Generate · Validate steps over the engine in tools/lib/library.mjs.
+// Define · Compile · Verify steps over the engine in tools/lib/library.mjs.
 // Registered here, after the write-route auth and tenancy middleware, so
 // they carry the same posture as POST /api/validate and POST /api/crawl:
 // open in local mode, a session or bearer in identity mode. The library is
@@ -1807,7 +1807,7 @@ function librarySummaryFor(canonical) {
 const knownEntryIds = () => library().entries.map(e => e.id).join(', ');
 const tierError = (tier) => `unknown tier ${JSON.stringify(tier)} (known: ${TIERS.join(', ')})`;
 
-// GET /api/library — the index the SELECT step lists (libraryIndex of loadLibrary)
+// GET /api/library — the index the DEFINE step lists (libraryIndex of loadLibrary)
 // plus the scaffold's own params (every instantiation has them) and the files
 // that did not load, so an entry missing from the list is never a mystery.
 app.get('/api/library', (req, res) => {
@@ -1862,7 +1862,7 @@ function resolveRequestedEntries(body) {
 }
 
 // POST /api/library/instantiate — body { entries | id, name, tier, environment,
-// owners, params, toggles } → the engine's result plus what VALIDATE reads:
+// owners, params, toggles } → the engine's result plus what VERIFY reads:
 // schemaErrors (validateCanonical), summary (validationSummary), conformance
 // (evaluateConformance of the env-overlaid canonical, as /api/validate computes
 // it) and the pack as YAML for the preview and the download. Node passes the
@@ -1897,7 +1897,7 @@ app.post('/api/library/instantiate', (req, res) => {
 });
 
 // POST /api/library/compile — body { canonical, target, dashboardId? } → one
-// compiled artefact through tools/lib/compile.mjs, so VALIDATE previews the
+// compiled artefact through tools/lib/compile.mjs, so VERIFY previews the
 // Prometheus rules, the collector config, the Alertmanager routes and the
 // Grafana boards without registering anything.
 app.post('/api/library/compile', (req, res) => {

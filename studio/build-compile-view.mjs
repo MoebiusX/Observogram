@@ -1,6 +1,6 @@
-// studio/build-generate-view.mjs
+// studio/build-compile-view.mjs
 //
-// BUILD step 2 — GENERATE, "What should it watch?": per-entry SLI toggles
+// BUILD step 2 — COMPILE, "What should we watch?": per-entry SLI toggles
 // (an SLI above the tier is shown disabled with the tier it needs), the SLO
 // objective and window each SLI gets at this tier (the library's per-tier
 // defaults, read-only — overriding an objective is a later slice), the
@@ -11,11 +11,11 @@
 // on the right fills in from the result.
 //
 // Renderer only (docs/UI_CONVENTIONS.md §2-3): render(container, model, host)
-// with buildGenerateModel's output; host.build.* are the actions.
+// with buildCompileModel's output; host.build.* are the actions.
 
 import { escapeHtml, downloadText } from './util.mjs';
 import { host as appHost } from './host.mjs';
-import { stepHeadHtml, evidenceBadge, instantiateErrorHtml } from './build-select-view.mjs';
+import { stepHeadHtml, evidenceBadge, instantiateErrorHtml } from './build-define-view.mjs';
 
 function sliRowHtml(s) {
   const disabled = !s.reachable;
@@ -48,14 +48,14 @@ function warningsHtml(groups) {
     </div>`;
 }
 
-/** render(container, model, host) — the GENERATE step. */
-export function renderBuildGenerate(container, model, host = appHost) {
+/** render(container, model, host) — the COMPILE step. */
+export function renderBuildCompile(container, model, host = appHost) {
   const act = host.build;
   const r = model.result;
   const allKeys = model.groups.flatMap(g => g.slis.filter(s => s.reachable).map(s => s.key));
   container.innerHTML = `
-    <section class="build-step build-generate">
-      ${stepHeadHtml('generate', 'What should it watch?', `Tick the SLIs the pack should carry — the library’s objectives and windows at <strong>${escapeHtml(model.tier)}</strong> are shown beside each one — and the sections it should contain. Every change regenerates the pack; the rail shows which of the tier’s clauses it holds up, and on what.`)}
+    <section class="build-step build-compile">
+      ${stepHeadHtml('compile', 'What should we watch?', `Tick the SLIs the pack should carry — the library’s objectives and windows at <strong>${escapeHtml(model.tier)}</strong> are shown beside each one — and the sections it should contain. Every change recompiles the pack; the rail shows which of the tier’s clauses it holds up, and on what.`)}
 
       ${model.groups.map(g => `
         <div class="build-sli-group">
@@ -82,8 +82,8 @@ export function renderBuildGenerate(container, model, host = appHost) {
       </div>
 
       <div class="build-result">
-        <div class="build-section-key">Generated pack <span class="build-section-sub">${model.pending ? 'regenerating…' : r ? `${r.sliCount} SLI${r.sliCount === 1 ? '' : 's'} · ${r.sloCount} SLO${r.sloCount === 1 ? '' : 's'} · ${r.todoCount} todo${r.todoCount === 1 ? '' : 's'} · ${r.warningCount} warning${r.warningCount === 1 ? '' : 's'} · schema ${r.schemaOk ? 'valid' : `${r.schemaErrors.length} error${r.schemaErrors.length === 1 ? '' : 's'}`}${model.stale ? ' · previous pack' : ''}` : model.error ? 'the last generation failed' : 'nothing generated yet'}</span></div>
-        ${instantiateErrorHtml(model.error, { stale: model.stale, where: 'Select and Validate (this step has no parameter inputs)' })}
+        <div class="build-section-key">Compiled pack <span class="build-section-sub">${model.pending ? 'recompiling…' : r ? `${r.sliCount} SLI${r.sliCount === 1 ? '' : 's'} · ${r.sloCount} SLO${r.sloCount === 1 ? '' : 's'} · ${r.todoCount} todo${r.todoCount === 1 ? '' : 's'} · ${r.warningCount} warning${r.warningCount === 1 ? '' : 's'} · schema ${r.schemaOk ? 'valid' : `${r.schemaErrors.length} error${r.schemaErrors.length === 1 ? '' : 's'}`}${model.stale ? ' · previous pack' : ''}` : model.error ? 'the last generation failed' : 'nothing generated yet'}</span></div>
+        ${instantiateErrorHtml(model.error, { stale: model.stale, where: 'Define and Verify (this step has no parameter inputs)' })}
         ${!model.atLeastOne ? '<div class="build-note build-note-warn">At least one SLI must stay selected — the pack cannot be generated without one.</div>' : ''}
         ${r && !r.schemaOk ? `<div class="build-note build-note-warn"><strong>Schema:</strong> the pack does not validate against spec v1.2 as toggled — ${r.schemaErrors.slice(0, 4).map(e => escapeHtml(e)).join('; ')}${r.schemaErrors.length > 4 ? ` … +${r.schemaErrors.length - 4}` : ''}</div>` : ''}
         ${r ? warningsHtml(r.warnings) : ''}
@@ -96,9 +96,9 @@ export function renderBuildGenerate(container, model, host = appHost) {
       </div>
 
       <footer class="build-step-actions">
-        <button type="button" class="ctrl-btn build-back" id="build-back">← Select</button>
-        <span class="build-step-status">${r && !model.pending ? (r.warnings.some(w => w.blocking) ? 'A PromQL warning blocks the pack — fix the param before validating.' : 'Generated. Validate shows the verdict, the todos and the artefacts.') : ''}</span>
-        <button type="button" class="mcp-refresh-btn build-next" id="build-next" ${r && !model.pending ? '' : 'disabled'}>Continue to Validate <span aria-hidden="true">→</span></button>
+        <button type="button" class="ctrl-btn build-back" id="build-back">← Define</button>
+        <span class="build-step-status">${r && !model.pending ? (r.warnings.some(w => w.blocking) ? 'A PromQL warning blocks the pack — fix the param before verifying.' : 'Compiled. Verify shows the verdict, the todos and the artefacts.') : ''}</span>
+        <button type="button" class="mcp-refresh-btn build-next" id="build-next" ${r && !model.pending ? '' : 'disabled'}>Continue to Verify <span aria-hidden="true">→</span></button>
       </footer>
     </section>`;
 
@@ -109,6 +109,6 @@ export function renderBuildGenerate(container, model, host = appHost) {
     cb.addEventListener('change', () => act.setToggle(cb.closest('.build-toggle').dataset.toggle, cb.checked));
   });
   container.querySelector('#build-yaml-download')?.addEventListener('click', () => downloadText(r.fileName, r.yaml, 'application/x-yaml'));
-  container.querySelector('#build-back').addEventListener('click', () => act.setStep('select'));
-  container.querySelector('#build-next').addEventListener('click', () => act.setStep('validate'));
+  container.querySelector('#build-back').addEventListener('click', () => act.setStep('define'));
+  container.querySelector('#build-next').addEventListener('click', () => act.setStep('verify'));
 }

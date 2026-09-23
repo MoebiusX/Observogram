@@ -28,15 +28,15 @@ import { loadLibrary, findEntry } from '../server/library.mjs';
 import { parsePromqlDependencies as lezer } from './lib/promql-lezer.mjs';
 import {
   BUILD_STEPS, TIERS, SECTION_TOGGLES, MAX_SERVICE_SLUG, LONGEST_DERIVED_SUFFIX, serviceSlug, isValidServiceName, parseOwners, sliKey, paramKey,
-  selectValid, buildStepReachability, clampStep, paramRows, effectiveParams, instantiateBody,
-  buildSelectModel, buildGenerateModel, summarizeWarnings, buildClauseChecklist, buildRailModel,
-  placeholdersRemaining, groupTodos, buildValidateModel, reachableSliKeys, retargetSlis, splitBuildErrors, isStale, resolveBuiltins,
+  defineValid, buildStepReachability, clampStep, paramRows, effectiveParams, instantiateBody,
+  buildDefineModel, buildCompileModel, summarizeWarnings, buildClauseChecklist, buildRailModel,
+  placeholdersRemaining, groupTodos, buildVerifyModel, reachableSliKeys, retargetSlis, splitBuildErrors, isStale, resolveBuiltins,
 } from '../studio/build-model.mjs';
 import {
   loadLibrary as loadLibraryApi, loadRequirements, loadTargets, instantiate, compilePreview, registerBuiltPack,
 } from '../studio/build-api.mjs';
 import { defaultBuildState, BUILD_PERSIST_FIELDS } from '../studio/state.mjs';
-import { renderBuildSelect } from '../studio/build-select-view.mjs';
+import { renderBuildDefine } from '../studio/build-define-view.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const FIX = resolve(ROOT, 'tools/fixtures/build');
@@ -44,7 +44,7 @@ const SCHEMA = JSON.parse(readFileSync(resolve(ROOT, 'vendor/observability-pack-
 const UPDATE = process.argv.includes('--update');
 const read = (name) => JSON.parse(readFileSync(resolve(FIX, name), 'utf8'));
 
-// The captured inputs of the instantiate fixture (what the SELECT step sends for the drive).
+// The captured inputs of the instantiate fixture (what the DEFINE step sends for the drive).
 const INPUTS = { entries: ['kafka', 'http-service'], name: 'orders-api', tier: 'tier-2', environment: 'prod', owners: ['team-orders'], params: {}, toggles: {} };
 
 // The same computation POST /api/library/instantiate performs, in process.
@@ -76,7 +76,7 @@ const LIBRARY = { entries: INDEX.entries, scaffoldParams: INDEX.scaffoldParams, 
 const REQUIREMENTS = Object.fromEntries(TIERS.map(t => [t, read(`requirements.${t}.json`).clauses]));
 const TARGETS = read('compile.targets.json').targets;
 
-// The draft after the drive's SELECT step, with the fixture as its result.
+// The draft after the drive's DEFINE step, with the fixture as its result.
 const draft = (over = {}) => ({
   ...defaultBuildState(),
   name: 'orders-api', owners: 'team-orders', environment: 'prod', tier: 'tier-2', entries: ['kafka', 'http-service'],
@@ -98,7 +98,7 @@ test('the instantiate fixture is stable: a fresh in-process instantiation of the
   assert.deepEqual(fresh.provenance, FIXTURE.provenance);
   assert.equal(fresh.conformance.mustPercent, FIXTURE.conformance.mustPercent);
   assert.equal(fresh.canonicalYaml, FIXTURE.canonicalYaml);
-  // The shape VALIDATE reads.
+  // The shape VERIFY reads.
   assert.equal(FIXTURE.summary.tier, 'tier-2');
   assert.deepEqual(FIXTURE.summary.must, { passed: 15, total: 15 });
   assert.deepEqual(FIXTURE.summary.should, { passed: 1, total: 1 });
@@ -116,7 +116,7 @@ test('the index fixture is what libraryIndex returns and the requirements are th
   assert.deepEqual(INDEX.scaffoldParams, SCAFFOLD_PARAMS);
   for (const t of TIERS) assert.deepEqual(REQUIREMENTS[t], tierRequirements(t), t);
   assert.deepEqual(TARGETS.map(t => t.id), listTargets().map(t => t.id));
-  // The index carries what GENERATE shows read-only: the objective AND the window per tier.
+  // The index carries what COMPILE shows read-only: the objective AND the window per tier.
   const kafka = INDEX.entries.find(e => e.id === 'kafka');
   const ba = kafka.slis.find(s => s.id === 'broker_availability');
   assert.deepEqual(ba.objectives, { 'tier-3': 0.99, 'tier-2': 0.999, 'tier-1': 0.999 });
@@ -142,7 +142,7 @@ test('serviceSlug / isValidServiceName mirror the engine (fileSlug + the slug ru
   assert.equal(MAX_SERVICE_SLUG, 45);
   assert.equal(isValidServiceName('a'.repeat(MAX_SERVICE_SLUG)), true, '45 once slugged is accepted');
   assert.equal(isValidServiceName('a'.repeat(MAX_SERVICE_SLUG + 1)), false, '46 is refused');
-  const tooLong = buildSelectModel({ build: draft({ name: 'a'.repeat(MAX_SERVICE_SLUG + 1) }), library: LIBRARY });
+  const tooLong = buildDefineModel({ build: draft({ name: 'a'.repeat(MAX_SERVICE_SLUG + 1) }), library: LIBRARY });
   assert.equal(tooLong.valid, false);
   assert.ok(tooLong.errors.some(e => e.includes('at most 45 characters') && e.includes('is 46')), tooLong.errors.join(' | '));
   assert.deepEqual(parseOwners('team-orders, sre-platform'), ['team-orders', 'sre-platform']);
@@ -153,7 +153,7 @@ test('serviceSlug / isValidServiceName mirror the engine (fileSlug + the slug ru
   assert.equal(paramKey('kafka', 'bootstrap', true), 'kafka.bootstrap');
   assert.equal(paramKey('kafka', 'bootstrap', false), 'bootstrap');
   assert.equal(paramKey(null, 'oncall_channel', true), 'oncall_channel', 'scaffold params are never namespaced');
-  assert.deepEqual(BUILD_STEPS, ['select', 'generate', 'validate']);
+  assert.deepEqual(BUILD_STEPS, ['define', 'compile', 'verify']);
   assert.deepEqual(TIERS, ENGINE_TIERS);
   assert.deepEqual(SECTION_TOGGLES.map(t => t.id), ['slos', 'policy', 'routes', 'dashboards', 'validation']);
 });
@@ -164,21 +164,25 @@ test('serviceSlug / isValidServiceName mirror the engine (fileSlug + the slug ru
 
 test('a step is reachable when the previous step\'s inputs are valid', () => {
   const empty = defaultBuildState();
-  assert.equal(selectValid(empty), false);
-  assert.deepEqual(buildStepReachability(empty), { select: true, generate: false, validate: false });
+  assert.equal(defineValid(empty), false);
+  assert.deepEqual(buildStepReachability(empty), { define: true, compile: false, verify: false });
   const selected = draft({ result: null });
-  assert.equal(selectValid(selected), true);
-  assert.deepEqual(buildStepReachability(selected), { select: true, generate: true, validate: false }, 'no result yet: Validate stays locked');
-  assert.deepEqual(buildStepReachability(draft()), { select: true, generate: true, validate: true });
-  assert.deepEqual(buildStepReachability(draft({ error: ['instantiatePack: at least one SLI must stay selected'], result: null })), { select: true, generate: true, validate: false });
-  assert.deepEqual(buildStepReachability(draft({ error: ['param kafka.bootstrap: a value may not contain a double quote'] })), { select: true, generate: true, validate: true }, 'a usage error keeps the previous pack, so Validate — where the field is — stays reachable');
-  assert.equal(clampStep(draft({ error: ['param kafka.bootstrap: a value may not contain a double quote'] }), 'validate'), 'validate', 'the user is not bounced off Validate by the error');
-  assert.deepEqual(buildStepReachability(draft({ name: 'x' })), { select: true, generate: false, validate: false }, 'an invalid name locks Generate even with a stale result');
-  assert.deepEqual(buildStepReachability(draft({ entries: [] })), { select: true, generate: false, validate: false });
-  assert.equal(clampStep(empty, 'validate'), 'select');
-  assert.equal(clampStep(selected, 'validate'), 'generate');
-  assert.equal(clampStep(draft(), 'validate'), 'validate');
-  assert.equal(clampStep(draft(), 'nonsense'), 'select');
+  assert.equal(defineValid(selected), true);
+  assert.deepEqual(buildStepReachability(selected), { define: true, compile: true, verify: false }, 'no result yet: Verify stays locked');
+  assert.deepEqual(buildStepReachability(draft()), { define: true, compile: true, verify: true });
+  assert.deepEqual(buildStepReachability(draft({ error: ['instantiatePack: at least one SLI must stay selected'], result: null })), { define: true, compile: true, verify: false });
+  assert.deepEqual(buildStepReachability(draft({ error: ['param kafka.bootstrap: a value may not contain a double quote'] })), { define: true, compile: true, verify: true }, 'a usage error keeps the previous pack, so Verify — where the field is — stays reachable');
+  assert.equal(clampStep(draft({ error: ['param kafka.bootstrap: a value may not contain a double quote'] }), 'verify'), 'verify', 'the user is not bounced off Verify by the error');
+  assert.deepEqual(buildStepReachability(draft({ name: 'x' })), { define: true, compile: false, verify: false }, 'an invalid name locks Compile even with a stale result');
+  assert.deepEqual(buildStepReachability(draft({ entries: [] })), { define: true, compile: false, verify: false });
+  assert.equal(clampStep(empty, 'verify'), 'define');
+  assert.equal(clampStep(selected, 'verify'), 'compile');
+  assert.equal(clampStep(draft(), 'verify'), 'verify');
+  assert.equal(clampStep(draft(), 'nonsense'), 'define');
+  // A draft persisted before the rename (select · generate · validate) resumes on the same step.
+  assert.equal(clampStep(draft(), 'validate'), 'verify');
+  assert.equal(clampStep(draft(), 'generate'), 'compile');
+  assert.equal(clampStep(empty, 'generate'), 'define');
 });
 
 // ---------------------------------------------------------------------------
@@ -228,11 +232,11 @@ test('instantiateBody: owners parsed, empty overrides dropped, slis only when ex
 });
 
 // ---------------------------------------------------------------------------
-// SELECT
+// DEFINE
 // ---------------------------------------------------------------------------
 
-test('buildSelectModel: tiers with their MUST / SHOULD counts and what each adds, products first, validity', () => {
-  const m = buildSelectModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS });
+test('buildDefineModel: tiers with their MUST / SHOULD counts and what each adds, products first, validity', () => {
+  const m = buildDefineModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS });
   assert.equal(m.valid, true);
   assert.deepEqual(m.errors, []);
   assert.equal(m.slug, 'orders-api');
@@ -256,18 +260,18 @@ test('buildSelectModel: tiers with their MUST / SHOULD counts and what each adds
   // What the step prints: the engine's count once a pack exists (the rail's number), the flagged count only before.
   assert.deepEqual(m.placeholders, { flagged: 21, remaining: 17 }, 'the summary counts the placeholders the engine wrote, not every flagged param of the selection');
   assert.equal(m.placeholders.remaining, placeholdersRemaining(FIXTURE), 'the same number the rail shows');
-  assert.deepEqual(buildSelectModel({ build: draft({ result: null }), library: LIBRARY, requirements: REQUIREMENTS }).placeholders, { flagged: 21, remaining: null });
+  assert.deepEqual(buildDefineModel({ build: draft({ result: null }), library: LIBRARY, requirements: REQUIREMENTS }).placeholders, { flagged: 21, remaining: null });
   // Requirements not loaded yet → counts null, adds empty, still valid.
-  const cold = buildSelectModel({ build: draft(), library: LIBRARY, requirements: {} });
+  const cold = buildDefineModel({ build: draft(), library: LIBRARY, requirements: {} });
   assert.equal(cold.tiers[1].must, null);
   assert.equal(cold.tiers[1].loaded, false);
   // Validity errors name what is missing.
-  const bad = buildSelectModel({ build: draft({ name: 'x', entries: [] }), library: LIBRARY, requirements: REQUIREMENTS });
+  const bad = buildDefineModel({ build: draft({ name: 'x', entries: [] }), library: LIBRARY, requirements: REQUIREMENTS });
   assert.equal(bad.valid, false);
   assert.equal(bad.errors.length, 2);
   assert.match(bad.errors[0], /slugs/);
   assert.match(bad.errors[1], /library entry/);
-  assert.deepEqual(buildSelectModel({ build: defaultBuildState(), library: LIBRARY }).errors, ['a service name', 'at least one library entry']);
+  assert.deepEqual(buildDefineModel({ build: defaultBuildState(), library: LIBRARY }).errors, ['a service name', 'at least one library entry']);
 });
 
 // The renderers have no DOM harness (docs/UI_CONVENTIONS.md §2), but they only need a container
@@ -277,24 +281,24 @@ function stubContainer() {
   return { innerHTML: '', querySelector: () => el, querySelectorAll: () => [] };
 }
 
-test('renderBuildSelect escapes the typed service name: the model carries it raw in the validity error, the renderer escapes at the seam', () => {
+test('renderBuildDefine escapes the typed service name: the model carries it raw in the validity error, the renderer escapes at the seam', () => {
   const payload = '1<img src=x onerror="window.__xss=1">';
-  const m = buildSelectModel({ build: draft({ name: payload }), library: LIBRARY, requirements: REQUIREMENTS });
+  const m = buildDefineModel({ build: draft({ name: payload }), library: LIBRARY, requirements: REQUIREMENTS });
   assert.equal(m.valid, false);
   assert.ok(m.errors[0].includes(payload), 'the model states the name as typed — data, not markup');
   const container = stubContainer();
-  renderBuildSelect(container, m, { build: {} });
+  renderBuildDefine(container, m, { build: {} });
   assert.ok(!container.innerHTML.includes('<img'), 'no element from the name reaches the page');
   assert.ok(container.innerHTML.includes('Still needed: a service name that slugs (‘1&lt;img src=x onerror=&quot;window.__xss=1&quot;&gt;’'), 'the status line shows the name escaped');
   assert.ok(container.innerHTML.includes(`value="${'1&lt;img src=x onerror=&quot;window.__xss=1&quot;&gt;'}"`), 'the input value is escaped too');
 });
 
 // ---------------------------------------------------------------------------
-// GENERATE
+// COMPILE
 // ---------------------------------------------------------------------------
 
-test('buildGenerateModel: an SLI above the tier is disabled with the tier it needs; objective and window per tier; composed keys', () => {
-  const m = buildGenerateModel({ build: draft(), library: LIBRARY });
+test('buildCompileModel: an SLI above the tier is disabled with the tier it needs; objective and window per tier; composed keys', () => {
+  const m = buildCompileModel({ build: draft(), library: LIBRARY });
   assert.equal(m.composed, true);
   assert.deepEqual(m.groups.map(g => g.id), ['kafka', 'http-service']);
   const kafka = m.groups[0];
@@ -323,26 +327,26 @@ test('buildGenerateModel: an SLI above the tier is disabled with the tier it nee
   assert.deepEqual(m.toggles.map(t => [t.id, t.on, t.disabled]), [['slos', true, false], ['policy', true, false], ['routes', true, false], ['dashboards', true, false], ['validation', true, false]]);
 
   // Tier changes what an SLI gets — and what it can be.
-  const t3 = buildGenerateModel({ build: draft({ tier: 'tier-3' }), library: LIBRARY });
+  const t3 = buildCompileModel({ build: draft({ tier: 'tier-3' }), library: LIBRARY });
   const ba3 = t3.groups[0].slis.find(s => s.id === 'broker_availability');
   assert.equal(ba3.objectiveLabel, '99%', 'tier-3 objective is the library\'s judgement, not the reference pack\'s');
   assert.equal(t3.groups[0].slis.find(s => s.id === 'partition_replica_health').objectiveLabel, 'needs tier-2');
   assert.deepEqual(t3.counts, { total: 10, reachable: 3, checked: 3 });
-  const t1 = buildGenerateModel({ build: draft({ tier: 'tier-1' }), library: LIBRARY });
+  const t1 = buildCompileModel({ build: draft({ tier: 'tier-1' }), library: LIBRARY });
   assert.equal(t1.groups[0].slis.find(s => s.id === 'controller_election_rate').reachable, true);
   assert.deepEqual(t1.counts, { total: 10, reachable: 10, checked: 10 });
 
   // An explicit selection unticks; a stale explicit selection above the tier stays unchecked, never re-enabled.
-  const partial = buildGenerateModel({ build: draft({ slis: ['kafka_broker_availability', 'kafka_controller_election_rate'] }), library: LIBRARY });
+  const partial = buildCompileModel({ build: draft({ slis: ['kafka_broker_availability', 'kafka_controller_election_rate'] }), library: LIBRARY });
   assert.deepEqual(partial.counts, { total: 10, reachable: 7, checked: 1 });
   assert.equal(partial.groups[0].slis.find(s => s.id === 'controller_election_rate').checked, false, 'above the tier: excluded by the engine, shown disabled here');
-  const none = buildGenerateModel({ build: draft({ slis: [] }), library: LIBRARY });
+  const none = buildCompileModel({ build: draft({ slis: [] }), library: LIBRARY });
   assert.equal(none.atLeastOne, false);
   // Policy greys out when SLOs are off.
-  const noSlos = buildGenerateModel({ build: draft({ toggles: { ...defaultBuildState().toggles, slos: false } }), library: LIBRARY });
+  const noSlos = buildCompileModel({ build: draft({ toggles: { ...defaultBuildState().toggles, slos: false } }), library: LIBRARY });
   assert.equal(noSlos.toggles.find(t => t.id === 'policy').disabled, true);
   // A single entry keeps bare ids.
-  const single = buildGenerateModel({ build: draft({ entries: ['kafka'] }), library: LIBRARY });
+  const single = buildCompileModel({ build: draft({ entries: ['kafka'] }), library: LIBRARY });
   assert.equal(single.composed, false);
   assert.equal(single.groups[0].slis[0].key, 'broker_availability');
 });
@@ -389,14 +393,14 @@ test('a usage error keeps the previous pack: the error is split per param, the r
   const rows = paramRows({ build: bad, library: LIBRARY });
   assert.equal(rows.find(r => r.key === 'kafka.bootstrap').error, splitBuildErrors([quote]).byParam['kafka.bootstrap']);
   assert.equal(rows.filter(r => r.error).length, 1, 'only the row the error names');
-  // SELECT shows the error and stays complete.
-  const sel = buildSelectModel({ build: bad, library: LIBRARY, requirements: REQUIREMENTS });
+  // DEFINE shows the error and stays complete.
+  const sel = buildDefineModel({ build: bad, library: LIBRARY, requirements: REQUIREMENTS });
   assert.equal(sel.valid, true);
   assert.equal(sel.error.paramCount, 1);
   assert.equal(sel.stale, true);
   assert.ok(sel.params.find(p => p.key === 'kafka.bootstrap').error);
-  // GENERATE keeps the previous counts, marked stale.
-  const gen = buildGenerateModel({ build: bad, library: LIBRARY });
+  // COMPILE keeps the previous counts, marked stale.
+  const gen = buildCompileModel({ build: bad, library: LIBRARY });
   assert.equal(gen.result.sliCount, 7);
   assert.equal(gen.stale, true);
   assert.equal(gen.error.paramCount, 1);
@@ -405,8 +409,8 @@ test('a usage error keeps the previous pack: the error is split per param, the r
   assert.equal(rail.stale, true);
   assert.equal(rail.ready, true);
   assert.deepEqual(rail.error, [quote]);
-  // VALIDATE keeps the verdict, marks the todo's param row, and does not hand the stale pack off.
-  const val = buildValidateModel({ build: bad, library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
+  // VERIFY keeps the verdict, marks the todo's param row, and does not hand the stale pack off.
+  const val = buildVerifyModel({ build: bad, library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
   assert.equal(val.ready, true);
   assert.equal(val.verdict.conformant, true);
   assert.equal(val.stale, true);
@@ -415,10 +419,10 @@ test('a usage error keeps the previous pack: the error is split per param, the r
   const canary = val.todoGroups.find(g => g.id === 'validation').todos.find(t => t.path === 'validation.synthetic_checks.kafka-produce-consume-canary');
   assert.ok(canary.params[0].error, 'the todo that this param fills shows the rejection on its row');
   // The footer's other states, in priority order.
-  assert.equal(buildValidateModel({ build: draft(), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS }).handoff, 'ready');
-  assert.equal(buildValidateModel({ build: draft({ registeredId: 'uploaded-x' }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS }).handoff, 'registered');
-  assert.equal(buildValidateModel({ build: draft({ result: { ...draft().result, warnings: [{ kind: 'promql', message: 'x' }] } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS }).handoff, 'promql');
-  assert.equal(buildValidateModel({ build: draft({ result: { ...draft().result, schemaErrors: ['$.spec: missing required key'] } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS }).handoff, 'schema');
+  assert.equal(buildVerifyModel({ build: draft(), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS }).handoff, 'ready');
+  assert.equal(buildVerifyModel({ build: draft({ registeredId: 'uploaded-x' }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS }).handoff, 'registered');
+  assert.equal(buildVerifyModel({ build: draft({ result: { ...draft().result, warnings: [{ kind: 'promql', message: 'x' }] } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS }).handoff, 'promql');
+  assert.equal(buildVerifyModel({ build: draft({ result: { ...draft().result, schemaErrors: ['$.spec: missing required key'] } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS }).handoff, 'schema');
 });
 
 test('summarizeWarnings groups by kind, blocking first', () => {
@@ -487,7 +491,7 @@ test('buildRailModel carries the counts the rail prints', () => {
 });
 
 // ---------------------------------------------------------------------------
-// VALIDATE
+// VERIFY
 // ---------------------------------------------------------------------------
 
 test('groupTodos: by artefact family, each todo with the param rows that fill it, manual ones flagged', () => {
@@ -508,8 +512,8 @@ test('groupTodos: by artefact family, each todo with the param rows that fill it
   assert.deepEqual(groupTodos([], params), []);
 });
 
-test('buildValidateModel: the verdict with the three states, schema, warnings, todos, artefacts, the hand-off facts', () => {
-  const m = buildValidateModel({ build: draft(), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
+test('buildVerifyModel: the verdict with the three states, schema, warnings, todos, artefacts, the hand-off facts', () => {
+  const m = buildVerifyModel({ build: draft(), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
   assert.equal(m.ready, true);
   assert.equal(m.tier, 'tier-2');
   assert.equal(m.verdict.conformant, true);
@@ -529,13 +533,13 @@ test('buildValidateModel: the verdict with the three states, schema, warnings, t
   assert.equal(m.canRegister, true);
   assert.equal(m.registeredId, null);
   // A blocking warning or a schema error blocks the hand-off; nothing else does.
-  const blocked = buildValidateModel({ build: draft({ result: { ...draft().result, warnings: [{ kind: 'promql', message: 'x' }] } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
+  const blocked = buildVerifyModel({ build: draft({ result: { ...draft().result, warnings: [{ kind: 'promql', message: 'x' }] } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
   assert.equal(blocked.blocking, true);
   assert.equal(blocked.canRegister, false);
-  const invalid = buildValidateModel({ build: draft({ result: { ...draft().result, schemaErrors: ['$.spec: missing required key \'dashboards\''] } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
+  const invalid = buildVerifyModel({ build: draft({ result: { ...draft().result, schemaErrors: ['$.spec: missing required key \'dashboards\''] } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
   assert.equal(invalid.schema.ok, false);
   assert.equal(invalid.canRegister, false);
-  const cold = buildValidateModel({ build: defaultBuildState(), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
+  const cold = buildVerifyModel({ build: defaultBuildState(), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
   assert.equal(cold.ready, false);
   assert.equal(cold.verdict, null);
   assert.deepEqual(cold.todoGroups, []);
@@ -549,7 +553,7 @@ test('the persisted build draft is inputs only — never the result, the preview
   const b = defaultBuildState();
   for (const k of BUILD_PERSIST_FIELDS) assert.ok(k in b, k);
   for (const k of ['result', 'preview', 'error', 'pending']) assert.ok(!BUILD_PERSIST_FIELDS.includes(k), `${k} must not persist`);
-  assert.equal(b.step, 'select');
+  assert.equal(b.step, 'define');
   assert.equal(b.tier, 'tier-2');
   assert.equal(b.slis, null, 'null means the tier\'s defaults');
 });

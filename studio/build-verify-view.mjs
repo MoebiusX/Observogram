@@ -1,6 +1,6 @@
-// studio/build-validate-view.mjs
+// studio/build-verify-view.mjs
 //
-// BUILD step 3 — VALIDATE, "Does it hold up?": the conformance verdict at
+// BUILD step 3 — VERIFY, "Is it ready to use?": the conformance verdict at
 // the tier (MUST / SHOULD counts and the three clause states — pass, pass on
 // a placeholder, fail), the schema verdict, the warnings (promql,
 // sli-excluded, burn-rules), the todos grouped by artefact with the param
@@ -11,11 +11,11 @@
 // how many placeholders remain.
 //
 // Renderer only (docs/UI_CONVENTIONS.md §2-3): render(container, model, host)
-// with buildValidateModel's output; host.build.* are the actions.
+// with buildVerifyModel's output; host.build.* are the actions.
 
 import { escapeHtml, downloadText } from './util.mjs';
 import { host as appHost } from './host.mjs';
-import { stepHeadHtml, paramRowHtml, wireParamInputs, instantiateErrorHtml } from './build-select-view.mjs';
+import { stepHeadHtml, paramRowHtml, wireParamInputs, instantiateErrorHtml } from './build-define-view.mjs';
 
 const GLYPH = { pass: '✓', placeholder: '◐', fail: '✗' };
 
@@ -39,17 +39,17 @@ function todoHtml(t, i) {
     </li>`;
 }
 
-/** render(container, model, host) — the VALIDATE step. */
-export function renderBuildValidate(container, model, host = appHost) {
+/** render(container, model, host) — the VERIFY step. */
+export function renderBuildVerify(container, model, host = appHost) {
   const act = host.build;
   const v = model.verdict;
   const k = model.checklist.counts;
   let todoIndex = 0;
   container.innerHTML = `
-    <section class="build-step build-validate">
-      ${stepHeadHtml('validate', 'Does it hold up?', `The pack as generated, read three ways: the tier’s conformance rubric (which clauses pass, which pass only on a placeholder, which fail), the v1.2 schema, and the artefacts it compiles to. Fill a placeholder inline and the pack regenerates; when it holds up, open it in Discover.`)}
+    <section class="build-step build-verify">
+      ${stepHeadHtml('verify', 'Is it ready to use?', `The pack as generated, read three ways: the tier’s conformance rubric (which clauses pass, which pass only on a placeholder, which fail), the v1.2 schema, and the artefacts it compiles to. Fill a placeholder inline and the pack regenerates; when it holds up, open it in Discover.`)}
 
-      ${!model.ready && !model.error ? `<div class="build-note">${model.pending ? 'Generating…' : 'Nothing generated yet — go back to Generate.'}</div>` : ''}
+      ${!model.ready && !model.error ? `<div class="build-note">${model.pending ? 'Compiling…' : 'Nothing compiled yet — go back to Compile.'}</div>` : ''}
       ${instantiateErrorHtml(model.error, { stale: model.stale, where: 'below, under its todo' })}
 
       ${v ? `
@@ -122,11 +122,11 @@ export function renderBuildValidate(container, model, host = appHost) {
       </div>
 
       <footer class="build-step-actions">
-        <button type="button" class="ctrl-btn build-back" id="build-back">← Generate</button>
+        <button type="button" class="ctrl-btn build-back" id="build-back">← Compile</button>
         <span class="build-step-status">${({
           registered: `Registered as <code>${escapeHtml(model.registeredId || '')}</code> — opening it again re-registers the current pack.`,
           ready: 'Open in Discover registers the pack the way an upload is registered; its todos travel with it.',
-          error: 'The last regeneration failed — fix the rejected value above; the pack shown is the previous one and is not handed off.',
+          error: 'The last compilation failed — fix the rejected value above; the pack shown is the previous one and is not handed off.',
           promql: 'A PromQL warning blocks the hand-off — fix the param first.',
           schema: 'The pack does not validate against the schema — see the schema card.',
         })[model.handoff]}</span>
@@ -149,6 +149,6 @@ export function renderBuildValidate(container, model, host = appHost) {
   });
   container.querySelector('#build-preview-close')?.addEventListener('click', () => act.update({ preview: null }, { rerender: true, reinstantiate: false }));
   container.querySelector('#build-yaml-download')?.addEventListener('click', () => downloadText(model.fileName, model.yaml, 'application/x-yaml'));
-  container.querySelector('#build-back')?.addEventListener('click', () => act.setStep('generate'));
+  container.querySelector('#build-back')?.addEventListener('click', () => act.setStep('compile'));
   container.querySelector('#build-open')?.addEventListener('click', () => act.openInDiscover());
 }

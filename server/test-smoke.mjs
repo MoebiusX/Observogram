@@ -1366,7 +1366,7 @@ try {
   // ---- The BUILD journey API (docs/BUILD_JOURNEY.md, slice 2) ----
   const postLib = (path, body) => fetch(`${base}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
-  // GET /api/library — the index the SELECT step lists.
+  // GET /api/library — the index the DEFINE step lists.
   const libIndex = await getJson(base, '/api/library');
   assert(libIndex.ok === true && Array.isArray(libIndex.entries), 'GET /api/library returns { ok, entries[] }');
   assert(libIndex.entries.length === 10, 'GET /api/library lists the ten shipped entries', libIndex.entries.length, 10);
@@ -1479,7 +1479,7 @@ try {
   // The studio ships the journey.
   const shellBuild = await getText(base, '/');
   assert(shellBuild.includes('data-action="build-library"'), 'shell: the upload popover offers Build from the library…');
-  for (const mod of ['build-model.mjs', 'build-api.mjs', 'build-select-view.mjs', 'build-generate-view.mjs', 'build-validate-view.mjs']) {
+  for (const mod of ['build-model.mjs', 'build-api.mjs', 'build-define-view.mjs', 'build-compile-view.mjs', 'build-verify-view.mjs']) {
     const r = await fetch(`${base}/${mod}`);
     assert(r.status === 200, `/${mod} served`, r.status, 200);
   }

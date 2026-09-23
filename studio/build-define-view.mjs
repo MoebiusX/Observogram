@@ -1,6 +1,6 @@
-// studio/build-select-view.mjs
+// studio/build-define-view.mjs
 //
-// BUILD step 1 — SELECT, "What are we observing?": the service (name, owners,
+// BUILD step 1 — DEFINE, "What are we observing?": the service (name, owners,
 // environment), its criticality tier (each with what it requires, from the
 // tier's clauses) and the library entries it runs on (products) or is built
 // as (archetypes), then the selection's params with their defaults and the
@@ -8,7 +8,7 @@
 // (the tier is chosen here, so the tier's requirements are introduced here).
 //
 // Renderer only (docs/UI_CONVENTIONS.md §2-3): render(container, model, host)
-// with the model from build-model.mjs's buildSelectModel / buildRailModel and
+// with the model from build-model.mjs's buildDefineModel / buildRailModel and
 // the host the controller in app.mjs passes — host.build.* are the actions
 // (update, toggleEntry, setParam, setStep, exit); no state reads, no fetches.
 
@@ -73,7 +73,7 @@ function tierCardHtml(t) {
     </label>`;
 }
 
-// One param as an input (the same param may fill several todos on VALIDATE:
+// One param as an input (the same param may fill several todos on VERIFY:
 // idSuffix keeps the ids and focus keys distinct while they share the key).
 export function paramRowHtml(p, { compact = false, idSuffix = '' } = {}) {
   const focusKey = `param:${p.key}${idSuffix ? `@${idSuffix}` : ''}`;
@@ -97,16 +97,16 @@ export function instantiateErrorHtml(error, { stale = false, where = 'below' } =
   if (!error) return '';
   const parts = [...error.general.map(escapeHtml)];
   if (error.paramCount) parts.push(`${error.paramCount} parameter value${error.paramCount === 1 ? '' : 's'} rejected — marked on ${error.paramCount === 1 ? 'its row' : 'their rows'} ${where}`);
-  return `<div class="build-note build-note-err" role="alert"><strong>The last regeneration failed${stale ? ' — the pack shown is the previous one' : ''}.</strong> ${parts.join(' · ')}</div>`;
+  return `<div class="build-note build-note-err" role="alert"><strong>The last compilation failed${stale ? ' — the pack shown is the previous one' : ''}.</strong> ${parts.join(' · ')}</div>`;
 }
 
-/** render(container, model, host) — the SELECT step. */
-export function renderBuildSelect(container, model, host = appHost) {
+/** render(container, model, host) — the DEFINE step. */
+export function renderBuildDefine(container, model, host = appHost) {
   const act = host.build;
   const entriesCount = model.selectedEntries.length;
   container.innerHTML = `
-    <section class="build-step build-select">
-      ${stepHeadHtml('select', 'What are we observing?', 'Name the service, pick its criticality tier and the library entries it runs on — products with an evidence bar, or an archetype for a service built from scratch. The rail on the right lists what the tier requires and fills in as soon as the selection is complete.')}
+    <section class="build-step build-define">
+      ${stepHeadHtml('define', 'What are we observing?', 'Name the service, pick its criticality tier and the library entries it runs on — products with an evidence bar, or an archetype for a service built from scratch. The rail on the right lists what the tier requires and fills in as soon as the selection is complete.')}
 
       <div class="build-fields">
         <label class="build-field">
@@ -150,13 +150,13 @@ export function renderBuildSelect(container, model, host = appHost) {
       <details class="build-params-wrap" ${model.params.some(p => !p.atDefault || p.error) ? 'open' : ''}>
         <summary class="build-section-key">Parameters <span class="build-section-sub">${model.params.length} for this selection · ${model.placeholders.remaining != null
           ? `${model.placeholders.remaining} placeholder${model.placeholders.remaining === 1 ? '' : 's'} still at their default in the generated pack — each is a todo`
-          : `${model.placeholders.flagged} placeholder param${model.placeholders.flagged === 1 ? '' : 's'} in this selection — one left at its default becomes a todo where the tier writes it`}; fill them here or inline on Validate</span></summary>
+          : `${model.placeholders.flagged} placeholder param${model.placeholders.flagged === 1 ? '' : 's'} in this selection — one left at its default becomes a todo where the tier writes it`}; fill them here or inline on Verify</span></summary>
         <div class="build-params">${model.params.map(p => paramRowHtml(p)).join('')}</div>
       </details>` : ''}
 
       <footer class="build-step-actions">
-        <span class="build-step-status">${!model.valid ? `Still needed: ${model.errors.map(escapeHtml).join(' and ')}.` : model.error ? 'Selection complete, but the last regeneration failed — see the error above.' : 'Selection complete — the tier’s clauses are being checked on the right.'}</span>
-        <button type="button" class="mcp-refresh-btn build-next" id="build-next" ${model.valid ? '' : 'disabled'}>Continue to Generate <span aria-hidden="true">→</span></button>
+        <span class="build-step-status">${!model.valid ? `Still needed: ${model.errors.map(escapeHtml).join(' and ')}.` : model.error ? 'Selection complete, but the last compilation failed — see the error above.' : 'Selection complete — the tier’s clauses are being checked on the right.'}</span>
+        <button type="button" class="mcp-refresh-btn build-next" id="build-next" ${model.valid ? '' : 'disabled'}>Continue to Compile <span aria-hidden="true">→</span></button>
       </footer>
     </section>`;
 
@@ -167,7 +167,7 @@ export function renderBuildSelect(container, model, host = appHost) {
   container.querySelectorAll('input[name="build-tier"]').forEach(r => r.addEventListener('change', () => act.setTier(r.value)));
   container.querySelectorAll('.build-entry').forEach(b => b.addEventListener('click', () => act.toggleEntry(b.dataset.entry)));
   wireParamInputs(container, act);
-  byId('build-next').addEventListener('click', () => act.setStep('generate'));
+  byId('build-next').addEventListener('click', () => act.setStep('compile'));
 }
 
 /** Param inputs commit on change (Enter / blur), so typing never re-renders under the caret. */
@@ -190,7 +190,7 @@ export function renderClauseRail(container, rail) {
   const c = rail.checklist;
   const k = c.counts;
   const status = rail.pending ? 'checking…'
-    : rail.error ? (rail.stale ? 'the last regeneration failed — showing the previous pack' : 'the last instantiation failed')
+    : rail.error ? (rail.stale ? 'the last compilation failed — showing the previous pack' : 'the last instantiation failed')
     : !rail.valid ? 'complete the selection to evaluate'
     : !rail.ready ? 'evaluating…'
     : (c.conformant ? 'conformant at this tier' : `${k.must.fail} MUST clause${k.must.fail === 1 ? '' : 's'} failing`);

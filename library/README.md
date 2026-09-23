@@ -3,7 +3,7 @@
 Versioned, parameterised pack fragments — one YAML entry per **product** a service
 runs on (`products/`) or per **archetype** of a service built from scratch
 (`archetypes/`). `packc init` and, in the BUILD journey's next slice, the studio's
-SELECT / GENERATE / VALIDATE steps instantiate an entry into a canonical
+DEFINE / COMPILE / VERIFY steps instantiate an entry into a canonical
 ObservabilityPack v1.2 at a chosen criticality tier. The engine is
 `tools/lib/library.mjs` (pure, browser-safe); the loader is `server/library.mjs`;
 the design is [docs/BUILD_JOURNEY.md](../docs/BUILD_JOURNEY.md).

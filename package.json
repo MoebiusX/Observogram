@@ -117,7 +117,7 @@
     "lint:library": "node --check tools/lib/library.mjs && node --check server/library.mjs && node --check tools/pack-init.mjs",
     "test:library": "node tools/test-library.mjs",
     "test:library:update": "node tools/test-library.mjs --update",
-    "lint:build": "node --check studio/build-model.mjs && node --check studio/build-api.mjs && node --check studio/build-select-view.mjs && node --check studio/build-generate-view.mjs && node --check studio/build-validate-view.mjs && node --check tools/test-build-model.mjs",
+    "lint:build": "node --check studio/build-model.mjs && node --check studio/build-api.mjs && node --check studio/build-define-view.mjs && node --check studio/build-compile-view.mjs && node --check studio/build-verify-view.mjs && node --check tools/test-build-model.mjs",
     "test:build": "node --test tools/test-build-model.mjs",
     "test:build:update": "node tools/test-build-model.mjs --update"
   },

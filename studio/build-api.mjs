@@ -1,7 +1,7 @@
 // studio/build-api.mjs
 //
 // The loaders of the BUILD journey (docs/UI_CONVENTIONS.md §2): every call the
-// Select · Generate · Validate steps make to the six /api/library routes,
+// Define · Compile · Verify steps make to the six /api/library routes,
 // normalised, with the fetcher injectable (`fetchFn`, like verdict-ui.mjs's
 // loadRunHistory) so the models can be fed under node:test. Nothing here
 // touches the DOM or the studio state; the controller in app.mjs owns when

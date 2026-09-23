@@ -16,9 +16,9 @@ behind the entries).
 
 | Step | Question | Input | Output |
 |---|---|---|---|
-| 1 SELECT | What are we observing? | service name, owners, criticality tier-1/2/3, environment, one or more library entries (products it runs on, or an archetype for a service built from scratch) | the entries' params with defaults; the tier's requirements (`tierRequirements`) |
-| 2 GENERATE | What should it watch? | per-entry SLI toggles (filtered by tier), params, section toggles (SLOs, policy + routes, dashboards, validation) | the canonical pack + todos + provenance (`instantiatePack`) |
-| 3 VALIDATE | Does it hold up? | the pack | which clauses pass, which pass only on a placeholder, which fail (`validationSummary`); the schema verdict; the compiled artifacts through the existing targets (Prometheus rules, OTel Collector, Alertmanager, Grafana dashboards) |
+| 1 DEFINE | What are we observing? | service name, owners, criticality tier-1/2/3, environment, one or more library entries (products it runs on, or an archetype for a service built from scratch) | the entries' params with defaults; the tier's requirements (`tierRequirements`) |
+| 2 COMPILE | What should we watch? | per-entry SLI toggles (filtered by tier), params, section toggles (SLOs, policy + routes, dashboards, validation) | the canonical pack + todos + provenance (`instantiatePack`) |
+| 3 VERIFY | Is it ready to use? | the pack | which clauses pass, which pass only on a placeholder, which fail (`validationSummary`); the schema verdict; the compiled artifacts through the existing targets (Prometheus rules, OTel Collector, Alertmanager, Grafana dashboards) |
 
 **Hand-off.** "Open in Discover" registers the produced pack in the studio's upload
 registry (the same path an uploaded pack takes) and switches to the existing journey:
@@ -86,7 +86,7 @@ retention and baseline numbers are starting points and are reported as todos.
 policy, routes, dashboards, validation }`, every section on. A section switched off is
 **absent** from the pack. The schema then reports the missing required key or the
 `minItems: 1` floor (`validateCanonical`), and the rubric reports the clauses the
-section satisfied (`evaluateConformance`) — VALIDATE shows both, nothing is faked to
+section satisfied (`evaluateConformance`) — VERIFY shows both, nothing is faked to
 keep a clause green. `slos: false` also drops policy (an SLO-less burn alert is
 meaningless); `policy: false` keeps the SLOs and drops the burn alerts and forecasts.
 
@@ -115,7 +115,7 @@ as it parks a crawler stub. The todo list returned by the engine is the same
 information structured: `{ path, fields, what, clause, clauses, params }` (one per
 artefact, its placeholder fields listed), where
 `clauses` names the conformance clauses the placeholder artefact holds up, so
-VALIDATE can say "passes, on a placeholder".
+VERIFY can say "passes, on a placeholder".
 
 **A placeholder-laden pack is reported conformant.** `tools/lib/conformance.mjs` reads
 no annotations, so a pager route of `pagerduty://<svc>`, a generic pod-failure chaos
@@ -126,7 +126,7 @@ pack with its todos untouched scores `MUST 15/15` through `POST /api/validate` a
 (aligned on purpose: the placeholder is parked as *Scaffold*, never graded as declared and
 unverified), and only `validationSummary(canonical, todos).onPlaceholder` — what
 `packc init` prints as "N clause(s) pass on a placeholder" — tells the two apart. Slice 2
-must carry it, not rediscover it: the VALIDATE step shows a third state, *pass
+must carry it, not rediscover it: the VERIFY step shows a third state, *pass
 (placeholder)*, for those clauses; the register hand-off keeps the todos with the pack
 (they are already in `metadata.annotations`, so nothing is lost); `/api/validate` attaches
 `onPlaceholder` whenever `library.todo.*` annotations exist. A pack whose placeholders
@@ -192,7 +192,7 @@ string, number or boolean) and never on an entry that validates. A mistyped para
 never dropped silently: the error lists the known keys. A selected SLI whose `minTier`
 the tier does not reach is **excluded, not fatal**: it comes back as a `warnings` entry
 of kind `sli-excluded` and the rest of the selection builds (the tier changes after the
-SLIs were ticked, SELECT then GENERATE); only a selection with nothing left throws.
+SLIs were ticked, DEFINE then COMPILE); only a selection with nothing left throws.
 
 **Params and PromQL.** A param value is spliced verbatim into label matchers, scrape
 targets and endpoints, so a string carrying a double quote, a backslash or a control
@@ -207,7 +207,7 @@ passes the Lezer grammar (`tools/lib/promql-lezer.mjs`, an npm import, Node-only
 failure is a `warnings` entry of kind `promql`, which makes the CLI exit 1. The
 browser-safe core (`tools/lib/promql.mjs`) extracts dependencies and reports no grammar
 error, so a caller with no parser gets no `promql` warning: the studio (slice 2) runs the
-instantiation through the API, where Node passes the grammar. `warnings` is what GENERATE
+instantiation through the API, where Node passes the grammar. `warnings` is what COMPILE
 shows beside the todos; its kinds: `promql` (the pack must not ship), `sli-excluded` (an
 SLI above the tier was dropped), `burn-rules` (the burn-rule generator's own warnings on
 the produced policy — `tools/lib/burn-rules.mjs` compiled once at build time, so a
@@ -252,7 +252,7 @@ read from disk once per process):
 
 | Route | Contract |
 |---|---|
-| `GET /api/library` | `{ ok, entries: libraryIndex(loadLibrary().entries), scaffoldParams: SCAFFOLD_PARAMS, errors }` — the scaffold params ride along because every instantiation has them and SELECT lists the selection's full parameter table |
+| `GET /api/library` | `{ ok, entries: libraryIndex(loadLibrary().entries), scaffoldParams: SCAFFOLD_PARAMS, errors }` — the scaffold params ride along because every instantiation has them and DEFINE lists the selection's full parameter table |
 | `GET /api/library/requirements/:tier` | `{ ok, tier, clauses: tierRequirements(tier) }`; 400 naming the known tiers |
 | `GET /api/library/:id` | `{ ok, entry: <index row>, params, scaffoldParams, slis (full templates: metrics, good/total or query/threshold, per-tier slo, burn, evidence, why, chaos, remediation), description, evidence, otel, telemetry }`; 404 naming the known entries |
 | `POST /api/library/instantiate` | body `{ entries: [ids] \| id, name, tier, environment, owners, params, toggles }` → `{ ok, canonical, canonicalYaml, todos, provenance, warnings, schemaErrors (validateCanonical), summary (validationSummary), conformance (evaluateConformance of the env-overlaid canonical, exactly as /api/validate computes it) }`; Node passes the Lezer grammar as `opts.promql` like `packc init`; an engine usage error is `400 { ok: false, errors }`, never 500 |
@@ -272,7 +272,7 @@ says whether a pack carries any.
 `studio/app.mjs` (the same `{ id, n, label, sub, techName, tagline, accent }` shape and the
 same three accents), rendered by the one header renderer — the nav is rebuilt only when
 the active set changes, a step card is reachable when the previous step's inputs are valid
-(`buildStepReachability`), the current step is highlighted like today's active tab. SELECT refuses a service name
+(`buildStepReachability`), the current step is highlighted like today's active tab. DEFINE refuses a service name
 longer than 45 characters once slugged (`MAX_SERVICE_SLUG`: the schema's 64-character Slug
 minus the longest suffix the scaffold appends, tier-1's `-deployment-overlay` board id), so
 a name that would fail the schema two steps later is stopped where it is typed. A usage
@@ -287,11 +287,11 @@ Nothing in Discover / Diagnose / Remediate changed.
 
 | Module | Role |
 |---|---|
-| `studio/build-model.mjs` | the pure models — `buildSelectModel`, `buildGenerateModel`, `buildValidateModel`, `buildClauseChecklist(clauses, summary)` (three states: `pass`, `placeholder`, `fail`; `pending` without a summary), `buildRailModel`, `buildStepReachability`, `clampStep`, `paramRows`, `groupTodos`, `instantiateBody`, `summarizeWarnings`; every input explicit, no state, no fetch |
+| `studio/build-model.mjs` | the pure models — `buildDefineModel`, `buildCompileModel`, `buildVerifyModel`, `buildClauseChecklist(clauses, summary)` (three states: `pass`, `placeholder`, `fail`; `pending` without a summary), `buildRailModel`, `buildStepReachability`, `clampStep`, `paramRows`, `groupTodos`, `instantiateBody`, `summarizeWarnings`; every input explicit, no state, no fetch |
 | `studio/build-api.mjs` | the loaders — `loadLibrary`, `loadRequirements` (cached per tier), `loadEntry`, `loadTargets`, `instantiate`, `compilePreview`, `registerBuiltPack`; `fetchFn` injectable, a 4xx JSON body is an answer |
-| `studio/build-select-view.mjs` | SELECT + the clause rail the three steps share (`renderClauseRail`) |
-| `studio/build-generate-view.mjs` | GENERATE |
-| `studio/build-validate-view.mjs` | VALIDATE and the hand-off |
+| `studio/build-define-view.mjs` | DEFINE + the clause rail the three steps share (`renderClauseRail`) |
+| `studio/build-compile-view.mjs` | COMPILE |
+| `studio/build-verify-view.mjs` | VERIFY and the hand-off |
 | `studio/app.mjs` | the controller: `enterBuildMode`, the debounced, sequence-guarded re-instantiation on every change, the `host.build` actions the renderers call (never an import of app.mjs), `openInDiscover` |
 
 `state.build` holds the draft (`name, owners, environment, tier, entries, params, slis,
@@ -303,14 +303,14 @@ overriding an objective is a later slice.
 **Deviations from the contract above, all additive.** `instantiate` also returns
 `canonicalYaml` (the preview and the download without a browser YAML emitter) and
 `conformance`; `GET /api/library` also returns `scaffoldParams`; `libraryIndex` rows carry
-`windows` per tier beside `objectives` (GENERATE shows both); `POST /api/library/compile`
-exists so VALIDATE previews without registering; the studio does not import
+`windows` per tier beside `objectives` (COMPILE shows both); `POST /api/library/compile`
+exists so VERIFY previews without registering; the studio does not import
 `/lib/library.mjs` — the tier's clauses come from the requirements route (three tiny,
 cached requests) and every instantiation goes through the API.
 
 ## What the next slices add
 
-- **Slice 3.** Seeding SELECT from a repo scan or a live MCP draft (the crawler's
+- **Slice 3.** Seeding DEFINE from a repo scan or a live MCP draft (the crawler's
   discovered backends and scrape jobs pre-select entries and fill params); live
   metric-name verification of an entry's `metrics[]` through the MCP capability
   registry, promoting `semconv` / `upstream-docs` evidence to a recorded one per

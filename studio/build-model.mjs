@@ -1,7 +1,7 @@
 // studio/build-model.mjs
 //
 // The pure models of the BUILD journey (docs/BUILD_JOURNEY.md, slice 2):
-// Select · Generate · Validate over the pack library. Every function here
+// Define · Compile · Verify over the pack library. Every function here
 // takes its inputs explicitly — the build draft (state.build's shape), the
 // library index (GET /api/library), the tier's clauses (GET
 // /api/library/requirements/:tier), the last instantiate response — and
@@ -16,8 +16,8 @@
 // engine's naming, spelled once in sliKey), and whether a clause passes,
 // passes on a placeholder or fails is read from the engine's summary.
 
-export const BUILD_STEPS = ['select', 'generate', 'validate'];
-/** Least stringent first — the order the engine lists them and the SELECT step shows them. */
+export const BUILD_STEPS = ['define', 'compile', 'verify'];
+/** Least stringent first — the order the engine lists them and the DEFINE step shows them. */
 export const TIERS = ['tier-3', 'tier-2', 'tier-1'];
 const TIER_RANK = { 'tier-3': 0, 'tier-2': 1, 'tier-1': 2 };
 export const TIER_META = {
@@ -37,7 +37,7 @@ export const WARNING_KINDS = {
   'sli-excluded': { label: 'SLI above the tier', blocking: false, hint: 'a selected SLI needs a higher tier and was excluded' },
   'burn-rules': { label: 'Burn rules', blocking: false, hint: 'the burn-rule generator’s own warnings on the produced policy' },
 };
-/** The artefact families a todo path falls into (grouping for the VALIDATE step). */
+/** The artefact families a todo path falls into (grouping for the VERIFY step). */
 export const ARTEFACT_GROUPS = [
   { id: 'alerting', label: 'Alerting routes', match: /^alerting\./ },
   { id: 'telemetry', label: 'Telemetry backends', match: /^telemetry\./ },
@@ -56,7 +56,7 @@ const SLUG_RE = /^[a-z][a-z0-9_-]*[a-z0-9]$/;
 /**
  * The schema's Slug is at most 64 characters and the longest suffix the scaffold appends
  * to the service slug is tier-1's `-deployment-overlay` board id (19), so a slug longer
- * than 45 passes SELECT and fails the schema two steps later (measured: 46 characters →
+ * than 45 passes DEFINE and fails the schema two steps later (measured: 46 characters →
  * `$.spec.dashboards[2].id: length 65 > maxLength 64`). Refused where the name is typed.
  */
 export const LONGEST_DERIVED_SUFFIX = '-deployment-overlay';
@@ -89,23 +89,23 @@ export function selectedEntries(build, library) {
   return (build?.entries || []).map(id => rows.find(r => r.id === id)).filter(Boolean);
 }
 
-/** The SELECT step's validity: a name that slugs, a known tier, at least one entry. */
-export function selectValid(build) {
+/** The DEFINE step's validity: a name that slugs, a known tier, at least one entry. */
+export function defineValid(build) {
   return !!build && isValidServiceName(build.name) && TIERS.includes(build.tier) && Array.isArray(build.entries) && build.entries.length >= 1;
 }
 
 /**
  * Which header cards are reachable: a step opens when the previous step's inputs
  * are valid. A usage error keeps the previous pack (the controller marks it
- * stale rather than dropping it), so Validate stays reachable while the field
- * the error names is fixed — on Validate itself, where the param inputs are.
+ * stale rather than dropping it), so Verify stays reachable while the field
+ * the error names is fixed — on Verify itself, where the param inputs are.
  */
 export function buildStepReachability(build) {
-  const select = true;
-  const generate = selectValid(build);
+  const define = true;
+  const compile = defineValid(build);
   const r = build?.result;
-  const validate = generate && !!r && Array.isArray(r.canonical?.spec?.slis) && r.canonical.spec.slis.length >= 1;
-  return { select, generate, validate };
+  const verify = compile && !!r && Array.isArray(r.canonical?.spec?.slis) && r.canonical.spec.slis.length >= 1;
+  return { define, compile, verify };
 }
 
 // ---------- the last instantiation's errors ----------
@@ -129,12 +129,15 @@ export function splitBuildErrors(errors) {
 /** The last instantiation failed while an earlier pack is still shown: what the views mark stale. */
 export function isStale(build) { return !!(build?.error && build?.result); }
 
-/** The furthest reachable step at or before `wanted`. */
+/** Step ids a draft may carry from before the rename (2026-09-23): they resume on the same step. */
+const LEGACY_STEP = { select: 'define', generate: 'compile', validate: 'verify' };
+/** The furthest reachable step at or before `wanted` (a legacy id counts as its current name). */
 export function clampStep(build, wanted) {
+  wanted = LEGACY_STEP[wanted] || wanted;
   const reach = buildStepReachability(build);
   const idx = Math.max(0, BUILD_STEPS.indexOf(wanted));
   for (let i = idx; i >= 0; i--) if (reach[BUILD_STEPS[i]]) return BUILD_STEPS[i];
-  return 'select';
+  return 'define';
 }
 
 // ---------- the SLI selection across tiers ----------
@@ -233,15 +236,15 @@ export function instantiateBody(build) {
   };
 }
 
-// ---------- SELECT ----------
+// ---------- DEFINE ----------
 
 /**
- * buildSelectModel({ build, library, requirements }) → what the SELECT step renders:
+ * buildDefineModel({ build, library, requirements }) → what the DEFINE step renders:
  * the fields, the three tiers with the clauses each adds, the entries as cards
  * (selected, evidence, SLI counts per tier), the selection's params.
  * `requirements` is { [tier]: clauses[] } (whatever tiers have loaded).
  */
-export function buildSelectModel({ build, library, requirements = {} }) {
+export function buildDefineModel({ build, library, requirements = {} }) {
   const rows = library?.entries || [];
   const selected = new Set(build?.entries || []);
   const name = build?.name || '';
@@ -291,14 +294,14 @@ export function buildSelectModel({ build, library, requirements = {} }) {
   };
 }
 
-// ---------- GENERATE ----------
+// ---------- COMPILE ----------
 
 /**
- * buildGenerateModel({ build, library }) → per-entry SLI rows (reachable at the
+ * buildCompileModel({ build, library }) → per-entry SLI rows (reachable at the
  * tier or disabled with the tier they need, checked, the objective and window
  * this tier gives them), the section toggles, and what the last result said.
  */
-export function buildGenerateModel({ build, library }) {
+export function buildCompileModel({ build, library }) {
   const entries = selectedEntries(build, library);
   const composed = entries.length > 1;
   const tier = build?.tier;
@@ -404,7 +407,7 @@ export function buildRailModel({ build, clauses }) {
     blockingWarnings: (r?.warnings || []).filter(w => w.kind === 'promql').length,
     placeholdersRemaining: placeholdersRemaining(r),
     pending: !!build?.pending, error: build?.error || null, stale: isStale(build), ready: !!r,
-    valid: selectValid(build),
+    valid: defineValid(build),
   };
 }
 
@@ -413,7 +416,7 @@ export function placeholdersRemaining(result) {
   return Array.isArray(result?.provenance?.placeholders) ? result.provenance.placeholders.length : 0;
 }
 
-// ---------- VALIDATE ----------
+// ---------- VERIFY ----------
 
 /** Todos grouped by artefact family, each todo carrying the param rows that fill it. */
 export function groupTodos(todos, params) {
@@ -431,12 +434,12 @@ export function groupTodos(todos, params) {
 }
 
 /**
- * buildValidateModel({ build, targets }) → the conformance verdict at the tier
+ * buildVerifyModel({ build, targets }) → the conformance verdict at the tier
  * with the three clause states, the schema verdict, the warnings, the todos
  * grouped by artefact with their params, the compile targets as artefact
  * cards, and the hand-off facts (placeholders remaining, registered id).
  */
-export function buildValidateModel({ build, library, clauses, targets }) {
+export function buildVerifyModel({ build, library, clauses, targets }) {
   const r = build?.result || null;
   const params = paramRows({ build, library });
   const checklist = buildClauseChecklist(clauses || [], r?.summary || null);
@@ -469,7 +472,7 @@ export function buildValidateModel({ build, library, clauses, targets }) {
     source: r?.provenance?.source || '',
     registeredId: build?.registeredId || null,
     handoff,
-    // A stale pack (the last regeneration failed) is never handed off: the error stands until the field is fixed.
+    // A stale pack (the last compilation failed) is never handed off: the error stands until the field is fixed.
     canRegister: !!r && schemaOk && !blocking && !error,
   };
 }

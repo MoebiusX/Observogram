@@ -10,8 +10,8 @@
 export const $  = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-// The BUILD journey's inputs (docs/BUILD_JOURNEY.md, slice 2): Select ·
-// Generate · Validate over the pack library. `slis: null` means "every SLI the
+// The BUILD journey's inputs (docs/BUILD_JOURNEY.md, slice 2): Define ·
+// Compile · Verify over the pack library. `slis: null` means "every SLI the
 // tier reaches" (the engine's defaultToggles) until the user unticks one;
 // `params` holds only the overrides (a value equal to the default is deleted
 // so the placeholder stays a placeholder). `result` is the last instantiate
@@ -19,7 +19,7 @@ export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel
 // reload from the inputs, which are.
 export function defaultBuildState() {
   return {
-    step: 'select',           // 'select' | 'generate' | 'validate'
+    step: 'define',           // 'define' | 'compile' | 'verify'
     name: '',
     owners: '',               // comma-separated, parsed by the model
     environment: 'prod',
@@ -31,7 +31,7 @@ export function defaultBuildState() {
     result: null,             // { canonical, canonicalYaml, todos, warnings, summary, conformance, schemaErrors, provenance }
     error: null,              // [messages] from a 400 instantiate
     pending: false,           // an instantiate is in flight
-    preview: null,            // { target, label, filename, contentType, content, warnings } — the VALIDATE artefact open
+    preview: null,            // { target, label, filename, contentType, content, warnings } — the VERIFY artefact open
     registeredId: null,       // the id "Open in Discover" registered
   };
 }
@@ -42,7 +42,7 @@ export const state = {
   // 'home' starts the studio empty; user picks Analyze (one pack) or
   // Compare (two packs). Once chosen, mode becomes 'single' or 'compare'
   // and the header bar + tabs appear. Logo click returns to 'home'.
-  // 'build' is the BUILD journey (Select · Generate · Validate) — the
+  // 'build' is the BUILD journey (Define · Compile · Verify) — the
   // header then renders BUILD_TABS through the same renderer.
   mode: 'home',
   build: defaultBuildState(),
