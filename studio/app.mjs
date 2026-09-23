@@ -2169,7 +2169,7 @@ function renderBuildView(view) {
       renderBuildVerify(stepEl, buildVerifyModel({ build: b, library, clauses, targets: buildTargets || [] }), host);
       return;
     case 'compile':
-      renderBuildCompile(stepEl, buildCompileModel({ build: b, library }), host);
+      renderBuildCompile(stepEl, buildCompileModel({ build: b, library, clauses }), host);
       return;
     case 'define':
     default:
