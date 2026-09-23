@@ -39,7 +39,8 @@ async function jsonFetch(path, { method = 'GET', body } = {}) {
 
 let _library = null;
 let _libraryPromise = null;
-const _requirements = new Map();   // tier → clauses[]
+const _requirements = new Map();           // tier → clauses[] (resolved)
+const _requirementsInFlight = new Map();   // tier → the request in flight, shared by concurrent callers
 let _targets = null;
 
 /** GET /api/library, once per page: { entries, scaffoldParams, errors }. */
@@ -56,13 +57,24 @@ export async function loadLibrary({ fetchFn = jsonFetch, force = false } = {}) {
 }
 export function libraryCache() { return _library; }
 
-/** GET /api/library/requirements/:tier, cached per tier: the rubric filtered by minTier. */
+/**
+ * GET /api/library/requirements/:tier, cached per tier: the rubric filtered by
+ * minTier. The request in flight is shared too (as loadLibrary shares
+ * _libraryPromise): a page load in build mode asks for the active tier from
+ * the shell, the rail and every repaint before the first answer lands, and
+ * that was three requests for one tier.
+ */
 export async function loadRequirements(tier, { fetchFn = jsonFetch } = {}) {
   if (_requirements.has(tier)) return _requirements.get(tier);
-  const out = await fetchFn(`/api/library/requirements/${encodeURIComponent(tier)}`);
-  if (!out?.ok) throw new Error(out?.error || `GET /api/library/requirements/${tier} failed`);
-  _requirements.set(tier, out.clauses || []);
-  return out.clauses || [];
+  if (_requirementsInFlight.has(tier)) return _requirementsInFlight.get(tier);
+  const inFlight = (async () => {
+    const out = await fetchFn(`/api/library/requirements/${encodeURIComponent(tier)}`);
+    if (!out?.ok) throw new Error(out?.error || `GET /api/library/requirements/${tier} failed`);
+    _requirements.set(tier, out.clauses || []);
+    return out.clauses || [];
+  })();
+  _requirementsInFlight.set(tier, inFlight);
+  try { return await inFlight; } finally { _requirementsInFlight.delete(tier); }
 }
 export function requirementsCache() { return Object.fromEntries(_requirements); }
 

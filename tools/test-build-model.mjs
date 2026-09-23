@@ -453,6 +453,10 @@ test('build-api loaders: the paths and bodies the six routes take, with an injec
   assert.equal(clauses.length, 16);
   await loadRequirements('tier-2', { fetchFn });
   assert.equal(calls.filter(c => c.path.includes('requirements')).length, 1, 'cached per tier');
+  // Concurrent callers of an uncached tier (the shell, the rail and a repaint on one page load) share the request in flight.
+  const [t1a, t1b] = await Promise.all([loadRequirements('tier-1', { fetchFn }), loadRequirements('tier-1', { fetchFn })]);
+  assert.equal(t1a, t1b);
+  assert.equal(calls.filter(c => c.path.endsWith('/tier-1')).length, 1, 'one request for two concurrent loads of the same tier');
   assert.equal((await loadTargets({ fetchFn })).length, 4);
   const res = await instantiate(draft(), { fetchFn });
   assert.equal(res.ok, true);
