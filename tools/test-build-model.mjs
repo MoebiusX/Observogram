@@ -40,6 +40,8 @@ import {
 import { defaultBuildState, BUILD_PERSIST_FIELDS } from '../studio/state.mjs';
 import { LAYER_DEFS, L4_SUBGROUPS } from '../studio/constants.mjs';
 import { renderBuildDefine, renderClauseRail } from '../studio/build-define-view.mjs';
+import { renderBuildCompile } from '../studio/build-compile-view.mjs';
+import { renderBuildVerify } from '../studio/build-verify-view.mjs';
 import { renderBuildStack, buildStackHtml, wireBuildStack } from '../studio/build-stack-view.mjs';
 import { artefactCardHtml } from '../studio/card-html.mjs';
 import { revealTodo } from '../studio/build-atoms.mjs';
@@ -466,6 +468,21 @@ test('a usage error keeps the previous pack: the error is split per param, the r
   assert.equal(buildVerifyModel({ build: draft({ registeredId: 'uploaded-x' }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS }).handoff, 'registered');
   assert.equal(buildVerifyModel({ build: draft({ result: { ...draft().result, warnings: [{ kind: 'promql', message: 'x' }] } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS }).handoff, 'promql');
   assert.equal(buildVerifyModel({ build: draft({ result: { ...draft().result, schemaErrors: ['$.spec: missing required key'] } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS }).handoff, 'schema');
+});
+
+test('the stale note on each step says where the rejected value is marked, in one sentence', () => {
+  const stale = draft({ error: ['param kafka.bootstrap: a value may not contain a double quote'] });
+  const render = (fn, model) => { const c = stubContainer(); fn(c, model, { build: {} }); return c.innerHTML; };
+  const lead = 'The last compilation failed — the pack shown is the previous one.</strong> 1 parameter value rejected — marked on its row ';
+  const define = render(renderBuildDefine, buildDefineModel({ build: stale, library: LIBRARY, requirements: REQUIREMENTS }));
+  assert.ok(define.includes(`${lead}below</div>`), 'DEFINE: the rows are on this step');
+  const compile = render(renderBuildCompile, buildCompileModel({ build: stale, library: LIBRARY, clauses: T2 }));
+  assert.ok(compile.includes(`${lead}on Define and Verify (this step has no parameter inputs)</div>`), 'COMPILE: the rows are on the other two steps');
+  const verify = render(renderBuildVerify, buildVerifyModel({ build: stale, library: LIBRARY, clauses: T2, targets: TARGETS }));
+  assert.ok(verify.includes(`${lead}below, under its todo</div>`), 'VERIFY: the row is under the todo');
+  // Two rejected values pluralise the whole phrase.
+  const two = draft({ error: ['param kafka.bootstrap: a value may not contain a double quote', 'param remote_write_url: a value may not contain a backslash'] });
+  assert.ok(render(renderBuildCompile, buildCompileModel({ build: two, library: LIBRARY, clauses: T2 })).includes('2 parameter values rejected — marked on their rows on Define and Verify'));
 });
 
 test('summarizeWarnings groups by kind, blocking first', () => {
