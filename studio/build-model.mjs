@@ -975,6 +975,18 @@ export function buildDefinitionModel({ build, library, requirements = {}, checkl
 }
 
 /**
+ * The conformance status in one line for the persistent live region (`#build-status`,
+ * outside the re-rendered view): the settled status and the three counts — or null while
+ * the engine is still answering or nothing is evaluated yet, so a keystroke's "checking…"
+ * is never announced and the region changes once per settled result.
+ */
+export function buildStatusLine(summary) {
+  if (!summary || summary.pending || !summary.ready) return null;
+  const k = summary.counts;
+  return `${summary.status} · ${k.pass} pass · ${k.placeholder} on a placeholder · ${k.fail} fail`;
+}
+
+/**
  * Which sheet a param is edited on: the scaffold's channel and pager params and the
  * runbook directory on L4, its chaos and probe targets on L5, its endpoints and
  * backend versions on L2; an entry's params on L5 when they name a workload, a canary,

@@ -470,6 +470,9 @@
 </footer>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<!-- The Build conformance status, announced once per change: a persistent live region outside the re-rendered
+     view (the summary block itself is rebuilt on every re-render, so a live region there announced nothing or everything). -->
+<div id="build-status" class="sr-text" role="status" aria-live="polite"></div>
 
 <script type="module" src="/app.mjs"></script>
 </body>

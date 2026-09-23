@@ -434,7 +434,11 @@ screen has one axis — **the pack** — and two columns on all three steps:
   that replaced the rail entirely: status, the three counts (pass · on a placeholder · fail),
   the failing clauses named (the red edges on the stack), how many pass only on a
   placeholder, todos, warnings and placeholders left. `renderClauseRail` and `buildRailModel`
-  are retired; the summary is part of the column.
+  are retired; the summary is part of the column. The column is rebuilt on every re-render,
+  so the summary is not a live region itself: its settled status goes as one line
+  (`buildStatusLine`: *conformant at tier-2 · 12 pass · 4 on a placeholder · 0 fail*) to a
+  persistent visually-hidden `role=status` node outside the view (`#build-status`), written
+  only when it changes — never while the engine is still answering.
 - **RIGHT, the stack** is the main surface, full remaining width: the slabs of the scan,
   unchanged in what they show. A slab head — or its **`+`** — opens the layer's sheet.
 

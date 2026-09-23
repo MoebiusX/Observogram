@@ -34,7 +34,7 @@ import {
   buildStackModel, sliCandidates, artefactSymbol, todoLayer, clauseGhostLabel, clauseSubgroup, slabState, isDetailArtefact, CLAUSE_GHOSTS,
   todoFocusSuffix, focusFallbackSelectors, enterStep, stepAfterInstantiate,
   buildDefinitionModel, buildSheetModel, rolodexItems, addSliSelection, paramLayer, paramSubgroup, sectionClauses, sectionDrops, sectionNotes, sectionSwitch, sheetLists,
-  sheetModeFor, stackExpanded, sheetFocusSuffix, LAYER_QUESTIONS, LAYER_SWITCHES,
+  sheetModeFor, stackExpanded, sheetFocusSuffix, LAYER_QUESTIONS, LAYER_SWITCHES, buildStatusLine,
 } from '../studio/build-model.mjs';
 import {
   loadLibrary as loadLibraryApi, loadRequirements, loadTargets, instantiate, compilePreview, registerBuiltPack,
@@ -1229,6 +1229,19 @@ test('renderBuildDefinition draws the segmented control, the chips and the summa
   assert.ok(html.includes('class="build-evidence-dot build-evidence-recorded-live" title="recorded live · verified 2026-09-22" role="img" aria-label="evidence: recorded live · verified 2026-09-22"'));
   assert.ok(html.includes('id="build-name"') && html.includes('data-focus-key="name"') && html.includes('data-focus-key="owners"') && html.includes('data-focus-key="environment"'));
   assert.ok(html.includes('class="build-summary is-ok"') && html.includes('conformant at tier-2'));
+  // The summary is rebuilt on every re-render, so it is not a live region itself: the status goes to one
+  // persistent role=status node outside the view (#build-status in index.html), as one settled line.
+  assert.ok(!html.includes('aria-live'), 'no live region inside the re-rendered column');
+  const page = readFileSync(resolve(ROOT, 'studio/index.html'), 'utf8');
+  assert.ok(page.includes('<div id="build-status" class="sr-text" role="status" aria-live="polite"></div>'));
+  assert.ok(page.indexOf('id="build-status"') > page.indexOf('</main>'), 'outside #layer-view, which renderMainView empties');
+  assert.match(cssRule('.sr-text'), /clip-path:\s*inset\(50%\)/, 'visually hidden, still read');
+  const okModel = buildDefinitionModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS });
+  assert.equal(buildStatusLine(okModel.summary), 'conformant at tier-2 · 12 pass · 4 on a placeholder · 0 fail');
+  assert.equal(buildStatusLine(buildDefinitionModel({ build: draft({ result: { ...draft().result, summary: DASHBOARDS_OFF_SUMMARY } }), library: LIBRARY, requirements: REQUIREMENTS }).summary), '2 MUST clauses failing · 10 pass · 4 on a placeholder · 2 fail');
+  assert.equal(buildStatusLine(buildDefinitionModel({ build: draft({ pending: true }), library: LIBRARY, requirements: REQUIREMENTS }).summary), null, 'nothing announced while the engine answers');
+  assert.equal(buildStatusLine(buildDefinitionModel({ build: defaultBuildState(), library: LIBRARY, requirements: REQUIREMENTS }).summary), null, 'nothing announced before the first result');
+  assert.equal(buildStatusLine(null), null);
   assert.ok(html.includes('12 pass') && html.includes('4 on a placeholder') && html.includes('0 fail'));
   assert.ok(!html.includes('build-summary-failing'), 'nothing fails: no failing block');
   assert.ok(html.includes('<b>21</b> todos') && html.includes('<b>17</b> placeholders left'));

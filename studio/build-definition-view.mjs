@@ -55,7 +55,7 @@ function chipHtml(c) {
 export function summaryHtml(s) {
   const k = s.counts;
   return `
-    <div class="build-summary is-${escapeHtml(s.statusKind)}" data-scroll-key="summary" aria-live="polite">
+    <div class="build-summary is-${escapeHtml(s.statusKind)}" data-scroll-key="summary">
       <div class="build-def-key">Conformance <span class="build-summary-tier">${escapeHtml(s.tier || '')} · ${k.must.total} MUST${k.should.total ? ` · ${k.should.total} SHOULD` : ''}</span></div>
       <div class="build-summary-status">${escapeHtml(s.status)}</div>
       <div class="build-summary-counts" aria-label="clause states">

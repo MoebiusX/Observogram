@@ -43,7 +43,7 @@ import { initHost } from './host.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
   BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, enterStep as enterBuildStep, stepAfterInstantiate as buildStepAfterInstantiate, focusFallbackSelectors,
-  buildDefineModel, buildCompileModel, buildVerifyModel, buildDefinitionModel, buildSheetModel, buildClauseChecklist, sheetModeFor, addSliSelection, placeholdersRemaining, retargetSlis,
+  buildDefineModel, buildCompileModel, buildVerifyModel, buildDefinitionModel, buildSheetModel, buildClauseChecklist, buildStatusLine, sheetModeFor, addSliSelection, placeholdersRemaining, retargetSlis,
 } from './build-model.mjs';
 import {
   loadLibrary as loadBuildLibrary, libraryCache as buildLibraryCache, loadRequirements as loadBuildRequirements,
@@ -2248,7 +2248,14 @@ function renderBuildView(view) {
   if (!clauses.length) ensureBuildRequirements(b.tier);
   const host = { renderMainView, renderTabs, build: buildActions };
   const checklist = buildClauseChecklist(clauses, b.result?.summary || null);
-  renderBuildDefinition(def, buildDefinitionModel({ build: b, library, requirements, checklist }), host);
+  const definition = buildDefinitionModel({ build: b, library, requirements, checklist });
+  renderBuildDefinition(def, definition, host);
+  // The status line goes to the one persistent live region (#build-status, outside this
+  // re-rendered tree) and only when it changed: the summary block itself is rebuilt on every
+  // re-render, so a live region on it announced nothing, or the whole block after each keystroke.
+  const status = buildStatusLine(definition.summary);
+  const live = document.getElementById('build-status');
+  if (live && status && live.textContent !== status) live.textContent = status;
 
   const stepEl = document.createElement('div');
   stepEl.className = 'build-step-host';

@@ -8549,6 +8549,8 @@ body.chrome-observa .disco {
 }
 .build-exit { grid-column: 1 / -1; }
 .build-main { min-width: 0; position: relative; }
+/* Screen-reader-only text: the persistent Build status live region (#build-status) outside the re-rendered view. */
+.sr-text { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
 @media (max-width: 1080px) { .build-shell { grid-template-columns: 1fr; } .build-def { position: static; max-height: none; } }
 .build-step-define .build-eyebrow { color: var(--obs-cyan, #0891b2); }
 .build-step-compile .build-eyebrow { color: var(--obs-pink, #db2777); }
