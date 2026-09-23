@@ -1178,7 +1178,9 @@ test('buildDefinitionModel: the fields, the tier segments with their counts, the
   assert.equal(m.products.length, 8);
   assert.equal(m.archetypes.length, 2);
   const kafka = m.products.find(c => c.id === 'kafka');
-  assert.deepEqual([kafka.selected, kafka.evidence.status, kafka.evidence.word, kafka.sliCountAtTier, kafka.placeholderParams, kafka.gaps], [true, 'recorded-live', 'recorded live', 5, 5, 2]);
+  assert.deepEqual([kafka.selected, kafka.evidence, kafka.sliCountAtTier, kafka.placeholderParams, kafka.gaps], [true, { status: 'recorded-live', verifiedOn: '2026-09-22' }, 5, 5, 2]);
+  // The word for a status is the evidence atom's vocabulary, spelled once there (not a second table on the model).
+  assert.ok(evidenceDot(kafka.evidence.status, kafka.evidence.verifiedOn).includes('recorded live · verified 2026-09-22'));
   assert.equal(m.products.find(c => c.id === 'ibm-mq').selected, false);
   assert.equal(m.archetypes.find(c => c.id === 'http-service').evidence.status, 'semconv');
   assert.equal(m.selectedCount, 2);

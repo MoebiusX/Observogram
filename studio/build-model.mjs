@@ -895,8 +895,6 @@ export const SHEET_MODES = { define: 'preview', compile: 'edit', verify: 'verify
 export const sheetModeFor = (step) => SHEET_MODES[step] || 'edit';
 /** The section switches each sheet carries (the sections that live on that layer; L2 has none). */
 export const LAYER_SWITCHES = { L1: ['slos'], L3: ['dashboards'], L4: ['policy', 'routes'], L5: ['validation'] };
-/** The evidence dot's colour class per status (the chip and the rolodex): the badge's vocabulary, spelled once. */
-export const EVIDENCE_WORD = { 'recorded-live': 'recorded live', 'reference-pack': 'reference pack', 'upstream-docs': 'upstream docs', semconv: 'semconv' };
 
 /** The DEFINE validity errors, spelled once for the define model and the definition column. */
 function definitionErrors(name, selectedCount) {
@@ -935,7 +933,8 @@ export function buildDefinitionModel({ build, library, requirements = {}, checkl
   const chip = (r) => ({
     id: r.id, kind: r.kind, title: r.title, summary: r.summary || '', product: r.product, version: r.version,
     selected: selected.has(r.id),
-    evidence: { status: r.evidence?.status || null, verifiedOn: r.evidence?.verifiedOn || null, word: EVIDENCE_WORD[r.evidence?.status] || r.evidence?.status || '' },
+    // The status and its date only: the word for each status is the evidence atom's vocabulary (build-atoms.mjs evidenceDot / evidenceBadge), spelled once there.
+    evidence: { status: r.evidence?.status || null, verifiedOn: r.evidence?.verifiedOn || null },
     sliCountByTier: r.sliCountByTier || {}, sliCountAtTier: r.sliCountByTier?.[tier] ?? 0,
     placeholderParams: (r.params || []).filter(p => p.placeholder).length,
     gaps: (r.evidence?.gaps || []).length,
