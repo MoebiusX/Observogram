@@ -8633,8 +8633,11 @@ body.chrome-observa .disco {
 .card-source[data-source="Candidate"] { background: transparent; color: var(--BLD); border: 1px dashed var(--BLD); }
 .card.card-ghost .build-evidence { margin-left: auto; }
 
-/* Scaffold — parked, not declared — is dashed wherever a card is drawn (Discover, the stack). */
+/* Scaffold — parked, not declared — is dashed wherever a card is drawn (Discover, the stack).
+   The dashed frame is an outline, which would beat .card:focus-visible (same specificity, later):
+   a focused Scaffold card in Discover keeps the accent focus ring. */
 .card.is-scaffold { outline: 1.5px dashed color-mix(in srgb, #64748B 70%, transparent); outline-offset: -3px; }
+.card.is-scaffold:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .card.is-scaffold .card-title { color: var(--ink-3); }
 .card .build-card-pin {
   position: absolute; right: 10px; bottom: 8px; appearance: none; border: 0; cursor: pointer;

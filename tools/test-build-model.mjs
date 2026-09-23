@@ -1044,6 +1044,24 @@ test('focus across a re-render: a todo\'s input keys by slab and path, so a fill
   assert.deepEqual(focusFallbackSelectors(null), []);
 });
 
+// The stylesheet, for the rules the stack relies on (the repo has no browser harness: these read the text).
+const CSS_TEXT = readFileSync(resolve(ROOT, 'studio/app.css'), 'utf8');
+const cssRule = (selector) => { const m = CSS_TEXT.match(new RegExp(`(?:^|\\n)${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`)); return m ? m[1] : null; };
+
+test('a Scaffold card keeps its focus ring: the dashed frame is an outline, so a later :focus-visible rule must restore the accent ring', () => {
+  const focusRing = cssRule('.card:focus-visible');
+  assert.ok(focusRing && /outline:\s*2px solid var\(--accent\)/.test(focusRing), 'the card focus ring is an outline in the accent');
+  // Every card flag this branch draws with an outline (same specificity as .card:focus-visible, declared later, so it wins) restores the ring.
+  for (const flag of ['is-scaffold']) {
+    const frame = cssRule(`.card.${flag}`);
+    assert.ok(frame && /outline:/.test(frame), `.card.${flag} draws with an outline`);
+    const restored = cssRule(`.card.${flag}:focus-visible`);
+    assert.ok(restored, `.card.${flag}:focus-visible exists`);
+    assert.equal(restored.replace(/\s+/g, ' ').trim(), focusRing.replace(/\s+/g, ' ').trim(), `.card.${flag}:focus-visible is the card focus ring`);
+    assert.ok(CSS_TEXT.indexOf(`.card.${flag}:focus-visible`) > CSS_TEXT.indexOf(`.card.${flag} {`), 'declared after the frame, so it wins the cascade');
+  }
+});
+
 test('artefactCardHtml is the one card body: Discover\'s head, chip, pill, title, desc, foot — and the flags only the caller knows', () => {
   const bak = FIXTURE.adapted.layers.L2.find(a => a.id === 'BAK-01');
   const plain = artefactCardHtml(bak);
