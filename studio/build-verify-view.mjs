@@ -6,7 +6,8 @@
 // sli-excluded, burn-rules), the todos grouped by artefact with the param
 // that fills each one editable inline (editing re-instantiates), the
 // artefacts (one card per compile target with preview and download),
-// "Download pack YAML" and "Open in Discover", which registers the pack the
+// "Download pack YAML" and "Ready to continue?" — resolve or adjust (back at Define)
+// or continue with visible gaps, which registers the pack the
 // way an upload is registered and hands it to the analysis journey, saying
 // how many placeholders remain.
 //
@@ -123,16 +124,17 @@ export function renderBuildVerify(container, model, host = appHost) {
 
       <footer class="build-step-actions">
         <button type="button" class="ctrl-btn build-back" id="build-back">← Compile</button>
+        <button type="button" class="ctrl-btn build-adjust" id="build-adjust" title="Back to Define — change the service, its tier or the library entries">Resolve or adjust</button>
         <span class="build-step-status">${({
-          registered: `Registered as <code>${escapeHtml(model.registeredId || '')}</code> — opening it again re-registers the current pack.`,
-          ready: 'Open in Discover registers the pack the way an upload is registered; its todos travel with it.',
+          registered: `Registered as <code>${escapeHtml(model.registeredId || '')}</code> — continuing again re-registers the current pack.`,
+          ready: escapeHtml(model.readyText),
           error: 'The last compilation failed — fix the rejected value above; the pack shown is the previous one and is not handed off.',
           promql: 'A PromQL warning blocks the hand-off — fix the param first.',
           schema: 'The pack does not validate against the schema — see the schema card.',
         })[model.handoff]}</span>
         <span class="build-actions-right">
           <button type="button" class="ctrl-btn" id="build-yaml-download">download pack yaml</button>
-          <button type="button" class="mcp-refresh-btn build-next" id="build-open" ${model.canRegister ? '' : 'disabled'}>Open in Discover <span aria-hidden="true">→</span></button>
+          <button type="button" class="mcp-refresh-btn build-next" id="build-open" ${model.canRegister ? '' : 'disabled'}>${escapeHtml(model.continueLabel)} <span aria-hidden="true">→</span></button>
         </span>
       </footer>` : ''}
     </section>`;
@@ -150,5 +152,6 @@ export function renderBuildVerify(container, model, host = appHost) {
   container.querySelector('#build-preview-close')?.addEventListener('click', () => act.update({ preview: null }, { rerender: true, reinstantiate: false }));
   container.querySelector('#build-yaml-download')?.addEventListener('click', () => downloadText(model.fileName, model.yaml, 'application/x-yaml'));
   container.querySelector('#build-back')?.addEventListener('click', () => act.setStep('compile'));
+  container.querySelector('#build-adjust')?.addEventListener('click', () => act.setStep('define'));
   container.querySelector('#build-open')?.addEventListener('click', () => act.openInDiscover());
 }

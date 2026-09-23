@@ -449,6 +449,7 @@ export function buildVerifyModel({ build, library, clauses, targets }) {
   const error = build?.error ? splitBuildErrors(build.error) : null;
   // What the footer says about the hand-off, in priority order.
   const handoff = build?.registeredId ? 'registered' : error ? 'error' : blocking ? 'promql' : !schemaOk ? 'schema' : 'ready';
+  const gaps = placeholdersRemaining(r);
   return {
     ready: !!r, pending: !!build?.pending, error, stale: isStale(build),
     tier: s?.tier || build?.tier,
@@ -472,6 +473,14 @@ export function buildVerifyModel({ build, library, clauses, targets }) {
     source: r?.provenance?.source || '',
     registeredId: build?.registeredId || null,
     handoff,
+    // "Ready to continue?" — VERIFY's two exits (docs/BUILD_JOURNEY.md "Where it starts"):
+    // resolve or adjust (back at Define), or continue with the gaps visible — they stay on
+    // the pack as library.todo.* annotations, so Diagnose grades them as gaps, never as verified.
+    gaps,
+    continueLabel: gaps > 0 ? 'Continue with visible gaps' : 'Continue to Discover',
+    readyText: gaps > 0
+      ? `Ready to continue? ${gaps} placeholder${gaps === 1 ? '' : 's'} remain — fill them above, resolve or adjust at Define, or continue: they stay visible in Discover and Diagnose grades them as gaps.`
+      : 'Ready to continue? No placeholder remains — continuing registers the pack the way an upload is registered and opens it in Discover.',
     // A stale pack (the last compilation failed) is never handed off: the error stands until the field is fixed.
     canRegister: !!r && schemaOk && !blocking && !error,
   };

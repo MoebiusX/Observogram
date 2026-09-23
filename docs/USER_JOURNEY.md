@@ -186,20 +186,23 @@ A parallel journey for a service that has no pack, in the same visual language
 as the three steps below and ending in Discover
 ([`BUILD_JOURNEY.md`](BUILD_JOURNEY.md)). It is reached from the home hero, the
 service gate and the upload popover, never from the three primary tabs, and it
-does not change what Discover, Diagnose or Remediate show.
+does not change what Discover, Diagnose or Remediate show. Both landings open with
+the first decision — check an existing service or pack, or build a new one — and
+both paths join at Discover.
 
 Belongs here:
 
-- Select: the service name, owners, environment, the criticality tier with the
+- Define: the service name, owners, environment, the criticality tier with the
   clauses it requires, the library entries (products with their evidence badge,
   archetypes) and the selection's parameters with their defaults
-- Generate: the SLIs per entry (an SLI above the tier disabled with the tier it
+- Compile: the SLIs per entry (an SLI above the tier disabled with the tier it
   needs), the objective and window each gets at the tier, the section toggles,
   the pack YAML
-- Validate: the conformance verdict at the tier with three clause states (pass
+- Verify: the conformance verdict at the tier with three clause states (pass
   · pass on a placeholder · fail), the schema verdict, the warnings, the todos
   by artefact with the parameter that fills each one, the compiled artefacts,
-  the hand-off ("Open in Discover", which registers the pack as an upload)
+  the hand-off ("Ready to continue?": resolve or adjust at Define, or continue
+  with visible gaps, which registers the pack as an upload)
 - the tier's clauses as a live checklist beside every step
 
 Does not belong here:

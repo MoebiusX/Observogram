@@ -1565,6 +1565,37 @@ function goHome() {
 // service". docs/PRODUCTIZATION_PLAN.md Stage 1 UX.
 // ============================================================
 
+// ============================================================
+// THE FIRST DECISION IS ABOUT THE PACK (docs/BUILD_JOURNEY.md "Where it
+// starts"): a service may already exist without one. Both landings — the
+// signed-in service gate and the local hero — open with the same question,
+// and both branches join at "Pack available in Discover".
+// ============================================================
+function homeChoiceHtml({ check }) {
+  return `
+    <div class="home-choice" role="group" aria-label="What would you like to do?">
+      <p class="home-choice-q">What would you like to do?</p>
+      <div class="home-choice-cards">
+        <button type="button" class="home-choice-card is-check" id="home-choice-check">
+          <span class="home-choice-key" aria-hidden="true">◎</span>
+          <span class="home-choice-title">Check an existing service or pack</span>
+          <span class="home-choice-sub">${escapeHtml(check)}</span>
+          <span class="home-choice-path">Discover · Diagnose · Remediate</span>
+        </button>
+        <button type="button" class="home-choice-card is-build" id="home-choice-build">
+          <span class="home-choice-key" aria-hidden="true">⬡</span>
+          <span class="home-choice-title">Build a new pack</span>
+          <span class="home-choice-sub">for a service that has no pack yet — name it, choose its tier, pick the products it runs on or an archetype</span>
+          <span class="home-choice-path">Define · Compile · Verify, then Discover</span>
+        </button>
+      </div>
+    </div>`;
+}
+function wireHomeChoice(view, { check }) {
+  view.querySelector('#home-choice-check')?.addEventListener('click', check);
+  view.querySelector('#home-choice-build')?.addEventListener('click', () => enterBuildMode('define'));
+}
+
 function renderServiceGate() {
   const view = $('#layer-view');
   if (!view) return;
@@ -1574,7 +1605,8 @@ function renderServiceGate() {
     <section class="svc-gate">
       <div class="svc-gate-eyebrow">OBSERVOGRAM · THE OBSERVABILITY COMPILER</div>
       <h1 class="svc-gate-title">Welcome back${who ? `, ${escapeHtml(who.split(' ')[0])}` : ''}.</h1>
-      <p class="svc-gate-sub">Which service are you working on?</p>
+      ${homeChoiceHtml({ check: 'select one of your services below, or import a pack — connect an MCP endpoint, upload a manifest or scan a repo' })}
+      <p class="svc-gate-sub" id="svc-gate-which">Which service are you working on?</p>
       <div class="svc-gate-grid">
         ${services.map(s => `
           <button type="button" class="svc-gate-card" data-service="${escapeHtml(s.key)}">
@@ -1584,7 +1616,6 @@ function renderServiceGate() {
       </div>
       <div class="svc-gate-actions">
         <button type="button" class="svc-gate-new" id="svc-gate-new">+ start something new — connect an MCP endpoint, upload or scan a repo</button>
-        <button type="button" class="svc-gate-new svc-gate-build" id="svc-gate-build">⬡ build a pack — select service, tier &amp; library, generate, validate</button>
       </div>
     </section>
   `;
@@ -1595,7 +1626,14 @@ function renderServiceGate() {
     state.homeVariant = 'hero';
     renderHomeView();
   });
-  view.querySelector('#svc-gate-build')?.addEventListener('click', () => enterBuildMode('define'));
+  wireHomeChoice(view, {
+    // The check branch is the service picker right below; with no service yet it is the hero's imports.
+    check: () => {
+      const first = view.querySelector('.svc-gate-card');
+      if (first) { view.querySelector('#svc-gate-which')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); first.focus(); }
+      else { state.homeVariant = 'hero'; renderHomeView(); }
+    },
+  });
 }
 
 // Reflect the active service into the always-visible OBSERVA-bar chip.
@@ -2314,6 +2352,8 @@ function renderHomeView() {
         they drift. Connect below to begin, or scan a repo from Discover.
       </p>
 
+      ${homeChoiceHtml({ check: 'connect an MCP endpoint below, drop a YAML / JSON pack or scan a service repo' })}
+
       <div class="home-mcp-card">
         <label class="home-mcp-url-row">
           <span class="home-mcp-url-label">MCP endpoint</span>
@@ -2360,11 +2400,6 @@ function renderHomeView() {
             <span class="home-alt-label">Scan a service repo</span>
             <span class="home-alt-sub">walks Prom / OTel / Grafana / AM configs · or a GitHub URL</span>
           </button>
-          <button id="home-shortcut-build" type="button" class="home-alt-btn home-alt-build">
-            <span class="home-alt-key" aria-hidden="true">⬡</span>
-            <span class="home-alt-label">Build a pack</span>
-            <span class="home-alt-sub">no pack yet? select service, tier &amp; library · generate · validate</span>
-          </button>
         </div>
       </div>
     </section>
@@ -2382,7 +2417,8 @@ function renderHomeView() {
   };
   $('#home-shortcut-upload').onclick = () => $('#upload-btn')?.click();
   $('#home-shortcut-crawl').onclick  = () => $('#crawl-btn')?.click();
-  $('#home-shortcut-build').onclick  = () => enterBuildMode('define');
+  // The check branch is the connect form right here; the build branch enters DEFINE.
+  wireHomeChoice(view, { check: () => { const url = $('#home-mcp-url'); url?.scrollIntoView({ behavior: 'smooth', block: 'center' }); url?.focus(); } });
 }
 
 async function doHomeMcpConnect() {

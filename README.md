@@ -54,6 +54,13 @@ into pack shape. The diff between declared and live is the operational truth.
 
 ## Main Journey
 
+The first decision is about the pack, because a service may already exist without
+one. Both landings open with **"What would you like to do?"** — *check an existing
+service or pack* (select a service, or import one: upload, repo scan, live MCP draft)
+or *build a new pack* (Define · Compile · Verify). The two paths join at *Pack
+available in Discover*: a compiled pack enters the same audit journey as an imported
+one, with its unresolved placeholders still visible.
+
 ### No pack yet? Build one
 
 A second, parallel journey for a service that has no pack: **Build** — three
@@ -77,9 +84,10 @@ ending where Discover begins ([`docs/BUILD_JOURNEY.md`](docs/BUILD_JOURNEY.md)):
    verdict, the warnings, the todos grouped by artefact with the parameter that
    fills each one editable inline, the compiled artefacts (Prometheus rules,
    OTel Collector, Alertmanager, Grafana dashboards) previewed and downloadable,
-   and **Open in Discover**, which registers the pack the way an upload is
-   registered and hands it to the journey below — saying how many placeholders
-   remain. A placeholder-laden pack is conformant on paper; the third state and
+   and **Ready to continue?** — *Resolve or adjust* returns to Define; *Continue
+   with visible gaps* (*Continue to Discover* when none remain) registers the pack
+   the way an upload is registered and hands it to the journey below, saying how
+   many placeholders remain. A placeholder-laden pack is conformant on paper; the third state and
    the todos are what tell it from a real one.
 
 ### 1. Discover - What Do We Have?

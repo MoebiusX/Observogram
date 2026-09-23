@@ -532,6 +532,14 @@ test('buildVerifyModel: the verdict with the three states, schema, warnings, tod
   assert.equal(m.source, 'kafka@1.0.0,http-service@1.0.0');
   assert.equal(m.canRegister, true);
   assert.equal(m.registeredId, null);
+  // "Ready to continue?": the exit's label and text follow the placeholders that remain.
+  assert.equal(m.gaps, 17);
+  assert.equal(m.continueLabel, 'Continue with visible gaps');
+  assert.match(m.readyText, /^Ready to continue\? 17 placeholders remain/);
+  const filled = buildVerifyModel({ build: draft({ result: { ...draft().result, provenance: { ...draft().result.provenance, placeholders: [] } } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
+  assert.equal(filled.gaps, 0);
+  assert.equal(filled.continueLabel, 'Continue to Discover');
+  assert.match(filled.readyText, /No placeholder remains/);
   // A blocking warning or a schema error blocks the hand-off; nothing else does.
   const blocked = buildVerifyModel({ build: draft({ result: { ...draft().result, warnings: [{ kind: 'promql', message: 'x' }] } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
   assert.equal(blocked.blocking, true);

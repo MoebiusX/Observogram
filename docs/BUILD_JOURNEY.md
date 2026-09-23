@@ -12,6 +12,33 @@ generated pack) and [archive/REFERENCE_CATALOGUE_PLAN.md](archive/REFERENCE_CATA
 (the catalogue those blocks came from — the reference packs are now the evidence
 behind the entries).
 
+## Where it starts
+
+The first decision is about the pack, because a service may already exist without
+one. Both landings — the signed-in service gate and the local hero — open with one
+question: **Do you want to check an existing service or pack, or build a new pack?**
+The first answer leads to the service picker or an import (upload, repo scan, live
+MCP draft); the second to DEFINE. The two paths join at *Pack available in Discover*:
+a newly compiled pack enters the same audit journey as an imported one, and its
+unresolved placeholders stay visible so Diagnose grades them as gaps, never as verified.
+
+```mermaid
+flowchart TD
+    A["Log in"] --> B{"What would you like to do?"}
+    B -->|"Check an existing service or pack"| C["Select service or import pack"]
+    B -->|"Build a new pack"| D["DEFINE<br/>Service, tier, products or archetype"]
+    D --> E["COMPILE<br/>Pack and deployable artifacts"]
+    E --> F["VERIFY<br/>Grade conformance and review placeholders"]
+    F --> G{"Ready to continue?"}
+    G -->|"Resolve or adjust"| D
+    G -->|"Continue with visible gaps"| H["Pack available in Discover"]
+    C --> H
+    H --> I["DISCOVER<br/>What do we have?"]
+    I --> J["DIAGNOSE<br/>Can we trust it?"]
+    J --> K["REMEDIATE<br/>Fix the gaps"]
+    K --> I
+```
+
 ## The three steps
 
 | Step | Question | Input | Output |
@@ -20,8 +47,10 @@ behind the entries).
 | 2 COMPILE | What should we watch? | per-entry SLI toggles (filtered by tier), params, section toggles (SLOs, policy + routes, dashboards, validation) | the canonical pack + todos + provenance (`instantiatePack`) |
 | 3 VERIFY | Is it ready to use? | the pack | which clauses pass, which pass only on a placeholder, which fail (`validationSummary`); the schema verdict; the compiled artifacts through the existing targets (Prometheus rules, OTel Collector, Alertmanager, Grafana dashboards) |
 
-**Hand-off.** "Open in Discover" registers the produced pack in the studio's upload
-registry (the same path an uploaded pack takes) and switches to the existing journey:
+**Hand-off.** VERIFY ends on *Ready to continue?* with two exits: *Resolve or adjust*
+returns to DEFINE; *Continue with visible gaps* (*Continue to Discover* when no
+placeholder remains) registers the produced pack in the studio's upload registry (the
+same path an uploaded pack takes) and switches to the existing journey:
 Discover shows its layers, Diagnose compares it with a live pack, Remediate compiles
 and deploys the delta. Nothing in Discover / Diagnose / Remediate changes; a
 library-built pack is an ordinary canonical pack with provenance annotations.
