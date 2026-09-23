@@ -61,7 +61,7 @@ steps in the same visual language as the three below, reached from the home
 hero, the service gate or the upload popover ("Build from the library…"), and
 ending where Discover begins ([`docs/BUILD_JOURNEY.md`](docs/BUILD_JOURNEY.md)):
 
-1. **Select - What Are We Building?** — the service name, owners and
+1. **Select - What Are We Observing?** — the service name, owners and
    environment, its criticality tier (each with the conformance clauses it
    requires) and one or more library entries: products it runs on (Kafka,
    Prometheus, Grafana, IBM MQ, Alertmanager, Loki, Tempo, the OTel Collector,

@@ -1,6 +1,6 @@
 // studio/build-select-view.mjs
 //
-// BUILD step 1 — SELECT, "What are we building?": the service (name, owners,
+// BUILD step 1 — SELECT, "What are we observing?": the service (name, owners,
 // environment), its criticality tier (each with what it requires, from the
 // tier's clauses) and the library entries it runs on (products) or is built
 // as (archetypes), then the selection's params with their defaults and the
@@ -106,7 +106,7 @@ export function renderBuildSelect(container, model, host = appHost) {
   const entriesCount = model.selectedEntries.length;
   container.innerHTML = `
     <section class="build-step build-select">
-      ${stepHeadHtml('select', 'What are we building?', 'Name the service, pick its criticality tier and the library entries it runs on — products with an evidence bar, or an archetype for a service built from scratch. The rail on the right lists what the tier requires and fills in as soon as the selection is complete.')}
+      ${stepHeadHtml('select', 'What are we observing?', 'Name the service, pick its criticality tier and the library entries it runs on — products with an evidence bar, or an archetype for a service built from scratch. The rail on the right lists what the tier requires and fills in as soon as the selection is complete.')}
 
       <div class="build-fields">
         <label class="build-field">

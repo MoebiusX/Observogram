@@ -1173,7 +1173,7 @@ export const BUILD_TABS = [
   {
     id: 'select',
     n: '1',
-    label: 'What Are We Building?',
+    label: 'What Are We Observing?',
     sub: 'Select',
     techName: 'Library',
     tagline: 'Service, tier & library',

@@ -16,7 +16,7 @@ behind the entries).
 
 | Step | Question | Input | Output |
 |---|---|---|---|
-| 1 SELECT | What are we building? | service name, owners, criticality tier-1/2/3, environment, one or more library entries (products it runs on, or an archetype for a service built from scratch) | the entries' params with defaults; the tier's requirements (`tierRequirements`) |
+| 1 SELECT | What are we observing? | service name, owners, criticality tier-1/2/3, environment, one or more library entries (products it runs on, or an archetype for a service built from scratch) | the entries' params with defaults; the tier's requirements (`tierRequirements`) |
 | 2 GENERATE | What should it watch? | per-entry SLI toggles (filtered by tier), params, section toggles (SLOs, policy + routes, dashboards, validation) | the canonical pack + todos + provenance (`instantiatePack`) |
 | 3 VALIDATE | Does it hold up? | the pack | which clauses pass, which pass only on a placeholder, which fail (`validationSummary`); the schema verdict; the compiled artifacts through the existing targets (Prometheus rules, OTel Collector, Alertmanager, Grafana dashboards) |
 
