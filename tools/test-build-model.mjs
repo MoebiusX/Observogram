@@ -36,6 +36,7 @@ import {
   loadLibrary as loadLibraryApi, loadRequirements, loadTargets, instantiate, compilePreview, registerBuiltPack,
 } from '../studio/build-api.mjs';
 import { defaultBuildState, BUILD_PERSIST_FIELDS } from '../studio/state.mjs';
+import { renderBuildSelect } from '../studio/build-select-view.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const FIX = resolve(ROOT, 'tools/fixtures/build');
@@ -241,6 +242,25 @@ test('buildSelectModel: tiers with their MUST / SHOULD counts and what each adds
   assert.match(bad.errors[0], /slugs/);
   assert.match(bad.errors[1], /library entry/);
   assert.deepEqual(buildSelectModel({ build: defaultBuildState(), library: LIBRARY }).errors, ['a service name', 'at least one library entry']);
+});
+
+// The renderers have no DOM harness (docs/UI_CONVENTIONS.md §2), but they only need a container
+// with innerHTML and the two query methods to run: enough to read what they put on the page.
+function stubContainer() {
+  const el = { addEventListener() {}, disabled: false };
+  return { innerHTML: '', querySelector: () => el, querySelectorAll: () => [] };
+}
+
+test('renderBuildSelect escapes the typed service name: the model carries it raw in the validity error, the renderer escapes at the seam', () => {
+  const payload = '1<img src=x onerror="window.__xss=1">';
+  const m = buildSelectModel({ build: draft({ name: payload }), library: LIBRARY, requirements: REQUIREMENTS });
+  assert.equal(m.valid, false);
+  assert.ok(m.errors[0].includes(payload), 'the model states the name as typed — data, not markup');
+  const container = stubContainer();
+  renderBuildSelect(container, m, { build: {} });
+  assert.ok(!container.innerHTML.includes('<img'), 'no element from the name reaches the page');
+  assert.ok(container.innerHTML.includes('Still needed: a service name that slugs (‘1&lt;img src=x onerror=&quot;window.__xss=1&quot;&gt;’'), 'the status line shows the name escaped');
+  assert.ok(container.innerHTML.includes(`value="${'1&lt;img src=x onerror=&quot;window.__xss=1&quot;&gt;'}"`), 'the input value is escaped too');
 });
 
 // ---------------------------------------------------------------------------

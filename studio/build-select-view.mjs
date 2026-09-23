@@ -143,7 +143,7 @@ export function renderBuildSelect(container, model, host = appHost) {
       </details>` : ''}
 
       <footer class="build-step-actions">
-        <span class="build-step-status">${model.valid ? 'Selection complete — the tier’s clauses are being checked on the right.' : `Still needed: ${model.errors.join(' and ')}.`}</span>
+        <span class="build-step-status">${model.valid ? 'Selection complete — the tier’s clauses are being checked on the right.' : `Still needed: ${model.errors.map(escapeHtml).join(' and ')}.`}</span>
         <button type="button" class="mcp-refresh-btn build-next" id="build-next" ${model.valid ? '' : 'disabled'}>Continue to Generate <span aria-hidden="true">→</span></button>
       </footer>
     </section>`;
