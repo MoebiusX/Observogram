@@ -193,10 +193,12 @@ both paths join at Discover.
 Belongs here:
 
 - the pack as the axis of the screen on every step: a sticky definition column
-  on the left (the service; the tier as a segmented control with its MUST ·
-  SHOULD counts; the library entries as chips with their evidence dot; the
-  conformance summary — pass · on a placeholder · fail, the failing clauses,
-  todos and placeholders left) and the layer stack of the pack being compiled
+  on the left — on Define the live form (the service; the tier as a segmented
+  control with its MUST · SHOULD counts; the library entries as chips with their
+  evidence dot), on Compile and Verify the read-only seed card it becomes once
+  the pack is seeded (*Seed the pack →*; *Change seed →* returns), and under
+  both the conformance summary — pass · on a placeholder · fail, the failing
+  clauses, todos and placeholders left — and the layer stack of the pack being compiled
   as the main surface — L1 Contract · L2 Telemetry · (L2X) · L3 Insight · L4
   Action · L5 Validation · GOV — drawn through the same adapter and the same
   artefact cards Discover uses, each slab's edge carrying the rubric's verdict
@@ -214,9 +216,14 @@ Belongs here:
   pack it demands (one ghost per clause per slab, reshaping with the tier), the
   entries' SLIs and their SLOs as candidates on L1
 - Compile: composition on the sheets — the SLI rolodex on L1 (the selected
-  entries' SLIs, every product's behind a filter, an SLI above the tier disabled
-  with the tier it needs, the objective and window at the tier, add / remove as
-  a switch; adding from a product not yet selected selects it too) and the SLOs
+  entries' SLIs, every product's behind a filter, any SLI addable — one above
+  the tier says which profile it starts from; the tier is a seed, not a gate —
+  the objective and window it starts with, add / remove as a switch; adding
+  from a product not yet selected selects it too; *Customise* edits a card's
+  copy of the library's values in place — objective, window, bound, PromQL,
+  description, each back to the library default in one click, an edited
+  expression dropping the library's evidence to *custom* — and *+ Custom SLI*
+  writes one from scratch) and the SLOs
   switch; the Dashboards, Policy, Routes and Validation switches on their
   layers, each saying which clauses it drops; the scrape targets, endpoints,
   channels and probe targets as params on the layer they shape — over the live
@@ -236,6 +243,9 @@ Does not belong here:
 - a pack that pages nobody presented as done: a placeholder-laden pack is
   conformant on paper, so the third clause state, the amber slab edges and the
   todo count travel with it into Discover
+- a library value that cannot be changed, or a tier that forbids an SLI: the
+  library seeds and the rubric grades; what the team measures is the team's
+  (an edited expression carries no library evidence, and says so)
 - a second rendering of the pack: the stack is the adapter's projection — the
   artefacts Discover will show, id for id — never a Build-only drawing of the
   canonical

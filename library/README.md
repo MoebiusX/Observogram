@@ -2,11 +2,16 @@
 
 Versioned, parameterised pack fragments — one YAML entry per **product** a service
 runs on (`products/`) or per **archetype** of a service built from scratch
-(`archetypes/`). `packc init` and, in the BUILD journey's next slice, the studio's
-DEFINE / COMPILE / VERIFY steps instantiate an entry into a canonical
-ObservabilityPack v1.2 at a chosen criticality tier. The engine is
-`tools/lib/library.mjs` (pure, browser-safe); the loader is `server/library.mjs`;
-the design is [docs/BUILD_JOURNEY.md](../docs/BUILD_JOURNEY.md).
+(`archetypes/`). `packc init` and the studio's DEFINE / COMPILE / VERIFY steps
+instantiate an entry into a canonical ObservabilityPack v1.2 at a chosen criticality
+tier. The engine is `tools/lib/library.mjs` (pure, browser-safe); the loader is
+`server/library.mjs`; the design is [docs/BUILD_JOURNEY.md](../docs/BUILD_JOURNEY.md).
+
+**The library's values are defaults, never constraints.** The tier is a seed: it decides
+which SLIs a pack starts with (`minTier`) and which rubric grades it, and any SLI of an
+entry may be selected at any tier. Once an entry is instantiated its values are copies
+the caller may edit — an objective, a window, a bound, an expression — through
+`overrides` and `custom` ("The seed and the copies" below).
 
 ```
 library/
@@ -50,7 +55,7 @@ telemetry:
 slis:
   - id: broker_availability
     type: ratio             # ratio (good/total) | threshold (query/threshold, upper bound)
-    minTier: tier-3         # the least stringent tier that includes it
+    minTier: tier-3         # the least stringent tier that includes it BY DEFAULT — never a gate: any SLI may be selected at any tier
     description: ...
     why: ...                # why this SLI, for the studio
     unit: ratio
@@ -61,7 +66,7 @@ slis:
     total: |
       count(up{job="${broker_job}"})
     slo:
-      objective: { tier-1: 0.999, tier-2: 0.999, tier-3: 0.99 }   # or one number
+      objective: { tier-1: 0.999, tier-2: 0.999, tier-3: 0.99 }   # or one number; a tier below minTier may be left out
       window: 30d           # 7d | 28d | 30d | 90d, per tier or one value
     burn: availability      # availability | latency | saturation | slow, or explicit windows
     forecast: { method: holt-winters, horizon: 7d, on_projected_breach: open_ticket, minTier: tier-1 }
@@ -88,6 +93,79 @@ its default is written into the pack AND reported as a todo
 
 YAML is read by `tools/lib/mini-yaml.mjs`: no anchors, no `|-`, no tags, and a
 plain list item must not contain `: ` (it would parse as a mapping) — use ` — `.
+
+## The seed and the copies
+
+**The per-tier walk.** A value declared per tier (`slo.objective`, `slo.window`) is read
+at the pack's tier, then walking towards the stricter tiers to the first value declared:
+a tier-2 pack that adds an SLI declared for `tier-1` only starts with the tier-1
+objective; a tier-3 pack adding one declared for tier-2 and tier-1 takes tier-2's. Where
+the map declares a value for the lower tier anyway (the shipped entries do), that value
+stands. `validateLibraryEntry` requires the objective for the tiers the SLI reaches and
+lets a tier below its `minTier` be left out. An SLI's own tier features — a `forecast`,
+a `chaos` or a `remediation` template with a `minTier` — keep their gating against the
+pack's tier: they are tier features, not the SLI. The rubric still grades the pack at
+its tier; an extra SLI simply counts.
+
+**Overrides** — copy-on-write over an SLI's template, keyed by the SLI id as the pack
+carries it (prefixed when several entries compose: `kafka_produce_latency_p99`):
+
+```js
+instantiatePack(entries, { name, tier, overrides: {
+  kafka_produce_latency_p99: { objective: 0.995, window: '7d', threshold: 0.25 },
+  http_service_availability: { good: 'sum(rate(http_ok_total[5m]))', total: 'sum(rate(http_total[5m]))' },
+} })
+```
+
+The fields (`OVERRIDE_FIELDS`): `objective` (a number in (0, 1) — the ratio the pack
+stores; the studio shows a percent), `window` (one of the schema's SLO windows `7d | 28d
+| 30d | 90d` — the schema's enum, not any duration), `threshold` (a finite number, a
+threshold SLI only; it is an upper bound: spec v1.2 has no direction field, so
+`comparison` is refused with that reason — a floor is a ratio SLI), `query` (threshold)
+or `good` / `total` (ratio) — non-empty strings within `MAX_PARAM_LENGTH` (4096) that
+carry no `${…}` placeholder, since an override replaces the library's expression *after*
+the params are in — `description` and `unit` (bounded strings). An unknown field, a wrong
+type, a key that is not an SLI id (`^[a-z][a-z0-9_]{0,63}$`; `__proto__`, `constructor`
+and `prototype` refused, nothing read through the prototype chain) are usage errors that
+name the field: `override <sli>.<field>: …`. An override for an SLI that is not in the
+pack is a **warning** of kind `override`, never an error. An overridden objective flows
+into the SLO (its id follows: `sloIdFor`), the burn alerts and the boards' bindings; an
+overridden window into the SLO. **An overridden expression drops the library's evidence
+honestly**: the SLI's evidence becomes `{ status: 'custom', source: 'edited in the studio',
+note: 'the library evidence no longer applies' }` and the template's `semconv_metric` goes
+with it; a bound, an objective or a window keeps the library's evidence (the expression is
+still the library's). The result says what was customised: `provenance.slis[<id>]
+.customised` (the fields), `provenance.overrides`, and on the pack
+`library.customised.slis.<id>` and `library.overrides`.
+
+**Custom SLIs** — written from scratch, outside any entry:
+
+```js
+instantiatePack(entries, { name, tier, custom: [
+  { id: 'checkout_success', type: 'ratio', good: 'sum(rate(checkout_ok_total[5m]))', total: 'sum(rate(checkout_total[5m]))', objective: 0.999, window: '30d' },
+  { id: 'checkout_p99', type: 'threshold', query: 'histogram_quantile(0.99, sum by (le)(rate(checkout_seconds_bucket[5m])))', threshold: 0.3, unit: 'seconds', objective: 0.99, window: '7d' },
+] })
+```
+
+The id a slug `^[a-z][a-z0-9_]{1,62}$` (not `errorbudget`) unique among the pack's SLIs —
+a clash with a selected library SLI or another custom one is a usage error naming both;
+`objective` and `window` required; the PromQL required per type; every field checked as
+above (`custom <id>.<field>: …`). A custom SLI gets an SLO, a recording rule, burn alerts
+from the **default burn profile** (`DEFAULT_BURN_PROFILE`: `availability` for a ratio,
+`latency` for a threshold — the profile a template without `burn` takes), SLI and SLO
+bindings on the overview board, the evidence `{ status: 'custom', source: 'written in the
+studio' }`, `provenance.slis[<id>].library.source = 'custom'`, `provenance.custom` and
+the annotation `library.custom`. The rubric counts it like any SLI, nothing more.
+
+**Where.** The API (`POST /api/library/instantiate`, `/compile`, `/register` take
+`overrides` and `custom`; at most 64 override entries and 16 custom SLIs per request,
+400 beyond, every value validated by the engine; `/compile` and `/register` accept the
+instantiate inputs in place of `canonical`), the studio (the L1 sheet's Customise face
+and its + Custom SLI card), and the CLI for the scalar overrides only:
+`packc init … --override <sli>.<objective|window|threshold>=<value>` (repeatable; a query,
+good or total is edited in the studio or in the pack file; the CLI takes no custom SLI in
+this slice). `--slis a,b` / `--sli <id>` takes any SLI of the chosen entries, above the
+tier too.
 
 ## The quality bar
 
@@ -118,7 +196,8 @@ plain list item must not contain `: ` (it would parse as a mapping) — use ` �
    `placeholder: true`.
 5. **Objectives are tiered** where a lower tier would honestly accept less
    (`0.99` at tier-3 where the reference pack says `0.999`), and burn windows come
-   from a named profile so the whole library alerts the same way.
+   from a named profile so the whole library alerts the same way. They are defaults:
+   a caller may override them per SLI, and the pack then says so.
 
 ## Adding an entry
 
@@ -154,6 +233,13 @@ toggles:
   `library.todo.*` annotations;
 - switching dashboards off makes exactly the dashboard clauses fail; switching
   policy off exactly the burn-rate clause;
+- the seed and the copies: an SLI above the tier instantiates with its own profile's
+  objective and no warning; the per-tier walk; overrides change the SLO id, the window,
+  the threshold; an overridden expression drops the evidence to `custom` and the
+  provenance lists the field; the usage errors and the `override` warning; a custom ratio
+  and a custom threshold SLI in `slis`, `slos`, the recording rules, the policy and the
+  bindings, schema-valid, counted by the rubric; a duplicate custom id refused;
+  `defaultToggles` unchanged;
 - three goldens (`tools/fixtures/library/kafka.tier-2.pack.yaml`,
   `ibm-mq.tier-1.pack.yaml`, `http-service.tier-3.pack.yaml`) are byte-stable.
 
