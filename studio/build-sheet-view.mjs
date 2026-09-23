@@ -42,8 +42,8 @@
 import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { sheetFocusSuffix } from './build-model.mjs';
-import { customDefFromDraft, normalizeDraft, slugifySliId } from './build-copies-model.mjs';
-import { evidenceBadge, paramRowHtml, wireParamInputs, clauseRowHtml, todoHtml, switchHtml, STATE_GLYPH } from './build-atoms.mjs';
+import { customDefFromDraft, normalizeDraft, slugifySliId, SLO_WINDOWS } from './build-copies-model.mjs';
+import { evidenceBadge, paramRowHtml, wireParamInputs, clauseRowHtml, todoHtml, switchHtml, editFieldHtml, STATE_GLYPH } from './build-atoms.mjs';
 
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 const MODE_WORD = { edit: 'compose', preview: 'preview', verify: 'verify' };
@@ -64,26 +64,7 @@ function switchRowHtml(s, model) {
     </div>`;
 }
 
-/** One field of a card's edit face: the input for its kind (a textarea for PromQL, a datalist for the window), the library default beside it, '↺ library default' when overridden, the engine's error under it. */
-function editFieldHtml(f, face) {
-  const dataKey = face.custom ? 'custom-field' : 'override-field';
-  const common = `class="build-edit-input" id="${escapeHtml(f.inputId)}" data-focus-key="${escapeHtml(f.focusKey)}" data-${dataKey}="${escapeHtml(f.id)}" data-sli="${escapeHtml(face.key)}"${f.error ? ' aria-invalid="true"' : ''}${face.readOnly ? ' readonly' : ''}`;
-  let input;
-  if (f.kind === 'promql') input = `<textarea ${common} rows="3" spellcheck="false" autocomplete="off">${escapeHtml(f.value)}</textarea>`;
-  else if (f.kind === 'window') input = `<input type="text" ${common} list="build-window-options" value="${escapeHtml(f.value)}" autocomplete="off" spellcheck="false">`;
-  else input = `<input type="text" ${common} value="${escapeHtml(f.value)}" autocomplete="off" spellcheck="false"${f.kind === 'percent' ? ' inputmode="decimal"' : f.kind === 'number' ? ' inputmode="decimal"' : ''}>`;
-  const dflt = f.default === null || f.default === undefined ? '' : (f.overridden
-    ? `<span class="build-edit-default">library <code>${escapeHtml(f.default || '—')}</code></span>`
-    : '<span class="build-edit-default">library default</span>');
-  return `
-    <div class="build-edit-field${f.overridden ? ' is-overridden' : ''}${f.error ? ' is-error' : ''}" data-field="${escapeHtml(f.id)}">
-      <label class="build-edit-label" for="${escapeHtml(f.inputId)}"><span>${escapeHtml(f.label)}${f.kind === 'percent' ? ' <em>%</em>' : ''}</span>${dflt}${f.resettable ? `<button type="button" class="build-edit-reset" data-reset="${escapeHtml(f.id)}" data-sli="${escapeHtml(face.key)}" data-focus-key="${escapeHtml(f.focusKey)}:reset" title="${escapeHtml(`back to the library default (${f.default || '—'})`)}" aria-label="${escapeHtml(`${f.label}: back to the library default`)}"><span aria-hidden="true">↺</span> library default</button>` : ''}</label>
-      ${input}
-      ${f.error ? `<span class="build-edit-error" role="alert">${escapeHtml(f.error)}</span>` : `<span class="build-edit-hint">${escapeHtml(f.hint || '')}</span>`}
-    </div>`;
-}
-
-/** The Customise face of a selected card — editable on COMPILE, read-only on VERIFY (the same fields, no reset, the provenance line). */
+/** The Customise face of a selected card — editable on COMPILE, read-only on VERIFY (the same fields as value spans, no reset, the provenance line). One field is the shared atom (build-atoms.mjs editFieldHtml). */
 function editFaceHtml(face) {
   return `
     <div class="build-edit-face${face.readOnly ? ' is-readonly' : ''}" id="${escapeHtml(`build-face-${face.key}`)}" data-face="${escapeHtml(face.key)}">
@@ -92,7 +73,7 @@ function editFaceHtml(face) {
         <span class="build-edit-provenance">${escapeHtml(face.provenance)}</span>
       </div>
       ${face.generalError ? `<div class="build-edit-error" role="alert">${escapeHtml(face.generalError)}</div>` : ''}
-      ${face.fields.map(f => editFieldHtml(f, face)).join('')}
+      ${face.fields.map(f => editFieldHtml(f, { dataAttr: face.custom ? 'custom-field' : 'override-field', sli: face.key, readOnly: face.readOnly })).join('')}
       <div class="build-edit-evidence">${evidenceBadge(face.evidence.status)}${face.evidence.note ? `<span class="build-edit-evidence-note">${escapeHtml(face.evidence.note)}</span>` : '<span class="build-edit-evidence-note">the library’s evidence — its expression is what runs</span>'}</div>
       ${face.promqlWarning ? `<div class="build-edit-error build-edit-promql" role="alert">${escapeHtml(face.promqlWarning)}</div>` : ''}
     </div>`;
@@ -135,22 +116,9 @@ function rolodexCardHtml(it, model) {
     </article>`;
 }
 
-/** The last card of the rolodex on COMPILE: the '+ Custom SLI' form, the engine's usage errors inline. */
+/** The last card of the rolodex on COMPILE: the '+ Custom SLI' form, the engine's usage errors inline; each field the shared atom. */
 function customFormCardHtml(form) {
-  const field = (f) => {
-    const common = `class="build-edit-input" id="${escapeHtml(f.inputId)}" data-focus-key="${escapeHtml(f.focusKey)}" data-custom-draft="${escapeHtml(f.id)}"${f.error ? ' aria-invalid="true"' : ''}${f.required ? ' required' : ''}`;
-    let input;
-    if (f.kind === 'promql') input = `<textarea ${common} rows="2" spellcheck="false" autocomplete="off" placeholder="${escapeHtml(f.placeholder || '')}">${escapeHtml(f.value)}</textarea>`;
-    else if (f.kind === 'select') input = `<select ${common}>${f.options.map(o => `<option value="${escapeHtml(o)}"${o === f.value ? ' selected' : ''}>${escapeHtml(o)}</option>`).join('')}</select>`;
-    else if (f.kind === 'window') input = `<input type="text" ${common} list="build-window-options" value="${escapeHtml(f.value)}" autocomplete="off" spellcheck="false">`;
-    else input = `<input type="text" ${common} value="${escapeHtml(f.value)}" placeholder="${escapeHtml(f.placeholder || '')}" autocomplete="off" spellcheck="false"${f.kind === 'percent' || f.kind === 'number' ? ' inputmode="decimal"' : ''}>`;
-    return `
-      <div class="build-edit-field${f.error ? ' is-error' : ''}" data-field="${escapeHtml(f.id)}">
-        <label class="build-edit-label" for="${escapeHtml(f.inputId)}"><span>${escapeHtml(f.label)}${f.kind === 'percent' ? ' <em>%</em>' : ''}${f.required ? ' <i title="required">*</i>' : ''}</span></label>
-        ${input}
-        ${f.error ? `<span class="build-edit-error" role="alert">${escapeHtml(f.error)}</span>` : f.hint ? `<span class="build-edit-hint">${escapeHtml(f.hint)}</span>` : ''}
-      </div>`;
-  };
+  const field = (f) => editFieldHtml(f, { dataAttr: 'custom-draft', rows: 2 });
   return `
     <article class="build-rolo-card build-rolo-custom-form" data-snap-card data-custom-form aria-label="Add a custom SLI">
       <header class="build-rolo-head">
@@ -191,7 +159,7 @@ function rolodexHtml(model) {
         </div>
         <button type="button" class="build-rolodex-nav is-next" aria-label="next SLI" data-nav="1"><span aria-hidden="true">›</span></button>
         <div class="build-rolodex-counter" aria-live="polite">1 / ${r.items.length + (r.customForm ? 1 : 0)}</div>
-        <datalist id="build-window-options">${['7d', '28d', '30d', '90d'].map(w => `<option value="${w}"></option>`).join('')}</datalist>
+        <datalist id="build-window-options">${SLO_WINDOWS.map(w => `<option value="${escapeHtml(w)}"></option>`).join('')}</datalist>
       </div>` : '<div class="build-sheet-empty">pick a library entry in the definition column — its SLIs land here</div>'}
       ${model.mode === 'edit' ? '<p class="build-sheet-note">Any SLI of the selected products can be in the pack — the tier only seeds the defaults; one above the tier says which profile it starts from. Adding an SLI from a product that is not selected yet selects that product too. Customise copies the library’s values into your pack: the objective, the window, the bound, the PromQL, the description — each back to the library default in one click; an edited expression carries no library evidence. The last card writes an SLI from scratch.</p>' : ''}
     </section>`;

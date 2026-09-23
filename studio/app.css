@@ -8926,7 +8926,7 @@ body.chrome-observa .disco {
   border: 1px solid var(--line); border-radius: var(--r-md); resize: vertical;
 }
 .build-edit-input:focus { outline: 2px solid var(--accent, var(--ink-2)); outline-offset: 1px; }
-.build-edit-input[readonly] { background: var(--code-bg); color: var(--ink-2); cursor: default; }
+.build-edit-value { display: block; padding: 7px 10px; box-sizing: border-box; font: 12px/1.45 var(--mono); background: var(--code-bg); color: var(--ink-2); border: 1px dashed var(--line); border-radius: var(--r-md); white-space: pre-wrap; word-break: break-word; }
 .build-edit-input::placeholder { color: var(--ink-3); font-style: italic; }
 select.build-edit-input { appearance: auto; }
 .build-edit-hint { font: italic 10.5px/1.45 var(--serif); color: var(--ink-3); }

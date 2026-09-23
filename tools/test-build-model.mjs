@@ -54,7 +54,7 @@ import { renderBuildStack, buildStackHtml, wireBuildStack } from '../studio/buil
 import { renderBuildDefinition, buildDefinitionHtml, wireBuildDefinition, summaryHtml, seedCardHtml } from '../studio/build-definition-view.mjs';
 import { renderBuildSheet, buildSheetHtml, wireBuildSheet, wireRolodex, SMOOTH_SCROLL_GRACE_MS } from '../studio/build-sheet-view.mjs';
 import { artefactCardHtml } from '../studio/card-html.mjs';
-import { revealTodo, clauseRowHtml, switchHtml, evidenceDot, paramRowHtml, paramLabelHtml } from '../studio/build-atoms.mjs';
+import { revealTodo, clauseRowHtml, switchHtml, evidenceDot, paramRowHtml, paramLabelHtml, editFieldHtml } from '../studio/build-atoms.mjs';
 import { installDialogFocusTrap, TRAPPED_DIALOGS } from '../studio/util.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -1987,11 +1987,19 @@ test('the Customise face renders in place on COMPILE: the fields with the librar
   assert.ok(typedHtml.includes('data-custom-draft="query"') && typedHtml.includes('data-custom-draft="threshold"') && typedHtml.includes('data-custom-draft="unit"') && !typedHtml.includes('data-custom-draft="good"'), 'the threshold fields');
   assert.ok(typedHtml.includes('<span class="build-edit-error" role="alert">the window is one of 7d | 28d | 30d | 90d (the schema&#39;s SLO windows), got &quot;30x&quot;</span>') || typedHtml.includes('<span class="build-edit-error" role="alert">the window is one of 7d | 28d | 30d | 90d (the schema\'s SLO windows), got &quot;30x&quot;</span>'), 'the engine\'s error under the field it names');
   assert.ok(typedHtml.includes('data-add-custom data-focus-key="cf:add">Add to the pack'), 'filled: enabled');
-  // VERIFY: the read-only face — the values, the chips, the provenance line, no reset, no Customise, no form; readonly inputs.
+  // VERIFY: the read-only face — the values as code spans (paramRowHtml's read-only shape: no input at all), the chips, the provenance line, no reset, no Customise, no form.
   const verify = buildSheetHtml(buildSheetModel({ layerId: 'L1', build: copiesDraft(), library: LIBRARY, requirements: T2, mode: 'verify' }));
   assert.ok(verify.includes('<div class="build-edit-face is-readonly" id="build-face-kafka_produce_latency_p99" data-face="kafka_produce_latency_p99">') && verify.includes('<span class="build-edit-eyebrow">as customised</span>'));
-  assert.ok(verify.includes('data-override-field="objective" data-sli="kafka_produce_latency_p99" readonly value="99.5"'));
+  assert.ok(verify.includes('<div class="build-edit-field is-overridden is-read" data-field="objective">') && verify.includes('<code class="build-edit-value" data-override-field="objective" data-sli="kafka_produce_latency_p99">99.5</code>'));
+  assert.ok(verify.includes('<span class="build-edit-label"><span>Objective <em>%</em></span><span class="build-edit-default">library <code>99</code></span></span>'), 'the same label block, a span without a for');
+  assert.ok(!verify.includes('build-edit-input') && !/ readonly[ >]/.test(verify) && !verify.includes('<textarea'), 'no input on VERIFY — a value is a value, not a disabled field');
+  assert.ok(verify.includes('<code class="build-edit-value" data-custom-field="good" data-sli="checkout_success">sum(rate(checkout_ok_total[5m]))</code>'));
   assert.ok(!verify.includes('data-reset=') && !verify.includes('data-customise=') && !verify.includes('build-rolo-custom-form'));
+  // One atom for the face and the form: the same field markup with the data attribute the wiring reads (override-field / custom-field / custom-draft), the datalist from SLO_WINDOWS.
+  assert.ok(html.includes('<div class="build-edit-field" data-field="name">') && html.includes('<label class="build-edit-label" for="build-custom-name"><span>Name</span></label>') && html.includes('data-focus-key="cf:good" data-custom-draft="good" required rows="2"'));
+  assert.ok(html.includes('<datalist id="build-window-options">' + SLO_WINDOWS.map(w => `<option value="${w}"></option>`).join('') + '</datalist>'));
+  assert.equal(typeof editFieldHtml, 'function');
+  assert.ok(editFieldHtml({ id: 'objective', label: 'Objective', kind: 'percent', value: '99', focusKey: 'ov:x:objective', inputId: 'i-x', required: true }, { dataAttr: 'custom-draft' }).includes('<i title="required">*</i>'));
   assert.ok(verify.includes('<span class="build-rolo-chip is-customised" title="customised: objective, window">customised</span>') && verify.includes('<span class="build-rolo-chip is-custom" title="written in the studio — not a library SLI">custom</span>'));
   assert.ok(verify.includes('customised: objective, window — the rest is Apache Kafka’s') && verify.includes('custom — written in the studio') && verify.includes('customised: query — the rest is HTTP service (OTel semconv)’s'));
   assert.equal((verify.match(/class="build-edit-face is-readonly"/g) || []).length, 3, 'the two customised and the custom card');
