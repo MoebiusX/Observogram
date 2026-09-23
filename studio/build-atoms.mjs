@@ -40,9 +40,9 @@ export function paramRowHtml(p, { compact = false, idSuffix = '' } = {}) {
     </div>`;
 }
 
-/** Param inputs commit on change (Enter / blur), so typing never re-renders under the caret. */
-export function wireParamInputs(container, act) {
-  container.querySelectorAll('.build-param-input').forEach(inp => {
+/** Param inputs commit on change (Enter / blur), so typing never re-renders under the caret. `selector` narrows which inputs (the stack wires only its own). */
+export function wireParamInputs(container, act, selector = '.build-param-input') {
+  container.querySelectorAll(selector).forEach(inp => {
     const key = inp.closest('.build-param')?.dataset.param;
     inp.addEventListener('change', () => act.setParam(key, inp.value));
     inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } });

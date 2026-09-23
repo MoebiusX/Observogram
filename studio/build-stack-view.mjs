@@ -201,5 +201,6 @@ export function wireBuildStack(container, model, host = appHost) {
     setTimeout(() => todo.classList.remove('is-flash'), 1200);
     todo.querySelector('.build-param-input')?.focus({ preventScroll: true });
   }));
-  if (act) wireParamInputs(container, act);
+  // Only the stack's own inputs: a step that wires its parameter section itself must not see them wired twice.
+  if (act) wireParamInputs(container, act, '.build-stack .build-param-input');
 }
