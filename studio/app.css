@@ -8681,8 +8681,12 @@ body.chrome-observa .disco {
 .build-sheet-scrim {
   position: absolute; inset: -8px; z-index: 1; cursor: pointer;
   background: color-mix(in srgb, var(--paper) 58%, transparent);
-  animation: build-fade 200ms ease-out;
 }
+/* The entrance plays on the render that opens the sheet only (`is-entering`, a one-shot the
+   controller sets in openSheet): a re-render while it is open — a switch flipped, a param
+   committed, a settled keystroke — rebuilds the element without the class and does not replay it. */
+.build-sheet-scrim.is-entering { animation: build-fade 200ms ease-out; }
+.build-sheet.is-entering { animation: build-sheet-in 200ms ease-out; }
 .build-sheet {
   position: fixed; z-index: 61; top: calc(var(--observa-chrome-h, 96px) + 72px); right: 20px; bottom: 20px;
   width: min(600px, calc(100vw - 40px)); display: flex; flex-direction: column; box-sizing: border-box;
@@ -8692,7 +8696,6 @@ body.chrome-observa .disco {
   border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
   border-radius: 16px;
   box-shadow: 0 1px 2px rgba(15, 27, 45, 0.06), 0 12px 32px -12px rgba(15, 27, 45, 0.22), 0 40px 80px -32px rgba(15, 27, 45, 0.35);
-  animation: build-sheet-in 200ms ease-out;
   outline: none;
 }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) { .build-sheet { background: var(--card); } }
@@ -8842,7 +8845,7 @@ body.chrome-observa .disco {
   .build-sheet-head, .build-sheet-body { padding-left: 20px; padding-right: 20px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .build-sheet, .build-sheet-scrim { animation: none; }
+  .build-sheet.is-entering, .build-sheet-scrim.is-entering { animation: none; }
   .build-seg-thumb, .build-switch, .build-switch-knob, .build-rolo-card, .build-chip, .build-slab-add, .build-def-field input, .build-summary, .build-sheet-close, .build-rolodex-nav, .build-seg-btn { transition: none; }
   .build-rolodex-track { scroll-behavior: auto; }
 }

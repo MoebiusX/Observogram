@@ -1515,6 +1515,12 @@ test('renderBuildSheet draws the dialog headlessly: the ARIA, the title and ques
   const l1 = html('L1');
   assert.ok(l1.includes('<div class="build-sheet-scrim" data-close aria-hidden="true"></div>'));
   assert.ok(l1.includes('<aside class="build-sheet is-edit is-pass" role="dialog" aria-modal="false" aria-labelledby="build-sheet-title" aria-describedby="build-sheet-question" data-layer="L1" data-mode="edit" tabindex="-1">'));
+  // The entrance plays on the opening render only: `entering` (the controller's one-shot) adds is-entering to the
+  // scrim and the panel; a model built without it — every re-render while the sheet stays open — carries no class.
+  const entering = buildSheetHtml(buildSheetModel({ layerId: 'L1', build: draft(), library: LIBRARY, requirements: T2, mode: 'edit', entering: true }));
+  assert.ok(entering.includes('<div class="build-sheet-scrim is-entering" data-close') && entering.includes('<aside class="build-sheet is-edit is-pass is-entering" role="dialog"'));
+  assert.equal(buildSheetModel({ layerId: 'L1', build: draft(), library: LIBRARY, requirements: T2, mode: 'edit' }).entering, false, 'off by default: a re-render never replays the entrance');
+  assert.ok(!l1.includes('is-entering'));
   assert.ok(l1.includes('<h2 class="build-sheet-title" id="build-sheet-title">L1 · Contract</h2>'));
   assert.ok(l1.includes('<p class="build-sheet-question" id="build-sheet-question">What should we measure?</p>'));
   assert.ok(l1.includes('class="build-sheet-close" data-close aria-label="Close the layer sheet (Esc)"'));
@@ -1691,9 +1697,13 @@ test('the stylesheet carries the language: the translucent sheet with a solid fa
   assert.ok(/\.build-switch\[aria-checked="true"\]\s*\{ background: var\(--accent, var\(--BLD\)\); \}/.test(CSS_TEXT), 'the on state is the layer accent');
   assert.match(cssRule('.build-rolodex-track'), /scroll-snap-type:\s*x mandatory/, 'the rolodex snaps');
   assert.match(cssRule('.build-rolo-card'), /scroll-snap-align:\s*center/);
+  // The entrance animation lives on the opening render's class only, so a re-render while the sheet is open cannot replay it.
+  assert.ok(!/animation:/.test(sheet) && !/animation:/.test(cssRule('.build-sheet-scrim')), 'no animation on the bare sheet or scrim');
+  assert.match(cssRule('.build-sheet.is-entering'), /animation:\s*build-sheet-in 200ms ease-out/, 'the entrance is the is-entering render\'s');
+  assert.match(cssRule('.build-sheet-scrim.is-entering'), /animation:\s*build-fade 200ms ease-out/);
   const reduced = CSS_TEXT.match(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/g)?.find(b => b.includes('.build-sheet'));
   assert.ok(reduced, 'a reduced-motion block for the Build controls');
-  for (const sel of ['.build-seg-thumb', '.build-switch-knob', '.build-rolo-card', '.build-sheet']) assert.ok(reduced.includes(sel), `${sel} respects reduced motion`);
+  for (const sel of ['.build-seg-thumb', '.build-switch-knob', '.build-rolo-card', '.build-sheet.is-entering', '.build-sheet-scrim.is-entering']) assert.ok(reduced.includes(sel), `${sel} respects reduced motion`);
   assert.ok(reduced.includes('scroll-behavior: auto'));
   // No colour literal beyond the theme tokens and the shadows' neutral rgba in the new block (both themes follow).
   const axis = CSS_TEXT.slice(CSS_TEXT.indexOf('==== The axis'));

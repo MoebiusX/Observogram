@@ -1936,7 +1936,11 @@ function goToBuildStep(step, { todo = null, sheet } = {}) {
   state.build.step = step;
   state.build.wantedStep = null;   // an explicit choice supersedes a step still waited for
   state.build.preview = null;
-  if (sheet !== undefined) { state.build.sheetOpen = sheet; if (sheet) buildFocusNext = '.build-sheet'; }
+  if (sheet !== undefined) {
+    buildSheetEntering = !!sheet && sheet !== state.build.sheetOpen;   // reopening the same layer on another step is not an opening
+    state.build.sheetOpen = sheet;
+    if (sheet) buildFocusNext = '.build-sheet';
+  }
   paintObservaActiveTab();
   renderMainView();
   focusAfterRender();
@@ -1947,6 +1951,11 @@ function goToBuildStep(step, { todo = null, sheet } = {}) {
 // A one-shot focus target for the render that follows: the sheet when it opens, the
 // slab head it belongs to when it closes (focus moves in and returns).
 let buildFocusNext = null;
+// A one-shot for the render that opens a layer's sheet: that render draws the sheet with
+// `is-entering` (the 200 ms entrance); every later re-render while it stays open — a
+// switch flipped, a param committed, a settled keystroke — rebuilds it without the class,
+// so the entrance never replays (measured: it slid in six times per SLI switch flip).
+let buildSheetEntering = false;
 function focusAfterRender() {
   if (!buildFocusNext) return;
   const el = document.querySelector(buildFocusNext);
@@ -2130,6 +2139,7 @@ const buildActions = {
   openSheet(layerId) {
     const b = state.build;
     if (!layerId) return;
+    buildSheetEntering = layerId !== b.sheetOpen;
     b.sheetOpen = layerId;
     buildFocusNext = '.build-sheet';
     rerenderBuild();
@@ -2271,8 +2281,9 @@ function renderBuildView(view) {
     const sheetEl = document.createElement('div');
     sheetEl.className = 'build-sheet-host';
     main.appendChild(sheetEl);
-    renderBuildSheet(sheetEl, buildSheetModel({ layerId: b.sheetOpen, build: b, library, requirements: clauses, stack, checklist, mode: sheetModeFor(b.step) }), host);
+    renderBuildSheet(sheetEl, buildSheetModel({ layerId: b.sheetOpen, build: b, library, requirements: clauses, stack, checklist, mode: sheetModeFor(b.step), entering: buildSheetEntering }), host);
   }
+  buildSheetEntering = false;   // the entrance plays once
 }
 
 // Hero / home screen — two big affordances. Mode-aware.

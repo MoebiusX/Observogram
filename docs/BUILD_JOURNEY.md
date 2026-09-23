@@ -506,10 +506,12 @@ over the card colour, a solid `--card` where unsupported), soft layered shadows,
 separators, real switches with a sliding knob, a segmented control with a sliding thumb, a
 large title + subtitle in the sheet, one accent per layer (the layer token) used sparingly
 — the sheet's border and accent bar, the on-state of its switches, its ids — the studio's
-sans for controls and the mono for ids, 200 ms ease-out transitions for the sheet, the
-thumb, the knob and the cards with `prefers-reduced-motion` respected (no animation, no
-transition, `scroll-behavior: auto`), visible focus everywhere, both themes through the
-tokens only. Restraint: no 3D flips, no parallax, no new gradients.
+sans for controls and the mono for ids, 200 ms ease-out motion for the sheet's entrance
+(on the render that opens it only — `is-entering`, a one-shot the controller sets in
+`openSheet`; a re-render while it stays open rebuilds the panel without the class and never
+replays the slide), the thumb, the knob and the cards, with `prefers-reduced-motion`
+respected (no animation, no transition, `scroll-behavior: auto`), visible focus everywhere,
+both themes through the tokens only. Restraint: no 3D flips, no parallax, no new gradients.
 
 **Honest gaps stay.** *Pass on a placeholder* never reads as plain green — on the summary,
 on the slab edge and in the sheet's verdict pill; a section switched off says which clauses

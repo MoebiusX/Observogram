@@ -1213,7 +1213,7 @@ export function sheetLists(layerId, adapted, { compiled = false } = {}) {
  * param rows. `mode`: 'edit' (COMPILE) | 'preview' (DEFINE: read-only, with the
  * "Compose in Compile →" action) | 'verify' (read-only options, editable todos).
  */
-export function buildSheetModel({ layerId, build, library, requirements = [], stack = null, checklist = null, mode = 'edit' }) {
+export function buildSheetModel({ layerId, build, library, requirements = [], stack = null, checklist = null, mode = 'edit', entering = false }) {
   const def = LAYER_DEFS.find(d => d.id === layerId) || { id: layerId, num: layerId, name: layerId };
   const r = build?.result || null;
   const params = paramRows({ build, library });
@@ -1257,6 +1257,8 @@ export function buildSheetModel({ layerId, build, library, requirements = [], st
   return {
     layerId, num: slab.num, name: slab.name, title: `${slab.num} · ${slab.name}`, question: LAYER_QUESTIONS[layerId] || '',
     mode, readOnly: mode !== 'edit', compose: mode === 'preview', step: build?.step || null, tier: build?.tier || null,
+    // True on the render that opens the sheet only (the controller's one-shot): the entrance plays once, never on a re-render.
+    entering: !!entering,
     state: slab.state, stateText: slab.stateText, why: slab.why || [], dimmed: !!slab.dimmed, offSections: slab.offSections || [], notes: slab.notes || [],
     clauses, counts: { ...slab.counts, clauses: slab.maturity },
     switches, rolodex, paramGroups: groupsFor(), lists, compiled,

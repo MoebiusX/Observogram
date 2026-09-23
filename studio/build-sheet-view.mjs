@@ -161,8 +161,8 @@ export function buildSheetHtml(model) {
     ? 'A preview: the requirements the tier puts on this layer and what the selection brings. Composition happens on Compile.'
     : model.mode === 'verify' ? 'Read-only on Verify: the options as compiled, and the todos that rest on a placeholder.' : '';
   return `
-    <div class="build-sheet-scrim" data-close aria-hidden="true"></div>
-    <aside class="build-sheet is-${escapeHtml(model.mode)} is-${escapeHtml(model.state)}${model.dimmed ? ' is-dimmed' : ''}" role="dialog" aria-modal="false" aria-labelledby="build-sheet-title" aria-describedby="build-sheet-question" data-layer="${escapeHtml(model.layerId)}" data-mode="${escapeHtml(model.mode)}" tabindex="-1">
+    <div class="build-sheet-scrim${model.entering ? ' is-entering' : ''}" data-close aria-hidden="true"></div>
+    <aside class="build-sheet is-${escapeHtml(model.mode)} is-${escapeHtml(model.state)}${model.dimmed ? ' is-dimmed' : ''}${model.entering ? ' is-entering' : ''}" role="dialog" aria-modal="false" aria-labelledby="build-sheet-title" aria-describedby="build-sheet-question" data-layer="${escapeHtml(model.layerId)}" data-mode="${escapeHtml(model.mode)}" tabindex="-1">
       <header class="build-sheet-head">
         <div class="build-sheet-eyebrow">layer · ${escapeHtml(MODE_WORD[model.mode] || model.mode)} · ${escapeHtml(model.tier || '')}</div>
         <h2 class="build-sheet-title" id="build-sheet-title">${escapeHtml(model.title)}</h2>
