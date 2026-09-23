@@ -183,7 +183,7 @@ symbolOf(path, root)                            → { symbol, field }   (the ada
 sloIdFor(sliId, objective)                      → '<sli>_<pct>'        (broker_availability, 0.999 → broker_availability_99_9:
                                                                         the SLO id of an SLI, derived here, never re-implemented)
 constants: LIBRARY_FORMAT ('v1'), TIERS, ENTRY_KINDS, EVIDENCE_STATUSES, SLI_TYPES, SLO_WINDOWS, SECTION_TOGGLES,
-           BURN_PROFILES, SCAFFOLD_PARAMS, SEMCONV_VERSION
+           BURN_PROFILES, SCAFFOLD_PARAMS, SEMCONV_VERSION, MAX_PARAM_LENGTH (4096)
 ```
 
 `instantiatePack` throws on a usage error (unknown tier, an unknown SLI, no entry, a
@@ -197,7 +197,11 @@ SLIs were ticked, SELECT then GENERATE); only a selection with nothing left thro
 **Params and PromQL.** A param value is spliced verbatim into label matchers, scrape
 targets and endpoints, so a string carrying a double quote, a backslash or a control
 character is refused (a usage error; `--param 'broker_job=brokers"}'` once produced
-`up{job="brokers"}"} == bool 1` in a pack that validated and passed every MUST). Every
+`up{job="brokers"}"} == bool 1` in a pack that validated and passed every MUST), and so is
+a value longer than `MAX_PARAM_LENGTH` (4096 characters: a 3 MB value was once accepted and
+spliced into a 9 MB pack); the unknown-key error echoes at most ten of the unknown keys
+(200,000 bogus keys once made a 1.7 MB error). A value error reads `param <key>: …`, so a
+caller can point at the field. Every
 resolved SLI expression is then parsed with the parser given as `promql`: `packc init`
 passes the Lezer grammar (`tools/lib/promql-lezer.mjs`, an npm import, Node-only) and a
 failure is a `warnings` entry of kind `promql`, which makes the CLI exit 1. The

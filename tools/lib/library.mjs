@@ -404,15 +404,25 @@ function paramTable(entries, prefixed) {
  * The caller's params, checked before anything is substituted: every key must be a parameter of
  * this instantiation (a scaffold param, `<entry>.<param>`, or a bare entry param) and every value
  * a scalar. A mistyped key was silently dropped once (the pack kept its placeholder and the todo
- * still named the right key); an object was spliced in as '[object Object]'.
+ * still named the right key); an object was spliced in as '[object Object]'. The error echoes at
+ * most UNKNOWN_PARAMS_SHOWN of the unknown keys (a params object of 200,000 bogus keys once made a
+ * 1.7 MB error body) and a value is bounded by MAX_PARAM_LENGTH (a 3 MB value was accepted and
+ * spliced into a 9 MB pack); both are usage errors, `param <key>: …` for the value so a caller
+ * can point at the field.
  */
+export const MAX_PARAM_LENGTH = 4096;
+const UNKNOWN_PARAMS_SHOWN = 10;
 function checkParams(userParams, rows) {
   if (!isObj(userParams)) throw new Error('instantiatePack: params must be an object of key → string | number | boolean');
   const known = uniq([...rows.map(r => r.key), ...rows.filter(r => r.entry).map(r => r.id)]);
   const unknown = Object.keys(userParams).filter(k => !known.includes(k));
-  if (unknown.length) throw new Error(`unknown param ${unknown.join(', ')} (known: ${known.sort().join(', ')})`);
+  if (unknown.length) {
+    const shown = unknown.slice(0, UNKNOWN_PARAMS_SHOWN).join(', ') + (unknown.length > UNKNOWN_PARAMS_SHOWN ? ` and ${unknown.length - UNKNOWN_PARAMS_SHOWN} more` : '');
+    throw new Error(`unknown param ${shown} (known: ${known.sort().join(', ')})`);
+  }
   for (const [k, v] of Object.entries(userParams)) {
     if (!['string', 'number', 'boolean'].includes(typeof v)) throw new Error(`param ${k}: expected a string, number or boolean, got ${v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v}`);
+    if (typeof v === 'string' && v.length > MAX_PARAM_LENGTH) throw new Error(`param ${k}: a value may not exceed ${MAX_PARAM_LENGTH} characters (${v.length} given)`);
     if (typeof v === 'string' && forbiddenInParam(v)) throw new Error(`param ${k}: a value may not contain a double quote, a backslash or a control character (it is spliced verbatim into PromQL label matchers, scrape targets and endpoints)`);
   }
   return userParams;

@@ -29,7 +29,7 @@ import { adapt } from './lib/adapter.mjs';
 import { compileBurnRules } from './lib/burn-rules.mjs';
 import {
   parseLibraryEntry, validateLibraryEntry, libraryIndex, tierRequirements, defaultToggles, instantiatePack,
-  validationSummary, symbolOf, TIERS, SECTION_TOGGLES, SCAFFOLD_PARAMS, EVIDENCE_STATUSES,
+  validationSummary, symbolOf, TIERS, SECTION_TOGGLES, SCAFFOLD_PARAMS, EVIDENCE_STATUSES, MAX_PARAM_LENGTH,
 } from './lib/library.mjs';
 import { loadLibrary, findEntry } from '../server/library.mjs';
 import { parsePromqlDependencies as lezer } from './lib/promql-lezer.mjs';
@@ -274,6 +274,14 @@ test('params: an unknown key or a non-scalar value is an error, never a silent d
   assert.throws(() => build(byId.kafka, 'tier-2', { params: { exporter_job: ['a'] } }), /got array/);
   assert.throws(() => build(byId.kafka, 'tier-2', { params: { exporter_job: null } }), /got null/);
   assert.throws(() => build(byId.kafka, 'tier-2', { params: ['a'] }), /params must be an object/);
+  // the error is bounded: at most ten unknown keys are echoed (200,000 bogus keys once made a 1.7 MB 400 body) …
+  const many = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`p${i}`, '1']));
+  const echoed = (() => { try { build(byId.kafka, 'tier-2', { params: many }); } catch (e) { return e.message; } })();
+  assert.match(echoed, /^unknown param p0, p1, p2, p3, p4, p5, p6, p7, p8, p9 and 190 more \(known: /);
+  assert.ok(!echoed.includes('p10,') && echoed.length < 2000, `the echo is capped (${echoed.length} chars)`);
+  // … and a value is bounded by MAX_PARAM_LENGTH (a 3 MB value was accepted and spliced into a 9 MB pack)
+  assert.throws(() => build(byId.kafka, 'tier-2', { params: { broker_job: 'x'.repeat(MAX_PARAM_LENGTH + 1) } }), new RegExp(`param broker_job: a value may not exceed ${MAX_PARAM_LENGTH} characters \\(${MAX_PARAM_LENGTH + 1} given\\)`));
+  assert.match(build(byId.kafka, 'tier-2', { params: { broker_job: 'x'.repeat(MAX_PARAM_LENGTH) } }).canonical.spec.slis[0].good, /job="x{4096}"/, 'exactly the bound is accepted');
   // numbers and booleans are the scalars an entry may declare as defaults: accepted, stringified, recorded
   const num = build(byId.kafka, 'tier-2', { params: { broker_job: 42 } });
   assert.match(num.canonical.spec.slis[0].good, /job="42"/);
