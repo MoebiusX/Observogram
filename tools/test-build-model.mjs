@@ -1946,6 +1946,12 @@ test('the Customise face renders in place on COMPILE: the fields with the librar
   // The card stays one card in the snap track, expanded (is-open), the button reads Done, the chips say customised.
   assert.ok(html.includes('class="build-rolo-card is-selected is-customised is-open" data-snap-card data-sli="kafka_produce_latency_p99"'));
   assert.ok(html.includes('data-customise="kafka_produce_latency_p99" data-focus-key="customise:kafka_produce_latency_p99" aria-expanded="true" aria-controls="build-face-kafka_produce_latency_p99">Done</button>'));
+  // The disclosure's target exists: an open face carries the id the button controls (it did not — the reference dangled, measured with getElementById → null); a closed card's button names no target, since its face is not in the DOM.
+  assert.ok(html.includes('<div class="build-edit-face" id="build-face-kafka_produce_latency_p99" data-face="kafka_produce_latency_p99">'));
+  const controlled = [...html.matchAll(/aria-controls="([^"]+)"/g)].map(m => m[1]);
+  assert.deepEqual(controlled, ['build-face-kafka_produce_latency_p99', 'build-face-http_service_latency_p99', 'build-face-checkout_success'], 'the three open faces only');
+  assert.ok(controlled.every(id => html.includes(`id="${id}"`)), 'every aria-controls resolves to an id in the page');
+  assert.ok(/data-customise="kafka_broker_availability" data-focus-key="customise:kafka_broker_availability" aria-expanded="false">Customise<\/button>/.test(html), 'a closed card: aria-expanded=false and no dangling aria-controls');
   assert.ok(html.includes('<span class="build-rolo-chip is-customised" title="customised: objective, window">customised</span>'));
   assert.ok(html.includes('<b>99.5%</b><span>over 7d · customised</span>'), 'the overridden objective large');
   // The face: the objective as a percent with the library default and its reset, the window with the datalist, the bound at its default (no reset).
@@ -1983,13 +1989,13 @@ test('the Customise face renders in place on COMPILE: the fields with the librar
   assert.ok(typedHtml.includes('data-add-custom data-focus-key="cf:add">Add to the pack'), 'filled: enabled');
   // VERIFY: the read-only face — the values, the chips, the provenance line, no reset, no Customise, no form; readonly inputs.
   const verify = buildSheetHtml(buildSheetModel({ layerId: 'L1', build: copiesDraft(), library: LIBRARY, requirements: T2, mode: 'verify' }));
-  assert.ok(verify.includes('<div class="build-edit-face is-readonly" data-face="kafka_produce_latency_p99">') && verify.includes('<span class="build-edit-eyebrow">as customised</span>'));
+  assert.ok(verify.includes('<div class="build-edit-face is-readonly" id="build-face-kafka_produce_latency_p99" data-face="kafka_produce_latency_p99">') && verify.includes('<span class="build-edit-eyebrow">as customised</span>'));
   assert.ok(verify.includes('data-override-field="objective" data-sli="kafka_produce_latency_p99" readonly value="99.5"'));
   assert.ok(!verify.includes('data-reset=') && !verify.includes('data-customise=') && !verify.includes('build-rolo-custom-form'));
   assert.ok(verify.includes('<span class="build-rolo-chip is-customised" title="customised: objective, window">customised</span>') && verify.includes('<span class="build-rolo-chip is-custom" title="written in the studio — not a library SLI">custom</span>'));
   assert.ok(verify.includes('customised: objective, window — the rest is Apache Kafka’s') && verify.includes('custom — written in the studio') && verify.includes('customised: query — the rest is HTTP service (OTel semconv)’s'));
   assert.equal((verify.match(/class="build-edit-face is-readonly"/g) || []).length, 3, 'the two customised and the custom card');
-  assert.ok(!/class="build-edit-face is-readonly" data-face="kafka_broker_availability"/.test(verify), 'an untouched SLI shows no face');
+  assert.ok(!/data-face="kafka_broker_availability"/.test(verify), 'an untouched SLI shows no face');
   // Escaping at the seam: a hostile override never becomes markup.
   const hostile = draft({ overrides: { kafka_produce_latency_p99: { description: '<img src=x onerror="1">' } }, customOpen: { kafka_produce_latency_p99: true } });
   assert.ok(!buildSheetHtml(buildSheetModel({ layerId: 'L1', build: hostile, library: LIBRARY, requirements: T2, mode: 'edit' })).includes('<img'));

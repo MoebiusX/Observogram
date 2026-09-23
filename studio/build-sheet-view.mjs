@@ -86,7 +86,7 @@ function editFieldHtml(f, face) {
 /** The Customise face of a selected card — editable on COMPILE, read-only on VERIFY (the same fields, no reset, the provenance line). */
 function editFaceHtml(face) {
   return `
-    <div class="build-edit-face${face.readOnly ? ' is-readonly' : ''}" data-face="${escapeHtml(face.key)}">
+    <div class="build-edit-face${face.readOnly ? ' is-readonly' : ''}" id="${escapeHtml(`build-face-${face.key}`)}" data-face="${escapeHtml(face.key)}">
       <div class="build-edit-head">
         <span class="build-edit-eyebrow">${face.readOnly ? 'as customised' : face.custom ? 'your SLI' : 'customise — a copy of the library’s values'}</span>
         <span class="build-edit-provenance">${escapeHtml(face.provenance)}</span>
@@ -128,7 +128,7 @@ function rolodexCardHtml(it, model) {
       <footer class="build-rolo-foot">
         <span class="build-rolo-state">${escapeHtml(stateWord)}</span>
         <span class="build-rolo-actions">
-          ${canCustomise ? `<button type="button" class="build-rolo-customise${it.face ? ' is-on' : ''}" data-customise="${escapeHtml(it.key)}" data-focus-key="customise:${escapeHtml(it.key)}" aria-expanded="${it.face ? 'true' : 'false'}" aria-controls="${escapeHtml(`build-face-${it.key}`)}">${it.face ? 'Done' : 'Customise'}</button>` : ''}
+          ${canCustomise ? `<button type="button" class="build-rolo-customise${it.face ? ' is-on' : ''}" data-customise="${escapeHtml(it.key)}" data-focus-key="customise:${escapeHtml(it.key)}" aria-expanded="${it.face ? 'true' : 'false'}"${it.face ? ` aria-controls="${escapeHtml(`build-face-${it.key}`)}"` : ''}>${it.face ? 'Done' : 'Customise'}</button>` : ''}
           ${switchHtml({ on: it.selected, disabled: readOnly, reason: readOnly ? READ_ONLY_REASON[model.mode] : null, label, focusKey: it.focusKey, data: { sli: it.key, entry: it.entry || '', 'sli-id': it.id, selected: it.selected ? '1' : '0', 'entry-selected': it.entrySelected ? '1' : '0', ...(it.custom ? { custom: '1' } : {}) } })}
         </span>
       </footer>
