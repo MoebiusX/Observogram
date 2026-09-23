@@ -705,7 +705,11 @@ axis's focus keys — `ov:<sli>:<field>`, `cu:<id>:<field>`, `cf:<field>`,
 (`slugifySliId`; a typed id sticks), the type, the description, the PromQL fields per type,
 the unit and the bound for a threshold SLI, the objective as a percent, the window — with
 the engine's usage errors shown inline from the 400 of the last attempt (`customDraftErrors`,
-`splitBuildErrors.byCustom`) and **Add to the pack** → `addCustom(def)`: the controller
+`splitBuildErrors.byCustom`); an id an SLI of the entries owns, an id that is not a slug and
+an SLO id the pack already carries (`sloIdFor(id, objective)`) are said on the id field as
+the user types — the wiring rebuilds `customFormModel` on the draft as typed and repaints the
+field, and **Add to the pack** follows the model's `canSubmit`, never a second rule in the
+renderer — and **Add to the pack** → `addCustom(def)`: the controller
 tries one instantiation with the SLI added and commits the SLI and the pack only when the
 engine accepts it; the draft stays on the form otherwise (`customDraft`, kept across
 re-renders without a re-render under the caret). A custom SLI then behaves like any selected

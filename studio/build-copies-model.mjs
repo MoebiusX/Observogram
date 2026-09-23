@@ -93,6 +93,11 @@ export function ratioOf(text) {
   return Number((n / 100).toFixed(6));
 }
 
+/** The engine's sloIdFor, spelled once here for the browser: `<sli>_<pct>` with the percent's point as `_` (0.995 → `_99_5`). */
+export function sloIdFor(sliId, objective) {
+  return `${sliId}_${Number((objective * 100).toFixed(4)).toString().replace('.', '_')}`;
+}
+
 /** A typed name as an SLI id: lowercase, runs of anything else → '_', a leading letter, at most 63 characters. */
 export function slugifySliId(name) {
   return String(name || '').toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/_+/g, '_').replace(/^[^a-z]+/, '').replace(/_$/, '').slice(0, 63);
@@ -168,23 +173,30 @@ export function normalizeDraft(draft) {
 }
 
 /**
- * customFormModel(draft, { errors, existingKeys }) → the last rolodex card on COMPILE: the fields (the name
- * with the id auto-slugged beneath, the type, the description, the PromQL per type, the unit and the bound
- * for a threshold SLI, the objective as a percent, the window), each with its value, focus key (`cf:<field>`)
- * and the engine's usage error for it (from the 400 of the last 'Add to the pack'); an id clash with an SLI
- * already in the pack is said before the engine is asked; `canSubmit` needs the required fields filled.
- * The engine remains the authority on every value.
+ * customFormModel(draft, { errors, existingKeys, existingSloIds }) → the last rolodex card on COMPILE: the
+ * fields (the name with the id auto-slugged beneath, the type, the description, the PromQL per type, the unit
+ * and the bound for a threshold SLI, the objective as a percent, the window), each with its value, focus key
+ * (`cf:<field>`) and the engine's usage error for it (from the 400 of the last 'Add to the pack'); an id that
+ * an SLI of the entries owns (`existingKeys`: in the pack or not — the engine refuses both), an id that is not
+ * a slug, and an SLO id the pack already carries (`existingSloIds`: `sloIdFor(id, objective)` — the engine
+ * refuses two SLIs on one SLO id) are said on the id field before the engine is asked; `canSubmit` needs the
+ * required fields filled and none of those. The inputs it was built with come back (`existingKeys`,
+ * `existingSloIds`) so the wiring can rebuild it as the user types — one rule, the model's, never a second
+ * one in the renderer. The engine remains the authority on every value.
  */
-export function customFormModel(draft, { errors = null, existingKeys = [] } = {}) {
+export function customFormModel(draft, { errors = null, existingKeys = [], existingSloIds = [] } = {}) {
   const d = normalizeDraft(draft);
   const errs = errors && (errors[d.id] || errors['']) ? { ...(errors[''] || {}), ...(errors[d.id] || {}) } : {};
-  const idClash = d.id && existingKeys.includes(d.id) ? `${d.id} is already an SLI of the pack — pick another name` : null;
+  const idClash = d.id && existingKeys.includes(d.id) ? `${d.id} is already an SLI of the pack or of a selected product — pick another name` : null;
   const idBad = d.id && !CUSTOM_ID_RE.test(d.id) ? 'an id is a slug of 2 to 63 characters: a letter, then letters, digits or _' : null;
+  const objective = ratioOf(d.objective);
+  const sloId = d.id && Number.isFinite(objective) ? sloIdFor(d.id, objective) : null;
+  const sloClash = sloId && existingSloIds.includes(sloId) ? `${d.id} at ${String(d.objective).trim()} % would share the SLO id ${sloId} with an SLI of the pack — pick another id or objective` : null;
   const required = ['objective', 'window', ...(d.type === 'ratio' ? ['good', 'total'] : ['query', 'threshold'])];
   const field = (id, label, kind, extra = {}) => ({ id, label, kind, value: String(d[id] ?? ''), focusKey: `cf:${id}`, inputId: `build-custom-${id}`, error: hasOwn(errs, id) ? errs[id] : null, required: required.includes(id), ...extra });
   const fields = [
     field('name', 'Name', 'text', { placeholder: 'Checkout success', hint: d.id ? `id ${d.id}` : 'the id is slugged from the name' }),
-    field('id', 'Id', 'slug', { placeholder: 'checkout_success', error: hasOwn(errs, 'id') ? errs.id : idClash || idBad, hint: 'the SLI id the pack carries — edit it to keep your own' }),
+    field('id', 'Id', 'slug', { placeholder: 'checkout_success', error: hasOwn(errs, 'id') ? errs.id : idClash || idBad || sloClash, hint: 'the SLI id the pack carries — edit it to keep your own' }),
     field('type', 'Type', 'select', { options: SLI_TYPES, hint: 'ratio: good over total events · threshold: a value under an upper bound' }),
     field('description', 'Description', 'text', { placeholder: 'what it measures' }),
     ...(d.type === 'ratio'
@@ -195,8 +207,8 @@ export function customFormModel(draft, { errors = null, existingKeys = [] } = {}
   ];
   const filled = required.every(k => String(d[k] ?? '').trim() !== '') && !!d.id;
   return {
-    draft: d, fields, idClash, required,
-    canSubmit: filled && !idClash && !idBad,
+    draft: d, fields, idClash, sloClash, required, existingKeys: [...existingKeys], existingSloIds: [...existingSloIds],
+    canSubmit: filled && !idClash && !idBad && !sloClash,
     generalError: hasOwn(errs, '') ? errs[''] : null,
     addLabel: 'Add to the pack',
     focusKey: 'cf:add',

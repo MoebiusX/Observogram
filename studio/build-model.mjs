@@ -1525,7 +1525,11 @@ export function buildSheetModel({ layerId, build, library, requirements = [], st
         library: (library?.entries || []).length, chosen: selectedEntries(build, library).length,
       },
       // The last card on COMPILE: the '+ Custom SLI' form, with the engine's usage errors of the last attempt inline.
-      customForm: mode === 'edit' ? customFormModel(build?.customDraft, { errors: splitBuildErrors(build?.customDraftErrors).byCustom, existingKeys: [...new Set([...inPack.map(i => i.key), ...allSliKeys(build, library)])] }) : null,
+      customForm: mode === 'edit' ? customFormModel(build?.customDraft, {
+        errors: splitBuildErrors(build?.customDraftErrors).byCustom,
+        existingKeys: [...new Set([...inPack.map(i => i.key), ...allSliKeys(build, library)])],
+        existingSloIds: (r?.canonical?.spec?.slos || []).map(s => s.id),
+      }) : null,
     };
   })() : null;
   const { byParam } = errors;

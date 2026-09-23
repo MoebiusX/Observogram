@@ -42,7 +42,7 @@
 import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { sheetFocusSuffix } from './build-model.mjs';
-import { customDefFromDraft, normalizeDraft, slugifySliId, SLO_WINDOWS } from './build-copies-model.mjs';
+import { customDefFromDraft, customFormModel, normalizeDraft, slugifySliId, SLO_WINDOWS } from './build-copies-model.mjs';
 import { evidenceBadge, paramRowHtml, wireParamInputs, clauseRowHtml, todoHtml, switchHtml, editFieldHtml, STATE_GLYPH } from './build-atoms.mjs';
 
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
@@ -348,7 +348,8 @@ export function wireRolodexCopies(container, model, act) {
     // re-render, so a handler that re-read the stale render-time draft started again with idTouched=false,
     // re-slugged a typed id from the name on the next keystroke and Add sent the slug (measured live:
     // 'my_checkout_id' typed, 'checkout_success' sent and drawn).
-    let cur = normalizeDraft(model.rolodex?.customForm?.draft);
+    const formModel = model.rolodex?.customForm || customFormModel(null);
+    let cur = normalizeDraft(formModel.draft);
     const fieldEls = () => [...(form.querySelectorAll?.('[data-custom-draft]') || [])];
     const read = () => {
       const d = { ...cur };
@@ -366,8 +367,14 @@ export function wireRolodexCopies(container, model, act) {
           if (idEl && idEl !== el) idEl.value = cur.id;
         }
         act.update?.({ customDraft: cur, customDraftErrors: null }, { rerender: false, reinstantiate: false });
+        // The model's rule, rebuilt on the draft as typed (no re-render under the caret): the Add button follows
+        // its canSubmit, and the id field shows its clash / not-a-slug / SLO-id message while typing — the
+        // renderer had its own submit rule, which enabled Add for ids the model rejects and never showed why.
+        const live = customFormModel(cur, { existingKeys: formModel.existingKeys, existingSloIds: formModel.existingSloIds });
         const add = container.querySelector('[data-add-custom]');
-        if (add) add.disabled = !customFormCanSubmit(cur, model);
+        if (add) add.disabled = !live.canSubmit;
+        paintFormField(container, live.fields.find(f => f.id === 'id'));
+        paintFormField(container, live.fields.find(f => f.id === 'name'));
       });
       if (field === 'type') el.addEventListener('change', () => { cur = read(); act.update?.({ customDraft: cur }, { rerender: true, reinstantiate: false }); });
     });
@@ -379,12 +386,25 @@ export function wireRolodexCopies(container, model, act) {
   }
 }
 
-/** Whether the form as typed can be sent: the required fields of its type filled and an id that is not already an SLI of the pack. */
-function customFormCanSubmit(d, model) {
-  const required = ['objective', 'window', ...(d.type === 'threshold' ? ['query', 'threshold'] : ['good', 'total'])];
-  const id = d.idTouched ? d.id : slugifySliId(d.name);
-  const existing = (model.rolodex?.items || []).filter(i => i.selected).map(i => i.key);
-  return !!id && required.every(k => String(d[k] ?? '').trim() !== '') && !existing.includes(id);
+/**
+ * One form field's message repainted in place from the model's field (error or hint, the is-error class, the
+ * input's aria-invalid / aria-describedby / aria-errormessage) — what a re-render would draw, without the re-render.
+ */
+function paintFormField(container, f) {
+  if (!f) return;
+  const box = container.querySelector(`.build-rolo-custom-form [data-field="${f.id}"]`);
+  const msg = box?.querySelector?.('.build-edit-error, .build-edit-hint');
+  if (!box || !msg) return;
+  const err = f.error || null;
+  msg.className = err ? 'build-edit-error' : 'build-edit-hint';
+  msg.id = `${f.inputId}-${err ? 'error' : 'hint'}`;
+  if (err) msg.setAttribute('role', 'alert'); else msg.removeAttribute('role');
+  msg.textContent = err || f.hint || '';
+  box.classList?.toggle('is-error', !!err);
+  const inp = box.querySelector('.build-edit-input');
+  if (!inp) return;
+  if (err) { inp.setAttribute('aria-invalid', 'true'); inp.setAttribute('aria-errormessage', msg.id); } else { inp.removeAttribute('aria-invalid'); inp.removeAttribute('aria-errormessage'); }
+  inp.setAttribute('aria-describedby', msg.id);
 }
 
 /** The rolodex's motion: the buttons and the arrow keys move one card; the card nearest the centre is the current one. */

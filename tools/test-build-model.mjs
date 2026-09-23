@@ -23,7 +23,7 @@ import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
 import { evaluateConformance } from './lib/conformance.mjs';
 import { adapt, applyEnvironmentOverlay } from './lib/adapter.mjs';
 import { listTargets } from './lib/compile.mjs';
-import { instantiatePack, libraryIndex, tierRequirements, validationSummary, SCAFFOLD_PARAMS, TIERS as ENGINE_TIERS } from './lib/library.mjs';
+import { instantiatePack, libraryIndex, tierRequirements, validationSummary, SCAFFOLD_PARAMS, TIERS as ENGINE_TIERS, sloIdFor as engineSloIdFor } from './lib/library.mjs';
 import { loadLibrary, findEntry } from '../server/library.mjs';
 import { parsePromqlDependencies as lezer } from './lib/promql-lezer.mjs';
 import {
@@ -40,7 +40,7 @@ import {
 } from '../studio/build-model.mjs';
 import {
   OVERRIDE_FIELDS, SLO_WINDOWS, PROMQL_FIELDS, overrideFor, customisedFields, promqlEdited, effectiveSli, customEffective, percentText, ratioOf, slugifySliId,
-  fieldsForType, editFaceModel, normalizeDraft, customFormModel, customDefFromDraft, fieldValueFor, numberOrText,
+  fieldsForType, editFaceModel, normalizeDraft, customFormModel, customDefFromDraft, fieldValueFor, numberOrText, sloIdFor,
 } from '../studio/build-copies-model.mjs';
 import {
   loadLibrary as loadLibraryApi, loadRequirements, loadTargets, instantiate, compilePreview, registerBuiltPack,
@@ -1567,8 +1567,17 @@ test('the custom-form model: the id slugged from the name until it is typed, the
   const own = customFormModel({ name: 'Checkout success', id: 'checkout_ok', idTouched: true, good: 'a', total: 'b' });
   assert.equal(own.draft.id, 'checkout_ok');
   const clash = customFormModel({ name: 'kafka broker availability', good: 'a', total: 'b' }, { existingKeys: ['kafka_broker_availability'] });
-  assert.deepEqual([clash.draft.id, clash.canSubmit, clash.fields.find(f => f.id === 'id').error], ['kafka_broker_availability', false, 'kafka_broker_availability is already an SLI of the pack — pick another name']);
-  assert.equal(customFormModel({ name: 'x', good: 'a', total: 'b' }).canSubmit, false, 'a one-letter id is not a slug the engine takes');
+  assert.deepEqual([clash.draft.id, clash.canSubmit, clash.fields.find(f => f.id === 'id').error], ['kafka_broker_availability', false, 'kafka_broker_availability is already an SLI of the pack or of a selected product — pick another name']);
+  assert.deepEqual([clash.existingKeys, clash.existingSloIds], [['kafka_broker_availability'], []], 'the inputs come back, so the wiring rebuilds the same model as the user types');
+  const oneLetter = customFormModel({ name: 'x', good: 'a', total: 'b' });
+  assert.deepEqual([oneLetter.canSubmit, oneLetter.fields.find(f => f.id === 'id').error], [false, 'an id is a slug of 2 to 63 characters: a letter, then letters, digits or _'], 'a one-letter id is not a slug the engine takes');
+  // An SLO id the pack already carries is said on the id field before the engine refuses it (sloIdFor mirrors the engine's).
+  assert.deepEqual([sloIdFor('broker_availability', 0.9999), sloIdFor('checkout_success', 0.999), sloIdFor('x', 0.09)], [engineSloIdFor('broker_availability', 0.9999), engineSloIdFor('checkout_success', 0.999), engineSloIdFor('x', 0.09)]);
+  const sloClash = customFormModel({ name: 'kafka broker availability 99', good: 'a', total: 'b', objective: '99' }, { existingSloIds: ['kafka_broker_availability_99_99'] });
+  assert.deepEqual([sloClash.draft.id, sloClash.sloClash, sloClash.canSubmit, sloClash.fields.find(f => f.id === 'id').error], ['kafka_broker_availability_99', 'kafka_broker_availability_99 at 99 % would share the SLO id kafka_broker_availability_99_99 with an SLI of the pack — pick another id or objective', false, 'kafka_broker_availability_99 at 99 % would share the SLO id kafka_broker_availability_99_99 with an SLI of the pack — pick another id or objective']);
+  assert.equal(customFormModel({ name: 'kafka broker availability 99', good: 'a', total: 'b', objective: '99.9' }, { existingSloIds: ['kafka_broker_availability_99_99'] }).canSubmit, true, 'another objective: another SLO id');
+  const withSlos = buildSheetModel({ layerId: 'L1', build: copiesDraft({ customDraft: { name: 'kafka produce latency p99 99', good: 'a', total: 'b', objective: '5' } }), library: LIBRARY, requirements: T2, mode: 'edit' }).rolodex.customForm;
+  assert.ok(withSlos.existingSloIds.includes('kafka_produce_latency_p99_99_5') && withSlos.sloClash && !withSlos.canSubmit, 'the sheet model hands the pack\'s SLO ids in');
   // The engine's usage errors of the last attempt, keyed by field (from the 400).
   const errs = splitBuildErrors(['custom checkout_success.window: the window is one of 7d | 28d | 30d | 90d (the schema\'s SLO windows), got "30x"']).byCustom;
   const withErr = customFormModel({ name: 'Checkout success', good: 'a', total: 'b', window: '30x' }, { errors: errs });
@@ -2101,6 +2110,30 @@ test('the copies’ handlers: Customise opens the face (a re-render, no instanti
   // Clearing the typed id hands the slug back to the name in the draft (the input the user is typing in is left alone).
   i2.value = ''; i2.fire('input');
   assert.deepEqual([i2.value, seq.at(-1)], ['', ['update', 'checkout_success', false]]);
+  // The id field's message appears while typing, from the model (the renderer had its own submit rule and showed nothing): a clash, a one-letter id, an SLO-id clash, then a good id.
+  const paint = (id) => {
+    const attrs = {};
+    const msg = { className: 'build-edit-hint', id: `build-custom-${id}-hint`, textContent: '', setAttribute: (k, v) => { attrs[`msg.${k}`] = v; }, removeAttribute: (k) => { delete attrs[`msg.${k}`]; } };
+    const inp = { setAttribute: (k, v) => { attrs[`inp.${k}`] = v; }, removeAttribute: (k) => { delete attrs[`inp.${k}`]; } };
+    const cls = new Set();
+    return { box: { classList: { toggle: (c, on) => { if (on) cls.add(c); else cls.delete(c); } }, querySelector: (sel) => (sel === '.build-edit-input' ? inp : msg) }, msg, attrs, cls };
+  };
+  const idPaint = paint('id'), namePaint = paint('name');
+  const c3 = fakeContainer({ '[data-custom-form-fields]': [form2], '[data-add-custom]': [add2] });
+  c3.querySelector = (sel) => (sel === '[data-add-custom]' ? add2 : sel === '.build-rolo-custom-form [data-field="id"]' ? idPaint.box : sel === '.build-rolo-custom-form [data-field="name"]' ? namePaint.box : (sel === '[data-custom-form-fields]' ? form2 : null));
+  const withPack = buildSheetModel({ layerId: 'L1', build: copiesDraft({ customDraft: null }), library: LIBRARY, requirements: T2, mode: 'edit' });
+  wireBuildSheet(c3, withPack, { build: seqAct });
+  n2.value = 'Checkout Success'; n2.fire('input');
+  i2.value = 'kafka_broker_availability'; i2.fire('input');
+  assert.deepEqual([idPaint.msg.className, idPaint.msg.id, idPaint.msg.textContent, idPaint.cls.has('is-error'), idPaint.attrs['inp.aria-invalid'], idPaint.attrs['inp.aria-describedby'], idPaint.attrs['msg.role'], add2.disabled],
+    ['build-edit-error', 'build-custom-id-error', 'kafka_broker_availability is already an SLI of the pack or of a selected product — pick another name', true, 'true', 'build-custom-id-error', 'alert', true], 'the clash is said on the field as typed');
+  i2.value = 'a'; i2.fire('input');
+  assert.deepEqual([idPaint.msg.textContent, add2.disabled], ['an id is a slug of 2 to 63 characters: a letter, then letters, digits or _', true], 'a one-letter id: the model\'s rule, the button stays off (it woke before)');
+  i2.value = 'kafka_produce_latency_p99_99'; o2.value = '5'; o2.fire('input');
+  assert.ok(/would share the SLO id kafka_produce_latency_p99_99_5/.test(idPaint.msg.textContent) && add2.disabled, 'an SLO id the pack carries');
+  i2.value = 'my_checkout_id'; i2.fire('input');
+  assert.deepEqual([idPaint.msg.className, idPaint.msg.textContent, idPaint.cls.has('is-error'), 'inp.aria-invalid' in idPaint.attrs, idPaint.attrs['inp.aria-describedby'], namePaint.msg.textContent, add2.disabled],
+    ['build-edit-hint', 'the SLI id the pack carries — edit it to keep your own', false, false, 'build-custom-id-hint', 'id my_checkout_id', false], 'a good id: the hint is back, the name\'s hint follows, Add wakes');
 });
 
 test('a field left by Enter or Tab keeps a focus: the commit waits for the focus move, then hands the action the field\'s key when nothing is focused (Enter) and nothing when Tab\'s target is (the re-render restores it)', async () => {
