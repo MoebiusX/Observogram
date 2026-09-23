@@ -192,30 +192,43 @@ both paths join at Discover.
 
 Belongs here:
 
-- the layer stack of the pack being compiled as the centre stage of every step
-  — L1 Contract · L2 Telemetry · (L2X) · L3 Insight · L4 Action · L5
-  Validation · GOV — drawn through the same adapter and the same artefact
-  cards Discover uses, each slab's edge carrying the rubric's verdict for that
-  layer (pass · pass on a placeholder · fail · neutral when no clause applies),
-  a placeholder artefact as Scaffold, a clause the tier still needs as a ghost
-  card on its slab, the layer's clauses a click away on the slab
-- Define: the service name, owners, environment, the criticality tier, the
-  library entries (products with their evidence badge, archetypes) and the
-  selection's parameters with their defaults; the tier as the silhouette of the
+- the pack as the axis of the screen on every step: a sticky definition column
+  on the left (the service; the tier as a segmented control with its MUST ·
+  SHOULD counts; the library entries as chips with their evidence dot; the
+  conformance summary — pass · on a placeholder · fail, the failing clauses,
+  todos and placeholders left) and the layer stack of the pack being compiled
+  as the main surface — L1 Contract · L2 Telemetry · (L2X) · L3 Insight · L4
+  Action · L5 Validation · GOV — drawn through the same adapter and the same
+  artefact cards Discover uses, each slab's edge carrying the rubric's verdict
+  for that layer (pass · pass on a placeholder · fail · neutral when no clause
+  applies), a placeholder artefact as Scaffold, a clause the tier still needs as
+  a ghost card on its slab
+- a sheet per layer, opened from the slab head: the layer's question (L1 *What
+  should we measure?* … GOV *Who owns it?*), its clauses at the tier with their
+  state, and what the pack can carry on that layer — always read from the
+  instantiated pack, never a made-up menu; one sheet at a time, Esc closes,
+  focus returns to the slab; a preview on Define (*Compose in Compile →*),
+  editable on Compile, read-only with the layer's todos on Verify
+- Define: the service name, owners, environment, the criticality tier and the
+  library entries in the definition column; the tier as the silhouette of the
   pack it demands (one ghost per clause per slab, reshaping with the tier), the
   entries' SLIs and their SLOs as candidates on L1
-- Compile: the SLIs per entry (an SLI above the tier disabled with the tier it
-  needs), the objective and window each gets at the tier, the section toggles —
-  over the live stack of the instantiated pack (a section off dims its slab and
-  its clauses go red on the edge), the pack YAML as a collapsible below
+- Compile: composition on the sheets — the SLI rolodex on L1 (the selected
+  entries' SLIs, every product's behind a filter, an SLI above the tier disabled
+  with the tier it needs, the objective and window at the tier, add / remove as
+  a switch; adding from a product not yet selected selects it too) and the SLOs
+  switch; the Dashboards, Policy, Routes and Validation switches on their
+  layers, each saying which clauses it drops; the scrape targets, endpoints,
+  channels and probe targets as params on the layer they shape — over the live
+  stack of the instantiated pack (a section off dims its slab, marks its head
+  *off* and its clauses go red on the edge), the pack YAML as a collapsible below
 - Verify: the conformance verdict at the tier with three clause states (pass
   · pass on a placeholder · fail) and a maturity bar per layer, the schema
   verdict, the warnings, the stack with the todos pinned to the slab of the
-  artefact each names and the parameter that fills each one, the compiled
-  artefacts, the hand-off ("Ready to continue?": resolve or adjust at Define,
-  or continue with visible gaps, which registers the pack as an upload)
-- the tier's clauses as a compact summary beside every step (counts, the
-  failing ones, the full list on demand)
+  artefact each names (and on that layer's sheet) and the parameter that fills
+  each one, the compiled artefacts, the hand-off ("Ready to continue?": resolve
+  or adjust at Define, or continue with visible gaps, which registers the pack
+  as an upload)
 
 Does not belong here:
 
