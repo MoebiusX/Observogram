@@ -8,8 +8,11 @@
 // tier control and the library entries live in the definition column on the
 // left (build-definition-view.mjs), the selection's params on the layer
 // sheets (L2 · L4 · L5, build-sheet-view.mjs); a click on a slab opens its
-// sheet in preview with a "Compose in Compile →" action. Also home to the
-// step head and the compilation-error note the three steps share.
+// sheet in preview with a "Compose in Compile →" action. DEFINE is the
+// seeding step (docs/BUILD_JOURNEY.md "The seed and the copies"): its primary
+// action is "Seed the pack →" (host.build.seed: seeded, persisted, on to
+// COMPILE), "Continue to Compile →" once seeded. Also home to the step head
+// and the compilation-error note the three steps share.
 //
 // Renderer only (docs/UI_CONVENTIONS.md §2-3): render(container, model, host)
 // with the model from build-model.mjs's buildDefineModel and the host the
@@ -51,7 +54,7 @@ export function renderBuildDefine(container, model, host = appHost) {
   const candidates = stack.slabs.reduce((n, s) => n + s.ghosts.filter(g => g.kind === 'sli').length, 0);
   container.innerHTML = `
     <section class="build-step build-define">
-      ${stepHeadHtml('define', 'What are we observing?', 'Name the service, pick its criticality tier and the library entries it runs on in the column on the left — products with an evidence bar, or an archetype for a service built from scratch. The tier draws the silhouette of the pack it demands, layer by layer; the entries drop their SLIs onto L1; the edges light up as soon as the selection compiles. Click a layer to preview what it will carry.')}
+      ${stepHeadHtml('define', 'What are we observing?', 'Name the service, pick its criticality tier and the library entries it runs on in the column on the left — products with an evidence bar, or an archetype for a service built from scratch. The tier is a seed: it draws the silhouette of the pack it starts with, layer by layer, and decides which rubric grades it — never which SLIs you may add. The entries drop their SLIs onto L1; the edges light up as soon as the selection compiles. Click a layer to preview what it will carry, then seed the pack.')}
 
       ${instantiateErrorHtml(model.error, { stale: model.stale, where: 'on its layer sheet (L2 · L4 · L5)' })}
 
@@ -63,11 +66,11 @@ export function renderBuildDefine(container, model, host = appHost) {
       </div>
 
       <footer class="build-step-actions">
-        <span class="build-step-status">${!model.valid ? `Still needed: ${model.errors.map(escapeHtml).join(' and ')}.` : model.error ? 'Selection complete, but the last compilation failed — see the error above.' : `Selection complete — ${entriesCount} entr${entriesCount === 1 ? 'y' : 'ies'}; the tier’s clauses are being checked on the left.`}</span>
-        <button type="button" class="mcp-refresh-btn build-next" id="build-next" ${model.valid ? '' : 'disabled'}>Continue to Compile <span aria-hidden="true">→</span></button>
+        <span class="build-step-status">${!model.valid ? `Still needed: ${model.errors.map(escapeHtml).join(' and ')}.` : model.error ? 'Selection complete, but the last compilation failed — see the error above.' : model.seeded ? `Seeded — ${entriesCount} entr${entriesCount === 1 ? 'y' : 'ies'}; your customisations wait on Compile.` : `Selection complete — ${entriesCount} entr${entriesCount === 1 ? 'y' : 'ies'}; seeding the pack opens Compile, where you compose it.`}</span>
+        <button type="button" class="mcp-refresh-btn build-next" id="build-next" ${model.valid ? '' : 'disabled'}>${escapeHtml(model.nextLabel)} <span aria-hidden="true">→</span></button>
       </footer>
     </section>`;
 
   wireBuildStack(container, stack, host);
-  container.querySelector('#build-next').addEventListener('click', () => act.setStep('compile'));
+  container.querySelector('#build-next').addEventListener('click', () => (act.seed ? act.seed() : act.setStep('compile')));
 }

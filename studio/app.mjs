@@ -42,9 +42,10 @@ import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-
 import { initHost } from './host.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
-  BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, enterStep as enterBuildStep, stepAfterInstantiate as buildStepAfterInstantiate, focusFallbackSelectors,
-  buildDefineModel, buildCompileModel, buildVerifyModel, buildDefinitionModel, buildSheetModel, buildClauseChecklist, buildStatusLine, sheetModeFor, addSliSelection, placeholdersRemaining, retargetSlis,
+  BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, enterStep as enterBuildStep, stepAfterInstantiate as buildStepAfterInstantiate, focusFallbackSelectors, instantiateBody as buildInstantiateBody,
+  buildDefineModel, buildCompileModel, buildVerifyModel, buildDefinitionModel, buildSheetModel, buildClauseChecklist, buildStatusLine, sheetModeFor, addSliSelection, placeholdersRemaining, retargetSlis, retargetOverrides,
 } from './build-model.mjs';
+import { fieldValueFor, OVERRIDE_FIELDS as BUILD_OVERRIDE_FIELDS } from './build-copies-model.mjs';
 import {
   loadLibrary as loadBuildLibrary, libraryCache as buildLibraryCache, loadRequirements as loadBuildRequirements,
   requirementsCache as buildRequirementsCache, instantiate as instantiateBuild, compilePreview as compileBuildPreview,
@@ -1882,12 +1883,21 @@ function restoreBuildDraft(saved) {
     if (saved[k] === undefined || saved[k] === null) continue;
     if (k === 'toggles' && typeof saved[k] === 'object') { next.toggles = { ...next.toggles, ...saved[k] }; continue; }
     if (k === 'params' && typeof saved[k] === 'object' && !Array.isArray(saved[k])) { next.params = { ...saved[k] }; continue; }
+    // The copies: overrides as { key: { field: value } } (own, plain objects only), custom as a list of plain objects.
+    if (k === 'overrides' && typeof saved[k] === 'object' && !Array.isArray(saved[k])) {
+      next.overrides = Object.fromEntries(Object.entries(saved[k]).filter(([, v]) => v && typeof v === 'object' && !Array.isArray(v)).map(([key, v]) => [key, Object.fromEntries(Object.entries(v).filter(([field]) => BUILD_OVERRIDE_FIELDS.includes(field)))]));
+      continue;
+    }
+    if (k === 'custom' && Array.isArray(saved[k])) { next.custom = saved[k].filter(d => d && typeof d === 'object' && !Array.isArray(d) && typeof d.id === 'string').map(d => ({ ...d })); continue; }
+    if (k === 'seeded') { if (typeof saved[k] === 'boolean') next.seeded = saved[k]; continue; }
     if (k === 'entries' && Array.isArray(saved[k])) { next.entries = saved[k].filter(x => typeof x === 'string'); continue; }
     if (k === 'slis' && Array.isArray(saved[k])) { next.slis = saved[k].filter(x => typeof x === 'string'); continue; }
     if (k === 'step' && !BUILD_STEPS.includes(saved[k])) continue;
     if (k === 'tier' && !BUILD_TIERS.includes(saved[k])) continue;
     if (['name', 'owners', 'environment', 'registeredId', 'step', 'tier'].includes(k) && typeof saved[k] === 'string') next[k] = saved[k];
   }
+  // A draft persisted before the seed existed that sits on COMPILE or VERIFY was seeded in all but name.
+  if (typeof saved.seeded !== 'boolean' && ['compile', 'verify', 'generate', 'validate'].includes(saved.step)) next.seeded = true;
   state.build = next;
 }
 
@@ -1928,7 +1938,7 @@ function goToBuildStep(step, { todo = null, sheet } = {}) {
   if (!BUILD_STEPS.includes(step)) return;
   const reach = buildStepReachability(state.build);
   if (!reach[step]) {
-    toast(step === 'compile' ? 'Complete the selection first — a service name, a tier and at least one library entry.'
+    toast(step === 'compile' ? (buildDefineValid(state.build) ? 'Seed the pack first — "Seed the pack →" on Define opens Compile.' : 'Complete the definition first — a service name, a tier and at least one library entry — then seed the pack.')
       : 'Generate a pack with at least one SLI first.', 'error');
     return;
   }
@@ -1986,27 +1996,21 @@ async function runBuildInstantiate() {
     if (b.result || b.error || b.pending) { b.result = null; b.error = null; b.pending = false; rerenderBuild(); }
     return;
   }
-  // A draft restored from an older session may list an SLI above its tier:
-  // prune before sending, so the body never carries a key the tier excludes.
+  // A draft restored from an older session may list an SLI of an entry no longer selected: drop those keys
+  // before sending (an SLI above the tier stays — the tier is a seed, not a gate); the body carries the
+  // overrides of the SLIs in the selection only (instantiateBody with the library).
   const lib = buildLibraryCache();
   if (lib) b.slis = retargetSlis(b, lib);
   const seq = ++buildSeq;
   b.pending = true;
   paintBuildPending(true);
   let res;
-  try { res = await instantiateBuild(b); }
+  try { res = await instantiateBuild(b, { library: lib }); }
   catch (e) { res = { ok: false, errors: [e.message] }; }
   if (seq !== buildSeq || state.build !== b) return;
   b.pending = false;
   if (res?.ok) {
-    b.result = {
-      canonical: res.canonical, canonicalYaml: res.canonicalYaml || '', todos: res.todos || [], warnings: res.warnings || [],
-      summary: res.summary || null, conformance: res.conformance || null, schemaErrors: res.schemaErrors || [], provenance: res.provenance || null,
-      // The adapter's layered projection — what the stack draws and what Discover will show.
-      adapted: res.adapted || null,
-    };
-    b.error = null;
-    b.preview = null;   // compiled from the previous canonical
+    applyInstantiateOk(b, res);
   } else {
     // A usage error — a param value the engine refuses, every SLI unticked:
     // the previous pack stays (the views mark it stale and show the error
@@ -2021,6 +2025,18 @@ async function runBuildInstantiate() {
   Object.assign(b, buildStepAfterInstantiate(b));
   rerenderBuild();
   persistence.schedule();
+}
+// A successful instantiate response onto the draft: the result the views read, the error cleared, the
+// preview (compiled from the previous canonical) dropped.
+function applyInstantiateOk(b, res) {
+  b.result = {
+    canonical: res.canonical, canonicalYaml: res.canonicalYaml || '', todos: res.todos || [], warnings: res.warnings || [],
+    summary: res.summary || null, conformance: res.conformance || null, schemaErrors: res.schemaErrors || [], provenance: res.provenance || null,
+    // The adapter's layered projection — what the stack draws and what Discover will show.
+    adapted: res.adapted || null,
+  };
+  b.error = null;
+  b.preview = null;
 }
 function paintBuildPending(on) {
   document.querySelector('.build-summary')?.classList.toggle('is-pending', on);
@@ -2066,6 +2082,9 @@ function rerenderBuild() {
   window.scrollTo({ top: scrollY });
 }
 
+// The draft's instantiate body as runBuildInstantiate sends it (the overrides filtered to the selection).
+function instantiateBodyOf(b) { return buildInstantiateBody(b, buildLibraryCache()); }
+
 // The actions the step renderers call (they never import app.mjs).
 const buildActions = {
   // Merge a patch into the draft; text fields re-instantiate after a pause,
@@ -2081,10 +2100,9 @@ const buildActions = {
     if (!BUILD_TIERS.includes(tier) || tier === b.tier) return;
     const prev = b.tier;
     b.tier = tier;
-    // An explicit SLI list follows the tier: a key the new tier does not reach
-    // is dropped (its row is disabled and unchecked, so nothing else could
-    // clear the sli-excluded warning it would raise on every regeneration),
-    // a key the new tier unlocks comes in ticked.
+    // The tier is a seed: an explicit SLI list keeps every SLI the user has (above the new tier too, with
+    // its overrides) and takes in what the new tier unlocks — the library's defaults refresh, the
+    // customisations stay (docs/BUILD_JOURNEY.md "The seed and the copies").
     b.slis = retargetSlis(b, buildLibraryCache(), prev);
     ensureBuildRequirements(tier);
     rerenderBuild();
@@ -2092,9 +2110,13 @@ const buildActions = {
   },
   toggleEntry(id) {
     const b = state.build;
+    const prevEntries = [...b.entries];
     b.entries = b.entries.includes(id) ? b.entries.filter(x => x !== id) : [...b.entries, id];
-    // The SLI selection is per entry set: a new composition starts from the tier's defaults.
+    // The SLI selection is per entry set: a new composition starts from the tier's defaults. The overrides
+    // follow their SLIs: re-keyed for the new composition, and an entry that leaves takes its SLIs' with it.
     b.slis = null;
+    b.overrides = retargetOverrides({ build: b, library: buildLibraryCache() }, prevEntries);
+    b.customOpen = {};
     rerenderBuild();
     scheduleBuildInstantiate(0);
   },
@@ -2127,12 +2149,103 @@ const buildActions = {
   // the new composition). Pure part: addSliSelection.
   addSli(entryId, sliId) {
     const b = state.build;
+    const prevEntries = [...b.entries];
     const next = addSliSelection({ build: b, library: buildLibraryCache() }, entryId, sliId);
     if (!next.changed) { if (next.reason) toast(`${sliId}: ${next.reason}`, 'error'); return; }
     b.entries = next.entries;
     b.slis = next.slis;
+    if (next.entries.length !== prevEntries.length) b.overrides = retargetOverrides({ build: b, library: buildLibraryCache() }, prevEntries);
     rerenderBuild();
     scheduleBuildInstantiate(0);
+  },
+  // DEFINE's primary action: the definition is confirmed once (seeded, persisted) and COMPILE opens; the
+  // column recedes into the seed card there. Idempotent: once seeded it is "Continue to Compile →".
+  seed() {
+    const b = state.build;
+    if (!buildDefineValid(b)) return;
+    b.seeded = true;
+    persistence.schedule();
+    goToBuildStep('compile');
+  },
+  // The copies (docs/BUILD_JOURNEY.md "The seed and the copies"): an override is copy-on-write over the
+  // library's value for one field of one SLI; an empty value clears it. The engine validates on the
+  // re-instantiation and its `override <sli>.<field>: …` error lands on the card's field.
+  setOverride(key, field, text) {
+    const b = state.build;
+    const value = fieldValueFor(field, text);
+    const current = { ...(Object.prototype.hasOwnProperty.call(b.overrides || {}, key) ? b.overrides[key] : {}) };
+    if (value === null) delete current[field]; else current[field] = value;
+    const overrides = { ...(b.overrides || {}) };
+    if (Object.keys(current).length) overrides[key] = current; else delete overrides[key];
+    if (JSON.stringify(overrides) === JSON.stringify(b.overrides || {})) return;
+    b.overrides = overrides;
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+    persistence.schedule();
+  },
+  clearOverride(key, field) {
+    const b = state.build;
+    if (!Object.prototype.hasOwnProperty.call(b.overrides || {}, key)) return;
+    const current = { ...b.overrides[key] };
+    if (field) delete current[field];
+    const overrides = { ...b.overrides };
+    if (field && Object.keys(current).length) overrides[key] = current; else delete overrides[key];
+    b.overrides = overrides;
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+    persistence.schedule();
+  },
+  // A custom SLI is tried before it is kept: one instantiation with it added; the engine's usage errors
+  // (a 400) stay on the form, inline, and nothing changes in the pack; a success commits it and the pack.
+  async addCustom(def, draft = null) {
+    const b = state.build;
+    const custom = [...(b.custom || []), def];
+    const seq = ++buildSeq;
+    b.pending = true;
+    b.customDraftErrors = null;
+    paintBuildPending(true);
+    let res;
+    try { res = await instantiateBuild(b, { body: { ...instantiateBodyOf(b), custom } }); }
+    catch (e) { res = { ok: false, errors: [e.message] }; }
+    if (seq !== buildSeq || state.build !== b) return;
+    b.pending = false;
+    if (res?.ok) {
+      b.custom = custom;
+      b.customDraft = null;
+      b.customDraftErrors = null;
+      b.customOpen = { ...(b.customOpen || {}), [def.id]: false };
+      applyInstantiateOk(b, res);
+      persistence.schedule();
+    } else {
+      b.customDraft = draft || b.customDraft;
+      b.customDraftErrors = res?.errors || [res?.error || 'the custom SLI was refused'];
+    }
+    Object.assign(b, buildStepAfterInstantiate(b));
+    rerenderBuild();
+  },
+  updateCustom(id, field, text) {
+    const b = state.build;
+    const i = (b.custom || []).findIndex(d => d.id === id);
+    if (i < 0) return;
+    const value = fieldValueFor(field, text);
+    const next = { ...b.custom[i] };
+    if (value === null) delete next[field]; else next[field] = value;
+    if (JSON.stringify(next) === JSON.stringify(b.custom[i])) return;
+    b.custom = b.custom.map((d, j) => (j === i ? next : d));
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+    persistence.schedule();
+  },
+  removeCustom(id) {
+    const b = state.build;
+    if (!(b.custom || []).some(d => d.id === id)) return;
+    b.custom = b.custom.filter(d => d.id !== id);
+    const open = { ...(b.customOpen || {}) };
+    delete open[id];
+    b.customOpen = open;
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+    persistence.schedule();
   },
   // The layer sheet: one at a time, remembered on the draft (never persisted); focus
   // moves into the sheet when it opens and returns to the slab head when it closes.

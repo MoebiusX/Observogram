@@ -36,8 +36,20 @@
 // read from the adapter's projection). The sheet writes through the same
 // actions the steps always had (setSli / addSli, setToggle, setParam,
 // toggleEntry, setTier); the models here only say what to draw.
+//
+// The seed and the copies (docs/BUILD_JOURNEY.md "The seed and the copies"):
+// the tier is a seed, never a gate — the rolodex never disables an SLI above
+// the tier (it says which profile it starts from), addSliSelection never
+// refuses one, retargetSlis keeps every SLI of a still-selected entry across
+// a tier change and only refreshes the tier's defaults; the library values
+// are copies the user edits (build.overrides, build.custom — the pure edit
+// face and custom-form models live in build-copies-model.mjs), and DEFINE is
+// the seeding step: buildStepReachability opens COMPILE once the definition
+// is valid AND seeded, and the definition column becomes a read-only seed
+// card there (seedCardModel).
 
 import { LAYER_DEFS, L4_SUBGROUPS } from './constants.mjs';
+import { overrideFor, effectiveSli, customisedFields, promqlEdited, editFaceModel, customFormModel, customEffective } from './build-copies-model.mjs';
 
 export const BUILD_STEPS = ['define', 'compile', 'verify'];
 /** Least stringent first — the order the engine lists them and the DEFINE step shows them. */
@@ -57,9 +69,11 @@ export const SECTION_TOGGLES = [
 ];
 export const WARNING_KINDS = {
   promql: { label: 'PromQL', blocking: true, hint: 'an SLI expression does not parse once the params are in — the pack must not ship' },
-  'sli-excluded': { label: 'SLI above the tier', blocking: false, hint: 'a selected SLI needs a higher tier and was excluded' },
+  override: { label: 'Override kept aside', blocking: false, hint: 'an override names an SLI that is not in the pack; nothing is applied until it is' },
   'burn-rules': { label: 'Burn rules', blocking: false, hint: 'the burn-rule generator’s own warnings on the produced policy' },
 };
+/** The one-line note at the top of the DEFINE column once the pack is seeded. */
+export const SEEDED_NOTE = 'Seeded. Changing the tier re-grades the pack and refreshes library defaults; your customisations stay. Removing a product drops its SLIs.';
 /** The artefact families a todo path falls into (grouping for the VERIFY step). */
 export const ARTEFACT_GROUPS = [
   { id: 'alerting', label: 'Alerting routes', match: /^alerting\./ },
@@ -118,14 +132,26 @@ export function defineValid(build) {
 }
 
 /**
- * Which header cards are reachable: a step opens when the previous step's inputs
- * are valid. A usage error keeps the previous pack (the controller marks it
- * stale rather than dropping it), so Verify stays reachable while the field
- * the error names is fixed — on Verify itself, where the param inputs are.
+ * Whether the definition was seeded ("Seed the pack →" on DEFINE). A draft persisted before the seed existed
+ * (no `seeded` field) that sits on COMPILE or VERIFY was seeded in all but name: it counts as seeded, so a
+ * reload lands where it was (the controller migrates the field on load; this tolerates it either way).
+ */
+export function isSeeded(build) {
+  if (!build) return false;
+  if (typeof build.seeded === 'boolean') return build.seeded;
+  return ['compile', 'verify'].includes(LEGACY_STEP[build.step] || build.step);
+}
+
+/**
+ * Which header cards are reachable: DEFINE always; COMPILE when the definition is valid AND seeded (the
+ * definition is a wizard stage: what the pack starts from is confirmed once, then it recedes into the seed
+ * card); VERIFY additionally needs a pack with at least one SLI. A usage error keeps the previous pack (the
+ * controller marks it stale rather than dropping it), so Verify stays reachable while the field the error
+ * names is fixed — on Verify itself, where the param inputs are.
  */
 export function buildStepReachability(build) {
   const define = true;
-  const compile = defineValid(build);
+  const compile = defineValid(build) && isSeeded(build);
   const r = build?.result;
   const verify = compile && !!r && Array.isArray(r.canonical?.spec?.slis) && r.canonical.spec.slis.length >= 1;
   return { define, compile, verify };
@@ -141,12 +167,19 @@ export function buildStepReachability(build) {
  */
 export function splitBuildErrors(errors) {
   const byParam = {};
+  const byOverride = {};   // { [sliKey]: { [field]: why } } — `override <sli>.<field>: …`, shown on the card's edit face
+  const byCustom = {};     // { [id]: { [field | '']: why } } — `custom <id>.<field>: …` / `custom <id>: …`, shown on the custom card
   const general = [];
   for (const e of errors || []) {
-    const m = /^param ([^\s:]+): ([\s\S]+)$/.exec(String(e));
-    if (m) byParam[m[1]] = m[2]; else general.push(String(e));
+    const text = String(e);
+    let m;
+    if ((m = /^param ([^\s:]+): ([\s\S]+)$/.exec(text))) byParam[m[1]] = m[2];
+    else if ((m = /^override ([a-z][a-z0-9_]*)\.([a-z_]+): ([\s\S]+)$/.exec(text))) (byOverride[m[1]] ??= {})[m[2]] = m[3];
+    else if ((m = /^custom ([a-z][a-z0-9_]*)(?:\.([a-z_]+))?: ([\s\S]+)$/.exec(text))) (byCustom[m[1]] ??= {})[m[2] || ''] = m[3];
+    else if ((m = /^custom\[\d+\](?:\.([a-z_]+))?: ([\s\S]+)$/.exec(text))) (byCustom[''] ??= {})[m[1] || ''] = m[2];
+    else general.push(text);
   }
-  return { byParam, general, paramCount: Object.keys(byParam).length, count: (errors || []).length };
+  return { byParam, byOverride, byCustom, general, paramCount: Object.keys(byParam).length, count: (errors || []).length };
 }
 
 /** The last instantiation failed while an earlier pack is still shown: what the views mark stale. */
@@ -206,6 +239,9 @@ export function todoFocusSuffix(layerId, path) {
 export function focusFallbackSelectors(key) {
   const k = String(key || '');
   if (/^tier:/.test(k)) return ['.build-seg-btn[aria-checked="true"]'];
+  // An edit-face input (ov:<sli>:<field>), the custom form (cf:<field>) or a rolodex switch (sli:<entry>:<id>)
+  // that vanished — the card closed, the SLI was removed, the form was reset — hands focus to the sheet.
+  if (/^(ov|cf|sli|customise):/.test(k)) return ['.build-sheet .build-edit-input', '.build-sheet .build-param-input', '.build-sheet-close'];
   const entry = /^entry:([\w.-]+)$/.exec(k);
   if (entry) return [`.build-chip[data-entry="${entry[1]}"]`, '.build-chip'];
   const m = /^param:[^@]+@([^/]+)\//.exec(k);
@@ -227,30 +263,68 @@ export function stackExpanded(build) {
 
 // ---------- the SLI selection across tiers ----------
 
-/** The SLI keys a tier reaches for the selection — what an explicit list may contain (the engine's defaultToggles). */
+/** The SLI keys a tier reaches for the selection — the tier's defaults (the engine's defaultToggles). */
 export function reachableSliKeys(build, library, tier = build?.tier) {
   const entries = selectedEntries(build, library);
   const composed = entries.length > 1;
   return entries.flatMap(en => (en.slis || []).filter(s => atTier(tier, s.minTier)).map(s => sliKey(en.id, s.id, composed)));
 }
+/** Every SLI key of the selected entries, at any tier — what an explicit list may contain (the tier is a seed, not a gate). */
+export function allSliKeys(build, library) {
+  const entries = selectedEntries(build, library);
+  const composed = entries.length > 1;
+  return entries.flatMap(en => (en.slis || []).map(s => sliKey(en.id, s.id, composed)));
+}
+/** The library SLI keys in the pack: the explicit list (known keys only) or the tier's defaults. */
+export function selectedSliKeys(build, library) {
+  const all = allSliKeys(build, library);
+  return Array.isArray(build?.slis) ? build.slis.filter(k => all.includes(k)) : reachableSliKeys(build, library);
+}
+const sameSet = (a, b) => a.length === b.length && a.every(k => b.includes(k));
 
 /**
- * The explicit SLI list after a tier change (`prevTier` → build.tier): a key the
- * new tier does not reach is dropped — the engine would exclude it with an
- * `sli-excluded` warning nobody could clear, since its row is disabled and
- * unchecked — a key the new tier unlocks comes in ticked (the user never had
- * that choice at the old tier), and a list equal to the tier's defaults
- * collapses to null. null (the defaults) stays null. Without `prevTier` it only
- * prunes: a draft restored from an older session may list an SLI above its tier.
+ * The explicit SLI list after a tier change (`prevTier` → build.tier) or an entry change: every key of a
+ * still-selected entry stays — above the new tier too, with its overrides (the tier never forbids; the user
+ * chose it) — a key whose entry left the selection drops, and a key the new tier unlocks comes in ticked (the
+ * tier refreshes the library's defaults). An explicit list stays explicit: it never collapses to null here —
+ * at tier-1 every key is a default, and a list collapsed there lost an above-tier pick on the way back down
+ * (measured: tier-2 + controller_election_rate → tier-1 → tier-2 came back without it). null (the defaults)
+ * stays null: the defaults follow the tier by themselves. Without `prevTier` it only drops the keys of
+ * entries no longer selected.
  */
 export function retargetSlis(build, library, prevTier) {
   if (!Array.isArray(build?.slis)) return null;
+  const all = allSliKeys(build, library);
   const now = reachableSliKeys(build, library);
   const before = new Set(prevTier ? reachableSliKeys(build, library, prevTier) : now);
-  const keep = new Set(build.slis.filter(k => now.includes(k)));
+  const keep = new Set(build.slis.filter(k => all.includes(k)));
   for (const k of now) if (!before.has(k)) keep.add(k);
-  const next = now.filter(k => keep.has(k));
-  return next.length === now.length ? null : next;
+  return all.filter(k => keep.has(k));
+}
+
+/**
+ * The overrides after the entry set changed (`prevEntries` → build.entries): the SLI ids the pack carries are
+ * prefixed once several entries compose, so an override keyed `broker_availability` becomes
+ * `kafka_broker_availability` when a second entry joins (and back). A key of an entry no longer selected
+ * drops with its SLI — the note on DEFINE says so; a key of no entry (a custom SLI's, a stale one) is kept as
+ * it is (the engine reports an unknown one as a warning). Pure: a new object.
+ */
+export function retargetOverrides({ build, library }, prevEntries) {
+  const rows = library?.entries || [];
+  const prev = Array.isArray(prevEntries) ? prevEntries : (build?.entries || []);
+  const prevComposed = prev.length > 1;
+  const owner = new Map();
+  for (const id of prev) for (const s of (rows.find(r => r.id === id)?.slis || [])) owner.set(sliKey(id, s.id, prevComposed), [id, s.id]);
+  const now = build?.entries || [];
+  const composed = now.length > 1;
+  const out = {};
+  for (const [k, ov] of Object.entries(build?.overrides || {})) {
+    const hit = owner.get(k);
+    if (!hit) { out[k] = ov; continue; }
+    if (!now.includes(hit[0])) continue;
+    out[sliKey(hit[0], hit[1], composed)] = ov;
+  }
+  return out;
 }
 
 // ---------- params ----------
@@ -306,8 +380,26 @@ export function effectiveParams(build) {
   return out;
 }
 
-/** The body POST /api/library/instantiate takes, from the draft. */
-export function instantiateBody(build) {
+/**
+ * The SLI overrides an instantiate body carries: the fields the user edited (own keys, non-empty), for the
+ * SLIs in the current selection when the library is known — an override kept for an SLI that is not in the
+ * pack right now (unticked, its entry removed) stays in the draft and comes back with the SLI, and never
+ * makes the engine warn about it in the meantime.
+ */
+export function effectiveOverrides(build, library = null) {
+  const inPack = library ? new Set(selectedSliKeys(build, library)) : null;
+  const out = {};
+  for (const [k, ov] of Object.entries(build?.overrides || {})) {
+    if (inPack && !inPack.has(k)) continue;
+    const fields = {};
+    for (const [field, v] of Object.entries(ov || {})) if (v !== null && v !== undefined && String(v) !== '') fields[field] = v;
+    if (Object.keys(fields).length) out[k] = fields;
+  }
+  return out;
+}
+
+/** The body POST /api/library/instantiate takes, from the draft (the overrides filtered to the selection when `library` is given). */
+export function instantiateBody(build, library = null) {
   const toggles = { ...(build?.toggles || {}) };
   if (Array.isArray(build?.slis)) toggles.slis = build.slis;
   return {
@@ -318,6 +410,8 @@ export function instantiateBody(build) {
     owners: parseOwners(build?.owners),
     params: effectiveParams(build),
     toggles,
+    overrides: effectiveOverrides(build, library),
+    custom: (build?.custom || []).map(def => ({ ...def })),
   };
 }
 
@@ -377,6 +471,9 @@ export function buildDefineModel({ build, library, requirements = {} }) {
     placeholders: { flagged: params.filter(p => p.placeholder && p.atDefault).length, remaining: r ? placeholdersRemaining(r) : null },
     libraryErrors: library?.errors || [],
     valid: errors.length === 0, errors,
+    // DEFINE is the seeding step: its primary action seeds the pack once, then reads as a continue.
+    seeded: isSeeded(build),
+    nextLabel: isSeeded(build) ? 'Continue to Compile' : 'Seed the pack',
     // The last instantiation's usage errors (a rejected param value is marked on its row).
     error: build?.error ? splitBuildErrors(build.error) : null, stale: isStale(build),
   };
@@ -385,10 +482,11 @@ export function buildDefineModel({ build, library, requirements = {} }) {
 // ---------- COMPILE ----------
 
 /**
- * The per-entry SLI rows of the selection at the draft's tier: reachable (its
- * minTier at or below the tier) or disabled with the tier it needs, checked
- * (an explicit list, else the tier's defaults), the objective and window this
- * tier gives it. COMPILE's rows and DEFINE's L1 candidates read the same list.
+ * The per-entry SLI rows of the selection at the draft's tier: reachable (its minTier at or below the tier —
+ * a default) or above the tier (selectable all the same: it starts from its own tier's profile), checked (an
+ * explicit list, else the tier's defaults), the objective and window it starts with — the library's at the
+ * tier through the engine's walk, or the user's override. COMPILE's counts and DEFINE's L1 candidates read
+ * the same list.
  */
 export function sliGroups({ build, library }) {
   const entries = selectedEntries(build, library);
@@ -400,21 +498,27 @@ export function sliGroups({ build, library }) {
     slis: (en.slis || []).map(s => {
       const key = sliKey(en.id, s.id, composed);
       const reachable = atTier(tier, s.minTier);
-      const checked = reachable && (explicit ? explicit.has(key) : true);
+      const checked = explicit ? explicit.has(key) : reachable;
+      const ov = overrideFor(build, key);
+      const eff = effectiveSli(s, tier, ov);
       return {
-        key, id: s.id, type: s.type, minTier: s.minTier, reachable, checked, unit: s.unit || null,
-        description: s.description || '', evidence: s.evidence || null, metrics: s.metrics || [],
-        objective: reachable ? s.objectives?.[tier] ?? null : null,
-        objectiveLabel: reachable ? fmtObjective(s.objectives?.[tier]) : `needs ${s.minTier}`,
-        window: reachable ? s.windows?.[tier] ?? null : null,
+        key, id: s.id, type: s.type, minTier: s.minTier, reachable, aboveTier: !reachable, checked, unit: eff.unit ?? null,
+        description: eff.description || '', evidence: promqlEdited(ov) ? 'custom' : (s.evidence || null), metrics: s.metrics || [],
+        objective: eff.objective, objectiveLabel: fmtObjective(eff.objective), window: eff.window,
+        customised: customisedFields(ov),
       };
     }),
   }));
 }
 
-/** DEFINE's L1 candidates: every SLI the tier reaches in the selection, with its entry. */
+/** DEFINE's L1 candidates: every SLI in the pack — the checked library ones, then the custom ones — with its entry. */
 export function sliCandidates({ build, library }) {
-  return sliGroups({ build, library }).flatMap(g => g.slis.filter(s => s.reachable).map(s => ({ ...s, entry: g.id, entryTitle: g.title })));
+  const tier = build?.tier;
+  const custom = (build?.custom || []).map(def => {
+    const eff = customEffective(def);
+    return { key: def.id, id: def.id, type: def.type, minTier: tier, reachable: true, aboveTier: false, checked: true, unit: eff.unit ?? null, description: eff.description || '', evidence: 'custom', metrics: [], objective: eff.objective, objectiveLabel: fmtObjective(eff.objective), window: eff.window, customised: [], custom: true, entry: null, entryTitle: 'Custom SLI' };
+  });
+  return [...sliGroups({ build, library }).flatMap(g => g.slis.filter(s => s.checked).map(s => ({ ...s, entry: g.id, entryTitle: g.title }))), ...custom];
 }
 
 /**
@@ -437,13 +541,15 @@ export function buildCompileModel({ build, library, clauses = [] }) {
     disabled: t.id === 'policy' && build?.toggles?.slos === false,
   }));
   const r = build?.result || null;
+  const customCount = (build?.custom || []).length;
   return {
     tier, composed, groups, toggles,
-    counts: { total: all.length, reachable: all.filter(s => s.reachable).length, checked: all.filter(s => s.checked).length },
-    atLeastOne: all.some(s => s.checked),
+    counts: { total: all.length, reachable: all.filter(s => s.reachable).length, checked: all.filter(s => s.checked).length, aboveTier: all.filter(s => s.checked && s.aboveTier).length, custom: customCount, customised: all.filter(s => s.checked && s.customised.length).length },
+    atLeastOne: all.some(s => s.checked) || customCount > 0,
     stack: buildStackModel({
       adapted: r?.adapted || null, requirements: clauses, checklist: buildClauseChecklist(clauses, r?.summary || null),
       todos: r?.todos || [], params: paramRows({ build, library }), mode: 'compile', toggles: build?.toggles || {}, expanded: stackExpanded(build),
+      customised: customisedMap(r),
     }),
     result: r ? {
       sliCount: r.canonical?.spec?.slis?.length || 0, sloCount: r.canonical?.spec?.slos?.length || 0,
@@ -551,6 +657,7 @@ export function buildVerifyModel({ build, library, clauses, targets }) {
   const stack = buildStackModel({
     adapted: r?.adapted || null, requirements: clauses || [], checklist,
     todos: r?.todos || [], params, mode: 'verify', toggles: build?.toggles || {}, expanded: stackExpanded(build),
+    customised: customisedMap(r),
   });
   const s = r?.summary || null;
   const blocking = (r?.warnings || []).some(w => w.kind === 'promql');
@@ -767,7 +874,19 @@ const pct = (n, total) => (total ? Math.round((n / total) * 100) : 0);
  * `symbol` and, when a todo names it, `todoPath`); the ghosts are the rubric; the states
  * are the checklist's.
  */
-export function buildStackModel({ adapted = null, checklist = null, requirements = null, candidates = [], todos = [], params = [], mode = 'compile', toggles = {}, expanded = {} } = {}) {
+/**
+ * What the provenance says was customised, per SLI id: { [id]: { fields, custom } } for the SLIs that carry
+ * an override or were written from scratch — what the L1 cards print as "customised: objective, query".
+ */
+export function customisedMap(result) {
+  const out = {};
+  for (const [id, p] of Object.entries(result?.provenance?.slis || {})) {
+    if ((p.customised || []).length || p.custom) out[id] = { fields: [...(p.customised || [])], custom: !!p.custom, evidence: p.evidence?.status || null };
+  }
+  return out;
+}
+
+export function buildStackModel({ adapted = null, checklist = null, requirements = null, candidates = [], todos = [], params = [], mode = 'compile', toggles = {}, expanded = {}, customised = {} } = {}) {
   const stateOf = new Map((checklist?.items || []).map(i => [i.id, i]));
   const clauseList = (requirements || checklist?.items || []).map(c => {
     const st = stateOf.get(c.id);
@@ -785,7 +904,9 @@ export function buildStackModel({ adapted = null, checklist = null, requirements
     const symbol = artefactSymbol(a);
     const todo = symbol ? todoByPath.get(symbol) : null;
     if (todo) todo.artefactId = a.id;
-    return { ...a, symbol, todoPath: todo ? todo.path : null, detail: isDetailArtefact(a, layerId) };
+    // An L1 SLI card whose provenance says it was customised or written from scratch says so (the adapter titles an SLI card with the SLI id).
+    const mark = layerId === 'L1' && /^SLI-/.test(String(a.id || '')) && customised?.[a.title] ? customised[a.title] : null;
+    return { ...a, symbol, todoPath: todo ? todo.path : null, detail: isDetailArtefact(a, layerId), ...(mark ? { customised: mark.fields, custom: mark.custom, customNote: mark.custom ? 'custom — written in the studio' : `customised: ${mark.fields.join(', ')}` } : {}) };
   });
   const ghostOf = (c) => ({
     kind: 'clause', key: `clause:${c.id}`, clauseId: c.id, title: c.label, desc: c.description, severity: c.severity, minTier: c.minTier,
@@ -796,7 +917,7 @@ export function buildStackModel({ adapted = null, checklist = null, requirements
   });
   const candidateGhosts = mode === 'define'
     ? (candidates || []).flatMap(c => [
-      { kind: 'sli', key: `sli:${c.key}`, title: c.key, desc: c.description || `${c.type} SLI`, source: 'Candidate', tool: `${c.type} SLI`, tags: ['sli', c.type, c.entry].filter(Boolean), evidence: c.evidence || null, state: null },
+      { kind: 'sli', key: `sli:${c.key}`, title: c.key, desc: c.description || `${c.type} SLI`, source: 'Candidate', tool: `${c.type} SLI`, tags: ['sli', c.type, c.entry || 'custom', ...(c.aboveTier ? [`from ${c.minTier}`] : []), ...(c.customised?.length ? ['customised'] : [])].filter(Boolean), evidence: c.evidence || null, state: null },
       { kind: 'slo', key: `slo:${c.key}`, title: `SLO on ${c.key}`, desc: `${c.objectiveLabel} over ${c.window || '—'}`, source: 'Candidate', tool: 'SLO', tags: ['slo', c.window].filter(Boolean), evidence: null, state: null },
     ])
     : [];
@@ -950,6 +1071,7 @@ export function buildDefinitionModel({ build, library, requirements = {}, checkl
     : !valid ? 'complete the definition to evaluate'
     : !ready ? 'evaluating…'
     : check.conformant ? `conformant at ${tier}` : `${plural(k.must.fail, 'MUST clause')} failing`;
+  const seeded = isSeeded(build);
   return {
     name, slug: serviceSlug(name), owners: build?.owners || '', ownerList: parseOwners(build?.owners), environment: build?.environment || 'prod',
     tier, tiers, tierIndex: Math.max(0, TIERS.indexOf(tier)), tierBlurb: TIER_META[tier]?.blurb || '',
@@ -957,6 +1079,11 @@ export function buildDefinitionModel({ build, library, requirements = {}, checkl
     archetypes: rows.filter(x => x.kind === 'archetype').map(chip),
     selectedCount: selectedEntries(build, library).length,
     selectedTitles: selectedEntries(build, library).map(e => e.title),
+    // The wizard stage: the live form on DEFINE; on COMPILE and VERIFY a read-only, recessed seed card with
+    // "Change seed →" (the summary below it stays live on every step — it is the grading, not the seed).
+    seeded, mode: (build?.step || 'define') === 'define' ? 'form' : 'seed',
+    seededNote: seeded ? SEEDED_NOTE : null,
+    seedCard: seedCardModel(build, library, requirements),
     summary: {
       status, statusKind, conformant: check.conformant, tier,
       counts: { pass: k.pass, placeholder: k.placeholder, fail: k.fail, pending: k.pending, total: k.total, must: k.must, should: k.should },
@@ -984,6 +1111,31 @@ export function buildStatusLine(summary) {
   if (!summary || summary.pending || !summary.ready) return null;
   const k = summary.counts;
   return `${summary.status} · ${k.pass} pass · ${k.placeholder} on a placeholder · ${k.fail} fail`;
+}
+
+/**
+ * seedCardModel(build, library, requirements) → the read-only seed card the definition column becomes on
+ * COMPILE and VERIFY: the service (name, owners, environment) as a definition list, one tier chip
+ * ("seeded at tier-2 · 15 MUST · 1 SHOULD"), the entries as small chips, what the pack carries from them
+ * (SLIs in the pack, how many from a higher tier's profile, customised, custom) and the way back
+ * ("Change seed →" returns to DEFINE). Everything read from the draft and the index; nothing invented.
+ */
+export function seedCardModel(build, library, requirements = {}) {
+  const tier = build?.tier;
+  const clauses = requirements?.[tier] || null;
+  const must = clauses ? clauses.filter(c => c.severity === 'MUST').length : null;
+  const should = clauses ? clauses.filter(c => c.severity === 'SHOULD').length : null;
+  const entries = selectedEntries(build, library);
+  const groups = sliGroups({ build, library }).flatMap(g => g.slis).filter(x => x.checked);
+  const custom = (build?.custom || []).length;
+  return {
+    name: build?.name || '', slug: serviceSlug(build?.name), owners: parseOwners(build?.owners), environment: build?.environment || 'prod',
+    tier, must, should,
+    tierChip: `seeded at ${tier || '—'}${must == null ? '' : ` · ${must} MUST${should ? ` · ${should} SHOULD` : ''}`}`,
+    entries: entries.map(e => ({ id: e.id, title: e.title, kind: e.kind })),
+    counts: { slis: groups.length + custom, aboveTier: groups.filter(x => x.aboveTier).length, customised: groups.filter(x => x.customised.length).length, custom },
+    changeLabel: 'Change seed',
+  };
 }
 
 /**
@@ -1089,12 +1241,16 @@ export function sectionSwitch(section, build, clauses) {
 }
 
 /**
- * rolodexItems({ build, library, all }) → the SLI cards of the L1 rolodex: every SLI of the
- * selected entries (in selection order) and, with `all`, every SLI of the entries not yet
- * selected — each with its product and evidence, type, metrics, the objective and window at
- * the current tier and at the other two, whether it is in the pack (`selected`), and why it
- * cannot be (`disabled` / `reason`: above the tier). The key of an SLI on an entry not yet
- * selected is the key it would have once that entry composes in (the engine's rule).
+ * rolodexItems({ build, library, all }) → the SLI cards of the L1 rolodex: every SLI of the selected entries
+ * (in selection order), the custom SLIs (`custom: true`, always in the pack) and, with `all`, every SLI of
+ * the entries not yet selected — each with its product and evidence, type, metrics, the objective and window it
+ * starts with at the current tier (the library's through the engine's walk, or the user's override) and the
+ * library's at the three tiers, whether it is in the pack (`selected`), and — never a reason it cannot be: the
+ * tier is a seed — an informational note for an SLI above the tier (`aboveTier`, `note`: "from the tier-1
+ * profile"). The copies: `override` (the edited fields), `customised` (their names), `effective` and
+ * `defaults` per field, the evidence turned `custom` once the PromQL was edited (`evidenceNote`), the
+ * engine's promql warning for the SLI, and whether its Customise face is open. The key of an SLI on an entry
+ * not yet selected is the key it would have once that entry composes in (the engine's rule).
  */
 export function rolodexItems({ build, library, all = false }) {
   const rows = library?.entries || [];
@@ -1103,36 +1259,61 @@ export function rolodexItems({ build, library, all = false }) {
   const others = all ? rows.filter(r => !chosenIds.has(r.id)) : [];
   const tier = build?.tier;
   const explicit = Array.isArray(build?.slis) ? new Set(build.slis) : null;
+  const promqlWarnings = (build?.result?.warnings || []).filter(w => w.kind === 'promql');
+  const warningFor = (key) => promqlWarnings.find(w => w.sli === key)?.message || null;
   const item = (en, s, entrySelected) => {
     const composed = entrySelected ? chosen.length > 1 : chosen.length + 1 > 1;
     const key = sliKey(en.id, s.id, composed);
     const reachable = atTier(tier, s.minTier);
+    const selected = entrySelected && (explicit ? explicit.has(key) : reachable);
+    const ov = entrySelected ? overrideFor(build, key) : {};
+    const eff = effectiveSli(s, tier, ov);
+    const edited = promqlEdited(ov);
+    const customised = customisedFields(ov);
     return {
       key, id: s.id, entry: en.id, entryTitle: en.title, entryKind: en.kind, entryEvidence: en.evidence?.status || null, entrySelected,
-      type: s.type, unit: s.unit || null, description: s.description || '', evidence: s.evidence || null, metrics: s.metrics || [],
-      minTier: s.minTier || 'tier-3', reachable,
-      selected: entrySelected && reachable && (explicit ? explicit.has(key) : true),
-      disabled: !reachable, reason: reachable ? null : `needs ${s.minTier}`,
-      objective: reachable ? s.objectives?.[tier] ?? null : null,
-      objectiveLabel: reachable ? fmtObjective(s.objectives?.[tier]) : `needs ${s.minTier}`,
-      window: reachable ? s.windows?.[tier] ?? null : null,
+      type: s.type, unit: eff.unit ?? null, description: eff.description || '', metrics: s.metrics || [],
+      evidence: edited ? 'custom' : (s.evidence || null), libraryEvidence: s.evidence || null,
+      evidenceNote: edited ? 'edited — the library’s evidence no longer applies' : null,
+      minTier: s.minTier || 'tier-3', reachable, aboveTier: !reachable, profileTier: s.minTier || 'tier-3',
+      note: reachable ? null : `from the ${s.minTier} profile`,
+      selected, disabled: false, reason: null, custom: false,
+      objective: eff.objective, objectiveLabel: fmtObjective(eff.objective), window: eff.window,
+      override: ov, customised, customisedLabel: customised.length ? `customised: ${customised.join(', ')}` : null,
+      effective: eff, defaults: effectiveSli(s, tier, {}),
       tiers: TIERS.map(t => ({ tier: t, current: t === tier, reachable: atTier(t, s.minTier), objective: s.objectives?.[t] ?? null, objectiveLabel: fmtObjective(s.objectives?.[t]), window: s.windows?.[t] ?? null })),
       focusKey: `sli:${en.id}:${s.id}`,
+      promqlWarning: selected ? warningFor(key) : null,
+      open: !!build?.customOpen?.[key],
+    };
+  };
+  const customItem = (def) => {
+    const eff = customEffective(def);
+    return {
+      key: def.id, id: def.id, entry: null, entryTitle: 'Custom SLI', entryKind: 'custom', entryEvidence: 'custom', entrySelected: true,
+      type: def.type, unit: eff.unit ?? null, description: eff.description || '', metrics: [],
+      evidence: 'custom', libraryEvidence: null, evidenceNote: 'written in the studio — no library evidence',
+      minTier: tier, reachable: true, aboveTier: false, profileTier: null, note: null,
+      selected: true, disabled: false, reason: null, custom: true, def: { ...def },
+      objective: eff.objective, objectiveLabel: fmtObjective(eff.objective), window: eff.window,
+      override: {}, customised: [], customisedLabel: null, effective: eff, defaults: {},
+      tiers: [], focusKey: `sli:custom:${def.id}`, promqlWarning: warningFor(def.id), open: !!build?.customOpen?.[def.id],
     };
   };
   return [
     ...chosen.flatMap(en => (en.slis || []).map(s => item(en, s, true))),
+    ...(build?.custom || []).map(customItem),
     ...others.flatMap(en => (en.slis || []).map(s => item(en, s, false))),
   ];
 }
 
 /**
  * addSliSelection({ build, library }, entryId, sliId) → { entries, slis, changed, reason }:
- * the pure part of the controller's addSli — the entry joins the selection when it is not
- * in it yet, the SLI is ticked, and the explicit list is re-keyed for the new composition
- * (going from one entry to two prefixes every id). The other entries keep exactly the SLIs
- * they had; a list equal to the tier's defaults collapses to null. An SLI above the tier
- * changes nothing (`changed: false`, the reason) — the rolodex disables it, this is the guard.
+ * the pure part of the controller's addSli — the entry joins the selection when it is not in it yet, the SLI
+ * is ticked (above the tier too: it starts from its own tier's profile), and the explicit list is re-keyed
+ * for the new composition (going from one entry to two prefixes every id). The other entries keep exactly
+ * the SLIs they had; a list equal to the tier's defaults collapses to null. Only an unknown entry or SLI
+ * changes nothing.
  */
 export function addSliSelection({ build, library }, entryId, sliId) {
   const rows = library?.entries || [];
@@ -1140,15 +1321,15 @@ export function addSliSelection({ build, library }, entryId, sliId) {
   const entry = rows.find(r => r.id === entryId);
   const sli = (entry?.slis || []).find(s => s.id === sliId);
   if (!entry || !sli) return { ...before, changed: false, reason: 'unknown entry or SLI' };
-  if (!atTier(build?.tier, sli.minTier)) return { ...before, changed: false, reason: `needs ${sli.minTier}` };
   const entries = before.entries.includes(entryId) ? before.entries : [...before.entries, entryId];
   const composed = entries.length > 1;
   // What is ticked today, re-keyed for the composition after the change.
   const kept = sliGroups({ build, library }).flatMap(g => g.slis.filter(s => s.checked).map(s => sliKey(g.id, s.id, composed)));
-  const reachable = reachableSliKeys({ ...build, entries }, library);
+  const next = { ...build, entries };
+  const all = allSliKeys(next, library);
   const want = new Set([...kept, sliKey(entryId, sliId, composed)]);
-  const slis = reachable.filter(k => want.has(k));
-  return { entries, slis: slis.length === reachable.length ? null : slis, changed: true, reason: null };
+  const slis = all.filter(k => want.has(k));
+  return { entries, slis: sameSet(slis, reachableSliKeys(next, library)) ? null : slis, changed: true, reason: null };
 }
 
 // The lists a sheet draws from the adapter's projection (never a made-up menu).
@@ -1255,15 +1436,31 @@ export function buildSheetModel({ layerId, build, library, requirements = [], st
   const switches = (LAYER_SWITCHES[layerId] || []).map(id => sectionSwitch(id, build, tierClauses));
   const compiled = !!r?.adapted;
   const lists = sheetLists(layerId, r?.adapted || null, { compiled });
+  const errors = splitBuildErrors(build?.error);
   const rolodex = layerId === 'L1' ? (() => {
-    const items = rolodexItems({ build, library, all: !!build?.rolodexAll });
+    const items = rolodexItems({ build, library, all: !!build?.rolodexAll }).map(it => ({
+      ...it,
+      // The Customise face: editable in place on COMPILE when the card is open; read-only on VERIFY for every
+      // card that carries a customisation (the values, the chips, the provenance line).
+      face: (mode === 'edit' && it.selected && it.open) || (mode === 'verify' && it.selected && (it.custom || it.customised.length))
+        ? editFaceModel(it, { errors: it.custom ? errors.byCustom[it.key] : errors.byOverride[it.key], readOnly: mode !== 'edit' })
+        : null,
+    }));
+    const inPack = items.filter(i => i.selected);
     return {
       items, filterAll: !!build?.rolodexAll,
-      allKeys: items.filter(i => i.entrySelected && i.reachable).map(i => i.key),
-      counts: { total: items.length, selected: items.filter(i => i.selected).length, selectable: items.filter(i => i.entrySelected && i.reachable).length, aboveTier: items.filter(i => i.entrySelected && !i.reachable).length, library: (library?.entries || []).length, chosen: selectedEntries(build, library).length },
+      // The keys an explicit list starts from when the first switch flips: what is in the pack now (library SLIs only; the custom ones are their own list).
+      allKeys: inPack.filter(i => !i.custom).map(i => i.key),
+      counts: {
+        total: items.length, selected: inPack.length, selectable: items.filter(i => i.entrySelected && !i.custom).length,
+        aboveTier: inPack.filter(i => i.aboveTier).length, customised: inPack.filter(i => i.customised.length).length, custom: inPack.filter(i => i.custom).length,
+        library: (library?.entries || []).length, chosen: selectedEntries(build, library).length,
+      },
+      // The last card on COMPILE: the '+ Custom SLI' form, with the engine's usage errors of the last attempt inline.
+      customForm: mode === 'edit' ? customFormModel(build?.customDraft, { errors: splitBuildErrors(build?.customDraftErrors).byCustom, existingKeys: [...new Set([...inPack.map(i => i.key), ...allSliKeys(build, library)])] }) : null,
     };
   })() : null;
-  const { byParam } = splitBuildErrors(build?.error);
+  const { byParam } = errors;
   const rejected = layerParams.filter(p => byParam[p.key]).length;
   return {
     layerId, num: slab.num, name: slab.name, title: `${slab.num} · ${slab.name}`, question: LAYER_QUESTIONS[layerId] || '',

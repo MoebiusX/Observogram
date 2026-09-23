@@ -63,11 +63,11 @@ export function ghostCardHtml(g) {
  * (data-jump) to that step, where its todo is.
  */
 function artefactCardHtmlInStack(a, mode) {
-  const cls = ['card', a.source === 'Scaffold' ? 'is-scaffold' : '', a.todoPath ? 'has-todo' : '', a.detail ? 'is-detail' : ''].filter(Boolean).join(' ');
+  const cls = ['card', a.source === 'Scaffold' ? 'is-scaffold' : '', a.todoPath ? 'has-todo' : '', a.detail ? 'is-detail' : '', a.custom ? 'is-custom' : a.customised ? 'is-customised' : ''].filter(Boolean).join(' ');
   const jump = mode !== 'verify';
   return `
     <div class="${cls}" data-artefact="${escapeHtml(a.id)}"${a.symbol ? ` data-symbol="${escapeHtml(a.symbol)}"` : ''}>
-      ${artefactCardHtml(a)}
+      ${artefactCardHtml(a, { note: a.customNote || null })}
       ${a.todoPath ? `<button type="button" class="build-card-pin" data-todo-path="${escapeHtml(a.todoPath)}"${jump ? ' data-jump="verify"' : ''} title="${escapeHtml(`todo: ${a.todoPath} — a placeholder value the team must fill${jump ? ', on Verify' : ''}`)}">todo</button>` : ''}
     </div>`;
 }

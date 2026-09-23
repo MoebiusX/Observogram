@@ -97,9 +97,12 @@ export async function loadTargets({ fetchFn = jsonFetch } = {}) {
  * POST /api/library/instantiate from the draft. Resolves to the response
  * either way: { ok: true, canonical, canonicalYaml, todos, provenance,
  * warnings, schemaErrors, summary, conformance } or { ok: false, errors }.
+ * With `library` the body carries only the overrides whose SLI is in the
+ * current selection (instantiateBody); `body` replaces the draft's body
+ * outright (the custom card's trial instantiation).
  */
-export async function instantiate(build, { fetchFn = jsonFetch } = {}) {
-  return fetchFn('/api/library/instantiate', { method: 'POST', body: instantiateBody(build) });
+export async function instantiate(build, { fetchFn = jsonFetch, library = null, body = null } = {}) {
+  return fetchFn('/api/library/instantiate', { method: 'POST', body: body || instantiateBody(build, library) });
 }
 
 /** POST /api/library/compile — one artefact previewed from the canonical, nothing registered. */

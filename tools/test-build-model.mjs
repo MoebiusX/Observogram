@@ -35,7 +35,12 @@ import {
   todoFocusSuffix, focusFallbackSelectors, enterStep, stepAfterInstantiate,
   buildDefinitionModel, buildSheetModel, rolodexItems, addSliSelection, paramLayer, paramSubgroup, sectionClauses, sectionDrops, sectionNotes, sectionSwitch, sheetLists,
   sheetModeFor, stackExpanded, sheetFocusSuffix, LAYER_QUESTIONS, LAYER_SWITCHES, buildStatusLine,
+  isSeeded, allSliKeys, selectedSliKeys, retargetOverrides, effectiveOverrides, seedCardModel, customisedMap, WARNING_KINDS, SEEDED_NOTE,
 } from '../studio/build-model.mjs';
+import {
+  OVERRIDE_FIELDS, SLO_WINDOWS, PROMQL_FIELDS, overrideFor, customisedFields, promqlEdited, effectiveSli, customEffective, percentText, ratioOf, slugifySliId,
+  fieldsForType, editFaceModel, normalizeDraft, customFormModel, customDefFromDraft, fieldValueFor,
+} from '../studio/build-copies-model.mjs';
 import {
   loadLibrary as loadLibraryApi, loadRequirements, loadTargets, instantiate, compilePreview, registerBuiltPack,
 } from '../studio/build-api.mjs';
@@ -45,7 +50,7 @@ import { renderBuildDefine } from '../studio/build-define-view.mjs';
 import { renderBuildCompile } from '../studio/build-compile-view.mjs';
 import { renderBuildVerify } from '../studio/build-verify-view.mjs';
 import { renderBuildStack, buildStackHtml, wireBuildStack } from '../studio/build-stack-view.mjs';
-import { renderBuildDefinition, buildDefinitionHtml, wireBuildDefinition, summaryHtml } from '../studio/build-definition-view.mjs';
+import { renderBuildDefinition, buildDefinitionHtml, wireBuildDefinition, summaryHtml, seedCardHtml } from '../studio/build-definition-view.mjs';
 import { renderBuildSheet, buildSheetHtml, wireBuildSheet, wireRolodex, SMOOTH_SCROLL_GRACE_MS } from '../studio/build-sheet-view.mjs';
 import { artefactCardHtml } from '../studio/card-html.mjs';
 import { revealTodo, clauseRowHtml, switchHtml, evidenceDot, paramRowHtml, paramLabelHtml } from '../studio/build-atoms.mjs';
@@ -95,7 +100,7 @@ const TARGETS = read('compile.targets.json').targets;
 // The draft after the drive's DEFINE step, with the fixture as its result.
 const draft = (over = {}) => ({
   ...defaultBuildState(),
-  name: 'orders-api', owners: 'team-orders', environment: 'prod', tier: 'tier-2', entries: ['kafka', 'http-service'],
+  name: 'orders-api', owners: 'team-orders', environment: 'prod', tier: 'tier-2', entries: ['kafka', 'http-service'], seeded: true,
   result: { canonical: FIXTURE.canonical, canonicalYaml: FIXTURE.canonicalYaml, todos: FIXTURE.todos, warnings: FIXTURE.warnings, summary: FIXTURE.summary, conformance: FIXTURE.conformance, schemaErrors: FIXTURE.schemaErrors, provenance: FIXTURE.provenance, adapted: FIXTURE.adapted },
   ...over,
 });
@@ -132,6 +137,17 @@ test('the instantiate fixture is stable: a fresh in-process instantiation of the
   assert.deepEqual(FIXTURE.warnings, []);
   assert.deepEqual(FIXTURE.schemaErrors, []);
   assert.equal(FIXTURE.provenance.placeholders.length, 17);
+  // The seed and the copies on the fixture: nothing customised, every SLI from its entry, none above the tier.
+  assert.deepEqual(Object.keys(FIXTURE.provenance.slis), FIXTURE.canonical.spec.slis.map(x => x.id));
+  assert.ok(Object.values(FIXTURE.provenance.slis).every(p => p.customised.length === 0 && p.custom === false && p.aboveTier === false));
+  assert.deepEqual([FIXTURE.provenance.overrides, FIXTURE.provenance.custom], [{}, []]);
+  assert.equal(FIXTURE.provenance.slis.kafka_broker_availability.library.source, 'kafka@1.0.0');
+  assert.deepEqual(customisedMap(FIXTURE), {});
+  // The index carries the templates the Customise face shows as the defaults.
+  const kafkaRow = INDEX.entries.find(e => e.id === 'kafka');
+  assert.equal(kafkaRow.slis.find(x => x.id === 'produce_latency_p99').threshold, 0.1);
+  assert.match(kafkaRow.slis.find(x => x.id === 'produce_latency_p99').query, /^max\(kafka_network_requestmetrics_totaltimems/);
+  assert.match(kafkaRow.slis.find(x => x.id === 'broker_availability').good, /\$\{broker_job\}/, 'the template, params unresolved');
 });
 
 test('the index fixture is what libraryIndex returns and the requirements are the rubric per tier', () => {
@@ -186,13 +202,29 @@ test('serviceSlug / isValidServiceName mirror the engine (fileSlug + the slug ru
 // Step reachability
 // ---------------------------------------------------------------------------
 
-test('a step is reachable when the previous step\'s inputs are valid', () => {
+test('a step is reachable when the previous step\'s inputs are valid — and COMPILE only once the pack is seeded', () => {
   const empty = defaultBuildState();
   assert.equal(defineValid(empty), false);
+  assert.equal(empty.seeded, false, 'a fresh draft is not seeded');
   assert.deepEqual(buildStepReachability(empty), { define: true, compile: false, verify: false });
   const selected = draft({ result: null });
   assert.equal(defineValid(selected), true);
   assert.deepEqual(buildStepReachability(selected), { define: true, compile: true, verify: false }, 'no result yet: Verify stays locked');
+  // The seed: a valid definition that was not seeded keeps COMPILE locked (the wizard stage), with or without a pack.
+  assert.deepEqual(buildStepReachability(draft({ seeded: false })), { define: true, compile: false, verify: false }, 'not seeded: COMPILE locked even with a pack');
+  assert.equal(clampStep(draft({ seeded: false }), 'verify'), 'define');
+  assert.equal(isSeeded(draft()), true);
+  assert.equal(isSeeded(draft({ seeded: false })), false);
+  assert.equal(isSeeded(null), false);
+  // A draft persisted before the seed existed (no field) on COMPILE or VERIFY counts as seeded; on DEFINE it does not.
+  const legacy = (step) => { const b = draft({ step }); delete b.seeded; return b; };
+  assert.equal(isSeeded(legacy('compile')), true);
+  assert.equal(isSeeded(legacy('verify')), true);
+  assert.equal(isSeeded(legacy('validate')), true, 'a legacy step id counts too');
+  assert.equal(isSeeded(legacy('define')), false);
+  assert.deepEqual(buildStepReachability(legacy('verify')), { define: true, compile: true, verify: true });
+  assert.equal(clampStep(legacy('verify'), 'verify'), 'verify', 'clampStep tolerates the missing field');
+  assert.equal(clampStep(legacy('compile'), 'compile'), 'compile');
   assert.deepEqual(buildStepReachability(draft()), { define: true, compile: true, verify: true });
   assert.deepEqual(buildStepReachability(draft({ error: ['instantiatePack: at least one SLI must stay selected'], result: null })), { define: true, compile: true, verify: false });
   assert.deepEqual(buildStepReachability(draft({ error: ['param kafka.bootstrap: a value may not contain a double quote'] })), { define: true, compile: true, verify: true }, 'a usage error keeps the previous pack, so Verify — where the field is — stays reachable');
@@ -275,7 +307,18 @@ test('instantiateBody: owners parsed, empty overrides dropped, slis only when ex
     entries: ['kafka', 'http-service'], name: 'orders-api', tier: 'tier-2', environment: 'prod', owners: ['team-orders'],
     params: { 'kafka.bootstrap': 'kafka-0:9092' },
     toggles: { slos: true, policy: true, routes: true, dashboards: true, validation: true },
+    overrides: {}, custom: [],
   });
+  // The copies: the overrides' edited fields (own, non-empty), filtered to the selection when the library is known; the custom SLIs copied.
+  const ov = { kafka_produce_latency_p99: { objective: 0.995, window: '' }, kafka_controller_election_rate: { objective: 0.9 }, nope: { window: '7d' } };
+  const def = { id: 'checkout_success', type: 'ratio', good: 'a', total: 'b', objective: 0.999, window: '30d' };
+  assert.deepEqual(effectiveOverrides(draft({ overrides: ov })), { kafka_produce_latency_p99: { objective: 0.995 }, kafka_controller_election_rate: { objective: 0.9 }, nope: { window: '7d' } }, 'without the library: every override with a value');
+  assert.deepEqual(effectiveOverrides(draft({ overrides: ov }), LIBRARY), { kafka_produce_latency_p99: { objective: 0.995 } }, 'with the library: the selection only (the tier-1 SLI is not in the pack at tier-2 defaults; nope is no SLI)');
+  assert.deepEqual(effectiveOverrides(draft({ overrides: ov, slis: [...FIXTURE.provenance.toggles.slis, 'kafka_controller_election_rate'] }), LIBRARY), { kafka_produce_latency_p99: { objective: 0.995 }, kafka_controller_election_rate: { objective: 0.9 } }, 'an above-tier SLI in the explicit list takes its override along');
+  const withCopies = instantiateBody(draft({ overrides: ov, custom: [def] }), LIBRARY);
+  assert.deepEqual(withCopies.overrides, { kafka_produce_latency_p99: { objective: 0.995 } });
+  assert.deepEqual(withCopies.custom, [def]);
+  assert.notEqual(withCopies.custom[0], def, 'a copy, not the draft\'s object');
   const explicit = instantiateBody(draft({ slis: ['kafka_broker_availability'], toggles: { ...defaultBuildState().toggles, dashboards: false } }));
   assert.deepEqual(explicit.toggles.slis, ['kafka_broker_availability']);
   assert.equal(explicit.toggles.dashboards, false);
@@ -352,18 +395,20 @@ test('renderBuildDefine escapes the typed service name: the model carries it raw
 // COMPILE
 // ---------------------------------------------------------------------------
 
-test('buildCompileModel: an SLI above the tier is disabled with the tier it needs; objective and window per tier; composed keys', () => {
+test('buildCompileModel: an SLI above the tier is not a default but stays selectable, with the objective of its own profile; objective and window per tier; composed keys', () => {
   const m = buildCompileModel({ build: draft(), library: LIBRARY });
   assert.equal(m.composed, true);
   assert.deepEqual(m.groups.map(g => g.id), ['kafka', 'http-service']);
   const kafka = m.groups[0];
   assert.deepEqual(kafka.slis.map(s => s.key), ['kafka_broker_availability', 'kafka_consumer_group_lag_seconds', 'kafka_partition_replica_health', 'kafka_produce_latency_p99', 'kafka_fetch_latency_p99', 'kafka_controller_election_rate']);
   const election = kafka.slis.find(s => s.id === 'controller_election_rate');
-  assert.equal(election.reachable, false);
-  assert.equal(election.checked, false);
+  assert.equal(election.reachable, false, 'not a default at tier-2');
+  assert.equal(election.aboveTier, true);
+  assert.equal(election.checked, false, 'the defaults do not include it');
   assert.equal(election.minTier, 'tier-1');
-  assert.equal(election.objectiveLabel, 'needs tier-1');
-  assert.equal(election.objective, null);
+  assert.equal(election.objectiveLabel, '99%', 'the objective it would start with — the tier-1 profile\'s, never "needs tier-1"');
+  assert.equal(election.objective, 0.99);
+  assert.equal(election.window, '7d');
   const ba = kafka.slis.find(s => s.id === 'broker_availability');
   assert.equal(ba.checked, true);
   assert.equal(ba.objective, 0.999);
@@ -372,7 +417,7 @@ test('buildCompileModel: an SLI above the tier is disabled with the tier it need
   const lag = kafka.slis.find(s => s.id === 'consumer_group_lag_seconds');
   assert.equal(lag.objectiveLabel, '99%');
   assert.equal(lag.window, '7d');
-  assert.deepEqual(m.counts, { total: 10, reachable: 7, checked: 7 });
+  assert.deepEqual(m.counts, { total: 10, reachable: 7, checked: 7, aboveTier: 0, custom: 0, customised: 0 });
   assert.equal(m.atLeastOne, true);
   assert.equal(m.result.sliCount, 7);
   assert.equal(m.result.sloCount, 7);
@@ -385,16 +430,23 @@ test('buildCompileModel: an SLI above the tier is disabled with the tier it need
   const t3 = buildCompileModel({ build: draft({ tier: 'tier-3' }), library: LIBRARY });
   const ba3 = t3.groups[0].slis.find(s => s.id === 'broker_availability');
   assert.equal(ba3.objectiveLabel, '99%', 'tier-3 objective is the library\'s judgement, not the reference pack\'s');
-  assert.equal(t3.groups[0].slis.find(s => s.id === 'partition_replica_health').objectiveLabel, 'needs tier-2');
-  assert.deepEqual(t3.counts, { total: 10, reachable: 3, checked: 3 });
+  assert.equal(t3.groups[0].slis.find(s => s.id === 'partition_replica_health').objectiveLabel, '99.9%', 'above tier-3, yet the library declares a tier-3 value for it (0.999): that is what it starts with — the walk only steps up where nothing is declared');
+  assert.equal(t3.groups[0].slis.find(s => s.id === 'partition_replica_health').aboveTier, true);
+  assert.deepEqual(t3.counts, { total: 10, reachable: 3, checked: 3, aboveTier: 0, custom: 0, customised: 0 });
   const t1 = buildCompileModel({ build: draft({ tier: 'tier-1' }), library: LIBRARY });
   assert.equal(t1.groups[0].slis.find(s => s.id === 'controller_election_rate').reachable, true);
-  assert.deepEqual(t1.counts, { total: 10, reachable: 10, checked: 10 });
+  assert.deepEqual(t1.counts, { total: 10, reachable: 10, checked: 10, aboveTier: 0, custom: 0, customised: 0 });
 
-  // An explicit selection unticks; a stale explicit selection above the tier stays unchecked, never re-enabled.
+  // An explicit selection unticks — and may tick an SLI above the tier: it counts, as "from a higher tier".
   const partial = buildCompileModel({ build: draft({ slis: ['kafka_broker_availability', 'kafka_controller_election_rate'] }), library: LIBRARY });
-  assert.deepEqual(partial.counts, { total: 10, reachable: 7, checked: 1 });
-  assert.equal(partial.groups[0].slis.find(s => s.id === 'controller_election_rate').checked, false, 'above the tier: excluded by the engine, shown disabled here');
+  assert.deepEqual(partial.counts, { total: 10, reachable: 7, checked: 2, aboveTier: 1, custom: 0, customised: 0 });
+  assert.equal(partial.groups[0].slis.find(s => s.id === 'controller_election_rate').checked, true, 'above the tier and asked for: in the pack');
+  // An override shows on the row; a custom SLI counts and keeps the pack non-empty on its own.
+  const ov = buildCompileModel({ build: draft({ overrides: { kafka_produce_latency_p99: { objective: 0.995, window: '7d' } } }), library: LIBRARY });
+  const pl = ov.groups[0].slis.find(s => s.id === 'produce_latency_p99');
+  assert.deepEqual([pl.objectiveLabel, pl.window, pl.customised, ov.counts.customised], ['99.5%', '7d', ['objective', 'window'], 1]);
+  const onlyCustom = buildCompileModel({ build: draft({ slis: [], custom: [{ id: 'checkout_success', type: 'ratio', good: 'a', total: 'b', objective: 0.999, window: '30d' }] }), library: LIBRARY });
+  assert.deepEqual([onlyCustom.atLeastOne, onlyCustom.counts.custom, onlyCustom.counts.checked], [true, 1, 0]);
   const none = buildCompileModel({ build: draft({ slis: [] }), library: LIBRARY });
   assert.equal(none.atLeastOne, false);
   // Policy greys out when SLOs are off.
@@ -406,29 +458,60 @@ test('buildCompileModel: an SLI above the tier is disabled with the tier it need
   assert.equal(single.groups[0].slis[0].key, 'broker_availability');
 });
 
-test('retargetSlis: an explicit SLI list follows the tier — above-tier keys dropped, newly reachable keys ticked, the defaults collapse to null', () => {
+test('retargetSlis: an explicit SLI list keeps every SLI of the selected entries across a tier change (the tier is a seed), takes in what the new tier unlocks, drops a deselected entry\'s keys, never collapses to null', () => {
   const all1 = reachableSliKeys(draft({ tier: 'tier-1' }), LIBRARY);
   const all2 = reachableSliKeys(draft({ tier: 'tier-2' }), LIBRARY);
   assert.equal(all1.length, 10);
   assert.equal(all2.length, 7);
   assert.ok(all1.includes('kafka_controller_election_rate') && !all2.includes('kafka_controller_election_rate'));
   assert.deepEqual(reachableSliKeys(draft({ tier: 'tier-3', entries: ['kafka'] }), LIBRARY), ['broker_availability', 'consumer_group_lag_seconds'], 'a single entry keeps bare ids');
-  // tier-1, partition_replica_health unticked: an explicit list of 9 that includes controller_election_rate (needs tier-1)
+  assert.deepEqual(allSliKeys(draft(), LIBRARY), all1, 'every SLI of the two entries: the tier-1 set, at any tier');
+  assert.deepEqual(selectedSliKeys(draft(), LIBRARY), all2, 'the defaults at tier-2');
+  assert.deepEqual(selectedSliKeys(draft({ slis: ['kafka_controller_election_rate', 'nope'] }), LIBRARY), ['kafka_controller_election_rate'], 'an explicit list, known keys only');
+  // tier-1, partition_replica_health unticked: an explicit list of 9 that includes controller_election_rate (a tier-1 SLI)
   const untick = all1.filter(k => k !== 'kafka_partition_replica_health');
-  // lowering to tier-2 drops controller_election_rate — the excluded key no longer sits in the draft, so the
-  // "SLI above the tier" warning cannot come back on every regeneration — and keeps the untick
+  // lowering to tier-2 keeps controller_election_rate (the user has it; it now reads "from the tier-1 profile") and keeps the untick
   const lowered = retargetSlis(draft({ tier: 'tier-2', slis: untick }), LIBRARY, 'tier-1');
-  assert.deepEqual([...lowered].sort(), all2.filter(k => k !== 'kafka_partition_replica_health').sort());
-  assert.ok(!lowered.includes('kafka_controller_election_rate'));
-  assert.deepEqual(instantiateBody(draft({ tier: 'tier-2', slis: lowered })).toggles.slis, lowered, 'the body sent carries no key the tier excludes');
-  // raising back to tier-1: what the tier unlocks comes in ticked, the untick still stands
+  assert.deepEqual([...lowered].sort(), [...untick].sort(), 'nothing the user has is dropped by a tier change');
+  assert.ok(lowered.includes('kafka_controller_election_rate'));
+  assert.deepEqual(instantiateBody(draft({ tier: 'tier-2', slis: lowered })).toggles.slis, lowered, 'the body carries it: the engine takes any SLI at any tier');
+  // raising back to tier-1: nothing new to unlock (every key is already there), the untick still stands
   const raised = retargetSlis(draft({ tier: 'tier-1', slis: lowered }), LIBRARY, 'tier-2');
   assert.deepEqual([...raised].sort(), [...untick].sort());
-  // a list equal to the tier's defaults collapses to null (the engine's defaultToggles)
-  assert.equal(retargetSlis(draft({ tier: 'tier-1', slis: [...lowered, 'kafka_partition_replica_health'] }), LIBRARY, 'tier-2'), null);
-  assert.equal(retargetSlis(draft({ slis: null }), LIBRARY, 'tier-1'), null, 'the defaults stay the defaults');
-  // no previous tier (a draft restored from an older session): stale keys are pruned, nothing is added
-  assert.deepEqual(retargetSlis(draft({ tier: 'tier-2', slis: ['kafka_broker_availability', 'kafka_controller_election_rate'] }), LIBRARY), ['kafka_broker_availability']);
+  // what the new tier unlocks comes in ticked: from tier-2 defaults minus one, raising to tier-1 adds the three tier-1 SLIs
+  const raisedFromDefaults = retargetSlis(draft({ tier: 'tier-1', slis: all2.filter(k => k !== 'kafka_partition_replica_health') }), LIBRARY, 'tier-2');
+  assert.deepEqual([...raisedFromDefaults].sort(), all1.filter(k => k !== 'kafka_partition_replica_health').sort());
+  // an explicit list stays explicit, even when it equals the new tier's defaults: collapsed to null at tier-1, a
+  // round trip tier-2 → tier-1 → tier-2 lost the above-tier pick (the tier-2 defaults have no controller_election_rate)
+  assert.deepEqual([...retargetSlis(draft({ tier: 'tier-1', slis: [...lowered, 'kafka_partition_replica_health'] }), LIBRARY, 'tier-2')].sort(), [...all1].sort());
+  const picked = [...all2, 'kafka_controller_election_rate'];
+  const up = retargetSlis(draft({ tier: 'tier-1', slis: picked }), LIBRARY, 'tier-2');
+  assert.deepEqual([...up].sort(), [...all1].sort(), 'raised: the three tier-1 SLIs are in (one was already picked)');
+  const down = retargetSlis(draft({ tier: 'tier-2', slis: up }), LIBRARY, 'tier-1');
+  assert.ok(down.includes('kafka_controller_election_rate'), 'lowered again: the pick is still there');
+  assert.deepEqual([...down].sort(), [...all1].sort(), 'and so are the tier-1 defaults that came in — from the tier-1 profile now; the user switches them off if unwanted');
+  assert.equal(retargetSlis(draft({ slis: null }), LIBRARY, 'tier-1'), null, 'the defaults stay the defaults (they follow the tier by themselves)');
+  // no previous tier (a draft restored from an older session): a key of a deselected entry is dropped, an above-tier key stays, nothing is added
+  assert.deepEqual(retargetSlis(draft({ tier: 'tier-2', slis: ['kafka_broker_availability', 'kafka_controller_election_rate', 'ibm_mq_qmgr_process_up'] }), LIBRARY), ['kafka_broker_availability', 'kafka_controller_election_rate']);
+  assert.deepEqual(retargetSlis(draft({ entries: ['kafka'], slis: ['kafka_broker_availability', 'http_service_availability'] }), LIBRARY), [], 'the keys of a composition that is gone are not this composition\'s (re-keyed by the caller)');
+});
+
+test('retargetOverrides: an override follows its SLI across a composition change — re-keyed when a second entry joins, dropped with an entry that leaves, an unknown key kept', () => {
+  // one entry → two: the bare key is prefixed
+  const one = draft({ entries: ['kafka'], overrides: { broker_availability: { objective: 0.9999 }, produce_latency_p99: { window: '7d' } } });
+  const two = { ...one, entries: ['kafka', 'http-service'] };
+  assert.deepEqual(retargetOverrides({ build: two, library: LIBRARY }, ['kafka']), { kafka_broker_availability: { objective: 0.9999 }, kafka_produce_latency_p99: { window: '7d' } });
+  // two → one: back to the bare key; the leaving entry's overrides go with it
+  const both = draft({ overrides: { kafka_broker_availability: { objective: 0.9999 }, http_service_availability: { objective: 0.95 }, checkout_success: { objective: 0.9 } } });
+  const kafkaOnly = { ...both, entries: ['kafka'] };
+  assert.deepEqual(retargetOverrides({ build: kafkaOnly, library: LIBRARY }, ['kafka', 'http-service']), { broker_availability: { objective: 0.9999 }, checkout_success: { objective: 0.9 } }, 'the http-service override is dropped; a key of no entry (a custom SLI\'s) is kept as it is');
+  // the same composition: unchanged
+  assert.deepEqual(retargetOverrides({ build: both, library: LIBRARY }, ['kafka', 'http-service']), both.overrides);
+  assert.deepEqual(retargetOverrides({ build: draft({ overrides: {} }), library: LIBRARY }, ['kafka']), {});
+  // pure
+  const before = JSON.stringify(both.overrides);
+  retargetOverrides({ build: kafkaOnly, library: LIBRARY }, ['kafka', 'http-service']);
+  assert.equal(JSON.stringify(both.overrides), before);
 });
 
 test('a usage error keeps the previous pack: the error is split per param, the row carries it, the views read stale, the hand-off is blocked', () => {
@@ -436,9 +519,16 @@ test('a usage error keeps the previous pack: the error is split per param, the r
   const unknown = 'unknown param nope (known: bootstrap, broker_job)';
   assert.deepEqual(splitBuildErrors([quote, unknown]), {
     byParam: { 'kafka.bootstrap': 'a value may not contain a double quote, a backslash or a control character (it is spliced verbatim into PromQL label matchers, scrape targets and endpoints)' },
+    byOverride: {}, byCustom: {},
     general: [unknown], paramCount: 1, count: 2,
   });
-  assert.deepEqual(splitBuildErrors(null), { byParam: {}, general: [], paramCount: 0, count: 0 });
+  assert.deepEqual(splitBuildErrors(null), { byParam: {}, byOverride: {}, byCustom: {}, general: [], paramCount: 0, count: 0 });
+  // The copies' errors are keyed for their cards: `override <sli>.<field>: …` per field, `custom <id>[.<field>]: …`, `custom[i]…` under ''.
+  const copies = splitBuildErrors(['override kafka_produce_latency_p99.window: the window is one of 7d | 28d | 30d | 90d', 'override kafka_produce_latency_p99.objective: the objective is a number in (0, 1)', 'custom checkout_success.good: the PromQL must be a non-empty string', 'custom checkout_success.id: declared twice in custom', 'custom[0].id: a slug of 2 to 63 characters is required', 'unknown SLI nope']);
+  assert.deepEqual(copies.byOverride, { kafka_produce_latency_p99: { window: 'the window is one of 7d | 28d | 30d | 90d', objective: 'the objective is a number in (0, 1)' } });
+  assert.deepEqual(copies.byCustom, { checkout_success: { good: 'the PromQL must be a non-empty string', id: 'declared twice in custom' }, '': { id: 'a slug of 2 to 63 characters is required' } });
+  assert.deepEqual(copies.general, ['unknown SLI nope']);
+  assert.equal(copies.count, 6);
   assert.deepEqual(splitBuildErrors(['param x: expected a string, number or boolean, got object']).byParam, { x: 'expected a string, number or boolean, got object' });
   // The draft after the live case: a rejected value persisted in params, the previous result kept, the error set.
   const bad = draft({ params: { 'kafka.bootstrap': 'kafka-0.orders.svc:9092"}' }, error: [quote] });
@@ -1274,20 +1364,26 @@ test('renderBuildDefinition draws the segmented control, the chips and the summa
   assert.deepEqual(focusFallbackSelectors('entry:<x>'), [], 'an id that is not a slug is not interpolated into a selector');
 });
 
-test('rolodexItems: the selected entries’ SLIs with the objective at the tier, above-tier ones disabled with the reason, every product behind the filter', () => {
+test('rolodexItems: the selected entries’ SLIs with the objective they start with, an above-tier one informational (never disabled), every product behind the filter', () => {
   const items = rolodexItems({ build: draft(), library: LIBRARY });
   assert.equal(items.length, 10, 'kafka 6 + http-service 4, in selection order');
   assert.deepEqual(items.slice(0, 6).map(i => i.entry), Array(6).fill('kafka'));
   const ba = items.find(i => i.id === 'broker_availability');
   assert.deepEqual([ba.key, ba.entryTitle, ba.entrySelected, ba.type, ba.evidence, ba.metrics, ba.reachable, ba.selected, ba.disabled, ba.reason, ba.objectiveLabel, ba.window, ba.focusKey],
     ['kafka_broker_availability', 'Apache Kafka', true, 'ratio', 'recorded-live', ['up'], true, true, false, null, '99.9%', '30d', 'sli:kafka:broker_availability']);
+  assert.deepEqual([ba.aboveTier, ba.note, ba.customised, ba.custom, ba.open, ba.promqlWarning, ba.evidenceNote], [false, null, [], false, false, null, null]);
   assert.deepEqual(ba.tiers.map(t => [t.tier, t.current, t.reachable, t.objectiveLabel, t.window]), [['tier-3', false, true, '99%', '30d'], ['tier-2', true, true, '99.9%', '30d'], ['tier-1', false, true, '99.9%', '30d']]);
+  // Above the tier: never disabled, no reason — an informational note, and the objective of its own profile (the engine's walk).
   const ce = items.find(i => i.id === 'controller_election_rate');
-  assert.deepEqual([ce.reachable, ce.selected, ce.disabled, ce.reason, ce.objectiveLabel, ce.objective, ce.window], [false, false, true, 'needs tier-1', 'needs tier-1', null, null]);
+  assert.deepEqual([ce.reachable, ce.aboveTier, ce.selected, ce.disabled, ce.reason, ce.note, ce.profileTier, ce.objectiveLabel, ce.objective, ce.window], [false, true, false, false, null, 'from the tier-1 profile', 'tier-1', '99%', 0.99, '7d']);
   assert.deepEqual(ce.tiers.map(t => t.reachable), [false, false, true]);
-  // At tier-1 the same SLI is reachable and, with the defaults, in the pack.
+  assert.ok(items.every(i => i.disabled === false && i.reason === null), 'nothing in the rolodex is disabled');
+  // Asked for at tier-2: selected, still above the tier.
+  const asked = rolodexItems({ build: draft({ slis: [...FIXTURE.provenance.toggles.slis, 'kafka_controller_election_rate'] }), library: LIBRARY }).find(i => i.id === 'controller_election_rate');
+  assert.deepEqual([asked.selected, asked.aboveTier, asked.note], [true, true, 'from the tier-1 profile']);
+  // At tier-1 the same SLI is a default and, with the defaults, in the pack.
   const t1 = rolodexItems({ build: draft({ tier: 'tier-1' }), library: LIBRARY }).find(i => i.id === 'controller_election_rate');
-  assert.deepEqual([t1.reachable, t1.selected, t1.objectiveLabel, t1.window], [true, true, '99%', '7d']);
+  assert.deepEqual([t1.reachable, t1.aboveTier, t1.selected, t1.objectiveLabel, t1.window, t1.note], [true, false, true, '99%', '7d', null]);
   // An explicit list: only its keys are selected.
   const explicit = rolodexItems({ build: draft({ slis: ['kafka_broker_availability'] }), library: LIBRARY });
   assert.deepEqual(explicit.filter(i => i.selected).map(i => i.key), ['kafka_broker_availability']);
@@ -1302,6 +1398,141 @@ test('rolodexItems: the selected entries’ SLIs with the objective at the tier,
   assert.equal(single.find(i => i.entry === 'kafka' && i.id === 'broker_availability').key, 'broker_availability');
   assert.equal(single.find(i => i.entry === 'http-service' && i.id === 'availability').key, 'http_service_availability');
   assert.deepEqual(rolodexItems({ build: defaultBuildState(), library: LIBRARY }), []);
+});
+
+// The drive's copies: an objective and window override, an edited query, a custom SLI — and the engine's answer to them.
+const COPIES = {
+  overrides: { kafka_produce_latency_p99: { objective: 0.995, window: '7d' }, http_service_latency_p99: { query: 'histogram_quantile(0.99, sum by (le)(rate(http_seconds_bucket[5m])))' } },
+  custom: [{ id: 'checkout_success', type: 'ratio', good: 'sum(rate(checkout_ok_total[5m]))', total: 'sum(rate(checkout_total[5m]))', objective: 0.999, window: '30d', description: 'Checkouts that succeed' }],
+};
+const copiesResult = () => instantiateInProcess({ ...INPUTS, ...COPIES });
+const copiesDraft = (over = {}) => { const r = copiesResult(); return draft({ ...COPIES, result: { canonical: r.canonical, canonicalYaml: r.canonicalYaml, todos: r.todos, warnings: r.warnings, summary: r.summary, conformance: r.conformance, schemaErrors: r.schemaErrors, provenance: r.provenance, adapted: r.adapted }, ...over }); };
+
+test('rolodexItems with the copies: the effective values and the customised fields, the evidence turned custom by an edited query, the custom SLI as a card of its own, the engine\'s promql warning on its card', () => {
+  const b = copiesDraft();
+  const items = rolodexItems({ build: b, library: LIBRARY });
+  assert.equal(items.length, 11, 'ten library SLIs, then the custom one');
+  const pl = items.find(i => i.key === 'kafka_produce_latency_p99');
+  assert.deepEqual([pl.objective, pl.objectiveLabel, pl.window, pl.customised, pl.customisedLabel, pl.evidence, pl.evidenceNote], [0.995, '99.5%', '7d', ['objective', 'window'], 'customised: objective, window', 'recorded-live', null]);
+  assert.deepEqual([pl.defaults.objective, pl.defaults.window, pl.defaults.threshold, pl.effective.threshold], [0.99, '30d', 0.1, 0.1], 'the library defaults beside the effective values; the bound untouched');
+  assert.deepEqual(pl.override, { objective: 0.995, window: '7d' });
+  const lp = items.find(i => i.key === 'http_service_latency_p99');
+  assert.deepEqual([lp.evidence, lp.libraryEvidence, lp.evidenceNote, lp.customised], ['custom', 'semconv', 'edited — the library’s evidence no longer applies', ['query']]);
+  assert.equal(lp.effective.query, COPIES.overrides.http_service_latency_p99.query);
+  assert.match(lp.defaults.query, /^histogram_quantile\(0\.99,/, 'the library template stays available as the default');
+  const cu = items.find(i => i.key === 'checkout_success');
+  assert.deepEqual([cu.custom, cu.selected, cu.entrySelected, cu.entryTitle, cu.entryKind, cu.type, cu.evidence, cu.evidenceNote, cu.objectiveLabel, cu.window, cu.description, cu.tiers, cu.focusKey, cu.customised, cu.aboveTier],
+    [true, true, true, 'Custom SLI', 'custom', 'ratio', 'custom', 'written in the studio — no library evidence', '99.9%', '30d', 'Checkouts that succeed', [], 'sli:custom:checkout_success', [], false]);
+  assert.deepEqual(cu.def, COPIES.custom[0]);
+  assert.equal(items.findIndex(i => i.custom), 10, 'after the selected entries\' SLIs');
+  assert.equal(rolodexItems({ build: b, library: LIBRARY, all: true }).findIndex(i => !i.entrySelected), 11, 'the foreign SLIs come after the custom one');
+  // The engine's promql warning for an SLI lands on its card — and only its card.
+  const broken = draft({ ...COPIES, result: { ...b.result, warnings: [{ kind: 'promql', sli: 'checkout_success', field: 'good', message: 'SLI checkout_success.good is not valid PromQL' }] } });
+  const withWarn = rolodexItems({ build: broken, library: LIBRARY });
+  assert.equal(withWarn.find(i => i.key === 'checkout_success').promqlWarning, 'SLI checkout_success.good is not valid PromQL');
+  assert.ok(withWarn.filter(i => i.promqlWarning).length === 1);
+  // An open card (UI state, never persisted).
+  assert.equal(rolodexItems({ build: draft({ customOpen: { kafka_produce_latency_p99: true } }), library: LIBRARY }).find(i => i.key === 'kafka_produce_latency_p99').open, true);
+  assert.ok(!BUILD_PERSIST_FIELDS.includes('customOpen') && !BUILD_PERSIST_FIELDS.includes('customDraft') && !BUILD_PERSIST_FIELDS.includes('customDraftErrors'));
+  // An override is read by own key only.
+  assert.deepEqual(overrideFor({ overrides: Object.create({ kafka_produce_latency_p99: { objective: 0.5 } }) }, 'kafka_produce_latency_p99'), {});
+  assert.deepEqual(overrideFor({ overrides: { kafka_produce_latency_p99: { objective: 0.5, window: '', nope: 1 } } }, 'kafka_produce_latency_p99'), { objective: 0.5 }, 'known fields with a value only');
+  assert.deepEqual([customisedFields({ window: '7d', objective: 0.5 }), promqlEdited({ objective: 0.5 }), promqlEdited({ good: 'x' })], [['objective', 'window'], false, true]);
+  assert.deepEqual(effectiveSli(INDEX.entries.find(e => e.id === 'kafka').slis.find(x => x.id === 'produce_latency_p99'), 'tier-2', { threshold: 0.2 }).threshold, 0.2);
+  assert.deepEqual(customEffective(COPIES.custom[0]).good, COPIES.custom[0].good);
+  assert.deepEqual([OVERRIDE_FIELDS.length, SLO_WINDOWS, PROMQL_FIELDS], [8, ['7d', '28d', '30d', '90d'], ['query', 'good', 'total']]);
+  // The engine's answer to the drive's copies, for the record: the SLO ids follow the objectives, the evidence dropped where the query was edited, the custom SLI in every section.
+  const r = b.result;
+  assert.equal(r.canonical.spec.slos.find(x => x.sli === 'kafka_produce_latency_p99').id, 'kafka_produce_latency_p99_99_5');
+  assert.equal(r.provenance.slis.http_service_latency_p99.evidence.status, 'custom');
+  assert.ok(r.canonical.spec.policy.burn_rate_alerts.some(a => a.slo === 'checkout_success_99_9'));
+  assert.deepEqual(r.schemaErrors, []);
+  assert.deepEqual(customisedMap(r), { kafka_produce_latency_p99: { fields: ['objective', 'window'], custom: false, evidence: 'recorded-live' }, http_service_latency_p99: { fields: ['query'], custom: false, evidence: 'custom' }, checkout_success: { fields: [], custom: true, evidence: 'custom' } });
+  // DEFINE's L1 candidates carry the copies too: the custom SLI as a candidate, the above-tier and customised tags.
+  const cands = sliCandidates({ build: draft({ ...COPIES, slis: [...FIXTURE.provenance.toggles.slis, 'kafka_controller_election_rate'] }), library: LIBRARY });
+  assert.equal(cands.length, 9);
+  assert.deepEqual(cands.at(-1).key, 'checkout_success');
+  const ghosts = buildDefineModel({ build: draft({ ...COPIES, slis: [...FIXTURE.provenance.toggles.slis, 'kafka_controller_election_rate'], result: null }), library: LIBRARY, requirements: REQUIREMENTS }).stack.slabs.find(x => x.id === 'L1').ghosts;
+  assert.deepEqual(ghosts.find(g => g.key === 'sli:kafka_controller_election_rate').tags, ['sli', 'threshold', 'kafka', 'from tier-1']);
+  assert.deepEqual(ghosts.find(g => g.key === 'sli:kafka_produce_latency_p99').tags, ['sli', 'threshold', 'kafka', 'customised']);
+  assert.deepEqual(ghosts.find(g => g.key === 'sli:checkout_success').tags, ['sli', 'ratio', 'custom']);
+  assert.equal(ghosts.find(g => g.key === 'slo:kafka_produce_latency_p99').desc, '99.5% over 7d');
+});
+
+test('the edit face model: the fields per type with value, library default, overridden and the focus key; a custom SLI has no default; the engine\'s error on its field', () => {
+  const items = rolodexItems({ build: copiesDraft(), library: LIBRARY });
+  const face = editFaceModel(items.find(i => i.key === 'kafka_produce_latency_p99'));
+  assert.deepEqual(face.fields.map(f => f.id), ['objective', 'window', 'threshold', 'unit', 'query', 'description'], 'a threshold SLI\'s fields');
+  assert.deepEqual(fieldsForType('ratio'), ['objective', 'window', 'good', 'total', 'description']);
+  const obj = face.fields[0];
+  assert.deepEqual([obj.kind, obj.value, obj.default, obj.overridden, obj.resettable, obj.focusKey, obj.inputId, obj.error], ['percent', '99.5', '99', true, true, 'ov:kafka_produce_latency_p99:objective', 'build-edit-kafka_produce_latency_p99-objective', null]);
+  const win = face.fields[1];
+  assert.deepEqual([win.kind, win.value, win.default, win.overridden, win.options], ['window', '7d', '30d', true, ['7d', '28d', '30d', '90d']]);
+  const thr = face.fields[2];
+  assert.deepEqual([thr.kind, thr.value, thr.default, thr.overridden, thr.resettable], ['number', '0.1', '0.1', false, false]);
+  assert.equal(face.fields.find(f => f.id === 'query').kind, 'promql');
+  assert.deepEqual([face.custom, face.readOnly, face.customised, face.evidence, face.promqlWarning], [false, false, ['objective', 'window'], { status: 'recorded-live', note: null }, null]);
+  assert.equal(face.provenance, 'customised: objective, window — the rest is Apache Kafka’s');
+  // The edited query: the evidence line says so.
+  const edited = editFaceModel(items.find(i => i.key === 'http_service_latency_p99'));
+  assert.deepEqual(edited.evidence, { status: 'custom', note: 'edited — the library’s evidence no longer applies' });
+  assert.equal(edited.fields.find(f => f.id === 'query').overridden, true);
+  // Nothing customised: the library's defaults, nothing resettable.
+  const plain = editFaceModel(items.find(i => i.key === 'kafka_broker_availability'));
+  assert.ok(plain.fields.every(f => !f.overridden && !f.resettable) && plain.provenance === 'Apache Kafka’s defaults');
+  assert.deepEqual(plain.fields.map(f => f.id), ['objective', 'window', 'good', 'total', 'description']);
+  // A custom SLI: no default, never resettable, cu: keys, the custom provenance.
+  const custom = editFaceModel(items.find(i => i.key === 'checkout_success'));
+  assert.ok(custom.custom && custom.fields.every(f => f.default === null && !f.resettable && f.focusKey.startsWith('cu:checkout_success:')));
+  assert.deepEqual([custom.fields[0].value, custom.evidence, custom.provenance], ['99.9', { status: 'custom', note: 'written in the studio — no library evidence' }, 'custom — written in the studio']);
+  // The engine's errors land on their fields; read-only turns the resets off.
+  const errs = splitBuildErrors(['override kafka_produce_latency_p99.window: the window is one of 7d | 28d | 30d | 90d']).byOverride.kafka_produce_latency_p99;
+  const withErr = editFaceModel(items.find(i => i.key === 'kafka_produce_latency_p99'), { errors: errs });
+  assert.equal(withErr.fields.find(f => f.id === 'window').error, 'the window is one of 7d | 28d | 30d | 90d');
+  const ro = editFaceModel(items.find(i => i.key === 'kafka_produce_latency_p99'), { readOnly: true });
+  assert.ok(ro.readOnly && ro.fields.every(f => !f.resettable) && ro.fields[0].overridden);
+  // The conversions the face and the controller share.
+  assert.deepEqual([percentText(0.995), percentText(0.9999), percentText(0.99), percentText(null)], ['99.5', '99.99', '99', '']);
+  assert.deepEqual([ratioOf('99.5'), ratioOf('99.5 %'), ratioOf('abc')], [0.995, 0.995, NaN]);
+  assert.deepEqual([fieldValueFor('objective', '99.5'), fieldValueFor('threshold', '0.25'), fieldValueFor('window', ' 7d '), fieldValueFor('query', 'up'), fieldValueFor('objective', ''), fieldValueFor('threshold', 'x')], [0.995, 0.25, '7d', 'up', null, NaN]);
+});
+
+test('the custom-form model: the id slugged from the name until it is typed, the fields per type, the clash with an SLI of the pack, the engine\'s errors inline, the definition the engine takes', () => {
+  assert.deepEqual(['Checkout success', 'HTTP 5xx rate!', '9 lives', '__x', 'a'.repeat(70)].map(slugifySliId), ['checkout_success', 'http_5xx_rate', 'lives', 'x', 'a'.repeat(63)]);
+  const empty = customFormModel(null);
+  assert.deepEqual([empty.draft.type, empty.draft.objective, empty.draft.window, empty.draft.id, empty.canSubmit, empty.addLabel, empty.focusKey], ['ratio', '99.9', '30d', '', false, 'Add to the pack', 'cf:add']);
+  assert.deepEqual(empty.fields.map(f => f.id), ['name', 'id', 'type', 'description', 'good', 'total', 'objective', 'window']);
+  assert.deepEqual(empty.fields.map(f => f.focusKey), ['cf:name', 'cf:id', 'cf:type', 'cf:description', 'cf:good', 'cf:total', 'cf:objective', 'cf:window']);
+  assert.deepEqual(empty.required, ['objective', 'window', 'good', 'total']);
+  const typed = customFormModel({ name: 'Checkout success', good: 'sum(rate(checkout_ok_total[5m]))', total: 'sum(rate(checkout_total[5m]))' });
+  assert.deepEqual([typed.draft.id, typed.canSubmit, typed.idClash, typed.fields.find(f => f.id === 'name').hint], ['checkout_success', true, null, 'id checkout_success']);
+  const threshold = customFormModel({ name: 'Checkout p99', type: 'threshold', query: 'x', threshold: '0.3' });
+  assert.deepEqual(threshold.fields.map(f => f.id), ['name', 'id', 'type', 'description', 'query', 'threshold', 'unit', 'objective', 'window']);
+  assert.deepEqual([threshold.required, threshold.canSubmit], [['objective', 'window', 'query', 'threshold'], true]);
+  assert.equal(customFormModel({ name: 'Checkout p99', type: 'threshold', query: 'x' }).canSubmit, false, 'the bound is required');
+  // A typed id sticks; a clash with an SLI of the pack is said before the engine is asked.
+  const own = customFormModel({ name: 'Checkout success', id: 'checkout_ok', idTouched: true, good: 'a', total: 'b' });
+  assert.equal(own.draft.id, 'checkout_ok');
+  const clash = customFormModel({ name: 'kafka broker availability', good: 'a', total: 'b' }, { existingKeys: ['kafka_broker_availability'] });
+  assert.deepEqual([clash.draft.id, clash.canSubmit, clash.fields.find(f => f.id === 'id').error], ['kafka_broker_availability', false, 'kafka_broker_availability is already an SLI of the pack — pick another name']);
+  assert.equal(customFormModel({ name: 'x', good: 'a', total: 'b' }).canSubmit, false, 'a one-letter id is not a slug the engine takes');
+  // The engine's usage errors of the last attempt, keyed by field (from the 400).
+  const errs = splitBuildErrors(['custom checkout_success.window: the window is one of 7d | 28d | 30d | 90d (the schema\'s SLO windows), got "30x"']).byCustom;
+  const withErr = customFormModel({ name: 'Checkout success', good: 'a', total: 'b', window: '30x' }, { errors: errs });
+  assert.equal(withErr.fields.find(f => f.id === 'window').error, 'the window is one of 7d | 28d | 30d | 90d (the schema\'s SLO windows), got "30x"');
+  assert.equal(withErr.generalError, null);
+  const general = customFormModel({ name: 'Checkout success', good: 'a', total: 'b' }, { errors: splitBuildErrors(['custom checkout_success: something']).byCustom });
+  assert.equal(general.generalError, 'something');
+  // The definition the engine takes: the percent → the ratio, the bound a number, empty fields left out.
+  assert.deepEqual(customDefFromDraft({ name: 'Checkout success', good: 'a', total: 'b', objective: '99.9', window: '30d', description: ' ' }), { id: 'checkout_success', type: 'ratio', objective: 0.999, window: '30d', good: 'a', total: 'b' });
+  assert.deepEqual(customDefFromDraft({ name: 'Checkout p99', type: 'threshold', query: 'q', threshold: '0.3', unit: 'seconds', objective: '99', window: '7d', description: 'p99' }), { id: 'checkout_p99', type: 'threshold', objective: 0.99, window: '7d', query: 'q', threshold: 0.3, unit: 'seconds', description: 'p99' });
+  assert.equal(normalizeDraft({ type: 'nope' }).type, 'ratio');
+  // The definition the form makes is one the engine accepts.
+  const made = instantiateInProcess({ ...INPUTS, custom: [customDefFromDraft({ name: 'Checkout success', good: 'sum(rate(checkout_ok_total[5m]))', total: 'sum(rate(checkout_total[5m]))' })] });
+  assert.ok(made.canonical.spec.slos.some(x => x.id === 'checkout_success_99_9') && made.schemaErrors.length === 0);
+  // The kinds the studio warns about: override joined, sli-excluded retired.
+  assert.ok(WARNING_KINDS.override && !WARNING_KINDS['sli-excluded']);
+  assert.equal(summarizeWarnings([{ kind: 'override', sli: 'x', message: 'm' }])[0].label, 'Override kept aside');
 });
 
 test('addSliSelection (the pure part of addSli): a product not yet selected joins with that one SLI, the rest of the selection kept and re-keyed', () => {
@@ -1322,9 +1553,12 @@ test('addSliSelection (the pure part of addSli): a product not yet selected join
   assert.equal(back.slis, null, 'every reachable SLI ticked again: the defaults');
   const again = addSliSelection({ build: draft(), library: LIBRARY }, 'kafka', 'broker_availability');
   assert.equal(again.slis, null, 'already in: nothing changes in the list');
-  // Above the tier: refused with the reason, nothing changes.
+  // Above the tier: added like any other — the tier is a seed, not a gate.
   const above = addSliSelection({ build: draft(), library: LIBRARY }, 'kafka', 'controller_election_rate');
-  assert.deepEqual([above.changed, above.reason, above.entries, above.slis], [false, 'needs tier-1', ['kafka', 'http-service'], null]);
+  assert.deepEqual([above.changed, above.reason, above.entries, above.slis], [true, null, ['kafka', 'http-service'], [...FIXTURE.provenance.toggles.slis.slice(0, 5), 'kafka_controller_election_rate', ...FIXTURE.provenance.toggles.slis.slice(5)]], 'the seven plus the tier-1 one, in the entries\' order');
+  const aboveForeign = addSliSelection({ build: draft(), library: LIBRARY }, 'ibm-mq', 'canary_roundtrip_p99');   // an MQ tier-1 SLI, at tier-2
+  assert.ok(aboveForeign.changed && aboveForeign.entries.includes('ibm-mq') && aboveForeign.slis.includes('ibm_mq_canary_roundtrip_p99'), JSON.stringify(aboveForeign));
+  assert.equal(aboveForeign.slis.filter(k => k.startsWith('ibm_mq_')).length, 1, 'only the one asked for; the MQ defaults do not pour in');
   assert.deepEqual(addSliSelection({ build: draft(), library: LIBRARY }, 'nope', 'x').changed, false);
   assert.deepEqual(addSliSelection({ build: draft(), library: LIBRARY }, 'kafka', 'nope').changed, false);
   // Pure: the draft passed in is untouched.
@@ -1441,10 +1675,27 @@ test('buildSheetModel: per layer the title and its question, the clauses with th
   assert.deepEqual([l1.mode, l1.readOnly, l1.compose, l1.state, l1.stateText], ['edit', false, false, 'pass', '3 of 3 clauses pass']);
   assert.deepEqual(l1.clauses.map(c => [c.id, c.state]), [['L1.MUST.availability_slo', 'pass'], ['L1.MUST.latency_slo', 'pass'], ['L1.MUST.sli_covered_by_slo', 'pass']]);
   assert.equal(l1.rolodex.items.length, 10);
-  assert.deepEqual(l1.rolodex.counts, { total: 10, selected: 7, selectable: 7, aboveTier: 3, library: 10, chosen: 2 });
+  assert.deepEqual(l1.rolodex.counts, { total: 10, selected: 7, selectable: 10, aboveTier: 0, customised: 0, custom: 0, library: 10, chosen: 2 }, 'aboveTier counts the SLIs in the pack from a higher tier — informational, none by default');
   assert.deepEqual(l1.rolodex.allKeys, FIXTURE.provenance.toggles.slis);
   assert.equal(l1.rolodex.filterAll, false);
+  assert.ok(l1.rolodex.customForm && l1.rolodex.customForm.addLabel === 'Add to the pack', 'the + Custom SLI card on COMPILE');
   assert.equal(sheet('L1', {}, draft({ rolodexAll: true })).rolodex.items.length, 56);
+  assert.ok(l1.rolodex.items.every(i => i.face === null), 'no face open by default');
+  // The copies on the sheet: the counts, the faces (open on COMPILE; every customised or custom card on VERIFY), the existing keys the form checks against.
+  const withCopies = sheet('L1', {}, copiesDraft({ slis: [...FIXTURE.provenance.toggles.slis, 'kafka_controller_election_rate'], customOpen: { kafka_produce_latency_p99: true } }));
+  assert.deepEqual(withCopies.rolodex.counts, { total: 11, selected: 9, selectable: 10, aboveTier: 1, customised: 2, custom: 1, library: 10, chosen: 2 });
+  assert.deepEqual(withCopies.rolodex.items.filter(i => i.face).map(i => i.key), ['kafka_produce_latency_p99'], 'on COMPILE only the open card has a face');
+  assert.equal(withCopies.rolodex.items.find(i => i.face).face.readOnly, false);
+  assert.ok(withCopies.rolodex.customForm.draft && !withCopies.rolodex.customForm.canSubmit);
+  const verifyCopies = buildSheetModel({ layerId: 'L1', build: copiesDraft(), library: LIBRARY, requirements: T2, mode: 'verify' });
+  assert.deepEqual(verifyCopies.rolodex.items.filter(i => i.face).map(i => [i.key, i.face.readOnly]), [['kafka_produce_latency_p99', true], ['http_service_latency_p99', true], ['checkout_success', true]], 'on VERIFY every customised or custom card shows its read-only face');
+  assert.equal(verifyCopies.rolodex.customForm, null, 'no form off COMPILE');
+  assert.equal(buildSheetModel({ layerId: 'L1', build: draft(), library: LIBRARY, requirements: T2, mode: 'preview' }).rolodex.customForm, null);
+  // The engine's errors of an override reach its face; those of the form's last attempt reach the form.
+  const errDraft = copiesDraft({ customOpen: { kafka_produce_latency_p99: true }, error: ['override kafka_produce_latency_p99.window: the window is one of 7d | 28d | 30d | 90d'], customDraft: { name: 'Checkout p99', type: 'threshold', query: 'x', threshold: '1', window: '30x' }, customDraftErrors: ['custom checkout_p99.window: the window is one of 7d | 28d | 30d | 90d (the schema\'s SLO windows), got "30x"'] });
+  const errSheet = sheet('L1', {}, errDraft);
+  assert.equal(errSheet.rolodex.items.find(i => i.key === 'kafka_produce_latency_p99').face.fields.find(f => f.id === 'window').error, 'the window is one of 7d | 28d | 30d | 90d');
+  assert.match(errSheet.rolodex.customForm.fields.find(f => f.id === 'window').error, /^the window is one of 7d/);
   assert.deepEqual(l1.switches.map(s => [s.id, s.on]), [['slos', true]]);
   assert.deepEqual(l1.lists.map(l => [l.id, l.items.length]), [['slos', 7]]);
   assert.equal(l1.lists[0].items[0].title, 'kafka_broker_availability_99_9');
@@ -1541,8 +1792,9 @@ test('renderBuildSheet draws the dialog headlessly: the ARIA, the title and ques
   assert.ok(l1.includes('class="build-sheet-close" data-close aria-label="Close the layer sheet (Esc)"'));
   assert.ok(l1.includes('Clauses at tier-2 <span class="build-sheet-count">3</span>'));
   assert.equal((l1.match(/<li class="build-rail-clause is-pass"/g) || []).length, 3, 'the clause rows are the shared atom');
-  // The rolodex: ten cards, the current-tier objective large, the other tiers muted, a switch each; the above-tier one disabled with the reason.
-  assert.equal((l1.match(/class="build-rolo-card/g) || []).length, 10);
+  // The rolodex: ten SLI cards and the '+ Custom SLI' card, the objective each starts with large, the other tiers muted, a switch each; the above-tier one addable with its note.
+  assert.equal((l1.match(/class="build-rolo-card/g) || []).length, 11);
+  assert.equal((l1.match(/class="build-rolo-card[^"]*build-rolo-custom-form/g) || []).length, 1);
   assert.ok(l1.includes('<div class="build-rolodex-track" role="group" aria-roledescription="carousel" aria-label="SLI cards — arrow keys move" tabindex="0" data-scroll-key="rolodex:L1">'));
   // The scroll offsets rerenderBuild preserves are keyed per layer: what L1's body scrolled to is not
   // restored on L3's body, so a newly opened layer starts at its top (measured: it opened pre-scrolled).
@@ -1555,17 +1807,25 @@ test('renderBuildSheet draws the dialog headlessly: the ARIA, the title and ques
   assert.ok(l1.includes('<b>99.9%</b><span>over 30d · at tier-2</span>'));
   assert.ok(l1.includes('class="is-muted" title="tier-3: 99% over 30d">tier-3 <b>99%</b> 30d</span>'));
   assert.ok(l1.includes('role="switch" class="build-switch" aria-checked="true" aria-label="broker_availability of Apache Kafka — remove from the pack" data-focus-key="sli:kafka:broker_availability" data-sli="kafka_broker_availability" data-entry="kafka" data-sli-id="broker_availability" data-selected="1" data-entry-selected="1"'));
-  assert.ok(l1.includes('aria-label="controller_election_rate of Apache Kafka — needs tier-1" disabled aria-disabled="true" title="needs tier-1 — this SLI is above the tier"'));
-  assert.ok(l1.includes('<b class="build-rolo-needs">needs tier-1</b><span>this SLI is above the tier — switch the tier to add it</span>'));
+  // Above the tier: no disabled switch, no "needs tier-1" — an informational chip, the profile it starts from, the switch live.
+  assert.ok(l1.includes('aria-label="controller_election_rate of Apache Kafka — add to the pack (from the tier-1 profile)" data-focus-key="sli:kafka:controller_election_rate" data-sli="kafka_controller_election_rate" data-entry="kafka" data-sli-id="controller_election_rate" data-selected="0" data-entry-selected="1"'), 'the above-tier switch is live');
+  assert.ok(!/aria-label="controller_election_rate[^"]*"[^>]*\bdisabled\b/.test(l1) && !l1.includes('build-rolo-needs') && !l1.includes('needs tier-1'));
+  assert.ok(l1.includes('<span class="build-rolo-chip is-above" title="this SLI&#39;s own tier is tier-1: it starts from that profile&#39;s objective and window — add it if you need it, the tier is a seed, not a gate">from the tier-1 profile</span>'));
+  assert.ok(l1.includes('<b>99%</b><span>over 7d · the tier-1 profile</span>'));
+  assert.equal((l1.match(/build-rolo-chip is-above/g) || []).length, 3, 'the three tier-1 SLIs of the selection');
+  assert.ok(l1.includes('data-customise="kafka_broker_availability"') && l1.includes('>Customise</button>'), 'a selected card has the Customise affordance');
+  assert.ok(!l1.includes('data-customise="kafka_controller_election_rate"'), 'an unselected card has none');
+  assert.ok(l1.includes('id="build-window-options"'));
   assert.ok(l1.includes('data-rolodex-all="0"') && l1.includes('show every product'));
-  assert.ok(l1.includes('1 / 10'));
+  assert.ok(l1.includes('1 / 11'));
+  assert.ok(l1.includes('7 in the pack · 10 in the library'));
   // The SLOs switch with its consequence in one line.
   assert.ok(l1.includes('role="switch" class="build-switch" aria-checked="true" aria-label="SLOs section" data-focus-key="toggle:slos" data-toggle="slos"'));
   assert.ok(l1.includes('off is expected to drop 4 clauses of the tier: availability SLO, latency SLO, every SLI under an SLO, chaos in staging'));
   assert.ok(!l1.includes('data-compose'), 'no compose action on COMPILE');
   // Every product: a foreign card is dashed, its switch says it selects the product.
   const all = html('L1', 'edit', draft({ rolodexAll: true }));
-  assert.equal((all.match(/class="build-rolo-card/g) || []).length, 56);
+  assert.equal((all.match(/class="build-rolo-card/g) || []).length, 57);
   assert.ok(all.includes('aria-label="qmgr_process_up of IBM MQ — add to the pack (selects IBM MQ too)" data-focus-key="sli:ibm-mq:qmgr_process_up" data-sli="ibm_mq_qmgr_process_up" data-entry="ibm-mq" data-sli-id="qmgr_process_up" data-selected="0" data-entry-selected="0"'));
   assert.ok(all.includes('class="build-rolo-card is-foreign"') && all.includes('not selected yet'));
   // L2: no switch, the param inputs editable with sheet focus keys, the lists.
@@ -1586,9 +1846,10 @@ test('renderBuildSheet draws the dialog headlessly: the ARIA, the title and ques
   assert.ok(l4.includes('data-toggle="policy"') && l4.includes('data-toggle="routes"'));
   assert.ok(l4.includes('Channels <span class="build-sheet-count">4</span>') && l4.includes('data-focus-key="param:oncall_channel@L4/sheet"'));
   assert.ok(l4.includes('<span class="build-sheet-item-title">SEV1 routes</span>') && l4.includes('<span>voice pagerduty://orders-api</span>'));
-  // Preview (DEFINE): every switch disabled, the params read-only, the compose action present.
+  // Preview (DEFINE): every switch disabled, the params read-only, the compose action present, no Customise and no form.
   const pv = html('L1', 'preview');
   assert.ok(pv.includes('data-mode="preview"') && pv.includes('<button type="button" class="mcp-refresh-btn build-sheet-compose-btn" data-compose>Compose in Compile'));
+  assert.ok(!pv.includes('data-customise=') && !pv.includes('build-rolo-custom-form') && (pv.match(/class="build-rolo-card/g) || []).length === 10);
   // Every add / remove and section switch is disabled; only the "show every product" filter (browsing) stays live.
   assert.equal((pv.match(/role="switch"/g) || []).length - 1, (pv.match(/role="switch"[^>]*\bdisabled\b/g) || []).length, 'nothing flips in a preview');
   assert.ok(!/data-rolodex-all="0"[^>]*\bdisabled\b/.test(pv) && !/\bdisabled\b[^>]*data-rolodex-all/.test(pv), 'the filter stays live');
@@ -1626,6 +1887,186 @@ test('renderBuildSheet draws the dialog headlessly: the ARIA, the title and ques
   assert.ok(paramRowHtml({ ...p, error: 'no' }, { readOnly: true }).includes('<span class="build-param-flag is-error">rejected</span>') && paramRowHtml({ ...p, error: 'no' }, { readOnly: true }).includes('role="alert">no</span>'));
 });
 
+test('the Customise face renders in place on COMPILE: the fields with the library default and the reset, the evidence line once a query is edited, the promql warning; the custom card; VERIFY read-only with the provenance', () => {
+  const b = copiesDraft({ customOpen: { kafka_produce_latency_p99: true, http_service_latency_p99: true, checkout_success: true } });
+  const html = buildSheetHtml(buildSheetModel({ layerId: 'L1', build: b, library: LIBRARY, requirements: T2, mode: 'edit' }));
+  // The card stays one card in the snap track, expanded (is-open), the button reads Done, the chips say customised.
+  assert.ok(html.includes('class="build-rolo-card is-selected is-customised is-open" data-snap-card data-sli="kafka_produce_latency_p99"'));
+  assert.ok(html.includes('data-customise="kafka_produce_latency_p99" data-focus-key="customise:kafka_produce_latency_p99" aria-expanded="true" aria-controls="build-face-kafka_produce_latency_p99">Done</button>'));
+  assert.ok(html.includes('<span class="build-rolo-chip is-customised" title="customised: objective, window">customised</span>'));
+  assert.ok(html.includes('<b>99.5%</b><span>over 7d · customised</span>'), 'the overridden objective large');
+  // The face: the objective as a percent with the library default and its reset, the window with the datalist, the bound at its default (no reset).
+  assert.ok(html.includes('<div class="build-edit-field is-overridden" data-field="objective">'));
+  assert.ok(html.includes('id="build-edit-kafka_produce_latency_p99-objective" data-focus-key="ov:kafka_produce_latency_p99:objective" data-override-field="objective" data-sli="kafka_produce_latency_p99" value="99.5"'));
+  assert.ok(html.includes('<span class="build-edit-default">library <code>99</code></span>'));
+  assert.ok(html.includes('data-reset="objective" data-sli="kafka_produce_latency_p99" data-focus-key="ov:kafka_produce_latency_p99:objective:reset" title="back to the library default (99)" aria-label="Objective: back to the library default"><span aria-hidden="true">↺</span> library default</button>'));
+  assert.ok(html.includes('data-override-field="window" data-sli="kafka_produce_latency_p99" list="build-window-options" value="7d"'));
+  assert.ok(html.includes('<div class="build-edit-field" data-field="threshold">') && html.includes('data-override-field="threshold" data-sli="kafka_produce_latency_p99" value="0.1"'));
+  assert.ok(!/data-reset="threshold" data-sli="kafka_produce_latency_p99"/.test(html), 'nothing to reset at the default');
+  assert.ok(html.includes('<textarea class="build-edit-input" id="build-edit-kafka_produce_latency_p99-query" data-focus-key="ov:kafka_produce_latency_p99:query" data-override-field="query"'), 'the PromQL is a textarea');
+  assert.ok(html.includes('<span class="build-edit-provenance">customised: objective, window — the rest is Apache Kafka’s</span>'));
+  assert.ok(html.includes('build-evidence-recorded-live') && html.includes('the library’s evidence — its expression is what runs'));
+  // The edited query: the evidence badge reads custom and the line says so — on the card and on the face.
+  assert.ok(html.includes('<div class="build-rolo-evidence-note">edited — the library’s evidence no longer applies</div>'));
+  assert.ok(html.includes('data-override-field="query" data-sli="http_service_latency_p99"') && html.includes('<span class="build-evidence build-evidence-custom" title="custom">custom</span><span class="build-edit-evidence-note">edited — the library’s evidence no longer applies</span>'));
+  // The custom SLI's card: the custom chip, cu: keys, no default, the switch removes it.
+  assert.ok(html.includes('class="build-rolo-card is-selected is-custom is-open" data-snap-card data-sli="checkout_success" data-entry="" data-sli-id="checkout_success" data-custom="1"'));
+  assert.ok(html.includes('<span class="build-rolo-chip is-custom" title="written in the studio — not a library SLI">custom</span>'));
+  assert.ok(html.includes('data-focus-key="cu:checkout_success:good" data-custom-field="good" data-sli="checkout_success"'));
+  assert.ok(html.includes('aria-label="checkout_success of Custom SLI — remove your SLI from the pack" data-focus-key="sli:custom:checkout_success" data-sli="checkout_success" data-entry="" data-sli-id="checkout_success" data-selected="1" data-entry-selected="1" data-custom="1"'));
+  assert.ok(!/data-reset="[a-z]+" data-sli="checkout_success"/.test(html), 'a custom SLI has no library default to go back to');
+  assert.ok(html.includes('<span class="build-edit-provenance">custom — written in the studio</span>'));
+  // The promql warning of the engine prints on its card.
+  const warned = draft({ ...COPIES, customOpen: { checkout_success: true }, result: { ...b.result, warnings: [{ kind: 'promql', sli: 'checkout_success', field: 'good', message: 'SLI checkout_success.good is not valid PromQL after parameter substitution (near "(")' }] } });
+  assert.ok(buildSheetHtml(buildSheetModel({ layerId: 'L1', build: warned, library: LIBRARY, requirements: T2, mode: 'edit' })).includes('<div class="build-edit-error build-edit-promql" role="alert">SLI checkout_success.good is not valid PromQL after parameter substitution (near &quot;(&quot;)</div>'));
+  // The '+ Custom SLI' card: the form's fields with cf: keys, the type select, the add button disabled until the required fields are filled; the engine's error inline.
+  assert.ok(html.includes('<article class="build-rolo-card build-rolo-custom-form" data-snap-card data-custom-form aria-label="Add a custom SLI">'));
+  assert.ok(html.includes('data-focus-key="cf:name" data-custom-draft="name"') && html.includes('<select class="build-edit-input" id="build-custom-type" data-focus-key="cf:type" data-custom-draft="type"') && html.includes('data-custom-draft="good"') && !html.includes('data-custom-draft="query"'));
+  assert.ok(html.includes('<button type="button" class="mcp-refresh-btn build-custom-add" data-add-custom data-focus-key="cf:add" disabled>Add to the pack'));
+  const typed = draft({ customDraft: { name: 'Checkout p99', type: 'threshold', query: 'q', threshold: '0.3' }, customDraftErrors: ['custom checkout_p99.window: the window is one of 7d | 28d | 30d | 90d (the schema\'s SLO windows), got "30x"'] });
+  const typedHtml = buildSheetHtml(buildSheetModel({ layerId: 'L1', build: typed, library: LIBRARY, requirements: T2, mode: 'edit' }));
+  assert.ok(typedHtml.includes('data-custom-draft="query"') && typedHtml.includes('data-custom-draft="threshold"') && typedHtml.includes('data-custom-draft="unit"') && !typedHtml.includes('data-custom-draft="good"'), 'the threshold fields');
+  assert.ok(typedHtml.includes('<span class="build-edit-error" role="alert">the window is one of 7d | 28d | 30d | 90d (the schema&#39;s SLO windows), got &quot;30x&quot;</span>') || typedHtml.includes('<span class="build-edit-error" role="alert">the window is one of 7d | 28d | 30d | 90d (the schema\'s SLO windows), got &quot;30x&quot;</span>'), 'the engine\'s error under the field it names');
+  assert.ok(typedHtml.includes('data-add-custom data-focus-key="cf:add">Add to the pack'), 'filled: enabled');
+  // VERIFY: the read-only face — the values, the chips, the provenance line, no reset, no Customise, no form; readonly inputs.
+  const verify = buildSheetHtml(buildSheetModel({ layerId: 'L1', build: copiesDraft(), library: LIBRARY, requirements: T2, mode: 'verify' }));
+  assert.ok(verify.includes('<div class="build-edit-face is-readonly" data-face="kafka_produce_latency_p99">') && verify.includes('<span class="build-edit-eyebrow">as customised</span>'));
+  assert.ok(verify.includes('data-override-field="objective" data-sli="kafka_produce_latency_p99" readonly value="99.5"'));
+  assert.ok(!verify.includes('data-reset=') && !verify.includes('data-customise=') && !verify.includes('build-rolo-custom-form'));
+  assert.ok(verify.includes('<span class="build-rolo-chip is-customised" title="customised: objective, window">customised</span>') && verify.includes('<span class="build-rolo-chip is-custom" title="written in the studio — not a library SLI">custom</span>'));
+  assert.ok(verify.includes('customised: objective, window — the rest is Apache Kafka’s') && verify.includes('custom — written in the studio') && verify.includes('customised: query — the rest is HTTP service (OTel semconv)’s'));
+  assert.equal((verify.match(/class="build-edit-face is-readonly"/g) || []).length, 3, 'the two customised and the custom card');
+  assert.ok(!/class="build-edit-face is-readonly" data-face="kafka_broker_availability"/.test(verify), 'an untouched SLI shows no face');
+  // Escaping at the seam: a hostile override never becomes markup.
+  const hostile = draft({ overrides: { kafka_produce_latency_p99: { description: '<img src=x onerror="1">' } }, customOpen: { kafka_produce_latency_p99: true } });
+  assert.ok(!buildSheetHtml(buildSheetModel({ layerId: 'L1', build: hostile, library: LIBRARY, requirements: T2, mode: 'edit' })).includes('<img'));
+  // The VERIFY stack: an L1 SLI card whose provenance says customised carries the note (the shared card body's optional note).
+  const stackHtml = buildStackHtml(buildVerifyModel({ build: copiesDraft(), library: LIBRARY, clauses: T2, targets: TARGETS }).stack);
+  assert.ok(stackHtml.includes('<span class="card-note">customised: objective, window</span>') && stackHtml.includes('<span class="card-note">customised: query</span>') && stackHtml.includes('<span class="card-note">custom — written in the studio</span>'));
+  assert.equal((stackHtml.match(/class="card-note"/g) || []).length, 3, 'the SLI cards only, never the SLO cards');
+  assert.ok(!artefactCardHtml({ id: 'X', title: 'x' }).includes('card-note') && artefactCardHtml({ id: 'X', title: 'x' }, { note: 'a <b>' }).includes('<span class="card-note">a &lt;b&gt;</span>'));
+  const verifyStack = buildVerifyModel({ build: copiesDraft(), library: LIBRARY, clauses: T2, targets: TARGETS }).stack;
+  assert.deepEqual(verifyStack.slabs.find(x => x.id === 'L1').artefacts.filter(a => a.customised || a.custom).map(a => [a.title, a.customNote]), [['kafka_produce_latency_p99', 'customised: objective, window'], ['http_service_latency_p99', 'customised: query'], ['checkout_success', 'custom — written in the studio']]);
+  // Focus fallbacks for the new keys land inside the sheet.
+  assert.deepEqual(focusFallbackSelectors('ov:kafka_produce_latency_p99:objective'), ['.build-sheet .build-edit-input', '.build-sheet .build-param-input', '.build-sheet-close']);
+  assert.deepEqual(focusFallbackSelectors('cf:name'), ['.build-sheet .build-edit-input', '.build-sheet .build-param-input', '.build-sheet-close']);
+  assert.deepEqual(focusFallbackSelectors('sli:custom:checkout_success'), ['.build-sheet .build-edit-input', '.build-sheet .build-param-input', '.build-sheet-close']);
+});
+
+test('the copies’ handlers: Customise opens the face (a re-render, no instantiation), a field commits on change through setOverride / updateCustom, ↺ through clearOverride, the custom switch through removeCustom, the form through addCustom with the engine’s definition', () => {
+  const calls = [];
+  const act = {
+    update: (p, o) => calls.push(['update', p, o]), setOverride: (k, f, v) => calls.push(['override', k, f, v]), clearOverride: (k, f) => calls.push(['clear', k, f]),
+    updateCustom: (id, f, v) => calls.push(['custom', id, f, v]), removeCustom: (id) => calls.push(['remove', id]), addCustom: (def, d) => calls.push(['add', def, d.id]),
+    setSli: (k, on) => calls.push(['sli', k, on]), addSli: (e, s) => calls.push(['addSli', e, s]), closeSheet() {}, setToggle() {}, setParam() {},
+  };
+  const b = copiesDraft({ customOpen: { kafka_produce_latency_p99: true }, customDraft: { name: 'Checkout p99', type: 'threshold', query: 'q', threshold: '0.3' } });
+  const model = buildSheetModel({ layerId: 'L1', build: b, library: LIBRARY, requirements: T2, mode: 'edit' });
+  const customise = fakeEl({ customise: 'kafka_broker_availability' });
+  const done = fakeEl({ customise: 'kafka_produce_latency_p99' });
+  const objective = { ...fakeEl({ overrideField: 'objective', sli: 'kafka_produce_latency_p99' }), value: '99.9', tagName: 'INPUT', readOnly: false, blur() { calls.push(['blur']); } };
+  const query = { ...fakeEl({ customField: 'good', sli: 'checkout_success' }), value: 'sum(rate(x[5m]))', tagName: 'TEXTAREA', readOnly: false };
+  const reset = fakeEl({ reset: 'window', sli: 'kafka_produce_latency_p99' });
+  const customSwitch = fakeEl({ sli: 'checkout_success', entry: '', sliId: 'checkout_success', selected: '1', entrySelected: '1', custom: '1' });
+  const aboveSwitch = fakeEl({ sli: 'kafka_controller_election_rate', entry: 'kafka', sliId: 'controller_election_rate', selected: '0', entrySelected: '1' });
+  const nameEl = { ...fakeEl({ customDraft: 'name' }), value: 'Checkout p99' };
+  const idEl = { ...fakeEl({ customDraft: 'id' }), value: '' };
+  const typeEl = { ...fakeEl({ customDraft: 'type' }), value: 'threshold' };
+  const queryEl = { ...fakeEl({ customDraft: 'query' }), value: 'q' };
+  const thresholdEl = { ...fakeEl({ customDraft: 'threshold' }), value: '0.3' };
+  const windowEl = { ...fakeEl({ customDraft: 'window' }), value: '30x' };
+  const objectiveEl = { ...fakeEl({ customDraft: 'objective' }), value: '99' };
+  const add = { ...fakeEl({}), disabled: true };
+  const form = { addEventListener() {}, querySelectorAll: () => [nameEl, idEl, typeEl, queryEl, thresholdEl, windowEl, objectiveEl] };
+  const container = fakeContainer({
+    '[data-customise]': [customise, done], '.build-edit-face:not(.build-custom-form) .build-edit-input': [objective, query], '[data-reset]': [reset],
+    '.build-switch[data-sli]': [customSwitch, aboveSwitch], '[data-custom-form-fields]': [form], '[data-add-custom]': [add],
+  });
+  wireBuildSheet(container, model, { build: act });
+  customise.fire('click'); done.fire('click');
+  objective.fire('change'); objective.fire('keydown', { key: 'Enter' }); query.fire('change');
+  reset.fire('click');
+  customSwitch.fire('click'); aboveSwitch.fire('click');
+  nameEl.fire('input');
+  typeEl.fire('change');
+  add.fire('click');
+  assert.deepEqual(calls.slice(0, 2), [['update', { customOpen: { kafka_produce_latency_p99: true, kafka_broker_availability: true } }, { rerender: true, reinstantiate: false }], ['update', { customOpen: {} }, { rerender: true, reinstantiate: false }]], 'Customise toggles the open set');
+  assert.deepEqual(calls.slice(2, 7), [['override', 'kafka_produce_latency_p99', 'objective', '99.9'], ['blur'], ['custom', 'checkout_success', 'good', 'sum(rate(x[5m]))'], ['clear', 'kafka_produce_latency_p99', 'window'], ['remove', 'checkout_success']]);
+  assert.deepEqual(calls[7], ['sli', 'kafka_controller_election_rate', true], 'an above-tier switch flips like any other');
+  const typedName = calls[8];
+  assert.equal(typedName[0], 'update');
+  assert.deepEqual([typedName[1].customDraft.name, typedName[1].customDraft.id, typedName[1].customDraftErrors, typedName[2]], ['Checkout p99', 'checkout_p99', null, { rerender: false, reinstantiate: false }], 'typing keeps the draft on the state without a re-render; the id follows the name');
+  assert.equal(idEl.value, 'checkout_p99', 'the id input follows without a re-render');
+  assert.equal(add.disabled, false, 'the required fields are filled: the button wakes');
+  assert.deepEqual(calls[9][2], { rerender: true, reinstantiate: false }, 'the type select re-renders (it changes the fields)');
+  assert.deepEqual(calls[10], ['add', { id: 'checkout_p99', type: 'threshold', objective: 0.99, window: '30x', query: 'q', threshold: 0.3 }, 'checkout_p99'], 'the engine\'s definition — the window as typed, for the engine to refuse inline');
+});
+
+test('the definition column is a wizard stage: the live form on DEFINE (with the seeded note once seeded), the recessed seed card with "Change seed →" on COMPILE and VERIFY, the summary live under both', () => {
+  // The models.
+  const define = buildDefinitionModel({ build: draft({ step: 'define' }), library: LIBRARY, requirements: REQUIREMENTS });
+  assert.deepEqual([define.mode, define.seeded, define.seededNote], ['form', true, SEEDED_NOTE]);
+  assert.equal(SEEDED_NOTE, 'Seeded. Changing the tier re-grades the pack and refreshes library defaults; your customisations stay. Removing a product drops its SLIs.');
+  const fresh = buildDefinitionModel({ build: draft({ step: 'define', seeded: false }), library: LIBRARY, requirements: REQUIREMENTS });
+  assert.deepEqual([fresh.mode, fresh.seeded, fresh.seededNote], ['form', false, null]);
+  const compile = buildDefinitionModel({ build: draft({ step: 'compile' }), library: LIBRARY, requirements: REQUIREMENTS });
+  assert.equal(compile.mode, 'seed');
+  assert.deepEqual(compile.seedCard, {
+    name: 'orders-api', slug: 'orders-api', owners: ['team-orders'], environment: 'prod', tier: 'tier-2', must: 15, should: 1,
+    tierChip: 'seeded at tier-2 · 15 MUST · 1 SHOULD',
+    entries: [{ id: 'kafka', title: 'Apache Kafka', kind: 'product' }, { id: 'http-service', title: 'HTTP service (OTel semconv)', kind: 'archetype' }],
+    counts: { slis: 7, aboveTier: 0, customised: 0, custom: 0 }, changeLabel: 'Change seed',
+  });
+  assert.equal(compile.summary.status, 'conformant at tier-2', 'the summary is live on the seed card\'s step');
+  assert.equal(buildDefinitionModel({ build: draft({ step: 'verify' }), library: LIBRARY, requirements: REQUIREMENTS }).mode, 'seed');
+  const cold = seedCardModel(draft({ step: 'compile' }), LIBRARY, {});
+  assert.deepEqual([cold.must, cold.should, cold.tierChip], [null, null, 'seeded at tier-2']);
+  assert.deepEqual(seedCardModel(copiesDraft({ slis: [...FIXTURE.provenance.toggles.slis, 'kafka_controller_election_rate'] }), LIBRARY, REQUIREMENTS).counts, { slis: 9, aboveTier: 1, customised: 2, custom: 1 });
+  assert.equal(seedCardModel(draft({ owners: '' }), LIBRARY, REQUIREMENTS).owners.length, 0);
+  // DEFINE's primary action.
+  assert.deepEqual([buildDefineModel({ build: draft({ seeded: false }), library: LIBRARY, requirements: REQUIREMENTS }).nextLabel, buildDefineModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS }).nextLabel], ['Seed the pack', 'Continue to Compile']);
+  // The renders.
+  const render = (b) => { const c = stubContainer(); renderBuildDefinition(c, buildDefinitionModel({ build: b, library: LIBRARY, requirements: REQUIREMENTS }), { build: {} }); return c.innerHTML; };
+  const formHtml = render(draft({ step: 'define' }));
+  assert.ok(formHtml.includes('<p class="build-def-seeded" role="note">Seeded. Changing the tier re-grades the pack') && formHtml.includes('id="build-name"') && formHtml.includes('role="radiogroup"') && !formHtml.includes('build-seed"'));
+  assert.ok(!render(draft({ step: 'define', seeded: false })).includes('build-def-seeded'), 'no note before the seed');
+  const seedHtml = render(draft({ step: 'compile' }));
+  assert.ok(seedHtml.includes('<div class="build-def-inner is-seeded">') && seedHtml.includes('<section class="build-seed" aria-label="Seed">') && seedHtml.includes('<div class="build-seed-eyebrow">Seed</div>'));
+  assert.ok(!seedHtml.includes('<input') && !seedHtml.includes('role="radiogroup"') && !seedHtml.includes('build-chip"'), 'read-only: no input, no segmented control, no chips to press');
+  assert.ok(seedHtml.includes('<dt>Service</dt><dd><code>orders-api</code></dd>') && seedHtml.includes('<dt>Owners</dt><dd><span>team-orders</span></dd>') && seedHtml.includes('<dt>Environment</dt><dd>prod</dd>'));
+  assert.ok(seedHtml.includes('<span class="build-seed-chip is-tier" data-tier="tier-2">seeded at tier-2 · 15 MUST · 1 SHOULD</span>'));
+  assert.ok(seedHtml.includes('<span class="build-seed-chip" title="product">Apache Kafka</span>') && seedHtml.includes('<span class="build-seed-chip" title="archetype">HTTP service (OTel semconv)</span>'));
+  assert.ok(seedHtml.includes('<div class="build-seed-from">7 SLIs in the pack</div>'));
+  assert.ok(seedHtml.includes('<button type="button" class="build-seed-change" data-change-seed data-focus-key="seed:change">Change seed <span aria-hidden="true">→</span></button>'));
+  assert.ok(seedHtml.includes('class="build-summary is-ok"') && seedHtml.includes('conformant at tier-2'), 'the summary stays live under the seed card');
+  assert.ok(render(draft({ step: 'compile', owners: '' })).includes('<dd><em>none — a todo</em></dd>'));
+  assert.ok(seedCardHtml(seedCardModel(copiesDraft({ slis: [...FIXTURE.provenance.toggles.slis, 'kafka_controller_election_rate'] }), LIBRARY, REQUIREMENTS)).includes('9 SLIs in the pack · 1 from a higher tier · 2 customised · 1 custom'));
+  assert.ok(!seedCardHtml(seedCardModel(draft({ name: '<b>x</b>' }), LIBRARY, REQUIREMENTS)).includes('<b>x</b>'), 'escaped at the seam');
+  // The wiring: "Change seed →" goes back to DEFINE.
+  const calls = [];
+  const change = fakeEl({});
+  wireBuildDefinition(fakeContainer({ '[data-change-seed]': [change] }), {}, { build: { setStep: (s) => calls.push(['step', s]), update() {}, setTier() {}, toggleEntry() {} } });
+  change.fire('click');
+  assert.deepEqual(calls, [['step', 'define']]);
+  // DEFINE's render: the primary action reads the seed, and calls seed().
+  const seedCalls = [];
+  const c = stubContainer();
+  const next = fakeEl({});
+  c.querySelector = (sel) => (sel === '#build-next' ? next : { addEventListener() {}, querySelector: () => null, querySelectorAll: () => [] });
+  renderBuildDefine(c, buildDefineModel({ build: draft({ seeded: false }), library: LIBRARY, requirements: REQUIREMENTS }), { build: { seed: () => seedCalls.push('seed'), setStep: (s) => seedCalls.push(s) } });
+  assert.ok(c.innerHTML.includes('id="build-next" >Seed the pack <span aria-hidden="true">→</span></button>'));
+  assert.ok(c.innerHTML.includes('seeding the pack opens Compile'));
+  next.fire('click');
+  assert.deepEqual(seedCalls, ['seed']);
+  const c2 = stubContainer();
+  renderBuildDefine(c2, buildDefineModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS }), { build: {} });
+  assert.ok(c2.innerHTML.includes('>Continue to Compile <span aria-hidden="true">→</span></button>') && c2.innerHTML.includes('Seeded —'));
+  // The persisted shape carries the copies and the seed.
+  for (const k of ['overrides', 'custom', 'seeded']) assert.ok(BUILD_PERSIST_FIELDS.includes(k), k);
+  const fresh2 = defaultBuildState();
+  assert.deepEqual([fresh2.overrides, fresh2.custom, fresh2.seeded, fresh2.customOpen, fresh2.customDraft, fresh2.customDraftErrors], [{}, [], false, {}, null, null]);
+});
+
 test('the sheet’s handlers write through the existing actions: close (button, scrim, Esc), compose, the section switches, the rolodex switches, the filter', () => {
   const calls = [];
   const act = {
@@ -1639,7 +2080,7 @@ test('the sheet’s handlers write through the existing actions: close (button, 
   const remove = fakeEl({ sli: 'kafka_broker_availability', entry: 'kafka', sliId: 'broker_availability', selected: '1', entrySelected: '1' });
   const add = fakeEl({ sli: 'kafka_fetch_latency_p99', entry: 'kafka', sliId: 'fetch_latency_p99', selected: '0', entrySelected: '1' });
   const foreign = fakeEl({ sli: 'ibm_mq_qmgr_process_up', entry: 'ibm-mq', sliId: 'qmgr_process_up', selected: '0', entrySelected: '0' });
-  const above = fakeEl({ sli: 'kafka_controller_election_rate', entry: 'kafka', sliId: 'controller_election_rate', selected: '0', entrySelected: '1' }, { disabled: true });
+  const above = fakeEl({ sli: 'kafka_controller_election_rate', entry: 'kafka', sliId: 'controller_election_rate', selected: '0', entrySelected: '1' });
   const filter = fakeEl({ rolodexAll: '0' });
   wireBuildSheet(fakeContainer({
     '[data-close]': [closeBtn, scrim], '.build-sheet': [sheet], '[data-compose]': [compose],
@@ -1655,9 +2096,9 @@ test('the sheet’s handlers write through the existing actions: close (button, 
     ['close'], ['close'], ['close'],
     ['step', 'compile', { sheet: 'L1' }],
     ['toggle', 'slos', false],
-    ['sli', 'kafka_broker_availability', false, 7], ['sli', 'kafka_fetch_latency_p99', true, 7], ['add', 'ibm-mq', 'qmgr_process_up'],
+    ['sli', 'kafka_broker_availability', false, 7], ['sli', 'kafka_fetch_latency_p99', true, 7], ['add', 'ibm-mq', 'qmgr_process_up'], ['sli', 'kafka_controller_election_rate', true, 7],
     ['update', { rolodexAll: true }, { rerender: true, reinstantiate: false }],
-  ], 'a disabled switch does nothing; a foreign SLI goes through addSli; Enter is not Esc');
+  ], 'a disabled switch does nothing; a foreign SLI goes through addSli; an above-tier one flips like any other; Enter is not Esc');
 });
 
 test('the slab head opens the layer’s sheet: aria-haspopup, the "+" affordance, the open layer marked; the inline clause list is gone', () => {
@@ -1879,6 +2320,7 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
     }
   }
   assert.deepEqual(offenders, [], 'every text colour the axis block names clears AA on its surface');
+  const reduced = CSS_TEXT.match(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/g)?.find(b => b.includes('.build-sheet')) || '';
   // The accent as text is the 65 % mix (the raw light L1 amber is 3.4:1 on the card); the eyebrow, the ids and a selected card's state use it.
   assert.ok(/\.build-slab, \.build-sheet \{ --accent-text: color-mix\(in srgb, var\(--accent\) 65%, var\(--ink\)\); \}/.test(axis));
   for (const sel of ['.build-sheet-eyebrow', '.build-sheet-item-id', '.build-rolo-type', '.build-rolo-card.is-selected .build-rolo-state']) assert.match(cssRule(sel), /color:\s*var\(--accent-text\)/, `${sel} is accent text`);
@@ -1888,4 +2330,12 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
   for (const sel of ['.build-param-key', '.build-param-desc', '.build-todo-manual', '.build-slab-todos-head', '.build-rail-clause.is-pending .build-rail-glyph', '.build-rail-clause.is-pending .build-rail-desc']) assert.match(cssRule(sel), /color:\s*var\(--ink-3\)/, `${sel} is --ink-3`);
   assert.match(cssRule('.build-todo-card'), /color:\s*var\(--accent-text, var\(--ink-3\)\)/);
   assert.ok(!/color:\s*var\(--ink-5\)/.test(axis.replace(/\.build-evidence-dot[^\n]*/g, '')), '--ink-5 is never a text colour on the axis (the dot aside)');
+  // The seed and the copies live in the same block, so the scan above covered them: the seed card's muted text is --ink-3, the face and the form use the tokens.
+  assert.ok(axis.includes('The seed and the copies'), 'the new rules are inside the axis block the scan reads');
+  for (const sel of ['.build-seed', '.build-seed-eyebrow', '.build-seed-dl dt', '.build-seed-from', '.build-def-seeded', '.build-rolo-chip', '.build-edit-hint', '.build-edit-provenance', '.build-edit-default', '.build-rolo-evidence-note']) assert.match(cssRule(sel), /color:\s*var\(--ink-3\)/, `${sel} is --ink-3`);
+  assert.match(cssRule('.build-seed'), /border:\s*1px solid var\(--line-2\)/, 'a thin border, recessed');
+  assert.match(cssRule('.build-edit-input'), /font:\s*12px\/1\.45 var\(--mono\)/, 'monospace PromQL');
+  assert.match(cssRule('.build-rolo-card.is-open'), /flex-basis/, 'an open card widens in the snap track');
+  assert.ok(reduced.includes('.build-seed-change') && reduced.includes('.build-rolo-customise') && reduced.includes('.build-edit-reset'), 'the new transitions respect reduced motion');
+  assert.match(cssRule('.build-evidence-custom'), /color:\s*var\(--ink-2\)/, 'the custom evidence badge is ink on a tint, not a colour literal');
 });
