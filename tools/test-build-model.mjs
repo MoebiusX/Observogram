@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { emit as emitYaml } from './lib/mini-yaml.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
 import { evaluateConformance } from './lib/conformance.mjs';
-import { applyEnvironmentOverlay } from './lib/adapter.mjs';
+import { adapt, applyEnvironmentOverlay } from './lib/adapter.mjs';
 import { listTargets } from './lib/compile.mjs';
 import { instantiatePack, libraryIndex, tierRequirements, validationSummary, SCAFFOLD_PARAMS, TIERS as ENGINE_TIERS } from './lib/library.mjs';
 import { loadLibrary, findEntry } from '../server/library.mjs';
@@ -57,8 +57,11 @@ function instantiateInProcess(inputs) {
   const { spec, effective } = applyEnvironmentOverlay(canonical.spec, provenance.environment);
   const overlaid = { ...canonical, spec, metadata: { ...canonical.metadata, bindings: { ...canonical.metadata.bindings, ...(effective.criticality ? { criticality: effective.criticality } : {}) } } };
   const conformance = evaluateConformance(overlaid);
+  // The adapter's projection of the env-overlaid canonical, as /api/validate returns it (the
+  // route serialises it, so the fixture and the comparison below are its JSON shape).
+  const adapted = JSON.parse(JSON.stringify(adapt(canonical, { environment: provenance.environment })));
   const canonicalYaml = `# ObservabilityPack ${canonical.metadata.name} — built from the library (${provenance.source}) at ${provenance.tier}\n# Todos: ${todos.length} (metadata.annotations library.todo.*). Spec v${SPEC_VERSION}.\n` + emitYaml(canonical);
-  return { ok: true, canonical, canonicalYaml, todos, provenance, warnings, schemaErrors, summary, conformance };
+  return { ok: true, canonical, canonicalYaml, todos, provenance, warnings, schemaErrors, summary, conformance, adapted };
 }
 
 if (UPDATE) {
@@ -98,6 +101,14 @@ test('the instantiate fixture is stable: a fresh in-process instantiation of the
   assert.deepEqual(fresh.provenance, FIXTURE.provenance);
   assert.equal(fresh.conformance.mustPercent, FIXTURE.conformance.mustPercent);
   assert.equal(fresh.canonicalYaml, FIXTURE.canonicalYaml);
+  // `adapted` is the adapter's own projection — what Discover draws for the same canonical.
+  assert.deepEqual(fresh.adapted, FIXTURE.adapted, 'adapted drifted — the adapter changed, or the canonical did');
+  assert.deepEqual(FIXTURE.adapted, JSON.parse(JSON.stringify(adapt(FIXTURE.canonical, { environment: 'prod' }))));
+  assert.equal(FIXTURE.adapted.meta.environment, 'prod');
+  assert.equal(FIXTURE.adapted.meta.criticality, 'tier-2');
+  assert.equal(FIXTURE.adapted.layers.L1.length, 14, '7 SLIs + 7 SLOs');
+  assert.deepEqual(FIXTURE.adapted.layers.L2X, []);
+  assert.equal(FIXTURE.adapted.layers.L4.alerting.length, 3);
   // The shape VERIFY reads.
   assert.equal(FIXTURE.summary.tier, 'tier-2');
   assert.deepEqual(FIXTURE.summary.must, { passed: 15, total: 15 });

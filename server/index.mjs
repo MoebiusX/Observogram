@@ -23,7 +23,7 @@
  *   GET  /api/library                     The pack library index (BUILD journey, docs/BUILD_JOURNEY.md)
  *   GET  /api/library/requirements/:tier  The conformance clauses that apply at a tier
  *   GET  /api/library/:id                 One library entry: index row + full SLI templates and params
- *   POST /api/library/instantiate         Library entries + name/tier/env/owners/params/toggles → canonical pack, todos, summary
+ *   POST /api/library/instantiate         Library entries + name/tier/env/owners/params/toggles → canonical pack, todos, summary, adapted
  *   POST /api/library/compile             { canonical, target } → one compiled artefact, nothing registered
  *   POST /api/library/register            { canonical, source? } → the upload registry (as /api/validate registers)
  *
@@ -1865,9 +1865,12 @@ function resolveRequestedEntries(body) {
 // owners, params, toggles } → the engine's result plus what VERIFY reads:
 // schemaErrors (validateCanonical), summary (validationSummary), conformance
 // (evaluateConformance of the env-overlaid canonical, as /api/validate computes
-// it) and the pack as YAML for the preview and the download. Node passes the
-// Lezer PromQL grammar, as packc init does, so a broken SLI expression comes
-// back as a `promql` warning. A usage error from the engine is 400, never 500.
+// it), `adapted` (the adapter's layered projection of the env-overlaid canonical,
+// exactly as /api/validate returns it — what Build's layer stack draws, so it is
+// the artefact list Discover shows after the hand-off, id for id) and the pack as
+// YAML for the preview and the download. Node passes the Lezer PromQL grammar,
+// as packc init does, so a broken SLI expression comes back as a `promql`
+// warning. A usage error from the engine is 400, never 500.
 app.post('/api/library/instantiate', (req, res) => {
   const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : null;
   if (!body) return res.status(400).json({ ok: false, errors: ['expected a JSON body { entries, name, tier, environment, owners, params, toggles }'] });
@@ -1892,8 +1895,10 @@ app.post('/api/library/instantiate', (req, res) => {
   const summary = validationSummary(canonical, todos);
   const { canonical: overlaid } = overlaidCanonical(canonical, provenance.environment);
   const conformance = evaluateConformance(overlaid);
+  // adapt() applies the environment overlay itself: the same call /api/validate makes.
+  const adapted = adapt(canonical, { environment: provenance.environment });
   const canonicalYaml = `# ObservabilityPack ${canonical.metadata.name} — built from the library (${provenance.source}) at ${provenance.tier}\n# Todos: ${todos.length} (metadata.annotations library.todo.*). Spec v${SPEC_VERSION}.\n` + emitYaml(canonical);
-  res.json({ ok: true, canonical, canonicalYaml, todos, provenance, warnings, schemaErrors, summary, conformance });
+  res.json({ ok: true, canonical, canonicalYaml, todos, provenance, warnings, schemaErrors, summary, conformance, adapted });
 });
 
 // POST /api/library/compile — body { canonical, target, dashboardId? } → one
