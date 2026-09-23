@@ -15,7 +15,7 @@
 
 import { escapeHtml, downloadText } from './util.mjs';
 import { host as appHost } from './host.mjs';
-import { stepHeadHtml, evidenceBadge } from './build-select-view.mjs';
+import { stepHeadHtml, evidenceBadge, instantiateErrorHtml } from './build-select-view.mjs';
 
 function sliRowHtml(s) {
   const disabled = !s.reachable;
@@ -82,8 +82,8 @@ export function renderBuildGenerate(container, model, host = appHost) {
       </div>
 
       <div class="build-result">
-        <div class="build-section-key">Generated pack <span class="build-section-sub">${model.pending ? 'regenerating…' : r ? `${r.sliCount} SLI${r.sliCount === 1 ? '' : 's'} · ${r.sloCount} SLO${r.sloCount === 1 ? '' : 's'} · ${r.todoCount} todo${r.todoCount === 1 ? '' : 's'} · ${r.warningCount} warning${r.warningCount === 1 ? '' : 's'} · schema ${r.schemaOk ? 'valid' : `${r.schemaErrors.length} error${r.schemaErrors.length === 1 ? '' : 's'}`}` : model.error ? 'the last generation failed' : 'nothing generated yet'}</span></div>
-        ${model.error ? `<div class="build-note build-note-err">${model.error.map(e => escapeHtml(e)).join('<br>')}</div>` : ''}
+        <div class="build-section-key">Generated pack <span class="build-section-sub">${model.pending ? 'regenerating…' : r ? `${r.sliCount} SLI${r.sliCount === 1 ? '' : 's'} · ${r.sloCount} SLO${r.sloCount === 1 ? '' : 's'} · ${r.todoCount} todo${r.todoCount === 1 ? '' : 's'} · ${r.warningCount} warning${r.warningCount === 1 ? '' : 's'} · schema ${r.schemaOk ? 'valid' : `${r.schemaErrors.length} error${r.schemaErrors.length === 1 ? '' : 's'}`}${model.stale ? ' · previous pack' : ''}` : model.error ? 'the last generation failed' : 'nothing generated yet'}</span></div>
+        ${instantiateErrorHtml(model.error, { stale: model.stale, where: 'Select and Validate (this step has no parameter inputs)' })}
         ${!model.atLeastOne ? '<div class="build-note build-note-warn">At least one SLI must stay selected — the pack cannot be generated without one.</div>' : ''}
         ${r && !r.schemaOk ? `<div class="build-note build-note-warn"><strong>Schema:</strong> the pack does not validate against spec v1.2 as toggled — ${r.schemaErrors.slice(0, 4).map(e => escapeHtml(e)).join('; ')}${r.schemaErrors.length > 4 ? ` … +${r.schemaErrors.length - 4}` : ''}</div>` : ''}
         ${r ? warningsHtml(r.warnings) : ''}

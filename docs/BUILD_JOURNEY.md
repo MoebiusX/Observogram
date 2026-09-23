@@ -272,7 +272,11 @@ says whether a pack carries any.
 `studio/app.mjs` (the same `{ id, n, label, sub, techName, tagline, accent }` shape and the
 same three accents), rendered by the one header renderer — the nav is rebuilt only when
 the active set changes, a step card is reachable when the previous step's inputs are valid
-(`buildStepReachability`), the current step is highlighted like today's active tab. Entry
+(`buildStepReachability`), the current step is highlighted like today's active tab. A usage
+error from the engine (a param value it refuses, a selection with no SLI left) keeps the
+previous pack on screen, marked stale, with the reason on the row that carries the value
+(`param <key>: …` → the row on Select and under its todo on Validate); Validate stays
+reachable and the hand-off is blocked until the value is fixed. Entry
 points: a "Build a pack" card beside the hero's two, a "build a pack" action beside the
 gate's "start something new", "Build from the library…" in the upload popover; the logo
 returns home; an Advanced item or an analysis tab leaves build mode into the workspace.

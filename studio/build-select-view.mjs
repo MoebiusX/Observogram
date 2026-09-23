@@ -79,16 +79,25 @@ export function paramRowHtml(p, { compact = false, idSuffix = '' } = {}) {
   const focusKey = `param:${p.key}${idSuffix ? `@${idSuffix}` : ''}`;
   const id = `bp-${idSuffix ? `${idSuffix}-` : ''}${p.key}`;
   return `
-    <div class="build-param${p.placeholder ? ' is-placeholder' : ''}${p.atDefault ? '' : ' is-set'}" data-param="${escapeHtml(p.key)}">
+    <div class="build-param${p.placeholder ? ' is-placeholder' : ''}${p.atDefault ? '' : ' is-set'}${p.error ? ' is-error' : ''}" data-param="${escapeHtml(p.key)}">
       <label class="build-param-label" for="${escapeHtml(id)}">
         <span class="build-param-name">${escapeHtml(p.label)}</span>
         <span class="build-param-key">${escapeHtml(p.key)}${p.entry ? '' : ' · scaffold'}</span>
-        ${p.placeholder ? `<span class="build-param-flag" title="left at its default this value is written into the pack AND reported as a todo">${p.atDefault ? 'placeholder → todo' : 'placeholder filled'}</span>` : ''}
+        ${p.error ? '<span class="build-param-flag is-error">rejected</span>' : p.placeholder ? `<span class="build-param-flag" title="left at its default this value is written into the pack AND reported as a todo">${p.atDefault ? 'placeholder → todo' : 'placeholder filled'}</span>` : ''}
       </label>
-      <input id="${escapeHtml(id)}" class="build-param-input" type="text" data-focus-key="${escapeHtml(focusKey)}"
+      <input id="${escapeHtml(id)}" class="build-param-input" type="text" data-focus-key="${escapeHtml(focusKey)}"${p.error ? ' aria-invalid="true"' : ''}
              value="${escapeHtml(p.value ?? '')}" placeholder="${escapeHtml(String(p.default ?? ''))}" autocomplete="off" spellcheck="false">
+      ${p.error ? `<span class="build-param-error" role="alert">${escapeHtml(p.error)}</span>` : ''}
       ${compact ? '' : `<span class="build-param-desc">${escapeHtml(p.description)}</span>`}
     </div>`;
+}
+
+/** The last instantiation's usage errors as one note: the general ones spelled out, the rejected params counted (their rows carry the reason). */
+export function instantiateErrorHtml(error, { stale = false, where = 'below' } = {}) {
+  if (!error) return '';
+  const parts = [...error.general.map(escapeHtml)];
+  if (error.paramCount) parts.push(`${error.paramCount} parameter value${error.paramCount === 1 ? '' : 's'} rejected — marked on ${error.paramCount === 1 ? 'its row' : 'their rows'} ${where}`);
+  return `<div class="build-note build-note-err" role="alert"><strong>The last regeneration failed${stale ? ' — the pack shown is the previous one' : ''}.</strong> ${parts.join(' · ')}</div>`;
 }
 
 /** render(container, model, host) — the SELECT step. */
@@ -137,13 +146,14 @@ export function renderBuildSelect(container, model, host = appHost) {
       </div>
 
       ${entriesCount ? `
-      <details class="build-params-wrap" ${model.params.some(p => !p.atDefault) ? 'open' : ''}>
+      ${instantiateErrorHtml(model.error, { stale: model.stale, where: 'below' })}
+      <details class="build-params-wrap" ${model.params.some(p => !p.atDefault || p.error) ? 'open' : ''}>
         <summary class="build-section-key">Parameters <span class="build-section-sub">${model.params.length} for this selection · ${model.params.filter(p => p.placeholder && p.atDefault).length} placeholder${model.params.filter(p => p.placeholder && p.atDefault).length === 1 ? '' : 's'} still at their default — each becomes a todo; fill them here or inline on Validate</span></summary>
         <div class="build-params">${model.params.map(p => paramRowHtml(p)).join('')}</div>
       </details>` : ''}
 
       <footer class="build-step-actions">
-        <span class="build-step-status">${model.valid ? 'Selection complete — the tier’s clauses are being checked on the right.' : `Still needed: ${model.errors.map(escapeHtml).join(' and ')}.`}</span>
+        <span class="build-step-status">${!model.valid ? `Still needed: ${model.errors.map(escapeHtml).join(' and ')}.` : model.error ? 'Selection complete, but the last regeneration failed — see the error above.' : 'Selection complete — the tier’s clauses are being checked on the right.'}</span>
         <button type="button" class="mcp-refresh-btn build-next" id="build-next" ${model.valid ? '' : 'disabled'}>Continue to Generate <span aria-hidden="true">→</span></button>
       </footer>
     </section>`;
@@ -178,7 +188,7 @@ export function renderClauseRail(container, rail) {
   const c = rail.checklist;
   const k = c.counts;
   const status = rail.pending ? 'checking…'
-    : rail.error ? 'the last instantiation failed'
+    : rail.error ? (rail.stale ? 'the last regeneration failed — showing the previous pack' : 'the last instantiation failed')
     : !rail.valid ? 'complete the selection to evaluate'
     : !rail.ready ? 'evaluating…'
     : (c.conformant ? 'conformant at this tier' : `${k.must.fail} MUST clause${k.must.fail === 1 ? '' : 's'} failing`);

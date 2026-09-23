@@ -30,7 +30,7 @@ import {
   BUILD_STEPS, TIERS, SECTION_TOGGLES, serviceSlug, isValidServiceName, parseOwners, sliKey, paramKey,
   selectValid, buildStepReachability, clampStep, paramRows, effectiveParams, instantiateBody,
   buildSelectModel, buildGenerateModel, summarizeWarnings, buildClauseChecklist, buildRailModel,
-  placeholdersRemaining, groupTodos, buildValidateModel, reachableSliKeys, retargetSlis,
+  placeholdersRemaining, groupTodos, buildValidateModel, reachableSliKeys, retargetSlis, splitBuildErrors, isStale,
 } from '../studio/build-model.mjs';
 import {
   loadLibrary as loadLibraryApi, loadRequirements, loadTargets, instantiate, compilePreview, registerBuiltPack,
@@ -161,6 +161,8 @@ test('a step is reachable when the previous step\'s inputs are valid', () => {
   assert.deepEqual(buildStepReachability(selected), { select: true, generate: true, validate: false }, 'no result yet: Validate stays locked');
   assert.deepEqual(buildStepReachability(draft()), { select: true, generate: true, validate: true });
   assert.deepEqual(buildStepReachability(draft({ error: ['instantiatePack: at least one SLI must stay selected'], result: null })), { select: true, generate: true, validate: false });
+  assert.deepEqual(buildStepReachability(draft({ error: ['param kafka.bootstrap: a value may not contain a double quote'] })), { select: true, generate: true, validate: true }, 'a usage error keeps the previous pack, so Validate — where the field is — stays reachable');
+  assert.equal(clampStep(draft({ error: ['param kafka.bootstrap: a value may not contain a double quote'] }), 'validate'), 'validate', 'the user is not bounced off Validate by the error');
   assert.deepEqual(buildStepReachability(draft({ name: 'x' })), { select: true, generate: false, validate: false }, 'an invalid name locks Generate even with a stale result');
   assert.deepEqual(buildStepReachability(draft({ entries: [] })), { select: true, generate: false, validate: false });
   assert.equal(clampStep(empty, 'validate'), 'select');
@@ -344,6 +346,55 @@ test('retargetSlis: an explicit SLI list follows the tier — above-tier keys dr
   assert.equal(retargetSlis(draft({ slis: null }), LIBRARY, 'tier-1'), null, 'the defaults stay the defaults');
   // no previous tier (a draft restored from an older session): stale keys are pruned, nothing is added
   assert.deepEqual(retargetSlis(draft({ tier: 'tier-2', slis: ['kafka_broker_availability', 'kafka_controller_election_rate'] }), LIBRARY), ['kafka_broker_availability']);
+});
+
+test('a usage error keeps the previous pack: the error is split per param, the row carries it, the views read stale, the hand-off is blocked', () => {
+  const quote = 'param kafka.bootstrap: a value may not contain a double quote, a backslash or a control character (it is spliced verbatim into PromQL label matchers, scrape targets and endpoints)';
+  const unknown = 'unknown param nope (known: bootstrap, broker_job)';
+  assert.deepEqual(splitBuildErrors([quote, unknown]), {
+    byParam: { 'kafka.bootstrap': 'a value may not contain a double quote, a backslash or a control character (it is spliced verbatim into PromQL label matchers, scrape targets and endpoints)' },
+    general: [unknown], paramCount: 1, count: 2,
+  });
+  assert.deepEqual(splitBuildErrors(null), { byParam: {}, general: [], paramCount: 0, count: 0 });
+  assert.deepEqual(splitBuildErrors(['param x: expected a string, number or boolean, got object']).byParam, { x: 'expected a string, number or boolean, got object' });
+  // The draft after the live case: a rejected value persisted in params, the previous result kept, the error set.
+  const bad = draft({ params: { 'kafka.bootstrap': 'kafka-0.orders.svc:9092"}' }, error: [quote] });
+  assert.equal(isStale(bad), true);
+  assert.equal(isStale(draft()), false);
+  assert.equal(isStale(draft({ error: [quote], result: null })), false, 'no pack to be stale');
+  const rows = paramRows({ build: bad, library: LIBRARY });
+  assert.equal(rows.find(r => r.key === 'kafka.bootstrap').error, splitBuildErrors([quote]).byParam['kafka.bootstrap']);
+  assert.equal(rows.filter(r => r.error).length, 1, 'only the row the error names');
+  // SELECT shows the error and stays complete.
+  const sel = buildSelectModel({ build: bad, library: LIBRARY, requirements: REQUIREMENTS });
+  assert.equal(sel.valid, true);
+  assert.equal(sel.error.paramCount, 1);
+  assert.equal(sel.stale, true);
+  assert.ok(sel.params.find(p => p.key === 'kafka.bootstrap').error);
+  // GENERATE keeps the previous counts, marked stale.
+  const gen = buildGenerateModel({ build: bad, library: LIBRARY });
+  assert.equal(gen.result.sliCount, 7);
+  assert.equal(gen.stale, true);
+  assert.equal(gen.error.paramCount, 1);
+  // The rail says so.
+  const rail = buildRailModel({ build: bad, clauses: REQUIREMENTS['tier-2'] });
+  assert.equal(rail.stale, true);
+  assert.equal(rail.ready, true);
+  assert.deepEqual(rail.error, [quote]);
+  // VALIDATE keeps the verdict, marks the todo's param row, and does not hand the stale pack off.
+  const val = buildValidateModel({ build: bad, library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
+  assert.equal(val.ready, true);
+  assert.equal(val.verdict.conformant, true);
+  assert.equal(val.stale, true);
+  assert.equal(val.canRegister, false);
+  assert.equal(val.handoff, 'error');
+  const canary = val.todoGroups.find(g => g.id === 'validation').todos.find(t => t.path === 'validation.synthetic_checks.kafka-produce-consume-canary');
+  assert.ok(canary.params[0].error, 'the todo that this param fills shows the rejection on its row');
+  // The footer's other states, in priority order.
+  assert.equal(buildValidateModel({ build: draft(), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS }).handoff, 'ready');
+  assert.equal(buildValidateModel({ build: draft({ registeredId: 'uploaded-x' }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS }).handoff, 'registered');
+  assert.equal(buildValidateModel({ build: draft({ result: { ...draft().result, warnings: [{ kind: 'promql', message: 'x' }] } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS }).handoff, 'promql');
+  assert.equal(buildValidateModel({ build: draft({ result: { ...draft().result, schemaErrors: ['$.spec: missing required key'] } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS }).handoff, 'schema');
 });
 
 test('summarizeWarnings groups by kind, blocking first', () => {

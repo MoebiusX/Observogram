@@ -83,14 +83,40 @@ export function selectValid(build) {
   return !!build && isValidServiceName(build.name) && TIERS.includes(build.tier) && Array.isArray(build.entries) && build.entries.length >= 1;
 }
 
-/** Which header cards are reachable: a step opens when the previous step's inputs are valid. */
+/**
+ * Which header cards are reachable: a step opens when the previous step's inputs
+ * are valid. A usage error keeps the previous pack (the controller marks it
+ * stale rather than dropping it), so Validate stays reachable while the field
+ * the error names is fixed — on Validate itself, where the param inputs are.
+ */
 export function buildStepReachability(build) {
   const select = true;
   const generate = selectValid(build);
   const r = build?.result;
-  const validate = generate && !!r && !build.error && Array.isArray(r.canonical?.spec?.slis) && r.canonical.spec.slis.length >= 1;
+  const validate = generate && !!r && Array.isArray(r.canonical?.spec?.slis) && r.canonical.spec.slis.length >= 1;
   return { select, generate, validate };
 }
+
+// ---------- the last instantiation's errors ----------
+
+/**
+ * The engine's usage errors split for the views: `param <key>: <why>` (a value
+ * the engine refuses — a quote, a backslash, a control character, too long, not
+ * a scalar) keyed by the param so the row that carries it shows it, everything
+ * else general (an unknown key, a selection with no SLI left).
+ */
+export function splitBuildErrors(errors) {
+  const byParam = {};
+  const general = [];
+  for (const e of errors || []) {
+    const m = /^param ([^\s:]+): ([\s\S]+)$/.exec(String(e));
+    if (m) byParam[m[1]] = m[2]; else general.push(String(e));
+  }
+  return { byParam, general, paramCount: Object.keys(byParam).length, count: (errors || []).length };
+}
+
+/** The last instantiation failed while an earlier pack is still shown: what the views mark stale. */
+export function isStale(build) { return !!(build?.error && build?.result); }
 
 /** The furthest reachable step at or before `wanted`. */
 export function clampStep(build, wanted) {
@@ -135,12 +161,14 @@ export function retargetSlis(build, library, prevTier) {
  * instantiation has them) then each selected entry's, keyed as the engine
  * addresses them. `value` is the override (null when at the default),
  * `effective` what the pack will carry, `atDefault` whether a placeholder
- * still becomes a todo.
+ * still becomes a todo, `error` the engine's reason when the last
+ * instantiation refused this value.
  */
 export function paramRows({ build, library }) {
   const entries = selectedEntries(build, library);
   const composed = entries.length > 1;
   const overrides = build?.params || {};
+  const { byParam } = splitBuildErrors(build?.error);
   const row = (p, entry) => {
     const key = paramKey(entry?.id, p.id, composed);
     const has = Object.prototype.hasOwnProperty.call(overrides, key) && String(overrides[key]) !== '';
@@ -148,6 +176,7 @@ export function paramRows({ build, library }) {
       key, id: p.id, entry: entry?.id || null, entryTitle: entry?.title || 'scaffold',
       label: p.label, description: p.description || '', default: p.default, placeholder: !!p.placeholder,
       value: has ? overrides[key] : null, effective: has ? overrides[key] : p.default, atDefault: !has,
+      error: byParam[key] || null,
     };
   };
   return [
@@ -222,6 +251,8 @@ export function buildSelectModel({ build, library, requirements = {} }) {
     params: paramRows({ build, library }),
     libraryErrors: library?.errors || [],
     valid: errors.length === 0, errors,
+    // The last instantiation's usage errors (a rejected param value is marked on its row).
+    error: build?.error ? splitBuildErrors(build.error) : null, stale: isStale(build),
   };
 }
 
@@ -272,7 +303,7 @@ export function buildGenerateModel({ build, library }) {
       fileName: `${r.canonical?.metadata?.name || 'pack'}.pack.yaml`,
       warnings: summarizeWarnings(r.warnings || []),
     } : null,
-    error: build?.error || null, pending: !!build?.pending,
+    error: build?.error ? splitBuildErrors(build.error) : null, stale: isStale(build), pending: !!build?.pending,
   };
 }
 
@@ -337,7 +368,7 @@ export function buildRailModel({ build, clauses }) {
     warningCount: r?.warnings?.length || 0,
     blockingWarnings: (r?.warnings || []).filter(w => w.kind === 'promql').length,
     placeholdersRemaining: placeholdersRemaining(r),
-    pending: !!build?.pending, error: build?.error || null, ready: !!r,
+    pending: !!build?.pending, error: build?.error || null, stale: isStale(build), ready: !!r,
     valid: selectValid(build),
   };
 }
@@ -357,7 +388,7 @@ export function groupTodos(todos, params) {
     const g = groups.find(x => ARTEFACT_GROUPS.find(a => a.id === x.id).match.test(t.path));
     g.todos.push({
       path: t.path, fields: t.fields || [], what: t.what || '', clauses: t.clauses || [],
-      params: (t.params || []).map(k => byKey.get(k) || { key: k, label: k, value: null, default: '', placeholder: true, effective: '' }),
+      params: (t.params || []).map(k => byKey.get(k) || { key: k, label: k, value: null, default: '', placeholder: true, effective: '', error: null }),
       manual: !(t.params || []).length,   // a runbook to write, a baseline to measure: no param fills it
     });
   }
@@ -375,8 +406,13 @@ export function buildValidateModel({ build, library, clauses, targets }) {
   const params = paramRows({ build, library });
   const checklist = buildClauseChecklist(clauses || [], r?.summary || null);
   const s = r?.summary || null;
+  const blocking = (r?.warnings || []).some(w => w.kind === 'promql');
+  const schemaOk = (r?.schemaErrors || []).length === 0;
+  const error = build?.error ? splitBuildErrors(build.error) : null;
+  // What the footer says about the hand-off, in priority order.
+  const handoff = build?.registeredId ? 'registered' : error ? 'error' : blocking ? 'promql' : !schemaOk ? 'schema' : 'ready';
   return {
-    ready: !!r, pending: !!build?.pending, error: build?.error || null,
+    ready: !!r, pending: !!build?.pending, error, stale: isStale(build),
     tier: s?.tier || build?.tier,
     verdict: s ? {
       conformant: !!s.conformant, must: s.must, should: s.should,
@@ -385,9 +421,9 @@ export function buildValidateModel({ build, library, clauses, targets }) {
       onPlaceholder: s.onPlaceholder || [], failing: s.failing || [],
     } : null,
     checklist,
-    schema: { ok: (r?.schemaErrors || []).length === 0, errors: r?.schemaErrors || [] },
+    schema: { ok: schemaOk, errors: r?.schemaErrors || [] },
     warnings: summarizeWarnings(r?.warnings || []),
-    blocking: (r?.warnings || []).some(w => w.kind === 'promql'),
+    blocking,
     todoGroups: groupTodos(r?.todos || [], params),
     todoCount: r?.todos?.length || 0,
     placeholdersRemaining: placeholdersRemaining(r),
@@ -397,6 +433,8 @@ export function buildValidateModel({ build, library, clauses, targets }) {
     packName: r?.canonical?.metadata?.name || build?.name || '',
     source: r?.provenance?.source || '',
     registeredId: build?.registeredId || null,
-    canRegister: !!r && (r.schemaErrors || []).length === 0 && !(r.warnings || []).some(w => w.kind === 'promql'),
+    handoff,
+    // A stale pack (the last regeneration failed) is never handed off: the error stands until the field is fixed.
+    canRegister: !!r && schemaOk && !blocking && !error,
   };
 }

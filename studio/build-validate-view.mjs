@@ -15,7 +15,7 @@
 
 import { escapeHtml, downloadText } from './util.mjs';
 import { host as appHost } from './host.mjs';
-import { stepHeadHtml, paramRowHtml, wireParamInputs } from './build-select-view.mjs';
+import { stepHeadHtml, paramRowHtml, wireParamInputs, instantiateErrorHtml } from './build-select-view.mjs';
 
 const GLYPH = { pass: '✓', placeholder: '◐', fail: '✗' };
 
@@ -49,7 +49,8 @@ export function renderBuildValidate(container, model, host = appHost) {
     <section class="build-step build-validate">
       ${stepHeadHtml('validate', 'Does it hold up?', `The pack as generated, read three ways: the tier’s conformance rubric (which clauses pass, which pass only on a placeholder, which fail), the v1.2 schema, and the artefacts it compiles to. Fill a placeholder inline and the pack regenerates; when it holds up, open it in Discover.`)}
 
-      ${!model.ready ? `<div class="build-note${model.error ? ' build-note-err' : ''}">${model.pending ? 'Generating…' : model.error ? model.error.map(e => escapeHtml(e)).join('<br>') : 'Nothing generated yet — go back to Generate.'}</div>` : ''}
+      ${!model.ready && !model.error ? `<div class="build-note">${model.pending ? 'Generating…' : 'Nothing generated yet — go back to Generate.'}</div>` : ''}
+      ${instantiateErrorHtml(model.error, { stale: model.stale, where: 'below, under its todo' })}
 
       ${v ? `
       <div class="build-verdicts">
@@ -122,7 +123,13 @@ export function renderBuildValidate(container, model, host = appHost) {
 
       <footer class="build-step-actions">
         <button type="button" class="ctrl-btn build-back" id="build-back">← Generate</button>
-        <span class="build-step-status">${model.registeredId ? `Registered as <code>${escapeHtml(model.registeredId)}</code> — opening it again re-registers the current pack.` : model.canRegister ? 'Open in Discover registers the pack the way an upload is registered; its todos travel with it.' : model.blocking ? 'A PromQL warning blocks the hand-off — fix the param first.' : 'The pack does not validate against the schema as toggled — switch the missing section back on.'}</span>
+        <span class="build-step-status">${({
+          registered: `Registered as <code>${escapeHtml(model.registeredId || '')}</code> — opening it again re-registers the current pack.`,
+          ready: 'Open in Discover registers the pack the way an upload is registered; its todos travel with it.',
+          error: 'The last regeneration failed — fix the rejected value above; the pack shown is the previous one and is not handed off.',
+          promql: 'A PromQL warning blocks the hand-off — fix the param first.',
+          schema: 'The pack does not validate against the schema as toggled — switch the missing section back on.',
+        })[model.handoff]}</span>
         <span class="build-actions-right">
           <button type="button" class="ctrl-btn" id="build-yaml-download">download pack yaml</button>
           <button type="button" class="mcp-refresh-btn build-next" id="build-open" ${model.canRegister ? '' : 'disabled'}>Open in Discover <span aria-hidden="true">→</span></button>

@@ -1927,12 +1927,17 @@ async function runBuildInstantiate() {
       summary: res.summary || null, conformance: res.conformance || null, schemaErrors: res.schemaErrors || [], provenance: res.provenance || null,
     };
     b.error = null;
+    b.preview = null;   // compiled from the previous canonical
   } else {
-    b.result = null;
+    // A usage error — a param value the engine refuses, every SLI unticked:
+    // the previous pack stays (the views mark it stale and show the error
+    // beside the field it names), so Validate stays reachable and nothing
+    // typed so far is lost. Dropping the result here once bounced the user
+    // from Validate to Generate, the one step without parameter inputs.
     b.error = res?.errors || [res?.error || 'instantiation failed'];
   }
-  b.preview = null;   // compiled from the previous canonical
-  // A step that is no longer reachable (every SLI unticked) falls back.
+  // A step that is no longer reachable falls back — only when there is no
+  // pack to read: a kept pack keeps its step.
   b.step = clampBuildStep(b, b.step);
   rerenderBuild();
   persistence.schedule();

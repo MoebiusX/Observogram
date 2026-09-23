@@ -8353,6 +8353,11 @@ body.chrome-observa .disco {
 .build-param.is-set .build-param-flag { color: var(--pass-border); }
 .build-param-desc { font: italic 11px/1.45 var(--serif); color: var(--ink-4); }
 .build-param-input::placeholder { color: var(--ink-5); font-style: italic; }
+/* A value the engine refused: the row carries the reason, the flag says so, the input is marked invalid. */
+.build-param.is-error, .build-param.is-placeholder.is-error { border-color: var(--error-border); border-left: 3px solid var(--error-border); }
+.build-param.is-error .build-param-input { border-color: var(--error-border); }
+.build-param-flag.is-error, .build-param.is-set .build-param-flag.is-error { color: var(--error-text); }
+.build-param-error { font: 11px/1.45 var(--mono); color: var(--error-text); }
 
 .build-note { margin-top: 12px; padding: 10px 12px; border-radius: var(--r-md); font: 11.5px/1.5 var(--mono); color: var(--ink-3); background: var(--card); border: 1px solid var(--line-2); }
 .build-note-warn { background: var(--warn-bg); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
