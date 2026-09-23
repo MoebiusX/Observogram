@@ -316,7 +316,7 @@ Nothing in Discover / Diagnose / Remediate changed.
 
 | Module | Role |
 |---|---|
-| `studio/build-model.mjs` | the pure models — `buildDefineModel`, `buildCompileModel`, `buildVerifyModel`, `buildClauseChecklist(clauses, summary)` (three states: `pass`, `placeholder`, `fail`; `pending` without a summary), `buildRailModel`, `buildStepReachability`, `clampStep`, `paramRows`, `groupTodos`, `instantiateBody`, `summarizeWarnings`; every input explicit, no state, no fetch |
+| `studio/build-model.mjs` | the pure models — `buildDefineModel`, `buildCompileModel`, `buildVerifyModel`, `buildClauseChecklist(clauses, summary)` (three states: `pass`, `placeholder`, `fail`; `pending` without a summary), `buildDefinitionModel`, `buildSheetModel`, `buildStackModel`, `rolodexItems`, `addSliSelection`, `sectionClauses` / `sectionDrops` / `sectionNotes`, `buildStepReachability`, `clampStep`, `paramRows`, `groupTodos`, `instantiateBody`, `summarizeWarnings`; every input explicit, no state, no fetch |
 | `studio/build-api.mjs` | the loaders — `loadLibrary`, `loadRequirements` (cached per tier), `loadEntry`, `loadTargets`, `instantiate`, `compilePreview`, `registerBuiltPack`; `fetchFn` injectable, a 4xx JSON body is an answer |
 | `studio/build-define-view.mjs` | DEFINE (the silhouette) + the step head and the compilation-error note the three steps share |
 | `studio/build-compile-view.mjs` | COMPILE (the live stack, the warnings, the YAML) |
