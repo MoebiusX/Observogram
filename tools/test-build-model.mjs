@@ -33,7 +33,8 @@ import {
   placeholdersRemaining, groupTodos, buildVerifyModel, reachableSliKeys, retargetSlis, splitBuildErrors, isStale, resolveBuiltins,
   buildStackModel, sliCandidates, artefactSymbol, todoLayer, clauseGhostLabel, clauseSubgroup, slabState, isDetailArtefact, CLAUSE_GHOSTS,
   todoFocusSuffix, focusFallbackSelectors, enterStep, stepAfterInstantiate,
-  buildDefinitionModel, buildSheetModel,
+  buildDefinitionModel, buildSheetModel, rolodexItems, addSliSelection, paramLayer, paramSubgroup, sectionClauses, sectionSwitch, sheetLists,
+  sheetModeFor, stackExpanded, sheetFocusSuffix, LAYER_QUESTIONS, LAYER_SWITCHES,
 } from '../studio/build-model.mjs';
 import {
   loadLibrary as loadLibraryApi, loadRequirements, loadTargets, instantiate, compilePreview, registerBuiltPack,
@@ -44,10 +45,10 @@ import { renderBuildDefine } from '../studio/build-define-view.mjs';
 import { renderBuildCompile } from '../studio/build-compile-view.mjs';
 import { renderBuildVerify } from '../studio/build-verify-view.mjs';
 import { renderBuildStack, buildStackHtml, wireBuildStack } from '../studio/build-stack-view.mjs';
-import { renderBuildDefinition } from '../studio/build-definition-view.mjs';
-import { buildSheetHtml } from '../studio/build-sheet-view.mjs';
+import { renderBuildDefinition, buildDefinitionHtml, wireBuildDefinition, summaryHtml } from '../studio/build-definition-view.mjs';
+import { renderBuildSheet, buildSheetHtml, wireBuildSheet, paramReadHtml } from '../studio/build-sheet-view.mjs';
 import { artefactCardHtml } from '../studio/card-html.mjs';
-import { revealTodo } from '../studio/build-atoms.mjs';
+import { revealTodo, clauseRowHtml, switchHtml, evidenceDot } from '../studio/build-atoms.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const FIX = resolve(ROOT, 'tools/fixtures/build');
@@ -1141,3 +1142,482 @@ test('artefactCardHtml is the one card body: Discover\'s head, chip, pill, title
   assert.ok(!hostile.includes('<img') && !hostile.includes('<b>') && hostile.includes('&lt;img src=x&gt;'));
 });
 
+// ---------------------------------------------------------------------------
+// The axis (docs/BUILD_JOURNEY.md "The axis"): the definition column and the layer sheet
+// ---------------------------------------------------------------------------
+
+// A container whose queries answer from a map of selector → elements (the handlers, without a DOM).
+function fakeContainer(map = {}) {
+  return {
+    innerHTML: '',
+    querySelectorAll: (sel) => map[sel] || [],
+    querySelector: (sel) => (map[sel] || [])[0] || null,
+  };
+}
+const fakeEl = (dataset = {}, extra = {}) => {
+  const handlers = {};
+  return {
+    dataset, disabled: false, ...extra,
+    addEventListener: (t, fn) => { handlers[t] = fn; },
+    fire: (t, ev = {}) => handlers[t]?.({ preventDefault() {}, stopPropagation() {}, currentTarget: null, ...ev }),
+    getAttribute: (k) => (k === 'aria-checked' ? extra.checked : null),
+  };
+};
+
+test('buildDefinitionModel: the fields, the tier segments with their counts, the entries as chips, the summary — and what is still needed', () => {
+  const m = buildDefinitionModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS });
+  assert.equal(m.name, 'orders-api');
+  assert.equal(m.slug, 'orders-api');
+  assert.deepEqual(m.ownerList, ['team-orders']);
+  assert.equal(m.environment, 'prod');
+  assert.equal(m.tier, 'tier-2');
+  assert.equal(m.tierIndex, 1, 'the thumb sits on the middle segment');
+  assert.deepEqual(m.tiers.map(t => [t.id, t.index, t.must, t.should, t.selected, t.loaded]), [['tier-3', 0, 9, 0, false, true], ['tier-2', 1, 15, 1, true, true], ['tier-1', 2, 25, 5, false, true]]);
+  assert.equal(m.tierBlurb, 'A latency SLO, logs and traces backends, a chaos experiment in staging, a remediation.');
+  assert.equal(m.products.length, 8);
+  assert.equal(m.archetypes.length, 2);
+  const kafka = m.products.find(c => c.id === 'kafka');
+  assert.deepEqual([kafka.selected, kafka.evidence.status, kafka.evidence.word, kafka.sliCountAtTier, kafka.placeholderParams, kafka.gaps], [true, 'recorded-live', 'recorded live', 5, 5, 2]);
+  assert.equal(m.products.find(c => c.id === 'ibm-mq').selected, false);
+  assert.equal(m.archetypes.find(c => c.id === 'http-service').evidence.status, 'semconv');
+  assert.equal(m.selectedCount, 2);
+  assert.deepEqual(m.selectedTitles, ['Apache Kafka', 'HTTP service (OTel semconv)']);
+  assert.equal(m.valid, true);
+  assert.deepEqual(m.summary.counts, { pass: 12, placeholder: 4, fail: 0, pending: 0, total: 16, must: { total: 15, pass: 15, fail: 0 }, should: { total: 1, pass: 1, fail: 0 } });
+  assert.deepEqual(m.summary.failing, []);
+  // Requirements not loaded: the segments say so, the column stays valid.
+  const cold = buildDefinitionModel({ build: draft(), library: LIBRARY, requirements: {} });
+  assert.equal(cold.tiers[1].must, null);
+  assert.equal(cold.tiers[1].loaded, false);
+  assert.equal(cold.valid, true);
+  // Dashboards off: the summary names the failing clauses (the red edges) and says how many MUST fail.
+  const off = buildDefinitionModel({ build: draft({ result: { ...draft().result, summary: DASHBOARDS_OFF_SUMMARY } }), library: LIBRARY, requirements: REQUIREMENTS });
+  assert.equal(off.summary.statusKind, 'fail');
+  assert.equal(off.summary.status, '2 MUST clauses failing');
+  assert.deepEqual(off.summary.failing.map(i => i.id), ['L3.MUST.service_overview_dashboard', 'L3.MUST.slo_burn_dashboard']);
+  // A caller's checklist is used as given (the shell computes it once for the column and the sheet).
+  const withCheck = buildDefinitionModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS, checklist: buildClauseChecklist(T2, DASHBOARDS_OFF_SUMMARY) });
+  assert.equal(withCheck.summary.counts.fail, 2);
+  // Pending, error and idle states.
+  assert.equal(buildDefinitionModel({ build: draft({ pending: true }), library: LIBRARY, requirements: REQUIREMENTS }).summary.status, 'checking…');
+  const stale = buildDefinitionModel({ build: draft({ error: ['param x: no'] }), library: LIBRARY, requirements: REQUIREMENTS });
+  assert.equal(stale.summary.statusKind, 'error');
+  assert.equal(stale.summary.status, 'the last compilation failed — showing the previous pack');
+  assert.equal(stale.stale, true);
+  const empty = buildDefinitionModel({ build: defaultBuildState(), library: LIBRARY, requirements: REQUIREMENTS });
+  assert.equal(empty.valid, false);
+  assert.deepEqual(empty.errors, ['a service name', 'at least one library entry']);
+  assert.equal(empty.selectedCount, 0);
+});
+
+test('renderBuildDefinition draws the segmented control, the chips and the summary headlessly, with their ARIA', () => {
+  const c = stubContainer();
+  renderBuildDefinition(c, buildDefinitionModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS }), { build: {} });
+  const html = c.innerHTML;
+  assert.ok(html.includes('<div class="build-seg" role="radiogroup" aria-label="Criticality tier" style="--seg-index:1">'));
+  assert.equal((html.match(/role="radio"/g) || []).length, 3);
+  assert.ok(html.includes('data-tier="tier-2" aria-checked="true" tabindex="0"'));
+  assert.ok(html.includes('data-tier="tier-1" aria-checked="false" tabindex="-1"'));
+  assert.ok(html.includes('<span class="build-seg-name">tier-2</span>') && html.includes('aria-label="15 MUST, 1 SHOULD"><b>15 MUST</b><b>1 SHOULD</b></span>'), 'the counts stack, MUST over SHOULD');
+  assert.ok(html.includes('aria-label="9 MUST"><b>9 MUST</b></span>'), 'tier-3 has no SHOULD: the count reads MUST only');
+  assert.ok(html.includes('<p class="build-seg-blurb"><b>tier-2</b> A latency SLO'));
+  assert.ok(html.includes('data-entry="kafka" aria-pressed="true"') && html.includes('data-entry="ibm-mq" aria-pressed="false"'));
+  assert.ok(html.includes('<span class="build-chip-slis">5 SLIs at this tier</span>'));
+  assert.ok(html.includes('class="build-evidence-dot build-evidence-recorded-live" title="recorded live · verified 2026-09-22" role="img" aria-label="evidence: recorded live · verified 2026-09-22"'));
+  assert.ok(html.includes('id="build-name"') && html.includes('data-focus-key="name"') && html.includes('data-focus-key="owners"') && html.includes('data-focus-key="environment"'));
+  assert.ok(html.includes('class="build-summary is-ok"') && html.includes('conformant at tier-2'));
+  assert.ok(html.includes('12 pass') && html.includes('4 on a placeholder') && html.includes('0 fail'));
+  assert.ok(!html.includes('build-summary-failing'), 'nothing fails: no failing block');
+  assert.ok(html.includes('<b>21</b> todos') && html.includes('<b>17</b> placeholders left'));
+  // Dashboards off: the failing block lists the two clauses with the shared clause row.
+  const off = summaryHtml(buildDefinitionModel({ build: draft({ result: { ...draft().result, summary: DASHBOARDS_OFF_SUMMARY } }), library: LIBRARY, requirements: REQUIREMENTS }).summary);
+  assert.ok(off.includes('class="build-summary is-fail"') && off.includes('build-summary-failing'));
+  assert.equal((off.match(/L3\.MUST\.\w+_dashboard — fails/g) || []).length, 2);
+  // Two-column html: the exit bar, the column and the main are the shell's; the column alone has no step head.
+  assert.ok(!buildDefinitionHtml(buildDefinitionModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS })).includes('build-step-head'));
+  // The wiring: a segment click sets the tier, arrow keys move within the group, a chip toggles its entry.
+  const calls = [];
+  const segs = ['tier-3', 'tier-2', 'tier-1'].map(t => fakeEl({ tier: t }, { focus() { calls.push(['focus', t]); } }));
+  const chip = fakeEl({ entry: 'ibm-mq' });
+  wireBuildDefinition(fakeContainer({ '.build-seg-btn': segs, '.build-chip': [chip] }), {}, { build: { setTier: (t) => calls.push(['tier', t]), toggleEntry: (id) => calls.push(['entry', id]), update() {} } });
+  segs[0].fire('click');
+  segs[1].fire('keydown', { key: 'ArrowRight' });
+  segs[2].fire('keydown', { key: 'ArrowRight' });
+  chip.fire('click');
+  assert.deepEqual(calls, [['tier', 'tier-3'], ['focus', 'tier-1'], ['tier', 'tier-1'], ['focus', 'tier-3'], ['tier', 'tier-3'], ['entry', 'ibm-mq']]);
+});
+
+test('rolodexItems: the selected entries’ SLIs with the objective at the tier, above-tier ones disabled with the reason, every product behind the filter', () => {
+  const items = rolodexItems({ build: draft(), library: LIBRARY });
+  assert.equal(items.length, 10, 'kafka 6 + http-service 4, in selection order');
+  assert.deepEqual(items.slice(0, 6).map(i => i.entry), Array(6).fill('kafka'));
+  const ba = items.find(i => i.id === 'broker_availability');
+  assert.deepEqual([ba.key, ba.entryTitle, ba.entrySelected, ba.type, ba.evidence, ba.metrics, ba.reachable, ba.selected, ba.disabled, ba.reason, ba.objectiveLabel, ba.window, ba.focusKey],
+    ['kafka_broker_availability', 'Apache Kafka', true, 'ratio', 'recorded-live', ['up'], true, true, false, null, '99.9%', '30d', 'sli:kafka:broker_availability']);
+  assert.deepEqual(ba.tiers.map(t => [t.tier, t.current, t.reachable, t.objectiveLabel, t.window]), [['tier-3', false, true, '99%', '30d'], ['tier-2', true, true, '99.9%', '30d'], ['tier-1', false, true, '99.9%', '30d']]);
+  const ce = items.find(i => i.id === 'controller_election_rate');
+  assert.deepEqual([ce.reachable, ce.selected, ce.disabled, ce.reason, ce.objectiveLabel, ce.objective, ce.window], [false, false, true, 'needs tier-1', 'needs tier-1', null, null]);
+  assert.deepEqual(ce.tiers.map(t => t.reachable), [false, false, true]);
+  // At tier-1 the same SLI is reachable and, with the defaults, in the pack.
+  const t1 = rolodexItems({ build: draft({ tier: 'tier-1' }), library: LIBRARY }).find(i => i.id === 'controller_election_rate');
+  assert.deepEqual([t1.reachable, t1.selected, t1.objectiveLabel, t1.window], [true, true, '99%', '7d']);
+  // An explicit list: only its keys are selected.
+  const explicit = rolodexItems({ build: draft({ slis: ['kafka_broker_availability'] }), library: LIBRARY });
+  assert.deepEqual(explicit.filter(i => i.selected).map(i => i.key), ['kafka_broker_availability']);
+  // The filter: every product's SLIs follow, not selected, keyed for the composition they would join.
+  const all = rolodexItems({ build: draft(), library: LIBRARY, all: true });
+  assert.equal(all.length, 56, 'every SLI of the ten entries');
+  const mq = all.find(i => i.entry === 'ibm-mq' && i.id === 'qmgr_process_up');
+  assert.deepEqual([mq.entrySelected, mq.selected, mq.key, mq.reachable], [false, false, 'ibm_mq_qmgr_process_up', true]);
+  assert.ok(all.findIndex(i => i.entry === 'ibm-mq') > all.findIndex(i => i.entry === 'http-service'), 'the selected entries come first');
+  // One entry alone: bare keys; a foreign SLI's key is the composed one it would get.
+  const single = rolodexItems({ build: draft({ entries: ['kafka'] }), library: LIBRARY, all: true });
+  assert.equal(single.find(i => i.entry === 'kafka' && i.id === 'broker_availability').key, 'broker_availability');
+  assert.equal(single.find(i => i.entry === 'http-service' && i.id === 'availability').key, 'http_service_availability');
+  assert.deepEqual(rolodexItems({ build: defaultBuildState(), library: LIBRARY }), []);
+});
+
+test('addSliSelection (the pure part of addSli): a product not yet selected joins with that one SLI, the rest of the selection kept and re-keyed', () => {
+  // The drive: kafka + http-service at tier-2, defaults; add an IBM MQ SLI.
+  const r = addSliSelection({ build: draft(), library: LIBRARY }, 'ibm-mq', 'qmgr_process_up');
+  assert.equal(r.changed, true);
+  assert.deepEqual(r.entries, ['kafka', 'http-service', 'ibm-mq'], 'the entry joins at the end');
+  assert.deepEqual(r.slis, [...FIXTURE.provenance.toggles.slis, 'ibm_mq_qmgr_process_up'], 'the seven that were in the pack, plus the one added — not every MQ SLI');
+  assert.equal(reachableSliKeys({ ...draft(), entries: r.entries }, LIBRARY).length, 13, 'six MQ SLIs are reachable at tier-2; only one was asked for');
+  // From one entry to two: every key is re-keyed for the composition.
+  const one = addSliSelection({ build: draft({ entries: ['kafka'], slis: null }), library: LIBRARY }, 'http-service', 'availability');
+  assert.deepEqual(one.entries, ['kafka', 'http-service']);
+  assert.deepEqual(one.slis, ['kafka_broker_availability', 'kafka_consumer_group_lag_seconds', 'kafka_partition_replica_health', 'kafka_produce_latency_p99', 'kafka_fetch_latency_p99', 'http_service_availability']);
+  // An SLI of an entry already selected: the key is ticked; completing the defaults collapses to null.
+  const partial = draft({ slis: FIXTURE.provenance.toggles.slis.filter(k => k !== 'kafka_fetch_latency_p99') });
+  const back = addSliSelection({ build: partial, library: LIBRARY }, 'kafka', 'fetch_latency_p99');
+  assert.deepEqual(back.entries, ['kafka', 'http-service']);
+  assert.equal(back.slis, null, 'every reachable SLI ticked again: the defaults');
+  const again = addSliSelection({ build: draft(), library: LIBRARY }, 'kafka', 'broker_availability');
+  assert.equal(again.slis, null, 'already in: nothing changes in the list');
+  // Above the tier: refused with the reason, nothing changes.
+  const above = addSliSelection({ build: draft(), library: LIBRARY }, 'kafka', 'controller_election_rate');
+  assert.deepEqual([above.changed, above.reason, above.entries, above.slis], [false, 'needs tier-1', ['kafka', 'http-service'], null]);
+  assert.deepEqual(addSliSelection({ build: draft(), library: LIBRARY }, 'nope', 'x').changed, false);
+  assert.deepEqual(addSliSelection({ build: draft(), library: LIBRARY }, 'kafka', 'nope').changed, false);
+  // Pure: the draft passed in is untouched.
+  const b = draft();
+  addSliSelection({ build: b, library: LIBRARY }, 'ibm-mq', 'qmgr_process_up');
+  assert.deepEqual(b.entries, ['kafka', 'http-service']);
+  assert.equal(b.slis, null);
+});
+
+test('paramLayer places every param of the drive on one sheet; sectionClauses names exactly what a section off drops', () => {
+  const rows = paramRows({ build: draft(), library: LIBRARY });
+  const byLayer = Object.fromEntries(['L2', 'L4', 'L5'].map(L => [L, rows.filter(p => paramLayer(p) === L).map(p => p.key)]));
+  assert.deepEqual(byLayer.L4, ['oncall_channel', 'team_channel', 'pager_service', 'pager_service_low', 'runbook_dir']);
+  assert.deepEqual(byLayer.L5, ['chaos_target', 'probe_target', 'kafka.bootstrap', 'kafka.broker_workload', 'kafka.consumer_workload', 'http-service.health_url']);
+  assert.deepEqual(byLayer.L2, ['metrics_endpoint', 'remote_write_url', 'logs_endpoint', 'logs_otlp_endpoint', 'traces_endpoint', 'traces_otlp_endpoint', 'prometheus_version', 'loki_version', 'tempo_version', 'kafka.broker_job', 'kafka.broker_targets', 'kafka.exporter_job', 'kafka.exporter_target', 'http-service.job', 'http-service.duration_metric']);
+  assert.equal(byLayer.L2.length + byLayer.L4.length + byLayer.L5.length, rows.length, 'every param has a sheet');
+  assert.deepEqual(rows.filter(p => paramSubgroup(p) === 'alerting').map(p => p.key), ['oncall_channel', 'team_channel', 'pager_service', 'pager_service_low']);
+  assert.deepEqual(rows.filter(p => paramSubgroup(p) === 'healing').map(p => p.key), ['runbook_dir']);
+  assert.equal(paramLayer(null), 'L2');
+  // What each section holds up at tier-2 — the consequence a switch states.
+  const ids = (s) => sectionClauses(s, T2).map(c => c.id);
+  assert.deepEqual(ids('slos'), ['L1.MUST.availability_slo', 'L1.MUST.latency_slo', 'L1.MUST.sli_covered_by_slo', 'L4.MUST.multi_window_burn_rate']);
+  assert.deepEqual(ids('policy'), ['L4.MUST.multi_window_burn_rate']);
+  assert.deepEqual(ids('routes'), [], 'no route clause below tier-1 (the SEV1 voice route is tier-1)');
+  assert.deepEqual(ids('dashboards'), ['L3.MUST.service_overview_dashboard', 'L3.MUST.slo_burn_dashboard'], 'the recording rules and the derived view stay when dashboards go');
+  assert.deepEqual(ids('validation'), ['L5.MUST.synthetic_probe', 'L5.MUST.tier2_chaos_staging']);
+  assert.deepEqual(ids('dashboards'), DASHBOARDS_OFF_SUMMARY.failing.map(f => f.id), 'what the switch says it drops is what the engine reports failing');
+  assert.equal(sectionClauses('routes', REQUIREMENTS['tier-1']).map(c => c.id).join(), 'L4.MUST.tier1_voice_route');
+  // The switch model: state, the consequence in one line, disabled when meaningless.
+  const on = defaultBuildState();
+  const slos = sectionSwitch('slos', on, T2);
+  assert.deepEqual([slos.id, slos.label, slos.on, slos.disabled, slos.focusKey], ['slos', 'SLOs', true, false, 'toggle:slos']);
+  assert.equal(slos.consequence, 'off also drops the burn alerts (policy) — 4 clauses go with it: availability SLO, latency SLO, every SLI under an SLO, multi-window burn alerts');
+  assert.equal(sectionSwitch('dashboards', on, T2).consequence, 'off drops 2 clauses of the tier: service overview board, SLO burn board');
+  assert.equal(sectionSwitch('routes', on, T2).consequence, 'no clause of the tier rests on it — the section is still absent from the pack when off');
+  const noSlos = { ...on, toggles: { ...on.toggles, slos: false } };
+  assert.deepEqual([sectionSwitch('policy', noSlos, T2).disabled, sectionSwitch('policy', noSlos, T2).consequence], [true, 'meaningless without SLOs — dropped with them']);
+  assert.equal(sectionSwitch('dashboards', { ...on, toggles: { ...on.toggles, dashboards: false } }, T2).on, false);
+});
+
+test('buildSheetModel: per layer the title and its question, the clauses with their state, the switches, the params, the lists read from the pack', () => {
+  const sheet = (layerId, over = {}, b = draft()) => buildSheetModel({ layerId, build: b, library: LIBRARY, requirements: T2, mode: 'edit', ...over });
+  for (const d of LAYER_DEFS) {
+    const m = sheet(d.id);
+    assert.equal(m.title, `${d.num} · ${d.name}`);
+    assert.equal(m.question, LAYER_QUESTIONS[d.id]);
+    assert.ok(m.question.endsWith('?'), `${d.id} asks a question`);
+    assert.deepEqual(m.switches.map(s => s.id), LAYER_SWITCHES[d.id] || []);
+  }
+  assert.deepEqual(Object.values(LAYER_QUESTIONS).slice(0, 7), ['What should we measure?', 'Where does the telemetry flow?', 'What else do we collect?', 'How do we see it?', 'What happens when it breaks?', 'How do we prove it?', 'Who owns it?']);
+  // L1: the clauses at the tier, the rolodex, the SLOs switch, the SLOs list.
+  const l1 = sheet('L1');
+  assert.deepEqual([l1.mode, l1.readOnly, l1.compose, l1.state, l1.stateText], ['edit', false, false, 'pass', '3 of 3 clauses pass']);
+  assert.deepEqual(l1.clauses.map(c => [c.id, c.state]), [['L1.MUST.availability_slo', 'pass'], ['L1.MUST.latency_slo', 'pass'], ['L1.MUST.sli_covered_by_slo', 'pass']]);
+  assert.equal(l1.rolodex.items.length, 10);
+  assert.deepEqual(l1.rolodex.counts, { total: 10, selected: 7, selectable: 7, aboveTier: 3, library: 10, chosen: 2 });
+  assert.deepEqual(l1.rolodex.allKeys, FIXTURE.provenance.toggles.slis);
+  assert.equal(l1.rolodex.filterAll, false);
+  assert.equal(sheet('L1', {}, draft({ rolodexAll: true })).rolodex.items.length, 56);
+  assert.deepEqual(l1.switches.map(s => [s.id, s.on]), [['slos', true]]);
+  assert.deepEqual(l1.lists.map(l => [l.id, l.items.length]), [['slos', 7]]);
+  assert.equal(l1.lists[0].items[0].title, 'kafka_broker_availability_99_9');
+  assert.deepEqual(l1.paramGroups, []);
+  assert.equal(l1.todoCount, 0);
+  // L2: no switch; the scrape jobs (from the prometheus receiver), the backends, exporters, storage; two param groups.
+  const l2 = sheet('L2');
+  assert.deepEqual([l2.state, l2.switches], ['placeholder', []]);
+  assert.deepEqual(l2.lists.map(l => [l.id, l.items.length]), [['jobs', 2], ['receivers', 1], ['backends', 3], ['exporters', 3], ['storage', 3], ['otel', 1]]);
+  assert.deepEqual(l2.lists[0].items.map(i => [i.title, i.desc, i.meta, i.scaffold]), [['kafka-broker', 'kafka-broker.kafka:9404', ['every 30s'], true], ['kafka-exporter', 'kafka-exporter.kafka:9308', ['every 30s'], true]]);
+  assert.deepEqual(l2.lists[2].items[0], { id: 'BAK-01', title: 'metrics-prom', desc: 'prometheus 3.14 (metrics)', meta: ['declared 3.14', 'min 2.53', 'gating warn', 'http://prometheus:9090'], scaffold: true, symbol: 'telemetry.backends.metrics-prom' });
+  assert.deepEqual(l2.paramGroups.map(g => [g.id, g.rows.length]), [['targets', 6], ['endpoints', 9]]);
+  assert.equal(l2.todoCount, 10);
+  assert.deepEqual(l2.todos, [], 'edit mode draws no todo (they are filled on Verify)');
+  // L3: the Dashboards switch and its consequence; boards, views, rules.
+  const l3 = sheet('L3');
+  assert.deepEqual(l3.switches.map(s => [s.id, s.on, s.consequence]), [['dashboards', true, 'off drops 2 clauses of the tier: service overview board, SLO burn board']]);
+  assert.deepEqual(l3.lists.map(l => [l.id, l.items.length]), [['boards', 4], ['views', 5], ['rules', 7]]);
+  assert.deepEqual(l3.lists[0].items.map(i => i.title), ['orders-api-overview', 'orders-api-slo-burn', 'kafka-kafka-consumer-lag', 'kafka-kafka-throughput']);
+  assert.deepEqual(l3.lists[0].items[0].meta, ['14 bindings']);
+  // Dashboards off: the switch is off, the state is red, the slab is dimmed, the boards list is empty with the reason.
+  const off = sheet('L3', {}, draft({ toggles: { ...defaultBuildState().toggles, dashboards: false }, result: { ...draft().result, summary: DASHBOARDS_OFF_SUMMARY } }));
+  assert.deepEqual([off.switches[0].on, off.state, off.dimmed, off.offSections], [false, 'fail', true, ['dashboards']]);
+  assert.deepEqual(off.clauses.filter(c => c.state === 'fail').map(c => c.id), ['L3.MUST.service_overview_dashboard', 'L3.MUST.slo_burn_dashboard']);
+  // L4: Policy and Routes switches; the burn windows per SLO, the routes with their channels, the remediation; channel and runbook params.
+  const l4 = sheet('L4');
+  assert.deepEqual(l4.switches.map(s => [s.id, s.on, s.disabled]), [['policy', true, false], ['routes', true, false]]);
+  assert.deepEqual(l4.lists.map(l => [l.id, l.items.length]), [['policy', 7], ['forecasts', 0], ['routes', 3], ['healing', 2]]);
+  assert.deepEqual(l4.lists[0].items[0].meta, ['14× 5m/1h SEV1', '6× 30m/6h SEV2']);
+  assert.deepEqual(l4.lists[2].items.map(i => [i.title, i.meta, i.scaffold]), [['SEV1 routes', ['msteams #orders-api-oncall', 'voice pagerduty://orders-api'], true], ['SEV2 routes', ['msteams #orders-api-oncall'], true], ['SEV3 routes', ['msteams #orders-api-team'], true]]);
+  assert.deepEqual(l4.lists[3].items[0].meta, ['file://runbooks/broker-down.md', 'argo-workflow://restart-broker-with-quorum-check']);
+  assert.deepEqual(l4.paramGroups.map(g => [g.id, g.rows.map(r => r.key)]), [['channels', ['oncall_channel', 'team_channel', 'pager_service', 'pager_service_low']], ['runbooks', ['runbook_dir']]]);
+  const noSlos = sheet('L4', {}, draft({ toggles: { ...defaultBuildState().toggles, slos: false } }));
+  assert.deepEqual([noSlos.switches[0].disabled, noSlos.switches[0].on], [true, false], 'policy is meaningless without SLOs: disabled, and off with them');
+  // L5: the Validation switch; probes, chaos, baselines; the target params.
+  const l5 = sheet('L5');
+  assert.deepEqual(l5.switches.map(s => [s.id, s.consequence]), [['validation', 'off drops 2 clauses of the tier: synthetic probe, chaos in staging']]);
+  assert.deepEqual(l5.lists.map(l => [l.id, l.items.length]), [['probes', 3], ['chaos', 2], ['baselines', 1]]);
+  assert.deepEqual(l5.lists[0].items[0].meta, ['k6', 'kafka.kafka:9092', 'every 1m', 'SEV2']);
+  assert.deepEqual(l5.lists[1].items[0].meta, ['chaos-mesh', 'on kafka-broker', 'pod-failure', 'monthly', 'staging', 'MTTD 90s']);
+  assert.deepEqual(l5.paramGroups.map(g => [g.id, g.rows.map(r => r.key)]), [['targets', ['chaos_target', 'probe_target', 'kafka.bootstrap', 'kafka.broker_workload', 'kafka.consumer_workload', 'http-service.health_url']]]);
+  // GOV: owners and imports, no switch, no param.
+  const gov = sheet('GOV');
+  assert.deepEqual([gov.state, gov.switches, gov.paramGroups, gov.owners], ['neutral', [], [], ['team-orders']]);
+  assert.deepEqual(gov.lists.map(l => [l.id, l.items.map(i => i.title)]), [['imports', ['platform/std-budget-policy@2.1']]]);
+  // Before the first result: the lists are empty and say why; nothing is invented.
+  const cold = sheet('L2', {}, draft({ result: null }));
+  assert.equal(cold.compiled, false);
+  assert.ok(cold.lists.every(l => l.items.length === 0 && l.empty === 'compiled on the first instantiation — nothing to list yet'));
+  assert.equal(cold.state, 'pending');
+  // The step's stack, when given, is what the sheet reads (no second computation).
+  const stack = buildCompileModel({ build: draft(), library: LIBRARY, clauses: T2 }).stack;
+  assert.deepEqual(sheet('L2', { stack }).clauses, stack.slabs.find(s => s.id === 'L2').clauses);
+  // A layer without a slab (L2X on a tier with no L2X clause and no artefact) still answers.
+  const noX = buildSheetModel({ layerId: 'L2X', build: draft(), library: LIBRARY, requirements: T2.filter(c => c.dimension !== 'L2X'), mode: 'edit' });
+  assert.deepEqual([noX.title, noX.state, noX.clauses, noX.lists[0].items], ['L2X · Extended', 'neutral', [], []]);
+  // sheetLists on its own, and the modes.
+  assert.equal(sheetLists('L1', null).length, 1);
+  assert.deepEqual(['define', 'compile', 'verify', 'other'].map(sheetModeFor), ['preview', 'edit', 'verify', 'edit']);
+});
+
+test('the sheet is one component on the three steps: a preview on DEFINE (Compose in Compile →), editable on COMPILE, read-only with the todos on VERIFY', () => {
+  const preview = buildSheetModel({ layerId: 'L1', build: draft({ step: 'define' }), library: LIBRARY, requirements: T2, mode: 'preview' });
+  assert.deepEqual([preview.mode, preview.readOnly, preview.compose, preview.todos], ['preview', true, true, []]);
+  assert.equal(preview.rolodex.items.length, 10, 'the candidates are the same items');
+  const edit = buildSheetModel({ layerId: 'L4', build: draft({ step: 'compile' }), library: LIBRARY, requirements: T2, mode: 'edit' });
+  assert.deepEqual([edit.readOnly, edit.compose, edit.todos, edit.todoCount], [false, false, [], 5]);
+  const verify = buildSheetModel({ layerId: 'L4', build: draft({ step: 'verify' }), library: LIBRARY, requirements: T2, mode: 'verify' });
+  assert.deepEqual([verify.readOnly, verify.compose], [true, false]);
+  assert.deepEqual(verify.todos.map(t => t.path), ['alerting.routes[0]', 'alerting.routes[1]', 'alerting.routes[2]', 'remediation[0]', 'remediation[1]']);
+  assert.deepEqual(verify.todos[0].params.map(p => p.key), ['oncall_channel', 'pager_service']);
+  assert.equal(verify.todos[3].manual, true, 'a runbook to write: no param fills it');
+  const l2v = buildSheetModel({ layerId: 'L2', build: draft(), library: LIBRARY, requirements: T2, mode: 'verify' });
+  assert.equal(l2v.todos.length, 10);
+  assert.ok(l2v.todos.some(t => t.path === 'telemetry.backends.metrics-prom' && t.params.map(p => p.key).join() === 'prometheus_version,metrics_endpoint'));
+  // Filling a placeholder takes its todo away on the sheet as on the slab.
+  const filled = draft({ result: { ...draft().result, todos: FIXTURE.todos.filter(t => t.path !== 'alerting.routes[2]') } });
+  assert.equal(buildSheetModel({ layerId: 'L4', build: filled, library: LIBRARY, requirements: T2, mode: 'verify' }).todos.length, 4);
+});
+
+test('renderBuildSheet draws the dialog headlessly: the ARIA, the title and question, the clause rows, the rolodex cards, the switches, the params, the todos — per mode', () => {
+  const html = (layerId, mode = 'edit', b = draft()) => { const c = stubContainer(); renderBuildSheet(c, buildSheetModel({ layerId, build: b, library: LIBRARY, requirements: T2, mode }), { build: {} }); return c.innerHTML; };
+  const l1 = html('L1');
+  assert.ok(l1.includes('<div class="build-sheet-scrim" data-close aria-hidden="true"></div>'));
+  assert.ok(l1.includes('<aside class="build-sheet is-edit is-pass" role="dialog" aria-modal="false" aria-labelledby="build-sheet-title" aria-describedby="build-sheet-question" data-layer="L1" data-mode="edit" tabindex="-1">'));
+  assert.ok(l1.includes('<h2 class="build-sheet-title" id="build-sheet-title">L1 · Contract</h2>'));
+  assert.ok(l1.includes('<p class="build-sheet-question" id="build-sheet-question">What should we measure?</p>'));
+  assert.ok(l1.includes('class="build-sheet-close" data-close aria-label="Close the layer sheet (Esc)"'));
+  assert.ok(l1.includes('Clauses at tier-2 <span class="build-sheet-count">3</span>'));
+  assert.equal((l1.match(/<li class="build-rail-clause is-pass"/g) || []).length, 3, 'the clause rows are the shared atom');
+  // The rolodex: ten cards, the current-tier objective large, the other tiers muted, a switch each; the above-tier one disabled with the reason.
+  assert.equal((l1.match(/class="build-rolo-card/g) || []).length, 10);
+  assert.ok(l1.includes('<div class="build-rolodex-track" role="group" aria-roledescription="carousel" aria-label="SLI cards — arrow keys move" tabindex="0" data-scroll-key="rolodex">'));
+  assert.ok(l1.includes('<span class="build-rolo-id">broker_availability</span>') && l1.includes('<code>up</code>'));
+  assert.ok(l1.includes('<b>99.9%</b><span>over 30d · at tier-2</span>'));
+  assert.ok(l1.includes('class="is-muted" title="tier-3: 99% over 30d">tier-3 <b>99%</b> 30d</span>'));
+  assert.ok(l1.includes('role="switch" class="build-switch" aria-checked="true" aria-label="broker_availability of Apache Kafka — remove from the pack" data-focus-key="sli:kafka:broker_availability" data-sli="kafka_broker_availability" data-entry="kafka" data-sli-id="broker_availability" data-selected="1" data-entry-selected="1"'));
+  assert.ok(l1.includes('aria-label="controller_election_rate of Apache Kafka — needs tier-1" disabled aria-disabled="true" title="needs tier-1 — this SLI is above the tier"'));
+  assert.ok(l1.includes('<b class="build-rolo-needs">needs tier-1</b><span>this SLI is above the tier — switch the tier to add it</span>'));
+  assert.ok(l1.includes('data-rolodex-all="0"') && l1.includes('show every product'));
+  assert.ok(l1.includes('1 / 10'));
+  // The SLOs switch with its consequence in one line.
+  assert.ok(l1.includes('role="switch" class="build-switch" aria-checked="true" aria-label="SLOs section" data-focus-key="toggle:slos" data-toggle="slos"'));
+  assert.ok(l1.includes('off also drops the burn alerts (policy) — 4 clauses go with it'));
+  assert.ok(!l1.includes('data-compose'), 'no compose action on COMPILE');
+  // Every product: a foreign card is dashed, its switch says it selects the product.
+  const all = html('L1', 'edit', draft({ rolodexAll: true }));
+  assert.equal((all.match(/class="build-rolo-card/g) || []).length, 56);
+  assert.ok(all.includes('aria-label="qmgr_process_up of IBM MQ — add to the pack (selects IBM MQ too)" data-focus-key="sli:ibm-mq:qmgr_process_up" data-sli="ibm_mq_qmgr_process_up" data-entry="ibm-mq" data-sli-id="qmgr_process_up" data-selected="0" data-entry-selected="0"'));
+  assert.ok(all.includes('class="build-rolo-card is-foreign"') && all.includes('not selected yet'));
+  // L2: no switch, the param inputs editable with sheet focus keys, the lists.
+  const l2 = html('L2');
+  assert.ok(!l2.includes('role="switch"'));
+  assert.ok(l2.includes('data-focus-key="param:kafka.broker_targets@L2/sheet"') && l2.includes('data-focus-key="param:prometheus_version@L2/sheet"'));
+  assert.ok(l2.includes('Scrape jobs <span class="build-sheet-count">2</span>') && l2.includes('<span class="build-sheet-item-title">kafka-broker</span>') && l2.includes('<span class="build-sheet-item-desc">kafka-broker.kafka:9404</span>'));
+  assert.ok(l2.includes('<span class="build-sheet-scaffold">scaffold</span>'));
+  assert.ok(l2.includes('10 todos on this layer — the placeholders are filled on Verify'));
+  // L3 with dashboards off: the switch reads off and the consequence is red.
+  const off = html('L3', 'edit', draft({ toggles: { ...defaultBuildState().toggles, dashboards: false }, result: { ...draft().result, summary: DASHBOARDS_OFF_SUMMARY } }));
+  assert.ok(off.includes('class="build-sheet is-edit is-fail is-dimmed"') && off.includes('<span class="build-slab-off">dashboards off</span>'));
+  assert.ok(off.includes('aria-checked="false" aria-label="Dashboards section"'));
+  assert.ok(off.includes('<span class="build-switch-consequence is-off">off — drops 2 clauses of the tier: service overview board, SLO burn board</span>'));
+  assert.equal((off.match(/<li class="build-rail-clause is-fail"/g) || []).length, 2);
+  // L4: two switches, the channel params, the routes list.
+  const l4 = html('L4');
+  assert.ok(l4.includes('data-toggle="policy"') && l4.includes('data-toggle="routes"'));
+  assert.ok(l4.includes('Channels <span class="build-sheet-count">4</span>') && l4.includes('data-focus-key="param:oncall_channel@L4/sheet"'));
+  assert.ok(l4.includes('<span class="build-sheet-item-title">SEV1 routes</span>') && l4.includes('<span>voice pagerduty://orders-api</span>'));
+  // Preview (DEFINE): every switch disabled, the params read-only, the compose action present.
+  const pv = html('L1', 'preview');
+  assert.ok(pv.includes('data-mode="preview"') && pv.includes('<button type="button" class="mcp-refresh-btn build-sheet-compose-btn" data-compose>Compose in Compile'));
+  // Every add / remove and section switch is disabled; only the "show every product" filter (browsing) stays live.
+  assert.equal((pv.match(/role="switch"/g) || []).length - 1, (pv.match(/role="switch"[^>]*\bdisabled\b/g) || []).length, 'nothing flips in a preview');
+  assert.ok(!/data-rolodex-all="0"[^>]*\bdisabled\b/.test(pv) && !/\bdisabled\b[^>]*data-rolodex-all/.test(pv), 'the filter stays live');
+  const pv2 = html('L2', 'preview');
+  assert.ok(pv2.includes('class="build-param build-param-read is-placeholder" data-param="kafka.broker_targets"') && pv2.includes('<code class="build-param-value">kafka-broker.kafka:9404</code>'));
+  assert.ok(!pv2.includes('build-param-input'), 'a preview has no input');
+  // Verify: read-only options, the todos with their inline inputs keyed by sheet and todo path.
+  const vf = html('L4', 'verify');
+  assert.ok(vf.includes('data-mode="verify"') && vf.includes('Read-only on Verify'));
+  assert.ok(vf.includes('Todos on this layer <span class="build-sheet-count">5</span>'));
+  assert.ok(vf.includes('data-todo="alerting.routes[0]"') && vf.includes('data-focus-key="param:oncall_channel@L4/sheet/alerting.routes[0]"'));
+  assert.ok(vf.includes('no parameter fills this one'));
+  assert.ok(!vf.includes('data-compose'));
+  // GOV: owners and imports, read-only, no switch.
+  const gov = html('GOV');
+  assert.ok(gov.includes('L2X') === false && gov.includes('GOV · Governance') && gov.includes('Who owns it?') && gov.includes('<div class="build-sheet-owners"><span>team-orders</span></div>') && gov.includes('platform/std-budget-policy@2.1'));
+  assert.ok(!gov.includes('role="switch"'));
+  // Escaping at the seam: a hostile clause description and owner never become markup.
+  const hostile = [{ id: 'L1.MUST.x', dimension: 'L1', severity: 'MUST', minTier: 'tier-3', description: 'a <img src=x onerror="1"> clause' }];
+  const hh = buildSheetHtml(buildSheetModel({ layerId: 'L1', build: draft({ owners: '<b>x</b>', result: null }), library: LIBRARY, requirements: hostile, mode: 'edit' }));
+  assert.ok(!hh.includes('<img') && hh.includes('a &lt;img src=x onerror=&quot;1&quot;&gt; clause'));
+  assert.ok(!buildSheetHtml(buildSheetModel({ layerId: 'GOV', build: draft({ owners: '<b>x</b>' }), library: LIBRARY, requirements: T2, mode: 'edit' })).includes('<b>x</b>'));
+  // The atoms on their own.
+  assert.equal(switchHtml({ on: false, label: 'x', focusKey: 'k', data: { a: '1' } }), '<button type="button" role="switch" class="build-switch" aria-checked="false" aria-label="x" data-focus-key="k" data-a="1"><span class="build-switch-knob" aria-hidden="true"></span></button>');
+  assert.ok(switchHtml({ on: true, disabled: true, reason: 'why', label: 'x' }).includes(' disabled aria-disabled="true" title="why"'));
+  assert.equal(evidenceDot(null), '');
+  assert.ok(paramReadHtml({ key: 'k', label: 'K', effective: 'v', placeholder: true, atDefault: false }).includes('placeholder filled'));
+});
+
+test('the sheet’s handlers write through the existing actions: close (button, scrim, Esc), compose, the section switches, the rolodex switches, the filter', () => {
+  const calls = [];
+  const act = {
+    closeSheet: () => calls.push(['close']), setStep: (s, o) => calls.push(['step', s, o]), setToggle: (id, on) => calls.push(['toggle', id, on]),
+    setSli: (k, on, all) => calls.push(['sli', k, on, all.length]), addSli: (e, s) => calls.push(['add', e, s]), update: (p, o) => calls.push(['update', p, o]), setParam() {},
+  };
+  const model = buildSheetModel({ layerId: 'L1', build: draft(), library: LIBRARY, requirements: T2, mode: 'edit' });
+  const closeBtn = fakeEl({}), scrim = fakeEl({}), sheet = fakeEl({}), compose = fakeEl({});
+  const slosSwitch = fakeEl({ toggle: 'slos' }, { checked: 'true' });
+  const disabledSwitch = fakeEl({ toggle: 'policy' }, { checked: 'false', disabled: true });
+  const remove = fakeEl({ sli: 'kafka_broker_availability', entry: 'kafka', sliId: 'broker_availability', selected: '1', entrySelected: '1' });
+  const add = fakeEl({ sli: 'kafka_fetch_latency_p99', entry: 'kafka', sliId: 'fetch_latency_p99', selected: '0', entrySelected: '1' });
+  const foreign = fakeEl({ sli: 'ibm_mq_qmgr_process_up', entry: 'ibm-mq', sliId: 'qmgr_process_up', selected: '0', entrySelected: '0' });
+  const above = fakeEl({ sli: 'kafka_controller_election_rate', entry: 'kafka', sliId: 'controller_election_rate', selected: '0', entrySelected: '1' }, { disabled: true });
+  const filter = fakeEl({ rolodexAll: '0' });
+  wireBuildSheet(fakeContainer({
+    '[data-close]': [closeBtn, scrim], '.build-sheet': [sheet], '[data-compose]': [compose],
+    '.build-switch[data-toggle]': [slosSwitch, disabledSwitch], '.build-switch[data-sli]': [remove, add, foreign, above], '.build-switch[data-rolodex-all]': [filter],
+  }), model, { build: act });
+  closeBtn.fire('click'); scrim.fire('click');
+  sheet.fire('keydown', { key: 'Escape' }); sheet.fire('keydown', { key: 'Enter' });
+  compose.fire('click');
+  slosSwitch.fire('click'); disabledSwitch.fire('click');
+  remove.fire('click'); add.fire('click'); foreign.fire('click'); above.fire('click');
+  filter.fire('click', { currentTarget: filter });
+  assert.deepEqual(calls, [
+    ['close'], ['close'], ['close'],
+    ['step', 'compile', { sheet: 'L1' }],
+    ['toggle', 'slos', false],
+    ['sli', 'kafka_broker_availability', false, 7], ['sli', 'kafka_fetch_latency_p99', true, 7], ['add', 'ibm-mq', 'qmgr_process_up'],
+    ['update', { rolodexAll: true }, { rerender: true, reinstantiate: false }],
+  ], 'a disabled switch does nothing; a foreign SLI goes through addSli; Enter is not Esc');
+});
+
+test('the slab head opens the layer’s sheet: aria-haspopup, the "+" affordance, the open layer marked; the inline clause list is gone', () => {
+  const html = buildStackHtml(stackOf());
+  assert.ok(html.includes('class="build-slab-edge" data-slab="L1" aria-haspopup="dialog" aria-expanded="false"'));
+  assert.ok(html.includes('class="build-slab-add" data-slab="L1" aria-haspopup="dialog" aria-expanded="false" aria-label="Open L1 · Contract — What should we measure?"'));
+  assert.ok(html.includes('<span class="build-slab-toggle">What should we measure?</span>'), 'the head invites with the question; the clause count is in the section count');
+  assert.ok(!html.includes('build-slab-clauses'), 'the clauses live on the sheet');
+  const open = buildStackHtml(stackOf({ expanded: { L2: true } }));
+  assert.ok(open.includes('class="section build-slab is-placeholder is-expanded" data-layer="L2"') && open.includes('data-slab="L2" aria-haspopup="dialog" aria-expanded="true"'));
+  // stackExpanded: the detail folds plus the open sheet's layer.
+  assert.deepEqual(stackExpanded({ stackOpen: { 'L3/detail': true }, sheetOpen: 'L4' }), { 'L3/detail': true, L4: true });
+  assert.deepEqual(stackExpanded({}), {});
+  assert.equal(buildCompileModel({ build: draft({ sheetOpen: 'L5' }), library: LIBRARY, clauses: T2 }).stack.slabs.find(s => s.id === 'L5').expanded, true);
+  // The handlers: a head or a '+' asks the controller to open that layer; the detail toggle keeps only the folds.
+  const calls = [];
+  const head = fakeEl({ slab: 'L2' }), plus = fakeEl({ slab: 'L5' }), detail = fakeEl({ detail: 'L3' });
+  const m = stackOf();
+  wireBuildStack(fakeContainer({ '.build-slab-edge, .build-slab-add': [head, plus], '.build-slab-detail': [detail] }), m, { build: { openSheet: (l) => calls.push(['open', l]), update: (p, o) => calls.push(['update', p, o]) } });
+  head.fire('click'); plus.fire('click'); detail.fire('click');
+  assert.deepEqual(calls, [['open', 'L2'], ['open', 'L5'], ['update', { stackOpen: { 'L3/detail': true } }, { rerender: true, reinstantiate: false }]]);
+  // Focus keys on a sheet fall back to the sheet first, then the slab.
+  assert.deepEqual(sheetFocusSuffix('L4'), 'L4/sheet');
+  assert.deepEqual(sheetFocusSuffix('L4', 'alerting.routes[0]'), 'L4/sheet/alerting.routes[0]');
+  assert.deepEqual(focusFallbackSelectors('param:oncall_channel@L4/sheet'), ['.build-sheet .build-param-input', '.build-sheet-close', '.build-slab[data-layer="L4"] .build-param-input', '.build-slab[data-layer="L4"] .build-slab-edge']);
+  assert.deepEqual(focusFallbackSelectors('param:oncall_channel@L4/sheet/alerting.routes[0]')[0], '.build-sheet .build-param-input');
+  assert.deepEqual(focusFallbackSelectors('param:oncall_channel@L4/alerting.routes[0]'), ['.build-slab[data-layer="L4"] .build-param-input', '.build-slab[data-layer="L4"] .build-slab-edge'], 'a slab input is unchanged');
+});
+
+test('the summary and the sheet draw the same clause row: one function, so a failing clause reads alike in both', () => {
+  const rowOf = (html, id) => { const m = html.match(new RegExp(`<li class="build-rail-clause is-\\w+" title="${id.replace(/\./g, '\\.')}[^"]*">[\\s\\S]*?</li>`)); return m && m[0]; };
+  const offDraft = draft({ result: { ...draft().result, summary: DASHBOARDS_OFF_SUMMARY } });
+  const summary = summaryHtml(buildDefinitionModel({ build: offDraft, library: LIBRARY, requirements: REQUIREMENTS }).summary);
+  const sheet = buildSheetHtml(buildSheetModel({ layerId: 'L3', build: offDraft, library: LIBRARY, requirements: T2, mode: 'edit' }));
+  for (const id of ['L3.MUST.service_overview_dashboard', 'L3.MUST.slo_burn_dashboard']) {
+    const a = rowOf(summary, id), b = rowOf(sheet, id);
+    assert.ok(a && b, `${id} drawn on both`);
+    assert.equal(a, b, `${id}: the summary's row is the sheet's row`);
+    assert.match(a, /is-fail/);
+  }
+  const l2 = buildSheetHtml(buildSheetModel({ layerId: 'L2', build: draft(), library: LIBRARY, requirements: T2, mode: 'edit' }));
+  const ph = rowOf(l2, 'L2.MUST.metrics_exporter');
+  assert.match(ph, /is-placeholder/);
+  assert.match(ph, /<em>on \d+ placeholders?: [^<]+<\/em>/, 'a placeholder pass names its todos');
+  // The one function, on its own: a failing clause with todos names them; escaping at the seam.
+  const withTodos = clauseRowHtml({ id: 'L4.MUST.x', state: 'fail', severity: 'MUST', description: 'd', todos: ['alerting.routes[0]', 'a <b>'] });
+  assert.ok(withTodos.includes('<em>alerting.routes[0], a &lt;b&gt;</em>') && !withTodos.includes('<b>'));
+  assert.ok(!clauseRowHtml({ id: 'L1.MUST.y', state: 'pass', severity: 'MUST', description: 'd', todos: [] }).includes('<em>'));
+});
+
+test('the stylesheet carries the language: the translucent sheet with a solid fallback, the switch and thumb motion, reduced motion respected, both themes through tokens', () => {
+  const sheet = cssRule('.build-sheet');
+  assert.ok(sheet && /backdrop-filter:\s*blur\(20px\) saturate\(140%\)/.test(sheet), 'the sheet surface is translucent');
+  assert.ok(/border-radius:\s*16px/.test(sheet), '16 px radius on the sheet');
+  assert.ok(/color-mix\(in srgb, var\(--card\)/.test(sheet), 'the surface is the card colour, mixed — no new colour');
+  assert.ok(/@supports not \(\(backdrop-filter: blur\(1px\)\) or \(-webkit-backdrop-filter: blur\(1px\)\)\) \{ \.build-sheet \{ background: var\(--card\); \} \}/.test(CSS_TEXT), 'a solid fallback where unsupported');
+  assert.ok(/\.build-sheet\[data-layer="L4"\]\s*\{ --accent: var\(--L4\)/.test(CSS_TEXT), 'one accent per layer: the layer token');
+  assert.match(cssRule('.build-seg-thumb'), /transition:\s*transform 200ms/, 'the thumb slides');
+  assert.match(cssRule('.build-switch-knob'), /transition:\s*transform 200ms/, 'the knob slides');
+  assert.ok(/\.build-switch\[aria-checked="true"\]\s*\{ background: var\(--accent, var\(--BLD\)\); \}/.test(CSS_TEXT), 'the on state is the layer accent');
+  assert.match(cssRule('.build-rolodex-track'), /scroll-snap-type:\s*x mandatory/, 'the rolodex snaps');
+  assert.match(cssRule('.build-rolo-card'), /scroll-snap-align:\s*center/);
+  const reduced = CSS_TEXT.match(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/g)?.find(b => b.includes('.build-sheet'));
+  assert.ok(reduced, 'a reduced-motion block for the Build controls');
+  for (const sel of ['.build-seg-thumb', '.build-switch-knob', '.build-rolo-card', '.build-sheet']) assert.ok(reduced.includes(sel), `${sel} respects reduced motion`);
+  assert.ok(reduced.includes('scroll-behavior: auto'));
+  // No colour literal beyond the theme tokens and the shadows' neutral rgba in the new block (both themes follow).
+  const axis = CSS_TEXT.slice(CSS_TEXT.indexOf('==== The axis'));
+  const literals = [...axis.matchAll(/#[0-9a-fA-F]{3,6}\b/g)].map(m => m[0]).filter(h => !['#fff', '#64748B', '#0891b2', '#db2777', '#0d9488'].includes(h));
+  assert.deepEqual(literals, [], 'the axis styles use the tokens (white knobs, the Scaffold grey and the step accents\' fallbacks aside)');
+  assert.ok(/\[data-theme="dark"\] \.build-sheet \{/.test(axis) && /\[data-theme="dark"\] \.build-chip\.is-selected/.test(axis), 'the dark theme adjusts the shadows and the chip fill');
+});
