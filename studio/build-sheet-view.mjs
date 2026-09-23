@@ -11,9 +11,15 @@
 //
 //   L1  the SLI rolodex — a scroll-snapping carousel of SLI cards from the
 //       selected entries (every product's behind a filter), each with its
-//       product and evidence, type, metrics, the objective and window at the
-//       current tier large and the other tiers muted, an add / remove switch
-//       ('needs tier-1' when above the tier); then the SLOs switch
+//       product and evidence, type, metrics, the objective and window it
+//       starts with large and the other tiers muted, an add / remove switch
+//       (an SLI above the tier is addable and says which profile it starts
+//       from: the tier is a seed, not a gate), a Customise affordance that
+//       expands the card in place into its edit face (objective, window,
+//       bound, PromQL, description — each with '↺ library default'; an
+//       edited expression turns the evidence badge custom), the custom SLIs
+//       as cards of their own, and the last card '+ Custom SLI' (an inline
+//       form with the engine's errors inline); then the SLOs switch
 //   L2  the scrape jobs, receivers, backends, exporters and storage the pack
 //       carries, with their params (targets, endpoints, versions) editable
 //   L3  the Dashboards switch, the boards, the derived views, the recording rules
@@ -25,8 +31,10 @@
 //
 // One component on the three steps: editable on COMPILE, a preview on DEFINE
 // (with "Compose in Compile →"), read-only on VERIFY with the layer's todos
-// and their inline params. Everything it changes goes through the existing
-// actions (setSli / addSli, setToggle, setParam); re-instantiation redraws.
+// and their inline params (and the customised / custom cards' read-only
+// faces with their provenance line). Everything it changes goes through the
+// actions (setSli / addSli, setToggle, setParam, setOverride / clearOverride,
+// addCustom / updateCustom / removeCustom); re-instantiation redraws.
 //
 // Renderer only (docs/UI_CONVENTIONS.md §2-3): render(container, model, host)
 // with buildSheetModel's output; host.build.* are the actions.
@@ -34,7 +42,8 @@
 import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { sheetFocusSuffix } from './build-model.mjs';
-import { evidenceBadge, paramRowHtml, wireParamInputs, clauseRowHtml, todoHtml, switchHtml, STATE_GLYPH } from './build-atoms.mjs';
+import { customDefFromDraft, customFormModel, normalizeDraft, slugifySliId, SLO_WINDOWS } from './build-copies-model.mjs';
+import { evidenceBadge, paramRowHtml, wireParamInputs, clauseRowHtml, todoHtml, switchHtml, editFieldHtml, STATE_GLYPH } from './build-atoms.mjs';
 
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 const MODE_WORD = { edit: 'compose', preview: 'preview', verify: 'verify' };
@@ -55,31 +64,77 @@ function switchRowHtml(s, model) {
     </div>`;
 }
 
-function rolodexCardHtml(it, model) {
-  const cls = ['build-rolo-card', it.selected ? 'is-selected' : '', it.disabled ? 'is-disabled' : '', it.entrySelected ? '' : 'is-foreign'].filter(Boolean).join(' ');
-  const readOnly = model.readOnly;
-  const stateWord = it.disabled ? it.reason : it.selected ? 'in the pack' : it.entrySelected ? 'not in the pack' : `adds ${it.entryTitle}`;
-  const label = `${it.id} of ${it.entryTitle}${it.disabled ? ` — ${it.reason}` : it.selected ? ' — remove from the pack' : it.entrySelected ? ' — add to the pack' : ` — add to the pack (selects ${it.entryTitle} too)`}`;
+/** The Customise face of a selected card — editable on COMPILE, read-only on VERIFY (the same fields as value spans, no reset, the provenance line). One field is the shared atom (build-atoms.mjs editFieldHtml). */
+function editFaceHtml(face) {
   return `
-    <article class="${cls}" data-snap-card data-sli="${escapeHtml(it.key)}" data-entry="${escapeHtml(it.entry)}" data-sli-id="${escapeHtml(it.id)}" aria-label="${escapeHtml(label)}">
+    <div class="build-edit-face${face.readOnly ? ' is-readonly' : ''}" id="${escapeHtml(`build-face-${face.key}`)}" data-face="${escapeHtml(face.key)}">
+      <div class="build-edit-head">
+        <span class="build-edit-eyebrow">${face.readOnly ? 'as customised' : face.custom ? 'your SLI' : 'customise — a copy of the library’s values'}</span>
+        <span class="build-edit-provenance">${escapeHtml(face.provenance)}</span>
+      </div>
+      ${face.generalError ? `<div class="build-edit-error" role="alert">${escapeHtml(face.generalError)}</div>` : ''}
+      ${face.fields.map(f => editFieldHtml(f, { dataAttr: face.custom ? 'custom-field' : 'override-field', sli: face.key, readOnly: face.readOnly })).join('')}
+      <div class="build-edit-evidence">${evidenceBadge(face.evidence.status)}${face.evidence.note ? `<span class="build-edit-evidence-note">${escapeHtml(face.evidence.note)}</span>` : '<span class="build-edit-evidence-note">the library’s evidence — its expression is what runs</span>'}</div>
+      ${face.promqlWarning ? `<div class="build-edit-error build-edit-promql" role="alert">${escapeHtml(face.promqlWarning)}</div>` : ''}
+    </div>`;
+}
+
+function rolodexCardHtml(it, model) {
+  const cls = ['build-rolo-card', it.selected ? 'is-selected' : '', it.entrySelected ? '' : 'is-foreign', it.aboveTier ? 'is-above' : '', it.custom ? 'is-custom' : '', it.customised.length ? 'is-customised' : '', it.errorFields?.length ? 'is-error' : '', it.face ? 'is-open' : ''].filter(Boolean).join(' ');
+  const readOnly = model.readOnly;
+  const stateWord = it.custom ? 'in the pack · custom' : it.selected ? 'in the pack' : it.entrySelected ? 'not in the pack' : `adds ${it.entryTitle}`;
+  const label = `${it.id} of ${it.entryTitle}${it.custom ? ' — remove your SLI from the pack' : it.selected ? ' — remove from the pack' : it.entrySelected ? ' — add to the pack' : ` — add to the pack (selects ${it.entryTitle} too)`}${it.aboveTier ? ` (from the ${it.profileTier} profile)` : ''}`;
+  const canCustomise = !readOnly && it.selected;
+  return `
+    <article class="${cls}" data-snap-card data-sli="${escapeHtml(it.key)}" data-entry="${escapeHtml(it.entry || '')}" data-sli-id="${escapeHtml(it.id)}"${it.custom ? ' data-custom="1"' : ''} aria-label="${escapeHtml(label)}">
       <header class="build-rolo-head">
         <span class="build-rolo-id">${escapeHtml(it.id)}</span>
-        <span class="type-pill build-rolo-type">${escapeHtml(it.type)}</span>
+        <span class="build-rolo-chips">
+          ${it.aboveTier ? `<span class="build-rolo-chip is-above" title="${escapeHtml(`this SLI's own tier is ${it.profileTier}: it starts from that profile's objective and window — add it if you need it, the tier is a seed, not a gate`)}">${escapeHtml(it.note)}</span>` : ''}
+          ${it.custom ? '<span class="build-rolo-chip is-custom" title="written in the studio — not a library SLI">custom</span>' : it.customised.length ? `<span class="build-rolo-chip is-customised" title="${escapeHtml(it.customisedLabel)}">customised</span>` : ''}
+          ${it.errorFields?.length ? `<span class="build-rolo-chip is-error" title="${escapeHtml(Object.entries(it.errors || {}).map(([f, why]) => `${f || 'sli'}: ${why}`).join(' · '))}">rejected: ${escapeHtml(it.errorFields.map(f => f || 'sli').join(', '))}</span>` : ''}
+          <span class="type-pill build-rolo-type">${escapeHtml(it.type)}</span>
+        </span>
       </header>
       <div class="build-rolo-product">${escapeHtml(it.entryTitle)} ${evidenceBadge(it.evidence || it.entryEvidence)}${it.entrySelected ? '' : '<span class="build-rolo-foreign" title="this product is not in the selection yet — adding the SLI selects it">not selected yet</span>'}</div>
+      ${it.evidenceNote ? `<div class="build-rolo-evidence-note">${escapeHtml(it.evidenceNote)}</div>` : ''}
       <p class="build-rolo-desc">${escapeHtml(it.description)}</p>
       <div class="build-rolo-metrics">${it.metrics.map(m => `<code>${escapeHtml(m)}</code>`).join('')}</div>
-      <div class="build-rolo-objective${it.disabled ? ' is-disabled' : ''}">
-        ${it.disabled
-          ? `<b class="build-rolo-needs">${escapeHtml(it.reason)}</b><span>this SLI is above the tier — switch the tier to add it</span>`
-          : `<b>${escapeHtml(it.objectiveLabel)}</b><span>over ${escapeHtml(it.window || '—')} · at ${escapeHtml(model.tier || '')}</span>`}
+      <div class="build-rolo-objective">
+        <b>${escapeHtml(it.objectiveLabel)}</b><span>over ${escapeHtml(it.window || '—')} · ${it.custom ? 'your objective' : it.customised.includes('objective') || it.customised.includes('window') ? 'customised' : it.aboveTier ? `the ${escapeHtml(it.profileTier)} profile` : `at ${escapeHtml(model.tier || '')}`}</span>
       </div>
-      <div class="build-rolo-tiers" aria-label="objective per tier">
-        ${it.tiers.map(t => `<span class="${t.current ? 'is-current' : 'is-muted'}${t.reachable ? '' : ' is-unreachable'}" title="${escapeHtml(`${t.tier}: ${t.reachable ? `${t.objectiveLabel} over ${t.window || '—'}` : 'not at this tier'}`)}">${escapeHtml(t.tier)} <b>${t.reachable ? escapeHtml(t.objectiveLabel) : '—'}</b> ${t.reachable && t.window ? escapeHtml(t.window) : ''}</span>`).join('')}
-      </div>
+      ${it.tiers.length ? `<div class="build-rolo-tiers" aria-label="the library's objective per tier">
+        ${it.tiers.map(t => `<span class="${t.current ? 'is-current' : 'is-muted'}${t.reachable ? '' : ' is-unreachable'}" title="${escapeHtml(`${t.tier}: ${t.objectiveLabel} over ${t.window || '—'}${t.reachable ? '' : ' — below this SLI’s own tier (a default from ' + it.profileTier + ' up)'}`)}">${escapeHtml(t.tier)} <b>${escapeHtml(t.objectiveLabel)}</b> ${t.window ? escapeHtml(t.window) : ''}</span>`).join('')}
+      </div>` : ''}
+      ${it.face ? editFaceHtml(it.face) : ''}
       <footer class="build-rolo-foot">
         <span class="build-rolo-state">${escapeHtml(stateWord)}</span>
-        ${switchHtml({ on: it.selected, disabled: it.disabled || readOnly, reason: it.disabled ? `${it.reason} — this SLI is above the tier` : readOnly ? READ_ONLY_REASON[model.mode] : null, label, focusKey: it.focusKey, data: { sli: it.key, entry: it.entry, 'sli-id': it.id, selected: it.selected ? '1' : '0', 'entry-selected': it.entrySelected ? '1' : '0' } })}
+        <span class="build-rolo-actions">
+          ${canCustomise ? `<button type="button" class="build-rolo-customise${it.face ? ' is-on' : ''}" data-customise="${escapeHtml(it.key)}" data-focus-key="customise:${escapeHtml(it.key)}" aria-expanded="${it.face ? 'true' : 'false'}"${it.face ? ` aria-controls="${escapeHtml(`build-face-${it.key}`)}"` : ''}>${it.face ? 'Done' : 'Customise'}</button>` : ''}
+          ${switchHtml({ on: it.selected, disabled: readOnly, reason: readOnly ? READ_ONLY_REASON[model.mode] : null, label, focusKey: it.focusKey, data: { sli: it.key, entry: it.entry || '', 'sli-id': it.id, selected: it.selected ? '1' : '0', 'entry-selected': it.entrySelected ? '1' : '0', ...(it.custom ? { custom: '1' } : {}) } })}
+        </span>
+      </footer>
+    </article>`;
+}
+
+/** The last card of the rolodex on COMPILE: the '+ Custom SLI' form, the engine's usage errors inline; each field the shared atom. */
+function customFormCardHtml(form) {
+  const field = (f) => editFieldHtml(f, { dataAttr: 'custom-draft', rows: 2 });
+  return `
+    <article class="build-rolo-card build-rolo-custom-form" data-snap-card data-custom-form aria-label="Add a custom SLI">
+      <header class="build-rolo-head">
+        <span class="build-rolo-id">+ Custom SLI</span>
+        <span class="type-pill build-rolo-type">${escapeHtml(form.draft.type)}</span>
+      </header>
+      <div class="build-rolo-product">written from scratch ${evidenceBadge('custom')}</div>
+      <p class="build-rolo-desc">An SLI outside any library entry. It gets an SLO, a recording rule, burn alerts from the default profile and a place on the boards like any SLI; the engine checks every value.</p>
+      <form class="build-edit-face build-custom-form" data-custom-form-fields novalidate>
+        ${form.generalError ? `<div class="build-edit-error" role="alert">${escapeHtml(form.generalError)}</div>` : ''}
+        ${form.fields.map(field).join('')}
+      </form>
+      <footer class="build-rolo-foot">
+        <span class="build-rolo-state">not in the pack yet</span>
+        <button type="button" class="mcp-refresh-btn build-custom-add" data-add-custom data-focus-key="${escapeHtml(form.focusKey)}"${form.canSubmit ? '' : ' disabled'}>${escapeHtml(form.addLabel)} <span aria-hidden="true">→</span></button>
       </footer>
     </article>`;
 }
@@ -91,22 +146,23 @@ function rolodexHtml(model) {
   return `
     <section class="build-sheet-section build-rolodex-section" aria-labelledby="build-rolodex-title">
       <div class="build-sheet-section-head is-row">
-        <h3 id="build-rolodex-title">SLI rolodex <span class="build-sheet-count">${c.selected} in the pack · ${c.selectable} at ${escapeHtml(model.tier || '')}${c.aboveTier ? ` · ${c.aboveTier} above the tier` : ''}${r.filterAll ? ` · ${r.items.length} across the library` : ''}</span></h3>
+        <h3 id="build-rolodex-title">SLI rolodex <span class="build-sheet-count">${c.selected} in the pack${c.aboveTier ? ` · ${c.aboveTier} from a higher tier` : ''}${c.customised ? ` · ${c.customised} customised` : ''}${c.custom ? ` · ${c.custom} custom` : ''} · ${c.selectable} in the library${r.filterAll ? ` (${r.items.length} across it)` : ''}</span></h3>
         <label class="build-rolodex-filter">
           <span>show every product</span>
           ${switchHtml({ on: r.filterAll, label: 'show every product’s SLIs', focusKey: 'rolodex:all', data: { 'rolodex-all': r.filterAll ? '1' : '0' }, small: true })}
         </label>
       </div>
-      ${r.items.length ? `
+      ${r.items.length || r.customForm ? `
       <div class="build-rolodex">
         <button type="button" class="build-rolodex-nav is-prev" aria-label="previous SLI" data-nav="-1"><span aria-hidden="true">‹</span></button>
         <div class="build-rolodex-track" role="group" aria-roledescription="carousel" aria-label="SLI cards — arrow keys move" tabindex="0" data-scroll-key="rolodex:${escapeHtml(model.layerId)}">
-          ${r.items.map(it => rolodexCardHtml(it, model)).join('')}
+          ${r.items.map(it => rolodexCardHtml(it, model)).join('')}${r.customForm ? customFormCardHtml(r.customForm) : ''}
         </div>
         <button type="button" class="build-rolodex-nav is-next" aria-label="next SLI" data-nav="1"><span aria-hidden="true">›</span></button>
-        <div class="build-rolodex-counter" aria-live="polite">1 / ${r.items.length}</div>
+        <div class="build-rolodex-counter" aria-live="polite">1 / ${r.items.length + (r.customForm ? 1 : 0)}</div>
+        <datalist id="build-window-options">${SLO_WINDOWS.map(w => `<option value="${escapeHtml(w)}"></option>`).join('')}</datalist>
       </div>` : '<div class="build-sheet-empty">pick a library entry in the definition column — its SLIs land here</div>'}
-      ${model.mode === 'edit' ? '<p class="build-sheet-note">Adding an SLI from a product that is not selected yet selects that product too — one action. Objectives and windows are the library’s per-tier defaults; overriding one is a later slice.</p>' : ''}
+      ${model.mode === 'edit' ? '<p class="build-sheet-note">Any SLI of the selected products can be in the pack — the tier only seeds the defaults; one above the tier says which profile it starts from. Adding an SLI from a product that is not selected yet selects that product too. Customise copies the library’s values into your pack: the objective, the window, the bound, the PromQL, the description — each back to the library default in one click; an edited expression carries no library evidence. The last card writes an SLI from scratch.</p>' : ''}
     </section>`;
 }
 
@@ -201,7 +257,22 @@ export function wireBuildSheet(container, model, host = appHost) {
   const act = host.build;
   const sheet = container.querySelector('.build-sheet');
   container.querySelectorAll('[data-close]').forEach(el => el.addEventListener('click', () => act?.closeSheet?.()));
-  sheet?.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); act?.closeSheet?.(); } });
+  sheet?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    e.stopPropagation();
+    // Inside an edit-face or custom-form field the first Esc leaves the field (its change commits) and lands on the
+    // card's Customise / Done button; the next Esc closes the sheet. Closing on the first one threw away the sheet
+    // under a PromQL textarea mid-edit (measured: the text survived only because Chrome fires change on removal).
+    const t = e.target;
+    if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || '') && t.closest?.('.build-edit-face, .build-custom-form')) {
+      const next = t.closest('.build-rolo-card')?.querySelector?.('[data-customise]') || sheet;
+      t.blur?.();
+      next.focus?.({ preventScroll: true });
+      return;
+    }
+    act?.closeSheet?.();
+  });
   container.querySelector('[data-compose]')?.addEventListener('click', () => act?.setStep?.('compile', { sheet: model.layerId }));
   container.querySelectorAll('.build-switch[data-toggle]').forEach(sw => sw.addEventListener('click', () => {
     if (sw.disabled) return;
@@ -210,16 +281,131 @@ export function wireBuildSheet(container, model, host = appHost) {
   const allKeys = model.rolodex?.allKeys || [];
   container.querySelectorAll('.build-switch[data-sli]').forEach(sw => sw.addEventListener('click', () => {
     if (sw.disabled) return;
-    const { sli, entry, sliId, selected, entrySelected } = sw.dataset;
-    if (selected === '1') act?.setSli?.(sli, false, allKeys);
+    const { sli, entry, sliId, selected, entrySelected, custom } = sw.dataset;
+    if (custom === '1') act?.removeCustom?.(sli);
+    else if (selected === '1') act?.setSli?.(sli, false, allKeys);
     else if (entrySelected === '1') act?.setSli?.(sli, true, allKeys);
     else act?.addSli?.(entry, sliId);
   }));
   container.querySelector('.build-switch[data-rolodex-all]')?.addEventListener('click', (e) => {
     act?.update?.({ rolodexAll: e.currentTarget.dataset.rolodexAll !== '1' }, { rerender: true, reinstantiate: false });
   });
+  wireRolodexCopies(container, model, act);
   wireRolodex(container);
   if (act) wireParamInputs(container, act, '.build-sheet .build-param-input');
+}
+
+/**
+ * The copies' handlers: Customise opens / closes a card's edit face (UI state on the draft, a re-render, no
+ * instantiation); an edit-face input commits on change (Enter on a one-line input, or leaving the field) —
+ * setOverride(sli, field, value) for a library SLI, updateCustom(id, field, value) for a custom one, an
+ * empty value clearing the override; '↺ library default' → clearOverride; the '+ Custom SLI' form keeps
+ * its draft on the draft as typed (no re-render under the caret; the type select re-renders since it
+ * changes the fields; the id follows the name until the user edits it), and 'Add to the pack' →
+ * addCustom(def) with the definition the engine takes.
+ */
+export function wireRolodexCopies(container, model, act) {
+  if (!act) return;
+  const open = Object.fromEntries((model.rolodex?.items || []).filter(i => i.open).map(i => [i.key, true]));
+  // Customise opens the face and lands the focus in its first field (the face renders above the footer the
+  // button sits in, so Tab from the button walked past every field to the card's switch — measured); Done keeps
+  // the focus on the button.
+  container.querySelectorAll('[data-customise]').forEach(btn => btn.addEventListener('click', () => {
+    const key = btn.dataset.customise;
+    const next = { ...open };
+    const opening = !next[key];
+    if (opening) next[key] = true; else delete next[key];
+    const item = (model.rolodex?.items || []).find(i => i.key === key);
+    act.update?.({ customOpen: next }, { rerender: true, reinstantiate: false, ...(opening ? { focus: `${item?.custom ? 'cu' : 'ov'}:${key}:objective` } : {}) });
+  }));
+  // A field commits on change. When the change comes from leaving the field (Tab, a click elsewhere, Enter's
+  // explicit blur) the commit is deferred one task so the browser finishes moving the focus first: the re-render
+  // then restores whatever is focused by then (Tab's target), and when nothing is — Enter, a click on blank space —
+  // the action lands the focus back on the field by its key. Committing inside the change dropped the focus to
+  // <body> and destroyed Tab's pending target (measured live: the next Tab landed on the toolbar).
+  const commit = (inp) => {
+    const { sli } = inp.dataset;
+    const value = inp.value;
+    const doc = typeof document !== 'undefined' ? document : null;
+    const run = () => {
+      const lost = !!doc && (!doc.activeElement || doc.activeElement === doc.body);
+      const opts = { focusKey: lost ? inp.dataset.focusKey || null : null };
+      if (inp.dataset.overrideField) act.setOverride?.(sli, inp.dataset.overrideField, value, opts);
+      else if (inp.dataset.customField) act.updateCustom?.(sli, inp.dataset.customField, value, opts);
+    };
+    if (doc && doc.activeElement !== inp) setTimeout(run, 0); else run();
+  };
+  container.querySelectorAll('.build-edit-face:not(.build-custom-form) .build-edit-input').forEach(inp => {
+    if (inp.readOnly) return;
+    inp.addEventListener('change', () => commit(inp));
+    if (inp.tagName !== 'TEXTAREA') inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } });
+  });
+  container.querySelectorAll('[data-reset]').forEach(btn => btn.addEventListener('click', () => act.clearOverride?.(btn.dataset.sli, btn.dataset.reset)));
+  // The custom form.
+  const form = container.querySelector('[data-custom-form-fields]');
+  if (form) {
+    // One live draft per wiring: every handler starts from what was typed so far (`cur`, with the fields' current
+    // values laid over it), never from the render-time draft — the inputs write the draft to the state without a
+    // re-render, so a handler that re-read the stale render-time draft started again with idTouched=false,
+    // re-slugged a typed id from the name on the next keystroke and Add sent the slug (measured live:
+    // 'my_checkout_id' typed, 'checkout_success' sent and drawn).
+    const formModel = model.rolodex?.customForm || customFormModel(null);
+    let cur = normalizeDraft(formModel.draft);
+    const fieldEls = () => [...(form.querySelectorAll?.('[data-custom-draft]') || [])];
+    const read = () => {
+      const d = { ...cur };
+      for (const el of fieldEls()) d[el.dataset.customDraft] = el.value;
+      return d;
+    };
+    fieldEls().forEach(el => {
+      const field = el.dataset.customDraft;
+      el.addEventListener('input', () => {
+        cur = read();
+        if (field === 'id') cur.idTouched = String(el.value).trim() !== '';
+        if (!cur.idTouched) {
+          cur.id = slugifySliId(cur.name);
+          const idEl = fieldEls().find(x => x.dataset.customDraft === 'id');
+          if (idEl && idEl !== el) idEl.value = cur.id;
+        }
+        act.update?.({ customDraft: cur, customDraftErrors: null }, { rerender: false, reinstantiate: false });
+        // The model's rule, rebuilt on the draft as typed (no re-render under the caret): the Add button follows
+        // its canSubmit, and the id field shows its clash / not-a-slug / SLO-id message while typing — the
+        // renderer had its own submit rule, which enabled Add for ids the model rejects and never showed why.
+        const live = customFormModel(cur, { existingKeys: formModel.existingKeys, existingSloIds: formModel.existingSloIds });
+        const add = container.querySelector('[data-add-custom]');
+        if (add) add.disabled = !live.canSubmit;
+        paintFormField(container, live.fields.find(f => f.id === 'id'));
+        paintFormField(container, live.fields.find(f => f.id === 'name'));
+      });
+      if (field === 'type') el.addEventListener('change', () => { cur = read(); act.update?.({ customDraft: cur }, { rerender: true, reinstantiate: false }); });
+    });
+    form.addEventListener?.('submit', (e) => { e.preventDefault(); });
+    container.querySelector('[data-add-custom]')?.addEventListener('click', () => {
+      cur = read();
+      act.addCustom?.(customDefFromDraft(cur), cur);
+    });
+  }
+}
+
+/**
+ * One form field's message repainted in place from the model's field (error or hint, the is-error class, the
+ * input's aria-invalid / aria-describedby / aria-errormessage) — what a re-render would draw, without the re-render.
+ */
+function paintFormField(container, f) {
+  if (!f) return;
+  const box = container.querySelector(`.build-rolo-custom-form [data-field="${f.id}"]`);
+  const msg = box?.querySelector?.('.build-edit-error, .build-edit-hint');
+  if (!box || !msg) return;
+  const err = f.error || null;
+  msg.className = err ? 'build-edit-error' : 'build-edit-hint';
+  msg.id = `${f.inputId}-${err ? 'error' : 'hint'}`;
+  if (err) msg.setAttribute('role', 'alert'); else msg.removeAttribute('role');
+  msg.textContent = err || f.hint || '';
+  box.classList?.toggle('is-error', !!err);
+  const inp = box.querySelector('.build-edit-input');
+  if (!inp) return;
+  if (err) { inp.setAttribute('aria-invalid', 'true'); inp.setAttribute('aria-errormessage', msg.id); } else { inp.removeAttribute('aria-invalid'); inp.removeAttribute('aria-errormessage'); }
+  inp.setAttribute('aria-describedby', msg.id);
 }
 
 /** The rolodex's motion: the buttons and the arrow keys move one card; the card nearest the centre is the current one. */

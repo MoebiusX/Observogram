@@ -13,6 +13,12 @@
 // left. DEFINE's tier cards, entry cards and fields moved here; the stack on
 // the right is the main surface on all three steps.
 //
+// The definition is a wizard stage (docs/BUILD_JOURNEY.md "The seed and the
+// copies"): the live form on DEFINE (with a one-line note once seeded); on
+// COMPILE and VERIFY a read-only, recessed SEED card — the service as a
+// definition list, one tier chip, the entries as muted chips, "Change seed →"
+// back to DEFINE — with the conformance summary live beneath it on every step.
+//
 // Renderer only (docs/UI_CONVENTIONS.md §2-3): render(container, model, host)
 // with buildDefinitionModel's output; host.build.* are the actions — update
 // (the text fields), setTier, toggleEntry. No state reads, no fetches.
@@ -77,11 +83,46 @@ export function summaryHtml(s) {
     </div>`;
 }
 
+/** The seed card: the definition, read-only and recessed, once the pack is seeded (COMPILE and VERIFY). */
+export function seedCardHtml(card) {
+  const k = card.counts;
+  const from = [
+    `${k.slis} SLI${k.slis === 1 ? '' : 's'} in the pack`,
+    k.aboveTier ? `${k.aboveTier} from a higher tier` : '',
+    k.customised ? `${k.customised} customised` : '',
+    k.custom ? `${k.custom} custom` : '',
+  ].filter(Boolean).join(' · ');
+  return `
+    <section class="build-seed" aria-label="Seed">
+      <div class="build-seed-eyebrow">Seed</div>
+      <dl class="build-seed-dl">
+        <dt>Service</dt><dd><code>${escapeHtml(card.slug || card.name || '—')}</code></dd>
+        <dt>Owners</dt><dd>${card.owners.length ? card.owners.map(o => `<span>${escapeHtml(o)}</span>`).join(', ') : '<em>none — a todo</em>'}</dd>
+        <dt>Environment</dt><dd>${escapeHtml(card.environment)}</dd>
+      </dl>
+      <div class="build-seed-tier"><span class="build-seed-chip is-tier" data-tier="${escapeHtml(card.tier || '')}">${escapeHtml(card.tierChip)}</span></div>
+      <div class="build-seed-entries" aria-label="Library entries">${card.entries.map(e => `<span class="build-seed-chip" title="${escapeHtml(e.kind)}">${escapeHtml(e.title)}</span>`).join('')}</div>
+      <div class="build-seed-from">${escapeHtml(from)}</div>
+      <button type="button" class="build-seed-change" data-change-seed data-focus-key="seed:change">${escapeHtml(card.changeLabel)} <span aria-hidden="true">→</span></button>
+    </section>`;
+}
+
 /** The column as HTML — the shell embeds it; wireBuildDefinition(container, model, host) wires it once in the DOM. */
 export function buildDefinitionHtml(model) {
   const sel = model.selectedCount;
+  // Seeded and past DEFINE: the definition recedes into the seed card; the summary stays live below it.
+  if (model.mode === 'seed') {
+    return `
+    <div class="build-def-inner is-seeded">
+      ${seedCardHtml(model.seedCard)}
+      <section class="build-def-group" aria-label="Conformance summary">
+        ${summaryHtml(model.summary)}
+      </section>
+    </div>`;
+  }
   return `
     <div class="build-def-inner">
+      ${model.seededNote ? `<p class="build-def-seeded" role="note">${escapeHtml(model.seededNote)}</p>` : ''}
       <section class="build-def-group build-def-service" aria-label="Service">
         <div class="build-def-key">Service</div>
         <label class="build-def-field">
@@ -156,4 +197,5 @@ export function wireBuildDefinition(container, model, host = appHost) {
     });
   });
   container.querySelectorAll('.build-chip').forEach(b => b.addEventListener('click', () => act.toggleEntry(b.dataset.entry)));
+  container.querySelector('[data-change-seed]')?.addEventListener('click', () => act.setStep('define'));
 }

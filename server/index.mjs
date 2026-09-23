@@ -23,9 +23,9 @@
  *   GET  /api/library                     The pack library index (BUILD journey, docs/BUILD_JOURNEY.md)
  *   GET  /api/library/requirements/:tier  The conformance clauses that apply at a tier
  *   GET  /api/library/:id                 One library entry: index row + full SLI templates and params
- *   POST /api/library/instantiate         Library entries + name/tier/env/owners/params/toggles → canonical pack, todos, summary, adapted
- *   POST /api/library/compile             { canonical, target } → one compiled artefact, nothing registered
- *   POST /api/library/register            { canonical, source? } → the upload registry (as /api/validate registers)
+ *   POST /api/library/instantiate         Library entries + name/tier/env/owners/params/toggles/overrides/custom → canonical pack, todos, summary, adapted
+ *   POST /api/library/compile             { canonical | the instantiate inputs, target } → one compiled artefact, nothing registered
+ *   POST /api/library/register            { canonical | the instantiate inputs, source? } → the upload registry (as /api/validate registers)
  *
  * Env:
  *   PORT   default 8000
@@ -1861,8 +1861,56 @@ function resolveRequestedEntries(body) {
   return { entries };
 }
 
+// The caps on the copies a request may carry (docs/BUILD_JOURNEY.md "The seed and the copies"): the
+// engine bounds every string at MAX_PARAM_LENGTH; the route bounds the counts so a body of ten thousand
+// overrides is refused before anything is validated one by one.
+const MAX_OVERRIDES = 64;
+const MAX_CUSTOM_SLIS = 16;
+
+/**
+ * The instantiate inputs of a request body, whitelisted: entries, name, tier, environment, owners, params,
+ * toggles, overrides (an object of at most MAX_OVERRIDES entries), custom (a list of at most MAX_CUSTOM_SLIS).
+ * Returns { opts } or { errors } (a 400 body). The engine validates every value.
+ */
+function instantiateInputs(body) {
+  const picked = resolveRequestedEntries(body);
+  if (picked.error) return { errors: [picked.error] };
+  if (body.tier !== undefined && !TIERS.includes(body.tier)) return { errors: [tierError(body.tier)] };
+  const owners = Array.isArray(body.owners) ? body.owners.map(String)
+    : typeof body.owners === 'string' ? body.owners.split(',').map(s => s.trim()).filter(Boolean)
+    : [];
+  const params = (body.params && typeof body.params === 'object' && !Array.isArray(body.params)) ? body.params : {};
+  const toggles = (body.toggles && typeof body.toggles === 'object' && !Array.isArray(body.toggles)) ? body.toggles : {};
+  let overrides;
+  if (body.overrides !== undefined && body.overrides !== null) {
+    if (typeof body.overrides !== 'object' || Array.isArray(body.overrides)) return { errors: ['overrides: expected an object of { <sli id>: { objective?, window?, threshold?, query?, good?, total?, description?, unit? } }'] };
+    const n = Object.keys(body.overrides).length;
+    if (n > MAX_OVERRIDES) return { errors: [`overrides: at most ${MAX_OVERRIDES} entries (${n} given)`] };
+    overrides = body.overrides;
+  }
+  let custom;
+  if (body.custom !== undefined && body.custom !== null) {
+    if (!Array.isArray(body.custom)) return { errors: ['custom: expected a list of { id, type, objective, window, good + total | query + threshold, description?, unit? }'] };
+    if (body.custom.length > MAX_CUSTOM_SLIS) return { errors: [`custom: at most ${MAX_CUSTOM_SLIS} custom SLIs (${body.custom.length} given)`] };
+    custom = body.custom;
+  }
+  return { opts: { entries: picked.entries, name: body.name, tier: body.tier, environment: body.environment, owners, params, toggles, overrides, custom } };
+}
+
+/** instantiatePack on a request's inputs: { result } or { errors } — an engine usage error is a 400, never a 500. */
+function instantiateFromBody(body) {
+  const inputs = instantiateInputs(body);
+  if (inputs.errors) return inputs;
+  const { entries, ...opts } = inputs.opts;
+  try {
+    return { result: instantiatePack(entries, { ...opts, promql: parsePromql }) };
+  } catch (e) {
+    return { errors: [e.message] };
+  }
+}
+
 // POST /api/library/instantiate — body { entries | id, name, tier, environment,
-// owners, params, toggles } → the engine's result plus what VERIFY reads:
+// owners, params, toggles, overrides, custom } → the engine's result plus what VERIFY reads:
 // schemaErrors (validateCanonical), summary (validationSummary), conformance
 // (evaluateConformance of the env-overlaid canonical, as /api/validate computes
 // it), `adapted` (the adapter's layered projection of the env-overlaid canonical,
@@ -1873,24 +1921,10 @@ function resolveRequestedEntries(body) {
 // warning. A usage error from the engine is 400, never 500.
 app.post('/api/library/instantiate', (req, res) => {
   const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : null;
-  if (!body) return res.status(400).json({ ok: false, errors: ['expected a JSON body { entries, name, tier, environment, owners, params, toggles }'] });
-  const picked = resolveRequestedEntries(body);
-  if (picked.error) return res.status(400).json({ ok: false, errors: [picked.error] });
-  if (body.tier !== undefined && !TIERS.includes(body.tier)) return res.status(400).json({ ok: false, errors: [tierError(body.tier)] });
-  const owners = Array.isArray(body.owners) ? body.owners.map(String)
-    : typeof body.owners === 'string' ? body.owners.split(',').map(s => s.trim()).filter(Boolean)
-    : [];
-  const params = (body.params && typeof body.params === 'object' && !Array.isArray(body.params)) ? body.params : {};
-  const toggles = (body.toggles && typeof body.toggles === 'object' && !Array.isArray(body.toggles)) ? body.toggles : {};
-  let result;
-  try {
-    result = instantiatePack(picked.entries, {
-      name: body.name, tier: body.tier, environment: body.environment, owners, params, toggles, promql: parsePromql,
-    });
-  } catch (e) {
-    return res.status(400).json({ ok: false, errors: [e.message] });
-  }
-  const { canonical, todos, provenance, warnings } = result;
+  if (!body) return res.status(400).json({ ok: false, errors: ['expected a JSON body { entries, name, tier, environment, owners, params, toggles, overrides, custom }'] });
+  const made = instantiateFromBody(body);
+  if (made.errors) return res.status(400).json({ ok: false, errors: made.errors });
+  const { canonical, todos, provenance, warnings } = made.result;
   const schemaErrors = validateCanonical(canonical, SCHEMA);
   const summary = validationSummary(canonical, todos);
   const { canonical: overlaid } = overlaidCanonical(canonical, provenance.environment);
@@ -1901,7 +1935,22 @@ app.post('/api/library/instantiate', (req, res) => {
   res.json({ ok: true, canonical, canonicalYaml, todos, provenance, warnings, schemaErrors, summary, conformance, adapted });
 });
 
-// POST /api/library/compile — body { canonical, target, dashboardId? } → one
+// The pack a compile or register request means: its `canonical`, or — when it carries the instantiate
+// inputs instead (entries, name, tier, …, overrides, custom) — the pack those inputs make, so a caller
+// can compile or register a customised pack in one request. { canonical } or { status, body }.
+function canonicalOfBody(body, what) {
+  if (body.canonical !== undefined) {
+    const canonical = body.canonical;
+    if (!canonical || typeof canonical !== 'object' || Array.isArray(canonical) || !canonical.spec) return { status: 400, body: { ok: false, ...what('expected `canonical`: a canonical ObservabilityPack object (the instantiate response carries one), or the instantiate inputs (entries, name, tier, …, overrides, custom)') } };
+    return { canonical };
+  }
+  if (body.entries === undefined && body.id === undefined && body.entry === undefined) return { status: 400, body: { ok: false, ...what('expected `canonical`: a canonical ObservabilityPack object (the instantiate response carries one), or the instantiate inputs (entries, name, tier, …, overrides, custom)') } };
+  const made = instantiateFromBody(body);
+  if (made.errors) return { status: 400, body: { ok: false, ...what(made.errors) } };
+  return { canonical: made.result.canonical };
+}
+
+// POST /api/library/compile — body { canonical | the instantiate inputs, target, dashboardId? } → one
 // compiled artefact through tools/lib/compile.mjs, so VERIFY previews the
 // Prometheus rules, the collector config, the Alertmanager routes and the
 // Grafana boards without registering anything.
@@ -1909,10 +1958,9 @@ app.post('/api/library/compile', (req, res) => {
   const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {};
   const target = body.target;
   if (!TARGETS[target]) return res.status(400).json({ ok: false, error: `unknown compile target ${JSON.stringify(target)} (known: ${Object.keys(TARGETS).join(', ')})` });
-  const canonical = body.canonical;
-  if (!canonical || typeof canonical !== 'object' || Array.isArray(canonical) || !canonical.spec) {
-    return res.status(400).json({ ok: false, error: 'expected `canonical`: a canonical ObservabilityPack object (the instantiate response carries one)' });
-  }
+  const got = canonicalOfBody(body, (e) => ({ error: Array.isArray(e) ? e.join('; ') : e }));
+  if (got.status) return res.status(got.status).json(got.body);
+  const canonical = got.canonical;
   try {
     const opts = typeof body.dashboardId === 'string' && body.dashboardId ? { dashboardId: body.dashboardId } : {};
     const out = compile(canonical, target, opts);
@@ -1936,10 +1984,9 @@ app.post('/api/library/compile', (req, res) => {
 // clauses still pass on a placeholder.
 app.post('/api/library/register', (req, res) => {
   const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {};
-  const canonical = body.canonical;
-  if (!canonical || typeof canonical !== 'object' || Array.isArray(canonical)) {
-    return res.status(400).json({ ok: false, errors: ['expected `canonical`: a canonical ObservabilityPack object'] });
-  }
+  const got = canonicalOfBody(body, (e) => ({ errors: Array.isArray(e) ? e : [e] }));
+  if (got.status) return res.status(got.status).json(got.body);
+  const canonical = got.canonical;
   try {
     const errors = validateCanonical(canonical, SCHEMA);
     if (errors.length) return res.status(400).json({ ok: false, errors });

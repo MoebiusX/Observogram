@@ -92,28 +92,40 @@ L4 (*What happens when it breaks?*), the probes and chaos experiments on L5
    entries: products it runs on (Kafka, Prometheus, Grafana, IBM MQ,
    Alertmanager, Loki, Tempo, the OTel Collector, every one with its evidence
    dot) or an archetype for a service built from scratch (HTTP service, queue
-   consumer — OTel semconv). The tier draws the **silhouette** of the pack it
-   demands — one ghost card per clause on each slab, reshaping as the tier
-   changes — and the entries drop their SLIs and the SLO each gets onto L1; a
-   layer's sheet opens in preview, with *Compose in Compile →*.
+   consumer — OTel semconv). **The tier is a seed, not a constraint**: it decides
+   which SLIs the pack starts with and which rubric grades it, never which SLIs
+   you may add. It draws the **silhouette** of the pack it starts with — one
+   ghost card per clause on each slab, reshaping as the tier changes — and the
+   entries drop their SLIs and the SLO each gets onto L1; a layer's sheet opens
+   in preview, with *Compose in Compile →*. **Seed the pack →** confirms the
+   definition once: on the next steps the column is a compact, read-only *seed
+   card* (service, owners, environment, one tier chip, the entries) with
+   *Change seed →*, and the conformance summary stays live beneath it.
 2. **Compile - What Should We Watch?** — the **live stack** of the instantiated
    pack, its real artefacts per layer with the edges in the clause states, and
    the sheets where composition happens: on L1 the **SLI rolodex** — a
    scroll-snapping carousel of SLI cards from the selected entries (every
    product's behind a filter; adding one from a product not yet selected
-   selects it too), each with its objective and window at the tier and an add /
-   remove switch, *needs tier-1* when above the tier — and the SLOs switch;
-   section switches on L3, L4 and L5 that say which clauses they drop; the
-   params on the layer they shape. Remove an SLI and L1 loses its card, switch
-   dashboards off and L3 dims with its clauses red and an *off* chip on its
-   head; the pack YAML as a collapsible underneath.
+   selects it too), each with the objective and window it starts with and an
+   add / remove switch — **any** SLI is addable; one above the tier says which
+   profile it starts from (*from the tier-1 profile*) — and the SLOs switch.
+   **The library's values are copies, not links**: *Customise* expands a card
+   in place into its edit face — the objective, the window, the bound, the
+   PromQL, the description, each with *↺ library default* — the SLO id follows
+   an edited objective, and an edited expression drops the library's evidence
+   to *custom*, honestly; the last card, **+ Custom SLI**, writes an SLI from
+   scratch (the engine's errors inline). Section switches on L3, L4 and L5 say
+   which clauses they drop; the params sit on the layer they shape. Remove an
+   SLI and L1 loses its card, switch dashboards off and L3 dims with its clauses
+   red and an *off* chip on its head; the pack YAML as a collapsible underneath.
 3. **Verify - Is It Ready to Use?** — the conformance verdict at the tier with
    three clause states (pass · pass on a placeholder · fail) and a **maturity
    bar per layer**, the schema verdict, the warnings, the stack again with the
    **todos pinned to the slab of the artefact each names** (routes and runbooks
    on L4, backends and pipelines on L2, probes and chaos on L5) and the parameter
    that fills each one editable inline — on the slab and on the layer's sheet,
-   read-only otherwise — the compiled artefacts (Prometheus rules,
+   read-only otherwise, the customised and custom SLIs with their provenance
+   (*customised: objective, window*) — the compiled artefacts (Prometheus rules,
    OTel Collector, Alertmanager, Grafana dashboards) previewed and downloadable,
    and **Ready to continue?** — *Resolve or adjust* returns to Define; *Continue
    with visible gaps* (*Continue to Discover* when none remain) registers the pack
@@ -463,8 +475,12 @@ schema: valid (spec v1.2)
 ```
 
 The pack goes to stdout or `--out`; the todo list and the conformance line go to
-stderr. `--slis a,b` keeps a subset of the tier's SLIs (an id above the tier is dropped
-with a `warning [sli-excluded]`); `--no-dashboards`,
+stderr. `--slis a,b` (or `--sli <id>`, repeatable) picks the SLIs — any SLI of the
+entries, above the tier too: the tier is a seed, an SLI above it starts from its own
+tier's profile; `--override <sli>.<objective|window|threshold>=<value>` (repeatable)
+edits a selected SLI's copy of the library's value (the SLO id follows the objective; a
+query is edited in the studio or the pack file; an override for an SLI not in the pack
+is a `warning [override]`); `--no-dashboards`,
 `--no-policy`, `--no-routes`, `--no-validation`, `--no-slos` leave that section out
 (the schema and the rubric then both say what is missing, exit `1`); `--entry
 kafka,http-service` composes several entries into one pack; `--json` returns

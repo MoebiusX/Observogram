@@ -13,12 +13,13 @@
 import { escapeHtml } from './util.mjs';
 
 /**
- * artefactCardHtml(artefact, { broken, benchmark, tagLimit }) → the HTML inside a `.card`.
+ * artefactCardHtml(artefact, { broken, benchmark, tagLimit, note }) → the HTML inside a `.card`.
  *   broken     the number of unresolved references the caller found on this card (0: no flag)
  *   benchmark  { slug, refPackId, label } when a backend's product matches a reference pack (the CTA)
  *   tagLimit   how many tags the foot shows (Discover shows four)
+ *   note       one short line in the foot the caller knows (Build: "customised: objective, query")
  */
-export function artefactCardHtml(artefact, { broken = 0, benchmark = null, tagLimit = 4 } = {}) {
+export function artefactCardHtml(artefact, { broken = 0, benchmark = null, tagLimit = 4, note = null } = {}) {
   const tags = (artefact.tags || []).slice(0, tagLimit).map(t =>
     `<span class="tag">${escapeHtml(t)}</span>`).join('');
 
@@ -56,6 +57,7 @@ export function artefactCardHtml(artefact, { broken = 0, benchmark = null, tagLi
       ${artefact.tool ? `<span class="tool">${escapeHtml(artefact.tool)}</span>` : ''}
       ${tags}
       ${benchmarkCta}
+      ${note ? `<span class="card-note">${escapeHtml(note)}</span>` : ''}
     </div>
   `;
 }

@@ -12,11 +12,17 @@ export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel
 
 // The BUILD journey's inputs (docs/BUILD_JOURNEY.md, slice 2): Define ·
 // Compile · Verify over the pack library. `slis: null` means "every SLI the
-// tier reaches" (the engine's defaultToggles) until the user unticks one;
-// `params` holds only the overrides (a value equal to the default is deleted
-// so the placeholder stays a placeholder). `result` is the last instantiate
-// response and is never persisted — the canonical is re-instantiated on
-// reload from the inputs, which are.
+// tier reaches" (the engine's defaultToggles) until the user edits the list
+// (any SLI of the selected entries may be in it, above the tier too: the
+// tier is a seed, not a gate); `params` holds only the overrides (a value
+// equal to the default is deleted so the placeholder stays a placeholder);
+// `overrides` the per-SLI copies over the library's values ({ [sliKey]:
+// { objective, window, threshold, query, good, total, description, unit } },
+// copy-on-write: only the fields the user edited), `custom` the SLIs written
+// from scratch, `seeded` whether DEFINE was confirmed ("Seed the pack →"),
+// which is what opens COMPILE. `result` is the last instantiate response and
+// is never persisted — the canonical is re-instantiated on reload from the
+// inputs, which are.
 export function defaultBuildState() {
   return {
     step: 'define',           // 'define' | 'compile' | 'verify'
@@ -26,8 +32,11 @@ export function defaultBuildState() {
     tier: 'tier-2',
     entries: [],              // library entry ids, in selection order
     params: {},               // { [paramKey]: value } overrides only
-    slis: null,               // null → the tier's defaults; [ids] once edited
+    slis: null,               // null → the tier's defaults; [ids] once edited (any SLI of the selected entries)
     toggles: { slos: true, policy: true, routes: true, dashboards: true, validation: true },
+    overrides: {},            // { [sliKey]: { <field>: value } } — the edited fields only (docs/BUILD_JOURNEY.md "The seed and the copies")
+    custom: [],               // [{ id, type, objective, window, good + total | query + threshold, description?, unit? }] — SLIs written from scratch
+    seeded: false,            // DEFINE confirmed ("Seed the pack →"): what makes COMPILE reachable; persisted
     result: null,             // { canonical, canonicalYaml, todos, warnings, summary, conformance, schemaErrors, provenance }
     error: null,              // [messages] from a 400 instantiate
     pending: false,           // an instantiate is in flight
@@ -36,11 +45,14 @@ export function defaultBuildState() {
     stackOpen: {},            // { [`${layerId}/detail`]: true } — the stack's open detail folds (UI state, never persisted)
     sheetOpen: null,          // the layer whose sheet is open ('L1' … 'GOV'), one at a time (UI state, never persisted)
     rolodexAll: false,        // the L1 rolodex shows every product's SLIs, not only the selected entries' (UI state, never persisted)
+    customOpen: {},           // { [sliKey]: true } — the rolodex cards whose Customise face is expanded (UI state, never persisted)
+    customDraft: null,        // the '+ Custom SLI' card's form as typed, until it is added (UI state, never persisted)
+    customDraftErrors: null,  // the engine's usage errors on the last 'Add to the pack' attempt (UI state, never persisted)
     wantedStep: null,         // the step asked for while unreachable (a reload on Verify before the pack is back); honoured once the instantiation answers (UI state, never persisted)
   };
 }
 // The build fields that survive a reload (never `result`, `preview`, `error`, `pending`).
-export const BUILD_PERSIST_FIELDS = ['step', 'name', 'owners', 'environment', 'tier', 'entries', 'params', 'slis', 'toggles', 'registeredId'];
+export const BUILD_PERSIST_FIELDS = ['step', 'name', 'owners', 'environment', 'tier', 'entries', 'params', 'slis', 'toggles', 'overrides', 'custom', 'seeded', 'registeredId'];
 
 export const state = {
   // 'home' starts the studio empty; user picks Analyze (one pack) or

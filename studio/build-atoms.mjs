@@ -72,6 +72,47 @@ export function paramLabelHtml(p, forId = null) {
   return forId ? `<label class="build-param-label" for="${escapeHtml(forId)}">${inner}</label>` : `<span class="build-param-label">${inner}</span>`;
 }
 
+/**
+ * One field of an edit face or of the '+ Custom SLI' form (the L1 sheet's copies), written once for both: the
+ * input for its kind (a textarea for PromQL, a datalist for the window, a select for the type, text otherwise),
+ * the library default beside the label when the model gives one, '↺ library default' when the field is
+ * overridden and resettable, the engine's error under it (role=alert) or the hint. `dataAttr` names the data
+ * attribute the wiring reads back (`override-field` / `custom-field` on a face, `custom-draft` on the form),
+ * `sli` the card's key, `rows` the textarea height. `readOnly` draws the row as VERIFY shows it — the value the
+ * pack carries as a code span in place of the input, the same label block without a `for` — like paramRowHtml's
+ * read-only variant, so the two faces cannot drift.
+ */
+export function editFieldHtml(f, { dataAttr = 'override-field', sli = null, rows = 3, readOnly = false } = {}) {
+  const id = escapeHtml(f.inputId);
+  const data = ` data-${escapeHtml(dataAttr)}="${escapeHtml(f.id)}"${sli ? ` data-sli="${escapeHtml(sli)}"` : ''}`;
+  // The label names the field and nothing else; the library default, the hint and the error are siblings the
+  // input is described by (aria-describedby), the reset a sibling button — a button inside a <label> is invalid
+  // HTML and read its text into the input's accessible name ("Objective % library 99 ↺ library default").
+  const hasDefault = !(f.default === null || f.default === undefined);
+  const dflt = hasDefault ? `<span class="build-edit-default" id="${id}-default">${f.overridden ? `library <code>${escapeHtml(f.default || '—')}</code>` : 'library default'}</span>` : '';
+  const labelInner = `<span>${escapeHtml(f.label)}${f.kind === 'percent' ? ' <em>%</em>' : ''}${f.required ? ' <i title="required">*</i>' : ''}</span>`;
+  const reset = f.resettable && !readOnly ? `<button type="button" class="build-edit-reset" data-reset="${escapeHtml(f.id)}"${sli ? ` data-sli="${escapeHtml(sli)}"` : ''} data-focus-key="${escapeHtml(f.focusKey)}:reset" title="${escapeHtml(`back to the library default (${f.default || '—'})`)}" aria-label="${escapeHtml(`${f.label}: back to the library default`)}"><span aria-hidden="true">↺</span> library default</button>` : '';
+  const showHint = !!f.hint && !f.error && !readOnly;
+  const describedBy = [hasDefault ? `${id}-default` : '', f.error ? `${id}-error` : showHint ? `${id}-hint` : ''].filter(Boolean).join(' ');
+  const aria = `${describedBy ? ` aria-describedby="${describedBy}"` : ''}${f.error ? ` aria-errormessage="${id}-error"` : ''}`;
+  let control;
+  if (readOnly) control = `<code class="build-edit-value"${data}>${escapeHtml(f.value)}</code>`;
+  else {
+    const common = `class="build-edit-input" id="${id}" data-focus-key="${escapeHtml(f.focusKey)}"${data}${f.error ? ' aria-invalid="true"' : ''}${f.required ? ' required' : ''}`;
+    const placeholder = f.placeholder ? ` placeholder="${escapeHtml(f.placeholder)}"` : '';
+    if (f.kind === 'promql') control = `<textarea ${common} rows="${rows}" spellcheck="false" autocomplete="off"${placeholder}${aria}>${escapeHtml(f.value)}</textarea>`;
+    else if (f.kind === 'select') control = `<select ${common}${aria}>${(f.options || []).map(o => `<option value="${escapeHtml(o)}"${o === f.value ? ' selected' : ''}>${escapeHtml(o)}</option>`).join('')}</select>`;
+    else if (f.kind === 'window') control = `<input type="text" ${common} list="build-window-options" value="${escapeHtml(f.value)}" autocomplete="off" spellcheck="false"${aria}>`;
+    else control = `<input type="text" ${common} value="${escapeHtml(f.value)}"${placeholder} autocomplete="off" spellcheck="false"${f.kind === 'percent' || f.kind === 'number' ? ' inputmode="decimal"' : ''}${aria}>`;
+  }
+  return `
+    <div class="build-edit-field${f.overridden ? ' is-overridden' : ''}${f.error ? ' is-error' : ''}${readOnly ? ' is-read' : ''}" data-field="${escapeHtml(f.id)}">
+      <div class="build-edit-label-row">${readOnly ? `<span class="build-edit-label">${labelInner}</span>` : `<label class="build-edit-label" for="${id}">${labelInner}</label>`}${dflt}${reset}</div>
+      ${control}
+      ${f.error ? `<span class="build-edit-error" id="${id}-error" role="alert">${escapeHtml(f.error)}</span>` : showHint ? `<span class="build-edit-hint" id="${id}-hint">${escapeHtml(f.hint)}</span>` : ''}
+    </div>`;
+}
+
 /** Param inputs commit on change (Enter / blur), so typing never re-renders under the caret. `selector` narrows which inputs (the stack wires only its own). */
 export function wireParamInputs(container, act, selector = '.build-param-input') {
   container.querySelectorAll(selector).forEach(inp => {

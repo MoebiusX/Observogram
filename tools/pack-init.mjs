@@ -5,9 +5,17 @@
  *   packc init --list                       the entries (id, kind, evidence, SLIs per tier)
  *   packc init --show <entry>               params, SLIs per tier, per-tier objectives, evidence
  *   packc init --entry <id>[,<id>] --tier tier-1|tier-2|tier-3 --name <service>
- *              [--env <environment>] [--owner <team>]... [--param k=v]... [--slis a,b]
+ *              [--env <environment>] [--owner <team>]... [--param k=v]... [--slis a,b | --sli <id>]...
+ *              [--override <sli>.<objective|window|threshold>=<value>]...
  *              [--no-slos] [--no-policy] [--no-routes] [--no-dashboards] [--no-validation]
  *              [--out <file>] [--json] [--library <dir>]
+ *
+ * The tier is a seed, not a gate (docs/BUILD_JOURNEY.md "The seed and the copies"): --slis / --sli
+ * takes any SLI of the chosen entries, above the tier too (it starts from its own tier's profile), and
+ * --override edits a selected SLI's objective, window or threshold (the copy-on-write the engine
+ * applies; a query, good or total is edited in the studio or in the pack file — the CLI does not take
+ * PromQL on the command line, and it takes no custom SLI in this slice). An override for an SLI not in
+ * the pack is a warning [override], not an error.
  *
  * The pack (YAML) goes to stdout or --out; the todo list and the validation summary go to
  * stderr, so `packc init … > pack.yaml` yields a clean file. Exit codes follow the repo's
@@ -38,11 +46,14 @@ const SCHEMA = JSON.parse(readFileSync(resolve(ROOT, 'vendor', 'observability-pa
 const USAGE = `usage: packc init --list [--library <dir>]
        packc init --show <entry>
        packc init --entry <id>[,<id>] --tier tier-1|tier-2|tier-3 --name <service> [--env <environment>]
-                  [--owner <team>]... [--param k=v]... [--slis a,b]
+                  [--owner <team>]... [--param k=v]... [--slis a,b | --sli <id>]...
+                  [--override <sli>.<objective|window|threshold>=<value>]...
                   [--no-slos] [--no-policy] [--no-routes] [--no-dashboards] [--no-validation]
                   [--out <file>] [--json]`;
 
-const VALUE_FLAGS = new Set(['--entry', '--tier', '--name', '--env', '--owner', '--param', '--slis', '--out', '--library', '--show']);
+/** What --override takes on the command line: the scalar fields. PromQL is edited in the studio or the pack file. */
+const CLI_OVERRIDE_FIELDS = ['objective', 'window', 'threshold'];
+const VALUE_FLAGS = new Set(['--entry', '--tier', '--name', '--env', '--owner', '--param', '--slis', '--sli', '--override', '--out', '--library', '--show']);
 const BOOL_FLAGS = new Set(['--list', '--json', '--help', '-h', ...SECTION_TOGGLES.map(s => `--no-${s}`)]);
 
 function usageError(msg) {
@@ -51,7 +62,9 @@ function usageError(msg) {
 }
 
 function parseArgs(argv) {
-  const o = { owners: [], params: {}, off: new Set() };
+  // A null-prototype map: `--override __proto__.objective=0.5` must reach the engine (which refuses the key), not
+  // set the plain object's prototype and vanish (measured: exit 0, nothing customised, no warning).
+  const o = { owners: [], params: {}, overrides: Object.create(null), off: new Set() };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (BOOL_FLAGS.has(a)) {
@@ -71,7 +84,21 @@ function parseArgs(argv) {
       case '--name': o.name = v; break;
       case '--env': o.env = v; break;
       case '--owner': o.owners.push(v); break;
-      case '--slis': o.slis = v.split(',').map(s => s.trim()).filter(Boolean); break;
+      case '--slis': case '--sli': o.slis = [...(o.slis || []), ...v.split(',').map(s => s.trim()).filter(Boolean)]; break;
+      case '--override': {
+        // <sli>.<field>=<value>: the field is the last dot-separated segment before '=' (an SLI id carries no dot).
+        const eq = v.indexOf('=');
+        if (eq <= 0) usageError(`--override expects <sli>.<field>=<value>, got ${v}`);
+        const lhs = v.slice(0, eq), raw = v.slice(eq + 1);
+        const dot = lhs.lastIndexOf('.');
+        if (dot <= 0 || dot === lhs.length - 1) usageError(`--override expects <sli>.<field>=<value>, got ${v}`);
+        const sli = lhs.slice(0, dot), field = lhs.slice(dot + 1);
+        if (!CLI_OVERRIDE_FIELDS.includes(field)) usageError(`--override takes objective, window or threshold (got ${field}); a query, good or total is edited in the studio or in the pack file`);
+        let value = raw;
+        if (field !== 'window') { value = Number(raw); if (raw.trim() === '' || !Number.isFinite(value)) usageError(`--override ${sli}.${field}: a number is required, got ${JSON.stringify(raw)}`); }
+        o.overrides[sli] = { ...(o.overrides[sli] || {}), [field]: value };
+        break;
+      }
       case '--out': o.out = v; break;
       case '--library': o.library = v; break;
       case '--show': o.show = v; break;
@@ -164,7 +191,7 @@ function main() {
   if (o.slis) toggles.slis = o.slis;
   let result;
   try {
-    result = instantiatePack(entries, { name: o.name, tier: o.tier, environment: o.env, owners: o.owners, params: o.params, toggles, promql: parsePromql });
+    result = instantiatePack(entries, { name: o.name, tier: o.tier, environment: o.env, owners: o.owners, params: o.params, toggles, overrides: o.overrides, promql: parsePromql });
   } catch (e) {
     usageError(e.message);
   }
@@ -181,7 +208,10 @@ function main() {
   }
 
   const err = (s) => process.stderr.write(s + '\n');
-  err(`packc init: ${canonical.metadata.name}@${provenance.tier} from ${provenance.source} — ${canonical.spec.slis.length} SLI(s), sections ${SECTION_TOGGLES.map(s => `${s}:${toggles[s] ? 'on' : 'off'}`).join(' ')}${o.out ? ` → ${o.out}` : ''}`);
+  const customised = Object.values(provenance.slis || {}).filter(p => p.customised.length).length;
+  const aboveTier = Object.values(provenance.slis || {}).filter(p => p.aboveTier).length;
+  err(`packc init: ${canonical.metadata.name}@${provenance.tier} from ${provenance.source} — ${canonical.spec.slis.length} SLI(s)${aboveTier ? ` (${aboveTier} from a higher tier's profile)` : ''}${customised ? ` (${customised} customised)` : ''}, sections ${SECTION_TOGGLES.map(s => `${s}:${toggles[s] ? 'on' : 'off'}`).join(' ')}${o.out ? ` → ${o.out}` : ''}`);
+  for (const [id, p] of Object.entries(provenance.slis || {})) if (p.customised.length) err(`  customised ${id}: ${p.customised.join(', ')}${p.evidence.status === 'custom' ? ' — the library evidence no longer applies to its expression' : ''}`);
   err(`conformance @ ${summary.tier}: MUST ${summary.must.passed}/${summary.must.total}, SHOULD ${summary.should.passed}/${summary.should.total}${summary.onPlaceholder.length ? ` (${summary.onPlaceholder.length} clause(s) pass on a placeholder)` : ''}`);
   for (const f of summary.failing) err(`  ✗ ${f.id} — ${f.description}${f.todos.length ? ` [todo: ${f.todos.join(', ')}]` : ''}`);
   if (todos.length) {

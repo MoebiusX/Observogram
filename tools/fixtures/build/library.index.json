@@ -69,7 +69,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(up{job=\"${job}\"} == bool 1)",
+          "total": "count(up{job=\"${job}\"})"
         },
         {
           "id": "notification_success_ratio",
@@ -91,7 +93,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(rate(alertmanager_notifications_total[5m])) -\n  (sum(rate(alertmanager_notifications_failed_total[5m])) or vector(0))",
+          "total": "sum(rate(alertmanager_notifications_total[5m]))"
         },
         {
           "id": "notification_failures",
@@ -112,7 +116,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "sum(rate(alertmanager_notifications_failed_total[5m]))",
+          "threshold": 0
         },
         {
           "id": "active_silences",
@@ -133,7 +139,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "sum(alertmanager_silences{state=\"active\"})",
+          "threshold": 20
         }
       ],
       "sliCountByTier": {
@@ -222,7 +230,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(rate(grafana_http_request_duration_seconds_count{status_code!~\"5..\"}[5m]))",
+          "total": "sum(rate(grafana_http_request_duration_seconds_count[5m]))"
         },
         {
           "id": "datasource_proxy_success_ratio",
@@ -243,7 +253,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(rate(grafana_datasource_request_total{code!~\"5..\"}[5m]))",
+          "total": "sum(rate(grafana_datasource_request_total[5m]))"
         },
         {
           "id": "http_request_latency_p99",
@@ -264,7 +276,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "query": "histogram_quantile(0.99,\n  sum by (le)(rate(grafana_http_request_duration_seconds_bucket[5m])))",
+          "threshold": 1
         },
         {
           "id": "datasource_proxy_latency_p99",
@@ -285,7 +299,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "query": "histogram_quantile(0.99,\n  sum by (le)(rate(grafana_datasource_request_duration_seconds_bucket[5m])))",
+          "threshold": 2
         },
         {
           "id": "alerting_rule_evaluation_success_ratio",
@@ -307,7 +323,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(rate(grafana_alerting_rule_evaluations_total[5m])) -\n  (sum(rate(grafana_alerting_rule_evaluation_failures_total[5m])) or vector(0))",
+          "total": "sum(rate(grafana_alerting_rule_evaluations_total[5m]))"
         },
         {
           "id": "plugin_request_success_ratio",
@@ -328,7 +346,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(rate(grafana_plugin_request_total{status=\"ok\"}[5m]))",
+          "total": "sum(rate(grafana_plugin_request_total[5m]))"
         },
         {
           "id": "login_success_ratio",
@@ -349,7 +369,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "good": "sum(rate(grafana_http_request_duration_seconds_count{handler=\"/login\",method=\"POST\",status_code=\"200\"}[5m]))",
+          "total": "sum(rate(grafana_http_request_duration_seconds_count{handler=\"/login\",method=\"POST\"}[5m]) > 0)"
         },
         {
           "id": "database_query_latency_p99",
@@ -370,7 +392,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "query": "histogram_quantile(0.99,\n  sum by (le)(rate(grafana_database_queries_duration_seconds_bucket[5m])))",
+          "threshold": 0.5
         }
       ],
       "sliCountByTier": {
@@ -488,7 +512,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(up{job=\"${native_job}\"} == bool 1)",
+          "total": "count(up{job=\"${native_job}\"})"
         },
         {
           "id": "qmgr_reachability",
@@ -509,7 +535,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(ibmmq_qmgr_status{job=\"${exporter_job}\"} == bool 2)",
+          "total": "count(ibmmq_qmgr_status{job=\"${exporter_job}\"})"
         },
         {
           "id": "queue_depth_headroom",
@@ -531,7 +559,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "query": "max by (qmgr, queue) (\n  last_over_time(ibmmq_queue_depth{job=\"${exporter_job}\", queue=~\"${queue_pattern}\"}[30s])\n    / last_over_time(ibmmq_queue_attribute_max_depth{job=\"${exporter_job}\", queue=~\"${queue_pattern}\"}[30s])\n)",
+          "threshold": 0.8
         },
         {
           "id": "oldest_message_age",
@@ -552,7 +582,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "max by (qmgr, queue) (\n  last_over_time(ibmmq_queue_oldest_message_age{job=\"${exporter_job}\", queue=~\"${queue_pattern}\", queue!=\"${dlq}\"}[30s])\n)",
+          "threshold": 60
         },
         {
           "id": "dlq_depth",
@@ -573,7 +605,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "query": "max by (qmgr) (last_over_time(ibmmq_queue_depth{job=\"${exporter_job}\", queue=\"${dlq}\"}[30s]))",
+          "threshold": 0
         },
         {
           "id": "canary_success",
@@ -594,7 +628,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "(sum(rate(mq_canary_attempts_total{result=\"ok\"}[5m])) or vector(0))",
+          "total": "sum(rate(mq_canary_attempts_total[5m]))"
         },
         {
           "id": "canary_roundtrip_p99",
@@ -615,7 +651,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "query": "histogram_quantile(0.99,\n  sum by (le) (rate(mq_canary_roundtrip_duration_seconds_bucket{result=\"ok\"}[5m])))",
+          "threshold": 0.5
         },
         {
           "id": "log_write_latency",
@@ -636,7 +674,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "max by (qmgr) (last_over_time(ibmmq_qmgr_log_write_latency_seconds{job=\"${exporter_job}\"}[30s]))",
+          "threshold": 0.02
         }
       ],
       "sliCountByTier": {
@@ -746,7 +786,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(up{job=\"${broker_job}\"} == bool 1)",
+          "total": "count(up{job=\"${broker_job}\"})"
         },
         {
           "id": "consumer_group_lag_seconds",
@@ -768,7 +810,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "max by (consumergroup) (\n  kafka_consumergroup_lag /\n    (rate(kafka_consumergroup_current_offset[5m]) > 0)\n)",
+          "threshold": 60
         },
         {
           "id": "partition_replica_health",
@@ -790,7 +834,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(kafka_topic_partition_in_sync_replica == bool kafka_topic_partition_replicas)",
+          "total": "count(kafka_topic_partition_replicas)"
         },
         {
           "id": "produce_latency_p99",
@@ -811,7 +857,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "query": "max(kafka_network_requestmetrics_totaltimems{request=\"Produce\",quantile=\"0.99\"}) / 1000",
+          "threshold": 0.1
         },
         {
           "id": "fetch_latency_p99",
@@ -832,7 +880,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "query": "max(kafka_network_requestmetrics_localtimems{request=\"FetchConsumer\",quantile=\"0.99\"}) / 1000",
+          "threshold": 0.05
         },
         {
           "id": "controller_election_rate",
@@ -853,7 +903,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "max(rate(kafka_controller_kafkacontroller_newactivecontrollerscount[1h])) * 3600",
+          "threshold": 1
         }
       ],
       "sliCountByTier": {
@@ -934,7 +986,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(up{job=\"${job}\"} == bool 1)",
+          "total": "count(up{job=\"${job}\"})"
         },
         {
           "id": "log_export_failures",
@@ -956,7 +1010,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "sum(rate(otelcol_exporter_send_failed_log_records[5m])) or (count(otelcol_exporter_sent_log_records) * 0)",
+          "threshold": 0
         },
         {
           "id": "log_records_refused",
@@ -978,7 +1034,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "sum(rate(otelcol_receiver_refused_log_records[5m])) or (count(otelcol_receiver_accepted_log_records) * 0)",
+          "threshold": 0
         },
         {
           "id": "shipper_drops",
@@ -999,7 +1057,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "sum(rate(promtail_dropped_entries_total[5m]))",
+          "threshold": 0
         }
       ],
       "sliCountByTier": {
@@ -1081,7 +1141,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(up{job=\"${job}\"} == bool 1)",
+          "total": "count(up{job=\"${job}\"})"
         },
         {
           "id": "metric_export_failures",
@@ -1103,7 +1165,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "sum(rate(otelcol_exporter_send_failed_metric_points${suffix}[5m])) or (count(otelcol_exporter_sent_metric_points${suffix}) * 0)",
+          "threshold": 0
         },
         {
           "id": "span_export_failures",
@@ -1125,7 +1189,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "sum(rate(otelcol_exporter_send_failed_spans${suffix}[5m])) or (count(otelcol_exporter_sent_spans${suffix}) * 0)",
+          "threshold": 0
         },
         {
           "id": "log_export_failures",
@@ -1147,7 +1213,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "sum(rate(otelcol_exporter_send_failed_log_records${suffix}[5m])) or (count(otelcol_exporter_sent_log_records${suffix}) * 0)",
+          "threshold": 0
         },
         {
           "id": "queue_saturation",
@@ -1169,7 +1237,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "max(max by (exporter, instance, job) (otelcol_exporter_queue_size) / max by (exporter, instance, job) (otelcol_exporter_queue_capacity))",
+          "threshold": 0.8
         },
         {
           "id": "metrics_refused",
@@ -1191,7 +1261,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "sum(rate(otelcol_receiver_refused_metric_points${suffix}[5m])) or (count(otelcol_receiver_accepted_metric_points${suffix}) * 0)",
+          "threshold": 0
         }
       ],
       "sliCountByTier": {
@@ -1279,7 +1351,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(up == bool 1)",
+          "total": "count(up)"
         },
         {
           "id": "rule_evaluation_success_ratio",
@@ -1301,7 +1375,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(rate(prometheus_rule_evaluations_total[5m])) -\n  (sum(rate(prometheus_rule_evaluation_failures_total[5m])) or vector(0))",
+          "total": "sum(rate(prometheus_rule_evaluations_total[5m]))"
         },
         {
           "id": "scrape_duration_p99",
@@ -1322,7 +1398,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "query": "max(quantile_over_time(0.99, scrape_duration_seconds[5m]))",
+          "threshold": 5
         },
         {
           "id": "query_latency_p99",
@@ -1343,7 +1421,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "query": "histogram_quantile(0.99,\n  sum by (le)(rate(prometheus_http_request_duration_seconds_bucket{handler=~\"/api/v1/query|/api/v1/query_range\"}[5m])))",
+          "threshold": 1
         },
         {
           "id": "alertmanager_notification_success_ratio",
@@ -1365,7 +1445,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(rate(prometheus_notifications_sent_total[5m])) -\n  (sum(rate(prometheus_notifications_errors_total[5m])) or vector(0))",
+          "total": "sum(rate(prometheus_notifications_sent_total[5m]))"
         },
         {
           "id": "tsdb_compaction_success_ratio",
@@ -1387,7 +1469,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(rate(prometheus_tsdb_compactions_total[1h])) -\n  (sum(rate(prometheus_tsdb_compactions_failed_total[1h])) or vector(0))",
+          "total": "sum(rate(prometheus_tsdb_compactions_total[1h]))"
         },
         {
           "id": "wal_corruption_freshness",
@@ -1409,7 +1493,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(rate(prometheus_tsdb_wal_truncations_total[5m])) -\n  (sum(rate(prometheus_tsdb_wal_corruptions_total[5m])) or vector(0))",
+          "total": "sum(rate(prometheus_tsdb_wal_truncations_total[5m]))"
         },
         {
           "id": "query_concurrent_saturation",
@@ -1431,7 +1517,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "max(\n  prometheus_engine_queries / prometheus_engine_queries_concurrent_max\n)",
+          "threshold": 0.8
         }
       ],
       "sliCountByTier": {
@@ -1520,7 +1608,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(up{job=\"${job}\"} == bool 1)",
+          "total": "count(up{job=\"${job}\"})"
         },
         {
           "id": "span_export_failures",
@@ -1542,7 +1632,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "sum(rate(otelcol_exporter_send_failed_spans[5m])) or (count(otelcol_exporter_sent_spans) * 0)",
+          "threshold": 0
         },
         {
           "id": "spans_refused",
@@ -1564,7 +1656,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "sum(rate(otelcol_receiver_refused_spans[5m])) or (count(otelcol_receiver_accepted_spans) * 0)",
+          "threshold": 0
         },
         {
           "id": "export_queue_saturation",
@@ -1586,7 +1680,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "max(max by (exporter, instance, job) (otelcol_exporter_queue_size{exporter=~\"${traces_exporter}\"}) / max by (exporter, instance, job) (otelcol_exporter_queue_capacity{exporter=~\"${traces_exporter}\"}))",
+          "threshold": 0.8
         }
       ],
       "sliCountByTier": {
@@ -1667,7 +1763,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(rate(${duration_metric}_count{job=\"${job}\",http_response_status_code!~\"5..\"}[5m]))",
+          "total": "sum(rate(${duration_metric}_count{job=\"${job}\"}[5m]))"
         },
         {
           "id": "latency_p99",
@@ -1688,7 +1786,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "query": "histogram_quantile(0.99,\n  sum by (le)(rate(${duration_metric}_bucket{job=\"${job}\"}[5m])))",
+          "threshold": 0.5
         },
         {
           "id": "in_flight_saturation",
@@ -1709,7 +1809,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "max by (instance) (http_server_active_requests{job=\"${job}\"})",
+          "threshold": 100
         },
         {
           "id": "error_rate",
@@ -1730,7 +1832,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "sum(rate(${duration_metric}_count{job=\"${job}\",http_response_status_code=~\"5..\"}[5m])) or vector(0)",
+          "threshold": 1
         }
       ],
       "sliCountByTier": {
@@ -1820,7 +1924,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "good": "sum(rate(messaging_client_consumed_messages_total{job=\"${job}\",messaging_system=\"${messaging_system}\",messaging_destination_name=~\"${destination}\",error_type=\"\"}[5m]))",
+          "total": "sum(rate(messaging_client_consumed_messages_total{job=\"${job}\",messaging_system=\"${messaging_system}\",messaging_destination_name=~\"${destination}\"}[5m]))"
         },
         {
           "id": "process_duration_p99",
@@ -1841,7 +1947,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "query": "histogram_quantile(0.99,\n  sum by (le)(rate(messaging_process_duration_seconds_bucket{job=\"${job}\",messaging_system=\"${messaging_system}\",messaging_destination_name=~\"${destination}\"}[5m])))",
+          "threshold": 1
         },
         {
           "id": "receive_duration_p99",
@@ -1862,7 +1970,9 @@
             "tier-3": "30d",
             "tier-2": "30d",
             "tier-1": "30d"
-          }
+          },
+          "query": "histogram_quantile(0.99,\n  sum by (le)(rate(messaging_client_operation_duration_seconds_bucket{job=\"${job}\",messaging_system=\"${messaging_system}\",messaging_operation_type=\"receive\"}[5m])))",
+          "threshold": 0.5
         },
         {
           "id": "processing_errors",
@@ -1883,7 +1993,9 @@
             "tier-3": "7d",
             "tier-2": "7d",
             "tier-1": "7d"
-          }
+          },
+          "query": "sum(rate(messaging_client_consumed_messages_total{job=\"${job}\",messaging_system=\"${messaging_system}\",messaging_destination_name=~\"${destination}\",error_type!=\"\"}[5m])) or vector(0)",
+          "threshold": 1
         }
       ],
       "sliCountByTier": {

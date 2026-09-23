@@ -42,6 +42,21 @@
 // (`library.evidence.slis.<id>`), so diff can tell library-derived from
 // hand-written and a later library release can propose upgrades.
 //
+// THE TIER IS A SEED, NOT A CONSTRAINT (docs/BUILD_JOURNEY.md "The seed and
+// the copies"). The tier decides what a pack STARTS with (defaultToggles: the
+// SLIs whose minTier it reaches, the scaffold's sections) and which RUBRIC
+// grades it (tierRequirements). It never forbids an SLI: any SLI of a passed
+// entry may be selected at any tier; a value declared per tier resolves for
+// an above-tier SLI by walking towards the stricter tiers (perTier). An SLI's
+// own tier features (forecast, chaos, remediation with a minTier) keep their
+// gating against the pack's tier — they are tier features, not the SLI.
+//
+// COPIES, NOT LINKS. The library values are defaults the caller may edit:
+// `overrides` (per SLI: objective, window, threshold, query / good / total,
+// description, unit — copy-on-write over the template) and `custom` (SLIs
+// written from scratch). An edited expression drops the library's evidence
+// (status `custom`); the provenance lists what was customised per SLI.
+//
 // Toggles leave honest gaps: a section switched off is absent from the pack;
 // the schema (minItems: 1 on slos / dashboards / burn_rate_alerts / routes)
 // and the rubric then both say what is missing — nothing is faked to keep a
@@ -91,6 +106,27 @@ export const BURN_PROFILES = Object.freeze({
   slow:         [{ short: '15m', long: '2h', factor: 8, severity: 'SEV2' }, { short: '1h', long: '6h', factor: 3, severity: 'SEV3' }],
 });
 const DEMOTE = { SEV1: 'SEV2', SEV2: 'SEV3', SEV3: 'SEV3', SEV4: 'SEV4' };
+/** The profile an SLI takes when its template names none — and every custom SLI: availability for a ratio, latency for a threshold. */
+export const DEFAULT_BURN_PROFILE = Object.freeze({ ratio: 'availability', threshold: 'latency' });
+/** The two windows of an SLI at a tier: its template's profile (or the default one), severities demoted one step at tier-3. */
+function burnWindowsFor(template, tier) {
+  const profile = Array.isArray(template.burn) ? template.burn : BURN_PROFILES[template.burn || DEFAULT_BURN_PROFILE[template.type]];
+  return profile.map(w => ({ ...w, severity: tier === 'tier-3' ? DEMOTE[w.severity] || w.severity : w.severity }));
+}
+/** The fields an override may carry, keyed by the SLI id as the pack carries it (docs/BUILD_JOURNEY.md "The seed and the copies"). */
+export const OVERRIDE_FIELDS = Object.freeze(['objective', 'window', 'threshold', 'query', 'good', 'total', 'description', 'unit']);
+/** The fields of a custom SLI (`custom: [...]`): the override fields plus its identity. */
+export const CUSTOM_FIELDS = Object.freeze(['id', 'type', ...OVERRIDE_FIELDS]);
+/** An override key: the SLI id as the pack carries it (prefixed when several entries compose). */
+export const SLI_KEY_RE = /^[a-z][a-z0-9_]{0,63}$/;
+/** A custom SLI's id: a slug of at least two characters (the schema's Slug, one segment). */
+export const CUSTOM_ID_RE = /^[a-z][a-z0-9_]{1,62}$/;
+/** Never read through the prototype chain: these keys are refused before anything is looked up. */
+const POLLUTING_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+/** The fields that replace the library's PromQL: an edit here drops the library's evidence for the SLI. */
+const PROMQL_FIELDS = ['query', 'good', 'total'];
+const MAX_UNIT_LENGTH = 64;
 
 /**
  * Parameters every instantiation has, whatever the entry: the values the
@@ -131,8 +167,20 @@ const forbiddenInParam = (v) => [...String(v)].some(ch => ch === '"' || ch === '
 const rank = (t) => TIER_RANK[t] ?? 0;
 const atTier = (tier, minTier) => rank(tier) >= rank(minTier || 'tier-3');
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
-/** A per-tier map `{ tier-1: x, tier-2: y, tier-3: z }` or a scalar that applies to every tier. */
-const perTier = (v, tier, fallback) => (isObj(v) ? (v[tier] ?? fallback) : (v ?? fallback));
+/**
+ * A per-tier map `{ tier-1: x, tier-2: y, tier-3: z }` or a scalar that applies to every tier. A map is read
+ * at the tier, then walking towards the stricter tiers (tier-3 → tier-2 → tier-1) to the first value declared:
+ * a tier-2 pack that adds an SLI declared for tier-1 only starts with the tier-1 objective, a tier-3 pack adding
+ * one declared for tier-2 and tier-1 takes tier-2's. The tier is a seed, never a gate.
+ */
+const perTier = (v, tier, fallback) => {
+  if (!isObj(v)) return v ?? fallback;
+  for (let i = Math.max(0, TIERS.indexOf(tier)); i < TIERS.length; i++) {
+    const at = v[TIERS[i]];
+    if (at !== undefined && at !== null) return at;
+  }
+  return fallback;
+};
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const uniq = (xs) => [...new Set(xs)];
 const PLACEHOLDER_RE = /\$\{([a-zA-Z_][a-zA-Z0-9_.]*)\}/g;
@@ -253,10 +301,14 @@ export function validateLibraryEntry(entry) {
       }
       if (!isObj(s.slo)) e(`${at}.slo: required ({ objective, window })`);
       else {
+        // A per-tier map must cover the tiers the SLI reaches; a tier below its minTier may be left out
+        // (a pack at that tier reads the stricter tiers' value through perTier's walk).
         for (const t of TIERS) {
-          const o = perTier(s.slo.objective, t, undefined);
-          if (typeof o !== 'number' || !(o > 0 && o < 1)) e(`${at}.slo.objective[${t}]: expected a number in (0, 1), got ${JSON.stringify(o)}`);
-          const w = perTier(s.slo.window, t, '30d');
+          const declared = (m) => (isObj(m) ? m[t] : m);
+          const o = declared(s.slo.objective);
+          if (o === undefined || o === null) { if (atTier(t, s.minTier)) e(`${at}.slo.objective[${t}]: required (the SLI is at ${s.minTier}; only a tier below it may leave the value out)`); }
+          else if (typeof o !== 'number' || !(o > 0 && o < 1)) e(`${at}.slo.objective[${t}]: expected a number in (0, 1), got ${JSON.stringify(o)}`);
+          const w = declared(s.slo.window) ?? (isObj(s.slo.window) && !atTier(t, s.minTier) ? '30d' : undefined) ?? '30d';
           if (!SLO_WINDOWS.includes(w)) e(`${at}.slo.window[${t}]: expected ${SLO_WINDOWS.join('|')}, got ${JSON.stringify(w)}`);
         }
       }
@@ -357,11 +409,15 @@ export function validateLibraryEntry(entry) {
 /** The summary the studio lists: one row per entry, its params, SLIs with minTier and evidence, the tiers it supports. */
 export function libraryIndex(entries) {
   return [...entries].map(entry => {
+    // objectives / windows per tier read through perTier's walk: what the SLI starts with at each tier, above
+    // its minTier too; the PromQL templates (${param} unresolved) and the bound are the defaults the studio's
+    // Customise face shows beside an override.
     const slis = (entry.slis || []).map(s => ({
       id: s.id, type: s.type, minTier: s.minTier, unit: s.unit, description: s.description,
       evidence: s.evidence?.status || null, metrics: [...(s.metrics || [])],
       objectives: Object.fromEntries(TIERS.map(t => [t, perTier(s.slo?.objective, t, null)])),
       windows: Object.fromEntries(TIERS.map(t => [t, perTier(s.slo?.window, t, null)])),
+      ...(s.type === 'ratio' ? { good: stripText(s.good), total: stripText(s.total) } : { query: stripText(s.query), threshold: s.threshold }),
     }));
     return {
       id: entry.id, kind: entry.kind, title: entry.title, product: entry.product || null, version: entry.version,
@@ -428,6 +484,159 @@ function checkParams(userParams, rows) {
   return userParams;
 }
 
+// ---------------------------------------------------------------------------
+// The copies: overrides over the library's SLIs, and custom SLIs (docs/BUILD_JOURNEY.md "The seed and the copies")
+// ---------------------------------------------------------------------------
+
+/** A usage error on one field of an override or a custom SLI, spelled `override <sli>.<field>: …` / `custom <id>.<field>: …` so a caller can point at the input. */
+const fieldError = (where, msg) => new Error(`${where}: ${msg}`);
+
+/**
+ * One field of an override or a custom SLI, checked against the SLI's type: the objective a number in (0, 1)
+ * (the ratio the pack stores — the studio shows a percent), the window one of the schema's SLO windows, the
+ * threshold a finite number (an upper bound: spec v1.2 has no direction field, so `comparison` is refused with
+ * the reason), the PromQL a non-empty string within MAX_PARAM_LENGTH that carries no ${…} placeholder (an
+ * override replaces the library's expression after the params are in; nothing resolves a placeholder in it),
+ * the description and unit bounded strings. Returns the normalised value.
+ */
+function checkCopyField(where, field, value, type) {
+  const str = (max, what) => {
+    if (typeof value !== 'string' || !value.trim()) throw fieldError(where, `${what} must be a non-empty string`);
+    if (value.length > max) throw fieldError(where, `${what} may not exceed ${max} characters (${value.length} given)`);
+    return value;
+  };
+  switch (field) {
+    case 'objective':
+      if (typeof value !== 'number' || !Number.isFinite(value) || !(value > 0 && value < 1)) throw fieldError(where, `the objective is a number in (0, 1) — the ratio the pack stores (0.995 for 99.5 %), got ${JSON.stringify(value)}`);
+      return value;
+    case 'window':
+      if (!SLO_WINDOWS.includes(value)) throw fieldError(where, `the window is one of ${SLO_WINDOWS.join(' | ')} (the schema's SLO windows), got ${JSON.stringify(value)}`);
+      return value;
+    case 'threshold':
+      if (type !== 'threshold') throw fieldError(where, 'a ratio SLI has no threshold (it has good and total)');
+      if (typeof value !== 'number' || !Number.isFinite(value)) throw fieldError(where, `the threshold is a finite number (an upper bound), got ${JSON.stringify(value)}`);
+      return value;
+    case 'query':
+      if (type !== 'threshold') throw fieldError(where, 'a ratio SLI has good and total, not a query');
+      return promqlField();
+    case 'good': case 'total':
+      if (type !== 'ratio') throw fieldError(where, `a threshold SLI has a query, not ${field}`);
+      return promqlField();
+    case 'description': return str(MAX_PARAM_LENGTH, 'the description');
+    case 'unit': return str(MAX_UNIT_LENGTH, 'the unit');
+    default: throw fieldError(where, `unknown field (the fields are ${OVERRIDE_FIELDS.join(', ')})`);
+  }
+  function promqlField() {
+    const v = str(MAX_PARAM_LENGTH, 'the PromQL');
+    const ph = placeholdersIn(v);
+    if (ph.length) throw fieldError(where, `the PromQL may not carry a \${…} placeholder (\${${ph[0]}}): an override replaces the library's expression after the params are in, nothing resolves one here`);
+    return v;
+  }
+}
+
+/** The one reason `comparison` is not a field: the spec's threshold is an upper bound and its schema has no direction. */
+const COMPARISON_REASON = 'not a field: an ObservabilityPack v1.2 threshold is an upper bound (the schema has no direction / comparison field; the burn-rate generator reads every threshold so) — express a floor as a ratio SLI';
+
+/**
+ * The caller's overrides, checked before anything is instantiated: a plain object keyed by SLI id as the pack
+ * carries it (SLI_KEY_RE; __proto__ / constructor / prototype refused, nothing read through the prototype chain),
+ * each value an object of OVERRIDE_FIELDS checked by checkCopyField against the SLI's type. An override for an SLI
+ * that is not in the pack (unknown, or known but not selected) is a warning of kind `override`, never an error.
+ * Returns { byId: Map<id, override>, warnings }.
+ */
+function checkOverrides(overrides, known, selected) {
+  const byId = new Map();
+  const warnings = [];
+  if (overrides === undefined || overrides === null) return { byId, warnings };
+  if (!isObj(overrides)) throw new Error('instantiatePack: overrides must be an object of { <sli id>: { objective?, window?, threshold?, query?, good?, total?, description?, unit? } }');
+  for (const key of Object.keys(overrides)) {
+    if (POLLUTING_KEYS.has(key) || !SLI_KEY_RE.test(key)) throw new Error(`override ${key}: not an SLI id (${SLI_KEY_RE})`);
+    const ov = overrides[key];
+    if (!isObj(ov)) throw new Error(`override ${key}: expected an object of fields, got ${ov === null ? 'null' : Array.isArray(ov) ? 'array' : typeof ov}`);
+    const k = known.get(key);
+    if (!k || !selected.has(key)) {
+      warnings.push({ kind: 'override', sli: key, message: `override ${key}: the SLI is not in the pack (${k ? 'not selected' : 'unknown'}) — the override is kept aside, nothing is applied` });
+      continue;
+    }
+    const out = Object.create(null);
+    for (const field of Object.keys(ov)) {
+      if (POLLUTING_KEYS.has(field)) throw fieldError(`override ${key}.${field}`, 'refused');
+      if (field === 'comparison') throw fieldError(`override ${key}.comparison`, COMPARISON_REASON);
+      if (!OVERRIDE_FIELDS.includes(field)) throw fieldError(`override ${key}.${field}`, `unknown field (the fields are ${OVERRIDE_FIELDS.join(', ')})`);
+      out[field] = checkCopyField(`override ${key}.${field}`, field, ov[field], k.type);
+    }
+    if (Object.keys(out).length) byId.set(key, out);
+  }
+  return { byId, warnings };
+}
+
+/**
+ * The caller's custom SLIs, checked: a list of { id, type, objective, window, good + total | query + threshold,
+ * description?, unit? }; the id a slug (CUSTOM_ID_RE, not the reserved policy segment) unique among the pack's
+ * SLIs — a clash with a selected library SLI or another custom one is a usage error naming both; the objective
+ * and window required; the PromQL required per type; every field checked by checkCopyField; an unknown field a
+ * usage error. Returns the normalised definitions in order.
+ */
+function checkCustom(custom, selected, known) {
+  if (custom === undefined || custom === null) return [];
+  if (!Array.isArray(custom)) throw new Error('instantiatePack: custom must be a list of { id, type, objective, window, good + total | query + threshold, description?, unit? }');
+  const out = [];
+  const seen = new Set();
+  custom.forEach((def, i) => {
+    const at = `custom[${i}]`;
+    if (!isObj(def)) throw new Error(`${at}: expected an object, got ${def === null ? 'null' : Array.isArray(def) ? 'array' : typeof def}`);
+    const id = hasOwn(def, 'id') ? def.id : undefined;
+    if (typeof id !== 'string' || !CUSTOM_ID_RE.test(id) || POLLUTING_KEYS.has(id)) throw new Error(`${at}.id: a slug of 2 to 63 characters is required ([a-z][a-z0-9_]{1,62}), got ${JSON.stringify(id)}`);
+    if (id === POLICY_SEGMENT) throw new Error(`custom ${id}.id: '${POLICY_SEGMENT}' is the compiler's reserved policy-record segment`);
+    const where = `custom ${id}`;
+    // Any library SLI of the passed entries owns its id, ticked or not: an un-ticked one would clash the moment
+    // it is ticked (a draft carrying both would draw two cards with one key), so the id is refused either way.
+    if (known.has(id)) {
+      const k = known.get(id);
+      const of = k?.entry ? ` of ${k.entry}` : '';
+      throw new Error(selected.has(id)
+        ? `${where}.id: clashes with the library SLI ${id}${of} in the pack — pick another id or drop that SLI`
+        : `${where}.id: shadows the library SLI ${id}${of} (not in the pack now — it would clash the moment it is ticked) — pick another id`);
+    }
+    if (seen.has(id)) throw new Error(`${where}.id: declared twice in custom`);
+    seen.add(id);
+    const type = def.type;
+    if (!SLI_TYPES.includes(type)) throw new Error(`${where}.type: expected ${SLI_TYPES.join(' | ')}, got ${JSON.stringify(type)}`);
+    const norm = { id, type };
+    for (const field of Object.keys(def)) {
+      if (field === 'id' || field === 'type') continue;
+      if (POLLUTING_KEYS.has(field)) throw fieldError(`${where}.${field}`, 'refused');
+      if (field === 'comparison') throw fieldError(`${where}.comparison`, COMPARISON_REASON);
+      if (!OVERRIDE_FIELDS.includes(field)) throw fieldError(`${where}.${field}`, `unknown field (the fields are ${CUSTOM_FIELDS.join(', ')})`);
+      norm[field] = checkCopyField(`${where}.${field}`, field, def[field], type);
+    }
+    for (const req of ['objective', 'window', ...(type === 'ratio' ? ['good', 'total'] : ['query', 'threshold'])]) {
+      if (!hasOwn(norm, req)) throw fieldError(`${where}.${req}`, `required for a ${type} SLI`);
+    }
+    out.push(norm);
+  });
+  return out;
+}
+
+/**
+ * Two SLIs may not share an SLO id. sloIdFor joins `<sli>_<pct>` with `_`, which is legal inside an SLI id, so an
+ * overridden `broker_availability` at 0.9999 and a custom `broker_availability_99` at 0.99 both become
+ * `broker_availability_99_99` — one SLO id, two burn alerts, two bindings, and nothing downstream would have said
+ * so (measured: schema valid, MUST 15/15, the compiled rules carrying the alert twice). A usage error spelled on
+ * the field the user can change: the custom SLI's id, else the overridden objective.
+ */
+function checkSloIds(slis) {
+  const bySlo = new Map();
+  for (const x of slis) {
+    const other = bySlo.get(x.sloId);
+    if (!other) { bySlo.set(x.sloId, x); continue; }
+    const culprit = [x, other].find(y => y.custom) || [x, other].find(y => hasOwn(y.overrides || {}, 'objective')) || x;
+    const rival = culprit === x ? other : x;
+    const where = culprit.custom ? `custom ${culprit.id}.id` : `override ${culprit.id}.objective`;
+    throw new Error(`${where}: its SLO id ${x.sloId} collides with ${rival.id}'s (objective ${rival.objective}) — pick another ${culprit.custom ? 'id or objective' : 'objective'}`);
+  }
+}
+
 /**
  * Every SLI expression, with the params in, must still be PromQL. The parser is an input: packc
  * init passes the Lezer grammar (tools/lib/promql-lezer.mjs, an npm import and so not for the
@@ -466,19 +675,22 @@ function resolveParams(rows, userParams, builtins) {
  * views, boards, probes, chaos and remediation templates the tier reaches.
  * Ids are prefixed with the entry id when several entries are composed.
  */
-function entryFragment(entry, { tier, selectedSlis, prefixed }) {
+function entryFragment(entry, { tier, selectedSlis, prefixed, overrides = new Map() }) {
   const px = prefixed ? `${metricPrefix(entry.id)}_` : '';
   const dpx = prefixed ? `${fileSlug(entry.id)}-` : '';
   const slis = [];
   for (const s of entry.slis || []) {
     const id = `${px}${s.id}`;
     if (!selectedSlis.has(id)) continue;
-    if (!atTier(tier, s.minTier)) throw new Error(`SLI ${id} needs ${s.minTier}; the pack is ${tier}`);
-    const objective = perTier(s.slo.objective, tier, null);
-    const window = perTier(s.slo.window, tier, '30d');
-    const profile = Array.isArray(s.burn) ? s.burn : BURN_PROFILES[s.burn || (s.type === 'ratio' ? 'availability' : 'latency')];
-    const windows = profile.map(w => ({ ...w, severity: tier === 'tier-3' ? DEMOTE[w.severity] || w.severity : w.severity }));
-    slis.push({ template: s, entry, id, sloId: sloIdFor(id, objective), objective, window, windows });
+    // No tier gate: an SLI above the tier starts with the value the walk finds (its own tier's profile).
+    const ov = overrides.get(id) || {};
+    const objective = ov.objective ?? perTier(s.slo.objective, tier, null);
+    const window = ov.window ?? perTier(s.slo.window, tier, '30d');
+    const customised = OVERRIDE_FIELDS.filter(k => hasOwn(ov, k));
+    slis.push({
+      template: s, entry, id, sloId: sloIdFor(id, objective), objective, window, windows: burnWindowsFor(s, tier),
+      overrides: ov, customised, custom: false, aboveTier: !atTier(tier, s.minTier),
+    });
   }
   const has = (t) => atTier(tier, t?.minTier);
   const sliOf = (bare) => slis.find(x => x.template.id === bare);
@@ -508,6 +720,28 @@ function entryFragment(entry, { tier, selectedSlis, prefixed }) {
     languages: entry.otel?.languages || [],
     customAttributes: entry.otel?.custom_attributes || [],
   };
+}
+
+/**
+ * What the custom SLIs contribute: one SLI record each, shaped like a template (so the scaffold treats it like any
+ * SLI — an SLO, a recording rule, burn alerts from the default profile, the overview board's bindings), with
+ * `custom` evidence and no entry. Nothing else: no view, board, probe, chaos or scrape job.
+ */
+function customFragment(defs, { tier }) {
+  const slis = defs.map(def => {
+    const template = {
+      id: def.id, type: def.type, minTier: tier,
+      description: def.description ?? `custom ${def.type} SLI — written in the studio`,
+      ...(def.unit !== undefined ? { unit: def.unit } : {}),
+      ...(def.type === 'ratio' ? { good: def.good, total: def.total } : { query: def.query, threshold: def.threshold }),
+      evidence: { status: 'custom', source: 'written in the studio' },
+    };
+    return {
+      template, entry: null, id: def.id, sloId: sloIdFor(def.id, def.objective), objective: def.objective, window: def.window,
+      windows: burnWindowsFor(template, tier), overrides: {}, customised: [], custom: true, aboveTier: false,
+    };
+  });
+  return { entry: null, custom: true, slis, views: [], dashboards: [], synthetic: [], chaos: [], remediation: [], scrapeJobs: [], receivers: [], languages: [], customAttributes: [] };
 }
 
 const RESOURCE_ATTRIBUTES = {
@@ -554,7 +788,7 @@ export function tierScaffold({ tier, service, environment, owners, fragments, to
     owners: ownersList,
     imports: [{ ref: 'platform/std-budget-policy@2.1' }],
     bindings: { service, environments: [environment], criticality: tier },
-    labels: { source: 'library', tier, 'library.entries': fragments.map(f => f.entry.id).join(',') },
+    labels: { source: 'library', tier, 'library.entries': fragments.filter(f => f.entry).map(f => f.entry.id).join(',') },
     annotations: {},   // filled by instantiatePack (provenance, todos, evidence)
   };
 
@@ -615,11 +849,15 @@ export function tierScaffold({ tier, service, environment, owners, fragments, to
   };
 
   // ----- L1: SLIs and SLOs -----
+  // Copy-on-write over the template: an override replaces the field (its PromQL carries no ${param}, so the
+  // substitution below leaves it alone); an edited expression also drops the semconv claim, which was the template's.
   const specSlis = slis.map(x => {
-    const s = x.template;
-    const base = { id: x.id, type: s.type, description: stripText(s.description), ...(s.semconv_metric ? { semconv_metric: s.semconv_metric } : {}) };
-    if (s.type === 'ratio') return { ...base, good: stripText(s.good), total: stripText(s.total), ...(s.owner ? { owner: s.owner } : {}) };
-    return { ...base, query: stripText(s.query), threshold: s.threshold, unit: s.unit };
+    const s = x.template, ov = x.overrides || {};
+    const promqlEdited = PROMQL_FIELDS.some(k => hasOwn(ov, k));
+    const base = { id: x.id, type: s.type, description: stripText(ov.description ?? s.description), ...(s.semconv_metric && !promqlEdited ? { semconv_metric: s.semconv_metric } : {}) };
+    if (s.type === 'ratio') return { ...base, good: stripText(ov.good ?? s.good), total: stripText(ov.total ?? s.total), ...(s.owner ? { owner: s.owner } : {}), ...(hasOwn(ov, 'unit') ? { unit: ov.unit } : {}) };
+    const unit = ov.unit ?? s.unit;
+    return { ...base, query: stripText(ov.query ?? s.query), threshold: ov.threshold ?? s.threshold, ...(unit !== undefined ? { unit } : {}) };
   });
   const specSlos = toggles.slos ? slis.map(x => ({ id: x.sloId, sli: x.id, objective: x.objective, window: x.window, error_budget_policy: BUDGET_POLICY })) : null;
 
@@ -867,13 +1105,15 @@ function burnRuleWarnings(canonical) {
 }
 
 /**
- * instantiatePack(entry | entries, { name, tier, environment, owners, params, toggles, promql })
+ * instantiatePack(entry | entries, { name, tier, environment, owners, params, toggles, overrides, custom, promql })
  *   → { canonical, todos: [{ path, fields, what, clause, clauses, params }], provenance,
  *       warnings: [{ kind, message, sli?, field? }] }
  *   (one todo per parked artefact; `fields` lists its placeholder fields; SLO ids are sloIdFor(sliId, objective);
  *   `promql` is the PromQL parser used on every resolved SLI expression — a `promql` warning per failure;
- *   a selected SLI above the tier is dropped with an `sli-excluded` warning, an unknown one throws;
- *   the burn-rule generator's warnings on the produced policy come back as kind `burn-rules`)
+ *   any SLI of the passed entries may be selected at any tier (an unknown one throws); `overrides` edit the
+ *   selected SLIs' fields (an override for an SLI not in the pack is a warning of kind `override`) and `custom`
+ *   adds SLIs written from scratch; the burn-rule generator's warnings on the produced policy come back as kind
+ *   `burn-rules`; `provenance.slis[id]` says per SLI where it came from, its evidence and what was customised)
  *
  * Several entries compose into one pack (a service that runs on Kafka AND
  * exposes HTTP): SLI, view, board, probe and chaos ids are prefixed with the
@@ -901,26 +1141,26 @@ export function instantiatePack(entryOrEntries, opts = {}) {
   for (const k of SECTION_TOGGLES) toggles[k] = toggles[k] !== false;
   const requested = Array.isArray(opts.toggles?.slis) ? opts.toggles.slis : (Array.isArray(opts.slis) ? opts.slis : null);
   const selected = new Set(requested || defaults.slis);
-  // An SLI the tier does not reach is excluded and reported, never fatal: the tier changes after the
-  // SLIs were ticked (SELECT then GENERATE) and the rest of the selection must survive it.
-  const excluded = [];
-  const known = entries.flatMap(en => (en.slis || []).map(s => ({ id: prefixed ? `${metricPrefix(en.id)}_${s.id}` : s.id, minTier: s.minTier })));
-  for (const id of [...selected]) if (!defaults.slis.includes(id)) {
-    const k = known.find(x => x.id === id);
-    if (!k) throw new Error(`unknown SLI ${id} (known: ${known.map(x => x.id).join(', ')})`);
-    selected.delete(id);
-    excluded.push({ kind: 'sli-excluded', sli: id, message: `SLI ${id} needs ${k.minTier} and the pack is ${tier}: excluded (raise the tier or drop it from the selection)` });
-  }
-  if (!selected.size) throw new Error(`instantiatePack: at least one SLI must stay selected${excluded.length ? ` (${excluded.map(w => w.sli).join(', ')}: above ${tier})` : ''}`);
+  // The tier is a seed: any SLI of the passed entries may be selected at any tier (the defaults are the ones the
+  // tier reaches; the rest start from their own tier's profile). Only an id no entry declares is an error.
+  const known = new Map(entries.flatMap(en => (en.slis || []).map(s => [prefixed ? `${metricPrefix(en.id)}_${s.id}` : s.id, { type: s.type, minTier: s.minTier, entry: en.id, sli: s.id }])));
+  for (const id of selected) if (!known.has(id)) throw new Error(`unknown SLI ${id} (known: ${[...known.keys()].join(', ')})`);
+  const { byId: overrides, warnings: overrideWarnings } = checkOverrides(opts.overrides, known, selected);
+  const customDefs = checkCustom(opts.custom, selected, known);
+  if (!selected.size && !customDefs.length) throw new Error('instantiatePack: at least one SLI must stay selected (or a custom SLI added)');
   toggles.slis = [...selected];
 
-  const fragments = entries.map(en => entryFragment(en, { tier, selectedSlis: selected, prefixed }));
+  const fragments = [
+    ...entries.map(en => entryFragment(en, { tier, selectedSlis: selected, prefixed, overrides })),
+    ...(customDefs.length ? [customFragment(customDefs, { tier })] : []),
+  ];
+  checkSloIds(fragments.flatMap(f => f.slis));
   const { canonical: draft, todos: scaffoldTodos } = tierScaffold({ tier, service, environment, owners, fragments, toggles });
 
   const rows = paramTable(entries, prefixed);
   const { values, provided } = resolveParams(rows, checkParams(opts.params || {}, rows), { service, environment, tier });
   const { canonical, todos: paramTodos, used } = resolvePlaceholders(draft, { rows, values, provided });
-  const warnings = [...excluded, ...promqlWarnings(canonical, opts.promql), ...burnRuleWarnings(canonical)];
+  const warnings = [...overrideWarnings, ...promqlWarnings(canonical, opts.promql), ...burnRuleWarnings(canonical)];
 
   // Merge the scaffold's own todos with the placeholder todos: ONE todo per artefact (symbol),
   // its fields listed, so `library.todo.<symbol>` is one annotation per parked artefact.
@@ -949,7 +1189,20 @@ export function instantiatePack(entryOrEntries, opts = {}) {
   ann['library.slis'] = toggles.slis.join(',');
   ann['library.params'] = JSON.stringify(Object.fromEntries(rows.filter(r => provided.has(r.key)).map(r => [r.key, values[r.key]])));
   ann['library.evidence'] = entries.map(en => `${en.id}:${en.evidence.status}`).join(',');
-  for (const f of fragments) for (const x of f.slis) ann[`library.evidence.slis.${x.id}`] = `${x.template.evidence.status}: ${x.template.evidence.source}`;
+  // Per SLI: the evidence as it stands (an edited expression drops the library's — honestly `custom`), and what
+  // was customised, so VERIFY and Discover can say "customised: objective, query" after the hand-off.
+  const sliProvenance = {};
+  for (const f of fragments) for (const x of f.slis) {
+    const evidence = evidenceOf(x);
+    ann[`library.evidence.slis.${x.id}`] = `${evidence.status}: ${evidence.source}${evidence.note ? ` — ${evidence.note}` : ''}`;
+    if (x.customised.length) ann[`library.customised.slis.${x.id}`] = x.customised.join(',');
+    sliProvenance[x.id] = {
+      library: x.custom ? { source: 'custom', entry: null, sli: null } : { source: `${x.entry.id}@${x.entry.version}`, entry: x.entry.id, sli: x.template.id },
+      evidence, customised: [...x.customised], custom: x.custom, aboveTier: x.aboveTier, ...(x.aboveTier ? { profileTier: x.template.minTier } : {}),
+    };
+  }
+  if (customDefs.length) ann['library.custom'] = customDefs.map(d => d.id).join(',');
+  if (overrides.size) ann['library.overrides'] = JSON.stringify(Object.fromEntries([...overrides].map(([id, ov]) => [id, { ...ov }])));
   ann['library.todoCount'] = String(todos.length);
   for (const t of todos) ann[`library.todo.${t.path}`] = t.what;
 
@@ -960,8 +1213,22 @@ export function instantiatePack(entryOrEntries, opts = {}) {
     source, tier, environment, toggles: { ...toggles },
     params: Object.fromEntries(rows.map(r => [r.key, values[r.key]])),
     placeholders: used,   // the placeholder params that landed in the pack at their default (each is a todo)
+    overrides: Object.fromEntries([...overrides].map(([id, ov]) => [id, { ...ov }])),   // the overrides applied (the warned-about ones are not here)
+    custom: customDefs.map(d => d.id),
+    slis: sliProvenance,
   };
   return { canonical, todos, provenance, warnings };
+}
+
+/**
+ * The evidence an SLI carries in the produced pack: the template's while the library's expression is what runs;
+ * `custom` once its PromQL was edited (the library's evidence is about the library's expression — it no longer
+ * applies) or when the SLI was written from scratch. The shape the studio's evidence vocabulary reads.
+ */
+function evidenceOf(x) {
+  if (x.custom) return { status: 'custom', source: 'written in the studio' };
+  if (PROMQL_FIELDS.some(k => x.customised.includes(k))) return { status: 'custom', source: 'edited in the studio', note: 'the library evidence no longer applies' };
+  return { status: x.template.evidence.status, source: x.template.evidence.source };
 }
 
 /**
