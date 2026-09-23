@@ -42,7 +42,7 @@ import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-
 import { initHost } from './host.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
-  BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, clampStep as clampBuildStep,
+  BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, clampStep as clampBuildStep, focusFallbackSelectors,
   buildDefineModel, buildCompileModel, buildVerifyModel, buildRailModel, placeholdersRemaining, retargetSlis,
 } from './build-model.mjs';
 import {
@@ -1999,6 +1999,8 @@ function paintBuildPending(on) {
 
 // Re-render the build view keeping the focused input focused (a typed name
 // or an inline param re-instantiates and repaints while the caret is in it).
+// When the input is gone — a filled todo disappears with its inputs — focus
+// moves to the nearest thing on the same slab rather than falling to <body>.
 function rerenderBuild() {
   if (state.mode !== 'build') return;
   const el = document.activeElement;
@@ -2008,10 +2010,15 @@ function rerenderBuild() {
   paintObservaActiveTab();
   renderMainView();
   if (key) {
-    const next = document.querySelector(`[data-focus-key="${CSS.escape(key)}"]`);
+    let next = document.querySelector(`[data-focus-key="${CSS.escape(key)}"]`);
+    let caret = sel;
+    if (!next) {
+      for (const s of focusFallbackSelectors(key)) { next = document.querySelector(s); if (next) break; }
+      caret = null;   // another input, or the slab's edge: the old caret means nothing there
+    }
     if (next) {
       next.focus({ preventScroll: true });
-      if (sel && typeof next.setSelectionRange === 'function') { try { next.setSelectionRange(sel[0], sel[1]); } catch { /* not a text input */ } }
+      if (caret && typeof next.setSelectionRange === 'function') { try { next.setSelectionRange(caret[0], caret[1]); } catch { /* not a text input */ } }
     }
   }
   window.scrollTo({ top: scrollY });

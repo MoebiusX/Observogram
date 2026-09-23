@@ -32,6 +32,7 @@ import {
   buildDefineModel, buildCompileModel, summarizeWarnings, buildClauseChecklist, buildRailModel,
   placeholdersRemaining, groupTodos, buildVerifyModel, reachableSliKeys, retargetSlis, splitBuildErrors, isStale, resolveBuiltins,
   buildStackModel, sliCandidates, artefactSymbol, todoLayer, clauseGhostLabel, clauseSubgroup, slabState, isDetailArtefact, CLAUSE_GHOSTS,
+  todoFocusSuffix, focusFallbackSelectors,
 } from '../studio/build-model.mjs';
 import {
   loadLibrary as loadLibraryApi, loadRequirements, loadTargets, instantiate, compilePreview, registerBuiltPack,
@@ -924,10 +925,11 @@ test('renderBuildStack draws the slabs headlessly in Discover\'s card markup: th
   assert.ok(html.includes('class="gating-chip" data-gating="warn"'));
   assert.ok(html.includes('class="card is-scaffold has-todo" data-artefact="ALR-01" data-symbol="alerting.routes[0]"'));
   assert.ok(!html.includes('benchmark-cta'), 'no benchmark action in Build');
-  // The todos on their slab, with the same param inputs as before (focus keys distinct per todo).
+  // The todos on their slab, with the same param inputs as before (focus keys distinct per todo: slab + todo path).
   assert.ok(html.includes('data-todo="alerting.routes[0]"'));
-  assert.ok(html.includes('data-focus-key="param:oncall_channel@L4alerting0"'));
-  assert.ok(html.includes('data-focus-key="param:kafka.bootstrap@L55"'));
+  assert.ok(html.includes('data-focus-key="param:oncall_channel@L4/alerting.routes[0]"'));
+  const l5Bootstrap = s.slabs.find(x => x.id === 'L5').todos.find(t => t.params.some(p => p.key === 'kafka.bootstrap'));
+  assert.ok(html.includes(`data-focus-key="param:kafka.bootstrap@L5/${l5Bootstrap.path}"`));
   assert.ok(html.includes('class="build-card-pin" data-todo-path="alerting.routes[0]"'));
   assert.ok(html.includes('<span class="build-todo-card" title="the artefact card this todo belongs to">ALR-01</span>'));
   assert.ok(html.includes('L4.alerting · Alerting'));
@@ -978,6 +980,25 @@ test('a card\'s todo pin reveals its todo on VERIFY and, where the todos are not
   assert.deepEqual(calls, [['verify', { todo: 'alerting.routes[0]' }]], 'COMPILE: the click goes to Verify, on that todo');
   // revealTodo on its own: false with nothing to reveal, so the caller falls back to the top of the step.
   assert.equal(revealTodo(null), false);
+});
+
+test('focus across a re-render: a todo\'s input keys by slab and path, so a filled todo takes only its own keys away; a vanished key falls back to its slab', () => {
+  assert.equal(todoFocusSuffix('L4', 'alerting.routes[0]'), 'L4/alerting.routes[0]');
+  const keysOf = (html) => [...html.matchAll(/data-focus-key="([^"]+)"/g)].map(m => m[1]);
+  const before = keysOf(buildStackHtml(stackOf()));
+  assert.equal(new Set(before).size, before.length, 'every input has its own key');
+  // Fill the first L2 todo: it disappears with its inputs — every other key is unchanged.
+  const gone = stackOf().slabs.find(x => x.id === 'L2').todos[0];
+  const after = keysOf(buildStackHtml(stackOf({ todos: FIXTURE.todos.filter(t => t.path !== gone.path) })));
+  const removed = before.filter(k => !after.includes(k));
+  assert.ok(removed.length >= 1 && removed.every(k => k.endsWith(`@L2/${gone.path}`)), `only the filled todo's keys go: ${removed.join(', ')}`);
+  assert.deepEqual(after, before.filter(k => !removed.includes(k)), 'the survivors keep their keys, in order');
+  // Where the controller sends focus when the key it held is gone: the same slab's first input, then its edge.
+  assert.deepEqual(focusFallbackSelectors(`param:${gone.params[0].key}@L2/${gone.path}`), ['.build-slab[data-layer="L2"] .build-param-input', '.build-slab[data-layer="L2"] .build-slab-edge']);
+  assert.deepEqual(focusFallbackSelectors('param:oncall_channel@L4/alerting.routes[0]'), ['.build-slab[data-layer="L4"] .build-param-input', '.build-slab[data-layer="L4"] .build-slab-edge']);
+  assert.deepEqual(focusFallbackSelectors('param:kafka.bootstrap'), [], 'a DEFINE param input has no slab');
+  assert.deepEqual(focusFallbackSelectors('name'), []);
+  assert.deepEqual(focusFallbackSelectors(null), []);
 });
 
 test('artefactCardHtml is the one card body: Discover\'s head, chip, pill, title, desc, foot — and the flags only the caller knows', () => {

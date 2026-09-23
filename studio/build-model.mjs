@@ -151,6 +151,30 @@ export function clampStep(build, wanted) {
   return 'define';
 }
 
+// ---------- focus across a re-render ----------
+
+/**
+ * The focus-key suffix of a todo's param inputs on the stack: the slab, then the todo's
+ * path (`L2/telemetry.backends[0]`) — stable while the todo survives a re-render. An index
+ * in the slab would shift when a filled todo disappears, and the same param may fill
+ * several todos, so an index once restored focus into another todo's input.
+ */
+export function todoFocusSuffix(layerId, path) {
+  return `${layerId}/${path}`;
+}
+
+/**
+ * Where focus goes when the input that held it is gone after a re-render (its todo was
+ * filled and disappeared): the selectors to try in order — the first param input left on
+ * the same slab, then the slab's edge — or none for a key that is not a stack input.
+ */
+export function focusFallbackSelectors(key) {
+  const m = /^param:[^@]+@([^/]+)\//.exec(String(key || ''));
+  if (!m) return [];
+  const slab = `.build-slab[data-layer="${m[1]}"]`;
+  return [`${slab} .build-param-input`, `${slab} .build-slab-edge`];
+}
+
 // ---------- the SLI selection across tiers ----------
 
 /** The SLI keys a tier reaches for the selection — what an explicit list may contain (the engine's defaultToggles). */

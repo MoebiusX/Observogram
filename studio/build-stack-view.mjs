@@ -22,6 +22,7 @@
 import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { artefactCardHtml } from './card-html.mjs';
+import { todoFocusSuffix } from './build-model.mjs';
 import { evidenceBadge, todoHtml, wireParamInputs, revealTodo } from './build-atoms.mjs';
 
 export const STATE_GLYPH = { pass: '✓', placeholder: '◐', fail: '✗', pending: '○', neutral: '·' };
@@ -91,12 +92,13 @@ function gridHtml(artefacts, ghosts, mode, { l4 = false } = {}) {
   return `<div class="section-grid${l4 ? ' section-grid-l4' : ''}">${artefacts.map(a => artefactCardHtmlInStack(a, mode)).join('')}${ghosts.map(ghostCardHtml).join('')}</div>`;
 }
 
-function todosHtml(slab, todos, keyPrefix) {
+// The inputs' focus keys are slab + todo path, so a survivor keeps its key when a filled todo disappears.
+function todosHtml(slab, todos) {
   if (!todos.length) return '';
   return `
     <div class="build-slab-todos">
       <div class="build-slab-todos-head">${plural(todos.length, 'todo')} on this layer <span>placeholders and scaffold defaults only the team can fill — fill one inline and the pack regenerates</span></div>
-      <ul class="build-todo-list">${todos.map((t, i) => todoHtml(t, `${keyPrefix}${i}`)).join('')}</ul>
+      <ul class="build-todo-list">${todos.map(t => todoHtml(t, todoFocusSuffix(slab.id, t.path))).join('')}</ul>
     </div>`;
 }
 
@@ -128,13 +130,13 @@ function slabHtml(slab, mode) {
       <div class="build-slab-sub subgroup${sg.offSections.length ? ' is-off' : ''}" data-subgroup="${escapeHtml(sg.key)}">
         <h4 class="subgroup-head">L4.${escapeHtml(sg.key)} · ${escapeHtml(sg.label)}${sg.offSections.length ? ` <span class="build-slab-off">${sg.offSections.map(s => `${escapeHtml(s)} off`).join(' · ')}</span>` : ''}</h4>
         ${gridHtml(visible(sg.artefacts), sg.ghosts, mode, { l4: true }) || `<div class="empty">${mode === 'define' ? (sg.ghosts.length ? '' : `no ${escapeHtml(sg.label.toLowerCase())} clause at this tier`) : `no ${escapeHtml(sg.label.toLowerCase())} declared`}</div>`}
-        ${mode === 'verify' ? todosHtml(slab, sg.todos, `${slab.id}${sg.key}`) : ''}
+        ${mode === 'verify' ? todosHtml(slab, sg.todos) : ''}
       </div>`).join('');
   } else {
     const grid = gridHtml(visible(slab.artefacts), slab.ghosts, mode);
     const empty = emptyText(slab, mode);
     body = grid || (empty ? `<div class="empty">${escapeHtml(empty)}</div>` : '');
-    if (mode === 'verify') body += todosHtml(slab, slab.todos, slab.id);
+    if (mode === 'verify') body += todosHtml(slab, slab.todos);
   }
   const detail = slab.counts.detail
     ? `<button type="button" class="section-expand-toggle build-slab-detail${slab.detailOpen ? ' is-on' : ''}" data-detail="${escapeHtml(slab.id)}" title="the detail artefacts Discover folds behind Expand — panels, queries, live evidence"><span class="section-expand-glyph" aria-hidden="true">${slab.detailOpen ? '⊟' : '⊞'}</span> ${slab.detailOpen ? 'Hide' : 'Expand'} detail <span class="section-expand-count">${slab.counts.detail}</span></button>`
