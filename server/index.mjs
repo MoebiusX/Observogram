@@ -56,6 +56,7 @@ import { validateMcpUrl, redactCredentials } from './mcp-url.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
 import { versionInfo } from './version.mjs';
+import { buildInfo, buildLabel } from './build-info.mjs';
 import { tenancyEnabled, orgsForUser, orgExists, runWithOrg, currentOrg, readOrgs, migrateFlatWorkspace } from './tenancy.mjs';
 import { setWorkspaceRootResolver } from '../tools/lib/journey.mjs';
 import { orgWorkspaceRoot } from './tenancy.mjs';
@@ -360,6 +361,20 @@ function overlaidCanonical(canonical, envName) {
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', false);
+
+// ---------- which build is this? ----------
+//
+// GET /api/version — the commit this process was started from
+// (server/build-info.mjs): { version, build, commit, branch, dirty,
+// date, source } plus the display `label`. Registered BEFORE the auth and
+// tenancy middlewares on purpose: it is public like the static shell (the
+// footer fills itself from it before anyone signs in) and holds nothing
+// secret. `no-store` so a proxy never pins an old build to a new process.
+app.get('/api/version', (req, res) => {
+  const info = buildInfo();
+  res.set('Cache-Control', 'no-store');
+  res.json({ ok: true, ...info, label: buildLabel(info) });
+});
 
 // ---------- write-route auth (VALUE_BACKLOG item 10B) ----------
 //

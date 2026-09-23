@@ -196,6 +196,13 @@ request and are never stored server-side. Registered packs and the deploy
 audit live in the `.observogram/` workspace (`OBSERVOGRAM_WORKSPACE`
 relocates it).
 
+Two read routes answer without a session in every posture: `/healthz`
+(probes) and `GET /api/version` — version, build, commit, branch, dirty,
+date, shallow, source — which the studio footer reads before anyone signs
+in. Neither carries a secret, but the second does tell an anonymous client
+which branch a hosted studio runs and whether its tree was dirty; see
+[Which Build Am I Running?](#which-build-am-i-running).
+
 Useful local checks:
 
 ```bash
@@ -211,9 +218,16 @@ npm run test
 The whole app is one Express process, so the container story is one image:
 
 ```bash
+npm run build:stamp                    # build.json: the commit the image is built from (the image has no .git)
 docker build -t observogram:0.4.0 .
-docker run --rm -p 8000:8000 observogram:0.4.0
+docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.4.0
 ```
+
+The image binds `0.0.0.0`, so it needs a seeded sign-in (or
+`OBSERVOGRAM_API_TOKEN`) to start — see Security Posture above. Its workspace
+is `/app/.observogram` (owned by the `node` user the container runs as);
+mount a volume there, or point `OBSERVOGRAM_WORKSPACE` at one, to keep users
+and packs across containers.
 
 Kubernetes manifests (Deployment + Service + Ingress, applied with Kustomize)
 live in [`deploy/k8s/`](deploy/k8s/README.md):
@@ -222,6 +236,38 @@ live in [`deploy/k8s/`](deploy/k8s/README.md):
 kubectl apply -k deploy/k8s            # the studio
 kubectl apply -k deploy/k8s-journeys   # + the opt-in journeys CronJob and its workspace PVC (deploy/k8s/README.md)
 ```
+
+### Which Build Am I Running?
+
+There is no build step — the studio is served from the checkout — so the
+identity of a running Observogram is the commit it was started from, and
+one reader (`server/build-info.mjs`) answers everywhere:
+
+- the studio footer: `v0.4.0 · build 975 · 9c4f827 · develop` (hover for
+  the commit date and the source), the same label on Advanced → About;
+- `packc --version` prints that label (`--version --json` the fields);
+- `GET /api/version` returns `{ version, build, commit, branch, dirty, date,
+  shallow, source, label }` — readable without a session (Security
+  Posture), `Cache-Control: no-store`, so a proxy never pins an old build
+  to a new process; `/healthz` keeps its composite `build: "975.9c4f827"`.
+
+The **build number is the commit count on the branch** (`git rev-list
+--count HEAD`): it climbs with every commit, so two studios can be compared
+at a glance; the **sha** is what makes it unique (two branches can share a
+count); **dirty** means git listed uncommitted or untracked files
+(`git status --porcelain`) when the process started — the code running is
+not exactly that commit. For a copy without
+`.git` (a tarball, a container image) run `npm run build:stamp` in the
+checkout first: it writes a git-ignored `build.json` that the reader falls
+back to (`source: file`; run again inside such a copy it keeps that file —
+it is the copy's only identity); with neither, the answer is package.json's
+version and `build unknown` (`source: package`) — never a guess.
+
+A **shallow clone** (`git clone --depth 1`; `actions/checkout` fetches one
+commit by default) has no history to count, so it reads `build unknown ·
+<sha> · <branch> · shallow` (`shallow: true`) rather than the clone depth,
+and `npm run build:stamp` refuses it (exit 2) until the history is there —
+`fetch-depth: 0` in the workflow, `git fetch --unshallow` locally.
 
 ## Common Operations
 
@@ -490,6 +536,7 @@ be tested without a browser. The view needs no pack loaded.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/healthz` | Health and vendored spec version |
+| `GET` | `/api/version` | Which build is this: version, build (commit count), commit, branch, dirty, date, shallow, source, label — public, no-store |
 | `GET` | `/api/packs` | In-memory and catalog pack registry |
 | `GET` | `/api/examples` | Bundled example packs |
 | `GET` | `/api/references` | Curated catalogue reference packs |
