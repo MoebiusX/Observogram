@@ -591,7 +591,7 @@ be tested without a browser. The view needs no pack loaded.
 | `GET` | `/api/packs/:id/compile-catalog` | Per-artifact compile tree |
 | `GET` | `/api/packs/:id/compile-artifact` | Compile one artifact or group |
 | `POST` | `/api/validate` | Validate and register uploaded YAML/JSON (`summary.onPlaceholder` when the pack carries `library.todo.*` annotations) |
-| `GET` | `/api/library` | The pack library index (`entries`, the scaffold `params`, the files that did not load) — the BUILD journey's SELECT step |
+| `GET` | `/api/library` | The pack library index (`entries`, `scaffoldParams`, `errors`: the files that did not load) — the BUILD journey's SELECT step |
 | `GET` | `/api/library/requirements/:tier` | The conformance clauses that apply at a tier (the rubric filtered by `minTier`; 400 names the known tiers) |
 | `GET` | `/api/library/:id` | One library entry: its index row plus the full SLI templates and params (404 names the known entries) |
 | `POST` | `/api/library/instantiate` | `{ entries, name, tier, environment, owners, params, toggles }` → `canonical`, `canonicalYaml`, `todos`, `provenance`, `warnings`, `schemaErrors`, `summary`, `conformance` (an engine usage error is 400, never 500) |
