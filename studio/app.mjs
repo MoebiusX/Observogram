@@ -1567,7 +1567,8 @@ function goHome() {
 
 // ============================================================
 // THE FIRST DECISION IS ABOUT THE PACK (docs/BUILD_JOURNEY.md "Where it
-// starts"): a service may already exist without one. Both landings — the
+// starts"): a service may already exist without one — Build comes first in time,
+// Check is the common case. Both landings — the
 // signed-in service gate and the local hero — open with the same question,
 // and both branches join at "Pack available in Discover".
 // ============================================================
@@ -1576,17 +1577,17 @@ function homeChoiceHtml({ check }) {
     <div class="home-choice" role="group" aria-label="What would you like to do?">
       <p class="home-choice-q">What would you like to do?</p>
       <div class="home-choice-cards">
+        <button type="button" class="home-choice-card is-build" id="home-choice-build">
+          <span class="home-choice-key" aria-hidden="true">⬡</span>
+          <span class="home-choice-title">Build a new pack</span>
+          <span class="home-choice-sub">for a service that has no pack yet — name it, choose its tier, pick the products it runs on or an archetype</span>
+          <span class="home-choice-path">Define · Compile · Verify</span>
+        </button>
         <button type="button" class="home-choice-card is-check" id="home-choice-check">
           <span class="home-choice-key" aria-hidden="true">◎</span>
           <span class="home-choice-title">Check an existing service or pack</span>
           <span class="home-choice-sub">${escapeHtml(check)}</span>
           <span class="home-choice-path">Discover · Diagnose · Remediate</span>
-        </button>
-        <button type="button" class="home-choice-card is-build" id="home-choice-build">
-          <span class="home-choice-key" aria-hidden="true">⬡</span>
-          <span class="home-choice-title">Build a new pack</span>
-          <span class="home-choice-sub">for a service that has no pack yet — name it, choose its tier, pick the products it runs on or an archetype</span>
-          <span class="home-choice-path">Define · Compile · Verify, then Discover</span>
         </button>
       </div>
     </div>`;
