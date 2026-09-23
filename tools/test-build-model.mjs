@@ -27,7 +27,7 @@ import { instantiatePack, libraryIndex, tierRequirements, validationSummary, SCA
 import { loadLibrary, findEntry } from '../server/library.mjs';
 import { parsePromqlDependencies as lezer } from './lib/promql-lezer.mjs';
 import {
-  BUILD_STEPS, TIERS, SECTION_TOGGLES, serviceSlug, isValidServiceName, parseOwners, sliKey, paramKey,
+  BUILD_STEPS, TIERS, SECTION_TOGGLES, MAX_SERVICE_SLUG, LONGEST_DERIVED_SUFFIX, serviceSlug, isValidServiceName, parseOwners, sliKey, paramKey,
   selectValid, buildStepReachability, clampStep, paramRows, effectiveParams, instantiateBody,
   buildSelectModel, buildGenerateModel, summarizeWarnings, buildClauseChecklist, buildRailModel,
   placeholdersRemaining, groupTodos, buildValidateModel, reachableSliKeys, retargetSlis, splitBuildErrors, isStale, resolveBuiltins,
@@ -135,6 +135,16 @@ test('serviceSlug / isValidServiceName mirror the engine (fileSlug + the slug ru
   assert.equal(isValidServiceName('x'), false, 'one character does not slug to a valid name (the engine refuses it)');
   assert.equal(isValidServiceName(''), false);
   assert.equal(isValidServiceName('9lives'), false);
+  // The bound: the schema's 64-character Slug minus the longest suffix the scaffold appends
+  // (measured: a 46-character name fails `$.spec.dashboards[2].id: length 65 > maxLength 64`).
+  assert.equal(LONGEST_DERIVED_SUFFIX, '-deployment-overlay');
+  assert.equal(MAX_SERVICE_SLUG, 64 - '-deployment-overlay'.length);
+  assert.equal(MAX_SERVICE_SLUG, 45);
+  assert.equal(isValidServiceName('a'.repeat(MAX_SERVICE_SLUG)), true, '45 once slugged is accepted');
+  assert.equal(isValidServiceName('a'.repeat(MAX_SERVICE_SLUG + 1)), false, '46 is refused');
+  const tooLong = buildSelectModel({ build: draft({ name: 'a'.repeat(MAX_SERVICE_SLUG + 1) }), library: LIBRARY });
+  assert.equal(tooLong.valid, false);
+  assert.ok(tooLong.errors.some(e => e.includes('at most 45 characters') && e.includes('is 46')), tooLong.errors.join(' | '));
   assert.deepEqual(parseOwners('team-orders, sre-platform'), ['team-orders', 'sre-platform']);
   assert.deepEqual(parseOwners(''), []);
   assert.equal(sliKey('kafka', 'broker_availability', true), 'kafka_broker_availability');

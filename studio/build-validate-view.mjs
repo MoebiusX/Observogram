@@ -128,7 +128,7 @@ export function renderBuildValidate(container, model, host = appHost) {
           ready: 'Open in Discover registers the pack the way an upload is registered; its todos travel with it.',
           error: 'The last regeneration failed — fix the rejected value above; the pack shown is the previous one and is not handed off.',
           promql: 'A PromQL warning blocks the hand-off — fix the param first.',
-          schema: 'The pack does not validate against the schema as toggled — switch the missing section back on.',
+          schema: 'The pack does not validate against the schema — see the schema card.',
         })[model.handoff]}</span>
         <span class="build-actions-right">
           <button type="button" class="ctrl-btn" id="build-yaml-download">download pack yaml</button>

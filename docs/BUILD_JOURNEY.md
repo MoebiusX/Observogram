@@ -272,7 +272,10 @@ says whether a pack carries any.
 `studio/app.mjs` (the same `{ id, n, label, sub, techName, tagline, accent }` shape and the
 same three accents), rendered by the one header renderer — the nav is rebuilt only when
 the active set changes, a step card is reachable when the previous step's inputs are valid
-(`buildStepReachability`), the current step is highlighted like today's active tab. A usage
+(`buildStepReachability`), the current step is highlighted like today's active tab. SELECT refuses a service name
+longer than 45 characters once slugged (`MAX_SERVICE_SLUG`: the schema's 64-character Slug
+minus the longest suffix the scaffold appends, tier-1's `-deployment-overlay` board id), so
+a name that would fail the schema two steps later is stopped where it is typed. A usage
 error from the engine (a param value it refuses, a selection with no SLI left) keeps the
 previous pack on screen, marked stale, with the reason on the row that carries the value
 (`param <key>: …` → the row on Select and under its todo on Validate); Validate stays

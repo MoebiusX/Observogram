@@ -14,7 +14,7 @@
 
 import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
-import { BUILD_STEPS } from './build-model.mjs';
+import { BUILD_STEPS, MAX_SERVICE_SLUG } from './build-model.mjs';
 
 const EVIDENCE_LABEL = {
   'recorded-live': 'recorded live', 'reference-pack': 'reference pack', 'upstream-docs': 'upstream docs', semconv: 'semconv',
@@ -112,7 +112,7 @@ export function renderBuildSelect(container, model, host = appHost) {
         <label class="build-field">
           <span class="build-field-key">Service name</span>
           <input id="build-name" type="text" data-focus-key="name" value="${escapeHtml(model.name)}" placeholder="orders-api" autocomplete="off" spellcheck="false">
-          <span class="build-field-hint">${model.name && model.slug !== model.name ? `slugs to <code>${escapeHtml(model.slug)}</code>` : 'metadata.name and the metric prefix of every recording rule'}</span>
+          <span class="build-field-hint">${model.name && model.slug !== model.name ? `slugs to <code>${escapeHtml(model.slug)}</code>` : `metadata.name and the metric prefix of every recording rule — at most ${MAX_SERVICE_SLUG} characters once slugged`}</span>
         </label>
         <label class="build-field">
           <span class="build-field-key">Owners</span>

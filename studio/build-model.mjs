@@ -53,12 +53,23 @@ export const ARTEFACT_GROUPS = [
 // ---------- small helpers (mirrors of the engine's rules, spelled once) ----------
 
 const SLUG_RE = /^[a-z][a-z0-9_-]*[a-z0-9]$/;
+/**
+ * The schema's Slug is at most 64 characters and the longest suffix the scaffold appends
+ * to the service slug is tier-1's `-deployment-overlay` board id (19), so a slug longer
+ * than 45 passes SELECT and fails the schema two steps later (measured: 46 characters →
+ * `$.spec.dashboards[2].id: length 65 > maxLength 64`). Refused where the name is typed.
+ */
+export const LONGEST_DERIVED_SUFFIX = '-deployment-overlay';
+export const MAX_SERVICE_SLUG = 64 - LONGEST_DERIVED_SUFFIX.length;
 /** tools/lib/slug.mjs fileSlug: what the engine makes of a typed service name. */
 export function serviceSlug(name) {
   if (typeof name !== 'string') return '';
   return name.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
 }
-export function isValidServiceName(name) { return SLUG_RE.test(serviceSlug(name)); }
+export function isValidServiceName(name) {
+  const slug = serviceSlug(name);
+  return SLUG_RE.test(slug) && slug.length <= MAX_SERVICE_SLUG;
+}
 /** "team-a, team-b" → ['team-a', 'team-b'] (commas or whitespace). */
 export function parseOwners(text) {
   return String(text || '').split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
@@ -236,6 +247,7 @@ export function buildSelectModel({ build, library, requirements = {} }) {
   const name = build?.name || '';
   const errors = [];
   if (!name.trim()) errors.push('a service name');
+  else if (serviceSlug(name).length > MAX_SERVICE_SLUG) errors.push(`a service name of at most ${MAX_SERVICE_SLUG} characters once slugged (‘${serviceSlug(name)}’ is ${serviceSlug(name).length})`);
   else if (!isValidServiceName(name)) errors.push(`a service name that slugs (‘${name}’ → ‘${serviceSlug(name)}’ is not one)`);
   if (!selected.size) errors.push('at least one library entry');
   const tiers = TIERS.map(tier => {
