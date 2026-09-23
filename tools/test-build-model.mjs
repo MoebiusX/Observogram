@@ -1080,6 +1080,29 @@ test('a Scaffold card keeps its focus ring: the dashed frame is an outline, so a
   }
 });
 
+test('the slab verdict reads at WCAG AA in both themes: each state colour the rules name, on the surface the pill sits on', () => {
+  const tokensOf = (block) => { const m = CSS_TEXT.match(new RegExp(`(?:^|\\n)${block}\\s*\\{([\\s\\S]*?)\\n\\}`)); assert.ok(m, `${block} token block`); return Object.fromEntries([...m[1].matchAll(/--([\w-]+):\s*(#[0-9a-fA-F]{6})\b/g)].map(t => [t[1], t[2]])); };
+  const themes = { light: tokensOf(':root'), dark: tokensOf('\\[data-theme="dark"\\]') };
+  const lum = (hex) => { const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(v => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const contrast = (a, b) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+  // The pill's surface and each state's colour, read from the rules themselves.
+  const pill = cssRule('.build-slab-verdict');
+  const surface = pill.match(/background:\s*var\(--([\w-]+)\)/)?.[1];
+  assert.equal(surface, 'card', 'the verdict sits on the card surface, not on the layer tint');
+  assert.match(pill, /font:\s*600 11px/, 'small bold text: the 4.5:1 threshold applies');
+  for (const state of ['pass', 'placeholder', 'fail', 'pending', 'neutral']) {
+    const token = cssRule(`.build-slab-verdict.is-${state}`)?.match(/color:\s*var\(--([\w-]+)\)/)?.[1];
+    assert.ok(token, `.is-${state} names a token`);
+    for (const [name, t] of Object.entries(themes)) {
+      assert.ok(t[token] && t[surface], `${name}: --${token} and --${surface} are hex tokens`);
+      const ratio = contrast(t[token], t[surface]);
+      assert.ok(ratio >= 4.5, `${name}: ${state} (--${token} ${t[token]}) on --${surface} ${t[surface]} is ${ratio.toFixed(2)}:1, below 4.5`);
+    }
+  }
+  // The ratio the review measured, for the record: the old pending grey on the light L5 tint fails.
+  assert.ok(contrast(themes.light['ink-5'], themes.light['L5-tint']) < 3);
+});
+
 test('artefactCardHtml is the one card body: Discover\'s head, chip, pill, title, desc, foot — and the flags only the caller knows', () => {
   const bak = FIXTURE.adapted.layers.L2.find(a => a.id === 'BAK-01');
   const plain = artefactCardHtml(bak);
