@@ -1427,6 +1427,61 @@ try {
   assert(aboveSlo && aboveSlo.id === 'kafka_controller_election_rate_99' && aboveSlo.objective === 0.99 && aboveSlo.window === '7d', 'the above-tier SLI carries the SLO of its own (tier-1) profile', JSON.stringify(aboveSlo));
   assert(instAbove.provenance.slis.kafka_controller_election_rate.aboveTier === true && instAbove.provenance.slis.kafka_controller_election_rate.profileTier === 'tier-1', 'provenance.slis says which profile an above-tier SLI starts from', JSON.stringify(instAbove.provenance.slis.kafka_controller_election_rate));
   assert(instAbove.summary.must.passed === 15 && instAbove.schemaErrors.length === 0, 'the rubric still grades the pack at tier-2 and the schema holds', JSON.stringify([instAbove.summary.must, instAbove.schemaErrors]));
+  // Overrides: the objective changes the SLO id and the objective, the window the SLO's window; provenance lists the fields.
+  const instOv = await (await postLib('/api/library/instantiate', { ...instBody, overrides: { kafka_produce_latency_p99: { objective: 0.995, window: '7d' } } })).json();
+  const ovSlo = instOv.ok && instOv.canonical.spec.slos.find(x => x.sli === 'kafka_produce_latency_p99');
+  assert(ovSlo && ovSlo.id === 'kafka_produce_latency_p99_99_5' && ovSlo.objective === 0.995 && ovSlo.window === '7d', 'an override of the objective and the window changes the SLO id, objective and window', JSON.stringify(ovSlo));
+  assert(instOv.provenance.slis.kafka_produce_latency_p99.customised.join() === 'objective,window' && instOv.provenance.slis.kafka_produce_latency_p99.evidence.status === 'recorded-live', 'provenance.customised lists the fields; the library evidence stays for an unedited expression', JSON.stringify(instOv.provenance.slis.kafka_produce_latency_p99));
+  assert(instOv.canonical.metadata.annotations['library.customised.slis.kafka_produce_latency_p99'] === 'objective,window' && instOv.schemaErrors.length === 0 && instOv.warnings.length === 0, 'the customised annotation is on the pack; schema valid; no warning', JSON.stringify([instOv.canonical.metadata.annotations['library.customised.slis.kafka_produce_latency_p99'], instOv.schemaErrors, instOv.warnings]));
+  // An edited query replaces the library's PromQL and drops its evidence to custom.
+  const instQ = await (await postLib('/api/library/instantiate', { ...instBody, overrides: { kafka_produce_latency_p99: { query: 'up' } } })).json();
+  const qSli = instQ.ok && instQ.canonical.spec.slis.find(x => x.id === 'kafka_produce_latency_p99');
+  assert(qSli && qSli.query === 'up' && qSli.threshold === 0.1, 'an overridden query replaces the library expression, the bound stays', JSON.stringify(qSli));
+  const qProv = instQ.provenance.slis.kafka_produce_latency_p99;
+  assert(qProv.evidence.status === 'custom' && qProv.evidence.source === 'edited in the studio' && qProv.evidence.note === 'the library evidence no longer applies' && qProv.customised.join() === 'query', 'an edited query drops the evidence to custom and provenance.customised is [query]', JSON.stringify(qProv));
+  assert(instQ.canonical.metadata.annotations['library.evidence.slis.kafka_produce_latency_p99'] === 'custom: edited in the studio — the library evidence no longer applies', 'the evidence annotation says so on the pack', instQ.canonical.metadata.annotations['library.evidence.slis.kafka_produce_latency_p99']);
+  // A custom ratio SLI lands in every section the scaffold derives, and the schema holds.
+  const checkout = { id: 'checkout_success', type: 'ratio', good: 'sum(rate(checkout_ok_total[5m]))', total: 'sum(rate(checkout_total[5m]))', objective: 0.999, window: '30d' };
+  const instC = await (await postLib('/api/library/instantiate', { ...instBody, custom: [checkout] })).json();
+  assert(instC.ok === true && instC.canonical.spec.slis.some(x => x.id === 'checkout_success' && x.good === checkout.good), 'a custom SLI is in slis', JSON.stringify(instC.canonical?.spec?.slis?.map(x => x.id)));
+  assert(instC.canonical.spec.slos.some(x => x.id === 'checkout_success_99_9' && x.sli === 'checkout_success'), 'a custom SLI gets its SLO (sloIdFor)', JSON.stringify(instC.canonical.spec.slos.map(x => x.id)));
+  assert(instC.canonical.spec.queries.recording_rules.some(r => r.expr === 'ref:slis.checkout_success' && r.name === 'orders_api:checkout_success:ratio_5m'), 'a custom SLI gets its recording rule');
+  assert(instC.canonical.spec.policy.burn_rate_alerts.some(a => a.slo === 'checkout_success_99_9' && a.windows.length === 2 && a.windows[0].factor === 14), 'a custom SLI gets the default availability burn profile');
+  assert(instC.canonical.spec.dashboards[0].panel_bindings.some(p => p.binds_to === 'slis.checkout_success') && instC.canonical.spec.dashboards[0].panel_bindings.some(p => p.binds_to === 'slos.checkout_success_99_9'), 'a custom SLI is bound on the overview board');
+  assert(instC.schemaErrors.length === 0 && instC.warnings.length === 0 && instC.summary.must.passed === 15, 'a pack with a custom SLI validates against the schema and grades as before', JSON.stringify([instC.schemaErrors, instC.warnings, instC.summary.must]));
+  assert(instC.provenance.slis.checkout_success.custom === true && instC.provenance.slis.checkout_success.library.source === 'custom' && instC.provenance.custom.join() === 'checkout_success', 'provenance marks the custom SLI', JSON.stringify(instC.provenance.slis.checkout_success));
+  assert(instC.adapted.layers.L1.some(a => a.title === 'checkout_success'), 'the adapter projects the custom SLI onto L1 like any SLI');
+  // The 400s: an unknown field, a bad window, a polluting key, a duplicate custom id, too many custom SLIs, too many overrides, a wrong shape.
+  const copyBad = [
+    [{ ...instBody, overrides: { kafka_produce_latency_p99: { nope: 1 } } }, /^override kafka_produce_latency_p99\.nope: unknown field/, 'an unknown override field'],
+    [{ ...instBody, overrides: { kafka_produce_latency_p99: { window: '30x' } } }, /^override kafka_produce_latency_p99\.window: the window is one of 7d \| 28d \| 30d \| 90d/, 'a bad window'],
+    [{ ...instBody, overrides: JSON.parse('{"__proto__": {"objective": 0.5}}') }, /^override __proto__: not an SLI id/, 'a __proto__ key'],
+    [{ ...instBody, custom: [checkout, checkout] }, /^custom checkout_success\.id: declared twice/, 'a duplicate custom id'],
+    [{ ...instBody, custom: Array.from({ length: 17 }, (_, i) => ({ ...checkout, id: `c_${i}` })) }, /^custom: at most 16 custom SLIs \(17 given\)/, '17 custom SLIs'],
+    [{ ...instBody, overrides: Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`o_${i}`, { objective: 0.5 }])) }, /^overrides: at most 64 entries \(65 given\)/, '65 overrides'],
+    [{ ...instBody, overrides: ['x'] }, /^overrides: expected an object/, 'overrides as a list'],
+    [{ ...instBody, custom: { id: 'x' } }, /^custom: expected a list/, 'custom as an object'],
+    [{ ...instBody, custom: [{ ...checkout, comparison: '<' }] }, /comparison: not a field: an ObservabilityPack v1\.2 threshold is an upper bound/, 'comparison is not a field'],
+  ];
+  for (const [body, re, label] of copyBad) {
+    const r = await postLib('/api/library/instantiate', body);
+    const j = await r.json();
+    assert(r.status === 400 && j.ok === false && Array.isArray(j.errors) && re.test(j.errors.join(' ')), `instantiate copies usage error (${label}) → 400 { ok:false, errors }`, `${r.status} ${JSON.stringify(j.errors)}`, `400 ${re}`);
+  }
+  // 16 custom SLIs and 64 overrides are exactly the caps: accepted (the overrides for absent SLIs are warnings).
+  const atCap = await (await postLib('/api/library/instantiate', { ...instBody, custom: Array.from({ length: 16 }, (_, i) => ({ ...checkout, id: `c_${i}` })), overrides: Object.fromEntries(Array.from({ length: 64 }, (_, i) => [`o_${i}`, { objective: 0.5 }])) })).json();
+  assert(atCap.ok === true && atCap.canonical.spec.slis.length === 7 + 16 && atCap.warnings.filter(w => w.kind === 'override').length === 64, 'exactly the caps are accepted; an override for an absent SLI is a warning of kind override', JSON.stringify([atCap.ok, atCap.canonical?.spec?.slis?.length, atCap.warnings?.length]));
+  // compile and register take the instantiate inputs in place of a canonical: one request for a customised pack.
+  const compFromInputs = await (await postLib('/api/library/compile', { ...instBody, custom: [checkout], target: 'prometheus-rules' })).json();
+  assert(compFromInputs.ok === true && /checkout_success_99_9_burn_14x_5m_1h/.test(compFromInputs.artifact.content), 'POST /api/library/compile with the instantiate inputs compiles the customised pack', JSON.stringify(compFromInputs.ok));
+  const compBadInputs = await postLib('/api/library/compile', { ...instBody, overrides: { kafka_produce_latency_p99: { window: '30x' } }, target: 'prometheus-rules' });
+  const compBadBody = await compBadInputs.json();
+  assert(compBadInputs.status === 400 && /override kafka_produce_latency_p99\.window/.test(compBadBody.error || ''), 'compile from bad inputs → 400 with the engine\'s message', `${compBadInputs.status} ${compBadBody.error}`);
+  const regFromInputs = await (await postLib('/api/library/register', { ...instBody, overrides: { kafka_produce_latency_p99: { objective: 0.995 } } })).json();
+  assert(regFromInputs.ok === true && /^uploaded-orders-api-[0-9a-f]{8}$/.test(regFromInputs.registered?.id || '') && regFromInputs.registered.source === 'library:kafka,http-service@tier-2', 'POST /api/library/register with the instantiate inputs registers the customised pack', JSON.stringify(regFromInputs.registered));
+  assert(regFromInputs.adapted.layers.L1.some(a => a.title === 'kafka_produce_latency_p99_99_5'), 'the registered pack carries the overridden SLO id');
+  const regBadInputs = await postLib('/api/library/register', { ...instBody, custom: [checkout, checkout] });
+  assert(regBadInputs.status === 400 && /declared twice/.test((await regBadInputs.json()).errors.join(' ')), 'register from bad inputs → 400 with the engine\'s message');
   // Usage errors are 400 { ok:false, errors }, never 500.
   const badCases = [
     [{ ...instBody, entries: ['nope'] }, /unknown library entry "nope"/, 'unknown entry'],
