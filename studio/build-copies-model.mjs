@@ -114,7 +114,9 @@ const FIELD_META = {
 export function fieldsForType(type) {
   return type === 'threshold' ? ['objective', 'window', 'threshold', 'unit', 'query', 'description'] : ['objective', 'window', 'good', 'total', 'description'];
 }
-const display = (field, v) => (v === null || v === undefined ? '' : field === 'objective' ? percentText(v) : String(v));
+// A number as the face shows it (the objective as a percent); text that did not parse ('abc', '99,5') as typed, so the
+// input keeps what the user wrote beside the engine's error instead of going blank or reading 'NaN'.
+const display = (field, v) => (v === null || v === undefined ? '' : field === 'objective' && typeof v === 'number' ? percentText(v) : String(v));
 
 /**
  * editFaceModel(item, { errors, readOnly }) → the Customise face of a rolodex card: the fields the SLI's type
@@ -201,24 +203,36 @@ export function customFormModel(draft, { errors = null, existingKeys = [] } = {}
   };
 }
 
-/** The definition the engine takes from the form: the percent typed → the ratio, the bound → a number, the empty fields left out. */
+/**
+ * A number field as typed → the number the engine takes (the objective's percent → the ratio), or the trimmed text
+ * itself when it does not parse ('abc', '99,5'): never NaN, which JSON turns into null — the engine then answered
+ * `got null`, the input went blank or read 'NaN', the card printed 'NaN%', a second bad entry equalled the first
+ * and was ignored, and the persisted draft carried `objective: null` (measured live). With the text kept, the
+ * engine answers `got "abc"`, the input keeps what was typed and every new attempt is a new value.
+ */
+export function numberOrText(field, text) {
+  const t = String(text ?? '').trim();
+  const n = field === 'objective' ? ratioOf(t) : Number(t);
+  return Number.isFinite(n) ? n : t;
+}
+
+/** The definition the engine takes from the form: the percent typed → the ratio, the bound → a number (the text as typed when it is not one), the empty fields left out. */
 export function customDefFromDraft(draft) {
   const d = normalizeDraft(draft);
-  const def = { id: d.id, type: d.type, objective: ratioOf(d.objective), window: d.window };
-  if (d.type === 'ratio') { def.good = d.good; def.total = d.total; } else { def.query = d.query; def.threshold = Number(String(d.threshold).trim()); if (String(d.unit).trim()) def.unit = d.unit.trim(); }
+  const def = { id: d.id, type: d.type, objective: numberOrText('objective', d.objective), window: d.window };
+  if (d.type === 'ratio') { def.good = d.good; def.total = d.total; } else { def.query = d.query; def.threshold = numberOrText('threshold', d.threshold); if (String(d.unit).trim()) def.unit = d.unit.trim(); }
   if (String(d.description).trim()) def.description = d.description.trim();
   return def;
 }
 
 /**
  * An edit-face value as the engine takes it for the field: the percent → the ratio, the bound → a number, a
- * string trimmed; '' means "clear" (the caller removes the override). NaN for a number that does not parse
- * (the caller passes it on: the engine's usage error names the field on the card).
+ * string trimmed; '' means "clear" (the caller removes the override). Text that is not a number stays text
+ * (numberOrText): the caller passes it on and the engine's usage error names the field and the value on the card.
  */
 export function fieldValueFor(field, text) {
   const t = String(text ?? '').trim();
   if (t === '') return null;
-  if (field === 'objective') return ratioOf(t);
-  if (field === 'threshold') return Number(t);
+  if (field === 'objective' || field === 'threshold') return numberOrText(field, t);
   return field === 'window' ? t : String(text);
 }

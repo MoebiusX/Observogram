@@ -40,7 +40,7 @@ import {
 } from '../studio/build-model.mjs';
 import {
   OVERRIDE_FIELDS, SLO_WINDOWS, PROMQL_FIELDS, overrideFor, customisedFields, promqlEdited, effectiveSli, customEffective, percentText, ratioOf, slugifySliId,
-  fieldsForType, editFaceModel, normalizeDraft, customFormModel, customDefFromDraft, fieldValueFor,
+  fieldsForType, editFaceModel, normalizeDraft, customFormModel, customDefFromDraft, fieldValueFor, numberOrText,
 } from '../studio/build-copies-model.mjs';
 import {
   loadLibrary as loadLibraryApi, loadRequirements, loadTargets, instantiate, compilePreview, registerBuiltPack,
@@ -1536,7 +1536,18 @@ test('the edit face model: the fields per type with value, library default, over
   // The conversions the face and the controller share.
   assert.deepEqual([percentText(0.995), percentText(0.9999), percentText(0.99), percentText(null)], ['99.5', '99.99', '99', '']);
   assert.deepEqual([ratioOf('99.5'), ratioOf('99.5 %'), ratioOf('abc')], [0.995, 0.995, NaN]);
-  assert.deepEqual([fieldValueFor('objective', '99.5'), fieldValueFor('threshold', '0.25'), fieldValueFor('window', ' 7d '), fieldValueFor('query', 'up'), fieldValueFor('objective', ''), fieldValueFor('threshold', 'x')], [0.995, 0.25, '7d', 'up', null, NaN]);
+  assert.deepEqual([fieldValueFor('objective', '99.5'), fieldValueFor('threshold', '0.25'), fieldValueFor('window', ' 7d '), fieldValueFor('query', 'up'), fieldValueFor('objective', '')], [0.995, 0.25, '7d', 'up', null]);
+  // Text that is not a number stays text — never NaN (JSON null: the engine said `got null`, the input went blank or read 'NaN', the card 'NaN%', a second bad entry was ignored).
+  assert.deepEqual([fieldValueFor('threshold', 'x'), fieldValueFor('objective', 'abc'), fieldValueFor('objective', ' 99,5 '), numberOrText('threshold', 'abc'), numberOrText('objective', '99.5')], ['x', 'abc', '99,5', 'abc', 0.995]);
+  assert.deepEqual(customDefFromDraft({ name: 'X', good: 'a', total: 'b', objective: 'abc', window: '30d' }).objective, 'abc');
+  assert.deepEqual(customDefFromDraft({ name: 'X', type: 'threshold', query: 'q', threshold: '1,5', objective: '99', window: '30d' }).threshold, '1,5');
+  const nanErr = (over) => { try { instantiateInProcess({ ...INPUTS, ...over }); } catch (e) { return e.message; } return null; };
+  assert.match(nanErr({ overrides: { kafka_produce_latency_p99: { objective: fieldValueFor('objective', 'abc') } } }), /^override kafka_produce_latency_p99\.objective: the objective is a number in \(0, 1\).*got "abc"$/, 'the engine names the value as typed');
+  assert.match(nanErr({ custom: [customDefFromDraft({ name: 'Xy', good: 'a', total: 'b', objective: '99,5', window: '30d' })] }), /^custom xy\.objective: .*got "99,5"$/);
+  // The face keeps the typed text in the input, beside the error; the card reads '—', never 'NaN%'.
+  const typedBad = rolodexItems({ build: copiesDraft({ overrides: { kafka_produce_latency_p99: { objective: 'abc' } } }), library: LIBRARY }).find(i => i.key === 'kafka_produce_latency_p99');
+  assert.deepEqual([typedBad.objectiveLabel, editFaceModel(typedBad, { errors: { objective: 'the objective is a number in (0, 1) — the ratio the pack stores (0.995 for 99.5 %), got "abc"' } }).fields[0].value], ['—', 'abc']);
+  assert.ok(buildSheetHtml(buildSheetModel({ layerId: 'L1', build: copiesDraft({ overrides: { kafka_produce_latency_p99: { objective: 'abc' } }, customOpen: { kafka_produce_latency_p99: true } }), library: LIBRARY, requirements: T2, mode: 'edit' })).includes('data-override-field="objective" data-sli="kafka_produce_latency_p99" value="abc"'));
 });
 
 test('the custom-form model: the id slugged from the name until it is typed, the fields per type, the clash with an SLI of the pack, the engine\'s errors inline, the definition the engine takes', () => {
