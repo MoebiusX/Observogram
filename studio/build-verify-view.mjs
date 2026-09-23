@@ -123,8 +123,10 @@ export function renderBuildVerify(container, model, host = appHost) {
       </div>
 
       <footer class="build-step-actions">
-        <button type="button" class="ctrl-btn build-back" id="build-back">← Compile</button>
-        <button type="button" class="ctrl-btn build-adjust" id="build-adjust" title="Back to Define — change the service, its tier or the library entries">Resolve or adjust</button>
+        <span class="build-actions-left">
+          <button type="button" class="ctrl-btn build-back" id="build-back">← Compile</button>
+          <button type="button" class="ctrl-btn build-adjust" id="build-adjust" title="Back to Define — change the service, its tier or the library entries">Resolve or adjust</button>
+        </span>
         <span class="build-step-status">${({
           registered: `Registered as <code>${escapeHtml(model.registeredId || '')}</code> — continuing again re-registers the current pack.`,
           ready: escapeHtml(model.readyText),
