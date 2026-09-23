@@ -36,7 +36,7 @@ import {
   buildDefinitionModel, buildSheetModel, rolodexItems, addSliSelection, paramLayer, paramSubgroup, sectionClauses, sectionDrops, sectionNotes, sectionSwitch, sheetLists,
   sheetModeFor, stackExpanded, sheetFocusSuffix, LAYER_QUESTIONS, LAYER_SWITCHES, buildStatusLine,
   isSeeded, allSliKeys, selectedSliKeys, retargetOverrides, retargetSlisForEntries, effectiveOverrides, seedCardModel, customisedMap, WARNING_KINDS, SEEDED_NOTE,
-  LEGACY_STEP, restoreBuildDraft, buildEditorModel,
+  LEGACY_STEP, restoreBuildDraft, buildEditorModel, stackCardActions, BUILD_TABS, tabName,
 } from '../studio/build-model.mjs';
 import {
   OVERRIDE_FIELDS, SLO_WINDOWS, PROMQL_FIELDS, overrideFor, customisedFields, promqlEdited, effectiveSli, effectiveId, customEffective, slugifySliId,
@@ -1709,7 +1709,7 @@ test('buildSheetModel: per layer the title and its question, the clauses with th
   assert.deepEqual(Object.values(LAYER_QUESTIONS).slice(0, 7), ['What should we measure?', 'Where does the telemetry flow?', 'What else do we collect?', 'How do we see it?', 'What happens when it breaks?', 'How do we prove it?', 'Who owns it?']);
   // L1: the clauses at the tier, the rolodex, the SLOs switch, the SLOs list.
   const l1 = sheet('L1');
-  assert.deepEqual([l1.mode, l1.readOnly, l1.compose, l1.state, l1.stateText], ['edit', false, false, 'pass', '3 of 3 clauses pass']);
+  assert.deepEqual([l1.mode, l1.readOnly, l1.state, l1.stateText], ['edit', false, 'pass', '3 of 3 clauses pass']);
   assert.deepEqual(l1.clauses.map(c => [c.id, c.state]), [['L1.MUST.availability_slo', 'pass'], ['L1.MUST.latency_slo', 'pass'], ['L1.MUST.sli_covered_by_slo', 'pass']]);
   assert.equal(l1.rolodex.items.length, 10);
   assert.deepEqual(l1.rolodex.counts, { total: 10, selected: 7, selectable: 10, aboveTier: 0, customised: 0, custom: 0, library: 10, chosen: 2 }, 'aboveTier counts the SLIs in the pack from a higher tier — informational, none by default');
@@ -1723,7 +1723,7 @@ test('buildSheetModel: per layer the title and its question, the clauses with th
   assert.deepEqual(withCopies.rolodex.counts, { total: 11, selected: 9, selectable: 10, aboveTier: 1, customised: 2, custom: 1, library: 10, chosen: 2 });
   const verifyCopies = buildSheetModel({ layerId: 'L1', build: copiesDraft(), library: LIBRARY, requirements: T2, mode: 'verify' });
   assert.deepEqual([verifyCopies.rolodex.create, verifyCopies.rolodex.editLabel], [false, 'View']);
-  assert.equal(buildSheetModel({ layerId: 'L1', build: draft(), library: LIBRARY, requirements: T2, mode: 'preview' }).rolodex.create, false);
+  assert.equal(buildSheetModel({ layerId: 'L1', build: draft({ step: 'define' }), library: LIBRARY, requirements: T2, mode: sheetModeFor('define') }).rolodex.create, true, 'the create card on DEFINE too: the sheet is live there');
   // The engine's error on an override marks its card (the editor's field carries it when the editor is open).
   const errSheet = sheet('L1', {}, copiesDraft({ error: ['override kafka_produce_latency_p99.window: the window is one of 7d | 28d | 30d | 90d'] }));
   assert.deepEqual(errSheet.rolodex.items.find(i => i.key === 'kafka_produce_latency_p99').errorFields, ['window']);
@@ -1785,17 +1785,18 @@ test('buildSheetModel: per layer the title and its question, the clauses with th
   assert.deepEqual([noX.title, noX.state, noX.clauses, noX.lists[0].items], ['L2X · Extended', 'neutral', [], []]);
   // sheetLists on its own, and the modes.
   assert.equal(sheetLists('L1', null).length, 1);
-  assert.deepEqual(['define', 'compile', 'verify', 'other'].map(sheetModeFor), ['preview', 'edit', 'verify', 'edit']);
+  assert.deepEqual(['define', 'compile', 'verify', 'other'].map(sheetModeFor), ['edit', 'edit', 'verify', 'edit'], 'live on Define and Compile, read-only on Verify — the preview mode is retired');
 });
 
-test('the sheet is one component on the three steps: a preview on DEFINE (Compose in Compile →), editable on COMPILE, read-only with the todos on VERIFY', () => {
-  const preview = buildSheetModel({ layerId: 'L1', build: draft({ step: 'define' }), library: LIBRARY, requirements: T2, mode: 'preview' });
-  assert.deepEqual([preview.mode, preview.readOnly, preview.compose, preview.todos], ['preview', true, true, []]);
-  assert.equal(preview.rolodex.items.length, 10, 'the candidates are the same items');
+test('the sheet is one component on the three steps: live on DEFINE (its pack is instantiated already) and COMPILE, read-only with the todos on VERIFY; no preview, no "Compose in Compile"', () => {
+  const define = buildSheetModel({ layerId: 'L1', build: draft({ step: 'define' }), library: LIBRARY, requirements: T2, mode: sheetModeFor('define') });
+  assert.deepEqual([define.mode, define.readOnly, define.todos, define.rolodex.create, define.rolodex.editLabel], ['edit', false, [], true, 'Edit'], 'the same live sheet on DEFINE');
+  assert.ok(!('compose' in define), 'no compose action anywhere');
+  assert.equal(define.rolodex.items.length, 10, 'the candidates are the same items');
   const edit = buildSheetModel({ layerId: 'L4', build: draft({ step: 'compile' }), library: LIBRARY, requirements: T2, mode: 'edit' });
-  assert.deepEqual([edit.readOnly, edit.compose, edit.todos, edit.todoCount], [false, false, [], 5]);
+  assert.deepEqual([edit.readOnly, edit.todos, edit.todoCount], [false, [], 5]);
   const verify = buildSheetModel({ layerId: 'L4', build: draft({ step: 'verify' }), library: LIBRARY, requirements: T2, mode: 'verify' });
-  assert.deepEqual([verify.readOnly, verify.compose], [true, false]);
+  assert.deepEqual([verify.readOnly, 'compose' in verify], [true, false]);
   assert.deepEqual(verify.todos.map(t => t.path), ['alerting.routes[0]', 'alerting.routes[1]', 'alerting.routes[2]', 'remediation[0]', 'remediation[1]']);
   assert.deepEqual(verify.todos[0].params.map(p => p.key), ['oncall_channel', 'pager_service']);
   assert.equal(verify.todos[3].manual, true, 'a runbook to write: no param fills it');
@@ -1833,7 +1834,7 @@ test('renderBuildSheet draws the dialog headlessly: the ARIA, the title and ques
   assert.deepEqual(scrollKeys(l1), ['sheet:L1', 'rolodex:L1']);
   assert.deepEqual(scrollKeys(html('L3')), ['sheet:L3']);
   assert.ok(!scrollKeys(l1).some(k => scrollKeys(html('L3')).includes(k)), 'no scroll key shared between two layers\' sheets');
-  assert.deepEqual(scrollKeys(html('L1', 'preview')), ['sheet:L1', 'rolodex:L1'], 'the same layer keeps its key across modes and re-renders');
+  assert.deepEqual(scrollKeys(html('L1', 'edit', draft({ step: 'define' }))), ['sheet:L1', 'rolodex:L1'], 'the same layer keeps its key across steps and re-renders');
   assert.ok(l1.includes('<span class="build-rolo-id">broker_availability</span>') && l1.includes('<code>up</code>'));
   assert.ok(l1.includes('<b>99.9%</b><span>over 30d · at tier-2</span>'));
   assert.ok(l1.includes('class="is-muted" title="tier-3: 99% over 30d">tier-3 <b>99%</b> 30d</span>'));
@@ -1877,16 +1878,16 @@ test('renderBuildSheet draws the dialog headlessly: the ARIA, the title and ques
   assert.ok(l4.includes('data-toggle="policy"') && l4.includes('data-toggle="routes"'));
   assert.ok(l4.includes('Channels <span class="build-sheet-count">4</span>') && l4.includes('data-focus-key="param:oncall_channel@L4/sheet"'));
   assert.ok(l4.includes('<span class="build-sheet-item-title">SEV1 routes</span>') && l4.includes('<span>voice pagerduty://orders-api</span>'));
-  // Preview (DEFINE): every switch disabled, the params read-only, the compose action present, no Edit and no create card.
-  const pv = html('L1', 'preview');
-  assert.ok(pv.includes('data-mode="preview"') && pv.includes('<button type="button" class="mcp-refresh-btn build-sheet-compose-btn" data-compose>Compose in Compile'));
-  assert.ok(!pv.includes('data-edit-sli=') && !pv.includes('build-rolo-create') && (pv.match(/class="build-rolo-card/g) || []).length === 10);
-  // Every add / remove and section switch is disabled; only the "show every product" filter (browsing) stays live.
-  assert.equal((pv.match(/role="switch"/g) || []).length - 1, (pv.match(/role="switch"[^>]*\bdisabled\b/g) || []).length, 'nothing flips in a preview');
-  assert.ok(!/data-rolodex-all="0"[^>]*\bdisabled\b/.test(pv) && !/\bdisabled\b[^>]*data-rolodex-all/.test(pv), 'the filter stays live');
-  const pv2 = html('L2', 'preview');
-  assert.ok(pv2.includes('class="build-param build-param-read is-placeholder" data-param="kafka.broker_targets"') && pv2.includes('<code class="build-param-value">kafka-broker.kafka:9404</code>'));
-  assert.ok(!pv2.includes('build-param-input'), 'a preview has no input');
+  // DEFINE: the same live sheet — Edit on every card, the create card, live switches and params; no compose action, no preview.
+  const df = html('L1', sheetModeFor('define'), draft({ step: 'define' }));
+  assert.ok(df.includes('data-mode="edit"') && !df.includes('data-compose') && !df.includes('preview'));
+  assert.ok(df.includes('data-edit-sli="kafka_broker_availability"') && df.includes('build-rolo-create') && (df.match(/class="build-rolo-card/g) || []).length === 11);
+  assert.ok(!/role="switch"[^>]*\bdisabled\b/.test(df.replace(/data-toggle="policy"[^>]*/, '')), 'the switches flip on DEFINE');
+  const df2 = html('L2', sheetModeFor('define'), draft({ step: 'define' }));
+  assert.ok(df2.includes('build-param-input') && df2.includes('data-focus-key="param:kafka.broker_targets@L2/sheet"'), 'the params are editable on DEFINE');
+  // Read-only params (Verify) draw the value as a code span, never an input.
+  const ro2 = html('L2', 'verify');
+  assert.ok(ro2.includes('class="build-param build-param-read is-placeholder" data-param="kafka.broker_targets"') && ro2.includes('<code class="build-param-value">kafka-broker.kafka:9404</code>'));
   // Verify: read-only options, the todos with their inline inputs keyed by sheet and todo path.
   const vf = html('L4', 'verify');
   assert.ok(vf.includes('data-mode="verify"') && vf.includes('Read-only on Verify'));
@@ -2019,19 +2020,20 @@ test('the definition column is a wizard stage: the live form on DEFINE (with the
   assert.ok(!seedHtml.includes('<input') && !seedHtml.includes('role="radiogroup"') && !seedHtml.includes('build-chip"'), 'read-only: no input, no segmented control, no chips to press');
   assert.ok(seedHtml.includes('<dt>Service</dt><dd><code>orders-api</code></dd>') && seedHtml.includes('<dt>Owners</dt><dd><span>team-orders</span></dd>') && seedHtml.includes('<dt>Environment</dt><dd>prod</dd>'));
   assert.ok(seedHtml.includes('<span class="build-seed-chip is-tier" data-tier="tier-2">seeded at tier-2 · 15 MUST · 1 SHOULD</span>'));
-  assert.ok(seedHtml.includes('<span class="build-seed-chip" title="product">Apache Kafka</span>') && seedHtml.includes('<span class="build-seed-chip" title="archetype">HTTP service (OTel semconv)</span>'));
+  assert.ok(seedHtml.includes('<button type="button" class="build-seed-chip is-entry" data-seed-entry="kafka" data-focus-key="seed:kafka" aria-haspopup="dialog" title="product — open the L1 sheet on its SLIs">Apache Kafka</button>') && seedHtml.includes('data-seed-entry="http-service" data-focus-key="seed:http-service" aria-haspopup="dialog" title="archetype — open the L1 sheet on its SLIs">HTTP service (OTel semconv)</button>'), 'a product chip opens the L1 sheet on its SLIs');
   assert.ok(seedHtml.includes('<div class="build-seed-from">7 SLIs in the pack</div>'));
   assert.ok(seedHtml.includes('<button type="button" class="build-seed-change" data-change-seed data-focus-key="seed:change">Change seed <span aria-hidden="true">→</span></button>'));
   assert.ok(seedHtml.includes('class="build-summary is-ok"') && seedHtml.includes('conformant at tier-2'), 'the summary stays live under the seed card');
   assert.ok(render(draft({ step: 'compile', owners: '' })).includes('<dd><em>none — a todo</em></dd>'));
   assert.ok(seedCardHtml(seedCardModel(copiesDraft({ slis: [...FIXTURE.provenance.toggles.slis, 'kafka_controller_election_rate'] }), LIBRARY, REQUIREMENTS)).includes('9 SLIs in the pack · 1 from a higher tier · 2 customised · 1 custom'));
   assert.ok(!seedCardHtml(seedCardModel(draft({ name: '<b>x</b>' }), LIBRARY, REQUIREMENTS)).includes('<b>x</b>'), 'escaped at the seam');
-  // The wiring: "Change seed →" goes back to DEFINE.
+  // The wiring: "Change seed →" goes back to DEFINE; a product chip opens the L1 sheet on that product.
   const calls = [];
   const change = fakeEl({});
-  wireBuildDefinition(fakeContainer({ '[data-change-seed]': [change] }), {}, { build: { setStep: (s) => calls.push(['step', s]), update() {}, setTier() {}, toggleEntry() {} } });
-  change.fire('click');
-  assert.deepEqual(calls, [['step', 'define']]);
+  const chip = fakeEl({ seedEntry: 'http-service' });
+  wireBuildDefinition(fakeContainer({ '[data-change-seed]': [change], '[data-seed-entry]': [chip] }), {}, { build: { setStep: (s) => calls.push(['step', s]), openSheet: (l, o) => calls.push(['sheet', l, o]), update() {}, setTier() {}, toggleEntry() {} } });
+  change.fire('click'); chip.fire('click');
+  assert.deepEqual(calls, [['step', 'define'], ['sheet', 'L1', { entry: 'http-service' }]]);
   // DEFINE's render: the primary action reads the seed, and calls seed().
   const seedCalls = [];
   const c = stubContainer();
@@ -2051,14 +2053,14 @@ test('the definition column is a wizard stage: the live form on DEFINE (with the
   assert.deepEqual([fresh2.overrides, fresh2.custom, fresh2.seeded, fresh2.editor, fresh2.editorDirty, fresh2.customDraft, fresh2.customDraftErrors], [{}, [], false, null, false, null, null]);
 });
 
-test('the sheet’s handlers write through the existing actions: close (button, scrim, Esc), compose, the section switches, the rolodex switches, the filter', () => {
+test('the sheet’s handlers write through the existing actions: close (button, scrim, Esc), the section switches, the rolodex switches, the filter', () => {
   const calls = [];
   const act = {
     closeSheet: () => calls.push(['close']), setStep: (s, o) => calls.push(['step', s, o]), setToggle: (id, on) => calls.push(['toggle', id, on]),
     setSli: (k, on, all) => calls.push(['sli', k, on, all.length]), addSli: (e, s) => calls.push(['add', e, s]), update: (p, o) => calls.push(['update', p, o]), setParam() {},
   };
   const model = buildSheetModel({ layerId: 'L1', build: draft(), library: LIBRARY, requirements: T2, mode: 'edit' });
-  const closeBtn = fakeEl({}), scrim = fakeEl({}), sheet = fakeEl({}), compose = fakeEl({});
+  const closeBtn = fakeEl({}), scrim = fakeEl({}), sheet = fakeEl({});
   const slosSwitch = fakeEl({ toggle: 'slos' }, { checked: 'true' });
   const disabledSwitch = fakeEl({ toggle: 'policy' }, { checked: 'false', disabled: true });
   const remove = fakeEl({ sli: 'kafka_broker_availability', entry: 'kafka', sliId: 'broker_availability', selected: '1', entrySelected: '1' });
@@ -2067,7 +2069,7 @@ test('the sheet’s handlers write through the existing actions: close (button, 
   const above = fakeEl({ sli: 'kafka_controller_election_rate', entry: 'kafka', sliId: 'controller_election_rate', selected: '0', entrySelected: '1' });
   const filter = fakeEl({ rolodexAll: '0' });
   wireBuildSheet(fakeContainer({
-    '[data-close]': [closeBtn, scrim], '.build-sheet': [sheet], '[data-compose]': [compose],
+    '[data-close]': [closeBtn, scrim], '.build-sheet': [sheet],
     '.build-switch[data-toggle]': [slosSwitch, disabledSwitch], '.build-switch[data-sli]': [remove, add, foreign, above], '.build-switch[data-rolodex-all]': [filter],
   }), model, { build: act });
   closeBtn.fire('click'); scrim.fire('click');
@@ -2075,13 +2077,11 @@ test('the sheet’s handlers write through the existing actions: close (button, 
   // Esc anywhere on the sheet closes it (the fields that once needed a two-step Esc live in the editor now, which has its own).
   const plainButton = { tagName: 'BUTTON', closest: () => null };
   sheet.fire('keydown', { key: 'Escape', target: plainButton });
-  compose.fire('click');
   slosSwitch.fire('click'); disabledSwitch.fire('click');
   remove.fire('click'); add.fire('click'); foreign.fire('click'); above.fire('click');
   filter.fire('click', { currentTarget: filter });
   assert.deepEqual(calls, [
     ['close'], ['close'], ['close'], ['close'],
-    ['step', 'compile', { sheet: 'L1' }],
     ['toggle', 'slos', false],
     ['sli', 'kafka_broker_availability', false, 7], ['sli', 'kafka_fetch_latency_p99', true, 7], ['add', 'ibm-mq', 'qmgr_process_up'], ['sli', 'kafka_controller_election_rate', true, 7],
     ['update', { rolodexAll: true }, { rerender: true, reinstantiate: false }],
@@ -2113,6 +2113,62 @@ test('the slab head opens the layer’s sheet: aria-haspopup, the "+" affordance
   assert.deepEqual(focusFallbackSelectors('param:oncall_channel@L4/sheet'), ['.build-sheet .build-param-input', '.build-sheet-close', '.build-slab[data-layer="L4"] .build-param-input', '.build-slab[data-layer="L4"] .build-slab-edge']);
   assert.deepEqual(focusFallbackSelectors('param:oncall_channel@L4/sheet/alerting.routes[0]')[0], '.build-sheet .build-param-input');
   assert.deepEqual(focusFallbackSelectors('param:oncall_channel@L4/alerting.routes[0]'), ['.build-slab[data-layer="L4"] .build-param-input', '.build-slab[data-layer="L4"] .build-slab-edge'], 'a slab input is unchanged');
+});
+
+test('an L1 SLI or SLO card on the stack is a control that opens the SLI’s editor — a focusable role=button with aria-haspopup, Enter and Space, an SLO card landing on the objective, a candidate ghost on DEFINE too; the header tab names read the step word', () => {
+  // The pure part: which editor each L1 card opens, by the id the pack carries (a rename, a custom SLI).
+  const actions = stackCardActions({ build: copiesDraft({ overrides: { ...COPIES.overrides, http_service_availability: { id: 'http_availability' } } }), library: LIBRARY });
+  assert.deepEqual([actions.kafka_broker_availability, actions.http_availability, actions.http_service_availability, actions.checkout_success], [{ key: 'kafka_broker_availability', custom: false }, { key: 'http_service_availability', custom: false }, undefined, { key: 'checkout_success', custom: true }]);
+  // COMPILE: the real cards carry the action — SLI-01 opens kafka_broker_availability, SLO-01 the same SLI on the objective; no other card does.
+  const compile = buildCompileModel({ build: copiesDraft(), library: LIBRARY, clauses: T2 }).stack;
+  const l1 = compile.slabs.find(s => s.id === 'L1');
+  assert.deepEqual(l1.artefacts.find(a => a.id === 'SLI-01').edit, { key: 'kafka_broker_availability', custom: false, focus: null });
+  assert.deepEqual(l1.artefacts.find(a => a.id === 'SLO-01').edit, { key: 'kafka_broker_availability', custom: false, focus: 'objective' });
+  assert.deepEqual(l1.artefacts.find(a => a.title === 'checkout_success').edit, { key: 'checkout_success', custom: true, focus: null });
+  assert.ok(compile.slabs.filter(s => s.id !== 'L1').every(s => s.artefacts.every(a => !a.edit)), 'only L1 cards open an editor');
+  const html = buildStackHtml(compile);
+  assert.ok(html.includes('<div class="card is-editable" data-artefact="SLI-01" data-symbol="slis.kafka_broker_availability" role="button" tabindex="0" aria-haspopup="dialog" data-edit-sli="kafka_broker_availability" data-focus-key="card:SLI-01" aria-label="Edit kafka_broker_availability — ratio SLI" title="open the editor — the objective, the window, the id, the PromQL as it runs">'));
+  assert.ok(html.includes('data-artefact="SLO-01" data-symbol="slos.kafka_broker_availability_99_9" role="button" tabindex="0" aria-haspopup="dialog" data-edit-sli="kafka_broker_availability" data-edit-focus="objective" data-focus-key="card:SLO-01" aria-label="Edit the SLO kafka_broker_availability_99_9 — its SLI&#39;s objective"'));
+  assert.ok(/data-edit-sli="checkout_success" data-edit-custom="1"/.test(html));
+  assert.ok(!/data-artefact="PIP-[^"]*"[^>]*role="button"/.test(html), 'an L2 card is not a control');
+  // VERIFY: the same cards open the editor (read-only there, the controller's mode); the title says so.
+  assert.ok(buildStackHtml(buildVerifyModel({ build: copiesDraft(), library: LIBRARY, clauses: T2, targets: TARGETS }).stack).includes('data-focus-key="card:SLI-01" aria-label="Edit kafka_broker_availability — ratio SLI" title="open the SLI as compiled"'));
+  // DEFINE: the candidate ghosts carry the action with the library key; a renamed one still opens by its key.
+  const define = buildDefineModel({ build: draft({ result: null, overrides: { kafka_broker_availability: { id: 'brokers_up' } } }), library: LIBRARY, requirements: REQUIREMENTS }).stack;
+  const ghosts = define.slabs.find(s => s.id === 'L1').ghosts;
+  assert.deepEqual([ghosts.find(g => g.key === 'sli:kafka_broker_availability').edit, ghosts.find(g => g.key === 'slo:kafka_broker_availability').edit, ghosts.find(g => g.kind === 'clause').edit], [{ key: 'kafka_broker_availability', custom: false, focus: null }, { key: 'kafka_broker_availability', custom: false, focus: 'objective' }, undefined]);
+  const dh = buildStackHtml(define);
+  assert.ok(dh.includes('class="card card-ghost is-sli is-editable" data-ghost="sli:kafka_broker_availability" title="an SLI of the selection at this tier, with the SLO it gets — ticked on Compile — open the editor" role="button" tabindex="0" aria-haspopup="dialog" data-edit-sli="kafka_broker_availability" data-focus-key="ghost:sli:kafka_broker_availability" aria-label="Edit brokers_up — ratio SLI"'));
+  assert.ok(dh.includes('data-ghost="slo:kafka_broker_availability"') && dh.includes('data-edit-focus="objective" data-focus-key="ghost:slo:kafka_broker_availability" aria-label="Edit the SLO on brokers_up — its SLI&#39;s objective"'));
+  assert.ok(!/data-ghost="clause:[^"]*"[^>]*role="button"/.test(dh), 'a clause ghost is not a control');
+  // The handlers: a click, Enter or Space on the card opens the editor with the key, the custom flag, the focus and the card's focus key; a key on a control inside the card is that control's.
+  const calls = [];
+  const sli = fakeEl({ editSli: 'kafka_broker_availability', focusKey: 'card:SLI-01' });
+  const slo = fakeEl({ editSli: 'kafka_broker_availability', editFocus: 'objective', focusKey: 'card:SLO-01' });
+  const custom = fakeEl({ editSli: 'checkout_success', editCustom: '1', focusKey: 'card:SLI-08' });
+  wireBuildStack(fakeContainer({ '.build-stack [data-edit-sli]': [sli, slo, custom] }), compile, { build: { openEditor: (o) => calls.push(o), openSheet() {}, update() {}, setParam() {} } });
+  sli.fire('click');
+  slo.fire('keydown', { key: 'Enter', target: slo });
+  custom.fire('keydown', { key: ' ', target: custom });
+  sli.fire('keydown', { key: 'Enter', target: {} });
+  sli.fire('keydown', { key: 'a', target: sli });
+  assert.deepEqual(calls, [
+    { key: 'kafka_broker_availability', custom: false, focus: null, opener: 'card:SLI-01' },
+    { key: 'kafka_broker_availability', custom: false, focus: 'objective', opener: 'card:SLO-01' },
+    { key: 'checkout_success', custom: true, focus: null, opener: 'card:SLI-08' },
+  ]);
+  // The header tabs: the step word and its tagline are the tab's name (measured: the title read "Library — …").
+  assert.deepEqual(BUILD_TABS.map(t => [t.id, t.sub, t.techName, tabName(t)]), [
+    ['define', 'Define', 'Define', 'Define — Service, tier & library'],
+    ['compile', 'Compile', 'Compile', 'Compile — Pack & deployable artifacts'],
+    ['verify', 'Verify', 'Verify', 'Verify — Conformance & placeholders'],
+  ]);
+  assert.ok(BUILD_TABS.every(t => !/Library|Instantiate|Conformance —/.test(tabName(t))));
+  // The stylesheet: the editable card has a hover and a focus ring.
+  assert.match(cssRule('.build-slab .card.is-editable'), /cursor:\s*pointer/);
+  assert.match(cssRule('.build-slab .card.is-editable:focus-visible'), /outline:\s*2px solid var\(--L1\)/);
+  assert.match(cssRule('.build-seed-chip.is-entry'), /cursor:\s*pointer/);
+  assert.equal(cssRule('.build-sheet-compose'), null, 'the compose block is gone');
 });
 
 test('the summary and the sheet draw the same clause row: one function, so a failing clause reads alike in both', () => {

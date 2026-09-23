@@ -143,8 +143,9 @@ export function renderBuildEditor(container, model, host = appHost, { focus = nu
   const byKey = (k) => container.querySelector(`[data-focus-key="${attr(k)}"]`);
   let target = null;
   if (focus) {
-    target = focus === 'dialog' ? container.querySelector('.build-editor')
-      : container.querySelector(`.build-editor [data-field="${attr(focus)}"] .build-edit-input`) || container.querySelector('.build-editor .build-edit-input') || container.querySelector('.build-editor [data-editor-close]');
+    // Read-only (Verify) has no field to land on: the dialog itself takes the focus, so its title is read.
+    target = focus === 'dialog' || model.readOnly ? container.querySelector('.build-editor')
+      : container.querySelector(`.build-editor [data-field="${attr(focus)}"] .build-edit-input`) || container.querySelector('.build-editor .build-edit-input') || container.querySelector('.build-editor');
   } else if (keep) target = byKey(keep.key);
   if (!target) return;
   const kept = keep && target === byKey(keep.key);

@@ -15,11 +15,15 @@
 // is dashed as Discover parks it; the detail artefacts Discover folds
 // (panels, queries) fold here too. On VERIFY the todos sit on their slab
 // with their inline param inputs, and a card that a todo names carries a pin.
+// An L1 SLI or SLO card (a real artefact on COMPILE and VERIFY, a candidate
+// ghost on DEFINE) is a control: it opens the SLI's pop-up editor
+// (build-editor-view.mjs) — a Build-only wrapper around the card body
+// Discover shares.
 //
 // Renderer only (docs/UI_CONVENTIONS.md §2-3): render(container, model, host).
-// host.build.openSheet opens a layer's sheet; host.build.update keeps which
-// detail folds are open (in the draft, never persisted); host.build.setParam
-// commits a filled placeholder.
+// host.build.openSheet opens a layer's sheet; host.build.openEditor the
+// editor; host.build.update keeps which detail folds are open (in the draft,
+// never persisted); host.build.setParam commits a filled placeholder.
 
 import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
@@ -34,14 +38,25 @@ const SOURCE_TITLE = {
 };
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
-/** A ghost card: a clause the tier requires (its severity as the id, the rubric's description) or an SLI / SLO candidate. */
+/**
+ * The attributes that make an L1 SLI / SLO card a real control (docs/BUILD_JOURNEY.md "The editor"): a focusable
+ * card with button semantics that opens the SLI's editor — role=button, Enter / Space, aria-haspopup=dialog, its
+ * focus key (`card:<artefact id>` / `ghost:<key>`) for the focus return — without touching the card body Discover
+ * shares (card-html.mjs): the wrapper is Build's.
+ */
+function editAttrs(edit, { focusKey, what }) {
+  if (!edit) return '';
+  return ` role="button" tabindex="0" aria-haspopup="dialog" data-edit-sli="${escapeHtml(edit.key)}"${edit.custom ? ' data-edit-custom="1"' : ''}${edit.focus ? ` data-edit-focus="${escapeHtml(edit.focus)}"` : ''} data-focus-key="${escapeHtml(focusKey)}" aria-label="${escapeHtml(`Edit ${what}`)}"`;
+}
+
+/** A ghost card: a clause the tier requires (its severity as the id, the rubric's description) or an SLI / SLO candidate (which opens the SLI's editor). */
 export function ghostCardHtml(g) {
   const state = g.state && g.state !== 'pending' ? g.state : null;
   const glyph = state ? `<span class="build-ghost-state is-${state}" title="${escapeHtml(STATE_WORD[state])}">${STATE_GLYPH[state]}</span>` : '';
   const tags = (g.tags || []).slice(0, 4).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('');
-  const title = g.kind === 'clause' ? `${g.clauseId} — ${STATE_WORD[g.state] || 'required'}` : (SOURCE_TITLE[g.source] || '');
+  const title = g.edit ? `${SOURCE_TITLE[g.source] || ''} — open the editor` : g.kind === 'clause' ? `${g.clauseId} — ${STATE_WORD[g.state] || 'required'}` : (SOURCE_TITLE[g.source] || '');
   return `
-    <div class="card card-ghost is-${escapeHtml(g.kind)}${state ? ` is-${state}` : ''}" data-ghost="${escapeHtml(g.key)}" title="${escapeHtml(title)}">
+    <div class="card card-ghost is-${escapeHtml(g.kind)}${state ? ` is-${state}` : ''}${g.edit ? ' is-editable' : ''}" data-ghost="${escapeHtml(g.key)}" title="${escapeHtml(title)}"${editAttrs(g.edit, { focusKey: `ghost:${g.key}`, what: g.kind === 'slo' ? `the SLO on ${g.title.replace(/^SLO on /, '')} — its SLI's objective` : `${g.title} — ${g.tool}` })}>
       <div class="card-head">
         <span class="card-id">${escapeHtml(g.kind === 'clause' ? g.severity : g.kind.toUpperCase())}</span>
         ${glyph}
@@ -63,10 +78,11 @@ export function ghostCardHtml(g) {
  * (data-jump) to that step, where its todo is.
  */
 function artefactCardHtmlInStack(a, mode) {
-  const cls = ['card', a.source === 'Scaffold' ? 'is-scaffold' : '', a.todoPath ? 'has-todo' : '', a.detail ? 'is-detail' : '', a.custom ? 'is-custom' : a.customised ? 'is-customised' : ''].filter(Boolean).join(' ');
+  const cls = ['card', a.source === 'Scaffold' ? 'is-scaffold' : '', a.todoPath ? 'has-todo' : '', a.detail ? 'is-detail' : '', a.custom ? 'is-custom' : a.customised ? 'is-customised' : '', a.edit ? 'is-editable' : ''].filter(Boolean).join(' ');
   const jump = mode !== 'verify';
+  const isSlo = /^SLO-/.test(String(a.id || ''));
   return `
-    <div class="${cls}" data-artefact="${escapeHtml(a.id)}"${a.symbol ? ` data-symbol="${escapeHtml(a.symbol)}"` : ''}>
+    <div class="${cls}" data-artefact="${escapeHtml(a.id)}"${a.symbol ? ` data-symbol="${escapeHtml(a.symbol)}"` : ''}${editAttrs(a.edit, { focusKey: `card:${a.id}`, what: isSlo ? `the SLO ${a.title} — its SLI's objective` : `${a.title} — ${a.tool || 'SLI'}` })}${a.edit ? ` title="${escapeHtml(mode === 'verify' ? 'open the SLI as compiled' : `open the editor — ${isSlo ? 'the objective and the window' : 'the objective, the window, the id, the PromQL as it runs'}`)}"` : ''}>
       ${artefactCardHtml(a, { note: a.customNote || null })}
       ${a.todoPath ? `<button type="button" class="build-card-pin" data-todo-path="${escapeHtml(a.todoPath)}"${jump ? ' data-jump="verify"' : ''} title="${escapeHtml(`todo: ${a.todoPath} — a placeholder value the team must fill${jump ? ', on Verify' : ''}`)}">todo</button>` : ''}
     </div>`;
@@ -162,13 +178,20 @@ export function renderBuildStack(container, model, host = appHost) {
   wireBuildStack(container, model, host);
 }
 
-/** The stack's handlers: the slab heads and '+' (the layer's sheet), the detail toggles, the todo pins, the param inputs. */
+/** The stack's handlers: the slab heads and '+' (the layer's sheet), the L1 SLI / SLO cards (the editor), the detail toggles, the todo pins, the param inputs. */
 export function wireBuildStack(container, model, host = appHost) {
   const act = host.build;
 
   // A slab head (or its '+') opens the layer's sheet; the controller keeps which layer is
   // open on the draft (never persisted) and moves focus into the sheet and back.
   container.querySelectorAll('.build-slab-edge, .build-slab-add').forEach(btn => btn.addEventListener('click', () => act?.openSheet?.(btn.dataset.slab)));
+  // An L1 SLI or SLO card opens the SLI's pop-up editor: a click, Enter or Space on the card (a control inside it —
+  // the todo pin — keeps its own click, which stops propagating). The card's focus key is where focus returns.
+  container.querySelectorAll('.build-stack [data-edit-sli]').forEach(card => {
+    const open = () => act?.openEditor?.({ key: card.dataset.editSli, custom: card.dataset.editCustom === '1', focus: card.dataset.editFocus || null, opener: card.dataset.focusKey || null });
+    card.addEventListener('click', open);
+    card.addEventListener('keydown', (e) => { if (e.target !== card) return; if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+  });
   // The open detail folds live in the draft (never persisted).
   const openMap = () => Object.fromEntries(model.slabs.flatMap(s => (s.detailOpen ? [[`${s.id}/detail`, true]] : [])));
   container.querySelectorAll('.build-slab-detail').forEach(btn => btn.addEventListener('click', () => {

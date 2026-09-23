@@ -30,11 +30,12 @@
 //       target params, the baselines
 //   GOV the owners and the imports, read-only
 //
-// One component on the three steps: editable on COMPILE, a preview on DEFINE
-// (with "Compose in Compile →"), read-only on VERIFY with the layer's todos
-// and their inline params (a card's View opens the editor read-only). Everything
-// it changes goes through the actions (setSli / addSli, setToggle, setParam,
-// openEditor); re-instantiation redraws.
+// One component on the three steps: live on DEFINE and COMPILE (DEFINE seeds,
+// but its pack is already instantiated — the same sheet, the same actions),
+// read-only on VERIFY with the layer's todos and their inline params (a card's
+// View opens the editor read-only). Everything it changes goes through the
+// actions (setSli / addSli, setToggle, setParam, openEditor); re-instantiation
+// redraws.
 //
 // Renderer only (docs/UI_CONVENTIONS.md §2-3): render(container, model, host)
 // with buildSheetModel's output; host.build.* are the actions.
@@ -45,10 +46,10 @@ import { sheetFocusSuffix } from './build-model.mjs';
 import { evidenceBadge, paramRowHtml, wireParamInputs, clauseRowHtml, todoHtml, switchHtml, STATE_GLYPH } from './build-atoms.mjs';
 
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
-const MODE_WORD = { edit: 'compose', preview: 'preview', verify: 'verify' };
+const MODE_WORD = { edit: 'compose', verify: 'verify' };
 /** How long the rolodex waits for a smooth scroll to move before scrolling instantly instead. */
 export const SMOOTH_SCROLL_GRACE_MS = 250;
-const READ_ONLY_REASON = { preview: 'a preview — compose it on Compile', verify: 'read-only on Verify — change it on Compile' };
+const READ_ONLY_REASON = { verify: 'read-only on Verify — change it on Define or Compile' };
 
 function switchRowHtml(s, model) {
   const readOnly = model.readOnly;
@@ -72,7 +73,7 @@ function rolodexCardHtml(it, model) {
   const label = `${shown} of ${it.entryTitle}${it.custom ? ' — remove your SLI from the pack' : it.selected ? ' — remove from the pack' : it.entrySelected ? ' — add to the pack' : ` — add to the pack (selects ${it.entryTitle} too)`}${it.aboveTier ? ` (from the ${it.profileTier} profile)` : ''}`;
   // Edit (View on Verify) opens the pop-up editor over this SLI; a product not yet selected is added first.
   const editLabel = model.rolodex?.editLabel || 'Edit';
-  const canEdit = (it.entrySelected || it.custom) && model.mode !== 'preview';
+  const canEdit = it.entrySelected || it.custom;
   return `
     <article class="${cls}" data-snap-card data-sli="${escapeHtml(it.key)}" data-entry="${escapeHtml(it.entry || '')}" data-sli-id="${escapeHtml(it.id)}"${it.custom ? ' data-custom="1"' : ''} aria-label="${escapeHtml(label)}">
       <header class="build-rolo-head">
@@ -174,9 +175,7 @@ function todosHtml(model) {
 
 /** The sheet as HTML (the scrim and the panel); wireBuildSheet(container, model, host) wires it once in the DOM. */
 export function buildSheetHtml(model) {
-  const readOnlyWhy = model.mode === 'preview'
-    ? 'A preview: the requirements the tier puts on this layer and what the selection brings. Composition happens on Compile.'
-    : model.mode === 'verify' ? 'Read-only on Verify: the options as compiled, and the todos that rest on a placeholder.' : '';
+  const readOnlyWhy = model.mode === 'verify' ? 'Read-only on Verify: the options as compiled, and the todos that rest on a placeholder.' : '';
   return `
     <div class="build-sheet-scrim${model.entering ? ' is-entering' : ''}" data-close aria-hidden="true"></div>
     <aside class="build-sheet is-${escapeHtml(model.mode)} is-${escapeHtml(model.state)}${model.dimmed ? ' is-dimmed' : ''}${model.entering ? ' is-entering' : ''}" role="dialog" aria-modal="false" aria-labelledby="build-sheet-title" aria-describedby="build-sheet-question" data-layer="${escapeHtml(model.layerId)}" data-mode="${escapeHtml(model.mode)}" tabindex="-1">
@@ -193,7 +192,7 @@ export function buildSheetHtml(model) {
         </div>
       </header>
       <div class="build-sheet-body" data-scroll-key="sheet:${escapeHtml(model.layerId)}">
-        ${model.compose ? `<div class="build-sheet-compose"><span>${escapeHtml(readOnlyWhy)}</span><button type="button" class="mcp-refresh-btn build-sheet-compose-btn" data-compose>Compose in Compile <span aria-hidden="true">→</span></button></div>` : readOnlyWhy ? `<div class="build-sheet-note">${escapeHtml(readOnlyWhy)}</div>` : ''}
+        ${readOnlyWhy ? `<div class="build-sheet-note">${escapeHtml(readOnlyWhy)}</div>` : ''}
         ${model.rejected ? `<div class="build-note build-note-err" role="alert">${plural(model.rejected, 'parameter value')} on this layer rejected by the last compilation${model.stale ? ' — the pack shown is the previous one' : ''}; the row carries the reason.</div>` : ''}
         <section class="build-sheet-section build-sheet-clauses">
           <div class="build-sheet-section-head"><h3>Clauses at ${escapeHtml(model.tier || 'this tier')} <span class="build-sheet-count">${model.clauses.length}</span></h3>${model.why.length ? `<span class="build-sheet-sub">${escapeHtml(model.why.join(' · '))}</span>` : ''}</div>
@@ -219,7 +218,7 @@ export function buildSheetHtml(model) {
 }
 
 /**
- * render(container, model, host) — the sheet on its own. host.build.closeSheet, setStep,
+ * render(container, model, host) — the sheet on its own. host.build.closeSheet,
  * setToggle, setSli, addSli, setParam, openEditor and update are the actions it calls.
  */
 export function renderBuildSheet(container, model, host = appHost) {
@@ -227,7 +226,7 @@ export function renderBuildSheet(container, model, host = appHost) {
   wireBuildSheet(container, model, host);
 }
 
-/** The sheet's handlers: close (button, scrim, Esc), compose, the switches, the rolodex (its switches, Edit and '+ Custom SLI'), the params. */
+/** The sheet's handlers: close (button, scrim, Esc), the switches, the rolodex (its switches, Edit and '+ Custom SLI'), the params. */
 export function wireBuildSheet(container, model, host = appHost) {
   const act = host.build;
   const sheet = container.querySelector('.build-sheet');
@@ -238,7 +237,6 @@ export function wireBuildSheet(container, model, host = appHost) {
     e.stopPropagation();
     act?.closeSheet?.();
   });
-  container.querySelector('[data-compose]')?.addEventListener('click', () => act?.setStep?.('compile', { sheet: model.layerId }));
   container.querySelectorAll('.build-switch[data-toggle]').forEach(sw => sw.addEventListener('click', () => {
     if (sw.disabled) return;
     act?.setToggle?.(sw.dataset.toggle, sw.getAttribute('aria-checked') !== 'true');

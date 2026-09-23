@@ -44,7 +44,7 @@ import { initHost } from './host.mjs';
 import {
   BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, enterStep as enterBuildStep, stepAfterInstantiate as buildStepAfterInstantiate, focusFallbackSelectors, instantiateBody as buildInstantiateBody,
   buildDefineModel, buildCompileModel, buildVerifyModel, buildDefinitionModel, buildSheetModel, buildClauseChecklist, buildStatusLine, sheetModeFor, addSliSelection, placeholdersRemaining, retargetSlis, retargetSlisForEntries, retargetOverrides,
-  restoreBuildDraft as restoreBuildDraftModel, buildEditorModel, editorModeFor,
+  restoreBuildDraft as restoreBuildDraftModel, buildEditorModel, editorModeFor, BUILD_TABS, tabName,
 } from './build-model.mjs';
 import { fieldValueFor } from './build-copies-model.mjs';
 import { renderBuildEditor } from './build-editor-view.mjs';
@@ -1174,48 +1174,22 @@ const OBSERVA_ADV = [
 ];
 const OBSERVA_ADV_VIEWS = new Set(OBSERVA_ADV.map(a => a.id));
 
-// The BUILD journey's three cards (docs/BUILD_JOURNEY.md): the same shape as
-// OBSERVA_TABS and the same accents, rendered by the same header renderer
-// whenever state.mode is 'build'. A card is reachable when the previous
-// step's inputs are valid (build-model.mjs buildStepReachability).
-export const BUILD_TABS = [
-  {
-    id: 'define',
-    n: '1',
-    label: 'What Are We Observing?',
-    sub: 'Define',
-    techName: 'Library',
-    tagline: 'Service, tier & library',
-    accent: 'tab-blue',
-  },
-  {
-    id: 'compile',
-    n: '2',
-    label: 'What Should We Watch?',
-    sub: 'Compile',
-    techName: 'Instantiate',
-    tagline: 'Pack & deployable artifacts',
-    accent: 'tab-magenta',
-  },
-  {
-    id: 'verify',
-    n: '3',
-    label: 'Is It Ready to Use?',
-    sub: 'Verify',
-    techName: 'Conformance',
-    tagline: 'Conformance & placeholders',
-    accent: 'tab-emerald',
-  },
-];
+// The BUILD journey's three cards (docs/BUILD_JOURNEY.md) live in build-model.mjs
+// (BUILD_TABS, pure, tested): the same shape as OBSERVA_TABS and the same
+// accents, rendered by the same header renderer whenever state.mode is 'build';
+// re-exported here for the studio's public surface.
+export { BUILD_TABS };
 
 // Which tab list the header shows: the analysis journey unless we are building.
 function activeTabSet() { return state.mode === 'build' ? 'build' : 'observa'; }
 function tabListFor(set) { return set === 'build' ? BUILD_TABS : OBSERVA_TABS; }
 
+// A tab's accessible name is its step word and tagline (tabName: "Define — Service, tier & library"), spelled
+// once for the title and aria-label — the content alone read as one run of number, eyebrow, question and tagline.
 function observaTabHtml(t) {
   return `
     <button type="button" role="tab" class="observa-tab ${t.accent}" data-view="${t.id}"
-            aria-selected="false" title="${escapeHtml(t.techName + ' — ' + t.tagline)}">
+            aria-selected="false" aria-label="${escapeHtml(tabName(t))}" title="${escapeHtml(tabName(t))}">
       <span class="observa-tab-num">${t.n}</span>
       <span class="observa-tab-text">
         <span class="observa-tab-eyebrow">${escapeHtml(t.sub)}</span>
@@ -1917,9 +1891,8 @@ function exitBuildMode() {
 
 // `todo` (a todo path) lands the step on that todo instead of its top — a card's
 // pin on COMPILE, whose todo is drawn on VERIFY only. `sheet` (a layer id) lands
-// it with that layer's sheet open — DEFINE's "Compose in Compile →" reopens the
-// layer it previewed; an open sheet otherwise stays open across steps (one
-// component on the three steps, its mode follows the step).
+// it with that layer's sheet open; an open sheet otherwise stays open across
+// steps (one component on the three steps, its mode follows the step).
 function goToBuildStep(step, { todo = null, sheet } = {}) {
   if (!BUILD_STEPS.includes(step)) return;
   const reach = buildStepReachability(state.build);
@@ -1954,9 +1927,14 @@ let buildFocusNext = null;
 let buildSheetEntering = false;
 function focusAfterRender() {
   if (!buildFocusNext) return;
-  const el = document.querySelector(buildFocusNext);
+  // A target inside the sheet that is not there (a product with no card yet) lands on the sheet itself.
+  const el = document.querySelector(buildFocusNext) || (buildFocusNext.startsWith('.build-sheet ') ? document.querySelector('.build-sheet') : null);
   buildFocusNext = null;
   el?.focus({ preventScroll: true });
+  // A rolodex card landed on (a seed chip opened the sheet on its product) is centred in the snap track.
+  const card = el?.closest?.('[data-snap-card]');
+  const track = card?.closest('[data-scroll-key]');
+  if (card && track) track.scrollLeft = card.offsetLeft - (track.clientWidth - card.offsetWidth) / 2;
 }
 /** The selector of a focus key (`ov:<sli>:<field>`, `customise:<key>`, …) as the renderers stamp it. */
 const focusKeySelector = (key) => `[data-focus-key="${CSS.escape(key)}"]`;
@@ -2305,12 +2283,13 @@ const buildActions = {
   },
   // The layer sheet: one at a time, remembered on the draft (never persisted); focus
   // moves into the sheet when it opens and returns to the slab head when it closes.
-  openSheet(layerId) {
+  // `entry` (a seed-card chip): the L1 sheet lands on that product's first SLI card.
+  openSheet(layerId, { entry = null } = {}) {
     const b = state.build;
     if (!layerId) return;
     buildSheetEntering = layerId !== b.sheetOpen;
     b.sheetOpen = layerId;
-    buildFocusNext = '.build-sheet';
+    buildFocusNext = entry ? `.build-sheet .build-rolo-card[data-entry="${CSS.escape(entry)}"] [data-edit-sli]` : '.build-sheet';
     rerenderBuild();
   },
   closeSheet() {
@@ -2391,8 +2370,8 @@ const buildHost = { renderMainView, renderTabs, build: buildActions };
 // definition column on the left (service, tier, entries, the conformance summary,
 // sticky), the step with the stack as the main surface on the right, and, when a
 // layer is open, its sheet over the stack (one component on the three steps; its
-// mode follows the step: preview · edit · verify). The pop-up editor is drawn
-// after this, into its own host (syncBuildEditor).
+// mode follows the step: live on Define and Compile, read-only on Verify). The
+// pop-up editor is drawn after this, into its own host (syncBuildEditor).
 function renderBuildView(view) {
   const b = state.build;
   const shell = document.createElement('div');
