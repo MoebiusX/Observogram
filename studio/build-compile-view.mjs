@@ -1,21 +1,27 @@
 // studio/build-compile-view.mjs
 //
-// BUILD step 2 — COMPILE, "What should we watch?": per-entry SLI toggles
-// (an SLI above the tier is shown disabled with the tier it needs), the SLO
-// objective and window each SLI gets at this tier (the library's per-tier
-// defaults, read-only — overriding an objective is a later slice), the
-// section toggles (SLOs, policy + routes, dashboards, validation), what the
-// last instantiation produced (SLIs, SLOs, todos, warnings, the schema
-// verdict) and a collapsible YAML preview with a download. Every change
-// re-instantiates through the API (the controller debounces) and the rail
-// on the right fills in from the result.
+// BUILD step 2 — COMPILE, "What should we watch?": the control area — per-entry
+// SLI toggles (an SLI above the tier is shown disabled with the tier it
+// needs), the SLO objective and window each SLI gets at this tier (the
+// library's per-tier defaults, read-only — overriding an objective is a later
+// slice), the section toggles (SLOs, policy + routes, dashboards, validation)
+// — over the canvas: the layer stack of the instantiated pack, drawn through
+// the adapter exactly as Discover will draw it (its real artefacts per layer,
+// the slab edges in the clause states, a ghost card for a clause still unmet,
+// Scaffold on the placeholder artefacts, a section switched off dimming its
+// slab), with the warnings and the schema verdict above it and the pack YAML
+// as a collapsible below it. Every change re-instantiates through the API
+// (the controller debounces) and the stack and the rail re-render from the
+// result.
 //
 // Renderer only (docs/UI_CONVENTIONS.md §2-3): render(container, model, host)
 // with buildCompileModel's output; host.build.* are the actions.
 
 import { escapeHtml, downloadText } from './util.mjs';
 import { host as appHost } from './host.mjs';
-import { stepHeadHtml, evidenceBadge, instantiateErrorHtml } from './build-define-view.mjs';
+import { stepHeadHtml, instantiateErrorHtml } from './build-define-view.mjs';
+import { evidenceBadge } from './build-atoms.mjs';
+import { buildStackHtml, wireBuildStack } from './build-stack-view.mjs';
 
 function sliRowHtml(s) {
   const disabled = !s.reachable;
@@ -53,9 +59,11 @@ export function renderBuildCompile(container, model, host = appHost) {
   const act = host.build;
   const r = model.result;
   const allKeys = model.groups.flatMap(g => g.slis.filter(s => s.reachable).map(s => s.key));
+  const stack = model.stack;
+  const lit = stack.counts.litSlabs;
   container.innerHTML = `
     <section class="build-step build-compile">
-      ${stepHeadHtml('compile', 'What should we watch?', `Tick the SLIs the pack should carry — the library’s objectives and windows at <strong>${escapeHtml(model.tier)}</strong> are shown beside each one — and the sections it should contain. Every change recompiles the pack; the rail shows which of the tier’s clauses it holds up, and on what.`)}
+      ${stepHeadHtml('compile', 'What should we watch?', `Tick the SLIs the pack should carry — the library’s objectives and windows at <strong>${escapeHtml(model.tier)}</strong> are shown beside each one — and the sections it should contain. Every change recompiles the pack and redraws it below, layer by layer, exactly as Discover will show it; each slab’s edge says which of the tier’s clauses that layer holds up, and on what.`)}
 
       ${model.groups.map(g => `
         <div class="build-sli-group">
@@ -81,12 +89,13 @@ export function renderBuildCompile(container, model, host = appHost) {
         </div>
       </div>
 
-      <div class="build-result">
-        <div class="build-section-key">Compiled pack <span class="build-section-sub">${model.pending ? 'recompiling…' : r ? `${r.sliCount} SLI${r.sliCount === 1 ? '' : 's'} · ${r.sloCount} SLO${r.sloCount === 1 ? '' : 's'} · ${r.todoCount} todo${r.todoCount === 1 ? '' : 's'} · ${r.warningCount} warning${r.warningCount === 1 ? '' : 's'} · schema ${r.schemaOk ? 'valid' : `${r.schemaErrors.length} error${r.schemaErrors.length === 1 ? '' : 's'}`}${model.stale ? ' · previous pack' : ''}` : model.error ? 'the last generation failed' : 'nothing generated yet'}</span></div>
-        ${instantiateErrorHtml(model.error, { stale: model.stale, where: 'Define and Verify (this step has no parameter inputs)' })}
+      <div class="build-result build-stack-wrap">
+        <div class="build-section-key">The pack, layer by layer <span class="build-section-sub">${model.pending ? 'recompiling…' : r ? `${r.sliCount} SLI${r.sliCount === 1 ? '' : 's'} · ${r.sloCount} SLO${r.sloCount === 1 ? '' : 's'} · ${stack.counts.artefacts} artefact${stack.counts.artefacts === 1 ? '' : 's'} on ${lit} of ${stack.counts.slabs} layers${stack.counts.scaffold ? ` · ${stack.counts.scaffold} scaffold (a placeholder value the team fills)` : ''}${stack.counts.ghosts ? ` · ${stack.counts.ghosts} clause${stack.counts.ghosts === 1 ? '' : 's'} unmet` : ''} · ${r.todoCount} todo${r.todoCount === 1 ? '' : 's'} · ${r.warningCount} warning${r.warningCount === 1 ? '' : 's'} · schema ${r.schemaOk ? 'valid' : `${r.schemaErrors.length} error${r.schemaErrors.length === 1 ? '' : 's'}`}${model.stale ? ' · previous pack' : ''} — the same artefacts, ids and titles Discover will show for this pack` : model.error ? 'the last generation failed' : 'nothing generated yet — the silhouette below fills in as soon as the pack compiles'}</span></div>
+        ${instantiateErrorHtml(model.error, { stale: model.stale, where: 'on Define and Verify (this step has no parameter inputs)' })}
         ${!model.atLeastOne ? '<div class="build-note build-note-warn">At least one SLI must stay selected — the pack cannot be generated without one.</div>' : ''}
         ${r && !r.schemaOk ? `<div class="build-note build-note-warn"><strong>Schema:</strong> the pack does not validate against spec v1.2 as toggled — ${r.schemaErrors.slice(0, 4).map(e => escapeHtml(e)).join('; ')}${r.schemaErrors.length > 4 ? ` … +${r.schemaErrors.length - 4}` : ''}</div>` : ''}
         ${r ? warningsHtml(r.warnings) : ''}
+        ${buildStackHtml(stack)}
         ${r ? `
         <details class="build-yaml">
           <summary class="build-yaml-summary">Pack YAML <span>${r.yamlLines} lines · ${escapeHtml(r.fileName)}</span></summary>
@@ -109,6 +118,7 @@ export function renderBuildCompile(container, model, host = appHost) {
     cb.addEventListener('change', () => act.setToggle(cb.closest('.build-toggle').dataset.toggle, cb.checked));
   });
   container.querySelector('#build-yaml-download')?.addEventListener('click', () => downloadText(r.fileName, r.yaml, 'application/x-yaml'));
+  wireBuildStack(container, stack, host);
   container.querySelector('#build-back').addEventListener('click', () => act.setStep('define'));
   container.querySelector('#build-next').addEventListener('click', () => act.setStep('verify'));
 }

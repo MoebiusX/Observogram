@@ -15,6 +15,18 @@
 // (the engine's atTier), a composed SLI id is `<entry prefix>_<sli>` (the
 // engine's naming, spelled once in sliKey), and whether a clause passes,
 // passes on a placeholder or fails is read from the engine's summary.
+//
+// The layer stack (docs/BUILD_JOURNEY.md "The scan") is the same discipline:
+// buildStackModel draws the slabs L1 … GOV from the adapter's projection of
+// the instantiated pack (`adapted` on the instantiate response — the artefact
+// list Discover shows for the same canonical), the rubric filtered by tier
+// (the silhouette: one ghost per clause), the clause checklist (the slab
+// edges and the maturity bars) and the todo list (pinned to the slab of the
+// artefact each names). The layer names are the studio's constants (a
+// slab's colour is its layer token, .section[data-layer], in the
+// stylesheet); nothing is invented here.
+
+import { LAYER_DEFS, L4_SUBGROUPS } from './constants.mjs';
 
 export const BUILD_STEPS = ['define', 'compile', 'verify'];
 /** Least stringent first — the order the engine lists them and the DEFINE step shows them. */
@@ -138,6 +150,48 @@ export function clampStep(build, wanted) {
   const idx = Math.max(0, BUILD_STEPS.indexOf(wanted));
   for (let i = idx; i >= 0; i--) if (reach[BUILD_STEPS[i]]) return BUILD_STEPS[i];
   return 'define';
+}
+
+/**
+ * Entering the journey on a step (a reload, a header card): `step` clamped to what is
+ * reachable now, and `wantedStep` the step that was asked for when the clamp demoted it. A
+ * reload lands with the inputs and no pack, so VERIFY is unreachable until the first
+ * instantiation answers — stepAfterInstantiate honours the wanted step then, once. UI
+ * state on the draft, never persisted (the persisted step is the wanted one).
+ */
+export function enterStep(build, wanted) {
+  const asked = LEGACY_STEP[wanted] || wanted || build?.step;
+  const step = clampStep(build, asked);
+  return { step, wantedStep: BUILD_STEPS.includes(asked) && asked !== step ? asked : null };
+}
+
+/** After an instantiation answered: the wanted step if one is pending and now reachable, else the current step clamped; the want is spent either way. */
+export function stepAfterInstantiate(build) {
+  return { step: clampStep(build, build?.wantedStep || build?.step), wantedStep: null };
+}
+
+// ---------- focus across a re-render ----------
+
+/**
+ * The focus-key suffix of a todo's param inputs on the stack: the slab, then the todo's
+ * path (`L2/telemetry.backends[0]`) — stable while the todo survives a re-render. An index
+ * in the slab would shift when a filled todo disappears, and the same param may fill
+ * several todos, so an index once restored focus into another todo's input.
+ */
+export function todoFocusSuffix(layerId, path) {
+  return `${layerId}/${path}`;
+}
+
+/**
+ * Where focus goes when the input that held it is gone after a re-render (its todo was
+ * filled and disappeared): the selectors to try in order — the first param input left on
+ * the same slab, then the slab's edge — or none for a key that is not a stack input.
+ */
+export function focusFallbackSelectors(key) {
+  const m = /^param:[^@]+@([^/]+)\//.exec(String(key || ''));
+  if (!m) return [];
+  const slab = `.build-slab[data-layer="${m[1]}"]`;
+  return [`${slab} .build-param-input`, `${slab} .build-slab-edge`];
 }
 
 // ---------- the SLI selection across tiers ----------
@@ -274,6 +328,7 @@ export function buildDefineModel({ build, library, requirements = {} }) {
   });
   const params = paramRows({ build, library });
   const r = build?.result || null;
+  const tierClauses = requirements[build?.tier] || [];
   return {
     name, slug: serviceSlug(name), owners: build?.owners || '', ownerList: parseOwners(build?.owners), environment: build?.environment || 'prod',
     tier: build?.tier, tiers,
@@ -281,6 +336,12 @@ export function buildDefineModel({ build, library, requirements = {} }) {
     archetypes: rows.filter(r => r.kind === 'archetype').map(card),
     selectedEntries: selectedEntries(build, library).map(card),
     params,
+    // The silhouette: the tier's clauses as ghost cards on their slabs, the selection's
+    // SLI / SLO candidates on L1, the edges in the clause states once a pack exists.
+    stack: buildStackModel({
+      requirements: tierClauses, checklist: buildClauseChecklist(tierClauses, r?.summary || null),
+      candidates: sliCandidates({ build, library }), mode: 'define', toggles: build?.toggles || {}, expanded: build?.stackOpen || {},
+    }),
     // The placeholder count the step prints: once a pack exists, the params the
     // engine wrote and reported (provenance.placeholders, what the rail shows) —
     // a flagged param the tier or the selection never writes (pager_service_low
@@ -297,16 +358,17 @@ export function buildDefineModel({ build, library, requirements = {} }) {
 // ---------- COMPILE ----------
 
 /**
- * buildCompileModel({ build, library }) → per-entry SLI rows (reachable at the
- * tier or disabled with the tier they need, checked, the objective and window
- * this tier gives them), the section toggles, and what the last result said.
+ * The per-entry SLI rows of the selection at the draft's tier: reachable (its
+ * minTier at or below the tier) or disabled with the tier it needs, checked
+ * (an explicit list, else the tier's defaults), the objective and window this
+ * tier gives it. COMPILE's rows and DEFINE's L1 candidates read the same list.
  */
-export function buildCompileModel({ build, library }) {
+export function sliGroups({ build, library }) {
   const entries = selectedEntries(build, library);
   const composed = entries.length > 1;
   const tier = build?.tier;
   const explicit = Array.isArray(build?.slis) ? new Set(build.slis) : null;
-  const groups = entries.map(en => ({
+  return entries.map(en => ({
     id: en.id, title: en.title, kind: en.kind, evidence: en.evidence?.status || null,
     slis: (en.slis || []).map(s => {
       const key = sliKey(en.id, s.id, composed);
@@ -321,6 +383,25 @@ export function buildCompileModel({ build, library }) {
       };
     }),
   }));
+}
+
+/** DEFINE's L1 candidates: every SLI the tier reaches in the selection, with its entry. */
+export function sliCandidates({ build, library }) {
+  return sliGroups({ build, library }).flatMap(g => g.slis.filter(s => s.reachable).map(s => ({ ...s, entry: g.id, entryTitle: g.title })));
+}
+
+/**
+ * buildCompileModel({ build, library, clauses }) → per-entry SLI rows (reachable at
+ * the tier or disabled with the tier they need, checked, the objective and window
+ * this tier gives them), the section toggles, what the last result said, and the
+ * live stack: the instantiated pack's artefacts per layer with the slab edges in
+ * the clause states (`clauses` is the tier's rubric; without it the edges are
+ * neutral and no ghost is drawn).
+ */
+export function buildCompileModel({ build, library, clauses = [] }) {
+  const tier = build?.tier;
+  const groups = sliGroups({ build, library });
+  const composed = selectedEntries(build, library).length > 1;
   const all = groups.flatMap(g => g.slis);
   const toggles = SECTION_TOGGLES.map(t => ({
     ...t,
@@ -333,6 +414,10 @@ export function buildCompileModel({ build, library }) {
     tier, composed, groups, toggles,
     counts: { total: all.length, reachable: all.filter(s => s.reachable).length, checked: all.filter(s => s.checked).length },
     atLeastOne: all.some(s => s.checked),
+    stack: buildStackModel({
+      adapted: r?.adapted || null, requirements: clauses, checklist: buildClauseChecklist(clauses, r?.summary || null),
+      todos: r?.todos || [], params: paramRows({ build, library }), mode: 'compile', toggles: build?.toggles || {}, expanded: build?.stackOpen || {},
+    }),
     result: r ? {
       sliCount: r.canonical?.spec?.slis?.length || 0, sloCount: r.canonical?.spec?.slos?.length || 0,
       todoCount: r.todos?.length || 0, warningCount: r.warnings?.length || 0,
@@ -396,12 +481,21 @@ export function buildClauseChecklist(clauses, summary) {
   };
 }
 
-/** The rail's model: the checklist plus the draft's todo / warning counts and its in-flight state. */
+/**
+ * The rail's model: the checklist plus the draft's todo / warning counts and its
+ * in-flight state. The rail is a compact summary of the stack (the per-layer
+ * clauses live on their slabs): `failing` and `onPlaceholder` are what it lists
+ * folded, `expanded` whether the full list is open.
+ */
 export function buildRailModel({ build, clauses }) {
   const r = build?.result || null;
+  const checklist = buildClauseChecklist(clauses || [], r?.summary || null);
   return {
     tier: build?.tier, step: build?.step,
-    checklist: buildClauseChecklist(clauses || [], r?.summary || null),
+    checklist,
+    failing: checklist.items.filter(i => i.state === 'fail'),
+    onPlaceholder: checklist.items.filter(i => i.state === 'placeholder'),
+    expanded: !!build?.railOpen,
     todoCount: r?.todos?.length || 0,
     warningCount: r?.warnings?.length || 0,
     blockingWarnings: (r?.warnings || []).filter(w => w.kind === 'promql').length,
@@ -418,31 +512,42 @@ export function placeholdersRemaining(result) {
 
 // ---------- VERIFY ----------
 
+/** One todo as the views draw it: its param rows resolved (an unknown key still gets a row), manual when no param fills it. */
+function todoRow(t, byKey) {
+  return {
+    path: t.path, fields: t.fields || [], what: t.what || '', clauses: t.clauses || [],
+    params: (t.params || []).map(k => byKey.get(k) || { key: k, label: k, value: null, default: '', placeholder: true, effective: '', error: null }),
+    manual: !(t.params || []).length,   // a runbook to write, a baseline to measure: no param fills it
+  };
+}
+
 /** Todos grouped by artefact family, each todo carrying the param rows that fill it. */
 export function groupTodos(todos, params) {
   const byKey = new Map((params || []).map(p => [p.key, p]));
   const groups = ARTEFACT_GROUPS.map(g => ({ id: g.id, label: g.label, todos: [] }));
   for (const t of todos || []) {
     const g = groups.find(x => ARTEFACT_GROUPS.find(a => a.id === x.id).match.test(t.path));
-    g.todos.push({
-      path: t.path, fields: t.fields || [], what: t.what || '', clauses: t.clauses || [],
-      params: (t.params || []).map(k => byKey.get(k) || { key: k, label: k, value: null, default: '', placeholder: true, effective: '', error: null }),
-      manual: !(t.params || []).length,   // a runbook to write, a baseline to measure: no param fills it
-    });
+    g.todos.push(todoRow(t, byKey));
   }
   return groups.filter(g => g.todos.length);
 }
 
 /**
- * buildVerifyModel({ build, targets }) → the conformance verdict at the tier
- * with the three clause states, the schema verdict, the warnings, the todos
- * grouped by artefact with their params, the compile targets as artefact
- * cards, and the hand-off facts (placeholders remaining, registered id).
+ * buildVerifyModel({ build, library, clauses, targets }) → the conformance verdict
+ * at the tier with the three clause states, the schema verdict, the warnings,
+ * the stack with the todos pinned to their slabs (each with the param rows that
+ * fill it) and the per-layer maturity, the todos grouped by artefact family, the
+ * compile targets as artefact cards, and the hand-off facts (placeholders
+ * remaining, registered id).
  */
 export function buildVerifyModel({ build, library, clauses, targets }) {
   const r = build?.result || null;
   const params = paramRows({ build, library });
   const checklist = buildClauseChecklist(clauses || [], r?.summary || null);
+  const stack = buildStackModel({
+    adapted: r?.adapted || null, requirements: clauses || [], checklist,
+    todos: r?.todos || [], params, mode: 'verify', toggles: build?.toggles || {}, expanded: build?.stackOpen || {},
+  });
   const s = r?.summary || null;
   const blocking = (r?.warnings || []).some(w => w.kind === 'promql');
   const schemaOk = (r?.schemaErrors || []).length === 0;
@@ -460,6 +565,9 @@ export function buildVerifyModel({ build, library, clauses, targets }) {
       onPlaceholder: s.onPlaceholder || [], failing: s.failing || [],
     } : null,
     checklist,
+    stack,
+    // The per-layer maturity bars on the verdict card: clause counts per dimension.
+    maturity: stack.slabs.filter(sl => sl.maturity.total > 0).map(sl => ({ id: sl.id, num: sl.num, name: sl.name, state: sl.state, ...sl.maturity })),
     schema: { ok: schemaOk, errors: r?.schemaErrors || [] },
     warnings: summarizeWarnings(r?.warnings || []),
     blocking,
@@ -484,4 +592,282 @@ export function buildVerifyModel({ build, library, clauses, targets }) {
     // A stale pack (the last compilation failed) is never handed off: the error stands until the field is fixed.
     canRegister: !!r && schemaOk && !blocking && !error,
   };
+}
+
+// ---------- the layer stack (steps 1-3; docs/BUILD_JOURNEY.md "The scan") ----------
+
+/**
+ * A short name per rubric clause for its ghost card — the card's title; the clause's
+ * description is the card's desc. The rubric is tools/lib/conformance.mjs; an id not
+ * listed here is humanised from its last segment. An L4 clause also says which
+ * subgroup (policy · alerting · self-healing) it shapes.
+ */
+export const CLAUSE_GHOSTS = {
+  'L1.MUST.availability_slo': { label: 'availability SLO' },
+  'L1.MUST.latency_slo': { label: 'latency SLO' },
+  'L1.SHOULD.domain_slo': { label: 'domain SLO' },
+  'L1.MUST.sli_covered_by_slo': { label: 'every SLI under an SLO' },
+  'L2.MUST.otlp_receiver': { label: 'otlp receiver' },
+  'L2.MUST.service_name_required': { label: 'service.name required' },
+  'L2.MUST.semconv_floor': { label: 'SemConv ≥ 1.26.0' },
+  'L2.MUST.semconv_current': { label: 'SemConv 1.27.0' },
+  'L2.MUST.resource_attrs_5plus': { label: '5+ resource attributes' },
+  'L2.MUST.log_correlation': { label: 'log correlation' },
+  'L2.MUST.metrics_exporter': { label: 'metrics exporter' },
+  'L2.MUST.logs_and_traces_exporters': { label: 'logs + traces exporters' },
+  'L2.MUST.tail_sampling': { label: 'tail sampling' },
+  'L2.MUST.metrics_logs_traces_backends': { label: 'metrics + logs + traces backends' },
+  'L2.SHOULD.backend_gating_enforce': { label: 'backend gating: enforce' },
+  'L2X.MUST.extended_backend_refs_resolve': { label: 'extended backend refs resolve' },
+  'L3.MUST.recording_rule_per_slo': { label: 'recording rule per SLO' },
+  'L3.SHOULD.derived_view': { label: 'derived view' },
+  'L3.MUST.service_overview_dashboard': { label: 'service overview board' },
+  'L3.MUST.slo_burn_dashboard': { label: 'SLO burn board' },
+  'L3.MUST.tier1_dashboards': { label: 'deployment overlay + customer impact boards' },
+  'L4.MUST.multi_window_burn_rate': { label: 'multi-window burn alerts', subgroup: 'policy' },
+  'L4.SHOULD.forecast_on_availability': { label: 'forecast on availability', subgroup: 'policy' },
+  'L4.MUST.tier1_voice_route': { label: 'SEV1 voice route', subgroup: 'alerting' },
+  'L4.MUST.tier1_at_least_one_automation': { label: 'self-healing remediation', subgroup: 'healing' },
+  'L5.SHOULD.tier1_release_gate': { label: 'release gate' },
+  'L5.MUST.synthetic_probe': { label: 'synthetic probe' },
+  'L5.MUST.tier1_chaos_for_each_slo': { label: 'chaos per SLO' },
+  'L5.MUST.tier2_chaos_staging': { label: 'chaos in staging' },
+  'L5.MUST.tier1_weekly_prod_chaos': { label: 'weekly prod chaos' },
+};
+const ACRONYMS = { slo: 'SLO', slos: 'SLOs', sli: 'SLI', slis: 'SLIs', otlp: 'OTLP', semconv: 'SemConv', otel: 'OTel', mttd: 'MTTD', mttr: 'MTTR', sev1: 'SEV1' };
+/** The ghost's title for a clause id: the table's label, else the id's last segment humanised. */
+export function clauseGhostLabel(id) {
+  if (CLAUSE_GHOSTS[id]) return CLAUSE_GHOSTS[id].label;
+  return String(id || '').split('.').pop().split('_').filter(Boolean).map(w => ACRONYMS[w] || w).join(' ');
+}
+/** The L4 subgroup an L4 clause shapes: the table's, else by keyword (route → alerting, automation / remediation → healing, the rest policy). */
+export function clauseSubgroup(id) {
+  if (CLAUSE_GHOSTS[id]?.subgroup) return CLAUSE_GHOSTS[id].subgroup;
+  const s = String(id || '').toLowerCase();
+  if (/route|voice|channel/.test(s)) return 'alerting';
+  if (/automation|remediat|heal|runbook/.test(s)) return 'healing';
+  return 'policy';
+}
+
+/**
+ * Which slab a todo lands on — the artefact family of its path (the adapter symbol the
+ * engine writes: `alerting.routes[0]`, `telemetry.backends.<id>`, `validation.synthetic_checks.<id>`,
+ * `remediation[0]`, `baselines`, `metadata.owners`) — and, on L4, which subgroup.
+ */
+export const TODO_LAYERS = [
+  { match: /^(slis|slos)\b/, layer: 'L1', subgroup: null },
+  { match: /^(otel|telemetry|pipelines|storage)\b/, layer: 'L2', subgroup: null },
+  { match: /^(profiling|network|policy_engine|mesh|collection)\b/, layer: 'L2X', subgroup: null },
+  { match: /^(queries|dashboards)\b/, layer: 'L3', subgroup: null },
+  { match: /^policy\b/, layer: 'L4', subgroup: 'policy' },
+  { match: /^alerting\b/, layer: 'L4', subgroup: 'alerting' },
+  { match: /^remediation\b/, layer: 'L4', subgroup: 'healing' },
+  { match: /^(validation|baselines)\b/, layer: 'L5', subgroup: null },
+  { match: /^metadata\b/, layer: 'GOV', subgroup: null },
+];
+export function todoLayer(path) {
+  const hit = TODO_LAYERS.find(t => t.match.test(String(path || '')));
+  return hit ? { layer: hit.layer, subgroup: hit.subgroup } : { layer: 'GOV', subgroup: null };
+}
+
+/**
+ * The adapter symbol of an artefact — the key `library.todo.<symbol>` (and
+ * `mcp.verified.<symbol>`) is written under: the artefact's own `defines` when it has
+ * one, else rebuilt from the adapter's id scheme (tools/lib/adapter.mjs: `PIP-RCV-02` is
+ * `pipelines.receivers[1]`, `ALR-01` `alerting.routes[0]`, `SYN-03` the third synthetic
+ * check by its id …). What pins a todo to its card; null when the id is not one the
+ * adapter mints from a canonical section.
+ */
+const SIGNAL_FAMILY = { MET: 'metrics', LOG: 'logs', TRC: 'traces' };
+export function artefactSymbol(a) {
+  if (!a) return null;
+  if (a.defines) return a.defines;
+  const id = String(a.id || '');
+  const fixed = { 'OTEL-01': 'otel', 'BASE-01': 'baselines', 'PROF-01': 'profiling', 'NET-01': 'network', 'POE-01': 'policy_engine' };
+  if (fixed[id]) return fixed[id];
+  const indexed = [
+    [/^PIP-RCV-(\d+)$/, 'pipelines.receivers'], [/^PIP-PRC-(\d+)$/, 'pipelines.processors'], [/^QRY-(\d+)$/, 'queries.recording_rules'],
+    [/^POL-(\d+)$/, 'policy.burn_rate_alerts'], [/^FCST-(\d+)$/, 'policy.forecasts'], [/^ALR-(\d+)$/, 'alerting.routes'],
+    [/^HEAL-(\d+)$/, 'remediation'], [/^MESH-(\d+)$/, 'mesh'], [/^COL-(\d+)$/, 'collection'],
+  ];
+  for (const [re, head] of indexed) { const m = re.exec(id); if (m) return `${head}[${Number(m[1]) - 1}]`; }
+  let m;
+  if ((m = /^PIP-EXP-(MET|LOG|TRC)$/.exec(id))) return `pipelines.exporters.${SIGNAL_FAMILY[m[1]]}`;
+  if ((m = /^STO-(MET|LOG|TRC)-01$/.exec(id))) return `storage.${SIGNAL_FAMILY[m[1]]}`;
+  if (/^CHAOS-\d+$/.test(id)) return `validation.chaos_experiments.${a.title}`;
+  if (/^SYN-\d+$/.test(id)) return `validation.synthetic_checks.${a.title}`;
+  if (/^PANEL-\d+$/.test(id) && a.parent) return `${a.parent}.panels.${a.title}`;
+  return null;
+}
+
+/**
+ * The detail artefacts Discover folds behind a section's Expand toggle (layers-view.mjs
+ * expandBucketsFor): anything the adapter marks `expand` (dashboard panels, the metric
+ * inventory, scrape evidence) and, on L3, the recording rules and derived views.
+ */
+export function isDetailArtefact(a, layerId) {
+  if (a?.expand) return true;
+  if (layerId !== 'L3') return false;
+  const tags = a?.tags || [];
+  return tags.includes('recording') || tags.includes('view') || tags.includes('derived');
+}
+
+/** The sections a toggle switches off, per slab (L4 per subgroup): what dims a slab. */
+const SECTION_SLABS = {
+  slos: [['L1', null], ['L4', 'policy']],
+  policy: [['L4', 'policy']],
+  routes: [['L4', 'alerting']],
+  dashboards: [['L3', null]],
+  validation: [['L5', null]],
+};
+
+/** The slab's edge from the clause states of its dimension: fail > pending > placeholder > pass; neutral when no clause applies. */
+export function slabState(clauses) {
+  if (!clauses.length) return 'neutral';
+  if (clauses.some(c => c.state === 'fail')) return 'fail';
+  if (clauses.some(c => c.state === 'pending')) return 'pending';
+  if (clauses.some(c => c.state === 'placeholder')) return 'placeholder';
+  return 'pass';
+}
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+function slabStateText(state, m) {
+  switch (state) {
+    case 'neutral': return 'no clause applies';
+    case 'pending': return `${plural(m.total, 'clause')} to evaluate`;
+    case 'fail': return `${m.fail} of ${plural(m.total, 'clause')} fail${m.fail === 1 ? 's' : ''}`;
+    case 'placeholder': return `${m.pass + m.placeholder} of ${m.total} pass · ${m.placeholder} on a placeholder`;
+    default: return `${m.total} of ${plural(m.total, 'clause')} pass`;
+  }
+}
+const pct = (n, total) => (total ? Math.round((n / total) * 100) : 0);
+
+/**
+ * buildStackModel({ adapted, checklist, requirements, candidates, todos, params, mode,
+ * toggles, expanded }) → { mode, slabs, counts, compiled }: the layer stack of the pack
+ * being compiled, in LAYER_DEFS order.
+ *
+ *   adapted       the adapter's layered projection (the instantiate response's `adapted`); null before the first result
+ *   checklist     buildClauseChecklist(...) of the tier's clauses: the edge states and the maturity
+ *   requirements  the tier's clauses (tierRequirements); the checklist's items when absent — the silhouette
+ *   candidates    DEFINE only: sliCandidates(...) — the selection's SLIs at the tier, ghosted on L1 with their SLO
+ *   todos, params the engine's todos and the param rows that fill them: pinned to the slab of the artefact they name
+ *   mode          'define' (silhouette: every clause a ghost, no artefact) | 'compile' | 'verify' (the artefacts;
+ *                 a ghost only for a clause still unmet, or for every clause while nothing is compiled yet)
+ *   toggles       the section toggles: a slab whose section is off is `dimmed` (its clauses go red on the edge by themselves)
+ *   expanded      { [layerId]: true } — which slabs show their clause list
+ *
+ * Each slab: { id, num, name, state, stateText, clauses, artefacts, ghosts, todos,
+ * subgroups (L4), counts, maturity, dimmed, offSections, expanded, why, present }. L2X is
+ * present only when it has an artefact or a clause; GOV has no clause and is neutral.
+ * Nothing here is invented: the artefacts are the adapter's, untouched (each gains its
+ * `symbol` and, when a todo names it, `todoPath`); the ghosts are the rubric; the states
+ * are the checklist's.
+ */
+export function buildStackModel({ adapted = null, checklist = null, requirements = null, candidates = [], todos = [], params = [], mode = 'compile', toggles = {}, expanded = {} } = {}) {
+  const stateOf = new Map((checklist?.items || []).map(i => [i.id, i]));
+  const clauseList = (requirements || checklist?.items || []).map(c => {
+    const st = stateOf.get(c.id);
+    return {
+      id: c.id, dimension: c.dimension, severity: c.severity, minTier: c.minTier, description: c.description || '',
+      label: clauseGhostLabel(c.id), state: st?.state || 'pending', todos: st?.todos || [],
+      subgroup: c.dimension === 'L4' ? clauseSubgroup(c.id) : null,
+    };
+  });
+  const byKey = new Map((params || []).map(p => [p.key, p]));
+  const todoRows = (todos || []).map(t => ({ ...todoRow(t, byKey), ...todoLayer(t.path), artefactId: null }));
+  const todoByPath = new Map(todoRows.map(t => [t.path, t]));
+  const layers = adapted?.layers || null;
+  const withSymbols = (items, layerId) => (items || []).map(a => {
+    const symbol = artefactSymbol(a);
+    const todo = symbol ? todoByPath.get(symbol) : null;
+    if (todo) todo.artefactId = a.id;
+    return { ...a, symbol, todoPath: todo ? todo.path : null, detail: isDetailArtefact(a, layerId) };
+  });
+  const ghostOf = (c) => ({
+    kind: 'clause', key: `clause:${c.id}`, clauseId: c.id, title: c.label, desc: c.description, severity: c.severity, minTier: c.minTier,
+    state: c.state, subgroup: c.subgroup,
+    // 'Required' while the silhouette is drawn, 'Missing' (Discover's word: required, not present) once a pack exists and the clause fails.
+    source: mode === 'define' || !layers ? 'Required' : 'Missing',
+    tool: c.id, tags: [c.severity, c.minTier],
+  });
+  const candidateGhosts = mode === 'define'
+    ? (candidates || []).flatMap(c => [
+      { kind: 'sli', key: `sli:${c.key}`, title: c.key, desc: c.description || `${c.type} SLI`, source: 'Candidate', tool: `${c.type} SLI`, tags: ['sli', c.type, c.entry].filter(Boolean), evidence: c.evidence || null, state: null },
+      { kind: 'slo', key: `slo:${c.key}`, title: `SLO on ${c.key}`, desc: `${c.objectiveLabel} over ${c.window || '—'}`, source: 'Candidate', tool: 'SLO', tags: ['slo', c.window].filter(Boolean), evidence: null, state: null },
+    ])
+    : [];
+  const ghostsFor = (clauses) => {
+    if (mode === 'define' || !layers) return clauses.map(ghostOf);
+    return clauses.filter(c => c.state === 'fail').map(ghostOf);
+  };
+  const offFor = (layerId, subgroup) => Object.keys(SECTION_SLABS).filter(sec => toggles?.[sec] === false && SECTION_SLABS[sec].some(([l, sg]) => l === layerId && (sg === null || subgroup === undefined || sg === subgroup)));
+
+  const slabs = [];
+  for (const def of LAYER_DEFS) {
+    const clauses = clauseList.filter(c => c.dimension === def.id);
+    const slabTodos = todoRows.filter(t => t.layer === def.id);
+    let artefacts, ghosts, subgroups = null;
+    if (def.id === 'L4') {
+      subgroups = L4_SUBGROUPS.map(sg => ({
+        key: sg.key, label: sg.label,
+        artefacts: mode === 'define' ? [] : withSymbols(layers?.L4?.[sg.key], 'L4'),
+        ghosts: ghostsFor(clauses.filter(c => c.subgroup === sg.key)),
+        todos: slabTodos.filter(t => t.subgroup === sg.key),
+        offSections: offFor('L4', sg.key),
+      }));
+      artefacts = subgroups.flatMap(sg => sg.artefacts);
+      ghosts = subgroups.flatMap(sg => sg.ghosts);
+    } else {
+      artefacts = mode === 'define' ? [] : withSymbols(layers?.[def.id], def.id);
+      ghosts = [...(def.id === 'L1' ? candidateGhosts : []), ...ghostsFor(clauses)];
+    }
+    // L2X is optional per spec v1.2: shown only when it has content or a clause of its own.
+    if (def.id === 'L2X' && !artefacts.length && !clauses.length) continue;
+    const m = {
+      total: clauses.length,
+      pass: clauses.filter(c => c.state === 'pass').length,
+      placeholder: clauses.filter(c => c.state === 'placeholder').length,
+      fail: clauses.filter(c => c.state === 'fail').length,
+      pending: clauses.filter(c => c.state === 'pending').length,
+    };
+    const maturity = {
+      ...m,
+      pct: m.total ? pct(m.pass + m.placeholder, m.total) : null,
+      passPct: pct(m.pass, m.total), placeholderPct: pct(m.placeholder, m.total), failPct: pct(m.fail, m.total), pendingPct: pct(m.pending, m.total),
+    };
+    const state = slabState(clauses);
+    const offSections = offFor(def.id, undefined);
+    slabs.push({
+      id: def.id, num: def.num, name: def.name,
+      state, stateText: slabStateText(state, m),
+      clauses, artefacts, ghosts, todos: slabTodos, subgroups,
+      counts: {
+        artefacts: artefacts.length, scaffold: artefacts.filter(a => a.source === 'Scaffold').length, verified: artefacts.filter(a => a.source === 'Verified').length,
+        detail: artefacts.filter(a => a.detail).length,
+        ghosts: ghosts.length, todos: slabTodos.length, clauses: clauses.length,
+      },
+      maturity,
+      dimmed: offSections.length > 0, offSections,
+      expanded: !!expanded?.[def.id],
+      // The detail artefacts Discover folds behind its Expand toggles (panels, queries, live evidence), shown on demand.
+      detailOpen: !!expanded?.[`${def.id}/detail`],
+      // A red or amber edge says which clause and why.
+      why: clauses.filter(c => c.state === 'fail' || c.state === 'placeholder').map(c => `${c.id} — ${c.state === 'fail' ? c.description : `passes on ${plural(c.todos.length, 'placeholder')}: ${c.todos.join(', ')}`}`),
+      present: artefacts.length > 0,
+    });
+  }
+  const counts = {
+    slabs: slabs.length,
+    artefacts: slabs.reduce((n, s) => n + s.counts.artefacts, 0),
+    scaffold: slabs.reduce((n, s) => n + s.counts.scaffold, 0),
+    ghosts: slabs.reduce((n, s) => n + s.counts.ghosts, 0),
+    todos: slabs.reduce((n, s) => n + s.counts.todos, 0),
+    clauses: {
+      total: clauseList.length,
+      pass: clauseList.filter(c => c.state === 'pass').length, placeholder: clauseList.filter(c => c.state === 'placeholder').length,
+      fail: clauseList.filter(c => c.state === 'fail').length, pending: clauseList.filter(c => c.state === 'pending').length,
+    },
+    litSlabs: slabs.filter(s => s.present).length,
+  };
+  return { mode, slabs, counts, compiled: !!layers };
 }

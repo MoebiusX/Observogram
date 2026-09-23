@@ -1665,5 +1665,3389 @@
         "pass": null
       }
     ]
+  },
+  "adapted": {
+    "id": "orders-api",
+    "name": "orders-api",
+    "badge": "TIER-2",
+    "description": "ObservabilityPack 0.1.0 for orders-api",
+    "meta": {
+      "apiVersion": "observability.platform/v1",
+      "kind": "ObservabilityPack",
+      "name": "orders-api",
+      "binding": "otel-grafanalabs",
+      "version": "0.1.0",
+      "owners": [
+        "team-orders"
+      ],
+      "service": "orders-api",
+      "criticality": "tier-2",
+      "environment": "prod",
+      "environments": [
+        "prod"
+      ],
+      "backendWiring": {
+        "metrics": "metrics-prom",
+        "logs": "logs-loki",
+        "traces": "traces-tempo"
+      },
+      "annotations": {
+        "library.source": "kafka@1.0.0,http-service@1.0.0",
+        "library.format": "v1",
+        "library.tier": "tier-2",
+        "library.environment": "prod",
+        "library.toggles": "slos,policy,routes,dashboards,validation",
+        "library.slis": "kafka_broker_availability,kafka_consumer_group_lag_seconds,kafka_partition_replica_health,kafka_produce_latency_p99,kafka_fetch_latency_p99,http_service_availability,http_service_latency_p99",
+        "library.params": "{}",
+        "library.evidence": "kafka:recorded-live,http-service:semconv",
+        "library.evidence.slis.kafka_broker_availability": "recorded-live: kafka.md §1.4 — up{job=\"kafka-broker\"} = 1 on the lab (one target)",
+        "library.evidence.slis.kafka_consumer_group_lag_seconds": "recorded-live: kafka.md §1.3-1.4 — kafka_exporter 1.10.0 families and the expression executed (two consumer groups)",
+        "library.evidence.slis.kafka_partition_replica_health": "recorded-live: kafka.md §1.3-1.4 — both families present and the bool form executed; an ISR shortfall itself was not observable on RF 1 (§1.6)",
+        "library.evidence.slis.kafka_produce_latency_p99": "recorded-live: kafka.md §1.2, §1.4 — kafka_network_requestmetrics_totaltimems{request=\"Produce\",quantile=\"0.99\"} read from the JMX exposition and the expression executed",
+        "library.evidence.slis.kafka_fetch_latency_p99": "recorded-live: kafka.md §1.2, §1.4 — the LocalTimeMs quantile gauge and the expression executed; the TotalTimeMs trap measured",
+        "library.evidence.slis.http_service_availability": "semconv: OTel semconv v1.27.0 HTTP metrics + Prometheus compatibility naming; spelling not verified live in this repo (evidence.notes)",
+        "library.evidence.slis.http_service_latency_p99": "semconv: OTel semconv v1.27.0 HTTP metrics + Prometheus compatibility naming; spelling not verified live in this repo (evidence.notes)",
+        "library.todoCount": "21",
+        "library.todo.alerting.routes[0]": "channels.0.msteams: Chat channel for SEV1/SEV2: placeholder '#orders-api-oncall' (param oncall_channel) — The Teams channel the SEV1 and SEV2 routes post to. · channels.1.voice: Voice (pager) target for SEV1: placeholder 'pagerduty://orders-api' (param pager_service) — The voice channel of the SEV1 route (tier-2 and tier-1; L4.MUST.tier1_voice_route).",
+        "library.todo.alerting.routes[1]": "channels.0.msteams: Chat channel for SEV1/SEV2: placeholder '#orders-api-oncall' (param oncall_channel) — The Teams channel the SEV1 and SEV2 routes post to.",
+        "library.todo.alerting.routes[2]": "channels.0.msteams: Chat channel for SEV3: placeholder '#orders-api-team' (param team_channel) — The Teams channel the SEV3 route posts to.",
+        "library.todo.baselines": "mttd_target_p50: MTTD / MTTR targets are the tier-2 defaults, not measured: set them from the service's incident history",
+        "library.todo.pipelines.exporters.logs": "endpoints.0: Loki OTLP ingest endpoint: placeholder 'http://loki:3100/otlp' (param logs_otlp_endpoint) — Where the collector pushes logs over OTLP/HTTP (pipelines.exporters.logs).",
+        "library.todo.pipelines.exporters.metrics": "endpoint: Prometheus remote-write URL: placeholder 'http://prometheus:9090/api/v1/write' (param remote_write_url) — Where the collector remote-writes metrics (pipelines.exporters.metrics).",
+        "library.todo.pipelines.exporters.traces": "endpoint: Tempo OTLP ingest endpoint: placeholder 'tempo:4317' (param traces_otlp_endpoint) — Where the collector pushes traces over OTLP/gRPC (pipelines.exporters.traces).",
+        "library.todo.pipelines.receivers[1]": "scrape_configs.0.static_configs.0.targets.0: Broker JMX exporter targets: placeholder 'kafka-broker.kafka:9404' (param kafka.broker_targets) — host:port of every broker's JMX Prometheus exporter (comma-separated in the scrape config). · scrape_configs.1.static_configs.0.targets.0: kafka_exporter target: placeholder 'kafka-exporter.kafka:9308' (param kafka.exporter_target) — host:port of kafka_exporter.",
+        "library.todo.remediation[0]": "runbook: write the runbook file://<runbook_dir>/broker-down.md",
+        "library.todo.remediation[1]": "runbook: write the runbook file://<runbook_dir>/under-replicated-partitions.md",
+        "library.todo.storage.logs": "version: Loki version you run: placeholder '3.7' (param loki_version) — The version of the Loki that stores the logs (telemetry.backends logs-loki version.declared, storage.logs.version); min stays 3.0.",
+        "library.todo.storage.metrics": "version: Prometheus version you run: placeholder '3.14' (param prometheus_version) — The version of the Prometheus that stores the metrics (telemetry.backends metrics-prom version.declared, storage.metrics.version); min stays 2.53, the floor the expressions are known to work from, and tier-1 enforces the block. · remote_write.0.url: Prometheus remote-write URL: placeholder 'http://prometheus:9090/api/v1/write' (param remote_write_url) — Where the collector remote-writes metrics (pipelines.exporters.metrics).",
+        "library.todo.storage.traces": "version: Tempo version you run: placeholder '2.10' (param tempo_version) — The version of the Tempo that stores the traces (telemetry.backends traces-tempo version.declared, storage.traces.version); min stays 2.5.",
+        "library.todo.telemetry.backends.logs-loki": "version.declared: Loki version you run: placeholder '3.7' (param loki_version) — The version of the Loki that stores the logs (telemetry.backends logs-loki version.declared, storage.logs.version); min stays 3.0. · endpoints.0: Loki endpoint: placeholder 'http://loki:3100' (param logs_endpoint) — Where the logs backend answers (telemetry.backends logs-loki).",
+        "library.todo.telemetry.backends.metrics-prom": "version.declared: Prometheus version you run: placeholder '3.14' (param prometheus_version) — The version of the Prometheus that stores the metrics (telemetry.backends metrics-prom version.declared, storage.metrics.version); min stays 2.53, the floor the expressions are known to work from, and tier-1 enforces the block. · endpoints.0: Prometheus query endpoint: placeholder 'http://prometheus:9090' (param metrics_endpoint) — Where the metrics backend answers PromQL (telemetry.backends metrics-prom).",
+        "library.todo.telemetry.backends.traces-tempo": "version.declared: Tempo version you run: placeholder '2.10' (param tempo_version) — The version of the Tempo that stores the traces (telemetry.backends traces-tempo version.declared, storage.traces.version); min stays 2.5. · endpoints.0: Tempo endpoint: placeholder 'http://tempo:3200' (param traces_endpoint) — Where the traces backend answers (telemetry.backends traces-tempo).",
+        "library.todo.validation.chaos_experiments.kafka-broker-network-partition": "target: Broker workload (chaos target): placeholder 'kafka-broker' (param kafka.broker_workload) — The broker workload (StatefulSet / pods) the chaos experiments target.",
+        "library.todo.validation.chaos_experiments.kafka-broker-pod-kill": "target: Broker workload (chaos target): placeholder 'kafka-broker' (param kafka.broker_workload) — The broker workload (StatefulSet / pods) the chaos experiments target.",
+        "library.todo.validation.synthetic_checks.http-service-health-probe": "target: Health endpoint URL: placeholder 'http://orders-api:8080/health' (param http-service.health_url) — The URL the blackbox probe hits to prove the service answers.",
+        "library.todo.validation.synthetic_checks.kafka-consumer-group-health": "target: Bootstrap servers: placeholder 'kafka.kafka:9092' (param kafka.bootstrap) — The bootstrap address the synthetic produce/consume canary connects to.",
+        "library.todo.validation.synthetic_checks.kafka-produce-consume-canary": "target: Bootstrap servers: placeholder 'kafka.kafka:9092' (param kafka.bootstrap) — The bootstrap address the synthetic produce/consume canary connects to."
+      }
+    },
+    "layers": {
+      "L1": [
+        {
+          "id": "SLI-01",
+          "title": "kafka_broker_availability",
+          "desc": "Fraction of brokers reporting ready vs. the cluster's declared broker count.",
+          "tool": "ratio SLI",
+          "tags": [
+            "sli",
+            "ratio",
+            "semconv"
+          ],
+          "source": "Declared",
+          "defines": "slis.kafka_broker_availability",
+          "spec": {
+            "id": "kafka_broker_availability",
+            "type": "ratio",
+            "description": "Fraction of brokers reporting ready vs. the cluster's declared broker count.",
+            "semconv_metric": "kafka.broker.up",
+            "good": "sum(up{job=\"kafka-broker\"} == bool 1)",
+            "total": "count(up{job=\"kafka-broker\"})"
+          }
+        },
+        {
+          "id": "SLI-02",
+          "title": "kafka_consumer_group_lag_seconds",
+          "desc": "Maximum consumer-group lag in seconds equivalent, per consumer group (message-count lag over the group's rolling consumption rate).",
+          "tool": "threshold SLI",
+          "tags": [
+            "sli",
+            "threshold",
+            "semconv"
+          ],
+          "source": "Declared",
+          "defines": "slis.kafka_consumer_group_lag_seconds",
+          "spec": {
+            "id": "kafka_consumer_group_lag_seconds",
+            "type": "threshold",
+            "description": "Maximum consumer-group lag in seconds equivalent, per consumer group (message-count lag over the group's rolling consumption rate).",
+            "semconv_metric": "messaging.kafka.consumer.lag",
+            "query": "max by (consumergroup) (\n  kafka_consumergroup_lag /\n    (rate(kafka_consumergroup_current_offset[5m]) > 0)\n)",
+            "threshold": 60,
+            "unit": "seconds"
+          }
+        },
+        {
+          "id": "SLI-03",
+          "title": "kafka_partition_replica_health",
+          "desc": "Fraction of partitions whose in-sync replica count equals their replica count (== bool, one per healthy partition).",
+          "tool": "ratio SLI",
+          "tags": [
+            "sli",
+            "ratio",
+            "semconv"
+          ],
+          "source": "Declared",
+          "defines": "slis.kafka_partition_replica_health",
+          "spec": {
+            "id": "kafka_partition_replica_health",
+            "type": "ratio",
+            "description": "Fraction of partitions whose in-sync replica count equals their replica count (== bool, one per healthy partition).",
+            "semconv_metric": "kafka.partition.in_sync_replicas",
+            "good": "sum(kafka_topic_partition_in_sync_replica == bool kafka_topic_partition_replicas)",
+            "total": "count(kafka_topic_partition_replicas)"
+          }
+        },
+        {
+          "id": "SLI-04",
+          "title": "kafka_produce_latency_p99",
+          "desc": "99th-percentile total time of Produce requests on the broker, in seconds (queue, local, replication wait, response send) — what a producer waits for an ack.",
+          "tool": "threshold SLI",
+          "tags": [
+            "sli",
+            "threshold",
+            "semconv"
+          ],
+          "source": "Declared",
+          "defines": "slis.kafka_produce_latency_p99",
+          "spec": {
+            "id": "kafka_produce_latency_p99",
+            "type": "threshold",
+            "description": "99th-percentile total time of Produce requests on the broker, in seconds (queue, local, replication wait, response send) — what a producer waits for an ack.",
+            "semconv_metric": "kafka.broker.request.latency",
+            "query": "max(kafka_network_requestmetrics_totaltimems{request=\"Produce\",quantile=\"0.99\"}) / 1000",
+            "threshold": 0.1,
+            "unit": "seconds"
+          }
+        },
+        {
+          "id": "SLI-05",
+          "title": "kafka_fetch_latency_p99",
+          "desc": "99th-percentile local (broker processing) time of FetchConsumer requests, in seconds.",
+          "tool": "threshold SLI",
+          "tags": [
+            "sli",
+            "threshold",
+            "semconv"
+          ],
+          "source": "Declared",
+          "defines": "slis.kafka_fetch_latency_p99",
+          "spec": {
+            "id": "kafka_fetch_latency_p99",
+            "type": "threshold",
+            "description": "99th-percentile local (broker processing) time of FetchConsumer requests, in seconds.",
+            "semconv_metric": "kafka.broker.request.latency",
+            "query": "max(kafka_network_requestmetrics_localtimems{request=\"FetchConsumer\",quantile=\"0.99\"}) / 1000",
+            "threshold": 0.05,
+            "unit": "seconds"
+          }
+        },
+        {
+          "id": "SLI-06",
+          "title": "http_service_availability",
+          "desc": "Fraction of HTTP requests not answered with a 5xx status, from the request-duration histogram's _count series (semconv http.server.request.duration, label http_response_status_code).",
+          "tool": "ratio SLI",
+          "tags": [
+            "sli",
+            "ratio",
+            "semconv"
+          ],
+          "source": "Declared",
+          "defines": "slis.http_service_availability",
+          "spec": {
+            "id": "http_service_availability",
+            "type": "ratio",
+            "description": "Fraction of HTTP requests not answered with a 5xx status, from the request-duration histogram's _count series (semconv http.server.request.duration, label http_response_status_code).",
+            "semconv_metric": "http.server.request.duration",
+            "good": "sum(rate(http_server_request_duration_seconds_count{job=\"orders-api\",http_response_status_code!~\"5..\"}[5m]))",
+            "total": "sum(rate(http_server_request_duration_seconds_count{job=\"orders-api\"}[5m]))"
+          }
+        },
+        {
+          "id": "SLI-07",
+          "title": "http_service_latency_p99",
+          "desc": "99th-percentile server-side request duration in seconds, from the semconv http.server.request.duration histogram.",
+          "tool": "threshold SLI",
+          "tags": [
+            "sli",
+            "threshold",
+            "semconv"
+          ],
+          "source": "Declared",
+          "defines": "slis.http_service_latency_p99",
+          "spec": {
+            "id": "http_service_latency_p99",
+            "type": "threshold",
+            "description": "99th-percentile server-side request duration in seconds, from the semconv http.server.request.duration histogram.",
+            "semconv_metric": "http.server.request.duration",
+            "query": "histogram_quantile(0.99,\n  sum by (le)(rate(http_server_request_duration_seconds_bucket{job=\"orders-api\"}[5m])))",
+            "threshold": 0.5,
+            "unit": "seconds"
+          }
+        },
+        {
+          "id": "SLO-01",
+          "title": "kafka_broker_availability_99_9",
+          "desc": "99.9% over 30d (SLI: kafka_broker_availability)",
+          "tool": "SLO",
+          "tags": [
+            "slo",
+            "30d"
+          ],
+          "source": "Declared",
+          "defines": "slos.kafka_broker_availability_99_9",
+          "refs": [
+            "slis.kafka_broker_availability"
+          ],
+          "spec": {
+            "id": "kafka_broker_availability_99_9",
+            "sli": "kafka_broker_availability",
+            "objective": 0.999,
+            "window": "30d",
+            "error_budget_policy": "ref:platform/std-budget-policy"
+          }
+        },
+        {
+          "id": "SLO-02",
+          "title": "kafka_consumer_group_lag_seconds_99",
+          "desc": "99% over 7d (SLI: kafka_consumer_group_lag_seconds)",
+          "tool": "SLO",
+          "tags": [
+            "slo",
+            "7d"
+          ],
+          "source": "Declared",
+          "defines": "slos.kafka_consumer_group_lag_seconds_99",
+          "refs": [
+            "slis.kafka_consumer_group_lag_seconds"
+          ],
+          "spec": {
+            "id": "kafka_consumer_group_lag_seconds_99",
+            "sli": "kafka_consumer_group_lag_seconds",
+            "objective": 0.99,
+            "window": "7d",
+            "error_budget_policy": "ref:platform/std-budget-policy"
+          }
+        },
+        {
+          "id": "SLO-03",
+          "title": "kafka_partition_replica_health_99_95",
+          "desc": "99.95% over 30d (SLI: kafka_partition_replica_health)",
+          "tool": "SLO",
+          "tags": [
+            "slo",
+            "30d"
+          ],
+          "source": "Declared",
+          "defines": "slos.kafka_partition_replica_health_99_95",
+          "refs": [
+            "slis.kafka_partition_replica_health"
+          ],
+          "spec": {
+            "id": "kafka_partition_replica_health_99_95",
+            "sli": "kafka_partition_replica_health",
+            "objective": 0.9995,
+            "window": "30d",
+            "error_budget_policy": "ref:platform/std-budget-policy"
+          }
+        },
+        {
+          "id": "SLO-04",
+          "title": "kafka_produce_latency_p99_99",
+          "desc": "99% over 30d (SLI: kafka_produce_latency_p99)",
+          "tool": "SLO",
+          "tags": [
+            "slo",
+            "30d"
+          ],
+          "source": "Declared",
+          "defines": "slos.kafka_produce_latency_p99_99",
+          "refs": [
+            "slis.kafka_produce_latency_p99"
+          ],
+          "spec": {
+            "id": "kafka_produce_latency_p99_99",
+            "sli": "kafka_produce_latency_p99",
+            "objective": 0.99,
+            "window": "30d",
+            "error_budget_policy": "ref:platform/std-budget-policy"
+          }
+        },
+        {
+          "id": "SLO-05",
+          "title": "kafka_fetch_latency_p99_99",
+          "desc": "99% over 30d (SLI: kafka_fetch_latency_p99)",
+          "tool": "SLO",
+          "tags": [
+            "slo",
+            "30d"
+          ],
+          "source": "Declared",
+          "defines": "slos.kafka_fetch_latency_p99_99",
+          "refs": [
+            "slis.kafka_fetch_latency_p99"
+          ],
+          "spec": {
+            "id": "kafka_fetch_latency_p99_99",
+            "sli": "kafka_fetch_latency_p99",
+            "objective": 0.99,
+            "window": "30d",
+            "error_budget_policy": "ref:platform/std-budget-policy"
+          }
+        },
+        {
+          "id": "SLO-06",
+          "title": "http_service_availability_99_5",
+          "desc": "99.5% over 30d (SLI: http_service_availability)",
+          "tool": "SLO",
+          "tags": [
+            "slo",
+            "30d"
+          ],
+          "source": "Declared",
+          "defines": "slos.http_service_availability_99_5",
+          "refs": [
+            "slis.http_service_availability"
+          ],
+          "spec": {
+            "id": "http_service_availability_99_5",
+            "sli": "http_service_availability",
+            "objective": 0.995,
+            "window": "30d",
+            "error_budget_policy": "ref:platform/std-budget-policy"
+          }
+        },
+        {
+          "id": "SLO-07",
+          "title": "http_service_latency_p99_99",
+          "desc": "99% over 30d (SLI: http_service_latency_p99)",
+          "tool": "SLO",
+          "tags": [
+            "slo",
+            "30d"
+          ],
+          "source": "Declared",
+          "defines": "slos.http_service_latency_p99_99",
+          "refs": [
+            "slis.http_service_latency_p99"
+          ],
+          "spec": {
+            "id": "http_service_latency_p99_99",
+            "sli": "http_service_latency_p99",
+            "objective": 0.99,
+            "window": "30d",
+            "error_budget_policy": "ref:platform/std-budget-policy"
+          }
+        }
+      ],
+      "L2": [
+        {
+          "id": "OTEL-01",
+          "title": "OTel SemConv 1.27.0",
+          "desc": "Languages: java, go, node · sampling: parentbased_traceidratio @ 0.1",
+          "tool": "OpenTelemetry SDK",
+          "tags": [
+            "otel",
+            "semconv-1.27.0",
+            "log-correlation"
+          ],
+          "source": "Declared",
+          "spec": {
+            "semconv": "1.27.0",
+            "resource_attributes": {
+              "required": [
+                "service.name",
+                "service.namespace",
+                "service.version",
+                "deployment.environment"
+              ],
+              "custom": [
+                "kafka.cluster.id",
+                "kafka.broker.id"
+              ]
+            },
+            "sdk": {
+              "languages": [
+                "java",
+                "go",
+                "node"
+              ],
+              "sampling": {
+                "policy": "parentbased_traceidratio",
+                "ratio": 0.1
+              },
+              "propagators": [
+                "tracecontext",
+                "baggage"
+              ],
+              "log_correlation": true
+            }
+          }
+        },
+        {
+          "id": "BAK-01",
+          "title": "metrics-prom",
+          "desc": "prometheus 3.14 (metrics)",
+          "tool": "prometheus",
+          "tags": [
+            "metrics",
+            "gating-warn",
+            "default"
+          ],
+          "source": "Scaffold",
+          "defines": "telemetry.backends.metrics-prom",
+          "spec": {
+            "id": "metrics-prom",
+            "signal": "metrics",
+            "product": "prometheus",
+            "version": {
+              "declared": "3.14",
+              "min": "2.53",
+              "gating": "warn"
+            },
+            "endpoints": [
+              "http://prometheus:9090"
+            ],
+            "default": true
+          }
+        },
+        {
+          "id": "BAK-02",
+          "title": "logs-loki",
+          "desc": "loki 3.7 (logs)",
+          "tool": "loki",
+          "tags": [
+            "logs",
+            "gating-warn",
+            "default"
+          ],
+          "source": "Scaffold",
+          "defines": "telemetry.backends.logs-loki",
+          "spec": {
+            "id": "logs-loki",
+            "signal": "logs",
+            "product": "loki",
+            "version": {
+              "declared": "3.7",
+              "min": "3.0",
+              "gating": "warn"
+            },
+            "endpoints": [
+              "http://loki:3100"
+            ],
+            "default": true
+          }
+        },
+        {
+          "id": "BAK-03",
+          "title": "traces-tempo",
+          "desc": "tempo 2.10 (traces)",
+          "tool": "tempo",
+          "tags": [
+            "traces",
+            "gating-warn",
+            "default"
+          ],
+          "source": "Scaffold",
+          "defines": "telemetry.backends.traces-tempo",
+          "spec": {
+            "id": "traces-tempo",
+            "signal": "traces",
+            "product": "tempo",
+            "version": {
+              "declared": "2.10",
+              "min": "2.5",
+              "gating": "warn"
+            },
+            "endpoints": [
+              "http://tempo:3200"
+            ],
+            "default": true
+          }
+        },
+        {
+          "id": "PIP-RCV-01",
+          "title": "receiver: otlp",
+          "desc": "OTel Collector receiver",
+          "tool": "OTel Collector",
+          "tags": [
+            "receiver",
+            "otlp"
+          ],
+          "source": "Declared",
+          "spec": {
+            "name": "otlp",
+            "protocols": [
+              "grpc",
+              "http"
+            ],
+            "endpoint": "0.0.0.0:4317"
+          }
+        },
+        {
+          "id": "PIP-RCV-02",
+          "title": "receiver: prometheus",
+          "desc": "OTel Collector receiver",
+          "tool": "OTel Collector",
+          "tags": [
+            "receiver",
+            "prometheus"
+          ],
+          "source": "Scaffold",
+          "spec": {
+            "name": "prometheus",
+            "scrape_configs": [
+              {
+                "job_name": "kafka-broker",
+                "scrape_interval": "30s",
+                "static_configs": [
+                  {
+                    "targets": [
+                      "kafka-broker.kafka:9404"
+                    ]
+                  }
+                ]
+              },
+              {
+                "job_name": "kafka-exporter",
+                "scrape_interval": "30s",
+                "static_configs": [
+                  {
+                    "targets": [
+                      "kafka-exporter.kafka:9308"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "PIP-PRC-01",
+          "title": "processor: memory_limiter",
+          "desc": "OTel Collector processor",
+          "tool": "OTel Collector",
+          "tags": [
+            "processor",
+            "memory_limiter"
+          ],
+          "source": "Declared",
+          "spec": {
+            "name": "memory_limiter",
+            "limit_percentage": 80
+          }
+        },
+        {
+          "id": "PIP-PRC-02",
+          "title": "processor: batch",
+          "desc": "OTel Collector processor",
+          "tool": "OTel Collector",
+          "tags": [
+            "processor",
+            "batch"
+          ],
+          "source": "Declared",
+          "spec": {
+            "name": "batch",
+            "timeout": "10s"
+          }
+        },
+        {
+          "id": "PIP-PRC-03",
+          "title": "processor: resource",
+          "desc": "OTel Collector processor",
+          "tool": "OTel Collector",
+          "tags": [
+            "processor",
+            "resource"
+          ],
+          "source": "Declared",
+          "spec": {
+            "name": "resource",
+            "attributes": [
+              {
+                "key": "deployment.environment",
+                "value": "prod",
+                "action": "upsert"
+              }
+            ]
+          }
+        },
+        {
+          "id": "PIP-EXP-MET",
+          "title": "exporter (metrics): prometheusremotewrite",
+          "desc": "OTel Collector exporter",
+          "tool": "prometheusremotewrite",
+          "tags": [
+            "exporter",
+            "metrics"
+          ],
+          "source": "Scaffold",
+          "spec": {
+            "kind": "prometheusremotewrite",
+            "endpoint": "http://prometheus:9090/api/v1/write",
+            "external_labels": {
+              "service": "orders-api"
+            }
+          }
+        },
+        {
+          "id": "PIP-EXP-LOG",
+          "title": "exporter (logs): otlphttp",
+          "desc": "OTel Collector exporter",
+          "tool": "otlphttp",
+          "tags": [
+            "exporter",
+            "logs"
+          ],
+          "source": "Scaffold",
+          "spec": {
+            "kind": "otlphttp",
+            "endpoints": [
+              "http://loki:3100/otlp"
+            ]
+          }
+        },
+        {
+          "id": "PIP-EXP-TRC",
+          "title": "exporter (traces): otlp",
+          "desc": "OTel Collector exporter",
+          "tool": "otlp",
+          "tags": [
+            "exporter",
+            "traces"
+          ],
+          "source": "Scaffold",
+          "spec": {
+            "kind": "otlp",
+            "endpoint": "tempo:4317"
+          }
+        },
+        {
+          "id": "STO-MET-01",
+          "title": "metrics storage",
+          "desc": "prometheus 3.14 retain 90d",
+          "tool": "prometheus",
+          "tags": [
+            "storage",
+            "metrics"
+          ],
+          "source": "Scaffold",
+          "spec": {
+            "backend": "prometheus",
+            "version": "3.14",
+            "retention": "90d",
+            "remote_write": [
+              {
+                "url": "http://prometheus:9090/api/v1/write"
+              }
+            ]
+          }
+        },
+        {
+          "id": "STO-LOG-01",
+          "title": "logs storage",
+          "desc": "loki 3.7 retain 30d",
+          "tool": "loki",
+          "tags": [
+            "storage",
+            "logs"
+          ],
+          "source": "Scaffold",
+          "spec": {
+            "backend": "loki",
+            "version": "3.7",
+            "retention": "30d"
+          }
+        },
+        {
+          "id": "STO-TRC-01",
+          "title": "traces storage",
+          "desc": "tempo 2.10 retain 7d",
+          "tool": "tempo",
+          "tags": [
+            "storage",
+            "traces",
+            "sampling-head-based"
+          ],
+          "source": "Scaffold",
+          "spec": {
+            "backend": "tempo",
+            "version": "2.10",
+            "retention": "7d",
+            "sampling": "head-based"
+          }
+        }
+      ],
+      "L2X": [],
+      "L3": [
+        {
+          "id": "QRY-01",
+          "title": "orders_api:kafka_broker_availability:ratio_5m",
+          "desc": "recording rule @ 30s",
+          "tool": "Prometheus recording rule",
+          "tags": [
+            "recording"
+          ],
+          "source": "Declared",
+          "refs": [
+            "ref:slis.kafka_broker_availability"
+          ],
+          "spec": {
+            "name": "orders_api:kafka_broker_availability:ratio_5m",
+            "expr": "ref:slis.kafka_broker_availability",
+            "interval": "30s"
+          }
+        },
+        {
+          "id": "QRY-02",
+          "title": "orders_api:kafka_consumer_group_lag_seconds:value_5m",
+          "desc": "recording rule @ 30s",
+          "tool": "Prometheus recording rule",
+          "tags": [
+            "recording"
+          ],
+          "source": "Declared",
+          "refs": [
+            "ref:slis.kafka_consumer_group_lag_seconds"
+          ],
+          "spec": {
+            "name": "orders_api:kafka_consumer_group_lag_seconds:value_5m",
+            "expr": "ref:slis.kafka_consumer_group_lag_seconds",
+            "interval": "30s"
+          }
+        },
+        {
+          "id": "QRY-03",
+          "title": "orders_api:kafka_partition_replica_health:ratio_5m",
+          "desc": "recording rule @ 30s",
+          "tool": "Prometheus recording rule",
+          "tags": [
+            "recording"
+          ],
+          "source": "Declared",
+          "refs": [
+            "ref:slis.kafka_partition_replica_health"
+          ],
+          "spec": {
+            "name": "orders_api:kafka_partition_replica_health:ratio_5m",
+            "expr": "ref:slis.kafka_partition_replica_health",
+            "interval": "30s"
+          }
+        },
+        {
+          "id": "QRY-04",
+          "title": "orders_api:kafka_produce_latency_p99:value_5m",
+          "desc": "recording rule @ 30s",
+          "tool": "Prometheus recording rule",
+          "tags": [
+            "recording"
+          ],
+          "source": "Declared",
+          "refs": [
+            "ref:slis.kafka_produce_latency_p99"
+          ],
+          "spec": {
+            "name": "orders_api:kafka_produce_latency_p99:value_5m",
+            "expr": "ref:slis.kafka_produce_latency_p99",
+            "interval": "30s"
+          }
+        },
+        {
+          "id": "QRY-05",
+          "title": "orders_api:kafka_fetch_latency_p99:value_5m",
+          "desc": "recording rule @ 30s",
+          "tool": "Prometheus recording rule",
+          "tags": [
+            "recording"
+          ],
+          "source": "Declared",
+          "refs": [
+            "ref:slis.kafka_fetch_latency_p99"
+          ],
+          "spec": {
+            "name": "orders_api:kafka_fetch_latency_p99:value_5m",
+            "expr": "ref:slis.kafka_fetch_latency_p99",
+            "interval": "30s"
+          }
+        },
+        {
+          "id": "QRY-06",
+          "title": "orders_api:http_service_availability:ratio_5m",
+          "desc": "recording rule @ 30s",
+          "tool": "Prometheus recording rule",
+          "tags": [
+            "recording"
+          ],
+          "source": "Declared",
+          "refs": [
+            "ref:slis.http_service_availability"
+          ],
+          "spec": {
+            "name": "orders_api:http_service_availability:ratio_5m",
+            "expr": "ref:slis.http_service_availability",
+            "interval": "30s"
+          }
+        },
+        {
+          "id": "QRY-07",
+          "title": "orders_api:http_service_latency_p99:value_5m",
+          "desc": "recording rule @ 30s",
+          "tool": "Prometheus recording rule",
+          "tags": [
+            "recording"
+          ],
+          "source": "Declared",
+          "refs": [
+            "ref:slis.http_service_latency_p99"
+          ],
+          "spec": {
+            "name": "orders_api:http_service_latency_p99:value_5m",
+            "expr": "ref:slis.http_service_latency_p99",
+            "interval": "30s"
+          }
+        },
+        {
+          "id": "VIEW-01",
+          "title": "golden_signals_orders_api",
+          "desc": "bound to ref:platform/golden-signals-view",
+          "tool": "derived view",
+          "tags": [
+            "view",
+            "derived"
+          ],
+          "source": "Declared",
+          "defines": "queries.derived_views.golden_signals_orders_api",
+          "refs": [
+            "ref:platform/golden-signals-view"
+          ],
+          "spec": {
+            "id": "golden_signals_orders_api",
+            "bind": "ref:platform/golden-signals-view",
+            "params": {
+              "service": "orders-api"
+            }
+          }
+        },
+        {
+          "id": "VIEW-02",
+          "title": "kafka_per_topic_throughput",
+          "desc": "bound to ref:platform/per-resource-rollup",
+          "tool": "derived view",
+          "tags": [
+            "view",
+            "derived"
+          ],
+          "source": "Declared",
+          "defines": "queries.derived_views.kafka_per_topic_throughput",
+          "refs": [
+            "ref:platform/per-resource-rollup"
+          ],
+          "spec": {
+            "id": "kafka_per_topic_throughput",
+            "bind": "ref:platform/per-resource-rollup",
+            "params": {
+              "metric": "kafka_server_brokertopicmetrics_messagesin_total{topic!=\"\"}",
+              "by": [
+                "topic"
+              ]
+            }
+          }
+        },
+        {
+          "id": "VIEW-03",
+          "title": "kafka_per_consumergroup_lag",
+          "desc": "bound to ref:platform/per-resource-rollup",
+          "tool": "derived view",
+          "tags": [
+            "view",
+            "derived"
+          ],
+          "source": "Declared",
+          "defines": "queries.derived_views.kafka_per_consumergroup_lag",
+          "refs": [
+            "ref:platform/per-resource-rollup"
+          ],
+          "spec": {
+            "id": "kafka_per_consumergroup_lag",
+            "bind": "ref:platform/per-resource-rollup",
+            "params": {
+              "sli": "kafka_consumer_group_lag_seconds",
+              "by": [
+                "consumergroup"
+              ]
+            }
+          }
+        },
+        {
+          "id": "VIEW-04",
+          "title": "http_service_per_route_latency",
+          "desc": "bound to ref:platform/per-resource-rollup",
+          "tool": "derived view",
+          "tags": [
+            "view",
+            "derived"
+          ],
+          "source": "Declared",
+          "defines": "queries.derived_views.http_service_per_route_latency",
+          "refs": [
+            "ref:platform/per-resource-rollup"
+          ],
+          "spec": {
+            "id": "http_service_per_route_latency",
+            "bind": "ref:platform/per-resource-rollup",
+            "params": {
+              "sli": "http_service_latency_p99",
+              "by": [
+                "http_route"
+              ]
+            }
+          }
+        },
+        {
+          "id": "VIEW-05",
+          "title": "http_service_per_route_traffic",
+          "desc": "bound to ref:platform/per-resource-rollup",
+          "tool": "derived view",
+          "tags": [
+            "view",
+            "derived"
+          ],
+          "source": "Declared",
+          "defines": "queries.derived_views.http_service_per_route_traffic",
+          "refs": [
+            "ref:platform/per-resource-rollup"
+          ],
+          "spec": {
+            "id": "http_service_per_route_traffic",
+            "bind": "ref:platform/per-resource-rollup",
+            "params": {
+              "metric": "http_server_request_duration_seconds_count",
+              "by": [
+                "http_route",
+                "http_request_method"
+              ]
+            }
+          }
+        },
+        {
+          "id": "DASH-01",
+          "title": "orders-api-overview",
+          "desc": "grafana 12.4 · folder: orders-api",
+          "tool": "grafana",
+          "tags": [
+            "dashboard",
+            "grafana"
+          ],
+          "source": "Declared",
+          "defines": "dashboards.orders-api-overview",
+          "refs": [
+            "slis.kafka_broker_availability",
+            "slis.kafka_consumer_group_lag_seconds",
+            "slis.kafka_partition_replica_health",
+            "slis.kafka_produce_latency_p99",
+            "slis.kafka_fetch_latency_p99",
+            "slis.http_service_availability",
+            "slis.http_service_latency_p99",
+            "slos.kafka_broker_availability_99_9",
+            "slos.kafka_consumer_group_lag_seconds_99",
+            "slos.kafka_partition_replica_health_99_95",
+            "slos.kafka_produce_latency_p99_99",
+            "slos.kafka_fetch_latency_p99_99",
+            "slos.http_service_availability_99_5",
+            "slos.http_service_latency_p99_99"
+          ],
+          "spec": {
+            "id": "orders-api-overview",
+            "provider": {
+              "kind": "grafana",
+              "version": "12.4",
+              "schemaVersion": 41
+            },
+            "folder": "orders-api",
+            "source": "file://dashboards/orders-api-overview.json",
+            "panel_bindings": [
+              {
+                "panel": "slis-kafka-broker-availability",
+                "binds_to": "slis.kafka_broker_availability"
+              },
+              {
+                "panel": "slis-kafka-consumer-group-lag-seconds",
+                "binds_to": "slis.kafka_consumer_group_lag_seconds"
+              },
+              {
+                "panel": "slis-kafka-partition-replica-health",
+                "binds_to": "slis.kafka_partition_replica_health"
+              },
+              {
+                "panel": "slis-kafka-produce-latency-p99",
+                "binds_to": "slis.kafka_produce_latency_p99"
+              },
+              {
+                "panel": "slis-kafka-fetch-latency-p99",
+                "binds_to": "slis.kafka_fetch_latency_p99"
+              },
+              {
+                "panel": "slis-http-service-availability",
+                "binds_to": "slis.http_service_availability"
+              },
+              {
+                "panel": "slis-http-service-latency-p99",
+                "binds_to": "slis.http_service_latency_p99"
+              },
+              {
+                "panel": "slos-kafka-broker-availability-99-9",
+                "binds_to": "slos.kafka_broker_availability_99_9"
+              },
+              {
+                "panel": "slos-kafka-consumer-group-lag-seconds-99",
+                "binds_to": "slos.kafka_consumer_group_lag_seconds_99"
+              },
+              {
+                "panel": "slos-kafka-partition-replica-health-99-95",
+                "binds_to": "slos.kafka_partition_replica_health_99_95"
+              },
+              {
+                "panel": "slos-kafka-produce-latency-p99-99",
+                "binds_to": "slos.kafka_produce_latency_p99_99"
+              },
+              {
+                "panel": "slos-kafka-fetch-latency-p99-99",
+                "binds_to": "slos.kafka_fetch_latency_p99_99"
+              },
+              {
+                "panel": "slos-http-service-availability-99-5",
+                "binds_to": "slos.http_service_availability_99_5"
+              },
+              {
+                "panel": "slos-http-service-latency-p99-99",
+                "binds_to": "slos.http_service_latency_p99_99"
+              }
+            ]
+          }
+        },
+        {
+          "id": "DASH-02",
+          "title": "orders-api-slo-burn",
+          "desc": "grafana 12.4 · folder: orders-api",
+          "tool": "grafana",
+          "tags": [
+            "dashboard",
+            "grafana"
+          ],
+          "source": "Declared",
+          "defines": "dashboards.orders-api-slo-burn",
+          "refs": [],
+          "spec": {
+            "id": "orders-api-slo-burn",
+            "provider": {
+              "kind": "grafana",
+              "version": "12.4",
+              "schemaVersion": 41
+            },
+            "folder": "orders-api",
+            "template": "ref:platform/slo-burn-template",
+            "params": {
+              "slos": [
+                "kafka_broker_availability_99_9",
+                "kafka_consumer_group_lag_seconds_99",
+                "kafka_partition_replica_health_99_95",
+                "kafka_produce_latency_p99_99",
+                "kafka_fetch_latency_p99_99",
+                "http_service_availability_99_5",
+                "http_service_latency_p99_99"
+              ]
+            }
+          }
+        },
+        {
+          "id": "DASH-03",
+          "title": "kafka-kafka-consumer-lag",
+          "desc": "grafana 12.4 · folder: orders-api",
+          "tool": "grafana",
+          "tags": [
+            "dashboard",
+            "grafana"
+          ],
+          "source": "Declared",
+          "defines": "dashboards.kafka-kafka-consumer-lag",
+          "refs": [
+            "slis.kafka_consumer_group_lag_seconds",
+            "slos.kafka_consumer_group_lag_seconds_99",
+            "ref:queries.kafka_per_consumergroup_lag"
+          ],
+          "spec": {
+            "id": "kafka-kafka-consumer-lag",
+            "provider": {
+              "kind": "grafana",
+              "version": "12.4",
+              "schemaVersion": 41
+            },
+            "folder": "orders-api",
+            "source": "file://dashboards/kafka-kafka-consumer-lag.json",
+            "panel_bindings": [
+              {
+                "panel": "slis-kafka-consumer-group-lag-seconds",
+                "binds_to": "slis.kafka_consumer_group_lag_seconds"
+              },
+              {
+                "panel": "slos-kafka-consumer-group-lag-seconds-99",
+                "binds_to": "slos.kafka_consumer_group_lag_seconds_99"
+              },
+              {
+                "panel": "view-kafka-per-consumergroup-lag",
+                "binds_to": "ref:queries.kafka_per_consumergroup_lag"
+              }
+            ]
+          }
+        },
+        {
+          "id": "DASH-04",
+          "title": "kafka-kafka-throughput",
+          "desc": "grafana 12.4 · folder: orders-api",
+          "tool": "grafana",
+          "tags": [
+            "dashboard",
+            "grafana"
+          ],
+          "source": "Declared",
+          "defines": "dashboards.kafka-kafka-throughput",
+          "refs": [
+            "ref:queries.kafka_per_topic_throughput"
+          ],
+          "spec": {
+            "id": "kafka-kafka-throughput",
+            "provider": {
+              "kind": "grafana",
+              "version": "12.4",
+              "schemaVersion": 41
+            },
+            "folder": "orders-api",
+            "source": "file://dashboards/kafka-kafka-throughput.json",
+            "panel_bindings": [
+              {
+                "panel": "view-kafka-per-topic-throughput",
+                "binds_to": "ref:queries.kafka_per_topic_throughput"
+              }
+            ]
+          }
+        },
+        {
+          "id": "PANEL-01",
+          "title": "slis-kafka-broker-availability",
+          "desc": "binds: slis.kafka_broker_availability",
+          "tool": "dashboard panel",
+          "tags": [
+            "panel",
+            "grafana"
+          ],
+          "source": "Declared",
+          "refs": [
+            "slis.kafka_broker_availability"
+          ],
+          "expand": true,
+          "parent": "dashboards.orders-api-overview",
+          "spec": {
+            "panel": "slis-kafka-broker-availability",
+            "title": "slis-kafka-broker-availability",
+            "binds_to": "slis.kafka_broker_availability"
+          }
+        },
+        {
+          "id": "PANEL-02",
+          "title": "slis-kafka-consumer-group-lag-seconds",
+          "desc": "binds: slis.kafka_consumer_group_lag_seconds",
+          "tool": "dashboard panel",
+          "tags": [
+            "panel",
+            "grafana"
+          ],
+          "source": "Declared",
+          "refs": [
+            "slis.kafka_consumer_group_lag_seconds"
+          ],
+          "expand": true,
+          "parent": "dashboards.orders-api-overview",
+          "spec": {
+            "panel": "slis-kafka-consumer-group-lag-seconds",
+            "title": "slis-kafka-consumer-group-lag-seconds",
+            "binds_to": "slis.kafka_consumer_group_lag_seconds"
+          }
+        },
+        {
+          "id": "PANEL-03",
+          "title": "slis-kafka-partition-replica-health",
+          "desc": "binds: slis.kafka_partition_replica_health",
+          "tool": "dashboard panel",
+          "tags": [
+            "panel",
+            "grafana"
+          ],
+          "source": "Declared",
+          "refs": [
+            "slis.kafka_partition_replica_health"
+          ],
+          "expand": true,
+          "parent": "dashboards.orders-api-overview",
+          "spec": {
+            "panel": "slis-kafka-partition-replica-health",
+            "title": "slis-kafka-partition-replica-health",
+            "binds_to": "slis.kafka_partition_replica_health"
+          }
+        },
+        {
+          "id": "PANEL-04",
+          "title": "slis-kafka-produce-latency-p99",
+          "desc": "binds: slis.kafka_produce_latency_p99",
+          "tool": "dashboard panel",
+          "tags": [
+            "panel",
+            "grafana"
+          ],
+          "source": "Declared",
+          "refs": [
+            "slis.kafka_produce_latency_p99"
+          ],
+          "expand": true,
+          "parent": "dashboards.orders-api-overview",
+          "spec": {
+            "panel": "slis-kafka-produce-latency-p99",
+            "title": "slis-kafka-produce-latency-p99",
+            "binds_to": "slis.kafka_produce_latency_p99"
+          }
+        },
+        {
+          "id": "PANEL-05",
+          "title": "slis-kafka-fetch-latency-p99",
+          "desc": "binds: slis.kafka_fetch_latency_p99",
+          "tool": "dashboard panel",
+          "tags": [
+            "panel",
+            "grafana"
+          ],
+          "source": "Declared",
+          "refs": [
+            "slis.kafka_fetch_latency_p99"
+          ],
+          "expand": true,
+          "parent": "dashboards.orders-api-overview",
+          "spec": {
+            "panel": "slis-kafka-fetch-latency-p99",
+            "title": "slis-kafka-fetch-latency-p99",
+            "binds_to": "slis.kafka_fetch_latency_p99"
+          }
+        },
+        {
+          "id": "PANEL-06",
+          "title": "slis-http-service-availability",
+          "desc": "binds: slis.http_service_availability",
+          "tool": "dashboard panel",
+          "tags": [
+            "panel",
+            "grafana"
+          ],
+          "source": "Declared",
+          "refs": [
+            "slis.http_service_availability"
+          ],
+          "expand": true,
+          "parent": "dashboards.orders-api-overview",
+          "spec": {
+            "panel": "slis-http-service-availability",
+            "title": "slis-http-service-availability",
+            "binds_to": "slis.http_service_availability"
+          }
+        },
+        {
+          "id": "PANEL-07",
+          "title": "slis-http-service-latency-p99",
+          "desc": "binds: slis.http_service_latency_p99",
+          "tool": "dashboard panel",
+          "tags": [
+            "panel",
+            "grafana"
+          ],
+          "source": "Declared",
+          "refs": [
+            "slis.http_service_latency_p99"
+          ],
+          "expand": true,
+          "parent": "dashboards.orders-api-overview",
+          "spec": {
+            "panel": "slis-http-service-latency-p99",
+            "title": "slis-http-service-latency-p99",
+            "binds_to": "slis.http_service_latency_p99"
+          }
+        },
+        {
+          "id": "PANEL-08",
+          "title": "slos-kafka-broker-availability-99-9",
+          "desc": "binds: slos.kafka_broker_availability_99_9",
+          "tool": "dashboard panel",
+          "tags": [
+            "panel",
+            "grafana"
+          ],
+          "source": "Declared",
+          "refs": [
+            "slos.kafka_broker_availability_99_9"
+          ],
+          "expand": true,
+          "parent": "dashboards.orders-api-overview",
+          "spec": {
+            "panel": "slos-kafka-broker-availability-99-9",
+            "title": "slos-kafka-broker-availability-99-9",
+            "binds_to": "slos.kafka_broker_availability_99_9"
+          }
+        },
+        {
+          "id": "PANEL-09",
+          "title": "slos-kafka-consumer-group-lag-seconds-99",
+          "desc": "binds: slos.kafka_consumer_group_lag_seconds_99",
+          "tool": "dashboard panel",
+          "tags": [
+            "panel",
+            "grafana"
+          ],
+          "source": "Declared",
+          "refs": [
+            "slos.kafka_consumer_group_lag_seconds_99"
+          ],
+          "expand": true,
+          "parent": "dashboards.orders-api-overview",
+          "spec": {
+            "panel": "slos-kafka-consumer-group-lag-seconds-99",
+            "title": "slos-kafka-consumer-group-lag-seconds-99",
+            "binds_to": "slos.kafka_consumer_group_lag_seconds_99"
+          }
+        },
+        {
+          "id": "PANEL-10",
+          "title": "slos-kafka-partition-replica-health-99-95",
+          "desc": "binds: slos.kafka_partition_replica_health_99_95",
+          "tool": "dashboard panel",
+          "tags": [
+            "panel",
+            "grafana"
+          ],
+          "source": "Declared",
+          "refs": [
+            "slos.kafka_partition_replica_health_99_95"
+          ],
+          "expand": true,
+          "parent": "dashboards.orders-api-overview",
+          "spec": {
+            "panel": "slos-kafka-partition-replica-health-99-95",
+            "title": "slos-kafka-partition-replica-health-99-95",
+            "binds_to": "slos.kafka_partition_replica_health_99_95"
+          }
+        },
+        {
+          "id": "PANEL-11",
+          "title": "slos-kafka-produce-latency-p99-99",
+          "desc": "binds: slos.kafka_produce_latency_p99_99",
+          "tool": "dashboard panel",
+          "tags": [
+            "panel",
+            "grafana"
+          ],
+          "source": "Declared",
+          "refs": [
+            "slos.kafka_produce_latency_p99_99"
+          ],
+          "expand": true,
+          "parent": "dashboards.orders-api-overview",
+          "spec": {
+            "panel": "slos-kafka-produce-latency-p99-99",
+            "title": "slos-kafka-produce-latency-p99-99",
+            "binds_to": "slos.kafka_produce_latency_p99_99"
+          }
+        },
+        {
+          "id": "PANEL-12",
+          "title": "slos-kafka-fetch-latency-p99-99",
+          "desc": "binds: slos.kafka_fetch_latency_p99_99",
+          "tool": "dashboard panel",
+          "tags": [
+            "panel",
+            "grafana"
+          ],
+          "source": "Declared",
+          "refs": [
+            "slos.kafka_fetch_latency_p99_99"
+          ],
+          "expand": true,
+          "parent": "dashboards.orders-api-overview",
+          "spec": {
+            "panel": "slos-kafka-fetch-latency-p99-99",
+            "title": "slos-kafka-fetch-latency-p99-99",
+            "binds_to": "slos.kafka_fetch_latency_p99_99"
+          }
+        },
+        {
+          "id": "PANEL-13",
+          "title": "slos-http-service-availability-99-5",
+          "desc": "binds: slos.http_service_availability_99_5",
+          "tool": "dashboard panel",
+          "tags": [
+            "panel",
+            "grafana"
+          ],
+          "source": "Declared",
+          "refs": [
+            "slos.http_service_availability_99_5"
+          ],
+          "expand": true,
+          "parent": "dashboards.orders-api-overview",
+          "spec": {
+            "panel": "slos-http-service-availability-99-5",
+            "title": "slos-http-service-availability-99-5",
+            "binds_to": "slos.http_service_availability_99_5"
+          }
+        },
+        {
+          "id": "PANEL-14",
+          "title": "slos-http-service-latency-p99-99",
+          "desc": "binds: slos.http_service_latency_p99_99",
+          "tool": "dashboard panel",
+          "tags": [
+            "panel",
+            "grafana"
+          ],
+          "source": "Declared",
+          "refs": [
+            "slos.http_service_latency_p99_99"
+          ],
+          "expand": true,
+          "parent": "dashboards.orders-api-overview",
+          "spec": {
+            "panel": "slos-http-service-latency-p99-99",
+            "title": "slos-http-service-latency-p99-99",
+            "binds_to": "slos.http_service_latency_p99_99"
+          }
+        },
+        {
+          "id": "PANEL-15",
+          "title": "slis-kafka-consumer-group-lag-seconds",
+          "desc": "binds: slis.kafka_consumer_group_lag_seconds",
+          "tool": "dashboard panel",
+          "tags": [
+            "panel",
+            "grafana"
+          ],
+          "source": "Declared",
+          "refs": [
+            "slis.kafka_consumer_group_lag_seconds"
+          ],
+          "expand": true,
+          "parent": "dashboards.kafka-kafka-consumer-lag",
+          "spec": {
+            "panel": "slis-kafka-consumer-group-lag-seconds",
+            "title": "slis-kafka-consumer-group-lag-seconds",
+            "binds_to": "slis.kafka_consumer_group_lag_seconds"
+          }
+        },
+        {
+          "id": "PANEL-16",
+          "title": "slos-kafka-consumer-group-lag-seconds-99",
+          "desc": "binds: slos.kafka_consumer_group_lag_seconds_99",
+          "tool": "dashboard panel",
+          "tags": [
+            "panel",
+            "grafana"
+          ],
+          "source": "Declared",
+          "refs": [
+            "slos.kafka_consumer_group_lag_seconds_99"
+          ],
+          "expand": true,
+          "parent": "dashboards.kafka-kafka-consumer-lag",
+          "spec": {
+            "panel": "slos-kafka-consumer-group-lag-seconds-99",
+            "title": "slos-kafka-consumer-group-lag-seconds-99",
+            "binds_to": "slos.kafka_consumer_group_lag_seconds_99"
+          }
+        },
+        {
+          "id": "PANEL-17",
+          "title": "view-kafka-per-consumergroup-lag",
+          "desc": "binds: ref:queries.kafka_per_consumergroup_lag",
+          "tool": "dashboard panel",
+          "tags": [
+            "panel",
+            "grafana"
+          ],
+          "source": "Declared",
+          "refs": [
+            "ref:queries.kafka_per_consumergroup_lag"
+          ],
+          "expand": true,
+          "parent": "dashboards.kafka-kafka-consumer-lag",
+          "spec": {
+            "panel": "view-kafka-per-consumergroup-lag",
+            "title": "view-kafka-per-consumergroup-lag",
+            "binds_to": "ref:queries.kafka_per_consumergroup_lag"
+          }
+        },
+        {
+          "id": "PANEL-18",
+          "title": "view-kafka-per-topic-throughput",
+          "desc": "binds: ref:queries.kafka_per_topic_throughput",
+          "tool": "dashboard panel",
+          "tags": [
+            "panel",
+            "grafana"
+          ],
+          "source": "Declared",
+          "refs": [
+            "ref:queries.kafka_per_topic_throughput"
+          ],
+          "expand": true,
+          "parent": "dashboards.kafka-kafka-throughput",
+          "spec": {
+            "panel": "view-kafka-per-topic-throughput",
+            "title": "view-kafka-per-topic-throughput",
+            "binds_to": "ref:queries.kafka_per_topic_throughput"
+          }
+        }
+      ],
+      "L4": {
+        "policy": [
+          {
+            "id": "POL-01",
+            "title": "burn-rate alert: kafka_broker_availability_99_9",
+            "desc": "2 window(s) · severities: SEV1, SEV2",
+            "tool": "Prometheus alerting",
+            "tags": [
+              "burn-rate",
+              "SEV1",
+              "SEV2"
+            ],
+            "source": "Declared",
+            "refs": [
+              "slos.kafka_broker_availability_99_9"
+            ],
+            "spec": {
+              "slo": "kafka_broker_availability_99_9",
+              "windows": [
+                {
+                  "short": "5m",
+                  "long": "1h",
+                  "factor": 14,
+                  "severity": "SEV1"
+                },
+                {
+                  "short": "30m",
+                  "long": "6h",
+                  "factor": 6,
+                  "severity": "SEV2"
+                }
+              ]
+            }
+          },
+          {
+            "id": "POL-02",
+            "title": "burn-rate alert: kafka_consumer_group_lag_seconds_99",
+            "desc": "2 window(s) · severities: SEV2, SEV3",
+            "tool": "Prometheus alerting",
+            "tags": [
+              "burn-rate",
+              "SEV2",
+              "SEV3"
+            ],
+            "source": "Declared",
+            "refs": [
+              "slos.kafka_consumer_group_lag_seconds_99"
+            ],
+            "spec": {
+              "slo": "kafka_consumer_group_lag_seconds_99",
+              "windows": [
+                {
+                  "short": "10m",
+                  "long": "1h",
+                  "factor": 10,
+                  "severity": "SEV2"
+                },
+                {
+                  "short": "1h",
+                  "long": "6h",
+                  "factor": 4,
+                  "severity": "SEV3"
+                }
+              ]
+            }
+          },
+          {
+            "id": "POL-03",
+            "title": "burn-rate alert: kafka_partition_replica_health_99_95",
+            "desc": "2 window(s) · severities: SEV1, SEV2",
+            "tool": "Prometheus alerting",
+            "tags": [
+              "burn-rate",
+              "SEV1",
+              "SEV2"
+            ],
+            "source": "Declared",
+            "refs": [
+              "slos.kafka_partition_replica_health_99_95"
+            ],
+            "spec": {
+              "slo": "kafka_partition_replica_health_99_95",
+              "windows": [
+                {
+                  "short": "5m",
+                  "long": "1h",
+                  "factor": 14,
+                  "severity": "SEV1"
+                },
+                {
+                  "short": "30m",
+                  "long": "6h",
+                  "factor": 6,
+                  "severity": "SEV2"
+                }
+              ]
+            }
+          },
+          {
+            "id": "POL-04",
+            "title": "burn-rate alert: kafka_produce_latency_p99_99",
+            "desc": "2 window(s) · severities: SEV2, SEV3",
+            "tool": "Prometheus alerting",
+            "tags": [
+              "burn-rate",
+              "SEV2",
+              "SEV3"
+            ],
+            "source": "Declared",
+            "refs": [
+              "slos.kafka_produce_latency_p99_99"
+            ],
+            "spec": {
+              "slo": "kafka_produce_latency_p99_99",
+              "windows": [
+                {
+                  "short": "5m",
+                  "long": "1h",
+                  "factor": 14,
+                  "severity": "SEV2"
+                },
+                {
+                  "short": "30m",
+                  "long": "6h",
+                  "factor": 6,
+                  "severity": "SEV3"
+                }
+              ]
+            }
+          },
+          {
+            "id": "POL-05",
+            "title": "burn-rate alert: kafka_fetch_latency_p99_99",
+            "desc": "2 window(s) · severities: SEV2, SEV3",
+            "tool": "Prometheus alerting",
+            "tags": [
+              "burn-rate",
+              "SEV2",
+              "SEV3"
+            ],
+            "source": "Declared",
+            "refs": [
+              "slos.kafka_fetch_latency_p99_99"
+            ],
+            "spec": {
+              "slo": "kafka_fetch_latency_p99_99",
+              "windows": [
+                {
+                  "short": "5m",
+                  "long": "1h",
+                  "factor": 14,
+                  "severity": "SEV2"
+                },
+                {
+                  "short": "30m",
+                  "long": "6h",
+                  "factor": 6,
+                  "severity": "SEV3"
+                }
+              ]
+            }
+          },
+          {
+            "id": "POL-06",
+            "title": "burn-rate alert: http_service_availability_99_5",
+            "desc": "2 window(s) · severities: SEV1, SEV2",
+            "tool": "Prometheus alerting",
+            "tags": [
+              "burn-rate",
+              "SEV1",
+              "SEV2"
+            ],
+            "source": "Declared",
+            "refs": [
+              "slos.http_service_availability_99_5"
+            ],
+            "spec": {
+              "slo": "http_service_availability_99_5",
+              "windows": [
+                {
+                  "short": "5m",
+                  "long": "1h",
+                  "factor": 14,
+                  "severity": "SEV1"
+                },
+                {
+                  "short": "30m",
+                  "long": "6h",
+                  "factor": 6,
+                  "severity": "SEV2"
+                }
+              ]
+            }
+          },
+          {
+            "id": "POL-07",
+            "title": "burn-rate alert: http_service_latency_p99_99",
+            "desc": "2 window(s) · severities: SEV2, SEV3",
+            "tool": "Prometheus alerting",
+            "tags": [
+              "burn-rate",
+              "SEV2",
+              "SEV3"
+            ],
+            "source": "Declared",
+            "refs": [
+              "slos.http_service_latency_p99_99"
+            ],
+            "spec": {
+              "slo": "http_service_latency_p99_99",
+              "windows": [
+                {
+                  "short": "5m",
+                  "long": "1h",
+                  "factor": 14,
+                  "severity": "SEV2"
+                },
+                {
+                  "short": "30m",
+                  "long": "6h",
+                  "factor": 6,
+                  "severity": "SEV3"
+                }
+              ]
+            }
+          }
+        ],
+        "alerting": [
+          {
+            "id": "ALR-01",
+            "title": "SEV1 routes",
+            "desc": "2 channel(s): msteams, voice",
+            "tool": "Alertmanager",
+            "tags": [
+              "routing",
+              "SEV1",
+              "msteams",
+              "voice"
+            ],
+            "source": "Scaffold",
+            "spec": {
+              "severity": "SEV1",
+              "channels": [
+                {
+                  "msteams": "#orders-api-oncall"
+                },
+                {
+                  "voice": "pagerduty://orders-api"
+                }
+              ]
+            }
+          },
+          {
+            "id": "ALR-02",
+            "title": "SEV2 routes",
+            "desc": "1 channel(s): msteams",
+            "tool": "Alertmanager",
+            "tags": [
+              "routing",
+              "SEV2",
+              "msteams"
+            ],
+            "source": "Scaffold",
+            "spec": {
+              "severity": "SEV2",
+              "channels": [
+                {
+                  "msteams": "#orders-api-oncall"
+                }
+              ]
+            }
+          },
+          {
+            "id": "ALR-03",
+            "title": "SEV3 routes",
+            "desc": "1 channel(s): msteams",
+            "tool": "Alertmanager",
+            "tags": [
+              "routing",
+              "SEV3",
+              "msteams"
+            ],
+            "source": "Scaffold",
+            "spec": {
+              "severity": "SEV3",
+              "channels": [
+                {
+                  "msteams": "#orders-api-team"
+                }
+              ]
+            }
+          }
+        ],
+        "healing": [
+          {
+            "id": "HEAL-01",
+            "title": "alert:kafka_broker_availability_99_9_burn_14x_5m_1h",
+            "desc": "runbook: file://runbooks/broker-down.md",
+            "tool": "argo-workflow",
+            "tags": [
+              "healing",
+              "rollback",
+              "circuit-breaker"
+            ],
+            "source": "Scaffold",
+            "refs": [
+              "alert:kafka_broker_availability_99_9_burn_14x_5m_1h"
+            ],
+            "spec": {
+              "trigger": "alert:kafka_broker_availability_99_9_burn_14x_5m_1h",
+              "runbook": "file://runbooks/broker-down.md",
+              "automation": "argo-workflow://restart-broker-with-quorum-check",
+              "guardrails": {
+                "max_invocations_per_hour": 2,
+                "requires_human_above": "SEV1",
+                "rollback_on_failure": true,
+                "cooldown_after_success": "30m",
+                "circuit_breaker": {
+                  "failures": 2,
+                  "window": "1h"
+                }
+              }
+            }
+          },
+          {
+            "id": "HEAL-02",
+            "title": "alert:kafka_partition_replica_health_99_95_burn_14x_5m_1h",
+            "desc": "runbook: file://runbooks/under-replicated-partitions.md",
+            "tool": "argo-workflow",
+            "tags": [
+              "healing"
+            ],
+            "source": "Scaffold",
+            "refs": [
+              "alert:kafka_partition_replica_health_99_95_burn_14x_5m_1h"
+            ],
+            "spec": {
+              "trigger": "alert:kafka_partition_replica_health_99_95_burn_14x_5m_1h",
+              "runbook": "file://runbooks/under-replicated-partitions.md",
+              "automation": "argo-workflow://reassign-partitions-with-throttle",
+              "guardrails": {
+                "max_invocations_per_hour": 1,
+                "requires_human_above": "SEV2",
+                "rollback_on_failure": false,
+                "cooldown_after_success": "1h"
+              }
+            }
+          }
+        ]
+      },
+      "L5": [
+        {
+          "id": "BASE-01",
+          "title": "MTTD / MTTR baselines",
+          "desc": "MTTD p50 5m · MTTR p50 1h · gate: warn_only",
+          "tool": "baselines",
+          "tags": [
+            "baseline",
+            "mttd",
+            "mttr",
+            "monthly"
+          ],
+          "source": "Scaffold",
+          "spec": {
+            "mttd_target_p50": "5m",
+            "mttd_target_p95": "15m",
+            "mttr_target_p50": "1h",
+            "mttr_target_p95": "4h",
+            "measurement_source": "incident-mgmt + alertmanager firing timestamps",
+            "review_cadence": "monthly",
+            "regression_gate": "warn_only"
+          }
+        },
+        {
+          "id": "CHAOS-01",
+          "title": "kafka-broker-pod-kill",
+          "desc": "chaos-mesh on kafka-broker · expect MTTD 90s · monthly · staging",
+          "tool": "chaos-mesh",
+          "tags": [
+            "chaos",
+            "chaos-mesh",
+            "monthly",
+            "staging"
+          ],
+          "source": "Scaffold",
+          "refs": [
+            "ref:slos.kafka_broker_availability_99_9",
+            "alert:kafka_broker_availability_99_9_burn_14x_5m_1h"
+          ],
+          "spec": {
+            "id": "kafka-broker-pod-kill",
+            "engine": "chaos-mesh",
+            "target": "kafka-broker",
+            "steady_state_hypothesis": "ref:slos.kafka_broker_availability_99_9",
+            "fault": {
+              "kind": "pod-failure",
+              "fraction": 0.33,
+              "duration": "90s"
+            },
+            "expected_alerts": [
+              "kafka_broker_availability_99_9_burn_14x_5m_1h"
+            ],
+            "expected_mttd": "90s",
+            "schedule": "monthly",
+            "environment": "staging"
+          }
+        },
+        {
+          "id": "CHAOS-02",
+          "title": "kafka-broker-network-partition",
+          "desc": "chaos-mesh on kafka-broker · expect MTTD 2m · monthly · staging",
+          "tool": "chaos-mesh",
+          "tags": [
+            "chaos",
+            "chaos-mesh",
+            "monthly",
+            "staging"
+          ],
+          "source": "Scaffold",
+          "refs": [
+            "ref:slos.kafka_partition_replica_health_99_95",
+            "alert:kafka_partition_replica_health_99_95_burn_14x_5m_1h"
+          ],
+          "spec": {
+            "id": "kafka-broker-network-partition",
+            "engine": "chaos-mesh",
+            "target": "kafka-broker",
+            "steady_state_hypothesis": "ref:slos.kafka_partition_replica_health_99_95",
+            "fault": {
+              "kind": "network-partition",
+              "duration": "3m"
+            },
+            "expected_alerts": [
+              "kafka_partition_replica_health_99_95_burn_14x_5m_1h"
+            ],
+            "expected_mttd": "2m",
+            "schedule": "monthly",
+            "environment": "staging"
+          }
+        },
+        {
+          "id": "SYN-01",
+          "title": "kafka-produce-consume-canary",
+          "desc": "k6 · interval 1m · on fail: SEV2",
+          "tool": "k6",
+          "tags": [
+            "synthetic",
+            "k6",
+            "SEV2"
+          ],
+          "source": "Scaffold",
+          "spec": {
+            "id": "kafka-produce-consume-canary",
+            "kind": "k6",
+            "target": "kafka.kafka:9092",
+            "interval": "1m",
+            "assertions": [
+              {
+                "produce_success": true
+              },
+              {
+                "round_trip_latency_lt": "500ms"
+              }
+            ],
+            "on_fail_severity": "SEV2"
+          }
+        },
+        {
+          "id": "SYN-02",
+          "title": "kafka-consumer-group-health",
+          "desc": "k6 · interval 1m · on fail: SEV2",
+          "tool": "k6",
+          "tags": [
+            "synthetic",
+            "k6",
+            "SEV2"
+          ],
+          "source": "Scaffold",
+          "spec": {
+            "id": "kafka-consumer-group-health",
+            "kind": "k6",
+            "target": "kafka.kafka:9092",
+            "interval": "1m",
+            "assertions": [
+              {
+                "consumer_groups_assigned": true
+              },
+              {
+                "current_offset_advancing": true
+              }
+            ],
+            "on_fail_severity": "SEV2"
+          }
+        },
+        {
+          "id": "SYN-03",
+          "title": "http-service-health-probe",
+          "desc": "blackbox-exporter · interval 1m · on fail: SEV2",
+          "tool": "blackbox-exporter",
+          "tags": [
+            "synthetic",
+            "blackbox-exporter",
+            "SEV2"
+          ],
+          "source": "Scaffold",
+          "spec": {
+            "id": "http-service-health-probe",
+            "kind": "blackbox-exporter",
+            "target": "http://orders-api:8080/health",
+            "interval": "1m",
+            "assertions": [
+              {
+                "status_code": 200
+              },
+              {
+                "latency_lt": "1s"
+              }
+            ],
+            "on_fail_severity": "SEV2"
+          }
+        }
+      ],
+      "GOV": [
+        {
+          "id": "IMP-01",
+          "title": "platform/std-budget-policy@2.1",
+          "desc": "vertical composition import",
+          "tool": "imports",
+          "tags": [
+            "governance",
+            "import"
+          ],
+          "source": "Declared",
+          "spec": {
+            "ref": "platform/std-budget-policy@2.1"
+          }
+        }
+      ]
+    },
+    "traceability": {
+      "summary": {
+        "requirements": 7,
+        "withMetrics": 7,
+        "withRecordingRules": 7,
+        "withExporters": 7,
+        "withScrapeEvidence": 0,
+        "withMatchedScrapeJobs": 0,
+        "withDashboards": 7,
+        "withAlerts": 7,
+        "complete": 0
+      },
+      "chains": [
+        {
+          "id": "kafka_broker_availability_99_9",
+          "kind": "slo",
+          "slo": {
+            "id": "kafka_broker_availability_99_9",
+            "symbol": "slos.kafka_broker_availability_99_9",
+            "objective": 0.999,
+            "window": "30d",
+            "artefactId": "SLO-01"
+          },
+          "sli": {
+            "id": "kafka_broker_availability",
+            "symbol": "slis.kafka_broker_availability",
+            "type": "ratio",
+            "artefactId": "SLI-01"
+          },
+          "metrics": [
+            {
+              "name": "up",
+              "sources": [
+                "sli"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:kafka_broker_availability:ratio_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "ref:slis",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:kafka_consumer_group_lag_seconds:value_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:kafka_partition_replica_health:ratio_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:kafka_produce_latency_p99:value_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:kafka_fetch_latency_p99:value_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:http_service_availability:ratio_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:http_service_latency_p99:value_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            }
+          ],
+          "recordingRules": [
+            {
+              "name": "orders_api:kafka_broker_availability:ratio_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:kafka_consumer_group_lag_seconds:value_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:kafka_partition_replica_health:ratio_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:kafka_produce_latency_p99:value_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:kafka_fetch_latency_p99:value_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:http_service_availability:ratio_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:http_service_latency_p99:value_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            }
+          ],
+          "exporters": [
+            {
+              "id": "PIP-EXP-MET",
+              "title": "exporter (metrics): prometheusremotewrite",
+              "kind": "prometheusremotewrite",
+              "source": "Scaffold"
+            }
+          ],
+          "scrapeJobs": {
+            "observedCount": 0,
+            "items": [],
+            "source": null,
+            "exact": false
+          },
+          "dashboards": [
+            {
+              "id": "orders-api-overview",
+              "title": "orders-api-overview",
+              "source": "file://dashboards/orders-api-overview.json",
+              "panels": [
+                {
+                  "title": "slis-kafka-broker-availability",
+                  "bindsTo": "slis.kafka_broker_availability",
+                  "matches": [
+                    "kafka_broker_availability_99_9",
+                    "kafka:broker:availability:99:9",
+                    "kafka_broker_availability",
+                    "kafka:broker:availability",
+                    "slos.kafka_broker_availability_99_9",
+                    "slos.kafka:broker:availability:99:9",
+                    "slis.kafka_broker_availability",
+                    "slis.kafka:broker:availability"
+                  ],
+                  "metrics": []
+                },
+                {
+                  "title": "slis-kafka-consumer-group-lag-seconds",
+                  "bindsTo": "slis.kafka_consumer_group_lag_seconds",
+                  "matches": [
+                    "up"
+                  ],
+                  "metrics": []
+                },
+                {
+                  "title": "slos-kafka-broker-availability-99-9",
+                  "bindsTo": "slos.kafka_broker_availability_99_9",
+                  "matches": [
+                    "kafka_broker_availability_99_9",
+                    "kafka:broker:availability:99:9",
+                    "kafka_broker_availability",
+                    "kafka:broker:availability",
+                    "slos.kafka_broker_availability_99_9",
+                    "slos.kafka:broker:availability:99:9",
+                    "slis.kafka_broker_availability",
+                    "slis.kafka:broker:availability"
+                  ],
+                  "metrics": []
+                },
+                {
+                  "title": "slos-kafka-consumer-group-lag-seconds-99",
+                  "bindsTo": "slos.kafka_consumer_group_lag_seconds_99",
+                  "matches": [
+                    "up"
+                  ],
+                  "metrics": []
+                }
+              ]
+            },
+            {
+              "id": "kafka-kafka-consumer-lag",
+              "title": "kafka-kafka-consumer-lag",
+              "source": "file://dashboards/kafka-kafka-consumer-lag.json",
+              "panels": [
+                {
+                  "title": "slis-kafka-consumer-group-lag-seconds",
+                  "bindsTo": "slis.kafka_consumer_group_lag_seconds",
+                  "matches": [
+                    "up"
+                  ],
+                  "metrics": []
+                },
+                {
+                  "title": "slos-kafka-consumer-group-lag-seconds-99",
+                  "bindsTo": "slos.kafka_consumer_group_lag_seconds_99",
+                  "matches": [
+                    "up"
+                  ],
+                  "metrics": []
+                },
+                {
+                  "title": "view-kafka-per-consumergroup-lag",
+                  "bindsTo": "ref:queries.kafka_per_consumergroup_lag",
+                  "matches": [
+                    "up"
+                  ],
+                  "metrics": []
+                }
+              ]
+            }
+          ],
+          "alerts": [
+            {
+              "name": "burn-rate alert: kafka_broker_availability_99_9",
+              "type": "burn_rate",
+              "source": "spec.policy.burn_rate_alerts",
+              "windows": 2,
+              "artefactId": "POL-01"
+            }
+          ],
+          "gaps": [
+            "missing_scrape_evidence"
+          ],
+          "notes": []
+        },
+        {
+          "id": "kafka_consumer_group_lag_seconds_99",
+          "kind": "slo",
+          "slo": {
+            "id": "kafka_consumer_group_lag_seconds_99",
+            "symbol": "slos.kafka_consumer_group_lag_seconds_99",
+            "objective": 0.99,
+            "window": "7d",
+            "artefactId": "SLO-02"
+          },
+          "sli": {
+            "id": "kafka_consumer_group_lag_seconds",
+            "symbol": "slis.kafka_consumer_group_lag_seconds",
+            "type": "threshold",
+            "artefactId": "SLI-02"
+          },
+          "metrics": [
+            {
+              "name": "kafka_consumergroup_current_offset",
+              "sources": [
+                "sli"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "kafka_consumergroup_lag",
+              "sources": [
+                "sli"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:kafka_consumer_group_lag_seconds:value_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "ref:slis",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:kafka_partition_replica_health:ratio_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:kafka_produce_latency_p99:value_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:kafka_fetch_latency_p99:value_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:http_service_availability:ratio_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:http_service_latency_p99:value_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            }
+          ],
+          "recordingRules": [
+            {
+              "name": "orders_api:kafka_consumer_group_lag_seconds:value_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:kafka_partition_replica_health:ratio_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:kafka_produce_latency_p99:value_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:kafka_fetch_latency_p99:value_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:http_service_availability:ratio_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:http_service_latency_p99:value_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            }
+          ],
+          "exporters": [
+            {
+              "id": "PIP-EXP-MET",
+              "title": "exporter (metrics): prometheusremotewrite",
+              "kind": "prometheusremotewrite",
+              "source": "Scaffold"
+            }
+          ],
+          "scrapeJobs": {
+            "observedCount": 0,
+            "items": [],
+            "source": null,
+            "exact": false
+          },
+          "dashboards": [
+            {
+              "id": "orders-api-overview",
+              "title": "orders-api-overview",
+              "source": "file://dashboards/orders-api-overview.json",
+              "panels": [
+                {
+                  "title": "slis-kafka-consumer-group-lag-seconds",
+                  "bindsTo": "slis.kafka_consumer_group_lag_seconds",
+                  "matches": [
+                    "kafka_consumer_group_lag_seconds_99",
+                    "kafka:consumer:group:lag:seconds:99",
+                    "kafka_consumer_group_lag_seconds",
+                    "kafka:consumer:group:lag:seconds",
+                    "slos.kafka_consumer_group_lag_seconds_99",
+                    "slos.kafka:consumer:group:lag:seconds:99",
+                    "slis.kafka_consumer_group_lag_seconds",
+                    "slis.kafka:consumer:group:lag:seconds"
+                  ],
+                  "metrics": []
+                },
+                {
+                  "title": "slos-kafka-consumer-group-lag-seconds-99",
+                  "bindsTo": "slos.kafka_consumer_group_lag_seconds_99",
+                  "matches": [
+                    "kafka_consumer_group_lag_seconds_99",
+                    "kafka:consumer:group:lag:seconds:99",
+                    "kafka_consumer_group_lag_seconds",
+                    "kafka:consumer:group:lag:seconds",
+                    "slos.kafka_consumer_group_lag_seconds_99",
+                    "slos.kafka:consumer:group:lag:seconds:99",
+                    "slis.kafka_consumer_group_lag_seconds",
+                    "slis.kafka:consumer:group:lag:seconds"
+                  ],
+                  "metrics": []
+                }
+              ]
+            },
+            {
+              "id": "kafka-kafka-consumer-lag",
+              "title": "kafka-kafka-consumer-lag",
+              "source": "file://dashboards/kafka-kafka-consumer-lag.json",
+              "panels": [
+                {
+                  "title": "slis-kafka-consumer-group-lag-seconds",
+                  "bindsTo": "slis.kafka_consumer_group_lag_seconds",
+                  "matches": [
+                    "kafka_consumer_group_lag_seconds_99",
+                    "kafka:consumer:group:lag:seconds:99",
+                    "kafka_consumer_group_lag_seconds",
+                    "kafka:consumer:group:lag:seconds",
+                    "slos.kafka_consumer_group_lag_seconds_99",
+                    "slos.kafka:consumer:group:lag:seconds:99",
+                    "slis.kafka_consumer_group_lag_seconds",
+                    "slis.kafka:consumer:group:lag:seconds"
+                  ],
+                  "metrics": []
+                },
+                {
+                  "title": "slos-kafka-consumer-group-lag-seconds-99",
+                  "bindsTo": "slos.kafka_consumer_group_lag_seconds_99",
+                  "matches": [
+                    "kafka_consumer_group_lag_seconds_99",
+                    "kafka:consumer:group:lag:seconds:99",
+                    "kafka_consumer_group_lag_seconds",
+                    "kafka:consumer:group:lag:seconds",
+                    "slos.kafka_consumer_group_lag_seconds_99",
+                    "slos.kafka:consumer:group:lag:seconds:99",
+                    "slis.kafka_consumer_group_lag_seconds",
+                    "slis.kafka:consumer:group:lag:seconds"
+                  ],
+                  "metrics": []
+                },
+                {
+                  "title": "view-kafka-per-consumergroup-lag",
+                  "bindsTo": "ref:queries.kafka_per_consumergroup_lag",
+                  "matches": [
+                    "kafka_consumergroup_lag"
+                  ],
+                  "metrics": []
+                }
+              ]
+            }
+          ],
+          "alerts": [
+            {
+              "name": "burn-rate alert: kafka_consumer_group_lag_seconds_99",
+              "type": "burn_rate",
+              "source": "spec.policy.burn_rate_alerts",
+              "windows": 2,
+              "artefactId": "POL-02"
+            }
+          ],
+          "gaps": [
+            "missing_scrape_evidence"
+          ],
+          "notes": []
+        },
+        {
+          "id": "kafka_partition_replica_health_99_95",
+          "kind": "slo",
+          "slo": {
+            "id": "kafka_partition_replica_health_99_95",
+            "symbol": "slos.kafka_partition_replica_health_99_95",
+            "objective": 0.9995,
+            "window": "30d",
+            "artefactId": "SLO-03"
+          },
+          "sli": {
+            "id": "kafka_partition_replica_health",
+            "symbol": "slis.kafka_partition_replica_health",
+            "type": "ratio",
+            "artefactId": "SLI-03"
+          },
+          "metrics": [
+            {
+              "name": "kafka_topic_partition_in_sync_replica",
+              "sources": [
+                "sli"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "kafka_topic_partition_replicas",
+              "sources": [
+                "sli"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:kafka_partition_replica_health:ratio_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "ref:slis",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:kafka_produce_latency_p99:value_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:kafka_fetch_latency_p99:value_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:http_service_availability:ratio_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:http_service_latency_p99:value_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            }
+          ],
+          "recordingRules": [
+            {
+              "name": "orders_api:kafka_partition_replica_health:ratio_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:kafka_produce_latency_p99:value_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:kafka_fetch_latency_p99:value_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:http_service_availability:ratio_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:http_service_latency_p99:value_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            }
+          ],
+          "exporters": [
+            {
+              "id": "PIP-EXP-MET",
+              "title": "exporter (metrics): prometheusremotewrite",
+              "kind": "prometheusremotewrite",
+              "source": "Scaffold"
+            }
+          ],
+          "scrapeJobs": {
+            "observedCount": 0,
+            "items": [],
+            "source": null,
+            "exact": false
+          },
+          "dashboards": [
+            {
+              "id": "orders-api-overview",
+              "title": "orders-api-overview",
+              "source": "file://dashboards/orders-api-overview.json",
+              "panels": [
+                {
+                  "title": "slis-kafka-partition-replica-health",
+                  "bindsTo": "slis.kafka_partition_replica_health",
+                  "matches": [
+                    "kafka_partition_replica_health_99_95",
+                    "kafka:partition:replica:health:99:95",
+                    "kafka_partition_replica_health",
+                    "kafka:partition:replica:health",
+                    "slos.kafka_partition_replica_health_99_95",
+                    "slos.kafka:partition:replica:health:99:95",
+                    "slis.kafka_partition_replica_health",
+                    "slis.kafka:partition:replica:health"
+                  ],
+                  "metrics": []
+                },
+                {
+                  "title": "slos-kafka-partition-replica-health-99-95",
+                  "bindsTo": "slos.kafka_partition_replica_health_99_95",
+                  "matches": [
+                    "kafka_partition_replica_health_99_95",
+                    "kafka:partition:replica:health:99:95",
+                    "kafka_partition_replica_health",
+                    "kafka:partition:replica:health",
+                    "slos.kafka_partition_replica_health_99_95",
+                    "slos.kafka:partition:replica:health:99:95",
+                    "slis.kafka_partition_replica_health",
+                    "slis.kafka:partition:replica:health"
+                  ],
+                  "metrics": []
+                }
+              ]
+            }
+          ],
+          "alerts": [
+            {
+              "name": "burn-rate alert: kafka_partition_replica_health_99_95",
+              "type": "burn_rate",
+              "source": "spec.policy.burn_rate_alerts",
+              "windows": 2,
+              "artefactId": "POL-03"
+            }
+          ],
+          "gaps": [
+            "missing_scrape_evidence"
+          ],
+          "notes": []
+        },
+        {
+          "id": "kafka_produce_latency_p99_99",
+          "kind": "slo",
+          "slo": {
+            "id": "kafka_produce_latency_p99_99",
+            "symbol": "slos.kafka_produce_latency_p99_99",
+            "objective": 0.99,
+            "window": "30d",
+            "artefactId": "SLO-04"
+          },
+          "sli": {
+            "id": "kafka_produce_latency_p99",
+            "symbol": "slis.kafka_produce_latency_p99",
+            "type": "threshold",
+            "artefactId": "SLI-04"
+          },
+          "metrics": [
+            {
+              "name": "kafka_network_requestmetrics_totaltimems",
+              "sources": [
+                "sli"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:kafka_produce_latency_p99:value_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "ref:slis",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:kafka_fetch_latency_p99:value_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:http_service_availability:ratio_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:http_service_latency_p99:value_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            }
+          ],
+          "recordingRules": [
+            {
+              "name": "orders_api:kafka_produce_latency_p99:value_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:kafka_fetch_latency_p99:value_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:http_service_availability:ratio_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:http_service_latency_p99:value_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            }
+          ],
+          "exporters": [
+            {
+              "id": "PIP-EXP-MET",
+              "title": "exporter (metrics): prometheusremotewrite",
+              "kind": "prometheusremotewrite",
+              "source": "Scaffold"
+            }
+          ],
+          "scrapeJobs": {
+            "observedCount": 0,
+            "items": [],
+            "source": null,
+            "exact": false
+          },
+          "dashboards": [
+            {
+              "id": "orders-api-overview",
+              "title": "orders-api-overview",
+              "source": "file://dashboards/orders-api-overview.json",
+              "panels": [
+                {
+                  "title": "slis-kafka-produce-latency-p99",
+                  "bindsTo": "slis.kafka_produce_latency_p99",
+                  "matches": [
+                    "kafka_produce_latency_p99_99",
+                    "kafka:produce:latency:p99:99",
+                    "kafka_produce_latency_p99",
+                    "kafka:produce:latency:p99",
+                    "slos.kafka_produce_latency_p99_99",
+                    "slos.kafka:produce:latency:p99:99",
+                    "slis.kafka_produce_latency_p99",
+                    "slis.kafka:produce:latency:p99"
+                  ],
+                  "metrics": []
+                },
+                {
+                  "title": "slos-kafka-produce-latency-p99-99",
+                  "bindsTo": "slos.kafka_produce_latency_p99_99",
+                  "matches": [
+                    "kafka_produce_latency_p99_99",
+                    "kafka:produce:latency:p99:99",
+                    "kafka_produce_latency_p99",
+                    "kafka:produce:latency:p99",
+                    "slos.kafka_produce_latency_p99_99",
+                    "slos.kafka:produce:latency:p99:99",
+                    "slis.kafka_produce_latency_p99",
+                    "slis.kafka:produce:latency:p99"
+                  ],
+                  "metrics": []
+                }
+              ]
+            }
+          ],
+          "alerts": [
+            {
+              "name": "burn-rate alert: kafka_produce_latency_p99_99",
+              "type": "burn_rate",
+              "source": "spec.policy.burn_rate_alerts",
+              "windows": 2,
+              "artefactId": "POL-04"
+            }
+          ],
+          "gaps": [
+            "missing_scrape_evidence"
+          ],
+          "notes": []
+        },
+        {
+          "id": "kafka_fetch_latency_p99_99",
+          "kind": "slo",
+          "slo": {
+            "id": "kafka_fetch_latency_p99_99",
+            "symbol": "slos.kafka_fetch_latency_p99_99",
+            "objective": 0.99,
+            "window": "30d",
+            "artefactId": "SLO-05"
+          },
+          "sli": {
+            "id": "kafka_fetch_latency_p99",
+            "symbol": "slis.kafka_fetch_latency_p99",
+            "type": "threshold",
+            "artefactId": "SLI-05"
+          },
+          "metrics": [
+            {
+              "name": "kafka_network_requestmetrics_localtimems",
+              "sources": [
+                "sli"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:kafka_fetch_latency_p99:value_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "ref:slis",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:http_service_availability:ratio_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:http_service_latency_p99:value_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            }
+          ],
+          "recordingRules": [
+            {
+              "name": "orders_api:kafka_fetch_latency_p99:value_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:http_service_availability:ratio_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:http_service_latency_p99:value_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            }
+          ],
+          "exporters": [
+            {
+              "id": "PIP-EXP-MET",
+              "title": "exporter (metrics): prometheusremotewrite",
+              "kind": "prometheusremotewrite",
+              "source": "Scaffold"
+            }
+          ],
+          "scrapeJobs": {
+            "observedCount": 0,
+            "items": [],
+            "source": null,
+            "exact": false
+          },
+          "dashboards": [
+            {
+              "id": "orders-api-overview",
+              "title": "orders-api-overview",
+              "source": "file://dashboards/orders-api-overview.json",
+              "panels": [
+                {
+                  "title": "slis-kafka-fetch-latency-p99",
+                  "bindsTo": "slis.kafka_fetch_latency_p99",
+                  "matches": [
+                    "kafka_fetch_latency_p99_99",
+                    "kafka:fetch:latency:p99:99",
+                    "kafka_fetch_latency_p99",
+                    "kafka:fetch:latency:p99",
+                    "slos.kafka_fetch_latency_p99_99",
+                    "slos.kafka:fetch:latency:p99:99",
+                    "slis.kafka_fetch_latency_p99",
+                    "slis.kafka:fetch:latency:p99"
+                  ],
+                  "metrics": []
+                },
+                {
+                  "title": "slos-kafka-fetch-latency-p99-99",
+                  "bindsTo": "slos.kafka_fetch_latency_p99_99",
+                  "matches": [
+                    "kafka_fetch_latency_p99_99",
+                    "kafka:fetch:latency:p99:99",
+                    "kafka_fetch_latency_p99",
+                    "kafka:fetch:latency:p99",
+                    "slos.kafka_fetch_latency_p99_99",
+                    "slos.kafka:fetch:latency:p99:99",
+                    "slis.kafka_fetch_latency_p99",
+                    "slis.kafka:fetch:latency:p99"
+                  ],
+                  "metrics": []
+                }
+              ]
+            }
+          ],
+          "alerts": [
+            {
+              "name": "burn-rate alert: kafka_fetch_latency_p99_99",
+              "type": "burn_rate",
+              "source": "spec.policy.burn_rate_alerts",
+              "windows": 2,
+              "artefactId": "POL-05"
+            }
+          ],
+          "gaps": [
+            "missing_scrape_evidence"
+          ],
+          "notes": []
+        },
+        {
+          "id": "http_service_availability_99_5",
+          "kind": "slo",
+          "slo": {
+            "id": "http_service_availability_99_5",
+            "symbol": "slos.http_service_availability_99_5",
+            "objective": 0.995,
+            "window": "30d",
+            "artefactId": "SLO-06"
+          },
+          "sli": {
+            "id": "http_service_availability",
+            "symbol": "slis.http_service_availability",
+            "type": "ratio",
+            "artefactId": "SLI-06"
+          },
+          "metrics": [
+            {
+              "name": "http_server_request_duration_seconds_count",
+              "sources": [
+                "sli"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:http_service_availability:ratio_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "ref:slis",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:http_service_latency_p99:value_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            }
+          ],
+          "recordingRules": [
+            {
+              "name": "orders_api:http_service_availability:ratio_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            },
+            {
+              "name": "orders_api:http_service_latency_p99:value_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            }
+          ],
+          "exporters": [
+            {
+              "id": "PIP-EXP-MET",
+              "title": "exporter (metrics): prometheusremotewrite",
+              "kind": "prometheusremotewrite",
+              "source": "Scaffold"
+            }
+          ],
+          "scrapeJobs": {
+            "observedCount": 0,
+            "items": [],
+            "source": null,
+            "exact": false
+          },
+          "dashboards": [
+            {
+              "id": "orders-api-overview",
+              "title": "orders-api-overview",
+              "source": "file://dashboards/orders-api-overview.json",
+              "panels": [
+                {
+                  "title": "slis-http-service-availability",
+                  "bindsTo": "slis.http_service_availability",
+                  "matches": [
+                    "http_service_availability",
+                    "http:service:availability",
+                    "slis.http_service_availability",
+                    "slis.http:service:availability",
+                    "slis.http_service_availability"
+                  ],
+                  "metrics": []
+                },
+                {
+                  "title": "slos-http-service-availability-99-5",
+                  "bindsTo": "slos.http_service_availability_99_5",
+                  "matches": [
+                    "http_service_availability_99_5",
+                    "http:service:availability:99:5",
+                    "http_service_availability",
+                    "http:service:availability",
+                    "slos.http_service_availability_99_5",
+                    "slos.http:service:availability:99:5",
+                    "slos.http_service_availability_99_5"
+                  ],
+                  "metrics": []
+                }
+              ]
+            }
+          ],
+          "alerts": [
+            {
+              "name": "burn-rate alert: http_service_availability_99_5",
+              "type": "burn_rate",
+              "source": "spec.policy.burn_rate_alerts",
+              "windows": 2,
+              "artefactId": "POL-06"
+            }
+          ],
+          "gaps": [
+            "missing_scrape_evidence"
+          ],
+          "notes": []
+        },
+        {
+          "id": "http_service_latency_p99_99",
+          "kind": "slo",
+          "slo": {
+            "id": "http_service_latency_p99_99",
+            "symbol": "slos.http_service_latency_p99_99",
+            "objective": 0.99,
+            "window": "30d",
+            "artefactId": "SLO-07"
+          },
+          "sli": {
+            "id": "http_service_latency_p99",
+            "symbol": "slis.http_service_latency_p99",
+            "type": "threshold",
+            "artefactId": "SLI-07"
+          },
+          "metrics": [
+            {
+              "name": "http_server_request_duration_seconds_bucket",
+              "sources": [
+                "sli"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "orders_api:http_service_latency_p99:value_5m",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            },
+            {
+              "name": "ref:slis",
+              "sources": [
+                "recording_rule"
+              ],
+              "declared": false,
+              "verified": false,
+              "origin": null
+            }
+          ],
+          "recordingRules": [
+            {
+              "name": "orders_api:http_service_latency_p99:value_5m",
+              "interval": "30s",
+              "metrics": [
+                "ref:slis"
+              ]
+            }
+          ],
+          "exporters": [
+            {
+              "id": "PIP-EXP-MET",
+              "title": "exporter (metrics): prometheusremotewrite",
+              "kind": "prometheusremotewrite",
+              "source": "Scaffold"
+            }
+          ],
+          "scrapeJobs": {
+            "observedCount": 0,
+            "items": [],
+            "source": null,
+            "exact": false
+          },
+          "dashboards": [
+            {
+              "id": "orders-api-overview",
+              "title": "orders-api-overview",
+              "source": "file://dashboards/orders-api-overview.json",
+              "panels": [
+                {
+                  "title": "slis-http-service-latency-p99",
+                  "bindsTo": "slis.http_service_latency_p99",
+                  "matches": [
+                    "http_service_latency_p99",
+                    "http:service:latency:p99",
+                    "slis.http_service_latency_p99",
+                    "slis.http:service:latency:p99",
+                    "slis.http_service_latency_p99"
+                  ],
+                  "metrics": []
+                },
+                {
+                  "title": "slos-http-service-latency-p99-99",
+                  "bindsTo": "slos.http_service_latency_p99_99",
+                  "matches": [
+                    "http_service_latency_p99_99",
+                    "http:service:latency:p99:99",
+                    "http_service_latency_p99",
+                    "http:service:latency:p99",
+                    "slos.http_service_latency_p99_99",
+                    "slos.http:service:latency:p99:99",
+                    "slos.http_service_latency_p99_99"
+                  ],
+                  "metrics": []
+                }
+              ]
+            }
+          ],
+          "alerts": [
+            {
+              "name": "burn-rate alert: http_service_latency_p99_99",
+              "type": "burn_rate",
+              "source": "spec.policy.burn_rate_alerts",
+              "windows": 2,
+              "artefactId": "POL-07"
+            }
+          ],
+          "gaps": [
+            "missing_scrape_evidence"
+          ],
+          "notes": []
+        }
+      ]
+    }
   }
 }

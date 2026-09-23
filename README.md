@@ -66,29 +66,43 @@ one, with its unresolved placeholders still visible.
 A second, parallel journey for a service that has no pack: **Build** — three
 steps in the same visual language as the three below, reached from the home
 hero, the service gate or the upload popover ("Build from the library…"), and
-ending where Discover begins ([`docs/BUILD_JOURNEY.md`](docs/BUILD_JOURNEY.md)):
+ending where Discover begins ([`docs/BUILD_JOURNEY.md`](docs/BUILD_JOURNEY.md)).
+Centre stage on every step is **the layer stack of the pack being compiled** —
+L1 Contract · L2 Telemetry · L3 Insight · L4 Action (policy · alerting ·
+self-healing) · L5 Validation · GOV — drawn through the same adapter and the
+same artefact cards Discover uses, so what you build is exactly what Discover
+shows afterwards. Each slab's edge carries the rubric's verdict for that layer
+(green pass, amber pass on a placeholder, red fail — naming the clause), a
+placeholder artefact is *Scaffold*, and a clause the tier still needs is a
+ghost card on its slab:
 
 1. **Define - What Are We Observing?** — the service name, owners and
-   environment, its criticality tier (each with the conformance clauses it
-   requires) and one or more library entries: products it runs on (Kafka,
-   Prometheus, Grafana, IBM MQ, Alertmanager, Loki, Tempo, the OTel Collector,
-   every one with its evidence badge) or an archetype for a service built from
-   scratch (HTTP service, queue consumer — OTel semconv).
+   environment, its criticality tier and one or more library entries: products
+   it runs on (Kafka, Prometheus, Grafana, IBM MQ, Alertmanager, Loki, Tempo,
+   the OTel Collector, every one with its evidence badge) or an archetype for a
+   service built from scratch (HTTP service, queue consumer — OTel semconv). The
+   tier draws the **silhouette** of the pack it demands — one ghost card per
+   clause on each slab, reshaping as the tier changes — and the entries drop
+   their SLIs and the SLO each gets onto L1.
 2. **Compile - What Should We Watch?** — the SLIs per entry (an SLI above the
    tier is shown disabled with the tier it needs) with the objective and window
-   each gets at this tier, the section toggles (SLOs, policy, routes, dashboards,
-   validation), the pack YAML. Every change regenerates the pack through the API
-   and the rail on the right shows which of the tier's clauses it holds up.
+   each gets at this tier and the section toggles (SLOs, policy, routes,
+   dashboards, validation) as the control area; below it the **live stack** of
+   the instantiated pack, its real artefacts per layer with the edges in the
+   clause states — untick an SLI and L1 loses its card, switch dashboards off
+   and L3 dims with its clauses red; the pack YAML as a collapsible underneath.
 3. **Verify - Is It Ready to Use?** — the conformance verdict at the tier with
-   three clause states (pass · pass on a placeholder · fail), the schema
-   verdict, the warnings, the todos grouped by artefact with the parameter that
-   fills each one editable inline, the compiled artefacts (Prometheus rules,
+   three clause states (pass · pass on a placeholder · fail) and a **maturity
+   bar per layer**, the schema verdict, the warnings, the stack again with the
+   **todos pinned to the slab of the artefact each names** (routes and runbooks
+   on L4, backends and pipelines on L2, probes and chaos on L5) and the parameter
+   that fills each one editable inline, the compiled artefacts (Prometheus rules,
    OTel Collector, Alertmanager, Grafana dashboards) previewed and downloadable,
    and **Ready to continue?** — *Resolve or adjust* returns to Define; *Continue
    with visible gaps* (*Continue to Discover* when none remain) registers the pack
    the way an upload is registered and hands it to the journey below, saying how
-   many placeholders remain. A placeholder-laden pack is conformant on paper; the third state and
-   the todos are what tell it from a real one.
+   many placeholders remain. A placeholder-laden pack is conformant on paper; the
+   third state, the amber edges and the todos are what tell it from a real one.
 
 ### 1. Discover - What Do We Have?
 
@@ -649,7 +663,7 @@ be tested without a browser. The view needs no pack loaded.
 | `GET` | `/api/library` | The pack library index (`entries`, `scaffoldParams`, `errors`: the files that did not load) — the BUILD journey's DEFINE step |
 | `GET` | `/api/library/requirements/:tier` | The conformance clauses that apply at a tier (the rubric filtered by `minTier`; 400 names the known tiers) |
 | `GET` | `/api/library/:id` | One library entry: its index row plus the full SLI templates and params (404 names the known entries) |
-| `POST` | `/api/library/instantiate` | `{ entries, name, tier, environment, owners, params, toggles }` → `canonical`, `canonicalYaml`, `todos`, `provenance`, `warnings`, `schemaErrors`, `summary`, `conformance` (an engine usage error is 400, never 500) |
+| `POST` | `/api/library/instantiate` | `{ entries, name, tier, environment, owners, params, toggles }` → `canonical`, `canonicalYaml`, `todos`, `provenance`, `warnings`, `schemaErrors`, `summary`, `conformance`, `adapted` (the adapter's layered projection, as `/api/validate` returns it — what Build's stack draws; an engine usage error is 400, never 500) |
 | `POST` | `/api/library/compile` | `{ canonical, target }` → one compiled artefact (`label`, `contentType`, `artifact { filename, content, warnings, profile }`), nothing registered |
 | `POST` | `/api/library/register` | `{ canonical, source? }` → the upload registry as `/api/validate` registers (`registered { id, source }`, `adapted`, `conformance`, `summary`; the source defaults to `library:<entries>@<tier>` for a library-built pack, `metadata.name` otherwise) — "VERIFY's "Continue with visible gaps"" |
 | `POST` | `/api/crawl` | Draft a pack from uploaded repo files |

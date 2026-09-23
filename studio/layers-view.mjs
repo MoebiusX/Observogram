@@ -11,6 +11,7 @@ import { LAYER_DEFS, L4_SUBGROUPS, DOMAIN_DEFS, DISCO_SLAB_ACCENT, discoGradeLet
 import { effectiveFocus, focusedPack, focusedConformance } from './focus.mjs';
 import { escapeHtml, toast } from './util.mjs';
 import { openDrawer } from './drawer.mjs';
+import { artefactCardHtml } from './card-html.mjs';
 import { LENS_PRODUCTS } from './compare-view.mjs';
 import { buildSymbolTable, defaultEnvFor, layerArtefactCount, renderLayerFilterChips, refresh, runBenchmark } from './app.mjs';
 import { host as appHost } from './host.mjs';
@@ -582,6 +583,10 @@ export function cardKey(layerId, sublayerKey, id) {
   return sublayerKey ? `${layerId}/${sublayerKey}/${id}` : `${layerId}/${id}`;
 }
 
+// The card body is the shared card-html helper (the Build stack draws the
+// same markup); this wraps it in the clickable element, the state-dependent
+// classes (active, broken references, Scaffold) and the drawer / benchmark
+// click handling.
 export function renderCard(artefact, def, sublayerKey) {
   const btn = document.createElement('button');
   btn.type = 'button';
@@ -589,55 +594,26 @@ export function renderCard(artefact, def, sublayerKey) {
   const key = cardKey(def.id, sublayerKey, artefact.id);
   btn.dataset.key = key;
   if (state.activeCardKey === key) btn.classList.add('is-active');
-  if (state.symbolTable?.broken?.has(key)) btn.classList.add('has-broken-refs');
-
-  const tags = (artefact.tags || []).slice(0, 4).map(t =>
-    `<span class="tag">${escapeHtml(t)}</span>`).join('');
-
-  // Version-gating chip for backend artefacts.
-  let gatingChip = '';
-  if (/^BAK-/.test(artefact.id) && artefact.spec?.version?.gating) {
-    const g = artefact.spec.version.gating;
-    gatingChip = `<span class="gating-chip" data-gating="${escapeHtml(g)}" title="version: ${escapeHtml(artefact.spec.version.declared || '?')} · gating: ${escapeHtml(g)}">${escapeHtml(g)}</span>`;
-  }
-
-  const brokenIndicator = state.symbolTable?.broken?.has(key)
-    ? `<span class="ref-indicator" title="${state.symbolTable.broken.get(key).length} unresolved reference(s)">⚠</span>`
-    : '';
+  const broken = state.symbolTable?.broken?.get(key)?.length || 0;
+  if (broken) btn.classList.add('has-broken-refs');
+  // A Scaffold artefact (a crawler stub, a library placeholder) is parked, not
+  // declared: dashed, as the Build stack draws it.
+  if (artefact.source === 'Scaffold') btn.classList.add('is-scaffold');
 
   // Benchmark CTA — when this backend's `product` matches a catalogue
   // reference pack (grafana, prometheus, kafka), surface a small action
   // that loads the reference as Pack B and applies the product lens.
   // This is the discovery affordance for the user journey: from any
   // backend card, one click → "how does my X compare to best practice?"
-  let benchmarkCta = '';
   const backendProduct = artefact.spec?.product || artefact.product || null;
   const refMatch = backendProduct
     ? LENS_PRODUCTS.find(lp => lp.slug === backendProduct.toLowerCase())
     : null;
-  if (refMatch && /^BAK-/.test(artefact.id)) {
-    benchmarkCta = `<button type="button" class="benchmark-cta"
-      data-product="${escapeHtml(refMatch.slug)}"
-      data-ref-pack="${escapeHtml(refMatch.refPackId)}"
-      title="Compare your ${escapeHtml(refMatch.label)} posture against the catalogue reference pack."
-    >⛯ Benchmark vs ${escapeHtml(refMatch.label)} →</button>`;
-  }
+  const benchmark = refMatch && /^BAK-/.test(artefact.id)
+    ? { slug: refMatch.slug, refPackId: refMatch.refPackId, label: refMatch.label }
+    : null;
 
-  btn.innerHTML = `
-    <div class="card-head">
-      <span class="card-id">${escapeHtml(artefact.id)}</span>
-      ${brokenIndicator}
-      ${gatingChip}
-      <span class="card-source" data-source="${escapeHtml(artefact.source || 'Declared')}">${escapeHtml(artefact.source || 'Declared')}</span>
-    </div>
-    <div class="card-title">${escapeHtml(artefact.title || artefact.id)}</div>
-    ${artefact.desc ? `<div class="card-desc">${escapeHtml(artefact.desc)}</div>` : ''}
-    <div class="card-foot">
-      ${artefact.tool ? `<span class="tool">${escapeHtml(artefact.tool)}</span>` : ''}
-      ${tags}
-      ${benchmarkCta}
-    </div>
-  `;
+  btn.innerHTML = artefactCardHtml(artefact, { broken, benchmark });
   btn.onclick = (ev) => {
     // The Benchmark CTA lives inside the card button. Intercept clicks
     // on it so the drawer doesn't open.

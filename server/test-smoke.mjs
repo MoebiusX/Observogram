@@ -1410,11 +1410,16 @@ try {
   assert(inst.summary.onPlaceholder.length === 4, 'instantiate summary: 4 clauses pass on a placeholder', inst.summary.onPlaceholder.length, 4);
   assert(inst.conformance?.declaredTier === 'tier-2' && inst.conformance.mustPercent === 100, 'instantiate conformance is evaluated on the env-overlaid canonical');
   assert(inst.canonical.spec.slis.length === 7, 'instantiate: 7 SLIs (5 kafka + 2 http-service at tier-2)', inst.canonical.spec.slis.length, 7);
+  // `adapted`: the adapter's layered projection of the env-overlaid canonical — what Build's stack draws.
+  assert(inst.adapted?.meta?.apiVersion === 'observability.platform/v1' && inst.adapted.meta.environment === 'prod' && inst.adapted.meta.criticality === 'tier-2', 'instantiate returns adapted (env-overlaid: prod, tier-2)', JSON.stringify(inst.adapted?.meta && { environment: inst.adapted.meta.environment, criticality: inst.adapted.meta.criticality }));
+  assert(inst.adapted.layers?.L1?.length === 14 && inst.adapted.layers.L4?.alerting?.length === 3 && inst.adapted.layers.L5?.length === 6, 'instantiate adapted: L1 14 (7 SLIs + 7 SLOs), L4.alerting 3, L5 6', JSON.stringify({ L1: inst.adapted.layers?.L1?.length, alerting: inst.adapted.layers?.L4?.alerting?.length, L5: inst.adapted.layers?.L5?.length }));
+  assert(inst.adapted.layers.L4.alerting.every(a => a.source === 'Scaffold') && inst.adapted.layers.L1.every(a => a.source === 'Declared'), 'instantiate adapted: placeholder routes project as Scaffold, SLIs as Declared');
   // The toggles: an SLI unticked, dashboards off → exactly the dashboard clauses fail and the schema says why.
   const instOff = await (await postLib('/api/library/instantiate', { ...instBody, toggles: { dashboards: false, slis: ['kafka_broker_availability', 'kafka_produce_latency_p99'] } })).json();
   assert(instOff.ok === true && instOff.canonical.spec.slis.length === 2, 'instantiate honours toggles.slis', instOff.canonical?.spec?.slis?.length, 2);
   assert(instOff.summary.failing.map(f => f.id).sort().join(',') === 'L3.MUST.service_overview_dashboard,L3.MUST.slo_burn_dashboard', 'dashboards off → exactly the two L3 dashboard clauses fail', instOff.summary.failing.map(f => f.id));
   assert(instOff.schemaErrors.some(e => /dashboards/.test(e)), 'dashboards off → the schema reports the missing key', instOff.schemaErrors);
+  assert(instOff.adapted?.layers?.L1?.length === 4 && !instOff.adapted.layers.L3.some(a => /^DASH-/.test(a.id)), 'dashboards off → adapted has no DASH card and L1 follows the SLI selection (2 SLIs + 2 SLOs)', JSON.stringify({ L1: instOff.adapted?.layers?.L1?.length, dash: instOff.adapted?.layers?.L3?.filter(a => /^DASH-/.test(a.id)).length }));
   const instExcluded = await (await postLib('/api/library/instantiate', { ...instBody, toggles: { slis: ['kafka_broker_availability', 'kafka_controller_election_rate'] } })).json();
   assert(instExcluded.ok === true && instExcluded.warnings.some(w => w.kind === 'sli-excluded' && w.sli === 'kafka_controller_election_rate'), 'an SLI above the tier comes back as an sli-excluded warning, not a 400', instExcluded.warnings);
   // Usage errors are 400 { ok:false, errors }, never 500.
@@ -1472,6 +1477,7 @@ try {
   const valLib = await (await postLib('/api/validate', inst.canonical)).json();
   assert(valLib.ok === true && valLib.summary?.onPlaceholder?.length === 4, '/api/validate of a library pack attaches summary.onPlaceholder', valLib.summary?.onPlaceholder?.length, 4);
   assert(valLib.registered.id === reg.registered.id, '/api/validate registers the same id as /api/library/register (same content)');
+  assert(JSON.stringify(valLib.adapted) === JSON.stringify(inst.adapted), 'instantiate\'s adapted is byte-identical to /api/validate\'s for the same canonical (Build and Discover draw the same artefacts)');
   const valPlain = await (await postLib('/api/validate', authRaw)).json();
   assert(valPlain.ok === true && valPlain.summary === undefined, '/api/validate of a plain pack carries no summary');
   await fetch(`${base}/api/uploads`, { method: 'DELETE' });

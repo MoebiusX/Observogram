@@ -42,7 +42,7 @@ import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-
 import { initHost } from './host.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
-  BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, clampStep as clampBuildStep,
+  BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, enterStep as enterBuildStep, stepAfterInstantiate as buildStepAfterInstantiate, focusFallbackSelectors,
   buildDefineModel, buildCompileModel, buildVerifyModel, buildRailModel, placeholdersRemaining, retargetSlis,
 } from './build-model.mjs';
 import {
@@ -53,6 +53,7 @@ import {
 import { renderBuildDefine, renderClauseRail } from './build-define-view.mjs';
 import { renderBuildCompile } from './build-compile-view.mjs';
 import { renderBuildVerify } from './build-verify-view.mjs';
+import { revealTodo } from './build-atoms.mjs';
 import { loadBuildInfo, loadHealth, buildLabelModel, renderVersionChrome } from './build-label.mjs';
 
 // `state`, the `$`/`$$` DOM helpers and the persistence layer now live in
@@ -1891,7 +1892,9 @@ function restoreBuildDraft(saved) {
 export function enterBuildMode(step) {
   state.mode = 'build';
   state.activeCardKey = null;
-  state.build.step = clampBuildStep(state.build, step || state.build.step);
+  // The step clamped to what is reachable now; a demoted step (VERIFY before the
+  // re-instantiation below has answered) is kept as wantedStep and honoured then.
+  Object.assign(state.build, enterBuildStep(state.build, step || state.build.step));
   applyModeChrome();
   paintObservaActiveTab();
   renderTabs();
@@ -1914,7 +1917,9 @@ function exitBuildMode() {
   goHome();
 }
 
-function goToBuildStep(step) {
+// `todo` (a todo path) lands the step on that todo instead of its top — a card's
+// pin on COMPILE, whose todo is drawn on VERIFY only.
+function goToBuildStep(step, { todo = null } = {}) {
   if (!BUILD_STEPS.includes(step)) return;
   const reach = buildStepReachability(state.build);
   if (!reach[step]) {
@@ -1924,9 +1929,11 @@ function goToBuildStep(step) {
   }
   if (state.mode !== 'build') { enterBuildMode(step); return; }
   state.build.step = step;
+  state.build.wantedStep = null;   // an explicit choice supersedes a step still waited for
   state.build.preview = null;
   paintObservaActiveTab();
   renderMainView();
+  if (todo && revealTodo(document.querySelector(`.build-step [data-todo="${CSS.escape(todo)}"]`))) return;
   window.scrollTo({ top: 0 });
 }
 
@@ -1969,6 +1976,8 @@ async function runBuildInstantiate() {
     b.result = {
       canonical: res.canonical, canonicalYaml: res.canonicalYaml || '', todos: res.todos || [], warnings: res.warnings || [],
       summary: res.summary || null, conformance: res.conformance || null, schemaErrors: res.schemaErrors || [], provenance: res.provenance || null,
+      // The adapter's layered projection — what the stack draws and what Discover will show.
+      adapted: res.adapted || null,
     };
     b.error = null;
     b.preview = null;   // compiled from the previous canonical
@@ -1981,8 +1990,9 @@ async function runBuildInstantiate() {
     b.error = res?.errors || [res?.error || 'instantiation failed'];
   }
   // A step that is no longer reachable falls back — only when there is no
-  // pack to read: a kept pack keeps its step.
-  b.step = clampBuildStep(b, b.step);
+  // pack to read: a kept pack keeps its step. A step waited for (a reload on
+  // VERIFY lands on COMPILE until the pack is back) is honoured now, once.
+  Object.assign(b, buildStepAfterInstantiate(b));
   rerenderBuild();
   persistence.schedule();
 }
@@ -1993,6 +2003,8 @@ function paintBuildPending(on) {
 
 // Re-render the build view keeping the focused input focused (a typed name
 // or an inline param re-instantiates and repaints while the caret is in it).
+// When the input is gone — a filled todo disappears with its inputs — focus
+// moves to the nearest thing on the same slab rather than falling to <body>.
 function rerenderBuild() {
   if (state.mode !== 'build') return;
   const el = document.activeElement;
@@ -2002,10 +2014,15 @@ function rerenderBuild() {
   paintObservaActiveTab();
   renderMainView();
   if (key) {
-    const next = document.querySelector(`[data-focus-key="${CSS.escape(key)}"]`);
+    let next = document.querySelector(`[data-focus-key="${CSS.escape(key)}"]`);
+    let caret = sel;
+    if (!next) {
+      for (const s of focusFallbackSelectors(key)) { next = document.querySelector(s); if (next) break; }
+      caret = null;   // another input, or the slab's edge: the old caret means nothing there
+    }
     if (next) {
       next.focus({ preventScroll: true });
-      if (sel && typeof next.setSelectionRange === 'function') { try { next.setSelectionRange(sel[0], sel[1]); } catch { /* not a text input */ } }
+      if (caret && typeof next.setSelectionRange === 'function') { try { next.setSelectionRange(caret[0], caret[1]); } catch { /* not a text input */ } }
     }
   }
   window.scrollTo({ top: scrollY });
@@ -2151,9 +2168,9 @@ function renderBuildView(view) {
   }
   const clauses = buildRequirementsCache()[b.tier] || [];
   if (!clauses.length) ensureBuildRequirements(b.tier);
-  renderClauseRail(rail, buildRailModel({ build: b, clauses }));
-
   const host = { renderMainView, renderTabs, build: buildActions };
+  renderClauseRail(rail, buildRailModel({ build: b, clauses }), host);
+
   const exitBar = document.createElement('div');
   exitBar.className = 'build-exit';
   exitBar.innerHTML = `<button type="button" class="build-exit-btn" title="Leave the BUILD journey">← ${state.selectedPackId ? 'back to the open pack' : 'back to Discover · Diagnose · Remediate'}</button>`;
@@ -2167,7 +2184,7 @@ function renderBuildView(view) {
       renderBuildVerify(stepEl, buildVerifyModel({ build: b, library, clauses, targets: buildTargets || [] }), host);
       return;
     case 'compile':
-      renderBuildCompile(stepEl, buildCompileModel({ build: b, library }), host);
+      renderBuildCompile(stepEl, buildCompileModel({ build: b, library, clauses }), host);
       return;
     case 'define':
     default:
