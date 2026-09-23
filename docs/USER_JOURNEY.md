@@ -192,25 +192,40 @@ both paths join at Discover.
 
 Belongs here:
 
-- Define: the service name, owners, environment, the criticality tier with the
-  clauses it requires, the library entries (products with their evidence badge,
-  archetypes) and the selection's parameters with their defaults
+- the layer stack of the pack being compiled as the centre stage of every step
+  — L1 Contract · L2 Telemetry · (L2X) · L3 Insight · L4 Action · L5
+  Validation · GOV — drawn through the same adapter and the same artefact
+  cards Discover uses, each slab's edge carrying the rubric's verdict for that
+  layer (pass · pass on a placeholder · fail · neutral when no clause applies),
+  a placeholder artefact as Scaffold, a clause the tier still needs as a ghost
+  card on its slab, the layer's clauses a click away on the slab
+- Define: the service name, owners, environment, the criticality tier, the
+  library entries (products with their evidence badge, archetypes) and the
+  selection's parameters with their defaults; the tier as the silhouette of the
+  pack it demands (one ghost per clause per slab, reshaping with the tier), the
+  entries' SLIs and their SLOs as candidates on L1
 - Compile: the SLIs per entry (an SLI above the tier disabled with the tier it
-  needs), the objective and window each gets at the tier, the section toggles,
-  the pack YAML
+  needs), the objective and window each gets at the tier, the section toggles —
+  over the live stack of the instantiated pack (a section off dims its slab and
+  its clauses go red on the edge), the pack YAML as a collapsible below
 - Verify: the conformance verdict at the tier with three clause states (pass
-  · pass on a placeholder · fail), the schema verdict, the warnings, the todos
-  by artefact with the parameter that fills each one, the compiled artefacts,
-  the hand-off ("Ready to continue?": resolve or adjust at Define, or continue
-  with visible gaps, which registers the pack as an upload)
-- the tier's clauses as a live checklist beside every step
+  · pass on a placeholder · fail) and a maturity bar per layer, the schema
+  verdict, the warnings, the stack with the todos pinned to the slab of the
+  artefact each names and the parameter that fills each one, the compiled
+  artefacts, the hand-off ("Ready to continue?": resolve or adjust at Define,
+  or continue with visible gaps, which registers the pack as an upload)
+- the tier's clauses as a compact summary beside every step (counts, the
+  failing ones, the full list on demand)
 
 Does not belong here:
 
 - a fourth primary tab (the header shows the build cards only while building)
 - a pack that pages nobody presented as done: a placeholder-laden pack is
-  conformant on paper, so the third clause state and the todo count travel
-  with it into Discover
+  conformant on paper, so the third clause state, the amber slab edges and the
+  todo count travel with it into Discover
+- a second rendering of the pack: the stack is the adapter's projection — the
+  artefacts Discover will show, id for id — never a Build-only drawing of the
+  canonical
 - deploy actions (Remediate's, on the registered pack)
 
 ### Discover
