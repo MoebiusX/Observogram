@@ -619,6 +619,25 @@ function checkCustom(custom, selected, known) {
 }
 
 /**
+ * Two SLIs may not share an SLO id. sloIdFor joins `<sli>_<pct>` with `_`, which is legal inside an SLI id, so an
+ * overridden `broker_availability` at 0.9999 and a custom `broker_availability_99` at 0.99 both become
+ * `broker_availability_99_99` — one SLO id, two burn alerts, two bindings, and nothing downstream would have said
+ * so (measured: schema valid, MUST 15/15, the compiled rules carrying the alert twice). A usage error spelled on
+ * the field the user can change: the custom SLI's id, else the overridden objective.
+ */
+function checkSloIds(slis) {
+  const bySlo = new Map();
+  for (const x of slis) {
+    const other = bySlo.get(x.sloId);
+    if (!other) { bySlo.set(x.sloId, x); continue; }
+    const culprit = [x, other].find(y => y.custom) || [x, other].find(y => hasOwn(y.overrides || {}, 'objective')) || x;
+    const rival = culprit === x ? other : x;
+    const where = culprit.custom ? `custom ${culprit.id}.id` : `override ${culprit.id}.objective`;
+    throw new Error(`${where}: its SLO id ${x.sloId} collides with ${rival.id}'s (objective ${rival.objective}) — pick another ${culprit.custom ? 'id or objective' : 'objective'}`);
+  }
+}
+
+/**
  * Every SLI expression, with the params in, must still be PromQL. The parser is an input: packc
  * init passes the Lezer grammar (tools/lib/promql-lezer.mjs, an npm import and so not for the
  * browser); the browser-safe core in tools/lib/promql.mjs extracts dependencies and reports no
@@ -1135,6 +1154,7 @@ export function instantiatePack(entryOrEntries, opts = {}) {
     ...entries.map(en => entryFragment(en, { tier, selectedSlis: selected, prefixed, overrides })),
     ...(customDefs.length ? [customFragment(customDefs, { tier })] : []),
   ];
+  checkSloIds(fragments.flatMap(f => f.slis));
   const { canonical: draft, todos: scaffoldTodos } = tierScaffold({ tier, service, environment, owners, fragments, toggles });
 
   const rows = paramTable(entries, prefixed);

@@ -630,7 +630,11 @@ inputs, in the engine, the API and the studio (the CLI takes the scalar override
   `errorbudget`) that no SLI of the passed entries owns — a clash with a library SLI (ticked,
   or un-ticked: it would clash the moment it is ticked, and a draft carrying both would draw
   two cards with one key) or with another custom one is a usage error naming both
-  (`clashes with` / `shadows the library SLI <id> of <entry>`); the objective and window required; the PromQL
+  (`clashes with` / `shadows the library SLI <id> of <entry>`); so is an SLO id two SLIs would
+  share — `sloIdFor` joins `<sli>_<pct>` with `_`, legal inside an id, so an overridden
+  `broker_availability` at 0.9999 and a custom `broker_availability_99` at 0.99 both make
+  `broker_availability_99_99` (`custom <id>.id: its SLO id … collides with <sli>'s`, or `override
+  <sli>.objective: …` when no custom SLI is involved); the objective and window required; the PromQL
   required per type; the fields validated as above. A custom SLI gets an SLO (`sloIdFor`), a
   recording rule, burn alerts from the **default burn profile** — `DEFAULT_BURN_PROFILE =
   { ratio: 'availability', threshold: 'latency' }`, the profile a library template without

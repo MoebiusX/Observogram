@@ -1458,6 +1458,7 @@ try {
     [{ ...instBody, overrides: JSON.parse('{"__proto__": {"objective": 0.5}}') }, /^override __proto__: not an SLI id/, 'a __proto__ key'],
     [{ ...instBody, custom: [checkout, checkout] }, /^custom checkout_success\.id: declared twice/, 'a duplicate custom id'],
     [{ ...instBody, toggles: { slis: ['kafka_produce_latency_p99'] }, custom: [{ ...checkout, id: 'kafka_broker_availability' }] }, /^custom kafka_broker_availability\.id: shadows the library SLI kafka_broker_availability of kafka \(not in the pack now/, 'a custom id shadowing an un-ticked library SLI'],
+    [{ ...instBody, overrides: { kafka_broker_availability: { objective: 0.9999 } }, custom: [{ ...checkout, id: 'kafka_broker_availability_99', objective: 0.99 }] }, /^custom kafka_broker_availability_99\.id: its SLO id kafka_broker_availability_99_99 collides with kafka_broker_availability's \(objective 0\.9999\)/, 'two SLIs sharing one SLO id'],
     [{ ...instBody, custom: Array.from({ length: 17 }, (_, i) => ({ ...checkout, id: `c_${i}` })) }, /^custom: at most 16 custom SLIs \(17 given\)/, '17 custom SLIs'],
     [{ ...instBody, overrides: Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`o_${i}`, { objective: 0.5 }])) }, /^overrides: at most 64 entries \(65 given\)/, '65 overrides'],
     [{ ...instBody, overrides: ['x'] }, /^overrides: expected an object/, 'overrides as a list'],

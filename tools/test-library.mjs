@@ -606,6 +606,14 @@ test('custom SLIs: the usage errors — a duplicate or clashing id, a missing fi
   const shadow = (() => { try { orders({ toggles: { slis: ['kafka_produce_latency_p99'] }, custom: [{ ...CUSTOM_RATIO, id: 'kafka_broker_availability' }] }); } catch (e) { return e.message; } return null; })();
   assert.match(shadow, /^custom kafka_broker_availability\.id: shadows the library SLI kafka_broker_availability of kafka \(not in the pack now — it would clash the moment it is ticked\) — pick another id$/);
   assert.equal(orders({ toggles: { slis: ['kafka_produce_latency_p99'] }, custom: [{ ...CUSTOM_RATIO, id: 'broker_availability' }] }).canonical.spec.slis.length, 2, 'the bare id is nobody\'s in a composed pack');
+  // two SLIs may not share an SLO id: sloIdFor joins <sli>_<pct> with _, legal inside an id (measured: one SLO id, two burn alerts, two bindings, schema valid, MUST 15/15)
+  assert.match(err([{ ...CUSTOM_RATIO, id: 'xx', objective: 0.999 }, { ...CUSTOM_RATIO, id: 'xx_99', objective: 0.09 }]), /^custom xx_99\.id: its SLO id xx_99_9 collides with xx's \(objective 0\.999\) — pick another id or objective$/);
+  const collide = (() => { try { orders({ overrides: { kafka_broker_availability: { objective: 0.9999 } }, custom: [{ ...CUSTOM_RATIO, id: 'kafka_broker_availability_99', objective: 0.99 }] }); } catch (e) { return e.message; } return null; })();
+  assert.match(collide, /^custom kafka_broker_availability_99\.id: its SLO id kafka_broker_availability_99_99 collides with kafka_broker_availability's \(objective 0\.9999\) — pick another id or objective$/);
+  const single = (custom, overrides) => { try { instantiatePack(byId.kafka, { name: 'orders', tier: 'tier-2', custom, overrides }); } catch (e) { return e.message; } return null; };
+  assert.match(single([{ ...CUSTOM_RATIO, id: 'broker_availability_99', objective: 0.99 }], { broker_availability: { objective: 0.9999 } }), /^custom broker_availability_99\.id: its SLO id broker_availability_99_99 collides with broker_availability's/, 'the custom SLI is named even when the overridden library SLI came first');
+  assert.equal(single([{ ...CUSTOM_RATIO, id: 'broker_availability_99', objective: 0.999 }], { broker_availability: { objective: 0.9999 } }), null, 'distinct SLO ids: both stay');
+  assert.equal(orders({ overrides: { kafka_broker_availability: { objective: 0.9999 } }, custom: [{ ...CUSTOM_RATIO, id: 'kafka_broker_availability_99', objective: 0.999 }] }).canonical.spec.slos.filter(s => /^kafka_broker_availability_99/.test(s.id)).length, 2);
   assert.match(err([{ ...CUSTOM_RATIO, id: 'A' }]), /^custom\[0\]\.id: a slug of 2 to 63 characters is required/);
   assert.match(err([{ ...CUSTOM_RATIO, id: 'a' }]), /a slug of 2 to 63 characters/);
   assert.match(err([{ ...CUSTOM_RATIO, id: 'errorbudget' }]), /reserved policy-record segment/);
