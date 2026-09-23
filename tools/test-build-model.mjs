@@ -1246,6 +1246,17 @@ test('renderBuildDefinition draws the segmented control, the chips and the summa
   segs[2].fire('keydown', { key: 'ArrowRight' });
   chip.fire('click');
   assert.deepEqual(calls, [['tier', 'tier-3'], ['focus', 'tier-1'], ['tier', 'tier-1'], ['focus', 'tier-3'], ['tier', 'tier-3'], ['entry', 'ibm-mq']]);
+  // Focus survives the re-render each of those causes: the segments and the chips carry a focus key
+  // (rerenderBuild restores focus by [data-focus-key]), and the key the wiring focused exists in the
+  // next render — the checked segment after setTier, the same chip after toggleEntry.
+  assert.ok(html.includes('data-tier="tier-2" aria-checked="true" tabindex="0" data-focus-key="tier:tier-2"'));
+  assert.ok(html.includes('data-entry="ibm-mq" aria-pressed="false" data-focus-key="entry:ibm-mq"'));
+  const after = buildDefinitionHtml(buildDefinitionModel({ build: draft({ tier: 'tier-1', entries: ['kafka', 'http-service', 'ibm-mq'] }), library: LIBRARY, requirements: REQUIREMENTS }));
+  assert.ok(after.includes('data-tier="tier-1" aria-checked="true" tabindex="0" data-focus-key="tier:tier-1"'), 'the segment the arrow key focused is the checked one after the re-render, same key');
+  assert.ok(after.includes('data-entry="ibm-mq" aria-pressed="true" data-focus-key="entry:ibm-mq"'), 'the toggled chip keeps its key');
+  assert.deepEqual(focusFallbackSelectors('tier:tier-1'), ['.build-seg-btn[aria-checked="true"]'], 'a tier key that vanished falls to the checked segment');
+  assert.deepEqual(focusFallbackSelectors('entry:ibm-mq'), ['.build-chip[data-entry="ibm-mq"]', '.build-chip']);
+  assert.deepEqual(focusFallbackSelectors('entry:<x>'), [], 'an id that is not a slug is not interpolated into a selector');
 });
 
 test('rolodexItems: the selected entries’ SLIs with the objective at the tier, above-tier ones disabled with the reason, every product behind the filter', () => {

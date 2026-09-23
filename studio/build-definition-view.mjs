@@ -28,7 +28,7 @@ function segmentHtml(t) {
   // The counts stack (MUST over SHOULD): a 100 px segment cannot hold "15 MUST · 1 SHOULD" on one line.
   const counts = t.must == null ? '<b>…</b>' : `<b>${t.must} MUST</b>${t.should ? `<b>${t.should} SHOULD</b>` : ''}`;
   return `
-    <button type="button" role="radio" class="build-seg-btn" data-tier="${escapeHtml(t.id)}" aria-checked="${t.selected ? 'true' : 'false'}" tabindex="${t.selected ? '0' : '-1'}"
+    <button type="button" role="radio" class="build-seg-btn" data-tier="${escapeHtml(t.id)}" aria-checked="${t.selected ? 'true' : 'false'}" tabindex="${t.selected ? '0' : '-1'}" data-focus-key="tier:${escapeHtml(t.id)}"
             title="${escapeHtml(`${t.label} — ${t.word}: ${t.blurb}`)}">
       <span class="build-seg-name">${escapeHtml(t.id)}</span>
       <span class="build-seg-counts" aria-label="${escapeHtml(t.must == null ? 'loading the clauses' : `${t.must} MUST${t.should ? `, ${t.should} SHOULD` : ''}`)}">${counts}</span>
@@ -38,7 +38,7 @@ function segmentHtml(t) {
 function chipHtml(c) {
   const at = c.sliCountAtTier;
   return `
-    <button type="button" class="build-chip${c.selected ? ' is-selected' : ''}" data-entry="${escapeHtml(c.id)}" aria-pressed="${c.selected ? 'true' : 'false'}"
+    <button type="button" class="build-chip${c.selected ? ' is-selected' : ''}" data-entry="${escapeHtml(c.id)}" aria-pressed="${c.selected ? 'true' : 'false'}" data-focus-key="entry:${escapeHtml(c.id)}"
             title="${escapeHtml(`${c.title} — ${c.summary}${c.gaps ? ` · ${plural(c.gaps, 'evidence gap')}` : ''}`)}">
       <span class="build-chip-top">
         <span class="build-chip-title">${escapeHtml(c.title)}</span>

@@ -197,11 +197,18 @@ export function todoFocusSuffix(layerId, path) {
  * Where focus goes when the input that held it is gone after a re-render (its todo was
  * filled and disappeared): the selectors to try in order — for an input on the layer
  * sheet, the sheet's first param input then its close control (the sheet stays open); for
- * an input on a slab, the first param input left on the same slab, then the slab's head —
- * or none for a key that is not a stack input.
+ * an input on a slab, the first param input left on the same slab, then the slab's head;
+ * for a tier segment (`tier:<id>`) the checked segment, for a library chip (`entry:<id>`)
+ * that chip then the first chip — or none for a key that is none of these. The segments
+ * and the chips carry their key so an arrow key on the radiogroup or a second Space on a
+ * chip still has a focused control after the re-render each one causes.
  */
 export function focusFallbackSelectors(key) {
-  const m = /^param:[^@]+@([^/]+)\//.exec(String(key || ''));
+  const k = String(key || '');
+  if (/^tier:/.test(k)) return ['.build-seg-btn[aria-checked="true"]'];
+  const entry = /^entry:([\w.-]+)$/.exec(k);
+  if (entry) return [`.build-chip[data-entry="${entry[1]}"]`, '.build-chip'];
+  const m = /^param:[^@]+@([^/]+)\//.exec(k);
   if (!m) return [];
   const slab = `.build-slab[data-layer="${m[1]}"]`;
   const onSheet = /@[^/]+\/sheet(\/|$)/.test(String(key));
