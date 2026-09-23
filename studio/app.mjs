@@ -43,7 +43,7 @@ import { initHost } from './host.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
   BUILD_STEPS, TIERS as BUILD_TIERS, selectValid as buildSelectValid, buildStepReachability, clampStep as clampBuildStep,
-  buildSelectModel, buildGenerateModel, buildValidateModel, buildRailModel, placeholdersRemaining,
+  buildSelectModel, buildGenerateModel, buildValidateModel, buildRailModel, placeholdersRemaining, retargetSlis,
 } from './build-model.mjs';
 import {
   loadLibrary as loadBuildLibrary, libraryCache as buildLibraryCache, loadRequirements as loadBuildRequirements,
@@ -1902,6 +1902,10 @@ async function runBuildInstantiate() {
     if (b.result || b.error || b.pending) { b.result = null; b.error = null; b.pending = false; rerenderBuild(); }
     return;
   }
+  // A draft restored from an older session may list an SLI above its tier:
+  // prune before sending, so the body never carries a key the tier excludes.
+  const lib = buildLibraryCache();
+  if (lib) b.slis = retargetSlis(b, lib);
   const seq = ++buildSeq;
   b.pending = true;
   paintBuildPending(true);
@@ -1962,8 +1966,15 @@ const buildActions = {
     persistence.schedule();
   },
   setTier(tier) {
-    if (!BUILD_TIERS.includes(tier) || tier === state.build.tier) return;
-    state.build.tier = tier;
+    const b = state.build;
+    if (!BUILD_TIERS.includes(tier) || tier === b.tier) return;
+    const prev = b.tier;
+    b.tier = tier;
+    // An explicit SLI list follows the tier: a key the new tier does not reach
+    // is dropped (its row is disabled and unchecked, so nothing else could
+    // clear the sli-excluded warning it would raise on every regeneration),
+    // a key the new tier unlocks comes in ticked.
+    b.slis = retargetSlis(b, buildLibraryCache(), prev);
     ensureBuildRequirements(tier);
     rerenderBuild();
     scheduleBuildInstantiate(0);

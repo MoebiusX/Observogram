@@ -30,7 +30,7 @@ import {
   BUILD_STEPS, TIERS, SECTION_TOGGLES, serviceSlug, isValidServiceName, parseOwners, sliKey, paramKey,
   selectValid, buildStepReachability, clampStep, paramRows, effectiveParams, instantiateBody,
   buildSelectModel, buildGenerateModel, summarizeWarnings, buildClauseChecklist, buildRailModel,
-  placeholdersRemaining, groupTodos, buildValidateModel,
+  placeholdersRemaining, groupTodos, buildValidateModel, reachableSliKeys, retargetSlis,
 } from '../studio/build-model.mjs';
 import {
   loadLibrary as loadLibraryApi, loadRequirements, loadTargets, instantiate, compilePreview, registerBuiltPack,
@@ -319,6 +319,31 @@ test('buildGenerateModel: an SLI above the tier is disabled with the tier it nee
   const single = buildGenerateModel({ build: draft({ entries: ['kafka'] }), library: LIBRARY });
   assert.equal(single.composed, false);
   assert.equal(single.groups[0].slis[0].key, 'broker_availability');
+});
+
+test('retargetSlis: an explicit SLI list follows the tier — above-tier keys dropped, newly reachable keys ticked, the defaults collapse to null', () => {
+  const all1 = reachableSliKeys(draft({ tier: 'tier-1' }), LIBRARY);
+  const all2 = reachableSliKeys(draft({ tier: 'tier-2' }), LIBRARY);
+  assert.equal(all1.length, 10);
+  assert.equal(all2.length, 7);
+  assert.ok(all1.includes('kafka_controller_election_rate') && !all2.includes('kafka_controller_election_rate'));
+  assert.deepEqual(reachableSliKeys(draft({ tier: 'tier-3', entries: ['kafka'] }), LIBRARY), ['broker_availability', 'consumer_group_lag_seconds'], 'a single entry keeps bare ids');
+  // tier-1, partition_replica_health unticked: an explicit list of 9 that includes controller_election_rate (needs tier-1)
+  const untick = all1.filter(k => k !== 'kafka_partition_replica_health');
+  // lowering to tier-2 drops controller_election_rate — the excluded key no longer sits in the draft, so the
+  // "SLI above the tier" warning cannot come back on every regeneration — and keeps the untick
+  const lowered = retargetSlis(draft({ tier: 'tier-2', slis: untick }), LIBRARY, 'tier-1');
+  assert.deepEqual([...lowered].sort(), all2.filter(k => k !== 'kafka_partition_replica_health').sort());
+  assert.ok(!lowered.includes('kafka_controller_election_rate'));
+  assert.deepEqual(instantiateBody(draft({ tier: 'tier-2', slis: lowered })).toggles.slis, lowered, 'the body sent carries no key the tier excludes');
+  // raising back to tier-1: what the tier unlocks comes in ticked, the untick still stands
+  const raised = retargetSlis(draft({ tier: 'tier-1', slis: lowered }), LIBRARY, 'tier-2');
+  assert.deepEqual([...raised].sort(), [...untick].sort());
+  // a list equal to the tier's defaults collapses to null (the engine's defaultToggles)
+  assert.equal(retargetSlis(draft({ tier: 'tier-1', slis: [...lowered, 'kafka_partition_replica_health'] }), LIBRARY, 'tier-2'), null);
+  assert.equal(retargetSlis(draft({ slis: null }), LIBRARY, 'tier-1'), null, 'the defaults stay the defaults');
+  // no previous tier (a draft restored from an older session): stale keys are pruned, nothing is added
+  assert.deepEqual(retargetSlis(draft({ tier: 'tier-2', slis: ['kafka_broker_availability', 'kafka_controller_election_rate'] }), LIBRARY), ['kafka_broker_availability']);
 });
 
 test('summarizeWarnings groups by kind, blocking first', () => {

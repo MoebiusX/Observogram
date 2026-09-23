@@ -100,6 +100,34 @@ export function clampStep(build, wanted) {
   return 'select';
 }
 
+// ---------- the SLI selection across tiers ----------
+
+/** The SLI keys a tier reaches for the selection — what an explicit list may contain (the engine's defaultToggles). */
+export function reachableSliKeys(build, library, tier = build?.tier) {
+  const entries = selectedEntries(build, library);
+  const composed = entries.length > 1;
+  return entries.flatMap(en => (en.slis || []).filter(s => atTier(tier, s.minTier)).map(s => sliKey(en.id, s.id, composed)));
+}
+
+/**
+ * The explicit SLI list after a tier change (`prevTier` → build.tier): a key the
+ * new tier does not reach is dropped — the engine would exclude it with an
+ * `sli-excluded` warning nobody could clear, since its row is disabled and
+ * unchecked — a key the new tier unlocks comes in ticked (the user never had
+ * that choice at the old tier), and a list equal to the tier's defaults
+ * collapses to null. null (the defaults) stays null. Without `prevTier` it only
+ * prunes: a draft restored from an older session may list an SLI above its tier.
+ */
+export function retargetSlis(build, library, prevTier) {
+  if (!Array.isArray(build?.slis)) return null;
+  const now = reachableSliKeys(build, library);
+  const before = new Set(prevTier ? reachableSliKeys(build, library, prevTier) : now);
+  const keep = new Set(build.slis.filter(k => now.includes(k)));
+  for (const k of now) if (!before.has(k)) keep.add(k);
+  const next = now.filter(k => keep.has(k));
+  return next.length === now.length ? null : next;
+}
+
 // ---------- params ----------
 
 /**
