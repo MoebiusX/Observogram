@@ -343,34 +343,38 @@ export function wireRolodexCopies(container, model, act) {
   // The custom form.
   const form = container.querySelector('[data-custom-form-fields]');
   if (form) {
-    const draftOf = () => normalizeDraft(model.rolodex?.customForm?.draft);
+    // One live draft per wiring: every handler starts from what was typed so far (`cur`, with the fields' current
+    // values laid over it), never from the render-time draft — the inputs write the draft to the state without a
+    // re-render, so a handler that re-read the stale render-time draft started again with idTouched=false,
+    // re-slugged a typed id from the name on the next keystroke and Add sent the slug (measured live:
+    // 'my_checkout_id' typed, 'checkout_success' sent and drawn).
+    let cur = normalizeDraft(model.rolodex?.customForm?.draft);
     const fieldEls = () => [...(form.querySelectorAll?.('[data-custom-draft]') || [])];
     const read = () => {
-      const d = { ...draftOf() };
+      const d = { ...cur };
       for (const el of fieldEls()) d[el.dataset.customDraft] = el.value;
       return d;
     };
     fieldEls().forEach(el => {
       const field = el.dataset.customDraft;
       el.addEventListener('input', () => {
-        const d = read();
-        if (field === 'id') d.idTouched = String(el.value).trim() !== '';
-        if (!d.idTouched) {
-          d.id = slugifySliId(d.name);
+        cur = read();
+        if (field === 'id') cur.idTouched = String(el.value).trim() !== '';
+        if (!cur.idTouched) {
+          cur.id = slugifySliId(cur.name);
           const idEl = fieldEls().find(x => x.dataset.customDraft === 'id');
-          if (idEl && idEl !== el) idEl.value = d.id;
+          if (idEl && idEl !== el) idEl.value = cur.id;
         }
-        act.update?.({ customDraft: d, customDraftErrors: null }, { rerender: false, reinstantiate: false });
+        act.update?.({ customDraft: cur, customDraftErrors: null }, { rerender: false, reinstantiate: false });
         const add = container.querySelector('[data-add-custom]');
-        if (add) add.disabled = !customFormCanSubmit(d, model);
+        if (add) add.disabled = !customFormCanSubmit(cur, model);
       });
-      if (field === 'type') el.addEventListener('change', () => act.update?.({ customDraft: read() }, { rerender: true, reinstantiate: false }));
+      if (field === 'type') el.addEventListener('change', () => { cur = read(); act.update?.({ customDraft: cur }, { rerender: true, reinstantiate: false }); });
     });
     form.addEventListener?.('submit', (e) => { e.preventDefault(); });
     container.querySelector('[data-add-custom]')?.addEventListener('click', () => {
-      const d = read();
-      if (!d.idTouched) d.id = slugifySliId(d.name);
-      act.addCustom?.(customDefFromDraft(d), d);
+      cur = read();
+      act.addCustom?.(customDefFromDraft(cur), cur);
     });
   }
 }

@@ -2079,6 +2079,28 @@ test('the copies’ handlers: Customise opens the face (a re-render, no instanti
   assert.equal(add.disabled, false, 'the required fields are filled: the button wakes');
   assert.deepEqual(calls[9][2], { rerender: true, reinstantiate: false }, 'the type select re-renders (it changes the fields)');
   assert.deepEqual(calls[10], ['add', { id: 'checkout_p99', type: 'threshold', objective: 0.99, window: '30x', query: 'q', threshold: 0.3 }, 'checkout_p99'], 'the engine\'s definition — the window as typed, for the engine to refuse inline');
+  // A typed id sticks across the following keystrokes and is what Add sends (it was re-slugged from the name on the next input and the slug was sent — the handlers re-read the render-time draft).
+  const seq = [];
+  const seqAct = { update: (p) => seq.push(['update', p.customDraft?.id, p.customDraft?.idTouched]), addCustom: (def) => seq.push(['add', def.id]) };
+  const n2 = { ...fakeEl({ customDraft: 'name' }), value: '' }, i2 = { ...fakeEl({ customDraft: 'id' }), value: '' }, g2 = { ...fakeEl({ customDraft: 'good' }), value: '' }, t2 = { ...fakeEl({ customDraft: 'total' }), value: '' }, w2 = { ...fakeEl({ customDraft: 'window' }), value: '30d' }, o2 = { ...fakeEl({ customDraft: 'objective' }), value: '99.9' };
+  const add2 = { ...fakeEl({}), disabled: true };
+  const form2 = { addEventListener() {}, querySelectorAll: () => [n2, i2, g2, t2, w2, o2] };
+  const fresh = buildSheetModel({ layerId: 'L1', build: copiesDraft({ customDraft: null }), library: LIBRARY, requirements: T2, mode: 'edit' });
+  wireBuildSheet(fakeContainer({ '[data-custom-form-fields]': [form2], '[data-add-custom]': [add2] }), fresh, { build: seqAct });
+  n2.value = 'Checkout Success'; n2.fire('input');
+  assert.equal(i2.value, 'checkout_success', 'the id follows the name');
+  i2.value = 'my_checkout_id'; i2.fire('input');
+  g2.value = 'sum(rate(checkout_ok_total[5m]))'; g2.fire('input');
+  t2.value = 'sum(rate(checkout_total[5m]))'; t2.fire('input');
+  n2.value = 'Checkout Success!'; n2.fire('input');
+  assert.equal(i2.value, 'my_checkout_id', 'the typed id is not overwritten by the name\'s slug on later keystrokes');
+  assert.deepEqual(seq.at(-1), ['update', 'my_checkout_id', true]);
+  assert.equal(add2.disabled, false);
+  add2.fire('click');
+  assert.deepEqual(seq.at(-1), ['add', 'my_checkout_id'], 'Add sends the typed id');
+  // Clearing the typed id hands the slug back to the name in the draft (the input the user is typing in is left alone).
+  i2.value = ''; i2.fire('input');
+  assert.deepEqual([i2.value, seq.at(-1)], ['', ['update', 'checkout_success', false]]);
 });
 
 test('a field left by Enter or Tab keeps a focus: the commit waits for the focus move, then hands the action the field\'s key when nothing is focused (Enter) and nothing when Tab\'s target is (the re-render restores it)', async () => {
