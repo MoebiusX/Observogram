@@ -49,7 +49,7 @@
 // card there (seedCardModel).
 
 import { LAYER_DEFS, L4_SUBGROUPS } from './constants.mjs';
-import { overrideFor, effectiveSli, customisedFields, promqlEdited, editFaceModel, customFormModel, customEffective } from './build-copies-model.mjs';
+import { OVERRIDE_FIELDS, overrideFor, effectiveSli, customisedFields, promqlEdited, editFaceModel, customFormModel, customEffective } from './build-copies-model.mjs';
 
 export const BUILD_STEPS = ['define', 'compile', 'verify'];
 /** Least stringent first — the order the engine lists them and the DEFINE step shows them. */
@@ -186,7 +186,7 @@ export function splitBuildErrors(errors) {
 export function isStale(build) { return !!(build?.error && build?.result); }
 
 /** Step ids a draft may carry from before the rename (2026-09-23): they resume on the same step. */
-const LEGACY_STEP = { select: 'define', generate: 'compile', validate: 'verify' };
+export const LEGACY_STEP = { select: 'define', generate: 'compile', validate: 'verify' };
 /** The furthest reachable step at or before `wanted` (a legacy id counts as its current name). */
 export function clampStep(build, wanted) {
   wanted = LEGACY_STEP[wanted] || wanted;
@@ -194,6 +194,41 @@ export function clampStep(build, wanted) {
   const idx = Math.max(0, BUILD_STEPS.indexOf(wanted));
   for (let i = idx; i >= 0; i--) if (reach[BUILD_STEPS[i]]) return BUILD_STEPS[i];
   return 'define';
+}
+
+const SLI_KEY_RE = /^[a-z][a-z0-9_]{0,63}$/;   // the engine's SLI_KEY_RE: what an override may be keyed by
+/**
+ * A persisted draft (inputs only, `fields` = BUILD_PERSIST_FIELDS) restored over `defaults` (a fresh
+ * defaultBuildState()): strings and lists filtered to their types, the toggles merged, the overrides as
+ * { key: { field: value } } (own plain objects, SLI keys, known fields only), the custom SLIs as plain objects
+ * with a string id, a legacy step id (select · generate · validate) mapped to its current name — it used to be
+ * dropped by the step check, which landed a 'validate' draft on DEFINE — and a draft persisted before the seed
+ * existed (no `seeded`) that sits on COMPILE or VERIFY marked seeded: it was, in all but name. Pure.
+ */
+export function restoreBuildDraft(saved, defaults, fields) {
+  const next = { ...defaults };
+  const src = saved && typeof saved === 'object' ? saved : {};
+  for (const k of fields) {
+    const v = src[k];
+    if (v === undefined || v === null) continue;
+    if (k === 'toggles' && typeof v === 'object' && !Array.isArray(v)) { next.toggles = { ...next.toggles, ...v }; continue; }
+    if (k === 'params' && typeof v === 'object' && !Array.isArray(v)) { next.params = { ...v }; continue; }
+    if (k === 'overrides' && typeof v === 'object' && !Array.isArray(v)) {
+      next.overrides = Object.fromEntries(Object.entries(v)
+        .filter(([key, ov]) => SLI_KEY_RE.test(key) && ov && typeof ov === 'object' && !Array.isArray(ov))
+        .map(([key, ov]) => [key, Object.fromEntries(Object.entries(ov).filter(([field]) => OVERRIDE_FIELDS.includes(field)))]));
+      continue;
+    }
+    if (k === 'custom' && Array.isArray(v)) { next.custom = v.filter(d => d && typeof d === 'object' && !Array.isArray(d) && typeof d.id === 'string').map(d => ({ ...d })); continue; }
+    if (k === 'seeded') { if (typeof v === 'boolean') next.seeded = v; continue; }
+    if (k === 'entries' && Array.isArray(v)) { next.entries = v.filter(x => typeof x === 'string'); continue; }
+    if (k === 'slis' && Array.isArray(v)) { next.slis = v.filter(x => typeof x === 'string'); continue; }
+    if (k === 'step') { const step = LEGACY_STEP[v] || v; if (BUILD_STEPS.includes(step)) next.step = step; continue; }
+    if (k === 'tier') { if (TIERS.includes(v)) next.tier = v; continue; }
+    if (['name', 'owners', 'environment', 'registeredId'].includes(k) && typeof v === 'string') next[k] = v;
+  }
+  if (typeof src.seeded !== 'boolean' && ['compile', 'verify'].includes(LEGACY_STEP[src.step] || src.step)) next.seeded = true;
+  return next;
 }
 
 /**

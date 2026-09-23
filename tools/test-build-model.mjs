@@ -36,6 +36,7 @@ import {
   buildDefinitionModel, buildSheetModel, rolodexItems, addSliSelection, paramLayer, paramSubgroup, sectionClauses, sectionDrops, sectionNotes, sectionSwitch, sheetLists,
   sheetModeFor, stackExpanded, sheetFocusSuffix, LAYER_QUESTIONS, LAYER_SWITCHES, buildStatusLine,
   isSeeded, allSliKeys, selectedSliKeys, retargetOverrides, retargetSlisForEntries, effectiveOverrides, seedCardModel, customisedMap, WARNING_KINDS, SEEDED_NOTE,
+  LEGACY_STEP, restoreBuildDraft,
 } from '../studio/build-model.mjs';
 import {
   OVERRIDE_FIELDS, SLO_WINDOWS, PROMQL_FIELDS, overrideFor, customisedFields, promqlEdited, effectiveSli, customEffective, percentText, ratioOf, slugifySliId,
@@ -763,6 +764,20 @@ test('the persisted build draft is inputs only — never the result, the preview
   assert.equal(b.step, 'define');
   assert.equal(b.tier, 'tier-2');
   assert.equal(b.slis, null, 'null means the tier\'s defaults');
+  // Restoring a draft (the controller's restoreBuildDraft is this pure function over defaultBuildState()).
+  const restore = (saved) => restoreBuildDraft(saved, defaultBuildState(), BUILD_PERSIST_FIELDS);
+  const full = { step: 'verify', name: 'orders-api', owners: 'team-orders', environment: 'prod', tier: 'tier-1', entries: ['kafka', 7], params: { a: '1' }, slis: ['x', null], toggles: { slos: false }, overrides: { kafka_produce_latency_p99: { objective: 0.995, nope: 1 }, 'Bad-Key': { objective: 0.5 }, dropped: 'x' }, custom: [{ id: 'c1', type: 'ratio' }, { type: 'ratio' }, 'x'], seeded: true, registeredId: 'r1', result: { canonical: {} }, error: ['e'] };
+  const got = restore(full);
+  assert.deepEqual([got.step, got.name, got.owners, got.environment, got.tier, got.entries, got.params, got.slis, got.toggles.slos, got.toggles.policy, got.overrides, got.custom, got.seeded, got.registeredId, got.result, got.error],
+    ['verify', 'orders-api', 'team-orders', 'prod', 'tier-1', ['kafka'], { a: '1' }, ['x'], false, true, { kafka_produce_latency_p99: { objective: 0.995 } }, [{ id: 'c1', type: 'ratio' }], true, 'r1', null, null], 'typed, filtered to the known fields and SLI keys; the result and the error never restored');
+  assert.deepEqual(Object.keys(restore({ overrides: JSON.parse('{"__proto__": {"objective": 0.5}}') }).overrides), [], 'a polluting key is not an SLI key');
+  // A legacy step id resumes on its current step — it used to be dropped by the step check, so a 'validate' draft landed on DEFINE with seeded=true and no seed card (measured live).
+  assert.deepEqual(LEGACY_STEP, { select: 'define', generate: 'compile', validate: 'verify' });
+  for (const [legacy, step, seeded] of [['validate', 'verify', true], ['generate', 'compile', true], ['select', 'define', false], ['compile', 'compile', true], ['verify', 'verify', true], ['define', 'define', false]]) {
+    const r = restore({ step: legacy, name: 'orders-api', entries: ['kafka'] });
+    assert.deepEqual([r.step, r.seeded], [step, seeded], `${legacy} → ${step}, seeded ${seeded} (a pre-seed draft past DEFINE was seeded in all but name)`);
+  }
+  assert.deepEqual([restore({ step: 'nonsense' }).step, restore({ step: 'compile', seeded: false }).seeded, restore({ tier: 'tier-9' }).tier, restore(null).step], ['define', false, 'tier-2', 'define'], 'an unknown step or tier falls to the default; an explicit seeded=false is kept; no draft is the defaults');
 });
 
 test('build-api loaders: the paths and bodies the six routes take, with an injected fetcher', async () => {

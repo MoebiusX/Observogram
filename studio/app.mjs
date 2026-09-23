@@ -44,8 +44,9 @@ import { initHost } from './host.mjs';
 import {
   BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, enterStep as enterBuildStep, stepAfterInstantiate as buildStepAfterInstantiate, focusFallbackSelectors, instantiateBody as buildInstantiateBody,
   buildDefineModel, buildCompileModel, buildVerifyModel, buildDefinitionModel, buildSheetModel, buildClauseChecklist, buildStatusLine, sheetModeFor, addSliSelection, placeholdersRemaining, retargetSlis, retargetSlisForEntries, retargetOverrides,
+  restoreBuildDraft as restoreBuildDraftModel,
 } from './build-model.mjs';
-import { fieldValueFor, OVERRIDE_FIELDS as BUILD_OVERRIDE_FIELDS } from './build-copies-model.mjs';
+import { fieldValueFor } from './build-copies-model.mjs';
 import {
   loadLibrary as loadBuildLibrary, libraryCache as buildLibraryCache, loadRequirements as loadBuildRequirements,
   requirementsCache as buildRequirementsCache, instantiate as instantiateBuild, compilePreview as compileBuildPreview,
@@ -1876,29 +1877,10 @@ function setupHomeAffordance() {
 // check is Node-only; the result feeds the clause rail the three steps share.
 // ============================================================
 
-// Restore a persisted draft (inputs only) over the defaults.
+// Restore a persisted draft (inputs only) over the defaults — the pure part is the model's (a legacy step id
+// resumes on its current step, a pre-seed draft on COMPILE / VERIFY counts as seeded).
 function restoreBuildDraft(saved) {
-  const next = defaultBuildState();
-  for (const k of BUILD_PERSIST_FIELDS) {
-    if (saved[k] === undefined || saved[k] === null) continue;
-    if (k === 'toggles' && typeof saved[k] === 'object') { next.toggles = { ...next.toggles, ...saved[k] }; continue; }
-    if (k === 'params' && typeof saved[k] === 'object' && !Array.isArray(saved[k])) { next.params = { ...saved[k] }; continue; }
-    // The copies: overrides as { key: { field: value } } (own, plain objects only), custom as a list of plain objects.
-    if (k === 'overrides' && typeof saved[k] === 'object' && !Array.isArray(saved[k])) {
-      next.overrides = Object.fromEntries(Object.entries(saved[k]).filter(([, v]) => v && typeof v === 'object' && !Array.isArray(v)).map(([key, v]) => [key, Object.fromEntries(Object.entries(v).filter(([field]) => BUILD_OVERRIDE_FIELDS.includes(field)))]));
-      continue;
-    }
-    if (k === 'custom' && Array.isArray(saved[k])) { next.custom = saved[k].filter(d => d && typeof d === 'object' && !Array.isArray(d) && typeof d.id === 'string').map(d => ({ ...d })); continue; }
-    if (k === 'seeded') { if (typeof saved[k] === 'boolean') next.seeded = saved[k]; continue; }
-    if (k === 'entries' && Array.isArray(saved[k])) { next.entries = saved[k].filter(x => typeof x === 'string'); continue; }
-    if (k === 'slis' && Array.isArray(saved[k])) { next.slis = saved[k].filter(x => typeof x === 'string'); continue; }
-    if (k === 'step' && !BUILD_STEPS.includes(saved[k])) continue;
-    if (k === 'tier' && !BUILD_TIERS.includes(saved[k])) continue;
-    if (['name', 'owners', 'environment', 'registeredId', 'step', 'tier'].includes(k) && typeof saved[k] === 'string') next[k] = saved[k];
-  }
-  // A draft persisted before the seed existed that sits on COMPILE or VERIFY was seeded in all but name.
-  if (typeof saved.seeded !== 'boolean' && ['compile', 'verify', 'generate', 'validate'].includes(saved.step)) next.seeded = true;
-  state.build = next;
+  state.build = restoreBuildDraftModel(saved, defaultBuildState(), BUILD_PERSIST_FIELDS);
 }
 
 export function enterBuildMode(step) {
