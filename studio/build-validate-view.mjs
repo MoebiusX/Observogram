@@ -103,8 +103,8 @@ export function renderBuildValidate(container, model, host = appHost) {
               <div class="build-artifact-label">${escapeHtml(a.label)}</div>
               <div class="build-artifact-desc">${escapeHtml(a.description)}</div>
               <div class="build-artifact-actions">
-                <button type="button" class="ctrl-btn" data-act="preview">${model.preview?.target === a.id ? 'previewing' : 'preview'}</button>
-                <button type="button" class="ctrl-btn" data-act="download">download</button>
+                <button type="button" class="ctrl-btn" data-act="preview" aria-label="preview ${escapeHtml(a.label)}">${model.preview?.target === a.id ? 'previewing' : 'preview'}</button>
+                <button type="button" class="ctrl-btn" data-act="download" aria-label="download ${escapeHtml(a.label)}">download</button>
               </div>
             </div>`).join('')}
         </div>

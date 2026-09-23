@@ -20,7 +20,7 @@ import { stepHeadHtml, evidenceBadge } from './build-select-view.mjs';
 function sliRowHtml(s) {
   const disabled = !s.reachable;
   return `
-    <label class="build-sli${disabled ? ' is-disabled' : ''}${s.checked ? ' is-checked' : ''}" data-sli="${escapeHtml(s.key)}" title="${escapeHtml(s.metrics.join(', '))}">
+    <label class="build-sli${disabled ? ' is-disabled' : ''}${s.checked ? ' is-checked' : ''}" data-sli="${escapeHtml(s.key)}" title="${escapeHtml(`${disabled ? `needs ${s.minTier} · ` : ''}${s.metrics.join(', ')}`)}">
       <input type="checkbox" ${s.checked ? 'checked' : ''} ${disabled ? 'disabled' : ''} aria-label="${escapeHtml(s.key)}">
       <span class="build-sli-main">
         <span class="build-sli-id">${escapeHtml(s.id)}</span>
