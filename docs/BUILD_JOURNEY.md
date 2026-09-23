@@ -695,7 +695,9 @@ clears that override; the card's face shows the overridden objective large as to
 the line *edited — the library's evidence no longer applies*; an engine `promql` warning for
 that SLI is printed on the card; the engine's `override <sli>.<field>: …` error lands under
 the field it names (`splitBuildErrors.byOverride`). Edits commit on change (Enter or leaving
-the field) through `setOverride(sliId, field, value)` / `clearOverride(sliId, field)` (the
+the field; a first Esc inside a face or form field leaves the field and lands on the card's
+Customise / Done button, the next Esc closes the sheet — never mid-edit under a PromQL
+textarea) through `setOverride(sliId, field, value)` / `clearOverride(sliId, field)` (the
 debounced instantiate as today; focus and scroll restore across the re-render through the
 axis's focus keys — `ov:<sli>:<field>`, `cu:<id>:<field>`, `cf:<field>`,
 `customise:<sli>` — and scroll keys). The rolodex's **last card is + Custom SLI**

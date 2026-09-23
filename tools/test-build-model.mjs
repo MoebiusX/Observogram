@@ -2141,17 +2141,30 @@ test('the sheet’s handlers write through the existing actions: close (button, 
   }), model, { build: act });
   closeBtn.fire('click'); scrim.fire('click');
   sheet.fire('keydown', { key: 'Escape' }); sheet.fire('keydown', { key: 'Enter' });
+  // Esc inside an edit-face field leaves the field and lands on the card's Customise button; it does not close the sheet (measured: it did, mid-edit in a PromQL textarea).
+  const focused = [];
+  const doneBtn = { focus: (o) => focused.push(['done', o]) };
+  const card = { querySelector: (sel) => (sel === '[data-customise]' ? doneBtn : null) };
+  const face = {};
+  const textarea = { tagName: 'TEXTAREA', closest: (sel) => (sel === '.build-rolo-card' ? card : sel.includes('.build-edit-face') ? face : null), blur: () => focused.push(['blur']) };
+  sheet.fire('keydown', { key: 'Escape', target: textarea });
+  const inputInForm = { tagName: 'INPUT', closest: (sel) => (sel === '.build-rolo-card' ? null : sel.includes('.build-custom-form') ? face : null), blur: () => focused.push(['blur']) };
+  sheet.focus = (o) => focused.push(['sheet', o]);
+  sheet.fire('keydown', { key: 'Escape', target: inputInForm });
+  assert.deepEqual(focused, [['blur'], ['done', { preventScroll: true }], ['blur'], ['sheet', { preventScroll: true }]], 'the field is left, focus lands on Done (or the sheet when no card has one)');
+  const plainButton = { tagName: 'BUTTON', closest: () => face };
+  sheet.fire('keydown', { key: 'Escape', target: plainButton });
   compose.fire('click');
   slosSwitch.fire('click'); disabledSwitch.fire('click');
   remove.fire('click'); add.fire('click'); foreign.fire('click'); above.fire('click');
   filter.fire('click', { currentTarget: filter });
   assert.deepEqual(calls, [
-    ['close'], ['close'], ['close'],
+    ['close'], ['close'], ['close'], ['close'],
     ['step', 'compile', { sheet: 'L1' }],
     ['toggle', 'slos', false],
     ['sli', 'kafka_broker_availability', false, 7], ['sli', 'kafka_fetch_latency_p99', true, 7], ['add', 'ibm-mq', 'qmgr_process_up'], ['sli', 'kafka_controller_election_rate', true, 7],
     ['update', { rolodexAll: true }, { rerender: true, reinstantiate: false }],
-  ], 'a disabled switch does nothing; a foreign SLI goes through addSli; an above-tier one flips like any other; Enter is not Esc');
+  ], 'a disabled switch does nothing; a foreign SLI goes through addSli; an above-tier one flips like any other; Enter is not Esc; Esc on a button inside the face still closes');
 });
 
 test('the slab head opens the layer’s sheet: aria-haspopup, the "+" affordance, the open layer marked; the inline clause list is gone', () => {

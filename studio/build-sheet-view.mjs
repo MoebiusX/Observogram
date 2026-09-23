@@ -288,7 +288,22 @@ export function wireBuildSheet(container, model, host = appHost) {
   const act = host.build;
   const sheet = container.querySelector('.build-sheet');
   container.querySelectorAll('[data-close]').forEach(el => el.addEventListener('click', () => act?.closeSheet?.()));
-  sheet?.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); act?.closeSheet?.(); } });
+  sheet?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    e.stopPropagation();
+    // Inside an edit-face or custom-form field the first Esc leaves the field (its change commits) and lands on the
+    // card's Customise / Done button; the next Esc closes the sheet. Closing on the first one threw away the sheet
+    // under a PromQL textarea mid-edit (measured: the text survived only because Chrome fires change on removal).
+    const t = e.target;
+    if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || '') && t.closest?.('.build-edit-face, .build-custom-form')) {
+      const next = t.closest('.build-rolo-card')?.querySelector?.('[data-customise]') || sheet;
+      t.blur?.();
+      next.focus?.({ preventScroll: true });
+      return;
+    }
+    act?.closeSheet?.();
+  });
   container.querySelector('[data-compose]')?.addEventListener('click', () => act?.setStep?.('compile', { sheet: model.layerId }));
   container.querySelectorAll('.build-switch[data-toggle]').forEach(sw => sw.addEventListener('click', () => {
     if (sw.disabled) return;
