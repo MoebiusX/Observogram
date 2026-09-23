@@ -33,8 +33,9 @@ export function defaultBuildState() {
     pending: false,           // an instantiate is in flight
     preview: null,            // { target, label, filename, contentType, content, warnings } — the VERIFY artefact open
     registeredId: null,       // the id VERIFY's "Continue …" exit registered
-    stackOpen: {},            // { [layerId]: true, [`${layerId}/detail`]: true } — the stack's open slabs (UI state, never persisted)
-    railOpen: false,          // the clause rail's full list open (UI state, never persisted)
+    stackOpen: {},            // { [`${layerId}/detail`]: true } — the stack's open detail folds (UI state, never persisted)
+    sheetOpen: null,          // the layer whose sheet is open ('L1' … 'GOV'), one at a time (UI state, never persisted)
+    rolodexAll: false,        // the L1 rolodex shows every product's SLIs, not only the selected entries' (UI state, never persisted)
     wantedStep: null,         // the step asked for while unreachable (a reload on Verify before the pack is back); honoured once the instantiation answers (UI state, never persisted)
   };
 }

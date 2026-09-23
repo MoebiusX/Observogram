@@ -8,22 +8,24 @@
 // so what Build shows is what Discover will show for the same pack. Each
 // slab's left edge carries the rubric's verdict for its dimension (green
 // pass, amber pass on a placeholder, red fail, neutral when no clause
-// applies, grey while pending); a click on the slab head opens the layer's
-// clauses. A ghost card is a clause of the tier (the silhouette on DEFINE,
+// applies, grey while pending); a click on the slab head — or its '+' —
+// opens the layer's sheet (build-sheet-view.mjs: the clauses, and what you
+// can add on that layer). A ghost card is a clause of the tier (the silhouette on DEFINE,
 // an unmet clause afterwards) or an SLI / SLO candidate; a Scaffold artefact
 // is dashed as Discover parks it; the detail artefacts Discover folds
 // (panels, queries) fold here too. On VERIFY the todos sit on their slab
 // with their inline param inputs, and a card that a todo names carries a pin.
 //
 // Renderer only (docs/UI_CONVENTIONS.md §2-3): render(container, model, host).
-// host.build.update keeps which slabs are open (in the draft, never
-// persisted); host.build.setParam commits a filled placeholder.
+// host.build.openSheet opens a layer's sheet; host.build.update keeps which
+// detail folds are open (in the draft, never persisted); host.build.setParam
+// commits a filled placeholder.
 
 import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { artefactCardHtml } from './card-html.mjs';
-import { todoFocusSuffix } from './build-model.mjs';
-import { evidenceBadge, todoHtml, wireParamInputs, revealTodo, clauseRowHtml, STATE_GLYPH, STATE_WORD } from './build-atoms.mjs';
+import { todoFocusSuffix, LAYER_QUESTIONS } from './build-model.mjs';
+import { evidenceBadge, todoHtml, wireParamInputs, revealTodo, STATE_GLYPH, STATE_WORD } from './build-atoms.mjs';
 
 const SOURCE_TITLE = {
   Required: 'required by the tier — the pack does not exist yet',
@@ -68,15 +70,6 @@ function artefactCardHtmlInStack(a, mode) {
       ${artefactCardHtml(a)}
       ${a.todoPath ? `<button type="button" class="build-card-pin" data-todo-path="${escapeHtml(a.todoPath)}"${jump ? ' data-jump="verify"' : ''} title="${escapeHtml(`todo: ${a.todoPath} — a placeholder value the team must fill${jump ? ', on Verify' : ''}`)}">todo</button>` : ''}
     </div>`;
-}
-
-// The slab's clause list: the rail's rows (one function, build-atoms clauseRowHtml), folded until the head is clicked.
-function clausesHtml(slab) {
-  if (!slab.clauses.length) return '';
-  return `
-    <ul class="build-rail-clauses build-slab-clauses" ${slab.expanded ? '' : 'hidden'}>
-      ${slab.clauses.map(clauseRowHtml).join('')}
-    </ul>`;
 }
 
 function gridHtml(artefacts, ghosts, mode, { l4 = false } = {}) {
@@ -133,20 +126,23 @@ function slabHtml(slab, mode) {
   const detail = slab.counts.detail
     ? `<button type="button" class="section-expand-toggle build-slab-detail${slab.detailOpen ? ' is-on' : ''}" data-detail="${escapeHtml(slab.id)}" title="the detail artefacts Discover folds behind Expand — panels, queries, live evidence"><span class="section-expand-glyph" aria-hidden="true">${slab.detailOpen ? '⊟' : '⊞'}</span> ${slab.detailOpen ? 'Hide' : 'Expand'} detail <span class="section-expand-count">${slab.counts.detail}</span></button>`
     : '';
+  // The head opens the layer's sheet: the clauses at the tier and what you can add on this layer.
+  const question = LAYER_QUESTIONS[slab.id] || '';
+  const sheetTitle = `${slab.num} · ${slab.name} — ${question}`;
   return `
     <section class="section build-slab is-${slab.state}${slab.dimmed ? ' is-dimmed' : ''}${slab.present || slab.ghosts.length ? '' : ' is-empty'}${slab.expanded ? ' is-expanded' : ''}" data-layer="${escapeHtml(slab.id)}">
       <div class="section-head build-slab-head">
-        <button type="button" class="build-slab-edge" data-slab="${escapeHtml(slab.id)}" aria-expanded="${slab.expanded ? 'true' : 'false'}" title="${escapeHtml(slab.why.length ? slab.why.join('\n') : `${slab.num} ${slab.name}: ${slab.stateText}`)}">
+        <button type="button" class="build-slab-edge" data-slab="${escapeHtml(slab.id)}" aria-haspopup="dialog" aria-expanded="${slab.expanded ? 'true' : 'false'}" title="${escapeHtml(`${slab.why.length ? slab.why.join('\n') : `${slab.num} ${slab.name}: ${slab.stateText}`}\nOpen: ${question}`)}">
           <span class="section-num">${escapeHtml(slab.num)}</span>
           <span class="section-name">${escapeHtml(slab.name)}</span>
           <span class="build-slab-verdict is-${slab.state}"><b aria-hidden="true">${STATE_GLYPH[slab.state]}</b> ${escapeHtml(slab.stateText)}</span>
           ${slab.offSections.length && !slab.subgroups ? `<span class="build-slab-off">${slab.offSections.map(s => `${escapeHtml(s)} off`).join(' · ')}</span>` : ''}
-          ${slab.clauses.length ? `<span class="build-slab-toggle">${plural(slab.clauses.length, 'clause')} <span aria-hidden="true">${slab.expanded ? '▾' : '▸'}</span></span>` : ''}
+          <span class="build-slab-toggle">${escapeHtml(question)}</span>
         </button>
         ${detail}
         <span class="section-count">${escapeHtml(countLabel(slab, mode))}</span>
+        <button type="button" class="build-slab-add" data-slab="${escapeHtml(slab.id)}" aria-haspopup="dialog" aria-expanded="${slab.expanded ? 'true' : 'false'}" aria-label="${escapeHtml(`Open ${sheetTitle}`)}" title="${escapeHtml(sheetTitle)}"><span aria-hidden="true">+</span></button>
       </div>
-      ${clausesHtml(slab)}
       ${body}
     </section>`;
 }
@@ -165,26 +161,15 @@ export function renderBuildStack(container, model, host = appHost) {
   wireBuildStack(container, model, host);
 }
 
-/** The stack's handlers: the slab heads (clauses), the detail toggles, the todo pins, the param inputs. */
+/** The stack's handlers: the slab heads and '+' (the layer's sheet), the detail toggles, the todo pins, the param inputs. */
 export function wireBuildStack(container, model, host = appHost) {
   const act = host.build;
 
-  // The open slabs live in the draft (never persisted); the DOM flips at once, the
-  // next re-render reads the draft back through the model.
-  const openMap = () => Object.fromEntries(model.slabs.flatMap(s => [...(s.expanded ? [[s.id, true]] : []), ...(s.detailOpen ? [[`${s.id}/detail`, true]] : [])]));
-  container.querySelectorAll('.build-slab-edge').forEach(btn => btn.addEventListener('click', () => {
-    const sec = btn.closest('.build-slab');
-    const open = !sec.classList.contains('is-expanded');
-    sec.classList.toggle('is-expanded', open);
-    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-    const list = sec.querySelector('.build-slab-clauses');
-    if (list) list.hidden = !open;
-    const caret = btn.querySelector('.build-slab-toggle [aria-hidden]');
-    if (caret) caret.textContent = open ? '▾' : '▸';
-    const slab = model.slabs.find(s => s.id === btn.dataset.slab);
-    if (slab) slab.expanded = open;
-    act?.update?.({ stackOpen: openMap() }, { reinstantiate: false });
-  }));
+  // A slab head (or its '+') opens the layer's sheet; the controller keeps which layer is
+  // open on the draft (never persisted) and moves focus into the sheet and back.
+  container.querySelectorAll('.build-slab-edge, .build-slab-add').forEach(btn => btn.addEventListener('click', () => act?.openSheet?.(btn.dataset.slab)));
+  // The open detail folds live in the draft (never persisted).
+  const openMap = () => Object.fromEntries(model.slabs.flatMap(s => (s.detailOpen ? [[`${s.id}/detail`, true]] : [])));
   container.querySelectorAll('.build-slab-detail').forEach(btn => btn.addEventListener('click', () => {
     const slab = model.slabs.find(s => s.id === btn.dataset.detail);
     if (!slab) return;

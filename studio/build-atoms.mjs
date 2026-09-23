@@ -21,6 +21,25 @@ export function evidenceBadge(status, verifiedOn) {
   return `<span class="build-evidence build-evidence-${escapeHtml(status)}" title="${escapeHtml(title)}">${escapeHtml(EVIDENCE_LABEL[status] || status)}</span>`;
 }
 
+/** The evidence as a dot (the definition column's chips): the badge's colour, the status in the title and for a screen reader. */
+export function evidenceDot(status, verifiedOn) {
+  if (!status) return '';
+  const word = EVIDENCE_LABEL[status] || status;
+  const title = verifiedOn ? `${word} · verified ${verifiedOn}` : word;
+  return `<span class="build-evidence-dot build-evidence-${escapeHtml(status)}" title="${escapeHtml(title)}" role="img" aria-label="${escapeHtml(`evidence: ${title}`)}"></span>`;
+}
+
+/**
+ * A real switch (role=switch, a sliding knob) for the section toggles and the rolodex's
+ * add / remove: `on` its state, `disabled` with `reason` when it cannot be flipped (an SLI
+ * above the tier, policy without SLOs), `label` its accessible name, `data-*` what the
+ * wiring reads back. The knob is CSS; the button is the whole control.
+ */
+export function switchHtml({ on, disabled = false, reason = null, label, focusKey = null, data = {}, small = false } = {}) {
+  const attrs = Object.entries(data).map(([k, v]) => ` data-${escapeHtml(k)}="${escapeHtml(v)}"`).join('');
+  return `<button type="button" role="switch" class="build-switch${small ? ' is-small' : ''}" aria-checked="${on ? 'true' : 'false'}" aria-label="${escapeHtml(label)}"${disabled ? ` disabled aria-disabled="true"${reason ? ` title="${escapeHtml(reason)}"` : ''}` : ''}${focusKey ? ` data-focus-key="${escapeHtml(focusKey)}"` : ''}${attrs}><span class="build-switch-knob" aria-hidden="true"></span></button>`;
+}
+
 // One param as an input (the same param may fill several todos on VERIFY:
 // idSuffix keeps the ids and focus keys distinct while they share the key).
 export function paramRowHtml(p, { compact = false, idSuffix = '' } = {}) {

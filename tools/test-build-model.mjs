@@ -29,22 +29,25 @@ import { parsePromqlDependencies as lezer } from './lib/promql-lezer.mjs';
 import {
   BUILD_STEPS, TIERS, SECTION_TOGGLES, MAX_SERVICE_SLUG, LONGEST_DERIVED_SUFFIX, serviceSlug, isValidServiceName, parseOwners, sliKey, paramKey,
   defineValid, buildStepReachability, clampStep, paramRows, effectiveParams, instantiateBody,
-  buildDefineModel, buildCompileModel, summarizeWarnings, buildClauseChecklist, buildRailModel,
+  buildDefineModel, buildCompileModel, summarizeWarnings, buildClauseChecklist,
   placeholdersRemaining, groupTodos, buildVerifyModel, reachableSliKeys, retargetSlis, splitBuildErrors, isStale, resolveBuiltins,
   buildStackModel, sliCandidates, artefactSymbol, todoLayer, clauseGhostLabel, clauseSubgroup, slabState, isDetailArtefact, CLAUSE_GHOSTS,
   todoFocusSuffix, focusFallbackSelectors, enterStep, stepAfterInstantiate,
+  buildDefinitionModel, buildSheetModel,
 } from '../studio/build-model.mjs';
 import {
   loadLibrary as loadLibraryApi, loadRequirements, loadTargets, instantiate, compilePreview, registerBuiltPack,
 } from '../studio/build-api.mjs';
 import { defaultBuildState, BUILD_PERSIST_FIELDS } from '../studio/state.mjs';
 import { LAYER_DEFS, L4_SUBGROUPS } from '../studio/constants.mjs';
-import { renderBuildDefine, renderClauseRail } from '../studio/build-define-view.mjs';
+import { renderBuildDefine } from '../studio/build-define-view.mjs';
 import { renderBuildCompile } from '../studio/build-compile-view.mjs';
 import { renderBuildVerify } from '../studio/build-verify-view.mjs';
 import { renderBuildStack, buildStackHtml, wireBuildStack } from '../studio/build-stack-view.mjs';
+import { renderBuildDefinition } from '../studio/build-definition-view.mjs';
+import { buildSheetHtml } from '../studio/build-sheet-view.mjs';
 import { artefactCardHtml } from '../studio/card-html.mjs';
-import { revealTodo, clauseRowHtml } from '../studio/build-atoms.mjs';
+import { revealTodo } from '../studio/build-atoms.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const FIX = resolve(ROOT, 'tools/fixtures/build');
@@ -335,7 +338,12 @@ test('renderBuildDefine escapes the typed service name: the model carries it raw
   renderBuildDefine(container, m, { build: {} });
   assert.ok(!container.innerHTML.includes('<img'), 'no element from the name reaches the page');
   assert.ok(container.innerHTML.includes('Still needed: a service name that slugs (‘1&lt;img src=x onerror=&quot;window.__xss=1&quot;&gt;’'), 'the status line shows the name escaped');
-  assert.ok(container.innerHTML.includes(`value="${'1&lt;img src=x onerror=&quot;window.__xss=1&quot;&gt;'}"`), 'the input value is escaped too');
+  // The input lives in the definition column now: its value is escaped there too.
+  const def = stubContainer();
+  renderBuildDefinition(def, buildDefinitionModel({ build: draft({ name: payload }), library: LIBRARY, requirements: REQUIREMENTS }), { build: {} });
+  assert.ok(!def.innerHTML.includes('<img'));
+  assert.ok(def.innerHTML.includes(`value="${'1&lt;img src=x onerror=&quot;window.__xss=1&quot;&gt;'}"`), 'the input value is escaped too');
+  assert.ok(def.innerHTML.includes('Still needed: a service name that slugs'), 'the column says what is still needed');
 });
 
 // ---------------------------------------------------------------------------
@@ -449,11 +457,13 @@ test('a usage error keeps the previous pack: the error is split per param, the r
   assert.equal(gen.result.sliCount, 7);
   assert.equal(gen.stale, true);
   assert.equal(gen.error.paramCount, 1);
-  // The rail says so.
-  const rail = buildRailModel({ build: bad, clauses: REQUIREMENTS['tier-2'] });
-  assert.equal(rail.stale, true);
-  assert.equal(rail.ready, true);
-  assert.deepEqual(rail.error, [quote]);
+  // The definition column's summary says so.
+  const def = buildDefinitionModel({ build: bad, library: LIBRARY, requirements: REQUIREMENTS });
+  assert.equal(def.summary.stale, true);
+  assert.equal(def.summary.ready, true);
+  assert.equal(def.summary.statusKind, 'error');
+  assert.deepEqual(Object.keys(def.error.byParam), ['kafka.bootstrap']);
+  assert.ok(quote.endsWith(def.error.byParam['kafka.bootstrap']), 'the reason is the engine\'s, after the `param <key>: ` prefix');
   // VERIFY keeps the verdict, marks the todo's param row, and does not hand the stale pack off.
   const val = buildVerifyModel({ build: bad, library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
   assert.equal(val.ready, true);
@@ -475,14 +485,19 @@ test('the stale note on each step says where the rejected value is marked, in on
   const render = (fn, model) => { const c = stubContainer(); fn(c, model, { build: {} }); return c.innerHTML; };
   const lead = 'The last compilation failed — the pack shown is the previous one.</strong> 1 parameter value rejected — marked on its row ';
   const define = render(renderBuildDefine, buildDefineModel({ build: stale, library: LIBRARY, requirements: REQUIREMENTS }));
-  assert.ok(define.includes(`${lead}below</div>`), 'DEFINE: the rows are on this step');
+  assert.ok(define.includes(`${lead}on its layer sheet (L2 · L4 · L5)</div>`), 'DEFINE: the params live on the layer sheets');
   const compile = render(renderBuildCompile, buildCompileModel({ build: stale, library: LIBRARY, clauses: T2 }));
-  assert.ok(compile.includes(`${lead}on Define and Verify (this step has no parameter inputs)</div>`), 'COMPILE: the rows are on the other two steps');
+  assert.ok(compile.includes(`${lead}on its layer sheet (L2 · L4 · L5) and under its todo on Verify</div>`), 'COMPILE: the row is on the sheet, and under the todo on Verify');
   const verify = render(renderBuildVerify, buildVerifyModel({ build: stale, library: LIBRARY, clauses: T2, targets: TARGETS }));
   assert.ok(verify.includes(`${lead}below, under its todo</div>`), 'VERIFY: the row is under the todo');
   // Two rejected values pluralise the whole phrase.
   const two = draft({ error: ['param kafka.bootstrap: a value may not contain a double quote', 'param remote_write_url: a value may not contain a backslash'] });
-  assert.ok(render(renderBuildCompile, buildCompileModel({ build: two, library: LIBRARY, clauses: T2 })).includes('2 parameter values rejected — marked on their rows on Define and Verify'));
+  assert.ok(render(renderBuildCompile, buildCompileModel({ build: two, library: LIBRARY, clauses: T2 })).includes('2 parameter values rejected — marked on their rows on its layer sheet'));
+  // The sheet that carries the rejected value says so, and its row carries the reason.
+  const l5 = buildSheetHtml(buildSheetModel({ layerId: 'L5', build: stale, library: LIBRARY, requirements: T2, mode: 'edit' }));
+  assert.ok(l5.includes('1 parameter value on this layer rejected by the last compilation — the pack shown is the previous one'));
+  assert.ok(l5.includes('<span class="build-param-error" role="alert">a value may not contain a double quote</span>'));
+  assert.equal(buildSheetModel({ layerId: 'L2', build: stale, library: LIBRARY, requirements: T2, mode: 'edit' }).rejected, 0, 'kafka.bootstrap is an L5 param (the canary’s address), not an L2 one');
 });
 
 test('summarizeWarnings groups by kind, blocking first', () => {
@@ -533,20 +548,23 @@ test('buildClauseChecklist: pass, pass on a placeholder, fail — and pending wi
   assert.equal(f.counts.must.fail, 2);
 });
 
-test('buildRailModel carries the counts the rail prints', () => {
-  const r = buildRailModel({ build: draft(), clauses: REQUIREMENTS['tier-2'] });
-  assert.equal(r.tier, 'tier-2');
-  assert.equal(r.todoCount, 21);
-  assert.equal(r.warningCount, 0);
-  assert.equal(r.blockingWarnings, 0);
-  assert.equal(r.placeholdersRemaining, 17);
-  assert.equal(r.ready, true);
-  assert.equal(r.valid, true);
-  assert.equal(r.checklist.counts.placeholder, 4);
-  const cold = buildRailModel({ build: defaultBuildState(), clauses: REQUIREMENTS['tier-2'] });
+test('the definition column’s summary carries the counts the rail used to print', () => {
+  const s = buildDefinitionModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS }).summary;
+  assert.equal(s.tier, 'tier-2');
+  assert.equal(s.todoCount, 21);
+  assert.equal(s.warningCount, 0);
+  assert.equal(s.blockingWarnings, 0);
+  assert.equal(s.placeholdersRemaining, 17);
+  assert.equal(s.ready, true);
+  assert.equal(s.statusKind, 'ok');
+  assert.equal(s.status, 'conformant at tier-2');
+  assert.equal(s.counts.placeholder, 4);
+  assert.equal(s.onPlaceholder, 4);
+  const cold = buildDefinitionModel({ build: defaultBuildState(), library: LIBRARY, requirements: REQUIREMENTS }).summary;
   assert.equal(cold.ready, false);
-  assert.equal(cold.valid, false);
-  assert.equal(cold.checklist.counts.pending, 16);
+  assert.equal(cold.statusKind, 'idle');
+  assert.equal(cold.status, 'complete the definition to evaluate');
+  assert.equal(cold.counts.pending, 16);
   assert.equal(placeholdersRemaining(null), 0);
 });
 
@@ -620,7 +638,9 @@ test('buildVerifyModel: the verdict with the three states, schema, warnings, tod
 test('the persisted build draft is inputs only — never the result, the preview or the error', () => {
   const b = defaultBuildState();
   for (const k of BUILD_PERSIST_FIELDS) assert.ok(k in b, k);
-  for (const k of ['result', 'preview', 'error', 'pending']) assert.ok(!BUILD_PERSIST_FIELDS.includes(k), `${k} must not persist`);
+  for (const k of ['result', 'preview', 'error', 'pending', 'stackOpen', 'sheetOpen', 'rolodexAll', 'wantedStep']) assert.ok(!BUILD_PERSIST_FIELDS.includes(k), `${k} must not persist`);
+  assert.equal(b.sheetOpen, null, 'no sheet open on a fresh draft');
+  assert.equal(b.rolodexAll, false);
   assert.equal(b.step, 'define');
   assert.equal(b.tier, 'tier-2');
   assert.equal(b.slis, null, 'null means the tier\'s defaults');
@@ -1121,52 +1141,3 @@ test('artefactCardHtml is the one card body: Discover\'s head, chip, pill, title
   assert.ok(!hostile.includes('<img') && !hostile.includes('<b>') && hostile.includes('&lt;img src=x&gt;'));
 });
 
-test('the compact rail: the failing and the placeholder clauses folded out, the full list behind "all clauses", its open state on the draft', () => {
-  const r = buildRailModel({ build: draft(), clauses: T2 });
-  assert.deepEqual(r.failing, []);
-  assert.deepEqual(r.onPlaceholder.map(i => i.id), ['L2.MUST.metrics_exporter', 'L2.MUST.metrics_logs_traces_backends', 'L5.MUST.synthetic_probe', 'L5.MUST.tier2_chaos_staging']);
-  assert.equal(r.expanded, false);
-  assert.equal(buildRailModel({ build: draft({ railOpen: true }), clauses: T2 }).expanded, true);
-  const off = buildRailModel({ build: draft({ result: { ...draft().result, summary: DASHBOARDS_OFF_SUMMARY } }), clauses: T2 });
-  assert.deepEqual(off.failing.map(i => i.id), ['L3.MUST.service_overview_dashboard', 'L3.MUST.slo_burn_dashboard']);
-  const container = stubContainer();
-  renderClauseRail(container, off, { build: {} });
-  assert.ok(container.innerHTML.includes('the red edges on the stack'));
-  assert.ok(container.innerHTML.includes('<details class="build-rail-all">') && container.innerHTML.includes('all 16 clauses by layer'));
-  assert.ok(container.innerHTML.includes('4 clauses pass only on a placeholder'));
-  renderClauseRail(container, buildRailModel({ build: draft({ railOpen: true }), clauses: T2 }), { build: {} });
-  assert.ok(container.innerHTML.includes('<details class="build-rail-all" open>'));
-  assert.ok(!container.innerHTML.includes('build-rail-failing'), 'nothing fails: no failing block');
-  // stackOpen and railOpen are UI state on the draft, never persisted.
-  const b = defaultBuildState();
-  assert.deepEqual(b.stackOpen, {});
-  assert.equal(b.railOpen, false);
-  for (const k of ['stackOpen', 'railOpen']) assert.ok(!BUILD_PERSIST_FIELDS.includes(k), `${k} must not persist`);
-});
-
-test('the rail and a slab draw the same clause row: one function, so a placeholder\'s todos and a failing clause\'s read alike in both', () => {
-  const rowOf = (html, id) => { const m = html.match(new RegExp(`<li class="build-rail-clause is-\\w+" title="${id.replace(/\./g, '\\.')}[^"]*">[\\s\\S]*?</li>`)); return m && m[0]; };
-  const rail = stubContainer();
-  renderClauseRail(rail, buildRailModel({ build: draft(), clauses: T2 }), { build: {} });
-  const stack = buildStackHtml(stackOf());
-  for (const id of ['L2.MUST.metrics_exporter', 'L5.MUST.synthetic_probe', 'L1.MUST.availability_slo']) {
-    const r = rowOf(rail.innerHTML, id), s = rowOf(stack, id);
-    assert.ok(r && s, `${id} drawn on both`);
-    assert.equal(r, s, `${id}: the rail's row is the slab's row`);
-  }
-  const ph = rowOf(stack, 'L2.MUST.metrics_exporter');
-  assert.match(ph, /is-placeholder/);
-  assert.match(ph, /<em>on \d+ placeholders?: [^<]+<\/em>/, 'a placeholder pass names its todos');
-  // A failing clause: the rail's failing block and the slab's list, the same row.
-  const off = stubContainer();
-  renderClauseRail(off, buildRailModel({ build: draft({ result: { ...draft().result, summary: DASHBOARDS_OFF_SUMMARY } }), clauses: T2 }), { build: {} });
-  const offStack = buildStackHtml(stackOf({ checklist: buildClauseChecklist(T2, DASHBOARDS_OFF_SUMMARY) }));
-  const failRail = rowOf(off.innerHTML, 'L3.MUST.service_overview_dashboard'), failSlab = rowOf(offStack, 'L3.MUST.service_overview_dashboard');
-  assert.ok(failRail && failSlab && failRail === failSlab);
-  assert.match(failRail, /is-fail/);
-  assert.equal((off.innerHTML.match(/L3\.MUST\.service_overview_dashboard — fails/g) || []).length, 2, 'listed under failing and under all clauses, the same row');
-  // The one function, on its own: a failing clause with todos names them; escaping at the seam.
-  const withTodos = clauseRowHtml({ id: 'L4.MUST.x', state: 'fail', severity: 'MUST', description: 'd', todos: ['alerting.routes[0]', 'a <b>'] });
-  assert.ok(withTodos.includes('<em>alerting.routes[0], a &lt;b&gt;</em>') && !withTodos.includes('<b>'));
-  assert.ok(!clauseRowHtml({ id: 'L1.MUST.y', state: 'pass', severity: 'MUST', description: 'd', todos: [] }).includes('<em>'));
-});

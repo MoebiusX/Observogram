@@ -25,6 +25,17 @@
 // artefact each names). The layer names are the studio's constants (a
 // slab's colour is its layer token, .section[data-layer], in the
 // stylesheet); nothing is invented here.
+//
+// The axis (docs/BUILD_JOURNEY.md "The axis"): the pack is the axis of the
+// Build screen — a definition column on the left (buildDefinitionModel: the
+// service, the tier as a segmented control, the entries as chips, the
+// conformance summary) and the stack as the main surface, each slab opening
+// a per-layer sheet (buildSheetModel: the layer's question, its clauses,
+// and its options — the SLI rolodex on L1, the section switches with the
+// clauses they drop, the params placed on the layer they shape, the lists
+// read from the adapter's projection). The sheet writes through the same
+// actions the steps always had (setSli / addSli, setToggle, setParam,
+// toggleEntry, setTier); the models here only say what to draw.
 
 import { LAYER_DEFS, L4_SUBGROUPS } from './constants.mjs';
 
@@ -184,14 +195,27 @@ export function todoFocusSuffix(layerId, path) {
 
 /**
  * Where focus goes when the input that held it is gone after a re-render (its todo was
- * filled and disappeared): the selectors to try in order — the first param input left on
- * the same slab, then the slab's edge — or none for a key that is not a stack input.
+ * filled and disappeared): the selectors to try in order — for an input on the layer
+ * sheet, the sheet's first param input then its close control (the sheet stays open); for
+ * an input on a slab, the first param input left on the same slab, then the slab's head —
+ * or none for a key that is not a stack input.
  */
 export function focusFallbackSelectors(key) {
   const m = /^param:[^@]+@([^/]+)\//.exec(String(key || ''));
   if (!m) return [];
   const slab = `.build-slab[data-layer="${m[1]}"]`;
-  return [`${slab} .build-param-input`, `${slab} .build-slab-edge`];
+  const onSheet = /@[^/]+\/sheet(\/|$)/.test(String(key));
+  return [...(onSheet ? ['.build-sheet .build-param-input', '.build-sheet-close'] : []), `${slab} .build-param-input`, `${slab} .build-slab-edge`];
+}
+
+/** The focus-key suffix of a param input on a layer sheet: `L4/sheet` (a plain param) or `L4/sheet/<todo path>` (a todo's input on VERIFY). */
+export function sheetFocusSuffix(layerId, path = null) {
+  return path ? `${layerId}/sheet/${path}` : `${layerId}/sheet`;
+}
+
+/** The stack's `expanded` map from the draft: the detail folds (`stackOpen`) plus the layer whose sheet is open. */
+export function stackExpanded(build) {
+  return { ...(build?.stackOpen || {}), ...(build?.sheetOpen ? { [build.sheetOpen]: true } : {}) };
 }
 
 // ---------- the SLI selection across tiers ----------
@@ -302,11 +326,7 @@ export function buildDefineModel({ build, library, requirements = {} }) {
   const rows = library?.entries || [];
   const selected = new Set(build?.entries || []);
   const name = build?.name || '';
-  const errors = [];
-  if (!name.trim()) errors.push('a service name');
-  else if (serviceSlug(name).length > MAX_SERVICE_SLUG) errors.push(`a service name of at most ${MAX_SERVICE_SLUG} characters once slugged (‘${serviceSlug(name)}’ is ${serviceSlug(name).length})`);
-  else if (!isValidServiceName(name)) errors.push(`a service name that slugs (‘${name}’ → ‘${serviceSlug(name)}’ is not one)`);
-  if (!selected.size) errors.push('at least one library entry');
+  const errors = definitionErrors(name, selected.size);
   const tiers = TIERS.map(tier => {
     const clauses = requirements[tier] || null;
     const adds = clauses ? clauses.filter(c => c.minTier === tier) : [];
@@ -340,7 +360,7 @@ export function buildDefineModel({ build, library, requirements = {} }) {
     // SLI / SLO candidates on L1, the edges in the clause states once a pack exists.
     stack: buildStackModel({
       requirements: tierClauses, checklist: buildClauseChecklist(tierClauses, r?.summary || null),
-      candidates: sliCandidates({ build, library }), mode: 'define', toggles: build?.toggles || {}, expanded: build?.stackOpen || {},
+      candidates: sliCandidates({ build, library }), mode: 'define', toggles: build?.toggles || {}, expanded: stackExpanded(build),
     }),
     // The placeholder count the step prints: once a pack exists, the params the
     // engine wrote and reported (provenance.placeholders, what the rail shows) —
@@ -416,7 +436,7 @@ export function buildCompileModel({ build, library, clauses = [] }) {
     atLeastOne: all.some(s => s.checked),
     stack: buildStackModel({
       adapted: r?.adapted || null, requirements: clauses, checklist: buildClauseChecklist(clauses, r?.summary || null),
-      todos: r?.todos || [], params: paramRows({ build, library }), mode: 'compile', toggles: build?.toggles || {}, expanded: build?.stackOpen || {},
+      todos: r?.todos || [], params: paramRows({ build, library }), mode: 'compile', toggles: build?.toggles || {}, expanded: stackExpanded(build),
     }),
     result: r ? {
       sliCount: r.canonical?.spec?.slis?.length || 0, sloCount: r.canonical?.spec?.slos?.length || 0,
@@ -443,13 +463,14 @@ export function summarizeWarnings(warnings) {
     .sort((a, b) => Number(b.blocking) - Number(a.blocking) || a.kind.localeCompare(b.kind));
 }
 
-// ---------- the clause rail (steps 1-3) ----------
+// ---------- the clause checklist (steps 1-3) ----------
 
 /**
  * buildClauseChecklist(clauses, summary) → the tier's clauses with one of three
  * states from the engine's summary — 'pass', 'placeholder' (passes only on a
  * placeholder artefact: summary.onPlaceholder names it), 'fail' — or 'pending'
- * when there is no summary yet. Grouped by dimension for the rail, with counts.
+ * when there is no summary yet. Grouped by dimension, with counts: the slab
+ * edges, the definition column's summary and the sheets all read it.
  */
 export function buildClauseChecklist(clauses, summary) {
   const onPlaceholder = new Map((summary?.onPlaceholder || []).map(c => [c.id, c]));
@@ -478,30 +499,6 @@ export function buildClauseChecklist(clauses, summary) {
       should: { total: items.filter(i => i.severity === 'SHOULD').length, pass: count('pass', 'SHOULD') + count('placeholder', 'SHOULD'), fail: count('fail', 'SHOULD') },
     },
     conformant: summary ? !!summary.conformant : null,
-  };
-}
-
-/**
- * The rail's model: the checklist plus the draft's todo / warning counts and its
- * in-flight state. The rail is a compact summary of the stack (the per-layer
- * clauses live on their slabs): `failing` and `onPlaceholder` are what it lists
- * folded, `expanded` whether the full list is open.
- */
-export function buildRailModel({ build, clauses }) {
-  const r = build?.result || null;
-  const checklist = buildClauseChecklist(clauses || [], r?.summary || null);
-  return {
-    tier: build?.tier, step: build?.step,
-    checklist,
-    failing: checklist.items.filter(i => i.state === 'fail'),
-    onPlaceholder: checklist.items.filter(i => i.state === 'placeholder'),
-    expanded: !!build?.railOpen,
-    todoCount: r?.todos?.length || 0,
-    warningCount: r?.warnings?.length || 0,
-    blockingWarnings: (r?.warnings || []).filter(w => w.kind === 'promql').length,
-    placeholdersRemaining: placeholdersRemaining(r),
-    pending: !!build?.pending, error: build?.error || null, stale: isStale(build), ready: !!r,
-    valid: defineValid(build),
   };
 }
 
@@ -546,7 +543,7 @@ export function buildVerifyModel({ build, library, clauses, targets }) {
   const checklist = buildClauseChecklist(clauses || [], r?.summary || null);
   const stack = buildStackModel({
     adapted: r?.adapted || null, requirements: clauses || [], checklist,
-    todos: r?.todos || [], params, mode: 'verify', toggles: build?.toggles || {}, expanded: build?.stackOpen || {},
+    todos: r?.todos || [], params, mode: 'verify', toggles: build?.toggles || {}, expanded: stackExpanded(build),
   });
   const s = r?.summary || null;
   const blocking = (r?.warnings || []).some(w => w.kind === 'promql');
@@ -870,4 +867,343 @@ export function buildStackModel({ adapted = null, checklist = null, requirements
     litSlabs: slabs.filter(s => s.present).length,
   };
   return { mode, slabs, counts, compiled: !!layers };
+}
+
+// ---------- the axis: the definition column and the layer sheet (docs/BUILD_JOURNEY.md "The axis") ----------
+
+/** The question each layer's sheet asks — the layer's job in one line. */
+export const LAYER_QUESTIONS = {
+  L1: 'What should we measure?',
+  L2: 'Where does the telemetry flow?',
+  L2X: 'What else do we collect?',
+  L3: 'How do we see it?',
+  L4: 'What happens when it breaks?',
+  L5: 'How do we prove it?',
+  GOV: 'Who owns it?',
+};
+/** The sheet is one component on the three steps: a preview on DEFINE, editable on COMPILE, read-only with the todos on VERIFY. */
+export const SHEET_MODES = { define: 'preview', compile: 'edit', verify: 'verify' };
+export const sheetModeFor = (step) => SHEET_MODES[step] || 'edit';
+/** The section switches each sheet carries (the sections that live on that layer; L2 has none). */
+export const LAYER_SWITCHES = { L1: ['slos'], L3: ['dashboards'], L4: ['policy', 'routes'], L5: ['validation'] };
+/** The evidence dot's colour class per status (the chip and the rolodex): the badge's vocabulary, spelled once. */
+export const EVIDENCE_WORD = { 'recorded-live': 'recorded live', 'reference-pack': 'reference pack', 'upstream-docs': 'upstream docs', semconv: 'semconv' };
+
+/** The DEFINE validity errors, spelled once for the define model and the definition column. */
+function definitionErrors(name, selectedCount) {
+  const errors = [];
+  if (!name.trim()) errors.push('a service name');
+  else if (serviceSlug(name).length > MAX_SERVICE_SLUG) errors.push(`a service name of at most ${MAX_SERVICE_SLUG} characters once slugged (‘${serviceSlug(name)}’ is ${serviceSlug(name).length})`);
+  else if (!isValidServiceName(name)) errors.push(`a service name that slugs (‘${name}’ → ‘${serviceSlug(name)}’ is not one)`);
+  if (!selectedCount) errors.push('at least one library entry');
+  return errors;
+}
+
+/**
+ * buildDefinitionModel({ build, library, requirements, checklist }) → the left column
+ * on every step: the service fields, the tier as a segmented control (each segment
+ * with its MUST · SHOULD counts, the chosen one's blurb), the library entries as
+ * chips (products, then archetypes; title, evidence, SLIs at this tier, selected),
+ * and the conformance summary that replaced the rail — status, the three counts,
+ * the failing clauses, how many pass only on a placeholder, todos, warnings and
+ * placeholders left. `requirements` is { [tier]: clauses[] }; `checklist` the
+ * current tier's checklist when the caller has it (built here otherwise).
+ */
+export function buildDefinitionModel({ build, library, requirements = {}, checklist = null }) {
+  const rows = library?.entries || [];
+  const selected = new Set(build?.entries || []);
+  const name = build?.name || '';
+  const errors = definitionErrors(name, selected.size);
+  const tier = build?.tier;
+  const tiers = TIERS.map((t, index) => {
+    const clauses = requirements[t] || null;
+    return {
+      id: t, index, ...TIER_META[t], selected: tier === t, loaded: !!clauses,
+      must: clauses ? clauses.filter(c => c.severity === 'MUST').length : null,
+      should: clauses ? clauses.filter(c => c.severity === 'SHOULD').length : null,
+    };
+  });
+  const chip = (r) => ({
+    id: r.id, kind: r.kind, title: r.title, summary: r.summary || '', product: r.product, version: r.version,
+    selected: selected.has(r.id),
+    evidence: { status: r.evidence?.status || null, verifiedOn: r.evidence?.verifiedOn || null, word: EVIDENCE_WORD[r.evidence?.status] || r.evidence?.status || '' },
+    sliCountByTier: r.sliCountByTier || {}, sliCountAtTier: r.sliCountByTier?.[tier] ?? 0,
+    placeholderParams: (r.params || []).filter(p => p.placeholder).length,
+    gaps: (r.evidence?.gaps || []).length,
+  });
+  const r = build?.result || null;
+  const tierClauses = requirements[tier] || [];
+  const check = checklist || buildClauseChecklist(tierClauses, r?.summary || null);
+  const k = check.counts;
+  const pending = !!build?.pending, error = build?.error || null, stale = isStale(build), ready = !!r, valid = errors.length === 0;
+  const statusKind = pending ? 'pending' : error ? 'error' : !valid ? 'idle' : !ready ? 'pending' : check.conformant ? 'ok' : 'fail';
+  const status = pending ? 'checking…'
+    : error ? (stale ? 'the last compilation failed — showing the previous pack' : 'the last compilation failed')
+    : !valid ? 'complete the definition to evaluate'
+    : !ready ? 'evaluating…'
+    : check.conformant ? `conformant at ${tier}` : `${plural(k.must.fail, 'MUST clause')} failing`;
+  return {
+    name, slug: serviceSlug(name), owners: build?.owners || '', ownerList: parseOwners(build?.owners), environment: build?.environment || 'prod',
+    tier, tiers, tierIndex: Math.max(0, TIERS.indexOf(tier)), tierBlurb: TIER_META[tier]?.blurb || '',
+    products: rows.filter(x => x.kind === 'product').map(chip),
+    archetypes: rows.filter(x => x.kind === 'archetype').map(chip),
+    selectedCount: selectedEntries(build, library).length,
+    selectedTitles: selectedEntries(build, library).map(e => e.title),
+    summary: {
+      status, statusKind, conformant: check.conformant, tier,
+      counts: { pass: k.pass, placeholder: k.placeholder, fail: k.fail, pending: k.pending, total: k.total, must: k.must, should: k.should },
+      failing: check.items.filter(i => i.state === 'fail'),
+      onPlaceholder: check.items.filter(i => i.state === 'placeholder').length,
+      todoCount: r?.todos?.length || 0,
+      warningCount: r?.warnings?.length || 0,
+      blockingWarnings: (r?.warnings || []).filter(w => w.kind === 'promql').length,
+      placeholdersRemaining: placeholdersRemaining(r),
+      ready, pending, stale,
+    },
+    libraryErrors: library?.errors || [],
+    valid, errors,
+    error: build?.error ? splitBuildErrors(build.error) : null, stale,
+  };
+}
+
+/**
+ * Which sheet a param is edited on: the scaffold's channel and pager params and the
+ * runbook directory on L4, its chaos and probe targets on L5, its endpoints and
+ * backend versions on L2; an entry's params on L5 when they name a workload, a canary,
+ * a probe or a bootstrap address (what the probes and the chaos experiments target),
+ * on L2 otherwise (scrape jobs, targets, selectors).
+ */
+const SCAFFOLD_PARAM_LAYER = {
+  oncall_channel: 'L4', team_channel: 'L4', pager_service: 'L4', pager_service_low: 'L4', runbook_dir: 'L4',
+  chaos_target: 'L5', probe_target: 'L5',
+};
+export function paramLayer(row) {
+  if (!row) return 'L2';
+  if (!row.entry) return SCAFFOLD_PARAM_LAYER[row.id] || 'L2';
+  return /workload|canary|health|probe|chaos|bootstrap/i.test(String(row.id)) ? 'L5' : 'L2';
+}
+/** The L4 sheet splits its params: the channels (routes) and the runbooks (self-healing). */
+export function paramSubgroup(row) {
+  if (paramLayer(row) !== 'L4') return null;
+  return /runbook/.test(String(row.id)) ? 'healing' : 'alerting';
+}
+
+/**
+ * The clauses a section holds up — what switching it off drops: the slab(s) the section
+ * feeds (SECTION_SLABS, L4 per subgroup), narrowed where a slab carries more than the
+ * section — dashboards off leaves the recording rules and the derived views (measured:
+ * exactly the two dashboard clauses fail at tier-2), validation off leaves the baselines'
+ * release gate.
+ */
+const SECTION_CLAUSE_FILTER = { dashboards: /dashboard/, validation: /probe|chaos|synthetic/ };
+export function sectionClauses(section, clauses) {
+  const slabs = SECTION_SLABS[section] || [];
+  const narrow = SECTION_CLAUSE_FILTER[section];
+  return (clauses || []).filter(c => slabs.some(([l, sg]) => c.dimension === l && (sg === null || clauseSubgroup(c.id) === sg)) && (!narrow || narrow.test(String(c.id))));
+}
+
+/** One section switch as the sheet draws it: its state, whether it is meaningful, and the consequence of switching it off in one line. */
+export function sectionSwitch(section, build, clauses) {
+  const def = SECTION_TOGGLES.find(t => t.id === section) || { id: section, label: section, hint: '' };
+  // Policy without SLOs is meaningless: the engine drops it, so the switch reads off, and cannot be flipped.
+  const disabled = section === 'policy' && build?.toggles?.slos === false;
+  const on = !disabled && build?.toggles?.[section] !== false;
+  const drops = sectionClauses(section, clauses).map(c => ({ id: c.id, label: clauseGhostLabel(c.id), severity: c.severity, state: c.state || null }));
+  const labels = drops.map(d => d.label).join(', ');
+  let consequence;
+  if (section === 'slos') consequence = `off also drops the burn alerts (policy)${drops.length ? ` — ${plural(drops.length, 'clause')} go with it: ${labels}` : ''}`;
+  else if (disabled) consequence = 'meaningless without SLOs — dropped with them';
+  else if (drops.length) consequence = `off drops ${plural(drops.length, 'clause')} of the tier: ${labels}`;
+  else consequence = 'no clause of the tier rests on it — the section is still absent from the pack when off';
+  return { id: section, label: def.label, hint: def.hint, on, disabled, consequence, drops, focusKey: `toggle:${section}` };
+}
+
+/**
+ * rolodexItems({ build, library, all }) → the SLI cards of the L1 rolodex: every SLI of the
+ * selected entries (in selection order) and, with `all`, every SLI of the entries not yet
+ * selected — each with its product and evidence, type, metrics, the objective and window at
+ * the current tier and at the other two, whether it is in the pack (`selected`), and why it
+ * cannot be (`disabled` / `reason`: above the tier). The key of an SLI on an entry not yet
+ * selected is the key it would have once that entry composes in (the engine's rule).
+ */
+export function rolodexItems({ build, library, all = false }) {
+  const rows = library?.entries || [];
+  const chosen = selectedEntries(build, library);
+  const chosenIds = new Set(chosen.map(e => e.id));
+  const others = all ? rows.filter(r => !chosenIds.has(r.id)) : [];
+  const tier = build?.tier;
+  const explicit = Array.isArray(build?.slis) ? new Set(build.slis) : null;
+  const item = (en, s, entrySelected) => {
+    const composed = entrySelected ? chosen.length > 1 : chosen.length + 1 > 1;
+    const key = sliKey(en.id, s.id, composed);
+    const reachable = atTier(tier, s.minTier);
+    return {
+      key, id: s.id, entry: en.id, entryTitle: en.title, entryKind: en.kind, entryEvidence: en.evidence?.status || null, entrySelected,
+      type: s.type, unit: s.unit || null, description: s.description || '', evidence: s.evidence || null, metrics: s.metrics || [],
+      minTier: s.minTier || 'tier-3', reachable,
+      selected: entrySelected && reachable && (explicit ? explicit.has(key) : true),
+      disabled: !reachable, reason: reachable ? null : `needs ${s.minTier}`,
+      objective: reachable ? s.objectives?.[tier] ?? null : null,
+      objectiveLabel: reachable ? fmtObjective(s.objectives?.[tier]) : `needs ${s.minTier}`,
+      window: reachable ? s.windows?.[tier] ?? null : null,
+      tiers: TIERS.map(t => ({ tier: t, current: t === tier, reachable: atTier(t, s.minTier), objective: s.objectives?.[t] ?? null, objectiveLabel: fmtObjective(s.objectives?.[t]), window: s.windows?.[t] ?? null })),
+      focusKey: `sli:${en.id}:${s.id}`,
+    };
+  };
+  return [
+    ...chosen.flatMap(en => (en.slis || []).map(s => item(en, s, true))),
+    ...others.flatMap(en => (en.slis || []).map(s => item(en, s, false))),
+  ];
+}
+
+/**
+ * addSliSelection({ build, library }, entryId, sliId) → { entries, slis, changed, reason }:
+ * the pure part of the controller's addSli — the entry joins the selection when it is not
+ * in it yet, the SLI is ticked, and the explicit list is re-keyed for the new composition
+ * (going from one entry to two prefixes every id). The other entries keep exactly the SLIs
+ * they had; a list equal to the tier's defaults collapses to null. An SLI above the tier
+ * changes nothing (`changed: false`, the reason) — the rolodex disables it, this is the guard.
+ */
+export function addSliSelection({ build, library }, entryId, sliId) {
+  const rows = library?.entries || [];
+  const before = { entries: [...(build?.entries || [])], slis: Array.isArray(build?.slis) ? [...build.slis] : null };
+  const entry = rows.find(r => r.id === entryId);
+  const sli = (entry?.slis || []).find(s => s.id === sliId);
+  if (!entry || !sli) return { ...before, changed: false, reason: 'unknown entry or SLI' };
+  if (!atTier(build?.tier, sli.minTier)) return { ...before, changed: false, reason: `needs ${sli.minTier}` };
+  const entries = before.entries.includes(entryId) ? before.entries : [...before.entries, entryId];
+  const composed = entries.length > 1;
+  // What is ticked today, re-keyed for the composition after the change.
+  const kept = sliGroups({ build, library }).flatMap(g => g.slis.filter(s => s.checked).map(s => sliKey(g.id, s.id, composed)));
+  const reachable = reachableSliKeys({ ...build, entries }, library);
+  const want = new Set([...kept, sliKey(entryId, sliId, composed)]);
+  const slis = reachable.filter(k => want.has(k));
+  return { entries, slis: slis.length === reachable.length ? null : slis, changed: true, reason: null };
+}
+
+// The lists a sheet draws from the adapter's projection (never a made-up menu).
+const listItem = (a, meta = []) => ({ id: a.id, title: a.title || a.id, desc: a.desc || '', meta: meta.filter(Boolean), scaffold: a.source === 'Scaffold', symbol: artefactSymbol(a) });
+const layerArtefacts = (adapted, layerId) => {
+  const L = adapted?.layers?.[layerId];
+  if (!L) return [];
+  return Array.isArray(L) ? L : L4_SUBGROUPS.flatMap(sg => L[sg.key] || []);
+};
+const pick = (list, re) => list.filter(a => re.test(String(a.id || '')));
+const channelText = (ch) => Object.entries(ch || {}).map(([kind, v]) => `${kind} ${v}`).join(', ');
+const windowText = (w) => `${w.factor}× ${w.short}/${w.long} ${w.severity}`;
+
+/** The per-layer lists: what the pack actually carries on that layer, read from `adapted`; empty with a reason before the first result. */
+export function sheetLists(layerId, adapted, { compiled = false } = {}) {
+  const A = layerArtefacts(adapted, layerId);
+  const empty = compiled ? 'none in the pack as toggled' : 'compiled on the first instantiation — nothing to list yet';
+  const list = (id, label, items, sub = '') => ({ id, label, sub, items, empty });
+  switch (layerId) {
+    case 'L1':
+      return [
+        list('slos', 'SLOs in the pack', pick(A, /^SLO-/).map(a => listItem(a, (a.tags || []).filter(t => t !== 'slo'))), 'one per selected SLI, the objective and window the tier gives it'),
+      ];
+    case 'L2': {
+      const jobs = pick(A, /^PIP-RCV-/).flatMap(a => (a.spec?.scrape_configs || []).map(j => ({
+        id: j.job_name, title: j.job_name, desc: (j.static_configs || []).flatMap(s => s.targets || []).join(', '), meta: [j.scrape_interval ? `every ${j.scrape_interval}` : ''].filter(Boolean), scaffold: a.source === 'Scaffold', symbol: artefactSymbol(a),
+      })));
+      return [
+        list('jobs', 'Scrape jobs', jobs, 'the products’ exporters, as the prometheus receiver scrapes them'),
+        list('receivers', 'Receivers', pick(A, /^PIP-RCV-/).filter(a => !a.spec?.scrape_configs).map(a => listItem(a, [(a.spec?.protocols || []).join(' + '), a.spec?.endpoint])), 'what the collector listens on'),
+        list('backends', 'Backends', pick(A, /^BAK-/).map(a => listItem(a, [a.spec?.version?.declared ? `declared ${a.spec.version.declared}` : '', a.spec?.version?.min ? `min ${a.spec.version.min}` : '', a.spec?.version?.gating ? `gating ${a.spec.version.gating}` : '', ...(a.spec?.endpoints || [])])), 'metrics, logs and traces — the versions declared are placeholder params'),
+        list('exporters', 'Exporters', pick(A, /^PIP-EXP-/).map(a => listItem(a, [a.spec?.endpoint, ...(a.spec?.endpoints || [])])), 'where each signal leaves the collector'),
+        list('storage', 'Storage', pick(A, /^STO-/).map(a => listItem(a, [a.spec?.retention ? `retain ${a.spec.retention}` : '', a.spec?.sampling])), 'retention per signal — the tier’s starting points'),
+        list('otel', 'Instrumentation', pick(A, /^OTEL-/).map(a => listItem(a, a.tags || [])), 'the SDK contract the tier asks for'),
+      ];
+    }
+    case 'L2X':
+      return [list('extended', 'Extended telemetry', A.map(a => listItem(a, a.tags || [])), 'profiling, network, mesh, policy engine — when the pack carries any')];
+    case 'L3':
+      return [
+        list('boards', 'Boards', pick(A, /^DASH-/).map(a => listItem(a, [(a.refs || []).length ? `${(a.refs || []).length} bindings` : ''])), 'the overview, the burn board at tier-2 and above, the entries’ boards, tier-1’s deployment overlay and customer impact'),
+        list('views', 'Derived views', pick(A, /^VIEW-/).map(a => listItem(a, (a.tags || []).filter(t => t !== 'view'))), 'golden signals at tier-2, the entries’ per-topic and per-route views'),
+        list('rules', 'Recording rules', pick(A, /^QRY-/).map(a => listItem(a, [a.spec?.interval ? `@ ${a.spec.interval}` : ''])), 'one per SLI — the compiler’s own names'),
+      ];
+    case 'L4':
+      return [
+        list('policy', 'Burn windows per SLO', pick(A, /^POL-/).map(a => listItem(a, (a.spec?.windows || []).map(windowText))), 'two windows per SLO from the SLI’s burn profile; forecasts at tier-1'),
+        list('forecasts', 'Forecasts', pick(A, /^FCST-/).map(a => listItem(a, a.tags || [])), 'a forecast on an availability SLO (tier-1)'),
+        list('routes', 'Routes', pick(A, /^ALR-/).map(a => listItem(a, (a.spec?.channels || []).map(channelText))), 'one route per severity — the channels are placeholder params'),
+        list('healing', 'Remediation', pick(A, /^HEAL-/).map(a => listItem(a, [a.spec?.runbook, a.spec?.automation])), 'the entries’ templates, each triggered by its SLI’s fast burn alert'),
+      ];
+    case 'L5':
+      return [
+        list('probes', 'Probes', pick(A, /^SYN-/).map(a => listItem(a, [a.spec?.kind, a.spec?.target, a.spec?.interval ? `every ${a.spec.interval}` : '', a.spec?.on_fail_severity])), 'synthetic checks — their targets are placeholder params'),
+        list('chaos', 'Chaos experiments', pick(A, /^CHAOS-/).map(a => listItem(a, [a.spec?.engine, a.spec?.target ? `on ${a.spec.target}` : '', a.spec?.fault?.kind, a.spec?.schedule, a.spec?.environment, a.spec?.expected_mttd ? `MTTD ${a.spec.expected_mttd}` : ''])), 'tier-2 runs them monthly in staging; tier-1 one per SLO and weekly in prod'),
+        list('baselines', 'Baselines', pick(A, /^BASE-/).map(a => listItem(a, a.tags || [])), 'MTTD / MTTR targets — starting points reported as a todo'),
+      ];
+    case 'GOV':
+      return [list('imports', 'Imports', pick(A, /^IMP-/).map(a => listItem(a, a.tags || [])), 'vertical composition — the platform’s budget policy')];
+    default:
+      return [];
+  }
+}
+
+/**
+ * buildSheetModel({ layerId, build, library, requirements, stack, checklist, mode }) → the
+ * per-layer sheet: the title (`L1 · Contract`) and its question, the layer's clauses at
+ * the tier with their state (from the step's stack, or built here from `requirements` +
+ * `checklist`), then the layer's options — the section switches with the consequence of
+ * switching each off, the L1 rolodex (the selected entries' SLIs, every product's behind
+ * `build.rolodexAll`), the params the layer shapes (grouped; L4 channels vs runbooks),
+ * the lists read from the instantiated pack, and on VERIFY the layer's todos with their
+ * param rows. `mode`: 'edit' (COMPILE) | 'preview' (DEFINE: read-only, with the
+ * "Compose in Compile →" action) | 'verify' (read-only options, editable todos).
+ */
+export function buildSheetModel({ layerId, build, library, requirements = [], stack = null, checklist = null, mode = 'edit' }) {
+  const def = LAYER_DEFS.find(d => d.id === layerId) || { id: layerId, num: layerId, name: layerId };
+  const r = build?.result || null;
+  const params = paramRows({ build, library });
+  const stackModel = stack || buildStackModel({
+    adapted: r?.adapted || null, requirements, checklist: checklist || buildClauseChecklist(requirements, r?.summary || null),
+    todos: r?.todos || [], params, mode: mode === 'preview' ? 'define' : mode === 'verify' ? 'verify' : 'compile', toggles: build?.toggles || {},
+  });
+  const slab = stackModel.slabs.find(s => s.id === layerId) || {
+    id: layerId, num: def.num, name: def.name, state: 'neutral', stateText: 'no clause applies', why: [], clauses: [], artefacts: [], ghosts: [], todos: [],
+    counts: { artefacts: 0, scaffold: 0, verified: 0, detail: 0, ghosts: 0, todos: 0, clauses: 0 }, maturity: { total: 0, pass: 0, placeholder: 0, fail: 0, pending: 0 }, dimmed: false, offSections: [], subgroups: null,
+  };
+  const layerParams = params.filter(p => paramLayer(p) === layerId);
+  const groupsFor = () => {
+    if (layerId === 'L4') return [
+      { id: 'channels', label: 'Channels', sub: 'oncall and team chat, the pager services — placeholders until the team names them', rows: layerParams.filter(p => paramSubgroup(p) === 'alerting') },
+      { id: 'runbooks', label: 'Runbooks', sub: 'where the remediation runbooks live', rows: layerParams.filter(p => paramSubgroup(p) === 'healing') },
+    ].filter(g => g.rows.length);
+    if (layerId === 'L2') return [
+      { id: 'targets', label: 'Scrape targets & selectors', sub: 'the entries’ params: exporter addresses, job labels, selectors', rows: layerParams.filter(p => p.entry) },
+      { id: 'endpoints', label: 'Endpoints & versions', sub: 'the scaffold’s: where each signal goes, and the backend versions the pack declares', rows: layerParams.filter(p => !p.entry) },
+    ].filter(g => g.rows.length);
+    if (layerId === 'L5') return [{ id: 'targets', label: 'Probe & chaos targets', sub: 'what the probes hit and the experiments fault', rows: layerParams }].filter(g => g.rows.length);
+    return [];
+  };
+  const clauses = slab.clauses || [];
+  // A switch's consequence spans the tier: SLOs off drops L1's clauses and L4's burn alert.
+  const tierClauses = stackModel.slabs.flatMap(s => s.clauses || []);
+  const switches = (LAYER_SWITCHES[layerId] || []).map(id => sectionSwitch(id, build, tierClauses));
+  const compiled = !!r?.adapted;
+  const lists = sheetLists(layerId, r?.adapted || null, { compiled });
+  const rolodex = layerId === 'L1' ? (() => {
+    const items = rolodexItems({ build, library, all: !!build?.rolodexAll });
+    return {
+      items, filterAll: !!build?.rolodexAll,
+      allKeys: items.filter(i => i.entrySelected && i.reachable).map(i => i.key),
+      counts: { total: items.length, selected: items.filter(i => i.selected).length, selectable: items.filter(i => i.entrySelected && i.reachable).length, aboveTier: items.filter(i => i.entrySelected && !i.reachable).length, library: (library?.entries || []).length, chosen: selectedEntries(build, library).length },
+    };
+  })() : null;
+  const { byParam } = splitBuildErrors(build?.error);
+  const rejected = layerParams.filter(p => byParam[p.key]).length;
+  return {
+    layerId, num: slab.num, name: slab.name, title: `${slab.num} · ${slab.name}`, question: LAYER_QUESTIONS[layerId] || '',
+    mode, readOnly: mode !== 'edit', compose: mode === 'preview', step: build?.step || null, tier: build?.tier || null,
+    state: slab.state, stateText: slab.stateText, why: slab.why || [], dimmed: !!slab.dimmed, offSections: slab.offSections || [],
+    clauses, counts: { ...slab.counts, clauses: slab.maturity },
+    switches, rolodex, paramGroups: groupsFor(), lists, compiled,
+    todos: mode === 'verify' ? (slab.todos || []) : [],
+    todoCount: (slab.todos || []).length,
+    owners: layerId === 'GOV' ? parseOwners(build?.owners) : null,
+    rejected, stale: isStale(build), pending: !!build?.pending,
+  };
 }
