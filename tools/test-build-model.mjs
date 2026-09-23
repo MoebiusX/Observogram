@@ -2043,7 +2043,12 @@ test('the copies’ handlers: Customise opens the face (a re-render, no instanti
   nameEl.fire('input');
   typeEl.fire('change');
   add.fire('click');
-  assert.deepEqual(calls.slice(0, 2), [['update', { customOpen: { kafka_produce_latency_p99: true, kafka_broker_availability: true } }, { rerender: true, reinstantiate: false }], ['update', { customOpen: {} }, { rerender: true, reinstantiate: false }]], 'Customise toggles the open set');
+  assert.deepEqual(calls.slice(0, 2), [['update', { customOpen: { kafka_produce_latency_p99: true, kafka_broker_availability: true } }, { rerender: true, reinstantiate: false, focus: 'ov:kafka_broker_availability:objective' }], ['update', { customOpen: {} }, { rerender: true, reinstantiate: false }]], 'Customise toggles the open set; opening lands the focus in the face\'s first field, Done keeps it on the button');
+  const customiseCustom = fakeEl({ customise: 'checkout_success' });
+  wireBuildSheet(fakeContainer({ '[data-customise]': [customiseCustom] }), model, { build: act });
+  customiseCustom.fire('click');
+  assert.deepEqual(calls.at(-1)[2], { rerender: true, reinstantiate: false, focus: 'cu:checkout_success:objective' }, 'a custom SLI\'s face: its cu: key');
+  calls.pop();
   assert.deepEqual(calls.slice(2, 7), [['override', 'kafka_produce_latency_p99', 'objective', '99.9', { focusKey: null }], ['blur'], ['custom', 'checkout_success', 'good', 'sum(rate(x[5m]))', { focusKey: null }], ['clear', 'kafka_produce_latency_p99', 'window'], ['remove', 'checkout_success']], 'headless (no document): the commit runs at once, no focus to give back');
   assert.deepEqual(calls[7], ['sli', 'kafka_controller_election_rate', true], 'an above-tier switch flips like any other');
   const typedName = calls[8];

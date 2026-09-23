@@ -338,11 +338,16 @@ export function wireBuildSheet(container, model, host = appHost) {
 export function wireRolodexCopies(container, model, act) {
   if (!act) return;
   const open = Object.fromEntries((model.rolodex?.items || []).filter(i => i.open).map(i => [i.key, true]));
+  // Customise opens the face and lands the focus in its first field (the face renders above the footer the
+  // button sits in, so Tab from the button walked past every field to the card's switch — measured); Done keeps
+  // the focus on the button.
   container.querySelectorAll('[data-customise]').forEach(btn => btn.addEventListener('click', () => {
     const key = btn.dataset.customise;
     const next = { ...open };
-    if (next[key]) delete next[key]; else next[key] = true;
-    act.update?.({ customOpen: next }, { rerender: true, reinstantiate: false });
+    const opening = !next[key];
+    if (opening) next[key] = true; else delete next[key];
+    const item = (model.rolodex?.items || []).find(i => i.key === key);
+    act.update?.({ customOpen: next }, { rerender: true, reinstantiate: false, ...(opening ? { focus: `${item?.custom ? 'cu' : 'ov'}:${key}:objective` } : {}) });
   }));
   // A field commits on change. When the change comes from leaving the field (Tab, a click elsewhere, Enter's
   // explicit blur) the commit is deferred one task so the browser finishes moving the focus first: the re-render
