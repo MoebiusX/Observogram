@@ -337,6 +337,83 @@ exists so VERIFY previews without registering; the studio does not import
 `/lib/library.mjs` — the tier's clauses come from the requirements route (three tiny,
 cached requests) and every instantiation goes through the API.
 
+## The scan: Build renders the layer model
+
+The studio's identity is the layer model. Discover draws every pack as L1 Contract ·
+L2 Telemetry · L2X Extended · L3 Insight · L4 Action · L5 Validation · GOV — the layer
+tokens `--L1…--GOV`, the artefact cards, the slab dashboard under Advanced → Discover.
+Build, as shipped in slice 2, was forms plus a checklist rail: it produced a pack in that
+language without ever showing it. From this slice on, **the centre stage of every Build
+step is the layer stack of the pack being compiled**, drawn with the same artefact cards,
+palette and tints as Discover, and the three steps are three states of one picture.
+
+**Principles.** Nothing is invented:
+
+- **The artefacts are the adapter's.** Build renders the instantiated pack through
+  `tools/lib/adapter.mjs` `adapt(canonical, { environment })` — the projection Discover
+  reads — and the same card markup (`.card`, `.card-head`, `.card-id`, `.card-source`,
+  `.card-title`, `.card-desc`, `.card-foot`). `POST /api/library/instantiate` returns that
+  projection as `adapted`, computed exactly as `POST /api/validate` computes it, so what
+  Build shows on COMPILE is the artefact list Discover shows after the hand-off, id for id;
+  the two journeys cannot drift. A placeholder artefact is *Scaffold* in both.
+- **The silhouette is the rubric.** On DEFINE each slab carries one ghost card per clause
+  that applies at the chosen tier in that dimension (`tierRequirements(tier)` grouped by
+  `dimension`), so the tier is seen as the shape of the pack it demands, not read as a list;
+  changing the tier reshapes it. The selected entries' SLI and SLO candidates land on L1 as
+  ghost cards (id, type, objective and window at the tier, evidence badge), read-only —
+  ticking stays on COMPILE.
+- **The edge states are the checklist's.** Every slab's edge carries the rubric's verdict
+  for its dimension, derived from `buildClauseChecklist` grouped by dimension: red when a
+  clause fails, amber when the dimension holds up only on a placeholder, green when every
+  clause passes on the pack as written, neutral when no clause applies (GOV), pending before
+  the first result. A red edge names the clause and its description; a placeholder-laden
+  pack shows *pass on a placeholder*, never plain green. A clause still unmet on COMPILE
+  stays on its slab as a ghost card marked *Missing* — Discover's word for "required, not
+  present".
+- **The maturity bars are clause counts.** Per layer: pass, pass on a placeholder (its own
+  segment) and fail, over the clauses of the dimension at the tier.
+- **The todos live where their artefact lives.** On VERIFY each todo is pinned to the slab
+  of the artefact it names — routes and runbooks on L4 (alerting, self-healing), backends,
+  pipelines and storage on L2, probes, chaos and baselines on L5 — with the same inline
+  parameter inputs as before; the pin is the todo's path family, and where the path is an
+  adapter symbol the card it belongs to is marked.
+- **Cause and effect in one glance.** A section switched off dims its slab and its clauses
+  turn red on the edge; every re-instantiation re-renders the stack with the focused input
+  kept focused.
+- **The clause rail folds into the stack.** The per-layer clauses live on their slab (a
+  click on the slab head expands them); the rail becomes a compact summary — the counts and
+  the failing clauses — that expands to the full list on demand.
+
+**Modules.** `studio/build-model.mjs` `buildStackModel({ adapted, checklist, requirements,
+candidates, todos, params, mode, toggles, expanded })` → ordered slabs `[{ id, num, name,
+accent, state, clauses[], artefacts[], ghosts[], todos[], subgroups? (L4: policy · alerting ·
+self-healing), counts, maturity, dimmed, offSections, expanded }]` — L2X only when it has an
+artefact or a clause, GOV neutral, every input explicit, no state reads (tested under
+`node:test` in `tools/test-build-model.mjs`, including that the artefact list is the one the
+adapter gives Discover for the same canonical). `studio/build-stack-view.mjs`
+`renderBuildStack(container, model, host)` draws it; the card's inner HTML is one shared
+helper (`studio/card-html.mjs` `artefactCardHtml`) that Discover's `renderCard` and the stack
+both call, so the markup is written once.
+
+**Slices.**
+
+1. **Foundation (this slice, shipped).** The stack on all three steps: DEFINE the
+   silhouette (ghost per clause, L1 candidates from the entries, reshaping with the tier);
+   COMPILE the live stack as the canvas (the SLI rows and the section toggles stay as the
+   control area above it, the YAML as a collapsible below it), edges in the clause states,
+   ghosts for unmet clauses, Scaffold for placeholders, a section off dims its slab; VERIFY
+   the stack with the todos pinned to their slabs and the per-layer maturity bars on the
+   verdict card, the artefacts strip and *Ready to continue?* unchanged; the compact rail;
+   `adapted` on the instantiate response; light and dark themes.
+2. **Layer detail (planned).** L1 SLO gauges (objective, window, burn profile per SLO);
+   the L2 flow strip (instrumentation → receivers → processors → exporters → storage, drawn
+   from the pipelines and the backends); L3 dashboard wireframes rendered from the compiled
+   Grafana JSON; the L4 chain (policy → routing → remediation → guardrails); L5 cards for
+   baselines, chaos and synthetics with their schedules and expected MTTD.
+3. **The tomograph (planned).** The isometric slab stack with an acquisition animation —
+   slabs lighting up as content arrives — and the landings' miniature stacks (a pack's
+   silhouette on its picker row).
+
 ## What the next slices add
 
 - **Slice 3.** Seeding DEFINE from a repo scan or a live MCP draft (the crawler's
