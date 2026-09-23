@@ -86,7 +86,7 @@ export function paramRowHtml(p, { compact = false, idSuffix = '' } = {}) {
         ${p.error ? '<span class="build-param-flag is-error">rejected</span>' : p.placeholder ? `<span class="build-param-flag" title="left at its default this value is written into the pack AND reported as a todo">${p.atDefault ? 'placeholder → todo' : 'placeholder filled'}</span>` : ''}
       </label>
       <input id="${escapeHtml(id)}" class="build-param-input" type="text" data-focus-key="${escapeHtml(focusKey)}"${p.error ? ' aria-invalid="true"' : ''}
-             value="${escapeHtml(p.value ?? '')}" placeholder="${escapeHtml(String(p.default ?? ''))}" autocomplete="off" spellcheck="false">
+             value="${escapeHtml(p.value ?? '')}" placeholder="${escapeHtml(String(p.hint ?? p.default ?? ''))}" autocomplete="off" spellcheck="false">
       ${p.error ? `<span class="build-param-error" role="alert">${escapeHtml(p.error)}</span>` : ''}
       ${compact ? '' : `<span class="build-param-desc">${escapeHtml(p.description)}</span>`}
     </div>`;

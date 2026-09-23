@@ -30,7 +30,7 @@ import {
   BUILD_STEPS, TIERS, SECTION_TOGGLES, serviceSlug, isValidServiceName, parseOwners, sliKey, paramKey,
   selectValid, buildStepReachability, clampStep, paramRows, effectiveParams, instantiateBody,
   buildSelectModel, buildGenerateModel, summarizeWarnings, buildClauseChecklist, buildRailModel,
-  placeholdersRemaining, groupTodos, buildValidateModel, reachableSliKeys, retargetSlis, splitBuildErrors, isStale,
+  placeholdersRemaining, groupTodos, buildValidateModel, reachableSliKeys, retargetSlis, splitBuildErrors, isStale, resolveBuiltins,
 } from '../studio/build-model.mjs';
 import {
   loadLibrary as loadLibraryApi, loadRequirements, loadTargets, instantiate, compilePreview, registerBuiltPack,
@@ -188,6 +188,16 @@ test('paramRows: the scaffold params then each entry\'s, namespaced when composi
   assert.equal(boot.effective, 'kafka-0:9092');
   assert.equal(boot.atDefault, false);
   assert.equal(rows.find(r => r.key === 'http-service.job').default, '${service}');
+  // The hint an input shows is the default with the engine's built-ins resolved — what the todo beside it names.
+  assert.equal(rows.find(r => r.key === 'http-service.job').hint, 'orders-api');
+  assert.equal(rows.find(r => r.key === 'oncall_channel').default, '#${service}-oncall', 'the raw template stays available');
+  assert.equal(rows.find(r => r.key === 'oncall_channel').hint, '#orders-api-oncall');
+  assert.equal(rows.find(r => r.key === 'oncall_channel').effective, '#orders-api-oncall', 'what the pack carries at the default');
+  assert.equal(rows.find(r => r.key === 'pager_service').hint, 'pagerduty://orders-api');
+  assert.ok(FIXTURE.todos.find(t => t.path === 'alerting.routes[0]').what.includes("'#orders-api-oncall' (param oncall_channel)"), 'the todo names the same value');
+  assert.equal(paramRows({ build: draft({ name: '' }), library: LIBRARY }).find(r => r.key === 'oncall_channel').hint, '#svc-oncall', 'readable before a name is typed');
+  assert.equal(resolveBuiltins('${service}-${environment}-${tier}', { service: 'a', environment: 'staging', tier: 'tier-1' }), 'a-staging-tier-1');
+  assert.equal(resolveBuiltins('${bootstrap}', { service: 'a' }), '${bootstrap}', 'an entry param reference is not a built-in');
   // A single entry is not namespaced.
   const single = paramRows({ build: draft({ entries: ['kafka'] }), library: LIBRARY });
   assert.ok(single.some(r => r.key === 'bootstrap'));

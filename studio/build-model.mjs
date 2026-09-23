@@ -157,9 +157,22 @@ export function retargetSlis(build, library, prevTier) {
 // ---------- params ----------
 
 /**
+ * A default with the engine's built-ins resolved as it resolves them
+ * (`${service}` is the slug of the typed name, `${environment}`, `${tier}`): what
+ * the pack will carry, shown as the input's hint instead of the raw template
+ * (`#${service}-oncall` beside a todo that reads '#orders-api-oncall'). The
+ * fallbacks keep the hint readable before a name is typed.
+ */
+export function resolveBuiltins(text, { service, environment, tier } = {}) {
+  const values = { service: service || 'svc', environment: environment || 'prod', tier: tier || '' };
+  return String(text ?? '').replace(/\$\{(service|environment|tier)\}/g, (m, k) => values[k]);
+}
+
+/**
  * The parameter table of the selection: the scaffold's params (every
  * instantiation has them) then each selected entry's, keyed as the engine
  * addresses them. `value` is the override (null when at the default),
+ * `default` the raw template, `hint` the default with the built-ins resolved,
  * `effective` what the pack will carry, `atDefault` whether a placeholder
  * still becomes a todo, `error` the engine's reason when the last
  * instantiation refused this value.
@@ -169,13 +182,15 @@ export function paramRows({ build, library }) {
   const composed = entries.length > 1;
   const overrides = build?.params || {};
   const { byParam } = splitBuildErrors(build?.error);
+  const builtins = { service: serviceSlug(build?.name), environment: build?.environment, tier: build?.tier };
   const row = (p, entry) => {
     const key = paramKey(entry?.id, p.id, composed);
     const has = Object.prototype.hasOwnProperty.call(overrides, key) && String(overrides[key]) !== '';
+    const hint = resolveBuiltins(p.default, builtins);
     return {
       key, id: p.id, entry: entry?.id || null, entryTitle: entry?.title || 'scaffold',
-      label: p.label, description: p.description || '', default: p.default, placeholder: !!p.placeholder,
-      value: has ? overrides[key] : null, effective: has ? overrides[key] : p.default, atDefault: !has,
+      label: p.label, description: p.description || '', default: p.default, hint, placeholder: !!p.placeholder,
+      value: has ? overrides[key] : null, effective: has ? overrides[key] : hint, atDefault: !has,
       error: byParam[key] || null,
     };
   };
