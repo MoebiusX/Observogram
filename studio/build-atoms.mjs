@@ -85,26 +85,31 @@ export function paramLabelHtml(p, forId = null) {
 export function editFieldHtml(f, { dataAttr = 'override-field', sli = null, rows = 3, readOnly = false } = {}) {
   const id = escapeHtml(f.inputId);
   const data = ` data-${escapeHtml(dataAttr)}="${escapeHtml(f.id)}"${sli ? ` data-sli="${escapeHtml(sli)}"` : ''}`;
-  const dflt = f.default === null || f.default === undefined ? '' : (f.overridden
-    ? `<span class="build-edit-default">library <code>${escapeHtml(f.default || '—')}</code></span>`
-    : '<span class="build-edit-default">library default</span>');
-  const labelInner = `<span>${escapeHtml(f.label)}${f.kind === 'percent' ? ' <em>%</em>' : ''}${f.required ? ' <i title="required">*</i>' : ''}</span>${dflt}`;
+  // The label names the field and nothing else; the library default, the hint and the error are siblings the
+  // input is described by (aria-describedby), the reset a sibling button — a button inside a <label> is invalid
+  // HTML and read its text into the input's accessible name ("Objective % library 99 ↺ library default").
+  const hasDefault = !(f.default === null || f.default === undefined);
+  const dflt = hasDefault ? `<span class="build-edit-default" id="${id}-default">${f.overridden ? `library <code>${escapeHtml(f.default || '—')}</code>` : 'library default'}</span>` : '';
+  const labelInner = `<span>${escapeHtml(f.label)}${f.kind === 'percent' ? ' <em>%</em>' : ''}${f.required ? ' <i title="required">*</i>' : ''}</span>`;
   const reset = f.resettable && !readOnly ? `<button type="button" class="build-edit-reset" data-reset="${escapeHtml(f.id)}"${sli ? ` data-sli="${escapeHtml(sli)}"` : ''} data-focus-key="${escapeHtml(f.focusKey)}:reset" title="${escapeHtml(`back to the library default (${f.default || '—'})`)}" aria-label="${escapeHtml(`${f.label}: back to the library default`)}"><span aria-hidden="true">↺</span> library default</button>` : '';
+  const showHint = !!f.hint && !f.error && !readOnly;
+  const describedBy = [hasDefault ? `${id}-default` : '', f.error ? `${id}-error` : showHint ? `${id}-hint` : ''].filter(Boolean).join(' ');
+  const aria = `${describedBy ? ` aria-describedby="${describedBy}"` : ''}${f.error ? ` aria-errormessage="${id}-error"` : ''}`;
   let control;
   if (readOnly) control = `<code class="build-edit-value"${data}>${escapeHtml(f.value)}</code>`;
   else {
     const common = `class="build-edit-input" id="${id}" data-focus-key="${escapeHtml(f.focusKey)}"${data}${f.error ? ' aria-invalid="true"' : ''}${f.required ? ' required' : ''}`;
     const placeholder = f.placeholder ? ` placeholder="${escapeHtml(f.placeholder)}"` : '';
-    if (f.kind === 'promql') control = `<textarea ${common} rows="${rows}" spellcheck="false" autocomplete="off"${placeholder}>${escapeHtml(f.value)}</textarea>`;
-    else if (f.kind === 'select') control = `<select ${common}>${(f.options || []).map(o => `<option value="${escapeHtml(o)}"${o === f.value ? ' selected' : ''}>${escapeHtml(o)}</option>`).join('')}</select>`;
-    else if (f.kind === 'window') control = `<input type="text" ${common} list="build-window-options" value="${escapeHtml(f.value)}" autocomplete="off" spellcheck="false">`;
-    else control = `<input type="text" ${common} value="${escapeHtml(f.value)}"${placeholder} autocomplete="off" spellcheck="false"${f.kind === 'percent' || f.kind === 'number' ? ' inputmode="decimal"' : ''}>`;
+    if (f.kind === 'promql') control = `<textarea ${common} rows="${rows}" spellcheck="false" autocomplete="off"${placeholder}${aria}>${escapeHtml(f.value)}</textarea>`;
+    else if (f.kind === 'select') control = `<select ${common}${aria}>${(f.options || []).map(o => `<option value="${escapeHtml(o)}"${o === f.value ? ' selected' : ''}>${escapeHtml(o)}</option>`).join('')}</select>`;
+    else if (f.kind === 'window') control = `<input type="text" ${common} list="build-window-options" value="${escapeHtml(f.value)}" autocomplete="off" spellcheck="false"${aria}>`;
+    else control = `<input type="text" ${common} value="${escapeHtml(f.value)}"${placeholder} autocomplete="off" spellcheck="false"${f.kind === 'percent' || f.kind === 'number' ? ' inputmode="decimal"' : ''}${aria}>`;
   }
   return `
     <div class="build-edit-field${f.overridden ? ' is-overridden' : ''}${f.error ? ' is-error' : ''}${readOnly ? ' is-read' : ''}" data-field="${escapeHtml(f.id)}">
-      ${readOnly ? `<span class="build-edit-label">${labelInner}</span>` : `<label class="build-edit-label" for="${id}">${labelInner}${reset}</label>`}
+      <div class="build-edit-label-row">${readOnly ? `<span class="build-edit-label">${labelInner}</span>` : `<label class="build-edit-label" for="${id}">${labelInner}</label>`}${dflt}${reset}</div>
       ${control}
-      ${f.error ? `<span class="build-edit-error" role="alert">${escapeHtml(f.error)}</span>` : f.hint && !readOnly ? `<span class="build-edit-hint">${escapeHtml(f.hint)}</span>` : ''}
+      ${f.error ? `<span class="build-edit-error" id="${id}-error" role="alert">${escapeHtml(f.error)}</span>` : showHint ? `<span class="build-edit-hint" id="${id}-hint">${escapeHtml(f.hint)}</span>` : ''}
     </div>`;
 }
 
