@@ -29,7 +29,7 @@ import { adapt } from './lib/adapter.mjs';
 import { compileBurnRules } from './lib/burn-rules.mjs';
 import {
   parseLibraryEntry, validateLibraryEntry, libraryIndex, tierRequirements, defaultToggles, instantiatePack,
-  validationSummary, symbolOf, TIERS, SECTION_TOGGLES, SCAFFOLD_PARAMS, EVIDENCE_STATUSES, MAX_PARAM_LENGTH,
+  validationSummary, symbolOf, todosFromAnnotations, hasLibraryTodos, TIERS, SECTION_TOGGLES, SCAFFOLD_PARAMS, EVIDENCE_STATUSES, MAX_PARAM_LENGTH,
 } from './lib/library.mjs';
 import { loadLibrary, findEntry } from '../server/library.mjs';
 import { parsePromqlDependencies as lezer } from './lib/promql-lezer.mjs';
@@ -46,6 +46,7 @@ const byId = Object.fromEntries(entries.map(e => [e.id, e]));
 // Every build in this suite runs the Lezer grammar over the resolved SLI expressions (what packc init does).
 const build = (entry, tier, extra = {}) => instantiatePack(entry, { name: `svc-${Array.isArray(entry) ? 'composed' : entry.id}`, tier, environment: 'prod', promql: lezer, ...extra });
 const failingMust = (canonical) => evaluateConformance(canonical).clauses.filter(c => c.applies && c.severity === 'MUST' && !c.pass).map(c => c.id).sort();
+const byPath = (a, b) => a.path.localeCompare(b.path);
 
 test('the library loads: ten entries, no errors', () => {
   assert.deepEqual(library.errors, []);
@@ -186,6 +187,11 @@ for (const entry of entries) for (const tier of TIERS) {
     assert.ok(todos.every(t => t.what && Array.isArray(t.clauses)));
     // every placeholder param left at its default is a todo somewhere
     for (const key of provenance.placeholders) assert.ok(todos.some(t => t.params.includes(key)), `${id}: placeholder ${key} is a todo`);
+    // the todos are recoverable from the pack alone — what /api/validate and the register hand-off feed
+    // validationSummary with: todosFromAnnotations rebuilds { path, fields, what, clause, clauses, params }
+    // from the library.todo.* annotations, the clauses derived from the pack (clausesFor), sorted by path
+    assert.deepEqual(todosFromAnnotations(canonical), [...todos].sort(byPath), `${id}: todosFromAnnotations rebuilds the engine's todo list`);
+    assert.equal(hasLibraryTodos(canonical), todos.length > 0, `${id}: hasLibraryTodos`);
 
     // the studio path: the adapter projects placeholder artefacts as Scaffold, SLIs as Declared
     const layered = adapt(canonical);
@@ -378,7 +384,29 @@ test('composition: kafka + http-service in one tier-2 pack, ids prefixed, params
   assert.deepEqual(provenance.entry, ['kafka', 'http-service']);
   assert.ok(canonical.spec.dashboards.some(d => d.id === 'kafka-kafka-consumer-lag'));
   assert.ok(!todos.some(t => t.path === 'metadata.owners'));
+  // a composed pack's todos (prefixed artefact ids, namespaced params) are recoverable from its annotations too
+  assert.deepEqual(todosFromAnnotations(canonical), [...todos].sort(byPath));
+  assert.ok(todosFromAnnotations(canonical).some(t => t.params.includes('kafka.bootstrap')), 'a namespaced param survives the round trip');
   assert.throws(() => instantiatePack([byId.kafka, byId.kafka], { name: 'x', tier: 'tier-3' }), /same entry twice/);
+});
+
+test('todosFromAnnotations: the tier-1 baseline todo holds up the release gate on both paths; a plain pack has no library todos', () => {
+  const { canonical, todos } = build(byId.kafka, 'tier-1');
+  assert.deepEqual(todos.find(t => t.path === 'baselines').clauses, ['L5.SHOULD.tier1_release_gate'], 'the scaffold\'s one non-derivable clause');
+  assert.deepEqual(todosFromAnnotations(canonical).find(t => t.path === 'baselines').clauses, ['L5.SHOULD.tier1_release_gate']);
+  assert.equal(todosFromAnnotations(canonical).find(t => t.path === 'baselines').clause, 'L5.SHOULD.tier1_release_gate');
+  // the tier is read from library.tier and, without it, from the declared criticality
+  const noTierAnn = JSON.parse(JSON.stringify(canonical));
+  delete noTierAnn.metadata.annotations['library.tier'];
+  assert.deepEqual(todosFromAnnotations(noTierAnn).find(t => t.path === 'baselines').clauses, ['L5.SHOULD.tier1_release_gate']);
+  // the summary the hand-off computes from the annotations is the summary a fresh instantiation gives
+  assert.deepEqual(validationSummary(canonical, todosFromAnnotations(canonical)), validationSummary(canonical, todos));
+  // a pack without library.todo.* annotations (hand-written, crawled) has none — /api/validate attaches no summary
+  const plain = parseYaml(readFileSync(resolve(ROOT, 'vendor/observability-pack-spec', `v${SPEC_VERSION}`, 'examples/payment-service.pack.yaml'), 'utf8'));
+  assert.equal(hasLibraryTodos(plain), false);
+  assert.deepEqual(todosFromAnnotations(plain), []);
+  assert.equal(hasLibraryTodos({}), false);
+  assert.deepEqual(todosFromAnnotations(null), []);
 });
 
 // ---------------------------------------------------------------------------
