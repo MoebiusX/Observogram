@@ -42,21 +42,34 @@ export function switchHtml({ on, disabled = false, reason = null, label, focusKe
 
 // One param as an input (the same param may fill several todos on VERIFY:
 // idSuffix keeps the ids and focus keys distinct while they share the key).
-export function paramRowHtml(p, { compact = false, idSuffix = '' } = {}) {
+// `readOnly` draws the row as the preview and VERIFY show it — the value the
+// pack carries as a code span instead of the input, the same label block
+// (name, key, the scaffold mark, the placeholder / rejected flag with its
+// title), so the two variants cannot drift.
+export function paramRowHtml(p, { compact = false, idSuffix = '', readOnly = false } = {}) {
   const focusKey = `param:${p.key}${idSuffix ? `@${idSuffix}` : ''}`;
   const id = `bp-${idSuffix ? `${idSuffix}-` : ''}${p.key}`;
+  const cls = `build-param${readOnly ? ' build-param-read' : ''}${p.placeholder ? ' is-placeholder' : ''}${p.atDefault ? '' : ' is-set'}${p.error ? ' is-error' : ''}`;
   return `
-    <div class="build-param${p.placeholder ? ' is-placeholder' : ''}${p.atDefault ? '' : ' is-set'}${p.error ? ' is-error' : ''}" data-param="${escapeHtml(p.key)}">
-      <label class="build-param-label" for="${escapeHtml(id)}">
+    <div class="${cls}" data-param="${escapeHtml(p.key)}">
+      ${paramLabelHtml(p, readOnly ? null : id)}
+      ${readOnly
+        ? `<code class="build-param-value">${escapeHtml(String(p.effective ?? ''))}</code>`
+        : `<input id="${escapeHtml(id)}" class="build-param-input" type="text" data-focus-key="${escapeHtml(focusKey)}"${p.error ? ' aria-invalid="true"' : ''}
+             value="${escapeHtml(p.value ?? '')}" placeholder="${escapeHtml(String(p.hint ?? p.default ?? ''))}" autocomplete="off" spellcheck="false">`}
+      ${p.error ? `<span class="build-param-error" role="alert">${escapeHtml(p.error)}</span>` : ''}
+      ${compact || readOnly ? '' : `<span class="build-param-desc">${escapeHtml(p.description)}</span>`}
+    </div>`;
+}
+
+/** The label block of a param row, written once: a <label for> when the row has an input, a <span> when it is read-only. */
+export function paramLabelHtml(p, forId = null) {
+  const inner = `
         <span class="build-param-name">${escapeHtml(p.label)}</span>
         <span class="build-param-key">${escapeHtml(p.key)}${p.entry ? '' : ' · scaffold'}</span>
         ${p.error ? '<span class="build-param-flag is-error">rejected</span>' : p.placeholder ? `<span class="build-param-flag" title="left at its default this value is written into the pack AND reported as a todo">${p.atDefault ? 'placeholder → todo' : 'placeholder filled'}</span>` : ''}
-      </label>
-      <input id="${escapeHtml(id)}" class="build-param-input" type="text" data-focus-key="${escapeHtml(focusKey)}"${p.error ? ' aria-invalid="true"' : ''}
-             value="${escapeHtml(p.value ?? '')}" placeholder="${escapeHtml(String(p.hint ?? p.default ?? ''))}" autocomplete="off" spellcheck="false">
-      ${p.error ? `<span class="build-param-error" role="alert">${escapeHtml(p.error)}</span>` : ''}
-      ${compact ? '' : `<span class="build-param-desc">${escapeHtml(p.description)}</span>`}
-    </div>`;
+      `;
+  return forId ? `<label class="build-param-label" for="${escapeHtml(forId)}">${inner}</label>` : `<span class="build-param-label">${inner}</span>`;
 }
 
 /** Param inputs commit on change (Enter / blur), so typing never re-renders under the caret. `selector` narrows which inputs (the stack wires only its own). */

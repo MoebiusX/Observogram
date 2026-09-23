@@ -46,9 +46,9 @@ import { renderBuildCompile } from '../studio/build-compile-view.mjs';
 import { renderBuildVerify } from '../studio/build-verify-view.mjs';
 import { renderBuildStack, buildStackHtml, wireBuildStack } from '../studio/build-stack-view.mjs';
 import { renderBuildDefinition, buildDefinitionHtml, wireBuildDefinition, summaryHtml } from '../studio/build-definition-view.mjs';
-import { renderBuildSheet, buildSheetHtml, wireBuildSheet, wireRolodex, paramReadHtml, SMOOTH_SCROLL_GRACE_MS } from '../studio/build-sheet-view.mjs';
+import { renderBuildSheet, buildSheetHtml, wireBuildSheet, wireRolodex, SMOOTH_SCROLL_GRACE_MS } from '../studio/build-sheet-view.mjs';
 import { artefactCardHtml } from '../studio/card-html.mjs';
-import { revealTodo, clauseRowHtml, switchHtml, evidenceDot } from '../studio/build-atoms.mjs';
+import { revealTodo, clauseRowHtml, switchHtml, evidenceDot, paramRowHtml, paramLabelHtml } from '../studio/build-atoms.mjs';
 import { installDialogFocusTrap, TRAPPED_DIALOGS } from '../studio/util.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -1600,7 +1600,15 @@ test('renderBuildSheet draws the dialog headlessly: the ARIA, the title and ques
   assert.equal(switchHtml({ on: false, label: 'x', focusKey: 'k', data: { a: '1' } }), '<button type="button" role="switch" class="build-switch" aria-checked="false" aria-label="x" data-focus-key="k" data-a="1"><span class="build-switch-knob" aria-hidden="true"></span></button>');
   assert.ok(switchHtml({ on: true, disabled: true, reason: 'why', label: 'x' }).includes(' disabled aria-disabled="true" title="why"'));
   assert.equal(evidenceDot(null), '');
-  assert.ok(paramReadHtml({ key: 'k', label: 'K', effective: 'v', placeholder: true, atDefault: false }).includes('placeholder filled'));
+  // The read-only param row is the one atom's other face: the same label block (name, key, scaffold mark, the
+  // placeholder flag with its title), the value as a code span, no input, no description.
+  const p = { key: 'k', label: 'K', effective: 'v', value: '', placeholder: true, atDefault: false, description: 'd' };
+  const read = paramRowHtml(p, { readOnly: true }), edit = paramRowHtml(p);
+  assert.ok(read.includes('class="build-param build-param-read is-placeholder is-set"') && read.includes('<code class="build-param-value">v</code>') && !read.includes('<input') && !read.includes('build-param-desc'));
+  assert.ok(read.includes('<span class="build-param-flag" title="left at its default this value is written into the pack AND reported as a todo">placeholder filled</span>'), 'the flag keeps its title in the read-only row');
+  assert.equal(read.match(/<span class="build-param-label">([\s\S]*?)<\/span>\s*<code/)[1], edit.match(/<label class="build-param-label" for="bp-k">([\s\S]*?)<\/label>/)[1], 'one label block for both faces');
+  assert.equal(paramLabelHtml(p), `<span class="build-param-label">${paramLabelHtml(p, 'x').match(/for="x">([\s\S]*)<\/label>$/)[1]}</span>`);
+  assert.ok(paramRowHtml({ ...p, error: 'no' }, { readOnly: true }).includes('<span class="build-param-flag is-error">rejected</span>') && paramRowHtml({ ...p, error: 'no' }, { readOnly: true }).includes('role="alert">no</span>'));
 });
 
 test('the sheet’s handlers write through the existing actions: close (button, scrim, Esc), compose, the section switches, the rolodex switches, the filter', () => {

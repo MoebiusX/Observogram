@@ -42,20 +42,6 @@ const MODE_WORD = { edit: 'compose', preview: 'preview', verify: 'verify' };
 export const SMOOTH_SCROLL_GRACE_MS = 250;
 const READ_ONLY_REASON = { preview: 'a preview — compose it on Compile', verify: 'read-only on Verify — change it on Compile' };
 
-/** A param as a read-only row (the preview and VERIFY): the value the pack carries, the placeholder flag, the engine's rejection if any. */
-export function paramReadHtml(p) {
-  return `
-    <div class="build-param build-param-read${p.placeholder ? ' is-placeholder' : ''}${p.atDefault ? '' : ' is-set'}${p.error ? ' is-error' : ''}" data-param="${escapeHtml(p.key)}">
-      <span class="build-param-label">
-        <span class="build-param-name">${escapeHtml(p.label)}</span>
-        <span class="build-param-key">${escapeHtml(p.key)}${p.entry ? '' : ' · scaffold'}</span>
-        ${p.error ? '<span class="build-param-flag is-error">rejected</span>' : p.placeholder ? `<span class="build-param-flag">${p.atDefault ? 'placeholder → todo' : 'placeholder filled'}</span>` : ''}
-      </span>
-      <code class="build-param-value">${escapeHtml(String(p.effective ?? ''))}</code>
-      ${p.error ? `<span class="build-param-error" role="alert">${escapeHtml(p.error)}</span>` : ''}
-    </div>`;
-}
-
 function switchRowHtml(s, model) {
   const readOnly = model.readOnly;
   return `
@@ -142,7 +128,7 @@ function paramGroupHtml(g, model) {
   return `
     <section class="build-sheet-section build-sheet-params" data-params="${escapeHtml(g.id)}">
       <div class="build-sheet-section-head"><h3>${escapeHtml(g.label)} <span class="build-sheet-count">${g.rows.length}</span></h3>${g.sub ? `<span class="build-sheet-sub">${escapeHtml(g.sub)}</span>` : ''}</div>
-      <div class="build-params build-sheet-param-grid">${g.rows.map(p => (editable ? paramRowHtml(p, { compact: true, idSuffix: sheetFocusSuffix(model.layerId) }) : paramReadHtml(p))).join('')}</div>
+      <div class="build-params build-sheet-param-grid">${g.rows.map(p => paramRowHtml(p, { compact: true, readOnly: !editable, idSuffix: sheetFocusSuffix(model.layerId) })).join('')}</div>
     </section>`;
 }
 
