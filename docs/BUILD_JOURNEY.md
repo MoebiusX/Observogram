@@ -444,8 +444,11 @@ when you click that layer.* A non-modal side panel anchored to the right edge ov
 stack — `role=dialog`, `aria-labelledby` its title, `aria-modal=false`, Esc closes, focus
 moves into the panel when it opens and returns to the slab head when it closes, the stack
 stays visible and dimmed (a scrim over the main column; the slab heads stay above it, so a
-click on another head switches the sheet; the definition column stays live), one sheet at a
-time, the open layer remembered in UI state (`state.build.sheetOpen`, never persisted). A
+click on another head switches the sheet; the definition column stays live — for the
+keyboard too: the studio's Tab trap, `installDialogFocusTrap`, skips an `aria-modal=false`
+dialog, so Tab walks on from the sheet to the heads and the column instead of cycling
+inside it), one sheet at a time, the open layer remembered in UI state
+(`state.build.sheetOpen`, never persisted). A
 large title (`L1 · Contract`) and the layer's question, then the layer's clauses at the tier
 with their state (the same `clauseRowHtml` the summary draws), then the layer's options —
 always what the pack actually carries, read from `adapted` (or the silhouette), never a

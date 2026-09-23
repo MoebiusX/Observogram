@@ -49,6 +49,7 @@ import { renderBuildDefinition, buildDefinitionHtml, wireBuildDefinition, summar
 import { renderBuildSheet, buildSheetHtml, wireBuildSheet, paramReadHtml } from '../studio/build-sheet-view.mjs';
 import { artefactCardHtml } from '../studio/card-html.mjs';
 import { revealTodo, clauseRowHtml, switchHtml, evidenceDot } from '../studio/build-atoms.mjs';
+import { installDialogFocusTrap, TRAPPED_DIALOGS } from '../studio/util.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const FIX = resolve(ROOT, 'tools/fixtures/build');
@@ -1620,4 +1621,59 @@ test('the stylesheet carries the language: the translucent sheet with a solid fa
   const literals = [...axis.matchAll(/#[0-9a-fA-F]{3,6}\b/g)].map(m => m[0]).filter(h => !['#fff', '#64748B', '#0891b2', '#db2777', '#0d9488'].includes(h));
   assert.deepEqual(literals, [], 'the axis styles use the tokens (white knobs, the Scaffold grey and the step accents\' fallbacks aside)');
   assert.ok(/\[data-theme="dark"\] \.build-sheet \{/.test(axis) && /\[data-theme="dark"\] \.build-chip\.is-selected/.test(axis), 'the dark theme adjusts the shadows and the chip fill');
+});
+
+// A document with only what the Tab trap reads: the dialogs (matched by attribute selector,
+// [attr="v"] and :not([attr]) / :not([attr="v"]) only), the active element, one keydown listener.
+function fakeDocument(dialogs) {
+  const handlers = {};
+  const matches = (el, sel) => (sel.match(/:not\(\[[^\]]+\]\)|\[[^\]]+\]/g) || []).every(part => {
+    const neg = part.startsWith(':not(');
+    const [, attr, , val] = /\[([\w-]+)(="([^"]*)")?\]/.exec(part);
+    const has = el.attrs[attr] !== undefined && (val === undefined || el.attrs[attr] === val);
+    return neg ? !has : has;
+  });
+  const doc = {
+    activeElement: null,
+    addEventListener: (t, fn) => { handlers[t] = fn; },
+    querySelectorAll: (sel) => dialogs.filter(d => matches(d, sel)),
+    tab: (shiftKey = false) => { let prevented = false; handlers.keydown({ key: 'Tab', shiftKey, preventDefault() { prevented = true; } }); return prevented; },
+  };
+  const focusable = (name) => ({ name, offsetParent: {}, focus() { doc.activeElement = this; } });
+  const dialog = (attrs, names) => { const items = names.map(focusable); return { attrs, items, querySelectorAll: () => items, contains: (el) => items.includes(el), focus() { doc.activeElement = this; } }; };
+  return { doc, dialog, focusable };
+}
+
+test('the Tab trap skips the non-modal layer sheet: Tab from the definition column walks on while a sheet is open, and a modal dialog still traps', () => {
+  assert.equal(TRAPPED_DIALOGS, '[role="dialog"]:not([hidden]):not([aria-modal="false"])');
+  // The sheet as the view draws it: role=dialog, aria-modal=false (the markup is asserted in the render test).
+  const dialogs = [];
+  const { doc, dialog, focusable } = fakeDocument(dialogs);
+  const sheet = dialog({ role: 'dialog', 'aria-modal': 'false' }, ['Close the layer sheet (Esc)', 'SLOs section']);
+  const about = dialog({ role: 'dialog', 'aria-modal': 'true' }, ['about-close', 'about-link']);
+  const hiddenModal = dialog({ role: 'dialog', 'aria-modal': 'true', hidden: '' }, ['deploy-close']);
+  dialogs.push(hiddenModal, sheet);
+  installDialogFocusTrap(doc);
+  const nameField = focusable('#build-name');
+  doc.activeElement = nameField;
+  assert.equal(doc.tab(), false, 'Tab from #build-name is not hijacked while only the sheet is open');
+  assert.equal(doc.activeElement, nameField, 'focus stays where the browser will move it next (Owners)');
+  doc.activeElement = sheet.items[1];
+  assert.equal(doc.tab(), false, 'Tab from the sheet\'s last control leaves the sheet (to the slab heads)');
+  assert.equal(doc.tab(true), false, 'Shift+Tab is not wrapped either');
+  // A modal dialog (the About card) is still trapped: focus is pulled in and wraps.
+  dialogs.push(about);
+  doc.activeElement = nameField;
+  assert.equal(doc.tab(), true);
+  assert.equal(doc.activeElement, about.items[0], 'Tab from outside lands on the first focusable of the modal');
+  doc.activeElement = about.items[1];
+  assert.equal(doc.tab(), true);
+  assert.equal(doc.activeElement, about.items[0], 'Tab from the last wraps to the first');
+  doc.activeElement = about.items[0];
+  assert.equal(doc.tab(true), true);
+  assert.equal(doc.activeElement, about.items[1], 'Shift+Tab from the first wraps to the last');
+  // A hidden modal (the deploy modal while closed) never traps.
+  dialogs.pop();
+  doc.activeElement = nameField;
+  assert.equal(doc.tab(), false);
 });
