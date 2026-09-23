@@ -1,1 +1,246 @@
-{"ok":true,"tier":"tier-1","clauses":[{"id":"L1.MUST.availability_slo","dimension":"L1","severity":"MUST","minTier":"tier-3","description":"At least one availability SLO (ratio-type SLI).","specRef":"§5.1"},{"id":"L1.MUST.latency_slo","dimension":"L1","severity":"MUST","minTier":"tier-2","description":"At least one latency SLO (threshold or distribution SLI).","specRef":"§5.1"},{"id":"L1.SHOULD.domain_slo","dimension":"L1","severity":"SHOULD","minTier":"tier-1","description":"A third, domain-specific SLO beyond availability and latency (4+ SLOs total).","specRef":"§5.1"},{"id":"L1.MUST.sli_covered_by_slo","dimension":"L1","severity":"MUST","minTier":"tier-3","description":"Every declared SLI is referenced by at least one SLO.","specRef":"§5.1"},{"id":"L2.MUST.otlp_receiver","dimension":"L2","severity":"MUST","minTier":"tier-3","description":"OTel Collector pipeline declares an `otlp` receiver.","specRef":"§5.2"},{"id":"L2.MUST.service_name_required","dimension":"L2","severity":"MUST","minTier":"tier-3","description":"`service.name` listed in otel.resource_attributes.required.","specRef":"§5.3"},{"id":"L2.MUST.semconv_floor","dimension":"L2","severity":"MUST","minTier":"tier-3","description":"OTel SemConv version >= 1.26.0 (binding floor).","specRef":"§5.3"},{"id":"L2.MUST.semconv_current","dimension":"L2","severity":"MUST","minTier":"tier-1","description":"OTel SemConv at currently-tracked version (1.27.0).","specRef":"§5.3"},{"id":"L2.MUST.resource_attrs_5plus","dimension":"L2","severity":"MUST","minTier":"tier-1","description":"At least five required resource attributes declared.","specRef":"§5.3"},{"id":"L2.MUST.log_correlation","dimension":"L2","severity":"MUST","minTier":"tier-1","description":"`otel.sdk.log_correlation: true` (trace IDs injected into logs).","specRef":"§5.3"},{"id":"L2.MUST.metrics_exporter","dimension":"L2","severity":"MUST","minTier":"tier-2","description":"Pipelines export metrics.","specRef":"§5.2"},{"id":"L2.MUST.logs_and_traces_exporters","dimension":"L2","severity":"MUST","minTier":"tier-1","description":"Pipelines export logs and traces.","specRef":"§5.2"},{"id":"L2.MUST.tail_sampling","dimension":"L2","severity":"MUST","minTier":"tier-1","description":"Pipelines include a tail_sampling processor.","specRef":"§5.2"},{"id":"L2.MUST.metrics_logs_traces_backends","dimension":"L2","severity":"MUST","minTier":"tier-2","description":"spec.telemetry.backends covers metrics + logs + traces.","specRef":"§5.12.1"},{"id":"L2.SHOULD.backend_gating_enforce","dimension":"L2","severity":"SHOULD","minTier":"tier-1","description":"tier-1 backends pin a `min` version with `gating: enforce`.","specRef":"§5.12.3"},{"id":"L2X.MUST.extended_backend_refs_resolve","dimension":"L2X","severity":"MUST","minTier":"tier-3","description":"Every extended surface references a declared telemetry backend or explicit external ref.","specRef":"§5.12.4"},{"id":"L3.MUST.recording_rule_per_slo","dimension":"L3","severity":"MUST","minTier":"tier-3","description":"Every SLO has at least one recording rule materialising its SLI.","specRef":"§5.5"},{"id":"L3.SHOULD.derived_view","dimension":"L3","severity":"SHOULD","minTier":"tier-2","description":"At least one derived view (e.g. golden signals or per-tenant rollup).","specRef":"§5.5"},{"id":"L3.MUST.service_overview_dashboard","dimension":"L3","severity":"MUST","minTier":"tier-3","description":"At least one dashboard declared (service overview).","specRef":"§5.6"},{"id":"L3.MUST.slo_burn_dashboard","dimension":"L3","severity":"MUST","minTier":"tier-2","description":"A second dashboard (SLO burn) on top of service overview.","specRef":"§5.6"},{"id":"L3.MUST.tier1_dashboards","dimension":"L3","severity":"MUST","minTier":"tier-1","description":"Service overview + SLO burn + deployment overlay + customer impact (4+ dashboards).","specRef":"§5.6"},{"id":"L4.MUST.multi_window_burn_rate","dimension":"L4","severity":"MUST","minTier":"tier-2","description":"Every SLO has at least one burn-rate alert with multi-window policy.","specRef":"§5.7"},{"id":"L4.SHOULD.forecast_on_availability","dimension":"L4","severity":"SHOULD","minTier":"tier-1","description":"At least one forecast declared on a primary availability SLO.","specRef":"§5.7"},{"id":"L4.MUST.tier1_voice_route","dimension":"L4","severity":"MUST","minTier":"tier-1","description":"SEV1 route includes a voice channel.","specRef":"§5.8"},{"id":"L4.MUST.tier1_at_least_one_automation","dimension":"L4","severity":"MUST","minTier":"tier-1","description":"At least one self-healing remediation declared.","specRef":"§5.9"},{"id":"L5.SHOULD.tier1_release_gate","dimension":"L5","severity":"SHOULD","minTier":"tier-1","description":"Regression gate set to a release-blocking mode.","specRef":"§5.10"},{"id":"L5.MUST.synthetic_probe","dimension":"L5","severity":"MUST","minTier":"tier-3","description":"At least one synthetic check declared.","specRef":"§5.11"},{"id":"L5.MUST.tier1_chaos_for_each_slo","dimension":"L5","severity":"MUST","minTier":"tier-1","description":"Every SLO is the steady-state hypothesis of at least one chaos experiment.","specRef":"§5.11"},{"id":"L5.MUST.tier2_chaos_staging","dimension":"L5","severity":"MUST","minTier":"tier-2","description":"At least one chaos experiment scheduled monthly+ in staging.","specRef":"§5.11"},{"id":"L5.MUST.tier1_weekly_prod_chaos","dimension":"L5","severity":"MUST","minTier":"tier-1","description":"At least one chaos experiment runs weekly+ in production with OTel-instrumented synthetic probes.","specRef":"§5.11"}]}
+{
+  "ok": true,
+  "tier": "tier-1",
+  "clauses": [
+    {
+      "id": "L1.MUST.availability_slo",
+      "dimension": "L1",
+      "severity": "MUST",
+      "minTier": "tier-3",
+      "description": "At least one availability SLO (ratio-type SLI).",
+      "specRef": "§5.1"
+    },
+    {
+      "id": "L1.MUST.latency_slo",
+      "dimension": "L1",
+      "severity": "MUST",
+      "minTier": "tier-2",
+      "description": "At least one latency SLO (threshold or distribution SLI).",
+      "specRef": "§5.1"
+    },
+    {
+      "id": "L1.SHOULD.domain_slo",
+      "dimension": "L1",
+      "severity": "SHOULD",
+      "minTier": "tier-1",
+      "description": "A third, domain-specific SLO beyond availability and latency (4+ SLOs total).",
+      "specRef": "§5.1"
+    },
+    {
+      "id": "L1.MUST.sli_covered_by_slo",
+      "dimension": "L1",
+      "severity": "MUST",
+      "minTier": "tier-3",
+      "description": "Every declared SLI is referenced by at least one SLO.",
+      "specRef": "§5.1"
+    },
+    {
+      "id": "L2.MUST.otlp_receiver",
+      "dimension": "L2",
+      "severity": "MUST",
+      "minTier": "tier-3",
+      "description": "OTel Collector pipeline declares an `otlp` receiver.",
+      "specRef": "§5.2"
+    },
+    {
+      "id": "L2.MUST.service_name_required",
+      "dimension": "L2",
+      "severity": "MUST",
+      "minTier": "tier-3",
+      "description": "`service.name` listed in otel.resource_attributes.required.",
+      "specRef": "§5.3"
+    },
+    {
+      "id": "L2.MUST.semconv_floor",
+      "dimension": "L2",
+      "severity": "MUST",
+      "minTier": "tier-3",
+      "description": "OTel SemConv version >= 1.26.0 (binding floor).",
+      "specRef": "§5.3"
+    },
+    {
+      "id": "L2.MUST.semconv_current",
+      "dimension": "L2",
+      "severity": "MUST",
+      "minTier": "tier-1",
+      "description": "OTel SemConv at currently-tracked version (1.27.0).",
+      "specRef": "§5.3"
+    },
+    {
+      "id": "L2.MUST.resource_attrs_5plus",
+      "dimension": "L2",
+      "severity": "MUST",
+      "minTier": "tier-1",
+      "description": "At least five required resource attributes declared.",
+      "specRef": "§5.3"
+    },
+    {
+      "id": "L2.MUST.log_correlation",
+      "dimension": "L2",
+      "severity": "MUST",
+      "minTier": "tier-1",
+      "description": "`otel.sdk.log_correlation: true` (trace IDs injected into logs).",
+      "specRef": "§5.3"
+    },
+    {
+      "id": "L2.MUST.metrics_exporter",
+      "dimension": "L2",
+      "severity": "MUST",
+      "minTier": "tier-2",
+      "description": "Pipelines export metrics.",
+      "specRef": "§5.2"
+    },
+    {
+      "id": "L2.MUST.logs_and_traces_exporters",
+      "dimension": "L2",
+      "severity": "MUST",
+      "minTier": "tier-1",
+      "description": "Pipelines export logs and traces.",
+      "specRef": "§5.2"
+    },
+    {
+      "id": "L2.MUST.tail_sampling",
+      "dimension": "L2",
+      "severity": "MUST",
+      "minTier": "tier-1",
+      "description": "Pipelines include a tail_sampling processor.",
+      "specRef": "§5.2"
+    },
+    {
+      "id": "L2.MUST.metrics_logs_traces_backends",
+      "dimension": "L2",
+      "severity": "MUST",
+      "minTier": "tier-2",
+      "description": "spec.telemetry.backends covers metrics + logs + traces.",
+      "specRef": "§5.12.1"
+    },
+    {
+      "id": "L2.SHOULD.backend_gating_enforce",
+      "dimension": "L2",
+      "severity": "SHOULD",
+      "minTier": "tier-1",
+      "description": "tier-1 backends pin a `min` version with `gating: enforce`.",
+      "specRef": "§5.12.3"
+    },
+    {
+      "id": "L2X.MUST.extended_backend_refs_resolve",
+      "dimension": "L2X",
+      "severity": "MUST",
+      "minTier": "tier-3",
+      "description": "Every extended surface references a declared telemetry backend or explicit external ref.",
+      "specRef": "§5.12.4"
+    },
+    {
+      "id": "L3.MUST.recording_rule_per_slo",
+      "dimension": "L3",
+      "severity": "MUST",
+      "minTier": "tier-3",
+      "description": "Every SLO has at least one recording rule materialising its SLI.",
+      "specRef": "§5.5"
+    },
+    {
+      "id": "L3.SHOULD.derived_view",
+      "dimension": "L3",
+      "severity": "SHOULD",
+      "minTier": "tier-2",
+      "description": "At least one derived view (e.g. golden signals or per-tenant rollup).",
+      "specRef": "§5.5"
+    },
+    {
+      "id": "L3.MUST.service_overview_dashboard",
+      "dimension": "L3",
+      "severity": "MUST",
+      "minTier": "tier-3",
+      "description": "At least one dashboard declared (service overview).",
+      "specRef": "§5.6"
+    },
+    {
+      "id": "L3.MUST.slo_burn_dashboard",
+      "dimension": "L3",
+      "severity": "MUST",
+      "minTier": "tier-2",
+      "description": "A second dashboard (SLO burn) on top of service overview.",
+      "specRef": "§5.6"
+    },
+    {
+      "id": "L3.MUST.tier1_dashboards",
+      "dimension": "L3",
+      "severity": "MUST",
+      "minTier": "tier-1",
+      "description": "Service overview + SLO burn + deployment overlay + customer impact (4+ dashboards).",
+      "specRef": "§5.6"
+    },
+    {
+      "id": "L4.MUST.multi_window_burn_rate",
+      "dimension": "L4",
+      "severity": "MUST",
+      "minTier": "tier-2",
+      "description": "Every SLO has at least one burn-rate alert with multi-window policy.",
+      "specRef": "§5.7"
+    },
+    {
+      "id": "L4.SHOULD.forecast_on_availability",
+      "dimension": "L4",
+      "severity": "SHOULD",
+      "minTier": "tier-1",
+      "description": "At least one forecast declared on a primary availability SLO.",
+      "specRef": "§5.7"
+    },
+    {
+      "id": "L4.MUST.tier1_voice_route",
+      "dimension": "L4",
+      "severity": "MUST",
+      "minTier": "tier-1",
+      "description": "SEV1 route includes a voice channel.",
+      "specRef": "§5.8"
+    },
+    {
+      "id": "L4.MUST.tier1_at_least_one_automation",
+      "dimension": "L4",
+      "severity": "MUST",
+      "minTier": "tier-1",
+      "description": "At least one self-healing remediation declared.",
+      "specRef": "§5.9"
+    },
+    {
+      "id": "L5.SHOULD.tier1_release_gate",
+      "dimension": "L5",
+      "severity": "SHOULD",
+      "minTier": "tier-1",
+      "description": "Regression gate set to a release-blocking mode.",
+      "specRef": "§5.10"
+    },
+    {
+      "id": "L5.MUST.synthetic_probe",
+      "dimension": "L5",
+      "severity": "MUST",
+      "minTier": "tier-3",
+      "description": "At least one synthetic check declared.",
+      "specRef": "§5.11"
+    },
+    {
+      "id": "L5.MUST.tier1_chaos_for_each_slo",
+      "dimension": "L5",
+      "severity": "MUST",
+      "minTier": "tier-1",
+      "description": "Every SLO is the steady-state hypothesis of at least one chaos experiment.",
+      "specRef": "§5.11"
+    },
+    {
+      "id": "L5.MUST.tier2_chaos_staging",
+      "dimension": "L5",
+      "severity": "MUST",
+      "minTier": "tier-2",
+      "description": "At least one chaos experiment scheduled monthly+ in staging.",
+      "specRef": "§5.11"
+    },
+    {
+      "id": "L5.MUST.tier1_weekly_prod_chaos",
+      "dimension": "L5",
+      "severity": "MUST",
+      "minTier": "tier-1",
+      "description": "At least one chaos experiment runs weekly+ in production with OTel-instrumented synthetic probes.",
+      "specRef": "§5.11"
+    }
+  ]
+}
