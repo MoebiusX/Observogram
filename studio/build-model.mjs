@@ -657,6 +657,18 @@ export function artefactSymbol(a) {
   return null;
 }
 
+/**
+ * The detail artefacts Discover folds behind a section's Expand toggle (layers-view.mjs
+ * expandBucketsFor): anything the adapter marks `expand` (dashboard panels, the metric
+ * inventory, scrape evidence) and, on L3, the recording rules and derived views.
+ */
+export function isDetailArtefact(a, layerId) {
+  if (a?.expand) return true;
+  if (layerId !== 'L3') return false;
+  const tags = a?.tags || [];
+  return tags.includes('recording') || tags.includes('view') || tags.includes('derived');
+}
+
 /** The sections a toggle switches off, per slab (L4 per subgroup): what dims a slab. */
 const SECTION_SLABS = {
   slos: [['L1', null], ['L4', 'policy']],
@@ -722,11 +734,11 @@ export function buildStackModel({ adapted = null, checklist = null, requirements
   const todoRows = (todos || []).map(t => ({ ...todoRow(t, byKey), ...todoLayer(t.path), artefactId: null }));
   const todoByPath = new Map(todoRows.map(t => [t.path, t]));
   const layers = adapted?.layers || null;
-  const withSymbols = (items) => (items || []).map(a => {
+  const withSymbols = (items, layerId) => (items || []).map(a => {
     const symbol = artefactSymbol(a);
     const todo = symbol ? todoByPath.get(symbol) : null;
     if (todo) todo.artefactId = a.id;
-    return { ...a, symbol, todoPath: todo ? todo.path : null };
+    return { ...a, symbol, todoPath: todo ? todo.path : null, detail: isDetailArtefact(a, layerId) };
   });
   const ghostOf = (c) => ({
     kind: 'clause', key: `clause:${c.id}`, clauseId: c.id, title: c.label, desc: c.description, severity: c.severity, minTier: c.minTier,
@@ -755,7 +767,7 @@ export function buildStackModel({ adapted = null, checklist = null, requirements
     if (def.id === 'L4') {
       subgroups = L4_SUBGROUPS.map(sg => ({
         key: sg.key, label: sg.label,
-        artefacts: mode === 'define' ? [] : withSymbols(layers?.L4?.[sg.key]),
+        artefacts: mode === 'define' ? [] : withSymbols(layers?.L4?.[sg.key], 'L4'),
         ghosts: ghostsFor(clauses.filter(c => c.subgroup === sg.key)),
         todos: slabTodos.filter(t => t.subgroup === sg.key),
         offSections: offFor('L4', sg.key),
@@ -763,7 +775,7 @@ export function buildStackModel({ adapted = null, checklist = null, requirements
       artefacts = subgroups.flatMap(sg => sg.artefacts);
       ghosts = subgroups.flatMap(sg => sg.ghosts);
     } else {
-      artefacts = mode === 'define' ? [] : withSymbols(layers?.[def.id]);
+      artefacts = mode === 'define' ? [] : withSymbols(layers?.[def.id], def.id);
       ghosts = [...(def.id === 'L1' ? candidateGhosts : []), ...ghostsFor(clauses)];
     }
     // L2X is optional per spec v1.2: shown only when it has content or a clause of its own.
@@ -788,11 +800,14 @@ export function buildStackModel({ adapted = null, checklist = null, requirements
       clauses, artefacts, ghosts, todos: slabTodos, subgroups,
       counts: {
         artefacts: artefacts.length, scaffold: artefacts.filter(a => a.source === 'Scaffold').length, verified: artefacts.filter(a => a.source === 'Verified').length,
+        detail: artefacts.filter(a => a.detail).length,
         ghosts: ghosts.length, todos: slabTodos.length, clauses: clauses.length,
       },
       maturity,
       dimmed: offSections.length > 0, offSections,
       expanded: !!expanded?.[def.id],
+      // The detail artefacts Discover folds behind its Expand toggles (panels, queries, live evidence), shown on demand.
+      detailOpen: !!expanded?.[`${def.id}/detail`],
       // A red or amber edge says which clause and why.
       why: clauses.filter(c => c.state === 'fail' || c.state === 'placeholder').map(c => `${c.id} — ${c.state === 'fail' ? c.description : `passes on ${plural(c.todos.length, 'placeholder')}: ${c.todos.join(', ')}`}`),
       present: artefacts.length > 0,

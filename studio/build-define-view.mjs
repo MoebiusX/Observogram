@@ -15,16 +15,11 @@
 import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { BUILD_STEPS, MAX_SERVICE_SLUG } from './build-model.mjs';
+import { evidenceBadge, paramRowHtml, wireParamInputs } from './build-atoms.mjs';
 
-const EVIDENCE_LABEL = {
-  'recorded-live': 'recorded live', 'reference-pack': 'reference pack', 'upstream-docs': 'upstream docs', semconv: 'semconv',
-};
-
-export function evidenceBadge(status, verifiedOn) {
-  if (!status) return '';
-  const title = verifiedOn ? `${EVIDENCE_LABEL[status] || status} · verified ${verifiedOn}` : (EVIDENCE_LABEL[status] || status);
-  return `<span class="build-evidence build-evidence-${escapeHtml(status)}" title="${escapeHtml(title)}">${escapeHtml(EVIDENCE_LABEL[status] || status)}</span>`;
-}
+// The atoms the three steps share moved to build-atoms.mjs (the stack view draws
+// them too); re-exported here so the step views keep one import for them.
+export { evidenceBadge, paramRowHtml, wireParamInputs } from './build-atoms.mjs';
 
 export function stepHeadHtml(step, title, lede) {
   const n = BUILD_STEPS.indexOf(step) + 1;
@@ -71,25 +66,6 @@ function tierCardHtml(t) {
       <span class="build-tier-requires">${t.id === 'tier-3' ? 'requires' : 'adds'}</span>
       ${adds}
     </label>`;
-}
-
-// One param as an input (the same param may fill several todos on VERIFY:
-// idSuffix keeps the ids and focus keys distinct while they share the key).
-export function paramRowHtml(p, { compact = false, idSuffix = '' } = {}) {
-  const focusKey = `param:${p.key}${idSuffix ? `@${idSuffix}` : ''}`;
-  const id = `bp-${idSuffix ? `${idSuffix}-` : ''}${p.key}`;
-  return `
-    <div class="build-param${p.placeholder ? ' is-placeholder' : ''}${p.atDefault ? '' : ' is-set'}${p.error ? ' is-error' : ''}" data-param="${escapeHtml(p.key)}">
-      <label class="build-param-label" for="${escapeHtml(id)}">
-        <span class="build-param-name">${escapeHtml(p.label)}</span>
-        <span class="build-param-key">${escapeHtml(p.key)}${p.entry ? '' : ' · scaffold'}</span>
-        ${p.error ? '<span class="build-param-flag is-error">rejected</span>' : p.placeholder ? `<span class="build-param-flag" title="left at its default this value is written into the pack AND reported as a todo">${p.atDefault ? 'placeholder → todo' : 'placeholder filled'}</span>` : ''}
-      </label>
-      <input id="${escapeHtml(id)}" class="build-param-input" type="text" data-focus-key="${escapeHtml(focusKey)}"${p.error ? ' aria-invalid="true"' : ''}
-             value="${escapeHtml(p.value ?? '')}" placeholder="${escapeHtml(String(p.hint ?? p.default ?? ''))}" autocomplete="off" spellcheck="false">
-      ${p.error ? `<span class="build-param-error" role="alert">${escapeHtml(p.error)}</span>` : ''}
-      ${compact ? '' : `<span class="build-param-desc">${escapeHtml(p.description)}</span>`}
-    </div>`;
 }
 
 /** The last instantiation's usage errors as one note: the general ones spelled out, the rejected params counted (their rows carry the reason). */
@@ -170,23 +146,32 @@ export function renderBuildDefine(container, model, host = appHost) {
   byId('build-next').addEventListener('click', () => act.setStep('compile'));
 }
 
-/** Param inputs commit on change (Enter / blur), so typing never re-renders under the caret. */
-export function wireParamInputs(container, act) {
-  container.querySelectorAll('.build-param-input').forEach(inp => {
-    const key = inp.closest('.build-param')?.dataset.param;
-    inp.addEventListener('change', () => act.setParam(key, inp.value));
-    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } });
-  });
-}
-
 // ---------- the clause rail (steps 1-3) ----------
 
 const STATE_GLYPH = { pass: '✓', placeholder: '◐', fail: '✗', pending: '○' };
 const STATE_WORD = { pass: 'passes', placeholder: 'passes on a placeholder', fail: 'fails', pending: 'not evaluated yet' };
 const DIM_NAME = { L1: 'Contract', L2: 'Telemetry', L2X: 'Extended', L3: 'Insight', L4: 'Action', L5: 'Validation', GOV: 'Governance' };
 
-/** render(container, railModel) — the tier's clauses as a live checklist with three states, plus the todo and warning counts. */
-export function renderClauseRail(container, rail) {
+function railClauseHtml(i) {
+  return `
+    <li class="build-rail-clause is-${i.state}" title="${escapeHtml(`${i.id} — ${STATE_WORD[i.state]}${i.todos.length ? ` · ${i.todos.join(', ')}` : ''}`)}">
+      <span class="build-rail-glyph" aria-hidden="true">${STATE_GLYPH[i.state]}</span>
+      <span class="build-rail-text">
+        <span class="build-rail-desc">${escapeHtml(i.description)}</span>
+        <span class="build-rail-id"><span class="build-sev build-sev-${i.severity.toLowerCase()}">${i.severity}</span> ${escapeHtml(i.id)}${i.state === 'placeholder' ? ` · <em>on ${i.todos.length} placeholder${i.todos.length === 1 ? '' : 's'}</em>` : ''}</span>
+      </span>
+    </li>`;
+}
+
+/**
+ * render(container, railModel, host) — the compact summary of the tier's clauses:
+ * the status, the three counts, the clauses that fail (always listed — the stack's
+ * red edges, named), how many pass only on a placeholder, and the todo / warning
+ * counts; the full list by layer folds under "all clauses" (the per-layer clauses
+ * live on the stack's slabs). Whether it is open is kept in the draft through
+ * host.build.update, never persisted.
+ */
+export function renderClauseRail(container, rail, host = appHost) {
   const c = rail.checklist;
   const k = c.counts;
   const status = rail.pending ? 'checking…'
@@ -206,25 +191,28 @@ export function renderClauseRail(container, rail) {
       <span class="build-rail-count is-placeholder" title="passes, but only on a placeholder value the team still has to fill"><b>${STATE_GLYPH.placeholder}</b> ${k.placeholder} on a placeholder</span>
       <span class="build-rail-count is-fail" title="does not pass at this tier"><b>${STATE_GLYPH.fail}</b> ${k.fail} fail</span>
     </div>
-    <div class="build-rail-list">
-      ${c.groups.map(g => `
-        <div class="build-rail-group">
-          <div class="build-rail-dim">${escapeHtml(g.dimension)} <span>${escapeHtml(DIM_NAME[g.dimension] || '')}</span></div>
-          <ul class="build-rail-clauses">
-            ${g.items.map(i => `
-              <li class="build-rail-clause is-${i.state}" title="${escapeHtml(`${i.id} — ${STATE_WORD[i.state]}${i.todos.length ? ` · ${i.todos.join(', ')}` : ''}`)}">
-                <span class="build-rail-glyph" aria-hidden="true">${STATE_GLYPH[i.state]}</span>
-                <span class="build-rail-text">
-                  <span class="build-rail-desc">${escapeHtml(i.description)}</span>
-                  <span class="build-rail-id"><span class="build-sev build-sev-${i.severity.toLowerCase()}">${i.severity}</span> ${escapeHtml(i.id)}${i.state === 'placeholder' ? ` · <em>on ${i.todos.length} placeholder${i.todos.length === 1 ? '' : 's'}</em>` : ''}</span>
-                </span>
-              </li>`).join('')}
-          </ul>
-        </div>`).join('')}
-    </div>
+    ${rail.failing.length ? `
+    <div class="build-rail-failing">
+      <div class="build-rail-dim">failing <span>the red edges on the stack</span></div>
+      <ul class="build-rail-clauses">${rail.failing.map(railClauseHtml).join('')}</ul>
+    </div>` : ''}
+    ${rail.onPlaceholder.length ? `<div class="build-rail-ph-note">${rail.onPlaceholder.length} clause${rail.onPlaceholder.length === 1 ? ' passes' : 's pass'} only on a placeholder — the amber edges on the stack; the todos on those slabs are the difference.</div>` : ''}
+    <details class="build-rail-all"${rail.expanded ? ' open' : ''}>
+      <summary>all ${k.total} clause${k.total === 1 ? '' : 's'} by layer</summary>
+      <div class="build-rail-list">
+        ${c.groups.map(g => `
+          <div class="build-rail-group">
+            <div class="build-rail-dim">${escapeHtml(g.dimension)} <span>${escapeHtml(DIM_NAME[g.dimension] || '')}</span></div>
+            <ul class="build-rail-clauses">${g.items.map(railClauseHtml).join('')}</ul>
+          </div>`).join('')}
+      </div>
+    </details>
     <div class="build-rail-foot">
       <span class="build-rail-todos" title="placeholders and scaffold defaults only the team can fill"><b>${rail.todoCount}</b> todo${rail.todoCount === 1 ? '' : 's'}</span>
       <span class="build-rail-warnings${rail.blockingWarnings ? ' is-blocking' : ''}" title="promql (blocking) · sli-excluded · burn-rules"><b>${rail.warningCount}</b> warning${rail.warningCount === 1 ? '' : 's'}</span>
       <span class="build-rail-ph"><b>${rail.placeholdersRemaining}</b> placeholder${rail.placeholdersRemaining === 1 ? '' : 's'} left</span>
     </div>`;
+  // The click lands before <details> toggles, so the new state is the opposite of the current one.
+  const all = container.querySelector('.build-rail-all');
+  all?.querySelector('summary')?.addEventListener('click', () => host.build?.update?.({ railOpen: !all.open }, { reinstantiate: false }));
 }

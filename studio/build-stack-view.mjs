@@ -1,0 +1,195 @@
+// studio/build-stack-view.mjs
+//
+// The layer stack of the pack being compiled — centre stage on the three
+// BUILD steps (docs/BUILD_JOURNEY.md "The scan"). Draws buildStackModel's
+// slabs in Discover's language: the same .section / .section-head /
+// .section-grid / .card markup, the same layer tokens (--L1 … --GOV through
+// .section[data-layer]), the card body from the shared card-html helper —
+// so what Build shows is what Discover will show for the same pack. Each
+// slab's left edge carries the rubric's verdict for its dimension (green
+// pass, amber pass on a placeholder, red fail, neutral when no clause
+// applies, grey while pending); a click on the slab head opens the layer's
+// clauses. A ghost card is a clause of the tier (the silhouette on DEFINE,
+// an unmet clause afterwards) or an SLI / SLO candidate; a Scaffold artefact
+// is dashed as Discover parks it; the detail artefacts Discover folds
+// (panels, queries) fold here too. On VERIFY the todos sit on their slab
+// with their inline param inputs, and a card that a todo names carries a pin.
+//
+// Renderer only (docs/UI_CONVENTIONS.md §2-3): render(container, model, host).
+// host.build.update keeps which slabs are open (in the draft, never
+// persisted); host.build.setParam commits a filled placeholder.
+
+import { escapeHtml } from './util.mjs';
+import { host as appHost } from './host.mjs';
+import { artefactCardHtml } from './card-html.mjs';
+import { evidenceBadge, todoHtml, wireParamInputs } from './build-atoms.mjs';
+
+export const STATE_GLYPH = { pass: '✓', placeholder: '◐', fail: '✗', pending: '○', neutral: '·' };
+export const STATE_WORD = { pass: 'passes', placeholder: 'passes on a placeholder', fail: 'fails', pending: 'not evaluated yet', neutral: 'no clause applies' };
+const SOURCE_TITLE = {
+  Required: 'required by the tier — the pack does not exist yet',
+  Missing: 'required by the tier, not present in the pack as toggled',
+  Candidate: 'an SLI of the selection at this tier, with the SLO it gets — ticked on Compile',
+};
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+
+/** A ghost card: a clause the tier requires (its severity as the id, the rubric's description) or an SLI / SLO candidate. */
+export function ghostCardHtml(g) {
+  const state = g.state && g.state !== 'pending' ? g.state : null;
+  const glyph = state ? `<span class="build-ghost-state is-${state}" title="${escapeHtml(STATE_WORD[state])}">${STATE_GLYPH[state]}</span>` : '';
+  const tags = (g.tags || []).slice(0, 4).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('');
+  const title = g.kind === 'clause' ? `${g.clauseId} — ${STATE_WORD[g.state] || 'required'}` : (SOURCE_TITLE[g.source] || '');
+  return `
+    <div class="card card-ghost is-${escapeHtml(g.kind)}${state ? ` is-${state}` : ''}" data-ghost="${escapeHtml(g.key)}" title="${escapeHtml(title)}">
+      <div class="card-head">
+        <span class="card-id">${escapeHtml(g.kind === 'clause' ? g.severity : g.kind.toUpperCase())}</span>
+        ${glyph}
+        <span class="card-source" data-source="${escapeHtml(g.source)}">${escapeHtml(g.source)}</span>
+      </div>
+      <div class="card-title">${escapeHtml(g.title)}</div>
+      ${g.desc ? `<div class="card-desc">${escapeHtml(g.desc)}</div>` : ''}
+      <div class="card-foot">
+        ${g.tool ? `<span class="tool">${escapeHtml(g.tool)}</span>` : ''}
+        ${tags}
+        ${g.evidence ? evidenceBadge(g.evidence) : ''}
+      </div>
+    </div>`;
+}
+
+/** A real artefact: Discover's card body, Scaffold dashed, a pin when a todo names it, folded when it is detail. */
+function artefactCardHtmlInStack(a) {
+  const cls = ['card', a.source === 'Scaffold' ? 'is-scaffold' : '', a.todoPath ? 'has-todo' : '', a.detail ? 'is-detail' : ''].filter(Boolean).join(' ');
+  return `
+    <div class="${cls}" data-artefact="${escapeHtml(a.id)}"${a.symbol ? ` data-symbol="${escapeHtml(a.symbol)}"` : ''}>
+      ${artefactCardHtml(a)}
+      ${a.todoPath ? `<button type="button" class="build-card-pin" data-todo-path="${escapeHtml(a.todoPath)}" title="${escapeHtml(`todo: ${a.todoPath} — a placeholder value the team must fill`)}">todo</button>` : ''}
+    </div>`;
+}
+
+function clausesHtml(slab) {
+  if (!slab.clauses.length) return '';
+  return `
+    <ul class="build-rail-clauses build-slab-clauses" ${slab.expanded ? '' : 'hidden'}>
+      ${slab.clauses.map(i => `
+        <li class="build-rail-clause is-${i.state}" title="${escapeHtml(`${i.id} — ${STATE_WORD[i.state]}${i.todos.length ? ` · ${i.todos.join(', ')}` : ''}`)}">
+          <span class="build-rail-glyph" aria-hidden="true">${STATE_GLYPH[i.state]}</span>
+          <span class="build-rail-text">
+            <span class="build-rail-desc">${escapeHtml(i.description)}</span>
+            <span class="build-rail-id"><span class="build-sev build-sev-${i.severity.toLowerCase()}">${i.severity}</span> ${escapeHtml(i.id)}${i.state === 'placeholder' ? ` · <em>on ${plural(i.todos.length, 'placeholder')}: ${escapeHtml(i.todos.join(', '))}</em>` : ''}${i.state === 'fail' && i.todos.length ? ` · <em>${escapeHtml(i.todos.join(', '))}</em>` : ''}</span>
+          </span>
+        </li>`).join('')}
+    </ul>`;
+}
+
+function gridHtml(artefacts, ghosts, { l4 = false } = {}) {
+  if (!artefacts.length && !ghosts.length) return '';
+  return `<div class="section-grid${l4 ? ' section-grid-l4' : ''}">${artefacts.map(artefactCardHtmlInStack).join('')}${ghosts.map(ghostCardHtml).join('')}</div>`;
+}
+
+function todosHtml(slab, todos, keyPrefix) {
+  if (!todos.length) return '';
+  return `
+    <div class="build-slab-todos">
+      <div class="build-slab-todos-head">${plural(todos.length, 'todo')} on this layer <span>placeholders and scaffold defaults only the team can fill — fill one inline and the pack regenerates</span></div>
+      <ul class="build-todo-list">${todos.map((t, i) => todoHtml(t, `${keyPrefix}${i}`)).join('')}</ul>
+    </div>`;
+}
+
+function emptyText(slab, mode) {
+  if (mode === 'define') return slab.clauses.length ? '' : 'no clause of the tier applies to this layer — nothing to build here';
+  if (!slab.counts.clauses) return slab.id === 'GOV' ? 'no governance artefact (imports) — no clause applies' : 'nothing declared — no clause applies';
+  if (slab.state === 'pending') return 'not yet acquired — waiting for the first compilation';
+  return `nothing declared — ${plural(slab.counts.clauses, 'clause')} pass${slab.counts.clauses === 1 ? 'es' : ''} with nothing to check`;
+}
+
+function countLabel(slab, mode) {
+  if (mode === 'define') {
+    const cl = plural(slab.counts.clauses, 'clause');
+    const cand = slab.ghosts.filter(g => g.kind !== 'clause').length;
+    return cand ? `${cl} · ${plural(cand, 'candidate')}` : cl;
+  }
+  const parts = [plural(slab.counts.artefacts, 'artefact')];
+  if (slab.counts.scaffold) parts.push(`${slab.counts.scaffold} scaffold`);
+  if (slab.counts.ghosts) parts.push(`${slab.counts.ghosts} missing`);
+  if (slab.counts.todos) parts.push(plural(slab.counts.todos, 'todo'));
+  return parts.join(' · ');
+}
+
+function slabHtml(slab, mode) {
+  const visible = (items) => items.filter(a => !a.detail || slab.detailOpen);
+  let body;
+  if (slab.subgroups) {
+    body = slab.subgroups.map(sg => `
+      <div class="build-slab-sub subgroup${sg.offSections.length ? ' is-off' : ''}" data-subgroup="${escapeHtml(sg.key)}">
+        <h4 class="subgroup-head">L4.${escapeHtml(sg.key)} · ${escapeHtml(sg.label)}${sg.offSections.length ? ` <span class="build-slab-off">${sg.offSections.map(s => `${escapeHtml(s)} off`).join(' · ')}</span>` : ''}</h4>
+        ${gridHtml(visible(sg.artefacts), sg.ghosts, { l4: true }) || `<div class="empty">${mode === 'define' ? (sg.ghosts.length ? '' : `no ${escapeHtml(sg.label.toLowerCase())} clause at this tier`) : `no ${escapeHtml(sg.label.toLowerCase())} declared`}</div>`}
+        ${mode === 'verify' ? todosHtml(slab, sg.todos, `${slab.id}${sg.key}`) : ''}
+      </div>`).join('');
+  } else {
+    const grid = gridHtml(visible(slab.artefacts), slab.ghosts);
+    const empty = emptyText(slab, mode);
+    body = grid || (empty ? `<div class="empty">${escapeHtml(empty)}</div>` : '');
+    if (mode === 'verify') body += todosHtml(slab, slab.todos, slab.id);
+  }
+  const detail = slab.counts.detail
+    ? `<button type="button" class="section-expand-toggle build-slab-detail${slab.detailOpen ? ' is-on' : ''}" data-detail="${escapeHtml(slab.id)}" title="the detail artefacts Discover folds behind Expand — panels, queries, live evidence"><span class="section-expand-glyph" aria-hidden="true">${slab.detailOpen ? '⊟' : '⊞'}</span> ${slab.detailOpen ? 'Hide' : 'Expand'} detail <span class="section-expand-count">${slab.counts.detail}</span></button>`
+    : '';
+  return `
+    <section class="section build-slab is-${slab.state}${slab.dimmed ? ' is-dimmed' : ''}${slab.present || slab.ghosts.length ? '' : ' is-empty'}${slab.expanded ? ' is-expanded' : ''}" data-layer="${escapeHtml(slab.id)}" style="--slab:${escapeHtml(slab.accent)}">
+      <div class="section-head build-slab-head">
+        <button type="button" class="build-slab-edge" data-slab="${escapeHtml(slab.id)}" aria-expanded="${slab.expanded ? 'true' : 'false'}" title="${escapeHtml(slab.why.length ? slab.why.join('\n') : `${slab.num} ${slab.name}: ${slab.stateText}`)}">
+          <span class="section-num">${escapeHtml(slab.num)}</span>
+          <span class="section-name">${escapeHtml(slab.name)}</span>
+          <span class="build-slab-verdict is-${slab.state}"><b aria-hidden="true">${STATE_GLYPH[slab.state]}</b> ${escapeHtml(slab.stateText)}</span>
+          ${slab.offSections.length && !slab.subgroups ? `<span class="build-slab-off">${slab.offSections.map(s => `${escapeHtml(s)} off`).join(' · ')}</span>` : ''}
+          ${slab.clauses.length ? `<span class="build-slab-toggle">${plural(slab.clauses.length, 'clause')} <span aria-hidden="true">${slab.expanded ? '▾' : '▸'}</span></span>` : ''}
+        </button>
+        ${detail}
+        <span class="section-count">${escapeHtml(countLabel(slab, mode))}</span>
+      </div>
+      ${clausesHtml(slab)}
+      ${body}
+    </section>`;
+}
+
+/**
+ * render(container, model, host) — the stack. `model` is buildStackModel's output;
+ * host.build.update / setParam are the only actions it calls.
+ */
+export function renderBuildStack(container, model, host = appHost) {
+  const act = host.build;
+  container.innerHTML = `<div class="build-stack" data-mode="${escapeHtml(model.mode)}">${model.slabs.map(s => slabHtml(s, model.mode)).join('')}</div>`;
+
+  // The open slabs live in the draft (never persisted); the DOM flips at once, the
+  // next re-render reads the draft back through the model.
+  const openMap = () => Object.fromEntries(model.slabs.flatMap(s => [...(s.expanded ? [[s.id, true]] : []), ...(s.detailOpen ? [[`${s.id}/detail`, true]] : [])]));
+  container.querySelectorAll('.build-slab-edge').forEach(btn => btn.addEventListener('click', () => {
+    const sec = btn.closest('.build-slab');
+    const open = !sec.classList.contains('is-expanded');
+    sec.classList.toggle('is-expanded', open);
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    const list = sec.querySelector('.build-slab-clauses');
+    if (list) list.hidden = !open;
+    const caret = btn.querySelector('.build-slab-toggle [aria-hidden]');
+    if (caret) caret.textContent = open ? '▾' : '▸';
+    const slab = model.slabs.find(s => s.id === btn.dataset.slab);
+    if (slab) slab.expanded = open;
+    act?.update?.({ stackOpen: openMap() }, { reinstantiate: false });
+  }));
+  container.querySelectorAll('.build-slab-detail').forEach(btn => btn.addEventListener('click', () => {
+    const slab = model.slabs.find(s => s.id === btn.dataset.detail);
+    if (!slab) return;
+    slab.detailOpen = !slab.detailOpen;
+    act?.update?.({ stackOpen: openMap() }, { rerender: true, reinstantiate: false });
+  }));
+  container.querySelectorAll('.build-card-pin').forEach(pin => pin.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const todo = container.querySelector(`[data-todo="${CSS.escape(pin.dataset.todoPath)}"]`);
+    if (!todo) return;
+    todo.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    todo.classList.add('is-flash');
+    setTimeout(() => todo.classList.remove('is-flash'), 1200);
+    todo.querySelector('.build-param-input')?.focus({ preventScroll: true });
+  }));
+  if (act) wireParamInputs(container, act);
+}

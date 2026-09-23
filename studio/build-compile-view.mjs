@@ -15,7 +15,8 @@
 
 import { escapeHtml, downloadText } from './util.mjs';
 import { host as appHost } from './host.mjs';
-import { stepHeadHtml, evidenceBadge, instantiateErrorHtml } from './build-define-view.mjs';
+import { stepHeadHtml, instantiateErrorHtml } from './build-define-view.mjs';
+import { evidenceBadge } from './build-atoms.mjs';
 
 function sliRowHtml(s) {
   const disabled = !s.reachable;

@@ -16,29 +16,10 @@
 
 import { escapeHtml, downloadText } from './util.mjs';
 import { host as appHost } from './host.mjs';
-import { stepHeadHtml, paramRowHtml, wireParamInputs, instantiateErrorHtml } from './build-define-view.mjs';
+import { stepHeadHtml, instantiateErrorHtml } from './build-define-view.mjs';
+import { todoHtml, wireParamInputs } from './build-atoms.mjs';
 
 const GLYPH = { pass: '✓', placeholder: '◐', fail: '✗' };
-
-// "channels.0.msteams: Chat channel for SEV1/SEV2: placeholder '#x' (param oncall_channel) — The Teams…"
-// → the part before the em dash, one line per placeholder field.
-function todoLines(what) {
-  return String(what || '').split(' · ').map(part => part.split(' — ')[0].trim()).filter(Boolean);
-}
-
-function todoHtml(t, i) {
-  return `
-    <li class="build-todo${t.manual ? ' is-manual' : ''}" data-todo="${escapeHtml(t.path)}">
-      <div class="build-todo-head">
-        <code class="build-todo-path">${escapeHtml(t.path)}</code>
-        ${t.clauses.map(c => `<span class="build-todo-clause" title="this placeholder artefact holds up ${escapeHtml(c)}">${GLYPH.placeholder} ${escapeHtml(c)}</span>`).join('')}
-      </div>
-      <ul class="build-todo-what">${todoLines(t.what).map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul>
-      ${t.manual
-        ? '<div class="build-todo-manual">no parameter fills this one — a file to write or a number to measure, then edit the pack</div>'
-        : `<div class="build-todo-params">${t.params.map(p => paramRowHtml(p, { compact: true, idSuffix: `t${i}` })).join('')}</div>`}
-    </li>`;
-}
 
 /** render(container, model, host) — the VERIFY step. */
 export function renderBuildVerify(container, model, host = appHost) {
@@ -93,7 +74,7 @@ export function renderBuildVerify(container, model, host = appHost) {
         ${model.todoGroups.length ? model.todoGroups.map(g => `
           <div class="build-todo-group">
             <div class="build-todo-group-head">${escapeHtml(g.label)} <span>${g.todos.length}</span></div>
-            <ul class="build-todo-list">${g.todos.map(t => todoHtml(t, todoIndex++)).join('')}</ul>
+            <ul class="build-todo-list">${g.todos.map(t => todoHtml(t, `t${todoIndex++}`)).join('')}</ul>
           </div>`).join('') : '<div class="build-note build-note-ok">No todos: every placeholder is filled and the scaffold has nothing left to hand over.</div>'}
       </div>
 

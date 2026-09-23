@@ -8550,3 +8550,138 @@ body.chrome-observa .disco {
 .build-preview-name { font: 11.5px/1.4 var(--mono); color: var(--ink-2); }
 .build-preview-name code { color: var(--ink); }
 .build-preview-actions { display: flex; gap: 6px; }
+
+/* ---- The layer stack (steps 1-3; docs/BUILD_JOURNEY.md "The scan") ----
+   Discover's .section / .section-head / .section-grid / .card language (the
+   layer tokens arrive through .section[data-layer]), plus one thing Discover
+   does not have: a verdict edge per slab — the rubric's state for that
+   dimension — and ghost cards for what the tier requires. */
+.build-stack-wrap { margin-top: 22px; }
+.build-stack-wrap > .build-section-key { margin-bottom: 10px; }
+.build-stack { display: flex; flex-direction: column; gap: 14px; }
+.build-slab {
+  margin-bottom: 0;
+  --edge: var(--ink-5);
+  border-left: 6px solid var(--edge);
+  border-radius: 6px 0 0 6px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent), 0 10px 24px -18px color-mix(in srgb, var(--accent) 60%, transparent);
+  transition: opacity 180ms ease, box-shadow 180ms ease;
+}
+.build-slab.is-pass { --edge: var(--pass-border); }
+.build-slab.is-placeholder { --edge: var(--warn); }
+.build-slab.is-fail { --edge: var(--fail-border); box-shadow: 0 0 0 1px color-mix(in srgb, var(--fail-border) 35%, transparent), 0 10px 24px -18px color-mix(in srgb, var(--fail-border) 60%, transparent); }
+.build-slab.is-pending { --edge: var(--ink-5); }
+.build-slab.is-neutral { --edge: var(--line); }
+.build-slab.is-dimmed { opacity: 0.5; }
+.build-slab.is-dimmed:hover { opacity: 0.92; }
+.build-slab.is-empty .section-head { border-style: dashed; }
+.build-shell.is-pending .build-stack { opacity: 0.6; transition: opacity 200ms ease; }
+
+.build-slab-head { padding: 0; gap: 0; align-items: stretch; }
+.build-slab-head .section-count { align-self: center; padding: 0 14px; }
+.build-slab-edge {
+  appearance: none; border: 0; background: none; cursor: pointer; flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: baseline; gap: 12px; padding: 10px 14px; text-align: left; font: inherit; color: inherit;
+}
+.build-slab-edge:hover { background: var(--accent-bg); }
+.build-slab-edge:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.build-slab-verdict { font: 600 11px/1.3 var(--mono); letter-spacing: 0.02em; white-space: nowrap; }
+.build-slab-verdict b { margin-right: 3px; }
+.build-slab-verdict.is-pass { color: var(--pass-border); }
+.build-slab-verdict.is-placeholder { color: var(--warn); }
+.build-slab-verdict.is-fail { color: var(--fail-border); }
+.build-slab-verdict.is-pending { color: var(--ink-5); }
+.build-slab-verdict.is-neutral { color: var(--ink-4); }
+.build-slab-off {
+  font: 600 9.5px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--fail-border); background: var(--fail-bg); border: 1px solid color-mix(in srgb, var(--fail-border) 40%, transparent);
+  padding: 1px 6px; border-radius: 8px; white-space: nowrap;
+}
+.build-slab-toggle { margin-left: auto; font: 10.5px/1.3 var(--mono); color: var(--ink-4); white-space: nowrap; }
+.build-slab-edge:hover .build-slab-toggle { color: var(--ink); }
+.build-slab-detail { align-self: center; margin-left: 0; }
+.build-slab-clauses { margin: 0; padding: 8px 12px; border: 1px solid var(--accent); border-top: 0; background: var(--card); }
+.build-slab .section-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.build-slab .card { cursor: default; }
+.build-slab .card:hover { background: var(--card); }
+.build-slab .card.card-ghost:hover { background: transparent; }
+.build-slab .empty { border: 1px solid var(--accent); border-top: 0; text-align: left; padding: 14px; font-style: italic; font-family: var(--serif); font-size: 12px; }
+/* L4: the three subgroups sit inside the slab box, one after another. */
+.build-slab-sub { margin: 0; padding: 10px 12px 12px; border: 1px solid var(--accent); border-top: 0; background: var(--accent-tint); }
+.build-slab-sub .subgroup-head { margin: 0 0 6px; display: flex; align-items: center; gap: 8px; }
+.build-slab-sub .section-grid { background: var(--line-2); }
+.build-slab-sub .empty { border: 1px solid var(--accent); }
+.build-slab-sub.is-off { opacity: 0.55; }
+
+/* Ghost cards: what the tier requires (a clause) or what the selection brings (an SLI / SLO candidate). */
+.card.card-ghost {
+  background: transparent; cursor: default;
+  outline: 1.5px dashed color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -4px;
+}
+.card.card-ghost .card-title { color: var(--ink-3); }
+.card.card-ghost .card-desc { color: var(--ink-4); }
+.card.card-ghost.is-fail { outline-color: var(--fail-border); background: var(--fail-bg); }
+.card.card-ghost.is-placeholder { outline-color: var(--warn); }
+.card.card-ghost.is-pass { outline-style: solid; outline-color: color-mix(in srgb, var(--pass-border) 45%, transparent); }
+.build-ghost-state { font: 700 11px/1.3 var(--mono); }
+.build-ghost-state.is-pass { color: var(--pass-border); }
+.build-ghost-state.is-placeholder { color: var(--warn); }
+.build-ghost-state.is-fail { color: var(--fail-border); }
+.card-source[data-source="Required"] { background: transparent; color: var(--ink-4); border: 1px dashed var(--ink-5); }
+.card-source[data-source="Candidate"] { background: transparent; color: var(--BLD); border: 1px dashed var(--BLD); }
+.card.card-ghost .build-evidence { margin-left: auto; }
+
+/* Scaffold — parked, not declared — is dashed wherever a card is drawn (Discover, the stack). */
+.card.is-scaffold { outline: 1.5px dashed color-mix(in srgb, #64748B 70%, transparent); outline-offset: -3px; }
+.card.is-scaffold .card-title { color: var(--ink-3); }
+.card .build-card-pin {
+  position: absolute; right: 10px; bottom: 8px; appearance: none; border: 0; cursor: pointer;
+  font: 600 9px/1.4 var(--mono); letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--warn); background: var(--warn-bg); padding: 1px 6px; border-radius: 8px;
+}
+.card .build-card-pin:hover { color: var(--paper); background: var(--warn); }
+
+/* Todos pinned on a slab (VERIFY). */
+.build-slab-todos { padding: 10px 12px 12px; border: 1px solid var(--accent); border-top: 0; background: var(--accent-tint); }
+.build-slab-sub .build-slab-todos { margin-top: 8px; border: 0; padding: 0; background: transparent; }
+.build-slab-todos-head { font: 600 10px/1.3 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-4); margin-bottom: 6px; }
+.build-slab-todos-head span { display: block; margin-top: 2px; font: italic 11px/1.4 var(--serif); letter-spacing: 0; text-transform: none; }
+.build-todo-card { font: 600 10px/1.4 var(--mono); color: var(--accent, var(--ink-3)); background: var(--card); border: 1px solid var(--line-2); padding: 1px 6px; border-radius: 8px; }
+.build-todo.is-flash { box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 45%, transparent); transition: box-shadow 200ms ease; }
+
+/* The compact rail: the failing clauses always listed, the full list folded. */
+.build-rail-ph-note { font: italic 11px/1.45 var(--serif); color: var(--warn); }
+.build-rail-all summary {
+  cursor: pointer; list-style: none;
+  font: 600 10px/1.3 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-4);
+}
+.build-rail-all summary::-webkit-details-marker { display: none; }
+.build-rail-all summary::before { content: '\25B8'; display: inline-block; width: 12px; }
+.build-rail-all[open] summary::before { content: '\25BE'; }
+.build-rail-all summary:hover { color: var(--ink); }
+.build-rail-all[open] > .build-rail-list { margin-top: 8px; }
+
+/* Per-layer maturity bars (VERIFY's conformance card): clause counts per dimension, pass on a placeholder its own segment. */
+.build-maturity { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.build-maturity-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) 44px; gap: 8px; align-items: center; font: 10.5px/1.3 var(--mono); color: var(--ink-3); --accent: var(--ink-3); }
+.build-maturity-row[data-layer="L1"]  { --accent: var(--L1); }
+.build-maturity-row[data-layer="L2"]  { --accent: var(--L2); }
+.build-maturity-row[data-layer="L2X"] { --accent: var(--L2X); }
+.build-maturity-row[data-layer="L3"]  { --accent: var(--L3); }
+.build-maturity-row[data-layer="L4"]  { --accent: var(--L4); }
+.build-maturity-row[data-layer="L5"]  { --accent: var(--L5); }
+.build-maturity-row[data-layer="GOV"] { --accent: var(--GOV); }
+.build-maturity-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.build-maturity-name b { color: var(--accent); margin-right: 4px; }
+.build-maturity-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--line-2); }
+.build-maturity-seg { display: block; height: 100%; }
+.build-maturity-seg.is-pass { background: var(--pass-border); }
+.build-maturity-seg.is-placeholder { background: var(--warn); }
+.build-maturity-seg.is-fail { background: var(--fail-border); }
+.build-maturity-seg.is-pending { background: var(--ink-5); }
+.build-maturity-pct { text-align: right; color: var(--ink); }
+.build-maturity-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; font: 10px/1.4 var(--mono); color: var(--ink-4); }
+.build-maturity-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+.build-maturity-legend .is-pass i { background: var(--pass-border); }
+.build-maturity-legend .is-placeholder i { background: var(--warn); }
+.build-maturity-legend .is-fail i { background: var(--fail-border); }
