@@ -46,7 +46,7 @@ import { renderBuildCompile } from '../studio/build-compile-view.mjs';
 import { renderBuildVerify } from '../studio/build-verify-view.mjs';
 import { renderBuildStack, buildStackHtml, wireBuildStack } from '../studio/build-stack-view.mjs';
 import { renderBuildDefinition, buildDefinitionHtml, wireBuildDefinition, summaryHtml } from '../studio/build-definition-view.mjs';
-import { renderBuildSheet, buildSheetHtml, wireBuildSheet, paramReadHtml } from '../studio/build-sheet-view.mjs';
+import { renderBuildSheet, buildSheetHtml, wireBuildSheet, wireRolodex, paramReadHtml, SMOOTH_SCROLL_GRACE_MS } from '../studio/build-sheet-view.mjs';
 import { artefactCardHtml } from '../studio/card-html.mjs';
 import { revealTodo, clauseRowHtml, switchHtml, evidenceDot } from '../studio/build-atoms.mjs';
 import { installDialogFocusTrap, TRAPPED_DIALOGS } from '../studio/util.mjs';
@@ -1755,4 +1755,58 @@ test('the Tab trap skips the non-modal layer sheet: Tab from the definition colu
   dialogs.pop();
   doc.activeElement = nameField;
   assert.equal(doc.tab(), false);
+});
+
+// A rolodex track with three cards: `smooth` says whether a smooth scrollTo moves it (host
+// Chrome) or is cancelled (the desktop app's embedded pane, measured: every smooth scroll on
+// the snap track ended at 0 while an instant one worked).
+function fakeTrack({ smooth }) {
+  const card = (i) => ({ offsetWidth: 340, offsetLeft: i * 352, classList: { toggle() {} }, setAttribute() {}, removeAttribute() {} });
+  const cards = [0, 1, 2].map(card);
+  const calls = [];
+  const track = {
+    scrollLeft: 0, clientWidth: 600, scrollWidth: 3 * 352, style: {}, handlers: {},
+    addEventListener(t, fn) { this.handlers[t] = fn; },
+    querySelectorAll: () => cards,
+    scrollTo(o) { calls.push(o); if (smooth) this.scrollLeft = o.left; },
+  };
+  const nav = fakeEl({ nav: '1' });
+  const counter = { textContent: '' };
+  const container = { querySelector: (sel) => (sel === '.build-rolodex-track' ? track : sel === '.build-rolodex-counter' ? counter : null), querySelectorAll: (sel) => (sel === '.build-rolodex-nav' ? [nav] : []) };
+  return { track, nav, counter, calls, container };
+}
+
+test('the rolodex moves one card by the buttons and the arrow keys — instantly, as a fallback, where the smooth scroll is cancelled', async () => {
+  const wait = () => new Promise(r => setTimeout(r, SMOOTH_SCROLL_GRACE_MS + 60));
+  // Host Chrome: the smooth scroll moves the track; nothing else is touched.
+  const ok = fakeTrack({ smooth: true });
+  wireRolodex(ok.container);
+  ok.nav.fire('click');
+  assert.deepEqual(ok.calls, [{ left: 352, behavior: 'smooth' }], 'one card = the card width plus the 12 px gap');
+  await wait();
+  assert.equal(ok.track.scrollLeft, 352);
+  assert.deepEqual(Object.keys(ok.track.style), [], 'no instant override when the smooth scroll moved');
+  ok.track.handlers.keydown({ key: 'ArrowRight', target: ok.track, preventDefault() {} });
+  assert.equal(ok.track.scrollLeft, 704);
+  ok.track.handlers.keydown({ key: 'Home', target: ok.track, preventDefault() {} });
+  assert.equal(ok.track.scrollLeft, 0);
+  ok.track.handlers.keydown({ key: 'End', target: ok.track, preventDefault() {} });
+  assert.equal(ok.track.scrollLeft, ok.track.scrollWidth);
+  ok.track.handlers.keydown({ key: 'ArrowRight', target: {}, preventDefault() {} });
+  assert.equal(ok.calls.length, 4, 'a key pressed on a switch inside the track is the switch\'s');
+  // The embedded pane: the smooth scroll is cancelled; after the grace period the track is set instantly with scroll-behavior auto, then restored.
+  const stuck = fakeTrack({ smooth: false });
+  wireRolodex(stuck.container);
+  stuck.nav.fire('click');
+  assert.equal(stuck.track.scrollLeft, 0, 'the smooth scroll did nothing');
+  await wait();
+  assert.equal(stuck.track.scrollLeft, 352, 'the fallback moved it one card');
+  assert.equal(stuck.track.style.scrollBehavior, '', 'scroll-behavior was forced to auto for the write and restored');
+  stuck.track.handlers.keydown({ key: 'ArrowLeft', target: stuck.track, preventDefault() {} });
+  await wait();
+  assert.equal(stuck.track.scrollLeft, 0);
+  stuck.track.handlers.keydown({ key: 'ArrowLeft', target: stuck.track, preventDefault() {} });
+  await wait();
+  assert.equal(stuck.track.scrollLeft, 0, 'never below zero, and no write when the target is where the track already is');
+  assert.equal(stuck.calls.length, 2, 'a scroll to the current offset is not issued');
 });

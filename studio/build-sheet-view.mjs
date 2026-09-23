@@ -38,6 +38,8 @@ import { evidenceBadge, paramRowHtml, wireParamInputs, clauseRowHtml, todoHtml, 
 
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 const MODE_WORD = { edit: 'compose', preview: 'preview', verify: 'verify' };
+/** How long the rolodex waits for a smooth scroll to move before scrolling instantly instead. */
+export const SMOOTH_SCROLL_GRACE_MS = 250;
 const READ_ONLY_REASON = { preview: 'a preview — compose it on Compile', verify: 'read-only on Verify — change it on Compile' };
 
 /** A param as a read-only row (the preview and VERIFY): the value the pack carries, the placeholder flag, the engine's rejection if any. */
@@ -251,14 +253,31 @@ export function wireRolodex(container) {
     list.forEach(c => { c.classList.toggle('is-current', c === best); if (c === best) c.setAttribute('aria-current', 'true'); else c.removeAttribute('aria-current'); });
     if (counter && best) counter.textContent = `${list.indexOf(best) + 1} / ${list.length}`;
   };
-  const move = (dir) => track.scrollBy?.({ left: dir * step(), behavior: reduced ? 'auto' : 'smooth' });
+  // Some embedded Chromium builds cancel every smooth scroll on a snap track (measured in the
+  // desktop app's browser pane: the arrow keys, the buttons and scrollBy all ended at 0 while
+  // an instant scroll worked; host Chrome moves fine). If nothing has moved shortly after a
+  // smooth scroll, set the offset instantly and let the snap settle.
+  const scrollTo = (left) => {
+    const before = track.scrollLeft;
+    if (left === before) return;
+    track.scrollTo?.({ left, behavior: reduced ? 'auto' : 'smooth' });
+    if (reduced) return;
+    setTimeout(() => {
+      if (track.scrollLeft !== before) return;
+      const prev = track.style?.scrollBehavior;
+      if (track.style) track.style.scrollBehavior = 'auto';
+      track.scrollLeft = left;
+      if (track.style) track.style.scrollBehavior = prev || '';
+    }, SMOOTH_SCROLL_GRACE_MS);
+  };
+  const move = (dir) => scrollTo(Math.max(0, (track.scrollLeft || 0) + dir * step()));
   container.querySelectorAll('.build-rolodex-nav').forEach(b => b.addEventListener('click', () => move(Number(b.dataset.nav) || 1)));
   track.addEventListener('keydown', (e) => {
     if (e.target !== track) return;   // a switch inside the track keeps its own keys
     if (e.key === 'ArrowRight') { e.preventDefault(); move(1); }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); move(-1); }
-    else if (e.key === 'Home') { e.preventDefault(); track.scrollTo?.({ left: 0, behavior: reduced ? 'auto' : 'smooth' }); }
-    else if (e.key === 'End') { e.preventDefault(); track.scrollTo?.({ left: track.scrollWidth, behavior: reduced ? 'auto' : 'smooth' }); }
+    else if (e.key === 'Home') { e.preventDefault(); scrollTo(0); }
+    else if (e.key === 'End') { e.preventDefault(); scrollTo(track.scrollWidth); }
   });
   let raf = 0;
   track.addEventListener('scroll', () => { if (raf) return; raf = (typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (fn) => setTimeout(fn, 16))(() => { raf = 0; mark(); }); }, { passive: true });
