@@ -32,7 +32,7 @@ import {
   buildDefineModel, buildCompileModel, summarizeWarnings, buildClauseChecklist, buildRailModel,
   placeholdersRemaining, groupTodos, buildVerifyModel, reachableSliKeys, retargetSlis, splitBuildErrors, isStale, resolveBuiltins,
   buildStackModel, sliCandidates, artefactSymbol, todoLayer, clauseGhostLabel, clauseSubgroup, slabState, isDetailArtefact, CLAUSE_GHOSTS,
-  todoFocusSuffix, focusFallbackSelectors,
+  todoFocusSuffix, focusFallbackSelectors, enterStep, stepAfterInstantiate,
 } from '../studio/build-model.mjs';
 import {
   loadLibrary as loadLibraryApi, loadRequirements, loadTargets, instantiate, compilePreview, registerBuiltPack,
@@ -200,6 +200,32 @@ test('a step is reachable when the previous step\'s inputs are valid', () => {
   assert.equal(clampStep(draft(), 'validate'), 'verify');
   assert.equal(clampStep(draft(), 'generate'), 'compile');
   assert.equal(clampStep(empty, 'generate'), 'define');
+});
+
+test('a reload on VERIFY resumes on VERIFY: the demoted step is kept as wantedStep and honoured once the pack is back', () => {
+  // The reload: the persisted step is 'verify', the result is not persisted, so the clamp lands on 'compile'.
+  const restored = { ...draft({ result: null }), step: 'verify' };
+  const entered = { ...restored, ...enterStep(restored, restored.step) };
+  assert.equal(entered.step, 'compile');
+  assert.equal(entered.wantedStep, 'verify', 'the step asked for is remembered');
+  // The re-instantiation answers with a pack: the wanted step is honoured, once.
+  const answered = { ...entered, result: draft().result };
+  const settled = { ...answered, ...stepAfterInstantiate(answered) };
+  assert.equal(settled.step, 'verify');
+  assert.equal(settled.wantedStep, null, 'spent');
+  // A later instantiation (an edit on VERIFY) keeps the step as before: no want pending, the step clamped.
+  assert.deepEqual(stepAfterInstantiate(settled), { step: 'verify', wantedStep: null });
+  // The answer is a usage error and no pack exists: the want is spent, the step stays where it is reachable.
+  assert.deepEqual(stepAfterInstantiate({ ...entered, error: ['instantiatePack: at least one SLI must stay selected'] }), { step: 'compile', wantedStep: null });
+  // A legacy id is wanted under its current name; a step that is reachable at once wants nothing; nonsense wants nothing.
+  assert.deepEqual(enterStep(restored, 'validate'), { step: 'compile', wantedStep: 'verify' });
+  assert.deepEqual(enterStep(draft(), 'verify'), { step: 'verify', wantedStep: null });
+  assert.deepEqual(enterStep(defaultBuildState(), 'nonsense'), { step: 'define', wantedStep: null });
+  assert.deepEqual(enterStep({ ...draft({ result: null }), step: 'compile' }, undefined), { step: 'compile', wantedStep: null }, 'no step asked: the draft\'s own, clamped, nothing wanted');
+  assert.deepEqual(enterStep({ ...draft({ result: null }), step: 'verify' }, undefined), { step: 'compile', wantedStep: 'verify' }, 'no step asked, the draft\'s own unreachable: wanted');
+  // wantedStep is UI state on the draft, never persisted (the persisted step is the wanted one).
+  assert.equal(defaultBuildState().wantedStep, null);
+  assert.ok(!BUILD_PERSIST_FIELDS.includes('wantedStep'));
 });
 
 // ---------------------------------------------------------------------------

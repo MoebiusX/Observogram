@@ -151,6 +151,24 @@ export function clampStep(build, wanted) {
   return 'define';
 }
 
+/**
+ * Entering the journey on a step (a reload, a header card): `step` clamped to what is
+ * reachable now, and `wantedStep` the step that was asked for when the clamp demoted it. A
+ * reload lands with the inputs and no pack, so VERIFY is unreachable until the first
+ * instantiation answers — stepAfterInstantiate honours the wanted step then, once. UI
+ * state on the draft, never persisted (the persisted step is the wanted one).
+ */
+export function enterStep(build, wanted) {
+  const asked = LEGACY_STEP[wanted] || wanted || build?.step;
+  const step = clampStep(build, asked);
+  return { step, wantedStep: BUILD_STEPS.includes(asked) && asked !== step ? asked : null };
+}
+
+/** After an instantiation answered: the wanted step if one is pending and now reachable, else the current step clamped; the want is spent either way. */
+export function stepAfterInstantiate(build) {
+  return { step: clampStep(build, build?.wantedStep || build?.step), wantedStep: null };
+}
+
 // ---------- focus across a re-render ----------
 
 /**

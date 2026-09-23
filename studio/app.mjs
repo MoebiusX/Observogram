@@ -42,7 +42,7 @@ import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-
 import { initHost } from './host.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
-  BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, clampStep as clampBuildStep, focusFallbackSelectors,
+  BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, enterStep as enterBuildStep, stepAfterInstantiate as buildStepAfterInstantiate, focusFallbackSelectors,
   buildDefineModel, buildCompileModel, buildVerifyModel, buildRailModel, placeholdersRemaining, retargetSlis,
 } from './build-model.mjs';
 import {
@@ -1892,7 +1892,9 @@ function restoreBuildDraft(saved) {
 export function enterBuildMode(step) {
   state.mode = 'build';
   state.activeCardKey = null;
-  state.build.step = clampBuildStep(state.build, step || state.build.step);
+  // The step clamped to what is reachable now; a demoted step (VERIFY before the
+  // re-instantiation below has answered) is kept as wantedStep and honoured then.
+  Object.assign(state.build, enterBuildStep(state.build, step || state.build.step));
   applyModeChrome();
   paintObservaActiveTab();
   renderTabs();
@@ -1927,6 +1929,7 @@ function goToBuildStep(step, { todo = null } = {}) {
   }
   if (state.mode !== 'build') { enterBuildMode(step); return; }
   state.build.step = step;
+  state.build.wantedStep = null;   // an explicit choice supersedes a step still waited for
   state.build.preview = null;
   paintObservaActiveTab();
   renderMainView();
@@ -1987,8 +1990,9 @@ async function runBuildInstantiate() {
     b.error = res?.errors || [res?.error || 'instantiation failed'];
   }
   // A step that is no longer reachable falls back — only when there is no
-  // pack to read: a kept pack keeps its step.
-  b.step = clampBuildStep(b, b.step);
+  // pack to read: a kept pack keeps its step. A step waited for (a reload on
+  // VERIFY lands on COMPILE until the pack is back) is honoured now, once.
+  Object.assign(b, buildStepAfterInstantiate(b));
   rerenderBuild();
   persistence.schedule();
 }

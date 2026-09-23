@@ -35,6 +35,7 @@ export function defaultBuildState() {
     registeredId: null,       // the id VERIFY's "Continue …" exit registered
     stackOpen: {},            // { [layerId]: true, [`${layerId}/detail`]: true } — the stack's open slabs (UI state, never persisted)
     railOpen: false,          // the clause rail's full list open (UI state, never persisted)
+    wantedStep: null,         // the step asked for while unreachable (a reload on Verify before the pack is back); honoured once the instantiation answers (UI state, never persisted)
   };
 }
 // The build fields that survive a reload (never `result`, `preview`, `error`, `pending`).
