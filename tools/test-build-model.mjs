@@ -903,6 +903,24 @@ test('L4 carries its subgroups; the maturity is the clause counts with pass-on-p
   assert.equal(v.stack.counts.todos, 21);
 });
 
+test('the maturity number says the split: the pass share, then the share that passes only on a placeholder — never one green number', () => {
+  const rowOf = (html, id) => html.match(new RegExp(`<div class="build-maturity-row" data-layer="${id}"[\\s\\S]*?<span class="build-maturity-pct">([\\s\\S]*?)</span>\\s*</div>`));
+  const render = (b) => { const c = stubContainer(); renderBuildVerify(c, buildVerifyModel({ build: b, library: LIBRARY, clauses: T2, targets: TARGETS }), { build: {} }); return c.innerHTML; };
+  const html = render(draft());
+  // L5: 0 of 2 pass without a placeholder — the text says 0%, not 100%.
+  assert.equal(rowOf(html, 'L5')[1], '0% <span class="build-maturity-ph" title="pass on a placeholder">+100% ◐</span>');
+  assert.equal(rowOf(html, 'L2')[1], '60% <span class="build-maturity-ph" title="pass on a placeholder">+40% ◐</span>');
+  assert.equal(rowOf(html, 'L1')[1], '100%', 'all pass: one number, no placeholder share');
+  assert.ok(!/build-maturity-pct">100% <span/.test(html), 'a placeholder share is never printed beside a 100% pass');
+  // The bar carries the counts for a screen reader (the segments are empty spans).
+  assert.ok(html.includes('<span class="build-maturity-bar" role="img" aria-label="L5 Validation: 0 pass, 2 on a placeholder, 0 fail of 2 clauses">'));
+  assert.ok(html.includes('aria-label="L2 Telemetry: 3 pass, 2 on a placeholder, 0 fail of 5 clauses"'));
+  // Dashboards off: L3 reads 50% (2 of 4 pass), the failing half is the red segment.
+  const off = render(draft({ result: { ...draft().result, summary: DASHBOARDS_OFF_SUMMARY } }));
+  assert.equal(rowOf(off, 'L3')[1], '50%');
+  assert.ok(off.includes('aria-label="L3 Insight: 2 pass, 0 on a placeholder, 2 fail of 4 clauses"'));
+});
+
 test('a section switched off dims the slab it feeds (L4 per subgroup); the open slabs come from `expanded`', () => {
   const on = defaultBuildState().toggles;
   const dim = (toggles) => Object.fromEntries(stackOf({ toggles }).slabs.filter(x => x.dimmed).map(x => [x.id, x.offSections]));

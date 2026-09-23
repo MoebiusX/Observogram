@@ -24,21 +24,27 @@ import { buildStackHtml, wireBuildStack } from './build-stack-view.mjs';
 
 const GLYPH = { pass: '✓', placeholder: '◐', fail: '✗' };
 
-/** The per-layer maturity bars: clause counts per dimension, pass on a placeholder its own segment. */
+/**
+ * The per-layer maturity bars: clause counts per dimension, pass on a placeholder its own
+ * segment — and its own number: the text beside the bar is the pass share plus, when any
+ * clause passes only on a placeholder, that share with the ◐ glyph, so the split is read
+ * without the colour (and by a screen reader through the bar's label).
+ */
 function maturityHtml(rows) {
   if (!rows.length) return '';
+  const counts = (m) => `${m.pass} pass, ${m.placeholder} on a placeholder, ${m.fail} fail${m.pending ? `, ${m.pending} not evaluated` : ''} of ${m.total} clause${m.total === 1 ? '' : 's'}`;
   return `
     <div class="build-maturity" aria-label="maturity per layer">
       ${rows.map(m => `
-        <div class="build-maturity-row" data-layer="${escapeHtml(m.id)}" title="${escapeHtml(`${m.num} ${m.name}: ${m.pass} pass · ${m.placeholder} on a placeholder · ${m.fail} fail${m.pending ? ` · ${m.pending} not evaluated` : ''} — of ${m.total} clause${m.total === 1 ? '' : 's'} at this tier`)}">
+        <div class="build-maturity-row" data-layer="${escapeHtml(m.id)}" title="${escapeHtml(`${m.num} ${m.name}: ${counts(m)} at this tier`)}">
           <span class="build-maturity-name"><b>${escapeHtml(m.num)}</b>${escapeHtml(m.name)}</span>
-          <span class="build-maturity-bar">
+          <span class="build-maturity-bar" role="img" aria-label="${escapeHtml(`${m.num} ${m.name}: ${counts(m)}`)}">
             <span class="build-maturity-seg is-pass" style="width:${m.passPct}%"></span>
             <span class="build-maturity-seg is-placeholder" style="width:${m.placeholderPct}%"></span>
             <span class="build-maturity-seg is-fail" style="width:${m.failPct}%"></span>
             <span class="build-maturity-seg is-pending" style="width:${m.pendingPct}%"></span>
           </span>
-          <span class="build-maturity-pct">${m.pct == null ? 'n/a' : `${m.pct}%`}</span>
+          <span class="build-maturity-pct">${m.total ? `${m.passPct}%${m.placeholder ? ` <span class="build-maturity-ph" title="pass on a placeholder">+${m.placeholderPct}% ${GLYPH.placeholder}</span>` : ''}` : 'n/a'}</span>
         </div>`).join('')}
       <div class="build-maturity-legend"><span class="is-pass"><i></i>pass</span><span class="is-placeholder"><i></i>pass on a placeholder</span><span class="is-fail"><i></i>fail</span></div>
     </div>`;
