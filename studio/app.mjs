@@ -1802,13 +1802,20 @@ function setupExportButton() {
   };
 }
 
-// Logo click returns home.
+// Logo click returns home. The OBSERVA chrome's brand is an <a href="/">:
+// left to the browser a click reloads the page, and with mode 'build'
+// persisted the studio resumed the BUILD journey at the saved step instead
+// of landing on the hero — so the brand is bound here beside the legacy
+// header's h1 (the build draft stays in state.build; "Build a pack" resumes it).
 function setupHomeAffordance() {
-  const brand = document.querySelector('.hdr-brand h1');
-  if (!brand) return;
-  brand.style.cursor = 'pointer';
-  brand.title = 'Return home';
-  brand.onclick = () => goHome();
+  const legacy = document.querySelector('.hdr-brand h1');
+  if (legacy) {
+    legacy.style.cursor = 'pointer';
+    legacy.title = 'Return home';
+    legacy.onclick = () => goHome();
+  }
+  const brand = document.querySelector('.observa-brand');
+  if (brand) brand.addEventListener('click', (e) => { e.preventDefault(); goHome(); });
 }
 
 // ============================================================

@@ -1466,6 +1466,9 @@ try {
   // must repaint them — leaving the BUILD journey once left the build cards up over the home hero.
   const fnBody = (name) => (js.split(`function ${name}(`)[1] || '').split('\n}\n')[0];
   assert(fnBody('applyModeChrome').includes('paintObservaActiveTab()'), 'app.mjs: applyModeChrome repaints the header cards (build ↔ analysis)');
+  // The visible brand is the OBSERVA chrome's <a class="observa-brand" href="/">: the home affordance must bind it,
+  // or a click reloads the page and a persisted build mode resumes the journey instead of returning home.
+  assert(fnBody('setupHomeAffordance').includes('.observa-brand') && fnBody('setupHomeAffordance').includes('goHome()'), 'app.mjs: setupHomeAffordance binds .observa-brand → goHome');
   assert(js.includes('setupCrawlPanel'), '/app.mjs wires setupCrawlPanel');
   assert(js.includes('renderCrawlResult'), '/app.mjs ships renderCrawlResult');
   assert(js.includes('setupDraftFromMcpPanel'), '/app.mjs wires setupDraftFromMcpPanel (Phase 7n)');
