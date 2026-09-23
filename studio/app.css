@@ -8601,6 +8601,8 @@ body.chrome-observa .disco {
 .build-slab-edge:hover .build-slab-toggle { color: var(--ink); }
 .build-slab-detail { align-self: center; margin-left: 0; }
 .build-slab-clauses { margin: 0; padding: 8px 12px; border: 1px solid var(--accent); border-top: 0; background: var(--card); }
+/* .build-rail-clauses sets display: flex, which would beat the UA's [hidden] rule: a folded slab keeps its list folded. */
+.build-slab-clauses[hidden] { display: none; }
 .build-slab .section-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
 .build-slab .card { cursor: default; }
 .build-slab .card:hover { background: var(--card); }
