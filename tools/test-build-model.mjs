@@ -2009,8 +2009,8 @@ test('the Customise face renders in place on COMPILE: the fields with the librar
 test('the copies’ handlers: Customise opens the face (a re-render, no instantiation), a field commits on change through setOverride / updateCustom, ↺ through clearOverride, the custom switch through removeCustom, the form through addCustom with the engine’s definition', () => {
   const calls = [];
   const act = {
-    update: (p, o) => calls.push(['update', p, o]), setOverride: (k, f, v) => calls.push(['override', k, f, v]), clearOverride: (k, f) => calls.push(['clear', k, f]),
-    updateCustom: (id, f, v) => calls.push(['custom', id, f, v]), removeCustom: (id) => calls.push(['remove', id]), addCustom: (def, d) => calls.push(['add', def, d.id]),
+    update: (p, o) => calls.push(['update', p, o]), setOverride: (k, f, v, o) => calls.push(['override', k, f, v, o]), clearOverride: (k, f) => calls.push(['clear', k, f]),
+    updateCustom: (id, f, v, o) => calls.push(['custom', id, f, v, o]), removeCustom: (id) => calls.push(['remove', id]), addCustom: (def, d) => calls.push(['add', def, d.id]),
     setSli: (k, on) => calls.push(['sli', k, on]), addSli: (e, s) => calls.push(['addSli', e, s]), closeSheet() {}, setToggle() {}, setParam() {},
   };
   const b = copiesDraft({ customOpen: { kafka_produce_latency_p99: true }, customDraft: { name: 'Checkout p99', type: 'threshold', query: 'q', threshold: '0.3' } });
@@ -2044,7 +2044,7 @@ test('the copies’ handlers: Customise opens the face (a re-render, no instanti
   typeEl.fire('change');
   add.fire('click');
   assert.deepEqual(calls.slice(0, 2), [['update', { customOpen: { kafka_produce_latency_p99: true, kafka_broker_availability: true } }, { rerender: true, reinstantiate: false }], ['update', { customOpen: {} }, { rerender: true, reinstantiate: false }]], 'Customise toggles the open set');
-  assert.deepEqual(calls.slice(2, 7), [['override', 'kafka_produce_latency_p99', 'objective', '99.9'], ['blur'], ['custom', 'checkout_success', 'good', 'sum(rate(x[5m]))'], ['clear', 'kafka_produce_latency_p99', 'window'], ['remove', 'checkout_success']]);
+  assert.deepEqual(calls.slice(2, 7), [['override', 'kafka_produce_latency_p99', 'objective', '99.9', { focusKey: null }], ['blur'], ['custom', 'checkout_success', 'good', 'sum(rate(x[5m]))', { focusKey: null }], ['clear', 'kafka_produce_latency_p99', 'window'], ['remove', 'checkout_success']], 'headless (no document): the commit runs at once, no focus to give back');
   assert.deepEqual(calls[7], ['sli', 'kafka_controller_election_rate', true], 'an above-tier switch flips like any other');
   const typedName = calls[8];
   assert.equal(typedName[0], 'update');
@@ -2053,6 +2053,49 @@ test('the copies’ handlers: Customise opens the face (a re-render, no instanti
   assert.equal(add.disabled, false, 'the required fields are filled: the button wakes');
   assert.deepEqual(calls[9][2], { rerender: true, reinstantiate: false }, 'the type select re-renders (it changes the fields)');
   assert.deepEqual(calls[10], ['add', { id: 'checkout_p99', type: 'threshold', objective: 0.99, window: '30x', query: 'q', threshold: 0.3 }, 'checkout_p99'], 'the engine\'s definition — the window as typed, for the engine to refuse inline');
+});
+
+test('a field left by Enter or Tab keeps a focus: the commit waits for the focus move, then hands the action the field\'s key when nothing is focused (Enter) and nothing when Tab\'s target is (the re-render restores it)', async () => {
+  const calls = [];
+  const act = { setOverride: (k, f, v, o) => calls.push(['override', k, f, v, o]), updateCustom: (id, f, v, o) => calls.push(['custom', id, f, v, o]), update() {}, clearOverride() {}, removeCustom() {}, addCustom() {}, setSli() {}, addSli() {}, closeSheet() {}, setToggle() {}, setParam() {} };
+  const model = buildSheetModel({ layerId: 'L1', build: copiesDraft({ customOpen: { kafka_produce_latency_p99: true, checkout_success: true } }), library: LIBRARY, requirements: T2, mode: 'edit' });
+  const objective = { ...fakeEl({ overrideField: 'objective', sli: 'kafka_produce_latency_p99', focusKey: 'ov:kafka_produce_latency_p99:objective' }), value: '99.7', tagName: 'INPUT', readOnly: false, blur() { globalThis.document.activeElement = globalThis.document.body; } };
+  const good = { ...fakeEl({ customField: 'good', sli: 'checkout_success', focusKey: 'cu:checkout_success:good' }), value: 'sum(rate(ok[5m]))', tagName: 'TEXTAREA', readOnly: false };
+  const nextField = { dataset: { focusKey: 'ov:kafka_produce_latency_p99:window' } };
+  const body = { tagName: 'BODY' };
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  globalThis.document = { body, activeElement: objective };
+  try {
+    wireBuildSheet(fakeContainer({ '.build-edit-face:not(.build-custom-form) .build-edit-input': [objective, good] }), model, { build: act });
+    // Still focused (a datalist pick, a scripted change): the commit runs at once, nothing to give back.
+    objective.fire('change');
+    assert.deepEqual(calls, [['override', 'kafka_produce_latency_p99', 'objective', '99.7', { focusKey: null }]]);
+    // Enter: the explicit blur leaves <body> active while change runs — the commit waits a task, then names the field's key.
+    calls.length = 0;
+    objective.fire('keydown', { key: 'Enter' });   // blur() → the handler's change would follow in a browser
+    objective.fire('change');
+    assert.deepEqual(calls, [], 'deferred: nothing yet');
+    await tick();
+    assert.deepEqual(calls, [['override', 'kafka_produce_latency_p99', 'objective', '99.7', { focusKey: 'ov:kafka_produce_latency_p99:objective' }]], 'Enter: the action gets the field\'s key back');
+    // Tab: by the time the deferred commit runs the next field is active — no key (rerenderBuild restores the active one).
+    calls.length = 0;
+    globalThis.document.activeElement = body;
+    objective.fire('change');
+    globalThis.document.activeElement = nextField;   // the browser finished the focus move
+    await tick();
+    assert.deepEqual(calls, [['override', 'kafka_produce_latency_p99', 'objective', '99.7', { focusKey: null }]]);
+    // A custom SLI's textarea left by a click on blank space: nothing focused afterwards → its key.
+    calls.length = 0;
+    globalThis.document.activeElement = body;
+    good.fire('change');
+    await tick();
+    assert.deepEqual(calls, [['custom', 'checkout_success', 'good', 'sum(rate(ok[5m]))', { focusKey: 'cu:checkout_success:good' }]]);
+  } finally {
+    delete globalThis.document;
+  }
+  // A vanished '↺ library default' hands the focus to its field's input first.
+  assert.deepEqual(focusFallbackSelectors('ov:kafka_produce_latency_p99:window:reset'), ['[data-focus-key="ov:kafka_produce_latency_p99:window"]', '.build-sheet .build-edit-input', '.build-sheet .build-param-input', '.build-sheet-close']);
+  assert.deepEqual(focusFallbackSelectors('cu:checkout_success:good'), ['.build-sheet .build-edit-input', '.build-sheet .build-param-input', '.build-sheet-close']);
 });
 
 test('the definition column is a wizard stage: the live form on DEFINE (with the seeded note once seeded), the recessed seed card with "Change seed →" on COMPILE and VERIFY, the summary live under both', () => {

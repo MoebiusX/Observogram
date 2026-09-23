@@ -274,9 +274,13 @@ export function todoFocusSuffix(layerId, path) {
 export function focusFallbackSelectors(key) {
   const k = String(key || '');
   if (/^tier:/.test(k)) return ['.build-seg-btn[aria-checked="true"]'];
+  // A per-field '↺ library default' (ov:<sli>:<field>:reset) that vanished — the field is back at its default —
+  // hands focus to that field's input first.
+  const reset = /^((?:ov|cu):[^:]+:[a-z_]+):reset$/.exec(k);
+  if (reset) return [`[data-focus-key="${reset[1]}"]`, '.build-sheet .build-edit-input', '.build-sheet .build-param-input', '.build-sheet-close'];
   // An edit-face input (ov:<sli>:<field>), the custom form (cf:<field>) or a rolodex switch (sli:<entry>:<id>)
   // that vanished — the card closed, the SLI was removed, the form was reset — hands focus to the sheet.
-  if (/^(ov|cf|sli|customise):/.test(k)) return ['.build-sheet .build-edit-input', '.build-sheet .build-param-input', '.build-sheet-close'];
+  if (/^(ov|cu|cf|sli|customise):/.test(k)) return ['.build-sheet .build-edit-input', '.build-sheet .build-param-input', '.build-sheet-close'];
   const entry = /^entry:([\w.-]+)$/.exec(k);
   if (entry) return [`.build-chip[data-entry="${entry[1]}"]`, '.build-chip'];
   const m = /^param:[^@]+@([^/]+)\//.exec(k);

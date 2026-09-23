@@ -344,10 +344,22 @@ export function wireRolodexCopies(container, model, act) {
     if (next[key]) delete next[key]; else next[key] = true;
     act.update?.({ customOpen: next }, { rerender: true, reinstantiate: false });
   }));
+  // A field commits on change. When the change comes from leaving the field (Tab, a click elsewhere, Enter's
+  // explicit blur) the commit is deferred one task so the browser finishes moving the focus first: the re-render
+  // then restores whatever is focused by then (Tab's target), and when nothing is — Enter, a click on blank space —
+  // the action lands the focus back on the field by its key. Committing inside the change dropped the focus to
+  // <body> and destroyed Tab's pending target (measured live: the next Tab landed on the toolbar).
   const commit = (inp) => {
     const { sli } = inp.dataset;
-    if (inp.dataset.overrideField) act.setOverride?.(sli, inp.dataset.overrideField, inp.value);
-    else if (inp.dataset.customField) act.updateCustom?.(sli, inp.dataset.customField, inp.value);
+    const value = inp.value;
+    const doc = typeof document !== 'undefined' ? document : null;
+    const run = () => {
+      const lost = !!doc && (!doc.activeElement || doc.activeElement === doc.body);
+      const opts = { focusKey: lost ? inp.dataset.focusKey || null : null };
+      if (inp.dataset.overrideField) act.setOverride?.(sli, inp.dataset.overrideField, value, opts);
+      else if (inp.dataset.customField) act.updateCustom?.(sli, inp.dataset.customField, value, opts);
+    };
+    if (doc && doc.activeElement !== inp) setTimeout(run, 0); else run();
   };
   container.querySelectorAll('.build-edit-face:not(.build-custom-form) .build-edit-input').forEach(inp => {
     if (inp.readOnly) return;

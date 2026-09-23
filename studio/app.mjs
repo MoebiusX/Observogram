@@ -1954,6 +1954,13 @@ function focusAfterRender() {
   buildFocusNext = null;
   el?.focus({ preventScroll: true });
 }
+/** The selector of a focus key (`ov:<sli>:<field>`, `customise:<key>`, …) as the renderers stamp it. */
+const focusKeySelector = (key) => `[data-focus-key="${CSS.escape(key)}"]`;
+/** Nothing to re-render, but a field was left by Enter or Tab and nothing has the focus: give it back to the key. */
+function refocusBuild(focusKey) {
+  if (!focusKey || (document.activeElement && document.activeElement !== document.body)) return;
+  document.querySelector(focusKeySelector(focusKey))?.focus({ preventScroll: true });
+}
 
 // A tier's clauses, loaded once per tier; the view repaints when they land
 // (DEFINE shows what every tier requires, the rail the chosen tier's).
@@ -2071,8 +2078,9 @@ function instantiateBodyOf(b) { return buildInstantiateBody(b, buildLibraryCache
 const buildActions = {
   // Merge a patch into the draft; text fields re-instantiate after a pause,
   // structural changes repaint at once.
-  update(patch, { rerender = false, reinstantiate = true, delay } = {}) {
+  update(patch, { rerender = false, reinstantiate = true, delay, focus = null } = {}) {
     Object.assign(state.build, patch);
+    if (focus) buildFocusNext = focusKeySelector(focus);   // where the render that follows should land the focus (a face that opened: its first field)
     if (rerender) rerenderBuild();
     if (reinstantiate) scheduleBuildInstantiate(delay);
     persistence.schedule();
@@ -2152,15 +2160,19 @@ const buildActions = {
   // The copies (docs/BUILD_JOURNEY.md "The seed and the copies"): an override is copy-on-write over the
   // library's value for one field of one SLI; an empty value clears it. The engine validates on the
   // re-instantiation and its `override <sli>.<field>: …` error lands on the card's field.
-  setOverride(key, field, text) {
+  // `focusKey`: the field to land the focus on after the re-render when the commit found none focused — a field
+  // committed by Enter (an explicit blur) or by leaving it has <body> as the active element while its change runs,
+  // so rerenderBuild alone had nothing to restore and the next Tab landed on the chrome (measured live).
+  setOverride(key, field, text, { focusKey = null } = {}) {
     const b = state.build;
     const value = fieldValueFor(field, text);
     const current = { ...(Object.prototype.hasOwnProperty.call(b.overrides || {}, key) ? b.overrides[key] : {}) };
     if (value === null) delete current[field]; else current[field] = value;
     const overrides = { ...(b.overrides || {}) };
     if (Object.keys(current).length) overrides[key] = current; else delete overrides[key];
-    if (JSON.stringify(overrides) === JSON.stringify(b.overrides || {})) return;
+    if (JSON.stringify(overrides) === JSON.stringify(b.overrides || {})) { refocusBuild(focusKey); return; }
     b.overrides = overrides;
+    if (focusKey) buildFocusNext = focusKeySelector(focusKey);
     rerenderBuild();
     scheduleBuildInstantiate(0);
     persistence.schedule();
@@ -2205,15 +2217,16 @@ const buildActions = {
     Object.assign(b, buildStepAfterInstantiate(b));
     rerenderBuild();
   },
-  updateCustom(id, field, text) {
+  updateCustom(id, field, text, { focusKey = null } = {}) {
     const b = state.build;
     const i = (b.custom || []).findIndex(d => d.id === id);
     if (i < 0) return;
     const value = fieldValueFor(field, text);
     const next = { ...b.custom[i] };
     if (value === null) delete next[field]; else next[field] = value;
-    if (JSON.stringify(next) === JSON.stringify(b.custom[i])) return;
+    if (JSON.stringify(next) === JSON.stringify(b.custom[i])) { refocusBuild(focusKey); return; }
     b.custom = b.custom.map((d, j) => (j === i ? next : d));
+    if (focusKey) buildFocusNext = focusKeySelector(focusKey);
     rerenderBuild();
     scheduleBuildInstantiate(0);
     persistence.schedule();
