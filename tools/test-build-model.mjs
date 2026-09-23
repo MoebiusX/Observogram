@@ -1522,7 +1522,14 @@ test('renderBuildSheet draws the dialog headlessly: the ARIA, the title and ques
   assert.equal((l1.match(/<li class="build-rail-clause is-pass"/g) || []).length, 3, 'the clause rows are the shared atom');
   // The rolodex: ten cards, the current-tier objective large, the other tiers muted, a switch each; the above-tier one disabled with the reason.
   assert.equal((l1.match(/class="build-rolo-card/g) || []).length, 10);
-  assert.ok(l1.includes('<div class="build-rolodex-track" role="group" aria-roledescription="carousel" aria-label="SLI cards — arrow keys move" tabindex="0" data-scroll-key="rolodex">'));
+  assert.ok(l1.includes('<div class="build-rolodex-track" role="group" aria-roledescription="carousel" aria-label="SLI cards — arrow keys move" tabindex="0" data-scroll-key="rolodex:L1">'));
+  // The scroll offsets rerenderBuild preserves are keyed per layer: what L1's body scrolled to is not
+  // restored on L3's body, so a newly opened layer starts at its top (measured: it opened pre-scrolled).
+  const scrollKeys = (h) => [...h.matchAll(/data-scroll-key="([^"]+)"/g)].map(m => m[1]);
+  assert.deepEqual(scrollKeys(l1), ['sheet:L1', 'rolodex:L1']);
+  assert.deepEqual(scrollKeys(html('L3')), ['sheet:L3']);
+  assert.ok(!scrollKeys(l1).some(k => scrollKeys(html('L3')).includes(k)), 'no scroll key shared between two layers\' sheets');
+  assert.deepEqual(scrollKeys(html('L1', 'preview')), ['sheet:L1', 'rolodex:L1'], 'the same layer keeps its key across modes and re-renders');
   assert.ok(l1.includes('<span class="build-rolo-id">broker_availability</span>') && l1.includes('<code>up</code>'));
   assert.ok(l1.includes('<b>99.9%</b><span>over 30d · at tier-2</span>'));
   assert.ok(l1.includes('class="is-muted" title="tier-3: 99% over 30d">tier-3 <b>99%</b> 30d</span>'));

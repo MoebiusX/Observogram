@@ -494,8 +494,10 @@ so a filled todo takes only its own inputs away; VERIFY keeps the verdict cards,
 maturity bars, the artefacts strip and *Ready to continue?*. The sheet writes through the
 existing actions only (`setSli` / `addSli`, `setToggle`, `setParam`, `toggleEntry`,
 `setTier`) and re-instantiation redraws the stack, the sheet and the column; the scroll
-offsets of the sheet body and the rolodex track survive the redraw (`[data-scroll-key]`),
-a focused rolodex card is re-centred, and a sheet input whose todo disappeared hands focus
+offsets of the sheet body and the rolodex track survive the redraw (`[data-scroll-key]`,
+keyed per layer — `sheet:L1`, `rolodex:L1` — so a switch flipped mid-list keeps its place
+while a newly opened layer starts at its top), a focused rolodex card is re-centred, and a
+sheet input whose todo disappeared hands focus
 to the sheet's next input, then its close control (`focusFallbackSelectors`).
 
 **The language.** Generous spacing between groups (24–32 px), 14–16 px radii on the sheet

@@ -112,7 +112,7 @@ function rolodexHtml(model) {
       ${r.items.length ? `
       <div class="build-rolodex">
         <button type="button" class="build-rolodex-nav is-prev" aria-label="previous SLI" data-nav="-1"><span aria-hidden="true">‹</span></button>
-        <div class="build-rolodex-track" role="group" aria-roledescription="carousel" aria-label="SLI cards — arrow keys move" tabindex="0" data-scroll-key="rolodex">
+        <div class="build-rolodex-track" role="group" aria-roledescription="carousel" aria-label="SLI cards — arrow keys move" tabindex="0" data-scroll-key="rolodex:${escapeHtml(model.layerId)}">
           ${r.items.map(it => rolodexCardHtml(it, model)).join('')}
         </div>
         <button type="button" class="build-rolodex-nav is-next" aria-label="next SLI" data-nav="1"><span aria-hidden="true">›</span></button>
@@ -173,7 +173,7 @@ export function buildSheetHtml(model) {
           ${model.counts.artefacts ? `<span class="build-sheet-artefacts">${plural(model.counts.artefacts, 'artefact')}${model.counts.scaffold ? ` · ${model.counts.scaffold} scaffold` : ''}</span>` : ''}
         </div>
       </header>
-      <div class="build-sheet-body" data-scroll-key="sheet">
+      <div class="build-sheet-body" data-scroll-key="sheet:${escapeHtml(model.layerId)}">
         ${model.compose ? `<div class="build-sheet-compose"><span>${escapeHtml(readOnlyWhy)}</span><button type="button" class="mcp-refresh-btn build-sheet-compose-btn" data-compose>Compose in Compile <span aria-hidden="true">→</span></button></div>` : readOnlyWhy ? `<div class="build-sheet-note">${escapeHtml(readOnlyWhy)}</div>` : ''}
         ${model.rejected ? `<div class="build-note build-note-err" role="alert">${plural(model.rejected, 'parameter value')} on this layer rejected by the last compilation${model.stale ? ' — the pack shown is the previous one' : ''}; the row carries the reason.</div>` : ''}
         <section class="build-sheet-section build-sheet-clauses">
