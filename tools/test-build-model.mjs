@@ -233,6 +233,10 @@ test('buildSelectModel: tiers with their MUST / SHOULD counts and what each adds
   assert.equal(m.archetypes.find(p => p.id === 'http-service').evidence.status, 'semconv');
   assert.equal(m.params.length, 26);
   assert.equal(m.params.filter(p => p.placeholder && p.atDefault).length, 21, '21 placeholder params on this selection (some fill several artefacts: 17 land in the pack)');
+  // What the step prints: the engine's count once a pack exists (the rail's number), the flagged count only before.
+  assert.deepEqual(m.placeholders, { flagged: 21, remaining: 17 }, 'the summary counts the placeholders the engine wrote, not every flagged param of the selection');
+  assert.equal(m.placeholders.remaining, placeholdersRemaining(FIXTURE), 'the same number the rail shows');
+  assert.deepEqual(buildSelectModel({ build: draft({ result: null }), library: LIBRARY, requirements: REQUIREMENTS }).placeholders, { flagged: 21, remaining: null });
   // Requirements not loaded yet → counts null, adds empty, still valid.
   const cold = buildSelectModel({ build: draft(), library: LIBRARY, requirements: {} });
   assert.equal(cold.tiers[1].must, null);

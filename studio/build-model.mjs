@@ -242,13 +242,21 @@ export function buildSelectModel({ build, library, requirements = {} }) {
     sliCountAtTier: r.sliCountByTier?.[build?.tier] ?? 0,
     placeholderParams: (r.params || []).filter(p => p.placeholder).length,
   });
+  const params = paramRows({ build, library });
+  const r = build?.result || null;
   return {
     name, slug: serviceSlug(name), owners: build?.owners || '', ownerList: parseOwners(build?.owners), environment: build?.environment || 'prod',
     tier: build?.tier, tiers,
     products: rows.filter(r => r.kind === 'product').map(card),
     archetypes: rows.filter(r => r.kind === 'archetype').map(card),
     selectedEntries: selectedEntries(build, library).map(card),
-    params: paramRows({ build, library }),
+    params,
+    // The placeholder count the step prints: once a pack exists, the params the
+    // engine wrote and reported (provenance.placeholders, what the rail shows) —
+    // a flagged param the tier or the selection never writes (pager_service_low
+    // below tier-1, chaos_target when every entry brings its own chaos) is no
+    // todo, so `flagged` overstates it and is only shown before the first result.
+    placeholders: { flagged: params.filter(p => p.placeholder && p.atDefault).length, remaining: r ? placeholdersRemaining(r) : null },
     libraryErrors: library?.errors || [],
     valid: errors.length === 0, errors,
     // The last instantiation's usage errors (a rejected param value is marked on its row).

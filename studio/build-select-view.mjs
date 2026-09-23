@@ -148,7 +148,9 @@ export function renderBuildSelect(container, model, host = appHost) {
       ${entriesCount ? `
       ${instantiateErrorHtml(model.error, { stale: model.stale, where: 'below' })}
       <details class="build-params-wrap" ${model.params.some(p => !p.atDefault || p.error) ? 'open' : ''}>
-        <summary class="build-section-key">Parameters <span class="build-section-sub">${model.params.length} for this selection · ${model.params.filter(p => p.placeholder && p.atDefault).length} placeholder${model.params.filter(p => p.placeholder && p.atDefault).length === 1 ? '' : 's'} still at their default — each becomes a todo; fill them here or inline on Validate</span></summary>
+        <summary class="build-section-key">Parameters <span class="build-section-sub">${model.params.length} for this selection · ${model.placeholders.remaining != null
+          ? `${model.placeholders.remaining} placeholder${model.placeholders.remaining === 1 ? '' : 's'} still at their default in the generated pack — each is a todo`
+          : `${model.placeholders.flagged} placeholder param${model.placeholders.flagged === 1 ? '' : 's'} in this selection — one left at its default becomes a todo where the tier writes it`}; fill them here or inline on Validate</span></summary>
         <div class="build-params">${model.params.map(p => paramRowHtml(p)).join('')}</div>
       </details>` : ''}
 
