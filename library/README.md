@@ -147,8 +147,9 @@ instantiatePack(entries, { name, tier, custom: [
 ] })
 ```
 
-The id a slug `^[a-z][a-z0-9_]{1,62}$` (not `errorbudget`) unique among the pack's SLIs —
-a clash with a selected library SLI or another custom one is a usage error naming both;
+The id a slug `^[a-z][a-z0-9_]{1,62}$` (not `errorbudget`) that no SLI of the chosen
+entries owns — a clash with a library SLI (ticked or not: an un-ticked one would clash the
+moment it is ticked) or with another custom one is a usage error naming both;
 `objective` and `window` required; the PromQL required per type; every field checked as
 above (`custom <id>.<field>: …`). A custom SLI gets an SLO, a recording rule, burn alerts
 from the **default burn profile** (`DEFAULT_BURN_PROFILE`: `availability` for a ratio,

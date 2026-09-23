@@ -589,7 +589,15 @@ function checkCustom(custom, selected, known) {
     if (typeof id !== 'string' || !CUSTOM_ID_RE.test(id) || POLLUTING_KEYS.has(id)) throw new Error(`${at}.id: a slug of 2 to 63 characters is required ([a-z][a-z0-9_]{1,62}), got ${JSON.stringify(id)}`);
     if (id === POLICY_SEGMENT) throw new Error(`custom ${id}.id: '${POLICY_SEGMENT}' is the compiler's reserved policy-record segment`);
     const where = `custom ${id}`;
-    if (selected.has(id)) { const k = known.get(id); throw new Error(`${where}.id: clashes with the library SLI ${id}${k?.entry ? ` of ${k.entry}` : ''} in the pack — pick another id or drop that SLI`); }
+    // Any library SLI of the passed entries owns its id, ticked or not: an un-ticked one would clash the moment
+    // it is ticked (a draft carrying both would draw two cards with one key), so the id is refused either way.
+    if (known.has(id)) {
+      const k = known.get(id);
+      const of = k?.entry ? ` of ${k.entry}` : '';
+      throw new Error(selected.has(id)
+        ? `${where}.id: clashes with the library SLI ${id}${of} in the pack — pick another id or drop that SLI`
+        : `${where}.id: shadows the library SLI ${id}${of} (not in the pack now — it would clash the moment it is ticked) — pick another id`);
+    }
     if (seen.has(id)) throw new Error(`${where}.id: declared twice in custom`);
     seen.add(id);
     const type = def.type;

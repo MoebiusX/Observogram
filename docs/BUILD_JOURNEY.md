@@ -627,8 +627,10 @@ inputs, in the engine, the API and the studio (the CLI takes the scalar override
 - `custom: [ { id, type: 'ratio' | 'threshold', description?, unit?, query? + threshold?
   (threshold), good? + total? (ratio), objective, window } ]` — SLIs written from scratch,
   outside any library entry. The id a slug `^[a-z][a-z0-9_]{1,62}$` (not the reserved
-  `errorbudget`) unique among the pack's SLIs — a clash with a selected library SLI or another
-  custom one is a usage error naming both; the objective and window required; the PromQL
+  `errorbudget`) that no SLI of the passed entries owns — a clash with a library SLI (ticked,
+  or un-ticked: it would clash the moment it is ticked, and a draft carrying both would draw
+  two cards with one key) or with another custom one is a usage error naming both
+  (`clashes with` / `shadows the library SLI <id> of <entry>`); the objective and window required; the PromQL
   required per type; the fields validated as above. A custom SLI gets an SLO (`sloIdFor`), a
   recording rule, burn alerts from the **default burn profile** — `DEFAULT_BURN_PROFILE =
   { ratio: 'availability', threshold: 'latency' }`, the profile a library template without

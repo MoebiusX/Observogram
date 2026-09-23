@@ -602,7 +602,10 @@ test('custom SLIs: the usage errors — a duplicate or clashing id, a missing fi
   const err = (custom) => { try { orders({ custom }); } catch (e) { return e.message; } return null; };
   assert.match(err([CUSTOM_RATIO, CUSTOM_RATIO]), /^custom checkout_success\.id: declared twice in custom$/);
   assert.match(err([{ ...CUSTOM_RATIO, id: 'kafka_broker_availability' }]), /^custom kafka_broker_availability\.id: clashes with the library SLI kafka_broker_availability of kafka in the pack/);
-  assert.equal(orders({ toggles: { slis: ['kafka_produce_latency_p99'] }, custom: [{ ...CUSTOM_RATIO, id: 'kafka_broker_availability' }] }).canonical.spec.slis.length, 2, 'a library id not in the pack is free');
+  // a library id of the entries is owned even un-ticked: it would clash the moment it is ticked (and the studio would draw two cards with one key)
+  const shadow = (() => { try { orders({ toggles: { slis: ['kafka_produce_latency_p99'] }, custom: [{ ...CUSTOM_RATIO, id: 'kafka_broker_availability' }] }); } catch (e) { return e.message; } return null; })();
+  assert.match(shadow, /^custom kafka_broker_availability\.id: shadows the library SLI kafka_broker_availability of kafka \(not in the pack now — it would clash the moment it is ticked\) — pick another id$/);
+  assert.equal(orders({ toggles: { slis: ['kafka_produce_latency_p99'] }, custom: [{ ...CUSTOM_RATIO, id: 'broker_availability' }] }).canonical.spec.slis.length, 2, 'the bare id is nobody\'s in a composed pack');
   assert.match(err([{ ...CUSTOM_RATIO, id: 'A' }]), /^custom\[0\]\.id: a slug of 2 to 63 characters is required/);
   assert.match(err([{ ...CUSTOM_RATIO, id: 'a' }]), /a slug of 2 to 63 characters/);
   assert.match(err([{ ...CUSTOM_RATIO, id: 'errorbudget' }]), /reserved policy-record segment/);
