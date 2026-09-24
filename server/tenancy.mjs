@@ -39,6 +39,8 @@ import { currentOrg, runWithOrg, validOrgId } from './org-context.mjs';
 import {
   MIGRATABLE, hasData, lexists, orgsFilePath as legacyOrgsFilePath, readOrgsFileStrict, writeOrgsFile,
 } from './store/legacy-files.mjs';
+import { currentStore } from './store/db.mjs';
+import { getOrg } from './store/orgs.mjs';
 
 // The org context lives in server/org-context.mjs (no import cycle with
 // server/store/); re-exported here for the callers that import it from
@@ -98,6 +100,30 @@ export function orgWorkspaceRoot() {
   if (!org || !tenancyEnabled()) return base;
   if (!validOrgId(org)) throw new Error(`tenancy: invalid org id ${JSON.stringify(org)}`);
   return join(base, 'orgs', org);
+}
+
+// ---------- an org's root in the store (STORE_PLAN slice 2) ----------
+//
+// orgs.root ('.' or 'orgs/<id>') is fixed at creation, so a lookup is
+// cached per store handle and never needs invalidating at runtime; an
+// offline root change happens with the server stopped or inside boot step
+// 3, which resets the cache first. Keyed by handle, so a suite that
+// re-points the workspace between boots never reads a stale root. A
+// removed org keeps its root (its files are still there).
+let rootCache = new WeakMap();   // db handle → Map(orgId → root)
+
+export function orgRootOf(orgId, db = currentStore()) {
+  let roots = rootCache.get(db);
+  if (!roots) { roots = new Map(); rootCache.set(db, roots); }
+  if (roots.has(orgId)) return roots.get(orgId);
+  const org = typeof orgId === 'string' ? getOrg(db, orgId) : null;
+  if (!org) throw new Error(`tenancy: unknown org ${JSON.stringify(orgId)}`);
+  roots.set(orgId, org.root);
+  return org.root;
+}
+
+export function resetOrgRootCache() {
+  rootCache = new WeakMap();
 }
 
 // ---------- boot migration: flat workspace → orgs/default/ ----------

@@ -785,3 +785,555 @@ test('Import: applyImport is atomic — a plan whose third insert fails leaves n
     close();
   }
 });
+
+// ---------- commit 6: the boot decisions, and bootStore() in-process ----------
+
+const boot = await import('./boot.mjs');
+const { hashPassword, verifyPassword } = await import('./auth.mjs');
+const admin = await import('./identity-admin.mjs');
+const { orgRootOf, resetOrgRootCache } = await import('./tenancy.mjs');
+const { renameSync } = await import('node:fs');
+
+const BOOT_VARS = ['WORKSPACE', 'DB', 'USERS_FILE', 'API_TOKEN', 'AUTH', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH', 'OIDC_ISSUER', 'OIDC_JOIN_ROLE', 'BOOTSTRAP_ADMIN'];
+const CLEAR_BOOT_ENV = Object.fromEntries(BOOT_VARS.flatMap((s) => [[`OBSERVOGRAM_${s}`, undefined], [`TOMOGRAPH_${s}`, undefined]]));
+
+// bootStore() on a temp workspace, with an explicit environment; the log
+// and warn lines are captured. The store stays open (closeBase closes it).
+async function bootIn(base, env = {}, { host = '127.0.0.1' } = {}) {
+  const logs = [];
+  const warns = [];
+  try {
+    const r = await withEnv({ ...CLEAR_BOOT_ENV, OBSERVOGRAM_WORKSPACE: base, ...env },
+      () => boot.bootStore({ host, log: (m) => logs.push(m), warn: (m) => warns.push(m) }));
+    return { ...r, logs, warns };
+  } catch (e) {
+    e.logs = logs;
+    e.warns = warns;
+    throw e;
+  }
+}
+const dbOf = (base) => join(base, 'observogram.db');
+const closeBase = (base) => closeStore(dbOf(base));
+const refusal = (re) => (e) => e instanceof boot.BootRefusal && e.code === 'ERR_OBSERVOGRAM_BOOT_REFUSED' && (typeof re === 'string' ? e.message === re : re.test(e.message));
+const auditRows = (db) => auditRepo.listAudit(db, { limit: 1000 }).reverse().map((r) => [r.action, r.actor, r.targetId]);
+
+test('seedDecision table: every row of §6.4; no orgs.json input exists', () => {
+  const base = { authOff: false, oidc: false, token: false, armed: false, adminPassword: null, loopback: true, adminStillSeeded: false };
+  const rows = [
+    [{ authOff: true }, 'none', null, 'OBSERVOGRAM_AUTH=off'],
+    [{ oidc: true }, 'none', null, 'OIDC'],
+    [{ token: true, adminPassword: 'pw' }, 'none', null, 'OBSERVOGRAM_API_TOKEN'],
+    [{ armed: true }, 'none', null, 'identity is armed'],
+    [{ armed: true, adminPassword: 'pw' }, 'none', null, 'the admin is not the seeded default'],
+    [{ armed: true, adminPassword: 'pw', adminStillSeeded: true, loopback: false }, 'rescue', 'pw', null],
+    [{ loopback: false }, 'none', null, 'the default credential never binds beyond loopback'],
+    [{}, 'seed', null, null],
+    [{ adminPassword: 'pw', loopback: false }, 'seed', 'pw', null],
+    [{ adminPassword: 'pw' }, 'seed', 'pw', null],
+  ];
+  for (const [over, kind, password, reason] of rows) {
+    const d = boot.seedDecision({ ...base, ...over });
+    assert.deepEqual([d.kind, d.password], [kind, password], JSON.stringify(over));
+    if (reason) assert.equal(d.reason, reason);
+    assert.deepEqual(Object.keys(d).sort(), ['kind', 'password', 'reason'], 'a decision never carries a row');
+  }
+  assert.deepEqual(boot.seedDecision({ ...base, orgsJson: true }), boot.seedDecision(base), 'an orgs.json term changes nothing (A-56)');
+});
+
+test('seedDecision views: the legacy view before the import and the store view after it take the same inputs from the same facts', async () => {
+  const cases = [
+    { users: { users: { admin: { password: PW, mustChange: true, seededDefault: true } } } },
+    { users: { users: { admin: { password: PW } } } },
+    { orgs: { solo: { name: 'Solo', members: {} } } },
+    {},
+  ];
+  for (const fixture of cases) {
+    const base = workspace(fixture);
+    const ctx = { ...contextFor(base), loopback: true, authOff: false, oidc: false, token: false, adminPassword: 'pw' };
+    const { db, close } = await storeFor(ctx);
+    try {
+      const before = boot.legacyView(db, ctx, readLegacy(db, ctx));
+      runImport(db, ctx);
+      assert.deepEqual(boot.storeView(db, ctx), before, JSON.stringify(fixture));
+      assert.deepEqual(boot.seedDecision(boot.storeView(db, ctx)), boot.seedDecision(before));
+    } finally {
+      close();
+    }
+  }
+  // A CLI-armed store that was never imported is armed in the legacy view (A-2).
+  const cliBase = workspace();
+  const ctx = { ...contextFor(cliBase), loopback: true, authOff: false, oidc: false, token: false, adminPassword: null };
+  const { db, close } = await storeFor(ctx);
+  try {
+    admin.addLocalUser(db, 'cli', { login: 'alice', password: 'correct horse' });
+    assert.equal(boot.legacyView(db, ctx, readLegacy(db, ctx)).armed, true);
+    assert.equal(boot.seedDecision(boot.legacyView(db, ctx, readLegacy(db, ctx))).kind, 'none');
+  } finally {
+    close();
+  }
+});
+
+const MSG_A = (host) => `refusing to bind to ${host} without auth: mutating /api routes would be open to the network.\n`
+  + '  Set OBSERVOGRAM_API_TOKEN=<secret> (clients send Authorization: Bearer <secret>),\n'
+  + "  or seed a sign-in with OBSERVOGRAM_ADMIN_PASSWORD=<secret> (user 'admin'),\n"
+  + '  or bind to loopback (HOST=127.0.0.1), or set OBSERVOGRAM_INSECURE_NO_AUTH=1 to override knowingly.';
+const MSG_B = (host) => `refusing to bind to ${host} while the seeded default admin password is unchanged.\n`
+  + '  Sign in once on loopback (admin / admin) to set a real password,\n'
+  + '  or seed a fresh workspace with OBSERVOGRAM_ADMIN_PASSWORD=<secret>.';
+const MSG_C3 = (n, ids) => `orgs.json would leave ${n} orgs (${ids}) but no identity is configured: more than one org needs to know who the user is.\n`
+  + '  Configure OIDC (OBSERVOGRAM_OIDC_*) or stand-alone users (users.json / npm run users),\n'
+  + '  or keep one org — one org boots with a bearer token alone, or on loopback. Nothing was moved or imported.';
+
+test('assertBootChecks table: A (and the INSECURE override), B after the decision, C counted from plan1.liveOrgsAfter, first failing check wins', async () => {
+  const input = { step: 'store', host: '0.0.0.0', loopback: false, token: false, insecure: false, auth: false, stillSeeded: false, orgIds: ['default'], identity: false, strandedDefault: null };
+  assert.throws(() => boot.assertBootChecks(input), refusal(MSG_A('0.0.0.0')));
+  assert.throws(() => boot.assertBootChecks({ ...input, step: 'import' }), (e) => e.nothingMoved === true);
+  assert.deepEqual(boot.assertBootChecks({ ...input, insecure: true }), { insecure: true }, 'the override passes and asks for the warning');
+  assert.deepEqual(boot.assertBootChecks({ ...input, token: true }), { insecure: false });
+  assert.deepEqual(boot.assertBootChecks({ ...input, auth: true }), { insecure: false });
+  assert.deepEqual(boot.assertBootChecks({ ...input, loopback: true, stillSeeded: true, orgIds: ['a'] }), { insecure: false });
+  assert.throws(() => boot.assertBootChecks({ ...input, auth: true, stillSeeded: true }), refusal(MSG_B('0.0.0.0')));
+  assert.throws(() => boot.assertBootChecks({ ...input, stillSeeded: true, orgIds: ['a', 'b'] }), refusal(MSG_A('0.0.0.0')), 'A before B and C');
+  assert.throws(() => boot.assertBootChecks({ ...input, token: true, orgIds: ['a', 'b'] }),
+    refusal(/^the store holds 2 orgs \(a, b\) but no identity is configured/), 'a bearer is not identity (step 4 text)');
+  assert.doesNotThrow(() => boot.assertBootChecks({ ...input, token: true, orgIds: ['a', 'b'], identity: true }));
+
+  // B from the legacy facts: a seeded record other than the admin a rescue covers still refuses.
+  const seededBase = workspace({ users: { users: {
+    admin: { password: PW, mustChange: true, seededDefault: true }, temp: { password: PW, mustChange: true, seededDefault: true },
+  } } });
+  const ctxB = { ...contextFor(seededBase), host: '0.0.0.0', loopback: false, authOff: false, oidc: false, token: false, insecure: false, adminPassword: 'pw' };
+  const s = await storeFor(ctxB);
+  try {
+    const legacyB = readLegacy(s.db, ctxB);
+    const decision = boot.seedDecision(boot.legacyView(s.db, ctxB, legacyB));
+    assert.equal(decision.kind, 'rescue');
+    const plan = planImport(s.db, legacyB, ctxB, projectedMigration({ migrate: false, orgs: legacyB.orgs }));
+    assert.throws(() => boot.assertBootChecks(boot.legacyChecksInput(s.db, ctxB, legacyB, decision, plan)), refusal(MSG_B('0.0.0.0')));
+    const onlyAdmin = { ...legacyB, users: { ...legacyB.users, entries: legacyB.users.entries.filter(([n]) => n === 'admin') } };
+    assert.equal(boot.legacyChecksInput(s.db, ctxB, onlyAdmin, decision, plan).stillSeeded, false, 'the admin the rescue covers is not counted');
+  } finally {
+    s.close();
+  }
+
+  // C from plan1: the empty default artefact is not counted, the migration's default is, a CLI-created org is.
+  const cases = [
+    [workspace({ orgs: { acme: { members: {} }, default: { members: {} } } }), null, ['acme']],
+    [workspace({ orgs: { solo: { members: {} } }, files: { 'packs/p.yaml': PACK } }), MSG_C3(2, 'solo, default'), ['solo', 'default']],
+    [workspace({ orgs: { acme: { members: {} } } }), MSG_C3(2, 'default, acme'), ['default', 'acme'], true],
+  ];
+  for (const [base, msg, ids, cliInit] of cases) {
+    const ctx = { ...contextFor(base), host: '127.0.0.1', loopback: true, authOff: false, oidc: false, token: true, insecure: false, adminPassword: null };
+    const { db, close } = await storeFor(ctx);
+    try {
+      if (cliInit) identity.ensureDefaultOrg(db, 'cli');
+      const legacy1 = readLegacy(db, ctx);
+      const migrate = legacy1.orgs.exists && !boot.keepsDefaultAtRoot(db);
+      const flat = migrate ? planFlatMigration({ base }) : null;
+      const plan1 = planImport(db, legacy1, ctx, projectedMigration({ flat, migrate, orgs: legacy1.orgs }));
+      const decision = boot.seedDecision(boot.legacyView(db, ctx, legacy1));
+      const checks = boot.legacyChecksInput(db, ctx, legacy1, decision, plan1);
+      assert.deepEqual(checks.orgIds, ids);
+      if (msg) assert.throws(() => boot.assertBootChecks(checks), (e) => refusal(msg)(e) && e.nothingMoved === true);
+      else assert.doesNotThrow(() => boot.assertBootChecks(checks));
+    } finally {
+      close();
+    }
+  }
+});
+
+test('bootContext: a malformed issuer, join role or bootstrap admin refuses before any file is created; a bootstrap admin without OIDC only warns', async () => {
+  for (const env of [
+    { OBSERVOGRAM_OIDC_ISSUER: 'ftp://idp.example' },
+    { OBSERVOGRAM_OIDC_ISSUER: 'https://user:pw@idp.example' },
+    { OBSERVOGRAM_OIDC_JOIN_ROLE: 'member' },
+    { OBSERVOGRAM_OIDC_ISSUER: ISSUER, OBSERVOGRAM_BOOTSTRAP_ADMIN: 'not an email' },
+  ]) {
+    const base = workspace({ users: { users: { alice: { password: PW } } } });
+    const name = Object.keys(env).at(-1);
+    await assert.rejects(bootIn(base, env), (e) => refusal(new RegExp(`^refusing to start: ${name} .*Nothing was written\\.$`))(e) && e.nothingMoved === true, JSON.stringify(env));
+    assert.equal(existsSync(dbOf(base)), false, 'no database file was created');
+  }
+  const base = workspace();
+  const r = await bootIn(base, { OBSERVOGRAM_BOOTSTRAP_ADMIN: 'boss@example.test' });
+  try {
+    assert.ok(r.warns.includes('[store] OBSERVOGRAM_BOOTSTRAP_ADMIN applies only with OIDC (OBSERVOGRAM_OIDC_ISSUER is not set) — ignored'), r.warns.join('\n'));
+    assert.equal(r.ctx.bootstrap, null);
+  } finally {
+    closeBase(base);
+  }
+});
+
+test('bootStore on a fresh workspace, loopback: imports (default at "."), writes the marker, seeds admin/admin owner and admin of default; a second boot changes nothing', async () => {
+  const base = workspace();
+  const r1 = await bootIn(base);
+  try {
+    assert.equal(r1.decision.kind, 'seed');
+    const db = r1.db;
+    assert.deepEqual(rowsOf(db), {
+      orgs: [['default', 'Default', '.']],
+      users: [{ login: 'admin', kind: 'local', owner: true, disabled: false, epoch: 1, sub: null }],
+      memberships: [['default', 'admin', 'admin']],
+    });
+    const a = users.getUserByLogin(db, 'admin');
+    assert.deepEqual([a.mustChange, a.seededDefault], [true, true]);
+    assert.ok(verifyPassword('admin', a.password));
+    assert.equal(metaOf(db, 'identity_armed'), '1');
+    assert.equal(legacy.readMarker(base).storeId, meta.storeId(db));
+    assert.equal(legacy.readMarker(base).by, 'import');
+    assert.equal(orgRootOf('default', db), '.');
+    assert.ok(r1.logs.some((l) => l.startsWith('[store] imported no users file and no orgs.json')), r1.logs.join('\n'));
+    assert.ok(r1.logs.includes('[studio] first boot: seeded default sign-in admin / admin — a password change is asked at sign-in (skippable until it lands). OBSERVOGRAM_AUTH=off runs open with no login.'));
+    const audit = auditRows(db);
+    const r2 = await bootIn(base);
+    assert.equal(r2.decision.kind, 'none');
+    assert.equal(r2.report, null);
+    assert.deepEqual(auditRows(db), audit, 'the second boot writes nothing');
+    assert.deepEqual(r2.logs, []);
+  } finally {
+    closeBase(base);
+  }
+});
+
+test('bootStore: the rescue never overwrites a real credential — a CLI-created admin kept as a conflict, the env password not applied, a warning, no user.password row', async () => {
+  const base = workspace();
+  const db0 = await openStore({ path: dbOf(base) });
+  admin.addLocalUser(db0, 'cli', { login: 'admin', password: 'a real password' });
+  write(join(base, 'users.json'), JSON.stringify({ users: { admin: { password: hashPassword('admin'), mustChange: true, seededDefault: true } } }));
+  try {
+    const r = await bootIn(base, { OBSERVOGRAM_ADMIN_PASSWORD: 'from the env' });
+    assert.equal(r.decision.kind, 'rescue');
+    assert.deepEqual(r.report.users.conflicts, [{ login: 'admin', reason: 'kept the existing row' }]);
+    const row = users.getUserByLogin(r.db, 'admin');
+    assert.ok(verifyPassword('a real password', row.password), 'the real password still verifies');
+    assert.ok(!verifyPassword('from the env', row.password), 'the env one does not');
+    assert.ok(r.warns.includes("[store] OBSERVOGRAM_ADMIN_PASSWORD not applied: the store's admin is not the seeded default (kept as it is)"), r.warns.join('\n'));
+    assert.ok(!auditRows(r.db).some(([action]) => action === 'user.password'));
+  } finally {
+    closeBase(base);
+  }
+});
+
+test('bootStore: the rescue replaces a still-seeded admin (imported from users.json) on 0.0.0.0, clears must_change and bumps the epoch', async () => {
+  const base = workspace({ users: { users: { admin: { password: hashPassword('admin'), mustChange: true, seededDefault: true } } } });
+  try {
+    const r = await bootIn(base, { OBSERVOGRAM_ADMIN_PASSWORD: 'from the env' }, { host: '0.0.0.0' });
+    assert.equal(r.decision.kind, 'rescue');
+    const row = users.getUserByLogin(r.db, 'admin');
+    assert.ok(verifyPassword('from the env', row.password));
+    assert.deepEqual([row.mustChange, row.seededDefault, row.sessionEpoch], [false, false, 1]);
+    assert.ok(r.logs.includes('[studio] replaced the still-default admin password from OBSERVOGRAM_ADMIN_PASSWORD'));
+    assert.deepEqual(auditRows(r.db).filter(([a]) => a === 'user.password'), [['user.password', 'system', 'admin']]);
+  } finally {
+    closeBase(base);
+  }
+  // The same with a token: no rescue, check B refuses and nothing is imported.
+  const tokenBase = workspace({ users: { users: { admin: { password: hashPassword('admin'), mustChange: true, seededDefault: true } } } });
+  const before = readFileSync(join(tokenBase, 'users.json'));
+  await assert.rejects(bootIn(tokenBase, { OBSERVOGRAM_ADMIN_PASSWORD: 'x', OBSERVOGRAM_API_TOKEN: 't' }, { host: '0.0.0.0' }),
+    (e) => refusal(MSG_B('0.0.0.0'))(e) && e.nothingMoved === true);
+  try {
+    const db = await openStore({ path: dbOf(tokenBase) });
+    assert.equal(metaOf(db, 'import_done'), null);
+    assert.deepEqual(readFileSync(join(tokenBase, 'users.json')), before);
+    assert.equal(existsSync(legacy.markerPath(tokenBase)), false);
+  } finally {
+    closeBase(tokenBase);
+  }
+});
+
+test('bootStore: a one-org orgs.json with no token and no identity, on loopback, boots twice to the same posture — seeded at the import boot, nothing at the second (A-56)', async () => {
+  const base = workspace({ orgs: { solo: { name: 'Solo', members: {} } } });
+  try {
+    const r1 = await bootIn(base);
+    assert.equal(r1.decision.kind, 'seed');
+    assert.deepEqual(rowsOf(r1.db), {
+      orgs: [['solo', 'Solo', 'orgs/solo']],
+      users: [{ login: 'admin', kind: 'local', owner: true, disabled: false, epoch: 1, sub: null }],
+      memberships: [['solo', 'admin', 'admin']],
+    });
+    assert.equal(metaOf(r1.db, 'identity_armed'), '1');
+    const audit = auditRows(r1.db);
+    const r2 = await bootIn(base);
+    assert.equal(r2.decision.kind, 'none');
+    assert.equal(metaOf(r2.db, 'identity_armed'), '1', 'the same posture: stand-alone sign-in armed');
+    assert.deepEqual(auditRows(r2.db), audit, 'no second seed');
+  } finally {
+    closeBase(base);
+  }
+  // Off loopback with the same env: check A refuses and nothing moves.
+  const exposed = workspace({ orgs: { solo: { name: 'Solo', members: {} } }, files: { 'packs/p.yaml': PACK } });
+  const orgsBefore = readFileSync(join(exposed, 'orgs.json'));
+  await assert.rejects(bootIn(exposed, {}, { host: '0.0.0.0' }), (e) => refusal(MSG_A('0.0.0.0'))(e) && e.nothingMoved === true);
+  closeBase(exposed);
+  assert.deepEqual(readFileSync(join(exposed, 'orgs.json')), orgsBefore);
+  assert.ok(existsSync(join(exposed, 'packs', 'p.yaml')) && !existsSync(join(exposed, 'orgs', 'default')), 'nothing moved');
+});
+
+test('bootStore on a CLI-initialised store, then an orgs.json { acme } and flat packs, journeys and deploys.jsonl: nothing moves, orgs.json byte-identical, the skip reported, default still at ".", acme at orgs/acme; C passes on the CLI-armed identity', async () => {
+  const base = workspace();
+  const db0 = await openStore({ path: dbOf(base) });
+  admin.addLocalUser(db0, 'cli', { login: 'alice', password: 'correct horse' });
+  write(join(base, 'orgs.json'), JSON.stringify({ acme: { name: 'Acme', members: { alice: 'admin' } } }, null, 2) + '\n');
+  write(join(base, 'packs', 'p.yaml'), PACK);
+  write(join(base, 'journeys', 'j.journey.yaml'), 'name: j\n');
+  write(join(base, 'deploys.jsonl'), '{}\n');
+  const orgsBefore = readFileSync(join(base, 'orgs.json'));
+  try {
+    const r = await bootIn(base, {}, { host: '0.0.0.0' });
+    assert.equal(r.report.migration.skipped, 'the store keeps the default org at .');
+    assert.deepEqual(r.report.migration.moved, []);
+    assert.deepEqual(readFileSync(join(base, 'orgs.json')), orgsBefore);
+    for (const rel of ['packs/p.yaml', 'journeys/j.journey.yaml', 'deploys.jsonl']) assert.ok(existsSync(join(base, rel)), rel);
+    assert.equal(existsSync(join(base, 'orgs', 'default')), false);
+    assert.deepEqual(rowsOf(r.db).orgs, [['default', 'Default', '.'], ['acme', 'Acme', 'orgs/acme']]);
+    assert.deepEqual([orgRootOf('default', r.db), orgRootOf('acme', r.db)], ['.', 'orgs/acme']);
+    assert.ok(r.logs.includes(`[store]   flat workspace not moved: store ${meta.storeId(r.db)} already keeps the default org at . (initialised by a CLI before this first start)`), r.logs.join('\n'));
+  } finally {
+    closeBase(base);
+  }
+});
+
+test('bootStore: the same store whose default-org data a pre-store build already moved into orgs/default refuses (check E) naming both paths, writes and moves nothing; after the entries are moved back the next boot imports', async () => {
+  const base = workspace();
+  const db0 = await openStore({ path: dbOf(base) });
+  admin.addLocalUser(db0, 'cli', { login: 'alice', password: 'correct horse' });
+  const id = meta.storeId(db0);
+  write(join(base, 'orgs.json'), JSON.stringify({ acme: { members: {} }, default: { name: 'Default', members: {} } }, null, 2) + '\n');
+  write(join(base, 'orgs', 'default', 'packs', 'p.yaml'), PACK);
+  const orgsBefore = readFileSync(join(base, 'orgs.json'));
+  const auditBefore = auditRows(db0);
+  const moved = join(base, 'orgs', 'default');
+  const MSG_E = `refusing to start: store ${id} keeps the default org at ${base} (a CLI initialised it before this first start), `
+    + `but ${moved} holds data no org reads — a pre-store build moved the default org's entries there. `
+    + `Nothing was moved or imported. With the server stopped, move the entries of ${moved} back into ${base} `
+    + '(or move that directory aside if it is not the default org\'s data), then start again.';
+  try {
+    await assert.rejects(bootIn(base), (e) => refusal(MSG_E)(e) && e.nothingMoved === true);
+    assert.deepEqual(auditRows(db0), auditBefore, 'no row');
+    assert.equal(metaOf(db0, 'import_done'), null, 'no meta');
+    assert.deepEqual(readFileSync(join(base, 'orgs.json')), orgsBefore);
+    assert.ok(existsSync(join(moved, 'packs', 'p.yaml')), 'nothing moved');
+    renameSync(join(moved, 'packs'), join(base, 'packs'));
+    const r = await bootIn(base);
+    assert.deepEqual(rowsOf(r.db).orgs, [['default', 'Default', '.'], ['acme', 'acme', 'orgs/acme']]);
+    assert.deepEqual(r.report.orgs.conflicts, [{ id: 'default', reason: 'kept the existing org' }]);
+    assert.ok(existsSync(join(base, 'packs', 'p.yaml')));
+  } finally {
+    closeBase(base);
+  }
+});
+
+test('staleImportGuard (a): a new store, or a store never imported, beside legacy files a marker names refuses with the 2a text and imports nothing', async () => {
+  const base = workspace({ users: { users: { alice: { password: PW } } } });
+  const r = await bootIn(base);
+  const oldId = meta.storeId(r.db);
+  closeBase(base);
+  rmSync(dbOf(base));
+  const newDb = join(tempDir('other-db'), 'observogram.db');
+  for (const [env, dbPath] of [[{}, dbOf(base)], [{ OBSERVOGRAM_DB: newDb }, newDb]]) {
+    const refused = await bootIn(base, env).then(() => null, (e) => e);
+    const db = await openStore({ path: dbPath });
+    try {
+      const expected = `refusing to start: the legacy users.json/orgs.json in ${base} were imported into store ${oldId} `
+        + `(${join(base, '.store-imported')}), but ${dbPath} holds a new, empty store (${meta.storeId(db)}).\n`
+        + 'Nothing was imported. Ways out:\n'
+        + '  - point OBSERVOGRAM_DB at that store, or at a copy of its backup;\n'
+        + '  - with the server stopped, `packc store restore <backup>`;\n'
+        + `  - or, to accept the legacy files as they stand, move ${join(base, '.store-imported')} aside:\n`
+        + '    the next start imports them and says so.';
+      assert.ok(refusal(expected)(refused), refused?.message);
+      assert.equal(metaOf(db, 'import_done'), null);
+      assert.deepEqual(rowsOf(db), { orgs: [], users: [], memberships: [] });
+    } finally {
+      closeStore(dbPath);
+    }
+  }
+  // Moving the marker aside accepts the files: the next boot imports.
+  renameSync(legacy.markerPath(base), join(base, 'marker.aside'));
+  try {
+    const again = await bootIn(base);
+    assert.ok(again.report);
+    assert.equal(legacy.readMarker(base).storeId, meta.storeId(again.db));
+  } finally {
+    closeBase(base);
+  }
+});
+
+test('staleImportGuard (b): a changed issuer refuses with the 2a text; the same issuer re-spelled boots; OIDC unset keeps the record', async () => {
+  const base = workspace();
+  try {
+    const r = await bootIn(base, { OBSERVOGRAM_OIDC_ISSUER: ISSUER });
+    assert.equal(metaOf(r.db, 'oidc_issuer'), KEY, 'step 4 records the key');
+    assert.deepEqual(auditRows(r.db).filter(([a, , t]) => a === 'meta.set' && t === 'oidc_issuer'), [['meta.set', 'system', 'oidc_issuer']]);
+    const id = meta.storeId(r.db);
+    const other = 'https://other.example/realms/x';
+    const expected = `refusing to start: OBSERVOGRAM_OIDC_ISSUER is ${other} (key ${other}), but store ${id} records its `
+      + `OIDC users under ${KEY}. Nothing was changed. If the IdP is the same, set OBSERVOGRAM_OIDC_ISSUER back to `
+      + `the value that key was recorded from (a spelling that canonicalises to ${KEY}: its trailing path slash, its well-known suffix).`;
+    const audit = auditRows(r.db);
+    await assert.rejects(bootIn(base, { OBSERVOGRAM_OIDC_ISSUER: other }), (e) => refusal(expected)(e) && e.nothingMoved === true);
+    assert.deepEqual(auditRows(r.db), audit);
+    for (const spelling of [`${ISSUER}/`, `${ISSUER}/.well-known/openid-configuration`]) {
+      await bootIn(base, { OBSERVOGRAM_OIDC_ISSUER: spelling });
+    }
+    assert.deepEqual(auditRows(r.db), audit, 'a re-spelled issuer writes nothing');
+    const plain = await bootIn(base);
+    assert.equal(plain.decision.kind, 'seed', 'booted stand-alone (a fresh stand-alone posture on loopback)');
+    assert.equal(metaOf(r.db, 'oidc_issuer'), KEY, 'the record kept');
+    assert.equal(auditRows(r.db).filter(([a, , t]) => a === 'meta.set' && t === 'oidc_issuer').length, 1);
+  } finally {
+    closeBase(base);
+  }
+});
+
+test('staleImportGuard (d): an edited users.json and an appeared orgs.json refuse with the 2a texts; the file put back passes; (e) a moved-aside file is recorded absent and a missing marker is rewritten', async () => {
+  const usersText = JSON.stringify({ users: { alice: { password: PW } } });
+  const base = workspace({ users: usersText });
+  const usersPath = join(base, 'users.json');
+  const markerFile = join(base, '.store-imported');
+  try {
+    const r = await bootIn(base);
+    const id = meta.storeId(r.db);
+    const recorded = legacy.sha256Of(Buffer.from(usersText));
+    assert.deepEqual(meta.getMetaJson(r.db, 'legacy_hashes'), { 'users.json': { sha256: recorded }, 'orgs.json': { absent: true } });
+    const rowsBefore = rowsOf(r.db);
+    const auditBefore = auditRows(r.db);
+
+    write(usersPath, JSON.stringify({ users: { alice: { password: PW }, mallory: { password: PW } } }));
+    const now = legacy.sha256Of(readFileSync(usersPath));
+    const expectedChanged = `refusing to start: ${usersPath} changed since store ${id} last imported it (it was SHA-256 ${recorded}, it is ${now}) — `
+      + 'it was edited outside the store (a pre-store build during a rollback, or config management).\n'
+      + 'Nothing was changed. The store keeps its own users and orgs; the file is only compared, never read again. With the server stopped:\n'
+      + `  - put ${usersPath} back exactly as it was imported (SHA-256 ${recorded}; the store's legacy_hashes and ${markerFile} record it), or\n`
+      + `  - move ${usersPath} aside: a file that disappears is recorded as absent and changes no user or org;\n`
+      + 'then make the change with `npm run users` / `npm run orgs`.';
+    await assert.rejects(bootIn(base), (e) => refusal(expectedChanged)(e) && e.nothingMoved === true);
+    assert.ok(!/packc|--replace|rekey/.test(expectedChanged), 'no command that 2a lacks');
+
+    write(usersPath, usersText);
+    await bootIn(base);
+
+    const orgsPath = write(join(base, 'orgs.json'), '{}\n');
+    const expectedAppeared = `refusing to start: ${orgsPath} appeared since store ${id} last imported it (it was absent then).\n`
+      + 'Nothing was changed. The store keeps its own users and orgs; the file is only compared, never read again. With the server stopped:\n'
+      + `  - move ${orgsPath} aside: a file that disappears is recorded as absent and changes no user or org;\n`
+      + 'then make the change with `npm run users` / `npm run orgs`.';
+    await assert.rejects(bootIn(base), (e) => refusal(expectedAppeared)(e));
+    rmSync(orgsPath);
+
+    renameSync(usersPath, join(base, 'users.json.aside'));
+    const moved = await bootIn(base);
+    assert.ok(moved.logs.includes('[store] users.json disappeared since the import; recorded as absent'), moved.logs.join('\n'));
+    assert.deepEqual(meta.getMetaJson(r.db, 'legacy_hashes'), { 'users.json': { absent: true }, 'orgs.json': { absent: true } });
+    assert.deepEqual(rowsOf(r.db), rowsBefore, 'no user, org or membership row changed');
+    assert.deepEqual(auditRows(r.db), auditBefore, 'no audit row');
+    assert.deepEqual(legacy.readMarker(base).files, meta.getMetaJson(r.db, 'legacy_hashes'), 'the marker follows the database');
+    assert.equal(legacy.readMarker(base).by, 'repair');
+
+    rmSync(markerFile);
+    const repaired = await bootIn(base);
+    assert.ok(repaired.logs.includes(`[store] rewrote ${markerFile} from store ${id}`), repaired.logs.join('\n'));
+    assert.deepEqual([legacy.readMarker(base).storeId, legacy.readMarker(base).by], [id, 'repair']);
+    write(markerFile, '{ nope');
+    await assert.rejects(bootIn(base), (e) => e instanceof legacy.LegacyFileError && e.path === markerFile, 'a corrupt marker refuses naming it');
+  } finally {
+    closeBase(base);
+  }
+});
+
+test('bootStore with OBSERVOGRAM_DB=:memory: warns, writes no marker, and a restart in a fresh process would import again', async () => {
+  const base = workspace({ users: { users: { alice: { password: PW } } } });
+  try {
+    const r = await bootIn(base, { OBSERVOGRAM_DB: ':memory:' });
+    assert.ok(r.warns.includes('[store] OBSERVOGRAM_DB=:memory: — nothing persists: every restart imports again and seeds admin/admin again'));
+    assert.ok(r.report);
+    assert.equal(existsSync(legacy.markerPath(base)), false);
+    assert.equal(existsSync(dbOf(base)), false);
+  } finally {
+    closeStore(':memory:');
+  }
+});
+
+test('the every-boot warnings on a boot that does not import: no owner, left behind, an ignored join role; the zero-owner warning only in the identity postures', async () => {
+  const noAdmin = workspace({ users: { users: { bob: { password: PW } } }, orgs: { acme: { members: { bob: 'operator' } } } });
+  try {
+    await bootIn(noAdmin);
+    const r = await bootIn(noAdmin);
+    assert.ok(r.warns.includes('[store] no owner — run `npm run users -- owner <login>` (or `npm run users -- add <name>`: the first local user becomes the owner)'), r.warns.join('\n'));
+  } finally {
+    closeBase(noAdmin);
+  }
+  const twin = workspace({ users: { users: { alice: { password: PW } } }, orgs: { default: { members: { alice: 'admin' } } }, files: { 'packs/p.yaml': PACK, 'orgs/default/packs/q.yaml': PACK } });
+  try {
+    await bootIn(twin);
+    const r = await bootIn(twin);
+    assert.ok(r.warns.includes(`[store] left behind: ${join(twin, 'packs')} — nothing reads it (the default org's copy is orgs/default/packs); merge it by hand`), r.warns.join('\n'));
+  } finally {
+    closeBase(twin);
+  }
+  const oidcBase = workspace();
+  try {
+    const r1 = await bootIn(oidcBase, { OBSERVOGRAM_OIDC_ISSUER: ISSUER, OBSERVOGRAM_OIDC_JOIN_ROLE: 'viewer' });
+    assert.equal(metaOf(r1.db, 'oidc_join_role'), 'viewer');
+    assert.ok(r1.warns.includes(`[store] no owner who can sign in with OIDC — set OBSERVOGRAM_BOOTSTRAP_ADMIN=${KEY}#<sub> (or a verified email) and sign in, or run \`npm run users -- owner ${KEY}#<sub>\``), r1.warns.join('\n'));
+    assert.ok(!r1.warns.some((w) => /JOIN_ROLE/.test(w)), 'the import boot reads it');
+    const r2 = await bootIn(oidcBase, { OBSERVOGRAM_OIDC_ISSUER: ISSUER, OBSERVOGRAM_OIDC_JOIN_ROLE: 'admin' });
+    assert.ok(r2.warns.includes('[store] OBSERVOGRAM_OIDC_JOIN_ROLE is read at the first start only; the store records viewer'), r2.warns.join('\n'));
+    assert.equal(metaOf(r2.db, 'oidc_join_role'), 'viewer');
+  } finally {
+    closeBase(oidcBase);
+  }
+  const open = workspace({ orgs: { acme: { members: {} } } });
+  try {
+    const r = await bootIn(open, { OBSERVOGRAM_AUTH: 'off' });
+    assert.ok(!r.warns.some((w) => /no owner/.test(w)), 'the open posture prints no zero-owner warning');
+  } finally {
+    closeBase(open);
+  }
+});
+
+test('the import report\'s no-owner line is not logged: open, token-only and OIDC import boots print at most warnNoOwner\'s line (A-49)', async () => {
+  const noOwnerLines = (r) => [...r.logs, ...r.warns].filter((l) => /no owner/.test(l));
+  const open = workspace();
+  try {
+    const r = await bootIn(open, { OBSERVOGRAM_INSECURE_NO_AUTH: '1' }, { host: '0.0.0.0' });
+    assert.deepEqual(noOwnerLines(r), [], 'an open import boot prints no no-owner line');
+  } finally {
+    closeBase(open);
+  }
+  const tokenOnly = workspace({ orgs: { acme: { members: {} } } });
+  try {
+    const r = await bootIn(tokenOnly, { OBSERVOGRAM_API_TOKEN: 'secret' });
+    assert.deepEqual(noOwnerLines(r), [], 'a token-only import boot prints no no-owner line');
+  } finally {
+    closeBase(tokenOnly);
+  }
+  const oidc = workspace();
+  try {
+    const r = await bootIn(oidc, { OBSERVOGRAM_OIDC_ISSUER: ISSUER });
+    assert.deepEqual(noOwnerLines(r), [`[store] no owner who can sign in with OIDC — set OBSERVOGRAM_BOOTSTRAP_ADMIN=${KEY}#<sub> (or a verified email) and sign in, or run \`npm run users -- owner ${KEY}#<sub>\``],
+      'an OIDC import boot prints the OIDC line once, not the report line too');
+  } finally {
+    closeBase(oidc);
+  }
+});
+
+test('orgRootOf: the store\'s root, cached per handle; an unknown org throws; resetOrgRootCache', async () => {
+  const flat = workspace({ users: { users: { alice: { password: PW } } } });
+  const armed = workspace({ users: { users: { alice: { password: PW } } }, orgs: { default: { members: { alice: 'admin' } } }, files: { 'packs/p.yaml': PACK } });
+  try {
+    const a = await bootIn(flat);
+    const b = await bootIn(armed);
+    assert.equal(orgRootOf('default', a.db), '.');
+    assert.equal(orgRootOf('default', b.db), 'orgs/default', 'keyed by handle: another store, another root');
+    assert.equal(orgRootOf('default', a.db), '.');
+    assert.throws(() => orgRootOf('nope', a.db), /^Error: tenancy: unknown org "nope"$/);
+    assert.throws(() => orgRootOf(undefined, a.db), /unknown org/);
+    resetOrgRootCache();
+    assert.equal(orgRootOf('default', b.db), 'orgs/default');
+  } finally {
+    closeBase(flat);
+    closeBase(armed);
+  }
+});
