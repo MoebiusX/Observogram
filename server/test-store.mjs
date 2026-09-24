@@ -568,3 +568,317 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
     raw.close();
   });
 }
+
+// ---------- Repositories ----------
+
+const { runWithOrg } = await import('./tenancy.mjs');
+const users = await import('./store/users.mjs');
+const orgs = await import('./store/orgs.mjs');
+const memberships = await import('./store/memberships.mjs');
+const auditRepo = await import('./store/audit.mjs');
+const meta = await import('./store/meta.mjs');
+const services = await import('./store/services.mjs');
+const environments = await import('./store/environments.mjs');
+const mcpEndpoints = await import('./store/mcp-endpoints.mjs');
+const packs = await import('./store/packs.mjs');
+const packServices = await import('./store/pack-services.mjs');
+
+async function freshStore(tag) {
+  const path = join(tempDir(tag), 'observogram.db');
+  const db = await openStore({ path });
+  return { path, db, close: () => closeStore(path) };
+}
+const auditActions = (db, filter = {}) => auditRepo.listAudit(db, { limit: 1000, ...filter }).reverse().map((r) => r.action);
+
+test('users: 0/1 booleans, the password record verbatim, epoch 1 by default and bumped by revocations, one audit row per change', async () => {
+  const { db, close } = await freshStore('users');
+  try {
+    const pw = { algo: 'scrypt', N: 16384, r: 8, p: 1, salt: 'c2FsdA==', hash: 'aGFzaA==' };
+    const alice = users.createUser(db, 'system', { login: 'alice', name: 'Alice', password: pw, isOwner: true, mustChange: true });
+    assert.equal(alice.sessionEpoch, 1);
+    assert.deepEqual(alice.password, pw);
+    assert.equal(alice.isOwner, true);
+    assert.equal(alice.mustChange, true);
+    assert.equal(alice.disabled, false);
+    const raw = prepare(db, 'SELECT is_owner, must_change, disabled, typeof(is_owner) AS t FROM users WHERE id = ?').get(alice.id);
+    assert.deepEqual({ ...raw }, { is_owner: 1, must_change: 1, disabled: 0, t: 'integer' });
+    assert.equal(users.getUserByLogin(db, 'alice').id, alice.id);
+    const oidc = users.createUser(db, 'system', { kind: 'oidc', login: 'idp#sub-1', issuer: 'https://idp.example', sub: 'sub-1', email: 'b@x.io', emailVerified: true });
+    assert.equal(oidc.emailVerified, true);
+    assert.throws(() => users.createUser(db, 'system', { kind: 'oidc', login: 'idp#sub-2' }), /CHECK/, 'an OIDC row needs issuer and sub');
+    assert.throws(() => users.createUser(db, 'system', { login: 'alice' }), /UNIQUE/);
+    assert.throws(() => users.createUser(db, 'system', { kind: 'saml', login: 'x' }), /local or oidc/);
+    assert.throws(() => users.createUser(db, '', { login: 'nobody' }), /needs an actor/);
+    assert.equal(users.getUserByLogin(db, 'nobody'), null);
+
+    assert.equal(users.bumpSessionEpoch(db, 'alice', alice.id), 2);
+    assert.equal(users.setPassword(db, 'alice', alice.id, { ...pw, hash: 'bmV3' }).sessionEpoch, 3, 'a password change bumps');
+    assert.equal(users.getUser(db, alice.id).mustChange, false);
+    assert.equal(users.setDisabled(db, 'alice', oidc.id, true).sessionEpoch, 2, 'disabling bumps');
+    assert.equal(users.setDisabled(db, 'alice', oidc.id, false).sessionEpoch, 2, 'enabling does not');
+    assert.equal(users.updateUserProfile(db, 'alice', alice.id, { name: 'Alice A.', emailVerified: false }).name, 'Alice A.');
+    assert.equal(users.getUser(db, alice.id).sessionEpoch, 3, 'a profile edit does not bump');
+    assert.equal(users.setOwner(db, 'alice', oidc.id, true).isOwner, true);
+    assert.throws(() => users.setDisabled(db, 'alice', 999, true), /no user 999/);
+    assert.deepEqual(auditActions(db), [
+      'user.create', 'user.create', 'user.signout', 'user.password', 'user.disable', 'user.enable', 'user.update', 'user.owner.grant',
+    ], 'exactly one row per successful change, none for a refused one');
+    const [latest] = auditRepo.listAudit(db, { limit: 1 });
+    assert.equal(latest.actor, 'alice');
+    assert.equal(latest.orgId, null, 'user changes are deployment events');
+    assert.equal(latest.targetId, 'idp#sub-1');
+  } finally {
+    close();
+  }
+});
+
+test('a repository write and its audit row commit together: a composed tx() that throws leaves neither', async () => {
+  const { db, close } = await freshStore('atomic');
+  try {
+    assert.throws(() => tx(db, () => {
+      users.createUser(db, 'system', { login: 'ghost' });
+      throw new Error('after the write');
+    }), /after the write/);
+    assert.equal(users.getUserByLogin(db, 'ghost'), null);
+    assert.deepEqual(auditActions(db), []);
+    tx(db, () => { users.createUser(db, 'system', { login: 'a' }); users.createUser(db, 'system', { login: 'b' }); });
+    assert.deepEqual(auditActions(db), ['user.create', 'user.create']);
+    assert.throws(() => auditRepo.writeAudit(db, 'x', { action: 'loose' }), /inside the tx\(\)/);
+  } finally {
+    close();
+  }
+});
+
+test('orgs: the root is "." only when asked for, else orgs/<id>; soft removal; a slug is never reused', async () => {
+  const { db, close } = await freshStore('orgs');
+  try {
+    assert.equal(orgs.createOrg(db, 'system', { id: 'default', name: 'Default', root: '.' }).root, '.');
+    assert.equal(orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' }).root, 'orgs/acme');
+    assert.throws(() => orgs.createOrg(db, 'system', { id: 'bravo', name: 'Bravo', root: 'elsewhere' }), /'\.' .* or 'orgs\/bravo'/);
+    assert.throws(() => orgs.createOrg(db, 'system', { id: 'Bad Slug', name: 'x' }), /invalid org id/);
+    assert.throws(() => orgs.createOrg(db, 'system', { id: 'second', name: 'Second default', root: '.' }), /UNIQUE/, 'one org at "."');
+    assert.equal(orgs.renameOrg(db, 'alice', 'acme', 'Acme Corp').name, 'Acme Corp');
+    assert.ok(orgs.removeOrg(db, 'system', 'acme').removedAt);
+    assert.deepEqual(orgs.listOrgs(db).map((o) => o.id), ['default']);
+    assert.deepEqual(orgs.listOrgs(db, { includeRemoved: true }).map((o) => o.id), ['default', 'acme']);
+    assert.throws(() => orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme again' }), /never reused/);
+    assert.throws(() => orgs.renameOrg(db, 'system', 'acme', 'x'), /no org/);
+    const rows = auditRepo.listAudit(db).reverse();
+    assert.deepEqual(rows.map((r) => [r.action, r.orgId]), [
+      ['org.create', null], ['org.create', null], ['org.rename', 'acme'], ['org.remove', null],
+    ]);
+  } finally {
+    close();
+  }
+});
+
+test('memberships: viewer/operator/admin only, first membership first, removed orgs skipped; audit rows carry the org', async () => {
+  const { db, close } = await freshStore('members');
+  try {
+    const alice = users.createUser(db, 'system', { login: 'alice' });
+    const bob = users.createUser(db, 'system', { login: 'bob' });
+    orgs.createOrg(db, 'system', { id: 'default', name: 'Default', root: '.' });
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    orgs.createOrg(db, 'system', { id: 'gone', name: 'Gone' });
+    for (const bad of ['member', 'owner', 'Admin', ' viewer ', null]) {
+      assert.throws(() => memberships.addMembership(db, 'system', { orgId: 'acme', userId: alice.id, role: bad }), /role is one of/, String(bad));
+    }
+    memberships.addMembership(db, 'system', { orgId: 'gone', userId: alice.id, role: 'admin' });
+    memberships.addMembership(db, 'system', { orgId: 'acme', userId: alice.id, role: 'operator' });
+    memberships.addMembership(db, 'system', { orgId: 'default', userId: alice.id, role: 'viewer' });
+    memberships.addMembership(db, 'system', { orgId: 'acme', userId: bob.id, role: 'viewer' });
+    assert.throws(() => memberships.addMembership(db, 'system', { orgId: 'acme', userId: bob.id, role: 'admin' }), /UNIQUE|PRIMARY/);
+    assert.throws(() => memberships.addMembership(db, 'system', { orgId: 'nope', userId: bob.id, role: 'admin' }), /no org/);
+    orgs.removeOrg(db, 'system', 'gone');
+    assert.throws(() => memberships.addMembership(db, 'system', { orgId: 'gone', userId: bob.id, role: 'admin' }), /no org/);
+    assert.deepEqual(memberships.listMembershipsForUser(db, alice.id).map((m) => m.orgId), ['acme', 'default'], 'created order, removed org skipped');
+    assert.equal(memberships.setRole(db, 'alice', 'acme', bob.id, 'admin').role, 'admin');
+    memberships.removeMembership(db, 'alice', 'acme', bob.id);
+    assert.equal(memberships.getMembership(db, 'acme', bob.id), null);
+    assert.deepEqual(memberships.listMembers(db, 'acme').map((m) => m.userId), [alice.id]);
+    const acmeRows = auditRepo.listAudit(db, { orgId: 'acme' }).reverse();
+    assert.deepEqual(acmeRows.map((r) => [r.action, r.targetId]), [
+      ['membership.add', 'alice'], ['membership.add', 'bob'], ['membership.role', 'bob'], ['membership.remove', 'bob'],
+    ]);
+  } finally {
+    close();
+  }
+});
+
+test('audit: appendAudit and listAudit filters (deployment rows, one org, actor, action, paging)', async () => {
+  const { db, close } = await freshStore('auditlist');
+  try {
+    auditRepo.appendAudit(db, 'alice', { action: 'x.one' });
+    auditRepo.appendAudit(db, 'bob', { orgId: 'acme', action: 'x.two', targetKind: 'pack', targetId: 7, detail: { n: 1 } });
+    auditRepo.appendAudit(db, 'alice', { orgId: 'acme', action: 'x.three' });
+    assert.equal(auditRepo.listAudit(db).length, 3);
+    assert.deepEqual(auditRepo.listAudit(db, { orgId: null }).map((r) => r.action), ['x.one']);
+    assert.deepEqual(auditRepo.listAudit(db, { orgId: 'acme' }).map((r) => r.action), ['x.three', 'x.two']);
+    assert.deepEqual(auditRepo.listAudit(db, { actor: 'alice' }).map((r) => r.action), ['x.three', 'x.one']);
+    const [two] = auditRepo.listAudit(db, { action: 'x.two' });
+    assert.deepEqual([two.targetKind, two.targetId, two.detail], ['pack', '7', { n: 1 }]);
+    const [newest] = auditRepo.listAudit(db, { limit: 1 });
+    assert.deepEqual(auditRepo.listAudit(db, { beforeSeq: newest.seq }).map((r) => r.action), ['x.two', 'x.one']);
+    assert.throws(() => auditRepo.appendAudit(db, ' ', { action: 'x' }), /needs an actor/);
+  } finally {
+    close();
+  }
+});
+
+test('meta: get and set with an audit row; store_id is fixed', async () => {
+  const { db, close } = await freshStore('meta');
+  try {
+    assert.match(meta.storeId(db), /^[0-9a-f-]{36}$/);
+    assert.equal(meta.getMeta(db, 'default_org'), null);
+    meta.setMeta(db, 'system', 'default_org', 'default');
+    meta.setMeta(db, 'system', 'default_org', 'acme');
+    assert.equal(meta.getMeta(db, 'default_org'), 'acme');
+    assert.throws(() => meta.setMeta(db, 'system', 'store_id', 'forged'), /fixed at creation/);
+    assert.throws(() => meta.setMeta(db, 'system', 'identity_armed', true), /string or null/);
+    assert.deepEqual(auditActions(db), ['meta.set', 'meta.set']);
+  } finally {
+    close();
+  }
+});
+
+test('context-scoped repositories throw outside runWithOrg()', async () => {
+  const { db, close } = await freshStore('noctx');
+  try {
+    const calls = {
+      'services.list': () => services.listServices(db),
+      'services.create': () => services.createService(db, 'a', { slug: 's', name: 'S' }),
+      'environments.list': () => environments.listEnvironments(db, 1),
+      'environments.create': () => environments.createEnvironment(db, 'a', { serviceId: 1, name: 'prod' }),
+      'mcp_endpoints.list': () => mcpEndpoints.listMcpEndpoints(db),
+      'mcp_endpoints.create': () => mcpEndpoints.createMcpEndpoint(db, 'a', { name: 'm', url: 'https://mcp.example' }),
+      'packs.list': () => packs.listPacks(db),
+      'packs.add': () => packs.addPack(db, 'a', { id: 'p' }),
+      'packs.touch': () => packs.touch(db, 'p'),
+      'pack_services.list': () => packServices.listServicesForPack(db, 'p'),
+      'pack_services.link': () => packServices.linkPackService(db, 'a', { packId: 'p', serviceId: 1 }),
+    };
+    for (const [name, call] of Object.entries(calls)) assert.throws(call, /org-scoped — call it inside runWithOrg\(\)/, name);
+    assert.deepEqual(auditActions(db), []);
+  } finally {
+    close();
+  }
+});
+
+test('Tenancy isolation: org B reads and writes nothing of org A through any context-scoped repository', async () => {
+  const { db, close } = await freshStore('iso');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    orgs.createOrg(db, 'system', { id: 'bravo', name: 'Bravo' });
+    const a = runWithOrg('acme', () => {
+      const ep = mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'prod-mcp', url: 'https://mcp.acme.example/mcp', readTokenEnv: 'ACME_MCP_TOKEN' });
+      const svc = services.createService(db, 'alice', { slug: 'checkout', name: 'Checkout', owners: ['alice'], tier: 'critical' });
+      const env = environments.createEnvironment(db, 'alice', { serviceId: svc.id, name: 'prod', tier: 'high', bindings: { region: 'eu' }, mcpEndpointId: ep.id });
+      const pack = packs.addPack(db, 'alice', { id: 'uploaded-checkout-0123abcd', label: 'Checkout', source: 'upload' });
+      const link = packServices.linkPackService(db, 'alice', { packId: pack.id, serviceId: svc.id, role: 'primary' });
+      return { ep, svc, env, pack, link };
+    });
+    assert.deepEqual(a.env.bindings, { region: 'eu' });
+    assert.deepEqual(a.svc.owners, ['alice']);
+    runWithOrg('bravo', () => {
+      assert.deepEqual(services.listServices(db), []);
+      assert.equal(services.getService(db, a.svc.id), null);
+      assert.equal(services.getServiceBySlug(db, 'checkout'), null);
+      assert.throws(() => services.updateService(db, 'bob', a.svc.id, { name: 'Pwned' }), /no service/);
+      assert.throws(() => services.deleteService(db, 'bob', a.svc.id), /no service/);
+      assert.deepEqual(environments.listEnvironments(db, a.svc.id), []);
+      assert.equal(environments.getEnvironment(db, a.env.id), null);
+      assert.throws(() => environments.createEnvironment(db, 'bob', { serviceId: a.svc.id, name: 'staging' }), /no service/);
+      assert.throws(() => environments.updateEnvironment(db, 'bob', a.env.id, { tier: 'low' }), /no environment/);
+      assert.throws(() => environments.deleteEnvironment(db, 'bob', a.env.id), /no environment/);
+      assert.deepEqual(mcpEndpoints.listMcpEndpoints(db), []);
+      assert.equal(mcpEndpoints.getMcpEndpoint(db, a.ep.id), null);
+      assert.throws(() => mcpEndpoints.updateMcpEndpoint(db, 'bob', a.ep.id, { url: 'https://evil.example' }), /no MCP endpoint/);
+      assert.throws(() => mcpEndpoints.deleteMcpEndpoint(db, 'bob', a.ep.id), /no MCP endpoint/);
+      assert.deepEqual(packs.listPacks(db), []);
+      assert.equal(packs.getPack(db, a.pack.id), null);
+      assert.equal(packs.touch(db, a.pack.id), false);
+      assert.throws(() => packs.removePack(db, 'bob', a.pack.id), /no pack/);
+      assert.deepEqual(packServices.listServicesForPack(db, a.pack.id), []);
+      assert.deepEqual(packServices.listPacksForService(db, a.svc.id), []);
+      assert.throws(() => packServices.unlinkPackService(db, 'bob', a.pack.id, a.svc.id), /no pack link/);
+      // B's own rows, reaching for A's: A's service and A's endpoint are not found.
+      const bSvc = services.createService(db, 'bob', { slug: 'checkout', name: 'Bravo checkout' });
+      assert.throws(() => environments.createEnvironment(db, 'bob', { serviceId: bSvc.id, name: 'prod', mcpEndpointId: a.ep.id }), /no MCP endpoint/);
+      const bEnv = environments.createEnvironment(db, 'bob', { serviceId: bSvc.id, name: 'prod' });
+      assert.throws(() => environments.updateEnvironment(db, 'bob', bEnv.id, { mcpEndpointId: a.ep.id }), /no MCP endpoint/);
+      packs.addPack(db, 'bob', { id: 'uploaded-checkout-0123abcd' });
+      assert.throws(() => packServices.linkPackService(db, 'bob', { packId: 'uploaded-checkout-0123abcd', serviceId: a.svc.id }), /no service/);
+    });
+    // A is untouched.
+    runWithOrg('acme', () => {
+      assert.equal(services.getService(db, a.svc.id).name, 'Checkout');
+      assert.equal(environments.getEnvironment(db, a.env.id).mcpEndpointId, a.ep.id);
+      assert.equal(mcpEndpoints.getMcpEndpoint(db, a.ep.id).url, 'https://mcp.acme.example/mcp');
+      assert.equal(packs.listPacks(db).length, 1);
+      assert.deepEqual(packServices.listServicesForPack(db, a.pack.id).map((l) => l.role), ['primary']);
+      assert.equal(packs.touch(db, a.pack.id, '2030-01-01T00:00:00.000Z'), true);
+      assert.equal(packs.getPack(db, a.pack.id).lastUsedAt, '2030-01-01T00:00:00.000Z');
+    });
+    assert.deepEqual(auditActions(db, { orgId: 'acme' }), ['mcp_endpoint.create', 'service.create', 'environment.create', 'pack.register', 'pack.link'],
+      'every write audited in its org, touch() not at all');
+    assert.deepEqual(auditActions(db, { orgId: 'bravo' }), ['service.create', 'environment.create', 'pack.register']);
+    // The schema holds the same line: a link across orgs is a foreign-key failure.
+    assert.throws(() => prepare(db, "INSERT INTO pack_services (org_id, pack_id, service_id, role) VALUES ('bravo', 'uploaded-checkout-0123abcd', ?, 'member')").run(a.svc.id), /FOREIGN KEY/);
+  } finally {
+    close();
+  }
+});
+
+test('context-scoped updates, deletes and cascades within one org', async () => {
+  const { db, close } = await freshStore('crud');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    runWithOrg('acme', () => {
+      const ep = mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'mcp', url: 'http://mcp.internal:3001' });
+      assert.throws(() => mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'leaky', url: 'https://user:secret@mcp.example' }), /may not carry credentials/);
+      assert.throws(() => mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'tok', url: 'https://mcp.example', readTokenEnv: 'sk-live-123' }), /env var name/);
+      assert.throws(() => mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'ftp', url: 'ftp://mcp.example' }), /http\(s\)/);
+      const svc = services.createService(db, 'alice', { slug: 'pay', name: 'Payments' });
+      assert.throws(() => services.createService(db, 'alice', { slug: 'pay', name: 'Again' }), /UNIQUE/);
+      assert.equal(services.updateService(db, 'alice', svc.id, { tier: 'critical', owners: ['team-pay'] }).tier, 'critical');
+      const env = environments.createEnvironment(db, 'alice', { serviceId: svc.id, name: 'prod', mcpEndpointId: ep.id });
+      assert.equal(environments.updateEnvironment(db, 'alice', env.id, { tier: 'high' }).tier, 'high');
+      mcpEndpoints.deleteMcpEndpoint(db, 'alice', ep.id);
+      assert.equal(environments.getEnvironment(db, env.id).mcpEndpointId, null, 'the environment is unbound, not deleted');
+      packs.addPack(db, 'alice', { id: 'p1' });
+      packServices.linkPackService(db, 'alice', { packId: 'p1', serviceId: svc.id, role: 'primary' });
+      const other = services.createService(db, 'alice', { slug: 'ledger', name: 'Ledger' });
+      assert.throws(() => packServices.linkPackService(db, 'alice', { packId: 'p1', serviceId: other.id, role: 'primary' }), /UNIQUE/, 'one primary per pack');
+      packServices.linkPackService(db, 'alice', { packId: 'p1', serviceId: other.id });
+      packServices.unlinkPackService(db, 'alice', 'p1', other.id);
+      services.deleteService(db, 'alice', svc.id);
+      assert.equal(environments.getEnvironment(db, env.id), null, 'environments go with their service');
+      assert.deepEqual(packServices.listServicesForPack(db, 'p1'), [], 'so do pack links');
+      packs.removePack(db, 'alice', 'p1');
+      assert.deepEqual(packs.listPacks(db), []);
+    });
+    assert.deepEqual(auditActions(db, { orgId: 'acme' }), [
+      'mcp_endpoint.create', 'service.create', 'service.update', 'environment.create', 'environment.update', 'mcp_endpoint.delete',
+      'pack.register', 'pack.link', 'service.create', 'pack.link', 'pack.unlink', 'service.delete', 'pack.remove',
+    ]);
+  } finally {
+    close();
+  }
+});
+
+test('Concurrency: a repository write waits out a child holding BEGIN IMMEDIATE, then succeeds with its audit row', async () => {
+  const { path, db, close } = await freshStore('conc-repo');
+  try {
+    const holder = lockHolder(path, 700);
+    await holder.until(/locked/);
+    const t0 = Date.now();
+    users.createUser(db, 'system', { login: 'patient' });
+    const waited = Date.now() - t0;
+    assert.equal((await holder.done).code, 0);
+    assert.ok(waited >= 300, `waited ${waited} ms`);
+    assert.ok(users.getUserByLogin(db, 'patient'));
+    assert.deepEqual(auditActions(db), ['user.create']);
+  } finally {
+    close();
+  }
+});
