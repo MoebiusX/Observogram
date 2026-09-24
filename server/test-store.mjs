@@ -1991,7 +1991,18 @@ test('identity-admin passwd, remove and owner: a local password bumps the epoch;
     assert.deepEqual([off.disabled, off.sessionEpoch], [true, 3]);
     assert.deepEqual(rolesOf(db, 'bob'), [['default', 'operator']], 'memberships kept');
     assert.equal(admin.setLocalPassword(db, 'cli', 'bob', 'third-pw1').disabled, true, 'a disabled row may be given a password');
-    assert.throws(() => admin.grantOwnerByLogin(db, 'cli', 'bob'), refused('bob is disabled'));
+    assert.throws(() => admin.grantOwnerByLogin(db, 'cli', 'bob'), refused('bob is disabled — npm run users -- enable bob first'));
+    assert.throws(() => admin.addLocalUser(db, 'cli', { login: 'bob', password: 'pw123456' }),
+      refused('user exists: bob, disabled (npm run users -- enable bob; passwd sets a new password)'));
+    assert.throws(() => admin.enableUser(db, 'cli', 'nobody'), refused('no such user: nobody'));
+    const e = auditTrail(db).length;
+    const on = admin.enableUser(db, 'cli', 'bob');
+    assert.deepEqual([on.disabled, on.sessionEpoch], [false, 4], 'enable undoes remove; the disable already ended the sessions');
+    assert.deepEqual(rolesOf(db, 'bob'), [['default', 'operator']], 'memberships as they were');
+    assert.ok(verifyPassword('third-pw1', users.getUserByLogin(db, 'bob').password), 'the password as it was');
+    assert.equal(admin.enableUser(db, 'cli', 'bob').disabled, false, 'enabling an enabled user is a no-op');
+    assert.deepEqual(auditTrail(db, e), [['user.enable', 'cli', null, 'bob']]);
+    admin.disableUser(db, 'cli', 'bob');
     admin.addLocalUser(db, 'cli', { login: 'carl', password: 'pw123456' });
     const n = auditTrail(db).length;
     const carl = admin.grantOwnerByLogin(db, 'cli', 'carl');
@@ -2004,6 +2015,9 @@ test('identity-admin passwd, remove and owner: a local password bumps the epoch;
     const ada = admin.grantOwnerByLogin(db, 'cli', 'user-42', { shellIssuerRaw: 'https://idp.example' });
     assert.deepEqual([ada.kind, ada.login, ada.sub, ada.sessionEpoch, ada.isOwner], ['oidc', `${KEY}#user-42`, 'user-42', 1, true]);
     assert.deepEqual(auditTrail(db, m), [['user.create', 'cli', null, `${KEY}#user-42`], ['owner.bootstrap', 'cli', null, `${KEY}#user-42`]]);
+    admin.disableUser(db, 'cli', `${KEY}#user-42`);
+    const back = admin.enableUser(db, 'cli', `${KEY}#user-42`);
+    assert.deepEqual([back.disabled, back.isOwner], [false, true], 'an OIDC user disabled by the CLI can be re-enabled');
   } finally {
     close();
   }

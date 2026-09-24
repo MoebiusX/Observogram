@@ -747,6 +747,16 @@ test('arming: removing every removable user never reopens a 0.0.0.0 server; the 
     assert.equal((await fetch(`${s.base}/api/packs`)).status, 401, 'anonymous /api → 401');
     assert.equal((await fetch(`${s.base}/api/packs`, { headers: { Cookie: bob } })).status, 401, "bob's cookie → 401");
     assert.equal((await fetch(`${s.base}/api/packs`, { headers: { Cookie: carol } })).status, 401, "carol's cookie → 401");
+    // `enable` undoes `remove`; the cookie from before the disable stays refused.
+    assert.equal(cli(USER_ADMIN, ['passwd', 'bob', '--password-stdin'], ws, { input: 'bob-new-passw0rd\n' }).stdout
+      .includes('updated password for bob (disabled: npm run users -- enable bob lets them sign in)'), true);
+    assert.equal((await signIn(s.base, 'bob', 'bob-new-passw0rd')).status, 401, 'still disabled after passwd');
+    const en = cli(USER_ADMIN, ['enable', 'bob'], ws);
+    assert.ok(en.status === 0 && en.stdout.includes('enabled bob'), en.stderr);
+    const back = await signIn(s.base, 'bob', 'bob-new-passw0rd');
+    assert.equal(back.status, 200, 'a re-enabled user signs in');
+    assert.equal((await fetch(`${s.base}/api/packs`, { headers: { Cookie: back.session } })).status, 200);
+    assert.equal((await fetch(`${s.base}/api/packs`, { headers: { Cookie: bob } })).status, 401, "bob's old cookie stays refused");
   } finally {
     await s.stop();
   }

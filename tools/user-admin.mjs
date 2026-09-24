@@ -9,13 +9,14 @@
  *   npm run users -- add <username> [--name N] [--email E] [--role viewer|operator|admin] [--org <id>] [--password-stdin]
  *   npm run users -- passwd <username> [--password-stdin]
  *   npm run users -- remove <username>
+ *   npm run users -- enable <username>
  *   npm run users -- list
  *   npm run users -- owner <login|sub|issuer#sub>
  *
  * The first local user becomes the owner and admin of the default org, and
  * arms stand-alone sign-in on a running server (no restart needed); once
  * armed it stays armed. `remove` disables (users are never deleted: the
- * audit references them). Passwords are prompted with echo off;
+ * audit references them); `enable` undoes it. Passwords are prompted with echo off;
  * automation can pipe one instead:
  *   echo "s3cret" | npm run users -- add alice --password-stdin
  *
@@ -26,7 +27,7 @@ import { createInterface } from 'node:readline';
 import { brandEnv } from './lib/brand-env.mjs';
 import { CliRefusal, noteShellInit, openStoreForCli } from '../server/store/cli.mjs';
 import {
-  AdminRefusal, addLocalUser, checkAddLocalUser, disableUser, grantOwnerByLogin, setLocalPassword,
+  AdminRefusal, addLocalUser, checkAddLocalUser, disableUser, enableUser, grantOwnerByLogin, setLocalPassword,
 } from '../server/identity-admin.mjs';
 import { ensureDefaultOrg, CLI } from '../server/store/identity.mjs';
 import { getMeta } from '../server/store/meta.mjs';
@@ -78,7 +79,7 @@ async function readPassword() {
 }
 
 function usage() {
-  console.error('usage: npm run users -- <add|passwd|remove|list|owner> [username] '
+  console.error('usage: npm run users -- <add|passwd|remove|enable|list|owner> [username] '
     + '[--name N] [--email E] [--role viewer|operator|admin] [--org <id>] [--password-stdin]');
   process.exitCode = 2;
 }
@@ -86,7 +87,7 @@ function usage() {
 const shellIssuerRaw = () => brandEnv('OIDC_ISSUER') || null;
 
 async function main() {
-  if (cmd !== 'list' && (!['add', 'passwd', 'remove', 'owner'].includes(cmd) || !username)) return usage();
+  if (cmd !== 'list' && (!['add', 'passwd', 'remove', 'enable', 'owner'].includes(cmd) || !username)) return usage();
   const { db } = await openStoreForCli({ name: NAME });
 
   if (cmd === 'list') {
@@ -125,7 +126,7 @@ async function main() {
     if (!row || row.kind !== 'local') throw new AdminRefusal(`no local user ${username}`);
     const password = await readPassword();
     const user = setLocalPassword(db, CLI, username, password);
-    console.log(`updated password for ${user.login}${user.disabled ? ' (disabled)' : ''}`);
+    console.log(`updated password for ${user.login}${user.disabled ? ` (disabled: npm run users -- enable ${user.login} lets them sign in)` : ''}`);
     noteShellInit(db);
     return;
   }
@@ -133,6 +134,13 @@ async function main() {
   if (cmd === 'remove') {
     const user = disableUser(db, CLI, username);
     console.log(`disabled ${user.login} (users are never deleted: the audit references them)`);
+    noteShellInit(db);
+    return;
+  }
+
+  if (cmd === 'enable') {
+    const user = enableUser(db, CLI, username);
+    console.log(`enabled ${user.login}`);
     noteShellInit(db);
     return;
   }

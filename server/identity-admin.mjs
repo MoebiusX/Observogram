@@ -127,7 +127,9 @@ const enabledOwnerCount = (db) => prepare(db, 'SELECT count(*) AS n FROM users W
 export function checkAddLocalUser(db, { login, role, orgId = null }) {
   if (typeof login !== 'string' || !LOCAL_LOGIN_RE.test(login)) refuse('username must be 2–64 chars of [a-zA-Z0-9._@-]');
   const parsedRole = parseRole(role);
-  if (getUserByLogin(db, login)) refuse(`user exists: ${login} (use passwd)`);
+  const existing = getUserByLogin(db, login);
+  if (existing?.disabled) refuse(`user exists: ${login}, disabled (npm run users -- enable ${login}; passwd sets a new password)`);
+  if (existing) refuse(`user exists: ${login} (use passwd)`);
   const live = listOrgs(db);
   if (orgId !== null && orgId !== undefined) {
     if (!liveOrg(db, orgId)) refuse(`no live org ${JSON.stringify(orgId)}`);
@@ -190,13 +192,25 @@ export function disableUser(db, actor, login) {
   });
 }
 
+// `users -- enable` undoes `remove`: the row, its memberships, owner flag
+// and password come back as they were (the disable already ended its
+// sessions). Looked up exactly as given, like `remove`.
+export function enableUser(db, actor, login) {
+  return atomic(db, () => {
+    const row = getUserByLogin(db, login);
+    if (!row) refuse(`no such user: ${login}`);
+    if (!row.disabled) return row;
+    return setDisabled(db, actor, row.id, false);
+  });
+}
+
 // `users -- owner`: an owner and admin of the default org, whether or not
 // an owner exists; an OIDC user never seen is created first.
 export function grantOwnerByLogin(db, actor, arg, { shellIssuerRaw = null } = {}) {
   return atomic(db, () => {
     const target = resolveLogin(db, arg, { shellIssuerRaw });
     const user = userFor(db, actor, target, { shellIssuerRaw });
-    if (user.disabled) refuse(`${user.login} is disabled`);
+    if (user.disabled) refuse(`${user.login} is disabled — npm run users -- enable ${user.login} first`);
     ensureDefaultOrg(db, actor);
     return grantOwner(db, actor, user.id, { action: 'owner.bootstrap', via: actor === SYSTEM ? 'system' : 'cli' });
   });
