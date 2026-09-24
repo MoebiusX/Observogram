@@ -122,13 +122,14 @@ const SCANNED = [
   ...walk(resolve(ROOT, 'tools')).filter(p => /\.mjs$/.test(p)),
   ...walk(resolve(ROOT, 'server')).filter(p => /\.mjs$/.test(p)),
   ...walk(resolve(ROOT, 'studio')).filter(p => /\.(mjs|html)$/.test(p)),
-  ...['package.json', '.github/workflows/ci.yml', 'README.md', 'docs/MODEL.md', 'docs/CONFORMANCE.md', 'docs/gen-site.md', 'docs/MCP_INTEGRATION.md', 'docs/ADAPTER.md', 'vendor/observability-pack-spec/README.md'].map(f => resolve(ROOT, f)),
+  ...['package.json', '.github/workflows/ci.yml', 'README.md', 'docs/MODEL.md', 'docs/CONFORMANCE.md', 'docs/gen-site.md', 'docs/MCP_INTEGRATION.md', 'docs/ADAPTER.md', 'docs/BUILD_JOURNEY.md', 'library/README.md', 'vendor/observability-pack-spec/README.md'].map(f => resolve(ROOT, f)),
 ];
 // Lines that name an older version on purpose: the spec's own lineage, RFC-0001 (a 1.2 sibling layer), the layered
 // JSON that predates the canonical manifest, the VersionSpec history.
 const HISTORY = /RFC-0001|pre-v1\.2|predates (the )?canonical|Spec v1\.2 §VersionSpec|SPEC_v1\.2_GAP|spec 1\.2 → 1\.3|spec 1\.2 -> 1\.3|1\.2 pack|1\.2 packs|1\.2 SLI|1\.2 reader|1\.2 meaning|1\.2 shaped|1\.2-shaped|1\.2 fixture|1\.2 board|1\.2 commit|stopped at 1\.2|every 1\.2|a 1\.2 |v1\.2\/ → v1\.3\/|remove v1\.2\/|v1\.2\/ stays|\(1\.2\)|1\.2 could express/;
 test('no scanned file names a spec version other than the current one', () => {
-  const other = new RegExp(`\\b(?:spec|Spec|canonical|schema|pack|manifest|ObservabilityPack|valid|version)\\s+v?1\\.\\d(?![.\\d])|vendor/observability-pack-spec/v1\\.\\d(?![.\\d])|\\bv1\\.\\d(?![.\\d])\\b`, 'g');
+  // `(?!\.\d|\d)`: not a longer version (1.2.3, 1.23) — a sentence-final "v1.2." still counts.
+  const other = new RegExp(`\\b(?:spec|Spec|canonical|schema|pack|manifest|ObservabilityPack|valid|version)\\s+v?1\\.\\d(?!\\.\\d|\\d)|vendor/observability-pack-spec/v1\\.\\d(?!\\.\\d|\\d)|\\bv1\\.\\d(?!\\.\\d|\\d)\\b`, 'g');
   const offenders = [];
   for (const file of SCANNED) {
     const rel = file.slice(ROOT.length + 1).replace(/\\/g, '/');
