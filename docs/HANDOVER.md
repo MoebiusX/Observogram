@@ -141,6 +141,29 @@ the schema; the engine's job per change becomes validate + grade at the tier + c
 it does not care which it writes to. The maintainer has not yet said go; it is the next
 big slice and should start after his answer, not before.
 
+Two design constraints he gave for it on 2026-09-24:
+
+- *Every layer's `+` adds an artefact, two faces:* a parameterised form (the pop-up idiom)
+  and a paste box for the artefact itself — a pack fragment in YAML on any layer, Grafana
+  dashboard JSON on L3 (stored as a source file the pack references, uid and bindings read
+  from the JSON), a scrape config or a Collector pipeline fragment on L2, an Alertmanager
+  route on L4 — parsed, validated, shown as a card with source "pasted" and no evidence
+  claim, refused with the parser's message otherwise. A raw Prometheus alerting rule has no
+  slot in the pack (L4 is declarative); pasting one needs an additive spec field first.
+- *Backpropagate the chain with virtual artefacts.* When a downstream artefact arrives
+  (a pasted dashboard, a rule, a probe), derive the upstream ones it implies as **virtual**
+  nodes — metric → SLI → SLO (and the policy an SLO implies) — so the chain is complete and
+  gradable at once; when the user later defines one explicitly, the explicit artefact
+  **supersedes the virtual one of the same identity** (merge: the virtual's identity and
+  what was inferred become the defaults of the explicit form; or ignore: the virtual node
+  simply drops out). The precedent already in the engine: `tools/lib/traceability-graph.mjs`
+  adds `METRIC-VIRTUAL-<name>` nodes (`virtual: true`) for metrics an SLI's PromQL references
+  but no L2 artefact declares, and the comparison lets a real node of the same identity
+  satisfy a virtual one; `tools/lib/sli-inference.mjs` is the compiler's inverse (recording
+  rule names → SLI/SLO identities) on which such inference keys. Virtual artefacts must stay
+  honest on the stack and in the summary: a clause that passes only on a virtual node reads
+  like "pass on a placeholder", never plain green.
+
 **B. Neuron SLO ledger.** He wants Pyrra's one thing — every SLO's availability, remaining
 budget and burn in one place — inside *Advanced → Neuron*, paired with the integrity of
 each SLO's measurement chain (Neuron already computes blast radius). Prerequisite in the
