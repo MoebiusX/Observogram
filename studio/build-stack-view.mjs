@@ -42,11 +42,13 @@ const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
  * The attributes that make an L1 SLI / SLO card a real control (docs/BUILD_JOURNEY.md "The editor"): a focusable
  * card with button semantics that opens the SLI's editor — role=button, Enter / Space, aria-haspopup=dialog, its
  * focus key (`card:<artefact id>` / `ghost:<key>`) for the focus return — without touching the card body Discover
- * shares (card-html.mjs): the wrapper is Build's.
+ * shares (card-html.mjs): the wrapper is Build's. Its accessible name says what the editor does there: `Edit …`,
+ * or `View … (as compiled)` on VERIFY, where the dialog is read-only (the rolodex's button reads View there too).
  */
-function editAttrs(edit, { focusKey, what }) {
+function editAttrs(edit, { focusKey, what, mode = null }) {
   if (!edit) return '';
-  return ` role="button" tabindex="0" aria-haspopup="dialog" data-edit-sli="${escapeHtml(edit.key)}"${edit.custom ? ' data-edit-custom="1"' : ''}${edit.focus ? ` data-edit-focus="${escapeHtml(edit.focus)}"` : ''} data-focus-key="${escapeHtml(focusKey)}" aria-label="${escapeHtml(`Edit ${what}`)}"`;
+  const name = mode === 'verify' ? `View ${what} (as compiled)` : `Edit ${what}`;
+  return ` role="button" tabindex="0" aria-haspopup="dialog" data-edit-sli="${escapeHtml(edit.key)}"${edit.custom ? ' data-edit-custom="1"' : ''}${edit.focus ? ` data-edit-focus="${escapeHtml(edit.focus)}"` : ''} data-focus-key="${escapeHtml(focusKey)}" aria-label="${escapeHtml(name)}"`;
 }
 
 /** A ghost card: a clause the tier requires (its severity as the id, the rubric's description) or an SLI / SLO candidate (which opens the SLI's editor). */
@@ -82,7 +84,7 @@ function artefactCardHtmlInStack(a, mode) {
   const jump = mode !== 'verify';
   const isSlo = /^SLO-/.test(String(a.id || ''));
   return `
-    <div class="${cls}" data-artefact="${escapeHtml(a.id)}"${a.symbol ? ` data-symbol="${escapeHtml(a.symbol)}"` : ''}${editAttrs(a.edit, { focusKey: `card:${a.id}`, what: isSlo ? `the SLO ${a.title} — its SLI's objective` : `${a.title} — ${a.tool || 'SLI'}` })}${a.edit ? ` title="${escapeHtml(mode === 'verify' ? 'open the SLI as compiled' : `open the editor — ${isSlo ? 'the objective and the window' : 'the objective, the window, the id, the PromQL as it runs'}`)}"` : ''}>
+    <div class="${cls}" data-artefact="${escapeHtml(a.id)}"${a.symbol ? ` data-symbol="${escapeHtml(a.symbol)}"` : ''}${editAttrs(a.edit, { focusKey: `card:${a.id}`, what: isSlo ? `the SLO ${a.title} — its SLI's objective` : `${a.title} — ${a.tool || 'SLI'}`, mode })}${a.edit ? ` title="${escapeHtml(mode === 'verify' ? 'open the SLI as compiled' : `open the editor — ${isSlo ? 'the objective and the window' : 'the objective, the window, the id, the PromQL as it runs'}`)}"` : ''}>
       ${artefactCardHtml(a, { note: a.customNote || null })}
       ${a.todoPath ? `<button type="button" class="build-card-pin" data-todo-path="${escapeHtml(a.todoPath)}"${jump ? ' data-jump="verify"' : ''} title="${escapeHtml(`todo: ${a.todoPath} — a placeholder value the team must fill${jump ? ', on Verify' : ''}`)}">todo</button>` : ''}
     </div>`;

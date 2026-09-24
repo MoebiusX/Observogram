@@ -742,7 +742,9 @@ real control — a focusable card with button semantics (`role=button`, `tabinde
 `editAttrs`, a Build-only wrapper around the card body Discover shares) — and an SLO card opens
 its SLI's editor on the objective; on COMPILE and VERIFY the adapter's artefacts carry the
 action (`stackCardActions` maps the id the pack carries to the editor's key, `buildStackModel`
-stamps `edit`), on DEFINE the SLI / SLO candidate ghosts do, with the library key. (b) The
+stamps `edit`), on DEFINE the SLI / SLO candidate ghosts do, with the library key; the card's
+accessible name reads *Edit <sli> — ratio SLI*, and on VERIFY *View <sli> — ratio SLI (as
+compiled)*, like the rolodex's button there. (b) The
 rolodex card's Edit. (c) The '+ Custom SLI' card. (d) A product chip on the seed card opens the
 L1 sheet on that product's first card (`openSheet('L1', { entry })`). It opens on DEFINE and
 COMPILE alike — DEFINE is the seeding stage but its pack is already instantiated, so the

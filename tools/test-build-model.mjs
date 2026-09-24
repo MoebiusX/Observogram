@@ -2134,8 +2134,10 @@ test('an L1 SLI or SLO card on the stack is a control that opens the SLI’s edi
   assert.ok(html.includes('data-artefact="SLO-01" data-symbol="slos.kafka_broker_availability_99_9" role="button" tabindex="0" aria-haspopup="dialog" data-edit-sli="kafka_broker_availability" data-edit-focus="objective" data-focus-key="card:SLO-01" aria-label="Edit the SLO kafka_broker_availability_99_9 — its SLI&#39;s objective"'));
   assert.ok(/data-edit-sli="checkout_success" data-edit-custom="1"/.test(html));
   assert.ok(!/data-artefact="PIP-[^"]*"[^>]*role="button"/.test(html), 'an L2 card is not a control');
-  // VERIFY: the same cards open the editor (read-only there, the controller's mode); the title says so.
-  assert.ok(buildStackHtml(buildVerifyModel({ build: copiesDraft(), library: LIBRARY, clauses: T2, targets: TARGETS }).stack).includes('data-focus-key="card:SLI-01" aria-label="Edit kafka_broker_availability — ratio SLI" title="open the SLI as compiled"'));
+  // VERIFY: the same cards open the editor (read-only there, the controller's mode); the accessible name and the title say View, as the rolodex's button does (it read "Edit …" beside a title saying "as compiled"; measured).
+  const verifyHtml = buildStackHtml(buildVerifyModel({ build: copiesDraft(), library: LIBRARY, clauses: T2, targets: TARGETS }).stack);
+  assert.ok(verifyHtml.includes('data-focus-key="card:SLI-01" aria-label="View kafka_broker_availability — ratio SLI (as compiled)" title="open the SLI as compiled"'));
+  assert.ok(verifyHtml.includes('aria-label="View the SLO kafka_broker_availability_99_9 — its SLI&#39;s objective (as compiled)"') && !/aria-label="Edit /.test(verifyHtml), 'no card says Edit on Verify');
   // DEFINE: the candidate ghosts carry the action with the library key; a renamed one still opens by its key.
   const define = buildDefineModel({ build: draft({ result: null, overrides: { kafka_broker_availability: { id: 'brokers_up' } } }), library: LIBRARY, requirements: REQUIREMENTS }).stack;
   const ghosts = define.slabs.find(s => s.id === 'L1').ghosts;
