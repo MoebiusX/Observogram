@@ -317,11 +317,14 @@ is `/app/.observogram` (owned by the `node` user the container runs as);
 mount a volume there, or point `OBSERVOGRAM_WORKSPACE` at one, to keep users
 and packs across containers.
 
-Kubernetes manifests (Deployment + Service + Ingress, applied with Kustomize)
-live in [`deploy/k8s/`](deploy/k8s/README.md):
+Kubernetes manifests (Deployment + Service + Ingress + the `store` PVC,
+applied with Kustomize) live in [`deploy/k8s/`](deploy/k8s/README.md). The
+studio keeps its workspace and its database on that ReadWriteOnce volume
+and rolls out with `strategy: Recreate`, so `kubectl apply -k deploy/k8s`
+needs a default StorageClass (or a `storageClassName`):
 
 ```bash
-kubectl apply -k deploy/k8s            # the studio
+kubectl apply -k deploy/k8s            # the studio and its store volume
 kubectl apply -k deploy/k8s-journeys   # + the opt-in journeys CronJob and its workspace PVC (deploy/k8s/README.md)
 ```
 
@@ -834,6 +837,7 @@ library/                   The pack library packc init builds from (docs/BUILD_J
 
 deploy/k8s/
   kustomization.yaml       Kustomize entry point (see deploy/k8s/README.md)
+  pvc-store.yaml           The studio's RWO store volume: database and workspace (docs/STORE_PLAN.md §3)
 ```
 
 ## Key Docs

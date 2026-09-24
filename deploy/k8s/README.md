@@ -2,7 +2,8 @@
 
 Observogram is a single Express server ([server/index.mjs](../../server/index.mjs))
 that serves the studio UI and the `/api/*` routes from one process. The
-deploy is correspondingly small: one Deployment, one Service, one Ingress.
+deploy is correspondingly small: one Deployment, one Service, one Ingress,
+and one PersistentVolumeClaim that holds the studio's state.
 
 ```bash
 # 1. Stamp the checkout (build.json says which commit the image is), then build it from the repo root.
@@ -15,13 +16,83 @@ npm run build:stamp && docker build -t observogram:0.4.0 .
 #                    docker push <registry>/observogram:0.4.0
 #                    cd deploy/k8s && kustomize edit set image observogram=<registry>/observogram:0.4.0
 
-# 3. Apply (from the repo root).
+# 3. Check that the cluster can provision the store volume (see "Storage class" below).
+kubectl get storageclass            # one line should say (default)
+
+# 4. Apply (from the repo root).
 kubectl create namespace observability --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -k deploy/k8s
 ```
 
 Then open `http://obspack.localhost/` (or whatever host you set in
 [ingress.yaml](ingress.yaml)).
+
+## The store volume
+
+The base is no longer ephemeral. The studio pod mounts its own
+`ReadWriteOnce` claim, `observabilitypack-studio-store`
+([pvc-store.yaml](pvc-store.yaml)), as the volume `store`, in two subPaths:
+
+| subPath | Mounted at | Env | Holds |
+|---|---|---|---|
+| `db` | `/data/db` | `OBSERVOGRAM_DB=/data/db/observogram.db` | the database: users, orgs, memberships, the audit, the session epoch that revokes cookies |
+| `workspace` | `/data/workspace` | `OBSERVOGRAM_WORKSPACE=/data/workspace` | the files the rows point at: `packs/`, `snapshots/`, `deploys.jsonl`, `journeys/`, `runs/`, `session-secret`, `users.json` and `orgs.json` until the store imports them |
+
+Before this volume, the workspace was the image's `/app/.observogram`, so
+every rollout and every pod restart wiped users, registered packs and the
+deploy audit. With the store it would also have wiped roles and the audit,
+and reset the session epoch, which revives revoked cookies. Both halves now
+live on one claim, so they persist together and a rollout loses neither.
+(The store itself arrives in stages, [docs/STORE_PLAN.md](../../docs/STORE_PLAN.md);
+`OBSERVOGRAM_DB` is set now so the first build that opens it finds it on
+this volume.)
+
+**The database is never on NFS or an RWX volume.** It runs in WAL mode,
+which needs shared memory between the processes on one host, and the store
+refuses to open it on NFS, CIFS/SMB or CephFS. Give the store claim a
+block-backed class (a cloud disk, local-path, hostPath) and keep it
+`ReadWriteOnce`. Keep `OBSERVOGRAM_DB` outside the workspace: unset, it
+defaults to `<workspace>/observogram.db`, and the journeys overlay below
+moves the workspace to a claim that may be RWX.
+
+**Backups.** A copy of `/data/workspace` alone holds no users, orgs or
+audit, and a file-by-file copy of `/data/db` taken while the studio runs is
+not a backup (a WAL checkpoint between two file copies tears it). Copy with
+the studio scaled to 0, take an atomic volume snapshot, or use
+`packc store backup` ([docs/STORE_PLAN.md](../../docs/STORE_PLAN.md) §3).
+
+### Storage class
+
+`kubectl apply -k deploy/k8s` now needs a **default StorageClass**, or a
+`storageClassName` in [pvc-store.yaml](pvc-store.yaml) (the commented
+stanza). Without either, the claim stays `Pending` and so does the pod
+(`pod has unbound immediate PersistentVolumeClaims`). docker-desktop
+(`hostpath`) and kind (`standard`) ship a default; on other clusters check
+`kubectl get storageclass` for `(default)`. `1Gi` is a placeholder, not a
+measurement: the database is small, and the workspace grows with registered
+packs, rollback snapshots and `deploys.jsonl`.
+
+### Pod settings
+
+- `securityContext.fsGroup: 1000` with `fsGroupChangePolicy: OnRootMismatch`.
+  A freshly provisioned volume is root:root 0755 with most CSI/hostPath
+  provisioners, so without it the studio (uid 1000) could create neither
+  the database nor the workspace. `OnRootMismatch` skips the recursive
+  chown once the volume root already belongs to the group.
+- `strategy: Recreate`, and `replicas: 1` (a multi-instance studio is out of
+  scope). A RollingUpdate briefly runs two studio processes against one
+  database. It stalls on attach when the RWO volume sits on another node.
+  And on the store upgrade it would run the new pod's import while the old
+  pod still writes the legacy files. Only `Recreate` waits for the old pod
+  to finish terminating; `maxSurge: 0` does not. The cost is a short outage
+  per rollout. Do not switch it back.
+
+Upgrading a deploy of the old base: its workspace lived in the container,
+where every restart already lost it, and the rollout to this base starts on
+an empty volume. If the running pod holds anything you need, save it with
+`kubectl cp` from `/app/.observogram` before you apply, and put it into
+`/data/workspace` with the studio scaled to 0, from a one-off pod that
+mounts the `store` claim, as in the overlay switch below.
 
 ## What happened to nginx / the fetcher sidecar / the MCP secret?
 
@@ -48,11 +119,10 @@ docroot. That architecture is gone:
 - `GITHUB_TOKEN` (optional) — uncomment in
   [deployment-studio.yaml](deployment-studio.yaml) to raise GitHub rate
   limits / allow private repos for `POST /api/crawl-github`.
-- Uploaded/crawled/drafted packs live in process memory and
-  `examples/production-live.pack.yaml` is written to the container
-  filesystem — both are intentionally ephemeral; a pod restart clears them
-  — as is the workspace (journeys, run history, deploy audit), unless the
-  workspace PVC of the opt-in journeys component below is mounted.
+- What persists: everything in the workspace and the database, on the store
+  volume above. What does not: `examples/production-live.pack.yaml`, which
+  `POST /api/refresh-live` writes to the container filesystem; a pod
+  restart clears it, by design.
 
 ## Scheduled journeys (opt-in)
 
@@ -67,6 +137,9 @@ studio reads:
 kubectl apply -k deploy/k8s-journeys     # base + components/journeys (sibling overlay)
 kubectl apply -k deploy/k8s              # the base alone stays byte-identical
 ```
+
+Switching a running base deploy to the overlay moves the workspace: copy it
+first ([below](#switching-a-running-base-to-the-overlay)).
 
 (The overlay is a sibling directory, not `deploy/k8s/overlays/…`: kustomize
 refuses a kustomization whose resource is a parent directory — "cycle
@@ -83,11 +156,13 @@ base's.)
 What the component adds ([components/journeys](components/journeys)):
 
 - `pvc-workspace.yaml` — the PVC `observabilitypack-studio-workspace`
-  (journeys/, runs/, deploys.jsonl, users.json, packs/). `1Gi` is a
-  placeholder, not a measurement: the workspace grows as
-  journeys × `OBSERVOGRAM_JOURNEY_RUN_RETENTION` (default 1000) × (one run
-  record + an optional `live/` snapshot of Pack B). Measure one record and
-  one snapshot from a real run of *your* journeys and size from that.
+  (journeys/, runs/, deploys.jsonl, users.json, packs/). It takes the
+  studio's workspace over from `/data/workspace`; the database stays on the
+  store claim. `1Gi` is a placeholder, not a measurement: the workspace
+  grows as journeys × `OBSERVOGRAM_JOURNEY_RUN_RETENTION` (default 1000) ×
+  (one run record + an optional `live/` snapshot of Pack B). Measure one
+  record and one snapshot from a real run of *your* journeys and size from
+  that.
 - `cronjob-journeys.yaml` — the fleet CronJob (`*/15 * * * *`;
   per-journey cadences come from `packc journey schedule <name> --format k8s`),
   `concurrencyPolicy: Forbid`, `backoffLimit: 0`, `restartPolicy: Never`:
@@ -96,10 +171,14 @@ What the component adds ([components/journeys](components/journeys)):
   `kubectl get jobs` shows a gate failure as a failed Job, which is the
   intended signal. The env var names your journeys reference
   (`packB.mcp.authEnv`, `notify.urlEnv`, `notify.authEnv`) are bound there
-  from Secrets (`secretKeyRef`, commented stanzas) — never as literals.
-- `patch-studio-workspace.yaml` — mounts the same PVC into the studio at the
-  same path, sets its `OBSERVOGRAM_WORKSPACE` and adds `fsGroup: 1000` to the
-  studio pod.
+  from Secrets (`secretKeyRef`, commented stanzas) — never as literals. It
+  never mounts the store claim and sets no `OBSERVOGRAM_DB`: the journey
+  runner opens no database.
+- `patch-studio-workspace.yaml` — mounts the same PVC into the studio at
+  `/workspace` and sets its `OBSERVOGRAM_WORKSPACE`. It never touches
+  `OBSERVOGRAM_DB`, the `store` volume or the strategy: the database stays
+  at `/data/db/observogram.db` on the RWO store claim, and `Recreate`
+  stands. It repeats the base's `fsGroup: 1000`.
 
 Volume ownership: both pods run as uid 1000 and set `fsGroup: 1000`
 (`fsGroupChangePolicy: OnRootMismatch`). A freshly provisioned PVC is
@@ -111,20 +190,115 @@ CronJob log). The per-journey CronJob printed by `packc journey schedule
 
 **Hard prerequisite:** BOTH processes mount the same PVC at the same
 `OBSERVOGRAM_WORKSPACE` (`/workspace`). A CronJob writing to a path the studio
-does not read produces records nobody sees — and `/app/.observogram` is not
-creatable by uid 1000 (the image only chowns `/app/examples`,
-[Dockerfile](../../Dockerfile)). Access mode: `ReadWriteOnce` is what every
-storage class offers; with RWO the CronJob pod must land on the studio's node
-(the `podAffinity` in the CronJob, commented) or its volume attach fails —
-switch to `ReadWriteMany` where the storage class offers it. Tenancy: when
-`<workspace>/orgs.json` exists, point the CronJob at the org root
-(`OBSERVOGRAM_WORKSPACE=/workspace/orgs/<orgId>`; the CLI resolves the flat
-root only).
+does not read produces records nobody sees. Access mode: `ReadWriteOnce` is
+what every storage class offers; with RWO the CronJob pod must land on the
+studio's node (the `podAffinity` in the CronJob, commented) or its volume
+attach fails. `ReadWriteMany` (then drop the affinity) is safe **only while
+the studio's `OBSERVOGRAM_DB` points at the RWO store volume**: an RWX class
+is typically NFS or CephFS, where the database refuses to open, so never
+unset `OBSERVOGRAM_DB` or point it under `/workspace` with an RWX workspace
+claim. Tenancy: when `<workspace>/orgs.json` exists, point the CronJob at the
+org root (`OBSERVOGRAM_WORKSPACE=/workspace/orgs/<orgId>`; the CLI resolves
+the flat root only).
 
-Validation: CI runs no kustomize/kubeconform. The manifests are checked
-structurally by `tools/test-deploy-manifests.mjs` (`npm run
-test:deploy-manifests` — parses every file, pins the shared PVC/mount/env on
-both sides, the overlay's namespace/labels, the non-retry contract and the
-no-literal-secret rule) and rendered by hand with `kubectl kustomize
-deploy/k8s-journeys` (check that every `kind:` in the output is followed by
+### Switching a running base to the overlay
+
+Applying the overlay to a running base deploy moves the studio's workspace
+from `/data/workspace` (a subPath of the store claim) to `/workspace` (the
+new workspace claim), and the default org's root `.` moves with it. Copy the
+whole `workspace` subPath across **before** the studio starts on the new
+claim, with the studio stopped. The database stays on `store` and needs no
+copy.
+
+```bash
+NS=observability
+
+# 1. Stop the studio and wait for its pod to be gone (nothing may write during the copy;
+#    "no matching resources" from the wait means it is gone already).
+kubectl -n $NS scale deployment/observabilitypack-studio --replicas=0
+kubectl -n $NS wait --for=delete pod -l app.kubernetes.io/name=observabilitypack-studio,app.kubernetes.io/component=studio --timeout=180s
+
+# 2. Create ONLY the workspace claim. Applying the whole overlay now would
+#    scale the studio back to 1 on an empty /workspace.
+kubectl -n $NS apply -f deploy/k8s/components/journeys/pvc-workspace.yaml
+
+# 3. Copy the whole workspace subPath, modes preserved, from a one-off pod
+#    that mounts both claims (the studio image has sh and cp).
+kubectl -n $NS apply -f - <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: observogram-workspace-copy
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch
+  containers:
+    - name: copy
+      image: observogram:0.4.0          # the studio's image and tag
+      command: ["sh", "-c", "cp -a /data/workspace/. /workspace/ && ls -la /workspace"]
+      volumeMounts:
+        - { name: store, mountPath: /data/workspace, subPath: workspace }
+        - { name: workspace, mountPath: /workspace }
+  volumes:
+    - name: store
+      persistentVolumeClaim: { claimName: observabilitypack-studio-store }
+    - name: workspace
+      persistentVolumeClaim: { claimName: observabilitypack-studio-workspace }
+EOF
+kubectl -n $NS wait --for=jsonpath='{.status.phase}'=Succeeded pod/observogram-workspace-copy --timeout=600s
+kubectl -n $NS logs observogram-workspace-copy
+kubectl -n $NS delete pod observogram-workspace-copy
+
+# 4. Apply the overlay: the studio comes back (replicas: 1) on /workspace, and the CronJob starts.
+kubectl apply -k deploy/k8s-journeys
+```
+
+The copy carries everything: packs, snapshots, `deploys.jsonl`, journeys,
+runs, `live/`, `session-secret` (so existing sessions stay signed in), every
+`orgs/<id>/` root, and any legacy files (`users.json`, `orgs.json`) and
+`.store-imported` marker. Check that the listing in step 3 shows them before
+step 4. The old copy under `/data/workspace` stays on the store claim,
+unused; delete it only once the studio shows the same users and packs.
+Going back to the base alone is the same procedure in reverse
+(`cp -a /workspace/. /data/workspace/`).
+
+### Zones
+
+Under the overlay the studio pod mounts **two** `ReadWriteOnce` claims, the
+store and the workspace, and both volumes must sit in the zone its node is
+in. On a single-zone cluster nothing changes. On a multi-zone cluster, use
+a StorageClass with `volumeBindingMode: WaitForFirstConsumer`: each claim is
+then provisioned where the first pod that uses it is scheduled, and the
+scheduler keeps later pods beside it. An `Immediate` class works only when
+it is pinned to one zone (`allowedTopologies`); otherwise it provisions each
+claim in whatever zone it picks, and a pod that needs both never schedules.
+Check:
+
+```bash
+kubectl get storageclass                                   # VOLUMEBINDINGMODE column
+kubectl get storageclass <name> -o jsonpath='{.volumeBindingMode}{"\n"}'
+kubectl -n observability get pvc                           # VOLUME column: the bound PVs
+kubectl get pv <volume> -o jsonpath='{.spec.nodeAffinity}{"\n"}'   # the zone a PV is pinned to
+```
+
+The same applies to the one-off copy pod above, which mounts both claims:
+with `WaitForFirstConsumer` it is what binds the new workspace claim, in the
+store's zone.
+
+## Validation
+
+CI runs no kustomize/kubeconform. The manifests are checked structurally by
+`tools/test-deploy-manifests.mjs` (`npm run test:deploy-manifests` — parses
+every file, pins the store volume and its subPaths, `fsGroup` and
+`Recreate` on the base, the shared PVC/mount/env on both sides of the
+overlay, the overlay's namespace/labels, the non-retry contract and the
+no-literal-secret rule, and checks on a modelled strategic merge of the
+overlay that `OBSERVOGRAM_DB` stays on the store volume and the CronJob never
+mounts it) and rendered by hand with `kubectl kustomize deploy/k8s-journeys`
+(check that every `kind:` in the output is followed by
 `namespace: observability`).
