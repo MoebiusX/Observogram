@@ -45,8 +45,9 @@ export function defaultBuildState() {
     stackOpen: {},            // { [`${layerId}/detail`]: true } — the stack's open detail folds (UI state, never persisted)
     sheetOpen: null,          // the layer whose sheet is open ('L1' … 'GOV'), one at a time (UI state, never persisted)
     rolodexAll: false,        // the L1 rolodex shows every product's SLIs, not only the selected entries' (UI state, never persisted)
-    customOpen: {},           // { [sliKey]: true } — the rolodex cards whose Customise face is expanded (UI state, never persisted)
-    customDraft: null,        // the '+ Custom SLI' card's form as typed, until it is added (UI state, never persisted)
+    editor: null,             // the pop-up editor: { key, custom } over one SLI, or { create: true } for a new custom one (UI state, never persisted; docs/BUILD_JOURNEY.md "The editor")
+    editorDirty: false,       // an editor field changed and the debounced instantiate has not answered yet: the editor's status reads 'applying…' (UI state, never persisted)
+    customDraft: null,        // the editor's create form as typed, until it is added (UI state, never persisted)
     customDraftErrors: null,  // the engine's usage errors on the last 'Add to the pack' attempt (UI state, never persisted)
     wantedStep: null,         // the step asked for while unreachable (a reload on Verify before the pack is back); honoured once the instantiation answers (UI state, never persisted)
   };

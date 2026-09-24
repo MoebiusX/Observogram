@@ -42,14 +42,15 @@
 // the tier (it says which profile it starts from), addSliSelection never
 // refuses one, retargetSlis keeps every SLI of a still-selected entry across
 // a tier change and only refreshes the tier's defaults; the library values
-// are copies the user edits (build.overrides, build.custom — the pure edit
-// face and custom-form models live in build-copies-model.mjs), and DEFINE is
-// the seeding step: buildStepReachability opens COMPILE once the definition
-// is valid AND seeded, and the definition column becomes a read-only seed
-// card there (seedCardModel).
+// are copies the user edits (build.overrides, build.custom — the pure editor
+// and create-form models live in build-copies-model.mjs; buildEditorModel
+// below finds the SLI the open editor is over and hands it to them), and
+// DEFINE is the seeding step: buildStepReachability opens COMPILE once the
+// definition is valid AND seeded, and the definition column becomes a
+// read-only seed card there (seedCardModel).
 
 import { LAYER_DEFS, L4_SUBGROUPS } from './constants.mjs';
-import { OVERRIDE_FIELDS, overrideFor, effectiveSli, customisedFields, promqlEdited, editFaceModel, customFormModel, customEffective } from './build-copies-model.mjs';
+import { OVERRIDE_FIELDS, overrideFor, effectiveSli, effectiveId, customisedFields, promqlEdited, customEffective, sliEditorModel } from './build-copies-model.mjs';
 
 export const BUILD_STEPS = ['define', 'compile', 'verify'];
 /** Least stringent first — the order the engine lists them and the DEFINE step shows them. */
@@ -275,12 +276,18 @@ export function focusFallbackSelectors(key) {
   const k = String(key || '');
   if (/^tier:/.test(k)) return ['.build-seg-btn[aria-checked="true"]'];
   // A per-field '↺ library default' (ov:<sli>:<field>:reset) that vanished — the field is back at its default —
-  // hands focus to that field's input first.
+  // hands focus to that field's input first, then stays in the editor.
   const reset = /^((?:ov|cu):[^:]+:[a-z_]+):reset$/.exec(k);
-  if (reset) return [`[data-focus-key="${reset[1]}"]`, '.build-sheet .build-edit-input', '.build-sheet .build-param-input', '.build-sheet-close'];
-  // An edit-face input (ov:<sli>:<field>), the custom form (cf:<field>) or a rolodex switch (sli:<entry>:<id>)
-  // that vanished — the card closed, the SLI was removed, the form was reset — hands focus to the sheet.
-  if (/^(ov|cu|cf|sli|customise):/.test(k)) return ['.build-sheet .build-edit-input', '.build-sheet .build-param-input', '.build-sheet-close'];
+  if (reset) return [`[data-focus-key="${reset[1]}"]`, '.build-editor .build-edit-input', '.build-editor [data-editor-done]', '.build-editor [data-editor-close]'];
+  // An editor field (ov:<sli>:<field>, cu:<id>:<field>, cf:<field>) that vanished — the type changed the fields, the
+  // SLI left the pack, the editor closed — stays in the editor while it is open, else lands on the sheet.
+  if (/^(ov|cu|cf):/.test(k)) return ['.build-editor .build-edit-input', '.build-editor [data-editor-done]', '.build-editor [data-editor-close]', '.build-sheet .build-rolo-card [data-edit-sli]', '.build-sheet-close'];
+  // One of the editor's own controls (editor:done / cancel / reset-all / close; Reset all vanishes once nothing is customised) stays in the editor.
+  if (/^editor:/.test(k)) return ['.build-editor [data-editor-done]', '.build-editor [data-editor-submit]', '.build-editor [data-editor-close]', '.build-editor .build-edit-input'];
+  // A rolodex card's Edit / '+ Custom SLI' (edit:<key>) or switch (sli:<entry>:<id>) that vanished — the SLI was removed — hands focus to the sheet.
+  if (/^(edit|sli):/.test(k)) return ['.build-sheet .build-rolo-card [data-edit-sli]', '.build-sheet .build-param-input', '.build-sheet-close'];
+  // An L1 stack card (card:<artefact id>, ghost:<key>) that vanished — the SLI left the pack — hands focus to the L1 slab head.
+  if (/^(card|ghost):/.test(k)) return ['.build-slab[data-layer="L1"] .build-slab-edge'];
   const entry = /^entry:([\w.-]+)$/.exec(k);
   if (entry) return [`.build-chip[data-entry="${entry[1]}"]`, '.build-chip'];
   const m = /^param:[^@]+@([^/]+)\//.exec(k);
@@ -570,7 +577,7 @@ export function sliGroups({ build, library }) {
       const ov = overrideFor(build, key);
       const eff = effectiveSli(s, tier, ov);
       return {
-        key, id: s.id, type: s.type, minTier: s.minTier, reachable, aboveTier: !reachable, checked, unit: eff.unit ?? null,
+        key, id: s.id, effectiveId: effectiveId(key, ov), type: s.type, minTier: s.minTier, reachable, aboveTier: !reachable, checked, unit: eff.unit ?? null,
         description: eff.description || '', evidence: promqlEdited(ov) ? 'custom' : (s.evidence || null), metrics: s.metrics || [],
         objective: eff.objective, objectiveLabel: fmtObjective(eff.objective), window: eff.window,
         customised: customisedFields(ov),
@@ -584,7 +591,7 @@ export function sliCandidates({ build, library }) {
   const tier = build?.tier;
   const custom = (build?.custom || []).map(def => {
     const eff = customEffective(def);
-    return { key: def.id, id: def.id, type: def.type, minTier: tier, reachable: true, aboveTier: false, checked: true, unit: eff.unit ?? null, description: eff.description || '', evidence: 'custom', metrics: [], objective: eff.objective, objectiveLabel: fmtObjective(eff.objective), window: eff.window, customised: [], custom: true, entry: null, entryTitle: 'Custom SLI' };
+    return { key: def.id, id: def.id, effectiveId: def.id, type: def.type, minTier: tier, reachable: true, aboveTier: false, checked: true, unit: eff.unit ?? null, description: eff.description || '', evidence: 'custom', metrics: [], objective: eff.objective, objectiveLabel: fmtObjective(eff.objective), window: eff.window, customised: [], custom: true, entry: null, entryTitle: 'Custom SLI' };
   });
   return [...sliGroups({ build, library }).flatMap(g => g.slis.filter(s => s.checked).map(s => ({ ...s, entry: g.id, entryTitle: g.title }))), ...custom];
 }
@@ -617,7 +624,7 @@ export function buildCompileModel({ build, library, clauses = [] }) {
     stack: buildStackModel({
       adapted: r?.adapted || null, requirements: clauses, checklist: buildClauseChecklist(clauses, r?.summary || null),
       todos: r?.todos || [], params: paramRows({ build, library }), mode: 'compile', toggles: build?.toggles || {}, expanded: stackExpanded(build),
-      customised: customisedMap(r),
+      customised: customisedMap(r), editors: stackCardActions({ build, library }),
     }),
     result: r ? {
       sliCount: r.canonical?.spec?.slis?.length || 0, sloCount: r.canonical?.spec?.slos?.length || 0,
@@ -725,7 +732,7 @@ export function buildVerifyModel({ build, library, clauses, targets }) {
   const stack = buildStackModel({
     adapted: r?.adapted || null, requirements: clauses || [], checklist,
     todos: r?.todos || [], params, mode: 'verify', toggles: build?.toggles || {}, expanded: stackExpanded(build),
-    customised: customisedMap(r),
+    customised: customisedMap(r), editors: stackCardActions({ build, library }),
   });
   const s = r?.summary || null;
   const blocking = (r?.warnings || []).some(w => w.kind === 'promql');
@@ -954,7 +961,7 @@ export function customisedMap(result) {
   return out;
 }
 
-export function buildStackModel({ adapted = null, checklist = null, requirements = null, candidates = [], todos = [], params = [], mode = 'compile', toggles = {}, expanded = {}, customised = {} } = {}) {
+export function buildStackModel({ adapted = null, checklist = null, requirements = null, candidates = [], todos = [], params = [], mode = 'compile', toggles = {}, expanded = {}, customised = {}, editors = {} } = {}) {
   const stateOf = new Map((checklist?.items || []).map(i => [i.id, i]));
   const clauseList = (requirements || checklist?.items || []).map(c => {
     const st = stateOf.get(c.id);
@@ -974,7 +981,11 @@ export function buildStackModel({ adapted = null, checklist = null, requirements
     if (todo) todo.artefactId = a.id;
     // An L1 SLI card whose provenance says it was customised or written from scratch says so (the adapter titles an SLI card with the SLI id).
     const mark = layerId === 'L1' && /^SLI-/.test(String(a.id || '')) && customised?.[a.title] ? customised[a.title] : null;
-    return { ...a, symbol, todoPath: todo ? todo.path : null, detail: isDetailArtefact(a, layerId), ...(mark ? { customised: mark.fields, custom: mark.custom, customNote: mark.custom ? 'custom — written in the studio' : `customised: ${mark.fields.join(', ')}` } : {}) };
+    // An L1 SLI or SLO card opens the SLI's editor (docs/BUILD_JOURNEY.md "The editor"): the whole card is the control; an SLO card lands on the objective.
+    const isSli = layerId === 'L1' && /^SLI-/.test(String(a.id || '')), isSlo = layerId === 'L1' && /^SLO-/.test(String(a.id || ''));
+    const target = isSli ? editors?.[a.spec?.id || a.title] : isSlo ? editors?.[a.spec?.sli] : null;
+    const edit = target ? { key: target.key, custom: !!target.custom, focus: isSlo ? 'objective' : null } : null;
+    return { ...a, symbol, todoPath: todo ? todo.path : null, detail: isDetailArtefact(a, layerId), ...(mark ? { customised: mark.fields, custom: mark.custom, customNote: mark.custom ? 'custom — written in the studio' : `customised: ${mark.fields.join(', ')}` } : {}), ...(edit ? { edit } : {}) };
   });
   const ghostOf = (c) => ({
     kind: 'clause', key: `clause:${c.id}`, clauseId: c.id, title: c.label, desc: c.description, severity: c.severity, minTier: c.minTier,
@@ -985,8 +996,9 @@ export function buildStackModel({ adapted = null, checklist = null, requirements
   });
   const candidateGhosts = mode === 'define'
     ? (candidates || []).flatMap(c => [
-      { kind: 'sli', key: `sli:${c.key}`, title: c.key, desc: c.description || `${c.type} SLI`, source: 'Candidate', tool: `${c.type} SLI`, tags: ['sli', c.type, c.entry || 'custom', ...(c.aboveTier ? [`from ${c.minTier}`] : []), ...(c.customised?.length ? ['customised'] : [])].filter(Boolean), evidence: c.evidence || null, state: null },
-      { kind: 'slo', key: `slo:${c.key}`, title: `SLO on ${c.key}`, desc: `${c.objectiveLabel} over ${c.window || '—'}`, source: 'Candidate', tool: 'SLO', tags: ['slo', c.window].filter(Boolean), evidence: null, state: null },
+      // The card names the SLI as the pack will carry it (a rename shows); the key stays the library's. Both cards open the SLI's editor.
+      { kind: 'sli', key: `sli:${c.key}`, title: c.effectiveId || c.key, desc: c.description || `${c.type} SLI`, source: 'Candidate', tool: `${c.type} SLI`, tags: ['sli', c.type, c.entry || 'custom', ...(c.aboveTier ? [`from ${c.minTier}`] : []), ...(c.customised?.length ? ['customised'] : [])].filter(Boolean), evidence: c.evidence || null, state: null, edit: { key: c.key, custom: !!c.custom, focus: null } },
+      { kind: 'slo', key: `slo:${c.key}`, title: `SLO on ${c.effectiveId || c.key}`, desc: `${c.objectiveLabel} over ${c.window || '—'}`, source: 'Candidate', tool: 'SLO', tags: ['slo', c.window].filter(Boolean), evidence: null, state: null, edit: { key: c.key, custom: !!c.custom, focus: 'objective' } },
     ])
     : [];
   const ghostsFor = (clauses) => {
@@ -1079,11 +1091,75 @@ export const LAYER_QUESTIONS = {
   L5: 'How do we prove it?',
   GOV: 'Who owns it?',
 };
-/** The sheet is one component on the three steps: a preview on DEFINE, editable on COMPILE, read-only with the todos on VERIFY. */
-export const SHEET_MODES = { define: 'preview', compile: 'edit', verify: 'verify' };
+/**
+ * The sheet is one component on the three steps: live on DEFINE and COMPILE (DEFINE is the seeding stage, but its
+ * pack is already instantiated — the same sheet, the same actions; the preview mode with "Compose in Compile →" is
+ * retired), read-only with the todos on VERIFY.
+ */
+export const SHEET_MODES = { define: 'edit', compile: 'edit', verify: 'verify' };
 export const sheetModeFor = (step) => SHEET_MODES[step] || 'edit';
+
+/**
+ * The BUILD journey's three header cards (docs/BUILD_JOURNEY.md): the same shape as the analysis journey's tabs
+ * and the same accents, rendered by the same header renderer whenever state.mode is 'build'. `techName` is the
+ * step's own name (the tab's title and accessible name read "Define — Service, tier & library", never the engine
+ * word behind it; measured: "Library — …"). A card is reachable when the previous step's inputs are valid
+ * (buildStepReachability).
+ */
+export const BUILD_TABS = [
+  { id: 'define', n: '1', label: 'What Are We Observing?', sub: 'Define', techName: 'Define', tagline: 'Service, tier & library', accent: 'tab-blue' },
+  { id: 'compile', n: '2', label: 'What Should We Watch?', sub: 'Compile', techName: 'Compile', tagline: 'Pack & deployable artifacts', accent: 'tab-magenta' },
+  { id: 'verify', n: '3', label: 'Is It Ready to Use?', sub: 'Verify', techName: 'Verify', tagline: 'Conformance & placeholders', accent: 'tab-emerald' },
+];
+/** A header tab's accessible name and title: the step word and its tagline. */
+export const tabName = (t) => `${t.techName} — ${t.tagline}`;
+
+/**
+ * stackCardActions({ build, library }) → { [sliId]: { key, custom } }: which editor each L1 card of the stack opens,
+ * by the SLI id the pack carries (the adapter titles an SLI card with it and an SLO card names it in spec.sli) — the
+ * library key behind a renamed SLI, `custom` for one written in the studio. buildStackModel stamps it on the cards
+ * (`edit`); an SLO card opens its SLI's editor on the objective.
+ */
+export function stackCardActions({ build, library }) {
+  const out = {};
+  for (const it of rolodexItems({ build, library })) out[it.effectiveId || it.key] = { key: it.key, custom: !!it.custom };
+  return out;
+}
 /** The section switches each sheet carries (the sections that live on that layer; L2 has none). */
 export const LAYER_SWITCHES = { L1: ['slos'], L3: ['dashboards'], L4: ['policy', 'routes'], L5: ['validation'] };
+
+/** The pop-up editor's mode per step (docs/BUILD_JOURNEY.md "The editor"): editable on DEFINE and COMPILE, read-only on VERIFY. */
+export const EDITOR_MODES = { define: 'edit', compile: 'edit', verify: 'readonly' };
+export const editorModeFor = (step) => EDITOR_MODES[step] || 'edit';
+/**
+ * `build.editorDirty` once an instantiate has answered: the editor's last edit is answered — unless a newer edit
+ * still waits on the debounce (the controller restarts the timer per keystroke without a request of its own), in
+ * which case the flag stays and the status keeps reading applying… instead of 'applied · SLO <the stale id>'.
+ */
+export const editorDirtyAfterAnswer = (dirty, debouncePending) => (debouncePending ? !!dirty : false);
+
+/**
+ * buildEditorModel({ build, library, mode }) → the pop-up editor's model for the SLI the draft's `editor` names
+ * (`{ key, custom }`, UI state, never persisted — or `{ create: true }` for a new custom SLI), or null when the
+ * editor is closed or its SLI is gone (its entry deselected, a custom one removed: the controller closes it). Finds
+ * the rolodex item (every entry's, so an SLI of a product not yet selected opens too), hands the engine's usage
+ * errors for that SLI (splitBuildErrors) and the library keys in the pack (what the footer switch's list starts
+ * from) to sliEditorModel. `mode` follows the step (editorModeFor).
+ */
+export function buildEditorModel({ build, library, mode = 'edit' }) {
+  const ed = build?.editor;
+  if (!ed) return null;
+  const r = build?.result || null;
+  if (ed.create) return sliEditorModel({ item: null, result: r, library, build, mode: 'create', errors: splitBuildErrors(build?.customDraftErrors).byCustom });
+  const items = rolodexItems({ build, library, all: true });
+  const item = items.find(i => i.key === ed.key && !!i.custom === !!ed.custom);
+  if (!item) return null;
+  const errs = splitBuildErrors(build?.error);
+  return sliEditorModel({
+    item, result: r, library, build, mode, errors: item.custom ? errs.byCustom[item.key] : errs.byOverride[item.key],
+    allKeys: items.filter(i => i.selected && !i.custom).map(i => i.key),
+  });
+}
 
 /** The DEFINE validity errors, spelled once for the define model and the definition column. */
 function definitionErrors(name, selectedCount) {
@@ -1343,7 +1419,7 @@ export function rolodexItems({ build, library, all = false }) {
     const edited = promqlEdited(ov);
     const customised = customisedFields(ov);
     return {
-      key, id: s.id, entry: en.id, entryTitle: en.title, entryKind: en.kind, entryEvidence: en.evidence?.status || null, entrySelected,
+      key, id: s.id, effectiveId: effectiveId(key, ov), entry: en.id, entryTitle: en.title, entryKind: en.kind, entryEvidence: en.evidence?.status || null, entrySelected,
       type: s.type, unit: eff.unit ?? null, description: eff.description || '', metrics: s.metrics || [],
       evidence: edited ? 'custom' : (s.evidence || null), libraryEvidence: s.evidence || null,
       evidenceNote: edited ? 'edited — the library’s evidence no longer applies' : null,
@@ -1356,21 +1432,20 @@ export function rolodexItems({ build, library, all = false }) {
       tiers: TIERS.map(t => ({ tier: t, current: t === tier, reachable: atTier(t, s.minTier), objective: s.objectives?.[t] ?? null, objectiveLabel: fmtObjective(s.objectives?.[t]), window: s.windows?.[t] ?? null })),
       focusKey: `sli:${en.id}:${s.id}`,
       promqlWarning: selected ? warningFor(key) : null,
-      open: !!build?.customOpen?.[key],
       errors: selected ? errorsFor(key, false) : null, errorFields: selected ? Object.keys(errorsFor(key, false) || {}) : [],
     };
   };
   const customItem = (def) => {
     const eff = customEffective(def);
     return {
-      key: def.id, id: def.id, entry: null, entryTitle: 'Custom SLI', entryKind: 'custom', entryEvidence: 'custom', entrySelected: true,
+      key: def.id, id: def.id, effectiveId: def.id, entry: null, entryTitle: 'Custom SLI', entryKind: 'custom', entryEvidence: 'custom', entrySelected: true,
       type: def.type, unit: eff.unit ?? null, description: eff.description || '', metrics: [],
       evidence: 'custom', libraryEvidence: null, evidenceNote: 'written in the studio — no library evidence',
       minTier: tier, reachable: true, aboveTier: false, profileTier: null, note: null,
       selected: true, disabled: false, reason: null, custom: true, def: { ...def },
       objective: eff.objective, objectiveLabel: fmtObjective(eff.objective), window: eff.window,
       override: {}, customised: [], customisedLabel: null, effective: eff, defaults: {},
-      tiers: [], focusKey: `sli:custom:${def.id}`, promqlWarning: warningFor(def.id), open: !!build?.customOpen?.[def.id],
+      tiers: [], focusKey: `sli:custom:${def.id}`, promqlWarning: warningFor(def.id),
       errors: errorsFor(def.id, true), errorFields: Object.keys(errorsFor(def.id, true) || {}),
     };
   };
@@ -1476,8 +1551,8 @@ export function sheetLists(layerId, adapted, { compiled = false } = {}) {
  * switching each off, the L1 rolodex (the selected entries' SLIs, every product's behind
  * `build.rolodexAll`), the params the layer shapes (grouped; L4 channels vs runbooks),
  * the lists read from the instantiated pack, and on VERIFY the layer's todos with their
- * param rows. `mode`: 'edit' (COMPILE) | 'preview' (DEFINE: read-only, with the
- * "Compose in Compile →" action) | 'verify' (read-only options, editable todos).
+ * param rows. `mode`: 'edit' (DEFINE and COMPILE — the same live sheet on both) | 'verify'
+ * (read-only options, editable todos).
  */
 export function buildSheetModel({ layerId, build, library, requirements = [], stack = null, checklist = null, mode = 'edit', entering = false }) {
   const def = LAYER_DEFS.find(d => d.id === layerId) || { id: layerId, num: layerId, name: layerId };
@@ -1485,7 +1560,7 @@ export function buildSheetModel({ layerId, build, library, requirements = [], st
   const params = paramRows({ build, library });
   const stackModel = stack || buildStackModel({
     adapted: r?.adapted || null, requirements, checklist: checklist || buildClauseChecklist(requirements, r?.summary || null),
-    todos: r?.todos || [], params, mode: mode === 'preview' ? 'define' : mode === 'verify' ? 'verify' : 'compile', toggles: build?.toggles || {},
+    todos: r?.todos || [], params, mode: mode === 'verify' ? 'verify' : (build?.step === 'define' ? 'define' : 'compile'), toggles: build?.toggles || {},
   });
   const slab = stackModel.slabs.find(s => s.id === layerId) || {
     id: layerId, num: def.num, name: def.name, state: 'neutral', stateText: 'no clause applies', why: [], clauses: [], artefacts: [], ghosts: [], todos: [],
@@ -1512,14 +1587,7 @@ export function buildSheetModel({ layerId, build, library, requirements = [], st
   const lists = sheetLists(layerId, r?.adapted || null, { compiled });
   const errors = splitBuildErrors(build?.error);
   const rolodex = layerId === 'L1' ? (() => {
-    const items = rolodexItems({ build, library, all: !!build?.rolodexAll }).map(it => ({
-      ...it,
-      // The Customise face: editable in place on COMPILE when the card is open; read-only on VERIFY for every
-      // card that carries a customisation (the values, the chips, the provenance line).
-      face: (mode === 'edit' && it.selected && it.open) || (mode === 'verify' && it.selected && (it.custom || it.customised.length))
-        ? editFaceModel(it, { errors: it.custom ? errors.byCustom[it.key] : errors.byOverride[it.key], readOnly: mode !== 'edit' })
-        : null,
-    }));
+    const items = rolodexItems({ build, library, all: !!build?.rolodexAll });
     const inPack = items.filter(i => i.selected);
     return {
       items, filterAll: !!build?.rolodexAll,
@@ -1530,19 +1598,17 @@ export function buildSheetModel({ layerId, build, library, requirements = [], st
         aboveTier: inPack.filter(i => i.aboveTier).length, customised: inPack.filter(i => i.customised.length).length, custom: inPack.filter(i => i.custom).length,
         library: (library?.entries || []).length, chosen: selectedEntries(build, library).length,
       },
-      // The last card on COMPILE: the '+ Custom SLI' form, with the engine's usage errors of the last attempt inline.
-      customForm: mode === 'edit' ? customFormModel(build?.customDraft, {
-        errors: splitBuildErrors(build?.customDraftErrors).byCustom,
-        existingKeys: [...new Set([...inPack.map(i => i.key), ...allSliKeys(build, library)])],
-        existingSloIds: (r?.canonical?.spec?.slos || []).map(s => s.id),
-      }) : null,
+      // The last card while composing: '+ Custom SLI', which opens the editor in create mode (docs/BUILD_JOURNEY.md "The editor").
+      create: mode === 'edit',
+      // The editor opens from a card's Edit (View on Verify); the editor's own mode follows the step (editorModeFor).
+      editLabel: mode === 'verify' ? 'View' : 'Edit',
     };
   })() : null;
   const { byParam } = errors;
   const rejected = layerParams.filter(p => byParam[p.key]).length;
   return {
     layerId, num: slab.num, name: slab.name, title: `${slab.num} · ${slab.name}`, question: LAYER_QUESTIONS[layerId] || '',
-    mode, readOnly: mode !== 'edit', compose: mode === 'preview', step: build?.step || null, tier: build?.tier || null,
+    mode, readOnly: mode !== 'edit', step: build?.step || null, tier: build?.tier || null,
     // True on the render that opens the sheet only (the controller's one-shot): the entrance plays once, never on a re-render.
     entering: !!entering,
     state: slab.state, stateText: slab.stateText, why: slab.why || [], dimmed: !!slab.dimmed, offSections: slab.offSections || [], notes: slab.notes || [],

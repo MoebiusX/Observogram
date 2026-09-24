@@ -16,8 +16,9 @@
 // The definition is a wizard stage (docs/BUILD_JOURNEY.md "The seed and the
 // copies"): the live form on DEFINE (with a one-line note once seeded); on
 // COMPILE and VERIFY a read-only, recessed SEED card — the service as a
-// definition list, one tier chip, the entries as muted chips, "Change seed →"
-// back to DEFINE — with the conformance summary live beneath it on every step.
+// definition list, one tier chip, the entries as muted chips (each opens the
+// L1 sheet on that product's SLIs), "Change seed →" back to DEFINE — with the
+// conformance summary live beneath it on every step.
 //
 // Renderer only (docs/UI_CONVENTIONS.md §2-3): render(container, model, host)
 // with buildDefinitionModel's output; host.build.* are the actions — update
@@ -101,7 +102,7 @@ export function seedCardHtml(card) {
         <dt>Environment</dt><dd>${escapeHtml(card.environment)}</dd>
       </dl>
       <div class="build-seed-tier"><span class="build-seed-chip is-tier" data-tier="${escapeHtml(card.tier || '')}">${escapeHtml(card.tierChip)}</span></div>
-      <div class="build-seed-entries" aria-label="Library entries">${card.entries.map(e => `<span class="build-seed-chip" title="${escapeHtml(e.kind)}">${escapeHtml(e.title)}</span>`).join('')}</div>
+      <div class="build-seed-entries" aria-label="Library entries">${card.entries.map(e => `<button type="button" class="build-seed-chip is-entry" data-seed-entry="${escapeHtml(e.id)}" data-focus-key="seed:${escapeHtml(e.id)}" aria-haspopup="dialog" title="${escapeHtml(`${e.kind} — open the L1 sheet on its SLIs`)}">${escapeHtml(e.title)}</button>`).join('')}</div>
       <div class="build-seed-from">${escapeHtml(from)}</div>
       <button type="button" class="build-seed-change" data-change-seed data-focus-key="seed:change">${escapeHtml(card.changeLabel)} <span aria-hidden="true">→</span></button>
     </section>`;
@@ -198,4 +199,6 @@ export function wireBuildDefinition(container, model, host = appHost) {
   });
   container.querySelectorAll('.build-chip').forEach(b => b.addEventListener('click', () => act.toggleEntry(b.dataset.entry)));
   container.querySelector('[data-change-seed]')?.addEventListener('click', () => act.setStep('define'));
+  // A product chip on the seed card opens the L1 sheet on that product's SLIs.
+  container.querySelectorAll('[data-seed-entry]').forEach(b => b.addEventListener('click', () => act.openSheet?.('L1', { entry: b.dataset.seedEntry })));
 }

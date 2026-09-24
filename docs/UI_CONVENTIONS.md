@@ -69,8 +69,8 @@ the testable layer).
 - `host` — the app callbacks, defaulting to the module-level `appHost` when
   the view isn't vendored.
 - A journey with its own actions (the BUILD steps: `update`, `setTier`,
-  `toggleEntry`, `setParam`, `setSli`, `setToggle`, `setStep`, `preview`,
-  `openInDiscover`, …) rides them on that argument as a namespace
+  `toggleEntry`, `setParam`, `setSli`, `setToggle`, `setStep`, `openEditor`,
+  `closeEditor`, `preview`, `openInDiscover`, …) rides them on that argument as a namespace
   (`host.build`), built by app.mjs's controller and handed to the renderer at
   the call site — never added to `host.mjs` (convention 1: the host stays the
   four stable hooks) and never reached by importing app.mjs. The renderer

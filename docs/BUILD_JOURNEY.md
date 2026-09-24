@@ -264,7 +264,7 @@ beside `server/` and `tools/`. Nothing under `tools/lib` touches the filesystem.
 packc init --list                                   the entries table
 packc init --show <entry>                           params (entry + scaffold), SLIs per tier, objectives, evidence
 packc init --entry <id>[,<id>] --tier tier-2 --name <svc> [--env <env>] [--owner <team>]...
-           [--param k=v]... [--slis a,b | --sli <id>]... [--override <sli>.<objective|window|threshold>=<value>]...
+           [--param k=v]... [--slis a,b | --sli <id>]... [--override <sli>.<id|objective|window|threshold|semconv_metric>=<value>]...
            [--no-slos|--no-policy|--no-routes|--no-dashboards|--no-validation]
            [--out <file>] [--json] [--library <dir>]
 ```
@@ -465,7 +465,7 @@ made-up menu:
 
 | Layer | Question | Options on the sheet |
 |---|---|---|
-| L1 Contract | What should we measure? | the **SLI rolodex** — a horizontally scroll-snapping carousel of SLI cards (CSS `scroll-snap`, the arrow buttons and the arrow keys move one card, the card in view is emphasised and `aria-current`) drawn from the selected entries and, behind the *show every product* switch, from the whole library (`rolodexItems`); each card: the SLI id, its product with the evidence badge, the type pill, the metric names, the objective and window **it starts with** large (the library's at the current tier, or the user's override) and the library's other tiers muted, an add / remove **switch** (`role=switch`) — **any** SLI of the entries is addable; one above the tier carries an informational chip, *from the tier-1 profile*, never a disabled switch — a **Customise** affordance that expands the card in place into its edit face, the custom SLIs as cards of their own, and the last card **+ Custom SLI** ("The seed and the copies"). Adding an SLI from a product not yet selected selects that product too — one action, `addSli(entryId, sliId)` in the controller, `addSliSelection` its pure part (the entry joins, the SLI is ticked, the rest of the selection is kept and re-keyed for the new composition). Below the rolodex the **SLOs** switch with its consequence in one line (*off is expected to drop 4 clauses of the tier: availability SLO, latency SLO, every SLI under an SLO, chaos in staging*; once off, *off — 4 clauses fail with it: …*, the engine's set — the burn-alert clause is not among them: quantified per SLO, it holds with none, while the chaos experiments lose the SLO their steady-state hypothesis names, so L5 fails and its head says *no SLO to test*); the SLOs in the pack listed |
+| L1 Contract | What should we measure? | the **SLI rolodex** — a horizontally scroll-snapping carousel of SLI cards (CSS `scroll-snap`, the arrow buttons and the arrow keys move one card, the card in view is emphasised and `aria-current`) drawn from the selected entries and, behind the *show every product* switch, from the whole library (`rolodexItems`); each card: the SLI id, its product with the evidence badge, the type pill, the metric names, the objective and window **it starts with** large (the library's at the current tier, or the user's override) and the library's other tiers muted, an add / remove **switch** (`role=switch`) — **any** SLI of the entries is addable; one above the tier carries an informational chip, *from the tier-1 profile*, never a disabled switch — **Edit**, which opens the SLI's pop-up editor ("The editor"), the custom SLIs as cards of their own, and the last card **+ Custom SLI** (the editor in create mode). Adding an SLI from a product not yet selected selects that product too — one action, `addSli(entryId, sliId)` in the controller, `addSliSelection` its pure part (the entry joins, the SLI is ticked, the rest of the selection is kept and re-keyed for the new composition). Below the rolodex the **SLOs** switch with its consequence in one line (*off is expected to drop 4 clauses of the tier: availability SLO, latency SLO, every SLI under an SLO, chaos in staging*; once off, *off — 4 clauses fail with it: …*, the engine's set — the burn-alert clause is not among them: quantified per SLO, it holds with none, while the chaos experiments lose the SLO their steady-state hypothesis names, so L5 fails and its head says *no SLO to test*); the SLOs in the pack listed |
 | L2 Telemetry | Where does the telemetry flow? | the products' scrape jobs (job, targets, interval — from the prometheus receiver), the receivers, the backends (declared / min version, gating, endpoints), the exporters, the storage, the instrumentation contract; the **params** the layer shapes, editable (`paramRowHtml`): the entries' scrape targets and selectors, the scaffold's endpoints and backend versions. L2 has no switch |
 | L3 Insight | How do we see it? | the **Dashboards** switch (*off is expected to drop 2 clauses of the tier: service overview board, SLO burn board* — exactly what the engine reports failing once it is off), the boards the pack carries (the overview, the burn board at tier-2+, the entries' boards, the tier-1 boards), the derived views, the recording rules |
 | L4 Action | What happens when it breaks? | the **Policy** switch (the burn windows per SLO listed, `14× 5m/1h SEV1 · 6× 30m/6h SEV2`; disabled and off when SLOs are off — meaningless without them), the **Routes** switch with the channel **params** (oncall, team, pager, pager-low), the routes listed with their channels, the remediation templates with their runbook and automation, the runbook directory param |
@@ -489,15 +489,15 @@ asserts both readings equal the engine's failing set. A section off dims its sla
 section off elsewhere — L5 with SLOs off — carries a chip that says why (`sectionNotes`:
 *no SLO to test*, the failing clauses in its title).
 
-**One component on the three steps** (`sheetModeFor(step)`): on **COMPILE** the sheet is
-editable — this is where composition happens, so the SLI rows table and the SECTIONS toggle
-grid are gone from the step; COMPILE keeps its summary line, the stack and the YAML
-collapsible. On **DEFINE** it opens in **preview** — the requirements and the candidates,
-every switch disabled, the params read-only, and a *Compose in Compile →* action that
-switches step and reopens the same layer (`setStep('compile', { sheet })`); the silhouette
-stays the axis on DEFINE, whose main column is now the silhouette alone (the fields, the
-tier and the entries moved into the column; the params list moved to the L2 / L4 / L5
-sheets). On **VERIFY** it is read-only and shows the layer's pinned todos with their inline
+**One component on the three steps** (`sheetModeFor(step)`): on **DEFINE** and **COMPILE**
+the sheet is live — this is where composition happens, so the SLI rows table and the
+SECTIONS toggle grid are gone from the step; COMPILE keeps its summary line, the stack and
+the YAML collapsible; DEFINE is the seeding stage, but its pack is already instantiated, so
+it gets the same live sheet (the disabled preview with *Compose in Compile →* it first
+shipped with is retired — "The editor"); the silhouette stays the axis on DEFINE, whose main
+column is now the silhouette alone (the fields, the tier and the entries moved into the
+column; the params list moved to the L2 / L4 / L5 sheets). On **VERIFY** it is read-only and
+shows the layer's pinned todos with their inline
 params — the same `todoHtml` the slabs draw, keyed `param:<key>@<layer>/sheet/<todo path>`
 so a filled todo takes only its own inputs away; VERIFY keeps the verdict cards, the
 maturity bars, the artefacts strip and *Ready to continue?*. The sheet writes through the
@@ -544,9 +544,9 @@ to two re-keys; completing the defaults collapses to null; above the tier added;
 partitioning every param, `sectionClauses` matching the engine's dashboards-off failures,
 `sectionSwitch` consequences, `buildSheetModel` per layer (title, question, clauses,
 switches, param groups, lists read from the fixture, the modes), the sheet headless per mode
-(dialog ARIA, the rolodex cards incl. the above-tier one, the switches, read-only params in
-preview, the todos on verify, escaping at the seam), the sheet's handlers through fake
-elements (close, scrim, Esc, compose, the section and rolodex switches incl. a foreign SLI
+(dialog ARIA, the rolodex cards incl. the above-tier one, the switches, the read-only params
+and the todos on verify, escaping at the seam), the sheet's handlers through fake
+elements (close, scrim, Esc, the section and rolodex switches incl. a foreign SLI
 through `addSli`, the filter), the slab head's `aria-haspopup` and `+`, `stackExpanded`, the
 sheet focus fallbacks, one clause row for the summary and the sheet, and the stylesheet
 (the translucent surface with its fallback, the accent per layer, the thumb and knob
@@ -593,9 +593,10 @@ tier's defaults.
 **2. Copies, not links** — copy-on-write over the library's defaults. Two new instantiate
 inputs, in the engine, the API and the studio (the CLI takes the scalar overrides):
 
-- `overrides: { [sliId]: { objective?, window?, threshold?, query?, good?, total?,
-  description?, unit? } }`, keyed by the SLI id as the pack carries it (prefixed when several
-  entries compose — the keys `build.slis` uses). The engine validates every field as a usage
+- `overrides: { [sliId]: { id?, objective?, window?, threshold?, query?, good?, total?,
+  description?, unit?, semconv_metric? } }`, keyed by the SLI id as the library gives it to the
+  pack (prefixed when several entries compose — the keys `build.slis` uses; a renamed SLI — the
+  `id` field, "The editor" — stays keyed so). The engine validates every field as a usage
   error (400 from the API, exit 2 from the CLI, never a 500): the objective a number in
   (0, 1) — the ratio the pack stores; the studio shows and edits a percent — the window one of
   the schema's SLO windows `7d | 28d | 30d | 90d` (the schema's enum, stricter than any
@@ -650,10 +651,11 @@ inputs, in the engine, the API and the studio (the CLI takes the scalar override
   `/compile` and `/register` accept the instantiate inputs in place of `canonical`, so a
   customised pack is compiled or registered in one request. `GET /api/library` is unchanged
   in shape; the index rows' SLIs now carry the PromQL templates and the bound (`good` /
-  `total` or `query` / `threshold`, `${param}` unresolved) — the defaults the edit face
-  shows. `packc init` gains a repeatable `--override <sliId>.<field>=<value>` for
-  `objective`, `window` and `threshold` (a query, good or total is edited in the studio or in
-  the pack file) and `--sli <id>` as a repeatable alias of `--slis`.
+  `total` or `query` / `threshold`, `${param}` unresolved) and the metric (`semconv_metric`)
+  — the defaults the editor shows. `packc init` gains a repeatable
+  `--override <sliId>.<field>=<value>` for `id`, `objective`, `window`, `threshold` and
+  `semconv_metric` (a query, good or total is edited in the studio or in the pack file) and
+  `--sli <id>` as a repeatable alias of `--slis`.
 
 **3. The definition is a wizard stage.** DEFINE is the *seeding* step: the left column is
 the live form exactly as before (the fields, the segmented tier control, the chips, the
@@ -682,65 +684,210 @@ compile or verify (`seeded` undefined) counts as seeded (`isSeeded`; the control
 the field on load and `clampStep` tolerates it). The `#build-status` live region line is
 unchanged.
 
-**The studio surface for the copies** (the L1 sheet; edit mode on COMPILE, read-only faces on
-DEFINE preview and VERIFY). Every selected rolodex card gains a **Customise** affordance that
-expands the card in place — it stays one card in the snap track, the track's height grows,
-the open set is UI state (`customOpen`, never persisted) — into its edit face
-(`editFaceModel`, `studio/build-copies-model.mjs`): the objective as a percent input with the
-library default beside it, the window with a datalist of `7d / 28d / 30d / 90d`, for a
-threshold SLI the bound and the unit, the PromQL (the query, or good and total) in monospace
-textareas, the description; every overridden field has a per-field **↺ library default** that
-clears that override; the card's face shows the overridden objective large as today plus a
-*customised* chip, and once an expression is edited the evidence badge reads *custom* with
-the line *edited — the library's evidence no longer applies*; an engine `promql` warning for
-that SLI is printed on the card; the engine's `override <sli>.<field>: …` error lands under
-the field it names (`splitBuildErrors.byOverride`) — and stays visible with the face or the
-sheet closed: the card is marked (`is-error`, a *rejected: window* chip with the reason in
-its title), the controller opens the card's face when the error arrives, and the step's
-compile note names the value and the card to open (*1 customised value rejected —
-kafka_produce_latency_p99.window: open Customise on its card on the L1 sheet*,
-`rejectedCopies`). Edits commit on change (Enter or leaving
-the field; a first Esc inside a face or form field leaves the field and lands on the card's
-Customise / Done button, the next Esc closes the sheet — never mid-edit under a PromQL
-textarea) through `setOverride(sliId, field, value)` / `clearOverride(sliId, field)` (the
-debounced instantiate as today; focus and scroll restore across the re-render through the
-axis's focus keys — `ov:<sli>:<field>`, `cu:<id>:<field>`, `cf:<field>`,
-`customise:<sli>` — and scroll keys). The rolodex's **last card is + Custom SLI**
-(`customFormModel`): an inline form — the name with the id auto-slugged beneath
-(`slugifySliId`; a typed id sticks), the type, the description, the PromQL fields per type,
-the unit and the bound for a threshold SLI, the objective as a percent, the window — with
-the engine's usage errors shown inline from the 400 of the last attempt (`customDraftErrors`,
-`splitBuildErrors.byCustom`); an id an SLI of the entries owns, an id that is not a slug and
-an SLO id the pack already carries (`sloIdFor(id, objective)`) are said on the id field as
-the user types — the wiring rebuilds `customFormModel` on the draft as typed and repaints the
-field, and **Add to the pack** follows the model's `canSubmit`, never a second rule in the
-renderer — and **Add to the pack** → `addCustom(def)`: the controller
-tries one instantiation with the SLI added and commits the SLI and the pack only when the
-engine accepts it; the draft stays on the form otherwise (`customDraft`, kept across
-re-renders without a re-render under the caret). A custom SLI then behaves like any selected
-card: Customise edits it through `updateCustom(id, field, value)`, its switch off is
-`removeCustom(id)`. Above-tier cards show their informational chip and are simply addable. On
-VERIFY the read-only card (`readOnly` face, no reset, no Customise, no form) shows the
-customised values, the *customised* / *custom* chips and a provenance line (*customised:
-objective, window — the rest is Apache Kafka's*, *custom — written in the studio*); the
-stack's L1 SLI cards carry the same line in their foot (`customisedMap`, the shared card
-body's optional `note`) wherever the provenance says so.
+**The studio surface for the copies** is the pop-up editor ("The editor" below): **Edit** on a
+rolodex card (View on Verify), any SLI or SLO card on the stack, or the last rolodex card
+**+ Custom SLI** for one written from scratch. The copies first shipped as an in-card
+Customise face and a form card; the maintainer's drive found them half baked, and they are
+gone. The engine's `override <sli>.<field>: …` error lands under the editor's field and, with
+the editor closed, stays visible on the card (`is-error`, a *rejected: window* chip with the
+reason in its title) and in the step's compile note, which names the value and the card to
+open (`rejectedCopies`). Above-tier cards show their informational chip and are simply
+addable. The stack's L1 SLI cards carry the provenance line in their foot (`customisedMap`,
+the shared card body's optional `note`) wherever the provenance says so.
 
 **Modules.** Engine: `checkOverrides`, `checkCustom`, `checkCopyField`, `customFragment`,
 `evidenceOf` in `tools/lib/library.mjs`. Studio: `studio/build-copies-model.mjs` (pure:
-`overrideFor`, `effectiveSli`, `customisedFields`, `promqlEdited`, `editFaceModel`,
+`overrideFor`, `effectiveSli`, `customisedFields`, `promqlEdited`, `sliEditorModel`,
 `customFormModel`, `customDefFromDraft`, `fieldValueFor`, `slugifySliId`, `percentText` /
 `ratioOf`; it imports nothing from `build-model.mjs`, which imports it); in
 `studio/build-model.mjs` `isSeeded`, `seedCardModel`, `allSliKeys` / `selectedSliKeys`,
 `retargetOverrides`, `effectiveOverrides`, `customisedMap`, `rolodexItems` with the copies,
-`buildSheetModel` with the faces and the form; the actions `seed`, `setOverride`,
-`clearOverride`, `addCustom`, `updateCustom`, `removeCustom` in `studio/app.mjs`;
-`seedCardHtml` in the definition view; `wireRolodexCopies` in the sheet view.
+`buildSheetModel`, `buildEditorModel`; the actions `seed`, `setOverride`, `clearOverride`,
+`addCustom`, `updateCustom`, `removeCustom`, `openEditor`, `closeEditor` in `studio/app.mjs`;
+`seedCardHtml` in the definition view; `wireRolodexEditors` in the sheet view; the view
+`studio/build-editor-view.mjs`.
 
 **Honesty rules kept.** A customised SLI never keeps the library's evidence badge for an
 expression it no longer uses; *pass on a placeholder* stays distinct from pass; a section
 switched off says what fails with it (unchanged); the rubric is never bent by a custom SLI —
 it counts like any SLI, nothing more.
+
+## The editor: one pop-up over an SLI and its SLO
+
+The copies shipped as an in-card face (2026-09-23) and the maintainer, trying them on a test
+server, wrote: *the functionality is not there, I can't update an SLI. This looks half baked …
+updating should be easier — one has to scroll up and down to modify something that, if it's
+just 5 variables, maybe a pop-up would do.* The face worked mechanically but lived at the end
+of a long path (COMPILE → a slab head → a footer button → a form scrolling inside a card); the
+SLI and SLO cards on the stack were not clickable, on DEFINE the sheet was a disabled preview,
+the seed card's chips did nothing; the face could not rename an SLI or change its metric; its
+PromQL fields showed the library TEMPLATE with `${duration_metric}` / `${job}` unresolved —
+which the engine refuses in an override, so the effective query was never shown and editing
+meant hand-expanding parameters; the description box read empty under a "library default"
+label; and edits applied only on leaving the field. One design replaces it.
+
+**One pop-up editor.** Editing an SLI and its SLO is one centered modal dialog
+(`studio/build-editor-view.mjs`, `renderBuildEditor(container, model, host)` over the pure
+`sliEditorModel({ item, result, library, build, mode, errors, allKeys })` in
+`studio/build-copies-model.mjs`; `buildEditorModel({ build, library, mode })` in
+`build-model.mjs` finds the SLI the draft's `editor` names and assembles the inputs). It
+replaces both the in-card Customise face and the '+ Custom SLI' form card (deleted with their
+wiring and CSS); the rolodex card keeps its facts and its add / remove switch, its footer
+button reads **Edit** (View on Verify) and opens the pop-up, and the last rolodex card
+**+ Custom SLI** opens it in create mode.
+
+*Where it opens from.* (a) Any SLI or SLO card on the L1 slab of the stack: the whole card is a
+real control — a focusable card with button semantics (`role=button`, `tabindex=0`,
+`aria-haspopup=dialog`, Enter and Space, a hover and a focus ring; `build-stack-view.mjs`
+`editAttrs`, a Build-only wrapper around the card body Discover shares) — and an SLO card opens
+its SLI's editor on the objective; on COMPILE and VERIFY the adapter's artefacts carry the
+action (`stackCardActions` maps the id the pack carries to the editor's key, `buildStackModel`
+stamps `edit`), on DEFINE the SLI / SLO candidate ghosts do, with the library key; the card's
+accessible name reads *Edit <sli> — ratio SLI*, and on VERIFY *View <sli> — ratio SLI (as
+compiled)*, like the rolodex's button there. (b) The
+rolodex card's Edit. (c) The '+ Custom SLI' card. (d) A product chip on the seed card opens the
+L1 sheet on that product's first card (`openSheet('L1', { entry })`). It opens on DEFINE and
+COMPILE alike — DEFINE is the seeding stage but its pack is already instantiated, so the
+sheet's disabled preview mode is retired: `sheetModeFor` is `edit` on DEFINE and COMPILE,
+`verify` on VERIFY; *Compose in Compile →* is gone; the sheet on DEFINE is the same live sheet.
+On VERIFY the same dialog opens read-only (`editorModeFor`: the values as spans, the
+provenance line, no input).
+
+*Dialog semantics.* `role=dialog aria-modal=true` (so `installDialogFocusTrap` traps it —
+`TRAPPED_DIALOGS` skips the sheet's `aria-modal=false`, so only the editor traps while the
+sheet stays open underneath), `aria-labelledby` the SLI id, `aria-describedby` the status
+line, a scrim over everything, Esc leaves a focused field (its change commits) and closes,
+focus lands on the first field on open (the objective from an SLO card) and returns to the
+opener on close (the opener's focus key travels with `openEditor`: `card:<artefact id>`,
+`ghost:<key>`, `edit:<key>`, `edit:create`), one editor at a time, the open editor in UI state
+(`build.editor`, never persisted). The sheet may stay open underneath; the editor never
+scrolls the page (its body scrolls inside, `overscroll-behavior: contain`). It stacks above
+the sheet (z 61), the sticky header and the toast (z 100) — the scrim at 150, the dialog at 151
+— and below the drop overlay and the Advanced menu (z 200), the chrome's own layers: at
+1366×768 the title row of every threshold / create editor once sat behind the header, whose
+buttons took the clicks meant for the dialog (measured).
+
+*Layout.* No scrolling at 1920×1080 and none at 1366×768 for a library SLI (measured live).
+A title row (the id large, the product and its evidence badge, the type pill, the
+*customised* / *custom* / *from the tier-1 profile* / *was <key>* chips); a compact
+two-column grid: Id (a rename) · Description (PREFILLED with the library default); Objective
+(percent) · Window (the schema's four); for a threshold SLI Bound · Unit; Metric
+(`semconv_metric`) · Type (fixed — a different shape is a new custom SLI, the hint says so; no
+library SLI carries a percentile, so there is no percentile field); then the PromQL (Query, or
+Good and Total side by side) as monospace textareas of two rows that grow (to about eight
+lines, then scroll inside), showing the RESOLVED expression — the parameters in, read from
+the instantiated pack (`result.canonical.spec.slis` by the id the pack carries; before the
+engine has answered for it, the library template with `result.provenance.params` in) — with a
+small line *parameters: job=orders-api, duration_metric=… — edit them in L2*; the evidence
+line; a status line at the bottom that says what happened (*applying…* → *applied · SLO
+availability_99_9 · 2 burn alerts · rule orders_api:availability:ratio_5m*; the engine's error,
+which also sits under its field; *not in the pack — switch it on below*; *the last
+compilation failed elsewhere*; *as compiled · …* on Verify); per-field **↺ library default**
+(the PromQL default is the resolved library expression, named beside the label rather than
+printed), **Reset all** and **Done**; the SLI's add / remove switch in the footer. Both themes
+through the tokens; the rules sit in the axis block of `app.css`, so the AA scan covers them.
+
+*Live apply.* Every field commits ON INPUT through the existing actions with `live: true`
+(`setOverride(key, field, text, { live })` / `updateCustom(id, field, text, { live })`, both
+answering whether anything changed): the draft changes, the dialog alone is redrawn (its
+status reads *applying…*, `build.editorDirty`) and the instantiate is debounced like a typed
+name — a keystroke is never a request of its own; the page under it follows when the pack
+answers (`runBuildInstantiate` clears the flag — unless a newer edit still waits on the
+debounce, `editorDirtyAfterAnswer`: an older request answering must not read *applied · SLO
+<the stale id>* before the last edit was ever sent). A text that means the committed value (`99.90`
+for 0.999, a detour and back) changes nothing: the action says so and the status stays what
+the model says, never *applying…* with no request behind it.
+The editor lives in a persistent host on `<body>`, outside the re-rendered view
+(`syncBuildEditor` after every render of the main view). When the same editor (key and mode)
+is already mounted, `renderBuildEditor` redraws it IN PLACE — the head, the body and the
+footer's actions are replaced; the dialog node, the scrim and the status node stay — so the
+status line, a polite live region (`role=status aria-live=polite`), is the same node whose text
+changes when the pack answers: assistive technology announces a text change in an existing
+live region, not the initial text of a freshly inserted one (the *applied · …* answer once
+arrived by replacing the whole dialog's innerHTML and was never announced; the entrance
+animation replayed with it). Another key or mode renders the dialog whole. `renderBuildEditor`
+also keeps the focused control's TEXT, focus and caret across a re-render — the model's `99` never overwrites a
+typed `99.` — so typing three characters quickly loses none (measured live) and a value the
+engine rejects stays as typed beside its message (*got "abc"*). A field is found by its focus
+key, else by its field name when the key changed under it — a custom SLI's keys carry its id
+(`cu:<id>:<field>`), which a rename changes: the old key found nothing, the focus dropped to
+`<body>` after the first keystroke and every following one was lost (measured); the dialog's
+own controls carry keys too (`editor:done`, `editor:cancel`, `editor:reset-all`,
+`editor:close`; `focusFallbackSelectors` knows them), so the pack answering while Done has the
+focus does not drop it either. Esc closes the editor from inside (the dialog's handler) and,
+through one document listener per host, from `<body>` — inert while no dialog is mounted,
+deferring to a modal on top. The render that opens the editor skips `rerenderBuild`'s generic
+focus restore, which handed the focus back to the opener. Enter on a one-line input leaves it; a `change` that follows an `input` with the same
+text is not a second commit. The **Id is the exception**: a rename moves the SLO id, the
+recording rule, the boards and the burn alerts, so it is pre-checked on every keystroke
+(`paintIdState`: the clash / not-a-slug message under the field, the status *not applied — …*
+or *rename to <id> — Enter, Tab or Esc applies it*) and committed when the field is LEFT —
+committing every keystroke renamed the SLI to each valid prefix and left it at `error_rat`
+when the final `error_rate` clashed (measured live with real keys). A typed id the model does
+not carry survives the pack's answer with its message: the render that restores the kept text
+re-runs the check and paints it again.
+
+*Rename and metric* (`tools/lib/library.mjs`). `id` and `semconv_metric` join
+`OVERRIDE_FIELDS`. An `id` override renames the SLI in the pack while the override stays keyed
+by the id the library gives it (`entryFragment` carries `key` beside `id`), so the studio keeps
+a renamed SLI attached to its library row and the stack and the rolodex show the new id; the
+SLO id (`sloIdFor`), the recording rule, the boards' bindings, the burn alerts and the chaos /
+remediation references follow; `provenance.slis` sits under the new id with `library.sli` the
+template's and `customised: id`; the evidence stays the library's — the expression is still
+the library's. The id is validated like a custom SLI's (`CUSTOM_ID_RE`, not `errorbudget`);
+`checkSliIds` refuses a rename onto another SLI in the pack (a library one, a custom one, a
+second rename), onto an un-ticked library SLI of the entries (it would clash the moment it is
+ticked) and a custom id equal to a renamed id; `checkSloIds` spells its collision on the
+override's key. A rename to the id the pack already carries is no rename. `semconv_metric` is
+one bounded token (128 characters, no whitespace, quote or backslash): restated beside an
+edited expression it stays (the caller's claim); left alone, an edited expression still drops
+the template's claim. The index rows carry the library's metric as the default. The studio
+pre-checks a typed id the way the engine will (`checkEditorId`, `existingSliIds`: a slug, not
+reserved, not another SLI of the pack or of a selected product) and keeps an invalid one in
+the field with its message, never sent; the key itself typed back (or an empty field) clears
+the rename — the studio never sends an override that restates the key, which it would show as
+*customised: id* while the engine treats it as no rename. `packc init --override` accepts `<sli>.id=` and
+`<sli>.semconv_metric=`.
+
+*Create mode.* The same dialog over the custom form (`customFormModel`, one rule: Name → id
+with `slugifySliId`, a typed id sticks; Type; Description; Objective; Window; Bound + Unit for
+a threshold SLI; Metric, optional; the PromQL fields for the type), **Add to the pack**
+enabled from the model's `canSubmit` with the engine's messages inline (`customDraftErrors`);
+a success morphs the dialog into edit mode over the new SLI, whose status says what the pack
+made of it.
+
+*Small fixes in the same slice.* The header step tabs' accessible names read *Define —
+Service, tier & library* (and Compile, Verify): `BUILD_TABS` lives in `build-model.mjs`
+(pure), `techName` is the step's own word, `tabName` spells the name once for the tab's
+`aria-label` and `title`. The description default bug (an empty box under a "library default"
+label) is gone with the face. The rolodex counts line and the L1 slab head are unchanged.
+
+**Honesty rules kept.** An edited PromQL drops the library evidence (`custom`, *edited — the
+library's evidence no longer applies*); a rename keeps the library provenance (`customised:
+id`); *pass on a placeholder* stays distinct; nothing in the rubric bends.
+
+**Modules.** Engine: `checkCopyField` (id, semconv_metric), `checkSliIds`, `entryFragment`'s
+`key` in `tools/lib/library.mjs`; `libraryIndex` rows carry `semconv_metric`. Studio:
+`sliEditorModel`, `checkEditorId`, `existingSliIds`, `resolveTemplate`, `templateParams`,
+`effectiveId`, `fieldsForType` in `studio/build-copies-model.mjs`; `buildEditorModel`,
+`editorModeFor`, `stackCardActions`, `BUILD_TABS` / `tabName`, `sheetModeFor` in
+`studio/build-model.mjs`; the view `studio/build-editor-view.mjs` (`buildEditorHtml`,
+`renderBuildEditor`, `wireBuildEditor`, `growTextarea`, `paintFieldMessage`); the actions
+`openEditor`, `closeEditor`, `setOverride` / `updateCustom` with `live`, `openSheet` with
+`entry` and `syncBuildEditor` in `studio/app.mjs`; `editAttrs` in the stack view;
+`wireRolodexEditors` in the sheet view; `state.build.editor` / `editorDirty`.
+
+**Tests.** `tools/test-build-editor.mjs` (the model over a library ratio SLI, a threshold one
+with a unit, an above-tier one, a customised, a renamed and a custom one, create mode,
+read-only; the helpers; headless renders per mode — the ARIA, every describedby resolving, no
+input on Verify; the handlers — three quick characters, the id clash kept and not sent, ↺ /
+Reset all / the switch / Esc; the focus-caret-text preservation under a fake document; the
+create form's live draft; the Tab trap with the sheet underneath; the stylesheet's modal
+rules); `tools/test-build-model.mjs` (the rolodex's Edit and create card, a renamed id on the
+card and the DEFINE ghost, the stack cards' action and wiring, the live DEFINE sheet, the seed
+chips, the tab names, the AA scan over the new rules); `tools/test-library.mjs` (the rename
+through the SLO, the rule, the bindings, the compiled alert and the provenance; every clash;
+the metric; the CLI).
 
 ## What the next slices add
 

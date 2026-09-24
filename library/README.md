@@ -114,17 +114,25 @@ carries it (prefixed when several entries compose: `kafka_produce_latency_p99`):
 instantiatePack(entries, { name, tier, overrides: {
   kafka_produce_latency_p99: { objective: 0.995, window: '7d', threshold: 0.25 },
   http_service_availability: { good: 'sum(rate(http_ok_total[5m]))', total: 'sum(rate(http_total[5m]))' },
+  kafka_broker_availability: { id: 'brokers_up', semconv_metric: 'kafka.broker.up' },
 } })
 ```
 
-The fields (`OVERRIDE_FIELDS`): `objective` (a number in (0, 1) — the ratio the pack
-stores; the studio shows a percent), `window` (one of the schema's SLO windows `7d | 28d
-| 30d | 90d` — the schema's enum, not any duration), `threshold` (a finite number, a
+The fields (`OVERRIDE_FIELDS`): `id` (a rename — a slug like a custom SLI's, `^[a-z][a-z0-9_]{1,62}$`,
+not `errorbudget`, that no other SLI of the pack carries and that shadows no un-ticked
+library SLI of the entries; the SLO id, the recording rule, the bindings, the burn alerts
+and the provenance follow the new id, the evidence stays the library's, and the override
+stays keyed by the id the library gives the SLI, so a renamed SLI stays attached to its
+library row; a rename to that id is no rename), `objective` (a number in (0, 1) — the ratio
+the pack stores; the studio shows a percent), `window` (one of the schema's SLO windows `7d
+| 28d | 30d | 90d` — the schema's enum, not any duration), `threshold` (a finite number, a
 threshold SLI only; it is an upper bound: spec v1.2 has no direction field, so
 `comparison` is refused with that reason — a floor is a ratio SLI), `query` (threshold)
 or `good` / `total` (ratio) — non-empty strings within `MAX_PARAM_LENGTH` (4096) that
 carry no `${…}` placeholder, since an override replaces the library's expression *after*
-the params are in — `description` and `unit` (bounded strings). An unknown field, a wrong
+the params are in — `description` and `unit` (bounded strings), `semconv_metric` (one
+bounded token, 128 characters; restated beside an edited expression it stays — the caller's
+claim). An unknown field, a wrong
 type, a key that is not an SLI id (`^[a-z][a-z0-9_]{0,63}$`; `__proto__`, `constructor`
 and `prototype` refused, nothing read through the prototype chain) are usage errors that
 name the field: `override <sli>.<field>: …`. An override for an SLI that is not in the
@@ -163,12 +171,14 @@ the annotation `library.custom`. The rubric counts it like any SLI, nothing more
 **Where.** The API (`POST /api/library/instantiate`, `/compile`, `/register` take
 `overrides` and `custom`; at most 64 override entries and 16 custom SLIs per request,
 400 beyond, every value validated by the engine; `/compile` and `/register` accept the
-instantiate inputs in place of `canonical`), the studio (the L1 sheet's Customise face
-and its + Custom SLI card), and the CLI for the scalar overrides only:
-`packc init … --override <sli>.<objective|window|threshold>=<value>` (repeatable; a query,
-good or total is edited in the studio or in the pack file; the CLI takes no custom SLI in
-this slice). `--slis a,b` / `--sli <id>` takes any SLI of the chosen entries, above the
-tier too.
+instantiate inputs in place of `canonical`), the studio (the pop-up SLI editor — Edit on a
+rolodex card, any SLI or SLO card on the stack, the + Custom SLI card;
+`docs/BUILD_JOURNEY.md` "The editor"), and the CLI for the scalar overrides only:
+`packc init … --override <sli>.<id|objective|window|threshold|semconv_metric>=<value>`
+(repeatable; a query, good or total is edited in the studio or in the pack file; the CLI
+takes no custom SLI in this slice). `--slis a,b` / `--sli <id>` takes any SLI of the chosen
+entries, above the tier too. The index rows (`libraryIndex`) carry each SLI's PromQL
+templates, bound and `semconv_metric` — the defaults the editor shows.
 
 ## The quality bar
 
@@ -238,7 +248,10 @@ toggles:
   policy off exactly the burn-rate clause;
 - the seed and the copies: an SLI above the tier instantiates with its own profile's
   objective and no warning; the per-tier walk; overrides change the SLO id, the window,
-  the threshold; an overridden expression drops the evidence to `custom` and the
+  the threshold; an `id` override renames the SLI and everything that names it (the SLO,
+  the rule, the bindings, the compiled alert, the provenance) and refuses clashes and
+  shadows; `semconv_metric` restated, dropped with an edited expression or kept beside it;
+  an overridden expression drops the evidence to `custom` and the
   provenance lists the field; the usage errors and the `override` warning; a custom ratio
   and a custom threshold SLI in `slis`, `slos`, the recording rules, the policy and the
   bindings, schema-valid, counted by the rubric; a duplicate custom id refused;

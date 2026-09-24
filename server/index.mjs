@@ -1883,7 +1883,7 @@ function instantiateInputs(body) {
   const toggles = (body.toggles && typeof body.toggles === 'object' && !Array.isArray(body.toggles)) ? body.toggles : {};
   let overrides;
   if (body.overrides !== undefined && body.overrides !== null) {
-    if (typeof body.overrides !== 'object' || Array.isArray(body.overrides)) return { errors: ['overrides: expected an object of { <sli id>: { objective?, window?, threshold?, query?, good?, total?, description?, unit? } }'] };
+    if (typeof body.overrides !== 'object' || Array.isArray(body.overrides)) return { errors: ['overrides: expected an object of { <sli id>: { id?, objective?, window?, threshold?, query?, good?, total?, description?, unit?, semconv_metric? } }'] };
     const n = Object.keys(body.overrides).length;
     if (n > MAX_OVERRIDES) return { errors: [`overrides: at most ${MAX_OVERRIDES} entries (${n} given)`] };
     overrides = body.overrides;

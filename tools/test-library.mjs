@@ -512,9 +512,75 @@ test('overrides: an edited expression replaces the library\'s PromQL and drops i
   assert.ok(orders({ overrides: { kafka_produce_latency_p99: { unit: 'ratio', threshold: 1 } } }).warnings.some(w => w.kind === 'burn-rules' && /kafka_produce_latency_p99/.test(w.message)));
 });
 
+test('overrides: id renames the SLI — the SLO, the burn alerts, the recording rule, the bindings and the provenance follow; the key stays the library\'s; clashes and shadows are refused', () => {
+  const r = orders({ overrides: { http_service_availability: { id: 'http_availability' } } });
+  assert.deepEqual(validateCanonical(r.canonical, SCHEMA), []);
+  assert.deepEqual([r.warnings, failingMust(r.canonical)], [[], []]);
+  assert.ok(!JSON.stringify(r.canonical.spec).includes('http_service_availability'), 'the old id is nowhere in the spec');
+  const sli = r.canonical.spec.slis.find(x => x.id === 'http_availability');
+  assert.ok(sli && sli.type === 'ratio' && sli.semconv_metric === 'http.server.request.duration' && /http_server_request_duration_seconds_count/.test(sli.good), 'the SLI keeps its expression, metric and description under the new id');
+  assert.deepEqual(r.canonical.spec.slos.find(x => x.sli === 'http_availability'), { id: 'http_availability_99_5', sli: 'http_availability', objective: 0.995, window: '30d', error_budget_policy: 'ref:platform/std-budget-policy' });
+  assert.deepEqual(r.canonical.spec.queries.recording_rules.find(x => x.expr === 'ref:slis.http_availability'), { name: 'orders_api:http_availability:ratio_5m', expr: 'ref:slis.http_availability', interval: '30s' });
+  assert.ok(r.canonical.spec.policy.burn_rate_alerts.some(a => a.slo === 'http_availability_99_5'));
+  assert.ok(r.canonical.spec.dashboards[0].panel_bindings.some(p => p.binds_to === 'slis.http_availability') && r.canonical.spec.dashboards[0].panel_bindings.some(p => p.binds_to === 'slos.http_availability_99_5'));
+  assert.deepEqual(checkBindings(r.canonical, genericBoards(r.canonical)), []);
+  assert.match(compile(r.canonical, 'prometheus-rules').content, /http_availability_99_5_burn_14x_5m_1h/);
+  // The provenance sits under the new id, points at the library row, lists the rename — and keeps the library's evidence: the expression is still the library's.
+  const p = r.provenance.slis.http_availability;
+  assert.deepEqual([p.library.entry, p.library.sli, p.customised, p.custom, p.evidence.status], ['http-service', 'availability', ['id'], false, 'semconv']);
+  assert.equal(r.provenance.slis.http_service_availability, undefined);
+  assert.deepEqual(r.provenance.overrides, { http_service_availability: { id: 'http_availability' } }, 'the override stays keyed by the library\'s id');
+  assert.equal(r.canonical.metadata.annotations['library.customised.slis.http_availability'], 'id');
+  assert.equal(r.canonical.metadata.annotations['library.slis'], orders().canonical.metadata.annotations['library.slis'], 'the selection is still the library\'s ids');
+  assert.deepEqual(todosFromAnnotations(r.canonical), [...r.todos].sort(byPath));
+  // A rename to the id the pack already carries is no rename.
+  assert.deepEqual(orders({ overrides: { http_service_availability: { id: 'http_service_availability' } } }).provenance.slis.http_service_availability.customised, []);
+  // The SLO-id collision on a renamed SLI is spelled on its library key.
+  const err = (extra) => { try { orders(extra); } catch (e) { return e.message; } return null; };
+  assert.match(err({ overrides: { kafka_broker_availability: { id: 'ka', objective: 0.9999 } }, custom: [{ ...CUSTOM_RATIO, id: 'ka_99', objective: 0.99 }] }), /^custom ka_99\.id: its SLO id ka_99_99 collides with ka's/);
+  assert.match(err({ overrides: { kafka_broker_availability: { id: 'ka', objective: 0.9999 }, kafka_produce_latency_p99: { id: 'ka_99', objective: 0.99 } } }), /^override kafka_produce_latency_p99\.objective: its SLO id ka_99_99 collides with ka's/, 'the override is addressed by its key, not the new id');
+  // Clashes: another SLI in the pack (a library one, a custom one, a second rename), a library SLI not ticked (shadowed), a bad slug, the reserved segment, a polluting key.
+  assert.match(err({ overrides: { http_service_availability: { id: 'kafka_broker_availability' } } }), /^override http_service_availability\.id: kafka_broker_availability is already the id of the library SLI kafka_broker_availability of kafka in the pack — pick another id$/);
+  assert.match(err({ overrides: { http_service_availability: { id: 'checkout_success' } }, custom: [CUSTOM_RATIO] }), /^override http_service_availability\.id: checkout_success is already the id of the custom SLI checkout_success in the pack — pick another id$/);
+  assert.match(err({ overrides: { http_service_availability: { id: 'same' }, http_service_latency_p99: { id: 'same' } } }), /^override http_service_latency_p99\.id: same is already the id of the library SLI http_service_availability of http-service \(renamed same\) in the pack — pick another id$/);
+  assert.match(err({ overrides: { http_service_availability: { id: 'kafka_controller_election_rate' } } }), /^override http_service_availability\.id: shadows the library SLI kafka_controller_election_rate of kafka \(not in the pack now — it would clash the moment it is ticked\) — pick another id$/);
+  assert.match(err({ overrides: { http_service_availability: { id: 'A' } } }), /^override http_service_availability\.id: the id is a slug of 2 to 63 characters \(\[a-z\]\[a-z0-9_\]\{1,62\}\), got "A"$/);
+  assert.match(err({ overrides: { http_service_availability: { id: 'x' } } }), /a slug of 2 to 63 characters/);
+  assert.match(err({ overrides: { http_service_availability: { id: 'errorbudget' } } }), /^override http_service_availability\.id: 'errorbudget' is the compiler's reserved policy-record segment$/);
+  assert.match(err({ overrides: { http_service_availability: { id: '__proto__' } } }), /a slug of 2 to 63 characters/);
+  assert.match(err({ overrides: { http_service_availability: { id: 7 } } }), /got 7$/);
+  // A renamed SLI can be customised further, and an above-tier one renamed like any other.
+  const both = orders({ toggles: { slis: [...defaultToggles(composed(), 'tier-2').slis, 'kafka_controller_election_rate'] }, overrides: { kafka_controller_election_rate: { id: 'elections', objective: 0.95, window: '7d' } } });
+  assert.deepEqual(both.canonical.spec.slos.find(x => x.sli === 'elections'), { id: 'elections_95', sli: 'elections', objective: 0.95, window: '7d', error_budget_policy: 'ref:platform/std-budget-policy' });
+  assert.deepEqual([both.provenance.slis.elections.customised, both.provenance.slis.elections.aboveTier, both.provenance.slis.elections.profileTier], [['id', 'objective', 'window'], true, 'tier-1']);
+  assert.deepEqual(validateCanonical(both.canonical, SCHEMA), []);
+});
+
+test('overrides: semconv_metric restates the metric the SLI reads — kept beside an edited expression when restated, dropped with it otherwise; one bounded token', () => {
+  const m = orders({ overrides: { kafka_produce_latency_p99: { semconv_metric: 'messaging.kafka.produce.duration' } } });
+  const sli = m.canonical.spec.slis.find(x => x.id === 'kafka_produce_latency_p99');
+  assert.equal(sli.semconv_metric, 'messaging.kafka.produce.duration');
+  assert.deepEqual([m.provenance.slis.kafka_produce_latency_p99.customised, m.provenance.slis.kafka_produce_latency_p99.evidence.status], [['semconv_metric'], 'recorded-live'], 'the metric alone keeps the library evidence: the expression is still the library\'s');
+  assert.deepEqual(validateCanonical(m.canonical, SCHEMA), []);
+  const edited = orders({ overrides: { http_service_availability: { good: 'sum(rate(http_ok_total[5m]))', total: 'sum(rate(http_total[5m]))' } } }).canonical.spec.slis.find(x => x.id === 'http_service_availability');
+  assert.ok(!('semconv_metric' in edited), 'an edited expression drops the template\'s claim');
+  const restated = orders({ overrides: { http_service_availability: { good: 'sum(rate(http_ok_total[5m]))', total: 'sum(rate(http_total[5m]))', semconv_metric: 'http.server.request.duration' } } });
+  assert.equal(restated.canonical.spec.slis.find(x => x.id === 'http_service_availability').semconv_metric, 'http.server.request.duration', 'restated with the edit: the caller\'s claim stays');
+  assert.equal(restated.provenance.slis.http_service_availability.evidence.status, 'custom', 'and the evidence is still honestly custom');
+  const err = (overrides) => { try { orders({ overrides }); } catch (e) { return e.message; } return null; };
+  assert.match(err({ kafka_produce_latency_p99: { semconv_metric: 'a b' } }), /^override kafka_produce_latency_p99\.semconv_metric: the metric is one name — no whitespace, quote or backslash — got "a b"$/);
+  assert.match(err({ kafka_produce_latency_p99: { semconv_metric: '' } }), /the metric must be a non-empty string/);
+  assert.match(err({ kafka_produce_latency_p99: { semconv_metric: 'x'.repeat(129) } }), /the metric may not exceed 128 characters \(129 given\)/);
+  assert.match(err({ kafka_produce_latency_p99: { semconv_metric: 3 } }), /must be a non-empty string/);
+  // A custom SLI may state a metric too.
+  const c = orders({ custom: [{ ...CUSTOM_RATIO, semconv_metric: 'checkout.success' }] });
+  assert.equal(c.canonical.spec.slis.find(x => x.id === 'checkout_success').semconv_metric, 'checkout.success');
+  assert.deepEqual(validateCanonical(c.canonical, SCHEMA), []);
+});
+
 test('overrides: the usage errors name the field, and an override for an SLI not in the pack is a warning', () => {
   const err = (overrides) => { try { orders({ overrides }); } catch (e) { return e.message; } return null; };
-  assert.match(err({ kafka_produce_latency_p99: { nope: 1 } }), /^override kafka_produce_latency_p99\.nope: unknown field \(the fields are objective, window, threshold, query, good, total, description, unit\)$/);
+  assert.match(err({ kafka_produce_latency_p99: { nope: 1 } }), /^override kafka_produce_latency_p99\.nope: unknown field \(the fields are id, objective, window, threshold, query, good, total, description, unit, semconv_metric\)$/);
   assert.match(err({ kafka_produce_latency_p99: { window: '30x' } }), /^override kafka_produce_latency_p99\.window: the window is one of 7d \| 28d \| 30d \| 90d \(the schema's SLO windows\), got "30x"$/);
   assert.match(err({ kafka_produce_latency_p99: { window: '14d' } }), /the schema's SLO windows/, 'the schema\'s enum, not any duration');
   assert.match(err({ kafka_produce_latency_p99: { objective: 1 } }), /^override kafka_produce_latency_p99\.objective: the objective is a number in \(0, 1\)/);
@@ -541,7 +607,7 @@ test('overrides: the usage errors name the field, and an override for an SLI not
   assert.match(err({ kafka_produce_latency_p99: JSON.parse('{"__proto__": {"objective": 0.5}}') }), /^override kafka_produce_latency_p99\.__proto__: refused$/);
   assert.equal(SLI_KEY_RE.test('a'.repeat(64)), true);
   assert.equal(SLI_KEY_RE.test('a'.repeat(65)), false);
-  assert.deepEqual(OVERRIDE_FIELDS, ['objective', 'window', 'threshold', 'query', 'good', 'total', 'description', 'unit']);
+  assert.deepEqual(OVERRIDE_FIELDS, ['id', 'objective', 'window', 'threshold', 'query', 'good', 'total', 'description', 'unit', 'semconv_metric']);
   // not in the pack: a warning of kind override, the rest builds unchanged
   const w = orders({ overrides: { nope_sli: { objective: 0.5 }, kafka_controller_election_rate: { objective: 0.5 }, kafka_produce_latency_p99: {} } });
   assert.deepEqual(w.warnings.map(x => [x.kind, x.sli]), [['override', 'nope_sli'], ['override', 'kafka_controller_election_rate']]);
@@ -629,13 +695,15 @@ test('custom SLIs: the usage errors — a duplicate or clashing id, a missing fi
   assert.match(err([noThreshold]), /^custom checkout_p99\.threshold: required for a threshold SLI$/);
   assert.match(err([{ ...CUSTOM_RATIO, query: 'up' }]), /^custom checkout_success\.query: a ratio SLI has good and total, not a query$/);
   assert.match(err([{ ...CUSTOM_THRESHOLD, comparison: '<' }]), /^custom checkout_p99\.comparison: not a field: an ObservabilityPack v1\.2 threshold is an upper bound/);
-  assert.match(err([{ ...CUSTOM_RATIO, nope: 1 }]), /^custom checkout_success\.nope: unknown field \(the fields are id, type, objective, window, threshold, query, good, total, description, unit\)$/);
+  assert.match(err([{ ...CUSTOM_RATIO, nope: 1 }]), /^custom checkout_success\.nope: unknown field \(the fields are id, type, objective, window, threshold, query, good, total, description, unit, semconv_metric\)$/);
   assert.match(err([{ ...CUSTOM_RATIO, window: '30x' }]), /^custom checkout_success\.window: the window is one of 7d \| 28d \| 30d \| 90d/);
   assert.match(err([{ ...CUSTOM_RATIO, good: 'sum(${x})' }]), /may not carry a \$\{…\} placeholder/);
   assert.match(err(['x']), /^custom\[0\]: expected an object, got string$/);
   assert.match(err({ id: 'x' }), /custom must be a list/);
   assert.equal(CUSTOM_ID_RE.test('checkout_success'), true);
-  assert.deepEqual(CUSTOM_FIELDS, ['id', 'type', ...OVERRIDE_FIELDS]);
+  assert.deepEqual(CUSTOM_FIELDS, ['id', 'type', 'objective', 'window', 'threshold', 'query', 'good', 'total', 'description', 'unit', 'semconv_metric'], 'the id once: a custom SLI\'s id is its key, not an override');
+  // A custom SLI's id is not an override field: `id` inside its definition is its identity, checked as such.
+  assert.match(err([{ ...CUSTOM_RATIO, id: 'kafka_broker_availability' }]), /^custom kafka_broker_availability\.id: clashes with/);
   // a custom SLI's PromQL is parsed like any other: a broken one is a promql warning, not a usage error
   assert.ok(orders({ custom: [{ ...CUSTOM_RATIO, good: 'sum(rate(x[5m])' }] }).warnings.some(w => w.kind === 'promql' && w.sli === 'checkout_success' && w.field === 'good'));
 });
@@ -733,7 +801,18 @@ test('packc init builds a pack: YAML on stdout, todos on stderr, exit 0; a secti
   assert.equal(ovPack.metadata.annotations['library.customised.slis.produce_latency_p99'], 'objective,window,threshold');
   assert.match(ov.stderr, /1 customised/);
   assert.equal(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.query=up').status, 2, 'a query is not a CLI override');
-  assert.match(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.query=up').stderr, /--override takes objective, window or threshold/);
+  assert.match(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.query=up').stderr, /--override takes id, objective, window, threshold or semconv_metric/);
+  // --override <sli>.id=<new id> renames the SLI (the SLO and the annotation follow; the SLI is still addressed by its library id); semconv_metric restates the metric.
+  const renamed = cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.id=produce_p99', '--override', 'produce_latency_p99.objective=0.995', '--override', 'produce_latency_p99.semconv_metric=messaging.kafka.produce.duration');
+  assert.equal(renamed.status, 0, renamed.stderr);
+  const renamedPack = parseYaml(renamed.stdout);
+  assert.ok(renamedPack.spec.slis.some(x => x.id === 'produce_p99' && x.semconv_metric === 'messaging.kafka.produce.duration') && !renamedPack.spec.slis.some(x => x.id === 'produce_latency_p99'));
+  assert.deepEqual(renamedPack.spec.slos.find(x => x.sli === 'produce_p99').id, 'produce_p99_99_5');
+  assert.equal(renamedPack.metadata.annotations['library.customised.slis.produce_p99'], 'id,objective,semconv_metric');
+  assert.match(renamed.stderr, /customised produce_p99: id, objective, semconv_metric/);
+  const clash = cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.id=broker_availability');
+  assert.equal(clash.status, 2, 'a rename onto another SLI\'s id is the engine\'s usage error');
+  assert.match(clash.stderr, /override produce_latency_p99\.id: broker_availability is already the id of the library SLI broker_availability of kafka in the pack/);
   assert.equal(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.objective=abc').status, 2, 'a number is required');
   assert.equal(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.window=30x').status, 2, 'the engine\'s usage error is exit 2');
   assert.match(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.window=30x').stderr, /override produce_latency_p99\.window: the window is one of 7d \| 28d \| 30d \| 90d/);
