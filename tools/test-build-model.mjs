@@ -2044,12 +2044,15 @@ test('the definition column is a wizard stage: the live form on DEFINE (with the
   c.querySelector = (sel) => (sel === '#build-next' ? next : { addEventListener() {}, querySelector: () => null, querySelectorAll: () => [] });
   renderBuildDefine(c, buildDefineModel({ build: draft({ seeded: false }), library: LIBRARY, requirements: REQUIREMENTS }), { build: { seed: () => seedCalls.push('seed'), setStep: (s) => seedCalls.push(s) } });
   assert.ok(c.innerHTML.includes('id="build-next" >Seed the pack <span aria-hidden="true">→</span></button>'));
-  assert.ok(c.innerHTML.includes('seeding the pack opens Compile'));
+  assert.ok(c.innerHTML.includes('seeding the pack opens Compile, where the artefacts are.'));
   next.fire('click');
   assert.deepEqual(seedCalls, ['seed']);
   const c2 = stubContainer();
   renderBuildDefine(c2, buildDefineModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS }), { build: {} });
   assert.ok(c2.innerHTML.includes('>Continue to Compile <span aria-hidden="true">→</span></button>') && c2.innerHTML.includes('Seeded —'));
+  // The sheet and the editor are live on DEFINE: the status never says the edits wait on Compile or that Compile is where one composes.
+  for (const html of [c.innerHTML, c2.innerHTML]) assert.ok(!/wait on Compile|where you compose/.test(html), 'no stale copy about composing on Compile');
+  assert.ok(c2.innerHTML.includes('your edits are already in the pack — Compile shows its artefacts.'));
   // The persisted shape carries the copies and the seed.
   for (const k of ['overrides', 'custom', 'seeded']) assert.ok(BUILD_PERSIST_FIELDS.includes(k), k);
   const fresh2 = defaultBuildState();

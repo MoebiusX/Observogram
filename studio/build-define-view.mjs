@@ -80,7 +80,7 @@ export function renderBuildDefine(container, model, host = appHost) {
       </div>
 
       <footer class="build-step-actions">
-        <span class="build-step-status">${!model.valid ? `Still needed: ${model.errors.map(escapeHtml).join(' and ')}.` : model.error ? 'Selection complete, but the last compilation failed — see the error above.' : model.seeded ? `Seeded — ${entriesCount} entr${entriesCount === 1 ? 'y' : 'ies'}; your customisations wait on Compile.` : `Selection complete — ${entriesCount} entr${entriesCount === 1 ? 'y' : 'ies'}; seeding the pack opens Compile, where you compose it.`}</span>
+        <span class="build-step-status">${!model.valid ? `Still needed: ${model.errors.map(escapeHtml).join(' and ')}.` : model.error ? 'Selection complete, but the last compilation failed — see the error above.' : model.seeded ? `Seeded — ${entriesCount} entr${entriesCount === 1 ? 'y' : 'ies'}; your edits are already in the pack — Compile shows its artefacts.` : `Selection complete — ${entriesCount} entr${entriesCount === 1 ? 'y' : 'ies'}; seeding the pack opens Compile, where the artefacts are.`}</span>
         <button type="button" class="mcp-refresh-btn build-next" id="build-next" ${model.valid ? '' : 'disabled'}>${escapeHtml(model.nextLabel)} <span aria-hidden="true">→</span></button>
       </footer>
     </section>`;
