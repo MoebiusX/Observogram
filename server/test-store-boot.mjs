@@ -566,6 +566,27 @@ test('stale import: deleting users.json after the upgrade, or the recorded users
   });
 });
 
+test('stale import: with the legacy files moved aside, a lost database still refuses (a) — no admin/admin seeded, the marker keeps naming the real store', async () => {
+  const ws = workspace();
+  usersFile(ws, { alice: { createdAt: 't', password: REAL } });
+  assert.ok(boot(ws).listening);
+  const storeId = await inspectWs(ws, (v) => v.meta('store_id'));
+  renameSync(join(ws, 'users.json'), join(ws, 'users.json.aside'));
+  assert.ok(boot(ws).listening, 'the files moved aside are recorded absent');
+
+  removeDb(dbFile(ws));
+  const r = boot(ws);
+  assert.ok(!r.listening && r.nothingMoved === true, r.message);
+  assert.ok(r.message.includes(`imported into store ${storeId}`) && /a new, empty store/.test(r.message), r.message);
+  assert.ok(/Nothing was imported or seeded/.test(r.message) && !/import --replace|rekey-issuer/.test(r.message), r.message);
+  assert.equal(JSON.parse(readFileSync(join(ws, '.store-imported'), 'utf8')).storeId, storeId, 'the marker still names the real store');
+  await inspectWs(ws, (v) => { assert.equal(v.meta('import_done'), null); assert.equal(v.users().length, 0); });
+
+  // The way out it names: the marker moved aside, the store at OBSERVOGRAM_DB starts as it stands.
+  renameSync(join(ws, '.store-imported'), join(ws, '.store-imported.aside'));
+  assert.ok(boot(ws).listening);
+});
+
 // ====================== removed orgs ======================
 
 test('a removed org is absent to the org middleware, the bearer fallback and the switcher; its files stay', async () => {

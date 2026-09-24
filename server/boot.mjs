@@ -317,16 +317,27 @@ export function staleImportGuard(db, ctx) {
   const orgsPath = orgsFilePath(ctx.base);
   const legacyPresent = existsSync(usersPath) || existsSync(orgsPath);
 
-  // (a) the legacy files were imported into another store.
-  if (!ctx.memory && legacyPresent && marker && (marker.storeId !== id || !importDone)) {
+  // (a) the legacy files were imported into another store. The marker
+  // outlives the files: once (d)'s "move it aside" has recorded them
+  // absent, it is the only record of the store this workspace belongs to,
+  // so a lost or re-pointed database still refuses rather than seeding a
+  // new store over it.
+  if (!ctx.memory && marker && (marker.storeId !== id || !importDone)) {
+    const holds = `${ctx.dbPath} holds ${describeStore(db, id, importDone)}`;
     throw new BootRefusal(
-      `refusing to start: the legacy users.json/orgs.json in ${ctx.base} were imported into store ${marker.storeId} ` +
-      `(${markerPath(ctx.base)}), but ${ctx.dbPath} holds ${describeStore(db, id, importDone)}.\n` +
-      'Nothing was imported. Ways out:\n' +
+      (legacyPresent
+        ? `refusing to start: the legacy users.json/orgs.json in ${ctx.base} were imported into store ${marker.storeId} ` +
+          `(${markerPath(ctx.base)}), but ${holds}.\n`
+        : `refusing to start: the workspace ${ctx.base} was imported into store ${marker.storeId} ` +
+          `(${markerPath(ctx.base)}), but ${holds}. Its legacy files are gone, so that marker is the only record ` +
+          'of the store that holds its users and orgs.\n') +
+      `Nothing was ${legacyPresent ? 'imported' : 'imported or seeded'}. Ways out:\n` +
       '  - point OBSERVOGRAM_DB at that store, or at a copy of its backup;\n' +
       '  - with the server stopped, `packc store restore <backup>`;\n' +
-      `  - or, to accept the legacy files as they stand, move ${markerPath(ctx.base)} aside:\n` +
-      '    the next start imports them and says so.',
+      (legacyPresent
+        ? `  - or, to accept the legacy files as they stand, move ${markerPath(ctx.base)} aside:\n` +
+          '    the next start imports them and says so.'
+        : `  - or, to start this workspace on ${ctx.dbPath} as it stands, move ${markerPath(ctx.base)} aside.`),
       { nothingMoved: true });
   }
 
