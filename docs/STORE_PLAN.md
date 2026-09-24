@@ -392,8 +392,11 @@ otherwise read an empty store:
      when the request, the marker and the database all carry the same
      `store_id`; step 3 then carries it out. Otherwise the first bullet's
      refusal applies and the request stays pending.
-   - A file that was absent at import or export is recorded as absent. A
-     hashed file that has since appeared or disappeared counts as changed.
+   - A file that was absent at import or export is recorded as absent, and
+     one that has since appeared counts as changed. A hashed file that has
+     *disappeared* is not a downgrade edit (no pre-store build deletes these
+     files): when nothing appeared and no content differs, the boot records
+     it as absent, logs it and goes on.
    - **`oidc_issuer`.** With OIDC configured and a recorded `oidc_issuer`
      that differs from today's issuer key, refuse, name both values and
      name `packc store rekey-issuer`. Nothing is moved, seeded, imported or
@@ -680,7 +683,8 @@ import the database is authoritative, and the legacy files are only hashed
     the switcher.
   - The default org cannot be removed.
   - Deleting a removed org's files is an explicit offline step, `packc
-    store purge-org <id>`.
+    store purge-org <id>`, which also drops that root's entries from
+    `legacy_hashes` and the marker.
 - **No data ever moves at runtime.** The default org stays at its root, and
   the journeys CronJob keeps its root.
   - `GET /api/journeys/:name/schedule` emits snippets for the requesting
@@ -737,9 +741,10 @@ from files edited during a downgrade. It is carried out by the server's next
 boot, with the unit's env (§4 step 3).
 - It keeps the audit, services, environments and endpoints. From slice 4 on
   it also re-imports each root's `index.json`, with the same reconcile rule.
-- A local user missing from `users.json` is disabled. An OIDC row is never
-  disabled for being absent from a file, because the export never writes
-  OIDC users.
+- A local user missing from `users.json` is disabled. When the files hold
+  no `users.json` at all, the store's local users are kept. An OIDC row is
+  never disabled for being absent from a file, because the export never
+  writes OIDC users.
 - `is_owner` is never re-derived from the files, and enabled users keep
   their flag. Without an `orgs.json` in the files, the store's memberships
   and `oidc_join_role` are kept, and the no-`orgs.json` mapping (import
@@ -750,9 +755,13 @@ boot, with the unit's env (§4 step 3).
   (moved by a pre-store boot, or by step 3's `migrateFlatWorkspace()`), the
   replace sets that org's `root` to `orgs/default` in the same `tx()`,
   rewrites its journey `file:` paths and prints the CronJob change, exactly
-  as the in-place export does. It refuses, naming the paths, if an entry
-  exists both flat and under `orgs/default/`. This is the second, and last,
-  offline way a `root` changes.
+  as the in-place export does. An empty flat directory or a zero-byte
+  `deploys.jsonl` beside its `orgs/default/` twin is a leftover of today's
+  rehydrate bug (every pre-store restart leaves an empty `<base>/packs`):
+  it is removed and reported. A non-empty twin refuses, naming the paths,
+  and that refusal is evaluated in step 3's no-write checks, before
+  `migrateFlatWorkspace()` runs, so a refused replace moves nothing. This is
+  the second, and last, offline way a `root` changes.
 - In the same `tx()` it bumps every changed or disabled user's epoch
   (which also kills cookies minted during the downgrade window), rewrites
   `legacy_hashes`, clears `replace_requested` and writes one audit row.
@@ -904,7 +913,7 @@ to end: the boot order and the import (slice 2) are the heavy part.
 | Migrations | every migration applied from `user_version` 0 and from each prior version, on temp-file fixtures that hold child rows. A v2 step that rebuilds `users` under `memberships` keeps every child row. A failing step leaves `foreign_keys` back `ON`. Two openers racing the same step apply it once |
 | Boot order | through `start()`, not only through the import function: a users.json `admin` with a real password, with and without `OBSERVOGRAM_ADMIN_PASSWORD`, on loopback and on 0.0.0.0, boots with exactly the imported users and no second `admin`; a still-seeded users.json plus a token on 0.0.0.0 refuses; a corrupt `users.json` or `orgs.json` aborts, names the path, and leaves `orgs.json` intact; a fresh workspace on 0.0.0.0 with only `OBSERVOGRAM_ADMIN_PASSWORD` boots with that `admin` as owner and `import_done` set; a still-seeded users.json on 0.0.0.0 with `OBSERVOGRAM_ADMIN_PASSWORD` and no token boots with the replaced password and `must_change` cleared, and the same with a token refuses with nothing moved; a store initialised by `npm run users -- add` boots on 0.0.0.0 with no token; after `import_done`, a store seeded `admin`/`admin` on loopback and rebooted on 0.0.0.0 with `OBSERVOGRAM_ADMIN_PASSWORD` and no token boots with the replaced password, and a token-only store rebooted on 0.0.0.0 with only `OBSERVOGRAM_ADMIN_PASSWORD` seeds `admin` as owner; `OBSERVOGRAM_AUTH=off` with OIDC env, or on a CLI-armed store, on 0.0.0.0 with no token and no `OBSERVOGRAM_INSECURE_NO_AUTH` refuses with nothing moved; a two-org `orgs.json` with no identity refuses with nothing moved and no `import_done`, and so does a one-org one whose flat data would add `default`, while a one-org `orgs.json` with only a bearer imports and boots token-only; an `orgs.json`-armed workspace whose flat data the migration moved boots a second time without refusing; from slice 4, an unreadable (non-ENOENT) `packs/index.json` aborts and names the path |
 | Import | fixture workspaces, each asserted row by row with its report: flat stand-alone; `orgs.json`-armed with a not-yet-moved flat workspace (labels kept, from slice 4); a flat entry plus its `orgs/default/` twin (reported, nothing merged); an acme-only `orgs.json` plus the empty `default` artefact (dropped); OIDC with `orgs.json`; OIDC without it; a leftover `users.json` under OIDC (disabled, no owner); legacy `.tomograph/`; a corrupt `index.json` (slice 4: rows rebuilt from the pack files, labels null, path in the report); an empty `users.json` (armed, nothing seeded); unknown and messy role strings (`owner`, `Admin`, ` Viewer `, `editor`, `admn`, null, missing) |
-| Stale import | deleting the database, or pointing `OBSERVOGRAM_DB` at a new path, with legacy files and a marker present: the boot refuses and imports nothing; then `packc store restore` of a backup succeeds and the next boot passes. A database moved with its id boots. A crash after commit repairs the marker. Export in place, then a pre-store build removes a user and changes a password, then re-upgrade: the boot refuses; after `import --replace` and a boot, the removed user is disabled, their old cookie is refused, the new password works, and the boot after that passes the guard. A replace requested from a shell with no OIDC env, on an OIDC deployment, maps members under the unit's issuer and disables no OIDC user. A flat OIDC round trip keeps every IdP user and the owner enabled; a flat stand-alone round trip keeps a viewer a viewer. With `OBSERVOGRAM_USERS_FILE` outside the workspace, an in-place export reaches the file a pre-store build reads; after the §3 overlay copy the boot passes the guard. A flat single-org store exported in place, then `npm run orgs -- create acme` on a pre-store build and a restart: the re-upgrade boot refuses, and after `import --replace` the default org's packs, deploys and journeys are found and `acme` exists. A foreign imported store with a replace request refuses and changes no rows. A replace requested after the issuer changed refuses at step 2 with nothing replaced, and after `rekey-issuer --to` it runs with no duplicate rows |
+| Stale import | deleting the database, or pointing `OBSERVOGRAM_DB` at a new path, with legacy files and a marker present: the boot refuses and imports nothing; then `packc store restore` of a backup succeeds and the next boot passes. A database moved with its id boots. A crash after commit repairs the marker. Export in place, then a pre-store build removes a user and changes a password, then re-upgrade: the boot refuses; after `import --replace` and a boot, the removed user is disabled, their old cookie is refused, the new password works, and the boot after that passes the guard. A replace requested from a shell with no OIDC env, on an OIDC deployment, maps members under the unit's issuer and disables no OIDC user. A flat OIDC round trip keeps every IdP user and the owner enabled; a flat stand-alone round trip keeps a viewer a viewer. With `OBSERVOGRAM_USERS_FILE` outside the workspace, an in-place export reaches the file a pre-store build reads; after the §3 overlay copy the boot passes the guard. A flat single-org store exported in place, then `npm run orgs -- create acme` on a pre-store build and a restart: the re-upgrade boot refuses, and after `import --replace` the default org's packs, deploys and journeys are found and `acme` exists. A foreign imported store with a replace request refuses and changes no rows. `purge-org` after slice 4, deleting `users.json` after the upgrade, and removing the recorded `users_file` each boot without refusing and change no rows. A replace requested after the issuer changed refuses at step 2 with nothing replaced, and after `rekey-issuer --to` it runs with no duplicate rows |
 | CLI | a CLI run with a shell env refuses on a workspace with legacy files and imports nothing; on a fresh workspace `users -- add` initialises the store without `import_done`, and the new user is an owner; the server's later import keeps that row and reports any conflict |
 | Export | a pre-store build boots on an exported workspace, and the same enabled users sign in and see the same packs; a flat deployment's export contains no `orgs.json`; a flat default org plus a created org exports `orgs.json`, and after the pre-store boot the default org's packs and journeys are found |
 | OIDC upgrade | a pre-upgrade OIDC cookie reads `/api` on a workspace without `orgs.json`, as `operator`, and two IdP users who have never signed in do too; an `orgs.json` OIDC member keeps their role with a pre-upgrade cookie and after a fresh sign-in, with an env issuer with and without a trailing slash; a local username equal to an IdP sub does not capture the membership; an unverified email never matches `OBSERVOGRAM_BOOTSTRAP_ADMIN`; a user who signed in before it was set becomes owner at their next sign-in; once an owner exists, a further match grants nothing; each grant leaves one `owner.bootstrap` row; a stand-alone store switched to OIDC boots and records the key; an OIDC store booted with OIDC unset boots stand-alone and keeps the record; a changed issuer refuses to boot and names `rekey-issuer`; after `rekey-issuer --to`, the same IdP users keep their rows, roles and owner flag; after `--clear`, the old rows are disabled and the bootstrap names a new owner |
