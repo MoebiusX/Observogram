@@ -366,7 +366,8 @@ test('the dialog headless in read-only mode (Verify): no input, the values as sp
   assert.ok(ready.includes('data-editor-submit data-focus-key="cf:add">Add to the pack') && ready.includes('class="build-editor-status is-ready"'));
 });
 
-test('the handlers: every field but the id commits on input through setOverride with the field’s key and live (three quick characters, none lost, the status says applying… only when something changed); a change after the input is not a second commit; the id is pre-checked on every keystroke and committed on change — ten keystrokes send nothing, a clash stays in the field with its message, a valid one goes once, the key itself clears; ↺ and Reset all → clearOverride; the switch; Esc leaves the field then closes; the scrim and Done close', () => {
+test('the handlers: every field but the id commits on input through setOverride with the field’s key and live (three quick characters, none lost, the status says applying… only when something changed); a change after the input is not a second commit; the id is pre-checked on every keystroke and committed on change, after the browser’s focus move — ten keystrokes send nothing, a clash stays in the field with its message, a valid one goes once, the key itself clears, a field left by Enter gets the focus back; ↺ and Reset all → clearOverride; the switch; Esc leaves the field then closes; the scrim and Done close', async () => {
+  const tick = () => new Promise(r => setTimeout(r, 0));
   const b = draftWith({ overrides: { availability: { objective: 0.999 } }, editor: { key: 'availability', custom: false } });
   const model = dialogOf(b);
   const calls = [];
@@ -375,7 +376,7 @@ test('the handlers: every field but the id commits on input through setOverride 
   const closeBtn = fakeEl({}), scrim = fakeEl({}), done = fakeEl({});
   const status = { textContent: '', className: '' };
   const objective = { ...fakeEl({ overrideField: 'objective', sli: 'availability' }), value: '99.9', tagName: 'INPUT', blurred: 0, blur() { this.blurred++; } };
-  const idInput = { ...fakeEl({ overrideField: 'id', sli: 'availability' }), value: 'availability', tagName: 'INPUT', blur() {} };
+  const idInput = { ...fakeEl({ overrideField: 'id', sli: 'availability', focusKey: 'ov:availability:id' }), value: 'availability', tagName: 'INPUT', blur() {} };
   const good = { ...fakeEl({ overrideField: 'good', sli: 'availability' }), value: 'x', tagName: 'TEXTAREA', style: {}, scrollHeight: 40 };
   const reset = fakeEl({ reset: 'objective', sli: 'availability' });
   const resetAll = fakeEl({});
@@ -413,32 +414,49 @@ test('the handlers: every field but the id commits on input through setOverride 
   assert.deepEqual(calls, [], 'ten keystrokes: nothing sent — no prefix becomes a rename');
   assert.deepEqual([msg.className, msg.id, msg.textContent, msgAttrs.role, cls.has('is-error'), inpAttrs['aria-invalid'], inpAttrs['aria-errormessage'], inpAttrs['aria-describedby'], status.textContent, status.className],
     ['build-edit-error', 'build-editor-id-error', 'error_rate is already an SLI of the pack or of a selected product — pick another id', 'alert', true, 'true', 'build-editor-id-error', 'build-editor-id-default build-editor-id-error', 'not applied — error_rate is already an SLI of the pack or of a selected product — pick another id', 'build-editor-status is-error']);
-  idInput.fire('change');
+  idInput.fire('change'); await tick();
   assert.deepEqual(calls, [], 'leaving the field with a clashing id sends nothing; the message stays');
   assert.equal(msg.className, 'build-edit-error');
-  // A valid id while typing: the message clears, the status says how to apply it; the change commits it once.
+  // A valid id while typing: the message clears, the status says how to apply it; the change commits it once — after
+  // the browser's own focus move (a Tab computed from a field the synchronous render had replaced landed nowhere; measured).
   idInput.value = 'http_availability'; idInput.fire('input');
   assert.deepEqual([calls, msg.className, msg.textContent, cls.has('is-error'), 'aria-invalid' in inpAttrs, inpAttrs['aria-describedby'], status.textContent, status.className],
     [[], 'build-edit-hint', idHint, false, false, 'build-editor-id-default build-editor-id-hint', 'rename to http_availability — Enter, Tab or Esc applies it', 'build-editor-status is-pending']);
   idInput.fire('change');
+  assert.deepEqual(calls, [], 'the commit waits for the focus move (a task)');
+  await tick();
   assert.deepEqual(calls, [['override', 'availability', 'id', 'http_availability', { live: true }]]);
   assert.deepEqual([status.textContent, status.className], ['applying…', 'build-editor-status is-pending']);
-  idInput.fire('change');
+  idInput.fire('change'); await tick();
   assert.equal(calls.length, 1, 'a second change with the same text is not a second rename');
   // Cleared: the text means the key, which this (un-renamed) model already carries — the status is the model's again;
   // the change still clears the rename typed before it (the controller removes the override).
   idInput.value = ''; idInput.fire('input');
   assert.equal(status.textContent, model.status.text);
-  idInput.fire('change');
+  idInput.fire('change'); await tick();
   assert.deepEqual(calls.at(-1), ['override', 'availability', 'id', '', { live: true }], 'an empty id clears the rename (the controller removes the override)');
   // The key itself typed back (' availability ', 'availability') is no rename: what goes out clears the override — never
   // `{ id: 'availability' }`, which the studio then showed as "customised: id" while the engine treated it as no rename (measured).
   calls.length = 0;
-  idInput.value = ' availability '; idInput.fire('input'); idInput.fire('change');
+  idInput.value = ' availability '; idInput.fire('input'); idInput.fire('change'); await tick();
   idInput.value = 'availability'; idInput.fire('input');
   assert.deepEqual([status.textContent, status.className], [model.status.text, `build-editor-status is-${model.status.kind}`], 'the id the pack carries: the status is the model\'s again');
-  idInput.fire('change');
+  idInput.fire('change'); await tick();
   assert.ok(calls.length >= 1 && calls.every(c => c[3] === ''), `typing the key back sends a clear, not the key: ${JSON.stringify(calls)}`);
+  // Enter left the field (blur → change) with <body> active: after the commit the fresh id field gets the focus back.
+  const body = {};
+  let refocused = 0;
+  const freshId = { focus: () => { refocused++; } };
+  const containerWithFresh = fakeContainer({ '.build-editor': [dialog], '.build-editor .build-edit-input': [idInput], '#build-editor-status': [status], '.build-editor [data-field="id"]': [idBox], '[data-focus-key="ov:availability:id"]': [freshId] });
+  wireBuildEditor(containerWithFresh, model, { build: act });
+  globalThis.document = { body, activeElement: body };
+  try {
+    idInput.value = 'http_avail'; idInput.fire('input'); idInput.fire('change'); await tick();
+    assert.deepEqual([calls.at(-1)[3], refocused], ['http_avail', 1], 'the field left by Enter is focused again');
+    globalThis.document.activeElement = { tagName: 'INPUT' };
+    idInput.value = 'http_avail2'; idInput.fire('input'); idInput.fire('change'); await tick();
+    assert.equal(refocused, 1, 'something else has the focus (Tab): left alone');
+  } finally { delete globalThis.document; }
   // paintIdState on its own, for the render that restores a typed id: the check comes back with the message painted.
   assert.equal(paintIdState(container, model, 'latency_p99').ok, false);
   assert.equal(msg.textContent, 'latency_p99 is already an SLI of the pack or of a selected product — pick another id');

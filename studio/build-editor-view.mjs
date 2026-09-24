@@ -333,7 +333,15 @@ export function wireBuildEditor(container, model, host = appHost, { shell = true
         if (!check.ok) return;
         last = inp.value;
         if (check.id === null && model.custom) { say(model.status.text, model.status.kind); return; }   // a custom SLI's id as it is: nothing to rename
-        send(check.id ?? '');   // the key itself (or nothing) clears the rename — never an override that restates the key
+        // The commit waits for the browser's own focus move (Tab, a click away): the render it causes redraws the
+        // field, and a Tab computed from a field that was gone landed the focus nowhere (measured). A field left by
+        // Enter (blur) has <body> active meanwhile: the fresh field gets the focus back.
+        const focusKey = inp.dataset.focusKey;
+        setTimeout(() => {
+          send(check.id ?? '');   // the key itself (or nothing) clears the rename — never an override that restates the key
+          if (typeof document === 'undefined' || (document.activeElement && document.activeElement !== document.body)) return;
+          container.querySelector(`[data-focus-key="${attr(focusKey)}"]`)?.focus?.({ preventScroll: true });
+        }, 0);
       });
     } else {
       const commit = () => {
