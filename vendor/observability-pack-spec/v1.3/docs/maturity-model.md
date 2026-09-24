@@ -56,7 +56,7 @@ Tier-2 packs are appropriate for internal-critical services where chat-only pagi
 
 | # | Dimension | Additional requirement | Conformance check |
 |---|---|---|---|
-| 2.1 | SLIs/SLOs | At least one latency SLI in addition to availability. | At least one SLI of type `threshold` or `distribution` exists. |
+| 2.1 | SLIs/SLOs | At least one latency SLI in addition to availability. | At least one SLI of type `threshold` or `distribution` exists. The check is by type, not by direction: since spec 1.3 a floor SLI (`good_when: above`, e.g. connected consumers) satisfies it as well. |
 | 2.2 | Pipelines | OTel Collector metrics pipeline present (otlp or prometheus receiver → prometheusremotewrite exporter). | `spec.pipelines.exporters.metrics.kind == "prometheusremotewrite"` |
 | 2.2b | OTel | SemConv version pinned to ≥ binding floor; auto-instrumentation declared for at least one language. | `spec.otel.semconv >= "1.26.0"` and `len(spec.otel.sdk.languages) >= 1` |
 | 2.3 | Queries | At least one derived view referencing a platform template. | `len(spec.queries.derived_views) >= 1` |

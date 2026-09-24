@@ -13,11 +13,11 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, relative, basename } from 'node:path';
 import { crawlToYaml } from './lib/crawler.mjs';
-import { validateCanonical } from './lib/validator.mjs';
+import { validateCanonical, SPEC_VERSION, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 import { brandEnv } from './lib/brand-env.mjs';
 import { readFileSync } from 'node:fs';
 const SCHEMA = JSON.parse(readFileSync(
-  new URL('../vendor/observability-pack-spec/v1.2/observability-pack.schema.json', import.meta.url), 'utf8'));
+  new URL(`../${SPEC_SCHEMA_PATH}`, import.meta.url), 'utf8'));
 
 const SCAN_EXT = /\.(ya?ml|json|cjs|mjs|js|jsx|ts|tsx|py|go|java|kt|rs|cs)$/i;
 const IGNORE_DIRS = new Set(['.git', 'node_modules', 'vendor', 'dist', 'build', '.cache', '.next', '.terraform']);
@@ -58,7 +58,7 @@ const USAGE = `\
 crawl-repo — Path A of pack creation.
 
 Walks a service repository and emits a draft canonical ObservabilityPack
-v1.2 manifest by introspecting common observability artefacts.
+manifest by introspecting common observability artefacts.
 
   Usage:
     node tools/crawl-repo.mjs <repo-path> [options]
@@ -169,7 +169,7 @@ async function main() {
     `#   evidence entries : ${Object.keys(evidence).length}`,
     schemaErrors.length
       ? `#   schema           : INVALID — ${schemaErrors.length} error(s); this is a crawler bug, please report it`
-      : `#   schema           : valid (spec v1.2)`,
+      : `#   schema           : valid (spec v${SPEC_VERSION})`,
     ...schemaErrors.map(e => `#     ✗ ${e}`),
     '',
   ].join('\n'));

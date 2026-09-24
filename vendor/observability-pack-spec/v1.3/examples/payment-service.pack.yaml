@@ -180,6 +180,7 @@ spec:
     # --- Kafka consumer surface ---
     - id: consumer_freshness
       type: threshold
+      good_when: below          # the default, stated: lag is a ceiling, samples above 60 s are bad
       description: Consumer lag for the settlement topic.
       semconv_metric: messaging.kafka.consumer.lag
       query: |
@@ -189,6 +190,18 @@ spec:
         })
       threshold: 60
       unit: seconds
+
+    - id: settlement_consumers_active
+      type: threshold
+      good_when: above          # a floor: fewer than two live members and the topic is one restart from stalling
+      description: Live members of the settlement consumer group.
+      semconv_metric: kafka.consumer_group.members   # OTel Collector kafkametrics receiver
+      query: |
+        min(kafka_consumer_group_members{
+          group="payment-settler"
+        })
+      threshold: 2
+      unit: consumers
 
     - id: consumer_processing_success
       type: ratio
@@ -214,6 +227,7 @@ spec:
     - { id: api_latency_99_p99_500ms,        sli: api_latency_p99,            objective: 0.99,   window: 30d, error_budget_policy: ref:platform/std-budget-policy }
     - { id: checkout_latency_99_5_p99_300ms, sli: api_latency_p99_checkout,   objective: 0.995,  window: 30d, error_budget_policy: ref:platform/std-budget-policy }
     - { id: consumer_freshness_99_under_60s, sli: consumer_freshness,         objective: 0.99,   window: 30d, error_budget_policy: ref:platform/std-budget-policy }
+    - { id: settlement_consumers_99_9_min_2, sli: settlement_consumers_active, objective: 0.999,  window: 30d, error_budget_policy: ref:platform/std-budget-policy }
     - { id: consumer_success_99_95,          sli: consumer_processing_success, objective: 0.9995, window: 30d, error_budget_policy: ref:platform/std-budget-policy }
 
   # ---------------------------------------------------------------------------
@@ -351,6 +365,9 @@ spec:
       - name: payment:consumer_lag:seconds_max_5m
         expr: ref:slis.consumer_freshness
         interval: 30s
+      - name: payment:settlement_consumers:members_min_5m
+        expr: ref:slis.settlement_consumers_active
+        interval: 30s
 
     derived_views:
       - id: golden_signals
@@ -376,6 +393,7 @@ spec:
         - { panel: sli-api-availability,    binds_to: slis.api_availability }
         - { panel: sli-api-latency-p99,     binds_to: slis.api_latency_p99 }
         - { panel: sli-consumer-freshness,  binds_to: slis.consumer_freshness }
+        - { panel: sli-settlement-consumers, binds_to: slis.settlement_consumers_active }
         - { panel: slo-api-availability,    binds_to: slos.api_availability_99_9 }
 
     - id: payment-slo-burn
@@ -415,6 +433,11 @@ spec:
         windows:
           - { short: 10m, long: 1h, factor: 10, severity: SEV2 }
           - { short: 1h,  long: 6h, factor: 4,  severity: SEV3 }
+
+      - slo: settlement_consumers_99_9_min_2      # a floor SLO burns exactly like a ceiling: bad samples are the ones under 2
+        windows:
+          - { short: 5m,  long: 1h, factor: 14, severity: SEV2 }
+          - { short: 30m, long: 6h, factor: 6,  severity: SEV3 }
 
       - slo: consumer_success_99_95
         windows:

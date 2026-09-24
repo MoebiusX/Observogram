@@ -227,7 +227,7 @@
         "w": 3,
         "h": 4
       },
-      "description": "99th-percentile HTTP request latency, server-side, across all handlers. SLO 99 % over 30d.",
+      "description": "99th-percentile HTTP request latency, server-side, across all handlers. SLO 99 % over 30d. Good when ≤ 1 seconds.",
       "pack": {
         "binds_to": [
           "slis.http_request_latency_p99"
@@ -375,7 +375,7 @@
         "w": 3,
         "h": 4
       },
-      "description": "99th-percentile datasource proxy request latency. SLO 99 % over 30d.",
+      "description": "99th-percentile datasource proxy request latency. SLO 99 % over 30d. Good when ≤ 2 seconds.",
       "pack": {
         "binds_to": [
           "slis.datasource_proxy_latency_p99"
@@ -449,7 +449,7 @@
         "w": 3,
         "h": 4
       },
-      "description": "99th-percentile latency of Grafana's internal database queries (the metadata / dashboards / users / orgs store). Slow database queries directly degrade the UI and alerting evaluation. Prerequisite: grafana_database_queries_duration_seconds is exposed only with [database] instrument_queries = true (GF_DATABASE_INSTRUMENT_QUERIES), which is off by default; without it this SLI reads nothing. SLO 99 % over 30d.",
+      "description": "99th-percentile latency of Grafana's internal database queries (the metadata / dashboards / users / orgs store). Slow database queries directly degrade the UI and alerting evaluation. Prerequisite: grafana_database_queries_duration_seconds is exposed only with [database] instrument_queries = true (GF_DATABASE_INSTRUMENT_QUERIES), which is off by default; without it this SLI reads nothing. SLO 99 % over 30d. Good when ≤ 0.5 seconds.",
       "pack": {
         "binds_to": [
           "slis.database_query_latency_p99"

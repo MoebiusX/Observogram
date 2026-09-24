@@ -40,7 +40,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
 import { adapt, listEnvironments, applyEnvironmentOverlay } from '../tools/lib/adapter.mjs';
 import { isLegacyLayeredPack, upconvertLegacyPack } from '../tools/lib/legacy.mjs';
-import { validateCanonical, SPEC_VERSION } from '../tools/lib/validator.mjs';
+import { validateCanonical, SPEC_VERSION, SPEC_DIR, SPEC_SCHEMA_PATH } from '../tools/lib/validator.mjs';
 import { evaluateConformance, RUBRIC } from '../tools/lib/conformance.mjs';
 import { crawlFiles, crawlToYaml } from '../tools/lib/crawler.mjs';
 import { fetchMcp, buildCanonicalPack } from '../tools/fetch-live-pack.mjs';
@@ -84,9 +84,7 @@ import { inventorySummary } from '../tools/lib/inventory-coverage.mjs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 const STUDIO_DIR = resolve(ROOT, 'studio');
-const SCHEMA_PATH = resolve(
-  ROOT, 'vendor', 'observability-pack-spec', `v${SPEC_VERSION}`, 'observability-pack.schema.json'
-);
+const SCHEMA_PATH = resolve(ROOT, SPEC_SCHEMA_PATH);
 const SCHEMA = JSON.parse(readFileSync(SCHEMA_PATH, 'utf8'));
 
 // ---------- pack catalog ----------
@@ -115,7 +113,7 @@ const EXAMPLE_PACKS = [
   {
     id: 'payment-service',
     label: 'Payment service (canonical example)',
-    path: 'vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml',
+    path: `${SPEC_DIR}/examples/payment-service.pack.yaml`,
     description: "The spec repo's reference tier-1 pack — HTTP API + Kafka consumer.",
   },
   {
@@ -534,7 +532,7 @@ app.get('/healthz', (req, res) => {
     ok: true,
     ...versionInfo(),   // version, build, node — "what exactly is running?"
     specVersion: SPEC_VERSION,
-    schemaPath: `vendor/observability-pack-spec/v${SPEC_VERSION}/observability-pack.schema.json`,
+    schemaPath: SPEC_SCHEMA_PATH,
   });
 });
 
@@ -1088,7 +1086,7 @@ app.get('/api/packs/:id/compile/:target', (req, res) => {
 app.get('/api/maturity-rubric', (req, res) => {
   res.json({
     specVersion: SPEC_VERSION,
-    docs: `vendor/observability-pack-spec/v${SPEC_VERSION}/docs/maturity-model.md`,
+    docs: `${SPEC_DIR}/docs/maturity-model.md`,
     clauses: RUBRIC.map(({ evaluate, ...rest }) => rest),
   });
 });
@@ -1240,7 +1238,7 @@ app.get('/api/live-status', (req, res) => {
 // POST /api/draft-from-mcp — Path B of the pack-creation journey.
 //
 // Parallel to POST /api/crawl, but the source is a live MCP server
-// instead of a repo file map. Builds a canonical v1.2 pack from what
+// instead of a repo file map. Builds a canonical pack from what
 // the MCP can attest to (system_health, system_topology, baselines,
 // active anomalies) and returns it for review WITHOUT writing it to
 // disk. The studio shows the preview + summary; "use this pack"

@@ -27,6 +27,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
+import { SPEC_DIR } from './lib/validator.mjs';
 import { compile, compileArtifact, TARGETS } from './lib/compile.mjs';
 import { createHarness } from './lib/harness.mjs';
 
@@ -43,7 +44,7 @@ const UPDATE = process.argv.includes('--update');
 // "well-formed" pack); edge-hostile-names exercises label/name escaping.
 // ---------------------------------------------------------------------------
 const PACKS = [
-  { id: 'payment-service',    path: 'vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml' },
+  { id: 'payment-service',    path: `${SPEC_DIR}/examples/payment-service.pack.yaml` },
   { id: 'edge-hostile-names', path: 'tools/fixtures/compile/edge-hostile-names.pack.yaml' },
   // Two SLOs on one SLI: the per-artifact matrix only (Grafana-managed uid/title uniqueness).
   { id: 'shared-sli',         path: 'tools/fixtures/compile/shared-sli.pack.yaml', artifactsOnly: true },

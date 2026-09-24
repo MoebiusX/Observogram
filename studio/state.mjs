@@ -17,7 +17,7 @@ export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel
 // tier is a seed, not a gate); `params` holds only the overrides (a value
 // equal to the default is deleted so the placeholder stays a placeholder);
 // `overrides` the per-SLI copies over the library's values ({ [sliKey]:
-// { objective, window, threshold, query, good, total, description, unit } },
+// { id, objective, window, threshold, good_when, query, good, total, description, unit, semconv_metric } },
 // copy-on-write: only the fields the user edited), `custom` the SLIs written
 // from scratch, `seeded` whether DEFINE was confirmed ("Seed the pack →"),
 // which is what opens COMPILE. `result` is the last instantiate response and
@@ -35,7 +35,7 @@ export function defaultBuildState() {
     slis: null,               // null → the tier's defaults; [ids] once edited (any SLI of the selected entries)
     toggles: { slos: true, policy: true, routes: true, dashboards: true, validation: true },
     overrides: {},            // { [sliKey]: { <field>: value } } — the edited fields only (docs/BUILD_JOURNEY.md "The seed and the copies")
-    custom: [],               // [{ id, type, objective, window, good + total | query + threshold, description?, unit? }] — SLIs written from scratch
+    custom: [],               // [{ id, type, objective, window, good + total | query + threshold (+ good_when?), description?, unit? }] — SLIs written from scratch
     seeded: false,            // DEFINE confirmed ("Seed the pack →"): what makes COMPILE reachable; persisted
     result: null,             // { canonical, canonicalYaml, todos, warnings, summary, conformance, schemaErrors, provenance }
     error: null,              // [messages] from a 400 instantiate

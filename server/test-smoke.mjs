@@ -30,6 +30,7 @@ delete process.env.OBSERVOGRAM_BUILD;
 delete process.env.TOMOGRAPH_BUILD;
 
 import { start } from './index.mjs';
+import { SPEC_DIR, SPEC_VERSION } from '../tools/lib/validator.mjs';
 import { createServer } from 'node:http';
 
 const failures = [];
@@ -103,7 +104,7 @@ try {
   // /healthz
   const health = await getJson(base, '/healthz');
   assert(health.ok === true, 'GET /healthz returns ok');
-  assert(health.specVersion === '1.2', 'GET /healthz reports specVersion 1.2');
+  assert(health.specVersion === SPEC_VERSION, `GET /healthz reports specVersion ${SPEC_VERSION}`);
   assert(/^\d+\.\d+\.\d+/.test(health.version || ''), 'GET /healthz carries the app version', health.version);
   assert(typeof health.build === 'string' && health.build.length > 0, 'GET /healthz carries the build identifier', health.build);
 
@@ -184,9 +185,9 @@ try {
   assert(adapted.meta?.apiVersion === 'observability.platform/v1', 'adapted meta.apiVersion');
   assert(adapted.meta?.environment === 'prod', 'adapted default env = prod');
   assert(adapted.meta?.target === 'ske', 'adapted default target ske');
-  assert(adapted.layers?.L1?.length === 10, 'adapted L1 count', adapted.layers?.L1?.length, 10);
+  assert(adapted.layers?.L1?.length === 12, 'adapted L1 count (six SLIs and six SLOs: the 1.3 example adds the settlement-consumers floor)', adapted.layers?.L1?.length, 12);
   assert(adapted.layers?.L2X?.length === 7, 'adapted L2X count', adapted.layers?.L2X?.length, 7);
-  assert(adapted.layers?.L4?.policy?.length === 6, 'adapted L4.policy count');
+  assert(adapted.layers?.L4?.policy?.length === 7, 'adapted L4.policy count (five burn-rate blocks and two forecasts)', adapted.layers?.L4?.policy?.length, 7);
 
   // /api/packs/:id with env override
   const staging = await getJson(base, '/api/packs/payment-service?env=staging');
@@ -559,7 +560,7 @@ try {
   delete process.env.OBSERVOGRAM_INSECURE_NO_AUTH;
 
   // --- saved journeys API (item 11, studio surface) ---
-  const PAY = resolvePath('vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml');
+  const PAY = resolvePath(SPEC_DIR, 'examples/payment-service.pack.yaml');
   const CUR = resolvePath('examples/production-curated.pack.yaml');
   mkdirSync(join(SMOKE_WORKSPACE, 'journeys'), { recursive: true });
   writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'smoke-journey.journey.yaml'), [
@@ -1015,7 +1016,7 @@ try {
 
   // /api/maturity-rubric
   const rubric = await getJson(base, '/api/maturity-rubric');
-  assert(rubric.specVersion === '1.2', 'rubric specVersion 1.2');
+  assert(rubric.specVersion === SPEC_VERSION, `rubric specVersion ${SPEC_VERSION}`);
   assert(Array.isArray(rubric.clauses) && rubric.clauses.length >= 20, 'rubric clauses present');
   assert(!('evaluate' in (rubric.clauses[0] || {})), 'rubric clauses do not leak evaluate function');
 
@@ -1279,7 +1280,7 @@ try {
   assert(crawlOut.canonical.spec.dashboards.some(d => d.provider?.kind === 'grafana'),
          'crawl emits grafana dashboard');
   assert(crawlOut.validation?.ok === true,
-         `crawl output passes v1.2 schema (errors: ${JSON.stringify(crawlOut.validation?.errors || []).slice(0, 200)})`);
+         `crawl output passes the vendored schema (errors: ${JSON.stringify(crawlOut.validation?.errors || []).slice(0, 200)})`);
   assert(typeof crawlOut.canonicalYaml === 'string' && crawlOut.canonicalYaml.includes('apiVersion'),
          'crawl returns canonical YAML');
   assert(crawlOut.summary?.discovered?.backends >= 2, 'crawl summary counts ≥2 backends');
@@ -1463,7 +1464,7 @@ try {
     [{ ...instBody, overrides: Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`o_${i}`, { objective: 0.5 }])) }, /^overrides: at most 64 entries \(65 given\)/, '65 overrides'],
     [{ ...instBody, overrides: ['x'] }, /^overrides: expected an object/, 'overrides as a list'],
     [{ ...instBody, custom: { id: 'x' } }, /^custom: expected a list/, 'custom as an object'],
-    [{ ...instBody, custom: [{ ...checkout, comparison: '<' }] }, /comparison: not a field: an ObservabilityPack v1\.2 threshold is an upper bound/, 'comparison is not a field'],
+    [{ ...instBody, custom: [{ ...checkout, comparison: '<' }] }, /comparison: not a field: the direction of a threshold is good_when .* — use good_when/, 'comparison is not a field (spec 1.3: good_when is)'],
   ];
   for (const [body, re, label] of copyBad) {
     const r = await postLib('/api/library/instantiate', body);

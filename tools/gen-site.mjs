@@ -29,7 +29,7 @@
  *   --strict     warnings are errors (compileBurnRules warnings, a pack without
  *                spec.environments.<env>, module warnings)
  *   --repo-url   base URL for runbook links (default: the environment's repo_url)
- *   --schema     the ObservabilityPack JSON schema (default: the vendored v1.2 schema)
+ *   --schema     the ObservabilityPack JSON schema (default: the vendored schema — tools/lib/validator.mjs SPEC_VERSION)
  *
  * Exit codes: 0 ok, 1 validation or self-check failed (nothing written), 2 usage.
  */
@@ -37,7 +37,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
-import { validateCanonical } from './lib/validator.mjs';
+import { validateCanonical, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 import { run } from './lib/site/run.mjs';
 import * as lib from './lib/dashboards/lib.mjs';
 
@@ -78,7 +78,7 @@ if (!packPath) {
 }
 const packText = read(packPath, 'pack');
 let pack; try { pack = parseYaml(packText); } catch (e) { die(`${packPath}: ${e.message}`, 1); }
-const schema = JSON.parse(read(opts.schema ? resolve(opts.schema) : resolve(HERE, '..', 'vendor', 'observability-pack-spec', 'v1.2', 'observability-pack.schema.json'), 'pack schema'));
+const schema = JSON.parse(read(opts.schema ? resolve(opts.schema) : resolve(HERE, '..', SPEC_SCHEMA_PATH), 'pack schema'));
 const packErrors = validateCanonical(pack, schema);
 if (packErrors.length) { for (const e of packErrors) console.error(`✗ ${packPath}: ${e}`); process.exit(1); }
 const inventorySchema = JSON.parse(read(resolve(HERE, 'lib', 'site', 'inventory.schema.json'), 'inventory schema'));

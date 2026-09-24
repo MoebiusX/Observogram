@@ -1,4 +1,4 @@
-# Grafana-managed rules compiled from ObservabilityPack v1.2
+# Grafana-managed rules compiled from ObservabilityPack v1.3
 # Pack: payment-service · version 1.5.0
 # Format: Grafana 9+ provisioning YAML (apiVersion: 1).
 # Apply via: copy under provisioning/alerting/ OR POST to /api/v1/provisioning/alert-rules
@@ -548,6 +548,124 @@ groups:
           metric: payment_service:errorbudget:burn_1h
           from: A
         is_paused: false
+      - uid: rec-payment_service-settlement_c-1emkvuq
+        title: payment_service:settlement_consumers_active:value_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                min(kafka_consumer_group_members{
+                  group="payment-settler"
+                })
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: settlement_consumers_99_9_min_2
+          sli: settlement_consumers_active
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:settlement_consumers_active:value_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-settlement_c-0owxjzb
+        title: payment_service:settlement_consumers_active:error_ratio_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(payment_service:settlement_consumers_active:value_5m) < bool 2)[5m:30s]) / 10)
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          sli: settlement_consumers_active
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:settlement_consumers_active:error_ratio_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-errorbudget--0pgdjcv
+        title: payment_service:errorbudget:burn_5m{slo="settlement_consumers_99_9_min_2"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(payment_service:settlement_consumers_active:value_5m) < bool 2)[5m:30s]) / 10) / 0.001
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: settlement_consumers_99_9_min_2
+          sli: settlement_consumers_active
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:errorbudget:burn_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-errorbudget--0lfq7gc
+        title: payment_service:errorbudget:burn_1h{slo="settlement_consumers_99_9_min_2"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(payment_service:settlement_consumers_active:value_5m) < bool 2)[1h:30s]) / 120) / 0.001
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: settlement_consumers_99_9_min_2
+          sli: settlement_consumers_active
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:errorbudget:burn_1h
+          from: A
+        is_paused: false
       - uid: rec-payment_service-consumer_pro-0l4j13w
         title: payment_service:consumer_processing_success:good_5m
         condition: A
@@ -851,6 +969,35 @@ groups:
         annotations: {}
         record:
           metric: payment:consumer_lag:seconds_max_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment-settlement_consumers-1wkm2uc
+        title: payment:settlement_consumers:members_min_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (min(kafka_consumer_group_members{
+                  group="payment-settler"
+                }))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels: {}
+        annotations: {}
+        record:
+          metric: payment:settlement_consumers:members_min_5m
           from: A
         is_paused: false
   - orgId: 1
@@ -1219,6 +1366,129 @@ groups:
           summary: Burn rate 4× on consumer_freshness_99_under_60s
           description: Both the 1h and 6h error ratios exceed 4× of the 1.000% error budget for consumer_freshness_99_under_60s, with at least 2 bad samples in the 1h window.
           slo_objective: 99.000%
+          slo_window: 30d
+          runbook: (supply runbook URL)
+        is_paused: false
+  - orgId: 1
+    name: payment_service_settlement_consumers_99_9_min_2_burn
+    folder: observability-pack
+    interval: 30s
+    rules:
+      - uid: alr-settlement_consumers_99_9_mi-0xxugay
+        title: settlement_consumers_99_9_min_2_burn_14x_5m_1h
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (
+                  (sum_over_time((max(payment_service:settlement_consumers_active:value_5m) < bool 2)[5m:30s]) / 10) > 0.014
+                ) and (
+                  (sum_over_time((max(payment_service:settlement_consumers_active:value_5m) < bool 2)[1h:30s]) / 120) > 0.014
+                ) and (
+                  sum_over_time((max(payment_service:settlement_consumers_active:value_5m) < bool 2)[5m:30s]) >= 2
+                )
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 2m
+        labels:
+          severity: SEV2
+          slo: settlement_consumers_99_9_min_2
+          sli: settlement_consumers_active
+          service: payment-service
+          burn_rate: "14"
+          window_short: 5m
+          window_long: 1h
+          pack: payment-service
+        annotations:
+          summary: Burn rate 14× on settlement_consumers_99_9_min_2
+          description: Both the 5m and 1h error ratios exceed 14× of the 0.100% error budget for settlement_consumers_99_9_min_2, with at least 2 bad samples in the 5m window.
+          slo_objective: 99.900%
+          slo_window: 30d
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-settlement_consumers_99_9_mi-0klsfzq
+        title: settlement_consumers_99_9_min_2_burn_6x_30m_6h
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (
+                  (sum_over_time((max(payment_service:settlement_consumers_active:value_5m) < bool 2)[30m:30s]) / 60) > 0.006
+                ) and (
+                  (sum_over_time((max(payment_service:settlement_consumers_active:value_5m) < bool 2)[6h:30s]) / 720) > 0.006
+                ) and (
+                  sum_over_time((max(payment_service:settlement_consumers_active:value_5m) < bool 2)[30m:30s]) >= 2
+                )
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 5m
+        labels:
+          severity: SEV3
+          slo: settlement_consumers_99_9_min_2
+          sli: settlement_consumers_active
+          service: payment-service
+          burn_rate: "6"
+          window_short: 30m
+          window_long: 6h
+          pack: payment-service
+        annotations:
+          summary: Burn rate 6× on settlement_consumers_99_9_min_2
+          description: Both the 30m and 6h error ratios exceed 6× of the 0.100% error budget for settlement_consumers_99_9_min_2, with at least 2 bad samples in the 30m window.
+          slo_objective: 99.900%
           slo_window: 30d
           runbook: (supply runbook URL)
         is_paused: false

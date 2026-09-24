@@ -65,6 +65,7 @@ export function ghostCardHtml(g) {
         <span class="card-source" data-source="${escapeHtml(g.source)}">${escapeHtml(g.source)}</span>
       </div>
       <div class="card-title">${escapeHtml(g.title)}</div>
+      ${g.subtitle ? `<div class="card-sub">${escapeHtml(g.subtitle)}</div>` : ''}
       ${g.desc ? `<div class="card-desc">${escapeHtml(g.desc)}</div>` : ''}
       <div class="card-foot">
         ${g.tool ? `<span class="tool">${escapeHtml(g.tool)}</span>` : ''}

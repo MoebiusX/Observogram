@@ -152,7 +152,7 @@
         "w": 6,
         "h": 8
       },
-      "description": "Maximum consumer-group lag (in seconds equivalent), per critical consumer group. Computed by dividing message-count lag by the consumer's rolling consumption rate. SLO 99 % over 7d.",
+      "description": "Maximum consumer-group lag (in seconds equivalent), per critical consumer group. Computed by dividing message-count lag by the consumer's rolling consumption rate. SLO 99 % over 7d. Good when ≤ 60 seconds.",
       "pack": {
         "binds_to": [
           "slis.consumer_group_lag_seconds"

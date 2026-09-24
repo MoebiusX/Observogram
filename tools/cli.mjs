@@ -26,6 +26,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, basename } from 'node:path';
 import { buildInfo, buildLabel } from '../server/build-info.mjs';
+import { SPEC_VERSION } from './lib/validator.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -93,7 +94,7 @@ function printHelp() {
   console.log(`Observogram — the Observability Compiler · ${buildLabel(buildInfo())}
 
 Usage:
-  packc validate <file...>        Validate pack(s) against spec v1.2
+  packc validate <file...>        Validate pack(s) against spec v${SPEC_VERSION}
   packc adapt    <file> [env]     Adapt a pack into the layered projection
   packc x-ray    <repo-dir>       Crawl a repo into a draft pack
   packc compile  <file> [target]  Compile a pack into a backend artefact

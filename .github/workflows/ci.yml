@@ -71,7 +71,7 @@ jobs:
       - name: Verify vendored spec checksums
         run: npm run sync-spec:check
 
-      - name: Validate canonical example against spec v1.2 schema
+      - name: Validate canonical example against the vendored spec schema (tools/lib/validator.mjs SPEC_VERSION)
         run: npm run validate
 
       - name: Backend validation — strict (promtool / amtool / otelcol-contrib)

@@ -15,7 +15,9 @@
 //
 // A title row (the id large, the product and its evidence, the type pill, the
 // chips), a compact two-column grid of fields — Id · Description, Objective ·
-// Window, Bound · Unit for a threshold SLI, Metric · Type (fixed: a different
+// Window, Bound (with its direction, spec 1.3 good_when, as a two-segment
+// control below · above in the same cell: the tier control's idiom, a
+// radiogroup the arrow keys move) · Unit for a threshold SLI, Metric · Type (fixed: a different
 // shape is a new custom SLI), then the PromQL as monospace textareas that
 // grow, showing the RESOLVED expression (the parameters in, read from the
 // instantiated pack) with the parameters line under it — the evidence line,
@@ -70,9 +72,85 @@ function chipHtml(c) {
   return `<span class="build-rolo-chip is-${escapeHtml(c.kind)}"${c.title ? ` title="${escapeHtml(c.title)}"` : ''}>${escapeHtml(c.text)}</span>`;
 }
 
+const dataAttrOf = (model) => (model.create ? 'custom-draft' : model.custom ? 'custom-field' : 'override-field');
+
 function fieldCellHtml(f, model) {
-  const dataAttr = model.create ? 'custom-draft' : model.custom ? 'custom-field' : 'override-field';
-  return `<div class="build-editor-cell is-${escapeHtml(f.id)}${WIDE.has(f.id) ? ' is-wide' : ''}">${editFieldHtml(f, { dataAttr, sli: model.create ? null : model.key, rows: 2, readOnly: !!model.readOnly })}</div>`;
+  return `<div class="build-editor-cell is-${escapeHtml(f.id)}${WIDE.has(f.id) ? ' is-wide' : ''}">${editFieldHtml(f, { dataAttr: dataAttrOf(model), sli: model.create ? null : model.key, rows: 2, readOnly: !!model.readOnly })}</div>`;
+}
+
+/** The Bound cell: the number input and, beside it, the direction of the bound (the model's good_when field, when the type carries one). */
+function boundCellHtml(f, model) {
+  const dir = model.fields.find(x => x.id === 'good_when') || null;
+  return `<div class="build-editor-cell is-threshold${dir ? ' has-direction' : ''}">${editFieldHtml(f, { dataAttr: dataAttrOf(model), sli: model.create ? null : model.key, rows: 2, readOnly: !!model.readOnly })}${dir ? directionHtml(dir, model) : ''}</div>`;
+}
+
+/**
+ * The direction of a threshold SLI's bound (spec 1.3 good_when): a two-segment control, below · above — the tier
+ * control's idiom (role=radiogroup, one role=radio per side with aria-checked, the checked one in the tab order,
+ * arrow keys move, a sliding thumb driven by --dir-index), labelled 'Good when' and described by the library default
+ * and the hint like any field (the same label row, '↺ library default' when overridden). The group carries the data
+ * attribute the wiring reads back (override-field / custom-field / custom-draft) and `data-dir-group`, so the generic
+ * input wiring passes it by; each segment carries a focus key of its own (`<field key>:<side>`), so the focus survives
+ * a re-render on it. Read-only: the side as a code span.
+ */
+function directionHtml(f, model) {
+  const id = escapeHtml(f.inputId);
+  const hasDefault = !(f.default === null || f.default === undefined);
+  const dflt = hasDefault ? `<span class="build-edit-default" id="${id}-default">${f.overridden ? `library <code>${escapeHtml(f.default)}</code>` : 'library default'}</span>` : '';
+  const reset = f.resettable && !model.readOnly ? `<button type="button" class="build-edit-reset" data-reset="${escapeHtml(f.id)}"${model.key ? ` data-sli="${escapeHtml(model.key)}"` : ''} data-focus-key="${escapeHtml(f.focusKey)}:reset" title="${escapeHtml(`back to the library default (${f.default})`)}" aria-label="${escapeHtml(`${f.label}: back to the library default`)}"><span aria-hidden="true">↺</span> library default</button>` : '';
+  const hintShown = !!f.hint && !f.error;
+  const describedBy = [hasDefault ? `${id}-default` : '', f.error ? `${id}-error` : hintShown ? `${id}-hint` : ''].filter(Boolean).join(' ');
+  const options = f.options || ['below', 'above'];
+  const control = model.readOnly
+    ? `<code class="build-edit-value">${escapeHtml(f.value)}</code>`
+    : `<div class="build-edit-dir" role="radiogroup" aria-labelledby="${id}-label"${describedBy ? ` aria-describedby="${describedBy}"` : ''} data-dir-group="${escapeHtml(f.id)}" data-${escapeHtml(dataAttrOf(model))}="${escapeHtml(f.id)}"${model.create ? '' : ` data-sli="${escapeHtml(model.key)}"`} style="--dir-index:${Math.max(0, options.indexOf(f.value))}"><span class="build-edit-dir-thumb" aria-hidden="true"></span>${options.map(o => `<button type="button" role="radio" class="build-edit-dir-btn" data-dir="${escapeHtml(o)}" aria-checked="${o === f.value ? 'true' : 'false'}" tabindex="${o === f.value ? '0' : '-1'}" data-focus-key="${escapeHtml(f.focusKey)}:${escapeHtml(o)}">${escapeHtml(o)}</button>`).join('')}</div>`;
+  return `
+    <div class="build-edit-field build-edit-direction${f.overridden ? ' is-overridden' : ''}${f.error ? ' is-error' : ''}${model.readOnly ? ' is-read' : ''}" data-field="${escapeHtml(f.id)}">
+      <div class="build-edit-label-row"><span class="build-edit-label" id="${id}-label"><span>${escapeHtml(f.label)}</span></span>${dflt}${reset}</div>
+      ${control}
+      ${f.error ? `<span class="build-edit-error" id="${id}-error" role="alert">${escapeHtml(f.error)}</span>` : hintShown ? `<span class="build-edit-hint" id="${id}-hint">${escapeHtml(f.hint)}</span>` : ''}
+    </div>`;
+}
+
+/** The two segments repainted for a side (aria-checked, the tab order, the thumb) — what a re-render would draw, without one. */
+export function paintDirection(group, value, btns = null) {
+  const list = btns || [...(group?.querySelectorAll?.('[data-dir]') || [])];
+  list.forEach((b, i) => {
+    const on = b.dataset?.dir === value;
+    b.setAttribute?.('aria-checked', on ? 'true' : 'false');
+    b.setAttribute?.('tabindex', on ? '0' : '-1');
+    if (on) group?.style?.setProperty?.('--dir-index', String(i));
+  });
+}
+
+/**
+ * The direction control's handlers, in edit mode and in create mode alike: a click picks a segment, ArrowLeft / Up
+ * and ArrowRight / Down move to the other one and pick it (a radiogroup's keyboard contract, as the tier control);
+ * `commit(field, value)` is what a pick does once the segments are repainted. A pick of the side already chosen does
+ * nothing.
+ */
+function wireDirectionGroups(container, commit) {
+  for (const group of container.querySelectorAll('.build-editor .build-edit-dir[data-dir-group]') || []) {
+    const field = group.dataset?.dirGroup;
+    const btns = [...(group.querySelectorAll?.('[data-dir]') || [])];
+    const current = () => btns.find(b => b.getAttribute?.('aria-checked') === 'true')?.dataset?.dir ?? null;
+    const pick = (value) => {
+      if (!value || value === current()) return;
+      paintDirection(group, value, btns);
+      commit(field, value, group);
+    };
+    btns.forEach((btn, i) => {
+      btn.addEventListener('click', () => pick(btn.dataset?.dir));
+      btn.addEventListener('keydown', (e) => {
+        const delta = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+        if (!delta) return;
+        e.preventDefault();
+        const next = btns[(i + delta + btns.length) % btns.length];
+        next.focus?.();
+        pick(next.dataset?.dir);
+      });
+    });
+  }
 }
 
 /** The type as a field-shaped cell through the same atom, read-only with its hint (fixed in edit and read-only modes; create mode carries the real select among its fields). */
@@ -104,7 +182,8 @@ function headHtml(model) {
 function bodyHtml(model) {
   const cells = [];
   for (const f of model.fields) {
-    cells.push(fieldCellHtml(f, model));
+    if (f.id === 'good_when') continue;   // drawn inside the Bound cell (boundCellHtml)
+    cells.push(f.id === 'threshold' ? boundCellHtml(f, model) : fieldCellHtml(f, model));
     if (f.id === 'semconv_metric' && !model.create) cells.push(typeCellHtml(model));
   }
   return `
@@ -354,6 +433,19 @@ export function wireBuildEditor(container, model, host = appHost, { shell = true
     }
     if (inp.tagName !== 'TEXTAREA') inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); inp.blur?.(); } });
   }
+  // The direction control commits like a field (setOverride / updateCustom, live) — except that picking the library's
+  // own side on a library SLI clears the override, as ↺ would: the library's direction is no customisation.
+  wireDirectionGroups(container, (field, value, group) => {
+    const f = model.fields.find(x => x.id === field);
+    if (group.dataset?.customField) {
+      const changed = act.updateCustom?.(model.key, field, value, { live: true });
+      if (changed === false) say(model.status.text, model.status.kind); else say('applying…', 'pending');
+      return;
+    }
+    if (f && f.default !== null && f.default !== undefined && value === f.default) { act.clearOverride?.(model.key, field); return; }
+    const changed = act.setOverride?.(model.key, field, value, { live: true });
+    if (changed === false) say(model.status.text, model.status.kind); else say('applying…', 'pending');
+  });
   for (const btn of container.querySelectorAll('[data-reset]') || []) btn.addEventListener('click', () => act.clearOverride?.(btn.dataset.sli || model.key, btn.dataset.reset));
   container.querySelector('[data-editor-reset-all]')?.addEventListener('click', () => act.clearOverride?.(model.key, null));
   const sw = container.querySelector('.build-editor .build-switch[data-sli]');
@@ -370,7 +462,8 @@ export function wireBuildEditor(container, model, host = appHost, { shell = true
 /** The create form's handlers (one live draft per wiring: every handler starts from what was typed so far, never from the render-time draft). */
 function wireCreateForm(container, model, act) {
   let cur = normalizeDraft(model.form.draft);
-  const fieldEls = () => [...(container.querySelectorAll('.build-editor [data-custom-draft]') || [])];
+  // The inputs of the form (the direction control is a group with no value to read back: it writes the draft itself, below).
+  const fieldEls = () => [...(container.querySelectorAll('.build-editor [data-custom-draft]') || [])].filter(el => !el.dataset?.dirGroup);
   const read = () => { const d = { ...cur }; for (const el of fieldEls()) d[el.dataset.customDraft] = el.value; return d; };
   const submit = container.querySelector('[data-editor-submit]');
   const statusEl = container.querySelector('#build-editor-status');
@@ -403,6 +496,12 @@ function wireCreateForm(container, model, act) {
     if (field === 'type') el.addEventListener('change', () => { cur = read(); act.update?.({ customDraft: cur }, { rerender: true, reinstantiate: false }); });
     if (el.tagName === 'INPUT') el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); if (submit && !submit.disabled) submit.click?.(); } });
   }
+  // The direction of a threshold SLI's bound: a pick lands in the draft as typed (no re-render), the model repainted.
+  wireDirectionGroups(container, (field, value) => {
+    cur = { ...read(), [field]: value };
+    act.update?.({ customDraft: cur, customDraftErrors: null }, { rerender: false, reinstantiate: false });
+    repaint();
+  });
   submit?.addEventListener('click', () => { cur = read(); act.addCustom?.(customDefFromDraft(cur), cur); });
 }
 

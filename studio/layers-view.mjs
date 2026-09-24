@@ -83,7 +83,7 @@ export function renderDiscoverDashboard(view) {
   if (pa) provRows.push(['probes', `${ps}/${pa} returned data`]);
   const tools = (ann['mcp.toolsCalled'] || '').split(',').filter(Boolean).length;
   if (tools) provRows.push(['mcp tools', `${tools} called`]);
-  provRows.push(['validated', conf ? 'schema v1.2 · conformance scored' : 'schema v1.2']);
+  provRows.push(['validated', conf ? 'schema v1.3 · conformance scored' : 'schema v1.3']);
 
   // ---- catalog lists (real) ----
   const uploaded = (state.catalog || []).filter(p => p.ok && p.id !== undefined);
@@ -164,7 +164,7 @@ export function renderDiscoverDashboard(view) {
           <div class="disco-slice">
             <span class="disco-slice-key">RESOLUTION</span>
             <span class="disco-slice-track"><span class="disco-slice-fill" style="width:21%"></span></span>
-            <span class="disco-slice-val">deep slice · canonical v1.2</span>
+            <span class="disco-slice-val">deep slice · canonical v1.3</span>
           </div>
         </section>
 
@@ -434,7 +434,7 @@ function renderLayersBody(body) {
 
   let rendered = 0;
   for (const def of layersToShow) {
-    // Skip L2X if empty (it's optional per spec v1.2).
+    // Skip L2X if empty (it's optional per the spec).
     if (def.id === 'L2X' && layerArtefactCount('L2X') === 0) continue;
     if (def.id === 'L4') {
       renderLayer4(body);

@@ -44,9 +44,13 @@
 //        is counted with increase() only when it can be a raw counter: a recording-rule name
 //        (`svc:req:good_rate_5m`) is a rate or a gauge and gets no policy rules (warned); a name
 //        without a counter suffix is warned about.
-//      - threshold SLIs: bad = samples of the recorded SLI above its threshold, sampled at the
-//        recorded series' own interval (all thresholds are upper bounds: the spec has no direction
-//        field, so a ratio-valued query with a floor objective is warned about, not inverted)
+//      - threshold SLIs: bad = samples of the recorded SLI on the BAD side of its bound, sampled at
+//        the recorded series' own interval. The side is the SLI's `good_when` (spec 1.3, read
+//        through good-when.mjs goodWhen(): absent means below): `below` — a ceiling, the only
+//        meaning a 1.2 pack could express — counts samples ABOVE the bound (`> bool t`); `above` —
+//        a floor: replicas, consumers, free capacity — counts samples UNDER it (`< bool t`). The
+//        bound itself is good either way. A ratio-valued query or a ratio unit with no direction
+//        declared is warned about as a probable floor, never inverted on a guess.
 //      No naive form survives for any shape: a ratio with no event or sample count (a scalar good
 //      over a rate, avg() over count(), an opaque `total: "1"`) gets NO policy rules and a
 //      warning, never an unfloored `1 - good / total` alert; and compile.mjs no longer records a
@@ -68,9 +72,11 @@
 //      1 d slope is 7× more sensitive); the annotation says which horizon was evaluated and the
 //      severity follows on_projected_breach (page_oncall → SEV1, open_ticket → SEV2, else SEV3).
 //
-// Plain ESM, browser-safe (the studio imports compile.mjs): only ./slug.mjs is imported.
+// Plain ESM, browser-safe (the studio imports compile.mjs): only ./slug.mjs and ./good-when.mjs
+// (both zero-import leaves) are imported.
 
 import { fileSlug, metricPrefix } from './slug.mjs';
+import { badComparator } from './good-when.mjs';
 
 // Whitespace is collapsed OUTSIDE string literals only: a label value such as `route="/a  b"`
 // (or one carrying a newline) is part of the selector and must survive byte for byte,
@@ -119,7 +125,7 @@ function derivationGuarded(expr) {
 // Legs no event count can be derived from: a per-second rate of the last two samples, or a
 // derivative / delta of a gauge — increase() has no meaning for them.
 const UNCOUNTABLE = /\b(irate|deriv|delta|idelta)\(/;
-// The spec's Duration units (vendor/observability-pack-spec/v1.2 schema: ns|us|ms|s|m|h|d|w|mo|y).
+// The spec's Duration units (the vendored schema's Duration pattern: ns|us|ms|s|m|h|d|w|mo|y).
 const UNITS = { ns: 1e-9, us: 1e-6, ms: 0.001, s: 1, m: 60, h: 3600, d: 86400, w: 604800, mo: 2628000, y: 31536000 };
 
 /** Prometheus metric/rule names accept only [a-zA-Z0-9_:]: an SLI id like `latência` embedded raw
@@ -290,8 +296,9 @@ function stateLeg(good) {
   if (agg.op === 'count' && !/ bool /.test(boolify(state))) return null;
   return { op: agg.op, state, grouping: agg, groupingText: text };
 }
-// A threshold read as an upper bound is wrong for a ratio-valued query whose objective is a floor
-// (probe success, `1 - error_ratio`): the spec has no direction field, so name the assumption.
+// A threshold read as a ceiling is wrong for a ratio-valued query whose objective is a floor (probe
+// success, `1 - error_ratio`). Spec 1.3 lets the pack say so (`good_when: above`); while it says
+// nothing, the guess is named — and only then: a declared direction, either way, is the author's.
 const RATIO_UNITS = new Set(['ratio', 'percent', 'percentunit']);
 const looksLikeRatio = (q) => { const bare = q.replace(/\{[^}]*\}/g, ''); return /(?:^|[(\s])1\s*-\s/.test(bare) || bare.includes('/'); };
 
@@ -333,8 +340,9 @@ const looksLikeRatio = (q) => { const bare = q.replace(/\{[^}]*\}/g, ''); return
  *                   on either leg: bad = sum_over_time(1 - state) over the expected samples, the
  *                   grouping carried (comparisons rewritten to bool form, warned), sampled at the
  *                   step of the job the legs select
- *   'threshold'     threshold SLI with a finite non-negative threshold: bad = recorded samples above it
- *   null            distribution / custom / unknown type, missing legs, an invalid threshold, legs
+ *   'threshold'     threshold SLI with a finite threshold: bad = recorded samples on the bad side of it —
+ *                   above it for good_when below (the default), under it for good_when above (a floor)
+ *   null            distribution / custom / unknown type, missing legs, a threshold that is not a number, legs
  *                   with irate()/deriv()/delta()/idelta() (no event count exists), a mixed
  *                   rate/gauge ratio, a scalar good, or an aggregation without a range (nothing
  *                   valid to emit)
@@ -444,16 +452,19 @@ export function sliLegs(sli, w, ctx = {}) {
   }
   if (sli.type === 'threshold') {
     const t = Number(sli.threshold);
-    if (!Number.isFinite(t) || t < 0) {
-      warn(`threshold SLI ${id}: threshold must be a non-negative upper bound (got ${JSON.stringify(sli.threshold)}); no policy rules`);
+    if (!Number.isFinite(t)) {
+      warn(`threshold SLI ${id}: threshold must be a finite number (got ${JSON.stringify(sli.threshold)}); no policy rules`);
       return null;
     }
     const s = Number(ctx.seriesStep) || step;
     const q = strip(sli.query || sli.expression);
     const unit = String(sli.unit ?? '').toLowerCase();
-    if (RATIO_UNITS.has(unit) || (t === 1 && looksLikeRatio(q))) {
-      warn(`threshold SLI ${id}: the policy reads threshold ${num(t)} as an upper bound (bad = samples above it); `
-        + `${RATIO_UNITS.has(unit) ? `unit ${unit}` : 'a ratio-shaped query with threshold 1'} suggests a floor, which the spec cannot express (no direction field) — check the alerts can fire`);
+    // The guess is raised only while the pack declares no direction: `good_when: above` makes the
+    // floor first-class and `good_when: below` states the ceiling on purpose (a ratio-valued
+    // headroom read against 0.8 is one; measured on the MQ pack, where the guess was wrong).
+    if (sli.good_when == null && (RATIO_UNITS.has(unit) || (t === 1 && looksLikeRatio(q)))) {
+      warn(`threshold SLI ${id}: the policy reads threshold ${num(t)} as a ceiling (bad = samples above it); `
+        + `${RATIO_UNITS.has(unit) ? `unit ${unit}` : 'a ratio-shaped query with threshold 1'} looks like a floor — declare good_when: above (or good_when: below to state the ceiling)`);
     }
     let series = ctx.series, sampled = s;
     if (!series) {
@@ -463,7 +474,8 @@ export function sliLegs(sli, w, ctx = {}) {
       // inlined: sampled at the step of the job the query selects (a recorded series has seriesStep)
       if (!ctx.seriesStep && ctx.pack) sampled = sliStepSeconds(ctx.pack, [q], step, warn, id);
     }
-    const bad = `sum_over_time((max(${series}) > bool ${num(t)})[${w}:${sampled}s])`, denom = String(expectedSamples(w, sampled));
+    // Strict on the bad side: the bound itself is good whichever way the SLI faces (badComparator).
+    const bad = `sum_over_time((max(${series}) ${badComparator(sli)} bool ${num(t)})[${w}:${sampled}s])`, denom = String(expectedSamples(w, sampled));
     return { kind: 'threshold', bad, denom, ratio: `(${bad} / ${denom})` };
   }
   warn(`SLI ${id}: type ${sli.type ?? '(none)'} has no error-ratio form; no policy rules`);

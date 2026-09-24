@@ -22,6 +22,7 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
+import { SPEC_DIR } from './lib/validator.mjs';
 import { compile, compilePrometheusRules, compileOtelCollector,
   compileAlertmanager, compileGrafanaDashboard, listTargets, TARGETS,
   compileSloPrometheusRules, compileGrafanaManagedRules, compileCatalog, compileArtifact } from './lib/compile.mjs';
@@ -36,7 +37,7 @@ const ROOT = resolve(__dirname, '..');
 // of packs/ so the studio boots empty. payment-service is the vendored
 // spec example and stays under vendor/.
 const FIXTURES = [
-  { id: 'payment-service',     path: 'vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml' },
+  { id: 'payment-service',     path: `${SPEC_DIR}/examples/payment-service.pack.yaml` },
   { id: 'target-advanced',     path: 'examples/target-advanced.pack.yaml' },
   { id: 'production-curated',  path: 'examples/production-curated.pack.yaml' },
   { id: 'demo-skeleton',       path: 'examples/demo-skeleton.pack.yaml' },
@@ -249,7 +250,7 @@ process.stdout.write('\n[policy PromQL] burn-rules.mjs is the single source\n');
   const groupsByName = Object.fromEntries(doc.groups.map(g => [g.name, g]));
 
   // 1. no naive form survives; every burn alert is the three-clause block
-  assert(burnAlerts.length === 8, 'payment-service emits eight burn-rate alerts (ratio and threshold SLOs)', burnAlerts.length, 8);
+  assert(burnAlerts.length === 10, 'payment-service emits ten burn-rate alerts (ratio and threshold SLOs, the settlement-consumers floor among them)', burnAlerts.length, 10);
   assert(alerts.every(a => !/\(1 - \(?sum\(rate\(/.test(a.expr)), 'no alert carries the naive (1 - sum(rate(...))) error ratio');
   assert(alerts.every(a => !/\brate\(/.test(a.expr)), 'no alert uses rate(): counters are read with increase()');
   const BLOCK = /^\(\n {2}.+ > [0-9.]+\n\) and \(\n {2}.+ > [0-9.]+\n\) and \(\n {2}.+ >= 2\n\)$/;
@@ -272,7 +273,9 @@ process.stdout.write('\n[policy PromQL] burn-rules.mjs is the single source\n');
       assert(a.expr.includes('clamp_min(') && a.expr.includes('increase('), `${a.alert}: events over the events that happened`);
     } else {
       const series = `payment_service:${sli.id.replace(/[^a-zA-Z0-9_]/g, '_')}:value_5m`;
-      assert(a.expr.includes('> bool ') && a.expr.includes(series), `${a.alert}: reads ${series} above its threshold`);
+      // spec 1.3: a floor (good_when: above) counts the samples UNDER the bound, a ceiling those above it
+      const cmp = sli.good_when === 'above' ? '< bool ' : '> bool ';
+      assert(a.expr.includes(cmp) && !a.expr.includes(cmp === '< bool ' ? '> bool ' : '< bool ') && a.expr.includes(series), `${a.alert}: reads ${series} on the bad side of its threshold (${cmp.trim()})`);
       assert(a.expr.includes(`[${a.labels.window_short}:30s]`) && a.expr.includes(`/ ${expectedSamples(a.labels.window_short)}`),
              `${a.alert}: short window sampled at the 30s recording interval`, a.expr.split('\n')[1], `[${a.labels.window_short}:30s] / ${expectedSamples(a.labels.window_short)}`);
     }
@@ -294,8 +297,9 @@ process.stdout.write('\n[policy PromQL] burn-rules.mjs is the single source\n');
     assert(ratioRecs.length === 1 && Object.keys(ratioRecs[0].labels).join(',') === 'sli,service' && ratioRecs[0].labels.sli === sli.id,
            `${slo.id}: its SLI has exactly one error_ratio_5m record, labelled by SLI only`, ratioRecs.map(r => r.labels), [{ sli: sli.id, service: 'payment-service' }]);
     if (sli.type === 'threshold') {
-      const want = `(sum_over_time((max(payment_service:${sli.id.replace(/[^a-zA-Z0-9_]/g, '_')}:value_5m) > bool ${sli.threshold})[5m:30s]) / 10)`;
-      assert(ratioRecs[0].expr === want, `${slo.id}: the threshold error_ratio_5m counts recorded samples above ${sli.threshold} over 10 expected`, ratioRecs[0].expr, want);
+      const side = sli.good_when === 'above' ? '<' : '>';
+      const want = `(sum_over_time((max(payment_service:${sli.id.replace(/[^a-zA-Z0-9_]/g, '_')}:value_5m) ${side} bool ${sli.threshold})[5m:30s]) / 10)`;
+      assert(ratioRecs[0].expr === want, `${slo.id}: the threshold error_ratio_5m counts recorded samples ${side === '<' ? 'under' : 'above'} ${sli.threshold} over 10 expected`, ratioRecs[0].expr, want);
     } else {
       assert(ratioRecs[0].expr.includes('increase(') && ratioRecs[0].expr.includes('clamp_min(') && !ratioRecs[0].expr.includes('1 - '),
              `${slo.id}: the ratio error_ratio_5m counts bad events over the events that happened`, ratioRecs[0].expr.slice(0, 80));
@@ -392,14 +396,14 @@ process.stdout.write('\n[policy PromQL] burn-rules.mjs is the single source\n');
   // reference packs' *.burn.yml stay as they are).
   const policyAlerts = alerts.filter(a => a.labels?.burn_rate || a.labels?.kind === 'forecast');
   const shared = policyAlerts.filter(a => genAlerts[a.alert]);
-  assert(shared.length === policyAlerts.length && shared.length === 10, 'the generator and the compiler emit the same policy alert names (8 burn + 2 forecast)', shared.length, 10);
+  assert(shared.length === policyAlerts.length && shared.length === 12, 'the generator and the compiler emit the same policy alert names (10 burn + 2 forecast)', shared.length, 12);
   assert(alerts.length === policyAlerts.length + assuranceAlerts.length, 'every other alert of the full file is an assurance alert', alerts.length - policyAlerts.length - assuranceAlerts.length, 0);
   const differing = shared.filter(a => normalise(genAlerts[a.alert].expr, a.labels.sli) !== a.expr).map(a => a.alert);
   assert(differing.length === 0, 'every shared alert has byte-identical expr modulo the threshold series name', differing, []);
-  assert(shared.filter(a => a.labels.burn_rate && sliOf(a.labels.sli)?.type === 'threshold').length === 4, 'four threshold burn alerts took part in the comparison');
+  assert(shared.filter(a => a.labels.burn_rate && sliOf(a.labels.sli)?.type === 'threshold').length === 6, 'six threshold burn alerts took part in the comparison (the floor SLO\'s two among them)');
   const genRecords = genRules.filter(r => r.record);
   const comparableSlos = pack.spec.slos.filter(slo => normalise('', slo.sli) !== null);
-  assert(comparableSlos.length === 4, 'four of the five SLOs are comparable (api_latency_p99 declares no ref:slis record)', comparableSlos.length, 4);
+  assert(comparableSlos.length === 5, 'five of the six SLOs are comparable (api_latency_p99 declares no ref:slis record)', comparableSlos.length, 5);
   for (const slo of comparableSlos) for (const w of ['5m', '1h']) {
     const mine = records.find(r => r.record === `payment_service:errorbudget:burn_${w}` && r.labels.slo === slo.id);
     const theirs = genRecords.find(r => r.record === `${metricPrefix(pack.metadata.name)}:errorbudget:burn_${w}` && r.labels.slo === slo.id);
@@ -512,6 +516,16 @@ process.stdout.write('\n[policy PromQL] burn-rules.mjs is the single source\n');
   const floor3 = burnOf(shapePack({ type: 'ratio', good: 'good_total', total: 'req_total' }), { minBadSamples: 3 });
   assert(/>= 3\n\)$/.test(floor3.expr) && /at least 3 bad samples/.test(floor3.alert.annotations.description), 'opts.minBadSamples sets the floor and the description', floor3.expr.split('\n')[5]);
   assert(compileSloPrometheusRules(shapePack({ type: 'ratio', good: 'good_total', total: 'req_total' }), 's_99', { lab: true }).includes('for: 30s'), 'compileSloPrometheusRules forwards opts.lab');
+  // spec 1.3 good_when through the compiler: a floor SLI's legs count the recorded samples UNDER the bound (`< bool`),
+  // its error_ratio_5m record too; a ceiling — declared or absent — keeps `> bool`; no warning either way.
+  const floorSli = burnOf(shapePack({ type: 'threshold', good_when: 'above', query: 'min(kafka_consumer_group_members{group="settler"})', threshold: 2, unit: 'consumers' }));
+  assert(floorSli.expr.split('\n')[1].trim() === '(sum_over_time((max(shape:s:value_5m) < bool 2)[5m:30s]) / 10) > 0.14' && floorSli.expr.split('\n')[5].trim() === 'sum_over_time((max(shape:s:value_5m) < bool 2)[5m:30s]) >= 2',
+         'a floor SLI (good_when: above) burns on the samples under its bound: short, long and the floor leg read `< bool 2`', floorSli.expr);
+  assert(!floorSli.expr.includes('> bool') && floorSli.warnings.length === 0, 'no leg above the bound, no warning', [floorSli.expr, floorSli.warnings]);
+  assert(floorSli.records.find(r => r.record === 'shape:s:error_ratio_5m')?.expr === '(sum_over_time((max(shape:s:value_5m) < bool 2)[5m:30s]) / 10)', 'the floor SLI\'s error_ratio_5m record counts the samples under the bound', floorSli.records.find(r => r.record === 'shape:s:error_ratio_5m')?.expr);
+  const ceilingSli = burnOf(shapePack({ type: 'threshold', good_when: 'below', query: 'max(lag)', threshold: 60, unit: 'seconds' }));
+  const plainSli = burnOf(shapePack({ type: 'threshold', query: 'max(lag)', threshold: 60, unit: 'seconds' }));
+  assert(ceilingSli.expr === plainSli.expr && ceilingSli.expr.includes('> bool 60') && !ceilingSli.expr.includes('< bool'), 'a declared `below` compiles exactly as an absent direction (a 1.2 pack): `> bool 60`', ceilingSli.expr.split('\n')[1]);
 
   // 9. per-SLO files
   const perSlo = compileSloPrometheusRules(pack, 'api_availability_99_9');
@@ -539,7 +553,7 @@ process.stdout.write('\n[policy PromQL] burn-rules.mjs is the single source\n');
   const uids = gmRules.map(r => r.uid), titles = gmRules.map(r => r.title);
   assert(new Set(uids).size === uids.length, 'Grafana-managed uids are unique', uids.length - new Set(uids).size, 0);
   assert(new Set(titles).size === titles.length, 'Grafana-managed titles are unique', titles.length - new Set(titles).size, 0);
-  assert(gmRules.filter(r => r.record?.metric === 'payment_service:errorbudget:burn_5m').length === 5, 'one burn_5m record per burnable SLO', gmRules.filter(r => r.record?.metric === 'payment_service:errorbudget:burn_5m').length, 5);
+  assert(gmRules.filter(r => r.record?.metric === 'payment_service:errorbudget:burn_5m').length === 6, 'one burn_5m record per burnable SLO', gmRules.filter(r => r.record?.metric === 'payment_service:errorbudget:burn_5m').length, 6);
   // Grafana's recording-rule writer accepts only reduced numeric frames: an instant query (one value
   // per series), never a range query (time-series frames need a Reduce expression). The threshold burn
   // alerts and every forecast read these records, so a range query here would leave them blind.
@@ -793,7 +807,7 @@ process.stdout.write('\n[policy PromQL] burn-rules.mjs is the single source\n');
          'two packs compiled into the same folder get disjoint assurance uids (the Watchdog uid is keyed by svc)', { a: [...uidsA], b: uidsB });
   // catalog + artifacts
   const cat = compileCatalog(pack).groups.find(g => g.id === 'rules').items;
-  assert(cat[0].id === 'all' && cat[0].subtitle === '5 SLO(s) · 4 declared' && cat[1].id === 'assurance' && cat[1].kind === 'rules-assurance' && cat[1].label === 'Assurance · watchdog + instrument liveness' && cat[1].subtitle === '7 alerts · generic, prometheus' && cat[2].kind === 'rules-slo',
+  assert(cat[0].id === 'all' && cat[0].subtitle === '6 SLO(s) · 5 declared' && cat[1].id === 'assurance' && cat[1].kind === 'rules-assurance' && cat[1].label === 'Assurance · watchdog + instrument liveness' && cat[1].subtitle === '7 alerts · generic, prometheus' && cat[2].kind === 'rules-slo',
          'the catalog lists the assurance item after all and before the per-SLO items; the all subtitle is unchanged', cat.slice(0, 3));
   const artProm = compileArtifact(pack, { group: 'rules', flavor: 'prometheus', artifact: 'assurance' });
   const artGm = compileArtifact(pack, { group: 'rules', flavor: 'grafana-managed', artifact: 'assurance' });
@@ -868,7 +882,7 @@ process.stdout.write('\n[reference packs] Grafana-managed uids and same-name dec
   const declaredCatalog = compileCatalog(declaredRatio).groups.find(g => g.id === 'rules').items.find(i => i.id === 'slo:lag_99')?.subtitle;
   assert(declaredCatalog === '3 recording · 1 burn-rate · 0 forecast', 'the catalog counts the de-duplicated per-SLO records', declaredCatalog, '3 recording · 1 burn-rate · 0 forecast');
   // a partially pasted --pack-snippet (one burn_5m{slo=A}) does not warn against the other SLOs' burn_5m
-  const partial = JSON.parse(JSON.stringify(parseYaml(readFileSync(resolve(ROOT, 'vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml'), 'utf8'))));
+  const partial = JSON.parse(JSON.stringify(parseYaml(readFileSync(resolve(ROOT, SPEC_DIR, 'examples/payment-service.pack.yaml'), 'utf8'))));
   const one = compileBurnRules(partial).recording.find(r => r.record.endsWith(':errorbudget:burn_5m') && r.labels.slo === 'api_availability_99_9');
   partial.spec.queries.recording_rules.push({ name: one.record, expr: one.expr, interval: '30s', labels: one.labels });
   const partialOut = compile(partial, 'prometheus-rules');

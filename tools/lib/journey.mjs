@@ -81,7 +81,7 @@ import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSy
 import { resolve, join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from './mini-yaml.mjs';
-import { validateCanonical } from './validator.mjs';
+import { validateCanonical, SPEC_SCHEMA_PATH } from './validator.mjs';
 import { adapt } from './adapter.mjs';
 import { evaluateConformance } from './conformance.mjs';
 import { diffPacks } from './diff.mjs';
@@ -104,7 +104,7 @@ import { sliBaseOfSloId } from '../../studio/verify-deploy.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = JSON.parse(readFileSync(
-  resolve(__dirname, '../../vendor/observability-pack-spec/v1.2/observability-pack.schema.json'), 'utf8'));
+  resolve(__dirname, '../..', SPEC_SCHEMA_PATH), 'utf8'));
 
 // The engine stays server-agnostic: by default the root comes from env
 // (flat workspace), but a host can inject a context-aware resolver —

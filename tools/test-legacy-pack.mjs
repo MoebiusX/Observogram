@@ -58,7 +58,7 @@ for (const file of files) {
 
   // 1. The upconvert must produce a schema-valid canonical manifest.
   const errors = validateCanonical(canonical, SCHEMA);
-  assert(errors.length === 0, 'upconverted manifest passes v1.2 schema', errors.slice(0, 3).join(' | ') || 'valid', 'no errors');
+  assert(errors.length === 0, 'upconverted manifest passes the vendored schema', errors.slice(0, 3).join(' | ') || 'valid', 'no errors');
 
   // 2. Losslessness: every legacy artefact is preserved verbatim in
   //    legacy.artefact.<LAYER>.<ID> annotations, and the report counts it.

@@ -2,7 +2,7 @@
 /**
  * tools/adapt-spec-pack.mjs
  *
- * CLI wrapper for tools/lib/adapter.mjs. Reads a canonical v1.2 pack
+ * CLI wrapper for tools/lib/adapter.mjs. Reads a canonical pack
  * (.yaml/.yml/.json), projects it into the studio's layered display object,
  * and writes the result as JSON to stdout.
  *

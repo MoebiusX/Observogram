@@ -2,11 +2,11 @@
 /**
  * tools/fetch-live-pack.mjs
  *
- * Build a canonical ObservabilityPack v1.2 manifest from a live MCP
+ * Build a canonical ObservabilityPack manifest from a live MCP
  * server's responses, validate it against the vendored schema, and write
  * it as a local generated YAML file.
  *
- * Phase 4 rewrite: emits canonical v1.2 only. No EMIT_FORMAT flag, no
+ * Phase 4 rewrite: emits the canonical manifest only. No EMIT_FORMAT flag, no
  * studio-shape output. Sections MCP cannot directly verify (SLIs, SLOs,
  * dashboards, alerting, …) are populated with minimal stubs derived from
  * MCP context (discovered services, baseline thresholds) — the canonical
@@ -190,7 +190,7 @@ export function createMcpClient({ mcpUrl, mcpAuth = null } = {}) {
 
 // ============================================================
 // Pack builder — pure, takes stubbed MCP responses, returns a canonical
-// v1.2 manifest. Exported for offline tests.
+// manifest. Exported for offline tests.
 // ============================================================
 
 function pickCriticality(services) {

@@ -23,7 +23,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { genericBoards, checkBindings } from './lib/dashboards/generic.mjs';
-import { derivedViewPanel, splitWidths, tileRows, viewWidths, stat } from './lib/dashboards/lib.mjs';
+import { derivedViewPanel, derivedSliTiles, derivedSliTrend, thresholdSteps, okAbove, splitWidths, tileRows, viewWidths, stat, C } from './lib/dashboards/lib.mjs';
 import { compileGrafanaDashboard } from './lib/compile.mjs';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -34,6 +34,7 @@ import {
   durationSeconds, packSnippet,
 } from './lib/burn-rules.mjs';
 import { compilePrometheusRules } from './lib/compile.mjs';
+import { SPEC_DIR } from './lib/validator.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PACKS = readdirSync(resolve(ROOT, 'reference-packs')).filter(f => f.endsWith('.pack.yaml')).map(f => `reference-packs/${f}`);
@@ -384,6 +385,49 @@ test('a binding that names no SLI or SLO of the pack is reported, never rendered
   assert.deepEqual(shape(section(boards.find(b => b.id === 'kafka-typo').dashboard.panels, /Contract/)), TILES_ONLY(1));
 });
 
+test('spec 1.3 good_when on the boards: a floor SLI\'s tile colours lower-is-worse (amber under the bound, red under half of it), a ceiling higher-is-worse as before, absent means below; the dashed line sits at the bound either way; the descriptions name the direction', () => {
+  const sli = (over) => ({ id: 'members', type: 'threshold', description: 'Live settlement consumers.', query: 'min(members)', threshold: 2, unit: 'consumers', ...over });
+  const packOf = (s) => ({ metadata: { name: 'settle', version: '0.0.1' }, spec: { slis: [s], slos: [{ id: 'members_99_9', sli: 'members', objective: 0.999, window: '30d' }] } });
+  const floor = sli({ good_when: 'above' }), ceiling = sli({ good_when: 'below' }), plain = sli({});
+  // Through the generator: the unified board's tile bound to the floor SLI, every binding satisfied.
+  const boards = genericBoards(packOf(floor));
+  assert.deepEqual(checkBindings(packOf(floor), boards), []);
+  const tile = boards[0].dashboard.panels.find(p => p.type === 'stat' && p.pack?.binds_to?.includes('slis.members'));
+  assert.deepEqual(tile.fieldConfig.defaults.thresholds.steps, [{ color: C.red, value: null }, { color: C.amber, value: 1 }, { color: C.green, value: 2 }], 'a floor: red under 1, amber under 2, green at or above the bound');
+  assert.equal(tile.description, 'Live settlement consumers. SLO 99.9 % over 30d. Good when ≥ 2 consumers.');
+  // The same tile built for a ceiling, declared or absent: okAbove as every 1.2 board had it, the description with ≤.
+  const [ct] = derivedSliTiles(packOf(ceiling), null), [pt] = derivedSliTiles(packOf(plain), null);
+  assert.deepEqual(ct.fieldConfig.defaults.thresholds.steps, [{ color: C.green, value: null }, { color: C.amber, value: 2 }, { color: C.red, value: 4 }], 'a ceiling: green under the bound, amber at it, red at twice it');
+  assert.equal(ct.description, 'Live settlement consumers. SLO 99.9 % over 30d. Good when ≤ 2 consumers.');
+  assert.deepEqual({ ...pt, id: 0 }, { ...ct, id: 0 }, 'absent means below: the tile of a 1.2 SLI is the tile of a declared ceiling');
+  assert.deepEqual(thresholdSteps({ type: 'threshold', threshold: 0.5 }), okAbove(0.5, 1));
+  assert.deepEqual(thresholdSteps({ type: 'threshold', good_when: 'above', threshold: -2 }).map(s => s.value), [null, -3, -2], 'a negative floor keeps its steps ascending');
+  // A bound of 0 has no amber band (twice 0 and half of 0 are 0). Grafana paints the last step whose value is <= the
+  // sample, so two steps at 0 painted the good 0 of a ceiling red (bf00c01: [green, amber 0, red 0]) while the tile's
+  // description says "Good when ≤ 0 messages"; a floor at 0 got amber and green both at 0. The bound itself stays good.
+  const paint = (steps, v) => steps.filter(st => st.value === null || v >= st.value).at(-1).color;   // Grafana's getActiveThreshold on ascending steps
+  const zeroCeiling = thresholdSteps({ type: 'threshold', threshold: 0 }), zeroFloor = thresholdSteps({ type: 'threshold', good_when: 'above', threshold: 0 });
+  assert.deepEqual(zeroCeiling, [{ color: C.green, value: null }, { color: C.red, value: Number.MIN_VALUE }], 'a ceiling at 0: green up to and including 0, red from the smallest value above it, no amber');
+  assert.deepEqual(zeroFloor, [{ color: C.red, value: null }, { color: C.green, value: 0 }], 'a floor at 0: red under 0, green from 0, no amber');
+  assert.deepEqual([paint(zeroCeiling, 0), paint(zeroCeiling, 1e-9), paint(zeroCeiling, 1), paint(zeroFloor, 0), paint(zeroFloor, -1e-9), paint(zeroFloor, -1)], [C.green, C.red, C.red, C.green, C.red, C.red], 'the good 0 is green on both sides; anything past the bound is red');
+  assert.equal(JSON.parse(JSON.stringify(zeroCeiling))[1].value, Number.MIN_VALUE, 'the step survives the board JSON (5e-324 parses back)');
+  assert.ok(new Set(zeroCeiling.map(st => st.value)).size === 2 && new Set(zeroFloor.map(st => st.value)).size === 2, 'no two steps share a value');
+  const [zt] = derivedSliTiles(packOf(sli({ description: 'Dead-letter depth.', threshold: 0, unit: 'messages' })), null);
+  assert.deepEqual(zt.fieldConfig.defaults.thresholds.steps, zeroCeiling, 'the tile of a 0-bound ceiling (the library entry dlq_depth) carries the guarded steps');
+  assert.equal(zt.description, 'Dead-letter depth. SLO 99.9 % over 30d. Good when ≤ 0 messages.');
+  // The trend: the dashed line at the bound whichever way the SLI faces; the description says which side is good.
+  const ftr = derivedSliTrend(packOf(floor), floor), ctr = derivedSliTrend(packOf(ceiling), ceiling), ptr = derivedSliTrend(packOf(plain), plain);
+  assert.deepEqual([ftr, ctr, ptr].map(p => p.fieldConfig.defaults.thresholds.steps.at(-1).value), [2, 2, 2]);
+  assert.deepEqual([ftr, ctr, ptr].map(p => p.fieldConfig.defaults.custom.thresholdsStyle.mode), ['dashed', 'dashed', 'dashed']);
+  assert.equal(ftr.description, 'Live settlement consumers. The dashed line is the threshold — good when ≥ 2 consumers.');
+  assert.equal(ctr.description, 'Live settlement consumers. The dashed line is the threshold — good when ≤ 2 consumers.');
+  assert.equal(ptr.description, ctr.description);
+  // A ratio tile says nothing about a bound (it has none); a threshold SLI without a unit prints the bare bound.
+  const ratioPack = { metadata: { name: 'r', version: '0.0.1' }, spec: { slis: [{ id: 'ok', type: 'ratio', description: 'Ok.', good: 'g', total: 't' }], slos: [{ id: 'ok_99', sli: 'ok', objective: 0.99, window: '30d' }] } };
+  assert.equal(derivedSliTiles(ratioPack, null)[0].description, 'Ok. SLO 99 % over 30d.');
+  assert.match(derivedSliTiles(packOf(sli({ unit: undefined })), null)[0].description, / Good when ≤ 2\.$/);
+});
+
 test('a pack module\'s sliTiles gets the layout hint; tiles that ignore it keep their own row above the standard burn panels', () => {
   const honouring = { sliTiles: (pack, ids, { widths, h }) => ids.map((id, i) => stat(`tile ${id}`, `up{sli="${id}"}`, { binds: `slis.${id}`, w: widths[i], h })) };
   const ignoring = { sliTiles: (pack, ids) => ids.map(id => stat(`tile ${id}`, `up{sli="${id}"}`, { binds: `slis.${id}`, w: 4 })) };
@@ -467,7 +511,7 @@ test('a derived view rates a counter with or without a label selector, and reads
 
 test('dashboards for a dash-named pack read the slugged metric prefix everywhere', () => {
   // payment-service: every recording rule the generators and the compiler emit is payment_service:*
-  const pack = load('vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml');
+  const pack = load(`${SPEC_DIR}/examples/payment-service.pack.yaml`);
   const boards = genericBoards(pack);
   const json = JSON.stringify(boards);
   assert.ok(boards.length >= 2);
@@ -675,7 +719,7 @@ test('sliLegs recognises every SLI shape and never throws on one', () => {
   const warned2 = [];
   assert.equal(sliLegs({ id: 'c', type: 'custom', expression: 'x' }, '5m', { step: 30, warn: (m) => warned2.push(m) }), null);
   assert.equal(sliLegs({ id: 'd', type: 'distribution', query: 'x' }, '5m', ctx), null);
-  assert.equal(sliLegs({ id: 'n', type: 'threshold', query: 'x', threshold: -1 }, '5m', ctx), null);
+  assert.equal(sliLegs({ id: 'n', type: 'threshold', query: 'x', threshold: 'x' }, '5m', ctx), null);
   assert.equal(sliLegs({ id: 'r', type: 'ratio', good: 'x' }, '5m', ctx), null);
   assert.equal(sliLegs({ id: 'w', type: 'ratio', good: 'sum(rate(a[5m]))', total: 'sum(rate(b[5m]))' }, 'soon', ctx), null, 'a window that is not a duration');
   assert.equal(warned2.length, 1);
@@ -693,18 +737,72 @@ test('whitespace inside a label value survives the burn legs byte for byte', () 
   assert.ok(t.bad.includes('lag{q="A  B"}'), t.bad);
 });
 
-test('threshold SLIs are upper bounds; a ratio-valued one is warned about', () => {
+test('a threshold SLI with no declared direction is read as a ceiling; a ratio-valued one is warned about as a probable floor', () => {
   const warned = [];
   const ctx = { step: 30, series: 'svc:x:value_5m', seriesStep: 30, warn: (m) => warned.push(m) };
   assert.equal(sliLegs({ id: 'sat', type: 'threshold', query: 'max(sat)', threshold: 0.8, unit: 'ratio' }, '5m', ctx).kind, 'threshold');
   assert.equal(sliLegs({ id: 'avail', type: 'threshold', query: '(1 - error_ratio) * probe_success', threshold: 1 }, '5m', ctx).kind, 'threshold');
   assert.equal(sliLegs({ id: 'ok', type: 'threshold', query: 'a / b', threshold: 1, unit: 'percentunit' }, '5m', ctx).kind, 'threshold');
   assert.equal(warned.length, 3);
-  assert.ok(warned.every(m => /upper bound/.test(m) && /no direction field/.test(m)), warned.join('; '));
+  assert.ok(warned.every(m => /as a ceiling \(bad = samples above it\)/.test(m) && /looks like a floor — declare good_when: above/.test(m)), warned.join('; '));
+  assert.ok(warned.every(m => !/no direction field|cannot express/.test(m)), 'a floor is expressible now: the warning no longer says the spec cannot');
   warned.length = 0;
   sliLegs({ id: 'lat', type: 'threshold', query: 'histogram_quantile(0.99, sum(rate(x{path="/api"}[5m])) by (le))', threshold: 0.5, unit: 'seconds' }, '5m', ctx);
   sliLegs({ id: 'lag', type: 'threshold', query: 'max(lag)', threshold: 1 }, '5m', ctx);
   assert.deepEqual(warned, []);
+});
+
+test('spec 1.3 good_when: a floor SLI counts the samples UNDER its bound, a ceiling those above it, absent means below; a declared direction ends the floor guess; the bound stays strict; a negative bound is a number', () => {
+  const warned = [];
+  const ctx = { step: 30, series: 'svc:x:value_5m', seriesStep: 30, warn: (m) => warned.push(m) };
+  const floor = sliLegs({ id: 'members', type: 'threshold', good_when: 'above', query: 'min(members)', threshold: 2, unit: 'consumers' }, '5m', ctx);
+  assert.deepEqual([floor.kind, floor.bad, floor.denom, floor.ratio], ['threshold', 'sum_over_time((max(svc:x:value_5m) < bool 2)[5m:30s])', '10', '(sum_over_time((max(svc:x:value_5m) < bool 2)[5m:30s]) / 10)']);
+  const ceiling = sliLegs({ id: 'lag', type: 'threshold', good_when: 'below', query: 'max(lag)', threshold: 60, unit: 'seconds' }, '5m', ctx);
+  assert.equal(ceiling.ratio, '(sum_over_time((max(svc:x:value_5m) > bool 60)[5m:30s]) / 10)');
+  assert.equal(sliLegs({ id: 'lag', type: 'threshold', query: 'max(lag)', threshold: 60, unit: 'seconds' }, '5m', ctx).ratio, ceiling.ratio, 'absent means below: a 1.2 SLI reads exactly as it did');
+  assert.deepEqual(warned, []);
+  // The comparison is strict on the bad side whichever way the SLI faces: 2 consumers satisfy a floor of 2, 60 s a ceiling of 60 (never >= / <=).
+  assert.ok(!/<=|>=/.test(floor.bad) && !/<=|>=/.test(ceiling.bad));
+  // The alert expression and the error-ratio record through the generator, on a pack whose floor SLI has its own recording rule.
+  const pack = {
+    metadata: { name: 'settle', version: '0.0.1' },
+    spec: {
+      slis: [{ id: 'members', type: 'threshold', good_when: 'above', query: 'min(kafka_consumer_group_members{group="settler"})', threshold: 2, unit: 'consumers' }],
+      slos: [{ id: 'members_99_9', sli: 'members', objective: 0.999, window: '30d' }],
+      queries: { recording_rules: [{ name: 'settle:members:min_5m', expr: 'ref:slis.members', interval: '30s' }] },
+      policy: { burn_rate_alerts: [{ slo: 'members_99_9', windows: [{ short: '5m', long: '1h', factor: 14, severity: 'SEV2' }] }] },
+    },
+  };
+  const r = compileBurnRules(pack);
+  assert.deepEqual(r.warnings, []);
+  assert.equal(r.recording.find(x => x.record === 'settle:members:error_ratio_5m').expr, '(sum_over_time((max(settle:members:min_5m) < bool 2)[5m:30s]) / 10)');
+  const alert = r.groups.flatMap(g => g.rules).find(x => x.alert === 'members_99_9_burn_14x_5m_1h');
+  assert.equal(alert.expr, [
+    '(', '  (sum_over_time((max(settle:members:min_5m) < bool 2)[5m:30s]) / 10) > 0.014', ') and (',
+    '  (sum_over_time((max(settle:members:min_5m) < bool 2)[1h:30s]) / 120) > 0.014', ') and (',
+    '  sum_over_time((max(settle:members:min_5m) < bool 2)[5m:30s]) >= 2', ')',
+  ].join('\n'));
+  assert.ok(!alert.expr.includes('> bool'), 'no leg of a floor alert counts samples above the bound');
+  // The floor guess (a ratio unit, a ratio-shaped query at 1) is raised only while the pack declares nothing: a declared
+  // `above` is the floor it guessed, a declared `below` states the ceiling on purpose (the MQ headroom SLI, measured).
+  const ratioish = { id: 'ok', type: 'threshold', query: 'a / b', threshold: 1, unit: 'percentunit' };
+  warned.length = 0;
+  assert.equal(sliLegs({ ...ratioish, good_when: 'above' }, '5m', ctx).bad, 'sum_over_time((max(svc:x:value_5m) < bool 1)[5m:30s])');
+  assert.equal(sliLegs({ ...ratioish, good_when: 'below' }, '5m', ctx).bad, 'sum_over_time((max(svc:x:value_5m) > bool 1)[5m:30s])');
+  assert.deepEqual(warned, []);
+  sliLegs(ratioish, '5m', ctx);
+  assert.equal(warned.length, 1);
+  // A bound is any finite number now (a floor at -1, a ceiling on a signed skew); only a non-number gets no policy rules.
+  warned.length = 0;
+  assert.equal(sliLegs({ id: 'n', type: 'threshold', query: 'x', threshold: -1 }, '5m', ctx).bad, 'sum_over_time((max(svc:x:value_5m) > bool -1)[5m:30s])');
+  assert.equal(sliLegs({ id: 'n', type: 'threshold', good_when: 'above', query: 'x', threshold: -1.5 }, '5m', ctx).bad, 'sum_over_time((max(svc:x:value_5m) < bool -1.5)[5m:30s])');
+  assert.deepEqual(warned, []);
+  for (const bad of ['x', NaN, Infinity, -Infinity, undefined]) assert.equal(sliLegs({ id: 'n', type: 'threshold', good_when: 'above', query: 'x', threshold: bad }, '5m', ctx), null, `threshold ${String(bad)}`);
+  assert.ok(warned.length === 5 && warned.every(m => /threshold must be a finite number/.test(m) && /no policy rules$/.test(m)), warned.join('; '));
+  // A distribution SLI stays what it was: no error-ratio form, whatever its direction (nothing invented here).
+  warned.length = 0;
+  assert.equal(sliLegs({ id: 'd', type: 'distribution', good_when: 'above', query: 'x', threshold: 2, percentile: 0.99 }, '5m', ctx), null);
+  assert.match(warned[0], /type distribution has no error-ratio form/);
 });
 
 test('durations accept every spec unit and never throw', () => {

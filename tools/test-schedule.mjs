@@ -12,6 +12,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'nod
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHarness } from './lib/harness.mjs';
+import { SPEC_DIR } from './lib/validator.mjs';
 import { parseSchedule, cadenceOf, windowMs, cronCadenceMs, SCHEDULE_ERROR, IRREGULAR_CRON_NOTE } from './lib/schedule.mjs';
 import { stackPostureBudget, stackSeries } from './lib/stack-evidence.mjs';
 
@@ -123,7 +124,7 @@ assert(windowMs('30') === null && windowMs('1w') === null && windowMs('') === nu
 }
 
 // --- loader integration ---
-const PACK_A = resolve('vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml').replaceAll('\\', '/');
+const PACK_A = resolve(SPEC_DIR, 'examples/payment-service.pack.yaml').replaceAll('\\', '/');
 const PACK_B = resolve('examples/production-curated.pack.yaml').replaceAll('\\', '/');
 try {
   mkdirSync(join(TMP, 'journeys'), { recursive: true });

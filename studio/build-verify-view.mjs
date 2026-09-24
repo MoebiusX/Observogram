@@ -58,7 +58,7 @@ export function renderBuildVerify(container, model, host = appHost) {
   const stack = model.stack;
   container.innerHTML = `
     <section class="build-step build-verify">
-      ${stepHeadHtml('verify', 'Is it ready to use?', `The pack as generated, read three ways: the tier’s conformance rubric (which clauses pass, which pass only on a placeholder, which fail — per layer), the v1.2 schema, and the artefacts it compiles to. The todos sit on the layer they live on — on the slab and on its sheet (click the layer); fill a placeholder inline and the pack regenerates; when it holds up, continue to Discover.`)}
+      ${stepHeadHtml('verify', 'Is it ready to use?', `The pack as generated, read three ways: the tier’s conformance rubric (which clauses pass, which pass only on a placeholder, which fail — per layer), the v1.3 schema, and the artefacts it compiles to. The todos sit on the layer they live on — on the slab and on its sheet (click the layer); fill a placeholder inline and the pack regenerates; when it holds up, continue to Discover.`)}
 
       ${!model.ready && !model.error ? `<div class="build-note">${model.pending ? 'Compiling…' : 'Nothing compiled yet — go back to Compile.'}</div>` : ''}
       ${instantiateErrorHtml(model.error, { stale: model.stale, where: 'below, under its todo' })}
@@ -81,7 +81,7 @@ export function renderBuildVerify(container, model, host = appHost) {
         <div class="build-verdict build-verdict-schema ${model.schema.ok ? 'is-ok' : 'is-fail'}">
           <div class="build-verdict-key">Schema</div>
           <div class="build-verdict-big">${model.schema.ok ? 'valid' : `${model.schema.errors.length} error${model.schema.errors.length === 1 ? '' : 's'}`}</div>
-          <div class="build-verdict-line">ObservabilityPack spec v1.2</div>
+          <div class="build-verdict-line">ObservabilityPack spec v1.3</div>
           ${model.schema.errors.length ? `<ul class="build-verdict-errors">${model.schema.errors.map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul>` : ''}
         </div>
         <div class="build-verdict build-verdict-warn ${model.warnings.length ? (model.blocking ? 'is-fail' : 'is-warn') : 'is-ok'}">

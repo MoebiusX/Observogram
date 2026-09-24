@@ -168,7 +168,7 @@ function parseCdFilename(cd) {
 //
 // Conformance answers "how MATURE is this pack?" against the maturity
 // rubric (MUST/SHOULD per tier). The Schema view answers "how does
-// this pack STAND UP against the v1.2 canonical schema?" — the
+// this pack STAND UP against the v1.3 canonical schema?" — the
 // structural question. Three sections:
 //
 //   1. Identity block — apiVersion / kind / metadata fields, the

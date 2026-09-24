@@ -1,4 +1,4 @@
-# Grafana-managed rules compiled from ObservabilityPack v1.2
+# Grafana-managed rules compiled from ObservabilityPack v1.3
 # Pack: edge-hostile-names · version 0.1.0
 # Format: Grafana 9+ provisioning YAML (apiVersion: 1).
 # Apply via: copy under provisioning/alerting/ OR POST to /api/v1/provisioning/alert-rules

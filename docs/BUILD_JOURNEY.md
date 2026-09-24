@@ -244,8 +244,9 @@ instantiation through the API, where Node passes the grammar. `warnings` is what
 shows beside the todos; its kinds: `promql` (the pack must not ship), `override` (an
 override names an SLI that is not in the pack; nothing is applied), `burn-rules` (the burn-rule generator's own warnings on
 the produced policy — `tools/lib/burn-rules.mjs` compiled once at build time, so a
-subtracted good leg without a presence guard or a ratio-unit threshold it reads as an
-upper bound is seen when the pack is made, not when its alerts stay silent; the shipped
+subtracted good leg without a presence guard or a ratio-unit threshold with no `good_when`
+declared, which it reads as a ceiling and flags as a probable floor, is seen when the pack
+is made, not when its alerts stay silent; the shipped
 entries draw none of the guardable ones, the suite checks). Several entries compose
 into one pack: ids are prefixed with the entry id (`kafka_broker_availability`,
 `http-service-…` boards), entry params are addressed as `<entry>.<param>` (a bare
@@ -264,13 +265,13 @@ beside `server/` and `tools/`. Nothing under `tools/lib` touches the filesystem.
 packc init --list                                   the entries table
 packc init --show <entry>                           params (entry + scaffold), SLIs per tier, objectives, evidence
 packc init --entry <id>[,<id>] --tier tier-2 --name <svc> [--env <env>] [--owner <team>]...
-           [--param k=v]... [--slis a,b | --sli <id>]... [--override <sli>.<id|objective|window|threshold|semconv_metric>=<value>]...
+           [--param k=v]... [--slis a,b | --sli <id>]... [--override <sli>.<id|objective|window|threshold|good_when|semconv_metric>=<value>]...
            [--no-slos|--no-policy|--no-routes|--no-dashboards|--no-validation]
            [--out <file>] [--json] [--library <dir>]
 ```
 
 YAML to stdout (or `--out`), the todo list, the warnings and the conformance line to
-stderr; exit `0` ok, `1` the produced pack does not validate against the v1.2 schema (a
+stderr; exit `0` ok, `1` the produced pack does not validate against the v1.3 schema (a
 section toggled off), fails a MUST clause of its tier (a `--slis` selection with no
 latency SLO at tier-2: `packc journey`'s "gate failed", so a CI caller can tell `MUST
 14/15` from `15/15`), an SLI is not valid PromQL once the `--param` values are in, or an
@@ -593,21 +594,24 @@ tier's defaults.
 **2. Copies, not links** — copy-on-write over the library's defaults. Two new instantiate
 inputs, in the engine, the API and the studio (the CLI takes the scalar overrides):
 
-- `overrides: { [sliId]: { id?, objective?, window?, threshold?, query?, good?, total?,
+- `overrides: { [sliId]: { id?, objective?, window?, threshold?, good_when?, query?, good?, total?,
   description?, unit?, semconv_metric? } }`, keyed by the SLI id as the library gives it to the
   pack (prefixed when several entries compose — the keys `build.slis` uses; a renamed SLI — the
   `id` field, "The editor" — stays keyed so). The engine validates every field as a usage
   error (400 from the API, exit 2 from the CLI, never a 500): the objective a number in
   (0, 1) — the ratio the pack stores; the studio shows and edits a percent — the window one of
   the schema's SLO windows `7d | 28d | 30d | 90d` (the schema's enum, stricter than any
-  duration), the threshold a finite number for a threshold SLI only, `query` for a threshold
+  duration), the threshold a finite number for a threshold SLI only, `good_when` one of
+  `below | above` for a threshold SLI only (spec 1.3: the side of the bound that is good —
+  below, a ceiling, the default when absent; above, a floor; copied into the pack SLI as
+  declared and never synthesised, so a pack that says nothing stays 1.2-shaped; the evidence
+  stays the library's), `query` for a threshold
   SLI and `good` / `total` for a ratio one — non-empty strings within `MAX_PARAM_LENGTH` that
   carry no `${…}` placeholder (an override replaces the library's expression *after* the
   params are in; nothing resolves a placeholder in it) — the description and unit bounded
-  strings; an unknown field is an error naming the fields; `comparison` is refused with the
-  reason: an ObservabilityPack v1.2 threshold is an upper bound (the schema has no direction
-  field and `additionalProperties: false` on an SLI; the burn-rate generator reads every
-  threshold so) — a floor is a ratio SLI. Keys match `^[a-z][a-z0-9_]{0,63}$`; `__proto__`,
+  strings; an unknown field is an error naming the fields; the retired `comparison` is refused
+  with the reason: the direction of a threshold is `good_when` (below — a ceiling, the default;
+  above — a floor), spec 1.3 — use `good_when`. Keys match `^[a-z][a-z0-9_]{0,63}$`; `__proto__`,
   `constructor` and `prototype` are refused as keys and as fields and nothing is read through
   the prototype chain (own keys only, a null-prototype copy). An override for an SLI not in
   the pack (unknown, or known and not selected) is a warning `{ kind: 'override', sli,
@@ -625,8 +629,8 @@ inputs, in the engine, the API and the studio (the CLI takes the scalar override
   `provenance.overrides` the overrides applied, and the pack carries
   `library.customised.slis.<id>` and `library.overrides` (JSON), so VERIFY and Discover can
   say *customised: objective, query*; `library.source` is unchanged.
-- `custom: [ { id, type: 'ratio' | 'threshold', description?, unit?, query? + threshold?
-  (threshold), good? + total? (ratio), objective, window } ]` — SLIs written from scratch,
+- `custom: [ { id, type: 'ratio' | 'threshold', description?, unit?, query? + threshold? +
+  good_when? (threshold), good? + total? (ratio), objective, window } ]` — SLIs written from scratch,
   outside any library entry. The id a slug `^[a-z][a-z0-9_]{1,62}$` (not the reserved
   `errorbudget`) that no SLI of the passed entries owns — a clash with a library SLI (ticked,
   or un-ticked: it would clash the moment it is ticked, and a draft carrying both would draw
@@ -652,8 +656,9 @@ inputs, in the engine, the API and the studio (the CLI takes the scalar override
   customised pack is compiled or registered in one request. `GET /api/library` is unchanged
   in shape; the index rows' SLIs now carry the PromQL templates and the bound (`good` /
   `total` or `query` / `threshold`, `${param}` unresolved) and the metric (`semconv_metric`)
-  — the defaults the editor shows. `packc init` gains a repeatable
-  `--override <sliId>.<field>=<value>` for `id`, `objective`, `window`, `threshold` and
+  — the defaults the editor shows; since spec 1.3 a threshold row also carries `good_when`
+  (normalised: `below` where the template says nothing). `packc init` gains a repeatable
+  `--override <sliId>.<field>=<value>` for `id`, `objective`, `window`, `threshold`, `good_when` and
   `semconv_metric` (a query, good or total is edited in the studio or in the pack file) and
   `--sli <id>` as a repeatable alias of `--slis`.
 
@@ -771,7 +776,9 @@ buttons took the clicks meant for the dialog (measured).
 A title row (the id large, the product and its evidence badge, the type pill, the
 *customised* / *custom* / *from the tier-1 profile* / *was <key>* chips); a compact
 two-column grid: Id (a rename) · Description (PREFILLED with the library default); Objective
-(percent) · Window (the schema's four); for a threshold SLI Bound · Unit; Metric
+(percent) · Window (the schema's four); for a threshold SLI Bound — with its direction beside
+the number, the two-segment *good when: below · above* control (spec 1.3 `good_when`, "The
+direction of the bound" below) — · Unit; Metric
 (`semconv_metric`) · Type (fixed — a different shape is a new custom SLI, the hint says so; no
 library SLI carries a percentile, so there is no percentile field); then the PromQL (Query, or
 Good and Total side by side) as monospace textareas of two rows that grow (to about eight
@@ -850,11 +857,37 @@ the rename — the studio never sends an override that restates the key, which i
 `<sli>.semconv_metric=`.
 
 *Create mode.* The same dialog over the custom form (`customFormModel`, one rule: Name → id
-with `slugifySliId`, a typed id sticks; Type; Description; Objective; Window; Bound + Unit for
-a threshold SLI; Metric, optional; the PromQL fields for the type), **Add to the pack**
+with `slugifySliId`, a typed id sticks; Type — its hint *ratio: good over total events ·
+threshold: a value against a bound — good when below (a ceiling) or above (a floor)*;
+Description; Objective; Window; Bound with its direction + Unit for a threshold SLI; Metric,
+optional; the PromQL fields for the type), **Add to the pack**
 enabled from the model's `canSubmit` with the engine's messages inline (`customDraftErrors`);
 a success morphs the dialog into edit mode over the new SLI, whose status says what the pack
 made of it.
+
+*The direction of the bound (spec 1.3 `good_when`).* A threshold SLI's bound says which side of
+it is good: `below` — a ceiling, the default and the only meaning a 1.2 pack could express
+(latency, lag) — or `above`, a floor (replicas, consumers). The editor's Bound row carries it as
+a two-segment control in the tier control's idiom — `role=radiogroup` labelled *Good when*, one
+`role=radio` per side with `aria-checked`, the chosen side in the tab order, ArrowLeft / Up and
+ArrowRight / Down move and pick, a sliding thumb (`--dir-index`), each segment with a focus key
+of its own (`ov:<key>:good_when:<side>`) so the focus survives a re-render on it — for threshold
+SLIs in edit and create modes; `↺ library default` sits beside its label when overridden, and
+the read-only face prints the side as a code span. A pick commits live like every other field
+(`setOverride` / `updateCustom` with `live: true`), except that picking the library's own side
+on a library SLI clears the override, as ↺ does: the library's direction is no customisation.
+The Bound hint reads *the bound in the SLI's unit; good when below (a ceiling: latency, lag) or
+above (a floor: replicas, consumers)*. The model's `good_when` field (kind `direction`, its value
+`below` when the SLI says nothing — `studio/sli-direction.mjs` `goodWhen`, the browser copy of
+`tools/lib/good-when.mjs`, held together by a test) follows `threshold` in `fieldsForType`; the
+view draws it inside the Bound cell (`boundCellHtml` / `directionHtml`, `paintDirection`,
+`wireDirectionGroups`), never in a cell of its own. The rolodex card prints the bound with its
+glyph (`≤ 0.1 seconds`, `≥ 2 consumers`), the DEFINE candidate ghost and the adapter's card
+print it under the title (`.card-sub`), and the create form writes `good_when` only for a floor
+(below is the default). The engine copies the declaration into the pack SLI as declared and never
+synthesises one; the compiled burn alert of a floor counts the samples under the bound
+(`< bool t`); the schema refuses the field on a ratio SLI, and so does the engine before the
+schema is asked ("a ratio SLI has no bound, so no direction").
 
 *Small fixes in the same slice.* The header step tabs' accessible names read *Define —
 Service, tier & library* (and Compile, Verify): `BUILD_TABS` lives in `build-model.mjs`
@@ -866,13 +899,15 @@ label) is gone with the face. The rolodex counts line and the L1 slab head are u
 library's evidence no longer applies*); a rename keeps the library provenance (`customised:
 id`); *pass on a placeholder* stays distinct; nothing in the rubric bends.
 
-**Modules.** Engine: `checkCopyField` (id, semconv_metric), `checkSliIds`, `entryFragment`'s
-`key` in `tools/lib/library.mjs`; `libraryIndex` rows carry `semconv_metric`. Studio:
+**Modules.** Engine: `checkCopyField` (id, semconv_metric, good_when), `checkSliIds`, `entryFragment`'s
+`key` in `tools/lib/library.mjs`; `libraryIndex` rows carry `semconv_metric` and `good_when`;
+`tools/lib/good-when.mjs` (`goodWhen`, `boundText`). Studio:
 `sliEditorModel`, `checkEditorId`, `existingSliIds`, `resolveTemplate`, `templateParams`,
-`effectiveId`, `fieldsForType` in `studio/build-copies-model.mjs`; `buildEditorModel`,
+`effectiveId`, `fieldsForType` in `studio/build-copies-model.mjs`; `studio/sli-direction.mjs`
+(the browser copy of the direction helper); `buildEditorModel`,
 `editorModeFor`, `stackCardActions`, `BUILD_TABS` / `tabName`, `sheetModeFor` in
 `studio/build-model.mjs`; the view `studio/build-editor-view.mjs` (`buildEditorHtml`,
-`renderBuildEditor`, `wireBuildEditor`, `growTextarea`, `paintFieldMessage`); the actions
+`renderBuildEditor`, `wireBuildEditor`, `growTextarea`, `paintFieldMessage`, `paintDirection`); the actions
 `openEditor`, `closeEditor`, `setOverride` / `updateCustom` with `live`, `openSheet` with
 `entry` and `syncBuildEditor` in `studio/app.mjs`; `editAttrs` in the stack view;
 `wireRolodexEditors` in the sheet view; `state.build.editor` / `editorDirty`.

@@ -28,7 +28,7 @@ import {
   sliEditorModel, checkEditorId, existingSliIds, resolveTemplate, templateParams, fieldsForType, effectiveId, percentText, ratioOf,
   fieldValueFor, numberOrText, customDefFromDraft, OVERRIDE_FIELDS,
 } from '../studio/build-copies-model.mjs';
-import { buildEditorHtml, renderBuildEditor, wireBuildEditor, paintFieldMessage, paintIdState, growTextarea, PROMQL_MAX_HEIGHT } from '../studio/build-editor-view.mjs';
+import { buildEditorHtml, renderBuildEditor, wireBuildEditor, paintFieldMessage, paintIdState, paintDirection, growTextarea, PROMQL_MAX_HEIGHT } from '../studio/build-editor-view.mjs';
 import { defaultBuildState } from '../studio/state.mjs';
 import { installDialogFocusTrap, TRAPPED_DIALOGS } from '../studio/util.mjs';
 import { editFieldHtml } from '../studio/build-atoms.mjs';
@@ -95,7 +95,7 @@ test('a library ratio SLI: the fields in reading order, the description prefille
   const m = modelOf(b, 'availability');
   assert.deepEqual([m.create, m.custom, m.readOnly, m.mode, m.key, m.id, m.type, m.renamed], [false, false, false, 'edit', 'availability', 'availability', 'ratio', false]);
   assert.deepEqual(m.fields.map(f => f.id), ['id', 'description', 'objective', 'window', 'semconv_metric', 'good', 'total']);
-  assert.deepEqual(fieldsForType('threshold'), ['id', 'description', 'objective', 'window', 'threshold', 'unit', 'semconv_metric', 'query']);
+  assert.deepEqual(fieldsForType('threshold'), ['id', 'description', 'objective', 'window', 'threshold', 'good_when', 'unit', 'semconv_metric', 'query']);
   assert.deepEqual(m.title, { id: 'availability', product: 'HTTP service (OTel semconv)', evidence: 'semconv', sliEvidence: 'semconv', type: 'ratio', chips: [] });
   const id = field(m, 'id');
   assert.deepEqual([id.kind, id.value, id.default, id.overridden, id.resettable, id.focusKey, id.inputId, id.error], ['slug', 'availability', 'availability', false, false, 'ov:availability:id', 'build-editor-id', null]);
@@ -142,9 +142,18 @@ test('a library ratio SLI: the fields in reading order, the description prefille
 test('a threshold SLI with a unit: Bound and Unit fields with their defaults, the query resolved; an above-tier SLI: the chip and its own profile’s objective, addable from the editor', () => {
   const b = draftWith({ entries: ['kafka', 'http-service'] });
   const m = modelOf(b, 'kafka_produce_latency_p99');
-  assert.deepEqual(m.fields.map(f => f.id), ['id', 'description', 'objective', 'window', 'threshold', 'unit', 'semconv_metric', 'query']);
+  assert.deepEqual(m.fields.map(f => f.id), ['id', 'description', 'objective', 'window', 'threshold', 'good_when', 'unit', 'semconv_metric', 'query']);
   assert.deepEqual([field(m, 'threshold').value, field(m, 'threshold').kind, field(m, 'threshold').default, field(m, 'unit').value, field(m, 'unit').kind], ['0.1', 'number', '0.1', 'seconds', 'unit']);
-  assert.match(field(m, 'threshold').hint, /an upper bound in the SLI’s unit \(spec v1\.2 has no direction: a floor is a ratio SLI\)/);
+  assert.equal(field(m, 'threshold').hint, 'the bound in the SLI’s unit; good when below (a ceiling: latency, lag) or above (a floor: replicas, consumers)');
+  // spec 1.3: the direction of the bound as a field of its own — 'below' when the library says nothing (absent means below), the two sides as options, the library's side the default.
+  const dir = field(m, 'good_when');
+  assert.deepEqual([dir.value, dir.kind, dir.options, dir.default, dir.overridden, dir.resettable, dir.focusKey, dir.inputId], ['below', 'direction', ['below', 'above'], 'below', false, false, 'ov:kafka_produce_latency_p99:good_when', 'build-editor-good_when']);
+  assert.match(dir.hint, /^below: a ceiling — samples above the bound are bad .* · above: a floor — samples under it are bad .*; the bound itself is good either way$/);
+  const flipped = modelOf(draftWith({ entries: ['kafka', 'http-service'], overrides: { kafka_produce_latency_p99: { good_when: 'above' } } }), 'kafka_produce_latency_p99');
+  assert.deepEqual([field(flipped, 'good_when').value, field(flipped, 'good_when').default, field(flipped, 'good_when').overridden, field(flipped, 'good_when').resettable, flipped.customised, flipped.title.chips.map(c => c.text)], ['above', 'below', true, true, ['good_when'], ['customised']]);
+  assert.equal(flipped.status.text, 'applied · SLO kafka_produce_latency_p99_99 · 2 burn alerts · rule orders_api:kafka_produce_latency_p99:value_5m', 'the engine took the floor');
+  assert.equal(field(flipped, 'query').value, field(m, 'query').value, 'the direction is not a PromQL edit: the library expression and its evidence stay');
+  assert.equal(flipped.evidence.status, 'recorded-live');
   assert.equal(field(m, 'query').value, b.result.canonical.spec.slis.find(s => s.id === 'kafka_produce_latency_p99').query);
   assert.ok(!/\$\{/.test(field(m, 'query').value) && /kafka_network_requestmetrics_totaltimems|kafka/.test(field(m, 'query').value));
   assert.equal(m.title.type, 'threshold');
@@ -248,8 +257,13 @@ test('create mode: the same dialog over the form — Name → id, Type, the fiel
   const typed = dialogOf({ ...b, customDraft: { name: 'Checkout success', good: 'sum(rate(ok[5m]))', total: 'sum(rate(all[5m]))' } });
   assert.deepEqual([typed.id, typed.title.id, typed.submit.enabled, typed.status.kind, field(typed, 'name').hint], ['checkout_success', 'checkout_success', true, 'ready', 'id checkout_success']);
   const threshold = dialogOf({ ...b, customDraft: { name: 'Checkout p99', type: 'threshold', query: 'x', threshold: '0.3' } });
-  assert.deepEqual(threshold.fields.map(f => f.id), ['name', 'id', 'type', 'description', 'objective', 'window', 'threshold', 'unit', 'semconv_metric', 'query']);
+  assert.deepEqual(threshold.fields.map(f => f.id), ['name', 'id', 'type', 'description', 'objective', 'window', 'threshold', 'good_when', 'unit', 'semconv_metric', 'query']);
   assert.equal(threshold.submit.enabled, true);
+  // The direction defaults to below and is written only as a floor; the type hint names both sides.
+  assert.deepEqual([field(threshold, 'good_when').value, field(threshold, 'good_when').kind, field(threshold, 'good_when').options, field(threshold, 'type').hint, threshold.typeHint], ['below', 'direction', ['below', 'above'], 'ratio: good over total events · threshold: a value against a bound — good when below (a ceiling) or above (a floor)', 'ratio: good over total events · threshold: a value against a bound — good when below (a ceiling) or above (a floor)']);
+  assert.ok(!('good_when' in customDefFromDraft(threshold.form.draft)), 'below is the default: nothing written');
+  assert.equal(customDefFromDraft({ ...threshold.form.draft, good_when: 'above' }).good_when, 'above');
+  assert.equal(customDefFromDraft({ ...threshold.form.draft, good_when: 'sideways' }).good_when, undefined, 'a value that is not a side reads as below');
   // A clash with a library SLI of the selected entry (ticked or not) or with a rename, said on the id field.
   const clash = dialogOf({ ...b, customDraft: { name: 'latency p99', good: 'a', total: 'b' } });
   assert.deepEqual([clash.submit.enabled, field(clash, 'id').error], [false, 'latency_p99 is already an SLI of the pack or of a selected product — pick another name']);
@@ -294,7 +308,8 @@ test('the helpers: checkEditorId, existingSliIds, resolveTemplate / templatePara
   assert.deepEqual([fieldValueFor('objective', '99.5'), fieldValueFor('threshold', '0.25'), fieldValueFor('window', ' 7d '), fieldValueFor('query', 'up'), fieldValueFor('objective', ''), fieldValueFor('id', ' http_availability '), fieldValueFor('semconv_metric', ' a.b '), fieldValueFor('id', '')], [0.995, 0.25, '7d', 'up', null, 'http_availability', 'a.b', null]);
   assert.deepEqual([fieldValueFor('threshold', 'x'), fieldValueFor('objective', 'abc'), fieldValueFor('objective', ' 99,5 '), numberOrText('threshold', 'abc'), numberOrText('objective', '99.5')], ['x', 'abc', '99,5', 'abc', 0.995], 'text that is not a number stays text — the engine names it, never NaN → null');
   assert.deepEqual(customDefFromDraft({ name: 'X', good: 'a', total: 'b', objective: 'abc', window: '30d' }).objective, 'abc');
-  assert.deepEqual(OVERRIDE_FIELDS, ['id', 'objective', 'window', 'threshold', 'query', 'good', 'total', 'description', 'unit', 'semconv_metric']);
+  assert.deepEqual(OVERRIDE_FIELDS, ['id', 'objective', 'window', 'threshold', 'good_when', 'query', 'good', 'total', 'description', 'unit', 'semconv_metric']);
+  assert.deepEqual([fieldValueFor('good_when', ' above '), fieldValueFor('good_when', ''), fieldValueFor('good_when', 'below')], ['above', null, 'below']);
 });
 
 // ---------------------------------------------------------------------------
@@ -340,6 +355,30 @@ test('the dialog headless in edit mode: role=dialog aria-modal=true labelled by 
   const t = renderHtml(dialogOf(draftWith({ entries: ['kafka', 'http-service'], editor: { key: 'kafka_produce_latency_p99', custom: false } })));
   assert.deepEqual([...t.matchAll(/class="build-editor-cell is-([a-z_]+)( is-wide)?/g)].map(m => m[1] + (m[2] || '')), ['id', 'description', 'objective', 'window', 'threshold', 'unit', 'semconv_metric', 'type', 'query is-wide']);
   assert.ok(t.includes('data-override-field="threshold" data-sli="kafka_produce_latency_p99" value="0.1"') && t.includes('<span>Bound</span>') && t.includes('<span>Unit</span>'));
+  // The Bound cell carries the direction control (spec 1.3 good_when): a radiogroup labelled 'Good when' and described by its
+  // default and hint, one radio per side with the chosen one checked and in the tab order, each with a focus key of its own,
+  // the group with the data attribute the wiring reads back; no cell of its own.
+  assert.ok(t.includes('<div class="build-editor-cell is-threshold has-direction">'));
+  assert.ok(t.includes('<div class="build-edit-field build-edit-direction" data-field="good_when">'));
+  assert.ok(t.includes('<span class="build-edit-label" id="build-editor-good_when-label"><span>Good when</span></span><span class="build-edit-default" id="build-editor-good_when-default">library default</span>'));
+  assert.ok(t.includes('<div class="build-edit-dir" role="radiogroup" aria-labelledby="build-editor-good_when-label" aria-describedby="build-editor-good_when-default build-editor-good_when-hint" data-dir-group="good_when" data-override-field="good_when" data-sli="kafka_produce_latency_p99" style="--dir-index:0"><span class="build-edit-dir-thumb" aria-hidden="true"></span>'));
+  assert.ok(t.includes('<button type="button" role="radio" class="build-edit-dir-btn" data-dir="below" aria-checked="true" tabindex="0" data-focus-key="ov:kafka_produce_latency_p99:good_when:below">below</button>'));
+  assert.ok(t.includes('<button type="button" role="radio" class="build-edit-dir-btn" data-dir="above" aria-checked="false" tabindex="-1" data-focus-key="ov:kafka_produce_latency_p99:good_when:above">above</button>'));
+  assert.ok(t.includes('<span class="build-edit-hint" id="build-editor-good_when-hint">below: a ceiling'));
+  assert.ok(!/<label[^>]*for="build-editor-good_when"/.test(t) && !t.includes('is-good_when'), 'no input and no cell of its own');
+  const tDescribed = [...t.matchAll(/aria-describedby="([^"]+)"/g)].flatMap(m => m[1].split(' '));
+  assert.ok(tDescribed.every(id => t.includes(`id="${id}"`)), 'every aria-describedby id of the threshold dialog resolves');
+  // A floor: the other segment checked, the thumb on it, the override ring and ↺ beside the label with the library's side.
+  const floor = renderHtml(dialogOf(draftWith({ entries: ['kafka', 'http-service'], overrides: { kafka_produce_latency_p99: { good_when: 'above' } }, editor: { key: 'kafka_produce_latency_p99', custom: false } })));
+  assert.ok(floor.includes('<div class="build-edit-field build-edit-direction is-overridden" data-field="good_when">') && floor.includes('style="--dir-index:1"'));
+  assert.ok(floor.includes('data-dir="above" aria-checked="true" tabindex="0"') && floor.includes('data-dir="below" aria-checked="false" tabindex="-1"'));
+  assert.ok(floor.includes('<span class="build-edit-default" id="build-editor-good_when-default">library <code>below</code></span><button type="button" class="build-edit-reset" data-reset="good_when" data-sli="kafka_produce_latency_p99" data-focus-key="ov:kafka_produce_latency_p99:good_when:reset" title="back to the library default (below)" aria-label="Good when: back to the library default">'));
+  // Read-only (Verify): the side as a code span, no radiogroup.
+  const ro = renderHtml(sliEditorModel({ item: itemOf(draftWith({ entries: ['kafka', 'http-service'], overrides: { kafka_produce_latency_p99: { good_when: 'above' } } }), 'kafka_produce_latency_p99'), result: draftWith({ entries: ['kafka', 'http-service'] }).result, library: LIBRARY, build: draftWith({ entries: ['kafka', 'http-service'] }), mode: 'readonly' }));
+  assert.ok(ro.includes('<div class="build-edit-field build-edit-direction is-overridden is-read" data-field="good_when">') && ro.includes('<code class="build-edit-value">above</code>') && !ro.includes('role="radiogroup"'));
+  // The create dialog's threshold form carries the same control on the draft.
+  const cr = renderHtml(dialogOf(draftWith({ editor: { create: true }, customDraft: { name: 'Settlement consumers', type: 'threshold', query: 'min(members)', threshold: '2', good_when: 'above', unit: 'consumers' } })));
+  assert.ok(cr.includes('data-dir-group="good_when" data-custom-draft="good_when" style="--dir-index:1"') && cr.includes('data-dir="above" aria-checked="true" tabindex="0" data-focus-key="cf:good_when:above"') && !cr.includes('data-sli="'));
   // The engine's error under its field, aria-invalid, and in the status.
   const e = renderHtml(buildEditorModel({ build: { ...b, error: ['override availability.objective: the objective is a number in (0, 1), got "abc"'] }, library: LIBRARY }));
   assert.ok(e.includes('<span class="build-edit-error" id="build-editor-objective-error" role="alert">the objective is a number in (0, 1), got &quot;abc&quot;</span>') && e.includes('aria-invalid="true"') && e.includes('class="build-editor-status is-error"'));
@@ -728,6 +767,83 @@ test('create mode handlers: typing the name slugs the id (a typed id sticks), th
   paintFieldMessage(fakeContainer({}), 'id', 'x', 'y');
 });
 
+test('the direction control’s handlers: a click or an arrow key picks the other side and commits it live through setOverride (the library’s own side clears the override instead) or updateCustom; in create mode the pick lands in the draft and a floor reaches the engine’s definition; the segments repaint without a re-render', () => {
+  const dirGroup = (dataset, checked) => {
+    const attrs = {};
+    const btn = (side) => {
+      const a = { 'aria-checked': side === checked ? 'true' : 'false', tabindex: side === checked ? '0' : '-1' };
+      const handlers = {};
+      return {
+        dataset: { dir: side, focusKey: `k:${side}` }, focused: 0, attrs: a,
+        addEventListener: (t, fn) => { handlers[t] = fn; }, fire: (t, ev = {}) => handlers[t]?.({ preventDefault() {}, ...ev }),
+        getAttribute: (k) => a[k] ?? null, setAttribute: (k, v) => { a[k] = v; }, focus() { this.focused++; },
+      };
+    };
+    const btns = [btn('below'), btn('above')];
+    return { dataset, style: { setProperty: (k, v) => { attrs[k] = v; } }, attrs, btns, querySelectorAll: (sel) => (sel === '[data-dir]' ? btns : []) };
+  };
+  const state = (g) => [g.btns.map(b => `${b.dataset.dir}:${b.attrs['aria-checked']}/${b.attrs.tabindex}`).join(' '), g.attrs['--dir-index']];
+  // A library SLI whose template says below: picking above is an override, picking below again clears it (the library's side is no customisation).
+  const b = draftWith({ entries: ['kafka', 'http-service'], editor: { key: 'kafka_produce_latency_p99', custom: false } });
+  const calls = [];
+  const act = { setOverride: (k, f, v, o) => { calls.push(['override', k, f, v, o]); return true; }, clearOverride: (k, f) => calls.push(['clear', k, f]), updateCustom: (id, f, v, o) => { calls.push(['custom', id, f, v, o]); return true; }, closeEditor: () => {} };
+  const status = { textContent: '', className: '' };
+  const g = dirGroup({ dirGroup: 'good_when', overrideField: 'good_when', sli: 'kafka_produce_latency_p99' }, 'below');
+  wireBuildEditor(fakeContainer({ '.build-editor': [fakeEl({})], '#build-editor-status': [status], '.build-editor .build-edit-dir[data-dir-group]': [g] }), dialogOf(b), { build: act });
+  g.btns[0].fire('click');
+  assert.deepEqual(calls, [], 'the side already chosen: nothing sent');
+  g.btns[1].fire('click');
+  assert.deepEqual(calls, [['override', 'kafka_produce_latency_p99', 'good_when', 'above', { live: true }]]);
+  assert.deepEqual([state(g), status.textContent, status.className], [['below:false/-1 above:true/0', '1'], 'applying…', 'build-editor-status is-pending'], 'the segments and the thumb repaint at once');
+  g.btns[1].fire('keydown', { key: 'ArrowLeft' });
+  assert.deepEqual([calls.at(-1), g.btns[0].focused, state(g)], [['clear', 'kafka_produce_latency_p99', 'good_when'], 1, ['below:true/0 above:false/-1', '0']], 'ArrowLeft moves to below — the library\'s side — and clears the override');
+  g.btns[0].fire('keydown', { key: 'ArrowDown' });
+  assert.deepEqual([calls.at(-1), g.btns[1].focused], [['override', 'kafka_produce_latency_p99', 'good_when', 'above', { live: true }], 1], 'ArrowDown wraps to above and commits it');
+  g.btns[1].fire('keydown', { key: 'Enter' });
+  assert.equal(calls.length, 3, 'other keys do nothing');
+  // An override whose library side is above: below is the customisation, above clears.
+  const bAbove = draftWith({ entries: ['kafka', 'http-service'], editor: { key: 'kafka_produce_latency_p99', custom: false } });
+  const modelAbove = { ...dialogOf(bAbove), fields: dialogOf(bAbove).fields.map(f => (f.id === 'good_when' ? { ...f, default: 'above', value: 'above' } : f)) };
+  const g2 = dirGroup({ dirGroup: 'good_when', overrideField: 'good_when', sli: 'kafka_produce_latency_p99' }, 'above');
+  calls.length = 0;
+  wireBuildEditor(fakeContainer({ '.build-editor': [fakeEl({})], '#build-editor-status': [status], '.build-editor .build-edit-dir[data-dir-group]': [g2] }), modelAbove, { build: act });
+  g2.btns[0].fire('click'); g2.btns[1].fire('click');
+  assert.deepEqual(calls, [['override', 'kafka_produce_latency_p99', 'good_when', 'below', { live: true }], ['clear', 'kafka_produce_latency_p99', 'good_when']]);
+  // A custom SLI: every pick goes through updateCustom (it has no library side).
+  const custom = { id: 'settlement_consumers', type: 'threshold', query: 'min(members)', threshold: 2, good_when: 'above', unit: 'consumers', objective: 0.999, window: '30d' };
+  const bc = draftWith({ custom: [custom], editor: { key: 'settlement_consumers', custom: true } });
+  const mc = dialogOf(bc);
+  assert.deepEqual([mc.custom, field(mc, 'good_when').value, field(mc, 'good_when').default, field(mc, 'good_when').focusKey], [true, 'above', null, 'cu:settlement_consumers:good_when']);
+  const g3 = dirGroup({ dirGroup: 'good_when', customField: 'good_when', sli: 'settlement_consumers' }, 'above');
+  calls.length = 0;
+  wireBuildEditor(fakeContainer({ '.build-editor': [fakeEl({})], '#build-editor-status': [status], '.build-editor .build-edit-dir[data-dir-group]': [g3] }), mc, { build: act });
+  g3.btns[0].fire('click'); g3.btns[0].fire('keydown', { key: 'ArrowRight' }); g3.btns[1].fire('keydown', { key: 'ArrowUp' });
+  assert.deepEqual(calls, [['custom', 'settlement_consumers', 'good_when', 'below', { live: true }], ['custom', 'settlement_consumers', 'good_when', 'above', { live: true }], ['custom', 'settlement_consumers', 'good_when', 'below', { live: true }]]);
+  // Create mode: the pick lands in the draft without a re-render; Add sends a floor's direction and nothing for below.
+  const bCreate = draftWith({ editor: { create: true }, customDraft: { name: 'Settlement consumers', type: 'threshold', query: 'min(members)', threshold: '2', unit: 'consumers' } });
+  const cCalls = [];
+  let lastDraft = null;
+  const cAct = { update: (p, o) => { if (p.customDraft) lastDraft = p.customDraft; cCalls.push(['update', p.customDraft?.good_when, o]); }, addCustom: (def, d) => cCalls.push(['add', def, d.good_when]), closeEditor: () => {} };
+  const g4 = dirGroup({ dirGroup: 'good_when', customDraft: 'good_when' }, 'below');
+  const inputs = [{ ...fakeEl({ customDraft: 'name' }), value: 'Settlement consumers', tagName: 'INPUT' }, { ...fakeEl({ customDraft: 'threshold' }), value: '2', tagName: 'INPUT' }, { ...fakeEl({ customDraft: 'query' }), value: 'min(members)', tagName: 'TEXTAREA', style: {}, scrollHeight: 20 }];
+  const submit = { ...fakeEl({}), disabled: false };
+  const cStatus = { textContent: '', className: '' };
+  wireBuildEditor(fakeContainer({ '.build-editor': [fakeEl({})], '.build-editor [data-custom-draft]': [...inputs, g4], '[data-editor-submit]': [submit], '#build-editor-status': [cStatus], '#build-editor-title': [{ textContent: '' }], '.build-editor .build-edit-dir[data-dir-group]': [g4] }), dialogOf(bCreate), { build: cAct });
+  g4.btns[1].fire('click');
+  assert.deepEqual([cCalls.at(-1), lastDraft.good_when, state(g4)], [['update', 'above', { rerender: false, reinstantiate: false }], 'above', ['below:false/-1 above:true/0', '1']]);
+  submit.fire('click');
+  assert.deepEqual(cCalls.at(-1)[1], { id: 'settlement_consumers', type: 'threshold', objective: 0.999, window: '30d', query: 'min(members)', threshold: 2, good_when: 'above', unit: 'consumers' });
+  g4.btns[1].fire('keydown', { key: 'ArrowRight' });
+  submit.fire('click');
+  assert.ok(!('good_when' in cCalls.at(-1)[1]) && lastDraft.good_when === 'below', 'back to below: the default, not written');
+  inputs[0].value = 'Settlement consumers live'; inputs[0].fire('input');
+  assert.equal(lastDraft.good_when, 'below', 'a typed input does not lose the picked side (the group has no value to read back)');
+  // paintDirection on its own is what a pick does to the DOM.
+  const g5 = dirGroup({}, 'below');
+  paintDirection(g5, 'above');
+  assert.deepEqual(state(g5), ['below:false/-1 above:true/0', '1']);
+});
+
 // A document with only what the Tab trap reads (tools/test-build-model.mjs fakeDocument).
 function fakeDocument(dialogs) {
   const handlers = {};
@@ -817,4 +933,16 @@ test('the stylesheet: one centered fixed modal above the sheet with the L1 accen
   assert.match(cssRule('.build-rolo-edit'), /cursor:\s*pointer/);
   assert.match(cssRule('.build-rolo-create'), /appearance:\s*none;\s*cursor:\s*pointer;\s*text-align:\s*left/);
   assert.match(CSS_TEXT.match(/@media \(max-width: 760px\) \{[\s\S]*?\n\}/g).find(b => b.includes('.build-editor')), /\.build-editor-grid \{ grid-template-columns: 1fr; \}/, 'one column on a narrow screen');
+  // The direction control (spec 1.3 good_when): the Bound cell splits for it, the two-segment group with a sliding thumb in the
+  // tier control's idiom, the tokens only, the accent ring when overridden, its transitions in the reduced-motion list, one column narrow.
+  assert.match(cssRule('.build-editor-cell.is-threshold.has-direction'), /grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\)/, 'two tracks that both shrink: an auto track let the direction hint squeeze the Bound input (measured)');
+  assert.match(cssRule('.build-edit-dir'), /display:\s*grid;\s*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);.*background:\s*var\(--line-2\)/);
+  assert.match(cssRule('.build-edit-dir-thumb'), /width:\s*calc\(\(100% - 6px\) \/ 2\)[\s\S]*transform:\s*translateX\(calc\(var\(--dir-index, 0\) \* 100%\)\)[\s\S]*transition:\s*transform/);
+  assert.match(cssRule('.build-edit-dir-btn'), /color:\s*var\(--ink-3\)[\s\S]*transition:\s*color/);
+  assert.match(cssRule('.build-edit-dir-btn[aria-checked="true"]'), /color:\s*var\(--ink\)/);
+  assert.match(cssRule('.build-edit-dir-btn:focus-visible'), /outline:\s*2px solid var\(--accent\)/);
+  assert.match(cssRule('.build-edit-direction.is-overridden .build-edit-dir'), /var\(--accent\)/);
+  for (const sel of ['.build-edit-dir-thumb', '.build-edit-dir-btn']) assert.ok(reduced.includes(sel), `${sel} is in the reduced-motion transition: none list`);
+  assert.match(CSS_TEXT.match(/@media \(max-width: 760px\) \{[\s\S]*?\n\}/g).find(b => b.includes('.build-editor')), /\.build-editor-cell\.is-threshold\.has-direction \{ grid-template-columns: 1fr; \}/);
+  assert.match(cssRule('.build-rolo-bound'), /color:\s*var\(--ink-2\)/, 'the rolodex prints the bound in ink');
 });

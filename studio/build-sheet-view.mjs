@@ -44,6 +44,7 @@ import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { sheetFocusSuffix } from './build-model.mjs';
 import { evidenceBadge, paramRowHtml, wireParamInputs, clauseRowHtml, todoHtml, switchHtml, STATE_GLYPH } from './build-atoms.mjs';
+import { boundText } from './sli-direction.mjs';
 
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 const MODE_WORD = { edit: 'compose', verify: 'verify' };
@@ -74,6 +75,8 @@ function rolodexCardHtml(it, model) {
   // Edit (View on Verify) opens the pop-up editor over this SLI; a product not yet selected is added first.
   const editLabel = model.rolodex?.editLabel || 'Edit';
   const canEdit = it.entrySelected || it.custom;
+  // A threshold SLI's bound with the side of it that is good (spec 1.3 good_when through sli-direction.mjs: ≤ a ceiling, ≥ a floor).
+  const bound = it.type === 'threshold' ? boundText({ threshold: it.effective?.threshold, unit: it.unit, good_when: it.effective?.good_when }) : '';
   return `
     <article class="${cls}" data-snap-card data-sli="${escapeHtml(it.key)}" data-entry="${escapeHtml(it.entry || '')}" data-sli-id="${escapeHtml(it.id)}"${it.custom ? ' data-custom="1"' : ''} aria-label="${escapeHtml(label)}">
       <header class="build-rolo-head">
@@ -92,6 +95,7 @@ function rolodexCardHtml(it, model) {
       <div class="build-rolo-objective">
         <b>${escapeHtml(it.objectiveLabel)}</b><span>over ${escapeHtml(it.window || '—')} · ${it.custom ? 'your objective' : it.customised.includes('objective') || it.customised.includes('window') ? 'customised' : it.aboveTier ? `the ${escapeHtml(it.profileTier)} profile` : `at ${escapeHtml(model.tier || '')}`}</span>
       </div>
+      ${bound ? `<div class="build-rolo-bound" title="the bound, and the side of it that is good (≤ a ceiling, ≥ a floor)">${escapeHtml(bound)}</div>` : ''}
       ${it.tiers.length ? `<div class="build-rolo-tiers" aria-label="the library's objective per tier">
         ${it.tiers.map(t => `<span class="${t.current ? 'is-current' : 'is-muted'}${t.reachable ? '' : ' is-unreachable'}" title="${escapeHtml(`${t.tier}: ${t.objectiveLabel} over ${t.window || '—'}${t.reachable ? '' : ' — below this SLI’s own tier (a default from ' + it.profileTier + ' up)'}`)}">${escapeHtml(t.tier)} <b>${escapeHtml(t.objectiveLabel)}</b> ${t.window ? escapeHtml(t.window) : ''}</span>`).join('')}
       </div>` : ''}

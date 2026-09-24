@@ -3,9 +3,9 @@
  * tools/validate-pack.mjs
  *
  * Validate ObservabilityPack manifests against the vendored canonical
- * spec v1.2 schema. Thin CLI wrapper over tools/lib/validator.mjs.
+ * spec schema (SPEC_VERSION). Thin CLI wrapper over tools/lib/validator.mjs.
  *
- * Studio v0.3 supports the canonical v1.2 manifest shape only:
+ * The studio supports the canonical manifest shape only:
  *   apiVersion: observability.platform/v1
  *   kind: ObservabilityPack
  *

@@ -29,6 +29,7 @@
 // contractBlock). A text note (an undeclared or unrenderable view) is always w24 on a row of its own.
 
 import { metricPrefix } from '../burn-rules.mjs';
+import { goodWhen, boundText } from '../good-when.mjs';
 
 export const DS = { type: 'prometheus', uid: 'prom' };
 export const LOKI = { type: 'loki', uid: 'loki' };
@@ -375,11 +376,32 @@ export function sliExpr(pack, sli) {
 }
 const UNIT = { seconds: 's', ratio: 'percentunit', percent: 'percent', bytes: 'bytes', messages: 'none', events_per_hour: 'none' };
 /**
+ * The colour steps of a threshold SLI's tile, oriented by its direction (spec 1.3 good_when, read
+ * through goodWhen: absent means below): a ceiling colours okAbove — higher is worse — amber at the
+ * bound and red at twice it; a floor (good_when: above) colours okBelow — lower is worse — amber
+ * under the bound and red under half of it (the same distance, mirrored; `t - |t| / 2` keeps the
+ * steps ascending for a negative bound too). The dashed line sits at the bound either way.
+ *
+ * A bound of 0 has no amber band (twice 0 and half of 0 are 0): the two steps would coincide and
+ * Grafana, which paints the last step whose value is <= the sample, would paint the good 0 of a
+ * ceiling red. So a ceiling at 0 is green up to and including 0 and red from the smallest value
+ * above it (Number.MIN_VALUE — 5e-324 in the board JSON — is "strictly above 0" for a double),
+ * and a floor at 0 is red under 0 and green from 0: the bound itself stays good, as the burn
+ * rules count it.
+ */
+export function thresholdSteps(sli) {
+  const t = Number(sli.threshold);
+  if (goodWhen(sli) === 'above') return t === 0 ? [{ color: C.red, value: null }, { color: C.green, value: 0 }] : okBelow(t, t - Math.abs(t) / 2);
+  return t === 0 ? [{ color: C.green, value: null }, { color: C.red, value: Number.MIN_VALUE }] : okAbove(t, t * 2);
+}
+/**
  * One stat tile per SLI, derived from the pack: ratio SLIs colour against the objective of the
  * first SLO on them (amber under it, red ten budgets below); threshold SLIs colour against the
- * threshold (amber at it, red at twice it). A pack module can replace these with hand-written tiles.
- * `widths` gives each tile its own width (splitWidths(n) fills the row exactly); `w` is one width
- * for all of them; `h` the tiles' height (8 when a tile shares a row with the burn panels).
+ * threshold in the direction of the SLI (thresholdSteps) and their description names the bound
+ * with its direction (`good when ≤ 0.5 seconds`, `≥ 2 consumers`). A pack module can replace these
+ * with hand-written tiles. `widths` gives each tile its own width (splitWidths(n) fills the row
+ * exactly); `w` is one width for all of them; `h` the tiles' height (8 when a tile shares a row
+ * with the burn panels).
  */
 export function derivedSliTiles(pack, sliIds, { w = 3, h = 4, widths } = {}) {
   const slis = (pack.spec.slis || []).filter(s => !sliIds || sliIds.includes(s.id));
@@ -391,16 +413,17 @@ export function derivedSliTiles(pack, sliIds, { w = 3, h = 4, widths } = {}) {
       const obj = Number(slo?.objective ?? 0.99), budget = 1 - obj;
       return stat(humanize(sli.id).replace(/ ratio$/i, ''), sliExpr(pack, sli), { binds: `slis.${sli.id}`, desc, unit: 'percentunit', decimals: 2, thresholds: okBelow(obj, Math.max(0, obj - 10 * budget)), w: tw, h });
     }
-    const t = Number(sli.threshold);
     const unit = UNIT[sli.unit] ?? 'none';
-    return stat(humanize(sli.id), sliExpr(pack, sli), { binds: `slis.${sli.id}`, desc, unit, decimals: unit === 's' ? 2 : unit === 'percentunit' ? 1 : 0, thresholds: okAbove(t, t * 2), w: tw, h });
+    const bound = boundText(sli);
+    return stat(humanize(sli.id), sliExpr(pack, sli), { binds: `slis.${sli.id}`, desc: `${desc}${bound ? ` Good when ${bound}.` : ''}`, unit, decimals: unit === 's' ? 2 : unit === 'percentunit' ? 1 : 0, thresholds: thresholdSteps(sli), w: tw, h });
   });
 }
 /**
  * The SLI over time with its line to hold — the objective of the first SLO on a ratio SLI, the
- * threshold of a threshold SLI — dashed across it. It completes the row of a lone tile: a single
- * SLI stretched to w24 was a banner-wide number with a sparkline, so the tile sits w6 h8 beside
- * this graph instead.
+ * threshold of a threshold SLI (at the bound whichever way the SLI faces; the description says
+ * which side is good) — dashed across it. It completes the row of a lone tile: a single SLI
+ * stretched to w24 was a banner-wide number with a sparkline, so the tile sits w6 h8 beside this
+ * graph instead.
  */
 export function derivedSliTrend(pack, sli, { w = 18, h = 8 } = {}) {
   const slo = (pack.spec.slos || []).find(s => s.sli === sli.id);
@@ -409,7 +432,7 @@ export function derivedSliTrend(pack, sli, { w = 18, h = 8 } = {}) {
   const line = ratio ? (slo ? Number(slo.objective) : NaN) : Number(sli.threshold);
   const title = ratio ? humanize(sli.id).replace(/ ratio$/i, '') : humanize(sli.id);
   return ts(`${title} · over time`, [{ expr: sliExpr(pack, sli), legend: sli.id }], {
-    binds: `slis.${sli.id}`, desc: `${strip(sli.description || '')}${Number.isFinite(line) ? ` The dashed line is the ${ratio ? `objective ${pct(line)}` : `threshold ${line}`}.` : ''}`.trim(),
+    binds: `slis.${sli.id}`, desc: `${strip(sli.description || '')}${Number.isFinite(line) ? ` The dashed line is the ${ratio ? `objective ${pct(line)}` : `threshold — good when ${boundText(sli)}`}.` : ''}`.trim(),
     unit, decimals: unit === 's' ? 2 : unit === 'percentunit' ? 2 : 0, legend: 'hidden', w, h,
     lines: Number.isFinite(line) ? [{ value: line, color: C.amber }] : undefined,
   });

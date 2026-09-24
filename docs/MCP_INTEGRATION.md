@@ -10,7 +10,7 @@ The read path powers Diagnose. The write path powers Remediate.
 ## Read Path: Live Pack Generation
 
 `tools/fetch-live-pack.mjs` interrogates an MCP endpoint and emits a canonical
-ObservabilityPack v1.2 manifest. By default it writes the ignored local file:
+ObservabilityPack v1.3 manifest. By default it writes the ignored local file:
 
 ```text
 examples/production-live.pack.yaml

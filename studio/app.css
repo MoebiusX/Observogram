@@ -1381,6 +1381,12 @@ a:hover { color: var(--ink); }
   word-break: break-word;
   margin: 0 0 4px;
 }
+/* An SLI's bound with its direction (≤ a ceiling, ≥ a floor), under the title. */
+.card-sub {
+  font-family: var(--mono); font-size: 11px; line-height: 1.4;
+  color: var(--ink-2);
+  margin: -2px 0 4px;
+}
 .card-desc {
   font-size: 12px; color: var(--ink-3); line-height: 1.4;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
@@ -8822,6 +8828,8 @@ body.chrome-observa .disco {
 .build-rolo-objective { display: flex; flex-direction: column; gap: 2px; padding-top: 6px; }
 .build-rolo-objective b { font: 500 34px/1 var(--serif); letter-spacing: -0.02em; color: var(--ink); }
 .build-rolo-objective span { font: 11px/1.4 var(--mono); color: var(--ink-3); }
+/* A threshold SLI's bound with the side of it that is good (≤ a ceiling, ≥ a floor). */
+.build-rolo-bound { font: 600 11px/1.4 var(--mono); color: var(--ink-2); padding-top: 4px; }
 .build-rolo-tiers { display: flex; flex-wrap: wrap; gap: 4px 12px; font: 11px/1.4 var(--mono); color: var(--ink-3); }
 .build-rolo-tiers span b { font-weight: 600; color: inherit; }
 .build-rolo-tiers .is-current { color: var(--ink-2); }
@@ -8972,6 +8980,30 @@ select.build-edit-input { appearance: auto; }
 .build-editor-cell { min-width: 0; }
 .build-editor-cell.is-wide { grid-column: 1 / -1; }
 .build-editor textarea.build-edit-input { resize: none; overflow-y: hidden; min-height: 54px; }
+/* The direction of a threshold SLI's bound (spec 1.3 good_when): a two-segment control beside the Bound input — the
+   tier control's idiom (a radiogroup, a sliding thumb, arrow keys) — below · above; an overridden one wears the accent ring. */
+/* Two equal tracks, both able to shrink: an `auto` track sized the direction column to its hint's max-content width and
+   squeezed the Bound input to a sliver whose hint wrapped word by word (measured on the first 1920 px frame). */
+.build-editor-cell.is-threshold.has-direction { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 12px; align-items: start; }
+.build-edit-direction { min-width: 0; }
+.build-edit-dir { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 3px; background: var(--line-2); border-radius: 10px; isolation: isolate; min-width: 136px; }
+.build-edit-direction.is-overridden .build-edit-dir { box-shadow: inset 0 0 0 1px var(--accent); }
+.build-edit-dir-thumb {
+  position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / 2); z-index: 0;
+  border-radius: 8px; background: var(--card);
+  box-shadow: 0 1px 2px rgba(15, 27, 45, 0.10), 0 3px 8px -3px rgba(15, 27, 45, 0.18);
+  transform: translateX(calc(var(--dir-index, 0) * 100%));
+  transition: transform 200ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+[data-theme="dark"] .build-edit-dir-thumb { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 3px 8px -3px rgba(0, 0, 0, 0.5); }
+.build-edit-dir-btn {
+  position: relative; z-index: 1; appearance: none; border: 0; background: none; cursor: pointer;
+  padding: 8px 12px; border-radius: 8px; color: var(--ink-3); font: 600 11px/1 var(--mono); letter-spacing: 0.02em;
+  transition: color 200ms ease-out;
+}
+.build-edit-dir-btn:hover { color: var(--ink-2); }
+.build-edit-dir-btn[aria-checked="true"] { color: var(--ink); }
+.build-edit-dir-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .build-editor-params { margin: 0; font: 11px/1.45 var(--mono); color: var(--ink-3); word-break: break-word; }
 .build-editor-evidence { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding-top: 10px; border-top: 1px solid var(--line-2); }
 .build-editor-provenance { font: italic 11px/1.45 var(--serif); color: var(--ink-3); }
@@ -8999,10 +9031,11 @@ select.build-edit-input { appearance: auto; }
   .build-sheet-head, .build-sheet-body { padding-left: 20px; padding-right: 20px; }
   .build-editor { left: 12px; right: 12px; width: auto; transform: translate(0, -50%); max-height: calc(100dvh - 24px); }
   .build-editor-grid { grid-template-columns: 1fr; }
+  .build-editor-cell.is-threshold.has-direction { grid-template-columns: 1fr; }
   .build-editor-head, .build-editor-body, .build-editor-foot { padding-left: 18px; padding-right: 18px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .build-sheet.is-entering, .build-sheet-scrim.is-entering, .build-editor, .build-editor-scrim { animation: none; }
-  .build-seg-thumb, .build-switch, .build-switch-knob, .build-rolo-card, .build-chip, .build-slab-add, .build-def-field input, .build-summary, .build-sheet-close, .build-rolodex-nav, .build-seg-btn, .build-seed-change, .build-rolo-edit, .build-rolo-create, .build-edit-reset, .build-editor-close, .build-slab .card.is-editable, .build-seed-chip.is-entry { transition: none; }
+  .build-seg-thumb, .build-switch, .build-switch-knob, .build-rolo-card, .build-chip, .build-slab-add, .build-def-field input, .build-summary, .build-sheet-close, .build-rolodex-nav, .build-seg-btn, .build-seed-change, .build-rolo-edit, .build-rolo-create, .build-edit-reset, .build-editor-close, .build-slab .card.is-editable, .build-seed-chip.is-entry, .build-edit-dir-thumb, .build-edit-dir-btn { transition: none; }
   .build-rolodex-track { scroll-behavior: auto; }
 }

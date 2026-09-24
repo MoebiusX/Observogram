@@ -2,11 +2,11 @@
 
 | | |
 |---|---|
-| Spec version | 1.2 |
+| Spec version | 1.3 |
 | Status | Draft for review |
 | Author | Carlos Montero  |
 | First publication | 2026-05-08 |
-| Last updated | 2026-06-05 |
+| Last updated | 2026-09-23 |
 | Default binding | `otel-elastic-prometheus-grafana` |
 | Audience | Service owners, SREs, platform engineers, security & compliance, leadership |
 
@@ -36,9 +36,9 @@ This document defines the contract for an ObservabilityPack: its conceptual mode
 
 ### 1.3 Versioning
 
-This document — the standard itself — carries an explicit **spec version** (see the header table; currently **1.2**), a two-part `major.minor` number: the minor part moves for backward-compatible additions and clarifications, the major part for breaking changes to the contract. The lineage: **1.0** was the generic observability standard; **1.1** added the OpenTelemetry instrumentation contract as a separate concern; **1.2** consolidates the two into this single unified document. Because the consolidation preserves the manifest contract (`apiVersion` stays `observability.platform/v1` and existing packs still validate), it is a backward-compatible minor bump rather than a breaking `2.0`. Beyond the spec version, five independent versioning axes appear inside the contract and should not be confused with one another:
+This document — the standard itself — carries an explicit **spec version** (see the header table; currently **1.3**), a two-part `major.minor` number: the minor part moves for backward-compatible additions and clarifications, the major part for breaking changes to the contract. The lineage: **1.0** was the generic observability standard; **1.1** added the OpenTelemetry instrumentation contract as a separate concern; **1.2** consolidates the two into this single unified document; **1.3** gives `threshold` and `distribution` SLIs a direction (`good_when`, §5.1), an additive minor. Because the consolidation and the addition both preserve the manifest contract (`apiVersion` stays `observability.platform/v1`, existing packs still validate and keep their meaning), each is a backward-compatible minor bump rather than a breaking `2.0`. Beyond the spec version, five independent versioning axes appear inside the contract and should not be confused with one another:
 
-- **Spec version** (`1.2`) — the version of this prose standard, in the header table. Owned by the platform engineering team. `major.minor`; bumped whenever this document changes.
+- **Spec version** (`1.3`) — the version of this prose standard, in the header table. Owned by the platform engineering team. `major.minor`; bumped whenever this document changes.
 - **`apiVersion: observability.platform/v1`** — the stable API surface for pack manifests, in the Kubernetes-style sense. A breaking change to the manifest shape would bump this to `v2`. Tracks the spec's major version but is not identical to it: an editorial spec patch does not move `apiVersion`.
 - **`metadata.version`** on each pack — SemVer per pack instance, owned by the service team. Bumped on every pack change. Unrelated to the spec.
 - **Binding name** (currently `otel-elastic-prometheus-grafana`) — the realisation contract for a specific stack. Future bindings live as separate documents under `bindings/` and do not bump the `apiVersion`.
@@ -131,12 +131,32 @@ Defines the explicit reliability contract. The source of truth from which every 
 
 SLI types: `ratio`, `threshold`, `distribution`, `custom`. Each SLI MUST declare an id, a type, and the underlying query. An optional `semconv_metric` field names the canonical OTel SemConv metric.
 
+A `threshold` or `distribution` SLI declares its bound in `threshold`, in the SLI's `unit` (for a `distribution` the bound applies to the value at `percentile`), and says which side of the bound is good in `good_when`. `below` — the default, and the only meaning a 1.2 pack could express — means a sample is good when it is at or below the bound: latency, lag, error rate, queue age. `above` means the bound is a floor and a sample is good when it is at or above it: in-sync replicas, free capacity, connected consumers, throughput. The bound itself is good in both directions. Every downstream artefact that compares samples with the bound (recording and alerting rules, dashboard threshold colouring) derives its comparison from `good_when`, so a floor no longer has to be encoded as a ratio SLI or as an inverted "headroom" quantity. A ceiling and a floor:
+
+```yaml
+slis:
+  - id: api_latency_p99                 # a ceiling; good_when: below is the default and may be omitted
+    type: threshold
+    query: histogram_quantile(0.99, sum by (le)(rate(http_server_request_duration_seconds_bucket{service_name="payment-service"}[5m])))
+    threshold: 0.5
+    unit: seconds
+
+  - id: settlement_in_sync_replicas     # a floor; fewer than two in-sync replicas is bad
+    type: threshold
+    good_when: above
+    semconv_metric: kafka.partition.replicas_in_sync   # OTel Collector kafkametrics receiver
+    query: min(kafka_partition_replicas_in_sync{topic="settlements"})
+    threshold: 2
+    unit: replicas
+```
+
 Each SLO MUST declare id, sli reference, objective (fraction), window (`7d`, `28d`, `30d`, or `90d`), and `error_budget_policy`.
 
 **Conformance:**
 - MUST: every tier-1 service declares at least one availability and one latency SLO.
 - MUST: every SLO's window is one of the four enumerated values; other windows require platform exception.
 - MUST: every SLI is covered by at least one SLO.
+- MUST: a `good_when` other than `below` or `above` is invalid, and `good_when` is only valid on `threshold` and `distribution` SLIs; absent means `below`.
 - SHOULD: SLO objectives are reviewed against historical data at least quarterly.
 
 ### 5.2 Pipelines: OTel-native collection (L2)

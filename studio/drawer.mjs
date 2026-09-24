@@ -11,6 +11,7 @@ import { L4_SUBGROUPS } from './constants.mjs';
 import { escapeHtml, toast } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { cardKey } from './layers-view.mjs';
+import { boundText, goodWhen, hasDirection } from './sli-direction.mjs';
 
 // ---------- drawer ----------
 
@@ -279,7 +280,9 @@ function panelSLI(s) {
     ['type', s.type],
     ['semconv metric', s.semconv_metric],
     ['unit', s.unit],
-    ['threshold', s.threshold],
+    // The bound with the side that is good (spec 1.3 good_when; absent means below): '≤ 0.5 seconds', '≥ 2 consumers'.
+    ['bound', hasDirection(s.type) ? boundText(s) : s.threshold],
+    ['good when', hasDirection(s.type) && s.threshold != null ? goodWhen(s) : null],
     ['percentile', s.percentile],
     ['owner', s.owner],
   ]));
