@@ -751,6 +751,18 @@ test('CLI: OIDC logins against the recorded issuer, from a shell with another is
   await inspectWs(ws, (v) => assert.ok(v.roles('carlos').includes('acme:operator')));
 });
 
+test('CLI: the first local user on an OIDC store with no users file is told only that OIDC shuts it out', async () => {
+  const ws = workspace();
+  orgsFile(ws, { acme: { members: { 'user-42': 'operator' } }, beta: { members: { 'user-43': 'viewer' } } });
+  assert.ok(boot(ws, { env: OIDC_ENV }).listening);
+  await inspectWs(ws, (v) => { assert.equal(v.meta('oidc_issuer'), KEY); assert.equal(v.meta('identity_armed'), null); });
+  const c = cli(USER_ADMIN, ['add', 'alice', '--org', 'acme', '--password-stdin'], ws, { input: 'alice-passw0rd\n' });
+  assert.equal(c.status, 0, c.stderr);
+  assert.ok(c.stdout.includes('local users cannot sign in while OIDC is configured'), c.stdout);
+  // Under OIDC anonymous reads already answered 401 and /auth/login is not a local sign-in.
+  assert.ok(!c.stdout.includes('anonymous reads now answer 401') && !c.stdout.includes('stand-alone sign-in is armed'), c.stdout);
+});
+
 // ====================== Arming (the CLI half) ======================
 
 test('arming: removing every removable user never reopens a 0.0.0.0 server; the removed users\' cookies stop working', async () => {

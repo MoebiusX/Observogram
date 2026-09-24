@@ -111,12 +111,15 @@ async function main() {
       const org = r.joined[0]?.orgId;
       console.log(`${r.user.login} is the first local user: owner, and admin of org ${org}${role !== undefined ? ' (--role ignored)' : ''}`);
     }
-    if (r.armed) {
+    // Under OIDC anonymous reads already answer 401 and local users cannot
+    // sign in: arming changes nothing a user of this posture would see.
+    const oidc = shellIssuerRaw() || getMeta(db, 'oidc_issuer');
+    if (r.armed && !oidc) {
       console.log('stand-alone sign-in is armed; sign in at /auth/login (no restart needed)');
       // The server already ran without identity: its anonymous reads were open.
       if (getMeta(db, 'import_done')) console.log('note: anonymous reads now answer 401 (identity is armed and stays armed)');
     }
-    if (shellIssuerRaw() || getMeta(db, 'oidc_issuer')) console.log('note: local users cannot sign in while OIDC is configured');
+    if (oidc) console.log('note: local users cannot sign in while OIDC is configured');
     noteShellInit(db);
     return;
   }
