@@ -19,7 +19,7 @@ is the condensed, agent-facing version — when in doubt, those docs win.
 
 - `npm run lint` (0 errors) and `npm test` (the full aggregate) must be green
   before every commit and push. There is NO build step: this is plain ESM
-  `.mjs` (Node 18+), not TypeScript — do not add transpilers or a build.
+  `.mjs` (Node 22.16+, the `engines` floor), not TypeScript — do not add transpilers or a build.
 - Changes visible in the studio UI must be browser-verified (boot the server,
   render the affected view, check the console) before the work is called done.
 - Conventional commit messages (`feat(server): …`, `fix(studio): …`,

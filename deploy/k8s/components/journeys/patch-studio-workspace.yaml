@@ -2,10 +2,15 @@
 # /workspace and point OBSERVOGRAM_WORKSPACE at it. This is the other half of
 # the prerequisite — the CronJob (cronjob-journeys.yaml) writes to exactly this
 # path, so the Journeys view shows its runs. Without this patch the studio
-# would keep its in-container workspace (ephemeral, and /app/.observogram is
-# not even creatable by uid 1000) and never see a scheduled run. It also adds
-# fsGroup 1000 to the pod: a new volume is root-owned until the kubelet
-# applies the group.
+# would keep its workspace on the base's store volume (/data/workspace), which
+# the CronJob cannot mount, and never see a scheduled run.
+#
+# It never touches OBSERVOGRAM_DB, the strategy or the `store` volume: the
+# database stays at /data/db on the base's ReadWriteOnce store claim, and the
+# base's `strategy: Recreate` stands. Volumes merge by name, so this one is
+# `workspace` and the base's is `store` — never the same name. The base's
+# /data/workspace mount stays too; it is where the overlay switch copies from
+# (deploy/k8s/README.md).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,8 +20,11 @@ spec:
     spec:
       # Merged into the base pod securityContext (runAsNonRoot/runAsUser/
       # runAsGroup stay): a freshly provisioned PVC is root:root 0755, so
-      # without fsGroup uid 1000 cannot write runs/ — same values as the
-      # CronJob (cronjob-journeys.yaml).
+      # without fsGroup uid 1000 cannot write runs/. The base already sets
+      # the same values for its store volume; they are repeated here so the
+      # component does not depend on it, and
+      # tools/test-deploy-manifests.mjs pins them equal to the base's and
+      # the CronJob's (cronjob-journeys.yaml).
       securityContext:
         fsGroup: 1000
         fsGroupChangePolicy: OnRootMismatch

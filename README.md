@@ -228,6 +228,13 @@ changes.
 
 ## Quickstart
 
+Requires **Node 22.16 or later** (`engines` in `package.json`). The studio
+is moving users, orgs, services and environments into an embedded store on
+Node's built-in `node:sqlite`, which is unflagged from 22.13; 22.16 is the
+floor because it fixes a `StatementSync` use-after-free and the `run()`
+statement reset that a store hits. CI runs the suites on 22.16.0 and on the
+latest 22. See [docs/STORE_PLAN.md](docs/STORE_PLAN.md).
+
 ```bash
 git clone https://github.com/MoebiusX/Observogram.git
 cd Observogram
@@ -310,11 +317,14 @@ is `/app/.observogram` (owned by the `node` user the container runs as);
 mount a volume there, or point `OBSERVOGRAM_WORKSPACE` at one, to keep users
 and packs across containers.
 
-Kubernetes manifests (Deployment + Service + Ingress, applied with Kustomize)
-live in [`deploy/k8s/`](deploy/k8s/README.md):
+Kubernetes manifests (Deployment + Service + Ingress + the `store` PVC,
+applied with Kustomize) live in [`deploy/k8s/`](deploy/k8s/README.md). The
+studio keeps its workspace and its database on that ReadWriteOnce volume
+and rolls out with `strategy: Recreate`, so `kubectl apply -k deploy/k8s`
+needs a default StorageClass (or a `storageClassName`):
 
 ```bash
-kubectl apply -k deploy/k8s            # the studio
+kubectl apply -k deploy/k8s            # the studio and its store volume
 kubectl apply -k deploy/k8s-journeys   # + the opt-in journeys CronJob and its workspace PVC (deploy/k8s/README.md)
 ```
 
@@ -683,6 +693,64 @@ zero-dependency inline SVG (`tools/lib/svg-charts.mjs`); the numbers come
 from one pure model (`tools/lib/neuron-model.mjs`), so what the page says can
 be tested without a browser. The view needs no pack loaded.
 
+### Back Up And Restore The Store
+
+The embedded store (`observogram.db` in the workspace, or wherever
+`OBSERVOGRAM_DB` points; [docs/STORE_PLAN.md](docs/STORE_PLAN.md) §3) runs
+in WAL mode. **A file-by-file copy (`cp -r`, rsync, tar) taken while any
+process has it open is not a backup**, even with `-wal` and `-shm`
+included: a checkpoint between two file copies tears it. Safe options:
+
+1. a copy with nothing holding the database — the server stopped, and no
+   `npm run users`, `npm run orgs` or `packc store` running;
+2. an atomic volume snapshot;
+3. with the server running, `packc store backup`:
+
+```bash
+packc store backup /backups/observogram-2026-09-24.db
+# backup written: /backups/observogram-2026-09-24.db
+# store_id: 3f0c… (schema v1, from /app/.observogram/observogram.db)
+```
+
+It runs `VACUUM INTO` outside any transaction into `<path>.tmp` and renames
+that into place: every committed row, as one rollback-journal file, while
+writers stay active. It refuses an existing `<path>`, `:memory:`, and a
+path with no database (it never creates one). The backup, like the
+database itself, is created `0600`: both hold the users' password records.
+
+The other workspace files (packs, snapshots, journeys, runs,
+`deploys.jsonl`, `session-secret`) can be copied live as before. Where the
+database lives outside the workspace, a workspace copy alone holds no
+users, orgs, memberships or audit.
+
+**Restore** with the server stopped:
+
+```bash
+packc store restore /backups/observogram-2026-09-24.db
+# restored … -> /app/.observogram/observogram.db
+# store_id: 3f0c… (schema v1); previous store_id: 3f0c…
+# moved aside: /app/.observogram/observogram.db.pre-restore-20260924T101500123Z
+```
+
+It refuses while anything holds the database (switching it out of WAL
+needs exclusive access, so even an idle server is caught), checks the
+backup is an Observogram store, moves `observogram.db`, `-wal` and `-shm`
+aside together under one timestamp, and copies the backup in with the
+replaced database's mode and owner, never the backup's (a read-only backup
+restores writable; with no previous database it is 0600), switched to
+WAL first, so it goes in like a cleanly stopped store and the check also
+sees whatever opens it before the next start. The in-use check also
+folds a `-wal` left by an unclean stop into the old database and removes
+the `-wal` and `-shm`, so the moved-aside copy keeps the crashed
+server's last writes; a `-wal` or
+`-shm` is moved aside itself (and listed) only when there is no database
+file beside it. Never copy a backup over the `.db` alone: a `-wal` left
+by an unclean stop would be replayed onto it. To move a
+database, move the file with nothing holding it: it carries its
+`store_id`. Set `OBSERVOGRAM_DB` before the first start of a build whose
+server opens the store (today only `packc store` opens it), so that first
+start finds the file where it will stay.
+
 ## API Surface
 
 | Method | Path | Purpose |
@@ -723,6 +791,7 @@ be tested without a browser. The view needs no pack loaded.
 server/
   index.mjs                Express API, upload registry, compile/deploy routes
   library.mjs              Loads library/**/*.library.yaml from disk (the Node side of the BUILD engine)
+  store/                   The embedded store (docs/STORE_PLAN.md): db.mjs (the one node:sqlite door), migrations, repositories, backup/restore — no server callers yet
   test-smoke.mjs           End-to-end route smoke tests
 
 studio/
@@ -742,7 +811,7 @@ studio/
   build-verify-view.mjs  BUILD step 3 — Verify (verdict, the stack with its todos, artefacts, Continue with visible gaps)
 
 tools/
-  cli.mjs                  packc CLI (journey run / list, compile, init, …)
+  cli.mjs                  packc CLI (journey run / list, compile, init, store backup / restore, …)
   crawl-repo.mjs           CLI repo crawler
   fetch-live-pack.mjs      MCP live-pack fetcher
   pack-init.mjs            packc init: build a pack from the library (list / show / instantiate)
@@ -779,6 +848,7 @@ library/                   The pack library packc init builds from (docs/BUILD_J
 
 deploy/k8s/
   kustomization.yaml       Kustomize entry point (see deploy/k8s/README.md)
+  pvc-store.yaml           The studio's RWO store volume: database and workspace (docs/STORE_PLAN.md §3)
 ```
 
 ## Key Docs

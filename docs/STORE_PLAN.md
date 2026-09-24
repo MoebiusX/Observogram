@@ -94,7 +94,13 @@ routine and another ad-hoc loader. The store removes that cost for
   each call, as `server/workspace.mjs` does, so a suite can re-point
   `OBSERVOGRAM_WORKSPACE` between boots. `closeStore()` is exported. The
   server closes the database on `SIGTERM` and `SIGINT`. It has no handler
-  today and runs as PID 1 in the image.
+  today and runs as PID 1 in the image. The kernel drops a re-raised signal
+  there, so after closing, the handler exits 128 + the signal number (143
+  for `SIGTERM`) when the re-raise did not end the process. When the
+  process has its own handler for that signal (checked when the signal
+  arrives, so one registered after the first open counts), that handler
+  owns shutdown: the store stays open while it drains, and a process
+  `exit` hook closes every handle when it ends the process.
 - **Opening a file database**, in order:
   1. Refuse on a network or shared filesystem (`fs.statfsSync`: NFS, CIFS,
      SMB, SMB2, CephFS) and warn on FUSE. WAL needs shared memory between
@@ -112,8 +118,13 @@ routine and another ad-hoc loader. The store removes that cost for
     shared connection, an `await` inside a transaction lets other
     requests' statements run inside it.
   - A guard test fails on a `BEGIN` or an outermost `SAVEPOINT` anywhere
-    outside `db.mjs`. Both are deferred transactions, which fail with
+    outside `db.mjs` (the store's own tests, `server/test-store*.mjs`,
+    are exempt). Both are deferred transactions, which fail with
     `SQLITE_BUSY_SNAPSHOT` at once whatever the timeout.
+  - A repository call joins a `tx()` already open (`atomic()` in
+    `db.mjs`) inside a nested `SAVEPOINT`, so if it throws its write is
+    undone with it even when the caller catches the error and carries on.
+    A write never commits without its audit row.
   - Repositories bind only numbers, strings, `null` and buffers:
     booleans become 0/1, because 22.x throws on a JS boolean and 24 does
     not.
@@ -229,7 +240,11 @@ audit           seq PK AUTOINCREMENT, at, org_id NULL, actor, action, target_kin
   in `schema_meta` and only an owner changes it.
 - **`mcp_endpoints.read_token_env`** is the *name* of an env var, mirroring
   the journeys' `packB.mcp.authEnv`. **No secret is ever stored**: write
-  tokens stay per-request pass-through.
+  tokens stay per-request pass-through, and `mcp_endpoints.url` refuses
+  userinfo (`user:pass@`), any fragment, and any query parameter whose name
+  looks like a credential (`token`, `key`, `secret`, `pass`, `auth`, `sig`,
+  `credential`, case-insensitive substring), without echoing the URL in the
+  error. The SSRF / local-address rule stays where the URL is fetched.
 - **`pack_services`** exists because a pack is not always one service. The
   live aggregate packs carry many.
 - **Tier is criticality, not `minTier`.** `minTier` belongs to library SLIs
@@ -246,13 +261,18 @@ audit           seq PK AUTOINCREMENT, at, org_id NULL, actor, action, target_kin
     tier. The conformance route passes it in, in slice 4. A pack with no
     service row is graded as today.
 - **`audit` is append-only in the schema.**
-  - `BEFORE UPDATE`, `BEFORE DELETE` and `BEFORE INSERT … WHEN EXISTS
-    (SELECT 1 FROM audit WHERE seq = NEW.seq)` triggers all
-    `RAISE(ABORT, 'audit is append-only')`.
-  - The third refuses an existing `seq`, so `REPLACE` / `INSERT OR REPLACE`
-    cannot rewrite a row on **any** connection. Without it, both overwrite
-    rows (verified on 22.22 / SQLite 3.51.2). An auto-assigned `seq` reads
-    as -1 in the trigger, so plain inserts pass.
+  - `BEFORE UPDATE`, `BEFORE DELETE` and `BEFORE INSERT … WHEN NEW.seq
+    <> -1 AND NEW.seq <= (SELECT coalesce(max(seq), 0) FROM audit)`
+    triggers all `RAISE(ABORT, 'audit is append-only')`.
+  - The third refuses any explicit `seq` not above the newest. That covers
+    an existing `seq`, so `REPLACE` / `INSERT OR REPLACE` cannot rewrite a
+    row on **any** connection (without it, both overwrite rows, verified
+    on 22.22 / SQLite 3.51.2), and a backdated `seq` (0, negative, a gap
+    below the newest) cannot pose as older history. An auto-assigned `seq`
+    reads as -1 in the trigger, so plain inserts pass.
+  - `seq` carries `CHECK (seq > 0)`: the trigger cannot tell an explicit
+    -1 from an auto-assigned one, so the CHECK refuses it, and any
+    `seq <= 0` on an empty table.
   - `recursive_triggers=ON` is a second layer only: it is per-connection
     and not stored in the file.
   - These triggers guard against application bugs, not against someone
@@ -334,7 +354,9 @@ Safe options:
 3. With the server running, `packc store backup <path>`. It runs `VACUUM
    INTO ?` outside any transaction into `<path>.tmp` and renames that to
    `<path>`, refusing an existing `<path>`. It captures committed rows
-   while writers are active, as one rollback-journal file.
+   while writers are active, as one rollback-journal file. The backup is
+   `0600`, like the database, which `openStore` creates `0600` (its
+   `-wal` and `-shm` follow): both hold the password records.
 
 The workspace files (packs, snapshots, journeys, runs, `deploys.jsonl`,
 `session-secret`) can be copied live as before. A workspace copy alone is
@@ -345,7 +367,10 @@ memberships or audit. This supersedes PRODUCTIZATION_PLAN Stage 4's
 
 **Restore** is `packc store restore <backup>`, with the server stopped. It
 refuses while the database is in use. It moves `observogram.db`, `-wal` and
-`-shm` aside together, then copies the backup in. Copying a backup over the
+`-shm` aside together, then copies the backup in. The copy takes the
+replaced database's mode (owner read-write always) and, run as root, its
+owner; 0600 when there was none. A read-only backup must not become a
+read-only store the next open cannot switch to WAL. Copying a backup over the
 `.db` alone is never safe: a `-wal` left by an unclean stop is replayed onto
 it.
 
@@ -921,7 +946,7 @@ to end: the boot order and the import (slice 2) are the heavy part.
 | AuthZ matrix | table-driven: every route × {anonymous, viewer, operator, admin, owner, bearer} × {open loopback, open exposed, token-only, identity} → the expected status; an unclassified route or static mount fails the suite; an org admin cannot act on a user or an org outside their own; an owner with no membership reaches owner routes and lands in the default org; public routes answer anonymously in the identity posture; `OBSERVOGRAM_AUTH=off` plus `OBSERVOGRAM_INSECURE_NO_AUTH=1` on 0.0.0.0 gets the open-exposed row; the forced change of the first `admin`/`admin` boot works through the pwflow cookie alone |
 | Revocation | a disabled user's cookie and a changed password's old cookie are refused on the next request, on `/api` **and** on `/auth/me` and the change-password routes; a pwflow cookie from before a change or a disable is refused; a disabled user cannot sign in; pre-upgrade cookies stay valid |
 | Arming | on an exposed, token-less server, removing the last local user through the API and through the CLI leaves the next `/api` request at 401 or 409, never 200 |
-| Audit | UPDATE, DELETE, UPSERT, `REPLACE` and `INSERT OR REPLACE` on `audit` abort and leave the rows unchanged, including on a connection opened without `recursive_triggers`; a plain insert passes; each successful route writes exactly the rows its table entry names, with the row's `login` as the actor; refused routes write none |
+| Audit | UPDATE, DELETE, UPSERT, `REPLACE`, `INSERT OR REPLACE` and a backdated `INSERT` (explicit `seq` 0, -5, -1) on `audit` abort and leave the rows unchanged, including on a connection opened without `recursive_triggers`; a plain insert passes; each successful route writes exactly the rows its table entry names, with the row's `login` as the actor; refused routes write none |
 | Concurrency | on a temp-file database, a child process holds `BEGIN IMMEDIATE` for less than `busy_timeout` while a repository write and a migration run: both succeed. A `tx(fn)` whose `fn` returns a promise throws and rolls back |
 | Local-mode behaviour | `OBSERVOGRAM_AUTH=off` and a fresh first boot (`admin`/`admin`) keep today's externally visible behaviour: HTTP statuses, the login and forced-change flow, the open posture, a flat workspace with one org. Token-only, including `AUTH=off` plus a token, keeps anonymous GET 200 and anonymous mutation 401 with `WWW-Authenticate: Bearer` |
 | Journey engine | `packc journey run` and the Neuron open no database; the CronJob path runs with the database file absent; a default-org CronJob keeps its root across org creation; a schedule snippet generated in a non-default org targets that org's root |

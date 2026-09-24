@@ -50,8 +50,13 @@ spec:
             # already belongs to the group.
             fsGroup: 1000
             fsGroupChangePolicy: OnRootMismatch
-          # With a ReadWriteOnce PVC (pvc-workspace.yaml) the pod must land on
-          # the studio's node, or the volume attach fails — uncomment:
+          # With a ReadWriteOnce workspace PVC (pvc-workspace.yaml) the pod
+          # must land on the studio's node, or the volume attach fails —
+          # uncomment. Drop it only for a ReadWriteMany workspace claim, which
+          # is safe only while the studio's OBSERVOGRAM_DB points at the RWO
+          # store volume (deploy/k8s/pvc-store.yaml). This pod never mounts
+          # that store claim and sets no OBSERVOGRAM_DB: the journey runner
+          # opens no database.
           # affinity:
           #   podAffinity:
           #     requiredDuringSchedulingIgnoredDuringExecution:

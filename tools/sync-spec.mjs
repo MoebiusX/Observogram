@@ -21,7 +21,7 @@
  *   0  success / no drift
  *   1  hard failure or drift detected (with --check)
  *
- * Requires: Node 18+, `gh` CLI authenticated.
+ * Requires: Node 22.16+ (the package floor), `gh` CLI authenticated.
  */
 
 import { spawnSync } from 'node:child_process';

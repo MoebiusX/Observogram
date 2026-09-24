@@ -2,21 +2,25 @@
 /**
  * tools/test-deploy-manifests.mjs
  *
- * Structural test for deploy/k8s (step 5): every YAML under it parses with
- * mini-yaml; the base stays what it was (three resources, no component, the
- * studio container without a workspace mount); the opt-in journeys component
- * wires ONE PVC into BOTH the CronJob and the studio at the SAME
- * OBSERVOGRAM_WORKSPACE; the CronJob carries the non-retry contract; no
- * secret-shaped env var carries a literal value anywhere; and the CLI's
- * per-journey CronJob (schedule-snippets.mjs) agrees with the component on
- * the PVC name and the mount. CI runs no kustomize/kubeconform — this is the
- * gate; `kubectl kustomize deploy/k8s-journeys` (the sibling overlay —
- * kustomize refuses one nested under the base it references) is run by hand.
+ * Structural test for deploy/k8s (step 5; STORE_PLAN §3): every YAML under
+ * it parses with mini-yaml; the base is four resources — the studio
+ * Deployment mounts its own RWO `store` PVC as two subPaths (the database at
+ * /data/db, the workspace at /data/workspace), with fsGroup and
+ * `strategy: Recreate`; the opt-in journeys component wires ONE workspace PVC
+ * into BOTH the CronJob and the studio at the SAME OBSERVOGRAM_WORKSPACE and
+ * never moves OBSERVOGRAM_DB off the store volume (checked on a modelled
+ * strategic-merge render of the overlay); the CronJob carries the non-retry
+ * contract and never mounts the store claim; no secret-shaped env var
+ * carries a literal value anywhere; and the CLI's per-journey CronJob
+ * (schedule-snippets.mjs) agrees with the component on the PVC name and the
+ * mount. CI runs no kustomize/kubeconform — this is the gate; `kubectl
+ * kustomize deploy/k8s-journeys` (the sibling overlay — kustomize refuses one
+ * nested under the base it references) is run by hand.
  * Exit 0 = pass.
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, posix } from 'node:path';
 import { createHarness } from './lib/harness.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { k8sCronJobManifest, K8S_WORKSPACE_PVC, K8S_WORKSPACE_MOUNT } from './lib/schedule-snippets.mjs';
@@ -35,34 +39,106 @@ function walk(dir) {
   return out.sort();
 }
 const files = walk(K8S);
+// mini-yaml keeps the last of two equal keys, so a repeated top-level key
+// parses here yet is invalid YAML that strict tools (yamllint key-duplicates,
+// go-yaml v3) reject. Scan the raw text per document instead.
+function duplicateTopLevelKeys(text) {
+  const dups = [];
+  let seen = new Map();
+  text.split(/\r?\n/).forEach((line, i) => {
+    if (/^---(\s|$)/.test(line)) { seen = new Map(); return; }
+    const m = /^([A-Za-z_][\w.-]*):(\s|$)/.exec(line);
+    if (!m) return;
+    if (seen.has(m[1])) dups.push(`${m[1]} (lines ${seen.get(m[1])} and ${i + 1})`);
+    else seen.set(m[1], i + 1);
+  });
+  return dups;
+}
 const docs = {};
 for (const f of files) {
   const rel = relative(K8S, f).replaceAll('\\', '/');
+  const text = readFileSync(f, 'utf8');
   let parsed = null, err = null;
-  try { parsed = parseYaml(readFileSync(f, 'utf8')); } catch (e) { err = e.message; }
+  try { parsed = parseYaml(text); } catch (e) { err = e.message; }
   assert(parsed && typeof parsed === 'object' && !err, `${rel} parses with mini-yaml`, err);
+  const dups = duplicateTopLevelKeys(text);
+  assert(dups.length === 0, `${rel} has no duplicate top-level keys`, dups);
   docs[rel] = parsed;
 }
-assert(Object.keys(docs).join() === 'components/journeys/cronjob-journeys.yaml,components/journeys/kustomization.yaml,components/journeys/patch-studio-workspace.yaml,components/journeys/pvc-workspace.yaml,deployment-studio.yaml,ingress.yaml,kustomization.yaml,service.yaml',
+assert(Object.keys(docs).join() === 'components/journeys/cronjob-journeys.yaml,components/journeys/kustomization.yaml,components/journeys/patch-studio-workspace.yaml,components/journeys/pvc-workspace.yaml,deployment-studio.yaml,ingress.yaml,kustomization.yaml,pvc-store.yaml,service.yaml',
        'deploy/k8s holds the base and the journeys component — nothing else (the overlay is the sibling deploy/k8s-journeys)', Object.keys(docs));
 // The sibling overlay (kustomize refuses an overlay nested under the base it references).
 const OVERLAY = join(K8S, '..', 'k8s-journeys', 'kustomization.yaml');
 {
   let overlayParsed = null, overlayErr = null;
-  try { overlayParsed = parseYaml(readFileSync(OVERLAY, 'utf8')); } catch (e) { overlayErr = e.message; }
+  const overlayText = readFileSync(OVERLAY, 'utf8');
+  try { overlayParsed = parseYaml(overlayText); } catch (e) { overlayErr = e.message; }
   assert(overlayParsed && !overlayErr, 'deploy/k8s-journeys/kustomization.yaml parses with mini-yaml', overlayErr);
+  const overlayDups = duplicateTopLevelKeys(overlayText);
+  assert(overlayDups.length === 0, 'deploy/k8s-journeys/kustomization.yaml has no duplicate top-level keys', overlayDups);
   docs['../k8s-journeys/kustomization.yaml'] = overlayParsed;
 }
 
-// --- the base is untouched (semantically) ---
+// The store (STORE_PLAN §3): the base's own RWO claim, holding the database
+// and the workspace as two subPaths of the volume named `store`. The name is
+// NOT `workspace`: the journeys patch strategic-merges volumes by name, and a
+// shared name would re-point the database's mount at the workspace claim.
+const STORE_PVC = 'observabilitypack-studio-store';
+const STORE_VOLUME = 'store';
+const STORE_DB = '/data/db/observogram.db';
+const STORE_WORKSPACE = '/data/workspace';
+
+// The mount (and the volume behind it) that holds `path`, or null.
+function mountOf(podSpec, container, path) {
+  const m = (container.volumeMounts || []).filter(v => path === v.mountPath || path.startsWith(v.mountPath.replace(/\/$/, '') + '/'))
+    .sort((a, b) => b.mountPath.length - a.mountPath.length)[0];
+  if (!m) return null;
+  return { mount: m, volume: (podSpec.volumes || []).find(v => v.name === m.name) || null };
+}
+const envMap = c => Object.fromEntries((c.env || []).map(e => [e.name, e]));
+
+// --- the base: four resources, the studio on its own store volume ---
 {
   const base = docs['kustomization.yaml'];
-  assert(base.kind === 'Kustomization' && base.resources.join() === 'deployment-studio.yaml,service.yaml,ingress.yaml' && !('components' in base) && base.namespace === 'observability' && base.images[0].name === 'observogram',
-         'the base kustomization lists its three resources and no component', base);
+  assert(base.kind === 'Kustomization' && base.resources.join() === 'pvc-store.yaml,deployment-studio.yaml,service.yaml,ingress.yaml' && !('components' in base) && base.namespace === 'observability' && base.images[0].name === 'observogram',
+         'the base kustomization lists its four resources (the store PVC first) and no component', base);
+  const store = docs['pvc-store.yaml'] || { metadata: {}, spec: { resources: { requests: {} }, accessModes: [] } };
+  assert(store.kind === 'PersistentVolumeClaim' && store.metadata.name === STORE_PVC && store.metadata.name !== K8S_WORKSPACE_PVC && !store.metadata.namespace && typeof store.spec.resources.requests.storage === 'string',
+         'the store PVC is its own claim (not the journeys workspace claim), namespace-less like every base file, with a storage request', store);
+  assert(store.spec.accessModes.join() === 'ReadWriteOnce', 'the store PVC is ReadWriteOnce — the database is never on an RWX (network) volume', store.spec.accessModes);
+  let storeText = '';
+  try { storeText = readFileSync(join(K8S, 'pvc-store.yaml'), 'utf8'); } catch { /* asserted below */ }
+  assert(/^ {2}# storageClassName: <your class> {3}# omit to use the cluster default$/m.test(storeText) && !('storageClassName' in store.spec),
+         'the store PVC carries the same commented storageClassName stanza as pvc-workspace.yaml (the cluster default applies)');
+  assert(/WaitForFirstConsumer/.test(storeText) && /volumeBindingMode/.test(storeText) && /zone/i.test(storeText),
+         'the store PVC file says how two RWO claims share a zone (WaitForFirstConsumer or a zone-pinned class) and how to check volumeBindingMode');
+
   const dep = docs['deployment-studio.yaml'];
-  const c = dep.spec.template.spec.containers[0];
-  assert(dep.kind === 'Deployment' && dep.metadata.name === 'observabilitypack-studio' && c.name === 'studio' && c.env.map(e => e.name).join() === 'HOST,PORT' && !('volumeMounts' in c) && !('volumes' in dep.spec.template.spec),
-         'the base studio Deployment carries no workspace env, mount or volume (the component adds them)', { env: c.env.map(e => e.name), vm: c.volumeMounts, v: dep.spec.template.spec.volumes });
+  const pod = dep.spec.template.spec;
+  const c = pod.containers[0];
+  assert(dep.kind === 'Deployment' && dep.metadata.name === 'observabilitypack-studio' && c.name === 'studio' && dep.spec.replicas === 1,
+         'the base studio Deployment is one replica of the studio container', { replicas: dep.spec.replicas });
+  assert(c.env.map(e => e.name).join() === 'HOST,PORT,OBSERVOGRAM_DB,OBSERVOGRAM_WORKSPACE',
+         'the base studio env is exactly HOST, PORT, OBSERVOGRAM_DB, OBSERVOGRAM_WORKSPACE', c.env.map(e => e.name));
+  const env = envMap(c);
+  assert(env.OBSERVOGRAM_DB?.value === STORE_DB && env.OBSERVOGRAM_WORKSPACE?.value === STORE_WORKSPACE,
+         `OBSERVOGRAM_DB is ${STORE_DB} and OBSERVOGRAM_WORKSPACE is ${STORE_WORKSPACE}`, { db: env.OBSERVOGRAM_DB, ws: env.OBSERVOGRAM_WORKSPACE });
+  assert(JSON.stringify(c.volumeMounts) === JSON.stringify([
+    { name: STORE_VOLUME, mountPath: '/data/db', subPath: 'db' },
+    { name: STORE_VOLUME, mountPath: STORE_WORKSPACE, subPath: 'workspace' },
+  ]), 'the studio mounts exactly the store volume, twice: subPath db at /data/db, subPath workspace at /data/workspace', c.volumeMounts);
+  assert(JSON.stringify(pod.volumes) === JSON.stringify([{ name: STORE_VOLUME, persistentVolumeClaim: { claimName: STORE_PVC } }]),
+         'the pod has exactly one volume, `store`, on the store PVC', pod.volumes);
+  const dbAt = env.OBSERVOGRAM_DB && mountOf(pod, c, env.OBSERVOGRAM_DB.value);
+  const wsAt = env.OBSERVOGRAM_WORKSPACE && mountOf(pod, c, env.OBSERVOGRAM_WORKSPACE.value);
+  assert(dbAt?.mount.subPath === 'db' && dbAt.volume?.persistentVolumeClaim?.claimName === STORE_PVC && posix.dirname(env.OBSERVOGRAM_DB.value) === dbAt.mount.mountPath,
+         'OBSERVOGRAM_DB resolves inside the store volume\'s db subPath', dbAt);
+  assert(wsAt?.mount.subPath === 'workspace' && wsAt.volume?.persistentVolumeClaim?.claimName === STORE_PVC && !env.OBSERVOGRAM_DB?.value.startsWith(env.OBSERVOGRAM_WORKSPACE?.value + '/'),
+         'OBSERVOGRAM_WORKSPACE resolves to the store volume\'s workspace subPath, and the database is not inside the workspace', wsAt);
+  assert(pod.securityContext.runAsNonRoot === true && pod.securityContext.runAsUser === 1000 && pod.securityContext.runAsGroup === 1000 && pod.securityContext.fsGroup === 1000 && pod.securityContext.fsGroupChangePolicy === 'OnRootMismatch',
+         'the base pod runs as uid/gid 1000 with fsGroup 1000 (OnRootMismatch): a fresh PVC is root:root 0755', pod.securityContext);
+  assert(dep.spec.strategy?.type === 'Recreate' && !('rollingUpdate' in dep.spec.strategy),
+         'the base Deployment uses strategy Recreate — never two studio processes on one database', dep.spec.strategy);
   assert(/opt-in `components\/journeys`/.test(readFileSync(join(K8S, 'deployment-studio.yaml'), 'utf8')), 'the studio Deployment header points at the opt-in component');
 }
 
@@ -115,7 +191,9 @@ const overlay = docs['../k8s-journeys/kustomization.yaml'];
   const patchPodSc = patch.spec.template.spec.securityContext;
   assert(patchPodSc && patchPodSc.fsGroup === 1000 && patchPodSc.fsGroupChangePolicy === 'OnRootMismatch' && Object.keys(patchPodSc).join() === 'fsGroup,fsGroupChangePolicy',
          'the studio patch adds the same fsGroup to the studio pod and nothing else of the securityContext (runAsUser/Group stay the base ones)', patchPodSc);
-  assert(!('fsGroup' in docs['deployment-studio.yaml'].spec.template.spec.securityContext), 'the base studio Deployment is untouched (fsGroup comes from the component patch only)');
+  const baseSc = docs['deployment-studio.yaml'].spec.template.spec.securityContext;
+  assert(baseSc.fsGroup === patchPodSc?.fsGroup && baseSc.fsGroupChangePolicy === patchPodSc?.fsGroupChangePolicy,
+         'the patch\'s fsGroup equals the base\'s (the base now needs it for the store volume)', { base: baseSc, patch: patchPodSc });
   const cronEnv = Object.fromEntries(c.env.map(e => [e.name, e]));
   const patchC = patch.spec.template.spec.containers[0];
   const patchEnv = Object.fromEntries(patchC.env.map(e => [e.name, e]));
@@ -129,6 +207,67 @@ const overlay = docs['../k8s-journeys/kustomization.yaml'];
   assert(/# - name: OBSERVOGRAM_JOURNEY_RUN_RETENTION/.test(cronText) && /# - name: OBSERVOGRAM_MCP_TIMEOUT_MS/.test(cronText) && /secretKeyRef: \{ name: journey-secrets, key: MY_JOURNEY_WEBHOOK_URL \}/.test(cronText) && /orgs\.json/.test(cronText),
          'the CronJob documents the retention / timeout knobs, the secretKeyRef binding for the env names and the tenancy root — all commented');
   assert(/exit 1 \(gate failed\) is the\n# early-warning OUTCOME/.test(cronText) && /kubectl get jobs/.test(cronText), 'the CronJob states why a gate failure is a failed Job, not a retry');
+  // STORE_PLAN §3: an RWX class is typically NFS/CephFS, where the database
+  // refuses to open — RWX is advice only while OBSERVOGRAM_DB is on the store.
+  const pvcText = readFileSync(join(K8S, 'components/journeys/pvc-workspace.yaml'), 'utf8');
+  const prose = t => t.replace(/\n[ \t]*#[ \t]*/g, ' '); // comment lines joined, wraps ignored
+  const rwxOnlyWhileDbOnStore = /ReadWriteMany.*only while.{0,40}OBSERVOGRAM_DB.{0,40}RWO store volume/i;
+  assert(rwxOnlyWhileDbOnStore.test(prose(pvcText)) && /pvc-store\.yaml/.test(pvcText),
+         'pvc-workspace.yaml allows ReadWriteMany only while OBSERVOGRAM_DB points at the RWO store volume');
+  assert(rwxOnlyWhileDbOnStore.test(prose(cronText)) && /^ {10}# affinity:\n {10}# {3}podAffinity:$/m.test(cronText) && !('affinity' in pod),
+         'cronjob-journeys.yaml keeps the podAffinity commented and ties dropping it (RWX) to OBSERVOGRAM_DB on the RWO store volume');
+}
+
+// --- the rendered overlay: the store survives the journeys patch ---
+// CI has no kustomize, so this models the strategic merge `kubectl kustomize
+// deploy/k8s-journeys` applies for the fields the patch uses: maps merge
+// recursively; lists merge on their Kubernetes patchMergeKey (containers, env,
+// volumes by name; volumeMounts by mountPath); any other list is replaced.
+const MERGE_KEYS = { containers: 'name', env: 'name', volumes: 'name', volumeMounts: 'mountPath' };
+function smp(base, patch, key) {
+  if (Array.isArray(patch)) {
+    const k = MERGE_KEYS[key];
+    if (!k || !Array.isArray(base)) return structuredClone(patch);
+    const out = structuredClone(base);
+    for (const p of patch) {
+      const i = out.findIndex(b => b && b[k] === p[k]);
+      if (i < 0) out.push(structuredClone(p)); else out[i] = smp(out[i], p);
+    }
+    return out;
+  }
+  if (patch && typeof patch === 'object') {
+    const out = base && typeof base === 'object' && !Array.isArray(base) ? structuredClone(base) : {};
+    for (const [k, v] of Object.entries(patch)) out[k] = smp(out[k], v, k);
+    return out;
+  }
+  return patch;
+}
+{
+  const rendered = smp(docs['deployment-studio.yaml'], patch);
+  const pod = rendered.spec.template.spec;
+  const c = pod.containers.find(x => x.name === 'studio');
+  const env = envMap(c);
+  const patchC = patch.spec.template.spec.containers[0];
+  assert(!patchC.env.some(e => e.name === 'OBSERVOGRAM_DB') && !('strategy' in patch.spec) && !('replicas' in patch.spec),
+         'the journeys patch never names OBSERVOGRAM_DB, the strategy or the replicas');
+  assert(!patch.spec.template.spec.volumes.some(v => v.name === STORE_VOLUME) && !patchC.volumeMounts.some(m => m.name === STORE_VOLUME),
+         'the journeys patch never names the store volume (volumes merge by name)', patch.spec.template.spec.volumes);
+  assert(env.OBSERVOGRAM_WORKSPACE?.value === K8S_WORKSPACE_MOUNT && env.OBSERVOGRAM_DB?.value === STORE_DB,
+         `rendered overlay: OBSERVOGRAM_WORKSPACE moves to ${K8S_WORKSPACE_MOUNT}, OBSERVOGRAM_DB stays ${STORE_DB}`, { ws: env.OBSERVOGRAM_WORKSPACE, db: env.OBSERVOGRAM_DB });
+  const dbAt = env.OBSERVOGRAM_DB && mountOf(pod, c, env.OBSERVOGRAM_DB.value);
+  const wsAt = env.OBSERVOGRAM_WORKSPACE && mountOf(pod, c, env.OBSERVOGRAM_WORKSPACE.value);
+  assert(dbAt?.volume?.name === STORE_VOLUME && dbAt.mount.subPath === 'db' && dbAt.volume.persistentVolumeClaim?.claimName === STORE_PVC && docs['pvc-store.yaml']?.spec.accessModes.join() === 'ReadWriteOnce',
+         'rendered overlay: OBSERVOGRAM_DB still resolves inside the RWO store volume — never onto the (possibly RWX) workspace claim', dbAt);
+  assert(wsAt?.volume?.persistentVolumeClaim?.claimName === K8S_WORKSPACE_PVC,
+         'rendered overlay: OBSERVOGRAM_WORKSPACE resolves onto the journeys workspace claim', wsAt);
+  assert(rendered.spec.strategy?.type === 'Recreate' && rendered.spec.replicas === 1,
+         'rendered overlay: still strategy Recreate and one replica', { strategy: rendered.spec.strategy, replicas: rendered.spec.replicas });
+  assert(pod.securityContext.fsGroup === 1000 && pod.securityContext.fsGroupChangePolicy === 'OnRootMismatch' && pod.securityContext.runAsUser === 1000,
+         'rendered overlay: the pod keeps runAsUser 1000 and fsGroup 1000 (OnRootMismatch)', pod.securityContext);
+  const cronPod = cron.spec.jobTemplate.spec.template.spec;
+  const cronC = cronPod.containers[0];
+  assert(!cronPod.volumes.some(v => v.name === STORE_VOLUME || v.persistentVolumeClaim?.claimName === STORE_PVC) && !('OBSERVOGRAM_DB' in envMap(cronC)),
+         'the journeys CronJob never mounts the store claim and sets no OBSERVOGRAM_DB (the journey runner opens no database)', cronPod.volumes);
 }
 
 // --- secrets discipline across every manifest: no literal value on a secret-shaped env var ---
@@ -157,6 +296,8 @@ for (const [rel, doc] of Object.entries(docs)) {
   assert(one.spec.jobTemplate.spec.template.spec.securityContext.fsGroup === compPodSc.fsGroup && one.spec.jobTemplate.spec.template.spec.securityContext.fsGroupChangePolicy === compPodSc.fsGroupChangePolicy,
          'and the same fsGroup as the component CronJob');
   assert(envs(one).filter(e => /(TOKEN|URL)$/.test(e.name) && 'value' in e).length === 0, 'and binds env names by secretKeyRef only');
+  assert(!one.spec.jobTemplate.spec.template.spec.volumes.some(v => v.persistentVolumeClaim?.claimName === STORE_PVC) && !c1.env.some(e => e.name === 'OBSERVOGRAM_DB'),
+         'and never mounts the store claim nor sets OBSERVOGRAM_DB');
 }
 
 report('deploy-manifests', 'all deploy-manifest assertions pass.');

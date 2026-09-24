@@ -22,11 +22,13 @@ next to Discover · Diagnose · Remediate. In order:
 | #105 | The **pop-up SLI editor**: one modal over an SLI and its SLO (id, description, metric, objective, window, bound, unit, resolved PromQL), opened from any L1 card on the stack or in the rolodex, live-applied on Define and Compile; `id` and `semconv_metric` overrides in the engine. |
 | #106 | **Spec 1.3** adopted: `good_when: below \| above` on threshold SLIs, vendored under `vendor/observability-pack-spec/v1.3/`, `SPEC_VERSION = '1.3'`, the burn-rate generator, the boards, the cards and the editor's Bound row know the direction. |
 
-`npm test`: 293 passing on CI's Node 20 (on Node 22.22, `tools/test-journey.mjs` fails
-under `node --test` — a pipe truncation in `packc journey run --all --json`, fixed first
-in [STORE_PLAN.md](STORE_PLAN.md) slice 1). `npm run lint`: 0 errors, 186 warnings (a baseline of
-`preserve-caught-error`-style warnings; do not add to it). CI on a PR: `validate`,
-`backend-live`, `refresh` (the vendored-spec check).
+`npm test` passes on Node 22.16+ (the `package.json` `engines` floor, for `node:sqlite`;
+the Node 22.22 pipe truncation in `packc journey run --all --json` that failed
+`tools/test-journey.mjs` was fixed in [STORE_PLAN.md](STORE_PLAN.md) slice 1). `npm run lint`:
+0 errors, 186 warnings (a baseline of `preserve-caught-error`-style warnings; do not add to
+it). CI on a PR: `validate` (includes the vendored-spec check) and `backend-live` on the
+latest 22, `node-floor` (`npm test` on exactly 22.16.0). `refresh-live-pack` runs only on
+demand or when the fetcher changes.
 
 ### otel-observability-pack (the spec) — `develop` at the merge of PR #8
 
@@ -85,7 +87,7 @@ These are the rules we learned the hard way; treat them as standing instructions
 ## 3. Running and checking things
 
 ```bash
-npm test                 # node:test suites (293 on Node 20; on 22.22 see §1), the studio graph, the AA scan
+npm test                 # node:test suites (Node 22.16+), the studio graph, the AA scan
 npm run lint             # eslint: 0 errors is the bar, 186 warnings the baseline
 node tools/sync-spec.mjs --check   # vendored spec files match VERSIONS.json
 PORT=8013 OBSERVOGRAM_AUTH=off OBSERVOGRAM_WORKSPACE=/tmp/ws node server/index.mjs
@@ -116,7 +118,7 @@ records at all — a service is a pack registration plus the landing's service p
 environment is a pack binding or a gen-site partition. The shape to build, keeping the
 repo's zero-new-dependency rule: an embedded SQL store on Node's built-in `node:sqlite`
 (`DatabaseSync`; present in the Node 22.16 the studio runs on, behind an experimental
-warning — pin the Node floor in `package.json` engines and say so in the README), file-backed
+warning — the Node floor is now pinned in `package.json` engines and the README), file-backed
 under the workspace for persistence with `:memory:` for tests and demos, one schema module
 with versioned migrations, tables for users (with roles), orgs, services (name, owners,
 criticality tier, the pack it carries, its environments), environments (name, bindings,

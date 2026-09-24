@@ -111,6 +111,7 @@ const S45 = withSched({ every: '45m' });
   assert(y.name === 'journey-repo-vs-live' && y.on.schedule[0].cron === '*/15 * * * *' && 'workflow_dispatch' in y.on && y.permissions.contents === 'read' && y.concurrency.group === 'journey-repo-vs-live' && y.concurrency['cancel-in-progress'] === false,
          'actions: name, schedule + dispatch, read-only permissions, per-journey concurrency without cancel', { name: y.name, on: y.on, c: y.concurrency });
   const steps = y.jobs.journey.steps;
+  assert(steps[1].with['node-version'] === '22', 'actions: setup-node pins the package floor major (22), not a Node below engines', steps[1].with);
   assert(steps[0].uses === 'actions/checkout@v7' && steps[1].uses === 'actions/setup-node@v7' && steps[2].run === 'npm ci' && steps[3].run === 'node tools/cli.mjs journey run repo-vs-live' && steps[3].env.OBSERVOGRAM_WORKSPACE === '.observogram',
          'actions: checkout, setup-node, npm ci, the journey run with the workspace env', steps.map(s => s.uses || s.run));
   assert(steps[3].env.MY_HOOK_URL === '${{ secrets.MY_HOOK_URL }}' && steps[3].env.MY_MCP_TOKEN === '${{ secrets.MY_MCP_TOKEN }}' && steps[3].env.MY_HOOK_TOKEN === '${{ secrets.MY_HOOK_TOKEN }}', 'actions: every env NAME binds to a repository secret of the same name');

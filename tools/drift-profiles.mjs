@@ -29,7 +29,7 @@
  *   1  at least one upstream is newer than our newest profiled version
  *   2  --strict and at least one upstream was unreachable
  *
- * Requires Node 18+ (global fetch).
+ * Requires Node 22.16+ (the package floor).
  */
 
 import { listProfiles, listProtocols, parseVersion, compareVersions } from './lib/profiles.mjs';
