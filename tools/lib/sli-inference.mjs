@@ -65,12 +65,13 @@ export function inferSlisFromRecordingRules(rules) {
     const totalKey = Object.keys(ops).find(k => /^total_/.test(k));
     const ratioKey = Object.keys(ops).find(k => /^ratio_/.test(k) || /^error_ratio_/.test(k));
     // The compiler's threshold shape: `value_*` plus an `error_ratio_*` whose expr reads
-    // the value series (`sum_over_time((max(<value series>) > bool <threshold>)[w:step]) / n`).
-    // Only that shape flips to a threshold SLI, with the threshold read back from the
+    // the value series (`sum_over_time((max(<value series>) > bool <threshold>)[w:step]) / n`,
+    // `< bool` for a floor — spec 1.3 `good_when: above`, tools/lib/burn-rules.mjs). Only that
+    // shape flips to a threshold SLI, with the threshold and its direction read back from the
     // comparison; any other value_*/error_ratio_* pair keeps the ratio-family inference.
     const valueKey = Object.keys(ops).find(k => /^value_/.test(k));
     const errorRatioKey = valueKey && Object.keys(ops).find(k => /^error_ratio_/.test(k) && String(ops[k].expr || '').includes(ops[valueKey].name));
-    const compiledThreshold = errorRatioKey ? /> bool (\d+(?:\.\d+)?)/.exec(ops[errorRatioKey].expr) : null;
+    const compiledThreshold = errorRatioKey ? /([<>]) bool (-?\d+(?:\.\d+)?)/.exec(ops[errorRatioKey].expr) : null;
     if (goodKey && totalKey) {
       sli = {
         id: sliId,
@@ -85,7 +86,9 @@ export function inferSlisFromRecordingRules(rules) {
         description: `Inferred from recording rules ${ops[valueKey].name} and ${ops[errorRatioKey].name}.`,
         type: 'threshold',
         query: ops[valueKey].expr,
-        threshold: compiledThreshold ? Number(compiledThreshold[1]) : 1,
+        threshold: compiledThreshold ? Number(compiledThreshold[2]) : 1,
+        // `< bool` counts the samples UNDER the bound: a floor. Absent means below, so a ceiling states nothing.
+        ...(compiledThreshold?.[1] === '<' ? { good_when: 'above' } : {}),
         ...(compiledThreshold ? {} : { unit: 'ratio' }),
       };
     } else if (ratioKey) {

@@ -675,7 +675,7 @@ test('sliLegs recognises every SLI shape and never throws on one', () => {
   const warned2 = [];
   assert.equal(sliLegs({ id: 'c', type: 'custom', expression: 'x' }, '5m', { step: 30, warn: (m) => warned2.push(m) }), null);
   assert.equal(sliLegs({ id: 'd', type: 'distribution', query: 'x' }, '5m', ctx), null);
-  assert.equal(sliLegs({ id: 'n', type: 'threshold', query: 'x', threshold: -1 }, '5m', ctx), null);
+  assert.equal(sliLegs({ id: 'n', type: 'threshold', query: 'x', threshold: 'x' }, '5m', ctx), null);
   assert.equal(sliLegs({ id: 'r', type: 'ratio', good: 'x' }, '5m', ctx), null);
   assert.equal(sliLegs({ id: 'w', type: 'ratio', good: 'sum(rate(a[5m]))', total: 'sum(rate(b[5m]))' }, 'soon', ctx), null, 'a window that is not a duration');
   assert.equal(warned2.length, 1);
@@ -693,18 +693,72 @@ test('whitespace inside a label value survives the burn legs byte for byte', () 
   assert.ok(t.bad.includes('lag{q="A  B"}'), t.bad);
 });
 
-test('threshold SLIs are upper bounds; a ratio-valued one is warned about', () => {
+test('a threshold SLI with no declared direction is read as a ceiling; a ratio-valued one is warned about as a probable floor', () => {
   const warned = [];
   const ctx = { step: 30, series: 'svc:x:value_5m', seriesStep: 30, warn: (m) => warned.push(m) };
   assert.equal(sliLegs({ id: 'sat', type: 'threshold', query: 'max(sat)', threshold: 0.8, unit: 'ratio' }, '5m', ctx).kind, 'threshold');
   assert.equal(sliLegs({ id: 'avail', type: 'threshold', query: '(1 - error_ratio) * probe_success', threshold: 1 }, '5m', ctx).kind, 'threshold');
   assert.equal(sliLegs({ id: 'ok', type: 'threshold', query: 'a / b', threshold: 1, unit: 'percentunit' }, '5m', ctx).kind, 'threshold');
   assert.equal(warned.length, 3);
-  assert.ok(warned.every(m => /upper bound/.test(m) && /no direction field/.test(m)), warned.join('; '));
+  assert.ok(warned.every(m => /as a ceiling \(bad = samples above it\)/.test(m) && /looks like a floor — declare good_when: above/.test(m)), warned.join('; '));
+  assert.ok(warned.every(m => !/no direction field|cannot express/.test(m)), 'a floor is expressible now: the warning no longer says the spec cannot');
   warned.length = 0;
   sliLegs({ id: 'lat', type: 'threshold', query: 'histogram_quantile(0.99, sum(rate(x{path="/api"}[5m])) by (le))', threshold: 0.5, unit: 'seconds' }, '5m', ctx);
   sliLegs({ id: 'lag', type: 'threshold', query: 'max(lag)', threshold: 1 }, '5m', ctx);
   assert.deepEqual(warned, []);
+});
+
+test('spec 1.3 good_when: a floor SLI counts the samples UNDER its bound, a ceiling those above it, absent means below; a declared direction ends the floor guess; the bound stays strict; a negative bound is a number', () => {
+  const warned = [];
+  const ctx = { step: 30, series: 'svc:x:value_5m', seriesStep: 30, warn: (m) => warned.push(m) };
+  const floor = sliLegs({ id: 'members', type: 'threshold', good_when: 'above', query: 'min(members)', threshold: 2, unit: 'consumers' }, '5m', ctx);
+  assert.deepEqual([floor.kind, floor.bad, floor.denom, floor.ratio], ['threshold', 'sum_over_time((max(svc:x:value_5m) < bool 2)[5m:30s])', '10', '(sum_over_time((max(svc:x:value_5m) < bool 2)[5m:30s]) / 10)']);
+  const ceiling = sliLegs({ id: 'lag', type: 'threshold', good_when: 'below', query: 'max(lag)', threshold: 60, unit: 'seconds' }, '5m', ctx);
+  assert.equal(ceiling.ratio, '(sum_over_time((max(svc:x:value_5m) > bool 60)[5m:30s]) / 10)');
+  assert.equal(sliLegs({ id: 'lag', type: 'threshold', query: 'max(lag)', threshold: 60, unit: 'seconds' }, '5m', ctx).ratio, ceiling.ratio, 'absent means below: a 1.2 SLI reads exactly as it did');
+  assert.deepEqual(warned, []);
+  // The comparison is strict on the bad side whichever way the SLI faces: 2 consumers satisfy a floor of 2, 60 s a ceiling of 60 (never >= / <=).
+  assert.ok(!/<=|>=/.test(floor.bad) && !/<=|>=/.test(ceiling.bad));
+  // The alert expression and the error-ratio record through the generator, on a pack whose floor SLI has its own recording rule.
+  const pack = {
+    metadata: { name: 'settle', version: '0.0.1' },
+    spec: {
+      slis: [{ id: 'members', type: 'threshold', good_when: 'above', query: 'min(kafka_consumer_group_members{group="settler"})', threshold: 2, unit: 'consumers' }],
+      slos: [{ id: 'members_99_9', sli: 'members', objective: 0.999, window: '30d' }],
+      queries: { recording_rules: [{ name: 'settle:members:min_5m', expr: 'ref:slis.members', interval: '30s' }] },
+      policy: { burn_rate_alerts: [{ slo: 'members_99_9', windows: [{ short: '5m', long: '1h', factor: 14, severity: 'SEV2' }] }] },
+    },
+  };
+  const r = compileBurnRules(pack);
+  assert.deepEqual(r.warnings, []);
+  assert.equal(r.recording.find(x => x.record === 'settle:members:error_ratio_5m').expr, '(sum_over_time((max(settle:members:min_5m) < bool 2)[5m:30s]) / 10)');
+  const alert = r.groups.flatMap(g => g.rules).find(x => x.alert === 'members_99_9_burn_14x_5m_1h');
+  assert.equal(alert.expr, [
+    '(', '  (sum_over_time((max(settle:members:min_5m) < bool 2)[5m:30s]) / 10) > 0.014', ') and (',
+    '  (sum_over_time((max(settle:members:min_5m) < bool 2)[1h:30s]) / 120) > 0.014', ') and (',
+    '  sum_over_time((max(settle:members:min_5m) < bool 2)[5m:30s]) >= 2', ')',
+  ].join('\n'));
+  assert.ok(!alert.expr.includes('> bool'), 'no leg of a floor alert counts samples above the bound');
+  // The floor guess (a ratio unit, a ratio-shaped query at 1) is raised only while the pack declares nothing: a declared
+  // `above` is the floor it guessed, a declared `below` states the ceiling on purpose (the MQ headroom SLI, measured).
+  const ratioish = { id: 'ok', type: 'threshold', query: 'a / b', threshold: 1, unit: 'percentunit' };
+  warned.length = 0;
+  assert.equal(sliLegs({ ...ratioish, good_when: 'above' }, '5m', ctx).bad, 'sum_over_time((max(svc:x:value_5m) < bool 1)[5m:30s])');
+  assert.equal(sliLegs({ ...ratioish, good_when: 'below' }, '5m', ctx).bad, 'sum_over_time((max(svc:x:value_5m) > bool 1)[5m:30s])');
+  assert.deepEqual(warned, []);
+  sliLegs(ratioish, '5m', ctx);
+  assert.equal(warned.length, 1);
+  // A bound is any finite number now (a floor at -1, a ceiling on a signed skew); only a non-number gets no policy rules.
+  warned.length = 0;
+  assert.equal(sliLegs({ id: 'n', type: 'threshold', query: 'x', threshold: -1 }, '5m', ctx).bad, 'sum_over_time((max(svc:x:value_5m) > bool -1)[5m:30s])');
+  assert.equal(sliLegs({ id: 'n', type: 'threshold', good_when: 'above', query: 'x', threshold: -1.5 }, '5m', ctx).bad, 'sum_over_time((max(svc:x:value_5m) < bool -1.5)[5m:30s])');
+  assert.deepEqual(warned, []);
+  for (const bad of ['x', NaN, Infinity, -Infinity, undefined]) assert.equal(sliLegs({ id: 'n', type: 'threshold', good_when: 'above', query: 'x', threshold: bad }, '5m', ctx), null, `threshold ${String(bad)}`);
+  assert.ok(warned.length === 5 && warned.every(m => /threshold must be a finite number/.test(m) && /no policy rules$/.test(m)), warned.join('; '));
+  // A distribution SLI stays what it was: no error-ratio form, whatever its direction (nothing invented here).
+  warned.length = 0;
+  assert.equal(sliLegs({ id: 'd', type: 'distribution', good_when: 'above', query: 'x', threshold: 2, percentile: 0.99 }, '5m', ctx), null);
+  assert.match(warned[0], /type distribution has no error-ratio form/);
 });
 
 test('durations accept every spec unit and never throw', () => {

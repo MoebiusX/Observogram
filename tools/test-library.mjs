@@ -350,10 +350,11 @@ test('params: a value cannot break the PromQL it is spliced into', () => {
 });
 
 test('warnings: the burn-rule generator\'s direction warning on a ratio-unit threshold is surfaced, and none when the SLOs are off', () => {
-  // queue_depth_headroom is depth / MAXDEPTH with an upper bound of 0.8 — the direction is right, and the generator's
-  // "unit ratio suggests a floor" heuristic cannot know that: the warning is the generator's and the caller must see it
+  // queue_depth_headroom is depth / MAXDEPTH with a ceiling of 0.8 — the direction is right, and the generator's
+  // "unit ratio looks like a floor" heuristic cannot know that while the entry declares no good_when: the warning is
+  // the generator's and the caller must see it (an explicit good_when: below would end the guess)
   const mq = build(byId['ibm-mq'], 'tier-2');
-  assert.ok(mq.warnings.some(w => w.kind === 'burn-rules' && /queue_depth_headroom.*upper bound/.test(w.message)), JSON.stringify(mq.warnings));
+  assert.ok(mq.warnings.some(w => w.kind === 'burn-rules' && /queue_depth_headroom.*as a ceiling.*looks like a floor — declare good_when: above/.test(w.message)), JSON.stringify(mq.warnings));
   assert.deepEqual(build(byId['ibm-mq'], 'tier-2', { toggles: { slos: false } }).warnings.filter(w => w.kind === 'burn-rules'), []);
   const prom = build(byId.prometheus, 'tier-1');
   assert.deepEqual(prom.warnings.filter(w => w.kind === 'burn-rules' && /rule_evaluation_success_ratio|notification_success_ratio|tsdb_compaction_success_ratio|wal_corruption_freshness|scrape_success_ratio/.test(w.message)), [], 'the prometheus legs are guarded');

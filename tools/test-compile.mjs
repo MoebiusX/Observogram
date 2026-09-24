@@ -512,6 +512,16 @@ process.stdout.write('\n[policy PromQL] burn-rules.mjs is the single source\n');
   const floor3 = burnOf(shapePack({ type: 'ratio', good: 'good_total', total: 'req_total' }), { minBadSamples: 3 });
   assert(/>= 3\n\)$/.test(floor3.expr) && /at least 3 bad samples/.test(floor3.alert.annotations.description), 'opts.minBadSamples sets the floor and the description', floor3.expr.split('\n')[5]);
   assert(compileSloPrometheusRules(shapePack({ type: 'ratio', good: 'good_total', total: 'req_total' }), 's_99', { lab: true }).includes('for: 30s'), 'compileSloPrometheusRules forwards opts.lab');
+  // spec 1.3 good_when through the compiler: a floor SLI's legs count the recorded samples UNDER the bound (`< bool`),
+  // its error_ratio_5m record too; a ceiling — declared or absent — keeps `> bool`; no warning either way.
+  const floorSli = burnOf(shapePack({ type: 'threshold', good_when: 'above', query: 'min(kafka_consumer_group_members{group="settler"})', threshold: 2, unit: 'consumers' }));
+  assert(floorSli.expr.split('\n')[1].trim() === '(sum_over_time((max(shape:s:value_5m) < bool 2)[5m:30s]) / 10) > 0.14' && floorSli.expr.split('\n')[5].trim() === 'sum_over_time((max(shape:s:value_5m) < bool 2)[5m:30s]) >= 2',
+         'a floor SLI (good_when: above) burns on the samples under its bound: short, long and the floor leg read `< bool 2`', floorSli.expr);
+  assert(!floorSli.expr.includes('> bool') && floorSli.warnings.length === 0, 'no leg above the bound, no warning', [floorSli.expr, floorSli.warnings]);
+  assert(floorSli.records.find(r => r.record === 'shape:s:error_ratio_5m')?.expr === '(sum_over_time((max(shape:s:value_5m) < bool 2)[5m:30s]) / 10)', 'the floor SLI\'s error_ratio_5m record counts the samples under the bound', floorSli.records.find(r => r.record === 'shape:s:error_ratio_5m')?.expr);
+  const ceilingSli = burnOf(shapePack({ type: 'threshold', good_when: 'below', query: 'max(lag)', threshold: 60, unit: 'seconds' }));
+  const plainSli = burnOf(shapePack({ type: 'threshold', query: 'max(lag)', threshold: 60, unit: 'seconds' }));
+  assert(ceilingSli.expr === plainSli.expr && ceilingSli.expr.includes('> bool 60') && !ceilingSli.expr.includes('< bool'), 'a declared `below` compiles exactly as an absent direction (a 1.2 pack): `> bool 60`', ceilingSli.expr.split('\n')[1]);
 
   // 9. per-SLO files
   const perSlo = compileSloPrometheusRules(pack, 'api_availability_99_9');

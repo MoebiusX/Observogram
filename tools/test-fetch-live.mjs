@@ -1842,6 +1842,16 @@ const healthFor = (uid) => (uid === HEALTH_ERR.datasource?.uid ? HEALTH_ERR : HE
     { name: 'svc:lat:error_ratio_5m', expr: '(sum_over_time((max(svc:lat:value_5m) > bool 0.5)[5m:30s]) / 10)' },
   ]);
   assert(fractional[0]?.sli.threshold === 0.5, 'a fractional threshold is read back', fractional[0]?.sli.threshold, 0.5);
+  assert(!('good_when' in threshold[0].sli) && !('good_when' in fractional[0].sli), 'a `> bool` ceiling states no direction (absent means below)');
+  // A floor (spec 1.3 good_when: above) compiles to `< bool`: read back with its direction, a negative bound included.
+  const floor = inferSlisFromRecordingRules([
+    { name: 'svc:members:value_5m', expr: 'min(members)' },
+    { name: 'svc:members:error_ratio_5m', expr: '(sum_over_time((max(svc:members:value_5m) < bool 2)[5m:30s]) / 10)' },
+    { name: 'svc:skew:value_5m', expr: 'min(skew)' },
+    { name: 'svc:skew:error_ratio_5m', expr: '(sum_over_time((max(svc:skew:value_5m) < bool -1.5)[5m:30s]) / 10)' },
+  ]);
+  assert(floor.length === 2 && floor.every(x => x.sli.type === 'threshold' && x.sli.good_when === 'above') && floor[0].sli.threshold === 2 && floor[1].sli.threshold === -1.5,
+         'a `< bool` comparison reads back as a floor: good_when above with the bound as compiled', floor.map(x => [x.sli.id, x.sli.threshold, x.sli.good_when]), [['svc_members', 2, 'above'], ['svc_skew', -1.5, 'above']]);
   // A foreign value_* / error_ratio_* pair (the error ratio does not read the value series)
   // keeps the pre-existing ratio-family inference.
   const foreign = inferSlisFromRecordingRules([
