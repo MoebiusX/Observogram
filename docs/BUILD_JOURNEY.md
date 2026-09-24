@@ -742,6 +742,27 @@ expression it no longer uses; *pass on a placeholder* stays distinct from pass; 
 switched off says what fails with it (unchanged); the rubric is never bent by a custom SLI —
 it counts like any SLI, nothing more.
 
+## The editor: one pop-up over an SLI and its SLO
+
+Editing an SLI and its SLO is one centered modal dialog (`studio/build-editor-view.mjs`,
+`renderBuildEditor(container, model, host)` over the pure `sliEditorModel` in
+`studio/build-copies-model.mjs`; `buildEditorModel` in `build-model.mjs` assembles it):
+`role=dialog aria-modal=true` (the Tab trap covers it and leaves the non-modal sheet
+underneath alone), labelled by the SLI id, a scrim over everything, Esc leaves the field and
+closes, focus on the first field on open and back on the opener on close
+(`buildActions.openEditor` / `closeEditor`), one editor at a time, UI state only
+(`build.editor`). A title row (the id, the product and its evidence, the type, the chips), a
+two-column grid — Id · Description (prefilled with the library default), Objective · Window,
+Bound · Unit for a threshold SLI, Metric · Type (fixed) — the PromQL as growing textareas
+showing the RESOLVED expression (the parameters in, read from the instantiated pack) with the
+*parameters: … — edit them in L2* line, the evidence line, a status line (*applying…* →
+*applied · SLO … · N burn alerts · rule …*, the engine's error under its field), per-field
+↺, Reset all, Done, the SLI's add / remove switch. Every field commits on input through
+`setOverride` / `updateCustom` with `live: true`; the render keeps the focused field's text,
+focus and caret across the pack's answer. Create mode is the same dialog over the custom form;
+on Verify it opens read-only. It replaces the in-card Customise face and the '+ Custom SLI'
+form card; the rolodex card's footer button reads **Edit** (View on Verify).
+
 ## What the next slices add
 
 - **Slice 3.** Seeding DEFINE from a repo scan or a live MCP draft (the crawler's

@@ -44,9 +44,10 @@ import { initHost } from './host.mjs';
 import {
   BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, enterStep as enterBuildStep, stepAfterInstantiate as buildStepAfterInstantiate, focusFallbackSelectors, instantiateBody as buildInstantiateBody,
   buildDefineModel, buildCompileModel, buildVerifyModel, buildDefinitionModel, buildSheetModel, buildClauseChecklist, buildStatusLine, sheetModeFor, addSliSelection, placeholdersRemaining, retargetSlis, retargetSlisForEntries, retargetOverrides,
-  restoreBuildDraft as restoreBuildDraftModel, splitBuildErrors,
+  restoreBuildDraft as restoreBuildDraftModel, buildEditorModel, editorModeFor,
 } from './build-model.mjs';
 import { fieldValueFor } from './build-copies-model.mjs';
+import { renderBuildEditor } from './build-editor-view.mjs';
 import {
   loadLibrary as loadBuildLibrary, libraryCache as buildLibraryCache, loadRequirements as loadBuildRequirements,
   requirementsCache as buildRequirementsCache, instantiate as instantiateBuild, compilePreview as compileBuildPreview,
@@ -738,8 +739,10 @@ export function renderMainView() {
   }
   // The BUILD journey renders its own three steps (Define · Compile ·
   // Verify) under BUILD_TABS; nothing below applies until "Open in
-  // Discover" hands the produced pack to the analysis journey.
-  if (state.mode === 'build') { renderBuildView(view); return; }
+  // Discover" hands the produced pack to the analysis journey. Its pop-up
+  // editor lives outside this view (syncBuildEditor draws or clears it).
+  if (state.mode === 'build') { renderBuildView(view); syncBuildEditor(); return; }
+  syncBuildEditor();
   if (!state.pack) {
     // In the workspace but no pack yet. Discover ("what do we have?") is
     // where you LOAD or COMPILE a pack — so its empty state IS the three
@@ -1907,6 +1910,7 @@ let buildTargets = null;
 // Leave the journey without a hand-off: back to the pack that was open, or home.
 function exitBuildMode() {
   if (state.mode !== 'build') return;
+  state.build.editor = null;   // the pop-up editor is UI state of the journey; the render that follows clears its host
   if (state.selectedPackId) { state.mode = 'single'; state.view = 'layers'; enterAnalyzeMode(state.selectedPackId, state.selectedEnv); return; }
   goHome();
 }
@@ -1962,6 +1966,33 @@ function refocusBuild(focusKey) {
   document.querySelector(focusKeySelector(focusKey))?.focus({ preventScroll: true });
 }
 
+// The pop-up SLI editor (docs/BUILD_JOURNEY.md "The editor") lives in a persistent host on <body>, outside the
+// re-rendered view, so a re-render of the stack, the sheet and the column under it never replaces the field being
+// typed in. syncBuildEditor draws or clears it after every render of the main view; the dialog itself is
+// re-rendered by build-editor-view.mjs with the focused field's text, focus and caret kept. `build.editor` (UI
+// state, never persisted) says which SLI it is over; the one-shots below carry the field to land on when it
+// opens and where focus returns when it closes.
+let buildEditorFocus = null;
+let buildEditorOpener = null;
+function buildEditorHost() {
+  let el = document.getElementById('build-editor-host');
+  if (!el) { el = document.createElement('div'); el.id = 'build-editor-host'; document.body.appendChild(el); }
+  return el;
+}
+function syncBuildEditor() {
+  const el = document.getElementById('build-editor-host');
+  const b = state.build;
+  const library = buildLibraryCache();
+  if (state.mode !== 'build' || !b?.editor || !library) { if (el && el.innerHTML) el.innerHTML = ''; return; }
+  const model = buildEditorModel({ build: b, library, mode: editorModeFor(b.step) });
+  // The SLI it was over is gone (its entry deselected, a custom one removed): the editor closes.
+  if (!model) { b.editor = null; if (el) el.innerHTML = ''; return; }
+  renderBuildEditor(buildEditorHost(), model, buildHost, { focus: buildEditorFocus });
+  buildEditorFocus = null;
+}
+/** The selector focus returns to when the editor closes: the opener's focus key, else the L1 slab head. */
+const editorReturnSelector = () => buildEditorOpener || '.build-slab[data-layer="L1"] .build-slab-edge';
+
 // A tier's clauses, loaded once per tier; the view repaints when they land
 // (DEFINE shows what every tier requires, the rail the chosen tier's).
 function ensureBuildRequirements(tier) {
@@ -1982,6 +2013,7 @@ async function runBuildInstantiate() {
   buildTimer = null;
   const b = state.build;
   if (!buildDefineValid(b)) {
+    b.editorDirty = false;
     if (b.result || b.error || b.pending) { b.result = null; b.error = null; b.pending = false; rerenderBuild(); }
     return;
   }
@@ -1998,20 +2030,16 @@ async function runBuildInstantiate() {
   catch (e) { res = { ok: false, errors: [e.message] }; }
   if (seq !== buildSeq || state.build !== b) return;
   b.pending = false;
+  b.editorDirty = false;   // the editor's last edit has an answer: its status line reads it
   if (res?.ok) {
     applyInstantiateOk(b, res);
   } else {
-    // A usage error — a param value the engine refuses, every SLI unticked:
-    // the previous pack stays (the views mark it stale and show the error
-    // beside the field it names), so Validate stays reachable and nothing
-    // typed so far is lost. Dropping the result here once bounced the user
-    // from Validate to Generate, the one step without parameter inputs.
+    // A usage error — a param value the engine refuses, every SLI unticked, a rejected customised value:
+    // the previous pack stays (the views mark it stale and show the error beside the field it names — on the
+    // editor's field when it is open, on the card's chip and in the compile note otherwise), so Validate stays
+    // reachable and nothing typed so far is lost. Dropping the result here once bounced the user from
+    // Validate to Generate, the one step without parameter inputs.
     b.error = res?.errors || [res?.error || 'instantiation failed'];
-    // A rejected customised value opens its card's face, so the field that carries the reason is in view the
-    // moment the L1 sheet is (closed, the card carried no mark and the note said only that the compilation failed).
-    const split = splitBuildErrors(b.error);
-    const keys = [...Object.keys(split.byOverride), ...Object.keys(split.byCustom).filter(Boolean)];
-    if (keys.length) b.customOpen = { ...(b.customOpen || {}), ...Object.fromEntries(keys.map(k => [k, true])) };
   }
   // A step that is no longer reachable falls back — only when there is no
   // pack to read: a kept pack keeps its step. A step waited for (a reload on
@@ -2047,7 +2075,9 @@ function paintBuildPending(on) {
 function rerenderBuild() {
   if (state.mode !== 'build') return;
   const el = document.activeElement;
-  const key = el?.dataset?.focusKey || null;
+  // The render that opens the editor (or morphs it after 'Add to the pack') lands the focus in it — the generic
+  // restore below must not hand it back to the opener (measured: the Edit button took it back).
+  const key = buildEditorFocus ? null : (el?.dataset?.focusKey || null);
   const sel = key && typeof el.selectionStart === 'number' ? [el.selectionStart, el.selectionEnd] : null;
   const scrollY = window.scrollY;
   const scrolls = Object.fromEntries([...document.querySelectorAll('[data-scroll-key]')].map(n => [n.dataset.scrollKey, [n.scrollTop, n.scrollLeft]]));
@@ -2111,8 +2141,7 @@ const buildActions = {
     // takes its SLIs (and their overrides) with it, one that joins brings the tier's defaults of its own.
     b.slis = retargetSlisForEntries({ build: b, library: buildLibraryCache() }, prevEntries);
     b.overrides = retargetOverrides({ build: b, library: buildLibraryCache() }, prevEntries);
-    b.customOpen = {};
-    rerenderBuild();
+    rerenderBuild();   // an open editor over an SLI of the entry that left closes here (syncBuildEditor finds no item)
     scheduleBuildInstantiate(0);
   },
   setParam(key, value) {
@@ -2162,13 +2191,15 @@ const buildActions = {
     persistence.schedule();
     goToBuildStep('compile');
   },
-  // The copies (docs/BUILD_JOURNEY.md "The seed and the copies"): an override is copy-on-write over the
-  // library's value for one field of one SLI; an empty value clears it. The engine validates on the
-  // re-instantiation and its `override <sli>.<field>: …` error lands on the card's field.
-  // `focusKey`: the field to land the focus on after the re-render when the commit found none focused — a field
-  // committed by Enter (an explicit blur) or by leaving it has <body> as the active element while its change runs,
-  // so rerenderBuild alone had nothing to restore and the next Tab landed on the chrome (measured live).
-  setOverride(key, field, text, { focusKey = null } = {}) {
+  // The copies (docs/BUILD_JOURNEY.md "The seed and the copies", "The editor"): an override is copy-on-write over
+  // the library's value for one field of one SLI, keyed by the id the library gives it (a rename — the `id`
+  // field — keeps that key, so the SLI stays attached to its library row); an empty value clears it. The engine
+  // validates on the re-instantiation and its `override <sli>.<field>: …` error lands under the editor's field.
+  // `live`: the editor commits on input — the draft changes, the dialog alone is redrawn (its status reads
+  // 'applying…'; the page under it follows when the pack answers) and the instantiate is debounced like a typed
+  // name, so a keystroke is never a request of its own. `focusKey`: the field to land the focus on after a full
+  // re-render when the commit found none focused (a field left by Enter or Tab has <body> active meanwhile).
+  setOverride(key, field, text, { focusKey = null, live = false } = {}) {
     const b = state.build;
     const value = fieldValueFor(field, text);
     const current = { ...(Object.prototype.hasOwnProperty.call(b.overrides || {}, key) ? b.overrides[key] : {}) };
@@ -2177,6 +2208,7 @@ const buildActions = {
     if (Object.keys(current).length) overrides[key] = current; else delete overrides[key];
     if (JSON.stringify(overrides) === JSON.stringify(b.overrides || {})) { refocusBuild(focusKey); return; }
     b.overrides = overrides;
+    if (live) { b.editorDirty = true; syncBuildEditor(); scheduleBuildInstantiate(); persistence.schedule(); return; }
     if (focusKey) buildFocusNext = focusKeySelector(focusKey);
     rerenderBuild();
     scheduleBuildInstantiate(0);
@@ -2212,8 +2244,9 @@ const buildActions = {
       b.custom = custom;
       b.customDraft = null;
       b.customDraftErrors = null;
-      b.customOpen = { ...(b.customOpen || {}), [def.id]: false };
       applyInstantiateOk(b, res);
+      // The editor stays open, now over the SLI it just added (edit mode): its status says what the pack made of it.
+      if (b.editor?.create) { b.editor = { key: def.id, custom: true }; buildEditorFocus = 'id'; }
       persistence.schedule();
     } else {
       b.customDraft = draft || b.customDraft;
@@ -2222,15 +2255,19 @@ const buildActions = {
     Object.assign(b, buildStepAfterInstantiate(b));
     rerenderBuild();
   },
-  updateCustom(id, field, text, { focusKey = null } = {}) {
+  // A custom SLI's field (`live` as setOverride's); its `id` renames it — the definition, the editor and its key follow.
+  updateCustom(id, field, text, { focusKey = null, live = false } = {}) {
     const b = state.build;
     const i = (b.custom || []).findIndex(d => d.id === id);
     if (i < 0) return;
     const value = fieldValueFor(field, text);
     const next = { ...b.custom[i] };
-    if (value === null) delete next[field]; else next[field] = value;
+    if (field === 'id') { if (value === null) return; next.id = value; }
+    else if (value === null) delete next[field]; else next[field] = value;
     if (JSON.stringify(next) === JSON.stringify(b.custom[i])) { refocusBuild(focusKey); return; }
     b.custom = b.custom.map((d, j) => (j === i ? next : d));
+    if (field === 'id' && b.editor?.custom && b.editor.key === id) b.editor = { ...b.editor, key: next.id };
+    if (live) { b.editorDirty = true; syncBuildEditor(); scheduleBuildInstantiate(); persistence.schedule(); return; }
     if (focusKey) buildFocusNext = focusKeySelector(focusKey);
     rerenderBuild();
     scheduleBuildInstantiate(0);
@@ -2240,12 +2277,31 @@ const buildActions = {
     const b = state.build;
     if (!(b.custom || []).some(d => d.id === id)) return;
     b.custom = b.custom.filter(d => d.id !== id);
-    const open = { ...(b.customOpen || {}) };
-    delete open[id];
-    b.customOpen = open;
+    // The editor over the SLI just removed closes, focus back where it was opened from.
+    if (b.editor?.custom && b.editor.key === id) { b.editor = null; buildFocusNext = editorReturnSelector(); buildEditorOpener = null; }
     rerenderBuild();
     scheduleBuildInstantiate(0);
     persistence.schedule();
+  },
+  // The pop-up editor (docs/BUILD_JOURNEY.md "The editor"): one at a time, on the draft (never persisted). It opens
+  // from an L1 card on the stack, a rolodex card's Edit or the '+ Custom SLI' card (`create`); `focus` names the
+  // field to land on (an SLO card lands on the objective); `opener` the focus key focus returns to on close.
+  openEditor({ key = null, custom = false, create = false, focus = null, opener = null } = {}) {
+    const b = state.build;
+    if (!create && !key) return;
+    b.editor = create ? { create: true } : { key, custom: !!custom };
+    buildEditorOpener = opener ? focusKeySelector(opener) : null;
+    buildEditorFocus = focus || (create ? 'name' : 'id');
+    rerenderBuild();
+  },
+  closeEditor() {
+    const b = state.build;
+    if (!b.editor) return;
+    b.editor = null;
+    b.customDraftErrors = null;
+    buildFocusNext = editorReturnSelector();
+    buildEditorOpener = null;
+    rerenderBuild();
   },
   // The layer sheet: one at a time, remembered on the draft (never persisted); focus
   // moves into the sheet when it opens and returns to the slab head when it closes.
@@ -2328,11 +2384,15 @@ const buildActions = {
   },
 };
 
+// The host the Build renderers get (docs/UI_CONVENTIONS.md §3): the two stable hooks plus the journey's actions.
+const buildHost = { renderMainView, renderTabs, build: buildActions };
+
 // The build view — the pack is the axis (docs/BUILD_JOURNEY.md "The axis"): the
 // definition column on the left (service, tier, entries, the conformance summary,
 // sticky), the step with the stack as the main surface on the right, and, when a
 // layer is open, its sheet over the stack (one component on the three steps; its
-// mode follows the step: preview · edit · verify).
+// mode follows the step: preview · edit · verify). The pop-up editor is drawn
+// after this, into its own host (syncBuildEditor).
 function renderBuildView(view) {
   const b = state.build;
   const shell = document.createElement('div');
@@ -2359,7 +2419,7 @@ function renderBuildView(view) {
   const requirements = buildRequirementsCache();
   const clauses = requirements[b.tier] || [];
   if (!clauses.length) ensureBuildRequirements(b.tier);
-  const host = { renderMainView, renderTabs, build: buildActions };
+  const host = buildHost;
   const checklist = buildClauseChecklist(clauses, b.result?.summary || null);
   const definition = buildDefinitionModel({ build: b, library, requirements, checklist });
   renderBuildDefinition(def, definition, host);

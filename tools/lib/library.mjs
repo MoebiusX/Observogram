@@ -420,10 +420,11 @@ export function validateLibraryEntry(entry) {
 export function libraryIndex(entries) {
   return [...entries].map(entry => {
     // objectives / windows per tier read through perTier's walk: what the SLI starts with at each tier, above
-    // its minTier too; the PromQL templates (${param} unresolved) and the bound are the defaults the studio's
-    // Customise face shows beside an override.
+    // its minTier too; the PromQL templates (${param} unresolved), the bound and the semconv metric are the
+    // defaults the studio's editor shows beside an override.
     const slis = (entry.slis || []).map(s => ({
       id: s.id, type: s.type, minTier: s.minTier, unit: s.unit, description: s.description,
+      ...(s.semconv_metric ? { semconv_metric: s.semconv_metric } : {}),
       evidence: s.evidence?.status || null, metrics: [...(s.metrics || [])],
       objectives: Object.fromEntries(TIERS.map(t => [t, perTier(s.slo?.objective, t, null)])),
       windows: Object.fromEntries(TIERS.map(t => [t, perTier(s.slo?.window, t, null)])),

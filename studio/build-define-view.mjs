@@ -55,7 +55,7 @@ export function instantiateErrorHtml(error, { stale = false, where = 'below' } =
   const parts = [...error.general.map(escapeHtml)];
   if (error.paramCount) parts.push(`${error.paramCount} parameter value${error.paramCount === 1 ? '' : 's'} rejected — marked on ${error.paramCount === 1 ? 'its row' : 'their rows'} ${where}`);
   const copies = rejectedCopies(error);
-  if (copies.length) parts.push(`${copies.length} customised value${copies.length === 1 ? '' : 's'} rejected — ${escapeHtml(copies.join(', '))}: open Customise on ${copies.length === 1 ? 'its card' : 'their cards'} on the L1 sheet, the field carries the reason`);
+  if (copies.length) parts.push(`${copies.length} customised value${copies.length === 1 ? '' : 's'} rejected — ${escapeHtml(copies.join(', '))}: open ${copies.length === 1 ? 'its card' : 'their cards'} on L1 (the stack or the sheet), the field carries the reason`);
   return `<div class="build-note build-note-err" role="alert"><strong>The last compilation failed${stale ? ' — the pack shown is the previous one' : ''}.</strong> ${parts.join(' · ')}</div>`;
 }
 
