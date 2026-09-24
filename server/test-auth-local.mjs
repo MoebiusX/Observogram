@@ -21,22 +21,55 @@ delete process.env.OBSERVOGRAM_SESSION_SECRET;
 delete process.env.OBSERVOGRAM_AUTH;
 delete process.env.TOMOGRAPH_AUTH;
 delete process.env.OBSERVOGRAM_ADMIN_PASSWORD;
+// Hermetic store (docs/STORE_PLAN.md slice 2): each block's database lives
+// in its own workspace; a shell's OBSERVOGRAM_DB or seed knobs never leak in.
+for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH']) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
 process.env.OBSERVOGRAM_USERS_FILE = join(WORKSPACE, 'users.json');
 
 import { createHarness } from '../tools/lib/harness.mjs';
 const { assert, failures, report } = createHarness({ indent: '  ', truncate: 200 });
 
-const { hashPassword, writeUsers, verifyPassword, localUsersEnabled } = await import('./auth.mjs');
+const { hashPassword, verifyPassword, localUsersEnabled } = await import('./auth.mjs');
+const { writeUsersFile } = await import('./store/legacy-files.mjs');
+const { currentStore } = await import('./store/db.mjs');
+const { createUser, setDisabled, getUserByLogin, listUsers } = await import('./store/users.mjs');
+const { getMeta } = await import('./store/meta.mjs');
+const { listMembershipsForUser } = await import('./store/memberships.mjs');
+const { listAudit } = await import('./store/audit.mjs');
+const { orgChipModel } = await import('../studio/api.mjs');
 
-// Seed one user — the file existing is what arms stand-alone mode.
-writeUsers({ users: { carlos: { name: 'Carlos', email: 'carlos@example.test', createdAt: 'test', password: hashPassword('correct-horse-9') } } });
-assert(localUsersEnabled() === true, 'users file arms stand-alone mode');
+// A pre-store users.json — the first start imports it (and arms
+// stand-alone sign-in). 'John Smith' is a name the pre-store login
+// accepts (it trims only the ends): imported as written (A-54).
+writeUsersFile({ users: {
+  carlos: { name: 'Carlos', email: 'carlos@example.test', createdAt: 'test', password: hashPassword('correct-horse-9') },
+  'John Smith': { createdAt: 'test', password: hashPassword('smith-pass-123') },
+} }, process.env.OBSERVOGRAM_USERS_FILE);
 assert(verifyPassword('correct-horse-9', JSON.parse(readFileSync(process.env.OBSERVOGRAM_USERS_FILE, 'utf8')).users.carlos.password), 'scrypt round-trips');
 assert(!verifyPassword('wrong', JSON.parse(readFileSync(process.env.OBSERVOGRAM_USERS_FILE, 'utf8')).users.carlos.password), 'scrypt rejects wrong password');
 
 const { start } = await import('./index.mjs');
 const srv = await start({ port: 0, host: '127.0.0.1', silent: true });
 const base = `http://127.0.0.1:${srv.address().port}`;
+
+{
+  const db = currentStore();
+  assert(localUsersEnabled() === true, 'the imported users file arms stand-alone sign-in (identity_armed)');
+  assert(getMeta(db, 'identity_armed') === '1', 'identity_armed is set by the import', getMeta(db, 'identity_armed'), '1');
+  const carlos = getUserByLogin(db, 'carlos');
+  assert(carlos?.kind === 'local' && carlos.sessionEpoch === 0 && carlos.isOwner === true,
+    'carlos is imported: local, epoch 0, owner', carlos && { kind: carlos.kind, ep: carlos.sessionEpoch, owner: carlos.isOwner });
+  const ms = carlos ? listMembershipsForUser(db, carlos.id) : [];
+  assert(JSON.stringify(ms.map(m => [m.orgId, m.role])) === JSON.stringify([['default', 'admin']]),
+    'carlos is admin of default', ms);
+  assert(!!getMeta(db, 'import_done'), 'import_done is set');
+  const marker = JSON.parse(readFileSync(join(WORKSPACE, '.store-imported'), 'utf8'));
+  assert(marker.storeId === getMeta(db, 'store_id'), '.store-imported names the store_id', marker.storeId, getMeta(db, 'store_id'));
+  assert(getUserByLogin(db, 'John Smith')?.kind === 'local', "'John Smith' is imported as written");
+}
 
 const getCookie = (res, name) => {
   for (const c of res.headers.getSetCookie?.() || []) {
@@ -92,7 +125,7 @@ try {
   assert(!!setCookie, 'session cookie issued');
   assert(/HttpOnly/i.test(setCookie) && /SameSite=Lax/i.test(setCookie) && /Path=\//.test(setCookie),
     'session cookie carries HttpOnly + SameSite=Lax + Path=/', setCookie);
-  const session = getCookie(r, 'observogram_session');
+  let session = getCookie(r, 'observogram_session');
 
   // ---- authenticated requests ----
   r = await fetch(`${base}/api/packs`, { headers: { Cookie: session } });
@@ -109,6 +142,17 @@ try {
   j = await r.json();
   assert(j.authenticated === true && j.sub === 'carlos' && j.email === 'carlos@example.test',
     '/auth/me reflects the signed-in user', JSON.stringify(j));
+  assert(JSON.stringify(j.orgs) === JSON.stringify([{ id: 'default', name: 'Default', role: 'admin', default: true }]),
+    '/auth/me lists the default org membership', JSON.stringify(j.orgs));
+  assert(j.user?.owner === true && j.user?.login === 'carlos' && j.user?.kind === 'local', '/auth/me names the store row (owner)', JSON.stringify(j.user));
+  assert(orgChipModel(j.orgs).kind === 'none', 'an upgraded flat stand-alone deployment shows no ORG chip', orgChipModel(j.orgs).kind, 'none');
+
+  // A users.json name with an inner space signs in after the upgrade.
+  r = await fetch(`${base}/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'username=John+Smith&password=smith-pass-123', redirect: 'manual',
+  });
+  assert(r.status === 302 && !!getCookie(r, 'observogram_session'), "'John Smith' signs in with his password after the upgrade", r.status, 302);
 
   // ---- CSRF gate on session-authenticated mutations ----
   r = await fetch(`${base}/api/validate`, {
@@ -189,6 +233,29 @@ try {
   });
   j = await r.json();
   assert(r.ok && j.ok === true, 'session-authenticated change succeeds with the current password', JSON.stringify(j));
+  // The change bumps the epoch: this session is re-issued, every other one ends.
+  const oldSession = session;
+  session = getCookie(r, 'observogram_session');
+  assert(!!session && session !== oldSession, 'the change re-issues the session');
+  {
+    const rows = listAudit(currentStore(), { action: 'user.password', targetId: 'carlos' });
+    assert(rows.length === 1 && rows[0].actor === 'carlos', 'the self-service change writes one user.password row with actor carlos', rows.map(x => x.actor));
+  }
+  r = await fetch(`${base}/api/packs`, { headers: { Cookie: oldSession } });
+  assert(r.status === 401, 'the pre-change session is revoked: /api/packs 401', r.status, 401);
+  r = await fetch(`${base}/auth/me`, { headers: { Cookie: oldSession } });
+  assert((await r.json()).authenticated === false, 'the pre-change session is revoked: /auth/me unauthenticated');
+  r = await fetch(`${base}/auth/change-password`, { headers: { Cookie: oldSession }, redirect: 'manual' });
+  assert(r.status === 302 && (r.headers.get('location') || '').includes('/auth/login'),
+    'the pre-change session is revoked: GET change page bounces to login', r.status, 302);
+  r = await fetch(`${base}/auth/change-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', Cookie: oldSession },
+    body: 'current=rotated-horse-10&password=never-lands-99&repeat=never-lands-99',
+  });
+  j = await r.json();
+  assert(r.status === 401 && j.error === 'password-change flow expired — sign in again',
+    'the pre-change session is revoked: POST change-password 401', [r.status, j.error], 401);
 
   r = await fetch(`${base}/auth/login`, {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -220,38 +287,59 @@ try {
   });
   assert(r.status === 302 && r.headers.get('location') === '/' && !!getCookie(r, 'observogram_session'),
     'HTML self-service change redirects home with a session', `${r.status} ${r.headers.get('location')}`);
+  session = getCookie(r, 'observogram_session');
+  assert(listAudit(currentStore(), { action: 'user.password', targetId: 'carlos' }).length === 2, 'each change writes one user.password row');
 
-  // ---- a session can outlive its users.json record ----
-  const withGhost = JSON.parse(readFileSync(process.env.OBSERVOGRAM_USERS_FILE, 'utf8'));
-  withGhost.users.ghost = { name: 'Ghost', createdAt: 'test', password: hashPassword('ghost-pass-123') };
-  writeUsers(withGhost);
+  // ---- a disabled user: the session ends, sign-in refused ----
+  const ghost = createUser(currentStore(), 'test', { login: 'ghost', name: 'Ghost', password: hashPassword('ghost-pass-123') });
   r = await fetch(`${base}/auth/login`, {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'username=ghost&password=ghost-pass-123', redirect: 'manual',
   });
   const ghostSession = getCookie(r, 'observogram_session');
-  assert(!!ghostSession, 'ghost signs in before deletion');
-  const withoutGhost = JSON.parse(readFileSync(process.env.OBSERVOGRAM_USERS_FILE, 'utf8'));
-  delete withoutGhost.users.ghost;
-  writeUsers(withoutGhost);
+  assert(!!ghostSession, 'ghost signs in before being disabled');
+  setDisabled(currentStore(), 'test', ghost.id, true);
   r = await fetch(`${base}/auth/change-password`, { headers: { Cookie: ghostSession }, redirect: 'manual' });
   assert(r.status === 302 && (r.headers.get('location') || '').includes('/auth/login'),
-    'deleted user with a live session: GET change page bounces to login', r.status, 302);
+    'disabled user with a live session: GET change page bounces to login', r.status, 302);
   r = await fetch(`${base}/auth/change-password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', Cookie: ghostSession },
     body: 'current=ghost-pass-123&password=whatever-long-1&repeat=whatever-long-1',
   });
-  assert(r.status === 401, 'deleted user with a live session: POST answers unknown user', r.status, 401);
+  assert(r.status === 401, 'disabled user with a live session: POST answers 401', r.status, 401);
+  r = await fetch(`${base}/api/packs`, { headers: { Cookie: ghostSession } });
+  assert(r.status === 401, 'disabled user with a live session: /api/packs 401', r.status, 401);
+  r = await fetch(`${base}/auth/me`, { headers: { Cookie: ghostSession } });
+  assert((await r.json()).authenticated === false, 'disabled user with a live session: /auth/me unauthenticated');
+  r = await fetch(`${base}/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'username=ghost&password=ghost-pass-123', redirect: 'manual',
+  });
+  assert(r.status === 401, 'a disabled user cannot sign in with the right password', r.status, 401);
+
+  // A disabled user's pre-disable pwflow cookie is refused too.
+  const pending = createUser(currentStore(), 'test', { login: 'pending', password: hashPassword('pending-pass-1'), mustChange: true });
+  r = await fetch(`${base}/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: 'username=pending&password=pending-pass-1',
+  });
+  const pendingFlow = getCookie(r, 'observogram_pwflow');
+  assert(!!pendingFlow, 'a forced change starts for pending');
+  setDisabled(currentStore(), 'test', pending.id, true);
+  r = await fetch(`${base}/auth/change-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', Cookie: pendingFlow },
+    body: 'password=pending-new-123&repeat=pending-new-123',
+  });
+  assert(r.status === 401, "a disabled user's pre-disable pwflow is refused", r.status, 401);
 
   // ---- a normal login clears a leftover pwchange flow cookie ----
   // An abandoned forced change (say admin/admin typed on a shared
   // browser, then closed) must never shadow the account menu's
   // change-password entry point — the change routes check the flow
   // cookie first, so login must clear the stale one.
-  const withStale = JSON.parse(readFileSync(process.env.OBSERVOGRAM_USERS_FILE, 'utf8'));
-  withStale.users.stale = { name: 'Stale', createdAt: 'test', password: hashPassword('stale-pass-123'), mustChange: true };
-  writeUsers(withStale);
+  createUser(currentStore(), 'test', { login: 'stale', name: 'Stale', password: hashPassword('stale-pass-123'), mustChange: true });
   r = await fetch(`${base}/auth/login`, {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'username=stale&password=stale-pass-123', redirect: 'manual',
@@ -328,9 +416,12 @@ delete process.env.OBSERVOGRAM_API_TOKEN_LABEL;
 const srv2 = await start({ port: 0, host: '127.0.0.1', silent: true });
 const base2 = `http://127.0.0.1:${srv2.address().port}`;
 try {
-  const seeded = JSON.parse(readFileSync(join(BOOT_WS, 'users.json'), 'utf8')).users.admin;
-  assert(!!seeded && seeded.mustChange === true && seeded.seededDefault === true,
-    'first boot seeds admin with a forced-change default', JSON.stringify(seeded));
+  const seeded = getUserByLogin(currentStore(), 'admin');
+  assert(!!seeded && seeded.mustChange === true && seeded.seededDefault === true && seeded.isOwner === true && seeded.sessionEpoch === 1,
+    'first boot seeds admin with a forced-change default (owner, epoch 1)', seeded && { mustChange: seeded.mustChange, seededDefault: seeded.seededDefault, owner: seeded.isOwner, ep: seeded.sessionEpoch });
+  assert(JSON.stringify(listMembershipsForUser(currentStore(), seeded.id).map(m => [m.orgId, m.role])) === JSON.stringify([['default', 'admin']]),
+    'the seeded admin is admin of default');
+  assert(!existsSync(join(BOOT_WS, 'users.json')), 'the seed writes no users.json');
 
   let r = await fetch(`${base2}/api/packs`);
   assert(r.status === 401, 'the seeded posture protects the API like any identity mode', r.status, 401);
@@ -378,6 +469,10 @@ try {
 
   r = await fetch(`${base2}/api/packs`, { headers: { Cookie: skipSession } });
   assert(r.ok, 'API works with the skipped session', r.status, 200);
+  {
+    const me = await (await fetch(`${base2}/auth/me`, { headers: { Cookie: skipSession } })).json();
+    assert(orgChipModel(me.orgs).kind === 'none', 'the fresh admin/admin boot shows no ORG chip', JSON.stringify(me.orgs));
+  }
 
   // The browser path: the form's skip button POSTs without Accept:
   // application/json — success is a 302 home carrying the session.
@@ -387,8 +482,8 @@ try {
   assert(r.status === 302 && r.headers.get('location') === '/' && !!getCookie(r, 'observogram_session'),
     'HTML skip redirects home with a session', `${r.status} ${r.headers.get('location')}`);
 
-  const afterSkip = JSON.parse(readFileSync(join(BOOT_WS, 'users.json'), 'utf8')).users.admin;
-  assert(afterSkip.mustChange === true && afterSkip.seededDefault === true,
+  const afterSkip = getUserByLogin(currentStore(), 'admin');
+  assert(afterSkip.mustChange === true && afterSkip.seededDefault === true && afterSkip.sessionEpoch === 1,
     'skip leaves the forced-change flags in place', JSON.stringify(afterSkip));
 
   let skipGuardErr = null;
@@ -406,9 +501,7 @@ try {
 
   // Admin-set temporary password (mustChange WITHOUT seededDefault):
   // the change stays forced — no skip control, skip POST refused.
-  const bootData = JSON.parse(readFileSync(join(BOOT_WS, 'users.json'), 'utf8'));
-  bootData.users.temp = { name: 'Temp', createdAt: 'test', password: hashPassword('temp-pass-123'), mustChange: true };
-  writeUsers(bootData);
+  createUser(currentStore(), 'test', { login: 'temp', name: 'Temp', password: hashPassword('temp-pass-123'), mustChange: true });
   r = await fetch(`${base2}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
@@ -454,8 +547,13 @@ try {
   r = await fetch(`${base2}/api/packs`, { headers: { Cookie: session2 } });
   assert(r.ok, 'API works with the post-change session', r.status, 200);
 
-  const after = JSON.parse(readFileSync(join(BOOT_WS, 'users.json'), 'utf8')).users.admin;
+  const after = getUserByLogin(currentStore(), 'admin');
   assert(!after.mustChange && !after.seededDefault, 'forced-change flags cleared after the change');
+  assert(after.sessionEpoch === 2, 'the change bumped the epoch', after.sessionEpoch, 2);
+  r = await fetch(`${base2}/auth/change-password/skip`, {
+    method: 'POST', headers: { Accept: 'application/json', Cookie: pwflow },
+  });
+  assert(r.status === 401, 'a pwflow cookie from before the change is refused (skip 401)', r.status, 401);
 
   r = await fetch(`${base2}/auth/login`, {
     method: 'POST',
@@ -484,6 +582,8 @@ try {
   const j = await r.json();
   assert(r.ok && j.ok === true && !j.mustChange && !!getCookie(r, 'observogram_session'),
     'OBSERVOGRAM_ADMIN_PASSWORD seeds a ready-to-use admin (no forced change)', JSON.stringify(j));
+  const admin = getUserByLogin(currentStore(), 'admin');
+  assert(admin?.isOwner === true && admin.mustChange === false, 'the env-seeded admin is an owner, not must_change');
 } finally {
   delete process.env.OBSERVOGRAM_ADMIN_PASSWORD;
   await new Promise(res => srv3.close(res));
@@ -499,7 +599,9 @@ try {
   await start({ port: 0, host: '0.0.0.0', silent: true }).then(s => s.close(), e => { netErr = e; });
   assert(!!netErr && /OBSERVOGRAM_ADMIN_PASSWORD/.test(netErr.message),
     'fresh network boot refuses and names the admin-password option', netErr && netErr.message);
-  assert(!existsSync(join(NET_WS, 'users.json')), 'no default credential is written for a network boot');
+  assert(!existsSync(join(NET_WS, 'users.json')), 'no users.json is written for a network boot');
+  assert(!getUserByLogin(currentStore(), 'admin') && !getMeta(currentStore(), 'import_done'),
+    'no default credential is written for a network boot (no admin row, nothing imported)');
 
   // Rescue: seed on loopback (default admin), then boot with
   // OBSERVOGRAM_ADMIN_PASSWORD — the still-default record is replaced.
@@ -537,7 +639,8 @@ try {
   assert(r.ok, 'OBSERVOGRAM_AUTH=off keeps the API open with no login', r.status, 200);
   r = await fetch(`${base4}/auth/me`);
   assert(r.status === 404, '/auth/me answers 404 in the open posture (studio local-mode detection)', r.status, 404);
-  assert(!existsSync(join(OFF_WS, 'users.json')), 'no admin is seeded in the open posture');
+  assert(listUsers(currentStore()).length === 0 && getMeta(currentStore(), 'identity_armed') === null,
+    'no admin is seeded in the open posture (no users, identity_armed unset)');
 } finally {
   delete process.env.OBSERVOGRAM_AUTH;
   await new Promise(res => srv4.close(res));

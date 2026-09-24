@@ -13,10 +13,11 @@ import { state } from './state.mjs';
 // the server ignores it outside identity mode.
 export const CSRF_HEADER = { 'X-Observogram-CSRF': '1' };
 
-// Active org (Stage 2 tenancy — server/tenancy.mjs). When the server has
-// orgs.json, every /api call carries X-Observogram-Org so the request runs
-// in that org's workspace. Resolved at boot from /auth/me memberships +
-// the persisted choice; null outside tenancy mode.
+// Active org (Stage 2 tenancy — server/tenancy.mjs, always on). In the
+// identity postures every /api call carries X-Observogram-Org so the
+// request runs in that org's workspace. Resolved at boot from /auth/me
+// memberships + the persisted choice; null in the open posture (the
+// server runs it in the default org).
 let activeOrg = null;
 export function setActiveOrg(id) {
   activeOrg = id || null;
@@ -27,6 +28,21 @@ export function setActiveOrg(id) {
 }
 export function getActiveOrg() { return activeOrg; }
 export function savedOrg() { try { return localStorage.getItem('studioOrg.v1') || null; } catch (_) { return null; } }
+
+// The ORG chip, one pure rule for both header sites (studio/app.mjs):
+// a switcher for a user in more than one org, a static label for a user
+// whose only org is not the deployment's default one, and nothing
+// otherwise (no org, or the default org only: the flat look of a fresh
+// install or an upgraded single-org deployment). `orgs` is /auth/me's
+// list ({ id, name, role, default }); `active` is `activeId` when it is
+// one of them, else the first.
+export function orgChipModel(orgs, activeId = null) {
+  const list = Array.isArray(orgs) ? orgs : [];
+  const active = list.find((o) => o.id === activeId) || list[0] || null;
+  if (list.length > 1) return { kind: 'switcher', active };
+  if (list.length === 1 && !list[0].default) return { kind: 'label', active };
+  return { kind: 'none', active };
+}
 
 // The headers every session-authenticated studio request needs: CSRF
 // always, the active org when tenancy is on. Raw fetch() call sites use

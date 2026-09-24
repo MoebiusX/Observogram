@@ -17,6 +17,14 @@
  *    Everything goes through tx(), atomic(), prepare(db, sql), pragma()
  *    and execScript().
  *
+ * 4. The identity switch (slice 2): server/auth.mjs exports resolveSession
+ *    and none of the file-era readers (readSession, readUsers, writeUsers,
+ *    maybeSeedDefaultAdmin); no tools/lib module imports from server/ (the
+ *    journey engine opens no database); and only the boot, the legacy
+ *    migration, the store's import/ops/cli modules, the suites and their
+ *    fixtures import server/store/legacy-files.mjs — nothing else reads
+ *    users.json or orgs.json.
+ *
  * The matchers are tested on known-good and known-bad snippets first, so
  * the guard cannot pass by matching nothing.
  */
@@ -111,4 +119,47 @@ test('no BEGIN, SAVEPOINT or raw handle prepare()/exec() in server/store outside
     .filter(([, v]) => v.length)
     .map(([f, v]) => `${f}: ${v.join(', ')}`);
   assert.deepEqual(offenders, [], 'use tx()/atomic() and prepare(db, sql)/pragma()/execScript() from db.mjs');
+});
+
+// ---------- 4. the identity switch ----------
+
+const NAMES_LEGACY_FILES = /legacy-files\.mjs['"`]/;
+const IMPORTS_SERVER = /(?:\bfrom\s*|\bimport\s*\(\s*)['"`](?:\.\.\/)+server\//;
+const LEGACY_FILES_IMPORTERS = [
+  /^server\/boot\.mjs$/, /^server\/tenancy\.mjs$/, /^server\/store\/(?:import|ops|cli)\.mjs$/,
+  /^server\/test-[^/]*\.mjs$/, /^server\/fixtures\//, /^tools\/test-store-prestore-live\.mjs$/,
+];
+
+test('the identity-switch matchers flag what they must and pass what they must', () => {
+  for (const bad of ["import { x } from './store/legacy-files.mjs';", "await import('../server/store/legacy-files.mjs')"]) {
+    assert.ok(NAMES_LEGACY_FILES.test(withoutComments(bad)), bad);
+  }
+  assert.ok(!NAMES_LEGACY_FILES.test(withoutComments('// see server/store/legacy-files.mjs')), 'a comment is not an import');
+  for (const bad of ["import { a } from '../../server/store/db.mjs';", "const m = await import('../server/tenancy.mjs');", "export { b } from '../server/x.mjs';"]) {
+    assert.ok(IMPORTS_SERVER.test(bad), bad);
+  }
+  for (const good of ["import { a } from './brand-env.mjs';", "import { b } from '../contracts/x.mjs';"]) assert.ok(!IMPORTS_SERVER.test(good), good);
+});
+
+test('server/auth.mjs exports resolveSession and none of the file-era readers', async () => {
+  const auth = await import('./auth.mjs');
+  assert.equal(typeof auth.resolveSession, 'function');
+  for (const gone of ['readSession', 'readUsers', 'writeUsers', 'usersFilePath', 'maybeSeedDefaultAdmin', 'defaultAdminCredentialActive']) {
+    assert.ok(!(gone in auth), `auth.mjs no longer exports ${gone}`);
+  }
+});
+
+test('no tools/lib module imports from server/', () => {
+  const files = sourceFiles(join(ROOT, 'tools', 'lib'));
+  assert.ok(files.includes('tools/lib/journey.mjs'), `walked tools/lib (${files.length} files)`);
+  const offenders = files.filter((f) => IMPORTS_SERVER.test(withoutComments(readFileSync(join(ROOT, f), 'utf8'))));
+  assert.deepEqual(offenders, [], 'tools/lib stays free of server code (the journey engine opens no database)');
+});
+
+test('only the boot, the migration, the store import/ops/cli, the suites and fixtures import legacy-files.mjs', () => {
+  const files = sourceFiles().filter((f) => f !== 'server/store/legacy-files.mjs' && f !== SELF);
+  const importers = files.filter((f) => NAMES_LEGACY_FILES.test(withoutComments(readFileSync(join(ROOT, f), 'utf8'))));
+  assert.ok(importers.includes('server/boot.mjs') && importers.includes('server/store/import.mjs'), `found the importers (${importers.join(', ')})`);
+  const offenders = importers.filter((f) => !LEGACY_FILES_IMPORTERS.some((re) => re.test(f)));
+  assert.deepEqual(offenders, [], 'nothing else reads users.json or orgs.json after the switch');
 });

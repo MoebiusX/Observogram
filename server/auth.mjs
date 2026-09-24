@@ -5,33 +5,41 @@
 // exception ratified with the plan); sessions, cookies, password
 // hashing and everything else are node: builtins.
 //
+// Users live in the store (docs/STORE_PLAN.md slice 2): server/boot.mjs
+// imports a legacy users.json once, seeds the first admin, and the CLIs
+// (`npm run users`, `npm run orgs`) write the store directly.
+//
 // Postures (mutually exclusive; the MODE is env-detected, stand-alone
-// ARMING is per-request — the users file may be seeded by start() on a
-// fresh install or written by `npm run users` after boot):
+// ARMING is per-request — identity_armed may be set by start() on a fresh
+// install or by `npm run users` while the server runs):
 //   - OPEN (OBSERVOGRAM_AUTH=off): the identity system is disabled —
 //     no login, no seeding, /auth/* answers 404. The pre-0.5
 //     no-friction posture, kept for dev shells, scripts and CI.
-//   - LOCAL USERS (stand-alone): a users file exists
-//     (OBSERVOGRAM_USERS_FILE, default <workspace>/users.json) → a
-//     password login page at /auth/login, credentials scrypt-hashed in
-//     the file, managed by `npm run users` (tools/user-admin.mjs). No
-//     IdP, no network dependency — file-first like everything else.
-//     The session secret auto-generates and persists into the
-//     workspace, so stand-alone mode is zero-config beyond adding a
-//     user. First boot with NOTHING configured ships like Grafana:
-//     start() seeds admin/admin, the change is asked at every sign-in
-//     until it lands (skippable per session for the seeded default
-//     only), and the default credential never binds beyond loopback
-//     — see maybeSeedDefaultAdmin().
-//   - OIDC (OBSERVOGRAM_OIDC_ISSUER set — wins over a users file):
+//   - LOCAL USERS (stand-alone): the store's identity_armed flag is set
+//     (the import of a users file, the seed, the first `npm run users --
+//     add`) → a password login page at /auth/login, credentials
+//     scrypt-hashed in the store. No IdP, no network dependency. Once
+//     armed it stays armed: removing users never reopens a server. The
+//     session secret auto-generates and persists into the workspace.
+//     First boot with NOTHING configured ships like Grafana: start()
+//     seeds admin/admin, the change is asked at every sign-in until it
+//     lands (skippable per session for the seeded default only), and the
+//     default credential never binds beyond loopback — see
+//     server/boot.mjs.
+//   - OIDC (OBSERVOGRAM_OIDC_ISSUER set — wins over local users):
 //     Authorization Code + PKCE against any conformant provider
-//     (Entra ID, Google, Okta, Keycloak, dex).
+//     (Entra ID, Google, Okta, Keycloak, dex). Users are recorded as
+//     <issuerKey>#<sub> (the issuer key is canonIssuer() of the variable,
+//     never the token's iss).
 //
 // In BOTH authenticated postures the session is the same signed
-// (HMAC-SHA256) HttpOnly SameSite=Lax cookie — no session store. ALL
-// /api data requires a session (or the bearer token, which remains the
-// service-account/CI path); the static studio shell stays open so the
-// client can redirect to /auth/login.
+// (HMAC-SHA256) HttpOnly SameSite=Lax cookie, carrying the user's login
+// and session epoch: every reader resolves it against the store
+// (resolveSession), so a password change, a disable or "sign out
+// everywhere" revokes the user's cookies. ALL /api data requires a
+// session (or the bearer token, which remains the service-account/CI
+// path); the static studio shell stays open so the client can redirect
+// to /auth/login.
 //
 // Env contract (every knob also honors the legacy TOMOGRAPH_* spelling —
 // see tools/lib/brand-env.mjs):
@@ -39,7 +47,11 @@
 //   OBSERVOGRAM_OIDC_CLIENT_ID     registered client id (required w/ issuer)
 //   OBSERVOGRAM_OIDC_CLIENT_SECRET optional — omit for a public PKCE client
 //   OBSERVOGRAM_OIDC_REDIRECT_URL  optional — defaults to <host>/auth/callback
-//   OBSERVOGRAM_USERS_FILE         optional — stand-alone users file path
+//   OBSERVOGRAM_BOOTSTRAP_ADMIN    OIDC: <issuer>#<sub> or a verified email —
+//                                  granted owner at sign-in while no owner
+//                                  can sign in with OIDC
+//   OBSERVOGRAM_USERS_FILE         optional — a legacy users file, imported
+//                                  once at the first start of a store build
 //   OBSERVOGRAM_AUTH               'off' disables identity entirely (open posture)
 //   OBSERVOGRAM_ADMIN_PASSWORD     first-boot seed password for 'admin'; skips
 //                                  the forced change (docker/k8s, where the
@@ -52,11 +64,18 @@
 //                                  dex-in-docker) — never production
 
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as oidc from 'openid-client';
 import { brandEnv, baseWorkspacePath } from '../tools/lib/brand-env.mjs';
-import { tenancyEnabled, orgsForUser } from './tenancy.mjs';
+import { currentStore } from './store/db.mjs';
+import { getMeta, isIdentityArmed } from './store/meta.mjs';
+import { getOrg } from './store/orgs.mjs';
+import { listMembershipsForUser } from './store/memberships.mjs';
+import { getUserByLogin, setPassword, touchLogin } from './store/users.mjs';
+import {
+  canonIssuer, firstSightOidc, oidcLogin, oidcSignIn, parseBootstrapAdmin, preStoreSub, sanitiseClaims,
+} from './store/identity.mjs';
 
 const SESSION_COOKIE = 'observogram_session';
 // Sessions signed before the rebrand stay valid (same HMAC secret): read
@@ -65,7 +84,7 @@ const LEGACY_SESSION_COOKIE = 'tomo_session';
 const FLOW_COOKIE = 'observogram_flow';
 const FLOW_TTL_S = 600;
 // Forced password change (seeded default / admin-set temporary): the
-// verified-but-not-yet-sessioned sub rides this signed cookie between
+// verified-but-not-yet-sessioned login rides this signed cookie between
 // POST /auth/login and POST /auth/change-password (or its /skip
 // sibling, seeded default only).
 const PWFLOW_COOKIE = 'observogram_pwflow';
@@ -73,23 +92,33 @@ const PWFLOW_TTL_S = 600;
 
 function workspaceRoot() { return baseWorkspacePath(); }
 
-export function usersFilePath() { return brandEnv('USERS_FILE') || join(workspaceRoot(), 'users.json'); }
-
 // OBSERVOGRAM_AUTH=off is the one hard switch that disables identity
 // entirely (no login, no seeding, /auth/* inert). It beats OIDC config
-// and an existing users file on purpose: one knob, one meaning. The
-// network fail-closed rule in start() still applies — this opens
-// loopback dev, not the internet.
+// and an armed store on purpose: one knob, one meaning. The network
+// fail-closed rule in start() still applies — this opens loopback dev,
+// not the internet.
 export function authDisabled() { return brandEnv('AUTH').toLowerCase() === 'off'; }
 
 export function oidcEnabled() { return !authDisabled() && !!brandEnv('OIDC_ISSUER'); }
 
-// Stand-alone mode: active when a users file exists (and OIDC doesn't
-// win). Checked per request, not at boot — the file may be seeded by
-// start() on first boot or created by `npm run users` while running.
-export function localUsersEnabled() { return !authDisabled() && !oidcEnabled() && existsSync(usersFilePath()); }
+// Stand-alone mode: armed by the store's identity_armed flag (and OIDC
+// doesn't win). A flag, not a row count and not a file: checked per
+// request, so `npm run users -- add` arms a running server, and nothing
+// disarms it. Throws when the store is not open — only without start()
+// (fail closed).
+export function localUsersEnabled() { return !authDisabled() && !oidcEnabled() && isIdentityArmed(currentStore()); }
 
 export function authEnabled() { return oidcEnabled() || localUsersEnabled(); }
+
+// The issuer key OIDC logins are recorded under: canonIssuer() of the
+// variable (never the token's iss), memoised per raw value.
+let issuerMemo = { raw: null, key: null };
+export function issuerKey() {
+  const raw = brandEnv('OIDC_ISSUER') || null;
+  if (!raw) return null;
+  if (issuerMemo.raw !== raw) issuerMemo = { raw, key: canonIssuer(raw) };
+  return issuerMemo.key;
+}
 
 function sessionTtlMs() {
   const h = Number(brandEnv('SESSION_TTL_HOURS') || 8);
@@ -97,8 +126,8 @@ function sessionTtlMs() {
 }
 
 // The HMAC key. OIDC requires it via env (instances must share it);
-// stand-alone mode auto-generates once and persists it next to the
-// users file's workspace so restarts keep sessions valid.
+// stand-alone mode auto-generates once and persists it in the workspace
+// so restarts keep sessions valid.
 let cachedSecret = null;
 function sessionSecret() {
   const fromEnv = brandEnv('SESSION_SECRET');
@@ -115,7 +144,13 @@ function sessionSecret() {
   return cachedSecret;
 }
 
-// ---------- stand-alone users (scrypt, plain file) ----------
+// Stand-alone is single-instance by definition — the auto-persisted
+// workspace secret is enough; start() touches it once armed so filesystem
+// problems surface at boot instead of at first login (in the open posture
+// nothing may be written into the workspace).
+export function touchSessionSecret() { sessionSecret(); }
+
+// ---------- passwords (scrypt) ----------
 
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
 
@@ -131,81 +166,6 @@ export function verifyPassword(password, rec) {
   const want = Buffer.from(rec.hash, 'base64');
   const got = scryptSync(String(password), salt, want.length, { N: rec.N, r: rec.r, p: rec.p });
   return got.length === want.length && timingSafeEqual(got, want);
-}
-
-export function readUsers(file = usersFilePath()) {
-  try {
-    const data = JSON.parse(readFileSync(file, 'utf8'));
-    return (data && typeof data === 'object' && data.users && typeof data.users === 'object') ? data : { users: {} };
-  } catch (_) { return { users: {} }; }
-}
-
-export function writeUsers(data, file = usersFilePath()) {
-  mkdirSync(dirname(file), { recursive: true });
-  // Atomic-ish: temp + rename keeps a crash from truncating the file.
-  const tmp = `${file}.tmp`;
-  writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
-  writeFileSync(file, readFileSync(tmp));
-  try { writeFileSync(tmp, ''); } catch (_) { /* best effort */ }
-}
-
-// ---------- Grafana-style first boot: seed a default admin ----------
-//
-// A fresh install should feel like a product, not a config exercise:
-// boot with NOTHING configured → users.json is seeded with admin/admin
-// and the login page is live, change asked at every sign-in until it
-// lands (skippable per session for the seeded default). The seed
-// backs off whenever the operator has expressed ANY intent: OIDC, an
-// existing users file, a bearer token (the 10B token-only contract),
-// armed tenancy (its fail-closed boot message is the better error), or
-// OBSERVOGRAM_AUTH=off. OBSERVOGRAM_ADMIN_PASSWORD seeds that secret
-// instead and skips the forced change — for docker/k8s, where signing
-// in on loopback first is impossible.
-export function maybeSeedDefaultAdmin({ log = () => {}, wouldExpose = false } = {}) {
-  if (authDisabled() || oidcEnabled() || brandEnv('API_TOKEN') || tenancyEnabled()) return false;
-  const provided = brandEnv('ADMIN_PASSWORD');
-  if (existsSync(usersFilePath())) {
-    // Rescue: a workspace seeded on loopback and later put behind the
-    // network is stuck — the seed backs off (file exists) but the
-    // exposure guard keeps refusing. OBSERVOGRAM_ADMIN_PASSWORD may
-    // overwrite a record ONLY while it still holds the seeded default
-    // (the flags clear the moment a real password lands, so a real
-    // credential can never be clobbered from the env).
-    if (!provided) return false;
-    const data = readUsers();
-    const rec = data.users.admin;
-    if (!rec || !rec.seededDefault || !rec.mustChange) return false;
-    rec.password = hashPassword(provided);
-    delete rec.mustChange;
-    delete rec.seededDefault;
-    writeUsers(data);
-    log("[studio] replaced the still-default admin password from OBSERVOGRAM_ADMIN_PASSWORD");
-    return true;
-  }
-  // Never strand default credentials on the disk of a to-be-exposed
-  // server: without a real password the fail-closed check right after
-  // this refuses the bind and names the options.
-  if (!provided && wouldExpose) return false;
-  writeUsers({ users: { admin: {
-    name: 'Admin',
-    createdAt: new Date().toISOString(),
-    password: hashPassword(provided || 'admin'),
-    ...(provided ? {} : { mustChange: true, seededDefault: true }),
-  } } });
-  log(provided
-    ? "[studio] seeded user 'admin' from OBSERVOGRAM_ADMIN_PASSWORD — sign in at /auth/login"
-    : '[studio] first boot: seeded default sign-in admin / admin — a password change is asked at sign-in (skippable until it lands). OBSERVOGRAM_AUTH=off runs open with no login.');
-  return true;
-}
-
-// True while the seeded admin/admin credential is still usable. The
-// exposure guard in server/index.mjs keys off this: the default
-// credential never binds beyond loopback. Deliberately narrow — an
-// admin-set temporary password (mustChange without seededDefault) is a
-// real secret and does not block exposure.
-export function defaultAdminCredentialActive() {
-  if (!localUsersEnabled()) return false;
-  return Object.values(readUsers().users).some(u => u && u.seededDefault && u.mustChange);
 }
 
 // Naive brute-force damper: 5 failures per user+address → 30s lockout.
@@ -268,11 +228,99 @@ function clearCookie(res, name) {
   res.append('Set-Cookie', `${name}=; ${cookieFlags(0)}`);
 }
 
-// The session attached to a request, or null. Exported for the auth
-// gate in server/index.mjs.
-export function readSession(req) {
+// ---------- sessions, resolved against the store ----------
+//
+// The cookie payload is { sub, login, ep, email, name, iat, exp }: `sub`
+// stays what a pre-store build knows the user by (preStoreSub: the
+// username, or the bare IdP sub), `login` is users.login, `ep` the
+// session epoch at issue. A cookie without `login` is pre-upgrade and
+// reads as epoch 0 (the epoch the import gives its rows).
+
+// The session attached to a request, or null — the one algorithm every
+// session reader uses. A refused cookie is the same as no cookie. May
+// write: the first sight of a pre-upgrade OIDC cookie creates its row.
+export function resolveSession(req, { db = currentStore() } = {}) {
+  if (!authEnabled()) return null;
   const cookies = parseCookies(req);
-  return verify(cookies[SESSION_COOKIE] || cookies[LEGACY_SESSION_COOKIE]);
+  const payload = verify(cookies[SESSION_COOKIE] || cookies[LEGACY_SESSION_COOKIE]);
+  if (!payload) return null;
+  const preUpgrade = typeof payload.login !== 'string';
+  let ep = 0;
+  if (!preUpgrade) {
+    if (!Number.isSafeInteger(payload.ep) || payload.ep < 0) return null;
+    ep = payload.ep;
+  }
+  const mode = oidcEnabled() ? 'oidc' : 'local';
+  let login;
+  if (!preUpgrade) login = payload.login;
+  else if (typeof payload.sub === 'string' && payload.sub) login = mode === 'oidc' ? oidcLogin(issuerKey(), payload.sub) : payload.sub;
+  else return null;
+  let user = getUserByLogin(db, login);
+  if (mode === 'oidc') {
+    const key = issuerKey();
+    if (!login.startsWith(`${key}#`)) return null;   // another issuer's cookie, or a local one
+    if (!user) {
+      if (!preUpgrade) return null;                   // only the callback creates post-upgrade rows
+      let claims;
+      try {
+        claims = sanitiseClaims({ sub: payload.sub, email: payload.email, name: payload.name }, brandEnv('OIDC_ISSUER'));
+      } catch { return null; }                        // an unusable sub
+      user = firstSightOidc(db, {
+        issuerKey: key, issuerDisplay: brandEnv('OIDC_ISSUER'), sub: claims.sub, email: claims.email, name: claims.name,
+      });
+    }
+    if (user.kind !== 'oidc') return null;
+  } else if (!user || user.kind !== 'local') {
+    return null;                                       // a local cookie with no row
+  }
+  if (user.disabled) return null;
+  if (user.sessionEpoch !== ep) return null;           // a changed password, a disable, "sign out everywhere"
+  return {
+    user, login: user.login, sub: preStoreSub(user),
+    email: user.email ?? payload.email ?? null,
+    name: user.name ?? (user.kind === 'local' ? user.login : payload.name ?? null),
+    exp: payload.exp, preUpgrade,
+  };
+}
+
+// The forced-change flow cookie, resolved against the store: the row must
+// be the local, enabled, still-must-change user it was issued for, at the
+// same epoch (a pre-upgrade flow cookie carries no login or ep: its sub is
+// the login and it reads as epoch 0).
+function resolvePwflow(req, db) {
+  const flow = verify(parseCookies(req)[PWFLOW_COOKIE]);
+  if (!flow || flow.purpose !== 'pwchange') return null;
+  const login = typeof flow.login === 'string' ? flow.login : flow.sub;
+  if (typeof login !== 'string' || !login) return null;
+  const ep = Number.isSafeInteger(flow.ep) ? flow.ep : 0;
+  const user = getUserByLogin(db, login);
+  if (!user || user.kind !== 'local' || user.disabled || user.sessionEpoch !== ep || !user.mustChange) return null;
+  return { user };
+}
+
+// Issue the signed session cookie for a store row. Shared by the login
+// paths, the forced change and the OIDC callback.
+function issueSession(res, db, user) {
+  const session = {
+    sub: preStoreSub(user),
+    login: user.login,
+    ep: user.sessionEpoch,
+    email: user.email || null,
+    name: user.name || (user.kind === 'local' ? user.login : null),
+    iat: Date.now(),
+    exp: Date.now() + sessionTtlMs(),
+  };
+  setCookie(res, SESSION_COOKIE, sign(session), Math.floor(sessionTtlMs() / 1000));
+}
+
+// The user's live orgs, first membership first; `default: true` marks the
+// deployment's default org (only ever on an org the user is in).
+function orgsOf(db, user) {
+  const defaultOrg = getMeta(db, 'default_org');
+  return listMembershipsForUser(db, user.id).map((m) => {
+    const org = getOrg(db, m.orgId);
+    return { id: m.orgId, name: org?.name || m.orgId, role: m.role, default: m.orgId === defaultOrg };
+  });
 }
 
 // ---------- OIDC client (lazy discovery, cached) ----------
@@ -314,17 +362,17 @@ function redirectUri(req) {
 export function initAuth(app) {
   if (authDisabled()) return;
   if (oidcEnabled()) { initOidc(app); registerShared(app, 'oidc'); return; }
-  // Stand-alone routes register unconditionally and gate on the users
-  // file PER REQUEST: route registration is load-time in Express, but
-  // the file may not exist yet at import — it can be seeded by start()
-  // on first boot or created by `npm run users` while the process runs.
-  // Posture stays request-time, exactly like the /api gate.
+  // Stand-alone routes register unconditionally and gate on
+  // identity_armed PER REQUEST: route registration is load-time in
+  // Express, but the store is not open yet at import — the flag may be
+  // set by start() on first boot or by `npm run users` while the process
+  // runs. Posture stays request-time, exactly like the /api gate.
   initLocalUsers(app);
   registerShared(app, 'local-users');
 }
 
-// 404 while identity is off (open posture, or the users file not yet
-// created) — the studio detects "local, no login" by this status code.
+// 404 while identity is off (open posture, or stand-alone not yet armed)
+// — the studio detects "local, no login" by this status code.
 function identityOff(res) {
   return res.status(404).json({ ok: false, error: 'identity not configured' });
 }
@@ -338,18 +386,21 @@ function registerShared(app, mode) {
   });
   app.get('/auth/me', (req, res) => {
     if (!authEnabled()) return identityOff(res);
-    const s = readSession(req);
+    const db = currentStore();
+    const s = resolveSession(req, { db });
     if (!s) return res.json({ ok: true, mode, authenticated: false, login: '/auth/login' });
     res.json({
       ok: true, mode, authenticated: true, sub: s.sub, email: s.email, name: s.name, expiresAt: s.exp,
-      // Stage 2 tenancy: the client needs the user's orgs at boot to pick
-      // an active one (X-Observogram-Org) before the first /api call.
-      ...(tenancyEnabled() ? { orgs: orgsForUser(s.sub) } : {}),
+      // Nested: the unauthenticated body's `login` is the login page.
+      user: { login: s.user.login, kind: s.user.kind, owner: s.user.isOwner },
+      // Tenancy is always on: the client picks an active org
+      // (X-Observogram-Org) from these before the first /api call.
+      orgs: orgsOf(db, s.user),
     });
   });
 }
 
-// ---------- stand-alone: password login against the users file ----------
+// ---------- stand-alone: password login against the store ----------
 
 const AUTH_PAGE_STYLE = `<style>
   body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f1623;color:#e5e8ec;
@@ -395,26 +446,7 @@ ${AUTH_PAGE_STYLE}</head><body>
   ${askCurrent ? '<a class="skip" href="/">Cancel — back to the studio</a>' : ''}
 </form></body></html>`;
 
-// Issue the signed session cookie for a users-file record. Shared by
-// the normal login path and the forced password change.
-function issueSession(res, username, rec) {
-  const session = {
-    sub: username,
-    email: rec.email || null,
-    name: rec.name || username,
-    iat: Date.now(),
-    exp: Date.now() + sessionTtlMs(),
-  };
-  setCookie(res, SESSION_COOKIE, sign(session), Math.floor(sessionTtlMs() / 1000));
-}
-
 function initLocalUsers(app) {
-  // Stand-alone is single-instance by definition — the auto-persisted
-  // workspace secret is enough; touching it here surfaces filesystem
-  // problems at boot instead of at first login. Only when already armed:
-  // in the open posture registration must not write into the workspace.
-  if (localUsersEnabled()) sessionSecret();
-
   app.get('/auth/login', (req, res) => {
     if (!localUsersEnabled()) return identityOff(res);
     res.type('html').send(LOGIN_PAGE());
@@ -422,6 +454,7 @@ function initLocalUsers(app) {
 
   app.post('/auth/login', (req, res) => {
     if (!localUsersEnabled()) return identityOff(res);
+    const db = currentStore();
     const body = req.body || {};
     const username = String(body.username || '').trim();
     const password = String(body.password || '');
@@ -434,19 +467,24 @@ function initLocalUsers(app) {
         : res.status(status).type('html').send(LOGIN_PAGE(msg));
     };
     if (loginLocked(key)) return fail('too many attempts — wait 30 seconds', 429);
-    const rec = readUsers().users[username];
+    const row = username ? getUserByLogin(db, username) : null;
+    // A disabled row answers exactly like an unknown one.
+    const rec = row?.kind === 'local' && !row.disabled && row.password ? row : null;
     // Always burn a hash verification so unknown users cost the same as
     // wrong passwords (no username oracle).
     const ok = rec ? verifyPassword(password, rec.password) : (hashPassword('timing-equalizer'), false);
     if (!ok) return fail('invalid username or password');
     clearLoginFailures(key);
+    touchLogin(db, rec.id);
     if (rec.mustChange) {
       // Correct password, but it's the seeded default (or an admin-set
       // temporary): no session yet — a short-lived signed flow cookie
-      // carries the sub to /auth/change-password, which issues the real
-      // session once a new password is set (or, for the seeded default
-      // only, once the change is skipped for this session).
-      setCookie(res, PWFLOW_COOKIE, sign({ sub: username, purpose: 'pwchange', exp: Date.now() + PWFLOW_TTL_S * 1000 }), PWFLOW_TTL_S);
+      // carries the login and epoch to /auth/change-password, which issues
+      // the real session once a new password is set (or, for the seeded
+      // default only, once the change is skipped for this session).
+      setCookie(res, PWFLOW_COOKIE, sign({
+        sub: rec.login, login: rec.login, ep: rec.sessionEpoch, purpose: 'pwchange', exp: Date.now() + PWFLOW_TTL_S * 1000,
+      }), PWFLOW_TTL_S);
       return wantsJson
         ? res.json({ ok: true, mustChange: true, next: '/auth/change-password' })
         : res.redirect('/auth/change-password');
@@ -457,24 +495,24 @@ function initLocalUsers(app) {
     // first, so a stale one would target the other account): clear it
     // the moment a normal session lands.
     clearCookie(res, PWFLOW_COOKIE);
-    issueSession(res, username, rec);
+    issueSession(res, db, rec);
     return wantsJson ? res.json({ ok: true }) : res.redirect('/');
   });
 
   app.get('/auth/change-password', (req, res) => {
     if (!localUsersEnabled()) return identityOff(res);
-    const flow = verify(parseCookies(req)[PWFLOW_COOKIE]);
-    if (flow && flow.purpose === 'pwchange') {
+    const db = currentStore();
+    const flow = resolvePwflow(req, db);
+    if (flow) {
       // The skip affordance renders only while the record still holds the
       // seeded default — an admin-set temporary password stays a forced
       // change (see the skip route below for the rationale).
-      const canSkip = !!readUsers().users[flow.sub]?.seededDefault;
-      return res.type('html').send(CHANGE_PAGE('', { canSkip }));
+      return res.type('html').send(CHANGE_PAGE('', { canSkip: flow.user.seededDefault }));
     }
     // Signed-in self-service (the account menu's "change password…"):
     // the same page, with the current password required.
-    const session = readSession(req);
-    if (session?.sub && readUsers().users[session.sub]) {
+    const session = resolveSession(req, { db });
+    if (session?.user.kind === 'local') {
       return res.type('html').send(CHANGE_PAGE('', { askCurrent: true }));
     }
     res.redirect('/auth/login');
@@ -488,40 +526,29 @@ function initLocalUsers(app) {
   // Neither path needs a separate CSRF token.
   app.post('/auth/change-password', (req, res) => {
     if (!localUsersEnabled()) return identityOff(res);
+    const db = currentStore();
     const wantsJson = (req.headers.accept || '').includes('application/json');
-    const flow = verify(parseCookies(req)[PWFLOW_COOKIE]);
-    const inFlow = !!flow && flow.purpose === 'pwchange';
-    const session = inFlow ? null : readSession(req);
-    const sub = inFlow ? flow.sub : session?.sub;
-    if (!sub) {
+    const flow = resolvePwflow(req, db);
+    const inFlow = !!flow;
+    const session = inFlow ? null : resolveSession(req, { db });
+    const user = inFlow ? flow.user : (session?.user.kind === 'local' ? session.user : null);
+    if (!user) {
       return wantsJson
         ? res.status(401).json({ ok: false, error: 'password-change flow expired — sign in again', login: '/auth/login' })
         : res.redirect('/auth/login');
     }
-    const data = readUsers();
-    const rec = data.users[sub];
-    if (!rec) {
-      return wantsJson
-        ? res.status(401).json({ ok: false, error: 'unknown user', login: '/auth/login' })
-        : res.redirect('/auth/login');
-    }
     const body = req.body || {};
     const password = String(body.password || '');
-    const canSkip = inFlow && !!rec.seededDefault;
+    const canSkip = inFlow && user.seededDefault;
     const bad = (msg, status = 400) => wantsJson
       ? res.status(status).json({ ok: false, error: msg })
       : res.status(status).type('html').send(CHANGE_PAGE(msg, { canSkip, askCurrent: !inFlow }));
     if (!inFlow) {
-      // Known limitation of the stateless-session model: rotating the
-      // password here does NOT revoke other outstanding sessions — an
-      // already-stolen cookie rides out its TTL. Real revocation needs a
-      // per-user epoch persisted in users.json and checked in
-      // readSession; until then the TTL (default 8h) bounds the window.
       // Same damper as login — current-password guesses from a stolen
       // session cookie must not be free.
-      const key = `${sub}|${req.ip || ''}`;
+      const key = `${user.login}|${req.ip || ''}`;
       if (loginLocked(key)) return bad('too many attempts — wait 30 seconds', 429);
-      if (!verifyPassword(String(body.current || ''), rec.password)) {
+      if (!verifyPassword(String(body.current || ''), user.password)) {
         noteLoginFailure(key);
         return bad('current password is incorrect', 401);
       }
@@ -529,12 +556,11 @@ function initLocalUsers(app) {
     }
     if (password.length < 8) return bad('password must be at least 8 characters');
     if (password !== String(body.repeat || '')) return bad('passwords do not match');
-    rec.password = hashPassword(password);
-    delete rec.mustChange;
-    delete rec.seededDefault;
-    writeUsers(data);
+    // Bumps the epoch: every other session of this user ends here; this
+    // one is re-issued at the new epoch.
+    const updated = setPassword(db, user.login, user.id, hashPassword(password), { mustChange: false, seededDefault: false });
     if (inFlow) clearCookie(res, PWFLOW_COOKIE);
-    issueSession(res, sub, rec);
+    issueSession(res, db, updated);
     return wantsJson ? res.json({ ok: true }) : res.redirect('/');
   });
 
@@ -544,33 +570,28 @@ function initLocalUsers(app) {
   //   - only while the record still holds the seeded default; an
   //     admin-set temporary password (mustChange without seededDefault)
   //     stays a forced change — skipping would defeat the admin's intent.
-  //   - the mustChange/seededDefault flags stay untouched, so every
-  //     subsequent sign-in asks again ("for now", not "never") and
-  //     defaultAdminCredentialActive() keeps refusing non-loopback
+  //   - the must_change/seeded_default flags stay untouched, so every
+  //     subsequent sign-in asks again ("for now", not "never") and the
+  //     boot's default-credential check keeps refusing non-loopback
   //     binds — skipping never lets admin/admin reach a network.
   // The flow cookie is the credential, same as the change POST above.
   app.post('/auth/change-password/skip', (req, res) => {
     if (!localUsersEnabled()) return identityOff(res);
+    const db = currentStore();
     const wantsJson = (req.headers.accept || '').includes('application/json');
-    const flow = verify(parseCookies(req)[PWFLOW_COOKIE]);
-    if (!flow || flow.purpose !== 'pwchange') {
+    const flow = resolvePwflow(req, db);
+    if (!flow) {
       return wantsJson
         ? res.status(401).json({ ok: false, error: 'password-change flow expired — sign in again', login: '/auth/login' })
         : res.redirect('/auth/login');
     }
-    const rec = readUsers().users[flow.sub];
-    if (!rec) {
-      return wantsJson
-        ? res.status(401).json({ ok: false, error: 'unknown user', login: '/auth/login' })
-        : res.redirect('/auth/login');
-    }
-    if (!rec.seededDefault) {
+    if (!flow.user.seededDefault) {
       return wantsJson
         ? res.status(403).json({ ok: false, error: 'a password change is required for this account' })
         : res.status(403).type('html').send(CHANGE_PAGE('a password change is required for this account'));
     }
     clearCookie(res, PWFLOW_COOKIE);
-    issueSession(res, flow.sub, rec);
+    issueSession(res, db, flow.user);
     return wantsJson ? res.json({ ok: true, skipped: true }) : res.redirect('/');
   });
 }
@@ -611,6 +632,7 @@ function initOidc(app) {
     const flow = verify(parseCookies(req)[FLOW_COOKIE]);
     clearCookie(res, FLOW_COOKIE);
     if (!flow) return res.status(400).json({ ok: false, error: 'login flow expired or missing — start again at /auth/login' });
+    let claims;
     try {
       const config = await getConfig();
       const currentUrl = new URL(req.originalUrl, redirectUri(req));
@@ -619,20 +641,31 @@ function initOidc(app) {
         expectedState: flow.state,
         expectedNonce: flow.nonce,
       });
-      const claims = tokens.claims() || {};
-      const session = {
-        sub: claims.sub,
-        email: claims.email || null,
-        name: claims.name || null,
-        iat: Date.now(),
-        exp: Date.now() + sessionTtlMs(),
-      };
-      setCookie(res, SESSION_COOKIE, sign(session), Math.floor(sessionTtlMs() / 1000));
-      res.redirect('/');
+      // '' name/email → null; an unusable sub refuses the sign-in.
+      claims = sanitiseClaims(tokens.claims() || {}, brandEnv('OIDC_ISSUER'));
     } catch (e) {
       // openid-client errors carry protocol detail; the message is safe,
       // token material never is.
-      res.status(401).json({ ok: false, error: `sign-in failed: ${e.message}` });
+      const message = e?.code === 'ERR_OBSERVOGRAM_UNUSABLE_SUB' ? e.message : `sign-in failed: ${e.message}`;
+      return res.status(401).json({ ok: false, error: message });
     }
+    const db = currentStore();
+    let r;
+    try {
+      // The bootstrap variable is read per sign-in.
+      r = oidcSignIn(db, {
+        issuerKey: issuerKey(), issuerDisplay: claims.iss, claims,
+        bootstrap: parseBootstrapAdmin(brandEnv('BOOTSTRAP_ADMIN')),
+      });
+    } catch (e) {
+      return res.status(401).json({ ok: false, error: `sign-in failed: ${e.message}` });
+    }
+    if (r.refused === 'disabled') return res.status(403).json({ ok: false, error: 'this account is disabled — ask an owner' });
+    if (r.refused === 'local-login') {
+      return res.status(403).json({ ok: false, error: 'this sign-in collides with a local user of the same login — ask an owner' });
+    }
+    touchLogin(db, r.user.id);
+    issueSession(res, db, r.user);
+    res.redirect('/');
   });
 }

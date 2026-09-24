@@ -49,6 +49,14 @@ process.env.OBSERVOGRAM_WORKSPACE = WORKSPACE;
 // the off switch, first boot would seed a default admin (Grafana-style
 // bootstrap) and 401 every /api call below.
 process.env.OBSERVOGRAM_AUTH = 'off';
+// Hermetic store (docs/STORE_PLAN.md slice 2): start() opens the store and
+// imports; a shell's OBSERVOGRAM_DB (or a seed / join-role knob) must not
+// leak in — the first start creates the default org at '.' in a database
+// inside WORKSPACE and, with AUTH=off, seeds nothing.
+for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH']) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
 
 import { createHarness } from './lib/harness.mjs';
 const { assert, failures, report } = createHarness({ indent: '  ', truncate: 400 });

@@ -36,9 +36,10 @@ import { orgWorkspaceRoot } from './tenancy.mjs';
 
 const PACK_SUFFIX = '.pack.yaml';
 
-// Stage 2 tenancy: the root is context-aware — <workspace>/orgs/<orgId>/
-// inside a request that carries an org, the flat workspace otherwise
-// (byte-identical v1 behaviour when tenancy is off). See server/tenancy.mjs.
+// Stage 2 tenancy (always on): the root is context-aware — the root of the
+// request's org, fixed at its creation in the store (the default org's is
+// usually the workspace itself, '.'; a created org's is orgs/<orgId>/).
+// Outside an org context it throws. See server/tenancy.mjs.
 function workspaceRoot() {
   return orgWorkspaceRoot();
 }
@@ -93,7 +94,7 @@ function readIndex() {
   }
 }
 
-// In-memory index state is keyed BY ROOT: with tenancy on, each org has
+// In-memory index state is keyed BY ROOT: with tenancy, each org has
 // its own workspace subtree, and a process-wide single cache would bleed
 // one org's index (ids, labels, deletions) into another's flush. The
 // per-root record holds exactly the state the old module-level variables
