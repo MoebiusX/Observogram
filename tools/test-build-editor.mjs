@@ -23,7 +23,7 @@ import { adapt, applyEnvironmentOverlay } from './lib/adapter.mjs';
 import { instantiatePack, validationSummary } from './lib/library.mjs';
 import { loadLibrary, findEntry } from '../server/library.mjs';
 import { parsePromqlDependencies as lezer } from './lib/promql-lezer.mjs';
-import { rolodexItems, buildEditorModel, editorModeFor, EDITOR_MODES, splitBuildErrors } from '../studio/build-model.mjs';
+import { rolodexItems, buildEditorModel, editorModeFor, editorDirtyAfterAnswer, EDITOR_MODES, splitBuildErrors } from '../studio/build-model.mjs';
 import {
   sliEditorModel, checkEditorId, existingSliIds, resolveTemplate, templateParams, fieldsForType, effectiveId, percentText, ratioOf,
   fieldValueFor, numberOrText, customDefFromDraft, OVERRIDE_FIELDS,
@@ -219,6 +219,21 @@ test('a custom SLI: no defaults, cu: keys, the custom chip and evidence, its id 
   // An SLI of a product not yet selected opens too (from the rolodex behind the filter) — its status says adding selects the product.
   const foreign = buildEditorModel({ build: { ...b, editor: { key: 'alertmanager_availability', custom: false } }, library: LIBRARY });
   assert.deepEqual([foreign.key, foreign.status.kind, foreign.status.text], ['alertmanager_availability', 'off', 'not in the pack — adding it selects Alertmanager too']);
+});
+
+test('the status stays applying… while a newer edit waits on the debounce: an older request answering does not clear editorDirty (the controller applies editorDirtyAfterAnswer at the answer site)', () => {
+  const b = draftWith();
+  // Keystroke A → request A in flight → keystroke B (dirty, the timer restarted) → A answers: still dirty, still applying…
+  assert.equal(editorDirtyAfterAnswer(true, true), true);
+  assert.deepEqual(modelOf({ ...b, editorDirty: editorDirtyAfterAnswer(true, true) }, 'availability').status, { kind: 'pending', text: 'applying…' }, 'the stale result is not reported as applied');
+  // No debounce pending: the answer is to the last edit — answered.
+  assert.equal(editorDirtyAfterAnswer(true, false), false);
+  assert.deepEqual(modelOf({ ...b, editorDirty: editorDirtyAfterAnswer(true, false) }, 'availability').status.kind, 'applied');
+  assert.deepEqual([editorDirtyAfterAnswer(false, true), editorDirtyAfterAnswer(undefined, true), editorDirtyAfterAnswer(false, false)], [false, false, false]);
+  // The controller reads the flag through it where the answer lands (an inlined `b.editorDirty = false` was the bug).
+  const app = readFileSync(resolve(ROOT, 'studio/app.mjs'), 'utf8');
+  assert.match(app, /b\.editorDirty = editorDirtyAfterAnswer\(b\.editorDirty, !!buildTimer\)/);
+  assert.ok(!/b\.pending = false;\s*\n\s*b\.editorDirty = false/.test(app), 'the answer site never clears the flag outright');
 });
 
 test('create mode: the same dialog over the form — Name → id, Type, the fields per type, Add to the pack from canSubmit, the id clash said before the engine is asked; the engine’s 400 inline', () => {

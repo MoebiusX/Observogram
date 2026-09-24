@@ -1131,6 +1131,12 @@ export const LAYER_SWITCHES = { L1: ['slos'], L3: ['dashboards'], L4: ['policy',
 /** The pop-up editor's mode per step (docs/BUILD_JOURNEY.md "The editor"): editable on DEFINE and COMPILE, read-only on VERIFY. */
 export const EDITOR_MODES = { define: 'edit', compile: 'edit', verify: 'readonly' };
 export const editorModeFor = (step) => EDITOR_MODES[step] || 'edit';
+/**
+ * `build.editorDirty` once an instantiate has answered: the editor's last edit is answered — unless a newer edit
+ * still waits on the debounce (the controller restarts the timer per keystroke without a request of its own), in
+ * which case the flag stays and the status keeps reading applying… instead of 'applied · SLO <the stale id>'.
+ */
+export const editorDirtyAfterAnswer = (dirty, debouncePending) => (debouncePending ? !!dirty : false);
 
 /**
  * buildEditorModel({ build, library, mode }) → the pop-up editor's model for the SLI the draft's `editor` names

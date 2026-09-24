@@ -44,7 +44,7 @@ import { initHost } from './host.mjs';
 import {
   BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, enterStep as enterBuildStep, stepAfterInstantiate as buildStepAfterInstantiate, focusFallbackSelectors, instantiateBody as buildInstantiateBody,
   buildDefineModel, buildCompileModel, buildVerifyModel, buildDefinitionModel, buildSheetModel, buildClauseChecklist, buildStatusLine, sheetModeFor, addSliSelection, placeholdersRemaining, retargetSlis, retargetSlisForEntries, retargetOverrides,
-  restoreBuildDraft as restoreBuildDraftModel, buildEditorModel, editorModeFor, BUILD_TABS, tabName,
+  restoreBuildDraft as restoreBuildDraftModel, buildEditorModel, editorModeFor, editorDirtyAfterAnswer, BUILD_TABS, tabName,
 } from './build-model.mjs';
 import { fieldValueFor } from './build-copies-model.mjs';
 import { renderBuildEditor } from './build-editor-view.mjs';
@@ -2008,7 +2008,9 @@ async function runBuildInstantiate() {
   catch (e) { res = { ok: false, errors: [e.message] }; }
   if (seq !== buildSeq || state.build !== b) return;
   b.pending = false;
-  b.editorDirty = false;   // the editor's last edit has an answer: its status line reads it
+  // The editor's last edit has an answer, so its status line reads it — unless a newer edit still waits on the
+  // debounce (buildTimer): this answer is to an older request and the status must keep reading applying…
+  b.editorDirty = editorDirtyAfterAnswer(b.editorDirty, !!buildTimer);
   if (res?.ok) {
     applyInstantiateOk(b, res);
   } else {
