@@ -1529,7 +1529,13 @@ test('rolodexItems with the copies: the effective values and the customised fiel
   assert.deepEqual([customisedFields({ window: '7d', objective: 0.5 }), promqlEdited({ objective: 0.5 }), promqlEdited({ good: 'x' })], [['objective', 'window'], false, true]);
   assert.deepEqual(effectiveSli(INDEX.entries.find(e => e.id === 'kafka').slis.find(x => x.id === 'produce_latency_p99'), 'tier-2', { threshold: 0.2 }).threshold, 0.2);
   assert.deepEqual(customEffective(COPIES.custom[0]).good, COPIES.custom[0].good);
-  assert.deepEqual([OVERRIDE_FIELDS, SLO_WINDOWS, PROMQL_FIELDS], [['id', 'objective', 'window', 'threshold', 'query', 'good', 'total', 'description', 'unit', 'semconv_metric'], ['7d', '28d', '30d', '90d'], ['query', 'good', 'total']], 'the engine\'s list, spelled once for the browser (tools/test-library.mjs pins the engine\'s)');
+  assert.deepEqual([OVERRIDE_FIELDS, SLO_WINDOWS, PROMQL_FIELDS], [['id', 'objective', 'window', 'threshold', 'good_when', 'query', 'good', 'total', 'description', 'unit', 'semconv_metric'], ['7d', '28d', '30d', '90d'], ['query', 'good', 'total']], 'the engine\'s list, spelled once for the browser (tools/test-library.mjs pins the engine\'s)');
+  // spec 1.3: the index rows carry the direction of a threshold SLI's bound, normalised (below where the template says nothing); the effective values read it under an override.
+  const produce = INDEX.entries.find(e => e.id === 'kafka').slis.find(x => x.id === 'produce_latency_p99');
+  assert.equal(produce.good_when, 'below');
+  assert.ok(INDEX.entries.flatMap(e => e.slis).filter(s => s.type === 'threshold').every(s => s.good_when === 'below') && INDEX.entries.flatMap(e => e.slis).filter(s => s.type === 'ratio').every(s => !('good_when' in s)));
+  assert.deepEqual([effectiveSli(produce, 'tier-2', {}).good_when, effectiveSli(produce, 'tier-2', { good_when: 'above' }).good_when, customEffective({ type: 'threshold', threshold: 2 }).good_when, customEffective({ type: 'threshold', threshold: 2, good_when: 'above' }).good_when], ['below', 'above', null, 'above']);
+  assert.deepEqual(customisedFields({ good_when: 'above', objective: 0.5 }), ['objective', 'good_when']);
   // The engine's answer to the drive's copies, for the record: the SLO ids follow the objectives, the evidence dropped where the query was edited, the custom SLI in every section.
   const r = b.result;
   assert.equal(r.canonical.spec.slos.find(x => x.sli === 'kafka_produce_latency_p99').id, 'kafka_produce_latency_p99_99_5');
@@ -1546,6 +1552,12 @@ test('rolodexItems with the copies: the effective values and the customised fiel
   assert.deepEqual(ghosts.find(g => g.key === 'sli:kafka_produce_latency_p99').tags, ['sli', 'threshold', 'kafka', 'customised']);
   assert.deepEqual(ghosts.find(g => g.key === 'sli:checkout_success').tags, ['sli', 'ratio', 'custom']);
   assert.equal(ghosts.find(g => g.key === 'slo:kafka_produce_latency_p99').desc, '99.5% over 7d');
+  // A threshold candidate's ghost prints its bound with its direction under the title (the adapter's card will, once the pack exists); a ratio one nothing.
+  assert.equal(ghosts.find(g => g.key === 'sli:kafka_produce_latency_p99').subtitle, '≤ 0.1 seconds');
+  assert.ok(!('subtitle' in ghosts.find(g => g.key === 'sli:checkout_success')));
+  const floorGhosts = buildDefineModel({ build: draft({ ...COPIES, overrides: { ...COPIES.overrides, kafka_produce_latency_p99: { ...COPIES.overrides.kafka_produce_latency_p99, good_when: 'above' } }, result: null }), library: LIBRARY, requirements: REQUIREMENTS }).stack.slabs.find(x => x.id === 'L1').ghosts;
+  assert.equal(floorGhosts.find(g => g.key === 'sli:kafka_produce_latency_p99').subtitle, '≥ 0.1 seconds');
+  assert.ok(buildStackHtml(buildDefineModel({ build: draft({ ...COPIES, result: null }), library: LIBRARY, requirements: REQUIREMENTS }).stack).includes('<div class="card-sub">≤ 0.1 seconds</div>'));
 });
 
 test('the custom-form model: the id slugged from the name until it is typed, the fields per type, the clash with an SLI of the pack, the engine\'s errors inline, the definition the engine takes', () => {
@@ -1558,8 +1570,8 @@ test('the custom-form model: the id slugged from the name until it is typed, the
   const typed = customFormModel({ name: 'Checkout success', good: 'sum(rate(checkout_ok_total[5m]))', total: 'sum(rate(checkout_total[5m]))' });
   assert.deepEqual([typed.draft.id, typed.canSubmit, typed.idClash, typed.fields.find(f => f.id === 'name').hint], ['checkout_success', true, null, 'id checkout_success']);
   const threshold = customFormModel({ name: 'Checkout p99', type: 'threshold', query: 'x', threshold: '0.3' });
-  assert.deepEqual(threshold.fields.map(f => f.id), ['name', 'id', 'type', 'description', 'objective', 'window', 'threshold', 'unit', 'semconv_metric', 'query']);
-  assert.deepEqual([threshold.required, threshold.canSubmit], [['objective', 'window', 'query', 'threshold'], true]);
+  assert.deepEqual(threshold.fields.map(f => f.id), ['name', 'id', 'type', 'description', 'objective', 'window', 'threshold', 'good_when', 'unit', 'semconv_metric', 'query']);
+  assert.deepEqual([threshold.required, threshold.canSubmit, threshold.draft.good_when], [['objective', 'window', 'query', 'threshold'], true, 'below'], 'the direction is not required: below is the default');
   assert.equal(customFormModel({ name: 'Checkout p99', type: 'threshold', query: 'x' }).canSubmit, false, 'the bound is required');
   // A typed id sticks; a clash with an SLI of the pack is said before the engine is asked.
   const own = customFormModel({ name: 'Checkout success', id: 'checkout_ok', idTouched: true, good: 'a', total: 'b' });
@@ -1958,6 +1970,11 @@ test('the rolodex carries Edit (View on Verify) and the + Custom SLI card in pla
   assert.ok(!html.includes('build-edit-face') && !html.includes('data-customise') && !html.includes('build-custom-form') && !html.includes('<textarea'), 'the in-card face and the form card are gone');
   assert.ok(html.includes('<button type="button" class="build-rolo-card build-rolo-create" data-snap-card data-edit-create data-focus-key="edit:create" aria-haspopup="dialog" aria-label="Add a custom SLI — opens the editor">'));
   assert.ok(html.includes('<span class="build-rolo-chip is-customised" title="customised: objective, window">customised</span>') && html.includes('<b>99.5%</b><span>over 7d · customised</span>'));
+  // A threshold card prints its bound with the side that is good (spec 1.3): ≤ a ceiling (the library's every bound), ≥ once overridden to a floor; a ratio card prints none.
+  assert.ok(html.includes('<div class="build-rolo-bound" title="the bound, and the side of it that is good (≤ a ceiling, ≥ a floor)">≤ 0.1 seconds</div>'));
+  const floorCard = buildSheetHtml(buildSheetModel({ layerId: 'L1', build: copiesDraft({ overrides: { ...COPIES.overrides, kafka_produce_latency_p99: { ...COPIES.overrides.kafka_produce_latency_p99, good_when: 'above' } } }), library: LIBRARY, requirements: T2, mode: 'edit' }));
+  assert.ok(floorCard.includes('≥ 0.1 seconds</div>') && floorCard.includes('title="customised: objective, window, good_when"'));
+  assert.equal((html.match(/class="build-rolo-bound"/g) || []).length, rolodexItems({ build: copiesDraft(), library: LIBRARY }).filter(i => i.type === 'threshold').length, 'one bound line per threshold card, none on a ratio card');
   assert.ok(html.includes('<div class="build-rolo-evidence-note">edited — the library’s evidence no longer applies</div>'));
   assert.ok(html.includes('<span class="build-rolo-chip is-custom" title="written in the studio — not a library SLI">custom</span>'));
   // A foreign card (its product not selected) has no Edit: adding it selects the product first.

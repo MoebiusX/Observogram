@@ -51,6 +51,7 @@
 
 import { LAYER_DEFS, L4_SUBGROUPS } from './constants.mjs';
 import { OVERRIDE_FIELDS, overrideFor, effectiveSli, effectiveId, customisedFields, promqlEdited, customEffective, sliEditorModel } from './build-copies-model.mjs';
+import { boundText } from './sli-direction.mjs';
 
 export const BUILD_STEPS = ['define', 'compile', 'verify'];
 /** Least stringent first — the order the engine lists them and the DEFINE step shows them. */
@@ -580,6 +581,7 @@ export function sliGroups({ build, library }) {
         key, id: s.id, effectiveId: effectiveId(key, ov), type: s.type, minTier: s.minTier, reachable, aboveTier: !reachable, checked, unit: eff.unit ?? null,
         description: eff.description || '', evidence: promqlEdited(ov) ? 'custom' : (s.evidence || null), metrics: s.metrics || [],
         objective: eff.objective, objectiveLabel: fmtObjective(eff.objective), window: eff.window,
+        threshold: eff.threshold ?? null, good_when: eff.good_when ?? null,
         customised: customisedFields(ov),
       };
     }),
@@ -591,7 +593,7 @@ export function sliCandidates({ build, library }) {
   const tier = build?.tier;
   const custom = (build?.custom || []).map(def => {
     const eff = customEffective(def);
-    return { key: def.id, id: def.id, effectiveId: def.id, type: def.type, minTier: tier, reachable: true, aboveTier: false, checked: true, unit: eff.unit ?? null, description: eff.description || '', evidence: 'custom', metrics: [], objective: eff.objective, objectiveLabel: fmtObjective(eff.objective), window: eff.window, customised: [], custom: true, entry: null, entryTitle: 'Custom SLI' };
+    return { key: def.id, id: def.id, effectiveId: def.id, type: def.type, minTier: tier, reachable: true, aboveTier: false, checked: true, unit: eff.unit ?? null, description: eff.description || '', evidence: 'custom', metrics: [], objective: eff.objective, objectiveLabel: fmtObjective(eff.objective), window: eff.window, threshold: eff.threshold ?? null, good_when: eff.good_when ?? null, customised: [], custom: true, entry: null, entryTitle: 'Custom SLI' };
   });
   return [...sliGroups({ build, library }).flatMap(g => g.slis.filter(s => s.checked).map(s => ({ ...s, entry: g.id, entryTitle: g.title }))), ...custom];
 }
@@ -997,7 +999,8 @@ export function buildStackModel({ adapted = null, checklist = null, requirements
   const candidateGhosts = mode === 'define'
     ? (candidates || []).flatMap(c => [
       // The card names the SLI as the pack will carry it (a rename shows); the key stays the library's. Both cards open the SLI's editor.
-      { kind: 'sli', key: `sli:${c.key}`, title: c.effectiveId || c.key, desc: c.description || `${c.type} SLI`, source: 'Candidate', tool: `${c.type} SLI`, tags: ['sli', c.type, c.entry || 'custom', ...(c.aboveTier ? [`from ${c.minTier}`] : []), ...(c.customised?.length ? ['customised'] : [])].filter(Boolean), evidence: c.evidence || null, state: null, edit: { key: c.key, custom: !!c.custom, focus: null } },
+      // A threshold candidate prints its bound with its direction under the title, as the adapter's card will once the pack exists.
+      { kind: 'sli', key: `sli:${c.key}`, title: c.effectiveId || c.key, ...(c.type === 'threshold' && boundText(c) ? { subtitle: boundText(c) } : {}), desc: c.description || `${c.type} SLI`, source: 'Candidate', tool: `${c.type} SLI`, tags: ['sli', c.type, c.entry || 'custom', ...(c.aboveTier ? [`from ${c.minTier}`] : []), ...(c.customised?.length ? ['customised'] : [])].filter(Boolean), evidence: c.evidence || null, state: null, edit: { key: c.key, custom: !!c.custom, focus: null } },
       { kind: 'slo', key: `slo:${c.key}`, title: `SLO on ${c.effectiveId || c.key}`, desc: `${c.objectiveLabel} over ${c.window || '—'}`, source: 'Candidate', tool: 'SLO', tags: ['slo', c.window].filter(Boolean), evidence: null, state: null, edit: { key: c.key, custom: !!c.custom, focus: 'objective' } },
     ])
     : [];

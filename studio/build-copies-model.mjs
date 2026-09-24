@@ -35,8 +35,10 @@
 // in tools/test-build-editor.mjs and tools/test-build-model.mjs). It imports
 // nothing from build-model.mjs, so build-model.mjs can import it.
 
-/** The fields an override may carry — the engine's OVERRIDE_FIELDS, spelled once here for the browser. */
-export const OVERRIDE_FIELDS = ['id', 'objective', 'window', 'threshold', 'query', 'good', 'total', 'description', 'unit', 'semconv_metric'];
+import { goodWhen, GOOD_WHEN } from './sli-direction.mjs';
+
+/** The fields an override may carry — the engine's OVERRIDE_FIELDS, spelled once here for the browser (`good_when`: spec 1.3, the side of a threshold SLI's bound that is good). */
+export const OVERRIDE_FIELDS = ['id', 'objective', 'window', 'threshold', 'good_when', 'query', 'good', 'total', 'description', 'unit', 'semconv_metric'];
 /** The schema's SLO windows: what the window input offers (the engine refuses any other). */
 export const SLO_WINDOWS = ['7d', '28d', '30d', '90d'];
 /** The fields that replace the library's PromQL — an edit here drops the library's evidence. */
@@ -80,6 +82,8 @@ export function effectiveSli(row, tier, override = {}) {
     objective: pick('objective', row?.objectives?.[tier] ?? null),
     window: pick('window', row?.windows?.[tier] ?? null),
     threshold: pick('threshold', row?.threshold ?? null),
+    // the direction of the bound (spec 1.3): the row's (the index normalises it: below where the template says nothing), null on a ratio row; readers ask goodWhen()
+    good_when: pick('good_when', row?.good_when ?? null),
     query: pick('query', row?.query ?? null),
     good: pick('good', row?.good ?? null),
     total: pick('total', row?.total ?? null),
@@ -91,7 +95,7 @@ export function effectiveSli(row, tier, override = {}) {
 /** A custom SLI's values in the same shape (its definition is all it has). */
 export function customEffective(def) {
   return {
-    objective: def?.objective ?? null, window: def?.window ?? null, threshold: def?.threshold ?? null,
+    objective: def?.objective ?? null, window: def?.window ?? null, threshold: def?.threshold ?? null, good_when: def?.good_when ?? null,
     query: def?.query ?? null, good: def?.good ?? null, total: def?.total ?? null,
     description: def?.description ?? '', unit: def?.unit ?? null, semconv_metric: def?.semconv_metric ?? null,
   };
@@ -156,17 +160,19 @@ const FIELD_META = {
   description: { label: 'Description', kind: 'text', hint: 'what the SLI measures, for the cards and the boards' },
   objective: { label: 'Objective', kind: 'percent', hint: 'the SLO objective as a percent (the pack stores the ratio; the SLO id follows it)' },
   window: { label: 'Window', kind: 'window', hint: 'the SLO window — 7d · 28d · 30d · 90d, the schema’s set' },
-  threshold: { label: 'Bound', kind: 'number', hint: 'an upper bound in the SLI’s unit (spec v1.2 has no direction: a floor is a ratio SLI)' },
+  threshold: { label: 'Bound', kind: 'number', hint: 'the bound in the SLI’s unit; good when below (a ceiling: latency, lag) or above (a floor: replicas, consumers)' },
+  // spec 1.3 good_when: the side of the bound that is good — rendered as a two-segment control in the Bound cell (build-editor-view.mjs)
+  good_when: { label: 'Good when', kind: 'direction', options: GOOD_WHEN, hint: 'below: a ceiling — samples above the bound are bad (latency, lag) · above: a floor — samples under it are bad (replicas, consumers); the bound itself is good either way' },
   unit: { label: 'Unit', kind: 'unit', hint: 'the unit of the bound (seconds, requests, per_second, …)' },
   semconv_metric: { label: 'Metric', kind: 'text', hint: 'the semantic-conventions metric the SLI reads (http.server.request.duration) — a claim on the pack, not a query' },
   query: { label: 'Query (PromQL)', kind: 'promql', hint: 'the expression as it runs, the parameters in — an edit replaces the library’s and its evidence no longer applies' },
   good: { label: 'Good events (PromQL)', kind: 'promql', hint: 'the good leg as it runs, the parameters in — an edit replaces the library’s and its evidence no longer applies' },
   total: { label: 'Total events (PromQL)', kind: 'promql', hint: 'the total leg as it runs, the parameters in — an edit replaces the library’s and its evidence no longer applies' },
 };
-/** The fields an SLI of a type carries, in the editor's reading order: the identity row, the objective row, the bound row, the metric, then the PromQL. */
+/** The fields an SLI of a type carries, in the editor's reading order: the identity row, the objective row, the bound row (the bound with its direction, then the unit), the metric, then the PromQL. */
 export function fieldsForType(type) {
   return type === 'threshold'
-    ? ['id', 'description', 'objective', 'window', 'threshold', 'unit', 'semconv_metric', 'query']
+    ? ['id', 'description', 'objective', 'window', 'threshold', 'good_when', 'unit', 'semconv_metric', 'query']
     : ['id', 'description', 'objective', 'window', 'semconv_metric', 'good', 'total'];
 }
 // A number as the editor shows it (the objective as a percent); text that did not parse ('abc', '99,5') as typed, so the
@@ -286,6 +292,10 @@ export function sliEditorModel({ item = null, result = null, library = null, bui
       value = overridden ? String(ov[field]) : custom ? String(eff[field] ?? '') : libraryExpr;
       def = libraryExpr;
       defaultLabel = custom ? null : 'the library’s expression, the parameters in';
+    } else if (field === 'good_when') {
+      // absent means below (the one rule, spelled in sli-direction.mjs): the control always shows a side, and the library default is the row's
+      value = goodWhen({ good_when: eff.good_when });
+      def = custom ? null : goodWhen({ good_when: dflt?.good_when });
     } else value = display(field, eff[field]);
     return {
       id: field, ...meta,
@@ -344,7 +354,7 @@ function createEditorModel({ build, library, result, errors }) {
   return {
     create: true, custom: true, readOnly: false, mode: 'create', key: null, id: d.id || null, type: d.type, renamed: false,
     title: { id: d.id || 'new SLI', product: 'Custom SLI', evidence: 'custom', sliEvidence: 'custom', type: d.type, chips: [{ kind: 'custom', text: 'custom', title: 'written in the studio — no library evidence' }] },
-    typeHint: 'ratio: good over total events · threshold: a value under an upper bound',
+    typeHint: TYPE_HINT,
     fields: form.fields.map(f => ({ ...f, readOnly: false, default: null, defaultLabel: null, overridden: false, resettable: false })),
     customised: [], parameters: null,
     evidence: { status: 'custom', note: 'written in the studio — no library evidence' }, provenance: 'custom — written in the studio',
@@ -361,11 +371,14 @@ function createEditorModel({ build, library, result, errors }) {
 
 // ---------- the create form ----------
 
-const DRAFT_DEFAULTS = { name: '', id: '', idTouched: false, type: 'ratio', description: '', unit: '', semconv_metric: '', good: '', total: '', query: '', threshold: '', objective: '99.9', window: '30d' };
-/** The form's draft with the defaults filled in and the id slugged from the name unless the user typed one. */
+/** The create dialog's word on the two types (its Type select's hint and the fixed Type cell's in create mode). */
+const TYPE_HINT = 'ratio: good over total events · threshold: a value against a bound — good when below (a ceiling) or above (a floor)';
+const DRAFT_DEFAULTS = { name: '', id: '', idTouched: false, type: 'ratio', description: '', unit: '', semconv_metric: '', good: '', total: '', query: '', threshold: '', good_when: 'below', objective: '99.9', window: '30d' };
+/** The form's draft with the defaults filled in, the id slugged from the name unless the user typed one, the direction one of the two (below by default). */
 export function normalizeDraft(draft) {
   const d = { ...DRAFT_DEFAULTS, ...(draft || {}) };
   if (!SLI_TYPES.includes(d.type)) d.type = 'ratio';
+  if (!GOOD_WHEN.includes(d.good_when)) d.good_when = 'below';
   if (!d.idTouched) d.id = slugifySliId(d.name);
   return d;
 }
@@ -394,11 +407,15 @@ export function customFormModel(draft, { errors = null, existingKeys = [], exist
   const fields = [
     field('name', 'Name', 'text', { placeholder: 'Checkout success', hint: d.id ? `id ${d.id}` : 'the id is slugged from the name' }),
     field('id', 'Id', 'slug', { placeholder: 'checkout_success', error: hasOwn(errs, 'id') ? errs.id : idClash || idBad || sloClash, hint: 'the SLI id the pack carries — edit it to keep your own' }),
-    field('type', 'Type', 'select', { options: SLI_TYPES, hint: 'ratio: good over total events · threshold: a value under an upper bound' }),
+    field('type', 'Type', 'select', { options: SLI_TYPES, hint: TYPE_HINT }),
     field('description', 'Description', 'text', { placeholder: 'what it measures' }),
     field('objective', 'Objective', 'percent', { hint: 'percent' }),
     field('window', 'Window', 'window', { options: SLO_WINDOWS }),
-    ...(d.type === 'threshold' ? [field('threshold', 'Bound', 'number', { placeholder: '0.5', hint: 'an upper bound in the unit' }), field('unit', 'Unit', 'unit', { placeholder: 'seconds' })] : []),
+    ...(d.type === 'threshold' ? [
+      field('threshold', 'Bound', 'number', { placeholder: '0.5', hint: 'the bound in the unit; good when below (a ceiling) or above (a floor)' }),
+      field('good_when', 'Good when', 'direction', { options: GOOD_WHEN, hint: FIELD_META.good_when.hint }),
+      field('unit', 'Unit', 'unit', { placeholder: 'seconds' }),
+    ] : []),
     field('semconv_metric', 'Metric', 'text', { placeholder: 'http.server.request.duration', hint: 'optional — the semantic-conventions metric the SLI reads' }),
     ...(d.type === 'ratio'
       ? [field('good', 'Good events (PromQL)', 'promql', { placeholder: 'sum(rate(checkout_ok_total[5m]))' }), field('total', 'Total events (PromQL)', 'promql', { placeholder: 'sum(rate(checkout_total[5m]))' })]
@@ -427,11 +444,11 @@ export function numberOrText(field, text) {
   return Number.isFinite(n) ? n : t;
 }
 
-/** The definition the engine takes from the form: the percent typed → the ratio, the bound → a number (the text as typed when it is not one), the empty fields left out. */
+/** The definition the engine takes from the form: the percent typed → the ratio, the bound → a number (the text as typed when it is not one), a floor's direction (below is the default and is not written), the empty fields left out. */
 export function customDefFromDraft(draft) {
   const d = normalizeDraft(draft);
   const def = { id: d.id, type: d.type, objective: numberOrText('objective', d.objective), window: d.window };
-  if (d.type === 'ratio') { def.good = d.good; def.total = d.total; } else { def.query = d.query; def.threshold = numberOrText('threshold', d.threshold); if (String(d.unit).trim()) def.unit = d.unit.trim(); }
+  if (d.type === 'ratio') { def.good = d.good; def.total = d.total; } else { def.query = d.query; def.threshold = numberOrText('threshold', d.threshold); if (d.good_when === 'above') def.good_when = 'above'; if (String(d.unit).trim()) def.unit = d.unit.trim(); }
   if (String(d.description).trim()) def.description = d.description.trim();
   if (String(d.semconv_metric).trim()) def.semconv_metric = d.semconv_metric.trim();
   return def;
@@ -447,6 +464,6 @@ export function fieldValueFor(field, text) {
   const t = String(text ?? '').trim();
   if (t === '') return null;
   if (field === 'objective' || field === 'threshold') return numberOrText(field, t);
-  if (field === 'window' || field === 'id' || field === 'unit' || field === 'semconv_metric') return t;
+  if (field === 'window' || field === 'id' || field === 'unit' || field === 'semconv_metric' || field === 'good_when') return t;
   return String(text);
 }
