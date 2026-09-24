@@ -1,0 +1,93 @@
+#!/usr/bin/env node
+/**
+ * server/test-store-guards.mjs — the source guards of docs/STORE_PLAN.md §1.
+ *
+ * 1. Only server/store/db.mjs names node:sqlite. A static import anywhere
+ *    else would load the built-in before db.mjs can check the Node floor
+ *    and filter its ExperimentalWarning.
+ * 2. Inside server/store/, only db.mjs opens a transaction or touches a
+ *    handle's prepare()/exec(). A BEGIN (deferred) or an outermost
+ *    SAVEPOINT fails with SQLITE_BUSY_SNAPSHOT at once on a shared file
+ *    whatever the timeout, and a raw prepare() skips the '?NNN' and
+ *    binding checks. Everything else goes through tx(), atomic(),
+ *    prepare(db, sql), pragma() and execScript().
+ *
+ * The matchers are tested on known-good and known-bad snippets first, so
+ * the guard cannot pass by matching nothing.
+ */
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(HERE, '..');
+const SELF = relative(ROOT, fileURLToPath(import.meta.url)).split(sep).join('/');
+const DB_MODULE = 'server/store/db.mjs';
+
+// Every .mjs/.js under the repo, skipping node_modules and dot-directories
+// (.git, a workspace, agent worktrees).
+function sourceFiles(dir = ROOT, out = []) {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
+    const p = join(dir, e.name);
+    if (e.isDirectory()) sourceFiles(p, out);
+    else if (e.isFile() && /\.(mjs|js)$/.test(e.name)) out.push(relative(ROOT, p).split(sep).join('/'));
+  }
+  return out;
+}
+
+// Comments may explain the rules; only code must follow them.
+function withoutComments(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|\s)\/\/[^\n]*/g, '$1');
+}
+
+const NAMES_SQLITE = /node:sqlite/;
+// A transaction BEGIN: followed by ';', a closing quote, the end, or a
+// transaction keyword. A trigger body's `BEGIN SELECT …` is not one.
+const TX_BEGIN = /\bBEGIN\b(?=\s*(?:;|['"`]|$|DEFERRED\b|IMMEDIATE\b|EXCLUSIVE\b|TRANSACTION\b))/i;
+const SAVEPOINT = /\bSAVEPOINT\b/i;
+const RAW_HANDLE_CALL = /\.(?:prepare|exec)\s*\(/;
+
+function storeViolations(src) {
+  const code = withoutComments(src);
+  const found = [];
+  if (TX_BEGIN.test(code)) found.push('BEGIN');
+  if (SAVEPOINT.test(code)) found.push('SAVEPOINT');
+  if (RAW_HANDLE_CALL.test(code)) found.push('raw .prepare(/.exec(');
+  return found;
+}
+
+test('the matchers flag what they must and pass what they must', () => {
+  for (const bad of [
+    "db.exec('BEGIN')", "execScript(db, 'BEGIN IMMEDIATE;')", "x('begin transaction')", "x(`BEGIN DEFERRED`)",
+    "x('SAVEPOINT a')", "db.prepare('SELECT 1')", 'handle.exec (sql)',
+  ]) assert.ok(storeViolations(bad).length > 0, bad);
+  for (const good of [
+    "prepare(db, 'SELECT 1')", 'execScript(db, sql)', 'tx(db, () => {})',
+    "x('CREATE TRIGGER t BEFORE UPDATE ON a BEGIN SELECT RAISE(ABORT, \\'no\\'); END;')",
+    "x(`CREATE TRIGGER t BEFORE DELETE ON a\nBEGIN\n  SELECT RAISE(ABORT, 'no');\nEND;`)",
+    '// a comment that says BEGIN IMMEDIATE; and db.prepare(sql)', '/* SAVEPOINT */ const a = 1;',
+  ]) assert.deepEqual(storeViolations(good), [], good);
+  assert.ok(NAMES_SQLITE.test("await import('node:sqlite')"));
+});
+
+test('only server/store/db.mjs names node:sqlite in the repo\'s .mjs/.js', () => {
+  const files = sourceFiles();
+  assert.ok(files.includes(DB_MODULE) && files.length > 100, `walked the repo (${files.length} files)`);
+  assert.ok(NAMES_SQLITE.test(readFileSync(join(ROOT, DB_MODULE), 'utf8')), 'db.mjs itself is found');
+  const offenders = files.filter((f) => f !== DB_MODULE && f !== SELF && NAMES_SQLITE.test(readFileSync(join(ROOT, f), 'utf8')));
+  assert.deepEqual(offenders, [], 'import it through server/store/db.mjs (loadSqlite, openStore, openRaw) instead');
+});
+
+test('no BEGIN, SAVEPOINT or raw handle prepare()/exec() in server/store outside db.mjs', () => {
+  const files = sourceFiles(join(ROOT, 'server', 'store')).filter((f) => f !== DB_MODULE);
+  assert.ok(files.length >= 1, 'server/store has modules besides db.mjs');
+  const offenders = files
+    .map((f) => [f, storeViolations(readFileSync(join(ROOT, f), 'utf8'))])
+    .filter(([, v]) => v.length)
+    .map(([f, v]) => `${f}: ${v.join(', ')}`);
+  assert.deepEqual(offenders, [], 'use tx()/atomic() and prepare(db, sql)/pragma()/execScript() from db.mjs');
+});
