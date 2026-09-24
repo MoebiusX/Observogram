@@ -31,6 +31,7 @@ import {
 import { buildEditorHtml, renderBuildEditor, wireBuildEditor, paintFieldMessage, paintIdState, growTextarea, PROMQL_MAX_HEIGHT } from '../studio/build-editor-view.mjs';
 import { defaultBuildState } from '../studio/state.mjs';
 import { installDialogFocusTrap, TRAPPED_DIALOGS } from '../studio/util.mjs';
+import { editFieldHtml } from '../studio/build-atoms.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const FIX = resolve(ROOT, 'tools/fixtures/build');
@@ -321,6 +322,11 @@ test('the dialog headless in edit mode: role=dialog aria-modal=true labelled by 
   const described = [...html.matchAll(/aria-describedby="([^"]+)"/g)].flatMap(m => m[1].split(' '));
   assert.ok(described.length >= 8 && described.every(id => html.includes(`id="${id}"`)), 'every aria-describedby id resolves');
   assert.ok(!/<label class="build-edit-label"[^>]*>(?:(?!<\/label>)[\s\S])*<button/.test(html), 'no button inside any label');
+  // The fixed Type cell is the atom's read-only row with its hint shown (one shape for every field, nothing hand-written), nothing reads it back (no data attribute).
+  const typeCell = editFieldHtml({ id: 'type', label: 'Type', kind: 'text', value: 'ratio', hint: 'fixed — a different shape is a new custom SLI (+ Custom SLI on the L1 sheet)', inputId: 'build-editor-type', focusKey: '' }, { readOnly: true, showHint: true, dataAttr: null });
+  assert.ok(html.includes(`<div class="build-editor-cell is-type">${typeCell}</div>`), 'the type cell is rendered through editFieldHtml');
+  assert.ok(typeCell.includes('<span class="build-edit-hint" id="build-editor-type-hint">fixed — ') && !/data-(override|custom)-/.test(typeCell) && !typeCell.includes('<label'), 'read-only with the hint, no field data attribute, no label for');
+  assert.ok(!editFieldHtml({ id: 'type', label: 'Type', kind: 'text', value: 'ratio', hint: 'h', inputId: 'x', focusKey: '' }, { readOnly: true }).includes('build-edit-hint'), 'read-only hides the hint unless asked');
   assert.ok(html.includes('<div class="build-edit-field is-read" data-field="type">') && html.includes('<code class="build-edit-value">ratio</code>') && html.includes('fixed — a different shape is a new custom SLI (+ Custom SLI on the L1 sheet)'));
   assert.ok(html.includes('<p class="build-editor-params">parameters: duration_metric=http_server_request_duration_seconds, job=orders-api — edit them in L2</p>'));
   assert.ok(html.includes('<div class="build-editor-evidence"><span class="build-evidence build-evidence-semconv" title="semconv">semconv</span><span class="build-edit-evidence-note">the library’s evidence — its expression is what runs</span></div>'));

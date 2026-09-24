@@ -75,16 +75,9 @@ function fieldCellHtml(f, model) {
   return `<div class="build-editor-cell is-${escapeHtml(f.id)}${WIDE.has(f.id) ? ' is-wide' : ''}">${editFieldHtml(f, { dataAttr, sli: model.create ? null : model.key, rows: 2, readOnly: !!model.readOnly })}</div>`;
 }
 
-/** The type as a field-shaped cell: fixed in edit and read-only modes (create mode carries the real select among its fields). */
+/** The type as a field-shaped cell through the same atom, read-only with its hint (fixed in edit and read-only modes; create mode carries the real select among its fields). */
 function typeCellHtml(model) {
-  return `
-    <div class="build-editor-cell is-type">
-      <div class="build-edit-field is-read" data-field="type">
-        <div class="build-edit-label-row"><span class="build-edit-label"><span>Type</span></span></div>
-        <code class="build-edit-value">${escapeHtml(model.type)}</code>
-        <span class="build-edit-hint" id="build-editor-type-hint">${escapeHtml(model.typeHint)}</span>
-      </div>
-    </div>`;
+  return `<div class="build-editor-cell is-type">${editFieldHtml({ id: 'type', label: 'Type', kind: 'text', value: model.type, hint: model.typeHint, inputId: 'build-editor-type', focusKey: '' }, { readOnly: true, showHint: true, dataAttr: null })}</div>`;
 }
 
 const dialogClass = (model) => `build-editor is-${escapeHtml(model.mode)}${model.custom ? ' is-custom' : ''}`;
