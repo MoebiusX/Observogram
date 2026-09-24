@@ -14,9 +14,10 @@
 // wal_checkpoint(TRUNCATE) would report as not busy. Then it moves the
 // database, -wal and -shm aside together (a -wal left by an unclean stop
 // would otherwise be replayed onto the restored file) and puts a copy of
-// the backup in its place; the next open switches it back to WAL.
+// the backup in its place, with the replaced file's mode and owner rather
+// than the backup's; the next open switches it back to WAL.
 
-import { copyFileSync, constants as fsConstants, existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
+import { chmodSync, chownSync, copyFileSync, constants as fsConstants, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { openRaw, pragma, prepare, resolveDbPath } from './db.mjs';
 import { SCHEMA_VERSION, userVersion } from './migrations.mjs';
@@ -91,6 +92,21 @@ export async function restoreStore(backup, { dbPath = resolveDbPath(), now = new
   // Validate a copy, not the caller's file: opening it must not touch it.
   const incoming = `${target}.restore-${ts}.tmp`;
   copyFileSync(source, incoming, fsConstants.COPYFILE_EXCL);
+  // copyFileSync keeps the backup's mode, and backups are often made
+  // read-only: a 0400 copy would become a live store the next open cannot
+  // switch to WAL ("attempt to write a readonly database"). Take the
+  // replaced store's mode (and, run as root, its owner) instead, always
+  // with owner read-write; 0644, what openStore creates, when there was
+  // none. SQLite gives -wal and -shm the database's mode, so they follow.
+  let live = null;
+  try { live = statSync(target); } catch {}
+  try {
+    chmodSync(incoming, ((live?.mode ?? 0o644) & 0o777) | 0o600);
+    if (live && process.getuid?.() === 0) chownSync(incoming, live.uid, live.gid);
+  } catch (e) {
+    removeSet(incoming);
+    throw e;
+  }
   let id;
   try {
     const db = await openRaw(incoming);

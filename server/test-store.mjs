@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, chownSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -1242,4 +1242,62 @@ test('packc store restore end to end: the old db, -wal and -shm move aside toget
   assert.equal(r3.code, 0, r3.stderr);
   assert.match(r3.stdout, /previous store_id: none/);
   assert.equal((await readStore(freshPath)).storeId, backupId);
+});
+
+test('packc store restore gives the restored file the replaced store\'s mode (owner read-write, 0644 when there was none), not the backup\'s, and it opens in WAL', async () => {
+  const dir = tempDir('rs-mode');
+  const dbPath = join(dir, 'observogram.db');
+  await openStore({ path: dbPath });
+  closeStore(dbPath);
+  const backup = join(dir, 'b.db');
+  assert.equal((await packc(['store', 'backup', backup], { OBSERVOGRAM_DB: dbPath })).code, 0);
+  const modeOf = (p) => statSync(p).mode & 0o777;
+  const opensWal = async (p) => {
+    // Root bypasses the mode bits, so only a non-root run can prove the open;
+    // the mode assertions carry the check under root.
+    if (process.getuid?.() === 0) return;
+    const db = await openStore({ path: p });
+    try { assert.equal(pragma(db, 'journal_mode')[0].journal_mode, 'wal'); } finally { closeStore(p); }
+  };
+
+  // Operators make backups read-only; the live store must not inherit that.
+  for (const ro of [0o400, 0o444]) {
+    chmodSync(backup, ro);
+    const r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: dbPath });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(modeOf(dbPath), 0o644, `a 0${ro.toString(8)} backup restores as the replaced store's 0644`);
+    assert.equal(modeOf(backup), ro, 'the backup keeps its own mode');
+    await opensWal(dbPath);
+  }
+
+  // A 0600 store stays 0600 when restored from an ordinary 0644 backup.
+  chmodSync(backup, 0o644);
+  chmodSync(dbPath, 0o600);
+  let r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: dbPath });
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(modeOf(dbPath), 0o600);
+  await opensWal(dbPath);
+
+  // A store the owner cannot write gets owner read-write added.
+  chmodSync(dbPath, 0o440);
+  r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: dbPath });
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(modeOf(dbPath), 0o640);
+
+  // No previous store: 0644, what openStore creates, whatever the backup's mode.
+  chmodSync(backup, 0o400);
+  const freshPath = join(tempDir('rs-mode-fresh'), 'observogram.db');
+  r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: freshPath });
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(modeOf(freshPath), 0o644);
+  await opensWal(freshPath);
+
+  // A root shell restoring for a non-root server keeps the replaced file's owner.
+  if (process.getuid?.() === 0) {
+    chownSync(dbPath, 1000, 1000);
+    r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: dbPath });
+    assert.equal(r.code, 0, r.stderr);
+    const st = statSync(dbPath);
+    assert.deepEqual([st.uid, st.gid], [1000, 1000], 'owned by the server\'s user, not root');
+  }
 });

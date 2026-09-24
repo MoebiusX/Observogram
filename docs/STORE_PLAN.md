@@ -355,7 +355,10 @@ memberships or audit. This supersedes PRODUCTIZATION_PLAN Stage 4's
 
 **Restore** is `packc store restore <backup>`, with the server stopped. It
 refuses while the database is in use. It moves `observogram.db`, `-wal` and
-`-shm` aside together, then copies the backup in. Copying a backup over the
+`-shm` aside together, then copies the backup in. The copy takes the
+replaced database's mode (owner read-write always) and, run as root, its
+owner; 0644 when there was none. A read-only backup must not become a
+read-only store the next open cannot switch to WAL. Copying a backup over the
 `.db` alone is never safe: a `-wal` left by an unclean stop is replayed onto
 it.
 

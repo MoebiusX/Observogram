@@ -734,8 +734,10 @@ packc store restore /backups/observogram-2026-09-24.db
 It refuses while anything holds the database (switching it out of WAL
 needs exclusive access, so even an idle server is caught), checks the
 backup is an Observogram store, moves `observogram.db`, `-wal` and `-shm`
-aside together under one timestamp, and copies the backup in; the next
-start switches it back to WAL. Never copy a backup over the `.db` alone: a
+aside together under one timestamp, and copies the backup in with the
+replaced database's mode and owner, never the backup's (a read-only backup
+restores writable; with no previous database it is 0644); the next start
+switches it back to WAL. Never copy a backup over the `.db` alone: a
 `-wal` left by an unclean stop would be replayed onto it. To move a
 database, move the file with nothing holding it: it carries its
 `store_id`.
