@@ -569,6 +569,42 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
   });
 }
 
+// A process with its own shutdown handler (drain, write a final row, then
+// exit) owns shutdown: the store must stay open under that handler, whether
+// it was registered before or after the first open, or as a `once`, and
+// must still be closed (checkpointed, no -wal) when that handler exits.
+for (const [where, how] of [['before', 'on'], ['after', 'on'], ['before', 'once']]) {
+  test(`SIGTERM with the process's own handler (${how}, registered ${where} the open): the store stays usable until it exits`, async () => {
+    const path = join(tempDir(), `sig-owned-${where}-${how}.db`);
+    const c = child(`
+      const { openStore, prepare, tx } = await import(${JSON.stringify(DB_URL)});
+      let db;
+      const mine = () => setTimeout(() => {
+        try {
+          tx(db, () => prepare(db, "INSERT INTO schema_meta (key, value) VALUES ('after_signal', 'drained')").run());
+          console.log('wrote');
+        } catch (e) { console.log('store error: ' + e.message); }
+        process.exit(0);
+      }, 200);
+      if (${JSON.stringify(where)} === 'before') process.${how}('SIGTERM', mine);
+      db = await openStore({ path: ${JSON.stringify(path)} });
+      if (${JSON.stringify(where)} === 'after') process.${how}('SIGTERM', mine);
+      console.log('ready');
+      setInterval(() => {}, 1000);
+    `);
+    await c.until(/ready/);
+    c.proc.kill('SIGTERM');
+    const r = await c.done;
+    assert.equal(r.code, 0, `the handler exited on its own (signal ${r.signal}, stdout ${r.stdout}, stderr ${r.stderr})`);
+    assert.doesNotMatch(r.stdout, /store error/);
+    assert.match(r.stdout, /wrote/);
+    assert.equal(existsSync(`${path}-wal`), false, 'no -wal left behind');
+    const raw = await openRaw(path);
+    assert.equal(prepare(raw, "SELECT value FROM schema_meta WHERE key = 'after_signal'").get().value, 'drained');
+    raw.close();
+  });
+}
+
 // PID 1 (the image runs node with no init) gets no default action for a
 // signal it does not handle: the handler's own re-raise and every later
 // SIGTERM are dropped by the kernel. The handler must still end the process,

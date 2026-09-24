@@ -230,10 +230,18 @@ export async function openRaw(path, { readOnly = false, timeout = BUSY_TIMEOUT_M
 // ---------- closing on SIGTERM / SIGINT ----------
 
 // The server runs as PID 1 in the image and had no handler. On the first
-// open, one handler per signal closes every handle, removes itself and
-// re-raises the signal, so the process dies by it — unless someone else
-// also listens, in which case Node's default is already off, a re-raise
-// would only call them twice, and ending the process is theirs to do.
+// open, one handler per signal is installed, and the choice is made when the
+// signal arrives, not when the handler was installed:
+// - If someone else also listens (registered before or after the open,
+//   with on or once), they own shutdown: Node's default action is already
+//   off and they may still drain and write. The store stays open, and a
+//   process 'exit' hook closes every handle when they end the process
+//   (process.exit, or the event loop running dry). The handler is
+//   prepended so a `once` listener registered earlier has not yet removed
+//   itself when the count is taken.
+// - Otherwise it closes every handle, removes itself and re-raises the
+//   signal, so the process dies by it. 'exit' is not emitted on a death by
+//   signal, so this close cannot be left to the hook.
 // The kernel drops a signal sent to a PID namespace's init when it has no
 // handler, so as PID 1 the re-raise does nothing (nor does any later
 // SIGTERM): the process would live on with its store closed until SIGKILL.
@@ -241,20 +249,25 @@ export async function openRaw(path, { readOnly = false, timeout = BUSY_TIMEOUT_M
 // shell and kubelet report for a death by that signal.
 const SIGNALS = ['SIGTERM', 'SIGINT'];
 let signalsInstalled = false;
+let exitInstalled = false;
 
 function onSignal(sig) {
+  if (process.listenerCount(sig) > 1) return;
   closeStore();
   for (const s of SIGNALS) process.removeListener(s, onSignal);
   signalsInstalled = false;
-  if (process.listenerCount(sig) !== 0) return;
   process.kill(process.pid, sig);
   setImmediate(() => process.exit(128 + osConstants.signals[sig]));
 }
 
 function installSignalHandlers() {
+  if (!exitInstalled) {
+    exitInstalled = true;
+    process.on('exit', () => closeStore());
+  }
   if (signalsInstalled) return;
   signalsInstalled = true;
-  for (const s of SIGNALS) process.on(s, onSignal);
+  for (const s of SIGNALS) process.prependListener(s, onSignal);
 }
 
 // ---------- transactions ----------
