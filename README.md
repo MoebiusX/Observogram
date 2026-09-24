@@ -747,7 +747,9 @@ server's last writes; a `-wal` or
 file beside it. Never copy a backup over the `.db` alone: a `-wal` left
 by an unclean stop would be replayed onto it. To move a
 database, move the file with nothing holding it: it carries its
-`store_id`.
+`store_id`. Set `OBSERVOGRAM_DB` before the first start of a build whose
+server opens the store (today only `packc store` opens it), so that first
+start finds the file where it will stay.
 
 ## API Surface
 
