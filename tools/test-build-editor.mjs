@@ -935,7 +935,7 @@ test('the stylesheet: one centered fixed modal above the sheet with the L1 accen
   assert.match(CSS_TEXT.match(/@media \(max-width: 760px\) \{[\s\S]*?\n\}/g).find(b => b.includes('.build-editor')), /\.build-editor-grid \{ grid-template-columns: 1fr; \}/, 'one column on a narrow screen');
   // The direction control (spec 1.3 good_when): the Bound cell splits for it, the two-segment group with a sliding thumb in the
   // tier control's idiom, the tokens only, the accent ring when overridden, its transitions in the reduced-motion list, one column narrow.
-  assert.match(cssRule('.build-editor-cell.is-threshold.has-direction'), /grid-template-columns:\s*minmax\(0, 1fr\) auto/);
+  assert.match(cssRule('.build-editor-cell.is-threshold.has-direction'), /grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\)/, 'two tracks that both shrink: an auto track let the direction hint squeeze the Bound input (measured)');
   assert.match(cssRule('.build-edit-dir'), /display:\s*grid;\s*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);.*background:\s*var\(--line-2\)/);
   assert.match(cssRule('.build-edit-dir-thumb'), /width:\s*calc\(\(100% - 6px\) \/ 2\)[\s\S]*transform:\s*translateX\(calc\(var\(--dir-index, 0\) \* 100%\)\)[\s\S]*transition:\s*transform/);
   assert.match(cssRule('.build-edit-dir-btn'), /color:\s*var\(--ink-3\)[\s\S]*transition:\s*color/);

@@ -8982,7 +8982,9 @@ select.build-edit-input { appearance: auto; }
 .build-editor textarea.build-edit-input { resize: none; overflow-y: hidden; min-height: 54px; }
 /* The direction of a threshold SLI's bound (spec 1.3 good_when): a two-segment control beside the Bound input — the
    tier control's idiom (a radiogroup, a sliding thumb, arrow keys) — below · above; an overridden one wears the accent ring. */
-.build-editor-cell.is-threshold.has-direction { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 12px; align-items: start; }
+/* Two equal tracks, both able to shrink: an `auto` track sized the direction column to its hint's max-content width and
+   squeezed the Bound input to a sliver whose hint wrapped word by word (measured on the first 1920 px frame). */
+.build-editor-cell.is-threshold.has-direction { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 12px; align-items: start; }
 .build-edit-direction { min-width: 0; }
 .build-edit-dir { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 3px; background: var(--line-2); border-radius: 10px; isolation: isolate; min-width: 136px; }
 .build-edit-direction.is-overridden .build-edit-dir { box-shadow: inset 0 0 0 1px var(--accent); }
