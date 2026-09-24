@@ -25,14 +25,20 @@
 // 'Add to the pack' from the model's canSubmit). On VERIFY it is read-only:
 // the values as spans, the provenance, no input.
 //
-// Live apply: every field commits ON INPUT through the actions (setOverride /
-// updateCustom with `live: true` — the debounced instantiate); the controller
+// Live apply: every field but the id commits ON INPUT through the actions
+// (setOverride / updateCustom with `live: true` — the debounced instantiate);
+// the status reads 'applying…' only when the action reports a change. The id
+// is a RENAME — the SLO, the recording rule, the boards and the burn alerts
+// follow it — so it is pre-checked on input (checkEditorId: the message under
+// the field and in the status while typing) and committed when the field is
+// left (Enter, Tab, Esc, a click away): committing every keystroke renamed
+// the SLI to each valid prefix and left it at 'error_rat' when the final
+// 'error_rate' clashed (measured). An invalid id stays in the field with its
+// message, never sent, and keeps it across the pack's answer. The controller
 // re-renders the dialog in place when the pack answers, and renderBuildEditor
 // keeps the focused field's text, focus and caret across that render (so
 // typing three characters quickly loses none, and a value the engine rejects
-// stays as typed beside its message). The id field is pre-checked
-// (checkEditorId) and an invalid id is kept in the field with its message,
-// never sent.
+// stays as typed beside its message).
 //
 // Renderer only (docs/UI_CONVENTIONS.md §2-3): render(container, model, host)
 // with sliEditorModel's output (build-model.mjs buildEditorModel assembles
@@ -124,6 +130,31 @@ export function growTextarea(ta) {
   ta.style.overflowY = h > PROMQL_MAX_HEIGHT ? 'auto' : 'hidden';
 }
 
+/** The status line said in place: what happened to the last edit. */
+export function sayStatus(container, text, kind) {
+  const el = container.querySelector('#build-editor-status');
+  if (!el) return;
+  if (el.textContent !== text) el.textContent = text;
+  el.className = `build-editor-status is-${escapeHtml(kind)}`;
+}
+
+/**
+ * The id field's message and the status for the text as typed, before the engine is asked (checkEditorId): a
+ * refused id under the field and 'not applied — …'; a valid rename 'rename to <id> — Enter, Tab or Esc applies
+ * it'; the id the pack carries → the status the model says. Returns the check (the change handler commits on it).
+ */
+export function paintIdState(container, model, text) {
+  const check = checkEditorId(text, { key: model.key, existingIds: model.existingIds });
+  const f = model.fields.find(x => x.id === 'id');
+  paintFieldMessage(container, 'id', check.ok ? null : check.message, f?.hint);
+  const current = f ? String(f.value) : String(model.id ?? model.key);
+  const next = check.id ?? model.key;
+  if (!check.ok) sayStatus(container, `not applied — ${check.message}`, 'error');
+  else if (next !== current) sayStatus(container, `rename to ${next} — Enter, Tab or Esc applies it`, 'pending');
+  else sayStatus(container, model.status.text, model.status.kind);
+  return check;
+}
+
 /**
  * render(container, model, host, { focus }) — the editor into its persistent host (the controller keeps one outside
  * the re-rendered view). `focus` names the field to land on (a field id, or 'dialog'): the render that opens the
@@ -152,6 +183,9 @@ export function renderBuildEditor(container, model, host = appHost, { focus = nu
   if (kept && keep.value != null && 'value' in target && target.value !== keep.value) {
     target.value = keep.value;
     if (target.tagName === 'TEXTAREA') growTextarea(target);
+    // A typed id the model does not carry (not committed yet, or refused): its message and the status say so again —
+    // the model-driven render has no error for it and once wiped the clash message under the field (measured).
+    if ((target.dataset?.overrideField || target.dataset?.customField) === 'id' && !model.readOnly && !model.create) paintIdState(container, model, keep.value);
   }
   target.focus?.({ preventScroll: true });
   if (typeof target.setSelectionRange !== 'function') return;
@@ -184,32 +218,42 @@ export function wireBuildEditor(container, model, host = appHost) {
   });
   if (model.readOnly) return;
   if (model.create) { wireCreateForm(container, model, act); return; }
-  const statusEl = container.querySelector('#build-editor-status');
-  const say = (text, kind) => { if (statusEl) { statusEl.textContent = text; statusEl.className = `build-editor-status is-${kind}`; } };
-  const idField = model.fields.find(f => f.id === 'id');
+  const say = (text, kind) => sayStatus(container, text, kind);
   for (const inp of container.querySelectorAll('.build-editor .build-edit-input') || []) {
     const field = inp.dataset?.overrideField || inp.dataset?.customField;
     if (!field) continue;
     let last = inp.value;
-    const commit = () => {
-      if (inp.value === last) return;   // a change after an input (Enter, blur, a datalist pick of the same text) is not a second edit
-      last = inp.value;
-      let text = inp.value;
-      if (field === 'id') {
-        const check = checkEditorId(inp.value, { key: model.key, existingIds: model.existingIds });
-        paintFieldMessage(container, 'id', check.ok ? null : check.message, idField?.hint);
-        if (!check.ok) { say(`not applied — ${check.message}`, 'error'); return; }
-        // What the check made of the text: the key itself (or nothing) clears the rename — never an override that
-        // restates the key, which the studio showed as "customised: id" while the engine treated it as no rename.
-        text = check.id ?? '';
-      }
+    const send = (text) => {
       const changed = inp.dataset.overrideField ? act.setOverride?.(model.key, field, text, { live: true }) : act.updateCustom?.(model.key, field, text, { live: true });
       // The action says whether anything changed: a text that means the committed value sends nothing, and the
       // status stays the model's — never 'applying…' with no request behind it (measured: still applying 4 s later).
       if (changed === false) say(model.status.text, model.status.kind); else say('applying…', 'pending');
     };
-    inp.addEventListener('input', () => { if (inp.tagName === 'TEXTAREA') growTextarea(inp); commit(); });
-    inp.addEventListener('change', commit);
+    if (field === 'id') {
+      // The id is a RENAME — the SLO, the recording rule, the boards and the burn alerts follow it — so it is
+      // pre-checked on input (the message under the field and in the status while typing) and committed when the
+      // field is left (Enter, Tab, Esc, a click away), never per keystroke: committing every keystroke renamed the
+      // SLI to each valid prefix and left it at 'error_rat' when the final 'error_rate' clashed (measured).
+      inp.addEventListener('input', () => paintIdState(container, model, inp.value));
+      inp.addEventListener('change', () => {
+        if (inp.value === last) return;
+        const check = paintIdState(container, model, inp.value);
+        if (!check.ok) return;
+        last = inp.value;
+        if (check.id === null && model.custom) { say(model.status.text, model.status.kind); return; }   // a custom SLI's id as it is: nothing to rename
+        // What the check made of the text: the key itself (or nothing) clears the rename — never an override that
+        // restates the key, which the studio showed as "customised: id" while the engine treated it as no rename.
+        send(check.id ?? '');
+      });
+    } else {
+      const commit = () => {
+        if (inp.value === last) return;   // a change after an input (Enter, blur, a datalist pick of the same text) is not a second edit
+        last = inp.value;
+        send(inp.value);
+      };
+      inp.addEventListener('input', () => { if (inp.tagName === 'TEXTAREA') growTextarea(inp); commit(); });
+      inp.addEventListener('change', commit);
+    }
     if (inp.tagName !== 'TEXTAREA') inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); inp.blur?.(); } });
   }
   for (const btn of container.querySelectorAll('[data-reset]') || []) btn.addEventListener('click', () => act.clearOverride?.(btn.dataset.sli || model.key, btn.dataset.reset));

@@ -796,7 +796,14 @@ typed `99.` — so typing three characters quickly loses none (measured live) an
 engine rejects stays as typed beside its message (*got "abc"*). The render that opens the
 editor skips `rerenderBuild`'s generic focus restore, which handed the focus back to the
 opener. Enter on a one-line input leaves it; a `change` that follows an `input` with the same
-text is not a second commit.
+text is not a second commit. The **Id is the exception**: a rename moves the SLO id, the
+recording rule, the boards and the burn alerts, so it is pre-checked on every keystroke
+(`paintIdState`: the clash / not-a-slug message under the field, the status *not applied — …*
+or *rename to <id> — Enter, Tab or Esc applies it*) and committed when the field is LEFT —
+committing every keystroke renamed the SLI to each valid prefix and left it at `error_rat`
+when the final `error_rate` clashed (measured live with real keys). A typed id the model does
+not carry survives the pack's answer with its message: the render that restores the kept text
+re-runs the check and paints it again.
 
 *Rename and metric* (`tools/lib/library.mjs`). `id` and `semconv_metric` join
 `OVERRIDE_FIELDS`. An `id` override renames the SLI in the pack while the override stays keyed
