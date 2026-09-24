@@ -203,9 +203,10 @@ export function wireBuildEditor(container, model, host = appHost) {
         // restates the key, which the studio showed as "customised: id" while the engine treated it as no rename.
         text = check.id ?? '';
       }
-      say('applying…', 'pending');
-      if (inp.dataset.overrideField) act.setOverride?.(model.key, field, text, { live: true });
-      else act.updateCustom?.(model.key, field, text, { live: true });
+      const changed = inp.dataset.overrideField ? act.setOverride?.(model.key, field, text, { live: true }) : act.updateCustom?.(model.key, field, text, { live: true });
+      // The action says whether anything changed: a text that means the committed value sends nothing, and the
+      // status stays the model's — never 'applying…' with no request behind it (measured: still applying 4 s later).
+      if (changed === false) say(model.status.text, model.status.kind); else say('applying…', 'pending');
     };
     inp.addEventListener('input', () => { if (inp.tagName === 'TEXTAREA') growTextarea(inp); commit(); });
     inp.addEventListener('change', commit);

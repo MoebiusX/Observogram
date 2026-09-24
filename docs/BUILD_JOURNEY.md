@@ -782,10 +782,13 @@ printed), **Reset all** and **Done**; the SLI's add / remove switch in the foote
 through the tokens; the rules sit in the axis block of `app.css`, so the AA scan covers them.
 
 *Live apply.* Every field commits ON INPUT through the existing actions with `live: true`
-(`setOverride(key, field, text, { live })` / `updateCustom(id, field, text, { live })`): the
-draft changes, the dialog alone is redrawn (its status reads *applying…*, `build.editorDirty`)
-and the instantiate is debounced like a typed name — a keystroke is never a request of its
-own; the page under it follows when the pack answers (`runBuildInstantiate` clears the flag).
+(`setOverride(key, field, text, { live })` / `updateCustom(id, field, text, { live })`, both
+answering whether anything changed): the draft changes, the dialog alone is redrawn (its
+status reads *applying…*, `build.editorDirty`) and the instantiate is debounced like a typed
+name — a keystroke is never a request of its own; the page under it follows when the pack
+answers (`runBuildInstantiate` clears the flag). A text that means the committed value (`99.90`
+for 0.999, a detour and back) changes nothing: the action says so and the status stays what
+the model says, never *applying…* with no request behind it.
 The editor lives in a persistent host on `<body>`, outside the re-rendered view
 (`syncBuildEditor` after every render of the main view), and `renderBuildEditor` keeps the
 focused field's TEXT, focus and caret across a re-render — the model's `99` never overwrites a

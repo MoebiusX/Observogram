@@ -2184,13 +2184,14 @@ const buildActions = {
     if (value === null) delete current[field]; else current[field] = value;
     const overrides = { ...(b.overrides || {}) };
     if (Object.keys(current).length) overrides[key] = current; else delete overrides[key];
-    if (JSON.stringify(overrides) === JSON.stringify(b.overrides || {})) { refocusBuild(focusKey); return; }
+    if (JSON.stringify(overrides) === JSON.stringify(b.overrides || {})) { refocusBuild(focusKey); return false; }   // nothing changed: the editor's status stays as it was
     b.overrides = overrides;
-    if (live) { b.editorDirty = true; syncBuildEditor(); scheduleBuildInstantiate(); persistence.schedule(); return; }
+    if (live) { b.editorDirty = true; syncBuildEditor(); scheduleBuildInstantiate(); persistence.schedule(); return true; }
     if (focusKey) buildFocusNext = focusKeySelector(focusKey);
     rerenderBuild();
     scheduleBuildInstantiate(0);
     persistence.schedule();
+    return true;
   },
   clearOverride(key, field) {
     const b = state.build;
@@ -2234,22 +2235,24 @@ const buildActions = {
     rerenderBuild();
   },
   // A custom SLI's field (`live` as setOverride's); its `id` renames it — the definition, the editor and its key follow.
+  // Both return whether anything changed (false: the editor's status line stays as it was).
   updateCustom(id, field, text, { focusKey = null, live = false } = {}) {
     const b = state.build;
     const i = (b.custom || []).findIndex(d => d.id === id);
-    if (i < 0) return;
+    if (i < 0) return false;
     const value = fieldValueFor(field, text);
     const next = { ...b.custom[i] };
-    if (field === 'id') { if (value === null) return; next.id = value; }
+    if (field === 'id') { if (value === null) return false; next.id = value; }
     else if (value === null) delete next[field]; else next[field] = value;
-    if (JSON.stringify(next) === JSON.stringify(b.custom[i])) { refocusBuild(focusKey); return; }
+    if (JSON.stringify(next) === JSON.stringify(b.custom[i])) { refocusBuild(focusKey); return false; }
     b.custom = b.custom.map((d, j) => (j === i ? next : d));
     if (field === 'id' && b.editor?.custom && b.editor.key === id) b.editor = { ...b.editor, key: next.id };
-    if (live) { b.editorDirty = true; syncBuildEditor(); scheduleBuildInstantiate(); persistence.schedule(); return; }
+    if (live) { b.editorDirty = true; syncBuildEditor(); scheduleBuildInstantiate(); persistence.schedule(); return true; }
     if (focusKey) buildFocusNext = focusKeySelector(focusKey);
     rerenderBuild();
     scheduleBuildInstantiate(0);
     persistence.schedule();
+    return true;
   },
   removeCustom(id) {
     const b = state.build;

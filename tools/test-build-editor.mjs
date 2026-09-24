@@ -397,6 +397,18 @@ test('the handlers: every field commits on input through setOverride with the fi
   idInput.value = ' availability '; idInput.fire('input');
   idInput.value = 'availability'; idInput.fire('input');
   assert.ok(calls.every(c => c[3] === ''), `typing the key back sends a clear, not the key: ${JSON.stringify(calls)}`);
+  // The action says whether anything changed: a text that means the committed value (99.90 for 0.999, a detour and back)
+  // sends nothing, and the status stays what the model says — never 'applying…' with no request behind it (measured: 4 s later, still applying).
+  const unchanged = { ...act, setOverride: (...a) => { calls.push(['override', ...a]); return false; } };
+  const status2 = { textContent: '', className: '' };
+  const obj2 = { ...fakeEl({ overrideField: 'objective', sli: 'availability' }), value: '99.9', tagName: 'INPUT' };
+  wireBuildEditor(fakeContainer({ '.build-editor': [fakeEl({})], '.build-editor .build-edit-input': [obj2], '#build-editor-status': [status2] }), model, { build: unchanged });
+  obj2.value = '99.90'; obj2.fire('input');
+  assert.deepEqual([status2.textContent, status2.className], [model.status.text, `build-editor-status is-${model.status.kind}`], 'no change: the status is the model\'s, not applying…');
+  const changed = { ...act, setOverride: (...a) => { calls.push(['override', ...a]); return true; } };
+  wireBuildEditor(fakeContainer({ '.build-editor': [fakeEl({})], '.build-editor .build-edit-input': [obj2], '#build-editor-status': [status2] }), model, { build: changed });
+  obj2.value = '99.95'; obj2.fire('input');
+  assert.deepEqual([status2.textContent, status2.className], ['applying…', 'build-editor-status is-pending']);
   // ↺ on a field, Reset all, the switch.
   calls.length = 0;
   reset.fire('click'); resetAll.fire('click'); sw.fire('click');
