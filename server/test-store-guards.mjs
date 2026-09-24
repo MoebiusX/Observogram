@@ -124,7 +124,7 @@ test('no BEGIN, SAVEPOINT or raw handle prepare()/exec() in server/store outside
 // ---------- 4. the identity switch ----------
 
 const NAMES_LEGACY_FILES = /legacy-files\.mjs['"`]/;
-const IMPORTS_SERVER = /(?:\bfrom\s*|\bimport\s*\(\s*)['"`](?:\.\.\/)+server\//;
+const IMPORTS_SERVER = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s*)['"`](?:\.\.\/)+server\//;
 const LEGACY_FILES_IMPORTERS = [
   /^server\/boot\.mjs$/, /^server\/tenancy\.mjs$/, /^server\/store\/(?:import|ops|cli)\.mjs$/,
   /^server\/test-[^/]*\.mjs$/, /^server\/fixtures\//, /^tools\/test-store-prestore-live\.mjs$/,
@@ -135,7 +135,7 @@ test('the identity-switch matchers flag what they must and pass what they must',
     assert.ok(NAMES_LEGACY_FILES.test(withoutComments(bad)), bad);
   }
   assert.ok(!NAMES_LEGACY_FILES.test(withoutComments('// see server/store/legacy-files.mjs')), 'a comment is not an import');
-  for (const bad of ["import { a } from '../../server/store/db.mjs';", "const m = await import('../server/tenancy.mjs');", "export { b } from '../server/x.mjs';"]) {
+  for (const bad of ["import { a } from '../../server/store/db.mjs';", "import '../../server/org-context.mjs';", "const m = await import('../server/tenancy.mjs');", "export { b } from '../server/x.mjs';"]) {
     assert.ok(IMPORTS_SERVER.test(bad), bad);
   }
   for (const good of ["import { a } from './brand-env.mjs';", "import { b } from '../contracts/x.mjs';"]) assert.ok(!IMPORTS_SERVER.test(good), good);
