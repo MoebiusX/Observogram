@@ -204,13 +204,13 @@ const overlay = docs['../k8s-journeys/kustomization.yaml'];
          'the claimName in the CronJob and in the studio patch is the PVC\'s name', { cron: pod.volumes[0].persistentVolumeClaim.claimName, studio: patch.spec.template.spec.volumes[0].persistentVolumeClaim.claimName, pvc: pvc.metadata.name });
   assert(patch.kind === 'Deployment' && patch.metadata.name === 'observabilitypack-studio' && patchC.name === 'studio', 'the patch targets the studio container by name (strategic merge)');
   const cronText = readFileSync(join(K8S, 'components/journeys/cronjob-journeys.yaml'), 'utf8');
-  assert(/# - name: OBSERVOGRAM_JOURNEY_RUN_RETENTION/.test(cronText) && /# - name: OBSERVOGRAM_MCP_TIMEOUT_MS/.test(cronText) && /secretKeyRef: \{ name: journey-secrets, key: MY_JOURNEY_WEBHOOK_URL \}/.test(cronText) && /orgs\.json/.test(cronText),
-         'the CronJob documents the retention / timeout knobs, the secretKeyRef binding for the env names and the tenancy root — all commented');
+  const prose = t => t.replace(/\n[ \t]*#[ \t]*/g, ' '); // comment lines joined, wraps ignored
+  assert(/# - name: OBSERVOGRAM_JOURNEY_RUN_RETENTION/.test(cronText) && /# - name: OBSERVOGRAM_MCP_TIMEOUT_MS/.test(cronText) && /secretKeyRef: \{ name: journey-secrets, key: MY_JOURNEY_WEBHOOK_URL \}/.test(cronText) && /one CronJob per org/.test(prose(cronText)) && /\/workspace\/<orgs\.root>/.test(cronText),
+         'the CronJob documents the retention / timeout knobs, the secretKeyRef binding for the env names and the per-org root — all commented');
   assert(/exit 1 \(gate failed\) is the\n# early-warning OUTCOME/.test(cronText) && /kubectl get jobs/.test(cronText), 'the CronJob states why a gate failure is a failed Job, not a retry');
   // STORE_PLAN §3: an RWX class is typically NFS/CephFS, where the database
   // refuses to open — RWX is advice only while OBSERVOGRAM_DB is on the store.
   const pvcText = readFileSync(join(K8S, 'components/journeys/pvc-workspace.yaml'), 'utf8');
-  const prose = t => t.replace(/\n[ \t]*#[ \t]*/g, ' '); // comment lines joined, wraps ignored
   const rwxOnlyWhileDbOnStore = /ReadWriteMany.*only while.{0,40}OBSERVOGRAM_DB.{0,40}RWO store volume/i;
   assert(rwxOnlyWhileDbOnStore.test(prose(pvcText)) && /pvc-store\.yaml/.test(pvcText),
          'pvc-workspace.yaml allows ReadWriteMany only while OBSERVOGRAM_DB points at the RWO store volume');

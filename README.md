@@ -229,9 +229,9 @@ changes.
 ## Quickstart
 
 Requires **Node 22.16 or later** (`engines` in `package.json`). The studio
-is moving users, orgs, services and environments into an embedded store on
-Node's built-in `node:sqlite`, which is unflagged from 22.13; 22.16 is the
-floor because it fixes a `StatementSync` use-after-free and the `run()`
+keeps users and orgs in an embedded store on Node's built-in `node:sqlite`
+(services and environments follow), which is unflagged from 22.13; 22.16 is
+the floor because it fixes a `StatementSync` use-after-free and the `run()`
 statement reset that a store hits. CI runs the suites on 22.16.0 and on the
 latest 22. See [docs/STORE_PLAN.md](docs/STORE_PLAN.md).
 
@@ -273,11 +273,56 @@ for a throwaway open sandbox.)
    logs a loud warning) for trusted-network demos only.
 
 Real users and SSO: `npm run users` manages locally-defined accounts,
-`OBSERVOGRAM_OIDC_*` wires any OIDC provider, and `npm run orgs` arms
-workspace-per-org tenancy — see
-[docs/PRODUCTIZATION_PLAN.md](docs/PRODUCTIZATION_PLAN.md). The next stage,
-an embedded store for users, orgs, services and environments, is planned
-in [docs/STORE_PLAN.md](docs/STORE_PLAN.md).
+`OBSERVOGRAM_OIDC_*` wires any OIDC provider, and `npm run orgs` manages
+orgs — see [docs/PRODUCTIZATION_PLAN.md](docs/PRODUCTIZATION_PLAN.md) and
+[docs/STORE_PLAN.md](docs/STORE_PLAN.md).
+
+**Users, orgs and sessions live in the store.** Users, orgs, memberships
+and the owner are rows in the embedded store (`observogram.db`, see
+[Back Up And Restore The Store](#back-up-and-restore-the-store)); the
+server opens it at every start.
+
+- **The import.** The first start of a store build imports `users.json`
+  and `orgs.json` once, prints a report on the boot log (`[store] …`
+  lines) and leaves both files in place. They are hashed and never read
+  again: from then on `npm run users` and `npm run orgs` write the store,
+  and `remove` disables a user instead of deleting it (the audit
+  references it). Names and fields the store cannot hold are dropped and
+  listed in the report; they never refuse the start.
+- **Edited legacy files refuse the start.** A store build refuses to start
+  when `users.json` or `orgs.json` changed after the import (a pre-store
+  build during a rollback, config management). The refusal prints the
+  imported SHA-256 and names the ways out: put the file back exactly as it
+  was imported, or move it aside and make the change with `npm run users` /
+  `npm run orgs`. Export for a rollback (`packc store export`) arrives with
+  the next store PR; until it lands, `develop` is held from promotion.
+- **Tenancy is always on.** Every `/api` request runs in an org and the
+  response echoes it in `X-Observogram-Org`. A flat workspace is the
+  default org, at the workspace root; an org created with `npm run orgs --
+  create <id>` gets `orgs/<id>/`, fixed at creation. The header ORG chip
+  shows for a user in more than one org, or whose only org is not the
+  default one.
+- **Sessions are revocable.** A password change or a disable signs the
+  user out everywhere (a per-user epoch in the store); cookies issued
+  before the upgrade stay valid.
+- **Stand-alone sign-in stays armed once armed.** The first local user
+  arms it; removing users never reopens a server. Only
+  `OBSERVOGRAM_AUTH=off` does.
+- **OIDC users** are recorded as `<issuerKey>#<sub>`. Name the first owner
+  with `OBSERVOGRAM_BOOTSTRAP_ADMIN` (the `<issuer>#<sub>` form, or an email
+  that counts only when the ID token says `email_verified: true`) or with
+  `npm run users -- owner <login>`. An OIDC deployment without `orgs.json`
+  keeps every IdP user's access (`oidc_join_role = operator`: each new
+  user joins the default org as an operator); set
+  `OBSERVOGRAM_OIDC_JOIN_ROLE=none` before the first start to keep it
+  closed.
+- **One org without identity.** A one-org `orgs.json` with only a bearer
+  (`OBSERVOGRAM_API_TOKEN`) boots token-only; with neither a bearer nor
+  identity it boots like a fresh install (on loopback it seeds
+  `admin`/`admin`). More than one org needs identity.
+- **Journeys run from the studio** load by name only, and a `crawl:`
+  journey reads only the org's own part of the workspace; a crawl root
+  inside another org's part is refused.
 
 MCP write tokens are unrelated to the API token: they pass through per
 request and are never stored server-side. Registered packs and the deploy
@@ -747,9 +792,9 @@ server's last writes; a `-wal` or
 file beside it. Never copy a backup over the `.db` alone: a `-wal` left
 by an unclean stop would be replayed onto it. To move a
 database, move the file with nothing holding it: it carries its
-`store_id`. Set `OBSERVOGRAM_DB` before the first start of a build whose
-server opens the store (today only `packc store` opens it), so that first
-start finds the file where it will stay.
+`store_id`. The server opens the store at every start, and its first start
+imports `users.json` / `orgs.json`: set `OBSERVOGRAM_DB` before that first
+start, so it finds the file where it will stay.
 
 ## API Surface
 
@@ -791,7 +836,9 @@ start finds the file where it will stay.
 server/
   index.mjs                Express API, upload registry, compile/deploy routes
   library.mjs              Loads library/**/*.library.yaml from disk (the Node side of the BUILD engine)
-  store/                   The embedded store (docs/STORE_PLAN.md): db.mjs (the one node:sqlite door), migrations, repositories, backup/restore — no server callers yet
+  boot.mjs                 The boot order: opens the store, imports users.json / orgs.json once, the seed and the fail-closed checks
+  identity-admin.mjs       The user and org rules behind npm run users / npm run orgs
+  store/                   The embedded store (docs/STORE_PLAN.md): db.mjs (the one node:sqlite door), migrations, repositories, the legacy import, backup/restore
   test-smoke.mjs           End-to-end route smoke tests
 
 studio/

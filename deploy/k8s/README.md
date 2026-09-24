@@ -43,9 +43,14 @@ every rollout and every pod restart wiped users, registered packs and the
 deploy audit. With the store it would also have wiped roles and the audit,
 and reset the session epoch, which revives revoked cookies. Both halves now
 live on one claim, so they persist together and a rollout loses neither.
-(The store itself arrives in stages, [docs/STORE_PLAN.md](../../docs/STORE_PLAN.md);
-`OBSERVOGRAM_DB` is set now so the first build that opens it finds it on
-this volume.)
+The studio opens the store at start; its first start imports the legacy
+files (`users.json`, `orgs.json`) once, prints a report in the pod log and
+leaves them in place, never read again
+([docs/STORE_PLAN.md](../../docs/STORE_PLAN.md)). From then on the user and
+org CLIs (`kubectl exec … -- node tools/user-admin.mjs …`,
+`tools/org-admin.mjs …`) change users and orgs; a `users.json` or
+`orgs.json` edited after the import makes the next start refuse, naming the
+file and the way out.
 
 **The database is never on NFS or an RWX volume.** It runs in WAL mode,
 which needs shared memory between the processes on one host, and the store
@@ -68,10 +73,64 @@ kubectl -n observability exec deploy/observabilitypack-studio -- \
   node tools/cli.mjs store backup /data/db/backup-$(date +%Y%m%d).db
 ```
 
-`store restore` refuses while the studio holds the database, so it needs
-the studio scaled to 0 and a one-off pod that mounts the `store` claim with
-`OBSERVOGRAM_DB` set; that recipe lands with slice 2, the first build that
-opens the store ([docs/STORE_PLAN.md](../../docs/STORE_PLAN.md) §3, §7).
+**Restore.** `store restore` refuses while anything holds the database, so
+scale the studio to 0 and run it from a one-off pod that mounts the `store`
+claim (`subPath: db`) with `OBSERVOGRAM_DB` set, then scale back to 1. The
+backup must be on that claim (the exec line above writes it to
+`/data/db`):
+
+```bash
+NS=observability
+BACKUP=backup-20260924.db                 # a file under /data/db on the store claim
+
+# 1. Stop the studio and wait for its pod to be gone.
+kubectl -n $NS scale deployment/observabilitypack-studio --replicas=0
+kubectl -n $NS wait --for=delete pod -l app.kubernetes.io/name=observabilitypack-studio,app.kubernetes.io/component=studio --timeout=180s
+
+# 2. Restore from a one-off pod on the store claim ($BACKUP expands: the
+#    heredoc is unquoted).
+kubectl -n $NS apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: observogram-store-restore
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch
+  containers:
+    - name: restore
+      image: observogram:0.4.0          # the studio's image and tag
+      workingDir: /app
+      command: ["node", "tools/cli.mjs", "store", "restore", "/data/db/$BACKUP"]
+      env:
+        - { name: OBSERVOGRAM_DB, value: /data/db/observogram.db }
+      volumeMounts:
+        - { name: store, mountPath: /data/db, subPath: db }
+  volumes:
+    - name: store
+      persistentVolumeClaim: { claimName: observabilitypack-studio-store }
+EOF
+kubectl -n $NS wait --for=jsonpath='{.status.phase}'=Succeeded pod/observogram-store-restore --timeout=300s
+kubectl -n $NS logs observogram-store-restore     # restored … -> /data/db/observogram.db, moved aside: …
+kubectl -n $NS delete pod observogram-store-restore
+
+# 3. Start the studio again.
+kubectl -n $NS scale deployment/observabilitypack-studio --replicas=1
+```
+
+The replaced database, with its `-wal` and `-shm`, is moved aside beside it
+under one timestamp (`observogram.db.pre-restore-<ts>`), so a wrong restore
+can be undone the same way. Restore a backup of this deployment's own
+store: the workspace's `.store-imported` marker names the store the legacy
+files were imported into, and a start against another store refuses and
+says so. If the phase never reaches `Succeeded`, `kubectl logs` shows the
+refusal (something still holds the database, or the file is not an
+Observogram store).
 
 ### Storage class
 
@@ -126,7 +185,9 @@ docroot. That architecture is gone:
   `OBSERVOGRAM_ADMIN_PASSWORD` seeds the `admin` sign-in on first boot
   (the loopback `admin/admin` default is never seeded off-loopback),
   and/or `OBSERVOGRAM_API_TOKEN` for service-account/CI access. OIDC
-  (`OBSERVOGRAM_OIDC_*`) also satisfies the requirement — see
+  (`OBSERVOGRAM_OIDC_*`) also satisfies the requirement; with it,
+  `OBSERVOGRAM_BOOTSTRAP_ADMIN` names the first owner (`<issuer>#<sub>`, or
+  an email the ID token marks verified) — see
   [.env.example](../../.env.example).
 - `GITHUB_TOKEN` (optional) — uncomment in
   [deployment-studio.yaml](deployment-studio.yaml) to raise GitHub rate
@@ -168,7 +229,8 @@ base's.)
 What the component adds ([components/journeys](components/journeys)):
 
 - `pvc-workspace.yaml` — the PVC `observabilitypack-studio-workspace`
-  (journeys/, runs/, deploys.jsonl, users.json, packs/). It takes the
+  (journeys/, runs/, deploys.jsonl, packs/, and the legacy users.json /
+  orgs.json until the first start imports them). It takes the
   studio's workspace over from `/data/workspace`; the database stays on the
   store claim. `1Gi` is a placeholder, not a measurement: the workspace
   grows as journeys × `OBSERVOGRAM_JOURNEY_RUN_RETENTION` (default 1000) ×
@@ -209,9 +271,10 @@ attach fails. `ReadWriteMany` (then drop the affinity) is safe **only while
 the studio's `OBSERVOGRAM_DB` points at the RWO store volume**: an RWX class
 is typically NFS or CephFS, where the database refuses to open, so never
 unset `OBSERVOGRAM_DB` or point it under `/workspace` with an RWX workspace
-claim. Tenancy: when `<workspace>/orgs.json` exists, point the CronJob at the
-org root (`OBSERVOGRAM_WORKSPACE=/workspace/orgs/<orgId>`; the CLI resolves
-the flat root only).
+claim. Tenancy: one CronJob per org —
+`OBSERVOGRAM_WORKSPACE=/workspace/<orgs.root>` (the default org's root is
+`.`, i.e. `/workspace`; a created org's is `orgs/<id>`, see `npm run orgs --
+list`); the studio's k8s snippet for a journey already targets its org.
 
 ### Switching a running base to the overlay
 
