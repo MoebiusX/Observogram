@@ -29,13 +29,16 @@
 //
 // MIGRATION — a deployment with an existing flat workspace gets it
 // moved to orgs/default/ by a one-shot, idempotent boot migration that
-// only runs once tenancy is armed (rename per entry; entries that
-// already exist under orgs/default/ are left alone).
+// only runs once tenancy is armed (rename per entry that holds data;
+// entries that already exist under orgs/default/ are left behind).
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { baseWorkspacePath } from '../tools/lib/brand-env.mjs';
 import { currentOrg, runWithOrg, validOrgId } from './org-context.mjs';
+import {
+  MIGRATABLE, hasData, lexists, orgsFilePath as legacyOrgsFilePath, readOrgsFileStrict, writeOrgsFile,
+} from './store/legacy-files.mjs';
 
 // The org context lives in server/org-context.mjs (no import cycle with
 // server/store/); re-exported here for the callers that import it from
@@ -99,35 +102,59 @@ export function orgWorkspaceRoot() {
 
 // ---------- boot migration: flat workspace → orgs/default/ ----------
 //
-// Idempotent and per-entry: each flat entry moves only if it exists AND
-// its destination doesn't. A half-migrated workspace (crash mid-move)
-// finishes on the next boot; an already-migrated one is a no-op.
+// Idempotent and per-entry. An entry moves only when it holds data
+// (hasData(): an empty directory, a tree of empty directories or a
+// zero-byte deploys.jsonl never moves, so an empty packs/ no longer
+// manufactures orgs/default/ and a 'default' org) and its destination does
+// not exist. A flat entry with data whose orgs/default/ twin exists is
+// left behind — neither moved nor merged — and reported. A half-migrated
+// workspace (crash mid-move) finishes on the next boot.
 
-const MIGRATABLE = ['packs', 'deploys.jsonl', 'snapshots', 'journeys', 'runs'];
-
-export function migrateFlatWorkspace({ log = () => {} } = {}) {
-  if (!tenancyEnabled()) return { migrated: [] };
-  const base = baseWorkspaceRoot();
-  const migrated = [];
+// Read-only: what the migration would do. Called before any write, so the
+// boot can count the orgs the import will produce.
+export function planFlatMigration({ base = baseWorkspaceRoot() } = {}) {
+  const move = [];
+  const leftBehind = [];
+  const emptyLeftovers = [];
   for (const entry of MIGRATABLE) {
     const from = join(base, entry);
-    const to = join(base, 'orgs', 'default', entry);
-    if (!existsSync(from) || existsSync(to)) continue;
-    mkdirSync(join(base, 'orgs', 'default'), { recursive: true });
-    renameSync(from, to);
-    migrated.push(entry);
-  }
-  if (migrated.length) {
-    // The moved state must stay reachable: make sure a 'default' org
-    // exists. Membership is left for the admin to fill in (orgs.json is
-    // their file); the migration only guarantees the org key is there.
-    const orgs = readOrgs();
-    if (!Object.hasOwn(orgs, 'default')) {
-      orgs.default = { name: 'Default', members: {} };
-      writeOrgs(orgs);
-      log(`[tenancy] created org "default" in orgs.json — add members to grant access to the migrated workspace`);
+    if (!hasData(from)) {
+      if (lexists(from)) emptyLeftovers.push(entry);
+      continue;
     }
-    log(`[tenancy] migrated flat workspace entries to orgs/default/: ${migrated.join(', ')}`);
+    if (lexists(join(base, 'orgs', 'default', entry))) leftBehind.push(entry);
+    else move.push(entry);
   }
-  return { migrated };
+  return { move, leftBehind, emptyLeftovers };
+}
+
+export function migrateFlatWorkspace({ log = () => {}, base = baseWorkspaceRoot() } = {}) {
+  const orgsPath = legacyOrgsFilePath(base);
+  if (!existsSync(orgsPath)) return { moved: [], leftBehind: [], wroteDefault: false };
+  const plan = planFlatMigration({ base });
+  // Strict, and before anything moves: a corrupt orgs.json fails the start
+  // naming its path (the lenient read returned {} and the write below
+  // replaced the file with { default }).
+  const orgs = plan.move.length ? readOrgsFileStrict(orgsPath) : null;
+  const moved = [];
+  for (const entry of plan.move) {
+    mkdirSync(join(base, 'orgs', 'default'), { recursive: true });
+    renameSync(join(base, entry), join(base, 'orgs', 'default', entry));
+    moved.push(entry);
+    log(`[tenancy] moved ${join(base, entry)} to orgs/default/${entry}`);
+  }
+  for (const entry of plan.leftBehind) {
+    log(`[tenancy] left behind: ${join(base, entry)} — orgs/default/${entry} already exists; neither moved nor merged, merge it by hand`);
+  }
+  let wroteDefault = false;
+  if (moved.length && !orgs.entries.some(([id]) => id === 'default')) {
+    // The moved state must stay reachable: make sure a 'default' org
+    // exists. Membership is left for the admin to fill in.
+    const data = JSON.parse(orgs.raw.toString('utf8'));
+    data.default = { name: 'Default', members: {} };
+    writeOrgsFile(data, orgsPath);
+    wroteDefault = true;
+    log(`[tenancy] created org "default" in orgs.json — add members to grant access to the migrated workspace`);
+  }
+  return { moved, leftBehind: plan.leftBehind, wroteDefault };
 }
