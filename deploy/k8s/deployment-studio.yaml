@@ -11,6 +11,13 @@
 # (kubectl apply -k deploy/k8s-journeys) adds a workspace PVC and a
 # journeys CronJob — scheduling delegated to Kubernetes, never a timer here.
 #
+# State: the pod mounts its own ReadWriteOnce claim (pvc-store.yaml) as the
+# volume `store` — the database at /data/db, the workspace at /data/workspace
+# (docs/STORE_PLAN.md §3). Without it every rollout would wipe users, roles,
+# registered packs and the deploy audit. The volume is NOT named `workspace`:
+# the journeys patch strategic-merges volumes by name, and a shared name would
+# put the database on the journeys claim.
+#
 # Image: built from the repo-root Dockerfile (see kustomization.yaml).
 # ─────────────────────────────────────────────────────────────────────────────
 apiVersion: apps/v1
@@ -21,7 +28,16 @@ metadata:
     app.kubernetes.io/name: observabilitypack-studio
     app.kubernetes.io/component: studio
 spec:
+  # One studio process per database: a multi-instance studio is out of scope.
   replicas: 1
+  # Recreate, not RollingUpdate: a rolling update briefly runs two studio
+  # processes against one database, stalls on attach when the RWO volume sits
+  # on another node, and on a store upgrade would run the new pod's import
+  # while the old pod still writes. Only Recreate waits for the old pod to
+  # finish terminating (maxSurge: 0 does not). The cost is a short outage per
+  # rollout.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: observabilitypack-studio
@@ -35,6 +51,12 @@ spec:
         runAsNonRoot: true
         runAsUser: 1000           # `node` user in the official node image
         runAsGroup: 1000
+        # A freshly provisioned PVC is root:root 0755 with most CSI /
+        # hostPath provisioners: without fsGroup uid 1000 cannot create the
+        # database or the workspace. OnRootMismatch skips the recursive chown
+        # once the root already belongs to the group.
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: studio
           image: observogram:0.4.0
@@ -47,6 +69,14 @@ spec:
               value: "0.0.0.0"
             - name: PORT
               value: "8000"
+            # The database stays on the RWO store volume, in its own subPath —
+            # never on NFS or an RWX volume (the store refuses a network
+            # filesystem), and not inside the workspace, so the journeys
+            # overlay can move the workspace without moving the database.
+            - name: OBSERVOGRAM_DB
+              value: /data/db/observogram.db
+            - name: OBSERVOGRAM_WORKSPACE
+              value: /data/workspace
             # REQUIRED to start off-loopback (the server fails closed
             # without auth): seed a sign-in and/or set a service token.
             # - name: OBSERVOGRAM_ADMIN_PASSWORD
@@ -77,3 +107,14 @@ spec:
             # NOT readOnlyRootFilesystem: POST /api/refresh-live writes
             # examples/production-live.pack.yaml inside the container.
             # The file is ephemeral by design (pod restart clears it).
+          volumeMounts:
+            - name: store
+              mountPath: /data/db
+              subPath: db
+            - name: store
+              mountPath: /data/workspace
+              subPath: workspace
+      volumes:
+        - name: store
+          persistentVolumeClaim:
+            claimName: observabilitypack-studio-store

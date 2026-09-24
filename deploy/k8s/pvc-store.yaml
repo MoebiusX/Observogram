@@ -1,0 +1,43 @@
+# The studio's own volume (docs/STORE_PLAN.md §3). The Deployment mounts it
+# as the volume `store`, in two subPaths:
+#   db/         at /data/db         OBSERVOGRAM_DB=/data/db/observogram.db
+#   workspace/  at /data/workspace  OBSERVOGRAM_WORKSPACE=/data/workspace
+# The database holds the records (users, orgs, memberships, the audit, the
+# session epoch that revokes cookies); the workspace holds the files those
+# rows point at (packs/, snapshots/, deploys.jsonl, session-secret, …). One
+# claim keeps them together, so a rollout never loses either half.
+#
+# Access mode: ReadWriteOnce, never ReadWriteMany. The database runs in WAL
+# mode, which needs shared memory between the processes on one host; the
+# store refuses to open it on NFS, CIFS/SMB or CephFS. Use a block-backed
+# class (a cloud disk, local-path, hostPath), not an NFS or other RWX one.
+#
+# Zones: with the opt-in journeys overlay (deploy/k8s-journeys) the studio
+# pod mounts TWO ReadWriteOnce claims — this one and
+# observabilitypack-studio-workspace — and both volumes must sit in the zone
+# the pod runs in. On a multi-zone cluster, use a class with
+# volumeBindingMode: WaitForFirstConsumer (each claim is provisioned where
+# the pod is scheduled), or an Immediate class pinned to one zone
+# (allowedTopologies) — an Immediate class that is not pinned provisions each
+# claim in whatever zone it likes, and the pod then never schedules. Check:
+#   kubectl get storageclass                        # VOLUMEBINDINGMODE column
+#   kubectl get storageclass <name> -o jsonpath='{.volumeBindingMode}'
+#   kubectl get pv <bound pv> -o jsonpath='{.spec.nodeAffinity}'   # its zone
+#
+# Sizing: 1Gi is a placeholder, not a measurement. The database is small
+# (rows for people, orgs and actions); the workspace grows with registered
+# packs, rollback snapshots and deploys.jsonl — measure yours.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: observabilitypack-studio-store
+  labels:
+    app.kubernetes.io/name: observabilitypack-studio
+    app.kubernetes.io/component: studio
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  # storageClassName: <your class>   # omit to use the cluster default

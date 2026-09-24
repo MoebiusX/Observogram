@@ -13,6 +13,10 @@
 #   #   kustomize edit set image observogram=ghcr.io/moebiusx/observogram:0.4.0
 #   kubectl apply -k deploy/k8s
 #
+# Needs a default StorageClass, or a storageClassName in pvc-store.yaml: the
+# studio's database and workspace live on that ReadWriteOnce claim, and the
+# pod stays Pending until it binds.
+#
 # Customise:
 #   - Edit deploy/k8s/ingress.yaml host / ingressClassName for your cluster.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -22,6 +26,7 @@ kind: Kustomization
 namespace: observability
 
 resources:
+  - pvc-store.yaml
   - deployment-studio.yaml
   - service.yaml
   - ingress.yaml
