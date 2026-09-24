@@ -39,12 +39,30 @@ function walk(dir) {
   return out.sort();
 }
 const files = walk(K8S);
+// mini-yaml keeps the last of two equal keys, so a repeated top-level key
+// parses here yet is invalid YAML that strict tools (yamllint key-duplicates,
+// go-yaml v3) reject. Scan the raw text per document instead.
+function duplicateTopLevelKeys(text) {
+  const dups = [];
+  let seen = new Map();
+  text.split(/\r?\n/).forEach((line, i) => {
+    if (/^---(\s|$)/.test(line)) { seen = new Map(); return; }
+    const m = /^([A-Za-z_][\w.-]*):(\s|$)/.exec(line);
+    if (!m) return;
+    if (seen.has(m[1])) dups.push(`${m[1]} (lines ${seen.get(m[1])} and ${i + 1})`);
+    else seen.set(m[1], i + 1);
+  });
+  return dups;
+}
 const docs = {};
 for (const f of files) {
   const rel = relative(K8S, f).replaceAll('\\', '/');
+  const text = readFileSync(f, 'utf8');
   let parsed = null, err = null;
-  try { parsed = parseYaml(readFileSync(f, 'utf8')); } catch (e) { err = e.message; }
+  try { parsed = parseYaml(text); } catch (e) { err = e.message; }
   assert(parsed && typeof parsed === 'object' && !err, `${rel} parses with mini-yaml`, err);
+  const dups = duplicateTopLevelKeys(text);
+  assert(dups.length === 0, `${rel} has no duplicate top-level keys`, dups);
   docs[rel] = parsed;
 }
 assert(Object.keys(docs).join() === 'components/journeys/cronjob-journeys.yaml,components/journeys/kustomization.yaml,components/journeys/patch-studio-workspace.yaml,components/journeys/pvc-workspace.yaml,deployment-studio.yaml,ingress.yaml,kustomization.yaml,pvc-store.yaml,service.yaml',
@@ -53,8 +71,11 @@ assert(Object.keys(docs).join() === 'components/journeys/cronjob-journeys.yaml,c
 const OVERLAY = join(K8S, '..', 'k8s-journeys', 'kustomization.yaml');
 {
   let overlayParsed = null, overlayErr = null;
-  try { overlayParsed = parseYaml(readFileSync(OVERLAY, 'utf8')); } catch (e) { overlayErr = e.message; }
+  const overlayText = readFileSync(OVERLAY, 'utf8');
+  try { overlayParsed = parseYaml(overlayText); } catch (e) { overlayErr = e.message; }
   assert(overlayParsed && !overlayErr, 'deploy/k8s-journeys/kustomization.yaml parses with mini-yaml', overlayErr);
+  const overlayDups = duplicateTopLevelKeys(overlayText);
+  assert(overlayDups.length === 0, 'deploy/k8s-journeys/kustomization.yaml has no duplicate top-level keys', overlayDups);
   docs['../k8s-journeys/kustomization.yaml'] = overlayParsed;
 }
 

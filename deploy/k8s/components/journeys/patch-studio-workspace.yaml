@@ -12,7 +12,6 @@
 # /data/workspace mount stays too; it is where the overlay switch copies from
 # (deploy/k8s/README.md).
 apiVersion: apps/v1
-apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: observabilitypack-studio
