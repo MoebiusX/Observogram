@@ -590,14 +590,19 @@ const TAMPERING = [
   ['UPSERT', "INSERT INTO audit (seq, at, actor, action) VALUES (1, 'x', 'mallory', 'forged') ON CONFLICT (seq) DO UPDATE SET actor = excluded.actor"],
   ['REPLACE', "REPLACE INTO audit (seq, at, actor, action) VALUES (1, 'x', 'mallory', 'forged')"],
   ['INSERT OR REPLACE', "INSERT OR REPLACE INTO audit (seq, at, actor, action) VALUES (2, 'x', 'mallory', 'forged')"],
+  // Backdating: a new seq below the newest would list as older history.
+  ['backdated seq 0', "INSERT INTO audit (seq, at, actor, action) VALUES (0, 'x', 'mallory', 'forged')"],
+  ['backdated seq -5', "INSERT INTO audit (seq, at, actor, action) VALUES (-5, 'x', 'mallory', 'forged')"],
+  // -1 is what an auto-assigned seq looks like to the trigger; the CHECK refuses it.
+  ['backdated seq -1', "INSERT INTO audit (seq, at, actor, action) VALUES (-1, 'x', 'mallory', 'forged')", /CHECK constraint failed/],
 ];
 
 test('Audit: UPDATE, DELETE, UPSERT, REPLACE and INSERT OR REPLACE abort and leave the rows unchanged; a plain insert passes', async () => {
   const { path, db, at, snapshot } = await auditFixture();
   try {
     const before = snapshot();
-    for (const [what, sql] of TAMPERING) {
-      assert.throws(() => tx(db, () => prepare(db, sql).run()), /audit is append-only/, what);
+    for (const [what, sql, re = /audit is append-only/] of TAMPERING) {
+      assert.throws(() => tx(db, () => prepare(db, sql).run()), re, what);
       assert.deepEqual(snapshot(), before, `${what} left the rows unchanged`);
     }
     prepare(db, "INSERT INTO audit (at, actor, action) VALUES (?, 'alice', 'org.create')").run(at);
@@ -615,8 +620,8 @@ test('Audit: the same on a raw connection opened without recursive_triggers', as
   try {
     assert.equal(pragma(raw, 'recursive_triggers')[0].recursive_triggers, 0, 'recursive_triggers is off on this connection');
     const rows = () => prepare(raw, 'SELECT * FROM audit ORDER BY seq').all().map((r) => ({ ...r }));
-    for (const [what, sql] of TAMPERING) {
-      assert.throws(() => prepare(raw, sql).run(), /audit is append-only/, what);
+    for (const [what, sql, re = /audit is append-only/] of TAMPERING) {
+      assert.throws(() => prepare(raw, sql).run(), re, what);
       assert.deepEqual(rows(), before, `${what} left the rows unchanged`);
     }
     prepare(raw, "INSERT INTO audit (at, actor, action) VALUES ('t', 'alice', 'plain')").run();

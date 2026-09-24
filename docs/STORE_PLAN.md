@@ -261,13 +261,18 @@ audit           seq PK AUTOINCREMENT, at, org_id NULL, actor, action, target_kin
     tier. The conformance route passes it in, in slice 4. A pack with no
     service row is graded as today.
 - **`audit` is append-only in the schema.**
-  - `BEFORE UPDATE`, `BEFORE DELETE` and `BEFORE INSERT … WHEN EXISTS
-    (SELECT 1 FROM audit WHERE seq = NEW.seq)` triggers all
-    `RAISE(ABORT, 'audit is append-only')`.
-  - The third refuses an existing `seq`, so `REPLACE` / `INSERT OR REPLACE`
-    cannot rewrite a row on **any** connection. Without it, both overwrite
-    rows (verified on 22.22 / SQLite 3.51.2). An auto-assigned `seq` reads
-    as -1 in the trigger, so plain inserts pass.
+  - `BEFORE UPDATE`, `BEFORE DELETE` and `BEFORE INSERT … WHEN NEW.seq
+    <> -1 AND NEW.seq <= (SELECT coalesce(max(seq), 0) FROM audit)`
+    triggers all `RAISE(ABORT, 'audit is append-only')`.
+  - The third refuses any explicit `seq` not above the newest. That covers
+    an existing `seq`, so `REPLACE` / `INSERT OR REPLACE` cannot rewrite a
+    row on **any** connection (without it, both overwrite rows, verified
+    on 22.22 / SQLite 3.51.2), and a backdated `seq` (0, negative, a gap
+    below the newest) cannot pose as older history. An auto-assigned `seq`
+    reads as -1 in the trigger, so plain inserts pass.
+  - `seq` carries `CHECK (seq > 0)`: the trigger cannot tell an explicit
+    -1 from an auto-assigned one, so the CHECK refuses it, and any
+    `seq <= 0` on an empty table.
   - `recursive_triggers=ON` is a second layer only: it is per-connection
     and not stored in the file.
   - These triggers guard against application bugs, not against someone
@@ -941,7 +946,7 @@ to end: the boot order and the import (slice 2) are the heavy part.
 | AuthZ matrix | table-driven: every route × {anonymous, viewer, operator, admin, owner, bearer} × {open loopback, open exposed, token-only, identity} → the expected status; an unclassified route or static mount fails the suite; an org admin cannot act on a user or an org outside their own; an owner with no membership reaches owner routes and lands in the default org; public routes answer anonymously in the identity posture; `OBSERVOGRAM_AUTH=off` plus `OBSERVOGRAM_INSECURE_NO_AUTH=1` on 0.0.0.0 gets the open-exposed row; the forced change of the first `admin`/`admin` boot works through the pwflow cookie alone |
 | Revocation | a disabled user's cookie and a changed password's old cookie are refused on the next request, on `/api` **and** on `/auth/me` and the change-password routes; a pwflow cookie from before a change or a disable is refused; a disabled user cannot sign in; pre-upgrade cookies stay valid |
 | Arming | on an exposed, token-less server, removing the last local user through the API and through the CLI leaves the next `/api` request at 401 or 409, never 200 |
-| Audit | UPDATE, DELETE, UPSERT, `REPLACE` and `INSERT OR REPLACE` on `audit` abort and leave the rows unchanged, including on a connection opened without `recursive_triggers`; a plain insert passes; each successful route writes exactly the rows its table entry names, with the row's `login` as the actor; refused routes write none |
+| Audit | UPDATE, DELETE, UPSERT, `REPLACE`, `INSERT OR REPLACE` and a backdated `INSERT` (explicit `seq` 0, -5, -1) on `audit` abort and leave the rows unchanged, including on a connection opened without `recursive_triggers`; a plain insert passes; each successful route writes exactly the rows its table entry names, with the row's `login` as the actor; refused routes write none |
 | Concurrency | on a temp-file database, a child process holds `BEGIN IMMEDIATE` for less than `busy_timeout` while a repository write and a migration run: both succeed. A `tx(fn)` whose `fn` returns a promise throws and rolls back |
 | Local-mode behaviour | `OBSERVOGRAM_AUTH=off` and a fresh first boot (`admin`/`admin`) keep today's externally visible behaviour: HTTP statuses, the login and forced-change flow, the open posture, a flat workspace with one org. Token-only, including `AUTH=off` plus a token, keeps anonymous GET 200 and anonymous mutation 401 with `WWW-Authenticate: Bearer` |
 | Journey engine | `packc journey run` and the Neuron open no database; the CronJob path runs with the database file absent; a default-org CronJob keeps its root across org creation; a schedule snippet generated in a non-default org targets that org's root |

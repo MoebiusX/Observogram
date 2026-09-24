@@ -3,8 +3,8 @@
 // Rows are written by the repository whose change they record, inside the
 // same tx() (writeAudit), or on their own (appendAudit). org_id NULL marks
 // a deployment event (users, orgs, owners); an org's rows carry its id.
-// The schema's triggers refuse UPDATE, DELETE and any insert over an
-// existing seq, so there is deliberately no way to change a row here.
+// The schema's triggers refuse UPDATE, DELETE and any insert at or below
+// the newest seq, so there is deliberately no way to change a row here.
 
 import { atomic, nowIso, prepare } from './db.mjs';
 import { requireActor, requireText, fromJson } from './rows.mjs';

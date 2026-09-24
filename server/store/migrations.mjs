@@ -132,7 +132,7 @@ CREATE INDEX pack_services_service ON pack_services (service_id, org_id);
 CREATE UNIQUE INDEX pack_services_one_primary ON pack_services (org_id, pack_id) WHERE role = 'primary';
 
 CREATE TABLE audit (
-  seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+  seq         INTEGER PRIMARY KEY AUTOINCREMENT CHECK (seq > 0),
   at          TEXT NOT NULL,
   org_id      TEXT,
   actor       TEXT NOT NULL,
@@ -143,16 +143,20 @@ CREATE TABLE audit (
 ) STRICT;
 CREATE INDEX audit_org_seq ON audit (org_id, seq);
 
--- Append-only. The third trigger refuses an existing seq, so REPLACE and
+-- Append-only. The third trigger refuses any explicit seq that is not
+-- above the newest one: that covers an existing seq, so REPLACE and
 -- INSERT OR REPLACE cannot rewrite a row on any connection, with or
--- without recursive_triggers. An auto-assigned seq reads as -1 in a
--- BEFORE INSERT trigger, so plain inserts pass.
+-- without recursive_triggers, and a backdated seq (0, negative, a gap
+-- below the newest) cannot slip in as older history. An auto-assigned
+-- seq reads as -1 in a BEFORE INSERT trigger, so plain inserts pass; the
+-- trigger cannot tell an explicit -1 from that, so CHECK (seq > 0)
+-- refuses it (and any seq <= 0).
 CREATE TRIGGER audit_no_update BEFORE UPDATE ON audit
 BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;
 CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit
 BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;
 CREATE TRIGGER audit_no_overwrite BEFORE INSERT ON audit
-WHEN EXISTS (SELECT 1 FROM audit WHERE seq = NEW.seq)
+WHEN NEW.seq <> -1 AND NEW.seq <= (SELECT coalesce(max(seq), 0) FROM audit)
 BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;
 `;
 
