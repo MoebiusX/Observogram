@@ -43,9 +43,9 @@ flowchart TD
 
 | Step | Question | Input | Output |
 |---|---|---|---|
-| 1 DEFINE | What are we observing? | service name, owners, criticality tier-1/2/3, environment, one or more library entries (products it runs on, or an archetype for a service built from scratch) — then **Seed the pack →**: the definition is confirmed once and recedes into a seed card | the entries' params with defaults; the tier's requirements (`tierRequirements`); the tier's default SLIs (`defaultToggles`) as the seed |
-| 2 COMPILE | What should we watch? | per-entry SLI toggles (**any** SLI of the entries, the tier's defaults pre-ticked), the copies (overrides per SLI, custom SLIs), params, section toggles (SLOs, policy + routes, dashboards, validation) | the canonical pack + todos + provenance (`instantiatePack`) |
-| 3 VERIFY | Is it ready to use? | the pack | which clauses pass, which pass only on a placeholder, which fail (`validationSummary`); the schema verdict; the compiled artifacts through the existing targets (Prometheus rules, OTel Collector, Alertmanager, Grafana dashboards) |
+| 1 DEFINE | What are we building for? | service name, owners, criticality tier-1/2/3, environment, one or more library entries (products it runs on, or an archetype for a service built from scratch) — then **Seed the pack →**: the definition is confirmed once and recedes into a seed card | the entries' params with defaults; the tier's requirements (`tierRequirements`); the tier's default SLIs (`defaultToggles`) as the seed |
+| 2 COMPILE | What will the pack include? | per-entry SLI toggles (**any** SLI of the entries, the tier's defaults pre-ticked), the copies (overrides per SLI, custom SLIs), params, section toggles (SLOs, policy + routes, dashboards, validation) | the canonical pack + todos + provenance (`instantiatePack`) |
+| 3 VERIFY | Can we use this pack? | the pack | which clauses pass, which pass only on a placeholder, which fail (`validationSummary`); the schema verdict; the compiled artifacts through the existing targets (Prometheus rules, OTel Collector, Alertmanager, Grafana dashboards) |
 
 **Hand-off.** VERIFY ends on *Ready to continue?* with two exits: *Resolve or adjust*
 returns to DEFINE; *Continue with visible gaps* (*Continue to Discover* when no
@@ -890,7 +890,7 @@ synthesises one; the compiled burn alert of a floor counts the samples under the
 schema is asked ("a ratio SLI has no bound, so no direction").
 
 *Small fixes in the same slice.* The header step tabs' accessible names read *Define —
-Service, tier & library* (and Compile, Verify): `BUILD_TABS` lives in `build-model.mjs`
+Choose a service, tier, and starting point* (and Compile, Verify): `BUILD_TABS` lives in `build-model.mjs`
 (pure), `techName` is the step's own word, `tabName` spells the name once for the tab's
 `aria-label` and `title`. The description default bug (an empty box under a "library default"
 label) is gone with the face. The rolodex counts line and the L1 slab head are unchanged.

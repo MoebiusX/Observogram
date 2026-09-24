@@ -2236,9 +2236,9 @@ test('an L1 SLI or SLO card on the stack is a control that opens the SLI’s edi
   ]);
   // The header tabs: the step word and its tagline are the tab's name (measured: the title read "Library — …").
   assert.deepEqual(BUILD_TABS.map(t => [t.id, t.sub, t.techName, tabName(t)]), [
-    ['define', 'Define', 'Define', 'Define — Service, tier & library'],
-    ['compile', 'Compile', 'Compile', 'Compile — Pack & deployable artifacts'],
-    ['verify', 'Verify', 'Verify', 'Verify — Conformance & placeholders'],
+    ['define', 'Define', 'Define', 'Define — Choose a service, tier, and starting point'],
+    ['compile', 'Compile', 'Compile', 'Compile — Build SLIs, alerts, dashboards, and checks'],
+    ['verify', 'Verify', 'Verify', 'Verify — Review coverage and resolve gaps'],
   ]);
   assert.ok(BUILD_TABS.every(t => !/Library|Instantiate|Conformance —/.test(tabName(t))));
   // The stylesheet: the editable card has a hover and a focus ring.

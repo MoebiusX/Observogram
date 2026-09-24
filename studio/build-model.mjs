@@ -1105,14 +1105,14 @@ export const sheetModeFor = (step) => SHEET_MODES[step] || 'edit';
 /**
  * The BUILD journey's three header cards (docs/BUILD_JOURNEY.md): the same shape as the analysis journey's tabs
  * and the same accents, rendered by the same header renderer whenever state.mode is 'build'. `techName` is the
- * step's own name (the tab's title and accessible name read "Define — Service, tier & library", never the engine
+ * step's own name (the tab's title and accessible name read "Define — Choose a service, tier, and starting point", never the engine
  * word behind it; measured: "Library — …"). A card is reachable when the previous step's inputs are valid
  * (buildStepReachability).
  */
 export const BUILD_TABS = [
-  { id: 'define', n: '1', label: 'What Are We Observing?', sub: 'Define', techName: 'Define', tagline: 'Service, tier & library', accent: 'tab-blue' },
-  { id: 'compile', n: '2', label: 'What Should We Watch?', sub: 'Compile', techName: 'Compile', tagline: 'Pack & deployable artifacts', accent: 'tab-magenta' },
-  { id: 'verify', n: '3', label: 'Is It Ready to Use?', sub: 'Verify', techName: 'Verify', tagline: 'Conformance & placeholders', accent: 'tab-emerald' },
+  { id: 'define', n: '1', label: 'What Are We Building For?', sub: 'Define', techName: 'Define', tagline: 'Choose a service, tier, and starting point', accent: 'tab-blue' },
+  { id: 'compile', n: '2', label: 'What Will the Pack Include?', sub: 'Compile', techName: 'Compile', tagline: 'Build SLIs, alerts, dashboards, and checks', accent: 'tab-magenta' },
+  { id: 'verify', n: '3', label: 'Can We Use This Pack?', sub: 'Verify', techName: 'Verify', tagline: 'Review coverage and resolve gaps', accent: 'tab-emerald' },
 ];
 /** A header tab's accessible name and title: the step word and its tagline. */
 export const tabName = (t) => `${t.techName} — ${t.tagline}`;

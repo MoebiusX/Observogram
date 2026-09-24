@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### The Build journey's step copy
+The maintainer's copy for the three steps of building a pack. The header tabs (`BUILD_TABS` in `studio/build-model.mjs`) and each step's heading now read:
+
+| Step | Question | Supporting text (the tab's tagline) |
+| --- | --- | --- |
+| Define | What are we building for? | Choose a service, tier, and starting point |
+| Compile | What will the pack include? | Build SLIs, alerts, dashboards, and checks |
+| Verify | Can we use this pack? | Review coverage and resolve gaps |
+
+Before, they read *What are we observing? · Service, tier & library*, *What should we watch? · Pack & deployable artifacts* and *Is it ready to use? · Conformance & placeholders*. The tab labels keep the header's title case (*What Are We Building For?*), like Discover's tabs. A tab's accessible name and title follow the tagline (*Define — Choose a service, tier, and starting point*). The README and `docs/BUILD_JOURNEY.md` follow. Only copy changed; the ledes under the headings are unchanged.
+
 ### Spec 1.3: `good_when` — a threshold SLI's bound has a direction
 The maintainer's request of 2026-09-23: the MQ lab could not say that fewer connected channels or running listeners is bad — a floor had to be encoded as a ratio SLI or as an inverted "headroom" ceiling — and the burn-rate generator could only warn that a ratio-shaped threshold "suggests a floor, which the spec cannot express". RFC-0002 (upstream MoebiusX/otel-observability-pack, accepted the same day, merged on develop as 98be4ae) adds one optional field to `threshold` and `distribution` SLIs, `good_when: below | above`, default `below` — today's meaning: a sample is good at or below the bound — with `above` a floor; the schema refuses the field on `ratio` and `custom` SLIs through a `not` sub-schema, the form this repo's validator enforces. Absent means below, so every 1.2 pack validates and means what it meant. Observogram adopts it end to end:
 - **Vendor.** `vendor/observability-pack-spec/v1.3/` holds the four upstream files byte for byte (each sha256 is the git blob's), `VERSIONS.json` records spec 1.3, ref `develop`, commit `98be4ae8…`; `v1.2/` is removed (1.3 validates every 1.2 pack unchanged; git history keeps it). `tools/sync-spec.mjs` reads the version directory from the fetched spec's own header (`| Spec version | 1.3 |`), fetches bodies untrimmed and defaults to the upstream default branch, develop. The studio’s links into the upstream repo (the footer’s “spec v1.3”, the Schema view’s schema and spec, the Conformance view’s maturity rubric) open that commit, not `main` — upstream main still serves 1.2 — and `tools/test-validator.mjs` holds them to `VERSIONS.json` `upstream.commit`.
