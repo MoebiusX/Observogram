@@ -339,6 +339,57 @@ test('boot order 10: a multi-org orgs.json with no identity refuses (C); a one-o
   }
 });
 
+// Check C's step-3 text names only ways out that work in this build (A-60):
+// every CLI refuses until a first start imports, so the text must not send
+// the operator to `npm run users` first. Each named step is run here.
+test('boot order 10b: check C (step 3) names a way out that works — trim orgs.json (or move it aside), start once, then users -- add and orgs -- create --adopt', async () => {
+  const TOKEN = { OBSERVOGRAM_API_TOKEN: 'tok-0123456789' };
+  const addAlice = (ws) => cli(USER_ADMIN, ['add', 'alice', '--password-stdin'], ws, { input: 'correct-horse-9\n' });
+  const bravoPack = (ws, id) => { mkdirSync(join(ws, 'orgs', id, 'packs'), { recursive: true }); writeFileSync(join(ws, 'orgs', id, 'packs', 'p.pack.yaml'), 'name: p\n'); };
+  const refusedC = (r) => {
+    assert.ok(!r.listening && r.nothingMoved === true, r.message);
+    for (const step of ['edit orgs.json down to one org', 'move it aside', 'npm run users -- add <login>', 'npm run orgs -- create <id> --adopt']) {
+      assert.ok(r.message.includes(step), `check C names "${step}": ${r.message}`);
+    }
+    assert.ok(!/users\.json \/ npm run users/.test(r.message), 'no way out this build cannot take');
+  };
+
+  // Two orgs in orgs.json: the CLIs refuse first; trimming orgs.json to one gets out.
+  const ws = workspace();
+  orgsFile(ws, { acme: { members: {} }, bravo: { members: {} } });
+  bravoPack(ws, 'bravo');
+  refusedC(boot(ws, { env: TOKEN }));
+  let c = addAlice(ws);
+  assert.ok(c.status === 1 && /not imported yet/.test(c.stderr), 'the CLIs refuse before the first start');
+  orgsFile(ws, { acme: { members: {} } });
+  assert.ok(boot(ws, { env: TOKEN }).listening, 'one org boots with a bearer token');
+  c = addAlice(ws);
+  assert.equal(c.status, 0, c.stderr);
+  c = cli(ORG_ADMIN, ['create', 'bravo', '--adopt', '--admin', 'alice'], ws);
+  assert.equal(c.status, 0, c.stderr);
+  assert.ok(boot(ws, { env: TOKEN }).listening, 'two orgs boot once identity is armed');
+  await inspectWs(ws, (v) => {
+    assert.deepEqual(v.orgs().map((o) => [o.id, o.root]), [['acme', 'orgs/acme'], ['bravo', 'orgs/bravo']]);
+    assert.deepEqual(v.roles('alice'), ['acme:admin', 'bravo:admin']);
+  });
+
+  // One org in orgs.json plus flat data (the second org is 'default'): moving orgs.json aside gets out.
+  const ws2 = workspace();
+  orgsFile(ws2, { acme: { members: {} } });
+  flatPack(ws2);
+  bravoPack(ws2, 'acme');
+  refusedC(boot(ws2, { env: TOKEN }));
+  renameSync(join(ws2, 'orgs.json'), join(ws2, 'orgs.json.aside'));
+  assert.ok(boot(ws2, { env: TOKEN }).listening, 'the flat workspace boots as the default org');
+  c = addAlice(ws2);
+  assert.equal(c.status, 0, c.stderr);
+  c = cli(ORG_ADMIN, ['create', 'acme', '--adopt'], ws2);
+  assert.equal(c.status, 0, c.stderr);
+  assert.ok(boot(ws2, { env: TOKEN }).listening);
+  await inspectWs(ws2, (v) => assert.deepEqual(v.orgs().map((o) => [o.id, o.root]), [['default', '.'], ['acme', 'orgs/acme']]));
+  assert.ok(existsSync(join(ws2, 'packs', 'flat.pack.yaml')) && existsSync(join(ws2, 'orgs', 'acme', 'packs', 'p.pack.yaml')), 'every file stays where it was');
+});
+
 test('boot order 11: an orgs.json-armed workspace whose flat data the migration moved boots a second time, moving nothing', async () => {
   const ws = workspace();
   usersFile(ws, { alice: { createdAt: 't', password: REAL } });

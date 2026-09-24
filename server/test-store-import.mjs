@@ -881,8 +881,10 @@ const MSG_B = (host) => `refusing to bind to ${host} while the seeded default ad
   + '  Sign in once on loopback (admin / admin) to set a real password,\n'
   + '  or seed a fresh workspace with OBSERVOGRAM_ADMIN_PASSWORD=<secret>.';
 const MSG_C3 = (n, ids) => `orgs.json would leave ${n} orgs (${ids}) but no identity is configured: more than one org needs to know who the user is.\n`
-  + '  Configure OIDC (OBSERVOGRAM_OIDC_*) or stand-alone users (users.json / npm run users),\n'
-  + '  or keep one org — one org boots with a bearer token alone, or on loopback. Nothing was moved or imported.';
+  + '  Configure OIDC (OBSERVOGRAM_OIDC_*), or start once with one org — one org boots with a bearer token alone, or on loopback:\n'
+  + '  with the server stopped, edit orgs.json down to one org (or move it aside when the flat workspace is the other org).\n'
+  + '  Then add stand-alone users with npm run users -- add <login>, and each other org with npm run orgs -- create <id> --adopt\n'
+  + '  (the CLIs refuse until that first start has imported). Nothing was moved or imported.';
 
 test('assertBootChecks table: A (and the INSECURE override), B after the decision, C counted from plan1.liveOrgsAfter, first failing check wins', async () => {
   const input = { step: 'store', host: '0.0.0.0', loopback: false, token: false, insecure: false, auth: false, stillSeeded: false, orgIds: ['default'], identity: false, strandedDefault: null };

@@ -272,8 +272,10 @@ export function assertBootChecks(input) {
     const ids = input.orgIds.join(', ');
     throw new BootRefusal(input.step === 'import'
       ? `orgs.json would leave ${n} orgs (${ids}) but no identity is configured: more than one org needs to know who the user is.\n` +
-        '  Configure OIDC (OBSERVOGRAM_OIDC_*) or stand-alone users (users.json / npm run users),\n' +
-        '  or keep one org — one org boots with a bearer token alone, or on loopback. Nothing was moved or imported.'
+        '  Configure OIDC (OBSERVOGRAM_OIDC_*), or start once with one org — one org boots with a bearer token alone, or on loopback:\n' +
+        '  with the server stopped, edit orgs.json down to one org (or move it aside when the flat workspace is the other org).\n' +
+        '  Then add stand-alone users with npm run users -- add <login>, and each other org with npm run orgs -- create <id> --adopt\n' +
+        '  (the CLIs refuse until that first start has imported). Nothing was moved or imported.'
       : `the store holds ${n} orgs (${ids}) but no identity is configured: more than one org needs to know who the user is.\n` +
         '  Configure OIDC (OBSERVOGRAM_OIDC_*) or stand-alone users (npm run users),\n' +
         '  or keep one org — remove the others with npm run orgs -- remove <id>.',
