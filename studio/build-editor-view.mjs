@@ -194,14 +194,18 @@ export function wireBuildEditor(container, model, host = appHost) {
     const commit = () => {
       if (inp.value === last) return;   // a change after an input (Enter, blur, a datalist pick of the same text) is not a second edit
       last = inp.value;
+      let text = inp.value;
       if (field === 'id') {
         const check = checkEditorId(inp.value, { key: model.key, existingIds: model.existingIds });
         paintFieldMessage(container, 'id', check.ok ? null : check.message, idField?.hint);
         if (!check.ok) { say(`not applied — ${check.message}`, 'error'); return; }
+        // What the check made of the text: the key itself (or nothing) clears the rename — never an override that
+        // restates the key, which the studio showed as "customised: id" while the engine treated it as no rename.
+        text = check.id ?? '';
       }
       say('applying…', 'pending');
-      if (inp.dataset.overrideField) act.setOverride?.(model.key, field, inp.value, { live: true });
-      else act.updateCustom?.(model.key, field, inp.value, { live: true });
+      if (inp.dataset.overrideField) act.setOverride?.(model.key, field, text, { live: true });
+      else act.updateCustom?.(model.key, field, text, { live: true });
     };
     inp.addEventListener('input', () => { if (inp.tagName === 'TEXTAREA') growTextarea(inp); commit(); });
     inp.addEventListener('change', commit);

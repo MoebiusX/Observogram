@@ -812,7 +812,9 @@ edited expression it stays (the caller's claim); left alone, an edited expressio
 the template's claim. The index rows carry the library's metric as the default. The studio
 pre-checks a typed id the way the engine will (`checkEditorId`, `existingSliIds`: a slug, not
 reserved, not another SLI of the pack or of a selected product) and keeps an invalid one in
-the field with its message, never sent. `packc init --override` accepts `<sli>.id=` and
+the field with its message, never sent; the key itself typed back (or an empty field) clears
+the rename — the studio never sends an override that restates the key, which it would show as
+*customised: id* while the engine treats it as no rename. `packc init --override` accepts `<sli>.id=` and
 `<sli>.semconv_metric=`.
 
 *Create mode.* The same dialog over the custom form (`customFormModel`, one rule: Name → id

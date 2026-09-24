@@ -391,6 +391,12 @@ test('the handlers: every field commits on input through setOverride with the fi
   assert.deepEqual([msg.className, msg.textContent, cls.has('is-error'), 'aria-invalid' in inpAttrs, inpAttrs['aria-describedby']], ['build-edit-hint', model.fields.find(f => f.id === 'id').hint, false, false, 'build-editor-id-default build-editor-id-hint']);
   idInput.value = ''; idInput.fire('input');
   assert.deepEqual(calls.at(-1), ['override', 'availability', 'id', '', { live: true }], 'an empty id clears the rename (the controller removes the override)');
+  // The key itself typed back (' availability ', 'availability') is no rename: what goes out clears the override — never
+  // `{ id: 'availability' }`, which the studio then showed as "customised: id" while the engine treated it as no rename (measured).
+  calls.length = 0;
+  idInput.value = ' availability '; idInput.fire('input');
+  idInput.value = 'availability'; idInput.fire('input');
+  assert.ok(calls.every(c => c[3] === ''), `typing the key back sends a clear, not the key: ${JSON.stringify(calls)}`);
   // ↺ on a field, Reset all, the switch.
   calls.length = 0;
   reset.fire('click'); resetAll.fire('click'); sw.fire('click');
