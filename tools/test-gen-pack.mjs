@@ -402,6 +402,19 @@ test('spec 1.3 good_when on the boards: a floor SLI\'s tile colours lower-is-wor
   assert.deepEqual({ ...pt, id: 0 }, { ...ct, id: 0 }, 'absent means below: the tile of a 1.2 SLI is the tile of a declared ceiling');
   assert.deepEqual(thresholdSteps({ type: 'threshold', threshold: 0.5 }), okAbove(0.5, 1));
   assert.deepEqual(thresholdSteps({ type: 'threshold', good_when: 'above', threshold: -2 }).map(s => s.value), [null, -3, -2], 'a negative floor keeps its steps ascending');
+  // A bound of 0 has no amber band (twice 0 and half of 0 are 0). Grafana paints the last step whose value is <= the
+  // sample, so two steps at 0 painted the good 0 of a ceiling red (bf00c01: [green, amber 0, red 0]) while the tile's
+  // description says "Good when ≤ 0 messages"; a floor at 0 got amber and green both at 0. The bound itself stays good.
+  const paint = (steps, v) => steps.filter(st => st.value === null || v >= st.value).at(-1).color;   // Grafana's getActiveThreshold on ascending steps
+  const zeroCeiling = thresholdSteps({ type: 'threshold', threshold: 0 }), zeroFloor = thresholdSteps({ type: 'threshold', good_when: 'above', threshold: 0 });
+  assert.deepEqual(zeroCeiling, [{ color: C.green, value: null }, { color: C.red, value: Number.MIN_VALUE }], 'a ceiling at 0: green up to and including 0, red from the smallest value above it, no amber');
+  assert.deepEqual(zeroFloor, [{ color: C.red, value: null }, { color: C.green, value: 0 }], 'a floor at 0: red under 0, green from 0, no amber');
+  assert.deepEqual([paint(zeroCeiling, 0), paint(zeroCeiling, 1e-9), paint(zeroCeiling, 1), paint(zeroFloor, 0), paint(zeroFloor, -1e-9), paint(zeroFloor, -1)], [C.green, C.red, C.red, C.green, C.red, C.red], 'the good 0 is green on both sides; anything past the bound is red');
+  assert.equal(JSON.parse(JSON.stringify(zeroCeiling))[1].value, Number.MIN_VALUE, 'the step survives the board JSON (5e-324 parses back)');
+  assert.ok(new Set(zeroCeiling.map(st => st.value)).size === 2 && new Set(zeroFloor.map(st => st.value)).size === 2, 'no two steps share a value');
+  const [zt] = derivedSliTiles(packOf(sli({ description: 'Dead-letter depth.', threshold: 0, unit: 'messages' })), null);
+  assert.deepEqual(zt.fieldConfig.defaults.thresholds.steps, zeroCeiling, 'the tile of a 0-bound ceiling (the library entry dlq_depth) carries the guarded steps');
+  assert.equal(zt.description, 'Dead-letter depth. SLO 99.9 % over 30d. Good when ≤ 0 messages.');
   // The trend: the dashed line at the bound whichever way the SLI faces; the description says which side is good.
   const ftr = derivedSliTrend(packOf(floor), floor), ctr = derivedSliTrend(packOf(ceiling), ceiling), ptr = derivedSliTrend(packOf(plain), plain);
   assert.deepEqual([ftr, ctr, ptr].map(p => p.fieldConfig.defaults.thresholds.steps.at(-1).value), [2, 2, 2]);

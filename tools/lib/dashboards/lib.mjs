@@ -381,10 +381,18 @@ const UNIT = { seconds: 's', ratio: 'percentunit', percent: 'percent', bytes: 'b
  * bound and red at twice it; a floor (good_when: above) colours okBelow — lower is worse — amber
  * under the bound and red under half of it (the same distance, mirrored; `t - |t| / 2` keeps the
  * steps ascending for a negative bound too). The dashed line sits at the bound either way.
+ *
+ * A bound of 0 has no amber band (twice 0 and half of 0 are 0): the two steps would coincide and
+ * Grafana, which paints the last step whose value is <= the sample, would paint the good 0 of a
+ * ceiling red. So a ceiling at 0 is green up to and including 0 and red from the smallest value
+ * above it (Number.MIN_VALUE — 5e-324 in the board JSON — is "strictly above 0" for a double),
+ * and a floor at 0 is red under 0 and green from 0: the bound itself stays good, as the burn
+ * rules count it.
  */
 export function thresholdSteps(sli) {
   const t = Number(sli.threshold);
-  return goodWhen(sli) === 'above' ? okBelow(t, t - Math.abs(t) / 2) : okAbove(t, t * 2);
+  if (goodWhen(sli) === 'above') return t === 0 ? [{ color: C.red, value: null }, { color: C.green, value: 0 }] : okBelow(t, t - Math.abs(t) / 2);
+  return t === 0 ? [{ color: C.green, value: null }, { color: C.red, value: Number.MIN_VALUE }] : okAbove(t, t * 2);
 }
 /**
  * One stat tile per SLI, derived from the pack: ratio SLIs colour against the objective of the
