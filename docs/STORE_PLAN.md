@@ -120,6 +120,10 @@ routine and another ad-hoc loader. The store removes that cost for
   - A guard test fails on a `BEGIN` or an outermost `SAVEPOINT` anywhere
     outside `db.mjs`. Both are deferred transactions, which fail with
     `SQLITE_BUSY_SNAPSHOT` at once whatever the timeout.
+  - A repository call joins a `tx()` already open (`atomic()` in
+    `db.mjs`) inside a nested `SAVEPOINT`, so if it throws its write is
+    undone with it even when the caller catches the error and carries on.
+    A write never commits without its audit row.
   - Repositories bind only numbers, strings, `null` and buffers:
     booleans become 0/1, because 22.x throws on a JS boolean and 24 does
     not.

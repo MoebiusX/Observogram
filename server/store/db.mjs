@@ -303,8 +303,36 @@ export function tx(db, fn) {
 // Composition for repositories: joins the tx() already open on this
 // connection, else opens one. A repository write and its audit row then
 // commit together whether it is called alone or inside a larger tx().
+// A joined call runs inside a nested SAVEPOINT, so it is all or nothing on
+// its own too: when it throws, its statements are rolled back to the
+// savepoint and the outer tx() stays open, and a caller that catches the
+// error and carries on (an import reporting errors per item) cannot commit
+// a write whose audit row never ran. The savepoint is nested inside
+// BEGIN IMMEDIATE, never outermost, so it takes no deferred snapshot.
+// ROLLBACK TO leaves the savepoint on the stack; RELEASE pops it.
+let savepointSeq = 0;
+
 export function atomic(db, fn) {
-  return db.isTransaction ? fn(db) : tx(db, fn);
+  if (!db.isTransaction) return tx(db, fn);
+  const name = `observogram_atomic_${++savepointSeq}`;
+  db.exec(`SAVEPOINT ${name}`);
+  const undo = () => {
+    try { db.exec(`ROLLBACK TO ${name}`); db.exec(`RELEASE ${name}`); } catch {}
+  };
+  let result;
+  try {
+    result = fn(db);
+  } catch (e) {
+    undo();
+    throw e;
+  }
+  if (result && typeof result.then === 'function') {
+    undo();
+    result.then(null, () => {});   // its rejection is ours to swallow now
+    throw new Error('observogram store: atomic(fn) must be synchronous — fn returned a thenable; rolled back to its savepoint');
+  }
+  db.exec(`RELEASE ${name}`);
+  return result;
 }
 
 // ---------- statements ----------

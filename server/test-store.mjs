@@ -278,6 +278,16 @@ test('tx: commits, rolls back and rethrows on throw, refuses a thenable (rolled 
     assert.equal(count(), 4, 'atomic opened its own tx');
     assert.throws(() => tx(db, () => { atomic(db, () => ins.run(9)); throw new Error('outer'); }), /outer/);
     assert.equal(count(), 4, 'a joined write rolls back with the outer tx');
+    tx(db, () => {
+      ins.run(10);
+      assert.throws(() => atomic(db, () => { ins.run(11); throw new Error('inner'); }), /inner/);
+      assert.equal(db.isTransaction, true, 'the outer tx is still open');
+      assert.throws(() => atomic(db, () => { ins.run(12); return Promise.resolve(); }), /synchronous/);
+      atomic(db, () => atomic(db, () => ins.run(13)));
+      ins.run(14);
+    });
+    assert.deepEqual(prepare(db, 'SELECT a FROM t WHERE a >= 10 ORDER BY a').all().map((r) => r.a), [10, 13, 14],
+      'a joined atomic that throws or returns a thenable is undone alone; the outer tx commits the rest');
   } finally {
     db.close();
   }
@@ -755,6 +765,40 @@ test('a repository write and its audit row commit together: a composed tx() that
     tx(db, () => { users.createUser(db, 'system', { login: 'a' }); users.createUser(db, 'system', { login: 'b' }); });
     assert.deepEqual(auditActions(db), ['user.create', 'user.create']);
     assert.throws(() => auditRepo.writeAudit(db, 'x', { action: 'loose' }), /inside the tx\(\)/);
+  } finally {
+    close();
+  }
+});
+
+test('a joined repository call that throws is undone on its own: a caller that catches it and carries on commits no write without its audit row', async () => {
+  const { db, close } = await freshStore('atomic-joined');
+  try {
+    const pw = { algo: 'scrypt', hash: 'b2xk' };
+    const errors = [];
+    tx(db, () => {
+      // An import loop that reports each item's error and carries on.
+      for (const [actor, login] of [['system', 'ok1'], ['', 'ghost'], ['system', 'ok2']]) {
+        try { users.createUser(db, actor, { login, password: pw }); } catch (e) { errors.push(e.message); }
+      }
+    });
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /needs an actor/);
+    assert.equal(users.getUserByLogin(db, 'ghost'), null, 'the refused call left no user row');
+    assert.deepEqual(auditRepo.listAudit(db).reverse().map((r) => r.targetId), ['ok1', 'ok2'], 'the calls around it committed with their audit rows');
+
+    const ok1 = users.getUserByLogin(db, 'ok1');
+    tx(db, () => {
+      try { users.setPassword(db, undefined, ok1.id, { algo: 'scrypt', hash: 'bmV3' }); } catch (e) { errors.push(e.message); }
+      users.bumpSessionEpoch(db, 'system', users.getUserByLogin(db, 'ok2').id);
+    });
+    assert.match(errors[1], /needs an actor/);
+    const after = users.getUserByLogin(db, 'ok1');
+    assert.deepEqual(after.password, pw, 'the refused password change was undone');
+    assert.equal(after.sessionEpoch, 1, 'and so was its epoch bump');
+    assert.equal(auditActions(db, { action: 'user.password' }).length, 0);
+    assert.equal(users.getUserByLogin(db, 'ok2').sessionEpoch, 2, 'the call after it in the same tx() committed');
+    assert.deepEqual(auditActions(db), ['user.create', 'user.create', 'user.signout']);
+    assert.equal(db.isTransaction, false);
   } finally {
     close();
   }
