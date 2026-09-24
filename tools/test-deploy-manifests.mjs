@@ -186,6 +186,15 @@ const overlay = docs['../k8s-journeys/kustomization.yaml'];
   assert(/# - name: OBSERVOGRAM_JOURNEY_RUN_RETENTION/.test(cronText) && /# - name: OBSERVOGRAM_MCP_TIMEOUT_MS/.test(cronText) && /secretKeyRef: \{ name: journey-secrets, key: MY_JOURNEY_WEBHOOK_URL \}/.test(cronText) && /orgs\.json/.test(cronText),
          'the CronJob documents the retention / timeout knobs, the secretKeyRef binding for the env names and the tenancy root — all commented');
   assert(/exit 1 \(gate failed\) is the\n# early-warning OUTCOME/.test(cronText) && /kubectl get jobs/.test(cronText), 'the CronJob states why a gate failure is a failed Job, not a retry');
+  // STORE_PLAN §3: an RWX class is typically NFS/CephFS, where the database
+  // refuses to open — RWX is advice only while OBSERVOGRAM_DB is on the store.
+  const pvcText = readFileSync(join(K8S, 'components/journeys/pvc-workspace.yaml'), 'utf8');
+  const prose = t => t.replace(/\n[ \t]*#[ \t]*/g, ' '); // comment lines joined, wraps ignored
+  const rwxOnlyWhileDbOnStore = /ReadWriteMany.*only while.{0,40}OBSERVOGRAM_DB.{0,40}RWO store volume/i;
+  assert(rwxOnlyWhileDbOnStore.test(prose(pvcText)) && /pvc-store\.yaml/.test(pvcText),
+         'pvc-workspace.yaml allows ReadWriteMany only while OBSERVOGRAM_DB points at the RWO store volume');
+  assert(rwxOnlyWhileDbOnStore.test(prose(cronText)) && /^ {10}# affinity:\n {10}# {3}podAffinity:$/m.test(cronText) && !('affinity' in pod),
+         'cronjob-journeys.yaml keeps the podAffinity commented and ties dropping it (RWX) to OBSERVOGRAM_DB on the RWO store volume');
 }
 
 // --- the rendered overlay: the store survives the journeys patch ---

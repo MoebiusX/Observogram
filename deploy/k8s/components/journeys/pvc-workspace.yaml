@@ -1,12 +1,26 @@
 # The workspace both the studio and the journeys CronJob mount at
 # OBSERVOGRAM_WORKSPACE=/workspace: journeys/<name>.journey.yaml, runs/<name>/
 # (one JSON per run + live/ snapshots), deploys.jsonl, users.json, packs/.
+# Under the overlay it takes the studio's workspace over from the base's
+# /data/workspace (copy that across first: deploy/k8s/README.md). The
+# database is NOT here: it stays on the base's store claim
+# (deploy/k8s/pvc-store.yaml) at OBSERVOGRAM_DB=/data/db/observogram.db,
+# which the journeys patch never touches and the CronJob never mounts.
 #
 # Access mode: ReadWriteOnce is what every storage class offers. With RWO the
 # CronJob pod must land on the studio's node or its volume attach fails —
 # cronjob-journeys.yaml carries the podAffinity for that, commented; uncomment
-# it (or switch to ReadWriteMany where the storage class offers it, and drop
-# the affinity).
+# it. ReadWriteMany (where the storage class offers it; then drop the
+# affinity) is safe only while the studio's OBSERVOGRAM_DB points at the RWO
+# store volume: an RWX class is typically NFS or CephFS, and the database
+# refuses a network filesystem (its WAL needs shared memory on one host).
+# Unset, OBSERVOGRAM_DB defaults to <workspace>/observogram.db — onto this
+# claim — so never unset it, or point it under /workspace, with RWX here.
+#
+# Zones: the studio pod mounts two ReadWriteOnce claims under the overlay,
+# this one and the store. On a multi-zone cluster see
+# deploy/k8s/pvc-store.yaml (WaitForFirstConsumer, or a class pinned to one
+# zone).
 #
 # Sizing: 1Gi is a placeholder, not a measurement. The workspace grows as
 #   journeys × OBSERVOGRAM_JOURNEY_RUN_RETENTION (default 1000)

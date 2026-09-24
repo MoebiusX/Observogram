@@ -16,8 +16,12 @@
 #
 # Hard prerequisite: BOTH processes mount the same PVC at the same
 # OBSERVOGRAM_WORKSPACE (/workspace) — a CronJob writing to a path the studio
-# does not read produces records nobody sees (and /app/.observogram is not
-# creatable by uid 1000: the image only chowns /app/examples).
+# does not read produces records nobody sees.
+#
+# The studio's database is not part of this: it stays at OBSERVOGRAM_DB on
+# the base's ReadWriteOnce store claim (deploy/k8s/pvc-store.yaml), so the
+# workspace claim here may be ReadWriteMany only while that stays so
+# (pvc-workspace.yaml).
 # ─────────────────────────────────────────────────────────────────────────────
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
