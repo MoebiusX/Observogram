@@ -36,6 +36,7 @@
 //     on every version, and undefined is never silently NULL.
 
 import { mkdirSync, statfsSync } from 'node:fs';
+import { constants as osConstants } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { baseWorkspacePath, brandEnv } from '../../tools/lib/brand-env.mjs';
 
@@ -230,9 +231,14 @@ export async function openRaw(path, { readOnly = false, timeout = BUSY_TIMEOUT_M
 
 // The server runs as PID 1 in the image and had no handler. On the first
 // open, one handler per signal closes every handle, removes itself and
-// re-raises the signal, so the process still dies by it — unless someone
-// else also listens, in which case Node's default is already off and a
-// re-raise would only call them twice.
+// re-raises the signal, so the process dies by it — unless someone else
+// also listens, in which case Node's default is already off, a re-raise
+// would only call them twice, and ending the process is theirs to do.
+// The kernel drops a signal sent to a PID namespace's init when it has no
+// handler, so as PID 1 the re-raise does nothing (nor does any later
+// SIGTERM): the process would live on with its store closed until SIGKILL.
+// If it survives the re-raise, it exits 128 + the signal number, what a
+// shell and kubelet report for a death by that signal.
 const SIGNALS = ['SIGTERM', 'SIGINT'];
 let signalsInstalled = false;
 
@@ -240,7 +246,9 @@ function onSignal(sig) {
   closeStore();
   for (const s of SIGNALS) process.removeListener(s, onSignal);
   signalsInstalled = false;
-  if (process.listenerCount(sig) === 0) process.kill(process.pid, sig);
+  if (process.listenerCount(sig) !== 0) return;
+  process.kill(process.pid, sig);
+  setImmediate(() => process.exit(128 + osConstants.signals[sig]));
 }
 
 function installSignalHandlers() {

@@ -11,7 +11,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -568,6 +568,81 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
     raw.close();
   });
 }
+
+// PID 1 (the image runs node with no init) gets no default action for a
+// signal it does not handle: the handler's own re-raise and every later
+// SIGTERM are dropped by the kernel. The handler must still end the process,
+// with the shell's 128 + signal number, instead of leaving it up with the
+// store closed until SIGKILL.
+const SIGNAL_EXIT = { SIGTERM: 143, SIGINT: 130 };
+const SIG_CHILD = (path) => `
+  const { openStore, prepare } = await import(${JSON.stringify(DB_URL)});
+  const db = await openStore({ path: ${JSON.stringify(path)} });
+  console.log('ready');
+  setInterval(() => { try { prepare(db, 'SELECT 1').get(); } catch (e) { console.log('closed-but-alive: ' + e.message); } }, 50);
+`;
+
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  test(`${sig}: when the re-raise is dropped (as for PID 1) the child still exits ${SIGNAL_EXIT[sig]} with the store closed`, async () => {
+    const path = join(tempDir(), 'sig-dropped.db');
+    // A no-op process.kill stands in for the kernel ignoring the re-raise.
+    const c = child(`process.kill = () => true;\n${SIG_CHILD(path)}`);
+    await c.until(/ready/);
+    c.proc.kill(sig);
+    const r = await Promise.race([
+      c.done,
+      new Promise((res) => setTimeout(() => res(null), 3000)),
+    ]);
+    if (!r) c.proc.kill('SIGKILL');
+    assert.ok(r, `the child was still alive 3 s after ${sig}`);
+    assert.equal(r.code, SIGNAL_EXIT[sig], `exit code (signal ${r.signal}, stdout ${r.stdout}, stderr ${r.stderr})`);
+    assert.doesNotMatch(r.stdout, /closed-but-alive/);
+    assert.equal(existsSync(`${path}-wal`), false, 'no -wal left behind');
+  });
+}
+
+// The real thing: node as PID 1 of a fresh PID namespace, signalled from
+// outside it, as kubelet does. Skipped where unshare is unavailable.
+const UNSHARE = (() => {
+  if (process.platform !== 'linux') return null;
+  const base = ['--pid', '--fork', '--kill-child'];
+  const tries = [base, ['--user', '--map-root-user', ...base]];
+  for (const args of tries) {
+    const r = spawnSync('unshare', [...args, process.execPath, '-e', 'process.exit(process.pid === 1 ? 0 : 7)'], { stdio: 'ignore', timeout: 5000 });
+    if (r.status === 0) return args;
+  }
+  return null;
+})();
+
+test('SIGTERM to node running as PID 1: the store closes and the process exits 143', { skip: UNSHARE ? false : 'unshare --pid is unavailable here' }, async () => {
+  const path = join(tempDir(), 'sig-pid1.db');
+  const proc = spawn('unshare', [...UNSHARE, process.execPath, '--input-type=module', '-e', `
+    if (process.pid !== 1) { console.log('not pid 1'); process.exit(9); }
+    ${SIG_CHILD(path)}
+  `], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '';
+  let stderr = '';
+  proc.stderr.on('data', (b) => { stderr += b; });
+  const ready = new Promise((res, rej) => {
+    proc.stdout.on('data', (b) => { stdout += b; if (/ready/.test(stdout)) res(); });
+    proc.on('exit', () => rej(new Error(`exited before ready: ${stdout} ${stderr}`)));
+  });
+  const done = new Promise((res) => proc.on('exit', (code, signal) => res({ code, signal })));
+  await ready;
+  // `unshare --fork` forwards nothing; signal node itself, from outside its
+  // namespace. Its host pid is unshare's only child.
+  const kids = readFileSync(`/proc/${proc.pid}/task/${proc.pid}/children`, 'utf8').trim().split(/\s+/);
+  assert.equal(kids.length, 1, `unshare has one child (${kids})`);
+  const nodePid = Number(kids[0]);
+  assert.match(readFileSync(`/proc/${nodePid}/status`, 'utf8'), /^NSpid:.*\s1$/m, 'node is PID 1 in its namespace');
+  process.kill(nodePid, 'SIGTERM');
+  const r = await Promise.race([done, new Promise((res) => setTimeout(() => res(null), 3000))]);
+  if (!r) { try { process.kill(nodePid, 'SIGKILL'); } catch {} }
+  assert.ok(r, `PID 1 was still alive 3 s after SIGTERM (stdout ${stdout})`);
+  assert.equal(r.code, 143, `unshare reports node's exit (${JSON.stringify(r)}, stderr ${stderr})`);
+  assert.doesNotMatch(stdout, /closed-but-alive/);
+  assert.equal(existsSync(`${path}-wal`), false, 'no -wal left behind');
+});
 
 // ---------- Repositories ----------
 

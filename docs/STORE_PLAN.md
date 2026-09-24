@@ -94,7 +94,9 @@ routine and another ad-hoc loader. The store removes that cost for
   each call, as `server/workspace.mjs` does, so a suite can re-point
   `OBSERVOGRAM_WORKSPACE` between boots. `closeStore()` is exported. The
   server closes the database on `SIGTERM` and `SIGINT`. It has no handler
-  today and runs as PID 1 in the image.
+  today and runs as PID 1 in the image. The kernel drops a re-raised signal
+  there, so after closing, the handler exits 128 + the signal number (143
+  for `SIGTERM`) when the re-raise did not end the process.
 - **Opening a file database**, in order:
   1. Refuse on a network or shared filesystem (`fs.statfsSync`: NFS, CIFS,
      SMB, SMB2, CephFS) and warn on FUSE. WAL needs shared memory between
