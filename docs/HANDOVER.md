@@ -26,7 +26,8 @@ next to Discover · Diagnose · Remediate. In order:
 the Node 22.22 pipe truncation in `packc journey run --all --json` that failed
 `tools/test-journey.mjs` was fixed in [STORE_PLAN.md](STORE_PLAN.md) slice 1). `npm run lint`:
 0 errors, 181 warnings (a baseline of `preserve-caught-error`-style warnings; slice 2a
-removed five with the file readers it deleted; do not add to it). CI on a PR: `validate` (includes the vendored-spec check) and `backend-live` on the
+removed five with the file readers it deleted; do not add to it). CI on a PR: `validate`
+(includes the vendored-spec check) and `backend-live` on the
 latest 22, `node-floor` (`npm test` on exactly 22.16.0). `refresh-live-pack` runs only on
 demand or when the fetcher changes.
 
