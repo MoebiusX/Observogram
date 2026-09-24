@@ -34,8 +34,8 @@ const { assert, failures, report } = createHarness({ indent: '  ', truncate: 200
 
 const { hashPassword, verifyPassword, localUsersEnabled } = await import('./auth.mjs');
 const { writeUsersFile } = await import('./store/legacy-files.mjs');
-const { currentStore } = await import('./store/db.mjs');
-const { createUser, setDisabled, getUserByLogin, listUsers } = await import('./store/users.mjs');
+const { currentStore, prepare } = await import('./store/db.mjs');
+const { createUser, setDisabled, bumpSessionEpoch, getUserByLogin, listUsers } = await import('./store/users.mjs');
 const { getMeta } = await import('./store/meta.mjs');
 const { listMembershipsForUser } = await import('./store/memberships.mjs');
 const { listAudit } = await import('./store/audit.mjs');
@@ -333,6 +333,41 @@ try {
     body: 'password=pending-new-123&repeat=pending-new-123',
   });
   assert(r.status === 401, "a disabled user's pre-disable pwflow is refused", r.status, 401);
+
+  // Each resolver check stands on its own (§7.3/§7.5): setDisabled and
+  // setPassword bump the epoch, so these raw row edits leave the epoch
+  // where the cookie has it and only the one check under test can refuse.
+  const quiet = createUser(currentStore(), 'test', { login: 'quiet', password: hashPassword('quiet-pass-123') });
+  r = await fetch(`${base}/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'username=quiet&password=quiet-pass-123', redirect: 'manual',
+  });
+  const quietSession = getCookie(r, 'observogram_session');
+  prepare(currentStore(), 'UPDATE users SET disabled = 1 WHERE id = ?').run(quiet.id);
+  r = await fetch(`${base}/auth/me`, { headers: { Cookie: quietSession } });
+  assert(!!quietSession && (await r.json()).authenticated === false,
+    'a disabled row ends its session even at the same epoch');
+
+  const flowAt = async (login, password) => getCookie(await fetch(`${base}/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: `username=${login}&password=${password}`,
+  }), 'observogram_pwflow');
+  const changeWith = (flow, pw) => fetch(`${base}/auth/change-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', Cookie: flow },
+    body: `password=${pw}&repeat=${pw}`,
+  });
+  const bumped = createUser(currentStore(), 'test', { login: 'bumped', password: hashPassword('bumped-pass-1'), mustChange: true });
+  const bumpedFlow = await flowAt('bumped', 'bumped-pass-1');
+  bumpSessionEpoch(currentStore(), 'test', bumped.id);
+  r = await changeWith(bumpedFlow, 'bumped-new-123');
+  assert(!!bumpedFlow && r.status === 401 && getUserByLogin(currentStore(), 'bumped').mustChange === true,
+    'a pwflow from an older epoch is refused while the change is still due', r.status, 401);
+  const settled = createUser(currentStore(), 'test', { login: 'settled', password: hashPassword('settled-pass-1'), mustChange: true });
+  const settledFlow = await flowAt('settled', 'settled-pass-1');
+  prepare(currentStore(), 'UPDATE users SET must_change = 0 WHERE id = ?').run(settled.id);
+  r = await changeWith(settledFlow, 'settled-new-123');
+  assert(!!settledFlow && r.status === 401, 'a pwflow for a user no longer due a change is refused at the same epoch', r.status, 401);
 
   // ---- a normal login clears a leftover pwchange flow cookie ----
   // An abandoned forced change (say admin/admin typed on a shared
