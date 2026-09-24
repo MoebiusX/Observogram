@@ -189,8 +189,8 @@ enforced server-side, not hidden client-side.
   mutating routes (SameSite=Lax + custom-header check); security
   headers; rate limit on `/auth/*`; secrets only via env; documented
   backup story = the workspace directory (it already IS the state —
-  with the server stopped; a live backup of the embedded store is
-  `packc store backup`, see [STORE_PLAN.md](STORE_PLAN.md) §3);
+  copied with nothing holding the embedded store's database; a live
+  backup is `packc store backup`, see [STORE_PLAN.md](STORE_PLAN.md) §3);
   upgrade/rollback notes. The fail-closed rule extends: non-loopback +
   no OIDC + no token → refuse to start, same as today.
 

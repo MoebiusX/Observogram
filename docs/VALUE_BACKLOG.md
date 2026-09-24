@@ -253,8 +253,8 @@ weeks), and the three maintainer decisions:
 *Status 2026-09-24:* Stages 1 and 2 delivered; the rest of the stream —
 roles enforced, services and environments as records, the settings
 surface — re-planned on the embedded store:
-[STORE_PLAN.md](STORE_PLAN.md) (slices 1–6b; decisions ratified, the §9b
-refinements await confirmation). PRODUCTIZATION_PLAN §6 decision 3
+[STORE_PLAN.md](STORE_PLAN.md) (slices 1–6b; decisions ratified 2026-09-24, refinements in its
+§9b). PRODUCTIZATION_PLAN §6 decision 3
 ("file-first org registry") is reversed there.
 
 ## P3 — Make the verdict more trustworthy *(under research — re-enters the queue when the maintainer's research lands)*

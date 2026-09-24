@@ -85,7 +85,7 @@ These are the rules we learned the hard way; treat them as standing instructions
 ## 3. Running and checking things
 
 ```bash
-npm test                 # node:test suites (293), the studio graph, the AA scan
+npm test                 # node:test suites (293 on Node 20; on 22.22 see §1), the studio graph, the AA scan
 npm run lint             # eslint: 0 errors is the bar, 186 warnings the baseline
 node tools/sync-spec.mjs --check   # vendored spec files match VERSIONS.json
 PORT=8013 OBSERVOGRAM_AUTH=off OBSERVOGRAM_WORKSPACE=/tmp/ws node server/index.mjs
@@ -131,7 +131,7 @@ file. Design it against `docs/VALUE_BACKLOG.md` items 10 and 12 and
 `docs/RELEASE_READINESS.md`, and put the plan in front of him before the first commit —
 he ratifies plans for this stream (item 12 says so). *Planned 2026-09-24:*
 [STORE_PLAN.md](STORE_PLAN.md) — schema, import, roles, slices and gates; the seven
-decisions are ratified, the §9b refinements await his confirmation.
+decisions are ratified; its §9b lists the refinements made since, which merging it confirms.
 
 **A. Decide: "the draft becomes the pack".** The root cause of every remaining Build gap is
 that the draft is a set of inputs re-instantiated from the seed on each change, with
@@ -217,9 +217,10 @@ read-only by design; the SLI rolodex shows the bare library id until a rename.
 - **`packc init` has no custom SLIs** and `--override` takes only the scalar fields and
   `id` / `semconv_metric` / `good_when`; PromQL edits are studio/API only. Documented in
   `library/README.md`.
-- **Persistence is file-first by design** (`users.json`, `packs/*.pack.yaml`, JSONL audit),
-  and the maintainer has now asked for an embedded SQL store instead (backlog 0, planned in
-  `docs/STORE_PLAN.md`). Until the migration lands, every new record type is another file
+- **Persistence is file-first by design** (`users.json`, `orgs.json`, `packs/index.json`), and
+  the maintainer has asked for an embedded SQL store for these records (backlog 0, planned in
+  `docs/STORE_PLAN.md`). Artefacts (`packs/*.pack.yaml`, snapshots, journeys, runs,
+  `deploys.jsonl`) stay files. Until slice 2 lands, every new record type is another file
   format and another ad-hoc loader.
 - **The Build state is inputs + overrides** (see backlog A). Until that changes, every new
   editable thing needs its own special case in the engine and the state.
