@@ -24,8 +24,8 @@
 // appears between the probe and the rename: a -wal left beside the
 // restored file would be replayed onto it.
 
-import { chmodSync, chownSync, closeSync, copyFileSync, constants as fsConstants, existsSync, mkdirSync, openSync, renameSync, rmSync, statSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { chmodSync, chownSync, closeSync, copyFileSync, constants as fsConstants, existsSync, mkdirSync, openSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { openRaw, pragma, prepare, resolveDbPath } from './db.mjs';
 import { SCHEMA_VERSION, userVersion } from './migrations.mjs';
 
@@ -51,6 +51,27 @@ function identify(db) {
   return { version, storeId };
 }
 
+// A path with symlinks resolved (SQLite names -wal/-shm/-journal after the
+// real path), or only its directory's when the file does not exist yet.
+function canonical(path) {
+  try { return realpathSync(path); } catch {}
+  try { return join(realpathSync(dirname(path)), basename(path)); } catch { return path; }
+}
+
+// '' when path is the database file, its suffix when it is the database's
+// -wal/-shm/-journal (the next open deletes one it finds stale), else null.
+function ownFile(dbFile, path) {
+  const db = canonical(dbFile);
+  const p = canonical(path);
+  return ['', '-wal', '-shm', '-journal'].find((s) => p === `${db}${s}`) ?? null;
+}
+
+function refuseOwnFile(dbFile, path) {
+  const s = ownFile(dbFile, path);
+  if (s === '') throw refuse(`${path} is the database itself`);
+  if (s !== null) throw refuse(`${path} is the database's own ${s} file — the next open would delete it; choose another path`);
+}
+
 const isOurs = ({ version, storeId }) => version >= 1 && typeof storeId === 'string' && storeId.length > 0;
 
 function stamp(now) {
@@ -63,9 +84,10 @@ export async function backupStore(dest, { dbPath = resolveDbPath() } = {}) {
   if (!existsSync(source)) throw refuse(`no database at ${source} — nothing to back up (this command never creates one; check OBSERVOGRAM_DB and OBSERVOGRAM_WORKSPACE)`);
   if (!dest) throw refuse('name the backup file: packc store backup <path>');
   const target = resolve(dest);
-  if (target === source) throw refuse(`${target} is the database itself`);
+  refuseOwnFile(source, target);
   if (existsSync(target)) throw refuse(`${target} exists — a backup never overwrites; choose a new path`);
   const tmp = `${target}.tmp`;
+  if (ownFile(source, tmp) !== null) throw refuse(`${tmp}, the backup's temporary file, would be the database's own file — choose another path`);
   if (existsSync(tmp)) throw refuse(`${tmp} exists (an interrupted backup?) — remove it and run again`);
   mkdirSync(dirname(target), { recursive: true });
   // A backup holds the password records: VACUUM INTO would create the file
@@ -101,7 +123,7 @@ export async function restoreStore(backup, { dbPath = resolveDbPath(), now = new
   const target = resolve(dbPath);
   const source = resolve(backup);
   if (!existsSync(source)) throw refuse(`no backup at ${source}`);
-  if (source === target) throw refuse(`${source} is the database itself`);
+  refuseOwnFile(target, source);
   const ts = stamp(now);
   mkdirSync(dirname(target), { recursive: true });
 

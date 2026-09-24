@@ -12,7 +12,7 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, chownSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, chownSync, copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -1222,6 +1222,32 @@ test('packc store backup: refuses :memory:, a missing database (creating none) a
   r = await packc(['store', 'backup', dbPath], { OBSERVOGRAM_DB: dbPath });
   assert.equal(r.code, 1);
   assert.match(r.stderr, /is the database itself/);
+  // The database's own -wal/-shm/-journal, also named through a symlinked
+  // directory: a backup there reads "written" and the next open deletes it.
+  const via = join(dir, 'via');
+  symlinkSync(dir, via);
+  r = await packc(['store', 'backup', join(via, 'observogram.db')], { OBSERVOGRAM_DB: dbPath });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /is the database itself/);
+  for (const sfx of ['-wal', '-shm', '-journal']) {
+    for (const dest of [`${dbPath}${sfx}`, join(via, `observogram.db${sfx}`)]) {
+      r = await packc(['store', 'backup', dest], { OBSERVOGRAM_DB: dbPath });
+      assert.equal(r.code, 1, dest);
+      assert.match(r.stderr, new RegExp(`is the database's own ${sfx} file`));
+      assert.equal(existsSync(`${dbPath}${sfx}`), false, dest);
+      assert.equal(existsSync(`${dbPath}${sfx}.tmp`), false, dest);
+    }
+  }
+  // A database named *.tmp is the backup's temporary file for the name
+  // without it: refused as that, not as an interrupted backup to remove.
+  const tmpNamed = join(dir, 'live.tmp');
+  await openStore({ path: tmpNamed });
+  closeStore(tmpNamed);
+  r = await packc(['store', 'backup', join(dir, 'live')], { OBSERVOGRAM_DB: tmpNamed });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /live\.tmp, the backup's temporary file, would be the database's own file/);
+  assert.doesNotMatch(r.stderr, /remove it/);
+  assert.equal(existsSync(join(dir, 'live')), false);
   const taken = join(dir, 'taken.db');
   writeFileSync(taken, 'precious');
   r = await packc(['store', 'backup', taken], { OBSERVOGRAM_DB: dbPath });
@@ -1305,6 +1331,15 @@ test('packc store restore: refuses while the server holds the store (even idle),
   r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: ':memory:' });
   assert.equal(r.code, 1);
   assert.match(r.stderr, /:memory:/);
+  // A backup lying on the database's own -wal: the in-use probe would
+  // delete it as a stale sidecar.
+  const onWal = `${dbPath}-wal`;
+  copyFileSync(backup, onWal);
+  r = await packc(['store', 'restore', onWal], { OBSERVOGRAM_DB: dbPath });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /is the database's own -wal file/);
+  assert.deepEqual(readFileSync(onWal), readFileSync(backup), 'the backup on the -wal path is untouched');
+  rmSync(onWal);
   assert.deepEqual(readdirSync(dir).sort(), ['b.db', 'foreign.db', 'junk.db', 'observogram.db'], 'no refusal moved or left anything');
 });
 
