@@ -12,6 +12,7 @@
 //   packc x-ray    <repo-dir>         → tools/crawl-repo.mjs
 //   packc compile  <file> [target]    → tools/lib/compile.mjs (programmatic)
 //   packc init     …                  → tools/pack-init.mjs (build a pack from the library)
+//   packc store    backup|restore …   → tools/store-admin.mjs (back up / restore the embedded store)
 //   packc serve                       → server/index.mjs (boots the studio)
 //   observogram                       → same as `serve`
 //
@@ -118,6 +119,8 @@ Usage:
   packc journey  run --all        Run every saved journey in sequence (exit = the worst of them)
   packc journey  schedule <name>  Print cron / schtasks / GitHub Actions / CronJob snippets from its schedule:
   packc journey  list             List saved journeys + their last outcome
+  packc store    backup <path>    Write a consistent copy of the store (safe while the server runs)
+  packc store    restore <backup> Replace the store with a backup (server stopped; old files moved aside)
   packc serve                     Boot the studio (Express server)
   observogram                     Same as \`packc serve\`
 
@@ -272,6 +275,9 @@ switch (command) {
     break;
   case 'journey':
     await runJourneyCommand(rest);
+    break;
+  case 'store':
+    delegate('tools/store-admin.mjs', rest);
     break;
   case 'serve':
   case 'studio':

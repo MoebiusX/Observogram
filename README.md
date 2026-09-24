@@ -690,6 +690,53 @@ zero-dependency inline SVG (`tools/lib/svg-charts.mjs`); the numbers come
 from one pure model (`tools/lib/neuron-model.mjs`), so what the page says can
 be tested without a browser. The view needs no pack loaded.
 
+### Back Up And Restore The Store
+
+The embedded store (`observogram.db` in the workspace, or wherever
+`OBSERVOGRAM_DB` points; [docs/STORE_PLAN.md](docs/STORE_PLAN.md) §3) runs
+in WAL mode. **A file-by-file copy (`cp -r`, rsync, tar) taken while any
+process has it open is not a backup**, even with `-wal` and `-shm`
+included: a checkpoint between two file copies tears it. Safe options:
+
+1. a copy with nothing holding the database — the server stopped, and no
+   `npm run users`, `npm run orgs` or `packc store` running;
+2. an atomic volume snapshot;
+3. with the server running, `packc store backup`:
+
+```bash
+packc store backup /backups/observogram-2026-09-24.db
+# backup written: /backups/observogram-2026-09-24.db
+# store_id: 3f0c… (schema v1, from /app/.observogram/observogram.db)
+```
+
+It runs `VACUUM INTO` outside any transaction into `<path>.tmp` and renames
+that into place: every committed row, as one rollback-journal file, while
+writers stay active. It refuses an existing `<path>`, `:memory:`, and a
+path with no database (it never creates one).
+
+The other workspace files (packs, snapshots, journeys, runs,
+`deploys.jsonl`, `session-secret`) can be copied live as before. Where the
+database lives outside the workspace, a workspace copy alone holds no
+users, orgs, memberships or audit.
+
+**Restore** with the server stopped:
+
+```bash
+packc store restore /backups/observogram-2026-09-24.db
+# restored … -> /app/.observogram/observogram.db
+# store_id: 3f0c… (schema v1); previous store_id: 3f0c…
+# moved aside: /app/.observogram/observogram.db.pre-restore-20260924T101500123Z
+```
+
+It refuses while anything holds the database (switching it out of WAL
+needs exclusive access, so even an idle server is caught), checks the
+backup is an Observogram store, moves `observogram.db`, `-wal` and `-shm`
+aside together under one timestamp, and copies the backup in; the next
+start switches it back to WAL. Never copy a backup over the `.db` alone: a
+`-wal` left by an unclean stop would be replayed onto it. To move a
+database, move the file with nothing holding it: it carries its
+`store_id`.
+
 ## API Surface
 
 | Method | Path | Purpose |
@@ -730,6 +777,7 @@ be tested without a browser. The view needs no pack loaded.
 server/
   index.mjs                Express API, upload registry, compile/deploy routes
   library.mjs              Loads library/**/*.library.yaml from disk (the Node side of the BUILD engine)
+  store/                   The embedded store (docs/STORE_PLAN.md): db.mjs (the one node:sqlite door), migrations, repositories, backup/restore — no server callers yet
   test-smoke.mjs           End-to-end route smoke tests
 
 studio/
@@ -749,7 +797,7 @@ studio/
   build-verify-view.mjs  BUILD step 3 — Verify (verdict, the stack with its todos, artefacts, Continue with visible gaps)
 
 tools/
-  cli.mjs                  packc CLI (journey run / list, compile, init, …)
+  cli.mjs                  packc CLI (journey run / list, compile, init, store backup / restore, …)
   crawl-repo.mjs           CLI repo crawler
   fetch-live-pack.mjs      MCP live-pack fetcher
   pack-init.mjs            packc init: build a pack from the library (list / show / instantiate)

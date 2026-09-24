@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -881,4 +881,210 @@ test('Concurrency: a repository write waits out a child holding BEGIN IMMEDIATE,
   } finally {
     close();
   }
+});
+
+// ---------- packc store backup / restore (end to end, through tools/cli.mjs) ----------
+
+const CLI = join(HERE, '..', 'tools', 'cli.mjs');
+
+function packc(args, env) {
+  return new Promise((res) => {
+    const proc = spawn(process.execPath, [CLI, ...args], {
+      env: { ...process.env, OBSERVOGRAM_WORKSPACE: '', TOMOGRAPH_DB: '', ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (b) => { stdout += b; });
+    proc.stderr.on('data', (b) => { stderr += b; });
+    proc.on('exit', (code, signal) => res({ code, signal, stdout, stderr }));
+  });
+}
+
+// A child that opens the store the way the server will, optionally writes,
+// says "ready" and stays up (idle) until killed.
+function storeHolder(path, { login = null } = {}) {
+  return child(`
+    const { openStore } = await import(${JSON.stringify(DB_URL)});
+    const users = await import(${JSON.stringify(pathToFileURL(join(HERE, 'store', 'users.mjs')).href)});
+    const db = await openStore({ path: ${JSON.stringify(path)} });
+    if (${JSON.stringify(login)}) users.createUser(db, 'system', { login: ${JSON.stringify(login)} });
+    console.log('ready');
+    setInterval(() => {}, 1000);
+  `);
+}
+
+async function readStore(path) {
+  const db = await openRaw(path);
+  try {
+    return {
+      storeId: prepare(db, "SELECT value FROM schema_meta WHERE key = 'store_id'").get().value,
+      logins: prepare(db, 'SELECT login FROM users ORDER BY id').all().map((r) => r.login),
+      journal: pragma(db, 'journal_mode')[0].journal_mode,
+    };
+  } finally {
+    db.close();
+  }
+}
+
+test('packc store backup: refuses :memory:, a missing database (creating none) and an existing target; usage is exit 2', async () => {
+  const dir = tempDir('bk-refuse');
+  const dbPath = join(dir, 'observogram.db');
+  let r = await packc(['store', 'backup', join(dir, 'a.db')], { OBSERVOGRAM_DB: ':memory:' });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /packc store backup: OBSERVOGRAM_DB is :memory:/);
+  r = await packc(['store', 'backup', join(dir, 'a.db')], { OBSERVOGRAM_DB: dbPath });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /no database at .*observogram\.db — nothing to back up/);
+  assert.equal(existsSync(dbPath), false, 'no database was created');
+  assert.equal(existsSync(join(dir, 'a.db')), false);
+  const db = await openStore({ path: dbPath });
+  closeStore(dbPath);
+  assert.ok(db);
+  r = await packc(['store', 'backup', dbPath], { OBSERVOGRAM_DB: dbPath });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /is the database itself/);
+  const taken = join(dir, 'taken.db');
+  writeFileSync(taken, 'precious');
+  r = await packc(['store', 'backup', taken], { OBSERVOGRAM_DB: dbPath });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /exists — a backup never overwrites/);
+  assert.equal(readFileSync(taken, 'utf8'), 'precious');
+  const notOurs = join(dir, 'other.db');
+  const other = await openRaw(notOurs);
+  execScript(other, 'CREATE TABLE t (a)');
+  other.close();
+  r = await packc(['store', 'backup', join(dir, 'b.db')], { OBSERVOGRAM_DB: notOurs });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /is not an Observogram store/);
+  r = await packc(['store'], {});
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /usage: packc store backup <path>/);
+  r = await packc(['store', 'backup'], {});
+  assert.equal(r.code, 2);
+});
+
+test('packc store backup while a server holds the store: every committed row, not an open transaction, one rollback-journal file', async () => {
+  const dir = tempDir('bk-live');
+  const dbPath = join(dir, 'observogram.db');
+  const server = storeHolder(dbPath, { login: 'committed-before' });
+  try {
+    await server.until(/ready/);
+    const writer = lockHolder(dbPath, 2500);   // an uncommitted row, held open
+    await writer.until(/locked/);
+    const dest = join(dir, 'backups', 'nightly.db');
+    const r = await packc(['store', 'backup', dest], { OBSERVOGRAM_DB: dbPath });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal((await writer.done).code, 0);
+    const got = await readStore(dest);
+    assert.match(r.stdout, new RegExp(`backup written: ${dest.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.match(r.stdout, new RegExp(`store_id: ${got.storeId} \\(schema v1`));
+    assert.deepEqual(got.logins, ['committed-before']);
+    assert.equal(got.journal, 'delete', 'a VACUUM INTO file is rollback-journal');
+    const raw = await openRaw(dest);
+    assert.equal(prepare(raw, "SELECT count(*) AS n FROM schema_meta WHERE key = 'held_by_child'").get().n, 0, 'the uncommitted row is not in it');
+    raw.close();
+    assert.equal(existsSync(`${dest}.tmp`), false, 'the .tmp was renamed into place');
+  } finally {
+    server.proc.kill('SIGTERM');
+    await server.done;
+  }
+});
+
+test('packc store restore: refuses while the server holds the store (even idle), a foreign file, a missing one and :memory:', async () => {
+  const dir = tempDir('rs-refuse');
+  const dbPath = join(dir, 'observogram.db');
+  const backup = join(dir, 'b.db');
+  await openStore({ path: dbPath });
+  closeStore(dbPath);
+  assert.equal((await packc(['store', 'backup', backup], { OBSERVOGRAM_DB: dbPath })).code, 0);
+  const server = storeHolder(dbPath);
+  try {
+    await server.until(/ready/);
+    const r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: dbPath });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /is in use — stop the server/);
+    assert.deepEqual(readdirSync(dir).sort(), ['b.db', 'observogram.db', 'observogram.db-shm', 'observogram.db-wal'], 'nothing moved, no temp file left');
+  } finally {
+    server.proc.kill('SIGTERM');
+    await server.done;
+  }
+  const junk = join(dir, 'junk.db');
+  writeFileSync(junk, 'not a database at all, just some bytes '.repeat(200));
+  let r = await packc(['store', 'restore', junk], { OBSERVOGRAM_DB: dbPath });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /junk\.db is not a readable SQLite database/);
+  const foreign = join(dir, 'foreign.db');
+  const f = await openRaw(foreign);
+  execScript(f, 'CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT)');
+  f.close();
+  r = await packc(['store', 'restore', foreign], { OBSERVOGRAM_DB: dbPath });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /is not an Observogram store backup \(user_version 0, no store_id\)/);
+  r = await packc(['store', 'restore', join(dir, 'missing.db')], { OBSERVOGRAM_DB: dbPath });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /no backup at/);
+  r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: ':memory:' });
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /:memory:/);
+  assert.deepEqual(readdirSync(dir).sort(), ['b.db', 'foreign.db', 'junk.db', 'observogram.db'], 'no refusal moved or left anything');
+});
+
+test('packc store restore end to end: the old db, -wal and -shm move aside together, an unclean stop\'s -wal is not replayed, both store_ids print, the next open is WAL', async () => {
+  const dir = tempDir('rs-e2e');
+  const dbPath = join(dir, 'observogram.db');
+  const db = await openStore({ path: dbPath });
+  users.createUser(db, 'system', { login: 'in-backup' });
+  closeStore(dbPath);
+  const backup = join(dir, 'b.db');
+  const bk = await packc(['store', 'backup', backup], { OBSERVOGRAM_DB: dbPath });
+  assert.equal(bk.code, 0, bk.stderr);
+  const backupId = (await readStore(backup)).storeId;
+
+  // A server that wrote after the backup and then died uncleanly (SIGKILL: no close, the -wal stays).
+  const crashed = storeHolder(dbPath, { login: 'after-backup' });
+  await crashed.until(/ready/);
+  crashed.proc.kill('SIGKILL');
+  assert.equal((await crashed.done).signal, 'SIGKILL');
+  assert.ok(existsSync(`${dbPath}-wal`), 'an unclean stop left a -wal behind');
+
+  const r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: dbPath });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, new RegExp(`store_id: ${backupId} \\(schema v1\\); previous store_id: ${backupId}`));
+  assert.match(r.stdout, /moved aside: .*observogram\.db\.pre-restore-\d{8}T\d{9}Z/);
+  assert.match(r.stdout, /switches it back to WAL/);
+  const aside = readdirSync(dir).filter((n) => n.startsWith('observogram.db.pre-restore-') && !/-(wal|shm)$/.test(n));
+  assert.equal(aside.length, 1, `the old set moved aside under one name (${aside})`);
+  assert.deepEqual((await readStore(join(dir, aside[0]))).logins, ['in-backup', 'after-backup'], 'the aside copy kept the crashed writer\'s rows');
+  assert.equal(existsSync(`${dbPath}-wal`), false);
+  assert.equal(readdirSync(dir).some((n) => n.includes('.restore-')), false, 'no temp copy left');
+
+  const restored = await openStore({ path: dbPath });
+  try {
+    assert.equal(pragma(restored, 'journal_mode')[0].journal_mode, 'wal', 'the next open switches it to WAL');
+    assert.deepEqual(users.listUsers(restored).map((u) => u.login), ['in-backup'], 'the stale -wal was not replayed onto it');
+    assert.equal(meta.storeId(restored), backupId);
+  } finally {
+    closeStore(dbPath);
+  }
+  assert.equal((await readStore(backup)).journal, 'delete', 'the backup file itself was not touched');
+
+  // Restoring another store's backup names both ids.
+  const otherPath = join(tempDir('rs-other'), 'observogram.db');
+  await openStore({ path: otherPath });
+  closeStore(otherPath);
+  const otherBackup = join(dir, 'other-backup.db');
+  assert.equal((await packc(['store', 'backup', otherBackup], { OBSERVOGRAM_DB: otherPath })).code, 0);
+  const otherId = (await readStore(otherBackup)).storeId;
+  assert.notEqual(otherId, backupId);
+  const r2 = await packc(['store', 'restore', otherBackup], { OBSERVOGRAM_DB: dbPath });
+  assert.equal(r2.code, 0, r2.stderr);
+  assert.match(r2.stdout, new RegExp(`store_id: ${otherId} \\(schema v1\\); previous store_id: ${backupId}`));
+
+  // A fresh deployment with no database yet: restore just puts it in place.
+  const freshPath = join(tempDir('rs-fresh'), 'db', 'observogram.db');
+  const r3 = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: freshPath });
+  assert.equal(r3.code, 0, r3.stderr);
+  assert.match(r3.stdout, /previous store_id: none/);
+  assert.equal((await readStore(freshPath)).storeId, backupId);
 });
