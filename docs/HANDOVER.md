@@ -127,7 +127,8 @@ table; Build's seed writes into it), a settings surface for users and environmen
 Discover · Diagnose · Remediate · Build hanging off a service record rather than a pack
 file. Design it against `docs/VALUE_BACKLOG.md` items 10 and 12 and
 `docs/RELEASE_READINESS.md`, and put the plan in front of him before the first commit —
-he ratifies plans for this stream (item 12 says so).
+he ratifies plans for this stream (item 12 says so). *Ratified 2026-09-24:*
+[STORE_PLAN.md](STORE_PLAN.md) — schema, import, roles, slices and gates.
 
 **A. Decide: "the draft becomes the pack".** The root cause of every remaining Build gap is
 that the draft is a set of inputs re-instantiated from the seed on each change, with

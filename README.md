@@ -782,6 +782,7 @@ deploy/k8s/
 ## Key Docs
 
 - [`docs/HANDOVER.md`](docs/HANDOVER.md) - hand-over note for the next session: where the three repos stand, the maintainer's working rules, the backlog and the known debts (2026-09-24)
+- [`docs/STORE_PLAN.md`](docs/STORE_PLAN.md) - the embedded `node:sqlite` store for users, orgs, services, environments and the audit: schema, import from today's files, roles, slices and gates (ratified 2026-09-24)
 - [`docs/USER_JOURNEY.md`](docs/USER_JOURNEY.md) - product journey and design invariants
 - [`docs/DRY_RUN.md`](docs/DRY_RUN.md) - dry-run script and readiness checklist
 - [`docs/RELEASE_READINESS.md`](docs/RELEASE_READINESS.md) - V1 release gate

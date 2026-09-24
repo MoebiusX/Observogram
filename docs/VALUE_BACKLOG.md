@@ -106,6 +106,11 @@ Closes four of the eight rows in RELEASE_READINESS's Production Hardening
 Gate. Design constraint: stay **file-first, zero new runtime deps,
 local-first** — a workspace directory + append-only JSONL + one optional
 bearer token, not a database + user accounts.
+*Superseded 2026-09-24:* records (users, orgs, services, environments, MCP
+endpoints, the pack registry, the audit) move into an embedded `node:sqlite`
+store — still zero new dependencies; artefacts (pack YAML, snapshots,
+journeys, runs, `deploys.jsonl`) stay files. See
+[STORE_PLAN.md](STORE_PLAN.md).
 
 **A. Workspace persistence** — `.observogram/` (gitignored;
 `OBSERVOGRAM_WORKSPACE` to relocate): `packs/<id>.pack.yaml` (id = the
@@ -240,6 +245,11 @@ exception proposed: `openid-client` confined to `server/auth.mjs` —
 everything else stays `node:` builtins. Full design, efforts (~2
 weeks), and the three maintainer decisions:
 [PRODUCTIZATION_PLAN.md](PRODUCTIZATION_PLAN.md). Effort: L.
+*Status 2026-09-24:* Stages 1 and 2 delivered; the rest of the stream —
+roles enforced, services and environments as records, the settings
+surface — re-planned on the embedded store and ratified:
+[STORE_PLAN.md](STORE_PLAN.md) (slices 1–6b). Decision 3 above
+("file-first org registry") is reversed there.
 
 ## P3 — Make the verdict more trustworthy *(under research — re-enters the queue when the maintainer's research lands)*
 
