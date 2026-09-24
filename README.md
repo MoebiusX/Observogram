@@ -228,6 +228,13 @@ changes.
 
 ## Quickstart
 
+Requires **Node 22.16 or later** (`engines` in `package.json`). The studio
+is moving users, orgs, services and environments into an embedded store on
+Node's built-in `node:sqlite`, which is unflagged from 22.13; 22.16 is the
+floor because it fixes a `StatementSync` use-after-free and the `run()`
+statement reset that a store hits. CI runs the suites on 22.16.0 and on the
+latest 22. See [docs/STORE_PLAN.md](docs/STORE_PLAN.md).
+
 ```bash
 git clone https://github.com/MoebiusX/Observogram.git
 cd Observogram

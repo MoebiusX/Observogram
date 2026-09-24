@@ -48,7 +48,7 @@
  *   1 — drift detected; cron should fire the notification
  *   2 — error (file missing, parse failure, git rev unknown)
  *
- * Requires Node 18+. No dependencies.
+ * Requires Node 22.16+ (the package floor). No dependencies.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';

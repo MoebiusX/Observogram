@@ -166,7 +166,7 @@ export function githubActionsWorkflow(i) {
     'permissions:', '  contents: read', '',
     'concurrency:', `  group: journey-${n.name}`, '  cancel-in-progress: false', '',
     'jobs:', '  journey:', '    runs-on: ubuntu-latest', '    timeout-minutes: 15', '    steps:',
-    '      - uses: actions/checkout@v7', '      - uses: actions/setup-node@v7', '        with:', "          node-version: '20'", "          cache: 'npm'",
+    '      - uses: actions/checkout@v7', '      - uses: actions/setup-node@v7', '        with:', "          node-version: '22'", "          cache: 'npm'",
     '      - run: npm ci',
     `      - name: Run journey ${n.name}`,
     '        env:',

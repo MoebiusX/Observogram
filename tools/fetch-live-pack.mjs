@@ -29,7 +29,7 @@
  *   0  success
  *   1  hard failure (no file written; previous file is kept)
  *
- * Requires Node 18+.
+ * Requires Node 22.16+ (the package floor).
  */
 
 import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
