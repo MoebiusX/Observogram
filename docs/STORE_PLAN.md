@@ -118,7 +118,8 @@ routine and another ad-hoc loader. The store removes that cost for
     shared connection, an `await` inside a transaction lets other
     requests' statements run inside it.
   - A guard test fails on a `BEGIN` or an outermost `SAVEPOINT` anywhere
-    outside `db.mjs`. Both are deferred transactions, which fail with
+    outside `db.mjs` (the store's own tests, `server/test-store*.mjs`,
+    are exempt). Both are deferred transactions, which fail with
     `SQLITE_BUSY_SNAPSHOT` at once whatever the timeout.
   - A repository call joins a `tx()` already open (`atomic()` in
     `db.mjs`) inside a nested `SAVEPOINT`, so if it throws its write is
