@@ -33,7 +33,13 @@
 //   - Binding. prepare() rejects '?NNN' (positional only from 22.20) and
 //     binds only numbers, bigints, strings, null and Uint8Array: 22.x
 //     throws on a JS boolean where 24 does not, so a boolean is a bug here
-//     on every version, and undefined is never silently NULL.
+//     on every version. Nothing is ever silently NULL: SQLite binds any
+//     parameter left unbound as NULL and Node counts nothing, so a
+//     statement is all '?' or all ':name'; a named call is one plain
+//     object carrying every name; a positional call has exactly one value
+//     per '?'; undefined, NaN, a Date and every other object throw (an
+//     object first would otherwise be read as the named map and shift the
+//     '?' values left one slot).
 
 import { closeSync, mkdirSync, openSync, statfsSync } from 'node:fs';
 import { constants as osConstants } from 'node:os';
@@ -348,38 +354,61 @@ function sqlWithoutLiterals(sql) {
 }
 
 function assertBindable(value, where) {
-  if (value === null || typeof value === 'string' || typeof value === 'number'
-    || typeof value === 'bigint' || value instanceof Uint8Array) return;
-  const kind = value === undefined ? 'undefined' : typeof value;
+  if (value === null || typeof value === 'string' || typeof value === 'bigint'
+    || (typeof value === 'number' && !Number.isNaN(value)) || value instanceof Uint8Array) return;
+  const kind = value === undefined ? 'undefined' : Number.isNaN(value) ? 'NaN'
+    : typeof value === 'object' ? (value.constructor?.name || 'object') : typeof value;
   throw new TypeError(`observogram store: cannot bind ${kind} to ${where} — bind numbers, bigints, strings, null or Uint8Array (booleans as 0/1)`);
 }
 
-function checkParams(params) {
-  params.forEach((p, i) => {
-    if (p !== null && typeof p === 'object' && !(p instanceof Uint8Array)) {
-      for (const [k, v] of Object.entries(p)) assertBindable(v, `:${k.replace(/^[:@$]/, '')}`);
-    } else {
-      assertBindable(p, `parameter ${i + 1}`);
-    }
-  });
+function isPlainObject(v) {
+  if (v === null || typeof v !== 'object') return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
 }
 
-const statementCache = new WeakMap();   // db → Map(sql → StatementSync)
+// shape: { positional: number of '?', names: [':name' names, no sigil] }.
+// SQLite binds an unbound parameter as NULL and Node does not count them,
+// so both are checked here: a statement is all '?' or all ':name', a
+// named call is one plain object with every name, a positional call has
+// exactly one value per '?'.
+function checkParams(params, shape) {
+  if (params.length === 1 && isPlainObject(params[0])) {
+    const p = params[0];
+    for (const [k, v] of Object.entries(p)) assertBindable(v, `:${k.replace(/^[:@$]/, '')}`);
+    const missing = shape.names.filter((n) => !['', ':', '@', '$'].some((sigil) => Object.hasOwn(p, sigil + n)));
+    if (missing.length) throw new TypeError(`observogram store: missing named parameter${missing.length > 1 ? 's' : ''} ${missing.map((n) => `:${n}`).join(', ')}`);
+    if (shape.positional) throw new TypeError(`observogram store: ${shape.positional} '?' parameter(s) left unbound by a named call`);
+    return;
+  }
+  params.forEach((p, i) => assertBindable(p, `parameter ${i + 1}`));
+  if (shape.names.length) throw new TypeError(`observogram store: this statement takes named parameters (${shape.names.map((n) => `:${n}`).join(', ')}) — pass one plain object`);
+  if (params.length !== shape.positional) throw new TypeError(`observogram store: statement takes ${shape.positional} '?' parameter(s), got ${params.length}`);
+}
+
+function paramShape(stripped) {
+  const names = [...new Set([...stripped.matchAll(/(?<![A-Za-z0-9_$])[:@$]([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))];
+  return { positional: (stripped.match(/\?/g) || []).length, names };
+}
+
+const statementCache = new WeakMap();   // db → Map(sql → { stmt: StatementSync, shape })
 
 // The statement wrapper repositories use. Parameters are '?' or ':name';
 // RETURNING rows are read with get()/all(), never run().changes.
 export function prepare(db, sql) {
-  if (/\?\d/.test(sqlWithoutLiterals(sql))) {
+  const stripped = sqlWithoutLiterals(sql);
+  if (/\?\d/.test(stripped)) {
     throw new Error(`observogram store: '?NNN' parameters are not allowed (positional only from Node 22.20) — use '?' or ':name': ${sql}`);
   }
   let cache = statementCache.get(db);
   if (!cache) { cache = new Map(); statementCache.set(db, cache); }
-  let stmt = cache.get(sql);
-  if (!stmt) { stmt = db.prepare(sql); cache.set(sql, stmt); }
+  let entry = cache.get(sql);
+  if (!entry) { entry = { stmt: db.prepare(sql), shape: paramShape(stripped) }; cache.set(sql, entry); }
+  const { stmt, shape } = entry;
   return {
-    run: (...params) => { checkParams(params); return stmt.run(...params); },
-    get: (...params) => { checkParams(params); return stmt.get(...params); },
-    all: (...params) => { checkParams(params); return stmt.all(...params); },
+    run: (...params) => { checkParams(params, shape); return stmt.run(...params); },
+    get: (...params) => { checkParams(params, shape); return stmt.get(...params); },
+    all: (...params) => { checkParams(params, shape); return stmt.all(...params); },
   };
 }
 

@@ -297,6 +297,32 @@ test('prepare rejects ?NNN at prepare time; booleans and undefined throw at bind
   }
 });
 
+test('prepare never binds NULL by omission: NaN, Date and other objects, a missing :name, too few ? values and an object before positional values all throw', async () => {
+  const db = await openRaw(':memory:');
+  try {
+    const one = prepare(db, 'SELECT ? AS v');
+    assert.throws(() => one.get(NaN), /cannot bind NaN to parameter 1/);
+    assert.throws(() => one.get(new Date()), /cannot bind Date to parameter 1/, 'a Date is not an empty named map');
+    assert.throws(() => one.get({}), /named parameters|'\?' parameter/, 'an empty object does not leave ? unbound');
+    assert.throws(() => one.get(new Map()), /cannot bind Map/);
+    assert.throws(() => one.get(Object.create(null)), /'\?' parameter/);
+    assert.throws(() => one.get(), /takes 1 '\?' parameter\(s\), got 0/, 'SQLite would bind the unbound ? as NULL');
+    assert.throws(() => prepare(db, 'SELECT ? AS a, ? AS b').get(1), /takes 2 '\?' parameter\(s\), got 1/);
+    assert.throws(() => prepare(db, 'SELECT ? AS a, ? AS b, ? AS c').get(new Date(), 'org', 'id'), /cannot bind Date to parameter 1/,
+      'an object first would be read as the named map and shift every ? left one slot');
+    const named = prepare(db, 'SELECT :a AS a, :b AS b');
+    assert.throws(() => named.get({ a: 1 }), /missing named parameter :b/);
+    assert.throws(() => named.get(1, 2), /takes named parameters \(:a, :b\)/);
+    assert.throws(() => named.get({ a: NaN, b: 1 }), /cannot bind NaN to :a/);
+    assert.deepEqual({ ...named.get({ a: 1, b: null }) }, { a: 1, b: null }, 'an explicit null still binds');
+    assert.deepEqual({ ...prepare(db, "SELECT ? AS v, ':x' AS lit, 1e999 AS inf").get(Infinity) }, { v: Infinity, lit: ':x', inf: Infinity },
+      'Infinity binds; a :name inside a literal is not a parameter');
+    assert.deepEqual({ ...prepare(db, 'SELECT :a + :a AS v').get({ a: 2 }) }, { v: 4 }, 'a repeated name needs one key');
+  } finally {
+    db.close();
+  }
+});
+
 // ---------- tx() semantics ----------
 
 test('tx: commits, rolls back and rethrows on throw, refuses a thenable (rolled back) and refuses nesting; atomic joins', async () => {
@@ -789,6 +815,7 @@ test('users: 0/1 booleans, the password record verbatim, epoch 1 by default and 
     assert.equal(users.bumpSessionEpoch(db, 'alice', alice.id), 2);
     assert.equal(users.setPassword(db, 'alice', alice.id, { ...pw, hash: 'bmV3' }).sessionEpoch, 3, 'a password change bumps');
     assert.equal(users.getUser(db, alice.id).mustChange, false);
+    assert.throws(() => users.getUser(db, new Date()), /cannot bind Date/, 'a wrong-typed id throws, not a silent null');
     assert.equal(users.setDisabled(db, 'alice', oidc.id, true).sessionEpoch, 2, 'disabling bumps');
     assert.equal(users.setDisabled(db, 'alice', oidc.id, false).sessionEpoch, 2, 'enabling does not');
     assert.equal(users.updateUserProfile(db, 'alice', alice.id, { name: 'Alice A.', emailVerified: false }).name, 'Alice A.');
@@ -1026,6 +1053,7 @@ test('Tenancy isolation: org B reads and writes nothing of org A through any con
       assert.equal(packs.listPacks(db).length, 1);
       assert.deepEqual(packServices.listServicesForPack(db, a.pack.id).map((l) => l.role), ['primary']);
       assert.equal(packs.touch(db, a.pack.id, '2030-01-01T00:00:00.000Z'), true);
+      assert.throws(() => packs.touch(db, a.pack.id, new Date()), /cannot bind Date/, 'not a silent false from ? values shifted one slot');
       assert.equal(packs.getPack(db, a.pack.id).lastUsedAt, '2030-01-01T00:00:00.000Z');
     });
     assert.deepEqual(auditActions(db, { orgId: 'acme' }), ['mcp_endpoint.create', 'service.create', 'environment.create', 'pack.register', 'pack.link'],
