@@ -58,8 +58,20 @@ moves the workspace to a claim that may be RWX.
 **Backups.** A copy of `/data/workspace` alone holds no users, orgs or
 audit, and a file-by-file copy of `/data/db` taken while the studio runs is
 not a backup (a WAL checkpoint between two file copies tears it). Copy with
-the studio scaled to 0, take an atomic volume snapshot, or use
-`packc store backup` ([docs/STORE_PLAN.md](../../docs/STORE_PLAN.md) §3).
+the studio scaled to 0, take an atomic volume snapshot, or take a live one
+from inside the running pod. The image has no `packc` on `PATH`
+(`npm ci --omit=dev` does not link the package's own bin), so call the CLI
+by path:
+
+```bash
+kubectl -n observability exec deploy/observabilitypack-studio -- \
+  node tools/cli.mjs store backup /data/db/backup-$(date +%Y%m%d).db
+```
+
+`store restore` refuses while the studio holds the database, so it needs
+the studio scaled to 0 and a one-off pod that mounts the `store` claim with
+`OBSERVOGRAM_DB` set; that recipe lands with slice 2, the first build that
+opens the store ([docs/STORE_PLAN.md](../../docs/STORE_PLAN.md) §3, §7).
 
 ### Storage class
 
