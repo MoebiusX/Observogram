@@ -1,14 +1,22 @@
 // server/store/mcp-endpoints.mjs — an org's named MCP endpoints
-// (context-scoped; docs/STORE_PLAN.md §2). No secret is ever stored:
+// (context-scoped; docs/STORE_PLAN.md §2). No secret is stored:
 // read_token_env is the NAME of an env var (like a journey's
-// packB.mcp.authEnv), and a URL carrying credentials is refused. Write
-// tokens stay per-request pass-through.
+// packB.mcp.authEnv), and requireUrl refuses a URL with userinfo
+// (user:pass@), any fragment, or a query parameter whose name looks like a
+// credential (token, key, secret, pass, auth, sig, credential — a
+// case-insensitive substring match). Refusals never echo the URL. Write
+// tokens stay per-request pass-through. The SSRF / local-address policy
+// (validateMcpUrl) is applied where the URL is fetched, not here.
 
 import { atomic, nowIso, prepare } from './db.mjs';
 import { writeAudit } from './audit.mjs';
 import { notFound, requireOrg, requireText, setClause } from './rows.mjs';
 
 const REPO = 'mcp_endpoints';
+// A query parameter NAME that looks like it carries a secret (apikey,
+// x-api-key, access_token, sig, ...). Deliberately broad: a false positive
+// costs a rename, a false negative stores a token.
+const CREDENTIAL_PARAM = /token|key|secret|pass|auth|sig|credential/i;
 
 export function rowToMcpEndpoint(r) {
   if (!r) return null;
@@ -18,9 +26,15 @@ export function rowToMcpEndpoint(r) {
 function requireUrl(url) {
   requireText(url, 'url', { max: 2000 });
   let u;
-  try { u = new URL(url); } catch (e) { throw new TypeError(`observogram store: url is not a URL: ${JSON.stringify(url)}`, { cause: e }); }
+  // No echo of the input and no `cause`: a URL that fails to parse may still
+  // hold a password or a query token, and this message reaches logs and 400s.
+  try { u = new URL(url); } catch { throw new TypeError('observogram store: url is not a URL'); }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new TypeError('observogram store: an MCP endpoint is http(s)');
   if (u.username || u.password) throw new TypeError('observogram store: an MCP endpoint URL may not carry credentials — name an env var in readTokenEnv');
+  if (u.hash) throw new TypeError('observogram store: an MCP endpoint URL has no fragment');
+  for (const k of u.searchParams.keys()) {
+    if (CREDENTIAL_PARAM.test(k)) throw new TypeError('observogram store: an MCP endpoint URL may not carry credentials in its query — name an env var in readTokenEnv');
+  }
   return url;
 }
 

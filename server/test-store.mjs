@@ -1075,6 +1075,42 @@ test('context-scoped updates, deletes and cascades within one org', async () => 
   }
 });
 
+test('an MCP endpoint URL carrying a secret is refused, on create and update, without echoing it', async () => {
+  const { db, close } = await freshStore('mcp-url-secrets');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    runWithOrg('acme', () => {
+      const ep = mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'ok', url: 'https://mcp.example/sse?transport=sse' });
+      assert.equal(ep.url, 'https://mcp.example/sse?transport=sse', 'a harmless query is kept');
+      assert.equal(mcpEndpoints.updateMcpEndpoint(db, 'alice', ep.id, { url: 'https://mcp.example/mcp?transport=sse' }).url, 'https://mcp.example/mcp?transport=sse');
+      const refused = [
+        ['https://mcp.example/sse?access_token=s3cr3t', /may not carry credentials in its query/],
+        ['https://mcp.example/sse?transport=sse&api_key=s3cr3t', /may not carry credentials in its query/],
+        ['https://mcp.example/sse?X-Api-Key=s3cr3t', /may not carry credentials in its query/],
+        ['https://mcp.example/sse#token=s3cr3t', /has no fragment/],
+        ['https://alice:s3cr3t@mcp.example/', /may not carry credentials/],
+        ['https://alice:s3cr3t@', /is not a URL/],
+        ['https://exa mple/?token=s3cr3t', /is not a URL/],
+      ];
+      for (const [url, why] of refused) {
+        for (const [op, write] of [
+          ['create', () => mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'leaky', url })],
+          ['update', () => mcpEndpoints.updateMcpEndpoint(db, 'alice', ep.id, { url })],
+        ]) {
+          assert.throws(write, (e) => {
+            assert.match(e.message, why, `${op} ${url}`);
+            assert.ok(!e.message.includes('s3cr3t'), `${op} ${url}: the error echoes the secret: ${e.message}`);
+            return true;
+          });
+        }
+      }
+      assert.deepEqual(mcpEndpoints.listMcpEndpoints(db).map((e) => e.url), ['https://mcp.example/mcp?transport=sse'], 'nothing leaky was stored');
+    });
+  } finally {
+    close();
+  }
+});
+
 test('Concurrency: a repository write waits out a child holding BEGIN IMMEDIATE, then succeeds with its audit row', async () => {
   const { path, db, close } = await freshStore('conc-repo');
   try {

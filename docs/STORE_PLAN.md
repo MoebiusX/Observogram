@@ -240,7 +240,11 @@ audit           seq PK AUTOINCREMENT, at, org_id NULL, actor, action, target_kin
   in `schema_meta` and only an owner changes it.
 - **`mcp_endpoints.read_token_env`** is the *name* of an env var, mirroring
   the journeys' `packB.mcp.authEnv`. **No secret is ever stored**: write
-  tokens stay per-request pass-through.
+  tokens stay per-request pass-through, and `mcp_endpoints.url` refuses
+  userinfo (`user:pass@`), any fragment, and any query parameter whose name
+  looks like a credential (`token`, `key`, `secret`, `pass`, `auth`, `sig`,
+  `credential`, case-insensitive substring), without echoing the URL in the
+  error. The SSRF / local-address rule stays where the URL is fetched.
 - **`pack_services`** exists because a pack is not always one service. The
   live aggregate packs carry many.
 - **Tier is criticality, not `minTier`.** `minTier` belongs to library SLIs
