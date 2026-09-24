@@ -8937,10 +8937,13 @@ select.build-edit-input { appearance: auto; }
 .build-edit-evidence { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding-top: 8px; border-top: 1px solid var(--line-2); }
 .build-edit-evidence-note { font: italic 11px/1.45 var(--serif); color: var(--ink-3); }
 
-/* ---- The editor (docs/BUILD_JOURNEY.md "The editor"): one centered modal dialog over the page, the L1 accent. ---- */
-.build-editor-scrim { position: fixed; inset: 0; z-index: 90; cursor: pointer; background: color-mix(in srgb, var(--ink) 40%, transparent); animation: build-fade 160ms ease-out; }
+/* ---- The editor (docs/BUILD_JOURNEY.md "The editor"): one centered modal dialog over the page, the L1 accent.
+   Stacking: above the sheet (61), the sticky header (100 — at 1366×768 the title row of every threshold / create
+   editor sat behind it and the header's buttons took the clicks meant for the dialog; measured) and the toast
+   (100); below the drop overlay and the Advanced menu (200), the chrome's own layers. ---- */
+.build-editor-scrim { position: fixed; inset: 0; z-index: 150; cursor: pointer; background: color-mix(in srgb, var(--ink) 40%, transparent); animation: build-fade 160ms ease-out; }
 .build-editor {
-  position: fixed; z-index: 91; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  position: fixed; z-index: 151; top: 50%; left: 50%; transform: translate(-50%, -50%);
   width: min(960px, calc(100vw - 48px)); max-height: calc(100dvh - 40px); display: flex; flex-direction: column; box-sizing: border-box;
   --accent: var(--L1); --accent-bg: var(--L1-bg); --accent-tint: var(--L1-tint); --accent-text: color-mix(in srgb, var(--accent) 65%, var(--ink));
   background: var(--card); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius: 16px;

@@ -715,9 +715,15 @@ test('the Tab trap covers the editor (aria-modal=true) alone while the non-modal
 test('the stylesheet: one centered fixed modal above the sheet with the L1 accent through the tokens, a scrim over everything, the two-column grid, the entrance and the reduced-motion block; the rolodex’s Edit button and create card', () => {
   const editor = cssRule('.build-editor');
   assert.ok(editor && /position:\s*fixed/.test(editor) && /top:\s*50%;\s*left:\s*50%;\s*transform:\s*translate\(-50%, -50%\)/.test(editor), 'centered');
-  assert.match(editor, /z-index:\s*91/);
-  assert.match(cssRule('.build-editor-scrim'), /position:\s*fixed;\s*inset:\s*0;\s*z-index:\s*90/);
-  assert.ok(Number(/z-index:\s*(\d+)/.exec(cssRule('.build-sheet'))[1]) < 90, 'the editor sits above the sheet (z 61)');
+  // The stacking: above the sheet (z 61), the sticky header (z 100 — at 1366×768 the title row of every threshold /
+  // create editor sat behind it and the header's buttons took the clicks meant for the dialog; measured) and the
+  // toast (z 100); below the drop overlay and the Advanced menu (z 200), which are the chrome's own layers.
+  const z = (sel) => Number(/z-index:\s*(\d+)/.exec(cssRule(sel))[1]);
+  assert.match(editor, /z-index:\s*151/);
+  assert.match(cssRule('.build-editor-scrim'), /position:\s*fixed;\s*inset:\s*0;\s*z-index:\s*150/);
+  assert.ok(z('.build-sheet') < z('.build-editor-scrim') && z('.build-editor-scrim') < z('.build-editor'), 'the scrim covers the sheet, the editor the scrim');
+  assert.ok(z('.observa-hdr') < z('.build-editor-scrim') && z('.toast') < z('.build-editor-scrim'), 'the scrim covers the sticky header and the toast');
+  assert.ok(z('.build-editor') < z('.drop-overlay') && z('.build-editor') < z('.observa-adv-menu'), 'below the drop overlay and the Advanced menu');
   assert.match(editor, /--accent:\s*var\(--L1\)/);
   assert.match(editor, /max-height:\s*calc\(100dvh - 40px\)/, 'never taller than the viewport');
   assert.match(cssRule('.build-editor-body'), /overflow:\s*auto;\s*overscroll-behavior:\s*contain/, 'scrolls inside, never the page');

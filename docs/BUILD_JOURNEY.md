@@ -759,7 +759,11 @@ focus lands on the first field on open (the objective from an SLO card) and retu
 opener on close (the opener's focus key travels with `openEditor`: `card:<artefact id>`,
 `ghost:<key>`, `edit:<key>`, `edit:create`), one editor at a time, the open editor in UI state
 (`build.editor`, never persisted). The sheet may stay open underneath; the editor never
-scrolls the page (its body scrolls inside, `overscroll-behavior: contain`).
+scrolls the page (its body scrolls inside, `overscroll-behavior: contain`). It stacks above
+the sheet (z 61), the sticky header and the toast (z 100) — the scrim at 150, the dialog at 151
+— and below the drop overlay and the Advanced menu (z 200), the chrome's own layers: at
+1366×768 the title row of every threshold / create editor once sat behind the header, whose
+buttons took the clicks meant for the dialog (measured).
 
 *Layout.* No scrolling at 1920×1080 and none at 1366×768 for a library SLI (measured live).
 A title row (the id large, the product and its evidence badge, the type pill, the
