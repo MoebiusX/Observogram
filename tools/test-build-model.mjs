@@ -15,8 +15,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emit as emitYaml } from './lib/mini-yaml.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
@@ -1323,6 +1323,25 @@ test('the studio\'s direction helper is the engine\'s, input for input: goodWhen
   assert.ok(engineHeader.includes('studio/sli-direction.mjs') && engineHeader.includes('tools/test-build-model.mjs'), 'the engine helper names its browser copy and this test');
   assert.ok(!/build-copies-model\.mjs|test-build-editor\.mjs/.test(engineHeader), 'the engine helper names no other module as the copy or the guard');
   assert.ok(studioHeader.includes('tools/lib/good-when.mjs') && studioHeader.includes('tools/test-build-model.mjs'), 'the browser copy names the engine helper and this test');
+});
+
+test('absent means below is decided in the two helpers alone: no other module compares good_when with a literal side', () => {
+  // A raw `x.good_when === 'above'` is right only while something upstream has already normalised the field; the
+  // helpers are the one place that decides. Enum checks (`GOOD_WHEN.includes(v)`, `!== undefined`) are not comparisons
+  // with a side and pass; the two helper bodies and the tests are the allowed sites.
+  const walk = (dir, out = []) => { for (const n of readdirSync(dir)) { const p = join(dir, n); if (statSync(p).isDirectory()) { if (!/node_modules|fixtures|assets/.test(n)) walk(p, out); } else out.push(p); } return out; };
+  const raw = /good_when\s*(?:===|!==|==|!=)\s*['"]|['"](?:above|below)['"]\s*(?:===|!==|==|!=)\s*[\w.?]*good_when/;
+  const helpers = new Set(['tools/lib/good-when.mjs', 'studio/sli-direction.mjs']);
+  const offenders = [];
+  for (const dir of ['tools', 'server', 'studio']) {
+    for (const file of walk(resolve(ROOT, dir)).filter(p => /\.mjs$/.test(p))) {
+      const rel = file.slice(ROOT.length + 1).replace(/\\/g, '/');
+      if (helpers.has(rel) || /(^|\/)test-[^/]*\.mjs$/.test(rel)) continue;
+      readFileSync(file, 'utf8').split('\n').forEach((line, i) => { if (raw.test(line)) offenders.push(`${rel}:${i + 1}: ${line.trim().slice(0, 120)}`); });
+    }
+  }
+  assert.deepEqual(offenders, [], 'every reader and writer asks goodWhen(sli); only the helpers read the raw field');
+  assert.ok(raw.test("if (d.good_when === 'above') def.good_when = 'above';") && !raw.test("if (goodWhen(d) === 'above') def.good_when = 'above';") && !raw.test('if (s.good_when !== undefined) e(1)'), 'the scan catches the raw comparison, not the helper call or an enum check');
 });
 
 // ---------------------------------------------------------------------------

@@ -448,7 +448,7 @@ export function numberOrText(field, text) {
 export function customDefFromDraft(draft) {
   const d = normalizeDraft(draft);
   const def = { id: d.id, type: d.type, objective: numberOrText('objective', d.objective), window: d.window };
-  if (d.type === 'ratio') { def.good = d.good; def.total = d.total; } else { def.query = d.query; def.threshold = numberOrText('threshold', d.threshold); if (d.good_when === 'above') def.good_when = 'above'; if (String(d.unit).trim()) def.unit = d.unit.trim(); }
+  if (d.type === 'ratio') { def.good = d.good; def.total = d.total; } else { def.query = d.query; def.threshold = numberOrText('threshold', d.threshold); if (goodWhen(d) === 'above') def.good_when = 'above'; if (String(d.unit).trim()) def.unit = d.unit.trim(); }
   if (String(d.description).trim()) def.description = d.description.trim();
   if (String(d.semconv_metric).trim()) def.semconv_metric = d.semconv_metric.trim();
   return def;
