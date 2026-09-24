@@ -23,7 +23,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { genericBoards, checkBindings } from './lib/dashboards/generic.mjs';
-import { derivedViewPanel, splitWidths, tileRows, viewWidths, stat } from './lib/dashboards/lib.mjs';
+import { derivedViewPanel, derivedSliTiles, derivedSliTrend, thresholdSteps, okAbove, splitWidths, tileRows, viewWidths, stat, C } from './lib/dashboards/lib.mjs';
 import { compileGrafanaDashboard } from './lib/compile.mjs';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -382,6 +382,36 @@ test('a binding that names no SLI or SLO of the pack is reported, never rendered
   for (const b of boards) assertSymmetric(b.id, b.dashboard.panels);
   // the typo'd SLO does not shape the block: the board holds one SLI and no SLO, so the tile sits beside its trend
   assert.deepEqual(shape(section(boards.find(b => b.id === 'kafka-typo').dashboard.panels, /Contract/)), TILES_ONLY(1));
+});
+
+test('spec 1.3 good_when on the boards: a floor SLI\'s tile colours lower-is-worse (amber under the bound, red under half of it), a ceiling higher-is-worse as before, absent means below; the dashed line sits at the bound either way; the descriptions name the direction', () => {
+  const sli = (over) => ({ id: 'members', type: 'threshold', description: 'Live settlement consumers.', query: 'min(members)', threshold: 2, unit: 'consumers', ...over });
+  const packOf = (s) => ({ metadata: { name: 'settle', version: '0.0.1' }, spec: { slis: [s], slos: [{ id: 'members_99_9', sli: 'members', objective: 0.999, window: '30d' }] } });
+  const floor = sli({ good_when: 'above' }), ceiling = sli({ good_when: 'below' }), plain = sli({});
+  // Through the generator: the unified board's tile bound to the floor SLI, every binding satisfied.
+  const boards = genericBoards(packOf(floor));
+  assert.deepEqual(checkBindings(packOf(floor), boards), []);
+  const tile = boards[0].dashboard.panels.find(p => p.type === 'stat' && p.pack?.binds_to?.includes('slis.members'));
+  assert.deepEqual(tile.fieldConfig.defaults.thresholds.steps, [{ color: C.red, value: null }, { color: C.amber, value: 1 }, { color: C.green, value: 2 }], 'a floor: red under 1, amber under 2, green at or above the bound');
+  assert.equal(tile.description, 'Live settlement consumers. SLO 99.9 % over 30d. Good when ≥ 2 consumers.');
+  // The same tile built for a ceiling, declared or absent: okAbove as every 1.2 board had it, the description with ≤.
+  const [ct] = derivedSliTiles(packOf(ceiling), null), [pt] = derivedSliTiles(packOf(plain), null);
+  assert.deepEqual(ct.fieldConfig.defaults.thresholds.steps, [{ color: C.green, value: null }, { color: C.amber, value: 2 }, { color: C.red, value: 4 }], 'a ceiling: green under the bound, amber at it, red at twice it');
+  assert.equal(ct.description, 'Live settlement consumers. SLO 99.9 % over 30d. Good when ≤ 2 consumers.');
+  assert.deepEqual({ ...pt, id: 0 }, { ...ct, id: 0 }, 'absent means below: the tile of a 1.2 SLI is the tile of a declared ceiling');
+  assert.deepEqual(thresholdSteps({ type: 'threshold', threshold: 0.5 }), okAbove(0.5, 1));
+  assert.deepEqual(thresholdSteps({ type: 'threshold', good_when: 'above', threshold: -2 }).map(s => s.value), [null, -3, -2], 'a negative floor keeps its steps ascending');
+  // The trend: the dashed line at the bound whichever way the SLI faces; the description says which side is good.
+  const ftr = derivedSliTrend(packOf(floor), floor), ctr = derivedSliTrend(packOf(ceiling), ceiling), ptr = derivedSliTrend(packOf(plain), plain);
+  assert.deepEqual([ftr, ctr, ptr].map(p => p.fieldConfig.defaults.thresholds.steps.at(-1).value), [2, 2, 2]);
+  assert.deepEqual([ftr, ctr, ptr].map(p => p.fieldConfig.defaults.custom.thresholdsStyle.mode), ['dashed', 'dashed', 'dashed']);
+  assert.equal(ftr.description, 'Live settlement consumers. The dashed line is the threshold — good when ≥ 2 consumers.');
+  assert.equal(ctr.description, 'Live settlement consumers. The dashed line is the threshold — good when ≤ 2 consumers.');
+  assert.equal(ptr.description, ctr.description);
+  // A ratio tile says nothing about a bound (it has none); a threshold SLI without a unit prints the bare bound.
+  const ratioPack = { metadata: { name: 'r', version: '0.0.1' }, spec: { slis: [{ id: 'ok', type: 'ratio', description: 'Ok.', good: 'g', total: 't' }], slos: [{ id: 'ok_99', sli: 'ok', objective: 0.99, window: '30d' }] } };
+  assert.equal(derivedSliTiles(ratioPack, null)[0].description, 'Ok. SLO 99 % over 30d.');
+  assert.match(derivedSliTiles(packOf(sli({ unit: undefined })), null)[0].description, / Good when ≤ 2\.$/);
 });
 
 test('a pack module\'s sliTiles gets the layout hint; tiles that ignore it keep their own row above the standard burn panels', () => {

@@ -300,7 +300,7 @@
         "w": 6,
         "h": 4
       },
-      "description": "99th-percentile total time of Produce requests on the broker (queue, local, remote/replication wait, response send), in seconds: what a producer waits for an ack. Kafka publishes its request-time histograms through JMX as per-quantile gauges (no _bucket series exist); with the Strimzi rule set the 0.99 quantile of kafka.network:type=RequestMetrics, name=TotalTimeMs is kafka_network_requestmetrics_totaltimems{quantile=\"0.99\"}, in milliseconds. SLO 99 % over 30d.",
+      "description": "99th-percentile total time of Produce requests on the broker (queue, local, remote/replication wait, response send), in seconds: what a producer waits for an ack. Kafka publishes its request-time histograms through JMX as per-quantile gauges (no _bucket series exist); with the Strimzi rule set the 0.99 quantile of kafka.network:type=RequestMetrics, name=TotalTimeMs is kafka_network_requestmetrics_totaltimems{quantile=\"0.99\"}, in milliseconds. SLO 99 % over 30d. Good when ≤ 0.1 seconds.",
       "pack": {
         "binds_to": [
           "slis.produce_latency_p99"
@@ -374,7 +374,7 @@
         "w": 6,
         "h": 4
       },
-      "description": "99th-percentile local (broker processing) time of FetchConsumer requests, in seconds. LocalTimeMs, not TotalTimeMs: a consumer fetch is a long poll, and TotalTimeMs is dominated by the wait in purgatory for the next record (RemoteTimeMs). Measured on the lab: on the 10 msg/s topic the TotalTimeMs p99 is 102 ms (the gap between records); on an idle partition it is fetch.max.wait.ms — 500 ms by default, seen as the 503 ms p999 during the producer's restart gaps — both above the 50 ms objective with no broker fault, while LocalTimeMs p99 is 0-1 ms. Same JMX-quantile shape as produce_latency_p99, milliseconds. SLO 99 % over 30d.",
+      "description": "99th-percentile local (broker processing) time of FetchConsumer requests, in seconds. LocalTimeMs, not TotalTimeMs: a consumer fetch is a long poll, and TotalTimeMs is dominated by the wait in purgatory for the next record (RemoteTimeMs). Measured on the lab: on the 10 msg/s topic the TotalTimeMs p99 is 102 ms (the gap between records); on an idle partition it is fetch.max.wait.ms — 500 ms by default, seen as the 503 ms p999 during the producer's restart gaps — both above the 50 ms objective with no broker fault, while LocalTimeMs p99 is 0-1 ms. Same JMX-quantile shape as produce_latency_p99, milliseconds. SLO 99 % over 30d. Good when ≤ 0.05 seconds.",
       "pack": {
         "binds_to": [
           "slis.fetch_latency_p99"

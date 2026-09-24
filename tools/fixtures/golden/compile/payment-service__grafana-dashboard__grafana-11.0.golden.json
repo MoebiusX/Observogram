@@ -229,7 +229,7 @@
         "w": 8,
         "h": 4
       },
-      "description": "99th-percentile API latency, server-side. SLO 99 % over 30d.",
+      "description": "99th-percentile API latency, server-side. SLO 99 % over 30d. Good when ≤ 0.5 seconds.",
       "pack": {
         "binds_to": [
           "slis.api_latency_p99"
@@ -303,7 +303,7 @@
         "w": 8,
         "h": 4
       },
-      "description": "Consumer lag for the settlement topic. SLO 99 % over 30d.",
+      "description": "Consumer lag for the settlement topic. SLO 99 % over 30d. Good when ≤ 60 seconds.",
       "pack": {
         "binds_to": [
           "slis.consumer_freshness"
