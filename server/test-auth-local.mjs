@@ -71,6 +71,15 @@ const base = `http://127.0.0.1:${srv.address().port}`;
   assert(getUserByLogin(db, 'John Smith')?.kind === 'local', "'John Smith' is imported as written");
 }
 
+// §3.3: every successful sign-in path refreshes last_login_at. Park a
+// sentinel before the call; the path under test must overwrite it.
+const STALE_LOGIN = '2000-01-01T00:00:00.000Z';
+const staleLastLogin = login => prepare(currentStore(), 'UPDATE users SET last_login_at = ? WHERE login = ?').run(STALE_LOGIN, login);
+const lastLoginMoved = login => {
+  const at = getUserByLogin(currentStore(), login)?.lastLoginAt;
+  return !!at && at !== STALE_LOGIN;
+};
+
 const getCookie = (res, name) => {
   for (const c of res.headers.getSetCookie?.() || []) {
     if (c.startsWith(`${name}=`)) return c.split(';')[0];
@@ -226,6 +235,7 @@ try {
   });
   assert(r.status === 400, 'short replacement rejected on the session path', r.status, 400);
 
+  staleLastLogin('carlos');
   r = await fetch(`${base}/auth/change-password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', Cookie: session },
@@ -233,6 +243,7 @@ try {
   });
   j = await r.json();
   assert(r.ok && j.ok === true, 'session-authenticated change succeeds with the current password', JSON.stringify(j));
+  assert(lastLoginMoved('carlos'), 'the self-service change refreshes last_login_at');
   // The change bumps the epoch: this session is re-issued, every other one ends.
   const oldSession = session;
   session = getCookie(r, 'observogram_session');
@@ -494,6 +505,7 @@ try {
   });
   assert(r.status === 401, 'skip without the flow cookie rejected', r.status, 401);
 
+  staleLastLogin('admin');
   r = await fetch(`${base2}/auth/change-password/skip`, {
     method: 'POST', headers: { Accept: 'application/json', Cookie: pwflow },
   });
@@ -501,6 +513,7 @@ try {
   const skipSession = getCookie(r, 'observogram_session');
   assert(r.ok && j.ok === true && j.skipped === true && !!skipSession,
     'skip issues a session without changing the password', JSON.stringify(j));
+  assert(lastLoginMoved('admin'), 'skip refreshes last_login_at');
 
   r = await fetch(`${base2}/api/packs`, { headers: { Cookie: skipSession } });
   assert(r.ok, 'API works with the skipped session', r.status, 200);
@@ -570,6 +583,7 @@ try {
   });
   assert(r.status === 400, 'short new password rejected', r.status, 400);
 
+  staleLastLogin('admin');
   r = await fetch(`${base2}/auth/change-password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', Cookie: pwflow },
@@ -578,6 +592,7 @@ try {
   j = await r.json();
   const session2 = getCookie(r, 'observogram_session');
   assert(r.ok && j.ok === true && !!session2, 'password change issues the real session', JSON.stringify(j));
+  assert(lastLoginMoved('admin'), 'the forced change refreshes last_login_at');
 
   r = await fetch(`${base2}/api/packs`, { headers: { Cookie: session2 } });
   assert(r.ok, 'API works with the post-change session', r.status, 200);

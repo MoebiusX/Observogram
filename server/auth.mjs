@@ -559,6 +559,7 @@ function initLocalUsers(app) {
     // Bumps the epoch: every other session of this user ends here; this
     // one is re-issued at the new epoch.
     const updated = setPassword(db, user.login, user.id, hashPassword(password), { mustChange: false, seededDefault: false });
+    touchLogin(db, updated.id);
     if (inFlow) clearCookie(res, PWFLOW_COOKIE);
     issueSession(res, db, updated);
     return wantsJson ? res.json({ ok: true }) : res.redirect('/');
@@ -590,6 +591,7 @@ function initLocalUsers(app) {
         ? res.status(403).json({ ok: false, error: 'a password change is required for this account' })
         : res.status(403).type('html').send(CHANGE_PAGE('a password change is required for this account'));
     }
+    touchLogin(db, flow.user.id);
     clearCookie(res, PWFLOW_COOKIE);
     issueSession(res, db, flow.user);
     return wantsJson ? res.json({ ok: true, skipped: true }) : res.redirect('/');
