@@ -31,7 +31,7 @@ async function main([cmd, arg, ...extra]) {
     console.log(`restored ${r.source} -> ${r.path}`);
     console.log(`store_id: ${r.storeId} (schema v${r.schemaVersion}); previous store_id: ${r.previousStoreId ?? `none${r.previousNote ? ` (${r.previousNote})` : ''}`}`);
     if (r.movedAside.length) console.log(`moved aside: ${r.movedAside.join(', ')}`);
-    console.log('The next start opens it and switches it back to WAL.');
+    console.log('It is in WAL mode already; start the server on it.');
     return 0;
   } catch (e) {
     console.error(`packc store ${cmd}: ${e.message}`);

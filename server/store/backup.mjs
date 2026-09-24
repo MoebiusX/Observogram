@@ -18,11 +18,13 @@
 // probe fails on an unreadable file), so the aside copy keeps the crashed
 // writer's rows. Then it moves the database, -wal and -shm aside together
 // under one timestamp and puts a copy of the backup in its place, with the
-// replaced file's mode and owner rather than the backup's; the next open
-// switches it back to WAL. The -wal/-shm move only does anything when
-// there is a -wal or -shm but no database file to probe, or when one
-// appears between the probe and the rename: a -wal left beside the
-// restored file would be replayed onto it.
+// replaced file's mode and owner rather than the backup's, switched to WAL
+// first (closing that connection leaves no -wal or -shm), so the probe of
+// a later restore sees a connection that opens it before the next start —
+// in rollback-journal mode an idle one holds no lock. The -wal/-shm move
+// only does anything when there is a -wal or -shm but no database file to
+// probe, or when one appears between the probe and the rename: a -wal
+// left beside the restored file would be replayed onto it.
 
 import { chmodSync, chownSync, closeSync, copyFileSync, constants as fsConstants, existsSync, mkdirSync, openSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -131,8 +133,8 @@ export async function restoreStore(backup, { dbPath = resolveDbPath(), now = new
   const incoming = `${target}.restore-${ts}.tmp`;
   copyFileSync(source, incoming, fsConstants.COPYFILE_EXCL);
   // copyFileSync keeps the backup's mode, and backups are often made
-  // read-only: a 0400 copy would become a live store the next open cannot
-  // switch to WAL ("attempt to write a readonly database"). Take the
+  // read-only: a 0400 copy could not be switched to WAL below, nor written
+  // by the server ("attempt to write a readonly database"). Take the
   // replaced store's mode (and, run as root, its owner) instead, always
   // with owner read-write; 0600, what openStore creates, when there was
   // none. SQLite gives -wal and -shm the database's mode, so they follow.
@@ -154,6 +156,11 @@ export async function restoreStore(backup, { dbPath = resolveDbPath(), now = new
       if (!isOurs(id)) throw refuse(`${source} is not an Observogram store backup (user_version ${id.version}, ${id.storeId ? 'a store_id' : 'no store_id'})`);
       if (id.version > SCHEMA_VERSION) throw refuse(`${source} is at schema v${id.version}; this build knows up to v${SCHEMA_VERSION} — restore it with the build that wrote it`);
       if (check !== 'ok') throw refuse(`${source} fails quick_check: ${check}`);
+      // Go in already in WAL, like a cleanly stopped store: in rollback
+      // mode an idle connection holds no lock, so the in-use probe of a
+      // later restore could not see one opened before the next start.
+      const wal = pragma(db, 'journal_mode=WAL')[0]?.journal_mode;
+      if (wal !== 'wal') throw refuse(`could not switch the restored copy of ${source} to WAL (journal_mode reads ${JSON.stringify(wal)})`);
     } finally {
       db.close();
     }

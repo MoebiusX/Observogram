@@ -1343,6 +1343,44 @@ test('packc store restore: refuses while the server holds the store (even idle),
   assert.deepEqual(readdirSync(dir).sort(), ['b.db', 'foreign.db', 'junk.db', 'observogram.db'], 'no refusal moved or left anything');
 });
 
+test('packc store restore puts the file in already in WAL, so a second restore refuses while an idle raw connection (a packc store backup, the sqlite3 shell) holds it', async () => {
+  // In rollback-journal mode an idle connection holds no lock and
+  // journal_mode=DELETE is a no-op, so the in-use probe cannot see it; in
+  // WAL it holds the shared lock the probe's switch fails on.
+  const dir = tempDir('rs-raw-holder');
+  const dbPath = join(dir, 'observogram.db');
+  await openStore({ path: dbPath });
+  closeStore(dbPath);
+  const backup = join(dir, 'b.db');
+  assert.equal((await packc(['store', 'backup', backup], { OBSERVOGRAM_DB: dbPath })).code, 0);
+  let r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: dbPath });
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal((await readStore(dbPath)).journal, 'wal', 'the restored file is WAL before any openStore');
+  assert.equal((await readStore(backup)).journal, 'delete', 'the backup itself stays rollback-journal');
+  assert.equal(readdirSync(dir).some((n) => /-(wal|shm)$/.test(n)), false, 'the switch left no -wal or -shm');
+
+  const holder = child(`
+    const { openRaw, prepare } = await import(${JSON.stringify(DB_URL)});
+    const db = await openRaw(${JSON.stringify(dbPath)});
+    prepare(db, 'SELECT count(*) AS n FROM users').get();
+    console.log('ready');
+    setInterval(() => {}, 1000);
+  `);
+  try {
+    await holder.until(/ready/);
+    const before = readdirSync(dir).sort();
+    r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: dbPath });
+    assert.equal(r.code, 1, r.stdout);
+    assert.match(r.stderr, /is in use — stop the server/);
+    assert.deepEqual(readdirSync(dir).sort(), before, 'nothing moved, no temp file left');
+  } finally {
+    holder.proc.kill('SIGTERM');
+    await holder.exited(10_000, 'SIGTERM');
+  }
+  r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: dbPath });
+  assert.equal(r.code, 0, `with the holder gone the restore goes ahead: ${r.stderr}`);
+});
+
 test('packc store restore end to end: the in-use probe checkpoints an unclean stop\'s -wal into the old db, so the aside copy keeps the crashed writer\'s rows and no -wal is left to replay; both store_ids print, the next open is WAL', async () => {
   const dir = tempDir('rs-e2e');
   const dbPath = join(dir, 'observogram.db');
@@ -1365,7 +1403,7 @@ test('packc store restore end to end: the in-use probe checkpoints an unclean st
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, new RegExp(`store_id: ${backupId} \\(schema v1\\); previous store_id: ${backupId}`));
   assert.match(r.stdout, /moved aside: .*observogram\.db\.pre-restore-\d{8}T\d{9}Z/);
-  assert.match(r.stdout, /switches it back to WAL/);
+  assert.match(r.stdout, /in WAL mode already/);
   const aside = readdirSync(dir).filter((n) => n.startsWith('observogram.db.pre-restore-') && !/-(wal|shm)$/.test(n));
   assert.equal(aside.length, 1, `the old set moved aside under one name (${aside})`);
   assert.deepEqual((await readStore(join(dir, aside[0]))).logins, ['in-backup', 'after-backup'], 'the aside copy kept the crashed writer\'s rows');
@@ -1374,7 +1412,7 @@ test('packc store restore end to end: the in-use probe checkpoints an unclean st
 
   const restored = await openStore({ path: dbPath });
   try {
-    assert.equal(pragma(restored, 'journal_mode')[0].journal_mode, 'wal', 'the next open switches it to WAL');
+    assert.equal(pragma(restored, 'journal_mode')[0].journal_mode, 'wal', 'it opens in WAL');
     assert.deepEqual(users.listUsers(restored).map((u) => u.login), ['in-backup'], 'the stale -wal was not replayed onto it');
     assert.equal(meta.storeId(restored), backupId);
   } finally {
