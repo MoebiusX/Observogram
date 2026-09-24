@@ -738,8 +738,12 @@ backup is an Observogram store, moves `observogram.db`, `-wal` and `-shm`
 aside together under one timestamp, and copies the backup in with the
 replaced database's mode and owner, never the backup's (a read-only backup
 restores writable; with no previous database it is 0600); the next start
-switches it back to WAL. Never copy a backup over the `.db` alone: a
-`-wal` left by an unclean stop would be replayed onto it. To move a
+switches it back to WAL. The in-use check also folds a `-wal` left by an
+unclean stop into the old database and removes the `-wal` and `-shm`, so
+the moved-aside copy keeps the crashed server's last writes; a `-wal` or
+`-shm` is moved aside itself (and listed) only when there is no database
+file beside it. Never copy a backup over the `.db` alone: a `-wal` left
+by an unclean stop would be replayed onto it. To move a
 database, move the file with nothing holding it: it carries its
 `store_id`.
 

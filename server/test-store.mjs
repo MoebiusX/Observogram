@@ -1239,7 +1239,7 @@ test('packc store restore: refuses while the server holds the store (even idle),
   assert.deepEqual(readdirSync(dir).sort(), ['b.db', 'foreign.db', 'junk.db', 'observogram.db'], 'no refusal moved or left anything');
 });
 
-test('packc store restore end to end: the old db, -wal and -shm move aside together, an unclean stop\'s -wal is not replayed, both store_ids print, the next open is WAL', async () => {
+test('packc store restore end to end: the in-use probe checkpoints an unclean stop\'s -wal into the old db, so the aside copy keeps the crashed writer\'s rows and no -wal is left to replay; both store_ids print, the next open is WAL', async () => {
   const dir = tempDir('rs-e2e');
   const dbPath = join(dir, 'observogram.db');
   const db = await openStore({ path: dbPath });
@@ -1265,7 +1265,7 @@ test('packc store restore end to end: the old db, -wal and -shm move aside toget
   const aside = readdirSync(dir).filter((n) => n.startsWith('observogram.db.pre-restore-') && !/-(wal|shm)$/.test(n));
   assert.equal(aside.length, 1, `the old set moved aside under one name (${aside})`);
   assert.deepEqual((await readStore(join(dir, aside[0]))).logins, ['in-backup', 'after-backup'], 'the aside copy kept the crashed writer\'s rows');
-  assert.equal(existsSync(`${dbPath}-wal`), false);
+  assert.equal(readdirSync(dir).some((n) => /-(wal|shm)$/.test(n)), false, 'the probe checkpointed the -wal and removed the -wal and -shm; nothing was left to move');
   assert.equal(readdirSync(dir).some((n) => n.includes('.restore-')), false, 'no temp copy left');
 
   const restored = await openStore({ path: dbPath });
@@ -1296,6 +1296,50 @@ test('packc store restore end to end: the old db, -wal and -shm move aside toget
   assert.equal(r3.code, 0, r3.stderr);
   assert.match(r3.stdout, /previous store_id: none/);
   assert.equal((await readStore(freshPath)).storeId, backupId);
+});
+
+test('packc store restore with a -wal and -shm but no database to probe: they move aside under one timestamp and the stale -wal is not replayed onto the restored file', async () => {
+  const dir = tempDir('rs-sidecars');
+  const dbPath = join(dir, 'observogram.db');
+  const db = await openStore({ path: dbPath });
+  users.createUser(db, 'system', { login: 'in-backup' });
+  closeStore(dbPath);
+  const backup = join(dir, 'b.db');
+  const bk = await packc(['store', 'backup', backup], { OBSERVOGRAM_DB: dbPath });
+  assert.equal(bk.code, 0, bk.stderr);
+
+  const crashed = storeHolder(dbPath, { login: 'after-backup' });
+  await crashed.until(/ready/);
+  crashed.proc.kill('SIGKILL');
+  assert.equal((await crashed.done).signal, 'SIGKILL');
+  assert.ok(existsSync(`${dbPath}-wal`), 'an unclean stop left a -wal behind');
+  assert.ok(existsSync(`${dbPath}-shm`), 'an unclean stop left a -shm behind');
+  // With a database file present the in-use probe would checkpoint and
+  // delete the -wal and -shm itself (even on a corrupt header, when its
+  // connection closes), so only a missing database reaches the move.
+  rmSync(dbPath);
+
+  const r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: dbPath });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /previous store_id: none/);
+  const moved = r.stdout.match(/^moved aside: (.*)$/m)?.[1].split(', ');
+  assert.ok(moved, r.stdout);
+  assert.equal(moved.length, 2, moved.join(', '));
+  const [wal, shm] = moved.map((p) => p.match(/observogram\.db\.pre-restore-(\d{8}T\d{9}Z)-(wal|shm)$/));
+  assert.ok(wal && shm, moved.join(', '));
+  assert.equal(wal[2], 'wal');
+  assert.equal(shm[2], 'shm');
+  assert.equal(wal[1], shm[1], 'one timestamp for the set');
+  assert.ok(existsSync(moved[0]) && existsSync(moved[1]));
+  assert.equal(existsSync(`${dbPath}-wal`), false, 'no -wal beside the restored file');
+  assert.equal(existsSync(`${dbPath}-shm`), false, 'no -shm beside the restored file');
+
+  const restored = await openStore({ path: dbPath });
+  try {
+    assert.deepEqual(users.listUsers(restored).map((u) => u.login), ['in-backup'], 'the stale -wal was not replayed onto it');
+  } finally {
+    closeStore(dbPath);
+  }
 });
 
 test('packc store restore gives the restored file the replaced store\'s mode (owner read-write, 0600 when there was none), not the backup\'s, and it opens in WAL', async () => {

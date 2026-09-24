@@ -12,11 +12,17 @@
 // the database: switching a WAL database out of WAL needs exclusive
 // access, so `PRAGMA journal_mode=DELETE` with no busy wait fails while
 // any other connection has the file open — even an idle one, which a
-// wal_checkpoint(TRUNCATE) would report as not busy. Then it moves the
-// database, -wal and -shm aside together (a -wal left by an unclean stop
-// would otherwise be replayed onto the restored file) and puts a copy of
-// the backup in its place, with the replaced file's mode and owner rather
-// than the backup's; the next open switches it back to WAL.
+// wal_checkpoint(TRUNCATE) would report as not busy. That probe also
+// checkpoints a -wal left by an unclean stop into the old database and
+// deletes the -wal and -shm (its connection's close does the same when the
+// probe fails on an unreadable file), so the aside copy keeps the crashed
+// writer's rows. Then it moves the database, -wal and -shm aside together
+// under one timestamp and puts a copy of the backup in its place, with the
+// replaced file's mode and owner rather than the backup's; the next open
+// switches it back to WAL. The -wal/-shm move only does anything when
+// there is a -wal or -shm but no database file to probe, or when one
+// appears between the probe and the rename: a -wal left beside the
+// restored file would be replayed onto it.
 
 import { chmodSync, chownSync, closeSync, copyFileSync, constants as fsConstants, existsSync, mkdirSync, openSync, renameSync, rmSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
