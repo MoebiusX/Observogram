@@ -49,6 +49,19 @@ function delegate(relPath, args) {
   });
 }
 
+// Exit only once stdout and stderr have flushed. On a pipe both streams
+// are asynchronous, so a bare process.exit() straight after a large
+// write drops the tail: `packc journey run --all --json` lost ~146 KB of
+// its 150 KB report to the pipe under `node --test`, and the reader got
+// unparseable JSON. The returned promise never settles; the pending
+// write keeps the process alive until the callback exits it, so
+// `await exitAfterFlush(n)` stops the caller exactly like process.exit.
+function exitAfterFlush(code) {
+  return new Promise(() => {
+    process.stdout.write('', () => process.stderr.write('', () => process.exit(code)));
+  });
+}
+
 async function runCompile(args) {
   // The third positional is the dashboard id for grafana-dashboard (the
   // target's own descriptor says "pass the dashboard id as an arg"); without
@@ -158,7 +171,7 @@ async function runJourneyCommand([sub, ...args]) {
     // 2 error, a definition that does not load included).
     if (args.includes('--all') && !ref) {
       const names = journeyLib.listJourneys();
-      if (!names.length) { console.log('(no journeys saved — add .observogram/journeys/<name>.journey.yaml)'); process.exit(0); }
+      if (!names.length) { console.log('(no journeys saved — add .observogram/journeys/<name>.journey.yaml)'); await exitAfterFlush(0); }
       const results = [];
       let worst = 0;
       for (const n of names) {
@@ -176,17 +189,17 @@ async function runJourneyCommand([sub, ...args]) {
         worst = Math.max(worst, exitCode);
       }
       if (asJson) process.stdout.write(JSON.stringify(results, null, 2) + '\n');
-      process.exit(worst);
+      await exitAfterFlush(worst);
     }
-    if (!ref) { console.error('usage: packc journey run <name|path/to/file.journey.yaml> [--json] | packc journey run --all [--json]'); process.exit(2); }
+    if (!ref) { console.error('usage: packc journey run <name|path/to/file.journey.yaml> [--json] | packc journey run --all [--json]'); await exitAfterFlush(2); }
     try {
       const def = journeyLib.loadJourneyDef(ref);
       const record = await journeyLib.runJourney(def);
       process.stdout.write(asJson ? JSON.stringify(record, null, 2) + '\n' : journeyLib.renderJourneyMarkdown(record) + '\n');
-      process.exit(record.outcome === 'pass' ? 0 : 1);
+      await exitAfterFlush(record.outcome === 'pass' ? 0 : 1);
     } catch (e) {
       console.error(`packc journey: ${e.message}`);
-      process.exit(2);
+      await exitAfterFlush(2);
     }
   }
   // Step 5: `schedule <name|path> [--format cron|schtasks|actions|k8s|all] [--json]`
@@ -203,11 +216,11 @@ async function runJourneyCommand([sub, ...args]) {
     const ref = args.find((a, i) => !a.startsWith('--') && !(fmtIdx >= 0 && i === fmtIdx + 1));
     const asJson = args.includes('--json');
     const format = fmtIdx >= 0 ? String(args[fmtIdx + 1] || '') : 'all';
-    if (!ref) { console.error('usage: packc journey schedule <name|path/to/file.journey.yaml> [--format cron|schtasks|actions|k8s|all] [--json]'); process.exit(2); }
+    if (!ref) { console.error('usage: packc journey schedule <name|path/to/file.journey.yaml> [--format cron|schtasks|actions|k8s|all] [--json]'); await exitAfterFlush(2); }
     const snippetsLib = await import('./lib/schedule-snippets.mjs');
-    if (format !== 'all' && !snippetsLib.SNIPPET_FORMATS.includes(format)) { console.error(`packc journey schedule: unknown --format ${format} (cron | schtasks | actions | k8s | all)`); process.exit(2); }
+    if (format !== 'all' && !snippetsLib.SNIPPET_FORMATS.includes(format)) { console.error(`packc journey schedule: unknown --format ${format} (cron | schtasks | actions | k8s | all)`); await exitAfterFlush(2); }
     let def;
-    try { def = journeyLib.loadJourneyDef(ref); } catch (e) { console.error(`packc journey: ${e.message}`); process.exit(2); }
+    try { def = journeyLib.loadJourneyDef(ref); } catch (e) { console.error(`packc journey: ${e.message}`); await exitAfterFlush(2); }
     const { parseSchedule } = await import('./lib/schedule.mjs');
     const { brandEnv } = await import('./lib/brand-env.mjs');
     const parsed = def.schedule === undefined || def.schedule === null ? null : parseSchedule(def.schedule);
@@ -228,15 +241,15 @@ async function runJourneyCommand([sub, ...args]) {
     const snippets = snippetsLib.scheduleSnippets(input);
     if (asJson) {
       process.stdout.write(JSON.stringify({ name: def.name, source: def.__source || null, schedule: parsed, placeholder: !parsed, envNames, snippets: format === 'all' ? snippets : { [format]: snippets[format] } }, null, 2) + '\n');
-      process.exit(0);
+      await exitAfterFlush(0);
     }
-    if (format !== 'all') { process.stdout.write(snippets[format]); process.exit(0); }
+    if (format !== 'all') { process.stdout.write(snippets[format]); await exitAfterFlush(0); }
     const titles = { cron: 'cron', schtasks: 'schtasks (Windows Task Scheduler)', actions: 'github-actions', k8s: 'kubernetes-cronjob' };
     for (const f of snippetsLib.SNIPPET_FORMATS) process.stdout.write(`## ${titles[f]}\n\n${snippets[f]}\n`);
-    process.exit(0);
+    await exitAfterFlush(0);
   }
   console.error('usage: packc journey <run|schedule|list> …');
-  process.exit(2);
+  await exitAfterFlush(2);
 }
 
 switch (command) {
