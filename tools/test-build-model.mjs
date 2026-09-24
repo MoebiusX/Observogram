@@ -56,6 +56,8 @@ import { renderBuildSheet, buildSheetHtml, wireBuildSheet, wireRolodex, SMOOTH_S
 import { artefactCardHtml } from '../studio/card-html.mjs';
 import { revealTodo, clauseRowHtml, switchHtml, evidenceDot, paramRowHtml, paramLabelHtml } from '../studio/build-atoms.mjs';
 import { installDialogFocusTrap, TRAPPED_DIALOGS } from '../studio/util.mjs';
+import * as studioDirection from '../studio/sli-direction.mjs';
+import * as engineDirection from './lib/good-when.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const FIX = resolve(ROOT, 'tools/fixtures/build');
@@ -1290,6 +1292,30 @@ test('artefactCardHtml is the one card body: Discover\'s head, chip, pill, title
   assert.equal((artefactCardHtml({ id: 'X', title: 'x', tags: ['a', 'b', 'c', 'd', 'e', 'f'] }).match(/class="tag"/g) || []).length, 4, 'four tags, as Discover shows');
   const hostile = artefactCardHtml({ id: 'X', title: '<img src=x>', desc: '"q"', source: 'Declared', tags: ['<b>'] });
   assert.ok(!hostile.includes('<img') && !hostile.includes('<b>') && hostile.includes('&lt;img src=x&gt;'));
+  // The subtitle the adapter gives an SLI (its bound with its direction) sits under the title; a card without one draws no line.
+  const lat = FIXTURE.adapted.layers.L1.find(a => a.title === 'kafka_produce_latency_p99');
+  assert.equal(lat.subtitle, '≤ 0.1 seconds', 'the fixture\'s threshold SLI carries its bound as a subtitle');
+  assert.ok(artefactCardHtml(lat).includes('<div class="card-title">kafka_produce_latency_p99</div>\n    <div class="card-sub">≤ 0.1 seconds</div>'));
+  assert.ok(!artefactCardHtml(bak).includes('card-sub') && !plain.includes('card-sub'));
+  assert.ok(artefactCardHtml({ id: 'X', title: 'x', subtitle: '≥ 2 <b>' }).includes('<div class="card-sub">≥ 2 &lt;b&gt;</div>'), 'escaped at the seam');
+  assert.ok(FIXTURE.adapted.layers.L1.filter(a => /^SLI-/.test(a.id) && a.spec?.type === 'ratio').every(a => !('subtitle' in a)), 'ratio SLIs carry none');
+});
+
+test('the studio\'s direction helper is the engine\'s, input for input: goodWhen, hasDirection, boundGlyph, boundText (the browser copy the drawer, the cards and the editor read)', () => {
+  const inputs = [
+    undefined, null, {}, { good_when: 'below' }, { good_when: 'above' }, { good_when: 'sideways' }, { good_when: null },
+    { type: 'threshold', threshold: 0.5, unit: 'seconds' }, { type: 'threshold', good_when: 'above', threshold: 2, unit: 'consumers' },
+    { type: 'threshold', good_when: 'above', threshold: -1.5 }, { type: 'threshold', threshold: 0 }, { type: 'threshold', threshold: '' },
+    { type: 'distribution', good_when: 'above', threshold: 1, unit: 'ratio', percentile: 0.99 }, { type: 'ratio', threshold: 3 },
+  ];
+  for (const s of inputs) {
+    assert.equal(studioDirection.goodWhen(s), engineDirection.goodWhen(s), JSON.stringify(s));
+    assert.equal(studioDirection.boundGlyph(s), engineDirection.boundGlyph(s), JSON.stringify(s));
+    assert.equal(studioDirection.boundText(s), engineDirection.boundText(s), JSON.stringify(s));
+    assert.equal(studioDirection.hasDirection(s?.type), engineDirection.hasDirection(s?.type), JSON.stringify(s));
+  }
+  assert.deepEqual([studioDirection.GOOD_WHEN, studioDirection.DEFAULT_GOOD_WHEN, studioDirection.DIRECTED_TYPES], [[...engineDirection.GOOD_WHEN], engineDirection.DEFAULT_GOOD_WHEN, [...engineDirection.DIRECTED_TYPES]]);
+  assert.deepEqual([engineDirection.goodWhen({}), engineDirection.boundText({ type: 'threshold', threshold: 0.5, unit: 'seconds' }), engineDirection.boundText({ good_when: 'above', threshold: 2, unit: 'consumers' })], ['below', '≤ 0.5 seconds', '≥ 2 consumers']);
 });
 
 // ---------------------------------------------------------------------------

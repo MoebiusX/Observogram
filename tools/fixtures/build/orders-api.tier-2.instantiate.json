@@ -1860,6 +1860,7 @@
           "id": "SLI-02",
           "title": "kafka_consumer_group_lag_seconds",
           "desc": "Maximum consumer-group lag in seconds equivalent, per consumer group (message-count lag over the group's rolling consumption rate).",
+          "subtitle": "≤ 60 seconds",
           "tool": "threshold SLI",
           "tags": [
             "sli",
@@ -1903,6 +1904,7 @@
           "id": "SLI-04",
           "title": "kafka_produce_latency_p99",
           "desc": "99th-percentile total time of Produce requests on the broker, in seconds (queue, local, replication wait, response send) — what a producer waits for an ack.",
+          "subtitle": "≤ 0.1 seconds",
           "tool": "threshold SLI",
           "tags": [
             "sli",
@@ -1925,6 +1927,7 @@
           "id": "SLI-05",
           "title": "kafka_fetch_latency_p99",
           "desc": "99th-percentile local (broker processing) time of FetchConsumer requests, in seconds.",
+          "subtitle": "≤ 0.05 seconds",
           "tool": "threshold SLI",
           "tags": [
             "sli",
@@ -1968,6 +1971,7 @@
           "id": "SLI-07",
           "title": "http_service_latency_p99",
           "desc": "99th-percentile server-side request duration in seconds, from the semconv http.server.request.duration histogram.",
+          "subtitle": "≤ 0.5 seconds",
           "tool": "threshold SLI",
           "tags": [
             "sli",

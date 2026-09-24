@@ -66,6 +66,23 @@ const sli = prod.layers.L1.find(a => a.title === 'api_availability');
 assert(sli && sli.defines === 'slis.api_availability', 'SLI defines slis.<id>', sli && sli.defines, 'slis.api_availability');
 assert(sli && sli.id === 'SLI-01',                     'SLI id pattern',         sli && sli.id, 'SLI-01');
 assert(sli && sli.source === 'Declared',               'SLI source = Declared',  sli && sli.source, 'Declared');
+// The bound with its direction as the card's subtitle (spec 1.3 good_when through good-when.mjs boundText):
+// a ratio SLI has none; a threshold SLI without good_when is a ceiling (≤); a floor prints ≥.
+assert(!('subtitle' in sli), 'a ratio SLI has no bound, no subtitle');
+const latency = prod.layers.L1.find(a => a.title === 'api_latency_p99');
+assert(latency?.subtitle === '≤ 0.5 seconds', 'a threshold SLI\'s subtitle is its bound with ≤ (absent good_when means below)', latency?.subtitle, '≤ 0.5 seconds');
+{
+  const floorPack = clone(canonical);
+  const lat = floorPack.spec.slis.find(s => s.id === 'api_latency_p99');
+  Object.assign(lat, { good_when: 'above', threshold: 2, unit: 'consumers' });
+  const floor = adapt(floorPack).layers.L1.find(a => a.title === 'api_latency_p99');
+  assert(floor?.subtitle === '≥ 2 consumers', 'a floor (good_when: above) prints ≥', floor?.subtitle, '≥ 2 consumers');
+  delete lat.unit;
+  assert(adapt(floorPack).layers.L1.find(a => a.title === 'api_latency_p99')?.subtitle === '≥ 2', 'no unit: the bare bound', adapt(floorPack).layers.L1.find(a => a.title === 'api_latency_p99')?.subtitle, '≥ 2');
+  const noBound = clone(canonical);
+  delete noBound.spec.slis.find(s => s.id === 'api_latency_p99').threshold;
+  assert(!('subtitle' in adapt(noBound).layers.L1.find(a => a.title === 'api_latency_p99')), 'no bound, no subtitle');
+}
 
 const slo = prod.layers.L1.find(a => a.title === 'api_availability_99_9');
 assert(slo && slo.defines === 'slos.api_availability_99_9',

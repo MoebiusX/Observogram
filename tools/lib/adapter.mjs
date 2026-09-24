@@ -11,6 +11,7 @@
 //   applyEnvironmentOverlay(spec, env)  -> { spec, effective }
 
 import { annotationList, buildRequirementTraceability } from './traceability.mjs';
+import { boundText, hasDirection } from './good-when.mjs';
 //
 // LAYERED DISPLAY OBJECT shape:
 //   {
@@ -33,6 +34,8 @@ import { annotationList, buildRequirementTraceability } from './traceability.mjs
 //     id: string,           // e.g. "SLI-01", "BAK-03"
 //     title: string,        // human label
 //     desc: string,         // one-line summary
+//     subtitle?: string,    // a threshold / distribution SLI's bound with its direction: '≤ 0.5 seconds', '≥ 2 consumers'
+//                           //   (spec 1.3 good_when through good-when.mjs boundText; absent means below)
 //     tool: string,         // implementation tool/family
 //     tags: string[],       // free-form tags
 //     source: 'Declared' | 'Verified' | 'Scaffold',
@@ -202,6 +205,8 @@ function adaptSLIs(ctx) {
     id: `SLI-${pad(i + 1)}`,
     title: sli.id,
     desc: sli.description || `${sli.type ?? '(untyped)'} SLI`,
+    // The bound as the card's subtitle, with the side that is good (≤ a ceiling, ≥ a floor) — the one helper every reader prints it through.
+    ...(hasDirection(sli.type) && boundText(sli) ? { subtitle: boundText(sli) } : {}),
     tool: SLI_TYPE_LABEL[sli.type] || 'SLI',
     tags: ['sli', sli.type, ...(sli.semconv_metric ? ['semconv'] : [])].filter(Boolean),
     source: ctx.sourceOf(`slis.${sli.id}`),

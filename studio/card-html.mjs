@@ -4,8 +4,10 @@
 // adapter artefact as a `.card` (Discover's layers view, the Build stack),
 // so the markup is written once and the two journeys cannot drift: the head
 // (id · unresolved-reference flag · version-gating chip · source pill), the
-// title, the one-line desc, the foot (tool · tags · an optional benchmark
-// CTA). Pure: it reads no state and touches no DOM — the caller passes what
+// title, the subtitle when the adapter gives one (an SLI's bound with its
+// direction: '≤ 0.5 seconds', '≥ 2 consumers'), the one-line desc, the foot
+// (tool · tags · an optional benchmark CTA). Pure: it reads no state and
+// touches no DOM — the caller passes what
 // it knows (the unresolved-reference count from its symbol table, the
 // benchmark match from the lens catalogue) and owns the element, its
 // classes (is-active, has-broken-refs, is-scaffold) and its click handling.
@@ -52,6 +54,7 @@ export function artefactCardHtml(artefact, { broken = 0, benchmark = null, tagLi
       <span class="card-source" data-source="${escapeHtml(artefact.source || 'Declared')}">${escapeHtml(artefact.source || 'Declared')}</span>
     </div>
     <div class="card-title">${escapeHtml(artefact.title || artefact.id)}</div>
+    ${artefact.subtitle ? `<div class="card-sub">${escapeHtml(artefact.subtitle)}</div>` : ''}
     ${artefact.desc ? `<div class="card-desc">${escapeHtml(artefact.desc)}</div>` : ''}
     <div class="card-foot">
       ${artefact.tool ? `<span class="tool">${escapeHtml(artefact.tool)}</span>` : ''}
