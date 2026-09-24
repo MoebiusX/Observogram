@@ -798,8 +798,15 @@ debounce, `editorDirtyAfterAnswer`: an older request answering must not read *ap
 for 0.999, a detour and back) changes nothing: the action says so and the status stays what
 the model says, never *applying…* with no request behind it.
 The editor lives in a persistent host on `<body>`, outside the re-rendered view
-(`syncBuildEditor` after every render of the main view), and `renderBuildEditor` keeps the
-focused control's TEXT, focus and caret across a re-render — the model's `99` never overwrites a
+(`syncBuildEditor` after every render of the main view). When the same editor (key and mode)
+is already mounted, `renderBuildEditor` redraws it IN PLACE — the head, the body and the
+footer's actions are replaced; the dialog node, the scrim and the status node stay — so the
+status line, a polite live region (`role=status aria-live=polite`), is the same node whose text
+changes when the pack answers: assistive technology announces a text change in an existing
+live region, not the initial text of a freshly inserted one (the *applied · …* answer once
+arrived by replacing the whole dialog's innerHTML and was never announced; the entrance
+animation replayed with it). Another key or mode renders the dialog whole. `renderBuildEditor`
+also keeps the focused control's TEXT, focus and caret across a re-render — the model's `99` never overwrites a
 typed `99.` — so typing three characters quickly loses none (measured live) and a value the
 engine rejects stays as typed beside its message (*got "abc"*). A field is found by its focus
 key, else by its field name when the key changed under it — a custom SLI's keys carry its id

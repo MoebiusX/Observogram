@@ -604,6 +604,35 @@ test('the render keeps the focused field’s text, focus and caret across a re-r
     log.length = 0;
     renderBuildEditor({ ...container, contains: () => true, querySelector: (sel) => (sel === '[data-focus-key="editor:done"]' ? doneBtn : sel === '.build-editor' ? dialogEl : null) }, model, { build: {} });
     assert.deepEqual(log, [['focus-done', { preventScroll: true }]]);
+    // The SAME editor already mounted (key and mode) is redrawn in place: the head, the body and the actions are
+    // replaced, the dialog node, the scrim and the status node (the polite live region) stay — assistive technology
+    // announces a text change in an existing live region, not the initial text of a freshly inserted one (the
+    // 'applied · …' answer once arrived by replacing the whole dialog's innerHTML; measured). Another key, or another
+    // mode: the dialog is rendered whole.
+    const part = () => ({ innerHTML: '' });
+    const status = { textContent: 'applying…', className: 'build-editor-status is-pending' };
+    const parts = { '.build-editor-head': part(), '.build-editor-body': part(), '.build-editor-actions': part(), '#build-editor-status': status };
+    const mountedSame = { className: 'build-editor is-edit', dataset: { editorKey: 'availability', editorMode: 'edit' }, addEventListener: () => log.push(['dialog-listener']), querySelector: (sel) => parts[sel] || null };
+    const scrim = { addEventListener: () => log.push(['scrim-listener']) };
+    const c4 = { innerHTML: 'UNTOUCHED', contains: () => false, querySelectorAll: () => [], querySelector: (sel) => (sel === '.build-editor' ? mountedSame : sel === '.build-editor-scrim' ? scrim : sel === '#build-editor-status' ? status : null) };
+    globalThis.document.activeElement = globalThis.document.body;
+    log.length = 0;
+    renderBuildEditor(c4, model, { build: {} });
+    assert.equal(c4.innerHTML, 'UNTOUCHED', 'the container is not replaced');
+    assert.deepEqual(log, [], 'the scrim and the dialog keep their listeners (no second binding)');
+    assert.ok(parts['.build-editor-head'].innerHTML.includes('<h2 class="build-editor-title" id="build-editor-title">availability</h2>'));
+    assert.ok(parts['.build-editor-body'].innerHTML.includes('id="build-editor-objective"') && parts['.build-editor-actions'].innerHTML.includes('data-editor-done'));
+    assert.deepEqual([status.textContent, status.className, mountedSame.dataset.editorKey], [model.status.text, `build-editor-status is-${model.status.kind}`, 'availability'], 'the same status node carries the answer');
+    const untouched = status;
+    renderBuildEditor(c4, dialogOf({ ...b, overrides: { availability: { objective: 0.999 } } }), { build: {} });
+    assert.equal(parts['#build-editor-status'], untouched, 'the second render of the same key reuses the status node');
+    // Another editor over the same host: rendered whole.
+    const c5 = { ...c4, innerHTML: 'UNTOUCHED' };
+    renderBuildEditor(c5, dialogOf(draftWith({ editor: { key: 'latency_p99', custom: false } })), { build: {} });
+    assert.ok(c5.innerHTML !== 'UNTOUCHED' && c5.innerHTML.includes('data-editor-key="latency_p99"'), 'another key: the dialog is rendered whole');
+    const c6 = { ...c4, innerHTML: 'UNTOUCHED' };
+    renderBuildEditor(c6, dialogOf(b, 'readonly'), { build: {} });
+    assert.ok(c6.innerHTML.includes('data-editor-mode="readonly"'), 'another mode: rendered whole');
   } finally {
     delete globalThis.document;
   }
