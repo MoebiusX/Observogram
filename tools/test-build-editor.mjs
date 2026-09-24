@@ -13,7 +13,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emit as emitYaml } from './lib/mini-yaml.mjs';
@@ -789,6 +789,12 @@ test('the stylesheet: one centered fixed modal above the sheet with the L1 accen
   for (const sel of ['.build-rolo-edit', '.build-rolo-create', '.build-edit-reset', '.build-editor-close', '.build-slab .card.is-editable', '.build-seed-chip.is-entry']) assert.ok(reduced.includes(sel), `${sel} is in the reduced-motion transition: none list`);
   const block = CSS_TEXT.slice(CSS_TEXT.indexOf('---- The editor'), CSS_TEXT.indexOf('@media (max-width: 760px)', CSS_TEXT.indexOf('---- The editor')));
   assert.deepEqual([...block.matchAll(/#[0-9a-fA-F]{3,6}\b/g)].map(m => m[0]), [], 'the tokens only — both themes follow');
+  // No dead rule: every .build-edit* / .build-editor* / .build-rolo* class the stylesheet names has a user in a studio module
+  // (`.build-rolo-objective b.build-rolo-needs` outlived the 'needs tier-N' chip by two slices).
+  const studioSrc = readdirSync(resolve(ROOT, 'studio')).filter(f => f.endsWith('.mjs')).map(f => readFileSync(resolve(ROOT, 'studio', f), 'utf8')).join('\n');
+  const named = [...new Set([...CSS_TEXT.matchAll(/\.(build-(?:edit|editor|rolo)[a-z0-9-]*)/g)].map(m => m[1]))];
+  assert.ok(named.length > 40, `the sweep sees the editor's classes (${named.length})`);
+  assert.deepEqual(named.filter(c => !studioSrc.includes(c)), [], 'every editor / rolodex class in the stylesheet is used by a studio module');
   assert.ok(/\[data-theme="dark"\] \.build-editor \{/.test(block), 'the dark theme adjusts the shadow');
   assert.match(cssRule('.build-rolo-edit'), /cursor:\s*pointer/);
   assert.match(cssRule('.build-rolo-create'), /appearance:\s*none;\s*cursor:\s*pointer;\s*text-align:\s*left/);
