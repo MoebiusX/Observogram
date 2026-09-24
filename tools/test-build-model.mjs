@@ -1316,6 +1316,13 @@ test('the studio\'s direction helper is the engine\'s, input for input: goodWhen
   }
   assert.deepEqual([studioDirection.GOOD_WHEN, studioDirection.DEFAULT_GOOD_WHEN, studioDirection.DIRECTED_TYPES], [[...engineDirection.GOOD_WHEN], engineDirection.DEFAULT_GOOD_WHEN, [...engineDirection.DIRECTED_TYPES]]);
   assert.deepEqual([engineDirection.goodWhen({}), engineDirection.boundText({ type: 'threshold', threshold: 0.5, unit: 'seconds' }), engineDirection.boundText({ good_when: 'above', threshold: 2, unit: 'consumers' })], ['below', '≤ 0.5 seconds', '≥ 2 consumers']);
+  // Each copy's header names the other and this test (the one place a reader is sent to for the twin): a header that
+  // names another module or another test sends them to the wrong file.
+  const header = (rel) => readFileSync(resolve(ROOT, rel), 'utf8').split('\n').filter(l => l.startsWith('//')).join('\n');
+  const engineHeader = header('tools/lib/good-when.mjs'), studioHeader = header('studio/sli-direction.mjs');
+  assert.ok(engineHeader.includes('studio/sli-direction.mjs') && engineHeader.includes('tools/test-build-model.mjs'), 'the engine helper names its browser copy and this test');
+  assert.ok(!/build-copies-model\.mjs|test-build-editor\.mjs/.test(engineHeader), 'the engine helper names no other module as the copy or the guard');
+  assert.ok(studioHeader.includes('tools/lib/good-when.mjs') && studioHeader.includes('tools/test-build-model.mjs'), 'the browser copy names the engine helper and this test');
 });
 
 // ---------------------------------------------------------------------------

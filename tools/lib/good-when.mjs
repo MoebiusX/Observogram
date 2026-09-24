@@ -10,8 +10,9 @@
 // Absent means below, and this module is the one place that says so: every reader — the
 // burn-rate generator, the dashboards, the adapter, the library engine, the CLI — asks
 // goodWhen(sli) and never the raw field, so a 1.2 pack reads exactly as it did. Zero imports,
-// browser-safe. The studio re-spells goodWhen for the browser (studio/build-copies-model.mjs,
-// which imports nothing from tools/lib) and tools/test-build-editor.mjs holds the two together.
+// browser-safe. The studio re-spells it for the browser (studio/sli-direction.mjs, zero imports:
+// a studio module cannot import tools/lib) and tools/test-build-model.mjs holds the two together
+// input for input.
 
 export const GOOD_WHEN = Object.freeze(['below', 'above']);
 export const DEFAULT_GOOD_WHEN = 'below';
