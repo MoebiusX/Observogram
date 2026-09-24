@@ -45,14 +45,35 @@ function subjects(db, orgId, userId) {
   return { org, user };
 }
 
+// The row insert, with the repository's rules and no audit row: internal
+// to server/store/ (the import, the identity operations), and only inside
+// the tx() whose own audit row covers it.
+export function insertMembershipRow(db, { orgId, userId, role, createdAt }) {
+  if (!db.isTransaction) throw new Error('observogram store: insertMembershipRow() runs inside the tx() whose audit row covers it');
+  requireRole(role);
+  if (createdAt !== undefined && (typeof createdAt !== 'string' || !Number.isFinite(Date.parse(createdAt)))) {
+    throw new TypeError('observogram store: createdAt is an ISO timestamp');
+  }
+  subjects(db, orgId, userId);
+  return rowToMembership(prepare(db, 'INSERT INTO memberships (org_id, user_id, role, created_at) VALUES (?, ?, ?, ?) RETURNING *')
+    .get(orgId, userId, role, createdAt ?? nowIso()));
+}
+
+// Internal (tx required, no audit): a role change that the caller's own
+// audit row records (the owner grant raising a membership to admin).
+export function setRoleRow(db, orgId, userId, role) {
+  if (!db.isTransaction) throw new Error('observogram store: setRoleRow() runs inside the tx() whose audit row covers it');
+  requireRole(role);
+  prepare(db, 'UPDATE memberships SET role = ? WHERE org_id = ? AND user_id = ?').run(role, orgId, userId);
+  return getMembership(db, orgId, userId);
+}
+
 export function addMembership(db, actor, { orgId, userId, role }) {
   requireRole(role);
   return atomic(db, () => {
-    const { user } = subjects(db, orgId, userId);
-    const row = prepare(db, 'INSERT INTO memberships (org_id, user_id, role, created_at) VALUES (?, ?, ?, ?) RETURNING *')
-      .get(orgId, userId, role, nowIso());
-    writeAudit(db, actor, { orgId, action: 'membership.add', targetKind: 'user', targetId: user.login, detail: { role } });
-    return rowToMembership(row);
+    const membership = insertMembershipRow(db, { orgId, userId, role });
+    writeAudit(db, actor, { orgId, action: 'membership.add', targetKind: 'user', targetId: getUser(db, userId).login, detail: { role } });
+    return membership;
   });
 }
 

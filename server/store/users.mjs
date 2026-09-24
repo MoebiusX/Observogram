@@ -5,7 +5,9 @@
 // today's users.json record verbatim ({ algo: 'scrypt', N, r, p, salt,
 // hash }) as JSON. Booleans are stored 0/1 and read back as booleans.
 //
-// session_epoch starts at the column default (1). Disabling a user,
+// session_epoch starts at 1 (0 for a row the legacy import or the first
+// sight of a pre-upgrade cookie creates: such cookies read as epoch 0).
+// Disabling a user,
 // changing a password and "sign out everywhere" bump it, which is what
 // revokes the user's cookies once sessions carry it (slice 2). Users are
 // never deleted: the audit references them, and a disabled row is what
@@ -45,35 +47,88 @@ function mustGet(db, id) {
   return user;
 }
 
-export function createUser(db, actor, {
+// The row insert every creator shares, with the repository's rules and no
+// audit row: internal to server/store/ (the import, the identity
+// operations), and only inside the one tx() whose own audit row covers it
+// — it throws anywhere else. A local login is at most 200 characters; an
+// OIDC login is <issuerKey>#<sub>, each part capped at 2000, so 4100.
+// session_epoch defaults to 1 (a fresh row); the import and the first
+// sight of a pre-upgrade cookie create rows at 0.
+export function insertUserRow(db, {
   kind = 'local', login, issuer = null, sub = null, email = null, emailVerified = false, name = null,
   password = null, mustChange = false, seededDefault = false, isOwner = false,
+  sessionEpoch = 1, disabled = false, createdAt,
 }) {
+  if (!db.isTransaction) throw new Error('observogram store: insertUserRow() runs inside the tx() whose audit row covers it');
   if (kind !== 'local' && kind !== 'oidc') throw new TypeError(`observogram store: user kind is local or oidc, not ${JSON.stringify(kind)}`);
-  requireText(login, 'login');
+  requireText(login, 'login', { max: kind === 'oidc' ? 4100 : 200 });
   if (password !== null && (typeof password !== 'object' || Array.isArray(password))) {
     throw new TypeError('observogram store: password is the hashed record object, or null');
   }
-  return atomic(db, () => {
-    const row = prepare(db, `INSERT INTO users (kind, login, issuer, sub, email, email_verified, name, password,
-        must_change, seeded_default, is_owner, created_at)
-      VALUES (:kind, :login, :issuer, :sub, :email, :email_verified, :name, :password,
-        :must_change, :seeded_default, :is_owner, :created_at) RETURNING *`).get({
-      kind, login,
-      issuer: optionalText(issuer, 'issuer', { max: 2000 }),
-      sub: optionalText(sub, 'sub', { max: 2000 }),
-      email: optionalText(email, 'email', { max: 320 }),
-      email_verified: bit(emailVerified),
-      name: optionalText(name, 'name'),
-      password: password === null ? null : toJson(password),
-      must_change: bit(mustChange),
-      seeded_default: bit(seededDefault),
-      is_owner: bit(isOwner),
-      created_at: nowIso(),
-    });
-    writeAudit(db, actor, { action: 'user.create', targetKind: 'user', targetId: login, detail: { kind, isOwner: !!isOwner } });
-    return rowToUser(row);
+  if (!Number.isSafeInteger(sessionEpoch) || sessionEpoch < 0) {
+    throw new TypeError('observogram store: sessionEpoch is a non-negative integer');
+  }
+  if (createdAt !== undefined && (typeof createdAt !== 'string' || !Number.isFinite(Date.parse(createdAt)))) {
+    throw new TypeError('observogram store: createdAt is an ISO timestamp');
+  }
+  const row = prepare(db, `INSERT INTO users (kind, login, issuer, sub, email, email_verified, name, password,
+      must_change, seeded_default, is_owner, disabled, session_epoch, created_at)
+    VALUES (:kind, :login, :issuer, :sub, :email, :email_verified, :name, :password,
+      :must_change, :seeded_default, :is_owner, :disabled, :session_epoch, :created_at) RETURNING *`).get({
+    kind, login,
+    issuer: optionalText(issuer, 'issuer', { max: 2000 }),
+    sub: optionalText(sub, 'sub', { max: 2000 }),
+    email: optionalText(email, 'email', { max: 320 }),
+    email_verified: bit(emailVerified),
+    name: optionalText(name, 'name'),
+    password: password === null ? null : toJson(password),
+    must_change: bit(mustChange),
+    seeded_default: bit(seededDefault),
+    is_owner: bit(isOwner),
+    disabled: bit(disabled),
+    session_epoch: sessionEpoch,
+    created_at: createdAt ?? nowIso(),
   });
+  return rowToUser(row);
+}
+
+export function createUser(db, actor, fields) {
+  return atomic(db, () => {
+    const user = insertUserRow(db, { ...fields, createdAt: undefined });
+    writeAudit(db, actor, {
+      action: 'user.create', targetKind: 'user', targetId: user.login,
+      detail: { kind: user.kind, isOwner: user.isOwner, sessionEpoch: user.sessionEpoch, disabled: user.disabled },
+    });
+    return user;
+  });
+}
+
+// Audit-free bookkeeping, like packs.touch(): the time of the last
+// successful sign-in.
+export function touchLogin(db, id, at = nowIso()) {
+  return atomic(db, () => {
+    prepare(db, 'UPDATE users SET last_login_at = ? WHERE id = ?').run(at, id);
+  });
+}
+
+// Internal (tx required, no audit): the owner flag, for the operations in
+// server/store/identity.mjs that write one audit row of their own.
+export function setOwnerRow(db, id, isOwner) {
+  if (!db.isTransaction) throw new Error('observogram store: setOwnerRow() runs inside the tx() whose audit row covers it');
+  prepare(db, 'UPDATE users SET is_owner = ? WHERE id = ?').run(bit(isOwner), id);
+  return getUser(db, id);
+}
+
+// For `npm run users -- list`: every user by id, with its memberships in
+// live orgs ([{ orgId, role }], first membership first).
+export function listUsersWithMemberships(db) {
+  const byUser = new Map();
+  for (const m of prepare(db, `SELECT m.user_id, m.org_id, m.role FROM memberships m JOIN orgs o ON o.id = m.org_id
+      WHERE o.removed_at IS NULL ORDER BY m.created_at, m.rowid`).all()) {
+    if (!byUser.has(m.user_id)) byUser.set(m.user_id, []);
+    byUser.get(m.user_id).push({ orgId: m.org_id, role: m.role });
+  }
+  return listUsers(db).map((u) => ({ ...u, memberships: byUser.get(u.id) || [] }));
 }
 
 // name, email, emailVerified. Not a revocation, so the epoch stays.

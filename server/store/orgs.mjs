@@ -28,19 +28,30 @@ export function listOrgs(db, { includeRemoved = false } = {}) {
   return prepare(db, sql).all().map(rowToOrg);
 }
 
-// Deployment event: org_id NULL on the audit row.
-export function createOrg(db, actor, { id, name, root }) {
+// The row insert, with the repository's rules and no audit row: internal
+// to server/store/ (the import, the identity operations), and only inside
+// the tx() whose own audit row covers it.
+export function insertOrgRow(db, { id, name, root, createdAt }) {
+  if (!db.isTransaction) throw new Error('observogram store: insertOrgRow() runs inside the tx() whose audit row covers it');
   if (!validOrgId(id)) throw new TypeError(`observogram store: invalid org id ${JSON.stringify(id)} (a slug: lowercase letters, digits, - and _)`);
   requireText(name, 'name');
   const fixedRoot = root === '.' ? '.' : `orgs/${id}`;
   if (root !== undefined && root !== fixedRoot) {
     throw new TypeError(`observogram store: an org's root is '.' (the default org, asked for explicitly) or 'orgs/${id}', not ${JSON.stringify(root)}`);
   }
+  if (createdAt !== undefined && (typeof createdAt !== 'string' || !Number.isFinite(Date.parse(createdAt)))) {
+    throw new TypeError('observogram store: createdAt is an ISO timestamp');
+  }
+  if (getOrg(db, id)) throw new Error(`observogram store: org ${JSON.stringify(id)} exists or existed — a slug is never reused`);
+  return rowToOrg(prepare(db, 'INSERT INTO orgs (id, name, root, created_at) VALUES (?, ?, ?, ?) RETURNING *').get(id, name, fixedRoot, createdAt ?? nowIso()));
+}
+
+// Deployment event: org_id NULL on the audit row.
+export function createOrg(db, actor, { id, name, root }) {
   return atomic(db, () => {
-    if (getOrg(db, id)) throw new Error(`observogram store: org ${JSON.stringify(id)} exists or existed — a slug is never reused`);
-    const row = prepare(db, 'INSERT INTO orgs (id, name, root, created_at) VALUES (?, ?, ?, ?) RETURNING *').get(id, name, fixedRoot, nowIso());
-    writeAudit(db, actor, { action: 'org.create', targetKind: 'org', targetId: id, detail: { name, root: fixedRoot } });
-    return rowToOrg(row);
+    const org = insertOrgRow(db, { id, name, root });
+    writeAudit(db, actor, { action: 'org.create', targetKind: 'org', targetId: id, detail: { name, root: org.root } });
+    return org;
   });
 }
 

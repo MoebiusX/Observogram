@@ -1579,3 +1579,350 @@ test('the store holds password records, so no file it creates is group or world 
   assert.equal(r2.code, 0, r2.stderr);
   assert.equal(modeOf(freshPath), 0o600, 'a restore with no previous store is 0600');
 });
+
+// ---------- Slice 2: identity repositories and rules ----------
+
+const dbModule = await import('./store/db.mjs');
+const rows = await import('./store/rows.mjs');
+const identity = await import('./store/identity.mjs');
+
+test('currentStore returns the handle openStore cached for the path resolveDbPath reads now, and throws ERR_OBSERVOGRAM_STORE_NOT_OPEN before any open', async () => {
+  const saved = process.env.OBSERVOGRAM_DB;
+  const path = join(tempDir('current'), 'observogram.db');
+  try {
+    process.env.OBSERVOGRAM_DB = path;
+    assert.equal(dbModule.storeIsOpen(), false);
+    assert.throws(() => dbModule.currentStore(), (e) => e.code === 'ERR_OBSERVOGRAM_STORE_NOT_OPEN' && e.message.includes(path));
+    assert.equal(existsSync(path), false, 'the lookup creates nothing');
+    const db = await openStore();
+    assert.equal(dbModule.currentStore(), db);
+    assert.equal(dbModule.storeIsOpen(), true);
+    process.env.OBSERVOGRAM_DB = join(tempDir('current-other'), 'observogram.db');
+    assert.throws(() => dbModule.currentStore(), /not open/, 'the env is re-read on every call');
+    process.env.OBSERVOGRAM_DB = path;
+    closeStore(path);
+    assert.throws(() => dbModule.currentStore(), /not open/, 'a closed handle is not current');
+  } finally {
+    if (saved === undefined) delete process.env.OBSERVOGRAM_DB; else process.env.OBSERVOGRAM_DB = saved;
+    closeStore(path);
+  }
+});
+
+test('createUser takes sessionEpoch 0 and disabled; an OIDC login may be longer than 200; insertUserRow refuses outside a transaction and writes no audit row; touchLogin writes last_login_at and no audit row; textOk agrees with requireText on \'\', \'  \', a 200- and a 201-character string', async () => {
+  const { db, close } = await freshStore('users2');
+  try {
+    const u = users.createUser(db, 'system', { login: 'zero', sessionEpoch: 0, disabled: true });
+    assert.deepEqual([u.sessionEpoch, u.disabled], [0, true]);
+    assert.deepEqual(auditRepo.listAudit(db, { limit: 1 })[0].detail, { kind: 'local', isOwner: false, sessionEpoch: 0, disabled: true });
+    assert.equal(users.createUser(db, 'system', { login: 'one' }).sessionEpoch, 1, 'epoch 1 by default');
+    for (const bad of [-1, 1.5, '0', null, Number.MAX_SAFE_INTEGER + 1]) {
+      assert.throws(() => users.createUser(db, 'system', { login: `bad-${bad}`, sessionEpoch: bad }), /sessionEpoch/, String(bad));
+    }
+    const longSub = 'x'.repeat(300);
+    const oidc = users.createUser(db, 'system', { kind: 'oidc', login: `https://idp.example/#${longSub}`, issuer: 'https://idp.example/', sub: longSub });
+    assert.ok(oidc.login.length > 200);
+    assert.throws(() => users.createUser(db, 'system', { login: 'l'.repeat(201) }), /login must be/, 'a local login stays at 200');
+    assert.throws(() => users.createUser(db, 'system', { kind: 'oidc', login: 'o'.repeat(4101), issuer: 'i', sub: 's' }), /at most 4100/);
+
+    const before = auditActions(db).length;
+    assert.throws(() => users.insertUserRow(db, { login: 'loose' }), /inside the tx\(\)/);
+    const inserted = tx(db, () => users.insertUserRow(db, { login: 'quiet', sessionEpoch: 0, createdAt: '2020-01-02T03:04:05.000Z' }));
+    assert.equal(inserted.createdAt, '2020-01-02T03:04:05.000Z');
+    assert.throws(() => tx(db, () => users.insertUserRow(db, { login: 'when', createdAt: 'yesterday' })), /createdAt/);
+    assert.equal(auditActions(db).length, before, 'insertUserRow writes no audit row');
+
+    assert.equal(inserted.lastLoginAt, null);
+    users.touchLogin(db, inserted.id, '2026-01-01T00:00:00.000Z');
+    assert.equal(users.getUser(db, inserted.id).lastLoginAt, '2026-01-01T00:00:00.000Z');
+    assert.equal(auditActions(db).length, before, 'touchLogin writes no audit row');
+
+    for (const [v, ok] of [['', false], ['  ', false], ['a'.repeat(200), true], ['a'.repeat(201), false], [null, false], [7, false], ['John Smith', true]]) {
+      assert.equal(rows.textOk(v), ok, JSON.stringify(v));
+      if (ok) assert.equal(rows.requireText(v, 'f'), v);
+      else assert.throws(() => rows.requireText(v, 'f'), /non-empty string/);
+    }
+    assert.equal(rows.textOk('a'.repeat(320), { max: 320 }), true);
+
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    orgs.createOrg(db, 'system', { id: 'gone', name: 'Gone' });
+    memberships.addMembership(db, 'system', { orgId: 'acme', userId: u.id, role: 'viewer' });
+    memberships.addMembership(db, 'system', { orgId: 'gone', userId: u.id, role: 'admin' });
+    orgs.removeOrg(db, 'system', 'gone');
+    const listed = users.listUsersWithMemberships(db);
+    assert.deepEqual(listed.map((x) => x.login), ['zero', 'one', oidc.login, 'quiet']);
+    assert.deepEqual(listed[0].memberships, [{ orgId: 'acme', role: 'viewer' }], 'live orgs only');
+    assert.deepEqual(listed[1].memberships, []);
+  } finally {
+    close();
+  }
+});
+
+test('putMeta writes no audit row, refuses outside a transaction and deletes on null; getMetaJson names the key on bad JSON; isIdentityArmed reads the flag', async () => {
+  const { db, close } = await freshStore('meta2');
+  try {
+    assert.throws(() => meta.putMeta(db, 'import_done', 'x'), /inside the tx\(\)/);
+    tx(db, () => meta.putMeta(db, 'legacy_hashes', JSON.stringify({ 'users.json': { absent: true } })));
+    assert.deepEqual(meta.getMetaJson(db, 'legacy_hashes'), { 'users.json': { absent: true } });
+    assert.equal(meta.getMetaJson(db, 'nothing', { d: 1 }).d, 1);
+    tx(db, () => meta.putMeta(db, 'import_report', '{broken'));
+    assert.throws(() => meta.getMetaJson(db, 'import_report'), /import_report is not valid JSON/);
+    tx(db, () => meta.putMeta(db, 'import_report', null));
+    assert.equal(meta.getMeta(db, 'import_report'), null, 'null deletes');
+    assert.throws(() => tx(db, () => meta.putMeta(db, 'store_id', 'forged')), /fixed at creation/);
+    assert.equal(meta.isIdentityArmed(db), false);
+    tx(db, () => meta.putMeta(db, 'identity_armed', '1'));
+    assert.equal(meta.isIdentityArmed(db), true);
+    assert.deepEqual(auditActions(db), [], 'no audit row');
+  } finally {
+    close();
+  }
+});
+
+test('insertOrgRow and insertMembershipRow: the repositories\' rules, tx required, no audit row; createOrg and addMembership still write one', async () => {
+  const { db, close } = await freshStore('rows2');
+  try {
+    assert.throws(() => orgs.insertOrgRow(db, { id: 'acme', name: 'Acme' }), /inside the tx\(\)/);
+    const alice = users.createUser(db, 'system', { login: 'alice' });
+    const before = auditActions(db);
+    tx(db, () => {
+      assert.equal(orgs.insertOrgRow(db, { id: 'default', name: 'Default', root: '.', createdAt: '2020-01-01T00:00:00.000Z' }).root, '.');
+      assert.equal(orgs.insertOrgRow(db, { id: 'acme', name: 'Acme' }).root, 'orgs/acme');
+      assert.throws(() => orgs.insertOrgRow(db, { id: 'Bad!', name: 'x' }), /invalid org id/);
+      assert.throws(() => orgs.insertOrgRow(db, { id: 'bravo', name: '   ' }), /name must be/);
+      assert.throws(() => orgs.insertOrgRow(db, { id: 'acme', name: 'Again' }), /never reused/);
+      memberships.insertMembershipRow(db, { orgId: 'acme', userId: alice.id, role: 'admin' });
+      assert.throws(() => memberships.insertMembershipRow(db, { orgId: 'acme', userId: alice.id, role: 'member' }), /role is one of/);
+      assert.throws(() => memberships.insertMembershipRow(db, { orgId: 'nope', userId: alice.id, role: 'admin' }), /no org/);
+    });
+    assert.throws(() => memberships.insertMembershipRow(db, { orgId: 'default', userId: alice.id, role: 'admin' }), /inside the tx\(\)/);
+    assert.deepEqual(auditActions(db), before, 'no audit rows');
+    assert.equal(orgs.getOrg(db, 'default').createdAt, '2020-01-01T00:00:00.000Z');
+    orgs.createOrg(db, 'system', { id: 'bravo', name: 'Bravo' });
+    memberships.addMembership(db, 'system', { orgId: 'bravo', userId: alice.id, role: 'viewer' });
+    assert.deepEqual(auditActions(db).slice(before.length), ['org.create', 'membership.add']);
+  } finally {
+    close();
+  }
+});
+
+test('canonIssuer: the well-known suffix stripped with and without a query after it, bare origins folded, a fragment dropped, userinfo / non-http / not-a-URL refused, a path slash kept', () => {
+  const b2c = 'https://t.b2clogin.com/t.onmicrosoft.com/v2.0';
+  for (const v of ['http://127.0.0.1:1234', 'http://127.0.0.1:1234/', 'http://127.0.0.1:1234/.well-known/openid-configuration', ' http://127.0.0.1:1234/#x ']) {
+    assert.equal(identity.canonIssuer(v), 'http://127.0.0.1:1234/', v);
+  }
+  assert.equal(identity.canonIssuer(`${b2c}/.well-known/openid-configuration?p=B2C_1_signin`), `${b2c}?p=B2C_1_signin`);
+  assert.equal(identity.canonIssuer(`${b2c}?p=B2C_1_signin`), `${b2c}?p=B2C_1_signin`);
+  assert.equal(identity.canonIssuer('https://idp.example/realms/x/'), 'https://idp.example/realms/x/', 'a path slash is kept');
+  assert.equal(identity.canonIssuer('https://idp.example/realms/x'), 'https://idp.example/realms/x');
+  assert.equal(identity.canonIssuer('https://idp.example/realms/x/.well-known/openid-configuration/'), 'https://idp.example/realms/x');
+  assert.ok(!identity.canonIssuer('https://idp.example/a#frag').includes('#'), 'a key never holds #');
+  assert.throws(() => identity.canonIssuer('not a url'), /OBSERVOGRAM_OIDC_ISSUER is not a URL/);
+  assert.throws(() => identity.canonIssuer('ftp://idp.example/'), /http\(s\) URL, not ftp:/);
+  assert.throws(() => identity.canonIssuer('https://user:s3cret@idp.example/'), (e) => /credentials/.test(e.message) && !e.message.includes('s3cret'));
+  assert.throws(() => identity.canonIssuer(`https://idp.example/${'p'.repeat(2000)}`), /longer than 2000/);
+  assert.equal(identity.oidcLogin('http://127.0.0.1:1234/', 'user-1'), 'http://127.0.0.1:1234/#user-1');
+  assert.equal(identity.preStoreSub({ kind: 'oidc', login: 'k#s', sub: 's' }), 's');
+  assert.equal(identity.preStoreSub({ kind: 'local', login: 'alice', sub: null }), 'alice');
+});
+
+test('sanitiseClaims: name \'\' and \'  \' → null, a 250-character name sliced, email \'\' → null, a sub of \'\' refused, a 2001-character iss replaced by the configured issuer', () => {
+  const env = 'https://idp.example/';
+  const base = { sub: ' sub 1 ', iss: 'https://idp.example', email: ' A@x.io ', email_verified: true, name: ' Alice ' };
+  assert.deepEqual(identity.sanitiseClaims(base, env), { sub: ' sub 1 ', iss: 'https://idp.example', email: 'A@x.io', email_verified: true, name: 'Alice' });
+  for (const name of ['', '  ', 7, undefined]) assert.equal(identity.sanitiseClaims({ ...base, name }, env).name, null, JSON.stringify(name));
+  assert.equal(identity.sanitiseClaims({ ...base, name: 'n'.repeat(250) }, env).name.length, 200);
+  for (const email of ['', '   ', 'no-at', 'a@b@c', `${'e'.repeat(320)}@x.io`, null]) {
+    assert.equal(identity.sanitiseClaims({ ...base, email }, env).email, null, JSON.stringify(email));
+  }
+  assert.equal(identity.sanitiseClaims({ ...base, email_verified: 'true' }, env).email_verified, false);
+  assert.equal(identity.sanitiseClaims({ ...base, iss: 'i'.repeat(2001) }, env).iss, env);
+  assert.equal(identity.sanitiseClaims({ ...base, iss: undefined }, env).iss, env);
+  for (const sub of ['', '  ', 42, undefined, 's'.repeat(2001)]) {
+    assert.throws(() => identity.sanitiseClaims({ ...base, sub }, env), (e) => e.code === 'ERR_OBSERVOGRAM_UNUSABLE_SUB' && /sub is unusable/.test(e.message), JSON.stringify(sub));
+  }
+});
+
+test('mapLegacyRole table; parseJoinRole; parseBootstrapAdmin: sub form split at the first \'#\', email form, malformed refused; bootstrapMatches: an unverified or string-\'true\' email never matches', () => {
+  const table = [
+    ['admin', 'admin', true], ['owner', 'admin', false], ['Admin', 'admin', false], [' Viewer ', 'viewer', false],
+    ['viewer', 'viewer', true], ['read', 'viewer', false], ['readonly', 'viewer', false], ['read-only', 'viewer', false],
+    ['operator', 'operator', true], ['member', 'operator', false], ['editor', 'operator', false], ['admn', 'operator', false],
+    ['', 'operator', false], [null, 'operator', false], [undefined, 'operator', false], [3, 'operator', false],
+  ];
+  for (const [v, role, exact] of table) assert.deepEqual(identity.mapLegacyRole(v), { role, exact }, JSON.stringify(v));
+
+  assert.equal(identity.parseJoinRole(''), undefined);
+  assert.equal(identity.parseJoinRole(undefined), undefined);
+  assert.equal(identity.parseJoinRole('none'), null);
+  for (const r of ['viewer', 'operator', 'admin']) assert.equal(identity.parseJoinRole(r), r);
+  for (const bad of ['Admin', 'member', 'owner']) assert.throws(() => identity.parseJoinRole(bad), /viewer, operator, admin or none/);
+
+  assert.equal(identity.parseBootstrapAdmin(''), null);
+  assert.deepEqual(identity.parseBootstrapAdmin('http://127.0.0.1:1234/.well-known/openid-configuration#user-60'),
+    { kind: 'login', issuerKey: 'http://127.0.0.1:1234/', login: 'http://127.0.0.1:1234/#user-60' });
+  assert.deepEqual(identity.parseBootstrapAdmin('https://idp.example#a#b'),
+    { kind: 'login', issuerKey: 'https://idp.example/', login: 'https://idp.example/#a#b' }, 'split at the first #');
+  assert.deepEqual(identity.parseBootstrapAdmin(' Ops@Example.COM '), { kind: 'email', email: 'ops@example.com' });
+  for (const bad of ['alice', 'a b@x', 'not-a-url#sub', 'https://idp.example#', '@x']) {
+    assert.throws(() => identity.parseBootstrapAdmin(bad), /OBSERVOGRAM_BOOTSTRAP_ADMIN is <issuer>#<sub> or an email/, bad);
+  }
+
+  const key = 'https://idp.example/';
+  const loginSpec = identity.parseBootstrapAdmin(`${key}#u1`);
+  assert.equal(identity.bootstrapMatches(loginSpec, { login: `${key}#u1` }, key), true);
+  assert.equal(identity.bootstrapMatches(loginSpec, { login: `${key}#u1` }, 'https://other/'), false);
+  const mailSpec = identity.parseBootstrapAdmin('ops@example.com');
+  assert.equal(identity.bootstrapMatches(mailSpec, { login: 'x', email: 'OPS@example.com', emailVerified: true }, key), true);
+  assert.equal(identity.bootstrapMatches(mailSpec, { login: 'x', email: 'ops@example.com', emailVerified: false }, key), false);
+  assert.equal(identity.bootstrapMatches(mailSpec, { login: 'x', email: 'ops@example.com', emailVerified: 'true' }, key), false);
+  assert.equal(identity.bootstrapMatches(mailSpec, { login: 'x', email: 'ops@example.com' }, key), false);
+  assert.equal(identity.bootstrapMatches(null, { login: 'x' }, key), false);
+});
+
+const KEY = 'https://idp.example/';
+async function identityStore(tag) {
+  const s = await freshStore(tag);
+  identity.ensureDefaultOrg(s.db, 'cli');
+  return s;
+}
+
+test('ensureDefaultOrg creates default at "." with org.create and meta.set once, then returns it; defaultOrgId and liveOrg', async () => {
+  const { db, close } = await freshStore('defaultorg');
+  try {
+    assert.throws(() => identity.defaultOrgId(db), (e) => e.code === 'ERR_OBSERVOGRAM_STORE_NO_DEFAULT_ORG');
+    const org = identity.ensureDefaultOrg(db, 'cli');
+    assert.deepEqual([org.id, org.name, org.root], ['default', 'Default', '.']);
+    assert.equal(identity.ensureDefaultOrg(db, 'cli').id, 'default');
+    assert.equal(identity.defaultOrgId(db), 'default');
+    assert.deepEqual(auditRepo.listAudit(db).reverse().map((r) => [r.action, r.actor, r.targetId]), [['org.create', 'cli', 'default'], ['meta.set', 'cli', 'default_org']]);
+    assert.equal(identity.liveOrg(db, 'default').id, 'default');
+    orgs.createOrg(db, 'cli', { id: 'gone', name: 'Gone' });
+    orgs.removeOrg(db, 'cli', 'gone');
+    assert.equal(identity.liveOrg(db, 'gone'), null);
+    assert.equal(identity.liveOrg(db, 'Bad!'), null);
+    assert.equal(identity.liveOrg(db, 'nope'), null);
+  } finally {
+    close();
+  }
+});
+
+test('createOidcUser joins the default org only when oidc_join_role is set, writing user.jit and membership.jit only', async () => {
+  const { db, close } = await identityStore('jit');
+  try {
+    const n0 = auditActions(db).length;
+    const a = identity.createOidcUser(db, { issuerKey: KEY, issuerDisplay: 'https://idp.example', sub: 'a', sessionEpoch: 1, via: 'callback' });
+    assert.deepEqual([a.kind, a.login, a.issuer, a.sub, a.sessionEpoch], ['oidc', `${KEY}#a`, 'https://idp.example', 'a', 1]);
+    assert.deepEqual(memberships.listMembershipsForUser(db, a.id), [], 'no join without oidc_join_role');
+    meta.setMeta(db, 'system', 'oidc_join_role', 'operator');
+    const b = identity.createOidcUser(db, { issuerKey: KEY, issuerDisplay: KEY, sub: 'b', sessionEpoch: 0, via: 'pre-upgrade-cookie' });
+    assert.deepEqual(memberships.listMembershipsForUser(db, b.id).map((m) => [m.orgId, m.role]), [['default', 'operator']]);
+    const rowsAfter = auditRepo.listAudit(db).reverse().slice(n0);
+    assert.deepEqual(rowsAfter.map((r) => [r.action, r.actor, r.orgId, r.targetId, r.detail]), [
+      ['user.jit', 'system', null, `${KEY}#a`, { via: 'callback', sessionEpoch: 1 }],
+      ['meta.set', 'system', null, 'oidc_join_role', null],
+      ['user.jit', 'system', null, `${KEY}#b`, { via: 'pre-upgrade-cookie', sessionEpoch: 0 }],
+      ['membership.jit', 'system', 'default', `${KEY}#b`, { role: 'operator' }],
+    ]);
+    orgs.removeOrg(db, 'cli', 'default');
+    const c = identity.createOidcUser(db, { issuerKey: KEY, issuerDisplay: KEY, sub: 'c', via: 'callback' });
+    assert.deepEqual(memberships.listMembershipsForUser(db, c.id), [], 'no join into a removed default org');
+    const again = identity.firstSightOidc(db, { issuerKey: KEY, issuerDisplay: KEY, sub: 'c' });
+    assert.equal(again.id, c.id, 'a UNIQUE race re-reads the row');
+  } finally {
+    close();
+  }
+});
+
+test('grantOwner writes one row of its action and makes the user admin of the default org, raising an existing membership', async () => {
+  const { db, close } = await identityStore('grant');
+  try {
+    const pw = { algo: 'scrypt', hash: 'aGFzaA==' };
+    const alice = users.createUser(db, 'cli', { login: 'alice', password: pw });
+    const bob = users.createUser(db, 'cli', { login: 'bob', password: pw });
+    const carl = users.createUser(db, 'cli', { login: 'carl', password: pw });
+    memberships.addMembership(db, 'cli', { orgId: 'default', userId: bob.id, role: 'viewer' });
+    memberships.addMembership(db, 'cli', { orgId: 'default', userId: carl.id, role: 'admin' });
+    const n0 = auditActions(db).length;
+    assert.equal(identity.grantOwner(db, 'cli', alice.id, { action: 'owner.first-local-user', via: 'users add' }).isOwner, true);
+    identity.grantOwner(db, 'system', bob.id, { action: 'owner.bootstrap', via: 'OBSERVOGRAM_BOOTSTRAP_ADMIN', match: 'email' });
+    identity.grantOwner(db, 'cli', carl.id, { action: 'owner.bootstrap', via: 'users owner' });
+    assert.throws(() => identity.grantOwner(db, 'cli', carl.id, { action: 'user.owner.grant' }), /owner grant is one of/);
+    const got = auditRepo.listAudit(db).reverse().slice(n0).map((r) => [r.action, r.actor, r.orgId, r.targetId, r.detail]);
+    assert.deepEqual(got, [
+      ['owner.first-local-user', 'cli', null, 'alice', { via: 'users add', match: null, org: 'default', membership: 'added' }],
+      ['owner.bootstrap', 'system', null, 'bob', { via: 'OBSERVOGRAM_BOOTSTRAP_ADMIN', match: 'email', org: 'default', membership: 'raised' }],
+      ['owner.bootstrap', 'cli', null, 'carl', { via: 'users owner', match: null, org: 'default', membership: 'kept' }],
+    ]);
+    for (const u of [alice, bob, carl]) {
+      assert.equal(memberships.getMembership(db, 'default', u.id).role, 'admin', u.login);
+      assert.equal(users.getUser(db, u.id).isOwner, true);
+    }
+  } finally {
+    close();
+  }
+});
+
+test('signInOwnerCount per mode: local counts enabled local owners with a password; oidc counts enabled owners under the issuer key (a prefix, not LIKE)', async () => {
+  const { db, close } = await identityStore('owners');
+  try {
+    const pw = { algo: 'scrypt', hash: 'aGFzaA==' };
+    assert.equal(identity.signInOwnerCount(db, { mode: 'local' }), 0);
+    users.createUser(db, 'cli', { login: 'nopw', isOwner: true });
+    const off = users.createUser(db, 'cli', { login: 'off', password: pw, isOwner: true });
+    users.setDisabled(db, 'cli', off.id, true);
+    users.createUser(db, 'cli', { login: 'notowner', password: pw });
+    assert.equal(identity.signInOwnerCount(db, { mode: 'local' }), 0);
+    users.createUser(db, 'cli', { login: 'alice', password: pw, isOwner: true });
+    assert.equal(identity.signInOwnerCount(db, { mode: 'local' }), 1);
+
+    const wild = 'https://idp.example/a_b%/';
+    users.createUser(db, 'cli', { kind: 'oidc', login: 'https://idp.example/aXbY/#s', issuer: 'i', sub: 's', isOwner: true });
+    assert.equal(identity.signInOwnerCount(db, { mode: 'oidc', issuerKey: wild }), 0, '_ and % are literal');
+    users.createUser(db, 'cli', { kind: 'oidc', login: `${wild}#s`, issuer: 'i2', sub: 's', isOwner: true });
+    assert.equal(identity.signInOwnerCount(db, { mode: 'oidc', issuerKey: wild }), 1);
+    assert.equal(identity.signInOwnerCount(db, { mode: 'oidc', issuerKey: null }), 0);
+    assert.equal(identity.signInOwnerCount(db, { mode: 'local' }), 1, 'OIDC owners are not local owners');
+  } finally {
+    close();
+  }
+});
+
+test('oidcSignIn: creates at epoch 1, syncs the profile (a name: \'\' claim never throws), grants the bootstrap owner once, refuses a disabled row and a login held by a local row, writing nothing then', async () => {
+  const { db, close } = await identityStore('signin');
+  try {
+    meta.setMeta(db, 'system', 'oidc_join_role', 'viewer');
+    const claims = (over = {}) => identity.sanitiseClaims({ sub: 'u1', iss: 'https://idp.example', email: 'ops@example.com', email_verified: true, name: 'Ops', ...over }, KEY);
+    const bootstrap = identity.parseBootstrapAdmin('ops@example.com');
+    const n0 = auditActions(db).length;
+    const r1 = identity.oidcSignIn(db, { issuerKey: KEY, issuerDisplay: 'https://idp.example', claims: claims(), bootstrap });
+    assert.deepEqual([r1.refused, r1.created, r1.granted, r1.user.sessionEpoch, r1.user.isOwner], [null, true, true, 1, true]);
+    assert.equal(memberships.getMembership(db, 'default', r1.user.id).role, 'admin', 'joined as viewer, raised by the grant');
+    assert.deepEqual(auditActions(db).slice(n0), ['user.jit', 'membership.jit', 'owner.bootstrap']);
+
+    const n1 = auditActions(db).length;
+    const r2 = identity.oidcSignIn(db, { issuerKey: KEY, issuerDisplay: 'https://idp.example', claims: claims({ name: '' }), bootstrap });
+    assert.deepEqual([r2.refused, r2.created, r2.granted, r2.user.name], [null, false, false, null]);
+    assert.deepEqual(auditActions(db).slice(n1), ['user.update'], 'the profile sync; an owner exists, so no second grant');
+    identity.oidcSignIn(db, { issuerKey: KEY, issuerDisplay: 'https://idp.example', claims: claims({ name: '' }), bootstrap });
+    assert.equal(auditActions(db).length, n1 + 1, 'nothing differs: no row');
+
+    const second = identity.oidcSignIn(db, { issuerKey: KEY, issuerDisplay: 'https://idp.example', claims: claims({ sub: 'u2' }), bootstrap });
+    assert.equal(second.granted, false, 'once an owner exists a further match grants nothing');
+
+    users.setDisabled(db, 'cli', second.user.id, true);
+    const n2 = auditActions(db).length;
+    const r3 = identity.oidcSignIn(db, { issuerKey: KEY, issuerDisplay: 'x', claims: claims({ sub: 'u2', name: 'Changed' }), bootstrap });
+    assert.equal(r3.refused, 'disabled');
+    assert.equal(users.getUser(db, second.user.id).name, 'Ops', 'no profile sync for a disabled row');
+
+    const local = users.createUser(db, 'cli', { login: `${KEY}#alice`, password: { algo: 'scrypt', hash: 'aGFzaA==' } });
+    const n3 = auditActions(db).length;
+    const r4 = identity.oidcSignIn(db, { issuerKey: KEY, issuerDisplay: 'x', claims: claims({ sub: 'alice' }), bootstrap: identity.parseBootstrapAdmin(`${KEY}#alice`) });
+    assert.deepEqual([r4.user, r4.refused], [null, 'local-login']);
+    assert.equal(auditActions(db).length, n3, 'nothing written');
+    assert.equal(users.getUser(db, local.id).isOwner, false, 'the local row never captures the IdP user');
+    assert.equal(n3, n2 + 1);
+  } finally {
+    close();
+  }
+});
