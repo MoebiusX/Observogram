@@ -9004,6 +9004,6 @@ select.build-edit-input { appearance: auto; }
 }
 @media (prefers-reduced-motion: reduce) {
   .build-sheet.is-entering, .build-sheet-scrim.is-entering, .build-editor, .build-editor-scrim { animation: none; }
-  .build-seg-thumb, .build-switch, .build-switch-knob, .build-rolo-card, .build-chip, .build-slab-add, .build-def-field input, .build-summary, .build-sheet-close, .build-rolodex-nav, .build-seg-btn, .build-seed-change, .build-rolo-edit, .build-rolo-create, .build-edit-reset, .build-editor-close { transition: none; }
+  .build-seg-thumb, .build-switch, .build-switch-knob, .build-rolo-card, .build-chip, .build-slab-add, .build-def-field input, .build-summary, .build-sheet-close, .build-rolodex-nav, .build-seg-btn, .build-seed-change, .build-rolo-edit, .build-rolo-create, .build-edit-reset, .build-editor-close, .build-slab .card.is-editable, .build-seed-chip.is-entry { transition: none; }
   .build-rolodex-track { scroll-behavior: auto; }
 }

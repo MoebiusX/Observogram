@@ -777,6 +777,10 @@ test('the stylesheet: one centered fixed modal above the sheet with the L1 accen
   const reduced = CSS_TEXT.match(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/g)?.find(b => b.includes('.build-editor')) || '';
   assert.ok(reduced.includes('.build-editor, .build-editor-scrim { animation: none; }') || /\.build-editor-scrim \{ animation: none; \}/.test(reduced), 'the entrance respects reduced motion');
   assert.ok(reduced.includes('.build-rolo-edit') && reduced.includes('.build-editor-close'));
+  // Every transition the editor slice added is in the reduced-motion list: the rolodex's Edit and create card, the esc and
+  // ↺ buttons, the stack's editable card and the seed card's product chips (the last two were left out; colour-only, still a promise).
+  for (const sel of ['.build-rolo-edit', '.build-edit-reset', '.build-editor-close', '.build-slab .card.is-editable', '.build-seed-chip.is-entry']) assert.match(cssRule(sel) || '', /transition:/, `${sel} transitions`);
+  for (const sel of ['.build-rolo-edit', '.build-rolo-create', '.build-edit-reset', '.build-editor-close', '.build-slab .card.is-editable', '.build-seed-chip.is-entry']) assert.ok(reduced.includes(sel), `${sel} is in the reduced-motion transition: none list`);
   const block = CSS_TEXT.slice(CSS_TEXT.indexOf('---- The editor'), CSS_TEXT.indexOf('@media (max-width: 760px)', CSS_TEXT.indexOf('---- The editor')));
   assert.deepEqual([...block.matchAll(/#[0-9a-fA-F]{3,6}\b/g)].map(m => m[0]), [], 'the tokens only — both themes follow');
   assert.ok(/\[data-theme="dark"\] \.build-editor \{/.test(block), 'the dark theme adjusts the shadow');
