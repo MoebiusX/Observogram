@@ -53,7 +53,7 @@ export function renderConformanceView() {
         <div class="conf-stat-val">${c.scorePercent}%</div>
       </div>
     </div>
-    <div class="conf-note">Scored against <a href="https://github.com/MoebiusX/otel-observability-pack/blob/main/docs/maturity-model.md" target="_blank" rel="noopener">maturity rubric</a>; MUST = 1, SHOULD = 0.5.</div>
+    <div class="conf-note">Scored against <a href="https://github.com/MoebiusX/otel-observability-pack/blob/98be4ae8c05899c066b9882e0498feb850afa387/docs/maturity-model.md" target="_blank" rel="noopener">maturity rubric</a>; MUST = 1, SHOULD = 0.5.</div>
   `;
   wrap.appendChild(headline);
 

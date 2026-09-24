@@ -37,3 +37,8 @@ The version directory is read from the fetched spec's own header (`| Spec versio
 a spec bump lands in a new `v<x.y>/` and `VERSIONS.json` follows it. The previous directory is removed in
 the commit that moves `SPEC_VERSION` (git history keeps it). The sync script uses the `gh` CLI for
 authentication and rate-limit headroom; no npm deps.
+
+The studio links into the upstream repository at the vendored commit (`upstream.commit`), never at a branch:
+upstream `main` still serves 1.2 while `develop` carries 1.3, so a link labelled with the version must open the
+file the label names. After a refresh, move the hrefs in `studio/index.html` (footer), `studio/schema-view.mjs`
+and `studio/conformance-view.mjs` to the new commit; `tools/test-validator.mjs` names the ones left behind.

@@ -140,3 +140,23 @@ test('no scanned file names a spec version other than the current one', () => {
   }
   assert.deepEqual(offenders, [], 'every current-version mention follows SPEC_VERSION (1.3)');
 });
+
+// The studio's links to upstream: the footer's "spec v1.3", the Schema view's "ObservabilityPack v1.3 JSON Schema"
+// and "Spec document", the Conformance view's "maturity rubric". Upstream's default branch is develop (1.3) and main
+// stopped at the 1.2 commit, so a link labelled with the version must open the commit VERSIONS.json vendored — never
+// a branch, which serves whatever it serves that day. After a re-vendor (node tools/sync-spec.mjs) the hrefs follow
+// upstream.commit; this test names the ones that do not.
+test('every studio link into the upstream spec repo opens the vendored commit, not a branch', () => {
+  const { upstream } = JSON.parse(readFileSync(resolve(ROOT, 'vendor/observability-pack-spec/VERSIONS.json'), 'utf8'));
+  assert.match(upstream.commit, /^[0-9a-f]{40}$/);
+  const link = /github\.com\/MoebiusX\/otel-observability-pack\/blob\/([^/"'\s]+)\//g;
+  const seen = [], offenders = [];
+  for (const file of walk(resolve(ROOT, 'studio')).filter(p => /\.(mjs|html)$/.test(p))) {
+    const rel = file.slice(ROOT.length + 1).replace(/\\/g, '/');
+    readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+      for (const m of line.matchAll(link)) { seen.push(rel); if (m[1] !== upstream.commit) offenders.push(`${rel}:${i + 1}: blob/${m[1]}`); }
+    });
+  }
+  assert.deepEqual(offenders, [], `a studio link into ${upstream.repo} opens blob/${upstream.commit} (VERSIONS.json upstream.commit; upstream main serves 1.2)`);
+  assert.deepEqual([...new Set(seen)].sort(), ['studio/conformance-view.mjs', 'studio/index.html', 'studio/schema-view.mjs'], 'the footer, the Schema view and the Conformance view link upstream');
+});
