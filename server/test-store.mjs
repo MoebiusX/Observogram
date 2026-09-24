@@ -9,7 +9,7 @@
  * binary as well as the latest 22 when CI runs it on both.
  */
 
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, chownSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -35,13 +35,28 @@ function tempDir(tag = 'store') {
 }
 process.on('exit', () => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true }); } catch {} } });
 
+// Every child this file spawns, until it exits. A failed assertion can leave
+// one running (a setInterval never ends on its own) and its pipes would keep
+// this file alive; whatever failed, none outlives the file.
+const live = new Set();
+function track(proc) {
+  live.add(proc);
+  proc.on('exit', () => live.delete(proc));
+  return proc;
+}
+after(() => { for (const p of live) p.kill('SIGKILL'); });
+
 // A child ES module run with this very Node binary. `until` resolves once a
-// line matching it appears on stdout; `done` resolves with the exit.
+// line matching it appears on stdout; `done` resolves with the exit. Both
+// bounded waits SIGKILL a child still running at their deadline and reject,
+// so a child that never gets there fails its test instead of hanging it:
+// `until(re, ms)` for the line, `exited(ms, what)` for the exit. A test
+// awaits `exited`, never `done` alone, for a child it expects to end.
 function child(code, { env = {} } = {}) {
-  const proc = spawn(process.execPath, ['--input-type=module', '-e', code], {
+  const proc = track(spawn(process.execPath, ['--input-type=module', '-e', code], {
     env: { ...process.env, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }));
   let stdout = '';
   let stderr = '';
   const waiters = [];
@@ -51,15 +66,45 @@ function child(code, { env = {} } = {}) {
   });
   proc.stderr.on('data', (b) => { stderr += b; });
   const done = new Promise((res) => proc.on('exit', (code, signal) => res({ code, signal, stdout, stderr })));
-  const until = (re) => new Promise((res, rej) => {
+  const deadline = (ms, onTimeout) => setTimeout(() => { proc.kill('SIGKILL'); onTimeout(); }, ms);
+  const until = (re, ms = 10_000) => new Promise((res, rej) => {
     if (re.test(stdout)) return res();
-    waiters.push({ re, resolve: res });
-    done.then((r) => rej(new Error(`child exited (${r.code}/${r.signal}) before ${re}: ${r.stderr || r.stdout}`)));
+    const t = deadline(ms, () => rej(new Error(`child printed no ${re} in ${ms} ms: ${stderr || stdout}`)));
+    waiters.push({ re, resolve: () => { clearTimeout(t); res(); } });
+    done.then((r) => { clearTimeout(t); rej(new Error(`child exited (${r.code}/${r.signal}) before ${re}: ${r.stderr || r.stdout}`)); });
   });
-  return { proc, until, done };
+  const exited = (ms, what) => new Promise((res, rej) => {
+    const t = deadline(ms, () => rej(new Error(`child still running ${ms} ms after ${what}: ${stderr || stdout}`)));
+    done.then((r) => { clearTimeout(t); res(r); });
+  });
+  return { proc, until, done, exited };
 }
 
 const tables = (db) => prepare(db, "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map((r) => r.name);
+
+// ---------- the harness: a stuck child fails its test, it does not hang the file ----------
+
+test('child(): exited() rejects, naming the wait, and SIGKILLs a child still running after its deadline', async () => {
+  const c = child(`
+    process.on('SIGTERM', () => {});   // a handler that swallows the signal
+    console.log('ready');
+    setInterval(() => {}, 1000);
+  `);
+  await c.until(/ready/);
+  c.proc.kill('SIGTERM');
+  const t0 = Date.now();
+  await assert.rejects(c.exited(300, 'SIGTERM'), /child still running 300 ms after SIGTERM/);
+  assert.ok(Date.now() - t0 < 5000, 'the deadline, not the child, ended the wait');
+  assert.equal((await c.done).signal, 'SIGKILL', 'the stuck child was killed, not left behind');
+  const quick = child('process.exit(3)');
+  assert.equal((await quick.exited(10_000, 'start')).code, 3, 'a child that exits in time resolves with its exit');
+});
+
+test('child(): until() rejects and SIGKILLs a child that stays up without ever printing the line', async () => {
+  const c = child('setInterval(() => {}, 1000);');
+  await assert.rejects(c.until(/ready/, 300), /printed no \/ready\/ in 300 ms/);
+  assert.equal((await c.done).signal, 'SIGKILL');
+});
 
 // ---------- Runtime: the Node floor ----------
 
@@ -104,7 +149,7 @@ test('loading the store prints no ExperimentalWarning, restores emitWarning, and
     process.emitWarning('an unrelated warning still prints', 'UnrelatedWarning');
     closeStore();
   `);
-  const r = await c.done;
+  const r = await c.exited(10_000, 'start');
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, /restored=true/);
   assert.doesNotMatch(r.stderr, /ExperimentalWarning/);
@@ -434,7 +479,7 @@ test('Concurrency: a write waits out a child holding BEGIN IMMEDIATE for less th
     const t0 = Date.now();
     tx(db, () => prepare(db, "INSERT INTO schema_meta (key, value) VALUES ('parent', 'wrote')").run());
     const waited = Date.now() - t0;
-    const r = await holder.done;
+    const r = await holder.exited(10_000, "the parent's write");
     assert.equal(r.code, 0, r.stderr);
     assert.ok(waited >= 300, `the parent waited on the lock (${waited} ms)`);
     assert.equal(prepare(db, "SELECT value FROM schema_meta WHERE key = 'parent'").get().value, 'wrote');
@@ -456,7 +501,7 @@ test('Concurrency: a migration waits out a child holding BEGIN IMMEDIATE, then a
     const step = { version: 2, name: 'add a table', up(d) { execScript(d, 'CREATE TABLE later (a INTEGER)'); } };
     assert.deepEqual(runMigrations(db, [...STEPS, step]).applied, [2]);
     const waited = Date.now() - t0;
-    assert.equal((await holder.done).code, 0);
+    assert.equal((await holder.exited(10_000, 'the migration')).code, 0);
     assert.ok(waited >= 300, `the migration waited on the lock (${waited} ms)`);
     assert.ok(tables(db).includes('later'));
   } finally {
@@ -490,7 +535,7 @@ test('Migrations: two openers racing the same step apply it once', async () => {
     const parentSteps = new Function('execScript', 'prepare', 'WHO', 'HOLD', `return ${steps};`)(execScript, prepare, WHO, HOLD);
     assert.equal(userVersion(db), 0, 'the parent sees v0 before it waits');
     const mine = runMigrations(db, parentSteps);
-    const theirs = await c.done;
+    const theirs = await c.exited(10_000, "the parent's migration");
     assert.equal(theirs.code, 0, theirs.stderr);
     assert.deepEqual(JSON.parse(theirs.stdout.trim().split('\n').pop()).applied, [1]);
     assert.deepEqual(mine.applied, [], 'the parent re-read user_version inside its tx and skipped');
@@ -567,10 +612,15 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
       console.log('ready');
       setInterval(() => {}, 1000);
     `);
-    await c.until(/ready/);
-    assert.ok(existsSync(`${path}-wal`), 'the -wal exists while the store is open');
-    c.proc.kill(sig);
-    const r = await c.done;
+    let r;
+    try {
+      await c.until(/ready/);
+      assert.ok(existsSync(`${path}-wal`), 'the -wal exists while the store is open');
+      c.proc.kill(sig);
+      r = await c.exited(10_000, sig);
+    } finally {
+      c.proc.kill('SIGKILL');
+    }
     assert.equal(r.signal, sig, `died by ${sig} (code ${r.code}, stderr ${r.stderr})`);
     assert.equal(existsSync(`${path}-wal`), false, 'no -wal left behind');
     const raw = await openRaw(path);
@@ -604,7 +654,7 @@ for (const [where, how] of [['before', 'on'], ['after', 'on'], ['before', 'once'
     `);
     await c.until(/ready/);
     c.proc.kill('SIGTERM');
-    const r = await c.done;
+    const r = await c.exited(10_000, 'SIGTERM');
     assert.equal(r.code, 0, `the handler exited on its own (signal ${r.signal}, stdout ${r.stdout}, stderr ${r.stderr})`);
     assert.doesNotMatch(r.stdout, /store error/);
     assert.match(r.stdout, /wrote/);
@@ -635,12 +685,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
     const c = child(`process.kill = () => true;\n${SIG_CHILD(path)}`);
     await c.until(/ready/);
     c.proc.kill(sig);
-    const r = await Promise.race([
-      c.done,
-      new Promise((res) => setTimeout(() => res(null), 3000)),
-    ]);
-    if (!r) c.proc.kill('SIGKILL');
-    assert.ok(r, `the child was still alive 3 s after ${sig}`);
+    const r = await c.exited(3000, sig);
     assert.equal(r.code, SIGNAL_EXIT[sig], `exit code (signal ${r.signal}, stdout ${r.stdout}, stderr ${r.stderr})`);
     assert.doesNotMatch(r.stdout, /closed-but-alive/);
     assert.equal(existsSync(`${path}-wal`), false, 'no -wal left behind');
@@ -662,28 +707,37 @@ const UNSHARE = (() => {
 
 test('SIGTERM to node running as PID 1: the store closes and the process exits 143', { skip: UNSHARE ? false : 'unshare --pid is unavailable here' }, async () => {
   const path = join(tempDir(), 'sig-pid1.db');
-  const proc = spawn('unshare', [...UNSHARE, process.execPath, '--input-type=module', '-e', `
+  const proc = track(spawn('unshare', [...UNSHARE, process.execPath, '--input-type=module', '-e', `
     if (process.pid !== 1) { console.log('not pid 1'); process.exit(9); }
     ${SIG_CHILD(path)}
-  `], { stdio: ['ignore', 'pipe', 'pipe'] });
+  `], { stdio: ['ignore', 'pipe', 'pipe'] }));
   let stdout = '';
   let stderr = '';
   proc.stderr.on('data', (b) => { stderr += b; });
   const ready = new Promise((res, rej) => {
     proc.stdout.on('data', (b) => { stdout += b; if (/ready/.test(stdout)) res(); });
     proc.on('exit', () => rej(new Error(`exited before ready: ${stdout} ${stderr}`)));
+    setTimeout(() => rej(new Error(`no ready in 10 s: ${stdout} ${stderr}`)), 10_000).unref();
   });
   const done = new Promise((res) => proc.on('exit', (code, signal) => res({ code, signal })));
-  await ready;
-  // `unshare --fork` forwards nothing; signal node itself, from outside its
-  // namespace. Its host pid is unshare's only child.
-  const kids = readFileSync(`/proc/${proc.pid}/task/${proc.pid}/children`, 'utf8').trim().split(/\s+/);
-  assert.equal(kids.length, 1, `unshare has one child (${kids})`);
-  const nodePid = Number(kids[0]);
-  assert.match(readFileSync(`/proc/${nodePid}/status`, 'utf8'), /^NSpid:.*\s1$/m, 'node is PID 1 in its namespace');
-  process.kill(nodePid, 'SIGTERM');
-  const r = await Promise.race([done, new Promise((res) => setTimeout(() => res(null), 3000))]);
-  if (!r) { try { process.kill(nodePid, 'SIGKILL'); } catch {} }
+  let r;
+  let nodePid;
+  try {
+    await ready;
+    // `unshare --fork` forwards nothing; signal node itself, from outside its
+    // namespace. Its host pid is unshare's only child.
+    const kids = readFileSync(`/proc/${proc.pid}/task/${proc.pid}/children`, 'utf8').trim().split(/\s+/);
+    assert.equal(kids.length, 1, `unshare has one child (${kids})`);
+    nodePid = Number(kids[0]);
+    assert.match(readFileSync(`/proc/${nodePid}/status`, 'utf8'), /^NSpid:.*\s1$/m, 'node is PID 1 in its namespace');
+    process.kill(nodePid, 'SIGTERM');
+    r = await Promise.race([done, new Promise((res) => setTimeout(() => res(null), 3000))]);
+  } finally {
+    // SIGKILL reaches a namespace's init from outside it; --kill-child takes
+    // node down with unshare if node's pid was never read.
+    if (!r && nodePid) { try { process.kill(nodePid, 'SIGKILL'); } catch {} }
+    proc.kill('SIGKILL');
+  }
   assert.ok(r, `PID 1 was still alive 3 s after SIGTERM (stdout ${stdout})`);
   assert.equal(r.code, 143, `unshare reports node's exit (${JSON.stringify(r)}, stderr ${stderr})`);
   assert.doesNotMatch(stdout, /closed-but-alive/);
@@ -1029,7 +1083,7 @@ test('Concurrency: a repository write waits out a child holding BEGIN IMMEDIATE,
     const t0 = Date.now();
     users.createUser(db, 'system', { login: 'patient' });
     const waited = Date.now() - t0;
-    assert.equal((await holder.done).code, 0);
+    assert.equal((await holder.exited(10_000, 'the repository write')).code, 0);
     assert.ok(waited >= 300, `waited ${waited} ms`);
     assert.ok(users.getUserByLogin(db, 'patient'));
     assert.deepEqual(auditActions(db), ['user.create']);
@@ -1130,7 +1184,7 @@ test('packc store backup while a server holds the store: every committed row, no
     const dest = join(dir, 'backups', 'nightly.db');
     const r = await packc(['store', 'backup', dest], { OBSERVOGRAM_DB: dbPath });
     assert.equal(r.code, 0, r.stderr);
-    assert.equal((await writer.done).code, 0);
+    assert.equal((await writer.exited(10_000, 'the backup')).code, 0);
     const got = await readStore(dest);
     assert.match(r.stdout, new RegExp(`backup written: ${dest.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
     assert.match(r.stdout, new RegExp(`store_id: ${got.storeId} \\(schema v1`));
@@ -1142,7 +1196,7 @@ test('packc store backup while a server holds the store: every committed row, no
     assert.equal(existsSync(`${dest}.tmp`), false, 'the .tmp was renamed into place');
   } finally {
     server.proc.kill('SIGTERM');
-    await server.done;
+    await server.exited(10_000, 'SIGTERM');
   }
 });
 
@@ -1162,7 +1216,7 @@ test('packc store restore: refuses while the server holds the store (even idle),
     assert.deepEqual(readdirSync(dir).sort(), ['b.db', 'observogram.db', 'observogram.db-shm', 'observogram.db-wal'], 'nothing moved, no temp file left');
   } finally {
     server.proc.kill('SIGTERM');
-    await server.done;
+    await server.exited(10_000, 'SIGTERM');
   }
   const junk = join(dir, 'junk.db');
   writeFileSync(junk, 'not a database at all, just some bytes '.repeat(200));
