@@ -344,7 +344,9 @@ Safe options:
 3. With the server running, `packc store backup <path>`. It runs `VACUUM
    INTO ?` outside any transaction into `<path>.tmp` and renames that to
    `<path>`, refusing an existing `<path>`. It captures committed rows
-   while writers are active, as one rollback-journal file.
+   while writers are active, as one rollback-journal file. The backup is
+   `0600`, like the database, which `openStore` creates `0600` (its
+   `-wal` and `-shm` follow): both hold the password records.
 
 The workspace files (packs, snapshots, journeys, runs, `deploys.jsonl`,
 `session-secret`) can be copied live as before. A workspace copy alone is
@@ -357,7 +359,7 @@ memberships or audit. This supersedes PRODUCTIZATION_PLAN Stage 4's
 refuses while the database is in use. It moves `observogram.db`, `-wal` and
 `-shm` aside together, then copies the backup in. The copy takes the
 replaced database's mode (owner read-write always) and, run as root, its
-owner; 0644 when there was none. A read-only backup must not become a
+owner; 0600 when there was none. A read-only backup must not become a
 read-only store the next open cannot switch to WAL. Copying a backup over the
 `.db` alone is never safe: a `-wal` left by an unclean stop is replayed onto
 it.

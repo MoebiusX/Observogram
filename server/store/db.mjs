@@ -35,7 +35,7 @@
 //     throws on a JS boolean where 24 does not, so a boolean is a bug here
 //     on every version, and undefined is never silently NULL.
 
-import { mkdirSync, statfsSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, statfsSync } from 'node:fs';
 import { constants as osConstants } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { baseWorkspacePath, brandEnv } from '../../tools/lib/brand-env.mjs';
@@ -187,6 +187,10 @@ export async function openStore({ path } = {}) {
   if (file) {
     mkdirSync(dirname(target), { recursive: true });
     checkFilesystem(dirname(target));
+    // The store holds password records: create the file 0600 (SQLite would
+    // create it 0644 under the usual umask). SQLite gives -wal and -shm the
+    // database's mode, so they follow. An existing file keeps its mode.
+    try { closeSync(openSync(target, 'wx', 0o600)); } catch (e) { if (e.code !== 'EEXIST') throw e; }
   }
   const db = new DatabaseSync(target);
   try {

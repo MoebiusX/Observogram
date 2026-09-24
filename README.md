@@ -715,7 +715,8 @@ packc store backup /backups/observogram-2026-09-24.db
 It runs `VACUUM INTO` outside any transaction into `<path>.tmp` and renames
 that into place: every committed row, as one rollback-journal file, while
 writers stay active. It refuses an existing `<path>`, `:memory:`, and a
-path with no database (it never creates one).
+path with no database (it never creates one). The backup, like the
+database itself, is created `0600`: both hold the users' password records.
 
 The other workspace files (packs, snapshots, journeys, runs,
 `deploys.jsonl`, `session-secret`) can be copied live as before. Where the
@@ -736,7 +737,7 @@ needs exclusive access, so even an idle server is caught), checks the
 backup is an Observogram store, moves `observogram.db`, `-wal` and `-shm`
 aside together under one timestamp, and copies the backup in with the
 replaced database's mode and owner, never the backup's (a read-only backup
-restores writable; with no previous database it is 0644); the next start
+restores writable; with no previous database it is 0600); the next start
 switches it back to WAL. Never copy a backup over the `.db` alone: a
 `-wal` left by an unclean stop would be replayed onto it. To move a
 database, move the file with nothing holding it: it carries its

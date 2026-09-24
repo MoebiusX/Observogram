@@ -4,8 +4,9 @@
 // The database is WAL, so a file copy taken while any process has it open
 // is not a backup, -wal and -shm included: a checkpoint between two file
 // copies tears it. backupStore() runs VACUUM INTO outside any transaction
-// into <path>.tmp and renames it into place: one consistent rollback-
-// journal file of every committed row, taken while writers are active.
+// into <path>.tmp (created 0600 first) and renames it into place: one
+// consistent rollback-journal file of every committed row, taken while
+// writers are active.
 //
 // restoreStore() is for a stopped server. It refuses while anything holds
 // the database: switching a WAL database out of WAL needs exclusive
@@ -17,7 +18,7 @@
 // the backup in its place, with the replaced file's mode and owner rather
 // than the backup's; the next open switches it back to WAL.
 
-import { chmodSync, chownSync, copyFileSync, constants as fsConstants, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, chownSync, closeSync, copyFileSync, constants as fsConstants, existsSync, mkdirSync, openSync, renameSync, rmSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { openRaw, pragma, prepare, resolveDbPath } from './db.mjs';
 import { SCHEMA_VERSION, userVersion } from './migrations.mjs';
@@ -61,10 +62,19 @@ export async function backupStore(dest, { dbPath = resolveDbPath() } = {}) {
   const tmp = `${target}.tmp`;
   if (existsSync(tmp)) throw refuse(`${tmp} exists (an interrupted backup?) — remove it and run again`);
   mkdirSync(dirname(target), { recursive: true });
+  // A backup holds the password records: VACUUM INTO would create the file
+  // 0644 under the usual umask, so create it empty at 0600 first (SQLite
+  // fills an existing empty target). 'wx' also closes the race with the
+  // check above.
+  try { closeSync(openSync(tmp, 'wx', 0o600)); } catch (e) {
+    if (e.code === 'EEXIST') throw refuse(`${tmp} exists (an interrupted backup?) — remove it and run again`);
+    throw e;
+  }
 
-  const db = await openRaw(source);
+  let db = null;
   let id;
   try {
+    db = await openRaw(source);
     id = identify(db);
     if (!isOurs(id)) throw refuse(`${source} is not an Observogram store (user_version ${id.version}, ${id.storeId ? 'a store_id' : 'no store_id'})`);
     prepare(db, 'VACUUM INTO ?').run(tmp);
@@ -72,7 +82,7 @@ export async function backupStore(dest, { dbPath = resolveDbPath() } = {}) {
     removeSet(tmp);
     throw e;
   } finally {
-    db.close();
+    db?.close();
   }
   if (existsSync(target)) { removeSet(tmp); throw refuse(`${target} appeared while the backup ran — nothing overwritten`); }
   renameSync(tmp, target);
@@ -96,12 +106,12 @@ export async function restoreStore(backup, { dbPath = resolveDbPath(), now = new
   // read-only: a 0400 copy would become a live store the next open cannot
   // switch to WAL ("attempt to write a readonly database"). Take the
   // replaced store's mode (and, run as root, its owner) instead, always
-  // with owner read-write; 0644, what openStore creates, when there was
+  // with owner read-write; 0600, what openStore creates, when there was
   // none. SQLite gives -wal and -shm the database's mode, so they follow.
   let live = null;
   try { live = statSync(target); } catch {}
   try {
-    chmodSync(incoming, ((live?.mode ?? 0o644) & 0o777) | 0o600);
+    chmodSync(incoming, ((live?.mode ?? 0o600) & 0o777) | 0o600);
     if (live && process.getuid?.() === 0) chownSync(incoming, live.uid, live.gid);
   } catch (e) {
     removeSet(incoming);

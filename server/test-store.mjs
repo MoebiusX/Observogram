@@ -1244,7 +1244,7 @@ test('packc store restore end to end: the old db, -wal and -shm move aside toget
   assert.equal((await readStore(freshPath)).storeId, backupId);
 });
 
-test('packc store restore gives the restored file the replaced store\'s mode (owner read-write, 0644 when there was none), not the backup\'s, and it opens in WAL', async () => {
+test('packc store restore gives the restored file the replaced store\'s mode (owner read-write, 0600 when there was none), not the backup\'s, and it opens in WAL', async () => {
   const dir = tempDir('rs-mode');
   const dbPath = join(dir, 'observogram.db');
   await openStore({ path: dbPath });
@@ -1265,17 +1265,18 @@ test('packc store restore gives the restored file the replaced store\'s mode (ow
     chmodSync(backup, ro);
     const r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: dbPath });
     assert.equal(r.code, 0, r.stderr);
-    assert.equal(modeOf(dbPath), 0o644, `a 0${ro.toString(8)} backup restores as the replaced store's 0644`);
+    assert.equal(modeOf(dbPath), 0o600, `a 0${ro.toString(8)} backup restores as the replaced store's 0600`);
     assert.equal(modeOf(backup), ro, 'the backup keeps its own mode');
     await opensWal(dbPath);
   }
 
-  // A 0600 store stays 0600 when restored from an ordinary 0644 backup.
+  // A mode the operator chose (0640, a backup agent's group) is kept, and a
+  // 0644 backup does not leak its mode in.
   chmodSync(backup, 0o644);
-  chmodSync(dbPath, 0o600);
+  chmodSync(dbPath, 0o640);
   let r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: dbPath });
   assert.equal(r.code, 0, r.stderr);
-  assert.equal(modeOf(dbPath), 0o600);
+  assert.equal(modeOf(dbPath), 0o640);
   await opensWal(dbPath);
 
   // A store the owner cannot write gets owner read-write added.
@@ -1284,12 +1285,12 @@ test('packc store restore gives the restored file the replaced store\'s mode (ow
   assert.equal(r.code, 0, r.stderr);
   assert.equal(modeOf(dbPath), 0o640);
 
-  // No previous store: 0644, what openStore creates, whatever the backup's mode.
+  // No previous store: 0600, what openStore creates, whatever the backup's mode.
   chmodSync(backup, 0o400);
   const freshPath = join(tempDir('rs-mode-fresh'), 'observogram.db');
   r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: freshPath });
   assert.equal(r.code, 0, r.stderr);
-  assert.equal(modeOf(freshPath), 0o644);
+  assert.equal(modeOf(freshPath), 0o600);
   await opensWal(freshPath);
 
   // A root shell restoring for a non-root server keeps the replaced file's owner.
@@ -1300,4 +1301,41 @@ test('packc store restore gives the restored file the replaced store\'s mode (ow
     const st = statSync(dbPath);
     assert.deepEqual([st.uid, st.gid], [1000, 1000], 'owned by the server\'s user, not root');
   }
+});
+
+test('the store holds password records, so no file it creates is group or world readable: the database and its -wal/-shm, a backup, a restored database and the moved-aside files are 0600', async () => {
+  const dir = tempDir('modes');
+  const dbPath = join(dir, 'db', 'observogram.db');
+  const modeOf = (p) => statSync(p).mode & 0o777;
+  const backup = join(dir, 'bk dir', 'one.db');
+  const db = await openStore({ path: dbPath });
+  try {
+    users.createUser(db, 'system', { login: 'alice', password: { algo: 'scrypt', N: 16384, r: 8, p: 1, salt: 'aa', hash: 'SECRETHASH' } });
+    for (const s of ['', '-wal', '-shm']) assert.equal(modeOf(`${dbPath}${s}`), 0o600, `observogram.db${s} is created 0600`);
+
+    // VACUUM INTO writes a new file: the backup is 0600 whatever the store's mode.
+    chmodSync(dbPath, 0o644);
+    const b = await packc(['store', 'backup', backup], { OBSERVOGRAM_DB: dbPath });
+    assert.equal(b.code, 0, b.stderr);
+    assert.equal(modeOf(backup), 0o600, 'the backup is 0600');
+    assert.ok(!existsSync(`${backup}.tmp`));
+  } finally {
+    closeStore(dbPath);
+  }
+  chmodSync(dbPath, 0o600);
+
+  // A 0644 backup (made by an older build, or chmodded) restores 0600 over a 0600 store.
+  chmodSync(backup, 0o644);
+  const r = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: dbPath });
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(modeOf(dbPath), 0o600, 'the restored database is 0600');
+  const aside = readdirSync(dirname(dbPath)).filter((f) => f.includes('.pre-restore-'));
+  assert.ok(aside.length >= 1);
+  for (const f of aside) assert.equal(modeOf(join(dirname(dbPath), f)), 0o600, `${f} is 0600`);
+
+  // No previous store: 0600.
+  const freshPath = join(tempDir('modes-fresh'), 'observogram.db');
+  const r2 = await packc(['store', 'restore', backup], { OBSERVOGRAM_DB: freshPath });
+  assert.equal(r2.code, 0, r2.stderr);
+  assert.equal(modeOf(freshPath), 0o600, 'a restore with no previous store is 0600');
 });
