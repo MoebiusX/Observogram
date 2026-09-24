@@ -186,7 +186,9 @@ test('hashes and the marker: sha256File absent vs present; compareHashes changed
   assert.throws(() => legacy.writeMarker(base, { storeId: 'store-1', files, by: 'whim' }), /written by one of/);
   for (const text of ['{', '[]', '{ "storeId": "", "files": {}, "by": "import", "writtenAt": "x" }', '{ "storeId": "s", "files": [], "by": "import", "writtenAt": "x" }']) {
     write(p, text);
-    assert.throws(() => legacy.readMarker(base), isLegacyError(p), text);
+    assert.throws(() => legacy.readMarker(base), (e) => e instanceof legacy.LegacyFileError && e.code === 'ERR_OBSERVOGRAM_LEGACY_FILE'
+      && e.path === p && e.message.startsWith(`${p}: `) && /delete it and the next start rewrites it from the store/.test(e.message)
+      && !/the upgrade imports nothing/.test(e.message), text);
   }
 });
 
@@ -1238,7 +1240,12 @@ test('staleImportGuard (d): an edited users.json and an appeared orgs.json refus
     assert.ok(repaired.logs.includes(`[store] rewrote ${markerFile} from store ${id}`), repaired.logs.join('\n'));
     assert.deepEqual([legacy.readMarker(base).storeId, legacy.readMarker(base).by], [id, 'repair']);
     write(markerFile, '{ nope');
-    await assert.rejects(bootIn(base), (e) => e instanceof legacy.LegacyFileError && e.path === markerFile, 'a corrupt marker refuses naming it');
+    await assert.rejects(bootIn(base), (e) => e instanceof legacy.LegacyFileError && e.path === markerFile
+      && !/the upgrade imports nothing/.test(e.message) && /delete it and the next start rewrites it from the store/.test(e.message),
+    'a corrupt marker refuses naming it and the way out, not as an upgrade problem');
+    rmSync(markerFile);
+    const again = await bootIn(base);
+    assert.ok(again.logs.includes(`[store] rewrote ${markerFile} from store ${id}`), 'the way the refusal names works');
   } finally {
     closeBase(base);
   }

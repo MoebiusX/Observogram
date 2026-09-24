@@ -36,9 +36,17 @@ export const MIGRATABLE = Object.freeze(['packs', 'deploys.jsonl', 'snapshots', 
 export const MARKER = '.store-imported';
 const MARKER_BY = Object.freeze(['import', 'replace', 'export', 'repair', 'purge-org']);
 
+const LEGACY_TAIL = 'the upgrade imports nothing until it is fixed';
+// The marker is written by the store, not by a person, and a corrupt one
+// on an imported store is not an upgrade problem: say so and name the way
+// out (applyRepairs rewrites a missing marker from the database).
+const MARKER_TAIL = 'nothing was changed. The store writes this file: with the server stopped, delete it and the next ' +
+  'start rewrites it from the store — unless this workspace\'s database was lost or moved, since the marker is then ' +
+  'the only record of the store the legacy files were imported into';
+
 export class LegacyFileError extends Error {
-  constructor(path, reason, options) {
-    super(`${path}: ${reason} — the upgrade imports nothing until it is fixed`, options);
+  constructor(path, reason, options, tail = LEGACY_TAIL) {
+    super(`${path}: ${reason} — ${tail}`, options);
     this.name = 'LegacyFileError';
     this.code = 'ERR_OBSERVOGRAM_LEGACY_FILE';
     this.path = path;
@@ -76,19 +84,19 @@ export function usersHashKey(recorded) {
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
 // ENOENT → null (absent); any other read error, or a parse error, throws.
-function readJson(path) {
+function readJson(path, tail = LEGACY_TAIL) {
   let raw;
   try {
     raw = readFileSync(path);
   } catch (e) {
     if (e?.code === 'ENOENT') return null;
-    throw new LegacyFileError(path, `cannot be read (${e?.code || e?.message})`, { cause: e });
+    throw new LegacyFileError(path, `cannot be read (${e?.code || e?.message})`, { cause: e }, tail);
   }
   let data;
   try {
     data = JSON.parse(raw.toString('utf8'));
   } catch (e) {
-    throw new LegacyFileError(path, `is not valid JSON (${e.message})`, { cause: e });
+    throw new LegacyFileError(path, `is not valid JSON (${e.message})`, { cause: e }, tail);
   }
   return { raw, data };
 }
@@ -190,12 +198,12 @@ export function markerPath(base = baseWorkspacePath()) {
 // throws naming it (it cannot be compared).
 export function readMarker(base = baseWorkspacePath()) {
   const path = markerPath(base);
-  const read = readJson(path);
+  const read = readJson(path, MARKER_TAIL);
   if (!read) return null;
   const m = read.data;
   if (!isPlainObject(m) || typeof m.storeId !== 'string' || !m.storeId || !isPlainObject(m.files)
     || typeof m.by !== 'string' || typeof m.writtenAt !== 'string') {
-    throw new LegacyFileError(path, 'is not a store import marker ({ storeId, files, by, writtenAt })');
+    throw new LegacyFileError(path, 'is not a store import marker ({ storeId, files, by, writtenAt })', undefined, MARKER_TAIL);
   }
   return { storeId: m.storeId, files: m.files, by: m.by, writtenAt: m.writtenAt };
 }
