@@ -71,7 +71,7 @@ import { versionInfo } from './version.mjs';
 import { buildInfo, buildLabel } from './build-info.mjs';
 import { tenancyEnabled, orgsForUser, orgExists, runWithOrg, currentOrg, readOrgs, migrateFlatWorkspace } from './tenancy.mjs';
 import { setWorkspaceRootResolver } from '../tools/lib/journey.mjs';
-import { orgWorkspaceRoot } from './tenancy.mjs';
+import { orgWorkspaceRoot, baseWorkspaceRoot } from './tenancy.mjs';
 import { brandEnv } from '../tools/lib/brand-env.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
 import { stackSummary } from '../tools/lib/stack-evidence.mjs';
@@ -874,7 +874,7 @@ app.get('/api/journeys', (req, res) => {
       // a journey that can never run must not look like a healthy
       // never-run one.
       let loadError = null;
-      try { def = loadJourneyDef(name); } catch (e) { loadError = e.message; }
+      try { def = loadJourneyDef(name, { allowPath: false }); } catch (e) { loadError = e.message; }
       const lastRun = readJourneyRuns(name, { limit: 1 })[0] || null;
       return {
         name,
@@ -953,7 +953,7 @@ app.get('/api/journeys/:name/runs', (req, res) => {
 // for an unknown or unloadable journey.
 app.get('/api/journeys/:name/schedule', (req, res) => {
   let def;
-  try { def = loadJourneyDef(req.params.name); }
+  try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
   catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
   try {
     const parsed = parsedSchedule(def);
@@ -979,10 +979,12 @@ app.get('/api/journeys/:name/schedule', (req, res) => {
 // 502 when a pack source can't be resolved (live MCP down etc.).
 app.post('/api/journeys/:name/run', async (req, res) => {
   let def;
-  try { def = loadJourneyDef(req.params.name); }
+  try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
   catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
   try {
-    const record = await runJourney(def);
+    // A crawl: walk reads only this org's own part of the workspace
+    // (STORE_PLAN slice 2, A-24); a crawl root in another org's part is refused.
+    const record = await runJourney(def, { crawlScope: { base: baseWorkspaceRoot(), ownRoot: orgWorkspaceRoot() } });
     res.json({ ok: true, record });
   } catch (e) {
     res.status(502).json({ ok: false, error: redactCredentials(String(e.message)) });

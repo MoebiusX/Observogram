@@ -10,7 +10,7 @@
  * append + read-back ordering, and the markdown report. Exit 0 = pass.
  */
 
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readdirSync, readFileSync, symlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
@@ -1515,6 +1515,76 @@ try {
     } finally {
       rmSync(TMP2, { recursive: true, force: true });
       rmSync(TMP3, { recursive: true, force: true });
+    }
+  }
+
+  // --- STORE_PLAN slice 2: name-only loads over the API, crawl walks scoped to the org ---
+  {
+    const OUT = mkdtempSync(join(tmpdir(), 'observogram-journey-path-'));
+    const scoped = mkdtempSync(join(tmpdir(), 'observogram-journey-scope-'));
+    const B = PACK_B.replaceAll('\\', '/');
+    const GO = 'package main\nimport "github.com/prometheus/client_golang/prometheus"\nvar c = prometheus.NewCounter(prometheus.CounterOpts{Name: "orders_total"})\n';
+    const put = (p, text = GO) => { mkdirSync(join(p, '..'), { recursive: true }); writeFileSync(p, text); };
+    const crawlDef = (name, path) => ({ name, packA: { crawl: { path, name: 'svc' } }, packB: { file: B } });
+    const tryRun = async (def, opts) => { try { return { rec: await runJourney(def, opts) }; } catch (e) { return { err: e.message }; } };
+    try {
+      // allowPath: a literal path loads for the CLI, never with allowPath:false (the server).
+      const outside = join(OUT, 'elsewhere.journey.yaml');
+      writeFileSync(outside, ['name: elsewhere', `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`, `packB: { file: ${B} }`].join('\n'));
+      assert(loadJourneyDef(outside).name === 'elsewhere', 'loadJourneyDef: a literal path still loads by default (the CLI)');
+      let pathErr = null;
+      try { loadJourneyDef(outside, { allowPath: false }); } catch (e) { pathErr = e.message; }
+      assert(/^journey not found: /.test(pathErr || ''), 'loadJourneyDef with allowPath:false never resolves a path', pathErr);
+      let relErr = null;
+      try { loadJourneyDef('../journeys/pay-vs-curated.journey.yaml', { allowPath: false }); } catch (e) { relErr = e.message; }
+      assert(/^journey not found: /.test(relErr || ''), 'allowPath:false: a relative path is sanitised into a name that does not exist', relErr);
+      assert(loadJourneyDef('pay-vs-curated', { allowPath: false }).name === 'pay-vs-curated', 'allowPath:false: a name under journeys/ still loads');
+
+      // The README's journey: crawl: { path: ../my-service } from <base>/journeys/, default org at the base.
+      put(join(TMP, 'my-service', 'main.go'));
+      writeFileSync(join(TMP, 'journeys', 'readme-crawl.journey.yaml'), ['name: readme-crawl', 'packA:', '  crawl:', '    path: ../my-service', '    name: my-service', `packB: { file: ${B} }`].join('\n'));
+      const readme = await tryRun(loadJourneyDef('readme-crawl', { allowPath: false }), { crawlScope: { base: TMP, ownRoot: TMP } });
+      assert(readme.rec?.packA?.source === `crawl:${join(TMP, 'my-service')}`, 'crawlScope: the README journey (default org at the base) walks <base>/my-service', readme.err || readme.rec?.packA);
+
+      // A walk of <base> from the default org never reads under <base>/orgs/.
+      const WS = join(scoped, 'ws');
+      put(join(WS, 'orgs', 'bravo', 'svc', 'main.go'));
+      const baseWalk = crawlDef('scope-base', '.');
+      const baseScoped = await tryRun(baseWalk, { baseDir: WS, crawlScope: { base: WS, ownRoot: WS } });
+      assert(/no scannable files found/.test(baseScoped.err || ''), 'crawlScope: a walk of <base> from the default org never reads under <base>/orgs/', baseScoped.err || 'ran');
+      assert((await tryRun(baseWalk, { baseDir: WS })).rec, 'no scope: the same walk reads <base>/orgs/ (today\'s walk, the CLI)');
+
+      // From orgs/acme: a root in <base>/packs or <base>/orgs/bravo is refused.
+      const ACME = join(WS, 'orgs', 'acme');
+      put(join(WS, 'packs', 'main.go'));
+      put(join(ACME, 'src', 'main.go'));
+      const acmeScope = { base: WS, ownRoot: ACME };
+      for (const [label, path] of [['<base>/packs', join(WS, 'packs')], ['<base>/orgs/bravo', join(WS, 'orgs', 'bravo')], ['<base> itself', WS]]) {
+        const r = await tryRun(crawlDef('scope-refused', path), { baseDir: ACME, crawlScope: acmeScope });
+        assert(r.err === `crawl source ${path} belongs to another org's part of the workspace — refused`, `crawlScope: from orgs/acme a crawl root in ${label} is refused`, r.err || 'ran');
+      }
+      assert((await tryRun(crawlDef('scope-own', 'src'), { baseDir: ACME, crawlScope: acmeScope })).rec, 'crawlScope: from orgs/acme its own root is walked');
+
+      // A crawl root that is an ancestor of the base never enters it.
+      const anc = crawlDef('scope-ancestor', scoped);
+      const ancScoped = await tryRun(anc, { baseDir: ACME, crawlScope: acmeScope });
+      assert(/no scannable files found/.test(ancScoped.err || ''), 'crawlScope: from orgs/acme a root that is an ancestor of the base never enters the base', ancScoped.err || 'ran');
+      assert((await tryRun(anc, { baseDir: ACME })).rec, 'no scope: the ancestor walk enters the base');
+
+      // A symlinked file into <base>/orgs/bravo is skipped.
+      if (process.platform !== 'win32') {
+        mkdirSync(join(ACME, 'linked'), { recursive: true });
+        symlinkSync(join(WS, 'orgs', 'bravo', 'svc', 'main.go'), join(ACME, 'linked', 'main.go'));
+        const link = crawlDef('scope-link', 'linked');
+        const linkScoped = await tryRun(link, { baseDir: ACME, crawlScope: acmeScope });
+        assert(/no scannable files found/.test(linkScoped.err || ''), 'crawlScope: a symlinked file into <base>/orgs/bravo is skipped', linkScoped.err || 'ran');
+        assert((await tryRun(link, { baseDir: ACME })).rec, 'no scope: the symlinked file is read (today\'s walk)');
+      }
+    } finally {
+      rmSync(OUT, { recursive: true, force: true });
+      rmSync(scoped, { recursive: true, force: true });
+      rmSync(join(TMP, 'my-service'), { recursive: true, force: true });
+      rmSync(join(TMP, 'journeys', 'readme-crawl.journey.yaml'), { force: true });
     }
   }
 } finally {

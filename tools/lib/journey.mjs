@@ -77,8 +77,8 @@
 // total loss of the observation point is a point in the drift history,
 // not a hole in it.
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync, openSync, readSync, closeSync } from 'node:fs';
-import { resolve, join, dirname, extname } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync, openSync, readSync, closeSync, realpathSync } from 'node:fs';
+import { resolve, join, dirname, extname, basename, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from './mini-yaml.mjs';
 import { validateCanonical, SPEC_SCHEMA_PATH } from './validator.mjs';
@@ -143,11 +143,13 @@ export function saveJourneyDef(name, def, { banner } = {}) {
 }
 
 // Resolve a journey by name (workspace journeys/) or by literal file path.
-export function loadJourneyDef(ref) {
-  const candidates = [
-    join(journeysDir(), `${sanitizeName(ref)}.journey.yaml`),
-    resolve(ref),
-  ];
+// The server passes { allowPath: false }: over the API a journey is only
+// ever a name under the org's journeys/ — Express decodes %2F into the
+// route parameter, so the path fallback would load any file on disk. The
+// CLI keeps it (`packc journey run ./some.journey.yaml`).
+export function loadJourneyDef(ref, { allowPath = true } = {}) {
+  const candidates = [join(journeysDir(), `${sanitizeName(ref)}.journey.yaml`)];
+  if (allowPath) candidates.push(resolve(ref));
   let text = null, source = null;
   for (const p of candidates) {
     try { text = readFileSync(p, 'utf8'); source = p; break; } catch (_) {}
@@ -392,7 +394,34 @@ const SCAN_EXT = /\.(ya?ml|json|cs|go|java|py|ts|tsx|js|mjs|rs|kt)$/i;
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
 
-function walkRepo(root) {
+// The crawl scope of a studio-run journey (STORE_PLAN slice 2): a walk
+// never reads what is not the requesting org's own part of the workspace.
+// scope = { base, ownRoot } (both absolute); null is the CLI's walk,
+// unchanged. Paths are compared as realpaths, so a symlink cannot lead a
+// walk into another org's part.
+function realOrResolved(p) {
+  try { return realpathSync(p); } catch {
+    const parent = dirname(p);
+    return parent === p ? p : join(realOrResolved(parent), basename(p));
+  }
+}
+function within(p, dir) { return p === dir || p.startsWith(dir.endsWith(sep) ? dir : dir + sep); }
+function crawlScopeTest(scope) {
+  if (!scope) return null;
+  const base = realOrResolved(resolve(scope.base));
+  const ownRoot = realOrResolved(resolve(scope.ownRoot));
+  const orgsDir = join(base, 'orgs');
+  // Outside the workspace (a checkout elsewhere) is nobody's part; inside
+  // it only the org's own root is, and the default org at the base never
+  // enters <base>/orgs/, where the other orgs live.
+  return (real) => !within(real, base) || (within(real, ownRoot) && !(ownRoot === base && within(real, orgsDir)));
+}
+
+function walkRepo(root, { scope = null } = {}) {
+  const inScope = crawlScopeTest(scope);
+  if (inScope && !inScope(realOrResolved(root))) {
+    throw new Error(`crawl source ${root} belongs to another org's part of the workspace — refused`);
+  }
   const files = {};
   let total = 0;
   const stack = [root];
@@ -402,11 +431,16 @@ function walkRepo(root) {
     try { entries = readdirSync(dir, { withFileTypes: true }); } catch (_) { continue; }
     for (const e of entries) {
       if (e.isDirectory()) {
-        if (!SKIP_DIRS.has(e.name) && !e.name.startsWith('.')) stack.push(join(dir, e.name));
+        if (!SKIP_DIRS.has(e.name) && !e.name.startsWith('.')) {
+          const sub = join(dir, e.name);
+          if (inScope && !inScope(realOrResolved(sub))) continue;   // never descended into
+          stack.push(sub);
+        }
         continue;
       }
       if (!SCAN_EXT.test(e.name)) continue;
       const full = join(dir, e.name);
+      if (inScope && !inScope(realOrResolved(full))) continue;      // a symlinked file included: skipped
       let size = 0;
       try { size = statSync(full).size; } catch (_) { continue; }
       if (size > MAX_FILE_BYTES || total + size > MAX_TOTAL_BYTES) continue;
@@ -419,11 +453,11 @@ function walkRepo(root) {
   return files;
 }
 
-async function resolvePackA(def, baseDir) {
+async function resolvePackA(def, baseDir, crawlScope = null) {
   if (def.packA.file) return loadPackFile(def.packA.file, baseDir);
   const c = def.packA.crawl;
   const root = resolve(baseDir || '.', c.path);
-  const files = walkRepo(root);
+  const files = walkRepo(root, { scope: crawlScope });
   if (!Object.keys(files).length) throw new Error(`crawl source ${root}: no scannable files found`);
   const out = crawlFiles(files, {
     repoName: c.name || undefined,
@@ -867,7 +901,9 @@ export function pruneLiveSnapshots(recordFiles, liveFiles) {
 
 // ---------- the run ----------
 
-export async function runJourney(def, { baseDir, notifier = postNotification } = {}) {
+// crawlScope: { base, ownRoot } from the server (a crawl: walk reads only
+// the org's own part of the workspace, walkRepo); null for the CLI.
+export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null } = {}) {
   def.__baseDir = baseDir || (def.__source ? dirname(def.__source) : '.');
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
@@ -876,7 +912,7 @@ export async function runJourney(def, { baseDir, notifier = postNotification } =
   // unset packB.mcp.authEnv. Kept in this local only.
   const notifyTarget = resolveNotifyTarget(def);
 
-  const a = await resolvePackA(def, def.__baseDir);
+  const a = await resolvePackA(def, def.__baseDir, crawlScope);
   let b;
   try {
     b = await resolvePackB(def);
