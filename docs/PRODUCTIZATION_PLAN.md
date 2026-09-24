@@ -70,6 +70,10 @@ enforced server-side, not hidden client-side.
 > suite. Remaining stage-1 nicety: dex-in-docker interop leg on the
 > backend-live job.
 >
+> *Superseded 2026-09-24:* the "plain file chosen over sqlite" call
+> above is reversed — users move into an embedded `node:sqlite` store
+> and the Node floor rises to 22.16. See [STORE_PLAN.md](STORE_PLAN.md).
+>
 > **Stage 1 addendum (2026-07-03, maintainer decision): ship like
 > Grafana.** The signed-in experience is now the DEFAULT: first boot
 > with nothing configured seeds `admin/admin` (users.json, the standard
@@ -152,10 +156,18 @@ enforced server-side, not hidden client-side.
   fine to ~50 orgs / hundreds of members; beyond that the registry
   module (one file) is the swap-point for a database. We do not build
   the database now.
+  *Reversed 2026-09-24 (planned, not yet built):* the registry moves
+  into the embedded store; [STORE_PLAN.md](STORE_PLAN.md) §4 imports
+  `orgs.json` and `users.json` into it.
 - Migration: a deployment with an existing flat workspace gets it
   moved to `orgs/default/` by a one-shot, idempotent boot migration.
 
 ### Stage 3 — Authorization (roles + org-scoped MCP endpoints)
+
+> **Stage 3 status — re-planned 2026-09-24** on the embedded store:
+> roles, the deployment-level owner and the route table in
+> [STORE_PLAN.md](STORE_PLAN.md) §5 / slice 3; org-scoped MCP endpoints
+> in slice 4.
 
 - **Roles per org:** `viewer` (read everything), `operator` (+ crawl /
   draft / register / deploy / retrofeed), `admin` (+ org settings,
@@ -176,7 +188,11 @@ enforced server-side, not hidden client-side.
 - TLS via reverse proxy (documented, not built); CSRF defence on
   mutating routes (SameSite=Lax + custom-header check); security
   headers; rate limit on `/auth/*`; secrets only via env; documented
-  backup story = the workspace directory (it already IS the state);
+  backup story = the embedded store's database file wherever
+  `OBSERVOGRAM_DB` puts it (on k8s on the `store` volume, outside the
+  workspace), copied with nothing holding it or live with `packc store
+  backup`, plus the workspace directory; see
+  [STORE_PLAN.md](STORE_PLAN.md) §3;
   upgrade/rollback notes. The fail-closed rule extends: non-loopback +
   no OIDC + no token → refuse to start, same as today.
 
@@ -229,6 +245,7 @@ Mirroring TEST_PLAN_COMPILER_VALIDITY.md — every claim CI-enforced:
    *(Recommended: generic-first.)*
 3. **File-first org registry** until scale demands otherwise.
    *(Recommended: yes — consistent with everything that made v1 work.)*
+   *Reversed 2026-09-24 — [STORE_PLAN.md](STORE_PLAN.md).*
 
 ## 7 · Risks
 

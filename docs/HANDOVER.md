@@ -22,7 +22,9 @@ next to Discover · Diagnose · Remediate. In order:
 | #105 | The **pop-up SLI editor**: one modal over an SLI and its SLO (id, description, metric, objective, window, bound, unit, resolved PromQL), opened from any L1 card on the stack or in the rolodex, live-applied on Define and Compile; `id` and `semconv_metric` overrides in the engine. |
 | #106 | **Spec 1.3** adopted: `good_when: below \| above` on threshold SLIs, vendored under `vendor/observability-pack-spec/v1.3/`, `SPEC_VERSION = '1.3'`, the burn-rate generator, the boards, the cards and the editor's Bound row know the direction. |
 
-`npm test`: 293 passing. `npm run lint`: 0 errors, 186 warnings (a baseline of
+`npm test`: 293 passing on CI's Node 20 (on Node 22.22, `tools/test-journey.mjs` fails
+under `node --test` — a pipe truncation in `packc journey run --all --json`, fixed first
+in [STORE_PLAN.md](STORE_PLAN.md) slice 1). `npm run lint`: 0 errors, 186 warnings (a baseline of
 `preserve-caught-error`-style warnings; do not add to it). CI on a PR: `validate`,
 `backend-live`, `refresh` (the vendored-spec check).
 
@@ -83,7 +85,7 @@ These are the rules we learned the hard way; treat them as standing instructions
 ## 3. Running and checking things
 
 ```bash
-npm test                 # node:test suites (293), the studio graph, the AA scan
+npm test                 # node:test suites (293 on Node 20; on 22.22 see §1), the studio graph, the AA scan
 npm run lint             # eslint: 0 errors is the bar, 186 warnings the baseline
 node tools/sync-spec.mjs --check   # vendored spec files match VERSIONS.json
 PORT=8013 OBSERVOGRAM_AUTH=off OBSERVOGRAM_WORKSPACE=/tmp/ws node server/index.mjs
@@ -127,7 +129,9 @@ table; Build's seed writes into it), a settings surface for users and environmen
 Discover · Diagnose · Remediate · Build hanging off a service record rather than a pack
 file. Design it against `docs/VALUE_BACKLOG.md` items 10 and 12 and
 `docs/RELEASE_READINESS.md`, and put the plan in front of him before the first commit —
-he ratifies plans for this stream (item 12 says so).
+he ratifies plans for this stream (item 12 says so). *Planned 2026-09-24:*
+[STORE_PLAN.md](STORE_PLAN.md) — schema, import, roles, slices and gates; the seven
+decisions are ratified; its §9b lists the refinements made since, which merging it confirms.
 
 **A. Decide: "the draft becomes the pack".** The root cause of every remaining Build gap is
 that the draft is a set of inputs re-instantiated from the seed on each change, with
@@ -213,9 +217,11 @@ read-only by design; the SLI rolodex shows the bare library id until a rename.
 - **`packc init` has no custom SLIs** and `--override` takes only the scalar fields and
   `id` / `semconv_metric` / `good_when`; PromQL edits are studio/API only. Documented in
   `library/README.md`.
-- **Persistence is file-first by design** (`users.json`, `packs/*.pack.yaml`, JSONL audit),
-  and the maintainer has now asked for an embedded SQL store instead (backlog 0). Until the
-  migration lands, every new record type is another file format and another ad-hoc loader.
+- **Persistence is file-first by design** (`users.json`, `orgs.json`, `packs/index.json`), and
+  the maintainer has asked for an embedded SQL store for these records (backlog 0, planned in
+  `docs/STORE_PLAN.md`). Artefacts (`packs/*.pack.yaml`, snapshots, journeys, runs,
+  `deploys.jsonl`) stay files. Until slice 2 lands, every new record type is another file
+  format and another ad-hoc loader.
 - **The Build state is inputs + overrides** (see backlog A). Until that changes, every new
   editable thing needs its own special case in the engine and the state.
 - **Distribution SLIs** get no burn rules (null legs) and no direction handling beyond the
@@ -242,6 +248,8 @@ read-only by design; the SLI rolodex shows the bare library id until a rename.
   the copies, the axis, the sheet, the editor, the API and the CLI.
 - `library/README.md` — the entry format, `instantiatePack` inputs (`overrides`, `custom`,
   `good_when`), the caps, the CLI flags.
+- `docs/STORE_PLAN.md` — backlog 0: the embedded store, its import from today's files,
+  roles and owners, the slices and their gates.
 - `docs/VALUE_BACKLOG.md` — the product backlog the maintainer curates (P1–P4); items A–C
   above are the Build-journey additions to it and should be filed there when he ratifies them.
 - `docs/CHANGELOG.md` (Unreleased) — one entry per PR above, with the review findings each
