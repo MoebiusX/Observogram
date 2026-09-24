@@ -54,7 +54,7 @@ telemetry:
   scrape_jobs: [ { job_name: "${broker_job}", scrape_interval: 30s, targets: ["${broker_targets}"], minTier: tier-3 } ]
 slis:
   - id: broker_availability
-    type: ratio             # ratio (good/total) | threshold (query/threshold, upper bound)
+    type: ratio             # ratio (good/total) | threshold (query/threshold, and good_when: below | above — a ceiling, the default, or a floor; spec 1.3)
     minTier: tier-3         # the least stringent tier that includes it BY DEFAULT — never a gate: any SLI may be selected at any tier
     description: ...
     why: ...                # why this SLI, for the studio
@@ -126,8 +126,12 @@ stays keyed by the id the library gives the SLI, so a renamed SLI stays attached
 library row; a rename to that id is no rename), `objective` (a number in (0, 1) — the ratio
 the pack stores; the studio shows a percent), `window` (one of the schema's SLO windows `7d
 | 28d | 30d | 90d` — the schema's enum, not any duration), `threshold` (a finite number, a
-threshold SLI only; it is an upper bound: spec v1.2 has no direction field, so
-`comparison` is refused with that reason — a floor is a ratio SLI), `query` (threshold)
+threshold SLI only — the bound), `good_when` (`below` | `above`, a threshold SLI only: the
+side of the bound that is good — below, a ceiling, the default when absent; above, a floor
+(spec 1.3). It is copied into the pack SLI as declared, never synthesised, so a pack that
+says nothing stays 1.2-shaped; it keeps the library's evidence — the expression is still
+the library's; the retired `comparison` is refused with the reason "the direction of a
+threshold is good_when … — use good_when"), `query` (threshold)
 or `good` / `total` (ratio) — non-empty strings within `MAX_PARAM_LENGTH` (4096) that
 carry no `${…}` placeholder, since an override replaces the library's expression *after*
 the params are in — `description` and `unit` (bounded strings), `semconv_metric` (one
@@ -152,6 +156,7 @@ still the library's). The result says what was customised: `provenance.slis[<id>
 instantiatePack(entries, { name, tier, custom: [
   { id: 'checkout_success', type: 'ratio', good: 'sum(rate(checkout_ok_total[5m]))', total: 'sum(rate(checkout_total[5m]))', objective: 0.999, window: '30d' },
   { id: 'checkout_p99', type: 'threshold', query: 'histogram_quantile(0.99, sum by (le)(rate(checkout_seconds_bucket[5m])))', threshold: 0.3, unit: 'seconds', objective: 0.99, window: '7d' },
+  { id: 'settlement_consumers', type: 'threshold', good_when: 'above', query: 'min(kafka_consumer_group_members{group="settler"})', threshold: 2, unit: 'consumers', objective: 0.999, window: '30d' },   // a floor: fewer than two is bad
 ] })
 ```
 
@@ -174,11 +179,12 @@ the annotation `library.custom`. The rubric counts it like any SLI, nothing more
 instantiate inputs in place of `canonical`), the studio (the pop-up SLI editor — Edit on a
 rolodex card, any SLI or SLO card on the stack, the + Custom SLI card;
 `docs/BUILD_JOURNEY.md` "The editor"), and the CLI for the scalar overrides only:
-`packc init … --override <sli>.<id|objective|window|threshold|semconv_metric>=<value>`
+`packc init … --override <sli>.<id|objective|window|threshold|good_when|semconv_metric>=<value>`
 (repeatable; a query, good or total is edited in the studio or in the pack file; the CLI
 takes no custom SLI in this slice). `--slis a,b` / `--sli <id>` takes any SLI of the chosen
 entries, above the tier too. The index rows (`libraryIndex`) carry each SLI's PromQL
-templates, bound and `semconv_metric` — the defaults the editor shows.
+templates, bound with its direction (`good_when`, normalised: `below` where the template
+says nothing) and `semconv_metric` — the defaults the editor shows.
 
 ## The quality bar
 
@@ -248,7 +254,9 @@ toggles:
   policy off exactly the burn-rate clause;
 - the seed and the copies: an SLI above the tier instantiates with its own profile's
   objective and no warning; the per-tier walk; overrides change the SLO id, the window,
-  the threshold; an `id` override renames the SLI and everything that names it (the SLO,
+  the threshold; `good_when` declared in an entry, in an override (the compiled alert then
+  reads `< bool`, the evidence stays the library's) and in a custom SLI, copied as declared
+  and never written when nothing is declared; an `id` override renames the SLI and everything that names it (the SLO,
   the rule, the bindings, the compiled alert, the provenance) and refuses clashes and
   shadows; `semconv_metric` restated, dropped with an edited expression or kept beside it;
   an overridden expression drops the evidence to `custom` and the

@@ -56,6 +56,7 @@ Each `artefact` is:
   id: string,                            // family + index, e.g. "SLI-01"
   title: string,
   desc: string,                          // one-line summary
+  subtitle?: string,                     // a threshold / distribution SLI's bound with its direction (spec 1.3 good_when): '≤ 0.5 seconds', '≥ 2 consumers'
   tool: string,                          // implementation tool/family
   tags: string[],
   source: 'Declared' | 'Verified' | 'Scaffold',

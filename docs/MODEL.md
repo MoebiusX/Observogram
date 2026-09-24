@@ -40,6 +40,24 @@ them or when the crawler/live MCP materialises them from discovered backends.
 The L2X tab is **hidden when empty** so packs without extended surfaces look
 uncluttered.
 
+## What the studio reads on an SLI — the bound and its direction (spec 1.3)
+
+The SLI fields the studio's readers project (`tools/lib/adapter.mjs`, the dashboards, the
+burn-rate generator, the library engine, the editor): `id`, `type` (`ratio` | `threshold` |
+`distribution` | `custom`), `description`, `semconv_metric`, `good` / `total` (ratio), `query`
+(threshold, distribution), `expression` (custom), `threshold` (the bound, in `unit`),
+`percentile` (distribution), `unit`, `owner` — and, since spec 1.3, `good_when: below | above`
+on `threshold` and `distribution` SLIs: which side of the bound is good. `below` is the
+default and the only meaning a 1.2 pack could express (a ceiling: a sample is good at or below
+the bound — latency, lag, error rate, queue age); `above` makes the bound a floor (good at or
+above it — in-sync replicas, connected consumers, free capacity). The bound itself is good
+either way. Absent means `below`, and one helper says so for every reader
+(`tools/lib/good-when.mjs` `goodWhen(sli)`; the browser copy `studio/sli-direction.mjs`):
+the generator's comparison (`> bool` a ceiling, `< bool` a floor), the tile's colour
+orientation, the card's subtitle (`≤ 0.5 seconds`, `≥ 2 consumers`) and the editor's
+*good when* control all derive from it. The schema forbids the field on `ratio` and `custom`
+SLIs (`matches forbidden 'not' schema`).
+
 ## What the studio adds — source tag taxonomy
 
 Each artefact in the layered display carries one of three source tags

@@ -477,10 +477,14 @@ schema: valid (spec v1.3)
 The pack goes to stdout or `--out`; the todo list and the conformance line go to
 stderr. `--slis a,b` (or `--sli <id>`, repeatable) picks the SLIs — any SLI of the
 entries, above the tier too: the tier is a seed, an SLI above it starts from its own
-tier's profile; `--override <sli>.<objective|window|threshold>=<value>` (repeatable)
+tier's profile; `--override <sli>.<id|objective|window|threshold|good_when|semconv_metric>=<value>` (repeatable)
 edits a selected SLI's copy of the library's value (the SLO id follows the objective; a
 query is edited in the studio or the pack file; an override for an SLI not in the pack
-is a `warning [override]`); `--no-dashboards`,
+is a `warning [override]`). A threshold SLI's bound has a direction since spec 1.3 —
+`good_when: below` (a ceiling, the default) or `above` (a floor: connected consumers,
+in-sync replicas) — declared in a library entry, in an override (`--override
+<sli>.good_when=above`, or the editor's *good when* control) or in a custom SLI, and the
+compiled burn alert then counts the samples under the bound; `--no-dashboards`,
 `--no-policy`, `--no-routes`, `--no-validation`, `--no-slos` leave that section out
 (the schema and the rubric then both say what is missing, exit `1`); `--entry
 kafka,http-service` composes several entries into one pack; `--json` returns

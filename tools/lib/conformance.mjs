@@ -94,6 +94,9 @@ export const RUBRIC = [
     id: 'L1.MUST.latency_slo', dimension: 'L1', severity: 'MUST', minTier: 'tier-2',
     description: 'At least one latency SLO (threshold or distribution SLI).',
     specRef: '§5.1',
+    // Counted by TYPE, never by direction: since spec 1.3 a floor SLI (`good_when: above` — connected consumers,
+    // in-sync replicas) satisfies this clause as well, exactly as the upstream maturity model's clause 2.1 says in
+    // its conformance cell. Tightening it to `good_when: below` would be a rubric revision, not part of the adoption.
     evaluate(c) {
       const ids = new Set(slos(c).map(s => stripRef(s.sli)));
       return slis(c).some(s => (s.type === 'threshold' || s.type === 'distribution') && ids.has(s.id));
