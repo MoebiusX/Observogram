@@ -118,7 +118,8 @@
             "tier-1": "7d"
           },
           "query": "sum(rate(alertmanager_notifications_failed_total[5m]))",
-          "threshold": 0
+          "threshold": 0,
+          "good_when": "below"
         },
         {
           "id": "active_silences",
@@ -141,7 +142,8 @@
             "tier-1": "7d"
           },
           "query": "sum(alertmanager_silences{state=\"active\"})",
-          "threshold": 20
+          "threshold": 20,
+          "good_when": "below"
         }
       ],
       "sliCountByTier": {
@@ -281,7 +283,8 @@
             "tier-1": "30d"
           },
           "query": "histogram_quantile(0.99,\n  sum by (le)(rate(grafana_http_request_duration_seconds_bucket[5m])))",
-          "threshold": 1
+          "threshold": 1,
+          "good_when": "below"
         },
         {
           "id": "datasource_proxy_latency_p99",
@@ -305,7 +308,8 @@
             "tier-1": "30d"
           },
           "query": "histogram_quantile(0.99,\n  sum by (le)(rate(grafana_datasource_request_duration_seconds_bucket[5m])))",
-          "threshold": 2
+          "threshold": 2,
+          "good_when": "below"
         },
         {
           "id": "alerting_rule_evaluation_success_ratio",
@@ -402,7 +406,8 @@
             "tier-1": "30d"
           },
           "query": "histogram_quantile(0.99,\n  sum by (le)(rate(grafana_database_queries_duration_seconds_bucket[5m])))",
-          "threshold": 0.5
+          "threshold": 0.5,
+          "good_when": "below"
         }
       ],
       "sliCountByTier": {
@@ -572,7 +577,8 @@
             "tier-1": "30d"
           },
           "query": "max by (qmgr, queue) (\n  last_over_time(ibmmq_queue_depth{job=\"${exporter_job}\", queue=~\"${queue_pattern}\"}[30s])\n    / last_over_time(ibmmq_queue_attribute_max_depth{job=\"${exporter_job}\", queue=~\"${queue_pattern}\"}[30s])\n)",
-          "threshold": 0.8
+          "threshold": 0.8,
+          "good_when": "below"
         },
         {
           "id": "oldest_message_age",
@@ -596,7 +602,8 @@
             "tier-1": "7d"
           },
           "query": "max by (qmgr, queue) (\n  last_over_time(ibmmq_queue_oldest_message_age{job=\"${exporter_job}\", queue=~\"${queue_pattern}\", queue!=\"${dlq}\"}[30s])\n)",
-          "threshold": 60
+          "threshold": 60,
+          "good_when": "below"
         },
         {
           "id": "dlq_depth",
@@ -620,7 +627,8 @@
             "tier-1": "30d"
           },
           "query": "max by (qmgr) (last_over_time(ibmmq_queue_depth{job=\"${exporter_job}\", queue=\"${dlq}\"}[30s]))",
-          "threshold": 0
+          "threshold": 0,
+          "good_when": "below"
         },
         {
           "id": "canary_success",
@@ -668,7 +676,8 @@
             "tier-1": "30d"
           },
           "query": "histogram_quantile(0.99,\n  sum by (le) (rate(mq_canary_roundtrip_duration_seconds_bucket{result=\"ok\"}[5m])))",
-          "threshold": 0.5
+          "threshold": 0.5,
+          "good_when": "below"
         },
         {
           "id": "log_write_latency",
@@ -692,7 +701,8 @@
             "tier-1": "7d"
           },
           "query": "max by (qmgr) (last_over_time(ibmmq_qmgr_log_write_latency_seconds{job=\"${exporter_job}\"}[30s]))",
-          "threshold": 0.02
+          "threshold": 0.02,
+          "good_when": "below"
         }
       ],
       "sliCountByTier": {
@@ -830,7 +840,8 @@
             "tier-1": "7d"
           },
           "query": "max by (consumergroup) (\n  kafka_consumergroup_lag /\n    (rate(kafka_consumergroup_current_offset[5m]) > 0)\n)",
-          "threshold": 60
+          "threshold": 60,
+          "good_when": "below"
         },
         {
           "id": "partition_replica_health",
@@ -879,7 +890,8 @@
             "tier-1": "30d"
           },
           "query": "max(kafka_network_requestmetrics_totaltimems{request=\"Produce\",quantile=\"0.99\"}) / 1000",
-          "threshold": 0.1
+          "threshold": 0.1,
+          "good_when": "below"
         },
         {
           "id": "fetch_latency_p99",
@@ -903,7 +915,8 @@
             "tier-1": "30d"
           },
           "query": "max(kafka_network_requestmetrics_localtimems{request=\"FetchConsumer\",quantile=\"0.99\"}) / 1000",
-          "threshold": 0.05
+          "threshold": 0.05,
+          "good_when": "below"
         },
         {
           "id": "controller_election_rate",
@@ -927,7 +940,8 @@
             "tier-1": "7d"
           },
           "query": "max(rate(kafka_controller_kafkacontroller_newactivecontrollerscount[1h])) * 3600",
-          "threshold": 1
+          "threshold": 1,
+          "good_when": "below"
         }
       ],
       "sliCountByTier": {
@@ -1034,7 +1048,8 @@
             "tier-1": "7d"
           },
           "query": "sum(rate(otelcol_exporter_send_failed_log_records[5m])) or (count(otelcol_exporter_sent_log_records) * 0)",
-          "threshold": 0
+          "threshold": 0,
+          "good_when": "below"
         },
         {
           "id": "log_records_refused",
@@ -1058,7 +1073,8 @@
             "tier-1": "7d"
           },
           "query": "sum(rate(otelcol_receiver_refused_log_records[5m])) or (count(otelcol_receiver_accepted_log_records) * 0)",
-          "threshold": 0
+          "threshold": 0,
+          "good_when": "below"
         },
         {
           "id": "shipper_drops",
@@ -1081,7 +1097,8 @@
             "tier-1": "7d"
           },
           "query": "sum(rate(promtail_dropped_entries_total[5m]))",
-          "threshold": 0
+          "threshold": 0,
+          "good_when": "below"
         }
       ],
       "sliCountByTier": {
@@ -1189,7 +1206,8 @@
             "tier-1": "7d"
           },
           "query": "sum(rate(otelcol_exporter_send_failed_metric_points${suffix}[5m])) or (count(otelcol_exporter_sent_metric_points${suffix}) * 0)",
-          "threshold": 0
+          "threshold": 0,
+          "good_when": "below"
         },
         {
           "id": "span_export_failures",
@@ -1213,7 +1231,8 @@
             "tier-1": "7d"
           },
           "query": "sum(rate(otelcol_exporter_send_failed_spans${suffix}[5m])) or (count(otelcol_exporter_sent_spans${suffix}) * 0)",
-          "threshold": 0
+          "threshold": 0,
+          "good_when": "below"
         },
         {
           "id": "log_export_failures",
@@ -1237,7 +1256,8 @@
             "tier-1": "7d"
           },
           "query": "sum(rate(otelcol_exporter_send_failed_log_records${suffix}[5m])) or (count(otelcol_exporter_sent_log_records${suffix}) * 0)",
-          "threshold": 0
+          "threshold": 0,
+          "good_when": "below"
         },
         {
           "id": "queue_saturation",
@@ -1261,7 +1281,8 @@
             "tier-1": "7d"
           },
           "query": "max(max by (exporter, instance, job) (otelcol_exporter_queue_size) / max by (exporter, instance, job) (otelcol_exporter_queue_capacity))",
-          "threshold": 0.8
+          "threshold": 0.8,
+          "good_when": "below"
         },
         {
           "id": "metrics_refused",
@@ -1285,7 +1306,8 @@
             "tier-1": "7d"
           },
           "query": "sum(rate(otelcol_receiver_refused_metric_points${suffix}[5m])) or (count(otelcol_receiver_accepted_metric_points${suffix}) * 0)",
-          "threshold": 0
+          "threshold": 0,
+          "good_when": "below"
         }
       ],
       "sliCountByTier": {
@@ -1425,7 +1447,8 @@
             "tier-1": "30d"
           },
           "query": "max(quantile_over_time(0.99, scrape_duration_seconds[5m]))",
-          "threshold": 5
+          "threshold": 5,
+          "good_when": "below"
         },
         {
           "id": "query_latency_p99",
@@ -1449,7 +1472,8 @@
             "tier-1": "30d"
           },
           "query": "histogram_quantile(0.99,\n  sum by (le)(rate(prometheus_http_request_duration_seconds_bucket{handler=~\"/api/v1/query|/api/v1/query_range\"}[5m])))",
-          "threshold": 1
+          "threshold": 1,
+          "good_when": "below"
         },
         {
           "id": "alertmanager_notification_success_ratio",
@@ -1549,7 +1573,8 @@
             "tier-1": "7d"
           },
           "query": "max(\n  prometheus_engine_queries / prometheus_engine_queries_concurrent_max\n)",
-          "threshold": 0.8
+          "threshold": 0.8,
+          "good_when": "below"
         }
       ],
       "sliCountByTier": {
@@ -1664,7 +1689,8 @@
             "tier-1": "7d"
           },
           "query": "sum(rate(otelcol_exporter_send_failed_spans[5m])) or (count(otelcol_exporter_sent_spans) * 0)",
-          "threshold": 0
+          "threshold": 0,
+          "good_when": "below"
         },
         {
           "id": "spans_refused",
@@ -1688,7 +1714,8 @@
             "tier-1": "7d"
           },
           "query": "sum(rate(otelcol_receiver_refused_spans[5m])) or (count(otelcol_receiver_accepted_spans) * 0)",
-          "threshold": 0
+          "threshold": 0,
+          "good_when": "below"
         },
         {
           "id": "export_queue_saturation",
@@ -1712,7 +1739,8 @@
             "tier-1": "7d"
           },
           "query": "max(max by (exporter, instance, job) (otelcol_exporter_queue_size{exporter=~\"${traces_exporter}\"}) / max by (exporter, instance, job) (otelcol_exporter_queue_capacity{exporter=~\"${traces_exporter}\"}))",
-          "threshold": 0.8
+          "threshold": 0.8,
+          "good_when": "below"
         }
       ],
       "sliCountByTier": {
@@ -1820,7 +1848,8 @@
             "tier-1": "30d"
           },
           "query": "histogram_quantile(0.99,\n  sum by (le)(rate(${duration_metric}_bucket{job=\"${job}\"}[5m])))",
-          "threshold": 0.5
+          "threshold": 0.5,
+          "good_when": "below"
         },
         {
           "id": "in_flight_saturation",
@@ -1844,7 +1873,8 @@
             "tier-1": "7d"
           },
           "query": "max by (instance) (http_server_active_requests{job=\"${job}\"})",
-          "threshold": 100
+          "threshold": 100,
+          "good_when": "below"
         },
         {
           "id": "error_rate",
@@ -1868,7 +1898,8 @@
             "tier-1": "7d"
           },
           "query": "sum(rate(${duration_metric}_count{job=\"${job}\",http_response_status_code=~\"5..\"}[5m])) or vector(0)",
-          "threshold": 1
+          "threshold": 1,
+          "good_when": "below"
         }
       ],
       "sliCountByTier": {
@@ -1985,7 +2016,8 @@
             "tier-1": "30d"
           },
           "query": "histogram_quantile(0.99,\n  sum by (le)(rate(messaging_process_duration_seconds_bucket{job=\"${job}\",messaging_system=\"${messaging_system}\",messaging_destination_name=~\"${destination}\"}[5m])))",
-          "threshold": 1
+          "threshold": 1,
+          "good_when": "below"
         },
         {
           "id": "receive_duration_p99",
@@ -2009,7 +2041,8 @@
             "tier-1": "30d"
           },
           "query": "histogram_quantile(0.99,\n  sum by (le)(rate(messaging_client_operation_duration_seconds_bucket{job=\"${job}\",messaging_system=\"${messaging_system}\",messaging_operation_type=\"receive\"}[5m])))",
-          "threshold": 0.5
+          "threshold": 0.5,
+          "good_when": "below"
         },
         {
           "id": "processing_errors",
@@ -2033,7 +2066,8 @@
             "tier-1": "7d"
           },
           "query": "sum(rate(messaging_client_consumed_messages_total{job=\"${job}\",messaging_system=\"${messaging_system}\",messaging_destination_name=~\"${destination}\",error_type!=\"\"}[5m])) or vector(0)",
-          "threshold": 1
+          "threshold": 1,
+          "good_when": "below"
         }
       ],
       "sliCountByTier": {

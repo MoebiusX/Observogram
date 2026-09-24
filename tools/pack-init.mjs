@@ -6,14 +6,15 @@
  *   packc init --show <entry>               params, SLIs per tier, per-tier objectives, evidence
  *   packc init --entry <id>[,<id>] --tier tier-1|tier-2|tier-3 --name <service>
  *              [--env <environment>] [--owner <team>]... [--param k=v]... [--slis a,b | --sli <id>]...
- *              [--override <sli>.<id|objective|window|threshold|semconv_metric>=<value>]...
+ *              [--override <sli>.<id|objective|window|threshold|good_when|semconv_metric>=<value>]...
  *              [--no-slos] [--no-policy] [--no-routes] [--no-dashboards] [--no-validation]
  *              [--out <file>] [--json] [--library <dir>]
  *
  * The tier is a seed, not a gate (docs/BUILD_JOURNEY.md "The seed and the copies"): --slis / --sli
  * takes any SLI of the chosen entries, above the tier too (it starts from its own tier's profile), and
  * --override edits a selected SLI's id (a rename: the SLO, the rule and the bindings follow; the SLI
- * is still addressed by its library id), objective, window, threshold or semconv_metric (the
+ * is still addressed by its library id), objective, window, threshold, good_when (below | above: the
+ * side of a threshold SLI's bound that is good, spec 1.3) or semconv_metric (the
  * copy-on-write the engine applies; a query, good or total is edited in the studio or in the pack
  * file — the CLI does not take PromQL on the command line, and it takes no custom SLI in this slice).
  * An override for an SLI not in the pack is a warning [override], not an error.
@@ -48,12 +49,12 @@ const USAGE = `usage: packc init --list [--library <dir>]
        packc init --show <entry>
        packc init --entry <id>[,<id>] --tier tier-1|tier-2|tier-3 --name <service> [--env <environment>]
                   [--owner <team>]... [--param k=v]... [--slis a,b | --sli <id>]...
-                  [--override <sli>.<id|objective|window|threshold|semconv_metric>=<value>]...
+                  [--override <sli>.<id|objective|window|threshold|good_when|semconv_metric>=<value>]...
                   [--no-slos] [--no-policy] [--no-routes] [--no-dashboards] [--no-validation]
                   [--out <file>] [--json]`;
 
 /** What --override takes on the command line: the scalar fields. PromQL is edited in the studio or the pack file. */
-const CLI_OVERRIDE_FIELDS = ['id', 'objective', 'window', 'threshold', 'semconv_metric'];
+const CLI_OVERRIDE_FIELDS = ['id', 'objective', 'window', 'threshold', 'good_when', 'semconv_metric'];
 /** The scalar overrides that are numbers on the command line; the rest stay strings. */
 const CLI_NUMERIC_OVERRIDES = ['objective', 'threshold'];
 const VALUE_FLAGS = new Set(['--entry', '--tier', '--name', '--env', '--owner', '--param', '--slis', '--sli', '--override', '--out', '--library', '--show']);
@@ -96,7 +97,7 @@ function parseArgs(argv) {
         const dot = lhs.lastIndexOf('.');
         if (dot <= 0 || dot === lhs.length - 1) usageError(`--override expects <sli>.<field>=<value>, got ${v}`);
         const sli = lhs.slice(0, dot), field = lhs.slice(dot + 1);
-        if (!CLI_OVERRIDE_FIELDS.includes(field)) usageError(`--override takes id, objective, window, threshold or semconv_metric (got ${field}); a query, good or total is edited in the studio or in the pack file`);
+        if (!CLI_OVERRIDE_FIELDS.includes(field)) usageError(`--override takes id, objective, window, threshold, good_when or semconv_metric (got ${field}); a query, good or total is edited in the studio or in the pack file`);
         let value = raw;
         if (CLI_NUMERIC_OVERRIDES.includes(field)) { value = Number(raw); if (raw.trim() === '' || !Number.isFinite(value)) usageError(`--override ${sli}.${field}: a number is required, got ${JSON.stringify(raw)}`); }
         o.overrides[sli] = { ...(o.overrides[sli] || {}), [field]: value };

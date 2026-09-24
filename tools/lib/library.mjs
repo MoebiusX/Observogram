@@ -75,6 +75,7 @@ import { parse as parseYaml } from './mini-yaml.mjs';
 import { RUBRIC, TIER_RANK, evaluateConformance } from './conformance.mjs';
 import { fileSlug, metricPrefix } from './slug.mjs';
 import { compileBurnRules } from './burn-rules.mjs';
+import { goodWhen, GOOD_WHEN } from './good-when.mjs';
 
 // ---------------------------------------------------------------------------
 // Constants — the entry format and the scaffold's fixed vocabulary
@@ -120,9 +121,10 @@ function burnWindowsFor(template, tier) {
  * The fields an override may carry, keyed by the SLI id as the library gives it to the pack (prefixed when several
  * entries compose; docs/BUILD_JOURNEY.md "The seed and the copies"). `id` renames the SLI in the pack — the key
  * stays the library's, so a caller keeps a renamed SLI attached to its library row; `semconv_metric` restates the
- * metric the SLI reads.
+ * metric the SLI reads; `good_when` (spec 1.3, threshold only) says which side of the bound is good — below, a
+ * ceiling (the default: absent means below), or above, a floor.
  */
-export const OVERRIDE_FIELDS = Object.freeze(['id', 'objective', 'window', 'threshold', 'query', 'good', 'total', 'description', 'unit', 'semconv_metric']);
+export const OVERRIDE_FIELDS = Object.freeze(['id', 'objective', 'window', 'threshold', 'good_when', 'query', 'good', 'total', 'description', 'unit', 'semconv_metric']);
 /** The fields of a custom SLI (`custom: [...]`): its identity, then the override fields (its id is its key, not an override). */
 export const CUSTOM_FIELDS = Object.freeze(['id', 'type', ...OVERRIDE_FIELDS.filter(f => f !== 'id')]);
 /** An override key: the SLI id as the pack carries it (prefixed when several entries compose). */
@@ -303,10 +305,13 @@ export function validateLibraryEntry(entry) {
       if (s.type === 'ratio') {
         if (typeof s.good !== 'string' || !s.good.trim()) e(`${at}.good: required for a ratio SLI`);
         if (typeof s.total !== 'string' || !s.total.trim()) e(`${at}.total: required for a ratio SLI`);
+        if (s.good_when !== undefined) e(`${at}.good_when: only a threshold SLI has a direction (a ratio SLI has good and total)`);
         if (s.minTier === 'tier-3') ratioAtTier3 = true;
       } else if (s.type === 'threshold') {
         if (typeof s.query !== 'string' || !s.query.trim()) e(`${at}.query: required for a threshold SLI`);
         if (typeof s.threshold !== 'number') e(`${at}.threshold: a number is required`);
+        // spec 1.3: the side of the bound that is good — below (a ceiling, the default when absent) or above (a floor)
+        if (s.good_when !== undefined && !GOOD_WHEN.includes(s.good_when)) e(`${at}.good_when: expected ${GOOD_WHEN.join('|')} (the direction of the bound; absent means below), got ${JSON.stringify(s.good_when)}`);
         if (s.minTier !== 'tier-1') thresholdByTier2 = true;
       }
       if (!isObj(s.slo)) e(`${at}.slo: required ({ objective, window })`);
@@ -420,15 +425,15 @@ export function validateLibraryEntry(entry) {
 export function libraryIndex(entries) {
   return [...entries].map(entry => {
     // objectives / windows per tier read through perTier's walk: what the SLI starts with at each tier, above
-    // its minTier too; the PromQL templates (${param} unresolved), the bound and the semconv metric are the
-    // defaults the studio's editor shows beside an override.
+    // its minTier too; the PromQL templates (${param} unresolved), the bound with its direction (goodWhen: the
+    // template's, or below) and the semconv metric are the defaults the studio's editor shows beside an override.
     const slis = (entry.slis || []).map(s => ({
       id: s.id, type: s.type, minTier: s.minTier, unit: s.unit, description: s.description,
       ...(s.semconv_metric ? { semconv_metric: s.semconv_metric } : {}),
       evidence: s.evidence?.status || null, metrics: [...(s.metrics || [])],
       objectives: Object.fromEntries(TIERS.map(t => [t, perTier(s.slo?.objective, t, null)])),
       windows: Object.fromEntries(TIERS.map(t => [t, perTier(s.slo?.window, t, null)])),
-      ...(s.type === 'ratio' ? { good: stripText(s.good), total: stripText(s.total) } : { query: stripText(s.query), threshold: s.threshold }),
+      ...(s.type === 'ratio' ? { good: stripText(s.good), total: stripText(s.total) } : { query: stripText(s.query), threshold: s.threshold, good_when: goodWhen(s) }),
     }));
     return {
       id: entry.id, kind: entry.kind, title: entry.title, product: entry.product || null, version: entry.version,
@@ -505,8 +510,9 @@ const fieldError = (where, msg) => new Error(`${where}: ${msg}`);
 /**
  * One field of an override or a custom SLI, checked against the SLI's type: the objective a number in (0, 1)
  * (the ratio the pack stores — the studio shows a percent), the window one of the schema's SLO windows, the
- * threshold a finite number (an upper bound: spec v1.2 has no direction field, so `comparison` is refused with
- * the reason), the PromQL a non-empty string within MAX_PARAM_LENGTH that carries no ${…} placeholder (an
+ * threshold a finite number (the bound; `good_when` — below | above, spec 1.3, threshold only — says which side
+ * of it is good, and the retired `comparison` is refused with that reason), the PromQL a non-empty string within
+ * MAX_PARAM_LENGTH that carries no ${…} placeholder (an
  * override replaces the library's expression after the params are in; nothing resolves a placeholder in it),
  * the description and unit bounded strings, the id a slug like a custom SLI's (CUSTOM_ID_RE, not the reserved
  * policy segment — its uniqueness is checked once every SLI is known, checkSliIds), the semconv_metric one bounded
@@ -536,7 +542,11 @@ function checkCopyField(where, field, value, type) {
       return value;
     case 'threshold':
       if (type !== 'threshold') throw fieldError(where, 'a ratio SLI has no threshold (it has good and total)');
-      if (typeof value !== 'number' || !Number.isFinite(value)) throw fieldError(where, `the threshold is a finite number (an upper bound), got ${JSON.stringify(value)}`);
+      if (typeof value !== 'number' || !Number.isFinite(value)) throw fieldError(where, `the threshold is a finite number (the bound; good_when says which side of it is good), got ${JSON.stringify(value)}`);
+      return value;
+    case 'good_when':
+      if (type !== 'threshold') throw fieldError(where, 'a ratio SLI has no bound, so no direction (good_when is a threshold SLI\'s)');
+      if (!GOOD_WHEN.includes(value)) throw fieldError(where, `the direction is below | above (spec 1.3 good_when: below — a ceiling, samples above the bound are bad, the default; above — a floor, samples under it are bad), got ${JSON.stringify(value)}`);
       return value;
     case 'query':
       if (type !== 'threshold') throw fieldError(where, 'a ratio SLI has good and total, not a query');
@@ -556,8 +566,8 @@ function checkCopyField(where, field, value, type) {
   }
 }
 
-/** The one reason `comparison` is not a field: the spec's threshold is an upper bound and its schema has no direction. */
-const COMPARISON_REASON = 'not a field: an ObservabilityPack v1.2 threshold is an upper bound (the schema has no direction / comparison field; the burn-rate generator reads every threshold so) — express a floor as a ratio SLI';
+/** The one reason `comparison` is not a field: the direction of a bound is spelled `good_when` (spec 1.3), never an operator. */
+const COMPARISON_REASON = 'not a field: the direction of a threshold is good_when (below — a ceiling, the default; above — a floor), spec 1.3 — use good_when';
 
 /**
  * The caller's overrides, checked before anything is instantiated: a plain object keyed by SLI id as the pack
@@ -570,7 +580,7 @@ function checkOverrides(overrides, known, selected) {
   const byId = new Map();
   const warnings = [];
   if (overrides === undefined || overrides === null) return { byId, warnings };
-  if (!isObj(overrides)) throw new Error('instantiatePack: overrides must be an object of { <sli id>: { objective?, window?, threshold?, query?, good?, total?, description?, unit? } }');
+  if (!isObj(overrides)) throw new Error('instantiatePack: overrides must be an object of { <sli id>: { id?, objective?, window?, threshold?, good_when?, query?, good?, total?, description?, unit?, semconv_metric? } }');
   for (const key of Object.keys(overrides)) {
     if (POLLUTING_KEYS.has(key) || !SLI_KEY_RE.test(key)) throw new Error(`override ${key}: not an SLI id (${SLI_KEY_RE})`);
     const ov = overrides[key];
@@ -622,15 +632,15 @@ function checkSliIds(slis, known) {
 }
 
 /**
- * The caller's custom SLIs, checked: a list of { id, type, objective, window, good + total | query + threshold,
- * description?, unit? }; the id a slug (CUSTOM_ID_RE, not the reserved policy segment) unique among the pack's
+ * The caller's custom SLIs, checked: a list of { id, type, objective, window, good + total | query + threshold
+ * (+ good_when?), description?, unit? }; the id a slug (CUSTOM_ID_RE, not the reserved policy segment) unique among the pack's
  * SLIs — a clash with a selected library SLI or another custom one is a usage error naming both; the objective
  * and window required; the PromQL required per type; every field checked by checkCopyField; an unknown field a
  * usage error. Returns the normalised definitions in order.
  */
 function checkCustom(custom, selected, known) {
   if (custom === undefined || custom === null) return [];
-  if (!Array.isArray(custom)) throw new Error('instantiatePack: custom must be a list of { id, type, objective, window, good + total | query + threshold, description?, unit? }');
+  if (!Array.isArray(custom)) throw new Error('instantiatePack: custom must be a list of { id, type, objective, window, good + total | query + threshold (+ good_when?), description?, unit? }');
   const out = [];
   const seen = new Set();
   custom.forEach((def, i) => {
@@ -790,7 +800,7 @@ function customFragment(defs, { tier }) {
       description: def.description ?? `custom ${def.type} SLI — written in the studio`,
       ...(def.unit !== undefined ? { unit: def.unit } : {}),
       ...(def.semconv_metric !== undefined ? { semconv_metric: def.semconv_metric } : {}),
-      ...(def.type === 'ratio' ? { good: def.good, total: def.total } : { query: def.query, threshold: def.threshold }),
+      ...(def.type === 'ratio' ? { good: def.good, total: def.total } : { query: def.query, threshold: def.threshold, ...(def.good_when !== undefined ? { good_when: def.good_when } : {}) }),
       evidence: { status: 'custom', source: 'written in the studio' },
     };
     return {
@@ -916,7 +926,10 @@ export function tierScaffold({ tier, service, environment, owners, fragments, to
     const base = { id: x.id, type: s.type, description: stripText(ov.description ?? s.description), ...(metric ? { semconv_metric: metric } : {}) };
     if (s.type === 'ratio') return { ...base, good: stripText(ov.good ?? s.good), total: stripText(ov.total ?? s.total), ...(s.owner ? { owner: s.owner } : {}), ...(hasOwn(ov, 'unit') ? { unit: ov.unit } : {}) };
     const unit = ov.unit ?? s.unit;
-    return { ...base, query: stripText(ov.query ?? s.query), threshold: ov.threshold ?? s.threshold, ...(unit !== undefined ? { unit } : {}) };
+    // The direction is copied as declared (the override's, else the template's) and never synthesised: absent
+    // means below everywhere, and a pack that says nothing stays a 1.2-shaped pack, byte for byte.
+    const direction = ov.good_when ?? s.good_when;
+    return { ...base, query: stripText(ov.query ?? s.query), threshold: ov.threshold ?? s.threshold, ...(direction !== undefined ? { good_when: direction } : {}), ...(unit !== undefined ? { unit } : {}) };
   });
   const specSlos = toggles.slos ? slis.map(x => ({ id: x.sloId, sli: x.id, objective: x.objective, window: x.window, error_budget_policy: BUDGET_POLICY })) : null;
 
@@ -1154,8 +1167,8 @@ function clausesFor(symbol, canonical, tier) {
 /**
  * The burn-rule generator's own warnings on the produced pack (tools/lib/burn-rules.mjs, the same
  * generator gen-burn-rules.mjs runs): a good leg derived by arithmetic without a presence guard,
- * a comparison it has to rewrite to bool, a threshold whose unit suggests a floor the spec cannot
- * express. Measured failure modes of the policy, so the caller sees them at build time rather
+ * a comparison it has to rewrite to bool, a threshold that looks like a floor with no good_when
+ * declared. Measured failure modes of the policy, so the caller sees them at build time rather
  * than when the alerts stay silent. Nothing to compile when the SLOs are off.
  */
 function burnRuleWarnings(canonical) {

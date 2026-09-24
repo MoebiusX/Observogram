@@ -1464,7 +1464,7 @@ try {
     [{ ...instBody, overrides: Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`o_${i}`, { objective: 0.5 }])) }, /^overrides: at most 64 entries \(65 given\)/, '65 overrides'],
     [{ ...instBody, overrides: ['x'] }, /^overrides: expected an object/, 'overrides as a list'],
     [{ ...instBody, custom: { id: 'x' } }, /^custom: expected a list/, 'custom as an object'],
-    [{ ...instBody, custom: [{ ...checkout, comparison: '<' }] }, /comparison: not a field: an ObservabilityPack v1\.2 threshold is an upper bound/, 'comparison is not a field'],
+    [{ ...instBody, custom: [{ ...checkout, comparison: '<' }] }, /comparison: not a field: the direction of a threshold is good_when .* — use good_when/, 'comparison is not a field (spec 1.3: good_when is)'],
   ];
   for (const [body, re, label] of copyBad) {
     const r = await postLib('/api/library/instantiate', body);

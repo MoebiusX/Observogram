@@ -493,6 +493,64 @@ test('overrides: the objective changes the SLO id, the burn alerts and the bindi
   assert.deepEqual(todosFromAnnotations(set.canonical), [...set.todos].sort(byPath));
 });
 
+test('spec 1.3 good_when: a floor declared in an entry, in an override, in a custom SLI — copied into the pack SLI as declared, schema-valid, burning on the samples under the bound; absent means below and writes nothing; the usage errors and the retired comparison name the field', () => {
+  // an entry may declare the direction of a threshold template (validateLibraryEntry: the enum, threshold only)
+  const floorEntry = JSON.parse(JSON.stringify(byId.kafka));
+  floorEntry.slis.find(s => s.id === 'produce_latency_p99').good_when = 'above';
+  assert.deepEqual(validateLibraryEntry(floorEntry), []);
+  const badValue = JSON.parse(JSON.stringify(byId.kafka));
+  badValue.slis.find(s => s.id === 'produce_latency_p99').good_when = 'sideways';
+  assert.ok(validateLibraryEntry(badValue).some(e => /^slis\[\d+\]\.good_when: expected below\|above \(the direction of the bound; absent means below\), got "sideways"$/.test(e)), validateLibraryEntry(badValue).join('; '));
+  const onRatio = JSON.parse(JSON.stringify(byId.kafka));
+  onRatio.slis.find(s => s.type === 'ratio').good_when = 'above';
+  assert.ok(validateLibraryEntry(onRatio).some(e => /^slis\[\d+\]\.good_when: only a threshold SLI has a direction/.test(e)));
+  for (const en of entries) for (const s of en.slis) assert.equal(s.good_when, undefined, `${en.id}.${s.id}: the shipped entries declare no direction yet (every bound a ceiling)`);
+  // the index rows carry it, normalised: the template's, or below — and never on a ratio row
+  const rows = libraryIndex([floorEntry, byId['http-service']]);
+  const kafkaRows = rows.find(r => r.id === 'kafka').slis;
+  assert.equal(kafkaRows.find(s => s.id === 'produce_latency_p99').good_when, 'above');
+  assert.ok(kafkaRows.filter(s => s.type === 'threshold' && s.id !== 'produce_latency_p99').every(s => s.good_when === 'below'));
+  assert.ok(rows.flatMap(r => r.slis).filter(s => s.type === 'ratio').every(s => !('good_when' in s)));
+  // instantiation copies the template's direction into the pack SLI; the pack validates; its alert reads `< bool`
+  const fromEntry = instantiatePack(floorEntry, { name: 'orders', tier: 'tier-2', promql: lezer });
+  assert.equal(fromEntry.canonical.spec.slis.find(x => x.id === 'produce_latency_p99').good_when, 'above');
+  assert.deepEqual(validateCanonical(fromEntry.canonical, SCHEMA), []);
+  assert.match(compile(fromEntry.canonical, 'prometheus-rules').content, /:produce_latency_p99:value_5m\) < bool 0\.1\)/);
+  assert.deepEqual(fromEntry.warnings, []);
+  // an override flips a library ceiling into a floor — a copy like any other: the evidence stays the library's,
+  // the provenance says customised: good_when, the compiled alert counts the samples under the bound
+  const set = orders({ overrides: { kafka_produce_latency_p99: { good_when: 'above' } } });
+  assert.equal(set.canonical.spec.slis.find(x => x.id === 'kafka_produce_latency_p99').good_when, 'above');
+  assert.deepEqual(validateCanonical(set.canonical, SCHEMA), []);
+  assert.deepEqual(failingMust(set.canonical), []);
+  assert.deepEqual([set.provenance.slis.kafka_produce_latency_p99.customised, set.provenance.slis.kafka_produce_latency_p99.evidence.status], [['good_when'], 'recorded-live']);
+  assert.equal(set.canonical.metadata.annotations['library.customised.slis.kafka_produce_latency_p99'], 'good_when');
+  assert.deepEqual(set.provenance.overrides, { kafka_produce_latency_p99: { good_when: 'above' } });
+  assert.match(compile(set.canonical, 'prometheus-rules').content, /:kafka_produce_latency_p99:value_5m\) < bool 0\.1\)/);
+  assert.equal(orders({ overrides: { kafka_produce_latency_p99: { good_when: 'below' } } }).canonical.spec.slis.find(x => x.id === 'kafka_produce_latency_p99').good_when, 'below', 'a stated below is copied as stated');
+  // nothing declared: nothing written — the pack stays 1.2-shaped, byte for byte what it was
+  assert.ok(orders().canonical.spec.slis.every(x => !('good_when' in x)));
+  assert.equal(JSON.stringify(orders().canonical.spec.slis), JSON.stringify(orders({ overrides: {} }).canonical.spec.slis));
+  // a custom threshold SLI declaring a floor: in slis with its direction, schema-valid, no warning, `< bool` in the rules, bound on the boards
+  const def = { id: 'settlement_consumers', type: 'threshold', query: 'min(kafka_consumer_group_members{group="settler"})', threshold: 2, good_when: 'above', unit: 'consumers', objective: 0.999, window: '30d' };
+  const c = orders({ custom: [def] });
+  assert.deepEqual(c.canonical.spec.slis.find(x => x.id === 'settlement_consumers'), { id: 'settlement_consumers', type: 'threshold', description: 'custom threshold SLI — written in the studio', query: def.query, threshold: 2, good_when: 'above', unit: 'consumers' });
+  assert.deepEqual(validateCanonical(c.canonical, SCHEMA), []);
+  assert.deepEqual(c.warnings, []);
+  assert.match(compile(c.canonical, 'prometheus-rules').content, /:settlement_consumers:value_5m\) < bool 2\)/);
+  assert.deepEqual(checkBindings(c.canonical, genericBoards(c.canonical)), []);
+  assert.ok(!('good_when' in orders({ custom: [CUSTOM_THRESHOLD] }).canonical.spec.slis.find(x => x.id === 'checkout_p99')), 'a custom SLI that says nothing writes nothing');
+  // the usage errors name the field; the retired `comparison` points at good_when
+  const err = (opts) => { try { orders(opts); } catch (e) { return e.message; } return null; };
+  assert.match(err({ overrides: { kafka_produce_latency_p99: { good_when: 'sideways' } } }), /^override kafka_produce_latency_p99\.good_when: the direction is below \| above \(spec 1\.3 good_when: below — a ceiling, samples above the bound are bad, the default; above — a floor, samples under it are bad\), got "sideways"$/);
+  assert.match(err({ overrides: { kafka_produce_latency_p99: { good_when: 1 } } }), /got 1$/);
+  assert.match(err({ overrides: { kafka_broker_availability: { good_when: 'above' } } }), /^override kafka_broker_availability\.good_when: a ratio SLI has no bound, so no direction \(good_when is a threshold SLI's\)$/);
+  assert.match(err({ custom: [{ ...CUSTOM_RATIO, good_when: 'above' }] }), /^custom checkout_success\.good_when: a ratio SLI has no bound, so no direction/);
+  assert.match(err({ custom: [{ ...def, good_when: 'up' }] }), /^custom settlement_consumers\.good_when: the direction is below \| above/);
+  assert.match(err({ overrides: { kafka_produce_latency_p99: { comparison: '<' } } }), /^override kafka_produce_latency_p99\.comparison: not a field: the direction of a threshold is good_when \(below — a ceiling, the default; above — a floor\), spec 1\.3 — use good_when$/);
+  assert.deepEqual(DEFAULT_BURN_PROFILE, { ratio: 'availability', threshold: 'latency' }, 'the default burn profile does not change with the direction');
+});
+
 test('overrides: an edited expression replaces the library\'s PromQL and drops its evidence to custom, honestly', () => {
   const q = orders({ overrides: { kafka_produce_latency_p99: { query: 'histogram_quantile(0.99, sum by (le)(rate(produce_seconds_bucket[5m])))' }, http_service_availability: { good: 'sum(rate(http_ok_total[5m]))', total: 'sum(rate(http_total[5m]))' } } });
   assert.deepEqual(validateCanonical(q.canonical, SCHEMA), []);
@@ -581,7 +639,7 @@ test('overrides: semconv_metric restates the metric the SLI reads — kept besid
 
 test('overrides: the usage errors name the field, and an override for an SLI not in the pack is a warning', () => {
   const err = (overrides) => { try { orders({ overrides }); } catch (e) { return e.message; } return null; };
-  assert.match(err({ kafka_produce_latency_p99: { nope: 1 } }), /^override kafka_produce_latency_p99\.nope: unknown field \(the fields are id, objective, window, threshold, query, good, total, description, unit, semconv_metric\)$/);
+  assert.match(err({ kafka_produce_latency_p99: { nope: 1 } }), /^override kafka_produce_latency_p99\.nope: unknown field \(the fields are id, objective, window, threshold, good_when, query, good, total, description, unit, semconv_metric\)$/);
   assert.match(err({ kafka_produce_latency_p99: { window: '30x' } }), /^override kafka_produce_latency_p99\.window: the window is one of 7d \| 28d \| 30d \| 90d \(the schema's SLO windows\), got "30x"$/);
   assert.match(err({ kafka_produce_latency_p99: { window: '14d' } }), /the schema's SLO windows/, 'the schema\'s enum, not any duration');
   assert.match(err({ kafka_produce_latency_p99: { objective: 1 } }), /^override kafka_produce_latency_p99\.objective: the objective is a number in \(0, 1\)/);
@@ -595,7 +653,7 @@ test('overrides: the usage errors name the field, and an override for an SLI not
   assert.match(err({ kafka_produce_latency_p99: { query: 'up{job="${job}"}' } }), /^override kafka_produce_latency_p99\.query: the PromQL may not carry a \$\{…\} placeholder \(\$\{job\}\)/);
   assert.match(err({ kafka_produce_latency_p99: { query: 'x'.repeat(MAX_PARAM_LENGTH + 1) } }), new RegExp(`may not exceed ${MAX_PARAM_LENGTH} characters \\(${MAX_PARAM_LENGTH + 1} given\\)`));
   assert.match(err({ kafka_produce_latency_p99: { unit: 'x'.repeat(65) } }), /the unit may not exceed 64 characters/);
-  assert.match(err({ kafka_produce_latency_p99: { comparison: '<' } }), /^override kafka_produce_latency_p99\.comparison: not a field: an ObservabilityPack v1\.2 threshold is an upper bound/);
+  assert.match(err({ kafka_produce_latency_p99: { comparison: '<' } }), /^override kafka_produce_latency_p99\.comparison: not a field: the direction of a threshold is good_when \(below — a ceiling, the default; above — a floor\), spec 1\.3 — use good_when$/);
   assert.match(err({ kafka_produce_latency_p99: 'x' }), /^override kafka_produce_latency_p99: expected an object of fields, got string$/);
   assert.match(err({ kafka_produce_latency_p99: null }), /got null/);
   assert.match(err('x'), /overrides must be an object/);
@@ -608,7 +666,7 @@ test('overrides: the usage errors name the field, and an override for an SLI not
   assert.match(err({ kafka_produce_latency_p99: JSON.parse('{"__proto__": {"objective": 0.5}}') }), /^override kafka_produce_latency_p99\.__proto__: refused$/);
   assert.equal(SLI_KEY_RE.test('a'.repeat(64)), true);
   assert.equal(SLI_KEY_RE.test('a'.repeat(65)), false);
-  assert.deepEqual(OVERRIDE_FIELDS, ['id', 'objective', 'window', 'threshold', 'query', 'good', 'total', 'description', 'unit', 'semconv_metric']);
+  assert.deepEqual(OVERRIDE_FIELDS, ['id', 'objective', 'window', 'threshold', 'good_when', 'query', 'good', 'total', 'description', 'unit', 'semconv_metric']);
   // not in the pack: a warning of kind override, the rest builds unchanged
   const w = orders({ overrides: { nope_sli: { objective: 0.5 }, kafka_controller_election_rate: { objective: 0.5 }, kafka_produce_latency_p99: {} } });
   assert.deepEqual(w.warnings.map(x => [x.kind, x.sli]), [['override', 'nope_sli'], ['override', 'kafka_controller_election_rate']]);
@@ -695,14 +753,14 @@ test('custom SLIs: the usage errors — a duplicate or clashing id, a missing fi
   const { threshold: _th, ...noThreshold } = CUSTOM_THRESHOLD;
   assert.match(err([noThreshold]), /^custom checkout_p99\.threshold: required for a threshold SLI$/);
   assert.match(err([{ ...CUSTOM_RATIO, query: 'up' }]), /^custom checkout_success\.query: a ratio SLI has good and total, not a query$/);
-  assert.match(err([{ ...CUSTOM_THRESHOLD, comparison: '<' }]), /^custom checkout_p99\.comparison: not a field: an ObservabilityPack v1\.2 threshold is an upper bound/);
-  assert.match(err([{ ...CUSTOM_RATIO, nope: 1 }]), /^custom checkout_success\.nope: unknown field \(the fields are id, type, objective, window, threshold, query, good, total, description, unit, semconv_metric\)$/);
+  assert.match(err([{ ...CUSTOM_THRESHOLD, comparison: '<' }]), /^custom checkout_p99\.comparison: not a field: the direction of a threshold is good_when .* — use good_when$/);
+  assert.match(err([{ ...CUSTOM_RATIO, nope: 1 }]), /^custom checkout_success\.nope: unknown field \(the fields are id, type, objective, window, threshold, good_when, query, good, total, description, unit, semconv_metric\)$/);
   assert.match(err([{ ...CUSTOM_RATIO, window: '30x' }]), /^custom checkout_success\.window: the window is one of 7d \| 28d \| 30d \| 90d/);
   assert.match(err([{ ...CUSTOM_RATIO, good: 'sum(${x})' }]), /may not carry a \$\{…\} placeholder/);
   assert.match(err(['x']), /^custom\[0\]: expected an object, got string$/);
   assert.match(err({ id: 'x' }), /custom must be a list/);
   assert.equal(CUSTOM_ID_RE.test('checkout_success'), true);
-  assert.deepEqual(CUSTOM_FIELDS, ['id', 'type', 'objective', 'window', 'threshold', 'query', 'good', 'total', 'description', 'unit', 'semconv_metric'], 'the id once: a custom SLI\'s id is its key, not an override');
+  assert.deepEqual(CUSTOM_FIELDS, ['id', 'type', 'objective', 'window', 'threshold', 'good_when', 'query', 'good', 'total', 'description', 'unit', 'semconv_metric'], 'the id once: a custom SLI\'s id is its key, not an override');
   // A custom SLI's id is not an override field: `id` inside its definition is its identity, checked as such.
   assert.match(err([{ ...CUSTOM_RATIO, id: 'kafka_broker_availability' }]), /^custom kafka_broker_availability\.id: clashes with/);
   // a custom SLI's PromQL is parsed like any other: a broken one is a promql warning, not a usage error
@@ -802,7 +860,13 @@ test('packc init builds a pack: YAML on stdout, todos on stderr, exit 0; a secti
   assert.equal(ovPack.metadata.annotations['library.customised.slis.produce_latency_p99'], 'objective,window,threshold');
   assert.match(ov.stderr, /1 customised/);
   assert.equal(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.query=up').status, 2, 'a query is not a CLI override');
-  assert.match(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.query=up').stderr, /--override takes id, objective, window, threshold or semconv_metric/);
+  assert.match(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.query=up').stderr, /--override takes id, objective, window, threshold, good_when or semconv_metric/);
+  // --override <sli>.good_when=above: the side of a threshold SLI's bound that is good (spec 1.3), copied into the pack SLI as declared
+  const floor = cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.good_when=above');
+  assert.equal(floor.status, 0, floor.stderr);
+  assert.equal(parseYaml(floor.stdout).spec.slis.find(x => x.id === 'produce_latency_p99').good_when, 'above');
+  assert.equal(parseYaml(floor.stdout).metadata.annotations['library.customised.slis.produce_latency_p99'], 'good_when');
+  assert.match(cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.good_when=sideways').stderr, /good_when: the direction is below \| above/);
   // --override <sli>.id=<new id> renames the SLI (the SLO and the annotation follow; the SLI is still addressed by its library id); semconv_metric restates the metric.
   const renamed = cli('--entry', 'kafka', '--tier', 'tier-2', '--name', 'orders', '--override', 'produce_latency_p99.id=produce_p99', '--override', 'produce_latency_p99.objective=0.995', '--override', 'produce_latency_p99.semconv_metric=messaging.kafka.produce.duration');
   assert.equal(renamed.status, 0, renamed.stderr);
