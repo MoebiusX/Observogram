@@ -5,7 +5,7 @@
  * Round-trip + conformance suite for every archived canonical pack
  * (examples/*.pack.yaml). For each pack:
  *   1. Parse the YAML.
- *   2. Validate against the vendored v1.2 schema.
+ *   2. Validate against the vendored schema (tools/lib/validator.mjs SPEC_VERSION).
  *   3. Adapt via the layered adapter.
  *   4. Assert the self-diff invariant: diffPacks(pack, pack) preserves every
  *      flat-comparable artefact with alignment/jaccard 1.0 — identity-key

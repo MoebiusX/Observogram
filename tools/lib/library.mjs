@@ -4,7 +4,7 @@
 // parameterised pack fragments — one YAML entry per product or archetype
 // under library/ — and the instantiation that turns one entry (or several)
 // plus a service name, a criticality tier, an environment and a few toggles
-// into a canonical ObservabilityPack v1.2 that tools/lib/validator.mjs
+// into a canonical ObservabilityPack that tools/lib/validator.mjs
 // accepts, tools/lib/compile.mjs compiles and tools/lib/conformance.mjs
 // scores at that tier.
 //

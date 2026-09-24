@@ -1026,7 +1026,7 @@ export function buildStackModel({ adapted = null, checklist = null, requirements
       artefacts = mode === 'define' ? [] : withSymbols(layers?.[def.id], def.id);
       ghosts = [...(def.id === 'L1' ? candidateGhosts : []), ...ghostsFor(clauses)];
     }
-    // L2X is optional per spec v1.2: shown only when it has content or a clause of its own.
+    // L2X is optional per the spec: shown only when it has content or a clause of its own.
     if (def.id === 'L2X' && !artefacts.length && !clauses.length) continue;
     const m = {
       total: clauses.length,

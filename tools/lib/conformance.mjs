@@ -1,6 +1,6 @@
 // tools/lib/conformance.mjs
 //
-// Maturity-rubric scoring for canonical v1.2 packs. Pure ESM —
+// Maturity-rubric scoring for canonical packs. Pure ESM —
 // browser-friendly so the studio could embed it later. Server uses it
 // today via GET /api/packs/:id/conformance.
 //

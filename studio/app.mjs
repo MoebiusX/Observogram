@@ -949,7 +949,7 @@ async function handleFile(file) {
     renderTabs();
     renderMainView();
     if (res.legacy) {
-      toast(`Loaded ${file.name} — previous (layered JSON) format upconverted to canonical v1.2: ${res.legacy.mapped} artefacts mapped, ${res.legacy.scaffolded} scaffolds`);
+      toast(`Loaded ${file.name} — previous (layered JSON) format upconverted to canonical v1.3: ${res.legacy.mapped} artefacts mapped, ${res.legacy.scaffolded} scaffolds`);
     } else {
       toast(`Loaded ${file.name}`);
     }
@@ -1167,7 +1167,7 @@ const OBSERVA_ADV = [
   { id: 'neuron',       label: 'Neuron',       sub: 'observability control · journeys · chains · causes · posture · trends' },
   { id: 'references',   label: 'References',   sub: 'catalogue reference packs · benchmark vs best practice' },
   { id: 'conformance',  label: 'Conformance',  sub: 'maturity rubric · MUST/SHOULD per tier' },
-  { id: 'schema',       label: 'Schema',       sub: 'canonical YAML + v1.2 validation' },
+  { id: 'schema',       label: 'Schema',       sub: 'canonical YAML + v1.3 validation' },
   { id: 'otlp',         label: 'OTLP Coverage', sub: 'receiver protocols · per-signal exporters' },
   { id: 'traceability', label: 'Traceability', sub: 'repo vs live · declared / verified / stale' },
   { id: 'atlas',        label: 'Atlas',        sub: 'visual atlases · strata · periodic · skyline' },
@@ -2556,7 +2556,7 @@ function renderDiscoverEmpty(view) {
         <button type="button" class="discover-load-card" data-load="upload">
           <span class="discover-load-glyph" aria-hidden="true">▤</span>
           <span class="discover-load-label">Upload a pack</span>
-          <span class="discover-load-sub">an existing canonical v1.2 YAML or JSON manifest</span>
+          <span class="discover-load-sub">an existing canonical v1.3 YAML or JSON manifest</span>
         </button>
       </div>
 
@@ -2657,7 +2657,7 @@ function renderHomeView() {
         <div id="home-mcp-adopt-bar" class="home-mcp-adopt-bar" hidden>
           <button id="home-mcp-adopt" type="button" class="home-mcp-adopt-btn">
             <span class="home-mcp-adopt-title">Render the manifest</span>
-            <span class="home-mcp-adopt-sub" id="home-mcp-adopt-hint">canonical v1.2 · ready to compile and deploy</span>
+            <span class="home-mcp-adopt-sub" id="home-mcp-adopt-hint">canonical v1.3 · ready to compile and deploy</span>
           </button>
         </div>
       </div>
@@ -2668,7 +2668,7 @@ function renderHomeView() {
           <button id="home-shortcut-upload" type="button" class="home-alt-btn">
             <span class="home-alt-key" aria-hidden="true">▤</span>
             <span class="home-alt-label">Drop a YAML / JSON pack</span>
-            <span class="home-alt-sub">canonical v1.2 manifest</span>
+            <span class="home-alt-sub">canonical v1.3 manifest</span>
           </button>
           <button id="home-shortcut-crawl" type="button" class="home-alt-btn">
             <span class="home-alt-key" aria-hidden="true">↻</span>
@@ -3569,7 +3569,7 @@ function renderCrawlResult(out) {
   vBox.innerHTML = `
     <h4>schema validation</h4>
     ${out.validation.ok
-      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.2</div>`
+      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.3</div>`
       : `<div class="crawl-pill crawl-pill-err">✗ ${out.validation.errors.length} schema error(s)</div>
          <ul class="crawl-result-errs">${out.validation.errors.slice(0, 8).map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul>`}
   `;
@@ -4555,7 +4555,7 @@ function renderDraftMcpResult(out) {
   $('#draft-mcp-result-validation').innerHTML = `
     <h4>schema validation</h4>
     ${v.ok
-      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.2</div>`
+      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.3</div>`
       : `<div class="crawl-pill crawl-pill-err">✗ ${v.errors.length} schema error(s)</div>
          <ul class="crawl-result-errs">${v.errors.slice(0, 8).map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul>`}
   `;

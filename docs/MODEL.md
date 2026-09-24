@@ -1,27 +1,27 @@
 # The ObservabilityPack model
 
 The studio is a faithful renderer of the [ObservabilityPack spec
-v1.2](../vendor/observability-pack-spec/v1.2/spec.md). The canonical model
+v1.3](../vendor/observability-pack-spec/v1.3/spec.md). The canonical model
 — `apiVersion`, `kind`, `metadata`, `spec`, the ten dimensions L1–L5 — is
 defined there; this document covers only the parts the studio adds or
 shapes for the display, not the canonical model itself.
 
 For the canonical model, read:
 
-- **[`../vendor/observability-pack-spec/v1.2/spec.md`](../vendor/observability-pack-spec/v1.2/spec.md)** — §3 the conceptual model, §4 the manifest shape, §5 each dimension with conformance, §7 the maturity rubric summary.
-- **[`../vendor/observability-pack-spec/v1.2/docs/maturity-model.md`](../vendor/observability-pack-spec/v1.2/docs/maturity-model.md)** — the full tier-3 → tier-2 → tier-1 clause rubric.
-- **[`../vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml`](../vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml)** — the canonical example.
+- **[`../vendor/observability-pack-spec/v1.3/spec.md`](../vendor/observability-pack-spec/v1.3/spec.md)** — §3 the conceptual model, §4 the manifest shape, §5 each dimension with conformance, §7 the maturity rubric summary.
+- **[`../vendor/observability-pack-spec/v1.3/docs/maturity-model.md`](../vendor/observability-pack-spec/v1.3/docs/maturity-model.md)** — the full tier-3 → tier-2 → tier-1 clause rubric.
+- **[`../vendor/observability-pack-spec/v1.3/examples/payment-service.pack.yaml`](../vendor/observability-pack-spec/v1.3/examples/payment-service.pack.yaml)** — the canonical example.
 
 ## What the studio projects — L2X (Extended Surfaces)
 
 The canonical spec carves the manifest into ten dimensions across five
 layers (L1 Contract, L2 Telemetry, L3 Insight, L4 Action, L5 Validation),
-plus governance. The v1.2 spec also defines optional extended technology
+plus governance. The spec also defines optional extended technology
 surfaces in `spec.profiling`, `spec.network`, `spec.policy_engine`,
 `spec.mesh[]`, and `spec.collection[]`. The studio projects those canonical
 fields into **L2X · Extended Surfaces**.
 
-L2X groups the optional, telemetry-adjacent spec sections that the v1.2
+L2X groups the optional, telemetry-adjacent spec sections that the
 spec carved out as "extended technology surfaces" in §5.12.4 of the spec:
 
 | Spec section | Artefact ID | Tool family |

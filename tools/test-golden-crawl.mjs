@@ -22,11 +22,11 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { crawlFiles } from './lib/crawler.mjs';
-import { validateCanonical } from './lib/validator.mjs';
+import { validateCanonical, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 import { createHarness } from './lib/harness.mjs';
 
 const SCHEMA = JSON.parse(readFileSync(
-  new URL('../vendor/observability-pack-spec/v1.2/observability-pack.schema.json', import.meta.url), 'utf8'));
+  new URL(`../${SPEC_SCHEMA_PATH}`, import.meta.url), 'utf8'));
 const GOLDEN_URL = new URL('./fixtures/golden-crawl.pack.json', import.meta.url);
 
 const { assert, report } = createHarness();

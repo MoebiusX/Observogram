@@ -1,6 +1,6 @@
 // tools/lib/l2x.mjs
 //
-// Shared materialisation for spec v1.2 extended technology surfaces.
+// Shared materialisation for the spec's extended technology surfaces (§5.12.4).
 // The crawler and the live MCP fetcher both discover telemetry.backends[];
 // this module promotes those backend rows into the canonical optional
 // L2X sections so repo-vs-live drift compares the same first-class surfaces.

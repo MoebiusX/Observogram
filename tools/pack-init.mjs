@@ -21,7 +21,7 @@
  * The pack (YAML) goes to stdout or --out; the todo list and the validation summary go to
  * stderr, so `packc init … > pack.yaml` yields a clean file. Exit codes follow the repo's
  * tools (tools/validate-pack.mjs, packc journey): 0 ok · 1 the produced pack does not
- * validate against the v1.2 schema, fails a MUST clause of its tier (a section toggled off, a
+ * validate against the vendored schema, fails a MUST clause of its tier (a section toggled off, a
  * --slis selection with no latency SLO: `packc journey`'s "gate failed", so a CI caller can tell
  * MUST 14/15 from 15/15), an SLI is not valid PromQL once the --param values are in (the Lezer
  * grammar, tools/lib/promql-lezer.mjs), or an entry fails validateLibraryEntry · 2 usage error

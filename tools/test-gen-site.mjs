@@ -30,11 +30,12 @@ import { derivePack, assertCounts, dropItem, splicePackSnippet, countMatches } f
 import { run, selectEnvironments } from './lib/site/run.mjs';
 import * as lib from './lib/dashboards/lib.mjs';
 import { packSnippet, compileBurnRules } from './lib/burn-rules.mjs';
+import { SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const FIX = resolve(ROOT, 'tools', 'fixtures', 'site');
 const readFix = (f) => readFileSync(resolve(FIX, f), 'utf8');
-const schema = JSON.parse(readFileSync(resolve(ROOT, 'vendor', 'observability-pack-spec', 'v1.2', 'observability-pack.schema.json'), 'utf8'));
+const schema = JSON.parse(readFileSync(resolve(ROOT, SPEC_SCHEMA_PATH), 'utf8'));
 const invSchema = JSON.parse(readFileSync(resolve(ROOT, 'tools', 'lib', 'site', 'inventory.schema.json'), 'utf8'));
 const packText = readFix('fixture.pack.yaml');
 const pack = parseYaml(packText);

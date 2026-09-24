@@ -18,6 +18,7 @@ import { createServer as createHttpServer } from 'node:http';
 import { spawnSync, spawn } from 'node:child_process';
 import { createHarness } from './lib/harness.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
+import { SPEC_DIR } from './lib/validator.mjs';
 import { adapt } from './lib/adapter.mjs';
 import { diffPacks } from './lib/diff.mjs';
 import { comparePackBranches } from './lib/traceability-graph.mjs';
@@ -55,7 +56,7 @@ async function closedLoopbackPort() {
   });
 }
 
-const PACK_A = resolve('vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml');
+const PACK_A = resolve(SPEC_DIR, 'examples/payment-service.pack.yaml');
 const PACK_B = resolve('examples/production-curated.pack.yaml');
 
 try {

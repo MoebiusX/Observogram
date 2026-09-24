@@ -31,7 +31,7 @@
 <header class="hdr">
   <div class="hdr-brand">
     <h1>Observo<span class="ital">gram</span></h1>
-    <div class="hdr-sub">the observability compiler · canonical spec v1.2</div>
+    <div class="hdr-sub">the observability compiler · canonical spec v1.3</div>
   </div>
   <div class="hdr-controls">
     <label class="ctrl ctrl-service" id="ctrl-service">
@@ -55,13 +55,13 @@
       <select id="env-b-select" aria-label="Select environment B"></select>
     </label>
     <div class="upload-popover-wrap">
-      <button id="upload-btn" class="ctrl-btn" type="button" title="Upload a canonical v1.2 pack (.yaml or .json) — or pick a quick-start case" aria-haspopup="true" aria-expanded="false">upload</button>
+      <button id="upload-btn" class="ctrl-btn" type="button" title="Upload a canonical v1.3 pack (.yaml or .json) — or pick a quick-start case" aria-haspopup="true" aria-expanded="false">upload</button>
       <div id="upload-popover" class="upload-popover" role="menu" hidden>
         <button class="upload-popover-item" data-action="pick-file" type="button" role="menuitem">
           <span class="upload-popover-key">▤</span>
           <span class="upload-popover-body">
             <span class="upload-popover-label">Pick a file…</span>
-            <span class="upload-popover-sub">canonical v1.2 YAML or JSON manifest</span>
+            <span class="upload-popover-sub">canonical v1.3 YAML or JSON manifest</span>
           </span>
         </button>
         <button class="upload-popover-item" data-action="build-library" type="button" role="menuitem">
@@ -277,7 +277,7 @@
     <p class="crawl-lede">
       Path B of pack creation. Interrogate a live OpenTelemetry MCP for the
       backends it manages, the topology it observes, the baselines and anomalies
-      it tracks, and produce a <em>draft canonical v1.2 pack</em> grounded in
+      it tracks, and produce a <em>draft canonical v1.3 pack</em> grounded in
       observed reality — not declared intent. Merge with a repo-derived draft
       (Path A) for a complete pack.
     </p>
@@ -336,7 +336,7 @@
       Path A of pack creation. The scanner walks your repo's
       <code>docker-compose.yml</code>, Prometheus rules, Alertmanager configs,
       OTel Collector configs, and Grafana dashboard JSONs, then emits a
-      <em>draft canonical v1.2 pack</em> — a real, valid manifest you can
+      <em>draft canonical v1.3 pack</em> — a real, valid manifest you can
       then refine.
     </p>
 
@@ -455,7 +455,7 @@
 <div class="drop-overlay" id="drop-overlay" hidden>
   <div class="drop-overlay-inner">
     <div class="drop-overlay-eyebrow">drop to validate + adapt</div>
-    <div class="drop-overlay-title">Load an ObservabilityPack v1.2 manifest</div>
+    <div class="drop-overlay-title">Load an ObservabilityPack v1.3 manifest</div>
     <div class="drop-overlay-sub">.yaml · .yml · .json — sent to <code>POST /api/validate</code></div>
   </div>
 </div>
@@ -463,7 +463,7 @@
 <footer class="ftr">
   <div>Observogram · the Observability Compiler · <span id="build-label" title="package.json version — the server has not answered /api/version">v0.4.0</span></div>
   <div>
-    <a href="https://github.com/MoebiusX/otel-observability-pack/blob/main/spec/ObservabilityPack-Spec.md" target="_blank" rel="noopener">spec v1.2</a>
+    <a href="https://github.com/MoebiusX/otel-observability-pack/blob/main/spec/ObservabilityPack-Spec.md" target="_blank" rel="noopener">spec v1.3</a>
     ·
     <a href="https://github.com/MoebiusX/Observogram" target="_blank" rel="noopener">repo</a>
   </div>

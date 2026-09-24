@@ -4,19 +4,19 @@
 //
 // Builds a synthetic file map representing a service repo, runs
 // the crawler, then validates the resulting canonical pack
-// against the spec v1.2 schema. Asserts the end-to-end loop
+// against the vendored spec schema. Asserts the end-to-end loop
 // works: crawler output is a valid pack.
 // ============================================================
 
 import { crawlFiles, detectArtefactKind, crawlToYaml } from './lib/crawler.mjs';
-import { validateCanonical } from './lib/validator.mjs';
+import { validateCanonical, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { readFileSync } from 'node:fs';
 import { adapt } from './lib/adapter.mjs';
 import { evaluateConformance } from './lib/conformance.mjs';
 import { diffPacks } from './lib/diff.mjs';
 
-const SCHEMA_PATH = new URL('../vendor/observability-pack-spec/v1.2/observability-pack.schema.json', import.meta.url);
+const SCHEMA_PATH = new URL(`../${SPEC_SCHEMA_PATH}`, import.meta.url);
 const SCHEMA = JSON.parse(readFileSync(SCHEMA_PATH, 'utf8'));
 
 import { createHarness } from './lib/harness.mjs';
@@ -364,15 +364,15 @@ const familyScope = crawlFiles(FIXTURE, {
 assert(familyScope.canonical.metadata.annotations['observogram.diff.scopeMode'] === 'family',
        'crawler honors live-drift scope override');
 
-// ---------- validate against spec v1.2 ----------
+// ---------- validate against the vendored schema ----------
 process.stdout.write('\n--- validate ---\n');
 const validationErrors = validateCanonical(canonical, SCHEMA);
 if (validationErrors.length) {
-  process.stdout.write(`✗ canonical pack passes v1.2 schema — got ${validationErrors.length} errors:\n`);
+  process.stdout.write(`✗ canonical pack passes the vendored schema — got ${validationErrors.length} errors:\n`);
   for (const e of validationErrors.slice(0, 8)) process.stdout.write(`    · ${e}\n`);
-  failures.push('canonical pack passes v1.2 schema');
+  failures.push('canonical pack passes the vendored schema');
 } else {
-  process.stdout.write(`✓ canonical pack passes v1.2 schema\n`);
+  process.stdout.write(`✓ canonical pack passes the vendored schema\n`);
 }
 
 // ---------- adapt + conformance ----------
@@ -594,7 +594,7 @@ assert(realAdapted.layers.L2.some(a => a.id.startsWith('SCRAPE-SRC-') && a.spec.
   'adapter projects source scrape job as first-class L2 scrape node');
 assert(realAdapted.layers.L2.some(a => a.id.startsWith('SCRAPE-SRC-') && a.spec.job === 'settlement-service' && a.spec.scrape_query === '/actuator/prometheus'),
   'adapter projects Spring actuator config as TelemetrySource');
-assert(validateCanonical(real.canonical, SCHEMA).length === 0, 'real-world crawl still validates against v1.2 schema');
+assert(validateCanonical(real.canonical, SCHEMA).length === 0, 'real-world crawl still validates against the vendored schema');
 
 // ---------- helm chart introspection ----------
 process.stdout.write('\n--- helm chart introspection ---\n');
@@ -656,7 +656,7 @@ assert(helm.canonical.spec.slis.some(s => s.id === 'slo_http_requests'),
   'SLI inferred from embedded recording rules');
 assert(helm.canonical.spec.dashboards.some(d => d.id === 'checkout-overview'),
   'grafana dashboard lifted from embedded ConfigMap JSON');
-assert(validateCanonical(helm.canonical, SCHEMA).length === 0, 'helm chart crawl validates against v1.2 schema');
+assert(validateCanonical(helm.canonical, SCHEMA).length === 0, 'helm chart crawl validates against the vendored schema');
 
 // ---------- environment-scoped extraction ----------
 process.stdout.write('\n--- environment scoped extraction ---\n');

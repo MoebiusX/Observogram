@@ -1,7 +1,7 @@
 {
   "uid": "payment-overview",
   "title": "Payment service — Payment overview",
-  "description": "Payment service pack board \"Payment overview\": SLIs api_availability, api_latency_p99, consumer_freshness · SLOs api_availability_99_9.",
+  "description": "Payment service pack board \"Payment overview\": SLIs api_availability, api_latency_p99, consumer_freshness, settlement_consumers_active · SLOs api_availability_99_9.",
   "tags": [
     "payment-service",
     "pack",
@@ -110,7 +110,7 @@
       "transparent": true,
       "options": {
         "mode": "markdown",
-        "content": "### Payment service · Payment overview\nSLIs api_availability, api_latency_p99, consumer_freshness · SLOs api_availability_99_9. &nbsp;·&nbsp; pack `payment-service@1.5.0` &nbsp;·&nbsp; [Unified](/d/payment-service-unified?${__url_time_range}) · **Payment overview** · [Payment slo burn](/d/payment-slo-burn?${__url_time_range}) · [Payment deployment](/d/payment-deployment?${__url_time_range}) · [Payment customer impact](/d/payment-customer-impact?${__url_time_range})",
+        "content": "### Payment service · Payment overview\nSLIs api_availability, api_latency_p99, consumer_freshness, settlement_consumers_active · SLOs api_availability_99_9. &nbsp;·&nbsp; pack `payment-service@1.5.0` &nbsp;·&nbsp; [Unified](/d/payment-service-unified?${__url_time_range}) · **Payment overview** · [Payment slo burn](/d/payment-slo-burn?${__url_time_range}) · [Payment deployment](/d/payment-deployment?${__url_time_range}) · [Payment customer impact](/d/payment-customer-impact?${__url_time_range})",
         "code": {
           "language": "plaintext",
           "showLineNumbers": false,
@@ -140,7 +140,7 @@
       "gridPos": {
         "x": 0,
         "y": 3,
-        "w": 8,
+        "w": 6,
         "h": 4
       },
       "description": "HTTP responses that are not 5xx, over total responses. SLO 99.9 % over 30d.",
@@ -209,9 +209,9 @@
       "title": "Api latency p99",
       "datasource": "${DS_PROMETHEUS}",
       "gridPos": {
-        "x": 8,
+        "x": 6,
         "y": 3,
-        "w": 8,
+        "w": 6,
         "h": 4
       },
       "description": "99th-percentile API latency, server-side. SLO 99 % over 30d. Good when ≤ 0.5 seconds.",
@@ -280,9 +280,9 @@
       "title": "Consumer freshness",
       "datasource": "${DS_PROMETHEUS}",
       "gridPos": {
-        "x": 16,
+        "x": 12,
         "y": 3,
-        "w": 8,
+        "w": 6,
         "h": 4
       },
       "description": "Consumer lag for the settlement topic. SLO 99 % over 30d. Good when ≤ 60 seconds.",
@@ -347,6 +347,77 @@
     },
     {
       "id": 6,
+      "type": "stat",
+      "title": "Settlement consumers active",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {
+        "x": 18,
+        "y": 3,
+        "w": 6,
+        "h": 4
+      },
+      "description": "Live members of the settlement consumer group. SLO 99.9 % over 30d. Good when ≥ 2 consumers.",
+      "pack": {
+        "binds_to": [
+          "slis.settlement_consumers_active"
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(payment:settlement_consumers:members_min_5m)",
+          "instant": false,
+          "range": true,
+          "legendFormat": "__auto"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "mappings": [],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#F0616D",
+                "value": null
+              },
+              {
+                "color": "#F5B14C",
+                "value": 1
+              },
+              {
+                "color": "#3DD68C",
+                "value": 2
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "orientation": "auto",
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 7,
       "type": "bargauge",
       "title": "Error-budget burn · last hour",
       "datasource": "${DS_PROMETHEUS}",
@@ -451,7 +522,7 @@
       }
     },
     {
-      "id": 7,
+      "id": 8,
       "type": "timeseries",
       "title": "Burn rate · 5 m window",
       "datasource": "${DS_PROMETHEUS}",
@@ -566,6 +637,18 @@
           {
             "matcher": {
               "id": "byName",
+              "options": "settlement_consumers_99_9_min_2"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Settlement consumers active"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
               "options": "consumer_success_99_95"
             },
             "properties": [
@@ -591,7 +674,7 @@
       }
     },
     {
-      "id": 8,
+      "id": 9,
       "type": "timeseries",
       "title": "Burn rate · 1 h window",
       "datasource": "${DS_PROMETHEUS}",
@@ -706,6 +789,18 @@
           {
             "matcher": {
               "id": "byName",
+              "options": "settlement_consumers_99_9_min_2"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Settlement consumers active"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
               "options": "consumer_success_99_95"
             },
             "properties": [
@@ -731,7 +826,7 @@
       }
     },
     {
-      "id": 9,
+      "id": 10,
       "type": "row",
       "title": "Alerting",
       "datasource": "${DS_PROMETHEUS}",
@@ -745,7 +840,7 @@
       "panels": []
     },
     {
-      "id": 10,
+      "id": 11,
       "type": "state-timeline",
       "title": "Symptom alerts · pending / firing",
       "datasource": "${DS_PROMETHEUS}",
@@ -812,7 +907,7 @@
       }
     },
     {
-      "id": 11,
+      "id": 12,
       "type": "state-timeline",
       "title": "Burn-rate & forecast alerts · pending / firing",
       "datasource": "${DS_PROMETHEUS}",

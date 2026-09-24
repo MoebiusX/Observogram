@@ -28,6 +28,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { SPEC_DIR } from './lib/validator.mjs';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { compileCatalog, compileArtifact } from './lib/compile.mjs';
@@ -84,7 +85,7 @@ for (const [name, path] of Object.entries(VALIDATORS)) {
 // ---------- fixture matrix ----------
 
 const fixtureFiles = [
-  { id: 'payment-service', path: 'vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml' },
+  { id: 'payment-service', path: `${SPEC_DIR}/examples/payment-service.pack.yaml` },
   ...readdirSync(join(ROOT, 'examples')).filter(f => f.endsWith('.pack.yaml'))
     .map(f => ({ id: f.replace(/\.pack\.yaml$/, ''), path: `examples/${f}` })),
   ...(existsSync(join(ROOT, 'tools', 'fixtures', 'compile'))

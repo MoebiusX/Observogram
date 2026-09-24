@@ -270,7 +270,7 @@ packc init --entry <id>[,<id>] --tier tier-2 --name <svc> [--env <env>] [--owner
 ```
 
 YAML to stdout (or `--out`), the todo list, the warnings and the conformance line to
-stderr; exit `0` ok, `1` the produced pack does not validate against the v1.2 schema (a
+stderr; exit `0` ok, `1` the produced pack does not validate against the v1.3 schema (a
 section toggled off), fails a MUST clause of its tier (a `--slis` selection with no
 latency SLO at tier-2: `packc journey`'s "gate failed", so a CI caller can tell `MUST
 14/15` from `15/15`), an SLI is not valid PromQL once the `--param` values are in, or an

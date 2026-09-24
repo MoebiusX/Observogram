@@ -208,7 +208,7 @@ function renderOtlpBody(host, canonical, layered) {
         <div class="otlp-summary-val">${hasOtlpReceiver ? 'pass' : 'fail'}</div>
       </div>
       <div class="otlp-summary-note">
-        Spec v1.2 §3 — every pack <strong>MUST</strong> declare an <code>otlp</code> receiver.
+        Spec v1.3 §3 — every pack <strong>MUST</strong> declare an <code>otlp</code> receiver.
         The OTLP-out column is informational: many production stacks intentionally use
         native protocols downstream (Prometheus remote-write, Loki native, Tempo OTLP)
         for backend efficiency.

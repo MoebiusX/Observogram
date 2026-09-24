@@ -34,6 +34,7 @@ import {
   durationSeconds, packSnippet,
 } from './lib/burn-rules.mjs';
 import { compilePrometheusRules } from './lib/compile.mjs';
+import { SPEC_DIR } from './lib/validator.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PACKS = readdirSync(resolve(ROOT, 'reference-packs')).filter(f => f.endsWith('.pack.yaml')).map(f => `reference-packs/${f}`);
@@ -497,7 +498,7 @@ test('a derived view rates a counter with or without a label selector, and reads
 
 test('dashboards for a dash-named pack read the slugged metric prefix everywhere', () => {
   // payment-service: every recording rule the generators and the compiler emit is payment_service:*
-  const pack = load('vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml');
+  const pack = load(`${SPEC_DIR}/examples/payment-service.pack.yaml`);
   const boards = genericBoards(pack);
   const json = JSON.stringify(boards);
   assert.ok(boards.length >= 2);

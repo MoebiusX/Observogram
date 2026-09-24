@@ -3,7 +3,7 @@
 Versioned, parameterised pack fragments — one YAML entry per **product** a service
 runs on (`products/`) or per **archetype** of a service built from scratch
 (`archetypes/`). `packc init` and the studio's DEFINE / COMPILE / VERIFY steps
-instantiate an entry into a canonical ObservabilityPack v1.2 at a chosen criticality
+instantiate an entry into a canonical ObservabilityPack v1.3 at a chosen criticality
 tier. The engine is `tools/lib/library.mjs` (pure, browser-safe); the loader is
 `server/library.mjs`; the design is [docs/BUILD_JOURNEY.md](../docs/BUILD_JOURNEY.md).
 
@@ -234,7 +234,7 @@ templates, bound and `semconv_metric` — the defaults the editor shows.
 toggles:
 
 - the entry parses and `validateLibraryEntry` returns no error;
-- `validateCanonical` accepts the produced pack (spec v1.2 schema);
+- `validateCanonical` accepts the produced pack (spec v1.3 schema);
 - every `compile.mjs` target compiles it without throwing (Prometheus rules, OTel
   Collector, Alertmanager, Grafana dashboard);
 - the generic dashboard generator builds every board and `checkBindings` reports

@@ -2,7 +2,7 @@
 /**
  * tools/detect-drift.mjs
  *
- * Drift detection across two ObservabilityPack v1.2 snapshots. Built to
+ * Drift detection across two ObservabilityPack snapshots. Built to
  * run in a cron context: after the fetcher refreshes the live pack,
  * call this against the new file and either a second file OR a git
  * rev N hours ago. Emits a structured drift report (markdown by default,

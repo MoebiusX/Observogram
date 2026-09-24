@@ -1,6 +1,6 @@
 // tools/lib/adapter.mjs
 //
-// Projects a canonical ObservabilityPack v1.2 manifest into the studio's
+// Projects a canonical ObservabilityPack manifest into the studio's
 // layered display object. Browser-friendly ESM — no Node APIs — so the
 // studio HTML can `<script type="module">` import this same file as the
 // Node CLI wrapper (tools/adapt-spec-pack.mjs).
@@ -12,6 +12,7 @@
 
 import { annotationList, buildRequirementTraceability } from './traceability.mjs';
 import { boundText, hasDirection } from './good-when.mjs';
+import { SPEC_VERSION } from './validator.mjs';
 //
 // LAYERED DISPLAY OBJECT shape:
 //   {
@@ -57,7 +58,7 @@ export function adapt(canonical, opts = {}) {
   }
   if (canonical.apiVersion !== CANONICAL_API_VERSION || canonical.kind !== CANONICAL_KIND) {
     throw new Error(
-      `adapter: not a canonical ObservabilityPack v1.2 manifest ` +
+      `adapter: not a canonical ObservabilityPack v${SPEC_VERSION} manifest ` +
       `(apiVersion=${JSON.stringify(canonical.apiVersion)}, kind=${JSON.stringify(canonical.kind)})`
     );
   }
@@ -390,7 +391,7 @@ function adaptSourceMetricDefinitions(ctx) {
 }
 
 // L2 EXPAND: scrape jobs projected from repo crawler annotations and live MCP
-// annotations. The canonical v1.2 schema does not have a first-class
+// annotations. The canonical schema does not have a first-class
 // scrape_jobs field, so both paths store them in annotations. Projecting them
 // here makes scrape evidence visible and comparable without changing the pack
 // schema.

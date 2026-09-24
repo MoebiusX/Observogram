@@ -337,7 +337,7 @@ is kept at every step and recorded in the manifest.
 | `--dry-run` | like `--check`, and list the files that would be written |
 | `--strict` | warnings are errors |
 | `--repo-url <url>` | runbook link base (default: the environment's `repo_url`) |
-| `--schema <file>` | the ObservabilityPack schema (default: the vendored v1.2 schema) |
+| `--schema <file>` | the ObservabilityPack schema (default: the vendored v1.3 schema) |
 
 Exit codes: `0` ok, `1` validation or self-check failed (nothing written), `2` usage (bad flags,
 no pack, `--env` omitted with several environments, `--env` naming an environment without

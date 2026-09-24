@@ -3,7 +3,7 @@
  * tools/test-library.mjs — the BUILD journey engine (docs/BUILD_JOURNEY.md), proven per tier.
  *
  * Loads every entry under library/, then for every entry × every tier with default toggles:
- * the produced pack validates against the v1.2 schema, compiles through every compile.mjs
+ * the produced pack validates against the vendored schema, compiles through every compile.mjs
  * target without throwing, the generic dashboard generator builds its boards with no unknown
  * binding, conformance at that tier reports every applicable MUST passing or failing only
  * because of a listed todo (failing MUST ids ⊆ clauses the todos name, both sets printed on

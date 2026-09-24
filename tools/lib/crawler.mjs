@@ -2,7 +2,7 @@
 // crawler.mjs — Path A of the pack-creation user journey.
 //
 // Walks a service repository and emits a draft canonical
-// ObservabilityPack v1.2 manifest by introspecting common
+// ObservabilityPack manifest by introspecting common
 // observability artefacts: docker-compose backends, Prometheus
 // rules, Alertmanager configs, OTel Collector pipelines, Grafana
 // dashboard JSONs, Helm values/templates, and Kubernetes workloads.
@@ -1883,7 +1883,7 @@ function isUnresolvedChannelValue(value) {
   return v.includes('${') && !CHANNEL_URI_RE.test(v);
 }
 
-// Map Prometheus / Alertmanager severity labels to the spec v1.2
+// Map Prometheus / Alertmanager severity labels to the spec's severity
 // enum: SEV1 (critical) / SEV2 (warning) / SEV3 (info) / SEV4 (debug).
 // If the input already matches SEV1..SEV4, pass through. Common
 // Prometheus conventions map as below.

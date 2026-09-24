@@ -2447,7 +2447,7 @@ function renderCoveragePopoverBody(pack) {
         <td class="cv-val"><strong>${total}</strong></td>
       </tr>
     </table>
-    <div class="cv-foot">Sub-buckets count by id prefix (SLI-, BAK-, DASH-, etc.). Pack generated from canonical v1.2 manifest.</div>
+    <div class="cv-foot">Sub-buckets count by id prefix (SLI-, BAK-, DASH-, etc.). Pack generated from canonical v1.3 manifest.</div>
   `;
 }
 

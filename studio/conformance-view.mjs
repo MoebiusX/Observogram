@@ -1,6 +1,6 @@
 // studio/conformance-view.mjs
 //
-// The Conformance view — how MATURE is the focused pack against the v1.2
+// The Conformance view — how MATURE is the focused pack against the v1.3
 // maturity rubric (MUST/SHOULD per tier): a headline scorecard, a per-
 // dimension grid, and the full clause list. Self-contained; returns the
 // rendered <section> for the caller to append.

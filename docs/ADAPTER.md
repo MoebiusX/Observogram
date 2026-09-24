@@ -1,6 +1,6 @@
 # Adapter — canonical → layered
 
-The adapter (`tools/lib/adapter.mjs`) projects a canonical ObservabilityPack v1.2 manifest into the studio's layered display object. Pure ESM, no Node APIs — the Express server, the `npm run adapt` CLI, and (potentially) browser-side consumers all import the same module.
+The adapter (`tools/lib/adapter.mjs`) projects a canonical ObservabilityPack v1.3 manifest into the studio's layered display object. Pure ESM, no Node APIs — the Express server, the `npm run adapt` CLI, and (potentially) browser-side consumers all import the same module.
 
 ## Public API
 
@@ -106,7 +106,7 @@ The client builds a symbol table from every artefact's `defines`. Each artefact'
 
 - **Internal** (`slis.X`, `slos.Y`, `telemetry.backends.Z`, `dashboards.W`, …) — must resolve against the symbol table. Unresolved → red outline on the card + drawer warning + ⚠ marker.
 - **External imports** (`ref:platform/...`, `ref:something/...@version`) — accepted without resolving.
-- **Alert references** (`alert:<name>`) — accepted. Alerts aren't first-class symbols in v1.2 (alerting routes don't `defines:` anything); a future spec rev could change this.
+- **Alert references** (`alert:<name>`) — accepted. Alerts aren't first-class symbols in the spec (alerting routes don't `defines:` anything); a future spec rev could change this.
 
 `ref-link`s in drawer panels are clickable — clicking jumps to the defining artefact's drawer (switches active layer tab, opens it, scrolls into view).
 
@@ -154,7 +154,7 @@ SLO -> SLI -> metrics -> exporter/scrape -> dashboard -> alert chain.
 
 The inverse-direction sibling lives in `tools/lib/legacy.mjs`: it detects the
 pre-v1.2 layered "studio-shape" JSON (the original pack format — working
-examples in `examples/legacy/`) and upconverts it into a canonical v1.2
+examples in `examples/legacy/`) and upconverts it into a canonical v1.3
 manifest, so the one canonical pipeline serves old packs too.
 
 ```js

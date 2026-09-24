@@ -2,7 +2,7 @@
 
 The conformance scorer (`tools/lib/conformance.mjs`) evaluates a canonical
 pack against a hand-curated subset of the maturity rubric from
-[spec §5 + §7](../vendor/observability-pack-spec/v1.2/spec.md). The studio
+[spec §5 + §7](../vendor/observability-pack-spec/v1.3/spec.md). The studio
 exposes the scoring under **Advanced -> Conformance** and via
 `GET /api/packs/:id/conformance?env=<name>`.
 

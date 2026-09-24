@@ -26,6 +26,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { SPEC_DIR } from './lib/validator.mjs';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -139,7 +140,7 @@ async function main() {
 
   try {
     // ---- register Pack A (the canonical spec example) ----
-    const packYaml = readFileSync(join(ROOT, 'vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml'), 'utf8');
+    const packYaml = readFileSync(join(ROOT, SPEC_DIR, 'examples/payment-service.pack.yaml'), 'utf8');
     const reg = await api(base, '/api/validate?env=prod&source=t4-pack-a', {
       method: 'POST', headers: { 'Content-Type': 'text/yaml' }, body: packYaml,
     });

@@ -125,7 +125,7 @@ function derivationGuarded(expr) {
 // Legs no event count can be derived from: a per-second rate of the last two samples, or a
 // derivative / delta of a gauge — increase() has no meaning for them.
 const UNCOUNTABLE = /\b(irate|deriv|delta|idelta)\(/;
-// The spec's Duration units (vendor/observability-pack-spec/v1.2 schema: ns|us|ms|s|m|h|d|w|mo|y).
+// The spec's Duration units (the vendored schema's Duration pattern: ns|us|ms|s|m|h|d|w|mo|y).
 const UNITS = { ns: 1e-9, us: 1e-6, ms: 0.001, s: 1, m: 60, h: 3600, d: 86400, w: 604800, mo: 2628000, y: 31536000 };
 
 /** Prometheus metric/rule names accept only [a-zA-Z0-9_:]: an SLI id like `latência` embedded raw
