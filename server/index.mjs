@@ -1018,8 +1018,9 @@ app.post('/api/journeys/:name/run', async (req, res) => {
   try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
   catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
   try {
-    // A crawl: walk reads only this org's own part of the workspace
-    // (STORE_PLAN slice 2, A-24); a crawl root in another org's part is refused.
+    // A crawl: walk, a file: source and an inventory site read only this
+    // org's own part of the workspace (STORE_PLAN slice 2, A-24); a path in
+    // another org's part is refused.
     const record = await runJourney(def, { crawlScope: { base: baseWorkspaceRoot(), ownRoot: orgWorkspaceRoot() } });
     res.json({ ok: true, record });
   } catch (e) {

@@ -380,8 +380,11 @@ export function validateGateStack(stack, journeyName = '?') {
 
 // ---------- pack sources ----------
 
-function loadPackFile(path, baseDir) {
+// scope: the studio run's crawl scope (below) — a file: source in another
+// org's part of the workspace is refused, as a crawl: root there is (A-24).
+function loadPackFile(path, baseDir, scope = null) {
   const p = resolve(baseDir || '.', path);
+  refuseOutOfScope(p, scope, 'pack file');
   const text = readFileSync(p, 'utf8');
   const pack = extname(p) === '.json' ? JSON.parse(text) : parseYaml(text);
   return { canonical: pack, source: p };
@@ -415,6 +418,14 @@ function crawlScopeTest(scope) {
   // it only the org's own root is, and the default org at the base never
   // enters <base>/orgs/, where the other orgs live.
   return (real) => !within(real, base) || (within(real, ownRoot) && !(ownRoot === base && within(real, orgsDir)));
+}
+
+// A single path (a file: source, an inventory site) read under the scope.
+function refuseOutOfScope(p, scope, what) {
+  const inScope = crawlScopeTest(scope);
+  if (inScope && !inScope(realOrResolved(p))) {
+    throw new Error(`${what} ${p} belongs to another org's part of the workspace — refused`);
+  }
 }
 
 function walkRepo(root, { scope = null } = {}) {
@@ -454,7 +465,7 @@ function walkRepo(root, { scope = null } = {}) {
 }
 
 async function resolvePackA(def, baseDir, crawlScope = null) {
-  if (def.packA.file) return loadPackFile(def.packA.file, baseDir);
+  if (def.packA.file) return loadPackFile(def.packA.file, baseDir, crawlScope);
   const c = def.packA.crawl;
   const root = resolve(baseDir || '.', c.path);
   const files = walkRepo(root, { scope: crawlScope });
@@ -467,8 +478,8 @@ async function resolvePackA(def, baseDir, crawlScope = null) {
   return { canonical: out.canonical, source: `crawl:${root}` };
 }
 
-async function resolvePackB(def) {
-  if (def.packB.file) return loadPackFile(def.packB.file, def.__baseDir);
+async function resolvePackB(def, crawlScope = null) {
+  if (def.packB.file) return loadPackFile(def.packB.file, def.__baseDir, crawlScope);
   const m = def.packB.mcp;
   if (!m?.url) throw new Error(`journey ${def.name}: packB.mcp.url required`);
   const mcpAuth = m.authEnv ? (process.env[m.authEnv] || null) : null;
@@ -501,11 +512,15 @@ async function resolvePackB(def) {
 // has no live series (not-attempted, said so); a site that cannot be read or carries no
 // expected block is `failed` with the reason; an MCP without the metrics query tool is
 // not-attempted with the tier reason. Never touches the grade or the alignment.
-async function observeInventoryCoverage(def, checkedAt) {
+async function observeInventoryCoverage(def, checkedAt, crawlScope = null) {
   const site = def.inventory.site;
   const kinds = def.inventory.kinds || null;
   let manifest;
-  try { manifest = JSON.parse(readFileSync(resolve(def.__baseDir || '.', site), 'utf8')); }
+  try {
+    const sitePath = resolve(def.__baseDir || '.', site);
+    refuseOutOfScope(sitePath, crawlScope, 'inventory site');
+    manifest = JSON.parse(readFileSync(sitePath, 'utf8'));
+  }
   catch (e) { return buildInventoryRecord({ site, expected: null, status: 'failed', reason: `cannot read ${site}: ${e.message}`, checkedAt }); }
   const expected = expectedFromSite(manifest);
   if (!expected) return buildInventoryRecord({ site, expected: null, status: 'failed', reason: `${site} carries no expected block (render the partition with gen-site)`, checkedAt });
@@ -901,8 +916,9 @@ export function pruneLiveSnapshots(recordFiles, liveFiles) {
 
 // ---------- the run ----------
 
-// crawlScope: { base, ownRoot } from the server (a crawl: walk reads only
-// the org's own part of the workspace, walkRepo); null for the CLI.
+// crawlScope: { base, ownRoot } from the server (a crawl: walk, a file:
+// source and an inventory site read only the org's own part of the
+// workspace, or outside it); null for the CLI.
 export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null } = {}) {
   def.__baseDir = baseDir || (def.__source ? dirname(def.__source) : '.');
   const startedAt = new Date().toISOString();
@@ -915,7 +931,7 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   const a = await resolvePackA(def, def.__baseDir, crawlScope);
   let b;
   try {
-    b = await resolvePackB(def);
+    b = await resolvePackB(def, crawlScope);
   } catch (e) {
     // Only a LIVE source that reached the wire can lose its vantage; a
     // missing pack file or an unset authEnv is a configuration error and
@@ -967,7 +983,7 @@ export async function runJourney(def, { baseDir, notifier = postNotification, cr
   const liveRefreshedAt = b.canonical?.metadata?.annotations?.['mcp.refreshedAt'] || null;
   const live = liveEvidenceFacts(b.canonical);
   // Inventory coverage (inventory-coverage.mjs): the site's expected sets against the live up series.
-  const inventory = def.inventory ? await observeInventoryCoverage(def, startedAt) : null;
+  const inventory = def.inventory ? await observeInventoryCoverage(def, startedAt, crawlScope) : null;
   // grade.overall.audit is the canonical PASS/FAIL contract (score > 85%).
   const audit = grade.overall?.audit || { scorePctExact: 0, passes: false };
   const facts = {

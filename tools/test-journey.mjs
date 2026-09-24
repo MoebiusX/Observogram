@@ -1571,6 +1571,26 @@ try {
       assert(/no scannable files found/.test(ancScoped.err || ''), 'crawlScope: from orgs/acme a root that is an ancestor of the base never enters the base', ancScoped.err || 'ran');
       assert((await tryRun(anc, { baseDir: ACME })).rec, 'no scope: the ancestor walk enters the base');
 
+      // file: sources take the same scope (A-24): from orgs/acme a pack file
+      // in the default org's part is refused for Pack A and Pack B, and an
+      // inventory site there is not read; its own packs and a file outside
+      // the base (the repo catalog) still load.
+      const A = PACK_A.replaceAll('\\', '/');
+      const basePack = join(WS, 'packs', 'demo.pack.yaml');
+      put(basePack, readFileSync(PACK_A, 'utf8'));
+      put(join(ACME, 'packs', 'own.pack.yaml'), readFileSync(PACK_A, 'utf8'));
+      const refusedA = await tryRun({ name: 'leak-a', packA: { file: '../../../packs/demo.pack.yaml' }, packB: { file: B } }, { baseDir: join(ACME, 'journeys'), crawlScope: acmeScope });
+      assert(refusedA.err === `pack file ${basePack} belongs to another org's part of the workspace — refused`, 'crawlScope: from orgs/acme a packA file: in the default org\'s part is refused', refusedA.err || refusedA.rec?.packA);
+      const refusedB = await tryRun({ name: 'leak-b', packA: { file: A }, packB: { file: basePack } }, { baseDir: join(ACME, 'journeys'), crawlScope: acmeScope });
+      assert(refusedB.err === `pack file ${basePack} belongs to another org's part of the workspace — refused`, 'crawlScope: from orgs/acme a packB file: in the default org\'s part is refused', refusedB.err || refusedB.rec?.packB);
+      const ownFile = await tryRun({ name: 'own-file', packA: { file: '../packs/own.pack.yaml' }, packB: { file: B } }, { baseDir: join(ACME, 'journeys'), crawlScope: acmeScope });
+      assert(ownFile.rec?.packA?.source === join(ACME, 'packs', 'own.pack.yaml'), 'crawlScope: from orgs/acme its own pack file loads', ownFile.err || ownFile.rec?.packA);
+      assert((await tryRun({ name: 'catalog-file', packA: { file: A }, packB: { file: B } }, { baseDir: join(ACME, 'journeys'), crawlScope: acmeScope })).rec, 'crawlScope: a pack file outside the base (the catalog) loads');
+      assert((await tryRun({ name: 'leak-a', packA: { file: '../../../packs/demo.pack.yaml' }, packB: { file: B } }, { baseDir: join(ACME, 'journeys') })).rec, 'no scope: the same file: loads (the CLI)');
+      put(join(WS, 'site.json'), JSON.stringify({ expected: { hosts: ['h1'] } }));
+      const siteRun = await tryRun({ name: 'leak-site', packA: { file: A }, packB: { file: B }, inventory: { site: '../../site.json' } }, { baseDir: ACME, crawlScope: acmeScope });
+      assert(siteRun.rec?.inventory?.status === 'failed' && /another org's part of the workspace — refused/.test(siteRun.rec?.inventory?.reason || ''), 'crawlScope: from orgs/acme an inventory site in the default org\'s part is not read', siteRun.err || siteRun.rec?.inventory);
+
       // A symlinked file into <base>/orgs/bravo is skipped.
       if (process.platform !== 'win32') {
         mkdirSync(join(ACME, 'linked'), { recursive: true });

@@ -321,9 +321,10 @@ server opens it at every start.
   (`OBSERVOGRAM_API_TOKEN`) boots token-only; with neither a bearer nor
   identity it boots like a fresh install (on loopback it seeds
   `admin`/`admin`). More than one org needs identity.
-- **Journeys run from the studio** load by name only, and a `crawl:`
-  journey reads only the org's own part of the workspace; a crawl root
-  inside another org's part is refused.
+- **Journeys run from the studio** load by name only, and a journey's
+  `crawl:` roots, `file:` packs and inventory site are read only from the
+  org's own part of the workspace (or outside it); a path inside another
+  org's part is refused.
 
 MCP write tokens are unrelated to the API token: they pass through per
 request and are never stored server-side. Registered packs and the deploy
