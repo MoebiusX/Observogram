@@ -391,6 +391,26 @@ try {
   j = await r.json();
   assert(r.ok && /value: \/workspace\/orgs\/acme\n/.test(j.snippets?.k8s || ''), "alice's k8s snippet sets OBSERVOGRAM_WORKSPACE=/workspace/orgs/acme", (j.snippets?.k8s || '').slice(0, 120));
   assert((j.snippets?.cron || '').includes(join(WORKSPACE, 'orgs', 'acme')), "alice's cron line carries <WORKSPACE>/orgs/acme", j.snippets?.cron);
+  // A studio-run crawl: journey reads only the caller's org's part of the
+  // workspace — a crawl root in orgs/bravo is refused through the route.
+  {
+    const bravoRoot = join(WORKSPACE, 'orgs', 'bravo');
+    writeFileSync(join(bravoRoot, 'leak.yaml'), PAY_YAML);
+    const pack = readdirSync(join(WORKSPACE, 'orgs', 'acme', 'packs')).find(f => f.endsWith('.pack.yaml'));
+    writeFileSync(join(WORKSPACE, 'orgs', 'acme', 'journeys', 'acme-crawl.journey.yaml'), [
+      'name: acme-crawl',
+      `packA: { crawl: { path: ${JSON.stringify(bravoRoot)}, name: svc } }`,
+      `packB: { file: ../packs/${pack} }`,
+    ].join('\n') + '\n');
+    r = await fetch(`${base}/api/journeys/acme-crawl/run`, {
+      method: 'POST', headers: { Cookie: alice, 'Content-Type': 'application/json', 'X-Observogram-CSRF': '1' }, body: '{}',
+    });
+    j = await r.json();
+    assert(r.status === 502 && j.error === `crawl source ${bravoRoot} belongs to another org's part of the workspace — refused`,
+      "alice's crawl: journey whose root is orgs/bravo → 502 'belongs to another org'", [r.status, j.error]);
+    rmSync(join(bravoRoot, 'leak.yaml'));
+    rmSync(join(WORKSPACE, 'orgs', 'acme', 'journeys', 'acme-crawl.journey.yaml'));
+  }
 
   // ---- a chunked body keeps its org context through the body parser ----
   {
