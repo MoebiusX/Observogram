@@ -188,9 +188,11 @@ enforced server-side, not hidden client-side.
 - TLS via reverse proxy (documented, not built); CSRF defence on
   mutating routes (SameSite=Lax + custom-header check); security
   headers; rate limit on `/auth/*`; secrets only via env; documented
-  backup story = the workspace directory (it already IS the state —
-  copied with nothing holding the embedded store's database; a live
-  backup is `packc store backup`, see [STORE_PLAN.md](STORE_PLAN.md) §3);
+  backup story = the embedded store's database file wherever
+  `OBSERVOGRAM_DB` puts it (on k8s on the `store` volume, outside the
+  workspace), copied with nothing holding it or live with `packc store
+  backup`, plus the workspace directory; see
+  [STORE_PLAN.md](STORE_PLAN.md) §3;
   upgrade/rollback notes. The fail-closed rule extends: non-loopback +
   no OIDC + no token → refuse to start, same as today.
 
