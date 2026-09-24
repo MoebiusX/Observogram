@@ -32,10 +32,15 @@
 // only runs once tenancy is armed (rename per entry; entries that
 // already exist under orgs/default/ are left alone).
 
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { baseWorkspacePath } from '../tools/lib/brand-env.mjs';
+import { currentOrg, runWithOrg, validOrgId } from './org-context.mjs';
+
+// The org context lives in server/org-context.mjs (no import cycle with
+// server/store/); re-exported here for the callers that import it from
+// tenancy.
+export { currentOrg, runWithOrg, validOrgId };
 
 // The deployment-level base — auth state (users.json, session-secret)
 // and orgs.json always live here, never inside an org subtree.
@@ -62,9 +67,6 @@ export function writeOrgs(orgs, file = orgsFilePath()) {
   catch (e) { try { rmSync(tmp, { force: true }); } catch (_) {} throw e; }
 }
 
-// Org ids are path components — same shape as the spec's Slug.
-export function validOrgId(id) { return /^[a-z][a-z0-9_-]{0,62}[a-z0-9]$/.test(String(id || '')); }
-
 export function orgsForUser(sub) {
   if (!sub) return [];
   const orgs = readOrgs();
@@ -83,13 +85,7 @@ export function orgExists(orgId) {
   return validOrgId(orgId) && Object.hasOwn(readOrgs(), orgId);
 }
 
-// ---------- per-request org context ----------
-
-const orgContext = new AsyncLocalStorage();
-
-export function runWithOrg(orgId, fn) { return orgContext.run(orgId, fn); }
-
-export function currentOrg() { return orgContext.getStore() || null; }
+// ---------- per-request org context (server/org-context.mjs) ----------
 
 // THE context-aware root. Flat (byte-identical v1 behaviour) unless
 // tenancy is armed AND the request carries an org.

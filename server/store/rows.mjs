@@ -10,7 +10,7 @@
 // Every mutating call takes an actor and writes its audit row in the same
 // transaction.
 
-import { currentOrg, validOrgId } from '../tenancy.mjs';
+import { currentOrg, validOrgId } from '../org-context.mjs';
 
 export function requireActor(actor) {
   if (typeof actor !== 'string' || !actor.trim()) {

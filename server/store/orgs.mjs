@@ -10,7 +10,7 @@
 import { atomic, nowIso, prepare } from './db.mjs';
 import { writeAudit } from './audit.mjs';
 import { notFound, requireText } from './rows.mjs';
-import { validOrgId } from '../tenancy.mjs';
+import { validOrgId } from '../org-context.mjs';
 
 export function rowToOrg(r) {
   if (!r) return null;
