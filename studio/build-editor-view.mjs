@@ -44,7 +44,7 @@
 // with sliEditorModel's output (build-model.mjs buildEditorModel assembles
 // it); host.build.* are the actions.
 
-import { escapeHtml } from './util.mjs';
+import { escapeHtml, TRAPPED_DIALOGS } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { editFieldHtml, evidenceBadge, switchHtml } from './build-atoms.mjs';
 import { checkEditorId, customFormModel, customDefFromDraft, normalizeDraft, slugifySliId, SLO_WINDOWS } from './build-copies-model.mjs';
@@ -54,6 +54,8 @@ const attr = (s) => String(s).replace(/["\\]/g, '\\$&');
 export const PROMQL_MAX_HEIGHT = 168;
 /** The fields that span the grid: one PromQL expression; good and total sit side by side. */
 const WIDE = new Set(['query']);
+/** The focus keys of the dialog's own controls: they survive a re-render like a field's (build-model.mjs focusFallbackSelectors knows them). */
+export const EDITOR_CONTROL_KEYS = { close: 'editor:close', done: 'editor:done', cancel: 'editor:cancel', resetAll: 'editor:reset-all' };
 
 function chipHtml(c) {
   return `<span class="build-rolo-chip is-${escapeHtml(c.kind)}"${c.title ? ` title="${escapeHtml(c.title)}"` : ''}>${escapeHtml(c.text)}</span>`;
@@ -86,8 +88,8 @@ export function buildEditorHtml(model) {
   }
   const eyebrow = model.create ? 'L1 · Contract · a new SLI' : `L1 · Contract · ${model.readOnly ? 'as compiled' : 'edit'} · ${model.type} SLI`;
   const footActions = model.create
-    ? `<button type="button" class="ctrl-btn build-editor-cancel" data-editor-close>${escapeHtml(model.doneLabel)}</button><button type="button" class="mcp-refresh-btn build-editor-submit" data-editor-submit data-focus-key="${escapeHtml(model.submit.focusKey)}"${model.submit.enabled ? '' : ' disabled'}>${escapeHtml(model.submit.label)} <span aria-hidden="true">→</span></button>`
-    : `${model.resetAll ? '<button type="button" class="ctrl-btn build-editor-reset-all" data-editor-reset-all title="every field back to the library default"><span aria-hidden="true">↺</span> Reset all</button>' : ''}<button type="button" class="mcp-refresh-btn build-editor-done" data-editor-done data-editor-close>${escapeHtml(model.doneLabel)}</button>`;
+    ? `<button type="button" class="ctrl-btn build-editor-cancel" data-editor-close data-focus-key="${EDITOR_CONTROL_KEYS.cancel}">${escapeHtml(model.doneLabel)}</button><button type="button" class="mcp-refresh-btn build-editor-submit" data-editor-submit data-focus-key="${escapeHtml(model.submit.focusKey)}"${model.submit.enabled ? '' : ' disabled'}>${escapeHtml(model.submit.label)} <span aria-hidden="true">→</span></button>`
+    : `${model.resetAll ? `<button type="button" class="ctrl-btn build-editor-reset-all" data-editor-reset-all data-focus-key="${EDITOR_CONTROL_KEYS.resetAll}" title="every field back to the library default"><span aria-hidden="true">↺</span> Reset all</button>` : ''}<button type="button" class="mcp-refresh-btn build-editor-done" data-editor-done data-editor-close data-focus-key="${EDITOR_CONTROL_KEYS.done}">${escapeHtml(model.doneLabel)}</button>`;
   return `
     <div class="build-editor-scrim" data-editor-close aria-hidden="true"></div>
     <div class="build-editor is-${escapeHtml(model.mode)}${model.custom ? ' is-custom' : ''}" role="dialog" aria-modal="true" aria-labelledby="build-editor-title" aria-describedby="build-editor-status" data-editor-key="${escapeHtml(model.key || '')}" data-editor-mode="${escapeHtml(model.mode)}" tabindex="-1">
@@ -101,7 +103,7 @@ export function buildEditorHtml(model) {
             ${t.chips.map(chipHtml).join('')}
           </span>
         </div>
-        <button type="button" class="build-editor-close" data-editor-close aria-label="Close the editor (Esc)" title="Close (Esc)"><span aria-hidden="true">esc</span></button>
+        <button type="button" class="build-editor-close" data-editor-close aria-label="Close the editor (Esc)" title="Close (Esc)" data-focus-key="${EDITOR_CONTROL_KEYS.close}"><span aria-hidden="true">esc</span></button>
       </header>
       <div class="build-editor-body">
         ${model.generalError ? `<div class="build-edit-error build-editor-general" role="alert">${escapeHtml(model.generalError)}</div>` : ''}
@@ -156,36 +158,63 @@ export function paintIdState(container, model, text) {
 }
 
 /**
+ * What the focused control of this editor is, before a re-render replaces it: its focus key, its field name (an
+ * input's data-override-field / data-custom-field / data-custom-draft — the stable handle when the key changes
+ * under it), its text and its caret. Null when nothing of the editor has the focus.
+ */
+function keptFocus(container, doc) {
+  const active = doc?.activeElement || null;
+  if (!active || active === doc.body || typeof container.contains !== 'function' || !container.contains(active)) return null;
+  const ds = active.dataset || {};
+  const key = ds.focusKey || null;
+  const field = ds.overrideField || ds.customField || ds.customDraft || null;
+  if (!key && !field) return null;
+  return { key, field, value: 'value' in active ? active.value : null, sel: typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null };
+}
+
+/**
  * render(container, model, host, { focus }) — the editor into its persistent host (the controller keeps one outside
  * the re-rendered view). `focus` names the field to land on (a field id, or 'dialog'): the render that opens the
- * editor. Without it the render keeps what the user has: when the active element is a field of this editor, its
+ * editor. Without it the render keeps what the user has: when the active element is a control of this editor, its
  * TEXT, focus and caret survive the re-render — the model's value is not written over what is being typed (a
  * re-render of '99.' from the stored 0.99 lost the dot; measured) — so a re-render on the pack's answer never eats
- * a keystroke, and a value the engine rejected stays as typed beside its message.
+ * a keystroke, and a value the engine rejected stays as typed beside its message. A field is found by its focus
+ * key, else by its name when the key changed under it (a custom SLI's keys carry its id, which a rename changes:
+ * cu:checkout_ok:id → cu:checkout_okx:id — the focus once dropped to <body> after the first keystroke and every
+ * following one was lost; measured); the footer controls by their own keys (EDITOR_CONTROL_KEYS).
  */
 export function renderBuildEditor(container, model, host = appHost, { focus = null } = {}) {
   const doc = typeof document !== 'undefined' ? document : null;
-  const active = doc?.activeElement || null;
-  const inside = !!active && active !== doc?.body && typeof container.contains === 'function' && container.contains(active) && !!active.dataset?.focusKey;
-  const keep = inside ? { key: active.dataset.focusKey, value: 'value' in active ? active.value : null, sel: typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null } : null;
+  const keep = keptFocus(container, doc);
+  const prevKey = container.querySelector?.('.build-editor')?.dataset?.editorKey ?? null;
+  const key = model.key || '';
+  // A custom SLI's editor is keyed by its id, which a rename changes under the focused field: the dialog is the same
+  // one, and the kept key is re-keyed before the lookup.
+  const renamed = !!(model.custom && !model.create && prevKey && prevKey !== key && keep?.key?.startsWith(`cu:${prevKey}:`));
   container.innerHTML = buildEditorHtml(model);
   wireBuildEditor(container, model, host);
   for (const ta of container.querySelectorAll('textarea.build-edit-input') || []) growTextarea(ta);
   const byKey = (k) => container.querySelector(`[data-focus-key="${attr(k)}"]`);
-  let target = null;
+  const byField = (f) => container.querySelector(`.build-editor [data-field="${attr(f)}"] .build-edit-input`);
+  let target = null, kept = false;
   if (focus) {
     // Read-only (Verify) has no field to land on: the dialog itself takes the focus, so its title is read.
     target = focus === 'dialog' || model.readOnly ? container.querySelector('.build-editor')
-      : container.querySelector(`.build-editor [data-field="${attr(focus)}"] .build-edit-input`) || container.querySelector('.build-editor .build-edit-input') || container.querySelector('.build-editor');
-  } else if (keep) target = byKey(keep.key);
+      : byField(focus) || container.querySelector('.build-editor .build-edit-input') || container.querySelector('.build-editor');
+  } else if (keep) {
+    const k = renamed ? `cu:${key}:${keep.key.slice(prevKey.length + 4)}` : keep.key;
+    // The same editor: a control by its key, else a field by its name (its key changed under it); another editor:
+    // nothing to keep — the controller lands the focus.
+    target = (k && byKey(k)) || (keep.field && (renamed || prevKey === key || !prevKey) ? byField(keep.field) : null);
+    kept = !!target;
+  }
   if (!target) return;
-  const kept = keep && target === byKey(keep.key);
   if (kept && keep.value != null && 'value' in target && target.value !== keep.value) {
     target.value = keep.value;
     if (target.tagName === 'TEXTAREA') growTextarea(target);
     // A typed id the model does not carry (not committed yet, or refused): its message and the status say so again —
     // the model-driven render has no error for it and once wiped the clash message under the field (measured).
-    if ((target.dataset?.overrideField || target.dataset?.customField) === 'id' && !model.readOnly && !model.create) paintIdState(container, model, keep.value);
+    if (keep.field === 'id' && !model.readOnly && !model.create) paintIdState(container, model, keep.value);
   }
   target.focus?.({ preventScroll: true });
   if (typeof target.setSelectionRange !== 'function') return;
@@ -195,9 +224,29 @@ export function renderBuildEditor(container, model, host = appHost, { focus = nu
   } catch { /* not a text input */ }
 }
 
+// One document listener per editor host (bound once, never removed: it does nothing while no dialog is mounted):
+// Esc closes the editor when nothing inside it has the focus — a re-render once dropped the focus to <body> and
+// Esc then did nothing (measured). The dialog's own handler takes an Esc from inside (and stops it here).
+const DOC_ESC = new WeakMap();
+function bindDocumentEscape(container, host) {
+  if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
+  const bound = DOC_ESC.has(container);
+  DOC_ESC.set(container, host);
+  if (bound) return;
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const dialog = container.querySelector('.build-editor');
+    if (!dialog || (e.target && dialog.contains?.(e.target))) return;
+    const open = document.querySelectorAll(TRAPPED_DIALOGS);
+    if (open.length && open[open.length - 1] !== dialog) return;   // another modal is on top: its Esc
+    e.preventDefault();
+    DOC_ESC.get(container)?.build?.closeEditor?.();
+  });
+}
+
 /**
  * The editor's handlers: close (the scrim, the esc button, Done / Cancel, Esc — a focused field is left first so its
- * change commits), a field's live commit on input (setOverride / updateCustom, `live: true`, the id pre-checked),
+ * change commits; a document listener while nothing inside has the focus), a field's live commit on input (setOverride / updateCustom, `live: true`, the id pre-checked),
  * Enter on a one-line input leaving it, '↺ library default' → clearOverride(key, field), Reset all →
  * clearOverride(key), the footer switch (setSli / addSli / removeCustom, as the rolodex's), the create form
  * (the draft kept on the state as typed, the id following the name until typed, the id / name messages and the
@@ -207,7 +256,8 @@ export function wireBuildEditor(container, model, host = appHost) {
   const act = host.build;
   const dialog = container.querySelector('.build-editor');
   if (!act || !dialog) return;
-  for (const el of container.querySelectorAll('[data-editor-close]') || []) el.addEventListener('click', () => act.closeEditor?.());
+  container.querySelector('.build-editor-scrim')?.addEventListener('click', () => act.closeEditor?.());
+  for (const el of container.querySelectorAll('.build-editor [data-editor-close]') || []) el.addEventListener('click', () => act.closeEditor?.());
   dialog.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     e.preventDefault();
@@ -216,6 +266,7 @@ export function wireBuildEditor(container, model, host = appHost) {
     if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || '')) t.blur?.();
     act.closeEditor?.();
   });
+  bindDocumentEscape(container, host);
   if (model.readOnly) return;
   if (model.create) { wireCreateForm(container, model, act); return; }
   const say = (text, kind) => sayStatus(container, text, kind);

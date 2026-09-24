@@ -282,6 +282,8 @@ export function focusFallbackSelectors(key) {
   // An editor field (ov:<sli>:<field>, cu:<id>:<field>, cf:<field>) that vanished — the type changed the fields, the
   // SLI left the pack, the editor closed — stays in the editor while it is open, else lands on the sheet.
   if (/^(ov|cu|cf):/.test(k)) return ['.build-editor .build-edit-input', '.build-editor [data-editor-done]', '.build-editor [data-editor-close]', '.build-sheet .build-rolo-card [data-edit-sli]', '.build-sheet-close'];
+  // One of the editor's own controls (editor:done / cancel / reset-all / close; Reset all vanishes once nothing is customised) stays in the editor.
+  if (/^editor:/.test(k)) return ['.build-editor [data-editor-done]', '.build-editor [data-editor-submit]', '.build-editor [data-editor-close]', '.build-editor .build-edit-input'];
   // A rolodex card's Edit / '+ Custom SLI' (edit:<key>) or switch (sli:<entry>:<id>) that vanished — the SLI was removed — hands focus to the sheet.
   if (/^(edit|sli):/.test(k)) return ['.build-sheet .build-rolo-card [data-edit-sli]', '.build-sheet .build-param-input', '.build-sheet-close'];
   // An L1 stack card (card:<artefact id>, ghost:<key>) that vanished — the SLI left the pack — hands focus to the L1 slab head.

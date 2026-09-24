@@ -791,11 +791,18 @@ for 0.999, a detour and back) changes nothing: the action says so and the status
 the model says, never *applying…* with no request behind it.
 The editor lives in a persistent host on `<body>`, outside the re-rendered view
 (`syncBuildEditor` after every render of the main view), and `renderBuildEditor` keeps the
-focused field's TEXT, focus and caret across a re-render — the model's `99` never overwrites a
+focused control's TEXT, focus and caret across a re-render — the model's `99` never overwrites a
 typed `99.` — so typing three characters quickly loses none (measured live) and a value the
-engine rejects stays as typed beside its message (*got "abc"*). The render that opens the
-editor skips `rerenderBuild`'s generic focus restore, which handed the focus back to the
-opener. Enter on a one-line input leaves it; a `change` that follows an `input` with the same
+engine rejects stays as typed beside its message (*got "abc"*). A field is found by its focus
+key, else by its field name when the key changed under it — a custom SLI's keys carry its id
+(`cu:<id>:<field>`), which a rename changes: the old key found nothing, the focus dropped to
+`<body>` after the first keystroke and every following one was lost (measured); the dialog's
+own controls carry keys too (`editor:done`, `editor:cancel`, `editor:reset-all`,
+`editor:close`; `focusFallbackSelectors` knows them), so the pack answering while Done has the
+focus does not drop it either. Esc closes the editor from inside (the dialog's handler) and,
+through one document listener per host, from `<body>` — inert while no dialog is mounted,
+deferring to a modal on top. The render that opens the editor skips `rerenderBuild`'s generic
+focus restore, which handed the focus back to the opener. Enter on a one-line input leaves it; a `change` that follows an `input` with the same
 text is not a second commit. The **Id is the exception**: a rename moves the SLO id, the
 recording rule, the boards and the burn alerts, so it is pre-checked on every keystroke
 (`paintIdState`: the clash / not-a-slug message under the field, the status *not applied — …*

@@ -1965,6 +1965,9 @@ test('the rolodex carries Edit (View on Verify) and the + Custom SLI card in pla
   assert.deepEqual(focusFallbackSelectors('edit:checkout_success'), ['.build-sheet .build-rolo-card [data-edit-sli]', '.build-sheet .build-param-input', '.build-sheet-close']);
   assert.deepEqual(focusFallbackSelectors('sli:custom:checkout_success'), ['.build-sheet .build-rolo-card [data-edit-sli]', '.build-sheet .build-param-input', '.build-sheet-close']);
   assert.deepEqual(focusFallbackSelectors('card:SLI-01'), ['.build-slab[data-layer="L1"] .build-slab-edge']);
+  // The editor's own controls (Reset all vanishes once nothing is customised): Done, then the create button, then the esc button, then a field.
+  assert.deepEqual(focusFallbackSelectors('editor:reset-all'), ['.build-editor [data-editor-done]', '.build-editor [data-editor-submit]', '.build-editor [data-editor-close]', '.build-editor .build-edit-input']);
+  assert.equal(focusFallbackSelectors('editor:done')[0], '.build-editor [data-editor-done]');
 });
 
 test('the rolodex’s handlers write through the actions: Edit → openEditor with the card’s key and its focus key as the opener, + Custom SLI → openEditor create, a custom switch → removeCustom, an above-tier switch → setSli', () => {

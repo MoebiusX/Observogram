@@ -311,7 +311,9 @@ test('the dialog headless in edit mode: role=dialog aria-modal=true labelled by 
   assert.ok(html.includes('<div class="build-editor-evidence"><span class="build-evidence build-evidence-semconv" title="semconv">semconv</span><span class="build-edit-evidence-note">the library’s evidence — its expression is what runs</span></div>'));
   assert.ok(html.includes('<div class="build-editor-status is-applied" id="build-editor-status" role="status" aria-live="polite">applied · SLO availability_99_9 · 2 burn alerts · rule orders_api:availability:ratio_5m</div>'));
   assert.ok(html.includes('<span class="build-editor-switch-text">in the pack</span><button type="button" role="switch" class="build-switch" aria-checked="true" aria-label="availability of HTTP service (OTel semconv) — remove from the pack" data-focus-key="sli:http-service:availability@editor" data-sli="availability"'));
-  assert.ok(html.includes('data-editor-reset-all') && html.includes('<button type="button" class="mcp-refresh-btn build-editor-done" data-editor-done data-editor-close>Done</button>'));
+  // The dialog's own controls carry focus keys, so the focus survives a re-render on them too (the pack answering while Done had it once dropped the focus to <body>; measured).
+  assert.ok(html.includes('data-editor-reset-all data-focus-key="editor:reset-all"') && html.includes('<button type="button" class="mcp-refresh-btn build-editor-done" data-editor-done data-editor-close data-focus-key="editor:done">Done</button>'));
+  assert.ok(html.includes('title="Close (Esc)" data-focus-key="editor:close">'));
   assert.ok(html.includes('<datalist id="build-window-options">'), 'the window datalist lives here');
   // The threshold shape: Bound · Unit before the metric, one wide Query cell.
   const t = renderHtml(dialogOf(draftWith({ entries: ['kafka', 'http-service'], editor: { key: 'kafka_produce_latency_p99', custom: false } })));
@@ -331,13 +333,13 @@ test('the dialog headless in read-only mode (Verify): no input, the values as sp
   assert.ok(!ro.includes('<input') && !ro.includes('<textarea') && !ro.includes('<select') && !ro.includes('role="switch"') && !ro.includes('data-reset') && !ro.includes('data-editor-reset-all'), 'no input on Verify — a value is a value, not a disabled field');
   assert.ok(ro.includes('<code class="build-edit-value" data-override-field="objective" data-sli="availability">99.9</code>') && ro.includes('<div class="build-edit-field is-overridden is-read" data-field="objective">'));
   assert.ok(ro.includes('<span class="build-editor-provenance">customised: objective — the rest is HTTP service (OTel semconv)’s</span>'));
-  assert.ok(ro.includes('class="build-editor-status is-readonly"') && ro.includes('>as compiled · SLO availability_99_9 ') && ro.includes('data-editor-done data-editor-close>Close</button>'));
+  assert.ok(ro.includes('class="build-editor-status is-readonly"') && ro.includes('>as compiled · SLO availability_99_9 ') && ro.includes('data-editor-done data-editor-close data-focus-key="editor:done">Close</button>'));
   const cr = renderHtml(dialogOf({ ...b, editor: { create: true }, customDraft: { name: 'Checkout success' } }));
   assert.ok(cr.includes('class="build-editor is-create is-custom" role="dialog" aria-modal="true"') && cr.includes('L1 · Contract · a new SLI') && cr.includes('<h2 class="build-editor-title" id="build-editor-title">checkout_success</h2>'));
   assert.ok(cr.includes('<label class="build-edit-label" for="build-custom-name"><span>Name</span></label>') && cr.includes('data-focus-key="cf:name" data-custom-draft="name" value="Checkout success"'));
   assert.ok(cr.includes('<select class="build-edit-input" id="build-custom-type" data-focus-key="cf:type" data-custom-draft="type"') && !cr.includes('data-field="type">\n        <div class="build-edit-label-row"><span class="build-edit-label">'), 'the real select, not the fixed cell');
   assert.ok(cr.includes('data-custom-draft="good" required rows="2"') && cr.includes('data-custom-draft="semconv_metric"') && !cr.includes('data-custom-draft="query"'));
-  assert.ok(cr.includes('<button type="button" class="ctrl-btn build-editor-cancel" data-editor-close>Cancel</button><button type="button" class="mcp-refresh-btn build-editor-submit" data-editor-submit data-focus-key="cf:add" disabled>Add to the pack'));
+  assert.ok(cr.includes('<button type="button" class="ctrl-btn build-editor-cancel" data-editor-close data-focus-key="editor:cancel">Cancel</button><button type="button" class="mcp-refresh-btn build-editor-submit" data-editor-submit data-focus-key="cf:add" disabled>Add to the pack'));
   assert.ok(cr.includes('class="build-editor-status is-idle"') && !cr.includes('role="switch"') && !cr.includes('build-editor-params'));
   const ready = renderHtml(dialogOf({ ...b, editor: { create: true }, customDraft: { name: 'Checkout success', good: 'a', total: 'b' } }));
   assert.ok(ready.includes('data-editor-submit data-focus-key="cf:add">Add to the pack') && ready.includes('class="build-editor-status is-ready"'));
@@ -363,7 +365,7 @@ test('the handlers: every field but the id commits on input through setOverride 
   const cls = new Set();
   const idBox = { classList: { toggle: (c, on) => { if (on) cls.add(c); else cls.delete(c); } }, querySelector: (sel) => (sel === '.build-edit-input' ? idBoxInput : sel === '.build-edit-default' ? { id: 'build-editor-id-default' } : msg) };
   const container = fakeContainer({
-    '.build-editor': [dialog], '[data-editor-close]': [closeBtn, scrim, done], '#build-editor-status': [status],
+    '.build-editor': [dialog], '.build-editor [data-editor-close]': [closeBtn, done], '.build-editor-scrim': [scrim], '#build-editor-status': [status],
     '.build-editor .build-edit-input': [objective, idInput, good], '[data-reset]': [reset], '[data-editor-reset-all]': [resetAll], '.build-editor .build-switch[data-sli]': [sw],
     '.build-editor [data-field="id"]': [idBox],
   });
@@ -466,6 +468,40 @@ test('the handlers: every field but the id commits on input through setOverride 
   wireBuildEditor(fakeContainer({ '.build-editor': [fakeEl({})], '.build-editor .build-edit-input': [roInput] }), dialogOf(b, 'readonly'), { build: act });
   roInput.fire('input');
   assert.deepEqual(calls, []);
+  // Esc with the focus on <body> (a re-render once dropped it there) closes the editor through a document listener —
+  // bound once per host, inert while no dialog is mounted, deferring to the dialog's own handler and to a modal on top.
+  const docHandlers = {};
+  const escDialog = { ...fakeEl({}), contains: (el) => el === roInput };
+  let dialogs = [escDialog];
+  globalThis.document = { body: {}, addEventListener: (t, fn) => { docHandlers[t] = fn; }, querySelectorAll: () => dialogs };
+  try {
+    const escHost = fakeContainer({ '.build-editor': [escDialog], '.build-editor .build-edit-input': [] });
+    calls.length = 0;
+    wireBuildEditor(escHost, model, { build: act });
+    let prevented = 0;
+    const esc = (target) => docHandlers.keydown({ key: 'Escape', target, preventDefault() { prevented++; } });
+    esc(globalThis.document.body);
+    assert.deepEqual([calls, prevented], [[['close']], 1], 'Esc from <body> closes');
+    esc(roInput);
+    assert.equal(calls.length, 1, 'Esc from inside the dialog is the dialog\'s own');
+    dialogs = [escDialog, { other: true }];
+    esc(globalThis.document.body);
+    assert.equal(calls.length, 1, 'another modal on top: its Esc');
+    dialogs = [escDialog];
+    docHandlers.keydown({ key: 'Enter', target: globalThis.document.body, preventDefault() {} });
+    assert.equal(calls.length, 1);
+    // Wired again (a re-render) with another host: one listener, the latest host.
+    const late = [];
+    wireBuildEditor(escHost, model, { build: { ...act, closeEditor: () => late.push('close') } });
+    esc(globalThis.document.body);
+    assert.deepEqual([calls.length, late], [1, ['close']]);
+    // Closed (no dialog mounted): inert.
+    escHost.querySelector = () => null;
+    esc(globalThis.document.body);
+    assert.deepEqual(late, ['close']);
+  } finally {
+    delete globalThis.document;
+  }
 });
 
 test('the render keeps the focused field’s text, focus and caret across a re-render (typing "99." is not rewritten to the stored "99"), lands on the requested field when opening with the caret at the end, and grows the textareas', () => {
@@ -521,6 +557,38 @@ test('the render keeps the focused field’s text, focus and caret across a re-r
     typedId.value = 'http_availability'; freshId.value = 'availability';
     renderBuildEditor(c2, model, { build: {} });
     assert.deepEqual([freshId.value, statusEl.textContent, idMsg.className], ['http_availability', 'rename to http_availability — Enter, Tab or Esc applies it', 'build-edit-hint']);
+    // A CUSTOM SLI renamed under the focused field: its keys carry the id (cu:checkout_ok:id → cu:checkout_okx:id), so
+    // the old key finds nothing — the focus once dropped to <body> after the first keystroke and every following one was
+    // lost (measured). The same dialog's kept key is re-keyed; a field whose key is gone altogether is found by its name.
+    const renamedModel = dialogOf(draftWith({ custom: [{ id: 'checkout_okx', type: 'ratio', good: 'a', total: 'b', objective: 0.999, window: '30d' }], editor: { key: 'checkout_okx', custom: true } }));
+    const oldId = { dataset: { focusKey: 'cu:checkout_ok:id', customField: 'id' }, value: 'checkout_okx', selectionStart: 12, selectionEnd: 12 };
+    const newId = { tagName: 'INPUT', value: 'checkout_okx', dataset: { focusKey: 'cu:checkout_okx:id', customField: 'id' }, focus: (o) => log.push(['focus-new-id', o]), setSelectionRange: (a, c) => log.push(['sel-new-id', a, c]) };
+    const newDesc = { tagName: 'INPUT', value: '', dataset: { focusKey: 'cu:checkout_okx:description', customField: 'description' }, focus: (o) => log.push(['focus-new-desc', o]), setSelectionRange: (a, c) => log.push(['sel-new-desc', a, c]) };
+    const mountedOld = { dataset: { editorKey: 'checkout_ok', editorMode: 'edit' }, addEventListener() {}, focus() {} };
+    const c3 = {
+      innerHTML: '', contains: (el) => el === oldId || el === oldDesc, querySelectorAll: () => [],
+      querySelector: (sel) => (sel === '.build-editor' ? mountedOld : sel === '[data-focus-key="cu:checkout_okx:id"]' ? newId : sel === '.build-editor [data-field="description"] .build-edit-input' ? newDesc : null),
+    };
+    const oldDesc = { dataset: { focusKey: 'cu:checkout_ok:description', customField: 'description' }, value: 'Checkouts', selectionStart: 2, selectionEnd: 2 };
+    globalThis.document.activeElement = oldId;
+    log.length = 0;
+    renderBuildEditor(c3, renamedModel, { build: {} });
+    assert.deepEqual([newId.value, log], ['checkout_okx', [['focus-new-id', { preventScroll: true }], ['sel-new-id', 12, 12]]], 'the kept key is re-keyed to the renamed editor');
+    globalThis.document.activeElement = oldDesc;
+    log.length = 0;
+    renderBuildEditor(c3, renamedModel, { build: {} });
+    assert.deepEqual([newDesc.value, log], ['Checkouts', [['focus-new-desc', { preventScroll: true }], ['sel-new-desc', 2, 2]]], 'a field found by its name when its key is gone');
+    // ANOTHER editor rendered while a field of the old one had the focus: nothing is kept (the controller lands the focus).
+    globalThis.document.activeElement = { dataset: { focusKey: 'ov:availability:description', overrideField: 'description' }, value: 'x' };
+    log.length = 0;
+    renderBuildEditor({ ...c3, contains: () => true, querySelector: (sel) => (sel === '.build-editor' ? { dataset: { editorKey: 'availability', editorMode: 'edit' }, addEventListener() {} } : sel === '.build-editor [data-field="description"] .build-edit-input' ? newDesc : null) }, renamedModel, { build: {} });
+    assert.deepEqual(log, [], 'a different editor: the old field\'s text is not written into it');
+    // Done (a control without a field) keeps the focus across the pack's answer.
+    const doneBtn = { tagName: 'BUTTON', dataset: { focusKey: 'editor:done' }, focus: (o) => log.push(['focus-done', o]) };
+    globalThis.document.activeElement = { dataset: { focusKey: 'editor:done' } };
+    log.length = 0;
+    renderBuildEditor({ ...container, contains: () => true, querySelector: (sel) => (sel === '[data-focus-key="editor:done"]' ? doneBtn : sel === '.build-editor' ? dialogEl : null) }, model, { build: {} });
+    assert.deepEqual(log, [['focus-done', { preventScroll: true }]]);
   } finally {
     delete globalThis.document;
   }
@@ -556,7 +624,7 @@ test('create mode handlers: typing the name slugs the id (a typed id sticks), th
   const dialog = fakeEl({});
   const cancel = fakeEl({});
   wireBuildEditor(fakeContainer({
-    '.build-editor': [dialog], '[data-editor-close]': [cancel], '.build-editor [data-custom-draft]': [name, id, type, desc, obj, win, metric, good, total],
+    '.build-editor': [dialog], '.build-editor [data-editor-close]': [cancel], '.build-editor [data-custom-draft]': [name, id, type, desc, obj, win, metric, good, total],
     '[data-editor-submit]': [submit], '#build-editor-status': [status], '#build-editor-title': [title],
     '.build-editor [data-field="id"]': [idPaint.box], '.build-editor [data-field="name"]': [namePaint.box],
   }), model, { build: act });
