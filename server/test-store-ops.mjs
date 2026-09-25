@@ -310,6 +310,29 @@ test('export to a directory: only reads the store, never overwrites', async () =
   assert.equal(existsSync(join(base, 'orgs.json')), false);
 });
 
+test('export: a workspace named while the shell\'s workspace is elsewhere is refused, not exported to as a directory — nothing written', async () => {
+  // An OIDC deployment keeps no users.json, so only the marker and the database tell the workspace apart.
+  const base = tempDir();
+  usersJson(base, ['alice']);
+  pack(base, 'p1');
+  await start(base);
+  await change(base, (db) => admin.createOrgFromAdmin(db, 'cli', { id: 'acme', name: 'Acme', admin: 'alice', base }));
+  rmSync(join(base, 'users.json'));
+  const markerBefore = readFileSync(legacy.markerPath(base), 'utf8');
+  const elsewhere = join(tempDir('ops-cwd'), '.observogram');   // OBSERVOGRAM_WORKSPACE unset, another cwd
+  const named = (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(`OBSERVOGRAM_WORKSPACE=${base}`);
+  await assert.rejects(exportStore(base, { dbPath: dbOf(base), base: elsewhere, out: silent }), named);
+  // The database alone (a store the marker was lost from) tells it too.
+  rmSync(legacy.markerPath(base));
+  await assert.rejects(exportStore(base, { dbPath: dbOf(base), base: elsewhere, out: silent }), named);
+  writeFileSync(legacy.markerPath(base), markerBefore);
+  assert.equal(existsSync(join(base, 'orgs.json')), false);
+  assert.equal(existsSync(join(base, 'users.json')), false);
+  assert.equal(existsSync(elsewhere), false);
+  assert.ok(existsSync(join(base, 'packs', 'p1.pack.yaml')), 'nothing moved');
+  await read(base, (db) => assert.equal(getOrg(db, 'default').root, '.'));
+});
+
 test('export: users.json holds password hashes — a new one is created 0600, an existing one keeps its mode, no .tmp left behind', { skip: process.platform === 'win32' && 'POSIX modes' }, async () => {
   const base = tempDir();
   usersJson(base, ['alice']);

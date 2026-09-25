@@ -839,8 +839,8 @@ since the upgrade revert, and removed users come back.
 ```bash
 # 1. Take a backup, then stop the server (the export refuses while anything holds the database).
 packc store backup /backups/observogram-before-rollback.db
-# 2. Export in place: <dir> = the workspace itself.
-packc store export .observogram
+# 2. Export in place: <dir> = the workspace itself (an absolute path, the same as OBSERVOGRAM_WORKSPACE).
+packc store export /app/.observogram
 # store: /app/.observogram/observogram.db
 # export: in place in /app/.observogram (store 3f0c…)
 # users.json: /app/.observogram/users.json (3 enabled local users; OIDC users are never written)
@@ -881,7 +881,10 @@ What the export writes:
   run `packc store import --replace` and start the server once so the
   store takes the edits in, then export again. `packc store export <dir>` to another, empty directory only
   reads the database (safe while the server runs) and never overwrites a
-  `users.json` / `orgs.json` there.
+  `users.json` / `orgs.json` there. Naming a workspace (a directory with
+  a `.store-imported` marker or the database) other than
+  `OBSERVOGRAM_WORKSPACE` is refused: set `OBSERVOGRAM_WORKSPACE` to it
+  to export in place.
 
 **Re-upgrade** after a rollback: stop the pre-store build and start the
 store build again.

@@ -56,7 +56,7 @@
 // store's source guard refuses a raw handle call's spelling here.
 
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { baseWorkspacePath } from '../../tools/lib/brand-env.mjs';
 import { parse as parseYaml } from '../../tools/lib/mini-yaml.mjs';
 import { closeStore, openStore, resolveDbPath, tx } from './db.mjs';
@@ -270,6 +270,14 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
     await assertNotInUse(path, { doing: 'an in-place export' });
   } else {
     if (existsSync(target) && !statSync(target).isDirectory()) throw refuse(`${target} exists and is not a directory`);
+    // A workspace named while the shell's workspace is elsewhere (OBSERVOGRAM_WORKSPACE unset, or a relative
+    // path from another cwd): a directory export there would write orgs.json without the default org's move.
+    const holds = [lexists(markerPath(target)) && markerPath(target), realOr(dirname(path)) === realOr(target) && path].filter(Boolean);
+    if (holds.length) {
+      throw refuse(`${target} is a workspace (it holds ${holds.join(' and ')}), but the workspace here is ${base} — a directory `
+        + `export into it would write files without the in-place steps. Nothing was changed. To export in place, set `
+        + `OBSERVOGRAM_WORKSPACE=${target} (and OBSERVOGRAM_DB, if it is elsewhere); otherwise choose an empty directory`);
+    }
     const taken = ['users.json', 'orgs.json'].map((f) => join(target, f)).filter((p) => existsSync(p));
     if (taken.length) throw refuse(`${taken.join(', ')} exist${taken.length === 1 ? 's' : ''} — a directory export never overwrites; choose an empty directory`);
   }
