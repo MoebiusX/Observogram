@@ -11,6 +11,7 @@
 
 import {
   parseDiffKey, sliBaseOfSloId, matcherForDeployItem, computeDeployTransitions,
+  deployReviewModel, reviewHostOf,
 } from '../studio/verify-deploy.mjs';
 import { catalogToDeployManifest } from '../studio/artifact-model.mjs';
 import { createHarness } from './lib/harness.mjs';
@@ -155,5 +156,46 @@ assert(r.summary.outcome === 'nothing-to-verify' && r.summary.allVerified === fa
 // Unmappable item type → unknown, surfaced.
 r = computeDeployTransitions([{ type: 'mystery', id: 'x' }], allGood);
 assert(r.transitions[0].status === 'unknown', 'unmappable item is reported unknown');
+
+// ---------- pre-deploy review ----------
+// The one panel before a deploy: destination, environment, what changes and
+// whether it is ready. Blocking = nothing selected, no gateway, no product,
+// an invalid schema. The tier rubric informs but never blocks: conformance
+// is not deployment readiness.
+const reviewRows = [
+  { type: 'recording', id: 'settlement_latency_99', name: 'SLO · settlement_latency_99 (recording rules)' },
+  { type: 'alert', id: 'settlement_latency_99', name: 'SLO · settlement_latency_99 (burn-rate alerts)' },
+  { type: 'dashboard', id: 'payment-overview', name: 'payment-overview' },
+];
+const readyReview = deployReviewModel({
+  target: { product: 'grafana', version: '12', url: 'https://grafana.example.net/d/x', folder: 'observability-pack', mcpUrl: 'https://user:secret@mcp.example.com/observability?token=abc' },
+  source: { id: 'payment-service', label: 'Payment service', version: 'v0.4.0' },
+  env: 'prod',
+  rows: reviewRows,
+  validation: { schemaValid: true, rubric: { conformant: false, tier: 'tier-2' } },
+});
+assert(readyReview.ready === true, 'a complete form with a valid pack is ready, even when the rubric is not met');
+assert(readyReview.headline === 'Ready to deploy 3 artefacts to grafana 12 (prod).', 'the ready headline names count, destination and environment', readyReview.headline);
+assert(readyReview.destination.gateway === 'mcp.example.com' && !JSON.stringify(readyReview).includes('secret') && !JSON.stringify(readyReview).includes('token'),
+       'the gateway is shown by host only: no userinfo, no query credentials');
+assert(readyReview.destination.host === 'grafana.example.net' && readyReview.destination.folder === 'observability-pack',
+       'destination carries the Grafana host and folder');
+assert(readyReview.changes.summary === '1 recording rule, 1 alert rule, 1 dashboard', 'changed artefacts are summarised by type', readyReview.changes.summary);
+assert(readyReview.source.version === '0.4.0', 'a leading v on the source version is not doubled');
+const rubricCheck = readyReview.checks.find(c => c.id === 'rubric');
+assert(rubricCheck.status === 'warning' && rubricCheck.blocking === false && rubricCheck.label === 'Does not meet tier-2 rubric',
+       'an unmet rubric warns without blocking');
+
+const blockedReview = deployReviewModel({ target: { product: 'grafana', version: '12' }, rows: [], validation: { schemaValid: false } });
+assert(blockedReview.ready === false, 'no rows, no gateway and an invalid schema block the deploy');
+assert(blockedReview.blockers.map(b => b.id).join() === 'selection,gateway,schema', 'every blocker is named, in form order', blockedReview.blockers.map(b => b.id));
+assert(blockedReview.headline === 'Not ready to deploy: select at least one artefact, add the MCP gateway URL and fix the pack’s schema errors.',
+       'the not-ready headline lists what to fix', blockedReview.headline);
+const unknownSchema = deployReviewModel({ target: { product: 'grafana', mcpUrl: 'https://mcp.example.com' }, rows: reviewRows.slice(0, 1) });
+assert(unknownSchema.ready === true && unknownSchema.checks.find(c => c.id === 'schema').status === 'notEvaluated'
+       && unknownSchema.checks.find(c => c.id === 'rubric').status === 'notEvaluated',
+       'an unchecked schema or rubric reads not evaluated, never pass, and does not block');
+assert(reviewHostOf('not a url/with/path') === 'not a url' && reviewHostOf('') === '' && reviewHostOf('mcp.example.com/x?t=1') === 'mcp.example.com',
+       'reviewHostOf degrades to the leading host-like segment for unparseable input');
 
 report('verify-deploy', 'all post-deploy transition assertions pass.');

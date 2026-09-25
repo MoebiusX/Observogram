@@ -14,6 +14,10 @@
 //
 // DOM-free and side-effect-free so it unit-tests without an MCP. The modal
 // orchestration (re-draft → re-diff → poll) lives in app.mjs.
+//
+// The pre-deploy half lives here too (deployReviewModel, at the end): the
+// one review panel that states destination, environment, the artefacts that
+// change and the validation state before anything is written to live.
 
 // Diff bucket keys are `kind::{json}` with an optional `#NN` occurrence
 // suffix (see tools/lib/diff.mjs occurrenceKey). Parse defensively: a key
@@ -149,4 +153,119 @@ export function computeDeployTransitions(items, diff) {
   summary.outcome = summary.allVerified ? 'verified'
     : (summary.pending > 0 ? 'pending' : (summary.total === 0 ? 'nothing-to-verify' : 'partial'));
   return { transitions, summary, alignment: diff?.summary?.alignment ?? null };
+}
+
+// ---------- pre-deploy review ----------
+//
+// Before a deploy, one panel says where it goes, what changes and whether it
+// is ready (docs/UX_SCREEN_GRAMMAR.md: source and destination explicit). The
+// deploy modal reads its form and hands the values in; this stays pure so
+// tools/test-verify-deploy.mjs pins the rules:
+//
+//   blocking     no artefact selected · no MCP gateway URL · no target
+//                product · a pack that fails schema validation
+//   informative  the tier rubric — conformance is not deployment readiness,
+//                so a non-conformant pack warns but never blocks
+//
+// target:     { product, version, url, folder, mcpUrl, profile }
+// source:     { id, label, version }
+// env:        the environment the artefacts are compiled for
+// rows:       the SELECTED manifest rows ({ type, id, name })
+// validation: { schemaValid: true|false|null, rubric: { conformant, tier } | null }
+
+const REVIEW_TYPE_WORDS = {
+  alert:     ['alert rule', 'alert rules'],
+  recording: ['recording rule', 'recording rules'],
+  dashboard: ['dashboard', 'dashboards'],
+};
+
+// Host only: a gateway URL can carry credentials in its userinfo or query,
+// and the review never shows more than where the write goes.
+export function reviewHostOf(url) {
+  const s = String(url ?? '').trim();
+  if (!s) return '';
+  try { return new URL(s).host || ''; }
+  catch { return s.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split(/[/?#]/)[0].split('@').pop(); }
+}
+
+function countWords(n, [one, many]) { return `${n} ${n === 1 ? one : many}`; }
+
+export function deployReviewModel({ target = {}, source = {}, env = null, rows = [], validation = {} } = {}) {
+  const selected = (rows || []).filter(Boolean);
+  const byType = {};
+  for (const r of selected) {
+    const t = r.type || 'other';
+    byType[t] = (byType[t] || 0) + 1;
+  }
+  const typeSummary = Object.entries(byType)
+    .map(([t, n]) => countWords(n, REVIEW_TYPE_WORDS[t] || [t, t]))
+    .join(', ');
+
+  const product = String(target.product ?? '').trim();
+  const version = String(target.version ?? '').trim();
+  const destination = {
+    platform: [product, version].filter(Boolean).join(' ') || null,
+    host: reviewHostOf(target.url) || null,
+    folder: String(target.folder ?? '').trim() || null,
+    gateway: reviewHostOf(target.mcpUrl) || null,
+    profile: String(target.profile ?? '').trim() || null,
+  };
+
+  const total = selected.length;
+  const schema = validation?.schemaValid;
+  const rubric = validation?.rubric || null;
+  const tierWord = rubric?.tier ? `${rubric.tier} rubric` : 'tier rubric';
+  const checks = [
+    { id: 'selection', blocking: true, status: total ? 'pass' : 'fail',
+      label: total ? `${countWords(total, ['artefact', 'artefacts'])} selected` : 'No artefacts selected',
+      fix: 'select at least one artefact' },
+    { id: 'gateway', blocking: true, status: destination.gateway ? 'pass' : 'fail',
+      label: destination.gateway ? 'MCP gateway set' : 'MCP gateway URL missing',
+      fix: 'add the MCP gateway URL' },
+    { id: 'target', blocking: true, status: product ? 'pass' : 'fail',
+      label: product ? 'Target product chosen' : 'No target product',
+      fix: 'choose a target product' },
+    { id: 'schema', blocking: true,
+      status: schema === true ? 'pass' : (schema === false ? 'fail' : 'notEvaluated'),
+      label: schema === true ? 'Pack schema valid' : (schema === false ? 'Pack schema invalid' : 'Pack schema not checked'),
+      fix: 'fix the pack’s schema errors' },
+    { id: 'rubric', blocking: false,
+      status: !rubric ? 'notEvaluated' : (rubric.conformant ? 'pass' : 'warning'),
+      label: !rubric ? 'Tier rubric not evaluated' : (rubric.conformant ? `Meets ${tierWord}` : `Does not meet ${tierWord}`),
+      fix: '' },
+  ];
+  const blockers = checks.filter(c => c.blocking && c.status === 'fail');
+  const ready = blockers.length === 0;
+
+  const where = destination.platform || 'the live platform';
+  const envText = env ? ` (${env})` : '';
+  let headline;
+  if (ready) {
+    headline = `Ready to deploy ${countWords(total, ['artefact', 'artefacts'])} to ${where}${envText}.`;
+  } else {
+    const fixes = blockers.map(b => b.fix);
+    const said = fixes.length <= 1 ? fixes.join('') : `${fixes.slice(0, -1).join(', ')} and ${fixes[fixes.length - 1]}`;
+    headline = `Not ready to deploy: ${said}.`;
+  }
+
+  return {
+    ready,
+    headline,
+    destination,
+    environment: env || null,
+    source: {
+      id: source?.id || null,
+      label: source?.label || source?.id || null,
+      version: source?.version ? String(source.version).replace(/^v/i, '') : null,
+    },
+    changes: {
+      total,
+      byType,
+      summary: typeSummary,
+      sample: selected.slice(0, 5).map(r => String(r.name || r.id || '')).filter(Boolean),
+      more: Math.max(0, total - 5),
+    },
+    checks,
+    blockers,
+  };
 }

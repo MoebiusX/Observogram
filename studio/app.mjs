@@ -26,7 +26,7 @@ import {
   focusedCompileArtifact, setFocusedCompileArtifact,
 } from './focus.mjs';
 import { escapeHtml, toast, fmtRelative, installDialogFocusTrap, downloadText } from './util.mjs';
-import { personalName } from './ux-kit.mjs';
+import { personalName, announce } from './ux-kit.mjs';
 import { renderSchemaView } from './schema-view.mjs';
 import { renderConformanceView } from './conformance-view.mjs';
 import { renderOtlpView } from './otlp-view.mjs';
@@ -147,6 +147,8 @@ async function rehydrateFromPersistence() {
   if (typeof saved.expandL3Queries === 'boolean') state.expandL3Queries = saved.expandL3Queries;
   if (typeof saved.layersSearch === 'string') state.layersSearch = saved.layersSearch;
   if (typeof saved.layersDomain === 'string') state.layersDomain = saved.layersDomain;
+  if (typeof saved.discoverTask === 'string') state.discoverTask = saved.discoverTask;
+  if (['summary', 'review', 'all'].includes(saved.compareFocus)) state.compareFocus = saved.compareFocus;
 
   // Make sure the picker can label an archived example by pushing the
   // catalog-entry shape into state.catalog (same trick renderPackBSelect uses).
@@ -927,7 +929,7 @@ async function handleFile(file) {
       return;
     }
     state.pack = res.adapted;
-    state.conformance = res.conformance;
+    state.conformance = withPlaceholderPasses(res);
     state.symbolTable = buildSymbolTable(res.adapted);
     state.uploadedSource = file.name;
     state.activeLayer = 'L1';
@@ -1178,10 +1180,19 @@ const OBSERVA_ADV = [
   { id: 'conformance',  label: 'Conformance',  sub: 'maturity rubric · MUST/SHOULD per tier' },
   { id: 'schema',       label: 'Schema',       sub: 'canonical YAML + v1.3 validation' },
   { id: 'otlp',         label: 'OTLP Coverage', sub: 'receiver protocols · per-signal exporters' },
-  { id: 'traceability', label: 'Traceability', sub: 'repo vs live · declared / verified / stale' },
+  { id: 'traceability', label: 'Traceability', sub: 'requirements · proof chain · repo vs live' },
   { id: 'atlas',        label: 'Atlas',        sub: 'visual atlases · strata · periodic · skyline' },
 ];
 const OBSERVA_ADV_VIEWS = new Set(OBSERVA_ADV.map(a => a.id));
+// The conformance report plus which clauses pass only on a placeholder, when
+// the answer carries it (a library-built or uploaded pack's validation
+// summary): Conformance then lists "Passes on placeholders" exactly instead of
+// hedging. The conformance endpoint alone does not say.
+function withPlaceholderPasses(res) {
+  const onPlaceholder = res?.summary?.onPlaceholder;
+  return res?.conformance && Array.isArray(onPlaceholder) ? { ...res.conformance, onPlaceholder } : res?.conformance;
+}
+
 // The views that read Pack B — the only ones whose header shows the baseline picker.
 const COMPARISON_VIEWS = new Set(['compare', 'benchmark', 'compare-artefacts', 'compile', 'traceability', 'atlas']);
 
@@ -1844,7 +1855,7 @@ function enterCompareMode(aId, aEnv, bId, bEnv) {
 // new pack.
 function applyModeChrome() {
   // The BUILD journey hides the pack controls like home does: there is no
-  // pack until VERIFY's "Continue with visible gaps" (or "Continue to Discover") registers one.
+  // pack until VERIFY's "Open pack in Discover" (with visible gaps, or without) registers one.
   const isHome = state.mode === 'home' || state.mode === 'build';
   updateObservaServiceChip();
   // Under the OBSERVA chrome the pack/env selectors are PINNED as a
@@ -2098,7 +2109,11 @@ let buildSheetEntering = false;
 function focusAfterRender() {
   if (!buildFocusNext) return;
   // A target inside the sheet that is not there (a product with no card yet) lands on the sheet itself.
-  const el = document.querySelector(buildFocusNext) || (buildFocusNext.startsWith('.build-sheet ') ? document.querySelector('.build-sheet') : null);
+  // COMPILE draws a layer's slab only when it is selected: a slab edge that is not there lands on its layer row.
+  const head = /^\.build-slab\[data-layer="([^"]+)"\] \.build-slab-edge$/.exec(buildFocusNext);
+  const el = document.querySelector(buildFocusNext)
+    || (head ? document.querySelector(`.bres-layer-toggle[data-layer="${head[1]}"]`) : null)
+    || (buildFocusNext.startsWith('.build-sheet ') ? document.querySelector('.build-sheet') : null);
   buildFocusNext = null;
   el?.focus({ preventScroll: true });
   // A rolodex card landed on (a seed chip opened the sheet on its product) is centred in the snap track.
@@ -2523,7 +2538,7 @@ const buildActions = {
     const onPh = res.summary?.onPlaceholder?.length || 0;
     try { await loadCatalog(); } catch (e) { toast(`Registered, but the catalog did not refresh: ${e.message}`, 'error'); }
     state.pack = res.adapted;
-    state.conformance = res.conformance;
+    state.conformance = withPlaceholderPasses(res);
     state.symbolTable = buildSymbolTable(res.adapted);
     state.uploadedSource = res.registered.source;
     state.mode = 'single';
@@ -2532,9 +2547,12 @@ const buildActions = {
     const env = canonical.metadata?.annotations?.['library.environment'] || defaultEnvFor(id);
     enterAnalyzeMode(id, env);
     paintObservaActiveTab();
-    toast(left
-      ? `Opened ${canonical.metadata.name} in Discover — ${left} placeholder${left === 1 ? '' : 's'} remain${left === 1 ? 's' : ''} (${b.result.todos.length} todo${b.result.todos.length === 1 ? '' : 's'}; ${onPh} clause${onPh === 1 ? '' : 's'} pass${onPh === 1 ? 'es' : ''} on one). They travel with the pack as library.todo.* annotations.`
-      : `Opened ${canonical.metadata.name} in Discover — every placeholder filled; ${b.result.todos.length} scaffold todo${b.result.todos.length === 1 ? '' : 's'} left.`);
+    // The hand-off says what the pack now is: the same kind of pack the check journey inspects.
+    const opened = left
+      ? `Opened ${canonical.metadata.name} in Discover — the same kind of pack you inspect and improve there. ${left} placeholder value${left === 1 ? '' : 's'} travel${left === 1 ? 's' : ''} with it as visible gaps (${b.result.todos.length} todo${b.result.todos.length === 1 ? '' : 's'}; ${onPh} clause${onPh === 1 ? '' : 's'} represented on a placeholder).`
+      : `Opened ${canonical.metadata.name} in Discover — the same kind of pack you inspect and improve there. Every placeholder is filled; ${b.result.todos.length} template value${b.result.todos.length === 1 ? '' : 's'} left to complete.`;
+    toast(opened);
+    announce(opened);
   },
 };
 
@@ -3813,7 +3831,7 @@ function renderCrawlResult(out) {
 // kind ∈ {'repo','live'}. Returns true when it entered compare.
 async function adoptValidatedPack(res, sourceLabel, kind) {
   state.pack = res.adapted;
-  state.conformance = res.conformance;
+  state.conformance = withPlaceholderPasses(res);
   state.symbolTable = buildSymbolTable(res.adapted);
   state.uploadedSource = sourceLabel;
   state.activeCardKey = null;
@@ -4260,9 +4278,11 @@ async function doDeployBulk() {
     statusEl.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
   };
   if (!url) { setStatus('mcp url required', 'error'); return; }
-  if (deployModalState.selected.size === 0) { setStatus('select at least one artefact', 'error'); return; }
-
-  const items = [...deployModalState.selected].map(k => {
+  // Deploy what the review shows: a selected row the type filter hides is
+  // not counted, not reviewed — and so not deployed.
+  const types = new Set([...document.querySelectorAll('#deploy-type-filters input:checked')].map(i => i.value));
+  const visible = new Set((deployModalState.manifest || []).filter(r => types.has(r.type)).map(r => r.key));
+  const items = [...deployModalState.selected].filter(k => visible.has(k)).map(k => {
     const row = (deployModalState.manifest || []).find(r => r.key === k);
     return row && {
       group:       row.group,
@@ -4276,6 +4296,7 @@ async function doDeployBulk() {
       id:          row.id,
     };
   }).filter(Boolean);
+  if (items.length === 0) { setStatus('select at least one artefact', 'error'); return; }
 
   deployModalState.inflight = true;
   const goBtn = $('#deploy-modal-go');
