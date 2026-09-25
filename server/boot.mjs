@@ -32,7 +32,7 @@
 // The fail-closed checks (assertBootChecks) refuse with the first failing
 // one, A to E; A and B keep today's texts verbatim.
 
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { baseWorkspacePath, brandEnv } from '../tools/lib/brand-env.mjs';
 import { authDisabled, hashPassword, oidcEnabled } from './auth.mjs';
@@ -40,6 +40,7 @@ import { migrateFlatWorkspace, planFlatMigration, resetOrgRootCache } from './te
 import { atomic, nowIso, openStore, prepare, resolveDbPath, tx } from './store/db.mjs';
 import { getMeta, getMetaJson, isIdentityArmed, putMeta, setMeta, storeId } from './store/meta.mjs';
 import { listOrgs } from './store/orgs.mjs';
+import { validOrgId } from './org-context.mjs';
 import { addMembership } from './store/memberships.mjs';
 import { createUser, getUserByLogin, setPassword } from './store/users.mjs';
 import {
@@ -347,7 +348,11 @@ export function staleImportGuard(db, ctx) {
       (legacyPresent
         ? `  - or, to accept the legacy files as they stand, move ${markerPath(ctx.base)} aside:\n` +
           '    the next start imports them and says so.'
-        : `  - or, to start this workspace on ${ctx.dbPath} as it stands, move ${markerPath(ctx.base)} aside.`),
+        : `  - or, to start this workspace on ${ctx.dbPath} as it stands, move ${markerPath(ctx.base)} aside:\n` +
+          '    the next start starts a new store with the default org at the workspace root and, on loopback with no other\n' +
+          '    sign-in configured, seeds admin / admin;\n' +
+          '    the imported users and orgs are lost unless a backup of that store is restored, and the org directories\n' +
+          '    they read are logged as left behind.'),
       { nothingMoved: true });
   }
 
@@ -446,6 +451,7 @@ export function warnNoOwner(db, ctx, warn) {
 // Data that nothing reads, in both directions (§4), until an operator
 // resolves it.
 export function warnLeftBehind(db, ctx, warn) {
+  warnUnreadOrgRoots(ctx, warn, listOrgs(db, { includeRemoved: true }));
   const live = listOrgs(db);
   const atBase = live.some((o) => o.root === '.');
   const moved = join(ctx.base, 'orgs', 'default');
@@ -462,6 +468,29 @@ export function warnLeftBehind(db, ctx, warn) {
   }
   if (movedUnread) {
     warn(`[store] left behind: ${moved} — nothing reads it (the default org's root is .); move its entries back to ${ctx.base} by hand`);
+  }
+}
+
+// Every other orgs/<id> with data that no org row reads — an org the store
+// lost (a database started anew). A removed org's root is left to
+// `packc store purge-org`.
+function warnUnreadOrgRoots(ctx, warn, rows) {
+  const dir = join(ctx.base, 'orgs');
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch (e) {
+    if (e?.code === 'ENOENT' || e?.code === 'ENOTDIR') return;
+    throw e;
+  }
+  const known = new Set(rows.map((o) => o.root));
+  for (const name of names.sort()) {
+    if (name === 'default' || known.has(`orgs/${name}`)) continue;
+    const path = join(dir, name);
+    if (!hasData(path)) continue;
+    warn(validOrgId(name)
+      ? `[store] left behind: ${path} — no org reads it (the store has no org ${name}); adopt it with \`npm run orgs -- create ${name} --adopt\` or move it aside by hand`
+      : `[store] left behind: ${path} — no org reads it; move it aside by hand`);
   }
 }
 

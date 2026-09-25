@@ -567,7 +567,9 @@ hashed nor imported before then.
      `orgs/default/` is a migration that moved the flat entries and
      stopped before its `orgs.json` write. The import plans `default` at
      `orgs/default`, as that write would have. A store that already
-     imported names the directory as left behind on every boot.
+     imported names the directory as left behind on every boot. So is
+     any other `orgs/<id>/` with data and no org row (a store started
+     anew); a removed org's root waits for `purge-org` instead.
    - **The default org** is `default` if a real one remains, otherwise the
      first `orgs.json` org. This mirrors today's bearer fallback.
    - **Owners** are the `admin` members of the default org. If there are

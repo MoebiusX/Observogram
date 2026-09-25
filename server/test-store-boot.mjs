@@ -610,6 +610,31 @@ test('stale import: with the legacy files moved aside, a lost database still ref
   assert.ok(boot(ws).listening);
 });
 
+test('stale import, files gone: the marker way out says it starts a new store with admin/admin and loses the imported users and orgs; every org root with data nothing reads is named on boot', async () => {
+  const ws = workspace();
+  usersFile(ws, { alice: { createdAt: 't', password: REAL } });
+  orgsFile(ws, { acme: { members: { alice: 'admin' } }, default: { members: { alice: 'admin' } } });
+  flatPack(ws);
+  assert.ok(boot(ws).listening);
+  mkdirSync(join(ws, 'orgs', 'acme', 'packs'), { recursive: true });
+  writeFileSync(join(ws, 'orgs', 'acme', 'packs', 'acme.pack.yaml'), 'name: acme\n');
+  renameSync(join(ws, 'users.json'), join(ws, 'users.json.aside'));
+  renameSync(join(ws, 'orgs.json'), join(ws, 'orgs.json.aside'));
+  assert.ok(boot(ws).listening, 'the files moved aside are recorded absent');
+
+  removeDb(dbFile(ws));
+  const r = boot(ws);
+  assert.ok(!r.listening && r.nothingMoved === true, r.message);
+  assert.ok(/starts a new store/.test(r.message) && /admin \/ admin/.test(r.message), r.message);
+  assert.ok(/imported users and orgs are lost unless/.test(r.message), r.message);
+
+  renameSync(join(ws, '.store-imported'), join(ws, '.store-imported.aside'));
+  const after = boot(ws, { silent: false });
+  assert.ok(after.listening, after.stderr);
+  assert.ok(after.stderr.includes(`[store] left behind: ${join(ws, 'orgs', 'acme')} — no org reads it`), after.stderr);
+  assert.ok(after.stderr.includes(`[store] left behind: ${join(ws, 'orgs', 'default')}`), after.stderr);
+});
+
 // ====================== removed orgs ======================
 
 test('a removed org is absent to the org middleware, the bearer fallback and the switcher; its files stay', async () => {
