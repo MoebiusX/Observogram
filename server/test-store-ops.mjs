@@ -798,6 +798,35 @@ test('Stale import: orgs.json edited on a pre-store build — orgs renamed, crea
   });
 });
 
+test('Stale import: a user disabled in the store keeps their memberships across a replace — the export leaves them out of orgs.json, so the file cannot have removed them', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice', 'bob', 'carol']);
+  legacy.writeOrgsFile({
+    default: { name: 'Default', members: { alice: 'admin', bob: 'member', carol: 'member' } },
+    acme: { name: 'Acme', members: { alice: 'admin', carol: 'viewer' } },
+  }, join(base, 'orgs.json'));
+  await start(base);
+  await change(base, (db) => admin.disableUser(db, 'cli', 'carol'));
+  await exportIt(base);
+  const orgsPath = join(base, 'orgs.json');
+  assert.deepEqual(Object.values(readJson(orgsPath)).map((o) => Object.keys(o.members)), [['alice', 'bob'], ['alice']], 'disabled users left out');
+
+  pre.boot(base);
+  const orgs = readJson(orgsPath);
+  orgs.default.members.bob = 'viewer';
+  legacy.writeOrgsFile(orgs, orgsPath);
+  await refused(base);
+  await requestIt(base);
+  const { logs } = await start(base);
+  assert.ok(logs.includes('[store]   memberships: changed default/bob operator → viewer'), logs.join('\n'));
+  await read(base, (db) => {
+    assert.deepEqual(membersOf(db, 'default'), ['alice:admin', 'bob:viewer', 'carol:operator']);
+    assert.deepEqual(membersOf(db, 'acme'), ['alice:admin', 'carol:viewer']);
+    assert.equal(getUserByLogin(db, 'carol').disabled, true);
+  });
+  assert.ok(logs.includes('[store]   sessions ended (changed or disabled): bob'), logs.join('\n'));
+});
+
 test('Stale import: the replace refuses to leave no enabled owner (check D) — nothing changes and the request stays pending; with the owner back in users.json it runs', async () => {
   const base = tempDir();
   usersJson(base, ['alice']);

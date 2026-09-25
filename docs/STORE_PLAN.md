@@ -842,6 +842,9 @@ boot, with the unit's env (§4 step 3).
   their flag. Without an `orgs.json` in the files, the store's memberships
   and `oidc_join_role` are kept, and the no-`orgs.json` mapping (import
   item 3) is not applied.
+- A user disabled before the replace and still disabled after it keeps
+  their memberships: the export leaves disabled users out of `orgs.json`,
+  so the file cannot have removed them.
 - It refuses to commit a result with no enabled owner.
 - When the store's default org has root `.`, the files' `orgs.json` holds
   `default`, and that org's flat entries now sit under `orgs/default/`

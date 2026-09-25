@@ -628,7 +628,12 @@ export function planReplace(db, legacy, ctx, migration) {
     const have = new Map();
     if (!orgCreates.some((o) => o.id === oid)) for (const m of listMembers(db, oid)) have.set(byId.get(m.userId).login, m);
     for (const [login, m] of have) {
+      // A user disabled before and after the replace is one the export
+      // leaves out of orgs.json: the file cannot have removed them, so
+      // their memberships stay (re-enabling them later finds their orgs).
+      const stillDisabled = byId.get(m.userId).disabled && updates.get(m.userId)?.disabled !== false;
       if (!want.has(login)) {
+        if (stillDisabled) continue;
         memberRemoves.push({ orgId: oid, login, userId: m.userId, role: m.role });
         bump.add(m.userId);
       } else if (want.get(login) !== m.role) {
