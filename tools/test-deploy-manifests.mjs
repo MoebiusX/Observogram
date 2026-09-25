@@ -307,6 +307,22 @@ function smp(base, patch, key) {
   const tagOf = ref => ref.slice(ref.lastIndexOf('/') + 1).split(':')[1] ?? '';
   assert(/^\$\(kubectl .*get deployment\/observabilitypack-studio/.test(store),
          'README rollback: STORE_IMAGE is read from the studio Deployment, not retyped', store);
+  // Step 3 changes the image STORE_IMAGE was read from, so "forward again"
+  // and its replace pod, often run from a new shell days later, need the value
+  // recorded where step 3 leaves it alone: an annotation on the Deployment,
+  // written before the image changes and read back from there.
+  const joined = readme.replaceAll(/\s*\\\n\s*/g, ' ');
+  const at = re => joined.search(re);
+  const annotate = at(/^kubectl .*annotate --overwrite deployment\/observabilitypack-studio observogram\.io\/store-image="\$\(kubectl .*containers\[\?\(@\.name=="studio"\)\]\.image\}'\)"/m);
+  const readBack = at(/^STORE_IMAGE=\$\(kubectl .*get deployment\/observabilitypack-studio -o jsonpath='\{\.metadata\.annotations\.observogram\\\.io\/store-image\}'\)/m);
+  const setImage = at(/^kubectl .*set image deployment\/observabilitypack-studio studio=\$OLD_IMAGE/m);
+  const forward = joined.slice(at(/\*\*Forward again:\*\*/));
+  assert(annotate >= 0 && setImage > annotate,
+         'README rollback: the store image is recorded as the observogram.io/store-image annotation before step 3 changes the image', { annotate, setImage });
+  assert(readBack >= 0 && readBack < setImage,
+         'README rollback: STORE_IMAGE is read back from the observogram.io/store-image annotation, which step 3 leaves alone', store);
+  assert(at(/\*\*Forward again:\*\*/) > setImage && /^STORE_IMAGE=\$\(kubectl .*observogram\\\.io\/store-image/m.test(forward),
+         'README forward again: STORE_IMAGE is re-read from the annotation, so a new shell gets the store image, not $OLD_IMAGE', forward.slice(0, 400));
   assert(old !== '' && tagOf(old) !== version && tagOf(old) !== `v${version}` && !/[<>]/.test(tagOf(old)),
          `README rollback: OLD_IMAGE has a tag of its own, never the package version ${version} the store build also carries`, old);
 }

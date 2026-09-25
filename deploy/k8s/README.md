@@ -155,13 +155,23 @@ still `0.4.0` in `package.json` and `kustomization.yaml`: a local
 replaced any older image of that name. Build the old one under a tag of its
 own (`git archive v0.4.0 | docker build -t observogram:0.4.0-prestore -`,
 then load or push it as in step 2 at the top), and take the store image
-from the Deployment rather than retyping it:
+from the Deployment rather than retyping it. Step 3 changes the image the
+Deployment runs, so step 0 records the store image as the
+`observogram.io/store-image` annotation on the Deployment, which step 3
+leaves alone, and every later shell reads it back from there:
 
 ```bash
 NS=observability
-STORE_IMAGE=$(kubectl -n $NS get deployment/observabilitypack-studio \
-  -o jsonpath='{.spec.template.spec.containers[?(@.name=="studio")].image}')   # the store build the studio runs now
 OLD_IMAGE=<registry>/observogram:0.4.0-prestore   # built from the v0.4.0 tag, never observogram:0.4.0
+
+# 0. Record the store build the studio runs now. Once, before step 3:
+#    run after it, this would record $OLD_IMAGE.
+kubectl -n $NS annotate --overwrite deployment/observabilitypack-studio \
+  observogram.io/store-image="$(kubectl -n $NS get deployment/observabilitypack-studio \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="studio")].image}')"
+STORE_IMAGE=$(kubectl -n $NS get deployment/observabilitypack-studio \
+  -o jsonpath='{.metadata.annotations.observogram\.io/store-image}')
+echo "$STORE_IMAGE"                               # the store build, not observogram:0.4.0-prestore
 
 # 1. A live backup, then stop the studio and wait for its pod to be gone.
 kubectl -n $NS exec deploy/observabilitypack-studio -- \
@@ -225,8 +235,19 @@ If the phase never reaches `Succeeded`, `kubectl logs` shows the refusal
 (something still holds the database, or an `orgs/default/` entry already
 exists).
 
-**Forward again:** set the image back to `$STORE_IMAGE`. If nothing was
-changed on the old build, the studio starts. If users or orgs were, the
+**Forward again:** in any shell, read the store image back from the
+annotation step 0 wrote (not from the image the Deployment runs, which is
+now `$OLD_IMAGE`) and set the image back to it:
+
+```bash
+NS=observability
+STORE_IMAGE=$(kubectl -n $NS get deployment/observabilitypack-studio \
+  -o jsonpath='{.metadata.annotations.observogram\.io/store-image}')
+echo "$STORE_IMAGE"                               # empty: step 0 never ran; stop and find the store image
+kubectl -n $NS set image deployment/observabilitypack-studio studio=$STORE_IMAGE
+```
+
+If nothing was changed on the old build, the studio starts. If users or orgs were, the
 pod log shows `refusing to start: … changed since store … last imported
 it`. Scale to 0, run the one-off pod above with the command `["node",
 "tools/cli.mjs", "store", "import", "--replace"]` (its log: `replace
