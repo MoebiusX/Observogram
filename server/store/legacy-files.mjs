@@ -197,15 +197,16 @@ export function markerPath(base = baseWorkspacePath()) {
 }
 
 // null when absent; a marker that cannot be read or has the wrong shape
-// throws naming it (it cannot be compared).
-export function readMarker(base = baseWorkspacePath()) {
+// throws naming it (it cannot be compared), with `tail` as its way out
+// (the start's by default; the in-place export names its own).
+export function readMarker(base = baseWorkspacePath(), { tail = MARKER_TAIL } = {}) {
   const path = markerPath(base);
-  const read = readJson(path, MARKER_TAIL);
+  const read = readJson(path, tail);
   if (!read) return null;
   const m = read.data;
   if (!isPlainObject(m) || typeof m.storeId !== 'string' || !m.storeId || !isPlainObject(m.files)
     || typeof m.by !== 'string' || typeof m.writtenAt !== 'string') {
-    throw new LegacyFileError(path, 'is not a store import marker ({ storeId, files, by, writtenAt })', undefined, MARKER_TAIL);
+    throw new LegacyFileError(path, 'is not a store import marker ({ storeId, files, by, writtenAt })', undefined, tail);
   }
   return { storeId: m.storeId, files: m.files, by: m.by, writtenAt: m.writtenAt };
 }

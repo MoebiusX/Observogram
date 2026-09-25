@@ -63,7 +63,7 @@ import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { baseWorkspacePath } from '../../tools/lib/brand-env.mjs';
 import { parse as parseYaml } from '../../tools/lib/mini-yaml.mjs';
 import { closeStore, openStore, resolveDbPath, tx } from './db.mjs';
-import { assertNotInUse } from './backup.mjs';
+import { assertNotInUse, identifyFile } from './backup.mjs';
 import { listAudit, writeAudit } from './audit.mjs';
 import { getMeta, getMetaJson, isIdentityArmed, putMeta, setMeta, storeId } from './meta.mjs';
 import { getOrg, listOrgs, setOrgRoot } from './orgs.mjs';
@@ -300,6 +300,36 @@ function exportDirectory(target, base) {
   return into;
 }
 
+// An in-place export with no marker: the workspace is this store's only if no other store's database is in it.
+// The candidates are the *.db files directly in <base> and <base>/db (<base>/observogram.db, the default, among
+// them), each opened read-only without migrating; one that cannot be read is refused naming it.
+async function assertNoOtherStore(base, path, id) {
+  const own = realOr(path);
+  for (const dir of [base, join(base, 'db')]) {
+    let names;
+    try { names = readdirSync(dir); } catch (e) { if (e?.code === 'ENOENT' || e?.code === 'ENOTDIR') continue; throw e; }
+    for (const name of names.filter((n) => n.endsWith('.db')).sort()) {
+      const file = join(dir, name);
+      if (realOr(file) === own) continue;
+      try { if (!statSync(file).isFile()) continue; } catch { continue; }
+      let other;
+      try {
+        other = (await identifyFile(file)).storeId;
+      } catch (e) {
+        throw refuse(`${file} cannot be read as a store (${e.message}), and ${markerPath(base)} is missing: an in-place export `
+          + `cannot tell whether the workspace ${base} is store ${id}'s. Nothing was changed. Move ${file} out of ${base}, then run `
+          + 'the export again');
+      }
+      if (other && other !== id) {
+        throw refuse(`${file} holds store ${other}, but ${path} holds store ${id}, and ${markerPath(base)} is missing: the workspace `
+          + `${base} is not known to be this store's, and an in-place export would write store ${id}'s files over it. Nothing was `
+          + `changed. To export that workspace, stop the server and run OBSERVOGRAM_DB=${file} OBSERVOGRAM_WORKSPACE=${base} `
+          + `packc store export ${base}; to export store ${id}, choose an empty or new directory`);
+      }
+    }
+  }
+}
+
 export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWorkspacePath(), out = process.stdout } = {}) {
   if (!dir) throw refuse('name the directory: packc store export <dir> (the workspace directory itself exports in place)');
   if (dbPath === MEMORY) throw refuse('OBSERVOGRAM_DB is :memory: — an in-memory store lives in one process and cannot be exported from another');
@@ -321,13 +351,17 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
     if (inPlace) {
       // Another store's workspace (OBSERVOGRAM_DB pointing elsewhere): the export would move its files and write this
       // store's users, orgs and marker over it.
-      const marker = readMarker(base);   // corrupt → LegacyFileError naming it
+      const mp = markerPath(base);
+      const marker = readMarker(base, { tail: 'nothing was changed. The store writes this file: with the server stopped, move it '
+        + `aside (mv ${mp} ${mp}.corrupt), then run the export again — with no marker, it checks the workspace's databases instead `
+        + 'and writes a new marker' });
       if (marker && marker.storeId !== id) {
-        throw refuse(`${markerPath(base)} names store ${marker.storeId}, but ${path} holds store ${id}: the workspace ${base} `
+        throw refuse(`${mp} names store ${marker.storeId}, but ${path} holds store ${id}: the workspace ${base} `
           + `is not this store's, and an in-place export would write store ${id}'s files over it. Nothing was changed. To export `
-          + `that workspace, point OBSERVOGRAM_DB at its own store (store ${marker.storeId}); to export store ${id}, name an empty `
-          + 'directory outside any workspace');
+          + `that workspace, point OBSERVOGRAM_DB at its own store (store ${marker.storeId}); to export store ${id}, choose an empty `
+          + 'or new directory');
       }
+      if (!marker) await assertNoOtherStore(base, path, id);
     }
     const plan = planExport(db, { inPlace, target: into, base });
     if (!inPlace) {

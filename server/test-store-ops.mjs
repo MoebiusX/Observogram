@@ -661,6 +661,88 @@ test('in place: refused while the store is in use, before the server first start
   await assert.rejects(exportStore(base, { dbPath: ':memory:', base, out: silent }), refused(/:memory:/));
 });
 
+test('in place: a markerless workspace holding another store\'s database is refused naming it — nothing moved or written; the ways out it names work', async () => {
+  const s1 = tempDir();
+  usersJson(s1, ['alice']);
+  pack(s1, 's1');
+  await start(s1);
+  await change(s1, (db) => admin.createOrgFromAdmin(db, 'cli', { id: 'acme', name: 'Acme', admin: 'alice', base: s1 }));
+  const s2 = tempDir();
+  usersJson(s2, ['bob']);
+  pack(s2, 's2');
+  await start(s2);
+  rmSync(join(s2, 'users.json'));
+  rmSync(legacy.markerPath(s2));
+  const idA = await read(s1, (db) => meta.storeId(db));
+  const idB = await read(s2, (db) => meta.storeId(db));
+  const untouched = async () => {
+    assert.ok(existsSync(join(s2, 'packs', 's2.pack.yaml')), 'nothing moved');
+    assert.equal(existsSync(join(s2, 'orgs')), false);
+    assert.equal(existsSync(join(s2, 'users.json')), false);
+    assert.equal(existsSync(join(s2, 'orgs.json')), false);
+    assert.equal(existsSync(legacy.markerPath(s2)), false);
+    await read(s1, (db) => assert.equal(getOrg(db, 'default').root, '.'));
+  };
+  // OBSERVOGRAM_WORKSPACE=s2 with OBSERVOGRAM_DB at store A: s2/observogram.db holds store B.
+  await assert.rejects(exportStore(s2, { dbPath: dbOf(s1), base: s2, out: silent }),
+    (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(`${dbOf(s2)} holds store ${idB}`) && e.message.includes(idA)
+      && e.message.includes(`OBSERVOGRAM_DB=${dbOf(s2)}`) && e.message.includes('choose an empty or new directory'));
+  await untouched();
+  // Another store's database directly in <base>/db, as a *.db file: refused the same way.
+  mkdirSync(join(s2, 'db'));
+  copyFileSync(dbOf(s2), join(s2, 'db', 'b.db'));
+  const s3 = tempDir();
+  usersJson(s3, ['carol']);
+  await start(s3);
+  rmSync(legacy.markerPath(s3));
+  copyFileSync(dbOf(s2), join(s3, 'db-b.db'));   // a *.db at the base that is another store
+  await assert.rejects(exportStore(s3, { dbPath: dbOf(s3), base: s3, out: silent }),
+    (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(`${join(s3, 'db-b.db')} holds store ${idB}`));
+  rmSync(join(s3, 'db-b.db'));
+  // An unreadable *.db is refused naming it; moved out of the workspace, the export runs.
+  mkdirSync(join(s3, 'db'));
+  writeFileSync(join(s3, 'db', 'junk.db'), 'not a database, not at all, not even a little bit of one');
+  await assert.rejects(exportStore(s3, { dbPath: dbOf(s3), base: s3, out: silent }),
+    (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(`${join(s3, 'db', 'junk.db')} cannot be read as a store`)
+      && e.message.includes(`Move ${join(s3, 'db', 'junk.db')} out of ${s3}, then run the export again`));
+  renameSync(join(s3, 'db', 'junk.db'), join(tempDir('ops-aside'), 'junk.db'));
+  // A backup of this store beside it is this store's: no refusal.
+  await backupStore(join(s3, 'db', 'mine.db'), { dbPath: dbOf(s3) });
+  assert.equal((await exportStore(s3, { dbPath: dbOf(s3), base: s3, out: silent })).inPlace, true);
+  await start(s3);
+  // The ways out s2's refusal names, followed literally: store B exports in place; store A to a new directory.
+  rmSync(join(s2, 'db'), { recursive: true });
+  assert.equal((await exportStore(s2, { dbPath: dbOf(s2), base: s2, out: silent })).storeId, idB);
+  await start(s2);
+  const fresh = join(tempDir('ops-out'), 'export');
+  assert.equal((await exportStore(fresh, { dbPath: dbOf(s1), base: s2, out: silent })).storeId, idA);
+});
+
+test('in place: a corrupt marker refuses naming it — the directory export\'s way out leads there, and its own way out (move it aside, export again) works', async () => {
+  const c1 = tempDir();
+  usersJson(c1, ['alice']);
+  pack(c1, 'p');
+  await start(c1);
+  writeFileSync(legacy.markerPath(c1), '{not json');
+  const elsewhere = join(tempDir('ops-cwd'), '.observogram');
+  // From another shell: the directory export refuses, naming the in-place export.
+  await assert.rejects(exportStore(c1, { dbPath: dbOf(c1), base: elsewhere, out: silent }),
+    (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(`OBSERVOGRAM_WORKSPACE=${c1} packc store export ${c1}`));
+  // Followed: the corrupt-marker refusal, naming the marker and a way out that works.
+  const aside = `${legacy.markerPath(c1)}.corrupt`;
+  await assert.rejects(exportStore(c1, { dbPath: dbOf(c1), base: c1, out: silent }),
+    (e) => e.code === 'ERR_OBSERVOGRAM_LEGACY_FILE' && e.message.startsWith(`${legacy.markerPath(c1)}: `)
+      && e.message.includes(`with the server stopped, move it aside (mv ${legacy.markerPath(c1)} ${aside}), then run the export again`));
+  assert.ok(existsSync(join(c1, 'packs', 'p.pack.yaml')), 'nothing moved');
+  assert.equal(existsSync(join(c1, 'orgs.json')), false);
+  // Followed: the export runs, writes a new marker, and the next start takes it.
+  renameSync(legacy.markerPath(c1), aside);
+  const r = await exportStore(c1, { dbPath: dbOf(c1), base: c1, out: silent });
+  assert.equal(r.inPlace, true);
+  assert.equal(legacy.readMarker(c1).storeId, r.storeId);
+  await start(c1);
+});
+
 test('in place: a failure after the move puts everything back', async () => {
   const base = tempDir();
   usersJson(base, ['alice']);

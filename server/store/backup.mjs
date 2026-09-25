@@ -53,6 +53,14 @@ function identify(db) {
   return { version, storeId };
 }
 
+// { version, storeId } of the database file at `path`, opened read-only and
+// never migrated; storeId null when it is not one of ours. Throws when the
+// file cannot be read as a database.
+export async function identifyFile(path) {
+  const db = await openRaw(path, { readOnly: true });
+  try { return identify(db); } finally { db.close(); }
+}
+
 // A path with symlinks resolved (SQLite names -wal/-shm/-journal after the
 // real path), or only its directory's when the file does not exist yet.
 function canonical(path) {
