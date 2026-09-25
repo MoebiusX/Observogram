@@ -313,6 +313,34 @@ test('Export gate: an orgs.json deployment — roles written back as admin/membe
   await start(base);
 });
 
+test('Export gate: one org at the workspace root on a deployment that had an orgs.json — orgs.json written, the default org moved (A-30)', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice']);
+  pack(base, 'p1');
+  await start(base);
+  // The one case the rule alone decides: one live org, kept at '.', and the
+  // import report recording that the deployment had an orgs.json.
+  await change(base, (db) => tx(db, () => {
+    meta.putMeta(db, 'import_report', JSON.stringify({ ...meta.getMetaJson(db, 'import_report'), orgsJson: true }));
+  }));
+  await read(base, (db) => {
+    assert.deepEqual(listOrgs(db).map((o) => [o.id, o.root]), [['default', '.']]);
+  });
+
+  const r = await exportIt(base);
+  assert.equal(r.orgs.path, join(base, 'orgs.json'));
+  assert.deepEqual(r.orgs.ids, ['default']);
+  assert.deepEqual(r.move, ['packs']);
+  assert.deepEqual(JSON.parse(readFileSync(join(base, 'orgs.json'), 'utf8')), {
+    default: { name: 'Default', members: { alice: 'admin' } },
+  });
+  assert.equal(existsSync(join(base, 'packs')), false, 'packs moved');
+  assert.deepEqual(pre.boot(base), { migrated: [] });
+  assert.deepEqual(pre.packIds(base, 'default'), ['p1']);
+  await read(base, (db) => assert.equal(getOrg(db, 'default').root, 'orgs/default'));
+  await start(base);
+});
+
 test('export to a directory: only reads the store, never overwrites', async () => {
   const base = tempDir();
   usersJson(base, ['alice']);
