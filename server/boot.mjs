@@ -493,9 +493,12 @@ export async function bootStore({ host, log = () => {}, warn = () => {} } = {}) 
     decision = seedDecision(legacyView(db, ctx, legacy1));
     const plan1 = planImport(db, legacy1, ctx, projectedMigration({ flat, migrate, orgs: legacy1.orgs }));
     assertBootChecks(legacyChecksInput(db, ctx, legacy1, decision, plan1));   // no write before this line
-    const migration = migrate
+    // :memory: never writes the workspace (it would move a file store's
+    // data and rewrite orgs.json under it): the import stands on the
+    // projected migration, and nothing moves.
+    const migration = migrate && !ctx.memory
       ? { ...migrateFlatWorkspace({ log, base: ctx.base }), skipped: null }
-      : projectedMigration({ flat: null, migrate, orgs: legacy1.orgs });
+      : projectedMigration({ flat, migrate, orgs: legacy1.orgs });
     const legacy2 = readLegacy(db, ctx);
     const plan2 = planImport(db, legacy2, ctx, migration);
     report = applyImport(db, plan2, ctx);

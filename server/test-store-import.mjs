@@ -23,7 +23,7 @@ const { test } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
 const { spawnSync } = await import('node:child_process');
 const {
-  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync,
 } = await import('node:fs');
 const { tmpdir } = await import('node:os');
 const { dirname, join } = await import('node:path');
@@ -1261,6 +1261,36 @@ test('bootStore with OBSERVOGRAM_DB=:memory: warns, writes no marker, and a rest
     assert.equal(existsSync(dbOf(base)), false);
   } finally {
     closeStore(':memory:');
+  }
+});
+
+// The workspace as bytes: every path under it, a directory as 'dir', a
+// file as its contents.
+function treeOf(dir, rel = '') {
+  const out = {};
+  for (const name of readdirSync(join(dir, rel)).sort()) {
+    const r = rel ? `${rel}/${name}` : name;
+    if (lstatSync(join(dir, r)).isDirectory()) Object.assign(out, { [r]: 'dir' }, treeOf(dir, r));
+    else out[r] = readFileSync(join(dir, r)).toString('base64');
+  }
+  return out;
+}
+
+test('upgrade-memory-boot-moves-file-store-data: an OBSERVOGRAM_DB=:memory: boot over orgs.json and flat data never writes the workspace', async () => {
+  for (const orgs of [{ acme: { members: { alice: 'admin' } } }, { acme: { members: {} }, default: { members: { alice: 'admin' } } }]) {
+    const base = workspace({
+      users: { users: { alice: { password: PW } } }, orgs,
+      files: { 'packs/p.yaml': PACK, 'deploys.jsonl': '{"id":"d1"}\n', 'runs/r1.json': '{}\n' },
+    });
+    const before = treeOf(base);
+    try {
+      const r = await bootIn(base, { OBSERVOGRAM_DB: ':memory:' });
+      assert.deepEqual(treeOf(base), before, 'the workspace tree is byte-identical after a :memory: boot');
+      assert.ok(!r.logs.some((l) => l.startsWith('[tenancy]')), r.logs.join('\n'));
+      assert.ok(r.logs.some((l) => l.startsWith('[store]   flat workspace not moved (OBSERVOGRAM_DB=:memory: writes nothing to the workspace')), r.logs.join('\n'));
+    } finally {
+      closeStore(':memory:');
+    }
   }
 });
 

@@ -333,7 +333,11 @@ export function formatReport(r) {
   if (r.migration.skipped) {
     out.push(`[store]   flat workspace not moved: store ${r.storeId} already keeps the default org at . (initialised by a CLI before this first start)`);
   }
-  if (r.migration.moved.length) out.push(`[store]   flat workspace moved to orgs/default/: ${r.migration.moved.join(', ')}`);
+  if (r.migration.moved.length) {
+    out.push(r.dbPath === ':memory:'
+      ? `[store]   flat workspace not moved (OBSERVOGRAM_DB=:memory: writes nothing to the workspace; a file store moves it to orgs/default/): ${r.migration.moved.join(', ')}`
+      : `[store]   flat workspace moved to orgs/default/: ${r.migration.moved.join(', ')}`);
+  }
   if (r.migration.leftBehind.length) out.push(`[store]   left behind (orgs/default/ already has them; neither moved nor merged): ${r.migration.leftBehind.join(', ')}`);
   if (r.users.disabled.length) out.push(`[store]   users-file users imported disabled (OIDC is configured): ${r.users.disabled.join(', ')}`);
   if (r.memberships.inexact.length) {
