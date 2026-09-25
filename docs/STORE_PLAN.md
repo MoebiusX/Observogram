@@ -563,6 +563,11 @@ hashed nor imported before then.
    - **The empty `default` artefact.** A `default` entry with no members
      and no data under `orgs/default/` is a leftover of today's rehydrate
      bug (§0). It is dropped and listed.
+   - **A stranded `orgs/default/`.** With no `default` entry, data under
+     `orgs/default/` is a migration that moved the flat entries and
+     stopped before its `orgs.json` write. The import plans `default` at
+     `orgs/default`, as that write would have. A store that already
+     imported names the directory as left behind on every boot.
    - **The default org** is `default` if a real one remains, otherwise the
      first `orgs.json` org. This mirrors today's bearer fallback.
    - **Owners** are the `admin` members of the default org. If there are

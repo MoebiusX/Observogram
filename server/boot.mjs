@@ -448,15 +448,19 @@ export function warnNoOwner(db, ctx, warn) {
 export function warnLeftBehind(db, ctx, warn) {
   const live = listOrgs(db);
   const atBase = live.some((o) => o.root === '.');
+  const moved = join(ctx.base, 'orgs', 'default');
+  const movedUnread = !live.some((o) => o.root === 'orgs/default') && hasData(moved);
   if (!atBase) {
     for (const entry of MIGRATABLE) {
       const path = join(ctx.base, entry);
       if (hasData(path)) warn(`[store] left behind: ${path} — nothing reads it (the default org's copy is orgs/default/${entry}); merge it by hand`);
     }
+    if (movedUnread) {
+      warn(`[store] left behind: ${moved} — no org reads it (the store has no org at orgs/default); adopt it with \`npm run orgs -- create default --adopt\` or merge it by hand`);
+    }
     return;
   }
-  const moved = join(ctx.base, 'orgs', 'default');
-  if (!live.some((o) => o.root === 'orgs/default') && hasData(moved)) {
+  if (movedUnread) {
     warn(`[store] left behind: ${moved} — nothing reads it (the default org's root is .); move its entries back to ${ctx.base} by hand`);
   }
 }

@@ -181,7 +181,12 @@ export function planImport(db, legacy, ctx, migration) {
   if (legacy.orgs.exists) {
     // ---- orgs.json (plan item 2) ----
     const entries = [...legacy.orgs.entries];
-    if (migration?.wroteDefault && !entries.some(([id]) => id === 'default')) {
+    // The default entry the migration wrote — or would have: a migration
+    // that moved the flat entries and crashed before the orgs.json write
+    // leaves data in orgs/default with no entry (nothing is left to move,
+    // so wroteDefault is false on the next boot).
+    if (!entries.some(([id]) => id === 'default')
+      && (migration?.wroteDefault || hasData(join(ctx.base, 'orgs', 'default')))) {
       entries.push(['default', { name: 'Default', members: [] }]);
     }
     const kept = new Set();
