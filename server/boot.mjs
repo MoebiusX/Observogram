@@ -190,13 +190,14 @@ export function applySeedDecision(db, decision, { log = () => {}, warn = () => {
   return 'none';
 }
 
-// True while a still-seeded default credential can sign in, after the
-// decision: the one row a rescue fixes is not counted.
+// True while a still-seeded default credential can sign in, or come back
+// (a disabled row counts: `users -- enable` would restore it), after the
+// decision: the one row a rescue fixes (an enabled admin) is not counted.
 export function defaultCredentialActive(db, ctx, decision = null) {
   if (ctx.authOff || ctx.oidc || !isIdentityArmed(db)) return false;
   const rescue = decision?.kind === 'rescue' ? 1 : 0;
-  return prepare(db, `SELECT count(*) AS n FROM users WHERE kind = 'local' AND disabled = 0 AND seeded_default = 1
-    AND must_change = 1 AND NOT (:rescue = 1 AND login = 'admin')`).get({ rescue }).n > 0;
+  return prepare(db, `SELECT count(*) AS n FROM users WHERE kind = 'local' AND seeded_default = 1
+    AND must_change = 1 AND NOT (:rescue = 1 AND login = 'admin' AND disabled = 0)`).get({ rescue }).n > 0;
 }
 
 // ---------- the fail-closed checks ----------

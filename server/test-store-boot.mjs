@@ -286,6 +286,29 @@ test('boot order 7: seeded admin/admin on loopback, rebooted on 0.0.0.0 with OBS
   });
 });
 
+test('boot order 7b: a disabled still-seeded admin refuses a 0.0.0.0 boot (B), and `users -- enable` refuses it until `passwd`', async () => {
+  const ws = workspace();
+  assert.ok(boot(ws).listening);
+  assert.equal(cli(USER_ADMIN, ['add', 'ops', '--password-stdin'], ws, { input: 'ops-passw0rd-7b\n' }).status, 0);
+  assert.equal(cli(USER_ADMIN, ['owner', 'ops'], ws).status, 0);
+  assert.equal(cli(USER_ADMIN, ['remove', 'admin'], ws).status, 0);
+  const r = boot(ws, { host: '0.0.0.0' });
+  assert.ok(!r.listening && MSG_B.test(r.message), 'a disabled row that could come back still counts');
+  const en = cli(USER_ADMIN, ['enable', 'admin'], ws);
+  assert.ok(en.status === 1 && en.stderr.includes('admin still has the seeded default password — npm run users -- passwd admin first'),
+    en.stdout + en.stderr);
+  await inspectWs(ws, (v) => assert.equal(v.user('admin').disabled, 1, 'still disabled'));
+  assert.equal(cli(USER_ADMIN, ['passwd', 'admin', '--password-stdin'], ws, { input: 'admin-passw0rd-7b\n' }).status, 0);
+  assert.equal(cli(USER_ADMIN, ['enable', 'admin'], ws).status, 0);
+  const s = await serve(ws, { host: '0.0.0.0' });
+  try {
+    assert.equal((await signIn(s.base, 'admin', 'admin')).status, 401);
+    assert.equal((await signIn(s.base, 'admin', 'admin-passw0rd-7b')).status, 200);
+  } finally {
+    await s.stop();
+  }
+});
+
 test('boot order 8: a token-only store rebooted on 0.0.0.0 with only OBSERVOGRAM_ADMIN_PASSWORD seeds admin as owner', async () => {
   const ws = workspace();
   assert.ok(boot(ws, { env: { OBSERVOGRAM_API_TOKEN: 'tok-0123456789' } }).listening);

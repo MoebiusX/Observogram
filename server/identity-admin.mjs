@@ -194,12 +194,18 @@ export function disableUser(db, actor, login) {
 
 // `users -- enable` undoes `remove`: the row, its memberships, owner flag
 // and password come back as they were (the disable already ended its
-// sessions). Looked up exactly as given, like `remove`.
+// sessions). Looked up exactly as given, like `remove`. A local row still
+// holding the seeded default password is refused until `passwd`: enabling
+// it would put admin/admin on a server that may already listen beyond
+// loopback, which boot check B only catches at the next start.
 export function enableUser(db, actor, login) {
   return atomic(db, () => {
     const row = getUserByLogin(db, login);
     if (!row) refuse(`no such user: ${login}`);
     if (!row.disabled) return row;
+    if (row.kind === 'local' && row.seededDefault && row.mustChange) {
+      refuse(`${login} still has the seeded default password — npm run users -- passwd ${login} first`);
+    }
     return setDisabled(db, actor, row.id, false);
   });
 }

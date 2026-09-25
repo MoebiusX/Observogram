@@ -16,7 +16,8 @@
  * The first local user becomes the owner and admin of the default org, and
  * arms stand-alone sign-in on a running server (no restart needed); once
  * armed it stays armed. `remove` disables (users are never deleted: the
- * audit references them); `enable` undoes it. Passwords are prompted with echo off;
+ * audit references them); `enable` undoes it, except for a row still holding
+ * the seeded default password (`passwd` it first). Passwords are prompted with echo off;
  * automation can pipe one instead:
  *   echo "s3cret" | npm run users -- add alice --password-stdin
  *

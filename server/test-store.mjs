@@ -2018,6 +2018,14 @@ test('identity-admin passwd, remove and owner: a local password bumps the epoch;
     admin.disableUser(db, 'cli', `${KEY}#user-42`);
     const back = admin.enableUser(db, 'cli', `${KEY}#user-42`);
     assert.deepEqual([back.disabled, back.isOwner], [false, true], 'an OIDC user disabled by the CLI can be re-enabled');
+    // A disabled row still holding the seeded default password stays off until passwd.
+    users.createUser(db, 'cli', { login: 'seed', password: { algo: 'scrypt', hash: 'aGFzaA==' }, mustChange: true, seededDefault: true });
+    admin.disableUser(db, 'cli', 'seed');
+    assert.throws(() => admin.enableUser(db, 'cli', 'seed'),
+      refused('seed still has the seeded default password — npm run users -- passwd seed first'));
+    assert.equal(users.getUserByLogin(db, 'seed').disabled, true);
+    admin.setLocalPassword(db, 'cli', 'seed', 'seed-passw0rd');
+    assert.equal(admin.enableUser(db, 'cli', 'seed').disabled, false, 'after passwd it comes back');
   } finally {
     close();
   }

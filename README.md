@@ -288,7 +288,10 @@ server opens it at every start.
   again: from then on `npm run users` and `npm run orgs` write the store,
   and `remove` disables a user instead of deleting it (the audit
   references it); `npm run users -- enable <login>` undoes it, with the
-  user's memberships, owner flag and password as they were. Names and fields the store cannot hold are dropped and
+  user's memberships, owner flag and password as they were. A user still
+  holding the seeded default password (`admin` / `admin`) is not enabled
+  until `npm run users -- passwd <login>` sets a real one, and such a
+  disabled row still refuses a start beyond loopback. Names and fields the store cannot hold are dropped and
   listed in the report; they never refuse the start.
 - **Edited legacy files refuse the start.** A store build refuses to start
   when `users.json` or `orgs.json` changed after the import (a pre-store
