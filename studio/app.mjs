@@ -26,6 +26,7 @@ import {
   focusedCompileArtifact, setFocusedCompileArtifact,
 } from './focus.mjs';
 import { escapeHtml, toast, fmtRelative, installDialogFocusTrap, downloadText } from './util.mjs';
+import { personalName } from './ux-kit.mjs';
 import { renderSchemaView } from './schema-view.mjs';
 import { renderConformanceView } from './conformance-view.mjs';
 import { renderOtlpView } from './otlp-view.mjs';
@@ -252,11 +253,16 @@ function serviceCatalogue() {
       label: String(name).trim(),
       packCount: 0,
       liveCount: 0,
+      environments: [],
+      tiers: [],
     });
     const item = byKey.get(key);
     if (p) {
       if (isLiveAggregatePack(p)) item.liveCount += 1;
       else item.packCount += 1;
+      // The home tiles tell services apart by environment and tier.
+      for (const env of p.environments || []) if (!item.environments.includes(env)) item.environments.push(env);
+      if (p.criticality && !item.tiers.includes(p.criticality)) item.tiers.push(p.criticality);
     }
   };
   for (const p of [...(state.catalog || []), ...(state._examplesCache || [])]) {
@@ -1132,25 +1138,25 @@ const OBSERVA_TABS = [
     label: 'What Do We Have?',
     sub: 'Discover',
     techName: 'Layers',
-    tagline: 'the Observogram Scan',
+    tagline: 'Layers, artefacts and evidence',
     accent: 'tab-blue',
   },
   {
     id: 'compare',
     n: '2',
-    label: 'Can We Trust It?',
+    label: 'How reliable is this pack?',
     sub: 'Diagnose',
     techName: 'Comparison',
-    tagline: 'Coverage & Fidelity',
+    tagline: 'Assessment and comparison',
     accent: 'tab-magenta',
   },
   {
     id: 'compile',
     n: '3',
-    label: 'Fix The Gaps',
+    label: 'Resolve gaps',
     sub: 'Remediate',
     techName: 'ObsOps',
-    tagline: 'Compile & Deploy',
+    tagline: 'Update, compile and deploy',
     accent: 'tab-emerald',
   },
 ];
@@ -1173,6 +1179,8 @@ const OBSERVA_ADV = [
   { id: 'atlas',        label: 'Atlas',        sub: 'visual atlases · strata · periodic · skyline' },
 ];
 const OBSERVA_ADV_VIEWS = new Set(OBSERVA_ADV.map(a => a.id));
+// The views that read Pack B — the only ones whose header shows the baseline picker.
+const COMPARISON_VIEWS = new Set(['compare', 'benchmark', 'compare-artefacts', 'compile', 'traceability', 'atlas']);
 
 // The BUILD journey's three cards (docs/BUILD_JOURNEY.md) live in build-model.mjs
 // (BUILD_TABS, pure, tested): the same shape as OBSERVA_TABS and the same
@@ -1263,6 +1271,8 @@ function installObservaChrome() {
         <span class="observa-brand-text">
           <span class="observa-wordmark">OBSERVO<strong>GRAM</strong></span>
           <span class="observa-tagline">
+            <!-- Home names no journey: the stepper appears once one is chosen. -->
+            <span class="observa-tagline-home">the observability compiler</span>
             <span class="observa-tagline-step">Discover</span>
             <span class="observa-tagline-dot">·</span>
             <span class="observa-tagline-step">Diagnose</span>
@@ -1307,6 +1317,23 @@ function installObservaChrome() {
                 <span class="observa-adv-item-sub">${escapeHtml(a.sub)}</span>
               </button>
             `).join('')}
+            <div class="observa-adv-menu-head">Administration</div>
+            <button type="button" class="observa-adv-item" role="menuitem" data-action="mcp">
+              <span class="observa-adv-item-label">Live MCP connection</span>
+              <span class="observa-adv-item-sub" id="observa-adv-mcp-sub">refresh production-live from an MCP server</span>
+            </button>
+            <button type="button" class="observa-adv-item" role="menuitem" data-action="api">
+              <span class="observa-adv-item-label">Pack catalogue API</span>
+              <span class="observa-adv-item-sub">the raw JSON the studio reads · opens a new tab</span>
+            </button>
+            <button type="button" class="observa-adv-item" role="menuitem" data-action="theme">
+              <span class="observa-adv-item-label">Switch light / dark theme</span>
+              <span class="observa-adv-item-sub">also in the context bar while a pack is open</span>
+            </button>
+            <button type="button" class="observa-adv-item" role="menuitem" data-action="reset">
+              <span class="observa-adv-item-label">Reset the studio…</span>
+              <span class="observa-adv-item-sub">drop uploaded packs and saved state · asks first</span>
+            </button>
             <button type="button" class="observa-adv-item observa-adv-about" role="menuitem" data-action="about">
               <span class="observa-adv-item-label">About Observogram</span>
               <span class="observa-adv-item-sub" id="observa-about-sub">version &amp; build</span>
@@ -1358,6 +1385,10 @@ function installObservaChrome() {
     e.stopPropagation();
     const willOpen = advMenu.hidden;
     if (!willOpen) { closeAdv(); return; }
+    // The MCP badge left the header; its state travels with the menu item.
+    const mcpSub = document.getElementById('observa-adv-mcp-sub');
+    const mcpBtn = document.getElementById('mcp-btn');
+    if (mcpSub && mcpBtn?.title) mcpSub.textContent = mcpBtn.title;
     advMenu.hidden = false;
     advToggle.setAttribute('aria-expanded', 'true');
     positionAdv();
@@ -1367,7 +1398,15 @@ function installObservaChrome() {
   hdr.querySelectorAll('.observa-adv-item').forEach(item => {
     item.addEventListener('click', () => {
       closeAdv();
-      if (item.dataset.action === 'about') { openAboutModal(); return; }
+      const action = item.dataset.action;
+      if (action === 'about') { openAboutModal(); return; }
+      // Admin tools proxy to the header's original controls. Deferred, so
+      // this click's own document-level outside-click handlers (the MCP
+      // panel closes on any click outside it) run before the panel opens.
+      if (action === 'mcp')   { setTimeout(() => $('#mcp-btn')?.click(), 0); return; }
+      if (action === 'reset') { setTimeout(() => $('#reset-btn')?.click(), 0); return; }
+      if (action === 'theme') { $('#theme-toggle')?.click(); return; }
+      if (action === 'api')   { window.open('/api/packs', '_blank', 'noopener'); return; }
       routeTo(item.dataset.view);
     });
   });
@@ -1451,6 +1490,7 @@ async function boot() {
   setupIdentityChip();
   setupResetButton();
   setupExportButton();
+  setupHeaderActionsMenu();
   // Eagerly fetch /api/examples so the Pack B picker has the archived
   // reference packs available even before the user visits the home
   // examples disclosure. AWAITED so the persistence rehydrate below can
@@ -1554,70 +1594,143 @@ function goHome() {
 // signed-in service gate and the local hero — open with the same question,
 // and both branches join at "Pack available in Discover".
 // ============================================================
-function homeChoiceHtml({ check }) {
+// The two journeys, equal-sized, under one question (the 2026-09 UX review,
+// docs/UX_SCREEN_GRAMMAR.md). Check opens its next step in place — recent
+// services, a search, the import / scan sources — so the service grid is no
+// longer a second, competing way to start. Build enters DEFINE.
+function homeChoiceHtml({ checkOpen }) {
   return `
-    <div class="home-choice" role="group" aria-label="What would you like to do?">
-      <p class="home-choice-q">What would you like to do?</p>
+    <div class="home-choice" role="group" aria-labelledby="home-title">
       <div class="home-choice-cards">
+        <button type="button" class="home-choice-card is-check${checkOpen ? ' is-open' : ''}" id="home-choice-check"
+                aria-expanded="${checkOpen ? 'true' : 'false'}" aria-controls="home-check">
+          <span class="home-choice-key" aria-hidden="true">◎</span>
+          <span class="home-choice-title">Check an existing service or pack</span>
+          <span class="home-choice-sub">Inspect its artefacts, assess evidence, and resolve gaps.</span>
+          <span class="home-choice-path">Discover → Diagnose → Remediate</span>
+        </button>
         <button type="button" class="home-choice-card is-build" id="home-choice-build">
           <span class="home-choice-key" aria-hidden="true">⬡</span>
           <span class="home-choice-title">Build a new pack</span>
-          <span class="home-choice-sub">for a service that has no pack yet — name it, choose its tier, pick the products it runs on or an archetype</span>
-          <span class="home-choice-path">Define · Compile · Verify</span>
-        </button>
-        <button type="button" class="home-choice-card is-check" id="home-choice-check">
-          <span class="home-choice-key" aria-hidden="true">◎</span>
-          <span class="home-choice-title">Check an existing service or pack</span>
-          <span class="home-choice-sub">${escapeHtml(check)}</span>
-          <span class="home-choice-path">Discover · Diagnose · Remediate</span>
+          <span class="home-choice-sub">Define a service and generate a pack you can review.</span>
+          <span class="home-choice-path">Define → Compile → Verify</span>
         </button>
       </div>
     </div>`;
 }
-function wireHomeChoice(view, { check }) {
-  view.querySelector('#home-choice-check')?.addEventListener('click', check);
-  view.querySelector('#home-choice-build')?.addEventListener('click', () => enterBuildMode('define'));
+
+// When each service was last opened here — the tiles' "last activity". The
+// catalogue carries no timestamps, so this is this browser's own record.
+const RECENT_SERVICES_KEY = 'studioRecentServices';
+function recentServices() {
+  try { return JSON.parse(localStorage.getItem(RECENT_SERVICES_KEY) || '{}') || {}; }
+  catch (_) { return {}; }
+}
+function recordRecentService(key) {
+  if (!key) return;
+  try {
+    const all = recentServices();
+    all[key] = new Date().toISOString();
+    localStorage.setItem(RECENT_SERVICES_KEY, JSON.stringify(all));
+  } catch (_) {}
 }
 
-function renderServiceGate() {
-  const view = $('#layer-view');
-  if (!view) return;
-  const services = serviceCatalogue();
-  const who = state.identity?.name || state.identity?.email || state.identity?.sub || '';
-  view.innerHTML = `
-    <section class="svc-gate">
-      <div class="svc-gate-eyebrow">OBSERVOGRAM · THE OBSERVABILITY COMPILER</div>
-      <h1 class="svc-gate-title">Welcome back${who ? `, ${escapeHtml(who.split(' ')[0])}` : ''}.</h1>
-      ${homeChoiceHtml({ check: 'select one of your services below, or import a pack — connect an MCP endpoint, upload a manifest or scan a repo' })}
-      <p class="svc-gate-sub" id="svc-gate-which">Which service are you working on?</p>
-      <div class="svc-gate-grid">
-        ${services.map(s => `
-          <button type="button" class="svc-gate-card" data-service="${escapeHtml(s.key)}">
-            <span class="svc-gate-name">${escapeHtml(s.label)}</span>
-            <span class="svc-gate-meta">${s.packCount} pack${s.packCount === 1 ? '' : 's'}${s.liveCount ? ` · ${s.liveCount} live draft${s.liveCount === 1 ? '' : 's'}` : ''}</span>
-          </button>`).join('')}
+// A tile carries what tells two services apart: environments, packs and
+// drafts, tier, when it was last opened, and the one issue worth knowing.
+function serviceTileHtml(s, openedAt) {
+  const packs = [
+    s.packCount ? `${s.packCount} pack${s.packCount === 1 ? '' : 's'}` : '',
+    s.liveCount ? `${s.liveCount} live draft${s.liveCount === 1 ? '' : 's'}` : '',
+  ].filter(Boolean).join(' · ') || 'no packs';
+  const envs = (s.environments || []).join(', ');
+  const tiers = (s.tiers || []).join(', ');
+  const issue = !s.packCount && s.liveCount ? 'Live draft only — no repository pack to compare with' : '';
+  return `
+    <button type="button" class="svc-gate-card" data-service="${escapeHtml(s.key)}"
+            data-search="${escapeHtml(`${s.label} ${envs} ${tiers}`.toLowerCase())}">
+      <span class="svc-gate-name">${escapeHtml(s.label)}</span>
+      <span class="svc-gate-meta">${escapeHtml([envs, packs, tiers].filter(Boolean).join(' · '))}</span>
+      <span class="svc-gate-activity">${openedAt ? `Opened ${escapeHtml(fmtRelative(openedAt))}` : 'Not opened here yet'}</span>
+      ${issue ? `<span class="svc-gate-issue">${escapeHtml(issue)}</span>` : ''}
+    </button>`;
+}
+
+// The check branch's next step: recent services first, a search, then the
+// sources a pack can come from (filled in by the caller).
+function homeCheckHtml(services, open) {
+  const opened = recentServices();
+  const ordered = [...services].sort((a, b) =>
+    (opened[b.key] || '').localeCompare(opened[a.key] || '') || a.label.localeCompare(b.label));
+  const anyRecent = services.some(s => opened[s.key]);
+  return `
+    <div class="home-check" id="home-check"${open ? '' : ' hidden'}>
+      ${services.length ? `
+      <div class="home-check-head">
+        <h2 class="home-check-title" id="svc-gate-which">${anyRecent ? 'Recent services' : 'Your services'}</h2>
+        <label class="home-check-search">
+          <span class="sr-text">Search services</span>
+          <input type="search" id="home-service-search" placeholder="Search by service, environment or tier" autocomplete="off" aria-controls="home-service-grid">
+        </label>
       </div>
-      <div class="svc-gate-actions">
-        <button type="button" class="svc-gate-new" id="svc-gate-new">+ start something new — connect an MCP endpoint, upload or scan a repo</button>
+      <div class="svc-gate-grid" id="home-service-grid">
+        ${ordered.map(s => serviceTileHtml(s, opened[s.key])).join('')}
       </div>
-    </section>
-  `;
+      <p class="home-check-none" id="home-service-none" role="status" hidden>No service matches that search.</p>` : `
+      <p class="home-check-empty">No services yet. Bring a pack in from one of the sources below.</p>`}
+      <h2 class="home-check-title home-check-sources-title">Import or scan another source</h2>
+      <div class="home-sources" id="home-sources"></div>
+    </div>`;
+}
+
+// Greet a person only by a name that is a name — "Welcome back, Admin" read
+// as a role label, not a greeting.
+function homeGreetingHtml() {
+  const who = personalName(state.identity);
+  return who ? `<p class="home-greeting">Welcome back, ${escapeHtml(who)}.</p>` : '';
+}
+
+// Whether Check was the last choice here: a returning user lands on their
+// services instead of re-opening the branch every visit.
+function homeCheckRemembered() {
+  try { return localStorage.getItem('studioHomeChoice') === 'check'; } catch (_) { return false; }
+}
+
+function wireHomeChoice(view) {
+  const checkBtn = view.querySelector('#home-choice-check');
+  const panel = view.querySelector('#home-check');
+  checkBtn?.addEventListener('click', () => {
+    const open = checkBtn.getAttribute('aria-expanded') !== 'true';
+    checkBtn.setAttribute('aria-expanded', String(open));
+    checkBtn.classList.toggle('is-open', open);
+    if (panel) panel.hidden = !open;
+    try { localStorage.setItem('studioHomeChoice', open ? 'check' : ''); } catch (_) {}
+    if (open) {
+      panel?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      (view.querySelector('#home-service-search') || view.querySelector('#home-mcp-url'))?.focus({ preventScroll: true });
+    }
+  });
+  view.querySelector('#home-choice-build')?.addEventListener('click', () => enterBuildMode('define'));
   view.querySelectorAll('.svc-gate-card').forEach(card => {
     card.addEventListener('click', () => enterServiceWorkspace(card.dataset.service));
   });
-  view.querySelector('#svc-gate-new')?.addEventListener('click', () => {
-    state.homeVariant = 'hero';
-    renderHomeView();
-  });
-  wireHomeChoice(view, {
-    // The check branch is the service picker right below; with no service yet it is the hero's imports.
-    check: () => {
-      const first = view.querySelector('.svc-gate-card');
-      if (first) { view.querySelector('#svc-gate-which')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); first.focus(); }
-      else { state.homeVariant = 'hero'; renderHomeView(); }
-    },
+  const search = view.querySelector('#home-service-search');
+  search?.addEventListener('input', () => {
+    const q = search.value.trim().toLowerCase();
+    let shown = 0;
+    view.querySelectorAll('.svc-gate-card').forEach(card => {
+      const hit = !q || card.dataset.search.includes(q);
+      card.hidden = !hit;
+      if (hit) shown++;
+    });
+    const none = view.querySelector('#home-service-none');
+    if (none) none.hidden = shown > 0;
   });
 }
+
+// The signed-in service gate and the local hero are one screen now: the
+// same question and the same two choices. The gate opens straight onto the
+// user's services; both keep the import sources one step down.
+function renderServiceGate() { renderHomeView(); }
 
 // Reflect the active service into the always-visible OBSERVA-bar chip.
 // Called wherever the selection can change (service select, analyze
@@ -1671,6 +1784,7 @@ function updateObservaServiceChip() {
 function enterServiceWorkspace(serviceKey) {
   if (!serviceKey) return;
   state.selectedService = serviceKey;
+  recordRecentService(serviceKey);
   // Catalog order is oldest→newest (workspace registry order, new
   // registrations appended) — the LAST match is the freshest. Prefer the
   // declared (non-aggregate) pack; an aggregate live draft is a usable
@@ -1696,6 +1810,7 @@ function enterAnalyzeMode(packId, env) {
   state.selectedEnv    = env || defaultEnvFor(packId);
   state.selectedService = serviceKeyForPack(state.catalog.find(p => p.id === packId)) || state.selectedService;
   state.activeLayer = 'L1';
+  recordRecentService(state.selectedService);
   state.activeCardKey = null;
   applyModeChrome();
   renderServiceSelect();
@@ -1747,10 +1862,15 @@ function applyModeChrome() {
   // Pack B picker stays visible whenever we're not on home — empty until
   // the user picks something. This is the unlock: no more rigid single
   // vs compare mode. Hide it on Compare for the same duplication reason.
+  // Comparison controls belong on the screens that compare (the UX
+  // review: keep them where they matter) — Diagnose, Remediate,
+  // Traceability and the Atlas; Discover and the single-pack tools work on
+  // the open pack alone.
   const packBCtrl = $('#ctrl-pack-b');
   const envBCtrl  = $('#ctrl-env-b');
-  if (packBCtrl) packBCtrl.hidden = isHome || onCompare;
-  if (envBCtrl)  envBCtrl.hidden  = isHome || onCompare || !state.packB;
+  const comparing = COMPARISON_VIEWS.has(state.view || 'layers');
+  if (packBCtrl) packBCtrl.hidden = isHome || onCompare || !comparing;
+  if (envBCtrl)  envBCtrl.hidden  = isHome || onCompare || !comparing || !state.packB;
   // Clear-B button only when B is loaded.
   const clearB = $('#pack-b-clear');
   if (clearB) clearB.hidden = !state.packB || onCompare;
@@ -1806,6 +1926,53 @@ function setupResetButton() {
     //    bypasses the disk cache for HTML.
     location.reload();
   };
+}
+
+// The working context bar's one Actions menu (index.html #hdr-actions).
+// Each item proxies to an original control that stays in the DOM, hidden,
+// so the upload / scan / draft / export flows keep their single wiring.
+function setupHeaderActionsMenu() {
+  const wrap = $('#hdr-actions');
+  const btn = $('#hdr-actions-btn');
+  const menu = $('#hdr-actions-menu');
+  if (!wrap || !btn || !menu) return;
+  const items = () => [...menu.querySelectorAll('.hdr-menu-item:not([disabled])')];
+  const close = (refocus) => {
+    if (menu.hidden) return;
+    menu.hidden = true;
+    btn.setAttribute('aria-expanded', 'false');
+    if (refocus) btn.focus();
+  };
+  const open = () => {
+    // Export needs a pack; say why instead of hiding the item.
+    for (const it of menu.querySelectorAll('[data-needs-pack]')) {
+      it.disabled = !focusedPackId();
+      it.title = it.disabled ? 'Open a pack first' : '';
+    }
+    menu.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    items()[0]?.focus();
+  };
+  btn.addEventListener('click', (e) => { e.stopPropagation(); if (menu.hidden) open(); else close(false); });
+  menu.addEventListener('click', (e) => {
+    const it = e.target.closest('.hdr-menu-item');
+    if (!it || it.disabled) return;
+    e.stopPropagation();
+    close(false);
+    const target = document.querySelector(it.dataset.proxy);
+    setTimeout(() => target?.click(), 0);
+  });
+  menu.addEventListener('keydown', (e) => {
+    const list = items();
+    const i = list.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown') { e.preventDefault(); list[(i + 1) % list.length]?.focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); list[(i - 1 + list.length) % list.length]?.focus(); }
+    else if (e.key === 'Home') { e.preventDefault(); list[0]?.focus(); }
+    else if (e.key === 'End') { e.preventDefault(); list[list.length - 1]?.focus(); }
+    else if (e.key === 'Escape') { e.preventDefault(); close(true); }
+    else if (e.key === 'Tab') close(false);
+  });
+  document.addEventListener('click', (e) => { if (!wrap.contains(e.target)) close(false); });
 }
 
 // Export button — download the focused pack as one ZIP: its canonical
@@ -2383,7 +2550,8 @@ function renderBuildView(view) {
   shell.className = `build-shell build-step-${b.step}${b.pending ? ' is-pending' : ''}${b.sheetOpen ? ' has-sheet' : ''}`;
   const exitBar = document.createElement('div');
   exitBar.className = 'build-exit';
-  exitBar.innerHTML = `<button type="button" class="build-exit-btn" title="Leave the BUILD journey">← ${state.selectedPackId ? 'back to the open pack' : 'back to Discover · Diagnose · Remediate'}</button>`;
+  // Where leaving goes, said plainly: the open pack, or home (where the journeys are chosen).
+  exitBar.innerHTML = `<button type="button" class="build-exit-btn" title="Leave the Build journey — your definition is kept">← ${state.selectedPackId ? 'Back to the open pack' : 'Back to home'}</button>`;
   exitBar.querySelector('button').addEventListener('click', exitBuildMode);
   const def = document.createElement('aside');
   def.className = 'build-def';
@@ -2616,19 +2784,26 @@ function renderHomeView() {
     catch (_) { return DEFAULT_MCP_URL; }
   })();
 
+  // One question, two journeys. The signed-in gate opens on the user's
+  // services; the check branch is otherwise remembered from last time.
+  const services = serviceCatalogue();
+  const checkOpen = (state.homeVariant === 'gate' && services.length > 0) || homeCheckRemembered();
   view.innerHTML = `
     <section class="home-hero">
-      <div class="home-hero-eyebrow">observogram · the observability compiler</div>
-      <h2 class="home-hero-title">Map your observability platform in seconds.</h2>
+      ${homeGreetingHtml()}
+      <h1 class="home-hero-title" id="home-title">What would you like to do?</h1>
       <p class="home-hero-lede">
-        Scan a service repo to capture what it <em>declares</em>, then draft
-        from a live OpenTelemetry MCP server to capture what the platform
-        <em>verifies</em> — Observogram diffs the two and shows you exactly where
-        they drift. Connect below to begin, or scan a repo from Discover.
+        Observogram compares what a service's repository <em>declares</em> with
+        what the live platform <em>verifies</em>, and helps you close the gap.
       </p>
 
-      ${homeChoiceHtml({ check: 'connect an MCP endpoint below, drop a YAML / JSON pack or scan a service repo' })}
-
+      ${homeChoiceHtml({ checkOpen })}
+      ${homeCheckHtml(services, checkOpen)}
+    </section>
+  `;
+  // The import sources live inside the check branch.
+  const sources = view.querySelector('#home-sources');
+  sources.innerHTML = `
       <div class="home-mcp-card">
         <label class="home-mcp-url-row">
           <span class="home-mcp-url-label">MCP endpoint</span>
@@ -2663,21 +2838,19 @@ function renderHomeView() {
       </div>
 
       <div class="home-alt">
-        <div class="home-alt-head"><span>or open a pack manually</span></div>
         <div class="home-alt-buttons">
           <button id="home-shortcut-upload" type="button" class="home-alt-btn">
             <span class="home-alt-key" aria-hidden="true">▤</span>
-            <span class="home-alt-label">Drop a YAML / JSON pack</span>
-            <span class="home-alt-sub">canonical v1.3 manifest</span>
+            <span class="home-alt-label">Upload a pack file</span>
+            <span class="home-alt-sub">a YAML or JSON manifest (spec v1.3) — or drop it anywhere on the page</span>
           </button>
           <button id="home-shortcut-crawl" type="button" class="home-alt-btn">
             <span class="home-alt-key" aria-hidden="true">↻</span>
-            <span class="home-alt-label">Scan a service repo</span>
-            <span class="home-alt-sub">walks Prom / OTel / Grafana / AM configs · or a GitHub URL</span>
+            <span class="home-alt-label">Scan a service repository</span>
+            <span class="home-alt-sub">reads its Prometheus, OpenTelemetry, Grafana and Alertmanager configuration — a folder or a GitHub URL</span>
           </button>
         </div>
       </div>
-    </section>
   `;
 
   $('#home-mcp-connect').onclick = () => doHomeMcpConnect();
@@ -2690,10 +2863,10 @@ function renderHomeView() {
     tog.setAttribute('aria-expanded', String(shown));
     if (shown) $('#home-mcp-auth')?.focus();
   };
-  $('#home-shortcut-upload').onclick = () => $('#upload-btn')?.click();
+  // The header (and its upload popover) is hidden on home: go straight to the file picker.
+  $('#home-shortcut-upload').onclick = () => $('#file-input')?.click();
   $('#home-shortcut-crawl').onclick  = () => $('#crawl-btn')?.click();
-  // The check branch is the connect form right here; the build branch enters DEFINE.
-  wireHomeChoice(view, { check: () => { const url = $('#home-mcp-url'); url?.scrollIntoView({ behavior: 'smooth', block: 'center' }); url?.focus(); } });
+  wireHomeChoice(view);
 }
 
 async function doHomeMcpConnect() {

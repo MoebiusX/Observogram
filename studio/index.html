@@ -47,22 +47,22 @@
       <select id="service-select" aria-label="Select service workspace"></select>
     </label>
     <label class="ctrl">
-      <span class="ctrl-key">PACK A</span>
+      <span class="ctrl-key" title="The pack you are working on (Pack A)">PACK</span>
       <select id="pack-select" aria-label="Select pack A"></select>
     </label>
     <label class="ctrl">
-      <span class="ctrl-key">ENV A</span>
+      <span class="ctrl-key">ENVIRONMENT</span>
       <select id="env-select" aria-label="Select environment A"></select>
     </label>
     <label class="ctrl ctrl-pack-b" id="ctrl-pack-b">
-      <span class="ctrl-key">PACK B <button id="pack-b-clear" class="ctrl-key-clear" type="button" hidden title="Remove Pack B">×</button></span>
+      <span class="ctrl-key" title="The pack this one is compared with (Pack B)">BASELINE <button id="pack-b-clear" class="ctrl-key-clear" type="button" hidden title="Stop comparing with this baseline" aria-label="Remove baseline">×</button></span>
       <select id="pack-b-select" aria-label="Select pack B"></select>
     </label>
     <label class="ctrl ctrl-pack-b" id="ctrl-env-b" hidden>
-      <span class="ctrl-key">ENV B</span>
+      <span class="ctrl-key">BASELINE ENV</span>
       <select id="env-b-select" aria-label="Select environment B"></select>
     </label>
-    <div class="upload-popover-wrap">
+    <div class="upload-popover-wrap hdr-src">
       <button id="upload-btn" class="ctrl-btn" type="button" title="Upload a canonical v1.3 pack (.yaml or .json) — or pick a quick-start case" aria-haspopup="true" aria-expanded="false">upload</button>
       <div id="upload-popover" class="upload-popover" role="menu" hidden>
         <button class="upload-popover-item" data-action="pick-file" type="button" role="menuitem">
@@ -97,18 +97,38 @@
       </div>
     </div>
     <input id="file-input" type="file" accept=".yaml,.yml,.json,application/json,text/yaml,application/x-yaml" hidden>
-    <button id="crawl-btn" class="ctrl-btn" type="button" title="Scan a service repo — drag a folder, pick files, or paste a GitHub URL">scan a repo</button>
+    <button id="crawl-btn" class="ctrl-btn hdr-src" type="button" title="Scan a service repo — drag a folder, pick files, or paste a GitHub URL">scan a repo</button>
     <input id="crawl-file-input" type="file" multiple webkitdirectory hidden>
-    <button id="draft-mcp-btn" class="ctrl-btn" type="button" title="Draft a pack from a live MCP server — interrogate it for backends, baselines, anomalies">new from live</button>
-    <button id="export-btn" class="ctrl-btn" type="button" title="Export this pack — the pack.yaml plus every compiled artefact (rules · dashboards · pipelines · routes) as a ZIP" hidden>export</button>
-    <button id="mcp-btn" class="ctrl-btn mcp-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Refresh production-live from an MCP server">
+    <button id="draft-mcp-btn" class="ctrl-btn hdr-src" type="button" title="Draft a pack from a live MCP server — interrogate it for backends, baselines, anomalies">new from live</button>
+    <button id="export-btn" class="ctrl-btn hdr-src" type="button" title="Export this pack — the pack.yaml plus every compiled artefact (rules · dashboards · pipelines · routes) as a ZIP" hidden>export</button>
+    <button id="mcp-btn" class="ctrl-btn mcp-btn hdr-src" type="button" aria-haspopup="true" aria-expanded="false" title="Refresh production-live from an MCP server">
       <span class="mcp-dot" aria-hidden="true"></span>
       <span class="mcp-btn-label">mcp</span>
       <span class="mcp-btn-age" id="mcp-btn-age"></span>
     </button>
+    <!-- The working context bar keeps only the context (service, pack,
+         environment; the baseline on comparison screens) and theme. The
+         infrequent actions sit in one menu; the originals above stay in the
+         DOM (hidden) so every existing handler keeps working — the menu
+         items proxy to them. Admin tools live under Advanced. -->
+    <div class="hdr-menu" id="hdr-actions">
+      <button id="hdr-actions-btn" class="ctrl-btn hdr-menu-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="hdr-actions-menu">Actions <span aria-hidden="true">▾</span></button>
+      <div class="hdr-menu-panel" id="hdr-actions-menu" role="menu" aria-label="Actions" hidden>
+        <div class="hdr-menu-group" role="presentation">Add a pack</div>
+        <button type="button" class="hdr-menu-item" role="menuitem" data-proxy="#file-input">Upload a pack file…<span class="hdr-menu-sub">YAML or JSON manifest, spec v1.3</span></button>
+        <button type="button" class="hdr-menu-item" role="menuitem" data-proxy="#crawl-btn">Scan a repository…<span class="hdr-menu-sub">a folder or a GitHub URL</span></button>
+        <button type="button" class="hdr-menu-item" role="menuitem" data-proxy="#draft-mcp-btn">Draft from a live MCP server…<span class="hdr-menu-sub">what the platform actually observes</span></button>
+        <button type="button" class="hdr-menu-item" role="menuitem" data-proxy='.upload-popover-item[data-action="build-library"]'>Build a new pack<span class="hdr-menu-sub">Define → Compile → Verify</span></button>
+        <div class="hdr-menu-group" role="presentation">This pack</div>
+        <button type="button" class="hdr-menu-item" role="menuitem" data-proxy="#export-btn" data-needs-pack>Export as ZIP<span class="hdr-menu-sub">pack.yaml and every compiled artefact — a download, nothing is deployed</span></button>
+        <div class="hdr-menu-group" role="presentation">Quick start with a real case</div>
+        <button type="button" class="hdr-menu-item" role="menuitem" data-proxy='.upload-popover-item[data-action="quick-krystaline"]'>Krystaline · live MCP draft</button>
+        <button type="button" class="hdr-menu-item" role="menuitem" data-proxy='.upload-popover-item[data-action="quick-krystalinex-repo"]'>KrystalineX · repository scan</button>
+      </div>
+    </div>
     <button id="theme-toggle" class="ctrl-btn theme-toggle" type="button" aria-label="Toggle theme"></button>
-    <button id="reset-btn" class="ctrl-btn ctrl-reset" type="button" title="Clear all uploaded packs + saved state and reload — like a fresh checkout, no persistence carried over">reset</button>
-    <a class="ctrl-link" href="/api/packs" target="_blank" rel="noopener" title="Pack catalog JSON">api</a>
+    <button id="reset-btn" class="ctrl-btn ctrl-reset hdr-src" type="button" title="Clear all uploaded packs + saved state and reload — like a fresh checkout, no persistence carried over">reset</button>
+    <a class="ctrl-link hdr-src" id="api-link" href="/api/packs" target="_blank" rel="noopener" title="Pack catalog JSON">api</a>
   </div>
 </header>
 

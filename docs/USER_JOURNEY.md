@@ -25,8 +25,8 @@ that answer.
 The primary chrome uses these questions directly:
 
 1. **Discover - What Do We Have?**
-2. **Diagnose - Can We Trust It?**
-3. **Remediate - Fix The Gaps**
+2. **Diagnose - How reliable is this pack?**
+3. **Remediate - Resolve gaps**
 
 Advanced views exist, but they are not the core journey. They support expert
 analysis: References, Conformance, Schema, OTLP Coverage, Traceability, Atlas.

@@ -152,7 +152,7 @@ The Discover view renders the observability Observogram across the layered model
 
 ![Observogram Discover view showing the layered observability inventory](docs/img/xray-discover.png)
 
-### 2. Diagnose - Can We Trust It?
+### 2. Diagnose - How reliable is this pack?
 
 Load the declared repo pack as **Pack A** and the live production pack as
 **Pack B**. Observogram computes the Diagnostic Grade:
@@ -210,7 +210,7 @@ rules, exporters, scrape evidence, dashboards, alerts, and runbooks.
 
 ![Observogram Diagnose view showing Diagnostic Grade and live drift buckets](docs/img/xray-diagnose-drift.png)
 
-### 3. Remediate - Fix The Gaps
+### 3. Remediate - Resolve gaps
 
 Observogram compiles the pack delta into native backend artifacts:
 

@@ -215,3 +215,91 @@ body { font-size: 15px; line-height: 1.5; }
   background: var(--ux-accent); border-color: var(--ux-accent); color: #fff;
 }
 .ux-segmented .ux-seg-count { margin-left: 6px; font-weight: 700; opacity: 0.85; }
+
+/* ---------- global chrome: one journey at a time ---------- */
+/* Home names no journey: the stepper and the journey tagline appear only
+   once the user has chosen Check or Build. */
+.observa-tagline-home { display: none; }
+body.chrome-observa[data-mode="home"] .observa-tabs { visibility: hidden; }
+body.chrome-observa[data-mode="home"] .observa-tagline-step,
+body.chrome-observa[data-mode="home"] .observa-tagline-dot { display: none; }
+body.chrome-observa[data-mode="home"] .observa-tagline-home { display: inline; }
+
+/* The working context bar: context stays, infrequent actions fold away. */
+body.chrome-observa .hdr .hdr-src { display: none !important; }
+.hdr-menu { position: relative; margin-left: auto; }
+.hdr-menu + .theme-toggle { margin-left: 0; }
+.hdr-menu-btn { min-height: 32px; }
+.hdr-menu-panel {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 120;
+  width: 320px; max-width: calc(100vw - 32px);
+  padding: 6px; border-radius: 10px;
+  background: var(--ux-bg); border: 1px solid var(--ux-line);
+  box-shadow: 0 18px 40px rgba(0,0,0,0.35);
+}
+.hdr-menu-group {
+  padding: 10px 10px 4px; font: 600 12px/1.2 var(--sans);
+  text-transform: uppercase; letter-spacing: 0.05em; color: var(--ux-ink-3);
+}
+.hdr-menu-item {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%;
+  padding: 8px 10px; min-height: 40px; border: 0; border-radius: 6px; cursor: pointer;
+  background: transparent; color: var(--ux-ink); text-align: left; font: 500 14px/1.3 var(--sans);
+}
+.hdr-menu-item:hover, .hdr-menu-item:focus-visible { background: var(--ux-bg-2); }
+.hdr-menu-item[disabled] { opacity: 0.55; cursor: not-allowed; }
+.hdr-menu-sub { font: 400 13px/1.35 var(--sans); color: var(--ux-ink-3); }
+
+/* ---------- home: one question, two equal choices ---------- */
+.home-hero { max-width: 880px; }
+.home-greeting { margin: 0 0 6px; font: 500 16px/1.4 var(--sans); color: var(--ux-ink-2); }
+.home-hero-title { font: 600 34px/1.15 var(--sans); letter-spacing: -0.01em; color: var(--ux-ink); max-width: none; }
+.home-hero-lede { font: 16px/1.55 var(--sans); color: var(--ux-ink-2); margin-bottom: 20px; }
+.home-choice-cards { align-items: stretch; }
+.home-choice-card { min-height: 150px; padding: 20px 22px; gap: 8px; color: var(--ux-ink); }
+.home-choice-title { font: 700 18px/1.3 var(--sans); color: var(--ux-ink); }
+.home-choice-sub { font: 400 15px/1.45 var(--sans); color: var(--ux-ink-2); }
+.home-choice-path { margin-top: auto; font: 600 13px/1.2 var(--sans); letter-spacing: 0.02em; text-transform: none; }
+.home-choice-card.is-open { border-color: var(--obs-cyan, var(--CMP)); box-shadow: inset 0 -3px 0 var(--obs-cyan, var(--CMP)); }
+
+.home-check { margin: 8px 0 40px; }
+.home-check[hidden] { display: none; }
+.home-check-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin: 18px 0 12px; }
+.home-check-title { margin: 0; font: 600 18px/1.3 var(--sans); color: var(--ux-ink); }
+.home-check-sources-title { margin: 32px 0 12px; }
+.home-check-search input {
+  width: min(320px, 70vw); min-height: 38px; padding: 7px 12px; border-radius: 8px;
+  border: 1px solid var(--ux-line); background: var(--ux-bg); color: var(--ux-ink); font: 15px/1.3 var(--sans);
+}
+.home-check-empty, .home-check-none { font-size: 15px; color: var(--ux-ink-2); }
+.svc-gate-card { display: flex; flex-direction: column; gap: 4px; color: var(--ux-ink); }
+.svc-gate-card[hidden] { display: none; }
+.svc-gate-name { font: 700 16px/1.3 var(--sans) !important; color: var(--ux-ink); }
+.svc-gate-meta { font: 400 14px/1.4 var(--sans); color: var(--ux-ink-2); }
+.svc-gate-activity { font: 400 13px/1.3 var(--sans); color: var(--ux-ink-3); }
+.svc-gate-issue { font: 500 13px/1.35 var(--sans); color: var(--ux-warn); }
+.home-alt { margin-top: 14px; }
+.home-alt-label { font: 600 15px/1.3 var(--sans); }
+.home-alt-sub { font: 400 13.5px/1.4 var(--sans); font-style: normal; }
+
+/* One row, whatever chips are showing: brand · org · service · journey · Advanced.
+   (A three-column grid wrapped Advanced onto a second row as soon as the
+   service chip appeared, doubling the sticky header's height.) */
+.observa-hdr-inner { display: flex; align-items: center; gap: 20px; }
+.observa-hdr-inner > .observa-brand,
+.observa-hdr-inner > .observa-service,
+.observa-hdr-inner > .observa-actions { flex: 0 0 auto; }
+.observa-hdr-inner > .observa-tabs { flex: 1 1 auto; min-width: 0; align-self: stretch; }
+.observa-hdr-inner > .observa-service { margin-left: 0; }
+.observa-tab-title, .observa-tab-tagline { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 1100px) { .observa-tab-tagline { display: none; } .observa-brand-text .observa-tagline { display: none; } }
+/* Inside a journey the tabs ARE the stepper — the brand's journey tagline
+   only repeated them and cost the tab titles their room. */
+body.chrome-observa:not([data-mode="home"]) .observa-brand-text .observa-tagline { display: none; }
+.observa-tab { grid-template-columns: 32px 1fr; gap: 10px; padding: 8px 14px; }
+.observa-tab-num { width: 30px; height: 30px; font-size: 14px; }
+.observa-tab-eyebrow { letter-spacing: 0.08em; }
+body.chrome-observa { --observa-chrome-h: 102px; }
+/* Build carries no utility toolbar into its steps: there is no pack to act
+   on yet, and the steps have their own actions. Theme lives in Advanced. */
+body.chrome-observa[data-mode="build"] .hdr { display: none !important; }

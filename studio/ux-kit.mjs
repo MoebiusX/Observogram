@@ -364,3 +364,15 @@ export function listSentence(items) {
   if (xs.length <= 1) return xs.join('');
   return `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
 }
+
+// ---------- who is here ----------
+
+// A greeting name, or '' when the identity only carries a role or an
+// address: "Welcome back, Admin" reads as a role label, not a greeting.
+const ROLE_WORDS = new Set(['admin', 'administrator', 'root', 'user', 'operator', 'owner', 'guest', 'default', 'anonymous', 'system']);
+export function personalName(identity) {
+  const n = String(identity?.name ?? '').trim();
+  if (!n || n.includes('@') || ROLE_WORDS.has(n.toLowerCase())) return '';
+  const first = n.split(/\s+/)[0];
+  return ROLE_WORDS.has(first.toLowerCase()) ? '' : first;
+}

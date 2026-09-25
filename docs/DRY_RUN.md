@@ -141,7 +141,7 @@ production-live · from production-live.pack.yaml
 
 ### 3. Diagnose
 
-Open **Diagnose - Can We Trust It?**
+Open **Diagnose - How reliable is this pack?**
 
 Expected current shape:
 
@@ -218,7 +218,7 @@ finding rather than hiding it.
 
 ### 5. Remediate
 
-Open **Remediate - Fix The Gaps**.
+Open **Remediate - Resolve gaps**.
 
 Confirm the plan separates:
 
