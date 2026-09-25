@@ -830,6 +830,21 @@ byte-level round trip.
   that differs from those hashes (edited by a pre-store build since the
   last import or export) is refused naming `packc store import --replace`,
   never overwritten: it holds the only copy of those edits.
+- **In place only into this store's workspace.** It proceeds only when
+  the marker names this store, or there is no marker and no other store's
+  database is in the workspace: every `*.db` directly in `<base>` and
+  `<base>/db` (`<base>/observogram.db`, the default path, among them) is
+  opened read-only without migrating, and one holding another `store_id`
+  refuses naming it, as does one that cannot be read. A corrupt marker
+  refuses naming it; with the server stopped, moving it aside and running
+  the export again takes the no-marker rule and writes a new marker.
+- **A directory export** writes only into a directory that does not exist
+  or is empty (lstat; a symlink is resolved, and what it names must be
+  absent or empty), outside the workspace and not holding it. Anything
+  else refuses, naming the two ways out: an empty or new directory, or,
+  for this store's own workspace, the in-place export with
+  `OBSERVOGRAM_WORKSPACE` set to it and the server stopped. No shape of a
+  non-empty directory is taken to be safe.
 
 **`packc store import --replace`** re-imports users, orgs and memberships
 from files edited during a downgrade. It is carried out by the server's next
@@ -856,7 +871,8 @@ boot, with the unit's env (§4 step 3).
   as the in-place export does. An empty flat directory or a zero-byte
   `deploys.jsonl` beside its `orgs/default/` twin is a leftover of today's
   rehydrate bug (every pre-store restart leaves an empty `<base>/packs`):
-  it is removed and reported. A non-empty twin refuses, naming the paths,
+  it is removed and reported (after the commit; one it cannot remove is a
+  warn line naming it, and the start goes on). A non-empty twin refuses, naming the paths,
   and that refusal is evaluated in step 3's no-write checks, before
   `migrateFlatWorkspace()` runs, so a refused replace moves nothing. This is
   the second, and last, offline way a `root` changes.

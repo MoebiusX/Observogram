@@ -891,23 +891,29 @@ What the export writes:
   `orgs.json` it would overwrite was edited since the store last imported
   or exported it (a second rollback after a pre-store build's changes):
   run `packc store import --replace` and start the server once so the
-  store takes the edits in, then export again. `packc store export <dir>` to another, empty directory only
-  reads the database (safe while the server runs) and never overwrites a
-  `users.json` / `orgs.json` there. A directory inside the workspace, or
-  one holding it, is refused naming the in-place export; the database's
-  own directory (`OBSERVOGRAM_DB` outside the workspace, as on k8s) and a
-  backup directory beside it are plain directory exports. Naming a
-  workspace with a `.store-imported` marker other than
-  `OBSERVOGRAM_WORKSPACE` is refused: if its marker names this store, set
-  `OBSERVOGRAM_WORKSPACE` to it to export in place; if it names another
-  store, the refusal names both and the workspace is left alone (point
-  `OBSERVOGRAM_DB` at that workspace's own store to work on it). A
-  directory holding the database and workspace data (`packs/`,
-  `deploys.jsonl`, `snapshots/`, `journeys/`, `runs/` or a non-empty
-  `orgs/`) is this store's workspace with its marker lost, and is refused
-  the same way, naming `OBSERVOGRAM_WORKSPACE`. An
-  in-place export refuses, changing nothing, when the workspace's marker
-  names another store.
+  store takes the edits in, then export again.
+- An in-place export also proceeds only into a workspace that is provably
+  this store's: its `.store-imported` marker names this store, or there is
+  no marker and no other store's database is in it (every `*.db` directly
+  in the workspace or its `db/`, `observogram.db` among them, is opened
+  read-only). A marker naming another store, or such a database holding
+  another store, is refused naming both stores and the command that
+  exports that workspace's own store; a `*.db` that cannot be read is
+  refused naming it (move it out, then export again). A corrupt marker is
+  refused naming it: with the server stopped, move it aside
+  (`mv <workspace>/.store-imported <workspace>/.store-imported.corrupt`),
+  then run the export again.
+- `packc store export <dir>` to any other directory only reads the
+  database (safe while the server runs) and writes only into a directory
+  that does not exist or is empty (a symlink is followed, and what it
+  names must be absent or empty). Anything else is refused, changing
+  nothing: choose an empty or new directory — or, if it is this store's
+  workspace, stop the server and run
+  `OBSERVOGRAM_WORKSPACE=<workspace> packc store export <workspace>` to
+  export in place. A directory inside the workspace, or one holding it,
+  is refused naming the in-place export. With `OBSERVOGRAM_DB` outside
+  the workspace (as on k8s), export to a new directory beside it, such as
+  `/data/db/export-$(date +%Y%m%d%H%M%S)`.
 
 **Re-upgrade** after a rollback: stop the pre-store build and start the
 store build again.

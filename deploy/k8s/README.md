@@ -232,8 +232,20 @@ default org's root is now orgs/default — point its CronJobs at …", the
 default org's data moved to `orgs/default/` for the old build: point that
 org's journey CronJob at `/workspace/orgs/default` (see Tenancy below).
 If the phase never reaches `Succeeded`, `kubectl logs` shows the refusal
-(something still holds the database, or an `orgs/default/` entry already
-exists).
+(something still holds the database, an `orgs/default/` entry already
+exists, or the workspace is not provably this store's: its marker, or a
+database in it, names another store).
+
+To read the files first without touching the workspace, a directory export
+from the running studio writes them to a new directory on the store claim.
+A directory export writes only into a directory that does not exist or is
+empty, so name a fresh one each time, never `/data/db` itself (it holds
+the database) or an earlier export:
+
+```bash
+kubectl -n $NS exec deploy/observabilitypack-studio -- \
+  node tools/cli.mjs store export /data/db/export-$(date +%Y%m%d%H%M%S)
+```
 
 **Forward again:** in any shell, read the store image back from the
 annotation step 0 wrote (not from the image the Deployment runs, which is
