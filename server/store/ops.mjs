@@ -392,6 +392,17 @@ export async function requestReplace({ dbPath = resolveDbPath(), base = baseWork
     const id = storeId(db);
     const marker = readMarker(base);   // corrupt → LegacyFileError naming it
     const importDone = getMeta(db, 'import_done');
+    if (importDone && !marker) {
+      // The store was imported, only the marker is gone: the next start's
+      // repair rewrites it — once the legacy files pass step 2 (d), and
+      // with no request pending (step 2 (c) refuses that).
+      const way = getMeta(db, 'replace_requested') !== null
+        ? `a replace is already pending, and the next start carries it out once ${markerPath(base)} is put back as it was (it names store ${id})`
+        : 'with the server stopped, move users.json/orgs.json aside if they changed since the import, start the server once '
+          + '(it records them absent and rewrites the marker), stop it, put them back, then run this again';
+      throw refuse(`${path} holds store ${id}, but ${markerPath(base)} is missing, and a replace is requested only for the store `
+        + `the marker names: ${way}. Nothing was requested`);
+    }
     if (!importDone || !marker || marker.storeId !== id) {
       const holds = importDone ? `store ${id}` : `store ${id}, never imported`;
       const names = !marker ? `${markerPath(base)} is missing` : `${markerPath(base)} names store ${marker.storeId}`;

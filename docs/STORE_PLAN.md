@@ -427,7 +427,10 @@ otherwise read an empty store:
      `OBSERVOGRAM_DB` at that store or at a copy of its backup; `packc store
      restore <backup>` with the server stopped; or, to accept the legacy
      files as they stand, move `.store-imported` aside, so the next boot
-     imports them and logs that it did.
+     imports them and logs that it did (a store that was imported already
+     imports nothing: the next boot compares the files with its record).
+     A replace request needs the marker; with it missing, the files are
+     moved aside for one boot, which rewrites it, then put back.
    - Ids match, but a hashed file differs from the last import or export:
      the files were edited outside the store, for instance during a
      downgrade. Refuse and name `packc store import --replace`.

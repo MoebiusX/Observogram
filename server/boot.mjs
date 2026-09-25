@@ -417,7 +417,11 @@ export function staleImportGuard(db, ctx) {
       `Nothing was ${legacyPresent ? 'imported' : 'imported or seeded'}. Ways out:\n` +
       '  - point OBSERVOGRAM_DB at that store, or at a copy of its backup;\n' +
       '  - with the server stopped, `packc store restore <backup>`;\n' +
-      (legacyPresent
+      (importDone
+        ? `  - or, to keep store ${id} for this workspace, move ${markerPath(ctx.base)} aside: store ${id} was imported ` +
+          'already, so the next start imports nothing — it compares the legacy files with what that store recorded, ' +
+          'starts when they match (and rewrites the marker), and otherwise refuses with the ways out for edited files.'
+        : legacyPresent
         ? `  - or, to accept the legacy files as they stand, move ${markerPath(ctx.base)} aside:\n` +
           '    the next start imports them and says so.'
         : `  - or, to start this workspace on ${ctx.dbPath} as it stands, move ${markerPath(ctx.base)} aside:\n` +
@@ -489,9 +493,12 @@ export function staleImportGuard(db, ctx) {
           `(it was SHA-256 ${importedOf(key)} at the import, it is ${current[key].sha256}).`
         : `${pathOf(key)} changed since store ${id} last imported it (it was SHA-256 ${recorded[key].sha256}, it is ${current[key].sha256}) — ` +
           'it was edited outside the store (a pre-store build during a rollback, or config management).'));
+    // The replace request needs the marker (requestReplace): with it
+    // missing, the way to the replace goes through the (e) repair first.
+    const noMarker = !ctx.memory && !marker;
     const ways = [
       ...cmp.changed.map((key) => `  - put ${pathOf(key)} back exactly as it was imported (SHA-256 ${asImported[key].sha256}; ` +
-        `the store's legacy_hashes and ${markerPath(ctx.base)} record it), or`),
+        `the store's legacy_hashes${noMarker ? '' : ` and ${markerPath(ctx.base)}`} record it), or`),
       ...stale.map((key) => `  - move ${pathOf(key)} aside: a file that disappears is recorded as absent and changes no user or org;`),
     ];
     throw new BootRefusal(
@@ -500,7 +507,12 @@ export function staleImportGuard(db, ctx) {
       'With the server stopped:\n' +
       `${ways.join('\n')}\n` +
       '    then make the change with `npm run users` / `npm run orgs`;\n' +
-      `  - or run ${REPLACE}: the next start re-imports the files as they stand.`,
+      (noMarker
+        ? `  - or, to re-import the files as they stand: ${REPLACE} needs ${markerPath(ctx.base)}, which is missing — ` +
+          `move ${stale.map(pathOf).join(' and ')} aside, start once (it records ${stale.length === 1 ? 'it' : 'them'} absent ` +
+          `and rewrites the marker), stop the server, put ${stale.length === 1 ? 'it' : 'them'} back, then run ${REPLACE}: ` +
+          'the next start re-imports the files as they stand.'
+        : `  - or run ${REPLACE}: the next start re-imports the files as they stand.`),
       { nothingMoved: true });
   }
   repairs.disappeared = cmp.disappeared.filter((key) => !recorded[key]?.absent);

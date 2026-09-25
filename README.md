@@ -949,7 +949,9 @@ belong together. Each refusal says `Nothing was …` and names its ways out:
   deployment's backup): point `OBSERVOGRAM_DB` at that store or a copy of
   its backup; `packc store restore <backup>` with the server stopped; or
   move `.store-imported` aside, which accepts the files as they stand (the
-  next start imports them, or with no files left starts a new store).
+  next start imports them, or with no files left starts a new store). On
+  a store that was imported already, the next start imports nothing: it
+  compares the files with that store's record, as below.
 - **The OIDC issuer changed:** set `OBSERVOGRAM_OIDC_ISSUER` back to a
   spelling of the recorded key, or `packc store rekey-issuer` (below).
 - **A replace requested for another store**, or with the marker missing:
@@ -958,7 +960,9 @@ belong together. Each refusal says `Nothing was …` and names its ways out:
 - **`users.json` / `orgs.json` edited after the import or the export:**
   put the file back exactly as it was (the refusal prints the SHA-256),
   move it aside and make the change with `npm run users` /
-  `npm run orgs`, or `packc store import --replace`.
+  `npm run orgs`, or `packc store import --replace`. The request needs
+  the marker: with it missing, move the files aside, start once (the
+  start rewrites the marker), stop, put them back, then request it.
 
 A marker or legacy file that disappeared is repaired and logged, not
 refused. `packc store restore` warns (above) when the marker names another

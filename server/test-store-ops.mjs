@@ -36,7 +36,7 @@ const { test } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
 const { spawnSync } = await import('node:child_process');
 const { createHmac } = await import('node:crypto');
-const { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } = await import('node:fs');
+const { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
 const { dirname, join } = await import('node:path');
 const { fileURLToPath } = await import('node:url');
@@ -537,6 +537,59 @@ test('Stale import: export in place, a pre-store build removes a user and change
   await read(base, (db) => assert.equal(actions(db).length, rows));
 });
 
+test('Stale import: with the marker missing (lost after an export, or moved aside as (a) says on an imported store) the refusals name a replace that works — aside, start once, back, request, start', async () => {
+  const refusedOp = (re) => (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && re.test(e.message);
+  const usersPath = (base) => join(base, 'users.json');
+  const downgradeAdds = (base, login) => {
+    const file = readJson(usersPath(base));
+    file.users[login] = { name: login, createdAt: '2026-05-01T00:00:00.000Z', password: hashPassword(`${login}-passw0rd`) };
+    legacy.writeUsersFile(file, usersPath(base));
+  };
+  // The route the refusals name: aside, one start (the repair rewrites the marker), back, request, start.
+  const replaceWithoutMarker = async (base, login) => {
+    const e = await refused(base);
+    assert.ok(e.message.includes(`${usersPath(base)} changed since store`), e.message);
+    assert.ok(e.message.includes("the store's legacy_hashes record it"), 'no claim that the missing marker records it');
+    assert.ok(!e.message.includes('  - or run `packc store import --replace`: the next start'), e.message);
+    assert.ok(e.message.includes(`\`packc store import --replace\` needs ${legacy.markerPath(base)}, which is missing — move ${usersPath(base)} aside, start once`), e.message);
+    await assert.rejects(requestIt(base), refusedOp(/is missing, and a replace is requested only for the store the marker names: with the server stopped, move users\.json\/orgs\.json aside .* start the server once/));
+    renameSync(usersPath(base), `${usersPath(base)}.aside`);
+    await start(base);
+    assert.ok(legacy.readMarker(base), 'the start rewrote the marker');
+    renameSync(`${usersPath(base)}.aside`, usersPath(base));
+    await requestIt(base);
+    const { logs } = await start(base);
+    assert.ok(logs.some((l) => l.startsWith(`[store] replaced from ${usersPath(base)}`)), logs.join('\n'));
+    await read(base, (db) => assert.equal(getUserByLogin(db, login)?.disabled, false));
+  };
+
+  // 1. The marker lost after an export; a pre-store build added dave.
+  const base = tempDir();
+  usersJson(base, ['alice']);
+  await start(base);
+  await exportIt(base);
+  pre.boot(base);
+  downgradeAdds(base, 'dave');
+  rmSync(legacy.markerPath(base));
+  await replaceWithoutMarker(base, 'dave');
+
+  // 2. Another imported store's database at this workspace: (a) does not
+  // promise an import, and its "move the marker aside" leads to (d)'s route.
+  const other = tempDir();
+  usersJson(other, ['alice']);
+  await start(other);
+  const ws = tempDir();
+  usersJson(ws, ['alice', 'bob']);
+  await start(ws);
+  copyFileSync(dbOf(other), dbOf(ws));
+  const idOther = legacy.readMarker(other).storeId;
+  const a = await refused(ws);
+  assert.ok(a.message.includes(`move ${legacy.markerPath(ws)} aside: store ${idOther} was imported already, so the next start imports nothing`), a.message);
+  assert.ok(!a.message.includes('the next start imports them'), a.message);
+  rmSync(legacy.markerPath(ws));
+  await replaceWithoutMarker(ws, 'bob');
+});
+
 test('Stale import: a second in-place export over files a pre-store build edited refuses naming import --replace and changes nothing; after the replace it exports the edits', async () => {
   const base = tempDir();
   usersJson(base, ['alice', 'bob']);
@@ -863,7 +916,7 @@ test('import --replace: the request refuses a store that is in use, never import
     + '  - point OBSERVOGRAM_DB at the store the request was made for, or at a copy of its backup;\n'
     + '  - with the server stopped, `packc store restore <backup>`;\n'
     + `  - or put ${legacy.markerPath(b)} back as it was (it names store ${idB}), then start again.`);
-  await assert.rejects(requestIt(b), refusedOp(/is missing: an empty or foreign store/));
+  await assert.rejects(requestIt(b), refusedOp(/is missing, and a replace is requested only for the store the marker names: a replace is already pending, and the next start carries it out once .* is put back as it was/));
   writeFileSync(legacy.markerPath(b), markerB);
   const { logs } = await start(b);
   assert.ok(logs.some((l) => l.startsWith('[store] replaced from')), logs.join('\n'));
