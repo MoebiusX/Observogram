@@ -846,6 +846,30 @@ test('Stale import: the default org already moved to orgs/default by an in-place
   await read(base, (db) => assert.equal(getOrg(db, 'default').root, 'orgs/default'));
 });
 
+test('Round trip: export → a pre-store restart (its empty <base>/packs) → a store start with no replace removes the empty leftover and keeps anything with data', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice', 'bob']);
+  pack(base, 'p1');
+  await start(base);
+  await change(base, (db) => admin.createOrgFromAdmin(db, 'cli', { id: 'acme', name: 'Acme', admin: 'bob', base }));
+  assert.deepEqual((await exportIt(base)).move, ['packs']);
+
+  pre.boot(base);
+  assert.equal(existsSync(join(base, 'packs')), true);
+  mkdirSync(join(base, 'snapshots'));
+  writeFileSync(join(base, 'snapshots', 'kept.json'), '{}');
+
+  const { logs, warns } = await start(base);
+  assert.ok(logs.includes(`[store] removed empty leftovers of a pre-store build: ${join(base, 'packs')}`), logs.join('\n'));
+  assert.equal(existsSync(join(base, 'packs')), false, 'the empty leftover is removed');
+  assert.equal(existsSync(join(base, 'snapshots', 'kept.json')), true, 'data is never removed');
+  assert.ok(warns.some((w) => w.startsWith(`[store] left behind: ${join(base, 'snapshots')}`)), warns.join('\n'));
+  assert.deepEqual(pre.packIds(base, 'default'), ['p1']);
+
+  // A second start has nothing to remove: no line.
+  assert.ok(!(await start(base)).logs.some((l) => /removed empty leftovers/.test(l)));
+});
+
 test('Stale import: `orgs create acme` on a pre-store build with no restart after it — the replace moves the flat workspace itself (migrateFlatWorkspace): the entries under orgs/default, the root, the journey file rewritten; the start after passes', async () => {
   const base = tempDir();
   usersJson(base, ['alice', 'bob']);

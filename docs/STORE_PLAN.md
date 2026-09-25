@@ -860,6 +860,12 @@ boot, with the unit's env (§4 step 3).
   and that refusal is evaluated in step 3's no-write checks, before
   `migrateFlatWorkspace()` runs, so a refused replace moves nothing. This is
   the second, and last, offline way a `root` changes.
+- Without a replace, the same leftover comes back after every round trip
+  (export, a pre-store restart, a store start). So every file-store boot
+  with no org at the base removes an empty directory among the flat
+  entries and logs one `removed empty leftovers of a pre-store build`
+  line. An entry that holds anything stays and is warned about as left
+  behind. `:memory:` removes nothing.
 - In the same `tx()` it bumps every changed or disabled user's epoch
   (which also kills cookies minted during the downgrade window), rewrites
   `legacy_hashes`, clears `replace_requested` and writes one audit row.
