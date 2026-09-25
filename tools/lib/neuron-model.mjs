@@ -425,3 +425,109 @@ export function defaultFocus(model) {
     return 0;
   })[0];
 }
+
+// ---------- the latest check, as a decision ----------
+//
+// The Neuron page leads with ONE sentence about the journey in focus (the
+// 2026-09 UX review): when its latest check ran, which of the outcomes a
+// person must tell apart it had — not run · unable to observe (the vantage
+// was lost, nothing was looked at) · check failed (the gate breached) ·
+// notification failed (the check ran, nobody was warned) — whether a
+// declared schedule has stopped producing runs, and whether the history is
+// long enough for a trend. Pure; `now` is injected so the tests pin the
+// clock. The record's own words stay the keys ('never-run' · 'pass' ·
+// 'gate-failed' · 'vantage-lost'); the surface owns the plain wording.
+
+// Fewer runs than this is a reading, not a trend: the charts wait.
+export const TREND_MIN_RUNS = 3;
+// A scheduled journey whose newest run is older than this many cadences
+// (plus a grace for a slow run) has stopped running on schedule.
+export const OVERDUE_CADENCES = 2;
+const OVERDUE_GRACE_MS = 5 * 60e3;
+export const DELIVERY_STATES = Object.freeze(['sent', 'skipped', 'failed', 'not-configured', 'unknown']);
+
+// The delivery of the newest record: 'sent' · 'skipped' (the notify policy
+// had nothing to report) · 'failed' (nobody was warned) · 'not-configured'
+// (no notify: block — the record says null, or an older record without the
+// key on a journey that declares none) · 'unknown' (a record written before
+// delivery on a journey that notifies, or an unrecognised status). null
+// without a run.
+export function deliveryState(detail) {
+  const last = detail?.latest;
+  if (!last) return null;
+  const n = last.notify;
+  if (isRecord(n)) return ['sent', 'skipped', 'failed'].includes(n.status) ? n.status : 'unknown';
+  if (n === null) return 'not-configured';
+  return isRecord(detail?.notify) ? 'unknown' : 'not-configured';
+}
+
+// How old the newest run is and whether a declared, regular schedule has
+// stopped producing runs. `overdue` is null without a regular cadence (no
+// schedule:, or an irregular cron): unknown, never "on time".
+export function scheduleLag(detail, { now = Date.now() } = {}) {
+  const t = Date.parse(detail?.latest?.startedAt || '');
+  const ageMs = Number.isFinite(t) ? Math.max(0, now - t) : null;
+  const cadenceMs = num(detail?.schedule?.cadenceMs);
+  return {
+    ageMs,
+    cadenceMs,
+    scheduled: isRecord(detail?.schedule),
+    overdue: ageMs !== null && cadenceMs ? ageMs > cadenceMs * OVERDUE_CADENCES + OVERDUE_GRACE_MS : null,
+  };
+}
+
+// Enough history for a trend: TREND_MIN_RUNS runs in the window (`ready`),
+// and as many that could observe (`observedReady`) — a vantage-lost run is
+// a gap in the alignment line, not a point.
+export function trendReadiness(detail) {
+  const runs = num(detail?.runs) ?? 0;
+  const observed = (Array.isArray(detail?.alignment) ? detail.alignment : []).filter((p) => p && p.v !== null).length;
+  return { minRuns: TREND_MIN_RUNS, runs, observed, ready: runs >= TREND_MIN_RUNS, observedReady: observed >= TREND_MIN_RUNS };
+}
+
+// The fleet reads as ready once its longest history is (the fleet charts
+// draw one line per journey).
+export function fleetTrendReadiness(model) {
+  const all = Object.values(model?.perJourney || {}).map(trendReadiness);
+  const runs = Math.max(0, ...all.map((r) => r.runs));
+  const observed = Math.max(0, ...all.map((r) => r.observed));
+  return { minRuns: TREND_MIN_RUNS, runs, observed, ready: runs >= TREND_MIN_RUNS, observedReady: observed >= TREND_MIN_RUNS };
+}
+
+// Everything the decision about one journey needs, as data.
+export function latestCheck(detail, { now = Date.now() } = {}) {
+  if (!detail) return null;
+  const last = detail.latest;
+  return {
+    name: detail.name ?? null,
+    outcome: last ? last.outcome : 'never-run',
+    startedAt: last?.startedAt ?? null,
+    delivery: deliveryState(detail),
+    breaches: last ? last.breaches.length : 0,
+    error: last?.error ?? null,
+    loadError: detail.loadError ?? null,
+    ...scheduleLag(detail, { now }),
+    trend: trendReadiness(detail),
+  };
+}
+
+// The journeys that need a person, most urgent first: a definition that
+// does not load (it can never run), a failed check, a lost vantage, an
+// undelivered notification, a schedule that stopped, then never run. Each
+// journey appears once, under its most urgent reason; `reasons` keeps the
+// rest. Passing, on-time journeys are left out.
+export const ATTENTION_REASONS = Object.freeze(['load-error', 'gate-failed', 'vantage-lost', 'notify-failed', 'overdue', 'never-run']);
+export function attentionList(model, { now = Date.now() } = {}) {
+  const out = [];
+  for (const [name, d] of Object.entries(model?.perJourney || {})) {
+    const c = latestCheck(d, { now });
+    const reasons = ATTENTION_REASONS.filter((r) => (
+      r === 'load-error' ? !!c.loadError
+        : r === 'notify-failed' ? c.delivery === 'failed'
+          : r === 'overdue' ? c.overdue === true
+            : c.outcome === r));
+    if (reasons.length) out.push({ name, reason: reasons[0], reasons });
+  }
+  const rank = (r) => ATTENTION_REASONS.indexOf(r);
+  return out.sort((a, b) => (rank(a.reason) - rank(b.reason)) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}

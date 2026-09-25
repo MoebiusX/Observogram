@@ -1,1 +1,61 @@
 /* studio/ux-neuron.css — Neuron: screen-specific rules on top of the shared grammar in studio/ux.css. */
+
+/* ---------- head: a one-line lede, the long explanation on demand ---------- */
+.neuron-view .nrn-lede { margin: 2px 0 0; font-size: 15px; color: var(--ux-ink-2); }
+.neuron-view .nrn-about { margin: 10px 0 18px; max-width: 860px; }
+.neuron-view .nrn-about p { margin: 0 0 10px; line-height: 1.6; }
+.neuron-view .nrn-about code { font-size: 13px; }
+.neuron-view .nrn-guide-title { margin: 14px 0 6px; font-weight: 600; color: var(--ux-ink); }
+.neuron-view .nrn-guide {
+  display: grid; grid-template-columns: max-content 1fr; gap: 8px 14px;
+  margin: 0 0 14px; align-items: baseline;
+}
+.neuron-view .nrn-guide dt { margin: 0; }
+.neuron-view .nrn-guide dd { margin: 0; font-size: 14px; color: var(--ux-ink-2); }
+.neuron-view .nrn-guide-remedy { display: block; color: var(--ux-ink-3); }
+
+/* ---------- outcome and delivery chips ----------
+   Outcome chips reuse ux.css's assessment marks (✓ ✕ ! –); delivery answers a
+   different question (was anyone warned?), so it carries its own mark. */
+.neuron-view .nrn-outcome-chip { cursor: help; }
+.neuron-view .nrn-delivery-chip::before { content: "✉"; font-weight: 400; }
+.neuron-view .nrn-delivery-chip.ux-chip-muted { border-style: dashed; }
+.neuron-view .ux-decision .ux-term { font-weight: inherit; }
+
+/* ---------- the latest-check record ---------- */
+.neuron-view .nrn-latest {
+  margin: 0 0 22px; padding: 14px 18px;
+  border: 1px solid var(--ux-line); border-radius: 10px; background: var(--ux-bg);
+}
+.neuron-view .nrn-latest .nrn-section-title { margin: 0 0 10px; font-size: 16px; }
+.neuron-view .nrn-record { margin: 0; display: grid; gap: 0; }
+.neuron-view .nrn-rec-row {
+  display: grid; grid-template-columns: minmax(130px, 180px) 1fr; gap: 4px 16px;
+  padding: 8px 0; border-top: 1px solid var(--ux-line);
+}
+.neuron-view .nrn-rec-row:first-child { border-top: 0; padding-top: 0; }
+.neuron-view .nrn-rec-row dt { font-size: 14px; font-weight: 600; color: var(--ux-ink-3); }
+.neuron-view .nrn-rec-row dd { margin: 0; font-size: 15px; line-height: 1.5; color: var(--ux-ink); min-width: 0; overflow-wrap: anywhere; }
+.neuron-view .nrn-rec-row dd code { font-size: 13px; }
+.neuron-view .nrn-rec-row dd .ux-chip { margin-right: 6px; vertical-align: 1px; }
+.neuron-view .nrn-rec-abs { color: var(--ux-ink-3); font-size: 14px; }
+.neuron-view .nrn-rec-meaning { color: var(--ux-ink-2); }
+.neuron-view .nrn-rec-warn { color: var(--ux-warn); }
+.neuron-view .nrn-rec-list { margin: 4px 0 6px; padding-left: 18px; }
+.neuron-view .nrn-rec-list li { margin: 2px 0; }
+@media (max-width: 640px) {
+  .neuron-view .nrn-rec-row { grid-template-columns: 1fr; }
+}
+
+/* ---------- sections below the decision ---------- */
+.neuron-view .nrn-fleet,
+.neuron-view .nrn-focus-section { margin-top: 8px; }
+.neuron-view .nrn-fleet .ux-empty,
+.neuron-view .nrn-focus .ux-empty { max-width: 860px; }
+.neuron-view .nrn-panel .ux-empty { margin: 4px 0; padding: 12px 14px; }
+.neuron-view .nrn-panel .ux-empty-title { font-size: 15px; }
+.neuron-view .nrn-toolbar .nrn-ctl { color: var(--ux-ink-2); font-size: 14px; }
+.neuron-view #nrn-evidence { scroll-margin-top: calc(var(--observa-chrome-h, 96px) + 16px); }
+.neuron-view .nrn-details[data-nrn-evidence] { scroll-margin-top: calc(var(--observa-chrome-h, 96px) + 16px); }
+.neuron-view #nrn-evidence:focus { outline: none; }
+.neuron-view #nrn-evidence:focus-visible { outline: 2px solid var(--ux-accent); outline-offset: 2px; }

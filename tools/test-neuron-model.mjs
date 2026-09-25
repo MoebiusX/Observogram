@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {
   OUTCOMES, LADDER_KEYS, BLAST_FIELDS, sortRunsOldestFirst, metricPoints, ladderSeries, stackRowSeries,
   blastRadiusNodes, exposureSeries, buildJourneyDetail, buildNeuronModel, defaultFocus,
+  TREND_MIN_RUNS, deliveryState, scheduleLag, trendReadiness, fleetTrendReadiness, latestCheck, attentionList,
 } from './lib/neuron-model.mjs';
 
 const T0 = Date.parse('2026-09-20T10:00:00.000Z');
@@ -235,4 +236,74 @@ test('inventory coverage: per-journey series from the records, fleet sums from t
 
 test('OUTCOMES is the record vocabulary', () => {
   assert.deepEqual([...OUTCOMES], ['pass', 'gate-failed', 'vantage-lost']);
+});
+
+test('deliveryState: sent / skipped / failed from the record; null → not configured; absent → unknown only where notify is declared', () => {
+  const d = (runs, journey = { name: 'j' }) => buildJourneyDetail(journey, runs);
+  assert.equal(deliveryState(d([])), null, 'no run, no delivery');
+  assert.equal(deliveryState(d([run(0)])), 'sent');
+  assert.equal(deliveryState(d([run(0, { notify: { status: 'skipped', reason: 'no transition' } })])), 'skipped');
+  assert.equal(deliveryState(d([run(0, { notify: { status: 'failed', httpStatus: 500 } })])), 'failed');
+  assert.equal(deliveryState(d([run(0, { notify: { status: 'weird' } })])), 'unknown');
+  assert.equal(deliveryState(d([run(0, { notify: null })])), 'not-configured');
+  const noKey = run(0); delete noKey.notify;
+  assert.equal(deliveryState(d([noKey])), 'not-configured', 'an older record on a journey that declares no notify: block');
+  assert.equal(deliveryState(d([noKey], { name: 'j', notify: { urlEnv: 'U' } })), 'unknown', 'written before delivery on a journey that notifies');
+});
+
+test('scheduleLag: overdue past two cadences plus grace; unknown without a regular cadence', () => {
+  const now = Date.parse(at(0)) + 40 * 60e3;                 // the newest run is 40 min old
+  const d = (schedule) => buildJourneyDetail({ name: 'j', schedule }, [run(0)]);
+  assert.deepEqual(scheduleLag(d({ cron: '*/15 * * * *', cadenceMs: 15 * 60e3 }), { now }), { ageMs: 40 * 60e3, cadenceMs: 15 * 60e3, scheduled: true, overdue: true });
+  assert.equal(scheduleLag(d({ cron: '*/30 * * * *', cadenceMs: 30 * 60e3 }), { now }).overdue, false);
+  assert.equal(scheduleLag(d({ cron: '0 9 * * 1-5', cadenceMs: null, cadenceNote: 'irregular' }), { now }).overdue, null, 'irregular cron: unknown, never on time');
+  assert.deepEqual(scheduleLag(d(null), { now }), { ageMs: 40 * 60e3, cadenceMs: null, scheduled: false, overdue: null });
+  assert.equal(scheduleLag(buildJourneyDetail({ name: 'j', schedule: { cadenceMs: 1 } }, []), { now }).ageMs, null);
+});
+
+test('trendReadiness: TREND_MIN_RUNS runs, and as many that could observe; the fleet reads its longest history', () => {
+  assert.equal(TREND_MIN_RUNS, 3);
+  const one = buildJourneyDetail({ name: 'a' }, [lost(0)]);
+  assert.deepEqual(trendReadiness(one), { minRuns: 3, runs: 1, observed: 0, ready: false, observedReady: false });
+  const mixed = buildJourneyDetail({ name: 'b' }, [run(0), lost(1), run(2)]);
+  assert.deepEqual(trendReadiness(mixed), { minRuns: 3, runs: 3, observed: 2, ready: true, observedReady: false });
+  const m = buildNeuronModel({ journeys: [entry('a', [lost(0)]), entry('b', [run(0), run(1), run(2)])], runsByName: { a: [lost(0)], b: [run(0), run(1), run(2)] } });
+  assert.deepEqual(fleetTrendReadiness(m), { minRuns: 3, runs: 3, observed: 3, ready: true, observedReady: true });
+  assert.deepEqual(fleetTrendReadiness(buildNeuronModel({})), { minRuns: 3, runs: 0, observed: 0, ready: false, observedReady: false });
+});
+
+test('latestCheck and attentionList: the four outcomes kept apart, most urgent first', () => {
+  const now = Date.parse(at(0)) + 4 * 24 * 3600e3;          // four days after the runs
+  const lostCheck = latestCheck(buildJourneyDetail({ name: 'l' }, [lost(0)]), { now });
+  assert.equal(lostCheck.outcome, 'vantage-lost');
+  assert.equal(lostCheck.error, 'ECONNREFUSED');
+  assert.equal(lostCheck.ageMs, 4 * 24 * 3600e3);
+  assert.equal(lostCheck.trend.ready, false);
+  assert.equal(latestCheck(buildJourneyDetail({ name: 'n' }, []), { now }).outcome, 'never-run');
+  assert.equal(latestCheck(null), null);
+
+  const failed = [run(0, { outcome: 'gate-failed', gate: { thresholds: {}, breaches: [{ criterion: 'minAlignmentPct', detail: 'x' }] } })];
+  const passNotify = [run(0, { notify: { status: 'failed', error: 'ECONNRESET' } })];
+  const onTime = [run(0)];
+  const stale = [run(0)];
+  const journeys = [
+    entry('pass-ok', onTime),
+    entry('stale', stale, { schedule: { cron: '*/15 * * * *', cadenceMs: 15 * 60e3 } }),
+    entry('never', []),
+    entry('notify', passNotify),
+    entry('lost', [lost(0)]),
+    entry('failed', failed),
+    entry('broken', [], { loadError: 'bad yaml' }),
+  ];
+  const m = buildNeuronModel({ journeys, runsByName: { 'pass-ok': onTime, stale, notify: passNotify, lost: [lost(0)], failed } });
+  const failedCheck = latestCheck(m.perJourney.failed, { now });
+  assert.equal(failedCheck.outcome, 'gate-failed');
+  assert.equal(failedCheck.breaches, 1);
+  assert.equal(latestCheck(m.perJourney.notify, { now }).delivery, 'failed');
+  const list = attentionList(m, { now });
+  assert.deepEqual(list.map(a => [a.name, a.reason]), [
+    ['broken', 'load-error'], ['failed', 'gate-failed'], ['lost', 'vantage-lost'], ['notify', 'notify-failed'], ['stale', 'overdue'], ['never', 'never-run'],
+  ]);
+  assert.deepEqual(list.find(a => a.name === 'broken').reasons, ['load-error', 'never-run']);
+  assert.ok(!list.some(a => a.name === 'pass-ok'), 'a passing, unscheduled journey needs nobody');
 });

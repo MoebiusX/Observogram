@@ -646,8 +646,11 @@ export function layerArtefactCount(layerId) {
 // ============================================================
 
 export function renderTabs() {
-  // Keep the OBSERVA chrome's active tab in sync on every re-render.
-  paintObservaActiveTab();
+  // Keep the OBSERVA chrome in sync on every re-render — the active tab and
+  // the per-view chrome (the baseline picker shows only where packs are
+  // compared). Views that switch state.view through the host seam
+  // (appHost.renderTabs) get the whole chrome, not just the tab highlight.
+  applyModeChrome();
   const tabs = $('#layer-tabs');
   if (!tabs) return;
   tabs.innerHTML = '';
