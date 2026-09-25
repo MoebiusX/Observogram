@@ -56,6 +56,7 @@ const { backupStore, restoreStore } = await import('./store/backup.mjs');
 const admin = await import('./identity-admin.mjs');
 const { hashPassword, resolveSession, verifyPassword } = await import('./auth.mjs');
 const boot = await import('./boot.mjs');
+const { applyReplace } = await import('./store/import.mjs');
 const pre = await import('./fixtures/pre-store-build.mjs');
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -982,6 +983,40 @@ test('Stale import: the replace refuses to leave no enabled owner (check D) — 
   await read(base, (db) => {
     assert.ok(verifyPassword('bob-new-passw0rd', getUserByLogin(db, 'bob').password));
     assert.equal(getUserByLogin(db, 'alice').disabled, false);
+  });
+});
+
+// Check D refuses on plan1; the transaction re-asserts the rule for a plan2
+// that diverged from it (the files changed between the two reads, §12.3).
+test('Stale import: applyReplace re-asserts the owner rule inside its transaction — a plan disabling the last owner rolls back, changing nothing', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice']);
+  await start(base);
+  await change(base, (db) => admin.addLocalUser(db, 'cli', { login: 'bob', password: 'bob-passw0rd', role: 'operator' }));
+  await exportIt(base);
+  await requestIt(base);
+  await change(base, (db) => {
+    const id = meta.storeId(db);
+    const before = { rows: actions(db).length, users: userRows(db) };
+    const alice = getUserByLogin(db, 'alice');
+    assert.equal(alice.isOwner, true);
+    const plan = {
+      journeys: [], leftovers: [], rootChange: false, bump: [alice.id],
+      orgs: { create: [], rename: [], remove: [] },
+      users: { create: [], update: [[alice.id, { disabled: true }]] },
+      memberships: { add: [], remove: [], role: [] },
+      ownerMode: { mode: 'local' }, ownersBefore: 1,
+      meta: { replace_requested: null },
+      report: {
+        storeId: id, users: { created: [], updated: [], disabled: ['alice'], enabled: [] },
+        orgs: { created: [], renamed: [], removed: [] }, memberships: { added: [], removed: [], changed: [] },
+        sessionsEnded: ['alice'], rootChanged: false, identityMode: 'local',
+      },
+    };
+    assert.throws(() => applyReplace(db, plan, { now: new Date().toISOString() }),
+      { message: `observogram store: the replace would leave store ${id} with no enabled owner — rolled back` });
+    assert.deepEqual({ rows: actions(db).length, users: userRows(db) }, before);
+    assert.equal(meta.getMeta(db, 'replace_requested'), id, 'the request stays pending');
   });
 });
 
