@@ -31,7 +31,7 @@ import { CliRefusal, noteShellInit, openStoreForCli } from '../server/store/cli.
 import {
   AdminRefusal, addLocalUser, checkAddLocalUser, disableUser, enableUser, grantOwnerByLogin, setLocalPassword,
 } from '../server/identity-admin.mjs';
-import { ensureDefaultOrg, CLI } from '../server/store/identity.mjs';
+import { ensureDefaultOrg, isControlChar, CLI } from '../server/store/identity.mjs';
 import { getMeta } from '../server/store/meta.mjs';
 import { getUserByLogin, listUsersWithMemberships } from '../server/store/users.mjs';
 
@@ -86,6 +86,10 @@ function usage() {
   process.exitCode = 2;
 }
 
+// One row per user: a control character in a stored value (a --name typed
+// here, a row from an older store) prints escaped, never as a tab or line.
+const printable = (v) => Array.from(String(v), (ch) => (isControlChar(ch) ? `\\x${ch.charCodeAt(0).toString(16).padStart(2, '0')}` : ch)).join('');
+
 const shellIssuerRaw = () => brandEnv('OIDC_ISSUER') || null;
 
 async function main() {
@@ -95,7 +99,8 @@ async function main() {
   if (cmd === 'list') {
     for (const u of listUsersWithMemberships(db)) {
       const orgs = u.memberships.map((m) => `${m.orgId}:${m.role}`).join(',');
-      console.log([u.login, u.kind, u.name || '', u.email || '', u.isOwner ? 'owner' : '-', u.disabled ? 'disabled' : 'enabled', orgs].join('\t'));
+      const fields = [u.login, u.kind, u.name || '', u.email || '', u.isOwner ? 'owner' : '-', u.disabled ? 'disabled' : 'enabled', orgs];
+      console.log(fields.map(printable).join('\t'));
     }
     return;
   }

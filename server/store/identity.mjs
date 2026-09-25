@@ -129,17 +129,24 @@ export function bootstrapMatches(spec, { login, email, emailVerified }, issuerKe
 // ID-token claims → values the users repository accepts (textOk is the one
 // test of "storable"), so a profile sync never throws on an IdP's odd
 // values. The sub is the IdP's identifier, compared byte for byte: never
-// trimmed, and an unusable one refuses the sign-in.
+// trimmed, and an unusable one (a C0/C1 control character included)
+// refuses the sign-in. Control characters are stripped from name and email,
+// so an IdP-supplied profile cannot forge lines in `npm run users -- list`.
+export const isControlChar = (ch) => {
+  const n = ch.charCodeAt(0);
+  return n <= 0x1f || (n >= 0x7f && n <= 0x9f);
+};
+const stripControlChars = (s) => Array.from(s).filter((ch) => !isControlChar(ch)).join('');
 export function sanitiseClaims(claims, envIssuer) {
   const c = claims && typeof claims === 'object' ? claims : {};
-  if (!textOk(c.sub, { max: SUB_MAX })) {
+  if (!textOk(c.sub, { max: SUB_MAX }) || Array.from(c.sub).some(isControlChar)) {
     const err = new Error('sign-in failed: the ID token\'s sub is unusable');
     err.code = 'ERR_OBSERVOGRAM_UNUSABLE_SUB';
     throw err;
   }
-  let name = typeof c.name === 'string' ? c.name.trim().slice(0, 200) : null;
+  let name = typeof c.name === 'string' ? stripControlChars(c.name).trim().slice(0, 200) : null;
   if (!name) name = null;
-  let email = typeof c.email === 'string' ? c.email.trim() : null;
+  let email = typeof c.email === 'string' ? stripControlChars(c.email).trim() : null;
   if (!email || email.length > 320 || email.split('@').length !== 2) email = null;
   const iss = textOk(c.iss, { max: ISSUER_MAX }) ? c.iss : envIssuer;
   return { sub: c.sub, iss, email, email_verified: c.email_verified === true, name };

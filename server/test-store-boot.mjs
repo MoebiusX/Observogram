@@ -737,7 +737,11 @@ test('CLI: the refusal table', async () => {
   assert.ok(c.status === 1 && /OBSERVOGRAM_DB is :memory:/.test(c.stderr), c.stderr);
 
   const ws = workspace();
-  assert.equal(cli(USER_ADMIN, ['add', 'alice', '--password-stdin'], ws, { input: 'alice-passw0rd\n' }).status, 0);
+  assert.equal(cli(USER_ADMIN, ['add', 'alice', '--name', 'Al\nroot\tlocal\u0085', '--password-stdin'], ws, { input: 'alice-passw0rd\n' }).status, 0);
+  // sec-4: a control character in a stored value prints escaped: one line, seven fields.
+  c = cli(USER_ADMIN, ['list'], ws);
+  assert.equal(c.status, 0, c.stderr);
+  assert.deepEqual(c.stdout.trimEnd().split('\n').filter((l) => !l.startsWith('store: ')).map((l) => l.split('\t')), [['alice', 'local', 'Al\\x0aroot\\x09local\\x85', '', 'owner', 'enabled', 'default:admin']]);
   c = cli(USER_ADMIN, ['add', 'carol', '--role', 'member', '--password-stdin'], ws, { input: 'carol-passw0rd\n' });
   assert.ok(c.status === 1 && /'member' is now 'operator'/.test(c.stderr), c.stderr);
   c = cli(USER_ADMIN, ['remove', 'alice'], ws);

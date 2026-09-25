@@ -1725,7 +1725,7 @@ test('canonIssuer: the well-known suffix stripped with and without a query after
   assert.equal(identity.preStoreSub({ kind: 'local', login: 'alice', sub: null }), 'alice');
 });
 
-test('sanitiseClaims: name \'\' and \'  \' → null, a 250-character name sliced, email \'\' → null, a sub of \'\' refused, a 2001-character iss replaced by the configured issuer', () => {
+test('sanitiseClaims: name \'\' and \'  \' → null, a 250-character name sliced, email \'\' → null, a sub of \'\' or with a control character refused, control characters stripped from name and email, a 2001-character iss replaced by the configured issuer', () => {
   const env = 'https://idp.example/';
   const base = { sub: ' sub 1 ', iss: 'https://idp.example', email: ' A@x.io ', email_verified: true, name: ' Alice ' };
   assert.deepEqual(identity.sanitiseClaims(base, env), { sub: ' sub 1 ', iss: 'https://idp.example', email: 'A@x.io', email_verified: true, name: 'Alice' });
@@ -1737,7 +1737,11 @@ test('sanitiseClaims: name \'\' and \'  \' → null, a 250-character name sliced
   assert.equal(identity.sanitiseClaims({ ...base, email_verified: 'true' }, env).email_verified, false);
   assert.equal(identity.sanitiseClaims({ ...base, iss: 'i'.repeat(2001) }, env).iss, env);
   assert.equal(identity.sanitiseClaims({ ...base, iss: undefined }, env).iss, env);
-  for (const sub of ['', '  ', 42, undefined, 's'.repeat(2001)]) {
+  // sec-4: control characters never reach the store (a forged `users list` row).
+  const forged = identity.sanitiseClaims({ ...base, name: 'Eve\nhttps://idp/#root\tkind\u0085', email: 'e\tve@x.io\r' }, env);
+  assert.equal(forged.name, 'Evehttps://idp/#rootkind');
+  assert.equal(forged.email, 'eve@x.io');
+  for (const sub of ['', '  ', 42, undefined, 's'.repeat(2001), 'u1\nroot', 'u1\t', '\u009bu1', 'u\u007f1']) {
     assert.throws(() => identity.sanitiseClaims({ ...base, sub }, env), (e) => e.code === 'ERR_OBSERVOGRAM_UNUSABLE_SUB' && /sub is unusable/.test(e.message), JSON.stringify(sub));
   }
 });
