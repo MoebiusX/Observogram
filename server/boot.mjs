@@ -207,11 +207,20 @@ export function keepsDefaultAtRoot(db) {
   return listOrgs(db).some((o) => o.root === '.');
 }
 
+// Check E's facts, on every boot: a store keeping the default org at '.'
+// beside an orgs.json, and data in orgs/default that no live org reads —
+// what a pre-store build's flat migration leaves, before the import or
+// after a rollback to one.
+function strandedDefault(db, ctx, orgsFileExists) {
+  return keepsDefaultAtRoot(db) && orgsFileExists && hasData(join(ctx.base, 'orgs', 'default'))
+    && !listOrgs(db).some((o) => o.root === 'orgs/default')
+    ? { storeId: storeId(db), base: ctx.base } : null;
+}
+
 // Step 3's facts: the legacy files, the decision and plan1.
 export function legacyChecksInput(db, ctx, legacy, decision, plan1) {
   const armed = isIdentityArmed(db);
   const usersFile = legacy.users.exists;
-  const liveOrgs = listOrgs(db);
   return {
     step: 'import', host: ctx.host, loopback: ctx.loopback, token: ctx.token, insecure: ctx.insecure, dbPath: ctx.dbPath,
     auth: !ctx.authOff && (ctx.oidc || usersFile || armed || decision.kind === 'seed'),
@@ -219,9 +228,7 @@ export function legacyChecksInput(db, ctx, legacy, decision, plan1) {
       rec.seededDefault && rec.mustChange && !(decision.kind === 'rescue' && name === 'admin')),
     orgIds: [...plan1.liveOrgsAfter],
     identity: !ctx.authOff && (ctx.oidc || usersFile || armed),
-    strandedDefault: keepsDefaultAtRoot(db) && legacy.orgs.exists && hasData(join(ctx.base, 'orgs', 'default'))
-      && !liveOrgs.some((o) => o.root === 'orgs/default')
-      ? { storeId: storeId(db), base: ctx.base } : null,
+    strandedDefault: strandedDefault(db, ctx, legacy.orgs.exists),
   };
 }
 
@@ -234,7 +241,7 @@ export function storeChecksInput(db, ctx, decision) {
     stillSeeded: defaultCredentialActive(db, ctx, decision),
     orgIds: listOrgs(db).map((o) => o.id),
     identity: !ctx.authOff && (ctx.oidc || armed),
-    strandedDefault: null,
+    strandedDefault: strandedDefault(db, ctx, existsSync(orgsFilePath(ctx.base))),
   };
 }
 
@@ -282,12 +289,14 @@ export function assertBootChecks(input) {
         '  or keep one org — remove the others with npm run orgs -- remove <id>.',
       { nothingMoved });
   }
-  // E — a CLI-initialised store at '.', and a pre-store build already moved its data.
+  // E — a store at '.', and a pre-store build moved its data (before the
+  // import, or on a rollback after it).
   if (input.strandedDefault) {
     const { storeId: id, base } = input.strandedDefault;
     const moved = join(base, 'orgs', 'default');
+    const why = input.step === 'import' ? ' (a CLI initialised it before this first start)' : '';
     throw new BootRefusal(
-      `refusing to start: store ${id} keeps the default org at ${base} (a CLI initialised it before this first start), ` +
+      `refusing to start: store ${id} keeps the default org at ${base}${why}, ` +
       `but ${moved} holds data no org reads — a pre-store build moved the default org's entries there. ` +
       `Nothing was moved or imported. With the server stopped, move the entries of ${moved} back into ${base} ` +
       '(or move that directory aside if it is not the default org\'s data), then start again.',

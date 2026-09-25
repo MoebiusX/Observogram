@@ -298,8 +298,11 @@ server opens it at every start.
   build during a rollback, config management). The refusal prints the
   imported SHA-256 and names the ways out: put the file back exactly as it
   was imported, or move it aside and make the change with `npm run users` /
-  `npm run orgs`. Export for a rollback (`packc store export`) arrives with
-  the next store PR; until it lands, `develop` is held from promotion.
+  `npm run orgs`. When the default org lives at the workspace root beside
+  an `orgs.json`, a pre-store build moves its data into `orgs/default/`;
+  every later start refuses until those entries are moved back. Export for
+  a rollback (`packc store export`) arrives with the next store PR; until
+  it lands, `develop` is held from promotion.
 - **Tenancy is always on.** Every `/api` request runs in an org and the
   response echoes it in `X-Observogram-Org`. A flat workspace is the
   default org, at the workspace root; an org created with `npm run orgs --

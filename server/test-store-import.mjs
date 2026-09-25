@@ -1098,7 +1098,7 @@ test('bootStore on a CLI-initialised store, then an orgs.json { acme } and flat 
   }
 });
 
-test('bootStore: the same store whose default-org data a pre-store build already moved into orgs/default refuses (check E) naming both paths, writes and moves nothing; after the entries are moved back the next boot imports', async () => {
+test('bootStore: the same store whose default-org data a pre-store build already moved into orgs/default refuses (check E) naming both paths, writes and moves nothing; after the entries are moved back the next boot imports; a rollback that moves them again refuses every later boot the same way', async () => {
   const base = workspace();
   const db0 = await openStore({ path: dbOf(base) });
   admin.addLocalUser(db0, 'cli', { login: 'alice', password: 'correct horse' });
@@ -1123,6 +1123,18 @@ test('bootStore: the same store whose default-org data a pre-store build already
     assert.deepEqual(rowsOf(r.db).orgs, [['default', 'Default', '.'], ['acme', 'acme', 'orgs/acme']]);
     assert.deepEqual(r.report.orgs.conflicts, [{ id: 'default', reason: 'kept the existing org' }]);
     assert.ok(existsSync(join(base, 'packs', 'p.yaml')));
+    // A rollback to a pre-store build moves the live default org's data
+    // again (orgs.json is unchanged, so no hash check fires): every later
+    // boot refuses with the same move-back text, never boots it empty.
+    renameSync(join(base, 'packs'), join(moved, 'packs'));
+    const MSG_E_LATER = `refusing to start: store ${id} keeps the default org at ${base}, `
+      + MSG_E.slice(MSG_E.indexOf('but '));
+    await assert.rejects(bootIn(base), (e) => refusal(MSG_E_LATER)(e) && e.nothingMoved === true);
+    assert.ok(existsSync(join(moved, 'packs', 'p.yaml')), 'nothing moved');
+    renameSync(join(moved, 'packs'), join(base, 'packs'));
+    const again = await bootIn(base);
+    assert.equal(again.report, null);
+    assert.ok(!again.warns.some((w) => /left behind/.test(w)), again.warns.join('\n'));
   } finally {
     closeBase(base);
   }
