@@ -21,6 +21,13 @@ it names the shape, the seams, the boot order, the slices, the gates and
 the risks. The detail below exists because every item was a real failure
 mode in the current code.*
 
+*Build status (2026-09-25): slice 1 (the foundation) is PR #109. Slice 2
+is built in two PRs: 2a (PR #111: identity on the store — the boot order,
+the import, revocable sessions, tenancy always on) and 2b (the offline
+operations of §3 and §4: `packc store export`, `import --replace`,
+`rekey-issuer`, `purge-org`, and `restore`'s marker warning). Slice 2 is
+complete once 2a and 2b merge; slice 3 (roles enforced) is next.*
+
 ## 0 · Status quo — what exists and what is missing
 
 | Concern | Today | Where | Gap |

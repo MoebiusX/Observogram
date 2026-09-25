@@ -132,6 +132,103 @@ says so. If the phase never reaches `Succeeded`, `kubectl logs` shows the
 refusal (something still holds the database, or the file is not an
 Observogram store).
 
+### Rolling the image back, and forward again
+
+Never roll the studio back to a pre-store image (one built before the
+store) with a bare `kubectl rollout undo`: the old build reads
+`users.json` / `orgs.json`, not the store, so passwords changed since the
+upgrade revert and removed users come back. Export in place first, with
+the studio at 0, from a one-off pod of the **store** image (the old one
+has no `store export`) that mounts both subPaths of the `store` claim at
+the studio's two paths:
+
+```bash
+NS=observability
+STORE_IMAGE=observogram:0.4.0            # the store build the studio runs now
+OLD_IMAGE=<registry>/observogram:<pre-store tag>
+
+# 1. A live backup, then stop the studio and wait for its pod to be gone.
+kubectl -n $NS exec deploy/observabilitypack-studio -- \
+  node tools/cli.mjs store backup /data/db/before-rollback-$(date +%Y%m%d).db
+kubectl -n $NS scale deployment/observabilitypack-studio --replicas=0
+kubectl -n $NS wait --for=delete pod -l app.kubernetes.io/name=observabilitypack-studio,app.kubernetes.io/component=studio --timeout=180s
+
+# 2. Export in place (<dir> = the workspace) from a one-off pod
+#    ($STORE_IMAGE expands: the heredoc is unquoted).
+kubectl -n $NS apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: observogram-store-export
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch
+  containers:
+    - name: export
+      image: $STORE_IMAGE
+      workingDir: /app
+      command: ["node", "tools/cli.mjs", "store", "export", "/data/workspace"]
+      env:
+        - { name: OBSERVOGRAM_DB, value: /data/db/observogram.db }
+        - { name: OBSERVOGRAM_WORKSPACE, value: /data/workspace }
+      volumeMounts:
+        - { name: store, mountPath: /data/db, subPath: db }
+        - { name: store, mountPath: /data/workspace, subPath: workspace }
+  volumes:
+    - name: store
+      persistentVolumeClaim: { claimName: observabilitypack-studio-store }
+EOF
+kubectl -n $NS wait --for=jsonpath='{.status.phase}'=Succeeded pod/observogram-store-export --timeout=300s
+kubectl -n $NS logs observogram-store-export      # export: in place in /data/workspace …, users.json: …, note: …
+kubectl -n $NS delete pod observogram-store-export
+
+# 3. Change the image only (keep the store volume and the env), then start.
+kubectl -n $NS set image deployment/observabilitypack-studio studio=$OLD_IMAGE
+kubectl -n $NS scale deployment/observabilitypack-studio --replicas=1
+```
+
+With the journeys overlay below, the studio's workspace is the
+`observabilitypack-studio-workspace` claim at `/workspace`: mount that
+claim there instead of the `workspace` subPath, and set
+`OBSERVOGRAM_WORKSPACE=/workspace` and the export directory to
+`/workspace`. Change the image, not the manifests: an older base kept the
+workspace in the container, where every restart lost it. The export's log lists the
+users it wrote, the viewers and operators who regain full write on the old
+build (it enforces no roles), and the cookie note: users revoked in the
+store stay signed in there until their cookies expire, and rotating
+`OBSERVOGRAM_SESSION_SECRET` signs everyone out. When it prints "the
+default org's root is now orgs/default — point its CronJobs at …", the
+default org's data moved to `orgs/default/` for the old build: point that
+org's journey CronJob at `/workspace/orgs/default` (see Tenancy below).
+If the phase never reaches `Succeeded`, `kubectl logs` shows the refusal
+(something still holds the database, or an `orgs/default/` entry already
+exists).
+
+**Forward again:** set the image back to `$STORE_IMAGE`. If nothing was
+changed on the old build, the studio starts. If users or orgs were, the
+pod log shows `refusing to start: … changed since store … last imported
+it`. Scale to 0, run the one-off pod above with the command `["node",
+"tools/cli.mjs", "store", "import", "--replace"]` (its log: `replace
+requested: the next server start re-imports …`), and scale to 1: that
+start re-imports the files with the studio's own environment and logs a
+`[store] replaced from …` report.
+
+**The IdP moved.** A studio whose `OBSERVOGRAM_OIDC_ISSUER` names another
+issuer than the store recorded refuses to start. Scale to 0 and run the
+one-off pod with `["node", "tools/cli.mjs", "store", "rekey-issuer",
+"--to", "<new issuer URL>"]` (the same IdP at a new URL: the users keep
+their rows, roles and owner flag, and sign in again) or with `["node",
+"tools/cli.mjs", "store", "rekey-issuer", "--clear"]` (a different IdP:
+the old OIDC users are disabled; set `OBSERVOGRAM_BOOTSTRAP_ADMIN` in the
+Deployment to name the new owner). Update the issuer in the Deployment and
+scale to 1. `store purge-org <id>` (the files of an org removed with
+`tools/org-admin.mjs remove`) runs the same way.
+
 ### Storage class
 
 `kubectl apply -k deploy/k8s` now needs a **default StorageClass**, or a

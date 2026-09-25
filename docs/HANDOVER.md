@@ -28,22 +28,30 @@ the Node 22.22 pipe truncation in `packc journey run --all --json` that failed
 0 errors, 181 warnings (a baseline of `preserve-caught-error`-style warnings; slice 2a
 removed five with the file readers it deleted; do not add to it). CI on a PR: `validate`
 (includes the vendored-spec check) and `backend-live` on the
-latest 22, `node-floor` (`npm test` on exactly 22.16.0). `refresh-live-pack` runs only on
+latest 22, `node-floor` (`npm test` on exactly 22.16.0), `store-prestore` (from slice 2b:
+the Export gate against a `v0.4.0` worktree). `refresh-live-pack` runs only on
 demand or when the fetcher changes.
 
-**The store (backlog 0) — slice 2a in review; `develop` held from promotion until 2b.**
+**The store (backlog 0) — slice 2 complete once 2a and 2b merge; slice 3 is next.**
 Slice 1 (the store foundation: `server/store/*`, `packc store backup` / `restore`, the k8s
-store volume) is PR #109. Slice 2a (branch `codex/store-identity`, stacked on it) moves
-identity onto the store: `start()` runs `bootStore()` (`server/boot.mjs`: the boot order, the
-one-time import of `users.json` / `orgs.json`, the seed and the fail-closed checks), sessions
-carry a per-user epoch, OIDC users are recorded under an issuer key, tenancy is always on,
-and `npm run users` / `npm run orgs` are entry points over `server/identity-admin.mjs`.
-Slice 2b (the offline operations: `packc store export`, `import --replace`, `rekey-issuer`,
-`purge-org`) follows; `export` is the plan's rollback path, so `main` is not promoted from
-`develop` until 2b merges. Every 2a refusal names a way out that exists in 2a (the boot's
-step-2 texts: put the file back or move it aside; set the issuer back); 2b's commits add
-`import --replace` and `rekey-issuer` to those texts together with the assertions in
-`server/test-store-boot.mjs` that pin them.
+store volume) is PR #109. Slice 2a (PR #111, branch `codex/store-identity`, stacked on it)
+moves identity onto the store: `start()` runs `bootStore()` (`server/boot.mjs`: the boot
+order, the one-time import of `users.json` / `orgs.json`, the seed and the fail-closed
+checks), sessions carry a per-user epoch, OIDC users are recorded under an issuer key,
+tenancy is always on, and `npm run users` / `npm run orgs` are entry points over
+`server/identity-admin.mjs`. Slice 2b (branch `codex/store-offline-ops`, stacked on 2a)
+adds the offline operations in `server/store/ops.mjs`: `packc store export` (the rollback:
+to a directory, or in place with the default org's move), `import --replace` (the request;
+the replace itself is boot step 3 in `server/store/import.mjs`), `rekey-issuer --to` /
+`--clear`, `purge-org`, and `restore`'s warning when the marker names another store. The
+boot's step-2 refusals now name `import --replace` (edited files) and both `rekey-issuer`
+commands (a changed issuer); `server/test-store-boot.mjs` and `server/test-store-import.mjs`
+pin those texts. The Export gate runs in `npm test` through
+`server/fixtures/pre-store-build.mjs`, and against the real `v0.4.0` build in the CI job
+`store-prestore` (`tools/test-store-prestore-live.mjs`). README "Upgrade And Roll Back" and
+`deploy/k8s/README.md` state the upgrade and the clean rollback (export in place first,
+with the server stopped). `develop` is promoted to `main` only once 2b has merged. Next is
+slice 3 (roles enforced, the identity API, the live pack per org — STORE_PLAN §7).
 
 ### otel-observability-pack (the spec) — `develop` at the merge of PR #8
 
@@ -149,9 +157,9 @@ file. Design it against `docs/VALUE_BACKLOG.md` items 10 and 12 and
 he ratifies plans for this stream (item 12 says so). *Planned 2026-09-24:*
 [STORE_PLAN.md](STORE_PLAN.md) — schema, import, roles, slices and gates; the seven
 decisions are ratified; its §9b lists the refinements made since, which merging it confirms.
-*Status:* slice 1 (the foundation) is PR #109; slice 2a (identity on the store) is in review,
-and `develop` is held from promotion until slice 2b (export, `import --replace`,
-`rekey-issuer`, `purge-org`) merges — see §1.
+*Status:* slice 1 (the foundation) is PR #109; slice 2 is complete once 2a (identity on the
+store, PR #111) and 2b (export, `import --replace`, `rekey-issuer`, `purge-org`) merge; slice 3
+(roles enforced) is next — see §1.
 
 **A. Decide: "the draft becomes the pack".** The root cause of every remaining Build gap is
 that the draft is a set of inputs re-instantiated from the seed on each change, with
@@ -242,8 +250,8 @@ read-only by design; the SLI rolodex shows the bare library id until a rename.
   again. `packs/index.json` (pack registrations), services and environments are still files
   or not records at all until the later slices of `docs/STORE_PLAN.md`; artefacts
   (`packs/*.pack.yaml`, snapshots, journeys, runs, `deploys.jsonl`) stay files by design.
-  Until 2b merges there is no clean rollback (`packc store export`), which is why `develop`
-  is held from promotion.
+  The rollback to a pre-store build is `packc store export` in place, with the server
+  stopped, and the way back after one is `packc store import --replace` (slice 2b).
 - **The Build state is inputs + overrides** (see backlog A). Until that changes, every new
   editable thing needs its own special case in the engine and the state.
 - **Distribution SLIs** get no burn rules (null legs) and no direction handling beyond the
