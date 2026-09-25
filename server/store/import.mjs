@@ -177,6 +177,10 @@ export function planImport(db, legacy, ctx, migration) {
   const existingDefault = getMeta(db, 'default_org');
   let defaultOrg;
   let joinRole = ctx.joinRoleEnv !== undefined ? ctx.joinRoleEnv : null;
+  // :memory: never moves the flat workspace: when a file store would move
+  // it, the default org reads it in place at '.' (orgs/default would be
+  // an empty root, and the flat data unread).
+  const defaultRootDir = ctx.memory && report.migration.moved.length > 0 ? '.' : 'orgs/default';
 
   if (legacy.orgs.exists) {
     // ---- orgs.json (plan item 2) ----
@@ -211,7 +215,7 @@ export function planImport(db, legacy, ctx, migration) {
       else if (org.name !== undefined && org.name !== null) {
         report.orgs.droppedFields.push({ id, field: 'name', reason: `${whyText(org.name, NAME_MAX)} — the id is its name` });
       }
-      plannedOrgs.push({ id, name, root: `orgs/${id}` });
+      plannedOrgs.push({ id, name, root: id === 'default' ? defaultRootDir : `orgs/${id}` });
       remaining.push(id);
       for (const [key, value] of org.members) {
         const login = memberLogin(id, key);
@@ -225,7 +229,7 @@ export function planImport(db, legacy, ctx, migration) {
     if (plannedOrgs.length === 0 && kept.size === 0 && !getOrg(db, 'default')) {
       // Zero real orgs (A-5): tenancy was armed, so the default org lives
       // where a pre-store build keeps it.
-      plannedOrgs.push({ id: 'default', name: 'Default', root: 'orgs/default' });
+      plannedOrgs.push({ id: 'default', name: 'Default', root: defaultRootDir });
       remaining.push('default');
     }
     defaultOrg = remaining.includes('default') ? 'default' : remaining[0] ?? null;
@@ -369,7 +373,7 @@ export function formatReport(r) {
   }
   if (r.migration.moved.length) {
     out.push(r.dbPath === ':memory:'
-      ? `[store]   flat workspace not moved (OBSERVOGRAM_DB=:memory: writes nothing to the workspace; a file store moves it to orgs/default/): ${r.migration.moved.join(', ')}`
+      ? `[store]   flat workspace not moved (OBSERVOGRAM_DB=:memory: writes nothing to the workspace; a file store moves it to orgs/default/): ${r.migration.moved.join(', ')} — the default org reads it in place at .${r.migration.wroteDefault ? '' : ' (orgs.json\'s default entry too: its root is . under :memory:)'}`
       : `[store]   flat workspace moved to orgs/default/: ${r.migration.moved.join(', ')}`);
   }
   if (r.unreadDefaultDir) out.push(`[store]   left behind: ${unreadDefaultText(r.unreadDefaultDir)}`);

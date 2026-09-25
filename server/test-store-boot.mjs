@@ -944,6 +944,58 @@ test(':memory: prints its warning, writes no marker, and a restart imports again
   assert.ok(r.listening && /\[store\] imported /.test(r.stdout), r.stdout);
 });
 
+// Every path under dir, sorted: a directory as 'dir', a file as its bytes.
+function treeOf(dir, rel = '') {
+  const out = {};
+  for (const name of readdirSync(join(dir, rel)).sort()) {
+    const r = rel ? `${rel}/${name}` : name;
+    if (statSync(join(dir, r)).isDirectory()) Object.assign(out, { [r]: 'dir' }, treeOf(dir, r));
+    else out[r] = readFileSync(join(dir, r)).toString('base64');
+  }
+  return out;
+}
+
+test(':memory: over orgs.json and flat data serves the flat data in place (default at .) and never writes the workspace', async () => {
+  const pack = readFileSync(join(ROOT, 'examples', 'demo-skeleton.pack.yaml'));
+  const token = 'tok-0123456789abcdef';
+  for (const [orgs, entryLine] of [[{ default: { name: 'Default', members: {} } }, true], [{ acme: { members: {} } }, false]]) {
+    const ws = workspace();
+    mkdirSync(join(ws, 'packs'));
+    writeFileSync(join(ws, 'packs', 'flat.pack.yaml'), pack);
+    orgsFile(ws, orgs);
+    if (!entryLine) usersFile(ws, { alice: { createdAt: 't', password: REAL } });   // two orgs need an identity
+    // The store moves and writes nothing; the only new file is the pack
+    // registry's own index, in the root it serves (., as any flat server
+    // writes it). The two-org case also gets the server's own session
+    // secret and orgs/acme; orgs/default never appears.
+    const storeTree = () => {
+      const t = treeOf(ws);
+      const serverOwn = entryLine ? ['packs/index.json'] : ['packs/index.json', 'session-secret', 'orgs', 'orgs/acme', 'orgs/acme/packs'];
+      for (const k of serverOwn) delete t[k];
+      return t;
+    };
+    const before = treeOf(ws);
+    const env = { OBSERVOGRAM_DB: ':memory:', OBSERVOGRAM_API_TOKEN: token };
+    const b = boot(ws, { env, silent: false });
+    const out = b.stdout + b.stderr;
+    assert.ok(b.listening, out);
+    assert.ok(out.includes('[store]   default org default (.)'), out);
+    assert.ok(out.includes(`packs — the default org reads it in place at .${entryLine ? " (orgs.json's default entry too: its root is . under :memory:)" : ''}\n`), out);
+    assert.ok(!out.includes('left behind'), out);
+    assert.deepEqual(storeTree(), before, 'the workspace tree is otherwise byte-identical after a :memory: boot');
+    const s = await serve(ws, { env });
+    try {
+      const r = await fetch(`${s.base}/api/packs`, { headers: { Accept: 'application/json', Authorization: `Bearer ${token}` } });
+      assert.equal(r.status, 200);
+      const { packs } = await r.json();
+      assert.ok(packs.some((p) => p.id === 'flat'), `the flat pack is served: ${JSON.stringify(packs.map((p) => p.id))}`);
+    } finally {
+      await s.stop();
+    }
+    assert.deepEqual(storeTree(), before, 'the workspace tree is otherwise byte-identical after a :memory: server');
+  }
+});
+
 // ====================== pre-upgrade cookies ======================
 
 test('pre-upgrade cookies stay valid across the upgrade', async () => {

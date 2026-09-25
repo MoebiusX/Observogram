@@ -55,6 +55,11 @@ routine and another ad-hoc loader. The store removes that cost for
     connection, never runs WAL, and forgets everything at restart. A
     restart imports again and seeds `admin`/`admin` again. The server
     warns when it starts on `:memory:`, and the CLIs refuse it.
+  - A `:memory:` boot never writes the workspace, so it never runs the
+    flat-workspace migration. Where a file store would move the flat
+    entries into `orgs/default/`, the default org's root is `.` instead
+    (an `orgs.json` `default` entry too): it reads the flat data in place,
+    and the report line says so.
 - **One module, `server/store/`.**
   - `db.mjs`: open, pragmas, `tx()`, the version check, the warning filter.
   - `migrations.mjs`: ordered steps keyed by `PRAGMA user_version`.
