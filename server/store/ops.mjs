@@ -16,6 +16,11 @@
 //                                        users follow the IdP to a new URL
 //                                        (--to), or are retired for another
 //                                        IdP (--clear)
+//   purgeOrg(id, { dbPath, base })      `packc store purge-org`: delete a
+//                                        removed org's files
+//   restoreMarkerWarning(storeId, base)  the warning `packc store restore`
+//                                        prints when the workspace's marker
+//                                        names another store
 //
 // An in-place export runs with the server stopped: assertNotInUse()
 // (server/store/backup.mjs, restore's probe) refuses while any connection
@@ -47,13 +52,13 @@
 // Every regex here is used through .test() / .match() / replace: the
 // store's source guard refuses a raw handle call's spelling here.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { isAbsolute, join, resolve, sep } from 'node:path';
 import { baseWorkspacePath } from '../../tools/lib/brand-env.mjs';
 import { parse as parseYaml } from '../../tools/lib/mini-yaml.mjs';
 import { closeStore, openStore, resolveDbPath, tx } from './db.mjs';
 import { assertNotInUse } from './backup.mjs';
-import { writeAudit } from './audit.mjs';
+import { listAudit, writeAudit } from './audit.mjs';
 import { getMeta, getMetaJson, isIdentityArmed, putMeta, setMeta, storeId } from './meta.mjs';
 import { getOrg, listOrgs, setOrgRoot } from './orgs.mjs';
 import { listMembers } from './memberships.mjs';
@@ -442,6 +447,93 @@ export function formatRekey(r) {
   }
   if (r.pending) out.push('a pending `packc store import --replace` stays pending: the next start carries it out under the new key');
   return out;
+}
+
+// ---------- purge-org ----------
+
+// With the server stopped: deletes the files of an org `npm run orgs --
+// remove` soft-removed (the row stays, so its slug and root are never
+// reused). The org exists, is removed and is not the default org; its root
+// is orgs/<id> and resolves under <base>/orgs/ (a symlink is refused, never
+// followed). Then one tx(): the root's keys dropped from legacy_hashes
+// (none before slice 4), one org.purge row; then the marker rewritten from
+// legacy_hashes (by 'purge-org'). A workspace whose marker names another
+// store is refused: its orgs/ are not this store's to delete.
+export async function purgeOrg(id, { dbPath = resolveDbPath(), base = baseWorkspacePath(), out = process.stdout } = {}) {
+  if (!id) throw refuse('name the org: packc store purge-org <id>');
+  if (dbPath === MEMORY) throw refuse('OBSERVOGRAM_DB is :memory: — an in-memory store lives in one process; purge from the server\'s database file');
+  const path = resolve(dbPath);
+  out.write(`store: ${path}\n`);
+  if (!existsSync(path)) throw refuse(`no database at ${path} — nothing to purge (this command never creates one; check OBSERVOGRAM_DB and OBSERVOGRAM_WORKSPACE)`);
+  await assertNotInUse(path, { doing: 'purging an org' });
+  const db = await openStore({ path });
+  try {
+    const sid = storeId(db);
+    const org = getOrg(db, id);
+    if (!org) throw refuse(`store ${sid} has no org ${JSON.stringify(id)} — nothing was deleted`);
+    if (getMeta(db, 'default_org') === id) throw refuse(`${id} is the default org and is never purged — nothing was deleted`);
+    if (!org.removedAt) {
+      throw refuse(`org ${id} is live — remove it first with \`npm run orgs -- remove ${id}\` (its files stay), then purge it; nothing was deleted`);
+    }
+    const marker = readMarker(base);   // corrupt → LegacyFileError naming it
+    if (marker && marker.storeId !== sid) {
+      throw refuse(`${markerPath(base)} names store ${marker.storeId}, but ${path} holds store ${sid}: the workspace ${base} `
+        + 'is not this store\'s — point OBSERVOGRAM_DB and OBSERVOGRAM_WORKSPACE at one deployment; nothing was deleted');
+    }
+    const rel = `orgs/${id}`;
+    if (org.root !== rel) throw refuse(`org ${id}'s root is ${org.root}, not ${rel} — only an org's own directory is purged; nothing was deleted`);
+    const root = join(base, 'orgs', id);
+    const parent = realOr(join(base, 'orgs'));
+    let present = false;
+    if (lexists(root)) {
+      const st = lstatSync(root);
+      if (!st.isDirectory()) throw refuse(`${root} is not a directory (${st.isSymbolicLink() ? 'a symlink, never followed' : 'a file'}) — move it aside by hand; nothing was deleted`);
+      if (!realOr(root).startsWith(parent + sep)) throw refuse(`${root} resolves outside ${join(base, 'orgs')} — nothing was deleted`);
+      present = true;
+    }
+    const usersFile = getMeta(db, 'users_file');
+    if (usersFile && isAbsolute(usersFile) && present && realOr(usersFile).startsWith(realOr(root) + sep)) {
+      throw refuse(`the recorded users file ${usersFile} lies under ${root} — move it out first; nothing was deleted`);
+    }
+    const hashes = getMetaJson(db, 'legacy_hashes', {}) || {};
+    const dropped = Object.keys(hashes).filter((k) => !isAbsolute(k) && slashed(k).startsWith(`${rel}/`)).sort();
+    if (!present && !dropped.length && listAudit(db, { action: 'org.purge', targetId: id, limit: 1 }).length) {
+      throw refuse(`org ${id} was purged already and nothing of it is left at ${root}`);
+    }
+    if (present) rmSync(root, { recursive: true });
+    const files = Object.fromEntries(Object.entries(hashes).filter(([k]) => !dropped.includes(k)));
+    tx(db, () => {
+      if (dropped.length) putMeta(db, 'legacy_hashes', JSON.stringify(files));
+      writeAudit(db, CLI, { action: 'org.purge', targetKind: 'org', targetId: id, detail: { root: rel, deleted: present, legacyHashes: dropped } });
+    });
+    const written = marker ? writeMarker(base, { storeId: sid, files, by: 'purge-org' }) : null;
+    return { storeId: sid, path, id, root, deleted: present, dropped, marker: written };
+  } finally {
+    closeStore(path);
+  }
+}
+
+export function formatPurge(r) {
+  const out = [r.deleted ? `purged org ${r.id}: deleted ${r.root}` : `purged org ${r.id}: nothing on disk at ${r.root}`];
+  if (r.dropped.length) out.push(`dropped from legacy_hashes: ${r.dropped.join(', ')}`);
+  if (r.marker) out.push(`rewrote ${r.marker}`);
+  return out;
+}
+
+// ---------- restore: the marker check ----------
+
+// After `packc store restore`: the start refuses (step 2 (a)) while the
+// workspace's marker names another store than the one restored.
+export function restoreMarkerWarning(restoredId, base = baseWorkspacePath()) {
+  let marker;
+  try {
+    marker = readMarker(base);
+  } catch (e) {
+    if (e?.code !== 'ERR_OBSERVOGRAM_LEGACY_FILE') throw e;
+    return `warning: ${markerPath(base)} cannot be read as a store import marker — the next start refuses until it is fixed (README: stale import)`;
+  }
+  if (!marker || marker.storeId === restoredId) return null;
+  return `warning: the restored store is ${restoredId}; ${markerPath(base)} names ${marker.storeId} — the next start refuses until they agree (README: stale import)`;
 }
 
 // ---------- the report ----------

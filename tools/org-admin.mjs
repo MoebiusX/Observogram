@@ -80,7 +80,7 @@ async function main() {
 
   if (cmd === 'remove') {
     const org = removeOrgSoft(db, CLI, orgId);
-    console.log(`removed org ${org.id} — its files under ${join(base, org.root)} stay`);
+    console.log(`removed org ${org.id} — its files under ${join(base, org.root)} stay; \`packc store purge-org ${org.id}\` deletes them with the server stopped`);
     noteShellInit(db);
     return;
   }

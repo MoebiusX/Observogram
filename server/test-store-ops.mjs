@@ -14,7 +14,9 @@
  * cases then edit the files as a pre-store build does during a downgrade,
  * and start the store build again: it refuses, and after `packc store
  * import --replace` the next start re-imports them. `packc store
- * rekey-issuer` (--to, --clear) closes the OIDC upgrade gate's IdP moves.
+ * rekey-issuer` (--to, --clear) closes the OIDC upgrade gate's IdP moves;
+ * `packc store purge-org` deletes a removed org's files, and `packc store
+ * restore` warns when the workspace's marker names another store.
  *
  * Hermetic (§0): the store and identity variables of a developer shell are
  * deleted before any server code loads; each fixture has its own temp
@@ -34,7 +36,7 @@ const { test } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
 const { spawnSync } = await import('node:child_process');
 const { createHmac } = await import('node:crypto');
-const { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = await import('node:fs');
+const { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
 const { dirname, join } = await import('node:path');
 const { fileURLToPath } = await import('node:url');
@@ -47,7 +49,10 @@ const { getOrg, listOrgs } = await import('./store/orgs.mjs');
 const { getUserByLogin, listUsers } = await import('./store/users.mjs');
 const { listAudit } = await import('./store/audit.mjs');
 const legacy = await import('./store/legacy-files.mjs');
-const { exportStore, formatExport, formatRekey, COOKIE_NOTE, rekeyIssuer, REPLACE_REQUESTED, requestReplace } = await import('./store/ops.mjs');
+const {
+  exportStore, formatExport, formatPurge, formatRekey, COOKIE_NOTE, purgeOrg, rekeyIssuer, REPLACE_REQUESTED, requestReplace, restoreMarkerWarning,
+} = await import('./store/ops.mjs');
+const { backupStore } = await import('./store/backup.mjs');
 const admin = await import('./identity-admin.mjs');
 const { hashPassword, resolveSession, verifyPassword } = await import('./auth.mjs');
 const boot = await import('./boot.mjs');
@@ -995,4 +1000,169 @@ test('packc store rekey-issuer: usage errors exit 2; the store line, the report;
   const clr = run('--clear');
   assert.equal(clr.status, 0, clr.stderr);
   assert.match(clr.stdout, /cleared the OIDC issuer of store \S+ \(was https:\/\/moved\.example\/\): disabled https:\/\/moved\.example\/#sub-1, https:\/\/moved\.example\/#sub-2/);
+});
+
+// ---------- purge-org ----------
+
+const purge = (base, id, opts = {}) => purgeOrg(id, { dbPath: dbOf(base), base, out: silent, ...opts });
+const refusedOp = (re) => (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && re.test(e.message);
+function cliEnv(base) {
+  const env = { ...process.env };
+  for (const k of STRIP) { delete env[`OBSERVOGRAM_${k}`]; delete env[`TOMOGRAPH_${k}`]; }
+  env.OBSERVOGRAM_WORKSPACE = base;
+  return env;
+}
+
+// A flat deployment with two created orgs, acme removed (its files stay).
+async function removedOrgDeployment() {
+  const base = tempDir();
+  usersJson(base, ['alice']);
+  pack(base, 'p1');
+  await start(base);
+  await change(base, (db) => {
+    admin.createOrgFromAdmin(db, 'cli', { id: 'acme', name: 'Acme', admin: 'alice', base });
+    admin.createOrgFromAdmin(db, 'cli', { id: 'beta', name: 'Beta', admin: 'alice', base });
+    admin.removeOrgSoft(db, 'cli', 'acme');
+  });
+  pack(join(base, 'orgs', 'acme'), 'a1');
+  pack(join(base, 'orgs', 'beta'), 'b1');
+  return base;
+}
+
+test('purge-org: a removed org\'s files deleted, its legacy_hashes keys dropped, one org.purge row, the marker rewritten; the next start passes and writes no row', async () => {
+  const base = await removedOrgDeployment();
+  // A slice-4 per-root key, as the store would record it.
+  const indexKey = 'orgs/acme/packs/index.json';
+  writeFileSync(join(base, indexKey), '{}\n');
+  const before = await change(base, (db) => {
+    const hashes = { ...meta.getMetaJson(db, 'legacy_hashes'), [indexKey]: legacy.sha256File(join(base, indexKey)) };
+    tx(db, () => meta.putMeta(db, 'legacy_hashes', JSON.stringify(hashes)));
+    return { rows: actions(db).length, hashes };
+  });
+  const markerBefore = legacy.readMarker(base);
+
+  const r = await purge(base, 'acme');
+  assert.deepEqual({ deleted: r.deleted, dropped: r.dropped, root: r.root }, { deleted: true, dropped: [indexKey], root: join(base, 'orgs', 'acme') });
+  assert.deepEqual(formatPurge(r), [`purged org acme: deleted ${join(base, 'orgs', 'acme')}`, `dropped from legacy_hashes: ${indexKey}`, `rewrote ${legacy.markerPath(base)}`]);
+  assert.equal(existsSync(join(base, 'orgs', 'acme')), false);
+  assert.deepEqual(readdirSync(join(base, 'orgs', 'beta', 'packs')), ['b1.pack.yaml'], 'another org\'s files stay');
+  assert.ok(existsSync(join(base, 'packs', 'p1.pack.yaml')), 'the default org\'s files stay');
+  const after = await read(base, (db) => {
+    assert.deepEqual(actions(db).slice(before.rows), ['org.purge:cli:acme']);
+    const [row] = listAudit(db, { action: 'org.purge' });
+    assert.equal(row.orgId, null);
+    assert.deepEqual(row.detail, { root: 'orgs/acme', deleted: true, legacyHashes: [indexKey] });
+    const { [indexKey]: _gone, ...rest } = before.hashes;
+    assert.deepEqual(meta.getMetaJson(db, 'legacy_hashes'), rest);
+    assert.ok(getOrg(db, 'acme').removedAt, 'the row stays: its slug is never reused');
+    return { rows: actions(db).length, hashes: rest };
+  });
+  const marker = legacy.readMarker(base);
+  assert.deepEqual({ by: marker.by, storeId: marker.storeId, files: marker.files }, { by: 'purge-org', storeId: markerBefore.storeId, files: after.hashes });
+
+  const { warns } = await start(base);
+  assert.deepEqual(warns.filter((w) => /left behind/.test(w)), []);
+  await read(base, (db) => assert.equal(actions(db).length, after.rows, 'the start writes no row'));
+
+  // Nothing left: a second purge is refused.
+  await assert.rejects(purge(base, 'acme'), refusedOp(/^org acme was purged already and nothing of it is left at /));
+});
+
+test('purge-org: refused for a live, default or unknown org, a root that is a symlink, a workspace whose marker names another store, a store in use, no database and :memory: — nothing deleted', async () => {
+  const base = await removedOrgDeployment();
+  const rows = await read(base, (db) => actions(db).length);
+  const files = () => readdirSync(join(base, 'orgs'), { recursive: true }).sort();
+  const filesBefore = files();
+
+  await assert.rejects(purge(base, 'beta'), refusedOp(/^org beta is live — remove it first with `npm run orgs -- remove beta` \(its files stay\), then purge it; nothing was deleted$/));
+  await assert.rejects(purge(base, 'default'), refusedOp(/^default is the default org and is never purged/));
+  await assert.rejects(purge(base, 'nope'), refusedOp(/^store \S+ has no org "nope" — nothing was deleted$/));
+
+  await openStore({ path: dbOf(base) });
+  try {
+    await assert.rejects(purge(base, 'acme'), refusedOp(/is in use — stop the server .* before purging an org/));
+  } finally {
+    closeStore(dbOf(base));
+  }
+
+  const markerBytes = readFileSync(legacy.markerPath(base));
+  legacy.writeMarker(base, { storeId: 'another-store', files: {}, by: 'import' });
+  await assert.rejects(purge(base, 'acme'), refusedOp(/names store another-store, but .* holds store \S+: the workspace .* is not this store's/));
+  writeFileSync(legacy.markerPath(base), markerBytes);
+
+  const elsewhere = tempDir();
+  pack(elsewhere, 'x1');
+  rmSync(join(base, 'orgs', 'acme'), { recursive: true });
+  symlinkSync(elsewhere, join(base, 'orgs', 'acme'), 'dir');
+  await assert.rejects(purge(base, 'acme'), refusedOp(/orgs\/acme is not a directory \(a symlink, never followed\)/));
+  assert.ok(existsSync(join(elsewhere, 'packs', 'x1.pack.yaml')), 'the link target stays');
+  rmSync(join(base, 'orgs', 'acme'));
+  pack(join(base, 'orgs', 'acme'), 'a1');
+  assert.deepEqual(files(), filesBefore);
+
+  await assert.rejects(purge(tempDir(), 'acme'), refusedOp(/^no database at .* nothing to purge/));
+  await assert.rejects(purge(base, 'acme', { dbPath: ':memory:' }), refusedOp(/:memory:/));
+  await read(base, (db) => assert.equal(actions(db).length, rows));
+  assert.deepEqual(readFileSync(legacy.markerPath(base)), markerBytes);
+});
+
+test('packc store purge-org: usage exits 2; the store line, the report; a refusal on one line with exit 1; `orgs -- remove` names it', async () => {
+  const base = await removedOrgDeployment();
+  const env = cliEnv(base);
+  const run = (...args) => spawnSync(process.execPath, [PACKC, 'store', 'purge-org', ...args], { env, encoding: 'utf8', timeout: 60_000 });
+  for (const args of [[], ['acme', 'x']]) {
+    const r = run(...args);
+    assert.equal(r.status, 2, args.join(' '));
+    assert.match(r.stderr, /packc store purge-org <id> +Delete the files of an org removed with `npm run orgs -- remove`/);
+  }
+  const live = run('beta');
+  assert.equal(live.status, 1);
+  assert.equal(live.stdout, `store: ${dbOf(base)}\n`);
+  assert.match(live.stderr, /^packc store purge-org: org beta is live/);
+  assert.equal(live.stderr.trim().split('\n').length, 1);
+  const ok = run('acme');
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.deepEqual(ok.stdout.trim().split('\n'), [`store: ${dbOf(base)}`, `purged org acme: deleted ${join(base, 'orgs', 'acme')}`, `rewrote ${legacy.markerPath(base)}`]);
+
+  const rm = spawnSync(process.execPath, [join(HERE, '..', 'tools', 'org-admin.mjs'), 'remove', 'beta'], { env, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(rm.status, 0, rm.stderr);
+  assert.match(rm.stdout, /removed org beta — its files under .*orgs.beta stay; `packc store purge-org beta` deletes them with the server stopped/);
+});
+
+// ---------- restore: the marker warning ----------
+
+test('packc store restore warns when the workspace\'s marker names another store, and the start then refuses; a backup of the same store restores without it', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice']);
+  await start(base);
+  const own = legacy.readMarker(base).storeId;
+  const sameBackup = join(tempDir(), 'same.db');
+  await backupStore(sameBackup, { dbPath: dbOf(base) });
+  const other = tempDir();
+  await start(other);
+  const otherId = await read(other, (db) => meta.storeId(db));
+  const otherBackup = join(tempDir(), 'other.db');
+  await backupStore(otherBackup, { dbPath: dbOf(other) });
+
+  assert.equal(restoreMarkerWarning(own, base), null);
+  assert.equal(restoreMarkerWarning(own, tempDir()), null, 'no marker, no warning');
+  const text = `warning: the restored store is ${otherId}; ${legacy.markerPath(base)} names ${own} — the next start refuses until they agree (README: stale import)`;
+  assert.equal(restoreMarkerWarning(otherId, base), text);
+
+  const env = cliEnv(base);
+  const run = (...args) => spawnSync(process.execPath, [PACKC, 'store', 'restore', ...args], { env, encoding: 'utf8', timeout: 60_000 });
+  const foreign = run(otherBackup);
+  assert.equal(foreign.status, 0, foreign.stderr);
+  assert.match(foreign.stdout, new RegExp(`store_id: ${otherId} `));
+  assert.equal(foreign.stderr, `${text}\n`);
+  const e = await refused(base);
+  assert.match(e.message, new RegExp(`imported into store ${own} `));
+
+  const same = run(sameBackup);
+  assert.equal(same.status, 0, same.stderr);
+  assert.equal(same.stderr, '');
+  await start(base);
+
+  writeFileSync(legacy.markerPath(base), 'not json');
+  assert.match(restoreMarkerWarning(own, base), /^warning: .*\.store-imported cannot be read as a store import marker — the next start refuses until it is fixed \(README: stale import\)$/);
 });
