@@ -863,7 +863,7 @@ test('COMPILE leads with a result: one sentence, three states apart, the action 
   // Two warnings: counted in the sentence, first in the queue with the artefact each impacts and a correction.
   const two = compile({ result: { ...draft().result, warnings: [THRESHOLD_WARNING, SAMPLING_WARNING] } });
   assert.equal(two.decision.sentence, 'Pack compiled. Two warnings need review; 17 values remain placeholders.');
-  assert.deepEqual(two.queue.map(i => [i.kind, i.impact]), [['burn-rules', 'SLI-04 · kafka_produce_latency_p99'], ['burn-rules', 'SLI-06 · http_service_availability'], ['placeholders', '21 Scaffold artefacts · 21 todos']]);
+  assert.deepEqual(two.queue.map(i => [i.kind, i.impact]), [['burn-rules', 'SLI-04 · kafka_produce_latency_p99'], ['burn-rules', 'SLI-06 · http_service_availability'], ['placeholders', '21 artefacts with template values · 21 todos']]);
   // What was produced: per layer, by type with its purpose; the counts add up to the stack's.
   assert.deepEqual(c.produced.find(l => l.id === 'L1').types.map(t => [t.type, t.count]), [['SLIs', 7], ['SLOs', 7]]);
   assert.deepEqual(c.produced.find(l => l.id === 'L4').types.map(t => [t.type, t.count]), [['Burn-rate alerts', 7], ['Alert routes', 3], ['Remediations', 2]]);
@@ -1011,7 +1011,7 @@ test('buildStackModel: the edge states are the checklist\'s per dimension, and a
   const s = stackOf();
   assert.deepEqual(Object.fromEntries(s.slabs.map(x => [x.id, x.state])), { L1: 'pass', L2: 'placeholder', L2X: 'pass', L3: 'pass', L4: 'pass', L5: 'placeholder', GOV: 'neutral' });
   const l2 = s.slabs.find(x => x.id === 'L2');
-  assert.equal(l2.stateText, '5 of 5 pass · 2 on a placeholder');
+  assert.equal(l2.stateText, '5 of 5 pass · 2 need a real value');
   assert.deepEqual(l2.why, [
     'L2.MUST.metrics_exporter — passes on 1 placeholder: pipelines.exporters.metrics',
     'L2.MUST.metrics_logs_traces_backends — passes on 3 placeholders: telemetry.backends.logs-loki, telemetry.backends.metrics-prom, telemetry.backends.traces-tempo',
@@ -1203,12 +1203,12 @@ test('the maturity number says the split: the pass share, then the share that pa
   assert.equal(rowOf(html, 'L1')[1], '100%', 'all pass: one number, no placeholder share');
   assert.ok(!/build-maturity-pct">100% <span/.test(html), 'a placeholder share is never printed beside a 100% pass');
   // The bar carries the counts for a screen reader (the segments are empty spans).
-  assert.ok(html.includes('<span class="build-maturity-bar" role="img" aria-label="L5 Validation: 0 pass, 2 on a placeholder, 0 fail of 2 clauses">'));
-  assert.ok(html.includes('aria-label="L2 Telemetry: 3 pass, 2 on a placeholder, 0 fail of 5 clauses"'));
+  assert.ok(html.includes('<span class="build-maturity-bar" role="img" aria-label="L5 Validation: 0 pass, 2 need a real value, 0 fail of 2 clauses">'));
+  assert.ok(html.includes('aria-label="L2 Telemetry: 3 pass, 2 need a real value, 0 fail of 5 clauses"'));
   // Dashboards off: L3 reads 50% (2 of 4 pass), the failing half is the red segment.
   const off = render(draft({ result: { ...draft().result, summary: DASHBOARDS_OFF_SUMMARY } }));
   assert.equal(rowOf(off, 'L3')[1], '50%');
-  assert.ok(off.includes('aria-label="L3 Insight: 2 pass, 0 on a placeholder, 2 fail of 4 clauses"'));
+  assert.ok(off.includes('aria-label="L3 Insight: 2 pass, 0 need a real value, 2 fail of 4 clauses"'));
 });
 
 test('a section switched off dims the slab it feeds (L4 per subgroup); the open slabs come from `expanded`', () => {

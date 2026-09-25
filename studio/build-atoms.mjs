@@ -151,7 +151,7 @@ export function wireParamInputs(container, act, selector = '.build-param-input')
 // ---------- the clause row (the rail and the slabs) ----------
 
 export const STATE_GLYPH = { pass: '✓', placeholder: '◐', fail: '✗', pending: '○', neutral: '·' };
-export const STATE_WORD = { pass: 'passes', placeholder: 'passes on a placeholder', fail: 'fails', pending: 'not evaluated yet', neutral: 'no clause applies' };
+export const STATE_WORD = { pass: 'passes', placeholder: 'represented; real value still needed', fail: 'fails', pending: 'not evaluated yet', neutral: 'no clause applies' };
 
 /**
  * One clause of the checklist as a row — the glyph of its state, the rubric's description,

@@ -51,7 +51,7 @@ const REPRESENTED = 'Requirement represented; real value still needed';
  */
 function maturityHtml(rows) {
   if (!rows.length) return '';
-  const counts = (m) => `${m.pass} pass, ${m.placeholder} on a placeholder, ${m.fail} fail${m.pending ? `, ${m.pending} not evaluated` : ''} of ${m.total} clause${m.total === 1 ? '' : 's'}`;
+  const counts = (m) => `${m.pass} pass, ${m.placeholder} need${m.placeholder === 1 ? 's' : ''} a real value, ${m.fail} fail${m.pending ? `, ${m.pending} not evaluated` : ''} of ${m.total} clause${m.total === 1 ? '' : 's'}`;
   return `
     <div class="build-maturity" aria-label="maturity per layer">
       ${rows.map(m => `

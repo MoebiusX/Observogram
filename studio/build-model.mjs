@@ -1259,7 +1259,7 @@ export function compileQueue({ result, readiness: r, editors = {}, stack = null,
     items.push({
       key: 'placeholders', kind: 'placeholders', label: 'Placeholders', blocking: false,
       message: `${plural(r.values, 'value')} ${r.values === 1 ? 'is' : 'are'} still a placeholder — written into the pack so each requirement is represented, but not real.`,
-      impact: `${plural(stack?.counts?.scaffold || 0, 'Scaffold artefact')} · ${plural(r.todos, 'todo')}`,
+      impact: `${plural(stack?.counts?.scaffold || 0, 'artefact')} with template values · ${plural(r.todos, 'todo')}`,
       suggestion: 'Fill them on Verify, where each value sits on the layer it shapes.',
       fix: { kind: 'step', step: 'verify' }, acceptable: false, accepted: null,
     });
@@ -1532,7 +1532,7 @@ function slabStateText(state, m) {
     case 'neutral': return 'no clause applies';
     case 'pending': return `${plural(m.total, 'clause')} to evaluate`;
     case 'fail': return `${m.fail} of ${plural(m.total, 'clause')} fail${m.fail === 1 ? 's' : ''}`;
-    case 'placeholder': return `${m.pass + m.placeholder} of ${m.total} pass · ${m.placeholder} on a placeholder`;
+    case 'placeholder': return `${m.pass + m.placeholder} of ${m.total} pass · ${m.placeholder} need${m.placeholder === 1 ? 's' : ''} a real value`;
     default: return `${m.total} of ${plural(m.total, 'clause')} pass`;
   }
 }
