@@ -829,6 +829,37 @@ test('Stale import: the replace refuses to leave no enabled owner (check D) — 
   });
 });
 
+test('Stale import: the no-owner refusal names a user only the files hold — add it (with --org) before owner; followed as written, the replace runs', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice']);
+  await start(base);
+  await change(base, (db) => admin.createOrgFromAdmin(db, 'cli', { id: 'acme', name: 'Acme', admin: 'alice', base }));
+  await exportIt(base);
+  const usersPath = join(base, 'users.json');
+  legacy.writeUsersFile({ users: { carol: record('carol') } }, usersPath);
+  await refused(base);
+  await requestIt(base);
+  const e = await refused(base);
+  assert.equal(e.message, `refusing to start: the pending \`packc store import --replace\` would leave store ${legacy.readMarker(base).storeId} `
+    + `with no enabled owner who can sign in with a local password (it disables alice: not in ${usersPath}). `
+    + 'Nothing was moved, imported or replaced; the request stays pending.\n'
+    + `  With the server stopped, put an owner back into ${usersPath}, or make a user the files keep an owner `
+    + '(npm run users -- owner <login>; carol is not in the store yet: npm run users -- add <login> --org <org> first), then start again.');
+  await change(base, (db) => {
+    assert.throws(() => admin.grantOwnerByLogin(db, 'cli', 'carol'), /no local user carol/);
+    assert.throws(() => admin.addLocalUser(db, 'cli', { login: 'carol', password: 'carol-other-pw', role: 'operator' }), /name one with --org/);
+    admin.addLocalUser(db, 'cli', { login: 'carol', password: 'carol-other-pw', role: 'operator', orgId: 'default' });
+    admin.grantOwnerByLogin(db, 'cli', 'carol');
+  });
+  await start(base);
+  await read(base, (db) => {
+    const carol = getUserByLogin(db, 'carol');
+    assert.deepEqual([carol.isOwner, carol.disabled, verifyPassword(PW.carol, carol.password)], [true, false, true]);
+    assert.equal(getUserByLogin(db, 'alice').disabled, true);
+    assert.equal(meta.getMeta(db, 'replace_requested'), null);
+  });
+});
+
 test('Stale import: with OBSERVOGRAM_USERS_FILE outside the workspace the replace re-imports the recorded file', async () => {
   const base = tempDir();
   const outside = join(tempDir('ops-users'), 'users.json');

@@ -253,6 +253,8 @@ export function legacyChecksInput(db, ctx, legacy, decision, plan1) {
     replace: plan1.replace ? {
       storeId: storeId(db), base: ctx.base, twins: plan1.twins, brokenJourneys: plan1.brokenJourneys,
       noOwner: plan1.noOwner, ownersDisabled: plan1.ownersDisabled, ownerMode: plan1.ownerMode, usersPath: plan1.usersPath,
+      // Local users only the files hold: `users -- owner` needs their row.
+      filesOnly: plan1.ownerMode?.mode === 'local' ? plan1.users.create.filter((u) => u.kind === 'local').map((u) => u.login) : [],
     } : null,
   };
 }
@@ -369,11 +371,14 @@ function assertReplaceChecks(r) {
   if (r.noOwner) {
     const how = r.ownerMode.mode === 'oidc' ? `through OIDC issuer ${r.ownerMode.issuerKey}` : 'with a local password';
     const lost = r.ownersDisabled.length ? ` (it disables ${r.ownersDisabled.join(', ')}: not in ${r.usersPath})` : '';
+    const fresh = r.filesOnly?.length
+      ? `; ${r.filesOnly.join(', ')} ${r.filesOnly.length === 1 ? 'is' : 'are'} not in the store yet: npm run users -- add <login> --org <org> first`
+      : '';
     throw new BootRefusal(
       `refusing to start: the pending ${REPLACE} would leave store ${r.storeId} with no enabled owner who can sign in ${how}${lost}. ` +
       `${REPLACE_KEPT}\n` +
       `  With the server stopped, put an owner back into ${r.usersPath}, or make a user the files keep an owner ` +
-      '(npm run users -- owner <login>), then start again.',
+      `(npm run users -- owner <login>${fresh}), then start again.`,
       { nothingMoved: true });
   }
 }

@@ -941,8 +941,9 @@ may not have), prints a `[store] replaced from …` report and writes one
   its `orgs/default/` twin, when a rewritten journey would no longer
   parse, or when it would leave no enabled owner who can sign in under the
   unit's mode (put an owner back into the users file, or make a kept user
-  owner with `npm run users -- owner <login>`). The request stays pending
-  through every refusal.
+  owner with `npm run users -- owner <login>` — a user only the files
+  hold needs `npm run users -- add <login> --org <org>` first). The
+  request stays pending through every refusal.
 - `packc store import` without `--replace` is a usage error: the first
   start of the server is what imports.
 
