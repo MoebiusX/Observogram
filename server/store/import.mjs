@@ -181,12 +181,11 @@ export function planImport(db, legacy, ctx, migration) {
   if (legacy.orgs.exists) {
     // ---- orgs.json (plan item 2) ----
     const entries = [...legacy.orgs.entries];
-    // The default entry the migration wrote — or would have: a migration
-    // that moved the flat entries and crashed before the orgs.json write
-    // leaves data in orgs/default with no entry (nothing is left to move,
-    // so wroteDefault is false on the next boot).
-    if (!entries.some(([id]) => id === 'default')
-      && (migration?.wroteDefault || hasData(join(ctx.base, 'orgs', 'default')))) {
+    // The default entry the migration wrote. Data in orgs/default with no
+    // entry is never planned as an org: a crash before the orgs.json write
+    // and an admin who retired the default org look the same. The report
+    // and every boot name the directory instead.
+    if (migration?.wroteDefault && !entries.some(([id]) => id === 'default')) {
       entries.push(['default', { name: 'Default', members: [] }]);
     }
     const kept = new Set();
@@ -268,6 +267,18 @@ export function planImport(db, legacy, ctx, migration) {
   report.users.fromUsersFile = localImported.length;
   report.users.disabled = users.filter((u) => u.disabled).map((u) => u.login);
   report.orgs.imported = plannedOrgs.map((o) => ({ id: o.id, root: o.root }));
+  // orgs/default holding data that no org, planned or kept, reads.
+  const defaultDir = join(ctx.base, 'orgs', 'default');
+  const rootOf = (id) => plannedOrgs.find((o) => o.id === id)?.root ?? getOrg(db, id)?.root ?? null;
+  if (![...plannedOrgs, ...listOrgs(db)].some((o) => o.root === 'orgs/default') && hasData(defaultDir)) {
+    const root = effectiveDefault ? rootOf(effectiveDefault) : null;
+    report.unreadDefaultDir = {
+      path: defaultDir, defaultOrg: root ? effectiveDefault : null,
+      defaultRoot: root === null ? null : root === '.' ? ctx.base : join(ctx.base, root),
+    };
+  } else {
+    report.unreadDefaultDir = null;
+  }
   report.memberships.imported = memberships.length;
   report.owners = users.filter((u) => u.isOwner).map((u) => u.login);
   // Owners the store already has (a CLI-created owner): the boot line names
@@ -334,6 +345,16 @@ function ownersText(r) {
   return all.length ? all.join(', ') : '(none)';
 }
 
+// orgs/default with data no org reads (no orgs.json "default" entry): a
+// migration that stopped before its orgs.json write, or a default org an
+// admin retired. Adding "default" to orgs.json now is too late — the
+// import has run — so the ways out are by hand.
+export function unreadDefaultText({ path, defaultOrg, defaultRoot }) {
+  return `${path} — no org reads it (the store has no org at orgs/default). With the server stopped, ` +
+    (defaultRoot ? `move its entries into ${defaultRoot} (the default org ${defaultOrg}'s root) if they are the default org's data, or ` : '') +
+    'move the directory aside';
+}
+
 export function formatReport(r) {
   const out = [];
   const usersPart = r.files.users.present ? `${r.files.users.path} (${r.users.fromUsersFile} users)` : 'no users file';
@@ -351,6 +372,7 @@ export function formatReport(r) {
       ? `[store]   flat workspace not moved (OBSERVOGRAM_DB=:memory: writes nothing to the workspace; a file store moves it to orgs/default/): ${r.migration.moved.join(', ')}`
       : `[store]   flat workspace moved to orgs/default/: ${r.migration.moved.join(', ')}`);
   }
+  if (r.unreadDefaultDir) out.push(`[store]   left behind: ${unreadDefaultText(r.unreadDefaultDir)}`);
   if (r.migration.leftBehind.length) out.push(`[store]   left behind (orgs/default/ already has them; neither moved nor merged): ${r.migration.leftBehind.join(', ')}`);
   if (r.users.disabled.length) out.push(`[store]   users-file users imported disabled (OIDC is configured): ${r.users.disabled.join(', ')}`);
   if (r.memberships.inexact.length) {

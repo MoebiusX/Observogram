@@ -567,10 +567,15 @@ hashed nor imported before then.
      and no data under `orgs/default/` is a leftover of today's rehydrate
      bug (§0). It is dropped and listed.
    - **A stranded `orgs/default/`.** With no `default` entry, data under
-     `orgs/default/` is a migration that moved the flat entries and
-     stopped before its `orgs.json` write. The import plans `default` at
-     `orgs/default`, as that write would have. A store that already
-     imported names the directory as left behind on every boot. So is
+     `orgs/default/` is either a migration that moved the flat entries
+     and stopped before its `orgs.json` write, or a default org an admin
+     retired from `orgs.json`. The import cannot tell them apart, so it
+     never plans `default` from the directory (that would move the
+     default org and strip its owners). The report and every boot name
+     the directory as left behind, with the ways out: with the server
+     stopped, move its entries into the default org's root, or move the
+     directory aside (adding `default` to `orgs.json` is too late once
+     the import has run). So is
      any other `orgs/<id>/` with data and no org row (a store started
      anew); a removed org's root waits for `purge-org` instead.
    - **The default org** is `default` if a real one remains, otherwise the

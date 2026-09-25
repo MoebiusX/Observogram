@@ -46,7 +46,7 @@ import { createUser, getUserByLogin, setPassword } from './store/users.mjs';
 import {
   canonIssuer, ensureDefaultOrg, parseBootstrapAdmin, parseJoinRole, signInOwnerCount, SYSTEM,
 } from './store/identity.mjs';
-import { applyImport, formatReport, planImport, projectedMigration, readLegacy } from './store/import.mjs';
+import { applyImport, formatReport, planImport, projectedMigration, readLegacy, unreadDefaultText } from './store/import.mjs';
 import {
   compareHashes, hasData, legacyUsersPath, markerPath, MIGRATABLE, orgsFilePath, readMarker, sha256File, writeMarker,
 } from './store/legacy-files.mjs';
@@ -502,7 +502,9 @@ export function warnLeftBehind(db, ctx, warn) {
       if (hasData(path)) warn(`[store] left behind: ${path} — nothing reads it (the default org's copy is orgs/default/${entry}); merge it by hand`);
     }
     if (movedUnread) {
-      warn(`[store] left behind: ${moved} — no org reads it (the store has no org at orgs/default); adopt it with \`npm run orgs -- create default --adopt\` or merge it by hand`);
+      const id = getMeta(db, 'default_org');
+      const root = id ? live.find((o) => o.id === id)?.root : null;
+      warn(`[store] left behind: ${unreadDefaultText({ path: moved, defaultOrg: root ? id : null, defaultRoot: root ? join(ctx.base, root) : null })}`);
     }
     return;
   }

@@ -444,7 +444,7 @@ test('Import: orgs.json-armed with a not-yet-moved flat workspace — the data m
   }
 });
 
-test('Import: a flat entry with data plus its orgs/default/ twin with data — nothing moved or merged, listed as left behind; default planned at orgs/default so the twin stays reachable', async () => {
+test('Import: a flat entry with data plus its orgs/default/ twin with data — nothing moved or merged, listed as left behind; the twin is named, never planned as an org', async () => {
   const base = workspace({
     users: { users: { alice: { password: PW } } },
     orgs: { acme: { members: { alice: 'admin' } } },
@@ -458,9 +458,10 @@ test('Import: a flat entry with data plus its orgs/default/ twin with data — n
     assert.deepEqual(report.migration, { moved: [], leftBehind: ['packs'], wroteDefault: false, skipped: null });
     assert.ok(existsSync(join(base, 'packs', 'flat.pack.yaml')));
     assert.ok(!existsSync(join(base, 'orgs', 'default', 'packs', 'flat.pack.yaml')));
-    assert.deepEqual(rowsOf(db).orgs, [['acme', 'acme', 'orgs/acme'], ['default', 'Default', 'orgs/default']]);
-    assert.equal(metaOf(db, 'default_org'), 'default');
-    assert.deepEqual([report.owners, report.noOwner], [[], true], 'the default org has no members yet');
+    assert.deepEqual(rowsOf(db).orgs, [['acme', 'acme', 'orgs/acme']]);
+    assert.equal(metaOf(db, 'default_org'), 'acme');
+    assert.deepEqual(report.owners, ['alice'], 'the default org is acme: its admins are the owners');
+    assert.deepEqual(report.unreadDefaultDir, { path: join(base, 'orgs', 'default'), defaultOrg: 'acme', defaultRoot: join(base, 'orgs', 'acme') });
   } finally {
     close();
   }
@@ -1151,26 +1152,33 @@ test('bootStore: the same store whose default-org data a pre-store build already
   }
 });
 
-test('bootStore: a migration that moved the flat entries but crashed before writing "default" into orgs.json — the import plans default at orgs/default; a store that already imported warns the directory is left behind', async () => {
-  // The half-migrated state: every flat entry already in orgs/default,
-  // orgs.json without a default entry (the crash came before its write).
+test('bootStore: data in orgs/default with no "default" in orgs.json — a crashed migration or a retired default org — is never planned as an org; the report and every boot name it with the ways out', async () => {
+  // A default org an admin retired from orgs.json, its directory kept —
+  // the same files as a migration that crashed before its orgs.json write.
   const base = workspace({
     users: { users: { alice: { password: PW } } },
     orgs: { acme: { name: 'Acme', members: { alice: 'admin' } } },
     files: { 'orgs/default/packs/p.pack.yaml': PACK, 'orgs/default/deploys.jsonl': '{"type":"deploy"}\n' },
   });
+  const moved = join(base, 'orgs', 'default');
+  const text = `${moved} — no org reads it (the store has no org at orgs/default). With the server stopped, ` +
+    `move its entries into ${join(base, 'orgs', 'acme')} (the default org acme's root) if they are the default org's data, or move the directory aside`;
   try {
     const r = await bootIn(base);
     assert.deepEqual(r.report.migration.moved, [], 'nothing left to move');
-    assert.deepEqual(rowsOf(r.db).orgs, [['acme', 'Acme', 'orgs/acme'], ['default', 'Default', 'orgs/default']]);
-    assert.equal(metaOf(r.db, 'default_org'), 'default');
-    assert.ok(!r.warns.some((w) => /left behind/.test(w)), r.warns.join('\n'));
+    assert.deepEqual(rowsOf(r.db).orgs, [['acme', 'Acme', 'orgs/acme']], 'the default org is not invented from the directory');
+    assert.equal(metaOf(r.db, 'default_org'), 'acme');
+    assert.deepEqual([r.report.owners, r.report.noOwner], [['alice'], false], 'alice stays the owner');
+    assert.ok(formatReport(r.report).includes(`[store]   left behind: ${text}`), formatReport(r.report).join('\n'));
+    assert.ok(r.warns.includes(`[store] left behind: ${text}`), r.warns.join('\n'));
+    closeBase(base);
+    const again = await bootIn(base);
+    assert.equal(again.report, null);
+    assert.ok(again.warns.includes(`[store] left behind: ${text}`), 'every boot, not only the import');
   } finally {
     closeBase(base);
   }
-  // A store that imported before orgs/default held data (a pre-store build
-  // ran the migration afterwards and crashed the same way): no import on
-  // this boot, so the directory is named as left behind.
+  // A store that imported before orgs/default held data.
   const later = workspace({
     users: { users: { alice: { password: PW } } },
     orgs: { acme: { members: { alice: 'admin' } } },
@@ -1182,8 +1190,9 @@ test('bootStore: a migration that moved the flat entries but crashed before writ
     const r = await bootIn(later);
     assert.equal(r.report, null);
     assert.deepEqual(rowsOf(r.db).orgs, [['acme', 'acme', 'orgs/acme']]);
-    const moved = join(later, 'orgs', 'default');
-    assert.ok(r.warns.includes(`[store] left behind: ${moved} — no org reads it (the store has no org at orgs/default); adopt it with \`npm run orgs -- create default --adopt\` or merge it by hand`), r.warns.join('\n'));
+    const dir = join(later, 'orgs', 'default');
+    assert.ok(r.warns.includes(`[store] left behind: ${dir} — no org reads it (the store has no org at orgs/default). With the server stopped, ` +
+      `move its entries into ${join(later, 'orgs', 'acme')} (the default org acme's root) if they are the default org's data, or move the directory aside`), r.warns.join('\n'));
   } finally {
     closeBase(later);
   }
