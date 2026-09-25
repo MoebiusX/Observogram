@@ -225,15 +225,19 @@ test('Export gate: a flat default org plus a created org — orgs.json, the defa
     acme: { name: 'Acme', members: { bob: 'admin', erin: 'viewer' } },
   });
   assert.deepEqual(r.writeAccess, [{ org: 'acme', key: 'erin', role: 'viewer' }]);
+  await read(base, (db) => assert.deepEqual(listUsers(db).filter((u) => u.isOwner).map((u) => u.login).sort(), ['alice', 'bob']));
+  assert.deepEqual(r.ownerLoss, [{ org: 'acme', key: 'alice' }], 'the owner alice is no member of acme (the owner bob is)');
   for (const e of ['packs', 'snapshots', 'journeys']) assert.equal(existsSync(join(base, e)), false, `${e} moved`);
   const moved = slashed(join(base, 'orgs', 'default', 'packs', 'p1.pack.yaml'));
   const lines = formatExport(r);
   assert.ok(lines.includes(`the default org's root is now orgs/default — point its CronJobs at ${r.cronJob}`), lines.join('\n'));
+  assert.ok(lines.includes('no access on a pre-store build (it has no owners; an owner enters only the orgs it is a member of): acme/alice (owner)'), lines.join('\n'));
 
   // The pre-store build: its migration finds nothing to move.
   assert.deepEqual(pre.boot(base), { migrated: [] });
   assert.deepEqual(pre.orgsForUser(base, 'bob').map((o) => o.id), ['default', 'acme']);
   assert.deepEqual(pre.orgsForUser(base, 'erin'), [{ id: 'acme', name: 'Acme', role: 'viewer' }]);
+  assert.deepEqual(pre.orgsForUser(base, 'alice').map((o) => o.id), ['default'], 'the owner keeps only its memberships');
   assert.deepEqual(pre.packIds(base, 'default'), ['p1']);
   assert.deepEqual(pre.journeys(base, 'default'), { nightly: { packA: moved, packB: moved } });
   assert.ok(existsSync(moved), 'the rewritten journey path exists');

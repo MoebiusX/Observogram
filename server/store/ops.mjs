@@ -29,7 +29,9 @@
 // The export writes files a pre-store build boots on with the same
 // membership, not the same access: a pre-store build enforces no roles, so
 // every viewer and operator regains full write there, and the report lists
-// them. It is not a byte-level round trip.
+// them; it has no owners either, so an owner enters only the orgs it is a
+// member of, and the report lists the orgs each owner loses. It is not a
+// byte-level round trip.
 //
 // In place, when it writes orgs.json while the default org's root is '.',
 // a pre-store build would move that org's flat entries into orgs/default/
@@ -191,6 +193,7 @@ export function planExport(db, { inPlace, target, base }) {
   const writeOrgs = !!report?.orgsJson || live.length > 1 || !atRoot;
   const orgs = {};
   const writeAccess = [];
+  const ownerLoss = [];    // owners a pre-store build (no owners) keeps out of an org they are no member of
   const collisions = [];
   let memberCount = 0;
   const byId = new Map(users.map((u) => [u.id, u]));
@@ -208,6 +211,9 @@ export function planExport(db, { inPlace, target, base }) {
         if (m.role !== 'admin') writeAccess.push({ org: org.id, key, role: m.role });
       }
       orgs[org.id] = { name: org.name, members };
+      for (const u of users) {
+        if (u.isOwner && signsInPreStore(u) && !Object.hasOwn(members, preStoreSub(u))) ownerLoss.push({ org: org.id, key: preStoreSub(u) });
+      }
     }
   } else {
     for (const org of live) {
@@ -251,7 +257,7 @@ export function planExport(db, { inPlace, target, base }) {
     storeId: id, inPlace, base, target, armed,
     users: { path: usersPath, data: { users: records }, logins: Object.keys(records), noPassword },
     orgs: { path: orgsPath, data: orgs, ids: Object.keys(orgs), members: memberCount, collisions },
-    writeAccess, move, journeys,
+    writeAccess, ownerLoss, move, journeys,
     usersKey: usersHashKey(recordedUsersFile),
   };
 }
@@ -610,6 +616,9 @@ export function formatExport(r) {
   if (r.cronJob) out.push(`the default org's root is now ${DEFAULT_MOVED} — point its CronJobs at ${r.cronJob}`);
   if (r.writeAccess.length) {
     out.push(`full write on a pre-store build (it enforces no roles): ${r.writeAccess.map((w) => `${w.org}/${w.key} (${w.role})`).join(' · ')}`);
+  }
+  if (r.ownerLoss.length) {
+    out.push(`no access on a pre-store build (it has no owners; an owner enters only the orgs it is a member of): ${r.ownerLoss.map((o) => `${o.org}/${o.key} (owner)`).join(' · ')}`);
   }
   if (r.marker) out.push(`recorded what it wrote in the store and ${r.marker}: a store build starts on these files without refusing`);
   out.push(`note: ${COOKIE_NOTE}`);

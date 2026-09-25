@@ -871,8 +871,10 @@ What the export writes:
   issuer only) and their roles (`operator` is written as `member`).
 - It is the same membership, not the same access: a pre-store build
   enforces no roles, so every viewer and operator regains full write there
-  (the report lists them). Disabled users are left out; the cookie note
-  above applies to them.
+  (the report lists them). It has no owners either: an owner enters only
+  the orgs it is a member of there (the report lists each org an owner
+  loses; add the owner as a member before exporting to keep it). Disabled
+  users are left out; the cookie note above applies to them.
 - When it writes `orgs.json` while the default org is at the workspace
   root, a pre-store build would move that org's data into
   `orgs/default/` at its next start, so the export makes the move itself:

@@ -793,7 +793,9 @@ import the database is authoritative, and the legacy files are only hashed
 It writes files a pre-store build boots on **with the same membership**,
 not the same access: a pre-store build enforces no roles, so every exported
 member regains full write, and the report lists every viewer and operator
-affected. It is not a byte-level round trip.
+affected. It has no owners either, so an owner enters only the orgs it is a
+member of, and the report lists each org an owner loses. It is not a
+byte-level round trip.
 - **`users.json`** is written only when `identity_armed` is set. It holds
   the enabled local users only; OIDC rows never go in it. In place, it is
   written to the recorded `users_file`, because a pre-store build reads
