@@ -509,7 +509,9 @@ otherwise read an empty store:
      the issuer variable is set (even with `OBSERVOGRAM_AUTH=off`, since
      the keys follow it), else `off` (`OBSERVOGRAM_AUTH=off`), `local`
      (identity armed), `token` (a bearer only) or `open`. It is written
-     (`meta.set`) only when it changes.
+     (`meta.set`) only when it changes, and only once the server listens
+     (step 6): a start that fails to bind — a second start beside the running
+     server — records nothing.
    - Zero owners in the current identity mode logs a warning naming the
      way in. The same banner shows in Settings.
 5. **From slice 4: the one-shot pack import**, while

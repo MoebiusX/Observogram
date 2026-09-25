@@ -490,7 +490,9 @@ export function identityModeOf(db, ctx) {
   return ctx.token ? 'token' : 'open';
 }
 
-// Recorded at every start, written (meta.set) only when it changes.
+// Recorded by start() once the server listens (never by a start that fails,
+// e.g. a second start on a port already in use next to the running server),
+// written (meta.set) only when it changes.
 export function recordIdentityMode(db, ctx) {
   const mode = identityModeOf(db, ctx);
   if (getMeta(db, 'identity_mode') === mode) return false;
@@ -638,7 +640,6 @@ export async function bootStore({ host, log = () => {}, warn = () => {} } = {}) 
   if (checked.insecure) process.stderr.write(`${INSECURE_WARNING(ctx.host)}\n`);
   applySeedDecision(db, decision, { log, warn });
   recordIssuer(db, ctx);
-  recordIdentityMode(db, ctx);
   warnNoOwner(db, ctx, warn);
   warnLeftBehind(db, ctx, warn);
   warnIgnoredJoinRole(db, ctx, warn, { imported: report !== null });

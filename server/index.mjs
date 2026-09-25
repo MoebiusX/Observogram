@@ -71,7 +71,7 @@ import { versionInfo } from './version.mjs';
 import { buildInfo, buildLabel } from './build-info.mjs';
 import { runWithOrg, currentOrg, orgWorkspaceRoot, baseWorkspaceRoot, orgRootOf } from './tenancy.mjs';
 import { setWorkspaceRootResolver } from '../tools/lib/journey.mjs';
-import { bootStore } from './boot.mjs';
+import { recordIdentityMode, bootStore } from './boot.mjs';
 import { currentStore } from './store/db.mjs';
 import { getOrg, listOrgs } from './store/orgs.mjs';
 import { listMembershipsForUser } from './store/memberships.mjs';
@@ -2100,7 +2100,7 @@ function rehydrateOrgs(silent) {
 export async function start({ port = PORT, host = HOST, silent = false } = {}) {
   const log = (m) => { if (!silent) process.stdout.write(m + '\n'); };
   const warn = (m) => { if (!silent) process.stderr.write(m + '\n'); };
-  await bootStore({ host, log, warn });
+  const { db, ctx } = await bootStore({ host, log, warn });
   if (localUsersEnabled()) touchSessionSecret();
   // Journeys/runs live in the engine (tools/lib/journey.mjs) — wire its
   // root through the same context-aware resolver the registry uses.
@@ -2114,6 +2114,9 @@ export async function start({ port = PORT, host = HOST, silent = false } = {}) {
       // call site will format a friendly message.
       const addr = srv.address();
       if (!addr) return;
+      // The sign-in mode the CLIs read (server/identity-admin.mjs) is this
+      // server's only once it listens: a start that fails to bind records nothing.
+      recordIdentityMode(db, ctx);
       if (!silent) process.stdout.write(`[studio] listening on http://${addr.address}:${addr.port}\n`);
       resolveListen(srv);
     });

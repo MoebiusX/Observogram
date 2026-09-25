@@ -88,7 +88,7 @@ function childEnv(ws, extra = {}) {
 const BOOT_CODE = `
 const { start } = await import(${JSON.stringify(INDEX_URL)});
 try {
-  const srv = await start({ port: 0, host: process.env.BOOT_HOST, silent: process.env.BOOT_SILENT === '1' });
+  const srv = await start({ port: Number(process.env.BOOT_PORT || 0), host: process.env.BOOT_HOST, silent: process.env.BOOT_SILENT === '1' });
   process.stdout.write('LISTENING ' + srv.address().port + '\\n');
   if (process.env.BOOT_KEEP !== '1') { srv.close(); process.exit(0); }
 } catch (e) {
@@ -106,9 +106,9 @@ function parseBoot(stdout) {
 }
 
 // One boot that exits: { listening, port?, message?, code?, nothingMoved?, stdout, stderr }.
-function boot(ws, { host = '127.0.0.1', env = {}, silent = true } = {}) {
+function boot(ws, { host = '127.0.0.1', env = {}, silent = true, port = 0 } = {}) {
   const r = spawnSync(process.execPath, ['--input-type=module', '-e', BOOT_CODE], {
-    env: childEnv(ws, { ...env, BOOT_HOST: host, BOOT_SILENT: silent ? '1' : '0' }), encoding: 'utf8', timeout: 60_000,
+    env: childEnv(ws, { ...env, BOOT_HOST: host, BOOT_SILENT: silent ? '1' : '0', BOOT_PORT: String(port) }), encoding: 'utf8', timeout: 60_000,
   });
   const out = { ...parseBoot(r.stdout), stdout: r.stdout, stderr: r.stderr, status: r.status };
   if (out.message === null) throw new Error(`the boot child printed neither LISTENING nor REFUSED (status ${r.status}): ${r.stderr}`);
@@ -861,6 +861,25 @@ test('boot step 4 records the sign-in mode it starts with, and writes it only wh
   const open = workspace();
   assert.ok(boot(open, { host: '0.0.0.0', env: { OBSERVOGRAM_INSECURE_NO_AUTH: '1' } }).listening);
   await inspectWs(open, (v) => assert.equal(v.meta('identity_mode'), 'open'));
+});
+
+test('a start that fails to listen records no sign-in mode: a plain-shell start beside the running OIDC server leaves oidc', async () => {
+  const ws = workspace();
+  const srv = await serve(ws, { env: OIDC_ENV });
+  try {
+    const port = Number(new URL(srv.base).port);
+    const r = boot(ws, { env: {}, port });
+    assert.equal(r.listening, false);
+    assert.equal(r.code, 'EADDRINUSE', r.message);
+    await inspectWs(ws, (v) => assert.equal(v.meta('identity_mode'), `oidc:${KEY}`));
+    // The CLI from a plain shell still reads the running server's mode: the first local user is not owner.
+    const c = cli(USER_ADMIN, ['add', 'ops', '--password-stdin'], ws, { input: 'correct-horse-battery\n' });
+    assert.equal(c.status, 0, c.stderr);
+    assert.ok(c.stdout.includes(`the server last started with OIDC issuer ${KEY}`), c.stdout);
+    assert.ok(!c.stdout.includes('is the first local user'), c.stdout);
+  } finally {
+    await srv.stop();
+  }
 });
 
 test('CLI sec-3: from a plain shell after an OIDC start the first local user is not owner and the last OIDC owner stays; after a start without OIDC it may go', async () => {
