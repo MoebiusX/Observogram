@@ -1034,3 +1034,23 @@ test('pre-upgrade cookies stay valid across the upgrade', async () => {
   }
   assert.ok(statSync(join(ws, 'session-secret')).isFile());
 });
+
+test('a pre-upgrade pwflow cookie replayed as the session is not a session', async () => {
+  // develop signs its forced-change flow cookie { sub, purpose: 'pwchange', exp }
+  // (no login, no ep) with the session key; after the upgrade it reads as
+  // pre-upgrade, so only the explicit purpose check keeps it from being one.
+  const ws = workspace();
+  usersFile(ws, { bob: { createdAt: 't', password: REAL, role: 'admin', mustChange: true } });
+  const secret = 'pre-store-session-secret-0123456789-abcdefgh';
+  writeFileSync(join(ws, 'session-secret'), secret, { mode: 0o600 });
+  const body = Buffer.from(JSON.stringify({ sub: 'bob', purpose: 'pwchange', exp: Date.now() + 600_000 })).toString('base64url');
+  const cookie = `observogram_session=v1.${body}.${createHmac('sha256', secret).update(body).digest('base64url')}`;
+  const s = await serve(ws);
+  try {
+    const me = await (await fetch(`${s.base}/auth/me`, { headers: { Cookie: cookie } })).json();
+    assert.equal(me.authenticated, false, JSON.stringify(me));
+    assert.equal((await fetch(`${s.base}/api/orgs`, { headers: { Accept: 'application/json', Cookie: cookie } })).status, 401);
+  } finally {
+    await s.stop();
+  }
+});
