@@ -871,6 +871,34 @@ test('Stale import: orgs.json edited on a pre-store build — orgs renamed, crea
   });
 });
 
+test('Stale import: orgs.json rewritten on a pre-store build without "default" — the default org is kept (never soft-removed), with its root and memberships; the others follow the file', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice', 'bob']);
+  legacy.writeOrgsFile({
+    default: { name: 'Default', members: { alice: 'admin' } },
+    beta: { name: 'Beta', members: { bob: 'member' } },
+  }, join(base, 'orgs.json'));
+  pack(base, 'p1');
+  await start(base);
+  await exportIt(base);
+  assert.deepEqual(Object.keys(readJson(join(base, 'orgs.json'))), ['default', 'beta']);
+
+  pre.boot(base);
+  legacy.writeOrgsFile({ beta: { name: 'Beta', members: { bob: 'admin' } } }, join(base, 'orgs.json'));
+  await refused(base);
+  await requestIt(base);
+  const { logs } = await start(base);
+  assert.ok(!logs.some((l) => /removed default/.test(l)), logs.join('\n'));
+  await read(base, (db) => {
+    assert.equal(getOrg(db, 'default').removedAt, null, 'the default org is never soft-removed by a replace');
+    assert.equal(getOrg(db, 'default').root, 'orgs/default');
+    assert.deepEqual(membersOf(db, 'default'), ['alice:admin']);
+    assert.deepEqual(membersOf(db, 'beta'), ['bob:admin']);
+    assert.equal(getOrg(db, 'beta').removedAt, null);
+  });
+  assert.deepEqual(pre.packIds(base, 'default'), ['p1']);
+});
+
 test('Stale import: a user disabled in the store keeps their memberships across a replace — the export leaves them out of orgs.json, so the file cannot have removed them', async () => {
   const base = tempDir();
   usersJson(base, ['alice', 'bob', 'carol']);
