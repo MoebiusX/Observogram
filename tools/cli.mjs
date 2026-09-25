@@ -12,7 +12,7 @@
 //   packc x-ray    <repo-dir>         → tools/crawl-repo.mjs
 //   packc compile  <file> [target]    → tools/lib/compile.mjs (programmatic)
 //   packc init     …                  → tools/pack-init.mjs (build a pack from the library)
-//   packc store    backup|restore|export|import --replace … → tools/store-admin.mjs (back up / restore / export the embedded store; request a re-import)
+//   packc store    backup|restore|export|import --replace|rekey-issuer … → tools/store-admin.mjs (back up / restore / export the embedded store; request a re-import; rekey the OIDC issuer)
 //   packc serve                       → server/index.mjs (boots the studio)
 //   observogram                       → same as `serve`
 //
@@ -123,6 +123,7 @@ Usage:
   packc store    restore <backup> Replace the store with a backup (server stopped; old files moved aside)
   packc store    export <dir>     Write users.json / orgs.json a pre-store build boots on (<dir> = the workspace: in place, server stopped)
   packc store    import --replace Ask the next server start to re-import users.json / orgs.json as they stand (server stopped)
+  packc store    rekey-issuer --to <issuer> | --clear  Move the OIDC users to the IdP's new URL, or disable them for another IdP (server stopped)
   packc serve                     Boot the studio (Express server)
   observogram                     Same as \`packc serve\`
 

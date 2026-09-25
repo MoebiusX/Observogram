@@ -2163,6 +2163,37 @@ test('identity-admin sec-3 without a recorded mode or issuer: A-16 applies and a
   }
 });
 
+test('rewriteLoginPrefix and disableOidcRows: tx only, no audit row; only kind oidc logins under the prefix; a login it would reuse refuses before any write', async () => {
+  const { db, close } = await freshStore('rekey');
+  try {
+    const mk = (login, kind = 'oidc') => users.createUser(db, 'system', kind === 'oidc'
+      ? { kind, login, issuer: login.split('#')[0], sub: login.split('#').slice(1).join('#') } : { login });
+    mk('https://a.example/#s1');
+    mk('https://a.example/#s#2');
+    mk('https://a.example/x#s3');
+    mk('https://a.example/#local', 'local');
+    const before = auditActions(db).length;
+    assert.throws(() => users.rewriteLoginPrefix(db, 'https://a.example/#', 'https://b.example/#'), /inside the tx\(\)/);
+    assert.throws(() => users.disableOidcRows(db), /inside the tx\(\)/);
+    assert.equal(tx(db, () => users.rewriteLoginPrefix(db, 'https://a.example/#', 'https://b.example/#')), 2);
+    assert.deepEqual(users.listUsers(db).map((u) => u.login),
+      ['https://b.example/#s1', 'https://b.example/#s#2', 'https://a.example/x#s3', 'https://a.example/#local']);
+    mk('https://c.example/#s1');
+    assert.throws(() => tx(db, () => users.rewriteLoginPrefix(db, 'https://b.example/#', 'https://c.example/#')),
+      (e) => e.code === 'ERR_OBSERVOGRAM_LOGIN_TAKEN' && e.taken.join() === 'https://c.example/#s1');
+    assert.ok(users.getUserByLogin(db, 'https://b.example/#s#2'), 'nothing rewritten');
+    const eps = users.listUsers(db).map((u) => u.sessionEpoch);
+    assert.deepEqual(tx(db, () => users.disableOidcRows(db)),
+      ['https://b.example/#s1', 'https://b.example/#s#2', 'https://a.example/x#s3', 'https://c.example/#s1']);
+    assert.deepEqual(users.listUsers(db).map((u) => [u.disabled, u.sessionEpoch]),
+      eps.map((ep, i) => (i === 3 ? [false, ep] : [true, ep + 1])));
+    assert.deepEqual(tx(db, () => users.disableOidcRows(db)), [], 'an already disabled row is left as it is');
+    assert.equal(auditActions(db).length, before + 1, 'no audit row but the createUser above');
+  } finally {
+    close();
+  }
+});
+
 test('identity-admin resolveLogin: its five cases, and a shell issuer that differs from the recorded one', async () => {
   const { db, close } = await freshStore('admin-resolve');
   try {

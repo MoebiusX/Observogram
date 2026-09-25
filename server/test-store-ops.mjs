@@ -13,7 +13,8 @@
  * real v0.4.0 build over HTTP (CI job store-prestore). The Stale import
  * cases then edit the files as a pre-store build does during a downgrade,
  * and start the store build again: it refuses, and after `packc store
- * import --replace` the next start re-imports them.
+ * import --replace` the next start re-imports them. `packc store
+ * rekey-issuer` (--to, --clear) closes the OIDC upgrade gate's IdP moves.
  *
  * Hermetic (§0): the store and identity variables of a developer shell are
  * deleted before any server code loads; each fixture has its own temp
@@ -46,7 +47,7 @@ const { getOrg, listOrgs } = await import('./store/orgs.mjs');
 const { getUserByLogin, listUsers } = await import('./store/users.mjs');
 const { listAudit } = await import('./store/audit.mjs');
 const legacy = await import('./store/legacy-files.mjs');
-const { exportStore, formatExport, COOKIE_NOTE, REPLACE_REQUESTED, requestReplace } = await import('./store/ops.mjs');
+const { exportStore, formatExport, formatRekey, COOKIE_NOTE, rekeyIssuer, REPLACE_REQUESTED, requestReplace } = await import('./store/ops.mjs');
 const admin = await import('./identity-admin.mjs');
 const { hashPassword, resolveSession, verifyPassword } = await import('./auth.mjs');
 const boot = await import('./boot.mjs');
@@ -669,7 +670,7 @@ test('Stale import: with OBSERVOGRAM_USERS_FILE outside the workspace the replac
   await start(base, env);
 });
 
-test('Stale import: a replace requested from a shell with no OIDC env on an OIDC deployment maps members under the unit\'s issuer and disables no OIDC user; after an issuer change it refuses at step 2 and stays pending', async () => {
+test('Stale import: a replace requested from a shell with no OIDC env on an OIDC deployment maps members under the unit\'s issuer and disables no OIDC user; after an issuer change it refuses at step 2 and stays pending; after `rekey-issuer --to` it runs under the new key with no duplicate rows', async () => {
   const base = tempDir();
   legacy.writeOrgsFile({
     default: { name: 'Default', members: { 'sub-1': 'admin' } },
@@ -707,16 +708,25 @@ test('Stale import: a replace requested from a shell with no OIDC env on an OIDC
     assert.equal(meta.getMeta(db, 'replace_requested'), meta.storeId(db));
   });
 
-  await start(base, env);
+  // The IdP moved: `rekey-issuer --to` from the same shell; the request stays pending.
+  const moved = 'https://other.example/';
+  const rk = run('rekey-issuer', '--to', moved);
+  assert.equal(rk.status, 0, rk.stderr);
+  assert.match(rk.stdout, /a pending `packc store import --replace` stays pending/);
+  await read(base, (db) => assert.equal(meta.getMeta(db, 'replace_requested'), meta.storeId(db)));
+  const NEW = identity.canonIssuer(moved);
+  await start(base, { OBSERVOGRAM_OIDC_ISSUER: moved });
   await read(base, (db) => {
     assert.deepEqual(userRows(db).map((u) => [u.login, u.kind, u.disabled, u.owner]), [
-      [`${KEY}#sub-1`, 'oidc', false, true], [`${KEY}#sub-2`, 'oidc', false, false], [`${KEY}#sub-3`, 'oidc', false, false],
-    ]);
-    assert.equal(getUserByLogin(db, `${KEY}#sub-3`).sessionEpoch, 1);
-    assert.deepEqual(membersOf(db, 'acme'), [`${KEY}#sub-2:admin`, `${KEY}#sub-3:viewer`]);
-    assert.deepEqual(membersOf(db, 'default'), [`${KEY}#sub-1:admin`]);
+      [`${NEW}#sub-1`, 'oidc', false, true], [`${NEW}#sub-2`, 'oidc', false, false], [`${NEW}#sub-3`, 'oidc', false, false],
+    ], 'no row under the old key, no duplicate under the new one');
+    assert.equal(getUserByLogin(db, `${NEW}#sub-3`).sessionEpoch, 1);
+    assert.deepEqual(membersOf(db, 'acme'), [`${NEW}#sub-2:admin`, `${NEW}#sub-3:viewer`]);
+    assert.deepEqual(membersOf(db, 'default'), [`${NEW}#sub-1:admin`]);
     assert.equal(meta.getMeta(db, 'replace_requested'), null);
+    assert.equal(meta.getMeta(db, 'oidc_issuer'), NEW);
   });
+  await start(base, { OBSERVOGRAM_OIDC_ISSUER: moved });
 });
 
 test('Stale import: a flat OIDC round trip keeps every IdP user and the owner enabled; a user a pre-store build adds to the leftover users.json is created disabled', async () => {
@@ -817,4 +827,172 @@ test('packc store import: without --replace a usage error naming it; the refusal
   assert.equal(none.stdout, `store: ${dbOf(base)}\n`);
   assert.match(none.stderr, /^packc store import: no database at /);
   assert.equal(none.stderr.trim().split('\n').length, 1);
+});
+
+// ---------- rekey-issuer ----------
+
+const rekey = (base, opts) => rekeyIssuer({ dbPath: dbOf(base), out: silent, ...opts });
+async function oidcSessionOf(base, c, issuerRaw) {
+  return withEnv({ ...CLEAR, OBSERVOGRAM_WORKSPACE: base, OBSERVOGRAM_SESSION_SECRET: SECRET, OBSERVOGRAM_OIDC_ISSUER: issuerRaw }, async () => {
+    const db = await openStore({ path: dbOf(base) });
+    try { return resolveSession({ headers: { cookie: c } }, { db })?.login ?? null; } finally { closeStore(dbOf(base)); }
+  });
+}
+// An OIDC deployment: orgs.json members, an owner, a local user left over.
+async function oidcDeployment() {
+  const base = tempDir();
+  usersJson(base, ['alice']);
+  legacy.writeOrgsFile({
+    default: { name: 'Default', members: { 'sub-1': 'admin' } },
+    acme: { name: 'Acme', members: { 'sub-2': 'viewer', 'sub-1': 'admin' } },
+  }, join(base, 'orgs.json'));
+  await start(base, { OBSERVOGRAM_OIDC_ISSUER: ISSUER });
+  // As start() records it once the server listens.
+  await change(base, (db) => boot.recordIdentityMode(db, { issuerKey: KEY }));
+  return base;
+}
+
+test('rekey-issuer --to: the same IdP users keep their rows, roles and owner flag under the new key; identity_mode follows; one issuer.rekey row; the new issuer boots', async () => {
+  const base = await oidcDeployment();
+  const moved = 'https://login.example/realms/ops/.well-known/openid-configuration';
+  const NEW = identity.canonIssuer(moved);
+  await change(base, (db) => admin.grantOwnerByLogin(db, 'cli', `${KEY}#sub-2`, { shellIssuerRaw: ISSUER }));
+  const before = await read(base, (db) => ({
+    users: userRows(db), audit: actions(db).length, identityMode: meta.getMeta(db, 'identity_mode'),
+    members: ['default', 'acme'].map((o) => membersOf(db, o)),
+  }));
+  assert.equal(before.identityMode, `oidc:${KEY}`);
+  assert.deepEqual(before.members, [[`${KEY}#sub-1:admin`, `${KEY}#sub-2:admin`], [`${KEY}#sub-1:admin`, `${KEY}#sub-2:viewer`]]);
+  const oldCookie = storeCookie(`${KEY}#sub-1`, 0);
+  assert.equal(await oidcSessionOf(base, oldCookie, ISSUER), `${KEY}#sub-1`);
+
+  const r = await rekey(base, { to: moved });
+  assert.deepEqual([r.mode, r.from, r.to, r.rows, r.pending], ['to', KEY, NEW, 2, false]);
+  assert.deepEqual(formatRekey(r), [
+    `rekeyed store ${r.storeId}: OIDC users ${KEY}#<sub> -> ${NEW}#<sub> (2 rows)`,
+    `set OBSERVOGRAM_OIDC_ISSUER to a spelling of ${NEW} before starting the server; sessions signed in under the old key end (a fresh sign-in finds the same user)`,
+  ]);
+  await read(base, (db) => {
+    assert.deepEqual(userRows(db), before.users.map((u) => ({ ...u, login: u.kind === 'oidc' ? u.login.replace(`${KEY}#`, `${NEW}#`) : u.login })),
+      'same rows, epochs, owner and disabled flags; only the prefix changed');
+    assert.deepEqual(['default', 'acme'].map((o) => membersOf(db, o)),
+      before.members.map((m) => m.map((x) => x.replace(`${KEY}#`, `${NEW}#`))), 'the same memberships and roles');
+    assert.equal(meta.getMeta(db, 'oidc_issuer'), NEW);
+    assert.equal(meta.getMeta(db, 'identity_mode'), `oidc:${NEW}`);
+    const rows = listAudit(db, { limit: 1000 });
+    assert.equal(rows.length, before.audit + 1, 'one audit row');
+    assert.deepEqual([rows[0].action, rows[0].actor, rows[0].targetKind, rows[0].targetId, rows[0].detail],
+      ['issuer.rekey', 'cli', 'issuer', KEY, { from: KEY, to: NEW, mode: 'to', rows: 2 }]);
+    assert.ok(rows.slice(1).some((a) => a.targetId === `${KEY}#sub-2`), 'earlier audit rows keep the old logins');
+  });
+
+  // Under the new issuer: no step-2 refusal; a pre-upgrade cookie finds the same row, a store cookie under the old key ends.
+  const { warns } = await start(base, { OBSERVOGRAM_OIDC_ISSUER: moved });
+  assert.ok(!warns.some((w) => /no owner/.test(w)), warns.join('\n'));
+  assert.equal(await oidcSessionOf(base, cookie({ sub: 'sub-2' }), moved), `${NEW}#sub-2`);
+  assert.equal(await oidcSessionOf(base, oldCookie, moved), null);
+  assert.equal(await oidcSessionOf(base, storeCookie(`${NEW}#sub-1`, 0), moved), `${NEW}#sub-1`);
+  await read(base, (db) => assert.equal(listUsers(db).length, before.users.length, 'no first-sight duplicate'));
+  const e = await refused(base, { OBSERVOGRAM_OIDC_ISSUER: ISSUER });
+  assert.ok(e.message.includes(`records its OIDC users under ${NEW}`), e.message);
+});
+
+test('rekey-issuer --to: refused on a re-spelling of the recorded key, a login it would reuse, no recorded issuer, an unusable URL, a store in use, no database and :memory: — nothing changed', async () => {
+  const refusedOp = (re) => (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && re.test(e.message);
+  const base = await oidcDeployment();
+  const NEW = identity.canonIssuer('https://new.example/');
+  await change(base, (db) => identity.createOidcUser(db, { issuerKey: NEW, issuerDisplay: 'https://new.example/', sub: 'sub-2', via: 'test' }));
+  const snapshot = () => read(base, (db) => ({ users: userRows(db), audit: actions(db).length, issuer: meta.getMeta(db, 'oidc_issuer'), mode: meta.getMeta(db, 'identity_mode') }));
+  const before = await snapshot();
+
+  await assert.rejects(rekey(base, { to: `${ISSUER}.well-known/openid-configuration` }), refusedOp(/already records its OIDC users under https:\/\/idp\.example\/ — nothing to rekey/));
+  await assert.rejects(rekey(base, { to: 'https://new.example' }), refusedOp(new RegExp(`would reuse a login that exists: ${NEW}#sub-2 — nothing was changed`)));
+  await assert.rejects(rekey(base, { to: 'ftp://new.example/' }), refusedOp(/^--to is an http\(s\) URL/));
+  await assert.rejects(rekey(base, {}), refusedOp(/name one of --to <issuer> or --clear/));
+  await assert.rejects(rekey(base, { to: 'https://x.example/', clear: true }), refusedOp(/name one of/));
+  await openStore({ path: dbOf(base) });
+  try {
+    await assert.rejects(rekey(base, { to: 'https://x.example/' }), refusedOp(/is in use — stop the server .* before rekeying the issuer/));
+  } finally {
+    closeStore(dbOf(base));
+  }
+  assert.deepEqual(await snapshot(), before);
+
+  const local = tempDir();
+  usersJson(local, ['alice']);
+  await start(local);
+  await assert.rejects(rekey(local, { to: 'https://x.example/' }), refusedOp(/records no OIDC issuer — nothing to rekey/));
+  await assert.rejects(rekey(local, { clear: true }), refusedOp(/records no OIDC issuer/));
+  await assert.rejects(rekey(tempDir(), { clear: true }), refusedOp(/no database at .* never creates one/));
+  await assert.rejects(rekeyIssuer({ clear: true, dbPath: ':memory:', out: silent }), refusedOp(/:memory:/));
+});
+
+test('rekey-issuer --clear: every OIDC row disabled with its epoch bumped, the record and an oidc: identity_mode cleared, one issuer.rekey row; the next start records the new key and the bootstrap names a new owner', async () => {
+  const base = await oidcDeployment();
+  await change(base, (db) => admin.disableUser(db, 'cli', `${KEY}#sub-2`, { shellIssuerRaw: ISSUER }));
+  const before = await read(base, (db) => ({ users: userRows(db), audit: actions(db).length }));
+  const r = await rekey(base, { clear: true });
+  assert.deepEqual([r.mode, r.from, r.to, r.disabled], ['clear', KEY, null, [`${KEY}#sub-1`]]);
+  assert.deepEqual(formatRekey(r), [
+    `cleared the OIDC issuer of store ${r.storeId} (was ${KEY}): disabled ${KEY}#sub-1`,
+    'the next start records the new issuer; set OBSERVOGRAM_BOOTSTRAP_ADMIN to name its owner',
+  ]);
+  await read(base, (db) => {
+    assert.deepEqual(userRows(db), before.users.map((u) => (u.kind === 'oidc' ? { ...u, disabled: true, ep: u.disabled ? u.ep : u.ep + 1 } : u)));
+    assert.equal(meta.getMeta(db, 'oidc_issuer'), null);
+    assert.equal(meta.getMeta(db, 'identity_mode'), null);
+    const rows = listAudit(db, { limit: 1000 });
+    assert.equal(rows.length, before.audit + 1, 'one audit row, none per user');
+    assert.deepEqual([rows[0].action, rows[0].actor, rows[0].targetId, rows[0].detail],
+      ['issuer.rekey', 'cli', KEY, { from: KEY, to: null, mode: 'clear', disabled: [`${KEY}#sub-1`] }]);
+  });
+  assert.equal(await oidcSessionOf(base, storeCookie(`${KEY}#sub-1`, 0), ISSUER), null, 'the old rows no longer sign in');
+
+  const other = 'https://other-idp.example/';
+  const OTHER = identity.canonIssuer(other);
+  const { warns } = await start(base, { OBSERVOGRAM_OIDC_ISSUER: other, OBSERVOGRAM_BOOTSTRAP_ADMIN: `${OTHER}#boss` });
+  assert.ok(warns.some((w) => w.startsWith('[store] no owner who can sign in with OIDC')), warns.join('\n'));
+  await change(base, (db) => {
+    assert.equal(meta.getMeta(db, 'oidc_issuer'), OTHER, 'the next start records the new key');
+    const u = identity.oidcSignIn(db, {
+      issuerKey: OTHER, issuerDisplay: other, claims: identity.sanitiseClaims({ sub: 'boss' }, other),
+      bootstrap: identity.parseBootstrapAdmin(`${OTHER}#boss`),
+    });
+    assert.equal(getUserByLogin(db, `${OTHER}#boss`).isOwner, true, u && 'the bootstrap names the new owner');
+    assert.equal(getUserByLogin(db, `${KEY}#sub-1`).isOwner, true, 'the old owner row keeps its flag, disabled');
+  });
+
+  // A stand-alone identity_mode is left as it is.
+  const local = tempDir();
+  await start(local, { OBSERVOGRAM_OIDC_ISSUER: ISSUER });
+  await change(local, (db) => boot.recordIdentityMode(db, { issuerKey: null, token: 'x' }));
+  await rekey(local, { clear: true });
+  await read(local, (db) => assert.equal(meta.getMeta(db, 'identity_mode'), 'token'));
+});
+
+test('packc store rekey-issuer: usage errors exit 2; the store line, the report; a refusal on one line with exit 1', async () => {
+  const base = await oidcDeployment();
+  const env = { ...process.env };
+  for (const k of STRIP) { delete env[`OBSERVOGRAM_${k}`]; delete env[`TOMOGRAPH_${k}`]; }
+  env.OBSERVOGRAM_WORKSPACE = base;
+  const run = (...args) => spawnSync(process.execPath, [PACKC, 'store', 'rekey-issuer', ...args], { env, encoding: 'utf8', timeout: 60_000 });
+  for (const args of [[], ['--to'], ['--to', ''], ['--clear', 'x'], ['--to', 'a', 'b'], ['--both']]) {
+    const r = run(...args);
+    assert.equal(r.status, 2, args.join(' '));
+    assert.match(r.stderr, /name one of --to <issuer> \(the same IdP at a new URL\) or --clear/);
+    assert.match(r.stderr, /packc store rekey-issuer --to <issuer> \| --clear/);
+  }
+  const same = run('--to', ISSUER);
+  assert.equal(same.status, 1);
+  assert.equal(same.stdout, `store: ${dbOf(base)}\n`);
+  assert.match(same.stderr, /^packc store rekey-issuer: store \S+ already records its OIDC users under/);
+  assert.equal(same.stderr.trim().split('\n').length, 1);
+  const ok = run('--to', 'https://moved.example/');
+  assert.equal(ok.status, 0, ok.stderr);
+  const lines = ok.stdout.trim().split('\n');
+  assert.equal(lines[0], `store: ${dbOf(base)}`);
+  assert.match(lines[1], /^rekeyed store \S+: OIDC users https:\/\/idp\.example\/#<sub> -> https:\/\/moved\.example\/#<sub> \(2 rows\)$/);
+  const clr = run('--clear');
+  assert.equal(clr.status, 0, clr.stderr);
+  assert.match(clr.stdout, /cleared the OIDC issuer of store \S+ \(was https:\/\/moved\.example\/\): disabled https:\/\/moved\.example\/#sub-1, https:\/\/moved\.example\/#sub-2/);
 });

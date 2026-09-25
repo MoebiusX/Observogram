@@ -985,7 +985,8 @@ test('OIDC: a stand-alone store switched to OIDC records the key; OIDC unset kee
   const other = 'http://127.0.0.1:10';
   const r = boot(ws, { env: { ...OIDC_ENV, OBSERVOGRAM_OIDC_ISSUER: other } });
   assert.ok(!r.listening && r.message.includes(`OBSERVOGRAM_OIDC_ISSUER is ${other} (key ${canonIssuer(other)})`) && r.message.includes(`under ${KEY}`), r.message);
-  assert.ok(/set OBSERVOGRAM_OIDC_ISSUER back/.test(r.message) && !/rekey-issuer/.test(r.message), r.message);
+  assert.ok(/set OBSERVOGRAM_OIDC_ISSUER back/.test(r.message), r.message);
+  assert.ok(r.message.includes(`\`packc store rekey-issuer --to ${other}\`; for a different IdP, \`packc store rekey-issuer --clear\`.`), r.message);
   await inspectWs(ws, (v) => {
     assert.equal(v.meta('oidc_issuer'), KEY);
     assert.equal(v.count('SELECT count(*) AS n FROM audit'), before, 'nothing written');

@@ -435,7 +435,8 @@ export function staleImportGuard(db, ctx) {
       `refusing to start: OBSERVOGRAM_OIDC_ISSUER is ${ctx.issuerRaw} (key ${ctx.issuerKey}), but store ${id} records its ` +
       `OIDC users under ${recordedIssuer}. Nothing was changed. If the IdP is the same, set OBSERVOGRAM_OIDC_ISSUER back to ` +
       `the value that key was recorded from (a spelling that canonicalises to ${recordedIssuer}: its trailing path slash, ` +
-      'its well-known suffix).',
+      'its well-known suffix). If the IdP moved (same users, new URL), with the server stopped run ' +
+      `\`packc store rekey-issuer --to ${ctx.issuerRaw}\`; for a different IdP, \`packc store rekey-issuer --clear\`.`,
       { nothingMoved: true });
   }
 

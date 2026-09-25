@@ -145,6 +145,41 @@ export function updateUserRow(db, id, fields, { bump = false } = {}) {
   return getUser(db, id);
 }
 
+// Internal (tx required, no audit): `packc store rekey-issuer --to`
+// (server/store/ops.mjs, whose one issuer.rekey row covers it). Every
+// kind 'oidc' login that starts with `fromPrefix` ('<old key>#') is spelled
+// with `toPrefix` instead; the sub after it is kept. Refused, before any
+// write, when a rewritten login is already taken. → the number of rows.
+export function rewriteLoginPrefix(db, fromPrefix, toPrefix) {
+  if (!db.isTransaction) throw new Error('observogram store: rewriteLoginPrefix() runs inside the tx() whose audit row covers it');
+  requireText(fromPrefix, 'fromPrefix', { max: 2001 });
+  requireText(toPrefix, 'toPrefix', { max: 2001 });
+  const n = fromPrefix.length;
+  const params = { from: fromPrefix, to: toPrefix, n: n + 1 };
+  const taken = prepare(db, `SELECT u.login AS login, t.login AS target FROM users u JOIN users t
+      ON t.login = :to || substr(u.login, :n)
+    WHERE u.kind = 'oidc' AND substr(u.login, 1, :n - 1) = :from ORDER BY u.id`).all(params);
+  if (taken.length) {
+    const err = new Error(`observogram store: rewriting ${fromPrefix} to ${toPrefix} would reuse a login that exists: `
+      + taken.map((r) => `${r.login} → ${r.target}`).join(', '));
+    err.code = 'ERR_OBSERVOGRAM_LOGIN_TAKEN';
+    err.taken = taken.map((r) => r.target);
+    throw err;
+  }
+  return prepare(db, `UPDATE users SET login = :to || substr(login, :n)
+    WHERE kind = 'oidc' AND substr(login, 1, :n - 1) = :from`).run(params).changes;
+}
+
+// Internal (tx required, no audit): `packc store rekey-issuer --clear`.
+// Every enabled kind 'oidc' row is disabled with its epoch bumped, so its
+// cookies stop working. → the logins it disabled, by id.
+export function disableOidcRows(db) {
+  if (!db.isTransaction) throw new Error('observogram store: disableOidcRows() runs inside the tx() whose audit row covers it');
+  return prepare(db, `UPDATE users SET disabled = 1, session_epoch = session_epoch + 1
+    WHERE kind = 'oidc' AND disabled = 0 RETURNING id, login`).all()
+    .sort((a, b) => a.id - b.id).map((r) => r.login);
+}
+
 // For `npm run users -- list`: every user by id, with its memberships in
 // live orgs ([{ orgId, role }], first membership first).
 export function listUsersWithMemberships(db) {

@@ -11,20 +11,26 @@
  *   packc store import --replace   ask the next server start to re-import
  *                                  users.json / orgs.json as they stand (server
  *                                  stopped) — the re-upgrade after a rollback
+ *   packc store rekey-issuer --to <issuer> | --clear
+ *                                  the OIDC users follow the IdP to a new URL,
+ *                                  or are retired for another IdP (server stopped)
  *
  * The database is OBSERVOGRAM_DB, else <workspace>/observogram.db. Exit
  * codes: 0 done · 1 refused or failed (one line on stderr) · 2 usage.
  */
 
 import { backupStore, restoreStore } from '../server/store/backup.mjs';
-import { exportStore, formatExport, REPLACE_REQUESTED, requestReplace } from '../server/store/ops.mjs';
+import { exportStore, formatExport, formatRekey, rekeyIssuer, REPLACE_REQUESTED, requestReplace } from '../server/store/ops.mjs';
 
 const USAGE = `usage: packc store backup <path>      Write a consistent copy of the store (safe while the server runs)
        packc store restore <backup>   Replace the store with a backup (server stopped; the old files are moved aside)
        packc store export <dir>       Write users.json / orgs.json a pre-store build boots on; <dir> = the workspace
                                       exports in place (server stopped: before rolling the image back)
        packc store import --replace   Ask the next server start to re-import users.json / orgs.json as they stand
-                                      (server stopped: after a rollback, before starting the store build again)`;
+                                      (server stopped: after a rollback, before starting the store build again)
+       packc store rekey-issuer --to <issuer> | --clear
+                                      Move the OIDC users to the IdP's new URL (--to), or disable them for another
+                                      IdP (--clear; OBSERVOGRAM_BOOTSTRAP_ADMIN names the next owner) (server stopped)`;
 
 async function main([cmd, arg, ...extra]) {
   if (cmd === 'import' && (arg !== '--replace' || extra.length)) {
@@ -32,6 +38,22 @@ async function main([cmd, arg, ...extra]) {
       + '--replace asks the next start to re-import the files as they stand');
     console.error(USAGE);
     return 2;
+  }
+  if (cmd === 'rekey-issuer') {
+    const to = arg === '--to' && extra.length === 1 && extra[0] ? extra[0] : null;
+    if (!(to || (arg === '--clear' && !extra.length))) {
+      console.error('packc store rekey-issuer: name one of --to <issuer> (the same IdP at a new URL) or --clear (a different IdP)');
+      console.error(USAGE);
+      return 2;
+    }
+    try {
+      const r = await rekeyIssuer(to ? { to } : { clear: true });
+      for (const line of formatRekey(r)) console.log(line);
+      return 0;
+    } catch (e) {
+      console.error(`packc store rekey-issuer: ${e.message}`);
+      return 1;
+    }
   }
   if (!['backup', 'restore', 'export', 'import'].includes(cmd) || !arg || extra.length) {
     console.error(USAGE);

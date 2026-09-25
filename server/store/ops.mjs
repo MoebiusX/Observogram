@@ -12,6 +12,10 @@
 //                                        users.json / orgs.json as they stand
 //                                        (boot step 3, planReplace/applyReplace
 //                                        in server/store/import.mjs)
+//   rekeyIssuer({ to | clear })          `packc store rekey-issuer`: the OIDC
+//                                        users follow the IdP to a new URL
+//                                        (--to), or are retired for another
+//                                        IdP (--clear)
 //
 // An in-place export runs with the server stopped: assertNotInUse()
 // (server/store/backup.mjs, restore's probe) refuses while any connection
@@ -53,8 +57,8 @@ import { writeAudit } from './audit.mjs';
 import { getMeta, getMetaJson, isIdentityArmed, putMeta, setMeta, storeId } from './meta.mjs';
 import { getOrg, listOrgs, setOrgRoot } from './orgs.mjs';
 import { listMembers } from './memberships.mjs';
-import { listUsers } from './users.mjs';
-import { CLI, preStoreSub } from './identity.mjs';
+import { disableOidcRows, listUsers, rewriteLoginPrefix } from './users.mjs';
+import { CLI, canonIssuer, preStoreSub } from './identity.mjs';
 import {
   MIGRATABLE, lexists, markerPath, orgsFilePath, readMarker, sha256File, usersHashKey, writeMarker, writeOrgsFile, writeUsersFile,
 } from './legacy-files.mjs';
@@ -361,6 +365,83 @@ export async function requestReplace({ dbPath = resolveDbPath(), base = baseWork
   } finally {
     closeStore(path);
   }
+}
+
+// ---------- rekey-issuer ----------
+
+// With the server stopped, on a store that records an OIDC issuer key.
+//   --to <issuer>: the same IdP at a new URL (same subs). One tx(): every
+//     kind 'oidc' login '<old>#<sub>' becomes '<new>#<sub>' (refused when a
+//     rewritten login exists), oidc_issuer and an 'oidc:<old>'
+//     identity_mode name the new key, one issuer.rekey row. Earlier audit
+//     rows and deploys.jsonl keep the old logins (append-only).
+//   --clear: another IdP. One tx(): every enabled kind 'oidc' row disabled
+//     with its epoch bumped, oidc_issuer and an 'oidc:' identity_mode
+//     cleared, one issuer.rekey row listing the logins. The next start
+//     records the new key; OBSERVOGRAM_BOOTSTRAP_ADMIN names the owner.
+// A pending replace is left pending: the next start carries it out under
+// the key this leaves (after --clear, the unit's new one).
+export async function rekeyIssuer({ to = null, clear = false, dbPath = resolveDbPath(), out = process.stdout } = {}) {
+  if (Boolean(clear) === (to !== null)) throw refuse('name one of --to <issuer> or --clear');
+  if (dbPath === MEMORY) throw refuse('OBSERVOGRAM_DB is :memory: — an in-memory store lives in one process; rekey the server\'s database file');
+  let newKey = null;
+  if (!clear) {
+    try { newKey = canonIssuer(to); } catch (e) { throw refuse(`--to ${e.message.replace(/^OBSERVOGRAM_OIDC_ISSUER /, '')}`); }
+  }
+  const path = resolve(dbPath);
+  out.write(`store: ${path}\n`);
+  if (!existsSync(path)) throw refuse(`no database at ${path} — nothing to rekey (this command never creates one; check OBSERVOGRAM_DB and OBSERVOGRAM_WORKSPACE)`);
+  await assertNotInUse(path, { doing: 'rekeying the issuer' });
+  const db = await openStore({ path });
+  try {
+    const id = storeId(db);
+    const from = getMeta(db, 'oidc_issuer');
+    if (!from) throw refuse(`store ${id} records no OIDC issuer — nothing to rekey (the server records one at its first start with OBSERVOGRAM_OIDC_ISSUER set)`);
+    const mode = getMeta(db, 'identity_mode');
+    const pending = getMeta(db, 'replace_requested') !== null;
+    if (!clear) {
+      if (newKey === from) throw refuse(`store ${id} already records its OIDC users under ${from} — nothing to rekey`);
+      const rows = tx(db, () => {
+        let n;
+        try {
+          n = rewriteLoginPrefix(db, `${from}#`, `${newKey}#`);
+        } catch (e) {
+          if (e.code !== 'ERR_OBSERVOGRAM_LOGIN_TAKEN') throw e;
+          throw refuse(`the new key would reuse a login that exists: ${e.taken.join(', ')} — nothing was changed`);
+        }
+        putMeta(db, 'oidc_issuer', newKey);
+        if (mode === `oidc:${from}`) putMeta(db, 'identity_mode', `oidc:${newKey}`);
+        writeAudit(db, CLI, { action: 'issuer.rekey', targetKind: 'issuer', targetId: from, detail: { from, to: newKey, mode: 'to', rows: n } });
+        return n;
+      });
+      return { storeId: id, path, mode: 'to', from, to: newKey, rows, pending };
+    }
+    const disabled = tx(db, () => {
+      const logins = disableOidcRows(db);
+      putMeta(db, 'oidc_issuer', null);
+      if (mode !== null && mode.startsWith('oidc:')) putMeta(db, 'identity_mode', null);
+      writeAudit(db, CLI, { action: 'issuer.rekey', targetKind: 'issuer', targetId: from, detail: { from, to: null, mode: 'clear', disabled: logins } });
+      return logins;
+    });
+    return { storeId: id, path, mode: 'clear', from, to: null, disabled, pending };
+  } finally {
+    closeStore(path);
+  }
+}
+
+export function formatRekey(r) {
+  const out = [];
+  if (r.mode === 'to') {
+    out.push(`rekeyed store ${r.storeId}: OIDC users ${r.from}#<sub> -> ${r.to}#<sub> (${r.rows} row${r.rows === 1 ? '' : 's'})`);
+    out.push(`set OBSERVOGRAM_OIDC_ISSUER to a spelling of ${r.to} before starting the server; `
+      + 'sessions signed in under the old key end (a fresh sign-in finds the same user)');
+  } else {
+    out.push(`cleared the OIDC issuer of store ${r.storeId} (was ${r.from}): `
+      + `${r.disabled.length ? `disabled ${r.disabled.join(', ')}` : 'no enabled OIDC user to disable'}`);
+    out.push('the next start records the new issuer; set OBSERVOGRAM_BOOTSTRAP_ADMIN to name its owner');
+  }
+  if (r.pending) out.push('a pending `packc store import --replace` stays pending: the next start carries it out under the new key');
+  return out;
 }
 
 // ---------- the report ----------

@@ -1234,7 +1234,7 @@ test('staleImportGuard (a): a new store, or a store never imported, beside legac
   }
 });
 
-test('staleImportGuard (b): a changed issuer refuses with the 2a text; the same issuer re-spelled boots; OIDC unset keeps the record', async () => {
+test('staleImportGuard (b): a changed issuer refuses naming both keys and rekey-issuer; the same issuer re-spelled boots; OIDC unset keeps the record', async () => {
   const base = workspace();
   try {
     const r = await bootIn(base, { OBSERVOGRAM_OIDC_ISSUER: ISSUER });
@@ -1244,7 +1244,9 @@ test('staleImportGuard (b): a changed issuer refuses with the 2a text; the same 
     const other = 'https://other.example/realms/x';
     const expected = `refusing to start: OBSERVOGRAM_OIDC_ISSUER is ${other} (key ${other}), but store ${id} records its `
       + `OIDC users under ${KEY}. Nothing was changed. If the IdP is the same, set OBSERVOGRAM_OIDC_ISSUER back to `
-      + `the value that key was recorded from (a spelling that canonicalises to ${KEY}: its trailing path slash, its well-known suffix).`;
+      + `the value that key was recorded from (a spelling that canonicalises to ${KEY}: its trailing path slash, its well-known suffix). `
+      + `If the IdP moved (same users, new URL), with the server stopped run \`packc store rekey-issuer --to ${other}\`; `
+      + 'for a different IdP, `packc store rekey-issuer --clear`.';
     const audit = auditRows(r.db);
     await assert.rejects(bootIn(base, { OBSERVOGRAM_OIDC_ISSUER: other }), (e) => refusal(expected)(e) && e.nothingMoved === true);
     assert.deepEqual(auditRows(r.db), audit);
