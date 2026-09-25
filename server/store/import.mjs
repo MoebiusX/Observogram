@@ -458,7 +458,8 @@ export function formatReport(r) {
 //     migration did): its root becomes orgs/default in the same tx(), its
 //     journeys' file: paths are rewritten, the empty flat leftovers beside
 //     their orgs/default/ twins (every pre-store restart leaves an empty
-//     <base>/packs) are removed. A flat entry with data beside its twin
+//     <base>/packs) are removed — as they are when an in-place export
+//     already moved that root. A flat entry with data beside its twin
 //     refuses (check D, before anything moves);
 //   - no enabled owner who can sign in under the unit's mode is left where
 //     one was → refuses (check D on plan1; re-asserted in the tx());
@@ -665,9 +666,16 @@ export function planReplace(db, legacy, ctx, migration) {
   let twins = [];
   let leftovers = [];
   let journeys = [];
+  // The default org already at orgs/default (an in-place export moved it):
+  // every pre-store restart since has left an empty <base>/packs beside its
+  // twin — removed as the root change's are.
+  const alreadyMoved = !atRoot && liveBefore.some((o) => o.id === 'default' && o.root === DEFAULT_MOVED);
+  if (rootChange || alreadyMoved) {
+    leftovers = MIGRATABLE.filter((e) => lexists(flatOf(e)) && !hasData(flatOf(e)) && lexists(twinOf(e))).map(flatOf);
+    report.leftovers = [...leftovers];
+  }
   if (rootChange) {
     twins = MIGRATABLE.filter((e) => hasData(flatOf(e)) && lexists(twinOf(e))).map((e) => ({ entry: e, flat: flatOf(e), twin: twinOf(e) }));
-    leftovers = MIGRATABLE.filter((e) => lexists(flatOf(e)) && !hasData(flatOf(e)) && lexists(twinOf(e))).map(flatOf);
     // The default org's journeys: already under orgs/default/ (a pre-store
     // boot moved them), or still at the base until this start's migration.
     const moved = MIGRATABLE.filter((e) => lexists(twinOf(e)) || report.migration.moved.includes(e));
@@ -675,7 +683,6 @@ export function planReplace(db, legacy, ctx, migration) {
     journeys = planJourneyRewrites(ctx.base, moved, { dir }).map((j) => ({ ...j, path: join(twinOf('journeys'), j.name) }));
     report.rootChanged = true;
     report.cronJob = `OBSERVOGRAM_WORKSPACE=${join(ctx.base, DEFAULT_MOVED)}`;
-    report.leftovers = [...leftovers];
     report.journeys = journeys.map((j) => j.name);
   }
   const brokenJourneys = journeys.filter((j) => j.parsedBefore && !j.parsesAfter).map((j) => j.path);

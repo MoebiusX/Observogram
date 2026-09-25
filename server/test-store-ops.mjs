@@ -788,6 +788,32 @@ test('Stale import: a flat single-org store exported, then `orgs create acme` on
   assert.deepEqual(again.warns.filter((w) => /left behind/.test(w)), []);
 });
 
+test('Stale import: the default org already moved to orgs/default by an in-place export — the replace removes the empty <base>/packs every pre-store restart leaves', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice', 'bob']);
+  pack(base, 'p1');
+  await start(base);
+  await change(base, (db) => admin.createOrgFromAdmin(db, 'cli', { id: 'acme', name: 'Acme', admin: 'bob', base }));
+  const r = await exportIt(base);
+  assert.deepEqual(r.move, ['packs']);
+
+  // The pre-store build: a restart (its empty <base>/packs), bob's password changed.
+  pre.boot(base);
+  assert.equal(existsSync(join(base, 'packs')), true);
+  const usersPath = join(base, 'users.json');
+  const file = readJson(usersPath);
+  file.users.bob.password = hashPassword('bob-downgrade-pw');
+  legacy.writeUsersFile(file, usersPath);
+  await requestIt(base);
+
+  const { logs } = await start(base);
+  assert.ok(logs.includes(`[store]   removed empty leftovers of a pre-store build: ${join(base, 'packs')}`), logs.join('\n'));
+  assert.ok(!logs.some((l) => /root is now/.test(l)), 'no root change: the root was already orgs/default');
+  assert.equal(existsSync(join(base, 'packs')), false, 'the empty leftover is removed');
+  assert.deepEqual(pre.packIds(base, 'default'), ['p1']);
+  await read(base, (db) => assert.equal(getOrg(db, 'default').root, 'orgs/default'));
+});
+
 test('Stale import: `orgs create acme` on a pre-store build with no restart after it — the replace moves the flat workspace itself (migrateFlatWorkspace): the entries under orgs/default, the root, the journey file rewritten; the start after passes', async () => {
   const base = tempDir();
   usersJson(base, ['alice', 'bob']);
