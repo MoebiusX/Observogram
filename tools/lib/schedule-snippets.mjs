@@ -27,6 +27,13 @@ export const SNIPPET_FORMATS = Object.freeze(['cron', 'schtasks', 'actions', 'k8
 export const K8S_WORKSPACE_PVC = 'observabilitypack-studio-workspace';
 export const K8S_WORKSPACE_MOUNT = '/workspace';
 const ENV_NAME_RE = /^[A-Z_][A-Z0-9_]*$/i;
+// An org's root in the workspace (STORE_PLAN slice 2): '.' for the default
+// org at the base, 'orgs/<slug>' for a created org. The slug is
+// server/org-context.mjs validOrgId's pattern, duplicated: tools/lib
+// cannot import server/.
+const ORG_ROOT_RE = /^orgs\/[a-z][a-z0-9_-]{0,62}[a-z0-9]$/;
+
+export function validOrgRoot(r) { return r === '.' || ORG_ROOT_RE.test(String(r)); }
 const DOW_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
 // Fill the defaults so every emitter reads one shape.
@@ -34,6 +41,7 @@ export function normaliseSnippetInput(i = {}) {
   const src = i && typeof i === 'object' ? i : {};
   const placeholder = !!src.placeholder || (src.cron == null && src.every == null);
   const envNames = [...new Set((Array.isArray(src.envNames) ? src.envNames : []).filter(n => typeof n === 'string' && ENV_NAME_RE.test(n)))];
+  if (src.orgRoot != null && !validOrgRoot(src.orgRoot)) throw new TypeError(`orgRoot must be '.' or 'orgs/<id>' (got ${JSON.stringify(src.orgRoot)})`);
   return {
     name: String(src.name || 'journey'),
     cron: placeholder ? PLACEHOLDER_CRON : (typeof src.cron === 'string' && src.cron ? src.cron : null),
@@ -50,6 +58,7 @@ export function normaliseSnippetInput(i = {}) {
     retention: src.retention == null ? null : String(src.retention),
     placeholder,
     source: typeof src.source === 'string' && src.source ? src.source : null,
+    orgRoot: src.orgRoot == null ? '.' : src.orgRoot,
   };
 }
 
@@ -190,10 +199,22 @@ export function k8sName(name) {
   return s || 'journey';
 }
 
+// The CronJob's OBSERVOGRAM_WORKSPACE: the shared PVC's mount, or the org's
+// root under it (the CLI resolves only the root it is given).
+export function k8sWorkspace(i) {
+  const n = normaliseSnippetInput(i);
+  return n.orgRoot === '.' ? K8S_WORKSPACE_MOUNT : `${K8S_WORKSPACE_MOUNT}/${n.orgRoot}`;
+}
+
 export function k8sCronJobManifest(i) {
   const n = normaliseSnippetInput(i);
-  const jobName = `observabilitypack-studio-journey-${k8sName(n.name)}`;
-  const secretName = `journey-${k8sName(n.name)}-secrets`;
+  // A non-default org's CronJob and Secret carry the org in their names, so
+  // two orgs' same-named journeys do not overwrite each other in one
+  // namespace; the default org's ('.') output is unchanged.
+  const slug = n.orgRoot === '.' ? null : n.orgRoot.slice('orgs/'.length);
+  const baseName = k8sName(slug ? `${slug}-${n.name}` : n.name);
+  const jobName = `observabilitypack-studio-journey-${baseName}`;
+  const secretName = `journey-${baseName}-secrets`;
   const out = [
     `# Observogram journey "${n.name}" — ${describeCadence(n)}`,
     '# Delegated scheduling (docs/VALUE_BACKLOG.md item 11): one CronJob per journey, no timer in the studio.',
@@ -203,9 +224,13 @@ export function k8sCronJobManifest(i) {
     '# a retry would append a duplicate record. `kubectl get jobs` shows a gate failure as a failed Job — the intended signal.',
   ];
   for (const note of headerNotes(n)) out.push(`# ${note}`);
+  if (slug) out.push(`# Org root: ${n.orgRoot} — OBSERVOGRAM_WORKSPACE=${k8sWorkspace(n)} on the shared PVC`);
   out.push(
     'apiVersion: batch/v1', 'kind: CronJob', 'metadata:', `  name: ${jobName}`, `  namespace: ${n.namespace}`, '  labels:',
     '    app.kubernetes.io/name: observabilitypack-studio', '    app.kubernetes.io/component: journeys', `    observogram.io/journey: ${k8sName(n.name)}`,
+  );
+  if (slug) out.push(`    observogram.io/org: ${slug}`);
+  out.push(
     'spec:',
     n.cron ? `  schedule: "${n.cron}"` : `  schedule: "<set by hand: every ${n.every} has no exact cron form>"`,
   );
@@ -225,7 +250,7 @@ export function k8sCronJobManifest(i) {
     '          containers:', '            - name: journey', `              image: ${n.image}`, '              imagePullPolicy: IfNotPresent',
     '              workingDir: /app',
     `              command: ["node", "tools/cli.mjs", "journey", "run", "${n.name}"]`,
-    '              env:', '                - name: OBSERVOGRAM_WORKSPACE', `                  value: ${K8S_WORKSPACE_MOUNT}`,
+    '              env:', '                - name: OBSERVOGRAM_WORKSPACE', `                  value: ${k8sWorkspace(n)}`,
   );
   if (n.retention) out.push('                - name: OBSERVOGRAM_JOURNEY_RUN_RETENTION', `                  value: "${n.retention}"`);
   for (const e of n.envNames) {

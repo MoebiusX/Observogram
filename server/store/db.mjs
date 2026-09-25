@@ -211,6 +211,30 @@ export async function openStore({ path } = {}) {
   return db;
 }
 
+// The handle openStore() cached for the path resolveDbPath() reads now.
+// The server opens it at start (boot step 1), a CLI in its preamble; every
+// request-time reader gets it here. The env is re-read on every call, like
+// resolveDbPath(), so a suite that re-points the workspace and opens again
+// gets the new database. Throws when that store is not open, so a caller
+// that runs before the open fails closed (a 500), never open.
+function cachedForCurrentPath() {
+  const path = resolveDbPath();
+  return handles.get(path === MEMORY ? MEMORY : resolve(path)) || null;
+}
+
+export function currentStore() {
+  const db = cachedForCurrentPath();
+  if (db) return db;
+  const err = new Error(`observogram store: the store at ${resolveDbPath()} is not open (the server opens it at start)`);
+  err.code = 'ERR_OBSERVOGRAM_STORE_NOT_OPEN';
+  throw err;
+}
+
+// The same lookup, without the throw.
+export function storeIsOpen() {
+  return cachedForCurrentPath() !== null;
+}
+
 // Closes one handle (by the path it was opened with) or, with no argument,
 // every handle. Closing the last connection to a WAL file checkpoints it
 // and removes the -wal file.

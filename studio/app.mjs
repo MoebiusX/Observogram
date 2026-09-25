@@ -15,7 +15,7 @@ import {
   DISCO_SLAB_ACCENT, discoGradeLetter, discoGradeWord,
 } from './constants.mjs';
 import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } from './state.mjs';
-import { api, loadCatalog, validateUploaded, authHeaders, setActiveOrg, getActiveOrg, savedOrg } from './api.mjs';
+import { api, loadCatalog, validateUploaded, authHeaders, setActiveOrg, getActiveOrg, savedOrg, orgChipModel } from './api.mjs';
 import {
   effectiveFocus, focusedPackId, focusedEnv, focusedPack,
   focusedConformance, setFocusedConformance,
@@ -1626,10 +1626,10 @@ function updateObservaOrgChip() {
   const chip = document.getElementById('observa-org');
   if (!chip) return;
   const orgs = state.identity?.orgs || [];
-  const active = orgs.find(o => o.id === getActiveOrg()) || orgs[0];
-  if (!active) { chip.hidden = true; return; }
+  const { kind, active } = orgChipModel(orgs, getActiveOrg());
+  if (kind === 'none') { chip.hidden = true; return; }
   const name = document.getElementById('observa-org-name');
-  if (orgs.length > 1 && !chip.querySelector('select')) {
+  if (kind === 'switcher' && !chip.querySelector('select')) {
     const sel = document.createElement('select');
     sel.className = 'observa-org-select';
     sel.setAttribute('aria-label', 'Active organisation');
@@ -4795,9 +4795,10 @@ async function loadIdentity() {
 }
 
 // Stage 2 tenancy: pick the active org from the session's memberships
-// (/auth/me carries them when orgs.json is armed) — the persisted choice
-// when still valid, the first membership otherwise. Outside tenancy mode
-// this is a no-op and no org header is ever sent.
+// (/auth/me carries them in every identity posture) — the persisted choice
+// when still valid, the first membership otherwise. Without memberships
+// (the open posture) no org header is sent: the server runs the request in
+// the default org. The header is sent whatever the ORG chip shows.
 function resolveActiveOrg() {
   const orgs = state.identity?.orgs || [];
   if (!orgs.length) { setActiveOrg(null); return; }
@@ -4813,16 +4814,18 @@ function setupIdentityChip() {
   const anchor = $('#theme-toggle');
   if (!anchor || document.getElementById('hdr-user')) return;
 
-  // Org indicator — a switcher when the user belongs to several orgs, a
-  // static label for exactly one. Switching reloads: every view is a
+  // Org indicator (orgChipModel) — a switcher when the user belongs to
+  // several orgs, a static label for one org that is not the default one,
+  // nothing for the default org alone. Switching reloads: every view is a
   // projection of the active org's workspace, so a clean re-boot is the
   // honest refresh.
   const orgs = me.orgs || [];
-  if (orgs.length && !document.getElementById('hdr-org')) {
+  const orgChip = orgChipModel(orgs, getActiveOrg());
+  if (orgChip.kind !== 'none' && !document.getElementById('hdr-org')) {
     const wrap = document.createElement('span');
     wrap.id = 'hdr-org';
     wrap.className = 'hdr-org';
-    if (orgs.length > 1) {
+    if (orgChip.kind === 'switcher') {
       wrap.innerHTML = `<span class="ctrl-key">ORG</span>`;
       const sel = document.createElement('select');
       sel.setAttribute('aria-label', 'Active organisation');
@@ -4839,7 +4842,7 @@ function setupIdentityChip() {
       });
       wrap.appendChild(sel);
     } else {
-      const active = orgs[0];
+      const active = orgChip.active;
       wrap.innerHTML = `<span class="ctrl-key">ORG</span><span class="hdr-org-name">${escapeHtml(active.name || active.id)}</span>`;
       wrap.title = `organisation: ${active.id}`;
     }

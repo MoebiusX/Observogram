@@ -21,6 +21,13 @@ it names the shape, the seams, the boot order, the slices, the gates and
 the risks. The detail below exists because every item was a real failure
 mode in the current code.*
 
+*Build status (2026-09-25): slice 1 (the foundation) is PR #109. Slice 2
+is built in two PRs: 2a (PR #111: identity on the store — the boot order,
+the import, revocable sessions, tenancy always on) and 2b (the offline
+operations of §3 and §4: `packc store export`, `import --replace`,
+`rekey-issuer`, `purge-org`, and `restore`'s marker warning). Slice 2 is
+complete once 2a and 2b merge; slice 3 (roles enforced) is next.*
+
 ## 0 · Status quo — what exists and what is missing
 
 | Concern | Today | Where | Gap |
@@ -55,6 +62,17 @@ routine and another ad-hoc loader. The store removes that cost for
     connection, never runs WAL, and forgets everything at restart. A
     restart imports again and seeds `admin`/`admin` again. The server
     warns when it starts on `:memory:`, and the CLIs refuse it.
+  - A `:memory:` boot never writes the workspace, so it never runs the
+    flat-workspace migration. Where a file store would move the flat
+    entries into `orgs/default/`, the default org's root is `.` instead
+    (an `orgs.json` `default` entry too): it reads the flat data in place,
+    and the report line says so. That holds only while `orgs/default`
+    holds no data: over a half-migrated workspace (a pre-store move that
+    stopped part-way) the default org is planned at `orgs/default`, as a
+    file store plans it, the unmoved flat entries stay unread, and the
+    report line and a `left behind` warning say so (`:memory:` moves
+    nothing; a file-store start finishes the move). Check E never fires
+    for that layout.
 - **One module, `server/store/`.**
   - `db.mjs`: open, pragmas, `tx()`, the version check, the warning filter.
   - `migrations.mjs`: ordered steps keyed by `PRAGMA user_version`.
@@ -179,8 +197,8 @@ routine and another ad-hoc loader. The store removes that cost for
 
 ```text
 schema_meta     key PK, value      -- store_id, default_org, identity_armed, oidc_issuer,
-                                   -- oidc_join_role, import_done, import_report, users_file,
-                                   -- legacy_hashes, replace_requested, packs_imported
+                                   -- identity_mode, oidc_join_role, import_done, import_report,
+                                   -- users_file, legacy_hashes, replace_requested, packs_imported
 users           id PK, kind (local|oidc), login UNIQUE NOT NULL,   -- username, or <issuerKey>#<sub>
                 issuer NULL, sub NULL, email, email_verified,
                 name, password JSON NULL, must_change, seeded_default,
@@ -409,7 +427,10 @@ otherwise read an empty store:
      `OBSERVOGRAM_DB` at that store or at a copy of its backup; `packc store
      restore <backup>` with the server stopped; or, to accept the legacy
      files as they stand, move `.store-imported` aside, so the next boot
-     imports them and logs that it did.
+     imports them and logs that it did (a store that was imported already
+     imports nothing: the next boot compares the files with its record).
+     A replace request needs the marker; with it missing, the files are
+     moved aside for one boot, which rewrites it, then put back.
    - Ids match, but a hashed file differs from the last import or export:
      the files were edited outside the store, for instance during a
      downgrade. Refuse and name `packc store import --replace`.
@@ -456,6 +477,11 @@ otherwise read an empty store:
        passes, as it does today.
      - **A still-seeded default admin off loopback.** Refuse, unless the
        decision is `rescue`: `OBSERVOGRAM_ADMIN_PASSWORD` set and no token.
+       A disabled still-seeded row counts too, and `users -- enable`
+       refuses one until `users -- passwd` sets a real password. When
+       every row counted is disabled, the refusal names `users -- passwd
+       <login>` (with the server stopped) instead of the loopback sign-in
+       and the rescue, which cannot reach a disabled row.
      - **No identity, and the import would produce more than one org.**
        Count the `orgs.json` orgs, minus the empty `default` artefact,
        plus `default` when `migrateFlatWorkspace()` would move flat data
@@ -488,6 +514,14 @@ otherwise read an empty store:
      OIDC boot, or a switch from stand-alone), record today's issuer key,
      after every other check has passed. A mismatch was already refused at
      step 2. With OIDC unset, keep the record.
+   - **`identity_mode`.** Record the sign-in mode this start runs, for
+     the CLIs, which cannot see the server's env: `oidc:<issuerKey>` when
+     the issuer variable is set (even with `OBSERVOGRAM_AUTH=off`, since
+     the keys follow it), else `off` (`OBSERVOGRAM_AUTH=off`), `local`
+     (identity armed), `token` (a bearer only) or `open`. It is written
+     (`meta.set`) only when it changes, and only once the server listens
+     (step 6): a start that fails to bind — a second start beside the running
+     server — records nothing.
    - Zero owners in the current identity mode logs a warning naming the
      way in. The same banner shows in Settings.
 5. **From slice 4: the one-shot pack import**, while
@@ -561,6 +595,18 @@ hashed nor imported before then.
    - **The empty `default` artefact.** A `default` entry with no members
      and no data under `orgs/default/` is a leftover of today's rehydrate
      bug (§0). It is dropped and listed.
+   - **A stranded `orgs/default/`.** With no `default` entry, data under
+     `orgs/default/` is either a migration that moved the flat entries
+     and stopped before its `orgs.json` write, or a default org an admin
+     retired from `orgs.json`. The import cannot tell them apart, so it
+     never plans `default` from the directory (that would move the
+     default org and strip its owners). The report and every boot name
+     the directory as left behind, with the ways out: with the server
+     stopped, move its entries into the default org's root, or move the
+     directory aside (adding `default` to `orgs.json` is too late once
+     the import has run). So is
+     any other `orgs/<id>/` with data and no org row (a store started
+     anew); a removed org's root waits for `purge-org` instead.
    - **The default org** is `default` if a real one remains, otherwise the
      first `orgs.json` org. This mirrors today's bearer fallback.
    - **Owners** are the `admin` members of the default org. If there are
@@ -640,13 +686,14 @@ import the database is authoritative, and the legacy files are only hashed
   rekey-issuer` offers two ways through:
   - `--to <issuer>`, for the same IdP at a new URL (a host move, or
     Keycloak 17+ dropping `/auth`), where the subs are unchanged. In one
-    `tx()` it rewrites `oidc_issuer` and the `<issuerKey>#` prefix of every
-    kind `oidc` login, refuses if a rewritten login already exists, and
-    writes one `issuer.rekey` row mapping old to new. Earlier audit rows
-    and `deploys.jsonl` keep the old logins, since both are append-only.
+    `tx()` it rewrites `oidc_issuer`, an `oidc:` `identity_mode` and the
+    `<issuerKey>#` prefix of every kind `oidc` login, refuses if a
+    rewritten login already exists, and writes one `issuer.rekey` row
+    mapping old to new. Earlier audit rows and `deploys.jsonl` keep the old
+    logins, since both are append-only.
   - `--clear`, for a different IdP. It disables every kind `oidc` row and
-    clears the record. The next boot records the new key, and the
-    bootstrap names an owner.
+    clears the record (and an `oidc:` `identity_mode`). The next boot
+    records the new key, and the bootstrap names an owner.
 - **Just-in-time users** are created at the callback, or on first sight of
   a pre-upgrade cookie, as kind `oidc`, with `email` and `email_verified`
   recorded.
@@ -686,7 +733,25 @@ import the database is authoritative, and the legacy files are only hashed
   - The first local user created while no owner exists becomes owner plus
     `admin` of the default org, whatever `--role` says, as the seed would
     have. The CLI prints this. It is safe because Settings cannot create a
-    user without an owner, so only shell access triggers it.
+    user without an owner, so only shell access triggers it. Only while
+    the server's sign-in mode is local: a local user cannot sign in under
+    OIDC, so there the user is created without owner and the CLI prints
+    why, naming the mode it used.
+  - The server's sign-in mode, as the CLI reads it: the issuer of a shell
+    that sets `OBSERVOGRAM_OIDC_ISSUER`; else the `identity_mode` the
+    server's last start recorded (`oidc:<key>` is OIDC, every other value
+    local); else — a store no start of this build has booted — local while
+    the store records no `oidc_issuer`, and unknown while it does (no A-16
+    owner then). The shell's env alone cannot tell: a `docker exec` or
+    `sudo` shell rarely carries the unit's OIDC variables.
+  - `users -- remove` also keeps the last owner who can sign in under
+    that mode: the OIDC owners under its issuer, or the local owners with
+    a password; when unknown, either kind. So a store that dropped OIDC
+    lets its departed OIDC owner go once the server has started without
+    OIDC and a local owner exists, and a plain shell on an OIDC server
+    never lets the last OIDC owner go (which would bring
+    `OBSERVOGRAM_BOOTSTRAP_ADMIN` back into effect for another IdP
+    account).
   - Otherwise the user joins the default org at `--role` while the
     deployment has one org; with more orgs, `--org` is required.
   - `--role` on `users -- add` and `orgs -- add-member` accepts only
@@ -728,7 +793,9 @@ import the database is authoritative, and the legacy files are only hashed
 It writes files a pre-store build boots on **with the same membership**,
 not the same access: a pre-store build enforces no roles, so every exported
 member regains full write, and the report lists every viewer and operator
-affected. It is not a byte-level round trip.
+affected. It has no owners either, so an owner enters only the orgs it is a
+member of, and the report lists each org an owner loses. It is not a
+byte-level round trip.
 - **`users.json`** is written only when `identity_armed` is set. It holds
   the enabled local users only; OIDC rows never go in it. In place, it is
   written to the recorded `users_file`, because a pre-store build reads
@@ -759,7 +826,28 @@ affected. It is not a byte-level round trip.
   out.
 - **In place, with the server stopped**, it records the hashes of what it
   wrote in `legacy_hashes` and the marker, so a later store boot does not
-  refuse its own export.
+  refuse its own export. Before it writes, a `users.json` / `orgs.json`
+  that differs from those hashes (edited by a pre-store build since the
+  last import or export) is refused naming `packc store import --replace`,
+  never overwritten: it holds the only copy of those edits.
+- **In place only into this store's workspace.** It proceeds only when
+  the marker names this store, or there is no marker, this store's
+  database lives inside the workspace and no other store's database is in
+  it (with the database outside, as in k8s, a missing marker refuses: one
+  start on the workspace rewrites it; a workspace that does not exist
+  refuses too): every `*.db` directly in `<base>` and
+  `<base>/db` (`<base>/observogram.db`, the default path, among them) is
+  opened read-only without migrating, and one holding another `store_id`
+  refuses naming it, as does one that cannot be read. A corrupt marker
+  refuses naming it; with the server stopped, moving it aside and running
+  the export again takes the no-marker rule and writes a new marker.
+- **A directory export** writes only into a directory that does not exist
+  or is empty (lstat; a symlink is resolved, and what it names must be
+  absent or empty), outside the workspace and not holding it. Anything
+  else refuses, naming the two ways out: an empty or new directory, or,
+  for this store's own workspace, the in-place export with
+  `OBSERVOGRAM_WORKSPACE` set to it and the server stopped. No shape of a
+  non-empty directory is taken to be safe.
 
 **`packc store import --replace`** re-imports users, orgs and memberships
 from files edited during a downgrade. It is carried out by the server's next
@@ -774,6 +862,9 @@ boot, with the unit's env (§4 step 3).
   their flag. Without an `orgs.json` in the files, the store's memberships
   and `oidc_join_role` are kept, and the no-`orgs.json` mapping (import
   item 3) is not applied.
+- A user disabled before the replace and still disabled after it keeps
+  their memberships: the export leaves disabled users out of `orgs.json`,
+  so the file cannot have removed them.
 - It refuses to commit a result with no enabled owner.
 - When the store's default org has root `.`, the files' `orgs.json` holds
   `default`, and that org's flat entries now sit under `orgs/default/`
@@ -783,10 +874,20 @@ boot, with the unit's env (§4 step 3).
   as the in-place export does. An empty flat directory or a zero-byte
   `deploys.jsonl` beside its `orgs/default/` twin is a leftover of today's
   rehydrate bug (every pre-store restart leaves an empty `<base>/packs`):
-  it is removed and reported. A non-empty twin refuses, naming the paths,
+  it is removed and reported (after the commit; one it cannot remove is a
+  warn line naming it, and the start goes on). A non-empty twin refuses, naming the paths,
   and that refusal is evaluated in step 3's no-write checks, before
   `migrateFlatWorkspace()` runs, so a refused replace moves nothing. This is
   the second, and last, offline way a `root` changes.
+- Without a replace, the same leftover comes back after every round trip
+  (export, a pre-store restart, a store start). So every file-store boot
+  with no org at the base removes an empty directory among the flat
+  entries and logs one `removed empty leftovers of a pre-store build`
+  line. An entry that holds anything stays and is warned about as left
+  behind. The removal is cosmetic: an empty directory it cannot remove (a
+  mount point, no permission, a read-only file system) is one warn line
+  naming the path and the error code, and the start goes on. `:memory:`
+  removes nothing.
 - In the same `tx()` it bumps every changed or disabled user's epoch
   (which also kills cookies minted during the downgrade window), rewrites
   `legacy_hashes`, clears `replace_requested` and writes one audit row.

@@ -229,9 +229,9 @@ changes.
 ## Quickstart
 
 Requires **Node 22.16 or later** (`engines` in `package.json`). The studio
-is moving users, orgs, services and environments into an embedded store on
-Node's built-in `node:sqlite`, which is unflagged from 22.13; 22.16 is the
-floor because it fixes a `StatementSync` use-after-free and the `run()`
+keeps users and orgs in an embedded store on Node's built-in `node:sqlite`
+(services and environments follow), which is unflagged from 22.13; 22.16 is
+the floor because it fixes a `StatementSync` use-after-free and the `run()`
 statement reset that a store hits. CI runs the suites on 22.16.0 and on the
 latest 22. See [docs/STORE_PLAN.md](docs/STORE_PLAN.md).
 
@@ -273,11 +273,73 @@ for a throwaway open sandbox.)
    logs a loud warning) for trusted-network demos only.
 
 Real users and SSO: `npm run users` manages locally-defined accounts,
-`OBSERVOGRAM_OIDC_*` wires any OIDC provider, and `npm run orgs` arms
-workspace-per-org tenancy — see
-[docs/PRODUCTIZATION_PLAN.md](docs/PRODUCTIZATION_PLAN.md). The next stage,
-an embedded store for users, orgs, services and environments, is planned
-in [docs/STORE_PLAN.md](docs/STORE_PLAN.md).
+`OBSERVOGRAM_OIDC_*` wires any OIDC provider, and `npm run orgs` manages
+orgs — see [docs/PRODUCTIZATION_PLAN.md](docs/PRODUCTIZATION_PLAN.md) and
+[docs/STORE_PLAN.md](docs/STORE_PLAN.md).
+
+**Users, orgs and sessions live in the store.** Users, orgs, memberships
+and the owner are rows in the embedded store (`observogram.db`, see
+[Back Up And Restore The Store](#back-up-and-restore-the-store)); the
+server opens it at every start.
+
+- **The import.** The first start of a store build imports `users.json`
+  and `orgs.json` once, prints a report on the boot log (`[store] …`
+  lines) and leaves both files in place. They are hashed and never read
+  again: from then on `npm run users` and `npm run orgs` write the store,
+  and `remove` disables a user instead of deleting it (the audit
+  references it); `npm run users -- enable <login>` undoes it, with the
+  user's memberships, owner flag and password as they were. A user still
+  holding the seeded default password (`admin` / `admin`) is not enabled
+  until `npm run users -- passwd <login>` sets a real one, and such a
+  disabled row still refuses a start beyond loopback (the refusal names
+  `npm run users -- passwd <login>`, run with the server stopped, as the way out). Names and fields the store cannot hold are dropped and
+  listed in the report; they never refuse the start.
+- **Edited legacy files refuse the start.** A store build refuses to start
+  when `users.json` or `orgs.json` changed after the import (a pre-store
+  build during a rollback, config management). The refusal prints the
+  imported SHA-256 and names the ways out: put the file back exactly as it
+  was imported, move it aside and make the change with `npm run users` /
+  `npm run orgs`, or run `packc store import --replace` so the next start
+  re-imports the files as they stand. Roll the image back only after
+  `packc store export` in place, with the server stopped — see
+  [Upgrade And Roll Back](#upgrade-and-roll-back) and
+  [Stale Import](#stale-import).
+- **Tenancy is always on.** Every `/api` request runs in an org and the
+  response echoes it in `X-Observogram-Org`. A flat workspace is the
+  default org, at the workspace root; an org created with `npm run orgs --
+  create <id>` gets `orgs/<id>/`, fixed at creation. The header ORG chip
+  shows for a user in more than one org, or whose only org is not the
+  default one.
+- **Sessions are revocable.** A password change or a disable signs the
+  user out everywhere (a per-user epoch in the store); cookies issued
+  before the upgrade stay valid.
+- **Stand-alone sign-in stays armed once armed.** The first local user
+  arms it; removing users never reopens a server. Only
+  `OBSERVOGRAM_AUTH=off` does.
+- **`npm run users` follows the server's sign-in mode**: the one this
+  shell's `OBSERVOGRAM_OIDC_ISSUER` names, else the one the server's last
+  start recorded. After an OIDC start, a local user added from a plain shell
+  (a `docker exec`, a `sudo` shell) is not made owner, and `users -- remove`
+  keeps the last owner who signs in through that issuer; once the server
+  has started without OIDC, local owners count instead.
+- **OIDC users** are recorded as `<issuerKey>#<sub>`. Name the first owner
+  with `OBSERVOGRAM_BOOTSTRAP_ADMIN` (the `<issuer>#<sub>` form, or an email
+  that counts only when the ID token says `email_verified: true`) or with
+  `npm run users -- owner <login>`. An OIDC deployment without `orgs.json`
+  keeps every IdP user's access (`oidc_join_role = operator`: each new
+  user joins the default org as an operator); set
+  `OBSERVOGRAM_OIDC_JOIN_ROLE=none` before the first start to keep it
+  closed. A start whose `OBSERVOGRAM_OIDC_ISSUER` names another issuer key
+  than the recorded one refuses; see
+  [Move The OIDC Issuer](#move-the-oidc-issuer).
+- **One org without identity.** A one-org `orgs.json` with only a bearer
+  (`OBSERVOGRAM_API_TOKEN`) boots token-only; with neither a bearer nor
+  identity it boots like a fresh install (on loopback it seeds
+  `admin`/`admin`). More than one org needs identity.
+- **Journeys run from the studio** load by name only, and a journey's
+  `crawl:` roots, `file:` packs and inventory site are read only from the
+  org's own part of the workspace (or outside it); a path inside another
+  org's part is refused.
 
 MCP write tokens are unrelated to the API token: they pass through per
 request and are never stored server-side. Registered packs and the deploy
@@ -747,9 +809,253 @@ server's last writes; a `-wal` or
 file beside it. Never copy a backup over the `.db` alone: a `-wal` left
 by an unclean stop would be replayed onto it. To move a
 database, move the file with nothing holding it: it carries its
-`store_id`. Set `OBSERVOGRAM_DB` before the first start of a build whose
-server opens the store (today only `packc store` opens it), so that first
-start finds the file where it will stay.
+`store_id`. The server opens the store at every start, and its first start
+imports `users.json` / `orgs.json`: set `OBSERVOGRAM_DB` before that first
+start, so it finds the file where it will stay.
+
+When the workspace's `.store-imported` marker names another store than the
+one restored, `restore` still succeeds (exit 0) and prints a warning on
+stderr — `the restored store is <id>; <base>/.store-imported names <other>
+— the next start refuses until they agree` — see
+[Stale Import](#stale-import).
+
+### Upgrade And Roll Back
+
+**Upgrade** to a store build ([docs/STORE_PLAN.md](docs/STORE_PLAN.md) §3):
+
+1. Set `OBSERVOGRAM_DB` first, where the database will stay (on local
+   disk; in Kubernetes the `store` claim, see
+   [deploy/k8s/README.md](deploy/k8s/README.md)).
+2. Start the store build. Its first start imports `users.json` /
+   `orgs.json` once, prints the `[store]` report and records what it read
+   (the files' SHA-256 in the store, and the `.store-imported` marker in
+   the workspace). Take a `packc store backup` once it runs.
+
+**Roll back** to a pre-store build (the image before the store) only this
+way. A pre-store build reads `users.json` / `orgs.json`, not the store, so
+without the export it runs on the pre-upgrade files: passwords changed
+since the upgrade revert, and removed users come back.
+
+```bash
+# 1. Take a backup, then stop the server (the export refuses while anything holds the database).
+packc store backup /backups/observogram-before-rollback.db
+# 2. Export in place: <dir> = the workspace itself (an absolute path, the same as OBSERVOGRAM_WORKSPACE).
+packc store export /app/.observogram
+# store: /app/.observogram/observogram.db
+# export: in place in /app/.observogram (store 3f0c…)
+# users.json: /app/.observogram/users.json (3 enabled local users; OIDC users are never written)
+# orgs.json: not written (one org at the workspace root, and the deployment never had one)
+# recorded what it wrote in the store and /app/.observogram/.store-imported: a store build starts on these files without refusing
+# note: users revoked in the store stay signed in on a pre-store build until their cookies expire; rotating OBSERVOGRAM_SESSION_SECRET signs everyone out
+# 3. Start the pre-store image on the same workspace.
+```
+
+To back out before step 3, start the store build again: the export
+changed nothing it needs, and it starts on the exported files. Do not
+restore the step-1 backup for that: it predates the export (and any move
+into `orgs/default`), so its start refuses, saying the files are the
+export's. If you did, `packc store restore` the
+`<database>.pre-restore-…` copy the restore moved aside (the store
+the export wrote); moving the files aside instead starts without the
+default org's moved data, while `packc store import --replace` re-imports
+the exported files and follows the move.
+
+What the export writes:
+
+- `users.json` — the **enabled local** users, with their password records
+  (only once stand-alone sign-in is armed; OIDC users are never written),
+  to the recorded `OBSERVOGRAM_USERS_FILE` path or `<workspace>/users.json`.
+- `orgs.json` — when the deployment had one, has more than one live org,
+  or keeps the default org anywhere but the workspace root: the live orgs,
+  their enabled members (an OIDC member by its `sub`, under the recorded
+  issuer only) and their roles (`operator` is written as `member`).
+- It is the same membership, not the same access: a pre-store build
+  enforces no roles, so every viewer and operator regains full write there
+  (the report lists them). It has no owners either: an owner enters only
+  the orgs it is a member of there (the report lists each org an owner
+  loses; add the owner as a member before exporting to keep it). Disabled
+  users are left out; the cookie note above applies to them.
+- When it writes `orgs.json` while the default org is at the workspace
+  root, a pre-store build would move that org's data into
+  `orgs/default/` at its next start, so the export makes the move itself:
+  every check first (an `orgs/default/<entry>` that already exists refuses,
+  naming each one), then the rename, the default org's journey `file:`
+  paths rewritten to the new place, the files written, and the store's
+  default-org root set to `orgs/default` in one transaction. It prints
+  `the default org's root is now orgs/default — point its CronJobs at
+  OBSERVOGRAM_WORKSPACE=<workspace>/orgs/default`. A failure part-way puts
+  every step back and says so.
+- An in-place export refuses while anything holds the database, on a store
+  the server never started (export to a directory instead), and on
+  `:memory:`. It also refuses, changing nothing, when the `users.json` /
+  `orgs.json` it would overwrite was edited since the store last imported
+  or exported it (a second rollback after a pre-store build's changes):
+  run `packc store import --replace` and start the server once so the
+  store takes the edits in, then export again.
+- An in-place export also proceeds only into a workspace that is provably
+  this store's: its `.store-imported` marker names this store, or there is
+  no marker, this store's database lives inside the workspace and no other
+  store's database is in it (every `*.db` directly in the workspace or its
+  `db/`, `observogram.db` among them, is opened read-only). With no marker
+  and the database outside the workspace (the k8s layout), it refuses: start
+  the server once on that workspace, which rewrites the marker, then export.
+  A workspace that does not exist is refused. A marker naming another store, or such a database holding
+  another store, is refused naming both stores and the command that
+  exports that workspace's own store; a `*.db` that cannot be read is
+  refused naming it (move it out, then export again). A corrupt marker is
+  refused naming it: with the server stopped, move it aside
+  (`mv <workspace>/.store-imported <workspace>/.store-imported.corrupt`),
+  then run the export again.
+- `packc store export <dir>` to any other directory only reads the
+  database (safe while the server runs) and writes only into a directory
+  that does not exist or is empty (a symlink is followed, and what it
+  names must be absent or empty). Anything else is refused, changing
+  nothing: choose an empty or new directory — or, if it is this store's
+  workspace, stop the server and run
+  `OBSERVOGRAM_WORKSPACE=<workspace> packc store export <workspace>` to
+  export in place. A directory inside the workspace, or one holding it,
+  is refused naming the in-place export. With `OBSERVOGRAM_DB` outside
+  the workspace (as on k8s), export to a new directory beside it, such as
+  `/data/db/export-$(date +%Y%m%d%H%M%S)`.
+
+**Re-upgrade** after a rollback: stop the pre-store build and start the
+store build again.
+
+- **Nothing changed** on the pre-store build: the store build starts on the
+  exported files without refusing.
+- **Users or orgs changed** on the pre-store build (its `npm run users` /
+  `npm run orgs`): the start refuses (see [Stale Import](#stale-import)).
+  With the server stopped, request a replace, then start:
+
+```bash
+packc store import --replace
+# store: /app/.observogram/observogram.db
+# replace requested: the next server start re-imports users.json/orgs.json with the unit's environment
+```
+
+The next start re-imports the files as they stand, with the unit's own
+environment (its OIDC issuer and users file, which the shell that asked
+may not have), prints a `[store] replaced from …` report and writes one
+`store.replace` audit row. It keeps the audit, and:
+
+- **Users**, when a users file is present: a local user absent from it is
+  disabled; one in it is updated (password, flags, name, email) and
+  re-enabled if disabled; a new one is created. Without a users file the
+  local users are kept. An OIDC user is never disabled for being absent.
+  The owner flag is never re-derived. Every changed or disabled user is
+  signed out (their old cookies are refused).
+- **Orgs**, when an `orgs.json` is present: orgs are created or renamed to
+  match, memberships follow the file exactly, and a store org absent from
+  it is removed (never the default org). A removed org that reappears is
+  a conflict, skipped and reported. Without an `orgs.json` the orgs and
+  memberships are kept.
+- **The default org's root.** On a flat deployment (exported without an
+  `orgs.json`), `npm run orgs -- create <id>` and a restart on the
+  pre-store build move the default org's data into `orgs/default/`; the
+  replace follows it: the store's default root becomes `orgs/default`
+  (journey `file:` paths rewritten, empty leftovers of the pre-store build
+  removed, the CronJob line printed as for the export; a store start with
+  no replace also removes an empty flat directory a pre-store restart left
+  beside `orgs/default/`, and logs it; one it cannot remove is a warn
+  line, never a failed start). Its memberships follow the file too: the `default`
+  entry a pre-store migration writes has no members, so the replace
+  removes the default org's memberships (the report lists them) and only
+  owners reach it; the others get `no org membership — ask an admin to add
+  you` until `npm run orgs -- add-member default <login>`.
+- It refuses, and moves nothing, when a flat entry with data sits beside
+  its `orgs/default/` twin, when a rewritten journey would no longer
+  parse, or when it would leave no enabled owner who can sign in under the
+  unit's mode (put an owner back into the users file, or make a kept user
+  owner with `npm run users -- owner <login>` — a user only the files
+  hold needs `npm run users -- add <login> --org <org>` first). The
+  request stays pending through every refusal.
+- `packc store import` without `--replace` is a usage error: the first
+  start of the server is what imports.
+
+**Without an export** (the image was already rolled back): the pre-store
+build ran on the pre-upgrade files, and the store still holds everything
+the store build wrote. Re-upgrading starts on the store as it was if those
+files are unchanged, and refuses if they changed, with the same ways out.
+
+### Stale Import
+
+A store build checks, at every start and before it moves, seeds or
+imports anything, that the store and the workspace's legacy files still
+belong together. Each refusal says `Nothing was …` and names its ways out:
+
+- **The marker names another store** (a deleted database,
+  `OBSERVOGRAM_DB` pointed at a new path, a restore of another
+  deployment's backup): point `OBSERVOGRAM_DB` at that store or a copy of
+  its backup; `packc store restore <backup>` with the server stopped; or
+  move `.store-imported` aside, which accepts the files as they stand (the
+  next start imports them, or with no files left starts a new store). On
+  a store that was imported already, the next start imports nothing: it
+  compares the files with that store's record, as below.
+- **The OIDC issuer changed:** set `OBSERVOGRAM_OIDC_ISSUER` back to a
+  spelling of the recorded key, or `packc store rekey-issuer` (below).
+- **A replace requested for another store**, or with the marker missing:
+  point `OBSERVOGRAM_DB` at the right store, restore, then run
+  `packc store import --replace` again (or put the marker back).
+- **`users.json` / `orgs.json` edited after the import or the export:**
+  put the file back exactly as it was (the refusal prints the SHA-256),
+  move it aside and make the change with `npm run users` /
+  `npm run orgs`, or `packc store import --replace`. The request needs
+  the marker: with it missing, move the files aside, start once (the
+  start rewrites the marker), stop, put them back, then request it.
+  After a restore of a backup taken before an in-place export, the
+  refusal says the files are the export's and names the database the
+  export wrote (see [Upgrade And Roll Back](#upgrade-and-roll-back)).
+
+A marker or legacy file that disappeared is repaired and logged, not
+refused. `packc store restore` warns (above) when the marker names another
+store than the one it restored.
+
+### Move The OIDC Issuer
+
+OIDC users are recorded as `<issuerKey>#<sub>`, so a start whose
+`OBSERVOGRAM_OIDC_ISSUER` canonicalises to another key refuses. With the
+server stopped:
+
+```bash
+packc store rekey-issuer --to https://login.example.com/realms/new   # the same IdP (same subs) at a new URL
+packc store rekey-issuer --clear                                     # a different IdP
+```
+
+- `--to` rewrites every OIDC login to the new key, keeping each user's
+  row, roles, memberships and owner flag (it refuses when a rewritten
+  login already exists). Store sessions signed in under the old key end;
+  a fresh sign-in finds the same row. Set `OBSERVOGRAM_OIDC_ISSUER` to a
+  spelling of the new key before the next start.
+- `--clear` disables every OIDC user (they keep their owner flag, disabled)
+  and forgets the issuer; the next start records the new one. Set
+  `OBSERVOGRAM_BOOTSTRAP_ADMIN` before that start to name the new owner.
+- Both write one `issuer.rekey` audit row; earlier audit rows and
+  `deploys.jsonl` keep the old logins. A pending `import --replace` stays
+  pending and runs under the new key.
+
+### Purge A Removed Org
+
+`npm run orgs -- remove <id>` soft-removes an org: its files under
+`orgs/<id>/` stay, and the command prints the way to delete them. With the
+server stopped:
+
+```bash
+packc store purge-org acme
+```
+
+It deletes `orgs/<id>/` and drops that root's entries from the store's
+legacy hashes, writes one `org.purge` audit row and rewrites the marker.
+It runs only on a removed, non-default org whose root is `orgs/<id>`, and
+refuses a root that is a symlink or resolves outside `<workspace>/orgs`,
+and a workspace whose marker names another store. The org row stays, so
+its id is never reused.
+
+**The purge cannot be undone and asks for no confirmation.** It deletes
+everything under `orgs/<id>/` at once: the org's packs, its
+`deploys.jsonl` (that org's deploy audit), its rollback `snapshots/`, its
+`runs/` and its `journeys/`. A `packc store backup` holds only the
+database, not these files, so copy `<workspace>/orgs/<id>/` first if any
+of it may be needed again.
 
 ## API Surface
 
@@ -791,7 +1097,9 @@ start finds the file where it will stay.
 server/
   index.mjs                Express API, upload registry, compile/deploy routes
   library.mjs              Loads library/**/*.library.yaml from disk (the Node side of the BUILD engine)
-  store/                   The embedded store (docs/STORE_PLAN.md): db.mjs (the one node:sqlite door), migrations, repositories, backup/restore — no server callers yet
+  boot.mjs                 The boot order: opens the store, imports users.json / orgs.json once, the seed and the fail-closed checks
+  identity-admin.mjs       The user and org rules behind npm run users / npm run orgs
+  store/                   The embedded store (docs/STORE_PLAN.md): db.mjs (the one node:sqlite door), migrations, repositories, the legacy import and import --replace, backup/restore, ops.mjs (export, the replace request, rekey-issuer, purge-org)
   test-smoke.mjs           End-to-end route smoke tests
 
 studio/

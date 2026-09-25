@@ -74,6 +74,10 @@ enforced server-side, not hidden client-side.
 > above is reversed — users move into an embedded `node:sqlite` store
 > and the Node floor rises to 22.16. See [STORE_PLAN.md](STORE_PLAN.md).
 >
+> *Delivered on the store (STORE_PLAN slice 2): users, sessions revocable
+> through a per-user epoch, OIDC users recorded under an issuer key, the
+> owner.*
+>
 > **Stage 1 addendum (2026-07-03, maintainer decision): ship like
 > Grafana.** The signed-in experience is now the DEFAULT: first boot
 > with nothing configured seeds `admin/admin` (users.json, the standard
@@ -156,9 +160,10 @@ enforced server-side, not hidden client-side.
   fine to ~50 orgs / hundreds of members; beyond that the registry
   module (one file) is the swap-point for a database. We do not build
   the database now.
-  *Reversed 2026-09-24 (planned, not yet built):* the registry moves
-  into the embedded store; [STORE_PLAN.md](STORE_PLAN.md) §4 imports
-  `orgs.json` and `users.json` into it.
+  *Reversed and delivered (STORE_PLAN slice 2):* `orgs.json` and
+  `users.json` are imported once into the store; tenancy is always on
+  with a default org; roots are fixed at creation, so no data moves at
+  runtime. See [STORE_PLAN.md](STORE_PLAN.md) §4.
 - Migration: a deployment with an existing flat workspace gets it
   moved to `orgs/default/` by a one-shot, idempotent boot migration.
 

@@ -63,15 +63,19 @@ import {
   validateSchedule, validateStackBudget, validateNotify,
 } from '../tools/lib/journey.mjs';
 import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
-import { initAuth, authEnabled, readSession, maybeSeedDefaultAdmin, defaultAdminCredentialActive } from './auth.mjs';
+import { initAuth, authEnabled, resolveSession, localUsersEnabled, touchSessionSecret } from './auth.mjs';
 import { validateMcpUrl, redactCredentials } from './mcp-url.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
 import { versionInfo } from './version.mjs';
 import { buildInfo, buildLabel } from './build-info.mjs';
-import { tenancyEnabled, orgsForUser, orgExists, runWithOrg, currentOrg, readOrgs, migrateFlatWorkspace } from './tenancy.mjs';
+import { runWithOrg, currentOrg, orgWorkspaceRoot, baseWorkspaceRoot, orgRootOf } from './tenancy.mjs';
 import { setWorkspaceRootResolver } from '../tools/lib/journey.mjs';
-import { orgWorkspaceRoot } from './tenancy.mjs';
+import { recordIdentityMode, bootStore } from './boot.mjs';
+import { currentStore } from './store/db.mjs';
+import { getOrg, listOrgs } from './store/orgs.mjs';
+import { listMembershipsForUser } from './store/memberships.mjs';
+import { defaultOrgId, liveOrg } from './store/identity.mjs';
 import { brandEnv } from '../tools/lib/brand-env.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
 import { stackSummary } from '../tools/lib/stack-evidence.mjs';
@@ -183,32 +187,45 @@ function loadPackFile(relPath) {
 // registration writes through to disk and start() rehydrates the map, so
 // crawled / drafted / uploaded packs survive restarts. Eviction at the cap
 // prunes both the map and the disk copy (retention by least-recently-used).
-// With tenancy on, each org has its own registry — a process-wide map
-// would leak one org's packs into another's catalog, which is exactly
-// what the Stage 2 isolation gate forbids. Scope key '' is the flat
-// (tenancy-off) workspace; org scopes rehydrate lazily from their own
-// workspace subtree on first touch.
-const UPLOAD_REGISTRIES = new Map();   // scope ('' | orgId) → Map(id → { canonical, source, createdAt })
+// Tenancy is always on: each org has its own registry — a process-wide
+// map would leak one org's packs into another's catalog, which is exactly
+// what the Stage 2 isolation gate forbids. The scope key is the request's
+// org (currentOrg()) within a store handle, so a suite that re-points the
+// workspace (and so the store) between boots in one process never sees
+// the previous workspace's packs. An org's map rehydrates from its own
+// workspace subtree on first touch (boot step 6 touches every live org).
+const UPLOAD_REGISTRIES = new WeakMap();   // store handle → Map(orgId → Map(id → { canonical, source, label, createdAt }))
 const MAX_UPLOADS = 200;
 
+function rehydrateInto(m, scope) {
+  let restored = 0;
+  try {
+    // loadWorkspacePacks resolves the org root from the AsyncLocalStorage
+    // context. Entries arrive oldest lastUsedAt first, preserving the
+    // map's LRU insertion order.
+    for (const p of loadWorkspacePacks()) {
+      if (m.has(p.id)) continue;
+      m.set(p.id, { canonical: p.canonical, source: p.source, label: p.label, createdAt: p.createdAt });
+      restored++;
+    }
+  } catch (e) {
+    process.stderr.write(`[workspace] org '${scope}' rehydrate failed: ${e.message}\n`);
+  }
+  return restored;
+}
+
+let lastRehydrated = 0;
 function uploadsMap() {
-  const scope = (tenancyEnabled() && currentOrg()) || '';
-  let m = UPLOAD_REGISTRIES.get(scope);
+  const scope = currentOrg();
+  if (!scope) throw new Error('uploadsMap() outside an org context');
+  const db = currentStore();
+  let byOrg = UPLOAD_REGISTRIES.get(db);
+  if (!byOrg) { byOrg = new Map(); UPLOAD_REGISTRIES.set(db, byOrg); }
+  let m = byOrg.get(scope);
   if (!m) {
     m = new Map();
-    UPLOAD_REGISTRIES.set(scope, m);
-    if (scope) {
-      // First touch of this org in this process: rehydrate from its own
-      // workspace subtree (loadWorkspacePacks resolves the org root from
-      // the request's AsyncLocalStorage context).
-      try {
-        for (const p of loadWorkspacePacks()) {
-          if (!m.has(p.id)) m.set(p.id, { canonical: p.canonical, source: p.source, label: p.label, createdAt: p.createdAt });
-        }
-      } catch (e) {
-        process.stderr.write(`[workspace] org '${scope}' rehydrate failed: ${e.message}\n`);
-      }
-    }
+    byOrg.set(scope, m);
+    lastRehydrated = rehydrateInto(m, scope);
   }
   return m;
 }
@@ -432,7 +449,7 @@ app.use((req, res, next) => {
   }
 
   if (identity) {
-    const session = readSession(req);
+    const session = resolveSession(req);
     if (session) {
       // Cookie-authenticated mutations require the custom header —
       // cross-origin pages can't set one without a CORS preflight, so
@@ -443,7 +460,7 @@ app.use((req, res, next) => {
         return res.status(403).json({ ok: false, error: 'missing X-Observogram-CSRF header on a session-authenticated mutation' });
       }
       req.observogramActor = session.email || session.sub;
-      req.observogramSub = session.sub;   // tenancy middleware resolves org membership by sub
+      req.observogramUser = session.user;   // the org middleware resolves memberships by the store row
       return next();
     }
     // Identity mode protects ALL /api data (reads included) — "your
@@ -467,37 +484,48 @@ app.use((req, res, next) => {
 
 // ---------- tenancy (Stage 2 — workspace-per-org) ----------
 //
-// Armed when <workspace>/orgs.json exists (server/tenancy.mjs). Every
-// /api request then runs inside an AsyncLocalStorage org context, and
-// workspaceRoot() everywhere underneath answers <workspace>/orgs/<id>/.
-// The org comes from the X-Observogram-Org header (or ?org=; the legacy
-// X-Tomograph-Org spelling still works), defaulting to the user's first
-// membership; membership is enforced here — Stage 3 adds per-route roles
-// on top of this same seam.
+// Always on (server/tenancy.mjs): every /api request runs inside an
+// AsyncLocalStorage org context, and workspaceRoot() everywhere
+// underneath answers <workspace>/<that org's root>. The org comes from
+// the X-Observogram-Org header (or ?org=; the legacy X-Tomograph-Org
+// spelling still works) for the bearer and a session; membership is
+// enforced here — Stage 3 adds per-route roles on top of this same seam.
+// The open and anonymous postures run in the default org and ignore the
+// header (nothing else is reachable there). Placed before the body
+// parsers: the context survives Express's body parsing.
 app.use((req, res, next) => {
-  if (!req.path.startsWith('/api/') || !tenancyEnabled()) return next();
+  if (!req.path.startsWith('/api/')) return next();
+  const db = currentStore();
   const requested = String(req.headers['x-observogram-org'] || req.headers['x-tomograph-org'] || req.query.org || '').trim();
+  const defaultOrg = defaultOrgId(db);
   let orgId;
   if (req.observogramBearer) {
     // The bearer is the deployment-level service account: it may target
-    // any existing org explicitly; without a header it falls back to
-    // 'default' (the migration org) or, failing that, the first org in
-    // orgs.json — so single-org deployments never need the header.
-    orgId = requested || (orgExists('default') ? 'default' : Object.keys(readOrgs())[0] || 'default');
-    if (!orgExists(orgId)) {
-      return res.status(403).json({ ok: false, error: `unknown org '${orgId}'` });
+    // any live org explicitly; without a header it lands in the default org.
+    orgId = requested || defaultOrg;
+    if (!liveOrg(db, orgId)) return res.status(403).json({ ok: false, error: `unknown org '${orgId}'` });
+  } else if (req.observogramUser) {
+    const user = req.observogramUser;
+    const memberships = listMembershipsForUser(db, user.id);   // live orgs, first first
+    if (user.isOwner) {
+      // An owner may request any live org; they land in their first
+      // membership, else the default org.
+      orgId = requested || memberships[0]?.orgId || defaultOrg;
+      if (!liveOrg(db, orgId)) return res.status(403).json({ ok: false, error: `unknown org '${orgId}'` });
+    } else {
+      if (!memberships.length) return res.status(403).json({ ok: false, error: 'no org membership — ask an admin to add you' });
+      orgId = requested || memberships[0].orgId;
+      if (!memberships.some((m) => m.orgId === orgId)) {
+        return res.status(403).json({ ok: false, error: `not a member of org '${orgId}'` });
+      }
     }
   } else {
-    const memberships = orgsForUser(req.observogramSub);
-    if (!memberships.length) {
-      return res.status(403).json({ ok: false, error: 'no org membership — ask an admin to add you to orgs.json' });
-    }
-    orgId = requested || memberships[0].id;
-    if (!memberships.some(o => o.id === orgId)) {
-      return res.status(403).json({ ok: false, error: `not a member of org '${orgId}'` });
-    }
+    // Open posture, or token-only anonymous (its mutations were already
+    // 401'd by the gate): the default org, the header ignored (as before).
+    orgId = defaultOrg;
   }
   res.set('X-Observogram-Org', orgId);   // echo so the client always knows the active org
+  req.observogramOrg = orgId;
   return runWithOrg(orgId, next);
 });
 
@@ -549,14 +577,22 @@ app.delete('/api/uploads', (req, res) => {
 });
 
 // Stage 2 tenancy: the orgs visible to this request. Sessions see their
-// memberships (role recorded for Stage 3, not yet enforced); the bearer
-// service account sees every org. `active` echoes the request's resolved
+// memberships (owners too; role recorded for Stage 3, not yet enforced);
+// the bearer service account sees every live org; the open and anonymous
+// postures see the default org. `active` echoes the request's resolved
 // org so clients never have to guess which workspace they're in.
+// `tenancy` stays in the body (always true) for old clients.
 app.get('/api/orgs', (req, res) => {
-  if (!tenancyEnabled()) return res.json({ ok: true, tenancy: false, orgs: [], active: null });
-  const orgs = req.observogramBearer
-    ? Object.entries(readOrgs()).map(([id, o]) => ({ id, name: o?.name || id, role: 'service-account' }))
-    : orgsForUser(req.observogramSub);
+  const db = currentStore();
+  let orgs;
+  if (req.observogramBearer) {
+    orgs = listOrgs(db).map((o) => ({ id: o.id, name: o.name, role: 'service-account' }));
+  } else if (req.observogramUser) {
+    orgs = listMembershipsForUser(db, req.observogramUser.id).map((m) => ({ id: m.orgId, name: getOrg(db, m.orgId)?.name || m.orgId, role: m.role }));
+  } else {
+    const org = getOrg(db, currentOrg());
+    orgs = [{ id: org.id, name: org.name, role: null }];
+  }
   res.json({ ok: true, tenancy: true, orgs, active: currentOrg() });
 });
 
@@ -874,7 +910,7 @@ app.get('/api/journeys', (req, res) => {
       // a journey that can never run must not look like a healthy
       // never-run one.
       let loadError = null;
-      try { def = loadJourneyDef(name); } catch (e) { loadError = e.message; }
+      try { def = loadJourneyDef(name, { allowPath: false }); } catch (e) { loadError = e.message; }
       const lastRun = readJourneyRuns(name, { limit: 1 })[0] || null;
       return {
         name,
@@ -953,7 +989,7 @@ app.get('/api/journeys/:name/runs', (req, res) => {
 // for an unknown or unloadable journey.
 app.get('/api/journeys/:name/schedule', (req, res) => {
   let def;
-  try { def = loadJourneyDef(req.params.name); }
+  try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
   catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
   try {
     const parsed = parsedSchedule(def);
@@ -964,7 +1000,7 @@ app.get('/api/journeys/:name/schedule', (req, res) => {
       cron: parsed?.cron ?? null, timezone: parsed?.timezone ?? null, every: parsed?.every ?? null, cadenceNote: parsed?.cadenceNote ?? null,
       envNames,
       nodePath: process.execPath, cliPath: resolve(ROOT, 'tools/cli.mjs'), cwd: process.cwd(),
-      workspace: brandEnv('WORKSPACE') || '.observogram',
+      workspace: orgWorkspaceRoot(), orgRoot: orgRootOf(currentOrg()),
       image: `observogram:${pkg.version}`, namespace: 'observability',
       retention: brandEnv('JOURNEY_RUN_RETENTION') || null,
       placeholder: !parsed,
@@ -979,10 +1015,13 @@ app.get('/api/journeys/:name/schedule', (req, res) => {
 // 502 when a pack source can't be resolved (live MCP down etc.).
 app.post('/api/journeys/:name/run', async (req, res) => {
   let def;
-  try { def = loadJourneyDef(req.params.name); }
+  try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
   catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
   try {
-    const record = await runJourney(def);
+    // A crawl: walk, a file: source and an inventory site read only this
+    // org's own part of the workspace (STORE_PLAN slice 2, A-24); a path in
+    // another org's part is refused.
+    const record = await runJourney(def, { crawlScope: { base: baseWorkspaceRoot(), ownRoot: orgWorkspaceRoot() } });
     res.json({ ok: true, record });
   } catch (e) {
     res.status(502).json({ ok: false, error: redactCredentials(String(e.message)) });
@@ -2037,85 +2076,36 @@ const PORT = Number(process.env.PORT || 8000);
 const HOST = process.env.HOST || '127.0.0.1';
 
 export { app };
-// Rehydrate the upload registry from the workspace (.observogram/). Runs
-// once per process, inside start() (not at module load) so tests can point
-// OBSERVOGRAM_WORKSPACE at a temp dir before booting. Entries arrive oldest
-// lastUsedAt first, preserving the map's LRU insertion order.
-let workspaceRehydrated = false;
-function rehydrateUploadsFromWorkspace(silent) {
-  if (workspaceRehydrated) return;
-  workspaceRehydrated = true;
+
+// Boot step 6: rehydrate each live org's upload registry from its
+// workspace subtree. Idempotent per store: a map that exists is not
+// refilled (suites call start() several times in one process).
+function rehydrateOrgs(silent) {
   let restored = 0;
-  try {
-    for (const p of loadWorkspacePacks()) {
-      if (uploadsMap().has(p.id)) continue;
-      uploadsMap().set(p.id, { canonical: p.canonical, source: p.source, label: p.label, createdAt: p.createdAt });
-      restored++;
-    }
-  } catch (e) {
-    process.stderr.write(`[workspace] rehydrate failed: ${e.message}\n`);
+  for (const org of listOrgs(currentStore())) {
+    runWithOrg(org.id, () => {
+      lastRehydrated = 0;
+      uploadsMap();
+      restored += lastRehydrated;
+    });
   }
   if (restored && !silent) process.stdout.write(`[studio] restored ${restored} pack${restored === 1 ? '' : 's'} from workspace\n`);
 }
 
-function isLoopbackHost(h) {
-  const host = String(h || '').toLowerCase();
-  return host === 'localhost' || host === '::1' || host.startsWith('127.');
-}
-
-export function start({ port = PORT, host = HOST, silent = false } = {}) {
-  // Grafana-style first boot: nothing configured → seed admin/admin,
-  // change asked at every sign-in until it lands (skippable per
-  // session). Backs off from any expressed intent
-  // (OIDC, users file, API token, tenancy, OBSERVOGRAM_AUTH=off) — see
-  // maybeSeedDefaultAdmin in server/auth.mjs.
-  maybeSeedDefaultAdmin({
-    log: (m) => { if (!silent) process.stdout.write(m + '\n'); },
-    wouldExpose: !isLoopbackHost(host),
-  });
-  // Fail closed (10B): binding beyond loopback with no auth at all would
-  // expose every write route — crawl, draft, deploy — to the network.
-  // Identity (OIDC or stand-alone users) satisfies the requirement just
-  // like the API token does.
-  if (!isLoopbackHost(host) && !apiToken() && !authEnabled()) {
-    if (brandEnv('INSECURE_NO_AUTH') === '1') {
-      process.stderr.write(
-        `[studio] WARNING: bound to ${host} with NO auth (OBSERVOGRAM_INSECURE_NO_AUTH=1). ` +
-        `Every write route is open to the network. Do not run this posture outside a trusted network.\n`);
-    } else {
-      return Promise.reject(new Error(
-        `refusing to bind to ${host} without auth: mutating /api routes would be open to the network.\n` +
-        `  Set OBSERVOGRAM_API_TOKEN=<secret> (clients send Authorization: Bearer <secret>),\n` +
-        `  or seed a sign-in with OBSERVOGRAM_ADMIN_PASSWORD=<secret> (user 'admin'),\n` +
-        `  or bind to loopback (HOST=127.0.0.1), or set OBSERVOGRAM_INSECURE_NO_AUTH=1 to override knowingly.`));
-    }
-  }
-  // The seeded default credential is loopback-only, without exception:
-  // admin/admin reachable from the network is how Grafana instances end
-  // up on Shodan. Completing the password change clears this — skipping
-  // it does not (the guard stays armed until a real password lands).
-  if (!isLoopbackHost(host) && defaultAdminCredentialActive()) {
-    return Promise.reject(new Error(
-      `refusing to bind to ${host} while the seeded default admin password is unchanged.\n` +
-      `  Sign in once on loopback (admin / admin) to set a real password,\n` +
-      `  or seed a fresh workspace with OBSERVOGRAM_ADMIN_PASSWORD=<secret>.`));
-  }
-  // Tenancy (Stage 2) sits ON TOP of identity: orgs.json without a way
-  // to know who the user is cannot enforce membership — fail closed with
-  // the fix in the message, same posture as incomplete OIDC config.
-  if (tenancyEnabled() && !authEnabled()) {
-    return Promise.reject(new Error(
-      'orgs.json found but no identity is configured: tenancy needs to know who the user is.\n' +
-      '  Configure OIDC (OBSERVOGRAM_OIDC_*) or stand-alone users (users.json / npm run users),\n' +
-      '  or remove orgs.json to run the flat single-tenant workspace.'));
-  }
-  // One-shot, idempotent: a deployment whose flat workspace predates
-  // tenancy gets its state moved to orgs/default/ when orgs.json appears.
-  migrateFlatWorkspace({ log: (m) => { if (!silent) process.stdout.write(m + '\n'); } });
+// Boot steps 1–5 are server/boot.mjs's bootStore(): the store opened, the
+// stale-import guard, the legacy import once, the seed decision and the
+// fail-closed checks (docs/STORE_PLAN.md §4). A refusal arrives as a
+// rejected promise (BootRefusal / LegacyFileError). Then step 6 and the
+// listen.
+export async function start({ port = PORT, host = HOST, silent = false } = {}) {
+  const log = (m) => { if (!silent) process.stdout.write(m + '\n'); };
+  const warn = (m) => { if (!silent) process.stderr.write(m + '\n'); };
+  const { db, ctx } = await bootStore({ host, log, warn });
+  if (localUsersEnabled()) touchSessionSecret();
   // Journeys/runs live in the engine (tools/lib/journey.mjs) — wire its
   // root through the same context-aware resolver the registry uses.
   setWorkspaceRootResolver(orgWorkspaceRoot);
-  rehydrateUploadsFromWorkspace(silent);
+  rehydrateOrgs(silent);
   return new Promise((resolveListen, reject) => {
     const srv = app.listen(port, host, () => {
       // When bind fails the listening callback can still fire with the
@@ -2124,6 +2114,9 @@ export function start({ port = PORT, host = HOST, silent = false } = {}) {
       // call site will format a friendly message.
       const addr = srv.address();
       if (!addr) return;
+      // The sign-in mode the CLIs read (server/identity-admin.mjs) is this
+      // server's only once it listens: a start that fails to bind records nothing.
+      recordIdentityMode(db, ctx);
       if (!silent) process.stdout.write(`[studio] listening on http://${addr.address}:${addr.port}\n`);
       resolveListen(srv);
     });

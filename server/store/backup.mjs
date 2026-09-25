@@ -53,6 +53,14 @@ function identify(db) {
   return { version, storeId };
 }
 
+// { version, storeId } of the database file at `path`, opened read-only and
+// never migrated; storeId null when it is not one of ours. Throws when the
+// file cannot be read as a database.
+export async function identifyFile(path) {
+  const db = await openRaw(path, { readOnly: true });
+  try { return identify(db); } finally { db.close(); }
+}
+
 // A path with symlinks resolved (SQLite names -wal/-shm/-journal after the
 // real path), or only its directory's when the file does not exist yet.
 function canonical(path) {
@@ -78,6 +86,39 @@ const isOurs = ({ version, storeId }) => version >= 1 && typeof storeId === 'str
 
 function stamp(now) {
   return now.toISOString().replace(/[-:.]/g, '');
+}
+
+// The in-use probe of the offline operations (restore, and the `packc
+// store` commands that need the server stopped). It opens the file raw with
+// no busy wait and switches it out of WAL, which needs exclusive access:
+// refused while any other connection has the file open, even an idle one.
+// That also checkpoints a -wal an unclean stop left into the database and
+// deletes the -wal and -shm. With backToWal (every caller but restore,
+// which moves this file aside) it switches back to WAL before the caller
+// opens the store. → { identity: { version, storeId } | null, note }: a
+// file that cannot be read is a refusal with backToWal, else a note.
+export async function assertNotInUse(dbPath, { backToWal = true, doing = 'running this' } = {}) {
+  const cur = await openRaw(dbPath, { timeout: 0 });
+  let identity = null;
+  let note = null;
+  try {
+    identity = identify(cur);
+    const mode = pragma(cur, 'journal_mode=DELETE')[0]?.journal_mode;
+    if (mode !== 'delete') throw Object.assign(new Error(`journal_mode stayed ${mode}`), { errcode: 5 });
+    if (backToWal) {
+      const wal = pragma(cur, 'journal_mode=WAL')[0]?.journal_mode;
+      if (wal !== 'wal') throw new Error(`could not switch it back to WAL (journal_mode reads ${JSON.stringify(wal)})`);
+    }
+  } catch (e) {
+    cur.close();
+    if (e.errcode === 5 || e.errcode === 6 || /locked|busy/i.test(e.message)) {
+      throw refuse(`${dbPath} is in use — stop the server (and any npm run users / orgs / packc store) before ${doing}`);
+    }
+    if (backToWal) throw refuse(`${dbPath} cannot be read: ${e.message}`);
+    note = `unreadable: ${e.message}`;
+  }
+  if (cur.isOpen) cur.close();
+  return { identity, note };
 }
 
 export async function backupStore(dest, { dbPath = resolveDbPath() } = {}) {
@@ -174,20 +215,12 @@ export async function restoreStore(backup, { dbPath = resolveDbPath(), now = new
   let previous = null;
   let previousNote = null;
   if (existsSync(target)) {
-    const cur = await openRaw(target, { timeout: 0 });
     try {
-      previous = identify(cur);
-      const mode = pragma(cur, 'journal_mode=DELETE')[0]?.journal_mode;
-      if (mode !== 'delete') throw Object.assign(new Error(`journal_mode stayed ${mode}`), { errcode: 5 });
+      ({ identity: previous, note: previousNote } = await assertNotInUse(target, { backToWal: false, doing: 'restoring' }));
     } catch (e) {
-      cur.close();
-      if (e.errcode === 5 || e.errcode === 6 || /locked|busy/i.test(e.message)) {
-        removeSet(incoming);
-        throw refuse(`${target} is in use — stop the server (and any npm run users / orgs / packc store) before restoring`);
-      }
-      previousNote = `unreadable: ${e.message}`;
+      if (e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED') removeSet(incoming);
+      throw e;
     }
-    if (cur.isOpen) cur.close();
   }
 
   const movedAside = [];
