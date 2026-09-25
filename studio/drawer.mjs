@@ -12,6 +12,7 @@ import { escapeHtml, toast } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { cardKey } from './layers-view.mjs';
 import { boundText, goodWhen, hasDirection } from './sli-direction.mjs';
+import { readChain, traceIndex } from './trace-chain.mjs';
 
 // ---------- drawer ----------
 
@@ -148,6 +149,8 @@ function jumpToRef(symbol) {
   }
   if (!hit) { toast(`no artefact defines ${symbol}`, 'error'); return; }
   state.activeLayer = hit.layerId;
+  // Discover opens one layer at a time: open the one that holds the reference.
+  state.layerFilter = hit.layerId;
   appHost.renderTabs();
   appHost.renderMainView();
   openDrawer(hit.a, { id: hit.layerId }, hit.sublayerKey);
@@ -199,26 +202,32 @@ function renderRequirementTracePanel(artefact, side = 'b') {
   const hits = chains.filter(c => c.slo?.symbol === symbol || c.sli?.symbol === symbol);
   if (!hits.length) return null;
 
+  // The same reading as the Traceability screen (studio/trace-chain.mjs):
+  // chain state, plain-language issue labels beside the machine codes, and
+  // job-level scrape evidence never presented as proof for this metric.
+  const index = traceIndex(pack);
   const p = panel('Requirement trace', 'p-requirement-trace');
   for (const chain of hits.slice(0, 3)) {
+    const read = readChain(chain, index);
+    const scrape = chain.scrapeJobs || {};
     const sec = subpanel(chain.slo?.id || chain.sli?.id || 'requirement');
     sec.appendChild(dl([
       ['slo', chain.slo?.id],
       ['sli', chain.sli?.id],
-      ['status', chain.gaps?.length ? `${chain.gaps.length} gap(s)` : 'complete'],
+      ['status', `${read.label}${read.firstBroken ? ` · breaks at ${read.firstBroken.label.toLowerCase()}` : ''}`],
       ['metrics', chain.metrics?.map(m => m.name).slice(0, 6).join(', ')],
       ['recording rules', chain.recordingRules?.map(r => r.name).slice(0, 4).join(', ')],
       ['exporters', chain.exporters?.map(e => e.title || e.id).join(', ')],
-      ['scrape evidence', chain.scrapeJobs?.items?.length
-        ? chain.scrapeJobs.items.map(j => j.name).join(', ')
-        : (chain.scrapeJobs?.observedCount ? `${chain.scrapeJobs.observedCount} jobs observed` : null)],
+      ['scrape evidence', scrape.items?.length
+        ? `${scrape.items.map(j => j.name).join(', ')} (matched by job name; targets not checked)`
+        : (scrape.observedCount ? `${scrape.observedCount} job${scrape.observedCount === 1 ? '' : 's'} found, none tied to this requirement’s metrics — not proof this metric is scraped` : null)],
       ['dashboards', chain.dashboards?.map(d => d.title || d.id).slice(0, 4).join(', ')],
       ['alerts', chain.alerts?.map(a => `${a.name}${a.verified === false ? ' (unhealthy)' : ''}`).slice(0, 5).join(', ')],
     ]));
-    if (chain.gaps?.length) {
-      const gap = document.createElement('div');
+    if (read.issues.length) {
+      const gap = document.createElement('ul');
       gap.className = 'trace-gap-list';
-      gap.innerHTML = chain.gaps.map(g => `<code>${escapeHtml(g)}</code>`).join('');
+      gap.innerHTML = read.issues.map(i => `<li class="trace-gap-item is-${i.kind}" title="${escapeHtml(i.why)}"><span class="trace-gap-label">${escapeHtml(i.label)}</span> <code>${escapeHtml(i.code)}</code></li>`).join('');
       sec.appendChild(gap);
     }
     p.appendChild(sec);
