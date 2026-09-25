@@ -59,7 +59,13 @@ routine and another ad-hoc loader. The store removes that cost for
     flat-workspace migration. Where a file store would move the flat
     entries into `orgs/default/`, the default org's root is `.` instead
     (an `orgs.json` `default` entry too): it reads the flat data in place,
-    and the report line says so.
+    and the report line says so. That holds only while `orgs/default`
+    holds no data: over a half-migrated workspace (a pre-store move that
+    stopped part-way) the default org is planned at `orgs/default`, as a
+    file store plans it, the unmoved flat entries stay unread, and the
+    report line and a `left behind` warning say so (`:memory:` moves
+    nothing; a file-store start finishes the move). Check E never fires
+    for that layout.
 - **One module, `server/store/`.**
   - `db.mjs`: open, pragmas, `tx()`, the version check, the warning filter.
   - `migrations.mjs`: ordered steps keyed by `PRAGMA user_version`.

@@ -49,7 +49,7 @@ import {
 } from './store/identity.mjs';
 import { applyImport, formatReport, planImport, projectedMigration, readLegacy, unreadDefaultText } from './store/import.mjs';
 import {
-  compareHashes, hasData, legacyUsersPath, markerPath, MIGRATABLE, orgsFilePath, readMarker, sha256File, writeMarker,
+  compareHashes, hasData, legacyUsersPath, lexists, markerPath, MIGRATABLE, orgsFilePath, readMarker, sha256File, writeMarker,
 } from './store/legacy-files.mjs';
 
 // ---------- the refusal ----------
@@ -520,7 +520,15 @@ export function warnLeftBehind(db, ctx, warn) {
   if (!atBase) {
     for (const entry of MIGRATABLE) {
       const path = join(ctx.base, entry);
-      if (hasData(path)) warn(`[store] left behind: ${path} — nothing reads it (the default org's copy is orgs/default/${entry}); merge it by hand`);
+      if (!hasData(path)) continue;
+      // :memory: over a half-migrated workspace: a file-store start would
+      // move this entry (orgs/default has no twin), so nothing to merge.
+      if (ctx.memory && !lexists(join(moved, entry))) {
+        warn(`[store] left behind: ${path} — nothing reads it (the default org's root is orgs/default/); ` +
+          'OBSERVOGRAM_DB=:memory: moves nothing; a file-store start finishes the move');
+      } else {
+        warn(`[store] left behind: ${path} — nothing reads it (the default org's copy is orgs/default/${entry}); merge it by hand`);
+      }
     }
     if (movedUnread) {
       const id = getMeta(db, 'default_org');

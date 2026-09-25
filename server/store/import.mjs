@@ -178,9 +178,15 @@ export function planImport(db, legacy, ctx, migration) {
   let defaultOrg;
   let joinRole = ctx.joinRoleEnv !== undefined ? ctx.joinRoleEnv : null;
   // :memory: never moves the flat workspace: when a file store would move
-  // it, the default org reads it in place at '.' (orgs/default would be
-  // an empty root, and the flat data unread).
-  const defaultRootDir = ctx.memory && report.migration.moved.length > 0 ? '.' : 'orgs/default';
+  // it into an orgs/default that holds no data, the default org reads it
+  // in place at '.' (orgs/default would be an empty root, and the flat
+  // data unread). A half-migrated workspace (orgs/default already holds
+  // data) keeps the default at orgs/default, as a file store plans it:
+  // the unmoved flat entries are left unread until a file-store start
+  // finishes the move.
+  const inPlace = !!ctx.memory && report.migration.moved.length > 0 && !hasData(join(ctx.base, 'orgs', 'default'));
+  const defaultRootDir = inPlace ? '.' : 'orgs/default';
+  report.memoryInPlace = inPlace;
 
   if (legacy.orgs.exists) {
     // ---- orgs.json (plan item 2) ----
@@ -373,7 +379,9 @@ export function formatReport(r) {
   }
   if (r.migration.moved.length) {
     out.push(r.dbPath === ':memory:'
-      ? `[store]   flat workspace not moved (OBSERVOGRAM_DB=:memory: writes nothing to the workspace; a file store moves it to orgs/default/): ${r.migration.moved.join(', ')} — the default org reads it in place at .${r.migration.wroteDefault ? '' : ' (orgs.json\'s default entry too: its root is . under :memory:)'}`
+      ? `[store]   flat workspace not moved (OBSERVOGRAM_DB=:memory: writes nothing to the workspace; a file store moves it to orgs/default/): ${r.migration.moved.join(', ')} — ${r.memoryInPlace
+        ? `the default org reads it in place at .${r.migration.wroteDefault ? '' : ' (orgs.json\'s default entry too: its root is . under :memory:)'}`
+        : 'left behind unread: orgs/default/ already holds the default org\'s data (a half-finished move); :memory: moves nothing; a file-store start finishes the move'}`
       : `[store]   flat workspace moved to orgs/default/: ${r.migration.moved.join(', ')}`);
   }
   if (r.unreadDefaultDir) out.push(`[store]   left behind: ${unreadDefaultText(r.unreadDefaultDir)}`);

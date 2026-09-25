@@ -1073,6 +1073,47 @@ test(':memory: over orgs.json and flat data serves the flat data in place (defau
   }
 });
 
+test(':memory: over a half-migrated workspace plans the default at orgs/default, as a file store does, and names the unmoved entries accurately', async () => {
+  // A pre-store migration that stopped mid-move: packs moved, deploys.jsonl not.
+  const pack = readFileSync(join(ROOT, 'examples', 'demo-skeleton.pack.yaml'));
+  const token = 'tok-0123456789abcdef';
+  const ws = workspace();
+  mkdirSync(join(ws, 'orgs', 'default', 'packs'), { recursive: true });
+  writeFileSync(join(ws, 'orgs', 'default', 'packs', 'moved.pack.yaml'), pack);
+  writeFileSync(join(ws, 'deploys.jsonl'), '{}\n');
+  orgsFile(ws, { default: { name: 'Default', members: {} } });
+  // The only new file is the pack registry's own index, in the root it serves.
+  const storeTree = () => { const t = treeOf(ws); delete t['orgs/default/packs/index.json']; return t; };
+  const before = treeOf(ws);
+  const env = { OBSERVOGRAM_DB: ':memory:', OBSERVOGRAM_API_TOKEN: token };
+  const b = boot(ws, { env, silent: false });
+  const out = b.stdout + b.stderr;
+  assert.ok(b.listening, out);
+  assert.ok(!/refusing to start/.test(out), `no check E: ${out}`);
+  assert.ok(out.includes('[store]   default org default (orgs/default)'), out);
+  assert.ok(out.includes('deploys.jsonl — left behind unread: orgs/default/ already holds the default org\'s data (a half-finished move); ' +
+    ':memory: moves nothing; a file-store start finishes the move\n'), out);
+  assert.ok(out.includes(`[store] left behind: ${join(ws, 'deploys.jsonl')} — nothing reads it (the default org's root is orgs/default/); ` +
+    'OBSERVOGRAM_DB=:memory: moves nothing; a file-store start finishes the move'), out);
+  assert.ok(!/merge it by hand|reads it in place|move its entries/.test(out), out);
+  assert.deepEqual(storeTree(), before, 'the workspace tree is byte-identical after a :memory: boot');
+  const s = await serve(ws, { env });
+  try {
+    const r = await fetch(`${s.base}/api/packs`, { headers: { Accept: 'application/json', Authorization: `Bearer ${token}` } });
+    assert.equal(r.status, 200);
+    const { packs } = await r.json();
+    assert.ok(packs.some((p) => p.id === 'moved'), `the moved pack is served: ${JSON.stringify(packs.map((p) => p.id))}`);
+  } finally {
+    await s.stop();
+  }
+  assert.deepEqual(storeTree(), before, 'the workspace tree is byte-identical after a :memory: server');
+  // A file-store start finishes the move, as the line says.
+  const f = boot(ws, { env: { OBSERVOGRAM_API_TOKEN: token }, silent: false });
+  assert.ok(f.listening, f.stdout + f.stderr);
+  assert.ok((f.stdout + f.stderr).includes('[store]   flat workspace moved to orgs/default/: deploys.jsonl'), f.stdout + f.stderr);
+  assert.ok(existsSync(join(ws, 'orgs', 'default', 'deploys.jsonl')) && !existsSync(join(ws, 'deploys.jsonl')));
+});
+
 // ====================== pre-upgrade cookies ======================
 
 test('pre-upgrade cookies stay valid across the upgrade', async () => {
