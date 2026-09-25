@@ -21,6 +21,20 @@ const { assert, report } = createHarness();
 const TMP = mkdtempSync(join(tmpdir(), 'observogram-ws-'));
 process.env.OBSERVOGRAM_WORKSPACE = TMP;
 delete process.env.TOMOGRAPH_WORKSPACE;
+// Tenancy is always on (docs/STORE_PLAN.md slice 2): the workspace root is
+// the org's root from the store, so the suite runs inside the default org
+// at '.'. It re-points its workspace below (TMP2, TMP3), so the store is
+// PINNED to a temp file of its own, outside every workspace it points at
+// (deleting OBSERVOGRAM_DB would look for <TMP2>/observogram.db, never
+// opened) — as hermetic as deleting it. '.' resolves against whatever base
+// the env names at each call.
+const DB_DIR = mkdtempSync(join(tmpdir(), 'observogram-ws-db-'));
+process.env.OBSERVOGRAM_DB = join(DB_DIR, 'observogram.db');
+for (const k of ['BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH']) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
+delete process.env.TOMOGRAPH_DB;
 
 const {
   saveWorkspacePack, deleteWorkspacePack, touchWorkspacePack,
@@ -29,8 +43,19 @@ const {
   appendDeployRecord, appendDeployVerify, readDeployRecords,
   saveDeploySnapshot, readDeploySnapshot,
 } = await import('./workspace.mjs');
+const { openStore } = await import('./store/db.mjs');
+const { createOrg } = await import('./store/orgs.mjs');
+const { runWithOrg } = await import('./tenancy.mjs');
+
+const db = await openStore();
+createOrg(db, 'test', { id: 'default', name: 'Default', root: '.' });
+
+let outsideThrew = false;
+try { workspaceInfo(); } catch { outsideThrew = true; }
+assert(outsideThrew, 'workspaceInfo() outside an org context throws');
 
 try {
+  await runWithOrg('default', async () => {
   // A representative canonical: nested objects, arrays, numbers, booleans,
   // multi-word strings — the shapes a real pack exercises in YAML round-trip.
   const canonical = {
@@ -235,8 +260,10 @@ try {
   process.env.OBSERVOGRAM_WORKSPACE = TMP;
   resetWorkspaceCache();
   rmSync(TMP3, { recursive: true, force: true });
+  });
 } finally {
   rmSync(TMP, { recursive: true, force: true });
+  rmSync(DB_DIR, { recursive: true, force: true });
 }
 
 report('workspace', 'all workspace persistence assertions pass.');

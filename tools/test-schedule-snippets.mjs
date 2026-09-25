@@ -18,6 +18,7 @@ import { parseSchedule } from './lib/schedule.mjs';
 import {
   PLACEHOLDER_CRON, SNIPPET_FORMATS, K8S_WORKSPACE_PVC, K8S_WORKSPACE_MOUNT,
   normaliseSnippetInput, describeCadence, cronLine, schtasksSchedule, schtasksCommand, githubActionsWorkflow, k8sCronJobManifest, k8sName, scheduleSnippets,
+  validOrgRoot, k8sWorkspace,
 } from './lib/schedule-snippets.mjs';
 
 const { assert, report } = createHarness();
@@ -151,6 +152,40 @@ const S45 = withSched({ every: '45m' });
   assert(parseYaml(k8sCronJobManifest(base)).spec.schedule === PLACEHOLDER_CRON && /placeholder, edit before installing/.test(k8sCronJobManifest(base)), 'k8s: the placeholder is marked');
   assert(k8sName('Repo VS Live!') === 'repo-vs-live' && k8sName('') === 'journey' && k8sName('x'.repeat(80)).length === 30 && parseYaml(k8sCronJobManifest({ ...S15, name: 'Repo VS Live!' })).metadata.name === 'observabilitypack-studio-journey-repo-vs-live' && parseYaml(k8sCronJobManifest({ ...S15, name: 'x'.repeat(80) })).metadata.name.length <= 63,
          'k8s: the journey name is sanitised to a DNS-1123 label and the CronJob name stays under 63 chars');
+}
+
+// --- orgRoot (STORE_PLAN slice 2): the per-org root of a journey's workspace ---
+{
+  assert(validOrgRoot('.') && validOrgRoot('orgs/acme') && validOrgRoot('orgs/a1') && validOrgRoot('orgs/a_b-c9'),
+         'orgRoot: . and orgs/<slug> are valid');
+  assert(['', '..', './', 'orgs/', 'orgs/Acme', 'orgs/a', 'orgs/acme/', 'orgs/acme/x', '/workspace/orgs/acme', 'orgs/1acme', 'orgs/acme-', `orgs/a${'b'.repeat(64)}`, null, 7].every(r => !validOrgRoot(r)),
+         'orgRoot: anything else is invalid (a one-character slug, a trailing slash, a nested path, upper case, an absolute path)');
+  let refused = null;
+  try { normaliseSnippetInput({ ...S15, orgRoot: '../bravo' }); } catch (e) { refused = e; }
+  assert(refused instanceof TypeError && /orgRoot must be '\.' or 'orgs\/<id>'/.test(refused.message), 'orgRoot: an invalid root is a TypeError, never a snippet', refused?.message);
+  assert(normaliseSnippetInput(S15).orgRoot === '.' && normaliseSnippetInput({ ...S15, orgRoot: null }).orgRoot === '.', 'orgRoot: unset or null is the default org (.)');
+  for (const [label, input] of Object.entries({ S15, S2H, SD, SW, SIRR, S45, base })) {
+    const plain = scheduleSnippets(input);
+    const dot = scheduleSnippets({ ...input, orgRoot: '.' });
+    assert(SNIPPET_FORMATS.every(f => plain[f] === dot[f]), `${label}: orgRoot '.' is byte-identical to no orgRoot in every form`);
+  }
+  assert(k8sWorkspace(S15) === '/workspace' && k8sWorkspace({ ...S15, orgRoot: 'orgs/acme' }) === '/workspace/orgs/acme', 'k8sWorkspace: the mount, or the org root under it');
+  const acme = { ...S15, orgRoot: 'orgs/acme', workspace: '/srv/ws/orgs/acme' };
+  const m = k8sCronJobManifest(acme);
+  const k = parseYaml(m);
+  const c = k.spec.jobTemplate.spec.template.spec.containers[0];
+  const env = Object.fromEntries(c.env.map(e => [e.name, e]));
+  assert(env.OBSERVOGRAM_WORKSPACE.value === '/workspace/orgs/acme', 'k8s orgs/acme: OBSERVOGRAM_WORKSPACE is the org root on the shared PVC', env.OBSERVOGRAM_WORKSPACE);
+  assert(m.includes('\n# Org root: orgs/acme — OBSERVOGRAM_WORKSPACE=/workspace/orgs/acme on the shared PVC\n'), 'k8s orgs/acme: the header names the org root');
+  assert(k.metadata.labels['observogram.io/org'] === 'acme' && k.metadata.labels['observogram.io/journey'] === 'repo-vs-live', 'k8s orgs/acme: an org label beside the journey label', k.metadata.labels);
+  assert(k.metadata.name === 'observabilitypack-studio-journey-acme-repo-vs-live' && env.MY_MCP_TOKEN.valueFrom.secretKeyRef.name === 'journey-acme-repo-vs-live-secrets',
+         'k8s orgs/acme: the CronJob and Secret names carry the org, so two orgs\' same-named journeys do not collide', { name: k.metadata.name });
+  assert(k.metadata.name !== parseYaml(k8sCronJobManifest({ ...acme, orgRoot: 'orgs/bravo' })).metadata.name, 'k8s: two orgs, one journey name → two CronJob names');
+  assert(c.volumeMounts[0].mountPath === '/workspace' && k.spec.jobTemplate.spec.template.spec.volumes[0].persistentVolumeClaim.claimName === K8S_WORKSPACE_PVC, 'k8s orgs/acme: the mount stays /workspace on the shared PVC');
+  assert(!/observogram\.io\/org|# Org root/.test(k8sCronJobManifest(S15)), 'k8s default org: no org label and no org header');
+  assert(cronLine(acme).includes('OBSERVOGRAM_WORKSPACE=/srv/ws/orgs/acme ') && schtasksCommand(acme).includes('setx OBSERVOGRAM_WORKSPACE "\\srv\\ws\\orgs\\acme"'),
+         'cron / schtasks carry the absolute root given as workspace');
+  assert(githubActionsWorkflow(acme) === githubActionsWorkflow(S15), 'actions: unchanged by orgRoot (a repo-committed .observogram)');
 }
 
 // --- secrets discipline across every form ---

@@ -77,10 +77,11 @@ spec:
               command: ["node", "tools/cli.mjs", "journey", "run", "--all"]
               env:
                 # MUST equal the studio's OBSERVOGRAM_WORKSPACE
-                # (patch-studio-workspace.yaml). Tenancy: when
-                # <workspace>/orgs.json exists, point the CronJob at the org
-                # root instead — OBSERVOGRAM_WORKSPACE=/workspace/orgs/<orgId>
-                # (the CLI resolves the flat root only).
+                # (patch-studio-workspace.yaml). Tenancy: one CronJob per org —
+                # point OBSERVOGRAM_WORKSPACE at /workspace/<orgs.root> (the
+                # default org's root is `.`, i.e. /workspace;
+                # `npm run orgs -- list` prints each org's root). The CLI
+                # resolves only the root it is given.
                 - name: OBSERVOGRAM_WORKSPACE
                   value: /workspace
                 # - name: OBSERVOGRAM_JOURNEY_RUN_RETENTION   # records kept per journey (default 1000)

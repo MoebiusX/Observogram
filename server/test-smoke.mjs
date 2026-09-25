@@ -28,6 +28,14 @@ process.env.OBSERVOGRAM_AUTH = 'off';
 // resolves on first request, so this still lands before it reads.
 delete process.env.OBSERVOGRAM_BUILD;
 delete process.env.TOMOGRAPH_BUILD;
+// Hermetic store (docs/STORE_PLAN.md slice 2): start() opens the store and
+// imports; a shell's OBSERVOGRAM_DB (or a seed / join-role knob) must not
+// leak in. The store lands in SMOKE_WORKSPACE. Read at start(), so these
+// land before it despite the hoisted import below.
+for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH']) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
 
 import { start } from './index.mjs';
 import { SPEC_DIR, SPEC_VERSION } from '../tools/lib/validator.mjs';
@@ -107,6 +115,19 @@ try {
   assert(health.specVersion === SPEC_VERSION, `GET /healthz reports specVersion ${SPEC_VERSION}`);
   assert(/^\d+\.\d+\.\d+/.test(health.version || ''), 'GET /healthz carries the app version', health.version);
   assert(typeof health.build === 'string' && health.build.length > 0, 'GET /healthz carries the build identifier', health.build);
+
+  // Tenancy is always on: the open posture runs in the default org at the
+  // workspace root, echoes it, and ignores the org header (A-9).
+  {
+    const r = await fetch(`${base}/api/packs`);
+    assert(r.status === 200 && r.headers.get('x-observogram-org') === 'default', 'open posture: /api echoes X-Observogram-Org: default', r.headers.get('x-observogram-org'), 'default');
+    const orgs = await (await fetch(`${base}/api/orgs`)).json();
+    assert(orgs.ok === true && orgs.tenancy === true && orgs.active === 'default'
+      && JSON.stringify(orgs.orgs) === JSON.stringify([{ id: 'default', name: 'Default', role: null }]),
+    'open posture: GET /api/orgs lists the default org with role null', orgs);
+    const other = await fetch(`${base}/api/packs`, { headers: { 'X-Observogram-Org': 'nope' } });
+    assert(other.status === 200 && other.headers.get('x-observogram-org') === 'default', 'open posture: X-Observogram-Org: nope is ignored (200, echo default)', [other.status, other.headers.get('x-observogram-org')], [200, 'default']);
+  }
 
   // /api/version — which build is this? (server/build-info.mjs)
   const verRes = await fetch(`${base}/api/version`);
@@ -515,6 +536,9 @@ try {
   process.env.OBSERVOGRAM_API_TOKEN_LABEL = 'smoke-ci';
   const openRead = await fetch(`${base}/api/packs`);
   assert(openRead.status === 200, 'token set: GET routes stay open without auth');
+  assert(openRead.headers.get('x-observogram-org') === 'default', 'token set: an anonymous GET echoes the default org', openRead.headers.get('x-observogram-org'), 'default');
+  const anonOther = await fetch(`${base}/api/packs`, { headers: { 'X-Observogram-Org': 'nope' } });
+  assert(anonOther.status === 200 && anonOther.headers.get('x-observogram-org') === 'default', 'token set: an anonymous GET ignores X-Observogram-Org (200, echo default)', [anonOther.status, anonOther.headers.get('x-observogram-org')], [200, 'default']);
   const denied = await fetch(`${base}/api/validate`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(authRaw),
   });

@@ -13,7 +13,8 @@
  * contract and never mounts the store claim; no secret-shaped env var
  * carries a literal value anywhere; and the CLI's per-journey CronJob
  * (schedule-snippets.mjs) agrees with the component on the PVC name and the
- * mount. CI runs no kustomize/kubeconform — this is the gate; `kubectl
+ * mount; and the README's one-off restore/export pods see the studio's
+ * database and workspace at the studio's paths. CI runs no kustomize/kubeconform — this is the gate; `kubectl
  * kustomize deploy/k8s-journeys` (the sibling overlay — kustomize refuses one
  * nested under the base it references) is run by hand.
  * Exit 0 = pass.
@@ -204,13 +205,13 @@ const overlay = docs['../k8s-journeys/kustomization.yaml'];
          'the claimName in the CronJob and in the studio patch is the PVC\'s name', { cron: pod.volumes[0].persistentVolumeClaim.claimName, studio: patch.spec.template.spec.volumes[0].persistentVolumeClaim.claimName, pvc: pvc.metadata.name });
   assert(patch.kind === 'Deployment' && patch.metadata.name === 'observabilitypack-studio' && patchC.name === 'studio', 'the patch targets the studio container by name (strategic merge)');
   const cronText = readFileSync(join(K8S, 'components/journeys/cronjob-journeys.yaml'), 'utf8');
-  assert(/# - name: OBSERVOGRAM_JOURNEY_RUN_RETENTION/.test(cronText) && /# - name: OBSERVOGRAM_MCP_TIMEOUT_MS/.test(cronText) && /secretKeyRef: \{ name: journey-secrets, key: MY_JOURNEY_WEBHOOK_URL \}/.test(cronText) && /orgs\.json/.test(cronText),
-         'the CronJob documents the retention / timeout knobs, the secretKeyRef binding for the env names and the tenancy root — all commented');
+  const prose = t => t.replace(/\n[ \t]*#[ \t]*/g, ' '); // comment lines joined, wraps ignored
+  assert(/# - name: OBSERVOGRAM_JOURNEY_RUN_RETENTION/.test(cronText) && /# - name: OBSERVOGRAM_MCP_TIMEOUT_MS/.test(cronText) && /secretKeyRef: \{ name: journey-secrets, key: MY_JOURNEY_WEBHOOK_URL \}/.test(cronText) && /one CronJob per org/.test(prose(cronText)) && /\/workspace\/<orgs\.root>/.test(cronText),
+         'the CronJob documents the retention / timeout knobs, the secretKeyRef binding for the env names and the per-org root — all commented');
   assert(/exit 1 \(gate failed\) is the\n# early-warning OUTCOME/.test(cronText) && /kubectl get jobs/.test(cronText), 'the CronJob states why a gate failure is a failed Job, not a retry');
   // STORE_PLAN §3: an RWX class is typically NFS/CephFS, where the database
   // refuses to open — RWX is advice only while OBSERVOGRAM_DB is on the store.
   const pvcText = readFileSync(join(K8S, 'components/journeys/pvc-workspace.yaml'), 'utf8');
-  const prose = t => t.replace(/\n[ \t]*#[ \t]*/g, ' '); // comment lines joined, wraps ignored
   const rwxOnlyWhileDbOnStore = /ReadWriteMany.*only while.{0,40}OBSERVOGRAM_DB.{0,40}RWO store volume/i;
   assert(rwxOnlyWhileDbOnStore.test(prose(pvcText)) && /pvc-store\.yaml/.test(pvcText),
          'pvc-workspace.yaml allows ReadWriteMany only while OBSERVOGRAM_DB points at the RWO store volume');
@@ -268,6 +269,62 @@ function smp(base, patch, key) {
   const cronC = cronPod.containers[0];
   assert(!cronPod.volumes.some(v => v.name === STORE_VOLUME || v.persistentVolumeClaim?.claimName === STORE_PVC) && !('OBSERVOGRAM_DB' in envMap(cronC)),
          'the journeys CronJob never mounts the store claim and sets no OBSERVOGRAM_DB (the journey runner opens no database)', cronPod.volumes);
+}
+
+// --- the README's one-off store pods run where the studio runs ---
+// `store restore` reads the workspace's .store-imported marker to warn about
+// a backup of another store, and `store export` writes into the workspace:
+// each pod must see the studio's database AND workspace at the studio's paths.
+{
+  const readme = readFileSync(join(K8S, 'README.md'), 'utf8');
+  const pods = [...readme.matchAll(/<<EOF\n([\s\S]*?)\nEOF\n/g)]
+    .map(m => parseYaml(m[1].replaceAll(/\$[A-Z_]+/g, 'x')))
+    .filter(d => d?.kind === 'Pod' && /^observogram-store-/.test(d.metadata?.name));
+  assert(pods.map(d => d.metadata.name).join() === 'observogram-store-restore,observogram-store-export',
+         'deploy/k8s/README.md carries the restore and the export one-off pods', pods.map(d => d.metadata?.name));
+  for (const d of pods) {
+    const c = d.spec.containers[0];
+    const env = envMap(c);
+    const wsAt = env.OBSERVOGRAM_WORKSPACE && mountOf(d.spec, c, env.OBSERVOGRAM_WORKSPACE.value);
+    const dbAt = env.OBSERVOGRAM_DB && mountOf(d.spec, c, env.OBSERVOGRAM_DB.value);
+    assert(env.OBSERVOGRAM_DB?.value === STORE_DB && dbAt?.mount.subPath === 'db' && dbAt.volume?.persistentVolumeClaim?.claimName === STORE_PVC,
+           `README ${d.metadata.name}: OBSERVOGRAM_DB is the studio's ${STORE_DB} on the store claim's db subPath`, { env: c.env, mounts: c.volumeMounts });
+    assert(env.OBSERVOGRAM_WORKSPACE?.value === STORE_WORKSPACE && wsAt?.mount.subPath === 'workspace' && wsAt.volume?.persistentVolumeClaim?.claimName === STORE_PVC,
+           `README ${d.metadata.name}: OBSERVOGRAM_WORKSPACE is the studio's ${STORE_WORKSPACE} on the store claim's workspace subPath (the restore's marker warning reads it)`, { env: c.env, mounts: c.volumeMounts });
+  }
+}
+
+// --- the README's rollback names two distinct images ---
+// The pre-store release is the git tag v0.4.0 and this build is still 0.4.0
+// in package.json, so an image tagged with the package version may be either
+// build: the store image comes from the Deployment, the old one has a tag of
+// its own, or `kubectl set image … studio=$OLD_IMAGE` changes nothing.
+{
+  const readme = readFileSync(join(K8S, 'README.md'), 'utf8');
+  const version = JSON.parse(readFileSync(new URL('package.json', ROOT), 'utf8')).version;
+  const store = readme.match(/^STORE_IMAGE=(.*)$/m)?.[1] ?? '';
+  const old = (readme.match(/^OLD_IMAGE=(\S*)/m)?.[1] ?? '').trim();
+  const tagOf = ref => ref.slice(ref.lastIndexOf('/') + 1).split(':')[1] ?? '';
+  assert(/^\$\(kubectl .*get deployment\/observabilitypack-studio/.test(store),
+         'README rollback: STORE_IMAGE is read from the studio Deployment, not retyped', store);
+  // Step 3 changes the image STORE_IMAGE was read from, so "forward again"
+  // and its replace pod, often run from a new shell days later, need the value
+  // recorded where step 3 leaves it alone: an annotation on the Deployment,
+  // written before the image changes and read back from there.
+  const joined = readme.replaceAll(/\s*\\\n\s*/g, ' ');
+  const at = re => joined.search(re);
+  const annotate = at(/^kubectl .*annotate --overwrite deployment\/observabilitypack-studio observogram\.io\/store-image="\$\(kubectl .*containers\[\?\(@\.name=="studio"\)\]\.image\}'\)"/m);
+  const readBack = at(/^STORE_IMAGE=\$\(kubectl .*get deployment\/observabilitypack-studio -o jsonpath='\{\.metadata\.annotations\.observogram\\\.io\/store-image\}'\)/m);
+  const setImage = at(/^kubectl .*set image deployment\/observabilitypack-studio studio=\$OLD_IMAGE/m);
+  const forward = joined.slice(at(/\*\*Forward again:\*\*/));
+  assert(annotate >= 0 && setImage > annotate,
+         'README rollback: the store image is recorded as the observogram.io/store-image annotation before step 3 changes the image', { annotate, setImage });
+  assert(readBack >= 0 && readBack < setImage,
+         'README rollback: STORE_IMAGE is read back from the observogram.io/store-image annotation, which step 3 leaves alone', store);
+  assert(at(/\*\*Forward again:\*\*/) > setImage && /^STORE_IMAGE=\$\(kubectl .*observogram\\\.io\/store-image/m.test(forward),
+         'README forward again: STORE_IMAGE is re-read from the annotation, so a new shell gets the store image, not $OLD_IMAGE', forward.slice(0, 400));
+  assert(old !== '' && tagOf(old) !== version && tagOf(old) !== `v${version}` && !/[<>]/.test(tagOf(old)),
+         `README rollback: OLD_IMAGE has a tag of its own, never the package version ${version} the store build also carries`, old);
 }
 
 // --- secrets discipline across every manifest: no literal value on a secret-shaped env var ---

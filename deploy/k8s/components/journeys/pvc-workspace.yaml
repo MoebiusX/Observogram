@@ -1,6 +1,7 @@
 # The workspace both the studio and the journeys CronJob mount at
 # OBSERVOGRAM_WORKSPACE=/workspace: journeys/<name>.journey.yaml, runs/<name>/
-# (one JSON per run + live/ snapshots), deploys.jsonl, users.json, packs/.
+# (one JSON per run + live/ snapshots), deploys.jsonl, packs/, and the legacy
+# users.json / orgs.json until the first start imports them.
 # Under the overlay it takes the studio's workspace over from the base's
 # /data/workspace (copy that across first: deploy/k8s/README.md). The
 # database is NOT here: it stays on the base's store claim

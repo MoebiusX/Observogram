@@ -10,7 +10,7 @@
 // Every mutating call takes an actor and writes its audit row in the same
 // transaction.
 
-import { currentOrg, validOrgId } from '../tenancy.mjs';
+import { currentOrg, validOrgId } from '../org-context.mjs';
 
 export function requireActor(actor) {
   if (typeof actor !== 'string' || !actor.trim()) {
@@ -41,8 +41,15 @@ export function notFound(kind, id) {
   return err;
 }
 
+// "Storable text": the one predicate the repositories enforce, exported so
+// the legacy import's field rules and the ID-token claim sanitiser apply
+// the same rule before anything is written.
+export function textOk(value, { max = 200 } = {}) {
+  return typeof value === 'string' && value.trim() !== '' && value.length <= max;
+}
+
 export function requireText(value, field, { max = 200 } = {}) {
-  if (typeof value !== 'string' || !value.trim() || value.length > max) {
+  if (!textOk(value, { max })) {
     throw new TypeError(`observogram store: ${field} must be a non-empty string of at most ${max} characters`);
   }
   return value;

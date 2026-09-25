@@ -25,10 +25,33 @@ next to Discover · Diagnose · Remediate. In order:
 `npm test` passes on Node 22.16+ (the `package.json` `engines` floor, for `node:sqlite`;
 the Node 22.22 pipe truncation in `packc journey run --all --json` that failed
 `tools/test-journey.mjs` was fixed in [STORE_PLAN.md](STORE_PLAN.md) slice 1). `npm run lint`:
-0 errors, 186 warnings (a baseline of `preserve-caught-error`-style warnings; do not add to
-it). CI on a PR: `validate` (includes the vendored-spec check) and `backend-live` on the
-latest 22, `node-floor` (`npm test` on exactly 22.16.0). `refresh-live-pack` runs only on
+0 errors, 181 warnings (a baseline of `preserve-caught-error`-style warnings; slice 2a
+removed five with the file readers it deleted; do not add to it). CI on a PR: `validate`
+(includes the vendored-spec check) and `backend-live` on the
+latest 22, `node-floor` (`npm test` on exactly 22.16.0), `store-prestore` (from slice 2b:
+the Export gate against a `v0.4.0` worktree). `refresh-live-pack` runs only on
 demand or when the fetcher changes.
+
+**The store (backlog 0) — slice 2 complete once 2a and 2b merge; slice 3 is next.**
+Slice 1 (the store foundation: `server/store/*`, `packc store backup` / `restore`, the k8s
+store volume) is PR #109. Slice 2a (PR #111, branch `codex/store-identity`, stacked on it)
+moves identity onto the store: `start()` runs `bootStore()` (`server/boot.mjs`: the boot
+order, the one-time import of `users.json` / `orgs.json`, the seed and the fail-closed
+checks), sessions carry a per-user epoch, OIDC users are recorded under an issuer key,
+tenancy is always on, and `npm run users` / `npm run orgs` are entry points over
+`server/identity-admin.mjs`. Slice 2b (branch `codex/store-offline-ops`, stacked on 2a)
+adds the offline operations in `server/store/ops.mjs`: `packc store export` (the rollback:
+to a directory, or in place with the default org's move), `import --replace` (the request;
+the replace itself is boot step 3 in `server/store/import.mjs`), `rekey-issuer --to` /
+`--clear`, `purge-org`, and `restore`'s warning when the marker names another store. The
+boot's step-2 refusals now name `import --replace` (edited files) and both `rekey-issuer`
+commands (a changed issuer); `server/test-store-boot.mjs` and `server/test-store-import.mjs`
+pin those texts. The Export gate runs in `npm test` through
+`server/fixtures/pre-store-build.mjs`, and against the real `v0.4.0` build in the CI job
+`store-prestore` (`tools/test-store-prestore-live.mjs`). README "Upgrade And Roll Back" and
+`deploy/k8s/README.md` state the upgrade and the clean rollback (export in place first,
+with the server stopped). `develop` is promoted to `main` only once 2b has merged. Next is
+slice 3 (roles enforced, the identity API, the live pack per org — STORE_PLAN §7).
 
 ### otel-observability-pack (the spec) — `develop` at the merge of PR #8
 
@@ -110,7 +133,7 @@ with `captureBeyondViewport`); in the cloud sandbox Chromium lives at
 in-mem SQL DB for user, services and environment management."* This supersedes the
 "file-first, not a database + user accounts" constraint written into
 `docs/VALUE_BACKLOG.md` item 10 and moves items 10 and 12 (workspace persistence · auth ·
-audit · rollback; identity · tenancy · hosted posture) to the front. What exists today:
+audit · rollback; identity · tenancy · hosted posture) to the front. What existed then:
 `server/auth.mjs` keeps users in `<workspace>/users.json` (seeded admin / admin on first
 boot, OIDC optional), `server/tenancy.mjs` scopes a workspace per org, packs live as
 `<workspace>/packs/<id>.pack.yaml`, and "service" and "environment" are not first-class
@@ -134,6 +157,9 @@ file. Design it against `docs/VALUE_BACKLOG.md` items 10 and 12 and
 he ratifies plans for this stream (item 12 says so). *Planned 2026-09-24:*
 [STORE_PLAN.md](STORE_PLAN.md) — schema, import, roles, slices and gates; the seven
 decisions are ratified; its §9b lists the refinements made since, which merging it confirms.
+*Status:* slice 1 (the foundation) is PR #109; slice 2 is complete once 2a (identity on the
+store, PR #111) and 2b (export, `import --replace`, `rekey-issuer`, `purge-org`) merge; slice 3
+(roles enforced) is next — see §1.
 
 **A. Decide: "the draft becomes the pack".** The root cause of every remaining Build gap is
 that the draft is a set of inputs re-instantiated from the seed on each change, with
@@ -219,11 +245,13 @@ read-only by design; the SLI rolodex shows the bare library id until a rename.
 - **`packc init` has no custom SLIs** and `--override` takes only the scalar fields and
   `id` / `semconv_metric` / `good_when`; PromQL edits are studio/API only. Documented in
   `library/README.md`.
-- **Persistence is file-first by design** (`users.json`, `orgs.json`, `packs/index.json`), and
-  the maintainer has asked for an embedded SQL store for these records (backlog 0, planned in
-  `docs/STORE_PLAN.md`). Artefacts (`packs/*.pack.yaml`, snapshots, journeys, runs,
-  `deploys.jsonl`) stay files. Until slice 2 lands, every new record type is another file
-  format and another ad-hoc loader.
+- **Records are half on the store.** Users, orgs, memberships, the owner and the audit live
+  in the store from slice 2a; `users.json` / `orgs.json` are imported once and never read
+  again. `packs/index.json` (pack registrations), services and environments are still files
+  or not records at all until the later slices of `docs/STORE_PLAN.md`; artefacts
+  (`packs/*.pack.yaml`, snapshots, journeys, runs, `deploys.jsonl`) stay files by design.
+  The rollback to a pre-store build is `packc store export` in place, with the server
+  stopped, and the way back after one is `packc store import --replace` (slice 2b).
 - **The Build state is inputs + overrides** (see backlog A). Until that changes, every new
   editable thing needs its own special case in the engine and the state.
 - **Distribution SLIs** get no burn rules (null legs) and no direction handling beyond the
