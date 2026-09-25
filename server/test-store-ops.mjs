@@ -1154,6 +1154,47 @@ test('Round trip: an empty leftover the start cannot remove (rmdir fails with EB
   assert.deepEqual(pre.packIds(base, 'default'), ['p1']);
 });
 
+// The real server's start in a child whose fs.rmSync and fs.rmdirSync fail
+// with EBUSY on <base>/packs, as a mount point there does.
+const BUSY_RM_START = BUSY_RMDIR_START.replace('fs.rmdirSync = (p, ...rest) => {', `const realRm = fs.rmSync;
+fs.rmSync = (p, ...rest) => {
+  if (String(p) === busy) throw Object.assign(new Error(\`EBUSY: resource busy or locked, rm '\${p}'\`), { code: 'EBUSY' });
+  return realRm(p, ...rest);
+};
+fs.rmdirSync = (p, ...rest) => {`);
+
+test('Stale import: an empty leftover the replace cannot remove (rm fails with EBUSY) is one warn line naming it and the code; the replace is committed and the server still listens', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice', 'bob']);
+  pack(base, 'p1');
+  await start(base);
+  await change(base, (db) => admin.createOrgFromAdmin(db, 'cli', { id: 'acme', name: 'Acme', admin: 'bob', base }));
+  assert.deepEqual((await exportIt(base)).move, ['packs']);
+  pre.boot(base);   // its empty <base>/packs
+  const usersPath = join(base, 'users.json');
+  const file = readJson(usersPath);
+  file.users.bob.password = hashPassword('bob-downgrade-pw');
+  legacy.writeUsersFile(file, usersPath);
+  await requestIt(base);
+
+  const env = { ...process.env };
+  for (const k of STRIP) { delete env[`OBSERVOGRAM_${k}`]; delete env[`TOMOGRAPH_${k}`]; }
+  env.OBSERVOGRAM_WORKSPACE = base;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', BUSY_RM_START], { env, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^LISTENING \d+$/m, r.stdout + r.stderr);
+  assert.match(r.stdout, /\[store\] replaced from /, r.stdout);
+  const lines = r.stderr.split('\n').filter((l) => l.includes(join(base, 'packs')));
+  assert.deepEqual(lines, [`[store] could not remove the empty leftover ${join(base, 'packs')} of a pre-store build (EBUSY): nothing reads it; the start goes on`], r.stderr);
+  assert.ok(!/removed empty leftovers/.test(r.stdout), r.stdout);
+  assert.equal(existsSync(join(base, 'packs')), true, 'the directory it could not remove is still there');
+  await read(base, (db) => {
+    assert.equal(meta.getMeta(db, 'replace_requested'), null, 'the replace is committed');
+    assert.ok(verifyPassword('bob-downgrade-pw', getUserByLogin(db, 'bob').password), 'the edit is in');
+  });
+  assert.deepEqual(pre.packIds(base, 'default'), ['p1']);
+});
+
 test('Stale import: `orgs create acme` on a pre-store build with no restart after it — the replace moves the flat workspace itself (migrateFlatWorkspace): the entries under orgs/default, the root, the journey file rewritten; the start after passes', async () => {
   const base = tempDir();
   usersJson(base, ['alice', 'bob']);

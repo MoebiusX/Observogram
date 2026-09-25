@@ -617,19 +617,26 @@ export function warnNoOwner(db, ctx, warn) {
 // recreates an empty <base>/packs that nothing reads: removed here — an
 // empty directory only, never anything with data, never under :memory:.
 // Cosmetic: a directory it cannot remove (a mount point, no permission, a
-// read-only file system) is one warn line, and the start goes on.
-export function removeEmptyLeftovers(db, ctx, log, warn) {
+// read-only file system) is one warn line, and the start goes on — as is
+// one the replace (applyReplace) could not remove, warned once.
+export function leftoverWarning(path, code) {
+  return `[store] could not remove the empty leftover ${path} of a pre-store build (${code}): nothing reads it; the start goes on`;
+}
+
+// `kept`: paths this start's replace already warned it could not remove.
+export function removeEmptyLeftovers(db, ctx, log, warn, { kept = [] } = {}) {
   if (ctx.memory || listOrgs(db).some((o) => o.root === '.')) return;
   const removed = [];
   for (const entry of MIGRATABLE) {
     const path = join(ctx.base, entry);
+    if (kept.includes(path)) continue;
     try {
       if (!lstatSync(path).isDirectory() || readdirSync(path).length) continue;
       rmdirSync(path);
       removed.push(path);
     } catch (e) {
       if (['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(e?.code)) continue;
-      warn(`[store] could not remove the empty leftover ${path} of a pre-store build (${e?.code ?? e?.message}): nothing reads it; the start goes on`);
+      warn(leftoverWarning(path, e?.code ?? e?.message));
     }
   }
   if (removed.length) log(`[store] removed empty leftovers of a pre-store build: ${removed.join(', ')}`);
@@ -747,6 +754,7 @@ export async function bootStore({ host, log = () => {}, warn = () => {} } = {}) 
     resetOrgRootCache();
     writeMarker(ctx.base, { storeId: storeId(db), files: plan2.legacyHashes, by: 'replace' });
     for (const line of formatReplace(report)) log(line);
+    for (const k of report.leftoversKept) warn(leftoverWarning(k.path, k.code));
   } else if (!getMeta(db, 'import_done')) {
     const legacy1 = readLegacy(db, ctx);                       // strict: a throw names the path, nothing moved
     const migrate = legacy1.orgs.exists && !keepsDefaultAtRoot(db);
@@ -787,7 +795,7 @@ export async function bootStore({ host, log = () => {}, warn = () => {} } = {}) 
   applySeedDecision(db, decision, { log, warn });
   recordIssuer(db, ctx);
   warnNoOwner(db, ctx, warn);
-  removeEmptyLeftovers(db, ctx, log, warn);
+  removeEmptyLeftovers(db, ctx, log, warn, { kept: (report?.leftoversKept ?? []).map((k) => k.path) });
   warnLeftBehind(db, ctx, warn);
   warnIgnoredJoinRole(db, ctx, warn, { imported: report !== null });
 

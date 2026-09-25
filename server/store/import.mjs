@@ -493,7 +493,7 @@ export function planReplace(db, legacy, ctx, migration) {
     users: { created: [], updated: [], disabled: [], enabled: [], conflicts: [], dropped: [], droppedFields: [] },
     orgs: { created: [], renamed: [], removed: [], conflicts: [], dropped: [], droppedFields: [], defaultOrg: getMeta(db, 'default_org') },
     memberships: { added: [], removed: [], changed: [], dropped: [], inexact: [], viewers: [] },
-    rootChanged: false, cronJob: null, leftovers: [], journeys: [], sessionsEnded: [],
+    rootChanged: false, cronJob: null, leftovers: [], leftoversKept: [], journeys: [], sessionsEnded: [],
     ownersDisabled: [], noOwner: false,
     identityArmed: legacy.users.exists || getMeta(db, 'identity_armed') === '1',
     // what the export reads: the deployment has, or had, an orgs.json
@@ -723,7 +723,8 @@ export function planReplace(db, legacy, ctx, migration) {
 }
 
 // The journey rewrites first (restored if the transaction fails), then one
-// tx(), then — committed — the empty flat leftovers are removed.
+// tx(), then — committed — the empty flat leftovers are removed (one that
+// cannot be is kept in report.leftoversKept, never a failure).
 export function applyReplace(db, plan, ctx) {
   const written = [];
   try {
@@ -780,7 +781,18 @@ export function applyReplace(db, plan, ctx) {
     }
     throw e;
   }
-  for (const path of plan.leftovers) rmSync(path, { recursive: true, force: true });
+  // Committed: the empty leftovers are cosmetic. One that cannot be removed (a mount point, no permission, a
+  // read-only file system) is kept and reported (leftoversKept) — the start warns and goes on.
+  const removed = [];
+  for (const path of plan.leftovers) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+      removed.push(path);
+    } catch (e) {
+      plan.report.leftoversKept.push({ path, code: e?.code ?? e?.message });
+    }
+  }
+  plan.report.leftovers = removed;
   return plan.report;
 }
 
