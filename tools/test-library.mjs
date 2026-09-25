@@ -915,3 +915,30 @@ test('findEntry; a missing library root is an error that names it; the package s
   const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
   assert.ok(pkg.files.includes('library/'), `package.json files: ${pkg.files.join(', ')}`);
 });
+
+// The Conformance screen's reading of the report (studio/conformance-view.mjs readConformance; the
+// 2026-09 UX review): with the validation summary's onPlaceholder, the clauses that pass on a template
+// value leave "Passed with real values"; without it, a pack that still carries library.todo.* values never
+// claims "real values". Clauses above the tier are excluded (not evaluated), never failed; a failing MUST
+// blocks with a reason and a fix, a failing SHOULD never does. View layer only: the verdict is the engine's.
+test('the Conformance screen splits blocking, on-placeholder, passed and not-applicable clauses', async () => {
+  const { readConformance } = await import('../studio/conformance-view.mjs');
+  const { canonical, todos } = build(byId.kafka, 'tier-2');
+  const report = evaluateConformance(canonical);
+  const pack = adapt(canonical);
+  const summary = validationSummary(canonical, todos);
+  const withPh = readConformance({ ...report, onPlaceholder: summary.onPlaceholder }, pack);
+  assert.equal(withPh.conformant, true);
+  assert.deepEqual(withPh.groups.blocking, []);
+  assert.deepEqual(withPh.groups.placeholder.map(r => r.id).sort(), summary.onPlaceholder.map(c => c.id).sort());
+  assert.ok(withPh.passedIsReal && withPh.groups.passed.every(r => !summary.onPlaceholder.some(c => c.id === r.id)));
+  const plain = readConformance(report, pack);
+  assert.equal(plain.placeholderKnown, false);
+  assert.equal(plain.passedIsReal, false, 'template values present and no summary: never "Passed with real values"');
+  assert.ok(plain.groups.notApplicable.length > 0 && plain.groups.notApplicable.every(r => r.applies === false && r.pass === null));
+  const broken = JSON.parse(JSON.stringify(canonical));
+  broken.spec.validation.synthetic_checks = [];
+  const b = readConformance(evaluateConformance(broken), adapt(broken));
+  assert.ok(b.groups.blocking.some(r => r.id === 'L5.MUST.synthetic_probe' && r.reason && r.action), 'a failing MUST blocks, with a reason and a fix');
+  assert.ok(b.groups.blocking.every(r => r.severity === 'MUST') && b.groups.recommended.every(r => r.severity === 'SHOULD'));
+});

@@ -50,19 +50,27 @@ real but a listed gap blocks confident daily use).
 
 ## 2. Conformance
 
-- **Current state.** Maturity-rubric scorecard for the focused pack:
-  headline conformant yes/no, MUST/SHOULD counts, combined score,
-  per-dimension grid (L1–L5), full clause list with applies/pass/severity
-  per clause. Supports the A|B focus toggle.
+- **Current state.** Maturity-rubric scorecard for the focused pack, in the
+  screen grammar ([UX_SCREEN_GRAMMAR.md](UX_SCREEN_GRAMMAR.md)): the
+  governing result first ("Not conformant at tier 2: three required clauses
+  need attention"), the top blockers each with a reason and a fix, then the
+  clauses split into blocking · recommended not met · passes on placeholders
+  (when the report carries `onPlaceholder`) · passed · not applicable at this
+  tier (drawn as excluded, never as failed), a per-layer grid (L1–L5 and
+  L2X), and the weighting in a collapsed "Scoring rules". Supports the A|B
+  focus toggle.
 - **User value.** "How mature is this pack against spec v1.2, and exactly
   which clause fails?" — the actionable detail behind the Diagnose grade.
 - **Code surface.** [studio/conformance-view.mjs](../studio/conformance-view.mjs)
-  (~95 lines), scoring in [tools/lib/conformance.mjs](../tools/lib/conformance.mjs),
+  (the view, plus `readConformance`, the pure clause grouping tested in
+  `test-library`), scoring in [tools/lib/conformance.mjs](../tools/lib/conformance.mjs),
   `GET /api/packs/:id/conformance` with env overlays. Rubric documented in
   [docs/CONFORMANCE.md](CONFORMANCE.md).
 - **Known gaps.**
-  - The dimension grid shows L1–L5 only; L2X and GOV clauses appear in the
-    clause list but not the grid.
+  - `GET /api/packs/:id/conformance` does not carry `onPlaceholder`, so the
+    "Passes on placeholders" group only appears for a report that does (the
+    library's validation summary); otherwise the view says passes may rest on
+    the pack's template values instead of claiming "real values".
   - When Pack B's conformance hasn't loaded yet the view shows a bare
     "conformance report unavailable" placeholder with no retry affordance.
   - Clause list has no filter (pass/fail/severity) — long lists at tier-1.
@@ -123,11 +131,18 @@ real but a listed gap blocks confident daily use).
 
 ## 5. Traceability
 
-- **Current state.** Two parts: (1) requirement chains for Pack A —
-  SLO → SLI → metrics → rules → dashboards → alerts → runbooks; (2) with
-  Pack B loaded, declared-vs-verified buckets (aligned / declared-not-
-  verified / verified-not-declared / stale) with per-finding suppress and
-  resolve preferences persisted in state.
+- **Current state.** Two parts: (1) requirement chains for Pack A — a
+  decision header, a table separating what exists somewhere from what is
+  linked and proven for each requirement, and a list sorted worst first
+  (name · chain state · first broken link · next action) where one
+  requirement at a time expands into its proof chain, each link read as
+  proven / inferred / unverified / missing / not required with the engine's
+  codes beside plain-language labels, and a filter grouping every
+  requirement that shares a gap (the reading is
+  [studio/trace-chain.mjs](../studio/trace-chain.mjs)); (2) with Pack B
+  loaded, underneath as details, the repo-vs-live groups (aligned /
+  declared, not seen live / live only / declared differently) with
+  per-finding suppress and resolve preferences persisted in state.
 - **User value.** "Show me the evidence chain for every requirement, and
   what production does or doesn't confirm" — the audit trail behind the
   drift verdicts.
@@ -141,8 +156,10 @@ real but a listed gap blocks confident daily use).
     this view) is not built — tracked in [VALUE_BACKLOG.md](VALUE_BACKLOG.md).
   - Suppress/resolve prefs are local to the browser (by design today) —
     no shared team state.
-- **Test coverage.** `test-traceability-graph` (22 assertions) covers the
-  graph engine; bucket categorisation is exercised indirectly. UI untested.
+- **Test coverage.** `test-traceability-graph` covers the graph engine and
+  the studio's chain reading (a job-level scrape is never proof, a
+  declaration alone is never proven, every engine code has a label);
+  bucket categorisation is exercised indirectly. UI rendering untested.
 - **Readiness: Ready.**
 
 ## 6. Atlas

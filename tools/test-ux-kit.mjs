@@ -95,7 +95,7 @@ test('the section index links each section with its count; empty input renders n
 test('plain words first, the formal term and its definition on hover', () => {
   assert.match(termHtml('retrofeed'), />Update repository from live</);
   assert.match(termHtml('retrofeed'), /title="Retrofeed: Copies signals/);
-  assert.match(termHtml('coverage'), /title="The share/, 'no "Coverage: " prefix when the plain word is the term');
+  assert.match(termHtml('coverage'), /title="How much/, 'no "Coverage: " prefix when the plain word is the term');
   assert.equal(termHtml('unknown-key', 'x'), 'x');
   assert.equal(GLOSSARY.conformant.plain, 'Meets tier rubric');
   assert.equal(GLOSSARY.placeholder.plain, 'Requirement represented; real value still needed');

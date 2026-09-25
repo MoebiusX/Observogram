@@ -68,7 +68,7 @@ Load Pack B: live production posture
   v
 Diagnose
   |
-  |-- Diagnostic Grade
+  |-- Assessment (diagnostic grade)
   |-- Coverage criteria
   |-- Trust criteria
   |-- Drift drill

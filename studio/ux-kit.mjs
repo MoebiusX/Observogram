@@ -152,7 +152,7 @@ export function legacyStatusChipHtml(word, opts = {}) {
 // termHtml instead of repeating a paragraph in every panel.
 export const GLOSSARY = {
   'diagnostic-grade': { term: 'Diagnostic grade', plain: 'Assessment', def: 'A letter grade for how well the pack is backed by evidence and how closely it matches the selected baseline. It combines coverage, trust and the audit gate.' },
-  coverage:     { term: 'Coverage', plain: 'Coverage', def: 'The share of the baseline’s artefacts that this pack also has.' },
+  coverage:     { term: 'Coverage', plain: 'Coverage', def: 'How much of the service the pack observes: the grade’s coverage checks (signal types, correlation, calibration, breadth) that pass.' },
   trust:        { term: 'Trust', plain: 'Trust', def: 'The share of this pack’s claims backed by live evidence rather than declaration alone.' },
   'audit-gate': { term: 'Audit gate', plain: 'Audit requirement', def: 'The minimum evidence the tier requires. A pack can have live signals and still fail it when required evidence is incomplete.' },
   baseline:     { term: 'Target', plain: 'Selected baseline', def: 'The pack you are comparing against — usually the curated repository pack.' },

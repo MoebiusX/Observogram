@@ -760,4 +760,62 @@ process.stdout.write('\n--- per-node ladder rides along, scoring untouched ---\n
          'rollup.integrityMean is unchanged by unhealthy or stale observations', [healthy.rollup.integrityMean, badRule.rollup.integrityMean, stale.rollup.integrityMean]);
 }
 
+// The studio's reading of the engine's requirement chains
+// (studio/trace-chain.mjs, the Traceability screen and the drawer). The UX
+// review's rules: a scrape job being observed is job-level evidence, never
+// proof that THIS metric is scraped; a declaration alone is never "proven";
+// a link is "missing" exactly when the engine records the gap; every engine
+// code has a plain-language label.
+process.stdout.write('\n--- studio chain reading ---\n');
+{
+  const { readFileSync } = await import('node:fs');
+  const { readTraceability, traceIssueLabel, TRACE_ISSUES } = await import('../studio/trace-chain.mjs');
+  const linkOf = (p, key) => readTraceability(adapt(p)).rows[0].links.find((l) => l.key === key);
+
+  const repo = readTraceability(adapt(completePack()));
+  const repoRow = repo.rows[0];
+  assert(repoRow.stateKey === 'unverified' && !repoRow.links.some((l) => l.key !== 'sli' && l.state === 'proven'),
+         'a repository pack with no live evidence proves nothing past the SLO→SLI reference',
+         repoRow.links.map((l) => `${l.key}:${l.state}`));
+
+  const jobOnly = clone(completePack());
+  jobOnly.metadata.annotations['crawler.discovered.scrape_jobs'] = '["billing-worker"]';
+  jobOnly.metadata.annotations['crawler.discovered.scrape_job_origins'] = '{}';
+  const jobModel = readTraceability(adapt(jobOnly));
+  const jobScrape = jobModel.rows[0].links.find((l) => l.key === 'scrape');
+  assert(jobScrape.state === 'unverified' && jobScrape.jobLevelOnly === true && /not proof that this metric is scraped/.test(jobScrape.detail),
+         'a scrape job observed but not tied to the metric reads unverified, job-level only, and says it is not proof', jobScrape);
+  assert(jobModel.byLink.scrape.linked === 0 && jobModel.byLink.scrape.proven === 0 && jobModel.exists.scrape.observed === 1,
+         'the summary counts the job as existing somewhere, not as linked or proven for the requirement',
+         [jobModel.byLink.scrape, jobModel.exists.scrape]);
+
+  const live = clone(completePack());
+  Object.assign(live.metadata.annotations, {
+    'mcp.url': 'http://mcp.example',
+    'mcp.discovered.metric_names': '["checkout_latency_seconds_bucket","checkout_latency_seconds_count"]',
+  });
+  const liveRow = readTraceability(adapt(live)).rows[0];
+  assert(liveRow.stateKey === 'proven' && ['metric', 'scrape', 'dashboard', 'alert'].every((k) => liveRow.links.find((l) => l.key === k).state === 'proven'),
+         'a live draft whose inventory reports the SLI metric, with a bound panel and a burn-rate alert, is proven end to end',
+         liveRow.links.map((l) => `${l.key}:${l.state}`));
+
+  const noDash = clone(completePack());
+  delete noDash.spec.dashboards;
+  const noDashModel = readTraceability(adapt(noDash));
+  const dash = linkOf(noDash, 'dashboard');
+  assert(dash.state === 'missing' && dash.broken && dash.gap === 'missing_dashboard_evidence' && noDashModel.rows[0].firstBroken?.key === 'dashboard',
+         'the engine gap missing_dashboard_evidence is the missing dashboard link and the first broken link', dash);
+  assert(noDashModel.issueGroups.some((g) => g.code === 'missing_dashboard_evidence' && g.ids.length === 1 && g.label === 'Dashboard evidence missing'),
+         'requirements sharing a gap are grouped under its plain-language label', noDashModel.issueGroups);
+
+  // Every gap and note the engine can emit has its label (no bare machine code on screen).
+  const engine = readFileSync(new URL('./lib/traceability.mjs', import.meta.url), 'utf8');
+  const codes = [...engine.matchAll(/(?:gaps|notes)\.push\('([a-z_]+)'\)/g)].map((m) => m[1]);
+  assert(codes.length >= 6 && codes.every((c) => TRACE_ISSUES[c]?.label),
+         'every gap/note code in tools/lib/traceability.mjs has a plain-language label in TRACE_ISSUES',
+         codes.filter((c) => !TRACE_ISSUES[c]), []);
+  assert(traceIssueLabel('missing_widget_evidence') === 'Missing widget evidence',
+         'an unknown code is humanised, never dropped', traceIssueLabel('missing_widget_evidence'));
+}
+
 report('traceability graph');
