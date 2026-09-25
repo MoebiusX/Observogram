@@ -126,8 +126,9 @@ export function artefactKind(artefact) {
 //   Verified -> evidence: live          Declared -> evidence: declared
 //   Scaffold -> completion: needsInput  Missing  -> evidence: missing
 // `attention` is Discover's definition of an artefact a person must act on: a
-// template value to complete, a required artefact that is missing, or a
-// reference that does not resolve. Evidence alone never makes it one — a
+// template value to complete or a reference that does not resolve (and an
+// artefact whose source is 'Missing', though the adapter emits none today: a
+// required artefact the pack lacks shows as a required check not met). Evidence alone never makes it one — a
 // repository pack is declared-only by nature.
 export function artefactStatus(artefact, { broken = 0 } = {}) {
   const src = String(artefact?.source || 'Declared');
@@ -150,7 +151,7 @@ export function artefactStatus(artefact, { broken = 0 } = {}) {
 // definition, repeated in its tooltip.
 export const DISCOVER_TASKS = [
   { id: 'attention',       label: 'Needs attention',
-    tip: 'Artefacts a person must act on: a template value still to complete, a reference that does not resolve, or a required artefact that is missing. Each artefact counts once, however many reasons apply.' },
+    tip: 'Artefacts a person must act on: a template value still to complete, or a reference that does not resolve. Each artefact counts once, however many reasons apply. A required artefact the pack lacks is not an artefact here; it shows as a required check not met.' },
   { id: 'missingEvidence', label: 'Missing evidence',
     tip: 'Artefacts with no live evidence: declared in the pack only, template values, or missing. Live evidence means the live platform reported the signal when the pack was drafted or refreshed.' },
   { id: 'scaffold',        label: 'Template value needs completion',
@@ -174,7 +175,8 @@ export function matchesTask(status, task) {
 // "Inferred from recording rule slo:x:ratio_5m." — the live fetcher's SLI
 // inference (tools/lib/sli-inference.mjs) writes the rule(s) it read into the
 // description. Returns the rule names (an `a:b:good/total` pair expands to its
-// two members) or null when the artefact was not inferred.
+// two members, `a:b:good` and `a:b:total`: stems, not rule names — see
+// resolveInferredRule) or null when the artefact was not inferred.
 const INFERRED_RE = /^\s*Inferred from recording rules?\s+(.+?)\.?\s*$/i;
 export function inferredFrom(artefact) {
   const text = String(artefact?.spec?.description ?? artefact?.desc ?? '');
@@ -188,6 +190,19 @@ export function inferredFrom(artefact) {
     else if (part) rules.push(part);
   }
   return rules.length ? { sentence: text.trim(), rules } : null;
+}
+
+// The recording rule, among `ruleNames`, that an inferredFrom() name stands for,
+// or null. An exact name wins. A good/total pair is written as the shorthand
+// `a:b:good/total`, while the rules themselves are `a:b:good_<window>` and
+// `a:b:total_<window>` (tools/lib/sli-inference.mjs infers the pair only from
+// those), so a `…:good` or `…:total` stem resolves to the first rule named
+// `<stem>_…`, the one the inference read.
+export function resolveInferredRule(name, ruleNames) {
+  const names = [...(ruleNames || [])].filter(n => typeof n === 'string' && n);
+  if (names.includes(name)) return name;
+  if (!/:(good|total)$/.test(String(name || ''))) return null;
+  return names.find(n => n.startsWith(`${name}_`)) || null;
 }
 
 // The status chips a Discover row shows: only the properties that apply.
@@ -225,7 +240,8 @@ function liveWhenOf(artefact) {
  *   benchmark      { slug, refPackId, label }: the benchmark CTA, as on the card
  *   rules          [{ name, found }]: the inferred-from recording rules, resolved
  *                  against the pack by the caller; a found rule is a button
- *                  that opens it (data-dv-rule="<name>")
+ *                  that opens it (data-dv-rule="<name>"), found:false says it
+ *                  is not in the pack, and without `rules` nothing was checked
  *   outsideFilter  true when the row shows only because it is open in the
  *                  detail panel, not because it matches the current filter
  * Name, what it does and status lead; id, type, tags and symbols sit in the
@@ -249,16 +265,30 @@ export function artefactRowHtml(artefact, { broken = 0, benchmark = null, rules 
   const repeatsKind = !desc || !!inference || desc === what
     || low.startsWith(kind.toLowerCase()) || GENERIC_DESC.test(low);
   const specLine = repeatsKind ? '' : desc;
-  const resolved = rules || (inference ? inference.rules.map(n => ({ name: n, found: false })) : []);
+  const resolved = rules || (inference ? inference.rules.map(n => ({ name: n, found: null })) : []);
 
   const ruleHtml = (r) => r.found
     ? `<button type="button" class="dv-rule-link" data-dv-rule="${escapeHtml(r.name)}" title="Open this recording rule"><code>${escapeHtml(r.name)}</code></button>`
-    : `<code class="dv-rule-missing" title="No recording rule of this name is in this pack">${escapeHtml(r.name)}</code>`;
+    : r.found === false
+      ? `<code class="dv-rule-missing" title="No recording rule of this name is in this pack">${escapeHtml(r.name)}</code>`
+      : `<code class="dv-rule-missing">${escapeHtml(r.name)}</code>`;
   const one = resolved.length === 1;
+  const those = one ? 'that rule' : 'those rules';
+  // What the inference establishes depends on the evidence: never more than
+  // the rule's own status (a declared rule is not a produced series) and
+  // nothing at all about a rule this pack does not hold.
+  const notFound = resolved.filter(r => r.found === false).length;
+  const why = notFound
+    ? (notFound === resolved.length
+      ? `${one ? 'That rule is' : 'Those rules are'} not in this pack, so the query cannot be traced to ${one ? 'it' : 'them'} here.`
+      : `${notFound} of those rules ${notFound === 1 ? 'is' : 'are'} not in this pack, so the query cannot be fully traced here.`)
+    : status.live
+      ? `Its query comes from ${those}, which the live platform reported when the pack was drafted or refreshed.`
+      : `Its query comes from ${those} as declared in the pack; nothing live has confirmed that ${one ? 'it runs' : 'they run'} or that the series ${one ? 'has' : 'have'} data.`;
   const sourceLine = inference ? `
     <p class="dv-row-source">
       <span class="dv-row-source-what">Inferred from recording rule${one ? '' : 's'} ${resolved.map(ruleHtml).join(' and ')}.</span>
-      <span class="dv-row-source-why">Its query comes from ${one ? 'that rule' : 'those rules'}, so the measurement exists; the target and threshold are defaults until someone sets them.</span>
+      <span class="dv-row-source-why">${escapeHtml(why)} The target and threshold are defaults until someone sets them.</span>
     </p>` : '';
 
   const gating = (/^BAK-/.test(a.id || '') && a.spec?.version?.gating)

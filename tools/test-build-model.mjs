@@ -50,7 +50,7 @@ import { LAYER_DEFS, L4_SUBGROUPS } from '../studio/constants.mjs';
 import { renderBuildDefine, rejectedCopies, instantiateErrorHtml } from '../studio/build-define-view.mjs';
 import { renderBuildCompile } from '../studio/build-compile-view.mjs';
 import { renderBuildVerify } from '../studio/build-verify-view.mjs';
-import { warningKey, warningSli, buildReadiness, schemaErrorLayer } from '../studio/build-model.mjs';
+import { warningKey, warningSli, buildReadiness, schemaErrorLayer, verifyDecision } from '../studio/build-model.mjs';
 import { renderBuildStack, buildStackHtml, wireBuildStack } from '../studio/build-stack-view.mjs';
 import { renderBuildDefinition, buildDefinitionHtml, wireBuildDefinition, summaryHtml, seedCardHtml } from '../studio/build-definition-view.mjs';
 import { renderBuildSheet, buildSheetHtml, wireBuildSheet, wireRolodex, SMOOTH_SCROLL_GRACE_MS } from '../studio/build-sheet-view.mjs';
@@ -697,8 +697,13 @@ test('the definition column’s summary carries the counts the rail used to prin
   assert.equal(s.blockingWarnings, 0);
   assert.equal(s.placeholdersRemaining, 17);
   assert.equal(s.ready, true);
-  assert.equal(s.statusKind, 'ok');
-  assert.equal(s.status, 'meets the tier-2 rubric', 'the plain words for conformant (the 2026-09 review §4)');
+  // Conformant, but four MUST clauses meet it only on a placeholder: amber, and it says so (never a green "meets").
+  assert.equal(s.mustOnPlaceholder, 4);
+  assert.equal(s.statusKind, 'warn');
+  assert.equal(s.status, 'meets the tier-2 rubric on placeholders — real values still needed', 'the plain words for conformant (the 2026-09 review §4), placeholders named');
+  // Every clause on real values: green, the plain words alone.
+  const real = buildDefinitionModel({ build: draft({ result: doneResult() }), library: LIBRARY, requirements: REQUIREMENTS }).summary;
+  assert.deepEqual([real.statusKind, real.status, real.mustOnPlaceholder], ['ok', 'meets the tier-2 rubric', 0]);
   assert.equal(s.counts.placeholder, 4);
   assert.equal(s.onPlaceholder, 4);
   const cold = buildDefinitionModel({ build: defaultBuildState(), library: LIBRARY, requirements: REQUIREMENTS }).summary;
@@ -758,8 +763,13 @@ test('buildVerifyModel: the verdict with the three states, schema, warnings, tod
   assert.match(m.readyText, /^The generated pack becomes the same kind of pack you inspect and improve in Discover\. Its 17 placeholder values travel with it as visible gaps/);
   const filled = buildVerifyModel({ build: draft({ result: { ...draft().result, provenance: { ...draft().result.provenance, placeholders: [] } } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
   assert.equal(filled.gaps, 0);
-  assert.equal(filled.continueLabel, 'Open pack in Discover');
-  assert.match(filled.readyText, /No placeholder value remains/);
+  // Every value filled is not every gap closed: the clauses on placeholders and the todos still travel as visible gaps.
+  assert.equal(filled.continueLabel, 'Open pack in Discover with visible gaps');
+  assert.match(filled.readyText, /Every value is filled, but 4 clauses pass only on placeholders, 3 items remain to write or measure and 18 other todos remain; they travel with it as visible gaps/);
+  assert.doesNotMatch(filled.readyText, /No placeholder value remains/);
+  const done = buildVerifyModel({ build: draft({ result: doneResult() }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
+  assert.equal(done.continueLabel, 'Open pack in Discover');
+  assert.match(done.readyText, /No placeholder value remains/);
   // A blocking warning or a schema error blocks the hand-off; nothing else does.
   const blocked = buildVerifyModel({ build: draft({ result: { ...draft().result, warnings: [{ kind: 'promql', message: 'x' }] } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
   assert.equal(blocked.blocking, true);
@@ -794,7 +804,7 @@ test('VERIFY shows four readiness states apart — "meets the tier rubric" never
   assert.deepEqual([m.decision.sentence, m.decision.word, m.decision.tone], ['Ready for team completion; not ready for deployment.', 'Incomplete', 'warn']);
   assert.deepEqual([m.next.primary.label, m.next.primary.action, m.next.secondary.map(s => s.label)], ['Complete required values', 'complete-values', ['Open in Discover with visible gaps']]);
   // The smallest actionable list: the clauses on placeholders, the values by the layer each shapes, what no value fills.
-  assert.deepEqual(m.remains.counts, { blocking: 0, warnings: 0, accepted: 0, clauses: 4, values: 17, manual: 3 });
+  assert.deepEqual(m.remains.counts, { blocking: 0, warnings: 0, accepted: 0, failing: 0, clauses: 4, values: 17, manual: 3 });
   assert.deepEqual(m.remains.values.groups.map(g => [g.layer, g.items.length]), [['L2', 11], ['L4', 3], ['L5', 3]]);
   assert.deepEqual(m.remains.values.groups.find(g => g.layer === 'L4').items.find(v => v.key === 'oncall_channel').todos, ['alerting.routes[0]', 'alerting.routes[1]']);
   assert.deepEqual(m.remains.clauses.find(c => c.id === 'L2.MUST.metrics_exporter').todos, ['pipelines.exporters.metrics']);
@@ -884,6 +894,62 @@ test('COMPILE leads with a result: one sentence, three states apart, the action 
   assert.ok(html.includes('What the pack produced') && html.includes('Changes since Define'));
   assert.ok(!html.includes('class="section build-slab'), 'no slab drawn in the overview');
   assert.ok(render({ compileView: ['L1'] }).includes('class="section build-slab is-pass'), 'a selected layer draws its slab');
+});
+
+// The false-assurance review (2026-09): no Build screen reads green, "nothing needs review", "nothing remains",
+// "ready" or "no placeholder value remains" while a clause rests on a placeholder, a todo is left, a clause fails or
+// the rubric is not evaluated.
+test('COMPILE and VERIFY never read complete while clauses rest on placeholders, todos remain, a clause fails or the rubric is unread', () => {
+  const compile = (result) => buildCompileModel({ build: draft({ result }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'] });
+  const verify = (result) => buildVerifyModel({ build: draft({ result }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
+  const renderC = (m) => { const el = stubContainer(); renderBuildCompile(el, m, { build: {} }); return el.innerHTML; };
+  const renderV = (m) => { const el = stubContainer(); renderBuildVerify(el, m, { build: {} }); return el.innerHTML; };
+  // Every value filled, but 4 clauses pass only on placeholders and 21 todos remain (3 no value fills).
+  const filledResult = { ...draft().result, provenance: { ...FIXTURE.provenance, placeholders: [] } };
+  const c = compile(filledResult);
+  assert.equal(c.readiness.values, 0);
+  assert.deepEqual([c.decision.tone, c.decision.sentence], ['warn', 'Pack compiled. No warning needs review; every value is filled, but 4 clauses pass only on placeholders, 3 items remain to write or measure and 18 other todos remain.']);
+  assert.deepEqual(c.queue.map(i => [i.kind, i.fix]), [['gaps', { kind: 'step', step: 'verify' }]]);
+  const cHtml = renderC(c);
+  assert.ok(!cHtml.includes('Nothing needs review') && cHtml.includes('Still to complete'), 'the queue is never the green empty state over an incomplete pack');
+  const v = verify(filledResult);
+  assert.deepEqual([v.decision.word, v.next.primary.action, v.next.primary.label], ['Incomplete', 'open-discover', 'Open in Discover with visible gaps']);
+  const vHtml = renderV(v);
+  assert.ok(vHtml.includes('Open pack in Discover with visible gaps') && !vHtml.includes('No placeholder value remains'));
+  // Everything real: the only case that reads green, "Nothing needs review" and "Ready".
+  const done = compile(doneResult());
+  assert.deepEqual([done.decision.tone, done.decision.sentence, done.queue.length], ['ok', 'Pack compiled. No warning needs review; every value is filled.', 0]);
+  assert.ok(renderC(done).includes('Nothing needs review'));
+  // A blocking PromQL warning or a schema error: the sentence counts only the other warnings, as the queue lists the blocker.
+  const promql = { kind: 'promql', sli: 'http_service_availability', field: 'good', message: 'not valid PromQL' };
+  const blocked = compile({ ...doneResult(), warnings: [promql] });
+  assert.equal(blocked.decision.sentence, 'Pack compiled, but it must not ship: an SLI expression is not valid PromQL. No other warning needs review; every value is filled.');
+  assert.equal(compile({ ...doneResult(), warnings: [promql, THRESHOLD_WARNING] }).decision.sentence, 'Pack compiled, but it must not ship: an SLI expression is not valid PromQL. One other warning needs review; every value is filled.');
+  assert.match(compile({ ...doneResult(), schemaErrors: ['$.spec.dashboards: missing required key'] }).decision.sentence, /schema in 1 place. No other warning needs review;/);
+  // A failing clause: on the queue (to its layer sheet) and on "What remains" — never "Nothing remains" under "Below tier".
+  const below = { ...doneResult(), summary: { ...DASHBOARDS_OFF_SUMMARY, onPlaceholder: [] } };
+  const cf = compile(below);
+  assert.deepEqual([cf.decision.tone, cf.queue.map(i => [i.kind, i.fix])], ['fail', [['failing', { kind: 'sheet', layer: 'L3' }]]]);
+  const vf = verify(below);
+  assert.deepEqual([vf.decision.word, vf.remains.empty, vf.remains.failing.map(i => [i.id, i.layer])], ['Below tier', false, [['L3.MUST.service_overview_dashboard', 'L3'], ['L3.MUST.slo_burn_dashboard', 'L3']]]);
+  const vfHtml = renderV(vf);
+  assert.ok(vfHtml.includes('data-group="failing"') && vfHtml.includes('data-key="fail:L3.MUST.slo_burn_dashboard"') && !vfHtml.includes('Nothing remains'));
+  // The rubric not evaluated (no summary): never "Ready", never "Nothing remains", never a green compile.
+  const unread = { ...doneResult(), summary: null };
+  const vu = verify(unread);
+  assert.deepEqual([vu.decision.word, vu.decision.tone, vu.remains.empty, vu.readiness.deployable], ['Not evaluated', 'warn', false, false]);
+  assert.equal(vu.next.primary.label, 'Open in Discover with visible gaps');
+  assert.equal(vu.continueLabel, 'Open pack in Discover with visible gaps');
+  assert.doesNotMatch(vu.readyText, /No placeholder value remains/);
+  const vuHtml = renderV(vu);
+  assert.ok(!vuHtml.includes('Nothing remains') && vuHtml.includes('The tier rubric is not evaluated yet'));
+  const cu = compile(unread);
+  assert.deepEqual([cu.decision.tone, cu.decision.sentence], ['warn', 'Pack compiled. No warning needs review; every value is filled. The tier rubric is not evaluated yet.']);
+  const cuHtml = renderC(cu);
+  assert.ok(!cuHtml.includes('Nothing needs review') && cuHtml.includes('No warning to review'));
+  // "Ready" is tied to deployable: a reason no branch names still keeps it at not ready.
+  const r = { ...buildReadiness({ result: doneResult() }), deployable: false, reasons: ['something new'] };
+  assert.deepEqual([verifyDecision(r, { tier: 'tier-2' }).word, verifyDecision(r).tone], ['Not ready', 'warn']);
 });
 
 // ---------------------------------------------------------------------------
@@ -1720,7 +1786,7 @@ test('renderBuildDefinition draws the segmented control, the chips and the summa
   assert.ok(form.includes('class="build-evidence-dot build-evidence-recorded-live" title="recorded live · verified 2026-09-22" role="img" aria-label="evidence: recorded live · verified 2026-09-22"'));
   assert.ok(form.includes('id="build-name"') && form.includes('data-focus-key="name"') && form.includes('data-focus-key="owners"') && form.includes('data-focus-key="environment"'));
   assert.ok(!html.includes('id="build-name"') && !html.includes('role="radiogroup"'), 'the column holds no form');
-  assert.ok(html.includes('class="build-summary is-ok"') && html.includes('meets the tier-2 rubric'));
+  assert.ok(html.includes('class="build-summary is-warn"') && html.includes('meets the tier-2 rubric on placeholders — real values still needed'), 'a rubric met on placeholders is amber, never green');
   // The summary is rebuilt on every re-render, so it is not a live region itself: the status goes to one
   // persistent role=status node outside the view (#build-status in index.html), as one settled line.
   assert.ok(!html.includes('aria-live'), 'no live region inside the re-rendered column');
@@ -1729,7 +1795,7 @@ test('renderBuildDefinition draws the segmented control, the chips and the summa
   assert.ok(page.indexOf('id="build-status"') > page.indexOf('</main>'), 'outside #layer-view, which renderMainView empties');
   assert.match(cssRule('.sr-text'), /clip-path:\s*inset\(50%\)/, 'visually hidden, still read');
   const okModel = buildDefinitionModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS });
-  assert.equal(buildStatusLine(okModel.summary), 'meets the tier-2 rubric · 12 pass · 4 need real values · 0 fail');
+  assert.equal(buildStatusLine(okModel.summary), 'meets the tier-2 rubric on placeholders — real values still needed · 12 pass · 4 need real values · 0 fail');
   assert.equal(buildStatusLine(buildDefinitionModel({ build: draft({ result: { ...draft().result, summary: DASHBOARDS_OFF_SUMMARY } }), library: LIBRARY, requirements: REQUIREMENTS }).summary), '2 MUST clauses failing · 10 pass · 4 need real values · 2 fail');
   assert.equal(buildStatusLine(buildDefinitionModel({ build: draft({ pending: true }), library: LIBRARY, requirements: REQUIREMENTS }).summary), null, 'nothing announced while the engine answers');
   assert.equal(buildStatusLine(buildDefinitionModel({ build: defaultBuildState(), library: LIBRARY, requirements: REQUIREMENTS }).summary), null, 'nothing announced before the first result');
@@ -2368,7 +2434,7 @@ test('the definition column is a wizard stage: the live form on DEFINE (with the
     entries: [{ id: 'kafka', title: 'Apache Kafka', kind: 'product' }, { id: 'http-service', title: 'HTTP service (OTel semconv)', kind: 'archetype' }],
     counts: { slis: 7, aboveTier: 0, customised: 0, custom: 0 }, changeLabel: 'Change seed',
   });
-  assert.equal(compile.summary.status, 'meets the tier-2 rubric', 'the summary is live on the seed card\'s step');
+  assert.equal(compile.summary.status, 'meets the tier-2 rubric on placeholders — real values still needed', 'the summary is live on the seed card\'s step');
   assert.equal(buildDefinitionModel({ build: draft({ step: 'verify' }), library: LIBRARY, requirements: REQUIREMENTS }).mode, 'seed');
   const cold = seedCardModel(draft({ step: 'compile' }), LIBRARY, {});
   assert.deepEqual([cold.must, cold.should, cold.tierChip], [null, null, 'seeded at tier-2']);
@@ -2393,7 +2459,7 @@ test('the definition column is a wizard stage: the live form on DEFINE (with the
   assert.ok(seedHtml.includes('<button type="button" class="build-seed-chip is-entry" data-seed-entry="kafka" data-focus-key="seed:kafka" aria-haspopup="dialog" title="product — open the L1 sheet on its SLIs">Apache Kafka</button>') && seedHtml.includes('data-seed-entry="http-service" data-focus-key="seed:http-service" aria-haspopup="dialog" title="archetype — open the L1 sheet on its SLIs">HTTP service (OTel semconv)</button>'), 'a product chip opens the L1 sheet on its SLIs');
   assert.ok(seedHtml.includes('<div class="build-seed-from">7 SLIs in the pack</div>'));
   assert.ok(seedHtml.includes('<button type="button" class="build-seed-change" data-change-seed data-focus-key="seed:change">Change seed <span aria-hidden="true">→</span></button>'));
-  assert.ok(seedHtml.includes('class="build-summary is-ok"') && seedHtml.includes('meets the tier-2 rubric'), 'the summary stays live under the seed card');
+  assert.ok(seedHtml.includes('class="build-summary is-warn"') && seedHtml.includes('meets the tier-2 rubric on placeholders — real values still needed'), 'the summary stays live under the seed card');
   assert.ok(render(draft({ step: 'compile', owners: '' })).includes('<dd><em>none — a todo</em></dd>'));
   assert.ok(seedCardHtml(seedCardModel(copiesDraft({ slis: [...FIXTURE.provenance.toggles.slis, 'kafka_controller_election_rate'] }), LIBRARY, REQUIREMENTS)).includes('9 SLIs in the pack · 1 from a higher tier · 2 customised · 1 custom'));
   assert.ok(!seedCardHtml(seedCardModel(draft({ name: '<b>x</b>' }), LIBRARY, REQUIREMENTS)).includes('<b>x</b>'), 'escaped at the seam');

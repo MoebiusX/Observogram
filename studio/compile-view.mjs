@@ -30,7 +30,10 @@ import { artefactLabel, deploySelectionFromEntries, deploySurfaceForArtefact } f
 import {
   decisionHeaderHtml, wireUxActions, emptyStateHtml, statusChipHtml, GLOSSARY, announce, plural, listSentence,
 } from './ux-kit.mjs';
-import { deployReviewModel } from './verify-deploy.mjs';
+import {
+  deployReviewModel, hiddenSelectionNote, recommendRemediation, remediationDeployPhrase,
+  remediationDeployActionLabel, remediationSideOnlyMeasure,
+} from './verify-deploy.mjs';
 
 // ---------- COMPILE view ----------
 //
@@ -344,6 +347,16 @@ const REMEDIATE_LAYER_NAMES = { L1:'Contract', L2:'Telemetry', L2X:'Extended', L
 
 const SCOPE_WORDS = { service: 'service scope', family: 'family scope', all: 'all live artefacts' };
 
+// In gap mode Pack B is a baseline, not live: say so in every scope phrase.
+function scopeWords(scopeMode, mode) {
+  if (scopeMode === 'all' && mode === 'gap') return 'the whole baseline';
+  return SCOPE_WORDS[scopeMode] || scopeMode || 'the selected scope';
+}
+function parkedWord(mode) { return mode === 'gap' ? 'baseline artefact' : 'live artefact'; }
+function widenAction(mode) {
+  return { label: mode === 'gap' ? 'Widen the scope to the whole baseline' : 'Widen the live scope', action: 'rm-widen-scope' };
+}
+
 // Plain name first. In gap mode Pack B is a baseline (a reference or target
 // pack), not live, so the import strategy says where it really reads from.
 function strategyLabel(id, mode) {
@@ -362,23 +375,8 @@ function packIdentity(packId, pack) {
   return { name, version, text: version ? `${name} v${version}` : name };
 }
 
-// Recommend ONE strategy from the diagnosed gap. Without Pack B there is no
-// diagnosed gap, so nothing is recommended (the header points to Diagnose).
-// In gap mode the repository's extras are "additional in your pack", never
-// something to push, so deploy is not recommended there.
-function recommendRemediation({ haveB, mode, liveOnly, repoOnly, drift }) {
-  if (!haveB) return null;
-  if (mode === 'gap') {
-    if (liveOnly) return { op: 'retrofeed', why: 'the baseline has artefacts your pack lacks' };
-    if (drift)    return { op: 'drift', why: 'shared artefacts differ from the baseline' };
-    return null;
-  }
-  if (liveOnly && repoOnly) return { op: 'all', why: 'each side has artefacts the other lacks' };
-  if (liveOnly) return { op: 'retrofeed', why: 'live has artefacts the repository lacks' };
-  if (repoOnly) return { op: 'deploy', why: 'the repository has artefacts live does not have yet' };
-  if (drift)    return { op: 'drift', why: 'the only gaps are shared artefacts whose fields differ' };
-  return null;
-}
+// The recommendation itself (one strategy, or none) is recommendRemediation
+// in verify-deploy.mjs, where tools/test-verify-deploy.mjs pins it.
 
 // Everything the Remediate screen says, computed once per render.
 function remediationModel() {
@@ -392,6 +390,7 @@ function remediationModel() {
   const counts = {
     liveOnly: sets.retrofeed?.retrofeed || 0,
     repoOnly: sets.deploy?.total || 0,
+    repoDeployable: sets.deploy?.deployable || 0,
     drift: sets.drift?.drift || 0,
     outOfScope: (haveB && state.diff?.summary?.outOfScope) || 0,
   };
@@ -416,6 +415,13 @@ function flowHtml(f) {
     : `From <strong>${escapeHtml(f.from)}</strong> to <strong>${escapeHtml(f.to)}</strong>`;
 }
 
+// "N to deploy (R deploy rows)" for a strategy's set: the live selection for
+// the active strategy, everything deployable for the others.
+function deployPhraseFor(opId, s, m) {
+  const sel = opId === m.op ? m.selected : remediationSelectedDeployment(s, new Set());
+  return remediationDeployPhrase({ selected: sel.identities.size, deployable: s.deployable, rows: sel.rows });
+}
+
 // How many changes a strategy proposes, and what they are.
 function strategyCount(opId, m) {
   const s = m.sets[opId];
@@ -424,19 +430,26 @@ function strategyCount(opId, m) {
   if (opId === 'drift') return { n: s.drift, note: s.drift ? 'shared artefacts to compare' : '' };
   if (opId === 'deploy') {
     if (!m.haveB) return { n: s.total, note: s.total ? 'not compared with live' : '' };
-    const rows = (opId === m.op ? m.selected : remediationSelectedDeployment(s, new Set())).rows;
     const manual = s.total - s.deployable;
-    return { n: s.total, note: s.total ? listSentence([`${plural(rows, 'deploy row')} selected`, manual ? `${manual} need a manual fix` : '']) : '' };
+    return { n: s.total, note: s.total ? listSentence([deployPhraseFor(opId, s, m), manual ? `${manual} need${manual === 1 ? 's' : ''} a manual fix` : '']) : '' };
   }
-  const deployish = s.total - s.retrofeed - s.drift;
+  // Every part is an artefact count, so the parts add up to the headline.
+  const manual = s.total - s.retrofeed - s.drift - s.deployable;
   return {
     n: s.total,
     note: listSentence([
       s.retrofeed ? `${s.retrofeed} to add to the repository` : '',
-      deployish ? `${deployish} to deploy or fix` : '',
+      deployPhraseFor(opId, s, m),
+      manual > 0 ? `${manual} need${manual === 1 ? 's' : ''} a manual fix` : '',
       s.drift ? `${s.drift} to compare` : '',
     ]),
   };
+}
+
+// "Review and deploy N selected (R deploy rows) to live": artefacts, as in
+// the counts beside it, with deploy rows only in brackets.
+function deployActionLabel(sel) {
+  return remediationDeployActionLabel({ selected: sel.identities.size, rows: sel.rows });
 }
 
 // The active strategy's next step — the ONE primary action of the screen.
@@ -444,14 +457,15 @@ function strategyNextAction(opId, m) {
   const s = m.sets[opId] || m.resolved;
   if (!s?.total) return null;
   const deploy = m.selected.rows
-    ? { label: `Review and deploy ${m.selected.rows} selected to live`, action: 'rm-deploy' }
+    ? { label: deployActionLabel(m.selected), action: 'rm-deploy' }
     : { label: 'See what needs a manual fix', action: 'rm-show-changes' };
   if (opId === 'retrofeed') return { label: 'Generate repository patch', action: 'rm-patch' };
   if (opId === 'deploy') return deploy;
   if (opId === 'drift') return { label: 'Compare the differences side by side', action: 'rm-compare' };
   if (s.retrofeed) return { label: 'Generate repository patch', action: 'rm-patch' };
   if (m.selected.rows) return deploy;
-  return { label: 'Compare the differences side by side', action: 'rm-compare' };
+  if (s.drift) return { label: 'Compare the differences side by side', action: 'rm-compare' };
+  return { label: 'See what needs a manual fix', action: 'rm-show-changes' };
 }
 
 function remediationContext(m) {
@@ -479,14 +493,21 @@ function remediationHeaderHtml(m) {
     primary = { label: 'Compare with live first', action: 'rm-diagnose' };
     if (m.sets.deploy?.total) secondary.push({ label: 'Deploy repository artefacts to live', action: 'rm-deploy-all' });
   } else {
+    // Gap mode: baseline artefacts the scoped diff parked (families your pack
+    // does not declare, or outside the service scope) were never compared,
+    // so they are named here: "your pack has everything" needs them at 0.
+    const parkedInGap = mode === 'gap' ? counts.outOfScope : 0;
     const parts = mode === 'gap'
       ? [
           counts.liveOnly ? `the baseline has ${plural(counts.liveOnly, 'artefact')} your pack lacks` : '',
           counts.drift ? `${plural(counts.drift, 'shared artefact')} ${counts.drift === 1 ? 'differs' : 'differ'}` : '',
+          parkedInGap ? `the baseline has ${plural(parkedInGap, 'artefact')} outside the checked scope that ${parkedInGap === 1 ? 'was' : 'were'} not compared` : '',
         ]
       : [
           counts.liveOnly ? `live has ${plural(counts.liveOnly, 'artefact')} the repository lacks` : '',
-          counts.repoOnly ? `the repository has ${plural(counts.repoOnly, 'artefact')} not yet live` : '',
+          counts.repoOnly
+            ? `the repository has ${plural(counts.repoOnly, 'artefact')} not yet live${counts.repoDeployable ? '' : ` that ${counts.repoOnly === 1 ? 'needs' : 'need'} a manual fix`}`
+            : '',
           counts.drift ? `${plural(counts.drift, 'shared artefact')} ${counts.drift === 1 ? 'differs' : 'differ'}` : '',
         ];
     const said = listSentence(parts.filter(Boolean));
@@ -510,20 +531,28 @@ function remediationHeaderHtml(m) {
     } else if (!said) {
       note = mode === 'gap'
         ? 'Additional artefacts in your pack are not gaps. Review the assessment in Diagnose for anything else.'
-        : `Checked in ${SCOPE_WORDS[activeDiffScopeMode()] || 'the selected scope'}. Widen the live scope, or review the assessment in Diagnose.`;
+        : `Checked in ${scopeWords(activeDiffScopeMode(), mode)}. Widen the live scope, or review the assessment in Diagnose.`;
       secondary.push({ label: 'Review the assessment', action: 'rm-diagnose' });
+    } else if (mode !== 'gap' && counts.repoOnly && !counts.repoDeployable && !counts.liveOnly && !counts.drift) {
+      note = 'None of them can be deployed from here: fix them in the pack, the instrumentation or the platform.';
+    }
+    // Part of the baseline was not compared: the way to compare it is one
+    // click away (and the primary action when nothing else is proposed).
+    if (parkedInGap && activeDiffScopeMode() !== 'all') {
+      if (!rec) note = `Checked in ${scopeWords(activeDiffScopeMode(), mode)}. Widen the scope to compare the rest of the baseline; your pack may lack some of it.`;
+      if (primary) secondary.push(widenAction(mode)); else primary = widenAction(mode);
     }
     // Bidirectional carries both halves: the other one stays one click away.
     if (op === 'all' && primary?.action === 'rm-patch' && m.selected.rows) {
-      secondary.push({ label: `Review and deploy ${m.selected.rows} selected to live`, action: 'rm-deploy' });
+      secondary.push({ label: deployActionLabel(m.selected), action: 'rm-deploy' });
     }
   }
 
   const measures = haveB ? [
-    { label: `Only in ${sideWord}`, value: String(counts.liveOnly), note: counts.liveOnly ? 'the repository lacks these' : 'nothing to import', tone: counts.liveOnly ? 'warn' : 'neutral' },
-    { label: 'Only in the repository', value: String(counts.repoOnly), note: mode === 'gap' ? 'additional in your pack — not a gap' : (counts.repoOnly ? 'not yet live' : 'nothing to deploy'), tone: counts.repoOnly && mode !== 'gap' ? 'warn' : 'neutral' },
+    { label: `Only in ${sideWord}`, value: String(counts.liveOnly), ...remediationSideOnlyMeasure({ mode, liveOnly: counts.liveOnly, outOfScope: counts.outOfScope }) },
+    { label: 'Only in the repository', value: String(counts.repoOnly), note: mode === 'gap' ? 'additional in your pack — not a gap' : (counts.repoOnly ? (counts.repoDeployable ? 'not yet live' : 'not yet live; need a manual fix') : 'nothing to deploy'), tone: counts.repoOnly && mode !== 'gap' ? 'warn' : 'neutral' },
     { label: 'Shared, fields differ', value: String(counts.drift), note: counts.drift ? 'decide which side is right' : 'shared artefacts agree', tone: counts.drift ? 'warn' : 'neutral' },
-    { label: 'Scope checked', value: SCOPE_WORDS[state.diff?.scope?.mode] || SCOPE_WORDS[activeDiffScopeMode()] || 'selected scope', note: counts.outOfScope ? `${plural(counts.outOfScope, 'live artefact')} parked out of scope` : 'nothing parked out of scope' },
+    { label: 'Scope checked', value: scopeWords(state.diff?.scope?.mode || activeDiffScopeMode(), mode), note: counts.outOfScope ? `${plural(counts.outOfScope, parkedWord(mode))} parked out of scope, not compared` : 'nothing parked out of scope', tone: counts.outOfScope && mode === 'gap' ? 'warn' : 'neutral' },
   ] : [];
 
   return decisionHeaderHtml({
@@ -582,22 +611,28 @@ function strategyEmptyHtml(op, m) {
   const scope = state.diff?.scope || {};
   const scopeMode = scope.mode || activeDiffScopeMode();
   const checked = m.haveB
-    ? `${m.sideB} pack ${m.b.text} against repository ${m.a.text}, ${SCOPE_WORDS[scopeMode] || scopeMode}${scope.service ? ` for ${scope.service}` : ''}, across all ${LAYERS_FOR_DIFF.length} layers${m.counts.outOfScope ? `; ${plural(m.counts.outOfScope, 'live artefact')} parked out of scope` : ''}.`
+    ? `${m.sideB} pack ${m.b.text} against repository ${m.a.text}, ${scopeWords(scopeMode, m.mode)}${scope.service ? ` for ${scope.service}` : ''}, across all ${LAYERS_FOR_DIFF.length} layers${m.counts.outOfScope ? `; ${plural(m.counts.outOfScope, parkedWord(m.mode))} parked out of scope, not compared` : ''}.`
     : `Repository ${m.a.text}, across all ${LAYERS_FOR_DIFF.length} layers.`;
+  // Gap mode with parked baseline artefacts: nothing was found IN SCOPE, and
+  // the rest of the baseline was not compared, never "nothing to import".
+  const gapParked = m.haveB && m.mode === 'gap' && m.counts.outOfScope > 0;
   const titles = {
-    retrofeed: m.mode === 'gap' ? 'Nothing to import from the selected baseline.' : 'Nothing to import from the selected live scope.',
+    retrofeed: m.mode === 'gap'
+      ? (gapParked ? 'Nothing to import in the checked scope; the rest of the baseline was not compared.' : 'Nothing to import from the selected baseline.')
+      : 'Nothing to import from the selected live scope.',
     deploy: !m.haveB ? 'This pack has no artefacts to deploy.'
       : (m.mode === 'gap' ? 'Your pack has nothing beyond the selected baseline.' : 'Nothing to deploy: live already has everything the repository declares here.'),
     drift: 'No shared artefacts differ in the selected scope.',
-    all: m.mode === 'gap' ? 'Nothing to reconcile with the selected baseline.' : 'The repository and live agree in the selected scope.',
+    all: m.mode === 'gap'
+      ? (gapParked ? 'Nothing to reconcile in the checked scope; the rest of the baseline was not compared.' : 'Nothing to reconcile with the selected baseline.')
+      : 'The repository and live agree in the selected scope.',
   };
   const actions = [];
   if (m.haveB) actions.push({ label: 'Review other gaps', action: 'rm-review-other' });
-  if (m.haveB && m.mode !== 'gap' && scopeMode !== 'all' && m.counts.outOfScope) {
-    actions.push({ label: 'Widen the live scope', action: 'rm-widen-scope' });
-  }
+  if (m.haveB && scopeMode !== 'all' && m.counts.outOfScope) actions.push(widenAction(m.mode));
   if (!m.haveB) actions.push({ label: 'Compare with live', action: 'rm-diagnose' });
-  return emptyStateHtml({ title: titles[op] || titles.all, checked, actions, tone: 'ok' });
+  const partial = gapParked && (op === 'retrofeed' || op === 'all');
+  return emptyStateHtml({ title: titles[op] || titles.all, checked, actions, tone: partial ? 'warn' : 'ok' });
 }
 
 // The first other strategy that proposes something — "Review other gaps".
@@ -738,7 +773,7 @@ function renderRemediationPlan(root) {
   handlers['rm-widen-scope'] = () => {
     state.diffScopeMode = 'all';
     state.diff = null;
-    announce('Widening the live scope to all live artefacts…');
+    announce(m.mode === 'gap' ? 'Widening the scope to the whole baseline…' : 'Widening the live scope to all live artefacts…');
     refreshDiff();
   };
 
@@ -764,13 +799,14 @@ function renderRemediationPlan(root) {
   }
 
   // Proposed changes, in one line — only the counts this strategy uses.
-  const deployRowsTotal = remediationSelectedDeployment(resolved, new Set()).rows;
+  // Artefact counts throughout, so the parts add up to the total; deploy
+  // rows only qualify the deploy part.
   const manual = resolved.total - resolved.deployable - resolved.retrofeed - resolved.drift;
   const summaryParts = haveB ? [
     resolved.retrofeed ? `${resolved.retrofeed} to add to the repository` : '',
-    deployRowsTotal ? `${selectedDeployment.rows} of ${plural(deployRowsTotal, 'deploy row')} selected` : '',
+    remediationDeployPhrase({ selected: selectedDeployment.identities.size, deployable: resolved.deployable, rows: selectedDeployment.rows }),
     resolved.drift ? `${plural(resolved.drift, 'shared artefact')} to compare` : '',
-    manual > 0 ? `${manual} need a manual fix` : '',
+    manual > 0 ? `${manual} need${manual === 1 ? 's' : ''} a manual fix` : '',
   ] : ['not compared with live, so the deploy review lists every deployable artefact'];
   active.insertAdjacentHTML('beforeend', `
     <p class="ux-rm-summary"><strong>${escapeHtml(haveB ? plural(resolved.total, 'proposed change') : plural(resolved.total, 'artefact'))}</strong>: ${escapeHtml(listSentence(summaryParts.filter(Boolean)))}.</p>`);
@@ -882,7 +918,7 @@ function renderRemediationPlan(root) {
     ${offersDeploy ? `
       <div class="ux-rm-action">
         <button type="button" class="remediate-deploy-btn" data-ux-action="rm-deploy" ${n === 0 ? 'disabled' : ''}>
-          Review and deploy ${n} selected to live ↗
+          ${escapeHtml(deployActionLabel(selectedDeployment))} ↗
         </button>
         <span class="remediate-action-hint"><span class="ux-rm-effect is-live">Changes live systems</span> ${n === 0
           ? 'Tick at least one deployable row, or handle the manual fixes in the pack.'
@@ -1499,6 +1535,18 @@ async function doDeploy(panel) {
 // announces the modal's deploy status line through #ux-status.
 // ============================================================
 
+// Template values the open pack still carries (library.todo.* annotations
+// and Scaffold artefacts): the same signal the Conformance screen uses for
+// "some passes may rest on placeholders".
+function templateValueCount(pack) {
+  if (!pack) return 0;
+  const ann = pack.meta?.annotations || pack.metadata?.annotations || {};
+  const todos = Object.keys(ann).filter(k => k.startsWith('library.todo.')).length;
+  let scaffolds = 0;
+  for (const L of LAYERS_FOR_DIFF) scaffolds += layerItemsFor(pack, L).filter(a => a?.source === 'Scaffold').length;
+  return todos + scaffolds;
+}
+
 function readDeployReview(doc) {
   const val = (id) => String(doc.getElementById(id)?.value ?? '').trim();
   const packId = val('deploy-source-pack');
@@ -1516,7 +1564,16 @@ function readDeployReview(doc) {
     });
   const hiddenTypes = [...doc.querySelectorAll('#deploy-type-filters input[type=checkbox]')]
     .filter(i => !i.checked)
-    .map(i => i.closest('label')?.textContent?.trim() || i.value);
+    .map(i => ({ value: i.value, label: i.closest('label')?.textContent?.trim() || i.value }));
+  // Selected rows the filter hides, per type, when the modal reports them
+  // (data-hidden-selected on the manifest tbody, JSON { type: n }). Without
+  // it the note still says the true effect, just without counts.
+  let hiddenSelected = null;
+  try {
+    const raw = doc.getElementById('deploy-manifest-tbody')?.dataset?.hiddenSelected;
+    if (raw) hiddenSelected = JSON.parse(raw);
+  } catch { hiddenSelected = null; }
+  const hiddenNote = hiddenSelectionNote({ hiddenTypes, hiddenSelected });
   const model = deployReviewModel({
     target: {
       product: val('deploy-target-product'),
@@ -1530,16 +1587,24 @@ function readDeployReview(doc) {
     env: state.selectedEnv || null,
     rows,
     validation: {
-      schemaValid: entry ? entry.ok !== false : null,
+      // The catalog's `ok` only says the file parsed. The open pack was served
+      // by GET /api/packs/:id, which refuses a schema-invalid pack, so it is
+      // the one pack known valid; any other reads "not checked".
+      schemaValid: entry?.ok === false ? false : (sameAsOpen && state.pack ? true : null),
       rubric: sameAsOpen && state.conformance
-        ? { conformant: !!state.conformance.conformant, tier: state.conformance.declaredTier || null }
+        ? {
+            conformant: !!state.conformance.conformant,
+            tier: state.conformance.declaredTier || null,
+            placeholders: Array.isArray(state.conformance.onPlaceholder) ? state.conformance.onPlaceholder.length : 0,
+            templates: templateValueCount(state.pack),
+          }
         : null,
     },
   });
-  return { model, packId, hiddenTypes };
+  return { model, packId, hiddenNote };
 }
 
-function deployReviewHtml(r, { downloadHref = '', hiddenTypes = [] } = {}) {
+function deployReviewHtml(r, { downloadHref = '', hiddenNote = '' } = {}) {
   const d = r.destination;
   const dest = d.platform ? `${d.platform}${d.host ? ` at ${d.host}` : ''}` : 'No target product chosen';
   const destNote = [
@@ -1566,7 +1631,7 @@ function deployReviewHtml(r, { downloadHref = '', hiddenTypes = [] } = {}) {
       </div>
       <div class="deploy-review-cell">
         <dt>Changed artefacts</dt>
-        <dd><span class="deploy-review-val">${escapeHtml(changes)}</span><span class="deploy-review-note">${escapeHtml(sample)}</span>${hiddenTypes.length ? `<span class="deploy-review-note is-caution">Filtered out of the table: ${escapeHtml(hiddenTypes.join(', '))}. Show every type to review everything selected.</span>` : ''}</dd>
+        <dd><span class="deploy-review-val">${escapeHtml(changes)}</span><span class="deploy-review-note">${escapeHtml(sample)}</span>${hiddenNote ? `<span class="deploy-review-note is-caution">${escapeHtml(hiddenNote)}</span>` : ''}</dd>
       </div>
       <div class="deploy-review-cell">
         <dt>Validation</dt>
@@ -1581,10 +1646,10 @@ function deployReviewHtml(r, { downloadHref = '', hiddenTypes = [] } = {}) {
 function renderDeployReview(doc) {
   const host = doc.getElementById('deploy-review-body');
   if (!host) return;
-  const { model, packId, hiddenTypes } = readDeployReview(doc);
+  const { model, packId, hiddenNote } = readDeployReview(doc);
   const env = state.selectedEnv;
   const downloadHref = packId ? `/api/packs/${encodeURIComponent(packId)}/export.zip${env ? `?env=${encodeURIComponent(env)}` : ''}` : '';
-  host.innerHTML = deployReviewHtml(model, { downloadHref, hiddenTypes });
+  host.innerHTML = deployReviewHtml(model, { downloadHref, hiddenNote });
   // The Deploy button says what it does and where (app.mjs only toggles
   // its disabled state, never its label).
   const go = doc.getElementById('deploy-modal-go');

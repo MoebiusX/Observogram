@@ -12,6 +12,7 @@ import {
   STATUS_PROPERTIES, statusFromLegacy, statusRecord, statusChipHtml, legacyStatusChipHtml,
   GLOSSARY, termHtml, LAYER_PURPOSE, layerTitle, decisionHeaderHtml, emptyStateHtml, sectionNavHtml,
   disclosureHtml, plural, listSentence, personalName,
+  parseRecentServices, orderServicesByRecent, withKnownPlaceholderPasses,
 } from '../studio/ux-kit.mjs';
 
 test('four separate status properties, each with its own question', () => {
@@ -123,4 +124,46 @@ test('a greeting uses a person’s name, never a role label or an address', () =
   assert.equal(personalName({ name: 'someone@example.com' }), '');
   assert.equal(personalName({ sub: 'admin' }), '');
   assert.equal(personalName(null), '');
+});
+
+test('the recent-services record reads only its own string entries', () => {
+  const opened = parseRecentServices('{"api":"2026-09-01T00:00:00.000Z","bad":42}');
+  assert.equal(opened.api, '2026-09-01T00:00:00.000Z');
+  assert.equal(opened.bad, undefined);
+  // An Object.prototype name is a service like any other: never opened here.
+  assert.equal(opened.constructor, undefined);
+  assert.equal(opened.toString, undefined);
+  for (const junk of [null, '', 'not json', '[1,2]', '"x"', 'null']) {
+    assert.deepEqual(Object.keys(parseRecentServices(junk)), []);
+  }
+  assert.equal(JSON.stringify(Object.assign(parseRecentServices('{}'), { a: 'x' })), '{"a":"x"}');
+});
+
+test('services order by when they were opened, then by name, whatever the key', () => {
+  const services = [{ key: 'constructor', label: 'constructor' }, { key: 'web', label: 'web' }, { key: 'api', label: 'api' }];
+  const none = parseRecentServices('{}');
+  assert.deepEqual(orderServicesByRecent(services, none).map(s => s.key), ['api', 'constructor', 'web']);
+  const opened = parseRecentServices('{"web":"2026-09-02T00:00:00.000Z","api":"2026-09-01T00:00:00.000Z"}');
+  assert.deepEqual(orderServicesByRecent(services, opened).map(s => s.key), ['web', 'api', 'constructor']);
+  // Even a plain object with an inherited "constructor" does not throw or sort it first.
+  assert.deepEqual(orderServicesByRecent(services, {}).map(s => s.key), ['api', 'constructor', 'web']);
+  assert.deepEqual(services.map(s => s.key), ['constructor', 'web', 'api'], 'input left as it was');
+});
+
+test('a remembered placeholder list returns only for the environment it was worked out for', () => {
+  const report = { environment: 'prod', clauses: [{ id: 'L4.1' }] };
+  const known = { env: 'prod', onPlaceholder: [{ id: 'L4.1', todos: [] }] };
+  assert.deepEqual(withKnownPlaceholderPasses(report, known, 'prod').onPlaceholder, known.onPlaceholder);
+  assert.equal(report.onPlaceholder, undefined, 'the fetched report is not mutated');
+  // Another environment: the overlay may change what rests on a placeholder, so hedge.
+  assert.equal(withKnownPlaceholderPasses(report, known, 'staging'), report);
+  assert.equal(withKnownPlaceholderPasses(report, { env: null, onPlaceholder: [] }, 'prod'), report);
+  assert.deepEqual(withKnownPlaceholderPasses(report, { env: null, onPlaceholder: [] }, null).onPlaceholder, []);
+  // Nothing remembered, or a list that is not one: the report as fetched.
+  assert.equal(withKnownPlaceholderPasses(report, undefined, 'prod'), report);
+  assert.equal(withKnownPlaceholderPasses(report, { env: 'prod', onPlaceholder: 'x' }, 'prod'), report);
+  // A report that already carries its own list keeps it.
+  const own = { ...report, onPlaceholder: [] };
+  assert.equal(withKnownPlaceholderPasses(own, known, 'prod'), own);
+  assert.equal(withKnownPlaceholderPasses(null, known, 'prod'), null);
 });

@@ -187,11 +187,13 @@ export function traceIndex(pack) {
   };
 }
 
-// Live evidence stands behind an artefact when the pack is a live draft
-// (everything in it came from the platform) or the artefact carries a
-// verification stamp.
-function confirmedLive(index, art) {
-  return !!(index.live || art?.source === 'Verified');
+// Live evidence stands behind an artefact only when it carries its own
+// verification stamp (source 'Verified'). Being in a live draft is not
+// enough: the fetcher leaves Declared what it could not confirm (a burn-rate
+// alert fed by an unhealthy rule) and marks schema-forced placeholders
+// Scaffold, and neither is live evidence.
+function confirmedLive(_index, art) {
+  return art?.source === 'Verified';
 }
 
 function few(names, n = 3) {
@@ -209,10 +211,25 @@ function link(key, state, detail, items = [], extra = {}) {
 
 function sliLink(chain, index) {
   if (!chain.sli) return link('sli', 'missing', 'The SLO references an SLI the pack does not declare.');
+  const sliArt = index.artefact(chain.sli.artefactId);
+  const sloArt = chain.slo ? index.artefact(chain.slo.artefactId) : null;
+  const items = [{ text: chain.sli.id, target: index.target(chain.sli.artefactId) }];
+  // A template placeholder (Scaffold) is nobody's measurement: never proven.
+  const scaffold = [sliArt, sloArt].filter(a => a?.source === 'Scaffold');
+  if (scaffold.length) {
+    const what = scaffold.length === 2 ? 'The SLI and its SLO are template placeholders' : `${scaffold[0] === sliArt ? `SLI ${chain.sli.id}` : 'The SLO'} is a template placeholder`;
+    return link('sli', 'unverified', `${what}: nothing measured or confirmed ${scaffold.length === 2 ? 'them' : 'it'}. Replace ${scaffold.length === 2 ? 'them' : 'it'} with the real definition.`, items, { scaffold: true });
+  }
+  if (!confirmedLive(index, sliArt)) {
+    const detail = chain.slo
+      ? `The SLO names SLI ${chain.sli.id}; it is declared only, and nothing live confirms it is measured.`
+      : `A standalone SLI, declared only: no SLO sets a target for it, and nothing live confirms it is measured.`;
+    return link('sli', 'unverified', detail, items, { declaredOnly: true, inLiveDraft: index.live });
+  }
   const detail = chain.slo
-    ? `The SLO names SLI ${chain.sli.id}; the definition is checked structurally.`
-    : `A standalone SLI: no SLO sets a target for it.`;
-  return link('sli', 'proven', detail, [{ text: chain.sli.id, target: index.target(chain.sli.artefactId) }]);
+    ? `The SLO names SLI ${chain.sli.id}, and a verification stamp confirms it is measured.`
+    : `A standalone SLI, confirmed live: no SLO sets a target for it.`;
+  return link('sli', 'proven', detail, items);
 }
 
 function metricLink(chain, index) {
@@ -317,14 +334,25 @@ function alertLink(chain, index) {
   const declared = alerts.filter(a => a.type === 'burn_rate');
   const liveHealthy = alerts.filter(a => a.type === 'live_alert_rule' && a.verified !== false);
   const liveUnhealthy = alerts.filter(a => a.type === 'live_alert_rule' && a.verified === false);
-  if (declared.length && liveUnhealthy.length && !liveHealthy.length) {
-    return link('alert', 'unverified', `A burn-rate alert is declared for this SLO, but the matching live rule (${few(liveUnhealthy.map(a => a.name), 2)}) is reported unhealthy.`, items, { unhealthy: true });
+  // One unhealthy window is enough: a multi-window alert with a rule that
+  // cannot evaluate is not alert evidence, however healthy the others are.
+  if (liveUnhealthy.length) {
+    const bad = few(liveUnhealthy.map(a => a.name), 2);
+    const one = liveUnhealthy.length === 1;
+    return link('alert', 'unverified', declared.length
+      ? `A burn-rate alert is declared for this SLO, but ${one ? 'a matching live rule' : 'matching live rules'} (${bad}) ${one ? 'is' : 'are'} reported unhealthy.`
+      : `A live alert rule’s name matches, but ${bad} ${one ? 'is' : 'are'} reported unhealthy; nothing is declared for this SLO.`, items, { unhealthy: true });
   }
   if (declared.length) {
-    const confirmed = declared.some(a => confirmedLive(index, index.artefact(a.artefactId))) || liveHealthy.length > 0;
+    // In a live draft the fetcher's stamp is the verdict: it withholds it
+    // from an alert it could not confirm, so a healthy name match alone does
+    // not override it.
+    const confirmed = declared.some(a => confirmedLive(index, index.artefact(a.artefactId))) || (!index.live && liveHealthy.length > 0);
     return confirmed
       ? link('alert', 'proven', `A burn-rate alert is declared for this SLO${liveHealthy.length ? ', and a matching live rule is healthy' : ' and confirmed live'}.`, items)
-      : link('alert', 'unverified', 'A burn-rate alert is declared for this SLO in the pack; no live rule confirms it fires.', items);
+      : link('alert', 'unverified', index.live
+        ? 'A burn-rate alert is declared for this SLO, but the live draft did not confirm it: a rule it maps to may be unhealthy or missing.'
+        : 'A burn-rate alert is declared for this SLO in the pack; no live rule confirms it fires.', items);
   }
   return link('alert', 'inferred', `A live alert rule’s name matches (${few(liveHealthy.map(a => a.name), 2)}); it is not declared for this SLO.`, items);
 }
@@ -338,6 +366,7 @@ function nextActionFor(l, chain) {
   const at = (label, useTarget = false) => ({ label, layer: l.layer, target: useTarget ? target : null, link: l.key });
   switch (`${l.key}:${l.state}`) {
     case 'sli:missing':          return at('Declare the SLI this SLO references');
+    case 'sli:unverified':       return l.scaffold ? at('Replace the placeholder SLI with the real one', true) : at(l.inLiveDraft ? 'Check the rules behind the SLI are healthy, then refresh live evidence' : 'Capture a live draft to confirm the SLI is measured', true);
     case 'metric:missing':       return { label: 'Map the SLI to a metric', layer: 'L1', target: null, link: 'metric', openSli: true };
     case 'metric:unverified':    return at(l.noInventory ? `Capture a live draft to confirm ${firstMetric || 'the metric'}` : `Confirm ${firstMetric || 'the metric'} is emitted live`, true);
     case 'metric:inferred':      return { label: 'Name the metric in the SLI’s query', layer: 'L1', target: null, link: 'metric', openSli: true };

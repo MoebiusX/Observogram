@@ -11,7 +11,8 @@
 
 import {
   parseDiffKey, sliBaseOfSloId, matcherForDeployItem, computeDeployTransitions,
-  deployReviewModel, reviewHostOf,
+  deployReviewModel, reviewHostOf, hiddenSelectionNote, recommendRemediation, remediationDeployPhrase,
+  remediationDeployActionLabel, remediationSideOnlyMeasure,
 } from '../studio/verify-deploy.mjs';
 import { catalogToDeployManifest } from '../studio/artifact-model.mjs';
 import { createHarness } from './lib/harness.mjs';
@@ -195,6 +196,84 @@ const unknownSchema = deployReviewModel({ target: { product: 'grafana', mcpUrl: 
 assert(unknownSchema.ready === true && unknownSchema.checks.find(c => c.id === 'schema').status === 'notEvaluated'
        && unknownSchema.checks.find(c => c.id === 'rubric').status === 'notEvaluated',
        'an unchecked schema or rubric reads not evaluated, never pass, and does not block');
+// A met rubric is "met with real values" only when nothing says it rests on
+// template values: placeholder passes or template values in the pack turn it
+// into the Represented (placeholder) state, still non-blocking.
+const rubricOf = (rubric) => deployReviewModel({
+  target: { product: 'grafana', mcpUrl: 'https://mcp.example.com' }, rows: reviewRows.slice(0, 1),
+  validation: { schemaValid: true, rubric },
+}).checks.find(c => c.id === 'rubric');
+const onPh = rubricOf({ conformant: true, tier: 'tier-2', placeholders: 1, templates: 0 });
+assert(onPh.status === 'placeholder' && onPh.label === 'Meets tier-2 rubric on placeholder values' && onPh.blocking === false,
+       'a rubric met on placeholder passes is never a plain pass', onPh);
+const onTpl = rubricOf({ conformant: true, tier: 'tier-2', templates: 3 });
+assert(onTpl.status === 'placeholder' && onTpl.label === 'Meets tier-2 rubric; template values remain',
+       'a rubric met while the pack still carries template values is never a plain pass', onTpl);
+const clean = rubricOf({ conformant: true, tier: 'tier-2', placeholders: 0, templates: 0 });
+assert(clean.status === 'pass' && clean.label === 'Meets tier-2 rubric', 'a rubric met with no template values is a pass', clean);
+assert(rubricOf({ conformant: false, tier: 'tier-2', placeholders: 2 }).status === 'warning',
+       'an unmet rubric warns whatever the placeholders');
+
+// The type-filter note says the true effect: hidden selected rows are NOT
+// deployed. With per-type counts it appears only when a hidden type holds
+// selected rows; without counts it still never says "review everything".
+const dashHidden = [{ value: 'dashboard', label: 'Dashboard' }];
+assert(hiddenSelectionNote({ hiddenTypes: dashHidden, hiddenSelected: { dashboard: 2 } })
+       === '2 selected dashboards are filtered out of the table and will not be deployed. Show every type to include them.',
+       'hidden selected rows are counted and said not to deploy');
+assert(hiddenSelectionNote({ hiddenTypes: [...dashHidden, { value: 'alert', label: 'Alert rule' }], hiddenSelected: { dashboard: 0, alert: 1, recording: 4 } })
+       === '1 selected alert rule is filtered out of the table and will not be deployed. Show every type to include it.',
+       'only hidden types with selected rows are named; visible types never count');
+assert(hiddenSelectionNote({ hiddenTypes: dashHidden, hiddenSelected: { dashboard: 0 } }) === '',
+       'no note when the hidden types hold no selected row');
+const noCounts = hiddenSelectionNote({ hiddenTypes: dashHidden });
+assert(/not deployed/.test(noCounts) && !/review everything/.test(noCounts) && noCounts.includes('Dashboard'),
+       'without counts the note still says filtered-out selections are not deployed', noCounts);
+assert(hiddenSelectionNote({ hiddenTypes: [] }) === '', 'no hidden type, no note');
+
+// ---------- Remediate: recommendation and deploy counts ----------
+// Deploy is recommended only when something repo-only can be deployed.
+assert(recommendRemediation({ haveB: true, mode: 'drift', repoOnly: 19, repoDeployable: 0 }) === null,
+       'repo-only artefacts that all need a manual fix never recommend "deploy to live"');
+assert(recommendRemediation({ haveB: true, mode: 'drift', repoOnly: 19, repoDeployable: 0, drift: 2 })?.op === 'drift',
+       'with nothing deployable, drift is the recommendation when present');
+assert(recommendRemediation({ haveB: true, mode: 'drift', repoOnly: 30, repoDeployable: 11 })?.op === 'deploy',
+       'deployable repo-only artefacts recommend deploy');
+assert(recommendRemediation({ haveB: true, mode: 'drift', liveOnly: 3, repoOnly: 19, repoDeployable: 0 })?.op === 'retrofeed',
+       'the "both directions" recommendation needs a deployable half');
+assert(recommendRemediation({ haveB: true, mode: 'drift', liveOnly: 3, repoOnly: 5, repoDeployable: 2 })?.op === 'all',
+       'both sides with a deployable half recommend both directions');
+assert(recommendRemediation({ haveB: true, mode: 'gap', repoOnly: 5, repoDeployable: 5 }) === null,
+       'gap mode never recommends pushing the pack\'s extras');
+assert(recommendRemediation({ haveB: false, repoDeployable: 5 }) === null, 'no Pack B, no recommendation');
+
+// Deploy counts stay in artefacts, so they add up with "need a manual fix";
+// deploy rows only qualify them (an SLO is two rows).
+assert(remediationDeployPhrase({ selected: 11, deployable: 11, rows: 16 }) === '11 to deploy (16 deploy rows)',
+       'all selected: artefacts to deploy, rows in brackets');
+assert(remediationDeployPhrase({ selected: 4, deployable: 11, rows: 6 }) === '4 of 11 selected to deploy (6 deploy rows)',
+       'partly selected: selected of deployable artefacts');
+assert(remediationDeployPhrase({ selected: 0, deployable: 0, rows: 0 }) === '', 'nothing deployable, no deploy phrase');
+// The deploy button counts artefacts like the phrase beside it; rows only in brackets.
+assert(remediationDeployActionLabel({ selected: 11, rows: 16 }) === 'Review and deploy 11 selected (16 deploy rows) to live',
+       'deploy action: selected artefacts, deploy rows qualified');
+assert(remediationDeployActionLabel({ selected: 1, rows: 1 }) === 'Review and deploy 1 selected (1 deploy row) to live',
+       'deploy action: singular deploy row');
+
+// "Only in live/baseline" = 0 only covers the checked scope when Pack B
+// artefacts were parked: in gap mode it is never "nothing to import".
+{
+  const gapParked = remediationSideOnlyMeasure({ mode: 'gap', liveOnly: 0, outOfScope: 6 });
+  assert(gapParked.tone === 'warn' && !/nothing to import/.test(gapParked.note) && /not compared/.test(gapParked.note),
+         'gap mode with parked baseline artefacts: warn, says the rest was not compared', gapParked);
+  const liveParked = remediationSideOnlyMeasure({ mode: 'drift', liveOnly: 0, outOfScope: 6 });
+  assert(/checked scope/.test(liveParked.note), 'live mode with parked artefacts: bounded to the checked scope', liveParked);
+  assert(remediationSideOnlyMeasure({ mode: 'gap', liveOnly: 0, outOfScope: 0 }).note === 'nothing to import',
+         'nothing parked and nothing missing: nothing to import');
+  assert(remediationSideOnlyMeasure({ mode: 'gap', liveOnly: 3, outOfScope: 6 }).tone === 'warn',
+         'missing artefacts: warn');
+}
+
 assert(reviewHostOf('not a url/with/path') === 'not a url' && reviewHostOf('') === '' && reviewHostOf('mcp.example.com/x?t=1') === 'mcp.example.com',
        'reviewHostOf degrades to the leading host-like segment for unparseable input');
 

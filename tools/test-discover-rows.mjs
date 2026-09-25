@@ -10,8 +10,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { parse } from './lib/mini-yaml.mjs';
 import { adapt } from './lib/adapter.mjs';
+import { inferSlisFromRecordingRules } from './lib/sli-inference.mjs';
 import {
-  artefactRowHtml, artefactStatus, matchesTask, inferredFrom, artefactKind, DISCOVER_TASKS, artefactCardHtml,
+  artefactRowHtml, artefactStatus, matchesTask, inferredFrom, resolveInferredRule, artefactKind, DISCOVER_TASKS, artefactCardHtml,
 } from '../studio/card-html.mjs';
 
 const allArtefacts = (pack) => Object.values(pack.layers).flatMap(v => (Array.isArray(v) ? v : Object.values(v).flat()));
@@ -57,6 +58,44 @@ test('"Inferred from recording rule …" names the rules, and every inferred SLI
   const inferred = carlos.layers.L1.filter(a => inferredFrom(a));
   assert.equal(inferred.length, 18);
   assert.ok(inferred.every(a => inferredFrom(a).rules.every(n => rules.has(n))));
+  assert.ok(inferred.every(a => inferredFrom(a).rules.every(n => resolveInferredRule(n, rules) === n)));
+});
+
+test('a good/total SLI the live fetcher infers resolves to the rules it read, not to the shorthand stems', () => {
+  const read = ['checkout:requests:good_5m', 'checkout:requests:total_5m'];
+  const [{ sli }] = inferSlisFromRecordingRules(read.map(name => ({ name, expr: `sum(rate(${name}[5m]))` })));
+  const { rules } = inferredFrom({ spec: { description: sli.description } });
+  const names = [...read, 'checkout:requests:good_or_bad', 'other:x:good_5m'];
+  assert.deepEqual(rules.map(n => resolveInferredRule(n, names)), read);
+  assert.equal(resolveInferredRule('svc:lat:good', ['svc:lat:goodness']), null, 'a stem needs the _<window> separator');
+  assert.equal(resolveInferredRule('svc:lat:p95', ['svc:lat:p95_5m']), null, 'only good/total stems widen; any other name is exact');
+  assert.equal(resolveInferredRule('a:b:c', ['a:b:c']), 'a:b:c');
+  assert.equal(resolveInferredRule('a:b:good', null), null);
+});
+
+test('the inference sentence claims no more than the evidence: declared is not live, and an absent rule is not traced', () => {
+  const sli = (source) => ({ id: 'SLI-01', title: 's', source, desc: 'Inferred from recording rule slo:x:y.', spec: { description: 'Inferred from recording rule slo:x:y.' } });
+  const found = { rules: [{ name: 'slo:x:y', found: true }] };
+  const declared = artefactRowHtml(sli('Declared'), found);
+  assert.ok(!/measurement exists/.test(declared), 'a declared rule is not a produced series');
+  assert.ok(declared.includes('as declared in the pack; nothing live has confirmed that it runs'));
+  const live = artefactRowHtml(sli('Verified'), found);
+  assert.ok(live.includes('which the live platform reported') && !/measurement exists/.test(live));
+  const absent = artefactRowHtml(sli('Verified'), { rules: [{ name: 'slo:x:y', found: false }] });
+  assert.ok(absent.includes('That rule is not in this pack, so the query cannot be traced to it here.'));
+  assert.ok(!absent.includes('Its query comes from') && !absent.includes('live platform reported'));
+  const pair = { id: 'SLI-02', title: 'p', source: 'Declared', desc: 'Inferred from recording rules a:b:good/total.' };
+  const partly = artefactRowHtml(pair, { rules: [{ name: 'a:b:good_5m', found: true }, { name: 'a:b:total', found: false }] });
+  assert.ok(partly.includes('1 of those rules is not in this pack, so the query cannot be fully traced here.'), 'one absent rule is enough to drop the claim');
+  assert.ok(!partly.includes('Its query comes from'));
+  const unchecked = artefactRowHtml(sli('Declared'));
+  assert.ok(!unchecked.includes('No recording rule of this name is in this pack'), 'nothing was checked, so nothing is claimed absent');
+});
+
+test('Needs attention does not claim to cover required artefacts the pack lacks', () => {
+  const tip = DISCOVER_TASKS.find(t => t.id === 'attention').tip;
+  assert.ok(!/required artefact that is missing/.test(tip));
+  assert.ok(/required check not met/.test(tip), 'and says where a missing required artefact shows instead');
 });
 
 test('a row leads with name + what it does + status; the id and tags wait in Details', () => {
@@ -65,7 +104,7 @@ test('a row leads with name + what it does + status; the id and tags wait in Det
   assert.ok(html.indexOf('dv-row-name') < html.indexOf('dv-row-status') && html.indexOf('dv-row-status') < html.indexOf('<details'));
   assert.ok(html.includes('data-dv-rule="slo:x:y"'), 'a found rule is a button that opens it');
   assert.ok(html.includes('Measures how the service behaves.'), 'the inference sentence is provenance, not the what line');
-  assert.ok(html.includes('so the measurement exists'), 'and says what the inference establishes');
+  assert.ok(html.includes('Its query comes from that rule as declared in the pack'), 'and says what the inference establishes, for a declared rule');
   assert.ok(/<details[\s\S]*<dd class="dv-mono">SLI-01<\/dd>/.test(html), 'the id sits in Details');
   assert.ok(html.includes('ux-chip-evidence') && html.includes('Declared only'), 'a status chip, not a bare word');
   assert.ok(!html.includes('<b>') && html.includes('&lt;b&gt;'));

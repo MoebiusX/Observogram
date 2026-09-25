@@ -43,7 +43,10 @@ function queueHtml(model) {
   if (!model.result) return '';
   const q = model.queue;
   if (!q.length) {
-    return `<section class="bres-queue" aria-label="Needs review">${emptyStateHtml({ title: 'Nothing needs review', checked: 'every SLI expression with the parameters in, the burn-rule generator’s notes, the schema', tone: 'ok' })}</section>`;
+    // Green only when the result is: an empty queue over a pack that is not ready (a previous pack, the rubric not
+    // evaluated) says only that no warning is listed, in a neutral tone.
+    const ok = model.decision?.tone === 'ok';
+    return `<section class="bres-queue" aria-label="Needs review">${emptyStateHtml({ title: ok ? 'Nothing needs review' : 'No warning to review', checked: 'every SLI expression with the parameters in, the burn-rule generator’s notes, the schema', tone: ok ? 'ok' : 'neutral' })}</section>`;
   }
   return `
     <section class="bres-queue" aria-labelledby="build-queue-title">
@@ -52,7 +55,7 @@ function queueHtml(model) {
       </div>
       <ol class="bres-items">
         ${q.map(i => `
-          <li class="bres-item ux-tone-${i.blocking ? 'fail' : i.kind === 'placeholders' ? 'info' : 'warn'}">
+          <li class="bres-item ux-tone-${i.blocking || i.kind === 'failing' ? 'fail' : i.kind === 'placeholders' || i.kind === 'gaps' ? 'info' : 'warn'}">
             <div class="bres-item-main">
               <span class="bres-kind">${escapeHtml(i.label)}${i.blocking ? ' · blocking' : ''}</span>
               <p class="bres-msg">${escapeHtml(i.message)}</p>

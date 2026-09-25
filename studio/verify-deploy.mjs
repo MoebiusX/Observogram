@@ -171,7 +171,13 @@ export function computeDeployTransitions(items, diff) {
 // source:     { id, label, version }
 // env:        the environment the artefacts are compiled for
 // rows:       the SELECTED manifest rows ({ type, id, name })
-// validation: { schemaValid: true|false|null, rubric: { conformant, tier } | null }
+// validation: { schemaValid: true|false|null,
+//               rubric: { conformant, tier, placeholders?, templates? } | null }
+//             placeholders = clauses the report says pass only on a template
+//             value; templates = template values the pack still carries
+//             (library.todo.* annotations, Scaffold artefacts). Either one
+//             turns a met rubric into "met on placeholder values", never a
+//             plain pass.
 
 const REVIEW_TYPE_WORDS = {
   alert:     ['alert rule', 'alert rules'],
@@ -189,6 +195,46 @@ export function reviewHostOf(url) {
 }
 
 function countWords(n, [one, many]) { return `${n} ${n === 1 ? one : many}`; }
+
+// The tier rubric informs, never blocks. A met rubric is a plain pass
+// ("met with real values") only when nothing says it rests on template
+// values; otherwise it is the Represented (placeholder) state.
+function rubricCheck(rubric, tierWord) {
+  const base = { id: 'rubric', blocking: false, fix: '' };
+  if (!rubric) return { ...base, status: 'notEvaluated', label: 'Tier rubric not evaluated' };
+  if (!rubric.conformant) return { ...base, status: 'warning', label: `Does not meet ${tierWord}` };
+  const placeholders = Number(rubric.placeholders) || 0;
+  const templates = Number(rubric.templates) || 0;
+  if (placeholders > 0) return { ...base, status: 'placeholder', label: `Meets ${tierWord} on placeholder values` };
+  if (templates > 0) return { ...base, status: 'placeholder', label: `Meets ${tierWord}; template values remain` };
+  return { ...base, status: 'pass', label: `Meets ${tierWord}` };
+}
+
+// The note under "Changed artefacts" when the type filter hides rows. The
+// deploy sends only the rows the table shows, so a selected row of a hidden
+// type is NOT deployed — the note says that, never "review everything".
+//   hiddenTypes     [{ value, label }] for every unchecked type filter
+//   hiddenSelected  { [type]: n } selected rows each hidden type holds, when
+//                   the modal reports it; null when it does not.
+export function hiddenSelectionNote({ hiddenTypes = [], hiddenSelected = null } = {}) {
+  if (hiddenSelected && typeof hiddenSelected === 'object') {
+    const hidden = new Set((hiddenTypes || []).map(t => t?.value ?? t));
+    const parts = Object.entries(hiddenSelected)
+      .filter(([t, n]) => hidden.has(t) && Number(n) > 0)
+      .map(([t, n]) => {
+        const [one, many] = REVIEW_TYPE_WORDS[t] || [t, t];
+        return `${n} selected ${Number(n) === 1 ? one : many}`;
+      });
+    if (!parts.length) return '';
+    const total = Object.entries(hiddenSelected)
+      .filter(([t]) => hidden.has(t)).reduce((sum, [, n]) => sum + (Number(n) > 0 ? Number(n) : 0), 0);
+    const list = parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+    return `${list} ${total === 1 ? 'is' : 'are'} filtered out of the table and will not be deployed. Show every type to include ${total === 1 ? 'it' : 'them'}.`;
+  }
+  const labels = (hiddenTypes || []).map(t => (t && typeof t === 'object' ? (t.label || t.value) : t)).filter(Boolean);
+  if (!labels.length) return '';
+  return `Filtered out of the table: ${labels.join(', ')}. Selected rows of a filtered-out type are not deployed; show every type to include them.`;
+}
 
 export function deployReviewModel({ target = {}, source = {}, env = null, rows = [], validation = {} } = {}) {
   const selected = (rows || []).filter(Boolean);
@@ -229,10 +275,7 @@ export function deployReviewModel({ target = {}, source = {}, env = null, rows =
       status: schema === true ? 'pass' : (schema === false ? 'fail' : 'notEvaluated'),
       label: schema === true ? 'Pack schema valid' : (schema === false ? 'Pack schema invalid' : 'Pack schema not checked'),
       fix: 'fix the pack’s schema errors' },
-    { id: 'rubric', blocking: false,
-      status: !rubric ? 'notEvaluated' : (rubric.conformant ? 'pass' : 'warning'),
-      label: !rubric ? 'Tier rubric not evaluated' : (rubric.conformant ? `Meets ${tierWord}` : `Does not meet ${tierWord}`),
-      fix: '' },
+    rubricCheck(rubric, tierWord),
   ];
   const blockers = checks.filter(c => c.blocking && c.status === 'fail');
   const ready = blockers.length === 0;
@@ -268,4 +311,64 @@ export function deployReviewModel({ target = {}, source = {}, env = null, rows =
     checks,
     blockers,
   };
+}
+
+// ---------- Remediate: the deploy half of the plan ----------
+//
+// Pure rules the Remediate screen (compile-view.mjs) applies to its counts,
+// kept here beside the deploy review so tools/test-verify-deploy.mjs pins
+// them. Counts are artefacts unless named "deploy row" (an SLO deploys as
+// two rows: recording rules and burn-rate alerts).
+
+// Recommend ONE strategy from the diagnosed gap, or null. Deploy is only
+// recommended when something the repository has beyond live can actually be
+// deployed (repoDeployable); artefacts that all need a manual fix are never
+// a reason to "deploy repository changes to live". In gap mode Pack B is a
+// baseline, so the repository's extras are never something to push.
+//   { haveB, mode: 'gap'|'drift'|…, liveOnly, repoOnly, repoDeployable, drift }
+export function recommendRemediation({ haveB, mode, liveOnly = 0, repoDeployable = 0, drift = 0 } = {}) {
+  if (!haveB) return null;
+  if (mode === 'gap') {
+    if (liveOnly) return { op: 'retrofeed', why: 'the baseline has artefacts your pack lacks' };
+    if (drift)    return { op: 'drift', why: 'shared artefacts differ from the baseline' };
+    return null;
+  }
+  if (liveOnly && repoDeployable) return { op: 'all', why: 'each side has artefacts the other lacks' };
+  if (liveOnly) return { op: 'retrofeed', why: 'live has artefacts the repository lacks' };
+  if (repoDeployable) return { op: 'deploy', why: 'the repository has deployable artefacts live does not have yet' };
+  if (drift)    return { op: 'drift', why: 'the only gaps are shared artefacts whose fields differ' };
+  return null;
+}
+
+// "N to deploy (R deploy rows)" — artefacts first, so it adds up with the
+// other artefact counts in the same sentence; rows only qualify it.
+//   selected    deployable artefacts still ticked
+//   deployable  deployable artefacts in the set
+//   rows        deploy rows the ticked artefacts expand to
+export function remediationDeployPhrase({ selected = 0, deployable = 0, rows = 0 } = {}) {
+  if (!deployable) return '';
+  const rowWords = countWords(rows, ['deploy row', 'deploy rows']);
+  return selected === deployable
+    ? `${deployable} to deploy (${rowWords})`
+    : `${selected} of ${deployable} selected to deploy (${rowWords})`;
+}
+
+// The deploy button's label, in the same units as the phrase above: ticked
+// artefacts first, deploy rows in brackets — never a bare row count beside
+// an artefact count.
+export function remediationDeployActionLabel({ selected = 0, rows = 0 } = {}) {
+  return `Review and deploy ${selected} selected (${countWords(rows, ['deploy row', 'deploy rows'])}) to live`;
+}
+
+// The "Only in live/baseline" measure. When Pack B artefacts were parked out
+// of the checked scope, a zero only covers that scope: in gap mode the rest
+// of the baseline is what the pack may lack, so it is never "nothing to
+// import"; in live mode the parked rest is other services' fleet, so the
+// zero is bounded to the checked scope.
+//   { mode: 'gap'|…, liveOnly, outOfScope } -> { note, tone }
+export function remediationSideOnlyMeasure({ mode, liveOnly = 0, outOfScope = 0 } = {}) {
+  if (liveOnly) return { note: 'the repository lacks these', tone: 'warn' };
+  if (outOfScope && mode === 'gap') return { note: 'none in the checked scope; the rest was not compared', tone: 'warn' };
+  if (outOfScope) return { note: 'nothing to import in the checked scope', tone: 'neutral' };
+  return { note: 'nothing to import', tone: 'neutral' };
 }

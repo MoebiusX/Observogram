@@ -319,6 +319,13 @@ export function buildNeuronModel({ journeys = [], runsByName = {}, window = NEUR
       loadErrors: list.filter((j) => j.loadError).length,
       scheduled: list.filter((j) => isRecord(j.schedule)).length,
       notifying: list.filter((j) => isRecord(j.notify)).length,
+      // Journeys that declare notify: but whose newest record says nothing
+      // about a delivery — never run, written before delivery (in flight or
+      // a crash), a notify: block added since, or an unrecognised status.
+      // Unknown, never "none needed".
+      notifyingNeverRun: list.filter((j) => isRecord(j.notify) && !isRecord(j.lastRun)).length,
+      deliveryUnknown: list.filter((j) => isRecord(j.notify) && !(isRecord(j.lastRun) && isRecord(j.lastRun.notify)
+        && ['sent', 'skipped', 'failed'].includes(j.lastRun.notify.status))).length,
       stackGated: list.filter((j) => isRecord(j.gate?.stack?.rows) && Object.keys(j.gate.stack.rows).length > 0).length,
       outcomes,
       alignment: { mean: mean(alignPairs.map(([a]) => a)), delta: pairedDelta(alignPairs), n: alignPairs.filter(([a]) => a !== null).length },
@@ -408,16 +415,26 @@ export function fleetInventory(lastRuns, names = []) {
   return { journeys: withBlock.length, unchecked, kinds, counted };
 }
 
-export function defaultFocus(model) {
+// The journey the page opens on: the most urgent attentionList reason first
+// (a definition that does not load, a failed check, a lost vantage, an
+// undelivered notification, a stopped schedule — so a passing journey never
+// leads while another needs a person), then a chain getting worse, then
+// gate-failed, vantage-lost, lowest alignment, name. Never run ranks with
+// the quiet journeys, behind a worsening chain.
+export function defaultFocus(model, { now = Date.now() } = {}) {
   const names = Object.keys(model?.perJourney || {});
   if (!names.length) return null;
+  const urgent = ATTENTION_REASONS.filter((r) => r !== 'never-run');
+  const reasonOf = new Map(attentionList(model, { now }).map((a) => [a.name, a.reasons.find((r) => urgent.includes(r))]));
   const score = (name) => {
     const d = model.perJourney[name];
     const last = d.latest;
-    const worse = (model.fleet.chains.worse || []).includes(name) ? 0 : 1;
+    const reason = reasonOf.get(name);
+    const attention = reason ? urgent.indexOf(reason) : urgent.length;
+    const worse = (model.fleet?.chains?.worse || []).includes(name) ? 0 : 1;
     const outcome = !last ? 3 : last.outcome === 'gate-failed' ? 0 : last.outcome === 'vantage-lost' ? 1 : 2;
     const align = last?.drift?.alignmentPct ?? 101;
-    return [worse, outcome, align, name];
+    return [attention, worse, outcome, align, name];
   };
   return names.slice().sort((a, b) => {
     const sa = score(a), sb = score(b);

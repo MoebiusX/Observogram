@@ -211,10 +211,19 @@ export function sliSummarySentence({ id = '', name = '', type = 'ratio', objecti
  * The relationships the editor checks as the user types, before the engine is asked (the engine stays the authority;
  * these catch what it would accept and what would still be wrong): the objective a percent strictly between 0 and 100,
  * the window one of the schema's, and for a threshold SLI a numeric bound that fits its unit (a ratio between 0 and
- * 1, a percent between 0 and 100, never negative in a unit), a direction that does not make every sample good, a unit
- * that is one word. An empty field is not checked here: in the editor it means "the library default", in the create
- * form the required list says it. Returns { [field]: message } — plain sentences a person can act on.
+ * 1, a percent between 0 and 100, never negative in a unit that cannot go below zero — a duration, a count, a rate),
+ * a direction that does not make every sample good, and a unit no longer than the engine takes. Nothing the engine
+ * accepts is refused for its own sake: any unit text ("µs", "requests per second") and a negative bound in a unit
+ * that can be negative ("celsius", "dBm") pass. An empty field is not checked here: in the editor it means "the
+ * library default", in the create form the required list says it. Returns { [field]: message } — plain sentences a
+ * person can act on.
  */
+// The engine's own limit on a unit (tools/lib/library.mjs MAX_UNIT_LENGTH): any text up to this length.
+const MAX_UNIT_LENGTH = 64;
+// Units whose values cannot go below zero: durations, sizes, counts and rates ("per_second", "events_per_hour").
+// A unit not named here (a temperature, a signal level) may be negative, so no sign rule applies to it.
+const NON_NEGATIVE_UNIT = /^(?:ns|us|µs|ms|s|sec|secs|seconds?|minutes?|hours?|days?|bytes?|[kmgt]i?b|count|requests?|messages?|consumers?|replicas?|events?|errors?|records?|items?|connections?|ratio|percent|%)$|(?:^|_)per_[a-z]+$/;
+const cannotBeNegative = (unit) => NON_NEGATIVE_UNIT.test(unit.toLowerCase().replace(/\s+/g, '_'));
 export function sliRelationshipChecks({ type = 'ratio', objective = null, window = null, threshold = null, good_when = null, unit = null } = {}) {
   const out = {};
   const obj = String(objective ?? '').trim();
@@ -227,7 +236,7 @@ export function sliRelationshipChecks({ type = 'ratio', objective = null, window
   if (win && !SLO_WINDOWS.includes(win)) out.window = `The window is one of ${SLO_WINDOWS.slice(0, -1).join(', ')} or ${SLO_WINDOWS.at(-1)}`;
   if (type !== 'threshold' && type !== 'distribution') return out;
   const u = String(unit ?? '').trim();
-  if (u && !/^[A-Za-z%][\w%/.-]*$/.test(u)) out.unit = 'A unit is one word, like seconds, ratio or per_second';
+  if (u.length > MAX_UNIT_LENGTH) out.unit = `A unit is at most ${MAX_UNIT_LENGTH} characters, like seconds, ratio or per_second`;
   const t = String(threshold ?? '').trim();
   if (!t) return out;
   const b = Number(t);
@@ -235,8 +244,8 @@ export function sliRelationshipChecks({ type = 'ratio', objective = null, window
   if (!Number.isFinite(b)) out.threshold = 'Enter the bound as a number, like 0.8';
   else if (unitLow === 'ratio' && (b < 0 || b > 1)) out.threshold = `A ratio bound is between 0 and 1${b > 1 && b <= 100 ? ` — for ${b}%, enter ${Number((b / 100).toFixed(6))}` : ''}`;
   else if ((unitLow === 'percent' || unitLow === '%') && (b < 0 || b > 100)) out.threshold = 'A percent bound is between 0 and 100';
-  else if (u && b < 0) out.threshold = `A bound in ${u.replace(/_/g, ' ')} cannot be negative`;
-  else if (u && b <= 0 && goodWhen({ good_when }) === 'above') out.good_when = 'Good when above 0 makes every sample good — raise the bound or choose below';
+  else if (u && b < 0 && cannotBeNegative(u)) out.threshold = `A bound in ${u.replace(/_/g, ' ')} cannot be negative`;
+  else if (u && b <= 0 && cannotBeNegative(u) && goodWhen({ good_when }) === 'above') out.good_when = 'Good when above 0 makes every sample good — raise the bound or choose below';
   else if (unitLow === 'ratio' && b >= 1 && goodWhen({ good_when }) === 'below') out.good_when = 'Good when below 1 makes every ratio good — lower the bound or choose above';
   return out;
 }

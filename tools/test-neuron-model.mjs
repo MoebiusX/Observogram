@@ -159,16 +159,57 @@ test('heatmap: columns = the longest history in the window, rows left-padded, ne
   assert.deepEqual(m.series.alignment.find(s => s.name === 'a').points.map(p => p.v), [89, 88, 87]);
 });
 
-test('defaultFocus: a chain getting worse wins, then gate-failed, vantage-lost, lowest alignment, name', () => {
+test('defaultFocus: a journey that needs a person first, then a chain getting worse, gate-failed, vantage-lost, lowest alignment, name', () => {
   const mk = (rows) => buildNeuronModel({ journeys: rows.map(([n, r, o]) => entry(n, r, o)), runsByName: Object.fromEntries(rows.map(([n, r]) => [n, r])) });
   assert.equal(defaultFocus(mk([['a', [run(0)]], ['b', [run(0, { outcome: 'gate-failed' })]]])), 'b');
   assert.equal(defaultFocus(mk([['a', [lost(0)]], ['b', [run(0)]]])), 'a');
   assert.equal(defaultFocus(mk([['a', [run(0)]], ['b', [run(0, { drift: { alignmentPct: 10 } })]]])), 'b');
   assert.equal(defaultFocus(mk([['b', [run(0)]], ['a', [run(0)]]])), 'a');
   const worse = run(0, { outcome: 'pass', transition: { any: true, changed: [{ direction: 'worse' }] } });
-  assert.equal(defaultFocus(mk([['a', [run(0, { outcome: 'gate-failed' })]], ['z', [worse]]])), 'z');
+  assert.equal(defaultFocus(mk([['a', [run(0, { outcome: 'gate-failed' })]], ['z', [worse]]])), 'a', 'a failed check leads over a passing journey whose chain got worse');
+  assert.equal(defaultFocus(mk([['a', []], ['z', [worse]]])), 'z', 'never run stays behind a chain getting worse');
+  assert.equal(defaultFocus(mk([['a', [run(0)]], ['z', [worse]]])), 'z');
   assert.equal(defaultFocus(mk([])), null);
   assert.equal(defaultFocus(buildNeuronModel({ journeys: [entry('only', [])], runsByName: {} })), 'only');
+});
+
+test('defaultFocus: a passing journey never leads while another cannot load, failed to notify or is overdue', () => {
+  const now = Date.parse(at(0)) + 10 * 60e3;                 // the newest runs are 10 min old
+  const ok = [run(0, { drift: { alignmentPct: 80 } })];
+  const notify = [run(0, { drift: { alignmentPct: 100 }, notify: { status: 'failed', error: 'ECONNRESET' } })];
+  const stale = [run(0, { drift: { alignmentPct: 100 } })];
+  const rows = [
+    entry('ok', ok),
+    entry('notify', notify, { notify: { urlEnv: 'U' } }),
+    entry('broken', [], { loadError: 'bad yaml' }),
+    entry('stale', stale, { schedule: { every: '1m', cadenceMs: 60e3 } }),
+  ];
+  const runsByName = { ok, notify, stale };
+  const pick = (names) => defaultFocus(buildNeuronModel({ journeys: rows.filter(j => names.includes(j.name)), runsByName }), { now });
+  assert.equal(pick(['ok', 'notify', 'broken', 'stale']), 'broken');
+  assert.equal(pick(['ok', 'notify', 'stale']), 'notify');
+  assert.equal(pick(['ok', 'stale']), 'stale');
+  assert.equal(pick(['ok']), 'ok');
+});
+
+test('buildNeuronModel: notifying journeys with no delivery on record are counted, never read as none needed', () => {
+  const sent = [run(0)];
+  const skipped = [run(0, { notify: { status: 'skipped' } })];
+  const preDelivery = [run(0, { outcome: 'gate-failed', notify: null })];
+  const journeys = [
+    entry('sent', sent, { notify: { urlEnv: 'U' } }),
+    entry('skipped', skipped, { notify: { urlEnv: 'U' } }),
+    entry('pre-delivery', preDelivery, { notify: { urlEnv: 'U' } }),
+    entry('never', [], { notify: { urlEnv: 'U' } }),
+    entry('quiet', [run(0, { notify: null })]),
+  ];
+  const m = buildNeuronModel({ journeys, runsByName: { sent, skipped, 'pre-delivery': preDelivery } });
+  assert.equal(m.fleet.notifying, 4);
+  assert.equal(m.fleet.notifyingNeverRun, 1);
+  assert.equal(m.fleet.deliveryUnknown, 2, 'the never-run journey and the record written before delivery');
+  const allSkipped = buildNeuronModel({ journeys: [entry('skipped', skipped, { notify: { urlEnv: 'U' } })], runsByName: { skipped } });
+  assert.equal(allSkipped.fleet.deliveryUnknown, 0);
+  assert.equal(buildNeuronModel({}).fleet.deliveryUnknown, 0);
 });
 
 test('blastRadiusNodes: declared chains only, one entry per node with every chain, widest first; exposureSeries per run', () => {

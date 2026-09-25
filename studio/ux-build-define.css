@@ -9,6 +9,9 @@
 .build-def {
   overflow: visible; max-height: none; overscroll-behavior: auto; padding-right: 2px;
 }
+/* The rubric met only on placeholders reads amber, never green (the same tone VERIFY gives "Meets tier rubric"). */
+.build-summary.is-warn { border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); }
+.build-summary.is-warn .build-summary-status { color: var(--warn); }
 /* A short viewport cannot hold a sticky column: it scrolls with the page instead (still one scroll). */
 @media (max-height: 760px) { .build-def { position: static; } }
 

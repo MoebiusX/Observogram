@@ -300,6 +300,13 @@ body.chrome-observa:not([data-mode="home"]) .observa-brand-text .observa-tagline
 .observa-tab-num { width: 30px; height: 30px; font-size: 14px; }
 .observa-tab-eyebrow { letter-spacing: 0.08em; }
 body.chrome-observa { --observa-chrome-h: 102px; }
+/* The context bar (.hdr) is sticky right under the chrome, so the sticky
+   strips (.ux-section-nav, .ux-decision.is-sticky, .diag-sticky) pin below it
+   by its height: this is its single-row height, and app.mjs replaces it with
+   the measured one (the bar wraps onto more rows on narrow screens). Zero
+   where the bar is hidden. */
+body.chrome-observa { --ux-context-h: 56px; }
+body.chrome-observa[data-mode="home"], body.chrome-observa[data-mode="build"] { --ux-context-h: 0px; }
 /* Build carries no utility toolbar into its steps: there is no pack to act
    on yet, and the steps have their own actions. Theme lives in Advanced. */
 body.chrome-observa[data-mode="build"] .hdr { display: none !important; }

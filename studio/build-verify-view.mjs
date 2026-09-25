@@ -14,8 +14,9 @@
 //   4. Explanation  four readiness states displayed independently: schema valid,
 //                   meets tier rubric, implementation, deployment ready
 //   5. Details      "What remains" — the smallest actionable list (what blocks the
-//                   hand-off, warnings, clauses whose requirement is represented
-//                   but whose real value is still needed, the values to fill by
+//                   hand-off, the clauses that fail at the tier, warnings, clauses
+//                   whose requirement is represented but whose real value is
+//                   still needed, the values to fill by
 //                   layer, the todos no value fills), each item with "Fix now" and,
 //                   for a non-blocking warning, "Accept with reason"; then the
 //                   rubric per layer (collapsed), the layer stack with the todos
@@ -128,6 +129,19 @@ function clauseItemHtml(c) {
     </li>`;
 }
 
+function failingItemHtml(c) {
+  return `
+    <li class="bres-item ux-tone-fail">
+      <div class="bres-item-main">
+        <span class="bres-kind">${escapeHtml(layerName(c.layer))} · ${escapeHtml(c.severity)}</span>
+        <p class="bres-msg"><strong>${escapeHtml(c.label)}</strong> — ${escapeHtml(c.description)}</p>
+      </div>
+      <div class="bres-actions">
+        <button type="button" class="ux-secondary-btn" data-ux-action="fix" data-key="${escapeHtml(c.key)}" title="${escapeHtml(`Opens the ${layerName(c.layer)} sheet on Compile`)}" aria-label="${escapeHtml(`Fix now: ${c.label}`)}">Fix now</button>
+      </div>
+    </li>`;
+}
+
 function valueItemHtml(v) {
   return `
     <li class="bres-value">
@@ -163,6 +177,7 @@ function remainsHtml(model) {
   const k = rm.counts;
   const summary = [
     k.blocking && `${plural(k.blocking, 'blocking issue')}`,
+    k.failing && `${plural(k.failing, 'failing clause')}`,
     `${plural(k.warnings, 'warning')}`,
     `${plural(k.clauses, 'clause')} passing on placeholders`,
     `${plural(k.values, 'value')} to fill`,
@@ -170,6 +185,7 @@ function remainsHtml(model) {
   ].filter(Boolean).join(' · ');
   const groups = [];
   if (rm.blocking.length) groups.push(groupHtml({ id: 'blocking', title: 'Blocking the hand-off', count: rm.blocking.length, tone: 'fail', why: 'The pack is not handed off while any of these stands.', body: `<ul class="bres-items">${rm.blocking.map(i => warningItemHtml(i, model)).join('')}</ul>` }));
+  if (rm.failing?.length) groups.push(groupHtml({ id: 'failing', title: 'Failing at this tier', count: rm.failing.length, tone: 'fail', why: 'The pack does not meet the tier’s rubric while any of these fails. Each is resolved on its layer’s sheet on Compile.', body: `<ul class="bres-items">${rm.failing.map(failingItemHtml).join('')}</ul>` }));
   if (rm.warnings.length) groups.push(groupHtml({ id: 'warnings', title: 'Warnings to review', count: rm.warnings.length, body: `<ul class="bres-items">${rm.warnings.map(i => warningItemHtml(i, model)).join('')}</ul>` }));
   if (rm.clauses.length) groups.push(groupHtml({ id: 'clauses', title: termHtml('placeholder', REPRESENTED), count: rm.clauses.length, why: 'These clauses pass the rubric on a template value. They count toward the tier; they page nobody until the value is real.', body: `<ul class="bres-items">${rm.clauses.map(clauseItemHtml).join('')}</ul>` }));
   if (rm.values.total) {
@@ -202,6 +218,7 @@ function remainsHtml(model) {
         <p class="bres-sub">${escapeHtml(summary)}</p>
       </div>
       ${rm.empty ? emptyStateHtml({ title: 'Nothing remains', checked: 'the schema, the tier’s rubric, every warning, every placeholder value and every todo', tone: 'ok' }) : groups.join('')}
+      ${rm.evaluated ? '' : emptyStateHtml({ title: 'The tier rubric is not evaluated yet', body: 'Nothing here says the pack meets it; what remains against the rubric is unknown until it is checked.', tone: 'neutral' })}
       ${accepted}
     </section>`;
 }
@@ -359,6 +376,7 @@ function wireRemains(container, model, act) {
   if (rm) {
     for (const i of [...rm.blocking, ...rm.warnings, ...rm.accepted]) items.set(i.key, { type: 'warning', item: i });
     for (const c of rm.clauses) items.set(c.key, { type: 'clause', item: c });
+    for (const c of rm.failing || []) items.set(c.key, { type: 'failing', item: c });
     for (const g of rm.values.groups) for (const v of g.items) items.set(`value:${v.key}`, { type: 'value', item: v });
     for (const t of rm.manual) items.set(t.key, { type: 'todo', item: t });
   }
@@ -374,6 +392,7 @@ function wireRemains(container, model, act) {
     if (!hit) return;
     const { type, item } = hit;
     if (type === 'warning') { fixOnCompile(item.fix); return; }
+    if (type === 'failing') { fixOnCompile({ kind: 'sheet', layer: item.layer }); return; }
     const ok = type === 'value' ? revealOnStack(container, { paramKey: item.key, todo: item.todos[0] })
       : type === 'clause' ? item.todos.some(t => revealOnStack(container, { todo: t }))
         : revealOnStack(container, { todo: item.path });

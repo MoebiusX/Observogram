@@ -984,7 +984,16 @@ test('the plain words: an id as a name, a window in days, the opening sentence i
   assert.deepEqual(sliRelationshipChecks({ type: 'threshold', threshold: '-1', unit: 'seconds' }), { threshold: 'A bound in seconds cannot be negative' });
   assert.deepEqual(sliRelationshipChecks({ type: 'threshold', threshold: '0', unit: 'per_second', good_when: 'above' }), { good_when: 'Good when above 0 makes every sample good — raise the bound or choose below' });
   assert.deepEqual(sliRelationshipChecks({ type: 'threshold', threshold: '1', unit: 'ratio', good_when: 'below' }), { good_when: 'Good when below 1 makes every ratio good — lower the bound or choose above' });
-  assert.deepEqual(sliRelationshipChecks({ type: 'threshold', threshold: 'abc', unit: 'events per hour' }), { unit: 'A unit is one word, like seconds, ratio or per_second', threshold: 'Enter the bound as a number, like 0.8' });
+  assert.deepEqual(sliRelationshipChecks({ type: 'threshold', threshold: 'abc', unit: 'events per hour' }), { threshold: 'Enter the bound as a number, like 0.8' }, 'any unit text the engine takes is taken');
+  assert.deepEqual(sliRelationshipChecks({ type: 'threshold', threshold: '1', unit: 'x'.repeat(65) }), { unit: 'A unit is at most 64 characters, like seconds, ratio or per_second' }, 'the engine’s own limit on a unit');
+  // Nothing the engine accepts is refused for its own sake: any unit text, and a negative bound in a unit that can be negative.
+  for (const [unit, threshold, good_when] of [['µs', '250', 'below'], ['requests per second', '5', 'above'], ['celsius', '-18', 'below'], ['dBm', '-70', 'above'], ['celsius', '0', 'above']]) {
+    assert.deepEqual(sliRelationshipChecks({ type: 'threshold', objective: '99.9', window: '30d', threshold, good_when, unit }), {}, `${threshold} ${unit} good when ${good_when}`);
+    assert.equal(customFormModel({ name: 'Cold room', type: 'threshold', objective: '99.9', window: '30d', query: 'up', threshold, good_when, unit }).canSubmit, true, `Add is open for ${threshold} ${unit}`);
+  }
+  // A unit that cannot go below zero keeps its sign rule, spelled with spaces or underscores.
+  assert.deepEqual(sliRelationshipChecks({ type: 'threshold', threshold: '-1', unit: 'requests per second' }), { threshold: 'A bound in requests per second cannot be negative' });
+  assert.deepEqual(sliRelationshipChecks({ type: 'threshold', threshold: '-5', unit: 'ms' }), { threshold: 'A bound in ms cannot be negative' });
   assert.deepEqual(sliRelationshipChecks({ type: 'threshold', threshold: '150', unit: 'percent' }), { threshold: 'A percent bound is between 0 and 100' });
   assert.deepEqual(sliRelationshipChecks({ type: 'ratio', objective: 'abc', threshold: '80', unit: 'ratio' }), { objective: 'Enter the objective as a percent, like 99.9' }, 'a ratio SLI carries no bound to check');
   assert.deepEqual(sliRelationshipChecks({ type: 'threshold', objective: '', window: '', threshold: '' }), {}, 'empty is not checked here: the library default in the editor, the required list in the form');

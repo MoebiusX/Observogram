@@ -12,7 +12,7 @@ import { LAYER_DEFS, L4_SUBGROUPS, DOMAIN_DEFS, DISCO_SLAB_ACCENT, discoGradeLet
 import { focusedConformance } from './focus.mjs';
 import { escapeHtml } from './util.mjs';
 import { openDrawer } from './drawer.mjs';
-import { artefactRowHtml, artefactStatus, matchesTask, inferredFrom, DISCOVER_TASKS } from './card-html.mjs';
+import { artefactRowHtml, artefactStatus, matchesTask, inferredFrom, resolveInferredRule, DISCOVER_TASKS } from './card-html.mjs';
 import { LENS_PRODUCTS } from './compare-view.mjs';
 import { buildSymbolTable, defaultEnvFor, layerArtefactCount, refresh, runBenchmark } from './app.mjs';
 import { host as appHost } from './host.mjs';
@@ -325,8 +325,8 @@ const shownAll = new Set();
 
 const COUNT_DEF = 'Artefacts in a layer: every item the pack projects onto it, including detail-level evidence (metric inventory, scrape jobs, dashboard panels, recording rules). '
   + 'The evidence split (live evidence found · declared only · template value · missing) divides the same artefacts, so it adds up to the layer total. '
-  + 'Needs attention counts the artefacts a person must act on: a template value to complete, a reference that does not resolve, or a required artefact that is missing; each counts once. '
-  + 'Required checks are clauses of the tier rubric, not artefacts. Filters never change these counts.';
+  + 'Needs attention counts the artefacts a person must act on: a template value to complete or a reference that does not resolve; each counts once. '
+  + 'Required checks are clauses of the tier rubric, not artefacts: a required artefact the pack lacks shows there. Filters never change these counts.';
 
 // What "no artefacts" means on each layer: what the adapter looked for.
 const LAYER_CHECKED = {
@@ -505,7 +505,7 @@ function summaryHtml(model) {
     primary = { id: 'dv-assess', label: 'Open the assessment', action: 'dv-assess' };
   } else if (t.attention) {
     decision = `${t.attention} of ${plural(t.total, 'artefact')} ${t.attention === 1 ? 'needs' : 'need'} attention across ${plural(attnLayers, 'layer')}.`;
-    note = `Needs attention means a template value still to complete, a reference that does not resolve, or a required artefact that is missing. ${evidenceNote}${rubricNote}`;
+    note = `Needs attention means a template value still to complete or a reference that does not resolve. ${evidenceNote}${rubricNote}`;
     tone = 'warn';
     primary = { id: 'dv-review', label: 'Review what needs attention', action: 'dv-review' };
     secondary = [{ id: 'dv-assess', label: 'Open the assessment', action: 'dv-assess' }];
@@ -638,7 +638,9 @@ function layerItemHtml(L, task, open) {
   ].filter(Boolean).join(' ');
   const attention = c.attention
     ? `<span class="dv-attn" title="${escapeHtml(TASK_BY_ID.attention.tip)}">${c.attention} need${c.attention === 1 ? 's' : ''} attention</span>`
-    : (c.total ? '<span class="dv-calm">Nothing needs attention</span>' : '');
+    // Calm only when the rubric agrees: a required check not met here (the
+    // chip beside it) is exactly what attention does not count.
+    : (c.total && !L.rubricFails.length ? '<span class="dv-calm">Nothing needs attention</span>' : '');
   const rubric = L.rubricFails.length
     ? statusChipHtml('assessment', 'fail', {
         label: `${L.rubricFails.length} required check${s(L.rubricFails.length)} not met`,
@@ -809,7 +811,18 @@ function layerEmptyHtml(L, task, { byTask, matched, folded, buckets }) {
   const checked = `${plural(L.counts.total, 'artefact')} in this layer`;
   switch (task) {
     case 'attention':
-      return emptyStateHtml({ tone: 'ok', title: `Nothing in ${where} needs attention`, checked: `${checked}: template values, references and required artefacts`, actions: [all] });
+      // Attention covers template values and references only. A required
+      // check not met here is still open, so the layer is never "ok".
+      if (L.rubricFails.length) {
+        return emptyStateHtml({
+          tone: 'warn',
+          title: `No artefact in ${where} needs attention, but ${plural(L.rubricFails.length, 'required check')} ${L.rubricFails.length === 1 ? 'is' : 'are'} not met`,
+          checked: `${checked}: template values and references`,
+          body: 'A required artefact the pack lacks is a rubric check, not an artefact, so this list cannot show it. The assessment explains what is missing.',
+          actions: [{ action: 'dv-assess', label: 'Open the assessment' }, all],
+        });
+      }
+      return emptyStateHtml({ tone: 'ok', title: `Nothing in ${where} needs attention`, checked: `${checked}: template values and references`, actions: [all] });
     case 'missingEvidence':
       return emptyStateHtml({ tone: 'ok', title: `Every artefact in ${where} has live evidence`, checked, actions: [all] });
     case 'scaffold':
@@ -839,10 +852,7 @@ function discoverHandlers(ctx) {
       persistence.schedule();
       repaintList(ctx, `detail-${key}`);
     },
-    'dv-show-all': (_ev, el) => {
-      shownAll.add(`${packKey()}|${el.dataset.layer}`);
-      repaintList(ctx);
-    },
+    'dv-show-all': (_ev, el) => showAllRows(ctx, el.dataset.layer),
     'dv-clear-refine': () => {
       state.layersSearch = '';
       state.layersDomain = 'all';
@@ -874,6 +884,27 @@ function repaintList(ctx, focusKey = null) {
     if (Math.abs(drift) > 1) window.scrollBy(0, drift);
   }
   el.focus({ preventScroll: true });
+}
+
+// "Show all N": the button disappears with the repaint, so focus moves to the
+// first row that was not listed before (where the list was cut), kept where
+// the button was on screen; failing that, to the layer's toggle.
+function showAllRows(ctx, layer) {
+  if (!layer) return;
+  const panel = ctx.root.querySelector(`#dv-panel-${layer}`);
+  const shown = new Set([...(panel?.querySelectorAll('.dv-row') || [])].map(r => r.dataset.key));
+  const before = panel?.querySelector('.dv-show-all')?.getBoundingClientRect?.().top;
+  shownAll.add(`${packKey()}|${layer}`);
+  renderLayerList(ctx);
+  const next = [...(ctx.root.querySelector(`#dv-panel-${layer}`)?.querySelectorAll('.dv-row') || [])]
+    .find(r => !shown.has(r.dataset.key))?.querySelector('.dv-row-main');
+  const el = next || ctx.root.querySelector(`[data-dv-focus="toggle-${layer}"]`);
+  if (!el) return;
+  if (next && before != null) {
+    const drift = el.getBoundingClientRect().top - before;
+    if (Math.abs(drift) > 1) window.scrollBy(0, drift);
+  }
+  el.focus({ preventScroll: !!next && before != null });
 }
 
 function setTask(ctx, task) {
@@ -1027,9 +1058,17 @@ function isActiveKey(key, layerId, id) {
 }
 
 // The recording rule an inferred indicator was read from (L3 QRY-NN, titled
-// by the rule's name).
+// by the rule's name). A good/total stem ('a:b:good') resolves to the rule it
+// stands for ('a:b:good_5m'): card-html.mjs resolveInferredRule.
+function recordingRules() {
+  return (state.pack?.layers?.L3 || []).filter(a => /^QRY-/.test(a.id || ''));
+}
+function recordingRuleName(name) {
+  return resolveInferredRule(name, recordingRules().flatMap(a => [a.title, a.spec?.name]));
+}
 function findRecordingRule(name) {
-  return (state.pack?.layers?.L3 || []).find(a => /^QRY-/.test(a.id || '') && (a.title === name || a.spec?.name === name)) || null;
+  const hit = recordingRuleName(name);
+  return hit ? recordingRules().find(a => a.title === hit || a.spec?.name === hit) || null : null;
 }
 
 // One Discover row. The body is card-html.mjs artefactRowHtml; this wraps it
@@ -1066,7 +1105,12 @@ export function renderCard(artefact, def, sublayerKey, { outsideFilter = false }
     : null;
 
   const inference = inferredFrom(artefact);
-  const rules = inference ? inference.rules.map(name => ({ name, found: !!findRecordingRule(name) })) : null;
+  // Name each rule as the pack does, so a resolved good/total stem shows (and
+  // opens) the real rule.
+  const rules = inference ? inference.rules.map(name => {
+    const hit = recordingRuleName(name);
+    return { name: hit || name, found: !!hit };
+  }) : null;
 
   row.innerHTML = artefactRowHtml(artefact, { broken, benchmark, rules, outsideFilter });
   row.addEventListener('click', (ev) => {

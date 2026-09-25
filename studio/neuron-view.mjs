@@ -194,9 +194,9 @@ export async function renderNeuron(container, { data, ui }, host = appHost) {
     return;
   }
 
-  const focus = ui.focus || mdl.defaultFocus(model);
-  const d = model.perJourney[focus];
   const now = Date.now();
+  const focus = ui.focus || mdl.defaultFocus(model, { now });
+  const d = model.perJourney[focus];
   const check = mdl.latestCheck(d, { now });
   const attention = mdl.attentionList(model, { now }).filter((a) => a.name !== focus);
   const fleetReady = mdl.fleetTrendReadiness(model);
@@ -420,6 +420,10 @@ function decisionMeasures(model, d, trend) {
   ]);
   const del = Object.fromEntries(f.delivery.map((x) => [x.key, x.count]));
   const without = f.journeys - f.notifying;
+  // Notifying journeys whose newest record says nothing about a delivery:
+  // unknown, so never counted as "none needed".
+  const neverRunNotifying = f.notifyingNeverRun ?? 0;
+  const unrecorded = Math.max(0, (f.deliveryUnknown ?? f.notifying) - neverRunNotifying);
   const runs = d.runs;
   return [
     {
@@ -433,17 +437,21 @@ function decisionMeasures(model, d, trend) {
     },
     {
       label: 'Notifications, latest runs',
-      value: del.failed ? `${del.failed} failed` : del.sent ? `${del.sent} sent` : f.notifying ? 'none needed' : 'not set up',
+      value: del.failed ? `${del.failed} failed` : del.sent ? `${del.sent} sent` : !f.notifying ? 'not set up' : f.deliveryUnknown === 0 ? 'none needed' : 'not known yet',
       note: [
         del.failed && del.sent && `${del.sent} sent`,
         del.skipped && `${del.skipped} had nothing to report`,
+        unrecorded && `no delivery on record for the latest run of ${plural(unrecorded, 'journey')}`,
+        neverRunNotifying && `${neverRunNotifying} not run yet`,
         without && `${without} ${without === 1 ? 'journey has' : 'journeys have'} no notifications — results show only here`,
       ].filter(Boolean).join(' · '),
-      tone: del.failed ? 'fail' : 'neutral',
+      tone: del.failed ? 'fail' : unrecorded ? 'warn' : 'neutral',
     },
     {
       label: `Run history of ${d.name}`, value: plural(runs, 'run'), tone: 'neutral',
-      note: trend.ready ? `in the last ${model.window} — enough for trends` : `trends appear after ${trend.minRuns} runs; ${runs} so far`,
+      note: trend.observedReady ? `in the last ${model.window} — enough for trends`
+        : trend.ready ? `the alignment and grade trend appears after ${trend.minRuns} runs that could observe; ${trend.observed} of ${runs} could`
+          : `trends appear after ${trend.minRuns} runs; ${runs} so far`,
     },
   ];
 }
@@ -764,7 +772,7 @@ const fmtCadence = (ms) => {
 const gateBits = (gate) => Object.entries(gate || {}).map(([k, v]) => `${k}=${v && typeof v === 'object' ? JSON.stringify(v) : v}`).join(' · ') || 'no gate';
 const scheduleText = (s) => (!s ? 'no schedule: declared (run on demand)' : `${s.cron ? `cron ${s.cron}` : s.every ? `every ${s.every}` : 'schedule'}${s.timezone ? ` (${s.timezone})` : ''}${s.cadenceMs ? ` · ${fmtCadence(s.cadenceMs)}` : s.cadenceNote ? ` · ${s.cadenceNote}` : ''}`);
 const val = (v) => (v === null || v === undefined ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v));
-const kv = (pairs) => `<dl class="nrn-kv">${pairs.filter(([, v]) => v !== undefined).map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${typeof v === 'string' && v.startsWith('<') ? v : escapeHtml(val(v))}</dd>`).join('')}</dl>`;
+const kv = (pairs) => `<dl class="nrn-kv">${pairs.filter(([, v]) => v !== undefined).map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(val(v))}</dd>`).join('')}</dl>`;
 const tbl = (headers, rows) => (rows.length
   ? `<table class="nrn-table"><thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>`
   : '<p class="nrn-muted">none</p>');

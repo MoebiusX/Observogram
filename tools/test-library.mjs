@@ -922,7 +922,7 @@ test('findEntry; a missing library root is an error that names it; the package s
 // claims "real values". Clauses above the tier are excluded (not evaluated), never failed; a failing MUST
 // blocks with a reason and a fix, a failing SHOULD never does. View layer only: the verdict is the engine's.
 test('the Conformance screen splits blocking, on-placeholder, passed and not-applicable clauses', async () => {
-  const { readConformance } = await import('../studio/conformance-view.mjs');
+  const { readConformance, passChipHtml } = await import('../studio/conformance-view.mjs');
   const { canonical, todos } = build(byId.kafka, 'tier-2');
   const report = evaluateConformance(canonical);
   const pack = adapt(canonical);
@@ -935,6 +935,10 @@ test('the Conformance screen splits blocking, on-placeholder, passed and not-app
   const plain = readConformance(report, pack);
   assert.equal(plain.placeholderKnown, false);
   assert.equal(plain.passedIsReal, false, 'template values present and no summary: never "Passed with real values"');
+  assert.match(passChipHtml(true), /real values/);
+  assert.doesNotMatch(passChipHtml(false), /real values/, 'a pass the report cannot place never claims real values on hover');
+  assert.match(passChipHtml(false), /does not say whether the pass rests on a real or a template value/);
+  assert.match(passChipHtml(false), /class="ux-chip ux-chip-ok ux-chip-assessment"/);
   assert.ok(plain.groups.notApplicable.length > 0 && plain.groups.notApplicable.every(r => r.applies === false && r.pass === null));
   const broken = JSON.parse(JSON.stringify(canonical));
   broken.spec.validation.synthetic_checks = [];

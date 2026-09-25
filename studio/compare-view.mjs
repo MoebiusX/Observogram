@@ -588,7 +588,7 @@ function paintRequirementBlock(block, pack, model) {
       { key: 'Service', value: meta.service || '' },
       { key: 'Environment', value: meta.environment || state.selectedEnv || '' },
       { key: 'Pack', value: [meta.name || pack?.name, meta.version ? `v${meta.version}` : ''].filter(Boolean).join(' ') },
-      { key: 'Evidence', value: model.live ? 'Live draft' : 'Declared in the pack', title: model.live ? 'Everything in this pack was read from the live platform.' : 'Links are read from the pack’s declarations; a link counts as proven only where a verification stamp confirms it live.' },
+      { key: 'Evidence', value: model.live ? 'Live draft' : 'Declared in the pack', title: model.live ? 'Read from the live platform; a link counts as proven only where the fetcher’s verification stamp confirms it. Placeholders the schema forced are marked as template values.' : 'Links are read from the pack’s declarations; a link counts as proven only where a verification stamp confirms it live.' },
     ],
     tone,
     decision,
@@ -613,13 +613,13 @@ function paintRequirementBlock(block, pack, model) {
   const evidenceRows = [
     ['Metric',
       [ex.metrics.live ? `${ex.metrics.live} seen live` : 'none seen live', ex.metrics.declared ? `${ex.metrics.declared} declared` : ''].filter(Boolean).join(' · '),
-      of(bl.metric.linked), of(bl.metric.proven), 'named in the SLI’s query'],
+      of(bl.metric.linked), of(bl.metric.proven), 'named in the SLI’s query, or matched by name'],
     ['Scrape job',
       ex.scrape.observed ? `${plural(ex.scrape.observed, 'job')} (${ex.scrape.live} observed live, ${ex.scrape.declared} declared)` : 'none',
       of(bl.scrape.linked), of(bl.scrape.proven), 'by job name, or proven when the live inventory reports the metric; a job merely existing is not counted'],
     ['Dashboard',
       plural(ex.dashboards, 'dashboard'),
-      of(bl.dashboard.linked), of(bl.dashboard.proven), 'a panel bound to the SLO or SLI'],
+      of(bl.dashboard.linked), of(bl.dashboard.proven), 'a panel bound to the SLO or SLI, or one that mentions its metrics'],
     ['Alert',
       `${plural(ex.alerts.burnRate, 'burn-rate alert')} · ${plural(ex.alerts.liveRules, 'live rule')}`,
       of(bl.alert.linked), of(bl.alert.proven), 'declared for the SLO, or a matching healthy live rule'],
@@ -1095,9 +1095,12 @@ export function renderBenchmarkView(view) {
   // same lensed comparison digest the drill renders) — nothing re-scores.
   const ctx = diagnoseContext();
   const digest = haveB ? diffDigest(diffSafe, state.packB, lens) : null;
-  // Whichever side is the live draft carries the probe record.
-  const liveEvidence = partialLiveEvidence(liveSidePack(ctx.roles.mode));
-  const decision = buildAssessmentDecision({ diagnostic, digest, roles: ctx.roles, liveEvidence, haveB, baselineName: ctx.b?.name || '' });
+  // The probe record the engine scored "fresh" / "drift-free" from: Pack B's
+  // when it carries mcp.* annotations, otherwise Pack A's — the same rule as
+  // computeDiagnosticGrade, so the sentence and the checks read one record.
+  const liveEvidence = partialLiveEvidence(engineLivePack(state.pack, state.packB));
+  const lensLabel = lens !== 'all' ? (LENS_PRODUCTS.find(lp => lp.slug === lens)?.label || lens) : '';
+  const decision = buildAssessmentDecision({ diagnostic, digest, roles: ctx.roles, liveEvidence, haveB, baselineName: ctx.b?.name || '', lensLabel });
   const parts = renderDiagnosticGradeVerdict(diagnostic);
 
   const report = document.createElement('div');
@@ -2373,7 +2376,11 @@ function renderCompareView(view) {
   if (focus === 'summary') {
     const body = document.createElement('div');
     body.className = 'compare-digest compare-digest-body';
-    body.innerHTML = compareSummaryHtml(digest, cmp, ctx);
+    // Nothing compared: an empty state, not tiles that read "nothing
+    // missing" / "100% overlap" over zero artefacts.
+    body.innerHTML = cmp.empty
+      ? compareNothingComparedHtml(digest, lens)
+      : compareSummaryHtml(digest, cmp, ctx);
     scaffold.appendChild(body);
     // What is being compared, and the controls to change it — after the answer.
     const packsHead = document.createElement('div');
@@ -2396,6 +2403,21 @@ function renderCompareView(view) {
     }
   }
   wireDiagActions(scaffold);
+}
+
+// The empty state for "nothing was compared" (cmp.empty): a warning, never
+// the green "nothing missing / nothing needs review" — zero artefacts
+// compared proves nothing. Shared by the Summary and Review focuses.
+function compareNothingComparedHtml(digest, lens) {
+  return diagUx.emptyStateHtml({
+    title: digest ? 'Nothing to compare in this scope.' : 'No comparison is available for these packs.',
+    checked: digest ? `Every artefact of both packs${lens !== 'all' ? ` inside the ${LENS_PRODUCTS.find(lp => lp.slug === lens)?.label || lens} lens` : ''}, within the current live scope.` : '',
+    body: lens !== 'all'
+      ? 'Clear the product lens or widen the live scope to include more artefacts.'
+      : 'Widen the live scope to include more artefacts.',
+    actions: lens !== 'all' ? [{ label: 'Show all artefacts', action: 'cmp-lens:all' }] : [],
+    tone: 'warn',
+  });
 }
 
 function buildCompareKeySets() {
@@ -3385,7 +3407,7 @@ export function renderComparePicker() {
 function renderCompareSummary(digest, ctx) {
   const t = digest?.totals || { onlyInA: 0, onlyInB: 0, shared: 0, universe: 0 };
   const r = ctx.roles;
-  const overlap = t.universe ? Math.round((t.shared / t.universe) * 100) : 100;
+  const overlap = t.universe ? `${Math.round((t.shared / t.universe) * 100)}%` : '—';
   const wrap = document.createElement('div');
   wrap.className = 'compare-summary';
   wrap.innerHTML = `
@@ -3393,7 +3415,7 @@ function renderCompareSummary(digest, ctx) {
     <div class="compare-cell c-both" title="In both A and B, matched by behaviour"><div class="c-key">shared</div><div class="c-val">${t.shared}</div></div>
     <div class="compare-cell c-b" title="Pack B only"><div class="c-key">${escapeHtml(r.bOnly)}</div><div class="c-val">${t.onlyInB}</div></div>
     <div class="compare-cell c-union" title="Union: A + B without duplicates"><div class="c-key">in either</div><div class="c-val">${t.universe}</div></div>
-    <div class="compare-cell c-jacc"><div class="c-key">${diagUx.termHtml('jaccard', 'overlap')}</div><div class="c-val">${overlap}%</div></div>
+    <div class="compare-cell c-jacc"><div class="c-key">${diagUx.termHtml('jaccard', 'overlap')}</div><div class="c-val"${t.universe ? '' : ' title="Nothing was compared, so there is no overlap to measure"'}>${overlap}</div></div>
   `;
   return wrap;
 }
@@ -3507,6 +3529,13 @@ function liveSidePack(mode) {
   return state.packB;
 }
 
+// The pack whose annotations the diagnostic engine reads as the live record
+// (diagnostic-grade.mjs: Pack B's when it has any mcp.* key, else Pack A's).
+function engineLivePack(packA, packB) {
+  const ann = packB?.meta?.annotations || packB?.metadata?.annotations || {};
+  return Object.keys(ann).some(k => k.startsWith('mcp.')) ? packB : packA;
+}
+
 // "Production curated v0.4.0 (prod)"
 function packLine(p) {
   if (!p) return '';
@@ -3589,7 +3618,7 @@ const CRITERION_COPY = {
 // or mismatched live read undermines every other reading), then coverage.
 const CRITERION_PRIORITY = ['drift-free', 'fresh', 'multi-modal', 'correlated', 'calibrated', 'comprehensive', 'chaos-validated'];
 
-function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck }) {
+function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel = '' }) {
   const copy = CRITERION_COPY[c.key] || { title: `${c.label} is not met`, why: c.sub || '', fix: '' };
   const b = {
     key: c.key, scored: true,
@@ -3613,7 +3642,11 @@ function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerChe
       b.actionId = 'diag-goto:diag-compare';
       if (digest && roles.mode === 'drift') {
         const t = digest.totals;
-        b.observed += ` — ${t.onlyInA} declared, not live · ${t.drifted} changed`;
+        // The engine's detail counts the whole diff; the digest may be
+        // lensed — never print the two side by side unlabelled.
+        b.observed += digest.useLens
+          ? ` — within the ${lensLabel || 'product'} lens: ${t.onlyInA} declared, not live · ${t.drifted} changed`
+          : ` — ${t.onlyInA} declared, not live · ${t.drifted} changed`;
       }
     } else {
       b.fix = 'Choose the live draft as the baseline (Pack B) to see which artefacts differ.';
@@ -3637,13 +3670,17 @@ function criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerChe
 // apparent contradictions, the next action, and the blockers in priority
 // order (what failed → why it matters → fix), the top three of which are
 // the header's causes.
-export function buildAssessmentDecision({ diagnostic, digest = null, roles = compareRoles('gap'), liveEvidence = null, haveB = false, baselineName = '' } = {}) {
+export function buildAssessmentDecision({ diagnostic, digest = null, roles = compareRoles('gap'), liveEvidence = null, haveB = false, baselineName = '', lensLabel = '' } = {}) {
   const overall = diagnostic.overall;
   const audit = overall.audit || diagnosticAuditStatus(overall.passed, overall.total);
   const ig = overall.instrumentGrade || instrumentGradeFor(audit.scorePctExact);
   const passes = !!audit.passes;
   const hasLive = !!diagnostic.trust?.hasMcpSource;
   const vantage = liveEvidence?.vantage || 'none';
+  // "Live evidence backs it" needs probes that answered, not just a refresh
+  // stamp: hasMcpSource is true even when every probe family failed.
+  const liveSeen = hasLive && (vantage === 'full' || vantage === 'restricted');
+  const liveUnknown = hasLive && vantage === 'none';   // refreshed, no probe record
   const scorePct = Math.round(audit.scorePctExact);
   const gradeName = sentenceCase(ig.label);
   const pointsPerCheck = overall.total ? 100 / overall.total : 0;
@@ -3678,7 +3715,7 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
   const noLiveFresh = !hasLive && failing.some(f => f.c.key === 'drift-free') ? failing.find(f => f.c.key === 'fresh') : null;
   for (const { c, lost } of failing) {
     if (noLiveFresh && c.key === 'fresh') continue;
-    const b = criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck });
+    const b = criterionBlocker(c, lost, { hasLive, haveB, digest, roles, pointsPerCheck, lensLabel });
     if (noLiveFresh && c.key === 'drift-free') {
       const both = lost + noLiveFresh.lost;
       b.observed = `${c.detail || ''} · ${noLiveFresh.c.detail || ''}`.replace(/^ · | · $/g, '');
@@ -3716,21 +3753,55 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
         cost: 'Required by the baseline; does not change the grade',
         actionLabel: 'See the changed fields', actionId: 'diag-compare-tab:review',
       });
+    } else if (!failing.some(f => f.c.key === 'drift-free')) {
+      // Drift mode: a failing drift-free check already carries these counts.
+      // When it passes (inside its tolerance, or scored from requirement
+      // chains these artefacts are not on), they still exist — name them.
+      const inLens = digest.useLens ? ` within the ${lensLabel || 'product'} lens` : '';
+      const cost = 'Within the drift-free tolerance, or outside the requirement chains; does not change the grade';
+      if (missing > 0) blockers.push({
+        key: 'live-missing', scored: false, tone: 'warn',
+        title: `${missing} declared ${missing === 1 ? 'artefact is' : 'artefacts are'} not seen live${inLens}`,
+        observed: `the pack declares ${missing === 1 ? 'it' : 'them'}; the live draft has no counterpart`,
+        why: 'The pack promises signals that production may not have.',
+        fix: 'Review them, then deploy what is missing live or update the repository from live.',
+        cost,
+        actionLabel: 'Review differences', actionId: 'diag-goto:diag-compare',
+      });
+      if (t.drifted > 0) blockers.push({
+        key: 'live-drifted', scored: false, tone: 'warn',
+        title: `${t.drifted} shared ${t.drifted === 1 ? 'artefact differs' : 'artefacts differ'} from live${inLens}`,
+        observed: 'same control, different field values',
+        why: 'Thresholds, queries or windows that differ from live may not detect what the pack declares.',
+        fix: 'Compare the changed fields side by side and decide which side is right.',
+        cost,
+        actionLabel: 'See the changed fields', actionId: 'diag-compare-tab:review',
+      });
     }
   }
   const gapCount = blockers.filter(b => b.key !== 'live-evidence').length;
 
   // The one sentence. Plain words first; the formal "diagnostic grade"
   // stays in the details ("How the grade is calculated").
+  const liveClause = !hasLive ? ''
+    : vantage === 'lost' ? 'the live check could not observe anything'
+      : vantage === 'partial' ? 'live evidence is partial'
+        : liveUnknown ? 'what the recorded live refresh observed is unknown'
+          : '';
   const sentence = passes
-    ? `${gradeName}: the pack meets the audit requirement${hasLive ? ' and live evidence backs it' : ''}.`
-    : hasLive
+    ? liveSeen
+      ? `${gradeName}: the pack meets the audit requirement and live evidence backs it.`
+      : `${gradeName}: the pack meets the audit requirement${liveClause ? `, but ${liveClause}` : ''}.`
+    : liveSeen
       ? `${gradeName}: live telemetry exists, but the pack does not meet the audit requirement.`
-      : `${gradeName}: the pack does not meet the audit requirement, and nothing live has been checked.`;
+      : hasLive
+        ? `${gradeName}: the pack does not meet the audit requirement, and ${liveClause || 'what the live check saw is unknown'}.`
+        : `${gradeName}: the pack does not meet the audit requirement, and nothing live has been checked.`;
 
   // Explain apparent contradictions inline, then the distance to the bar.
   const notes = [];
   if (vantage === 'lost') notes.push('A live check ran but could not observe anything, so live results are unknown rather than failed.');
+  else if (liveUnknown) notes.push('A live refresh is recorded, but no probe record says what it observed, so live results are unknown.');
   else if (!passes && hasLive) notes.push('Live signals detected; required evidence is still incomplete.');
   else if (!hasLive) notes.push('No live evidence has been checked; every result rests on what the pack declares.');
   if (vantage === 'partial') notes.push('Some live probes failed, so live evidence is partial and differences may be overstated.');
@@ -3739,7 +3810,7 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
     : `Grade A begins above ${audit.threshold}%; this pack scores ${scorePct}%, ${(audit.threshold - audit.scorePctExact).toFixed(1)} points below.`);
 
   const primary = gapCount > 0
-    ? { label: `Review ${gapCount} required ${gapCount === 1 ? 'gap' : 'gaps'}`, action: 'diag-goto:diag-gaps' }
+    ? { label: `Review ${gapCount}${blockers.some(b => b.key === 'live-missing' || b.key === 'live-drifted') ? '' : ' required'} ${gapCount === 1 ? 'gap' : 'gaps'}`, action: 'diag-goto:diag-gaps' }
     : blockers.length
       ? { label: 'Review the live evidence', action: 'diag-goto:diag-gaps' }
       : { label: 'Review the evidence', action: 'diag-goto:diag-evidence' };
@@ -3748,7 +3819,9 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
   if (haveB && qualityGaps > 0) secondary.push({ label: 'Resolve gaps in Remediate', action: 'diag-remediate' });
 
   return {
-    tone: passes ? 'ok' : (ig.tier === 'd' ? 'fail' : 'warn'),
+    // A pass whose live read saw nothing (or cannot say what it saw) is not
+    // a clean green.
+    tone: passes ? ((vantage === 'lost' || liveUnknown) ? 'warn' : 'ok') : (ig.tier === 'd' ? 'fail' : 'warn'),
     verdict: ig.letter,
     verdictTitle: `${ig.letter} · ${ig.label} — ${ig.blurb || ''}`,
     sentence,
@@ -3756,7 +3829,10 @@ export function buildAssessmentDecision({ diagnostic, digest = null, roles = com
     primary, secondary,
     causes: blockers.slice(0, 3).map(b => ({ title: b.title, why: b.why, actionLabel: b.actionLabel, actionId: b.actionId, tone: b.tone })),
     blockers, gapCount, qualityGaps,
-    passes, hasLive, vantage, ig, audit, scorePct, gradeName,
+    passes, hasLive, liveSeen, vantage, ig, audit, scorePct, gradeName,
+    compared: !!digest && digest.totals.universe > 0, haveB,
+    // A product lens narrows what was compared: "no gaps" then holds inside the lens only.
+    lensed: !!digest?.useLens, lensLabel,
   };
 }
 
@@ -3793,7 +3869,8 @@ function assessmentMeasuresHtml(diagnostic, d) {
   const live = !d.hasLive ? { v: 'Not checked', note: 'connect MCP or scan live to verify', tone: 'warn' }
     : d.vantage === 'lost' ? { v: 'Could not observe', note: 'a live check ran, but no probe family answered', tone: 'warn' }
       : d.vantage === 'partial' ? { v: 'Partial', note: 'some live probes failed', tone: 'warn' }
-        : { v: 'Detected', note: 'a live draft or live refresh backs this read', tone: 'ok' };
+        : d.vantage === 'none' ? { v: 'Refreshed', note: 'no probe record, so what the live check observed is unknown', tone: 'warn' }
+          : { v: 'Detected', note: 'the live probes answered for this read', tone: 'ok' };
   const m = (labelHtml, value, note, tone, title = '') => `
         <div class="ux-measure ux-tone-${tone}"${title ? ` title="${escapeHtml(title)}"` : ''}>
           <dt>${labelHtml}</dt>
@@ -3882,7 +3959,11 @@ function assessmentGapsHtml(d) {
     ? `<ol class="diag-blockers">${items}</ol>`
     : diagUx.emptyStateHtml({
       title: 'No gaps: every scored check passes.',
-      checked: 'The seven scored checks (four for coverage, three for trust) and, with a baseline selected, the artefacts it expects.',
+      checked: d.compared
+        ? (d.lensed
+          ? `The seven scored checks (four for coverage, three for trust) and the artefacts the selected baseline expects within the ${d.lensLabel || 'selected'} lens — artefacts outside the lens were not checked.`
+          : 'The seven scored checks (four for coverage, three for trust) and the artefacts the selected baseline expects.')
+        : `The seven scored checks (four for coverage, three for trust).${d.haveB ? ' No artefact of the baseline could be compared in this scope, so none was checked.' : ''}`,
       tone: 'ok',
     });
   return `
@@ -3950,6 +4031,11 @@ function runDiagAction(id) {
       document.querySelector(`.compare-focus [data-ux-action="cmp-focus:${arg}"]`)?.focus();
       diagUx.announce(`Showing ${({ summary: 'the comparison summary', review: 'changes needing review', all: 'all differences' })[arg] || arg}.`);
       break;
+    case 'cmp-lens':
+      state.compareLens = arg || 'all';
+      appHost.renderMainView();
+      diagUx.announce(arg && arg !== 'all' ? 'Lens applied.' : 'Showing all artefacts: the product lens is cleared.');
+      break;
     case 'cmp-slice':
       state.compareFocus = 'all';
       state.compareSlice = arg;
@@ -3993,6 +4079,34 @@ function openRemediate() {
 export function buildCompareDecision(digest, ctx) {
   const r = ctx.roles;
   const t = digest?.totals || { aligned: 0, drifted: 0, onlyInA: 0, onlyInB: 0, outOfScope: 0, scaffold: 0, shared: 0, universe: 0 };
+  // Nothing compared is not "everything matches": with no usable diff, or
+  // nothing of either pack left in this scope, say what is unknown and
+  // offer the way to widen the scope — never "seen live" / "none missing".
+  if (!digest || !t.universe) {
+    const notes = [];
+    if (!digest) notes.push('No usable comparison is available for these two packs.');
+    else {
+      if (t.scaffold || t.outOfScope) notes.push(`${diagUx.listSentence([
+        t.scaffold ? diagUx.plural(t.scaffold, 'template placeholder') : '',
+        t.outOfScope ? `${diagUx.plural(t.outOfScope, 'live artefact')} outside the declared scope` : '',
+      ])} ${t.scaffold + t.outOfScope === 1 ? 'is' : 'are'} not counted.`);
+      notes.push(digest.useLens
+        ? 'No artefact of either pack falls inside the product lens; clear the lens or widen the live scope.'
+        : 'Widen the live scope to include more artefacts.');
+    }
+    return {
+      sentence: 'Nothing was comparable in this scope, so whether the packs match is unknown.',
+      tone: digest?.useLens ? 'warn' : 'neutral',
+      note: notes.join(' '),
+      primary: digest?.useLens
+        ? { label: 'Show all artefacts', action: 'cmp-lens:all' }
+        : { label: 'Show all differences', action: 'cmp-focus:all' },
+      secondary: [],
+      missing: 0, extras: 0, changed: 0, review: 0, diffs: 0,
+      totals: t,
+      empty: true,
+    };
+  }
   const drift = r.mode === 'drift';
   const missing = drift ? t.onlyInA : t.onlyInB;   // quality gap
   const extras = drift ? t.onlyInB : t.onlyInA;    // structural difference
@@ -4131,14 +4245,16 @@ function compareSummaryHtml(digest, cmp, ctx) {
   if (cmp.extras) sItems.push(`<li class="ux-tone-info"><strong>${cmp.extras}</strong> ${drift ? `live artefact${s(cmp.extras)} not declared (shadow signals)` : `additional artefact${s(cmp.extras)} in the ${escapeHtml(r.aNoun)}`}</li>`);
   if (t.outOfScope) sItems.push(`<li class="ux-tone-muted"><strong>${t.outOfScope}</strong> live artefact${s(t.outOfScope)} outside the declared scope — platform inventory, not counted</li>`);
   if (t.scaffold) sItems.push(`<li class="ux-tone-muted"><strong>${t.scaffold}</strong> template placeholder${s(t.scaffold)} (scaffold) — not counted</li>`);
-  const overlap = t.universe ? Math.round((t.shared / t.universe) * 100) : 100;
+  const overlap = t.universe ? Math.round((t.shared / t.universe) * 100) : null;
   const structuralPanel = `
       <section class="compare-panel ux-tone-info" aria-labelledby="compare-structural-title">
         <h3 class="compare-panel-title" id="compare-structural-title">Structural differences <span class="compare-panel-sub">informational</span></h3>
         ${sItems.length
           ? `<ul class="compare-panel-list">${sItems.join('')}</ul>`
           : '<p class="compare-panel-ok">No structural differences: both packs hold the same artefacts.</p>'}
-        <p class="compare-panel-overlap">${diagUx.termHtml('jaccard', 'Overlap')}: ${overlap}% of all compared artefacts appear in both packs.${overlap < 50 && cmp.extras > cmp.missing ? ' It is low because of the additional artefacts, not because anything is missing.' : ''}</p>
+        <p class="compare-panel-overlap">${overlap == null
+          ? `${diagUx.termHtml('jaccard', 'Overlap')}: not measured, because nothing was compared.`
+          : `${diagUx.termHtml('jaccard', 'Overlap')}: ${overlap}% of all compared artefacts appear in both packs.${overlap < 50 && cmp.extras > cmp.missing ? ' It is low because of the additional artefacts, not because anything is missing.' : ''}`}</p>
       </section>`;
 
   // Per-layer counts: what "36 vs 6" means. The first two columns are every
@@ -4325,7 +4441,7 @@ function renderCompareReview(digest, cmp, ctx) {
       <h2 class="diag-block-title">Changes needing review</h2>
       <p class="diag-block-lede">Quality gaps only: artefacts one side expects and the other lacks, and shared artefacts whose fields changed.</p>
     </header>
-    ${missingHtml || changedHtml ? `${missingHtml}${changedHtml}` : diagUx.emptyStateHtml({
+    ${missingHtml || changedHtml ? `${missingHtml}${changedHtml}` : cmp.empty ? compareNothingComparedHtml(digest, state.compareLens || 'all') : diagUx.emptyStateHtml({
       title: 'Nothing needs review.',
       checked: `${diagUx.plural(cmp.totals.shared, 'shared artefact')} compared field by field, and every ${drift ? 'declared' : r.bNoun} artefact looked for in the ${drift ? 'live pack' : r.aNoun}.`,
       body: cmp.extras ? `${drift ? 'Undeclared live artefacts' : 'The additional artefacts'} (${cmp.extras}) are structural differences and are not listed here.` : '',

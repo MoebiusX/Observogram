@@ -24,7 +24,7 @@ import { host as appHost } from './host.mjs';
 import { layerItemsFor } from './diagnostic-grade.mjs';
 import { clauseGhostLabel } from './build-model.mjs';
 import {
-  decisionHeaderHtml, layerTitle, LAYER_PURPOSE, plural, sectionNavHtml, statusChipHtml, termHtml,
+  decisionHeaderHtml, layerTitle, LAYER_PURPOSE, plural, sectionNavHtml, statusChipHtml, statusRecord, termHtml,
   wireSectionNav, wireUxActions,
 } from './ux-kit.mjs';
 
@@ -175,6 +175,17 @@ function fixLine(r, lead = 'Fix') {
     </div>`;
 }
 
+// The chip on a passed clause. The shared 'pass' tooltip says the clause was
+// met with real values; when the report cannot say that (no onPlaceholder
+// list, and the pack still carries template values) the chip keeps its look
+// but its tooltip says what is unknown instead.
+export function passChipHtml(passedIsReal) {
+  if (passedIsReal) return statusChipHtml('assessment', 'pass');
+  const r = statusRecord('assessment', 'pass');
+  const tip = `${r.propertyLabel} — ${r.question} Met this check. This report does not say whether the pass rests on a real or a template value.`;
+  return `<span class="ux-chip ux-chip-${r.tone} ux-chip-assessment" title="${escapeHtml(tip)}">${escapeHtml(r.label)}</span>`;
+}
+
 function rowHtml(r, kind, model) {
   const tier = tierLabel(model.tier);
   if (kind === 'blocking' || kind === 'recommended') {
@@ -209,7 +220,7 @@ function rowHtml(r, kind, model) {
     const layerTemplates = !model.passedIsReal && model.templates.byLayer[r.dimension];
     return `
       <li class="conf-row" data-group="passed" data-dim="${escapeHtml(r.dimension)}" data-sev="${escapeHtml(r.severity)}">
-        <div class="conf-row-status">${statusChipHtml('assessment', 'pass')}</div>
+        <div class="conf-row-status">${passChipHtml(model.passedIsReal)}</div>
         <div class="conf-row-body">
           <p class="conf-row-title">${escapeHtml(r.name)}</p>
           <p class="conf-row-desc">${escapeHtml(r.description)}</p>

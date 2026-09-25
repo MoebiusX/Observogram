@@ -376,3 +376,37 @@ export function personalName(identity) {
   const first = n.split(/\s+/)[0];
   return ROLE_WORDS.has(first.toLowerCase()) ? '' : first;
 }
+
+// ---------- the home screen's service list ----------
+
+// When each service was last opened in this browser, from its stored JSON.
+// A map with no prototype and only string values: a service keyed
+// "constructor" must read as never opened, not as Object.prototype's function.
+export function parseRecentServices(text) {
+  const out = Object.create(null);
+  let raw;
+  try { raw = JSON.parse(text || '{}'); } catch { return out; }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [k, v] of Object.entries(raw)) if (typeof v === 'string' && v) out[k] = v;
+  return out;
+}
+
+// Most recently opened first, then by label. `opened` is a parseRecentServices map.
+export function orderServicesByRecent(services, opened) {
+  const at = (s) => (Object.hasOwn(opened || {}, s.key) && typeof opened[s.key] === 'string') ? opened[s.key] : '';
+  return [...services].sort((a, b) => at(b).localeCompare(at(a)) || String(a.label).localeCompare(String(b.label)));
+}
+
+// ---------- which clauses pass only on a placeholder ----------
+
+// A registration answer names the clauses that pass only on a placeholder
+// (summary.onPlaceholder); the plain conformance report does not. Re-attach a
+// remembered list to a refetched report only when it was worked out for the
+// same environment — otherwise leave the report without it, and Conformance
+// says it cannot tell which passes rest on placeholders.
+export function withKnownPlaceholderPasses(conformance, known, env) {
+  if (!conformance || Array.isArray(conformance.onPlaceholder)) return conformance;
+  if (!known || !Array.isArray(known.onPlaceholder)) return conformance;
+  if ((known.env || null) !== (env || null)) return conformance;
+  return { ...conformance, onPlaceholder: known.onPlaceholder };
+}

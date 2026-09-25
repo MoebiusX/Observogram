@@ -774,9 +774,11 @@ process.stdout.write('\n--- studio chain reading ---\n');
 
   const repo = readTraceability(adapt(completePack()));
   const repoRow = repo.rows[0];
-  assert(repoRow.stateKey === 'unverified' && !repoRow.links.some((l) => l.key !== 'sli' && l.state === 'proven'),
-         'a repository pack with no live evidence proves nothing past the SLO→SLI reference',
+  assert(repoRow.stateKey === 'unverified' && !repoRow.links.some((l) => l.state === 'proven'),
+         'a repository pack with no live evidence proves nothing, not even its SLO→SLI reference',
          repoRow.links.map((l) => `${l.key}:${l.state}`));
+  assert(repoRow.links.find((l) => l.key === 'sli').state === 'unverified',
+         'a declared-only SLI reads unverified, never proven', repoRow.links.find((l) => l.key === 'sli'));
 
   const jobOnly = clone(completePack());
   jobOnly.metadata.annotations['crawler.discovered.scrape_jobs'] = '["billing-worker"]';
@@ -789,15 +791,80 @@ process.stdout.write('\n--- studio chain reading ---\n');
          'the summary counts the job as existing somewhere, not as linked or proven for the requirement',
          [jobModel.byLink.scrape, jobModel.exists.scrape]);
 
-  const live = clone(completePack());
+  // A live draft proves a link only where the fetcher stamped the artefact
+  // Verified; being in a live draft (mcp.url) is not itself evidence.
+  const liveBase = () => {
+    const p = clone(completePack());
+    Object.assign(p.metadata.annotations, {
+      'mcp.url': 'http://mcp.example',
+      'mcp.discovered.metric_names': '["checkout_latency_seconds_bucket","checkout_latency_seconds_count"]',
+    });
+    return p;
+  };
+  const stamp = '2026-09-01T00:00:00Z';
+  const live = liveBase();
   Object.assign(live.metadata.annotations, {
-    'mcp.url': 'http://mcp.example',
-    'mcp.discovered.metric_names': '["checkout_latency_seconds_bucket","checkout_latency_seconds_count"]',
+    'mcp.verified.slis.checkout_latency': stamp,
+    'mcp.verified.dashboards.checkout-slo': stamp,
+    'mcp.verified.policy.burn_rate_alerts[0]': stamp,
   });
   const liveRow = readTraceability(adapt(live)).rows[0];
-  assert(liveRow.stateKey === 'proven' && ['metric', 'scrape', 'dashboard', 'alert'].every((k) => liveRow.links.find((l) => l.key === k).state === 'proven'),
-         'a live draft whose inventory reports the SLI metric, with a bound panel and a burn-rate alert, is proven end to end',
+  assert(liveRow.stateKey === 'proven' && ['sli', 'metric', 'scrape', 'dashboard', 'alert'].every((k) => liveRow.links.find((l) => l.key === k).state === 'proven'),
+         'a live draft whose inventory reports the SLI metric, with a verified SLI, bound panel and burn-rate alert, is proven end to end',
          liveRow.links.map((l) => `${l.key}:${l.state}`));
+
+  const unstamped = readTraceability(adapt(liveBase())).rows[0];
+  assert(unstamped.stateKey !== 'proven' && ['sli', 'dashboard', 'alert'].every((k) => unstamped.links.find((l) => l.key === k).state === 'unverified'),
+         'a live draft with no verification stamps proves no SLI, dashboard or alert link',
+         unstamped.links.map((l) => `${l.key}:${l.state}`));
+
+  // The fetcher withholds the burn-rate stamp when a rule it maps from is
+  // unhealthy; a rule name that does not match the requirement must not let
+  // the declared alert read as confirmed live.
+  const withheld = liveBase();
+  Object.assign(withheld.metadata.annotations, {
+    'mcp.verified.dashboards.checkout-slo': stamp,
+    'mcp.discovered.alert_rule_names': 'CheckoutBudgetBurnFast',
+    'mcp.discovered.alert_rules_unhealthy': 'CheckoutBudgetBurnFast',
+    'mcp.scaffold.pipelines.exporters.metrics': 'schema-required fallback',
+  });
+  const withheldRow = readTraceability(adapt(withheld)).rows[0];
+  const withheldAlert = withheldRow.links.find((l) => l.key === 'alert');
+  assert(withheldAlert.state === 'unverified' && withheldAlert.items.every((i) => i.evidence !== 'live') && withheldRow.stateKey !== 'proven',
+         'a live draft’s Declared burn-rate alert (stamp withheld) reads unverified, not live', withheldAlert);
+  const scaffoldExporter = withheldRow.links.find((l) => l.key === 'exporter');
+  assert(scaffoldExporter.items.every((i) => i.evidence === 'declared'),
+         'a Scaffold metrics exporter in a live draft is never tagged live evidence', scaffoldExporter.items);
+
+  // One unhealthy window of a multi-window alert keeps it unverified, even
+  // when another matching rule is healthy.
+  const mixed = liveBase();
+  Object.assign(mixed.metadata.annotations, {
+    'mcp.verified.slis.checkout_latency': stamp,
+    'mcp.verified.dashboards.checkout-slo': stamp,
+    'mcp.verified.policy.burn_rate_alerts[0]': stamp,
+    'mcp.discovered.alert_rule_names': 'checkout_latency_99_burn_14x_5m_1h,checkout_latency_99_burn_6x_30m_6h',
+    'mcp.discovered.alert_rules_unhealthy': 'checkout_latency_99_burn_6x_30m_6h',
+  });
+  const mixedRow = readTraceability(adapt(mixed)).rows[0];
+  const mixedAlert = mixedRow.links.find((l) => l.key === 'alert');
+  assert(mixedAlert.state === 'unverified' && mixedAlert.unhealthy === true && /unhealthy/.test(mixedAlert.detail) && mixedRow.stateKey !== 'proven',
+         'a burn-rate alert with one unhealthy matching live rule reads unverified, whatever the healthy ones say', mixedAlert);
+
+  // A template placeholder SLI or SLO (Scaffold) is never a proven link.
+  const scaffoldSli = liveBase();
+  Object.assign(scaffoldSli.metadata.annotations, {
+    'mcp.scaffold.slis.checkout_latency': 'schema-required fallback',
+    'mcp.scaffold.slos.checkout_latency_99': 'schema-required fallback',
+    'mcp.verified.dashboards.checkout-slo': stamp,
+    'mcp.verified.policy.burn_rate_alerts[0]': stamp,
+  });
+  const scaffoldRow = readTraceability(adapt(scaffoldSli)).rows[0];
+  const scaffoldLink = scaffoldRow.links.find((l) => l.key === 'sli');
+  assert(scaffoldLink.state === 'unverified' && scaffoldLink.scaffold === true && scaffoldRow.stateKey !== 'proven'
+         && /placeholder/i.test(scaffoldRow.next?.label || ''),
+         'a Scaffold SLI/SLO reads unverified, keeps the requirement from proven and asks for the real one',
+         [scaffoldLink, scaffoldRow.stateKey, scaffoldRow.next]);
 
   const noDash = clone(completePack());
   delete noDash.spec.dashboards;

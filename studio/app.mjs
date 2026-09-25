@@ -26,7 +26,9 @@ import {
   focusedCompileArtifact, setFocusedCompileArtifact,
 } from './focus.mjs';
 import { escapeHtml, toast, fmtRelative, installDialogFocusTrap, downloadText } from './util.mjs';
-import { personalName, announce } from './ux-kit.mjs';
+import {
+  personalName, announce, parseRecentServices, orderServicesByRecent, withKnownPlaceholderPasses,
+} from './ux-kit.mjs';
 import { renderSchemaView } from './schema-view.mjs';
 import { renderConformanceView } from './conformance-view.mjs';
 import { renderOtlpView } from './otlp-view.mjs';
@@ -181,6 +183,11 @@ async function rehydrateFromPersistence() {
   return true;
 }
 
+// Which clauses pass only on a placeholder, per registered pack id, from the
+// registration answer (the plain /conformance report does not carry it), with
+// the environment the server worked it out for. loadPack re-attaches it.
+const placeholderPassesByPack = new Map();
+
 async function loadPack(id, env) {
   const q = env ? `?env=${encodeURIComponent(env)}` : '';
   const [pack, conformance] = await Promise.all([
@@ -188,7 +195,7 @@ async function loadPack(id, env) {
     api(`/api/packs/${encodeURIComponent(id)}/conformance${q}`),
   ]);
   state.pack = pack;
-  state.conformance = conformance;
+  state.conformance = withKnownPlaceholderPasses(conformance, placeholderPassesByPack.get(id), env);
   state.uploadedSource = null;
   state.symbolTable = buildSymbolTable(pack);
 }
@@ -245,8 +252,13 @@ function isLiveAggregatePack(p) {
   return /\b(live|mcp|production-live|draft-from-mcp)\b/.test(text);
 }
 
-function serviceCatalogue() {
+// `ownOnly` (the home tiles): only the packs in this workspace's catalog —
+// never the bundled reference examples, which are not the user's services
+// and do not open from a tile — and not the service of whatever pack
+// happens to be loaded.
+function serviceCatalogue({ ownOnly = false } = {}) {
   const byKey = new Map();
+  const counted = new Map();
   const add = (name, p) => {
     const key = normalizeServiceKey(name);
     if (!key) return;
@@ -260,6 +272,12 @@ function serviceCatalogue() {
     });
     const item = byKey.get(key);
     if (p) {
+      // A pack names its service more than once (bindings and services[]):
+      // count it once per service.
+      const seen = counted.get(key) || new Set();
+      counted.set(key, seen);
+      if (p.id != null && seen.has(p.id)) return;
+      if (p.id != null) seen.add(p.id);
       if (isLiveAggregatePack(p)) item.liveCount += 1;
       else item.packCount += 1;
       // The home tiles tell services apart by environment and tier.
@@ -267,7 +285,11 @@ function serviceCatalogue() {
       if (p.criticality && !item.tiers.includes(p.criticality)) item.tiers.push(p.criticality);
     }
   };
-  for (const p of [...(state.catalog || []), ...(state._examplesCache || [])]) {
+  const exampleIds = new Set((state._examplesCache || []).map(p => p?.id));
+  const packs = ownOnly
+    ? (state.catalog || []).filter(p => !exampleIds.has(p?.id))
+    : [...(state.catalog || []), ...(state._examplesCache || [])];
+  for (const p of packs) {
     if (!p?.ok) continue;
     const aggregate = isLiveAggregatePack(p);
     const primaryKey = serviceKeyForPack(p);
@@ -278,7 +300,7 @@ function serviceCatalogue() {
     }
   }
   const current = state.pack?.meta?.service;
-  if (current) add(current);
+  if (current && !ownOnly) add(current);
   return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label));
 }
 
@@ -1259,9 +1281,25 @@ function routeTo(id) {
   renderMainView();
 }
 
+// The sticky strips below the context bar (.ux-section-nav, .diag-sticky,
+// .ux-decision.is-sticky) pin at chrome + --ux-context-h. The bar wraps onto
+// more rows on narrow screens and is hidden on home and in Build, so measure
+// it; ux.css holds the single-row default for when this cannot run.
+function trackContextBarHeight() {
+  const bar = document.querySelector('header.hdr');
+  if (!bar || typeof ResizeObserver !== 'function') return;
+  const apply = () => {
+    const h = Math.ceil(bar.getBoundingClientRect().height);
+    document.body.style.setProperty('--ux-context-h', `${h}px`);
+  };
+  new ResizeObserver(apply).observe(bar);
+  apply();
+}
+
 function installObservaChrome() {
   if (document.querySelector('.observa-hdr')) return;
   document.body.classList.add('chrome-observa');
+  trackContextBarHeight();
 
   const hdr = document.createElement('header');
   hdr.className = 'observa-hdr';
@@ -1587,7 +1625,7 @@ function goHome() {
   // you working on?", not the marketing hero. The hero stays for local
   // mode and for true cold starts (no services yet); the gate links to
   // it for "start something new".
-  state.homeVariant = (state.identity?.authenticated && serviceCatalogue().length) ? 'gate' : 'hero';
+  state.homeVariant = (state.identity?.authenticated && serviceCatalogue({ ownOnly: true }).length) ? 'gate' : 'hero';
   applyModeChrome();
   if (state.homeVariant === 'gate') renderServiceGate();
   else renderHomeView();
@@ -1637,8 +1675,8 @@ function homeChoiceHtml({ checkOpen }) {
 // catalogue carries no timestamps, so this is this browser's own record.
 const RECENT_SERVICES_KEY = 'studioRecentServices';
 function recentServices() {
-  try { return JSON.parse(localStorage.getItem(RECENT_SERVICES_KEY) || '{}') || {}; }
-  catch (_) { return {}; }
+  try { return parseRecentServices(localStorage.getItem(RECENT_SERVICES_KEY)); }
+  catch { return parseRecentServices(null); }
 }
 function recordRecentService(key) {
   if (!key) return;
@@ -1673,8 +1711,7 @@ function serviceTileHtml(s, openedAt) {
 // sources a pack can come from (filled in by the caller).
 function homeCheckHtml(services, open) {
   const opened = recentServices();
-  const ordered = [...services].sort((a, b) =>
-    (opened[b.key] || '').localeCompare(opened[a.key] || '') || a.label.localeCompare(b.label));
+  const ordered = orderServicesByRecent(services, opened);
   const anyRecent = services.some(s => opened[s.key]);
   return `
     <div class="home-check" id="home-check"${open ? '' : ' hidden'}>
@@ -1797,23 +1834,26 @@ function updateObservaServiceChip() {
 // service selected, its most recent pack loaded as Pack A, Discover open.
 function enterServiceWorkspace(serviceKey) {
   if (!serviceKey) return;
-  state.selectedService = serviceKey;
-  recordRecentService(serviceKey);
   // Catalog order is oldest→newest (workspace registry order, new
   // registrations appended) — the LAST match is the freshest. Prefer the
-  // declared (non-aggregate) pack; an aggregate live draft is a usable
-  // fallback when it's all the service has.
-  const matches = state.catalog.filter(p => p.ok && packMatchesService(p, serviceKey, { side: 'a' }));
+  // declared (non-aggregate) pack; an aggregate live draft that names the
+  // service is a usable fallback when it's all the service has. A live
+  // snapshot of some other service is never opened as this one's Pack A.
+  const matches = state.catalog.filter(p => p.ok
+    && (serviceKeyForPack(p) === serviceKey || packMatchesService(p, serviceKey, { side: 'a' })));
   const declared = matches.filter(p => !isLiveAggregatePack(p));
-  const pack = declared[declared.length - 1] || matches[matches.length - 1]
-    || state.catalog.filter(p => p.ok && packMatchesService(p, serviceKey, { side: 'b' })).pop();
+  const pack = declared[declared.length - 1] || matches[matches.length - 1];
   if (!pack) {
-    // A service with nothing loadable (e.g. example-derived) — fall back
-    // to the hero so the user can bring a pack in.
-    state.homeVariant = 'hero';
-    renderHomeView();
+    // Nothing loadable for it here: say so, open nothing, and record
+    // nothing — the tile must not then read "Opened".
+    const label = serviceCatalogue().find(s => s.key === serviceKey)?.label || serviceKey;
+    toast(`No pack for ${label} is loaded here yet. Import or scan one under "Import or scan another source".`);
     return;
   }
+  // Record the tile that was clicked: a pack can carry several services (or
+  // be a live aggregate), and enterAnalyzeMode records only its primary one.
+  recordRecentService(serviceKey);
+  state.selectedService = serviceKey;
   enterAnalyzeMode(pack.id, defaultEnvFor(pack.id));
 }
 
@@ -2113,8 +2153,11 @@ function focusAfterRender() {
   const head = /^\.build-slab\[data-layer="([^"]+)"\] \.build-slab-edge$/.exec(buildFocusNext);
   const el = document.querySelector(buildFocusNext)
     || (head ? document.querySelector(`.bres-layer-toggle[data-layer="${head[1]}"]`) : null)
-    || (buildFocusNext.startsWith('.build-sheet ') ? document.querySelector('.build-sheet') : null);
+    || (buildFocusNext.startsWith('.build-sheet ') ? document.querySelector('.build-sheet') : null)
+    || focusFallbackSelectors(buildFocusNextKey).map(sel => document.querySelector(sel)).find(Boolean)
+    || null;
   buildFocusNext = null;
+  buildFocusNextKey = null;
   el?.focus({ preventScroll: true });
   // A rolodex card landed on (a seed chip opened the sheet on its product) is centred in the snap track.
   const card = el?.closest?.('[data-snap-card]');
@@ -2137,6 +2180,17 @@ function refocusBuild(focusKey) {
 // opens and where focus returns when it closes.
 let buildEditorFocus = null;
 let buildEditorOpener = null;
+// The opener's raw focus key: kept so a renamed custom SLI's Edit button is re-keyed, and so a missing opener (the
+// SLI was removed) falls back through focusFallbackSelectors instead of dropping focus to <body>.
+let buildEditorOpenerKey = null;
+let buildFocusNextKey = null;
+/** Focus goes back where the editor was opened from; the key rides along for the fallback. */
+function returnFocusToOpener() {
+  buildFocusNext = editorReturnSelector();
+  buildFocusNextKey = buildEditorOpenerKey;
+  buildEditorOpener = null;
+  buildEditorOpenerKey = null;
+}
 function buildEditorHost() {
   let el = document.getElementById('build-editor-host');
   if (!el) { el = document.createElement('div'); el.id = 'build-editor-host'; document.body.appendChild(el); }
@@ -2434,6 +2488,11 @@ const buildActions = {
     if (JSON.stringify(next) === JSON.stringify(b.custom[i])) { refocusBuild(focusKey); return false; }
     b.custom = b.custom.map((d, j) => (j === i ? next : d));
     if (field === 'id' && b.editor?.custom && b.editor.key === id) b.editor = { ...b.editor, key: next.id };
+    // The Edit button that opened it carries the id in its focus key: follow the rename.
+    if (field === 'id' && buildEditorOpenerKey === `sugg-edit:${id}`) {
+      buildEditorOpenerKey = `sugg-edit:${next.id}`;
+      buildEditorOpener = focusKeySelector(buildEditorOpenerKey);
+    }
     if (live) { b.editorDirty = true; syncBuildEditor(); scheduleBuildInstantiate(); persistence.schedule(); return true; }
     if (focusKey) buildFocusNext = focusKeySelector(focusKey);
     rerenderBuild();
@@ -2446,7 +2505,7 @@ const buildActions = {
     if (!(b.custom || []).some(d => d.id === id)) return;
     b.custom = b.custom.filter(d => d.id !== id);
     // The editor over the SLI just removed closes, focus back where it was opened from.
-    if (b.editor?.custom && b.editor.key === id) { b.editor = null; buildFocusNext = editorReturnSelector(); buildEditorOpener = null; }
+    if (b.editor?.custom && b.editor.key === id) { b.editor = null; returnFocusToOpener(); }
     rerenderBuild();
     scheduleBuildInstantiate(0);
     persistence.schedule();
@@ -2459,6 +2518,7 @@ const buildActions = {
     if (!create && !key) return;
     b.editor = create ? { create: true } : { key, custom: !!custom };
     buildEditorOpener = opener ? focusKeySelector(opener) : null;
+    buildEditorOpenerKey = opener || null;
     // An existing SLI opens on the dialog's first field (Behavior leads; the id is a generated output now).
     buildEditorFocus = focus || (create ? 'name' : 'first');
     rerenderBuild();
@@ -2468,8 +2528,7 @@ const buildActions = {
     if (!b.editor) return;
     b.editor = null;
     b.customDraftErrors = null;
-    buildFocusNext = editorReturnSelector();
-    buildEditorOpener = null;
+    returnFocusToOpener();
     rerenderBuild();
   },
   // The layer sheet: one at a time, remembered on the draft (never persisted); focus
@@ -2545,13 +2604,25 @@ const buildActions = {
     state.mode = 'single';
     state.view = 'layers';
     state.layerFilter = 'all';
-    const env = canonical.metadata?.annotations?.['library.environment'] || defaultEnvFor(id);
+    const annotatedEnv = canonical.metadata?.annotations?.['library.environment'] || null;
+    const env = annotatedEnv || defaultEnvFor(id);
+    // enterAnalyzeMode refetches the pack and its plain conformance report;
+    // keep the placeholder list for it, for the environment the server used.
+    if (Array.isArray(res.summary?.onPlaceholder)) {
+      placeholderPassesByPack.set(id, { env: annotatedEnv, onPlaceholder: res.summary.onPlaceholder });
+    }
     enterAnalyzeMode(id, env);
     paintObservaActiveTab();
     // The hand-off says what the pack now is: the same kind of pack the check journey inspects.
-    const opened = left
-      ? `Opened ${canonical.metadata.name} in Discover — the same kind of pack you inspect and improve there. ${left} placeholder value${left === 1 ? '' : 's'} travel${left === 1 ? 's' : ''} with it as visible gaps (${b.result.todos.length} todo${b.result.todos.length === 1 ? '' : 's'}; ${onPh} clause${onPh === 1 ? '' : 's'} represented on a placeholder).`
-      : `Opened ${canonical.metadata.name} in Discover — the same kind of pack you inspect and improve there. Every placeholder is filled; ${b.result.todos.length} template value${b.result.todos.length === 1 ? '' : 's'} left to complete.`;
+    // Never "every placeholder is filled" while a clause still rests on one or a todo is left.
+    const todosLeft = b.result.todos.length;
+    const gaps = [
+      left ? `${left} placeholder value${left === 1 ? '' : 's'}` : '',
+      onPh ? `${onPh} clause${onPh === 1 ? '' : 's'} passing only on a placeholder` : '',
+      todosLeft ? `${todosLeft} todo${todosLeft === 1 ? '' : 's'} to write or measure` : '',
+    ].filter(Boolean);
+    const opened = `Opened ${canonical.metadata.name} in Discover — the same kind of pack you inspect and improve there. `
+      + (gaps.length ? `It carries ${gaps.length > 1 ? `${gaps.slice(0, -1).join(', ')} and ${gaps[gaps.length - 1]}` : gaps[0]} as visible gaps.` : 'Every value is filled and no clause rests on a placeholder.');
     toast(opened);
     announce(opened);
   },
@@ -2808,7 +2879,7 @@ function renderHomeView() {
 
   // One question, two journeys. The signed-in gate opens on the user's
   // services; the check branch is otherwise remembered from last time.
-  const services = serviceCatalogue();
+  const services = serviceCatalogue({ ownOnly: true });
   const checkOpen = (state.homeVariant === 'gate' && services.length > 0) || homeCheckRemembered();
   view.innerHTML = `
     <section class="home-hero">
@@ -4217,6 +4288,13 @@ function renderDeployManifestTable() {
   const tbody = $('#deploy-manifest-tbody');
   const types = new Set([...document.querySelectorAll('#deploy-type-filters input:checked')].map(i => i.value));
   const rows = (deployModalState.manifest || []).filter(r => types.has(r.type));
+  // The deploy review (compile-view.mjs readDeployReview) says which selected
+  // rows a type filter hides — and so will not deploy — from these counts.
+  const hiddenSelected = {};
+  for (const r of deployModalState.manifest || []) {
+    if (!types.has(r.type) && deployModalState.selected.has(r.key)) hiddenSelected[r.type] = (hiddenSelected[r.type] || 0) + 1;
+  }
+  tbody.dataset.hiddenSelected = JSON.stringify(hiddenSelected);
   if (rows.length === 0) {
     tbody.innerHTML = '<tr><td colspan="5" class="placeholder">No artefacts of the selected types in this pack.</td></tr>';
     updateManifestCounter(0, 0);

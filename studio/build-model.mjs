@@ -971,14 +971,46 @@ export function buildVerifyModel({ build, library, clauses, targets }) {
     // The hand-off — VERIFY's exits (docs/BUILD_JOURNEY.md "Where it starts"; the review's §1: Verify leads to
     // "Open pack in Discover"): resolve or adjust (back at Define), or open the pack in Discover with the gaps
     // visible — they stay on the pack as library.todo.* annotations, so Diagnose grades them as gaps, never as verified.
+    // The gaps are read from readiness, not from the parameter values alone: with every value filled, a clause that
+    // passes only on a placeholder or a todo to write or measure still travels with the pack as a visible gap.
     gaps,
-    continueLabel: gaps > 0 ? 'Open pack in Discover with visible gaps' : 'Open pack in Discover',
-    readyText: gaps > 0
-      ? `The generated pack becomes the same kind of pack you inspect and improve in Discover. Its ${gaps} placeholder value${gaps === 1 ? '' : 's'} travel${gaps === 1 ? 's' : ''} with it as visible gaps — Diagnose grades them as gaps, never as verified.`
-      : 'The generated pack becomes the same kind of pack you inspect and improve in Discover. No placeholder value remains; opening it registers the pack the way an upload is registered.',
+    continueLabel: handoffGaps(gaps, readiness) ? 'Open pack in Discover with visible gaps' : 'Open pack in Discover',
+    readyText: handoffText(gaps, readiness),
     // A stale pack (the last compilation failed) is never handed off: the error stands until the field is fixed.
     canRegister,
   };
+}
+
+/**
+ * What still stands once every value is filled, in words ("4 clauses pass only on placeholders and 3 items remain to
+ * write or measure"), or '' when nothing does: the clauses resting on a placeholder, the todos no value fills and
+ * any other todo left.
+ */
+function stillToComplete(r) {
+  if (!r) return '';
+  const other = r.todos - r.manual;
+  const parts = [
+    r.onPlaceholder && `${plural(r.onPlaceholder, 'clause')} pass${r.onPlaceholder === 1 ? 'es' : ''} only on placeholders`,
+    r.manual && `${plural(r.manual, 'item')} remain${r.manual === 1 ? 's' : ''} to write or measure`,
+    other > 0 && `${plural(other, 'other todo')} remain${other === 1 ? 's' : ''}`,
+  ].filter(Boolean);
+  return parts.length < 2 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
+}
+
+/** Whether the pack goes to Discover with visible gaps: a placeholder value, a todo, a clause on a placeholder, or a rubric not evaluated. */
+function handoffGaps(gaps, r) {
+  return gaps > 0 || !!r?.incomplete || r?.meets == null;
+}
+
+/** VERIFY's hand-off line: what travels with the pack — never "no placeholder remains" while a clause rests on one. */
+function handoffText(gaps, r) {
+  const lead = 'The generated pack becomes the same kind of pack you inspect and improve in Discover.';
+  const graded = 'Diagnose grades them as gaps, never as verified.';
+  if (gaps > 0) return `${lead} Its ${gaps} placeholder value${gaps === 1 ? '' : 's'} travel${gaps === 1 ? 's' : ''} with it as visible gaps — ${graded}`;
+  const rest = stillToComplete(r);
+  if (rest) return `${lead} Every value is filled, but ${rest}; they travel with it as visible gaps — ${graded}`;
+  if (r?.meets == null) return `${lead} The tier rubric is not evaluated yet, so nothing here says the pack meets it; opening it registers the pack the way an upload is registered.`;
+  return `${lead} No placeholder value remains; opening it registers the pack the way an upload is registered.`;
 }
 
 // ---------- COMPILE and VERIFY: what the pack produced, what is ready and what remains ----------
@@ -1153,8 +1185,11 @@ export function verifyDecision(r, { tier = '' } = {}) {
   if (!r.schemaOk) return { sentence: `Blocked: the pack fails the schema in ${plural(r.schemaErrors, 'place')}.`, word: 'Blocked', tone: 'fail', note };
   const failN = r.mustFail || r.failing;
   if (r.meets === false) return { sentence: `Does not meet the ${tier || 'tier'} rubric: ${plural(failN, 'required clause')} fail${failN === 1 ? 's' : ''}.`, word: 'Below tier', tone: 'fail', note };
+  if (r.meets == null) return { sentence: `Not evaluated: the ${tier || 'tier'} rubric has not been checked, so the pack is not ready for deployment.`, word: 'Not evaluated', tone: 'warn', note };
   if (r.incomplete) return { sentence: 'Ready for team completion; not ready for deployment.', word: 'Incomplete', tone: 'warn', note };
   if (r.reviewWarnings) return { sentence: `Complete for ${tier || 'this tier'}; ${r.reviewWarnings === 1 ? 'one warning needs' : `${r.reviewWarnings} warnings need`} review before deployment.`, word: 'Review', tone: 'warn', note };
+  // "Ready" only when readiness says so: any reason left (one this function has no branch for) keeps it at not ready.
+  if (!r.deployable) return { sentence: 'Not ready for deployment.', word: 'Not ready', tone: 'warn', note };
   return { sentence: `Ready for deployment: valid, meets the ${tier || 'tier'} rubric on real values, nothing left to fill.`, word: 'Ready', tone: 'ok', note };
 }
 
@@ -1184,25 +1219,33 @@ export function verifyRemains({ result, checklist, params = [], editors = {}, ac
   });
   const valueGroups = LAYER_DEFS.map(d => ({ layer: d.id, num: d.num, name: d.name, question: LAYER_QUESTIONS[d.id] || '', items: values.filter(v => v.layer === d.id) })).filter(g => g.items.length);
   const manual = todos.filter(t => !(t.params || []).length).map(t => ({ key: `todo:${t.path}`, path: t.path, what: t.what || '', layer: todoLayer(t.path).layer, clauses: t.clauses || [] }));
+  // The clauses that fail at the tier: resolved where the layer is composed (its sheet on COMPILE).
+  const failing = (checklist?.items || []).filter(i => i.state === 'fail').map(i => ({
+    key: `fail:${i.id}`, id: i.id, label: clauseGhostLabel(i.id), description: i.description, severity: i.severity, layer: i.dimension,
+  }));
+  // Nothing is said to remain only when the rubric was read: without the engine's summary, nothing here is known.
+  const evaluated = !!result?.summary;
   return {
-    blocking, warnings, accepted: acceptedItems, clauses, values: { total: values.length, groups: valueGroups }, manual,
-    counts: { blocking: blocking.length, warnings: warnings.length, accepted: acceptedItems.length, clauses: clauses.length, values: values.length, manual: manual.length },
-    empty: !blocking.length && !warnings.length && !clauses.length && !values.length && !manual.length,
+    blocking, warnings, accepted: acceptedItems, failing, clauses, values: { total: values.length, groups: valueGroups }, manual, evaluated,
+    counts: { blocking: blocking.length, warnings: warnings.length, accepted: acceptedItems.length, failing: failing.length, clauses: clauses.length, values: values.length, manual: manual.length },
+    empty: evaluated && !blocking.length && !warnings.length && !failing.length && !clauses.length && !values.length && !manual.length,
   };
 }
 
 /**
  * VERIFY's one primary next action at the actual gate, and the quieter alternatives: fix what blocks the hand-off;
  * else resolve a failing requirement; else complete the required values (the hand-off stays a secondary: the pack
- * may travel with visible gaps); else "Open pack in Discover".
+ * may travel with visible gaps); else "Open pack in Discover" — "with visible gaps" while any gap travels with it.
  */
 export function verifyNext(r, { canRegister = false, remains = null } = {}) {
   if (!r) return { primary: null, secondary: [] };
-  const handoff = { id: 'build-verify-open', label: remains?.values?.total ? 'Open in Discover with visible gaps' : 'Open pack in Discover', action: 'open-discover' };
+  // The hand-off names the gaps whenever any travel with the pack — a value, a todo, a clause on a placeholder.
+  const gaps = remains?.values?.total || r.incomplete || r.meets == null;
+  const handoff = { id: 'build-verify-open', label: gaps ? 'Open in Discover with visible gaps' : 'Open pack in Discover', action: 'open-discover' };
   if (r.blocked) return { primary: { id: 'build-verify-fix', label: 'Fix what blocks the hand-off', action: 'fix-first' }, secondary: [] };
   if (r.meets === false) return { primary: { id: 'build-verify-resolve', label: 'Resolve failing requirements', action: 'resolve-failing' }, secondary: canRegister ? [handoff] : [] };
   if (r.values > 0) return { primary: { id: 'build-verify-complete', label: 'Complete required values', action: 'complete-values' }, secondary: canRegister ? [handoff] : [] };
-  return { primary: canRegister ? { ...handoff, label: 'Open pack in Discover' } : null, secondary: [] };
+  return { primary: canRegister ? handoff : null, secondary: [] };
 }
 
 /** COMPILE's one sentence: a result ("Pack compiled. Two warnings need review; 17 values remain placeholders."). */
@@ -1217,15 +1260,22 @@ export function compileDecision({ result, readiness: r, pending = false, error =
     : r.blocking ? 'Pack compiled, but it must not ship: an SLI expression is not valid PromQL.'
       : !r.schemaOk ? `Pack compiled, but it fails the schema in ${plural(r.schemaErrors, 'place')}.`
         : 'Pack compiled.';
+  // A blocking item (a PromQL warning, a schema error) is in the queue too: the count of the rest says "other".
+  const other = (r.blocking || !r.schemaOk) ? ' other' : '';
   const review = r.reviewWarnings
-    ? `${sentenceCount(r.reviewWarnings)} warning${r.reviewWarnings === 1 ? ' needs' : 's need'} review`
-    : 'No warning needs review';
-  const values = r.values ? `${r.values} value${r.values === 1 ? ' remains a placeholder' : 's remain placeholders'}` : 'every value is filled';
-  const tone = r.blocked || r.meets === false ? 'fail' : (r.reviewWarnings || r.values) ? 'warn' : 'ok';
+    ? `${sentenceCount(r.reviewWarnings)}${other} warning${r.reviewWarnings === 1 ? ' needs' : 's need'} review`
+    : `No${other} warning needs review`;
+  // Every value filled is not the pack complete: a clause on a placeholder or a todo to write or measure is said too.
+  const rest = stillToComplete(r);
+  const values = r.values ? `${r.values} value${r.values === 1 ? ' remains a placeholder' : 's remain placeholders'}`
+    : rest ? `every value is filled, but ${rest}` : 'every value is filled';
+  const unread = r.meets == null ? ' The tier rubric is not evaluated yet.' : '';
+  // Green only when readiness says deployable; anything left — a warning, a gap, the rubric unread — keeps it amber.
+  const tone = r.blocked || r.meets === false ? 'fail' : r.deployable ? 'ok' : 'warn';
   const artefacts = stack?.counts?.artefacts || 0;
   return {
     // The sentence says "compiled"; the verdict chip speaks only when something stops the pack.
-    sentence: `${head} ${review}; ${values}.`, word: r.stale ? 'Previous pack' : r.blocked ? 'Blocked' : '', tone,
+    sentence: `${head} ${review}; ${values}.${unread}`, word: r.stale ? 'Previous pack' : r.blocked ? 'Blocked' : '', tone,
     note: `${plural(artefacts, 'artefact')} on ${stack?.counts?.litSlabs || 0} of ${stack?.counts?.slabs || 0} layers — the same artefacts, ids and titles Discover will show for this pack.`,
   };
 }
@@ -1250,17 +1300,40 @@ export function compileStates(r, stack, tier) {
 
 /**
  * COMPILE's action queue, first on the screen: each warning (and schema error) with the artefact it impacts, a
- * suggested correction and where "Review" opens; then, when placeholder values remain, one row that sends them to
- * VERIFY, where each sits on its layer. Accepted warnings stay off the queue.
+ * suggested correction and where "Review" opens; the failing clauses, when the rubric is not met (to the first one's
+ * layer sheet); then, when placeholder values remain — or, every value filled, clauses on placeholders or todos
+ * remain — one row that sends them to VERIFY, where each sits on its layer. Accepted warnings stay off the queue.
  */
 export function compileQueue({ result, readiness: r, editors = {}, stack = null, accepted = {} }) {
   const items = [...schemaItems(result?.schemaErrors), ...warningItems(result?.warnings || [], { editors, adapted: result?.adapted || null, accepted }).filter(w => !w.accepted)];
+  if (r?.meets === false) {
+    const failing = result?.summary?.failing || [];
+    const failN = r.mustFail || r.failing;
+    const layer = (/^(L\d)\./.exec(String(failing[0]?.id || '')) || [])[1] || 'L1';
+    items.push({
+      key: 'failing', kind: 'failing', label: 'Failing requirements', blocking: false,
+      message: `${plural(failN, 'required clause')} fail${failN === 1 ? 's' : ''} at the tier — the pack does not meet its rubric.`,
+      impact: failing.slice(0, 3).map(c => c.id).join(', ') + (failing.length > 3 ? ' …' : ''),
+      suggestion: 'Switch the section back on, or add what the clause asks for, on its layer.',
+      fix: { kind: 'sheet', layer }, acceptable: false, accepted: null,
+    });
+  }
   if (r?.values) {
     items.push({
       key: 'placeholders', kind: 'placeholders', label: 'Placeholders', blocking: false,
       message: `${plural(r.values, 'value')} ${r.values === 1 ? 'is' : 'are'} still a placeholder — written into the pack so each requirement is represented, but not real.`,
       impact: `${plural(stack?.counts?.scaffold || 0, 'artefact')} with template values · ${plural(r.todos, 'todo')}`,
       suggestion: 'Fill them on Verify, where each value sits on the layer it shapes.',
+      fix: { kind: 'step', step: 'verify' }, acceptable: false, accepted: null,
+    });
+  } else if (r?.onPlaceholder || r?.todos) {
+    // Every value filled is not every requirement real: the clauses on placeholders and the todos go to VERIFY too,
+    // so the queue never reads "Nothing needs review" over a pack that is still incomplete.
+    items.push({
+      key: 'gaps', kind: 'gaps', label: 'Still to complete', blocking: false,
+      message: `Every value is filled, but ${stillToComplete(r)} — represented in the pack, not yet real.`,
+      impact: `${plural(stack?.counts?.scaffold || 0, 'artefact')} with template values · ${plural(r.todos, 'todo')}`,
+      suggestion: 'See them on Verify: each clause with what it rests on, and what to write or measure outside the studio.',
       fix: { kind: 'step', step: 'verify' }, acceptable: false, accepted: null,
     });
   }
@@ -1821,13 +1894,17 @@ export function buildDefinitionModel({ build, library, requirements = {}, checkl
   const check = checklist || buildClauseChecklist(tierClauses, r?.summary || null);
   const k = check.counts;
   const pending = !!build?.pending, error = build?.error || null, stale = isStale(build), ready = !!r, valid = errors.length === 0;
-  const statusKind = pending ? 'pending' : error ? 'error' : !valid ? 'idle' : !ready ? 'pending' : check.conformant ? 'ok' : 'fail';
+  // A MUST clause that passes only on a placeholder keeps the column amber, as VERIFY's "Meets tier rubric" is.
+  const mustOnPlaceholder = check.items.filter(i => i.state === 'placeholder' && i.severity === 'MUST').length;
+  const statusKind = pending ? 'pending' : error ? 'error' : !valid ? 'idle' : !ready ? 'pending' : check.conformant ? (mustOnPlaceholder ? 'warn' : 'ok') : 'fail';
   const status = pending ? 'checking…'
     : error ? (stale ? 'the last compilation failed — showing the previous pack' : 'the last compilation failed')
     : !valid ? 'complete the definition to evaluate'
     : !ready ? 'evaluating…'
-    // Plain words first (the 2026-09 review §4): the formal "conformant" is "meets the tier rubric" — which says nothing of placeholders.
-    : check.conformant ? `meets the ${tier} rubric` : `${plural(k.must.fail, 'MUST clause')} failing`;
+    // Plain words first (the 2026-09 review §4): the formal "conformant" is "meets the tier rubric" — and it says so
+    // when a required clause meets it only on a placeholder.
+    : check.conformant ? (mustOnPlaceholder ? `meets the ${tier} rubric on placeholders — real values still needed` : `meets the ${tier} rubric`)
+    : `${plural(k.must.fail, 'MUST clause')} failing`;
   const seeded = isSeeded(build);
   return {
     name, slug: serviceSlug(name), owners: build?.owners || '', ownerList: parseOwners(build?.owners), environment: build?.environment || 'prod',
@@ -1848,6 +1925,7 @@ export function buildDefinitionModel({ build, library, requirements = {}, checkl
       counts: { pass: k.pass, placeholder: k.placeholder, fail: k.fail, pending: k.pending, total: k.total, must: k.must, should: k.should },
       failing: check.items.filter(i => i.state === 'fail'),
       onPlaceholder: check.items.filter(i => i.state === 'placeholder').length,
+      mustOnPlaceholder,
       todoCount: r?.todos?.length || 0,
       warningCount: r?.warnings?.length || 0,
       blockingWarnings: (r?.warnings || []).filter(w => w.kind === 'promql').length,
