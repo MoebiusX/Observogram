@@ -1308,6 +1308,25 @@ test('purge-org: a removed org\'s files deleted, its legacy_hashes keys dropped,
   await assert.rejects(purge(base, 'acme'), refusedOp(/^org acme was purged already and nothing of it is left at /));
 });
 
+test('purge-org docs: the README and the k8s note say it cannot be undone, what it deletes, and that a store backup holds none of it', () => {
+  const section = (text, heading) => {
+    const at = text.indexOf(heading);
+    assert.notEqual(at, -1, heading);
+    const next = text.indexOf('\n#', at + heading.length);
+    return text.slice(at, next === -1 ? undefined : next).replace(/\s+/g, ' ');
+  };
+  const readme = section(readFileSync(join(HERE, '..', 'README.md'), 'utf8'), '### Purge A Removed Org');
+  const k8s = readFileSync(join(HERE, '..', 'deploy', 'k8s', 'README.md'), 'utf8').replace(/\s+/g, ' ');
+  const note = k8s.slice(k8s.indexOf('`store purge-org <id>`'), k8s.indexOf('### Storage class'));
+  for (const [name, text] of [['README', readme], ['deploy/k8s/README.md', note]]) {
+    assert.match(text, /cannot be undone/, `${name}: irreversible`);
+    assert.match(text, /no confirmation/, `${name}: no prompt`);
+    for (const part of ['deploys.jsonl', 'snapshots/', 'runs/', 'journeys/']) assert.ok(text.includes(part), `${name}: names ${part}`);
+    assert.match(text, /store backup` holds/, `${name}: a store backup does not cover the files`);
+    assert.match(text, /copy `[^`]*orgs\/<id>\/?` .*first/, `${name}: copy the directory first`);
+  }
+});
+
 test('purge-org: refused for a live, default or unknown org, a root that is a symlink, a workspace whose marker names another store, a store in use, no database and :memory: — nothing deleted', async () => {
   const base = await removedOrgDeployment();
   const rows = await read(base, (db) => actions(db).length);

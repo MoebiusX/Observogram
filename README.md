@@ -1027,6 +1027,13 @@ refuses a root that is a symlink or resolves outside `<workspace>/orgs`,
 and a workspace whose marker names another store. The org row stays, so
 its id is never reused.
 
+**The purge cannot be undone and asks for no confirmation.** It deletes
+everything under `orgs/<id>/` at once: the org's packs, its
+`deploys.jsonl` (that org's deploy audit), its rollback `snapshots/`, its
+`runs/` and its `journeys/`. A `packc store backup` holds only the
+database, not these files, so copy `<workspace>/orgs/<id>/` first if any
+of it may be needed again.
+
 ## API Surface
 
 | Method | Path | Purpose |

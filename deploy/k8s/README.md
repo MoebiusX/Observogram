@@ -234,7 +234,10 @@ their rows, roles and owner flag, and sign in again) or with `["node",
 the old OIDC users are disabled; set `OBSERVOGRAM_BOOTSTRAP_ADMIN` in the
 Deployment to name the new owner). Update the issuer in the Deployment and
 scale to 1. `store purge-org <id>` (the files of an org removed with
-`tools/org-admin.mjs remove`) runs the same way.
+`tools/org-admin.mjs remove`) runs the same way; it cannot be undone and
+asks for no confirmation, and it deletes that org's packs, `deploys.jsonl`,
+`snapshots/`, `runs/` and `journeys/`, which no `store backup` holds, so
+copy `/data/workspace/orgs/<id>` off the claim first.
 
 ### Storage class
 
