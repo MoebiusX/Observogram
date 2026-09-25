@@ -385,12 +385,34 @@ test('export: a workspace named while the shell\'s workspace is elsewhere is ref
   const elsewhere = join(tempDir('ops-cwd'), '.observogram');   // OBSERVOGRAM_WORKSPACE unset, another cwd
   const named = (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(`OBSERVOGRAM_WORKSPACE=${base}`);
   await assert.rejects(exportStore(base, { dbPath: dbOf(base), base: elsewhere, out: silent }), named);
+  // The database alone (a store the marker was lost from) tells it too.
+  rmSync(legacy.markerPath(base));
+  await assert.rejects(exportStore(base, { dbPath: dbOf(base), base: elsewhere, out: silent }), named);
   writeFileSync(legacy.markerPath(base), markerBefore);
   assert.equal(existsSync(join(base, 'orgs.json')), false);
   assert.equal(existsSync(join(base, 'users.json')), false);
   assert.equal(existsSync(elsewhere), false);
   assert.ok(existsSync(join(base, 'packs', 'p1.pack.yaml')), 'nothing moved');
   await read(base, (db) => assert.equal(getOrg(db, 'default').root, '.'));
+});
+
+test('export: a workspace its marker was lost from — this store\'s database beside its org data, no users.json — is refused as a directory export, naming the in-place export that works', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice']);
+  await start(base);
+  await change(base, (db) => admin.createOrgFromAdmin(db, 'cli', { id: 'acme', name: 'Acme', admin: 'alice', base }));
+  pack(join(base, 'orgs', 'acme'), 'a1');   // org data only: no flat entry at the base
+  rmSync(join(base, 'users.json'));
+  rmSync(legacy.markerPath(base));
+  const elsewhere = join(tempDir('ops-cwd'), '.observogram');   // OBSERVOGRAM_WORKSPACE unset, another cwd
+  const named = (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(`OBSERVOGRAM_WORKSPACE=${base} to export in place`);
+  await assert.rejects(exportStore(base, { dbPath: dbOf(base), base: elsewhere, out: silent }), named);
+  assert.equal(existsSync(join(base, 'orgs.json')), false);
+  assert.equal(existsSync(join(base, 'users.json')), false);
+  assert.equal(existsSync(elsewhere), false);
+  // The way out, followed literally: the in-place export, and the next start takes what it wrote.
+  assert.equal((await exportStore(base, { dbPath: dbOf(base), base, out: silent })).inPlace, true);
+  await start(base);
 });
 
 test('export: another store\'s workspace is never exported into — the in-place export refuses when the marker names another store, and the directory-export refusal for it names both stores and suggests no write there', async () => {

@@ -58,7 +58,7 @@
 // store's source guard refuses a raw handle call's spelling here.
 
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { baseWorkspacePath } from '../../tools/lib/brand-env.mjs';
 import { parse as parseYaml } from '../../tools/lib/mini-yaml.mjs';
 import { closeStore, openStore, resolveDbPath, tx } from './db.mjs';
@@ -70,7 +70,7 @@ import { listMembers } from './memberships.mjs';
 import { disableOidcRows, listUsers, rewriteLoginPrefix } from './users.mjs';
 import { CLI, canonIssuer, preStoreSub } from './identity.mjs';
 import {
-  MIGRATABLE, lexists, markerPath, orgsFilePath, readMarker, sha256File, usersHashKey, writeMarker, writeOrgsFile, writeUsersFile,
+  MIGRATABLE, hasData, lexists, markerPath, orgsFilePath, readMarker, sha256File, usersHashKey, writeMarker, writeOrgsFile, writeUsersFile,
 } from './legacy-files.mjs';
 
 const MEMORY = ':memory:';
@@ -293,6 +293,17 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
     // without the default org's move.
     // Refused below, once the store id tells this store's workspace from another's.
     if (lexists(markerPath(target))) workspaceNamed = true;
+    // A workspace its marker was lost from: it holds this store's database and workspace data. The database's
+    // directory alone (with backups beside it) is the k8s layout, a plain directory export.
+    else if (realOr(dirname(path)) === realOr(target)) {
+      const data = [...MIGRATABLE.filter((e) => lexists(join(target, e))), ...(hasData(join(target, 'orgs')) ? ['orgs'] : [])];
+      if (data.length) {
+        throw refuse(`${target} is a workspace (it holds ${path} and ${data.map((e) => join(target, e)).join(', ')}; its marker `
+          + `${markerPath(target)} is missing), but the workspace here is ${base} — a directory export into it would write files `
+          + 'without the in-place steps. Nothing was changed. It is this store\'s workspace (it holds this store\'s database): '
+          + `set OBSERVOGRAM_WORKSPACE=${target} to export in place; otherwise choose an empty directory`);
+      }
+    }
     const taken = ['users.json', 'orgs.json'].map((f) => join(target, f)).filter((p) => existsSync(p));
     if (taken.length && !workspaceNamed) throw refuse(`${taken.join(', ')} exist${taken.length === 1 ? 's' : ''} — a directory export never overwrites; choose an empty directory`);
   }

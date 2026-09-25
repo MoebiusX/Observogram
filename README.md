@@ -901,7 +901,11 @@ What the export writes:
   `OBSERVOGRAM_WORKSPACE` is refused: if its marker names this store, set
   `OBSERVOGRAM_WORKSPACE` to it to export in place; if it names another
   store, the refusal names both and the workspace is left alone (point
-  `OBSERVOGRAM_DB` at that workspace's own store to work on it). An
+  `OBSERVOGRAM_DB` at that workspace's own store to work on it). A
+  directory holding the database and workspace data (`packs/`,
+  `deploys.jsonl`, `snapshots/`, `journeys/`, `runs/` or a non-empty
+  `orgs/`) is this store's workspace with its marker lost, and is refused
+  the same way, naming `OBSERVOGRAM_WORKSPACE`. An
   in-place export refuses, changing nothing, when the workspace's marker
   names another store.
 
