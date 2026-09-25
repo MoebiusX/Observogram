@@ -77,3 +77,22 @@ export function removeOrg(db, actor, id) {
     return getOrg(db, id);
   });
 }
+
+// The one offline root change (docs/STORE_PLAN.md §4): the default org's
+// '.' becomes 'orgs/<id>' when its flat entries moved there — the in-place
+// export, and the replace's root change. Only with the server stopped or
+// inside boot step 3 (tenancy.mjs caches roots per handle). An org-level
+// change: the row carries the org's id.
+export function setOrgRoot(db, actor, id, root) {
+  return atomic(db, () => {
+    const org = getOrg(db, id);
+    if (!org || org.removedAt) throw notFound('org', id);
+    if (root !== `orgs/${id}`) {
+      throw new TypeError(`observogram store: an org's root changes only from '.' to 'orgs/${id}', not to ${JSON.stringify(root)}`);
+    }
+    if (org.root === root) return org;
+    prepare(db, 'UPDATE orgs SET root = ? WHERE id = ?').run(root, id);
+    writeAudit(db, actor, { orgId: id, action: 'org.root', targetKind: 'org', targetId: id, detail: { from: org.root, to: root } });
+    return getOrg(db, id);
+  });
+}

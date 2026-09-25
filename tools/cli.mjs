@@ -12,7 +12,7 @@
 //   packc x-ray    <repo-dir>         → tools/crawl-repo.mjs
 //   packc compile  <file> [target]    → tools/lib/compile.mjs (programmatic)
 //   packc init     …                  → tools/pack-init.mjs (build a pack from the library)
-//   packc store    backup|restore …   → tools/store-admin.mjs (back up / restore the embedded store)
+//   packc store    backup|restore|export … → tools/store-admin.mjs (back up / restore / export the embedded store)
 //   packc serve                       → server/index.mjs (boots the studio)
 //   observogram                       → same as `serve`
 //
@@ -121,6 +121,7 @@ Usage:
   packc journey  list             List saved journeys + their last outcome
   packc store    backup <path>    Write a consistent copy of the store (safe while the server runs)
   packc store    restore <backup> Replace the store with a backup (server stopped; old files moved aside)
+  packc store    export <dir>     Write users.json / orgs.json a pre-store build boots on (<dir> = the workspace: in place, server stopped)
   packc serve                     Boot the studio (Express server)
   observogram                     Same as \`packc serve\`
 
