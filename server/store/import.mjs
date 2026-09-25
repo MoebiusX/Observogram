@@ -270,7 +270,10 @@ export function planImport(db, legacy, ctx, migration) {
   report.orgs.imported = plannedOrgs.map((o) => ({ id: o.id, root: o.root }));
   report.memberships.imported = memberships.length;
   report.owners = users.filter((u) => u.isOwner).map((u) => u.login);
-  report.noOwner = report.owners.length === 0 && !listUsers(db).some((u) => u.isOwner && !u.disabled);
+  // Owners the store already has (a CLI-created owner): the boot line names
+  // them too, so a kept owner never reads as "(none)".
+  report.ownersKept = listUsers(db).filter((u) => u.isOwner && !u.disabled && !report.owners.includes(u.login)).map((u) => u.login);
+  report.noOwner = report.owners.length === 0 && report.ownersKept.length === 0;
   report.oidcJoinRole = joinRole;
   report.identityArmed = legacy.users.exists || getMeta(db, 'identity_armed') === '1';
 
@@ -326,6 +329,11 @@ export function applyImport(db, plan, ctx) {
 
 const q = (v) => (typeof v === 'string' ? `'${v}'` : JSON.stringify(v ?? null));
 
+function ownersText(r) {
+  const all = [...r.owners, ...(r.ownersKept ?? []).map((login) => `${login} (kept)`)];
+  return all.length ? all.join(', ') : '(none)';
+}
+
 export function formatReport(r) {
   const out = [];
   const usersPart = r.files.users.present ? `${r.files.users.path} (${r.users.fromUsersFile} users)` : 'no users file';
@@ -334,7 +342,7 @@ export function formatReport(r) {
     : `no orgs.json (${r.orgs.imported.length} org, ${r.memberships.imported} memberships)`;
   out.push(`[store] imported ${usersPart} and ${orgsPart} into ${r.dbPath} (store ${r.storeId})`);
   const def = r.orgs.imported.find((o) => o.id === r.orgs.defaultOrg);
-  out.push(`[store]   default org ${r.orgs.defaultOrg ?? '(none)'}${def ? ` (${def.root})` : r.orgs.defaultOrgKept ? ' (kept as the store records it)' : ''}; owners: ${r.owners.length ? r.owners.join(', ') : '(none)'}`);
+  out.push(`[store]   default org ${r.orgs.defaultOrg ?? '(none)'}${def ? ` (${def.root})` : r.orgs.defaultOrgKept ? ' (kept as the store records it)' : ''}; owners: ${ownersText(r)}`);
   if (r.migration.skipped) {
     out.push(`[store]   flat workspace not moved: store ${r.storeId} already keeps the default org at . (initialised by a CLI before this first start)`);
   }

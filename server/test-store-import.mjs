@@ -685,6 +685,8 @@ test('Import: a CLI-initialised store — the existing alice kept (password, epo
     assert.deepEqual(report.orgs.conflicts, [{ id: 'default', reason: 'kept the existing org' }]);
     assert.deepEqual([metaOf(db, 'default_org'), report.orgs.defaultOrg, report.orgs.defaultOrgKept], ['default', 'default', true]);
     assert.deepEqual(report.owners, ['bob']);
+    assert.deepEqual(report.ownersKept, ['alice']);
+    assert.equal(formatReport(report)[1], '[store]   default org default (kept as the store records it); owners: bob, alice (kept)');
     assert.deepEqual(importAudit(db).slice(before.length), ['store.import']);
   } finally {
     close();
@@ -1093,6 +1095,8 @@ test('bootStore on a CLI-initialised store, then an orgs.json { acme } and flat 
     assert.deepEqual(rowsOf(r.db).orgs, [['default', 'Default', '.'], ['acme', 'Acme', 'orgs/acme']]);
     assert.deepEqual([orgRootOf('default', r.db), orgRootOf('acme', r.db)], ['.', 'orgs/acme']);
     assert.ok(r.logs.includes(`[store]   flat workspace not moved: store ${meta.storeId(r.db)} already keeps the default org at . (initialised by a CLI before this first start)`), r.logs.join('\n'));
+    // upgrade-import-report-owners-none-when-kept: the CLI-created owner is named, not "(none)".
+    assert.ok(r.logs.includes('[store]   default org default (kept as the store records it); owners: alice (kept)'), r.logs.join('\n'));
   } finally {
     closeBase(base);
   }
