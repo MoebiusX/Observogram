@@ -120,6 +120,21 @@ function userFor(db, actor, target, { shellIssuerRaw }) {
 
 const enabledOwnerCount = (db) => prepare(db, 'SELECT count(*) AS n FROM users WHERE is_owner = 1 AND disabled = 0').get().n;
 
+// The store's recorded sign-in mode: OIDC under the recorded issuer key
+// when one is recorded, else local. An owner who cannot sign in under it
+// (a local owner on an OIDC store, an OIDC owner of another issuer) does
+// not keep the web-usable owner set alive.
+function recordedMode(db) {
+  const issuerKey = getMeta(db, 'oidc_issuer');
+  return issuerKey ? { mode: 'oidc', issuerKey } : { mode: 'local' };
+}
+
+function signsInUnder(row, { mode, issuerKey }) {
+  if (row.disabled || !row.isOwner) return false;
+  if (mode === 'local') return row.kind === 'local' && row.password !== null && row.password !== undefined;
+  return row.kind === 'oidc' && row.login.startsWith(`${issuerKey}#`);
+}
+
 // ---------- users ----------
 
 // The read-only refusals of `users -- add`, so the CLI can run them before
@@ -139,10 +154,13 @@ export function checkAddLocalUser(db, { login, role, orgId = null }) {
   return { role: parsedRole, orgId: orgId ?? null };
 }
 
-// → { user, owner, joined: [{ orgId, role }], armed }. `password` is the
-// plain text; it is hashed before the transaction opens. The first local
-// user created while no enabled local owner exists becomes the owner and
-// admin of the default org, whatever --role says (A-16).
+// → { user, owner, ownerWithheld, joined: [{ orgId, role }], armed }.
+// `password` is the plain text; it is hashed before the transaction opens.
+// The first local user created while no enabled local owner exists becomes
+// the owner and admin of the default org, whatever --role says (A-16) —
+// unless the store records an OIDC issuer: a local user cannot sign in
+// there, so owner would only let the last OIDC owner be disabled. Then
+// `ownerWithheld` says why (null otherwise).
 export function addLocalUser(db, actor, { login, name = null, email = null, password, role, orgId = null, via = 'cli' }) {
   checkAddLocalUser(db, { login, role, orgId });
   if (typeof password !== 'string' || password === '') refuse('a password is required');
@@ -150,7 +168,12 @@ export function addLocalUser(db, actor, { login, name = null, email = null, pass
   return atomic(db, () => {
     const { role: parsedRole } = checkAddLocalUser(db, { login, role, orgId });
     const defaultOrg = ensureDefaultOrg(db, actor);
-    const owner = signInOwnerCount(db, { mode: 'local' }) === 0;
+    const recordedIssuer = getMeta(db, 'oidc_issuer');
+    const noLocalOwner = signInOwnerCount(db, { mode: 'local' }) === 0;
+    const owner = noLocalOwner && !recordedIssuer;
+    const ownerWithheld = noLocalOwner && recordedIssuer
+      ? `this store records OIDC issuer ${recordedIssuer} and local users cannot sign in under it — grant owner to an IdP user with npm run users -- owner <login>`
+      : null;
     let user = createUser(db, actor, { kind: 'local', login, name, email, password: hashed });
     const joined = [];
     if (owner) {
@@ -164,7 +187,7 @@ export function addLocalUser(db, actor, { login, name = null, email = null, pass
     }
     let armed = false;
     if (!isIdentityArmed(db)) { setMeta(db, actor, 'identity_armed', '1'); armed = true; }
-    return { user, owner, joined, armed };
+    return { user, owner, ownerWithheld, joined, armed };
   });
 }
 
@@ -179,7 +202,8 @@ export function setLocalPassword(db, actor, login, password) {
 }
 
 // Users are never deleted (the audit references them): disabling bumps the
-// epoch and keeps the memberships. The last enabled owner stays.
+// epoch and keeps the memberships. The last enabled owner stays, and so
+// does the last owner who can sign in under the store's recorded mode.
 export function disableUser(db, actor, login) {
   return atomic(db, () => {
     const row = getUserByLogin(db, login);
@@ -187,6 +211,11 @@ export function disableUser(db, actor, login) {
     if (row.disabled) return row;
     if (row.isOwner && enabledOwnerCount(db) === 1) {
       refuse(`${login} is the last enabled owner — grant another owner first (npm run users -- owner <login>)`);
+    }
+    const mode = recordedMode(db);
+    if (signsInUnder(row, mode) && signInOwnerCount(db, mode) === 1) {
+      const how = mode.mode === 'oidc' ? `through OIDC issuer ${mode.issuerKey}` : 'with a local password';
+      refuse(`${login} is the last owner who can sign in ${how} — grant another owner first (npm run users -- owner <login>)`);
     }
     return setDisabled(db, actor, row.id, true);
   });

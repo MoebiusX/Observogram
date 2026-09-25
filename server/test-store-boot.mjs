@@ -807,6 +807,10 @@ test('CLI: the first local user on an OIDC store with no users file is told only
   const c = cli(USER_ADMIN, ['add', 'alice', '--org', 'acme', '--password-stdin'], ws, { input: 'alice-passw0rd\n' });
   assert.equal(c.status, 0, c.stderr);
   assert.ok(c.stdout.includes('local users cannot sign in while OIDC is configured'), c.stdout);
+  // sec-3: no A-16 owner on a store that records an OIDC issuer, and the output says why.
+  assert.ok(c.stdout.includes(`alice is created without owner: this store records OIDC issuer ${KEY}`), c.stdout);
+  assert.ok(!c.stdout.includes('is the first local user'), c.stdout);
+  await inspectWs(ws, (v) => assert.ok(!v.roles('alice').includes('default:admin')));
   // Under OIDC anonymous reads already answered 401 and /auth/login is not a local sign-in.
   assert.ok(!c.stdout.includes('anonymous reads now answer 401') && !c.stdout.includes('stand-alone sign-in is armed'), c.stdout);
 });

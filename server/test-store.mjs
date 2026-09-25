@@ -2031,6 +2031,37 @@ test('identity-admin passwd, remove and owner: a local password bumps the epoch;
   }
 });
 
+test('identity-admin sec-3: on an OIDC store the first local user is not made owner, and the last owner who can sign in under the recorded mode cannot be disabled', async () => {
+  const { db, close } = await freshStore('admin-signin-owner');
+  try {
+    // A local owner from before OIDC was configured, then the store records an issuer.
+    admin.addLocalUser(db, 'cli', { login: 'alice', password: 'pw123456' });
+    meta.setMeta(db, 'system', 'oidc_issuer', KEY);
+    const claims = (over = {}) => identity.sanitiseClaims({ sub: 'boss', iss: 'https://idp.example', email: 'boss@example.test', email_verified: true, ...over }, KEY);
+    const bootstrap = identity.parseBootstrapAdmin('boss@example.test');
+    const boss = identity.oidcSignIn(db, { issuerKey: KEY, issuerDisplay: 'https://idp.example', claims: claims(), bootstrap }).user;
+    assert.equal(boss.isOwner, true);
+    // alice cannot sign in under OIDC: she does not keep boss disable-able.
+    assert.throws(() => admin.disableUser(db, 'cli', boss.login),
+      refused(`${boss.login} is the last owner who can sign in through OIDC issuer ${KEY} — grant another owner first (npm run users -- owner <login>)`));
+    assert.equal(admin.disableUser(db, 'cli', 'alice').disabled, true, 'a local owner on an OIDC store may go');
+    // A-16 is withheld while the store records an issuer.
+    const ops = admin.addLocalUser(db, 'cli', { login: 'ops', password: 'pw123456' });
+    assert.deepEqual([ops.owner, ops.user.isOwner, ops.joined], [false, false, [{ orgId: 'default', role: 'operator' }]]);
+    assert.match(ops.ownerWithheld, /records OIDC issuer .* local users cannot sign in under it/);
+    assert.throws(() => admin.disableUser(db, 'cli', boss.login), refused(/is the last enabled owner/));
+    // So BOOTSTRAP_ADMIN never comes back into effect for another IdP account with that email.
+    const mallory = identity.oidcSignIn(db, { issuerKey: KEY, issuerDisplay: 'https://idp.example', claims: claims({ sub: 'mallory', email: 'BOSS@example.test' }), bootstrap });
+    assert.equal(mallory.granted, false);
+    assert.equal(mallory.user.isOwner, false);
+    // A second OIDC owner lets the first go.
+    admin.grantOwnerByLogin(db, 'cli', `${KEY}#carol`);
+    assert.equal(admin.disableUser(db, 'cli', boss.login).disabled, true);
+  } finally {
+    close();
+  }
+});
+
 test('identity-admin resolveLogin: its five cases, and a shell issuer that differs from the recorded one', async () => {
   const { db, close } = await freshStore('admin-resolve');
   try {

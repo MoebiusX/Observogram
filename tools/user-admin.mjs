@@ -13,7 +13,8 @@
  *   npm run users -- list
  *   npm run users -- owner <login|sub|issuer#sub>
  *
- * The first local user becomes the owner and admin of the default org, and
+ * The first local user becomes the owner and admin of the default org (not
+ * on a store that records an OIDC issuer: it is created without owner), and
  * arms stand-alone sign-in on a running server (no restart needed); once
  * armed it stays armed. `remove` disables (users are never deleted: the
  * audit references them); `enable` undoes it, except for a row still holding
@@ -112,6 +113,7 @@ async function main() {
       const org = r.joined[0]?.orgId;
       console.log(`${r.user.login} is the first local user: owner, and admin of org ${org}${role !== undefined ? ' (--role ignored)' : ''}`);
     }
+    if (r.ownerWithheld) console.log(`${r.user.login} is created without owner: ${r.ownerWithheld}`);
     // Under OIDC anonymous reads already answer 401 and local users cannot
     // sign in: arming changes nothing a user of this posture would see.
     const oidc = shellIssuerRaw() || getMeta(db, 'oidc_issuer');
