@@ -743,6 +743,58 @@ test('in place: a corrupt marker refuses naming it — the directory export\'s w
   await start(c1);
 });
 
+test('in place: with no marker, only a workspace holding this store\'s database is exported in place — a directory that does not exist, an unrelated one and a workspace whose database lives outside it are refused, nothing written; the k8s way out (start once, export) works', async () => {
+  const root = tempDir('ops-k8s2');
+  const ws = join(root, 'workspace');
+  const dbDir = join(root, 'db');
+  mkdirSync(ws);
+  mkdirSync(dbDir);
+  const dbPath = join(dbDir, 'observogram.db');
+  usersJson(ws, ['alice']);
+  pack(ws, 'p');
+  const at = async (fn) => { const db = await openStore({ path: dbPath }); try { return fn(db); } finally { closeStore(dbPath); } };
+  await start(ws, { OBSERVOGRAM_DB: dbPath });
+  const id = await at((db) => meta.storeId(db));
+  const hashes = () => at((db) => JSON.stringify(meta.getMetaJson(db, 'legacy_hashes', {})));
+  const before = await hashes();
+  // A workspace that does not exist.
+  const gone = join(root, 'nowhere');
+  await assert.rejects(exportStore(gone, { dbPath, base: gone, out: silent }),
+    (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(`the workspace ${gone} does not exist`));
+  assert.equal(existsSync(gone), false);
+  // An unrelated directory with no marker and no database: not provably this store's.
+  const junk = join(root, 'junk');
+  mkdirSync(junk);
+  writeFileSync(join(junk, 'notes.txt'), 'x');
+  await assert.rejects(exportStore(junk, { dbPath, base: junk, out: silent }),
+    (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(`${legacy.markerPath(junk)} is missing and ${dbPath} lives outside ${junk}`));
+  assert.deepEqual(readdirSync(junk), ['notes.txt']);
+  // This store's own workspace (k8s layout) with its marker lost: refused the same way, nothing written.
+  rmSync(legacy.markerPath(ws));
+  await assert.rejects(exportStore(ws, { dbPath, base: ws, out: silent }),
+    (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED'
+      && e.message.includes(`If ${ws} is this store's workspace, start the server once with OBSERVOGRAM_WORKSPACE=${ws} and OBSERVOGRAM_DB=${dbPath}`));
+  assert.ok(existsSync(join(ws, 'packs', 'p.pack.yaml')), 'nothing moved');
+  assert.equal(await hashes(), before, 'legacy_hashes untouched by the refusals');
+  // The way out, followed: one start rewrites the marker; the export then runs in place.
+  await start(ws, { OBSERVOGRAM_DB: dbPath });
+  assert.equal(legacy.readMarker(ws).storeId, id);
+  assert.equal((await exportStore(ws, { dbPath, base: ws, out: silent })).inPlace, true);
+});
+
+test('export: with no workspace at the default path, the refusal of a directory holding it names no in-place export there', async () => {
+  const root = tempDir('ops-nows');
+  const a = join(root, 'A');
+  mkdirSync(a);
+  usersJson(a, ['alice']);
+  await start(a);
+  const missing = join(root, 'cwd', '.observogram');
+  await assert.rejects(exportStore(root, { dbPath: dbOf(a), base: missing, out: silent }),
+    (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(`holds the workspace ${missing}`)
+      && !e.message.includes(`packc store export ${missing}`) && e.message.includes('Choose an empty directory outside the workspace'));
+  assert.equal(existsSync(missing), false);
+});
+
 test('in place: a failure after the move puts everything back', async () => {
   const base = tempDir();
   usersJson(base, ['alice']);

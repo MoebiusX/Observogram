@@ -284,9 +284,10 @@ function exportDirectory(target, base) {
   const b = realOr(base);
   const inside = t.startsWith(b + sep);
   if (t === b || inside || b.startsWith(t.endsWith(sep) ? t : t + sep)) {
+    // The in-place way out is named only for a workspace that exists: the default <cwd>/.observogram may not.
+    const inPlaceWay = existsSync(base) ? `To export in place, stop the server and run packc store export ${base}; otherwise choose` : 'Choose';
     throw refuse(`${named(into)} ${t === b ? 'is' : inside ? 'lies inside' : 'holds'} the workspace ${base} — a directory export there `
-      + `would write files without the in-place steps. Nothing was changed. To export in place, stop the server and run `
-      + `packc store export ${base}; otherwise choose an empty directory outside the workspace`);
+      + `would write files without the in-place steps. Nothing was changed. ${inPlaceWay} an empty directory outside the workspace`);
   }
   if (!st) return into;
   if (!st.isDirectory()) throw refuse(`${named(into)} exists and is not a directory. Nothing was changed. Choose an empty or new directory`);
@@ -340,6 +341,7 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
   const inPlace = realOr(target) === realOr(base);
   let into = target;   // where a directory export writes: the target, or the directory its symlink resolves to
   if (inPlace) {
+    if (!existsSync(base)) throw refuse(`the workspace ${base} does not exist — an in-place export works on an existing workspace. Nothing was changed. Check OBSERVOGRAM_WORKSPACE, or choose an empty or new directory for a directory export`);
     await assertNotInUse(path, { doing: 'an in-place export' });
   } else {
     into = exportDirectory(target, base);
@@ -353,15 +355,28 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
       // store's users, orgs and marker over it.
       const mp = markerPath(base);
       const marker = readMarker(base, { tail: 'nothing was changed. The store writes this file: with the server stopped, move it '
-        + `aside (mv ${mp} ${mp}.corrupt), then run the export again — with no marker, it checks the workspace's databases instead `
-        + 'and writes a new marker' });
+        + `aside (mv ${mp} ${mp}.corrupt), then run the export again (with no marker, a database that lives outside the `
+        + 'workspace needs one start of the server on the workspace first, which rewrites the marker)' });
       if (marker && marker.storeId !== id) {
         throw refuse(`${mp} names store ${marker.storeId}, but ${path} holds store ${id}: the workspace ${base} `
           + `is not this store's, and an in-place export would write store ${id}'s files over it. Nothing was changed. To export `
           + `that workspace, point OBSERVOGRAM_DB at its own store (store ${marker.storeId}); to export store ${id}, choose an empty `
           + 'or new directory');
       }
-      if (!marker) await assertNoOtherStore(base, path, id);
+      if (!marker) {
+        // No marker: the workspace is this store's only if its database lives in it (and no other store's does).
+        // A database elsewhere proves nothing about the directory — an empty or unrelated one would pass, and the
+        // export would record that directory's files as this store's legacy files.
+        await assertNoOtherStore(base, path, id);   // the more specific refusal first: it names the other store
+        const own = realOr(path);
+        const b = realOr(base);
+        if (!own.startsWith(b + sep)) {
+          throw refuse(`${mp} is missing and ${path} lives outside ${base}: the workspace ${base} is not known to be store ${id}'s. `
+            + `Nothing was changed. If ${base} is this store's workspace, start the server once with OBSERVOGRAM_WORKSPACE=${base} `
+            + `and OBSERVOGRAM_DB=${path} (the start rewrites the marker), stop it, then run the export again; otherwise choose an `
+            + 'empty or new directory for a directory export');
+        }
+      }
     }
     const plan = planExport(db, { inPlace, target: into, base });
     if (!inPlace) {

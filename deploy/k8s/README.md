@@ -234,7 +234,9 @@ org's journey CronJob at `/workspace/orgs/default` (see Tenancy below).
 If the phase never reaches `Succeeded`, `kubectl logs` shows the refusal
 (something still holds the database, an `orgs/default/` entry already
 exists, or the workspace is not provably this store's: its marker, or a
-database in it, names another store).
+database in it, names another store, or the marker is missing — the
+database lives outside the workspace here, so start the studio once to
+rewrite it, then run the export again).
 
 To read the files first without touching the workspace, a directory export
 from the running studio writes them to a new directory on the store claim.

@@ -894,9 +894,12 @@ What the export writes:
   store takes the edits in, then export again.
 - An in-place export also proceeds only into a workspace that is provably
   this store's: its `.store-imported` marker names this store, or there is
-  no marker and no other store's database is in it (every `*.db` directly
-  in the workspace or its `db/`, `observogram.db` among them, is opened
-  read-only). A marker naming another store, or such a database holding
+  no marker, this store's database lives inside the workspace and no other
+  store's database is in it (every `*.db` directly in the workspace or its
+  `db/`, `observogram.db` among them, is opened read-only). With no marker
+  and the database outside the workspace (the k8s layout), it refuses: start
+  the server once on that workspace, which rewrites the marker, then export.
+  A workspace that does not exist is refused. A marker naming another store, or such a database holding
   another store, is refused naming both stores and the command that
   exports that workspace's own store; a `*.db` that cannot be read is
   refused naming it (move it out, then export again). A corrupt marker is

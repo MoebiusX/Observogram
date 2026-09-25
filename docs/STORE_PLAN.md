@@ -831,8 +831,11 @@ byte-level round trip.
   last import or export) is refused naming `packc store import --replace`,
   never overwritten: it holds the only copy of those edits.
 - **In place only into this store's workspace.** It proceeds only when
-  the marker names this store, or there is no marker and no other store's
-  database is in the workspace: every `*.db` directly in `<base>` and
+  the marker names this store, or there is no marker, this store's
+  database lives inside the workspace and no other store's database is in
+  it (with the database outside, as in k8s, a missing marker refuses: one
+  start on the workspace rewrites it; a workspace that does not exist
+  refuses too): every `*.db` directly in `<base>` and
   `<base>/db` (`<base>/observogram.db`, the default path, among them) is
   opened read-only without migrating, and one holding another `store_id`
   refuses naming it, as does one that cannot be read. A corrupt marker
