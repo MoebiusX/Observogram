@@ -6,6 +6,9 @@
 //   planImport(db, legacy, ctx, migration)    reads only: the rows, the meta and the report
 //   applyImport(db, plan, ctx)                one tx(): the rows, the meta, ONE store.import audit row
 //   formatReport(report)                      the boot log lines
+//   planReplace / applyReplace / formatReplace  the same for `packc store
+//                                             import --replace`, carried out
+//                                             by the next start (below)
 //
 // The boot plans twice: before anything moves (plan1: validation, and the
 // org count its checks refuse on) and after the flat-workspace migration
@@ -18,18 +21,20 @@
 // `ctx` is the boot context: { base, now, dbPath, identityMode ('local' |
 // 'oidc'), issuerRaw, issuerKey, usersFileEnv, joinRoleEnv }.
 
+import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tx } from './db.mjs';
 import { writeAudit } from './audit.mjs';
-import { getMeta, putMeta, storeId } from './meta.mjs';
-import { getOrg, insertOrgRow, listOrgs } from './orgs.mjs';
-import { insertMembershipRow } from './memberships.mjs';
-import { getUserByLogin, insertUserRow, listUsers } from './users.mjs';
+import { getMeta, getMetaJson, putMeta, storeId } from './meta.mjs';
+import { getOrg, insertOrgRow, listOrgs, removeOrgRow, renameOrgRow, setOrgRoot } from './orgs.mjs';
+import { deleteMembershipRow, insertMembershipRow, listMembers, setRoleRow } from './memberships.mjs';
+import { getUserByLogin, insertUserRow, listUsers, updateUserRow } from './users.mjs';
 import { textOk } from './rows.mjs';
-import { mapLegacyRole, oidcLogin, SYSTEM } from './identity.mjs';
+import { mapLegacyRole, oidcLogin, signInOwnerCount, SYSTEM } from './identity.mjs';
+import { planJourneyRewrites } from './ops.mjs';
 import { validOrgId } from '../org-context.mjs';
 import {
-  hasData, legacyUsersPath, orgsFilePath, readOrgsFileStrict, readUsersFileStrict, sha256Of, usersHashKey,
+  hasData, legacyUsersPath, lexists, MIGRATABLE, orgsFilePath, readOrgsFileStrict, readUsersFileStrict, sha256Of, usersHashKey,
 } from './legacy-files.mjs';
 
 const NAME_MAX = 200;
@@ -83,6 +88,30 @@ function optionalField(value, max, drop) {
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
+// A users.json record's fields, by the field rules: what the import and
+// the replace store for it; every value dropped is listed.
+function userFileFields(name, rec, now, report) {
+  const dropField = (field) => (reason) => report.users.droppedFields.push({ login: name, field, reason });
+  let password = null;
+  if (isPlainObject(rec.password)) password = rec.password;
+  else if (rec.password !== undefined && rec.password !== null) dropField('password')('not a password record');
+  let createdAt = now;
+  if (rec.createdAt !== undefined && rec.createdAt !== null) {
+    if (typeof rec.createdAt === 'string' && Number.isFinite(Date.parse(rec.createdAt))) createdAt = rec.createdAt;
+    else dropField('createdAt')('not a timestamp — the import time is used');
+  }
+  return {
+    name: optionalField(rec.name, NAME_MAX, dropField('name')),
+    email: optionalField(rec.email, EMAIL_MAX, dropField('email')),
+    password, mustChange: !!rec.mustChange, seededDefault: !!rec.seededDefault, createdAt,
+  };
+}
+
+// A users.json name the store can hold as a login, else the reason it
+// cannot ('empty' — it could not be typed at the login form, which trims).
+const unusableName = (name) => (textOk(name, { max: NAME_MAX }) ? null
+  : textOk(name, { max: Infinity }) ? `longer than ${NAME_MAX} characters` : 'empty');
+
 // ---------- planning ----------
 
 export function planImport(db, legacy, ctx, migration) {
@@ -112,8 +141,8 @@ export function planImport(db, legacy, ctx, migration) {
   // ---- users.json (plan item 1) ----
   if (legacy.users.exists) {
     for (const [name, rec] of legacy.users.entries) {
-      if (!textOk(name, { max: NAME_MAX })) {
-        report.users.dropped.push({ login: name, reason: textOk(name, { max: Infinity }) ? `longer than ${NAME_MAX} characters` : 'empty' });
+      if (unusableName(name)) {
+        report.users.dropped.push({ login: name, reason: unusableName(name) });
         continue;
       }
       if (oidc && name.startsWith(`${ctx.issuerKey}#`)) {
@@ -124,21 +153,9 @@ export function planImport(db, legacy, ctx, migration) {
         report.users.conflicts.push({ login: name, reason: 'kept the existing row' });
         continue;
       }
-      const dropField = (field) => (reason) => report.users.droppedFields.push({ login: name, field, reason });
-      let password = null;
-      if (isPlainObject(rec.password)) password = rec.password;
-      else if (rec.password !== undefined && rec.password !== null) dropField('password')('not a password record');
-      let createdAt = now;
-      if (rec.createdAt !== undefined && rec.createdAt !== null) {
-        if (typeof rec.createdAt === 'string' && Number.isFinite(Date.parse(rec.createdAt))) createdAt = rec.createdAt;
-        else dropField('createdAt')('not a timestamp — the import time is used');
-      }
       const row = {
-        kind: 'local', login: name, issuer: null, sub: null,
-        name: optionalField(rec.name, NAME_MAX, dropField('name')),
-        email: optionalField(rec.email, EMAIL_MAX, dropField('email')),
-        password, mustChange: !!rec.mustChange, seededDefault: !!rec.seededDefault,
-        isOwner: false, disabled: oidc, sessionEpoch: 0, createdAt,
+        kind: 'local', login: name, issuer: null, sub: null, ...userFileFields(name, rec, now, report),
+        isOwner: false, disabled: oidc, sessionEpoch: 0,
       };
       plannedUsers.set(name, row);
       localImported.push(name);
@@ -410,5 +427,400 @@ export function formatReport(r) {
   if (fields.length) out.push(`[store]   fields dropped: ${fields.join(' · ')}`);
   if (r.oidcJoinRole) out.push(`[store]   OIDC users join the default org as ${r.oidcJoinRole} at their first sign-in (OBSERVOGRAM_OIDC_JOIN_ROLE=none before the first start keeps it closed)`);
   if (r.noOwner) out.push('[store]   no owner — run `npm run users -- owner <login>`');
+  return out;
+}
+
+// ---------- the replace (`packc store import --replace`) ----------
+//
+// The request (server/store/ops.mjs requestReplace) sets replace_requested;
+// the next start's step 2 accepts it (the request, the marker and the
+// database carry one store_id) and step 3 re-imports users.json and
+// orgs.json as they stand, with the unit's environment — the files a
+// pre-store build edited during a downgrade. Against the import:
+//   - the audit, services, environments and endpoints are kept, and rows
+//     are updated, never overwritten wholesale;
+//   - users, users.json present: a local row absent from it is disabled; an
+//     entry with a row takes the file's password, flags, name and email and
+//     is re-enabled (a users-file row stays disabled under OIDC); an entry
+//     without a row is created (epoch 1) and, without an orgs.json, joins
+//     the default org as operator (a pre-store build gave it full write).
+//     users.json absent: the local users are kept. An OIDC row is never
+//     disabled for being absent (the export never writes one). is_owner is
+//     never re-derived;
+//   - orgs, orgs.json present: orgs created or renamed to match; each
+//     file org's memberships replaced to match its members (keys by the
+//     unit's mode); a live org absent from the file is soft-removed unless
+//     it is the default org; a removed slug that reappears is skipped.
+//     orgs.json absent: orgs, memberships and oidc_join_role are kept;
+//   - the root change: the store keeps the default org at '.', and the
+//     files' orgs.json holds "default" (a pre-store build keeps that org at
+//     orgs/default/, and has moved its entries there, or this start's
+//     migration did): its root becomes orgs/default in the same tx(), its
+//     journeys' file: paths are rewritten, the empty flat leftovers beside
+//     their orgs/default/ twins (every pre-store restart leaves an empty
+//     <base>/packs) are removed. A flat entry with data beside its twin
+//     refuses (check D, before anything moves);
+//   - no enabled owner who can sign in under the unit's mode is left where
+//     one was → refuses (check D on plan1; re-asserted in the tx());
+//   - in the same tx(): every changed or disabled user's epoch is bumped
+//     (a membership change is a change: it also ends cookies minted during
+//     the downgrade window), legacy_hashes rewritten, replace_requested
+//     cleared, one store.replace row (and org.root for the root change).
+
+const DEFAULT_MOVED = 'orgs/default';
+
+const ownerSignsIn = (u, mode) => u.isOwner && !u.disabled && (mode.mode === 'local'
+  ? u.kind === 'local' && u.password !== null && u.password !== undefined
+  : u.kind === 'oidc' && u.login.startsWith(`${mode.issuerKey}#`));
+
+export function planReplace(db, legacy, ctx, migration) {
+  const oidc = ctx.identityMode === 'oidc';
+  const now = ctx.now;
+  const id = storeId(db);
+  const previous = getMetaJson(db, 'import_report', null);
+  const report = {
+    kind: 'replace', at: now, storeId: id, dbPath: ctx.dbPath ?? null,
+    identityMode: oidc ? 'oidc' : 'local', issuerKey: oidc ? ctx.issuerKey : null, usersFile: getMeta(db, 'users_file'),
+    files: {
+      users: { path: legacy.usersPath, present: legacy.users.exists, entries: legacy.users.exists ? legacy.users.entries.length : 0 },
+      orgs: { path: legacy.orgsPath, present: legacy.orgs.exists, entries: legacy.orgs.exists ? legacy.orgs.entries.length : 0 },
+    },
+    migration: {
+      moved: [...(migration?.moved ?? [])], leftBehind: [...(migration?.leftBehind ?? [])],
+      wroteDefault: !!migration?.wroteDefault, skipped: migration?.skipped ?? null,
+    },
+    users: { created: [], updated: [], disabled: [], enabled: [], conflicts: [], dropped: [], droppedFields: [] },
+    orgs: { created: [], renamed: [], removed: [], conflicts: [], dropped: [], droppedFields: [], defaultOrg: getMeta(db, 'default_org') },
+    memberships: { added: [], removed: [], changed: [], dropped: [], inexact: [], viewers: [] },
+    rootChanged: false, cronJob: null, leftovers: [], journeys: [], sessionsEnded: [],
+    ownersDisabled: [], noOwner: false,
+    identityArmed: legacy.users.exists || getMeta(db, 'identity_armed') === '1',
+    // what the export reads: the deployment has, or had, an orgs.json
+    orgsJson: legacy.orgs.exists || !!previous?.orgsJson,
+  };
+
+  const rows = listUsers(db);
+  const byLogin = new Map(rows.map((u) => [u.login, u]));
+  const byId = new Map(rows.map((u) => [u.id, u]));
+  const updates = new Map();     // user id → the fields that change
+  const creates = new Map();     // login → a new local row
+  const plannedOidc = new Map(); // login → a new OIDC row (an orgs.json member never seen)
+  const bump = new Set();        // user ids whose sessions end
+  const change = (u, fields) => updates.set(u.id, { ...(updates.get(u.id) ?? {}), ...fields });
+
+  // ---- users ----
+  if (legacy.users.exists) {
+    const inFile = new Set();
+    for (const [name, rec] of legacy.users.entries) {
+      inFile.add(name);
+      if (unusableName(name)) { report.users.dropped.push({ login: name, reason: unusableName(name) }); continue; }
+      if (oidc && name.startsWith(`${ctx.issuerKey}#`)) {
+        report.users.conflicts.push({ login: name, reason: `has the form of an OIDC login under ${ctx.issuerKey}` });
+        continue;
+      }
+      const row = byLogin.get(name);
+      if (row && row.kind !== 'local') { report.users.conflicts.push({ login: name, reason: 'the login is held by an OIDC user' }); continue; }
+      const f = userFileFields(name, rec, now, report);
+      if (!row) {
+        creates.set(name, { kind: 'local', login: name, issuer: null, sub: null, ...f, isOwner: false, disabled: oidc, sessionEpoch: 1 });
+        report.users.created.push(name);
+        continue;
+      }
+      const diff = {};
+      if (JSON.stringify(row.password) !== JSON.stringify(f.password)) diff.password = f.password;
+      for (const k of ['mustChange', 'seededDefault', 'name', 'email']) if (row[k] !== f[k]) diff[k] = f[k];
+      const fields = Object.keys(diff);
+      if (fields.length) report.users.updated.push({ login: name, fields });
+      if (row.disabled && !oidc) { diff.disabled = false; report.users.enabled.push(name); }
+      if (Object.keys(diff).length) { change(row, diff); bump.add(row.id); }
+    }
+    for (const u of rows) {
+      if (u.kind !== 'local' || u.disabled || inFile.has(u.login)) continue;
+      change(u, { disabled: true });
+      bump.add(u.id);
+      report.users.disabled.push(u.login);
+    }
+  }
+
+  // ---- orgs and memberships ----
+  const dropMember = (org, key, reason) => report.memberships.dropped.push({ org, key, reason });
+  function memberLogin(org, key) {
+    if (oidc) {
+      if (!textOk(key, { max: SUB_MAX })) { dropMember(org, key, 'not a usable sub'); return null; }
+      const login = oidcLogin(ctx.issuerKey, key);
+      if (plannedOidc.has(login)) return login;
+      const existing = byLogin.get(login);
+      if (existing) {
+        if (existing.kind !== 'oidc') { dropMember(org, key, 'the login is held by a local user'); return null; }
+        return login;
+      }
+      plannedOidc.set(login, {
+        kind: 'oidc', login, issuer: ctx.issuerRaw, sub: key, name: null, email: null, password: null,
+        mustChange: false, seededDefault: false, isOwner: false, disabled: false, sessionEpoch: 1, createdAt: now,
+      });
+      report.users.created.push(login);
+      return login;
+    }
+    if (creates.has(key)) return key;
+    const existing = typeof key === 'string' && key ? byLogin.get(key) : null;
+    if (existing && existing.kind === 'local') return key;
+    dropMember(org, key, 'no such user');
+    return null;
+  }
+
+  const liveBefore = listOrgs(db);
+  const defaultOrgId = getMeta(db, 'default_org');
+  const atRoot = liveBefore.find((o) => o.root === '.') ?? null;
+  const orgCreates = [];
+  const renames = [];
+  const removes = [];
+  const desired = new Map();     // org id → Map(login → role)
+  let fileKeepsDefault = false;
+  if (legacy.orgs.exists) {
+    const entries = [...legacy.orgs.entries];
+    if (migration?.wroteDefault && !entries.some(([k]) => k === 'default')) entries.push(['default', { name: 'Default', members: [] }]);
+    const inFile = new Set();
+    for (const [oid, org] of entries) {
+      if (!validOrgId(oid)) {
+        report.orgs.dropped.push({ id: oid, reason: 'not a valid org id (a slug: lowercase letters, digits, - and _)' });
+        continue;
+      }
+      const existing = getOrg(db, oid);
+      if (existing?.removedAt) {
+        report.orgs.conflicts.push({ id: oid, reason: 'the id was used by a removed org — never reused; skipped' });
+        for (const [key] of org.members) dropMember(oid, key, 'org skipped');
+        continue;
+      }
+      const usable = textOk(org.name, { max: NAME_MAX });
+      if (!usable && org.name !== undefined && org.name !== null) {
+        report.orgs.droppedFields.push({ id: oid, field: 'name', reason: `${whyText(org.name, NAME_MAX)} — ${existing ? 'the store keeps its name' : 'the id is its name'}` });
+      }
+      if (existing) {
+        if (usable && org.name !== existing.name) renames.push({ id: oid, from: existing.name, to: org.name });
+        if (oid === 'default') fileKeepsDefault = true;
+      } else {
+        if (oid === 'default' && org.members.length === 0 && !hasData(join(ctx.base, 'orgs', 'default'))
+          && report.migration.moved.length === 0) {
+          report.orgs.dropped.push({ id: 'default', reason: 'empty leftover of the flat-workspace migration' });
+          continue;
+        }
+        orgCreates.push({ id: oid, name: usable ? org.name : oid, root: `orgs/${oid}` });
+      }
+      inFile.add(oid);
+      const want = new Map();
+      for (const [key, value] of org.members) {
+        const login = memberLogin(oid, key);
+        if (!login) continue;
+        const { role, exact } = mapLegacyRole(value);
+        if (!exact) report.memberships.inexact.push({ org: oid, key, from: value ?? null, to: role });
+        if (role === 'viewer') report.memberships.viewers.push({ org: oid, key });
+        want.set(login, role);
+      }
+      desired.set(oid, want);
+    }
+    for (const o of liveBefore) if (!inFile.has(o.id) && o.id !== defaultOrgId) removes.push(o.id);
+  }
+
+  const memberAdds = [];
+  const memberRemoves = [];
+  const memberRoles = [];
+  for (const [oid, want] of desired) {
+    const have = new Map();
+    if (!orgCreates.some((o) => o.id === oid)) for (const m of listMembers(db, oid)) have.set(byId.get(m.userId).login, m);
+    for (const [login, m] of have) {
+      if (!want.has(login)) {
+        memberRemoves.push({ orgId: oid, login, userId: m.userId, role: m.role });
+        bump.add(m.userId);
+      } else if (want.get(login) !== m.role) {
+        memberRoles.push({ orgId: oid, login, userId: m.userId, from: m.role, to: want.get(login) });
+        bump.add(m.userId);
+      }
+    }
+    for (const [login, role] of want) {
+      if (have.has(login)) continue;
+      memberAdds.push({ orgId: oid, login, role });
+      if (byLogin.has(login)) bump.add(byLogin.get(login).id);
+    }
+  }
+  // A new local user without an orgs.json joins the default org (A-29).
+  if (!legacy.orgs.exists && defaultOrgId && liveBefore.some((o) => o.id === defaultOrgId)) {
+    for (const login of creates.keys()) memberAdds.push({ orgId: defaultOrgId, login, role: 'operator' });
+  }
+  report.orgs.created = orgCreates.map((o) => ({ id: o.id, root: o.root }));
+  report.orgs.renamed = renames.map((r) => ({ ...r }));
+  report.orgs.removed = [...removes];
+  report.memberships.added = memberAdds.map((m) => ({ org: m.orgId, login: m.login, role: m.role }));
+  report.memberships.removed = memberRemoves.map((m) => ({ org: m.orgId, login: m.login, role: m.role }));
+  report.memberships.changed = memberRoles.map((m) => ({ org: m.orgId, login: m.login, from: m.from, to: m.to }));
+
+  // ---- the root change ----
+  const rootChange = !!atRoot && atRoot.id === 'default' && fileKeepsDefault;
+  const flatOf = (e) => join(ctx.base, e);
+  const twinOf = (e) => join(ctx.base, 'orgs', 'default', e);
+  let twins = [];
+  let leftovers = [];
+  let journeys = [];
+  if (rootChange) {
+    twins = MIGRATABLE.filter((e) => hasData(flatOf(e)) && lexists(twinOf(e))).map((e) => ({ entry: e, flat: flatOf(e), twin: twinOf(e) }));
+    leftovers = MIGRATABLE.filter((e) => lexists(flatOf(e)) && !hasData(flatOf(e)) && lexists(twinOf(e))).map(flatOf);
+    // The default org's journeys: already under orgs/default/ (a pre-store
+    // boot moved them), or still at the base until this start's migration.
+    const moved = MIGRATABLE.filter((e) => lexists(twinOf(e)) || report.migration.moved.includes(e));
+    const dir = lexists(twinOf('journeys')) ? twinOf('journeys') : flatOf('journeys');
+    journeys = planJourneyRewrites(ctx.base, moved, { dir }).map((j) => ({ ...j, path: join(twinOf('journeys'), j.name) }));
+    report.rootChanged = true;
+    report.cronJob = `OBSERVOGRAM_WORKSPACE=${join(ctx.base, DEFAULT_MOVED)}`;
+    report.leftovers = [...leftovers];
+    report.journeys = journeys.map((j) => j.name);
+  }
+  const brokenJourneys = journeys.filter((j) => j.parsedBefore && !j.parsesAfter).map((j) => j.path);
+
+  // ---- the owner ----
+  const ownerMode = oidc ? { mode: 'oidc', issuerKey: ctx.issuerKey } : { mode: 'local' };
+  const ownersBefore = signInOwnerCount(db, ownerMode);
+  const after = rows.map((u) => ({ ...u, ...(updates.get(u.id) ?? {}) }));
+  const ownersAfter = after.filter((u) => ownerSignsIn(u, ownerMode)).length;
+  report.ownersDisabled = rows.filter((u) => ownerSignsIn(u, ownerMode) && updates.get(u.id)?.disabled === true).map((u) => u.login);
+  report.noOwner = ownersBefore > 0 && ownersAfter === 0;
+  report.sessionsEnded = [...bump].map((uid) => byId.get(uid).login);
+
+  // ---- meta ----
+  const recorded = getMetaJson(db, 'legacy_hashes', {}) || {};
+  // A file still absent keeps the hash it was imported with (step 2 (d)/(e)).
+  const hashOf = (key, file) => (file.exists ? { sha256: sha256Of(file.raw) }
+    : recorded[key]?.absent && typeof recorded[key].importedSha256 === 'string'
+      ? { absent: true, importedSha256: recorded[key].importedSha256 } : { absent: true });
+  const legacyHashes = { ...recorded, [legacy.usersKey]: hashOf(legacy.usersKey, legacy.users), [ORGS_KEY]: hashOf(ORGS_KEY, legacy.orgs) };
+  const meta = {
+    ...(legacy.users.exists && getMeta(db, 'identity_armed') !== '1' ? { identity_armed: '1' } : {}),
+    legacy_hashes: JSON.stringify(legacyHashes),
+    import_report: JSON.stringify(report),
+    replace_requested: null,
+  };
+
+  const liveOrgsAfter = [...liveBefore.map((o) => o.id).filter((o) => !removes.includes(o)), ...orgCreates.map((o) => o.id)];
+  return {
+    replace: true,
+    users: { create: [...creates.values(), ...plannedOidc.values()], update: [...updates.entries()] },
+    orgs: { create: orgCreates, rename: renames, remove: removes },
+    memberships: { add: memberAdds, remove: memberRemoves, role: memberRoles },
+    bump: [...bump], rootChange, twins, leftovers, journeys, brokenJourneys,
+    ownerMode, ownersBefore, noOwner: report.noOwner, ownersDisabled: report.ownersDisabled, usersPath: legacy.usersPath,
+    meta, legacyHashes, liveOrgsAfter, report,
+  };
+}
+
+// The journey rewrites first (restored if the transaction fails), then one
+// tx(), then — committed — the empty flat leftovers are removed.
+export function applyReplace(db, plan, ctx) {
+  const written = [];
+  try {
+    for (const j of plan.journeys) {
+      writeFileSync(j.path, j.after);
+      written.push(j);
+    }
+    tx(db, () => {
+      if (!getMeta(db, 'import_done') || getMeta(db, 'replace_requested') !== plan.report.storeId) {
+        throw new Error(`observogram store: the replace request on store ${plan.report.storeId} was carried out or withdrawn while this start was planning it — restart to use it`);
+      }
+      for (const o of plan.orgs.create) insertOrgRow(db, { ...o, createdAt: ctx.now });
+      for (const r of plan.orgs.rename) renameOrgRow(db, r.id, r.to);
+      for (const oid of plan.orgs.remove) removeOrgRow(db, oid, ctx.now);
+      if (plan.rootChange) setOrgRoot(db, SYSTEM, 'default', DEFAULT_MOVED);
+      const ids = new Map();
+      for (const u of plan.users.create) ids.set(u.login, insertUserRow(db, u).id);
+      const bump = new Set(plan.bump);
+      for (const [uid, fields] of plan.users.update) {
+        updateUserRow(db, uid, fields, { bump: bump.has(uid) });
+        bump.delete(uid);
+      }
+      for (const m of plan.memberships.remove) deleteMembershipRow(db, m.orgId, m.userId);
+      for (const m of plan.memberships.role) setRoleRow(db, m.orgId, m.userId, m.to);
+      for (const m of plan.memberships.add) {
+        const userId = ids.get(m.login) ?? getUserByLogin(db, m.login)?.id;
+        insertMembershipRow(db, { orgId: m.orgId, userId, role: m.role, createdAt: ctx.now });
+      }
+      for (const uid of bump) updateUserRow(db, uid, {}, { bump: true });
+      if (plan.ownersBefore > 0 && signInOwnerCount(db, plan.ownerMode) === 0) {
+        throw new Error(`observogram store: the replace would leave store ${plan.report.storeId} with no enabled owner — rolled back`);
+      }
+      for (const [key, value] of Object.entries(plan.meta)) putMeta(db, key, value);
+      const r = plan.report;
+      writeAudit(db, SYSTEM, {
+        action: 'store.replace', targetKind: 'store', targetId: r.storeId,
+        detail: {
+          users: { created: r.users.created.length, updated: r.users.updated.length, disabled: r.users.disabled.length, enabled: r.users.enabled.length },
+          orgs: { created: r.orgs.created.length, renamed: r.orgs.renamed.length, removed: r.orgs.removed.length },
+          memberships: { added: r.memberships.added.length, removed: r.memberships.removed.length, changed: r.memberships.changed.length },
+          sessionsEnded: r.sessionsEnded.length, rootChanged: r.rootChanged, mode: r.identityMode,
+        },
+      });
+    });
+  } catch (e) {
+    const failed = [];
+    for (const j of written.reverse()) {
+      try { writeFileSync(j.path, j.before); } catch (err) { failed.push(`${j.path} (${err.message})`); }
+    }
+    if (written.length) {
+      e.message += failed.length
+        ? `; restoring the rewritten journeys failed for ${failed.join(', ')} — put those back by hand`
+        : '; the rewritten journeys were put back';
+    }
+    throw e;
+  }
+  for (const path of plan.leftovers) rmSync(path, { recursive: true, force: true });
+  return plan.report;
+}
+
+export function formatReplace(r) {
+  const out = [];
+  const usersPart = r.files.users.present ? `${r.files.users.path} (${r.files.users.entries} entries)` : 'no users file (the local users kept)';
+  const orgsPart = r.files.orgs.present ? `${r.files.orgs.path} (${r.files.orgs.entries} orgs)` : 'no orgs.json (orgs and memberships kept)';
+  out.push(`[store] replaced from ${usersPart} and ${orgsPart} into ${r.dbPath} (store ${r.storeId}; packc store import --replace)`);
+  const list = (items) => items.join(', ');
+  const users = [
+    r.users.created.length ? `created ${list(r.users.created)}` : null,
+    r.users.updated.length ? `updated ${list(r.users.updated.map((u) => `${u.login} (${u.fields.join(', ')})`))}` : null,
+    r.users.enabled.length ? `re-enabled ${list(r.users.enabled)}` : null,
+    r.users.disabled.length ? `disabled ${list(r.users.disabled)} (not in the users file)` : null,
+  ].filter(Boolean);
+  out.push(`[store]   users: ${users.length ? users.join(' · ') : 'unchanged'}`);
+  const orgs = [
+    r.orgs.created.length ? `created ${list(r.orgs.created.map((o) => `${o.id} (${o.root})`))}` : null,
+    r.orgs.renamed.length ? `renamed ${list(r.orgs.renamed.map((o) => `${o.id} (${q(o.from)} → ${q(o.to)})`))}` : null,
+    r.orgs.removed.length ? `removed ${list(r.orgs.removed)} (not in orgs.json)` : null,
+  ].filter(Boolean);
+  const members = [
+    r.memberships.added.length ? `added ${list(r.memberships.added.map((m) => `${m.org}/${m.login} (${m.role})`))}` : null,
+    r.memberships.removed.length ? `removed ${list(r.memberships.removed.map((m) => `${m.org}/${m.login}`))}` : null,
+    r.memberships.changed.length ? `changed ${list(r.memberships.changed.map((m) => `${m.org}/${m.login} ${m.from} → ${m.to}`))}` : null,
+  ].filter(Boolean);
+  if (orgs.length) out.push(`[store]   orgs: ${orgs.join(' · ')}`);
+  if (members.length) out.push(`[store]   memberships: ${members.join(' · ')}`);
+  if (r.migration.moved.length) out.push(`[store]   flat workspace moved to orgs/default/: ${r.migration.moved.join(', ')}`);
+  if (r.migration.leftBehind.length) out.push(`[store]   left behind (orgs/default/ already has them; neither moved nor merged): ${r.migration.leftBehind.join(', ')}`);
+  if (r.rootChanged) out.push(`[store]   the default org's root is now ${DEFAULT_MOVED} — point its CronJobs at ${r.cronJob}`);
+  if (r.journeys.length) out.push(`[store]   journey file: paths rewritten: ${r.journeys.join(', ')}`);
+  if (r.leftovers.length) out.push(`[store]   removed empty leftovers of a pre-store build: ${r.leftovers.join(', ')}`);
+  if (r.sessionsEnded.length) out.push(`[store]   sessions ended (changed or disabled): ${r.sessionsEnded.join(', ')}`);
+  if (r.memberships.inexact.length) {
+    out.push(`[store]   roles mapped: ${r.memberships.inexact.map((m) => `${m.org}/${m.key} ${q(m.from)} → ${m.to}${m.to === 'viewer' ? ' (loses write power when roles are enforced)' : ''}`).join(' · ')}`);
+  }
+  const dropped = [
+    ...r.orgs.dropped.map((d) => `org ${d.id} (${d.reason})`),
+    ...r.memberships.dropped.map((d) => `member ${d.org}/${d.key} (${d.reason})`),
+    ...r.users.dropped.map((d) => `user ${q(d.login.length > 40 ? `${d.login.slice(0, 40)}…` : d.login)} (${d.reason})`),
+  ];
+  if (dropped.length) out.push(`[store]   dropped: ${dropped.join(' · ')}`);
+  const conflicts = [
+    ...r.users.conflicts.map((c) => `user ${c.login} (${c.reason})`),
+    ...r.orgs.conflicts.map((c) => `org ${c.id} (${c.reason})`),
+  ];
+  if (conflicts.length) out.push(`[store]   skipped: ${conflicts.join(' · ')}`);
+  const fields = [
+    ...r.users.droppedFields.map((f) => `${f.login} ${f.field} (${f.reason})`),
+    ...r.orgs.droppedFields.map((f) => `org ${f.id} ${f.field} (${f.reason})`),
+  ];
+  if (fields.length) out.push(`[store]   fields dropped: ${fields.join(' · ')}`);
   return out;
 }

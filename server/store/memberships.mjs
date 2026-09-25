@@ -68,6 +68,13 @@ export function setRoleRow(db, orgId, userId, role) {
   return getMembership(db, orgId, userId);
 }
 
+// Internal (tx required, no audit): the replace's removal of a membership
+// the files no longer hold (its one store.replace row covers it).
+export function deleteMembershipRow(db, orgId, userId) {
+  if (!db.isTransaction) throw new Error('observogram store: deleteMembershipRow() runs inside the tx() whose audit row covers it');
+  prepare(db, 'DELETE FROM memberships WHERE org_id = ? AND user_id = ?').run(orgId, userId);
+}
+
 export function addMembership(db, actor, { orgId, userId, role }) {
   requireRole(role);
   return atomic(db, () => {

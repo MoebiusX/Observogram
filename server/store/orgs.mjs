@@ -78,6 +78,22 @@ export function removeOrg(db, actor, id) {
   });
 }
 
+// Internal (tx required, no audit): the replace's rename and soft removal
+// (server/store/import.mjs applyReplace; its one store.replace row covers
+// them).
+export function renameOrgRow(db, id, name) {
+  if (!db.isTransaction) throw new Error('observogram store: renameOrgRow() runs inside the tx() whose audit row covers it');
+  requireText(name, 'name');
+  prepare(db, 'UPDATE orgs SET name = ? WHERE id = ? AND removed_at IS NULL').run(name, id);
+  return getOrg(db, id);
+}
+
+export function removeOrgRow(db, id, at = nowIso()) {
+  if (!db.isTransaction) throw new Error('observogram store: removeOrgRow() runs inside the tx() whose audit row covers it');
+  prepare(db, 'UPDATE orgs SET removed_at = ? WHERE id = ? AND removed_at IS NULL').run(at, id);
+  return getOrg(db, id);
+}
+
 // The one offline root change (docs/STORE_PLAN.md §4): the default org's
 // '.' becomes 'orgs/<id>' when its flat entries moved there — the in-place
 // export, and the replace's root change. Only with the server stopped or

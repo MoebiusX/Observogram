@@ -10,10 +10,14 @@
 //   step 1  openStore()            version check, filesystem check, migrations
 //   step 2  staleImportGuard()     the store and the legacy files still belong
 //                                  together: a stale store, a changed issuer,
-//                                  files edited after the import refuse
+//                                  files edited after the import refuse —
+//                                  unless `packc store import --replace` was
+//                                  requested on this very store
 //   step 3  the legacy import      once: read strictly, decide, check (no
 //                                  write before the checks pass), migrate the
 //                                  flat workspace, read again, import, mark
+//           — or the replace       the same order, with planReplace /
+//                                  applyReplace (server/store/import.mjs)
 //           — or the repairs       a file that disappeared is recorded
 //                                  absent; the marker is rewritten from the
 //                                  database
@@ -47,7 +51,9 @@ import { createUser, getUserByLogin, setPassword } from './store/users.mjs';
 import {
   canonIssuer, ensureDefaultOrg, parseBootstrapAdmin, parseJoinRole, signInOwnerCount, SYSTEM,
 } from './store/identity.mjs';
-import { applyImport, formatReport, planImport, projectedMigration, readLegacy, unreadDefaultText } from './store/import.mjs';
+import {
+  applyImport, applyReplace, formatReplace, formatReport, planImport, planReplace, projectedMigration, readLegacy, unreadDefaultText,
+} from './store/import.mjs';
 import {
   compareHashes, hasData, legacyUsersPath, lexists, markerPath, MIGRATABLE, orgsFilePath, readMarker, sha256File, writeMarker,
 } from './store/legacy-files.mjs';
@@ -241,7 +247,13 @@ export function legacyChecksInput(db, ctx, legacy, decision, plan1) {
       rec.seededDefault && rec.mustChange && !(decision.kind === 'rescue' && name === 'admin')),
     orgIds: [...plan1.liveOrgsAfter],
     identity: !ctx.authOff && (ctx.oidc || usersFile || armed),
-    strandedDefault: strandedDefault(db, ctx, legacy.orgs.exists),
+    // A replace that moves the default org's root to orgs/default leaves
+    // nothing stranded there.
+    strandedDefault: plan1.replace && plan1.rootChange ? null : strandedDefault(db, ctx, legacy.orgs.exists),
+    replace: plan1.replace ? {
+      storeId: storeId(db), base: ctx.base, twins: plan1.twins, brokenJourneys: plan1.brokenJourneys,
+      noOwner: plan1.noOwner, ownersDisabled: plan1.ownersDisabled, ownerMode: plan1.ownerMode, usersPath: plan1.usersPath,
+    } : null,
   };
 }
 
@@ -314,12 +326,15 @@ export function assertBootChecks(input) {
         '  or keep one org — remove the others with npm run orgs -- remove <id>.',
       { nothingMoved });
   }
+  // D — the replace (`packc store import --replace`) would merge twins,
+  // break a journey or leave no owner.
+  if (input.replace) assertReplaceChecks(input.replace);
   // E — a store at '.', and a pre-store build moved its data (before the
   // import, or on a rollback after it).
   if (input.strandedDefault) {
     const { storeId: id, base } = input.strandedDefault;
     const moved = join(base, 'orgs', 'default');
-    const why = input.step === 'import' ? ' (a CLI initialised it before this first start)' : '';
+    const why = input.step === 'import' && !input.replace ? ' (a CLI initialised it before this first start)' : '';
     throw new BootRefusal(
       `refusing to start: store ${id} keeps the default org at ${base}${why}, ` +
       `but ${moved} holds data no org reads — a pre-store build moved the default org's entries there. ` +
@@ -328,6 +343,39 @@ export function assertBootChecks(input) {
       { nothingMoved: true });
   }
   return { insecure };
+}
+
+const REPLACE = '`packc store import --replace`';
+const REPLACE_KEPT = 'Nothing was moved, imported or replaced; the request stays pending.';
+
+function assertReplaceChecks(r) {
+  if (r.twins.length) {
+    const pairs = r.twins.map((t) => `${t.flat} holds data beside ${t.twin}`);
+    throw new BootRefusal(
+      `refusing to start: the pending ${REPLACE} moves the default org's root to ${join(r.base, 'orgs', 'default')} ` +
+      '(the files\' orgs.json holds "default", which a pre-store build keeps there), but ' +
+      `${pairs.join('; ')} — neither is moved or merged. ${REPLACE_KEPT}\n` +
+      `  With the server stopped, merge ${pairs.length === 1 ? 'the flat entry into its twin' : 'each flat entry into its twin'} ` +
+      'by hand (or move one of the two aside), then start again.',
+      { nothingMoved: true });
+  }
+  if (r.brokenJourneys.length) {
+    throw new BootRefusal(
+      `refusing to start: the pending ${REPLACE} rewrites the file: paths of ${r.brokenJourneys.join(', ')} for the default ` +
+      `org's move to orgs/default, which would leave ${r.brokenJourneys.length === 1 ? 'it' : 'them'} unparseable. ${REPLACE_KEPT}\n` +
+      '  With the server stopped, fix the paths by hand, then start again.',
+      { nothingMoved: true });
+  }
+  if (r.noOwner) {
+    const how = r.ownerMode.mode === 'oidc' ? `through OIDC issuer ${r.ownerMode.issuerKey}` : 'with a local password';
+    const lost = r.ownersDisabled.length ? ` (it disables ${r.ownersDisabled.join(', ')}: not in ${r.usersPath})` : '';
+    throw new BootRefusal(
+      `refusing to start: the pending ${REPLACE} would leave store ${r.storeId} with no enabled owner who can sign in ${how}${lost}. ` +
+      `${REPLACE_KEPT}\n` +
+      `  With the server stopped, put an owner back into ${r.usersPath}, or make a user the files keep an owner ` +
+      '(npm run users -- owner <login>), then start again.',
+      { nothingMoved: true });
+  }
 }
 
 // ---------- step 2: the stale-import guard ----------
@@ -394,6 +442,25 @@ export function staleImportGuard(db, ctx) {
   const repairs = { disappeared: [], returned: [], recorded: null };
   if (!importDone) return { replacePending: false, repairs };
 
+  // (c) a replace requested with `packc store import --replace`: accepted
+  // only when the request, the marker and the database name one store;
+  // step 3 carries it out instead of (d)'s refusal.
+  const replaceReq = getMeta(db, 'replace_requested');
+  if (replaceReq !== null) {
+    if (!ctx.memory && marker && replaceReq === marker.storeId && replaceReq === id) return { replacePending: true, repairs };
+    const names = ctx.memory ? 'OBSERVOGRAM_DB is :memory:, which has no marker'
+      : !marker ? `${markerPath(ctx.base)} is missing` : `${markerPath(ctx.base)} names store ${marker.storeId}`;
+    throw new BootRefusal(
+      `refusing to start: ${ctx.dbPath} holds store ${id} with a pending ${REPLACE} requested for store ${replaceReq}, ` +
+      `but ${names}. Nothing was imported or replaced; the request stays pending. Ways out:\n` +
+      '  - point OBSERVOGRAM_DB at the store the request was made for, or at a copy of its backup;\n' +
+      '  - with the server stopped, `packc store restore <backup>`;\n' +
+      (marker
+        ? `  - or, to replace into store ${id}, with the server stopped run ${REPLACE} again.`
+        : `  - or put ${markerPath(ctx.base)} back as it was (it names store ${id}), then start again.`),
+      { nothingMoved: true });
+  }
+
   // (d) files edited since the import.
   const recorded = getMetaJson(db, 'legacy_hashes', {}) || {};
   const usersKey = getMeta(db, 'users_file') || 'users.json';
@@ -431,7 +498,8 @@ export function staleImportGuard(db, ctx) {
       'Nothing was changed. The store keeps its own users and orgs; the file is only compared, never read again. ' +
       'With the server stopped:\n' +
       `${ways.join('\n')}\n` +
-      'then make the change with `npm run users` / `npm run orgs`.',
+      '    then make the change with `npm run users` / `npm run orgs`;\n' +
+      `  - or run ${REPLACE}: the next start re-imports the files as they stand.`,
       { nothingMoved: true });
   }
   repairs.disappeared = cmp.disappeared.filter((key) => !recorded[key]?.absent);
@@ -601,7 +669,29 @@ export async function bootStore({ host, log = () => {}, warn = () => {} } = {}) 
   // step 3
   let decision = null;
   let report = null;
-  if (!getMeta(db, 'import_done')) {
+  const replace = !!getMeta(db, 'import_done') && guard.replacePending;
+  if (replace) {
+    const legacy1 = readLegacy(db, ctx);                       // strict: a throw names the path, nothing moved
+    // The replace's own root rule (docs/STORE_PLAN.md §4 "import
+    // --replace"): the files' orgs.json is what a pre-store build ran on,
+    // so the flat workspace moves as it would have there — unless an org
+    // other than "default" keeps the base.
+    const atRoot = listOrgs(db).find((o) => o.root === '.');
+    const migrate = legacy1.orgs.exists && (!atRoot || atRoot.id === 'default');
+    const flat = migrate ? planFlatMigration({ base: ctx.base }) : null;
+    decision = seedDecision(legacyView(db, ctx, legacy1));
+    const plan1 = planReplace(db, legacy1, ctx, projectedMigration({ flat, migrate, orgs: legacy1.orgs }));
+    assertBootChecks(legacyChecksInput(db, ctx, legacy1, decision, plan1));   // no write before this line (check D)
+    const migration = migrate
+      ? { ...migrateFlatWorkspace({ log, base: ctx.base }), skipped: null }
+      : projectedMigration({ flat, migrate, orgs: legacy1.orgs });
+    const legacy2 = readLegacy(db, ctx);
+    const plan2 = planReplace(db, legacy2, ctx, migration);
+    report = applyReplace(db, plan2, ctx);
+    resetOrgRootCache();
+    writeMarker(ctx.base, { storeId: storeId(db), files: plan2.legacyHashes, by: 'replace' });
+    for (const line of formatReplace(report)) log(line);
+  } else if (!getMeta(db, 'import_done')) {
     const legacy1 = readLegacy(db, ctx);                       // strict: a throw names the path, nothing moved
     const migrate = legacy1.orgs.exists && !keepsDefaultAtRoot(db);
     const flat = migrate ? planFlatMigration({ base: ctx.base }) : null;

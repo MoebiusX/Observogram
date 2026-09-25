@@ -555,7 +555,8 @@ test('stale import: an edited users.json refuses (d) and changes nothing; put ba
   let r = boot(ws);
   assert.ok(!r.listening && r.message.includes(`${path} changed since store`) && r.message.includes(`it was SHA-256 ${recorded}`), r.message);
   assert.ok(r.message.includes(`put ${path} back exactly as it was imported`) && r.message.includes(`move ${path} aside`), r.message);
-  assert.ok(!/import --replace|rekey-issuer/.test(r.message), 'no command 2a lacks');
+  assert.ok(r.message.includes('or run `packc store import --replace`: the next start re-imports the files as they stand.'), r.message);
+  assert.ok(!/rekey-issuer/.test(r.message), 'no command this build lacks');
   await inspectWs(ws, (v) => assert.equal(rowsOf(v), before));
 
   writeFileSync(path, bytes);

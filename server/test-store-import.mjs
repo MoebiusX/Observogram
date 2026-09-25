@@ -1261,7 +1261,7 @@ test('staleImportGuard (b): a changed issuer refuses with the 2a text; the same 
   }
 });
 
-test('staleImportGuard (d): an edited users.json and an appeared orgs.json refuse with the 2a texts; the file put back passes; (e) a moved-aside file is recorded absent and a missing marker is rewritten', async () => {
+test('staleImportGuard (d): an edited users.json and an appeared orgs.json refuse with the texts that name import --replace; the file put back passes; (e) a moved-aside file is recorded absent and a missing marker is rewritten', async () => {
   const usersText = JSON.stringify({ users: { alice: { password: PW } } });
   const base = workspace({ users: usersText });
   const usersPath = join(base, 'users.json');
@@ -1281,9 +1281,10 @@ test('staleImportGuard (d): an edited users.json and an appeared orgs.json refus
       + 'Nothing was changed. The store keeps its own users and orgs; the file is only compared, never read again. With the server stopped:\n'
       + `  - put ${usersPath} back exactly as it was imported (SHA-256 ${recorded}; the store's legacy_hashes and ${markerFile} record it), or\n`
       + `  - move ${usersPath} aside: a file that disappears is recorded as absent and changes no user or org;\n`
-      + 'then make the change with `npm run users` / `npm run orgs`.';
+      + '    then make the change with `npm run users` / `npm run orgs`;\n'
+      + '  - or run `packc store import --replace`: the next start re-imports the files as they stand.';
     await assert.rejects(bootIn(base), (e) => refusal(expectedChanged)(e) && e.nothingMoved === true);
-    assert.ok(!/packc|--replace|rekey/.test(expectedChanged), 'no command that 2a lacks');
+    assert.ok(!/rekey/.test(expectedChanged), 'no command this build lacks');
 
     write(usersPath, usersText);
     await bootIn(base);
@@ -1292,7 +1293,8 @@ test('staleImportGuard (d): an edited users.json and an appeared orgs.json refus
     const expectedAppeared = `refusing to start: ${orgsPath} appeared since store ${id} last imported it (it was absent then).\n`
       + 'Nothing was changed. The store keeps its own users and orgs; the file is only compared, never read again. With the server stopped:\n'
       + `  - move ${orgsPath} aside: a file that disappears is recorded as absent and changes no user or org;\n`
-      + 'then make the change with `npm run users` / `npm run orgs`.';
+      + '    then make the change with `npm run users` / `npm run orgs`;\n'
+      + '  - or run `packc store import --replace`: the next start re-imports the files as they stand.';
     await assert.rejects(bootIn(base), (e) => refusal(expectedAppeared)(e));
     rmSync(orgsPath);
 
@@ -1346,7 +1348,8 @@ test('staleImportGuard (d)/(e): a moved-aside file keeps its imported hash — p
       + 'Nothing was changed. The store keeps its own users and orgs; the file is only compared, never read again. With the server stopped:\n'
       + `  - put ${usersPath} back exactly as it was imported (SHA-256 ${recorded}; the store's legacy_hashes and ${markerFile} record it), or\n`
       + `  - move ${usersPath} aside: a file that disappears is recorded as absent and changes no user or org;\n`
-      + 'then make the change with `npm run users` / `npm run orgs`.';
+      + '    then make the change with `npm run users` / `npm run orgs`;\n'
+      + '  - or run `packc store import --replace`: the next start re-imports the files as they stand.';
     await assert.rejects(bootIn(base), (e) => refusal(expected)(e) && e.nothingMoved === true);
 
     write(usersPath, usersText);

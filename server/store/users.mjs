@@ -119,6 +119,32 @@ export function setOwnerRow(db, id, isOwner) {
   return getUser(db, id);
 }
 
+// Internal (tx required, no audit): the replace's update of a row it
+// re-imports (server/store/import.mjs applyReplace, whose one store.replace
+// row covers it). `fields` holds only what changes — password, mustChange,
+// seededDefault, name, email, disabled; `bump` ends the user's sessions.
+export function updateUserRow(db, id, fields, { bump = false } = {}) {
+  if (!db.isTransaction) throw new Error('observogram store: updateUserRow() runs inside the tx() whose audit row covers it');
+  if (fields.password !== undefined && fields.password !== null
+    && (typeof fields.password !== 'object' || Array.isArray(fields.password))) {
+    throw new TypeError('observogram store: password is the hashed record object, or null');
+  }
+  const values = {
+    password: fields.password === undefined ? undefined : fields.password === null ? null : toJson(fields.password),
+    mustChange: fields.mustChange === undefined ? undefined : bit(fields.mustChange),
+    seededDefault: fields.seededDefault === undefined ? undefined : bit(fields.seededDefault),
+    name: fields.name === undefined ? undefined : optionalText(fields.name, 'name'),
+    email: fields.email === undefined ? undefined : optionalText(fields.email, 'email', { max: 320 }),
+    disabled: fields.disabled === undefined ? undefined : bit(fields.disabled),
+  };
+  const { sql, params } = setClause(values, {
+    password: 'password', mustChange: 'must_change', seededDefault: 'seeded_default', name: 'name', email: 'email', disabled: 'disabled',
+  });
+  const sets = [sql, bump ? 'session_epoch = session_epoch + 1' : ''].filter(Boolean).join(', ');
+  if (sets) prepare(db, `UPDATE users SET ${sets} WHERE id = :id`).run({ ...params, id });
+  return getUser(db, id);
+}
+
 // For `npm run users -- list`: every user by id, with its memberships in
 // live orgs ([{ orgId, role }], first membership first).
 export function listUsersWithMemberships(db) {

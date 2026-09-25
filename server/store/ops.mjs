@@ -7,6 +7,11 @@
 //                                        in place (with the default org's
 //                                        move); planExport is its read-only half
 //   formatExport(result)                 the CLI's report lines
+//   requestReplace({ dbPath, base })     `packc store import --replace`: asks the
+//                                        next server start to re-import
+//                                        users.json / orgs.json as they stand
+//                                        (boot step 3, planReplace/applyReplace
+//                                        in server/store/import.mjs)
 //
 // An in-place export runs with the server stopped: assertNotInUse()
 // (server/store/backup.mjs, restore's probe) refuses while any connection
@@ -45,13 +50,13 @@ import { parse as parseYaml } from '../../tools/lib/mini-yaml.mjs';
 import { closeStore, openStore, resolveDbPath, tx } from './db.mjs';
 import { assertNotInUse } from './backup.mjs';
 import { writeAudit } from './audit.mjs';
-import { getMeta, getMetaJson, isIdentityArmed, putMeta, storeId } from './meta.mjs';
+import { getMeta, getMetaJson, isIdentityArmed, putMeta, setMeta, storeId } from './meta.mjs';
 import { getOrg, listOrgs, setOrgRoot } from './orgs.mjs';
 import { listMembers } from './memberships.mjs';
 import { listUsers } from './users.mjs';
 import { CLI, preStoreSub } from './identity.mjs';
 import {
-  MIGRATABLE, lexists, orgsFilePath, sha256File, usersHashKey, writeMarker, writeOrgsFile, writeUsersFile,
+  MIGRATABLE, lexists, markerPath, orgsFilePath, readMarker, sha256File, usersHashKey, writeMarker, writeOrgsFile, writeUsersFile,
 } from './legacy-files.mjs';
 
 const MEMORY = ':memory:';
@@ -86,12 +91,14 @@ function parses(text) {
 // ---------- the plan (reads only) ----------
 
 // The journey rewrites of the default org's move: for every
-// <base>/journeys/*.journey.yaml, its text with each <base>/<moved entry>/
-// spelled <base>/orgs/default/<moved entry>/ (the base as given and, when
-// it differs, as realpath spells it). Only files whose text changes.
-function planJourneyRewrites(base, moved) {
+// *.journey.yaml in `dir` (the default org's journeys: <base>/journeys
+// before the move, <base>/orgs/default/journeys after it — the replace's
+// root change, server/store/import.mjs), its text with each
+// <base>/<moved entry>/ spelled <base>/orgs/default/<moved entry>/ (the
+// base as given and, when it differs, as realpath spells it). Only files
+// whose text changes.
+export function planJourneyRewrites(base, moved, { dir = join(base, 'journeys') } = {}) {
   if (!moved.includes('journeys')) return [];
-  const dir = join(base, 'journeys');
   let names;
   try { names = readdirSync(dir).filter((f) => f.endsWith(JOURNEY_SUFFIX)).sort(); } catch { return []; }
   const bases = [...new Set([slashed(base), slashed(realOr(base))])];
@@ -318,6 +325,42 @@ function exportInPlace(db, plan) {
   const marker = writeMarker(base, { storeId: plan.storeId, files, by: 'export' });
   const defaultRoot = getOrg(db, 'default')?.root ?? null;
   return { ...plan, rootChanged, marker, cronJob: rootChanged ? `OBSERVOGRAM_WORKSPACE=${join(base, DEFAULT_MOVED)}` : null, defaultRoot };
+}
+
+// ---------- import --replace: the request ----------
+
+export const REPLACE_REQUESTED = "replace requested: the next server start re-imports users.json/orgs.json with the unit's environment";
+
+// Only a request: the replace itself runs at the next start, with the
+// unit's environment (its OIDC issuer, its users file), which this shell
+// may not have. With the server stopped; the store must be the one the
+// workspace's marker names, already imported — an empty or foreign store
+// takes the stale-store ways out instead (a replace there would re-import
+// the files into the wrong store).
+export async function requestReplace({ dbPath = resolveDbPath(), base = baseWorkspacePath(), out = process.stdout } = {}) {
+  if (dbPath === MEMORY) throw refuse('OBSERVOGRAM_DB is :memory: — an in-memory store lives in one process; a replace is carried out by the server\'s next start on its database file');
+  const path = resolve(dbPath);
+  out.write(`store: ${path}\n`);
+  if (!existsSync(path)) throw refuse(`no database at ${path} — nothing to replace into (this command never creates one; check OBSERVOGRAM_DB and OBSERVOGRAM_WORKSPACE)`);
+  await assertNotInUse(path, { doing: 'requesting a replace' });
+  const db = await openStore({ path });
+  try {
+    const id = storeId(db);
+    const marker = readMarker(base);   // corrupt → LegacyFileError naming it
+    const importDone = getMeta(db, 'import_done');
+    if (!importDone || !marker || marker.storeId !== id) {
+      const holds = importDone ? `store ${id}` : `store ${id}, never imported`;
+      const names = !marker ? `${markerPath(base)} is missing` : `${markerPath(base)} names store ${marker.storeId}`;
+      throw refuse(`${path} holds ${holds}, but ${names}: an empty or foreign store — see the stale-store ways out: `
+        + 'point OBSERVOGRAM_DB at the store this workspace was imported into, or at a copy of its backup, '
+        + 'or with the server stopped `packc store restore <backup>`. Nothing was requested');
+    }
+    const pending = getMeta(db, 'replace_requested') === id;
+    if (!pending) setMeta(db, CLI, 'replace_requested', id);
+    return { storeId: id, path, alreadyPending: pending };
+  } finally {
+    closeStore(path);
+  }
 }
 
 // ---------- the report ----------

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * server/test-store-ops.mjs — the `packc store` offline operations
- * (docs/STORE_PLAN.md §4 "packc store export", §8 gate Export).
+ * (docs/STORE_PLAN.md §4 "packc store export" and "packc store import
+ * --replace", §8 gates Export and Stale import).
  *
  * Every workspace is upgraded the way a deployment is: legacy files and
  * flat data on disk, one bootStore() (the import), then changes through the
@@ -9,7 +10,10 @@
  * the server stopped — and exported. What a pre-store build then does with
  * the result is asked of server/fixtures/pre-store-build.mjs, a frozen copy
  * of v0.4.0's file semantics; tools/test-store-prestore-live.mjs asks the
- * real v0.4.0 build over HTTP (CI job store-prestore).
+ * real v0.4.0 build over HTTP (CI job store-prestore). The Stale import
+ * cases then edit the files as a pre-store build does during a downgrade,
+ * and start the store build again: it refuses, and after `packc store
+ * import --replace` the next start re-imports them.
  *
  * Hermetic (§0): the store and identity variables of a developer shell are
  * deleted before any server code loads; each fixture has its own temp
@@ -28,7 +32,8 @@ for (const k of STRIP) {
 const { test } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
 const { spawnSync } = await import('node:child_process');
-const { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = await import('node:fs');
+const { createHmac } = await import('node:crypto');
+const { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
 const { dirname, join } = await import('node:path');
 const { fileURLToPath } = await import('node:url');
@@ -37,12 +42,13 @@ const { closeStore, openStore, tx } = await import('./store/db.mjs');
 const identity = await import('./store/identity.mjs');
 const memberships = await import('./store/memberships.mjs');
 const meta = await import('./store/meta.mjs');
-const { getOrg } = await import('./store/orgs.mjs');
+const { getOrg, listOrgs } = await import('./store/orgs.mjs');
+const { getUserByLogin, listUsers } = await import('./store/users.mjs');
 const { listAudit } = await import('./store/audit.mjs');
 const legacy = await import('./store/legacy-files.mjs');
-const { exportStore, formatExport, COOKIE_NOTE } = await import('./store/ops.mjs');
+const { exportStore, formatExport, COOKIE_NOTE, REPLACE_REQUESTED, requestReplace } = await import('./store/ops.mjs');
 const admin = await import('./identity-admin.mjs');
-const { hashPassword } = await import('./auth.mjs');
+const { hashPassword, resolveSession, verifyPassword } = await import('./auth.mjs');
 const boot = await import('./boot.mjs');
 const pre = await import('./fixtures/pre-store-build.mjs');
 
@@ -93,13 +99,28 @@ function journey(root, name, packFile) {
 }
 
 // The server's start: one bootStore() with this env, then stopped.
+const CLEAR = Object.fromEntries(STRIP.flatMap((k) => [[`OBSERVOGRAM_${k}`, undefined], [`TOMOGRAPH_${k}`, undefined]]));
 async function start(base, env = {}) {
-  const clear = Object.fromEntries(STRIP.flatMap((k) => [[`OBSERVOGRAM_${k}`, undefined], [`TOMOGRAPH_${k}`, undefined]]));
   const warns = [];
-  await withEnv({ ...clear, OBSERVOGRAM_WORKSPACE: base, ...env },
-    () => boot.bootStore({ host: '127.0.0.1', warn: (m) => warns.push(m) }));
-  closeStore(dbOf(base));
-  return { warns };
+  const logs = [];
+  try {
+    await withEnv({ ...CLEAR, OBSERVOGRAM_WORKSPACE: base, ...env },
+      () => boot.bootStore({ host: '127.0.0.1', log: (m) => logs.push(m), warn: (m) => warns.push(m) }));
+  } finally {
+    closeStore(env.OBSERVOGRAM_DB ?? dbOf(base));
+  }
+  return { warns, logs };
+}
+
+// A start that must refuse: the BootRefusal.
+async function refused(base, env = {}) {
+  try {
+    await start(base, env);
+  } catch (e) {
+    assert.ok(e instanceof boot.BootRefusal, e.stack);
+    return e;
+  }
+  assert.fail('the start did not refuse');
 }
 
 // Changes made while the server is stopped (as a CLI would).
@@ -383,4 +404,417 @@ test('packc store export: the store line first, the report, exit codes', async (
   const usage = run('export');
   assert.equal(usage.status, 2);
   assert.match(usage.stderr, /packc store export <dir>/);
+});
+
+// ---------- import --replace (the Stale import gate, 2b) ----------
+
+const SECRET = 'ops-suite-session-secret-0123456789abcdef';
+const ISSUER = 'https://idp.example/';
+const KEY = identity.canonIssuer(ISSUER);
+const requestIt = (base) => requestReplace({ dbPath: dbOf(base), base, out: silent });
+const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
+
+// A signed session cookie: the store build's ({ login, ep, purpose }) or,
+// without them, one a pre-store build minted.
+function cookie(payload) {
+  const body = Buffer.from(JSON.stringify({ iat: Date.now(), exp: Date.now() + 3_600_000, ...payload })).toString('base64url');
+  return `observogram_session=v1.${body}.${createHmac('sha256', SECRET).update(body).digest('base64url')}`;
+}
+const storeCookie = (login, ep) => cookie({ sub: login, login, ep, purpose: 'session' });
+// The login a cookie resolves to on the stopped store build, or null.
+async function sessionOf(base, c) {
+  return withEnv({ ...CLEAR, OBSERVOGRAM_WORKSPACE: base, OBSERVOGRAM_SESSION_SECRET: SECRET }, async () => {
+    const db = await openStore({ path: dbOf(base) });
+    try { return resolveSession({ headers: { cookie: c } }, { db })?.login ?? null; } finally { closeStore(dbOf(base)); }
+  });
+}
+const userRows = (db) => listUsers(db).map((u) => ({ login: u.login, kind: u.kind, disabled: u.disabled, owner: u.isOwner, ep: u.sessionEpoch }));
+const membersOf = (db, orgId) => memberships.listMembers(db, orgId).map((m) => `${listUsers(db).find((u) => u.id === m.userId).login}:${m.role}`).sort();
+
+test('Stale import: export in place, a pre-store build removes a user and changes a password — the start refuses naming import --replace; after it the removed user is disabled and their cookie refused, the new password works, a viewer stays a viewer; the start after passes', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice', 'bob', 'carol']);
+  pack(base, 'p1');
+  await start(base);
+  await change(base, (db) => admin.addLocalUser(db, 'cli', { login: 'dave', password: 'dave-passw0rd', role: 'viewer' }));
+  await exportIt(base);
+  const cookies = await read(base, (db) => Object.fromEntries(['alice', 'bob', 'carol', 'dave'].map((l) => [l, storeCookie(l, getUserByLogin(db, l).sessionEpoch)])));
+  for (const l of ['alice', 'bob', 'carol', 'dave']) assert.equal(await sessionOf(base, cookies[l]), l);
+
+  // The pre-store build: a restart, carol removed, bob's password changed, frank added (and signed in).
+  pre.boot(base);
+  const usersPath = join(base, 'users.json');
+  const file = readJson(usersPath);
+  delete file.users.carol;
+  file.users.bob.password = hashPassword('bob-downgrade-pw');
+  file.users.frank = { name: 'Frank', createdAt: '2026-05-01T00:00:00.000Z', password: hashPassword('frank-passw0rd') };
+  legacy.writeUsersFile(file, usersPath);
+  assert.deepEqual(pre.signIn(base, 'frank', 'frank-passw0rd'), { sub: 'frank', mustChange: false });
+  const frankPreStore = cookie({ sub: 'frank', name: 'frank' });
+
+  const e = await refused(base);
+  assert.ok(e.message.startsWith(`refusing to start: ${usersPath} changed since store `), e.message);
+  assert.ok(e.message.endsWith('  - or run `packc store import --replace`: the next start re-imports the files as they stand.'), e.message);
+  const before = await read(base, (db) => ({ rows: actions(db).length, users: userRows(db) }));
+
+  const req = await requestIt(base);
+  assert.equal(req.alreadyPending, false);
+  const id = await read(base, (db) => {
+    assert.equal(meta.getMeta(db, 'replace_requested'), meta.storeId(db));
+    assert.deepEqual(actions(db).slice(before.rows), ['meta.set:cli:replace_requested']);
+    assert.deepEqual(userRows(db), before.users, 'the request changes no user');
+    return meta.storeId(db);
+  });
+  assert.equal((await requestIt(base)).alreadyPending, true, 'a second request is a no-op');
+
+  const { logs } = await start(base);
+  assert.ok(logs.includes(`[store] replaced from ${usersPath} (4 entries) and no orgs.json (orgs and memberships kept) into ${dbOf(base)} (store ${id}; packc store import --replace)`), logs.join('\n'));
+  assert.ok(logs.includes('[store]   users: created frank · updated bob (password) · disabled carol (not in the users file)'), logs.join('\n'));
+  assert.ok(logs.includes('[store]   memberships: added default/frank (operator)'), logs.join('\n'));
+  assert.ok(logs.includes('[store]   sessions ended (changed or disabled): bob, carol'), logs.join('\n'));
+  await read(base, (db) => {
+    const u = Object.fromEntries(userRows(db).map((r) => [r.login, r]));
+    const was = Object.fromEntries(before.users.map((r) => [r.login, r]));
+    assert.equal(u.carol.disabled, true);
+    assert.equal(u.carol.ep, was.carol.ep + 1);
+    assert.equal(u.bob.ep, was.bob.ep + 1);
+    assert.ok(verifyPassword('bob-downgrade-pw', getUserByLogin(db, 'bob').password));
+    assert.deepEqual([u.alice.ep, u.alice.disabled, u.alice.owner], [was.alice.ep, false, true], 'an unchanged user keeps its sessions');
+    assert.deepEqual([u.frank.ep, u.frank.owner, u.frank.disabled], [1, false, false], 'created at epoch 1, never an owner');
+    assert.equal(getUserByLogin(db, 'frank').createdAt, '2026-05-01T00:00:00.000Z');
+    assert.deepEqual(membersOf(db, 'default'), ['alice:admin', 'bob:admin', 'carol:admin', 'dave:viewer', 'frank:operator']);
+    assert.deepEqual(actions(db).slice(before.rows), ['meta.set:cli:replace_requested', `store.replace:system:${id}`]);
+    const [row] = listAudit(db, { action: 'store.replace' });
+    assert.deepEqual(row.detail, {
+      users: { created: 1, updated: 1, disabled: 1, enabled: 0 }, orgs: { created: 0, renamed: 0, removed: 0 },
+      memberships: { added: 1, removed: 0, changed: 0 }, sessionsEnded: 2, rootChanged: false, mode: 'local',
+    });
+    assert.equal(meta.getMeta(db, 'replace_requested'), null);
+    const hashes = meta.getMetaJson(db, 'legacy_hashes');
+    assert.deepEqual(hashes, { 'users.json': legacy.sha256File(usersPath), 'orgs.json': { absent: true } });
+    assert.deepEqual(legacy.readMarker(base).files, hashes);
+    assert.equal(legacy.readMarker(base).by, 'replace');
+    assert.equal(meta.getMetaJson(db, 'import_report').kind, 'replace');
+  });
+  assert.equal(await sessionOf(base, cookies.carol), null, "the removed user's cookie is refused");
+  assert.equal(await sessionOf(base, cookies.bob), null, 'a changed password ends the sessions');
+  assert.equal(await sessionOf(base, cookies.alice), 'alice');
+  assert.equal(await sessionOf(base, cookies.dave), 'dave');
+  assert.equal(await sessionOf(base, frankPreStore), null, 'a cookie minted during the downgrade window reads as epoch 0');
+  assert.equal(await sessionOf(base, storeCookie('frank', 1)), 'frank');
+
+  const rows = await read(base, (db) => actions(db).length);
+  const again = await start(base);
+  assert.ok(!again.logs.some((l) => /replaced/.test(l)), 'the start after passes the guard and replaces nothing');
+  await read(base, (db) => assert.equal(actions(db).length, rows));
+});
+
+test('Stale import: a flat single-org store exported, then `orgs create acme` on a pre-store build and a restart — the start refuses; a flat entry with data beside its twin refuses the replace (check D) and moves nothing; then the default org is found at orgs/default and acme exists', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice', 'bob']);
+  pack(base, 'p1');
+  journey(base, 'nightly', join(base, 'packs', 'p1.pack.yaml'));
+  writeFileSync(join(base, 'deploys.jsonl'), '{"at":"2026-01-01T00:00:00.000Z"}\n');
+  await start(base);
+  const r = await exportIt(base);
+  assert.equal(r.orgs.path, null, 'a flat deployment exports no orgs.json');
+
+  // The pre-store build: npm run orgs -- create acme; add-member acme bob admin; a restart; an upload into acme.
+  legacy.writeOrgsFile({ acme: { name: 'Acme', members: { bob: 'admin' } } }, join(base, 'orgs.json'));
+  assert.deepEqual(pre.boot(base), { migrated: ['packs', 'deploys.jsonl', 'journeys'] });
+  pack(join(base, 'orgs', 'acme'), 'a1');
+  assert.deepEqual(pre.packIds(base, 'default'), ['p1']);
+
+  const e = await refused(base);
+  assert.ok(e.message.includes(`${join(base, 'orgs.json')} appeared since store`) && e.message.includes('packc store import --replace'), e.message);
+  await requestIt(base);
+
+  // Data written at the base beside its orgs/default twin: check D, nothing moved or replaced.
+  pack(base, 'stray');
+  const before = await read(base, (db) => ({ rows: actions(db).length, users: userRows(db), root: getOrg(db, 'default').root }));
+  const d = await refused(base);
+  assert.equal(d.nothingMoved, true);
+  assert.equal(d.message, `refusing to start: the pending \`packc store import --replace\` moves the default org's root to ${join(base, 'orgs', 'default')} `
+    + '(the files\' orgs.json holds "default", which a pre-store build keeps there), but '
+    + `${join(base, 'packs')} holds data beside ${join(base, 'orgs', 'default', 'packs')} — neither is moved or merged. `
+    + 'Nothing was moved, imported or replaced; the request stays pending.\n'
+    + '  With the server stopped, merge the flat entry into its twin by hand (or move one of the two aside), then start again.');
+  await read(base, (db) => {
+    assert.deepEqual({ rows: actions(db).length, users: userRows(db), root: getOrg(db, 'default').root }, before);
+    assert.equal(meta.getMeta(db, 'replace_requested'), meta.storeId(db), 'the request stays pending');
+  });
+  rmSync(join(base, 'packs', 'stray.pack.yaml'));   // back to the empty <base>/packs every pre-store restart leaves
+
+  const { logs, warns } = await start(base);
+  const moved = slashed(join(base, 'orgs', 'default', 'packs', 'p1.pack.yaml'));
+  assert.ok(logs.includes(`[store]   the default org's root is now orgs/default — point its CronJobs at OBSERVOGRAM_WORKSPACE=${join(base, 'orgs', 'default')}`), logs.join('\n'));
+  assert.ok(logs.includes(`[store]   removed empty leftovers of a pre-store build: ${join(base, 'packs')}`), logs.join('\n'));
+  assert.ok(logs.includes('[store]   journey file: paths rewritten: nightly.journey.yaml'), logs.join('\n'));
+  assert.ok(logs.includes('[store]   orgs: created acme (orgs/acme)'), logs.join('\n'));
+  assert.deepEqual(warns.filter((w) => /left behind/.test(w)), []);
+  assert.equal(existsSync(join(base, 'packs')), false, 'the empty leftover is removed');
+  assert.deepEqual(pre.journeys(base, 'default'), { nightly: { packA: moved, packB: moved } });
+  await read(base, (db) => {
+    const id = meta.storeId(db);
+    assert.equal(getOrg(db, 'default').root, 'orgs/default');
+    assert.deepEqual(listOrgs(db).map((o) => [o.id, o.root]), [['default', 'orgs/default'], ['acme', 'orgs/acme']]);
+    for (const f of [join('packs', 'p1.pack.yaml'), 'deploys.jsonl', join('journeys', 'nightly.journey.yaml')]) {
+      assert.ok(existsSync(join(base, getOrg(db, 'default').root, f)), `the default org's ${f} is found`);
+    }
+    assert.ok(existsSync(join(base, getOrg(db, 'acme').root, 'packs', 'a1.pack.yaml')));
+    assert.deepEqual(membersOf(db, 'acme'), ['bob:admin']);
+    // orgs.json's "default" (the pre-store migration's) has no members: the memberships follow the file.
+    assert.deepEqual(membersOf(db, 'default'), []);
+    assert.equal(getUserByLogin(db, 'alice').isOwner, true, 'is_owner is never re-derived');
+    assert.deepEqual(actions(db).slice(before.rows), ['org.root:system:default', `store.replace:system:${id}`]);
+    assert.deepEqual(listAudit(db, { action: 'org.root' })[0].detail, { from: '.', to: 'orgs/default' });
+    assert.equal(meta.getMetaJson(db, 'legacy_hashes')['orgs.json'].sha256, legacy.sha256File(join(base, 'orgs.json')).sha256);
+  });
+  const again = await start(base);
+  assert.deepEqual(again.warns.filter((w) => /left behind/.test(w)), []);
+});
+
+test('Stale import: orgs.json edited on a pre-store build — orgs renamed, created and soft-removed to match, a removed slug that reappears is skipped, memberships replaced', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice', 'bob', 'carol']);
+  legacy.writeOrgsFile({
+    default: { name: 'Default', members: { alice: 'admin' } },
+    beta: { name: 'Beta', members: { bob: 'member' } },
+    gamma: { name: 'Gamma', members: { carol: 'member' } },
+  }, join(base, 'orgs.json'));
+  pack(base, 'p1');
+  await start(base);
+  await change(base, (db) => admin.removeOrgSoft(db, 'cli', 'gamma'));
+  await exportIt(base);
+  assert.deepEqual(Object.keys(readJson(join(base, 'orgs.json'))), ['default', 'beta']);
+
+  pre.boot(base);
+  legacy.writeOrgsFile({
+    default: { name: 'Main', members: { alice: 'admin', bob: 'viewer' } },
+    gamma: { name: 'Gamma', members: { carol: 'member' } },
+    delta: { name: 'Delta', members: { carol: 'admin', ghost: 'member' } },
+  }, join(base, 'orgs.json'));
+  await refused(base);
+  await requestIt(base);
+  const before = await read(base, (db) => ({ rows: actions(db).length, users: userRows(db) }));
+  const { logs } = await start(base);
+  assert.ok(logs.includes("[store]   orgs: created delta (orgs/delta) · renamed default ('Default' → 'Main') · removed beta (not in orgs.json)"), logs.join('\n'));
+  assert.ok(logs.includes('[store]   memberships: added default/bob (viewer), delta/carol (admin)'), logs.join('\n'));
+  assert.ok(logs.includes('[store]   dropped: member gamma/carol (org skipped) · member delta/ghost (no such user)'), logs.join('\n'));
+  assert.ok(logs.includes('[store]   skipped: org gamma (the id was used by a removed org — never reused; skipped)'), logs.join('\n'));
+  await read(base, (db) => {
+    assert.equal(getOrg(db, 'default').name, 'Main');
+    assert.ok(getOrg(db, 'beta').removedAt, 'an org absent from the file is soft-removed');
+    assert.ok(getOrg(db, 'gamma').removedAt, 'a removed slug is never reused');
+    assert.deepEqual([getOrg(db, 'delta').root, getOrg(db, 'delta').removedAt], ['orgs/delta', null]);
+    assert.deepEqual(membersOf(db, 'default'), ['alice:admin', 'bob:viewer']);
+    assert.deepEqual(membersOf(db, 'delta'), ['carol:admin']);
+    assert.deepEqual(membersOf(db, 'beta'), ['bob:operator'], 'a soft-removed org keeps its rows');
+    const was = Object.fromEntries(before.users.map((r) => [r.login, r.ep]));
+    assert.deepEqual(userRows(db).map((u) => [u.login, u.ep - was[u.login]]), [['alice', 0], ['bob', 1], ['carol', 1]], 'a membership change ends the sessions');
+    assert.deepEqual(actions(db).slice(before.rows), [`store.replace:system:${meta.storeId(db)}`]);
+  });
+});
+
+test('Stale import: the replace refuses to leave no enabled owner (check D) — nothing changes and the request stays pending; with the owner back in users.json it runs', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice']);
+  await start(base);
+  await change(base, (db) => admin.addLocalUser(db, 'cli', { login: 'bob', password: 'bob-passw0rd', role: 'operator' }));
+  await exportIt(base);
+  const usersPath = join(base, 'users.json');
+  const exported = readJson(usersPath);
+  const edited = { users: { bob: { ...exported.users.bob, password: hashPassword('bob-new-passw0rd') } } };
+  legacy.writeUsersFile(edited, usersPath);
+  await refused(base);
+  await requestIt(base);
+  const before = await read(base, (db) => ({ rows: actions(db).length, users: userRows(db) }));
+  const e = await refused(base);
+  assert.equal(e.message, `refusing to start: the pending \`packc store import --replace\` would leave store ${legacy.readMarker(base).storeId} `
+    + `with no enabled owner who can sign in with a local password (it disables alice: not in ${usersPath}). `
+    + 'Nothing was moved, imported or replaced; the request stays pending.\n'
+    + `  With the server stopped, put an owner back into ${usersPath}, or make a user the files keep an owner `
+    + '(npm run users -- owner <login>), then start again.');
+  await read(base, (db) => {
+    assert.deepEqual({ rows: actions(db).length, users: userRows(db) }, before);
+    assert.equal(meta.getMeta(db, 'replace_requested'), meta.storeId(db));
+  });
+  legacy.writeUsersFile({ users: { alice: exported.users.alice, ...edited.users } }, usersPath);
+  await start(base);
+  await read(base, (db) => {
+    assert.ok(verifyPassword('bob-new-passw0rd', getUserByLogin(db, 'bob').password));
+    assert.equal(getUserByLogin(db, 'alice').disabled, false);
+  });
+});
+
+test('Stale import: with OBSERVOGRAM_USERS_FILE outside the workspace the replace re-imports the recorded file', async () => {
+  const base = tempDir();
+  const outside = join(tempDir('ops-users'), 'users.json');
+  usersJson(base, ['alice', 'bob'], outside);
+  const env = { OBSERVOGRAM_USERS_FILE: outside };
+  await start(base, env);
+  assert.equal((await exportIt(base)).users.path, outside);
+  const file = readJson(outside);
+  file.users.bob.password = hashPassword('bob-new-passw0rd');
+  legacy.writeUsersFile(file, outside);
+  assert.deepEqual(pre.signIn(base, 'bob', 'bob-new-passw0rd', { usersFile: outside }), { sub: 'bob', mustChange: false });
+  const e = await refused(base, env);
+  assert.ok(e.message.startsWith(`refusing to start: ${outside} changed since store`), e.message);
+  await requestIt(base);
+  await start(base);   // the recorded users_file is compared and read, whatever this env says
+  await read(base, (db) => {
+    assert.ok(verifyPassword('bob-new-passw0rd', getUserByLogin(db, 'bob').password));
+    assert.deepEqual(meta.getMetaJson(db, 'legacy_hashes')[outside], legacy.sha256File(outside));
+  });
+  await start(base, env);
+});
+
+test('Stale import: a replace requested from a shell with no OIDC env on an OIDC deployment maps members under the unit\'s issuer and disables no OIDC user; after an issuer change it refuses at step 2 and stays pending', async () => {
+  const base = tempDir();
+  legacy.writeOrgsFile({
+    default: { name: 'Default', members: { 'sub-1': 'admin' } },
+    acme: { name: 'Acme', members: { 'sub-2': 'member' } },
+  }, join(base, 'orgs.json'));
+  pack(base, 'p1');
+  const env = { OBSERVOGRAM_OIDC_ISSUER: ISSUER };
+  await start(base, env);
+  await exportIt(base);
+  assert.deepEqual(readJson(join(base, 'orgs.json')), {
+    default: { name: 'Default', members: { 'sub-1': 'admin' } }, acme: { name: 'Acme', members: { 'sub-2': 'member' } },
+  });
+  pre.boot(base);
+  legacy.writeOrgsFile({
+    default: { name: 'Default', members: { 'sub-1': 'admin' } },
+    acme: { name: 'Acme', members: { 'sub-2': 'admin', 'sub-3': 'viewer' } },
+  }, join(base, 'orgs.json'));
+  await refused(base, env);
+
+  // The request, from a shell without the unit's OIDC env.
+  const shell = { ...process.env };
+  for (const k of STRIP) { delete shell[`OBSERVOGRAM_${k}`]; delete shell[`TOMOGRAPH_${k}`]; }
+  shell.OBSERVOGRAM_WORKSPACE = base;
+  const run = (...args) => spawnSync(process.execPath, [PACKC, 'store', ...args], { env: shell, encoding: 'utf8', timeout: 60_000 });
+  const ok = run('import', '--replace');
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.deepEqual(ok.stdout.trim().split('\n'), [`store: ${dbOf(base)}`, REPLACE_REQUESTED]);
+
+  // A changed issuer refuses at step 2, before the replace; the request stays pending.
+  const before = await read(base, (db) => ({ rows: actions(db).length, users: userRows(db) }));
+  const b = await refused(base, { OBSERVOGRAM_OIDC_ISSUER: 'https://other.example/' });
+  assert.match(b.message, /^refusing to start: OBSERVOGRAM_OIDC_ISSUER is https:\/\/other\.example\//);
+  await read(base, (db) => {
+    assert.deepEqual({ rows: actions(db).length, users: userRows(db) }, before);
+    assert.equal(meta.getMeta(db, 'replace_requested'), meta.storeId(db));
+  });
+
+  await start(base, env);
+  await read(base, (db) => {
+    assert.deepEqual(userRows(db).map((u) => [u.login, u.kind, u.disabled, u.owner]), [
+      [`${KEY}#sub-1`, 'oidc', false, true], [`${KEY}#sub-2`, 'oidc', false, false], [`${KEY}#sub-3`, 'oidc', false, false],
+    ]);
+    assert.equal(getUserByLogin(db, `${KEY}#sub-3`).sessionEpoch, 1);
+    assert.deepEqual(membersOf(db, 'acme'), [`${KEY}#sub-2:admin`, `${KEY}#sub-3:viewer`]);
+    assert.deepEqual(membersOf(db, 'default'), [`${KEY}#sub-1:admin`]);
+    assert.equal(meta.getMeta(db, 'replace_requested'), null);
+  });
+});
+
+test('Stale import: a flat OIDC round trip keeps every IdP user and the owner enabled; a user a pre-store build adds to the leftover users.json is created disabled', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice']);   // a leftover under OIDC: imported disabled
+  pack(base, 'p1');
+  const env = { OBSERVOGRAM_OIDC_ISSUER: ISSUER };
+  await start(base, env);
+  await change(base, (db) => {
+    admin.grantOwnerByLogin(db, 'cli', `${KEY}#sub-1`, { shellIssuerRaw: ISSUER });
+    identity.createOidcUser(db, { issuerKey: KEY, issuerDisplay: ISSUER, sub: 'sub-2', via: 'test' });
+  });
+  const r = await exportIt(base);
+  assert.deepEqual([r.orgs.path, r.users.logins], [null, []]);
+  pre.boot(base);
+  legacy.writeUsersFile({ users: { ops: record('bob') } }, join(base, 'users.json'));
+  await refused(base, env);
+  await requestIt(base);
+  await start(base, env);
+  await read(base, (db) => {
+    assert.deepEqual(userRows(db).map((u) => [u.login, u.disabled, u.owner]), [
+      ['alice', true, false], [`${KEY}#sub-1`, false, true], [`${KEY}#sub-2`, false, false], ['ops', true, false],
+    ]);
+    assert.equal(getOrg(db, 'default').root, '.');
+    assert.ok(membersOf(db, 'default').includes('ops:operator'));
+  });
+  await start(base, env);
+});
+
+test('import --replace: the request refuses a store that is in use, never imported, foreign or :memory:; the start refuses a request the marker does not match (a foreign store, a missing marker) and changes nothing', async () => {
+  const refusedOp = (re) => (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && re.test(e.message);
+  const a = tempDir();
+  usersJson(a, ['alice']);
+  await start(a);
+  const b = tempDir();
+  usersJson(b, ['alice']);
+  await start(b);
+  legacy.writeUsersFile({ users: { alice: record('alice'), bob: record('bob') } }, join(b, 'users.json'));
+  await requestIt(b);
+
+  // b's database, its request pending, pointed at a's workspace: (a) refuses; nothing changes.
+  const foreign = join(a, 'foreign.db');
+  copyFileSync(dbOf(b), foreign);
+  const rowsOf = async (path) => { const db = await openStore({ path }); try { return { rows: actions(db).length, users: userRows(db), req: meta.getMeta(db, 'replace_requested') }; } finally { closeStore(path); } };
+  const before = await rowsOf(foreign);
+  const e = await refused(a, { OBSERVOGRAM_DB: foreign });
+  assert.match(e.message, /^refusing to start: the legacy users\.json\/orgs\.json in .* were imported into store /);
+  assert.deepEqual(await rowsOf(foreign), before);
+  assert.ok(before.req, 'the request stays pending');
+  await assert.rejects(requestReplace({ dbPath: foreign, base: a, out: silent }), refusedOp(/names store .*: an empty or foreign store — see the stale-store ways out/));
+
+  // b's marker gone: (c) refuses, naming it; put back, the replace runs.
+  const markerB = readFileSync(legacy.markerPath(b));
+  rmSync(legacy.markerPath(b));
+  const c = await refused(b);
+  const idB = JSON.parse(markerB).storeId;
+  assert.equal(c.message, `refusing to start: ${dbOf(b)} holds store ${idB} with a pending \`packc store import --replace\` requested for store ${idB}, `
+    + `but ${legacy.markerPath(b)} is missing. Nothing was imported or replaced; the request stays pending. Ways out:\n`
+    + '  - point OBSERVOGRAM_DB at the store the request was made for, or at a copy of its backup;\n'
+    + '  - with the server stopped, `packc store restore <backup>`;\n'
+    + `  - or put ${legacy.markerPath(b)} back as it was (it names store ${idB}), then start again.`);
+  await assert.rejects(requestIt(b), refusedOp(/is missing: an empty or foreign store/));
+  writeFileSync(legacy.markerPath(b), markerB);
+  const { logs } = await start(b);
+  assert.ok(logs.some((l) => l.startsWith('[store] replaced from')), logs.join('\n'));
+  await read(b, (db) => assert.ok(getUserByLogin(db, 'bob')));
+
+  // In use, never imported, no database, :memory:.
+  await openStore({ path: dbOf(a) });
+  try {
+    await assert.rejects(requestIt(a), refusedOp(/is in use — stop the server .* before requesting a replace/));
+  } finally {
+    closeStore(dbOf(a));
+  }
+  const fresh = tempDir();
+  await openStore({ path: dbOf(fresh) });
+  closeStore(dbOf(fresh));
+  await assert.rejects(requestIt(fresh), refusedOp(/never imported, but .* is missing: an empty or foreign store/));
+  await assert.rejects(requestIt(tempDir()), refusedOp(/no database at/));
+  await assert.rejects(requestReplace({ dbPath: ':memory:', base: a, out: silent }), refusedOp(/:memory:/));
+  await read(a, (db) => assert.equal(meta.getMeta(db, 'replace_requested'), null));
+});
+
+test('packc store import: without --replace a usage error naming it; the refusal on one line with exit 1', () => {
+  const base = tempDir();
+  const env = { ...process.env };
+  for (const k of STRIP) { delete env[`OBSERVOGRAM_${k}`]; delete env[`TOMOGRAPH_${k}`]; }
+  env.OBSERVOGRAM_WORKSPACE = base;
+  const run = (...args) => spawnSync(process.execPath, [PACKC, 'store', ...args], { env, encoding: 'utf8', timeout: 60_000 });
+  for (const args of [['import'], ['import', '--force'], ['import', '--replace', 'x']]) {
+    const r = run(...args);
+    assert.equal(r.status, 2, args.join(' '));
+    assert.match(r.stderr, /only `packc store import --replace` exists/);
+    assert.match(r.stderr, /packc store import --replace +Ask the next server start/);
+  }
+  const none = run('import', '--replace');
+  assert.equal(none.status, 1);
+  assert.equal(none.stdout, `store: ${dbOf(base)}\n`);
+  assert.match(none.stderr, /^packc store import: no database at /);
+  assert.equal(none.stderr.trim().split('\n').length, 1);
 });
