@@ -788,6 +788,47 @@ test('Stale import: a flat single-org store exported, then `orgs create acme` on
   assert.deepEqual(again.warns.filter((w) => /left behind/.test(w)), []);
 });
 
+test('Stale import: `orgs create acme` on a pre-store build with no restart after it — the replace moves the flat workspace itself (migrateFlatWorkspace): the entries under orgs/default, the root, the journey file rewritten; the start after passes', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice', 'bob']);
+  pack(base, 'p1');
+  journey(base, 'nightly', join(base, 'packs', 'p1.pack.yaml'));
+  writeFileSync(join(base, 'deploys.jsonl'), '{"at":"2026-01-01T00:00:00.000Z"}\n');
+  await start(base);
+  await exportIt(base);
+
+  // The pre-store build: npm run orgs -- create acme; add-member acme bob admin — and no restart, so nothing moved yet.
+  legacy.writeOrgsFile({ acme: { name: 'Acme', members: { bob: 'admin' } } }, join(base, 'orgs.json'));
+  assert.equal(existsSync(join(base, 'orgs', 'default')), false);
+  await refused(base);
+  await requestIt(base);
+  const rows = await read(base, (db) => actions(db).length);
+
+  const { logs, warns } = await start(base);
+  const moved = slashed(join(base, 'orgs', 'default', 'packs', 'p1.pack.yaml'));
+  for (const f of ['packs', 'deploys.jsonl', 'journeys']) {
+    assert.ok(logs.some((l) => l.startsWith('[tenancy] moved ') && l.endsWith(` to ${join('orgs', 'default', f)}`)), `${f} moved\n${logs.join('\n')}`);
+  }
+  assert.ok(logs.includes(`[store]   the default org's root is now orgs/default — point its CronJobs at OBSERVOGRAM_WORKSPACE=${join(base, 'orgs', 'default')}`), logs.join('\n'));
+  assert.ok(logs.includes('[store]   journey file: paths rewritten: nightly.journey.yaml'), logs.join('\n'));
+  assert.deepEqual(warns.filter((w) => /left behind/.test(w)), []);
+  for (const f of ['packs', 'deploys.jsonl', 'journeys']) assert.equal(existsSync(join(base, f)), false, `${f} is no longer at the base`);
+  assert.deepEqual(pre.journeys(base, 'default'), { nightly: { packA: moved, packB: moved } });
+  assert.deepEqual(pre.packIds(base, 'default'), ['p1']);
+  await read(base, (db) => {
+    const id = meta.storeId(db);
+    assert.deepEqual(listOrgs(db).map((o) => [o.id, o.root]), [['default', 'orgs/default'], ['acme', 'orgs/acme']]);
+    for (const f of [join('packs', 'p1.pack.yaml'), 'deploys.jsonl', join('journeys', 'nightly.journey.yaml')]) {
+      assert.ok(existsSync(join(base, getOrg(db, 'default').root, f)), `the default org's ${f} is found`);
+    }
+    assert.deepEqual(actions(db).slice(rows), ['org.root:system:default', `store.replace:system:${id}`]);
+    assert.deepEqual(listAudit(db, { action: 'org.root' })[0].detail, { from: '.', to: 'orgs/default' });
+  });
+  const again = await start(base);
+  assert.deepEqual(again.warns.filter((w) => /left behind/.test(w)), []);
+  assert.deepEqual(pre.journeys(base, 'default'), { nightly: { packA: moved, packB: moved } });
+});
+
 test('Stale import: orgs.json edited on a pre-store build — orgs renamed, created and soft-removed to match, a removed slug that reappears is skipped, memberships replaced', async () => {
   const base = tempDir();
   usersJson(base, ['alice', 'bob', 'carol']);
