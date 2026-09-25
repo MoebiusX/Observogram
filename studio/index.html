@@ -24,6 +24,14 @@
 <link rel="stylesheet" href="/app.css">
 <link rel="stylesheet" href="/verdict-ui.css">
 <link rel="stylesheet" href="/proto.css">
+<link rel="stylesheet" href="/ux.css">
+<link rel="stylesheet" href="/ux-discover.css">
+<link rel="stylesheet" href="/ux-diagnose.css">
+<link rel="stylesheet" href="/ux-remediate.css">
+<link rel="stylesheet" href="/ux-neuron.css">
+<link rel="stylesheet" href="/ux-evidence.css">
+<link rel="stylesheet" href="/ux-build-define.css">
+<link rel="stylesheet" href="/ux-build-result.css">
 </head>
 <body>
 <a class="skip" href="#layer-view">Skip to content</a>
@@ -473,6 +481,8 @@
 <!-- The Build conformance status, announced once per change: a persistent live region outside the re-rendered
      view (the summary block itself is rebuilt on every re-render, so a live region there announced nothing or everything). -->
 <div id="build-status" class="sr-text" role="status" aria-live="polite"></div>
+<!-- Scan / evaluation / compile / deploy progress, announced once per change (studio/ux-kit.mjs announce()). -->
+<div id="ux-status" class="sr-text" role="status" aria-live="polite"></div>
 
 <script type="module" src="/app.mjs"></script>
 </body>

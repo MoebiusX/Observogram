@@ -1,0 +1,217 @@
+/* ============================================================
+   studio/ux.css — the shared screen grammar (studio/ux-kit.mjs,
+   docs/UX_SCREEN_GRAMMAR.md): context · decision · next action ·
+   explanation · details, one status vocabulary, readable defaults.
+   Loaded after app.css so its readability floor wins.
+   ============================================================ */
+
+body {
+  --ux-ink:     var(--obs-ink, var(--ink));
+  --ux-ink-2:   var(--obs-ink-2, var(--ink-2));
+  --ux-ink-3:   var(--obs-ink-3, var(--ink-3));
+  --ux-bg:      var(--obs-bg-2, var(--card));
+  --ux-bg-2:    var(--obs-bg-3, var(--paper));
+  --ux-line:    var(--obs-line-2, var(--line));
+  --ux-accent:  var(--obs-purple, var(--CMP));
+  --ux-ok:      #10b981;
+  --ux-warn:    #f59e0b;
+  --ux-fail:    #f87171;
+  --ux-info:    #60a5fa;
+  --ux-ok-bg:   rgba(16,185,129,0.12);
+  --ux-warn-bg: rgba(245,158,11,0.12);
+  --ux-fail-bg: rgba(248,113,113,0.12);
+  --ux-info-bg: rgba(96,165,250,0.12);
+}
+html[data-theme="light"] body {
+  --ux-ok:      #047857;
+  --ux-warn:    #a15c07;
+  --ux-fail:    #b91c1c;
+  --ux-info:    #1d4ed8;
+  --ux-ok-bg:   #ecfdf5;
+  --ux-warn-bg: #fffbeb;
+  --ux-fail-bg: #fef2f2;
+  --ux-info-bg: #eff6ff;
+}
+
+/* ---------- readability floor (review §2 "Make the default view readable") ----------
+   Muted ink tokens raised to WCAG 2.2 AA contrast on their own backgrounds;
+   body copy up a step; italics reserved for emphasis, not help text. */
+:root { --ink-5: #6A7380; }
+[data-theme="dark"] { --ink-4: #97A1B3; --ink-5: #8A94A8; }
+body.chrome-observa { --obs-ink-3: #a3acbd; --obs-ink-4: #8b94a8; }
+html[data-theme="light"] body.chrome-observa { --obs-ink-3: #4f535d; --obs-ink-4: #676b75; }
+body { font-size: 15px; line-height: 1.5; }
+
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--ux-accent);
+  outline-offset: 2px;
+}
+
+/* ---------- the decision header ---------- */
+.ux-decision {
+  background: var(--ux-bg);
+  border: 1px solid var(--ux-line);
+  border-left: 4px solid var(--ux-tone, var(--ux-info));
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin: 0 0 20px;
+  color: var(--ux-ink);
+  font-family: var(--sans);
+}
+.ux-decision.is-sticky {
+  position: sticky;
+  top: calc(var(--observa-chrome-h, 96px) + var(--ux-context-h, 0px));
+  z-index: 40;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+}
+.ux-tone-ok      { --ux-tone: var(--ux-ok);   --ux-tone-bg: var(--ux-ok-bg); }
+.ux-tone-warn    { --ux-tone: var(--ux-warn); --ux-tone-bg: var(--ux-warn-bg); }
+.ux-tone-fail    { --ux-tone: var(--ux-fail); --ux-tone-bg: var(--ux-fail-bg); }
+.ux-tone-info    { --ux-tone: var(--ux-info); --ux-tone-bg: var(--ux-info-bg); }
+.ux-tone-neutral { --ux-tone: var(--ux-ink-3); --ux-tone-bg: transparent; }
+.ux-tone-muted   { --ux-tone: var(--ux-ink-3); --ux-tone-bg: transparent; }
+
+.ux-ctx {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
+  font-size: 14px; color: var(--ux-ink-2); margin-bottom: 8px;
+}
+.ux-ctx-key {
+  font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--ux-ink-3); margin-right: 4px;
+}
+.ux-ctx-val { font-weight: 600; color: var(--ux-ink); }
+.ux-ctx-sep { color: var(--ux-ink-3); }
+
+.ux-decision-main { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; }
+.ux-decision-text { flex: 1 1 420px; min-width: 0; }
+.ux-eyebrow {
+  font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--ux-ink-3); margin-bottom: 4px;
+}
+.ux-decision-sentence {
+  margin: 0; font-size: 20px; line-height: 1.35; font-weight: 600; color: var(--ux-ink);
+  font-family: var(--sans);
+}
+.ux-verdict {
+  display: inline-block; margin-right: 10px; padding: 2px 10px; border-radius: 6px;
+  background: var(--ux-tone-bg); color: var(--ux-tone); border: 1px solid var(--ux-tone);
+  font-size: 16px; font-weight: 700; vertical-align: 2px;
+}
+.ux-decision-note { margin: 6px 0 0; font-size: 15px; color: var(--ux-ink-2); }
+.ux-decision-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+.ux-primary-btn, .ux-secondary-btn {
+  font: 600 15px/1.2 var(--sans);
+  min-height: 40px; padding: 9px 16px; border-radius: 8px; cursor: pointer;
+  border: 1px solid transparent;
+}
+.ux-primary-btn { background: var(--ux-accent); color: #fff; }
+.ux-primary-btn:hover { filter: brightness(1.1); }
+.ux-secondary-btn { background: transparent; color: var(--ux-ink); border-color: var(--ux-line); }
+.ux-secondary-btn:hover { border-color: var(--ux-accent); }
+.ux-link-btn {
+  background: none; border: 0; padding: 4px 0; min-height: 24px; cursor: pointer;
+  color: var(--ux-accent); font: 600 14px/1.3 var(--sans); white-space: nowrap;
+}
+.ux-link-btn:hover { text-decoration: underline; }
+
+.ux-causes { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 8px; counter-reset: ux-cause; }
+.ux-cause {
+  display: flex; gap: 12px; align-items: center; justify-content: space-between;
+  padding: 10px 12px; border-radius: 8px; background: var(--ux-bg-2);
+  border-left: 3px solid var(--ux-tone);
+}
+.ux-cause-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ux-cause-title { font-size: 15px; font-weight: 600; color: var(--ux-ink); }
+.ux-cause-title::before { counter-increment: ux-cause; content: counter(ux-cause) ". "; color: var(--ux-ink-3); }
+.ux-cause-why { font-size: 14px; color: var(--ux-ink-2); }
+
+.ux-measures {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px; margin: 14px 0 0;
+}
+.ux-measure { padding: 8px 12px; border-radius: 8px; background: var(--ux-bg-2); }
+.ux-measure dt { font-size: 13px; color: var(--ux-ink-3); font-weight: 500; }
+.ux-measure dd { margin: 2px 0 0; display: flex; flex-direction: column; }
+.ux-measure-val { font-size: 18px; font-weight: 700; color: var(--ux-tone, var(--ux-ink)); }
+.ux-measure.ux-tone-neutral .ux-measure-val { color: var(--ux-ink); }
+.ux-measure-note { font-size: 13px; color: var(--ux-ink-2); }
+
+/* ---------- status chips: one shape per property ---------- */
+.ux-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 600 13px/1.2 var(--sans); padding: 3px 8px; border-radius: 999px;
+  border: 1px solid var(--ux-line); color: var(--ux-ink-2); white-space: nowrap;
+  cursor: help;
+}
+.ux-chip-prop { font-weight: 500; color: var(--ux-ink-3); }
+.ux-chip-prop::after { content: " ·"; }
+.ux-chip-ok      { color: var(--ux-ok);   border-color: currentColor; background: var(--ux-ok-bg); }
+.ux-chip-warn    { color: var(--ux-warn); border-color: currentColor; background: var(--ux-warn-bg); }
+.ux-chip-fail    { color: var(--ux-fail); border-color: currentColor; background: var(--ux-fail-bg); }
+.ux-chip-info    { color: var(--ux-info); border-color: currentColor; background: var(--ux-info-bg); }
+.ux-chip-muted   { color: var(--ux-ink-3); border-style: dashed; }
+/* Shape encodes the property, so colour is never the only cue:
+   origin = square, completion = pill, evidence = dot, assessment = pill with mark. */
+.ux-chip-origin { border-radius: 4px; }
+.ux-chip-evidence::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.ux-chip-assessment.ux-chip-ok::before   { content: "✓"; }
+.ux-chip-assessment.ux-chip-fail::before { content: "✕"; }
+.ux-chip-assessment.ux-chip-warn::before { content: "!"; }
+.ux-chip-assessment.ux-chip-muted::before { content: "–"; }
+
+.ux-term {
+  text-decoration: underline dotted; text-underline-offset: 3px; cursor: help;
+}
+
+/* ---------- empty states ---------- */
+.ux-empty {
+  border: 1px dashed var(--ux-line); border-radius: 10px; padding: 18px 20px;
+  background: var(--ux-bg); color: var(--ux-ink-2); margin: 12px 0;
+}
+.ux-empty-title { margin: 0 0 6px; font-size: 16px; font-weight: 600; color: var(--ux-ink); }
+.ux-empty-checked, .ux-empty-body { margin: 4px 0; font-size: 14px; }
+.ux-empty-key { font-weight: 600; color: var(--ux-ink-3); }
+.ux-empty-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+
+/* ---------- sticky section index ---------- */
+.ux-section-nav {
+  position: sticky; top: calc(var(--observa-chrome-h, 96px) + var(--ux-context-h, 0px)); z-index: 30;
+  display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0; margin: 0 0 16px;
+  background: var(--obs-bg, var(--paper));
+  border-bottom: 1px solid var(--ux-line);
+}
+.ux-section-link {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 32px;
+  padding: 5px 12px; border-radius: 999px; border: 1px solid var(--ux-line);
+  font: 500 14px/1.2 var(--sans); color: var(--ux-ink-2); text-decoration: none;
+}
+.ux-section-link:hover, .ux-section-link.is-current { border-color: var(--ux-accent); color: var(--ux-ink); }
+.ux-section-count {
+  font-size: 12px; font-weight: 700; padding: 1px 7px; border-radius: 999px;
+  background: var(--ux-tone-bg, var(--ux-bg-2)); color: var(--ux-tone, var(--ux-ink-2));
+}
+[id].ux-section-target { scroll-margin-top: calc(var(--observa-chrome-h, 96px) + 120px); }
+
+/* ---------- collapsed reference material ---------- */
+.ux-disclosure {
+  border: 1px solid var(--ux-line); border-radius: 10px; margin: 16px 0;
+  background: var(--ux-bg);
+}
+.ux-disclosure > summary {
+  cursor: pointer; padding: 12px 16px; font: 600 15px/1.3 var(--sans); color: var(--ux-ink);
+  min-height: 44px; display: flex; align-items: center;
+}
+.ux-disclosure-body { padding: 0 16px 16px; font-size: 15px; color: var(--ux-ink-2); }
+
+/* ---------- task filters (segmented) ---------- */
+.ux-segmented { display: inline-flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.ux-segmented button {
+  font: 500 14px/1.2 var(--sans); min-height: 34px; padding: 6px 12px;
+  border-radius: 999px; border: 1px solid var(--ux-line); background: transparent;
+  color: var(--ux-ink-2); cursor: pointer;
+}
+.ux-segmented button[aria-pressed="true"] {
+  background: var(--ux-accent); border-color: var(--ux-accent); color: #fff;
+}
+.ux-segmented .ux-seg-count { margin-left: 6px; font-weight: 700; opacity: 0.85; }
