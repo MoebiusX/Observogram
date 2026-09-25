@@ -1105,8 +1105,8 @@ export const sheetModeFor = (step) => SHEET_MODES[step] || 'edit';
 /**
  * The BUILD journey's three header cards (docs/BUILD_JOURNEY.md): the same shape as the analysis journey's tabs
  * and the same accents, rendered by the same header renderer whenever state.mode is 'build'. `techName` is the
- * step's own name (the tab's title and accessible name read "Define — Choose a service, tier, and starting point", never the engine
- * word behind it; measured: "Library — …"). A card is reachable when the previous step's inputs are valid
+ * step's own name (the tab's title and accessible name read "Define — Choose a service, tier, and starting point",
+ * never the engine word behind it; measured: "Library — …"). A card is reachable when the previous step's inputs are valid
  * (buildStepReachability).
  */
 export const BUILD_TABS = [

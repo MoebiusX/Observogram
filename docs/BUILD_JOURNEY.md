@@ -26,9 +26,9 @@ unresolved placeholders stay visible so Diagnose grades them as gaps, never as v
 flowchart TD
     A["Log in"] --> B{"What would you like to do?"}
     B -->|"Check an existing service or pack"| C["Select service or import pack"]
-    B -->|"Build a new pack"| D["DEFINE<br/>Service, tier, products or archetype"]
-    D --> E["COMPILE<br/>Pack and deployable artifacts"]
-    E --> F["VERIFY<br/>Grade conformance and review placeholders"]
+    B -->|"Build a new pack"| D["DEFINE<br/>What are we building for?"]
+    D --> E["COMPILE<br/>What will the pack include?"]
+    E --> F["VERIFY<br/>Can we use this pack?"]
     F --> G{"Ready to continue?"}
     G -->|"Resolve or adjust"| D
     G -->|"Continue with visible gaps"| H["Pack available in Discover"]
@@ -890,8 +890,8 @@ synthesises one; the compiled burn alert of a floor counts the samples under the
 schema is asked ("a ratio SLI has no bound, so no direction").
 
 *Small fixes in the same slice.* The header step tabs' accessible names read *Define —
-Choose a service, tier, and starting point* (and Compile, Verify): `BUILD_TABS` lives in `build-model.mjs`
-(pure), `techName` is the step's own word, `tabName` spells the name once for the tab's
+Service, tier & library* (and Compile, Verify; the taglines were renamed later, #110): `BUILD_TABS`
+lives in `build-model.mjs` (pure), `techName` is the step's own word, `tabName` spells the name once for the tab's
 `aria-label` and `title`. The description default bug (an empty box under a "library default"
 label) is gone with the face. The rolodex counts line and the L1 slab head are unchanged.
 
