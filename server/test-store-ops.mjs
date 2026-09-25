@@ -36,7 +36,7 @@ const { test } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
 const { spawnSync } = await import('node:child_process');
 const { createHmac } = await import('node:crypto');
-const { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } = await import('node:fs');
+const { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
 const { dirname, join } = await import('node:path');
 const { fileURLToPath } = await import('node:url');
@@ -308,6 +308,28 @@ test('export to a directory: only reads the store, never overwrites', async () =
   assert.equal(readFileSync(legacy.markerPath(base), 'utf8'), markerBefore);
   assert.ok(existsSync(join(base, 'packs', 'p1.pack.yaml')));
   assert.equal(existsSync(join(base, 'orgs.json')), false);
+});
+
+test('export: users.json holds password hashes — a new one is created 0600, an existing one keeps its mode, no .tmp left behind', { skip: process.platform === 'win32' && 'POSIX modes' }, async () => {
+  const base = tempDir();
+  usersJson(base, ['alice']);
+  await start(base);
+  await change(base, (db) => admin.createOrgFromAdmin(db, 'cli', { id: 'acme', name: 'Acme', admin: 'alice', base }));
+  const dir = join(tempDir('ops-out'), 'export');
+  await exportIt(base, dir);
+  const mode = (p) => statSync(p).mode & 0o777;
+  assert.equal(mode(join(dir, 'users.json')), 0o600, 'a directory export (a backup) is not world-readable');
+  assert.equal(mode(join(dir, 'orgs.json')), 0o600);
+  assert.deepEqual(readdirSync(dir).sort(), ['orgs.json', 'users.json'], 'no users.json.tmp left behind');
+
+  // An existing file (a bind mount, an operator's chmod) is rewritten in place: its mode stays.
+  const kept = join(tempDir('ops-mode'), 'users.json');
+  writeFileSync(kept, '{}');
+  chmodSync(kept, 0o640);
+  legacy.writeUsersFile({ users: { alice: record('alice') } }, kept);
+  assert.equal(mode(kept), 0o640);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(kept, 'utf8')).users), ['alice']);
+  assert.equal(existsSync(`${kept}.tmp`), false);
 });
 
 test('export: OIDC members are written by their bare sub, only under the recorded issuer; never into users.json', async () => {

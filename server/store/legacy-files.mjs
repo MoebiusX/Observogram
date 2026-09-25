@@ -135,13 +135,15 @@ export function readOrgsFileStrict(path) {
 // ---------- writers (today's, verbatim) ----------
 
 // users.json as the pre-store tools wrote it: a 0600 temp file, then its
-// bytes copied in place, which keeps working for a bind-mounted file.
+// bytes copied in place, which keeps working for a bind-mounted file. It
+// holds password hashes, so a file this creates is 0600 too (an existing
+// one keeps its mode), and the temp file is removed, not left empty.
 export function writeUsersFile(data, path) {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
-  writeFileSync(path, readFileSync(tmp));
-  try { writeFileSync(tmp, ''); } catch { /* best effort */ }
+  writeFileSync(path, readFileSync(tmp), { mode: 0o600 });
+  try { rmSync(tmp, { force: true }); } catch { /* best effort */ }
 }
 
 // orgs.json: a 0600 temp file renamed over it, with a trailing newline.
