@@ -25,6 +25,11 @@
 //                                      engine's usage errors inline, whether it can be added
 //   customDefFromDraft(draft)          the definition the engine takes (the percent typed becomes the ratio the
 //                                      pack stores; the numbers parsed)
+//   sliSummarySentence(values)         the editor's opening sentence in real units ('… is healthy when its ratio is
+//                                      at or below 0.8; target 99.9% of the time over 30 days.')
+//   sliRelationshipChecks(values)      direction · bound · unit · objective · window checked as typed, per field
+//   sliName(id) · windowText(w)        an id and a window as words; generatedOutputs(result, id) what the pack made
+//                                      of an SLI (its SLO, recording rule, burn alerts)
 //
 // Nothing here re-implements the engine's validation: the engine is the
 // authority (a 400 comes back with `override <sli>.<field>: …` / `custom
@@ -153,21 +158,108 @@ export function resolveTemplate(text, params = null, entry = null) {
   return { text: out, used, unresolved, resolved: unresolved.length === 0 };
 }
 
+// ---------- plain words: the SLI's name, its window, the sentence the editor opens with ----------
+
+// Words an SLI id spells that read better in capitals (or spelled out) when the id is shown as a name.
+const NAME_WORDS = { http: 'HTTP', https: 'HTTPS', dlq: 'DLQ', wal: 'WAL', tsdb: 'TSDB', api: 'API', otlp: 'OTLP', sli: 'SLI', slo: 'SLO', mq: 'MQ', qmgr: 'queue manager', grpc: 'gRPC', db: 'DB', ibm: 'IBM', jvm: 'JVM', cpu: 'CPU', gc: 'GC', tls: 'TLS', dns: 'DNS', p99: 'p99', p95: 'p95', ui: 'UI', io: 'I/O' };
+/** An SLI id as a name a person reads: `queue_depth_headroom` → 'Queue depth headroom', `http_service_availability` → 'HTTP service availability'. */
+export function sliName(id) {
+  const words = String(id ?? '').split(/[_\s-]+/).filter(Boolean).map(w => NAME_WORDS[w.toLowerCase()] ?? w);
+  if (!words.length) return '';
+  const s = words.join(' ');
+  return s[0].toUpperCase() + s.slice(1);
+}
+/** An SLO window as words: '30d' → '30 days', '1d' → '1 day'; anything else as it is ('' when empty). */
+export function windowText(w) {
+  const t = String(w ?? '').trim();
+  const m = /^(\d+)d$/.exec(t);
+  return m ? `${m[1]} day${m[1] === '1' ? '' : 's'}` : t;
+}
+// A bound's unit as it reads after the number: `per_second` → ' per second'; a ratio, a count and no unit read as the bare number.
+const UNIT_WORDS = { per_second: 'per second', per_minute: 'per minute', events_per_hour: 'events per hour', percent: '%', '%': '%' };
+function unitSuffix(unit) {
+  const u = String(unit ?? '').trim();
+  if (!u || u === 'ratio' || u === 'count') return '';
+  const w = UNIT_WORDS[u] ?? u.replace(/_/g, ' ');
+  return w === '%' ? '%' : ` ${w}`;
+}
+const numberText = (v) => { const t = String(v ?? '').trim().replace(/%$/, '').trim(); return t !== '' && Number.isFinite(Number(t)) ? String(Number(t)) : null; };
+
+/**
+ * The editor's opening sentence, in real units, from the values as they stand (the model's, or the inputs as typed):
+ * 'Queue depth headroom is healthy when its ratio is at or below 0.8; target 99.9% of the time over 30 days.' — a
+ * threshold SLI says which side of its bound is good (the bound itself is good either way, spec 1.3), a ratio SLI says
+ * it is the share of good events. `name` (a typed name in create mode) wins over the id. A value missing or not a
+ * number reads 'not set yet' instead of being guessed.
+ */
+export function sliSummarySentence({ id = '', name = '', type = 'ratio', objective = null, window = null, threshold = null, good_when = null, unit = null } = {}) {
+  const who = sliName(name || id) || 'This SLI';
+  const pct = numberText(objective);
+  const win = windowText(window);
+  const goal = pct ? `target ${pct}% ${type === 'ratio' ? 'good' : 'of the time'}${win ? ` over ${win}` : ''}` : 'no objective set yet';
+  if (type === 'threshold' || type === 'distribution') {
+    const u = String(unit ?? '').trim();
+    const subject = u === 'ratio' ? 'its ratio is' : u === 'percent' || u === '%' ? 'its percentage is' : 'it is';
+    const b = numberText(threshold);
+    const side = goodWhen({ good_when }) === 'above' ? 'at or above' : 'at or below';
+    return `${who} is healthy when ${b ? `${subject} ${side} ${b}${unitSuffix(u)}` : 'it stays within a bound that is not set yet'}; ${goal}.`;
+  }
+  return `${who} is the share of good events among all events; ${goal}.`;
+}
+
+/**
+ * The relationships the editor checks as the user types, before the engine is asked (the engine stays the authority;
+ * these catch what it would accept and what would still be wrong): the objective a percent strictly between 0 and 100,
+ * the window one of the schema's, and for a threshold SLI a numeric bound that fits its unit (a ratio between 0 and
+ * 1, a percent between 0 and 100, never negative in a unit), a direction that does not make every sample good, a unit
+ * that is one word. An empty field is not checked here: in the editor it means "the library default", in the create
+ * form the required list says it. Returns { [field]: message } — plain sentences a person can act on.
+ */
+export function sliRelationshipChecks({ type = 'ratio', objective = null, window = null, threshold = null, good_when = null, unit = null } = {}) {
+  const out = {};
+  const obj = String(objective ?? '').trim();
+  if (obj) {
+    const n = Number(obj.replace(/%$/, '').trim());
+    if (!Number.isFinite(n)) out.objective = 'Enter the objective as a percent, like 99.9';
+    else if (n <= 0 || n >= 100) out.objective = 'The objective is a percent above 0 and below 100, like 99.9';
+  }
+  const win = String(window ?? '').trim();
+  if (win && !SLO_WINDOWS.includes(win)) out.window = `The window is one of ${SLO_WINDOWS.slice(0, -1).join(', ')} or ${SLO_WINDOWS.at(-1)}`;
+  if (type !== 'threshold' && type !== 'distribution') return out;
+  const u = String(unit ?? '').trim();
+  if (u && !/^[A-Za-z%][\w%/.-]*$/.test(u)) out.unit = 'A unit is one word, like seconds, ratio or per_second';
+  const t = String(threshold ?? '').trim();
+  if (!t) return out;
+  const b = Number(t);
+  const unitLow = u.toLowerCase();
+  if (!Number.isFinite(b)) out.threshold = 'Enter the bound as a number, like 0.8';
+  else if (unitLow === 'ratio' && (b < 0 || b > 1)) out.threshold = `A ratio bound is between 0 and 1${b > 1 && b <= 100 ? ` — for ${b}%, enter ${Number((b / 100).toFixed(6))}` : ''}`;
+  else if ((unitLow === 'percent' || unitLow === '%') && (b < 0 || b > 100)) out.threshold = 'A percent bound is between 0 and 100';
+  else if (u && b < 0) out.threshold = `A bound in ${u.replace(/_/g, ' ')} cannot be negative`;
+  else if (u && b <= 0 && goodWhen({ good_when }) === 'above') out.good_when = 'Good when above 0 makes every sample good — raise the bound or choose below';
+  else if (unitLow === 'ratio' && b >= 1 && goodWhen({ good_when }) === 'below') out.good_when = 'Good when below 1 makes every ratio good — lower the bound or choose above';
+  return out;
+}
+/** The fields sliRelationshipChecks reads: what the editor re-checks on every keystroke. */
+export const CHECKED_FIELDS = ['objective', 'window', 'threshold', 'good_when', 'unit'];
+
 // ---------- the editor ----------
 
+// `help` is the short line under a field (an example, a few words); `hint` the longer explanation the field's '?'
+// shows on demand — a paragraph under every field had to be read through before the form made sense (the review).
 const FIELD_META = {
-  id: { label: 'Id', kind: 'slug', hint: 'the SLI id the pack carries — a rename here; the SLO, the recording rule, the boards and the burn alerts follow' },
-  description: { label: 'Description', kind: 'text', hint: 'what the SLI measures, for the cards and the boards' },
-  objective: { label: 'Objective', kind: 'percent', hint: 'the SLO objective as a percent (the pack stores the ratio; the SLO id follows it)' },
-  window: { label: 'Window', kind: 'window', hint: 'the SLO window — 7d · 28d · 30d · 90d, the schema’s set' },
-  threshold: { label: 'Bound', kind: 'number', hint: 'the bound in the SLI’s unit; good when below (a ceiling: latency, lag) or above (a floor: replicas, consumers)' },
+  id: { label: 'Id', kind: 'slug', help: 'Names the SLO, recording rule, boards and burn alerts', hint: 'the SLI id the pack carries — a rename here; the SLO, the recording rule, the boards and the burn alerts follow' },
+  description: { label: 'Description', kind: 'text', help: 'What it measures, in one line', hint: 'what the SLI measures, for the cards and the boards' },
+  objective: { label: 'Objective', kind: 'percent', help: 'How often it must be good, e.g. 99.9', hint: 'the SLO objective as a percent (the pack stores the ratio; the SLO id follows it)' },
+  window: { label: 'Window', kind: 'window', help: '7d, 28d, 30d or 90d', hint: 'the SLO window — 7d · 28d · 30d · 90d, the schema’s set' },
+  threshold: { label: 'Bound', kind: 'number', help: 'The limit in the unit, e.g. 0.8', hint: 'the bound in the SLI’s unit; good when below (a ceiling: latency, lag) or above (a floor: replicas, consumers)' },
   // spec 1.3 good_when: the side of the bound that is good — rendered as a two-segment control in the Bound cell (build-editor-view.mjs)
-  good_when: { label: 'Good when', kind: 'direction', options: GOOD_WHEN, hint: 'below: a ceiling — samples above the bound are bad (latency, lag) · above: a floor — samples under it are bad (replicas, consumers); the bound itself is good either way' },
-  unit: { label: 'Unit', kind: 'unit', hint: 'the unit of the bound (seconds, requests, per_second, …)' },
-  semconv_metric: { label: 'Metric', kind: 'text', hint: 'the semantic-conventions metric the SLI reads (http.server.request.duration) — a claim on the pack, not a query' },
-  query: { label: 'Query (PromQL)', kind: 'promql', hint: 'the expression as it runs, the parameters in — an edit replaces the library’s and its evidence no longer applies' },
-  good: { label: 'Good events (PromQL)', kind: 'promql', hint: 'the good leg as it runs, the parameters in — an edit replaces the library’s and its evidence no longer applies' },
-  total: { label: 'Total events (PromQL)', kind: 'promql', hint: 'the total leg as it runs, the parameters in — an edit replaces the library’s and its evidence no longer applies' },
+  good_when: { label: 'Good when', kind: 'direction', options: GOOD_WHEN, help: 'below: a ceiling (latency, lag) · above: a floor (replicas, consumers)', hint: 'below: a ceiling — samples above the bound are bad (latency, lag) · above: a floor — samples under it are bad (replicas, consumers); the bound itself is good either way' },
+  unit: { label: 'Unit', kind: 'unit', help: 'e.g. seconds, ratio, per_second', hint: 'the unit of the bound (seconds, requests, per_second, …)' },
+  semconv_metric: { label: 'Metric', kind: 'text', help: 'e.g. http.server.request.duration', hint: 'the semantic-conventions metric the SLI reads (http.server.request.duration) — a claim on the pack, not a query' },
+  query: { label: 'Query (PromQL)', kind: 'promql', help: 'The expression as it runs, parameters filled in', hint: 'the expression as it runs, the parameters in — an edit replaces the library’s and its evidence no longer applies' },
+  good: { label: 'Good events (PromQL)', kind: 'promql', help: 'The good events as they run, parameters filled in', hint: 'the good leg as it runs, the parameters in — an edit replaces the library’s and its evidence no longer applies' },
+  total: { label: 'Total events (PromQL)', kind: 'promql', help: 'All events as they run, parameters filled in', hint: 'the total leg as it runs, the parameters in — an edit replaces the library’s and its evidence no longer applies' },
 };
 /** The fields an SLI of a type carries, in the editor's reading order: the identity row, the objective row, the bound row (the bound with its direction, then the unit), the metric, then the PromQL. */
 export function fieldsForType(type) {
@@ -217,16 +309,25 @@ export function existingSliIds({ build, library, except = [] } = {}) {
 /** The SLI as the last instantiation compiled it, by the id the pack carries (a rename the engine has not answered yet is not found: the status says applying). */
 const compiledSli = (result, id) => (result?.canonical?.spec?.slis || []).find(s => s.id === id) || null;
 
-/** The status line: what happened to the last edit, from the draft's flags and the last result. */
-function editorStatus({ build, result, item, id, custom, readOnly, errors, compiled }) {
+/**
+ * What the pack generated from an SLI, by the id it carries: its SLO, the recording rule that materialises it and how
+ * many burn alerts the policy gives the SLO (one per window) — the editor's "generated rule details" and its status line.
+ */
+export function generatedOutputs(result, id) {
   const spec = result?.canonical?.spec || null;
   const slo = spec?.slos?.find(s => s.sli === id) || null;
   // The policy carries one entry per SLO with its windows; the compiler emits one burn alert per window.
   const burns = slo ? (spec?.policy?.burn_rate_alerts || []).filter(a => a.slo === slo.id).reduce((n, a) => n + ((a.windows || []).length || 1), 0) : 0;
   const rule = spec?.queries?.recording_rules?.find(r => r.expr === `ref:slis.${id}`)?.name || null;
-  const applied = () => `${slo ? `SLO ${slo.id}` : 'SLOs off'}${burns ? ` · ${burns} burn alert${burns === 1 ? '' : 's'}` : ''}${rule ? ` · rule ${rule}` : ''}`;
+  return { slo: slo?.id || null, burns, rule };
+}
+
+/** The status line: what happened to the last edit, from the draft's flags and the last result. */
+function editorStatus({ build, result, item, id, custom, readOnly, errors, compiled }) {
+  const { slo, burns, rule } = generatedOutputs(result, id);
+  const applied = () => `${slo ? `SLO ${slo}` : 'SLOs off'}${burns ? ` · ${burns} burn alert${burns === 1 ? '' : 's'}` : ''}${rule ? ` · rule ${rule}` : ''}`;
   if (readOnly) return { kind: 'readonly', text: compiled ? `as compiled · ${applied()}` : 'not in the pack' };
-  if (!custom && !item.selected) return { kind: 'off', text: item.entrySelected ? 'not in the pack — switch it on below; your edits wait with it' : `not in the pack — adding it selects ${item.entryTitle} too` };
+  if (!custom && !item.selected) return { kind: 'off', text: item.entrySelected ? 'not in the pack — tick Include in this pack below; your edits wait with it' : `not in the pack — adding it selects ${item.entryTitle} too` };
   const errFields = errors ? Object.keys(errors).filter(Boolean) : [];
   if (errFields.length) return { kind: 'error', text: `rejected — ${errFields[0]}: ${errors[errFields[0]]}` };
   if (errors && hasOwn(errors, '')) return { kind: 'error', text: `rejected — ${errors['']}` };
@@ -297,6 +398,7 @@ export function sliEditorModel({ item = null, result = null, library = null, bui
       value = goodWhen({ good_when: eff.good_when });
       def = custom ? null : goodWhen({ good_when: dflt?.good_when });
     } else value = display(field, eff[field]);
+    const engineError = errors && hasOwn(errors, field) ? errors[field] : null;
     return {
       id: field, ...meta,
       ...(field === 'id' && custom ? { hint: 'your SLI’s id — the SLO, the recording rule and the boards follow a rename' } : {}),
@@ -304,10 +406,16 @@ export function sliEditorModel({ item = null, result = null, library = null, bui
       value, raw: field === 'id' ? id : (eff[field] ?? null),
       default: def, defaultLabel, overridden, resettable: overridden && !readOnly,
       focusKey: `${prefix}:${field}`, inputId: `build-editor-${field}`,
-      error: errors && hasOwn(errors, field) ? errors[field] : null, readOnly,
+      // The engine's word on the field first (it is the authority), else the relationship check on what the field holds.
+      engineError, error: engineError, readOnly,
       ...(field === 'window' ? { options: SLO_WINDOWS } : {}),
     };
   });
+  // The relationships (direction, bound, unit, objective, window) checked on the values the editor shows — the same
+  // check the view re-runs on every keystroke, so a problem is said beside its field before the engine answers.
+  const valueOf = (fid) => fields.find(f => f.id === fid)?.value ?? null;
+  const checks = readOnly ? {} : sliRelationshipChecks({ type: item.type, objective: valueOf('objective'), window: valueOf('window'), threshold: valueOf('threshold'), good_when: valueOf('good_when'), unit: valueOf('unit') });
+  for (const f of fields) { f.check = checks[f.id] || null; if (!f.error && f.check) f.error = f.check; }
   const customised = custom ? [] : customisedFields(ov);
   const edited = !custom && promqlEdited(ov);
   const parameters = names.length ? {
@@ -336,15 +444,33 @@ export function sliEditorModel({ item = null, result = null, library = null, bui
     promqlWarning: item.promqlWarning || null,
     generalError: errors && hasOwn(errors, '') ? errors[''] : null,
     status: editorStatus({ build, result, item, id, custom, readOnly, errors, compiled }),
+    // The sentence the dialog opens with, in real units (the view repaints it from the inputs as they are typed).
+    summary: sliSummarySentence({ id, type: item.type, objective: valueOf('objective'), window: valueOf('window'), threshold: valueOf('threshold'), good_when: valueOf('good_when'), unit: valueOf('unit') }),
+    checks, errorList: errorListOf(fields),
+    outputs: { ...generatedOutputs(result, id), compiled: !!compiled },
     resetAll: !custom && !readOnly && customised.length > 0,
     switch: readOnly ? null : {
       on: !!item.selected, label, focusKey: `${item.focusKey}@editor`,
       data: { sli: key, entry: item.entry || '', 'sli-id': item.id, selected: item.selected ? '1' : '0', 'entry-selected': item.entrySelected ? '1' : '0', ...(custom ? { custom: '1' } : {}) },
     },
+    // Inclusion is its own named control, apart from saving: a library SLI is ticked in or out of the pack (an excluded
+    // SLI keeps its edits in the draft — say so); a custom SLI exists only in the pack, so its control removes it.
+    inclusion: readOnly ? null : custom
+      ? { kind: 'remove', label: 'Remove SLI', help: 'A custom SLI is always in the pack; removing it deletes it.' }
+      : { kind: 'include', label: 'Include in this pack', on: !!item.selected,
+        help: item.selected ? 'Untick to leave it out: your edits stay with the draft and return when you include it again.'
+          : item.entrySelected ? 'Not in the pack. Save SLI keeps your edits with the draft; tick to include it.'
+            : `Not in the pack. Ticking also selects ${item.entryTitle}; your edits are kept either way.` },
     allKeys: [...allKeys],
-    doneLabel: readOnly ? 'Close' : 'Done',
+    doneLabel: readOnly ? 'Close' : 'Save SLI',
+    saveHelp: readOnly ? null : 'Changes apply as you type; Save SLI checks them and closes the editor.',
     existingIds: existingSliIds({ build, library, except: [key, id] }),
   };
+}
+
+/** The fields that carry an error, in the editor's reading order: the linked summary at the top of the dialog (the GOV.UK pattern). */
+function errorListOf(fields) {
+  return fields.filter(f => f.error).map(f => ({ field: f.id, label: f.label, message: f.error, inputId: f.inputId }));
 }
 
 /** The editor in create mode: the same dialog over the custom form (customFormModel), 'Add to the pack' from its canSubmit. */
@@ -359,9 +485,8 @@ function createEditorModel({ build, library, result, errors }) {
     customised: [], parameters: null,
     evidence: { status: 'custom', note: 'written in the studio — no library evidence' }, provenance: 'custom — written in the studio',
     promqlWarning: null, generalError: form.generalError,
-    status: form.canSubmit
-      ? { kind: 'ready', text: 'ready — Add to the pack compiles once and keeps the SLI when the engine accepts it' }
-      : { kind: 'idle', text: `fill the required fields: ${form.required.join(', ')}${form.draft.id ? '' : ' — and a name'}` },
+    summary: form.summary, checks: form.checks, errorList: errorListOf(form.fields), outputs: null, inclusion: null, saveHelp: null,
+    status: createFormStatus(form),
     resetAll: false, switch: null, allKeys: [], doneLabel: 'Cancel',
     submit: { label: form.addLabel, enabled: form.canSubmit, focusKey: form.focusKey },
     form,
@@ -370,6 +495,15 @@ function createEditorModel({ build, library, result, errors }) {
 }
 
 // ---------- the create form ----------
+
+/** The create form's status line, one rule for the model and the live repaint: ready, the values to fix, or the required fields left. */
+export function createFormStatus(form) {
+  if (form.canSubmit) return { kind: 'ready', text: 'ready — Add to the pack compiles once and keeps the SLI when the engine accepts it' };
+  const n = Object.keys(form.checks || {}).length;
+  const filled = form.required.every(k => String(form.draft[k] ?? '').trim() !== '') && !!form.draft.id;
+  if (n && filled) return { kind: 'error', text: `${n === 1 ? 'one value needs' : `${n} values need`} attention — listed at the top` };
+  return { kind: 'idle', text: `fill the required fields: ${form.required.join(', ')}${form.draft.id ? '' : ' — and a name'}` };
+}
 
 /** The create dialog's word on the two types (its Type select's hint and the fixed Type cell's in create mode). */
 const TYPE_HINT = 'ratio: good over total events · threshold: a value against a bound — good when below (a ceiling) or above (a floor)';
@@ -403,7 +537,9 @@ export function customFormModel(draft, { errors = null, existingKeys = [], exist
   const sloId = d.id && Number.isFinite(objective) ? sloIdFor(d.id, objective) : null;
   const sloClash = sloId && existingSloIds.includes(sloId) ? `${d.id} at ${String(d.objective).trim()} % would share the SLO id ${sloId} with an SLI of the pack — pick another id or objective` : null;
   const required = ['objective', 'window', ...(d.type === 'ratio' ? ['good', 'total'] : ['query', 'threshold'])];
-  const field = (id, label, kind, extra = {}) => ({ id, label, kind, value: String(d[id] ?? ''), focusKey: `cf:${id}`, inputId: `build-custom-${id}`, error: hasOwn(errs, id) ? errs[id] : null, required: required.includes(id), ...extra });
+  // The relationships the editor checks as typed (sliRelationshipChecks): said beside the field, and the form cannot be added while one stands.
+  const checks = sliRelationshipChecks({ type: d.type, objective: d.objective, window: d.window, threshold: d.threshold, good_when: d.good_when, unit: d.unit });
+  const field = (id, label, kind, extra = {}) => ({ id, label, kind, value: String(d[id] ?? ''), focusKey: `cf:${id}`, inputId: `build-custom-${id}`, error: hasOwn(errs, id) ? errs[id] : (checks[id] || null), check: checks[id] || null, required: required.includes(id), ...extra });
   const fields = [
     field('name', 'Name', 'text', { placeholder: 'Checkout success', hint: d.id ? `id ${d.id}` : 'the id is slugged from the name' }),
     field('id', 'Id', 'slug', { placeholder: 'checkout_success', error: hasOwn(errs, 'id') ? errs.id : idClash || idBad || sloClash, hint: 'the SLI id the pack carries — edit it to keep your own' }),
@@ -424,7 +560,8 @@ export function customFormModel(draft, { errors = null, existingKeys = [], exist
   const filled = required.every(k => String(d[k] ?? '').trim() !== '') && !!d.id;
   return {
     draft: d, fields, idClash, sloClash, required, existingKeys: [...existingKeys], existingSloIds: [...existingSloIds],
-    canSubmit: filled && !idClash && !idBad && !sloClash,
+    checks, summary: sliSummarySentence({ id: d.id, name: d.name, type: d.type, objective: d.objective, window: d.window, threshold: d.threshold, good_when: d.good_when, unit: d.unit }),
+    canSubmit: filled && !idClash && !idBad && !sloClash && Object.keys(checks).length === 0,
     generalError: hasOwn(errs, '') ? errs[''] : null,
     addLabel: 'Add to the pack',
     focusKey: 'cf:add',

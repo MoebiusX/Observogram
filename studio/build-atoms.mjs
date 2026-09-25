@@ -95,7 +95,8 @@ export function editFieldHtml(f, { dataAttr = 'override-field', sli = null, rows
   const dflt = hasDefault ? `<span class="build-edit-default" id="${id}-default">${f.overridden ? `library <code>${escapeHtml(defaultText)}</code>` : 'library default'}</span>` : '';
   const labelInner = `<span>${escapeHtml(f.label)}${f.kind === 'percent' ? ' <em>%</em>' : ''}${f.required ? ' <i title="required">*</i>' : ''}</span>`;
   const reset = f.resettable && !readOnly ? `<button type="button" class="build-edit-reset" data-reset="${escapeHtml(f.id)}"${sli ? ` data-sli="${escapeHtml(sli)}"` : ''} data-focus-key="${escapeHtml(f.focusKey)}:reset" title="${escapeHtml(`back to the library default (${defaultText})`)}" aria-label="${escapeHtml(`${f.label}: back to the library default`)}"><span aria-hidden="true">↺</span> library default</button>` : '';
-  const hintShown = !!f.hint && !f.error && (!readOnly || showHint);
+  const { line, more } = fieldHelp(f);
+  const hintShown = !!line && !f.error && (!readOnly || showHint);
   const describedBy = [hasDefault ? `${id}-default` : '', f.error ? `${id}-error` : hintShown ? `${id}-hint` : ''].filter(Boolean).join(' ');
   const aria = `${describedBy ? ` aria-describedby="${describedBy}"` : ''}${f.error ? ` aria-errormessage="${id}-error"` : ''}`;
   let control;
@@ -108,12 +109,34 @@ export function editFieldHtml(f, { dataAttr = 'override-field', sli = null, rows
     else if (f.kind === 'window') control = `<input type="text" ${common} list="build-window-options" value="${escapeHtml(f.value)}" autocomplete="off" spellcheck="false"${aria}>`;
     else control = `<input type="text" ${common} value="${escapeHtml(f.value)}"${placeholder} autocomplete="off" spellcheck="false"${f.kind === 'percent' || f.kind === 'number' ? ' inputmode="decimal"' : ''}${aria}>`;
   }
+  const moreShown = !!more && !readOnly;
   return `
     <div class="build-edit-field${f.overridden ? ' is-overridden' : ''}${f.error ? ' is-error' : ''}${readOnly ? ' is-read' : ''}" data-field="${escapeHtml(f.id)}">
-      <div class="build-edit-label-row">${readOnly ? `<span class="build-edit-label">${labelInner}</span>` : `<label class="build-edit-label" for="${id}">${labelInner}</label>`}${dflt}${reset}</div>
+      <div class="build-edit-label-row">${readOnly ? `<span class="build-edit-label">${labelInner}</span>` : `<label class="build-edit-label" for="${id}">${labelInner}</label>`}${dflt}${reset}${moreShown ? moreToggleHtml(f) : ''}</div>
       ${control}
-      ${f.error ? `<span class="build-edit-error" id="${id}-error" role="alert">${escapeHtml(f.error)}</span>` : hintShown ? `<span class="build-edit-hint" id="${id}-hint">${escapeHtml(f.hint)}</span>` : ''}
+      ${f.error ? `<span class="build-edit-error" id="${id}-error" role="alert">${escapeHtml(f.error)}</span>` : hintShown ? `<span class="build-edit-hint" id="${id}-hint">${escapeHtml(line)}</span>` : ''}
+      ${moreShown ? moreTextHtml(f, more) : ''}
     </div>`;
+}
+
+/**
+ * A field's help, split (the 2026-09 review, "Build / SLI editor": short help and examples, the longer schema
+ * explanation on demand): `line` the short text under the field — the field's `help`, else its `hint` — and `more`
+ * the longer `hint` when a short `help` stands in for it, shown by the field's '?' toggle (null when there is none).
+ */
+export function fieldHelp(f) {
+  const line = f?.help || f?.hint || '';
+  const more = f?.help && f?.hint && f.hint !== f.help ? f.hint : null;
+  return { line, more };
+}
+/** The '?' beside a field's label: a disclosure button over the field's longer explanation (wired by the editor; its focus key survives a re-render). */
+export function moreToggleHtml(f) {
+  const id = escapeHtml(f.inputId);
+  return `<button type="button" class="build-edit-more-btn" data-more="${id}" aria-expanded="false" aria-controls="${id}-more" data-focus-key="${escapeHtml(f.focusKey)}:more" title="${escapeHtml(`About ${f.label}`)}" aria-label="${escapeHtml(`About ${f.label}`)}"><span aria-hidden="true">?</span></button>`;
+}
+/** The field's longer explanation, hidden until its '?' opens it. */
+export function moreTextHtml(f, more) {
+  return `<p class="build-edit-more" id="${escapeHtml(f.inputId)}-more" hidden>${escapeHtml(more)}</p>`;
 }
 
 /** Param inputs commit on change (Enter / blur), so typing never re-renders under the caret. `selector` narrows which inputs (the stack wires only its own). */

@@ -50,6 +50,12 @@ export function defaultBuildState() {
     customDraft: null,        // the editor's create form as typed, until it is added (UI state, never persisted)
     customDraftErrors: null,  // the engine's usage errors on the last 'Add to the pack' attempt (UI state, never persisted)
     wantedStep: null,         // the step asked for while unreachable (a reload on Verify before the pack is back); honoured once the instantiation answers (UI state, never persisted)
+    defineSub: null,          // DEFINE's substep on screen ('service' · 'tier' · 'technology' · 'review'); null = the first incomplete one (UI state, never persisted)
+    defineFolds: {},          // DEFINE's open folds ("Why these suggestions?", "Advanced review") (UI state, never persisted)
+    compileView: null,        // COMPILE's drawn layers: null (none) · 'all' · [layer ids] (UI state, never persisted)
+    accepted: {},             // VERIFY's warnings accepted with a reason, for this session only — never written into the pack (UI state, never persisted)
+    accepting: null,          // the warning whose "Accept with reason" form is open (UI state, never persisted)
+    acceptDraft: null,        // that form's reason as typed (UI state, never persisted)
   };
 }
 // The build fields that survive a reload (never `result`, `preview`, `error`, `pending`).

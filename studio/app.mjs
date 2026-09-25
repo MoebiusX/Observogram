@@ -2412,7 +2412,7 @@ const buildActions = {
       b.customDraftErrors = null;
       applyInstantiateOk(b, res);
       // The editor stays open, now over the SLI it just added (edit mode): its status says what the pack made of it.
-      if (b.editor?.create) { b.editor = { key: def.id, custom: true }; buildEditorFocus = 'id'; }
+      if (b.editor?.create) { b.editor = { key: def.id, custom: true }; buildEditorFocus = 'first'; }
       persistence.schedule();
     } else {
       b.customDraft = draft || b.customDraft;
@@ -2459,7 +2459,8 @@ const buildActions = {
     if (!create && !key) return;
     b.editor = create ? { create: true } : { key, custom: !!custom };
     buildEditorOpener = opener ? focusKeySelector(opener) : null;
-    buildEditorFocus = focus || (create ? 'name' : 'id');
+    // An existing SLI opens on the dialog's first field (Behavior leads; the id is a generated output now).
+    buildEditorFocus = focus || (create ? 'name' : 'first');
     rerenderBuild();
   },
   closeEditor() {

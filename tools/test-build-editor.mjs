@@ -27,8 +27,10 @@ import { rolodexItems, buildEditorModel, editorModeFor, editorDirtyAfterAnswer, 
 import {
   sliEditorModel, checkEditorId, existingSliIds, resolveTemplate, templateParams, fieldsForType, effectiveId, percentText, ratioOf,
   fieldValueFor, numberOrText, customDefFromDraft, OVERRIDE_FIELDS,
+  sliSummarySentence, sliRelationshipChecks, sliName, windowText, generatedOutputs, createFormStatus, customFormModel,
 } from '../studio/build-copies-model.mjs';
-import { buildEditorHtml, renderBuildEditor, wireBuildEditor, paintFieldMessage, paintIdState, paintDirection, growTextarea, PROMQL_MAX_HEIGHT } from '../studio/build-editor-view.mjs';
+import { buildEditorHtml, renderBuildEditor, wireBuildEditor, paintFieldMessage, paintIdState, paintDirection, growTextarea, PROMQL_MAX_HEIGHT, editorGroups, editorFieldOrder, liveCheck, jumpToField } from '../studio/build-editor-view.mjs';
+import { fieldHelp } from '../studio/build-atoms.mjs';
 import { defaultBuildState } from '../studio/state.mjs';
 import { installDialogFocusTrap, TRAPPED_DIALOGS } from '../studio/util.mjs';
 import { editFieldHtml } from '../studio/build-atoms.mjs';
@@ -118,7 +120,14 @@ test('a library ratio SLI: the fields in reading order, the description prefille
   assert.deepEqual(m.evidence, { status: 'semconv', note: 'the library’s evidence — its expression is what runs' });
   assert.equal(m.provenance, 'HTTP service (OTel semconv)’s defaults');
   assert.deepEqual(m.status, { kind: 'applied', text: 'applied · SLO availability_99_5 · 2 burn alerts · rule orders_api:availability:ratio_5m' });
-  assert.deepEqual([m.resetAll, m.customised, m.doneLabel, m.typeHint], [false, [], 'Done', 'fixed — a different shape is a new custom SLI (+ Custom SLI on the L1 sheet)']);
+  // The final action is Save SLI (it checks, then closes — the edits apply as typed); inclusion is its own named control.
+  assert.deepEqual([m.resetAll, m.customised, m.doneLabel, m.typeHint], [false, [], 'Save SLI', 'fixed — a different shape is a new custom SLI (+ Custom SLI on the L1 sheet)']);
+  assert.deepEqual(m.inclusion, { kind: 'include', label: 'Include in this pack', on: true, help: 'Untick to leave it out: your edits stay with the draft and return when you include it again.' });
+  assert.equal(m.saveHelp, 'Changes apply as you type; Save SLI checks them and closes the editor.');
+  // The opening sentence in real units; the generated names; nothing to fix.
+  assert.equal(m.summary, 'Availability is the share of good events among all events; target 99.5% good over 30 days.');
+  assert.deepEqual(m.outputs, { slo: 'availability_99_5', burns: 2, rule: 'orders_api:availability:ratio_5m', compiled: true });
+  assert.deepEqual([m.checks, m.errorList], [{}, []]);
   assert.deepEqual(m.switch, { on: true, label: 'availability of HTTP service (OTel semconv) — remove from the pack', focusKey: 'sli:http-service:availability@editor', data: { sli: 'availability', entry: 'http-service', 'sli-id': 'availability', selected: '1', 'entry-selected': '1' } });
   assert.deepEqual(m.existingIds.sort(), ['error_rate', 'in_flight_saturation', 'latency_p99'], 'every other id of the selected entries, ticked or not; its own left out');
   // Before the engine has answered: the template resolved from the last provenance, else left as it is and said so.
@@ -131,7 +140,8 @@ test('a library ratio SLI: the fields in reading order, the description prefille
   assert.deepEqual(modelOf({ ...b, pending: true }, 'availability').status, { kind: 'pending', text: 'applying…' });
   assert.deepEqual(modelOf({ ...b, error: ['param job: no'] }, 'availability').status, { kind: 'stale', text: 'the last compilation failed elsewhere — the pack shown is the previous one' });
   const off = modelOf({ ...b, slis: ['latency_p99'] }, 'availability');
-  assert.deepEqual([off.status, off.switch.on], [{ kind: 'off', text: 'not in the pack — switch it on below; your edits wait with it' }, false]);
+  assert.deepEqual([off.status, off.switch.on, off.inclusion.on], [{ kind: 'off', text: 'not in the pack — tick Include in this pack below; your edits wait with it' }, false, false]);
+  assert.equal(off.inclusion.help, 'Not in the pack. Save SLI keeps your edits with the draft; tick to include it.', 'saving an excluded SLI is supported — the help says so');
   // The two-entry pack: the composed key, the entry-namespaced parameter keys behind the bare names.
   const two = draftWith({ entries: ['kafka', 'http-service'] });
   const m2 = modelOf(two, 'http_service_availability');
@@ -327,7 +337,8 @@ test('the dialog headless in edit mode: role=dialog aria-modal=true labelled by 
   assert.ok(html.includes('<span class="build-rolo-chip is-customised" title="customised: objective">customised</span>'));
   assert.ok(html.includes('class="build-editor-close" data-editor-close aria-label="Close the editor (Esc)"'));
   // The grid: id · description, objective · window, metric · type, good | total; each input labelled, described by its default / hint / error, all ids resolving.
-  assert.deepEqual([...html.matchAll(/class="build-editor-cell is-([a-z_]+)/g)].map(m => m[1]), ['id', 'description', 'objective', 'window', 'semconv_metric', 'type', 'good', 'total']);
+  // The four groups (Behavior · Objective · Data source · Generated outputs): the id is a generated output now, last.
+  assert.deepEqual([...html.matchAll(/class="build-editor-cell is-([a-z_]+)/g)].map(m => m[1]), ['description', 'objective', 'window', 'semconv_metric', 'type', 'good', 'total', 'id']);
   assert.ok(html.includes('<label class="build-edit-label" for="build-editor-id"><span>Id</span></label>') && html.includes('data-focus-key="ov:availability:id" data-override-field="id" data-sli="availability" value="availability"'));
   assert.ok(html.includes('id="build-editor-description"') && html.includes('value="Fraction of HTTP requests not answered with a 5xx status'), 'the description is prefilled');
   assert.ok(html.includes('<div class="build-edit-field is-overridden" data-field="objective">') && html.includes('<span class="build-edit-default" id="build-editor-objective-default">library <code>99.5</code></span>'));
@@ -346,14 +357,17 @@ test('the dialog headless in edit mode: role=dialog aria-modal=true labelled by 
   assert.ok(html.includes('<p class="build-editor-params">parameters: duration_metric=http_server_request_duration_seconds, job=orders-api — edit them in L2</p>'));
   assert.ok(html.includes('<div class="build-editor-evidence"><span class="build-evidence build-evidence-semconv" title="semconv">semconv</span><span class="build-edit-evidence-note">the library’s evidence — its expression is what runs</span></div>'));
   assert.ok(html.includes('<div class="build-editor-status is-applied" id="build-editor-status" role="status" aria-live="polite">applied · SLO availability_99_9 · 2 burn alerts · rule orders_api:availability:ratio_5m</div>'));
-  assert.ok(html.includes('<span class="build-editor-switch-text">in the pack</span><button type="button" role="switch" class="build-switch" aria-checked="true" aria-label="availability of HTTP service (OTel semconv) — remove from the pack" data-focus-key="sli:http-service:availability@editor" data-sli="availability"'));
+  // Inclusion is a named checkbox, apart from saving; its help says what unticking keeps.
+  assert.ok(html.includes('<label class="build-editor-switch"><input type="checkbox" class="build-editor-include-box" data-editor-include data-sli="availability" data-entry="http-service" data-sli-id="availability" data-selected="1" data-entry-selected="1" data-focus-key="sli:http-service:availability@editor" checked aria-describedby="build-editor-include-help"><span class="build-editor-switch-text">Include in this pack</span></label><span class="build-editor-include-help" id="build-editor-include-help">Untick to leave it out'));
+  assert.ok(!html.includes('role="switch"'), 'no IN THE PACK switch');
   // The dialog's own controls carry focus keys, so the focus survives a re-render on them too (the pack answering while Done had it once dropped the focus to <body>; measured).
-  assert.ok(html.includes('data-editor-reset-all data-focus-key="editor:reset-all"') && html.includes('<button type="button" class="mcp-refresh-btn build-editor-done" data-editor-done data-editor-close data-focus-key="editor:done">Done</button>'));
+  assert.ok(html.includes('data-editor-reset-all data-focus-key="editor:reset-all"') && html.includes('<button type="button" class="mcp-refresh-btn build-editor-done" data-editor-done data-editor-save data-focus-key="editor:done" aria-describedby="build-editor-save-help">Save SLI</button>'), 'Save SLI checks before it closes: no data-editor-close on it');
+  assert.ok(html.includes('<span class="build-editor-save-help" id="build-editor-save-help">Changes apply as you type; Save SLI checks them and closes the editor.</span>'));
   assert.ok(html.includes('title="Close (Esc)" data-focus-key="editor:close">'));
   assert.ok(html.includes('<datalist id="build-window-options">'), 'the window datalist lives here');
   // The threshold shape: Bound · Unit before the metric, one wide Query cell.
   const t = renderHtml(dialogOf(draftWith({ entries: ['kafka', 'http-service'], editor: { key: 'kafka_produce_latency_p99', custom: false } })));
-  assert.deepEqual([...t.matchAll(/class="build-editor-cell is-([a-z_]+)( is-wide)?/g)].map(m => m[1] + (m[2] || '')), ['id', 'description', 'objective', 'window', 'threshold', 'unit', 'semconv_metric', 'type', 'query is-wide']);
+  assert.deepEqual([...t.matchAll(/class="build-editor-cell is-([a-z_]+)( is-wide)?/g)].map(m => m[1] + (m[2] || '')), ['description is-wide', 'threshold', 'unit', 'objective', 'window', 'semconv_metric', 'type', 'query is-wide', 'id']);
   assert.ok(t.includes('data-override-field="threshold" data-sli="kafka_produce_latency_p99" value="0.1"') && t.includes('<span>Bound</span>') && t.includes('<span>Unit</span>'));
   // The Bound cell carries the direction control (spec 1.3 good_when): a radiogroup labelled 'Good when' and described by its
   // default and hint, one radio per side with the chosen one checked and in the tab order, each with a focus key of its own,
@@ -427,7 +441,7 @@ test('the handlers: every field but the id commits on input through setOverride 
   const idBox = { classList: { toggle: (c, on) => { if (on) cls.add(c); else cls.delete(c); } }, querySelector: (sel) => (sel === '.build-edit-input' ? idBoxInput : sel === '.build-edit-default' ? { id: 'build-editor-id-default' } : msg) };
   const container = fakeContainer({
     '.build-editor': [dialog], '.build-editor [data-editor-close]': [closeBtn, done], '.build-editor-scrim': [scrim], '#build-editor-status': [status],
-    '.build-editor .build-edit-input': [objective, idInput, good], '[data-reset]': [reset], '[data-editor-reset-all]': [resetAll], '.build-editor .build-switch[data-sli]': [sw],
+    '.build-editor .build-edit-input': [objective, idInput, good], '[data-reset]': [reset], '[data-editor-reset-all]': [resetAll], '.build-editor [data-editor-include]': [sw],
     '.build-editor [data-field="id"]': [idBox],
   });
   wireBuildEditor(container, model, { build: act });
@@ -447,7 +461,7 @@ test('the handlers: every field but the id commits on input through setOverride 
   // (Enter, Tab, Esc, a click away) — never per keystroke. Typing error_rate key by key once renamed the SLI to every
   // valid prefix and left it 'error_rat' when the final 'error_rate' clashed (measured).
   calls.length = 0;
-  const idHint = model.fields.find(f => f.id === 'id').hint;
+  const idHint = model.fields.find(f => f.id === 'id').help;   // the short help line under the field (the long hint is behind its '?')
   let typed = '';
   for (const ch of 'error_rate') { typed += ch; idInput.value = typed; idInput.fire('input'); }
   assert.deepEqual(calls, [], 'ten keystrokes: nothing sent — no prefix becomes a rename');
@@ -513,9 +527,9 @@ test('the handlers: every field but the id commits on input through setOverride 
   wireBuildEditor(fakeContainer({ '.build-editor': [fakeEl({})], '.build-editor .build-edit-input': [obj2], '#build-editor-status': [status2] }), model, { build: changed });
   obj2.value = '99.95'; obj2.fire('input');
   assert.deepEqual([status2.textContent, status2.className], ['applying…', 'build-editor-status is-pending']);
-  // ↺ on a field, Reset all, the switch.
+  // ↺ on a field, Reset all, the inclusion checkbox (a change, as a checkbox fires).
   calls.length = 0;
-  reset.fire('click'); resetAll.fire('click'); sw.fire('click');
+  reset.fire('click'); resetAll.fire('click'); sw.fire('change');
   assert.deepEqual(calls, [['clear', 'availability', 'objective'], ['clear', 'availability', null], ['sli', 'availability', false, ['availability', 'latency_p99']]]);
   // Esc on a field leaves it (its change commits) and closes; Esc elsewhere closes; the scrim, the esc button and Done close.
   calls.length = 0;
@@ -529,16 +543,16 @@ test('the handlers: every field but the id commits on input through setOverride 
   // A custom SLI's fields go through updateCustom; the custom switch through removeCustom; an above-tier switch adds.
   const cb = draftWith({ custom: [{ id: 'checkout_success', type: 'ratio', good: 'a', total: 'b', objective: 0.999, window: '30d' }], editor: { key: 'checkout_success', custom: true } });
   const cGood = { ...fakeEl({ customField: 'good', sli: 'checkout_success' }), value: 'a', tagName: 'TEXTAREA', style: {}, scrollHeight: 30 };
-  const cSw = fakeEl({ sli: 'checkout_success', entry: '', sliId: 'checkout_success', selected: '1', entrySelected: '1', custom: '1' });
+  const cSw = fakeEl({ sli: 'checkout_success' });   // a custom SLI's Remove SLI
   calls.length = 0;
-  wireBuildEditor(fakeContainer({ '.build-editor': [fakeEl({})], '.build-editor .build-edit-input': [cGood], '.build-editor .build-switch[data-sli]': [cSw], '#build-editor-status': [status] }), dialogOf(cb), { build: act });
+  wireBuildEditor(fakeContainer({ '.build-editor': [fakeEl({})], '.build-editor .build-edit-input': [cGood], '.build-editor [data-editor-remove]': [cSw], '#build-editor-status': [status] }), dialogOf(cb), { build: act });
   cGood.value = 'sum(rate(ok[5m]))'; cGood.fire('input'); cSw.fire('click');
   assert.deepEqual(calls, [['custom', 'checkout_success', 'good', 'sum(rate(ok[5m]))', { live: true }], ['remove', 'checkout_success']]);
   const ab = draftWith({ entries: ['kafka', 'http-service'], editor: { key: 'kafka_controller_election_rate', custom: false } });
   const aSw = fakeEl({ sli: 'kafka_controller_election_rate', entry: 'kafka', sliId: 'controller_election_rate', selected: '0', entrySelected: '1' });
   calls.length = 0;
-  wireBuildEditor(fakeContainer({ '.build-editor': [fakeEl({})], '.build-editor .build-switch[data-sli]': [aSw] }), dialogOf(ab), { build: act });
-  aSw.fire('click');
+  wireBuildEditor(fakeContainer({ '.build-editor': [fakeEl({})], '.build-editor [data-editor-include]': [aSw] }), dialogOf(ab), { build: act });
+  aSw.fire('change');
   assert.deepEqual(calls[0].slice(0, 3), ['sli', 'kafka_controller_election_rate', true]);
   // Read-only: only close is wired.
   calls.length = 0;
@@ -945,4 +959,171 @@ test('the stylesheet: one centered fixed modal above the sheet with the L1 accen
   for (const sel of ['.build-edit-dir-thumb', '.build-edit-dir-btn']) assert.ok(reduced.includes(sel), `${sel} is in the reduced-motion transition: none list`);
   assert.match(CSS_TEXT.match(/@media \(max-width: 760px\) \{[\s\S]*?\n\}/g).find(b => b.includes('.build-editor')), /\.build-editor-cell\.is-threshold\.has-direction \{ grid-template-columns: 1fr; \}/);
   assert.match(cssRule('.build-rolo-bound'), /color:\s*var\(--ink-2\)/, 'the rolodex prints the bound in ink');
+});
+
+// ---------------------------------------------------------------------------
+// The 2026-09 UX review, "Build / SLI editor": one sentence in real units, the fields in four groups, short help
+// with the long explanation on demand, the relationships checked as typed with a linked summary, Save SLI apart
+// from "Include in this pack"
+// ---------------------------------------------------------------------------
+
+test('the plain words: an id as a name, a window in days, the opening sentence in real units; the relationship checks (direction, bound, unit, objective, window); the short help and the long explanation', () => {
+  assert.deepEqual([sliName('queue_depth_headroom'), sliName('http_service_availability'), sliName('dlq_depth'), sliName('qmgr_process_up'), sliName('')], ['Queue depth headroom', 'HTTP service availability', 'DLQ depth', 'Queue manager process up', '']);
+  assert.deepEqual([windowText('30d'), windowText('1d'), windowText('7d'), windowText(''), windowText('2w')], ['30 days', '1 day', '7 days', '', '2w']);
+  // The review's own example, word for word but for the bound being good at the bound itself (spec 1.3).
+  assert.equal(sliSummarySentence({ id: 'queue_depth_headroom', type: 'threshold', objective: '99.9', window: '30d', threshold: '0.8', good_when: 'below', unit: 'ratio' }), 'Queue depth headroom is healthy when its ratio is at or below 0.8; target 99.9% of the time over 30 days.');
+  assert.equal(sliSummarySentence({ id: 'settlement_consumers', type: 'threshold', objective: 99, window: '7d', threshold: 2, good_when: 'above', unit: 'consumers' }), 'Settlement consumers is healthy when it is at or above 2 consumers; target 99% of the time over 7 days.');
+  assert.equal(sliSummarySentence({ id: 'notification_failures', type: 'threshold', objective: '99', window: '7d', threshold: 0, unit: 'per_second' }), 'Notification failures is healthy when it is at or below 0 per second; target 99% of the time over 7 days.');
+  assert.equal(sliSummarySentence({ id: 'availability', type: 'ratio', objective: '99.5', window: '30d' }), 'Availability is the share of good events among all events; target 99.5% good over 30 days.');
+  assert.equal(sliSummarySentence({ id: 'x_y', name: 'Checkout success', type: 'threshold', objective: 'abc', window: '30d', threshold: '' }), 'Checkout success is healthy when it stays within a bound that is not set yet; no objective set yet.', 'a value missing or not a number is said, not guessed');
+  // The relationships.
+  assert.deepEqual(sliRelationshipChecks({ type: 'threshold', objective: '99.9', window: '30d', threshold: '0.8', good_when: 'below', unit: 'ratio' }), {});
+  assert.deepEqual(sliRelationshipChecks({ type: 'threshold', objective: '100', window: '31d', threshold: '80', unit: 'ratio' }), {
+    objective: 'The objective is a percent above 0 and below 100, like 99.9', window: 'The window is one of 7d, 28d, 30d or 90d', threshold: 'A ratio bound is between 0 and 1 — for 80%, enter 0.8',
+  });
+  assert.deepEqual(sliRelationshipChecks({ type: 'threshold', threshold: '-1', unit: 'seconds' }), { threshold: 'A bound in seconds cannot be negative' });
+  assert.deepEqual(sliRelationshipChecks({ type: 'threshold', threshold: '0', unit: 'per_second', good_when: 'above' }), { good_when: 'Good when above 0 makes every sample good — raise the bound or choose below' });
+  assert.deepEqual(sliRelationshipChecks({ type: 'threshold', threshold: '1', unit: 'ratio', good_when: 'below' }), { good_when: 'Good when below 1 makes every ratio good — lower the bound or choose above' });
+  assert.deepEqual(sliRelationshipChecks({ type: 'threshold', threshold: 'abc', unit: 'events per hour' }), { unit: 'A unit is one word, like seconds, ratio or per_second', threshold: 'Enter the bound as a number, like 0.8' });
+  assert.deepEqual(sliRelationshipChecks({ type: 'threshold', threshold: '150', unit: 'percent' }), { threshold: 'A percent bound is between 0 and 100' });
+  assert.deepEqual(sliRelationshipChecks({ type: 'ratio', objective: 'abc', threshold: '80', unit: 'ratio' }), { objective: 'Enter the objective as a percent, like 99.9' }, 'a ratio SLI carries no bound to check');
+  assert.deepEqual(sliRelationshipChecks({ type: 'threshold', objective: '', window: '', threshold: '' }), {}, 'empty is not checked here: the library default in the editor, the required list in the form');
+  // No library default is flagged, at any tier.
+  for (const e of INDEX.entries) for (const sli of e.slis) for (const t of ['tier-3', 'tier-2', 'tier-1']) {
+    assert.deepEqual(sliRelationshipChecks({ type: sli.type, objective: percentText(sli.objectives?.[t]), window: sli.windows?.[t], threshold: sli.threshold, good_when: sli.good_when, unit: sli.unit }), {}, `${e.id}.${sli.id} at ${t}`);
+  }
+  // A field's help: the short line under it, the longer explanation behind its '?'.
+  assert.deepEqual(fieldHelp({ help: 'short', hint: 'long' }), { line: 'short', more: 'long' });
+  assert.deepEqual(fieldHelp({ hint: 'only' }), { line: 'only', more: null });
+  assert.equal(createFormStatus(customFormModel({ name: 'X y', type: 'ratio', good: 'a', total: 'b', objective: '100' })).text, 'one value needs attention — listed at the top');
+});
+
+test('the model: a relationship problem lands on its field and in the linked list, the engine’s word wins; the generated outputs; inclusion per kind; create mode checks the form and blocks Add', () => {
+  const ratioBound = 'A ratio bound is between 0 and 1 — for 80%, enter 0.8';
+  const b = draftWith({ entries: ['kafka', 'http-service'], overrides: { kafka_produce_latency_p99: { threshold: 80, unit: 'ratio' } } });
+  const m = modelOf(b, 'kafka_produce_latency_p99');
+  assert.deepEqual([field(m, 'threshold').check, field(m, 'threshold').error, field(m, 'threshold').engineError, field(m, 'threshold').value], [ratioBound, ratioBound, null, '80'], 'the value stays as entered');
+  assert.deepEqual(m.errorList, [{ field: 'threshold', label: 'Bound', message: ratioBound, inputId: 'build-editor-threshold' }]);
+  assert.equal(m.summary, 'Kafka produce latency p99 is healthy when its ratio is at or below 80; target 99% of the time over 30 days.');
+  const withEngine = modelOf(b, 'kafka_produce_latency_p99', { errors: { threshold: 'engine says no' } });
+  assert.deepEqual([field(withEngine, 'threshold').error, field(withEngine, 'threshold').check], ['engine says no', ratioBound], 'the engine is the authority');
+  // Read-only (Verify): nothing re-checked, nothing to include or save.
+  const ro = modelOf(b, 'kafka_produce_latency_p99', { mode: 'readonly' });
+  assert.deepEqual([ro.checks, ro.errorList, ro.inclusion, ro.saveHelp, ro.doneLabel], [{}, [], null, null, 'Close']);
+  // What the pack generated from the SLI (the folded details), and an SLI the pack does not carry yet.
+  assert.deepEqual(m.outputs, { slo: 'kafka_produce_latency_p99_99', burns: 2, rule: 'orders_api:kafka_produce_latency_p99:value_5m', compiled: true });
+  assert.deepEqual(generatedOutputs(null, 'x'), { slo: null, burns: 0, rule: null });
+  const above = modelOf(b, 'kafka_controller_election_rate');
+  assert.deepEqual([above.outputs.compiled, above.inclusion.on, above.inclusion.help], [false, false, 'Not in the pack. Save SLI keeps your edits with the draft; tick to include it.']);
+  // A custom SLI exists only in the pack: its control removes it; an SLI of a product not selected says it selects the product.
+  const cb = draftWith({ custom: [{ id: 'checkout_success', type: 'ratio', good: 'a', total: 'b', objective: 0.999, window: '30d' }], editor: { key: 'checkout_success', custom: true } });
+  assert.deepEqual(dialogOf(cb).inclusion, { kind: 'remove', label: 'Remove SLI', help: 'A custom SLI is always in the pack; removing it deletes it.' });
+  assert.equal(buildEditorModel({ build: { ...cb, editor: { key: 'alertmanager_availability', custom: false } }, library: LIBRARY }).inclusion.help, 'Not in the pack. Ticking also selects Alertmanager; your edits are kept either way.');
+  // Create mode: the same checks on the form, Add blocked while one stands, the sentence from the typed name.
+  const create = draftWith({ editor: { create: true }, customDraft: { name: 'Queue headroom', type: 'threshold', query: 'max(x)', threshold: '80', unit: 'ratio' } });
+  const cm = dialogOf(create);
+  assert.deepEqual([cm.submit.enabled, field(cm, 'threshold').error, cm.status], [false, ratioBound, { kind: 'error', text: 'one value needs attention — listed at the top' }]);
+  assert.equal(cm.summary, 'Queue headroom is healthy when its ratio is at or below 80; target 99.9% of the time over 30 days.');
+  assert.deepEqual(cm.errorList.map(e => e.field), ['threshold']);
+  const fixed = dialogOf({ ...create, customDraft: { ...create.customDraft, threshold: '0.8' } });
+  assert.deepEqual([fixed.submit.enabled, fixed.status.kind], [true, 'ready']);
+});
+
+test('the dialog in four groups: Behavior · Objective · Data source · Generated outputs; the PromQL and the generated names folded under Advanced (open when an error sits there, and in create mode); the sentence at the top; the linked error summary; a ? per field', () => {
+  const b = draftWith({ entries: ['kafka', 'http-service'], overrides: { kafka_produce_latency_p99: { threshold: 80, unit: 'ratio' } }, editor: { key: 'kafka_produce_latency_p99', custom: false } });
+  const model = dialogOf(b);
+  assert.deepEqual(editorGroups(model).map(g => [g.id, g.cells, g.advanced]), [['behavior', ['description', 'threshold', 'unit'], []], ['objective', ['objective', 'window'], []], ['source', ['semconv_metric', '@type'], ['query']], ['outputs', ['id'], []]]);
+  assert.deepEqual(editorFieldOrder(model).map(f => f.id), ['description', 'threshold', 'good_when', 'unit', 'objective', 'window', 'semconv_metric', 'query', 'id']);
+  const html = renderHtml(model);
+  assert.deepEqual([...html.matchAll(/<h3 class="build-editor-group-title" id="build-editor-g-([a-z]+)">([^<]+)/g)].map(m => [m[1], m[2].trim()]), [['behavior', 'Behavior'], ['objective', 'Objective'], ['source', 'Data source'], ['outputs', 'Generated outputs']]);
+  assert.ok(html.includes('<p class="build-editor-summary" id="build-editor-summary">Kafka produce latency p99 is healthy when its ratio is at or below 80; target 99% of the time over 30 days.</p>'));
+  assert.ok(html.includes('<div class="build-editor-errors" id="build-editor-errors" tabindex="-1" aria-labelledby="build-editor-errors-title"><p class="build-editor-errors-title" id="build-editor-errors-title">One value needs attention</p><ul class="build-editor-errors-list"><li><a href="#build-editor-threshold" data-editor-jump="threshold">Bound: A ratio bound is between 0 and 1 — for 80%, enter 0.8</a></li></ul></div>'));
+  assert.ok(html.indexOf('id="build-editor-errors"') < html.indexOf('build-editor-group'), 'the summary is at the top of the body');
+  assert.ok(html.includes('<span class="build-edit-error" id="build-editor-threshold-error" role="alert">A ratio bound is between 0 and 1 — for 80%, enter 0.8</span>') && html.includes('data-override-field="threshold" data-sli="kafka_produce_latency_p99" aria-invalid="true" value="80"'), 'beside its field, the value kept as entered');
+  assert.ok(html.includes('<details class="build-editor-advanced" data-editor-fold="promql"><summary>Advanced: PromQL as it runs</summary>'), 'the PromQL folded');
+  assert.ok(html.includes('<details class="build-editor-advanced" data-editor-fold="outputs"><summary>Advanced: generated rule details</summary>') && html.includes('<dt>SLO</dt><dd><code>kafka_produce_latency_p99_99</code></dd>'));
+  assert.ok(html.includes('<button type="button" class="build-edit-more-btn" data-more="build-editor-threshold" aria-expanded="false" aria-controls="build-editor-threshold-more" data-focus-key="ov:kafka_produce_latency_p99:threshold:more" title="About Bound" aria-label="About Bound"><span aria-hidden="true">?</span></button>'));
+  assert.ok(html.includes('<p class="build-edit-more" id="build-editor-threshold-more" hidden>the bound in the SLI’s unit;'));
+  assert.ok(html.includes('<span class="build-edit-hint" id="build-editor-objective-hint">How often it must be good, e.g. 99.9</span>'), 'short help under the field');
+  // No problem: the summary is drawn hidden (the live check fills it as the user types).
+  assert.ok(renderHtml(dialogOf(draftWith({ editor: { key: 'availability', custom: false } }))).includes('<div class="build-editor-errors" id="build-editor-errors" tabindex="-1" aria-labelledby="build-editor-errors-title" hidden>'));
+  // An error on the PromQL opens its fold (and keeps it open across a redraw); create mode has it open — the PromQL is required there.
+  assert.ok(renderHtml(buildEditorModel({ build: { ...b, error: ['override kafka_produce_latency_p99.query: does not parse'] }, library: LIBRARY })).includes('data-editor-fold="promql" open data-fold-required>'));
+  const cr = renderHtml(dialogOf(draftWith({ editor: { create: true } })));
+  assert.ok(cr.includes('data-editor-fold="promql" open data-fold-required><summary>Advanced: PromQL</summary>') && !cr.includes('data-editor-fold="outputs"'));
+});
+
+test('the handlers: the live check repaints the field, the linked summary and the sentence as typed; Save SLI moves the focus to the summary while a problem stands and closes once none does; a ? opens its explanation; a summary link opens the fold and focuses the field; a redraw keeps the folds and the explanations open', () => {
+  const b = draftWith({ entries: ['kafka', 'http-service'], editor: { key: 'kafka_produce_latency_p99', custom: false } });
+  const model = dialogOf(b);
+  assert.deepEqual(model.errorList, []);
+  const calls = [];
+  const act = { closeEditor: () => calls.push(['close']), setOverride: (k, f, v) => { calls.push(['override', k, f, v]); return true; }, clearOverride: () => {} };
+  const attrs = {}, cls = new Set();
+  const msg = { className: 'build-edit-hint', id: 'build-editor-threshold-hint', textContent: '', setAttribute() {}, removeAttribute() {} };
+  let focused = null;
+  const thr = { ...fakeEl({ overrideField: 'threshold', sli: 'kafka_produce_latency_p99' }), id: 'build-editor-threshold', value: '0.1', tagName: 'INPUT', focus() { focused = 'threshold'; }, setAttribute: (k, v) => { attrs[k] = v; }, removeAttribute: (k) => { delete attrs[k]; } };
+  const unit = { ...fakeEl({ overrideField: 'unit', sli: 'kafka_produce_latency_p99' }), value: 'seconds', tagName: 'INPUT' };
+  const fold = { open: false };
+  const thrBox = { classList: { toggle: (c, on) => (on ? cls.add(c) : cls.delete(c)) }, closest: () => fold, querySelector: (sel) => (sel === '.build-edit-input' ? thr : sel === '.build-edit-default' ? { id: 'build-editor-threshold-default' } : sel === '.build-edit-error, .build-edit-hint' ? msg : null) };
+  const errBox = { ...fakeEl({}), innerHTML: '', hidden: true, focused: 0, focus() { this.focused++; } };
+  const sentence = { textContent: model.summary };
+  const status = { textContent: '', className: '' };
+  const save = fakeEl({});
+  const moreAttrs = { 'aria-expanded': 'false' };
+  const more = { ...fakeEl({ more: 'build-editor-threshold' }), getAttribute: (k) => moreAttrs[k], setAttribute: (k, v) => { moreAttrs[k] = v; } };
+  const moreText = { hidden: true };
+  const container = fakeContainer({
+    '.build-editor': [fakeEl({})], '.build-editor .build-edit-input': [thr, unit], '#build-editor-status': [status],
+    '.build-editor [data-field="threshold"]': [thrBox], '.build-editor [data-field="threshold"] .build-edit-input': [thr], '.build-editor [data-field="unit"] .build-edit-input': [unit],
+    '#build-editor-errors': [errBox], '#build-editor-summary': [sentence], '.build-editor [data-editor-save]': [save],
+    '.build-editor [data-more]': [more], '#build-editor-threshold-more': [moreText],
+  });
+  wireBuildEditor(container, model, { build: act });
+  // The unit becomes a ratio, then 80 is typed for the bound: committed live (the value kept), the problem said at once.
+  unit.value = 'ratio'; unit.fire('input');
+  thr.value = '80'; thr.fire('input');
+  assert.deepEqual(calls, [['override', 'kafka_produce_latency_p99', 'unit', 'ratio'], ['override', 'kafka_produce_latency_p99', 'threshold', '80']]);
+  assert.deepEqual([msg.className, msg.textContent, attrs['aria-invalid'], cls.has('is-error')], ['build-edit-error', 'A ratio bound is between 0 and 1 — for 80%, enter 0.8', 'true', true]);
+  assert.ok(!errBox.hidden && errBox.innerHTML.includes('<a href="#build-editor-threshold" data-editor-jump="threshold">Bound: A ratio bound is between 0 and 1 — for 80%, enter 0.8</a>'));
+  assert.equal(sentence.textContent, 'Kafka produce latency p99 is healthy when its ratio is at or below 80; target 99% of the time over 30 days.');
+  // Save SLI with the problem standing: not closed, the focus on the summary, the status says why.
+  calls.length = 0;
+  save.fire('click');
+  assert.deepEqual([calls, errBox.focused, status.textContent, status.className], [[], 1, 'not closed — one value needs attention, listed at the top', 'build-editor-status is-error']);
+  // A summary link: the fold the field sits in opens, the field takes the focus.
+  errBox.fire('click', { target: { closest: () => ({ dataset: { editorJump: 'threshold' } }) } });
+  assert.deepEqual([fold.open, focused], [true, 'threshold']);
+  assert.equal(jumpToField(fakeContainer({}), 'nope'), false);
+  // Fixed: the message goes back to the help line, the summary hides, Save SLI closes.
+  thr.value = '0.8'; thr.fire('input');
+  assert.deepEqual([msg.className, msg.textContent, 'aria-invalid' in attrs, errBox.hidden], ['build-edit-hint', 'The limit in the unit, e.g. 0.8', false, true]);
+  assert.equal(liveCheck(container, model).length, 0);
+  save.fire('click');
+  assert.deepEqual(calls.at(-1), ['close']);
+  // The '?' opens (and closes) the field's longer explanation.
+  more.fire('click');
+  assert.deepEqual([moreAttrs['aria-expanded'], moreText.hidden], ['true', false]);
+  more.fire('click');
+  assert.deepEqual([moreAttrs['aria-expanded'], moreText.hidden], ['false', true]);
+  // Read-only: no live check.
+  assert.equal(liveCheck(container, dialogOf(b, 'readonly')), null);
+  // A redraw of the same editor keeps the folds and the '?' explanations the user opened.
+  const oldFold = { dataset: { editorFold: 'promql' }, open: true, hasAttribute: () => false };
+  const newFold = { dataset: { editorFold: 'promql' }, open: false, hasAttribute: () => false };
+  const newMore = { dataset: { more: 'build-editor-objective' }, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } };
+  const newMoreText = { hidden: true };
+  const body = {
+    swapped: false, html: '', set innerHTML(v) { this.html = v; this.swapped = true; }, get innerHTML() { return this.html; },
+    querySelectorAll(sel) { if (sel === 'details[data-editor-fold]') return [this.swapped ? newFold : oldFold]; if (sel === '[data-more][aria-expanded="true"]') return this.swapped ? [] : [{ dataset: { more: 'build-editor-objective' } }]; return []; },
+    querySelector(sel) { return sel === '[data-more="build-editor-objective"]' ? newMore : sel === '#build-editor-objective-more' ? newMoreText : null; },
+  };
+  const parts = { '.build-editor-head': { innerHTML: '' }, '.build-editor-body': body, '.build-editor-actions': { innerHTML: '' }, '#build-editor-status': { textContent: '', className: '' } };
+  const mounted = { className: '', dataset: { editorKey: 'kafka_produce_latency_p99', editorMode: 'edit' }, addEventListener() {}, querySelector: (sel) => parts[sel] || null };
+  globalThis.document = { activeElement: {}, body: {} };
+  try {
+    renderBuildEditor({ innerHTML: '', contains: () => false, querySelectorAll: () => [], querySelector: (sel) => (sel === '.build-editor' ? mounted : null) }, model, { build: {} });
+  } finally { delete globalThis.document; }
+  assert.ok(body.swapped && body.html.includes('build-editor-group'), 'the body was redrawn');
+  assert.deepEqual([newFold.open, newMore.attrs['aria-expanded'], newMoreText.hidden], [true, 'true', false]);
 });

@@ -1,1 +1,139 @@
-/* studio/ux-build-result.css — Build Compile + Verify: screen-specific rules on top of the shared grammar in studio/ux.css. */
+/* studio/ux-build-result.css — Build Compile + Verify: screen-specific rules on top of the shared grammar in studio/ux.css.
+   The result screens (studio/build-compile-view.mjs, studio/build-verify-view.mjs): the decision header comes from
+   ux-kit, this file styles what follows it — the action queue (Compile), "What remains" (Verify), the layer overview
+   with its artefacts by type, "Changes since Define", the reason form of "Accept with reason". Colours come from the
+   ux tokens (both themes) and the layer tokens; text sizes follow the readability floor (15px body, 13–14px labels). */
+
+.build-step .ux-decision { margin: 0 0 18px; }
+
+/* ---------- a result section's head ---------- */
+.bres-queue, .bres-remains, .bres-produced { margin: 0 0 20px; color: var(--ux-ink); font-family: var(--sans); }
+.bres-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin: 0 0 10px; }
+.bres-title { margin: 0; font: 600 17px/1.3 var(--sans); color: var(--ux-ink); }
+.bres-sub { margin: 0; flex: 1 1 260px; font-size: 14px; line-height: 1.45; color: var(--ux-ink-2); }
+.bres-all { margin-left: auto; }
+.bres-count {
+  display: inline-block; min-width: 22px; margin-left: 6px; padding: 1px 7px; border-radius: 999px; text-align: center;
+  font: 700 12px/1.5 var(--sans); background: var(--ux-tone-bg, var(--ux-bg-2)); color: var(--ux-tone, var(--ux-ink-2));
+  vertical-align: 1px;
+}
+#build-remains { scroll-margin-top: calc(var(--observa-chrome-h, 96px) + 24px); }
+
+/* ---------- one actionable item: what it says, what it impacts, the correction, its actions ---------- */
+.bres-items { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.bres-item {
+  display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-start; justify-content: space-between;
+  padding: 12px 14px; border-radius: 8px; background: var(--ux-bg); border: 1px solid var(--ux-line);
+  border-left: 3px solid var(--ux-tone, var(--ux-line));
+}
+.bres-item-main { flex: 1 1 380px; min-width: 0; }
+.bres-kind { display: block; font: 600 13px/1.3 var(--sans); color: var(--ux-tone, var(--ux-ink-2)); margin-bottom: 3px; }
+.bres-msg { margin: 0; font-size: 15px; line-height: 1.45; color: var(--ux-ink); overflow-wrap: anywhere; }
+.bres-rest { margin: 4px 0 0; font-size: 14px; color: var(--ux-ink-2); overflow-wrap: anywhere; }
+.bres-rest code, .bres-msg code { font: 13px/1.4 var(--mono); }
+.bres-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 8px 0 0; font-size: 14px; }
+.bres-facts > div { display: contents; }
+.bres-facts dt { color: var(--ux-ink-3); font-weight: 600; }
+.bres-facts dd { margin: 0; color: var(--ux-ink-2); overflow-wrap: anywhere; }
+.bres-actions { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.bres-actions .ux-secondary-btn { min-height: 36px; padding: 7px 14px; font-size: 14px; }
+
+/* ---------- "What remains" (Verify): groups, values by layer ---------- */
+.bres-group { margin: 0 0 16px; }
+.bres-group-title { margin: 0 0 4px; font: 600 15px/1.35 var(--sans); color: var(--ux-ink); }
+.bres-group-why { margin: 0 0 8px; font-size: 14px; line-height: 1.45; color: var(--ux-ink-2); max-width: 780px; }
+.bres-layer-group { margin: 8px 0 12px; padding-left: 10px; border-left: 3px solid var(--bres-layer, var(--ux-line)); }
+.bres-layer-title { margin: 0 0 6px; font: 600 14px/1.35 var(--sans); color: var(--ux-ink); }
+.bres-layer-q { font-weight: 400; color: var(--ux-ink-2); }
+.bres-values { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.bres-value {
+  display: grid; grid-template-columns: minmax(160px, 1.2fr) minmax(120px, 1fr) minmax(0, 1.4fr) auto; gap: 4px 12px;
+  align-items: baseline; padding: 6px 10px; border-radius: 6px; background: var(--ux-bg); font-size: 14px;
+}
+.bres-value.is-manual { grid-template-columns: minmax(160px, 1fr) minmax(0, 2fr) auto; }
+.bres-value-name { color: var(--ux-ink); font-weight: 600; overflow-wrap: anywhere; }
+.bres-value-key { font: 13px/1.4 var(--mono); color: var(--ux-ink-2); overflow-wrap: anywhere; }
+.bres-value-now { color: var(--ux-ink-2); overflow-wrap: anywhere; }
+.bres-value-now code { font: 13px/1.4 var(--mono); }
+@media (max-width: 720px) {
+  .bres-value, .bres-value.is-manual { grid-template-columns: minmax(0, 1fr) auto; }
+  .bres-value-key, .bres-value-now { grid-column: 1 / -1; }
+}
+
+/* ---------- Accept with reason: a per-session acknowledgement ---------- */
+.bres-accept { flex: 1 1 100%; display: grid; gap: 6px; padding: 10px 12px; border-radius: 8px; background: var(--ux-bg-2); }
+.bres-accept-label { font: 600 14px/1.3 var(--sans); color: var(--ux-ink); }
+.bres-accept-input {
+  font: 15px/1.4 var(--sans); min-height: 38px; padding: 7px 10px; border-radius: 6px;
+  border: 1px solid var(--ux-line); background: var(--ux-bg); color: var(--ux-ink);
+}
+.bres-accept-input[aria-invalid="true"] { border-color: var(--ux-fail); }
+.bres-accept-hint { margin: 0; font-size: 13px; color: var(--ux-ink-2); }
+.bres-accept-actions { display: flex; gap: 12px; align-items: center; }
+.bres-accepted .bres-item { opacity: 0.9; }
+
+/* ---------- the layer overview (Compile): one row per layer, a slab only when selected ---------- */
+.bres-layers { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.bres-layer {
+  --bres-layer: var(--ux-line);
+  border: 1px solid var(--ux-line); border-left: 4px solid var(--bres-layer); border-radius: 10px;
+  background: var(--ux-bg); padding: 4px 12px 10px;
+}
+.bres-layer[data-layer="L1"], .bres-layer-group[data-layer="L1"] { --bres-layer: var(--L1); }
+.bres-layer[data-layer="L2"], .bres-layer-group[data-layer="L2"] { --bres-layer: var(--L2); }
+.bres-layer[data-layer="L2X"], .bres-layer-group[data-layer="L2X"] { --bres-layer: var(--L2X); }
+.bres-layer[data-layer="L3"], .bres-layer-group[data-layer="L3"] { --bres-layer: var(--L3); }
+.bres-layer[data-layer="L4"], .bres-layer-group[data-layer="L4"] { --bres-layer: var(--L4); }
+.bres-layer[data-layer="L5"], .bres-layer-group[data-layer="L5"] { --bres-layer: var(--L5); }
+.bres-layer[data-layer="GOV"], .bres-layer-group[data-layer="GOV"] { --bres-layer: var(--GOV); }
+.bres-layer-toggle {
+  width: 100%; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; text-align: left;
+  min-height: 44px; padding: 8px 0; background: none; border: 0; cursor: pointer; color: var(--ux-ink); font: inherit;
+}
+.bres-layer-toggle::before {
+  content: "▸"; display: inline-block; width: 12px; color: var(--ux-ink-3); transition: transform 150ms ease;
+}
+.bres-layer.is-open .bres-layer-toggle::before { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .bres-layer-toggle::before { transition: none; } }
+.bres-layer-code { font: 700 14px/1.3 var(--mono); color: var(--bres-layer); }
+.bres-layer-name { font: 600 15px/1.35 var(--sans); flex: 1 1 240px; }
+.bres-layer-verdict { font-size: 14px; font-weight: 600; }
+.bres-layer-verdict b { margin-right: 3px; }
+.bres-layer-verdict.is-pass { color: var(--ux-ok); }
+.bres-layer-verdict.is-placeholder { color: var(--ux-warn); }
+.bres-layer-verdict.is-fail { color: var(--ux-fail); }
+.bres-layer-verdict.is-pending, .bres-layer-verdict.is-neutral { color: var(--ux-ink-3); }
+.bres-layer-count { font-size: 14px; color: var(--ux-ink-2); }
+.bres-layer-body:not([hidden]) { margin-top: 10px; }
+
+/* artefacts by type (and the purpose each serves) */
+.bres-types { list-style: none; margin: 0; padding: 0 0 0 24px; display: flex; flex-wrap: wrap; gap: 6px; }
+.bres-types li {
+  font-size: 13px; line-height: 1.35; padding: 3px 9px; border-radius: 6px;
+  background: var(--ux-bg-2); color: var(--ux-ink-2); cursor: default;
+}
+.bres-types li b { color: var(--ux-ink); margin-left: 2px; }
+.bres-type-why { display: none; }
+.bres-layer.is-open .bres-type-why { display: inline; color: var(--ux-ink-3); }
+
+/* ---------- Changes since Define ---------- */
+.bres-origins { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 10px; }
+.bres-origin { padding: 10px 12px; border-radius: 8px; background: var(--ux-bg-2); }
+.bres-origin-head { margin-bottom: 6px; font-size: 15px; color: var(--ux-ink); }
+.bres-origin-sub { font-size: 13px; color: var(--ux-ink-2); margin-left: 6px; }
+.bres-origin .bres-types { padding-left: 0; }
+.bres-origin .bres-types li { background: var(--ux-bg); }
+.bres-origin-slis { margin: 6px 0 0; font-size: 14px; color: var(--ux-ink-2); overflow-wrap: anywhere; }
+.bres-origin-slis code { font: 13px/1.4 var(--mono); }
+.bres-origin-edits-title { margin: 8px 0 4px; font: 600 14px/1.3 var(--sans); color: var(--ux-ink); }
+.bres-origin-edits { margin: 0; padding-left: 18px; font-size: 14px; color: var(--ux-ink-2); }
+
+/* ---------- the rubric detail (Verify, collapsed) ---------- */
+.bres-rubric-line { margin: 0 0 6px; font-size: 14px; color: var(--ux-ink-2); }
+.bres-rubric-line b { color: var(--ux-ink); }
+.bres-rubric-note { margin: 10px 0 0; font-size: 14px; color: var(--ux-ink-2); }
+.bres-rubric-note code { font: 13px/1.4 var(--mono); }
+
+/* ---------- the hand-off footer: the button is primary only when the hand-off is the next action ---------- */
+.bres-handoff .build-step-status { font: 14px/1.5 var(--sans); font-style: normal; color: var(--ux-ink-2); }
+.bres-handoff .build-next-secondary { font-weight: 600; }

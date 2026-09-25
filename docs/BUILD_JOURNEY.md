@@ -27,15 +27,15 @@ flowchart TD
     A["Log in"] --> B{"What would you like to do?"}
     B -->|"Check an existing service or pack"| C["Select service or import pack"]
     B -->|"Build a new pack"| D["DEFINE<br/>What are we building for?"]
-    D --> E["COMPILE<br/>What will the pack include?"]
-    E --> F["VERIFY<br/>Can we use this pack?"]
+    D --> E["COMPILE<br/>What did the pack produce?"]
+    E --> F["VERIFY<br/>What is ready, and what remains?"]
     F --> G{"Ready to continue?"}
     G -->|"Resolve or adjust"| D
-    G -->|"Continue with visible gaps"| H["Pack available in Discover"]
+    G -->|"Open pack in Discover (with visible gaps)"| H["Pack available in Discover"]
     C --> H
     H --> I["DISCOVER<br/>What do we have?"]
-    I --> J["DIAGNOSE<br/>Can we trust it?"]
-    J --> K["REMEDIATE<br/>Fix the gaps"]
+    I --> J["DIAGNOSE<br/>How reliable is this pack?"]
+    J --> K["REMEDIATE<br/>Resolve gaps"]
     K --> I
 ```
 
@@ -44,16 +44,51 @@ flowchart TD
 | Step | Question | Input | Output |
 |---|---|---|---|
 | 1 DEFINE | What are we building for? | service name, owners, criticality tier-1/2/3, environment, one or more library entries (products it runs on, or an archetype for a service built from scratch) — then **Seed the pack →**: the definition is confirmed once and recedes into a seed card | the entries' params with defaults; the tier's requirements (`tierRequirements`); the tier's default SLIs (`defaultToggles`) as the seed |
-| 2 COMPILE | What will the pack include? | per-entry SLI toggles (**any** SLI of the entries, the tier's defaults pre-ticked), the copies (overrides per SLI, custom SLIs), params, section toggles (SLOs, policy + routes, dashboards, validation) | the canonical pack + todos + provenance (`instantiatePack`) |
-| 3 VERIFY | Can we use this pack? | the pack | which clauses pass, which pass only on a placeholder, which fail (`validationSummary`); the schema verdict; the compiled artifacts through the existing targets (Prometheus rules, OTel Collector, Alertmanager, Grafana dashboards) |
+| 2 COMPILE | What did the pack produce? | per-entry SLI toggles (**any** SLI of the entries, the tier's defaults pre-ticked), the copies (overrides per SLI, custom SLIs), params, section toggles (SLOs, policy + routes, dashboards, validation) | the canonical pack + todos + provenance (`instantiatePack`) |
+| 3 VERIFY | What is ready, and what remains? | the pack | which clauses pass, which pass only on a placeholder, which fail (`validationSummary`); the schema verdict; the compiled artifacts through the existing targets (Prometheus rules, OTel Collector, Alertmanager, Grafana dashboards) |
 
 **Hand-off.** VERIFY ends on *Ready to continue?* with two exits: *Resolve or adjust*
-returns to DEFINE; *Continue with visible gaps* (*Continue to Discover* when no
-placeholder remains) registers the produced pack in the studio's upload registry (the
+returns to DEFINE; *Open pack in Discover with visible gaps* (*Open pack in Discover* when
+no placeholder remains) registers the produced pack in the studio's upload registry (the
 same path an uploaded pack takes) and switches to the existing journey:
 Discover shows its layers, Diagnose compares it with a live pack, Remediate compiles
 and deploys the delta. Nothing in Discover / Diagnose / Remediate changes; a
 library-built pack is an ordinary canonical pack with provenance annotations.
+
+## The screens, after the 2026-09 UX review
+
+The review (docs/UX_SCREEN_GRAMMAR.md) found Define asking for everything at once and
+Verify's *conformant* reading as *safe to deploy*. What changed, per step:
+
+- **DEFINE** is four short substeps inside the step — *Service* (name, owners,
+  environment), *Criticality* (each tier a card that says what it requires, from the
+  rubric: *Tier 2: availability and latency objectives; metrics, logs and traces;
+  burn-rate alerts; …*), *Technology* (each card says *Adds N suggested SLIs*, previewable
+  before it is picked), *Review suggestions* (the SLIs grouped by technology with *Select
+  recommended* and one checkbox each). The substep on screen is `build.defineSub` (UI
+  state). Rubric clauses and the layer mechanics moved into *Why these suggestions?* and
+  *Advanced review*. The definition column is a sticky progress summary, not a second
+  scrolling form.
+- **The editor** opens on a live sentence (*Queue depth headroom is healthy when its ratio
+  is at or below 0.8; target 99.9% of the time over 30 days.*), groups its fields, folds
+  PromQL and the generated names under *Advanced*, checks direction / bound / unit /
+  objective / window as the user types (beside the field and in a linked summary, the
+  typed values kept), and ends on **Save SLI** with *Include in this pack* as a checkbox.
+- **COMPILE** asks *What did the pack produce?* and leads with the result (*Pack
+  compiled. Two warnings need review; 19 values remain placeholders.*), three separate
+  states (generated · complete for this tier · ready to deploy), a *Needs review* queue
+  (warning, impacted artefact, suggested correction, *Review*), a layer overview whose
+  slabs are drawn only when selected (`build.compileView`), and a *Changes since Define*
+  disclosure.
+- **VERIFY** asks *What is ready, and what remains?* and shows four readiness states
+  independently — *Schema valid*, *Meets tier rubric*, *Implementation*, *Deployment
+  ready* — under a verdict such as *Ready for team completion; not ready for deployment.*
+  Meeting the rubric never masks placeholders: deployment is ready only when nothing
+  fails, no value or runbook is left, no clause rests on a placeholder and every warning
+  is reviewed. The smallest list of what remains follows, each item with *Fix now* and,
+  for a non-blocking warning, *Accept with reason* (this session only — `build.accepted`,
+  never written into the pack). One primary action: fix what blocks, complete required
+  values, or *Open pack in Discover*.
 
 ## The library
 
@@ -442,7 +477,7 @@ screen has one axis — **the pack** — and two columns on all three steps:
   placeholder, todos, warnings and placeholders left. `renderClauseRail` and `buildRailModel`
   are retired; the summary is part of the column. The column is rebuilt on every re-render,
   so the summary is not a live region itself: its settled status goes as one line
-  (`buildStatusLine`: *conformant at tier-2 · 12 pass · 4 on a placeholder · 0 fail*) to a
+  (`buildStatusLine`: *meets the tier-2 rubric · 12 pass · 4 need real values · 0 fail*) to a
   persistent visually-hidden `role=status` node outside the view (`#build-status`), written
   only when it changes — never while the engine is still answering.
 - **RIGHT, the stack** is the main surface, full remaining width: the slabs of the scan,
@@ -788,10 +823,14 @@ engine has answered for it, the library template with `result.provenance.params`
 small line *parameters: job=orders-api, duration_metric=… — edit them in L2*; the evidence
 line; a status line at the bottom that says what happened (*applying…* → *applied · SLO
 availability_99_9 · 2 burn alerts · rule orders_api:availability:ratio_5m*; the engine's error,
-which also sits under its field; *not in the pack — switch it on below*; *the last
+which also sits under its field; *not in the pack — tick Include in this pack below*; *the last
 compilation failed elsewhere*; *as compiled · …* on Verify); per-field **↺ library default**
 (the PromQL default is the resolved library expression, named beside the label rather than
-printed), **Reset all** and **Done**; the SLI's add / remove switch in the footer. Both themes
+printed), **Reset all** and **Save SLI**; the *Include in this pack* checkbox in the footer
+(a custom SLI gets **Remove SLI** instead). Since the 2026-09 review the fields are grouped
+Behavior · Objective · Data source · Generated outputs, a sentence in real units leads the
+dialog, and the relationship checks sit beside each field and in a linked summary (see
+"The screens, after the 2026-09 UX review" below). Both themes
 through the tokens; the rules sit in the axis block of `app.css`, so the AA scan covers them.
 
 *Live apply.* Every field commits ON INPUT through the existing actions with `live: true`

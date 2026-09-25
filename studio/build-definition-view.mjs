@@ -1,20 +1,25 @@
 // studio/build-definition-view.mjs
 //
 // The definition column — the left, sticky column of every BUILD step
-// (docs/BUILD_JOURNEY.md "The axis"): what the pack is, compactly. The
-// service (name, owners, environment), the criticality tier as a segmented
-// control (tier-3 · tier-2 · tier-1, each segment with its MUST · SHOULD
-// counts, the chosen tier's one-line blurb beneath, a sliding thumb), the
-// library entries as chips in a grid (products, then archetypes: title,
-// evidence dot, SLIs at this tier; a selected chip is filled), and the
-// conformance summary that replaced the clause rail — the status, the three
-// counts (pass · on a placeholder · fail), the failing clauses named, how
-// many pass only on a placeholder, the todos, warnings and placeholders
-// left. DEFINE's tier cards, entry cards and fields moved here; the stack on
-// the right is the main surface on all three steps.
+// (docs/BUILD_JOURNEY.md "The axis"): what the pack is, compactly.
+//
+// On DEFINE it is a sticky progress summary (the 2026-09 UX review, "Build /
+// Define": a narrow form that scrolled on its own beside a long canvas was
+// nested scrolling): the four substeps of the step — Service · Criticality ·
+// Technology · Review suggestions — each a button with what it holds now
+// (orders-api · team-orders · prod; tier-2 · important; …) and whether it is
+// done, what is still needed, and the conformance summary that replaced the
+// clause rail — the status in plain words ("meets the tier-2 rubric"), the
+// three counts (pass · need real values · fail), the failing clauses named,
+// how many are represented but still need a real value, the todos, warnings
+// and placeholders left. The form itself — the service
+// fields, the tier cards with their consequences, the technology cards — is
+// on the step (build-define-view.mjs), one substep at a time; this module
+// keeps its wiring (wireBuildDefinition), so the two share one set of
+// handlers.
 //
 // The definition is a wizard stage (docs/BUILD_JOURNEY.md "The seed and the
-// copies"): the live form on DEFINE (with a one-line note once seeded); on
+// copies"): the progress on DEFINE (with a one-line note once seeded); on
 // COMPILE and VERIFY a read-only, recessed SEED card — the service as a
 // definition list, one tier chip, the entries as muted chips (each opens the
 // L1 sheet on that product's SLIs), "Change seed →" back to DEFINE — with the
@@ -22,40 +27,37 @@
 //
 // Renderer only (docs/UI_CONVENTIONS.md §2-3): render(container, model, host)
 // with buildDefinitionModel's output; host.build.* are the actions — update
-// (the text fields), setTier, toggleEntry. No state reads, no fetches.
+// (the text fields, the substep), setTier, toggleEntry. No state reads, no fetches.
 
 import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
-import { MAX_SERVICE_SLUG } from './build-model.mjs';
-import { evidenceDot, clauseRowHtml, STATE_GLYPH } from './build-atoms.mjs';
+import { serviceLine } from './build-model.mjs';
+import { clauseRowHtml, STATE_GLYPH } from './build-atoms.mjs';
+import { termHtml } from './ux-kit.mjs';
 
-const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
-
-function segmentHtml(t) {
-  // The counts stack (MUST over SHOULD): a 100 px segment cannot hold "15 MUST · 1 SHOULD" on one line.
-  const counts = t.must == null ? '<b>…</b>' : `<b>${t.must} MUST</b>${t.should ? `<b>${t.should} SHOULD</b>` : ''}`;
+/**
+ * The progress summary (DEFINE): the four substeps in order, each a button to it with what it holds now and whether
+ * it is done — the current one marked aria-current="step" — then what is still needed. The service line repaints
+ * as the name is typed (data-progress-val), before any re-render.
+ */
+export function progressHtml(model) {
+  const items = model.substeps || [];
   return `
-    <button type="button" role="radio" class="build-seg-btn" data-tier="${escapeHtml(t.id)}" aria-checked="${t.selected ? 'true' : 'false'}" tabindex="${t.selected ? '0' : '-1'}" data-focus-key="tier:${escapeHtml(t.id)}"
-            title="${escapeHtml(`${t.label} — ${t.word}: ${t.blurb}`)}">
-      <span class="build-seg-name">${escapeHtml(t.id)}</span>
-      <span class="build-seg-counts" aria-label="${escapeHtml(t.must == null ? 'loading the clauses' : `${t.must} MUST${t.should ? `, ${t.should} SHOULD` : ''}`)}">${counts}</span>
-    </button>`;
-}
-
-function chipHtml(c) {
-  const at = c.sliCountAtTier;
-  return `
-    <button type="button" class="build-chip${c.selected ? ' is-selected' : ''}" data-entry="${escapeHtml(c.id)}" aria-pressed="${c.selected ? 'true' : 'false'}" data-focus-key="entry:${escapeHtml(c.id)}"
-            title="${escapeHtml(`${c.title} — ${c.summary}${c.gaps ? ` · ${plural(c.gaps, 'evidence gap')}` : ''}`)}">
-      <span class="build-chip-top">
-        <span class="build-chip-title">${escapeHtml(c.title)}</span>
-        ${evidenceDot(c.evidence.status, c.evidence.verifiedOn)}
-      </span>
-      <span class="build-chip-meta">
-        <span class="build-chip-slis">${at} SLI${at === 1 ? '' : 's'} at this tier</span>
-        ${c.placeholderParams ? `<span class="build-chip-ph" title="params the library cannot know — each left at its default becomes a todo">${c.placeholderParams} ◐</span>` : ''}
-      </span>
-    </button>`;
+      <nav class="build-def-group bd-progress" aria-label="Define progress">
+        <div class="build-def-key">Your pack <span class="build-def-sub">${model.substepsDone ?? 0} of ${items.length} steps done</span></div>
+        <ol class="bd-progress-list">${items.map(s => `
+          <li class="bd-progress-item is-${escapeHtml(s.status)}${s.complete && s.status !== 'complete' ? ' is-complete' : ''}">
+            <button type="button" class="bd-progress-btn" data-define-sub="${escapeHtml(s.id)}" data-focus-key="dprog:${escapeHtml(s.id)}"${s.current ? ' aria-current="step"' : ''}>
+              <span class="bd-progress-n" aria-hidden="true">${s.complete && !s.current ? '✓' : s.n}</span>
+              <span class="bd-progress-text">
+                <span class="bd-progress-label">${escapeHtml(s.label)}<span class="sr-text">${s.complete ? ' — done' : ' — needs input'}</span></span>
+                <span class="bd-progress-val" data-progress-val="${escapeHtml(s.id)}">${escapeHtml(s.value)}</span>
+              </span>
+            </button>
+          </li>`).join('')}
+        </ol>
+        ${!model.valid ? `<div class="build-def-needed">Still needed: ${model.errors.map(escapeHtml).join(' and ')}.</div>` : ''}
+      </nav>`;
 }
 
 /** The conformance summary: the block that replaced the rail. */
@@ -63,11 +65,11 @@ export function summaryHtml(s) {
   const k = s.counts;
   return `
     <div class="build-summary is-${escapeHtml(s.statusKind)}" data-scroll-key="summary">
-      <div class="build-def-key">Conformance <span class="build-summary-tier">${escapeHtml(s.tier || '')} · ${k.must.total} MUST${k.should.total ? ` · ${k.should.total} SHOULD` : ''}</span></div>
+      <div class="build-def-key">${termHtml('conformant', 'Tier rubric')} <span class="build-summary-tier">${escapeHtml(s.tier || '')} · ${k.must.total} MUST${k.should.total ? ` · ${k.should.total} SHOULD` : ''}</span></div>
       <div class="build-summary-status">${escapeHtml(s.status)}</div>
       <div class="build-summary-counts" aria-label="clause states">
         <span class="build-summary-count is-pass" title="passes on the pack as written"><b aria-hidden="true">${STATE_GLYPH.pass}</b> ${k.pass} pass</span>
-        <span class="build-summary-count is-placeholder" title="passes, but only on a placeholder value the team still has to fill"><b aria-hidden="true">${STATE_GLYPH.placeholder}</b> ${k.placeholder} on a placeholder</span>
+        <span class="build-summary-count is-placeholder" title="Requirement represented; real value still needed — it passes the rubric on a placeholder value the team still has to fill"><b aria-hidden="true">${STATE_GLYPH.placeholder}</b> ${k.placeholder} need real values</span>
         <span class="build-summary-count is-fail" title="does not pass at this tier"><b aria-hidden="true">${STATE_GLYPH.fail}</b> ${k.fail} fail</span>
       </div>
       ${s.failing.length ? `
@@ -75,7 +77,7 @@ export function summaryHtml(s) {
         <div class="build-summary-sub">failing <span>the red edges on the stack — open the layer to see why</span></div>
         <ul class="build-rail-clauses">${s.failing.map(clauseRowHtml).join('')}</ul>
       </div>` : ''}
-      ${s.onPlaceholder ? `<div class="build-summary-ph">${s.onPlaceholder} clause${s.onPlaceholder === 1 ? ' passes' : 's pass'} only on a placeholder — amber on the stack; the todos on those layers are the difference.</div>` : ''}
+      ${s.onPlaceholder ? `<div class="build-summary-ph">${s.onPlaceholder} requirement${s.onPlaceholder === 1 ? ' is' : 's are'} represented but still need${s.onPlaceholder === 1 ? 's' : ''} a real value — amber on the stack; the todos on those layers are what remains.</div>` : ''}
       <div class="build-summary-foot">
         <span class="build-summary-todos" title="placeholders and scaffold defaults only the team can fill"><b>${s.todoCount}</b> todo${s.todoCount === 1 ? '' : 's'}</span>
         <span class="build-summary-warnings${s.blockingWarnings ? ' is-blocking' : ''}" title="promql (blocking) · sli-excluded · burn-rules"><b>${s.warningCount}</b> warning${s.warningCount === 1 ? '' : 's'}</span>
@@ -110,7 +112,6 @@ export function seedCardHtml(card) {
 
 /** The column as HTML — the shell embeds it; wireBuildDefinition(container, model, host) wires it once in the DOM. */
 export function buildDefinitionHtml(model) {
-  const sel = model.selectedCount;
   // Seeded and past DEFINE: the definition recedes into the seed card; the summary stays live below it.
   if (model.mode === 'seed') {
     return `
@@ -121,48 +122,11 @@ export function buildDefinitionHtml(model) {
       </section>
     </div>`;
   }
+  // DEFINE: the progress summary of the substeps (the form is on the step), the conformance summary beneath.
   return `
-    <div class="build-def-inner">
+    <div class="build-def-inner is-progress">
       ${model.seededNote ? `<p class="build-def-seeded" role="note">${escapeHtml(model.seededNote)}</p>` : ''}
-      <section class="build-def-group build-def-service" aria-label="Service">
-        <div class="build-def-key">Service</div>
-        <label class="build-def-field">
-          <span class="build-def-label">Name</span>
-          <input id="build-name" type="text" data-focus-key="name" value="${escapeHtml(model.name)}" placeholder="orders-api" autocomplete="off" spellcheck="false" aria-describedby="build-name-hint">
-          <span class="build-def-hint" id="build-name-hint">${model.name && model.slug !== model.name ? `slugs to <code>${escapeHtml(model.slug)}</code>` : `metadata.name and the metric prefix — at most ${MAX_SERVICE_SLUG} characters once slugged`}</span>
-        </label>
-        <label class="build-def-field">
-          <span class="build-def-label">Owners</span>
-          <input id="build-owners" type="text" data-focus-key="owners" value="${escapeHtml(model.owners)}" placeholder="team-orders, sre-platform" autocomplete="off" spellcheck="false">
-          <span class="build-def-hint">${model.ownerList.length ? plural(model.ownerList.length, 'owner') : 'comma-separated — empty is a todo'}</span>
-        </label>
-        <label class="build-def-field">
-          <span class="build-def-label">Environment</span>
-          <input id="build-env" type="text" data-focus-key="environment" list="build-env-options" value="${escapeHtml(model.environment)}" placeholder="prod" autocomplete="off" spellcheck="false">
-          <datalist id="build-env-options"><option value="prod"></option><option value="staging"></option><option value="dev"></option><option value="eks"></option><option value="local-docker"></option></datalist>
-          <span class="build-def-hint">the pack’s one environment; its overlay carries the tier</span>
-        </label>
-      </section>
-
-      <section class="build-def-group build-def-tier" aria-label="Criticality tier">
-        <div class="build-def-key">Criticality tier <span class="build-def-sub">the rubric filtered by minTier — the only definition of what the pack must contain</span></div>
-        <div class="build-seg" role="radiogroup" aria-label="Criticality tier" style="--seg-index:${model.tierIndex}">
-          <span class="build-seg-thumb" aria-hidden="true"></span>
-          ${model.tiers.map(segmentHtml).join('')}
-        </div>
-        <p class="build-seg-blurb"><b>${escapeHtml(model.tier || '')}</b> ${escapeHtml(model.tierBlurb)}</p>
-      </section>
-
-      <section class="build-def-group build-def-library" aria-label="Library entries">
-        <div class="build-def-key">Library <span class="build-def-sub">${sel ? `${sel} selected — ${model.selectedTitles.map(escapeHtml).join(', ')}` : 'pick one or more; several compose into one pack'}</span></div>
-        <div class="build-chip-kind">Products <span>what the service runs on</span></div>
-        <div class="build-chips" role="group" aria-label="Products">${model.products.map(chipHtml).join('')}</div>
-        <div class="build-chip-kind">Archetypes <span>a service built from scratch</span></div>
-        <div class="build-chips" role="group" aria-label="Archetypes">${model.archetypes.map(chipHtml).join('')}</div>
-        ${model.libraryErrors.length ? `<div class="build-note build-note-warn">${plural(model.libraryErrors.length, 'library file')} did not load: ${model.libraryErrors.map(e => `<code>${escapeHtml(e.file)}</code>`).join(', ')}</div>` : ''}
-        ${!model.valid ? `<div class="build-def-needed">Still needed: ${model.errors.map(escapeHtml).join(' and ')}.</div>` : ''}
-      </section>
-
+      ${progressHtml(model)}
       <section class="build-def-group" aria-label="Conformance summary">
         ${summaryHtml(model.summary)}
       </section>
@@ -178,12 +142,29 @@ export function renderBuildDefinition(container, model, host = appHost) {
   wireBuildDefinition(container, model, host);
 }
 
+/**
+ * The definition's handlers, wherever the controls are drawn — the column (the progress, the seed card) and the
+ * DEFINE step (the service fields, the tier cards, the technology cards): the text fields update the draft as typed
+ * (and repaint the progress summary's service line at once), a tier card or an arrow key sets the tier, a technology
+ * card toggles its entry, a substep button (the step's indicator, the column's progress) moves to that substep.
+ */
 export function wireBuildDefinition(container, model, host = appHost) {
   const act = host.build;
   const byId = (id) => container.querySelector(`#${id}`);
-  byId('build-name')?.addEventListener('input', (e) => act.update({ name: e.target.value }));
-  byId('build-owners')?.addEventListener('input', (e) => act.update({ owners: e.target.value }));
-  byId('build-env')?.addEventListener('input', (e) => act.update({ environment: e.target.value }));
+  // The service line of the progress summary follows the fields as typed (a keystroke re-renders nothing).
+  const paintService = () => {
+    const text = serviceLine({ name: byId('build-name')?.value ?? model?.name, owners: byId('build-owners')?.value ?? model?.owners, environment: byId('build-env')?.value ?? model?.environment });
+    for (const el of container.ownerDocument?.querySelectorAll?.('[data-progress-val="service"]') || []) el.textContent = text;
+  };
+  byId('build-name')?.addEventListener('input', (e) => { act.update({ name: e.target.value }); paintService(); });
+  byId('build-owners')?.addEventListener('input', (e) => { act.update({ owners: e.target.value }); paintService(); });
+  byId('build-env')?.addEventListener('input', (e) => { act.update({ environment: e.target.value }); paintService(); });
+  // A substep: the draft remembers which one is shown (UI state, never persisted); the focus lands on its heading.
+  // The indicator is brought into view first, so the render that follows keeps the page where the substep starts.
+  container.querySelectorAll('[data-define-sub]').forEach(b => b.addEventListener('click', () => {
+    container.ownerDocument?.querySelector?.('.bd-substeps')?.scrollIntoView?.({ block: 'nearest' });
+    act.update?.({ defineSub: b.dataset.defineSub }, { rerender: true, reinstantiate: false, focus: `dpanel:${b.dataset.defineSub}` });
+  }));
   // The segmented control: a click picks; arrow keys move within the group (a radiogroup's keyboard contract).
   const segs = [...container.querySelectorAll('.build-seg-btn')];
   segs.forEach((btn, i) => {
