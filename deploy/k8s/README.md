@@ -74,10 +74,12 @@ kubectl -n observability exec deploy/observabilitypack-studio -- \
 ```
 
 **Restore.** `store restore` refuses while anything holds the database, so
-scale the studio to 0 and run it from a one-off pod that mounts the `store`
-claim (`subPath: db`) with `OBSERVOGRAM_DB` set, then scale back to 1. The
-backup must be on that claim (the exec line above writes it to
-`/data/db`):
+scale the studio to 0 and run it from a one-off pod that mounts both
+subPaths of the `store` claim at the studio's two paths, with
+`OBSERVOGRAM_DB` and `OBSERVOGRAM_WORKSPACE` set as the studio sets them
+(the workspace is where the restore reads the `.store-imported` marker it
+warns against), then scale back to 1. The backup must be on that claim (the
+exec line above writes it to `/data/db`):
 
 ```bash
 NS=observability
@@ -109,8 +111,10 @@ spec:
       command: ["node", "tools/cli.mjs", "store", "restore", "/data/db/$BACKUP"]
       env:
         - { name: OBSERVOGRAM_DB, value: /data/db/observogram.db }
+        - { name: OBSERVOGRAM_WORKSPACE, value: /data/workspace }
       volumeMounts:
         - { name: store, mountPath: /data/db, subPath: db }
+        - { name: store, mountPath: /data/workspace, subPath: workspace }
   volumes:
     - name: store
       persistentVolumeClaim: { claimName: observabilitypack-studio-store }
@@ -127,8 +131,11 @@ The replaced database, with its `-wal` and `-shm`, is moved aside beside it
 under one timestamp (`observogram.db.pre-restore-<ts>`), so a wrong restore
 can be undone the same way. Restore a backup of this deployment's own
 store: the workspace's `.store-imported` marker names the store the legacy
-files were imported into, and a start against another store refuses and
-says so. If the phase never reaches `Succeeded`, `kubectl logs` shows the
+files were imported into; a restore of another store's backup ends its log
+with a `warning:` naming both, and a start against it refuses and says so.
+With the journeys overlay below, mount the workspace claim at `/workspace`
+instead of the `workspace` subPath and set `OBSERVOGRAM_WORKSPACE=/workspace`,
+as for the export. If the phase never reaches `Succeeded`, `kubectl logs` shows the
 refusal (something still holds the database, or the file is not an
 Observogram store).
 

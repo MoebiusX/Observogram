@@ -13,7 +13,8 @@
  * contract and never mounts the store claim; no secret-shaped env var
  * carries a literal value anywhere; and the CLI's per-journey CronJob
  * (schedule-snippets.mjs) agrees with the component on the PVC name and the
- * mount. CI runs no kustomize/kubeconform — this is the gate; `kubectl
+ * mount; and the README's one-off restore/export pods see the studio's
+ * database and workspace at the studio's paths. CI runs no kustomize/kubeconform — this is the gate; `kubectl
  * kustomize deploy/k8s-journeys` (the sibling overlay — kustomize refuses one
  * nested under the base it references) is run by hand.
  * Exit 0 = pass.
@@ -268,6 +269,29 @@ function smp(base, patch, key) {
   const cronC = cronPod.containers[0];
   assert(!cronPod.volumes.some(v => v.name === STORE_VOLUME || v.persistentVolumeClaim?.claimName === STORE_PVC) && !('OBSERVOGRAM_DB' in envMap(cronC)),
          'the journeys CronJob never mounts the store claim and sets no OBSERVOGRAM_DB (the journey runner opens no database)', cronPod.volumes);
+}
+
+// --- the README's one-off store pods run where the studio runs ---
+// `store restore` reads the workspace's .store-imported marker to warn about
+// a backup of another store, and `store export` writes into the workspace:
+// each pod must see the studio's database AND workspace at the studio's paths.
+{
+  const readme = readFileSync(join(K8S, 'README.md'), 'utf8');
+  const pods = [...readme.matchAll(/<<EOF\n([\s\S]*?)\nEOF\n/g)]
+    .map(m => parseYaml(m[1].replaceAll(/\$[A-Z_]+/g, 'x')))
+    .filter(d => d?.kind === 'Pod' && /^observogram-store-/.test(d.metadata?.name));
+  assert(pods.map(d => d.metadata.name).join() === 'observogram-store-restore,observogram-store-export',
+         'deploy/k8s/README.md carries the restore and the export one-off pods', pods.map(d => d.metadata?.name));
+  for (const d of pods) {
+    const c = d.spec.containers[0];
+    const env = envMap(c);
+    const wsAt = env.OBSERVOGRAM_WORKSPACE && mountOf(d.spec, c, env.OBSERVOGRAM_WORKSPACE.value);
+    const dbAt = env.OBSERVOGRAM_DB && mountOf(d.spec, c, env.OBSERVOGRAM_DB.value);
+    assert(env.OBSERVOGRAM_DB?.value === STORE_DB && dbAt?.mount.subPath === 'db' && dbAt.volume?.persistentVolumeClaim?.claimName === STORE_PVC,
+           `README ${d.metadata.name}: OBSERVOGRAM_DB is the studio's ${STORE_DB} on the store claim's db subPath`, { env: c.env, mounts: c.volumeMounts });
+    assert(env.OBSERVOGRAM_WORKSPACE?.value === STORE_WORKSPACE && wsAt?.mount.subPath === 'workspace' && wsAt.volume?.persistentVolumeClaim?.claimName === STORE_PVC,
+           `README ${d.metadata.name}: OBSERVOGRAM_WORKSPACE is the studio's ${STORE_WORKSPACE} on the store claim's workspace subPath (the restore's marker warning reads it)`, { env: c.env, mounts: c.volumeMounts });
+  }
 }
 
 // --- secrets discipline across every manifest: no literal value on a secret-shaped env var ---
