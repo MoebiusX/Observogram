@@ -379,6 +379,12 @@ try {
   prepare(currentStore(), 'UPDATE users SET must_change = 0 WHERE id = ?').run(settled.id);
   r = await changeWith(settledFlow, 'settled-new-123');
   assert(!!settledFlow && r.status === 401, 'a pwflow for a user no longer due a change is refused at the same epoch', r.status, 401);
+  const benched = createUser(currentStore(), 'test', { login: 'benched', password: hashPassword('benched-pass-1'), mustChange: true });
+  const benchedFlow = await flowAt('benched', 'benched-pass-1');
+  prepare(currentStore(), 'UPDATE users SET disabled = 1 WHERE id = ?').run(benched.id);
+  r = await changeWith(benchedFlow, 'benched-new-123');
+  assert(!!benchedFlow && r.status === 401 && getUserByLogin(currentStore(), 'benched').mustChange === true,
+    'a pwflow for a disabled row is refused at the same epoch', r.status, 401);
 
   // ---- a normal login clears a leftover pwchange flow cookie ----
   // An abandoned forced change (say admin/admin typed on a shared
