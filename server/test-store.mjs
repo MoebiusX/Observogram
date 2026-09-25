@@ -2035,8 +2035,9 @@ test('identity-admin passwd, remove and owner: a local password bumps the epoch;
   }
 });
 
-test('identity-admin sec-3: on an OIDC store the first local user is not made owner, and the last owner who can sign in under the recorded mode cannot be disabled', async () => {
+test('identity-admin sec-3: from a shell configured for OIDC the first local user is not made owner, and the last owner who can sign in through that issuer cannot be disabled', async () => {
   const { db, close } = await freshStore('admin-signin-owner');
+  const shell = { shellIssuerRaw: 'https://idp.example' };
   try {
     // A local owner from before OIDC was configured, then the store records an issuer.
     admin.addLocalUser(db, 'cli', { login: 'alice', password: 'pw123456' });
@@ -2046,21 +2047,60 @@ test('identity-admin sec-3: on an OIDC store the first local user is not made ow
     const boss = identity.oidcSignIn(db, { issuerKey: KEY, issuerDisplay: 'https://idp.example', claims: claims(), bootstrap }).user;
     assert.equal(boss.isOwner, true);
     // alice cannot sign in under OIDC: she does not keep boss disable-able.
-    assert.throws(() => admin.disableUser(db, 'cli', boss.login),
+    assert.throws(() => admin.disableUser(db, 'cli', boss.login, shell),
       refused(`${boss.login} is the last owner who can sign in through OIDC issuer ${KEY} — grant another owner first (npm run users -- owner <login>)`));
-    assert.equal(admin.disableUser(db, 'cli', 'alice').disabled, true, 'a local owner on an OIDC store may go');
-    // A-16 is withheld while the store records an issuer.
-    const ops = admin.addLocalUser(db, 'cli', { login: 'ops', password: 'pw123456' });
+    assert.equal(admin.disableUser(db, 'cli', 'alice', shell).disabled, true, 'a local owner on an OIDC deployment may go');
+    // A-16 is withheld while the shell configures OIDC.
+    const ops = admin.addLocalUser(db, 'cli', { login: 'ops', password: 'pw123456', ...shell });
     assert.deepEqual([ops.owner, ops.user.isOwner, ops.joined], [false, false, [{ orgId: 'default', role: 'operator' }]]);
-    assert.match(ops.ownerWithheld, /records OIDC issuer .* local users cannot sign in under it/);
-    assert.throws(() => admin.disableUser(db, 'cli', boss.login), refused(/is the last enabled owner/));
+    assert.equal(ops.ownerWithheld, `this shell configures OIDC issuer ${KEY} and local users cannot sign in under it — grant owner to an IdP user with npm run users -- owner <login>`);
+    assert.throws(() => admin.disableUser(db, 'cli', boss.login, shell), refused(/is the last enabled owner/));
     // So BOOTSTRAP_ADMIN never comes back into effect for another IdP account with that email.
     const mallory = identity.oidcSignIn(db, { issuerKey: KEY, issuerDisplay: 'https://idp.example', claims: claims({ sub: 'mallory', email: 'BOSS@example.test' }), bootstrap });
     assert.equal(mallory.granted, false);
     assert.equal(mallory.user.isOwner, false);
     // A second OIDC owner lets the first go.
     admin.grantOwnerByLogin(db, 'cli', `${KEY}#carol`);
-    assert.equal(admin.disableUser(db, 'cli', boss.login).disabled, true);
+    assert.equal(admin.disableUser(db, 'cli', boss.login, shell).disabled, true);
+  } finally {
+    close();
+  }
+});
+
+test('identity-admin sec-3 from a plain shell: a store that records an issuer but runs local grants A-16 and lets its OIDC owner go once a local owner exists; the last owner of either kind stays', async () => {
+  const { db, close } = await freshStore('admin-signin-plain');
+  try {
+    // The store records an issuer and one OIDC owner; the deployment then drops OIDC.
+    meta.setMeta(db, 'system', 'oidc_issuer', KEY);
+    const boss = admin.grantOwnerByLogin(db, 'cli', 'boss', { shellIssuerRaw: 'https://idp.example' });
+    const both = `with a local password or through OIDC issuer ${KEY}`;
+    assert.throws(() => admin.disableUser(db, 'cli', boss.login), refused(/is the last enabled owner/));
+    // A plain shell: A-16 applies (the server may run local), nothing withheld.
+    const alice = admin.addLocalUser(db, 'cli', { login: 'alice', password: 'pw123456', role: 'viewer' });
+    assert.deepEqual([alice.owner, alice.user.isOwner, alice.ownerWithheld], [true, true, null]);
+    // Either owner may be the working one: each keeps the other disable-able.
+    assert.equal(admin.disableUser(db, 'cli', boss.login).disabled, true, 'the departed OIDC owner goes once a local owner exists');
+    // A local owner without a password cannot sign in: it keeps nobody alive.
+    users.createUser(db, 'cli', { kind: 'local', login: 'nopw', password: null, isOwner: true });
+    assert.throws(() => admin.disableUser(db, 'cli', 'alice'),
+      refused(`alice is the last owner who can sign in ${both} — grant another owner first (npm run users -- owner <login>)`));
+    // An OIDC owner under the recorded issuer lets alice go, and then stays the last.
+    admin.enableUser(db, 'cli', boss.login);
+    assert.equal(admin.disableUser(db, 'cli', 'alice').disabled, true);
+    assert.throws(() => admin.disableUser(db, 'cli', boss.login),
+      refused(`${boss.login} is the last owner who can sign in ${both} — grant another owner first (npm run users -- owner <login>)`));
+  } finally {
+    close();
+  }
+});
+
+test('identity-admin sec-3 without a recorded issuer: a plain shell counts local owners only', async () => {
+  const { db, close } = await freshStore('admin-signin-local');
+  try {
+    admin.addLocalUser(db, 'cli', { login: 'alice', password: 'pw123456' });
+    users.createUser(db, 'cli', { kind: 'local', login: 'nopw', password: null, isOwner: true });
+    assert.throws(() => admin.disableUser(db, 'cli', 'alice'),
+      refused('alice is the last owner who can sign in with a local password — grant another owner first (npm run users -- owner <login>)'));
   } finally {
     close();
   }

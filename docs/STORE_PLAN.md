@@ -708,9 +708,15 @@ import the database is authoritative, and the legacy files are only hashed
   - The first local user created while no owner exists becomes owner plus
     `admin` of the default org, whatever `--role` says, as the seed would
     have. The CLI prints this. It is safe because Settings cannot create a
-    user without an owner, so only shell access triggers it. Not on a
-    store that records an OIDC issuer: a local user cannot sign in there,
-    so the user is created without owner and the CLI prints why.
+    user without an owner, so only shell access triggers it. Not from a
+    shell that sets `OBSERVOGRAM_OIDC_ISSUER`: a local user cannot sign in
+    there, so the user is created without owner and the CLI prints why.
+  - `users -- remove` also keeps the last owner who can sign in, read
+    from the shell the way a login is: with `OBSERVOGRAM_OIDC_ISSUER` set,
+    the OIDC owners under that issuer; without it, the local owners with a
+    password plus the OIDC owners under the issuer the store records (the
+    server may run either way), so a store that dropped OIDC can let its
+    departed OIDC owner go once a local owner exists.
   - Otherwise the user joins the default org at `--role` while the
     deployment has one org; with more orgs, `--org` is required.
   - `--role` on `users -- add` and `orgs -- add-member` accepts only

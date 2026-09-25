@@ -829,15 +829,34 @@ test('CLI: the first local user on an OIDC store with no users file is told only
   orgsFile(ws, { acme: { members: { 'user-42': 'operator' } }, beta: { members: { 'user-43': 'viewer' } } });
   assert.ok(boot(ws, { env: OIDC_ENV }).listening);
   await inspectWs(ws, (v) => { assert.equal(v.meta('oidc_issuer'), KEY); assert.equal(v.meta('identity_armed'), null); });
-  const c = cli(USER_ADMIN, ['add', 'alice', '--org', 'acme', '--password-stdin'], ws, { input: 'alice-passw0rd\n' });
+  const c = cli(USER_ADMIN, ['add', 'alice', '--org', 'acme', '--password-stdin'], ws, { env: { OBSERVOGRAM_OIDC_ISSUER: ISSUER }, input: 'alice-passw0rd\n' });
   assert.equal(c.status, 0, c.stderr);
   assert.ok(c.stdout.includes('local users cannot sign in while OIDC is configured'), c.stdout);
-  // sec-3: no A-16 owner on a store that records an OIDC issuer, and the output says why.
-  assert.ok(c.stdout.includes(`alice is created without owner: this store records OIDC issuer ${KEY}`), c.stdout);
+  // sec-3: no A-16 owner from a shell configured for OIDC, and the output says why.
+  assert.ok(c.stdout.includes(`alice is created without owner: this shell configures OIDC issuer ${KEY}`), c.stdout);
   assert.ok(!c.stdout.includes('is the first local user'), c.stdout);
   await inspectWs(ws, (v) => assert.ok(!v.roles('alice').includes('default:admin')));
   // Under OIDC anonymous reads already answered 401 and /auth/login is not a local sign-in.
   assert.ok(!c.stdout.includes('anonymous reads now answer 401') && !c.stdout.includes('stand-alone sign-in is armed'), c.stdout);
+});
+
+test('CLI: a store that dropped OIDC — from a plain shell the first local user is owner, the departed OIDC owner can go, and the output is true', async () => {
+  const ws = workspace();
+  assert.ok(boot(ws, { env: OIDC_ENV }).listening);
+  const shell = { OBSERVOGRAM_OIDC_ISSUER: ISSUER };
+  assert.equal(cli(USER_ADMIN, ['owner', 'boss'], ws, { env: shell }).status, 0);
+  // The operator drops OIDC: no issuer in the shell, the server boots local.
+  let c = cli(USER_ADMIN, ['add', 'alice', '--password-stdin'], ws, { input: 'alice-passw0rd\n' });
+  assert.equal(c.status, 0, c.stderr);
+  assert.ok(c.stdout.includes('alice is the first local user: owner, and admin of org default'), c.stdout);
+  assert.ok(c.stdout.includes(`note: this store records OIDC issuer ${KEY}: local users sign in only while the server runs without OBSERVOGRAM_OIDC_ISSUER`), c.stdout);
+  assert.ok(!c.stdout.includes('created without owner') && !c.stdout.includes('cannot sign in while OIDC is configured'), c.stdout);
+  c = cli(USER_ADMIN, ['remove', `${KEY}#boss`], ws);
+  assert.equal(c.status, 0, c.stderr);
+  // The last owner of either kind stays.
+  c = cli(USER_ADMIN, ['remove', 'alice'], ws);
+  assert.ok(c.status === 1 && c.stderr.includes('is the last enabled owner'), c.stderr);
+  assert.ok(boot(ws).listening);
 });
 
 // ====================== Arming (the CLI half) ======================
