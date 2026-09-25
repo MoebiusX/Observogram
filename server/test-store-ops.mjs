@@ -393,6 +393,46 @@ test('export: a workspace named while the shell\'s workspace is elsewhere is ref
   await read(base, (db) => assert.equal(getOrg(db, 'default').root, '.'));
 });
 
+test('export: another store\'s workspace is never exported into — the in-place export refuses when the marker names another store, and the directory-export refusal for it names both stores and suggests no write there', async () => {
+  const w1 = tempDir();
+  usersJson(w1, ['alice']);
+  pack(w1, 's1');
+  await start(w1);
+  await change(w1, (db) => admin.createOrgFromAdmin(db, 'cli', { id: 'acme', name: 'Acme', admin: 'alice', base: w1 }));
+  const w2 = tempDir();
+  usersJson(w2, ['bob']);
+  pack(w2, 's2');
+  await start(w2);
+  rmSync(join(w2, 'users.json'));   // as an OIDC deployment: nothing of store A's to trip over but the marker
+  const idA = await read(w1, (db) => meta.storeId(db));
+  const idB = await read(w2, (db) => meta.storeId(db));
+  assert.notEqual(idA, idB);
+  const markerBefore = readFileSync(legacy.markerPath(w2), 'utf8');
+  const both = (e) => e.message.includes(idA) && e.message.includes(idB);
+
+  // The directory export from w1's shell (workspace unset) names both stores and does not send the operator to OBSERVOGRAM_WORKSPACE.
+  const elsewhere = join(tempDir('ops-cwd'), '.observogram');
+  await assert.rejects(exportStore(w2, { dbPath: dbOf(w1), base: elsewhere, out: silent }),
+    (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && both(e) && !e.message.includes('OBSERVOGRAM_WORKSPACE=')
+      && e.message.includes('OBSERVOGRAM_DB'));
+  // Following the old text literally (OBSERVOGRAM_WORKSPACE=w2) is an in-place export into w2: refused.
+  await assert.rejects(exportStore(w2, { dbPath: dbOf(w1), base: w2, out: silent }),
+    (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && both(e) && e.message.includes('OBSERVOGRAM_DB'));
+  assert.equal(readFileSync(legacy.markerPath(w2), 'utf8'), markerBefore);
+  assert.equal(existsSync(join(w2, 'users.json')), false);
+  assert.equal(existsSync(join(w2, 'orgs.json')), false);
+  assert.equal(existsSync(join(w2, 'orgs')), false);
+  assert.ok(existsSync(join(w2, 'packs', 's2.pack.yaml')), 'nothing moved');
+  await read(w1, (db) => assert.equal(getOrg(db, 'default').root, '.'));
+
+  // The way out works: w2's own store exports in place; this store's own marker still names it.
+  assert.equal((await exportStore(w2, { dbPath: dbOf(w2), base: w2, out: silent })).storeId, idB);
+  await start(w2);
+  // And this store's own workspace, named from another shell, still points at OBSERVOGRAM_WORKSPACE.
+  await assert.rejects(exportStore(w1, { dbPath: dbOf(w1), base: elsewhere, out: silent }),
+    (e) => e.message.includes(`OBSERVOGRAM_WORKSPACE=${w1}`));
+});
+
 test('export: the database\'s own directory is not a workspace — with the database outside the workspace (the k8s layout) it and a backup directory beside it export as plain directories; a directory inside or around the workspace is refused naming the in-place export', async () => {
   const root = tempDir();
   const base = join(root, 'ws');

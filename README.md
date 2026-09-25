@@ -898,8 +898,12 @@ What the export writes:
   own directory (`OBSERVOGRAM_DB` outside the workspace, as on k8s) and a
   backup directory beside it are plain directory exports. Naming a
   workspace with a `.store-imported` marker other than
-  `OBSERVOGRAM_WORKSPACE` is refused: if it is this store's workspace, set
-  `OBSERVOGRAM_WORKSPACE` to it to export in place.
+  `OBSERVOGRAM_WORKSPACE` is refused: if its marker names this store, set
+  `OBSERVOGRAM_WORKSPACE` to it to export in place; if it names another
+  store, the refusal names both and the workspace is left alone (point
+  `OBSERVOGRAM_DB` at that workspace's own store to work on it). An
+  in-place export refuses, changing nothing, when the workspace's marker
+  names another store.
 
 **Re-upgrade** after a rollback: stop the pre-store build and start the
 store build again.

@@ -272,6 +272,7 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
   if (!existsSync(path)) throw refuse(`no database at ${path} — nothing to export (this command never creates one; check OBSERVOGRAM_DB and OBSERVOGRAM_WORKSPACE)`);
   const target = resolve(dir);
   const inPlace = realOr(target) === realOr(base);
+  let workspaceNamed = false;
   if (inPlace) {
     await assertNotInUse(path, { doing: 'an in-place export' });
   } else {
@@ -290,17 +291,38 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
     // A workspace named while the shell's workspace is elsewhere (OBSERVOGRAM_WORKSPACE unset, or a relative
     // path from another cwd): its marker tells it apart, and a directory export there would write orgs.json
     // without the default org's move.
-    if (lexists(markerPath(target))) {
-      throw refuse(`${target} is a workspace (it holds ${markerPath(target)}), but the workspace here is ${base} — a directory `
-        + `export into it would write files without the in-place steps. Nothing was changed. If it is this store's `
-        + `workspace, set OBSERVOGRAM_WORKSPACE=${target} to export in place; otherwise choose an empty directory`);
-    }
+    // Refused below, once the store id tells this store's workspace from another's.
+    if (lexists(markerPath(target))) workspaceNamed = true;
     const taken = ['users.json', 'orgs.json'].map((f) => join(target, f)).filter((p) => existsSync(p));
-    if (taken.length) throw refuse(`${taken.join(', ')} exist${taken.length === 1 ? 's' : ''} — a directory export never overwrites; choose an empty directory`);
+    if (taken.length && !workspaceNamed) throw refuse(`${taken.join(', ')} exist${taken.length === 1 ? 's' : ''} — a directory export never overwrites; choose an empty directory`);
   }
 
   const db = await openStore({ path });
   try {
+    const id = storeId(db);
+    if (inPlace) {
+      // Another store's workspace (OBSERVOGRAM_DB pointing elsewhere): the export would move its files and write this
+      // store's users, orgs and marker over it.
+      const marker = readMarker(base);   // corrupt → LegacyFileError naming it
+      if (marker && marker.storeId !== id) {
+        throw refuse(`${markerPath(base)} names store ${marker.storeId}, but ${path} holds store ${id}: the workspace ${base} `
+          + `is not this store's, and an in-place export would write store ${id}'s files over it. Nothing was changed. To export `
+          + `that workspace, point OBSERVOGRAM_DB at its own store (store ${marker.storeId}); to export store ${id}, name an empty `
+          + 'directory outside any workspace');
+      }
+    } else if (workspaceNamed) {
+      let named = null;
+      try { named = readMarker(target)?.storeId ?? null; } catch { /* unreadable: not known to be this store's */ }
+      const head = `${target} is a workspace (it holds ${markerPath(target)}), but the workspace here is ${base} — a directory `
+        + 'export into it would write files without the in-place steps. Nothing was changed. ';
+      if (named === id) {
+        throw refuse(`${head}It is this store's workspace (its marker names store ${id}): set OBSERVOGRAM_WORKSPACE=${target} `
+          + 'to export in place; otherwise choose an empty directory');
+      }
+      const whose = named === null ? 'its marker cannot be read, so it is not known to be' : `its marker names store ${named}, not`;
+      throw refuse(`${head}It is not this store's workspace (${whose} store ${id}, which ${path} holds): leave it alone — `
+        + `to work on it, point OBSERVOGRAM_DB at its own store; to export store ${id}, choose an empty directory outside any workspace`);
+    }
     const plan = planExport(db, { inPlace, target, base });
     if (!inPlace) {
       if (plan.users.path) writeUsersFile(plan.users.data, plan.users.path);
@@ -309,7 +331,7 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
     }
     return exportInPlace(db, plan);
   } finally {
-    if (inPlace) closeStore(path);
+    if (inPlace || workspaceNamed) closeStore(path);   // a refused directory export leaves nothing open
   }
 }
 
