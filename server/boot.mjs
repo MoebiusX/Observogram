@@ -496,13 +496,29 @@ export function staleImportGuard(db, ctx) {
     // The replace request needs the marker (requestReplace): with it
     // missing, the way to the replace goes through the (e) repair first.
     const noMarker = !ctx.memory && !marker;
+    // The marker names the hash only while it still agrees with the store
+    // (an export's marker, over a backup restored from before it, does not).
+    const markerRecords = (key) => !!marker && JSON.stringify(marker.files[key]) === JSON.stringify(recorded[key]);
+    // Every stale file is exactly what an export from this store wrote: the
+    // database was restored from a backup taken before that export.
+    const exportedAfter = !!marker && marker.by === 'export' && marker.storeId === id
+      && stale.every((key) => current[key] && marker.files[key]?.sha256 === current[key].sha256);
     const ways = [
+      ...(exportedAfter
+        ? [`  - put back the database that export wrote: \`packc store restore\` the ${ctx.dbPath}.pre-restore-… copy ` +
+          'the restore moved aside (or a backup taken after the export) — it starts on these files as they stand; or'] : []),
       ...cmp.changed.map((key) => `  - put ${pathOf(key)} back exactly as it was imported (SHA-256 ${asImported[key].sha256}; ` +
-        `the store's legacy_hashes${noMarker ? '' : ` and ${markerPath(ctx.base)}`} record it), or`),
+        `the store's legacy_hashes${markerRecords(key) ? ` and ${markerPath(ctx.base)}` : ''} record it), or`),
       ...stale.map((key) => `  - move ${pathOf(key)} aside: a file that disappears is recorded as absent and changes no user or org;`),
     ];
     throw new BootRefusal(
       `refusing to start: ${lines.join('\n  ')}\n` +
+      (exportedAfter
+        ? `${stale.length === 1 ? 'It is' : 'They are'} exactly what an export from store ${id} wrote (${markerPath(ctx.base)}, ` +
+          `written by that export, records ${stale.length === 1 ? 'it' : 'them'}): this database was restored from a backup taken before the export, ` +
+          'which may also have moved the default org\'s data into orgs/default: moving the files aside starts on the ' +
+          `backup's default-org root without that data, and ${REPLACE} follows the move.\n`
+        : '') +
       'Nothing was changed. The store keeps its own users and orgs; the file is only compared, never read again. ' +
       'With the server stopped:\n' +
       `${ways.join('\n')}\n` +

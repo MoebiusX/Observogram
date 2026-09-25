@@ -850,6 +850,16 @@ packc store export /app/.observogram
 # 3. Start the pre-store image on the same workspace.
 ```
 
+To back out before step 3, start the store build again: the export
+changed nothing it needs, and it starts on the exported files. Do not
+restore the step-1 backup for that: it predates the export (and any move
+into `orgs/default`), so its start refuses, saying the files are the
+export's. If you did, `packc store restore` the
+`<database>.pre-restore-…` copy the restore moved aside (the store
+the export wrote); moving the files aside instead starts without the
+default org's moved data, while `packc store import --replace` re-imports
+the exported files and follows the move.
+
 What the export writes:
 
 - `users.json` — the **enabled local** users, with their password records
@@ -966,6 +976,9 @@ belong together. Each refusal says `Nothing was …` and names its ways out:
   `npm run orgs`, or `packc store import --replace`. The request needs
   the marker: with it missing, move the files aside, start once (the
   start rewrites the marker), stop, put them back, then request it.
+  After a restore of a backup taken before an in-place export, the
+  refusal says the files are the export's and names the database the
+  export wrote (see [Upgrade And Roll Back](#upgrade-and-roll-back)).
 
 A marker or legacy file that disappeared is repaired and logged, not
 refused. `packc store restore` warns (above) when the marker names another

@@ -52,7 +52,7 @@ const legacy = await import('./store/legacy-files.mjs');
 const {
   exportStore, formatExport, formatPurge, formatRekey, COOKIE_NOTE, purgeOrg, rekeyIssuer, REPLACE_REQUESTED, requestReplace, restoreMarkerWarning,
 } = await import('./store/ops.mjs');
-const { backupStore } = await import('./store/backup.mjs');
+const { backupStore, restoreStore } = await import('./store/backup.mjs');
 const admin = await import('./identity-admin.mjs');
 const { hashPassword, resolveSession, verifyPassword } = await import('./auth.mjs');
 const boot = await import('./boot.mjs');
@@ -251,6 +251,36 @@ test('Export gate: a flat default org plus a created org — orgs.json, the defa
   // A store build starts on it: nothing left behind (the pre-store boot's empty <base>/packs holds no data).
   const { warns } = await start(base);
   assert.deepEqual(warns.filter((w) => /left behind/.test(w)), []);
+});
+
+test('Rollback backed out by restoring the pre-export backup: the refusal says the files are the export\'s, claims no marker record it lacks, and names the database the export wrote, which starts with the default org\'s data found', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice', 'bob']);
+  pack(base, 'p1');
+  await start(base);
+  await change(base, (db) => admin.createOrgFromAdmin(db, 'cli', { id: 'acme', name: 'Acme', admin: 'bob', base }));
+  const backup = join(tempDir(), 'before-rollback.db');
+  await backupStore(backup, { dbPath: dbOf(base) });
+  const recorded = await read(base, (db) => meta.getMetaJson(db, 'legacy_hashes')['users.json'].sha256);
+  await change(base, (db) => admin.addLocalUser(db, 'cli', { login: 'erin', password: 'erin-passw0rd', role: 'viewer', orgId: 'acme' }));
+  const r = await exportIt(base);
+  assert.deepEqual(r.move, ['packs']);
+
+  const restored = await restoreStore(backup, { dbPath: dbOf(base) });
+  const aside = restored.movedAside.find((p) => !/-(wal|shm)$/.test(p));
+  const e = await refused(base);
+  const marker = legacy.markerPath(base);
+  assert.ok(e.message.includes(`They are exactly what an export from store ${restored.storeId} wrote (${marker}, written by that export, records them)`), e.message);
+  assert.ok(e.message.includes(`\`packc store restore\` the ${dbOf(base)}.pre-restore-… copy`), e.message);
+  assert.ok(e.message.includes(`(SHA-256 ${recorded}; the store's legacy_hashes record it), or`), e.message);
+  assert.ok(!e.message.includes(`legacy_hashes and ${marker}`), 'the export\'s marker records another hash');
+  assert.ok(e.message.includes('moving the files aside starts on the backup\'s default-org root without that data'), e.message);
+
+  // The way out it names first: the database the export wrote starts on these files.
+  await restoreStore(aside, { dbPath: dbOf(base) });
+  const { warns } = await start(base);
+  assert.deepEqual(warns.filter((w) => /left behind/.test(w)), []);
+  await read(base, (db) => assert.equal(getOrg(db, 'default').root, 'orgs/default'));
 });
 
 test('Export gate: an orgs.json deployment — roles written back as admin/member/viewer, no move', async () => {
