@@ -1,6 +1,6 @@
 // studio/build-define-view.mjs
 //
-// BUILD step 1 — DEFINE, "What are we observing?": the silhouette of the
+// BUILD step 1 — DEFINE, "What are we building for?": the silhouette of the
 // pack the chosen tier demands — one ghost card per clause the tier applies
 // in each dimension, the selected entries' SLIs and the SLO each gets as
 // candidates on L1, reshaping with the tier and the entries, the edges
@@ -68,7 +68,7 @@ export function renderBuildDefine(container, model, host = appHost) {
   const candidates = stack.slabs.reduce((n, s) => n + s.ghosts.filter(g => g.kind === 'sli').length, 0);
   container.innerHTML = `
     <section class="build-step build-define">
-      ${stepHeadHtml('define', 'What are we observing?', 'Name the service, pick its criticality tier and the library entries it runs on in the column on the left — products with an evidence bar, or an archetype for a service built from scratch. The tier is a seed: it draws the silhouette of the pack it starts with, layer by layer, and decides which rubric grades it — never which SLIs you may add. The entries drop their SLIs onto L1; the edges light up as soon as the selection compiles. Click a layer to compose it, or an SLI card to edit that SLI in a pop-up, then seed the pack.')}
+      ${stepHeadHtml('define', 'What are we building for?', 'Name the service, pick its criticality tier and the library entries it runs on in the column on the left — products with an evidence bar, or an archetype for a service built from scratch. The tier is a seed: it draws the silhouette of the pack it starts with, layer by layer, and decides which rubric grades it — never which SLIs you may add. The entries drop their SLIs onto L1; the edges light up as soon as the selection compiles. Click a layer to compose it, or an SLI card to edit that SLI in a pop-up, then seed the pack.')}
 
       ${instantiateErrorHtml(model.error, { stale: model.stale, where: 'on its layer sheet (L2 · L4 · L5)' })}
 

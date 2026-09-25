@@ -1184,7 +1184,7 @@ export { BUILD_TABS };
 function activeTabSet() { return state.mode === 'build' ? 'build' : 'observa'; }
 function tabListFor(set) { return set === 'build' ? BUILD_TABS : OBSERVA_TABS; }
 
-// A tab's accessible name is its step word and tagline (tabName: "Define — Service, tier & library"), spelled
+// A tab's accessible name is its step word and tagline (tabName: "Define — Choose a service, tier, and starting point"), spelled
 // once for the title and aria-label — the content alone read as one run of number, eyebrow, question and tagline.
 function observaTabHtml(t) {
   return `

@@ -1,6 +1,6 @@
 // studio/build-compile-view.mjs
 //
-// BUILD step 2 — COMPILE, "What should we watch?": the layer stack of the
+// BUILD step 2 — COMPILE, "What will the pack include?": the layer stack of the
 // instantiated pack is the surface, drawn through the adapter exactly as
 // Discover will draw it (its real artefacts per layer, the slab edges in the
 // clause states, a ghost card for a clause still unmet, Scaffold on the
@@ -45,7 +45,7 @@ export function renderBuildCompile(container, model, host = appHost) {
   const k = model.counts;
   container.innerHTML = `
     <section class="build-step build-compile">
-      ${stepHeadHtml('compile', 'What should we watch?', `The pack, layer by layer, exactly as Discover will show it. Click a layer to compose it: L1 holds the SLI rolodex — <strong>${k.checked} of ${k.reachable}</strong> SLI${k.reachable === 1 ? '' : 's'} at <strong>${escapeHtml(model.tier)}</strong> in the pack — and the SLOs switch; L2 the scrape jobs and endpoints; L3 the boards; L4 the burn policy and the routes; L5 the probes and chaos. Every change recompiles the pack and redraws it; each slab’s edge says which of the tier’s clauses that layer holds up, and on what.`)}
+      ${stepHeadHtml('compile', 'What will the pack include?', `The pack, layer by layer, exactly as Discover will show it. Click a layer to compose it: L1 holds the SLI rolodex — <strong>${k.checked} of ${k.reachable}</strong> SLI${k.reachable === 1 ? '' : 's'} at <strong>${escapeHtml(model.tier)}</strong> in the pack — and the SLOs switch; L2 the scrape jobs and endpoints; L3 the boards; L4 the burn policy and the routes; L5 the probes and chaos. Every change recompiles the pack and redraws it; each slab’s edge says which of the tier’s clauses that layer holds up, and on what.`)}
 
       <div class="build-result build-stack-wrap">
         <div class="build-section-key">The pack, layer by layer <span class="build-section-sub">${model.pending ? 'recompiling…' : r ? `${r.sliCount} SLI${r.sliCount === 1 ? '' : 's'} · ${r.sloCount} SLO${r.sloCount === 1 ? '' : 's'} · ${stack.counts.artefacts} artefact${stack.counts.artefacts === 1 ? '' : 's'} on ${lit} of ${stack.counts.slabs} layers${stack.counts.scaffold ? ` · ${stack.counts.scaffold} scaffold (a placeholder value the team fills)` : ''}${stack.counts.ghosts ? ` · ${stack.counts.ghosts} clause${stack.counts.ghosts === 1 ? '' : 's'} unmet` : ''} · ${r.todoCount} todo${r.todoCount === 1 ? '' : 's'} · ${r.warningCount} warning${r.warningCount === 1 ? '' : 's'} · schema ${r.schemaOk ? 'valid' : `${r.schemaErrors.length} error${r.schemaErrors.length === 1 ? '' : 's'}`}${model.stale ? ' · previous pack' : ''} — the same artefacts, ids and titles Discover will show for this pack` : model.error ? 'the last generation failed' : 'nothing generated yet — the silhouette below fills in as soon as the pack compiles'}</span></div>

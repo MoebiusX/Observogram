@@ -87,7 +87,7 @@ it?*), the burn policy, the routes with their channels and the remediation on
 L4 (*What happens when it breaks?*), the probes and chaos experiments on L5
 (*How do we prove it?*), the owners and imports on GOV (*Who owns it?*):
 
-1. **Define - What Are We Observing?** — in the definition column: the service
+1. **Define - What Are We Building For?** — in the definition column: the service
    name, owners and environment, its criticality tier and one or more library
    entries: products it runs on (Kafka, Prometheus, Grafana, IBM MQ,
    Alertmanager, Loki, Tempo, the OTel Collector, every one with its evidence
@@ -101,7 +101,7 @@ L4 (*What happens when it breaks?*), the probes and chaos experiments on L5
    definition once: on the next steps the column is a compact, read-only *seed
    card* (service, owners, environment, one tier chip, the entries) with
    *Change seed →*, and the conformance summary stays live beneath it.
-2. **Compile - What Should We Watch?** — the **live stack** of the instantiated
+2. **Compile - What Will the Pack Include?** — the **live stack** of the instantiated
    pack, its real artefacts per layer with the edges in the clause states, and
    the sheets where composition happens: on L1 the **SLI rolodex** — a
    scroll-snapping carousel of SLI cards from the selected entries (every
@@ -118,7 +118,7 @@ L4 (*What happens when it breaks?*), the probes and chaos experiments on L5
    which clauses they drop; the params sit on the layer they shape. Remove an
    SLI and L1 loses its card, switch dashboards off and L3 dims with its clauses
    red and an *off* chip on its head; the pack YAML as a collapsible underneath.
-3. **Verify - Is It Ready to Use?** — the conformance verdict at the tier with
+3. **Verify - Can We Use This Pack?** — the conformance verdict at the tier with
    three clause states (pass · pass on a placeholder · fail) and a **maturity
    bar per layer**, the schema verdict, the warnings, the stack again with the
    **todos pinned to the slab of the artefact each names** (routes and runbooks

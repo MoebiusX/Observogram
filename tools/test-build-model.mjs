@@ -2235,12 +2235,16 @@ test('an L1 SLI or SLO card on the stack is a control that opens the SLI’s edi
     { key: 'checkout_success', custom: true, focus: null, opener: 'card:SLI-08' },
   ]);
   // The header tabs: the step word and its tagline are the tab's name (measured: the title read "Library — …").
-  assert.deepEqual(BUILD_TABS.map(t => [t.id, t.sub, t.techName, tabName(t)]), [
-    ['define', 'Define', 'Define', 'Define — Service, tier & library'],
-    ['compile', 'Compile', 'Compile', 'Compile — Pack & deployable artifacts'],
-    ['verify', 'Verify', 'Verify', 'Verify — Conformance & placeholders'],
+  assert.deepEqual(BUILD_TABS.map(t => [t.id, t.sub, t.techName, t.label, tabName(t)]), [
+    ['define', 'Define', 'Define', 'What Are We Building For?', 'Define — Choose a service, tier, and starting point'],
+    ['compile', 'Compile', 'Compile', 'What Will the Pack Include?', 'Compile — Build SLIs, alerts, dashboards, and checks'],
+    ['verify', 'Verify', 'Verify', 'Can We Use This Pack?', 'Verify — Review coverage and resolve gaps'],
   ]);
   assert.ok(BUILD_TABS.every(t => !/Library|Instantiate|Conformance —/.test(tabName(t))));
+  // Each step's heading is its question in sentence case (the tab label is the same question in title case).
+  for (const [view, step, title] of [['build-define-view.mjs', 'define', 'What are we building for?'], ['build-compile-view.mjs', 'compile', 'What will the pack include?'], ['build-verify-view.mjs', 'verify', 'Can we use this pack?']]) {
+    assert.ok(readFileSync(join(ROOT, 'studio', view), 'utf8').includes(`stepHeadHtml('${step}', '${title}'`), `${view} heads its step "${title}"`);
+  }
   // The stylesheet: the editable card has a hover and a focus ring.
   assert.match(cssRule('.build-slab .card.is-editable'), /cursor:\s*pointer/);
   assert.match(cssRule('.build-slab .card.is-editable:focus-visible'), /outline:\s*2px solid var\(--L1\)/);

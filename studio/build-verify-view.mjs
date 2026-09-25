@@ -1,6 +1,6 @@
 // studio/build-verify-view.mjs
 //
-// BUILD step 3 — VERIFY, "Is it ready to use?": the conformance verdict at
+// BUILD step 3 — VERIFY, "Can we use this pack?": the conformance verdict at
 // the tier (MUST / SHOULD counts, the three clause states — pass, pass on a
 // placeholder, fail — and the maturity per layer: the clause pass ratio of
 // each dimension with pass-on-placeholder as its own segment), the schema
@@ -58,7 +58,7 @@ export function renderBuildVerify(container, model, host = appHost) {
   const stack = model.stack;
   container.innerHTML = `
     <section class="build-step build-verify">
-      ${stepHeadHtml('verify', 'Is it ready to use?', `The pack as generated, read three ways: the tier’s conformance rubric (which clauses pass, which pass only on a placeholder, which fail — per layer), the v1.3 schema, and the artefacts it compiles to. The todos sit on the layer they live on — on the slab and on its sheet (click the layer); fill a placeholder inline and the pack regenerates; when it holds up, continue to Discover.`)}
+      ${stepHeadHtml('verify', 'Can we use this pack?', `The pack as generated, read three ways: the tier’s conformance rubric (which clauses pass, which pass only on a placeholder, which fail — per layer), the v1.3 schema, and the artefacts it compiles to. The todos sit on the layer they live on — on the slab and on its sheet (click the layer); fill a placeholder inline and the pack regenerates; when it holds up, continue to Discover.`)}
 
       ${!model.ready && !model.error ? `<div class="build-note">${model.pending ? 'Compiling…' : 'Nothing compiled yet — go back to Compile.'}</div>` : ''}
       ${instantiateErrorHtml(model.error, { stale: model.stale, where: 'below, under its todo' })}
