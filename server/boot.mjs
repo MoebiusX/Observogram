@@ -367,7 +367,7 @@ export function staleImportGuard(db, ctx) {
       { nothingMoved: true });
   }
 
-  const repairs = { disappeared: [], recorded: null };
+  const repairs = { disappeared: [], returned: [], recorded: null };
   if (!importDone) return { replacePending: false, repairs };
 
   // (d) files edited since the import.
@@ -377,16 +377,28 @@ export function staleImportGuard(db, ctx) {
   for (const key of new Set([...Object.keys(recorded), usersKey, 'orgs.json'])) {
     current[key] = sha256File(key === usersKey ? usersPath : keyPath(ctx.base, key));
   }
-  const cmp = compareHashes(recorded, current);
+  // A file recorded absent after the import keeps the hash it was imported
+  // with, and is compared as that: put back byte for byte it passes (and
+  // (e) records it present again); any other file refuses as a change.
+  const importedOf = (key) => (recorded[key]?.absent && typeof recorded[key].importedSha256 === 'string'
+    ? recorded[key].importedSha256 : null);
+  const asImported = {};
+  for (const [key, value] of Object.entries(recorded)) {
+    asImported[key] = importedOf(key) ? { sha256: importedOf(key) } : value;
+  }
+  const cmp = compareHashes(asImported, current);
   const stale = [...cmp.changed, ...cmp.appeared];
   if (stale.length) {
     const pathOf = (key) => (key === usersKey ? usersPath : keyPath(ctx.base, key));
-    const lines = stale.map((key) => (cmp.changed.includes(key)
-      ? `${pathOf(key)} changed since store ${id} last imported it (it was SHA-256 ${recorded[key].sha256}, it is ${current[key].sha256}) — ` +
-        'it was edited outside the store (a pre-store build during a rollback, or config management).'
-      : `${pathOf(key)} appeared since store ${id} last imported it (it was absent then).`));
+    const lines = stale.map((key) => (!cmp.changed.includes(key)
+      ? `${pathOf(key)} appeared since store ${id} last imported it (it was absent then).`
+      : importedOf(key)
+        ? `${pathOf(key)} came back since store ${id} recorded it absent, but not as it was imported ` +
+          `(it was SHA-256 ${importedOf(key)} at the import, it is ${current[key].sha256}).`
+        : `${pathOf(key)} changed since store ${id} last imported it (it was SHA-256 ${recorded[key].sha256}, it is ${current[key].sha256}) — ` +
+          'it was edited outside the store (a pre-store build during a rollback, or config management).'));
     const ways = [
-      ...cmp.changed.map((key) => `  - put ${pathOf(key)} back exactly as it was imported (SHA-256 ${recorded[key].sha256}; ` +
+      ...cmp.changed.map((key) => `  - put ${pathOf(key)} back exactly as it was imported (SHA-256 ${asImported[key].sha256}; ` +
         `the store's legacy_hashes and ${markerPath(ctx.base)} record it), or`),
       ...stale.map((key) => `  - move ${pathOf(key)} aside: a file that disappears is recorded as absent and changes no user or org;`),
     ];
@@ -398,7 +410,8 @@ export function staleImportGuard(db, ctx) {
       'then make the change with `npm run users` / `npm run orgs`.',
       { nothingMoved: true });
   }
-  repairs.disappeared = cmp.disappeared;
+  repairs.disappeared = cmp.disappeared.filter((key) => !recorded[key]?.absent);
+  repairs.returned = Object.keys(recorded).filter((key) => importedOf(key) && current[key]?.sha256 === importedOf(key));
   repairs.recorded = recorded;
   return { replacePending: false, repairs };
 }
@@ -408,12 +421,16 @@ export function staleImportGuard(db, ctx) {
 // membership row touched — A-20); the marker is rewritten from the
 // database whenever it differs.
 export function applyRepairs(db, ctx, guard, { log = () => {} } = {}) {
-  const { disappeared, recorded } = guard.repairs;
-  if (disappeared.length) {
+  const { disappeared, returned = [], recorded } = guard.repairs;
+  if (disappeared.length || returned.length) {
     const next = { ...recorded };
-    for (const key of disappeared) next[key] = { absent: true };
+    // The imported hash is kept, so the file put back byte for byte is
+    // accepted (and recorded present again) rather than refused as new.
+    for (const key of disappeared) next[key] = { absent: true, importedSha256: recorded[key].sha256 };
+    for (const key of returned) next[key] = { sha256: recorded[key].importedSha256 };
     tx(db, () => putMeta(db, 'legacy_hashes', JSON.stringify(next)));
     for (const key of disappeared) log(`[store] ${key} disappeared since the import; recorded as absent`);
+    for (const key of returned) log(`[store] ${key} is back as it was imported; recorded as present`);
   }
   if (!getMeta(db, 'import_done') || ctx.memory) return;
   const id = storeId(db);

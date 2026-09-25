@@ -29,7 +29,7 @@ for (const k of STRIP) {
 const { test } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
 const { spawn, spawnSync } = await import('node:child_process');
-const { createHmac } = await import('node:crypto');
+const { createHash, createHmac } = await import('node:crypto');
 const {
   existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync,
 } = await import('node:fs');
@@ -547,7 +547,7 @@ test('stale import: an edited users.json refuses (d) and changes nothing; put ba
   r = boot(ws);
   assert.ok(r.listening, r.message);
   await inspectWs(ws, (v) => {
-    assert.deepEqual(JSON.parse(v.meta('legacy_hashes'))['users.json'], { absent: true });
+    assert.deepEqual(JSON.parse(v.meta('legacy_hashes'))['users.json'], { absent: true, importedSha256: recorded });
     assert.equal(rowsOf(v), before, 'no user, org or membership row changed');
   });
 });
@@ -567,10 +567,11 @@ test('stale import: deleting users.json after the upgrade, or the recorded users
   usersFile(ws, { alice: { createdAt: 't', password: REAL } });
   assert.ok(boot(ws).listening);
   const before = await inspectWs(ws, rowsOf);
+  const imported = createHash('sha256').update(readFileSync(join(ws, 'users.json'))).digest('hex');
   rmSync(join(ws, 'users.json'));
   assert.ok(boot(ws).listening);
   await inspectWs(ws, (v) => {
-    assert.deepEqual(JSON.parse(v.meta('legacy_hashes'))['users.json'], { absent: true });
+    assert.deepEqual(JSON.parse(v.meta('legacy_hashes'))['users.json'], { absent: true, importedSha256: imported });
     assert.equal(rowsOf(v), before);
   });
 
@@ -580,11 +581,12 @@ test('stale import: deleting users.json after the upgrade, or the recorded users
   const env = { OBSERVOGRAM_USERS_FILE: outside };
   assert.ok(boot(ws2, { env }).listening);
   const before2 = await inspectWs(ws2, (v) => { assert.equal(v.meta('users_file'), outside); return rowsOf(v); });
+  const imported2 = createHash('sha256').update(readFileSync(outside)).digest('hex');
   rmSync(outside);
   const r = boot(ws2, { env });
   assert.ok(r.listening, r.message);
   await inspectWs(ws2, (v) => {
-    assert.deepEqual(JSON.parse(v.meta('legacy_hashes'))[outside], { absent: true });
+    assert.deepEqual(JSON.parse(v.meta('legacy_hashes'))[outside], { absent: true, importedSha256: imported2 });
     assert.equal(rowsOf(v), before2);
   });
 });

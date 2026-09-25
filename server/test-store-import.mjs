@@ -1283,7 +1283,7 @@ test('staleImportGuard (d): an edited users.json and an appeared orgs.json refus
     renameSync(usersPath, join(base, 'users.json.aside'));
     const moved = await bootIn(base);
     assert.ok(moved.logs.includes('[store] users.json disappeared since the import; recorded as absent'), moved.logs.join('\n'));
-    assert.deepEqual(meta.getMetaJson(r.db, 'legacy_hashes'), { 'users.json': { absent: true }, 'orgs.json': { absent: true } });
+    assert.deepEqual(meta.getMetaJson(r.db, 'legacy_hashes'), { 'users.json': { absent: true, importedSha256: recorded }, 'orgs.json': { absent: true } });
     assert.deepEqual(rowsOf(r.db), rowsBefore, 'no user, org or membership row changed');
     assert.deepEqual(auditRows(r.db), auditBefore, 'no audit row');
     assert.deepEqual(legacy.readMarker(base).files, meta.getMetaJson(r.db, 'legacy_hashes'), 'the marker follows the database');
@@ -1300,6 +1300,48 @@ test('staleImportGuard (d): an edited users.json and an appeared orgs.json refus
     rmSync(markerFile);
     const again = await bootIn(base);
     assert.ok(again.logs.includes(`[store] rewrote ${markerFile} from store ${id}`), 'the way the refusal names works');
+  } finally {
+    closeBase(base);
+  }
+});
+
+test('staleImportGuard (d)/(e): a moved-aside file keeps its imported hash — put back byte for byte it passes and is recorded present again; a different file refuses saying so', async () => {
+  const usersText = JSON.stringify({ users: { alice: { password: PW } } });
+  const base = workspace({ users: usersText });
+  const usersPath = join(base, 'users.json');
+  const markerFile = join(base, '.store-imported');
+  try {
+    const r = await bootIn(base);
+    const id = meta.storeId(r.db);
+    const recorded = legacy.sha256Of(Buffer.from(usersText));
+    const rowsBefore = rowsOf(r.db);
+    const auditBefore = auditRows(r.db);
+
+    renameSync(usersPath, join(base, 'users.json.aside'));
+    await bootIn(base);
+    assert.deepEqual(meta.getMetaJson(r.db, 'legacy_hashes'), { 'users.json': { absent: true, importedSha256: recorded }, 'orgs.json': { absent: true } });
+    const still = await bootIn(base);
+    assert.ok(!still.logs.some((l) => /disappeared/.test(l)), 'an absent file is recorded once, not every start');
+
+    write(usersPath, JSON.stringify({ users: { alice: { password: PW }, mallory: { password: PW } } }));
+    const now = legacy.sha256Of(readFileSync(usersPath));
+    const expected = `refusing to start: ${usersPath} came back since store ${id} recorded it absent, but not as it was imported `
+      + `(it was SHA-256 ${recorded} at the import, it is ${now}).\n`
+      + 'Nothing was changed. The store keeps its own users and orgs; the file is only compared, never read again. With the server stopped:\n'
+      + `  - put ${usersPath} back exactly as it was imported (SHA-256 ${recorded}; the store's legacy_hashes and ${markerFile} record it), or\n`
+      + `  - move ${usersPath} aside: a file that disappears is recorded as absent and changes no user or org;\n`
+      + 'then make the change with `npm run users` / `npm run orgs`.';
+    await assert.rejects(bootIn(base), (e) => refusal(expected)(e) && e.nothingMoved === true);
+
+    write(usersPath, usersText);
+    const back = await bootIn(base);
+    assert.ok(back.logs.includes('[store] users.json is back as it was imported; recorded as present'), back.logs.join('\n'));
+    assert.deepEqual(meta.getMetaJson(r.db, 'legacy_hashes'), { 'users.json': { sha256: recorded }, 'orgs.json': { absent: true } });
+    assert.deepEqual(legacy.readMarker(base).files, meta.getMetaJson(r.db, 'legacy_hashes'), 'the marker follows the database');
+    assert.deepEqual(rowsOf(r.db), rowsBefore, 'no user, org or membership row changed');
+    assert.deepEqual(auditRows(r.db), auditBefore, 'no audit row');
+    const quiet = await bootIn(base);
+    assert.ok(!quiet.logs.some((l) => /is back|disappeared/.test(l)), quiet.logs.join('\n'));
   } finally {
     closeBase(base);
   }
