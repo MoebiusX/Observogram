@@ -875,7 +875,11 @@ What the export writes:
   every step back and says so.
 - An in-place export refuses while anything holds the database, on a store
   the server never started (export to a directory instead), and on
-  `:memory:`. `packc store export <dir>` to another, empty directory only
+  `:memory:`. It also refuses, changing nothing, when the `users.json` /
+  `orgs.json` it would overwrite was edited since the store last imported
+  or exported it (a second rollback after a pre-store build's changes):
+  run `packc store import --replace` and start the server once so the
+  store takes the edits in, then export again. `packc store export <dir>` to another, empty directory only
   reads the database (safe while the server runs) and never overwrites a
   `users.json` / `orgs.json` there.
 

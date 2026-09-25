@@ -515,6 +515,54 @@ test('Stale import: export in place, a pre-store build removes a user and change
   await read(base, (db) => assert.equal(actions(db).length, rows));
 });
 
+test('Stale import: a second in-place export over files a pre-store build edited refuses naming import --replace and changes nothing; after the replace it exports the edits', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice', 'bob']);
+  pack(base, 'p1');
+  await start(base);
+  await change(base, (db) => admin.createOrgFromAdmin(db, 'cli', { id: 'acme', name: 'Acme', admin: 'alice', base }));
+  await exportIt(base);
+  const usersPath = join(base, 'users.json');
+  const orgsPath = join(base, 'orgs.json');
+
+  // The pre-store build: alice's password changed, dave added, dave in acme.
+  pre.boot(base);
+  const file = readJson(usersPath);
+  file.users.alice.password = hashPassword('alice-downgrade-pw');
+  file.users.dave = { name: 'Dave', createdAt: '2026-05-01T00:00:00.000Z', password: hashPassword('dave-passw0rd') };
+  legacy.writeUsersFile(file, usersPath);
+  const orgs = readJson(orgsPath);
+  orgs.acme.members.dave = 'member';
+  legacy.writeOrgsFile(orgs, orgsPath);
+  const edited = { users: readFileSync(usersPath), orgs: readFileSync(orgsPath) };
+  const before = await read(base, (db) => ({ rows: actions(db).length, hashes: meta.getMetaJson(db, 'legacy_hashes') }));
+  const markerBefore = readFileSync(legacy.markerPath(base));
+
+  await assert.rejects(exportIt(base), (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED'
+    && e.message.startsWith(`${usersPath} (it was SHA-256 ${before.hashes['users.json'].sha256}, it is ${legacy.sha256Of(edited.users)}), `
+      + `${orgsPath} (it was SHA-256 ${before.hashes['orgs.json'].sha256}, it is ${legacy.sha256Of(edited.orgs)}) differ from what store `)
+    && e.message.includes('Nothing was changed. With the server stopped, run `packc store import --replace` and start the server once'));
+  assert.deepEqual(readFileSync(usersPath), edited.users, 'the edited users.json is not overwritten');
+  assert.deepEqual(readFileSync(orgsPath), edited.orgs, 'the edited orgs.json is not overwritten');
+  assert.deepEqual(readFileSync(legacy.markerPath(base)), markerBefore);
+  await read(base, (db) => {
+    assert.equal(actions(db).length, before.rows);
+    assert.deepEqual(meta.getMetaJson(db, 'legacy_hashes'), before.hashes);
+  });
+
+  // The way out it names: the replace takes the edits in, then the export writes them back.
+  await requestIt(base);
+  await start(base);
+  const r = await exportIt(base);
+  assert.deepEqual(r.users.logins.sort(), ['alice', 'bob', 'dave']);
+  assert.deepEqual(pre.signIn(base, 'alice', 'alice-downgrade-pw'), { sub: 'alice', mustChange: false });
+  assert.deepEqual(pre.signIn(base, 'dave', 'dave-passw0rd'), { sub: 'dave', mustChange: false });
+  assert.equal(readJson(orgsPath).acme.members.dave, 'member');
+  // Unedited, a second export passes.
+  await exportIt(base);
+  await start(base);
+});
+
 test('Stale import: a flat single-org store exported, then `orgs create acme` on a pre-store build and a restart — the start refuses; a flat entry with data beside its twin refuses the replace (check D) and moves nothing; then the default org is found at orgs/default and acme exists', async () => {
   const base = tempDir();
   usersJson(base, ['alice', 'bob']);

@@ -35,6 +35,9 @@
 // a pre-store build would move that org's flat entries into orgs/default/
 // at its next start and the store would no longer find them. So the export
 // makes the move itself, every check before the first write:
+//   0. users.json / orgs.json, where it writes them, are as the store last
+//      imported or exported them (a file a pre-store build edited since
+//      is refused naming `import --replace`, never overwritten);
 //   1. dry run: no MIGRATABLE entry present at the base has an
 //      orgs/default/ twin (refused listing every conflict), and every
 //      journey whose file: paths it rewrites still parses;
@@ -125,6 +128,32 @@ export function planJourneyRewrites(base, moved, { dir = join(base, 'journeys') 
   return out;
 }
 
+// In place, the files the export would overwrite must be as the store
+// last imported or exported them (the boot's step 2 (d) comparison: a file
+// recorded absent keeps its imported hash). One a pre-store build edited
+// since holds the only copy of those edits, so it is refused, not
+// overwritten: the replace takes them into the store first.
+function assertUnedited(db, id, base, files) {
+  const recorded = getMetaJson(db, 'legacy_hashes', {}) || {};
+  const expectedOf = (r) => (r?.absent ? (typeof r.importedSha256 === 'string' ? r.importedSha256 : null)
+    : typeof r?.sha256 === 'string' ? r.sha256 : null);
+  const edited = [];
+  for (const [key, path] of files) {
+    let now;
+    // A file that cannot be read is left to step 4, which fails on it and
+    // puts back what ran.
+    try { now = sha256File(path); } catch (e) { if (e?.code === 'ERR_OBSERVOGRAM_LEGACY_FILE') continue; throw e; }
+    if (now.absent) continue;
+    const was = expectedOf(recorded[key]);
+    if (now.sha256 !== was) edited.push(`${path} (${was ? `it was SHA-256 ${was}` : 'it was absent'}, it is ${now.sha256})`);
+  }
+  if (!edited.length) return;
+  throw refuse(`${edited.join(', ')} ${edited.length === 1 ? 'differs' : 'differ'} from what store ${id} last imported or exported — `
+    + 'edited outside the store (a pre-store build during a rollback, or config management); an in-place export would overwrite '
+    + 'those edits. Nothing was changed. With the server stopped, run `packc store import --replace` and start the server once, '
+    + `so the store takes them in, then export again; or move ${edited.length === 1 ? 'it' : 'them'} aside to discard them`);
+}
+
 // Everything the export will write, and every refusal, before any write.
 export function planExport(db, { inPlace, target, base }) {
   const id = storeId(db);
@@ -189,6 +218,12 @@ export function planExport(db, { inPlace, target, base }) {
     }
   }
   const orgsPath = !writeOrgs ? null : inPlace ? orgsFilePath(base) : join(target, 'orgs.json');
+  if (inPlace) {
+    assertUnedited(db, id, base, [
+      ...(usersPath ? [[usersHashKey(recordedUsersFile), usersPath]] : []),
+      ...(orgsPath ? [['orgs.json', orgsPath]] : []),
+    ]);
+  }
 
   // The default org's move (in place only).
   let move = [];

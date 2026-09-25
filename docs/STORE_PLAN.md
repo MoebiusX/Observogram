@@ -821,7 +821,10 @@ affected. It is not a byte-level round trip.
   out.
 - **In place, with the server stopped**, it records the hashes of what it
   wrote in `legacy_hashes` and the marker, so a later store boot does not
-  refuse its own export.
+  refuse its own export. Before it writes, a `users.json` / `orgs.json`
+  that differs from those hashes (edited by a pre-store build since the
+  last import or export) is refused naming `packc store import --replace`,
+  never overwritten: it holds the only copy of those edits.
 
 **`packc store import --replace`** re-imports users, orgs and memberships
 from files edited during a downgrade. It is carried out by the server's next
