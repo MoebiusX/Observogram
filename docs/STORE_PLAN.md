@@ -457,7 +457,10 @@ otherwise read an empty store:
      - **A still-seeded default admin off loopback.** Refuse, unless the
        decision is `rescue`: `OBSERVOGRAM_ADMIN_PASSWORD` set and no token.
        A disabled still-seeded row counts too, and `users -- enable`
-       refuses one until `users -- passwd` sets a real password.
+       refuses one until `users -- passwd` sets a real password. When
+       every row counted is disabled, the refusal names `users -- passwd
+       <login>` (with the server stopped) instead of the loopback sign-in
+       and the rescue, which cannot reach a disabled row.
      - **No identity, and the import would produce more than one org.**
        Count the `orgs.json` orgs, minus the empty `default` artefact,
        plus `default` when `migrateFlatWorkspace()` would move flat data

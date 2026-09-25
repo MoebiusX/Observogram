@@ -884,6 +884,10 @@ const MSG_A = (host) => `refusing to bind to ${host} without auth: mutating /api
 const MSG_B = (host) => `refusing to bind to ${host} while the seeded default admin password is unchanged.\n`
   + '  Sign in once on loopback (admin / admin) to set a real password,\n'
   + '  or seed a fresh workspace with OBSERVOGRAM_ADMIN_PASSWORD=<secret>.';
+const MSG_B_DISABLED = (host, login) => `refusing to bind to ${host} while the seeded default admin password is unchanged.\n`
+  + `  The user ${login} is disabled but still holds it (a loopback sign-in or OBSERVOGRAM_ADMIN_PASSWORD cannot reach a disabled user).\n`
+  + `  With the server stopped, run npm run users -- passwd ${login} to set a real password;\n`
+  + `  the user can then stay disabled, or be enabled with npm run users -- enable ${login}.`;
 const MSG_C3 = (n, ids) => `orgs.json would leave ${n} orgs (${ids}) but no identity is configured: more than one org needs to know who the user is.\n`
   + '  Configure OIDC (OBSERVOGRAM_OIDC_*), or start once with one org — one org boots with a bearer token alone, or on loopback:\n'
   + '  with the server stopped, edit orgs.json down to one org (or move it aside when the flat workspace is the other org).\n'
@@ -899,6 +903,9 @@ test('assertBootChecks table: A (and the INSECURE override), B after the decisio
   assert.deepEqual(boot.assertBootChecks({ ...input, auth: true }), { insecure: false });
   assert.deepEqual(boot.assertBootChecks({ ...input, loopback: true, stillSeeded: true, orgIds: ['a'] }), { insecure: false });
   assert.throws(() => boot.assertBootChecks({ ...input, auth: true, stillSeeded: true }), refusal(MSG_B('0.0.0.0')));
+  assert.throws(() => boot.assertBootChecks({ ...input, auth: true, stillSeeded: true, stillSeededDisabled: null }), refusal(MSG_B('0.0.0.0')));
+  assert.throws(() => boot.assertBootChecks({ ...input, auth: true, stillSeeded: true, stillSeededDisabled: ['admin'] }),
+    refusal(MSG_B_DISABLED('0.0.0.0', 'admin')), 'every counted row disabled: B names users -- passwd');
   assert.throws(() => boot.assertBootChecks({ ...input, stillSeeded: true, orgIds: ['a', 'b'] }), refusal(MSG_A('0.0.0.0')), 'A before B and C');
   assert.throws(() => boot.assertBootChecks({ ...input, token: true, orgIds: ['a', 'b'] }),
     refusal(/^the store holds 2 orgs \(a, b\) but no identity is configured/), 'a bearer is not identity (step 4 text)');

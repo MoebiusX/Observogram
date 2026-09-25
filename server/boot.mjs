@@ -195,10 +195,21 @@ export function applySeedDecision(db, decision, { log = () => {}, warn = () => {
 // (a disabled row counts: `users -- enable` would restore it), after the
 // decision: the one row a rescue fixes (an enabled admin) is not counted.
 export function defaultCredentialActive(db, ctx, decision = null) {
-  if (ctx.authOff || ctx.oidc || !isIdentityArmed(db)) return false;
+  return stillSeededRows(db, ctx, decision).length > 0;
+}
+
+function stillSeededRows(db, ctx, decision) {
+  if (ctx.authOff || ctx.oidc || !isIdentityArmed(db)) return [];
   const rescue = decision?.kind === 'rescue' ? 1 : 0;
-  return prepare(db, `SELECT count(*) AS n FROM users WHERE kind = 'local' AND seeded_default = 1
-    AND must_change = 1 AND NOT (:rescue = 1 AND login = 'admin' AND disabled = 0)`).get({ rescue }).n > 0;
+  return prepare(db, `SELECT login, disabled FROM users WHERE kind = 'local' AND seeded_default = 1
+    AND must_change = 1 AND NOT (:rescue = 1 AND login = 'admin' AND disabled = 0) ORDER BY login`).all({ rescue });
+}
+
+// The logins check B counts when every one is disabled (neither a loopback
+// sign-in nor a rescue reaches them; `users -- passwd` does), else null.
+function stillSeededDisabled(db, ctx, decision) {
+  const rows = stillSeededRows(db, ctx, decision);
+  return rows.length && rows.every((r) => r.disabled) ? rows.map((r) => r.login) : null;
 }
 
 // ---------- the fail-closed checks ----------
@@ -240,6 +251,7 @@ export function storeChecksInput(db, ctx, decision) {
     step: 'store', host: ctx.host, loopback: ctx.loopback, token: ctx.token, insecure: ctx.insecure, dbPath: ctx.dbPath,
     auth: !ctx.authOff && (ctx.oidc || armed || decision.kind === 'seed'),
     stillSeeded: defaultCredentialActive(db, ctx, decision),
+    stillSeededDisabled: stillSeededDisabled(db, ctx, decision),
     orgIds: listOrgs(db).map((o) => o.id),
     identity: !ctx.authOff && (ctx.oidc || armed),
     strandedDefault: strandedDefault(db, ctx, existsSync(orgsFilePath(ctx.base))),
@@ -268,6 +280,17 @@ export function assertBootChecks(input) {
     }
   }
   // B — the seeded default credential never binds beyond loopback.
+  if (!input.loopback && input.stillSeeded && input.stillSeededDisabled?.length) {
+    const logins = input.stillSeededDisabled;
+    const which = logins.length === 1 ? `user ${logins[0]} is` : `users ${logins.join(', ')} are`;
+    const cmd = logins.length === 1 ? logins[0] : '<login>';
+    throw new BootRefusal(
+      `refusing to bind to ${input.host} while the seeded default admin password is unchanged.\n` +
+      `  The ${which} disabled but still hold${logins.length === 1 ? 's' : ''} it (a loopback sign-in or OBSERVOGRAM_ADMIN_PASSWORD cannot reach a disabled user).\n` +
+      `  With the server stopped, run npm run users -- passwd ${cmd} to set a real password${logins.length === 1 ? '' : ' for each'};\n` +
+      `  the user can then stay disabled, or be enabled with npm run users -- enable ${cmd}.`,
+      { nothingMoved });
+  }
   if (!input.loopback && input.stillSeeded) {
     throw new BootRefusal(
       `refusing to bind to ${input.host} while the seeded default admin password is unchanged.\n` +

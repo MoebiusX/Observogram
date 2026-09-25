@@ -291,7 +291,8 @@ server opens it at every start.
   user's memberships, owner flag and password as they were. A user still
   holding the seeded default password (`admin` / `admin`) is not enabled
   until `npm run users -- passwd <login>` sets a real one, and such a
-  disabled row still refuses a start beyond loopback. Names and fields the store cannot hold are dropped and
+  disabled row still refuses a start beyond loopback (the refusal names
+  `npm run users -- passwd <login>`, run with the server stopped, as the way out). Names and fields the store cannot hold are dropped and
   listed in the report; they never refuse the start.
 - **Edited legacy files refuse the start.** A store build refuses to start
   when `users.json` or `orgs.json` changed after the import (a pre-store
