@@ -569,6 +569,15 @@ try {
   });
   assert(r.status === 403, 'skip refused for an admin-set temporary password', r.status, 403);
 
+  // The pwflow cookie is signed with the session key; replayed as the
+  // session cookie it must not stand in for a session (sec-2).
+  const tempFlowAsSession = `observogram_session=${tempFlow.slice('observogram_pwflow='.length)}`;
+  r = await fetch(`${base2}/auth/me`, { headers: { Cookie: tempFlowAsSession } });
+  j = await r.json();
+  assert(r.ok && j.authenticated === false, 'a pwflow cookie replayed as the session is not a session', JSON.stringify(j));
+  r = await fetch(`${base2}/api/orgs`, { headers: { Accept: 'application/json', Cookie: tempFlowAsSession } });
+  assert(r.status === 401, 'a pwflow cookie replayed as the session gets no /api access', r.status, 401);
+
   r = await fetch(`${base2}/auth/change-password/skip`, {
     method: 'POST', headers: { Cookie: tempFlow }, redirect: 'manual',
   });

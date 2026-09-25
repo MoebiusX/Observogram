@@ -230,11 +230,14 @@ function clearCookie(res, name) {
 
 // ---------- sessions, resolved against the store ----------
 //
-// The cookie payload is { sub, login, ep, email, name, iat, exp }: `sub`
-// stays what a pre-store build knows the user by (preStoreSub: the
-// username, or the bare IdP sub), `login` is users.login, `ep` the
-// session epoch at issue. A cookie without `login` is pre-upgrade and
-// reads as epoch 0 (the epoch the import gives its rows).
+// The cookie payload is { sub, login, ep, purpose: 'session', email, name,
+// iat, exp }: `sub` stays what a pre-store build knows the user by
+// (preStoreSub: the username, or the bare IdP sub), `login` is
+// users.login, `ep` the session epoch at issue. A cookie without `login` is pre-upgrade and
+// reads as epoch 0 (the epoch the import gives its rows). Every signed
+// payload shares the key, so a session must say it is one: a post-upgrade
+// payload without `purpose: 'session'`, or any payload whose purpose is
+// something else (the pwflow cookie), is refused.
 
 // The session attached to a request, or null — the one algorithm every
 // session reader uses. A refused cookie is the same as no cookie. May
@@ -245,6 +248,8 @@ export function resolveSession(req, { db = currentStore() } = {}) {
   const payload = verify(cookies[SESSION_COOKIE] || cookies[LEGACY_SESSION_COOKIE]);
   if (!payload) return null;
   const preUpgrade = typeof payload.login !== 'string';
+  if (payload.purpose !== undefined && payload.purpose !== 'session') return null;
+  if (!preUpgrade && payload.purpose !== 'session') return null;
   let ep = 0;
   if (!preUpgrade) {
     if (!Number.isSafeInteger(payload.ep) || payload.ep < 0) return null;
@@ -305,6 +310,7 @@ function issueSession(res, db, user) {
     sub: preStoreSub(user),
     login: user.login,
     ep: user.sessionEpoch,
+    purpose: 'session',
     email: user.email || null,
     name: user.name || (user.kind === 'local' ? user.login : null),
     iat: Date.now(),
