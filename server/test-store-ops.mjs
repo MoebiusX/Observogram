@@ -342,7 +342,7 @@ test('Export gate: one org at the workspace root on a deployment that had an org
   await start(base);
 });
 
-test('export to a directory: only reads the store, never overwrites', async () => {
+test('export to a directory: only reads the store, never overwrites — a second export into it is refused as not empty', async () => {
   const base = tempDir();
   usersJson(base, ['alice']);
   pack(base, 'p1');
@@ -364,7 +364,7 @@ test('export to a directory: only reads the store, never overwrites', async () =
     assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(dir, 'orgs.json'), 'utf8'))), ['default', 'acme']);
     assert.equal(actions(db).length, snapshot.rows);
     assert.equal(meta.getMeta(db, 'legacy_hashes'), snapshot.hashes);
-    await assert.rejects(exportIt(base, dir), (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && /never overwrites/.test(e.message));
+    await assert.rejects(exportIt(base, dir), (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(`${dir} is not empty`));
   } finally {
     closeStore(dbOf(base));
   }
@@ -405,7 +405,7 @@ test('export: a workspace its marker was lost from — this store\'s database be
   rmSync(join(base, 'users.json'));
   rmSync(legacy.markerPath(base));
   const elsewhere = join(tempDir('ops-cwd'), '.observogram');   // OBSERVOGRAM_WORKSPACE unset, another cwd
-  const named = (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(`OBSERVOGRAM_WORKSPACE=${base} to export in place`);
+  const named = (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(`OBSERVOGRAM_WORKSPACE=${base} packc store export ${base} to export in place`);
   await assert.rejects(exportStore(base, { dbPath: dbOf(base), base: elsewhere, out: silent }), named);
   assert.equal(existsSync(join(base, 'orgs.json')), false);
   assert.equal(existsSync(join(base, 'users.json')), false);
@@ -415,7 +415,7 @@ test('export: a workspace its marker was lost from — this store\'s database be
   await start(base);
 });
 
-test('export: another store\'s workspace is never exported into — the in-place export refuses when the marker names another store, and the directory-export refusal for it names both stores and suggests no write there', async () => {
+test('export: another store\'s workspace is never exported into — the directory export refuses it as not empty, and the in-place export refuses when the marker names another store, naming both stores', async () => {
   const w1 = tempDir();
   usersJson(w1, ['alice']);
   pack(w1, 's1');
@@ -432,12 +432,11 @@ test('export: another store\'s workspace is never exported into — the in-place
   const markerBefore = readFileSync(legacy.markerPath(w2), 'utf8');
   const both = (e) => e.message.includes(idA) && e.message.includes(idB);
 
-  // The directory export from w1's shell (workspace unset) names both stores and does not send the operator to OBSERVOGRAM_WORKSPACE.
+  // The directory export from w1's shell (workspace unset): w2 is not empty. Its in-place way out holds only for this
+  // store's own workspace; followed for w2 anyway (OBSERVOGRAM_WORKSPACE=w2), it is an in-place export into w2: refused.
   const elsewhere = join(tempDir('ops-cwd'), '.observogram');
   await assert.rejects(exportStore(w2, { dbPath: dbOf(w1), base: elsewhere, out: silent }),
-    (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && both(e) && !e.message.includes('OBSERVOGRAM_WORKSPACE=')
-      && e.message.includes('OBSERVOGRAM_DB'));
-  // Following the old text literally (OBSERVOGRAM_WORKSPACE=w2) is an in-place export into w2: refused.
+    (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(`${w2} is not empty`));
   await assert.rejects(exportStore(w2, { dbPath: dbOf(w1), base: w2, out: silent }),
     (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && both(e) && e.message.includes('OBSERVOGRAM_DB'));
   assert.equal(readFileSync(legacy.markerPath(w2), 'utf8'), markerBefore);
@@ -455,7 +454,7 @@ test('export: another store\'s workspace is never exported into — the in-place
     (e) => e.message.includes(`OBSERVOGRAM_WORKSPACE=${w1}`));
 });
 
-test('export: the database\'s own directory is not a workspace — with the database outside the workspace (the k8s layout) it and a backup directory beside it export as plain directories; a directory inside or around the workspace is refused naming the in-place export', async () => {
+test('export: with the database outside the workspace (the k8s layout) a new directory beside it exports as a plain directory, the database\'s own (non-empty) directory is refused; a directory inside or around the workspace is refused naming the in-place export', async () => {
   const root = tempDir();
   const base = join(root, 'ws');
   const dbDir = join(root, 'db');
@@ -466,14 +465,17 @@ test('export: the database\'s own directory is not a workspace — with the data
   await start(base, { OBSERVOGRAM_DB: dbPath });
   const hashes = async () => { const db = await openStore({ path: dbPath }); try { return meta.getMeta(db, 'legacy_hashes'); } finally { closeStore(dbPath); } };
   const hashesBefore = await hashes();
-  // The directory holding the database: a plain directory export, the store and the workspace untouched.
-  const r = await exportStore(dbDir, { dbPath, base, out: silent });
+  // The directory holding the database is not empty: refused, nothing written beside the database.
+  await assert.rejects(exportStore(dbDir, { dbPath, base, out: silent }),
+    (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(`${dbDir} is not empty`));
+  assert.equal(existsSync(join(dbDir, 'users.json')), false);
+  // A new directory beside the database (the k8s recipe's export-<timestamp>): a plain directory export, the store
+  // and the workspace untouched.
+  const fresh = join(dbDir, 'export-20260925120000');
+  const r = await exportStore(fresh, { dbPath, base, out: silent });
   assert.equal(r.inPlace, false);
-  assert.ok(existsSync(join(dbDir, 'users.json')));
-  assert.equal(existsSync(legacy.markerPath(dbDir)), false, 'no marker written next to the database');
-  const backups = join(dbDir, 'backups');
-  assert.equal((await exportStore(backups, { dbPath, base, out: silent })).inPlace, false);
-  assert.ok(existsSync(join(backups, 'users.json')));
+  assert.ok(existsSync(join(fresh, 'users.json')));
+  assert.equal(existsSync(legacy.markerPath(fresh)), false, 'no marker written by a directory export');
   const hashesAfter = await hashes();
   assert.equal(hashesAfter, hashesBefore, 'legacy_hashes untouched');
   // The real case: a directory inside the workspace, or one holding it. The way out is the in-place export,
@@ -487,6 +489,99 @@ test('export: the database\'s own directory is not a workspace — with the data
   // The workspace itself still exports in place.
   assert.equal((await exportStore(base, { dbPath, base, out: silent })).inPlace, true);
   await start(base, { OBSERVOGRAM_DB: dbPath });   // starts on what the export wrote, no refusal
+});
+
+test('export: a directory export writes only into a new or empty directory — a live workspace its marker was lost from (its database in db/, or no flat entry) is refused naming the in-place export, and the way out works', async () => {
+  const elsewhere = join(tempDir('ops-cwd'), '.observogram');   // OBSERVOGRAM_WORKSPACE unset, another cwd
+  const inPlaceNamed = (ws) => (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED'
+    && e.message.includes(`${ws} is not empty`) && e.message.includes('choose an empty or new directory')
+    && e.message.includes(`OBSERVOGRAM_WORKSPACE=${ws} packc store export ${ws}`);
+  // A: the database in <workspace>/db, org data, no users.json and no marker.
+  const d1 = tempDir();
+  const db1 = join(d1, 'db', 'observogram.db');
+  usersJson(d1, ['alice']);
+  pack(d1, 'p');
+  await start(d1, { OBSERVOGRAM_DB: db1 });
+  { const db = await openStore({ path: db1 }); try { admin.createOrgFromAdmin(db, 'cli', { id: 'acme', name: 'Acme', admin: 'alice', base: d1 }); } finally { closeStore(db1); } }
+  rmSync(join(d1, 'users.json'));
+  rmSync(legacy.markerPath(d1));
+  await assert.rejects(exportStore(d1, { dbPath: db1, base: elsewhere, out: silent }), inPlaceNamed(d1));
+  assert.equal(existsSync(join(d1, 'users.json')), false);
+  assert.equal(existsSync(join(d1, 'orgs.json')), false);
+  // Followed literally: the in-place export, and the next start takes what it wrote.
+  assert.equal((await exportStore(d1, { dbPath: db1, base: d1, out: silent })).inPlace, true);
+  await start(d1, { OBSERVOGRAM_DB: db1 });
+
+  // B: the database in the workspace root, no flat entry and no org data.
+  const d2 = tempDir();
+  usersJson(d2, ['alice']);
+  await start(d2);
+  rmSync(join(d2, 'users.json'));
+  rmSync(legacy.markerPath(d2));
+  rmSync(join(d2, 'packs'), { recursive: true, force: true });
+  await assert.rejects(exportStore(d2, { dbPath: dbOf(d2), base: elsewhere, out: silent }), inPlaceNamed(d2));
+  assert.equal(existsSync(join(d2, 'users.json')), false);
+  assert.equal(existsSync(join(d2, 'orgs.json')), false);
+  assert.equal((await exportStore(d2, { dbPath: dbOf(d2), base: d2, out: silent })).inPlace, true);
+  await start(d2);
+});
+
+test('export: a directory export into another store\'s markerless workspace is refused — nothing written, its next start passes', async () => {
+  const t1 = tempDir();
+  usersJson(t1, ['alice']);
+  pack(t1, 's1');
+  await start(t1);
+  const t2 = tempDir();
+  usersJson(t2, ['bob']);
+  pack(t2, 's2');
+  await start(t2);
+  rmSync(join(t2, 'users.json'));
+  rmSync(legacy.markerPath(t2));
+  const elsewhere = join(tempDir('ops-cwd'), '.observogram');
+  await assert.rejects(exportStore(t2, { dbPath: dbOf(t1), base: elsewhere, out: silent }),
+    (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(`${t2} is not empty`));
+  assert.equal(existsSync(join(t2, 'users.json')), false);
+  assert.equal(existsSync(join(t2, 'orgs.json')), false);
+  await start(t2);
+});
+
+test('export: a directory export targets a new or empty directory only — an empty one and a symlink to an absent or empty one export; a file, a non-empty symlink target and a non-empty directory are refused', { skip: process.platform === 'win32' && 'symlinks' }, async () => {
+  const base = tempDir();
+  usersJson(base, ['alice']);
+  await start(base);
+  const root = tempDir('ops-out');
+  const refusedNotEmpty = (p) => (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(`${p} is not empty`)
+    && e.message.includes('choose an empty or new directory');
+  // Empty: exports.
+  const empty = join(root, 'empty');
+  mkdirSync(empty);
+  assert.equal((await exportIt(base, empty)).inPlace, false);
+  assert.ok(existsSync(join(empty, 'users.json')));
+  // Now not empty: refused, never overwritten.
+  const before = readFileSync(join(empty, 'users.json'));
+  await assert.rejects(exportIt(base, empty), refusedNotEmpty(empty));
+  assert.deepEqual(readFileSync(join(empty, 'users.json')), before);
+  // A directory with any entry (not only users.json / orgs.json) is refused.
+  const other = join(root, 'other');
+  mkdirSync(other);
+  writeFileSync(join(other, 'notes.txt'), 'x');
+  await assert.rejects(exportIt(base, other), refusedNotEmpty(other));
+  assert.deepEqual(readdirSync(other), ['notes.txt']);
+  // A symlink to an empty directory exports into it; to an absent one creates it; to a non-empty one is refused.
+  const emptyTarget = join(root, 'empty-target');
+  mkdirSync(emptyTarget);
+  symlinkSync(emptyTarget, join(root, 'link-empty'));
+  await exportIt(base, join(root, 'link-empty'));
+  assert.ok(existsSync(join(emptyTarget, 'users.json')));
+  symlinkSync(join(root, 'absent-target'), join(root, 'link-absent'));
+  await exportIt(base, join(root, 'link-absent'));
+  assert.ok(existsSync(join(root, 'absent-target', 'users.json')));
+  symlinkSync(other, join(root, 'link-full'));
+  await assert.rejects(exportIt(base, join(root, 'link-full')), (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(other));
+  assert.deepEqual(readdirSync(other), ['notes.txt']);
+  // A file is refused.
+  writeFileSync(join(root, 'file'), 'x');
+  await assert.rejects(exportIt(base, join(root, 'file')), (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && /is not a directory/.test(e.message));
 });
 
 test('export: users.json holds password hashes — a new one is created 0600, an existing one keeps its mode, no .tmp left behind', { skip: process.platform === 'win32' && 'POSIX modes' }, async () => {

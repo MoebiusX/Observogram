@@ -24,7 +24,8 @@
 //
 // An in-place export runs with the server stopped: assertNotInUse()
 // (server/store/backup.mjs, restore's probe) refuses while any connection
-// holds the database. A directory export only reads the store.
+// holds the database. A directory export only reads the store, and writes
+// only into a directory that does not exist or is empty (exportDirectory).
 //
 // The export writes files a pre-store build boots on with the same
 // membership, not the same access: a pre-store build enforces no roles, so
@@ -57,7 +58,7 @@
 // Every regex here is used through .test() / .match() / replace: the
 // store's source guard refuses a raw handle call's spelling here.
 
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { baseWorkspacePath } from '../../tools/lib/brand-env.mjs';
 import { parse as parseYaml } from '../../tools/lib/mini-yaml.mjs';
@@ -70,7 +71,7 @@ import { listMembers } from './memberships.mjs';
 import { disableOidcRows, listUsers, rewriteLoginPrefix } from './users.mjs';
 import { CLI, canonIssuer, preStoreSub } from './identity.mjs';
 import {
-  MIGRATABLE, hasData, lexists, markerPath, orgsFilePath, readMarker, sha256File, usersHashKey, writeMarker, writeOrgsFile, writeUsersFile,
+  MIGRATABLE, lexists, markerPath, orgsFilePath, readMarker, sha256File, usersHashKey, writeMarker, writeOrgsFile, writeUsersFile,
 } from './legacy-files.mjs';
 
 const MEMORY = ':memory:';
@@ -264,6 +265,41 @@ export function planExport(db, { inPlace, target, base }) {
 
 // ---------- the export ----------
 
+// A directory export writes only into a directory that does not exist or is empty: anything else may be a
+// workspace (live, another store's, or one its marker was lost from), and files written there would skip the
+// in-place steps. A symlink is resolved, and what it names must itself be absent or empty. A directory inside
+// the workspace or holding it is refused too: the way back is the in-place export. → the directory to write.
+function exportDirectory(target, base) {
+  const named = (into) => (into === target ? target : `${target} (a symlink to ${into})`);
+  const unreadable = (p, e) => refuse(`${p} cannot be read: ${e.message}. Nothing was changed. Choose an empty or new directory`);
+  let into = target;
+  let st;
+  for (let hops = 0; ; hops += 1) {
+    try { st = lstatSync(into); } catch (e) { if (e?.code === 'ENOENT') { st = null; break; } throw unreadable(into, e); }
+    if (!st.isSymbolicLink()) break;
+    if (hops >= 40) throw refuse(`${target} is a symlink loop. Nothing was changed. Choose an empty or new directory`);
+    into = resolve(dirname(into), readlinkSync(into));
+  }
+  const t = realOr(into);
+  const b = realOr(base);
+  const inside = t.startsWith(b + sep);
+  if (t === b || inside || b.startsWith(t.endsWith(sep) ? t : t + sep)) {
+    throw refuse(`${named(into)} ${t === b ? 'is' : inside ? 'lies inside' : 'holds'} the workspace ${base} — a directory export there `
+      + `would write files without the in-place steps. Nothing was changed. To export in place, stop the server and run `
+      + `packc store export ${base}; otherwise choose an empty directory outside the workspace`);
+  }
+  if (!st) return into;
+  if (!st.isDirectory()) throw refuse(`${named(into)} exists and is not a directory. Nothing was changed. Choose an empty or new directory`);
+  let entries;
+  try { entries = readdirSync(into); } catch (e) { throw unreadable(into, e); }
+  if (entries.length) {
+    throw refuse(`${named(into)} is not empty — a directory export writes only into a new or empty directory. Nothing was changed. `
+      + `To export: choose an empty or new directory; or, if ${into} is this store's workspace, stop the server and run `
+      + `OBSERVOGRAM_WORKSPACE=${into} packc store export ${into} to export in place`);
+  }
+  return into;
+}
+
 export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWorkspacePath(), out = process.stdout } = {}) {
   if (!dir) throw refuse('name the directory: packc store export <dir> (the workspace directory itself exports in place)');
   if (dbPath === MEMORY) throw refuse('OBSERVOGRAM_DB is :memory: — an in-memory store lives in one process and cannot be exported from another');
@@ -272,40 +308,11 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
   if (!existsSync(path)) throw refuse(`no database at ${path} — nothing to export (this command never creates one; check OBSERVOGRAM_DB and OBSERVOGRAM_WORKSPACE)`);
   const target = resolve(dir);
   const inPlace = realOr(target) === realOr(base);
-  let workspaceNamed = false;
+  let into = target;   // where a directory export writes: the target, or the directory its symlink resolves to
   if (inPlace) {
     await assertNotInUse(path, { doing: 'an in-place export' });
   } else {
-    if (existsSync(target) && !statSync(target).isDirectory()) throw refuse(`${target} exists and is not a directory`);
-    // A directory inside the workspace or holding it is refused: the way back is the in-place export. The
-    // database's own directory is not a workspace (OBSERVOGRAM_DB may sit outside it, as on k8s): it and a
-    // backup directory beside it are plain directory exports.
-    const t = realOr(target);
-    const b = realOr(base);
-    const inside = t.startsWith(b + sep);
-    if (inside || b.startsWith(t.endsWith(sep) ? t : t + sep)) {
-      throw refuse(`${target} ${inside ? 'lies inside' : 'holds'} the workspace ${base} — a directory export there would `
-        + `write files without the in-place steps. Nothing was changed. To export in place, stop the server and run `
-        + `packc store export ${base}; otherwise choose an empty directory outside the workspace`);
-    }
-    // A workspace named while the shell's workspace is elsewhere (OBSERVOGRAM_WORKSPACE unset, or a relative
-    // path from another cwd): its marker tells it apart, and a directory export there would write orgs.json
-    // without the default org's move.
-    // Refused below, once the store id tells this store's workspace from another's.
-    if (lexists(markerPath(target))) workspaceNamed = true;
-    // A workspace its marker was lost from: it holds this store's database and workspace data. The database's
-    // directory alone (with backups beside it) is the k8s layout, a plain directory export.
-    else if (realOr(dirname(path)) === realOr(target)) {
-      const data = [...MIGRATABLE.filter((e) => lexists(join(target, e))), ...(hasData(join(target, 'orgs')) ? ['orgs'] : [])];
-      if (data.length) {
-        throw refuse(`${target} is a workspace (it holds ${path} and ${data.map((e) => join(target, e)).join(', ')}; its marker `
-          + `${markerPath(target)} is missing), but the workspace here is ${base} — a directory export into it would write files `
-          + 'without the in-place steps. Nothing was changed. It is this store\'s workspace (it holds this store\'s database): '
-          + `set OBSERVOGRAM_WORKSPACE=${target} to export in place; otherwise choose an empty directory`);
-      }
-    }
-    const taken = ['users.json', 'orgs.json'].map((f) => join(target, f)).filter((p) => existsSync(p));
-    if (taken.length && !workspaceNamed) throw refuse(`${taken.join(', ')} exist${taken.length === 1 ? 's' : ''} — a directory export never overwrites; choose an empty directory`);
+    into = exportDirectory(target, base);
   }
 
   const db = await openStore({ path });
@@ -321,20 +328,8 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
           + `that workspace, point OBSERVOGRAM_DB at its own store (store ${marker.storeId}); to export store ${id}, name an empty `
           + 'directory outside any workspace');
       }
-    } else if (workspaceNamed) {
-      let named = null;
-      try { named = readMarker(target)?.storeId ?? null; } catch { /* unreadable: not known to be this store's */ }
-      const head = `${target} is a workspace (it holds ${markerPath(target)}), but the workspace here is ${base} — a directory `
-        + 'export into it would write files without the in-place steps. Nothing was changed. ';
-      if (named === id) {
-        throw refuse(`${head}It is this store's workspace (its marker names store ${id}): set OBSERVOGRAM_WORKSPACE=${target} `
-          + 'to export in place; otherwise choose an empty directory');
-      }
-      const whose = named === null ? 'its marker cannot be read, so it is not known to be' : `its marker names store ${named}, not`;
-      throw refuse(`${head}It is not this store's workspace (${whose} store ${id}, which ${path} holds): leave it alone — `
-        + `to work on it, point OBSERVOGRAM_DB at its own store; to export store ${id}, choose an empty directory outside any workspace`);
     }
-    const plan = planExport(db, { inPlace, target, base });
+    const plan = planExport(db, { inPlace, target: into, base });
     if (!inPlace) {
       if (plan.users.path) writeUsersFile(plan.users.data, plan.users.path);
       if (plan.orgs.path) writeOrgsFile(plan.orgs.data, plan.orgs.path);
@@ -342,7 +337,7 @@ export async function exportStore(dir, { dbPath = resolveDbPath(), base = baseWo
     }
     return exportInPlace(db, plan);
   } finally {
-    if (inPlace || workspaceNamed) closeStore(path);   // a refused directory export leaves nothing open
+    if (inPlace) closeStore(path);
   }
 }
 
