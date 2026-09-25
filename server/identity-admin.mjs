@@ -120,18 +120,47 @@ function userFor(db, actor, target, { shellIssuerRaw }) {
 
 const enabledOwnerCount = (db) => prepare(db, 'SELECT count(*) AS n FROM users WHERE is_owner = 1 AND disabled = 0').get().n;
 
-// The sign-in modes an owner may be using, read the way resolveLogin reads
-// them: a shell that sets OBSERVOGRAM_OIDC_ISSUER is configured like an
-// OIDC server, so only OIDC owners under that issuer key count; a plain
-// shell counts local owners and, when the store records an issuer, its OIDC
-// owners too (the server may run either way). An owner who signs in under
-// none of them does not keep the web-usable owner set alive.
-function signInModes(db, shellIssuerRaw) {
+// The sign-in mode the server runs, as far as a shell can know it: a shell
+// that sets OBSERVOGRAM_OIDC_ISSUER is configured like an OIDC server, so
+// that issuer; else the mode the server recorded at its last start
+// (identity_mode, boot step 4); else — a store no start of this build has
+// booted — the store alone: local, plus the recorded issuer if any (the
+// server may run either way). `why` names the source, for every text.
+//   → { kind: 'oidc', issuerKey, why } | { kind: 'local', why }
+//     | { kind: 'unknown', issuerKey (null when none recorded), why }
+export function serverSignInMode(db, { shellIssuerRaw = null } = {}) {
   const S = shellKey(shellIssuerRaw);
-  if (S) return [{ mode: 'oidc', issuerKey: S }];
+  if (S) return { kind: 'oidc', issuerKey: S, why: `this shell configures OIDC issuer ${S}` };
+  const M = getMeta(db, 'identity_mode');
+  if (M !== null && M.startsWith('oidc:')) {
+    const issuerKey = M.slice('oidc:'.length);
+    return { kind: 'oidc', issuerKey, why: `the server last started with OIDC issuer ${issuerKey}` };
+  }
+  const last = {
+    local: 'the server last started without OIDC, with local sign-in',
+    token: 'the server last started without OIDC, with only OBSERVOGRAM_API_TOKEN',
+    open: 'the server last started without OIDC or any sign-in',
+    off: 'the server last started with OBSERVOGRAM_AUTH=off and without OIDC',
+  }[M];
+  if (last) return { kind: 'local', why: last };
   const R = getMeta(db, 'oidc_issuer');
-  return R ? [{ mode: 'local' }, { mode: 'oidc', issuerKey: R }] : [{ mode: 'local' }];
+  return {
+    kind: 'unknown',
+    issuerKey: R,
+    why: R ? `this store records OIDC issuer ${R} and no server start has recorded whether it still runs with it`
+      : 'no server start has recorded a sign-in mode',
+  };
 }
+
+// The modes whose owners keep the web-usable owner set alive.
+function signInModes(mode) {
+  if (mode.kind === 'oidc') return [{ mode: 'oidc', issuerKey: mode.issuerKey }];
+  if (mode.kind === 'unknown' && mode.issuerKey) return [{ mode: 'local' }, { mode: 'oidc', issuerKey: mode.issuerKey }];
+  return [{ mode: 'local' }];
+}
+
+// A-16 applies only where a local user can sign in.
+const localSignIn = (mode) => mode.kind === 'local' || (mode.kind === 'unknown' && !mode.issuerKey);
 
 const modeText = ({ mode, issuerKey }) => (mode === 'oidc' ? `through OIDC issuer ${issuerKey}` : 'with a local password');
 
@@ -160,26 +189,31 @@ export function checkAddLocalUser(db, { login, role, orgId = null }) {
   return { role: parsedRole, orgId: orgId ?? null };
 }
 
-// → { user, owner, ownerWithheld, joined: [{ orgId, role }], armed }.
+// → { user, owner, ownerWithheld, joined: [{ orgId, role }], armed, mode }.
 // `password` is the plain text; it is hashed before the transaction opens.
 // The first local user created while no enabled local owner exists becomes
 // the owner and admin of the default org, whatever --role says (A-16) —
-// unless this shell sets OBSERVOGRAM_OIDC_ISSUER: a local user cannot sign
-// in there, so owner would only let the last OIDC owner be disabled. Then
-// `ownerWithheld` says why (null otherwise).
+// only when serverSignInMode() is local (or unknown with no issuer
+// recorded): elsewhere a local user cannot sign in, so owner would only let
+// the last OIDC owner be disabled. Then `ownerWithheld` says why (null
+// otherwise). `mode` is the serverSignInMode() it used.
 export function addLocalUser(db, actor, { login, name = null, email = null, password, role, orgId = null, via = 'cli', shellIssuerRaw = null }) {
   checkAddLocalUser(db, { login, role, orgId });
   if (typeof password !== 'string' || password === '') refuse('a password is required');
-  const shellIssuer = shellKey(shellIssuerRaw);
+  serverSignInMode(db, { shellIssuerRaw });   // a malformed shell issuer refuses before the hash
   const hashed = hashPassword(password);
   return atomic(db, () => {
     const { role: parsedRole } = checkAddLocalUser(db, { login, role, orgId });
+    const mode = serverSignInMode(db, { shellIssuerRaw });
     const defaultOrg = ensureDefaultOrg(db, actor);
     const noLocalOwner = signInOwnerCount(db, { mode: 'local' }) === 0;
-    const owner = noLocalOwner && !shellIssuer;
-    const ownerWithheld = noLocalOwner && shellIssuer
-      ? `this shell configures OIDC issuer ${shellIssuer} and local users cannot sign in under it — grant owner to an IdP user with npm run users -- owner <login>`
-      : null;
+    const owner = noLocalOwner && localSignIn(mode);
+    let ownerWithheld = null;
+    if (noLocalOwner && !owner) {
+      ownerWithheld = `${mode.why}${mode.kind === 'oidc' ? ' and local users cannot sign in under it' : ''} — `
+        + 'grant owner to an IdP user with npm run users -- owner <login>, '
+        + `or, once the server has started without OBSERVOGRAM_OIDC_ISSUER, npm run users -- owner ${login} from a shell without it`;
+    }
     let user = createUser(db, actor, { kind: 'local', login, name, email, password: hashed });
     const joined = [];
     if (owner) {
@@ -193,7 +227,7 @@ export function addLocalUser(db, actor, { login, name = null, email = null, pass
     }
     let armed = false;
     if (!isIdentityArmed(db)) { setMeta(db, actor, 'identity_armed', '1'); armed = true; }
-    return { user, owner, ownerWithheld, joined, armed };
+    return { user, owner, ownerWithheld, joined, armed, mode };
   });
 }
 
@@ -209,7 +243,7 @@ export function setLocalPassword(db, actor, login, password) {
 
 // Users are never deleted (the audit references them): disabling bumps the
 // epoch and keeps the memberships. The last enabled owner stays, and so
-// does the last owner who can sign in under the modes signInModes reads.
+// does the last owner who can sign in under serverSignInMode().
 export function disableUser(db, actor, login, { shellIssuerRaw = null } = {}) {
   return atomic(db, () => {
     const row = getUserByLogin(db, login);
@@ -218,10 +252,11 @@ export function disableUser(db, actor, login, { shellIssuerRaw = null } = {}) {
     if (row.isOwner && enabledOwnerCount(db) === 1) {
       refuse(`${login} is the last enabled owner — grant another owner first (npm run users -- owner <login>)`);
     }
-    const modes = signInModes(db, shellIssuerRaw);
+    const mode = serverSignInMode(db, { shellIssuerRaw });
+    const modes = signInModes(mode);
     const left = modes.reduce((n, m) => n + signInOwnerCount(db, m), 0);
     if (modes.some((m) => signsInUnder(row, m)) && left === 1) {
-      refuse(`${login} is the last owner who can sign in ${modes.map(modeText).join(' or ')} — grant another owner first (npm run users -- owner <login>)`);
+      refuse(`${login} is the last owner who can sign in ${modes.map(modeText).join(' or ')} (${mode.why}) — grant another owner first (npm run users -- owner <login>)`);
     }
     return setDisabled(db, actor, row.id, true);
   });

@@ -316,6 +316,12 @@ server opens it at every start.
 - **Stand-alone sign-in stays armed once armed.** The first local user
   arms it; removing users never reopens a server. Only
   `OBSERVOGRAM_AUTH=off` does.
+- **`npm run users` follows the server's sign-in mode**: the one this
+  shell's `OBSERVOGRAM_OIDC_ISSUER` names, else the one the server's last
+  start recorded. After an OIDC start, a local user added from a plain shell
+  (a `docker exec`, a `sudo` shell) is not made owner, and `users -- remove`
+  keeps the last owner who signs in through that issuer; once the server
+  has started without OIDC, local owners count instead.
 - **OIDC users** are recorded as `<issuerKey>#<sub>`. Name the first owner
   with `OBSERVOGRAM_BOOTSTRAP_ADMIN` (the `<issuer>#<sub>` form, or an email
   that counts only when the ID token says `email_verified: true`) or with

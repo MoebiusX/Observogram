@@ -14,7 +14,8 @@
  *   npm run users -- owner <login|sub|issuer#sub>
  *
  * The first local user becomes the owner and admin of the default org (not
- * when this shell sets OBSERVOGRAM_OIDC_ISSUER: it is created without owner), and
+ * when the server runs OIDC — this shell sets OBSERVOGRAM_OIDC_ISSUER, or the
+ * server's last start recorded it: it is created without owner), and
  * arms stand-alone sign-in on a running server (no restart needed); once
  * armed it stays armed. `remove` disables (users are never deleted: the
  * audit references them); `enable` undoes it, except for a row still holding
@@ -121,14 +122,19 @@ async function main() {
     if (r.ownerWithheld) console.log(`${r.user.login} is created without owner: ${r.ownerWithheld}`);
     // Under OIDC anonymous reads already answer 401 and local users cannot
     // sign in: arming changes nothing a user of this posture would see.
-    const recorded = getMeta(db, 'oidc_issuer');
-    if (r.armed && !shellIssuerRaw() && !recorded) {
-      console.log('stand-alone sign-in is armed; sign in at /auth/login (no restart needed)');
-      // The server already ran without identity: its anonymous reads were open.
-      if (getMeta(db, 'import_done')) console.log('note: anonymous reads now answer 401 (identity is armed and stays armed)');
+    const { mode } = r;
+    const off = getMeta(db, 'identity_mode') === 'off' && mode.kind === 'local';
+    if (r.armed && (mode.kind === 'local' || (mode.kind === 'unknown' && !mode.issuerKey))) {
+      if (off) {
+        console.log(`stand-alone sign-in is armed; ${mode.why}: local users sign in once it runs without OBSERVOGRAM_AUTH=off`);
+      } else {
+        console.log('stand-alone sign-in is armed; sign in at /auth/login (no restart needed)');
+        // The server already ran without identity: its anonymous reads were open.
+        if (getMeta(db, 'import_done')) console.log('note: anonymous reads now answer 401 (identity is armed and stays armed)');
+      }
     }
-    if (shellIssuerRaw()) console.log('note: local users cannot sign in while OIDC is configured');
-    else if (recorded) console.log(`note: this store records OIDC issuer ${recorded}: local users sign in only while the server runs without OBSERVOGRAM_OIDC_ISSUER`);
+    if (mode.kind === 'oidc') console.log(`note: ${mode.why}: local users cannot sign in while the server runs with OIDC`);
+    else if (mode.kind === 'unknown' && mode.issuerKey) console.log(`note: ${mode.why}: local users sign in only while the server runs without OBSERVOGRAM_OIDC_ISSUER`);
     noteShellInit(db);
     return;
   }

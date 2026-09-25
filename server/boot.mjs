@@ -19,7 +19,8 @@
 //                                  database
 //   step 4  the seed decision      seed admin / rescue a still-seeded admin /
 //                                  nothing, checked first; the issuer record;
-//                                  the every-boot warnings
+//                                  the sign-in mode record; the every-boot
+//                                  warnings
 //   step 5  importPacksOnce()      slice 4's hook
 //
 // The seed decision (today's maybeSeedDefaultAdmin, split): seedDecision()
@@ -477,6 +478,26 @@ export function recordIssuer(db, ctx) {
   return false;
 }
 
+// The sign-in mode this start runs, for the CLIs: they cannot see the
+// server's env, and a shell's may differ (a docker exec, a sudo shell).
+// 'oidc:<issuerKey>' whenever the issuer variable is set (the keys follow
+// it even with OBSERVOGRAM_AUTH=off — A-51); else 'off' (OBSERVOGRAM_AUTH=off),
+// 'local' (identity armed), 'token' (a bearer only) or 'open' (neither).
+export function identityModeOf(db, ctx) {
+  if (ctx.issuerKey) return `oidc:${ctx.issuerKey}`;
+  if (ctx.authOff) return 'off';
+  if (isIdentityArmed(db)) return 'local';
+  return ctx.token ? 'token' : 'open';
+}
+
+// Recorded at every start, written (meta.set) only when it changes.
+export function recordIdentityMode(db, ctx) {
+  const mode = identityModeOf(db, ctx);
+  if (getMeta(db, 'identity_mode') === mode) return false;
+  setMeta(db, SYSTEM, 'identity_mode', mode);
+  return true;
+}
+
 // Only in the identity postures (A-49).
 export function warnNoOwner(db, ctx, warn) {
   const localIdentity = !ctx.authOff && !ctx.oidc && isIdentityArmed(db);
@@ -609,6 +630,7 @@ export async function bootStore({ host, log = () => {}, warn = () => {} } = {}) 
   if (checked.insecure) process.stderr.write(`${INSECURE_WARNING(ctx.host)}\n`);
   applySeedDecision(db, decision, { log, warn });
   recordIssuer(db, ctx);
+  recordIdentityMode(db, ctx);
   warnNoOwner(db, ctx, warn);
   warnLeftBehind(db, ctx, warn);
   warnIgnoredJoinRole(db, ctx, warn, { imported: report !== null });

@@ -184,8 +184,8 @@ routine and another ad-hoc loader. The store removes that cost for
 
 ```text
 schema_meta     key PK, value      -- store_id, default_org, identity_armed, oidc_issuer,
-                                   -- oidc_join_role, import_done, import_report, users_file,
-                                   -- legacy_hashes, replace_requested, packs_imported
+                                   -- identity_mode, oidc_join_role, import_done, import_report,
+                                   -- users_file, legacy_hashes, replace_requested, packs_imported
 users           id PK, kind (local|oidc), login UNIQUE NOT NULL,   -- username, or <issuerKey>#<sub>
                 issuer NULL, sub NULL, email, email_verified,
                 name, password JSON NULL, must_change, seeded_default,
@@ -498,6 +498,12 @@ otherwise read an empty store:
      OIDC boot, or a switch from stand-alone), record today's issuer key,
      after every other check has passed. A mismatch was already refused at
      step 2. With OIDC unset, keep the record.
+   - **`identity_mode`.** Record the sign-in mode this start runs, for
+     the CLIs, which cannot see the server's env: `oidc:<issuerKey>` when
+     the issuer variable is set (even with `OBSERVOGRAM_AUTH=off`, since
+     the keys follow it), else `off` (`OBSERVOGRAM_AUTH=off`), `local`
+     (identity armed), `token` (a bearer only) or `open`. It is written
+     (`meta.set`) only when it changes.
    - Zero owners in the current identity mode logs a warning naming the
      way in. The same banner shows in Settings.
 5. **From slice 4: the one-shot pack import**, while
@@ -662,13 +668,14 @@ import the database is authoritative, and the legacy files are only hashed
   rekey-issuer` offers two ways through:
   - `--to <issuer>`, for the same IdP at a new URL (a host move, or
     Keycloak 17+ dropping `/auth`), where the subs are unchanged. In one
-    `tx()` it rewrites `oidc_issuer` and the `<issuerKey>#` prefix of every
-    kind `oidc` login, refuses if a rewritten login already exists, and
-    writes one `issuer.rekey` row mapping old to new. Earlier audit rows
-    and `deploys.jsonl` keep the old logins, since both are append-only.
+    `tx()` it rewrites `oidc_issuer`, an `oidc:` `identity_mode` and the
+    `<issuerKey>#` prefix of every kind `oidc` login, refuses if a
+    rewritten login already exists, and writes one `issuer.rekey` row
+    mapping old to new. Earlier audit rows and `deploys.jsonl` keep the old
+    logins, since both are append-only.
   - `--clear`, for a different IdP. It disables every kind `oidc` row and
-    clears the record. The next boot records the new key, and the
-    bootstrap names an owner.
+    clears the record (and an `oidc:` `identity_mode`). The next boot
+    records the new key, and the bootstrap names an owner.
 - **Just-in-time users** are created at the callback, or on first sight of
   a pre-upgrade cookie, as kind `oidc`, with `email` and `email_verified`
   recorded.
@@ -708,15 +715,25 @@ import the database is authoritative, and the legacy files are only hashed
   - The first local user created while no owner exists becomes owner plus
     `admin` of the default org, whatever `--role` says, as the seed would
     have. The CLI prints this. It is safe because Settings cannot create a
-    user without an owner, so only shell access triggers it. Not from a
-    shell that sets `OBSERVOGRAM_OIDC_ISSUER`: a local user cannot sign in
-    there, so the user is created without owner and the CLI prints why.
-  - `users -- remove` also keeps the last owner who can sign in, read
-    from the shell the way a login is: with `OBSERVOGRAM_OIDC_ISSUER` set,
-    the OIDC owners under that issuer; without it, the local owners with a
-    password plus the OIDC owners under the issuer the store records (the
-    server may run either way), so a store that dropped OIDC can let its
-    departed OIDC owner go once a local owner exists.
+    user without an owner, so only shell access triggers it. Only while
+    the server's sign-in mode is local: a local user cannot sign in under
+    OIDC, so there the user is created without owner and the CLI prints
+    why, naming the mode it used.
+  - The server's sign-in mode, as the CLI reads it: the issuer of a shell
+    that sets `OBSERVOGRAM_OIDC_ISSUER`; else the `identity_mode` the
+    server's last start recorded (`oidc:<key>` is OIDC, every other value
+    local); else — a store no start of this build has booted — local while
+    the store records no `oidc_issuer`, and unknown while it does (no A-16
+    owner then). The shell's env alone cannot tell: a `docker exec` or
+    `sudo` shell rarely carries the unit's OIDC variables.
+  - `users -- remove` also keeps the last owner who can sign in under
+    that mode: the OIDC owners under its issuer, or the local owners with
+    a password; when unknown, either kind. So a store that dropped OIDC
+    lets its departed OIDC owner go once the server has started without
+    OIDC and a local owner exists, and a plain shell on an OIDC server
+    never lets the last OIDC owner go (which would bring
+    `OBSERVOGRAM_BOOTSTRAP_ADMIN` back into effect for another IdP
+    account).
   - Otherwise the user joins the default org at `--role` while the
     deployment has one org; with more orgs, `--org` is required.
   - `--role` on `users -- add` and `orgs -- add-member` accepts only
