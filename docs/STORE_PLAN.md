@@ -865,7 +865,10 @@ boot, with the unit's env (§4 step 3).
   with no org at the base removes an empty directory among the flat
   entries and logs one `removed empty leftovers of a pre-store build`
   line. An entry that holds anything stays and is warned about as left
-  behind. `:memory:` removes nothing.
+  behind. The removal is cosmetic: an empty directory it cannot remove (a
+  mount point, no permission, a read-only file system) is one warn line
+  naming the path and the error code, and the start goes on. `:memory:`
+  removes nothing.
 - In the same `tx()` it bumps every changed or disabled user's epoch
   (which also kills cookies minted during the downgrade window), rewrites
   `legacy_hashes`, clears `replace_requested` and writes one audit row.

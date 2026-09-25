@@ -616,7 +616,9 @@ export function warnNoOwner(db, ctx, warn) {
 // With no org at the base, every pre-store restart (a rollback round trip)
 // recreates an empty <base>/packs that nothing reads: removed here — an
 // empty directory only, never anything with data, never under :memory:.
-export function removeEmptyLeftovers(db, ctx, log) {
+// Cosmetic: a directory it cannot remove (a mount point, no permission, a
+// read-only file system) is one warn line, and the start goes on.
+export function removeEmptyLeftovers(db, ctx, log, warn) {
   if (ctx.memory || listOrgs(db).some((o) => o.root === '.')) return;
   const removed = [];
   for (const entry of MIGRATABLE) {
@@ -626,7 +628,8 @@ export function removeEmptyLeftovers(db, ctx, log) {
       rmdirSync(path);
       removed.push(path);
     } catch (e) {
-      if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(e?.code)) throw e;
+      if (['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(e?.code)) continue;
+      warn(`[store] could not remove the empty leftover ${path} of a pre-store build (${e?.code ?? e?.message}): nothing reads it; the start goes on`);
     }
   }
   if (removed.length) log(`[store] removed empty leftovers of a pre-store build: ${removed.join(', ')}`);
@@ -784,7 +787,7 @@ export async function bootStore({ host, log = () => {}, warn = () => {} } = {}) 
   applySeedDecision(db, decision, { log, warn });
   recordIssuer(db, ctx);
   warnNoOwner(db, ctx, warn);
-  removeEmptyLeftovers(db, ctx, log);
+  removeEmptyLeftovers(db, ctx, log, warn);
   warnLeftBehind(db, ctx, warn);
   warnIgnoredJoinRole(db, ctx, warn, { imported: report !== null });
 

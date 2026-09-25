@@ -939,7 +939,8 @@ may not have), prints a `[store] replaced from …` report and writes one
   (journey `file:` paths rewritten, empty leftovers of the pre-store build
   removed, the CronJob line printed as for the export; a store start with
   no replace also removes an empty flat directory a pre-store restart left
-  beside `orgs/default/`, and logs it). Its memberships follow the file too: the `default`
+  beside `orgs/default/`, and logs it; one it cannot remove is a warn
+  line, never a failed start). Its memberships follow the file too: the `default`
   entry a pre-store migration writes has no members, so the replace
   removes the default org's memberships (the report lists them) and only
   owners reach it; the others get `no org membership — ask an admin to add

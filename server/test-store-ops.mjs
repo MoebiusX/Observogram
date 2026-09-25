@@ -39,7 +39,7 @@ const { createHmac } = await import('node:crypto');
 const { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
 const { dirname, join } = await import('node:path');
-const { fileURLToPath } = await import('node:url');
+const { fileURLToPath, pathToFileURL } = await import('node:url');
 
 const { closeStore, openStore, tx } = await import('./store/db.mjs');
 const identity = await import('./store/identity.mjs');
@@ -868,6 +868,51 @@ test('Round trip: export → a pre-store restart (its empty <base>/packs) → a 
 
   // A second start has nothing to remove: no line.
   assert.ok(!(await start(base)).logs.some((l) => /removed empty leftovers/.test(l)));
+});
+
+// The real server's start in a child whose fs.rmdirSync fails with EBUSY
+// on <base>/packs, as a mount point there does (node:fs named imports are
+// synced to the stub): { status, stdout, stderr }.
+const INDEX_URL = pathToFileURL(join(HERE, 'index.mjs')).href;
+const BUSY_RMDIR_START = `
+const fs = (await import('node:fs')).default;
+const { syncBuiltinESMExports } = await import('node:module');
+const { join } = await import('node:path');
+const busy = join(process.env.OBSERVOGRAM_WORKSPACE, 'packs');
+const real = fs.rmdirSync;
+fs.rmdirSync = (p, ...rest) => {
+  if (String(p) === busy) throw Object.assign(new Error(\`EBUSY: resource busy or locked, rmdir '\${p}'\`), { code: 'EBUSY' });
+  return real(p, ...rest);
+};
+syncBuiltinESMExports();
+const { start } = await import(${JSON.stringify(INDEX_URL)});
+const srv = await start({ port: 0, host: '127.0.0.1' });
+process.stdout.write('LISTENING ' + srv.address().port + '\\n');
+srv.close();
+process.exit(0);
+`;
+
+test('Round trip: an empty leftover the start cannot remove (rmdir fails with EBUSY) is one warn line naming it and the code; the server still listens', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice', 'bob']);
+  pack(base, 'p1');
+  await start(base);
+  await change(base, (db) => admin.createOrgFromAdmin(db, 'cli', { id: 'acme', name: 'Acme', admin: 'bob', base }));
+  assert.deepEqual((await exportIt(base)).move, ['packs']);
+  pre.boot(base);
+  assert.equal(existsSync(join(base, 'packs')), true);
+
+  const env = { ...process.env };
+  for (const k of STRIP) { delete env[`OBSERVOGRAM_${k}`]; delete env[`TOMOGRAPH_${k}`]; }
+  env.OBSERVOGRAM_WORKSPACE = base;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', BUSY_RMDIR_START], { env, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^LISTENING \d+$/m, r.stdout + r.stderr);
+  const lines = r.stderr.split('\n').filter((l) => l.includes(join(base, 'packs')));
+  assert.deepEqual(lines, [`[store] could not remove the empty leftover ${join(base, 'packs')} of a pre-store build (EBUSY): nothing reads it; the start goes on`], r.stderr);
+  assert.equal(existsSync(join(base, 'packs')), true, 'the directory it could not remove is still there');
+  assert.ok(!/removed empty leftovers/.test(r.stdout), r.stdout);
+  assert.deepEqual(pre.packIds(base, 'default'), ['p1']);
 });
 
 test('Stale import: `orgs create acme` on a pre-store build with no restart after it — the replace moves the flat workspace itself (migrateFlatWorkspace): the entries under orgs/default, the root, the journey file rewritten; the start after passes', async () => {
