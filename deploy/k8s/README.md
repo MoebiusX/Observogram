@@ -149,10 +149,19 @@ the studio at 0, from a one-off pod of the **store** image (the old one
 has no `store export`) that mounts both subPaths of the `store` claim at
 the studio's two paths:
 
+The pre-store release is the git tag `v0.4.0`, and the store build is
+still `0.4.0` in `package.json` and `kustomization.yaml`: a local
+`observogram:0.4.0` built from this checkout is the store build, and it
+replaced any older image of that name. Build the old one under a tag of its
+own (`git archive v0.4.0 | docker build -t observogram:0.4.0-prestore -`,
+then load or push it as in step 2 at the top), and take the store image
+from the Deployment rather than retyping it:
+
 ```bash
 NS=observability
-STORE_IMAGE=observogram:0.4.0            # the store build the studio runs now
-OLD_IMAGE=<registry>/observogram:<pre-store tag>
+STORE_IMAGE=$(kubectl -n $NS get deployment/observabilitypack-studio \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="studio")].image}')   # the store build the studio runs now
+OLD_IMAGE=<registry>/observogram:0.4.0-prestore   # built from the v0.4.0 tag, never observogram:0.4.0
 
 # 1. A live backup, then stop the studio and wait for its pod to be gone.
 kubectl -n $NS exec deploy/observabilitypack-studio -- \

@@ -294,6 +294,23 @@ function smp(base, patch, key) {
   }
 }
 
+// --- the README's rollback names two distinct images ---
+// The pre-store release is the git tag v0.4.0 and this build is still 0.4.0
+// in package.json, so an image tagged with the package version may be either
+// build: the store image comes from the Deployment, the old one has a tag of
+// its own, or `kubectl set image … studio=$OLD_IMAGE` changes nothing.
+{
+  const readme = readFileSync(join(K8S, 'README.md'), 'utf8');
+  const version = JSON.parse(readFileSync(new URL('package.json', ROOT), 'utf8')).version;
+  const store = readme.match(/^STORE_IMAGE=(.*)$/m)?.[1] ?? '';
+  const old = (readme.match(/^OLD_IMAGE=(\S*)/m)?.[1] ?? '').trim();
+  const tagOf = ref => ref.slice(ref.lastIndexOf('/') + 1).split(':')[1] ?? '';
+  assert(/^\$\(kubectl .*get deployment\/observabilitypack-studio/.test(store),
+         'README rollback: STORE_IMAGE is read from the studio Deployment, not retyped', store);
+  assert(old !== '' && tagOf(old) !== version && tagOf(old) !== `v${version}` && !/[<>]/.test(tagOf(old)),
+         `README rollback: OLD_IMAGE has a tag of its own, never the package version ${version} the store build also carries`, old);
+}
+
 // --- secrets discipline across every manifest: no literal value on a secret-shaped env var ---
 function envs(node, out = []) {
   if (Array.isArray(node)) { for (const x of node) envs(x, out); return out; }
