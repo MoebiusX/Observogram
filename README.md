@@ -893,10 +893,13 @@ What the export writes:
   run `packc store import --replace` and start the server once so the
   store takes the edits in, then export again. `packc store export <dir>` to another, empty directory only
   reads the database (safe while the server runs) and never overwrites a
-  `users.json` / `orgs.json` there. Naming a workspace (a directory with
-  a `.store-imported` marker or the database) other than
-  `OBSERVOGRAM_WORKSPACE` is refused: set `OBSERVOGRAM_WORKSPACE` to it
-  to export in place.
+  `users.json` / `orgs.json` there. A directory inside the workspace, or
+  one holding it, is refused naming the in-place export; the database's
+  own directory (`OBSERVOGRAM_DB` outside the workspace, as on k8s) and a
+  backup directory beside it are plain directory exports. Naming a
+  workspace with a `.store-imported` marker other than
+  `OBSERVOGRAM_WORKSPACE` is refused: if it is this store's workspace, set
+  `OBSERVOGRAM_WORKSPACE` to it to export in place.
 
 **Re-upgrade** after a rollback: stop the pre-store build and start the
 store build again.

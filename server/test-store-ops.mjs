@@ -385,15 +385,46 @@ test('export: a workspace named while the shell\'s workspace is elsewhere is ref
   const elsewhere = join(tempDir('ops-cwd'), '.observogram');   // OBSERVOGRAM_WORKSPACE unset, another cwd
   const named = (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(`OBSERVOGRAM_WORKSPACE=${base}`);
   await assert.rejects(exportStore(base, { dbPath: dbOf(base), base: elsewhere, out: silent }), named);
-  // The database alone (a store the marker was lost from) tells it too.
-  rmSync(legacy.markerPath(base));
-  await assert.rejects(exportStore(base, { dbPath: dbOf(base), base: elsewhere, out: silent }), named);
   writeFileSync(legacy.markerPath(base), markerBefore);
   assert.equal(existsSync(join(base, 'orgs.json')), false);
   assert.equal(existsSync(join(base, 'users.json')), false);
   assert.equal(existsSync(elsewhere), false);
   assert.ok(existsSync(join(base, 'packs', 'p1.pack.yaml')), 'nothing moved');
   await read(base, (db) => assert.equal(getOrg(db, 'default').root, '.'));
+});
+
+test('export: the database\'s own directory is not a workspace — with the database outside the workspace (the k8s layout) it and a backup directory beside it export as plain directories; a directory inside or around the workspace is refused naming the in-place export', async () => {
+  const root = tempDir();
+  const base = join(root, 'ws');
+  const dbDir = join(root, 'db');
+  mkdirSync(dbDir);
+  const dbPath = join(dbDir, 'observogram.db');
+  usersJson(base, ['alice']);
+  pack(base, 'p1');
+  await start(base, { OBSERVOGRAM_DB: dbPath });
+  const hashes = async () => { const db = await openStore({ path: dbPath }); try { return meta.getMeta(db, 'legacy_hashes'); } finally { closeStore(dbPath); } };
+  const hashesBefore = await hashes();
+  // The directory holding the database: a plain directory export, the store and the workspace untouched.
+  const r = await exportStore(dbDir, { dbPath, base, out: silent });
+  assert.equal(r.inPlace, false);
+  assert.ok(existsSync(join(dbDir, 'users.json')));
+  assert.equal(existsSync(legacy.markerPath(dbDir)), false, 'no marker written next to the database');
+  const backups = join(dbDir, 'backups');
+  assert.equal((await exportStore(backups, { dbPath, base, out: silent })).inPlace, false);
+  assert.ok(existsSync(join(backups, 'users.json')));
+  const hashesAfter = await hashes();
+  assert.equal(hashesAfter, hashesBefore, 'legacy_hashes untouched');
+  // The real case: a directory inside the workspace, or one holding it. The way out is the in-place export,
+  // never a workspace setting that writes legacy files elsewhere.
+  const refusedInPlace = (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && e.message.includes(`packc store export ${base}`)
+    && !e.message.includes('OBSERVOGRAM_WORKSPACE=');
+  await assert.rejects(exportStore(join(base, 'rollback'), { dbPath, base, out: silent }), refusedInPlace);
+  await assert.rejects(exportStore(root, { dbPath, base, out: silent }), refusedInPlace);
+  assert.equal(existsSync(join(base, 'rollback')), false);
+  assert.equal(existsSync(join(root, 'users.json')), false);
+  // The workspace itself still exports in place.
+  assert.equal((await exportStore(base, { dbPath, base, out: silent })).inPlace, true);
+  await start(base, { OBSERVOGRAM_DB: dbPath });   // starts on what the export wrote, no refusal
 });
 
 test('export: users.json holds password hashes — a new one is created 0600, an existing one keeps its mode, no .tmp left behind', { skip: process.platform === 'win32' && 'POSIX modes' }, async () => {
