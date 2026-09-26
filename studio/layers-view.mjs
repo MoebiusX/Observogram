@@ -62,7 +62,9 @@ export function renderDiscoverDashboard(view) {
     if (cl.applies && !cl.pass) {
       issues.push({
         sev: cl.severity === 'MUST' ? 'HIGH' : 'MEDIUM',
-        type: cl.severity === 'MUST' ? 'missing' : 'advisory',
+        // A failing clause is a check on the pack, not a detected missing
+        // artefact (many fail on a property of one that is present).
+        type: cl.severity === 'MUST' ? 'required' : 'advisory',
         ref: cl.id,
         detail: cl.description,
       });
@@ -250,7 +252,6 @@ export function renderDiscoverDashboard(view) {
           <ul class="disco-legend">
             <li><span class="disco-legend-dot" data-src="declared"></span><span class="disco-legend-name">Declared</span><span class="disco-legend-desc">present in manifest</span></li>
             <li><span class="disco-legend-dot" data-src="verified"></span><span class="disco-legend-name">Verified</span><span class="disco-legend-desc">MCP attested</span></li>
-            <li><span class="disco-legend-dot" data-src="missing"></span><span class="disco-legend-name">Missing</span><span class="disco-legend-desc">required, not present</span></li>
           </ul>
         </section>
       </aside>
@@ -324,9 +325,9 @@ const ROW_CAP = 60;
 const shownAll = new Set();
 
 const COUNT_DEF = 'Artefacts in a layer: every item the pack projects onto it, including detail-level evidence (metric inventory, scrape jobs, dashboard panels, recording rules). '
-  + 'The evidence split (live evidence found · declared only · template value · missing) divides the same artefacts, so it adds up to the layer total. '
+  + 'The evidence split (live evidence found · declared only · template value) divides the same artefacts, so it adds up to the layer total. '
   + 'Needs attention counts the artefacts a person must act on: a template value to complete or a reference that does not resolve; each counts once. '
-  + 'Required checks are clauses of the tier rubric, not artefacts: a required artefact the pack lacks shows there. Filters never change these counts.';
+  + 'Required checks are clauses of the tier rubric, not artefacts. Discover lists only what the pack has; when a check fails because something is absent, the check says so. Filters never change these counts.';
 
 // What "no artefacts" means on each layer: what the adapter looked for.
 const LAYER_CHECKED = {
@@ -382,12 +383,17 @@ function discoverModel() {
     });
     // L2X is optional in the spec: no row when the pack has nothing there.
     if (def.id === 'L2X' && !entries.length) continue;
-    const counts = { total: entries.length, live: 0, declared: 0, needsInput: 0, missing: 0, attention: 0, broken: 0 };
+    // The adapter's sources are Declared, Verified and Scaffold, so the split
+    // is live · template value · declared only. artefactStatus reads any other
+    // source (an unknown word included) as declared, so it counts as declared
+    // only; the one source left out of the split, counted in the total alone,
+    // is 'Missing', which the adapter never emits. What the pack lacks is a
+    // required check not met (rubricFails below), never a detected artefact.
+    const counts = { total: entries.length, live: 0, declared: 0, needsInput: 0, attention: 0, broken: 0 };
     for (const e of entries) {
       if (e.status.live) counts.live++;
       else if (e.status.completion === 'needsInput') counts.needsInput++;
-      else if (e.status.evidence === 'missing') counts.missing++;
-      else counts.declared++;
+      else if (e.status.evidence === 'declared') counts.declared++;
       if (e.status.attention) counts.attention++;
       if (e.status.broken) counts.broken++;
     }
@@ -396,7 +402,7 @@ function discoverModel() {
   const sum = (k) => layers.reduce((n, L) => n + L.counts[k], 0);
   const totals = {
     total: sum('total'), live: sum('live'), declared: sum('declared'), needsInput: sum('needsInput'),
-    missing: sum('missing'), attention: sum('attention'), broken: sum('broken'),
+    attention: sum('attention'), broken: sum('broken'),
   };
   const taskCounts = {
     attention: totals.attention, missingEvidence: totals.total - totals.live,
@@ -516,9 +522,6 @@ function summaryHtml(model) {
     if (t.broken) c.push({ n: t.broken, tone: 'fail', actionId: 'dv-show-broken',
       title: `${plural(t.broken, 'artefact')} with unresolved references`,
       why: 'Each names something this pack does not define, so the chain between them is broken.' });
-    if (t.missing) c.push({ n: t.missing, tone: 'fail', actionId: 'dv-show-missing',
-      title: `${plural(t.missing, 'required artefact')} missing`,
-      why: 'Required, and neither declared nor observed.' });
     causes = c.sort((x, y) => y.n - x.n).slice(0, 3).map(x => ({ ...x, actionLabel: 'Show them' }));
   } else {
     decision = `None of the ${plural(t.total, 'artefact')} across ${plural(withArtefacts, 'layer')} needs attention.`;
@@ -535,7 +538,6 @@ function summaryHtml(model) {
       title: 'Declared in the pack or repository; no live evidence was checked or found.' },
     { label: 'Template values to complete', value: String(t.needsInput), tone: t.needsInput ? 'warn' : 'neutral',
       title: 'Generated from a template so the requirement is represented; a person must supply the real value.' },
-    ...(t.missing ? [{ label: 'Missing', value: String(t.missing), tone: 'fail', title: 'Required, and neither declared nor observed.' }] : []),
   ] : [];
 
   return decisionHeaderHtml({
@@ -634,7 +636,6 @@ function layerItemHtml(L, task, open) {
     c.live ? statusChipHtml('evidence', 'live', { label: `${c.live} live evidence` }) : '',
     c.declared ? statusChipHtml('evidence', 'declared', { label: `${c.declared} declared only` }) : '',
     c.needsInput ? statusChipHtml('completion', 'needsInput', { label: `${c.needsInput} template value${s(c.needsInput)}` }) : '',
-    c.missing ? statusChipHtml('evidence', 'missing', { label: `${c.missing} missing` }) : '',
   ].filter(Boolean).join(' ');
   const attention = c.attention
     ? `<span class="dv-attn" title="${escapeHtml(TASK_BY_ID.attention.tip)}">${c.attention} need${c.attention === 1 ? 's' : ''} attention</span>`
@@ -818,7 +819,7 @@ function layerEmptyHtml(L, task, { byTask, matched, folded, buckets }) {
           tone: 'warn',
           title: `No artefact in ${where} needs attention, but ${plural(L.rubricFails.length, 'required check')} ${L.rubricFails.length === 1 ? 'is' : 'are'} not met`,
           checked: `${checked}: template values and references`,
-          body: 'A required artefact the pack lacks is a rubric check, not an artefact, so this list cannot show it. The assessment explains what is missing.',
+          body: 'Required checks are clauses of the tier rubric, not artefacts, so this list cannot show them. The assessment explains each one and its fix.',
           actions: [{ action: 'dv-assess', label: 'Open the assessment' }, all],
         });
       }
@@ -865,7 +866,6 @@ function discoverHandlers(ctx) {
     'dv-review':        () => focusTask(ctx, 'attention', L => L.counts.attention > 0),
     'dv-show-scaffold': () => focusTask(ctx, 'scaffold',  L => L.counts.needsInput > 0),
     'dv-show-broken':   () => focusTask(ctx, 'attention', L => L.counts.broken > 0),
-    'dv-show-missing':  () => focusTask(ctx, 'attention', L => L.counts.missing > 0),
     'dv-assess': () => goToAssessment(),
   };
 }

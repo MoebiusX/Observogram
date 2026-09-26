@@ -32,24 +32,13 @@ import {
 } from './ux-kit.mjs';
 import {
   deployReviewModel, hiddenSelectionNote, recommendRemediation, remediationDeployPhrase,
-  remediationDeployActionLabel, remediationSideOnlyMeasure,
+  remediationDeployActionLabel, remediationDeployActionTitle, remediationSideOnlyMeasure,
 } from './verify-deploy.mjs';
 
 // ---------- COMPILE view ----------
 //
 // Pack -> real, ingestible platform artefacts. The pack is the contract;
 // this is the program. Spec §9's reference-implementation table made real.
-
-async function loadCompileTargets() {
-  if (state.compileTargets) return state.compileTargets;
-  try {
-    const r = await api('/api/compile/targets');
-    state.compileTargets = r.targets || [];
-  } catch (_) {
-    state.compileTargets = [];
-  }
-  return state.compileTargets;
-}
 
 export async function loadDeployMatrix() {
   if (state.deployMatrix) return state.deployMatrix;
@@ -60,9 +49,6 @@ export async function loadDeployMatrix() {
 
 function isDeployable(target) {
   return !!state.deployMatrix?.targets?.[target]?.deployable;
-}
-function targetScopable(target) {
-  return !!state.deployMatrix?.targets?.[target]?.scopable;
 }
 
 async function loadCompileCatalog() {
@@ -120,10 +106,10 @@ async function loadCompileCatalog() {
   return focusedCompileCatalog();
 }
 
-// Map (group, flavor) → legacy deploy target id used by isDeployable() and the
-// deploy panel. Until per-artifact deploy lands, deploys are still
-// per-target (whole-file) so we resolve the active selection to the
-// closest legacy target name.
+// Map (group, flavor) → legacy deploy target id used by isDeployable() and
+// the deploy matrix's per-target reason. Until per-artifact deploy lands,
+// deploys are still per-target (whole-file) so we resolve the active
+// selection to the closest legacy target name.
 function legacyDeployTargetFor(group) {
   if (group === 'rules')        return 'prometheus-rules';
   if (group === 'dashboards')   return 'grafana-dashboard';
@@ -446,10 +432,13 @@ function strategyCount(opId, m) {
   };
 }
 
-// "Review and deploy N selected (R deploy rows) to live": artefacts, as in
-// the counts beside it, with deploy rows only in brackets.
+// "Review and deploy N artefacts to live": artefacts, as in the counts beside
+// it; the deploy rows behind them go in the tooltip.
 function deployActionLabel(sel) {
-  return remediationDeployActionLabel({ selected: sel.identities.size, rows: sel.rows });
+  return remediationDeployActionLabel({ selected: sel.identities.size });
+}
+function deployActionTitle(sel) {
+  return remediationDeployActionTitle({ selected: sel.identities.size, rows: sel.rows });
 }
 
 // The active strategy's next step — the ONE primary action of the screen.
@@ -457,7 +446,7 @@ function strategyNextAction(opId, m) {
   const s = m.sets[opId] || m.resolved;
   if (!s?.total) return null;
   const deploy = m.selected.rows
-    ? { label: deployActionLabel(m.selected), action: 'rm-deploy' }
+    ? { label: deployActionLabel(m.selected), title: deployActionTitle(m.selected), action: 'rm-deploy' }
     : { label: 'See what needs a manual fix', action: 'rm-show-changes' };
   if (opId === 'retrofeed') return { label: 'Generate repository patch', action: 'rm-patch' };
   if (opId === 'deploy') return deploy;
@@ -544,7 +533,7 @@ function remediationHeaderHtml(m) {
     }
     // Bidirectional carries both halves: the other one stays one click away.
     if (op === 'all' && primary?.action === 'rm-patch' && m.selected.rows) {
-      secondary.push({ label: deployActionLabel(m.selected), action: 'rm-deploy' });
+      secondary.push({ label: deployActionLabel(m.selected), title: deployActionTitle(m.selected), action: 'rm-deploy' });
     }
   }
 
@@ -650,6 +639,30 @@ function goToDiagnose(sub) {
 
 // Disclosure open-state survives re-renders (a checkbox toggle re-renders).
 const remediateUi = { changesOpen: null, patchOpen: false, diffWait: null };
+
+// The last "Generate repository patch" outcome (runRetrofeed's rendered
+// result, or its failure) for the A/B pair and scope it was generated for.
+// A re-render — a ticked checkbox, a strategy switch — shows it again; a
+// different pair or scope drops it. `pending` keeps the button disabled
+// across re-renders while the request runs.
+const patchResult = { key: null, html: '', pending: false };
+
+function retrofeedPairKey() {
+  return JSON.stringify([
+    state.selectedPackId || '', state.selectedEnv || '',
+    state.compareBId || '', state.compareBEnv || '',
+    state.selectedService || '', activeDiffScopeMode(),
+  ]);
+}
+
+// The kept outcome for the current pair and scope, or null. Anything kept
+// for another pair or scope is dropped here unless its request still runs.
+function keptPatchResult() {
+  const key = retrofeedPairKey();
+  if (patchResult.key === key) return patchResult;
+  if (patchResult.key && !patchResult.pending) Object.assign(patchResult, { key: null, html: '' });
+  return null;
+}
 
 // The remediation plan — leads the Remediate view. Appends to root and
 // returns the [data-ux-action] handlers for the whole screen.
@@ -901,6 +914,7 @@ function renderRemediationPlan(root) {
   const n = selectedDeployment.rows;
   const offersPatch = resolved.retrofeed > 0;
   const offersDeploy = haveB && (resolved.deployable > 0 || (op === 'deploy' && resolved.total > 0));
+  const kept = offersPatch ? keptPatchResult() : null;
   const action = document.createElement('div');
   action.className = 'remediate-action ux-rm-actions';
   action.innerHTML = `
@@ -911,13 +925,13 @@ function renderRemediationPlan(root) {
       </div>` : ''}
     ${offersPatch ? `
       <div class="ux-rm-action">
-        <button type="button" class="ux-secondary-btn ux-rm-patch-btn" data-ux-action="rm-patch">Generate repository patch</button>
+        <button type="button" class="ux-secondary-btn ux-rm-patch-btn" data-ux-action="rm-patch"${kept?.pending ? ' disabled aria-busy="true"' : ''}>Generate repository patch</button>
         <span class="remediate-action-hint"><span class="ux-rm-effect is-repo">Changes the repository</span> Downloads an additions fragment and the updated pack to commit. Live systems are untouched.</span>
-        <div class="drift-retrofeed-result ux-rm-patch-result" hidden></div>
+        <div class="drift-retrofeed-result ux-rm-patch-result"${kept?.html ? '' : ' hidden'}>${kept?.html || ''}</div>
       </div>` : ''}
     ${offersDeploy ? `
       <div class="ux-rm-action">
-        <button type="button" class="remediate-deploy-btn" data-ux-action="rm-deploy" ${n === 0 ? 'disabled' : ''}>
+        <button type="button" class="remediate-deploy-btn" data-ux-action="rm-deploy" title="${escapeHtml(deployActionTitle(selectedDeployment))}" ${n === 0 ? 'disabled' : ''}>
           ${escapeHtml(deployActionLabel(selectedDeployment))} ↗
         </button>
         <span class="remediate-action-hint"><span class="ux-rm-effect is-live">Changes live systems</span> ${n === 0
@@ -936,15 +950,28 @@ function renderRemediationPlan(root) {
 
 // "Generate patch": the real retrofeed POST (compare-view's runRetrofeed)
 // renders what was adopted and the two downloads; the progress and the
-// outcome are announced once each.
+// outcome are announced once each. The outcome is kept for this pair and
+// scope (patchResult) so a re-render does not drop it.
 async function generateRepositoryPatch(root, btn) {
   const out = root.querySelector('.ux-rm-patch-result');
   if (!out || !btn) return;
+  const key = retrofeedPairKey();
+  Object.assign(patchResult, { key, html: '', pending: true });
   announce('Generating the repository patch…');
-  await runRetrofeed(btn, out);
-  out.hidden = false;
+  try {
+    await runRetrofeed(btn, out);
+  } finally {
+    if (patchResult.key === key) Object.assign(patchResult, { html: out.innerHTML, pending: false });
+  }
   const head = out.querySelector('.drift-retrofeed-head')?.textContent?.replace(/\s+/g, ' ').trim();
   announce(head || 'Repository patch ready.');
+  // A re-render while the request ran replaced `out` (and its button); draw
+  // the screen again so the kept outcome shows for the same pair and scope.
+  if (!out.isConnected) {
+    if (patchResult.key === key && retrofeedPairKey() === key) appHost.renderMainView();
+    return;
+  }
+  out.hidden = false;
   out.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
 }
 
@@ -1331,16 +1358,6 @@ function renderCompiler(root) {
   `;
   stage.appendChild(outStep);
 
-  // Inline deploy panel — kept for its ids; the deploy button opens the
-  // deploy review modal instead, so it stays hidden.
-  const deployPanel = document.createElement('div');
-  deployPanel.className = 'deploy-panel';
-  deployPanel.hidden = true;
-  if (isDeployable(state.compileTarget)) {
-    deployPanel.innerHTML = renderDeployPanelMarkup(state.compileTarget);
-  }
-  stage.appendChild(deployPanel);
-
   outStep.querySelector('#copy-compiled').onclick = async () => {
     try { await navigator.clipboard.writeText(c.text); toast('Copied to clipboard'); announce(`Copied ${c.filename} to the clipboard.`); }
     catch (e) { toast('Copy failed: ' + e.message, 'error'); }
@@ -1352,174 +1369,6 @@ function renderCompiler(root) {
   const deployBtn = outStep.querySelector('#deploy-compiled');
   if (deployBtn) {
     deployBtn.onclick = () => appHost.openDeployModal({ packId: focusedPackId(), presetIdentities: presetForCompileItem(activeItem) });
-  }
-
-  // Live re-derive the default tool name as the user changes product /
-  // version / scope. We DON'T overwrite a user-typed override — only when
-  // the input still matches the previous default do we refresh it.
-  function rewireDefaults() {
-    const toolInput = deployPanel.querySelector('#deploy-mcp-tool');
-    if (!toolInput) return;
-    const newDefault = computeDeployTool(state.compileTarget);
-    if (toolInput.value === toolInput.dataset.lastDefault || !toolInput.value) {
-      toolInput.value = newDefault;
-    }
-    toolInput.dataset.lastDefault = newDefault;
-  }
-  const prodSel = deployPanel.querySelector('#deploy-product');
-  if (prodSel) prodSel.addEventListener('change', () => { state.deployProduct = prodSel.value; rewireDefaults(); });
-  const verSel = deployPanel.querySelector('#deploy-version');
-  if (verSel) verSel.addEventListener('change', () => { state.deployVersion = verSel.value; rewireDefaults(); });
-  const scopeSel = deployPanel.querySelector('#deploy-scope');
-  if (scopeSel) scopeSel.addEventListener('change', () => { state.deployScope = scopeSel.value; rewireDefaults(); });
-
-  const goBtn2 = deployPanel.querySelector('#deploy-go-btn');
-  if (goBtn2) goBtn2.onclick = () => doDeploy(deployPanel);
-  const cancelBtn = deployPanel.querySelector('#deploy-cancel-btn');
-  if (cancelBtn) cancelBtn.onclick = () => { deployPanel.hidden = true; };
-}
-
-// Mirror the server's defaultDeployTool function. Kept in sync with
-// server/index.mjs::defaultDeployTool.
-function computeDeployTool(target) {
-  const product = state.deployProduct;
-  if (product === 'grafana') {
-    if (target === 'prometheus-rules') {
-      return 'grafana_create_alert_rule';
-    }
-    if (target === 'grafana-dashboard') return 'grafana_create_dashboard';
-  }
-  return `apply_${String(target || '').replace(/-/g, '_')}`;
-}
-
-function renderDeployPanelMarkup(target) {
-  const matrix = state.deployMatrix || { products: ['grafana'], versions: { grafana: ['12', '13'] }, scopes: ['both', 'recording', 'alerting'] };
-  const products = matrix.products.length ? matrix.products : ['grafana'];
-  const versions = matrix.versions[state.deployProduct] || matrix.versions[products[0]] || ['12', '13'];
-  const scopes = matrix.scopes || ['both', 'recording', 'alerting'];
-  const scopable = targetScopable(target);
-
-  const scopeLabels = {
-    both:      'both — recording + alerting rules',
-    recording: 'recording rules only',
-    alerting:  'alerting rules only',
-  };
-
-  return `
-    <div class="deploy-panel-head">
-      <div class="deploy-panel-title">Deploy via MCP write tool</div>
-      <div class="deploy-panel-sub">Target a specific product + version. The pack stays the source of truth — re-deploy any time by re-emitting from the pack.</div>
-    </div>
-    <div class="deploy-panel-body">
-      <div class="deploy-trio">
-        <label class="mcp-field deploy-field">
-          <span class="mcp-field-key">Target product</span>
-          <select id="deploy-product">
-            ${products.map(p => `<option value="${escapeHtml(p)}" ${p === state.deployProduct ? 'selected' : ''}>${escapeHtml(p)}</option>`).join('')}
-          </select>
-        </label>
-        <label class="mcp-field deploy-field">
-          <span class="mcp-field-key">Target version</span>
-          <select id="deploy-version">
-            ${versions.map(v => `<option value="${escapeHtml(v)}" ${v === state.deployVersion ? 'selected' : ''}>${escapeHtml(v)}</option>`).join('')}
-          </select>
-        </label>
-        ${scopable ? `
-          <label class="mcp-field deploy-field">
-            <span class="mcp-field-key">Rules scope</span>
-            <select id="deploy-scope">
-              ${scopes.map(s => `<option value="${escapeHtml(s)}" ${s === state.deployScope ? 'selected' : ''}>${escapeHtml(scopeLabels[s] || s)}</option>`).join('')}
-            </select>
-          </label>` : ''}
-      </div>
-      <label class="mcp-field">
-        <span class="mcp-field-key">MCP URL</span>
-        <input id="deploy-mcp-url" type="url" placeholder="https://your-mcp.example.com/observability" autocomplete="off">
-      </label>
-      <label class="mcp-field">
-        <span class="mcp-field-key">Tool name <em>(default per product · version · scope)</em></span>
-        <input id="deploy-mcp-tool" type="text" placeholder="grafana_create_alert_rule" autocomplete="off">
-      </label>
-      <label class="mcp-field">
-        <span class="mcp-field-key">MCP client key <em>(optional, not persisted)</em></span>
-        <input id="deploy-mcp-auth" type="password" placeholder="sk-..." autocomplete="off">
-      </label>
-      <div class="deploy-panel-actions">
-        <button id="deploy-go-btn" class="mcp-refresh-btn" type="button">deploy</button>
-        <button id="deploy-cancel-btn" class="ctrl-btn" type="button">cancel</button>
-        <span id="deploy-status" class="mcp-refresh-status"></span>
-      </div>
-      <div id="deploy-result" class="deploy-result" hidden></div>
-    </div>
-  `;
-}
-
-async function doDeploy(panel) {
-  const url  = panel.querySelector('#deploy-mcp-url').value.trim();
-  const tool = panel.querySelector('#deploy-mcp-tool').value.trim() || computeDeployTool(state.compileTarget);
-  const auth = panel.querySelector('#deploy-mcp-auth').value;
-  const product = panel.querySelector('#deploy-product')?.value || state.deployProduct;
-  const version = panel.querySelector('#deploy-version')?.value || state.deployVersion;
-  const scope   = panel.querySelector('#deploy-scope')?.value   || (targetScopable(state.compileTarget) ? state.deployScope : undefined);
-  const statusEl = panel.querySelector('#deploy-status');
-  const resultEl = panel.querySelector('#deploy-result');
-  const setStatus = (msg, kind) => {
-    statusEl.textContent = msg;
-    statusEl.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
-  };
-  if (!url) { setStatus('mcp url required', 'error'); return; }
-  try { localStorage.setItem('mcpUrl', url); } catch (_) {}
-
-  const goBtn = panel.querySelector('#deploy-go-btn');
-  goBtn.disabled = true;
-  setStatus(`deploying to ${product} ${version}${scope && scope !== 'both' ? ' · ' + scope : ''}…`);
-  resultEl.hidden = true;
-
-  const qs = new URLSearchParams();
-  const deployEnv = focusedEnv();
-  if (deployEnv) qs.set('env', deployEnv);
-  if (state.compileDashId) qs.set('dashboardId', state.compileDashId);
-  const target = state.compileTarget;
-  const path = `/api/packs/${encodeURIComponent(focusedPackId())}/deploy/${encodeURIComponent(target)}?${qs}`;
-
-  try {
-    const r = await fetch(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        mcpUrl: url,
-        mcpAuth: auth || undefined,
-        mcpTool: tool,
-        targetProduct: product,
-        targetVersion: version,
-        scope,
-      }),
-    });
-    const ct = r.headers.get('content-type') || '';
-    const raw = await r.text();
-    let body;
-    if (!ct.includes('application/json')) {
-      setStatus(`error: server returned ${r.status} ${ct || 'no content-type'}`, 'error');
-      console.error('[deploy] non-JSON response:', raw.slice(0, 400));
-      return;
-    }
-    try { body = JSON.parse(raw); }
-    catch (e) { setStatus(`error: malformed JSON (${e.message})`, 'error'); return; }
-
-    if (!body.ok) {
-      setStatus(`error: ${body.error || 'unknown'}`, 'error');
-      resultEl.textContent = JSON.stringify(body, null, 2);
-      resultEl.hidden = false;
-      return;
-    }
-    setStatus(`deployed in ${body.tookMs}ms via ${escapeHtml(body.tool)}`, 'ok');
-    resultEl.textContent = JSON.stringify(body.result, null, 2);
-    resultEl.hidden = false;
-    toast(`Deployed ${body.filename} to ${body.env || 'mcp'}`);
-  } catch (e) {
-    setStatus(`error: ${e.message}`, 'error');
-  } finally {
-    goBtn.disabled = false;
   }
 }
 

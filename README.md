@@ -87,51 +87,54 @@ it?*), the burn policy, the routes with their channels and the remediation on
 L4 (*What happens when it breaks?*), the probes and chaos experiments on L5
 (*How do we prove it?*), the owners and imports on GOV (*Who owns it?*):
 
-1. **Define - What Are We Building For?** — in the definition column: the service
-   name, owners and environment, its criticality tier and one or more library
-   entries: products it runs on (Kafka, Prometheus, Grafana, IBM MQ,
-   Alertmanager, Loki, Tempo, the OTel Collector, every one with its evidence
-   dot) or an archetype for a service built from scratch (HTTP service, queue
-   consumer — OTel semconv). **The tier is a seed, not a constraint**: it decides
-   which SLIs the pack starts with and which rubric grades it, never which SLIs
-   you may add. It draws the **silhouette** of the pack it starts with — one
-   ghost card per clause on each slab, reshaping as the tier changes — and the
-   entries drop their SLIs and the SLO each gets onto L1; a layer's sheet opens
-   in preview, with *Compose in Compile →*. **Seed the pack →** confirms the
-   definition once: on the next steps the column is a compact, read-only *seed
-   card* (service, owners, environment, one tier chip, the entries) with
-   *Change seed →*, and the conformance summary stays live beneath it.
-2. **Compile - What Will the Pack Include?** — the **live stack** of the instantiated
-   pack, its real artefacts per layer with the edges in the clause states, and
-   the sheets where composition happens: on L1 the **SLI rolodex** — a
-   scroll-snapping carousel of SLI cards from the selected entries (every
-   product's behind a filter; adding one from a product not yet selected
-   selects it too), each with the objective and window it starts with and an
-   add / remove switch — **any** SLI is addable; one above the tier says which
-   profile it starts from (*from the tier-1 profile*) — and the SLOs switch.
-   **The library's values are copies, not links**: *Customise* expands a card
-   in place into its edit face — the objective, the window, the bound, the
-   PromQL, the description, each with *↺ library default* — the SLO id follows
-   an edited objective, and an edited expression drops the library's evidence
-   to *custom*, honestly; the last card, **+ Custom SLI**, writes an SLI from
-   scratch (the engine's errors inline). Section switches on L3, L4 and L5 say
-   which clauses they drop; the params sit on the layer they shape. Remove an
-   SLI and L1 loses its card, switch dashboards off and L3 dims with its clauses
-   red and an *off* chip on its head; the pack YAML as a collapsible underneath.
-3. **Verify - Can We Use This Pack?** — the conformance verdict at the tier with
-   three clause states (pass · pass on a placeholder · fail) and a **maturity
-   bar per layer**, the schema verdict, the warnings, the stack again with the
-   **todos pinned to the slab of the artefact each names** (routes and runbooks
-   on L4, backends and pipelines on L2, probes and chaos on L5) and the parameter
-   that fills each one editable inline — on the slab and on the layer's sheet,
-   read-only otherwise, the customised and custom SLIs with their provenance
-   (*customised: objective, window*) — the compiled artefacts (Prometheus rules,
-   OTel Collector, Alertmanager, Grafana dashboards) previewed and downloadable,
-   and **Ready to continue?** — *Resolve or adjust* returns to Define; *Continue
-   with visible gaps* (*Continue to Discover* when none remain) registers the pack
-   the way an upload is registered and hands it to the journey below, saying how
-   many placeholders remain. A placeholder-laden pack is conformant on paper; the
-   third state, the amber edges and the todos are what tell it from a real one.
+1. **Define - What Are We Building For?** — four short substeps: **Service**
+   (name, owners, environment), **Criticality** (each tier a card that says what
+   it requires — *Tier 2: availability and latency objectives; metrics, logs
+   and traces; burn-rate alerts; …*), **Technology** (library entries: products
+   it runs on — Kafka, Prometheus, Grafana, IBM MQ, Alertmanager, Loki, Tempo,
+   the OTel Collector — or an archetype for a service built from scratch; each
+   card says *Adds N suggested SLIs* and previews them) and **Review
+   suggestions** (the SLIs grouped by technology, *Select recommended*, one
+   checkbox each, *Edit* opening the SLI editor). **The tier is a seed, not a
+   constraint**: it decides which SLIs the pack starts with and which rubric
+   grades it, never which SLIs you may add. The rubric clauses and the layer
+   mechanics sit in *Why these suggestions?* and *Advanced review*; the left
+   column is a sticky progress summary with the conformance summary beneath it.
+   **Seed the pack →** confirms the definition once; on the next steps the
+   column becomes a read-only seed card with *Change seed →*.
+2. **Compile - What Did the Pack Produce?** — leads with the result (*Pack
+   compiled. Two warnings need review; 19 values remain placeholders.*), three
+   separate states (generated · complete for this tier · ready to deploy) and a
+   *Needs review* queue (warning → impacted artefact → suggested correction →
+   *Review*). A layer overview counts the artefacts by type and purpose; select
+   a layer to draw its slab of the **live stack** and open its sheet, where
+   composition happens: on L1 the **SLI rolodex** (any SLI of the selected
+   entries is addable with *Include in this pack*; one above the tier says which
+   profile it starts from), section switches on L3, L4 and L5 that say which
+   clauses they drop, the params on the layer they shape. **The library's values
+   are copies, not links**: the **SLI editor** opens on a sentence in real units
+   (*Queue depth headroom is healthy when its ratio is at or below 0.8; target
+   99.9% of the time over 30 days.*), groups Behavior · Objective · Data source ·
+   Generated outputs, folds the PromQL under *Advanced*, checks direction, bound,
+   unit, objective and window as you type, and ends on **Save SLI**; an edited
+   expression drops the library's evidence to *custom*, honestly. *Changes since
+   Define* says which selection produced which artefacts.
+3. **Verify - What Is Ready, and What Remains?** — four readiness states shown
+   apart — **schema valid**, **meets tier rubric**, **implementation**,
+   **deployment ready** — under one verdict (*Ready for team completion; not
+   ready for deployment.*): meeting the rubric never masks placeholders, and
+   deployment is ready only when nothing fails, no value or runbook is left, no
+   clause rests on a placeholder and every warning is reviewed. The smallest
+   list of what remains follows — warnings, clauses whose requirement is
+   represented but still needs a real value, values to fill by layer, work
+   outside the studio — each with *Fix now* and, for a non-blocking warning,
+   *Accept with reason* (this session only, never written into the pack); the
+   stack again with the **todos pinned to the slab of the artefact each names**
+   and the parameter that fills each one editable inline; the compiled
+   artefacts previewed and downloadable. One primary action: fix what blocks,
+   complete required values, or **Open pack in Discover** (*with visible gaps*
+   when some remain), which registers the pack the way an upload is registered
+   and hands it to the journey below as the same kind of pack you inspect there.
 
 ### 1. Discover - What Do We Have?
 
@@ -155,7 +158,7 @@ The Discover view renders the observability Observogram across the layered model
 ### 2. Diagnose - How reliable is this pack?
 
 Load the declared repo pack as **Pack A** and the live production pack as
-**Pack B**. Observogram computes the Diagnostic Grade:
+**Pack B**. Observogram computes the Assessment (the diagnostic grade):
 
 - **Score**: total criteria passed out of 7
 - **Coverage**: four checks for "are we observing the right things?"
@@ -1068,7 +1071,7 @@ of it may be needed again.
 | `GET` | `/api/references` | Curated catalogue reference packs |
 | `GET` | `/api/packs/:id` | Adapted layered pack |
 | `GET` | `/api/packs/:id/canonical` | Canonical pack with env overlay |
-| `GET` | `/api/packs/:id/conformance` | Maturity-rubric scoring |
+| `GET` | `/api/packs/:id/conformance` | Maturity-rubric scoring (`onPlaceholder` when the pack carries `library.todo.*` annotations) |
 | `GET` | `/api/diff?a=&b=` | Repo/live or pack/pack structural diff |
 | `GET` | `/api/packs/:id/compile-catalog` | Per-artifact compile tree |
 | `GET` | `/api/packs/:id/compile-artifact` | Compile one artifact or group |
@@ -1078,7 +1081,7 @@ of it may be needed again.
 | `GET` | `/api/library/:id` | One library entry: its index row plus the full SLI templates and params (404 names the known entries) |
 | `POST` | `/api/library/instantiate` | `{ entries, name, tier, environment, owners, params, toggles }` → `canonical`, `canonicalYaml`, `todos`, `provenance`, `warnings`, `schemaErrors`, `summary`, `conformance`, `adapted` (the adapter's layered projection, as `/api/validate` returns it — what Build's stack draws; an engine usage error is 400, never 500) |
 | `POST` | `/api/library/compile` | `{ canonical, target }` → one compiled artefact (`label`, `contentType`, `artifact { filename, content, warnings, profile }`), nothing registered |
-| `POST` | `/api/library/register` | `{ canonical, source? }` → the upload registry as `/api/validate` registers (`registered { id, source }`, `adapted`, `conformance`, `summary`; the source defaults to `library:<entries>@<tier>` for a library-built pack, `metadata.name` otherwise) — "VERIFY's "Continue with visible gaps"" |
+| `POST` | `/api/library/register` | `{ canonical, source? }` → the upload registry as `/api/validate` registers (`registered { id, source }`, `adapted`, `conformance`, `summary`; the source defaults to `library:<entries>@<tier>` for a library-built pack, `metadata.name` otherwise) — VERIFY's "Open pack in Discover" |
 | `POST` | `/api/crawl` | Draft a pack from uploaded repo files |
 | `POST` | `/api/crawl-github` | Draft a pack from a GitHub URL |
 | `POST` | `/api/draft-from-mcp` | Draft a live pack from an MCP endpoint |
@@ -1104,7 +1107,7 @@ server/
 
 studio/
   app.mjs                  Browser app shell and three-step workflow
-  compare-view.mjs         Diagnostic Grade, drift, traceability entry points
+  compare-view.mjs         Assessment (diagnostic grade), Compare, drift, traceability
   compile-view.mjs         Remediate, compile catalog, deploy surfaces
   layers-view.mjs          Discover Observogram and artifact cards
   neuron-view.mjs          Advanced → Neuron: fleet tiles, trend / heatmap / bar panels, the journey in focus, the newest record opened up
@@ -1116,7 +1119,7 @@ studio/
   build-stack-view.mjs     BUILD — the layer stack of the pack being compiled (Discover's cards; a slab head opens its sheet)
   build-define-view.mjs    BUILD step 1 — Define (the silhouette) + the step head and error note the three steps share
   build-compile-view.mjs  BUILD step 2 — Compile (the live stack, the warnings, the pack YAML)
-  build-verify-view.mjs  BUILD step 3 — Verify (verdict, the stack with its todos, artefacts, Continue with visible gaps)
+  build-verify-view.mjs  BUILD step 3 — Verify (readiness states, what remains, the stack with its todos, artefacts, Open pack in Discover)
 
 tools/
   cli.mjs                  packc CLI (journey run / list, compile, init, store backup / restore, …)

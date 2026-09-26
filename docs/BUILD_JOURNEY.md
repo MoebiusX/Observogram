@@ -186,7 +186,9 @@ VERIFY can say "passes, on a placeholder".
 no annotations, so a pager route of `pagerduty://<svc>`, a generic pod-failure chaos
 experiment or an unwritten runbook satisfy their clauses like real ones: a kafka tier-2
 pack with its todos untouched scores `MUST 15/15` through `POST /api/validate` and
-`GET /api/packs/<id>/conformance` with no key that mentions a placeholder, and at tier-1
+`GET /api/packs/<id>/conformance` — the score itself ignores annotations; both answers now
+attach `onPlaceholder` beside it (from `validationSummary`), so the studio can say which
+passes rest on a placeholder — and at tier-1
 10 of the 25 MUST clauses pass on one. That is exactly how a crawler stub behaves today
 (aligned on purpose: the placeholder is parked as *Scaffold*, never graded as declared and
 unverified), and only `validationSummary(canonical, todos).onPlaceholder` — what
@@ -986,6 +988,8 @@ the metric; the CLI).
   `semconv` status can become `recorded-live`.
 - Should `evaluateConformance` itself learn the placeholder state — a clause held up only
   by `crawler.scaffold.*` / `library.todo.*` artefacts reported as *pass (placeholder)* —
-  so the CLI, the API and the studio agree without each attaching `onPlaceholder`? Today
+  so the CLI, the API and the studio agree without each attaching `onPlaceholder`
+  (`/api/validate`, `/api/library/register` and `GET /api/packs/:id/conformance` all
+  attach it from `validationSummary` today)? Today
   the rubric is annotation-blind by design and the distinction lives in the engine's
   `validationSummary`; the crawler's stubs would gain the same honesty.

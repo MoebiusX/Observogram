@@ -75,7 +75,7 @@ export function inferSlisFromRecordingRules(rules) {
     if (goodKey && totalKey) {
       sli = {
         id: sliId,
-        description: `Inferred from recording rules ${service}:${metric}:good/total.`,
+        description: `Inferred from recording rules ${ops[goodKey].name} and ${ops[totalKey].name}.`,
         type: 'ratio',
         good:  ops[goodKey].expr,
         total: ops[totalKey].expr,

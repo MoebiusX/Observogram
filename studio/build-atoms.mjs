@@ -31,8 +31,9 @@ export function evidenceDot(status, verifiedOn) {
 
 /**
  * A real switch (role=switch, a sliding knob) for the section toggles and the rolodex's
- * add / remove: `on` its state, `disabled` with `reason` when it cannot be flipped (an SLI
- * above the tier, policy without SLOs), `label` its accessible name, `data-*` what the
+ * "every product" filter (a card's inclusion is a named checkbox, build-sheet-view.mjs):
+ * `on` its state, `disabled` with `reason` when it cannot be flipped (policy without SLOs,
+ * read-only on Verify), `label` its accessible name, `data-*` what the
  * wiring reads back. The knob is CSS; the button is the whole control.
  */
 export function switchHtml({ on, disabled = false, reason = null, label, focusKey = null, data = {}, small = false } = {}) {

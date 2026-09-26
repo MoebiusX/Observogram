@@ -12,7 +12,7 @@
 import {
   parseDiffKey, sliBaseOfSloId, matcherForDeployItem, computeDeployTransitions,
   deployReviewModel, reviewHostOf, hiddenSelectionNote, recommendRemediation, remediationDeployPhrase,
-  remediationDeployActionLabel, remediationSideOnlyMeasure,
+  remediationDeployActionLabel, remediationDeployActionTitle, remediationSideOnlyMeasure,
 } from '../studio/verify-deploy.mjs';
 import { catalogToDeployManifest } from '../studio/artifact-model.mjs';
 import { createHarness } from './lib/harness.mjs';
@@ -254,11 +254,15 @@ assert(remediationDeployPhrase({ selected: 11, deployable: 11, rows: 16 }) === '
 assert(remediationDeployPhrase({ selected: 4, deployable: 11, rows: 6 }) === '4 of 11 selected to deploy (6 deploy rows)',
        'partly selected: selected of deployable artefacts');
 assert(remediationDeployPhrase({ selected: 0, deployable: 0, rows: 0 }) === '', 'nothing deployable, no deploy phrase');
-// The deploy button counts artefacts like the phrase beside it; rows only in brackets.
-assert(remediationDeployActionLabel({ selected: 11, rows: 16 }) === 'Review and deploy 11 selected (16 deploy rows) to live',
-       'deploy action: selected artefacts, deploy rows qualified');
-assert(remediationDeployActionLabel({ selected: 1, rows: 1 }) === 'Review and deploy 1 selected (1 deploy row) to live',
-       'deploy action: singular deploy row');
+// The deploy button counts artefacts like the phrase beside it; the deploy rows go in its tooltip.
+assert(remediationDeployActionLabel({ selected: 11, rows: 16 }) === 'Review and deploy 11 artefacts to live',
+       'deploy action: selected artefacts');
+assert(remediationDeployActionLabel({ selected: 1, rows: 1 }) === 'Review and deploy 1 artefact to live',
+       'deploy action: singular artefact');
+assert(remediationDeployActionTitle({ selected: 11, rows: 16 }).startsWith('11 selected artefacts · 16 deploy rows'),
+       'deploy action tooltip: artefacts and the deploy rows behind them');
+assert(remediationDeployActionTitle({ selected: 1, rows: 1 }).startsWith('1 selected artefact · 1 deploy row'),
+       'deploy action tooltip: singular'); 
 
 // "Only in live/baseline" = 0 only covers the checked scope when Pack B
 // artefacts were parked: in gap mode it is never "nothing to import".

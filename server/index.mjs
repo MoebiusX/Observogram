@@ -17,7 +17,7 @@
  *   GET  /api/packs                       Pack catalog
  *   GET  /api/packs/:id                   Adapted layered pack (?env=<name>)
  *   GET  /api/packs/:id/canonical         Canonical manifest + env overlay (?env=<name>)
- *   GET  /api/packs/:id/conformance       Maturity-rubric scoring (?env=<name>)
+ *   GET  /api/packs/:id/conformance       Maturity-rubric scoring (?env=<name>; onPlaceholder for a library-built pack)
  *   GET  /api/maturity-rubric             Rubric metadata (clause definitions)
  *   POST /api/validate                    Validate uploaded JSON/YAML body (summary.onPlaceholder for a library-built pack)
  *   GET  /api/library                     The pack library index (BUILD journey, docs/BUILD_JOURNEY.md)
@@ -695,7 +695,13 @@ app.get('/api/packs/:id/conformance', (req, res) => {
     const env = readEnv(req.query);
     const { canonical: overlaid } = overlaidCanonical(canonical, env);
     const report = evaluateConformance(overlaid);
-    res.json({ environment: env, ...report });
+    // Which clauses pass only on a placeholder, for this env overlay — the
+    // same list /api/validate and /api/library/register put in
+    // summary.onPlaceholder. Only a pack carrying library.todo.* annotations
+    // can say; for any other pack the key is omitted (not []), because "no
+    // placeholder" is not known there and the view keeps its hedge.
+    const onPlaceholder = librarySummaryFor(overlaid)?.onPlaceholder;
+    res.json({ environment: env, ...report, ...(Array.isArray(onPlaceholder) ? { onPlaceholder } : {}) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

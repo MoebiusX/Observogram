@@ -1550,6 +1550,16 @@ try {
   assert(!!regRow && regRow.source === 'uploaded' && regRow.description === 'Uploaded pack — library:kafka,http-service@tier-2', 'the registered pack is in the catalog as an upload, its description carrying the source hint', regRow && [regRow.source, regRow.description]);
   const regConf = await getJson(base, `/api/packs/${reg.registered.id}/conformance`);
   assert(regConf.declaredTier === 'tier-2' && regConf.mustPercent === 100, 'the registered pack answers /api/packs/:id/conformance like an upload');
+  // /conformance names the placeholder passes itself for a library-built pack — for the env the
+  // registration worked them out for (library.environment), the same list the register summary carries —
+  // and omits the key (not []) for a plain pack, where it is not known.
+  const regEnv = inst.canonical.metadata?.annotations?.['library.environment'] || '';
+  const regConfEnv = await getJson(base, `/api/packs/${reg.registered.id}/conformance${regEnv ? `?env=${encodeURIComponent(regEnv)}` : ''}`);
+  assert(Array.isArray(regConfEnv.onPlaceholder) && JSON.stringify(regConfEnv.onPlaceholder) === JSON.stringify(reg.summary.onPlaceholder),
+    'a library-built registered pack\'s /conformance carries onPlaceholder matching the register summary', regConfEnv.onPlaceholder?.length, reg.summary?.onPlaceholder?.length);
+  assert(Array.isArray(regConf.onPlaceholder), 'a library-built registered pack\'s /conformance carries onPlaceholder without ?env too', typeof regConf.onPlaceholder);
+  const plainConf = await getJson(base, '/api/packs/payment-service/conformance');
+  assert(typeof plainConf.mustPercent === 'number' && !('onPlaceholder' in plainConf), 'a plain example pack\'s /conformance carries no onPlaceholder key', Object.keys(plainConf));
   const regAgain = await (await postLib('/api/library/register', { canonical: inst.canonical, source: 'my-source' })).json();
   assert(regAgain.registered.id === reg.registered.id && regAgain.registered.source === 'my-source', 'register is idempotent on content and honours an explicit source');
   const regBad = await postLib('/api/library/register', { canonical: { apiVersion: 'x' } });

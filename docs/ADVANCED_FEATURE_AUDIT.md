@@ -67,10 +67,10 @@ real but a listed gap blocks confident daily use).
   `GET /api/packs/:id/conformance` with env overlays. Rubric documented in
   [docs/CONFORMANCE.md](CONFORMANCE.md).
 - **Known gaps.**
-  - `GET /api/packs/:id/conformance` does not carry `onPlaceholder`, so the
-    "Passes on placeholders" group only appears for a report that does (the
-    library's validation summary); otherwise the view says passes may rest on
-    the pack's template values instead of claiming "real values".
+  - `GET /api/packs/:id/conformance` carries `onPlaceholder` only for a pack
+    with `library.todo.*` annotations (from the library's validation summary);
+    for any other pack the list is not known, so the view says passes may rest
+    on the pack's template values instead of claiming "real values".
   - When Pack B's conformance hasn't loaded yet the view shows a bare
     "conformance report unavailable" placeholder with no retry affordance.
   - Clause list has no filter (pass/fail/severity) — long lists at tier-1.
