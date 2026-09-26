@@ -61,12 +61,17 @@ test('"Inferred from recording rule …" names the rules, and every inferred SLI
   assert.ok(inferred.every(a => inferredFrom(a).rules.every(n => resolveInferredRule(n, rules) === n)));
 });
 
-test('a good/total SLI the live fetcher infers resolves to the rules it read, not to the shorthand stems', () => {
+test('a good/total SLI the live fetcher infers names the two rules it read; the older shorthand still resolves to them', () => {
   const read = ['checkout:requests:good_5m', 'checkout:requests:total_5m'];
   const [{ sli }] = inferSlisFromRecordingRules(read.map(name => ({ name, expr: `sum(rate(${name}[5m]))` })));
+  assert.equal(sli.description, 'Inferred from recording rules checkout:requests:good_5m and checkout:requests:total_5m.');
   const { rules } = inferredFrom({ spec: { description: sli.description } });
+  assert.deepEqual(rules, read, 'the full rule names, not the shorthand stems');
   const names = [...read, 'checkout:requests:good_or_bad', 'other:x:good_5m'];
   assert.deepEqual(rules.map(n => resolveInferredRule(n, names)), read);
+  // A pack fetched before the inference named both rules carries the shorthand.
+  const legacy = inferredFrom({ spec: { description: 'Inferred from recording rules checkout:requests:good/total.' } }).rules;
+  assert.deepEqual(legacy.map(n => resolveInferredRule(n, names)), read);
   assert.equal(resolveInferredRule('svc:lat:good', ['svc:lat:goodness']), null, 'a stem needs the _<window> separator');
   assert.equal(resolveInferredRule('svc:lat:p95', ['svc:lat:p95_5m']), null, 'only good/total stems widen; any other name is exact');
   assert.equal(resolveInferredRule('a:b:c', ['a:b:c']), 'a:b:c');
@@ -119,4 +124,23 @@ test('a row leads with name + what it does + status; the id and tags wait in Det
 
 test('the Build stack card body is unchanged by the Discover row', () => {
   assert.ok(artefactCardHtml({ id: 'X', title: 'x', source: 'Declared' }).includes('<span class="card-id">X</span>'));
+});
+
+test('no adapted artefact is ever Missing, so Discover never claims a missing artefact was detected', () => {
+  const dir = new URL('../examples/', import.meta.url);
+  const packs = fs.readdirSync(dir).filter(f => f.endsWith('.pack.yaml'));
+  assert.ok(packs.length >= 1);
+  for (const f of packs) {
+    const sources = new Set(allArtefacts(adapt(parse(fs.readFileSync(new URL(f, dir), 'utf8')))).map(a => a.source));
+    assert.ok(!sources.has('Missing'), `${f}: the adapter projects only what the pack holds`);
+  }
+  // The shared vocabulary still maps the word, but it never makes an artefact need attention.
+  assert.equal(artefactStatus({ source: 'Missing' }).attention, false);
+  assert.ok(!/missing\b/.test(DISCOVER_TASKS.find(t => t.id === 'missingEvidence').tip.replace('Missing evidence', '')),
+    'Missing evidence lists declared and template values only');
+  const src = fs.readFileSync(new URL('../studio/layers-view.mjs', import.meta.url), 'utf8');
+  assert.ok(!src.includes('dv-show-missing'), 'no cause or action for missing artefacts');
+  assert.ok(!/label: 'Missing'/.test(src), 'no Missing measure');
+  assert.ok(!/statusChipHtml\('evidence', 'missing'/.test(src), 'no per-layer missing chip');
+  assert.ok(!/required artefact'\)\} missing/.test(src));
 });

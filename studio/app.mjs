@@ -27,7 +27,7 @@ import {
 } from './focus.mjs';
 import { escapeHtml, toast, fmtRelative, installDialogFocusTrap, downloadText } from './util.mjs';
 import {
-  personalName, announce, parseRecentServices, orderServicesByRecent, withKnownPlaceholderPasses,
+  personalName, announce, parseRecentServices, orderServicesByRecent,
 } from './ux-kit.mjs';
 import { renderSchemaView } from './schema-view.mjs';
 import { renderConformanceView } from './conformance-view.mjs';
@@ -183,11 +183,9 @@ async function rehydrateFromPersistence() {
   return true;
 }
 
-// Which clauses pass only on a placeholder, per registered pack id, from the
-// registration answer (the plain /conformance report does not carry it), with
-// the environment the server worked it out for. loadPack re-attaches it.
-const placeholderPassesByPack = new Map();
-
+// The /conformance report carries onPlaceholder itself — worked out for this
+// env overlay — whenever the pack carries library todos, and omits it when the
+// server cannot say, so it survives reloads and env switches as is.
 async function loadPack(id, env) {
   const q = env ? `?env=${encodeURIComponent(env)}` : '';
   const [pack, conformance] = await Promise.all([
@@ -195,7 +193,7 @@ async function loadPack(id, env) {
     api(`/api/packs/${encodeURIComponent(id)}/conformance${q}`),
   ]);
   state.pack = pack;
-  state.conformance = withKnownPlaceholderPasses(conformance, placeholderPassesByPack.get(id), env);
+  state.conformance = conformance;
   state.uploadedSource = null;
   state.symbolTable = buildSymbolTable(pack);
 }
@@ -1209,7 +1207,7 @@ const OBSERVA_ADV_VIEWS = new Set(OBSERVA_ADV.map(a => a.id));
 // The conformance report plus which clauses pass only on a placeholder, when
 // the answer carries it (a library-built or uploaded pack's validation
 // summary): Conformance then lists "Passes on placeholders" exactly instead of
-// hedging. The conformance endpoint alone does not say.
+// hedging. (GET /api/packs/:id/conformance carries the same list itself.)
 function withPlaceholderPasses(res) {
   const onPlaceholder = res?.summary?.onPlaceholder;
   return res?.conformance && Array.isArray(onPlaceholder) ? { ...res.conformance, onPlaceholder } : res?.conformance;
@@ -2606,11 +2604,8 @@ const buildActions = {
     state.layerFilter = 'all';
     const annotatedEnv = canonical.metadata?.annotations?.['library.environment'] || null;
     const env = annotatedEnv || defaultEnvFor(id);
-    // enterAnalyzeMode refetches the pack and its plain conformance report;
-    // keep the placeholder list for it, for the environment the server used.
-    if (Array.isArray(res.summary?.onPlaceholder)) {
-      placeholderPassesByPack.set(id, { env: annotatedEnv, onPlaceholder: res.summary.onPlaceholder });
-    }
+    // enterAnalyzeMode refetches the pack and its conformance report, which
+    // names the placeholder passes itself for a library-built pack.
     enterAnalyzeMode(id, env);
     paintObservaActiveTab();
     // The hand-off says what the pack now is: the same kind of pack the check journey inspects.

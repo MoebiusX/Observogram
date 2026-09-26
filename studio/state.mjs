@@ -164,9 +164,7 @@ export const state = {
   atlasMorph: 0,               // 0..1 for the constellation slider
   arborView: 'A',              // 'A' | 'B' | 'both' — arbor side-by-side toggle
   compileTarget: 'prometheus-rules',
-  compileDashId: null,
   compileContent: null,        // { filename, contentType, text, source } | { error }
-  compileTargets: null,        // legacy catalog from /api/compile/targets
   // Per-artifact compile state (Phase 7m).
   compileCatalog: null,        // { groups: [...] } from /api/packs/:id/compile-catalog
   compileGroup: 'rules',       // 'rules' | 'dashboards' | 'pipelines' | 'alertmanager'
@@ -175,7 +173,6 @@ export const state = {
   deployMatrix: null,          // catalog from /api/deploy/matrix
   deployProduct: 'grafana',    // chosen target product
   deployVersion: '12',         // chosen target version (string — matches matrix.versions)
-  deployScope: 'both',         // for prometheus-rules: both | recording | alerting
   // Reconcile mode. null → bidirectional when Pack B is loaded, otherwise
   // deploy-only. Legacy values (A/B/AUB/A-B) are migrated in compile-view.
   remediateOp: null,           // 'all' | 'deploy' | 'retrofeed' | 'drift'
