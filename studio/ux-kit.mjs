@@ -397,16 +397,3 @@ export function orderServicesByRecent(services, opened) {
   return [...services].sort((a, b) => at(b).localeCompare(at(a)) || String(a.label).localeCompare(String(b.label)));
 }
 
-// ---------- which clauses pass only on a placeholder ----------
-
-// A registration answer names the clauses that pass only on a placeholder
-// (summary.onPlaceholder); the plain conformance report does not. Re-attach a
-// remembered list to a refetched report only when it was worked out for the
-// same environment — otherwise leave the report without it, and Conformance
-// says it cannot tell which passes rest on placeholders.
-export function withKnownPlaceholderPasses(conformance, known, env) {
-  if (!conformance || Array.isArray(conformance.onPlaceholder)) return conformance;
-  if (!known || !Array.isArray(known.onPlaceholder)) return conformance;
-  if ((known.env || null) !== (env || null)) return conformance;
-  return { ...conformance, onPlaceholder: known.onPlaceholder };
-}

@@ -83,8 +83,9 @@ function appliesText(minTier) {
 }
 
 // The clauses that pass only on a template value, when the report says so:
-// the library's validation summary (summary.onPlaceholder) names them; the
-// plain /conformance report does not (yet), so this is null there.
+// /conformance carries onPlaceholder for a pack with library todos (and the
+// validation summary, summary.onPlaceholder, names them for a fresh build or
+// upload). Any other report omits it, so this is null and the view hedges.
 function placeholderEntries(c) {
   const src = c?.onPlaceholder || c?.summary?.onPlaceholder || null;
   if (!Array.isArray(src)) return null;

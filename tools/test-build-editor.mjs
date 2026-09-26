@@ -27,8 +27,9 @@ import { rolodexItems, buildEditorModel, editorModeFor, editorDirtyAfterAnswer, 
 import {
   sliEditorModel, checkEditorId, existingSliIds, resolveTemplate, templateParams, fieldsForType, effectiveId, percentText, ratioOf,
   fieldValueFor, numberOrText, customDefFromDraft, OVERRIDE_FIELDS,
-  sliSummarySentence, sliRelationshipChecks, sliName, windowText, generatedOutputs, createFormStatus, customFormModel,
+  sliSummarySentence, sliRelationshipChecks, sliName, windowText, generatedOutputs, createFormStatus, customFormModel, unitWords, boundWords,
 } from '../studio/build-copies-model.mjs';
+import { boundText } from '../studio/sli-direction.mjs';
 import { buildEditorHtml, renderBuildEditor, wireBuildEditor, paintFieldMessage, paintIdState, paintDirection, growTextarea, PROMQL_MAX_HEIGHT, editorGroups, editorFieldOrder, liveCheck, jumpToField } from '../studio/build-editor-view.mjs';
 import { fieldHelp } from '../studio/build-atoms.mjs';
 import { defaultBuildState } from '../studio/state.mjs';
@@ -974,6 +975,14 @@ test('the plain words: an id as a name, a window in days, the opening sentence i
   assert.equal(sliSummarySentence({ id: 'queue_depth_headroom', type: 'threshold', objective: '99.9', window: '30d', threshold: '0.8', good_when: 'below', unit: 'ratio' }), 'Queue depth headroom is healthy when its ratio is at or below 0.8; target 99.9% of the time over 30 days.');
   assert.equal(sliSummarySentence({ id: 'settlement_consumers', type: 'threshold', objective: 99, window: '7d', threshold: 2, good_when: 'above', unit: 'consumers' }), 'Settlement consumers is healthy when it is at or above 2 consumers; target 99% of the time over 7 days.');
   assert.equal(sliSummarySentence({ id: 'notification_failures', type: 'threshold', objective: '99', window: '7d', threshold: 0, unit: 'per_second' }), 'Notification failures is healthy when it is at or below 0 per second; target 99% of the time over 7 days.');
+  // A bound for a one-line meta (the Define review, the rolodex): the unit in words, never its id;
+  // a ratio or a count keeps its word (a meta line has no subject to carry it); boundText, the engine's copy, is untouched.
+  assert.deepEqual([unitWords('per_second'), unitWords('events_per_hour'), unitWords('seconds'), unitWords('some_unit'), unitWords('ratio'), unitWords(null)], ['per second', 'events per hour', 'seconds', 'some unit', 'ratio', '']);
+  assert.deepEqual([
+    boundWords({ threshold: 1, unit: 'events_per_hour' }), boundWords({ threshold: 100, unit: 'per_second', good_when: 'above' }), boundWords({ threshold: '0.8', unit: 'ratio' }),
+    boundWords({ threshold: 5, unit: 'percent' }), boundWords({ threshold: 0.1, unit: 'seconds' }), boundWords({ threshold: 2 }), boundWords({ threshold: '', unit: 'seconds' }),
+  ], ['≤ 1 events per hour', '≥ 100 per second', '≤ 0.8 ratio', '≤ 5%', '≤ 0.1 seconds', '≤ 2', '']);
+  assert.equal(boundText({ threshold: 1, unit: 'events_per_hour' }), '≤ 1 events_per_hour', 'sli-direction.mjs keeps the engine’s spelling; the words are applied at render time');
   assert.equal(sliSummarySentence({ id: 'availability', type: 'ratio', objective: '99.5', window: '30d' }), 'Availability is the share of good events among all events; target 99.5% good over 30 days.');
   assert.equal(sliSummarySentence({ id: 'x_y', name: 'Checkout success', type: 'threshold', objective: 'abc', window: '30d', threshold: '' }), 'Checkout success is healthy when it stays within a bound that is not set yet; no objective set yet.', 'a value missing or not a number is said, not guessed');
   // The relationships.

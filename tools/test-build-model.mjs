@@ -1596,7 +1596,8 @@ test('DEFINE substeps: which one shows, what each holds, what the tier asks of t
   const s = full.suggestions;
   assert.deepEqual(s.groups.map(g => [g.id, g.counts.selected, g.counts.total]), [['kafka', 5, 6], ['http-service', 2, 4]]);
   const election = s.groups[0].items.find(i => i.id === 'controller_election_rate');
-  assert.deepEqual([election.checked, election.recommended, election.profileTier, election.name, election.meta], [false, false, 'tier-1', 'Controller election rate', '≤ 1 events_per_hour · 99% over 7d']);
+  assert.deepEqual([election.checked, election.recommended, election.profileTier, election.name, election.meta], [false, false, 'tier-1', 'Controller election rate', '≤ 1 events per hour · 99% over 7d']);
+  // The unit reads in words at render time (build-copies-model.mjs boundWords); sli-direction.mjs boundText stays the engine's copy.
   assert.equal(s.groups[0].items.find(i => i.id === 'broker_availability').meta, 'good ÷ total events · 99.9% over 30d');
   assert.deepEqual([s.counts, s.allRecommended, s.recommendedSlis], [{ selected: 7, total: 10, recommended: 7, recommendedSelected: 7, custom: 0 }, true, null]);
   // An explicit list without some recommended SLIs, with an optional one: Select recommended keeps the optional one and adds the rest back.
@@ -1941,6 +1942,8 @@ test('rolodexItems with the copies: the effective values and the customised fiel
   // A threshold candidate's ghost prints its bound with its direction under the title (the adapter's card will, once the pack exists); a ratio one nothing.
   assert.equal(ghosts.find(g => g.key === 'sli:kafka_produce_latency_p99').subtitle, '≤ 0.1 seconds');
   assert.ok(!('subtitle' in ghosts.find(g => g.key === 'sli:checkout_success')));
+  // The ghost's subtitle is the adapter card's spelling (engine boundText, unit id and all), so the card reads the same before and after the pack exists.
+  assert.equal(ghosts.find(g => g.key === 'sli:kafka_controller_election_rate').subtitle, '≤ 1 events_per_hour', 'candidate subtitle keeps parity with the adapter card');
   const floorGhosts = buildDefineModel({ build: draft({ ...COPIES, overrides: { ...COPIES.overrides, kafka_produce_latency_p99: { ...COPIES.overrides.kafka_produce_latency_p99, good_when: 'above' } }, result: null }), library: LIBRARY, requirements: REQUIREMENTS }).stack.slabs.find(x => x.id === 'L1').ghosts;
   assert.equal(floorGhosts.find(g => g.key === 'sli:kafka_produce_latency_p99').subtitle, '≥ 0.1 seconds');
   assert.ok(buildStackHtml(buildDefineModel({ build: draft({ ...COPIES, result: null }), library: LIBRARY, requirements: REQUIREMENTS }).stack).includes('<div class="card-sub">≤ 0.1 seconds</div>'));
@@ -2248,7 +2251,7 @@ test('renderBuildSheet draws the dialog headlessly: the ARIA, the title and ques
   assert.ok(l1.includes('class="build-sheet-close" data-close aria-label="Close the layer sheet (Esc)"'));
   assert.ok(l1.includes('Clauses at tier-2 <span class="build-sheet-count">3</span>'));
   assert.equal((l1.match(/<li class="build-rail-clause is-pass"/g) || []).length, 3, 'the clause rows are the shared atom');
-  // The rolodex: ten SLI cards and the '+ Custom SLI' card, the objective each starts with large, the other tiers muted, a switch each; the above-tier one addable with its note.
+  // The rolodex: ten SLI cards and the '+ Custom SLI' card, the objective each starts with large, the other tiers muted, an "Include <SLI>" checkbox each; the above-tier one addable with its note.
   assert.equal((l1.match(/class="build-rolo-card/g) || []).length, 11);
   assert.equal((l1.match(/class="build-rolo-card build-rolo-create"/g) || []).length, 1, 'the last card opens the editor in create mode');
   assert.ok(l1.includes('<div class="build-rolodex-track" role="group" aria-roledescription="carousel" aria-label="SLI cards — arrow keys move" tabindex="0" data-scroll-key="rolodex:L1">'));
@@ -2262,10 +2265,17 @@ test('renderBuildSheet draws the dialog headlessly: the ARIA, the title and ques
   assert.ok(l1.includes('<span class="build-rolo-id">broker_availability</span>') && l1.includes('<code>up</code>'));
   assert.ok(l1.includes('<b>99.9%</b><span>over 30d · at tier-2</span>'));
   assert.ok(l1.includes('class="is-muted" title="tier-3: 99% over 30d">tier-3 <b>99%</b> 30d</span>'));
-  assert.ok(l1.includes('role="switch" class="build-switch" aria-checked="true" aria-label="broker_availability of Apache Kafka — remove from the pack" data-focus-key="sli:kafka:broker_availability" data-sli="kafka_broker_availability" data-entry="kafka" data-sli-id="broker_availability" data-selected="1" data-entry-selected="1"'));
-  // Above the tier: no disabled switch, no "needs tier-1" — an informational chip, the profile it starts from, the switch live.
-  assert.ok(l1.includes('aria-label="controller_election_rate of Apache Kafka — add to the pack (from the tier-1 profile)" data-focus-key="sli:kafka:controller_election_rate" data-sli="kafka_controller_election_rate" data-entry="kafka" data-sli-id="controller_election_rate" data-selected="0" data-entry-selected="1"'), 'the above-tier switch is live');
-  assert.ok(!/aria-label="controller_election_rate[^"]*"[^>]*\bdisabled\b/.test(l1) && !l1.includes('build-rolo-needs') && !l1.includes('needs tier-1'));
+  // Inclusion is the editor's named control (build-editor-view.mjs "Include in this pack"): a real checkbox labelled with the SLI's name,
+  // checked when it is in the pack, its state line as the description, the data the wiring reads back and the card's focus key.
+  assert.ok(l1.includes('<label class="build-rolo-include"><input type="checkbox" class="build-rolo-include-box" data-rolo-include data-sli="kafka_broker_availability" data-entry="kafka" data-sli-id="broker_availability" data-selected="1" data-entry-selected="1" data-focus-key="sli:kafka:broker_availability" checked aria-describedby="build-rolo-state-kafka_broker_availability"><span class="build-rolo-include-text">Include Broker availability</span></label>'));
+  assert.ok(l1.includes('<span class="build-rolo-state" id="build-rolo-state-kafka_broker_availability">in the pack</span>'));
+  assert.ok(l1.includes('data-snap-card data-sli="kafka_broker_availability" data-entry="kafka" data-sli-id="broker_availability" aria-label="broker_availability of Apache Kafka"'), 'the card names the SLI; the action words live on the checkbox');
+  assert.ok(!/<button[^>]*role="switch"[^>]*data-sli=/.test(l1), 'no SLI switch left on the cards');
+  assert.ok(l1.includes('(≤ a ceiling, ≥ a floor)">≤ 1 events per hour</div>') && !l1.includes('events_per_hour'), 'the card’s bound reads its unit in words, never the unit id');
+  // Above the tier: no disabled control, no "needs tier-1" — an informational chip, the profile it starts from, the checkbox live and unticked.
+  assert.ok(l1.includes('aria-label="controller_election_rate of Apache Kafka (from the tier-1 profile)"'));
+  assert.ok(l1.includes('data-rolo-include data-sli="kafka_controller_election_rate" data-entry="kafka" data-sli-id="controller_election_rate" data-selected="0" data-entry-selected="1" data-focus-key="sli:kafka:controller_election_rate" aria-describedby="build-rolo-state-kafka_controller_election_rate"><span class="build-rolo-include-text">Include Controller election rate</span>'), 'the above-tier checkbox is live');
+  assert.ok(!/data-rolo-include data-sli="kafka_controller_election_rate"[^>]*\bdisabled\b/.test(l1) && !l1.includes('build-rolo-needs') && !l1.includes('needs tier-1'));
   assert.ok(l1.includes('<span class="build-rolo-chip is-above" title="this SLI&#39;s own tier is tier-1: it starts from that profile&#39;s objective and window — add it if you need it, the tier is a seed, not a gate">from the tier-1 profile</span>'));
   assert.ok(l1.includes('<b>99%</b><span>over 7d · the tier-1 profile</span>'));
   assert.equal((l1.match(/build-rolo-chip is-above/g) || []).length, 3, 'the three tier-1 SLIs of the selection');
@@ -2279,10 +2289,11 @@ test('renderBuildSheet draws the dialog headlessly: the ARIA, the title and ques
   assert.ok(l1.includes('role="switch" class="build-switch" aria-checked="true" aria-label="SLOs section" data-focus-key="toggle:slos" data-toggle="slos"'));
   assert.ok(l1.includes('off is expected to drop 4 clauses of the tier: availability SLO, latency SLO, every SLI under an SLO, chaos in staging'));
   assert.ok(!l1.includes('data-compose'), 'no compose action on COMPILE');
-  // Every product: a foreign card is dashed, its switch says it selects the product.
+  // Every product: a foreign card is dashed, its state line (the checkbox's description) says ticking it adds the product.
   const all = html('L1', 'edit', draft({ rolodexAll: true }));
   assert.equal((all.match(/class="build-rolo-card/g) || []).length, 57);
-  assert.ok(all.includes('aria-label="qmgr_process_up of IBM MQ — add to the pack (selects IBM MQ too)" data-focus-key="sli:ibm-mq:qmgr_process_up" data-sli="ibm_mq_qmgr_process_up" data-entry="ibm-mq" data-sli-id="qmgr_process_up" data-selected="0" data-entry-selected="0"'));
+  assert.ok(all.includes('data-rolo-include data-sli="ibm_mq_qmgr_process_up" data-entry="ibm-mq" data-sli-id="qmgr_process_up" data-selected="0" data-entry-selected="0" data-focus-key="sli:ibm-mq:qmgr_process_up" aria-describedby="build-rolo-state-ibm_mq_qmgr_process_up"><span class="build-rolo-include-text">Include Queue manager process up</span>'));
+  assert.ok(all.includes('<span class="build-rolo-state" id="build-rolo-state-ibm_mq_qmgr_process_up">adds IBM MQ</span>'));
   assert.ok(all.includes('class="build-rolo-card is-foreign"') && all.includes('not selected yet'));
   // L2: no switch, the param inputs editable with sheet focus keys, the lists.
   const l2 = html('L2');
@@ -2307,6 +2318,10 @@ test('renderBuildSheet draws the dialog headlessly: the ARIA, the title and ques
   assert.ok(df.includes('data-mode="edit"') && !df.includes('data-compose') && !df.includes('preview'));
   assert.ok(df.includes('data-edit-sli="kafka_broker_availability"') && df.includes('build-rolo-create') && (df.match(/class="build-rolo-card/g) || []).length === 11);
   assert.ok(!/role="switch"[^>]*\bdisabled\b/.test(df.replace(/data-toggle="policy"[^>]*/, '')), 'the switches flip on DEFINE');
+  assert.ok(df.includes('data-rolo-include') && !/data-rolo-include[^>]*\bdisabled\b/.test(df), 'the Include checkboxes tick on DEFINE');
+  // Verify: the Include checkboxes show the state but are disabled, with the reason.
+  const vl1 = html('L1', 'verify');
+  assert.ok(vl1.includes('data-focus-key="sli:kafka:broker_availability" checked aria-describedby="build-rolo-state-kafka_broker_availability" disabled aria-disabled="true" title="read-only on Verify — change it on Define or Compile">'));
   const df2 = html('L2', sheetModeFor('define'), draft({ step: 'define' }));
   assert.ok(df2.includes('build-param-input') && df2.includes('data-focus-key="param:kafka.broker_targets@L2/sheet"'), 'the params are editable on DEFINE');
   // Read-only params (Verify) draw the value as a code span, never an input.
@@ -2358,6 +2373,9 @@ test('the rolodex carries Edit (View on Verify) and the + Custom SLI card in pla
   assert.ok(html.includes('<span class="build-rolo-chip is-customised" title="customised: objective, window">customised</span>') && html.includes('<b>99.5%</b><span>over 7d · customised</span>'));
   // A threshold card prints its bound with the side that is good (spec 1.3): ≤ a ceiling (the library's every bound), ≥ once overridden to a floor; a ratio card prints none.
   assert.ok(html.includes('<div class="build-rolo-bound" title="the bound, and the side of it that is good (≤ a ceiling, ≥ a floor)">≤ 0.1 seconds</div>'));
+  // A custom SLI exists only in the pack: no checkbox, a named Remove (the editor's "Remove SLI" on the card).
+  assert.ok(html.includes('<button type="button" class="ctrl-btn build-rolo-remove" data-rolo-remove data-sli="checkout_success" data-focus-key="sli:custom:checkout_success" aria-label="Remove Checkout success from the pack" aria-describedby="build-rolo-state-checkout_success">Remove</button>'));
+  assert.ok(!html.includes('data-rolo-include data-sli="checkout_success"'));
   const floorCard = buildSheetHtml(buildSheetModel({ layerId: 'L1', build: copiesDraft({ overrides: { ...COPIES.overrides, kafka_produce_latency_p99: { ...COPIES.overrides.kafka_produce_latency_p99, good_when: 'above' } } }), library: LIBRARY, requirements: T2, mode: 'edit' }));
   assert.ok(floorCard.includes('≥ 0.1 seconds</div>') && floorCard.includes('title="customised: objective, window, good_when"'));
   assert.equal((html.match(/class="build-rolo-bound"/g) || []).length, rolodexItems({ build: copiesDraft(), library: LIBRARY }).filter(i => i.type === 'threshold').length, 'one bound line per threshold card, none on a ratio card');
@@ -2399,18 +2417,18 @@ test('the rolodex carries Edit (View on Verify) and the + Custom SLI card in pla
   assert.equal(focusFallbackSelectors('editor:done')[0], '.build-editor [data-editor-done]');
 });
 
-test('the rolodex’s handlers write through the actions: Edit → openEditor with the card’s key and its focus key as the opener, + Custom SLI → openEditor create, a custom switch → removeCustom, an above-tier switch → setSli', () => {
+test('the rolodex’s handlers write through the actions: Edit → openEditor with the card’s key and its focus key as the opener, + Custom SLI → openEditor create, a custom SLI’s Remove → removeCustom, an above-tier Include checkbox → setSli', () => {
   const calls = [];
   const act = { openEditor: (o) => calls.push(['open', o]), removeCustom: (id) => calls.push(['remove', id]), setSli: (k, on) => calls.push(['sli', k, on]), addSli: (e, s) => calls.push(['addSli', e, s]), update() {}, closeSheet() {}, setToggle() {}, setParam() {} };
   const model = buildSheetModel({ layerId: 'L1', build: copiesDraft(), library: LIBRARY, requirements: T2, mode: 'edit' });
   const edit = fakeEl({ editSli: 'kafka_produce_latency_p99', focusKey: 'edit:kafka_produce_latency_p99' });
   const editCustom = fakeEl({ editSli: 'checkout_success', editCustom: '1', focusKey: 'edit:checkout_success' });
   const create = fakeEl({ editCreate: '', focusKey: 'edit:create' });
-  const customSwitch = fakeEl({ sli: 'checkout_success', entry: '', sliId: 'checkout_success', selected: '1', entrySelected: '1', custom: '1' });
-  const aboveSwitch = fakeEl({ sli: 'kafka_controller_election_rate', entry: 'kafka', sliId: 'controller_election_rate', selected: '0', entrySelected: '1' });
-  wireBuildSheet(fakeContainer({ '[data-edit-sli]': [edit, editCustom], '[data-edit-create]': [create], '.build-switch[data-sli]': [customSwitch, aboveSwitch] }), model, { build: act });
+  const customRemove = fakeEl({ sli: 'checkout_success' });
+  const aboveBox = fakeEl({ sli: 'kafka_controller_election_rate', entry: 'kafka', sliId: 'controller_election_rate', selected: '0', entrySelected: '1' });
+  wireBuildSheet(fakeContainer({ '[data-edit-sli]': [edit, editCustom], '[data-edit-create]': [create], '[data-rolo-remove]': [customRemove], '[data-rolo-include]': [aboveBox] }), model, { build: act });
   edit.fire('click'); editCustom.fire('click'); create.fire('click', { currentTarget: create });
-  customSwitch.fire('click'); aboveSwitch.fire('click');
+  customRemove.fire('click'); aboveBox.fire('change');
   assert.deepEqual(calls, [
     ['open', { key: 'kafka_produce_latency_p99', custom: false, opener: 'edit:kafka_produce_latency_p99' }],
     ['open', { key: 'checkout_success', custom: true, opener: 'edit:checkout_success' }],
@@ -2492,7 +2510,7 @@ test('the definition column is a wizard stage: the live form on DEFINE (with the
   assert.deepEqual([fresh2.overrides, fresh2.custom, fresh2.seeded, fresh2.editor, fresh2.editorDirty, fresh2.customDraft, fresh2.customDraftErrors], [{}, [], false, null, false, null, null]);
 });
 
-test('the sheet’s handlers write through the existing actions: close (button, scrim, Esc), the section switches, the rolodex switches, the filter', () => {
+test('the sheet’s handlers write through the existing actions: close (button, scrim, Esc), the section switches, the rolodex Include checkboxes, the filter', () => {
   const calls = [];
   const act = {
     closeSheet: () => calls.push(['close']), setStep: (s, o) => calls.push(['step', s, o]), setToggle: (id, on) => calls.push(['toggle', id, on]),
@@ -2506,10 +2524,11 @@ test('the sheet’s handlers write through the existing actions: close (button, 
   const add = fakeEl({ sli: 'kafka_fetch_latency_p99', entry: 'kafka', sliId: 'fetch_latency_p99', selected: '0', entrySelected: '1' });
   const foreign = fakeEl({ sli: 'ibm_mq_qmgr_process_up', entry: 'ibm-mq', sliId: 'qmgr_process_up', selected: '0', entrySelected: '0' });
   const above = fakeEl({ sli: 'kafka_controller_election_rate', entry: 'kafka', sliId: 'controller_election_rate', selected: '0', entrySelected: '1' });
+  const readOnlyBox = fakeEl({ sli: 'kafka_broker_availability', entry: 'kafka', sliId: 'broker_availability', selected: '1', entrySelected: '1' }, { disabled: true });
   const filter = fakeEl({ rolodexAll: '0' });
   wireBuildSheet(fakeContainer({
     '[data-close]': [closeBtn, scrim], '.build-sheet': [sheet],
-    '.build-switch[data-toggle]': [slosSwitch, disabledSwitch], '.build-switch[data-sli]': [remove, add, foreign, above], '.build-switch[data-rolodex-all]': [filter],
+    '.build-switch[data-toggle]': [slosSwitch, disabledSwitch], '[data-rolo-include]': [remove, add, foreign, above, readOnlyBox], '.build-switch[data-rolodex-all]': [filter],
   }), model, { build: act });
   closeBtn.fire('click'); scrim.fire('click');
   sheet.fire('keydown', { key: 'Escape' }); sheet.fire('keydown', { key: 'Enter' });
@@ -2517,14 +2536,14 @@ test('the sheet’s handlers write through the existing actions: close (button, 
   const plainButton = { tagName: 'BUTTON', closest: () => null };
   sheet.fire('keydown', { key: 'Escape', target: plainButton });
   slosSwitch.fire('click'); disabledSwitch.fire('click');
-  remove.fire('click'); add.fire('click'); foreign.fire('click'); above.fire('click');
+  remove.fire('change'); add.fire('change'); foreign.fire('change'); above.fire('change'); readOnlyBox.fire('change');
   filter.fire('click', { currentTarget: filter });
   assert.deepEqual(calls, [
     ['close'], ['close'], ['close'], ['close'],
     ['toggle', 'slos', false],
     ['sli', 'kafka_broker_availability', false, 7], ['sli', 'kafka_fetch_latency_p99', true, 7], ['add', 'ibm-mq', 'qmgr_process_up'], ['sli', 'kafka_controller_election_rate', true, 7],
     ['update', { rolodexAll: true }, { rerender: true, reinstantiate: false }],
-  ], 'a disabled switch does nothing; a foreign SLI goes through addSli; an above-tier one flips like any other; Enter is not Esc; Esc on any control closes');
+  ], 'a disabled switch or checkbox does nothing; a foreign SLI goes through addSli; an above-tier one ticks like any other; Enter is not Esc; Esc on any control closes');
 });
 
 test('the slab head opens the layer’s sheet: aria-haspopup, the "+" affordance, the open layer marked; the inline clause list is gone', () => {
