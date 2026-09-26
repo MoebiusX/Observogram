@@ -50,6 +50,12 @@ export function defaultBuildState() {
     customDraft: null,        // the editor's create form as typed, until it is added (UI state, never persisted)
     customDraftErrors: null,  // the engine's usage errors on the last 'Add to the pack' attempt (UI state, never persisted)
     wantedStep: null,         // the step asked for while unreachable (a reload on Verify before the pack is back); honoured once the instantiation answers (UI state, never persisted)
+    defineSub: null,          // DEFINE's substep on screen ('service' · 'tier' · 'technology' · 'review'); null = the first incomplete one (UI state, never persisted)
+    defineFolds: {},          // DEFINE's open folds ("Why these suggestions?", "Advanced review") (UI state, never persisted)
+    compileView: null,        // COMPILE's drawn layers: null (none) · 'all' · [layer ids] (UI state, never persisted)
+    accepted: {},             // VERIFY's warnings accepted with a reason, for this session only — never written into the pack (UI state, never persisted)
+    accepting: null,          // the warning whose "Accept with reason" form is open (UI state, never persisted)
+    acceptDraft: null,        // that form's reason as typed (UI state, never persisted)
   };
 }
 // The build fields that survive a reload (never `result`, `preview`, `error`, `pending`).
@@ -110,9 +116,21 @@ export const state = {
   // Discover content filters (only active on view='layers').
   layersSearch: '',            // free-text over card id/title/desc/tags/tool
   layersDomain: 'all',         // facet over artefact tool/system
-  // Secondary layer filter chips (only visible on view='layers').
-  // 'all' stacks every layer; the layer ids narrow to one.
+  // Discover's one expanded layer (the layer overview opens one at a time).
+  // 'all' = the overview with every layer collapsed; a layer id expands
+  // that layer. Anything that routes to Discover with a layer id (the
+  // traceability "open" action) lands with that layer open.
   layerFilter: 'all',
+  // Discover's task filter: 'attention' | 'missingEvidence' | 'scaffold' |
+  // 'live' | 'all'. null = the default (Needs attention when anything needs
+  // it, else All) until the user picks one. Persisted.
+  discoverTask: null,
+  // Discover's scroll position ({ pack, y }), restored when the user comes
+  // back from Diagnose or Remediate to the same pack (UI state, never persisted).
+  discoverScroll: null,
+  // Compare's view: 'summary' | 'review' | 'all' — Summary until the user
+  // picks another. Persisted.
+  compareFocus: 'summary',
   // Legacy: kept for back-compat with code that still reads it
   // (drawer card highlight on per-layer cards, etc.). Mirrors view.
   activeLayer: 'L1',
@@ -190,6 +208,8 @@ const PERSIST_FIELDS = [
   'tracePrefs',
   'expandL2', 'expandL3Panels', 'expandL3Queries',
   'layersSearch', 'layersDomain',
+  'discoverTask',
+  'compareFocus',
 ];
 export const persistence = {
   _suspended: true,  // boot-phase guard — flipped to false once rehydrate finishes

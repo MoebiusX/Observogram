@@ -14,19 +14,30 @@
 // L1 rolodex used to carry.
 //
 // A title row (the id large, the product and its evidence, the type pill, the
-// chips), a compact two-column grid of fields — Id · Description, Objective ·
-// Window, Bound (with its direction, spec 1.3 good_when, as a two-segment
-// control below · above in the same cell: the tier control's idiom, a
-// radiogroup the arrow keys move) · Unit for a threshold SLI, Metric · Type (fixed: a different
-// shape is a new custom SLI), then the PromQL as monospace textareas that
-// grow, showing the RESOLVED expression (the parameters in, read from the
-// instantiated pack) with the parameters line under it — the evidence line,
-// a status line that says what happened ('applying…' → 'applied · SLO …', or
-// the engine's error, which also sits under its field), per-field '↺ library
-// default', Reset all, Done and the SLI's add / remove switch in the footer.
-// Create mode is the same dialog over the custom form (Name → id, Type, …,
-// 'Add to the pack' from the model's canSubmit). On VERIFY it is read-only:
-// the values as spans, the provenance, no input.
+// chips) and, under it, one sentence in real units that follows the fields as
+// they are typed ('Queue depth headroom is healthy when its ratio is at or
+// below 0.8; target 99.9% of the time over 30 days.'). Then the fields in four
+// groups (the 2026-09 UX review, "Build / SLI editor"): Behavior — the
+// description, and for a threshold SLI the Bound with its direction (spec 1.3
+// good_when, a two-segment control below · above in the same cell: the tier
+// control's idiom, a radiogroup the arrow keys move) and the Unit; Objective —
+// objective and window; Data source — the metric, the fixed Type (a different
+// shape is a new custom SLI), the evidence line, and folded under "Advanced:
+// PromQL" the expressions as monospace textareas that grow, showing the
+// RESOLVED expression (the parameters in, read from the instantiated pack)
+// with the parameters line; Generated outputs — the id, and folded the SLO,
+// recording rule and burn alerts the pack generated. Each field carries a
+// short help line; its longer explanation is behind its '?'. The relationships
+// (direction, bound, unit, objective, window) are checked as typed: the
+// problem beside its field and in a linked summary at the top (the GOV.UK
+// pattern), the values kept as typed. The footer: a status line that says
+// what happened ('applying…' → 'applied · SLO …', or the engine's error, which
+// also sits under its field), "Include in this pack" (a checkbox, apart from
+// saving; a custom SLI's "Remove SLI"), Reset all and Save SLI — which checks
+// first and, with a problem standing, moves the focus to the summary instead
+// of closing. Create mode is the same dialog over the custom form (Name → id,
+// Type, …, 'Add to the pack' from the model's canSubmit). On VERIFY it is
+// read-only: the values as spans, the provenance, no input.
 //
 // Live apply: every field but the id commits ON INPUT through the actions
 // (setOverride / updateCustom with `live: true` — the debounced instantiate);
@@ -57,16 +68,42 @@
 
 import { escapeHtml, TRAPPED_DIALOGS } from './util.mjs';
 import { host as appHost } from './host.mjs';
-import { editFieldHtml, evidenceBadge, switchHtml } from './build-atoms.mjs';
-import { checkEditorId, customFormModel, customDefFromDraft, normalizeDraft, slugifySliId, SLO_WINDOWS } from './build-copies-model.mjs';
+import { editFieldHtml, evidenceBadge, fieldHelp, moreToggleHtml, moreTextHtml } from './build-atoms.mjs';
+import { checkEditorId, customFormModel, customDefFromDraft, createFormStatus, normalizeDraft, slugifySliId, SLO_WINDOWS, sliSummarySentence, sliRelationshipChecks, CHECKED_FIELDS } from './build-copies-model.mjs';
 
 const attr = (s) => String(s).replace(/["\\]/g, '\\$&');
 /** How tall a PromQL textarea may grow before it scrolls inside (about eight lines of 12 px mono). */
 export const PROMQL_MAX_HEIGHT = 168;
-/** The fields that span the grid: one PromQL expression; good and total sit side by side. */
-const WIDE = new Set(['query']);
+/** The fields that span the grid: the description and one PromQL expression; good and total sit side by side. */
+const WIDE = new Set(['query', 'description']);
+const fieldOf = (model, id) => model.fields.find(f => f.id === id) || null;
+
+/**
+ * The dialog's four groups (the 2026-09 UX review, "Build / SLI editor"): Behavior (what counts as good), Objective,
+ * Data source, Generated outputs — the decision fields visible, the PromQL and the generated names folded under
+ * Advanced. `cells` are field ids in reading order ('@type' is the fixed Type cell of an existing SLI; the direction
+ * of a bound is drawn inside the Bound cell), `advanced` the fields of the group's fold. Create mode groups its form
+ * the same way (Name and Type are behaviour there; the id it slugs is an output).
+ */
+export function editorGroups(model) {
+  const has = new Set(model.fields.map(f => f.id));
+  const pick = (ids) => ids.filter(id => has.has(id));
+  return [
+    { id: 'behavior', title: 'Behavior', note: model.type === 'threshold' ? 'what counts as good' : 'what it measures', cells: pick(['name', 'type', 'description', 'threshold', 'unit']), advanced: [] },
+    { id: 'objective', title: 'Objective', note: 'how often it must be good, over which window', cells: pick(['objective', 'window']), advanced: [] },
+    { id: 'source', title: 'Data source', note: 'where the numbers come from', cells: [...pick(['semconv_metric']), ...(model.create ? [] : ['@type'])], advanced: pick(['query', 'good', 'total']) },
+    { id: 'outputs', title: 'Generated outputs', note: 'what the pack names after this SLI', cells: pick(['id']), advanced: [] },
+  ];
+}
+/** The fields in the order the dialog draws them (the error summary lists them so). */
+export function editorFieldOrder(model) {
+  return editorGroups(model).flatMap(g => [...g.cells, ...g.advanced]).flatMap(id => (id === 'threshold' ? ['threshold', 'good_when'] : [id]))
+    .map(id => fieldOf(model, id)).filter(Boolean);
+}
 /** The focus keys of the dialog's own controls: they survive a re-render like a field's (build-model.mjs focusFallbackSelectors knows them). */
 export const EDITOR_CONTROL_KEYS = { close: 'editor:close', done: 'editor:done', cancel: 'editor:cancel', resetAll: 'editor:reset-all' };
+/** The focus the controller asks for when it opens an existing SLI (app.mjs openEditor's default): the dialog's first field. */
+const OPENING_FOCUS = 'first';
 
 function chipHtml(c) {
   return `<span class="build-rolo-chip is-${escapeHtml(c.kind)}"${c.title ? ` title="${escapeHtml(c.title)}"` : ''}>${escapeHtml(c.text)}</span>`;
@@ -98,7 +135,9 @@ function directionHtml(f, model) {
   const hasDefault = !(f.default === null || f.default === undefined);
   const dflt = hasDefault ? `<span class="build-edit-default" id="${id}-default">${f.overridden ? `library <code>${escapeHtml(f.default)}</code>` : 'library default'}</span>` : '';
   const reset = f.resettable && !model.readOnly ? `<button type="button" class="build-edit-reset" data-reset="${escapeHtml(f.id)}"${model.key ? ` data-sli="${escapeHtml(model.key)}"` : ''} data-focus-key="${escapeHtml(f.focusKey)}:reset" title="${escapeHtml(`back to the library default (${f.default})`)}" aria-label="${escapeHtml(`${f.label}: back to the library default`)}"><span aria-hidden="true">↺</span> library default</button>` : '';
-  const hintShown = !!f.hint && !f.error;
+  const { line, more } = fieldHelp(f);
+  const moreShown = !!more && !model.readOnly;
+  const hintShown = !!line && !f.error;
   const describedBy = [hasDefault ? `${id}-default` : '', f.error ? `${id}-error` : hintShown ? `${id}-hint` : ''].filter(Boolean).join(' ');
   const options = f.options || ['below', 'above'];
   const control = model.readOnly
@@ -106,9 +145,10 @@ function directionHtml(f, model) {
     : `<div class="build-edit-dir" role="radiogroup" aria-labelledby="${id}-label"${describedBy ? ` aria-describedby="${describedBy}"` : ''} data-dir-group="${escapeHtml(f.id)}" data-${escapeHtml(dataAttrOf(model))}="${escapeHtml(f.id)}"${model.create ? '' : ` data-sli="${escapeHtml(model.key)}"`} style="--dir-index:${Math.max(0, options.indexOf(f.value))}"><span class="build-edit-dir-thumb" aria-hidden="true"></span>${options.map(o => `<button type="button" role="radio" class="build-edit-dir-btn" data-dir="${escapeHtml(o)}" aria-checked="${o === f.value ? 'true' : 'false'}" tabindex="${o === f.value ? '0' : '-1'}" data-focus-key="${escapeHtml(f.focusKey)}:${escapeHtml(o)}">${escapeHtml(o)}</button>`).join('')}</div>`;
   return `
     <div class="build-edit-field build-edit-direction${f.overridden ? ' is-overridden' : ''}${f.error ? ' is-error' : ''}${model.readOnly ? ' is-read' : ''}" data-field="${escapeHtml(f.id)}">
-      <div class="build-edit-label-row"><span class="build-edit-label" id="${id}-label"><span>${escapeHtml(f.label)}</span></span>${dflt}${reset}</div>
+      <div class="build-edit-label-row"><span class="build-edit-label" id="${id}-label"><span>${escapeHtml(f.label)}</span></span>${dflt}${reset}${moreShown ? moreToggleHtml(f) : ''}</div>
       ${control}
-      ${f.error ? `<span class="build-edit-error" id="${id}-error" role="alert">${escapeHtml(f.error)}</span>` : hintShown ? `<span class="build-edit-hint" id="${id}-hint">${escapeHtml(f.hint)}</span>` : ''}
+      ${f.error ? `<span class="build-edit-error" id="${id}-error" role="alert">${escapeHtml(f.error)}</span>` : hintShown ? `<span class="build-edit-hint" id="${id}-hint">${escapeHtml(line)}</span>` : ''}
+      ${moreShown ? moreTextHtml(f, more) : ''}
     </div>`;
 }
 
@@ -175,33 +215,118 @@ function headHtml(model) {
             ${t.chips.map(chipHtml).join('')}
           </span>
         </div>
+        ${model.summary ? `<p class="build-editor-summary" id="build-editor-summary">${escapeHtml(model.summary)}</p>` : ''}
         <button type="button" class="build-editor-close" data-editor-close aria-label="Close the editor (Esc)" title="Close (Esc)" data-focus-key="${EDITOR_CONTROL_KEYS.close}"><span aria-hidden="true">esc</span></button>`;
 }
 
-/** The body's inner HTML: the general error, the grid, the parameters and evidence lines, the PromQL warning, the window datalist. */
-function bodyHtml(model) {
-  const cells = [];
-  for (const f of model.fields) {
-    if (f.id === 'good_when') continue;   // drawn inside the Bound cell (boundCellHtml)
-    cells.push(f.id === 'threshold' ? boundCellHtml(f, model) : fieldCellHtml(f, model));
-    if (f.id === 'semconv_metric' && !model.create) cells.push(typeCellHtml(model));
+/** One cell by id: '@type' the fixed Type, the bound with its direction, any other field. */
+function cellHtml(id, model) {
+  if (id === '@type') return typeCellHtml(model);
+  const f = fieldOf(model, id);
+  if (!f) return '';
+  return f.id === 'threshold' ? boundCellHtml(f, model) : fieldCellHtml(f, model);
+}
+
+/**
+ * The problems the dialog knows of, listed at its top and linked to their fields (the GOV.UK error summary): each
+ * link moves the focus to its field (opening the fold it sits in). Always drawn — hidden while empty — so the live
+ * check can fill it as the user types, and Save SLI can move the focus to it.
+ */
+function errorSummaryHtml(list) {
+  const n = list.length;
+  return `<div class="build-editor-errors" id="build-editor-errors" tabindex="-1" aria-labelledby="build-editor-errors-title"${n ? '' : ' hidden'}>${errorSummaryInner(list)}</div>`;
+}
+function errorSummaryInner(list) {
+  const n = list.length;
+  return `<p class="build-editor-errors-title" id="build-editor-errors-title">${n === 1 ? 'One value needs attention' : `${n} values need attention`}</p>`
+    + `<ul class="build-editor-errors-list">${list.map(e => `<li><a href="#${escapeHtml(e.inputId)}" data-editor-jump="${escapeHtml(e.field)}">${escapeHtml(e.label)}: ${escapeHtml(e.message)}</a></li>`).join('')}</ul>`;
+}
+/** The error list in the dialog's reading order. */
+function orderedErrors(model, list = model.errorList || []) {
+  const order = editorFieldOrder(model).map(f => f.id);
+  return [...list].sort((a, b) => order.indexOf(a.field) - order.indexOf(b.field));
+}
+
+/** What the pack generated from this SLI: the SLO, the recording rule, the burn alerts — folded under Advanced. */
+function outputsHtml(model) {
+  const o = model.outputs;
+  if (!o) return '';
+  const rows = o.compiled
+    ? `<dl class="build-editor-outputs">
+            <div><dt>SLO</dt><dd>${o.slo ? `<code>${escapeHtml(o.slo)}</code>` : 'none — SLOs are off'}</dd></div>
+            <div><dt>Recording rule</dt><dd>${o.rule ? `<code>${escapeHtml(o.rule)}</code>` : 'none'}</dd></div>
+            <div><dt>Burn-rate alerts</dt><dd>${o.burns}</dd></div>
+          </dl>`
+    : '<p class="build-editor-outputs-note">Generated once the pack compiles with this SLI in it.</p>';
+  return `<details class="build-editor-advanced" data-editor-fold="outputs"><summary>Advanced: generated rule details</summary>${rows}</details>`;
+}
+
+/** One group: its title and note, its visible cells, its fold (the PromQL of the data source, the outputs' names). */
+function groupHtml(g, model) {
+  const cells = g.cells.map(id => cellHtml(id, model)).join('');
+  let fold = '';
+  if (g.id === 'source' && g.advanced.length) {
+    // Folded unless it must show: the create form needs its PromQL, and an error or a PromQL warning opens it.
+    const required = !!(model.create || model.promqlWarning || g.advanced.some(id => fieldOf(model, id)?.error));
+    fold = `<details class="build-editor-advanced" data-editor-fold="promql"${required ? ' open data-fold-required' : ''}><summary>Advanced: PromQL${model.create ? '' : ' as it runs'}</summary>
+          <div class="build-editor-grid">${g.advanced.map(id => cellHtml(id, model)).join('')}</div>
+          ${model.parameters ? `<p class="build-editor-params">${escapeHtml(model.parameters.text)}</p>` : ''}
+        </details>`;
   }
+  const evidence = g.id === 'source'
+    ? `<div class="build-editor-evidence">${evidenceBadge(model.evidence.status)}<span class="build-edit-evidence-note">${escapeHtml(model.evidence.note)}</span>${model.readOnly ? `<span class="build-editor-provenance">${escapeHtml(model.provenance)}</span>` : ''}</div>
+        ${model.promqlWarning ? `<div class="build-edit-error build-edit-promql" role="alert">${escapeHtml(model.promqlWarning)}</div>` : ''}`
+    : '';
+  if (!cells && !fold && !evidence && !(g.id === 'outputs' && model.outputs)) return '';
   return `
+        <section class="build-editor-group is-${g.id}" aria-labelledby="build-editor-g-${g.id}">
+          <h3 class="build-editor-group-title" id="build-editor-g-${g.id}">${escapeHtml(g.title)} <span class="build-editor-group-note">${escapeHtml(g.note)}</span></h3>
+          ${cells ? `<div class="build-editor-grid">${cells}</div>` : ''}
+          ${evidence}
+          ${fold}
+          ${g.id === 'outputs' ? outputsHtml(model) : ''}
+        </section>`;
+}
+
+/** The body's inner HTML: the error summary, the general error, the four groups, the window datalist. */
+function bodyHtml(model) {
+  return `
+        ${errorSummaryHtml(orderedErrors(model))}
         ${model.generalError ? `<div class="build-edit-error build-editor-general" role="alert">${escapeHtml(model.generalError)}</div>` : ''}
-        <div class="build-editor-grid">${cells.join('')}</div>
-        ${model.parameters ? `<p class="build-editor-params">${escapeHtml(model.parameters.text)}</p>` : ''}
-        <div class="build-editor-evidence">${evidenceBadge(model.evidence.status)}<span class="build-edit-evidence-note">${escapeHtml(model.evidence.note)}</span>${model.readOnly ? `<span class="build-editor-provenance">${escapeHtml(model.provenance)}</span>` : ''}</div>
-        ${model.promqlWarning ? `<div class="build-edit-error build-edit-promql" role="alert">${escapeHtml(model.promqlWarning)}</div>` : ''}
+        ${editorGroups(model).map(g => groupHtml(g, model)).join('')}
         <datalist id="build-window-options">${SLO_WINDOWS.map(w => `<option value="${escapeHtml(w)}"></option>`).join('')}</datalist>`;
 }
 
-/** The footer's actions: the switch, then Reset all + Done (edit), Close (read-only) or Cancel + Add to the pack (create). */
+/**
+ * Inclusion, as its own named control (the review: saving and inclusion were one switch and one DONE): a library SLI
+ * gets the checkbox "Include in this pack" — its help says an excluded SLI keeps its edits with the draft; a custom
+ * SLI, which exists only in the pack, gets "Remove SLI". The control carries the data the wiring reads back (the
+ * rolodex switch's) and its focus key, so the focus survives the re-render a toggle causes.
+ */
+function inclusionHtml(model) {
+  const inc = model.inclusion;
+  if (!inc || !model.switch) return '';
+  const help = `<span class="build-editor-include-help" id="build-editor-include-help">${escapeHtml(inc.help)}</span>`;
+  if (inc.kind === 'remove') {
+    return `<span class="build-editor-include"><button type="button" class="ctrl-btn build-editor-remove" data-editor-remove data-sli="${escapeHtml(model.key)}" data-focus-key="${escapeHtml(model.switch.focusKey)}" aria-describedby="build-editor-include-help">${escapeHtml(inc.label)}</button>${help}</span>`;
+  }
+  const data = Object.entries(model.switch.data || {}).map(([k, v]) => ` data-${escapeHtml(k)}="${escapeHtml(v)}"`).join('');
+  return `<span class="build-editor-include"><label class="build-editor-switch"><input type="checkbox" class="build-editor-include-box" data-editor-include${data} data-focus-key="${escapeHtml(model.switch.focusKey)}"${inc.on ? ' checked' : ''} aria-describedby="build-editor-include-help"><span class="build-editor-switch-text">${escapeHtml(inc.label)}</span></label>${help}</span>`;
+}
+
+/** The footer's actions: inclusion, then Reset all + Save SLI (edit), Close (read-only) or Cancel + Add to the pack (create). */
 function actionsHtml(model) {
-  const footActions = model.create
-    ? `<button type="button" class="ctrl-btn build-editor-cancel" data-editor-close data-focus-key="${EDITOR_CONTROL_KEYS.cancel}">${escapeHtml(model.doneLabel)}</button><button type="button" class="mcp-refresh-btn build-editor-submit" data-editor-submit data-focus-key="${escapeHtml(model.submit.focusKey)}"${model.submit.enabled ? '' : ' disabled'}>${escapeHtml(model.submit.label)} <span aria-hidden="true">→</span></button>`
-    : `${model.resetAll ? `<button type="button" class="ctrl-btn build-editor-reset-all" data-editor-reset-all data-focus-key="${EDITOR_CONTROL_KEYS.resetAll}" title="every field back to the library default"><span aria-hidden="true">↺</span> Reset all</button>` : ''}<button type="button" class="mcp-refresh-btn build-editor-done" data-editor-done data-editor-close data-focus-key="${EDITOR_CONTROL_KEYS.done}">${escapeHtml(model.doneLabel)}</button>`;
+  let footActions;
+  if (model.create) footActions = `<button type="button" class="ctrl-btn build-editor-cancel" data-editor-close data-focus-key="${EDITOR_CONTROL_KEYS.cancel}">${escapeHtml(model.doneLabel)}</button><button type="button" class="mcp-refresh-btn build-editor-submit" data-editor-submit data-focus-key="${escapeHtml(model.submit.focusKey)}"${model.submit.enabled ? '' : ' disabled'}>${escapeHtml(model.submit.label)} <span aria-hidden="true">→</span></button>`;
+  else if (model.readOnly) footActions = `<button type="button" class="mcp-refresh-btn build-editor-done" data-editor-done data-editor-close data-focus-key="${EDITOR_CONTROL_KEYS.done}">${escapeHtml(model.doneLabel)}</button>`;
+  else {
+    // Save SLI checks the values first: with a problem standing it moves the focus to the summary at the top instead of closing.
+    footActions = `${model.resetAll ? `<button type="button" class="ctrl-btn build-editor-reset-all" data-editor-reset-all data-focus-key="${EDITOR_CONTROL_KEYS.resetAll}" title="every field back to the library default"><span aria-hidden="true">↺</span> Reset all</button>` : ''}`
+      + `${model.saveHelp ? `<span class="build-editor-save-help" id="build-editor-save-help">${escapeHtml(model.saveHelp)}</span>` : ''}`
+      + `<button type="button" class="mcp-refresh-btn build-editor-done" data-editor-done data-editor-save data-focus-key="${EDITOR_CONTROL_KEYS.done}"${model.saveHelp ? ' aria-describedby="build-editor-save-help"' : ''}>${escapeHtml(model.doneLabel)}</button>`;
+  }
   return `
-          ${model.switch ? `<span class="build-editor-switch"><span class="build-editor-switch-text">${model.switch.on ? 'in the pack' : 'not in the pack'}</span>${switchHtml({ on: model.switch.on, label: model.switch.label, focusKey: model.switch.focusKey, data: model.switch.data })}</span>` : ''}
+          ${inclusionHtml(model)}
           ${footActions}`;
 }
 
@@ -233,11 +358,37 @@ function patchEditor(dialog, model) {
   if (!head || !body || !actions || !status) return false;
   dialog.className = dialogClass(model);
   if (dialog.dataset) dialog.dataset.editorKey = model.key || '';
+  // The folds and the '?' explanations the user opened stay as they were across the redraw (a keystroke's answer
+  // redraws the body; closing the PromQL fold under the caret would drop the focus). A fold an error requires stays open.
+  const kept = foldState(body);
   head.innerHTML = headHtml(model);
   body.innerHTML = bodyHtml(model);
   actions.innerHTML = actionsHtml(model);
+  restoreFoldState(body, kept);
   paintStatus(status, model.status.text, model.status.kind);
   return true;
+}
+
+/** Which folds of the body are open and which '?' explanations are shown: what a redraw keeps. */
+function foldState(root) {
+  const folds = {};
+  for (const d of root?.querySelectorAll?.('details[data-editor-fold]') || []) folds[d.dataset?.editorFold] = !!d.open;
+  const more = [...(root?.querySelectorAll?.('[data-more][aria-expanded="true"]') || [])].map(b => b.dataset?.more).filter(Boolean);
+  return { folds, more };
+}
+function restoreFoldState(root, { folds, more }) {
+  for (const d of root?.querySelectorAll?.('details[data-editor-fold]') || []) {
+    const was = folds[d.dataset?.editorFold];
+    if (was === true) d.open = true;
+    else if (was === false && !d.hasAttribute?.('data-fold-required')) d.open = false;
+  }
+  for (const id of more) { const b = root?.querySelector?.(`[data-more="${attr(id)}"]`); if (b) setMore(root, b, true); }
+}
+/** A field's '?' opened or closed: the button's aria-expanded, the explanation's hidden. */
+function setMore(root, btn, open) {
+  btn.setAttribute?.('aria-expanded', open ? 'true' : 'false');
+  const p = root?.querySelector?.(`#${btn.dataset?.more}-more`);
+  if (p) p.hidden = !open;
 }
 
 /** A PromQL textarea sized to its text, up to PROMQL_MAX_HEIGHT (then it scrolls inside). */
@@ -301,10 +452,13 @@ export function renderBuildEditor(container, model, host = appHost, { focus = nu
   const byKey = (k) => container.querySelector(`[data-focus-key="${attr(k)}"]`);
   const byField = (f) => container.querySelector(`.build-editor [data-field="${attr(f)}"] .build-edit-input`);
   let target = null, kept = false;
+  const firstField = () => container.querySelector('.build-editor .build-edit-input');
   if (focus) {
-    // Read-only (Verify) has no field to land on: the dialog itself takes the focus, so its title is read.
+    // Read-only (Verify) has no field to land on: the dialog itself takes the focus, so its title is read. The
+    // controller opens an existing SLI on 'first' — the dialog's first field (the id is a generated output, last).
+    const opening = focus === OPENING_FOCUS;
     target = focus === 'dialog' || model.readOnly ? container.querySelector('.build-editor')
-      : byField(focus) || container.querySelector('.build-editor .build-edit-input') || container.querySelector('.build-editor');
+      : (opening ? firstField() || byField(focus) : byField(focus)) || firstField() || container.querySelector('.build-editor');
   } else if (keep) {
     const k = renamed ? `cu:${key}:${keep.key.slice(prevKey.length + 4)}` : keep.key;
     // The same editor: a control by its key, else a field by its name (its key changed under it); another editor:
@@ -335,7 +489,7 @@ export function renderBuildEditor(container, model, host = appHost, { focus = nu
 export function paintIdState(container, model, text) {
   const check = checkEditorId(text, { key: model.key, existingIds: model.existingIds });
   const f = model.fields.find(x => x.id === 'id');
-  paintFieldMessage(container, 'id', check.ok ? null : check.message, f?.hint);
+  paintFieldMessage(container, 'id', check.ok ? null : check.message, fieldHelp(f).line);
   const current = f ? String(f.value) : String(model.id ?? model.key);
   const next = check.id ?? model.key;
   if (!check.ok) sayStatus(container, `not applied — ${check.message}`, 'error');
@@ -392,6 +546,7 @@ export function wireBuildEditor(container, model, host = appHost, { shell = true
   }
   for (const el of container.querySelectorAll('.build-editor [data-editor-close]') || []) el.addEventListener('click', () => act.closeEditor?.());
   if (model.readOnly) return;
+  wireHelpAndErrors(container);
   if (model.create) { wireCreateForm(container, model, act); return; }
   const say = (text, kind) => sayStatus(container, text, kind);
   for (const inp of container.querySelectorAll('.build-editor .build-edit-input') || []) {
@@ -427,6 +582,8 @@ export function wireBuildEditor(container, model, host = appHost, { shell = true
         if (inp.value === last) return;   // a change after an input (Enter, blur, a datalist pick of the same text) is not a second edit
         last = inp.value;
         send(inp.value);
+        // The sentence at the top and the relationship checks follow the text as typed, before the engine answers.
+        liveCheck(container, model, { [field]: inp.value });
       };
       inp.addEventListener('input', () => { if (inp.tagName === 'TEXTAREA') growTextarea(inp); commit(); });
       inp.addEventListener('change', commit);
@@ -437,6 +594,7 @@ export function wireBuildEditor(container, model, host = appHost, { shell = true
   // own side on a library SLI clears the override, as ↺ would: the library's direction is no customisation.
   wireDirectionGroups(container, (field, value, group) => {
     const f = model.fields.find(x => x.id === field);
+    liveCheck(container, model, { [field]: value });
     if (group.dataset?.customField) {
       const changed = act.updateCustom?.(model.key, field, value, { live: true });
       if (changed === false) say(model.status.text, model.status.kind); else say('applying…', 'pending');
@@ -448,15 +606,119 @@ export function wireBuildEditor(container, model, host = appHost, { shell = true
   });
   for (const btn of container.querySelectorAll('[data-reset]') || []) btn.addEventListener('click', () => act.clearOverride?.(btn.dataset.sli || model.key, btn.dataset.reset));
   container.querySelector('[data-editor-reset-all]')?.addEventListener('click', () => act.clearOverride?.(model.key, null));
-  const sw = container.querySelector('.build-editor .build-switch[data-sli]');
-  sw?.addEventListener('click', () => {
-    if (sw.disabled) return;
-    const { sli, entry, sliId, selected, entrySelected, custom } = sw.dataset;
-    if (custom === '1') act.removeCustom?.(sli);
-    else if (selected === '1') act.setSli?.(sli, false, model.allKeys || []);
+  // Inclusion: the checkbox ticks a library SLI in or out of the pack (an SLI of a product not selected yet selects the
+  // product too); a custom SLI's Remove deletes it. Neither closes the editor — saving is Save SLI's.
+  const inc = container.querySelector('.build-editor [data-editor-include]');
+  inc?.addEventListener('change', () => {
+    const { sli, entry, sliId, selected, entrySelected } = inc.dataset;
+    if (selected === '1') act.setSli?.(sli, false, model.allKeys || []);
     else if (entrySelected === '1') act.setSli?.(sli, true, model.allKeys || []);
     else act.addSli?.(entry, sliId);
   });
+  const rm = container.querySelector('.build-editor [data-editor-remove]');
+  rm?.addEventListener('click', () => act.removeCustom?.(rm.dataset?.sli || model.key));
+  // Save SLI: the edits are already applied as typed, so saving is a check and a close — with a problem standing (the
+  // live checks, or the engine's word on a field) the focus moves to the linked summary at the top instead.
+  container.querySelector('.build-editor [data-editor-save]')?.addEventListener('click', () => {
+    const list = liveCheck(container, model) ?? orderedErrors(model);
+    if (list.length) {
+      const box = container.querySelector('#build-editor-errors');
+      if (box) { box.hidden = false; box.focus?.(); }
+      say(`not closed — ${list.length === 1 ? 'one value needs' : `${list.length} values need`} attention, listed at the top`, 'error');
+      return;
+    }
+    act.closeEditor?.();
+  });
+}
+
+/** The fields' '?' explanations and the error summary's links (both modes that take input). */
+function wireHelpAndErrors(container) {
+  for (const btn of container.querySelectorAll('.build-editor [data-more]') || []) {
+    btn.addEventListener('click', () => setMore(container, btn, btn.getAttribute?.('aria-expanded') !== 'true'));
+  }
+  container.querySelector('#build-editor-errors')?.addEventListener('click', (e) => {
+    const a = e.target?.closest?.('[data-editor-jump]');
+    if (!a) return;
+    e.preventDefault();   // a plain #hash would also move the studio's router
+    jumpToField(container, a.dataset.editorJump);
+  });
+}
+
+/** An error summary link followed: the fold the field sits in opens, the field takes the focus (a direction: its chosen side). */
+export function jumpToField(container, fieldId) {
+  const box = container.querySelector(`.build-editor [data-field="${attr(fieldId)}"]`);
+  if (!box) return false;
+  const fold = box.closest?.('details');
+  if (fold && !fold.open) fold.open = true;
+  const target = box.querySelector?.('.build-edit-input') || box.querySelector?.('[data-dir][aria-checked="true"]');
+  target?.focus?.();
+  target?.scrollIntoView?.({ block: 'center' });
+  return !!target;
+}
+
+/** A field's value as it stands in the dialog: the text being typed (`typed`), the input's, the chosen side, else the model's. */
+function valueNow(container, model, fid, typed) {
+  if (typed && Object.prototype.hasOwnProperty.call(typed, fid)) return typed[fid];
+  if (fid === 'good_when') {
+    const side = container.querySelector?.('.build-editor [data-field="good_when"] [data-dir][aria-checked="true"]');
+    if (side?.dataset?.dir) return side.dataset.dir;
+  } else {
+    const inp = container.querySelector?.(`.build-editor [data-field="${attr(fid)}"] .build-edit-input`);
+    if (inp && typeof inp.value === 'string') return inp.value;
+  }
+  return fieldOf(model, fid)?.value ?? null;
+}
+
+/**
+ * The live check of an existing SLI's editor: the relationships (sliRelationshipChecks) re-run on the values as they
+ * stand — a field left empty reads its library default — each relationship field's message repainted in place (its
+ * check, else the engine's word while the value is the one the engine answered, else its help line), the error summary
+ * refilled and the opening sentence rewritten. Nothing is sent and nothing re-rendered. Returns the problems in reading
+ * order (Save SLI reads them), or null read-only.
+ */
+export function liveCheck(container, model, typed = {}) {
+  if (model.readOnly || model.create) return null;
+  const values = {};
+  for (const fid of CHECKED_FIELDS) {
+    const f = fieldOf(model, fid);
+    if (!f) continue;
+    let v = valueNow(container, model, fid, typed);
+    if (String(v ?? '').trim() === '' && f.default != null) v = f.default;   // empty is the library default in the editor
+    values[fid] = v;
+  }
+  const checks = sliRelationshipChecks({ type: model.type, ...values });
+  const list = [];
+  for (const f of editorFieldOrder(model)) {
+    let err = f.error;
+    if (f.id === 'id') {
+      // The id is pre-checked as typed (paintIdState paints it); a refused one is a problem Save SLI must not close over.
+      const typedId = String(valueNow(container, model, 'id', typed) ?? '');
+      const c = checkEditorId(typedId, { key: model.key, existingIds: model.existingIds });
+      err = c.ok ? (typedId.trim() === String(f.value ?? '') || typedId.trim() === '' ? f.engineError : null) : c.message;
+    } else if (CHECKED_FIELDS.includes(f.id)) {
+      const unchanged = String(values[f.id] ?? '') === String(f.value ?? '');
+      err = checks[f.id] || (unchanged ? f.engineError : null) || null;
+      paintFieldMessage(container, f.id, err, fieldHelp(f).line);
+    }
+    if (err) list.push({ field: f.id, label: f.label, message: err, inputId: f.inputId });
+  }
+  paintErrorSummary(container, list);
+  const id = String(valueNow(container, model, 'id', typed) ?? '').trim() || model.id;
+  paintSummary(container, sliSummarySentence({ id, type: model.type, ...values }));
+  return list;
+}
+
+/** The error summary refilled in place (hidden while empty). */
+function paintErrorSummary(container, list) {
+  const box = container.querySelector?.('#build-editor-errors');
+  if (!box) return;
+  box.innerHTML = errorSummaryInner(list);
+  box.hidden = list.length === 0;
+}
+/** The opening sentence rewritten in place. */
+function paintSummary(container, text) {
+  const el = container.querySelector?.('#build-editor-summary');
+  if (el && el.textContent !== text) el.textContent = text;
 }
 
 /** The create form's handlers (one live draft per wiring: every handler starts from what was typed so far, never from the render-time draft). */
@@ -473,9 +735,14 @@ function wireCreateForm(container, model, act) {
   const repaint = () => {
     const live = customFormModel(cur, { existingKeys: model.form.existingKeys, existingSloIds: model.form.existingSloIds });
     if (submit) submit.disabled = !live.canSubmit;
-    for (const id of ['id', 'name']) { const f = live.fields.find(x => x.id === id); if (f) paintFieldMessage(container, id, f.error, f.hint); }
+    for (const id of ['id', 'name', ...CHECKED_FIELDS]) { const f = live.fields.find(x => x.id === id); if (f) paintFieldMessage(container, id, f.error, fieldHelp(f).line); }
+    // The relationships and the sentence follow the form as typed, like the edit mode's live check.
+    const shape = { create: true, type: live.draft.type, fields: live.fields };
+    paintErrorSummary(container, orderedErrors(shape, live.fields.filter(f => f.error).map(f => ({ field: f.id, label: f.label, message: f.error, inputId: f.inputId }))));
+    paintSummary(container, live.summary);
     if (statusEl) {
-      paintStatus(statusEl, live.canSubmit ? 'ready — Add to the pack compiles once and keeps the SLI when the engine accepts it' : `fill the required fields: ${live.required.join(', ')}${live.draft.id ? '' : ' — and a name'}`, live.canSubmit ? 'ready' : 'idle');
+      const st = createFormStatus(live);
+      paintStatus(statusEl, st.text, st.kind);
     }
     if (title) title.textContent = live.draft.id || 'new SLI';
   };
@@ -511,10 +778,18 @@ function wireCreateForm(container, model, act) {
  */
 export function paintFieldMessage(container, fieldId, error, hint) {
   const box = container.querySelector(`.build-editor [data-field="${attr(fieldId)}"]`);
-  const msg = box?.querySelector?.('.build-edit-error, .build-edit-hint');
-  const inp = box?.querySelector?.('.build-edit-input');
-  if (!box || !msg || !inp) return;
-  const base = inp.id || `build-editor-${fieldId}`;
+  // The control: an input, or the direction's radiogroup (which carries the same describedby / invalid attributes).
+  const inp = box?.querySelector?.('.build-edit-input') || box?.querySelector?.('.build-edit-dir');
+  let msg = box?.querySelector?.('.build-edit-error, .build-edit-hint');
+  if (!box || !inp) return;
+  if (!msg) {
+    // A field drawn with no line under it (no hint, no error) gets one when a check has something to say.
+    if (!error) return;
+    msg = box.ownerDocument?.createElement?.('span');
+    if (!msg) return;
+    inp.insertAdjacentElement?.('afterend', msg);
+  }
+  const base = inp.id || String(inp.getAttribute?.('aria-labelledby') || '').replace(/-label$/, '') || `build-editor-${fieldId}`;
   const err = error || null;
   msg.className = err ? 'build-edit-error' : 'build-edit-hint';
   msg.id = `${base}-${err ? 'error' : 'hint'}`;

@@ -760,4 +760,129 @@ process.stdout.write('\n--- per-node ladder rides along, scoring untouched ---\n
          'rollup.integrityMean is unchanged by unhealthy or stale observations', [healthy.rollup.integrityMean, badRule.rollup.integrityMean, stale.rollup.integrityMean]);
 }
 
+// The studio's reading of the engine's requirement chains
+// (studio/trace-chain.mjs, the Traceability screen and the drawer). The UX
+// review's rules: a scrape job being observed is job-level evidence, never
+// proof that THIS metric is scraped; a declaration alone is never "proven";
+// a link is "missing" exactly when the engine records the gap; every engine
+// code has a plain-language label.
+process.stdout.write('\n--- studio chain reading ---\n');
+{
+  const { readFileSync } = await import('node:fs');
+  const { readTraceability, traceIssueLabel, TRACE_ISSUES } = await import('../studio/trace-chain.mjs');
+  const linkOf = (p, key) => readTraceability(adapt(p)).rows[0].links.find((l) => l.key === key);
+
+  const repo = readTraceability(adapt(completePack()));
+  const repoRow = repo.rows[0];
+  assert(repoRow.stateKey === 'unverified' && !repoRow.links.some((l) => l.state === 'proven'),
+         'a repository pack with no live evidence proves nothing, not even its SLO→SLI reference',
+         repoRow.links.map((l) => `${l.key}:${l.state}`));
+  assert(repoRow.links.find((l) => l.key === 'sli').state === 'unverified',
+         'a declared-only SLI reads unverified, never proven', repoRow.links.find((l) => l.key === 'sli'));
+
+  const jobOnly = clone(completePack());
+  jobOnly.metadata.annotations['crawler.discovered.scrape_jobs'] = '["billing-worker"]';
+  jobOnly.metadata.annotations['crawler.discovered.scrape_job_origins'] = '{}';
+  const jobModel = readTraceability(adapt(jobOnly));
+  const jobScrape = jobModel.rows[0].links.find((l) => l.key === 'scrape');
+  assert(jobScrape.state === 'unverified' && jobScrape.jobLevelOnly === true && /not proof that this metric is scraped/.test(jobScrape.detail),
+         'a scrape job observed but not tied to the metric reads unverified, job-level only, and says it is not proof', jobScrape);
+  assert(jobModel.byLink.scrape.linked === 0 && jobModel.byLink.scrape.proven === 0 && jobModel.exists.scrape.observed === 1,
+         'the summary counts the job as existing somewhere, not as linked or proven for the requirement',
+         [jobModel.byLink.scrape, jobModel.exists.scrape]);
+
+  // A live draft proves a link only where the fetcher stamped the artefact
+  // Verified; being in a live draft (mcp.url) is not itself evidence.
+  const liveBase = () => {
+    const p = clone(completePack());
+    Object.assign(p.metadata.annotations, {
+      'mcp.url': 'http://mcp.example',
+      'mcp.discovered.metric_names': '["checkout_latency_seconds_bucket","checkout_latency_seconds_count"]',
+    });
+    return p;
+  };
+  const stamp = '2026-09-01T00:00:00Z';
+  const live = liveBase();
+  Object.assign(live.metadata.annotations, {
+    'mcp.verified.slis.checkout_latency': stamp,
+    'mcp.verified.dashboards.checkout-slo': stamp,
+    'mcp.verified.policy.burn_rate_alerts[0]': stamp,
+  });
+  const liveRow = readTraceability(adapt(live)).rows[0];
+  assert(liveRow.stateKey === 'proven' && ['sli', 'metric', 'scrape', 'dashboard', 'alert'].every((k) => liveRow.links.find((l) => l.key === k).state === 'proven'),
+         'a live draft whose inventory reports the SLI metric, with a verified SLI, bound panel and burn-rate alert, is proven end to end',
+         liveRow.links.map((l) => `${l.key}:${l.state}`));
+
+  const unstamped = readTraceability(adapt(liveBase())).rows[0];
+  assert(unstamped.stateKey !== 'proven' && ['sli', 'dashboard', 'alert'].every((k) => unstamped.links.find((l) => l.key === k).state === 'unverified'),
+         'a live draft with no verification stamps proves no SLI, dashboard or alert link',
+         unstamped.links.map((l) => `${l.key}:${l.state}`));
+
+  // The fetcher withholds the burn-rate stamp when a rule it maps from is
+  // unhealthy; a rule name that does not match the requirement must not let
+  // the declared alert read as confirmed live.
+  const withheld = liveBase();
+  Object.assign(withheld.metadata.annotations, {
+    'mcp.verified.dashboards.checkout-slo': stamp,
+    'mcp.discovered.alert_rule_names': 'CheckoutBudgetBurnFast',
+    'mcp.discovered.alert_rules_unhealthy': 'CheckoutBudgetBurnFast',
+    'mcp.scaffold.pipelines.exporters.metrics': 'schema-required fallback',
+  });
+  const withheldRow = readTraceability(adapt(withheld)).rows[0];
+  const withheldAlert = withheldRow.links.find((l) => l.key === 'alert');
+  assert(withheldAlert.state === 'unverified' && withheldAlert.items.every((i) => i.evidence !== 'live') && withheldRow.stateKey !== 'proven',
+         'a live draft’s Declared burn-rate alert (stamp withheld) reads unverified, not live', withheldAlert);
+  const scaffoldExporter = withheldRow.links.find((l) => l.key === 'exporter');
+  assert(scaffoldExporter.items.every((i) => i.evidence === 'declared'),
+         'a Scaffold metrics exporter in a live draft is never tagged live evidence', scaffoldExporter.items);
+
+  // One unhealthy window of a multi-window alert keeps it unverified, even
+  // when another matching rule is healthy.
+  const mixed = liveBase();
+  Object.assign(mixed.metadata.annotations, {
+    'mcp.verified.slis.checkout_latency': stamp,
+    'mcp.verified.dashboards.checkout-slo': stamp,
+    'mcp.verified.policy.burn_rate_alerts[0]': stamp,
+    'mcp.discovered.alert_rule_names': 'checkout_latency_99_burn_14x_5m_1h,checkout_latency_99_burn_6x_30m_6h',
+    'mcp.discovered.alert_rules_unhealthy': 'checkout_latency_99_burn_6x_30m_6h',
+  });
+  const mixedRow = readTraceability(adapt(mixed)).rows[0];
+  const mixedAlert = mixedRow.links.find((l) => l.key === 'alert');
+  assert(mixedAlert.state === 'unverified' && mixedAlert.unhealthy === true && /unhealthy/.test(mixedAlert.detail) && mixedRow.stateKey !== 'proven',
+         'a burn-rate alert with one unhealthy matching live rule reads unverified, whatever the healthy ones say', mixedAlert);
+
+  // A template placeholder SLI or SLO (Scaffold) is never a proven link.
+  const scaffoldSli = liveBase();
+  Object.assign(scaffoldSli.metadata.annotations, {
+    'mcp.scaffold.slis.checkout_latency': 'schema-required fallback',
+    'mcp.scaffold.slos.checkout_latency_99': 'schema-required fallback',
+    'mcp.verified.dashboards.checkout-slo': stamp,
+    'mcp.verified.policy.burn_rate_alerts[0]': stamp,
+  });
+  const scaffoldRow = readTraceability(adapt(scaffoldSli)).rows[0];
+  const scaffoldLink = scaffoldRow.links.find((l) => l.key === 'sli');
+  assert(scaffoldLink.state === 'unverified' && scaffoldLink.scaffold === true && scaffoldRow.stateKey !== 'proven'
+         && /placeholder/i.test(scaffoldRow.next?.label || ''),
+         'a Scaffold SLI/SLO reads unverified, keeps the requirement from proven and asks for the real one',
+         [scaffoldLink, scaffoldRow.stateKey, scaffoldRow.next]);
+
+  const noDash = clone(completePack());
+  delete noDash.spec.dashboards;
+  const noDashModel = readTraceability(adapt(noDash));
+  const dash = linkOf(noDash, 'dashboard');
+  assert(dash.state === 'missing' && dash.broken && dash.gap === 'missing_dashboard_evidence' && noDashModel.rows[0].firstBroken?.key === 'dashboard',
+         'the engine gap missing_dashboard_evidence is the missing dashboard link and the first broken link', dash);
+  assert(noDashModel.issueGroups.some((g) => g.code === 'missing_dashboard_evidence' && g.ids.length === 1 && g.label === 'Dashboard evidence missing'),
+         'requirements sharing a gap are grouped under its plain-language label', noDashModel.issueGroups);
+
+  // Every gap and note the engine can emit has its label (no bare machine code on screen).
+  const engine = readFileSync(new URL('./lib/traceability.mjs', import.meta.url), 'utf8');
+  const codes = [...engine.matchAll(/(?:gaps|notes)\.push\('([a-z_]+)'\)/g)].map((m) => m[1]);
+  assert(codes.length >= 6 && codes.every((c) => TRACE_ISSUES[c]?.label),
+         'every gap/note code in tools/lib/traceability.mjs has a plain-language label in TRACE_ISSUES',
+         codes.filter((c) => !TRACE_ISSUES[c]), []);
+  assert(traceIssueLabel('missing_widget_evidence') === 'Missing widget evidence',
+         'an unknown code is humanised, never dropped', traceIssueLabel('missing_widget_evidence'));
+}
+
 report('traceability graph');

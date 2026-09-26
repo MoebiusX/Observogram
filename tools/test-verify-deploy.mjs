@@ -11,6 +11,8 @@
 
 import {
   parseDiffKey, sliBaseOfSloId, matcherForDeployItem, computeDeployTransitions,
+  deployReviewModel, reviewHostOf, hiddenSelectionNote, recommendRemediation, remediationDeployPhrase,
+  remediationDeployActionLabel, remediationSideOnlyMeasure,
 } from '../studio/verify-deploy.mjs';
 import { catalogToDeployManifest } from '../studio/artifact-model.mjs';
 import { createHarness } from './lib/harness.mjs';
@@ -155,5 +157,124 @@ assert(r.summary.outcome === 'nothing-to-verify' && r.summary.allVerified === fa
 // Unmappable item type → unknown, surfaced.
 r = computeDeployTransitions([{ type: 'mystery', id: 'x' }], allGood);
 assert(r.transitions[0].status === 'unknown', 'unmappable item is reported unknown');
+
+// ---------- pre-deploy review ----------
+// The one panel before a deploy: destination, environment, what changes and
+// whether it is ready. Blocking = nothing selected, no gateway, no product,
+// an invalid schema. The tier rubric informs but never blocks: conformance
+// is not deployment readiness.
+const reviewRows = [
+  { type: 'recording', id: 'settlement_latency_99', name: 'SLO · settlement_latency_99 (recording rules)' },
+  { type: 'alert', id: 'settlement_latency_99', name: 'SLO · settlement_latency_99 (burn-rate alerts)' },
+  { type: 'dashboard', id: 'payment-overview', name: 'payment-overview' },
+];
+const readyReview = deployReviewModel({
+  target: { product: 'grafana', version: '12', url: 'https://grafana.example.net/d/x', folder: 'observability-pack', mcpUrl: 'https://user:secret@mcp.example.com/observability?token=abc' },
+  source: { id: 'payment-service', label: 'Payment service', version: 'v0.4.0' },
+  env: 'prod',
+  rows: reviewRows,
+  validation: { schemaValid: true, rubric: { conformant: false, tier: 'tier-2' } },
+});
+assert(readyReview.ready === true, 'a complete form with a valid pack is ready, even when the rubric is not met');
+assert(readyReview.headline === 'Ready to deploy 3 artefacts to grafana 12 (prod).', 'the ready headline names count, destination and environment', readyReview.headline);
+assert(readyReview.destination.gateway === 'mcp.example.com' && !JSON.stringify(readyReview).includes('secret') && !JSON.stringify(readyReview).includes('token'),
+       'the gateway is shown by host only: no userinfo, no query credentials');
+assert(readyReview.destination.host === 'grafana.example.net' && readyReview.destination.folder === 'observability-pack',
+       'destination carries the Grafana host and folder');
+assert(readyReview.changes.summary === '1 recording rule, 1 alert rule, 1 dashboard', 'changed artefacts are summarised by type', readyReview.changes.summary);
+assert(readyReview.source.version === '0.4.0', 'a leading v on the source version is not doubled');
+const rubricCheck = readyReview.checks.find(c => c.id === 'rubric');
+assert(rubricCheck.status === 'warning' && rubricCheck.blocking === false && rubricCheck.label === 'Does not meet tier-2 rubric',
+       'an unmet rubric warns without blocking');
+
+const blockedReview = deployReviewModel({ target: { product: 'grafana', version: '12' }, rows: [], validation: { schemaValid: false } });
+assert(blockedReview.ready === false, 'no rows, no gateway and an invalid schema block the deploy');
+assert(blockedReview.blockers.map(b => b.id).join() === 'selection,gateway,schema', 'every blocker is named, in form order', blockedReview.blockers.map(b => b.id));
+assert(blockedReview.headline === 'Not ready to deploy: select at least one artefact, add the MCP gateway URL and fix the pack’s schema errors.',
+       'the not-ready headline lists what to fix', blockedReview.headline);
+const unknownSchema = deployReviewModel({ target: { product: 'grafana', mcpUrl: 'https://mcp.example.com' }, rows: reviewRows.slice(0, 1) });
+assert(unknownSchema.ready === true && unknownSchema.checks.find(c => c.id === 'schema').status === 'notEvaluated'
+       && unknownSchema.checks.find(c => c.id === 'rubric').status === 'notEvaluated',
+       'an unchecked schema or rubric reads not evaluated, never pass, and does not block');
+// A met rubric is "met with real values" only when nothing says it rests on
+// template values: placeholder passes or template values in the pack turn it
+// into the Represented (placeholder) state, still non-blocking.
+const rubricOf = (rubric) => deployReviewModel({
+  target: { product: 'grafana', mcpUrl: 'https://mcp.example.com' }, rows: reviewRows.slice(0, 1),
+  validation: { schemaValid: true, rubric },
+}).checks.find(c => c.id === 'rubric');
+const onPh = rubricOf({ conformant: true, tier: 'tier-2', placeholders: 1, templates: 0 });
+assert(onPh.status === 'placeholder' && onPh.label === 'Meets tier-2 rubric on placeholder values' && onPh.blocking === false,
+       'a rubric met on placeholder passes is never a plain pass', onPh);
+const onTpl = rubricOf({ conformant: true, tier: 'tier-2', templates: 3 });
+assert(onTpl.status === 'placeholder' && onTpl.label === 'Meets tier-2 rubric; template values remain',
+       'a rubric met while the pack still carries template values is never a plain pass', onTpl);
+const clean = rubricOf({ conformant: true, tier: 'tier-2', placeholders: 0, templates: 0 });
+assert(clean.status === 'pass' && clean.label === 'Meets tier-2 rubric', 'a rubric met with no template values is a pass', clean);
+assert(rubricOf({ conformant: false, tier: 'tier-2', placeholders: 2 }).status === 'warning',
+       'an unmet rubric warns whatever the placeholders');
+
+// The type-filter note says the true effect: hidden selected rows are NOT
+// deployed. With per-type counts it appears only when a hidden type holds
+// selected rows; without counts it still never says "review everything".
+const dashHidden = [{ value: 'dashboard', label: 'Dashboard' }];
+assert(hiddenSelectionNote({ hiddenTypes: dashHidden, hiddenSelected: { dashboard: 2 } })
+       === '2 selected dashboards are filtered out of the table and will not be deployed. Show every type to include them.',
+       'hidden selected rows are counted and said not to deploy');
+assert(hiddenSelectionNote({ hiddenTypes: [...dashHidden, { value: 'alert', label: 'Alert rule' }], hiddenSelected: { dashboard: 0, alert: 1, recording: 4 } })
+       === '1 selected alert rule is filtered out of the table and will not be deployed. Show every type to include it.',
+       'only hidden types with selected rows are named; visible types never count');
+assert(hiddenSelectionNote({ hiddenTypes: dashHidden, hiddenSelected: { dashboard: 0 } }) === '',
+       'no note when the hidden types hold no selected row');
+const noCounts = hiddenSelectionNote({ hiddenTypes: dashHidden });
+assert(/not deployed/.test(noCounts) && !/review everything/.test(noCounts) && noCounts.includes('Dashboard'),
+       'without counts the note still says filtered-out selections are not deployed', noCounts);
+assert(hiddenSelectionNote({ hiddenTypes: [] }) === '', 'no hidden type, no note');
+
+// ---------- Remediate: recommendation and deploy counts ----------
+// Deploy is recommended only when something repo-only can be deployed.
+assert(recommendRemediation({ haveB: true, mode: 'drift', repoOnly: 19, repoDeployable: 0 }) === null,
+       'repo-only artefacts that all need a manual fix never recommend "deploy to live"');
+assert(recommendRemediation({ haveB: true, mode: 'drift', repoOnly: 19, repoDeployable: 0, drift: 2 })?.op === 'drift',
+       'with nothing deployable, drift is the recommendation when present');
+assert(recommendRemediation({ haveB: true, mode: 'drift', repoOnly: 30, repoDeployable: 11 })?.op === 'deploy',
+       'deployable repo-only artefacts recommend deploy');
+assert(recommendRemediation({ haveB: true, mode: 'drift', liveOnly: 3, repoOnly: 19, repoDeployable: 0 })?.op === 'retrofeed',
+       'the "both directions" recommendation needs a deployable half');
+assert(recommendRemediation({ haveB: true, mode: 'drift', liveOnly: 3, repoOnly: 5, repoDeployable: 2 })?.op === 'all',
+       'both sides with a deployable half recommend both directions');
+assert(recommendRemediation({ haveB: true, mode: 'gap', repoOnly: 5, repoDeployable: 5 }) === null,
+       'gap mode never recommends pushing the pack\'s extras');
+assert(recommendRemediation({ haveB: false, repoDeployable: 5 }) === null, 'no Pack B, no recommendation');
+
+// Deploy counts stay in artefacts, so they add up with "need a manual fix";
+// deploy rows only qualify them (an SLO is two rows).
+assert(remediationDeployPhrase({ selected: 11, deployable: 11, rows: 16 }) === '11 to deploy (16 deploy rows)',
+       'all selected: artefacts to deploy, rows in brackets');
+assert(remediationDeployPhrase({ selected: 4, deployable: 11, rows: 6 }) === '4 of 11 selected to deploy (6 deploy rows)',
+       'partly selected: selected of deployable artefacts');
+assert(remediationDeployPhrase({ selected: 0, deployable: 0, rows: 0 }) === '', 'nothing deployable, no deploy phrase');
+// The deploy button counts artefacts like the phrase beside it; rows only in brackets.
+assert(remediationDeployActionLabel({ selected: 11, rows: 16 }) === 'Review and deploy 11 selected (16 deploy rows) to live',
+       'deploy action: selected artefacts, deploy rows qualified');
+assert(remediationDeployActionLabel({ selected: 1, rows: 1 }) === 'Review and deploy 1 selected (1 deploy row) to live',
+       'deploy action: singular deploy row');
+
+// "Only in live/baseline" = 0 only covers the checked scope when Pack B
+// artefacts were parked: in gap mode it is never "nothing to import".
+{
+  const gapParked = remediationSideOnlyMeasure({ mode: 'gap', liveOnly: 0, outOfScope: 6 });
+  assert(gapParked.tone === 'warn' && !/nothing to import/.test(gapParked.note) && /not compared/.test(gapParked.note),
+         'gap mode with parked baseline artefacts: warn, says the rest was not compared', gapParked);
+  const liveParked = remediationSideOnlyMeasure({ mode: 'drift', liveOnly: 0, outOfScope: 6 });
+  assert(/checked scope/.test(liveParked.note), 'live mode with parked artefacts: bounded to the checked scope', liveParked);
+  assert(remediationSideOnlyMeasure({ mode: 'gap', liveOnly: 0, outOfScope: 0 }).note === 'nothing to import',
+         'nothing parked and nothing missing: nothing to import');
+  assert(remediationSideOnlyMeasure({ mode: 'gap', liveOnly: 3, outOfScope: 6 }).tone === 'warn',
+         'missing artefacts: warn');
+}
+
+assert(reviewHostOf('not a url/with/path') === 'not a url' && reviewHostOf('') === '' && reviewHostOf('mcp.example.com/x?t=1') === 'mcp.example.com',
+       'reviewHostOf degrades to the leading host-like segment for unparseable input');
 
 report('verify-deploy', 'all post-deploy transition assertions pass.');

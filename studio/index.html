@@ -24,6 +24,14 @@
 <link rel="stylesheet" href="/app.css">
 <link rel="stylesheet" href="/verdict-ui.css">
 <link rel="stylesheet" href="/proto.css">
+<link rel="stylesheet" href="/ux.css">
+<link rel="stylesheet" href="/ux-discover.css">
+<link rel="stylesheet" href="/ux-diagnose.css">
+<link rel="stylesheet" href="/ux-remediate.css">
+<link rel="stylesheet" href="/ux-neuron.css">
+<link rel="stylesheet" href="/ux-evidence.css">
+<link rel="stylesheet" href="/ux-build-define.css">
+<link rel="stylesheet" href="/ux-build-result.css">
 </head>
 <body>
 <a class="skip" href="#layer-view">Skip to content</a>
@@ -39,22 +47,22 @@
       <select id="service-select" aria-label="Select service workspace"></select>
     </label>
     <label class="ctrl">
-      <span class="ctrl-key">PACK A</span>
+      <span class="ctrl-key" title="The pack you are working on (Pack A)">PACK</span>
       <select id="pack-select" aria-label="Select pack A"></select>
     </label>
     <label class="ctrl">
-      <span class="ctrl-key">ENV A</span>
+      <span class="ctrl-key">ENVIRONMENT</span>
       <select id="env-select" aria-label="Select environment A"></select>
     </label>
     <label class="ctrl ctrl-pack-b" id="ctrl-pack-b">
-      <span class="ctrl-key">PACK B <button id="pack-b-clear" class="ctrl-key-clear" type="button" hidden title="Remove Pack B">×</button></span>
+      <span class="ctrl-key" title="The pack this one is compared with (Pack B)">BASELINE <button id="pack-b-clear" class="ctrl-key-clear" type="button" hidden title="Stop comparing with this baseline" aria-label="Remove baseline">×</button></span>
       <select id="pack-b-select" aria-label="Select pack B"></select>
     </label>
     <label class="ctrl ctrl-pack-b" id="ctrl-env-b" hidden>
-      <span class="ctrl-key">ENV B</span>
+      <span class="ctrl-key">BASELINE ENV</span>
       <select id="env-b-select" aria-label="Select environment B"></select>
     </label>
-    <div class="upload-popover-wrap">
+    <div class="upload-popover-wrap hdr-src">
       <button id="upload-btn" class="ctrl-btn" type="button" title="Upload a canonical v1.3 pack (.yaml or .json) — or pick a quick-start case" aria-haspopup="true" aria-expanded="false">upload</button>
       <div id="upload-popover" class="upload-popover" role="menu" hidden>
         <button class="upload-popover-item" data-action="pick-file" type="button" role="menuitem">
@@ -89,18 +97,38 @@
       </div>
     </div>
     <input id="file-input" type="file" accept=".yaml,.yml,.json,application/json,text/yaml,application/x-yaml" hidden>
-    <button id="crawl-btn" class="ctrl-btn" type="button" title="Scan a service repo — drag a folder, pick files, or paste a GitHub URL">scan a repo</button>
+    <button id="crawl-btn" class="ctrl-btn hdr-src" type="button" title="Scan a service repo — drag a folder, pick files, or paste a GitHub URL">scan a repo</button>
     <input id="crawl-file-input" type="file" multiple webkitdirectory hidden>
-    <button id="draft-mcp-btn" class="ctrl-btn" type="button" title="Draft a pack from a live MCP server — interrogate it for backends, baselines, anomalies">new from live</button>
-    <button id="export-btn" class="ctrl-btn" type="button" title="Export this pack — the pack.yaml plus every compiled artefact (rules · dashboards · pipelines · routes) as a ZIP" hidden>export</button>
-    <button id="mcp-btn" class="ctrl-btn mcp-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Refresh production-live from an MCP server">
+    <button id="draft-mcp-btn" class="ctrl-btn hdr-src" type="button" title="Draft a pack from a live MCP server — interrogate it for backends, baselines, anomalies">new from live</button>
+    <button id="export-btn" class="ctrl-btn hdr-src" type="button" title="Export this pack — the pack.yaml plus every compiled artefact (rules · dashboards · pipelines · routes) as a ZIP" hidden>export</button>
+    <button id="mcp-btn" class="ctrl-btn mcp-btn hdr-src" type="button" aria-haspopup="true" aria-expanded="false" title="Refresh production-live from an MCP server">
       <span class="mcp-dot" aria-hidden="true"></span>
       <span class="mcp-btn-label">mcp</span>
       <span class="mcp-btn-age" id="mcp-btn-age"></span>
     </button>
+    <!-- The working context bar keeps only the context (service, pack,
+         environment; the baseline on comparison screens) and theme. The
+         infrequent actions sit in one menu; the originals above stay in the
+         DOM (hidden) so every existing handler keeps working — the menu
+         items proxy to them. Admin tools live under Advanced. -->
+    <div class="hdr-menu" id="hdr-actions">
+      <button id="hdr-actions-btn" class="ctrl-btn hdr-menu-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="hdr-actions-menu">Actions <span aria-hidden="true">▾</span></button>
+      <div class="hdr-menu-panel" id="hdr-actions-menu" role="menu" aria-label="Actions" hidden>
+        <div class="hdr-menu-group" role="presentation">Add a pack</div>
+        <button type="button" class="hdr-menu-item" role="menuitem" data-proxy="#file-input">Upload a pack file…<span class="hdr-menu-sub">YAML or JSON manifest, spec v1.3</span></button>
+        <button type="button" class="hdr-menu-item" role="menuitem" data-proxy="#crawl-btn">Scan a repository…<span class="hdr-menu-sub">a folder or a GitHub URL</span></button>
+        <button type="button" class="hdr-menu-item" role="menuitem" data-proxy="#draft-mcp-btn">Draft from a live MCP server…<span class="hdr-menu-sub">what the platform actually observes</span></button>
+        <button type="button" class="hdr-menu-item" role="menuitem" data-proxy='.upload-popover-item[data-action="build-library"]'>Build a new pack<span class="hdr-menu-sub">Define → Compile → Verify</span></button>
+        <div class="hdr-menu-group" role="presentation">This pack</div>
+        <button type="button" class="hdr-menu-item" role="menuitem" data-proxy="#export-btn" data-needs-pack>Export as ZIP<span class="hdr-menu-sub">pack.yaml and every compiled artefact — a download, nothing is deployed</span></button>
+        <div class="hdr-menu-group" role="presentation">Quick start with a real case</div>
+        <button type="button" class="hdr-menu-item" role="menuitem" data-proxy='.upload-popover-item[data-action="quick-krystaline"]'>Krystaline · live MCP draft</button>
+        <button type="button" class="hdr-menu-item" role="menuitem" data-proxy='.upload-popover-item[data-action="quick-krystalinex-repo"]'>KrystalineX · repository scan</button>
+      </div>
+    </div>
     <button id="theme-toggle" class="ctrl-btn theme-toggle" type="button" aria-label="Toggle theme"></button>
-    <button id="reset-btn" class="ctrl-btn ctrl-reset" type="button" title="Clear all uploaded packs + saved state and reload — like a fresh checkout, no persistence carried over">reset</button>
-    <a class="ctrl-link" href="/api/packs" target="_blank" rel="noopener" title="Pack catalog JSON">api</a>
+    <button id="reset-btn" class="ctrl-btn ctrl-reset hdr-src" type="button" title="Clear all uploaded packs + saved state and reload — like a fresh checkout, no persistence carried over">reset</button>
+    <a class="ctrl-link hdr-src" id="api-link" href="/api/packs" target="_blank" rel="noopener" title="Pack catalog JSON">api</a>
   </div>
 </header>
 
@@ -127,7 +155,9 @@
 
 <nav class="tabs" id="layer-tabs" aria-label="Layer navigation"></nav>
 
-<main id="layer-view" tabindex="-1" aria-live="polite">
+<!-- Not a live region: the view re-renders whole, and announcing it all on
+     every change drowned the one status line that matters (#ux-status). -->
+<main id="layer-view" tabindex="-1">
   <div class="placeholder">Loading pack…</div>
 </main>
 
@@ -156,20 +186,20 @@
   <div id="drawer-a-panels"></div>
 </aside>
 
-<div class="deploy-modal" id="deploy-modal" role="dialog" aria-labelledby="deploy-modal-title" tabindex="-1" hidden>
+<div class="deploy-modal" id="deploy-modal" role="dialog" aria-labelledby="deploy-modal-title" aria-describedby="deploy-modal-lede" tabindex="-1" hidden>
   <div class="deploy-modal-head">
     <div class="deploy-modal-title">
-      <span class="deploy-modal-arrow">↑</span>
-      <h2 id="deploy-modal-title"><em>Deploy to Grafana</em></h2>
+      <span class="deploy-modal-arrow" aria-hidden="true">↑</span>
+      <h2 id="deploy-modal-title"><em>Deploy repository changes to live</em></h2>
     </div>
     <button class="deploy-modal-close" id="deploy-modal-close" type="button" aria-label="Close deploy modal" title="Close">×</button>
   </div>
-  <p class="deploy-modal-lede">Select artefacts and target, then deploy to a Grafana instance.</p>
+  <p class="deploy-modal-lede" id="deploy-modal-lede">Deploying writes the selected artefacts to a live platform through your MCP gateway. Choose the destination, pick the artefacts, then check the review beside the Deploy button — nothing is written until you press it.</p>
 
   <div class="deploy-modal-body">
-    <!-- Target section -->
+    <!-- 1 · Destination -->
     <section class="deploy-section">
-      <div class="deploy-section-head">TARGET</div>
+      <div class="deploy-section-head">1 · Destination</div>
       <div class="deploy-field-grid">
         <label class="deploy-field">
           <span class="deploy-field-key">Target profile</span>
@@ -214,9 +244,9 @@
       <div class="deploy-section-foot" id="deploy-target-summary">Target: —</div>
     </section>
 
-    <!-- Source pack + type filters -->
+    <!-- 2 · Source pack + type filters -->
     <section class="deploy-section">
-      <div class="deploy-section-head">SOURCE PACK &amp; ARTEFACT TYPES</div>
+      <div class="deploy-section-head">2 · Source pack and artefact types</div>
       <label class="deploy-field">
         <span class="deploy-field-key">Pack</span>
         <select id="deploy-source-pack"></select>
@@ -228,10 +258,10 @@
       </div>
     </section>
 
-    <!-- Manifest preview -->
+    <!-- 3 · The artefacts that will change -->
     <section class="deploy-section">
       <div class="deploy-section-head deploy-manifest-head">
-        MANIFEST PREVIEW
+        3 · Artefacts to deploy
         <span class="deploy-manifest-counter" id="deploy-manifest-counter">0 of 0 artefacts selected</span>
       </div>
       <div class="deploy-manifest-toolbar">
@@ -257,10 +287,19 @@
     </section>
   </div>
 
+  <!-- Review before deploying: destination, environment, the artefacts that change and the validation state in one
+       place, always beside the Deploy button. Filled from the form by studio/compile-view.mjs (wireDeployReview). -->
+  <section class="deploy-review" id="deploy-review" aria-labelledby="deploy-review-title">
+    <div class="deploy-section-head deploy-review-head" id="deploy-review-title">Review before deploying</div>
+    <div class="deploy-review-body" id="deploy-review-body">
+      <p class="deploy-review-verdict">Choose a destination and the artefacts to see what will change.</p>
+    </div>
+  </section>
+
   <div class="deploy-modal-actions">
     <span id="deploy-modal-status" class="mcp-refresh-status"></span>
-    <button id="deploy-modal-cancel" type="button" class="ctrl-btn">cancel</button>
-    <button id="deploy-modal-go"     type="button" class="mcp-refresh-btn"><span class="deploy-go-icon">↑</span> Deploy</button>
+    <button id="deploy-modal-cancel" type="button" class="ctrl-btn">Cancel</button>
+    <button id="deploy-modal-go"     type="button" class="mcp-refresh-btn" title="Writes to the live platform"><span class="deploy-go-icon" aria-hidden="true">↑</span> Deploy to live</button>
   </div>
 
   <div class="deploy-modal-result" id="deploy-modal-result" hidden></div>
@@ -473,6 +512,8 @@
 <!-- The Build conformance status, announced once per change: a persistent live region outside the re-rendered
      view (the summary block itself is rebuilt on every re-render, so a live region there announced nothing or everything). -->
 <div id="build-status" class="sr-text" role="status" aria-live="polite"></div>
+<!-- Scan / evaluation / compile / deploy progress, announced once per change (studio/ux-kit.mjs announce()). -->
+<div id="ux-status" class="sr-text" role="status" aria-live="polite"></div>
 
 <script type="module" src="/app.mjs"></script>
 </body>

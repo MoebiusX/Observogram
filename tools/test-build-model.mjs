@@ -50,6 +50,7 @@ import { LAYER_DEFS, L4_SUBGROUPS } from '../studio/constants.mjs';
 import { renderBuildDefine, rejectedCopies, instantiateErrorHtml } from '../studio/build-define-view.mjs';
 import { renderBuildCompile } from '../studio/build-compile-view.mjs';
 import { renderBuildVerify } from '../studio/build-verify-view.mjs';
+import { warningKey, warningSli, buildReadiness, schemaErrorLayer, verifyDecision } from '../studio/build-model.mjs';
 import { renderBuildStack, buildStackHtml, wireBuildStack } from '../studio/build-stack-view.mjs';
 import { renderBuildDefinition, buildDefinitionHtml, wireBuildDefinition, summaryHtml, seedCardHtml } from '../studio/build-definition-view.mjs';
 import { renderBuildSheet, buildSheetHtml, wireBuildSheet, wireRolodex, SMOOTH_SCROLL_GRACE_MS } from '../studio/build-sheet-view.mjs';
@@ -386,11 +387,12 @@ test('renderBuildDefine escapes the typed service name: the model carries it raw
   renderBuildDefine(container, m, { build: {} });
   assert.ok(!container.innerHTML.includes('<img'), 'no element from the name reaches the page');
   assert.ok(container.innerHTML.includes('Still needed: a service name that slugs (‘1&lt;img src=x onerror=&quot;window.__xss=1&quot;&gt;’'), 'the status line shows the name escaped');
-  // The input lives in the definition column now: its value is escaped there too.
+  // The input lives on the step's Service substep (the 2026-09 UX review moved the form out of the column): its value is escaped there too.
+  assert.ok(container.innerHTML.includes(`value="${'1&lt;img src=x onerror=&quot;window.__xss=1&quot;&gt;'}"`), 'the input value is escaped too');
+  // The column is the progress summary: it says what is still needed, the name escaped.
   const def = stubContainer();
   renderBuildDefinition(def, buildDefinitionModel({ build: draft({ name: payload }), library: LIBRARY, requirements: REQUIREMENTS }), { build: {} });
   assert.ok(!def.innerHTML.includes('<img'));
-  assert.ok(def.innerHTML.includes(`value="${'1&lt;img src=x onerror=&quot;window.__xss=1&quot;&gt;'}"`), 'the input value is escaped too');
   assert.ok(def.innerHTML.includes('Still needed: a service name that slugs'), 'the column says what is still needed');
 });
 
@@ -695,8 +697,13 @@ test('the definition column’s summary carries the counts the rail used to prin
   assert.equal(s.blockingWarnings, 0);
   assert.equal(s.placeholdersRemaining, 17);
   assert.equal(s.ready, true);
-  assert.equal(s.statusKind, 'ok');
-  assert.equal(s.status, 'conformant at tier-2');
+  // Conformant, but four MUST clauses meet it only on a placeholder: amber, and it says so (never a green "meets").
+  assert.equal(s.mustOnPlaceholder, 4);
+  assert.equal(s.statusKind, 'warn');
+  assert.equal(s.status, 'meets the tier-2 rubric on placeholders — real values still needed', 'the plain words for conformant (the 2026-09 review §4), placeholders named');
+  // Every clause on real values: green, the plain words alone.
+  const real = buildDefinitionModel({ build: draft({ result: doneResult() }), library: LIBRARY, requirements: REQUIREMENTS }).summary;
+  assert.deepEqual([real.statusKind, real.status, real.mustOnPlaceholder], ['ok', 'meets the tier-2 rubric', 0]);
   assert.equal(s.counts.placeholder, 4);
   assert.equal(s.onPlaceholder, 4);
   const cold = buildDefinitionModel({ build: defaultBuildState(), library: LIBRARY, requirements: REQUIREMENTS }).summary;
@@ -751,12 +758,18 @@ test('buildVerifyModel: the verdict with the three states, schema, warnings, tod
   assert.equal(m.registeredId, null);
   // "Ready to continue?": the exit's label and text follow the placeholders that remain.
   assert.equal(m.gaps, 17);
-  assert.equal(m.continueLabel, 'Continue with visible gaps');
-  assert.match(m.readyText, /^Ready to continue\? 17 placeholders remain/);
+  // The review's §1: Verify leads to "Open pack in Discover", and says the pack becomes the same kind of pack Discover inspects.
+  assert.equal(m.continueLabel, 'Open pack in Discover with visible gaps');
+  assert.match(m.readyText, /^The generated pack becomes the same kind of pack you inspect and improve in Discover\. Its 17 placeholder values travel with it as visible gaps/);
   const filled = buildVerifyModel({ build: draft({ result: { ...draft().result, provenance: { ...draft().result.provenance, placeholders: [] } } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
   assert.equal(filled.gaps, 0);
-  assert.equal(filled.continueLabel, 'Continue to Discover');
-  assert.match(filled.readyText, /No placeholder remains/);
+  // Every value filled is not every gap closed: the clauses on placeholders and the todos still travel as visible gaps.
+  assert.equal(filled.continueLabel, 'Open pack in Discover with visible gaps');
+  assert.match(filled.readyText, /Every value is filled, but 4 clauses pass only on placeholders, 3 items remain to write or measure and 18 other todos remain; they travel with it as visible gaps/);
+  assert.doesNotMatch(filled.readyText, /No placeholder value remains/);
+  const done = buildVerifyModel({ build: draft({ result: doneResult() }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
+  assert.equal(done.continueLabel, 'Open pack in Discover');
+  assert.match(done.readyText, /No placeholder value remains/);
   // A blocking warning or a schema error blocks the hand-off; nothing else does.
   const blocked = buildVerifyModel({ build: draft({ result: { ...draft().result, warnings: [{ kind: 'promql', message: 'x' }] } }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
   assert.equal(blocked.blocking, true);
@@ -768,6 +781,175 @@ test('buildVerifyModel: the verdict with the three states, schema, warnings, tod
   assert.equal(cold.ready, false);
   assert.equal(cold.verdict, null);
   assert.deepEqual(cold.todoGroups, []);
+});
+
+// The 2026-09 UX review, "Build / Verify" (P0) and "Build / Compile": the result first, the readiness states apart.
+const THRESHOLD_WARNING = { kind: 'burn-rules', message: 'threshold SLI kafka_produce_latency_p99: the policy reads threshold 0.8 as a ceiling (bad = samples above it); unit ratio looks like a floor — declare good_when: above (or good_when: below to state the ceiling)' };
+const SAMPLING_WARNING = { kind: 'burn-rules', message: 'SLI http_service_availability: no job="..." matcher names one of the pack\'s scrape jobs (a, b), which are scraped at different intervals (15s, 30s); sampling at 30s' };
+// The fixture with every value filled, no todo left and no clause resting on a placeholder.
+const doneResult = () => ({
+  ...draft().result, todos: [], provenance: { ...FIXTURE.provenance, placeholders: [] },
+  summary: { ...FIXTURE.summary, onPlaceholder: [], passing: [...FIXTURE.summary.passing, ...FIXTURE.summary.onPlaceholder.map(c => c.id)] },
+});
+
+test('VERIFY shows four readiness states apart — "meets the tier rubric" never masks a placeholder: the fixture is ready for team completion, not for deployment', () => {
+  const verify = (over) => buildVerifyModel({ build: draft(over), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
+  const m = verify();
+  assert.deepEqual(m.states.map(s => [s.id, s.label, s.value, s.tone]), [
+    ['schema', 'Schema valid', 'Yes', 'ok'], ['rubric', 'Meets tier rubric', 'Yes', 'warn'],
+    ['implementation', 'Implementation', 'Incomplete', 'warn'], ['deployment', 'Deployment ready', 'No', 'warn'],
+  ]);
+  assert.equal(m.states[1].note, 'MUST 15/15 at tier-2 · 4 only on placeholders', 'conformant, and it says how many MUST clauses rest on a placeholder');
+  assert.deepEqual(m.readiness.reasons, ['17 values to fill', '4 clauses pass only on placeholders', '3 items to write or measure outside the studio']);
+  assert.deepEqual([m.decision.sentence, m.decision.word, m.decision.tone], ['Ready for team completion; not ready for deployment.', 'Incomplete', 'warn']);
+  assert.deepEqual([m.next.primary.label, m.next.primary.action, m.next.secondary.map(s => s.label)], ['Complete required values', 'complete-values', ['Open in Discover with visible gaps']]);
+  // The smallest actionable list: the clauses on placeholders, the values by the layer each shapes, what no value fills.
+  assert.deepEqual(m.remains.counts, { blocking: 0, warnings: 0, accepted: 0, failing: 0, clauses: 4, values: 17, manual: 3 });
+  assert.deepEqual(m.remains.values.groups.map(g => [g.layer, g.items.length]), [['L2', 11], ['L4', 3], ['L5', 3]]);
+  assert.deepEqual(m.remains.values.groups.find(g => g.layer === 'L4').items.find(v => v.key === 'oncall_channel').todos, ['alerting.routes[0]', 'alerting.routes[1]']);
+  assert.deepEqual(m.remains.clauses.find(c => c.id === 'L2.MUST.metrics_exporter').todos, ['pipelines.exporters.metrics']);
+  assert.deepEqual(m.remains.manual.map(t => t.path), ['baselines', 'remediation[0]', 'remediation[1]']);
+  // Every value real: all four say yes, and the one primary action is the hand-off.
+  const ready = verify({ result: doneResult() });
+  assert.deepEqual(ready.states.map(s => s.value), ['Yes', 'Yes', 'Complete', 'Yes']);
+  assert.equal(ready.readiness.deployable, true);
+  assert.match(ready.decision.sentence, /^Ready for deployment: valid, meets the tier-2 rubric on real values/);
+  assert.deepEqual([ready.next.primary.label, ready.next.primary.action, ready.next.secondary], ['Open pack in Discover', 'open-discover', []]);
+  assert.equal(ready.remains.empty, true);
+  // A non-blocking warning holds deployment back until it is accepted with a reason (per session, on the draft).
+  const warned = verify({ result: { ...doneResult(), warnings: [THRESHOLD_WARNING] } });
+  assert.equal(warned.readiness.deployable, false);
+  assert.equal(warned.decision.sentence, 'Complete for tier-2; one warning needs review before deployment.');
+  const item = warned.remains.warnings[0];
+  assert.deepEqual([item.sli, item.impact, item.acceptable, item.fix], ['kafka_produce_latency_p99', 'SLI-04 · kafka_produce_latency_p99', true, { kind: 'editor', key: 'kafka_produce_latency_p99', custom: false, focus: 'good_when', layer: 'L1' }]);
+  assert.match(item.suggestion, /Good when/);
+  const accepted = verify({ result: { ...doneResult(), warnings: [THRESHOLD_WARNING] }, accepted: { [warningKey(THRESHOLD_WARNING)]: { reason: 'a ceiling on purpose' } } });
+  assert.equal(accepted.readiness.deployable, true);
+  assert.deepEqual([accepted.remains.counts.warnings, accepted.remains.counts.accepted, accepted.remains.accepted[0].accepted.reason], [0, 1, 'a ceiling on purpose']);
+  // A blocking warning is never accepted away: the hand-off stays blocked and the primary action fixes it.
+  const promql = { kind: 'promql', sli: 'http_service_availability', field: 'good', message: 'SLI http_service_availability.good is not valid PromQL after parameter substitution' };
+  const blocked = verify({ result: { ...doneResult(), warnings: [promql] }, accepted: { [warningKey(promql)]: { reason: 'x' } } });
+  assert.deepEqual([blocked.decision.word, blocked.decision.tone, blocked.readiness.deployable, blocked.canRegister], ['Blocked', 'fail', false, false]);
+  assert.deepEqual([blocked.next.primary.action, blocked.remains.blocking[0].acceptable, blocked.remains.blocking[0].fix.focus], ['fix-first', false, 'good']);
+  // A schema error blocks too, and points at the layer its section lives on.
+  const invalid = verify({ result: { ...doneResult(), schemaErrors: ['$.spec.dashboards: missing required key'] } });
+  assert.deepEqual([invalid.states[0].value, invalid.decision.word, invalid.remains.blocking[0].fix], ['No', 'Blocked', { kind: 'sheet', layer: 'L3' }]);
+  assert.equal(schemaErrorLayer('$.spec: missing required key \'dashboards\''), 'L1');
+  // A failing MUST clause: the rubric says no and the primary action resolves it (back on Compile).
+  const failing = verify({ result: { ...draft().result, summary: DASHBOARDS_OFF_SUMMARY } });
+  assert.deepEqual([failing.states[1].value, failing.decision.word, failing.next.primary.action], ['No', 'Below tier', 'resolve-failing']);
+  assert.equal(buildReadiness({ result: null }), null);
+  assert.deepEqual([warningSli(THRESHOLD_WARNING), warningSli(SAMPLING_WARNING), warningSli({ kind: 'burn-rules', message: 'no SLI here' })], ['kafka_produce_latency_p99', 'http_service_availability', null]);
+});
+
+test('the VERIFY screen renders the grammar: the step question, the verdict sentence, the four states, "What remains" with Fix now, the hand-off named explicitly', () => {
+  const render = (over) => { const c = stubContainer(); renderBuildVerify(c, buildVerifyModel({ build: draft(over), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS }), { build: {} }); return c.innerHTML; };
+  const html = render();
+  assert.ok(html.includes('What is ready, and what remains?'));
+  assert.ok(html.includes('Ready for team completion; not ready for deployment.'));
+  assert.ok(html.includes('id="build-verify-complete"') && html.includes('>Complete required values</button>'), 'one primary action at the gate');
+  assert.ok(html.includes('title="Conformant: Every MUST clause for the tier is satisfied'), '"Meets tier rubric" carries the formal word and its limit on hover');
+  assert.ok(!/>\s*conformant\s*</.test(html), 'the bare word "conformant" is never the verdict');
+  assert.ok(html.includes('id="build-remains"') && html.includes('Values to fill') && html.includes('data-ux-action="fix" data-key="value:oncall_channel"'));
+  assert.ok(html.includes('Requirement represented; real value still needed'));
+  assert.ok(html.includes('The generated pack becomes the same kind of pack you inspect and improve in Discover.'), 'the hand-off is explicit');
+  assert.ok(html.includes('id="build-open"') && html.includes('Open pack in Discover with visible gaps'));
+  // A warning offers "Accept with reason"; its open form says the acknowledgement is per session and not in the pack.
+  const key = warningKey(THRESHOLD_WARNING);
+  const warned = render({ result: { ...doneResult(), warnings: [THRESHOLD_WARNING] } });
+  assert.ok(warned.includes('data-ux-action="accept-open"') && warned.includes('Suggested correction'));
+  const form = render({ result: { ...doneResult(), warnings: [THRESHOLD_WARNING] }, accepting: key, acceptDraft: { key, text: 'on <purpose>' } });
+  assert.ok(form.includes('value="on &lt;purpose&gt;"') && form.includes('Kept for this session only — not saved, and not written into the pack.'));
+  assert.ok(render({ result: doneResult() }).includes('>Open pack in Discover</button>'), 'every value filled: the hand-off is the primary action');
+});
+
+test('COMPILE leads with a result: one sentence, three states apart, the action queue, what was produced by layer and type, which selection produced which artefact', () => {
+  const compile = (over) => buildCompileModel({ build: draft(over), library: LIBRARY, clauses: REQUIREMENTS['tier-2'] });
+  const c = compile();
+  assert.equal(c.decision.sentence, 'Pack compiled. No warning needs review; 17 values remain placeholders.');
+  assert.deepEqual(c.states.map(s => [s.id, s.label, s.value]), [['generated', 'Generated', 'Yes'], ['tier', 'Complete for this tier', 'On placeholders'], ['deploy', 'Ready to deploy', 'No']]);
+  assert.deepEqual(c.queue.map(i => [i.kind, i.fix]), [['placeholders', { kind: 'step', step: 'verify' }]]);
+  assert.deepEqual(c.context.map(x => x.value), ['orders-api', 'prod', 'tier-2', 'kafka + http-service']);
+  // Two warnings: counted in the sentence, first in the queue with the artefact each impacts and a correction.
+  const two = compile({ result: { ...draft().result, warnings: [THRESHOLD_WARNING, SAMPLING_WARNING] } });
+  assert.equal(two.decision.sentence, 'Pack compiled. Two warnings need review; 17 values remain placeholders.');
+  assert.deepEqual(two.queue.map(i => [i.kind, i.impact]), [['burn-rules', 'SLI-04 · kafka_produce_latency_p99'], ['burn-rules', 'SLI-06 · http_service_availability'], ['placeholders', '21 artefacts with template values · 21 todos']]);
+  // What was produced: per layer, by type with its purpose; the counts add up to the stack's.
+  assert.deepEqual(c.produced.find(l => l.id === 'L1').types.map(t => [t.type, t.count]), [['SLIs', 7], ['SLOs', 7]]);
+  assert.deepEqual(c.produced.find(l => l.id === 'L4').types.map(t => [t.type, t.count]), [['Burn-rate alerts', 7], ['Alert routes', 3], ['Remediations', 2]]);
+  assert.equal(c.produced.reduce((n, l) => n + l.artefacts, 0), c.stack.counts.artefacts);
+  // Changes since Define: each selection's artefacts, the rest the tier's scaffold — every artefact attributed once.
+  assert.deepEqual(c.origins.groups.map(g => [g.id, g.count]), [['kafka', 34], ['http-service', 11], ['scaffold', 37]]);
+  assert.equal(c.origins.groups.reduce((n, g) => n + g.count, 0), c.stack.counts.artefacts);
+  assert.deepEqual(c.origins.groups.find(g => g.id === 'http-service').slis, ['http_service_availability', 'http_service_latency_p99']);
+  assert.deepEqual(compile({ params: { oncall_channel: '#x' }, toggles: { ...defaultBuildState().toggles, dashboards: false } }).origins.edits.map(e => e.kind), ['params', 'off']);
+  // Layers expand only when selected; the sheet's layer is drawn too, so focus returns to a slab head that exists.
+  assert.deepEqual(c.expandedLayers, []);
+  assert.deepEqual(compile({ compileView: ['L3'], sheetOpen: 'L1' }).expandedLayers, ['L1', 'L3']);
+  assert.equal(compile({ compileView: 'all' }).expandedLayers.length, c.stack.slabs.length);
+  // Headless: the result sentence first, the overview without a slab until one is selected.
+  const render = (over) => { const el = stubContainer(); renderBuildCompile(el, compile(over), { build: {} }); return el.innerHTML; };
+  const html = render();
+  assert.ok(html.includes('What did the pack produce?') && html.includes('Pack compiled. No warning needs review; 17 values remain placeholders.'));
+  assert.ok(html.includes('What the pack produced') && html.includes('Changes since Define'));
+  assert.ok(!html.includes('class="section build-slab'), 'no slab drawn in the overview');
+  assert.ok(render({ compileView: ['L1'] }).includes('class="section build-slab is-pass'), 'a selected layer draws its slab');
+});
+
+// The false-assurance review (2026-09): no Build screen reads green, "nothing needs review", "nothing remains",
+// "ready" or "no placeholder value remains" while a clause rests on a placeholder, a todo is left, a clause fails or
+// the rubric is not evaluated.
+test('COMPILE and VERIFY never read complete while clauses rest on placeholders, todos remain, a clause fails or the rubric is unread', () => {
+  const compile = (result) => buildCompileModel({ build: draft({ result }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'] });
+  const verify = (result) => buildVerifyModel({ build: draft({ result }), library: LIBRARY, clauses: REQUIREMENTS['tier-2'], targets: TARGETS });
+  const renderC = (m) => { const el = stubContainer(); renderBuildCompile(el, m, { build: {} }); return el.innerHTML; };
+  const renderV = (m) => { const el = stubContainer(); renderBuildVerify(el, m, { build: {} }); return el.innerHTML; };
+  // Every value filled, but 4 clauses pass only on placeholders and 21 todos remain (3 no value fills).
+  const filledResult = { ...draft().result, provenance: { ...FIXTURE.provenance, placeholders: [] } };
+  const c = compile(filledResult);
+  assert.equal(c.readiness.values, 0);
+  assert.deepEqual([c.decision.tone, c.decision.sentence], ['warn', 'Pack compiled. No warning needs review; every value is filled, but 4 clauses pass only on placeholders, 3 items remain to write or measure and 18 other todos remain.']);
+  assert.deepEqual(c.queue.map(i => [i.kind, i.fix]), [['gaps', { kind: 'step', step: 'verify' }]]);
+  const cHtml = renderC(c);
+  assert.ok(!cHtml.includes('Nothing needs review') && cHtml.includes('Still to complete'), 'the queue is never the green empty state over an incomplete pack');
+  const v = verify(filledResult);
+  assert.deepEqual([v.decision.word, v.next.primary.action, v.next.primary.label], ['Incomplete', 'open-discover', 'Open in Discover with visible gaps']);
+  const vHtml = renderV(v);
+  assert.ok(vHtml.includes('Open pack in Discover with visible gaps') && !vHtml.includes('No placeholder value remains'));
+  // Everything real: the only case that reads green, "Nothing needs review" and "Ready".
+  const done = compile(doneResult());
+  assert.deepEqual([done.decision.tone, done.decision.sentence, done.queue.length], ['ok', 'Pack compiled. No warning needs review; every value is filled.', 0]);
+  assert.ok(renderC(done).includes('Nothing needs review'));
+  // A blocking PromQL warning or a schema error: the sentence counts only the other warnings, as the queue lists the blocker.
+  const promql = { kind: 'promql', sli: 'http_service_availability', field: 'good', message: 'not valid PromQL' };
+  const blocked = compile({ ...doneResult(), warnings: [promql] });
+  assert.equal(blocked.decision.sentence, 'Pack compiled, but it must not ship: an SLI expression is not valid PromQL. No other warning needs review; every value is filled.');
+  assert.equal(compile({ ...doneResult(), warnings: [promql, THRESHOLD_WARNING] }).decision.sentence, 'Pack compiled, but it must not ship: an SLI expression is not valid PromQL. One other warning needs review; every value is filled.');
+  assert.match(compile({ ...doneResult(), schemaErrors: ['$.spec.dashboards: missing required key'] }).decision.sentence, /schema in 1 place. No other warning needs review;/);
+  // A failing clause: on the queue (to its layer sheet) and on "What remains" — never "Nothing remains" under "Below tier".
+  const below = { ...doneResult(), summary: { ...DASHBOARDS_OFF_SUMMARY, onPlaceholder: [] } };
+  const cf = compile(below);
+  assert.deepEqual([cf.decision.tone, cf.queue.map(i => [i.kind, i.fix])], ['fail', [['failing', { kind: 'sheet', layer: 'L3' }]]]);
+  const vf = verify(below);
+  assert.deepEqual([vf.decision.word, vf.remains.empty, vf.remains.failing.map(i => [i.id, i.layer])], ['Below tier', false, [['L3.MUST.service_overview_dashboard', 'L3'], ['L3.MUST.slo_burn_dashboard', 'L3']]]);
+  const vfHtml = renderV(vf);
+  assert.ok(vfHtml.includes('data-group="failing"') && vfHtml.includes('data-key="fail:L3.MUST.slo_burn_dashboard"') && !vfHtml.includes('Nothing remains'));
+  // The rubric not evaluated (no summary): never "Ready", never "Nothing remains", never a green compile.
+  const unread = { ...doneResult(), summary: null };
+  const vu = verify(unread);
+  assert.deepEqual([vu.decision.word, vu.decision.tone, vu.remains.empty, vu.readiness.deployable], ['Not evaluated', 'warn', false, false]);
+  assert.equal(vu.next.primary.label, 'Open in Discover with visible gaps');
+  assert.equal(vu.continueLabel, 'Open pack in Discover with visible gaps');
+  assert.doesNotMatch(vu.readyText, /No placeholder value remains/);
+  const vuHtml = renderV(vu);
+  assert.ok(!vuHtml.includes('Nothing remains') && vuHtml.includes('The tier rubric is not evaluated yet'));
+  const cu = compile(unread);
+  assert.deepEqual([cu.decision.tone, cu.decision.sentence], ['warn', 'Pack compiled. No warning needs review; every value is filled. The tier rubric is not evaluated yet.']);
+  const cuHtml = renderC(cu);
+  assert.ok(!cuHtml.includes('Nothing needs review') && cuHtml.includes('No warning to review'));
+  // "Ready" is tied to deployable: a reason no branch names still keeps it at not ready.
+  const r = { ...buildReadiness({ result: doneResult() }), deployable: false, reasons: ['something new'] };
+  assert.deepEqual([verifyDecision(r, { tier: 'tier-2' }).word, verifyDecision(r).tone], ['Not ready', 'warn']);
 });
 
 // ---------------------------------------------------------------------------
@@ -895,7 +1077,7 @@ test('buildStackModel: the edge states are the checklist\'s per dimension, and a
   const s = stackOf();
   assert.deepEqual(Object.fromEntries(s.slabs.map(x => [x.id, x.state])), { L1: 'pass', L2: 'placeholder', L2X: 'pass', L3: 'pass', L4: 'pass', L5: 'placeholder', GOV: 'neutral' });
   const l2 = s.slabs.find(x => x.id === 'L2');
-  assert.equal(l2.stateText, '5 of 5 pass · 2 on a placeholder');
+  assert.equal(l2.stateText, '5 of 5 pass · 2 need a real value');
   assert.deepEqual(l2.why, [
     'L2.MUST.metrics_exporter — passes on 1 placeholder: pipelines.exporters.metrics',
     'L2.MUST.metrics_logs_traces_backends — passes on 3 placeholders: telemetry.backends.logs-loki, telemetry.backends.metrics-prom, telemetry.backends.traces-tempo',
@@ -1081,17 +1263,18 @@ test('the maturity number says the split: the pass share, then the share that pa
   const render = (b) => { const c = stubContainer(); renderBuildVerify(c, buildVerifyModel({ build: b, library: LIBRARY, clauses: T2, targets: TARGETS }), { build: {} }); return c.innerHTML; };
   const html = render(draft());
   // L5: 0 of 2 pass without a placeholder — the text says 0%, not 100%.
-  assert.equal(rowOf(html, 'L5')[1], '0% <span class="build-maturity-ph" title="pass on a placeholder">+100% ◐</span>');
-  assert.equal(rowOf(html, 'L2')[1], '60% <span class="build-maturity-ph" title="pass on a placeholder">+40% ◐</span>');
+  // The placeholder share is titled in the review's words (§4: "Pass on a placeholder" → "Requirement represented; real value still needed").
+  assert.equal(rowOf(html, 'L5')[1], '0% <span class="build-maturity-ph" title="requirement represented; real value still needed">+100% ◐</span>');
+  assert.equal(rowOf(html, 'L2')[1], '60% <span class="build-maturity-ph" title="requirement represented; real value still needed">+40% ◐</span>');
   assert.equal(rowOf(html, 'L1')[1], '100%', 'all pass: one number, no placeholder share');
   assert.ok(!/build-maturity-pct">100% <span/.test(html), 'a placeholder share is never printed beside a 100% pass');
   // The bar carries the counts for a screen reader (the segments are empty spans).
-  assert.ok(html.includes('<span class="build-maturity-bar" role="img" aria-label="L5 Validation: 0 pass, 2 on a placeholder, 0 fail of 2 clauses">'));
-  assert.ok(html.includes('aria-label="L2 Telemetry: 3 pass, 2 on a placeholder, 0 fail of 5 clauses"'));
+  assert.ok(html.includes('<span class="build-maturity-bar" role="img" aria-label="L5 Validation: 0 pass, 2 need a real value, 0 fail of 2 clauses">'));
+  assert.ok(html.includes('aria-label="L2 Telemetry: 3 pass, 2 need a real value, 0 fail of 5 clauses"'));
   // Dashboards off: L3 reads 50% (2 of 4 pass), the failing half is the red segment.
   const off = render(draft({ result: { ...draft().result, summary: DASHBOARDS_OFF_SUMMARY } }));
   assert.equal(rowOf(off, 'L3')[1], '50%');
-  assert.ok(off.includes('aria-label="L3 Insight: 2 pass, 0 on a placeholder, 2 fail of 4 clauses"'));
+  assert.ok(off.includes('aria-label="L3 Insight: 2 pass, 0 need a real value, 2 fail of 4 clauses"'));
 });
 
 test('a section switched off dims the slab it feeds (L4 per subgroup); the open slabs come from `expanded`', () => {
@@ -1263,7 +1446,7 @@ test('the slab verdict reads at WCAG AA in both themes: each state colour the ru
   const pill = cssRule('.build-slab-verdict');
   const surface = pill.match(/background:\s*var\(--([\w-]+)\)/)?.[1];
   assert.equal(surface, 'card', 'the verdict sits on the card surface, not on the layer tint');
-  assert.match(pill, /font:\s*600 11px/, 'small bold text: the 4.5:1 threshold applies');
+  assert.match(pill, /font:\s*600 13px/, 'small bold text (under 14 px): the 4.5:1 threshold applies');
   for (const state of ['pass', 'placeholder', 'fail', 'pending', 'neutral']) {
     const token = cssRule(`.build-slab-verdict.is-${state}`)?.match(/color:\s*var\(--([\w-]+)\)/)?.[1];
     assert.ok(token, `.is-${state} names a token`);
@@ -1366,6 +1549,169 @@ const fakeEl = (dataset = {}, extra = {}) => {
   };
 };
 
+// ---------------------------------------------------------------------------
+// DEFINE in four substeps (the 2026-09 UX review, "Build / Define")
+// ---------------------------------------------------------------------------
+
+test('DEFINE substeps: which one shows, what each holds, what the tier asks of the pack (from the rubric), what an entry adds, the suggestions grouped by technology', async () => {
+  const bm = await import('../studio/build-model.mjs');
+  // The four substeps, in order; the one shown is the draft's (UI state) or the first still needing input.
+  assert.deepEqual(bm.DEFINE_SUBSTEPS.map(s => s.id), ['service', 'criticality', 'technology', 'review']);
+  const full = bm.buildDefineModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS });
+  assert.equal(full.substep, 'review', 'a complete definition opens on the review');
+  assert.deepEqual(full.substeps.map(s => [s.id, s.status, s.value]), [
+    ['service', 'complete', 'orders-api · team-orders · prod'], ['criticality', 'complete', 'tier-2 · important'],
+    ['technology', 'complete', 'Apache Kafka, HTTP service (OTel semconv)'], ['review', 'current', '7 SLIs in the pack'],
+  ]);
+  assert.equal(full.substepsDone, 4);
+  const fresh = bm.buildDefineModel({ build: defaultBuildState(), library: LIBRARY, requirements: REQUIREMENTS });
+  assert.deepEqual([fresh.substep, fresh.substeps.map(s => s.status)], ['service', ['current', 'complete', 'todo', 'todo']], 'a fresh draft starts on the service; the tier has a default');
+  assert.equal(fresh.substeps[0].value, 'not named yet');
+  assert.equal(bm.buildDefineModel({ build: draft({ entries: [] }), library: LIBRARY, requirements: REQUIREMENTS }).substep, 'technology');
+  assert.equal(bm.buildDefineModel({ build: draft({ defineSub: 'criticality' }), library: LIBRARY, requirements: REQUIREMENTS }).substep, 'criticality', 'the draft remembers the one shown');
+  assert.equal(bm.buildDefineModel({ build: draft({ defineSub: 'nonsense' }), library: LIBRARY, requirements: REQUIREMENTS }).substep, 'review');
+  assert.equal(bm.serviceLine({ name: 'Orders API', owners: 'a, b', environment: 'staging' }), 'orders-api · a, b · staging');
+  // The column's progress reads the same substeps.
+  assert.deepEqual(buildDefinitionModel({ build: draft({ defineSub: 'technology' }), library: LIBRARY, requirements: REQUIREMENTS }).substeps.map(s => s.status), ['complete', 'complete', 'current', 'complete']);
+  // What each tier asks of the pack, read from its rubric clauses: the review's "Tier 2: availability and latency objectives; logs and traces; alerting requirements".
+  const t2 = full.tiers.find(t => t.id === 'tier-2').consequences;
+  assert.equal(t2.derived, true);
+  assert.equal(t2.sentence, 'availability and latency objectives; metrics, logs and traces; burn-rate alerts; a service overview and an SLO burn board; a synthetic probe and chaos in staging');
+  assert.deepEqual(t2.rows.map(r => r.label), ['Objectives', 'Signals', 'Alerting', 'Dashboards', 'Validation']);
+  assert.ok(t2.rows.find(r => r.id === 'alerting').clauses.includes('L4.MUST.multi_window_burn_rate'), 'each row names the clauses behind it');
+  const t3 = full.tiers.find(t => t.id === 'tier-3').consequences;
+  assert.equal(t3.sentence, 'an availability objective; an OTLP pipeline; a service overview; a synthetic probe', 'tier-3 asks for no alerting and no latency objective');
+  const t1 = full.tiers.find(t => t.id === 'tier-1').consequences;
+  assert.deepEqual([t1.rows[0].text, t1.rows[0].recommended], ['availability and latency objectives', 'a domain objective'], 'a SHOULD is said as recommended, never as required');
+  assert.match(t1.rows.find(r => r.id === 'alerting').text, /voice paging and self-healing/);
+  // Not loaded yet: the tier's static blurb, no rows.
+  const cold = bm.tierConsequences(null, 'tier-2');
+  assert.deepEqual([cold.derived, cold.rows, cold.sentence], [false, [], 'A latency SLO, logs and traces backends, a chaos experiment in staging, a remediation.']);
+  // A product card says what it adds at the tier, the SLIs named, before it is picked.
+  const mq = full.products.find(p => p.id === 'ibm-mq');
+  assert.equal(mq.selected, false);
+  assert.deepEqual(mq.suggested.map(s => s.name), ['Queue manager process up', 'Queue manager reachability', 'Queue depth headroom', 'Oldest message age', 'DLQ depth', 'Canary success']);
+  assert.deepEqual([mq.suggested.length, mq.sliCountAtTier, mq.optional], [6, 6, 2]);
+  // The suggestions, grouped by technology, the recommended ones ticked; "Select recommended" adds them to the selection.
+  const s = full.suggestions;
+  assert.deepEqual(s.groups.map(g => [g.id, g.counts.selected, g.counts.total]), [['kafka', 5, 6], ['http-service', 2, 4]]);
+  const election = s.groups[0].items.find(i => i.id === 'controller_election_rate');
+  assert.deepEqual([election.checked, election.recommended, election.profileTier, election.name, election.meta], [false, false, 'tier-1', 'Controller election rate', '≤ 1 events_per_hour · 99% over 7d']);
+  assert.equal(s.groups[0].items.find(i => i.id === 'broker_availability').meta, 'good ÷ total events · 99.9% over 30d');
+  assert.deepEqual([s.counts, s.allRecommended, s.recommendedSlis], [{ selected: 7, total: 10, recommended: 7, recommendedSelected: 7, custom: 0 }, true, null]);
+  // An explicit list without some recommended SLIs, with an optional one: Select recommended keeps the optional one and adds the rest back.
+  const partial = bm.defineSuggestions({ build: draft({ slis: ['kafka_broker_availability', 'kafka_controller_election_rate'] }), library: LIBRARY });
+  assert.equal(partial.allRecommended, false);
+  assert.deepEqual(partial.allKeys, ['kafka_broker_availability', 'kafka_controller_election_rate']);
+  assert.ok(partial.recommendedSlis.includes('kafka_controller_election_rate') && partial.recommendedSlis.includes('http_service_latency_p99') && partial.recommendedSlis.length === 8);
+  // Exactly the recommended set collapses to null (the tier's defaults).
+  assert.equal(bm.defineSuggestions({ build: draft({ slis: ['kafka_broker_availability'] }), library: LIBRARY }).recommendedSlis, null);
+  // The custom SLIs are their own group, always in the pack.
+  const withCustom = bm.defineSuggestions({ build: draft({ custom: [{ id: 'checkout_success', type: 'ratio', good: 'a', total: 'b', objective: 0.999, window: '30d' }] }), library: LIBRARY });
+  assert.deepEqual(withCustom.custom.map(c => [c.key, c.name, c.meta]), [['checkout_success', 'Checkout success', 'good ÷ total events · 99.9% over 30d']]);
+  // "Why these suggestions?": the rubric clauses, themed, then the ones no theme names.
+  assert.deepEqual([full.why.must, full.why.should, full.why.themes.length], [15, 1, 5]);
+  assert.ok(full.why.also.some(c => c.id === 'L1.MUST.sli_covered_by_slo'));
+  assert.equal(full.why.themes.flatMap(t => t.clauses).length + full.why.also.length, 16, 'every clause of the tier, once');
+  // A vanished suggestion hands the focus on.
+  assert.deepEqual(focusFallbackSelectors('sugg:kafka_broker_availability'), ['.bd-sugg-box', '[data-focus-key="dpanel:review"]']);
+});
+
+test('DEFINE substeps render: the indicator with aria-current, one panel shown, Back / Continue, the tier cards and entry cards, the review with its disclosures and the stack inside Advanced review; the column is a progress summary', async () => {
+  const define = (b) => { const c = stubContainer(); renderBuildDefine(c, buildDefineModel({ build: b, library: LIBRARY, requirements: REQUIREMENTS }), { build: {} }); return c.innerHTML; };
+  const html = define(draft());
+  assert.ok(html.includes('<nav class="bd-substeps" aria-label="Define in four steps">'));
+  assert.ok(html.includes('data-define-sub="review" data-focus-key="dsub:review" aria-current="step">'));
+  assert.equal((html.match(/aria-current="step"/g) || []).length, 1);
+  // Every panel is drawn (their fields keep their focus keys), only the current one visible.
+  assert.ok(html.includes('<section class="bd-panel" id="bd-panel-service" data-panel="service" aria-labelledby="bd-h-service" hidden>'));
+  assert.ok(html.includes('<section class="bd-panel" id="bd-panel-review" data-panel="review" aria-labelledby="bd-h-review">'));
+  assert.ok(html.includes('<h3 class="bd-panel-title" id="bd-h-review" tabindex="-1" data-focus-key="dpanel:review"><span class="bd-panel-n">4</span> What should the pack measure?</h3>'));
+  assert.ok(html.includes('<button type="button" class="ux-secondary-btn" data-define-sub="technology"><span aria-hidden="true">←</span> Back to Technology</button>'));
+  assert.ok(html.includes('<button type="button" class="ux-primary-btn" data-define-sub="criticality">Continue to Criticality <span aria-hidden="true">→</span></button>'));
+  // The opening copy is short and task-oriented: no seed, silhouette or ghost cards before a selection.
+  const lede = html.match(/<p class="build-lede">([^<]*)<\/p>/)[1];
+  assert.ok(!/silhouette|ghost|rubric|L1/.test(lede), lede);
+  // The review: grouped suggestions with individual checkboxes, Select recommended, the requirement line, the two disclosures.
+  assert.ok(html.includes('<input type="checkbox" class="bd-sugg-box" id="bd-sugg-kafka_broker_availability" data-sugg-sli="kafka_broker_availability" data-focus-key="sugg:kafka_broker_availability" checked aria-describedby="bd-sugg-kafka_broker_availability-meta">'));
+  assert.ok(html.includes('<label class="bd-sugg-label" for="bd-sugg-kafka_broker_availability"><span class="bd-sugg-name">Broker availability</span><span class="bd-tag is-rec">Recommended</span></label>'));
+  assert.ok(html.includes('<legend class="bd-sugg-legend">Apache Kafka <span class="bd-sugg-legend-count">5 of 6 selected</span></legend>'));
+  assert.ok(html.includes('data-sugg-recommended data-focus-key="sugg:recommended" disabled>All recommended selected</button>'));
+  assert.ok(html.includes('<p class="bd-requirements"><span class="bd-requirements-key">tier-2 also requires</span> availability and latency objectives; metrics, logs and traces;'));
+  assert.ok(html.includes('<details class="ux-disclosure bd-fold" data-define-fold="why"><summary>Why these suggestions?</summary>'));
+  assert.ok(html.includes('<details class="ux-disclosure bd-fold" data-define-fold="advanced"><summary>Advanced review: the pack layer by layer</summary>'));
+  const advanced = html.slice(html.indexOf('data-define-fold="advanced"'));
+  assert.ok(advanced.includes('<div class="build-stack" data-mode="define">') && advanced.includes('silhouette'), 'the layer mechanics and the stack live in Advanced review');
+  assert.ok(html.slice(html.indexOf('data-define-fold="why"')).includes('<code>L1.MUST.latency_slo</code>'), 'the rubric clauses live in Why these suggestions?');
+  // A fold the user opened stays open; a rejected value opens Advanced review by itself unless it was closed.
+  assert.ok(define(draft({ defineFolds: { why: true, 'preview:ibm-mq': true } })).includes('data-define-fold="why" open>') && define(draft({ defineFolds: { 'preview:ibm-mq': true } })).includes('data-define-fold="preview:ibm-mq" open>'));
+  const rejected = draft({ error: ['param kafka.bootstrap: a value may not contain a double quote'] });
+  assert.ok(define(rejected).includes('data-define-fold="advanced" open>') && !define({ ...rejected, defineFolds: { advanced: false } }).includes('data-define-fold="advanced" open>'));
+  // No technology yet: an empty state that says what was checked and offers the way there.
+  const empty = define(draft({ entries: [], defineSub: 'review' }));
+  assert.ok(empty.includes('<p class="ux-empty-title">No suggestions yet</p>') && empty.includes('data-define-sub="technology">Pick a technology</button>'));
+  // One primary action: Seed the pack is primary on the review, secondary before it.
+  assert.ok(html.includes('class="mcp-refresh-btn build-next" id="build-next"') && define(draft({ defineSub: 'service' })).includes('class="ctrl-btn build-next" id="build-next"'));
+  // The column on DEFINE: the progress summary, one button per substep with what it holds, no form, no scroller of its own.
+  const col = stubContainer();
+  renderBuildDefinition(col, buildDefinitionModel({ build: draft({ defineSub: 'criticality' }), library: LIBRARY, requirements: REQUIREMENTS }), { build: {} });
+  assert.ok(col.innerHTML.includes('<div class="build-def-inner is-progress">'));
+  assert.ok(col.innerHTML.includes('data-define-sub="criticality" data-focus-key="dprog:criticality" aria-current="step">') && col.innerHTML.includes('<span class="bd-progress-val" data-progress-val="criticality">tier-2 · important</span>'));
+  assert.ok(col.innerHTML.includes('<span class="bd-progress-label">Service<span class="sr-text"> — done</span></span>'));
+  const css = readFileSync(resolve(ROOT, 'studio/ux-build-define.css'), 'utf8');
+  assert.match(css, /\.build-def \{\s*overflow: visible; max-height: none;/, 'the column does not scroll on its own');
+  const page = readFileSync(resolve(ROOT, 'studio/index.html'), 'utf8');
+  assert.ok(page.indexOf('/ux-build-define.css') > page.indexOf('/app.css'), 'loaded after app.css, so it wins');
+});
+
+test('DEFINE substep handlers: a substep button moves (focus on its heading), a checkbox puts its SLI in or out, Select recommended, Edit and Add a custom SLI open the editor, a fold is remembered; the service line repaints as typed', async () => {
+  const { wireSuggestions } = await import('../studio/build-define-view.mjs');
+  const calls = [];
+  const act = { update: (p, o) => calls.push(['update', p, o]), setSli: (k, on, all) => calls.push(['sli', k, on, all]), openEditor: (o) => calls.push(['editor', o]) };
+  // The substep buttons (the indicator, Back / Continue, the column's progress) through wireBuildDefinition.
+  const sub = fakeEl({ defineSub: 'technology' });
+  wireBuildDefinition(fakeContainer({ '[data-define-sub]': [sub] }), {}, { build: act });
+  sub.fire('click');
+  assert.deepEqual(calls.pop(), ['update', { defineSub: 'technology' }, { rerender: true, reinstantiate: false, focus: 'dpanel:technology' }]);
+  // The service line of the progress summary follows the name as typed, before any re-render.
+  const val = { textContent: '' };
+  const name = { ...fakeEl({}), value: 'Orders API' };
+  const c = { ...fakeContainer({ '#build-name': [name] }), ownerDocument: { querySelectorAll: (sel) => (sel === '[data-progress-val="service"]' ? [val] : []) } };
+  wireBuildDefinition(c, { owners: 'team-orders', environment: 'prod' }, { build: act });
+  name.fire('input', { target: name });
+  assert.deepEqual([calls.pop(), val.textContent], [['update', { name: 'Orders API' }, undefined], 'orders-api · team-orders · prod']);
+  // The substep shown is pinned on the first render, so a later re-render (the first technology picked) never moves the user on by itself.
+  const pins = [];
+  const pinHost = { build: { update: (p, o) => pins.push([p, o]) } };
+  renderBuildDefine(stubContainer(), buildDefineModel({ build: draft({ entries: [] }), library: LIBRARY, requirements: REQUIREMENTS }), pinHost);
+  renderBuildDefine(stubContainer(), buildDefineModel({ build: draft({ entries: [], defineSub: 'technology' }), library: LIBRARY, requirements: REQUIREMENTS }), pinHost);
+  renderBuildDefine(stubContainer(), buildDefineModel({ build: draft({ defineSub: 'technology' }), library: LIBRARY, requirements: REQUIREMENTS }), pinHost);
+  assert.deepEqual(pins, [[{ defineSub: 'technology' }, { rerender: false, reinstantiate: false }]], 'pinned once; with an entry picked it stays on technology');
+  // The review's handlers.
+  const m = buildDefineModel({ build: draft({ slis: ['kafka_broker_availability'] }), library: LIBRARY, requirements: REQUIREMENTS });
+  const box = { ...fakeEl({ suggSli: 'kafka_fetch_latency_p99' }), checked: true };
+  const rec = fakeEl({});
+  const edit = fakeEl({ suggEdit: 'kafka_broker_availability', focusKey: 'sugg-edit:kafka_broker_availability' });
+  const editCustom = fakeEl({ suggEdit: 'checkout_success', suggCustom: '1', focusKey: 'sugg:custom:checkout_success' });
+  const create = fakeEl({});
+  const fold = { ...fakeEl({ defineFold: 'why' }), open: true };
+  wireSuggestions(fakeContainer({ '[data-sugg-sli]': [box], '[data-sugg-recommended]': [rec], '[data-sugg-edit]': [edit, editCustom], '[data-sugg-create]': [create], 'details[data-define-fold]': [fold] }), m, act);
+  box.fire('change');
+  assert.deepEqual(calls.pop(), ['sli', 'kafka_fetch_latency_p99', true, ['kafka_broker_availability']], 'the explicit list starts from the SLIs in the pack');
+  rec.fire('click');
+  assert.deepEqual(calls.pop(), ['update', { slis: null }, { rerender: true, delay: 0, focus: 'dpanel:review' }], 'every recommended SLI selected: exactly the defaults, so null');
+  edit.fire('click'); editCustom.fire('click'); create.fire('click');
+  assert.deepEqual(calls.splice(-3), [
+    ['editor', { key: 'kafka_broker_availability', custom: false, opener: 'sugg-edit:kafka_broker_availability' }],
+    ['editor', { key: 'checkout_success', custom: true, opener: 'sugg:custom:checkout_success' }],
+    ['editor', { create: true, opener: 'sugg:create' }],
+  ]);
+  fold.fire('toggle');
+  assert.deepEqual(calls.pop(), ['update', { defineFolds: { why: true } }, { rerender: false, reinstantiate: false }]);
+  fold.fire('toggle');
+  assert.equal(calls.length, 0, 'a toggle that changes nothing writes nothing');
+});
+
 test('buildDefinitionModel: the fields, the tier segments with their counts, the entries as chips, the summary — and what is still needed', () => {
   const m = buildDefinitionModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS });
   assert.equal(m.name, 'orders-api');
@@ -1415,21 +1761,32 @@ test('buildDefinitionModel: the fields, the tier segments with their counts, the
 });
 
 test('renderBuildDefinition draws the segmented control, the chips and the summary headlessly, with their ARIA', () => {
+  // The tier cards, the technology cards and the fields are on the DEFINE step's substeps now (the 2026-09 UX
+  // review); the column is the progress summary and the conformance summary. Both are drawn headlessly here.
+  const step = stubContainer();
+  renderBuildDefine(step, buildDefineModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS }), { build: {} });
+  const form = step.innerHTML;
   const c = stubContainer();
   renderBuildDefinition(c, buildDefinitionModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS }), { build: {} });
   const html = c.innerHTML;
-  assert.ok(html.includes('<div class="build-seg" role="radiogroup" aria-label="Criticality tier" style="--seg-index:1">'));
-  assert.equal((html.match(/role="radio"/g) || []).length, 3);
-  assert.ok(html.includes('data-tier="tier-2" aria-checked="true" tabindex="0"'));
-  assert.ok(html.includes('data-tier="tier-1" aria-checked="false" tabindex="-1"'));
-  assert.ok(html.includes('<span class="build-seg-name">tier-2</span>') && html.includes('aria-label="15 MUST, 1 SHOULD"><b>15 MUST</b><b>1 SHOULD</b></span>'), 'the counts stack, MUST over SHOULD');
-  assert.ok(html.includes('aria-label="9 MUST"><b>9 MUST</b></span>'), 'tier-3 has no SHOULD: the count reads MUST only');
-  assert.ok(html.includes('<p class="build-seg-blurb"><b>tier-2</b> A latency SLO'));
-  assert.ok(html.includes('data-entry="kafka" aria-pressed="true"') && html.includes('data-entry="ibm-mq" aria-pressed="false"'));
-  assert.ok(html.includes('<span class="build-chip-slis">5 SLIs at this tier</span>'));
-  assert.ok(html.includes('class="build-evidence-dot build-evidence-recorded-live" title="recorded live · verified 2026-09-22" role="img" aria-label="evidence: recorded live · verified 2026-09-22"'));
-  assert.ok(html.includes('id="build-name"') && html.includes('data-focus-key="name"') && html.includes('data-focus-key="owners"') && html.includes('data-focus-key="environment"'));
-  assert.ok(html.includes('class="build-summary is-ok"') && html.includes('conformant at tier-2'));
+  assert.ok(form.includes('<div class="bd-tiers" role="radiogroup" aria-label="Criticality tier">'));
+  assert.equal((form.match(/role="radio"/g) || []).length, 3);
+  assert.ok(form.includes('data-tier="tier-2" aria-checked="true" tabindex="0"'));
+  assert.ok(form.includes('data-tier="tier-1" aria-checked="false" tabindex="-1"'));
+  assert.ok(form.includes('<span class="build-seg-name">tier-2</span>') && form.includes('aria-label="15 MUST, 1 SHOULD"><b>15 MUST</b><b>1 SHOULD</b></span>'), 'the counts stack, MUST over SHOULD');
+  assert.ok(form.includes('aria-label="9 MUST"><b>9 MUST</b></span>'), 'tier-3 has no SHOULD: the count reads MUST only');
+  // Each tier card says what it asks of the pack, read from the rubric — the radio named by the tier, described by its counts and consequences.
+  assert.ok(form.includes('aria-label="Tier 2, important" aria-describedby="bd-tier-tier-2-counts bd-tier-tier-2-what"'));
+  assert.ok(form.includes('<span class="bd-tier-row"><span class="bd-tier-key">Objectives</span><span class="bd-tier-val">availability and latency objectives</span></span>'));
+  assert.ok(form.includes('<span class="bd-tier-key">Signals</span><span class="bd-tier-val">metrics, logs and traces</span>') && form.includes('<span class="bd-tier-key">Alerting</span><span class="bd-tier-val">burn-rate alerts</span>'));
+  assert.ok(form.includes('data-entry="kafka" aria-pressed="true"') && form.includes('data-entry="ibm-mq" aria-pressed="false"'));
+  // A technology card says what it adds, with its SLIs previewable before it is picked.
+  assert.ok(form.includes('<span class="build-chip-slis" id="bd-entry-kafka-adds">Adds 5 suggested SLIs</span>'));
+  assert.ok(form.includes('<details class="bd-entry-preview" data-define-fold="preview:ibm-mq">') && form.includes('<li>Queue depth headroom <span class="bd-entry-sli-type">threshold</span></li>'));
+  assert.ok(form.includes('class="build-evidence-dot build-evidence-recorded-live" title="recorded live · verified 2026-09-22" role="img" aria-label="evidence: recorded live · verified 2026-09-22"'));
+  assert.ok(form.includes('id="build-name"') && form.includes('data-focus-key="name"') && form.includes('data-focus-key="owners"') && form.includes('data-focus-key="environment"'));
+  assert.ok(!html.includes('id="build-name"') && !html.includes('role="radiogroup"'), 'the column holds no form');
+  assert.ok(html.includes('class="build-summary is-warn"') && html.includes('meets the tier-2 rubric on placeholders — real values still needed'), 'a rubric met on placeholders is amber, never green');
   // The summary is rebuilt on every re-render, so it is not a live region itself: the status goes to one
   // persistent role=status node outside the view (#build-status in index.html), as one settled line.
   assert.ok(!html.includes('aria-live'), 'no live region inside the re-rendered column');
@@ -1438,12 +1795,13 @@ test('renderBuildDefinition draws the segmented control, the chips and the summa
   assert.ok(page.indexOf('id="build-status"') > page.indexOf('</main>'), 'outside #layer-view, which renderMainView empties');
   assert.match(cssRule('.sr-text'), /clip-path:\s*inset\(50%\)/, 'visually hidden, still read');
   const okModel = buildDefinitionModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS });
-  assert.equal(buildStatusLine(okModel.summary), 'conformant at tier-2 · 12 pass · 4 on a placeholder · 0 fail');
-  assert.equal(buildStatusLine(buildDefinitionModel({ build: draft({ result: { ...draft().result, summary: DASHBOARDS_OFF_SUMMARY } }), library: LIBRARY, requirements: REQUIREMENTS }).summary), '2 MUST clauses failing · 10 pass · 4 on a placeholder · 2 fail');
+  assert.equal(buildStatusLine(okModel.summary), 'meets the tier-2 rubric on placeholders — real values still needed · 12 pass · 4 need real values · 0 fail');
+  assert.equal(buildStatusLine(buildDefinitionModel({ build: draft({ result: { ...draft().result, summary: DASHBOARDS_OFF_SUMMARY } }), library: LIBRARY, requirements: REQUIREMENTS }).summary), '2 MUST clauses failing · 10 pass · 4 need real values · 2 fail');
   assert.equal(buildStatusLine(buildDefinitionModel({ build: draft({ pending: true }), library: LIBRARY, requirements: REQUIREMENTS }).summary), null, 'nothing announced while the engine answers');
   assert.equal(buildStatusLine(buildDefinitionModel({ build: defaultBuildState(), library: LIBRARY, requirements: REQUIREMENTS }).summary), null, 'nothing announced before the first result');
   assert.equal(buildStatusLine(null), null);
-  assert.ok(html.includes('12 pass') && html.includes('4 on a placeholder') && html.includes('0 fail'));
+  assert.ok(html.includes('12 pass') && html.includes('4 need real values') && html.includes('0 fail'));
+  assert.ok(html.includes('title="Conformant: Every MUST clause for the tier is satisfied'), 'the formal term and its meaning on the label, the plain words shown');
   assert.ok(!html.includes('build-summary-failing'), 'nothing fails: no failing block');
   assert.ok(html.includes('<b>21</b> todos') && html.includes('<b>17</b> placeholders left'));
   // Dashboards off: the failing block lists the two clauses with the shared clause row.
@@ -1465,9 +1823,11 @@ test('renderBuildDefinition draws the segmented control, the chips and the summa
   // Focus survives the re-render each of those causes: the segments and the chips carry a focus key
   // (rerenderBuild restores focus by [data-focus-key]), and the key the wiring focused exists in the
   // next render — the checked segment after setTier, the same chip after toggleEntry.
-  assert.ok(html.includes('data-tier="tier-2" aria-checked="true" tabindex="0" data-focus-key="tier:tier-2"'));
-  assert.ok(html.includes('data-entry="ibm-mq" aria-pressed="false" data-focus-key="entry:ibm-mq"'));
-  const after = buildDefinitionHtml(buildDefinitionModel({ build: draft({ tier: 'tier-1', entries: ['kafka', 'http-service', 'ibm-mq'] }), library: LIBRARY, requirements: REQUIREMENTS }));
+  assert.ok(form.includes('data-tier="tier-2" aria-checked="true" tabindex="0" data-focus-key="tier:tier-2"'));
+  assert.ok(form.includes('data-entry="ibm-mq" aria-pressed="false" data-focus-key="entry:ibm-mq"'));
+  const afterStep = stubContainer();
+  renderBuildDefine(afterStep, buildDefineModel({ build: draft({ tier: 'tier-1', entries: ['kafka', 'http-service', 'ibm-mq'] }), library: LIBRARY, requirements: REQUIREMENTS }), { build: {} });
+  const after = afterStep.innerHTML;
   assert.ok(after.includes('data-tier="tier-1" aria-checked="true" tabindex="0" data-focus-key="tier:tier-1"'), 'the segment the arrow key focused is the checked one after the re-render, same key');
   assert.ok(after.includes('data-entry="ibm-mq" aria-pressed="true" data-focus-key="entry:ibm-mq"'), 'the toggled chip keeps its key');
   assert.deepEqual(focusFallbackSelectors('tier:tier-1'), ['.build-seg-btn[aria-checked="true"]'], 'a tier key that vanished falls to the checked segment');
@@ -2074,7 +2434,7 @@ test('the definition column is a wizard stage: the live form on DEFINE (with the
     entries: [{ id: 'kafka', title: 'Apache Kafka', kind: 'product' }, { id: 'http-service', title: 'HTTP service (OTel semconv)', kind: 'archetype' }],
     counts: { slis: 7, aboveTier: 0, customised: 0, custom: 0 }, changeLabel: 'Change seed',
   });
-  assert.equal(compile.summary.status, 'conformant at tier-2', 'the summary is live on the seed card\'s step');
+  assert.equal(compile.summary.status, 'meets the tier-2 rubric on placeholders — real values still needed', 'the summary is live on the seed card\'s step');
   assert.equal(buildDefinitionModel({ build: draft({ step: 'verify' }), library: LIBRARY, requirements: REQUIREMENTS }).mode, 'seed');
   const cold = seedCardModel(draft({ step: 'compile' }), LIBRARY, {});
   assert.deepEqual([cold.must, cold.should, cold.tierChip], [null, null, 'seeded at tier-2']);
@@ -2084,8 +2444,12 @@ test('the definition column is a wizard stage: the live form on DEFINE (with the
   assert.deepEqual([buildDefineModel({ build: draft({ seeded: false }), library: LIBRARY, requirements: REQUIREMENTS }).nextLabel, buildDefineModel({ build: draft(), library: LIBRARY, requirements: REQUIREMENTS }).nextLabel], ['Seed the pack', 'Continue to Compile']);
   // The renders.
   const render = (b) => { const c = stubContainer(); renderBuildDefinition(c, buildDefinitionModel({ build: b, library: LIBRARY, requirements: REQUIREMENTS }), { build: {} }); return c.innerHTML; };
+  // On DEFINE the column is the progress summary of the four substeps (the form itself is on the step — the 2026-09 UX review).
   const formHtml = render(draft({ step: 'define' }));
-  assert.ok(formHtml.includes('<p class="build-def-seeded" role="note">Seeded. Changing the tier re-grades the pack') && formHtml.includes('id="build-name"') && formHtml.includes('role="radiogroup"') && !formHtml.includes('build-seed"'));
+  assert.ok(formHtml.includes('<p class="build-def-seeded" role="note">Seeded. Changing the tier re-grades the pack') && formHtml.includes('<nav class="build-def-group bd-progress" aria-label="Define progress">') && !formHtml.includes('build-seed"'));
+  assert.ok(formHtml.includes('data-define-sub="service" data-focus-key="dprog:service">') && formHtml.includes('<span class="bd-progress-val" data-progress-val="service">orders-api · team-orders · prod</span>'));
+  assert.ok(formHtml.includes('data-define-sub="review" data-focus-key="dprog:review" aria-current="step">'), 'a complete definition lands on the review substep');
+  assert.ok(!formHtml.includes('id="build-name"') && !formHtml.includes('role="radiogroup"'), 'no form in the column');
   assert.ok(!render(draft({ step: 'define', seeded: false })).includes('build-def-seeded'), 'no note before the seed');
   const seedHtml = render(draft({ step: 'compile' }));
   assert.ok(seedHtml.includes('<div class="build-def-inner is-seeded">') && seedHtml.includes('<section class="build-seed" aria-label="Seed">') && seedHtml.includes('<div class="build-seed-eyebrow">Seed</div>'));
@@ -2095,7 +2459,7 @@ test('the definition column is a wizard stage: the live form on DEFINE (with the
   assert.ok(seedHtml.includes('<button type="button" class="build-seed-chip is-entry" data-seed-entry="kafka" data-focus-key="seed:kafka" aria-haspopup="dialog" title="product — open the L1 sheet on its SLIs">Apache Kafka</button>') && seedHtml.includes('data-seed-entry="http-service" data-focus-key="seed:http-service" aria-haspopup="dialog" title="archetype — open the L1 sheet on its SLIs">HTTP service (OTel semconv)</button>'), 'a product chip opens the L1 sheet on its SLIs');
   assert.ok(seedHtml.includes('<div class="build-seed-from">7 SLIs in the pack</div>'));
   assert.ok(seedHtml.includes('<button type="button" class="build-seed-change" data-change-seed data-focus-key="seed:change">Change seed <span aria-hidden="true">→</span></button>'));
-  assert.ok(seedHtml.includes('class="build-summary is-ok"') && seedHtml.includes('conformant at tier-2'), 'the summary stays live under the seed card');
+  assert.ok(seedHtml.includes('class="build-summary is-warn"') && seedHtml.includes('meets the tier-2 rubric on placeholders — real values still needed'), 'the summary stays live under the seed card');
   assert.ok(render(draft({ step: 'compile', owners: '' })).includes('<dd><em>none — a todo</em></dd>'));
   assert.ok(seedCardHtml(seedCardModel(copiesDraft({ slis: [...FIXTURE.provenance.toggles.slis, 'kafka_controller_election_rate'] }), LIBRARY, REQUIREMENTS)).includes('9 SLIs in the pack · 1 from a higher tier · 2 customised · 1 custom'));
   assert.ok(!seedCardHtml(seedCardModel(draft({ name: '<b>x</b>' }), LIBRARY, REQUIREMENTS)).includes('<b>x</b>'), 'escaped at the seam');
@@ -2237,12 +2601,12 @@ test('an L1 SLI or SLO card on the stack is a control that opens the SLI’s edi
   // The header tabs: the step word and its tagline are the tab's name (measured: the title read "Library — …").
   assert.deepEqual(BUILD_TABS.map(t => [t.id, t.sub, t.techName, t.label, tabName(t)]), [
     ['define', 'Define', 'Define', 'What Are We Building For?', 'Define — Choose a service, tier, and starting point'],
-    ['compile', 'Compile', 'Compile', 'What Will the Pack Include?', 'Compile — Build SLIs, alerts, dashboards, and checks'],
-    ['verify', 'Verify', 'Verify', 'Can We Use This Pack?', 'Verify — Review coverage and resolve gaps'],
+    ['compile', 'Compile', 'Compile', 'What Did the Pack Produce?', 'Compile — Build SLIs, alerts, dashboards, and checks'],
+    ['verify', 'Verify', 'Verify', 'What Is Ready, and What Remains?', 'Verify — Review coverage and resolve gaps'],
   ]);
   assert.ok(BUILD_TABS.every(t => !/Library|Instantiate|Conformance —/.test(tabName(t))));
   // Each step's heading is its question in sentence case (the tab label is the same question in title case).
-  for (const [view, step, title] of [['build-define-view.mjs', 'define', 'What are we building for?'], ['build-compile-view.mjs', 'compile', 'What will the pack include?'], ['build-verify-view.mjs', 'verify', 'Can we use this pack?']]) {
+  for (const [view, step, title] of [['build-define-view.mjs', 'define', 'What are we building for?'], ['build-compile-view.mjs', 'compile', 'What did the pack produce?'], ['build-verify-view.mjs', 'verify', 'What is ready, and what remains?']]) {
     assert.ok(readFileSync(join(ROOT, 'studio', view), 'utf8').includes(`stepHeadHtml('${step}', '${title}'`), `${view} heads its step "${title}"`);
   }
   // The stylesheet: the editable card has a hover and a focus ring.
@@ -2450,7 +2814,7 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
   for (const sel of ['.build-sheet-eyebrow', '.build-sheet-item-id', '.build-rolo-type', '.build-rolo-card.is-selected .build-rolo-state']) assert.match(cssRule(sel), /color:\s*var\(--accent-text\)/, `${sel} is accent text`);
   assert.ok(contrast(themes.light.L1, themes.light.card) < 4.5 && contrast(themes.dark['ink-4'], themes.dark.card) < 4.5, 'the ratios the review measured, for the record');
   // The shared rows the sheet draws (the clause row, the param rows, the todos) hold the same bar.
-  assert.match(cssRule('.build-rail-id'), /font:\s*11px[^;]*;\s*color:\s*var\(--ink-3\)/, 'the clause id is 11 px --ink-3, not 9.5 px --ink-5');
+  assert.match(cssRule('.build-rail-id'), /font:\s*13px[^;]*;\s*color:\s*var\(--ink-3\)/, 'the clause id is 13 px --ink-3 (the readable floor), not 9.5 px --ink-5');
   for (const sel of ['.build-param-key', '.build-param-desc', '.build-todo-manual', '.build-slab-todos-head', '.build-rail-clause.is-pending .build-rail-glyph', '.build-rail-clause.is-pending .build-rail-desc']) assert.match(cssRule(sel), /color:\s*var\(--ink-3\)/, `${sel} is --ink-3`);
   assert.match(cssRule('.build-todo-card'), /color:\s*var\(--accent-text, var\(--ink-3\)\)/);
   assert.ok(!/color:\s*var\(--ink-5\)/.test(axis.replace(/\.build-evidence-dot[^\n]*/g, '')), '--ink-5 is never a text colour on the axis (the dot aside)');
@@ -2458,7 +2822,7 @@ test('the sheet and the definition column read at WCAG AA in both themes: every 
   assert.ok(axis.includes('The seed and the copies') && axis.includes('The editor'), 'the new rules are inside the axis block the scan reads');
   for (const sel of ['.build-seed', '.build-seed-eyebrow', '.build-seed-dl dt', '.build-seed-from', '.build-def-seeded', '.build-rolo-chip', '.build-edit-hint', '.build-edit-default', '.build-rolo-evidence-note', '.build-editor-params', '.build-editor-provenance', '.build-editor-status', '.build-editor-switch-text', '.build-editor-close']) assert.match(cssRule(sel), /color:\s*var\(--ink-3\)/, `${sel} is --ink-3`);
   assert.match(cssRule('.build-seed'), /border:\s*1px solid var\(--line-2\)/, 'a thin border, recessed');
-  assert.match(cssRule('.build-edit-input'), /font:\s*12px\/1\.45 var\(--mono\)/, 'monospace PromQL');
+  assert.match(cssRule('.build-edit-input'), /font:\s*13\.5px\/1\.45 var\(--mono\)/, 'monospace PromQL');
   assert.ok(!cssRule('.build-rolo-card.is-open') && !cssRule('.build-rolo-customise') && !cssRule('.build-edit-face'), 'the in-card face and its rules are gone');
   assert.ok(reduced.includes('.build-seed-change') && reduced.includes('.build-rolo-edit') && reduced.includes('.build-edit-reset') && reduced.includes('.build-editor,'), 'the new transitions and the editor\'s entrance respect reduced motion');
   assert.match(cssRule('.build-evidence-custom'), /color:\s*var\(--ink-2\)/, 'the custom evidence badge is ink on a tint, not a colour literal');

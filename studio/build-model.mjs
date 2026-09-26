@@ -50,7 +50,7 @@
 // read-only seed card there (seedCardModel).
 
 import { LAYER_DEFS, L4_SUBGROUPS } from './constants.mjs';
-import { OVERRIDE_FIELDS, overrideFor, effectiveSli, effectiveId, customisedFields, promqlEdited, customEffective, sliEditorModel } from './build-copies-model.mjs';
+import { OVERRIDE_FIELDS, overrideFor, effectiveSli, effectiveId, customisedFields, promqlEdited, customEffective, sliEditorModel, sliName } from './build-copies-model.mjs';
 import { boundText } from './sli-direction.mjs';
 
 export const BUILD_STEPS = ['define', 'compile', 'verify'];
@@ -289,6 +289,9 @@ export function focusFallbackSelectors(key) {
   if (/^(edit|sli):/.test(k)) return ['.build-sheet .build-rolo-card [data-edit-sli]', '.build-sheet .build-param-input', '.build-sheet-close'];
   // An L1 stack card (card:<artefact id>, ghost:<key>) that vanished — the SLI left the pack — hands focus to the L1 slab head.
   if (/^(card|ghost):/.test(k)) return ['.build-slab[data-layer="L1"] .build-slab-edge'];
+  // A Review suggestion (DEFINE, substep 4) that vanished — its technology was removed — hands focus to the first
+  // suggestion left, then to the substep's heading.
+  if (/^sugg(-edit)?:/.test(k)) return ['.bd-sugg-box', '[data-focus-key="dpanel:review"]'];
   const entry = /^entry:([\w.-]+)$/.exec(k);
   if (entry) return [`.build-chip[data-entry="${entry[1]}"]`, '.build-chip'];
   const m = /^param:[^@]+@([^/]+)\//.exec(k);
@@ -494,10 +497,13 @@ export function instantiateBody(build, library = null) {
 // ---------- DEFINE ----------
 
 /**
- * buildDefineModel({ build, library, requirements }) → what the DEFINE step renders:
- * the fields, the three tiers with the clauses each adds, the entries as cards
- * (selected, evidence, SLI counts per tier), the selection's params.
- * `requirements` is { [tier]: clauses[] } (whatever tiers have loaded).
+ * buildDefineModel({ build, library, requirements }) → what the DEFINE step renders, in
+ * four substeps (defineSubsteps): the fields, the three tiers with the clauses each adds
+ * and what each asks of the pack (tierConsequences), the entries as cards (selected,
+ * evidence, SLI counts per tier, the SLIs each suggests at the tier), the proposed SLIs
+ * grouped by technology (defineSuggestions), why they are suggested (defineWhy), the
+ * silhouette stack, the selection's params. `requirements` is { [tier]: clauses[] }
+ * (whatever tiers have loaded).
  */
 export function buildDefineModel({ build, library, requirements = {} }) {
   const rows = library?.entries || [];
@@ -513,15 +519,21 @@ export function buildDefineModel({ build, library, requirements = {} }) {
       should: clauses ? clauses.filter(c => c.severity === 'SHOULD').length : null,
       adds: adds.map(c => ({ id: c.id, severity: c.severity, description: c.description })),
       loaded: !!clauses,
+      // What choosing it asks of the pack, in plain words, read from the rubric (the tier's blurb until it has loaded).
+      consequences: tierConsequences(clauses, tier),
     };
   });
   const card = (r) => ({
     id: r.id, kind: r.kind, title: r.title, summary: r.summary, product: r.product, version: r.version, tags: r.tags || [],
     selected: selected.has(r.id),
     evidence: { status: r.evidence?.status || null, verifiedOn: r.evidence?.verifiedOn || null, gaps: (r.evidence?.gaps || []).length },
+    gaps: (r.evidence?.gaps || []).length,
     sliCountByTier: r.sliCountByTier,
     sliCountAtTier: r.sliCountByTier?.[build?.tier] ?? 0,
     placeholderParams: (r.params || []).filter(p => p.placeholder).length,
+    // "Adds N suggested SLIs", previewable before the entry is picked: the SLIs the tier recommends from it, named.
+    suggested: (r.slis || []).filter(s => atTier(build?.tier, s.minTier)).map(s => ({ id: s.id, name: sliName(s.id), type: s.type })),
+    optional: (r.slis || []).filter(s => !atTier(build?.tier, s.minTier)).length,
   });
   const params = paramRows({ build, library });
   const r = build?.result || null;
@@ -552,6 +564,154 @@ export function buildDefineModel({ build, library, requirements = {} }) {
     nextLabel: isSeeded(build) ? 'Continue to Compile' : 'Seed the pack',
     // The last instantiation's usage errors (a rejected param value is marked on its row).
     error: build?.error ? splitBuildErrors(build.error) : null, stale: isStale(build),
+    // The four short substeps (the 2026-09 UX review, "Build / Define"): Service · Criticality · Technology · Review
+    // suggestions — the one shown, what each holds, which are done; the proposed SLIs grouped by technology with the
+    // recommended set; why these are the suggestions (the tier's rubric, in plain words, then its clauses); and the
+    // folds the user opened (UI state on the draft, never persisted).
+    ...defineSubsteps({ build, library }),
+    suggestions: defineSuggestions({ build, library }),
+    why: defineWhy(tierClauses, build?.tier),
+    folds: { ...(build?.defineFolds || {}) },
+  };
+}
+
+// ---------- DEFINE: the four substeps (the 2026-09 UX review, "Build / Define") ----------
+
+/** Define, in short visible substeps within the step; the data behind them is the draft's, unchanged. */
+export const DEFINE_SUBSTEPS = [
+  { id: 'service', label: 'Service', question: 'Which service is this?' },
+  { id: 'criticality', label: 'Criticality', question: 'How critical is it?' },
+  { id: 'technology', label: 'Technology', question: 'What does it run on?' },
+  { id: 'review', label: 'Review suggestions', question: 'What should the pack measure?' },
+];
+
+/** The service in one line — slug · owners · environment — for the progress summary (the view repaints it as the name is typed). */
+export function serviceLine({ name = '', owners = '', environment = '' } = {}) {
+  const slug = serviceSlug(name);
+  const who = parseOwners(owners);
+  return slug ? [slug, who.join(', '), environment || 'prod'].filter(Boolean).join(' · ') : 'not named yet';
+}
+
+/**
+ * defineSubsteps({ build, library }) → { substep, substeps, substepsDone }: the substep shown (the draft's
+ * `defineSub`, UI state never persisted — else the first one still needing input: a name, then a technology, then
+ * the review) and each substep with what it holds now (`value`), whether it is complete, and what it still needs.
+ */
+export function defineSubsteps({ build, library }) {
+  const name = build?.name || '';
+  const entries = selectedEntries(build, library);
+  const selected = selectedSliKeys(build, library).length + (build?.custom || []).length;
+  const nameErrors = definitionErrors(name, 1);
+  const meta = TIER_META[build?.tier] || null;
+  const state = {
+    service: { complete: nameErrors.length === 0, value: serviceLine(build || {}), needed: nameErrors },
+    criticality: { complete: TIERS.includes(build?.tier), value: meta ? `${build.tier} · ${meta.word}` : 'not chosen yet', needed: [] },
+    technology: { complete: entries.length > 0, value: entries.length ? entries.map(e => e.title).join(', ') : 'nothing picked yet', needed: entries.length ? [] : ['at least one library entry'] },
+    review: { complete: entries.length > 0 && selected > 0, value: entries.length ? `${plural(selected, 'SLI')} in the pack` : 'pick a technology first', needed: [] },
+  };
+  const ids = DEFINE_SUBSTEPS.map(s => s.id);
+  const wanted = ids.includes(build?.defineSub) ? build.defineSub : null;
+  const substep = wanted || (!state.service.complete ? 'service' : !state.technology.complete ? 'technology' : 'review');
+  const substeps = DEFINE_SUBSTEPS.map((s, i) => ({
+    ...s, n: i + 1, ...state[s.id], current: s.id === substep,
+    status: s.id === substep ? 'current' : state[s.id].complete ? 'complete' : 'todo',
+    focusKey: `dsub:${s.id}`,
+  }));
+  // `substepPinned`: the draft names the substep. Until it does, the view pins the default on its first render, so a
+  // later re-render (an answer, a rubric loading, the first technology picked) never moves the user on by itself.
+  return { substep, substepPinned: !!wanted, substeps, substepsDone: substeps.filter(s => s.complete).length };
+}
+
+// The rubric, read as what a tier asks of the pack: each theme lists the clauses that bring a word to it. A part
+// with `unless` gives way to a clause that says more (a tier that requires logs and traces needs no "OTLP pipeline").
+const TIER_THEMES = [
+  { id: 'objectives', label: 'Objectives', parts: [['L1.MUST.availability_slo', 'availability'], ['L1.MUST.latency_slo', 'latency'], ['L1.SHOULD.domain_slo', 'a domain objective']] },
+  { id: 'signals', label: 'Signals', parts: [['L2.MUST.otlp_receiver', 'an OTLP pipeline', ['L2.MUST.metrics_logs_traces_backends']], ['L2.MUST.metrics_logs_traces_backends', 'metrics, logs and traces'], ['L2.MUST.tail_sampling', 'tail sampling'], ['L2.MUST.log_correlation', 'log correlation']] },
+  { id: 'alerting', label: 'Alerting', parts: [['L4.MUST.multi_window_burn_rate', 'burn-rate alerts'], ['L4.MUST.tier1_voice_route', 'voice paging'], ['L4.MUST.tier1_at_least_one_automation', 'self-healing'], ['L4.SHOULD.forecast_on_availability', 'an availability forecast']] },
+  { id: 'dashboards', label: 'Dashboards', parts: [['L3.MUST.service_overview_dashboard', 'a service overview', ['L3.MUST.tier1_dashboards']], ['L3.MUST.slo_burn_dashboard', 'an SLO burn board', ['L3.MUST.tier1_dashboards']], ['L3.MUST.tier1_dashboards', 'overview, SLO burn, deployment and customer-impact boards']] },
+  { id: 'validation', label: 'Validation', parts: [['L5.MUST.synthetic_probe', 'a synthetic probe'], ['L5.MUST.tier2_chaos_staging', 'chaos in staging'], ['L5.MUST.tier1_weekly_prod_chaos', 'weekly chaos in production'], ['L5.SHOULD.tier1_release_gate', 'a release gate']] },
+];
+const andList = (xs) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+
+/**
+ * tierConsequences(clauses, tier) → { rows, sentence, derived }: what choosing the tier asks of the pack, in plain
+ * words, read from the tier's rubric clauses — rows per theme (objectives · signals · alerting · dashboards ·
+ * validation: the required words, then the recommended ones) and one sentence ('availability and latency
+ * objectives; metrics, logs and traces; burn-rate alerts; …'). Before the rubric has loaded: the tier's static
+ * blurb, `derived: false`, no rows.
+ */
+export function tierConsequences(clauses, tier = null) {
+  if (!Array.isArray(clauses) || !clauses.length) return { rows: [], sentence: TIER_META[tier]?.blurb || '', derived: false };
+  const byId = new Map(clauses.map(c => [c.id, c]));
+  const rows = TIER_THEMES.map(th => {
+    const hits = th.parts.filter(([id, , unless]) => byId.has(id) && !(unless || []).some(u => byId.has(u)));
+    const must = hits.filter(([id]) => byId.get(id).severity === 'MUST').map(([, w]) => w);
+    const should = hits.filter(([id]) => byId.get(id).severity !== 'MUST').map(([, w]) => w);
+    if (!must.length && !should.length) return null;
+    const one = must.length === 1 ? `${/^[aeiou]/i.test(must[0]) ? 'an' : 'a'} ${must[0]} objective` : `${andList(must)} objectives`;
+    const text = th.id === 'objectives' && must.length ? one : andList(must);
+    return { id: th.id, label: th.label, text, recommended: andList(should), must, should, clauses: hits.map(([id]) => id) };
+  }).filter(Boolean);
+  return { rows, sentence: rows.filter(r => r.text).map(r => r.text).join('; '), derived: true };
+}
+
+/**
+ * "Why these suggestions?" — the rubric clauses that used to open the step, moved behind a fold: the tier's themes
+ * with the clauses behind each (severity, the rubric's description, the id), then the clauses no theme names ("also
+ * checked"), and the counts.
+ */
+export function defineWhy(clauses, tier) {
+  const list = Array.isArray(clauses) ? clauses : [];
+  const cons = tierConsequences(list, tier);
+  const row = (c) => ({ id: c.id, severity: c.severity, description: c.description, dimension: c.dimension });
+  const named = new Set(cons.rows.flatMap(r => r.clauses));
+  return {
+    tier, word: TIER_META[tier]?.word || '', loaded: list.length > 0,
+    must: list.filter(c => c.severity === 'MUST').length, should: list.filter(c => c.severity === 'SHOULD').length,
+    themes: cons.rows.map(r => ({ id: r.id, label: r.label, text: r.text, clauses: r.clauses.map(id => row(list.find(c => c.id === id))) })),
+    also: list.filter(c => !named.has(c.id)).map(row),
+  };
+}
+
+/** One SLI in a line: the bound (≤ 0.1 seconds) or good ÷ total, then the objective and window it starts with. */
+function sliMeta(s) {
+  const what = s.type === 'ratio' ? 'good ÷ total events' : (boundText(s) || s.type);
+  return `${what} · ${s.objectiveLabel} over ${s.window || '—'}`;
+}
+
+/**
+ * defineSuggestions({ build, library }) → the Review substep: the proposed SLIs grouped by technology (the entry
+ * they come from), each with its checkbox state, whether the tier recommends it (its minTier at or below the tier)
+ * or it starts from a higher tier's profile, a one-line meta and its description; the custom SLIs (always in the
+ * pack); the counts; the keys an explicit list starts from (`allKeys`, what setSli takes); and what "Select
+ * recommended" sets — the current selection plus every recommended SLI, collapsed to null (the tier's defaults)
+ * when that is exactly the defaults.
+ */
+export function defineSuggestions({ build, library }) {
+  const groups = sliGroups({ build, library });
+  const selected = selectedSliKeys(build, library);
+  const recommended = reachableSliKeys(build, library);
+  const all = allSliKeys(build, library);
+  const union = all.filter(k => selected.includes(k) || recommended.includes(k));
+  const custom = (build?.custom || []).map(def => {
+    const eff = customEffective(def);
+    return { key: def.id, name: sliName(def.id), type: def.type, meta: sliMeta({ type: def.type, ...eff, objectiveLabel: fmtObjective(eff.objective) }), description: eff.description || '', focusKey: `sugg:custom:${def.id}` };
+  });
+  return {
+    groups: groups.map(g => ({
+      id: g.id, title: g.title, kind: g.kind, evidence: g.evidence,
+      counts: { selected: g.slis.filter(s => s.checked).length, total: g.slis.length },
+      items: g.slis.map(s => ({
+        key: s.key, id: s.id, name: sliName(s.effectiveId !== s.key ? s.effectiveId : s.id), type: s.type, checked: s.checked,
+        recommended: s.reachable, profileTier: s.minTier || 'tier-3', customised: s.customised.length > 0,
+        meta: sliMeta(s), description: s.description, focusKey: `sugg:${s.key}`,
+      })),
+    })),
+    custom,
+    counts: { selected: selected.length, total: all.length, recommended: recommended.length, recommendedSelected: recommended.filter(k => selected.includes(k)).length, custom: custom.length },
+    allKeys: selected,
+    allRecommended: recommended.every(k => selected.includes(k)),
+    recommendedSlis: sameSet(union, recommended) ? null : union,
   };
 }
 
@@ -619,15 +779,34 @@ export function buildCompileModel({ build, library, clauses = [] }) {
   }));
   const r = build?.result || null;
   const customCount = (build?.custom || []).length;
+  const atLeastOne = all.some(s => s.checked) || customCount > 0;
+  const editors = stackCardActions({ build, library });
+  const stack = buildStackModel({
+    adapted: r?.adapted || null, requirements: clauses, checklist: buildClauseChecklist(clauses, r?.summary || null),
+    todos: r?.todos || [], params: paramRows({ build, library }), mode: 'compile', toggles: build?.toggles || {}, expanded: stackExpanded(build),
+    customised: customisedMap(r), editors,
+  });
+  const error = build?.error ? splitBuildErrors(build.error) : null;
+  const pending = !!build?.pending;
+  const readiness = buildReadiness({ result: r, error, accepted: build?.accepted || {} });
   return {
     tier, composed, groups, toggles,
     counts: { total: all.length, reachable: all.filter(s => s.reachable).length, checked: all.filter(s => s.checked).length, aboveTier: all.filter(s => s.checked && s.aboveTier).length, custom: customCount, customised: all.filter(s => s.checked && s.customised.length).length },
-    atLeastOne: all.some(s => s.checked) || customCount > 0,
-    stack: buildStackModel({
-      adapted: r?.adapted || null, requirements: clauses, checklist: buildClauseChecklist(clauses, r?.summary || null),
-      todos: r?.todos || [], params: paramRows({ build, library }), mode: 'compile', toggles: build?.toggles || {}, expanded: stackExpanded(build),
-      customised: customisedMap(r), editors: stackCardActions({ build, library }),
-    }),
+    atLeastOne,
+    stack,
+    // The result first (docs/UX_SCREEN_GRAMMAR.md; the 2026-09 review, "Build / Compile"): the context, one
+    // sentence, the three states kept apart, the action queue, what was produced by layer and type, and which
+    // selection of DEFINE produced which artefact.
+    context: stepContext(build, r),
+    readiness,
+    decision: compileDecision({ result: r, readiness, pending, error, atLeastOne, stack }),
+    states: compileStates(readiness, stack, r?.summary?.tier || tier),
+    queue: r ? compileQueue({ result: r, readiness, editors, stack, accepted: build?.accepted || {} }) : [],
+    produced: producedByLayer(stack),
+    origins: artefactOrigins({ build, result: r, stack }),
+    // Which layers are expanded on COMPILE: null (the overview), 'all', or one layer id — UI state, never persisted.
+    // The layer whose sheet is open is expanded too, so the sheet's close returns focus to a slab head that exists.
+    expandedLayers: compileExpandedLayers(build, stack),
     result: r ? {
       sliCount: r.canonical?.spec?.slis?.length || 0, sloCount: r.canonical?.spec?.slos?.length || 0,
       todoCount: r.todos?.length || 0, warningCount: r.warnings?.length || 0,
@@ -636,7 +815,7 @@ export function buildCompileModel({ build, library, clauses = [] }) {
       fileName: `${r.canonical?.metadata?.name || 'pack'}.pack.yaml`,
       warnings: summarizeWarnings(r.warnings || []),
     } : null,
-    error: build?.error ? splitBuildErrors(build.error) : null, stale: isStale(build), pending: !!build?.pending,
+    error, stale: isStale(build), pending,
   };
 }
 
@@ -743,9 +922,29 @@ export function buildVerifyModel({ build, library, clauses, targets }) {
   // What the footer says about the hand-off, in priority order.
   const handoff = build?.registeredId ? 'registered' : error ? 'error' : blocking ? 'promql' : !schemaOk ? 'schema' : 'ready';
   const gaps = placeholdersRemaining(r);
+  const accepted = build?.accepted || {};
+  const readiness = buildReadiness({ result: r, error, accepted });
+  const tier = s?.tier || build?.tier;
+  const canRegister = !!r && schemaOk && !blocking && !error;
+  const remains = r ? verifyRemains({ result: r, checklist, params, editors: stackCardActions({ build, library }), accepted }) : null;
   return {
     ready: !!r, pending: !!build?.pending, error, stale: isStale(build),
-    tier: s?.tier || build?.tier,
+    tier,
+    // The verdict first (docs/UX_SCREEN_GRAMMAR.md; the 2026-09 review, "Build / Verify", P0): four readiness
+    // states displayed independently, one sentence that never lets "meets the tier rubric" mask a placeholder,
+    // the smallest list of what remains, and one primary next action at the actual gate.
+    context: stepContext(build, r),
+    readiness,
+    states: readinessStates(readiness, tier),
+    decision: verifyDecision(readiness, { tier }),
+    remains,
+    next: verifyNext(readiness, { canRegister, remains }),
+    // "Accept with reason": a per-session acknowledgement of a non-blocking warning, kept on the draft and never
+    // persisted or written into the pack — there is no backend for it. `accepting` is the item whose reason form is
+    // open, `acceptDraft` the reason being typed (so a re-render does not lose it).
+    accepting: build?.accepting || null,
+    acceptDraft: build?.acceptDraft || null,
+    acceptedMap: accepted,
     verdict: s ? {
       conformant: !!s.conformant, must: s.must, should: s.should,
       mustPercent: s.mustPercent, scorePercent: s.scorePercent,
@@ -769,17 +968,500 @@ export function buildVerifyModel({ build, library, clauses, targets }) {
     source: r?.provenance?.source || '',
     registeredId: build?.registeredId || null,
     handoff,
-    // "Ready to continue?" — VERIFY's two exits (docs/BUILD_JOURNEY.md "Where it starts"):
-    // resolve or adjust (back at Define), or continue with the gaps visible — they stay on
-    // the pack as library.todo.* annotations, so Diagnose grades them as gaps, never as verified.
+    // The hand-off — VERIFY's exits (docs/BUILD_JOURNEY.md "Where it starts"; the review's §1: Verify leads to
+    // "Open pack in Discover"): resolve or adjust (back at Define), or open the pack in Discover with the gaps
+    // visible — they stay on the pack as library.todo.* annotations, so Diagnose grades them as gaps, never as verified.
+    // The gaps are read from readiness, not from the parameter values alone: with every value filled, a clause that
+    // passes only on a placeholder or a todo to write or measure still travels with the pack as a visible gap.
     gaps,
-    continueLabel: gaps > 0 ? 'Continue with visible gaps' : 'Continue to Discover',
-    readyText: gaps > 0
-      ? `Ready to continue? ${gaps} placeholder${gaps === 1 ? '' : 's'} remain — fill them above, resolve or adjust at Define, or continue: they stay visible in Discover and Diagnose grades them as gaps.`
-      : 'Ready to continue? No placeholder remains — continuing registers the pack the way an upload is registered and opens it in Discover.',
+    continueLabel: handoffGaps(gaps, readiness) ? 'Open pack in Discover with visible gaps' : 'Open pack in Discover',
+    readyText: handoffText(gaps, readiness),
     // A stale pack (the last compilation failed) is never handed off: the error stands until the field is fixed.
-    canRegister: !!r && schemaOk && !blocking && !error,
+    canRegister,
   };
+}
+
+/**
+ * What still stands once every value is filled, in words ("4 clauses pass only on placeholders and 3 items remain to
+ * write or measure"), or '' when nothing does: the clauses resting on a placeholder, the todos no value fills and
+ * any other todo left.
+ */
+function stillToComplete(r) {
+  if (!r) return '';
+  const other = r.todos - r.manual;
+  const parts = [
+    r.onPlaceholder && `${plural(r.onPlaceholder, 'clause')} pass${r.onPlaceholder === 1 ? 'es' : ''} only on placeholders`,
+    r.manual && `${plural(r.manual, 'item')} remain${r.manual === 1 ? 's' : ''} to write or measure`,
+    other > 0 && `${plural(other, 'other todo')} remain${other === 1 ? 's' : ''}`,
+  ].filter(Boolean);
+  return parts.length < 2 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
+}
+
+/** Whether the pack goes to Discover with visible gaps: a placeholder value, a todo, a clause on a placeholder, or a rubric not evaluated. */
+function handoffGaps(gaps, r) {
+  return gaps > 0 || !!r?.incomplete || r?.meets == null;
+}
+
+/** VERIFY's hand-off line: what travels with the pack — never "no placeholder remains" while a clause rests on one. */
+function handoffText(gaps, r) {
+  const lead = 'The generated pack becomes the same kind of pack you inspect and improve in Discover.';
+  const graded = 'Diagnose grades them as gaps, never as verified.';
+  if (gaps > 0) return `${lead} Its ${gaps} placeholder value${gaps === 1 ? '' : 's'} travel${gaps === 1 ? 's' : ''} with it as visible gaps — ${graded}`;
+  const rest = stillToComplete(r);
+  if (rest) return `${lead} Every value is filled, but ${rest}; they travel with it as visible gaps — ${graded}`;
+  if (r?.meets == null) return `${lead} The tier rubric is not evaluated yet, so nothing here says the pack meets it; opening it registers the pack the way an upload is registered.`;
+  return `${lead} No placeholder value remains; opening it registers the pack the way an upload is registered.`;
+}
+
+// ---------- COMPILE and VERIFY: what the pack produced, what is ready and what remains ----------
+//
+// The 2026-09 UX review (docs/UX_SCREEN_GRAMMAR.md; "Build / Compile" and "Build / Verify"): COMPILE leads
+// with a result and a small action queue; VERIFY with four readiness states displayed independently — schema
+// valid, meets the tier rubric, implementation complete, deployment ready — so a conformant pack whose MUST
+// clauses pass on placeholders is never read as ready to deploy. Everything is read from the instantiate
+// response, the draft and the stack; nothing is invented.
+
+const COUNT_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
+/** A count that opens a sentence: a word up to nine ("Two warnings"), the digits after. */
+const sentenceCount = (n) => COUNT_WORDS[n] || String(n);
+
+/** The working context both result screens name first: the service, its environment, the tier, what it is built from. */
+function stepContext(build, r) {
+  const prov = r?.provenance || {};
+  return [
+    { key: 'Service', value: r?.canonical?.metadata?.name || serviceSlug(build?.name) || '' },
+    { key: 'Environment', value: prov.environment || build?.environment || '' },
+    { key: 'Tier', value: prov.tier || build?.tier || '' },
+    { key: 'Built from', value: (prov.entries || []).map(e => e.id).join(' + ') || (build?.entries || []).join(' + ') },
+  ];
+}
+
+/** The key a warning is acknowledged under ("Accept with reason"): stable while the engine says the same thing. */
+export function warningKey(w) {
+  return `${w?.kind || 'other'}:${w?.sli || ''}:${w?.field || ''}:${w?.message || ''}`;
+}
+
+const SLI_IN_MESSAGE = /^(?:threshold )?SLI ([a-z][a-z0-9_]*)[.:]/;
+/** The SLI a warning names: the engine's `sli` (promql, override), else the burn-rule generator's "SLI <id>:" prefix; null when none. */
+export function warningSli(w) {
+  if (w?.sli) return w.sli;
+  const m = SLI_IN_MESSAGE.exec(String(w?.message || ''));
+  return m ? m[1] : null;
+}
+
+/** The correction to suggest for a warning — read from its kind and the engine's words — and the editor field "Fix now" lands on. */
+export function warningSuggestion(w) {
+  const msg = String(w?.message || '');
+  if (w?.kind === 'promql') return { text: `Correct the SLI’s ${w.field || 'expression'}, or the parameter substituted into it, so it parses as PromQL.`, focus: w.field || null };
+  if (w?.kind === 'override') return { text: 'Add the SLI back to the pack on L1, or clear its customisation.', focus: null };
+  if (/good_when/.test(msg)) return { text: 'Say which side is good: set “Good when” to above (a floor) or below (a ceiling).', focus: 'good_when' };
+  if (/matcher names one of the pack/.test(msg)) return { text: 'Add a job="…" matcher that names one of the pack’s scrape jobs.', focus: null };
+  if (/legs will not match/.test(msg)) return { text: 'Aggregate the good and total legs the same way.', focus: null };
+  if (/counter/.test(msg)) return { text: 'Point the SLI at the counter, not a recorded rate.', focus: null };
+  if (/no policy rules/.test(msg)) return { text: 'No burn-rate alert is generated for this SLI until its expression takes a form the policy can count.', focus: null };
+  return { text: 'Review the SLI in its editor; the generator’s note says what it assumed.', focus: null };
+}
+
+/**
+ * warningItems(warnings, { editors, adapted, accepted }) → one actionable item per warning, blocking first: the
+ * engine's words, the artefact it impacts (the SLI card the adapter draws for the SLI it names), a suggested
+ * correction, where "Fix now" / "Review" opens (the SLI's editor, else the L1 sheet — both on COMPILE, where
+ * they edit), whether it may be accepted with a reason (a blocking one may not) and the acceptance if any.
+ */
+export function warningItems(warnings, { editors = {}, adapted = null, accepted = {} } = {}) {
+  const l1 = adapted?.layers?.L1 || [];
+  return summarizeWarnings(warnings).flatMap(g => g.items.map(w => {
+    const sli = warningSli(w);
+    const card = sli ? l1.find(a => /^SLI-/.test(String(a.id || '')) && (a.spec?.id || a.title) === sli) : null;
+    const ed = sli ? editors?.[sli] : null;
+    const sug = warningSuggestion(w);
+    const key = warningKey(w);
+    return {
+      key, kind: g.kind, label: g.label, blocking: g.blocking, message: w.message || '', sli,
+      impact: card ? `${card.id} · ${sli}` : sli ? `SLI ${sli}` : 'the pack',
+      suggestion: sug.text,
+      fix: ed ? { kind: 'editor', key: ed.key, custom: !!ed.custom, focus: sug.focus, layer: 'L1' } : { kind: 'sheet', layer: 'L1' },
+      acceptable: !g.blocking,
+      accepted: accepted?.[key] || null,
+    };
+  }));
+}
+
+/** The layer a schema error points at: the section under `$.spec.` by todoLayer's families; L1 when it names none. */
+export function schemaErrorLayer(message) {
+  const m = /\$\.spec\.([a-z_]+)/.exec(String(message || ''));
+  return m ? todoLayer(m[1]).layer : 'L1';
+}
+const schemaItems = (errors) => (errors || []).map((message, i) => {
+  const layer = schemaErrorLayer(message);
+  return {
+    key: `schema:${i}:${message}`, kind: 'schema', label: 'Schema', blocking: true, message,
+    impact: (/\$\.[\w.[\]-]+/.exec(message) || [layer])[0],
+    suggestion: 'Switch the section back on, or restore the value the schema requires.',
+    fix: { kind: 'sheet', layer }, acceptable: false, accepted: null,
+  };
+});
+
+/**
+ * buildReadiness({ result, error, accepted }) → the facts both result screens state, each on its own: generated,
+ * schema valid, meets the tier rubric (every MUST clause passes — possibly on a placeholder), implementation
+ * incomplete (placeholder values, todos, clauses resting on a placeholder), and deployment ready — none of the
+ * `reasons` left: no failed compilation, no blocking warning, no schema error, the rubric met on real values,
+ * nothing to fill, write or measure, no warning left unreviewed. A MUST clause passing only on a placeholder keeps
+ * deployment ready at no. null before the first result.
+ */
+export function buildReadiness({ result, error = null, accepted = {} } = {}) {
+  if (!result) return null;
+  const s = result.summary || null;
+  const warnings = result.warnings || [];
+  const isBlocking = (w) => !!WARNING_KINDS[w.kind]?.blocking;
+  const blocking = warnings.filter(isBlocking).length;
+  const openWarnings = warnings.filter(w => isBlocking(w) || !accepted?.[warningKey(w)]).length;
+  const todos = result.todos || [];
+  const onPlaceholder = s?.onPlaceholder || [];
+  const failing = s?.failing || [];
+  const schemaErrors = (result.schemaErrors || []).length;
+  const r = {
+    generated: !!result.canonical,
+    stale: !!error,
+    schemaOk: schemaErrors === 0, schemaErrors,
+    meets: s ? !!s.conformant : null,
+    must: s?.must || null, should: s?.should || null,
+    failing: failing.length, mustFail: failing.filter(c => c.severity === 'MUST').length,
+    onPlaceholder: onPlaceholder.length, mustOnPlaceholder: onPlaceholder.filter(c => c.severity === 'MUST').length,
+    values: placeholdersRemaining(result),
+    todos: todos.length,
+    manual: todos.filter(t => !(t.params || []).length).length,
+    warnings: warnings.length, blocking, openWarnings, acceptedWarnings: warnings.length - openWarnings,
+    reviewWarnings: openWarnings - blocking,
+  };
+  r.incomplete = r.values > 0 || r.todos > 0 || r.onPlaceholder > 0;
+  r.blocked = r.stale || blocking > 0 || !r.schemaOk;
+  const failN = r.mustFail || r.failing;
+  // What stands between the pack and a deployment, the most basic first; deployment ready is none of it.
+  r.reasons = [
+    r.stale && 'the last compilation failed',
+    blocking && `${plural(blocking, 'SLI expression')} ${blocking === 1 ? 'is' : 'are'} not valid PromQL`,
+    !r.schemaOk && plural(schemaErrors, 'schema error'),
+    r.meets === false && `${plural(failN, 'required clause')} fail${failN === 1 ? 's' : ''}`,
+    r.meets === null && 'the rubric is not evaluated yet',
+    r.values && `${plural(r.values, 'value')} to fill`,
+    r.onPlaceholder && `${plural(r.onPlaceholder, 'clause')} pass${r.onPlaceholder === 1 ? 'es' : ''} only on placeholders`,
+    r.manual && `${plural(r.manual, 'item')} to write or measure outside the studio`,
+    r.reviewWarnings && `${plural(r.reviewWarnings, 'warning')} to review`,
+  ].filter(Boolean);
+  r.deployable = r.reasons.length === 0;
+  return r;
+}
+
+/**
+ * readinessStates(readiness, tier) → VERIFY's four states, each displayed on its own: { id, label, value, note,
+ * tone }. "Meets tier rubric" (the formal word: conformant) says yes when every MUST clause passes and names how
+ * many of those rest on placeholders; "Deployment ready" is its own answer, never inferred from the rubric.
+ */
+export function readinessStates(r, tier) {
+  if (!r) return [];
+  const implNote = [r.values && `${plural(r.values, 'value')} to fill`, r.manual && `${r.manual} to write or measure`, r.onPlaceholder && `${plural(r.onPlaceholder, 'clause')} on placeholders`].filter(Boolean).join(' · ');
+  return [
+    { id: 'schema', label: 'Schema valid', value: r.schemaOk ? 'Yes' : 'No', tone: r.schemaOk ? 'ok' : 'fail',
+      note: r.schemaOk ? 'the pack validates against the spec' : plural(r.schemaErrors, 'error') },
+    { id: 'rubric', label: 'Meets tier rubric', value: r.meets == null ? 'Not evaluated' : r.meets ? 'Yes' : 'No',
+      tone: r.meets == null ? 'neutral' : !r.meets ? 'fail' : r.mustOnPlaceholder ? 'warn' : 'ok',
+      note: r.must ? `MUST ${r.must.passed}/${r.must.total}${tier ? ` at ${tier}` : ''}${r.mustOnPlaceholder ? ` · ${r.mustOnPlaceholder} only on placeholders` : ''}` : '' },
+    { id: 'implementation', label: 'Implementation', value: r.incomplete ? 'Incomplete' : 'Complete', tone: r.incomplete ? 'warn' : 'ok',
+      note: r.incomplete ? implNote : 'every value filled' },
+    { id: 'deployment', label: 'Deployment ready', value: r.deployable ? 'Yes' : 'No',
+      tone: r.deployable ? 'ok' : (r.blocked || r.meets === false) ? 'fail' : 'warn',
+      note: r.deployable ? 'nothing left to fill or review' : `not until: ${r.reasons.slice(0, 2).join('; ')}${r.reasons.length > 2 ? ' …' : ''}` },
+  ];
+}
+
+/** VERIFY's one sentence, its short verdict word and tone, and the line under it (what remains). */
+export function verifyDecision(r, { tier = '' } = {}) {
+  if (!r) return { sentence: 'Nothing compiled yet — Compile generates the pack this step reads.', word: '', tone: 'neutral', note: '' };
+  const note = r.deployable ? '' : `What remains: ${r.reasons.join(', ')}.`;
+  if (r.stale) return { sentence: 'The last change did not compile; the pack shown is the previous one and cannot be handed off.', word: 'Not ready', tone: 'fail', note };
+  if (r.blocking) return { sentence: 'Blocked: an SLI expression is not valid PromQL, so the pack must not ship.', word: 'Blocked', tone: 'fail', note };
+  if (!r.schemaOk) return { sentence: `Blocked: the pack fails the schema in ${plural(r.schemaErrors, 'place')}.`, word: 'Blocked', tone: 'fail', note };
+  const failN = r.mustFail || r.failing;
+  if (r.meets === false) return { sentence: `Does not meet the ${tier || 'tier'} rubric: ${plural(failN, 'required clause')} fail${failN === 1 ? 's' : ''}.`, word: 'Below tier', tone: 'fail', note };
+  if (r.meets == null) return { sentence: `Not evaluated: the ${tier || 'tier'} rubric has not been checked, so the pack is not ready for deployment.`, word: 'Not evaluated', tone: 'warn', note };
+  if (r.incomplete) return { sentence: 'Ready for team completion; not ready for deployment.', word: 'Incomplete', tone: 'warn', note };
+  if (r.reviewWarnings) return { sentence: `Complete for ${tier || 'this tier'}; ${r.reviewWarnings === 1 ? 'one warning needs' : `${r.reviewWarnings} warnings need`} review before deployment.`, word: 'Review', tone: 'warn', note };
+  // "Ready" only when readiness says so: any reason left (one this function has no branch for) keeps it at not ready.
+  if (!r.deployable) return { sentence: 'Not ready for deployment.', word: 'Not ready', tone: 'warn', note };
+  return { sentence: `Ready for deployment: valid, meets the ${tier || 'tier'} rubric on real values, nothing left to fill.`, word: 'Ready', tone: 'ok', note };
+}
+
+/**
+ * verifyRemains({ result, checklist, params, editors, accepted }) → the smallest actionable list VERIFY shows:
+ * what blocks the hand-off (schema errors, a PromQL warning), the warnings to review (accepted ones set aside),
+ * the clauses that pass only on a placeholder ("Requirement represented; real value still needed") with the todos
+ * they rest on, the placeholder values to fill grouped by the layer each shapes (there is no owner per item —
+ * the pack's owners are one team), and the todos no value fills (a runbook to write, a baseline to measure).
+ */
+export function verifyRemains({ result, checklist, params = [], editors = {}, accepted = {} }) {
+  const all = warningItems(result?.warnings || [], { editors, adapted: result?.adapted || null, accepted });
+  const blocking = [...schemaItems(result?.schemaErrors), ...all.filter(w => w.blocking)];
+  const warnings = all.filter(w => !w.blocking && !w.accepted);
+  const acceptedItems = all.filter(w => w.accepted);
+  const todos = result?.todos || [];
+  const clauses = (checklist?.items || []).filter(i => i.state === 'placeholder').map(i => ({
+    key: `clause:${i.id}`, id: i.id, label: clauseGhostLabel(i.id), description: i.description, severity: i.severity, layer: i.dimension, todos: i.todos || [],
+  }));
+  const byKey = new Map((params || []).map(p => [p.key, p]));
+  const values = (Array.isArray(result?.provenance?.placeholders) ? result.provenance.placeholders : []).map(key => {
+    const p = byKey.get(key) || { key, id: key, label: key, entry: null, entryTitle: '', hint: '', effective: '' };
+    return {
+      key, label: p.label || key, entryTitle: p.entry ? p.entryTitle : 'scaffold', current: String(p.effective ?? p.hint ?? ''),
+      layer: paramLayer(p), todos: todos.filter(t => (t.params || []).includes(key)).map(t => t.path),
+    };
+  });
+  const valueGroups = LAYER_DEFS.map(d => ({ layer: d.id, num: d.num, name: d.name, question: LAYER_QUESTIONS[d.id] || '', items: values.filter(v => v.layer === d.id) })).filter(g => g.items.length);
+  const manual = todos.filter(t => !(t.params || []).length).map(t => ({ key: `todo:${t.path}`, path: t.path, what: t.what || '', layer: todoLayer(t.path).layer, clauses: t.clauses || [] }));
+  // The clauses that fail at the tier: resolved where the layer is composed (its sheet on COMPILE).
+  const failing = (checklist?.items || []).filter(i => i.state === 'fail').map(i => ({
+    key: `fail:${i.id}`, id: i.id, label: clauseGhostLabel(i.id), description: i.description, severity: i.severity, layer: i.dimension,
+  }));
+  // Nothing is said to remain only when the rubric was read: without the engine's summary, nothing here is known.
+  const evaluated = !!result?.summary;
+  return {
+    blocking, warnings, accepted: acceptedItems, failing, clauses, values: { total: values.length, groups: valueGroups }, manual, evaluated,
+    counts: { blocking: blocking.length, warnings: warnings.length, accepted: acceptedItems.length, failing: failing.length, clauses: clauses.length, values: values.length, manual: manual.length },
+    empty: evaluated && !blocking.length && !warnings.length && !failing.length && !clauses.length && !values.length && !manual.length,
+  };
+}
+
+/**
+ * VERIFY's one primary next action at the actual gate, and the quieter alternatives: fix what blocks the hand-off;
+ * else resolve a failing requirement; else complete the required values (the hand-off stays a secondary: the pack
+ * may travel with visible gaps); else "Open pack in Discover" — "with visible gaps" while any gap travels with it.
+ */
+export function verifyNext(r, { canRegister = false, remains = null } = {}) {
+  if (!r) return { primary: null, secondary: [] };
+  // The hand-off names the gaps whenever any travel with the pack — a value, a todo, a clause on a placeholder.
+  const gaps = remains?.values?.total || r.incomplete || r.meets == null;
+  const handoff = { id: 'build-verify-open', label: gaps ? 'Open in Discover with visible gaps' : 'Open pack in Discover', action: 'open-discover' };
+  if (r.blocked) return { primary: { id: 'build-verify-fix', label: 'Fix what blocks the hand-off', action: 'fix-first' }, secondary: [] };
+  if (r.meets === false) return { primary: { id: 'build-verify-resolve', label: 'Resolve failing requirements', action: 'resolve-failing' }, secondary: canRegister ? [handoff] : [] };
+  if (r.values > 0) return { primary: { id: 'build-verify-complete', label: 'Complete required values', action: 'complete-values' }, secondary: canRegister ? [handoff] : [] };
+  return { primary: canRegister ? handoff : null, secondary: [] };
+}
+
+/** COMPILE's one sentence: a result ("Pack compiled. Two warnings need review; 17 values remain placeholders."). */
+export function compileDecision({ result, readiness: r, pending = false, error = null, atLeastOne = true, stack = null } = {}) {
+  if (!atLeastOne) return { sentence: 'No SLI is in the pack — add one on L1 to compile it.', word: 'Not compiled', tone: 'fail' };
+  if (!result) {
+    if (pending) return { sentence: 'Compiling the pack…', word: '', tone: 'info' };
+    if (error) return { sentence: 'The pack did not compile — the rejected value is named below.', word: 'Failed', tone: 'fail' };
+    return { sentence: 'Nothing compiled yet — the layers fill in as soon as the pack compiles.', word: '', tone: 'neutral' };
+  }
+  const head = r.stale ? 'The last change did not compile; this is the previous pack.'
+    : r.blocking ? 'Pack compiled, but it must not ship: an SLI expression is not valid PromQL.'
+      : !r.schemaOk ? `Pack compiled, but it fails the schema in ${plural(r.schemaErrors, 'place')}.`
+        : 'Pack compiled.';
+  // A blocking item (a PromQL warning, a schema error) is in the queue too: the count of the rest says "other".
+  const other = (r.blocking || !r.schemaOk) ? ' other' : '';
+  const review = r.reviewWarnings
+    ? `${sentenceCount(r.reviewWarnings)}${other} warning${r.reviewWarnings === 1 ? ' needs' : 's need'} review`
+    : `No${other} warning needs review`;
+  // Every value filled is not the pack complete: a clause on a placeholder or a todo to write or measure is said too.
+  const rest = stillToComplete(r);
+  const values = r.values ? `${r.values} value${r.values === 1 ? ' remains a placeholder' : 's remain placeholders'}`
+    : rest ? `every value is filled, but ${rest}` : 'every value is filled';
+  const unread = r.meets == null ? ' The tier rubric is not evaluated yet.' : '';
+  // Green only when readiness says deployable; anything left — a warning, a gap, the rubric unread — keeps it amber.
+  const tone = r.blocked || r.meets === false ? 'fail' : r.deployable ? 'ok' : 'warn';
+  const artefacts = stack?.counts?.artefacts || 0;
+  return {
+    // The sentence says "compiled"; the verdict chip speaks only when something stops the pack.
+    sentence: `${head} ${review}; ${values}.${unread}`, word: r.stale ? 'Previous pack' : r.blocked ? 'Blocked' : '', tone,
+    note: `${plural(artefacts, 'artefact')} on ${stack?.counts?.litSlabs || 0} of ${stack?.counts?.slabs || 0} layers — the same artefacts, ids and titles Discover will show for this pack.`,
+  };
+}
+
+/**
+ * COMPILE's three states, kept apart (the review: "generated successfully", "complete for this tier", "ready to
+ * deploy" are different answers): { id, label, value, note, tone }.
+ */
+export function compileStates(r, stack, tier) {
+  if (!r) return [];
+  const failN = r.mustFail || r.failing;
+  return [
+    { id: 'generated', label: 'Generated', value: r.stale ? 'Previous pack' : 'Yes', tone: r.stale ? 'fail' : 'ok',
+      note: `${plural(stack?.counts?.artefacts || 0, 'artefact')}${r.schemaOk ? ', schema valid' : `, ${plural(r.schemaErrors, 'schema error')}`}` },
+    { id: 'tier', label: 'Complete for this tier', value: r.meets == null ? 'Not evaluated' : !r.meets ? 'No' : r.mustOnPlaceholder ? 'On placeholders' : 'Yes',
+      tone: r.meets == null ? 'neutral' : !r.meets ? 'fail' : r.mustOnPlaceholder ? 'warn' : 'ok',
+      note: r.meets === false ? `${plural(failN, 'required clause')} fail${failN === 1 ? 's' : ''} at ${tier}` : r.mustOnPlaceholder ? `${r.mustOnPlaceholder} required clause${r.mustOnPlaceholder === 1 ? '' : 's'} represented; real value still needed` : r.must ? `MUST ${r.must.passed}/${r.must.total} at ${tier}` : '' },
+    { id: 'deploy', label: 'Ready to deploy', value: r.deployable ? 'Yes' : 'No', tone: r.deployable ? 'ok' : (r.blocked || r.meets === false) ? 'fail' : 'warn',
+      note: r.deployable ? 'Verify confirms it' : `not until: ${r.reasons[0]}${r.reasons.length > 1 ? ` (+${r.reasons.length - 1} more on Verify)` : ''}` },
+  ];
+}
+
+/**
+ * COMPILE's action queue, first on the screen: each warning (and schema error) with the artefact it impacts, a
+ * suggested correction and where "Review" opens; the failing clauses, when the rubric is not met (to the first one's
+ * layer sheet); then, when placeholder values remain — or, every value filled, clauses on placeholders or todos
+ * remain — one row that sends them to VERIFY, where each sits on its layer. Accepted warnings stay off the queue.
+ */
+export function compileQueue({ result, readiness: r, editors = {}, stack = null, accepted = {} }) {
+  const items = [...schemaItems(result?.schemaErrors), ...warningItems(result?.warnings || [], { editors, adapted: result?.adapted || null, accepted }).filter(w => !w.accepted)];
+  if (r?.meets === false) {
+    const failing = result?.summary?.failing || [];
+    const failN = r.mustFail || r.failing;
+    const layer = (/^(L\d)\./.exec(String(failing[0]?.id || '')) || [])[1] || 'L1';
+    items.push({
+      key: 'failing', kind: 'failing', label: 'Failing requirements', blocking: false,
+      message: `${plural(failN, 'required clause')} fail${failN === 1 ? 's' : ''} at the tier — the pack does not meet its rubric.`,
+      impact: failing.slice(0, 3).map(c => c.id).join(', ') + (failing.length > 3 ? ' …' : ''),
+      suggestion: 'Switch the section back on, or add what the clause asks for, on its layer.',
+      fix: { kind: 'sheet', layer }, acceptable: false, accepted: null,
+    });
+  }
+  if (r?.values) {
+    items.push({
+      key: 'placeholders', kind: 'placeholders', label: 'Placeholders', blocking: false,
+      message: `${plural(r.values, 'value')} ${r.values === 1 ? 'is' : 'are'} still a placeholder — written into the pack so each requirement is represented, but not real.`,
+      impact: `${plural(stack?.counts?.scaffold || 0, 'artefact')} with template values · ${plural(r.todos, 'todo')}`,
+      suggestion: 'Fill them on Verify, where each value sits on the layer it shapes.',
+      fix: { kind: 'step', step: 'verify' }, acceptable: false, accepted: null,
+    });
+  } else if (r?.onPlaceholder || r?.todos) {
+    // Every value filled is not every requirement real: the clauses on placeholders and the todos go to VERIFY too,
+    // so the queue never reads "Nothing needs review" over a pack that is still incomplete.
+    items.push({
+      key: 'gaps', kind: 'gaps', label: 'Still to complete', blocking: false,
+      message: `Every value is filled, but ${stillToComplete(r)} — represented in the pack, not yet real.`,
+      impact: `${plural(stack?.counts?.scaffold || 0, 'artefact')} with template values · ${plural(r.todos, 'todo')}`,
+      suggestion: 'See them on Verify: each clause with what it rests on, and what to write or measure outside the studio.',
+      fix: { kind: 'step', step: 'verify' }, acceptable: false, accepted: null,
+    });
+  }
+  return items;
+}
+
+/** The artefact types the adapter mints, by id prefix: the type and the purpose it serves (COMPILE groups by both). */
+export const ARTEFACT_TYPES = [
+  { match: /^SLI-/, type: 'SLIs', purpose: 'what the service is measured by' },
+  { match: /^SLO-/, type: 'SLOs', purpose: 'the objective each SLI is held to' },
+  { match: /^OTEL-/, type: 'Instrumentation', purpose: 'how the service emits telemetry' },
+  { match: /^BAK-/, type: 'Backends', purpose: 'where each signal is stored and queried' },
+  { match: /^PIP-/, type: 'Collector pipeline', purpose: 'how the signals travel' },
+  { match: /^STO-/, type: 'Storage', purpose: 'how long each signal is kept' },
+  { match: /^(COL|MESH|PROF|NET|POE)-/, type: 'Extended collection', purpose: 'signals beyond metrics, logs and traces' },
+  { match: /^QRY-/, type: 'Recording rules', purpose: 'each SLI, precomputed' },
+  { match: /^VIEW-/, type: 'Derived views', purpose: 'reusable queries over the signals' },
+  { match: /^DASH-/, type: 'Dashboards', purpose: 'how people see it' },
+  { match: /^PANEL-/, type: 'Dashboard panels', purpose: 'the panels inside the dashboards' },
+  { match: /^POL-/, type: 'Burn-rate alerts', purpose: 'when an objective is at risk' },
+  { match: /^FCST-/, type: 'Forecasts', purpose: 'an objective at risk before it burns' },
+  { match: /^ALR-/, type: 'Alert routes', purpose: 'who is told, and how' },
+  { match: /^HEAL-/, type: 'Remediations', purpose: 'what runs when it breaks' },
+  { match: /^SYN-/, type: 'Synthetic probes', purpose: 'checks that the service answers' },
+  { match: /^CHAOS-/, type: 'Chaos experiments', purpose: 'proof that the alerts fire' },
+  { match: /^BASE-/, type: 'Baselines', purpose: 'how fast incidents are seen and fixed' },
+  { match: /^IMP-/, type: 'Imports', purpose: 'shared policy the pack references' },
+];
+export function artefactType(a) {
+  const hit = ARTEFACT_TYPES.find(t => t.match.test(String(a?.id || '')));
+  return hit ? { type: hit.type, purpose: hit.purpose } : { type: a?.tool || 'Other', purpose: '' };
+}
+/** Artefacts counted by type, in ARTEFACT_TYPES order: [{ type, purpose, count, scaffold, detail }]. */
+function typeCounts(artefacts) {
+  const by = new Map();
+  for (const a of artefacts || []) {
+    const t = artefactType(a);
+    const g = by.get(t.type) || { ...t, count: 0, scaffold: 0, detail: 0 };
+    g.count += 1;
+    if (a.source === 'Scaffold') g.scaffold += 1;
+    if (a.detail) g.detail += 1;
+    by.set(t.type, g);
+  }
+  const order = (t) => { const i = ARTEFACT_TYPES.findIndex(x => x.type === t); return i < 0 ? ARTEFACT_TYPES.length : i; };
+  return [...by.values()].sort((a, b) => order(a.type) - order(b.type) || a.type.localeCompare(b.type));
+}
+
+/**
+ * producedByLayer(stack) → what the pack produced, one row per slab: its question, the clause verdict, the counts,
+ * and its artefacts by type with the purpose of each — the overview COMPILE shows before any card.
+ */
+export function producedByLayer(stack) {
+  return (stack?.slabs || []).map(s => ({
+    id: s.id, num: s.num, name: s.name, question: LAYER_QUESTIONS[s.id] || '', state: s.state, stateText: s.stateText,
+    artefacts: s.counts.artefacts, scaffold: s.counts.scaffold, missing: s.ghosts.filter(g => g.kind === 'clause').length, todos: s.counts.todos,
+    offSections: s.offSections || [], types: typeCounts(s.artefacts),
+  }));
+}
+
+/**
+ * The layers COMPILE expands, in stack order: every slab (`compileView` 'all'), the ones selected (an array of
+ * layer ids, or one id), and the one whose sheet is open — the overview alone when nothing is selected.
+ */
+export function compileExpandedLayers(build, stack) {
+  const ids = (stack?.slabs || []).map(s => s.id);
+  const view = build?.compileView ?? null;
+  if (view === 'all') return ids;
+  const chosen = new Set(Array.isArray(view) ? view : view ? [view] : []);
+  return ids.filter(id => chosen.has(id) || id === build?.sheetOpen);
+}
+
+/**
+ * artefactOrigins({ build, result, stack }) → COMPILE's "Changes since Define": which selection produced which
+ * artefacts, and what was edited since. Read from the provenance the engine writes (each SLI's library entry,
+ * custom, customised, above its tier) and the adapter's own references (an SLO names its SLI, a recording rule
+ * `ref:slis.<id>`, a burn alert its SLO, a remediation the alert that triggers it, a chaos experiment the SLO it
+ * tests, a panel its board); a board, view or probe named after an entry is that entry's, and what no entry claims
+ * is the tier's scaffold. An attribution, not a proof: the engine does not stamp every artefact with its origin.
+ */
+export function artefactOrigins({ build, result, stack }) {
+  if (!result || !stack) return null;
+  const prov = result.provenance || {};
+  const psli = prov.slis || {};
+  const tier = prov.tier || build?.tier || '';
+  const slug = serviceSlug(result.canonical?.metadata?.name || build?.name || '');
+  const entries = (prov.entries || []).map(e => ({ id: e.id, version: e.version || '', kind: e.kind || '' }));
+  const own = (n) => !!slug && (n === slug || n.startsWith(`${slug}-`) || n.startsWith(`${slug.replace(/-/g, '_')}_`));
+  const byName = (name) => {
+    const n = String(name || '');
+    if (!n || own(n)) return null;
+    return entries.find(e => [`${e.id}-`, `${e.id}_`, `${e.id.replace(/-/g, '_')}_`].some(p => n.startsWith(p)))?.id || null;
+  };
+  const sliOrigin = (id) => { const p = id ? psli[id] : null; return p ? (p.custom ? 'custom' : p.library?.entry || null) : null; };
+  const artefacts = stack.slabs.flatMap(s => s.artefacts);
+  const sloToSli = new Map(artefacts.filter(a => /^SLO-/.test(String(a.id || ''))).map(a => [a.spec?.id || a.title, a.spec?.sli]));
+  const sloOrigin = (slo) => (slo ? sliOrigin(sloToSli.get(slo)) : null);
+  const ref = (s, re) => { const m = re.exec(String(s || '')); return m ? m[1] : null; };
+  const originOf = (a) => {
+    const id = String(a.id || '');
+    const name = a.spec?.id || a.title;
+    if (/^SLI-/.test(id)) return sliOrigin(name);
+    if (/^SLO-/.test(id)) return sliOrigin(a.spec?.sli);
+    if (/^QRY-/.test(id)) return sliOrigin(ref(a.spec?.expr, /^ref:slis\.(.+)$/));
+    if (/^(POL|FCST)-/.test(id)) return sloOrigin(a.spec?.slo);
+    if (/^HEAL-/.test(id)) return sloOrigin(ref(a.spec?.trigger, /^alert:(.+?)_burn_/));
+    if (/^CHAOS-/.test(id)) return byName(name) || (own(String(name || '')) ? null : sloOrigin(ref(a.spec?.steady_state_hypothesis, /^ref:slos\.(.+)$/)));
+    if (/^PANEL-/.test(id)) return byName(String(a.parent || '').replace(/^dashboards\./, ''));
+    return byName(name);
+  };
+  const groups = new Map([
+    ...entries.map(e => [e.id, { id: e.id, label: e.id, sub: [e.kind, e.version && `v${e.version}`].filter(Boolean).join(' · '), kind: 'entry', artefacts: [] }]),
+    ['custom', { id: 'custom', label: 'Custom SLIs', sub: 'written in the studio', kind: 'custom', artefacts: [] }],
+    ['scaffold', { id: 'scaffold', label: `${tier || 'tier'} scaffold`, sub: 'the tier’s structure, shared by every entry', kind: 'scaffold', artefacts: [] }],
+  ]);
+  for (const a of artefacts) (groups.get(originOf(a)) || groups.get('scaffold')).artefacts.push(a);
+  const out = [...groups.values()].filter(g => g.artefacts.length).map(g => ({
+    id: g.id, label: g.label, sub: g.sub, kind: g.kind, count: g.artefacts.length, types: typeCounts(g.artefacts),
+    slis: g.artefacts.filter(a => /^SLI-/.test(String(a.id || ''))).map(a => a.spec?.id || a.title),
+  }));
+  const edits = [];
+  for (const [id, p] of Object.entries(psli)) if ((p.customised || []).length) edits.push({ kind: 'customised', text: `${id}: ${p.customised.join(', ')} customised` });
+  const above = Object.entries(psli).filter(([, p]) => p.aboveTier).map(([id]) => id);
+  if (above.length) edits.push({ kind: 'above', text: `${plural(above.length, 'SLI')} added from a higher tier’s profile: ${above.join(', ')}` });
+  const set = Object.keys(effectiveParams(build));
+  if (set.length) edits.push({ kind: 'params', text: `${plural(set.length, 'value')} set: ${set.join(', ')}` });
+  const off = SECTION_TOGGLES.filter(t => build?.toggles?.[t.id] === false).map(t => t.label);
+  if (off.length) edits.push({ kind: 'off', text: `Switched off: ${off.join(', ')} — nothing is generated for ${off.length === 1 ? 'it' : 'them'}` });
+  return { groups: out, edits, total: artefacts.length };
 }
 
 // ---------- the layer stack (steps 1-3; docs/BUILD_JOURNEY.md "The scan") ----------
@@ -923,7 +1605,7 @@ function slabStateText(state, m) {
     case 'neutral': return 'no clause applies';
     case 'pending': return `${plural(m.total, 'clause')} to evaluate`;
     case 'fail': return `${m.fail} of ${plural(m.total, 'clause')} fail${m.fail === 1 ? 's' : ''}`;
-    case 'placeholder': return `${m.pass + m.placeholder} of ${m.total} pass · ${m.placeholder} on a placeholder`;
+    case 'placeholder': return `${m.pass + m.placeholder} of ${m.total} pass · ${m.placeholder} need${m.placeholder === 1 ? 's' : ''} a real value`;
     default: return `${m.total} of ${plural(m.total, 'clause')} pass`;
   }
 }
@@ -1111,8 +1793,8 @@ export const sheetModeFor = (step) => SHEET_MODES[step] || 'edit';
  */
 export const BUILD_TABS = [
   { id: 'define', n: '1', label: 'What Are We Building For?', sub: 'Define', techName: 'Define', tagline: 'Choose a service, tier, and starting point', accent: 'tab-blue' },
-  { id: 'compile', n: '2', label: 'What Will the Pack Include?', sub: 'Compile', techName: 'Compile', tagline: 'Build SLIs, alerts, dashboards, and checks', accent: 'tab-magenta' },
-  { id: 'verify', n: '3', label: 'Can We Use This Pack?', sub: 'Verify', techName: 'Verify', tagline: 'Review coverage and resolve gaps', accent: 'tab-emerald' },
+  { id: 'compile', n: '2', label: 'What Did the Pack Produce?', sub: 'Compile', techName: 'Compile', tagline: 'Build SLIs, alerts, dashboards, and checks', accent: 'tab-magenta' },
+  { id: 'verify', n: '3', label: 'What Is Ready, and What Remains?', sub: 'Verify', techName: 'Verify', tagline: 'Review coverage and resolve gaps', accent: 'tab-emerald' },
 ];
 /** A header tab's accessible name and title: the step word and its tagline. */
 export const tabName = (t) => `${t.techName} — ${t.tagline}`;
@@ -1212,12 +1894,17 @@ export function buildDefinitionModel({ build, library, requirements = {}, checkl
   const check = checklist || buildClauseChecklist(tierClauses, r?.summary || null);
   const k = check.counts;
   const pending = !!build?.pending, error = build?.error || null, stale = isStale(build), ready = !!r, valid = errors.length === 0;
-  const statusKind = pending ? 'pending' : error ? 'error' : !valid ? 'idle' : !ready ? 'pending' : check.conformant ? 'ok' : 'fail';
+  // A MUST clause that passes only on a placeholder keeps the column amber, as VERIFY's "Meets tier rubric" is.
+  const mustOnPlaceholder = check.items.filter(i => i.state === 'placeholder' && i.severity === 'MUST').length;
+  const statusKind = pending ? 'pending' : error ? 'error' : !valid ? 'idle' : !ready ? 'pending' : check.conformant ? (mustOnPlaceholder ? 'warn' : 'ok') : 'fail';
   const status = pending ? 'checking…'
     : error ? (stale ? 'the last compilation failed — showing the previous pack' : 'the last compilation failed')
     : !valid ? 'complete the definition to evaluate'
     : !ready ? 'evaluating…'
-    : check.conformant ? `conformant at ${tier}` : `${plural(k.must.fail, 'MUST clause')} failing`;
+    // Plain words first (the 2026-09 review §4): the formal "conformant" is "meets the tier rubric" — and it says so
+    // when a required clause meets it only on a placeholder.
+    : check.conformant ? (mustOnPlaceholder ? `meets the ${tier} rubric on placeholders — real values still needed` : `meets the ${tier} rubric`)
+    : `${plural(k.must.fail, 'MUST clause')} failing`;
   const seeded = isSeeded(build);
   return {
     name, slug: serviceSlug(name), owners: build?.owners || '', ownerList: parseOwners(build?.owners), environment: build?.environment || 'prod',
@@ -1231,11 +1918,14 @@ export function buildDefinitionModel({ build, library, requirements = {}, checkl
     seeded, mode: (build?.step || 'define') === 'define' ? 'form' : 'seed',
     seededNote: seeded ? SEEDED_NOTE : null,
     seedCard: seedCardModel(build, library, requirements),
+    // On DEFINE the column is a sticky progress summary of the four substeps (the form is on the step itself).
+    ...defineSubsteps({ build, library }),
     summary: {
       status, statusKind, conformant: check.conformant, tier,
       counts: { pass: k.pass, placeholder: k.placeholder, fail: k.fail, pending: k.pending, total: k.total, must: k.must, should: k.should },
       failing: check.items.filter(i => i.state === 'fail'),
       onPlaceholder: check.items.filter(i => i.state === 'placeholder').length,
+      mustOnPlaceholder,
       todoCount: r?.todos?.length || 0,
       warningCount: r?.warnings?.length || 0,
       blockingWarnings: (r?.warnings || []).filter(w => w.kind === 'promql').length,
@@ -1257,7 +1947,7 @@ export function buildDefinitionModel({ build, library, requirements = {}, checkl
 export function buildStatusLine(summary) {
   if (!summary || summary.pending || !summary.ready) return null;
   const k = summary.counts;
-  return `${summary.status} · ${k.pass} pass · ${k.placeholder} on a placeholder · ${k.fail} fail`;
+  return `${summary.status} · ${k.pass} pass · ${k.placeholder} need real values · ${k.fail} fail`;
 }
 
 /**
