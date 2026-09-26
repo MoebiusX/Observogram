@@ -196,7 +196,7 @@ Two design constraints he gave for it on 2026-09-24:
   honest on the stack and in the summary: a clause that passes only on a virtual node reads
   like "pass on a placeholder", never plain green.
 
-**B. Neuron SLO ledger.** He wants Pyrra's one thing — every SLO's availability, remaining
+**B. Neuron SLO ledger** *(planned with the fleet view in [NEURON_FLEET_PLAN.md](NEURON_FLEET_PLAN.md), slices F1–F3; proposed 2026-09-25)*. He wants Pyrra's one thing — every SLO's availability, remaining
 budget and burn in one place — inside *Advanced → Neuron*, paired with the integrity of
 each SLO's measurement chain (Neuron already computes blast radius). Prerequisite in the
 compiler: window-long error-ratio and budget-remaining recording rules per SLO (today only
