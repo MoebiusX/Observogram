@@ -50,6 +50,14 @@ them; change them at the source and update the gate in the same commit.
 - **The vendored spec** under `vendor/observability-pack-spec/` is synced,
   never hand-edited: use `npm run sync-spec`; `npm run sync-spec:check`
   verifies SHA256 integrity and runs in CI.
+- **Routes and roles:** every route is registered with
+  `authorize('<METHOD> <path>')` (`server/authz.mjs`) as its first handler,
+  per method (never `app.all` / `route.all`), and classified in
+  `server/route-table.mjs`; every router is
+  `express.Router({ caseSensitive: true })` mounted at the root.
+  `server/test-authz.mjs` fails the build on an unclassified, unguarded or
+  unprobed route (add its probe to `PROBES`); a class change updates
+  `EXPECTED_CLASS` there in the same commit.
 - **Browser-safety rule:** modules under `tools/lib/` (including
   `tools/lib/contracts/`) are imported by the studio in the browser — they
   must not import `node:*` APIs or read `process.env`. Node-only code lives

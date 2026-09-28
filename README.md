@@ -307,7 +307,8 @@ server opens it at every start.
   `packc store export` in place, with the server stopped — see
   [Upgrade And Roll Back](#upgrade-and-roll-back) and
   [Stale Import](#stale-import).
-- **Tenancy is always on.** Every `/api` request runs in an org and the
+- **Tenancy is always on, and roles are enforced per route** (see
+  [Roles](#roles)). Every `/api` request runs in an org and the
   response echoes it in `X-Observogram-Org`. A flat workspace is the
   default org, at the workspace root; an org created with `npm run orgs --
   create <id>` gets `orgs/<id>/`, fixed at creation. The header ORG chip
@@ -344,8 +345,58 @@ server opens it at every start.
   org's own part of the workspace (or outside it); a path inside another
   org's part is refused.
 
+#### Roles
+
+Who may call what is decided per route, by one table:
+[`server/route-table.mjs`](server/route-table.mjs) classifies every route
+the server registers, and each route's first handler is its guard.
+
+| Role | May |
+|---|---|
+| `viewer` | every read (`GET`) in the org |
+| `operator` | every existing write in the org as well: scan, draft, register, instantiate and compile, deploy, verify and roll back, retrofeed, journeys, the live refresh, RESET |
+| `admin` | the org's name and members as well (the identity API, next slice) |
+| owner | a deployment-level flag, not an org role: an owner acts as `admin` in every org, plus users, orgs and the join role (next slice) |
+
+The role is the membership **of the request's org** (`X-Observogram-Org`,
+`?org=`); `orgs.json`'s `member` (and any unknown role) imported as
+`operator`, `read`/`readonly` as `viewer`. Per posture:
+
+- **Signed in** (local users or OIDC): the user's role in the org; an owner
+  is an admin everywhere. The bearer (`OBSERVOGRAM_API_TOKEN`) acts as an
+  `operator` of its `X-Observogram-Org` (else the default org), never as an
+  admin or owner.
+- **Token-only** (a token, no sign-in): anonymous callers are viewers
+  (their writes answer 401); the bearer is an operator.
+- **Open** (`OBSERVOGRAM_AUTH=off`, or `OBSERVOGRAM_INSECURE_NO_AUTH=1`
+  beyond loopback): the caller is `local`, an owner — every route, as
+  before.
+
+Every refusal carries `denied` — `auth` (401: sign in), `csrf`, `org` (not
+a member of that org), `role` or `posture` — and a sentence that names the
+way out, e.g. `requires the operator role in org 'acme' (you are viewer) —
+ask an admin of acme`; the studio shows it as is. `GET /api/orgs` and
+`/auth/me`'s `orgs` give each org's `role` (the membership's) and
+`effectiveRole` (the one the guard applies). A form post to `/auth/login`
+or `/auth/change-password` that the browser marks as coming from another
+site, or a sibling subdomain (`Sec-Fetch-Site: cross-site | same-site`), is
+refused. Authorization is decided when a request reaches its route: a
+request already running when its user is disabled or demoted finishes; the
+user's next one is refused.
+
+**What a viewer can no longer do in the studio** (each answers with the
+server's text): Scan (a repo or GitHub), Draft from MCP and the MCP
+panel's live refresh, dropping or uploading a pack file (even only to view
+it: the upload registers it), Build (its preview computes on the server,
+and Save registers), Compare's retrofeed, journey Capture and Run, Deploy /
+Verify / Rollback, and RESET. Give such a member `operator` with
+`npm run orgs -- add-member <org> <login> --role operator`.
+
 MCP write tokens are unrelated to the API token: they pass through per
-request and are never stored server-side. Registered packs and the deploy
+request and are never stored server-side. Userinfo, the fragment and query
+parameters named like credentials (`token`, `api_key`, `X-Amz-Signature`, …)
+are never kept in the live pack or a draft; put a token in the auth field —
+never in the URL's path. Registered packs and the deploy
 audit live in the `.observogram/` workspace (`OBSERVOGRAM_WORKSPACE`
 relocates it).
 
@@ -454,7 +505,13 @@ MCP_AUTH=$MCP_CLIENT_KEY \
 npm run fetch-live
 ```
 
-The default output is the ignored local file `examples/production-live.pack.yaml`.
+The default output is the ignored local file `examples/production-live.pack.yaml`,
+which `npm run detect-drift` and the dry run read. The studio's LIVE badge
+reads each org's own live pack, `<org root>/live/production-live.pack.yaml`
+(the default org at `.` → `<workspace>/live/…`), written by the MCP panel's
+refresh; `OUTPUT=<org root>/live/production-live.pack.yaml npm run fetch-live`
+feeds it from the CLI. Both keep the same safe URL: no userinfo, fragment or
+credential query parameter (`MCP_AUTH` is the place for a token).
 When the MCP exposes `metrics_query`, the fetch also samples the observability
 stack's own self-metrics (scrape, ruler, notify, tsdb, collector, dashboards,
 synthetic, logs, traces) as point-in-time signals — never verdicts, stamps or
@@ -1061,6 +1118,10 @@ database, not these files, so copy `<workspace>/orgs/<id>/` first if any
 of it may be needed again.
 
 ## API Surface
+
+Every route's class — public, self, viewer, operator, admin, owner — is in
+[`server/route-table.mjs`](server/route-table.mjs) (see [Roles](#roles)):
+every `GET` below is `viewer`, every other `/api` route `operator`.
 
 | Method | Path | Purpose |
 |---|---|---|
