@@ -15,8 +15,9 @@
  *
  * A created org's root is orgs/<id>/, fixed at creation. Creating an org
  * needs identity (a local user or OIDC) and an owner. Removing an org is
- * soft: its row and its files stay. Roles are recorded for Stage 3
- * (authorization); Stage 2 enforces membership only.
+ * soft: its row and its files stay. A membership's role is enforced per
+ * route by the server's route guard (server/authz.mjs authorize(),
+ * classified in server/route-table.mjs); this CLI is where it is set.
  *
  * Exit codes: 0 done · 1 refused or failed (one line on stderr) · 2 usage.
  */

@@ -17,6 +17,7 @@
  *   below, only the named middleware and the static mounts sit between;
  *   the README's API Surface states each of its rows' class as the table has it,
  *   and its Roles section each orgs.json role the import maps to admin or viewer;
+ *   no comment in server/ or tools/ still says roles are not enforced;
  * - the decision (authzDecision), pure, over synthetic entries — the
  *   always / refuse / rule / direct-loopback paths no route has yet — and
  *   the request facts it reads (the CSRF header, a cross-site form, a
@@ -730,6 +731,31 @@ test('the README Roles section lists every orgs.json role the import maps to adm
     const { role } = mapLegacyRole(w);
     if (role !== 'operator') assert.ok(listed[role].includes(w), `${w} → ${role}: a mapping the README does not list`);
   }
+});
+
+// Roles are enforced: no comment in server/ or tools/ still says a role
+// is only recorded (the pre-3a "recorded for Stage 3, not yet enforced").
+// Comment lines are joined first, so a sentence wrapped over two lines is
+// read whole.
+test('no source comment says roles are recorded but not enforced', () => {
+  const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const STALE = /\brole[s]?\b[^.;]{0,60}\bnot (?:yet )?enforced|\brole[s]?\b[^.;]{0,20}\brecorded for stage 3|enforces membership only/i;
+  const self = fileURLToPath(import.meta.url);
+  const files = [];
+  const walk = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith('.mjs') && p !== self) files.push(p);
+    }
+  };
+  walk(join(REPO, 'server'));
+  walk(join(REPO, 'tools'));
+  assert.ok(files.length > 50, `walked the sources (${files.length} files)`);
+  const stale = files.filter((f) => STALE.test(readFileSync(f, 'utf8').replace(/\s*\n\s*(?:\*(?!\/)|\/\/)?\s*/g, ' ')))
+    .map((f) => f.slice(REPO.length + 1));
+  assert.deepEqual(stale, [], 'a comment still says roles are not enforced');
 });
 
 test('authorize(key) throws at registration on an unclassified key, naming both files', async () => {
