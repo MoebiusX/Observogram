@@ -40,7 +40,7 @@
 // in tools/test-build-editor.mjs and tools/test-build-model.mjs). It imports
 // nothing from build-model.mjs, so build-model.mjs can import it.
 
-import { goodWhen, GOOD_WHEN } from './sli-direction.mjs';
+import { goodWhen, GOOD_WHEN, boundText } from './sli-direction.mjs';
 
 /** The fields an override may carry — the engine's OVERRIDE_FIELDS, spelled once here for the browser (`good_when`: spec 1.3, the side of a threshold SLI's bound that is good). */
 export const OVERRIDE_FIELDS = ['id', 'objective', 'window', 'threshold', 'good_when', 'query', 'good', 'total', 'description', 'unit', 'semconv_metric'];
@@ -177,11 +177,30 @@ export function windowText(w) {
 }
 // A bound's unit as it reads after the number: `per_second` → ' per second'; a ratio, a count and no unit read as the bare number.
 const UNIT_WORDS = { per_second: 'per second', per_minute: 'per minute', events_per_hour: 'events per hour', percent: '%', '%': '%' };
+/** A unit id as words: `per_second` → 'per second', `events_per_hour` → 'events per hour', `seconds` as it is; '' without a unit. */
+export function unitWords(unit) {
+  const u = String(unit ?? '').trim();
+  return u ? (UNIT_WORDS[u] ?? u.replace(/_/g, ' ')) : '';
+}
 function unitSuffix(unit) {
   const u = String(unit ?? '').trim();
   if (!u || u === 'ratio' || u === 'count') return '';
-  const w = UNIT_WORDS[u] ?? u.replace(/_/g, ' ');
+  const w = unitWords(u);
   return w === '%' ? '%' : ` ${w}`;
+}
+/**
+ * A threshold SLI's bound for a one-line meta (the Define review, the rolodex; the stack's candidate cards keep the engine's boundText for parity): the
+ * direction and the number from sli-direction.mjs boundText, the unit in words — '≤ 1 events per hour', '≥ 100 per
+ * second', '≤ 5%'; a ratio or a count keeps its word ('≤ 0.8 ratio'), since a meta line has no subject to carry it.
+ * '' without a bound. boundText itself stays the engine's copy, input for input.
+ */
+export function boundWords(sli) {
+  // A percent bound typed with its sign ('5%') would read '5%%' once the unit's sign is appended.
+  const threshold = typeof sli?.threshold === 'string' ? sli.threshold.trim().replace(/%$/, '').trim() : sli?.threshold;
+  const bare = boundText({ threshold, good_when: sli?.good_when });
+  if (!bare) return '';
+  const w = unitWords(sli?.unit);
+  return !w ? bare : w === '%' ? `${bare}%` : `${bare} ${w}`;
 }
 const numberText = (v) => { const t = String(v ?? '').trim().replace(/%$/, '').trim(); return t !== '' && Number.isFinite(Number(t)) ? String(Number(t)) : null; };
 

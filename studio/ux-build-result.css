@@ -137,3 +137,12 @@
 /* ---------- the hand-off footer: the button is primary only when the hand-off is the next action ---------- */
 .bres-handoff .build-step-status { font: 14px/1.5 var(--sans); font-style: normal; color: var(--ux-ink-2); }
 .bres-handoff .build-next-secondary { font-weight: 600; }
+
+/* Stacked (under 1080px) the step's own verdict comes first: the definition
+   column — seed card, rubric summary — follows it instead of pushing Compile's
+   result and Verify's readiness verdict below the fold. */
+@media (max-width: 1080px) {
+  .build-shell > .build-exit { order: 0; }
+  .build-shell > .build-main { order: 1; }
+  .build-shell > .build-def  { order: 2; }
+}

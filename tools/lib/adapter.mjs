@@ -40,7 +40,9 @@ import { SPEC_VERSION } from './validator.mjs';
 //     tool: string,         // implementation tool/family
 //     tags: string[],       // free-form tags
 //     source: 'Declared' | 'Verified' | 'Scaffold',
-//                              // 'Missing' added by Phase 3 conformance pass
+//                              // never 'Missing': the adapter projects only what the pack
+//                              //   holds; something it lacks is a failing rubric clause
+//                              //   (conformance.mjs), not an artefact
 //     defines?: string,     // symbol this artefact defines (e.g. "slis.api_availability")
 //     refs?: string[],      // symbols this artefact references (cross-ref check input)
 //     spec: object,         // raw canonical section/item (drawer detail)

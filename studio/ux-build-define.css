@@ -187,6 +187,14 @@
 .build-editor-include-box { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .build-editor-include-help, .build-editor-save-help { font: 12.5px/1.4 var(--sans); color: var(--ink-3); }
 .build-editor-save-help { max-width: 230px; text-align: right; }
+/* A rolodex card's inclusion — the editor's named control on the card: "Include <SLI>" as a real checkbox (a custom SLI's Remove). */
+.build-rolo-actions { flex-wrap: wrap; justify-content: flex-end; }
+.build-rolo-include { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font: 600 13px/1.3 var(--sans); color: var(--ink); }
+.build-rolo-include-box { width: 18px; height: 18px; margin: 0; flex: none; accent-color: var(--accent); cursor: pointer; }
+.build-rolo-include-box:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.build-rolo-include:has(.build-rolo-include-box:disabled) { cursor: not-allowed; color: var(--ink-3); }
+.build-rolo-include-box:disabled { cursor: not-allowed; }
+.build-rolo-remove { padding: 4px 10px; font: 600 12.5px/1.3 var(--sans); }
 @media (max-width: 760px) {
   .build-editor-summary { padding-right: 0; }
   .build-editor-save-help { text-align: left; }

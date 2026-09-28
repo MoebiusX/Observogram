@@ -74,6 +74,19 @@ export function protoEnsureComparison(host) {
   return true;
 }
 
+// ---------- plain words (docs/UX_SCREEN_GRAMMAR.md) ----------
+
+// Gap mode: Pack B is the selected baseline, Pack A the pack being
+// assessed — "the live pack" only when it carries live-draft provenance
+// (mcp.url) or a live-like id, never claimed without it; otherwise "the
+// current pack". Returns the A-only phrase, e.g. "Additional in live pack".
+export function protoAdditionalLabel() {
+  const pack = state.pack;
+  const live = !!pack && (partialLiveEvidence(pack).isLiveDraft
+    || /(^|[-_])(live|deployed|runtime)([-_]|$)/i.test(String(state.selectedPackId || pack.id || '')));
+  return `Additional in ${live ? 'live pack' : 'current pack'}`;
+}
+
 // ---------- the normalized model ----------
 
 // Stable identity for a diff entry inside the prototype layer — used to
@@ -170,10 +183,10 @@ export function buildProtoModel() {
   // Biggest-gap attribution: which badness bucket costs the most units.
   const buckets = [
     { kind: 'onlyInA', units: weighted.onlyInAUnits, n: totals.onlyInA,
-      label: mode === 'drift' ? 'declared, not live' : 'beyond target' },
+      label: mode === 'drift' ? 'declared, not live' : protoAdditionalLabel().toLowerCase() },
     { kind: 'drifted', units: weighted.driftedUnits, n: totals.drifted, label: 'drifted' },
     { kind: 'onlyInB', units: weighted.onlyInBUnits, n: totals.onlyInB,
-      label: mode === 'drift' ? 'live, not declared' : 'missing vs target' },
+      label: mode === 'drift' ? 'live, not declared' : 'missing vs baseline' },
   ].sort((x, y) => y.units - x.units);
   const biggestGap = buckets[0].units > 0 ? buckets[0] : null;
 
@@ -397,7 +410,7 @@ export function ladderHtml(ig, overallPct, { compact = false } = {}) {
 export function partialEvidenceBanner(model) {
   const ev = model.liveEvidence;
   if (!ev?.partial) return '';
-  const aLabel = model.mode === 'drift' ? 'Declared, not live' : 'Beyond target';
+  const aLabel = model.mode === 'drift' ? 'Declared, not live' : protoAdditionalLabel();
   return `
     <div class="drift-partial-banner">
       <span class="drift-partial-key">⚠ PARTIAL LIVE EVIDENCE</span>
@@ -411,7 +424,8 @@ export function partialEvidenceBanner(model) {
 export function scaffoldOosNotes(model) {
   const bits = [];
   if (model.totals.scaffold) {
-    bits.push(`<p class="drift-oos-note">${model.totals.scaffold} schema-required scaffold artefact${model.totals.scaffold === 1 ? '' : 's'} had no source evidence in the selected environment. Shown in the pack, excluded from drift badness.</p>`);
+    const n = model.totals.scaffold;
+    bits.push(`<p class="drift-oos-note">Template value needs completion: ${n} schema-required artefact${n === 1 ? '' : 's'} (scaffold) had no source evidence in the selected environment. Shown in the pack, excluded from drift badness.</p>`);
   }
   if (model.totals.outOfScope) {
     bits.push(`<p class="drift-oos-note">${model.totals.outOfScope} live artefact${model.totals.outOfScope === 1 ? '' : 's'} out of declared scope — members of families <strong>${escapeHtml(model.bName)}</strong> runs but your pack doesn't declare (the rest of the platform inventory). Shown for context, not counted as drift.</p>`);
@@ -478,16 +492,17 @@ export function deploySelectionFromItems(items, selectedUids = null) {
 
 // Fix-kind chip vocabulary shared by the triage surfaces.
 export function fixChip(fix) {
+  // Plain words on the chip; the formal term rides along as the tooltip.
   const map = {
     deploy: ['deploy', 'DEPLOY'],
-    retrofeed: ['retrofeed', 'RETROFEED'],
+    retrofeed: ['retrofeed', 'UPDATE REPOSITORY FROM LIVE', 'Retrofeed: copy the live signal into the repository pack as a patch you review'],
     adopt: ['retrofeed', 'ADOPT'],
     reconcile: ['reconcile', 'FIELD DECISION'],
     manual: ['manual', 'MANUAL'],
-    'beyond-target': ['manual', 'BEYOND TARGET'],
+    'beyond-target': ['manual', 'ADDITIONAL VS BASELINE', 'Present in this pack but not in the selected baseline'],
   };
-  const [cls, text] = map[fix] || ['manual', String(fix).toUpperCase()];
-  return `<span class="proto-fix is-${cls}">${text}</span>`;
+  const [cls, text, tip] = map[fix] || ['manual', String(fix).toUpperCase()];
+  return `<span class="proto-fix is-${cls}"${tip ? ` title="${escapeHtml(tip)}"` : ''}>${text}</span>`;
 }
 
 export function badnessClassChip(item) {

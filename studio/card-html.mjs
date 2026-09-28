@@ -124,12 +124,15 @@ export function artefactKind(artefact) {
 // An artefact on the four-property vocabulary (studio/ux-kit.mjs): the
 // adapter's one `source` word answers two different questions, so it is split.
 //   Verified -> evidence: live          Declared -> evidence: declared
-//   Scaffold -> completion: needsInput  Missing  -> evidence: missing
+//   Scaffold -> completion: needsInput
+// The adapter emits only those three (tools/lib/adapter.mjs). 'Missing' maps
+// to evidence: missing only to keep the shared vocabulary total (the Model
+// view's clause ghosts use that word); no artefact carries it, so Discover
+// never counts or lists one. Something the pack lacks is a required check not
+// met, reported by the tier rubric, never a detected artefact.
 // `attention` is Discover's definition of an artefact a person must act on: a
-// template value to complete or a reference that does not resolve (and an
-// artefact whose source is 'Missing', though the adapter emits none today: a
-// required artefact the pack lacks shows as a required check not met). Evidence alone never makes it one — a
-// repository pack is declared-only by nature.
+// template value to complete or a reference that does not resolve. Evidence
+// alone never makes it one — a repository pack is declared-only by nature.
 export function artefactStatus(artefact, { broken = 0 } = {}) {
   const src = String(artefact?.source || 'Declared');
   const scaffold = src === 'Scaffold';
@@ -142,7 +145,7 @@ export function artefactStatus(artefact, { broken = 0 } = {}) {
     completion: scaffold ? 'needsInput' : null,
     broken: nBroken,
     live,
-    attention: scaffold || missing || nBroken > 0,
+    attention: scaffold || nBroken > 0,
   };
 }
 
@@ -151,9 +154,9 @@ export function artefactStatus(artefact, { broken = 0 } = {}) {
 // definition, repeated in its tooltip.
 export const DISCOVER_TASKS = [
   { id: 'attention',       label: 'Needs attention',
-    tip: 'Artefacts a person must act on: a template value still to complete, or a reference that does not resolve. Each artefact counts once, however many reasons apply. A required artefact the pack lacks is not an artefact here; it shows as a required check not met.' },
+    tip: 'Artefacts a person must act on: a template value still to complete, or a reference that does not resolve. Each artefact counts once, however many reasons apply. Something the pack lacks is not an artefact here: when the tier rubric requires it, it shows as a required check not met.' },
   { id: 'missingEvidence', label: 'Missing evidence',
-    tip: 'Artefacts with no live evidence: declared in the pack only, template values, or missing. Live evidence means the live platform reported the signal when the pack was drafted or refreshed.' },
+    tip: 'Artefacts with no live evidence: declared in the pack only, or template values. Live evidence means the live platform reported the signal when the pack was drafted or refreshed.' },
   { id: 'scaffold',        label: 'Template value needs completion',
     tip: 'Generated from a template so the requirement is represented; a person must supply the real value (formerly "Scaffold").' },
   { id: 'live',            label: 'Live evidence',
@@ -174,9 +177,11 @@ export function matchesTask(status, task) {
 
 // "Inferred from recording rule slo:x:ratio_5m." — the live fetcher's SLI
 // inference (tools/lib/sli-inference.mjs) writes the rule(s) it read into the
-// description. Returns the rule names (an `a:b:good/total` pair expands to its
-// two members, `a:b:good` and `a:b:total`: stems, not rule names — see
-// resolveInferredRule) or null when the artefact was not inferred.
+// description. Returns the rule names, or null when the artefact was not
+// inferred. The inference now names every rule in full; packs fetched before
+// that wrote a good/total pair as the shorthand `a:b:good/total`, which still
+// expands to its two members, `a:b:good` and `a:b:total` (stems, not rule
+// names — see resolveInferredRule), so those older packs keep resolving.
 const INFERRED_RE = /^\s*Inferred from recording rules?\s+(.+?)\.?\s*$/i;
 export function inferredFrom(artefact) {
   const text = String(artefact?.spec?.description ?? artefact?.desc ?? '');
@@ -193,11 +198,12 @@ export function inferredFrom(artefact) {
 }
 
 // The recording rule, among `ruleNames`, that an inferredFrom() name stands for,
-// or null. An exact name wins. A good/total pair is written as the shorthand
-// `a:b:good/total`, while the rules themselves are `a:b:good_<window>` and
-// `a:b:total_<window>` (tools/lib/sli-inference.mjs infers the pair only from
-// those), so a `…:good` or `…:total` stem resolves to the first rule named
-// `<stem>_…`, the one the inference read.
+// or null. An exact name wins. Fallback for packs fetched before
+// tools/lib/sli-inference.mjs named both rules of a good/total pair: those wrote
+// the shorthand `a:b:good/total`, while the rules themselves are
+// `a:b:good_<window>` and `a:b:total_<window>` (the inference reads the pair
+// only from those), so a `…:good` or `…:total` stem resolves to the first rule
+// named `<stem>_…`, the one the inference read.
 export function resolveInferredRule(name, ruleNames) {
   const names = [...(ruleNames || [])].filter(n => typeof n === 'string' && n);
   if (names.includes(name)) return name;

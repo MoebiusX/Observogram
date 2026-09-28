@@ -16,18 +16,28 @@ import {
   buildProtoModel, protoEnsureComparison, projectGrade, projectionSentence,
   ladderHtml, chip, criterionChip, donutSvg, fmtUnits, fixChip, badnessClassChip,
   partialEvidenceBanner, scaffoldOosNotes, verificationNote, operabilityNote,
-  buildEvidenceRows, deploySelectionFromItems,
+  buildEvidenceRows, deploySelectionFromItems, protoAdditionalLabel,
 } from './proto-shared.mjs';
 
 let step = 1;                  // current Diagnose step (session-only)
 const basket = new Set();      // picked gap uids — shared Diagnose ↔ Remediate
 
 const STEPS = [
-  { n: 1, key: 'VERDICT', q: 'can we trust it?' },
+  { n: 1, key: 'VERDICT', q: 'how reliable is this pack?' },
   { n: 2, key: 'EVIDENCE', q: 'why — what does the instrument see?' },
   { n: 3, key: 'PICK GAPS', q: 'which gaps are worth fixing?' },
   { n: 4, key: 'HAND OFF', q: 'what happens next?' },
 ];
+
+// Plain words for the fix kinds in the hand-off summary (docs/UX_SCREEN_GRAMMAR.md).
+const FIX_WORDS = {
+  deploy: 'to deploy',
+  retrofeed: 'to update the repository from live',
+  adopt: 'to adopt from the baseline',
+  reconcile: 'to decide field by field',
+  manual: 'manual',
+  'beyond-target': 'additional vs baseline',
+};
 
 function stepperHtml(active) {
   return `
@@ -88,7 +98,7 @@ function stepVerdict(m) {
       <div class="pc-verdict-main">
         <div class="pa-verdict-letter tier-${escapeHtml(ig.tier)}">${escapeHtml(ig.letter)}</div>
         <div>
-          <span class="pa-verdict-eyebrow">DIAGNOSTIC GRADE · ${escapeHtml(ig.label)}</span>
+          <span class="pa-verdict-eyebrow" title="The diagnostic grade: coverage, trust and evidence">ASSESSMENT · ${escapeHtml(ig.label)}</span>
           <span class="pa-verdict-word ${escapeHtml(verdict.level)}">${escapeHtml(verdict.word)}</span>
           <span class="pa-verdict-stats">
             <strong>${m.overallPct}%</strong> score
@@ -119,8 +129,8 @@ function stepEvidence(m) {
         <ul class="pb-lattice-legend">
           <li>${m.totals.aligned} aligned</li>
           <li>${m.totals.drifted} drifted</li>
-          <li>${m.totals.onlyInA} ${m.mode === 'drift' ? 'declared-not-live' : 'beyond target'}</li>
-          <li>${m.totals.onlyInB} ${m.mode === 'drift' ? 'live-not-declared' : 'missing vs target'}</li>
+          <li>${m.totals.onlyInA} ${m.mode === 'drift' ? 'declared-not-live' : escapeHtml(protoAdditionalLabel().toLowerCase())}</li>
+          <li>${m.totals.onlyInB} ${m.mode === 'drift' ? 'live-not-declared' : 'missing vs baseline'}</li>
         </ul>
       </div>
       ${scaffoldOosNotes(m)}
@@ -208,14 +218,14 @@ function stepHandOff(m) {
       <div class="pc-card pc-card-wide">
         <header>The plan</header>
         <p class="pc-handoff-lede">You picked <strong>${picked.length}</strong> gap${picked.length === 1 ? '' : 's'} —
-          ${Object.entries(byFix).map(([f, n]) => `${n} ${escapeHtml(f)}`).join(' · ') || 'none'}.</p>
+          ${Object.entries(byFix).map(([f, n]) => `${n} ${escapeHtml(FIX_WORDS[f] || f)}`).join(' · ') || 'none'}.</p>
         ${sentence ? `<p class="pa-gap-projection">${escapeHtml(sentence)}</p>` : ''}
         <div class="pc-handoff-actions">
           ${dep.identities.size ? `<button type="button" class="proto-act is-primary" id="pc-deploy">⇪ Deploy ${dep.identities.size} now (${dep.rows} rows)</button>` : ''}
           <button type="button" class="proto-act" id="pc-to-remediate">Open the Remediate queue →</button>
           <button type="button" class="proto-act is-quiet" id="pc-reverify">↻ Re-verify after deploying</button>
         </div>
-        <p class="proto-verification-note">Hand-off is verification-scoped: deploys land in the platform, retrofeeds land as a repo patch — the grade only moves when the next live verification confirms it.</p>
+        <p class="proto-verification-note">Hand-off is verification-scoped: deploys land in the platform, updates from live (retrofeed) land as a repository patch — the grade only moves when the next live verification confirms it.</p>
       </div>
     </div>
     ${navHtml(4)}`;
@@ -306,6 +316,7 @@ export function renderProtoRemediateC(view) {
   const dep = deploySelectionFromItems(picked, basket);
   const projection = basket.size ? projectGrade(basket) : null;
   const pct = Math.round((basket.size / m.items.length) * 100);
+  const repoUpdates = picked.filter(i => i.fix === 'retrofeed' || i.fix === 'adopt').length;
 
   root.innerHTML = `
     ${partialEvidenceBanner(m)}
@@ -339,7 +350,7 @@ export function renderProtoRemediateC(view) {
         <div class="pc-basket">
           <span class="pc-gauge-key">DEPLOY BASKET</span>
           <div class="pc-basket-n"><strong>${dep.identities.size}</strong> deployable · ${dep.rows} rows</div>
-          <div class="pc-basket-n">${picked.filter(i => i.fix === 'retrofeed' || i.fix === 'adopt').length} retrofeed · ${picked.filter(i => i.fix === 'reconcile').length} field decisions · ${picked.filter(i => i.fix === 'manual' || i.fix === 'beyond-target').length} manual</div>
+          <div class="pc-basket-n">${repoUpdates} repository update${repoUpdates === 1 ? '' : 's'} · ${picked.filter(i => i.fix === 'reconcile').length} field decisions · ${picked.filter(i => i.fix === 'manual' || i.fix === 'beyond-target').length} manual</div>
           ${dep.identities.size ? `<button type="button" class="proto-act is-primary" id="pc-r-deploy">⇪ Deploy the basket</button>` : ''}
           <button type="button" class="proto-act is-quiet" id="pc-r-reverify">↻ Re-verify</button>
         </div>

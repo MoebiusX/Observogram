@@ -12,8 +12,9 @@
 //   L1  the SLI rolodex — a scroll-snapping carousel of SLI cards from the
 //       selected entries (every product's behind a filter), each with its
 //       product and evidence, type, metrics, the objective and window it
-//       starts with large and the other tiers muted, an add / remove switch
-//       (an SLI above the tier is addable and says which profile it starts
+//       starts with large and the other tiers muted, an "Include <SLI>"
+//       checkbox — the editor's named control; a custom SLI's "Remove" — (an
+//       SLI above the tier is addable and says which profile it starts
 //       from: the tier is a seed, not a gate), and Edit, which opens the
 //       pop-up editor over the SLI (build-editor-view.mjs: the objective, the
 //       window, the bound, the id, the PromQL as it runs, the description —
@@ -44,7 +45,7 @@ import { escapeHtml } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import { sheetFocusSuffix } from './build-model.mjs';
 import { evidenceBadge, paramRowHtml, wireParamInputs, clauseRowHtml, todoHtml, switchHtml, STATE_GLYPH } from './build-atoms.mjs';
-import { boundText } from './sli-direction.mjs';
+import { boundWords, sliName } from './build-copies-model.mjs';
 
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 const MODE_WORD = { edit: 'compose', verify: 'verify' };
@@ -67,16 +68,17 @@ function switchRowHtml(s, model) {
 
 function rolodexCardHtml(it, model) {
   const cls = ['build-rolo-card', it.selected ? 'is-selected' : '', it.entrySelected ? '' : 'is-foreign', it.aboveTier ? 'is-above' : '', it.custom ? 'is-custom' : '', it.customised.length ? 'is-customised' : '', it.errorFields?.length ? 'is-error' : ''].filter(Boolean).join(' ');
-  const readOnly = model.readOnly;
   // The card names the SLI as the library does (its product is beside it); a rename shows the id the pack carries. The key stays the library's.
   const shown = it.customised.includes('id') ? it.effectiveId : it.id;
   const stateWord = it.custom ? 'in the pack · custom' : it.selected ? 'in the pack' : it.entrySelected ? 'not in the pack' : `adds ${it.entryTitle}`;
-  const label = `${shown} of ${it.entryTitle}${it.custom ? ' — remove your SLI from the pack' : it.selected ? ' — remove from the pack' : it.entrySelected ? ' — add to the pack' : ` — add to the pack (selects ${it.entryTitle} too)`}${it.aboveTier ? ` (from the ${it.profileTier} profile)` : ''}`;
+  const stateId = `build-rolo-state-${it.key}`;
+  // The card's own name for assistive tech: the SLI, its product, the profile it starts from.
+  const label = `${shown} of ${it.entryTitle}${it.aboveTier ? ` (from the ${it.profileTier} profile)` : ''}`;
   // Edit (View on Verify) opens the pop-up editor over this SLI; a product not yet selected is added first.
   const editLabel = model.rolodex?.editLabel || 'Edit';
   const canEdit = it.entrySelected || it.custom;
   // A threshold SLI's bound with the side of it that is good (spec 1.3 good_when through sli-direction.mjs: ≤ a ceiling, ≥ a floor).
-  const bound = it.type === 'threshold' ? boundText({ threshold: it.effective?.threshold, unit: it.unit, good_when: it.effective?.good_when }) : '';
+  const bound = it.type === 'threshold' ? boundWords({ threshold: it.effective?.threshold, unit: it.unit, good_when: it.effective?.good_when }) : '';
   return `
     <article class="${cls}" data-snap-card data-sli="${escapeHtml(it.key)}" data-entry="${escapeHtml(it.entry || '')}" data-sli-id="${escapeHtml(it.id)}"${it.custom ? ' data-custom="1"' : ''} aria-label="${escapeHtml(label)}">
       <header class="build-rolo-head">
@@ -100,13 +102,31 @@ function rolodexCardHtml(it, model) {
         ${it.tiers.map(t => `<span class="${t.current ? 'is-current' : 'is-muted'}${t.reachable ? '' : ' is-unreachable'}" title="${escapeHtml(`${t.tier}: ${t.objectiveLabel} over ${t.window || '—'}${t.reachable ? '' : ' — below this SLI’s own tier (a default from ' + it.profileTier + ' up)'}`)}">${escapeHtml(t.tier)} <b>${escapeHtml(t.objectiveLabel)}</b> ${t.window ? escapeHtml(t.window) : ''}</span>`).join('')}
       </div>` : ''}
       <footer class="build-rolo-foot">
-        <span class="build-rolo-state">${escapeHtml(stateWord)}</span>
+        <span class="build-rolo-state" id="${escapeHtml(stateId)}">${escapeHtml(stateWord)}</span>
         <span class="build-rolo-actions">
           ${canEdit ? `<button type="button" class="build-rolo-edit" data-edit-sli="${escapeHtml(it.key)}"${it.custom ? ' data-edit-custom="1"' : ''} data-focus-key="edit:${escapeHtml(it.key)}" aria-haspopup="dialog" aria-label="${escapeHtml(`${editLabel} ${shown}`)}" title="${escapeHtml(`${editLabel} ${shown} — the objective, the window, the id, the PromQL as it runs`)}">${escapeHtml(editLabel)}</button>` : ''}
-          ${switchHtml({ on: it.selected, disabled: readOnly, reason: readOnly ? READ_ONLY_REASON[model.mode] : null, label, focusKey: it.focusKey, data: { sli: it.key, entry: it.entry || '', 'sli-id': it.id, selected: it.selected ? '1' : '0', 'entry-selected': it.entrySelected ? '1' : '0', ...(it.custom ? { custom: '1' } : {}) } })}
+          ${inclusionHtml(it, shown, stateId, model)}
         </span>
       </footer>
     </article>`;
+}
+
+/**
+ * A card's inclusion, the same named control as the editor's footer (build-editor-view.mjs inclusionHtml): a library
+ * SLI gets a real checkbox labelled "Include <the SLI's name>" — checked when it is in the pack, its state line as the
+ * description (an SLI of a product not selected yet says ticking adds that product); a custom SLI, which exists only
+ * in the pack, gets "Remove". Both carry the data the wiring reads back and the card's focus key, so the focus
+ * survives the re-render a toggle causes; on Verify both are disabled with the reason.
+ */
+function inclusionHtml(it, shown, stateId, model) {
+  const name = sliName(shown) || shown;
+  const off = model.readOnly ? ` disabled aria-disabled="true" title="${escapeHtml(READ_ONLY_REASON[model.mode] || 'read-only')}"` : '';
+  if (it.custom) {
+    return `<button type="button" class="ctrl-btn build-rolo-remove" data-rolo-remove data-sli="${escapeHtml(it.key)}" data-focus-key="${escapeHtml(it.focusKey)}" aria-label="${escapeHtml(`Remove ${name} from the pack`)}" aria-describedby="${escapeHtml(stateId)}"${off}>Remove</button>`;
+  }
+  const data = { sli: it.key, entry: it.entry || '', 'sli-id': it.id, selected: it.selected ? '1' : '0', 'entry-selected': it.entrySelected ? '1' : '0' };
+  const attrs = Object.entries(data).map(([k, v]) => ` data-${k}="${escapeHtml(v)}"`).join('');
+  return `<label class="build-rolo-include"><input type="checkbox" class="build-rolo-include-box" data-rolo-include${attrs} data-focus-key="${escapeHtml(it.focusKey)}"${it.selected ? ' checked' : ''} aria-describedby="${escapeHtml(stateId)}"${off}><span class="build-rolo-include-text">Include ${escapeHtml(name)}</span></label>`;
 }
 
 /** The last card of the rolodex while composing: '+ Custom SLI', a card-shaped button that opens the editor in create mode. */
@@ -230,7 +250,7 @@ export function renderBuildSheet(container, model, host = appHost) {
   wireBuildSheet(container, model, host);
 }
 
-/** The sheet's handlers: close (button, scrim, Esc), the switches, the rolodex (its switches, Edit and '+ Custom SLI'), the params. */
+/** The sheet's handlers: close (button, scrim, Esc), the section switches, the rolodex (Include / Remove, Edit and '+ Custom SLI'), the params. */
 export function wireBuildSheet(container, model, host = appHost) {
   const act = host.build;
   const sheet = container.querySelector('.build-sheet');
@@ -245,14 +265,20 @@ export function wireBuildSheet(container, model, host = appHost) {
     if (sw.disabled) return;
     act?.setToggle?.(sw.dataset.toggle, sw.getAttribute('aria-checked') !== 'true');
   }));
+  // A card's "Include <SLI>" checkbox ticks a library SLI in or out of the pack (an SLI of a product not selected yet
+  // selects the product too) — the editor's wiring, on `change` so Space and a click on the label both count; a custom
+  // SLI's Remove deletes it.
   const allKeys = model.rolodex?.allKeys || [];
-  container.querySelectorAll('.build-switch[data-sli]').forEach(sw => sw.addEventListener('click', () => {
-    if (sw.disabled) return;
-    const { sli, entry, sliId, selected, entrySelected, custom } = sw.dataset;
-    if (custom === '1') act?.removeCustom?.(sli);
-    else if (selected === '1') act?.setSli?.(sli, false, allKeys);
+  container.querySelectorAll('[data-rolo-include]').forEach(box => box.addEventListener('change', () => {
+    if (box.disabled) return;
+    const { sli, entry, sliId, selected, entrySelected } = box.dataset;
+    if (selected === '1') act?.setSli?.(sli, false, allKeys);
     else if (entrySelected === '1') act?.setSli?.(sli, true, allKeys);
     else act?.addSli?.(entry, sliId);
+  }));
+  container.querySelectorAll('[data-rolo-remove]').forEach(btn => btn.addEventListener('click', () => {
+    if (btn.disabled) return;
+    act?.removeCustom?.(btn.dataset.sli);
   }));
   container.querySelector('.build-switch[data-rolodex-all]')?.addEventListener('click', (e) => {
     act?.update?.({ rolodexAll: e.currentTarget.dataset.rolodexAll !== '1' }, { rerender: true, reinstantiate: false });
@@ -314,7 +340,7 @@ export function wireRolodex(container) {
   const move = (dir) => scrollTo(Math.max(0, (track.scrollLeft || 0) + dir * step()));
   container.querySelectorAll('.build-rolodex-nav').forEach(b => b.addEventListener('click', () => move(Number(b.dataset.nav) || 1)));
   track.addEventListener('keydown', (e) => {
-    if (e.target !== track) return;   // a switch inside the track keeps its own keys
+    if (e.target !== track) return;   // a control inside the track (a checkbox, a button) keeps its own keys
     if (e.key === 'ArrowRight') { e.preventDefault(); move(1); }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); move(-1); }
     else if (e.key === 'Home') { e.preventDefault(); scrollTo(0); }

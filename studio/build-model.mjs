@@ -50,7 +50,7 @@
 // read-only seed card there (seedCardModel).
 
 import { LAYER_DEFS, L4_SUBGROUPS } from './constants.mjs';
-import { OVERRIDE_FIELDS, overrideFor, effectiveSli, effectiveId, customisedFields, promqlEdited, customEffective, sliEditorModel, sliName } from './build-copies-model.mjs';
+import { OVERRIDE_FIELDS, overrideFor, effectiveSli, effectiveId, customisedFields, promqlEdited, customEffective, sliEditorModel, sliName, boundWords } from './build-copies-model.mjs';
 import { boundText } from './sli-direction.mjs';
 
 export const BUILD_STEPS = ['define', 'compile', 'verify'];
@@ -285,7 +285,7 @@ export function focusFallbackSelectors(key) {
   if (/^(ov|cu|cf):/.test(k)) return ['.build-editor .build-edit-input', '.build-editor [data-editor-done]', '.build-editor [data-editor-close]', '.build-sheet .build-rolo-card [data-edit-sli]', '.build-sheet-close'];
   // One of the editor's own controls (editor:done / cancel / reset-all / close; Reset all vanishes once nothing is customised) stays in the editor.
   if (/^editor:/.test(k)) return ['.build-editor [data-editor-done]', '.build-editor [data-editor-submit]', '.build-editor [data-editor-close]', '.build-editor .build-edit-input'];
-  // A rolodex card's Edit / '+ Custom SLI' (edit:<key>) or switch (sli:<entry>:<id>) that vanished — the SLI was removed — hands focus to the sheet.
+  // A rolodex card's Edit / '+ Custom SLI' (edit:<key>) or Include / Remove (sli:<entry>:<id>) that vanished — the SLI was removed — hands focus to the sheet.
   if (/^(edit|sli):/.test(k)) return ['.build-sheet .build-rolo-card [data-edit-sli]', '.build-sheet .build-param-input', '.build-sheet-close'];
   // An L1 stack card (card:<artefact id>, ghost:<key>) that vanished — the SLI left the pack — hands focus to the L1 slab head.
   if (/^(card|ghost):/.test(k)) return ['.build-slab[data-layer="L1"] .build-slab-edge'];
@@ -673,9 +673,9 @@ export function defineWhy(clauses, tier) {
   };
 }
 
-/** One SLI in a line: the bound (≤ 0.1 seconds) or good ÷ total, then the objective and window it starts with. */
+/** One SLI in a line: the bound with its unit in words (≤ 1 events per hour) or good ÷ total, then the objective and window it starts with. */
 function sliMeta(s) {
-  const what = s.type === 'ratio' ? 'good ÷ total events' : (boundText(s) || s.type);
+  const what = s.type === 'ratio' ? 'good ÷ total events' : (boundWords(s) || s.type);
   return `${what} · ${s.objectiveLabel} over ${s.window || '—'}`;
 }
 
@@ -1674,14 +1674,15 @@ export function buildStackModel({ adapted = null, checklist = null, requirements
   const ghostOf = (c) => ({
     kind: 'clause', key: `clause:${c.id}`, clauseId: c.id, title: c.label, desc: c.description, severity: c.severity, minTier: c.minTier,
     state: c.state, subgroup: c.subgroup,
-    // 'Required' while the silhouette is drawn, 'Missing' (Discover's word: required, not present) once a pack exists and the clause fails.
+    // 'Required' while the silhouette is drawn, 'Missing' (the Build stack's word: required, not present) once a pack exists and the clause fails.
     source: mode === 'define' || !layers ? 'Required' : 'Missing',
     tool: c.id, tags: [c.severity, c.minTier],
   });
   const candidateGhosts = mode === 'define'
     ? (candidates || []).flatMap(c => [
       // The card names the SLI as the pack will carry it (a rename shows); the key stays the library's. Both cards open the SLI's editor.
-      // A threshold candidate prints its bound with its direction under the title, as the adapter's card will once the pack exists.
+      // A threshold candidate prints its bound with its direction under the title, as the adapter's card will once the pack exists —
+      // boundText, the engine's spelling (unit id and all), so the card reads the same on Define as on Compile / Verify.
       { kind: 'sli', key: `sli:${c.key}`, title: c.effectiveId || c.key, ...(c.type === 'threshold' && boundText(c) ? { subtitle: boundText(c) } : {}), desc: c.description || `${c.type} SLI`, source: 'Candidate', tool: `${c.type} SLI`, tags: ['sli', c.type, c.entry || 'custom', ...(c.aboveTier ? [`from ${c.minTier}`] : []), ...(c.customised?.length ? ['customised'] : [])].filter(Boolean), evidence: c.evidence || null, state: null, edit: { key: c.key, custom: !!c.custom, focus: null } },
       { kind: 'slo', key: `slo:${c.key}`, title: `SLO on ${c.effectiveId || c.key}`, desc: `${c.objectiveLabel} over ${c.window || '—'}`, source: 'Candidate', tool: 'SLO', tags: ['slo', c.window].filter(Boolean), evidence: null, state: null, edit: { key: c.key, custom: !!c.custom, focus: 'objective' } },
     ])

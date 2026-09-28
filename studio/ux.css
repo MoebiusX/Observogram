@@ -310,3 +310,36 @@ body.chrome-observa[data-mode="home"], body.chrome-observa[data-mode="build"] { 
 /* Build carries no utility toolbar into its steps: there is no pack to act
    on yet, and the steps have their own actions. Theme lives in Advanced. */
 body.chrome-observa[data-mode="build"] .hdr { display: none !important; }
+
+/* Medium widths (a laptop pane, 200% zoom on a wide screen): the step words
+   keep their room. The wordmark, the chip's key and the Advanced label give
+   way (logo, name and glyph stay, with their accessible names), and a tab's
+   question wraps to two lines instead of truncating to three letters. */
+@media (max-width: 1280px) {
+  .observa-brand-text { display: none; }
+  .observa-service-key { display: none; }
+  .observa-actions .observa-action-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .observa-hdr-inner { gap: 14px; }
+  .observa-tab-title {
+    white-space: normal; font-size: 14px; line-height: 1.25;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }
+}
+/* The pickers show the pack name; the long provenance tail may ellipsize. */
+body.chrome-observa .hdr .ctrl select { max-width: min(380px, 42vw); text-overflow: ellipsis; }
+
+/* The chrome zeroes #layer-view's padding and each screen pads its own root.
+   Conformance, Traceability and Remediate had none, so their decision headers
+   ran to the window's edge; they get the same gutter as Discover and Neuron. */
+body.chrome-observa #layer-view > .conformance-view,
+body.chrome-observa #layer-view > .trace-view,
+body.chrome-observa #layer-view > .ux-rm-view {
+  padding: 24px 28px 80px;
+  max-width: 1480px;
+  margin: 0 auto;
+}
+@media (max-width: 720px) {
+  body.chrome-observa #layer-view > .conformance-view,
+  body.chrome-observa #layer-view > .trace-view,
+  body.chrome-observa #layer-view > .ux-rm-view { padding: 16px 16px 64px; }
+}

@@ -203,3 +203,6 @@
   .deploy-review-grid { grid-template-columns: 1fr; }
   .deploy-review { max-height: 45vh; padding: 10px 14px 12px; }
 }
+/* A long effect ("Changes the repository and live systems") wraps inside a
+   narrow strategy card instead of running past its edge. */
+.ux-rm-effect { white-space: normal; max-width: 100%; }

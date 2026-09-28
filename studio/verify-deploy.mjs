@@ -356,8 +356,13 @@ export function remediationDeployPhrase({ selected = 0, deployable = 0, rows = 0
 // The deploy button's label, in the same units as the phrase above: ticked
 // artefacts first, deploy rows in brackets — never a bare row count beside
 // an artefact count.
-export function remediationDeployActionLabel({ selected = 0, rows = 0 } = {}) {
-  return `Review and deploy ${selected} selected (${countWords(rows, ['deploy row', 'deploy rows'])}) to live`;
+export function remediationDeployActionLabel({ selected = 0 } = {}) {
+  return `Review and deploy ${countWords(selected, ['artefact', 'artefacts'])} to live`;
+}
+// The deploy rows behind that label, for its tooltip: an artefact can compile
+// to more than one row (a rule group, a board per panel set).
+export function remediationDeployActionTitle({ selected = 0, rows = 0 } = {}) {
+  return `${countWords(selected, ['selected artefact', 'selected artefacts'])} · ${countWords(rows, ['deploy row', 'deploy rows'])} — an artefact can compile to more than one row. Opens the deploy review; nothing changes until you confirm there.`;
 }
 
 // The "Only in live/baseline" measure. When Pack B artefacts were parked out

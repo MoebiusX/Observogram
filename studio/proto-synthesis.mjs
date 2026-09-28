@@ -27,7 +27,7 @@ import {
 import { buildRetrofeedPatchText } from './compile-view.mjs';
 import { artefactLabel, diffEntryLabel } from './artifact-model.mjs';
 import {
-  computeDiagnosticGrade, computePostureMatrix, criterionScore,
+  computeDiagnosticGrade, computePostureMatrix, criterionScore, partialLiveEvidence,
   diagnosticAuditStatus, instrumentGradeFor, INSTRUMENT_GRADE_SCALE,
   DRIFT_HEALTH_PASS_PCT, POSTURE_LAYERS, POSTURE_MECHANISMS_PER_LAYER,
 } from './diagnostic-grade.mjs';
@@ -47,6 +47,26 @@ import { host as appHost } from './host.mjs';
 // this is the studio's one binding of that contract.
 function verdictInputs() {
   return { pack: state.pack, packB: state.packB, diff: state.diff, compareBId: state.compareBId };
+}
+
+// Plain words (docs/UX_SCREEN_GRAMMAR.md) for the A-only bucket in gap
+// mode: Pack A is "the live pack" only when it carries live-draft
+// provenance (mcp.url) or a live-like id — never claimed without it.
+// This deliberately matches verdict-ui's assessedPackNoun, which tests
+// only the adapted pack.id (the vendored engine cannot read
+// state.selectedPackId), because this screen also shows verdict-ui's
+// model labels and must not name the same pack two ways. Production
+// Compare (compare-view isLivePack) and proto-shared's
+// protoAdditionalLabel prefer a non-empty state.selectedPackId over
+// pack.id, so the two rules can disagree in either direction when the
+// catalog id and metadata.name differ in live-likeness (an mcp.url live
+// draft always agrees): this screen may then say "current pack" where
+// Compare says "live pack", or the reverse.
+function additionalLabel() {
+  const pack = state.pack;
+  const live = !!pack && (partialLiveEvidence(pack).isLiveDraft
+    || /(^|[-_])(live|deployed|runtime)([-_]|$)/i.test(String(pack.id || '')));
+  return `additional in ${live ? 'live pack' : 'current pack'}`;
 }
 
 // ---------- comparison loading gate (mirrors production behaviour) ----------
@@ -89,10 +109,10 @@ export function renderSynthDiagnose(view) {
   const nav = document.createElement('div');
   nav.className = 'diag-subnav';
   nav.innerHTML = `
-    <button type="button" class="diag-subtab is-active">
-      <span class="diag-subtab-label">Diagnostic Grade</span><span class="diag-subtab-sub">is it good enough?</span></button>
-    <button type="button" class="diag-subtab" data-sub="compare">
-      <span class="diag-subtab-label">Compare</span><span class="diag-subtab-sub">A vs B — what differs?</span></button>
+    <button type="button" class="diag-subtab is-active" title="The diagnostic grade: coverage, trust and evidence, with what keeps the pack below grade A.">
+      <span class="diag-subtab-label">Assessment</span><span class="diag-subtab-sub">is it good enough?</span></button>
+    <button type="button" class="diag-subtab" data-sub="compare" title="Artefact by artefact: the pack (A) compared with the selected baseline (B).">
+      <span class="diag-subtab-label">Compare</span><span class="diag-subtab-sub">what differs from the baseline?</span></button>
   `;
   nav.querySelector('[data-sub="compare"]').addEventListener('click', () => {
     state.diagnoseSub = 'compare';
@@ -147,7 +167,7 @@ export function renderSynthDiagnose(view) {
         <span class="compare-prompt-key">COMPARE</span>
         <span class="compare-prompt-text">This verdict reads <strong>Pack A on its own</strong>. Load a
           <strong>Pack B</strong> from the <em>PACK B</em> picker in the header to compare side-by-side —
-          detect <strong>drift</strong> (declared vs what's deployed) or measure the <strong>gap to a target</strong> posture.</span>
+          detect <strong>drift</strong> (declared vs what's deployed) or measure the <strong>gap to a selected baseline</strong>.</span>
       </div></div>`);
   }
 }
@@ -236,7 +256,7 @@ function buildDiagnosePage(vm, diagnostic, posture, lens, useLens) {
     <header class="diag-report-head">
       <div class="diag-head-main">
         <div class="diag-report-head-line">
-          <span class="diag-report-eyebrow">DIAGNOSTIC GRADE</span>
+          <span class="diag-report-eyebrow" title="The diagnostic grade: coverage, trust and evidence">ASSESSMENT</span>
           <span class="diag-report-status grade-chip tier-${escapeHtml(ig.tier)}" title="${escapeHtml(ig.blurb || '')}">${escapeHtml(ig.letter)} · ${escapeHtml(ig.label)}</span>
         </div>
         <p class="diag-grade-blurb">${escapeHtml(ig.blurb || '')} Diagnostic-grade (A) begins above ${audit.threshold}%${passes ? '' : ` — this pack is ${(audit.threshold - audit.scorePctExact).toFixed(1)} pp below the bar`}.</p>
@@ -307,7 +327,7 @@ function buildActionStrip(vm) {
   strip.className = 'mc-actionbar';
   const dep = vm.deployableSet;
   const rfLabel = vm.mode === 'drift'
-    ? `⤵ Retrofeed ${vm.totals.onlyInB} shadow signal${vm.totals.onlyInB === 1 ? '' : 's'} to the pack`
+    ? `⤵ Update repository from live (${vm.totals.onlyInB} signal${vm.totals.onlyInB === 1 ? '' : 's'})`
     : `⤵ Adopt ${vm.totals.onlyInB} declaration${vm.totals.onlyInB === 1 ? '' : 's'} from ${escapeHtml(vm.bName)}`;
   strip.innerHTML = `
     ${vm.mode === 'drift' && dep.identities.size ? `
@@ -316,7 +336,7 @@ function buildActionStrip(vm) {
         ⇪ Deploy the missing set (${dep.identities.size})</button>` : ''}
     ${vm.haveB && vm.totals.onlyInB > 0 ? `
       <button type="button" class="mc-act" id="mc-retrofeed"
-        title="Adopt the ${vm.mode === 'drift' ? 'live-not-declared shadow signals' : 'target pack’s missing declarations'} into your pack — download the additions and the updated pack for a repo PR">
+        title="${vm.mode === 'drift' ? 'Retrofeed: adopt the live-not-declared shadow signals' : 'Adopt the selected baseline’s missing declarations'} into your pack — download the additions and the updated pack for a repository PR">
         ${rfLabel}</button>` : ''}
     <button type="button" class="mc-act" id="mc-reverify"
       title="Open Journeys to re-run the live verification — the only thing that actually moves the grade">↻ Re-verify</button>
@@ -422,13 +442,13 @@ function buildPanels(vm, ctx) {
   };
 
   if (vm.haveB && vm.diff) {
-    const aLabel = vm.mode === 'drift' ? 'declared, not live' : 'beyond target';
-    const bLabel = vm.mode === 'drift' ? 'live, not declared' : 'missing vs target';
+    const aLabel = vm.mode === 'drift' ? 'declared, not live' : additionalLabel();
+    const bLabel = vm.mode === 'drift' ? 'live, not declared' : 'missing vs baseline';
     const aW = vm.mode === 'drift' ? '1.0' : '0.15';
     const bW = vm.mode === 'drift' ? '0.15' : '1.0';
     const riskNote = vm.mode === 'drift'
       ? 'Weighted badness: declared-not-live = 1.0; drifted = 0.5 by default, 1.0 for decision-bearing fields, 0.1 for cosmetic fields; live-not-declared = 0.15. Out-of-scope live inventory is excluded.'
-      : 'Weighted badness: missing target artefacts = 1.0; drifted = 0.5 by default, 1.0 for decision-bearing fields, 0.1 for cosmetic fields; beyond-target extras = 0.15.';
+      : `Weighted badness: missing vs baseline = 1.0; drifted = 0.5 by default, 1.0 for decision-bearing fields, 0.1 for cosmetic fields; ${aLabel} = 0.15.`;
     panels.push(mcPanel({
       id: 'lattice', accent: 'amber', title: 'Signal Lattice',
       question: vm.mode === 'drift' ? `does the declared pack match ${vm.bName}?` : `how far from ${vm.bName}?`,
@@ -476,8 +496,8 @@ function buildPanels(vm, ctx) {
         </table>`,
       detail: vm.layers.map(r => {
         const drifted = r.drifted.length ? `<div class="mc-strata-detail"><span class="mc-lnum">${r.L}</span> drifted: ${sampleDeltas(r.drifted)}</div>` : '';
-        const missing = r.onlyInA.length ? `<div class="mc-strata-detail"><span class="mc-lnum">${r.L}</span> ${vm.mode === 'drift' ? 'declared-not-live' : 'beyond target'}: ${sampleKeys(r.onlyInA)}</div>` : '';
-        const shadow = r.onlyInB.length ? `<div class="mc-strata-detail"><span class="mc-lnum">${r.L}</span> ${vm.mode === 'drift' ? 'live-not-declared' : 'missing vs target'}: ${sampleKeys(r.onlyInB)}</div>` : '';
+        const missing = r.onlyInA.length ? `<div class="mc-strata-detail"><span class="mc-lnum">${r.L}</span> ${vm.mode === 'drift' ? 'declared-not-live' : escapeHtml(aLabel)}: ${sampleKeys(r.onlyInA)}</div>` : '';
+        const shadow = r.onlyInB.length ? `<div class="mc-strata-detail"><span class="mc-lnum">${r.L}</span> ${vm.mode === 'drift' ? 'live-not-declared' : 'missing vs baseline'}: ${sampleKeys(r.onlyInB)}</div>` : '';
         return drifted + missing + shadow;
       }).join('') || '<div class="mc-strata-detail">no deltas</div>',
     }));
@@ -603,10 +623,15 @@ let triageFilter = 'all';
 const TRIAGE_FILTERS = [
   { id: 'all',       label: 'All',             test: () => true },
   { id: 'deploy',    label: 'Deploy',          test: i => i.fix === 'deploy' },
-  { id: 'retrofeed', label: 'Retrofeed',       test: i => i.fix === 'retrofeed' || i.fix === 'adopt' },
+  { id: 'retrofeed', label: 'Update repository from live', test: i => i.fix === 'retrofeed' || i.fix === 'adopt' },
   { id: 'reconcile', label: 'Field decisions', test: i => i.fix === 'reconcile' },
   { id: 'manual',    label: 'Manual',          test: i => i.fix === 'manual' || i.fix === 'beyond-target' },
 ];
+
+// In gap mode the same bucket adopts the baseline's declarations, not live signals.
+function filterLabel(f, mode) {
+  return f.id === 'retrofeed' && mode !== 'drift' ? 'Adopt from the baseline' : f.label;
+}
 
 // Session-only basket deselections (NOT state.remediateDeselected — the
 // production plan band owns that; the prototype must not disturb it).
@@ -628,7 +653,7 @@ export function renderSynthRemediate(view) {
         <span class="rq-eyebrow">TRIAGE</span>
         <span class="rq-title">What do we fix first?</span>
         <span class="rq-sub">Load a <strong>Pack B</strong> from the header to compute the queue —
-          drift, shadow signals, and gaps to target, ordered by what they cost the grade.
+          drift, shadow signals, and gaps to the selected baseline, ordered by what they cost the grade.
           (The per-artefact compiler is unchanged — exit the prototype to use it.)</span>
       </div>`;
     return;
@@ -669,7 +694,7 @@ export function renderSynthRemediate(view) {
   const filterChips = TRIAGE_FILTERS.map(f => {
     const n = f.id === 'all' ? vm.items.length : vm.items.filter(f.test).length;
     return `<button type="button" class="rq-filter${triageFilter === f.id ? ' is-active' : ''}" data-filter="${f.id}">
-      ${escapeHtml(f.label)} <span class="rq-filter-n">${n}</span></button>`;
+      ${escapeHtml(filterLabel(f, vm.mode))} <span class="rq-filter-n">${n}</span></button>`;
   }).join('');
   const activeFilter = TRIAGE_FILTERS.find(f => f.id === triageFilter) || TRIAGE_FILTERS[0];
   const shown = vm.items.filter(activeFilter.test);
@@ -704,7 +729,7 @@ export function renderSynthRemediate(view) {
           </tr>`).join('')}
       </tbody>
     </table>
-    ${shown.length === 0 ? `<div class="remediate-empty">Nothing ${triageFilter === 'all' ? 'to remediate — every concrete artefact aligns.' : `under the ${escapeHtml(activeFilter.label)} filter.`}</div>` : ''}
+    ${shown.length === 0 ? `<div class="remediate-empty">Nothing ${triageFilter === 'all' ? 'to remediate — every concrete artefact aligns.' : `under the ${escapeHtml(filterLabel(activeFilter, vm.mode))} filter.`}</div>` : ''}
     ${scaffoldOosNotes(vm)}
     <div class="rq-patch-host"></div>
     <div class="mc-deploybar">
@@ -729,7 +754,7 @@ export function renderSynthRemediate(view) {
       const patch = document.createElement('details');
       patch.className = 'remediate-patch';
       patch.innerHTML = `
-        <summary>Repo retrofeed patch (${retroPicked.length} item${retroPicked.length === 1 ? '' : 's'} in the basket)</summary>
+        <summary>${vm.mode === 'drift' ? 'Update repository from live — retrofeed patch' : 'Repository patch — adopt from the baseline'} (${retroPicked.length} item${retroPicked.length === 1 ? '' : 's'} in the basket)</summary>
         <pre>${escapeHtml(patchText)}</pre>
       `;
       wrap.querySelector('.rq-patch-host').appendChild(patch);

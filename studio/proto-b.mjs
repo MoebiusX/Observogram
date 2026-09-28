@@ -17,7 +17,7 @@ import {
   loadRunHistory, runHistory, runSeries, deltaVsPrevious,
   kpiTile, ladderHtml, chip, criterionChip, donutSvg, fmtUnits, fixChip, badnessClassChip,
   partialEvidenceBanner, scaffoldOosNotes, operabilityNote,
-  buildEvidenceRows, deploySelectionFromItems,
+  buildEvidenceRows, deploySelectionFromItems, protoAdditionalLabel,
 } from './proto-shared.mjs';
 
 // Panels the user has expanded (session-only).
@@ -119,8 +119,8 @@ function renderPanels(host, m) {
     const C_DRIFTED = 'rgb(150, 90, 200)';
     const C_DECL = 'rgb(200, 70, 40)';
     const C_SHADOW = 'rgb(180, 120, 0)';
-    const aLabel = m.mode === 'drift' ? 'declared-not-live' : 'beyond target';
-    const bLabel = m.mode === 'drift' ? 'live-not-declared' : 'missing vs target';
+    const aLabel = m.mode === 'drift' ? 'declared-not-live' : protoAdditionalLabel().toLowerCase();
+    const bLabel = m.mode === 'drift' ? 'live-not-declared' : 'missing vs baseline';
     panels.push(panel({
       id: 'lattice', accent: 'amber', title: 'Signal Lattice',
       question: `does the declared pack match ${m.bName}?`,
@@ -136,7 +136,7 @@ function renderPanels(host, m) {
           </ul>
         </div>`,
       detail: `
-        <p class="drift-risk-note">Weighted badness: ${m.mode === 'drift' ? 'declared-not-live = 1.0' : 'missing target artefacts = 1.0'}; drifted = 0.5 default / 1.0 decision-bearing / 0.1 cosmetic; ${m.mode === 'drift' ? 'live-not-declared' : 'beyond-target extras'} = 0.15. Health = aligned / (aligned + weighted badness).</p>
+        <p class="drift-risk-note">Weighted badness: ${m.mode === 'drift' ? 'declared-not-live = 1.0' : 'missing vs baseline = 1.0'}; drifted = 0.5 default / 1.0 decision-bearing / 0.1 cosmetic; ${m.mode === 'drift' ? 'live-not-declared' : escapeHtml(aLabel)} = 0.15. Health = aligned / (aligned + weighted badness).</p>
         ${scaffoldOosNotes(m)}`,
     }));
 

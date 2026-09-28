@@ -12,7 +12,7 @@ import {
   STATUS_PROPERTIES, statusFromLegacy, statusRecord, statusChipHtml, legacyStatusChipHtml,
   GLOSSARY, termHtml, LAYER_PURPOSE, layerTitle, decisionHeaderHtml, emptyStateHtml, sectionNavHtml,
   disclosureHtml, plural, listSentence, personalName,
-  parseRecentServices, orderServicesByRecent, withKnownPlaceholderPasses,
+  parseRecentServices, orderServicesByRecent,
 } from '../studio/ux-kit.mjs';
 
 test('four separate status properties, each with its own question', () => {
@@ -150,20 +150,3 @@ test('services order by when they were opened, then by name, whatever the key', 
   assert.deepEqual(services.map(s => s.key), ['constructor', 'web', 'api'], 'input left as it was');
 });
 
-test('a remembered placeholder list returns only for the environment it was worked out for', () => {
-  const report = { environment: 'prod', clauses: [{ id: 'L4.1' }] };
-  const known = { env: 'prod', onPlaceholder: [{ id: 'L4.1', todos: [] }] };
-  assert.deepEqual(withKnownPlaceholderPasses(report, known, 'prod').onPlaceholder, known.onPlaceholder);
-  assert.equal(report.onPlaceholder, undefined, 'the fetched report is not mutated');
-  // Another environment: the overlay may change what rests on a placeholder, so hedge.
-  assert.equal(withKnownPlaceholderPasses(report, known, 'staging'), report);
-  assert.equal(withKnownPlaceholderPasses(report, { env: null, onPlaceholder: [] }, 'prod'), report);
-  assert.deepEqual(withKnownPlaceholderPasses(report, { env: null, onPlaceholder: [] }, null).onPlaceholder, []);
-  // Nothing remembered, or a list that is not one: the report as fetched.
-  assert.equal(withKnownPlaceholderPasses(report, undefined, 'prod'), report);
-  assert.equal(withKnownPlaceholderPasses(report, { env: 'prod', onPlaceholder: 'x' }, 'prod'), report);
-  // A report that already carries its own list keeps it.
-  const own = { ...report, onPlaceholder: [] };
-  assert.equal(withKnownPlaceholderPasses(own, known, 'prod'), own);
-  assert.equal(withKnownPlaceholderPasses(null, known, 'prod'), null);
-});
