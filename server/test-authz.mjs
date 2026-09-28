@@ -8,7 +8,8 @@
  *   request on a temp store — the session's role is the membership of the
  *   CONTEXT org, never the first one;
  * - the studio guards: every fetch() sends authHeaders(), every navigation
- *   to /api names the org with orgQuery(); the deploy modal says a refusal;
+ *   to /api names the org with orgQuery(); the deploy modal and Neuron's
+ *   Run all say a refusal;
  * - completeness: three children (local, oidc, off) walk the app's router
  *   (server/fixtures/route-inventory.mjs); every route's first handler, per
  *   method, is its own authorize() guard, every key is in
@@ -459,7 +460,7 @@ const { deployRefusal } = await import('../studio/api.mjs');
 // A function declaration's text, from its name to its balanced closing brace.
 function functionSource(code, name) {
   const start = code.indexOf(`function ${name}(`);
-  assert.ok(start >= 0, `studio/app.mjs declares ${name}()`);
+  assert.ok(start >= 0, `the studio source declares ${name}()`);
   let i = code.indexOf('{', code.indexOf(')', start));
   for (let depth = 0; i < code.length; i++) {
     if (code[i] === '{') depth++;
@@ -491,6 +492,32 @@ test('a refused Deploy says the server\'s text on the modal\'s status line and d
   assert.ok(thrown < at('body.summary'), 'the refusal is thrown before the summary is read');
   assert.ok(thrown < at('renderDeployBulkResult('), 'the refusal is thrown before the result table is drawn');
   assert.match(fn, /catch \(e\) \{\s*setStatus\(`error: \$\{e\.message\}`, 'error'\);/);
+});
+
+// Neuron's Run all runs each journey with api() and ends on ONE toast: a
+// refusal (the same for every journey) must reach it, not only a count.
+const { deniedError } = await import('../studio/api.mjs');
+const { runAllText } = await import('../studio/journeys-view.mjs');
+
+test('Neuron\'s Run all says the server\'s text when the runs are refused, not only how many did not finish', async () => {
+  const { routeEntry } = await import('./route-table.mjs');
+  const d = authzDecision(routeEntry('POST /api/journeys/:name/run'), ctxOf('identity', P.viewer));
+  const denial = deniedError(d.status, d.body); // what api() throws
+  const names = ['j-one', 'j-two'];
+  const tally = (t) => ({ pass: 0, 'gate-failed': 0, 'vantage-lost': 0, error: 0, ...t });
+  assert.equal(runAllText(names, tally({ error: 2 }), names.map((name) => ({ name, message: denial.message }))),
+    "Ran 2 journeys: 2 did not finish. j-one and j-two: 403: requires the operator role in org 'acme' (you are viewer) — ask an admin of acme.");
+  // Another reason is not passed off as the first one's: its journey is named.
+  assert.equal(runAllText(['a', 'b', 'c', 'd'], tally({ pass: 1, error: 3 }), [
+    { name: 'b', message: '502: the live source did not answer' }, { name: 'c', message: 'Failed to fetch' }, { name: 'd', message: '502: the live source did not answer' },
+  ]), 'Ran 4 journeys: 1 passed and 3 did not finish. b and d: 502: the live source did not answer. c: another reason — run it alone to read it.');
+  // Runs that all finished read as before.
+  assert.equal(runAllText(names, tally({ pass: 1, 'gate-failed': 1 })), 'Ran 2 journeys: 1 passed and 1 failed.');
+
+  // runJourneys keeps each thrown error's text and hands it to the toast.
+  const fn = functionSource(withoutComments(readFileSync(join(STUDIO, 'neuron-view.mjs'), 'utf8')), 'runJourneys');
+  assert.match(fn, /catch \(err\) \{\s*tally\.error \+= 1;\s*failures\.push\(\{ name, message: err\?\.message \|\| String\(err\) \}\);/);
+  assert.match(fn, /if \(names\.length > 1\) toast\(runAllText\(names, tally, failures\),/);
 });
 
 // ---------- completeness: every route is classified and guarded (§14.1) ----------
