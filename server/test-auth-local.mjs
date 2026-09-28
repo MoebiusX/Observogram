@@ -51,7 +51,7 @@ writeUsersFile({ users: {
 assert(verifyPassword('correct-horse-9', JSON.parse(readFileSync(process.env.OBSERVOGRAM_USERS_FILE, 'utf8')).users.carlos.password), 'scrypt round-trips');
 assert(!verifyPassword('wrong', JSON.parse(readFileSync(process.env.OBSERVOGRAM_USERS_FILE, 'utf8')).users.carlos.password), 'scrypt rejects wrong password');
 
-const { start } = await import('./index.mjs');
+const { start, app } = await import('./index.mjs');
 const srv = await start({ port: 0, host: '127.0.0.1', silent: true });
 const base = `http://127.0.0.1:${srv.address().port}`;
 
@@ -97,6 +97,24 @@ try {
   r = await fetch(`${base}/api/packs`);
   j = await r.json();
   assert(r.status === 401 && j.login === '/auth/login', 'API reads require sign-in in identity mode', r.status, 401);
+
+  // Routes match case-sensitively: the gate and the org middleware test '/api/' as written, and
+  // Express matched case-insensitively by default, so `/API/…` reached the handlers with neither —
+  // the nested deploy router included. Now no spelling but '/api/' reaches an /api handler.
+  for (const [method, path] of [['GET', '/API/packs'], ['GET', '/Api/deploy/matrix'], ['GET', '/API/deploys'],
+    ['GET', '/API/live-status'], ['POST', '/API/validate'], ['POST', '/API/deploys/x/verify'],
+    ['POST', '/Api/deploys/dep_x/rollback'], ['DELETE', '/API/uploads']]) {
+    r = await fetch(`${base}${path}`, { method, headers: { 'Content-Type': 'application/json' }, body: method === 'GET' ? undefined : '{}' });
+    const body = await r.text();
+    assert(r.status === 404 || (r.status === 200 && /^<!doctype html>/i.test(body.trimStart())),
+      `anonymous ${method} ${path} reaches no /api handler (404, or the studio shell for a GET)`, `${r.status} ${body.slice(0, 60)}`, '404 or the HTML shell');
+  }
+  r = await fetch(`${base}/api/packs/`);
+  assert(r.status === 401, 'a trailing slash still meets the gate', r.status, 401);
+  assert(app.router.caseSensitive === true, 'the app routes case-sensitively', app.router.caseSensitive, true);
+  const nested = app.router.stack.filter((l) => l.handle && Array.isArray(l.handle.stack));
+  assert(nested.length >= 1 && nested.every((l) => l.handle.caseSensitive === true),
+    'every nested router routes case-sensitively (a Router() does not inherit the app setting)', nested.map((l) => l.handle.caseSensitive), 'all true');
 
   r = await fetch(`${base}/healthz`);
   assert(r.ok, '/healthz stays open (probes)');
