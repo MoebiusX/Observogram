@@ -73,6 +73,16 @@ export function deniedError(status, body) {
   return err;
 }
 
+// A deploy-bulk answer that is no deploy result — the guard's denial, or
+// the route's own refusal (an unknown pack, a bad URL, strict snapshot
+// mode) — as the Error the deploy modal shows: the server's text, as
+// deniedError() words it. null for a result: it has a summary, even when
+// every item failed (the result table shows each).
+export function deployRefusal(status, body) {
+  if (body && typeof body === 'object' && body.summary) return null;
+  return deniedError(status, body) || new Error(`${status}: ${body?.error || 'no deploy result'}`);
+}
+
 // ---------- the remembered MCP URL (per user and org) ----------
 //
 // The MCP panels prefill the URL this user last used in the active org:

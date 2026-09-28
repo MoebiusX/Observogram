@@ -16,7 +16,7 @@ import {
 } from './constants.mjs';
 import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } from './state.mjs';
 import {
-  api, loadCatalog, validateUploaded, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel, deniedError,
+  api, loadCatalog, validateUploaded, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel, deniedError, deployRefusal,
   setSignedInLogin, recallMcpUrl, rememberMcpUrl, forgetMcpUrls,
 } from './api.mjs';
 import {
@@ -4410,10 +4410,12 @@ async function doDeployBulk() {
       return;
     }
     const body = JSON.parse(raw);
-    if (body.summary) {
-      const { ok, failed, total } = body.summary;
-      setStatus(`${ok}/${total} deployed in ${body.tookMs}ms · ${failed} failed`, failed === 0 ? 'ok' : 'error');
-    }
+    // A refusal (a viewer's 403, an unknown pack, a bad URL) is no result:
+    // the status line says the server's text; no result table is drawn.
+    const refusal = deployRefusal(r.status, body);
+    if (refusal) throw refusal;
+    const { ok, failed, total } = body.summary;
+    setStatus(`${ok}/${total} deployed in ${body.tookMs}ms · ${failed} failed`, failed === 0 ? 'ok' : 'error');
     renderDeployBulkResult(body);
     // The attempt is in the audit log now (ok or not) — refresh the trail.
     loadDeployHistory(deployModalState.packId);

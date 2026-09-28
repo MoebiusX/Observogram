@@ -8,7 +8,7 @@
  *   request on a temp store — the session's role is the membership of the
  *   CONTEXT org, never the first one;
  * - the studio guards: every fetch() sends authHeaders(), every navigation
- *   to /api names the org with orgQuery();
+ *   to /api names the org with orgQuery(); the deploy modal says a refusal;
  * - completeness: three children (local, oidc, off) walk the app's router
  *   (server/fixtures/route-inventory.mjs); every route's first handler, per
  *   method, is its own authorize() guard, every key is in
@@ -450,6 +450,47 @@ test('every studio navigation to /api names the active org (orgQuery())', () => 
   assert.deepEqual(navs.filter((n) => !n.ok).map((n) => `${n.file}: ${n.text.slice(0, 120)}`), []);
   const html = readFileSync(join(STUDIO, 'index.html'), 'utf8');
   assert.ok(!/href\s*=\s*["']\/api\//i.test(html), 'studio/index.html links to /api with a static href (it cannot name the org)');
+});
+
+// The deploy modal (Compare, Compile, Remediate all open it) reads
+// deploy-bulk with fetch(), not api(): a refusal must reach its status line.
+const { deployRefusal } = await import('../studio/api.mjs');
+
+// A function declaration's text, from its name to its balanced closing brace.
+function functionSource(code, name) {
+  const start = code.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `studio/app.mjs declares ${name}()`);
+  let i = code.indexOf('{', code.indexOf(')', start));
+  for (let depth = 0; i < code.length; i++) {
+    if (code[i] === '{') depth++;
+    else if (code[i] === '}' && --depth === 0) break;
+  }
+  return code.slice(start, i + 1);
+}
+
+test('a refused Deploy says the server\'s text on the modal\'s status line and draws no result table', async () => {
+  const { routeEntry } = await import('./route-table.mjs');
+  const d = authzDecision(routeEntry('POST /api/packs/:id/deploy-bulk'), ctxOf('identity', P.viewer));
+  const denial = deployRefusal(d.status, d.body);
+  assert.equal(denial.message, "403: requires the operator role in org 'acme' (you are viewer) — ask an admin of acme");
+  assert.equal(denial.denied, 'role');
+  // The route's own refusals carry no summary either.
+  assert.equal(deployRefusal(404, { ok: false, error: 'unknown pack: nope' }).message, '404: unknown pack: nope');
+  assert.equal(deployRefusal(412, { ok: false, deployId: 'dep_1', error: 'strict snapshot' }).message, '412: strict snapshot');
+  assert.equal(deployRefusal(500, {}).message, '500: no deploy result');
+  // A result is none, even when every item failed: the table shows each.
+  assert.equal(deployRefusal(200, { ok: true, results: [], summary: { total: 1, ok: 1, failed: 0 } }), null);
+  assert.equal(deployRefusal(502, { ok: false, results: [{ ok: false, error: 'boom' }], summary: { total: 1, ok: 0, failed: 1 } }), null);
+
+  // The handler throws it (its catch sets the status line) before it reads a
+  // summary or draws the table.
+  const fn = functionSource(withoutComments(readFileSync(join(STUDIO, 'app.mjs'), 'utf8')), 'doDeployBulk');
+  const at = (s) => { const i = fn.indexOf(s); assert.ok(i >= 0, `doDeployBulk has ${s}`); return i; };
+  const thrown = at('if (refusal) throw refusal;');
+  assert.ok(at('const refusal = deployRefusal(r.status, body);') < thrown);
+  assert.ok(thrown < at('body.summary'), 'the refusal is thrown before the summary is read');
+  assert.ok(thrown < at('renderDeployBulkResult('), 'the refusal is thrown before the result table is drawn');
+  assert.match(fn, /catch \(e\) \{\s*setStatus\(`error: \$\{e\.message\}`, 'error'\);/);
 });
 
 // ---------- completeness: every route is classified and guarded (§14.1) ----------
