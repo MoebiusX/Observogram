@@ -359,8 +359,9 @@ the server registers, and each route's first handler is its guard.
 | owner | a deployment-level flag, not an org role: an owner acts as `admin` in every org, plus users, orgs and the join role (next slice) |
 
 The role is the membership **of the request's org** (`X-Observogram-Org`,
-`?org=`); `orgs.json`'s `member` (and any unknown role) imported as
-`operator`, `read`/`readonly` as `viewer`. Per posture:
+`?org=`). `orgs.json` roles are mapped on import: `admin` / `owner` →
+`admin`, `viewer` / `read` / `readonly` / `read-only` → `viewer`,
+anything else (`member`, empty) → `operator`. Per posture:
 
 - **Signed in** (local users or OIDC): the user's role in the org; an owner
   is an admin everywhere. The bearer (`OBSERVOGRAM_API_TOKEN`) acts as an

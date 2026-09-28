@@ -15,7 +15,8 @@
  *   method, is its own authorize() guard, every key is in
  *   server/route-table.mjs for its mode and agrees with EXPECTED_CLASS
  *   below, only the named middleware and the static mounts sit between;
- *   the README's API Surface states each of its rows' class as the table has it;
+ *   the README's API Surface states each of its rows' class as the table has it,
+ *   and its Roles section each orgs.json role the import maps to admin or viewer;
  * - the decision (authzDecision), pure, over synthetic entries — the
  *   always / refuse / rule / direct-loopback paths no route has yet — and
  *   the request facts it reads (the CSRF header, a cross-site form, a
@@ -55,7 +56,7 @@ const { createUser } = await import('./store/users.mjs');
 const { setMeta } = await import('./store/meta.mjs');
 const { createOrg } = await import('./store/orgs.mjs');
 const { addMembership } = await import('./store/memberships.mjs');
-const { ensureDefaultOrg } = await import('./store/identity.mjs');
+const { ensureDefaultOrg, mapLegacyRole } = await import('./store/identity.mjs');
 const { currentOrg } = await import('./tenancy.mjs');
 
 after(() => {
@@ -699,6 +700,36 @@ test('the README API Surface: its intro names each public row, every other GET i
   }
   assert.match(intro, /every other `GET` is `viewer`/, 'the intro states the GET rule');
   assert.match(intro, /every other route `operator`/, 'the intro states the rule for every other row');
+});
+
+// The README's Roles section states how the import maps orgs.json roles:
+// each word it lists maps to that role, and every word the import sends
+// to admin or viewer is listed (else a reader takes it for an operator).
+test('the README Roles section lists every orgs.json role the import maps to admin or viewer', () => {
+  const readme = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'README.md'), 'utf8');
+  const start = readme.indexOf('\n#### Roles\n');
+  assert.ok(start >= 0, 'README has a Roles section');
+  const end = readme.indexOf('\n#', start + 1);
+  const text = readme.slice(start, end < 0 ? undefined : end).replace(/\s+/g, ' ');
+  const m = text.match(/`orgs\.json` roles are mapped on import: (.+?)\. Per posture:/);
+  assert.ok(m, 'the Roles section states the orgs.json mapping');
+  assert.match(m[1], /, anything else \(`member`, empty\) → `operator`$/, 'the mapping ends with the operator catch-all');
+  assert.equal(mapLegacyRole('member').role, 'operator');
+  assert.equal(mapLegacyRole('').role, 'operator');
+  const listed = { admin: [], viewer: [] };
+  for (const [, words, role] of m[1].matchAll(/((?:`[a-z-]+`(?: \/ )?)+) → `(admin|viewer)`/g)) {
+    listed[role].push(...[...words.matchAll(/`([a-z-]+)`/g)].map(([, w]) => w));
+  }
+  for (const role of ['admin', 'viewer']) {
+    assert.ok(listed[role].length > 0, `the mapping lists the words for ${role}`);
+    for (const w of listed[role]) assert.equal(mapLegacyRole(w).role, role, `${w}: listed as ${role}`);
+  }
+  const candidates = ['admin', 'owner', 'viewer', 'read', 'readonly', 'read-only', 'read_only', 'ro',
+    'operator', 'member', 'editor', 'write', 'maintainer', 'guest'];
+  for (const w of candidates) {
+    const { role } = mapLegacyRole(w);
+    if (role !== 'operator') assert.ok(listed[role].includes(w), `${w} → ${role}: a mapping the README does not list`);
+  }
 });
 
 test('authorize(key) throws at registration on an unclassified key, naming both files', async () => {
