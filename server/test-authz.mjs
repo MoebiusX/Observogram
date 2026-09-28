@@ -8,7 +8,12 @@
  *   request on a temp store — the session's role is the membership of the
  *   CONTEXT org, never the first one;
  * - the studio guards: every fetch() sends authHeaders(), every navigation
- *   to /api names the org with orgQuery().
+ *   to /api names the org with orgQuery();
+ * - completeness: three children (local, oidc, off) walk the app's router
+ *   (server/fixtures/route-inventory.mjs); every route's first handler, per
+ *   method, is its own authorize() guard, every key is in
+ *   server/route-table.mjs for its mode and agrees with EXPECTED_CLASS
+ *   below, only the named middleware and the static mounts sit between.
  */
 
 // Hermetic (§0): a developer shell's store or identity variables never
@@ -267,4 +272,164 @@ test('every studio navigation to /api names the active org (orgQuery())', () => 
   assert.deepEqual(navs.filter((n) => !n.ok).map((n) => `${n.file}: ${n.text.slice(0, 120)}`), []);
   const html = readFileSync(join(STUDIO, 'index.html'), 'utf8');
   assert.ok(!/href\s*=\s*["']\/api\//i.test(html), 'studio/index.html links to /api with a static href (it cannot name the org)');
+});
+
+// ---------- completeness: every route is classified and guarded (§14.1) ----------
+//
+// The expected class of every route, written from STORE_PLAN §5 — NOT
+// imported from the table: reclassifying a route is a two-place edit.
+const EXPECTED_CLASS = Object.freeze({
+  'GET /healthz': 'public',
+  'GET /api/version': 'public',
+  'GET /auth/login': 'public',
+  'POST /auth/login': 'public',
+  'GET /auth/callback': 'public',
+  'POST /auth/logout': 'public',
+  'GET /auth/me': 'public',
+  [`GET ${/^(?!\/api\/).*/}`]: 'public',
+  'GET /auth/change-password': 'self',
+  'POST /auth/change-password': 'self',
+  'POST /auth/change-password/skip': 'self',
+  'GET /api/orgs': 'viewer',
+  'GET /api/packs': 'viewer',
+  'GET /api/examples': 'viewer',
+  'GET /api/references': 'viewer',
+  'GET /api/packs/:id': 'viewer',
+  'GET /api/packs/:id/canonical': 'viewer',
+  'GET /api/packs/:id/conformance': 'viewer',
+  'GET /api/diff': 'viewer',
+  'GET /api/compile/targets': 'viewer',
+  'GET /api/packs/:id/compile-catalog': 'viewer',
+  'GET /api/packs/:id/compile-artifact': 'viewer',
+  'GET /api/packs/:id/export.zip': 'viewer',
+  'GET /api/deploy/matrix': 'viewer',
+  'GET /api/deploys': 'viewer',
+  'GET /api/deploys/:deployId/rollback-plan': 'viewer',
+  'GET /api/journeys': 'viewer',
+  'GET /api/journeys/:name/runs': 'viewer',
+  'GET /api/journeys/:name/schedule': 'viewer',
+  'GET /api/packs/:id/compile/:target': 'viewer',
+  'GET /api/maturity-rubric': 'viewer',
+  'GET /api/live-status': 'viewer',
+  'GET /api/library': 'viewer',
+  'GET /api/library/requirements/:tier': 'viewer',
+  'GET /api/library/:id': 'viewer',
+  'DELETE /api/uploads': 'operator',
+  'POST /api/packs/:id/retrofeed': 'operator',
+  'POST /api/deploys/:deployId/verify': 'operator',
+  'POST /api/deploys/:deployId/rollback': 'operator',
+  'POST /api/packs/:id/deploy-bulk': 'operator',
+  'POST /api/packs/:id/deploy/:target': 'operator',
+  'POST /api/journeys/:name/run': 'operator',
+  'POST /api/journeys/capture': 'operator',
+  'POST /api/draft-from-mcp': 'operator',
+  'POST /api/refresh-live': 'operator',
+  'POST /api/crawl': 'operator',
+  'POST /api/crawl-github': 'operator',
+  'POST /api/validate': 'operator',
+  'POST /api/library/instantiate': 'operator',
+  'POST /api/library/compile': 'operator',
+  'POST /api/library/register': 'operator',
+});
+// The identity API (/api/admin/*, /api/org*) and the one open-exposed
+// `rule` route arrive with slice 3b; none exists yet.
+const EXPECTED_IDENTITY_API = Object.freeze([]);
+const EXPECTED_EXPOSED_RULE = Object.freeze([]);
+
+const { spawnSync } = await import('node:child_process');
+const { ROUTES, STATIC_MOUNTS, MIDDLEWARE, CLASSES, MODES, routeEntry } = await import('./route-table.mjs');
+const INVENTORY = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'route-inventory.mjs');
+
+// initAuth() decides the /auth/* routes at import: one child per mode,
+// each with an explicit env (this process's minus every variable a boot
+// reads, plus the mode's own). OIDC discovery is lazy: nothing is contacted.
+const MODE_ENV = {
+  local: {},
+  oidc: {
+    OBSERVOGRAM_OIDC_ISSUER: 'http://127.0.0.1:9', OBSERVOGRAM_OIDC_CLIENT_ID: 'studio', OBSERVOGRAM_OIDC_ALLOW_HTTP: '1',
+    OBSERVOGRAM_SESSION_SECRET: 'authz-suite-session-secret-0123456789-abc',
+  },
+  off: { OBSERVOGRAM_AUTH: 'off' },
+};
+function inventory(mode) {
+  const env = { ...process.env };
+  for (const k of STRIP) { delete env[`OBSERVOGRAM_${k}`]; delete env[`TOMOGRAPH_${k}`]; }
+  Object.assign(env, { OBSERVOGRAM_WORKSPACE: WORKSPACE }, MODE_ENV[mode]);
+  const r = spawnSync(process.execPath, [INVENTORY], { env, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, `the ${mode} inventory child failed: ${r.stderr}`);
+  return JSON.parse(r.stdout.trim().split('\n').pop());
+}
+const inventories = Object.fromEntries(MODES.map((m) => [m, inventory(m)]));
+
+test('completeness: every route\'s first handler, per method, is its own guard; no route.all', () => {
+  for (const [mode, inv] of Object.entries(inventories)) {
+    assert.ok(inv.routes.length >= 40, `${mode}: walked the router (${inv.routes.length} routes)`);
+    assert.deepEqual(inv.routes.filter((r) => r.guard !== r.key).map((r) => `${r.key} (first handler: ${r.guard ?? 'not a guard'})`), [], `${mode}: unguarded routes`);
+    assert.deepEqual(inv.alls, [], `${mode}: app.all / route.all registrations`);
+    const keys = inv.routes.map((r) => r.key);
+    assert.deepEqual(keys.filter((k, i) => keys.indexOf(k) !== i), [], `${mode}: a route registered twice`);
+  }
+});
+
+test('completeness: every registered route is in the table for its mode, and every entry is registered', () => {
+  for (const [mode, inv] of Object.entries(inventories)) {
+    const registered = new Set(inv.routes.map((r) => r.key));
+    const unclassified = [...registered].filter((k) => !Object.hasOwn(ROUTES, k));
+    assert.deepEqual(unclassified, [], `${mode}: routes missing from server/route-table.mjs`);
+    const wrongMode = [...registered].filter((k) => !routeEntry(k).modes.includes(mode));
+    assert.deepEqual(wrongMode, [], `${mode}: registered in a mode its entry does not list`);
+    const expected = Object.keys(ROUTES).filter((k) => routeEntry(k).modes.includes(mode));
+    assert.deepEqual(expected.filter((k) => !registered.has(k)), [], `${mode}: entries that list this mode but are not registered`);
+  }
+  const union = new Set(Object.values(inventories).flatMap((inv) => inv.routes.map((r) => r.key)));
+  assert.deepEqual(Object.keys(ROUTES).filter((k) => !union.has(k)), [], 'stale entries: registered in no mode');
+});
+
+test('completeness: only the named middleware, routers mounted at the root, the static mounts, case-sensitive routing', () => {
+  for (const [mode, inv] of Object.entries(inventories)) {
+    assert.deepEqual(inv.middleware.filter((n) => !MIDDLEWARE.includes(n)), [], `${mode}: an unexpected middleware layer (name it and list it in MIDDLEWARE)`);
+    assert.deepEqual([...inv.middleware].sort(), [...MIDDLEWARE].sort(), `${mode}: every named middleware is in the stack once`);
+    assert.ok(inv.routers.length >= 1, `${mode}: found the deploy router`);
+    assert.deepEqual(inv.routers.filter((r) => !r.mountedAtRoot), [], `${mode}: a router mounted under a prefix (keys must be absolute paths)`);
+    assert.deepEqual(inv.routers.filter((r) => !r.caseSensitive), [], `${mode}: a router without { caseSensitive: true }`);
+    assert.equal(inv.appCaseSensitive, true, `${mode}: app.router is case-sensitive`);
+    assert.deepEqual([...inv.statics].sort(), Object.keys(STATIC_MOUNTS).sort(), `${mode}: each static layer matches exactly one mount, each mount once`);
+  }
+});
+
+test('completeness: the table agrees with the independent classification, and every entry is well formed', () => {
+  assert.deepEqual(Object.keys(ROUTES).sort(), Object.keys(EXPECTED_CLASS).sort(), 'ROUTES and EXPECTED_CLASS hold the same keys');
+  for (const key of Object.keys(ROUTES)) {
+    const e = routeEntry(key);
+    assert.equal(e.class, EXPECTED_CLASS[key], `${key}: class`);
+    assert.ok(CLASSES.includes(e.class), `${key}: a known class`);
+    assert.ok(e.modes.length > 0 && e.modes.every((m) => MODES.includes(m)), `${key}: modes`);
+    assert.ok(['none', 'session', 'always', 'form'].includes(e.csrf), `${key}: csrf`);
+    assert.ok(['allow', 'refuse', 'rule'].includes(e.exposed), `${key}: exposed`);
+    assert.ok(Array.isArray(e.audit) && e.audit.every((a) => /^[a-z]+(?:[.-][a-z]+)+$/.test(a)), `${key}: audit actions`);
+    assert.ok(e.later === null || (typeof e.later === 'string' && e.later.length > 0), `${key}: later`);
+    const isApi = e.path.startsWith('/api/');
+    if (isApi && e.method !== 'GET') {
+      assert.ok(['session', 'always'].includes(e.csrf), `${key}: an /api mutation needs csrf session or always`);
+      assert.ok(!['public', 'viewer'].includes(e.class), `${key}: a viewer may only read`);
+    }
+    if (e.identityApi) assert.ok(['admin', 'owner'].includes(e.class), `${key}: the identity API is admin or owner`);
+    if (e.class === 'admin' || e.class === 'owner') assert.ok(Object.hasOwn(ROUTES[key], 'exposed'), `${key}: an ${e.class} route declares exposed`);
+    if (e.csrf === 'form') assert.ok(e.method !== 'GET' && e.path.startsWith('/auth/'), `${key}: form is for a non-GET /auth route`);
+    if (e.class === 'self') {
+      assert.ok(e.self && typeof e.self.pwflow === 'boolean' && typeof e.self.session === 'boolean'
+        && ['redirect', 'flow-expired', 'json'].includes(e.self.unauth), `${key}: a self entry has a self spec`);
+    } else assert.equal(e.self, null, `${key}: only a self entry has a self spec`);
+  }
+  assert.deepEqual(Object.keys(ROUTES).filter((k) => routeEntry(k).identityApi).sort(), [...EXPECTED_IDENTITY_API].sort(), 'the identity API set');
+  assert.deepEqual(Object.keys(ROUTES).filter((k) => routeEntry(k).exposed === 'rule').sort(), [...EXPECTED_EXPOSED_RULE].sort(), 'the exposed: rule set');
+});
+
+test('authorize(key) throws at registration on an unclassified key, naming both files', async () => {
+  const { authorize } = await import('./authz.mjs');
+  assert.throws(() => authorize('GET /api/nope'),
+    { message: 'unclassified route GET /api/nope — add it to server/route-table.mjs and to EXPECTED_CLASS in server/test-authz.mjs' });
+  const g = authorize('GET /api/packs');
+  assert.equal(g.name, 'authorize');
+  assert.equal(g.routeKey, 'GET /api/packs');
 });

@@ -365,16 +365,19 @@ function redirectUri(req) {
 // Validates the env contract and registers /auth/*. Called at module
 // load by server/index.mjs; throws (fail closed, clear message) when the
 // configuration is incomplete.
-export function initAuth(app) {
+export function initAuth(app, { authorize } = {}) {
+  // Every route's first handler is its guard (server/authz.mjs, injected:
+  // this module never imports it); the route table classifies each one.
+  if (typeof authorize !== 'function') throw new TypeError('initAuth(app, { authorize }): the route guard factory is required');
   if (authDisabled()) return;
-  if (oidcEnabled()) { initOidc(app); registerShared(app, 'oidc'); return; }
+  if (oidcEnabled()) { initOidc(app, authorize); registerShared(app, 'oidc', authorize); return; }
   // Stand-alone routes register unconditionally and gate on
   // identity_armed PER REQUEST: route registration is load-time in
   // Express, but the store is not open yet at import — the flag may be
   // set by start() on first boot or by `npm run users` while the process
   // runs. Posture stays request-time, exactly like the /api gate.
-  initLocalUsers(app);
-  registerShared(app, 'local-users');
+  initLocalUsers(app, authorize);
+  registerShared(app, 'local-users', authorize);
 }
 
 // 404 while identity is off (open posture, or stand-alone not yet armed)
@@ -383,14 +386,14 @@ function identityOff(res) {
   return res.status(404).json({ ok: false, error: 'identity not configured' });
 }
 
-function registerShared(app, mode) {
-  app.post('/auth/logout', (req, res) => {
+function registerShared(app, mode, authorize) {
+  app.post('/auth/logout', authorize('POST /auth/logout'), (req, res) => {
     if (!authEnabled()) return identityOff(res);
     clearCookie(res, SESSION_COOKIE);
     clearCookie(res, LEGACY_SESSION_COOKIE);
     res.status(204).end();
   });
-  app.get('/auth/me', (req, res) => {
+  app.get('/auth/me', authorize('GET /auth/me'), (req, res) => {
     if (!authEnabled()) return identityOff(res);
     const db = currentStore();
     const s = resolveSession(req, { db });
@@ -452,13 +455,13 @@ ${AUTH_PAGE_STYLE}</head><body>
   ${askCurrent ? '<a class="skip" href="/">Cancel — back to the studio</a>' : ''}
 </form></body></html>`;
 
-function initLocalUsers(app) {
-  app.get('/auth/login', (req, res) => {
+function initLocalUsers(app, authorize) {
+  app.get('/auth/login', authorize('GET /auth/login'), (req, res) => {
     if (!localUsersEnabled()) return identityOff(res);
     res.type('html').send(LOGIN_PAGE());
   });
 
-  app.post('/auth/login', (req, res) => {
+  app.post('/auth/login', authorize('POST /auth/login'), (req, res) => {
     if (!localUsersEnabled()) return identityOff(res);
     const db = currentStore();
     const body = req.body || {};
@@ -505,7 +508,7 @@ function initLocalUsers(app) {
     return wantsJson ? res.json({ ok: true }) : res.redirect('/');
   });
 
-  app.get('/auth/change-password', (req, res) => {
+  app.get('/auth/change-password', authorize('GET /auth/change-password'), (req, res) => {
     if (!localUsersEnabled()) return identityOff(res);
     const db = currentStore();
     const flow = resolvePwflow(req, db);
@@ -530,7 +533,7 @@ function initLocalUsers(app) {
   // signed-in session, which must ALSO prove the current password —
   // that knowledge is what makes a forged cross-site POST useless.
   // Neither path needs a separate CSRF token.
-  app.post('/auth/change-password', (req, res) => {
+  app.post('/auth/change-password', authorize('POST /auth/change-password'), (req, res) => {
     if (!localUsersEnabled()) return identityOff(res);
     const db = currentStore();
     const wantsJson = (req.headers.accept || '').includes('application/json');
@@ -582,7 +585,7 @@ function initLocalUsers(app) {
   //     boot's default-credential check keeps refusing non-loopback
   //     binds — skipping never lets admin/admin reach a network.
   // The flow cookie is the credential, same as the change POST above.
-  app.post('/auth/change-password/skip', (req, res) => {
+  app.post('/auth/change-password/skip', authorize('POST /auth/change-password/skip'), (req, res) => {
     if (!localUsersEnabled()) return identityOff(res);
     const db = currentStore();
     const wantsJson = (req.headers.accept || '').includes('application/json');
@@ -606,7 +609,7 @@ function initLocalUsers(app) {
 
 // ---------- OIDC ----------
 
-function initOidc(app) {
+function initOidc(app, authorize) {
   const missing = [];
   if (!brandEnv('OIDC_CLIENT_ID')) missing.push('OBSERVOGRAM_OIDC_CLIENT_ID');
   if (brandEnv('SESSION_SECRET').length < 32) missing.push('OBSERVOGRAM_SESSION_SECRET (≥ 32 chars — instances must share it)');
@@ -614,7 +617,7 @@ function initOidc(app) {
     throw new Error(`OIDC is configured (OBSERVOGRAM_OIDC_ISSUER set) but incomplete — missing: ${missing.join(', ')}. Refusing to start half-authenticated.`);
   }
 
-  app.get('/auth/login', async (req, res) => {
+  app.get('/auth/login', authorize('GET /auth/login'), async (req, res) => {
     try {
       const config = await getConfig();
       const state = oidc.randomState();
@@ -636,7 +639,7 @@ function initOidc(app) {
     }
   });
 
-  app.get('/auth/callback', async (req, res) => {
+  app.get('/auth/callback', authorize('GET /auth/callback'), async (req, res) => {
     const flow = verify(parseCookies(req)[FLOW_COOKIE]);
     clearCookie(res, FLOW_COOKIE);
     if (!flow) return res.status(400).json({ ok: false, error: 'login flow expired or missing — start again at /auth/login' });

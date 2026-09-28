@@ -10,6 +10,9 @@
 //   orgContext  the request's org for every /api path (membership checked),
 //               run inside runWithOrg(); stamps req.observogramPrincipal.
 //
+// Then, at every route, its guard: authorize('<METHOD> <path>'), the
+// route's first handler, classified in server/route-table.mjs.
+//
 // The posture is read per request (a CLI arms a running server; a suite
 // flips the token mid-run). The bind is per server, not per process: each
 // server stamps its own on the requests it receives (server/index.mjs
@@ -23,6 +26,7 @@ import { runWithOrg } from './tenancy.mjs';
 import { currentStore } from './store/db.mjs';
 import { listMembershipsForUser } from './store/memberships.mjs';
 import { defaultOrgId, liveOrg } from './store/identity.mjs';
+import { routeEntry } from './route-table.mjs';
 
 // ---------- write-route auth (VALUE_BACKLOG item 10B) ----------
 //
@@ -186,4 +190,20 @@ function principalOf(req, { orgId, memberships }) {
   if (authEnabled()) return null;
   if (apiToken()) return { kind: 'anonymous', actor: null, role: 'viewer', owner: false };
   return { kind: 'local', actor: 'local', role: 'admin', owner: true };
+}
+
+// ---------- the guard ----------
+//
+// authorize(key) is every route's first handler (per method), so the entry
+// is the one Express itself matched. The key is looked up at registration:
+// an unclassified route throws, and the server module fails to load. The
+// returned function carries its key (`routeKey`), which is how the
+// completeness test proves each route's first handler is its own guard.
+// For now it passes every request through; the policy lands with the
+// route table's enforcement.
+export function authorize(key) {
+  routeEntry(key);
+  const guard = function authorize(req, res, next) { return next(); };
+  guard.routeKey = key;
+  return guard;
 }

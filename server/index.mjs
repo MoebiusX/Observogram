@@ -68,7 +68,7 @@ import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
 import { validateMcpUrl, redactCredentials } from './mcp-url.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
-import { authGate, orgContext } from './authz.mjs';
+import { authGate, orgContext, authorize } from './authz.mjs';
 import { versionInfo } from './version.mjs';
 import { buildInfo, buildLabel } from './build-info.mjs';
 import { runWithOrg, currentOrg, orgWorkspaceRoot, baseWorkspaceRoot, orgRootOf } from './tenancy.mjs';
@@ -405,7 +405,7 @@ app.enable('case sensitive routing');
 // tenancy middlewares on purpose: it is public like the static shell (the
 // footer fills itself from it before anyone signs in) and holds nothing
 // secret. `no-store` so a proxy never pins an old build to a new process.
-app.get('/api/version', (req, res) => {
+app.get('/api/version', authorize('GET /api/version'), (req, res) => {
   const info = buildInfo();
   res.set('Cache-Control', 'no-store');
   res.json({ ok: true, ...info, label: buildLabel(info) });
@@ -431,14 +431,14 @@ app.use(express.urlencoded({ extended: false, limit: '64kb' }));   // /auth/logi
 
 // Identity routes (/auth/*) — inert in local mode; throws fail-closed at
 // boot when OIDC is configured incompletely. See server/auth.mjs.
-initAuth(app);
+initAuth(app, { authorize });
 
 // Express's PayloadTooLargeError is thrown by the body parsers BEFORE
 // any of our handlers run, and the default error path returns HTML.
 // /api/* always wants JSON so the client can show a clean error and
 // hint the user toward client-side filtering instead of dumping a stack
 // trace into the dropzone.
-app.use((err, req, res, next) => {
+app.use(function payloadTooLarge(err, req, res, next) {
   if (err?.type === 'entity.too.large' || err?.status === 413) {
     if ((req.path || '').startsWith('/api/')) {
       const limit = err.limit ? Math.round(err.limit / 1024 / 1024) + 'MB' : '16MB';
@@ -451,7 +451,7 @@ app.use((err, req, res, next) => {
   return next(err);
 });
 
-app.get('/healthz', (req, res) => {
+app.get('/healthz', authorize('GET /healthz'), (req, res) => {
   res.json({
     ok: true,
     ...versionInfo(),   // version, build, node — "what exactly is running?"
@@ -464,7 +464,7 @@ app.get('/healthz', (req, res) => {
 // studio's RESET button so the user can start truly fresh — the client
 // pairs this with a localStorage.clear() + reload. No body, no params.
 // Returns the number of entries dropped so the client can echo it.
-app.delete('/api/uploads', (req, res) => {
+app.delete('/api/uploads', authorize('DELETE /api/uploads'), (req, res) => {
   const uploads = uploadsMap();
   const dropped = uploads.size;
   uploads.clear();
@@ -478,7 +478,7 @@ app.delete('/api/uploads', (req, res) => {
 // postures see the default org. `active` echoes the request's resolved
 // org so clients never have to guess which workspace they're in.
 // `tenancy` stays in the body (always true) for old clients.
-app.get('/api/orgs', (req, res) => {
+app.get('/api/orgs', authorize('GET /api/orgs'), (req, res) => {
   const db = currentStore();
   let orgs;
   if (req.observogramBearer) {
@@ -492,7 +492,7 @@ app.get('/api/orgs', (req, res) => {
   res.json({ ok: true, tenancy: true, orgs, active: currentOrg() });
 });
 
-app.get('/api/packs', (req, res) => {
+app.get('/api/packs', authorize('GET /api/packs'), (req, res) => {
   // Catalog + in-memory uploads. Uploaded packs lead the list so the
   // picker surfaces them at the top — they're the user's just-created
   // work and most likely what they want to interact with next.
@@ -535,7 +535,7 @@ function findPackMeta(id) {
 
 // Browse the archived reference packs without auto-loading them. The
 // home screen renders these as a small "Browse examples" affordance.
-app.get('/api/examples', (req, res) => {
+app.get('/api/examples', authorize('GET /api/examples'), (req, res) => {
   res.json({ examples: EXAMPLE_PACKS.map(catalogEntry) });
 });
 
@@ -543,11 +543,11 @@ app.get('/api/examples', (req, res) => {
 // the studio's Advanced → References view (reference component analysis).
 // Kept separate from /api/examples so they no longer appear in the
 // example-pack list, only under References.
-app.get('/api/references', (req, res) => {
+app.get('/api/references', authorize('GET /api/references'), (req, res) => {
   res.json({ references: REFERENCE_PACKS.map(catalogEntry) });
 });
 
-app.get('/api/packs/:id', (req, res) => {
+app.get('/api/packs/:id', authorize('GET /api/packs/:id'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ error: `unknown pack: ${req.params.id}` });
   try {
@@ -562,7 +562,7 @@ app.get('/api/packs/:id', (req, res) => {
   }
 });
 
-app.get('/api/packs/:id/canonical', (req, res) => {
+app.get('/api/packs/:id/canonical', authorize('GET /api/packs/:id/canonical'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ error: `unknown pack: ${req.params.id}` });
   try {
@@ -583,7 +583,7 @@ app.get('/api/packs/:id/canonical', (req, res) => {
   }
 });
 
-app.get('/api/packs/:id/conformance', (req, res) => {
+app.get('/api/packs/:id/conformance', authorize('GET /api/packs/:id/conformance'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ error: `unknown pack: ${req.params.id}` });
   try {
@@ -603,7 +603,7 @@ app.get('/api/packs/:id/conformance', (req, res) => {
   }
 });
 
-app.get('/api/diff', (req, res) => {
+app.get('/api/diff', authorize('GET /api/diff'), (req, res) => {
   const aId = typeof req.query.a === 'string' ? req.query.a : null;
   const bId = typeof req.query.b === 'string' ? req.query.b : null;
   if (!aId || !bId) return res.status(400).json({ error: 'query params `a` and `b` (pack ids) required' });
@@ -638,7 +638,7 @@ app.get('/api/diff', (req, res) => {
 // platform artefacts (Prometheus rules, OTel Collector config, etc.)
 // derived from it. Spec §9's reference implementation table made real.
 
-app.get('/api/compile/targets', (req, res) => {
+app.get('/api/compile/targets', authorize('GET /api/compile/targets'), (req, res) => {
   res.json({ targets: listTargets() });
 });
 
@@ -648,7 +648,7 @@ app.get('/api/compile/targets', (req, res) => {
 // left-nav tree; each leaf is then compiled via /api/packs/:id/
 // compile-artifact?group=&flavor=&artifact= below.
 // ----------------------------------------------------------------
-app.get('/api/packs/:id/compile-catalog', (req, res) => {
+app.get('/api/packs/:id/compile-catalog', authorize('GET /api/packs/:id/compile-catalog'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ ok: false, error: `unknown pack: ${req.params.id}` });
   try {
@@ -672,7 +672,7 @@ app.get('/api/packs/:id/compile-catalog', (req, res) => {
 // shape as /api/packs/:id/compile/:target so the client can reuse
 // the existing display path.
 // ----------------------------------------------------------------
-app.get('/api/packs/:id/compile-artifact', (req, res) => {
+app.get('/api/packs/:id/compile-artifact', authorize('GET /api/packs/:id/compile-artifact'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ ok: false, error: `unknown pack: ${req.params.id}` });
   const group = String(req.query.group || '');
@@ -699,7 +699,7 @@ app.get('/api/packs/:id/compile-artifact', (req, res) => {
 // GET /api/packs/:id/export.zip — the whole pack as one download: the
 // canonical pack.yaml plus every compiled artefact (the 'all' bundle of each
 // compile group × flavor) under artefacts/. Hand-rolled ZIP, no zip dep.
-app.get('/api/packs/:id/export.zip', (req, res) => {
+app.get('/api/packs/:id/export.zip', authorize('GET /api/packs/:id/export.zip'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ error: `unknown pack: ${req.params.id}` });
   try {
@@ -737,7 +737,7 @@ app.get('/api/packs/:id/export.zip', (req, res) => {
 // plan/execute, bulk + single deploy) live in server/routes/deploy.mjs;
 // the shaping transforms in server/deploy-helpers.mjs. The pack-registry
 // seam is injected until the registry extraction slice.
-app.use(deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readEnv, actorForRequest, contentHash }));
+app.use(deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readEnv, actorForRequest, contentHash, authorize }));
 
 // ---------- saved journeys (VALUE_BACKLOG item 11, studio surface) ----------
 
@@ -750,7 +750,7 @@ app.use(deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readE
 // the full updated pack YAML, and an honest skipped-list. The updated pack
 // is schema-validated before it leaves — retrofeed must never hand out a
 // pack that fails its own spec.
-app.post('/api/packs/:id/retrofeed', (req, res) => {
+app.post('/api/packs/:id/retrofeed', authorize('POST /api/packs/:id/retrofeed'), (req, res) => {
   const metaA = findPackMeta(req.params.id);
   if (!metaA) return res.status(404).json({ ok: false, error: `unknown pack: ${req.params.id}` });
   const b = req.body || {};
@@ -804,7 +804,7 @@ function parsedSchedule(def) {
   try { return parseSchedule(def.schedule); } catch { return null; }
 }
 
-app.get('/api/journeys', (req, res) => {
+app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
   try {
     const journeys = listJourneys().map(name => {
       let def = null;
@@ -874,7 +874,7 @@ app.get('/api/journeys', (req, res) => {
 
 // GET /api/journeys/:name/runs — run history newest first (the
 // drift-over-time series behind the panel's trend sparkline).
-app.get('/api/journeys/:name/runs', (req, res) => {
+app.get('/api/journeys/:name/runs', authorize('GET /api/journeys/:name/runs'), (req, res) => {
   const limit = Math.max(1, Math.min(200, parseInt(req.query.limit, 10) || 30));
   try {
     res.json({ runs: readJourneyRuns(req.params.name, { limit }) });
@@ -889,7 +889,7 @@ app.get('/api/journeys/:name/runs', (req, res) => {
 // a schedule: every snippet uses the placeholder cadence and `placeholder`
 // says so (nothing fabricated is presented as the journey's cadence). 404
 // for an unknown or unloadable journey.
-app.get('/api/journeys/:name/schedule', (req, res) => {
+app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/schedule'), (req, res) => {
   let def;
   try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
   catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
@@ -915,7 +915,7 @@ app.get('/api/journeys/:name/schedule', (req, res) => {
 // POST /api/journeys/:name/run — execute now. HTTP 200 even when the gate
 // fails: the run succeeded, the outcome is data. 404 for unknown names,
 // 502 when a pack source can't be resolved (live MCP down etc.).
-app.post('/api/journeys/:name/run', async (req, res) => {
+app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), async (req, res) => {
   let def;
   try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
   catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
@@ -936,7 +936,7 @@ app.post('/api/journeys/:name/run', async (req, res) => {
 // persisted workspace copy (10A); a Pack B that came from a live MCP draft
 // is saved as a live mcp: source via its mcp.url annotation, so re-runs
 // re-draft instead of comparing against a frozen snapshot.
-app.post('/api/journeys/capture', (req, res) => {
+app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req, res) => {
   const b = req.body || {};
   const name = typeof b.name === 'string' ? b.name.trim() : '';
   if (!name) return res.status(400).json({ ok: false, error: 'name required' });
@@ -997,7 +997,7 @@ app.post('/api/journeys/capture', (req, res) => {
   }
 });
 
-app.get('/api/packs/:id/compile/:target', (req, res) => {
+app.get('/api/packs/:id/compile/:target', authorize('GET /api/packs/:id/compile/:target'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ error: `unknown pack: ${req.params.id}` });
   try {
@@ -1024,7 +1024,7 @@ app.get('/api/packs/:id/compile/:target', (req, res) => {
   }
 });
 
-app.get('/api/maturity-rubric', (req, res) => {
+app.get('/api/maturity-rubric', authorize('GET /api/maturity-rubric'), (req, res) => {
   res.json({
     specVersion: SPEC_VERSION,
     docs: `${SPEC_DIR}/docs/maturity-model.md`,
@@ -1146,7 +1146,7 @@ function grafanaSummaryFromAnnotations(ann) {
   };
 }
 
-app.get('/api/live-status', (req, res) => {
+app.get('/api/live-status', authorize('GET /api/live-status'), (req, res) => {
   try {
     const abs = resolve(ROOT, LIVE_PACK_PATH);
     if (!existsSync(abs)) return res.json({ present: false });
@@ -1189,7 +1189,7 @@ app.get('/api/live-status', (req, res) => {
 // Response: { ok, canonical, canonicalYaml, summary, validation,
 //             conformance, annotations, tookMs }
 // ----------------------------------------------------------------
-app.post('/api/draft-from-mcp', async (req, res) => {
+app.post('/api/draft-from-mcp', authorize('POST /api/draft-from-mcp'), async (req, res) => {
   const body = req.body || {};
   const mcpUrl  = typeof body.mcpUrl  === 'string' && body.mcpUrl.trim() ? body.mcpUrl.trim() : null;
   const mcpAuth = typeof body.mcpAuth === 'string' && body.mcpAuth ? body.mcpAuth : null;
@@ -1393,7 +1393,7 @@ function banner(pack) {
   ].join('\n');
 }
 
-app.post('/api/refresh-live', async (req, res) => {
+app.post('/api/refresh-live', authorize('POST /api/refresh-live'), async (req, res) => {
   const body = req.body || {};
   const mcpUrl = typeof body.mcpUrl === 'string' && body.mcpUrl.trim() ? body.mcpUrl.trim() : null;
   const mcpAuth = typeof body.mcpAuth === 'string' && body.mcpAuth ? body.mcpAuth : null;
@@ -1451,7 +1451,7 @@ app.post('/api/refresh-live', async (req, res) => {
 // The crawler library is shared with tools/crawl-repo.mjs (the
 // CLI form); both feed crawlFiles() the same in-memory map shape.
 // ----------------------------------------------------------------
-app.post('/api/crawl', (req, res) => {
+app.post('/api/crawl', authorize('POST /api/crawl'), (req, res) => {
   const body = req.body || {};
   const files = body.files;
   if (!files || typeof files !== 'object' || Array.isArray(files)) {
@@ -1537,7 +1537,7 @@ app.post('/api/crawl', (req, res) => {
 // ----------------------------------------------------------------
 // parseGithubUrl / isCrawlerFile / ghFetch live in server/github-crawl.mjs.
 
-app.post('/api/crawl-github', async (req, res) => {
+app.post('/api/crawl-github', authorize('POST /api/crawl-github'), async (req, res) => {
   const body = req.body || {};
   const parsed = parseGithubUrl(body.url);
   if (!parsed) {
@@ -1675,7 +1675,7 @@ app.post('/api/crawl-github', async (req, res) => {
   }
 });
 
-app.post('/api/validate', (req, res) => {
+app.post('/api/validate', authorize('POST /api/validate'), (req, res) => {
   try {
     let canonical;
     if (typeof req.body === 'string') {
@@ -1749,14 +1749,14 @@ const tierError = (tier) => `unknown tier ${JSON.stringify(tier)} (known: ${TIER
 // GET /api/library — the index the DEFINE step lists (libraryIndex of loadLibrary)
 // plus the scaffold's own params (every instantiation has them) and the files
 // that did not load, so an entry missing from the list is never a mystery.
-app.get('/api/library', (req, res) => {
+app.get('/api/library', authorize('GET /api/library'), (req, res) => {
   const lib = library();
   res.json({ ok: true, entries: libraryIndex(lib.entries), scaffoldParams: SCAFFOLD_PARAMS, errors: lib.errors });
 });
 
 // GET /api/library/requirements/:tier — the conformance clauses that apply at
 // the tier (tierRequirements: the rubric filtered by minTier, never a second one).
-app.get('/api/library/requirements/:tier', (req, res) => {
+app.get('/api/library/requirements/:tier', authorize('GET /api/library/requirements/:tier'), (req, res) => {
   const tier = req.params.tier;
   if (!TIERS.includes(tier)) return res.status(400).json({ ok: false, error: tierError(tier) });
   res.json({ ok: true, tier, clauses: tierRequirements(tier) });
@@ -1764,7 +1764,7 @@ app.get('/api/library/requirements/:tier', (req, res) => {
 
 // GET /api/library/:id — one entry: its index row (what the step needs) plus
 // the full SLI templates and params (what a details drawer needs).
-app.get('/api/library/:id', (req, res) => {
+app.get('/api/library/:id', authorize('GET /api/library/:id'), (req, res) => {
   const entry = findEntry(library(), req.params.id);
   if (!entry) return res.status(404).json({ ok: false, error: `unknown library entry ${JSON.stringify(req.params.id)} (known: ${knownEntryIds()})` });
   const [row] = libraryIndex([entry]);
@@ -1858,7 +1858,7 @@ function instantiateFromBody(body) {
 // YAML for the preview and the download. Node passes the Lezer PromQL grammar,
 // as packc init does, so a broken SLI expression comes back as a `promql`
 // warning. A usage error from the engine is 400, never 500.
-app.post('/api/library/instantiate', (req, res) => {
+app.post('/api/library/instantiate', authorize('POST /api/library/instantiate'), (req, res) => {
   const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : null;
   if (!body) return res.status(400).json({ ok: false, errors: ['expected a JSON body { entries, name, tier, environment, owners, params, toggles, overrides, custom }'] });
   const made = instantiateFromBody(body);
@@ -1893,7 +1893,7 @@ function canonicalOfBody(body, what) {
 // compiled artefact through tools/lib/compile.mjs, so VERIFY previews the
 // Prometheus rules, the collector config, the Alertmanager routes and the
 // Grafana boards without registering anything.
-app.post('/api/library/compile', (req, res) => {
+app.post('/api/library/compile', authorize('POST /api/library/compile'), (req, res) => {
   const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {};
   const target = body.target;
   if (!TARGETS[target]) return res.status(400).json({ ok: false, error: `unknown compile target ${JSON.stringify(target)} (known: ${Object.keys(TARGETS).join(', ')})` });
@@ -1921,7 +1921,7 @@ app.post('/api/library/compile', (req, res) => {
 // library.source) and to metadata.name for anything else, as /api/validate labels an
 // upload; the todos travel in metadata.annotations and the summary says which
 // clauses still pass on a placeholder.
-app.post('/api/library/register', (req, res) => {
+app.post('/api/library/register', authorize('POST /api/library/register'), (req, res) => {
   const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {};
   const got = canonicalOfBody(body, (e) => ({ errors: Array.isArray(e) ? e : [e] }));
   if (got.status) return res.status(got.status).json(got.body);
@@ -1965,7 +1965,8 @@ app.use(express.static(STUDIO_DIR, { extensions: ['html'], index: 'index.html' }
 
 // SPA-style fallback: any unknown GET returns the studio shell so the client
 // can route. The /api/* paths above already handled JSON requests.
-app.get(/^(?!\/api\/).*/, (req, res, next) => {
+const SPA_FALLBACK = /^(?!\/api\/).*/;
+app.get(SPA_FALLBACK, authorize(`GET ${SPA_FALLBACK}`), (req, res, next) => {
   if (req.method !== 'GET') return next();
   res.sendFile(resolve(STUDIO_DIR, 'index.html'));
 });
