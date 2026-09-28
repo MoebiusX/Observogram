@@ -17,12 +17,9 @@
  */
 
 // Hermetic (§0): a developer shell's store or identity variables never
-// reach this process's own imports.
-const STRIP = [
-  'DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH', 'WORKSPACE', 'USERS_FILE',
-  'OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET', 'OIDC_REDIRECT_URL', 'OIDC_ALLOW_HTTP', 'OIDC_SECURE_COOKIES',
-  'SESSION_SECRET', 'API_TOKEN', 'API_TOKEN_LABEL', 'AUTH',
-];
+// reach a child or this process's own imports. The child helpers
+// (server/fixtures/serve-child.mjs) import no server code.
+const { STRIP, childEnv } = await import('./fixtures/serve-child.mjs');
 for (const k of STRIP) {
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];
@@ -352,10 +349,7 @@ const MODE_ENV = {
   off: { OBSERVOGRAM_AUTH: 'off' },
 };
 function inventory(mode) {
-  const env = { ...process.env };
-  for (const k of STRIP) { delete env[`OBSERVOGRAM_${k}`]; delete env[`TOMOGRAPH_${k}`]; }
-  Object.assign(env, { OBSERVOGRAM_WORKSPACE: WORKSPACE }, MODE_ENV[mode]);
-  const r = spawnSync(process.execPath, [INVENTORY], { env, encoding: 'utf8', timeout: 60_000 });
+  const r = spawnSync(process.execPath, [INVENTORY], { env: childEnv(WORKSPACE, MODE_ENV[mode]), encoding: 'utf8', timeout: 60_000 });
   assert.equal(r.status, 0, `the ${mode} inventory child failed: ${r.stderr}`);
   return JSON.parse(r.stdout.trim().split('\n').pop());
 }
