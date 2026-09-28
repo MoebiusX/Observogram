@@ -1120,8 +1120,9 @@ of it may be needed again.
 ## API Surface
 
 Every route's class — public, self, viewer, operator, admin, owner — is in
-[`server/route-table.mjs`](server/route-table.mjs) (see [Roles](#roles)):
-every `GET` below is `viewer`, every other `/api` route `operator`.
+[`server/route-table.mjs`](server/route-table.mjs) (see [Roles](#roles)).
+Below, `/healthz` and `/api/version` are `public`, every other `GET` is
+`viewer` and every other route `operator`.
 
 | Method | Path | Purpose |
 |---|---|---|

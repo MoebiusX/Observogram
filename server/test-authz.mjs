@@ -15,6 +15,7 @@
  *   method, is its own authorize() guard, every key is in
  *   server/route-table.mjs for its mode and agrees with EXPECTED_CLASS
  *   below, only the named middleware and the static mounts sit between;
+ *   the README's API Surface states each of its rows' class as the table has it;
  * - the decision (authzDecision), pure, over synthetic entries — the
  *   always / refuse / rule / direct-loopback paths no route has yet — and
  *   the request facts it reads (the CSRF header, a cross-site form, a
@@ -668,6 +669,33 @@ test('completeness: the table agrees with the independent classification, and ev
   }
   assert.deepEqual(Object.keys(ROUTES).filter((k) => routeEntry(k).identityApi).sort(), [...EXPECTED_IDENTITY_API].sort(), 'the identity API set');
   assert.deepEqual(Object.keys(ROUTES).filter((k) => routeEntry(k).exposed === 'rule').sort(), [...EXPECTED_EXPOSED_RULE].sort(), 'the exposed: rule set');
+});
+
+// The README's API Surface states each row's class in its intro: the
+// public rows by name, then every other GET viewer, every other row
+// operator. Each row is checked against the route table.
+test('the README API Surface: its intro names each public row, every other GET is viewer, every other row operator', () => {
+  const readme = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'README.md'), 'utf8');
+  const start = readme.indexOf('\n## API Surface\n');
+  assert.ok(start >= 0, 'README has an API Surface section');
+  const end = readme.indexOf('\n## ', start + 1);
+  const section = readme.slice(start, end < 0 ? undefined : end);
+  const intro = section.slice(0, section.indexOf('\n|')).replace(/\s+/g, ' ');
+  const rows = [...section.matchAll(/^\| `([A-Z]+)` \| `([^`]+)` \|/gm)].map(([, method, path]) => ({ method, path: path.split('?')[0] }));
+  assert.ok(rows.length >= 20, `read the table (${rows.length} rows)`);
+  for (const { method, path } of rows) {
+    const key = `${method} ${path}`;
+    assert.ok(Object.hasOwn(ROUTES, key), `${key}: a README row the route table does not hold`);
+    const { class: cls } = routeEntry(key);
+    const named = intro.includes(`\`${path}\``);
+    if (cls === 'public') assert.ok(named, `${key}: a public row the intro does not name`);
+    else {
+      assert.ok(!named, `${key}: the intro names a ${cls} row as public`);
+      assert.equal(cls, method === 'GET' ? 'viewer' : 'operator', `${key}: the class the intro states`);
+    }
+  }
+  assert.match(intro, /every other `GET` is `viewer`/, 'the intro states the GET rule');
+  assert.match(intro, /every other route `operator`/, 'the intro states the rule for every other row');
 });
 
 test('authorize(key) throws at registration on an unclassified key, naming both files', async () => {
