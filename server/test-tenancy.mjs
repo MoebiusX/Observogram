@@ -156,8 +156,8 @@ const DEPLOYMENT_GLOBAL = new Set([
 
 // alice, in `org`, creates the objects the sweep addresses: a registered
 // pack, a deploy with a snapshot against the fake MCP, a verify on it, a
-// journey captured and run once, and the org's live pack (planted: a
-// refresh would need a live-draft MCP; the route's own write is test-smoke's).
+// journey captured and run once, and the org's live pack (planted; the
+// route's own write into a created org is the default-at-'.' block's).
 async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   const h = { Cookie: cookie, 'X-Observogram-CSRF': '1', 'X-Observogram-Org': org };
   mkdirSync(join(dir, 'live'), { recursive: true });
@@ -595,6 +595,28 @@ try {
     j = await r.json();
     assert(!j.journeys.some(x => x.name === ids.journey), "carlos's /api/journeys in default never lists delta's journey");
     await sweep({ root: base4, cookie: carlos, who: 'carlos (default at .)', ids, mcp, dir: deltaDir });
+
+    // The refresh writes the caller's org's live pack — orgs/delta/live/ —
+    // and never the default org's at the base (whose root contains delta's).
+    const deltaLive = join(deltaDir, 'live', 'production-live.pack.yaml');
+    const baseLive = join(WS4, 'live', 'production-live.pack.yaml');
+    const liveUrl = `${mcp.url}?from=delta`;
+    r = await fetch(`${base4}/api/refresh-live`, {
+      method: 'POST',
+      headers: { Cookie: alice, 'X-Observogram-CSRF': '1', 'X-Observogram-Org': 'delta', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mcpUrl: liveUrl }),
+    });
+    j = await r.json();
+    assert(r.status === 200 && j.ok === true && j.annotations?.['mcp.url'] === liveUrl, 'alice refreshes the live pack in delta', [r.status, j.error]);
+    assert(existsSync(deltaLive) && readFileSync(deltaLive, 'utf8').includes(liveUrl),
+      "the refresh wrote orgs/delta/live/production-live.pack.yaml (its mcp.url is the refresh's)", existsSync(deltaLive) ? readFileSync(deltaLive, 'utf8').slice(0, 300) : 'absent');
+    assert(!existsSync(baseLive), "delta's refresh wrote no live pack for the default org at the base", baseLive);
+    r = await fetch(`${base4}/api/live-status`, { headers: { Cookie: alice, 'X-Observogram-Org': 'delta' } });
+    j = await r.json();
+    assert(j.present === true && j.url === liveUrl, "alice's live-status in delta reads the refreshed pack", [j.present, j.url]);
+    r = await fetch(`${base4}/api/live-status`, { headers: { Cookie: carlos } });
+    j = await r.json();
+    assert(r.headers.get('x-observogram-org') === 'default' && j.present === false, "carlos's live-status in default: still no live pack", [r.headers.get('x-observogram-org'), j.present]);
   } finally {
     await new Promise(res => srv4.close(res));
     rmSync(WS4, { recursive: true, force: true });
