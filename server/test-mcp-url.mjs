@@ -102,6 +102,17 @@ assert(mcpUrlOrigin(pathSecret) === 'https://mcp.example.com' && mcpUrlOrigin('h
   'mcpUrlOrigin: scheme://host:port, never a path, a query or userinfo');
 assert(safeMcpUrl('not a url') === null && mcpUrlOrigin('not a url') === null && mcpUrlOrigin('file:///etc/passwd') === null, 'not an http(s) URL → null');
 assert(safeMcpUrl('https://mcp.example.com/obs?a=%20b+c&tier=x') === 'https://mcp.example.com/obs?a=%20b+c&tier=x', 'nothing dropped → the query keeps its spelling');
+// Something dropped → only its segments go; the rest is not re-serialised
+// (%20 stays %20, a comma stays a comma, a bare flag stays bare), so a
+// journey drafted from the safe URL calls the user's URL minus the token.
+const spelled = stripMcpUrl('http://127.0.0.1:47111/mcp?token=T&flag&filter=a%20b&list=x,y');
+assert(spelled.safe === 'http://127.0.0.1:47111/mcp?flag&filter=a%20b&list=x,y' && spelled.dropped.join() === 'token',
+  'something dropped → the other parameters keep their spelling', spelled);
+assert(safeMcpUrl('https://mcp.example.com/obs?a+b=%E2%9C%93&token=1&tier=x;pwd=1&x=%zz&token=2&tier=y&q=1+2') === 'https://mcp.example.com/obs?a+b=%E2%9C%93&x=%zz&q=1+2',
+  'every segment of a dropped name goes (repeats, a ;-pair value) and the kept ones keep their spelling');
+assert(safeMcpUrl('https://mcp.example.com/obs??token=x&a=1') === 'https://mcp.example.com/obs?a=1'
+  && safeMcpUrl('https://mcp.example.com/obs?&token=x&') === 'https://mcp.example.com/obs',
+  'a name starting with ? is matched as searchParams decodes it; a query left with no parameter is removed');
 const creds = 'https://user:pw@mcp.example.com/obs?token=abc&tier=x#f';
 assert(validateMcpUrl(creds).safeUrl === safeMcpUrl(creds) && validateMcpUrl(creds).safeUrl === 'https://mcp.example.com/obs?tier=x',
   'validateMcpUrl().safeUrl is safeMcpUrl()');

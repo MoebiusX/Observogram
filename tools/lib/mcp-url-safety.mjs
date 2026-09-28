@@ -75,8 +75,21 @@ export function stripMcpUrl(raw) {
       dropped.push(name);
     }
   }
-  // Only rewrite the query when something goes: the rest keeps its spelling.
-  for (const name of dropped) url.searchParams.delete(name);
+  // Only the dropped names' own `&`-segments go (and the empty ones, which
+  // carry nothing); every other segment keeps its spelling.
+  // (searchParams.delete() would re-serialise the rest — `%20` → `+`,
+  // `,` → `%2C`, a bare `flag` → `flag=` — and a journey drafted from this
+  // URL would call a different one.) A segment's name is decoded as
+  // searchParams decodes it; the leading `&` keeps the constructor from
+  // eating a `?` the name starts with (`??token=…`).
+  if (dropped.length) {
+    const gone = new Set(dropped);
+    const rest = url.search.slice(1).split('&').filter((segment) => {
+      const [entry] = new URLSearchParams(`&${segment}`);
+      return entry && !gone.has(entry[0]);
+    }).join('&');
+    url.search = rest ? `?${rest}` : '';
+  }
   return { safe: url.href, dropped };
 }
 
