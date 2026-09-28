@@ -17,26 +17,38 @@
 // URL to operators only (its origin to everyone).
 
 // Matched by WORD, not by substring: the name is split at camelCase
-// boundaries and at every non-alphanumeric character, and a word — or the
+// boundaries, at digits and at every other non-letter, and a word — or the
 // whole name with its separators removed — is one of these. So `token`,
 // `api_key`, `apiKey`, `X-Amz-Signature`, `access_token`, `sessionId`,
-// `pwd`, `jwt` are credentials; `signal`, `design`, `keyspace`, `monkey`,
-// `author`, `bypass`, `passive`, `tenant`, `tier` are not.
+// `pwd`, `jwt`, `token1` are credentials; `signal`, `design`, `keyspace`,
+// `monkey`, `author`, `bypass`, `passive`, `tenant`, `tier` are not.
 const CREDENTIAL_WORDS = new Set(['token', 'tokens', 'key', 'keys', 'apikey', 'secret', 'secrets',
   'pass', 'passwd', 'password', 'passphrase', 'pwd', 'auth', 'authorization', 'authtoken',
   'accesstoken', 'sig', 'signature', 'credential', 'credentials', 'jwt', 'session', 'sessionid',
   'bearer', 'sas']);
+
+// A name written as one run — all lowercase or all uppercase, with no
+// boundary to split at (`apitoken`, `APISECRET`, `clientsecret`,
+// `refreshtoken`, `ACCESSKEY`, `xapikey`) — is still a credential: a word
+// that ENDS in one of these is one. No common word ends in them; `key`
+// alone is not one of them (`monkey`, `turkey`, `hockey`), only its
+// credential compounds are.
+const CREDENTIAL_TAILS = ['token', 'tokens', 'secret', 'secrets', 'password', 'passwd',
+  'passphrase', 'passcode', 'pwd', 'credential', 'credentials', 'signature', 'sessionid',
+  'apikey', 'accesskey', 'secretkey', 'privatekey', 'authkey', 'sessionkey', 'signingkey'];
+
+const credentialWord = (w) => CREDENTIAL_WORDS.has(w) || CREDENTIAL_TAILS.some((t) => w.endsWith(t));
 
 export function credentialParamName(name) {
   const text = String(name ?? '');
   const words = text
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
-    .split(/[^A-Za-z0-9]+/)
+    .split(/[^A-Za-z]+/)
     .filter(Boolean)
     .map((w) => w.toLowerCase());
-  if (words.some((w) => CREDENTIAL_WORDS.has(w))) return true;
-  return CREDENTIAL_WORDS.has(text.replace(/[^A-Za-z0-9]+/g, '').toLowerCase());
+  if (words.some(credentialWord)) return true;
+  return credentialWord(text.replace(/[^A-Za-z]+/g, '').toLowerCase());
 }
 
 // A value that smuggles a `;`-separated `name=value` pair naming a credential.

@@ -74,11 +74,25 @@ for (const name of ['token', 'api_key', 'apiKey', 'X-Amz-Signature', 'access_tok
   assert(safe === 'https://mcp.example.com/obs?tier=x' && dropped.length === 1 && dropped[0] === name, `a credential parameter is removed: ${name}`, [safe, dropped]);
   assert(credentialParamName(name), `credentialParamName(${name})`);
 }
+// A name written as one run (no camelCase, no separator) or ending in a
+// digit is a credential too, whatever its case: APISECRET goes like apiSecret.
+for (const name of ['apitoken', 'APITOKEN', 'accesskey', 'ACCESSKEY', 'secretkey', 'clientsecret', 'CLIENTSECRET',
+  'APISECRET', 'API_SECRET', 'apiSecret', 'privatetoken', 'privatekey', 'authkey', 'xapikey', 'sessiontoken',
+  'refreshtoken', 'idtoken', 'mytoken', 'token1', 'password1', 'key2', 'passcode', 'jsessionid', 'urlsignature']) {
+  const { safe, dropped } = stripMcpUrl(`https://mcp.example.com/obs?${name}=s3cret&tier=x`);
+  assert(safe === 'https://mcp.example.com/obs?tier=x' && dropped.length === 1 && dropped[0] === name, `a run-together credential parameter is removed: ${name}`, [safe, dropped]);
+}
+const both = stripMcpUrl('https://mcp.example.com/obs?token=A&apitoken=B&tier=x');
+assert(both.safe === 'https://mcp.example.com/obs?tier=x' && both.dropped.join() === 'token,apitoken',
+  'token and apitoken both go, and dropped names both', both);
+assert(safeMcpUrl('https://mcp.example.com/obs?tier=x;APITOKEN=B&design=1') === 'https://mcp.example.com/obs?design=1',
+  'a ;-separated pair naming a run-together credential is removed whole');
 assert(stripMcpUrl('https://mcp.example.com/obs?%74oken=s3cret').safe === 'https://mcp.example.com/obs'
   && stripMcpUrl('https://mcp.example.com/obs?%74oken=s3cret').dropped[0] === 'token', 'an ENCODED name is decoded first: %74oken is token');
 assert(safeMcpUrl('https://mcp.example.com/obs?tier=x;pwd=hunter2&design=1') === 'https://mcp.example.com/obs?design=1',
   'a value carrying a ;-separated credential pair is removed whole');
-const KEPT = ['signal', 'design', 'keyspace', 'author', 'bypass', 'tenant', 'tier', 'monkey', 'passive'];
+const KEPT = ['signal', 'design', 'keyspace', 'author', 'bypass', 'tenant', 'tier', 'monkey', 'passive',
+  'turkey', 'hockey', 'keyword', 'tokenizer', 'secretary', 'obsession', 'compass', 'tier1', 'v2', 'sha256'];
 const kept = `https://mcp.example.com/obs?${KEPT.map((n, i) => `${n}=${i}`).join('&')}`;
 assert(safeMcpUrl(kept) === kept, 'names that merely contain a credential word are kept (a word rule, not a substring rule)', safeMcpUrl(kept));
 for (const n of KEPT) assert(!credentialParamName(n), `not a credential: ${n}`);
