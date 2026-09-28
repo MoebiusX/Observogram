@@ -1243,22 +1243,35 @@ try {
     // The boot line: while the install still has the old deployment-wide
     // file and the default org has no live pack of its own, the start says
     // where the badge reads now; after the org's first refresh it does not.
+    // The old file is a scratch copy the children are pointed at — never
+    // one planted in the checkout's examples/, which tools/test-validator.mjs,
+    // tools/test-packs.mjs and tools/test-backend-validate.mjs enumerate
+    // while this suite runs (an invalid pack there turns them red).
     {
-      const legacyLive = resolvePath(dirname(fileURLToPath(import.meta.url)), '..', 'examples', 'production-live.pack.yaml');
-      const planted = !existsSync(legacyLive);
-      if (planted) writeFileSync(legacyLive, 'apiVersion: observability.pack/v1\nkind: ObservabilityPack\nmetadata:\n  name: production-live\nspec: {}\n');
-      const bootWs = mkdtempSync(join(tmpdir(), 'observogram-smoke-bootline-'));
+      const installLegacy = resolvePath(dirname(fileURLToPath(import.meta.url)), '..', 'examples', 'production-live.pack.yaml');
+      const installBefore = existsSync(installLegacy) ? readFileSync(installLegacy, 'utf8') : null;
+      const installUntouched = () => (existsSync(installLegacy) ? readFileSync(installLegacy, 'utf8') : null) === installBefore;
+      const scratch = mkdtempSync(join(tmpdir(), 'observogram-smoke-bootline-'));
+      const bootWs = join(scratch, 'ws');
+      const legacyLive = join(scratch, 'examples', 'production-live.pack.yaml');
+      const PACK = 'apiVersion: observability.pack/v1\nkind: ObservabilityPack\nmetadata:\n  name: production-live\nspec: {}\n';
+      const bootEnv = { OBSERVOGRAM_AUTH: 'off', BOOT_LEGACY_LIVE_PACK: legacyLive };
       try {
+        mkdirSync(bootWs, { recursive: true });
         const LINE = '[studio] the studio no longer reads examples/production-live.pack.yaml: each org\'s live pack is <org root>/live/production-live.pack.yaml, written by the MCP panel\'s refresh (npm run detect-drift and the dry run still read the old file; OUTPUT=<org root>/live/production-live.pack.yaml npm run fetch-live writes the new one)';
-        const first = boot(bootWs, { silent: false, env: { OBSERVOGRAM_AUTH: 'off' } });
+        const none = boot(bootWs, { silent: false, env: bootEnv });
+        assert(none.listening && !none.stdout.includes('no longer reads'), 'boot: no old live pack → no boot line', none.stdout);
+        mkdirSync(dirname(legacyLive), { recursive: true });
+        writeFileSync(legacyLive, PACK);
+        const first = boot(bootWs, { silent: false, env: bootEnv });
         assert(first.listening && first.stdout.includes(LINE), 'boot: the old live pack exists, the default org has none → the boot line', first.stdout);
+        assert(installUntouched(), 'boot line: the check plants nothing in the checkout\'s examples/ (suites enumerating examples/*.pack.yaml run alongside)');
         mkdirSync(join(bootWs, 'live'), { recursive: true });
-        writeFileSync(join(bootWs, 'live', 'production-live.pack.yaml'), 'apiVersion: observability.pack/v1\nkind: ObservabilityPack\nmetadata:\n  name: production-live\nspec: {}\n');
-        const second = boot(bootWs, { silent: false, env: { OBSERVOGRAM_AUTH: 'off' } });
+        writeFileSync(join(bootWs, 'live', 'production-live.pack.yaml'), PACK);
+        const second = boot(bootWs, { silent: false, env: bootEnv });
         assert(second.listening && !second.stdout.includes('no longer reads'), 'boot: after the default org\'s first refresh → no boot line', second.stdout);
       } finally {
-        if (planted) rmSync(legacyLive, { force: true });
-        rmSync(bootWs, { recursive: true, force: true });
+        rmSync(scratch, { recursive: true, force: true });
       }
     }
   }

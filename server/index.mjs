@@ -2033,9 +2033,9 @@ function rehydrateOrgs(silent) {
 // org has no live pack of its own yet, one line says where the badge reads
 // now — it stops after the default org's first refresh. The file is not
 // moved: it belonged to no org, and the CLIs still use it.
-function noteLegacyLivePack(db, log) {
+function noteLegacyLivePack(db, log, legacyPath) {
   try {
-    if (!existsSync(resolve(ROOT, LEGACY_LIVE_PACK))) return;
+    if (!existsSync(legacyPath)) return;
     const org = defaultOrgId(db);
     if (!org || runWithOrg(org, () => readLivePack()) !== null) return;
     log(`[studio] the studio no longer reads ${LEGACY_LIVE_PACK}: each org's live pack is <org root>/live/${LIVE_PACK_FILE}, `
@@ -2048,8 +2048,10 @@ function noteLegacyLivePack(db, log) {
 // stale-import guard, the legacy import once, the seed decision and the
 // fail-closed checks (docs/STORE_PLAN.md §4). A refusal arrives as a
 // rejected promise (BootRefusal / LegacyFileError). Then step 6 and the
-// listen.
-export async function start({ port = PORT, host = HOST, silent = false } = {}) {
+// listen. legacyLivePack is where the old file is looked for — a seam for
+// the suites, which must not plant one in the checkout's examples/ (other
+// suites enumerate examples/*.pack.yaml concurrently).
+export async function start({ port = PORT, host = HOST, silent = false, legacyLivePack = resolve(ROOT, LEGACY_LIVE_PACK) } = {}) {
   const log = (m) => { if (!silent) process.stdout.write(m + '\n'); };
   const warn = (m) => { if (!silent) process.stderr.write(m + '\n'); };
   const { db, ctx } = await bootStore({ host, log, warn });
@@ -2058,7 +2060,7 @@ export async function start({ port = PORT, host = HOST, silent = false } = {}) {
   // root through the same context-aware resolver the registry uses.
   setWorkspaceRootResolver(orgWorkspaceRoot);
   rehydrateOrgs(silent);
-  noteLegacyLivePack(db, log);
+  noteLegacyLivePack(db, log, legacyLivePack);
   // Each server stamps its own bind on the requests it receives
   // (server/authz.mjs listenOf): suites run several servers per process
   // on different binds, so the bind never lives in module state.
