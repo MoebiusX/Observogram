@@ -696,6 +696,21 @@ test('a <base>/live nothing reads (the default org at orgs/default) is named at 
   assert.ok(warns.includes(`[store] left behind: ${join(base, 'live')} — nothing reads it (the default org's copy is orgs/default/live); merge it by hand`), warns.join('\n'));
 });
 
+test('an empty <base>/live (the default org at orgs/default) is removed at the start, as the empty <base>/packs is — nothing named left behind', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice']);
+  pack(base, 'p1');
+  await start(base);
+  await change(base, (db) => admin.createOrgFromAdmin(db, 'cli', { id: 'acme', name: 'Acme', admin: 'alice', base }));
+  await exportIt(base);
+  await read(base, (db) => assert.equal(getOrg(db, 'default').root, 'orgs/default'));
+  mkdirSync(join(base, 'live'));
+  const { logs, warns } = await start(base);
+  assert.ok(logs.includes(`[store] removed empty leftovers of a pre-store build: ${join(base, 'live')}`), logs.join('\n'));
+  assert.equal(existsSync(join(base, 'live')), false, 'the empty leftover is removed');
+  assert.deepEqual(warns.filter((w) => /left behind/.test(w)), []);
+});
+
 test('in place: refused while the store is in use, before the server first started, and on a move conflict — nothing changed', async () => {
   const refused = (re) => (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && re.test(e.message);
 
