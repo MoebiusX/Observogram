@@ -18,7 +18,8 @@
  * - the decision (authzDecision), pure, over synthetic entries — the
  *   always / refuse / rule / direct-loopback paths no route has yet — and
  *   the request facts it reads (the CSRF header, a cross-site form, a
- *   direct loopback request); selfGate's CSRF step;
+ *   direct loopback request); selfGate's CSRF step; the guard's 500 for
+ *   a classified route reached without a principal (fail closed);
  * - the AuthZ matrix: every /api route × every principal × every posture,
  *   each a child server (server/fixtures/serve-child.mjs), its expectations
  *   from EXPECTED_CLASS and the fixture's own membership table, never from
@@ -675,6 +676,41 @@ test('authorize(key) throws at registration on an unclassified key, naming both 
   const g = authorize('GET /api/packs');
   assert.equal(g.name, 'authorize');
   assert.equal(g.routeKey, 'GET /api/packs');
+});
+
+test('authorize(key): a classified route reached without a principal is refused 500, logged once — never passed (§6.2 step 3)', async () => {
+  const { authorize } = await import('./authz.mjs');
+  const guard = authorize('GET /api/packs');
+  const run = () => {
+    const out = { status: null, body: null, next: false };
+    const res = {
+      status(code) { out.status = code; return res; },
+      json(body) { out.body = body; return res; },
+    };
+    guard({ method: 'GET', path: '/api/packs', headers: {}, query: {} }, res, () => { out.next = true; });
+    return out;
+  };
+  const logged = [];
+  const write = process.stderr.write;
+  process.stderr.write = (chunk, ...rest) => {
+    if (String(chunk).startsWith('[authz] ')) { logged.push(String(chunk)); return true; }
+    return write.call(process.stderr, chunk, ...rest);
+  };
+  let first;
+  let second;
+  try {
+    first = run();
+    second = run();
+  } finally {
+    process.stderr.write = write;
+  }
+  for (const r of [first, second]) {
+    assert.equal(r.next, false, 'the guard never passes a request without a principal');
+    assert.equal(r.status, 500);
+    assert.equal(r.body.ok, false);
+    assert.match(r.body.error, /^no principal was resolved for GET \/api\/packs — a bug/);
+  }
+  assert.deepEqual(logged, ['[authz] no principal was resolved for GET /api/packs — refused (500)\n'], 'logged once per key');
 });
 
 // ---------- the AuthZ matrix (§14.2) ----------
