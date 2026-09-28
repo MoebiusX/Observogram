@@ -20,7 +20,9 @@
 // as exposed (fail closed).
 
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { authEnabled, resolveSession } from './auth.mjs';
+import {
+  authEnabled, localUsersEnabled, resolveSession, resolvePwflow, identityOff, wantsJson,
+} from './auth.mjs';
 import { brandEnv } from '../tools/lib/brand-env.mjs';
 import { runWithOrg } from './tenancy.mjs';
 import { currentStore } from './store/db.mjs';
@@ -199,11 +201,44 @@ function principalOf(req, { orgId, memberships }) {
 // an unclassified route throws, and the server module fails to load. The
 // returned function carries its key (`routeKey`), which is how the
 // completeness test proves each route's first handler is its own guard.
-// For now it passes every request through; the policy lands with the
-// route table's enforcement.
+// A `self` route's caller is resolved here (selfGate); every other class
+// passes through for now — the policy lands with the route table's
+// enforcement.
 export function authorize(key) {
-  routeEntry(key);
-  const guard = function authorize(req, res, next) { return next(); };
+  const entry = routeEntry(key);
+  const guard = function authorize(req, res, next) {
+    if (entry.class === 'self') return selfGate(entry, req, res, next);
+    return next();
+  };
   guard.routeKey = key;
   return guard;
+}
+
+// ---------- the self class: the caller's own row ----------
+//
+// The caller of a self route is resolved once, here, and the handler reads
+// req.observogramSelf — { via: 'pwflow', user } or { via: 'session', user,
+// session }. The pwflow cookie wins (the forced change of the first
+// admin/admin boot works through it alone); resolveSession() runs at most
+// once (it may write a first-sight row), and only when there is no flow.
+export function selfGate(entry, req, res, next) {
+  const localOnly = entry.modes.length === 1 && entry.modes[0] === 'local';
+  if (localOnly ? !localUsersEnabled() : !authEnabled()) return identityOff(res);
+  const db = currentStore();
+  const flow = entry.self.pwflow ? resolvePwflow(req, db) : null;
+  const session = !flow && entry.self.session ? resolveSession(req, { db }) : null;
+  if (!flow && !session) {
+    switch (entry.self.unauth) {
+      case 'redirect':
+        return res.redirect('/auth/login');
+      case 'flow-expired':
+        return wantsJson(req)
+          ? res.status(401).json({ ok: false, error: 'password-change flow expired — sign in again', login: '/auth/login' })
+          : res.redirect('/auth/login');
+      default:
+        return res.status(401).json({ ok: false, error: 'unauthorized: sign in required', login: '/auth/login', denied: 'auth' });
+    }
+  }
+  req.observogramSelf = flow ? { via: 'pwflow', user: flow.user } : { via: 'session', user: session.user, session };
+  return next();
 }
