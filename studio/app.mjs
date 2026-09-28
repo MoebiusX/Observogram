@@ -15,7 +15,7 @@ import {
   DISCO_SLAB_ACCENT, discoGradeLetter, discoGradeWord,
 } from './constants.mjs';
 import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } from './state.mjs';
-import { api, loadCatalog, validateUploaded, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel } from './api.mjs';
+import { api, loadCatalog, validateUploaded, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel, deniedError } from './api.mjs';
 import {
   effectiveFocus, focusedPackId, focusedEnv, focusedPack,
   focusedConformance, setFocusedConformance,
@@ -1960,19 +1960,25 @@ function setupResetButton() {
       '  • reload the page to the empty home screen\n\n' +
       'Catalog-shipped example packs are unaffected (they live on disk).');
     if (!ok) return;
-    // 1. Stop persistence from racing the reload + writing stale state.
+    // 1. Drop server-side uploads FIRST. A refusal (a viewer, a signed-out
+    //    session) is shown and nothing is cleared — the browser's state
+    //    stays as it was. If the endpoint is unreachable we still reset
+    //    the client — the client-side reset is the higher-leverage part.
+    try {
+      const r = await fetch('/api/uploads', { method: 'DELETE', headers: { Accept: 'application/json', ...authHeaders() } });
+      if (!r.ok) {
+        const denial = deniedError(r.status, await r.text().catch(() => ''));
+        if (denial) { toast(`RESET refused — ${denial.message}`, 'error'); return; }
+      }
+    } catch (_) {}
+    // 2. Stop persistence from racing the reload + writing stale state.
     try { persistence.suspend(); } catch (_) {}
-    // 2. Wipe localStorage. Keep theme so the user's dark/light choice
+    // 3. Wipe localStorage. Keep theme so the user's dark/light choice
     //    survives — that's not session state, it's a preference.
     try {
       const theme = localStorage.getItem('studioTheme');
       localStorage.clear();
       if (theme) localStorage.setItem('studioTheme', theme);
-    } catch (_) {}
-    // 3. Drop server-side uploads. If the endpoint is unreachable we
-    //    still reload — the client-side reset is the higher-leverage part.
-    try {
-      await fetch('/api/uploads', { method: 'DELETE', headers: { ...authHeaders() } });
     } catch (_) {}
     // 4. Reload. location.reload(true) is non-standard in modern Firefox;
     //    plain reload() picks up server changes since the navigation

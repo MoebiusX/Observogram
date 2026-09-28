@@ -21,7 +21,7 @@
 
 import { createHash, timingSafeEqual } from 'node:crypto';
 import {
-  authEnabled, localUsersEnabled, resolveSession, resolvePwflow, identityOff, wantsJson,
+  authDisabled, authEnabled, localUsersEnabled, resolveSession, resolvePwflow, identityOff, wantsJson,
 } from './auth.mjs';
 import { brandEnv } from '../tools/lib/brand-env.mjs';
 import { runWithOrg } from './tenancy.mjs';
@@ -100,9 +100,8 @@ export function authGate(req, res, next) {
       // cross-origin pages can't set one without a CORS preflight, so
       // SameSite=Lax + this check closes the CSRF window. The legacy
       // X-Tomograph-CSRF spelling stays accepted for pre-rebrand clients.
-      const csrf = req.headers['x-observogram-csrf'] || req.headers['x-tomograph-csrf'];
-      if (mutating && isApi && csrf !== '1') {
-        return res.status(403).json({ ok: false, error: 'missing X-Observogram-CSRF header on a session-authenticated mutation' });
+      if (mutating && isApi && !hasCsrfHeader(req)) {
+        return res.status(403).json({ ok: false, error: 'missing X-Observogram-CSRF header on a session-authenticated mutation', denied: 'csrf' });
       }
       req.observogramActor = session.email || session.sub;
       req.observogramUser = session.user;   // the org middleware resolves memberships by the store row
@@ -112,7 +111,7 @@ export function authGate(req, res, next) {
     // services" is enforced server-side. The static studio shell stays
     // open so the client can land and redirect to the login page.
     if (isApi) {
-      return res.status(401).json({ ok: false, error: 'unauthorized: sign in required', login: '/auth/login' });
+      return res.status(401).json({ ok: false, error: 'unauthorized: sign in required', login: '/auth/login', denied: 'auth' });
     }
     return next();
   }
@@ -124,6 +123,7 @@ export function authGate(req, res, next) {
   return res.status(401).json({
     ok: false,
     error: 'unauthorized: mutating /api routes require `Authorization: Bearer <OBSERVOGRAM_API_TOKEN>`',
+    denied: 'auth',
   });
 }
 
@@ -134,7 +134,8 @@ export function authGate(req, res, next) {
 // underneath answers <workspace>/<that org's root>. The org comes from
 // the X-Observogram-Org header (or ?org=; the legacy X-Tomograph-Org
 // spelling still works) for the bearer and a session; membership is
-// enforced here — Stage 3 adds per-route roles on top of this same seam.
+// enforced here, and the principal stamped for the route's guard
+// (authorize(), below), which enforces the role per route.
 // The open and anonymous postures run in the default org and ignore the
 // header (nothing else is reachable there). Placed before the body
 // parsers: the context survives Express's body parsing.
@@ -149,7 +150,7 @@ export function orgContext(req, res, next) {
     // The bearer is the deployment-level service account: it may target
     // any live org explicitly; without a header it lands in the default org.
     orgId = requested || defaultOrg;
-    if (!liveOrg(db, orgId)) return res.status(403).json({ ok: false, error: `unknown org '${orgId}'` });
+    if (!liveOrg(db, orgId)) return res.status(403).json({ ok: false, error: `unknown org '${orgId}'`, denied: 'org' });
   } else if (req.observogramUser) {
     const user = req.observogramUser;
     memberships = listMembershipsForUser(db, user.id);   // live orgs, first first
@@ -157,12 +158,12 @@ export function orgContext(req, res, next) {
       // An owner may request any live org; they land in their first
       // membership, else the default org.
       orgId = requested || memberships[0]?.orgId || defaultOrg;
-      if (!liveOrg(db, orgId)) return res.status(403).json({ ok: false, error: `unknown org '${orgId}'` });
+      if (!liveOrg(db, orgId)) return res.status(403).json({ ok: false, error: `unknown org '${orgId}'`, denied: 'org' });
     } else {
-      if (!memberships.length) return res.status(403).json({ ok: false, error: 'no org membership — ask an admin to add you' });
+      if (!memberships.length) return res.status(403).json({ ok: false, error: 'no org membership — ask an admin to add you', denied: 'org' });
       orgId = requested || memberships[0].orgId;
       if (!memberships.some((m) => m.orgId === orgId)) {
-        return res.status(403).json({ ok: false, error: `not a member of org '${orgId}'` });
+        return res.status(403).json({ ok: false, error: `not a member of org '${orgId}'`, denied: 'org' });
       }
     }
   } else {
@@ -194,6 +195,136 @@ function principalOf(req, { orgId, memberships }) {
   return { kind: 'local', actor: 'local', role: 'admin', owner: true };
 }
 
+// ---------- the request's facts the guard reads ----------
+
+// The CSRF header — X-Observogram-CSRF: 1, or the pre-rebrand
+// X-Tomograph-CSRF: 1 — as the gate reads it.
+export function hasCsrfHeader(req) {
+  return (req.headers['x-observogram-csrf'] || req.headers['x-tomograph-csrf']) === '1';
+}
+
+// The browser's own statement of where a form post came from (Fetch
+// Metadata). The server's own pages post as same-origin (or none, a
+// typed-in navigation); a client that sends no Sec-Fetch-Site (curl, a
+// script, an old browser) keeps today's behaviour. No Origin-vs-Host
+// fallback: a reverse proxy commonly rewrites Host, and a false refusal
+// here would lock every user out of sign-in.
+export function crossSiteForm(req) {
+  const site = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+  return site === 'cross-site' || site === 'same-site';
+}
+
+// A Host header's name (brackets removed) and port, or null.
+function hostOf(value) {
+  const m = /^(\[[^\]]+\]|[^:[\]]+)(?::(\d{1,5}))?$/.exec(String(value || '').trim().toLowerCase());
+  if (!m) return null;
+  return { name: m[1].replace(/^\[|\]$/g, ''), port: m[2] ?? null };
+}
+const LOOPBACK_V4 = /^127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+
+// A request sent straight to a loopback address (the open postures'
+// identity API, STORE_PLAN §5): Host names localhost, 127.x.x.x or [::1];
+// an Origin, if any, is that same host and port; no proxy header. Pure
+// over the headers. A DNS-rebinding page sends its own name in Host, a
+// browser behind a proxy the public origin in Origin, and most proxies add
+// X-Forwarded-For.
+export function directLoopbackRequest(req) {
+  const h = req.headers || {};
+  if (h.forwarded !== undefined || h['x-forwarded-for'] !== undefined
+    || h['x-forwarded-host'] !== undefined || h['x-real-ip'] !== undefined) return false;
+  const host = hostOf(h.host);
+  if (!host) return false;
+  // Stricter than boot.mjs isLoopbackHost (a bind): a Host is attacker-
+  // chosen, and '127.evil.example' starts with '127.' too.
+  if (!(host.name === 'localhost' || host.name === '::1' || LOOPBACK_V4.test(host.name))) return false;
+  if (h.origin !== undefined) {
+    let origin;
+    try { origin = new URL(String(h.origin)); } catch { return false; }
+    if (origin.protocol !== 'http:' && origin.protocol !== 'https:') return false;
+    let expected;
+    try { expected = new URL(`${origin.protocol}//${String(h.host).trim()}`).host; } catch { return false; }
+    if (origin.host !== expected) return false;
+  }
+  return true;
+}
+
+// ---------- roles ----------
+
+const RANK = Object.freeze({ viewer: 0, operator: 1, admin: 2 });
+
+// The rank of the role a principal acts as in its context org: an owner
+// (and the open postures' local) is an admin, the bearer an operator,
+// token-only anonymous a viewer. -1 for no principal.
+export function rankOf(principal) {
+  if (!principal) return -1;
+  if (principal.owner) return RANK.admin;
+  return RANK[principal.role] ?? -1;
+}
+
+// The role the guard applies to a principal in an org where its
+// membership role is `membershipRole` (the org lists' effectiveRole).
+export function effectiveRoleOf(principal, membershipRole = null) {
+  if (!principal) return null;
+  if (principal.owner) return 'admin';
+  if (principal.kind === 'session') return membershipRole;
+  return principal.role;
+}
+
+// ---------- the decision ----------
+
+const NO_SIGN_IN_WAY = 'this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC';
+const CSRF_ALWAYS_TEXT = "missing X-Observogram-CSRF: 1 — identity changes need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')";
+
+const deny = (status, denied, error, extra = {}) => ({ status, body: { ok: false, error, denied, ...extra } });
+
+// Is this principal allowed this entry, in this posture? Pure: null when
+// allowed, else { status, body } — the refusal, with `denied`.
+//   ctx: { posture, principal, csrf (the header), direct (a direct loopback
+//          request), org, authOff (OBSERVOGRAM_AUTH=off), host (the bind),
+//          port (the listening port) }
+export function authzDecision(entry, ctx) {
+  const p = ctx.principal;
+  const open = ctx.posture === 'open-loopback' || ctx.posture === 'open-exposed';
+  // 1. The open, exposed posture closes what the entry says it refuses.
+  if (ctx.posture === 'open-exposed' && entry.exposed === 'refuse') {
+    const why = ctx.authOff
+      ? `the identity API is closed on a server bound to ${ctx.host} without sign-in (OBSERVOGRAM_INSECURE_NO_AUTH=1, OBSERVOGRAM_AUTH=off): restart it without OBSERVOGRAM_AUTH=off and sign in as an owner, or bind it to loopback`
+      : `the identity API is closed on a server bound to ${ctx.host} without sign-in (OBSERVOGRAM_INSECURE_NO_AUTH=1): add the first user with npm run users -- add <login> (it arms sign-in without a restart; the first local user is an owner), or configure OIDC`;
+    return deny(403, 'posture', why);
+  }
+  // 2. Without sign-in, the identity API answers a person at this machine only.
+  if (open && entry.identityApi && !ctx.direct) {
+    return deny(403, 'posture', `on a server without sign-in the identity API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / X-Forwarded-* / X-Real-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:${ctx.port ?? '<port>'}, or use the CLIs from this machine (npm run users -- add <login>, passwd <login>, owner <login>)`);
+  }
+  // 3. Identity changes carry the CSRF header from every principal but the bearer.
+  if (entry.csrf === 'always' && p.kind !== 'bearer' && !ctx.csrf) return deny(403, 'csrf', CSRF_ALWAYS_TEXT);
+  // 4–5. The class.
+  const allowed = entry.class === 'owner' ? p.owner === true : rankOf(p) >= RANK[entry.class];
+  if (allowed) return null;
+  const need = entry.class === 'owner' ? 'an owner' : `the ${entry.class} role`;
+  const role = p.owner ? 'admin' : p.role;
+  const extra = { need: entry.class, role, owner: p.owner === true, org: ctx.org ?? null };
+  if (p.kind === 'bearer') {
+    return deny(403, 'role', `the bearer token acts as an operator in org '${ctx.org}'; ${need} needs a signed-in user with that role${ctx.posture === 'token' ? `; ${NO_SIGN_IN_WAY}` : ''}`, extra);
+  }
+  if (p.kind === 'anonymous') {
+    return deny(403, 'role', `anonymous callers are viewers here; ${need} needs a signed-in user; ${NO_SIGN_IN_WAY}`, extra);
+  }
+  if (entry.class === 'owner') {
+    return deny(403, 'role', `requires an owner of this deployment (you are ${role} in org '${ctx.org}') — ask an owner`, extra);
+  }
+  return deny(403, 'role', `requires the ${entry.class} role in org '${ctx.org}' (you are ${role}) — ask an admin of ${ctx.org}`, extra);
+}
+
+// The form refusal (§7): JSON when the client asked for it, else text.
+function refuseCrossSiteForm(entry, req, res) {
+  const page = entry.path === '/auth/change-password/skip' ? '/auth/change-password' : entry.path;
+  const site = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+  const error = `this form accepts posts from this server's own pages only (Sec-Fetch-Site: ${site}) — open ${page} on this server and submit it there`;
+  if (wantsJson(req)) return res.status(403).json({ ok: false, error, denied: 'csrf' });
+  return res.status(403).type('text/plain').send(error);
+}
+
 // ---------- the guard ----------
 //
 // authorize(key) is every route's first handler (per method), so the entry
@@ -201,13 +332,36 @@ function principalOf(req, { orgId, memberships }) {
 // an unclassified route throws, and the server module fails to load. The
 // returned function carries its key (`routeKey`), which is how the
 // completeness test proves each route's first handler is its own guard.
-// A `self` route's caller is resolved here (selfGate); every other class
-// passes through for now — the policy lands with the route table's
-// enforcement.
+//
+// At request time, in order: a form route refuses a cross-site post; a
+// public route passes; a self route resolves its caller (selfGate); every
+// other route needs the principal the org middleware stamped and passes
+// authzDecision(). Refused requests write nothing.
+const missingPrincipalLogged = new Set();
 export function authorize(key) {
   const entry = routeEntry(key);
   const guard = function authorize(req, res, next) {
+    if (entry.csrf === 'form' && crossSiteForm(req)) return refuseCrossSiteForm(entry, req, res);
+    if (entry.class === 'public') return next();
     if (entry.class === 'self') return selfGate(entry, req, res, next);
+    const principal = req.observogramPrincipal;
+    if (!principal) {
+      if (!missingPrincipalLogged.has(key)) {
+        missingPrincipalLogged.add(key);
+        process.stderr.write(`[authz] no principal was resolved for ${key} — refused (500)\n`);
+      }
+      return res.status(500).json({
+        ok: false,
+        error: `no principal was resolved for ${key} — a bug: every /api route runs after the gate and the org middleware; please report it`,
+      });
+    }
+    const listen = listenOf(req);
+    const d = authzDecision(entry, {
+      posture: requestPosture(req), principal, csrf: hasCsrfHeader(req), direct: directLoopbackRequest(req),
+      org: req.observogramOrg ?? null, authOff: authDisabled(), host: listen.host ?? 'a non-loopback address',
+      port: req.socket?.localPort ?? null,
+    });
+    if (d) return res.status(d.status).json(d.body);
     return next();
   };
   guard.routeKey = key;
@@ -239,6 +393,8 @@ export function selfGate(entry, req, res, next) {
         return res.status(401).json({ ok: false, error: 'unauthorized: sign in required', login: '/auth/login', denied: 'auth' });
     }
   }
+  // An identity change from the caller's own session carries the header too.
+  if (entry.csrf === 'always' && !hasCsrfHeader(req)) return res.status(403).json({ ok: false, error: CSRF_ALWAYS_TEXT, denied: 'csrf' });
   req.observogramSelf = flow ? { via: 'pwflow', user: flow.user } : { via: 'session', user: session.user, session };
   return next();
 }

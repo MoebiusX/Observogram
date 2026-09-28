@@ -19,7 +19,8 @@
 // orgWorkspaceRoot() throws: the point of the rule.
 //
 // Membership lives in the store (server/store/memberships.mjs); roles are
-// RECORDED but not yet ENFORCED — that is Stage 3's per-route check.
+// enforced per route by the route guard (server/authz.mjs authorize(),
+// classified in server/route-table.mjs).
 //
 // MIGRATION — a pre-store deployment whose orgs.json armed tenancy while
 // its flat workspace stayed at the base gets that state moved to

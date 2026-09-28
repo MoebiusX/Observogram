@@ -320,12 +320,17 @@ function issueSession(res, db, user) {
 }
 
 // The user's live orgs, first membership first; `default: true` marks the
-// deployment's default org (only ever on an org the user is in).
+// deployment's default org (only ever on an org the user is in). `role` is
+// the membership's; `effectiveRole` the role the route guard applies there
+// (an owner is an admin in every live org — server/authz.mjs).
 function orgsOf(db, user) {
   const defaultOrg = getMeta(db, 'default_org');
   return listMembershipsForUser(db, user.id).map((m) => {
     const org = getOrg(db, m.orgId);
-    return { id: m.orgId, name: org?.name || m.orgId, role: m.role, default: m.orgId === defaultOrg };
+    return {
+      id: m.orgId, name: org?.name || m.orgId, role: m.role, effectiveRole: user.isOwner ? 'admin' : m.role,
+      default: m.orgId === defaultOrg,
+    };
   });
 }
 

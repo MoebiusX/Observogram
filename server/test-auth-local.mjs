@@ -169,7 +169,7 @@ try {
   j = await r.json();
   assert(j.authenticated === true && j.sub === 'carlos' && j.email === 'carlos@example.test',
     '/auth/me reflects the signed-in user', JSON.stringify(j));
-  assert(JSON.stringify(j.orgs) === JSON.stringify([{ id: 'default', name: 'Default', role: 'admin', default: true }]),
+  assert(JSON.stringify(j.orgs) === JSON.stringify([{ id: 'default', name: 'Default', role: 'admin', effectiveRole: 'admin', default: true }]),
     '/auth/me lists the default org membership', JSON.stringify(j.orgs));
   assert(j.user?.owner === true && j.user?.login === 'carlos' && j.user?.kind === 'local', '/auth/me names the store row (owner)', JSON.stringify(j.user));
   assert(orgChipModel(j.orgs).kind === 'none', 'an upgraded flat stand-alone deployment shows no ORG chip', orgChipModel(j.orgs).kind, 'none');

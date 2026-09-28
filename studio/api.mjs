@@ -59,6 +59,20 @@ export function orgQuery(sep = '?') {
   return activeOrg ? `${sep}org=${encodeURIComponent(activeOrg)}` : '';
 }
 
+// A refusal by the server's auth gate, org middleware or route guard
+// carries `denied` (auth · csrf · org · role · posture) and a sentence
+// that names the way out — shown as is: `${status}: ${error}`. null for
+// any other body (a handler's own error keeps its format).
+export function deniedError(status, body) {
+  let json = body;
+  if (typeof body === 'string') { try { json = JSON.parse(body); } catch { return null; } }
+  if (!json || typeof json !== 'object' || !json.denied) return null;
+  const err = new Error(`${status}: ${json.error || 'refused'}`);
+  err.denied = json.denied;
+  err.status = status;
+  return err;
+}
+
 export async function api(path, opts = {}) {
   // Merge headers instead of replacing them, so callers passing their own
   // Content-Type keep Accept + the CSRF/org headers.
@@ -73,6 +87,8 @@ export async function api(path, opts = {}) {
   }
   if (!r.ok) {
     const body = await r.text().catch(() => '');
+    const denial = deniedError(r.status, body);
+    if (denial) throw denial;
     throw new Error(`${r.status} ${r.statusText} on ${path}${body ? ': ' + body.slice(0, 200) : ''}`);
   }
   // Some routes might be missing on a stale server, returning an HTML
@@ -99,11 +115,17 @@ export async function validateUploaded(body, contentType, env) {
   });
   // /api/validate reports schema failures as JSON with a non-2xx status, so
   // only treat the response as an error when it isn't JSON at all (e.g. the
-  // HTML fallback from a stale server, or a proxy error page).
+  // HTML fallback from a stale server, or a proxy error page) or when it is
+  // a denial (below).
   const ct = r.headers.get('content-type') || '';
   if (!ct.includes('application/json')) {
     const text = await r.text().catch(() => '');
     throw new Error(`/api/validate: server returned non-JSON (${ct || 'no content-type'}, ${r.status}). Restart \`npm run dev\` if the route is new.${text ? '\n' + text.slice(0, 200) : ''}`);
   }
-  return r.json();
+  const json = await r.json();
+  // A denial (a viewer, a signed-out session) is not a schema failure:
+  // throw it, so every caller's catch shows the server's sentence.
+  const denial = deniedError(r.status, json);
+  if (denial) throw denial;
+  return json;
 }

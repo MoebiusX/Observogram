@@ -68,7 +68,7 @@ import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
 import { validateMcpUrl, redactCredentials } from './mcp-url.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
-import { authGate, orgContext, authorize } from './authz.mjs';
+import { authGate, orgContext, authorize, effectiveRoleOf } from './authz.mjs';
 import { versionInfo } from './version.mjs';
 import { buildInfo, buildLabel } from './build-info.mjs';
 import { runWithOrg, currentOrg, orgWorkspaceRoot, baseWorkspaceRoot, orgRootOf } from './tenancy.mjs';
@@ -473,23 +473,33 @@ app.delete('/api/uploads', authorize('DELETE /api/uploads'), (req, res) => {
 });
 
 // Stage 2 tenancy: the orgs visible to this request. Sessions see their
-// memberships (owners too; role recorded for Stage 3, not yet enforced);
-// the bearer service account sees every live org; the open and anonymous
-// postures see the default org. `active` echoes the request's resolved
-// org so clients never have to guess which workspace they're in.
+// memberships; the bearer service account sees every live org; the open
+// and anonymous postures see the default org. `role` is the membership's
+// role (null without one; 'service-account' for the bearer) and
+// `effectiveRole` the role the route guard applies there (an owner is an
+// admin in every live org, so an owner's list also holds the active org
+// when it is not one of their memberships). `active` echoes the request's
+// resolved org so clients never have to guess which workspace they're in.
 // `tenancy` stays in the body (always true) for old clients.
 app.get('/api/orgs', authorize('GET /api/orgs'), (req, res) => {
   const db = currentStore();
+  const principal = req.observogramPrincipal;
+  const active = currentOrg();
   let orgs;
   if (req.observogramBearer) {
-    orgs = listOrgs(db).map((o) => ({ id: o.id, name: o.name, role: 'service-account' }));
+    orgs = listOrgs(db).map((o) => ({ id: o.id, name: o.name, role: 'service-account', effectiveRole: effectiveRoleOf(principal) }));
   } else if (req.observogramUser) {
-    orgs = listMembershipsForUser(db, req.observogramUser.id).map((m) => ({ id: m.orgId, name: getOrg(db, m.orgId)?.name || m.orgId, role: m.role }));
+    orgs = listMembershipsForUser(db, req.observogramUser.id).map((m) => ({
+      id: m.orgId, name: getOrg(db, m.orgId)?.name || m.orgId, role: m.role, effectiveRole: effectiveRoleOf(principal, m.role),
+    }));
+    if (principal?.owner && !orgs.some((o) => o.id === active)) {
+      orgs.push({ id: active, name: getOrg(db, active)?.name || active, role: null, effectiveRole: effectiveRoleOf(principal) });
+    }
   } else {
-    const org = getOrg(db, currentOrg());
-    orgs = [{ id: org.id, name: org.name, role: null }];
+    const org = getOrg(db, active);
+    orgs = [{ id: org.id, name: org.name, role: null, effectiveRole: effectiveRoleOf(principal) }];
   }
-  res.json({ ok: true, tenancy: true, orgs, active: currentOrg() });
+  res.json({ ok: true, tenancy: true, orgs, active });
 });
 
 app.get('/api/packs', authorize('GET /api/packs'), (req, res) => {

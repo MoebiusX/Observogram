@@ -123,8 +123,8 @@ try {
     assert(r.status === 200 && r.headers.get('x-observogram-org') === 'default', 'open posture: /api echoes X-Observogram-Org: default', r.headers.get('x-observogram-org'), 'default');
     const orgs = await (await fetch(`${base}/api/orgs`)).json();
     assert(orgs.ok === true && orgs.tenancy === true && orgs.active === 'default'
-      && JSON.stringify(orgs.orgs) === JSON.stringify([{ id: 'default', name: 'Default', role: null }]),
-    'open posture: GET /api/orgs lists the default org with role null', orgs);
+      && JSON.stringify(orgs.orgs) === JSON.stringify([{ id: 'default', name: 'Default', role: null, effectiveRole: 'admin' }]),
+    'open posture: GET /api/orgs lists the default org with role null, effectiveRole admin (local is an owner)', orgs);
     const other = await fetch(`${base}/api/packs`, { headers: { 'X-Observogram-Org': 'nope' } });
     assert(other.status === 200 && other.headers.get('x-observogram-org') === 'default', 'open posture: X-Observogram-Org: nope is ignored (200, echo default)', [other.status, other.headers.get('x-observogram-org')], [200, 'default']);
   }
@@ -539,6 +539,11 @@ try {
   assert(openRead.headers.get('x-observogram-org') === 'default', 'token set: an anonymous GET echoes the default org', openRead.headers.get('x-observogram-org'), 'default');
   const anonOther = await fetch(`${base}/api/packs`, { headers: { 'X-Observogram-Org': 'nope' } });
   assert(anonOther.status === 200 && anonOther.headers.get('x-observogram-org') === 'default', 'token set: an anonymous GET ignores X-Observogram-Org (200, echo default)', [anonOther.status, anonOther.headers.get('x-observogram-org')], [200, 'default']);
+  const anonOrgs = await (await fetch(`${base}/api/orgs`)).json();
+  assert(JSON.stringify(anonOrgs.orgs) === JSON.stringify([{ id: 'default', name: 'Default', role: null, effectiveRole: 'viewer' }]),
+    'token set: an anonymous GET /api/orgs → role null, effectiveRole viewer', anonOrgs.orgs);
+  const deniedBody = await (await fetch(`${base}/api/validate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+  assert(deniedBody.denied === 'auth', 'token set: the 401 body carries denied: auth', deniedBody);
   const denied = await fetch(`${base}/api/validate`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(authRaw),
   });
