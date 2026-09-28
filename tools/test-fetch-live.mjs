@@ -10,10 +10,14 @@
  *      markers in the flat key form `mcp.verified.<symbol>`.
  *   4. The pack adapts cleanly via the layered adapter (Verified source
  *      tags surface where the fetcher attested them).
+ *   5. The CLI (`npm run fetch-live`) writes the safe MCP URL — no
+ *      credential parameter — and says on stderr which one it dropped.
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from './lib/mini-yaml.mjs';
@@ -1820,6 +1824,49 @@ const healthFor = (uid) => (uid === HEALTH_ERR.datasource?.uid ? HEALTH_ERR : HE
            'without fetchStartedAt / observedAt inputs neither annotation is fabricated');
   } finally {
     await fakeR.close();
+  }
+}
+
+// ---------- case 8e: the CLI (npm run fetch-live) writes the safe MCP URL ----------
+// main() is the third consumer of the one URL rule (tools/lib/mcp-url-safety.mjs):
+// it talks to MCP_URL as given, but the pack it writes keeps no credential
+// parameter and stderr names the one it dropped. Spawned as a child with an
+// explicit env (async — the fake MCP answers from this process's event loop).
+
+{
+  const fake = await withFakeMcp((name) => {
+    if (name === 'system_health') return { services: [] };
+    if (name === 'system_topology') return { dependencies: [] };
+    return {};
+  }, ['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines']);
+  const dir = mkdtempSync(resolve(tmpdir(), 'observogram-fetch-live-cli-'));
+  const output = resolve(dir, 'production-live.pack.yaml');
+  try {
+    const run = await new Promise((resolveRun) => {
+      const child = spawn(process.execPath, [resolve(__dirname, 'fetch-live-pack.mjs')], {
+        cwd: dir,
+        env: { MCP_URL: `${fake.url}?token=s3cret-cli&tier=x`, OUTPUT: output },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+      let stderr = '';
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (chunk) => { stderr += chunk; });
+      child.stdout.resume();
+      const timer = setTimeout(() => child.kill(), 60_000);
+      child.on('close', (code) => { clearTimeout(timer); resolveRun({ code, stderr }); });
+    });
+    assert(run.code === 0 && existsSync(output), 'the fetch-live CLI exits 0 and writes OUTPUT', run);
+    const text = existsSync(output) ? readFileSync(output, 'utf8') : '';
+    const written = text ? parseYaml(text).metadata?.annotations?.['mcp.url'] : undefined;
+    assert(written === `${fake.url}?tier=x`,
+           'the CLI\'s pack keeps the safe MCP URL: the token parameter dropped, tier kept', written, `${fake.url}?tier=x`);
+    assert(!text.includes('s3cret-cli'), 'the credential value appears nowhere in the written pack');
+    assert(/not kept in the pack: the token parameter/.test(run.stderr) && !run.stderr.includes('s3cret-cli'),
+           'stderr names the dropped parameter and never prints its value', run.stderr);
+  } finally {
+    await fake.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 
