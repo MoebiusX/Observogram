@@ -221,6 +221,8 @@ function hostOf(value) {
   return { name: m[1].replace(/^\[|\]$/g, ''), port: m[2] ?? null };
 }
 const LOOPBACK_V4 = /^127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+// The headers a proxy adds: Forwarded, Via, every X-Forwarded-*, X-Real-IP.
+const PROXY_HEADER = /^(?:forwarded|via|x-real-ip|x-forwarded-.*)$/i;
 
 // A request sent straight to a loopback address (the open postures'
 // identity API, STORE_PLAN §5): Host names localhost, 127.x.x.x or [::1];
@@ -230,8 +232,7 @@ const LOOPBACK_V4 = /^127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
 // X-Forwarded-For.
 export function directLoopbackRequest(req) {
   const h = req.headers || {};
-  if (h.forwarded !== undefined || h['x-forwarded-for'] !== undefined
-    || h['x-forwarded-host'] !== undefined || h['x-real-ip'] !== undefined) return false;
+  if (Object.keys(h).some((name) => PROXY_HEADER.test(name) && h[name] !== undefined)) return false;
   const host = hostOf(h.host);
   if (!host) return false;
   // Stricter than boot.mjs isLoopbackHost (a bind): a Host is attacker-
@@ -297,7 +298,7 @@ export function authzDecision(entry, ctx) {
   }
   // 2. Without sign-in, the identity API answers a person at this machine only.
   if (open && entry.identityApi && !ctx.direct) {
-    return deny(403, 'posture', `on a server without sign-in the identity API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / X-Forwarded-* / X-Real-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:${ctx.port ?? '<port>'}, or use the CLIs from this machine (npm run users -- add <login>, passwd <login>, owner <login>)`);
+    return deny(403, 'posture', `on a server without sign-in the identity API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / Via / X-Forwarded-* / X-Real-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:${ctx.port ?? '<port>'}, or use the CLIs from this machine (npm run users -- add <login>, passwd <login>, owner <login>)`);
   }
   // 3. Identity changes carry the CSRF header from every principal but the bearer.
   if (entry.csrf === 'always' && p.kind !== 'bearer' && !ctx.csrf) return deny(403, 'csrf', CSRF_ALWAYS_TEXT);

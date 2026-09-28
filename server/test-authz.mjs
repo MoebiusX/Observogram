@@ -271,7 +271,7 @@ test('authzDecision: every refusal names a way out', () => {
   assert.equal(text(ownerApi, ctxOf('open-exposed', P.local)),
     'the identity API is closed on a server bound to 0.0.0.0 without sign-in (OBSERVOGRAM_INSECURE_NO_AUTH=1): add the first user with npm run users -- add <login> (it arms sign-in without a restart; the first local user is an owner), or configure OIDC');
   assert.equal(text(ownerApi, ctxOf('open-loopback', P.local, { direct: false, port: 8123 })),
-    'on a server without sign-in the identity API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / X-Forwarded-* / X-Real-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:8123, or use the CLIs from this machine (npm run users -- add <login>, passwd <login>, owner <login>)');
+    'on a server without sign-in the identity API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / Via / X-Forwarded-* / X-Real-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:8123, or use the CLIs from this machine (npm run users -- add <login>, passwd <login>, owner <login>)');
   assert.equal(text(ownerApi, ctxOf('identity', P.owner, { csrf: false })),
     "missing X-Observogram-CSRF: 1 — identity changes need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')");
   assert.equal(text(ownerApi, ctxOf('identity', P.admin)), "requires an owner of this deployment (you are admin in org 'acme') — ask an owner");
@@ -304,9 +304,12 @@ test('the request facts: the CSRF header, a cross-site form, a direct loopback r
     assert.equal(direct(host === undefined ? {} : { host }), false, String(host));
   }
   const h = { host: '127.0.0.1:8000' };
-  for (const proxy of ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-real-ip']) {
+  // Every proxy header the refusal text names; X-Forwarded-* is the whole prefix.
+  for (const proxy of ['forwarded', 'via', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-port', 'x-forwarded-server', 'x-forwarded-prefix', 'x-real-ip', 'X-Forwarded-Proto']) {
     assert.equal(direct({ ...h, [proxy]: '203.0.113.9' }), false, proxy);
   }
+  assert.equal(direct({ ...h, 'x-forwarded-proto': undefined }), true, 'a header object\'s absent value is no header');
+  assert.equal(direct({ ...h, 'x-forwardedness': '1', 'user-agent': 'curl/8', accept: '*/*' }), true, 'only the proxy headers');
   assert.equal(direct({ ...h, origin: 'http://127.0.0.1:8000' }), true);
   assert.equal(direct({ host: 'localhost', origin: 'http://localhost' }), true);
   assert.equal(direct({ host: 'localhost:80', origin: 'http://localhost' }), true, 'the default port, spelled or not');
