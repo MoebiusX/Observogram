@@ -51,6 +51,14 @@ export function authHeaders() {
   return { ...CSRF_HEADER, ...(activeOrg ? { 'X-Observogram-Org': activeOrg } : {}) };
 }
 
+// A navigation (a link, window.open, a download) cannot send a header, so
+// it names the active org in the query instead — the org middleware reads
+// ?org= (server/authz.mjs orgContext). '' without an active org; `sep` is
+// '&' when the URL already has a query.
+export function orgQuery(sep = '?') {
+  return activeOrg ? `${sep}org=${encodeURIComponent(activeOrg)}` : '';
+}
+
 export async function api(path, opts = {}) {
   // Merge headers instead of replacing them, so callers passing their own
   // Content-Type keep Accept + the CSRF/org headers.

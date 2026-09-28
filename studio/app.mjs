@@ -15,7 +15,7 @@ import {
   DISCO_SLAB_ACCENT, discoGradeLetter, discoGradeWord,
 } from './constants.mjs';
 import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } from './state.mjs';
-import { api, loadCatalog, validateUploaded, authHeaders, setActiveOrg, getActiveOrg, savedOrg, orgChipModel } from './api.mjs';
+import { api, loadCatalog, validateUploaded, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel } from './api.mjs';
 import {
   effectiveFocus, focusedPackId, focusedEnv, focusedPack,
   focusedConformance, setFocusedConformance,
@@ -1456,7 +1456,7 @@ function installObservaChrome() {
       if (action === 'mcp')   { setTimeout(() => $('#mcp-btn')?.click(), 0); return; }
       if (action === 'reset') { setTimeout(() => $('#reset-btn')?.click(), 0); return; }
       if (action === 'theme') { $('#theme-toggle')?.click(); return; }
-      if (action === 'api')   { window.open('/api/packs', '_blank', 'noopener'); return; }
+      if (action === 'api')   { window.open(`/api/packs${orgQuery()}`, '_blank', 'noopener'); return; }
       routeTo(item.dataset.view);
     });
   });
@@ -1529,6 +1529,7 @@ async function boot() {
   // header has to be resolved before the catalog loads.
   await loadIdentity();
   resolveActiveOrg();
+  syncApiLink();
   try { await loadCatalog(); }
   catch (e) {
     document.body.innerHTML = `<pre class="json" style="margin:48px;max-width:800px">Failed to reach Observogram's API.\n\n${escapeHtml(e.message)}\n\nMake sure the server is running: \`node server/index.mjs\` or \`npm run serve\`.</pre>`;
@@ -1971,7 +1972,7 @@ function setupResetButton() {
     // 3. Drop server-side uploads. If the endpoint is unreachable we
     //    still reload — the client-side reset is the higher-leverage part.
     try {
-      await fetch('/api/uploads', { method: 'DELETE' });
+      await fetch('/api/uploads', { method: 'DELETE', headers: { ...authHeaders() } });
     } catch (_) {}
     // 4. Reload. location.reload(true) is non-standard in modern Firefox;
     //    plain reload() picks up server changes since the navigation
@@ -2039,7 +2040,7 @@ function setupExportButton() {
     const env = focusedEnv();
     const qs = env ? `?env=${encodeURIComponent(env)}` : '';
     const a = document.createElement('a');
-    a.href = `/api/packs/${encodeURIComponent(id)}/export.zip${qs}`;
+    a.href = `/api/packs/${encodeURIComponent(id)}/export.zip${qs}${orgQuery(qs ? '&' : '?')}`;
     a.download = '';
     document.body.appendChild(a);
     a.click();
@@ -5075,6 +5076,13 @@ function resolveActiveOrg() {
   if (!orgs.length) { setActiveOrg(null); return; }
   const saved = savedOrg();
   setActiveOrg((orgs.find(o => o.id === saved) || orgs[0]).id);
+}
+
+// The header's `api` link (studio/index.html #api-link) names the active
+// org in its query: a static href cannot know it.
+function syncApiLink() {
+  const link = document.getElementById('api-link');
+  if (link) link.href = `/api/packs${orgQuery()}`;
 }
 
 // Identity chip — only renders when the server runs in an identity
