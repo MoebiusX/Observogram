@@ -24,7 +24,8 @@
  *   each a child server (server/fixtures/serve-child.mjs), its expectations
  *   from EXPECTED_CLASS and the fixture's own membership table, never from
  *   the server; refused requests write no audit row; plus the CSRF, form,
- *   public, case, org-list and fresh admin/admin rows.
+ *   public, case, org-list and fresh admin/admin rows; the self routes'
+ *   404 while stand-alone sign-in is off (selfGate's first step).
  */
 
 // Hermetic (§0): a developer shell's store or identity variables never
@@ -1084,6 +1085,15 @@ test('the AuthZ matrix — token posture: anonymous reads, the bearer an operato
     assert.deepEqual([l.present, l.origin, l.url], [true, LIVE_ORIGIN, null]);
     l = (await call(srv.base, ['GET', '/api/live-status'], { headers: variants[1].headers })).json;
     assert.deepEqual([l.present, l.origin, l.url], [true, LIVE_ORIGIN, LIVE_SAFE]);
+    // Stand-alone sign-in is off (nothing seeded): the self routes are
+    // registered, and selfGate's first step answers 404 whatever the
+    // caller carries — not a redirect to /auth/login, not a 401.
+    for (const probe of [['GET', '/auth/change-password'], ['POST', '/auth/change-password'], ['POST', '/auth/change-password/skip']]) {
+      for (const headers of [{}, { ...variants[1].headers, 'X-Observogram-CSRF': '1' }]) {
+        const r = await call(srv.base, probe, { headers });
+        assert.deepEqual([r.status, r.json], [404, { ok: false, error: 'identity not configured' }], `${probe.join(' ')} ${JSON.stringify(headers)}`);
+      }
+    }
   } finally {
     await srv.stop();
   }
