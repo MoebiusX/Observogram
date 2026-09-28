@@ -82,6 +82,19 @@ for (const name of ['apitoken', 'APITOKEN', 'accesskey', 'ACCESSKEY', 'secretkey
   const { safe, dropped } = stripMcpUrl(`https://mcp.example.com/obs?${name}=s3cret&tier=x`);
   assert(safe === 'https://mcp.example.com/obs?tier=x' && dropped.length === 1 && dropped[0] === name, `a run-together credential parameter is removed: ${name}`, [safe, dropped]);
 }
+// Every run ending in a credential word goes, not only a listed compound:
+// a key, pass, sig, auth, jwt, session, sessid, cookie or sas run, in
+// either case (appkey was kept, and reached deploys.jsonl and GET /api/deploys).
+const RUN_TOGETHER = ['appkey', 'clientkey', 'masterkey', 'subscriptionkey', 'accountkey', 'consumerkey', 'userkey',
+  'licensekey', 'devkey', 'sharedkey', 'encryptionkey', 'hmackey', 'passkey', 'apikeys', 'userpass', 'dbpass', 'urlsig',
+  'hmacsig', 'basicauth', 'apiauth', 'proxyauthorization', 'apijwt', 'usersession', 'phpsessid', 'authcookie', 'blobsas'];
+for (const name of [...RUN_TOGETHER, ...RUN_TOGETHER.map((n) => n.toUpperCase())]) {
+  const { safe, dropped } = stripMcpUrl(`https://mcp.example.com/obs?${name}=s3cret&tier=x`);
+  assert(safe === 'https://mcp.example.com/obs?tier=x' && dropped.length === 1 && dropped[0] === name, `a run ending in a credential word is removed: ${name}`, [safe, dropped]);
+}
+// The deploy routes write validateMcpUrl().safeUrl to deploys.jsonl and their log lines.
+assert(validateMcpUrl('https://mcp.example.com/obs?appkey=APPKEYSECRET7&tier=x').safeUrl === 'https://mcp.example.com/obs?tier=x',
+  'validateMcpUrl().safeUrl — what a deploy records — keeps no appkey');
 const both = stripMcpUrl('https://mcp.example.com/obs?token=A&apitoken=B&tier=x');
 assert(both.safe === 'https://mcp.example.com/obs?tier=x' && both.dropped.join() === 'token,apitoken',
   'token and apitoken both go, and dropped names both', both);
@@ -96,6 +109,13 @@ const KEPT = ['signal', 'design', 'keyspace', 'author', 'bypass', 'tenant', 'tie
 const kept = `https://mcp.example.com/obs?${KEPT.map((n, i) => `${n}=${i}`).join('&')}`;
 assert(safeMcpUrl(kept) === kept, 'names that merely contain a credential word are kept (a word rule, not a substring rule)', safeMcpUrl(kept));
 for (const n of KEPT) assert(!credentialParamName(n), `not a credential: ${n}`);
+// The ordinary words that merely end in a credential word stay, in either
+// case, and so does a name that ends in one (cache_bypass, noBypass).
+const ORDINARY = ['bypass', 'compass', 'overpass', 'surpass', 'monkey', 'donkey', 'turkey', 'hockey', 'jockey', 'whiskey', 'hotkey', 'obsession'];
+const ordinary = [...ORDINARY, ...ORDINARY.map((n) => n.toUpperCase()), 'cache_bypass', 'noBypass', 'encompass', 'hotkey2'];
+const ordinaryUrl = `https://mcp.example.com/obs?${ordinary.map((n, i) => `${n}=${i}`).join('&')}`;
+assert(safeMcpUrl(ordinaryUrl) === ordinaryUrl, 'an ordinary word ending in a credential word is kept', safeMcpUrl(ordinaryUrl));
+for (const n of ordinary) assert(!credentialParamName(n), `not a credential (an ordinary word): ${n}`);
 const pathSecret = 'https://mcp.example.com/mcp/s/sk-ak-0123456789abcdef/mcp';
 assert(safeMcpUrl(pathSecret) === pathSecret, 'a secret in the PATH is kept (names only: the server serves url to operators only)');
 assert(mcpUrlOrigin(pathSecret) === 'https://mcp.example.com' && mcpUrlOrigin('https://u:p@h.test:8443/x?token=1') === 'https://h.test:8443',

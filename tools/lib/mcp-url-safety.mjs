@@ -8,7 +8,7 @@
 // the WHATWG URL only, no import.
 //
 // What it removes: userinfo, the fragment, and every query parameter whose
-// DECODED name is a credential word — or whose value carries a
+// DECODED name is or ends in a credential word — or whose value carries a
 // `;`-separated credential pair (`tier=x;pwd=…`: some servers split on `;`,
 // URLSearchParams does not). What no name-based rule can see — a secret in
 // the URL's path (`/mcp/s/<key>/mcp`), or in a parameter named like
@@ -18,26 +18,27 @@
 
 // Matched by WORD, not by substring: the name is split at camelCase
 // boundaries, at digits and at every other non-letter, and a word — or the
-// whole name with its separators removed — is one of these. So `token`,
-// `api_key`, `apiKey`, `X-Amz-Signature`, `access_token`, `sessionId`,
-// `pwd`, `jwt`, `token1` are credentials; `signal`, `design`, `keyspace`,
-// `monkey`, `author`, `bypass`, `passive`, `tenant`, `tier` are not.
-const CREDENTIAL_WORDS = new Set(['token', 'tokens', 'key', 'keys', 'apikey', 'secret', 'secrets',
-  'pass', 'passwd', 'password', 'passphrase', 'pwd', 'auth', 'authorization', 'authtoken',
-  'accesstoken', 'sig', 'signature', 'credential', 'credentials', 'jwt', 'session', 'sessionid',
-  'bearer', 'sas']);
+// whole name with its separators and digits removed, which is how a name
+// written as one run is read — that IS or ENDS IN one of these, in any
+// case, is a credential. So `token`, `api_key`, `apiKey`, `X-Amz-Signature`,
+// `access_token`, `sessionId`, `pwd`, `jwt`, `token1` are credentials, and
+// so are `apitoken`, `APISECRET`, `clientsecret`, `appkey`, `DBPASS`,
+// `urlsig`, `basicauth`, `apijwt`, `usersession`, `PHPSESSID`; `signal`,
+// `design`, `keyspace`, `keyword`, `author`, `passive`, `tenant`, `tier`
+// (a credential word inside, not at the end) are not.
+const CREDENTIAL_WORDS = ['token', 'tokens', 'key', 'keys', 'secret', 'secrets', 'pass', 'passwd',
+  'password', 'passphrase', 'passcode', 'pwd', 'auth', 'authorization', 'sig', 'signature',
+  'credential', 'credentials', 'jwt', 'session', 'sessionid', 'sessid', 'cookie', 'bearer', 'sas'];
 
-// A name written as one run — all lowercase or all uppercase, with no
-// boundary to split at (`apitoken`, `APISECRET`, `clientsecret`,
-// `refreshtoken`, `ACCESSKEY`, `xapikey`) — is still a credential: a word
-// that ENDS in one of these is one. No common word ends in them; `key`
-// alone is not one of them (`monkey`, `turkey`, `hockey`), only its
-// credential compounds are.
-const CREDENTIAL_TAILS = ['token', 'tokens', 'secret', 'secrets', 'password', 'passwd',
-  'passphrase', 'passcode', 'pwd', 'credential', 'credentials', 'signature', 'sessionid',
-  'apikey', 'accesskey', 'secretkey', 'privatekey', 'authkey', 'sessionkey', 'signingkey'];
+// ...unless it ends in one of these ordinary words, which merely end in a
+// credential word. Short on purpose: a secret kept costs more than a
+// harmless parameter dropped (the server still fetches the raw URL), so
+// `sortkey` or `partitionkey` go; `bypass`, `monkey`, `obsession` stay.
+const ORDINARY_WORDS = ['bypass', 'compass', 'overpass', 'surpass', 'monkey', 'donkey', 'turkey',
+  'hockey', 'jockey', 'whiskey', 'hotkey', 'obsession'];
 
-const credentialWord = (w) => CREDENTIAL_WORDS.has(w) || CREDENTIAL_TAILS.some((t) => w.endsWith(t));
+const credentialWord = (w) => CREDENTIAL_WORDS.some((c) => w.endsWith(c))
+  && !ORDINARY_WORDS.some((o) => w.endsWith(o));
 
 export function credentialParamName(name) {
   const text = String(name ?? '');
