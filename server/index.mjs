@@ -34,7 +34,7 @@
 
 import express from 'express';
 import { createServer } from 'node:http';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -58,6 +58,7 @@ import { parsePromqlDependencies as parsePromql } from '../tools/lib/promql-leze
 import {
   saveWorkspacePack, deleteWorkspacePack, touchWorkspacePack,
   loadWorkspacePacks, clearWorkspacePacks, workspaceInfo,
+  writeLivePack, readLivePack, LIVE_PACK_FILE,
 } from './workspace.mjs';
 import {
   listJourneys, loadJourneyDef, runJourney, readJourneyRuns, saveJourneyDef, validateGateStack,
@@ -65,16 +66,17 @@ import {
 } from '../tools/lib/journey.mjs';
 import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
 import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
-import { validateMcpUrl, redactCredentials } from './mcp-url.mjs';
+import { validateMcpUrl, redactCredentials, stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
-import { authGate, orgContext, authorize, effectiveRoleOf } from './authz.mjs';
+import { authGate, orgContext, authorize, effectiveRoleOf, rankOf, rankOfRole } from './authz.mjs';
 import { versionInfo } from './version.mjs';
 import { buildInfo, buildLabel } from './build-info.mjs';
 import { runWithOrg, currentOrg, orgWorkspaceRoot, baseWorkspaceRoot, orgRootOf } from './tenancy.mjs';
 import { setWorkspaceRootResolver } from '../tools/lib/journey.mjs';
 import { recordIdentityMode, bootStore } from './boot.mjs';
 import { currentStore } from './store/db.mjs';
+import { defaultOrgId } from './store/identity.mjs';
 import { getOrg, listOrgs } from './store/orgs.mjs';
 import { listMembershipsForUser } from './store/memberships.mjs';
 import { brandEnv } from '../tools/lib/brand-env.mjs';
@@ -1048,10 +1050,13 @@ app.get('/api/maturity-rubric', authorize('GET /api/maturity-rubric'), (req, res
 // production path. This in-browser endpoint exists so a dev session can
 // kick off an ad-hoc refresh from a local MCP without spawning a process.
 
-// Local live refreshes write this ignored runtime file. It is deliberately not
-// a committed example; the live-status badge reports absent until a refresh
-// creates it in the working tree.
-const LIVE_PACK_PATH = 'examples/production-live.pack.yaml';
+// Each org's live pack is <org root>/live/production-live.pack.yaml
+// (server/workspace.mjs livePackPath); the badge reports absent until the
+// org's first refresh. The install's examples/production-live.pack.yaml —
+// the deployment-wide file of the builds before STORE_PLAN slice 3, still
+// the CLI's default output and detect-drift's default input — is no longer
+// read here (start() says so once, until the default org has its own).
+const LEGACY_LIVE_PACK = 'examples/production-live.pack.yaml';
 
 // ---------- step 2: stack self-metrics summary (signal, never verdict) ----------
 //
@@ -1156,16 +1161,25 @@ function grafanaSummaryFromAnnotations(ann) {
   };
 }
 
+// The org's live pack. `origin` (scheme://host:port) is served to every
+// reader; `url` — the safe form, which may still carry a path — only to an
+// operator and above (its one consumer is the MCP panel's prefill, an
+// operator action): a viewer, and in the token posture any anonymous
+// caller, never sees a path. A file written by an older build or by hand
+// is served clean too.
 app.get('/api/live-status', authorize('GET /api/live-status'), (req, res) => {
   try {
-    const abs = resolve(ROOT, LIVE_PACK_PATH);
-    if (!existsSync(abs)) return res.json({ present: false });
-    const c = parseYaml(readFileSync(abs, 'utf8'));
+    const text = readLivePack();
+    if (text === null) return res.json({ present: false });
+    const c = parseYaml(text);
     const a = c.metadata?.annotations || {};
+    const raw = a['mcp.url'] || null;
+    const operator = rankOf(req.observogramPrincipal) >= rankOfRole('operator');
     res.json({
       present: true,
       refreshedAt:        a['mcp.refreshedAt']        || null,
-      url:                a['mcp.url']                || null,
+      origin:             raw ? mcpUrlOrigin(raw) : null,
+      url:                raw && operator ? stripMcpUrl(raw).safe : null,
       toolsCalled:        a['mcp.toolsCalled']        || '',
       toolsFailed:        a['mcp.toolsFailed']        || '',
       // Probe-outcome honesty: families that got no answer (a hole) vs
@@ -1209,13 +1223,17 @@ app.post('/api/draft-from-mcp', authorize('POST /api/draft-from-mcp'), async (re
   if (!mcpUrl) return res.status(400).json({ ok: false, error: 'mcpUrl required in JSON body' });
   const { error: mcpUrlError, safeUrl: safeMcpUrl } = validateMcpUrl(mcpUrl);
   if (mcpUrlError) return res.status(400).json({ ok: false, error: mcpUrlError });
+  // The draft is a registered pack every viewer of the org reads: it keeps
+  // the safe URL (a journey captured from it re-drafts from it; a header
+  // token rides packB.mcp.authEnv), and says what it dropped.
+  const { dropped } = stripMcpUrl(mcpUrl);
 
   const t0 = Date.now();
   try {
     process.stderr.write(`[draft-from-mcp] POST -> ${safeMcpUrl}\n`);
     const fetched = await fetchMcp({ mcpUrl, mcpAuth });
     const refreshedAt = new Date().toISOString();
-    const pack = buildCanonicalPack({ refreshedAt, mcpUrl, packName, ...fetched });
+    const pack = buildCanonicalPack({ refreshedAt, mcpUrl: safeMcpUrl, packName, ...fetched });
     const errors = validateCanonical(pack, SCHEMA);
 
     // Build a discovery summary in the same shape the crawler returns,
@@ -1259,7 +1277,7 @@ app.post('/api/draft-from-mcp', authorize('POST /api/draft-from-mcp'), async (re
 
     const summary = {
       source: 'mcp',
-      mcpUrl,
+      mcpUrl: safeMcpUrl,
       refreshedAt,
       discovered: {
         backends:        (pack.spec?.telemetry?.backends || []).length,
@@ -1303,6 +1321,9 @@ app.post('/api/draft-from-mcp', authorize('POST /api/draft-from-mcp'), async (re
       tier: pack.metadata?.bindings?.criticality || 'tier-3',
     };
 
+    // The strip is never silent.
+    const strippedNote = droppedNote(dropped, { where: 'not kept in the draft' });
+    if (strippedNote) summary.warnings.push(strippedNote);
     // Warnings — only flag a gap when we ASKED and got nothing, never
     // when we never asked. The MCP probe table is the contract for
     // "what we tried."
@@ -1410,28 +1431,30 @@ app.post('/api/refresh-live', authorize('POST /api/refresh-live'), async (req, r
   if (!mcpUrl) return res.status(400).json({ ok: false, error: 'mcpUrl required in JSON body' });
   const { error: mcpUrlError, safeUrl: safeMcpUrl } = validateMcpUrl(mcpUrl);
   if (mcpUrlError) return res.status(400).json({ ok: false, error: mcpUrlError });
+  const { dropped } = stripMcpUrl(mcpUrl);
 
   const t0 = Date.now();
   try {
     process.stderr.write(`[refresh-live] POST /api/refresh-live -> ${safeMcpUrl}\n`);
     const fetched = await fetchMcp({ mcpUrl, mcpAuth });
     const refreshedAt = new Date().toISOString();
-    const pack = buildCanonicalPack({ refreshedAt, mcpUrl, ...fetched });
+    // The persisted mcp.url (and the response's annotations) is the safe form.
+    const pack = buildCanonicalPack({ refreshedAt, mcpUrl: safeMcpUrl, ...fetched });
     const errors = validateCanonical(pack, SCHEMA);
     if (errors.length) {
       return res.status(500).json({ ok: false, error: 'built pack failed schema validation', details: errors });
     }
-    const abs = resolve(ROOT, LIVE_PACK_PATH);
-    mkdirSync(dirname(abs), { recursive: true });
-    writeFileSync(abs, emitYaml(pack));
+    writeLivePack(emitYaml(pack));   // <org root>/live/production-live.pack.yaml, atomically
     process.stderr.write(`[refresh-live]   ok in ${Date.now() - t0}ms; ` +
       `services=${pack.metadata.annotations['mcp.servicesDiscovered'] || '(none)'} ` +
       `failed=${pack.metadata.annotations['mcp.toolsFailed'] || 'none'}\n`);
+    const note = droppedNote(dropped);
     res.json({
       ok: true,
       refreshedAt,
       pack: adapt(pack),
       annotations: pack.metadata.annotations,
+      ...(note ? { note } : {}),
     });
   } catch (e) {
     process.stderr.write(`[refresh-live]   error in ${Date.now() - t0}ms: ${redactCredentials(e.message)}\n`);
@@ -2005,6 +2028,22 @@ function rehydrateOrgs(silent) {
   if (restored && !silent) process.stdout.write(`[studio] restored ${restored} pack${restored === 1 ? '' : 's'} from workspace\n`);
 }
 
+// The studio no longer reads the install's deployment-wide live pack
+// (STORE_PLAN slice 3: one per org). While that file exists and the default
+// org has no live pack of its own yet, one line says where the badge reads
+// now — it stops after the default org's first refresh. The file is not
+// moved: it belonged to no org, and the CLIs still use it.
+function noteLegacyLivePack(db, log) {
+  try {
+    if (!existsSync(resolve(ROOT, LEGACY_LIVE_PACK))) return;
+    const org = defaultOrgId(db);
+    if (!org || runWithOrg(org, () => readLivePack()) !== null) return;
+    log(`[studio] the studio no longer reads ${LEGACY_LIVE_PACK}: each org's live pack is <org root>/live/${LIVE_PACK_FILE}, `
+      + `written by the MCP panel's refresh (npm run detect-drift and the dry run still read the old file; `
+      + `OUTPUT=<org root>/live/${LIVE_PACK_FILE} npm run fetch-live writes the new one)`);
+  } catch { /* a note, never a boot failure */ }
+}
+
 // Boot steps 1–5 are server/boot.mjs's bootStore(): the store opened, the
 // stale-import guard, the legacy import once, the seed decision and the
 // fail-closed checks (docs/STORE_PLAN.md §4). A refusal arrives as a
@@ -2019,6 +2058,7 @@ export async function start({ port = PORT, host = HOST, silent = false } = {}) {
   // root through the same context-aware resolver the registry uses.
   setWorkspaceRootResolver(orgWorkspaceRoot);
   rehydrateOrgs(silent);
+  noteLegacyLivePack(db, log);
   // Each server stamps its own bind on the requests it receives
   // (server/authz.mjs listenOf): suites run several servers per process
   // on different binds, so the bind never lives in module state.

@@ -31,8 +31,15 @@ import { baseWorkspacePath, brandEnv } from '../../tools/lib/brand-env.mjs';
 import { nowIso } from './db.mjs';
 import { getMeta } from './meta.mjs';
 
-// The flat workspace entries that belong to an org (moved from tenancy.mjs).
+// The flat workspace entries that belong to an org (moved from tenancy.mjs):
+// what a PRE-STORE build keeps, and so what the import's flat → orgs/default
+// migration moves.
 export const MIGRATABLE = Object.freeze(['packs', 'deploys.jsonl', 'snapshots', 'journeys', 'runs']);
+// The entries of an org root the store build owns: MIGRATABLE plus the
+// org's live pack (live/, STORE_PLAN slice 3). The in-place export's
+// default-org move and the boot's left-behind / empty-leftover checks use
+// this list.
+export const ORG_ENTRIES = Object.freeze([...MIGRATABLE, 'live']);
 export const MARKER = '.store-imported';
 const MARKER_BY = Object.freeze(['import', 'replace', 'export', 'repair', 'purge-org']);
 

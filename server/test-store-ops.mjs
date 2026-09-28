@@ -629,6 +629,73 @@ test('export: OIDC members are written by their bare sub, only under the recorde
   assert.deepEqual(r.writeAccess, [{ org: 'acme', key: 'sub-1', role: 'operator' }]);
 });
 
+// The org's live pack (live/, STORE_PLAN slice 3) is org data: it moves with
+// the default org, and a conflicting twin refuses naming it.
+function livePack(root, text = 'name: production-live\n') {
+  mkdirSync(join(root, 'live'), { recursive: true });
+  writeFileSync(join(root, 'live', 'production-live.pack.yaml'), text);
+}
+
+test('in place: the default org at . plus a created org — <base>/live moves to orgs/default/live; a conflicting orgs/default/live refuses naming it', async () => {
+  const refusedMsg = (re) => (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && re.test(e.message);
+  const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // A conflict first: nothing moves.
+  const clash = tempDir();
+  usersJson(clash, ['alice']);
+  pack(clash, 'p1');
+  livePack(clash);
+  await start(clash);
+  await change(clash, (db) => admin.createOrgFromAdmin(db, 'cli', { id: 'acme', name: 'Acme', admin: 'alice', base: clash }));
+  livePack(join(clash, 'orgs', 'default'), 'name: someone-elses\n');
+  await assert.rejects(exportIt(clash), refusedMsg(new RegExp(`already holds ${esc(join(clash, 'orgs', 'default', 'live'))} — nothing was changed`)));
+  assert.ok(existsSync(join(clash, 'live', 'production-live.pack.yaml')), 'the default org\'s live pack stays at the base');
+  assert.ok(existsSync(join(clash, 'packs', 'p1.pack.yaml')));
+
+  // No conflict: live/ moves with the rest.
+  const base = tempDir();
+  usersJson(base, ['alice']);
+  pack(base, 'p1');
+  livePack(base, 'name: the-default-orgs\n');
+  await start(base);
+  await change(base, (db) => admin.createOrgFromAdmin(db, 'cli', { id: 'acme', name: 'Acme', admin: 'alice', base }));
+  livePack(join(base, 'orgs', 'acme'), 'name: acmes\n');
+  const r = await exportIt(base);
+  assert.deepEqual(r.move, ['packs', 'live']);
+  assert.equal(existsSync(join(base, 'live')), false, 'live moved');
+  assert.equal(readFileSync(join(base, 'orgs', 'default', 'live', 'production-live.pack.yaml'), 'utf8'), 'name: the-default-orgs\n');
+  assert.equal(readFileSync(join(base, 'orgs', 'acme', 'live', 'production-live.pack.yaml'), 'utf8'), 'name: acmes\n', 'the created org\'s own is untouched');
+  // A store build starts on it: nothing left behind.
+  const { warns } = await start(base);
+  assert.deepEqual(warns.filter((w) => /left behind/.test(w)), []);
+});
+
+test('in place: a flat one-org deployment — nothing moves, <base>/live stays at the base', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice']);
+  pack(base, 'p1');
+  livePack(base);
+  await start(base);
+  const r = await exportIt(base);
+  assert.deepEqual(r.move, []);
+  assert.ok(existsSync(join(base, 'live', 'production-live.pack.yaml')));
+  const { warns } = await start(base);
+  assert.deepEqual(warns.filter((w) => /left behind/.test(w)), []);
+});
+
+test('a <base>/live nothing reads (the default org at orgs/default) is named at the start: left behind, merge it by hand', async () => {
+  const base = tempDir();
+  usersJson(base, ['alice']);
+  pack(base, 'p1');
+  await start(base);
+  await change(base, (db) => admin.createOrgFromAdmin(db, 'cli', { id: 'acme', name: 'Acme', admin: 'alice', base }));
+  await exportIt(base);
+  await read(base, (db) => assert.equal(getOrg(db, 'default').root, 'orgs/default'));
+  livePack(base);   // a pre-store round trip, or a hand copy, left one at the base
+  const { warns } = await start(base);
+  assert.ok(warns.includes(`[store] left behind: ${join(base, 'live')} — nothing reads it (the default org's copy is orgs/default/live); merge it by hand`), warns.join('\n'));
+});
+
 test('in place: refused while the store is in use, before the server first started, and on a move conflict — nothing changed', async () => {
   const refused = (re) => (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && re.test(e.message);
 

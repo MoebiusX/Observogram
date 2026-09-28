@@ -8,8 +8,9 @@
 //
 //   <OBSERVOGRAM_WORKSPACE>/                      the default org's root ('.')
 //     observogram.db, session-secret              deployment-level (shared)
-//     packs|deploys.jsonl|snapshots|journeys|runs the default org at '.'
-//     orgs/<orgId>/packs|deploys.jsonl|…          any other org ('orgs/<id>')
+//     packs|deploys.jsonl|snapshots|journeys|runs|live
+//                                                  the default org at '.'
+//     orgs/<orgId>/packs|deploys.jsonl|…|live      any other org ('orgs/<id>')
 //
 // — and the file-first machinery underneath (registry, deploys,
 // snapshots, journeys, runs) is unchanged: it already resolves its root

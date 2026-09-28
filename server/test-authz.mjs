@@ -620,6 +620,7 @@ test('authorize(key) throws at registration on an unclassified key, naming both 
 // fixture's own membership table below — never from the server's answers
 // or the table under test.
 
+const { writeFileSync: writeFile, mkdirSync: makeDir } = await import('node:fs');
 const { serve, cli, signIn } = await import('./fixtures/serve-child.mjs');
 const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
 const { hashPassword } = await import('./auth.mjs');
@@ -742,6 +743,19 @@ const freshWorkspace = (tag) => {
   return ws;
 };
 after(() => { for (const ws of workspaces) rmSync(ws, { recursive: true, force: true }); });
+
+// A live pack planted in an org root, its URL carrying a credential
+// parameter and a path; what live-status serves depends on the rank.
+const LIVE_URL = 'https://mcp.acme.test/mcp/s/sk-path-secret/obs?token=abc&tier=x';
+function plantLivePack(root) {
+  makeDir(join(root, 'live'), { recursive: true });
+  writeFile(join(root, 'live', 'production-live.pack.yaml'), [
+    'apiVersion: observability.pack/v1', 'kind: ObservabilityPack', 'metadata:', '  name: production-live', '  annotations:',
+    '    mcp.refreshedAt: "2026-06-06T00:00:00Z"', `    mcp.url: "${LIVE_URL}"`, 'spec: {}', '',
+  ].join('\n'));
+}
+const LIVE_SAFE = 'https://mcp.acme.test/mcp/s/sk-path-secret/obs?tier=x';
+const LIVE_ORIGIN = 'https://mcp.acme.test';
 
 // ---- the identity posture ----
 //
@@ -870,6 +884,20 @@ test('the AuthZ matrix — identity posture: every /api route × every principal
     const me = (await call(srv.base, ['GET', '/auth/me'], { headers: { Cookie: cookies.owen } })).json;
     assert.deepEqual(me.orgs.map((x) => [x.id, x.role, x.effectiveRole]), [['default', 'admin', 'admin'], ['acme', 'viewer', 'admin']]);
 
+    // live-status by rank: `origin` to every reader, the safe `url` to an
+    // operator and above — a viewer never sees the path.
+    plantLivePack(join(ws, 'orgs', 'acme'));
+    const liveFor = async (name) => (await call(srv.base, ['GET', '/api/live-status'], { headers: variants.find((v) => v.name === name).headers })).json;
+    for (const name of ['vera@acme', 'mia@acme']) {
+      const l = await liveFor(name);
+      assert.deepEqual([l.present, l.origin, l.url], [true, LIVE_ORIGIN, null], `${name}: origin only`);
+    }
+    for (const name of ['oscar@acme', 'bearer', 'ada@acme', 'owen@acme']) {
+      const l = await liveFor(name);
+      assert.deepEqual([l.present, l.origin, l.url], [true, LIVE_ORIGIN, LIVE_SAFE], `${name}: the safe url`);
+    }
+    assert.equal((await liveFor('mia (no org → her first, bravo)')).present, false, 'bravo has no live pack: acme\'s is not read');
+
     // Public rows, anonymous.
     const pub = async (method, path, init = {}) => fetch(`${srv.base}${path}`, { method, redirect: 'manual', ...init });
     assert.equal((await pub('GET', '/healthz')).status, 200);
@@ -946,6 +974,12 @@ test('the AuthZ matrix — token posture: anonymous reads, the bearer an operato
     assert.equal(await auditSeq(ws), before);
     const o = (await call(srv.base, ['GET', '/api/orgs'])).json;
     assert.deepEqual(o.orgs, [{ id: 'default', name: 'Default', role: null, effectiveRole: 'viewer' }]);
+    // live-status by rank: an anonymous caller (a viewer) gets the origin only; the bearer the safe url.
+    plantLivePack(ws);
+    let l = (await call(srv.base, ['GET', '/api/live-status'])).json;
+    assert.deepEqual([l.present, l.origin, l.url], [true, LIVE_ORIGIN, null]);
+    l = (await call(srv.base, ['GET', '/api/live-status'], { headers: variants[1].headers })).json;
+    assert.deepEqual([l.present, l.origin, l.url], [true, LIVE_ORIGIN, LIVE_SAFE]);
   } finally {
     await srv.stop();
   }

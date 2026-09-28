@@ -261,6 +261,9 @@ export function rankOf(principal) {
   return RANK[principal.role] ?? -1;
 }
 
+// The rank of a role name (viewer 0, operator 1, admin 2; -1 otherwise).
+export function rankOfRole(role) { return RANK[role] ?? -1; }
+
 // The role the guard applies to a principal in an org where its
 // membership role is `membershipRole` (the org lists' effectiveRole).
 export function effectiveRoleOf(principal, membershipRole = null) {
@@ -299,7 +302,7 @@ export function authzDecision(entry, ctx) {
   // 3. Identity changes carry the CSRF header from every principal but the bearer.
   if (entry.csrf === 'always' && p.kind !== 'bearer' && !ctx.csrf) return deny(403, 'csrf', CSRF_ALWAYS_TEXT);
   // 4–5. The class.
-  const allowed = entry.class === 'owner' ? p.owner === true : rankOf(p) >= RANK[entry.class];
+  const allowed = entry.class === 'owner' ? p.owner === true : rankOf(p) >= rankOfRole(entry.class);
   if (allowed) return null;
   const need = entry.class === 'owner' ? 'an owner' : `the ${entry.class} role`;
   const role = p.owner ? 'admin' : p.role;

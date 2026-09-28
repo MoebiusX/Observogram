@@ -73,6 +73,50 @@ export function deniedError(status, body) {
   return err;
 }
 
+// ---------- the remembered MCP URL (per user and org) ----------
+//
+// The MCP panels prefill the URL this user last used in the active org:
+// remembered > the server's live-status url for this org > empty. Stored
+// under mcpUrl.v2:<login or 'local'>:<active org or 'default'>, in its safe
+// form (tools/lib/mcp-url-safety.mjs: no userinfo, fragment or credential
+// query parameter — a token belongs in the auth field), and cleared at
+// sign-out. The unscoped pre-slice-3 key 'mcpUrl' is never read again.
+const MCP_URL_KEY_PREFIX = 'mcpUrl.v2:';
+const LEGACY_MCP_URL_KEY = 'mcpUrl';
+let signedInLogin = null;
+// Set from /auth/me at boot; null in the open posture ('local').
+export function setSignedInLogin(login) { signedInLogin = login || null; }
+const mcpUrlKey = () => `${MCP_URL_KEY_PREFIX}${signedInLogin || 'local'}:${activeOrg || 'default'}`;
+
+export function recallMcpUrl() {
+  try { return localStorage.getItem(mcpUrlKey()) || null; } catch { return null; }
+}
+
+// Stores the safe form; returns the names of the parameters it dropped.
+// The rule is loaded at call time — never statically: the Node suites that
+// import this module have no /lib/.
+export async function rememberMcpUrl(url) {
+  const { stripMcpUrl } = await import('/lib/mcp-url-safety.mjs');
+  const { safe, dropped } = stripMcpUrl(url);
+  try {
+    localStorage.removeItem(LEGACY_MCP_URL_KEY);
+    if (safe) localStorage.setItem(mcpUrlKey(), safe);
+  } catch { /* storage unavailable: nothing remembered */ }
+  return dropped;
+}
+
+// Every URL this login remembered, in every org, and the legacy key.
+export function forgetMcpUrls(login = signedInLogin) {
+  try {
+    const prefix = `${MCP_URL_KEY_PREFIX}${login || 'local'}:`;
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(prefix)) localStorage.removeItem(k);
+    }
+    localStorage.removeItem(LEGACY_MCP_URL_KEY);
+  } catch { /* storage unavailable */ }
+}
+
 export async function api(path, opts = {}) {
   // Merge headers instead of replacing them, so callers passing their own
   // Content-Type keep Accept + the CSRF/org headers.

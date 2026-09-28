@@ -8,7 +8,8 @@
  * makes it testable, so it gets its suite in the same commit.
  */
 
-import { validateMcpUrl, isLocalOrPrivateHost, redactCredentials } from './mcp-url.mjs';
+import { validateMcpUrl, isLocalOrPrivateHost, redactCredentials, safeMcpUrl, stripMcpUrl, mcpUrlOrigin, credentialParamName } from './mcp-url.mjs';
+import { readFileSync } from 'node:fs';
 import { createHarness } from '../tools/lib/harness.mjs';
 
 const { assert, report } = createHarness({ indent: '  ', truncate: 160 });
@@ -64,5 +65,33 @@ assert(!!validateMcpUrl('http://192.168.1.34:3001/mcp').error, 'strict posture r
 assert(!validateMcpUrl('https://mcp.example.com/x').error, 'strict posture still accepts public hosts');
 delete process.env.OBSERVOGRAM_ALLOW_LOCAL_MCP;
 assert(!validateMcpUrl('http://127.0.0.1:3001/mcp').error, 'default posture allows loopback (local dev)');
+
+// ---------- safeMcpUrl: what may be persisted, logged or served ----------
+// (tools/lib/mcp-url-safety.mjs, re-exported by server/mcp-url.mjs)
+assert(safeMcpUrl('https://u:p@mcp.example.com/obs#frag') === 'https://mcp.example.com/obs', 'safeMcpUrl removes userinfo and the fragment');
+for (const name of ['token', 'api_key', 'apiKey', 'X-Amz-Signature', 'access_token', 'password', 'pwd', 'jwt', 'session', 'bearer', 'sessionId', 'APIKey', 'auth']) {
+  const { safe, dropped } = stripMcpUrl(`https://mcp.example.com/obs?${encodeURIComponent(name)}=s3cret&tier=x`);
+  assert(safe === 'https://mcp.example.com/obs?tier=x' && dropped.length === 1 && dropped[0] === name, `a credential parameter is removed: ${name}`, [safe, dropped]);
+  assert(credentialParamName(name), `credentialParamName(${name})`);
+}
+assert(stripMcpUrl('https://mcp.example.com/obs?%74oken=s3cret').safe === 'https://mcp.example.com/obs'
+  && stripMcpUrl('https://mcp.example.com/obs?%74oken=s3cret').dropped[0] === 'token', 'an ENCODED name is decoded first: %74oken is token');
+assert(safeMcpUrl('https://mcp.example.com/obs?tier=x;pwd=hunter2&design=1') === 'https://mcp.example.com/obs?design=1',
+  'a value carrying a ;-separated credential pair is removed whole');
+const KEPT = ['signal', 'design', 'keyspace', 'author', 'bypass', 'tenant', 'tier', 'monkey', 'passive'];
+const kept = `https://mcp.example.com/obs?${KEPT.map((n, i) => `${n}=${i}`).join('&')}`;
+assert(safeMcpUrl(kept) === kept, 'names that merely contain a credential word are kept (a word rule, not a substring rule)', safeMcpUrl(kept));
+for (const n of KEPT) assert(!credentialParamName(n), `not a credential: ${n}`);
+const pathSecret = 'https://mcp.example.com/mcp/s/sk-ak-0123456789abcdef/mcp';
+assert(safeMcpUrl(pathSecret) === pathSecret, 'a secret in the PATH is kept (names only: the server serves url to operators only)');
+assert(mcpUrlOrigin(pathSecret) === 'https://mcp.example.com' && mcpUrlOrigin('https://u:p@h.test:8443/x?token=1') === 'https://h.test:8443',
+  'mcpUrlOrigin: scheme://host:port, never a path, a query or userinfo');
+assert(safeMcpUrl('not a url') === null && mcpUrlOrigin('not a url') === null && mcpUrlOrigin('file:///etc/passwd') === null, 'not an http(s) URL → null');
+assert(safeMcpUrl('https://mcp.example.com/obs?a=%20b+c&tier=x') === 'https://mcp.example.com/obs?a=%20b+c&tier=x', 'nothing dropped → the query keeps its spelling');
+const creds = 'https://user:pw@mcp.example.com/obs?token=abc&tier=x#f';
+assert(validateMcpUrl(creds).safeUrl === safeMcpUrl(creds) && validateMcpUrl(creds).safeUrl === 'https://mcp.example.com/obs?tier=x',
+  'validateMcpUrl().safeUrl is safeMcpUrl()');
+const lib = readFileSync(new URL('../tools/lib/mcp-url-safety.mjs', import.meta.url), 'utf8');
+assert(!/^\s*import\b/m.test(lib) && !/\brequire\(/.test(lib) && !/node:/.test(lib), 'tools/lib/mcp-url-safety.mjs imports nothing (browser-safe: the studio loads it from /lib)');
 
 report('mcp-url', 'the SSRF guard rejects bad schemes, strips credentials, and classifies hosts correctly.');

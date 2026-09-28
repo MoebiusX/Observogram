@@ -38,6 +38,7 @@ for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'I
 }
 
 import { start } from './index.mjs';
+import { boot } from './fixtures/serve-child.mjs';
 import { SPEC_DIR, SPEC_VERSION } from '../tools/lib/validator.mjs';
 import { createServer } from 'node:http';
 
@@ -1063,52 +1064,49 @@ try {
   }
   // Probe-outcome honesty on the badge: when a live pack exists, the
   // status carries the failed AND the unsupported probe families as the
-  // same comma-string shape as toolsFailed. The live pack is an ignored
-  // runtime file (examples/production-live.pack.yaml); when the working
-  // tree has none, plant a minimal one for the assertion and remove it
-  // afterwards — never overwrite a real refresh.
+  // same comma-string shape as toolsFailed. The live pack is the org's
+  // <org root>/live/production-live.pack.yaml — the default org at '.' is
+  // this suite's workspace. Planted with a URL that carries a credential
+  // parameter and a path: it is served clean (a file written by an older
+  // build or by hand), `origin` to everyone, `url` to an operator and above
+  // (local, here). Removed afterwards: the refresh below writes its own.
   {
-    const livePackPath = resolvePath(dirname(fileURLToPath(import.meta.url)), '..', 'examples', 'production-live.pack.yaml');
-    const planted = !existsSync(livePackPath);
-    if (planted) {
-      writeFileSync(livePackPath, [
-        'apiVersion: observability.pack/v1',
-        'kind: ObservabilityPack',
-        'metadata:',
-        '  name: production-live',
-        '  annotations:',
-        '    mcp.refreshedAt: "2026-06-06T00:00:00Z"',
-        '    mcp.url: "https://fake-mcp.test/observability"',
-        '    mcp.toolsFailed: ""',
-        '    mcp.probesFailed: "dashboards"',
-        '    mcp.probesUnsupported: "scrape_configs,metric_names"',
-        '    mcp.probeErrors.dashboards: "HTTP 502 Bad Gateway"',
-        '    mcp.stack.status: "sampled"',
-        '    mcp.stack.sampled: "7"',
-        'spec: {}',
-        '',
-      ].join('\n'));
-    }
+    const livePackPath = join(SMOKE_WORKSPACE, 'live', 'production-live.pack.yaml');
+    mkdirSync(dirname(livePackPath), { recursive: true });
+    writeFileSync(livePackPath, [
+      'apiVersion: observability.pack/v1',
+      'kind: ObservabilityPack',
+      'metadata:',
+      '  name: production-live',
+      '  annotations:',
+      '    mcp.refreshedAt: "2026-06-06T00:00:00Z"',
+      '    mcp.url: "https://fake-mcp.test/mcp/s/sk-path-secret/observability?token=abc&tier=x"',
+      '    mcp.toolsFailed: ""',
+      '    mcp.probesFailed: "dashboards"',
+      '    mcp.probesUnsupported: "scrape_configs,metric_names"',
+      '    mcp.probeErrors.dashboards: "HTTP 502 Bad Gateway"',
+      '    mcp.stack.status: "sampled"',
+      '    mcp.stack.sampled: "7"',
+      'spec: {}',
+      '',
+    ].join('\n'));
     try {
       const withPack = await getJson(base, '/api/live-status');
-      assert(withPack.present === true, 'live-status reports present with a live pack on disk');
-      assert(typeof withPack.probesFailed === 'string' && typeof withPack.probesUnsupported === 'string',
-             'live-status carries probesFailed and probesUnsupported as comma strings',
+      assert(withPack.present === true, 'live-status reports present with the org\'s live pack on disk');
+      assert(withPack.probesFailed === 'dashboards' && withPack.probesUnsupported === 'scrape_configs,metric_names',
+             'live-status reads mcp.probesFailed / mcp.probesUnsupported straight from the pack annotations',
              [withPack.probesFailed, withPack.probesUnsupported]);
-      assert((withPack.stackStatus === null || typeof withPack.stackStatus === 'string') && typeof withPack.stackSampled === 'number',
-             'live-status carries stackStatus (string|null) and stackSampled (number)',
+      assert(withPack.stackStatus === 'sampled' && withPack.stackSampled === 7,
+             'live-status reads mcp.stack.status / mcp.stack.sampled straight from the pack annotations',
              [withPack.stackStatus, withPack.stackSampled]);
-      if (planted) {
-        assert(withPack.probesFailed === 'dashboards' && withPack.probesUnsupported === 'scrape_configs,metric_names',
-               'live-status reads mcp.probesFailed / mcp.probesUnsupported straight from the pack annotations',
-               [withPack.probesFailed, withPack.probesUnsupported]);
-        assert(withPack.stackStatus === 'sampled' && withPack.stackSampled === 7,
-               'live-status reads mcp.stack.status / mcp.stack.sampled straight from the pack annotations',
-               [withPack.stackStatus, withPack.stackSampled]);
-      }
+      assert(withPack.origin === 'https://fake-mcp.test', 'live-status serves the URL\'s origin', withPack.origin);
+      assert(withPack.url === 'https://fake-mcp.test/mcp/s/sk-path-secret/observability?tier=x',
+             'live-status serves the safe url to an operator and above — a hand-written token parameter is not served', withPack.url);
     } finally {
-      if (planted) rmSync(livePackPath, { force: true });
+      rmSync(livePackPath, { force: true });
     }
+    const gone = await getJson(base, '/api/live-status');
+    assert(gone.present === false, 'live-status: no live pack for the org → present: false (the install\'s examples/ file is not read)', gone);
   }
 
   // POST /api/draft-from-mcp — step 2 stack self-metrics on the summary.
@@ -1200,6 +1198,8 @@ try {
     try {
       const draft = await (await postJson('/api/draft-from-mcp', { mcpUrl: fakeRestricted.url })).json();
       assert(draft.ok === true, 'draft-from-mcp against the restricted fake succeeds', draft.error);
+      assert(draft.validation?.ok === true && typeof draft.registered?.id === 'string',
+             'the restricted fake\'s draft validates and registers (so a refresh from it can write a live pack)', draft.validation);
       const st = draft.summary?.stack;
       assert(st && st.status === 'not-attempted' && st.reason === 'metrics_query not exposed by this MCP (restricted tier)',
              'restricted tier → summary.stack.status not-attempted with the tier reason', st);
@@ -1209,8 +1209,57 @@ try {
              'restricted tier → the not-attempted warning', draft.summary.warnings);
       assert(draft.summary.alertmanager === null && draft.summary.grafana === null,
              'restricted tier → alertmanager / grafana summaries are null (not exposed), never fabricated');
+
+      // The MCP URL keeps no credential parameter — in a draft (visibly)
+      // and in the live pack, which is the org's own file.
+      const withToken = `${fakeRestricted.url}?token=abc&tier=x`;
+      const tokenDraft = await (await postJson('/api/draft-from-mcp', { mcpUrl: withToken })).json();
+      assert(tokenDraft.ok === true && tokenDraft.summary.mcpUrl === `${fakeRestricted.url}?tier=x`,
+             'draft-from-mcp: summary.mcpUrl is the safe form (no token parameter)', tokenDraft.summary?.mcpUrl);
+      assert(tokenDraft.canonical.metadata.annotations['mcp.url'] === `${fakeRestricted.url}?tier=x` && !tokenDraft.canonicalYaml.includes('token=abc'),
+             'draft-from-mcp: the drafted pack\'s mcp.url (and its YAML) keeps no token', tokenDraft.canonical.metadata.annotations['mcp.url']);
+      assert((tokenDraft.summary.warnings || []).some((w) => /^not kept in the draft: the "token" parameter of the MCP URL/.test(w)),
+             'draft-from-mcp: a summary.warnings entry names the dropped parameter', tokenDraft.summary.warnings);
+      const legacyLive = resolvePath(dirname(fileURLToPath(import.meta.url)), '..', 'examples', 'production-live.pack.yaml');
+      const legacyBefore = existsSync(legacyLive) ? readFileSync(legacyLive, 'utf8') : null;
+      const refreshed = await (await postJson('/api/refresh-live', { mcpUrl: withToken })).json();
+      assert(refreshed.ok === true, 'refresh-live against the restricted fake succeeds', refreshed.error);
+      assert(/^not kept in the live pack: the "token" parameter of the MCP URL, which looks like a credential — put a token in the auth field instead$/.test(refreshed.note || ''),
+             'refresh-live: the response\'s note names the dropped parameter', refreshed.note);
+      assert(refreshed.annotations['mcp.url'] === `${fakeRestricted.url}?tier=x`, 'refresh-live: the response\'s annotations carry the safe URL', refreshed.annotations['mcp.url']);
+      const orgLive = join(SMOKE_WORKSPACE, 'live', 'production-live.pack.yaml');
+      const written = existsSync(orgLive) ? readFileSync(orgLive, 'utf8') : '';
+      assert(/mcp\.url: "?[^\n]*\?tier=x"?\n/.test(written) && !written.includes('token=abc'),
+             'refresh-live writes <org root>/live/production-live.pack.yaml, its mcp.url ending ?tier=x', written.slice(0, 300));
+      assert((existsSync(legacyLive) ? readFileSync(legacyLive, 'utf8') : null) === legacyBefore,
+             'refresh-live leaves the install\'s examples/production-live.pack.yaml alone (not created, not changed)');
+      const status = await getJson(base, '/api/live-status');
+      assert(status.present === true && status.url === `${fakeRestricted.url}?tier=x` && status.origin === new URL(fakeRestricted.url).origin,
+             'live-status reads the org\'s refreshed pack', [status.present, status.url, status.origin]);
     } finally {
       await fakeRestricted.close();
+    }
+
+    // The boot line: while the install still has the old deployment-wide
+    // file and the default org has no live pack of its own, the start says
+    // where the badge reads now; after the org's first refresh it does not.
+    {
+      const legacyLive = resolvePath(dirname(fileURLToPath(import.meta.url)), '..', 'examples', 'production-live.pack.yaml');
+      const planted = !existsSync(legacyLive);
+      if (planted) writeFileSync(legacyLive, 'apiVersion: observability.pack/v1\nkind: ObservabilityPack\nmetadata:\n  name: production-live\nspec: {}\n');
+      const bootWs = mkdtempSync(join(tmpdir(), 'observogram-smoke-bootline-'));
+      try {
+        const LINE = '[studio] the studio no longer reads examples/production-live.pack.yaml: each org\'s live pack is <org root>/live/production-live.pack.yaml, written by the MCP panel\'s refresh (npm run detect-drift and the dry run still read the old file; OUTPUT=<org root>/live/production-live.pack.yaml npm run fetch-live writes the new one)';
+        const first = boot(bootWs, { silent: false, env: { OBSERVOGRAM_AUTH: 'off' } });
+        assert(first.listening && first.stdout.includes(LINE), 'boot: the old live pack exists, the default org has none → the boot line', first.stdout);
+        mkdirSync(join(bootWs, 'live'), { recursive: true });
+        writeFileSync(join(bootWs, 'live', 'production-live.pack.yaml'), 'apiVersion: observability.pack/v1\nkind: ObservabilityPack\nmetadata:\n  name: production-live\nspec: {}\n');
+        const second = boot(bootWs, { silent: false, env: { OBSERVOGRAM_AUTH: 'off' } });
+        assert(second.listening && !second.stdout.includes('no longer reads'), 'boot: after the default org\'s first refresh → no boot line', second.stdout);
+      } finally {
+        if (planted) rmSync(legacyLive, { force: true });
+        rmSync(bootWs, { recursive: true, force: true });
+      }
     }
   }
 
