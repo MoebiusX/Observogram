@@ -154,6 +154,16 @@ const DEPLOYMENT_GLOBAL = new Set([
   'POST /api/library/compile', 'GET /api/maturity-rubric', 'GET /api/compile/targets', 'GET /api/deploy/matrix',
 ]);
 
+// The owner routes (STORE_PLAN slice 3b): the deployment's users, orgs and
+// join role, whatever org the request names — not swept here (bob, a
+// non-owner, is refused 403; carlos is an owner, who may act in any org).
+// The AuthZ matrix (server/test-authz.mjs) covers them.
+const OWNER_ONLY = new Set([
+  'GET /api/admin/users', 'POST /api/admin/users', 'POST /api/admin/users/:id/disable', 'POST /api/admin/users/:id/enable',
+  'POST /api/admin/users/:id/password', 'POST /api/admin/users/:id/signout', 'PUT /api/admin/users/:id/owner',
+  'GET /api/admin/orgs', 'POST /api/admin/orgs', 'DELETE /api/admin/orgs/:id', 'GET /api/admin/join-role', 'PUT /api/admin/join-role',
+]);
+
 // alice, in `org`, creates the objects the sweep addresses: a registered
 // pack, a deploy with a snapshot against the fake MCP, a verify on it, a
 // journey captured and run once, and the org's live pack (planted; the
@@ -257,8 +267,10 @@ async function sweep({ root, cookie, who, ids, mcp, dir }) {
   const before = tree(dir);
   const mcpCalls = mcp.calls.length;
   const routes = apiRoutes();
-  const unclassified = routes.filter(k => !DEPLOYMENT_GLOBAL.has(k) && !ORG_SCOPED[k]);
-  assert(unclassified.length === 0, 'every /api route is classified org-scoped or deployment-global', unclassified, []);
+  const unclassified = routes.filter(k => !DEPLOYMENT_GLOBAL.has(k) && !ORG_SCOPED[k] && !OWNER_ONLY.has(k));
+  assert(unclassified.length === 0, 'every /api route is classified org-scoped, deployment-global or owner-only', unclassified, []);
+  const staleOwnerOnly = [...OWNER_ONLY].filter(k => !routes.includes(k));
+  assert(staleOwnerOnly.length === 0, 'every owner-only entry is a registered route', staleOwnerOnly, []);
   // DELETE /api/uploads last: the reads above must see the caller's own registry.
   const order = Object.keys(ORG_SCOPED).filter(k => routes.includes(k)).sort((a, b) => (a === 'DELETE /api/uploads') - (b === 'DELETE /api/uploads'));
   for (const key of order) {

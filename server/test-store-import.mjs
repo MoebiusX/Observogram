@@ -1458,7 +1458,7 @@ test('the every-boot warnings on a boot that does not import: no owner, left beh
     assert.ok(r1.warns.includes(`[store] no owner who can sign in with OIDC — set OBSERVOGRAM_BOOTSTRAP_ADMIN=${KEY}#<sub> (or a verified email) and sign in, or run \`npm run users -- owner ${KEY}#<sub>\``), r1.warns.join('\n'));
     assert.ok(!r1.warns.some((w) => /JOIN_ROLE/.test(w)), 'the import boot reads it');
     const r2 = await bootIn(oidcBase, { OBSERVOGRAM_OIDC_ISSUER: ISSUER, OBSERVOGRAM_OIDC_JOIN_ROLE: 'admin' });
-    assert.ok(r2.warns.includes('[store] OBSERVOGRAM_OIDC_JOIN_ROLE is read at the first start only; the store records viewer'), r2.warns.join('\n'));
+    assert.ok(r2.warns.includes('[store] OBSERVOGRAM_OIDC_JOIN_ROLE is read at the first start only; the store records viewer — an owner changes it with PUT /api/admin/join-role'), r2.warns.join('\n'));
     assert.equal(metaOf(r2.db, 'oidc_join_role'), 'viewer');
   } finally {
     closeBase(oidcBase);

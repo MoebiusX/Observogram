@@ -126,7 +126,8 @@ for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'I
 
 const { start } = await import('./index.mjs');
 const { currentStore } = await import('./store/db.mjs');
-const { getUserByLogin, listUsers, setDisabled } = await import('./store/users.mjs');
+const { createUser, getUserByLogin, listUsers, setDisabled } = await import('./store/users.mjs');
+const { hashPassword } = await import('./auth.mjs');
 const { listMembershipsForUser } = await import('./store/memberships.mjs');
 const { getMeta } = await import('./store/meta.mjs');
 const { listAudit } = await import('./store/audit.mjs');
@@ -253,6 +254,25 @@ try {
   assert(got.status === 302 && boss.isOwner === true && rolesOf(db, boss).includes('default:admin'),
     'bootstrap by email, email_verified true → owner and admin of default', rolesOf(db, boss));
   assert(listAudit(db, { action: 'owner.bootstrap' }).length === 1, 'one owner.bootstrap row');
+
+  // ---- the owner routes under OIDC (STORE_PLAN slice 3b): a local user is
+  // created, never an owner, and the answer says it cannot sign in here ----
+  const asBoss = (method, path, body) => fetch(`${base}${path}`, {
+    method, headers: { Cookie: got.session, 'X-Observogram-CSRF': '1', 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  }).then(async (res) => ({ status: res.status, json: await res.json() }));
+  let made = await asBoss('POST', '/api/admin/users', { login: 'lee', password: 'lee-passw0rd' });
+  assert(made.status === 201 && made.json.owner === false && made.json.user.owner === false
+    && made.json.note === `this server signs in through OIDC issuer ${KEY} and local users cannot sign in under it — lee is created without owner; `
+      + 'make an IdP user an owner with PUT /api/admin/users/<id>/owner with {"owner": true}',
+  'an OIDC owner creates a local user: never an owner, the note says why', made);
+  createUser(db, 'test', { login: 'local-owner', password: hashPassword('local-owner-pw'), isOwner: true });
+  made = await asBoss('POST', '/api/admin/users', { login: 'lou', password: 'lou-passw0rd' });
+  assert(made.status === 201 && made.json.note === `local users cannot sign in while this server signs in through OIDC issuer ${KEY}`,
+    'with a local owner already there, the note says a local user cannot sign in here', made);
+  const joinRole = await asBoss('GET', '/api/admin/join-role');
+  assert(joinRole.status === 200 && JSON.stringify(joinRole.json) === JSON.stringify({ ok: true, role: 'operator', oidc: true, issuerKey: KEY }),
+    'GET /api/admin/join-role: the recorded role, OIDC on, its issuer key', joinRole.json);
   process.env.OBSERVOGRAM_BOOTSTRAP_ADMIN = `${issuer}#user-42`;
   got = await signIn(base, DEFAULT_CLAIMS);
   assert(got.status === 302 && getUserByLogin(db, loginOf('user-42')).isOwner === false && listAudit(db, { action: 'owner.bootstrap' }).length === 1,

@@ -103,6 +103,31 @@ export const ROUTES = Object.freeze({
   'POST /api/library/instantiate': { class: 'operator', later: 'none (computes)' },
   'POST /api/library/compile': { class: 'operator', later: 'none (computes)' },
   'POST /api/library/register': { class: 'operator', later: SLICE4_PACK },
+
+  // ---------- owner: the deployment's users, orgs and join role ----------
+  // The identity API (server/routes/identity.mjs), whatever org the request
+  // is in. Closed in the open, exposed posture — but for an org's creation,
+  // which the rule itself refuses there (409) — and, without sign-in,
+  // answered only to a request sent straight to loopback.
+  'GET /api/admin/users': { class: 'owner', identityApi: true, exposed: 'refuse' },
+  'POST /api/admin/users': {
+    class: 'owner', identityApi: true, csrf: 'always', exposed: 'refuse',
+    audit: ['user.create', 'owner.first-local-user', 'membership.add', 'meta.set'],
+  },
+  'POST /api/admin/users/:id/disable': { class: 'owner', identityApi: true, csrf: 'always', exposed: 'refuse', audit: ['user.disable'] },
+  'POST /api/admin/users/:id/enable': { class: 'owner', identityApi: true, csrf: 'always', exposed: 'refuse', audit: ['user.enable'] },
+  'POST /api/admin/users/:id/password': { class: 'owner', identityApi: true, csrf: 'always', exposed: 'refuse', audit: ['user.password'] },
+  'POST /api/admin/users/:id/signout': { class: 'owner', identityApi: true, csrf: 'always', exposed: 'refuse', audit: ['user.signout'] },
+  'PUT /api/admin/users/:id/owner': {
+    class: 'owner', identityApi: true, csrf: 'always', exposed: 'refuse', audit: ['owner.grant', 'owner.revoke'],
+  },
+  'GET /api/admin/orgs': { class: 'owner', identityApi: true, exposed: 'refuse' },
+  'POST /api/admin/orgs': {
+    class: 'owner', identityApi: true, csrf: 'always', exposed: 'rule', audit: ['org.create', 'org.adopt', 'membership.add'],
+  },
+  'DELETE /api/admin/orgs/:id': { class: 'owner', identityApi: true, csrf: 'always', exposed: 'refuse', audit: ['org.remove'] },
+  'GET /api/admin/join-role': { class: 'owner', identityApi: true, exposed: 'refuse' },
+  'PUT /api/admin/join-role': { class: 'owner', identityApi: true, csrf: 'always', exposed: 'refuse', audit: ['meta.set'] },
 });
 
 // The static mounts, each public.
