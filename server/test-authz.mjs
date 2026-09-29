@@ -17,7 +17,8 @@
  *   server/route-table.mjs for its mode and agrees with EXPECTED_CLASS
  *   below, only the named middleware and the static mounts sit between;
  *   the README's API Surface states each of its rows' class as the table has it,
- *   its Identity API section lists every identity route with its class, and
+ *   its Identity API section states the audit actor (the first local user's
+ *   owner grant keeps `system`) and lists every identity route with its class, and
  *   its Roles section each orgs.json role the import maps to admin or viewer;
  *   docs/STORE_PLAN.md's build status and docs/HANDOVER.md name one next
  *   slice; no comment in server/ or tools/ still says roles are not enforced;
@@ -780,16 +781,24 @@ test('the README API Surface: its intro states each row\'s class — public and 
   for (const path of [...publicNamed, ...selfNamed]) assert.ok(rows.some((r) => r.path === path), `${path}: named in the intro, a row below`);
 });
 
-// The README's Identity API section: its table lists every identity-API
-// route and the self route it documents (POST /auth/signout-others) once,
-// each with its class as "Who"; every change it lists takes the CSRF header
-// ("on every change"), and each curl example that changes something sends it.
-test('the README Identity API section lists every identity route once with its class, and its examples send the CSRF header', () => {
+// The README's Identity API section: its intro states the audit actor — the
+// caller's login, with its one exception, the first local user's owner grant
+// that keeps `system` (the open-loopback case below pins those rows); its
+// table lists every identity-API route and the self route it documents
+// (POST /auth/signout-others) once, each with its class as "Who"; every
+// change it lists takes the CSRF header ("on every change"), and each curl
+// example that changes something sends it.
+test('the README Identity API section states the audit actor and its system exception, lists every identity route once with its class, and its examples send the CSRF header', () => {
   const readme = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'README.md'), 'utf8');
   const start = readme.indexOf('\n### The Identity API\n');
   assert.ok(start >= 0, 'README has an Identity API section');
   const end = readme.indexOf('\n### ', start + 1);
   const section = readme.slice(start, end < 0 ? undefined : end);
+  const intro = section.slice(0, section.indexOf('\n|')).replace(/\s+/g, ' ');
+  assert.match(intro, /with the caller's login as the actor \(`local` on a server without sign-in\)/, 'the intro states the actor');
+  assert.ok(routeEntry('POST /api/admin/users').audit.includes('owner.first-local-user'), 'POST /api/admin/users writes the first local user\'s grant');
+  assert.match(intro, /except the owner grant the first local user gets \(`owner\.first-local-user`\), which keeps `system`/,
+    'the intro names the one row an identity route writes as system, not as the caller');
   const rows = [...section.matchAll(/^\| `([A-Z]+)` \| `([^`]+)` \| ([a-z]+) \|/gm)].map(([, method, path, who]) => ({ key: `${method} ${path}`, who }));
   const expected = Object.keys(ROUTES).filter((k) => routeEntry(k).identityApi || k === 'POST /auth/signout-others');
   assert.deepEqual(rows.map((r) => r.key).sort(), expected.sort(), 'the identity routes, each once');

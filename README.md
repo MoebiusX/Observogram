@@ -439,7 +439,9 @@ Owners and org admins manage users, orgs and memberships over HTTP with
 the rules `npm run users` and `npm run orgs` apply
 ([`server/identity-admin.mjs`](server/identity-admin.mjs)); every change
 writes its audit rows with the caller's login as the actor (`local` on a
-server without sign-in). The owner routes (`/api/admin/…`) act on the
+server without sign-in), except the owner grant the first local user gets
+(`owner.first-local-user`), which keeps `system`, the store's automatic
+actor. The owner routes (`/api/admin/…`) act on the
 deployment, whatever org the request is in. The admin routes
 (`/api/org…`) act on the request's org (`X-Observogram-Org`, `?org=`): no
 path names an org, so an org admin never reaches another one; an owner is
