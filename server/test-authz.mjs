@@ -19,7 +19,8 @@
  *   the README's API Surface states each of its rows' class as the table has it,
  *   its Identity API section lists every identity route with its class, and
  *   its Roles section each orgs.json role the import maps to admin or viewer;
- *   no comment in server/ or tools/ still says roles are not enforced;
+ *   docs/STORE_PLAN.md's build status and docs/HANDOVER.md name one next
+ *   slice; no comment in server/ or tools/ still says roles are not enforced;
  * - the decision (authzDecision), pure, over synthetic entries — the
  *   always / refuse / rule / direct-loopback paths no route has yet — and
  *   the request facts it reads (the CSRF header, a cross-site form, a
@@ -833,6 +834,30 @@ test('the README Roles section lists every orgs.json role the import maps to adm
     const { role } = mapLegacyRole(w);
     if (role !== 'operator') assert.ok(listed[role].includes(w), `${w} → ${role}: a mapping the README does not list`);
   }
+});
+
+// docs/STORE_PLAN.md's build status (the italic paragraphs before §0) and
+// docs/HANDOVER.md say which slice is next: one slice, the same in both,
+// and never one the build status already calls built.
+test('docs/STORE_PLAN.md\'s build status and docs/HANDOVER.md name one next slice, after every slice built', () => {
+  const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const plan = readFileSync(join(REPO, 'docs', 'STORE_PLAN.md'), 'utf8');
+  const start = plan.indexOf('*Build status');
+  const end = plan.indexOf('\n## 0 ');
+  assert.ok(start >= 0 && end > start, 'docs/STORE_PLAN.md has its build status before §0');
+  const status = plan.slice(start, end).replace(/\s+/g, ' ');
+  const handover = readFileSync(join(REPO, 'docs', 'HANDOVER.md'), 'utf8').replace(/\s+/g, ' ');
+  const NEXT = /\bslice (\d+)\b[^.;*]{0,40}?\bis next\b/gi;
+  const next = [
+    ...[...status.matchAll(NEXT)].map(([phrase, n]) => ({ doc: 'STORE_PLAN.md', phrase, n: Number(n) })),
+    ...[...handover.matchAll(NEXT)].map(([phrase, n]) => ({ doc: 'HANDOVER.md', phrase, n: Number(n) })),
+  ];
+  assert.ok(next.some((x) => x.doc === 'STORE_PLAN.md') && next.some((x) => x.doc === 'HANDOVER.md'), 'both docs say which slice is next');
+  const slices = [...new Set(next.map((x) => x.n))];
+  assert.equal(slices.length, 1, `one next slice, not ${next.map((x) => `${x.doc}: "${x.phrase}"`).join(', ')}`);
+  const built = [...status.matchAll(/\bslice (\d+) is built\b/gi)].map(([, n]) => Number(n));
+  assert.ok(built.length > 0, 'the build status says which slices are built');
+  for (const b of built) assert.ok(slices[0] > b, `slice ${slices[0]} is next, but the build status says slice ${b} is built`);
 });
 
 // Roles are enforced: no comment in server/ or tools/ still says a role
