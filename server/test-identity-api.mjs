@@ -717,12 +717,26 @@ test('the last admin: acme\'s only admin is neither demoted nor removed by an ad
   await refused(DELETE, 'ada', `/api/org/members/${ada}`, undefined, 409, last('ada'));
   await ok(PATCH, 'olive', `/api/org/members/${dan}`, { role: 'viewer' }, 200, ACME);
 
-  // An owner may: olive through the upsert, then back through PATCH.
+  // An owner may, on all three paths, each time with ada acme's only
+  // enabled admin: olive demotes her through the upsert, then back through
+  // PATCH; demotes her through PATCH, then back; removes her through
+  // DELETE, then adds her back through the upsert.
   ({ json, rows } = await ok(POST, 'olive', '/api/org/members', { login: 'ada', role: 'viewer' }, 200, ACME));
   assert.deepEqual([json.added, json.changed], [false, { from: 'admin', to: 'viewer' }]);
   assert.deepEqual(rows, [['membership.role', 'olive', 'acme', 'ada', { from: 'admin', to: 'viewer' }]]);
   ({ rows } = await ok(PATCH, 'olive', `/api/org/members/${ada}`, { role: 'admin' }, 200, ACME));
   assert.deepEqual(rows, [['membership.role', 'olive', 'acme', 'ada', { from: 'viewer', to: 'admin' }]]);
+  ({ json, rows } = await ok(PATCH, 'olive', `/api/org/members/${ada}`, { role: 'viewer' }, 200, ACME));
+  assert.deepEqual([json.member.role, json.changed], ['viewer', { from: 'admin', to: 'viewer' }]);
+  assert.deepEqual(rows, [['membership.role', 'olive', 'acme', 'ada', { from: 'admin', to: 'viewer' }]]);
+  await ok(PATCH, 'olive', `/api/org/members/${ada}`, { role: 'admin' }, 200, ACME);
+  ({ json, rows } = await ok(DELETE, 'olive', `/api/org/members/${ada}`, undefined, 200, ACME));
+  assert.deepEqual([json.removed.login, json.removed.role], ['ada', 'admin']);
+  assert.deepEqual(rows, [['membership.remove', 'olive', 'acme', 'ada', { role: 'admin' }]]);
+  assert.equal(getMembership(db, 'acme', ada), null);
+  ({ json, rows } = await ok(POST, 'olive', '/api/org/members', { login: 'ada', role: 'admin' }, 201, ACME));
+  assert.deepEqual([json.added, json.member.role], [true, 'admin']);
+  assert.deepEqual(rows, [['membership.add', 'olive', 'acme', 'ada', { role: 'admin' }]]);
 
   // With another enabled admin, ada may step down; oscar is then the last.
   await ok(PATCH, 'ada', `/api/org/members/${oscar}`, { role: 'admin' });
