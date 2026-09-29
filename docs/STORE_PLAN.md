@@ -25,8 +25,8 @@ mode in the current code.*
 is built in two PRs: 2a (PR #111: identity on the store — the boot order,
 the import, revocable sessions, tenancy always on) and 2b (the offline
 operations of §3 and §4: `packc store export`, `import --replace`,
-`rekey-issuer`, `purge-org`, and `restore`'s marker warning). Slice 2 is
-complete once 2a and 2b merge.*
+`rekey-issuer`, `purge-org`, and `restore`'s marker warning). Both are on
+`develop` (PR #111 merged them together, `014d780`): slice 2 is complete.*
 
 *Slice 3 is built in two PRs: 3a (PR #119, `codex/roles-enforced`: roles
 enforced on every route through `server/route-table.mjs`, the live pack
