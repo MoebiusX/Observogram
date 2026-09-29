@@ -3,20 +3,22 @@
  * server/test-identity-api.mjs — the identity API (docs/STORE_PLAN.md §5,
  * slice 3b), in-process over HTTP on one stand-alone identity server.
  *
- * For every owner route (/api/admin/*) and every admin route (/api/org*,
- * the request's org): the success path with its exact response and its
- * exact audit rows (action, actor = the caller's login, org, target,
- * detail — each action one the route table lists for it), and every
- * refusal with its status and text and no new row. Plus Revocation (an
- * owner's sign-out everywhere, disable and password reset refuse the
- * user's cookies from the next request; a temporary password is a forced
- * change with no skip), the last-owner rules end to end, the owner flag's
- * round trip (the grant records the role it replaced; the revoke touches
- * no membership and says so; the org's admin sets the role back), the
- * join role's confirm, the org's last admin on all three paths that can
- * demote or remove one (an owner may, and so may the shell), and what a
- * member-add refusal reveals (to an org admin, no one, a disabled user and
- * several are one 404; an owner gets the detail).
+ * For every owner route (/api/admin/*), every admin route (/api/org*,
+ * the request's org) and the self route POST /auth/signout-others: the
+ * success path with its exact response and its exact audit rows (action,
+ * actor = the caller's login, org, target, detail — each action one the
+ * route table lists for it), and every refusal with its status and text
+ * and no new row. Plus Revocation (an owner's sign-out everywhere, disable
+ * and password reset refuse the user's cookies from the next request; a
+ * temporary password is a forced change with no skip; "sign out my other
+ * sessions" refuses the caller's other cookies and re-issues its own at
+ * the new epoch, its expiry kept), the last-owner rules end to end, the
+ * owner flag's round trip (the grant records the role it replaced; the
+ * revoke touches no membership and says so; the org's admin sets the role
+ * back), the join role's confirm, the org's last admin on all three paths
+ * that can demote or remove one (an owner may, and so may the shell), and
+ * what a member-add refusal reveals (to an org admin, no one, a disabled
+ * user and several are one 404; an owner gets the detail).
  *
  * Who may reach these routes in each posture is test-authz's (the AuthZ
  * matrix); this suite is what they do once reached.
@@ -124,7 +126,7 @@ const rowsAfter = (seq) => prepare(db, 'SELECT org_id, actor, action, target_id,
 
 // A successful call of route `key` (`extra`: more headers, such as the
 // org): its status, and the rows it wrote — each an action the route table
-// lists for the route (exact per build).
+// lists for the route (exact per build); its response headers too.
 async function ok(key, who, path, body, status = 200, extra = {}) {
   const seq = seqNow();
   const r = await call(who, routeEntry(key).method, path, body, extra);
@@ -133,7 +135,7 @@ async function ok(key, who, path, body, status = 200, extra = {}) {
   const rows = rowsAfter(seq);
   const listed = routeEntry(key).audit;
   assert.deepEqual(rows.map(([action]) => action).filter((a) => !listed.includes(a)), [], `${key}: rows the route table does not list`);
-  return { json: r.json, rows };
+  return { json: r.json, rows, headers: r.headers };
 }
 
 // A refusal: exactly { ok: false, error } at `status`, and no row.
@@ -343,6 +345,57 @@ test('POST /api/admin/users/:id/signout: sign out everywhere — every cookie of
 
   await refused(K, 'olive', '/api/admin/users/999999/signout', undefined, 404, 'no user 999999');
   for (const id of BAD_IDS) await refused(K, 'olive', `/api/admin/users/${id}/signout`, undefined, 400, 'user id must be a positive integer');
+});
+
+// A session cookie's signed payload ({ login, ep, exp, … }).
+const payloadOf = (cookie) => JSON.parse(Buffer.from(cookie.split('=')[1].split('.')[1], 'base64url').toString('utf8'));
+
+test('POST /auth/signout-others: sign out my other sessions — every other cookie of the caller is refused from its next request; this one is re-issued at the new epoch, its expiry kept', async () => {
+  const K = 'POST /auth/signout-others';
+  const P = '/auth/signout-others';
+  const mine = cookies.vera;
+  const other = (await signIn(BASE, 'vera', pw('vera'))).session;   // vera's second browser
+  for (const c of [mine, other]) assert.equal((await call(c, 'GET', '/api/packs')).status, 200, 'both of vera\'s cookies work');
+  const before = getUserByLogin(db, 'vera').sessionEpoch;
+
+  // Refused, and nothing written: no CSRF header; no session at all.
+  let seq = seqNow();
+  let r = await fetch(`${BASE}${P}`, { method: 'POST', headers: { Cookie: mine, Accept: 'application/json' } });
+  assert.deepEqual([r.status, (await r.json()).denied], [403, 'csrf'], 'without the CSRF header');
+  const NO_SESSION = { ok: false, error: 'unauthorized: sign in required', login: '/auth/login', denied: 'auth' };
+  for (const [label, extra] of [['anonymous', {}], ['the bearer', { Authorization: `Bearer ${process.env.OBSERVOGRAM_API_TOKEN}` }]]) {
+    r = await call(null, 'POST', P, undefined, extra);
+    assert.deepEqual([r.status, r.json], [401, NO_SESSION], label);
+  }
+  assert.deepEqual(rowsAfter(seq), []);
+  assert.equal(getUserByLogin(db, 'vera').sessionEpoch, before, 'nothing bumped');
+
+  const t0 = Date.now();
+  const { json, rows, headers } = await ok(K, mine, P);
+  assert.deepEqual(json, { ok: true, sessionEpoch: before + 1 });
+  assert.deepEqual(rows, [['user.signout', 'vera', null, 'vera', { sessionEpoch: before + 1 }]], 'one row, vera its actor');
+  const set = headers.getSetCookie().find((c) => c.startsWith('observogram_session='));
+  assert.ok(set, 'the response re-issues this browser\'s cookie');
+  const reissued = set.split(';')[0];
+  assert.deepEqual([payloadOf(reissued).login, payloadOf(reissued).ep], ['vera', before + 1], 'at the new epoch');
+  assert.equal(payloadOf(reissued).exp, payloadOf(mine).exp, 'its expiry kept: signing out elsewhere never extends a session');
+  const maxAge = Number(set.match(/Max-Age=(\d+)/)[1]);
+  assert.ok(maxAge > 0 && maxAge <= Math.floor((payloadOf(mine).exp - t0) / 1000), `Max-Age ${maxAge}: what remains of the session`);
+
+  for (const [label, c] of [['the other browser', other], ['this browser\'s cookie before the re-issue', mine]]) {
+    assert.equal((await call(c, 'GET', '/api/packs')).status, 401, `${label}: /api refuses it`);
+    const me = await (await fetch(`${BASE}/auth/me`, { headers: { Cookie: c } })).json();
+    assert.equal(me.authenticated, false, `${label}: /auth/me no longer knows it`);
+    seq = seqNow();
+    r = await call(c, 'POST', P);
+    assert.deepEqual([r.status, r.json], [401, NO_SESSION], `${label}: it signs out nothing`);
+    assert.deepEqual(rowsAfter(seq), []);
+  }
+  cookies.vera = reissued;
+  assert.equal((await call('vera', 'GET', '/api/packs')).status, 200, 'the re-issued cookie works');
+  const me = await (await fetch(`${BASE}/auth/me`, { headers: { Cookie: reissued } })).json();
+  assert.deepEqual([me.authenticated, me.user.login], [true, 'vera']);
+  assert.equal(getUserByLogin(db, 'vera').sessionEpoch, before + 1);
 });
 
 test('PUT /api/admin/users/:id/owner: the round trip — the grant records the role it replaced, the revoke touches no membership and says so', async () => {

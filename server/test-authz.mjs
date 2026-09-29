@@ -9,7 +9,8 @@
  *   CONTEXT org, never the first one;
  * - the studio guards: every fetch() sends authHeaders(), every navigation
  *   to /api names the org with orgQuery(); the deploy modal and Neuron's
- *   Run all say a refusal;
+ *   Run all say a refusal; the account menu's "sign out my other
+ *   sessions" says its answer;
  * - completeness: three children (local, oidc, off) walk the app's router
  *   (server/fixtures/route-inventory.mjs); every route's first handler, per
  *   method, is its own authorize() guard, every key is in
@@ -21,14 +22,18 @@
  * - the decision (authzDecision), pure, over synthetic entries — the
  *   always / refuse / rule / direct-loopback paths no route has yet — and
  *   the request facts it reads (the CSRF header, a cross-site form, a
- *   direct loopback request); selfGate's CSRF step; the guard's 500 for
+ *   direct loopback request); selfGate's CSRF step, on the entry of
+ *   POST /auth/signout-others; the guard's 500 for
  *   a classified route reached without a principal (fail closed);
  * - the AuthZ matrix: every /api route × every principal × every posture,
  *   each a child server (server/fixtures/serve-child.mjs), its expectations
  *   from EXPECTED_CLASS and the fixture's own membership table, never from
  *   the server; refused requests write no audit row; plus the CSRF, form,
  *   public, case, org-list and fresh admin/admin rows; the self routes'
- *   404 while stand-alone sign-in is off (selfGate's first step);
+ *   404 while stand-alone sign-in is off (selfGate's first step); the
+ *   self rows of POST /auth/signout-others (the caller's own session with
+ *   the CSRF header — never anonymous, the bearer, a disabled user or the
+ *   pwflow cookie; its other cookies refused, its own re-issued);
  * - the identity API in that matrix (slice 3b): an owner with no
  *   membership reaches the owner routes, everyone else is refused; the
  *   admin routes answer the context org's admins and every owner, and an
@@ -339,8 +344,9 @@ test('the request facts: the CSRF header, a cross-site form, a direct loopback r
   assert.equal(effectiveRoleOf(P.local), 'admin');
 });
 
-test('selfGate: an always-CSRF self route refuses the caller\'s own session without the header', async () => {
+test('selfGate: an always-CSRF self route (POST /auth/signout-others) refuses the caller\'s own session without the header', async () => {
   const { createHmac } = await import('node:crypto');
+  const { routeEntry } = await import('./route-table.mjs');
   const db = currentStore();
   const selfie = createUser(db, 'system', { login: 'selfie' });
   setMeta(db, 'system', 'identity_armed', '1');
@@ -349,7 +355,8 @@ test('selfGate: an always-CSRF self route refuses the caller\'s own session with
     const body = Buffer.from(JSON.stringify({ sub: 'selfie', login: 'selfie', ep: selfie.sessionEpoch, purpose: 'session', iat: Date.now(), exp: Date.now() + 3600_000 })).toString('base64url');
     return `observogram_session=v1.${body}.${createHmac('sha256', secret).update(body).digest('base64url')}`;
   })();
-  const entry = { class: 'self', csrf: 'always', modes: ['local', 'oidc'], self: { pwflow: false, session: true, unauth: 'json' } };
+  const entry = routeEntry('POST /auth/signout-others');
+  assert.deepEqual([entry.class, entry.csrf, entry.modes, entry.self], ['self', 'always', ['local', 'oidc'], { pwflow: false, session: true, unauth: 'json' }]);
   const run = (headers) => new Promise((resolve) => {
     const req = { headers, query: {} };
     const res = {
@@ -540,6 +547,29 @@ test('Neuron\'s Run all says the server\'s text when the runs are refused, not o
   assert.match(fn, /if \(names\.length > 1\) toast\(runAllText\(names, tally, failures\),/);
 });
 
+// The account menu's "sign out my other sessions" posts to its self route
+// and says the answer on the menu's id line: done, or the server's text.
+const { signOutOthersText } = await import('../studio/api.mjs');
+
+test('the account menu\'s "sign out my other sessions": the route it posts to, and what its id line says', async () => {
+  const { routeEntry } = await import('./route-table.mjs');
+  assert.equal(signOutOthersText(200, { ok: true, sessionEpoch: 3 }), 'other sessions signed out');
+  assert.equal(signOutOthersText(401, { ok: false, error: 'unauthorized: sign in required', login: '/auth/login', denied: 'auth' }),
+    '401: unauthorized: sign in required');
+  assert.equal(signOutOthersText(403, { ok: false, error: 'missing X-Observogram-CSRF: 1 — …', denied: 'csrf' }), '403: missing X-Observogram-CSRF: 1 — …');
+  assert.equal(signOutOthersText(0, { error: 'Failed to fetch' }), 'Failed to fetch', 'no answer: the network\'s text');
+  assert.equal(signOutOthersText(502, null), '502: the other sessions were not signed out');
+  assert.equal(signOutOthersText(200, null), '200: the other sessions were not signed out', 'a 200 that is not the route\'s answer');
+
+  const fn = functionSource(withoutComments(readFileSync(join(STUDIO, 'app.mjs'), 'utf8')), 'setupIdentityChip');
+  const at = (s) => { const i = fn.indexOf(s); assert.ok(i >= 0, `setupIdentityChip has ${s}`); return i; };
+  assert.ok(at('>change password…</a>') < at('class="hdr-user-menu-item hdr-user-others">sign out my other sessions</button>'), 'after change password…');
+  assert.ok(at('hdr-user-others">sign out my other sessions</button>') < at('class="hdr-user-menu-item hdr-user-out">sign out</button>'), 'before sign out');
+  assert.match(fn, /fetch\('\/auth\/signout-others', \{ method: 'POST', headers: \{ Accept: 'application\/json', \.\.\.authHeaders\(\) \} \}\)/);
+  assert.equal(routeEntry('POST /auth/signout-others').class, 'self', 'the route it posts to');
+  assert.match(fn, /chip\.querySelector\('\.hdr-user-menu-id'\)\.textContent = signOutOthersText\(status, body\);/);
+});
+
 // ---------- completeness: every route is classified and guarded (§14.1) ----------
 //
 // The expected class of every route, written from STORE_PLAN §5 — NOT
@@ -556,6 +586,7 @@ const EXPECTED_CLASS = Object.freeze({
   'GET /auth/change-password': 'self',
   'POST /auth/change-password': 'self',
   'POST /auth/change-password/skip': 'self',
+  'POST /auth/signout-others': 'self',
   'GET /api/orgs': 'viewer',
   'GET /api/packs': 'viewer',
   'GET /api/examples': 'viewer',
@@ -1259,6 +1290,32 @@ test('the AuthZ matrix — identity posture: every /api route × every principal
     const wipe = await call(srv.base, ['DELETE', '/api/uploads'], { headers: oscar });
     assert.equal(wipe.json?.dropped >= 1, true, wipe.text);
     assert.equal(await auditSeq(ws), seq, 'validate, capture and reset wrote no audit row');
+
+    // Self rows: POST /auth/signout-others answers the caller's own session,
+    // with the CSRF header — never an anonymous caller, the bearer or a
+    // disabled user's cookie; on a throwaway sign-in of vera's, whose
+    // matrix cookie is then refused and the re-issued one answered.
+    const SELF = ['POST', '/auth/signout-others'];
+    const selfSeq = await auditSeq(ws);
+    const NO_SESSION = { ok: false, error: 'unauthorized: sign in required', login: '/auth/login', denied: 'auth' };
+    for (const [label, headers] of [['anonymous', CSRF], ['the bearer', { Authorization: `Bearer ${TOKEN}`, ...CSRF }], ['dan (disabled)', { Cookie: cookies.dan, ...CSRF }]]) {
+      r = await call(srv.base, SELF, { headers });
+      assert.deepEqual([r.status, r.json], [401, NO_SESSION], label);
+    }
+    const throwaway = (await signIn(srv.base, 'vera', pw('vera'))).session;
+    r = await call(srv.base, SELF, { headers: { Cookie: throwaway } });
+    assert.deepEqual([r.status, r.json.denied], [403, 'csrf'], 'a session without the header');
+    assert.equal(await auditSeq(ws), selfSeq, 'the refused self calls wrote nothing');
+    const out = await fetch(`${srv.base}/auth/signout-others`, { method: 'POST', headers: { Cookie: throwaway, ...CSRF, Accept: 'application/json' } });
+    const outJson = await out.json();
+    assert.deepEqual([out.status, outJson.ok, Number.isInteger(outJson.sessionEpoch)], [200, true, true], JSON.stringify(outJson));
+    const reissued = (out.headers.getSetCookie?.() || []).find((c) => c.startsWith('observogram_session='))?.split(';')[0];
+    assert.ok(reissued && reissued !== throwaway, 'this session\'s cookie is re-issued');
+    for (const [label, cookie, want] of [['vera\'s matrix cookie', cookies.vera, 401], ['the throwaway before its re-issue', throwaway, 401], ['the re-issued cookie', reissued, 200]]) {
+      r = await call(srv.base, PROBES['GET /api/packs'], { headers: { Cookie: cookie, 'X-Observogram-Org': 'acme' } });
+      assert.equal(r.status, want, label);
+    }
+    assert.deepEqual((await auditRowsAfter(ws, selfSeq)).map((row) => row.slice(0, 4)), [['user.signout', 'vera', null, 'vera']], 'one row, vera its actor');
   } finally {
     await srv.stop();
   }
@@ -1299,7 +1356,7 @@ test('the AuthZ matrix — token posture: anonymous reads, the bearer an operato
     // Stand-alone sign-in is off (nothing seeded): the self routes are
     // registered, and selfGate's first step answers 404 whatever the
     // caller carries — not a redirect to /auth/login, not a 401.
-    for (const probe of [['GET', '/auth/change-password'], ['POST', '/auth/change-password'], ['POST', '/auth/change-password/skip']]) {
+    for (const probe of [['GET', '/auth/change-password'], ['POST', '/auth/change-password'], ['POST', '/auth/change-password/skip'], ['POST', '/auth/signout-others']]) {
       for (const headers of [{}, { ...variants[1].headers, 'X-Observogram-CSRF': '1' }]) {
         const r = await call(srv.base, probe, { headers });
         assert.deepEqual([r.status, r.json], [404, { ok: false, error: 'identity not configured' }], `${probe.join(' ')} ${JSON.stringify(headers)}`);
@@ -1469,6 +1526,8 @@ test('fresh loopback boot: the pwflow cookie alone reaches the forced change and
     assert.match(await r.text(), /formaction="\/auth\/change-password\/skip"/, 'the skip control');
     r = await fetch(`${srv.base}/api/packs`, { headers: { Cookie: s.pwflow, Accept: 'application/json' } });
     assert.equal(r.status, 401, 'the pwflow cookie is not a session');
+    r = await fetch(`${srv.base}/auth/signout-others`, { method: 'POST', headers: { Cookie: s.pwflow, 'X-Observogram-CSRF': '1', Accept: 'application/json' } });
+    assert.deepEqual([r.status, (await r.json()).denied], [401, 'auth'], 'nor is it one to sign out the other sessions');
 
     // A sibling subdomain's auto-submitted form: refused, and nothing set.
     const form = (cookie, site, path = '/auth/change-password') => fetch(`${srv.base}${path}`, {
@@ -1491,6 +1550,14 @@ test('fresh loopback boot: the pwflow cookie alone reaches the forced change and
     assert.ok(session, 'the skip issues a session');
     r = await fetch(`${srv.base}/api/packs`, { headers: { Cookie: session } });
     assert.equal(r.status, 200);
+
+    // Beside a session, a pwflow cookie never wins on POST /auth/signout-others
+    // (session only): the session signs out the others — and the bump ends
+    // the pending forced change too.
+    r = await fetch(`${srv.base}/auth/signout-others`, { method: 'POST', headers: { Cookie: `${s.pwflow}; ${session}`, 'X-Observogram-CSRF': '1', Accept: 'application/json' } });
+    assert.equal(r.status, 200);
+    r = await fetch(`${srv.base}/auth/change-password`, { headers: { Cookie: s.pwflow }, redirect: 'manual' });
+    assert.deepEqual([r.status, r.headers.get('location')], [302, '/auth/login'], 'the pwflow cookie of before is refused');
   } finally {
     await srv.stop();
   }

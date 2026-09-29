@@ -59,6 +59,12 @@ export const ROUTES = Object.freeze({
     class: 'self', csrf: 'form', modes: ['local'],
     self: { pwflow: true, session: false, unauth: 'flow-expired' },
   },
+  // "Sign out my other sessions": a session only (never the pwflow cookie),
+  // and an identity change, so the CSRF header in every mode.
+  'POST /auth/signout-others': {
+    class: 'self', csrf: 'always', modes: ['local', 'oidc'], audit: ['user.signout'],
+    self: { pwflow: false, session: true, unauth: 'json' },
+  },
 
   // ---------- viewer: every read in the org ----------
   'GET /api/orgs': { class: 'viewer' },

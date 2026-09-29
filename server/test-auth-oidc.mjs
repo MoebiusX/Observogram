@@ -314,6 +314,23 @@ try {
     + '(an email counts only when the sign-in verified it) — add them by login; an IdP user can be added after their first sign-in'
     && !rolesOf(db, getUserByLogin(db, loginOf('user-81'))).includes('ops:operator'),
   'an email whose ID token said email_verified: false is not matched (404)', made);
+
+  // ---- sign out my other sessions under OIDC (STORE_PLAN slice 3b): the
+  // IdP user's other cookie ends; this one is re-issued at the new epoch ----
+  const carolAgain = (await signIn(base, { sub: 'user-80', email: 'carol@example.test', name: 'Carol', email_verified: true })).session;
+  const carolEp = getUserByLogin(db, loginOf('user-80')).sessionEpoch;
+  r = await fetch(`${base}/auth/signout-others`, { method: 'POST', headers: { Cookie: carol.session, 'X-Observogram-CSRF': '1', Accept: 'application/json' } });
+  j = await r.json();
+  const carolNow = cookieOf(r, 'observogram_session');
+  assert(r.status === 200 && j.ok === true && j.sessionEpoch === carolEp + 1 && !!carolNow,
+    'an IdP user signs out their other sessions: 200, the epoch bumped, this cookie re-issued', [r.status, j]);
+  const carolStatuses = [];
+  for (const c of [carolAgain, carol.session, carolNow]) carolStatuses.push((await fetch(`${base}/api/packs`, { headers: { Cookie: c } })).status);
+  assert(JSON.stringify(carolStatuses) === JSON.stringify([401, 401, 200]),
+    'the other cookie and this one before the re-issue are refused; the re-issued one works', carolStatuses);
+  const carolRows = listAudit(db, { action: 'user.signout', targetId: loginOf('user-80') });
+  assert(carolRows.length === 1 && carolRows[0].actor === loginOf('user-80') && carolRows[0].detail?.sessionEpoch === carolEp + 1,
+    'one user.signout row, the IdP user its actor', carolRows);
 } finally {
   delete process.env.OBSERVOGRAM_BOOTSTRAP_ADMIN;
   await new Promise(res => srv.close(res));
