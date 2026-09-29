@@ -541,7 +541,9 @@ request writes none.
 - **Without sign-in** (the open postures, where the caller is `local`, an
   owner): on a loopback server the identity API answers only a request
   sent straight to it — `Host` `localhost`, `127.x.x.x` or `[::1]`, no
-  `Forwarded`, `Via`, `X-Forwarded-*` or `X-Real-IP` header, and an
+  `Forwarded`, `Via`, `X-Forwarded-*` or `X-Real-IP` header nor a
+  client-IP header a CDN or a tunnel adds (`CF-Connecting-IP`,
+  `True-Client-IP`, `X-Client-IP`, …), and an
   `Origin`, if any, naming that host — else 403 `posture`, naming the
   CLIs; a DNS-rebinding page or a proxy cannot plant an owner that outlives
   the posture. Beyond loopback (`OBSERVOGRAM_INSECURE_NO_AUTH=1`) it is
