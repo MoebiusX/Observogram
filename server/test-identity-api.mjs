@@ -150,7 +150,9 @@ const VIEW_KEYS = ['id', 'login', 'kind', 'name', 'email', 'emailVerified', 'own
   'createdAt', 'lastLoginAt', 'memberships'];
 const isView = (u) => assert.deepEqual(Object.keys(u), VIEW_KEYS, `the user view of ${u.login}: named fields only (no password, no session epoch)`);
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-const BAD_IDS = ['abc', '0', '01', '-1', '1.5', '1e3', '12345678901234567'];
+// A 16-digit id past 2^53 - 1 is refused too: bound as a number it would
+// round, and a refusal would name an id the caller never sent.
+const BAD_IDS = ['abc', '0', '01', '-1', '1.5', '1e3', '12345678901234567', '9007199254740992', '9007199254740993', '9999999999999999'];
 
 // ---------- the reads ----------
 
@@ -280,6 +282,7 @@ test('POST /api/admin/users/:id/disable and /enable: the rows, the no-ops, the s
   for (const key of ['POST /api/admin/users/:id/disable', 'POST /api/admin/users/:id/enable']) {
     const verb = key.split('/').pop();
     await refused(key, 'olive', `/api/admin/users/999999/${verb}`, undefined, 404, 'no user 999999');
+    await refused(key, 'olive', `/api/admin/users/9007199254740991/${verb}`, undefined, 404, 'no user 9007199254740991');
     for (const id of BAD_IDS) await refused(key, 'olive', `/api/admin/users/${id}/${verb}`, undefined, 400, 'user id must be a positive integer');
   }
 });
@@ -663,7 +666,7 @@ test('PATCH /api/org/members/:userId: a member\'s role — membership.role { fro
 
   // bob is in bravo, otto in no org, 999999 no one: one answer — nothing
   // outside acme is told apart.
-  for (const id of [idOf('bob'), idOf('otto'), 999999]) {
+  for (const id of [idOf('bob'), idOf('otto'), 999999, Number.MAX_SAFE_INTEGER]) {
     await refused(K, 'ada', `/api/org/members/${id}`, { role: 'viewer' }, 404, `user ${id} is not a member of acme`);
   }
   for (const id of BAD_IDS) await refused(K, 'ada', `/api/org/members/${id}`, { role: 'viewer' }, 400, 'user id must be a positive integer');
