@@ -248,7 +248,8 @@ npm run dev
 Open `http://127.0.0.1:8000` and sign in with **admin / admin** — first
 boot seeds this default user and asks for a password change at sign-in
 (skippable for now; it asks again each sign-in until a real password
-lands — or change it any time from the account menu, top right). From
+lands — or change it any time from the account menu, top right once a
+pack is open, which also has **sign out my other sessions**). From
 there it's a signed-in app: your packs, deploy audit and run history
 belong to you. (`OBSERVOGRAM_AUTH=off` skips login entirely
 for a throwaway open sandbox.)
@@ -269,7 +270,9 @@ for a throwaway open sandbox.)
    `Authorization: Bearer <secret>`; read routes stay open. Set
    `OBSERVOGRAM_API_TOKEN_LABEL=<team-or-owner>` to stamp the deploy audit
    log with the token's ownership — the secret itself never lands in any
-   log. A token configured on a fresh workspace suppresses the
+   log. The label must not be a user's login: the audit log names the
+   bearer by it (default `token`), and the identity API refuses a new user
+   by that name. A token configured on a fresh workspace suppresses the
    default-admin seed: the token is the expressed auth intent.
 3. **Exposed without any auth.** The server **refuses to start** with a
    clear message. `OBSERVOGRAM_INSECURE_NO_AUTH=1` overrides knowingly (it
@@ -277,7 +280,9 @@ for a throwaway open sandbox.)
 
 Real users and SSO: `npm run users` manages locally-defined accounts,
 `OBSERVOGRAM_OIDC_*` wires any OIDC provider, and `npm run orgs` manages
-orgs — see [docs/PRODUCTIZATION_PLAN.md](docs/PRODUCTIZATION_PLAN.md) and
+orgs; owners and org admins do the same over HTTP through
+[the identity API](#the-identity-api) — see
+[docs/PRODUCTIZATION_PLAN.md](docs/PRODUCTIZATION_PLAN.md) and
 [docs/STORE_PLAN.md](docs/STORE_PLAN.md).
 
 **Users, orgs and sessions live in the store.** Users, orgs, memberships
@@ -315,8 +320,10 @@ server opens it at every start.
   shows for a user in more than one org, or whose only org is not the
   default one.
 - **Sessions are revocable.** A password change or a disable signs the
-  user out everywhere (a per-user epoch in the store); cookies issued
-  before the upgrade stay valid.
+  user out everywhere (a per-user epoch in the store), and so does an
+  owner's `POST /api/admin/users/<id>/signout`; a user's **sign out my
+  other sessions** ends every session but the one they click it in.
+  Cookies issued before the upgrade stay valid.
 - **Stand-alone sign-in stays armed once armed.** The first local user
   arms it; removing users never reopens a server. Only
   `OBSERVOGRAM_AUTH=off` does.
@@ -355,8 +362,8 @@ the server registers, and each route's first handler is its guard.
 |---|---|
 | `viewer` | every read (`GET`) in the org |
 | `operator` | every existing write in the org as well: scan, draft, register, instantiate and compile, deploy, verify and roll back, retrofeed, journeys, the live refresh, RESET |
-| `admin` | the org's name and members as well (the identity API, next slice) |
-| owner | a deployment-level flag, not an org role: an owner acts as `admin` in every org, plus users, orgs and the join role (next slice) |
+| `admin` | the org's name and members as well ([the identity API](#the-identity-api)) |
+| owner | a deployment-level flag, not an org role: an owner acts as `admin` in every org, plus users, orgs and the join role ([the identity API](#the-identity-api)) |
 
 The role is the membership **of the request's org** (`X-Observogram-Org`,
 `?org=`). `orgs.json` roles are mapped on import: `admin` / `owner` →
@@ -371,19 +378,26 @@ anything else (`member`, empty) → `operator`. Per posture:
   (their writes answer 401); the bearer is an operator.
 - **Open** (`OBSERVOGRAM_AUTH=off`, or `OBSERVOGRAM_INSECURE_NO_AUTH=1`
   beyond loopback): the caller is `local`, an owner — every route, as
-  before.
+  before, but the identity API: on a loopback server it answers only a
+  request sent straight to it, and beyond loopback it is closed (see
+  [The Identity API](#the-identity-api)).
 
-Every refusal carries `denied` — `auth` (401: sign in), `csrf`, `org` (not
-a member of that org), `role` or `posture` — and a sentence that names the
-way out, e.g. `requires the operator role in org 'acme' (you are viewer) —
-ask an admin of acme`; the studio shows it as is. `GET /api/orgs` and
-`/auth/me`'s `orgs` give each org's `role` (the membership's) and
-`effectiveRole` (the one the guard applies). A form post to `/auth/login`
-or `/auth/change-password` that the browser marks as coming from another
-site, or a sibling subdomain (`Sec-Fetch-Site: cross-site | same-site`), is
-refused. Authorization is decided when a request reaches its route: a
-request already running when its user is disabled or demoted finishes; the
-user's next one is refused.
+Every authorization refusal carries `denied` — `auth` (401: sign in),
+`csrf`, `org` (not a member of that org), `role` or `posture` — and a
+sentence that names the way out, e.g. `requires the operator role in org
+'acme' (you are viewer) — ask an admin of acme`; the studio shows it as
+is. `GET /api/orgs` and `/auth/me`'s `orgs` give each org's `role` (the
+membership's) and `effectiveRole` (the one the guard applies). A form
+post to `/auth/login` or `/auth/change-password` that the browser marks as
+coming from another site, or a sibling subdomain
+(`Sec-Fetch-Site: cross-site | same-site`), is refused. An identity
+change — every identity-API request but a `GET`, and
+`POST /auth/signout-others` — needs `X-Observogram-CSRF: 1` in every
+posture, the open ones included, so a cross-site form cannot make one (the
+bearer, which a cross-site page cannot send, never reaches one).
+Authorization is decided when a request reaches its route: a request
+already running when its user is disabled or demoted finishes; the user's
+next one is refused.
 
 **What a viewer can no longer do in the studio** (each answers with the
 server's text): Scan (a repo or GitHub), Draft from MCP and the MCP
@@ -391,7 +405,8 @@ panel's live refresh, dropping or uploading a pack file (even only to view
 it: the upload registers it), Build (its preview computes on the server,
 and Save registers), Compare's retrofeed, journey Capture and Run, Deploy /
 Verify / Rollback, and RESET. Give such a member `operator` with
-`npm run orgs -- add-member <org> <login> --role operator`.
+`npm run orgs -- add-member <org> <login> --role operator`, or, as an
+admin of the org, `PATCH /api/org/members/<id>` with `{"role": "operator"}`.
 
 MCP write tokens are unrelated to the API token: they pass through per
 request and are never stored server-side. Userinfo, the fragment and query
@@ -417,6 +432,131 @@ npm run lint:crawler
 npm run lint:fetcher
 npm run test
 ```
+
+### The Identity API
+
+Owners and org admins manage users, orgs and memberships over HTTP with
+the rules `npm run users` and `npm run orgs` apply
+([`server/identity-admin.mjs`](server/identity-admin.mjs)); every change
+writes its audit rows with the caller's login as the actor (`local` on a
+server without sign-in). The owner routes (`/api/admin/…`) act on the
+deployment, whatever org the request is in. The admin routes
+(`/api/org…`) act on the request's org (`X-Observogram-Org`, `?org=`): no
+path names an org, so an org admin never reaches another one; an owner is
+an admin of every org it names. Paths name a user by its numeric `id`
+(from `GET /api/admin/users`, or `userId` in a member list); logins and
+emails go in the JSON body.
+
+| Method | Path | Who | Body | What it does |
+|---|---|---|---|---|
+| `GET` | `/api/admin/users` | owner | — | every user, disabled ones too: `id`, `login`, `kind`, `name`, `email`, `emailVerified`, `owner`, `disabled`, `mustChange`, `seededDefault`, `createdAt`, `lastLoginAt`, `memberships` — never a password |
+| `POST` | `/api/admin/users` | owner | `{ login, password, name?, email?, role?, orgId? }` | a local user (201) with that password (at least 8 characters), a member of `orgId` (needed when the deployment has more than one org) at `role` (default `operator`); the first local user while no enabled local owner exists becomes an owner, where local users can sign in |
+| `POST` | `/api/admin/users/:id/disable` | owner | — | every session of the user ends; `you: true` when it was the caller |
+| `POST` | `/api/admin/users/:id/enable` | owner | — | undoes a disable: memberships, owner flag and password as they were |
+| `POST` | `/api/admin/users/:id/password` | owner | `{ password }` | a temporary password for a local user: every session ends, and the next sign-in must set a new one |
+| `POST` | `/api/admin/users/:id/signout` | owner | — | sign out everywhere: every cookie of the user is refused from its next request; `you: true` when it was the caller |
+| `PUT` | `/api/admin/users/:id/owner` | owner | `{ "owner": true \| false }` | grants or revokes owner |
+| `GET` | `/api/admin/orgs` | owner | — | `defaultOrg` and every org, removed ones too, with its `members` count |
+| `POST` | `/api/admin/orgs` | owner | `{ id, name?, adopt? }` | a new org at `orgs/<id>/` (201), the caller its first admin; `"adopt": true` takes over a non-empty directory; a slug is never reused |
+| `DELETE` | `/api/admin/orgs/:id` | owner | — | a soft removal, never of the default org: the org is refused from its members' next request; its files stay (`packc store purge-org <id>`, with the server stopped) |
+| `GET` | `/api/admin/join-role` | owner | — | the recorded join role (`viewer`, `operator`, `admin` or `null`), `oidc`, `issuerKey` |
+| `PUT` | `/api/admin/join-role` | owner | `{ role, confirm? }` | the default-org role of every IdP user created from now on; `null` or `"none"`: no automatic join |
+| `PATCH` | `/api/org` | admin | `{ name }` | renames the org (1–200 characters) |
+| `GET` | `/api/org/members` | admin | — | the org and its members: `userId`, `login`, `kind`, `name`, `email`, `role`, `disabled`, `since` |
+| `POST` | `/api/org/members` | admin | `{ login }` or `{ email }`, `role?` | adds an existing user (201) at `role` (default `operator`); a member already gets that role (200, `changed`) |
+| `PATCH` | `/api/org/members/:userId` | admin | `{ role }` | changes a member's role |
+| `DELETE` | `/api/org/members/:userId` | admin | — | removes a member |
+| `POST` | `/auth/signout-others` | self | — | sign out my other sessions (below) |
+
+Call it with a session cookie and `X-Observogram-CSRF: 1` on every change:
+
+```bash
+# Sign in as a local owner; the jar keeps the session cookie.
+curl -s -c jar -H 'Accept: application/json' \
+  --data-urlencode username=olive --data-urlencode 'password=<password>' \
+  http://127.0.0.1:8000/auth/login
+# Create a local user, an admin of acme (201).
+curl -s -b jar -H 'X-Observogram-CSRF: 1' -H 'Content-Type: application/json' \
+  -d '{"login":"ada","password":"<at least 8 characters>","orgId":"acme","role":"admin"}' \
+  http://127.0.0.1:8000/api/admin/users
+# Add an existing user to acme by the email their sign-in verified.
+curl -s -b jar -H 'X-Observogram-CSRF: 1' -H 'X-Observogram-Org: acme' \
+  -H 'Content-Type: application/json' -d '{"email":"bob@example.com","role":"viewer"}' \
+  http://127.0.0.1:8000/api/org/members
+```
+
+A change without the header answers 403 `csrf`. The bearer
+(`OBSERVOGRAM_API_TOKEN`) is an operator, so the identity API refuses it
+(403 `role`). A 403 is always an authorization denial, with `denied`; a
+rule's refusal is 400 (bad input), 404 (no such user, org or member) or
+409 (the state forbids it), and names the way out. Each route's audit rows
+are listed in [`server/route-table.mjs`](server/route-table.mjs); a refused
+request writes none.
+
+- **Adding a member.** `POST /api/org/members` adds an existing user — by
+  exact `login`, or by `email`: the one enabled user whose sign-in
+  verified that address (compared without case; only an IdP sign-in
+  verifies one, so a local user is added by login). It never creates a
+  user: an owner creates local users, and an IdP user can be added after
+  their first sign-in. An IdP re-syncs the email at every sign-in, so an address
+  names whoever holds it at the IdP now: confirm the match by the
+  `member.login` the answer returns. To an org admin, no such user, a
+  disabled one and several matches are one 404 (an admin cannot list the
+  deployment's users); an owner gets the detail.
+- **Sign out everywhere, and keeping someone out.** After
+  `POST /api/admin/users/<id>/signout` an IdP user can sign in again at
+  the IdP, perhaps without a prompt; to keep them out, disable them.
+- **The temporary password.** `POST /api/admin/users/<id>/password` sets a
+  password (at least 8 characters) the user must replace at their next
+  sign-in — there is no skip — for a local user only (an IdP user has no
+  password here: sign them out everywhere or disable them) and never on the
+  caller's own account (change yours at `/auth/change-password`).
+- **The last owner and the last admin.** The last enabled owner, and the
+  last owner who can sign in under the server's sign-in mode (a local
+  password, or its OIDC issuer), can be neither disabled nor demoted: 409,
+  naming `PUT /api/admin/users/<id>/owner` with `{"owner": true}` for
+  another user first. An org's last enabled admin can be demoted or
+  removed only by an owner — through `PATCH` or `DELETE
+  /api/org/members/<userId>`, or the role change of `POST
+  /api/org/members`; from a shell, `npm run orgs -- add-member` and
+  `remove-member` still can.
+- **Revoking owner keeps the admin membership.** A grant makes the user an
+  admin of the default org too (its `owner.grant` audit row records the
+  role before, `from`); `{"owner": false}` touches no membership, and the
+  answer's `memberships` and `note` say when the user is still that org's
+  admin — change it with `PATCH /api/org/members/<id>` in the default org.
+- **The join role.** `PUT /api/admin/join-role` with `{"role": "admin"}`
+  answers 409 unless it carries `"confirm": true`: every user the IdP lets
+  in would become an admin of the default org — to add admins one by one,
+  use `POST /api/org/members` with `{"role": "admin"}`. The join role
+  applies to IdP users created after the change and backfills nobody;
+  `OBSERVOGRAM_OIDC_JOIN_ROLE` is still read at the first start only.
+- **Reserved logins.** `system`, `cli`, `local` and `token` — the actors
+  the audit log writes for the store, a shell, a server without sign-in
+  and the bearer — are refused as a new local login, from the API and from
+  `npm run users -- add`; the API also refuses the configured
+  `OBSERVOGRAM_API_TOKEN_LABEL`.
+- **Without sign-in** (the open postures, where the caller is `local`, an
+  owner): on a loopback server the identity API answers only a request
+  sent straight to it — `Host` `localhost`, `127.x.x.x` or `[::1]`, no
+  `Forwarded`, `Via`, `X-Forwarded-*` or `X-Real-IP` header, and an
+  `Origin`, if any, naming that host — else 403 `posture`, naming the
+  CLIs; a DNS-rebinding page or a proxy cannot plant an owner that outlives
+  the posture. Beyond loopback (`OBSERVOGRAM_INSECURE_NO_AUTH=1`) it is
+  closed (403 `posture`). A direct request to `POST /api/admin/orgs`
+  answers 409 in both: a second org needs identity. With a token and no
+  sign-in nobody is an owner or an admin, so the identity API refuses
+  every caller; its 403 `role` names `npm run users -- add <login>`.
+
+**Sign out my other sessions** — `POST /auth/signout-others`, the account
+menu's item, in local and OIDC sign-in. It takes the caller's own session
+cookie only (never the cookie of a pending forced password change, never
+the bearer: 401) and `X-Observogram-CSRF: 1` (else 403 `csrf`). Every other
+cookie of the user — another browser's, a script's — is refused from its
+next request; this browser's is re-issued at the new session epoch and
+keeps its expiry (signing out elsewhere never extends a session). It
+answers `{ ok, sessionEpoch }` and writes one `user.signout` row, the user
+its actor.
 
 ### Run In Docker Or Kubernetes
 
@@ -1122,8 +1262,10 @@ of it may be needed again.
 
 Every route's class — public, self, viewer, operator, admin, owner — is in
 [`server/route-table.mjs`](server/route-table.mjs) (see [Roles](#roles)).
-Below, `/healthz` and `/api/version` are `public`, every other `GET` is
-`viewer` and every other route `operator`.
+Below, `/healthz` and `/api/version` are `public` and `/auth/signout-others`
+is `self`; `/api/org` and every `/api/org/…` route are `admin`, every
+`/api/admin/…` route `owner` (see [The Identity API](#the-identity-api));
+every other `GET` is `viewer` and every other route `operator`.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -1156,6 +1298,24 @@ Below, `/healthz` and `/api/version` are `public`, every other `GET` is
 | `GET` | `/api/journeys/:name/schedule` | The parsed `schedule:` and the cron / schtasks / GitHub Actions / CronJob snippets (env var names only; `placeholder: true` without a schedule) |
 | `POST` | `/api/journeys/:name/run` | Run a saved journey now |
 | `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file |
+| `GET` | `/api/admin/users` | Every user, disabled ones too, with their memberships — never a password |
+| `POST` | `/api/admin/users` | Create a local user (201) |
+| `POST` | `/api/admin/users/:id/disable` | Disable a user: every session ends |
+| `POST` | `/api/admin/users/:id/enable` | Undo a disable |
+| `POST` | `/api/admin/users/:id/password` | Set a temporary password: changed at the next sign-in, every session ends |
+| `POST` | `/api/admin/users/:id/signout` | Sign a user out everywhere |
+| `PUT` | `/api/admin/users/:id/owner` | Grant or revoke owner (`{"owner": true \| false}`) |
+| `GET` | `/api/admin/orgs` | Every org, removed ones too, with its member count |
+| `POST` | `/api/admin/orgs` | Create an org (201); the caller is its first admin |
+| `DELETE` | `/api/admin/orgs/:id` | Remove an org (soft: its files stay) |
+| `GET` | `/api/admin/join-role` | The default-org role of a new IdP user |
+| `PUT` | `/api/admin/join-role` | Set it (`admin` needs `"confirm": true`) |
+| `PATCH` | `/api/org` | Rename the request's org |
+| `GET` | `/api/org/members` | The request's org and its members |
+| `POST` | `/api/org/members` | Add an existing user by login or verified email (201), or change a member's role |
+| `PATCH` | `/api/org/members/:userId` | Change a member's role |
+| `DELETE` | `/api/org/members/:userId` | Remove a member |
+| `POST` | `/auth/signout-others` | Sign out my other sessions: this browser's cookie is re-issued, every other one refused |
 
 ## Repository Map
 

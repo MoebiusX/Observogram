@@ -17,7 +17,8 @@
  *   server/route-table.mjs for its mode and agrees with EXPECTED_CLASS
  *   below, only the named middleware and the static mounts sit between;
  *   the README's API Surface states each of its rows' class as the table has it,
- *   and its Roles section each orgs.json role the import maps to admin or viewer;
+ *   its Identity API section lists every identity route with its class, and
+ *   its Roles section each orgs.json role the import maps to admin or viewer;
  *   no comment in server/ or tools/ still says roles are not enforced;
  * - the decision (authzDecision), pure, over synthetic entries — the
  *   always / refuse / rule / direct-loopback paths no route has yet — and
@@ -742,9 +743,10 @@ test('completeness: the table agrees with the independent classification, and ev
 });
 
 // The README's API Surface states each row's class in its intro: the
-// public rows by name, then every other GET viewer, every other row
-// operator. Each row is checked against the route table.
-test('the README API Surface: its intro names each public row, every other GET is viewer, every other row operator', () => {
+// public and self rows by name, the admin rows (/api/org, /api/org/…) and
+// the owner rows (/api/admin/…) by path, then every other GET viewer, every
+// other row operator. Each row is checked against the route table.
+test('the README API Surface: its intro states each row\'s class — public and self by name, admin and owner by path, every other GET viewer, every other row operator', () => {
   const readme = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'README.md'), 'utf8');
   const start = readme.indexOf('\n## API Surface\n');
   assert.ok(start >= 0, 'README has an API Surface section');
@@ -753,19 +755,54 @@ test('the README API Surface: its intro names each public row, every other GET i
   const intro = section.slice(0, section.indexOf('\n|')).replace(/\s+/g, ' ');
   const rows = [...section.matchAll(/^\| `([A-Z]+)` \| `([^`]+)` \|/gm)].map(([, method, path]) => ({ method, path: path.split('?')[0] }));
   assert.ok(rows.length >= 20, `read the table (${rows.length} rows)`);
+  const paths = (text) => [...(text ?? '').matchAll(/`([^`]+)`/g)].map(([, path]) => path);
+  const publicNamed = paths(intro.match(/Below, (.+?) are `public`/)?.[1]);
+  const selfNamed = paths(intro.match(/are `public` and (.+?) is `self`/)?.[1]);
+  assert.ok(publicNamed.length > 0, 'the intro names the public rows');
+  assert.ok(selfNamed.length > 0, 'the intro names the self rows');
+  assert.match(intro, /`\/api\/org` and every `\/api\/org\/…` route are `admin`/, 'the intro states the admin rows');
+  assert.match(intro, /every `\/api\/admin\/…` route `owner`/, 'the intro states the owner rows');
+  assert.match(intro, /every other `GET` is `viewer`/, 'the intro states the GET rule');
+  assert.match(intro, /every other route `operator`/, 'the intro states the rule for every other row');
+  const stated = (method, path) => {
+    if (publicNamed.includes(path)) return 'public';
+    if (selfNamed.includes(path)) return 'self';
+    if (path === '/api/org' || path.startsWith('/api/org/')) return 'admin';
+    if (path.startsWith('/api/admin/')) return 'owner';
+    return method === 'GET' ? 'viewer' : 'operator';
+  };
   for (const { method, path } of rows) {
     const key = `${method} ${path}`;
     assert.ok(Object.hasOwn(ROUTES, key), `${key}: a README row the route table does not hold`);
-    const { class: cls } = routeEntry(key);
-    const named = intro.includes(`\`${path}\``);
-    if (cls === 'public') assert.ok(named, `${key}: a public row the intro does not name`);
-    else {
-      assert.ok(!named, `${key}: the intro names a ${cls} row as public`);
-      assert.equal(cls, method === 'GET' ? 'viewer' : 'operator', `${key}: the class the intro states`);
-    }
+    assert.equal(routeEntry(key).class, stated(method, path), `${key}: the class the intro states`);
   }
-  assert.match(intro, /every other `GET` is `viewer`/, 'the intro states the GET rule');
-  assert.match(intro, /every other route `operator`/, 'the intro states the rule for every other row');
+  for (const path of [...publicNamed, ...selfNamed]) assert.ok(rows.some((r) => r.path === path), `${path}: named in the intro, a row below`);
+});
+
+// The README's Identity API section: its table lists every identity-API
+// route and the self route it documents (POST /auth/signout-others) once,
+// each with its class as "Who"; every change it lists takes the CSRF header
+// ("on every change"), and each curl example that changes something sends it.
+test('the README Identity API section lists every identity route once with its class, and its examples send the CSRF header', () => {
+  const readme = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'README.md'), 'utf8');
+  const start = readme.indexOf('\n### The Identity API\n');
+  assert.ok(start >= 0, 'README has an Identity API section');
+  const end = readme.indexOf('\n### ', start + 1);
+  const section = readme.slice(start, end < 0 ? undefined : end);
+  const rows = [...section.matchAll(/^\| `([A-Z]+)` \| `([^`]+)` \| ([a-z]+) \|/gm)].map(([, method, path, who]) => ({ key: `${method} ${path}`, who }));
+  const expected = Object.keys(ROUTES).filter((k) => routeEntry(k).identityApi || k === 'POST /auth/signout-others');
+  assert.deepEqual(rows.map((r) => r.key).sort(), expected.sort(), 'the identity routes, each once');
+  for (const { key, who } of rows) {
+    const e = routeEntry(key);
+    assert.equal(who, e.class, `${key}: "Who" is its class`);
+    if (e.method !== 'GET') assert.equal(e.csrf, 'always', `${key}: a change takes the CSRF header in every posture`);
+  }
+  const example = section.match(/```bash\n([\s\S]*?)```/)?.[1] ?? '';
+  const curls = example.replace(/\\\n\s*/g, ' ').split('\n').filter((line) => line.startsWith('curl '));
+  assert.ok(curls.length >= 2, `the curl example (${curls.length} calls)`);
+  for (const line of curls) {
+    if (/ -d /.test(line) && /\/api\/(admin|org)/.test(line)) assert.ok(line.includes("-H 'X-Observogram-CSRF: 1'"), `${line}: sends the CSRF header`);
+  }
 });
 
 // The README's Roles section states how the import maps orgs.json roles:
