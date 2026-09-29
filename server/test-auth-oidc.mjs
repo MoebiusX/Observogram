@@ -278,6 +278,42 @@ try {
   assert(got.status === 302 && getUserByLogin(db, loginOf('user-42')).isOwner === false && listAudit(db, { action: 'owner.bootstrap' }).length === 1,
     'once an owner exists, a sub-form match grants nothing');
   delete process.env.OBSERVOGRAM_BOOTSTRAP_ADMIN;
+
+  // ---- the admin routes under OIDC (STORE_PLAN slice 3b): an IdP admin
+  // adds an IdP user by the email their sign-in verified; an email the ID
+  // token did not verify matches no one ----
+  const as = (cookie, org = null) => (method, path, body) => fetch(`${base}${path}`, {
+    method,
+    headers: {
+      Cookie: cookie, 'X-Observogram-CSRF': '1', 'Content-Type': 'application/json', Accept: 'application/json',
+      ...(org ? { 'X-Observogram-Org': org } : {}),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  }).then(async (res) => ({ status: res.status, json: await res.json() }));
+  const bossSession = (await signIn(base, { sub: 'boss', email: 'boss@example.test', name: 'Boss', email_verified: true })).session;
+  made = await as(bossSession)('POST', '/api/admin/orgs', { id: 'ops', name: 'Ops' });
+  assert(made.status === 201, 'the owner creates org ops', made);
+  const bossInOps = as(bossSession, 'ops');
+  made = await bossInOps('POST', '/api/org/members', { login: loginOf('user-42'), role: 'admin' });
+  assert(made.status === 201 && made.json.member.login === loginOf('user-42') && made.json.member.role === 'admin',
+    'the owner adds user-42 to ops by its exact IdP login, as admin', made);
+  const carol = await signIn(base, { sub: 'user-80', email: 'carol@example.test', name: 'Carol', email_verified: true });
+  const dave = await signIn(base, { sub: 'user-81', email: 'dave@example.test', name: 'Dave', email_verified: false });
+  assert(carol.status === 302 && dave.status === 302 && getUserByLogin(db, loginOf('user-80')).emailVerified === true
+    && getUserByLogin(db, loginOf('user-81')).emailVerified === false, 'user-80 signs in with a verified email, user-81 with one the IdP did not verify');
+  const idpAdminInOps = as(got.session, 'ops');   // user-42, an admin of ops and not an owner
+  made = await idpAdminInOps('POST', '/api/org/members', { email: 'Carol@Example.test' });
+  assert(made.status === 201 && made.json.added === true && made.json.member.login === loginOf('user-80')
+    && made.json.member.kind === 'oidc' && made.json.member.role === 'operator',
+  'an IdP admin adds an IdP user by verified email: 201, member.login the IdP login', made);
+  const added = listAudit(db, { action: 'membership.add', targetId: loginOf('user-80'), orgId: 'ops' });
+  assert(added.length === 1 && added[0].actor === loginOf('user-42') && JSON.stringify(added[0].detail) === JSON.stringify({ role: 'operator' }),
+    'one membership.add row in ops, actor the IdP admin\'s login', added);
+  made = await idpAdminInOps('POST', '/api/org/members', { email: 'dave@example.test' });
+  assert(made.status === 404 && made.json.error === 'no single enabled user has the verified email dave@example.test '
+    + '(an email counts only when the sign-in verified it) — add them by login; an IdP user can be added after their first sign-in'
+    && !rolesOf(db, getUserByLogin(db, loginOf('user-81'))).includes('ops:operator'),
+  'an email whose ID token said email_verified: false is not matched (404)', made);
 } finally {
   delete process.env.OBSERVOGRAM_BOOTSTRAP_ADMIN;
   await new Promise(res => srv.close(res));

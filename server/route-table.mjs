@@ -104,6 +104,20 @@ export const ROUTES = Object.freeze({
   'POST /api/library/compile': { class: 'operator', later: 'none (computes)' },
   'POST /api/library/register': { class: 'operator', later: SLICE4_PACK },
 
+  // ---------- admin: the request's org — its name and its members ----------
+  // The identity API (server/routes/identity.mjs) for the org the request
+  // is in: no path names an org, so an admin never reaches another one (the
+  // org middleware refused a header naming an org they are not in). An
+  // owner is an admin in every org. Closed in the open, exposed posture and,
+  // without sign-in, answered only to a request sent straight to loopback.
+  'PATCH /api/org': { class: 'admin', identityApi: true, csrf: 'always', exposed: 'refuse', audit: ['org.rename'] },
+  'GET /api/org/members': { class: 'admin', identityApi: true, exposed: 'refuse' },
+  'POST /api/org/members': {
+    class: 'admin', identityApi: true, csrf: 'always', exposed: 'refuse', audit: ['membership.add', 'membership.role'],
+  },
+  'PATCH /api/org/members/:userId': { class: 'admin', identityApi: true, csrf: 'always', exposed: 'refuse', audit: ['membership.role'] },
+  'DELETE /api/org/members/:userId': { class: 'admin', identityApi: true, csrf: 'always', exposed: 'refuse', audit: ['membership.remove'] },
+
   // ---------- owner: the deployment's users, orgs and join role ----------
   // The identity API (server/routes/identity.mjs), whatever org the request
   // is in. Closed in the open, exposed posture — but for an org's creation,

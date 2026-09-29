@@ -1,7 +1,10 @@
 // server/routes/identity.mjs — the identity API (docs/STORE_PLAN.md §5,
 // slice 3b): the deployment's users, orgs and join role under /api/admin/*,
 // each class `owner` in server/route-table.mjs, whatever org the request is
-// in.
+// in; and the request's own org — its name and its members — under
+// /api/org*, class `admin`. No path names an org: the org is the one the
+// org middleware resolved (and checked the membership of), so an org admin
+// never reaches another org.
 //
 // Every rule is server/identity-admin.mjs's — the CLIs' own, called with
 // `surface: 'api'`, which changes only the way out a refusal names (a route
@@ -16,20 +19,27 @@
 // row and the atomic() that changes it. The audit actor is the principal's
 // (the user's login, or `local` on a server without sign-in); the rows each
 // route writes are listed in server/route-table.mjs.
+//
+// What an org admin's refusal reveals stays inside the org (STORE_PLAN §5:
+// an admin cannot list the deployment's users): a member route names a
+// user by id and answers "not a member" whether or not the id exists, and
+// an add that finds no one, a disabled user or several is one 404. An
+// owner gets the detailed texts.
 
 import express from 'express';
 import { join } from 'node:path';
 import { authDisabled, authEnabled, oidcEnabled } from '../auth.mjs';
 import { apiTokenLabel } from '../authz.mjs';
 import {
-  AdminRefusal, addLocalUser, createOrgFromAdmin, disableUser, enableUser, liveSignInMode, removeOrgSoft, setJoinRole,
-  setLocalPassword, setOwnerFlag, signOutEverywhere,
+  AdminRefusal, addLocalUser, addMember, createOrgFromAdmin, disableUser, enableUser, findMemberCandidate, liveSignInMode,
+  parseRole, removeMember, removeOrgSoft, renameOrgFromAdmin, setJoinRole, setLocalPassword, setMemberRole, setOwnerFlag,
+  signOutEverywhere,
 } from '../identity-admin.mjs';
-import { currentStore } from '../store/db.mjs';
+import { atomic, currentStore } from '../store/db.mjs';
 import { defaultOrgId } from '../store/identity.mjs';
 import { listMembers, listMembershipsForUser } from '../store/memberships.mjs';
 import { getMeta } from '../store/meta.mjs';
-import { listOrgs } from '../store/orgs.mjs';
+import { getOrg, listOrgs } from '../store/orgs.mjs';
 import { getUser, listUsersWithMemberships } from '../store/users.mjs';
 import { baseWorkspaceRoot } from '../tenancy.mjs';
 
@@ -57,14 +67,23 @@ const handler = (fn) => function identityHandler(req, res) {
 // A JSON object body, else {} (each rule refuses what is then missing).
 const bodyOf = (req) => (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {});
 
-// The user a path names by users.id — or null, the answer (400 / 404) sent.
-function pathUser(req, res, db) {
-  const id = req.params.id;
+// The users.id a path parameter holds, bound as a number — or null, the
+// 400 sent.
+function pathId(req, res, param) {
+  const id = req.params[param];
   if (!USER_ID.test(id)) {
     res.status(400).json({ ok: false, error: 'user id must be a positive integer' });
     return null;
   }
-  const row = getUser(db, Number(id));
+  return Number(id);
+}
+
+// The user an owner route's path names — or null, the answer (400 / 404)
+// sent. (The member routes never say whether an id exists: pathId only.)
+function pathUser(req, res, db) {
+  const id = pathId(req, res, 'id');
+  if (id === null) return null;
+  const row = getUser(db, id);
   if (!row) {
     res.status(404).json({ ok: false, error: `no user ${id}` });
     return null;
@@ -87,6 +106,22 @@ const userViewOf = (db, id) => userView(getUser(db, id), listMembershipsForUser(
 // The caller acted on its own row (its session ends with a disable or a
 // sign-out everywhere).
 const isCaller = (principal, row) => principal.user?.id === row.id;
+
+// The member view (admin routes): the membership and named fields of its
+// user — never a password, a session epoch or the user's other orgs.
+function memberView(m, u) {
+  return { userId: u.id, login: u.login, kind: u.kind, name: u.name, email: u.email, role: m.role, disabled: u.disabled, since: m.createdAt };
+}
+
+// The request's org, as the admin routes show it.
+function orgView(db, id) {
+  const org = getOrg(db, id);
+  return { id: org.id, name: org.name, default: org.id === defaultOrgId(db) };
+}
+
+// An owner (and `local` without sign-in) acts as an owner here: the org's
+// last admin may be demoted or removed, and a refusal gives the detail.
+const byOwnerOf = (principal) => principal.owner === true;
 
 export function identityRoutes({ authorize }) {
   // Case-sensitive like the app (server/index.mjs): a nested router does not inherit the app's setting.
@@ -197,6 +232,50 @@ export function identityRoutes({ authorize }) {
     const { role, confirm } = bodyOf(req);
     const r = setJoinRole(db, actor, role, { confirm });
     res.json({ ok: true, role: r.role, from: r.from });
+  }));
+
+  // ---------- the request's org: its name and its members ----------
+
+  router.patch('/api/org', authorize('PATCH /api/org'), handler((req, res, { db, actor }) => {
+    const org = renameOrgFromAdmin(db, actor, req.observogramOrg, bodyOf(req).name);
+    res.json({ ok: true, org: orgView(db, org.id) });
+  }));
+
+  router.get('/api/org/members', authorize('GET /api/org/members'), handler((req, res, { db }) => {
+    const orgId = req.observogramOrg;
+    res.json({ ok: true, org: orgView(db, orgId), members: listMembers(db, orgId).map((m) => memberView(m, getUser(db, m.userId))) });
+  }));
+
+  // An EXISTING user, by exact login or by the one enabled user whose
+  // sign-in verified that email — never a new row. An upsert: a member at
+  // another role gets that role (the org's last admin is not demoted but by
+  // an owner). The role is read first, so a bad one never looks anyone up;
+  // the lookup and the change are one transaction.
+  router.post('/api/org/members', authorize('POST /api/org/members'), handler((req, res, { db, actor, principal }) => {
+    const { login, email, role } = bodyOf(req);
+    const byOwner = byOwnerOf(principal);
+    parseRole(role);
+    const r = atomic(db, () => {
+      const user = findMemberCandidate(db, { login, email, detailed: byOwner });
+      return addMember(db, actor, { orgId: req.observogramOrg, userId: user.id, role, byOwner });
+    });
+    const member = memberView(r.membership, r.user);
+    if (r.added) return res.status(201).json({ ok: true, member, added: true });
+    return res.json({ ok: true, member, added: false, changed: r.changed });
+  }));
+
+  router.patch('/api/org/members/:userId', authorize('PATCH /api/org/members/:userId'), handler((req, res, { db, actor, principal }) => {
+    const userId = pathId(req, res, 'userId');
+    if (userId === null) return;
+    const r = setMemberRole(db, actor, { orgId: req.observogramOrg, userId, role: bodyOf(req).role, byOwner: byOwnerOf(principal) });
+    res.json({ ok: true, member: memberView(r.membership, r.user), changed: r.changed });
+  }));
+
+  router.delete('/api/org/members/:userId', authorize('DELETE /api/org/members/:userId'), handler((req, res, { db, actor, principal }) => {
+    const userId = pathId(req, res, 'userId');
+    if (userId === null) return;
+    const r = removeMember(db, actor, { orgId: req.observogramOrg, userId, byOwner: byOwnerOf(principal) });
+    res.json({ ok: true, removed: memberView(r.membership, r.user) });
   }));
 
   return router;

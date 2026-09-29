@@ -29,8 +29,11 @@
  *   the server; refused requests write no audit row; plus the CSRF, form,
  *   public, case, org-list and fresh admin/admin rows; the self routes'
  *   404 while stand-alone sign-in is off (selfGate's first step);
- * - the identity API's owner routes in that matrix (slice 3b): an owner
- *   with no membership reaches them, everyone else is refused; without
+ * - the identity API in that matrix (slice 3b): an owner with no
+ *   membership reaches the owner routes, everyone else is refused; the
+ *   admin routes answer the context org's admins and every owner, and an
+ *   org admin never reaches another org's members (a member of another org
+ *   is "not a member" here; naming that org is 403 org); without
  *   sign-in they answer only a request sent straight to loopback (a
  *   foreign Host, a proxy header or a foreign Origin → 403 posture, over
  *   node:http) and every mutation needs the CSRF header; the open-loopback
@@ -593,6 +596,11 @@ const EXPECTED_CLASS = Object.freeze({
   'POST /api/library/instantiate': 'operator',
   'POST /api/library/compile': 'operator',
   'POST /api/library/register': 'operator',
+  'PATCH /api/org': 'admin',
+  'GET /api/org/members': 'admin',
+  'POST /api/org/members': 'admin',
+  'PATCH /api/org/members/:userId': 'admin',
+  'DELETE /api/org/members/:userId': 'admin',
   'GET /api/admin/users': 'owner',
   'POST /api/admin/users': 'owner',
   'POST /api/admin/users/:id/disable': 'owner',
@@ -609,6 +617,7 @@ const EXPECTED_CLASS = Object.freeze({
 // The identity API (/api/admin/*, /api/org*), and the one route the open,
 // exposed posture passes to its rule (which answers 409 there).
 const EXPECTED_IDENTITY_API = Object.freeze([
+  'PATCH /api/org', 'GET /api/org/members', 'POST /api/org/members', 'PATCH /api/org/members/:userId', 'DELETE /api/org/members/:userId',
   'GET /api/admin/users', 'POST /api/admin/users', 'POST /api/admin/users/:id/disable', 'POST /api/admin/users/:id/enable',
   'POST /api/admin/users/:id/password', 'POST /api/admin/users/:id/signout', 'PUT /api/admin/users/:id/owner',
   'GET /api/admin/orgs', 'POST /api/admin/orgs', 'DELETE /api/admin/orgs/:id', 'GET /api/admin/join-role', 'PUT /api/admin/join-role',
@@ -892,6 +901,13 @@ const PROBES = Object.freeze({
   'POST /api/library/instantiate': ['POST', '/api/library/instantiate'],
   'POST /api/library/compile': ['POST', '/api/library/compile'],
   'POST /api/library/register': ['POST', '/api/library/register'],
+  // The admin routes: invalid bodies, and a user id that is no member (the
+  // PATCH names a valid role, so the membership is what it answers).
+  'PATCH /api/org': ['PATCH', '/api/org'],
+  'GET /api/org/members': ['GET', '/api/org/members'],
+  'POST /api/org/members': ['POST', '/api/org/members'],
+  'PATCH /api/org/members/:userId': ['PATCH', '/api/org/members/999999', '{"role":"viewer"}'],
+  'DELETE /api/org/members/:userId': ['DELETE', '/api/org/members/999999'],
   // The owner routes: unknown ids and invalid bodies. POST /api/admin/orgs
   // answers 409 before it reads the body on a server without identity.
   'GET /api/admin/users': ['GET', '/api/admin/users'],
@@ -1115,8 +1131,37 @@ test('the AuthZ matrix — identity posture: every /api route × every principal
     assert.deepEqual(r.json.users.map((u) => u.login).sort(), [...LOGINS].sort(), 'every user');
     assert.deepEqual(r.json.users.map((u) => u.id), [...r.json.users.map((u) => u.id)].sort((a, b) => a - b), 'by id');
     assert.ok(r.json.users.every((u) => !('password' in u) && !('sessionEpoch' in u)), 'no password, no session epoch');
+    const idOf = Object.fromEntries(r.json.users.map((u) => [u.login, u.id]));
     r = await call(srv.base, PROBES['POST /api/admin/users/:id/disable'], { headers: otto });
     assert.deepEqual([r.status, r.org, r.json], [404, 'default', { ok: false, error: 'no user 999999' }]);
+
+    // The admin routes: the context org's admins (and every owner). ada,
+    // acme's admin, reaches acme's members only: bob, a member of bravo,
+    // is "not a member" here — the answer an id no user holds gets, so
+    // nothing outside acme is told apart — and naming bravo is 403 org.
+    const ada = variants.find((v) => v.name === 'ada@acme').headers;
+    const toViewer = '{"role":"viewer"}';
+    r = await call(srv.base, ['PATCH', `/api/org/members/${idOf.bob}`], { headers: ada, body: toViewer });
+    assert.deepEqual([r.status, r.org, r.json], [404, 'acme', { ok: false, error: `user ${idOf.bob} is not a member of acme` }], 'ada: bob is no member of acme');
+    r = await call(srv.base, ['DELETE', `/api/org/members/${idOf.bob}`], { headers: ada });
+    assert.deepEqual([r.status, r.json], [404, { ok: false, error: `user ${idOf.bob} is not a member of acme` }], 'ada: bob is not removed');
+    r = await call(srv.base, PROBES['PATCH /api/org/members/:userId'], { headers: ada });
+    assert.deepEqual([r.status, r.json], [404, { ok: false, error: 'user 999999 is not a member of acme' }], 'an id no user holds: the same answer');
+    r = await call(srv.base, ['PATCH', `/api/org/members/${idOf.bob}`], { headers: session('ada', 'bravo').headers, body: toViewer });
+    assert.deepEqual([r.status, r.json.denied, r.json.error], [403, 'org', "not a member of org 'bravo'"], 'ada naming bravo');
+    r = await call(srv.base, PROBES['GET /api/org/members'], { headers: ada });
+    assert.deepEqual([r.status, r.org, r.json.org], [200, 'acme', { id: 'acme', name: 'Acme', default: false }]);
+    assert.deepEqual(r.json.members.map((m) => `${m.login}:${m.role}`).sort(), Object.entries(MEMBERS.acme).map(([l, role]) => `${l}:${role}`).sort(),
+      'acme\'s members, and no one else');
+    assert.ok(r.json.members.every((m) => Object.keys(m).join() === 'userId,login,kind,name,email,role,disabled,since'), 'the member view: named fields only');
+    r = await call(srv.base, PROBES['GET /api/org/members'], { headers: variants.find((v) => v.name === 'mia (no org → her first, bravo)').headers });
+    assert.deepEqual([r.status, r.org, r.json.members.map((m) => m.login).sort()], [200, 'bravo', ['bob', 'mia']], 'mia, no org: bravo, where she is admin');
+    r = await call(srv.base, PROBES['GET /api/org/members'], { headers: variants.find((v) => v.name === 'vera@acme').headers });
+    assert.deepEqual([r.status, r.json.denied, r.json.error, r.json.need, r.json.role],
+      [403, 'role', "requires the admin role in org 'acme' (you are viewer) — ask an admin of acme", 'admin', 'viewer']);
+    r = await call(srv.base, PROBES['GET /api/org/members'], { headers: variants.find((v) => v.name === 'bearer').headers });
+    assert.deepEqual([r.status, r.json.denied, r.json.error],
+      [403, 'role', "the bearer token acts as an operator in org 'acme'; the admin role needs a signed-in user with that role"]);
 
     // CSRF rows: a session's mutation without the header → 403 csrf; the bearer needs none.
     const noCsrf = [];

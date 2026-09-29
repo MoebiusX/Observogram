@@ -754,7 +754,8 @@ app.use(deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readE
 
 // The identity API (STORE_PLAN slice 3b) lives in server/routes/identity.mjs:
 // the deployment's users, orgs and join role under /api/admin/* (owners),
-// every rule server/identity-admin.mjs's — the CLIs' own.
+// the request's org — its name and its members — under /api/org* (its
+// admins), every rule server/identity-admin.mjs's — the CLIs' own.
 app.use(identityRoutes({ authorize }));
 
 // ---------- saved journeys (VALUE_BACKLOG item 11, studio surface) ----------

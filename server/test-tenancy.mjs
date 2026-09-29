@@ -49,6 +49,7 @@ const { currentStore } = await import('./store/db.mjs');
 const { getOrg } = await import('./store/orgs.mjs');
 const { getMeta, getMetaJson } = await import('./store/meta.mjs');
 const { listUsers } = await import('./store/users.mjs');
+const { listMembershipsForUser } = await import('./store/memberships.mjs');
 const { orgWorkspaceRoot } = await import('./tenancy.mjs');
 const { orgChipModel } = await import('../studio/api.mjs');
 const { GRAFANA_ALERT_RULE_TOOL, GRAFANA_DASHBOARD_TOOL } = await import('./deploy-helpers.mjs');
@@ -213,9 +214,10 @@ async function createObjects({ root, cookie, org, journey, mcp, dir }) {
 }
 
 // The cross-org route sweep: `who` (a session in another org) calls every
-// org-scoped route with the other org's ids; each answers 404, an empty
-// list or "no snapshot", no MCP call is made, and nothing under `dir`
-// changes. An /api route in neither table fails the test.
+// org-scoped route with the other org's ids — a user of the other org only
+// among them; each answers 404, an empty list or "no snapshot", no MCP call
+// is made, nothing under `dir` changes and that user's memberships stay as
+// they were. An /api route in no table fails the test.
 async function sweep({ root, cookie, who, ids, mcp, dir }) {
   const h = { Cookie: cookie, 'X-Observogram-CSRF': '1' };
   const call = async (method, path, body) => {
@@ -227,7 +229,7 @@ async function sweep({ root, cookie, who, ids, mcp, dir }) {
     const parse = () => { try { return JSON.parse(text); } catch { return null; } };
     return { status: r.status, json: parse() };
   };
-  const { packId, deployId, journey } = ids;
+  const { packId, deployId, journey, userId } = ids;
   const p = encodeURIComponent(packId);
   const is404 = (label) => (r) => assert(r.status === 404, `${who}: ${label} → 404`, r.status, 404);
   const ORG_SCOPED = {
@@ -263,7 +265,18 @@ async function sweep({ root, cookie, who, ids, mcp, dir }) {
     'GET /api/live-status': ['/api/live-status', undefined, (r) => assert(r.status === 200 && r.json.present === false, `${who}: GET /api/live-status does not read the other org's live pack`, r.json)],
     'POST /api/refresh-live': ['/api/refresh-live', {}, (r) => assert(r.status === 400, `${who}: POST /api/refresh-live {} → 400`, r.status, 400)],
     'DELETE /api/uploads': ['/api/uploads', undefined, (r) => assert(r.status === 200, `${who}: DELETE /api/uploads clears only the caller's org`, r.status, 200)],
+    // The request's org, its name and its members (STORE_PLAN slice 3b): the
+    // list holds none of the other org's users, and a member route naming
+    // one of them answers "not a member" of the caller's org.
+    'GET /api/org/members': ['/api/org/members', undefined, (r) => assert(r.status === 200 && !r.json.members.some(m => m.userId === userId), `${who}: GET /api/org/members holds no user of the other org`, r.json)],
+    'PATCH /api/org/members/:userId': [`/api/org/members/${userId}`, { role: 'viewer' }, is404('PATCH /api/org/members/:userId')],
+    'DELETE /api/org/members/:userId': [`/api/org/members/${userId}`, undefined, is404('DELETE /api/org/members/:userId')],
+    'POST /api/org/members': ['/api/org/members', {}, (r) => assert(r.status === 400, `${who}: POST /api/org/members {} → 400`, r.status, 400)],
+    'PATCH /api/org': ['/api/org', {}, (r) => assert(r.status === 400, `${who}: PATCH /api/org {} → 400`, r.status, 400)],
   };
+  const memberships = () => JSON.stringify(listMembershipsForUser(currentStore(), userId));
+  const membershipsBefore = memberships();
+  assert(membershipsBefore !== '[]', `${who}: the other org's user is a member there`, membershipsBefore);
   const before = tree(dir);
   const mcpCalls = mcp.calls.length;
   const routes = apiRoutes();
@@ -279,6 +292,7 @@ async function sweep({ root, cookie, who, ids, mcp, dir }) {
   }
   assert(mcp.calls.length === mcpCalls, `${who}: the sweep made no MCP call`, mcp.calls.length - mcpCalls, 0);
   assert(JSON.stringify(tree(dir)) === JSON.stringify(before), `${who}: nothing under ${dir} changed`);
+  assert(memberships() === membershipsBefore, `${who}: the other org's user's memberships are unchanged`, memberships(), membershipsBefore);
 }
 
 const mcp = await startFakeMcp();
@@ -475,7 +489,8 @@ try {
 
   // ---- the cross-org route sweep: bob (bravo) against acme's objects ----
   const acmeIds = await createObjects({ root: base, cookie: alice, org: 'acme', journey: 'acme-sweep', mcp, dir: join(WORKSPACE, 'orgs', 'acme') });
-  await sweep({ root: base, cookie: bob, who: 'bob (bravo)', ids: acmeIds, mcp, dir: join(WORKSPACE, 'orgs', 'acme') });
+  const aliceId = listUsers(currentStore()).find(u => u.login === 'alice').id;   // acme's admin, no member of bravo
+  await sweep({ root: base, cookie: bob, who: 'bob (bravo)', ids: { ...acmeIds, userId: aliceId }, mcp, dir: join(WORKSPACE, 'orgs', 'acme') });
 } finally {
   await new Promise(res => srv.close(res));
 }
@@ -595,6 +610,11 @@ try {
     assert(c.status === 0, 'npm run users -- add alice (spawned) succeeds', c.stderr || c.stdout);
     c = cli('tools/org-admin.mjs', ['create', 'delta', '--admin', 'alice']);
     assert(c.status === 0 && getOrg(currentStore(), 'delta')?.root === 'orgs/delta', 'npm run orgs -- create delta --admin alice (spawned): delta at orgs/delta', c.stderr || c.stdout);
+    // dora: a member of delta only (alice is in the default org too).
+    c = cli('tools/user-admin.mjs', ['add', 'dora', '--org', 'delta', '--password-stdin'], 'dora-passw0rd!\n');
+    const dora = listUsers(currentStore()).find(u => u.login === 'dora');
+    const doraOrgs = dora ? listMembershipsForUser(currentStore(), dora.id).map(m => m.orgId) : null;
+    assert(c.status === 0 && JSON.stringify(doraOrgs) === JSON.stringify(['delta']), 'npm run users -- add dora --org delta (spawned): a member of delta only', c.stderr || doraOrgs);
 
     const alice = await loginAt(base4, 'alice', 'alice-passw0rd!');
     const carlos = await loginAt(base4, 'carlos', 'carlos-passw0rd');
@@ -606,7 +626,7 @@ try {
     r = await fetch(`${base4}/api/journeys`, { headers: { Cookie: carlos } });
     j = await r.json();
     assert(!j.journeys.some(x => x.name === ids.journey), "carlos's /api/journeys in default never lists delta's journey");
-    await sweep({ root: base4, cookie: carlos, who: 'carlos (default at .)', ids, mcp, dir: deltaDir });
+    await sweep({ root: base4, cookie: carlos, who: 'carlos (default at .)', ids: { ...ids, userId: dora.id }, mcp, dir: deltaDir });
 
     // The refresh writes the caller's org's live pack — orgs/delta/live/ —
     // and never the default org's at the base (whose root contains delta's).
