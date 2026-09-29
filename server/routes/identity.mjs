@@ -68,13 +68,14 @@ const handler = (fn) => function identityHandler(req, res) {
 const bodyOf = (req) => (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {});
 
 // The users.id a path parameter holds, bound as a number — or null, the
-// 400 sent. A 16-digit id past 2^53 - 1 is refused too: as a number it
-// would round, and a refusal would name an id the caller never sent.
+// 400 sent. A 16-digit id past 2^53 - 1 is refused too, and the text says
+// why: as a number it would round, and a refusal would name an id the
+// caller never sent.
 function pathId(req, res, param) {
   const id = req.params[param];
   const n = USER_ID.test(id) ? Number(id) : NaN;
   if (!Number.isSafeInteger(n)) {
-    res.status(400).json({ ok: false, error: 'user id must be a positive integer' });
+    res.status(400).json({ ok: false, error: 'user id must be a positive integer, at most 9007199254740991' });
     return null;
   }
   return n;

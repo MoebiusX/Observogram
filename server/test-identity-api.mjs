@@ -283,7 +283,7 @@ test('POST /api/admin/users/:id/disable and /enable: the rows, the no-ops, the s
     const verb = key.split('/').pop();
     await refused(key, 'olive', `/api/admin/users/999999/${verb}`, undefined, 404, 'no user 999999');
     await refused(key, 'olive', `/api/admin/users/9007199254740991/${verb}`, undefined, 404, 'no user 9007199254740991');
-    for (const id of BAD_IDS) await refused(key, 'olive', `/api/admin/users/${id}/${verb}`, undefined, 400, 'user id must be a positive integer');
+    for (const id of BAD_IDS) await refused(key, 'olive', `/api/admin/users/${id}/${verb}`, undefined, 400, 'user id must be a positive integer, at most 9007199254740991');
   }
 });
 
@@ -313,7 +313,7 @@ test('POST /api/admin/users/:id/password: a temporary password — every session
   await signInAs('oscar');
 
   await refused(K, 'olive', '/api/admin/users/999999/password', { password: 'long-enough-1' }, 404, 'no user 999999');
-  for (const id of BAD_IDS) await refused(K, 'olive', `/api/admin/users/${id}/password`, { password: 'long-enough-1' }, 400, 'user id must be a positive integer');
+  for (const id of BAD_IDS) await refused(K, 'olive', `/api/admin/users/${id}/password`, { password: 'long-enough-1' }, 400, 'user id must be a positive integer, at most 9007199254740991');
   await refused(K, 'olive', `/api/admin/users/${idOf('olive')}/password`, { password: 'long-enough-1' }, 409,
     'this is your own account — change your password at /auth/change-password');
   const idp = createUser(db, 'system', { kind: 'oidc', login: 'https://idp.example.test#sub-1', issuer: 'https://idp.example.test', sub: 'sub-1' });
@@ -347,7 +347,7 @@ test('POST /api/admin/users/:id/signout: sign out everywhere — every cookie of
   await signInAs('olive');
 
   await refused(K, 'olive', '/api/admin/users/999999/signout', undefined, 404, 'no user 999999');
-  for (const id of BAD_IDS) await refused(K, 'olive', `/api/admin/users/${id}/signout`, undefined, 400, 'user id must be a positive integer');
+  for (const id of BAD_IDS) await refused(K, 'olive', `/api/admin/users/${id}/signout`, undefined, 400, 'user id must be a positive integer, at most 9007199254740991');
 });
 
 // A session cookie's signed payload ({ login, ep, exp, … }).
@@ -436,7 +436,7 @@ test('PUT /api/admin/users/:id/owner: the round trip — the grant records the r
     await refused(K, 'olive', `/api/admin/users/${val}/owner`, body, 400, '"owner" is true or false');
   }
   await refused(K, 'olive', '/api/admin/users/999999/owner', { owner: true }, 404, 'no user 999999');
-  for (const id of BAD_IDS) await refused(K, 'olive', `/api/admin/users/${id}/owner`, { owner: true }, 400, 'user id must be a positive integer');
+  for (const id of BAD_IDS) await refused(K, 'olive', `/api/admin/users/${id}/owner`, { owner: true }, 400, 'user id must be a positive integer, at most 9007199254740991');
 });
 
 // ---------- orgs ----------
@@ -669,7 +669,7 @@ test('PATCH /api/org/members/:userId: a member\'s role — membership.role { fro
   for (const id of [idOf('bob'), idOf('otto'), 999999, Number.MAX_SAFE_INTEGER]) {
     await refused(K, 'ada', `/api/org/members/${id}`, { role: 'viewer' }, 404, `user ${id} is not a member of acme`);
   }
-  for (const id of BAD_IDS) await refused(K, 'ada', `/api/org/members/${id}`, { role: 'viewer' }, 400, 'user id must be a positive integer');
+  for (const id of BAD_IDS) await refused(K, 'ada', `/api/org/members/${id}`, { role: 'viewer' }, 400, 'user id must be a positive integer, at most 9007199254740991');
   for (const body of [{}, { role: null }]) await refused(K, 'ada', `/api/org/members/${oscar}`, body, 400, 'a role is required: viewer, operator or admin');
   await refused(K, 'ada', `/api/org/members/${oscar}`, { role: 'boss' }, 400, 'roles are viewer, operator or admin, not "boss"');
   await refused(K, 'ada', `/api/org/members/${oscar}`, { role: 'member' }, 400, "roles are viewer, operator or admin ('member' is now 'operator')");
@@ -698,7 +698,7 @@ test('DELETE /api/org/members/:userId: a member removed — membership.remove { 
   assert.deepEqual(rows, [['membership.remove', 'owen', 'acme', 'https://idp.example.test#sub-1', { role: 'viewer' }]]);
 
   for (const id of [idOf('bob'), 999999]) await refused(K, 'ada', `/api/org/members/${id}`, undefined, 404, `user ${id} is not a member of acme`);
-  for (const id of BAD_IDS) await refused(K, 'ada', `/api/org/members/${id}`, undefined, 400, 'user id must be a positive integer');
+  for (const id of BAD_IDS) await refused(K, 'ada', `/api/org/members/${id}`, undefined, 400, 'user id must be a positive integer, at most 9007199254740991');
 });
 
 test('the last admin: acme\'s only admin is neither demoted nor removed by an admin — through PATCH, DELETE or the upsert; an owner may, and so may the shell', async () => {
