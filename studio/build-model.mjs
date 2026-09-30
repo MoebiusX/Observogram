@@ -2239,7 +2239,7 @@ export function sheetLists(layerId, adapted, { compiled = false } = {}) {
 
 /**
  * buildSheetModel({ layerId, build, library, requirements, stack, checklist, mode }) → the
- * per-layer sheet: the title (`L1 · Contract`) and its question, the layer's clauses at
+ * per-layer sheet: the title (`L1 · SLI/SLO`) and its question, the layer's clauses at
  * the tier with their state (from the step's stack, or built here from `requirements` +
  * `checklist`), then the layer's options — the section switches with the consequence of
  * switching each off, the L1 rolodex (the selected entries' SLIs, every product's behind
