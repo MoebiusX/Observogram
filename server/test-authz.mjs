@@ -703,6 +703,8 @@ test('deploy target profiles keep no credential: per user, stripped like the rem
     'a save stores the safe profile and reports what it dropped');
   assert.match(load, /const \{ profiles \} = migrateDeployProfiles\(legacy, localStorage\.getItem\(deployProfilesKey\(\)\), stripMcpUrl\);\s*localStorage\.setItem\(deployProfilesKey\(\), JSON\.stringify\(profiles\)\);/, 'the adoption stores the migrated map');
   assert.match(functionSource(apiSrc, 'writeDeployProfiles'), /setItem\(deployProfilesKey\(\), JSON\.stringify\(profiles\)\)/);
+  // A delete never writes {} over a map it could not read.
+  assert.match(functionSource(apiSrc, 'removeDeployProfile'), /const profiles = await loadDeployProfiles\(\);\s*if \(!Object\.hasOwn\(profiles, name\)\) return;/, 'a delete of a name that is not there writes nothing');
 });
 
 // ---------- completeness: every route is classified and guarded (§14.1) ----------

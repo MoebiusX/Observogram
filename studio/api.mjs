@@ -244,8 +244,12 @@ export async function storeDeployProfile(name, profile) {
   return deployProfileSavedText(name, { dropped, notUrl, droppedTarget, targetNotUrl }, droppedNote);
 }
 
+// Nothing is written when the name is not there — a map that could not
+// be read (storage unavailable, the rule not loaded) comes back as {},
+// and {} must never be stored over the user's profiles.
 export async function removeDeployProfile(name) {
   const profiles = await loadDeployProfiles();
+  if (!Object.hasOwn(profiles, name)) return;
   delete profiles[name];
   writeDeployProfiles(profiles);
 }
