@@ -33,10 +33,11 @@
  */
 
 import express from 'express';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
 import { adapt, listEnvironments, applyEnvironmentOverlay } from '../tools/lib/adapter.mjs';
 import { isLegacyLayeredPack, upconvertLegacyPack } from '../tools/lib/legacy.mjs';
@@ -57,25 +58,27 @@ import { parsePromqlDependencies as parsePromql } from '../tools/lib/promql-leze
 import {
   saveWorkspacePack, deleteWorkspacePack, touchWorkspacePack,
   loadWorkspacePacks, clearWorkspacePacks, workspaceInfo,
+  writeLivePack, readLivePack, LIVE_PACK_FILE,
 } from './workspace.mjs';
 import {
   listJourneys, loadJourneyDef, runJourney, readJourneyRuns, saveJourneyDef, validateGateStack,
   validateSchedule, validateStackBudget, validateNotify,
 } from '../tools/lib/journey.mjs';
 import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
-import { initAuth, authEnabled, resolveSession, localUsersEnabled, touchSessionSecret } from './auth.mjs';
-import { validateMcpUrl, redactCredentials } from './mcp-url.mjs';
+import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
+import { validateMcpUrl, redactCredentials, stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
+import { authGate, orgContext, authorize, effectiveRoleOf, rankOf, rankOfRole } from './authz.mjs';
 import { versionInfo } from './version.mjs';
 import { buildInfo, buildLabel } from './build-info.mjs';
 import { runWithOrg, currentOrg, orgWorkspaceRoot, baseWorkspaceRoot, orgRootOf } from './tenancy.mjs';
 import { setWorkspaceRootResolver } from '../tools/lib/journey.mjs';
 import { recordIdentityMode, bootStore } from './boot.mjs';
 import { currentStore } from './store/db.mjs';
+import { defaultOrgId } from './store/identity.mjs';
 import { getOrg, listOrgs } from './store/orgs.mjs';
 import { listMembershipsForUser } from './store/memberships.mjs';
-import { defaultOrgId, liveOrg } from './store/identity.mjs';
 import { brandEnv } from '../tools/lib/brand-env.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
 import { stackSummary } from '../tools/lib/stack-evidence.mjs';
@@ -404,137 +407,25 @@ app.enable('case sensitive routing');
 // tenancy middlewares on purpose: it is public like the static shell (the
 // footer fills itself from it before anyone signs in) and holds nothing
 // secret. `no-store` so a proxy never pins an old build to a new process.
-app.get('/api/version', (req, res) => {
+app.get('/api/version', authorize('GET /api/version'), (req, res) => {
   const info = buildInfo();
   res.set('Cache-Control', 'no-store');
   res.json({ ok: true, ...info, label: buildLabel(info) });
 });
 
-// ---------- write-route auth (VALUE_BACKLOG item 10B) ----------
+// ---------- the auth gate and the org middleware ----------
 //
-// One token, three postures:
-//   1. Local (default): loopback bind, no token, no auth — zero friction.
-//   2. Exposed + OBSERVOGRAM_API_TOKEN set: mutating /api/* routes require
-//      `Authorization: Bearer <token>`. Reads stay open. Once a token is
-//      set it is enforced regardless of bind address — a reverse proxy
-//      makes everything look local, so a loopback bypass would undermine
-//      the token exactly when it matters.
-//   3. Exposed + no token: the server REFUSES TO START (fail closed; see
-//      start()). OBSERVOGRAM_INSECURE_NO_AUTH=1 is the explicit, loudly
-//      logged override for trusted-network demos.
-// MCP write tokens are unrelated and never stored here — they pass
-// through per request. The audit log records the token's ownership label
-// (OBSERVOGRAM_API_TOKEN_LABEL), never the secret.
-
-function apiToken() { return brandEnv('API_TOKEN'); }
-function apiTokenLabel() { return brandEnv('API_TOKEN_LABEL') || 'token'; }
-
-function tokenEquals(candidate, token) {
-  // Constant-time compare over digests so length differences leak nothing.
-  const a = createHash('sha256').update(String(candidate)).digest();
-  const b = createHash('sha256').update(String(token)).digest();
-  return timingSafeEqual(a, b);
-}
+// server/authz.mjs: authGate decides who is calling (the bearer, a
+// session, or nobody) and the posture's answer to an anonymous caller;
+// orgContext runs every /api request inside its org (membership checked)
+// and stamps the principal. Both before the body parsers: the context
+// survives Express's body parsing.
 
 // Who performed a mutating request — the audit log's actor field.
 function actorForRequest(req) { return req?.observogramActor || 'local'; }
 
-app.use((req, res, next) => {
-  if (req.path.startsWith('/auth/')) return next();   // the login flow itself
-  const token = apiToken();
-  const identity = authEnabled();                     // OIDC or stand-alone users
-  if (!token && !identity) return next();             // posture 1/3 — local, no friction
-  const isApi = req.path.startsWith('/api/');
-  const mutating = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
-
-  // Bearer token: the service-account / CI path — works in every posture.
-  const m = /^Bearer\s+(.+)$/i.exec(req.headers.authorization || '');
-  if (m && token && tokenEquals(m[1].trim(), token)) {
-    req.observogramActor = apiTokenLabel();
-    req.observogramBearer = true;
-    return next();
-  }
-
-  if (identity) {
-    const session = resolveSession(req);
-    if (session) {
-      // Cookie-authenticated mutations require the custom header —
-      // cross-origin pages can't set one without a CORS preflight, so
-      // SameSite=Lax + this check closes the CSRF window. The legacy
-      // X-Tomograph-CSRF spelling stays accepted for pre-rebrand clients.
-      const csrf = req.headers['x-observogram-csrf'] || req.headers['x-tomograph-csrf'];
-      if (mutating && isApi && csrf !== '1') {
-        return res.status(403).json({ ok: false, error: 'missing X-Observogram-CSRF header on a session-authenticated mutation' });
-      }
-      req.observogramActor = session.email || session.sub;
-      req.observogramUser = session.user;   // the org middleware resolves memberships by the store row
-      return next();
-    }
-    // Identity mode protects ALL /api data (reads included) — "your
-    // services" is enforced server-side. The static studio shell stays
-    // open so the client can land and redirect to the login page.
-    if (isApi) {
-      return res.status(401).json({ ok: false, error: 'unauthorized: sign in required', login: '/auth/login' });
-    }
-    return next();
-  }
-
-  // Token-only posture (no identity configured): original 10B contract —
-  // mutating /api routes require the bearer, reads stay open.
-  if (!mutating || !isApi) return next();
-  res.set('WWW-Authenticate', 'Bearer realm="observogram"');
-  return res.status(401).json({
-    ok: false,
-    error: 'unauthorized: mutating /api routes require `Authorization: Bearer <OBSERVOGRAM_API_TOKEN>`',
-  });
-});
-
-// ---------- tenancy (Stage 2 — workspace-per-org) ----------
-//
-// Always on (server/tenancy.mjs): every /api request runs inside an
-// AsyncLocalStorage org context, and workspaceRoot() everywhere
-// underneath answers <workspace>/<that org's root>. The org comes from
-// the X-Observogram-Org header (or ?org=; the legacy X-Tomograph-Org
-// spelling still works) for the bearer and a session; membership is
-// enforced here — Stage 3 adds per-route roles on top of this same seam.
-// The open and anonymous postures run in the default org and ignore the
-// header (nothing else is reachable there). Placed before the body
-// parsers: the context survives Express's body parsing.
-app.use((req, res, next) => {
-  if (!req.path.startsWith('/api/')) return next();
-  const db = currentStore();
-  const requested = String(req.headers['x-observogram-org'] || req.headers['x-tomograph-org'] || req.query.org || '').trim();
-  const defaultOrg = defaultOrgId(db);
-  let orgId;
-  if (req.observogramBearer) {
-    // The bearer is the deployment-level service account: it may target
-    // any live org explicitly; without a header it lands in the default org.
-    orgId = requested || defaultOrg;
-    if (!liveOrg(db, orgId)) return res.status(403).json({ ok: false, error: `unknown org '${orgId}'` });
-  } else if (req.observogramUser) {
-    const user = req.observogramUser;
-    const memberships = listMembershipsForUser(db, user.id);   // live orgs, first first
-    if (user.isOwner) {
-      // An owner may request any live org; they land in their first
-      // membership, else the default org.
-      orgId = requested || memberships[0]?.orgId || defaultOrg;
-      if (!liveOrg(db, orgId)) return res.status(403).json({ ok: false, error: `unknown org '${orgId}'` });
-    } else {
-      if (!memberships.length) return res.status(403).json({ ok: false, error: 'no org membership — ask an admin to add you' });
-      orgId = requested || memberships[0].orgId;
-      if (!memberships.some((m) => m.orgId === orgId)) {
-        return res.status(403).json({ ok: false, error: `not a member of org '${orgId}'` });
-      }
-    }
-  } else {
-    // Open posture, or token-only anonymous (its mutations were already
-    // 401'd by the gate): the default org, the header ignored (as before).
-    orgId = defaultOrg;
-  }
-  res.set('X-Observogram-Org', orgId);   // echo so the client always knows the active org
-  req.observogramOrg = orgId;
-  return runWithOrg(orgId, next);
-});
+app.use(authGate);
+app.use(orgContext);
 
 app.use(express.json({ limit: '16mb' }));   // /api/crawl can carry a whole repo's worth of YAML
 app.use(express.text({ type: ['application/x-yaml', 'text/yaml', 'text/plain'], limit: '4mb' }));
@@ -542,14 +433,14 @@ app.use(express.urlencoded({ extended: false, limit: '64kb' }));   // /auth/logi
 
 // Identity routes (/auth/*) — inert in local mode; throws fail-closed at
 // boot when OIDC is configured incompletely. See server/auth.mjs.
-initAuth(app);
+initAuth(app, { authorize });
 
 // Express's PayloadTooLargeError is thrown by the body parsers BEFORE
 // any of our handlers run, and the default error path returns HTML.
 // /api/* always wants JSON so the client can show a clean error and
 // hint the user toward client-side filtering instead of dumping a stack
 // trace into the dropzone.
-app.use((err, req, res, next) => {
+app.use(function payloadTooLarge(err, req, res, next) {
   if (err?.type === 'entity.too.large' || err?.status === 413) {
     if ((req.path || '').startsWith('/api/')) {
       const limit = err.limit ? Math.round(err.limit / 1024 / 1024) + 'MB' : '16MB';
@@ -562,7 +453,7 @@ app.use((err, req, res, next) => {
   return next(err);
 });
 
-app.get('/healthz', (req, res) => {
+app.get('/healthz', authorize('GET /healthz'), (req, res) => {
   res.json({
     ok: true,
     ...versionInfo(),   // version, build, node — "what exactly is running?"
@@ -575,7 +466,7 @@ app.get('/healthz', (req, res) => {
 // studio's RESET button so the user can start truly fresh — the client
 // pairs this with a localStorage.clear() + reload. No body, no params.
 // Returns the number of entries dropped so the client can echo it.
-app.delete('/api/uploads', (req, res) => {
+app.delete('/api/uploads', authorize('DELETE /api/uploads'), (req, res) => {
   const uploads = uploadsMap();
   const dropped = uploads.size;
   uploads.clear();
@@ -584,26 +475,36 @@ app.delete('/api/uploads', (req, res) => {
 });
 
 // Stage 2 tenancy: the orgs visible to this request. Sessions see their
-// memberships (owners too; role recorded for Stage 3, not yet enforced);
-// the bearer service account sees every live org; the open and anonymous
-// postures see the default org. `active` echoes the request's resolved
-// org so clients never have to guess which workspace they're in.
+// memberships; the bearer service account sees every live org; the open
+// and anonymous postures see the default org. `role` is the membership's
+// role (null without one; 'service-account' for the bearer) and
+// `effectiveRole` the role the route guard applies there (an owner is an
+// admin in every live org, so an owner's list also holds the active org
+// when it is not one of their memberships). `active` echoes the request's
+// resolved org so clients never have to guess which workspace they're in.
 // `tenancy` stays in the body (always true) for old clients.
-app.get('/api/orgs', (req, res) => {
+app.get('/api/orgs', authorize('GET /api/orgs'), (req, res) => {
   const db = currentStore();
+  const principal = req.observogramPrincipal;
+  const active = currentOrg();
   let orgs;
   if (req.observogramBearer) {
-    orgs = listOrgs(db).map((o) => ({ id: o.id, name: o.name, role: 'service-account' }));
+    orgs = listOrgs(db).map((o) => ({ id: o.id, name: o.name, role: 'service-account', effectiveRole: effectiveRoleOf(principal) }));
   } else if (req.observogramUser) {
-    orgs = listMembershipsForUser(db, req.observogramUser.id).map((m) => ({ id: m.orgId, name: getOrg(db, m.orgId)?.name || m.orgId, role: m.role }));
+    orgs = listMembershipsForUser(db, req.observogramUser.id).map((m) => ({
+      id: m.orgId, name: getOrg(db, m.orgId)?.name || m.orgId, role: m.role, effectiveRole: effectiveRoleOf(principal, m.role),
+    }));
+    if (principal?.owner && !orgs.some((o) => o.id === active)) {
+      orgs.push({ id: active, name: getOrg(db, active)?.name || active, role: null, effectiveRole: effectiveRoleOf(principal) });
+    }
   } else {
-    const org = getOrg(db, currentOrg());
-    orgs = [{ id: org.id, name: org.name, role: null }];
+    const org = getOrg(db, active);
+    orgs = [{ id: org.id, name: org.name, role: null, effectiveRole: effectiveRoleOf(principal) }];
   }
-  res.json({ ok: true, tenancy: true, orgs, active: currentOrg() });
+  res.json({ ok: true, tenancy: true, orgs, active });
 });
 
-app.get('/api/packs', (req, res) => {
+app.get('/api/packs', authorize('GET /api/packs'), (req, res) => {
   // Catalog + in-memory uploads. Uploaded packs lead the list so the
   // picker surfaces them at the top — they're the user's just-created
   // work and most likely what they want to interact with next.
@@ -646,7 +547,7 @@ function findPackMeta(id) {
 
 // Browse the archived reference packs without auto-loading them. The
 // home screen renders these as a small "Browse examples" affordance.
-app.get('/api/examples', (req, res) => {
+app.get('/api/examples', authorize('GET /api/examples'), (req, res) => {
   res.json({ examples: EXAMPLE_PACKS.map(catalogEntry) });
 });
 
@@ -654,11 +555,11 @@ app.get('/api/examples', (req, res) => {
 // the studio's Advanced → References view (reference component analysis).
 // Kept separate from /api/examples so they no longer appear in the
 // example-pack list, only under References.
-app.get('/api/references', (req, res) => {
+app.get('/api/references', authorize('GET /api/references'), (req, res) => {
   res.json({ references: REFERENCE_PACKS.map(catalogEntry) });
 });
 
-app.get('/api/packs/:id', (req, res) => {
+app.get('/api/packs/:id', authorize('GET /api/packs/:id'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ error: `unknown pack: ${req.params.id}` });
   try {
@@ -673,7 +574,7 @@ app.get('/api/packs/:id', (req, res) => {
   }
 });
 
-app.get('/api/packs/:id/canonical', (req, res) => {
+app.get('/api/packs/:id/canonical', authorize('GET /api/packs/:id/canonical'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ error: `unknown pack: ${req.params.id}` });
   try {
@@ -694,7 +595,7 @@ app.get('/api/packs/:id/canonical', (req, res) => {
   }
 });
 
-app.get('/api/packs/:id/conformance', (req, res) => {
+app.get('/api/packs/:id/conformance', authorize('GET /api/packs/:id/conformance'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ error: `unknown pack: ${req.params.id}` });
   try {
@@ -714,7 +615,7 @@ app.get('/api/packs/:id/conformance', (req, res) => {
   }
 });
 
-app.get('/api/diff', (req, res) => {
+app.get('/api/diff', authorize('GET /api/diff'), (req, res) => {
   const aId = typeof req.query.a === 'string' ? req.query.a : null;
   const bId = typeof req.query.b === 'string' ? req.query.b : null;
   if (!aId || !bId) return res.status(400).json({ error: 'query params `a` and `b` (pack ids) required' });
@@ -749,7 +650,7 @@ app.get('/api/diff', (req, res) => {
 // platform artefacts (Prometheus rules, OTel Collector config, etc.)
 // derived from it. Spec §9's reference implementation table made real.
 
-app.get('/api/compile/targets', (req, res) => {
+app.get('/api/compile/targets', authorize('GET /api/compile/targets'), (req, res) => {
   res.json({ targets: listTargets() });
 });
 
@@ -759,7 +660,7 @@ app.get('/api/compile/targets', (req, res) => {
 // left-nav tree; each leaf is then compiled via /api/packs/:id/
 // compile-artifact?group=&flavor=&artifact= below.
 // ----------------------------------------------------------------
-app.get('/api/packs/:id/compile-catalog', (req, res) => {
+app.get('/api/packs/:id/compile-catalog', authorize('GET /api/packs/:id/compile-catalog'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ ok: false, error: `unknown pack: ${req.params.id}` });
   try {
@@ -783,7 +684,7 @@ app.get('/api/packs/:id/compile-catalog', (req, res) => {
 // shape as /api/packs/:id/compile/:target so the client can reuse
 // the existing display path.
 // ----------------------------------------------------------------
-app.get('/api/packs/:id/compile-artifact', (req, res) => {
+app.get('/api/packs/:id/compile-artifact', authorize('GET /api/packs/:id/compile-artifact'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ ok: false, error: `unknown pack: ${req.params.id}` });
   const group = String(req.query.group || '');
@@ -810,7 +711,7 @@ app.get('/api/packs/:id/compile-artifact', (req, res) => {
 // GET /api/packs/:id/export.zip — the whole pack as one download: the
 // canonical pack.yaml plus every compiled artefact (the 'all' bundle of each
 // compile group × flavor) under artefacts/. Hand-rolled ZIP, no zip dep.
-app.get('/api/packs/:id/export.zip', (req, res) => {
+app.get('/api/packs/:id/export.zip', authorize('GET /api/packs/:id/export.zip'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ error: `unknown pack: ${req.params.id}` });
   try {
@@ -848,7 +749,7 @@ app.get('/api/packs/:id/export.zip', (req, res) => {
 // plan/execute, bulk + single deploy) live in server/routes/deploy.mjs;
 // the shaping transforms in server/deploy-helpers.mjs. The pack-registry
 // seam is injected until the registry extraction slice.
-app.use(deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readEnv, actorForRequest, contentHash }));
+app.use(deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readEnv, actorForRequest, contentHash, authorize }));
 
 // ---------- saved journeys (VALUE_BACKLOG item 11, studio surface) ----------
 
@@ -861,7 +762,7 @@ app.use(deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readE
 // the full updated pack YAML, and an honest skipped-list. The updated pack
 // is schema-validated before it leaves — retrofeed must never hand out a
 // pack that fails its own spec.
-app.post('/api/packs/:id/retrofeed', (req, res) => {
+app.post('/api/packs/:id/retrofeed', authorize('POST /api/packs/:id/retrofeed'), (req, res) => {
   const metaA = findPackMeta(req.params.id);
   if (!metaA) return res.status(404).json({ ok: false, error: `unknown pack: ${req.params.id}` });
   const b = req.body || {};
@@ -915,7 +816,7 @@ function parsedSchedule(def) {
   try { return parseSchedule(def.schedule); } catch { return null; }
 }
 
-app.get('/api/journeys', (req, res) => {
+app.get('/api/journeys', authorize('GET /api/journeys'), (req, res) => {
   try {
     const journeys = listJourneys().map(name => {
       let def = null;
@@ -985,7 +886,7 @@ app.get('/api/journeys', (req, res) => {
 
 // GET /api/journeys/:name/runs — run history newest first (the
 // drift-over-time series behind the panel's trend sparkline).
-app.get('/api/journeys/:name/runs', (req, res) => {
+app.get('/api/journeys/:name/runs', authorize('GET /api/journeys/:name/runs'), (req, res) => {
   const limit = Math.max(1, Math.min(200, parseInt(req.query.limit, 10) || 30));
   try {
     res.json({ runs: readJourneyRuns(req.params.name, { limit }) });
@@ -1000,7 +901,7 @@ app.get('/api/journeys/:name/runs', (req, res) => {
 // a schedule: every snippet uses the placeholder cadence and `placeholder`
 // says so (nothing fabricated is presented as the journey's cadence). 404
 // for an unknown or unloadable journey.
-app.get('/api/journeys/:name/schedule', (req, res) => {
+app.get('/api/journeys/:name/schedule', authorize('GET /api/journeys/:name/schedule'), (req, res) => {
   let def;
   try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
   catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
@@ -1026,7 +927,7 @@ app.get('/api/journeys/:name/schedule', (req, res) => {
 // POST /api/journeys/:name/run — execute now. HTTP 200 even when the gate
 // fails: the run succeeded, the outcome is data. 404 for unknown names,
 // 502 when a pack source can't be resolved (live MCP down etc.).
-app.post('/api/journeys/:name/run', async (req, res) => {
+app.post('/api/journeys/:name/run', authorize('POST /api/journeys/:name/run'), async (req, res) => {
   let def;
   try { def = loadJourneyDef(req.params.name, { allowPath: false }); }
   catch (e) { return res.status(404).json({ ok: false, error: e.message }); }
@@ -1047,7 +948,7 @@ app.post('/api/journeys/:name/run', async (req, res) => {
 // persisted workspace copy (10A); a Pack B that came from a live MCP draft
 // is saved as a live mcp: source via its mcp.url annotation, so re-runs
 // re-draft instead of comparing against a frozen snapshot.
-app.post('/api/journeys/capture', (req, res) => {
+app.post('/api/journeys/capture', authorize('POST /api/journeys/capture'), (req, res) => {
   const b = req.body || {};
   const name = typeof b.name === 'string' ? b.name.trim() : '';
   if (!name) return res.status(400).json({ ok: false, error: 'name required' });
@@ -1108,7 +1009,7 @@ app.post('/api/journeys/capture', (req, res) => {
   }
 });
 
-app.get('/api/packs/:id/compile/:target', (req, res) => {
+app.get('/api/packs/:id/compile/:target', authorize('GET /api/packs/:id/compile/:target'), (req, res) => {
   const meta = findPackMeta(req.params.id);
   if (!meta) return res.status(404).json({ error: `unknown pack: ${req.params.id}` });
   try {
@@ -1135,7 +1036,7 @@ app.get('/api/packs/:id/compile/:target', (req, res) => {
   }
 });
 
-app.get('/api/maturity-rubric', (req, res) => {
+app.get('/api/maturity-rubric', authorize('GET /api/maturity-rubric'), (req, res) => {
   res.json({
     specVersion: SPEC_VERSION,
     docs: `${SPEC_DIR}/docs/maturity-model.md`,
@@ -1149,10 +1050,13 @@ app.get('/api/maturity-rubric', (req, res) => {
 // production path. This in-browser endpoint exists so a dev session can
 // kick off an ad-hoc refresh from a local MCP without spawning a process.
 
-// Local live refreshes write this ignored runtime file. It is deliberately not
-// a committed example; the live-status badge reports absent until a refresh
-// creates it in the working tree.
-const LIVE_PACK_PATH = 'examples/production-live.pack.yaml';
+// Each org's live pack is <org root>/live/production-live.pack.yaml
+// (server/workspace.mjs livePackPath); the badge reports absent until the
+// org's first refresh. The install's examples/production-live.pack.yaml —
+// the deployment-wide file of the builds before STORE_PLAN slice 3, still
+// the CLI's default output and detect-drift's default input — is no longer
+// read here (start() says so once, until the default org has its own).
+const LEGACY_LIVE_PACK = 'examples/production-live.pack.yaml';
 
 // ---------- step 2: stack self-metrics summary (signal, never verdict) ----------
 //
@@ -1257,16 +1161,25 @@ function grafanaSummaryFromAnnotations(ann) {
   };
 }
 
-app.get('/api/live-status', (req, res) => {
+// The org's live pack. `origin` (scheme://host:port) is served to every
+// reader; `url` — the safe form, which may still carry a path — only to an
+// operator and above (its one consumer is the MCP panel's prefill, an
+// operator action): a viewer, and in the token posture any anonymous
+// caller, never sees a path. A file written by an older build or by hand
+// is served clean too.
+app.get('/api/live-status', authorize('GET /api/live-status'), (req, res) => {
   try {
-    const abs = resolve(ROOT, LIVE_PACK_PATH);
-    if (!existsSync(abs)) return res.json({ present: false });
-    const c = parseYaml(readFileSync(abs, 'utf8'));
+    const text = readLivePack();
+    if (text === null) return res.json({ present: false });
+    const c = parseYaml(text);
     const a = c.metadata?.annotations || {};
+    const raw = a['mcp.url'] || null;
+    const operator = rankOf(req.observogramPrincipal) >= rankOfRole('operator');
     res.json({
       present: true,
       refreshedAt:        a['mcp.refreshedAt']        || null,
-      url:                a['mcp.url']                || null,
+      origin:             raw ? mcpUrlOrigin(raw) : null,
+      url:                raw && operator ? stripMcpUrl(raw).safe : null,
       toolsCalled:        a['mcp.toolsCalled']        || '',
       toolsFailed:        a['mcp.toolsFailed']        || '',
       // Probe-outcome honesty: families that got no answer (a hole) vs
@@ -1300,7 +1213,7 @@ app.get('/api/live-status', (req, res) => {
 // Response: { ok, canonical, canonicalYaml, summary, validation,
 //             conformance, annotations, tookMs }
 // ----------------------------------------------------------------
-app.post('/api/draft-from-mcp', async (req, res) => {
+app.post('/api/draft-from-mcp', authorize('POST /api/draft-from-mcp'), async (req, res) => {
   const body = req.body || {};
   const mcpUrl  = typeof body.mcpUrl  === 'string' && body.mcpUrl.trim() ? body.mcpUrl.trim() : null;
   const mcpAuth = typeof body.mcpAuth === 'string' && body.mcpAuth ? body.mcpAuth : null;
@@ -1310,13 +1223,17 @@ app.post('/api/draft-from-mcp', async (req, res) => {
   if (!mcpUrl) return res.status(400).json({ ok: false, error: 'mcpUrl required in JSON body' });
   const { error: mcpUrlError, safeUrl: safeMcpUrl } = validateMcpUrl(mcpUrl);
   if (mcpUrlError) return res.status(400).json({ ok: false, error: mcpUrlError });
+  // The draft is a registered pack every viewer of the org reads: it keeps
+  // the safe URL (a journey captured from it re-drafts from it; a header
+  // token rides packB.mcp.authEnv), and says what it dropped.
+  const { dropped } = stripMcpUrl(mcpUrl);
 
   const t0 = Date.now();
   try {
     process.stderr.write(`[draft-from-mcp] POST -> ${safeMcpUrl}\n`);
     const fetched = await fetchMcp({ mcpUrl, mcpAuth });
     const refreshedAt = new Date().toISOString();
-    const pack = buildCanonicalPack({ refreshedAt, mcpUrl, packName, ...fetched });
+    const pack = buildCanonicalPack({ refreshedAt, mcpUrl: safeMcpUrl, packName, ...fetched });
     const errors = validateCanonical(pack, SCHEMA);
 
     // Build a discovery summary in the same shape the crawler returns,
@@ -1360,7 +1277,7 @@ app.post('/api/draft-from-mcp', async (req, res) => {
 
     const summary = {
       source: 'mcp',
-      mcpUrl,
+      mcpUrl: safeMcpUrl,
       refreshedAt,
       discovered: {
         backends:        (pack.spec?.telemetry?.backends || []).length,
@@ -1404,6 +1321,9 @@ app.post('/api/draft-from-mcp', async (req, res) => {
       tier: pack.metadata?.bindings?.criticality || 'tier-3',
     };
 
+    // The strip is never silent.
+    const strippedNote = droppedNote(dropped, { where: 'not kept in the draft' });
+    if (strippedNote) summary.warnings.push(strippedNote);
     // Warnings — only flag a gap when we ASKED and got nothing, never
     // when we never asked. The MCP probe table is the contract for
     // "what we tried."
@@ -1504,35 +1424,37 @@ function banner(pack) {
   ].join('\n');
 }
 
-app.post('/api/refresh-live', async (req, res) => {
+app.post('/api/refresh-live', authorize('POST /api/refresh-live'), async (req, res) => {
   const body = req.body || {};
   const mcpUrl = typeof body.mcpUrl === 'string' && body.mcpUrl.trim() ? body.mcpUrl.trim() : null;
   const mcpAuth = typeof body.mcpAuth === 'string' && body.mcpAuth ? body.mcpAuth : null;
   if (!mcpUrl) return res.status(400).json({ ok: false, error: 'mcpUrl required in JSON body' });
   const { error: mcpUrlError, safeUrl: safeMcpUrl } = validateMcpUrl(mcpUrl);
   if (mcpUrlError) return res.status(400).json({ ok: false, error: mcpUrlError });
+  const { dropped } = stripMcpUrl(mcpUrl);
 
   const t0 = Date.now();
   try {
     process.stderr.write(`[refresh-live] POST /api/refresh-live -> ${safeMcpUrl}\n`);
     const fetched = await fetchMcp({ mcpUrl, mcpAuth });
     const refreshedAt = new Date().toISOString();
-    const pack = buildCanonicalPack({ refreshedAt, mcpUrl, ...fetched });
+    // The persisted mcp.url (and the response's annotations) is the safe form.
+    const pack = buildCanonicalPack({ refreshedAt, mcpUrl: safeMcpUrl, ...fetched });
     const errors = validateCanonical(pack, SCHEMA);
     if (errors.length) {
       return res.status(500).json({ ok: false, error: 'built pack failed schema validation', details: errors });
     }
-    const abs = resolve(ROOT, LIVE_PACK_PATH);
-    mkdirSync(dirname(abs), { recursive: true });
-    writeFileSync(abs, emitYaml(pack));
+    writeLivePack(emitYaml(pack));   // <org root>/live/production-live.pack.yaml, atomically
     process.stderr.write(`[refresh-live]   ok in ${Date.now() - t0}ms; ` +
       `services=${pack.metadata.annotations['mcp.servicesDiscovered'] || '(none)'} ` +
       `failed=${pack.metadata.annotations['mcp.toolsFailed'] || 'none'}\n`);
+    const note = droppedNote(dropped);
     res.json({
       ok: true,
       refreshedAt,
       pack: adapt(pack),
       annotations: pack.metadata.annotations,
+      ...(note ? { note } : {}),
     });
   } catch (e) {
     process.stderr.write(`[refresh-live]   error in ${Date.now() - t0}ms: ${redactCredentials(e.message)}\n`);
@@ -1562,7 +1484,7 @@ app.post('/api/refresh-live', async (req, res) => {
 // The crawler library is shared with tools/crawl-repo.mjs (the
 // CLI form); both feed crawlFiles() the same in-memory map shape.
 // ----------------------------------------------------------------
-app.post('/api/crawl', (req, res) => {
+app.post('/api/crawl', authorize('POST /api/crawl'), (req, res) => {
   const body = req.body || {};
   const files = body.files;
   if (!files || typeof files !== 'object' || Array.isArray(files)) {
@@ -1648,7 +1570,7 @@ app.post('/api/crawl', (req, res) => {
 // ----------------------------------------------------------------
 // parseGithubUrl / isCrawlerFile / ghFetch live in server/github-crawl.mjs.
 
-app.post('/api/crawl-github', async (req, res) => {
+app.post('/api/crawl-github', authorize('POST /api/crawl-github'), async (req, res) => {
   const body = req.body || {};
   const parsed = parseGithubUrl(body.url);
   if (!parsed) {
@@ -1786,7 +1708,7 @@ app.post('/api/crawl-github', async (req, res) => {
   }
 });
 
-app.post('/api/validate', (req, res) => {
+app.post('/api/validate', authorize('POST /api/validate'), (req, res) => {
   try {
     let canonical;
     if (typeof req.body === 'string') {
@@ -1860,14 +1782,14 @@ const tierError = (tier) => `unknown tier ${JSON.stringify(tier)} (known: ${TIER
 // GET /api/library — the index the DEFINE step lists (libraryIndex of loadLibrary)
 // plus the scaffold's own params (every instantiation has them) and the files
 // that did not load, so an entry missing from the list is never a mystery.
-app.get('/api/library', (req, res) => {
+app.get('/api/library', authorize('GET /api/library'), (req, res) => {
   const lib = library();
   res.json({ ok: true, entries: libraryIndex(lib.entries), scaffoldParams: SCAFFOLD_PARAMS, errors: lib.errors });
 });
 
 // GET /api/library/requirements/:tier — the conformance clauses that apply at
 // the tier (tierRequirements: the rubric filtered by minTier, never a second one).
-app.get('/api/library/requirements/:tier', (req, res) => {
+app.get('/api/library/requirements/:tier', authorize('GET /api/library/requirements/:tier'), (req, res) => {
   const tier = req.params.tier;
   if (!TIERS.includes(tier)) return res.status(400).json({ ok: false, error: tierError(tier) });
   res.json({ ok: true, tier, clauses: tierRequirements(tier) });
@@ -1875,7 +1797,7 @@ app.get('/api/library/requirements/:tier', (req, res) => {
 
 // GET /api/library/:id — one entry: its index row (what the step needs) plus
 // the full SLI templates and params (what a details drawer needs).
-app.get('/api/library/:id', (req, res) => {
+app.get('/api/library/:id', authorize('GET /api/library/:id'), (req, res) => {
   const entry = findEntry(library(), req.params.id);
   if (!entry) return res.status(404).json({ ok: false, error: `unknown library entry ${JSON.stringify(req.params.id)} (known: ${knownEntryIds()})` });
   const [row] = libraryIndex([entry]);
@@ -1969,7 +1891,7 @@ function instantiateFromBody(body) {
 // YAML for the preview and the download. Node passes the Lezer PromQL grammar,
 // as packc init does, so a broken SLI expression comes back as a `promql`
 // warning. A usage error from the engine is 400, never 500.
-app.post('/api/library/instantiate', (req, res) => {
+app.post('/api/library/instantiate', authorize('POST /api/library/instantiate'), (req, res) => {
   const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : null;
   if (!body) return res.status(400).json({ ok: false, errors: ['expected a JSON body { entries, name, tier, environment, owners, params, toggles, overrides, custom }'] });
   const made = instantiateFromBody(body);
@@ -2004,7 +1926,7 @@ function canonicalOfBody(body, what) {
 // compiled artefact through tools/lib/compile.mjs, so VERIFY previews the
 // Prometheus rules, the collector config, the Alertmanager routes and the
 // Grafana boards without registering anything.
-app.post('/api/library/compile', (req, res) => {
+app.post('/api/library/compile', authorize('POST /api/library/compile'), (req, res) => {
   const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {};
   const target = body.target;
   if (!TARGETS[target]) return res.status(400).json({ ok: false, error: `unknown compile target ${JSON.stringify(target)} (known: ${Object.keys(TARGETS).join(', ')})` });
@@ -2032,7 +1954,7 @@ app.post('/api/library/compile', (req, res) => {
 // library.source) and to metadata.name for anything else, as /api/validate labels an
 // upload; the todos travel in metadata.annotations and the summary says which
 // clauses still pass on a placeholder.
-app.post('/api/library/register', (req, res) => {
+app.post('/api/library/register', authorize('POST /api/library/register'), (req, res) => {
   const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {};
   const got = canonicalOfBody(body, (e) => ({ errors: Array.isArray(e) ? e : [e] }));
   if (got.status) return res.status(got.status).json(got.body);
@@ -2076,7 +1998,8 @@ app.use(express.static(STUDIO_DIR, { extensions: ['html'], index: 'index.html' }
 
 // SPA-style fallback: any unknown GET returns the studio shell so the client
 // can route. The /api/* paths above already handled JSON requests.
-app.get(/^(?!\/api\/).*/, (req, res, next) => {
+const SPA_FALLBACK = /^(?!\/api\/).*/;
+app.get(SPA_FALLBACK, authorize(`GET ${SPA_FALLBACK}`), (req, res, next) => {
   if (req.method !== 'GET') return next();
   res.sendFile(resolve(STUDIO_DIR, 'index.html'));
 });
@@ -2105,12 +2028,30 @@ function rehydrateOrgs(silent) {
   if (restored && !silent) process.stdout.write(`[studio] restored ${restored} pack${restored === 1 ? '' : 's'} from workspace\n`);
 }
 
+// The studio no longer reads the install's deployment-wide live pack
+// (STORE_PLAN slice 3: one per org). While that file exists and the default
+// org has no live pack of its own yet, one line says where the badge reads
+// now — it stops after the default org's first refresh. The file is not
+// moved: it belonged to no org, and the CLIs still use it.
+function noteLegacyLivePack(db, log, legacyPath) {
+  try {
+    if (!existsSync(legacyPath)) return;
+    const org = defaultOrgId(db);
+    if (!org || runWithOrg(org, () => readLivePack()) !== null) return;
+    log(`[studio] the studio no longer reads ${LEGACY_LIVE_PACK}: each org's live pack is <org root>/live/${LIVE_PACK_FILE}, `
+      + `written by the MCP panel's refresh (npm run detect-drift and the dry run still read the old file; `
+      + `OUTPUT=<org root>/live/${LIVE_PACK_FILE} npm run fetch-live writes the new one)`);
+  } catch { /* a note, never a boot failure */ }
+}
+
 // Boot steps 1–5 are server/boot.mjs's bootStore(): the store opened, the
 // stale-import guard, the legacy import once, the seed decision and the
 // fail-closed checks (docs/STORE_PLAN.md §4). A refusal arrives as a
 // rejected promise (BootRefusal / LegacyFileError). Then step 6 and the
-// listen.
-export async function start({ port = PORT, host = HOST, silent = false } = {}) {
+// listen. legacyLivePack is where the old file is looked for — a seam for
+// the suites, which must not plant one in the checkout's examples/ (other
+// suites enumerate examples/*.pack.yaml concurrently).
+export async function start({ port = PORT, host = HOST, silent = false, legacyLivePack = resolve(ROOT, LEGACY_LIVE_PACK) } = {}) {
   const log = (m) => { if (!silent) process.stdout.write(m + '\n'); };
   const warn = (m) => { if (!silent) process.stderr.write(m + '\n'); };
   const { db, ctx } = await bootStore({ host, log, warn });
@@ -2119,12 +2060,17 @@ export async function start({ port = PORT, host = HOST, silent = false } = {}) {
   // root through the same context-aware resolver the registry uses.
   setWorkspaceRootResolver(orgWorkspaceRoot);
   rehydrateOrgs(silent);
+  noteLegacyLivePack(db, log, legacyLivePack);
+  // Each server stamps its own bind on the requests it receives
+  // (server/authz.mjs listenOf): suites run several servers per process
+  // on different binds, so the bind never lives in module state.
+  const listen = Object.freeze({ host, loopback: ctx.loopback });
   return new Promise((resolveListen, reject) => {
-    const srv = app.listen(port, host, () => {
-      // When bind fails the listening callback can still fire with the
-      // address being null (race between EADDRINUSE and 'listening').
-      // Bail here so the error handler below resolves the promise; the
-      // call site will format a friendly message.
+    const srv = createServer((req, res) => { req.observogramListen = listen; app(req, res); });
+    srv.listen(port, host, () => {
+      // Defensive: should the listening callback ever fire without an
+      // address (a failed bind), bail here so the error handler below
+      // resolves the promise; the call site will format a friendly message.
       const addr = srv.address();
       if (!addr) return;
       // The sign-in mode the CLIs read (server/identity-admin.mjs) is this

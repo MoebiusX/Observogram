@@ -8,13 +8,19 @@
 //     (a local MCP server is the normal dev setup) but logged per use;
 //     set OBSERVOGRAM_ALLOW_LOCAL_MCP=0 to turn them into 400s when the
 //     studio is exposed beyond the developer's own machine;
-//   - the returned safeUrl has credentials stripped — stderr logs must use
-//     it (or redactCredentials), never the raw URL.
+//   - the returned safeUrl is safeMcpUrl(url) (tools/lib/mcp-url-safety.mjs,
+//     re-exported here): userinfo, the fragment and every query parameter
+//     named like a credential removed — stderr logs, deploys.jsonl and
+//     every persisted pack must use it (or redactCredentials), never the
+//     raw URL. Fetches keep using the raw URL.
 // Hostnames that RESOLVE to private addresses are not caught (no DNS
 // lookup here); the literal-IP check covers hex/decimal/octal IPv4 forms
 // because the WHATWG URL parser normalises those to dotted-decimal.
 
 import { brandEnv } from '../tools/lib/brand-env.mjs';
+import { safeMcpUrl } from '../tools/lib/mcp-url-safety.mjs';
+
+export { credentialParamName, safeMcpUrl, stripMcpUrl, mcpUrlOrigin, droppedNote } from '../tools/lib/mcp-url-safety.mjs';
 
 const PRIVATE_V4 = [
   /^127\./, /^10\./, /^192\.168\./, /^169\.254\./, /^0\./,
@@ -38,7 +44,8 @@ export function redactCredentials(text) {
 }
 
 // Returns { safeUrl } when the URL is fetchable, { error } when it must be
-// rejected with a 400. safeUrl is the parsed URL with credentials removed.
+// rejected with a 400. safeUrl is safeMcpUrl(): the URL with userinfo, the
+// fragment and credential parameters removed.
 export function validateMcpUrl(raw) {
   let url;
   try {
@@ -49,9 +56,7 @@ export function validateMcpUrl(raw) {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     return { error: `mcpUrl must be http or https; got scheme '${url.protocol.replace(/:$/, '')}'` };
   }
-  url.username = '';
-  url.password = '';
-  const safeUrl = url.href;
+  const safeUrl = safeMcpUrl(url.href);
   if (isLocalOrPrivateHost(url.hostname)) {
     if (brandEnv('ALLOW_LOCAL_MCP') === '0') {
       return { error: `mcpUrl targets a local/private address (${url.hostname}), which OBSERVOGRAM_ALLOW_LOCAL_MCP=0 forbids` };

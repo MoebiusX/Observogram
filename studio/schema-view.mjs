@@ -8,6 +8,7 @@
 import { state, $ } from './state.mjs';
 import { focusedPack, focusedPackId, focusedEnv, effectiveFocus } from './focus.mjs';
 import { escapeHtml } from './util.mjs';
+import { authHeaders } from './api.mjs';
 
 export function renderSchemaView(host) {
   const pack    = focusedPack();
@@ -134,7 +135,7 @@ export function renderSchemaView(host) {
 
   const envQ = env ? `?env=${encodeURIComponent(env)}&format=yaml` : '?format=yaml';
   fetch(`/api/packs/${encodeURIComponent(packId)}/canonical${envQ}`, {
-    headers: { Accept: 'application/x-yaml' },
+    headers: { Accept: 'application/x-yaml', ...authHeaders() },
   }).then(async r => {
     const text = await r.text();
     if (!r.ok) throw new Error(`server ${r.status}: ${text.slice(0, 200)}`);

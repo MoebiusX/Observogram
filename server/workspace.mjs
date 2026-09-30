@@ -9,6 +9,7 @@
 //                                     a pre-rebrand .tomograph/ keeps working)
 //     packs/<id>.pack.yaml           one inspectable YAML file per pack
 //     packs/index.json               id → { label, source, createdAt, lastUsedAt }
+//     live/production-live.pack.yaml the org's live pack (POST /api/refresh-live)
 //
 // Design constraints (deliberate):
 //   - File-first, zero new dependencies: plain YAML files + one JSON index,
@@ -366,6 +367,31 @@ export function readDeploySnapshot(deployId) {
 
 // Test hook: force any debounced index write to land now.
 export function flushWorkspaceIndex() { flushIndexNow(); }
+
+// ---------- the live pack (per org) ----------
+//
+// The last POST /api/refresh-live of THIS org, read by GET /api/live-status
+// for the studio's LIVE badge: <org root>/live/production-live.pack.yaml.
+// Replaced atomically, so a concurrent live-status never reads a torn file.
+// (Before STORE_PLAN slice 3 it was one file in the install, shared by every
+// org; the CLI `npm run fetch-live` still writes that path by default.)
+export const LIVE_PACK_FILE = 'production-live.pack.yaml';
+
+export function livePackPath() { return join(workspaceRoot(), 'live', LIVE_PACK_FILE); }
+
+export function writeLivePack(yamlText) {
+  mkdirSync(join(workspaceRoot(), 'live'), { recursive: true });
+  writeFileAtomic(livePackPath(), yamlText);
+}
+
+// The YAML text, or null when this org has none yet.
+export function readLivePack() {
+  try { return readFileSync(livePackPath(), 'utf8'); }
+  catch (e) {
+    if (e.code === 'ENOENT') return null;
+    throw e;
+  }
+}
 
 // Test hook: drop the in-memory index caches so a re-pointed
 // OBSERVOGRAM_WORKSPACE takes effect within the same process.

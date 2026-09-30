@@ -15,12 +15,9 @@
  */
 
 // Hermetic (§0): a developer shell's store or identity variables never
-// reach a child or this process's own imports.
-const STRIP = [
-  'DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH', 'WORKSPACE', 'USERS_FILE',
-  'OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET', 'OIDC_REDIRECT_URL', 'OIDC_ALLOW_HTTP', 'OIDC_SECURE_COOKIES',
-  'SESSION_SECRET', 'API_TOKEN', 'API_TOKEN_LABEL', 'AUTH',
-];
+// reach a child or this process's own imports. The child helpers
+// (server/fixtures/serve-child.mjs) import no server code.
+const { STRIP, boot, serve, cli, signIn } = await import('./fixtures/serve-child.mjs');
 for (const k of STRIP) {
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];
@@ -28,14 +25,13 @@ for (const k of STRIP) {
 
 const { test } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
-const { spawn, spawnSync } = await import('node:child_process');
 const { createHash, createHmac } = await import('node:crypto');
 const {
   existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync,
 } = await import('node:fs');
 const { tmpdir } = await import('node:os');
 const { dirname, join } = await import('node:path');
-const { fileURLToPath, pathToFileURL } = await import('node:url');
+const { fileURLToPath } = await import('node:url');
 
 const { openRaw, prepare } = await import('./store/db.mjs');
 const { hashPassword, verifyPassword } = await import('./auth.mjs');
@@ -45,7 +41,6 @@ const { SPEC_DIR } = await import('../tools/lib/validator.mjs');
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
-const INDEX_URL = pathToFileURL(join(HERE, 'index.mjs')).href;
 const USER_ADMIN = join(ROOT, 'tools', 'user-admin.mjs');
 const ORG_ADMIN = join(ROOT, 'tools', 'org-admin.mjs');
 const PACKC = join(ROOT, 'tools', 'cli.mjs');
@@ -75,82 +70,6 @@ const OIDC_ENV = {
   OBSERVOGRAM_SESSION_SECRET: 'boot-suite-session-secret-0123456789-abc',
 };
 
-function childEnv(ws, extra = {}) {
-  const env = { ...process.env };
-  for (const k of STRIP) { delete env[`OBSERVOGRAM_${k}`]; delete env[`TOMOGRAPH_${k}`]; }
-  if (ws) env.OBSERVOGRAM_WORKSPACE = ws;
-  for (const [k, v] of Object.entries(extra)) { if (v === undefined) delete env[k]; else env[k] = v; }
-  return env;
-}
-
-// ---------- the children ----------
-
-const BOOT_CODE = `
-const { start } = await import(${JSON.stringify(INDEX_URL)});
-try {
-  const srv = await start({ port: Number(process.env.BOOT_PORT || 0), host: process.env.BOOT_HOST, silent: process.env.BOOT_SILENT === '1' });
-  process.stdout.write('LISTENING ' + srv.address().port + '\\n');
-  if (process.env.BOOT_KEEP !== '1') { srv.close(); process.exit(0); }
-} catch (e) {
-  process.stdout.write('REFUSED ' + JSON.stringify({ message: e.message, code: e.code ?? null, nothingMoved: e.nothingMoved ?? null }) + '\\n');
-  process.exit(3);
-}
-`;
-
-function parseBoot(stdout) {
-  const listening = /^LISTENING (\d+)$/m.exec(stdout);
-  if (listening) return { listening: true, port: Number(listening[1]) };
-  const refused = /^REFUSED (.*)$/m.exec(stdout);
-  if (refused) return { listening: false, ...JSON.parse(refused[1]) };
-  return { listening: false, message: null };
-}
-
-// One boot that exits: { listening, port?, message?, code?, nothingMoved?, stdout, stderr }.
-function boot(ws, { host = '127.0.0.1', env = {}, silent = true, port = 0 } = {}) {
-  const r = spawnSync(process.execPath, ['--input-type=module', '-e', BOOT_CODE], {
-    env: childEnv(ws, { ...env, BOOT_HOST: host, BOOT_SILENT: silent ? '1' : '0', BOOT_PORT: String(port) }), encoding: 'utf8', timeout: 60_000,
-  });
-  const out = { ...parseBoot(r.stdout), stdout: r.stdout, stderr: r.stderr, status: r.status };
-  if (out.message === null) throw new Error(`the boot child printed neither LISTENING nor REFUSED (status ${r.status}): ${r.stderr}`);
-  return out;
-}
-
-// A server that keeps running: { base, stop() }.
-async function serve(ws, { host = '127.0.0.1', env = {} } = {}) {
-  const proc = spawn(process.execPath, ['--input-type=module', '-e', BOOT_CODE], {
-    env: childEnv(ws, { ...env, BOOT_HOST: host, BOOT_SILENT: '1', BOOT_KEEP: '1' }), stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let stdout = '';
-  let stderr = '';
-  proc.stdout.setEncoding('utf8');
-  proc.stderr.setEncoding('utf8');
-  proc.stderr.on('data', (c) => { stderr += c; });
-  const exited = new Promise((res) => proc.on('exit', (code, signal) => res({ code, signal })));
-  const port = await new Promise((res, rej) => {
-    const t = setTimeout(() => { proc.kill('SIGKILL'); rej(new Error(`no LISTENING in 60 s: ${stderr}`)); }, 60_000);
-    proc.stdout.on('data', (c) => {
-      stdout += c;
-      const b = parseBoot(stdout);
-      if (b.listening) { clearTimeout(t); res(b.port); } else if (b.message !== null) { clearTimeout(t); rej(new Error(`refused: ${b.message}`)); }
-    });
-    exited.then((r) => { clearTimeout(t); rej(new Error(`the server exited (${r.code}/${r.signal}): ${stderr}`)); });
-  });
-  return {
-    base: `http://127.0.0.1:${port}`,
-    stop: async () => {
-      proc.kill('SIGTERM');
-      const t = setTimeout(() => proc.kill('SIGKILL'), 10_000);
-      await exited;
-      clearTimeout(t);
-    },
-  };
-}
-
-// A CLI: process.execPath with the script, an explicit env, input piped.
-function cli(script, args, ws, { env = {}, input = '' } = {}) {
-  return spawnSync(process.execPath, [script, ...args], { env: childEnv(ws, env), input, encoding: 'utf8', timeout: 60_000 });
-}
-
 // ---------- the parent's read-only view of a database ----------
 
 async function inspect(path, fn) {
@@ -179,15 +98,6 @@ const rowsOf = (v) => JSON.stringify({
 
 const MSG_A = /refusing to bind to 0\.0\.0\.0 without auth/;
 const MSG_B = /refusing to bind to 0\.0\.0\.0 while the seeded default admin password is unchanged/;
-
-async function signIn(base, username, password) {
-  const r = await fetch(`${base}/auth/login`, {
-    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-    body: `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
-  });
-  const cookie = (name) => (r.headers.getSetCookie?.() || []).find((c) => c.startsWith(`${name}=`))?.split(';')[0] ?? null;
-  return { status: r.status, json: await r.json().catch(() => null), session: cookie('observogram_session'), pwflow: cookie('observogram_pwflow') };
-}
 
 // ====================== the Boot order gate ======================
 

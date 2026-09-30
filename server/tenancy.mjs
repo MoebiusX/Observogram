@@ -8,8 +8,9 @@
 //
 //   <OBSERVOGRAM_WORKSPACE>/                      the default org's root ('.')
 //     observogram.db, session-secret              deployment-level (shared)
-//     packs|deploys.jsonl|snapshots|journeys|runs the default org at '.'
-//     orgs/<orgId>/packs|deploys.jsonl|…          any other org ('orgs/<id>')
+//     packs|deploys.jsonl|snapshots|journeys|runs|live
+//                                                  the default org at '.'
+//     orgs/<orgId>/packs|deploys.jsonl|…|live      any other org ('orgs/<id>')
 //
 // — and the file-first machinery underneath (registry, deploys,
 // snapshots, journeys, runs) is unchanged: it already resolves its root
@@ -19,7 +20,8 @@
 // orgWorkspaceRoot() throws: the point of the rule.
 //
 // Membership lives in the store (server/store/memberships.mjs); roles are
-// RECORDED but not yet ENFORCED — that is Stage 3's per-route check.
+// enforced per route by the route guard (server/authz.mjs authorize(),
+// classified in server/route-table.mjs).
 //
 // MIGRATION — a pre-store deployment whose orgs.json armed tenancy while
 // its flat workspace stayed at the base gets that state moved to

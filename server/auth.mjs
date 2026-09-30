@@ -292,7 +292,7 @@ export function resolveSession(req, { db = currentStore() } = {}) {
 // be the local, enabled, still-must-change user it was issued for, at the
 // same epoch (a pre-upgrade flow cookie carries no login or ep: its sub is
 // the login and it reads as epoch 0).
-function resolvePwflow(req, db) {
+export function resolvePwflow(req, db) {
   const flow = verify(parseCookies(req)[PWFLOW_COOKIE]);
   if (!flow || flow.purpose !== 'pwchange') return null;
   const login = typeof flow.login === 'string' ? flow.login : flow.sub;
@@ -320,12 +320,17 @@ function issueSession(res, db, user) {
 }
 
 // The user's live orgs, first membership first; `default: true` marks the
-// deployment's default org (only ever on an org the user is in).
+// deployment's default org (only ever on an org the user is in). `role` is
+// the membership's; `effectiveRole` the role the route guard applies there
+// (an owner is an admin in every live org — server/authz.mjs).
 function orgsOf(db, user) {
   const defaultOrg = getMeta(db, 'default_org');
   return listMembershipsForUser(db, user.id).map((m) => {
     const org = getOrg(db, m.orgId);
-    return { id: m.orgId, name: org?.name || m.orgId, role: m.role, default: m.orgId === defaultOrg };
+    return {
+      id: m.orgId, name: org?.name || m.orgId, role: m.role, effectiveRole: user.isOwner ? 'admin' : m.role,
+      default: m.orgId === defaultOrg,
+    };
   });
 }
 
@@ -365,32 +370,40 @@ function redirectUri(req) {
 // Validates the env contract and registers /auth/*. Called at module
 // load by server/index.mjs; throws (fail closed, clear message) when the
 // configuration is incomplete.
-export function initAuth(app) {
+export function initAuth(app, { authorize } = {}) {
+  // Every route's first handler is its guard (server/authz.mjs, injected:
+  // this module never imports it); the route table classifies each one.
+  if (typeof authorize !== 'function') throw new TypeError('initAuth(app, { authorize }): the route guard factory is required');
   if (authDisabled()) return;
-  if (oidcEnabled()) { initOidc(app); registerShared(app, 'oidc'); return; }
+  if (oidcEnabled()) { initOidc(app, authorize); registerShared(app, 'oidc', authorize); return; }
   // Stand-alone routes register unconditionally and gate on
   // identity_armed PER REQUEST: route registration is load-time in
   // Express, but the store is not open yet at import — the flag may be
   // set by start() on first boot or by `npm run users` while the process
   // runs. Posture stays request-time, exactly like the /api gate.
-  initLocalUsers(app);
-  registerShared(app, 'local-users');
+  initLocalUsers(app, authorize);
+  registerShared(app, 'local-users', authorize);
 }
 
 // 404 while identity is off (open posture, or stand-alone not yet armed)
 // — the studio detects "local, no login" by this status code.
-function identityOff(res) {
+export function identityOff(res) {
   return res.status(404).json({ ok: false, error: 'identity not configured' });
 }
 
-function registerShared(app, mode) {
-  app.post('/auth/logout', (req, res) => {
+// A client that asked for JSON (a script, the studio) rather than a page.
+export function wantsJson(req) {
+  return (req.headers.accept || '').includes('application/json');
+}
+
+function registerShared(app, mode, authorize) {
+  app.post('/auth/logout', authorize('POST /auth/logout'), (req, res) => {
     if (!authEnabled()) return identityOff(res);
     clearCookie(res, SESSION_COOKIE);
     clearCookie(res, LEGACY_SESSION_COOKIE);
     res.status(204).end();
   });
-  app.get('/auth/me', (req, res) => {
+  app.get('/auth/me', authorize('GET /auth/me'), (req, res) => {
     if (!authEnabled()) return identityOff(res);
     const db = currentStore();
     const s = resolveSession(req, { db });
@@ -452,23 +465,23 @@ ${AUTH_PAGE_STYLE}</head><body>
   ${askCurrent ? '<a class="skip" href="/">Cancel — back to the studio</a>' : ''}
 </form></body></html>`;
 
-function initLocalUsers(app) {
-  app.get('/auth/login', (req, res) => {
+function initLocalUsers(app, authorize) {
+  app.get('/auth/login', authorize('GET /auth/login'), (req, res) => {
     if (!localUsersEnabled()) return identityOff(res);
     res.type('html').send(LOGIN_PAGE());
   });
 
-  app.post('/auth/login', (req, res) => {
+  app.post('/auth/login', authorize('POST /auth/login'), (req, res) => {
     if (!localUsersEnabled()) return identityOff(res);
     const db = currentStore();
     const body = req.body || {};
     const username = String(body.username || '').trim();
     const password = String(body.password || '');
     const key = `${username}|${req.ip || ''}`;
-    const wantsJson = (req.headers.accept || '').includes('application/json');
+    const json = wantsJson(req);
     const fail = (msg, status = 401) => {
       noteLoginFailure(key);
-      return wantsJson
+      return json
         ? res.status(status).json({ ok: false, error: msg })
         : res.status(status).type('html').send(LOGIN_PAGE(msg));
     };
@@ -491,7 +504,7 @@ function initLocalUsers(app) {
       setCookie(res, PWFLOW_COOKIE, sign({
         sub: rec.login, login: rec.login, ep: rec.sessionEpoch, purpose: 'pwchange', exp: Date.now() + PWFLOW_TTL_S * 1000,
       }), PWFLOW_TTL_S);
-      return wantsJson
+      return json
         ? res.json({ ok: true, mustChange: true, next: '/auth/change-password' })
         : res.redirect('/auth/change-password');
     }
@@ -502,23 +515,25 @@ function initLocalUsers(app) {
     // the moment a normal session lands.
     clearCookie(res, PWFLOW_COOKIE);
     issueSession(res, db, rec);
-    return wantsJson ? res.json({ ok: true }) : res.redirect('/');
+    return json ? res.json({ ok: true }) : res.redirect('/');
   });
 
-  app.get('/auth/change-password', (req, res) => {
-    if (!localUsersEnabled()) return identityOff(res);
-    const db = currentStore();
-    const flow = resolvePwflow(req, db);
-    if (flow) {
+  // The three change-password routes are `self` routes: their guard
+  // (selfGate, server/authz.mjs) answers 404 while stand-alone sign-in is
+  // off, resolves the caller once — the pwflow cookie first, else a
+  // session — refuses a request with neither, and hands the handler
+  // req.observogramSelf: { via: 'pwflow', user } | { via: 'session', user, session }.
+  app.get('/auth/change-password', authorize('GET /auth/change-password'), (req, res) => {
+    const self = req.observogramSelf;
+    if (self.via === 'pwflow') {
       // The skip affordance renders only while the record still holds the
       // seeded default — an admin-set temporary password stays a forced
       // change (see the skip route below for the rationale).
-      return res.type('html').send(CHANGE_PAGE('', { canSkip: flow.user.seededDefault }));
+      return res.type('html').send(CHANGE_PAGE('', { canSkip: self.user.seededDefault }));
     }
     // Signed-in self-service (the account menu's "change password…"):
     // the same page, with the current password required.
-    const session = resolveSession(req, { db });
-    if (session?.user.kind === 'local') {
+    if (self.user.kind === 'local') {
       return res.type('html').send(CHANGE_PAGE('', { askCurrent: true }));
     }
     res.redirect('/auth/login');
@@ -530,23 +545,21 @@ function initLocalUsers(app) {
   // signed-in session, which must ALSO prove the current password —
   // that knowledge is what makes a forged cross-site POST useless.
   // Neither path needs a separate CSRF token.
-  app.post('/auth/change-password', (req, res) => {
-    if (!localUsersEnabled()) return identityOff(res);
+  app.post('/auth/change-password', authorize('POST /auth/change-password'), (req, res) => {
     const db = currentStore();
-    const wantsJson = (req.headers.accept || '').includes('application/json');
-    const flow = resolvePwflow(req, db);
-    const inFlow = !!flow;
-    const session = inFlow ? null : resolveSession(req, { db });
-    const user = inFlow ? flow.user : (session?.user.kind === 'local' ? session.user : null);
+    const json = wantsJson(req);
+    const self = req.observogramSelf;
+    const inFlow = self.via === 'pwflow';
+    const user = inFlow ? self.user : (self.user.kind === 'local' ? self.user : null);
     if (!user) {
-      return wantsJson
+      return json
         ? res.status(401).json({ ok: false, error: 'password-change flow expired — sign in again', login: '/auth/login' })
         : res.redirect('/auth/login');
     }
     const body = req.body || {};
     const password = String(body.password || '');
     const canSkip = inFlow && user.seededDefault;
-    const bad = (msg, status = 400) => wantsJson
+    const bad = (msg, status = 400) => json
       ? res.status(status).json({ ok: false, error: msg })
       : res.status(status).type('html').send(CHANGE_PAGE(msg, { canSkip, askCurrent: !inFlow }));
     if (!inFlow) {
@@ -568,7 +581,7 @@ function initLocalUsers(app) {
     touchLogin(db, updated.id);
     if (inFlow) clearCookie(res, PWFLOW_COOKIE);
     issueSession(res, db, updated);
-    return wantsJson ? res.json({ ok: true }) : res.redirect('/');
+    return json ? res.json({ ok: true }) : res.redirect('/');
   });
 
   // "Skip for now" — the first-run affordance on the forced change:
@@ -582,31 +595,25 @@ function initLocalUsers(app) {
   //     boot's default-credential check keeps refusing non-loopback
   //     binds — skipping never lets admin/admin reach a network.
   // The flow cookie is the credential, same as the change POST above.
-  app.post('/auth/change-password/skip', (req, res) => {
-    if (!localUsersEnabled()) return identityOff(res);
+  app.post('/auth/change-password/skip', authorize('POST /auth/change-password/skip'), (req, res) => {
     const db = currentStore();
-    const wantsJson = (req.headers.accept || '').includes('application/json');
-    const flow = resolvePwflow(req, db);
-    if (!flow) {
-      return wantsJson
-        ? res.status(401).json({ ok: false, error: 'password-change flow expired — sign in again', login: '/auth/login' })
-        : res.redirect('/auth/login');
-    }
+    const json = wantsJson(req);
+    const flow = req.observogramSelf;   // the pwflow cookie only (selfGate)
     if (!flow.user.seededDefault) {
-      return wantsJson
+      return json
         ? res.status(403).json({ ok: false, error: 'a password change is required for this account' })
         : res.status(403).type('html').send(CHANGE_PAGE('a password change is required for this account'));
     }
     touchLogin(db, flow.user.id);
     clearCookie(res, PWFLOW_COOKIE);
     issueSession(res, db, flow.user);
-    return wantsJson ? res.json({ ok: true, skipped: true }) : res.redirect('/');
+    return json ? res.json({ ok: true, skipped: true }) : res.redirect('/');
   });
 }
 
 // ---------- OIDC ----------
 
-function initOidc(app) {
+function initOidc(app, authorize) {
   const missing = [];
   if (!brandEnv('OIDC_CLIENT_ID')) missing.push('OBSERVOGRAM_OIDC_CLIENT_ID');
   if (brandEnv('SESSION_SECRET').length < 32) missing.push('OBSERVOGRAM_SESSION_SECRET (≥ 32 chars — instances must share it)');
@@ -614,7 +621,7 @@ function initOidc(app) {
     throw new Error(`OIDC is configured (OBSERVOGRAM_OIDC_ISSUER set) but incomplete — missing: ${missing.join(', ')}. Refusing to start half-authenticated.`);
   }
 
-  app.get('/auth/login', async (req, res) => {
+  app.get('/auth/login', authorize('GET /auth/login'), async (req, res) => {
     try {
       const config = await getConfig();
       const state = oidc.randomState();
@@ -636,7 +643,7 @@ function initOidc(app) {
     }
   });
 
-  app.get('/auth/callback', async (req, res) => {
+  app.get('/auth/callback', authorize('GET /auth/callback'), async (req, res) => {
     const flow = verify(parseCookies(req)[FLOW_COOKIE]);
     clearCookie(res, FLOW_COOKIE);
     if (!flow) return res.status(400).json({ ok: false, error: 'login flow expired or missing — start again at /auth/login' });

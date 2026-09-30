@@ -104,9 +104,9 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
-            # NOT readOnlyRootFilesystem: POST /api/refresh-live writes
-            # examples/production-live.pack.yaml inside the container.
-            # The file is ephemeral by design (pod restart clears it).
+            # NOT readOnlyRootFilesystem: not yet verified for this image.
+            # (Each org's live pack is on the workspace volume:
+            # <org root>/live/production-live.pack.yaml.)
           volumeMounts:
             - name: store
               mountPath: /data/db

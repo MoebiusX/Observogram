@@ -169,7 +169,7 @@ try {
   j = await r.json();
   assert(j.authenticated === true && j.sub === 'carlos' && j.email === 'carlos@example.test',
     '/auth/me reflects the signed-in user', JSON.stringify(j));
-  assert(JSON.stringify(j.orgs) === JSON.stringify([{ id: 'default', name: 'Default', role: 'admin', default: true }]),
+  assert(JSON.stringify(j.orgs) === JSON.stringify([{ id: 'default', name: 'Default', role: 'admin', effectiveRole: 'admin', default: true }]),
     '/auth/me lists the default org membership', JSON.stringify(j.orgs));
   assert(j.user?.owner === true && j.user?.login === 'carlos' && j.user?.kind === 'local', '/auth/me names the store row (owner)', JSON.stringify(j.user));
   assert(orgChipModel(j.orgs).kind === 'none', 'an upgraded flat stand-alone deployment shows no ORG chip', orgChipModel(j.orgs).kind, 'none');
@@ -422,6 +422,42 @@ try {
   const clearsFlow = (r.headers.getSetCookie?.() || []).find(c => c.startsWith('observogram_pwflow=;'));
   assert(r.status === 302 && !!clearsFlow && /Max-Age=0/.test(clearsFlow),
     'a normal login clears the stale flow cookie so it cannot shadow the session');
+
+  // ---- the pwflow cookie wins over a session (§6.4, selfGate) ----
+  // The reverse order: carlos is signed in, then a must_change user signs
+  // in on the same browser. That login sets the flow cookie and leaves
+  // carlos's session in the jar, so the change routes see both — and the
+  // forced change must be the one they serve and write, never carlos's
+  // self-service form or carlos's row.
+  createUser(currentStore(), 'test', { login: 'switch', name: 'Switch', password: hashPassword('switch-temp-123'), mustChange: true });
+  const switchFlow = await flowAt('switch', 'switch-temp-123');
+  const bothCookies = `${session}; ${switchFlow}`;
+  const carlosRow = row => JSON.stringify([row.password, row.sessionEpoch]);
+  const carlosBefore = carlosRow(getUserByLogin(currentStore(), 'carlos'));
+  r = await fetch(`${base}/auth/me`, { headers: { Cookie: session } });
+  j = await r.json();
+  assert(!!switchFlow && j.authenticated === true && j.user?.login === 'carlos',
+    'the jar holds a live carlos session beside switch\'s flow cookie', JSON.stringify(j.user));
+  r = await fetch(`${base}/auth/change-password`, { headers: { Cookie: bothCookies } });
+  const bothPage = await r.text();
+  assert(r.ok && !bothPage.includes('name="current"') && bothPage.includes('choose a new password to finish signing in'),
+    'session + pwflow cookies: GET renders the forced change, not the session user\'s self-service form', r.status, 200);
+  r = await fetch(`${base}/auth/change-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', Cookie: bothCookies },
+    body: 'password=switch-new-1234&repeat=switch-new-1234',
+  });
+  j = await r.json();
+  const switchSession = getCookie(r, 'observogram_session');
+  const switchRow = getUserByLogin(currentStore(), 'switch');
+  assert(r.ok && j.ok === true && switchRow.mustChange === false && verifyPassword('switch-new-1234', switchRow.password),
+    'session + pwflow cookies: POST completes the forced change for the flow\'s user', JSON.stringify(j));
+  assert(carlosRow(getUserByLogin(currentStore(), 'carlos')) === carlosBefore,
+    'session + pwflow cookies: the session user\'s row is untouched (password, epoch)');
+  r = await fetch(`${base}/auth/me`, { headers: { Cookie: switchSession || '' } });
+  j = await r.json();
+  assert(!!switchSession && j.authenticated === true && j.user?.login === 'switch',
+    'session + pwflow cookies: the re-issued session is the flow user\'s', JSON.stringify(j.user));
 
   // ---- the login damper covers current-password guesses too ----
   // (LAST carlos exercise in this block: the lockout outlives it.)
