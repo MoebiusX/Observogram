@@ -355,6 +355,13 @@ function overlaidCanonical(canonical, envName) {
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', false);
+// Routes match case-sensitively. Express matches case-insensitively by
+// default, while the auth gate and the org middleware below test the path
+// as written ('/api/'): `/API/…` used to reach the handlers with neither.
+// Set before the first route creates app.router. A nested express.Router()
+// does not inherit this — each one passes { caseSensitive: true } itself
+// (server/test-auth-local.mjs checks every router layer).
+app.enable('case sensitive routing');
 
 // ---------- write-route auth (VALUE_BACKLOG item 10B) ----------
 //
