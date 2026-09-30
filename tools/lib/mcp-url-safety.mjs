@@ -108,9 +108,12 @@ export function mcpUrlOrigin(raw) {
   return url.origin;
 }
 
-// The sentence a route or the studio shows when it dropped something.
-export function droppedNote(dropped, { where = 'not kept in the live pack' } = {}) {
+// The sentence a route or the studio shows when it dropped something:
+// `where` names the place, `of` the URL (the MCP URL unless told
+// otherwise) and `hint` the way out — the auth field, which holds for the
+// MCP URL alone.
+export function droppedNote(dropped, { where = 'not kept in the live pack', of = 'the MCP URL', hint = ' — put a token in the auth field instead' } = {}) {
   if (!dropped?.length) return null;
   const names = dropped.map((n) => `"${n}"`).join(', ');
-  return `${where}: the ${names} parameter${dropped.length === 1 ? '' : 's'} of the MCP URL, which look${dropped.length === 1 ? 's' : ''} like ${dropped.length === 1 ? 'a credential' : 'credentials'} — put a token in the auth field instead`;
+  return `${where}: the ${names} parameter${dropped.length === 1 ? '' : 's'} of ${of}, which look${dropped.length === 1 ? 's' : ''} like ${dropped.length === 1 ? 'a credential' : 'credentials'}${hint}`;
 }

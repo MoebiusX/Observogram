@@ -1536,8 +1536,12 @@ async function boot() {
   resolveActiveOrg();
   // The deploy target profiles saved before slice 3 (one browser-wide key,
   // URLs as typed) become this user's, stripped, now — not at the first
-  // deploy: no credential waits in localStorage until then.
-  loadDeployProfiles().catch(() => {});
+  // deploy: no credential waits in localStorage until then. Not on a boot
+  // /auth/me answered "no session": the login is not known yet and the
+  // shell is about to redirect to sign-in — adopted now, the profiles
+  // would sit under 'local', where the signed-in user never sees them.
+  // (state.identity stays null in the open posture, which adopts here.)
+  if (state.identity?.authenticated !== false) loadDeployProfiles().catch(() => {});
   syncApiLink();
   try { await loadCatalog(); }
   catch (e) {
@@ -4204,7 +4208,7 @@ function updateDeployTargetSummary() {
   $('#deploy-target-summary').textContent = `Target: ${prof}  |  ${prod} ${ver}  |  ${url}`;
 }
 
-// ----- Profiles (studio/api.mjs: per user, each MCP URL in its safe form) -----
+// ----- Profiles (studio/api.mjs: per user, each URL in its safe form) -----
 
 function setDeployStatus(msg, kind = '') {
   const el = $('#deploy-modal-status');
