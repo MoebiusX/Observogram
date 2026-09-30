@@ -1298,6 +1298,23 @@ function trackContextBarHeight() {
   apply();
 }
 
+// The context bar and those strips pin under the chrome by
+// --observa-chrome-h. ux.css holds its single-row height; the chrome grows
+// when its tab titles wrap (a laptop width, with the account menu beside
+// them), and a constant would leave the context bar under the chrome by
+// the difference — so measure it, as the context bar is.
+function trackChromeHeight(hdr) {
+  const apply = () => {
+    document.body.style.setProperty('--observa-chrome-h', `${Math.ceil(hdr.getBoundingClientRect().height)}px`);
+  };
+  if (typeof ResizeObserver === 'function') new ResizeObserver(apply).observe(hdr);
+  // A tab in the background gets no resize notifications until it is shown
+  // again — and not always then.
+  window.addEventListener('resize', apply);
+  document.addEventListener('visibilitychange', apply);
+  apply();
+}
+
 function installObservaChrome() {
   if (document.querySelector('.observa-hdr')) return;
   document.body.classList.add('chrome-observa');
@@ -1402,6 +1419,8 @@ function installObservaChrome() {
   // The tab cards: the analysis journey's three (or the BUILD journey's
   // three in build mode), one renderer — syncObservaTabs wires the clicks.
   syncObservaTabs();
+  // Measured with the tabs in it: they set its height.
+  trackChromeHeight(hdr);
 
   // Wire the Advanced menu — deep tools off the main workflow.
   const advToggle = hdr.querySelector('.observa-adv-toggle');
@@ -5153,6 +5172,9 @@ function setupIdentityChip() {
 
   // Account menu: who you are, change password (stand-alone mode — OIDC
   // passwords belong to the IdP), sign out my other sessions, sign out.
+  // The name is its own span: beside the tabs it gives way (ux.css — ten
+  // characters at a laptop width, the glyph alone at phone width), so the
+  // tab titles keep their room; the title and the menu say it in full.
   const chip = document.createElement('span');
   chip.id = 'hdr-user';
   chip.className = 'hdr-user';
@@ -5161,7 +5183,7 @@ function setupIdentityChip() {
   // buttons are natively focusable and honest about what this is.
   chip.innerHTML = `
     <button type="button" class="ctrl-btn hdr-user-btn" aria-expanded="false"
-            title="signed in as ${escapeHtml(me.email || me.sub)} (${escapeHtml(me.mode)})">⏣ ${escapeHtml(me.name || me.email || me.sub)} ▾</button>
+            title="signed in as ${escapeHtml(me.email || me.sub)} (${escapeHtml(me.mode)})">⏣ <span class="hdr-user-name">${escapeHtml(me.name || me.email || me.sub)}</span> ▾</button>
     <div class="hdr-user-menu" hidden>
       <div class="hdr-user-menu-id" aria-live="polite">signed in as <strong>${escapeHtml(me.email || me.sub)}</strong><span class="hdr-user-menu-mode">${escapeHtml(me.mode)}</span></div>
       ${me.mode === 'local-users' ? '<a class="hdr-user-menu-item" href="/auth/change-password">change password…</a>' : ''}

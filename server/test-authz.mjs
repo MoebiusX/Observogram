@@ -587,7 +587,22 @@ test('the account menu mounts in the one bar every screen shows — not the cont
   assert.match(fn, /\n {2}actions\.appendChild\(chip\);\n\}$/, 'the chip is its last child');
   assert.doesNotMatch(fn, /insertBefore\(chip,/, 'not beside the theme toggle in the context bar');
   const boot = functionSource(src, 'boot');
-  assert.ok(boot.indexOf('installObservaChrome();') < boot.indexOf('setupIdentityChip();'), 'boot mounts the chrome before the chip');
+  const chromeAt = boot.indexOf('installObservaChrome();');
+  assert.ok(chromeAt >= 0 && chromeAt < boot.indexOf('setupIdentityChip();'), 'boot mounts the chrome before the chip');
+  // The chrome's height is measured into --observa-chrome-h (the context bar
+  // and the sticky strips pin under it): beside the account menu the tab
+  // titles wrap at a laptop width, and the constant alone left the context
+  // bar under the chrome by the difference. The chip's name gives way there
+  // (ten characters) and at phone width (the glyph), so the tabs keep their
+  // room and the popover stays on screen.
+  assert.match(src, /syncObservaTabs\(\);\s*trackChromeHeight\(hdr\);/, 'the chrome is measured once its tabs are in it');
+  assert.match(functionSource(src, 'trackChromeHeight'), /setProperty\('--observa-chrome-h', `\$\{Math\.ceil\(hdr\.getBoundingClientRect\(\)\.height\)\}px`\)[\s\S]*new ResizeObserver\(apply\)\.observe\(hdr\);[\s\S]*addEventListener\('resize', apply\);[\s\S]*apply\(\);\s*\}$/);
+  assert.match(fn, /<span class="hdr-user-name">\$\{escapeHtml\(me\.name \|\| me\.email \|\| me\.sub\)\}<\/span>/, 'the name is its own span, so a stylesheet can let it give way');
+  const ux = readFileSync(join(STUDIO, 'ux.css'), 'utf8');
+  const at1280 = ux.indexOf('@media (max-width: 1280px) {');
+  const cap = ux.indexOf('.observa-actions .hdr-user-btn { max-width: 10ch; }');
+  const at720 = ux.search(/@media \(max-width: 720px\) \{\r?\n\s*\.observa-actions \.hdr-user-name \{ position: absolute; width: 1px;/);
+  assert.ok(at1280 >= 0 && cap > at1280 && at720 > cap, 'the chip gives way at a laptop width (ten characters) and at phone width (its glyph)');
 
   // Every selector a mode rule hides, from every studio stylesheet.
   const hidden = [];
