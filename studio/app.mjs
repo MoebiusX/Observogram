@@ -5101,21 +5101,28 @@ function syncApiLink() {
 }
 
 // Identity chip — only renders when the server runs in an identity
-// posture and a session exists.
+// posture and a session exists. The account menu mounts in the chrome's
+// action cluster (installObservaChrome runs first in boot): the one bar
+// every screen shows. The context bar (.hdr) is hidden on the home and
+// Build screens (app.css, ux.css), so a menu there left a signed-in user
+// no way to sign out or change a password until a pack was open.
 function setupIdentityChip() {
   const me = state.identity;
   if (!me?.authenticated) return;
-  const anchor = $('#theme-toggle');
-  if (!anchor || document.getElementById('hdr-user')) return;
+  const actions = document.querySelector('.observa-hdr .observa-actions');
+  if (!actions || document.getElementById('hdr-user')) return;
 
   // Org indicator (orgChipModel) — a switcher when the user belongs to
   // several orgs, a static label for one org that is not the default one,
   // nothing for the default org alone. Switching reloads: every view is a
   // projection of the active org's workspace, so a clean re-boot is the
   // honest refresh.
+  // This copy sits with the pack pickers in the context bar; the OBSERVA
+  // bar's own ORG chip (updateObservaOrgChip) shows on every screen.
   const orgs = me.orgs || [];
   const orgChip = orgChipModel(orgs, getActiveOrg());
-  if (orgChip.kind !== 'none' && !document.getElementById('hdr-org')) {
+  const anchor = $('#theme-toggle');
+  if (anchor && orgChip.kind !== 'none' && !document.getElementById('hdr-org')) {
     const wrap = document.createElement('span');
     wrap.id = 'hdr-org';
     wrap.className = 'hdr-org';
@@ -5190,7 +5197,7 @@ function setupIdentityChip() {
     await fetch('/auth/logout', { method: 'POST', headers: { ...authHeaders() } }).catch(() => {});
     window.location.assign('/auth/login');
   });
-  anchor.parentNode.insertBefore(chip, anchor);
+  actions.appendChild(chip);
 }
 
 // The inline script in <head> already applied the persisted/system theme
