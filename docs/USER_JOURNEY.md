@@ -199,8 +199,9 @@ Belongs here:
   the pack is seeded (*Seed the pack →*; *Change seed →* returns), and under
   both the conformance summary — pass · on a placeholder · fail, the failing
   clauses, todos and placeholders left — and the layer stack of the pack being compiled
-  as the main surface — L1 Contract · L2 Telemetry · (L2X) · L3 Insight · L4
-  Action · L5 Validation · GOV — drawn through the same adapter and the same
+  as the main surface — L1 SLI/SLO · L2 Metrics/Logs/Traces · (L2X) · L3
+  Dashboards/Recording Rules · L4 Alerts/Policy/Self-healing · L5 Self-check · GOV
+  — drawn through the same adapter and the same
   artefact cards Discover uses, each slab's edge carrying the rubric's verdict
   for that layer (pass · pass on a placeholder · fail · neutral when no clause
   applies), a placeholder artefact as Scaffold, a clause the tier still needs as

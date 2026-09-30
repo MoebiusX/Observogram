@@ -125,6 +125,11 @@ export const state = {
   // 'live' | 'all'. null = the default (Needs attention when anything needs
   // it, else All) until the user picks one. Persisted.
   discoverTask: null,
+  // Discover's View: how much of each artefact the open layer draws — 'list'
+  // (name and a status mark) | 'tiles' (name, kind, bound, status) | 'cards'
+  // (the card grid) | 'details' (the full row, the default). card-html.mjs
+  // DISCOVER_VIEWS. Persisted.
+  discoverDetail: 'details',
   // Discover's scroll position ({ pack, y }), restored when the user comes
   // back from Diagnose or Remediate to the same pack (UI state, never persisted).
   discoverScroll: null,
@@ -205,7 +210,7 @@ const PERSIST_FIELDS = [
   'tracePrefs',
   'expandL2', 'expandL3Panels', 'expandL3Queries',
   'layersSearch', 'layersDomain',
-  'discoverTask',
+  'discoverTask', 'discoverDetail',
   'compareFocus',
 ];
 export const persistence = {
