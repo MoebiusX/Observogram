@@ -16,13 +16,17 @@
 // instead (artefactRowHtml, the 2026-09 UX review): name + what it does +
 // status first, the id, tool, tags and symbols one expansion away. The row
 // keeps the card's `.card` / data-key / is-active / has-broken-refs /
-// is-scaffold contract so the drawer highlights it the same way. The pure pieces that row needs — the
+// is-scaffold contract so the drawer highlights it the same way. Discover's
+// View control draws that row at four degrees of detail (DISCOVER_VIEWS):
+// the full row, the card (artefactCardHtml: the grid Discover drew before the
+// review), or less still as a tile or a list line (artefactLightRowHtml).
+// The pure pieces that row needs — the
 // plain-language kind of an artefact, its status on the studio's four-property
 // vocabulary, the Discover task filters, and the "Inferred from recording
 // rule …" relationship — live here too so they stay testable headlessly.
 
 import { escapeHtml } from './util.mjs';
-import { statusChipHtml } from './ux-kit.mjs';
+import { statusChipHtml, statusRecord } from './ux-kit.mjs';
 
 /**
  * artefactCardHtml(artefact, { broken, benchmark, tagLimit, note }) → the HTML inside a `.card`.
@@ -30,8 +34,10 @@ import { statusChipHtml } from './ux-kit.mjs';
  *   benchmark  { slug, refPackId, label } when a backend's product matches a reference pack (the CTA)
  *   tagLimit   how many tags the foot shows (Discover shows four)
  *   note       one short line in the foot the caller knows (Build: "customised: objective, query")
+ *   titleButton  the title is a button (`.dv-row-main`), for a caller whose card is not itself one
+ *                (Discover's Cards view: the keyboard's way to open the full record)
  */
-export function artefactCardHtml(artefact, { broken = 0, benchmark = null, tagLimit = 4, note = null } = {}) {
+export function artefactCardHtml(artefact, { broken = 0, benchmark = null, tagLimit = 4, note = null, titleButton = false } = {}) {
   const tags = (artefact.tags || []).slice(0, tagLimit).map(t =>
     `<span class="tag">${escapeHtml(t)}</span>`).join('');
 
@@ -63,7 +69,9 @@ export function artefactCardHtml(artefact, { broken = 0, benchmark = null, tagLi
       ${gatingChip}
       <span class="card-source" data-source="${escapeHtml(artefact.source || 'Declared')}">${escapeHtml(artefact.source || 'Declared')}</span>
     </div>
-    <div class="card-title">${escapeHtml(artefact.title || artefact.id)}</div>
+    ${titleButton
+    ? `<button type="button" class="card-title dv-row-main" title="Open the full record">${escapeHtml(artefact.title || artefact.id)}</button>`
+    : `<div class="card-title">${escapeHtml(artefact.title || artefact.id)}</div>`}
     ${artefact.subtitle ? `<div class="card-sub">${escapeHtml(artefact.subtitle)}</div>` : ''}
     ${artefact.desc ? `<div class="card-desc">${escapeHtml(artefact.desc)}</div>` : ''}
     <div class="card-foot">
@@ -211,23 +219,84 @@ export function resolveInferredRule(name, ruleNames) {
   return names.find(n => n.startsWith(`${name}_`)) || null;
 }
 
+// Discover's View control: four degrees of detail over the same artefacts,
+// least first. Details is the full row (artefactRowHtml as the review drew it)
+// and the default; the others show less of each artefact so more of a layer
+// fits on one screen. Cards is the card grid Discover drew before the review
+// (artefactCardHtml, the card the Build stack still draws): the id and the
+// adapter's source word on its face. `cap` is how many artefacts an open
+// layer draws before "Show all N": a lighter view draws more.
+export const DISCOVER_VIEWS = [
+  { id: 'list',    label: 'List',    cap: 480,
+    tip: 'The name and a status mark only: the most artefacts on one screen.' },
+  { id: 'tiles',   label: 'Tiles',   cap: 180,
+    tip: 'The name with its kind, bound and status.' },
+  { id: 'cards',   label: 'Cards',   cap: 120,
+    tip: 'The earlier card grid: ID, source, name, bound, summary, type and tags on each card.' },
+  { id: 'details', label: 'Details', cap: 60,
+    tip: 'Everything: what each artefact does, what it was inferred from, and its ID, tags and references.' },
+];
+export const DISCOVER_VIEW_DEFAULT = 'details';
+
+// The view for an id; anything unknown (a stale persisted value) is Details.
+export function discoverView(id) {
+  return DISCOVER_VIEWS.find(v => v.id === id) || DISCOVER_VIEWS.find(v => v.id === DISCOVER_VIEW_DEFAULT);
+}
+
 // The status chips a Discover row shows: only the properties that apply.
-export function artefactStatusChipsHtml(status, { liveWhen = '' } = {}) {
+// `short` (the Tiles view) keeps each chip to a word or two; the tooltip
+// carries the full meaning either way.
+const SHORT_EVIDENCE = { live: 'Live', declared: 'Declared' };
+export function artefactStatusChipsHtml(status, { liveWhen = '', short = false } = {}) {
   const chips = [];
   if (status.completion === 'needsInput') {
     chips.push(statusChipHtml('completion', 'needsInput', { label: 'Template value' }));
   }
   if (status.evidence) {
-    chips.push(statusChipHtml('evidence', status.evidence,
-      liveWhen && status.evidence === 'live' ? { extraTip: `Last seen live: ${liveWhen}.` } : {}));
+    const opts = liveWhen && status.evidence === 'live' ? { extraTip: `Last seen live: ${liveWhen}.` } : {};
+    if (short && SHORT_EVIDENCE[status.evidence]) opts.label = SHORT_EVIDENCE[status.evidence];
+    chips.push(statusChipHtml('evidence', status.evidence, opts));
   }
   if (status.broken) {
     chips.push(statusChipHtml('assessment', 'fail', {
-      label: `${status.broken} unresolved reference${status.broken === 1 ? '' : 's'}`,
+      label: short ? `${status.broken} unresolved` : `${status.broken} unresolved reference${status.broken === 1 ? '' : 's'}`,
       extraTip: 'It names another artefact this pack does not define, so the chain between them is broken.',
     }));
   }
   return chips.join(' ');
+}
+
+// The List view has no room for chips, so each artefact's status is one mark
+// and the same words as the chips, for the tooltip, the legend and assistive
+// technology. The mark's shape builds on the chip vocabulary (studio/ux.css):
+// evidence stays a dot and a failed assessment a cross, as on the chips; the
+// mark's own are filled = live / hollow = declared only, and a dashed box for
+// a template value (the dashed frame such a row has) — so colour is never the
+// only cue. One mark per artefact: what a person must act on wins.
+export const STATUS_MARKS = [
+  { id: 'broken',     label: 'Unresolved reference' },
+  { id: 'needsInput', label: 'Template value' },
+  { id: 'live',       label: statusRecord('evidence', 'live').label },
+  { id: 'declared',   label: statusRecord('evidence', 'declared').label },
+  { id: 'missing',    label: statusRecord('evidence', 'missing').label },
+];
+
+export function artefactStatusMark(status) {
+  if (status?.broken) return 'broken';
+  if (status?.completion === 'needsInput') return 'needsInput';
+  return status?.evidence || 'declared';
+}
+
+export function statusMarkHtml(mark) {
+  return `<span class="dv-mark dv-mark-${escapeHtml(mark)}" aria-hidden="true"></span>`;
+}
+
+export function artefactStatusWords(status) {
+  const words = [];
+  if (status?.completion === 'needsInput') words.push('Template value');
+  if (status?.evidence) words.push(statusRecord('evidence', status.evidence)?.label);
+  if (status?.broken) words.push(`${status.broken} unresolved reference${status.broken === 1 ? '' : 's'}`);
+  return words.filter(Boolean);
 }
 
 // Adapter summaries that only restate what the kind already says.
@@ -250,10 +319,17 @@ function liveWhenOf(artefact) {
  *                  is not in the pack, and without `rules` nothing was checked
  *   outsideFilter  true when the row shows only because it is open in the
  *                  detail panel, not because it matches the current filter
+ *   view           'details' (the default: the full row), 'cards', 'tiles' or
+ *                  'list' (DISCOVER_VIEWS): the same artefact with less of it drawn
  * Name, what it does and status lead; id, type, tags and symbols sit in the
- * row's Details.
+ * row's Details. Tiles and List are artefactLightRowHtml; Cards is the card
+ * body (artefactCardHtml) with its title as the button that opens the record.
  */
-export function artefactRowHtml(artefact, { broken = 0, benchmark = null, rules = null, outsideFilter = false } = {}) {
+export function artefactRowHtml(artefact, { broken = 0, benchmark = null, rules = null, outsideFilter = false, view = DISCOVER_VIEW_DEFAULT } = {}) {
+  if (view === 'tiles' || view === 'list') return artefactLightRowHtml(artefact, { broken, outsideFilter, view });
+  if (view === 'cards') {
+    return artefactCardHtml(artefact || {}, { broken, benchmark, titleButton: true, note: outsideFilter ? 'Open in the detail panel · outside this filter' : null });
+  }
   const a = artefact || {};
   const { kind, role } = artefactKind(a);
   const status = artefactStatus(a, { broken });
@@ -340,7 +416,66 @@ export function artefactRowHtml(artefact, { broken = 0, benchmark = null, rules 
     <div class="dv-row-foot">
       ${details}
       ${benchmarkCta}
-      ${outsideFilter ? '<span class="dv-row-pinned" title="Shown because it is open in the detail panel; the current filter would hide it.">Open in the detail panel · outside this filter</span>' : ''}
+      ${outsideFilter ? `<span class="dv-row-pinned" title="${PINNED_TIP}">Open in the detail panel · outside this filter</span>` : ''}
     </div>
+  `;
+}
+
+const PINNED_TIP = 'Shown because it is open in the detail panel; the current filter would hide it.';
+
+// A name set in a narrow column: a break opportunity after each separator, so
+// 'genai_client_operation_duration' wraps at a word, not mid-word. A number
+// stays whole: no break between two digits ('1.27.0', '12:30') or after a
+// leading minus ('-5').
+function breakableHtml(text) {
+  return escapeHtml(text).replace(/([_:./-])(?=\S)/g, (m, sep, i, s) => {
+    const before = s[i - 1] || '';
+    const inNumber = /\d/.test(s[i + 1]) && (/\d/.test(before) || (sep === '-' && (!before || /\s/.test(before))));
+    return inNumber ? sep : `${sep}<wbr>`;
+  });
+}
+
+/**
+ * artefactLightRowHtml(artefact, { broken, outsideFilter, view }) → the HTML
+ * inside a `.dv-row` on Discover's two lightest views, Tiles and List
+ * (DISCOVER_VIEWS; Cards is artefactCardHtml, through artefactRowHtml): the
+ * same artefact as artefactRowHtml, with less of it drawn.
+ *   tiles  the name, then its kind and bound, with the status chips (short
+ *          labels; the tooltip keeps the meaning)
+ *   list   the name and one status mark; kind, bound and status in words are
+ *          the tooltip and the text assistive technology reads
+ * Both are one `.dv-row-main` button that opens the full record, as the full
+ * row's name does; what the row leaves out is there.
+ */
+export function artefactLightRowHtml(artefact, { broken = 0, outsideFilter = false, view = 'tiles' } = {}) {
+  const a = artefact || {};
+  const { kind } = artefactKind(a);
+  const status = artefactStatus(a, { broken });
+  const name = a.title || a.id;
+
+  if (view === 'list') {
+    const words = [kind, a.subtitle, ...artefactStatusWords(status), outsideFilter ? 'Open in the detail panel, outside this filter' : '']
+      .filter(Boolean);
+    return `
+    <button type="button" class="dv-row-main">
+      <span class="dv-row-line" title="${escapeHtml(words.join(' · '))}">
+        ${statusMarkHtml(artefactStatusMark(status))}
+        <span class="dv-row-name">${breakableHtml(name)}</span>
+      </span>
+      <span class="sr-text">${escapeHtml(`${words.join('. ')}.`)}</span>
+    </button>
+  `;
+  }
+
+  return `
+    <button type="button" class="dv-row-main" title="Open the full record">
+      <span class="dv-row-name">${breakableHtml(name)}</span>
+      <span class="dv-row-meta">
+        <span class="dv-row-kind">${escapeHtml(kind)}</span>
+        ${a.subtitle ? `<span class="dv-row-bound">${escapeHtml(a.subtitle)}</span>` : ''}
+      </span>
+      <span class="dv-row-status">${artefactStatusChipsHtml(status, { liveWhen: liveWhenOf(a), short: true })}</span>
+    </button>
+    ${outsideFilter ? `<span class="dv-row-pinned" title="${PINNED_TIP}">Open in the detail panel · outside this filter</span>` : ''}
   `;
 }

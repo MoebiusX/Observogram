@@ -6,16 +6,24 @@
 // client (and to unit-test in isolation). The semantics are the spec's, not
 // the UI's — see vendor/observability-pack-spec for the source of truth.
 
-// The seven canonical layers (L1 Contract … GOV Governance).
+// The seven canonical layers. `name` is what the studio shows: the layer
+// named by the artefacts on it, the wording users asked for (2026-09: the
+// spec's abstract names and the "What should we measure?" questions were
+// disliked). `spec` is the layer's name in the ObservabilityPack spec, kept
+// for tooltips and for reading the spec side by side. Never invent layer
+// semantics; the spec is the source of truth for what belongs on a layer.
 export const LAYER_DEFS = [
-  { id: 'L1',  num: 'L1',  name: 'Contract'   },
-  { id: 'L2',  num: 'L2',  name: 'Telemetry'  },
-  { id: 'L2X', num: 'L2X', name: 'Extended'   },
-  { id: 'L3',  num: 'L3',  name: 'Insight'    },
-  { id: 'L4',  num: 'L4',  name: 'Action'     },
-  { id: 'L5',  num: 'L5',  name: 'Validation' },
-  { id: 'GOV', num: 'GOV', name: 'Governance' },
+  { id: 'L1',  num: 'L1',  name: 'SLI/SLO',                    spec: 'Contract'   },
+  { id: 'L2',  num: 'L2',  name: 'Metrics/Logs/Traces',        spec: 'Telemetry'  },
+  { id: 'L2X', num: 'L2X', name: 'Extended',                   spec: 'Extended'   },
+  { id: 'L3',  num: 'L3',  name: 'Dashboards/Recording Rules', spec: 'Insight'    },
+  { id: 'L4',  num: 'L4',  name: 'Alerts/Policy/Self-healing', spec: 'Action'     },
+  { id: 'L5',  num: 'L5',  name: 'Self-check',                 spec: 'Validation' },
+  { id: 'GOV', num: 'GOV', name: 'Governance',                 spec: 'Governance' },
 ];
+// { L1: 'SLI/SLO', … } — the one map every view reads a layer's name from.
+export const LAYER_NAMES = Object.fromEntries(LAYER_DEFS.map(d => [d.id, d.name]));
+export const LAYER_SPEC_NAMES = Object.fromEntries(LAYER_DEFS.map(d => [d.id, d.spec]));
 
 // NOTE: diagnostic-grade.mjs inlines its own private copy of this array so
 // it can stay zero-dependency for downstream vendoring — keep the two in sync.
@@ -37,10 +45,8 @@ export const DOMAIN_DEFS = [
   { id: 'ux',             label: 'User Experience' },
 ];
 
-// Slab accents only — the layer NAMES come from the canonical LAYER_DEFS
-// (L1 Contract · L2 Telemetry · L2X Extended · L3 Insight · L4 Action ·
-// L5 Validation · GOV Governance). Never invent layer semantics; the spec
-// is the source of truth.
+// Slab accents only — the layer NAMES come from LAYER_DEFS above. Never
+// invent layer semantics; the spec is the source of truth.
 export const DISCO_SLAB_ACCENT = {
   L1: '#3b82f6', L2: '#06b6d4', L2X: '#0ea5e9', L3: '#10b981',
   L4: '#f59e0b', L5: '#a855f7', GOV: '#64748b',

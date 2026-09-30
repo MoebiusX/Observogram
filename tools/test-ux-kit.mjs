@@ -10,10 +10,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   STATUS_PROPERTIES, statusFromLegacy, statusRecord, statusChipHtml, legacyStatusChipHtml,
-  GLOSSARY, termHtml, LAYER_PURPOSE, layerTitle, decisionHeaderHtml, emptyStateHtml, sectionNavHtml,
+  GLOSSARY, termHtml, LAYER_PURPOSE, layerTitle, layerSpecTip, decisionHeaderHtml, emptyStateHtml, sectionNavHtml,
   disclosureHtml, plural, listSentence, personalName,
   parseRecentServices, orderServicesByRecent,
 } from '../studio/ux-kit.mjs';
+import { LAYER_NAMES } from '../studio/constants.mjs';
 
 test('four separate status properties, each with its own question', () => {
   assert.deepEqual(Object.keys(STATUS_PROPERTIES), ['origin', 'completion', 'evidence', 'assessment']);
@@ -102,10 +103,20 @@ test('plain words first, the formal term and its definition on hover', () => {
   assert.equal(GLOSSARY.placeholder.plain, 'Requirement represented; real value still needed');
 });
 
-test('every layer code travels with its plain purpose', () => {
-  for (const code of ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV']) assert.ok(LAYER_PURPOSE[code]?.question.endsWith('?'), code);
-  assert.equal(layerTitle('L1'), 'L1 Contract · What should we measure?');
+test('every layer code travels with the name users asked for, the spec name behind it, and no question', () => {
+  for (const code of ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV']) {
+    const p = LAYER_PURPOSE[code];
+    assert.ok(p && p.name && p.spec && p.blurb, code);
+    assert.equal(p.name, LAYER_NAMES[code], `${code}: the one name every screen shows`);
+    assert.equal(p.question, undefined, `${code}: no "What should we measure?" line`);
+  }
+  assert.deepEqual(['L1', 'L2', 'L3', 'L4', 'L5'].map(c => LAYER_NAMES[c]),
+    ['SLI/SLO', 'Metrics/Logs/Traces', 'Dashboards/Recording Rules', 'Alerts/Policy/Self-healing', 'Self-check']);
+  assert.equal(layerTitle('L1'), 'L1 SLI/SLO');
   assert.equal(layerTitle('ZZ'), 'ZZ');
+  assert.equal(layerSpecTip('L1'), 'In the ObservabilityPack spec: L1 Contract.');
+  assert.equal(layerSpecTip('GOV'), '', 'no tooltip where the spec says the same word');
+  assert.equal(layerSpecTip('ZZ'), '');
 });
 
 test('small grammar helpers', () => {

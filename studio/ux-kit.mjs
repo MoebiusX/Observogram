@@ -21,6 +21,7 @@
 // that only run when called. Safe to import under node for the headless tests.
 
 import { escapeHtml } from './util.mjs';
+import { LAYER_DEFS } from './constants.mjs';
 
 // ---------- the four status properties ----------
 //
@@ -182,20 +183,32 @@ export function termHtml(key, text = null) {
 
 // ---------- the layer model, translated ----------
 
-// Every layer code travels with its plain-English purpose (review §3 Discover).
-export const LAYER_PURPOSE = {
-  L1:  { name: 'Contract',   question: 'What should we measure?',          blurb: 'Objectives, indicators and the promises the service makes.' },
-  L2:  { name: 'Telemetry',  question: 'How do signals arrive?',            blurb: 'Metrics, logs and traces, and the pipelines that carry them.' },
-  L2X: { name: 'Extended',   question: 'What else do we collect?',          blurb: 'Additional signals beyond the core three: profiles, events, synthetic data.' },
-  L3:  { name: 'Insight',    question: 'How do we see what is happening?',  blurb: 'Recording rules and dashboards that turn signals into answers.' },
-  L4:  { name: 'Action',     question: 'What happens when it breaks?',      blurb: 'Alerts, routing, policy and self-healing.' },
-  L5:  { name: 'Validation', question: 'How do we know it works?',          blurb: 'Tests, synthetic checks and chaos experiments that prove the rest.' },
-  GOV: { name: 'Governance', question: 'Who owns it and how is it kept?',   blurb: 'Ownership, review and change control.' },
+// Every layer code travels with its name (constants.mjs LAYER_DEFS: the
+// layer named by its artefacts, as users asked), the spec's name for that
+// layer, and one plain line on what sits there. The review's "Contract ·
+// What should we measure?" pairing was retired on user feedback (2026-09):
+// the name says what the layer holds; no question is shown.
+const LAYER_BLURBS = {
+  L1:  'Service level indicators and the objectives set on them.',
+  L2:  'Metrics, logs and traces, and the pipelines that carry them.',
+  L2X: 'Additional signals beyond the core three: profiles, events, synthetic data.',
+  L3:  'Recording rules and dashboards that turn signals into answers.',
+  L4:  'Alerts, routing, policy and self-healing.',
+  L5:  'Tests, synthetic checks and chaos experiments that prove the rest.',
+  GOV: 'Ownership, review and change control.',
 };
+export const LAYER_PURPOSE = Object.fromEntries(LAYER_DEFS.map(d => [d.id, { name: d.name, spec: d.spec, blurb: LAYER_BLURBS[d.id] || '' }]));
 
+// "L1 SLI/SLO" — a layer as the screens name it. Nothing is appended.
 export function layerTitle(code) {
   const p = LAYER_PURPOSE[code];
-  return p ? `${code} ${p.name} · ${p.question}` : String(code ?? '');
+  return p ? `${code} ${p.name}` : String(code ?? '');
+}
+
+// The tooltip that keeps the spec's name in reach: "In the ObservabilityPack spec: L1 Contract."
+export function layerSpecTip(code) {
+  const p = LAYER_PURPOSE[code];
+  return p && p.spec && p.spec !== p.name ? `In the ObservabilityPack spec: ${code} ${p.spec}.` : '';
 }
 
 // ---------- the decision header ----------
