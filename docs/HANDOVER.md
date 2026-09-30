@@ -25,15 +25,15 @@ next to Discover · Diagnose · Remediate. In order:
 `npm test` passes on Node 22.16+ (the `package.json` `engines` floor, for `node:sqlite`;
 the Node 22.22 pipe truncation in `packc journey run --all --json` that failed
 `tools/test-journey.mjs` was fixed in [STORE_PLAN.md](STORE_PLAN.md) slice 1). `npm run lint`:
-0 errors, 166 warnings on `codex/roles-enforced` (a baseline of `preserve-caught-error`-style
+0 errors, 166 warnings on `codex/identity-api` (a baseline of `preserve-caught-error`-style
 warnings; slice 2a removed five with the file readers it deleted, slice 3a some unused catch
-bindings; do not add to it). CI on a PR: `validate`
+bindings, and slice 3b added none; do not add to it). CI on a PR: `validate`
 (includes the vendored-spec check) and `backend-live` on the
 latest 22, `node-floor` (`npm test` on exactly 22.16.0), `store-prestore` (from slice 2b:
 the Export gate against a `v0.4.0` worktree). `refresh-live-pack` runs only on
 demand or when the fetcher changes.
 
-**The store (backlog 0) — slices 1 and 2 on `develop`; slice 3a (roles enforced) delivered; 3b (the identity API) is next.**
+**The store (backlog 0) — slices 1 and 2 on `develop`; slice 3a (roles enforced) and 3b (the identity API) delivered; slice 4 is next.**
 Slice 1 (the store foundation: `server/store/*`, `packc store backup` / `restore`, the k8s
 store volume) is PR #109. Slice 2a (PR #111, branch `codex/store-identity`, stacked on it)
 moves identity onto the store: `start()` runs `bootStore()` (`server/boot.mjs`: the boot
@@ -53,7 +53,7 @@ pin those texts. The Export gate runs in `npm test` through
 `deploy/k8s/README.md` state the upgrade and the clean rollback (export in place first,
 with the server stopped). `develop` is promoted to `main` only once 2b has merged.
 
-**Slice 3a delivered (branch `codex/roles-enforced`): roles enforced, the live pack per org.**
+**Slice 3a delivered (PR #119, branch `codex/roles-enforced`): roles enforced, the live pack per org.**
 Every route registers `authorize('<METHOD> <path>')` (`server/authz.mjs`) as its first
 handler and is classified in `server/route-table.mjs`; the guard applies it (a viewer reads,
 an operator writes, an owner is an admin everywhere, the bearer an operator; every refusal
@@ -63,8 +63,27 @@ live pack is per org (`<org root>/live/production-live.pack.yaml`) and the MCP U
 credential parameter (`tools/lib/mcp-url-safety.mjs`); the maintainer's decisions for it:
 members are listed to admins only, viewer affordances in the studio wait for slice 6a (the
 studio shows the server's refusal), drafts keep no credential parameter either (with a
-warning), and the old install-wide live pack is not moved. Next is slice 3b — the identity API (users, orgs, members, the join role, sign out my
-other sessions — STORE_PLAN §7) — then slice 4.
+warning), and the old install-wide live pack is not moved.
+
+**Slice 3b delivered (branch `codex/identity-api`, stacked on 3a; PR pending): the identity
+API.** `server/routes/identity.mjs` registers the owner routes (`/api/admin/*`: users —
+create, disable, enable, a temporary password, sign out everywhere, the owner flag — orgs
+and the join role) and the admin routes (`/api/org*`: the request's org's name and
+members; no path names an org); `server/auth.mjs` adds the self route
+`POST /auth/signout-others` ("sign out my other sessions" in the account menu; the
+re-issued cookie keeps its expiry). Every rule is `server/identity-admin.mjs`'s, called with
+`surface: 'api'` — only the way out a refusal names differs from the CLI's, and
+`server/test-store.mjs` pins both columns; a rule's refusal is 400 / 404 / 409 by its `kind`,
+never 403. Every identity change needs `X-Observogram-CSRF: 1` in every posture (the bearer,
+an operator, never reaches one); without sign-in
+the identity API answers only a direct loopback request and is closed beyond loopback.
+`server/test-identity-api.mjs` holds every route's exact answers and audit rows; the AuthZ
+matrix in `server/test-authz.mjs` covers the new routes, and its README tests pin the API
+Surface and The Identity API tables to the route table. The maintainer's decisions for it:
+admins list members, enable and owner grant / revoke ship (the revoke leaves the default
+org's admin membership, and says so), the join role `admin` needs `"confirm": true`, and
+the open-loopback posture keeps the HTTP identity API behind the direct-loopback rule.
+Next is slice 4 (services, environments and org-scoped MCP endpoints on the store).
 
 ### otel-observability-pack (the spec) — `develop` at the merge of PR #8
 
@@ -124,7 +143,7 @@ These are the rules we learned the hard way; treat them as standing instructions
 
 ```bash
 npm test                 # node:test suites (Node 22.16+), the studio graph, the AA scan
-npm run lint             # eslint: 0 errors is the bar, 186 warnings the baseline
+npm run lint             # eslint: 0 errors is the bar, 166 warnings the baseline
 node tools/sync-spec.mjs --check   # vendored spec files match VERSIONS.json
 PORT=8013 OBSERVOGRAM_AUTH=off OBSERVOGRAM_WORKSPACE=/tmp/ws node server/index.mjs
 ```
@@ -172,7 +191,8 @@ he ratifies plans for this stream (item 12 says so). *Planned 2026-09-24:*
 decisions are ratified; its §9b lists the refinements made since, which merging it confirms.
 *Status:* slice 1 (the foundation) is PR #109; slice 2 is complete once 2a (identity on the
 store, PR #111) and 2b (export, `import --replace`, `rekey-issuer`, `purge-org`) merge; slice 3a
-(roles enforced, the live pack per org) is delivered and 3b (the identity API) is next — see §1.
+(roles enforced, the live pack per org; PR #119) and 3b (the identity API) are delivered and
+slice 4 is next — see §1.
 
 **A. Decide: "the draft becomes the pack".** The root cause of every remaining Build gap is
 that the draft is a set of inputs re-instantiated from the seed on each change, with
@@ -275,7 +295,7 @@ read-only by design; the SLI rolodex shows the bare library id until a rename.
   explicit allow-list of historical documents.
 - **The repo-root `index.html`** (the v0.3-era landing page) still says "Spec v1.2" and
   links upstream `main`; it is not scanned by the drift guard.
-- **Lint baseline**: 186 warnings, mostly `preserve-caught-error`; each new file should
+- **Lint baseline**: 166 warnings, mostly `preserve-caught-error`; each new file should
   add none.
 - **The MQ lab's `sites/lab/`** (the rendering `npm run site` writes) is untracked and
   unignored in that repo; it is a copy of `stack/` plus site-only files, not something to

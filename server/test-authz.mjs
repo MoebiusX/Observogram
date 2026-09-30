@@ -9,26 +9,46 @@
  *   CONTEXT org, never the first one;
  * - the studio guards: every fetch() sends authHeaders(), every navigation
  *   to /api names the org with orgQuery(); the deploy modal and Neuron's
- *   Run all say a refusal;
+ *   Run all say a refusal; the account menu's "sign out my other
+ *   sessions" says its answer;
  * - completeness: three children (local, oidc, off) walk the app's router
  *   (server/fixtures/route-inventory.mjs); every route's first handler, per
  *   method, is its own authorize() guard, every key is in
  *   server/route-table.mjs for its mode and agrees with EXPECTED_CLASS
  *   below, only the named middleware and the static mounts sit between;
  *   the README's API Surface states each of its rows' class as the table has it,
- *   and its Roles section each orgs.json role the import maps to admin or viewer;
- *   no comment in server/ or tools/ still says roles are not enforced;
+ *   its Identity API section states the audit actor (the first local user's
+ *   owner grant keeps `system`) and lists every identity route with its class, and
+ *   its Roles section each orgs.json role the import maps to admin or viewer;
+ *   docs/STORE_PLAN.md's build status and docs/HANDOVER.md name one next
+ *   slice; no comment in server/ or tools/ still says roles are not enforced;
  * - the decision (authzDecision), pure, over synthetic entries — the
  *   always / refuse / rule / direct-loopback paths no route has yet — and
  *   the request facts it reads (the CSRF header, a cross-site form, a
- *   direct loopback request); selfGate's CSRF step; the guard's 500 for
+ *   direct loopback request); selfGate's CSRF step, on the entry of
+ *   POST /auth/signout-others; the guard's 500 for
  *   a classified route reached without a principal (fail closed);
  * - the AuthZ matrix: every /api route × every principal × every posture,
  *   each a child server (server/fixtures/serve-child.mjs), its expectations
  *   from EXPECTED_CLASS and the fixture's own membership table, never from
  *   the server; refused requests write no audit row; plus the CSRF, form,
  *   public, case, org-list and fresh admin/admin rows; the self routes'
- *   404 while stand-alone sign-in is off (selfGate's first step).
+ *   404 while stand-alone sign-in is off (selfGate's first step); the
+ *   self rows of POST /auth/signout-others (the caller's own session with
+ *   the CSRF header — never anonymous, the bearer, a disabled user or the
+ *   pwflow cookie; its other cookies refused, its own re-issued);
+ * - the identity API in that matrix (slice 3b): an owner with no
+ *   membership reaches the owner routes, everyone else is refused; the
+ *   admin routes answer the context org's admins and every owner, and an
+ *   org admin never reaches another org's members (a member of another org
+ *   is "not a member" here; naming that org is 403 org); without
+ *   sign-in they answer only a request sent straight to loopback (a
+ *   foreign Host, a proxy header or a foreign Origin → 403 posture, over
+ *   node:http) and every mutation needs the CSRF header; the open-loopback
+ *   identity writes and their audit rows (actor local; system for the
+ *   first local user's grant); Arming, the API half (an exposed server
+ *   seeded with OBSERVOGRAM_ADMIN_PASSWORD never answers an anonymous read
+ *   while its users change).
  */
 
 // Hermetic (§0): a developer shell's store or identity variables never
@@ -195,9 +215,9 @@ test('orgContext stamps the principal; a session\'s role is the context org\'s m
 
 // ---------- the decision, pure (§6.3) ----------
 //
-// Synthetic entries: slice 3a has no identity-API route yet, so the
-// always / refuse / rule / direct-loopback paths are proved here, on the
-// function the guard calls.
+// Synthetic entries: the always / refuse / rule / direct-loopback paths
+// proved on the function the guard calls, whatever routes the table holds
+// (the matrix below proves them again over the identity API's routes).
 
 const synth = (fields) => ({ csrf: 'none', exposed: 'allow', identityApi: false, ...fields });
 const P = {
@@ -273,7 +293,7 @@ test('authzDecision: every refusal names a way out', () => {
   assert.equal(text(ownerApi, ctxOf('open-exposed', P.local)),
     'the identity API is closed on a server bound to 0.0.0.0 without sign-in (OBSERVOGRAM_INSECURE_NO_AUTH=1): add the first user with npm run users -- add <login> (it arms sign-in without a restart; the first local user is an owner), or configure OIDC');
   assert.equal(text(ownerApi, ctxOf('open-loopback', P.local, { direct: false, port: 8123 })),
-    'on a server without sign-in the identity API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / Via / X-Forwarded-* / X-Real-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:8123, or use the CLIs from this machine (npm run users -- add <login>, passwd <login>, owner <login>)');
+    'on a server without sign-in the identity API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:8123, or use the CLIs from this machine (npm run users -- add <login>, passwd <login>, owner <login>)');
   assert.equal(text(ownerApi, ctxOf('identity', P.owner, { csrf: false })),
     "missing X-Observogram-CSRF: 1 — identity changes need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')");
   assert.equal(text(ownerApi, ctxOf('identity', P.admin)), "requires an owner of this deployment (you are admin in org 'acme') — ask an owner");
@@ -307,7 +327,9 @@ test('the request facts: the CSRF header, a cross-site form, a direct loopback r
   }
   const h = { host: '127.0.0.1:8000' };
   // Every proxy header the refusal text names; X-Forwarded-* is the whole prefix.
-  for (const proxy of ['forwarded', 'via', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-port', 'x-forwarded-server', 'x-forwarded-prefix', 'x-real-ip', 'X-Forwarded-Proto']) {
+  for (const proxy of ['forwarded', 'via', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-port', 'x-forwarded-server', 'x-forwarded-prefix', 'x-real-ip', 'X-Forwarded-Proto',
+    // The client-IP headers a CDN or a tunnel adds instead of X-Forwarded-For.
+    'cf-connecting-ip', 'CF-Connecting-IPv6', 'true-client-ip', 'x-client-ip', 'x-cluster-client-ip', 'fastly-client-ip', 'x-azure-clientip', 'x-original-forwarded-for']) {
     assert.equal(direct({ ...h, [proxy]: '203.0.113.9' }), false, proxy);
   }
   assert.equal(direct({ ...h, 'x-forwarded-proto': undefined }), true, 'a header object\'s absent value is no header');
@@ -327,8 +349,9 @@ test('the request facts: the CSRF header, a cross-site form, a direct loopback r
   assert.equal(effectiveRoleOf(P.local), 'admin');
 });
 
-test('selfGate: an always-CSRF self route refuses the caller\'s own session without the header', async () => {
+test('selfGate: an always-CSRF self route (POST /auth/signout-others) refuses the caller\'s own session without the header', async () => {
   const { createHmac } = await import('node:crypto');
+  const { routeEntry } = await import('./route-table.mjs');
   const db = currentStore();
   const selfie = createUser(db, 'system', { login: 'selfie' });
   setMeta(db, 'system', 'identity_armed', '1');
@@ -337,7 +360,8 @@ test('selfGate: an always-CSRF self route refuses the caller\'s own session with
     const body = Buffer.from(JSON.stringify({ sub: 'selfie', login: 'selfie', ep: selfie.sessionEpoch, purpose: 'session', iat: Date.now(), exp: Date.now() + 3600_000 })).toString('base64url');
     return `observogram_session=v1.${body}.${createHmac('sha256', secret).update(body).digest('base64url')}`;
   })();
-  const entry = { class: 'self', csrf: 'always', modes: ['local', 'oidc'], self: { pwflow: false, session: true, unauth: 'json' } };
+  const entry = routeEntry('POST /auth/signout-others');
+  assert.deepEqual([entry.class, entry.csrf, entry.modes, entry.self], ['self', 'always', ['local', 'oidc'], { pwflow: false, session: true, unauth: 'json' }]);
   const run = (headers) => new Promise((resolve) => {
     const req = { headers, query: {} };
     const res = {
@@ -528,6 +552,29 @@ test('Neuron\'s Run all says the server\'s text when the runs are refused, not o
   assert.match(fn, /if \(names\.length > 1\) toast\(runAllText\(names, tally, failures\),/);
 });
 
+// The account menu's "sign out my other sessions" posts to its self route
+// and says the answer on the menu's id line: done, or the server's text.
+const { signOutOthersText } = await import('../studio/api.mjs');
+
+test('the account menu\'s "sign out my other sessions": the route it posts to, and what its id line says', async () => {
+  const { routeEntry } = await import('./route-table.mjs');
+  assert.equal(signOutOthersText(200, { ok: true, sessionEpoch: 3 }), 'other sessions signed out');
+  assert.equal(signOutOthersText(401, { ok: false, error: 'unauthorized: sign in required', login: '/auth/login', denied: 'auth' }),
+    '401: unauthorized: sign in required');
+  assert.equal(signOutOthersText(403, { ok: false, error: 'missing X-Observogram-CSRF: 1 — …', denied: 'csrf' }), '403: missing X-Observogram-CSRF: 1 — …');
+  assert.equal(signOutOthersText(0, { error: 'Failed to fetch' }), 'Failed to fetch', 'no answer: the network\'s text');
+  assert.equal(signOutOthersText(502, null), '502: the other sessions were not signed out');
+  assert.equal(signOutOthersText(200, null), '200: the other sessions were not signed out', 'a 200 that is not the route\'s answer');
+
+  const fn = functionSource(withoutComments(readFileSync(join(STUDIO, 'app.mjs'), 'utf8')), 'setupIdentityChip');
+  const at = (s) => { const i = fn.indexOf(s); assert.ok(i >= 0, `setupIdentityChip has ${s}`); return i; };
+  assert.ok(at('>change password…</a>') < at('class="hdr-user-menu-item hdr-user-others">sign out my other sessions</button>'), 'after change password…');
+  assert.ok(at('hdr-user-others">sign out my other sessions</button>') < at('class="hdr-user-menu-item hdr-user-out">sign out</button>'), 'before sign out');
+  assert.match(fn, /fetch\('\/auth\/signout-others', \{ method: 'POST', headers: \{ Accept: 'application\/json', \.\.\.authHeaders\(\) \} \}\)/);
+  assert.equal(routeEntry('POST /auth/signout-others').class, 'self', 'the route it posts to');
+  assert.match(fn, /chip\.querySelector\('\.hdr-user-menu-id'\)\.textContent = signOutOthersText\(status, body\);/);
+});
+
 // ---------- completeness: every route is classified and guarded (§14.1) ----------
 //
 // The expected class of every route, written from STORE_PLAN §5 — NOT
@@ -544,6 +591,7 @@ const EXPECTED_CLASS = Object.freeze({
   'GET /auth/change-password': 'self',
   'POST /auth/change-password': 'self',
   'POST /auth/change-password/skip': 'self',
+  'POST /auth/signout-others': 'self',
   'GET /api/orgs': 'viewer',
   'GET /api/packs': 'viewer',
   'GET /api/examples': 'viewer',
@@ -584,11 +632,33 @@ const EXPECTED_CLASS = Object.freeze({
   'POST /api/library/instantiate': 'operator',
   'POST /api/library/compile': 'operator',
   'POST /api/library/register': 'operator',
+  'PATCH /api/org': 'admin',
+  'GET /api/org/members': 'admin',
+  'POST /api/org/members': 'admin',
+  'PATCH /api/org/members/:userId': 'admin',
+  'DELETE /api/org/members/:userId': 'admin',
+  'GET /api/admin/users': 'owner',
+  'POST /api/admin/users': 'owner',
+  'POST /api/admin/users/:id/disable': 'owner',
+  'POST /api/admin/users/:id/enable': 'owner',
+  'POST /api/admin/users/:id/password': 'owner',
+  'POST /api/admin/users/:id/signout': 'owner',
+  'PUT /api/admin/users/:id/owner': 'owner',
+  'GET /api/admin/orgs': 'owner',
+  'POST /api/admin/orgs': 'owner',
+  'DELETE /api/admin/orgs/:id': 'owner',
+  'GET /api/admin/join-role': 'owner',
+  'PUT /api/admin/join-role': 'owner',
 });
-// The identity API (/api/admin/*, /api/org*) and the one open-exposed
-// `rule` route arrive with slice 3b; none exists yet.
-const EXPECTED_IDENTITY_API = Object.freeze([]);
-const EXPECTED_EXPOSED_RULE = Object.freeze([]);
+// The identity API (/api/admin/*, /api/org*), and the one route the open,
+// exposed posture passes to its rule (which answers 409 there).
+const EXPECTED_IDENTITY_API = Object.freeze([
+  'PATCH /api/org', 'GET /api/org/members', 'POST /api/org/members', 'PATCH /api/org/members/:userId', 'DELETE /api/org/members/:userId',
+  'GET /api/admin/users', 'POST /api/admin/users', 'POST /api/admin/users/:id/disable', 'POST /api/admin/users/:id/enable',
+  'POST /api/admin/users/:id/password', 'POST /api/admin/users/:id/signout', 'PUT /api/admin/users/:id/owner',
+  'GET /api/admin/orgs', 'POST /api/admin/orgs', 'DELETE /api/admin/orgs/:id', 'GET /api/admin/join-role', 'PUT /api/admin/join-role',
+]);
+const EXPECTED_EXPOSED_RULE = Object.freeze(['POST /api/admin/orgs']);
 
 const { spawnSync } = await import('node:child_process');
 const { ROUTES, STATIC_MOUNTS, MIDDLEWARE, CLASSES, MODES, routeEntry } = await import('./route-table.mjs');
@@ -677,9 +747,10 @@ test('completeness: the table agrees with the independent classification, and ev
 });
 
 // The README's API Surface states each row's class in its intro: the
-// public rows by name, then every other GET viewer, every other row
-// operator. Each row is checked against the route table.
-test('the README API Surface: its intro names each public row, every other GET is viewer, every other row operator', () => {
+// public and self rows by name, the admin rows (/api/org, /api/org/…) and
+// the owner rows (/api/admin/…) by path, then every other GET viewer, every
+// other row operator. Each row is checked against the route table.
+test('the README API Surface: its intro states each row\'s class — public and self by name, admin and owner by path, every other GET viewer, every other row operator', () => {
   const readme = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'README.md'), 'utf8');
   const start = readme.indexOf('\n## API Surface\n');
   assert.ok(start >= 0, 'README has an API Surface section');
@@ -688,19 +759,62 @@ test('the README API Surface: its intro names each public row, every other GET i
   const intro = section.slice(0, section.indexOf('\n|')).replace(/\s+/g, ' ');
   const rows = [...section.matchAll(/^\| `([A-Z]+)` \| `([^`]+)` \|/gm)].map(([, method, path]) => ({ method, path: path.split('?')[0] }));
   assert.ok(rows.length >= 20, `read the table (${rows.length} rows)`);
+  const paths = (text) => [...(text ?? '').matchAll(/`([^`]+)`/g)].map(([, path]) => path);
+  const publicNamed = paths(intro.match(/Below, (.+?) are `public`/)?.[1]);
+  const selfNamed = paths(intro.match(/are `public` and (.+?) is `self`/)?.[1]);
+  assert.ok(publicNamed.length > 0, 'the intro names the public rows');
+  assert.ok(selfNamed.length > 0, 'the intro names the self rows');
+  assert.match(intro, /`\/api\/org` and every `\/api\/org\/…` route are `admin`/, 'the intro states the admin rows');
+  assert.match(intro, /every `\/api\/admin\/…` route `owner`/, 'the intro states the owner rows');
+  assert.match(intro, /every other `GET` is `viewer`/, 'the intro states the GET rule');
+  assert.match(intro, /every other route `operator`/, 'the intro states the rule for every other row');
+  const stated = (method, path) => {
+    if (publicNamed.includes(path)) return 'public';
+    if (selfNamed.includes(path)) return 'self';
+    if (path === '/api/org' || path.startsWith('/api/org/')) return 'admin';
+    if (path.startsWith('/api/admin/')) return 'owner';
+    return method === 'GET' ? 'viewer' : 'operator';
+  };
   for (const { method, path } of rows) {
     const key = `${method} ${path}`;
     assert.ok(Object.hasOwn(ROUTES, key), `${key}: a README row the route table does not hold`);
-    const { class: cls } = routeEntry(key);
-    const named = intro.includes(`\`${path}\``);
-    if (cls === 'public') assert.ok(named, `${key}: a public row the intro does not name`);
-    else {
-      assert.ok(!named, `${key}: the intro names a ${cls} row as public`);
-      assert.equal(cls, method === 'GET' ? 'viewer' : 'operator', `${key}: the class the intro states`);
-    }
+    assert.equal(routeEntry(key).class, stated(method, path), `${key}: the class the intro states`);
   }
-  assert.match(intro, /every other `GET` is `viewer`/, 'the intro states the GET rule');
-  assert.match(intro, /every other route `operator`/, 'the intro states the rule for every other row');
+  for (const path of [...publicNamed, ...selfNamed]) assert.ok(rows.some((r) => r.path === path), `${path}: named in the intro, a row below`);
+});
+
+// The README's Identity API section: its intro states the audit actor — the
+// caller's login, with its one exception, the first local user's owner grant
+// that keeps `system` (the open-loopback case below pins those rows); its
+// table lists every identity-API route and the self route it documents
+// (POST /auth/signout-others) once, each with its class as "Who"; every
+// change it lists takes the CSRF header ("on every change"), and each curl
+// example that changes something sends it.
+test('the README Identity API section states the audit actor and its system exception, lists every identity route once with its class, and its examples send the CSRF header', () => {
+  const readme = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'README.md'), 'utf8');
+  const start = readme.indexOf('\n### The Identity API\n');
+  assert.ok(start >= 0, 'README has an Identity API section');
+  const end = readme.indexOf('\n### ', start + 1);
+  const section = readme.slice(start, end < 0 ? undefined : end);
+  const intro = section.slice(0, section.indexOf('\n|')).replace(/\s+/g, ' ');
+  assert.match(intro, /with the caller's login as the actor \(`local` on a server without sign-in\)/, 'the intro states the actor');
+  assert.ok(routeEntry('POST /api/admin/users').audit.includes('owner.first-local-user'), 'POST /api/admin/users writes the first local user\'s grant');
+  assert.match(intro, /except the owner grant the first local user gets \(`owner\.first-local-user`\), which keeps `system`/,
+    'the intro names the one row an identity route writes as system, not as the caller');
+  const rows = [...section.matchAll(/^\| `([A-Z]+)` \| `([^`]+)` \| ([a-z]+) \|/gm)].map(([, method, path, who]) => ({ key: `${method} ${path}`, who }));
+  const expected = Object.keys(ROUTES).filter((k) => routeEntry(k).identityApi || k === 'POST /auth/signout-others');
+  assert.deepEqual(rows.map((r) => r.key).sort(), expected.sort(), 'the identity routes, each once');
+  for (const { key, who } of rows) {
+    const e = routeEntry(key);
+    assert.equal(who, e.class, `${key}: "Who" is its class`);
+    if (e.method !== 'GET') assert.equal(e.csrf, 'always', `${key}: a change takes the CSRF header in every posture`);
+  }
+  const example = section.match(/```bash\n([\s\S]*?)```/)?.[1] ?? '';
+  const curls = example.replace(/\\\n\s*/g, ' ').split('\n').filter((line) => line.startsWith('curl '));
+  assert.ok(curls.length >= 2, `the curl example (${curls.length} calls)`);
+  for (const line of curls) {
+    if (/ -d /.test(line) && /\/api\/(admin|org)/.test(line)) assert.ok(line.includes("-H 'X-Observogram-CSRF: 1'"), `${line}: sends the CSRF header`);
+  }
 });
 
 // The README's Roles section states how the import maps orgs.json roles:
@@ -731,6 +845,30 @@ test('the README Roles section lists every orgs.json role the import maps to adm
     const { role } = mapLegacyRole(w);
     if (role !== 'operator') assert.ok(listed[role].includes(w), `${w} → ${role}: a mapping the README does not list`);
   }
+});
+
+// docs/STORE_PLAN.md's build status (the italic paragraphs before §0) and
+// docs/HANDOVER.md say which slice is next: one slice, the same in both,
+// and never one the build status already calls built.
+test('docs/STORE_PLAN.md\'s build status and docs/HANDOVER.md name one next slice, after every slice built', () => {
+  const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const plan = readFileSync(join(REPO, 'docs', 'STORE_PLAN.md'), 'utf8');
+  const start = plan.indexOf('*Build status');
+  const end = plan.indexOf('\n## 0 ');
+  assert.ok(start >= 0 && end > start, 'docs/STORE_PLAN.md has its build status before §0');
+  const status = plan.slice(start, end).replace(/\s+/g, ' ');
+  const handover = readFileSync(join(REPO, 'docs', 'HANDOVER.md'), 'utf8').replace(/\s+/g, ' ');
+  const NEXT = /\bslice (\d+)\b[^.;*]{0,40}?\bis next\b/gi;
+  const next = [
+    ...[...status.matchAll(NEXT)].map(([phrase, n]) => ({ doc: 'STORE_PLAN.md', phrase, n: Number(n) })),
+    ...[...handover.matchAll(NEXT)].map(([phrase, n]) => ({ doc: 'HANDOVER.md', phrase, n: Number(n) })),
+  ];
+  assert.ok(next.some((x) => x.doc === 'STORE_PLAN.md') && next.some((x) => x.doc === 'HANDOVER.md'), 'both docs say which slice is next');
+  const slices = [...new Set(next.map((x) => x.n))];
+  assert.equal(slices.length, 1, `one next slice, not ${next.map((x) => `${x.doc}: "${x.phrase}"`).join(', ')}`);
+  const built = [...status.matchAll(/\bslice (\d+) is built\b/gi)].map(([, n]) => Number(n));
+  assert.ok(built.length > 0, 'the build status says which slices are built');
+  for (const b of built) assert.ok(slices[0] > b, `slice ${slices[0]} is next, but the build status says slice ${b} is built`);
 });
 
 // Roles are enforced: no comment in server/ or tools/ still says a role
@@ -867,6 +1005,27 @@ const PROBES = Object.freeze({
   'POST /api/library/instantiate': ['POST', '/api/library/instantiate'],
   'POST /api/library/compile': ['POST', '/api/library/compile'],
   'POST /api/library/register': ['POST', '/api/library/register'],
+  // The admin routes: invalid bodies, and a user id that is no member (the
+  // PATCH names a valid role, so the membership is what it answers).
+  'PATCH /api/org': ['PATCH', '/api/org'],
+  'GET /api/org/members': ['GET', '/api/org/members'],
+  'POST /api/org/members': ['POST', '/api/org/members'],
+  'PATCH /api/org/members/:userId': ['PATCH', '/api/org/members/999999', '{"role":"viewer"}'],
+  'DELETE /api/org/members/:userId': ['DELETE', '/api/org/members/999999'],
+  // The owner routes: unknown ids and invalid bodies. POST /api/admin/orgs
+  // answers 409 before it reads the body on a server without identity.
+  'GET /api/admin/users': ['GET', '/api/admin/users'],
+  'POST /api/admin/users': ['POST', '/api/admin/users'],
+  'POST /api/admin/users/:id/disable': ['POST', '/api/admin/users/999999/disable'],
+  'POST /api/admin/users/:id/enable': ['POST', '/api/admin/users/999999/enable'],
+  'POST /api/admin/users/:id/password': ['POST', '/api/admin/users/999999/password'],
+  'POST /api/admin/users/:id/signout': ['POST', '/api/admin/users/999999/signout'],
+  'PUT /api/admin/users/:id/owner': ['PUT', '/api/admin/users/999999/owner'],
+  'GET /api/admin/orgs': ['GET', '/api/admin/orgs'],
+  'POST /api/admin/orgs': ['POST', '/api/admin/orgs', '{"id":"!"}'],
+  'DELETE /api/admin/orgs/:id': ['DELETE', '/api/admin/orgs/nope'],
+  'GET /api/admin/join-role': ['GET', '/api/admin/join-role'],
+  'PUT /api/admin/join-role': ['PUT', '/api/admin/join-role'],
 });
 
 // The /auth/* routes and the non-/api public routes have their own rows below.
@@ -875,19 +1034,40 @@ test('the probe table covers every /api route the server registers', () => {
   assert.deepEqual(Object.keys(PROBES).sort(), [...new Set(apiKeys)].sort(), 'a /api route without a probe (add one to PROBES), or a probe for no route');
 });
 
-// One request: { status, json (or null), text, type }; `query` is appended to the path.
-async function call(base, [method, path], { headers = {}, body, query = '' } = {}) {
+// One request: { status, json (or null), text, type }; `query` is appended
+// to the path; a probe's third element is its body (default {}). With
+// `raw`, over node:http: fetch drops a custom Host header.
+async function call(base, [method, path, probeBody], { headers = {}, body, query = '', raw = false } = {}) {
   const h = { Accept: 'application/json', ...headers };
   let payload;
   if (method !== 'GET' && method !== 'DELETE') {
     h['Content-Type'] ??= 'application/json';
-    payload = body ?? '{}';
+    payload = body ?? probeBody ?? '{}';
   }
+  if (raw) return rawCall(`${base}${path}${query}`, method, h, payload);
   const r = await fetch(`${base}${path}${query}`, { method, headers: h, body: payload, redirect: 'manual' });
   const text = await r.text();
   let json = null;
   try { json = JSON.parse(text); } catch { /* not JSON */ }
-  return { status: r.status, json, text, type: r.headers.get('content-type') || '' };
+  return { status: r.status, json, text, type: r.headers.get('content-type') || '', org: r.headers.get('x-observogram-org') };
+}
+
+const { request: httpRequest } = await import('node:http');
+function rawCall(url, method, headers, payload) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(url, { method, headers: payload === undefined ? headers : { ...headers, 'Content-Length': Buffer.byteLength(payload) } }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { text += c; });
+      res.on('end', () => {
+        let json = null;
+        try { json = JSON.parse(text); } catch { /* not JSON */ }
+        resolve({ status: res.statusCode, json, text, type: res.headers['content-type'] || '', org: res.headers['x-observogram-org'] ?? null });
+      });
+    });
+    req.on('error', reject);
+    req.end(payload);
+  });
 }
 const outcome = (r) => ((r.status === 401 || r.status === 403 || r.json?.denied)
   ? `${r.status} ${r.json?.denied ?? '(no denied)'}` : 'allowed');
@@ -898,7 +1078,7 @@ async function sweep(base, variants, expect) {
   let n = 0;
   for (const v of variants) {
     for (const [key, probe] of Object.entries(PROBES)) {
-      const r = await call(base, probe, { headers: v.headers, query: v.query || '' });
+      const r = await call(base, probe, { headers: v.headers, query: v.query || '', raw: v.raw === true });
       n++;
       const got = outcome(r);
       const want = expect(v, key);
@@ -1040,6 +1220,53 @@ test('the AuthZ matrix — identity posture: every /api route × every principal
     r = await call(srv.base, PROBES['GET /api/packs'], { headers: {} });
     assert.deepEqual([r.status, r.json.denied, r.json.login], [401, 'auth', '/auth/login']);
 
+    // The owner routes: an org admin is refused, the bearer too; an owner
+    // with no membership (otto, no org named) lands in the default org and
+    // reaches them — an owner acts at the deployment, whatever the org.
+    r = await call(srv.base, PROBES['GET /api/admin/users'], { headers: variants.find((v) => v.name === 'ada@acme').headers });
+    assert.deepEqual([r.status, r.json.denied, r.json.error, r.json.need, r.json.role, r.json.owner, r.json.org],
+      [403, 'role', "requires an owner of this deployment (you are admin in org 'acme') — ask an owner", 'owner', 'admin', false, 'acme']);
+    r = await call(srv.base, PROBES['GET /api/admin/users'], { headers: variants.find((v) => v.name === 'bearer').headers });
+    assert.deepEqual([r.status, r.json.denied, r.json.error],
+      [403, 'role', "the bearer token acts as an operator in org 'acme'; an owner needs a signed-in user with that role"]);
+    const otto = variants.find((v) => v.name === 'otto').headers;
+    r = await call(srv.base, PROBES['GET /api/admin/users'], { headers: otto });
+    assert.deepEqual([r.status, r.org], [200, 'default'], 'otto: the default org, an owner route answered');
+    assert.deepEqual(r.json.users.map((u) => u.login).sort(), [...LOGINS].sort(), 'every user');
+    assert.deepEqual(r.json.users.map((u) => u.id), [...r.json.users.map((u) => u.id)].sort((a, b) => a - b), 'by id');
+    assert.ok(r.json.users.every((u) => !('password' in u) && !('sessionEpoch' in u)), 'no password, no session epoch');
+    const idOf = Object.fromEntries(r.json.users.map((u) => [u.login, u.id]));
+    r = await call(srv.base, PROBES['POST /api/admin/users/:id/disable'], { headers: otto });
+    assert.deepEqual([r.status, r.org, r.json], [404, 'default', { ok: false, error: 'no user 999999' }]);
+
+    // The admin routes: the context org's admins (and every owner). ada,
+    // acme's admin, reaches acme's members only: bob, a member of bravo,
+    // is "not a member" here — the answer an id no user holds gets, so
+    // nothing outside acme is told apart — and naming bravo is 403 org.
+    const ada = variants.find((v) => v.name === 'ada@acme').headers;
+    const toViewer = '{"role":"viewer"}';
+    r = await call(srv.base, ['PATCH', `/api/org/members/${idOf.bob}`], { headers: ada, body: toViewer });
+    assert.deepEqual([r.status, r.org, r.json], [404, 'acme', { ok: false, error: `user ${idOf.bob} is not a member of acme` }], 'ada: bob is no member of acme');
+    r = await call(srv.base, ['DELETE', `/api/org/members/${idOf.bob}`], { headers: ada });
+    assert.deepEqual([r.status, r.json], [404, { ok: false, error: `user ${idOf.bob} is not a member of acme` }], 'ada: bob is not removed');
+    r = await call(srv.base, PROBES['PATCH /api/org/members/:userId'], { headers: ada });
+    assert.deepEqual([r.status, r.json], [404, { ok: false, error: 'user 999999 is not a member of acme' }], 'an id no user holds: the same answer');
+    r = await call(srv.base, ['PATCH', `/api/org/members/${idOf.bob}`], { headers: session('ada', 'bravo').headers, body: toViewer });
+    assert.deepEqual([r.status, r.json.denied, r.json.error], [403, 'org', "not a member of org 'bravo'"], 'ada naming bravo');
+    r = await call(srv.base, PROBES['GET /api/org/members'], { headers: ada });
+    assert.deepEqual([r.status, r.org, r.json.org], [200, 'acme', { id: 'acme', name: 'Acme', default: false }]);
+    assert.deepEqual(r.json.members.map((m) => `${m.login}:${m.role}`).sort(), Object.entries(MEMBERS.acme).map(([l, role]) => `${l}:${role}`).sort(),
+      'acme\'s members, and no one else');
+    assert.ok(r.json.members.every((m) => Object.keys(m).join() === 'userId,login,kind,name,email,role,disabled,since'), 'the member view: named fields only');
+    r = await call(srv.base, PROBES['GET /api/org/members'], { headers: variants.find((v) => v.name === 'mia (no org → her first, bravo)').headers });
+    assert.deepEqual([r.status, r.org, r.json.members.map((m) => m.login).sort()], [200, 'bravo', ['bob', 'mia']], 'mia, no org: bravo, where she is admin');
+    r = await call(srv.base, PROBES['GET /api/org/members'], { headers: variants.find((v) => v.name === 'vera@acme').headers });
+    assert.deepEqual([r.status, r.json.denied, r.json.error, r.json.need, r.json.role],
+      [403, 'role', "requires the admin role in org 'acme' (you are viewer) — ask an admin of acme", 'admin', 'viewer']);
+    r = await call(srv.base, PROBES['GET /api/org/members'], { headers: variants.find((v) => v.name === 'bearer').headers });
+    assert.deepEqual([r.status, r.json.denied, r.json.error],
+      [403, 'role', "the bearer token acts as an operator in org 'acme'; the admin role needs a signed-in user with that role"]);
+
     // CSRF rows: a session's mutation without the header → 403 csrf; the bearer needs none.
     const noCsrf = [];
     for (const login of ['ada', 'olive']) {
@@ -1053,7 +1280,7 @@ test('the AuthZ matrix — identity posture: every /api route × every principal
     for (const [key, probe] of Object.entries(PROBES)) {
       if (probe[0] === 'GET') continue;
       const res = await call(srv.base, probe, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Observogram-Org': 'acme' } });
-      assert.equal(outcome(res), 'allowed', `bearer without the CSRF header: ${key}`);
+      assert.equal(outcome(res), expectIdentity({ bearer: true }, key), `bearer without the CSRF header: ${key} (its class decides, never the header)`);
     }
 
     // Case rows: /API/… is never a handler.
@@ -1136,6 +1363,32 @@ test('the AuthZ matrix — identity posture: every /api route × every principal
     const wipe = await call(srv.base, ['DELETE', '/api/uploads'], { headers: oscar });
     assert.equal(wipe.json?.dropped >= 1, true, wipe.text);
     assert.equal(await auditSeq(ws), seq, 'validate, capture and reset wrote no audit row');
+
+    // Self rows: POST /auth/signout-others answers the caller's own session,
+    // with the CSRF header — never an anonymous caller, the bearer or a
+    // disabled user's cookie; on a throwaway sign-in of vera's, whose
+    // matrix cookie is then refused and the re-issued one answered.
+    const SELF = ['POST', '/auth/signout-others'];
+    const selfSeq = await auditSeq(ws);
+    const NO_SESSION = { ok: false, error: 'unauthorized: sign in required', login: '/auth/login', denied: 'auth' };
+    for (const [label, headers] of [['anonymous', CSRF], ['the bearer', { Authorization: `Bearer ${TOKEN}`, ...CSRF }], ['dan (disabled)', { Cookie: cookies.dan, ...CSRF }]]) {
+      r = await call(srv.base, SELF, { headers });
+      assert.deepEqual([r.status, r.json], [401, NO_SESSION], label);
+    }
+    const throwaway = (await signIn(srv.base, 'vera', pw('vera'))).session;
+    r = await call(srv.base, SELF, { headers: { Cookie: throwaway } });
+    assert.deepEqual([r.status, r.json.denied], [403, 'csrf'], 'a session without the header');
+    assert.equal(await auditSeq(ws), selfSeq, 'the refused self calls wrote nothing');
+    const out = await fetch(`${srv.base}/auth/signout-others`, { method: 'POST', headers: { Cookie: throwaway, ...CSRF, Accept: 'application/json' } });
+    const outJson = await out.json();
+    assert.deepEqual([out.status, outJson.ok, Number.isInteger(outJson.sessionEpoch)], [200, true, true], JSON.stringify(outJson));
+    const reissued = (out.headers.getSetCookie?.() || []).find((c) => c.startsWith('observogram_session='))?.split(';')[0];
+    assert.ok(reissued && reissued !== throwaway, 'this session\'s cookie is re-issued');
+    for (const [label, cookie, want] of [['vera\'s matrix cookie', cookies.vera, 401], ['the throwaway before its re-issue', throwaway, 401], ['the re-issued cookie', reissued, 200]]) {
+      r = await call(srv.base, PROBES['GET /api/packs'], { headers: { Cookie: cookie, 'X-Observogram-Org': 'acme' } });
+      assert.equal(r.status, want, label);
+    }
+    assert.deepEqual((await auditRowsAfter(ws, selfSeq)).map((row) => row.slice(0, 4)), [['user.signout', 'vera', null, 'vera']], 'one row, vera its actor');
   } finally {
     await srv.stop();
   }
@@ -1176,7 +1429,7 @@ test('the AuthZ matrix — token posture: anonymous reads, the bearer an operato
     // Stand-alone sign-in is off (nothing seeded): the self routes are
     // registered, and selfGate's first step answers 404 whatever the
     // caller carries — not a redirect to /auth/login, not a 401.
-    for (const probe of [['GET', '/auth/change-password'], ['POST', '/auth/change-password'], ['POST', '/auth/change-password/skip']]) {
+    for (const probe of [['GET', '/auth/change-password'], ['POST', '/auth/change-password'], ['POST', '/auth/change-password/skip'], ['POST', '/auth/signout-others']]) {
       for (const headers of [{}, { ...variants[1].headers, 'X-Observogram-CSRF': '1' }]) {
         const r = await call(srv.base, probe, { headers });
         assert.deepEqual([r.status, r.json], [404, { ok: false, error: 'identity not configured' }], `${probe.join(' ')} ${JSON.stringify(headers)}`);
@@ -1187,7 +1440,37 @@ test('the AuthZ matrix — token posture: anonymous reads, the bearer an operato
   }
 });
 
-// ---- the open postures: every existing route, as today ----
+// ---- the open postures: every existing route, as today; the identity API
+// to a person at this machine only ----
+//
+// Without sign-in, local is an owner. Every existing route answers it as
+// today, with or without the CSRF header. The identity API needs the header
+// on a mutation and, on a loopback bind, a request sent straight to it —
+// a foreign Host (a DNS-rebinding page), a proxy header or a foreign Origin
+// is refused (§8.1); on an exposed bind it is closed, but for POST
+// /api/admin/orgs, whose rule answers 409 (no second org without identity).
+function expectOpen(tag) {
+  return (v, key) => {
+    if (!EXPECTED_IDENTITY_API.includes(key)) return 'allowed';
+    if (tag !== 'open-loopback' && !EXPECTED_EXPOSED_RULE.includes(key)) return '403 posture';
+    if (v.foreign) return '403 posture';
+    if (key.split(' ')[0] !== 'GET' && !v.csrf) return '403 csrf';
+    return 'allowed';
+  };
+}
+
+// The audit rows after `seq`, read from a stopped child's database.
+async function auditRowsAfter(ws, seq) {
+  const db = await openRaw(join(ws, 'observogram.db'), { readOnly: true });
+  try {
+    return prepare(db, 'SELECT org_id, actor, action, target_id, detail FROM audit WHERE seq > ? ORDER BY seq').all(seq)
+      .map((r) => [r.action, r.actor, r.org_id, r.target_id, r.detail === null ? null : JSON.parse(r.detail)]);
+  } finally {
+    db.close();
+  }
+}
+
+const CSRF_HEADER = Object.freeze({ 'X-Observogram-CSRF': '1' });
 const OPEN = [
   { tag: 'open-loopback', host: '127.0.0.1', env: { OBSERVOGRAM_AUTH: 'off' } },
   {
@@ -1197,24 +1480,113 @@ const OPEN = [
   { tag: 'open-exposed-b', host: '0.0.0.0', env: { OBSERVOGRAM_INSECURE_NO_AUTH: '1' } },
 ];
 for (const posture of OPEN) {
-  test(`the AuthZ matrix — ${posture.tag}: local is an owner; every existing route answers, with or without the CSRF header`, { timeout: 120_000 }, async () => {
+  test(`the AuthZ matrix — ${posture.tag}: local is an owner; every existing route answers, with or without the CSRF header; the identity API ${posture.tag === 'open-loopback' ? 'to a direct loopback request with the header' : 'closed'}`, { timeout: 120_000 }, async () => {
     const ws = freshWorkspace(posture.tag);
     posture.setup?.(ws);
     const srv = await serve(ws, { host: posture.host, env: posture.env });
+    const port = new URL(srv.base).port;
+    let writes = null;
     try {
-      const variants = [{ name: 'local', headers: {} }, { name: 'local + CSRF', headers: { 'X-Observogram-CSRF': '1' } }];
+      const variants = [{ name: 'local', headers: {} }, { name: 'local + CSRF', csrf: true, headers: CSRF_HEADER }];
+      if (posture.tag === 'open-loopback') {
+        variants.push(
+          { name: 'local + CSRF, a foreign Host', csrf: true, foreign: true, raw: true, headers: { ...CSRF_HEADER, Host: `rebind.attacker.example:${port}` } },
+          { name: 'local + CSRF, X-Forwarded-For', csrf: true, foreign: true, raw: true, headers: { ...CSRF_HEADER, 'X-Forwarded-For': '203.0.113.9' } },
+          { name: 'local + CSRF, CF-Connecting-IP (a tunnel)', csrf: true, foreign: true, raw: true, headers: { ...CSRF_HEADER, 'CF-Connecting-IP': '203.0.113.9' } },
+          { name: 'local + CSRF, a foreign Origin', csrf: true, foreign: true, raw: true, headers: { ...CSRF_HEADER, Origin: 'https://evil.example' } },
+        );
+      }
       const before = await auditSeq(ws);
-      const { bad, n } = await sweep(srv.base, variants, () => 'allowed');
+      const { bad, n } = await sweep(srv.base, variants, expectOpen(posture.tag));
       assert.deepEqual(bad, [], `${bad.length} of ${n} cells disagree`);
       assert.deepEqual(await caseRows(srv.base), []);
       assert.equal(await auditSeq(ws), before);
       const o = (await call(srv.base, ['GET', '/api/orgs'])).json;
       assert.deepEqual(o.orgs, [{ id: 'default', name: 'Default', role: null, effectiveRole: 'admin' }]);
+
+      // The refusal texts, and the rule's 409 for a second org.
+      const orgCreate = await call(srv.base, PROBES['POST /api/admin/orgs'], { headers: CSRF_HEADER });
+      assert.equal(orgCreate.status, 409);
+      assert.equal(orgCreate.json.denied, undefined, 'the rule refuses, not the guard');
+      if (posture.tag === 'open-loopback') {
+        const r = await call(srv.base, PROBES['GET /api/admin/users'], { headers: { Host: `rebind.attacker.example:${port}` }, raw: true });
+        assert.deepEqual([r.status, r.json.denied, r.json.error], [403, 'posture',
+          'on a server without sign-in the identity API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; '
+          + `no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:${port}, `
+          + 'or use the CLIs from this machine (npm run users -- add <login>, passwd <login>, owner <login>)']);
+        const direct = await call(srv.base, PROBES['GET /api/admin/users'], { headers: { Host: `localhost:${port}`, Origin: `http://localhost:${port}` }, raw: true });
+        assert.deepEqual([direct.status, direct.json.users], [200, []], 'Host localhost with its own Origin is a direct request');
+      } else {
+        const r = await call(srv.base, PROBES['GET /api/admin/users'], { headers: CSRF_HEADER });
+        assert.deepEqual([r.status, r.json.denied], [403, 'posture']);
+        assert.match(r.json.error, /^the identity API is closed on a server bound to 0\.0\.0\.0 without sign-in \(OBSERVOGRAM_INSECURE_NO_AUTH=1/);
+      }
+
+      // Open loopback: identity writes from this machine, and their audit (§14.2).
+      if (posture.tag === 'open-loopback') {
+        const seq = await auditSeq(ws);
+        const lena = JSON.stringify({ login: 'lena', password: 'lena-passw0rd' });
+        let r = await call(srv.base, ['POST', '/api/admin/users'], { body: lena });
+        assert.deepEqual([r.status, r.json.denied], [403, 'csrf'], 'without the header');
+        r = await call(srv.base, ['POST', '/api/admin/users'], { headers: { ...CSRF_HEADER, Host: `rebind.attacker.example:${port}` }, body: lena, raw: true });
+        assert.deepEqual([r.status, r.json.denied], [403, 'posture'], 'a foreign Host');
+        r = await call(srv.base, ['POST', '/api/admin/users'], { headers: CSRF_HEADER, body: lena });
+        assert.equal(r.status, 201, r.text);
+        assert.deepEqual([r.json.user.login, r.json.user.owner, r.json.owner, r.json.armed, r.json.joined, r.json.note],
+          ['lena', true, true, true, [{ orgId: 'default', role: 'admin' }], null], 'the first local user is an owner (A-16), and it arms the store');
+        r = await call(srv.base, ['POST', '/api/admin/orgs'], { headers: CSRF_HEADER, body: JSON.stringify({ id: 'acme' }) });
+        assert.deepEqual([r.status, r.json], [409, {
+          ok: false,
+          error: 'creating a second org needs identity: this server runs with OBSERVOGRAM_AUTH=off, and a second org would make its next start refuse '
+            + '— restart it without OBSERVOGRAM_AUTH=off and sign in as an owner (npm run users -- add <login> first when no user exists), or configure OIDC',
+        }]);
+        r = await call(srv.base, ['GET', '/api/packs']);
+        assert.equal(r.status, 200, 'still no sign-in: OBSERVOGRAM_AUTH=off');
+        writes = async () => assert.deepEqual(await auditRowsAfter(ws, seq), [
+          ['user.create', 'local', null, 'lena', { kind: 'local', isOwner: false, sessionEpoch: 1, disabled: false }],
+          ['owner.first-local-user', 'system', null, 'lena', { via: 'api', match: null, org: 'default', membership: 'added', from: null }],
+          ['meta.set', 'local', null, 'identity_armed', null],
+        ], 'actor local, system for the grant; nothing from the refused requests');
+      }
     } finally {
       await srv.stop();
     }
+    await writes?.();
   });
 }
+
+// ---- Arming, the API half: an exposed server whose users change ----
+test('Arming, the API half: on an exposed server seeded with OBSERVOGRAM_ADMIN_PASSWORD, users change through the API and an anonymous read is never answered', { timeout: 120_000 }, async () => {
+  const ws = freshWorkspace('arming');
+  const ADMIN_PW = 'arming-admin-passw0rd';
+  const srv = await serve(ws, { host: '0.0.0.0', env: { OBSERVOGRAM_ADMIN_PASSWORD: ADMIN_PW } });
+  try {
+    const anonymousRead = async (when) => {
+      const r = await call(srv.base, ['GET', '/api/packs']);
+      assert.deepEqual([r.status, r.json?.denied], [401, 'auth'], `${when}: an anonymous GET /api/packs`);
+    };
+    await anonymousRead('at the start');
+    const s = await signIn(srv.base, 'admin', ADMIN_PW);
+    assert.ok(s.session && !s.pwflow?.split('=')[1], 'the seeded admin signs in, no forced change (a pwflow cookie, if any, is cleared)');
+    const h = { Cookie: s.session, ...CSRF_HEADER };
+    let r = await call(srv.base, ['POST', '/api/admin/users'], { headers: h, body: JSON.stringify({ login: 'bob', password: 'bob-passw0rd-1' }) });
+    assert.equal(r.status, 201, r.text);
+    assert.deepEqual([r.json.owner, r.json.armed, r.json.joined, r.json.note], [false, false, [{ orgId: 'default', role: 'operator' }], null]);
+    const bob = r.json.user.id;
+    await anonymousRead('after bob is created');
+    r = await call(srv.base, ['POST', `/api/admin/users/${bob}/disable`], { headers: h });
+    assert.deepEqual([r.status, r.json.user.disabled, r.json.you], [200, true, false]);
+    await anonymousRead('after bob is disabled');
+    const admin = (await call(srv.base, ['GET', '/api/admin/users'], { headers: h })).json.users.find((u) => u.login === 'admin');
+    r = await call(srv.base, ['POST', `/api/admin/users/${admin.id}/disable`], { headers: h });
+    assert.deepEqual([r.status, r.json], [409, {
+      ok: false, error: 'admin is the last enabled owner — make another user an owner first (PUT /api/admin/users/<id>/owner with {"owner": true})',
+    }]);
+    await anonymousRead('after the refused disable');
+  } finally {
+    await srv.stop();
+  }
+});
 
 // ---- a fresh loopback boot: the seeded admin/admin and its forced change ----
 test('fresh loopback boot: the pwflow cookie alone reaches the forced change and its skip, never /api; a same-site form post is refused', { timeout: 120_000 }, async () => {
@@ -1228,6 +1600,8 @@ test('fresh loopback boot: the pwflow cookie alone reaches the forced change and
     assert.match(await r.text(), /formaction="\/auth\/change-password\/skip"/, 'the skip control');
     r = await fetch(`${srv.base}/api/packs`, { headers: { Cookie: s.pwflow, Accept: 'application/json' } });
     assert.equal(r.status, 401, 'the pwflow cookie is not a session');
+    r = await fetch(`${srv.base}/auth/signout-others`, { method: 'POST', headers: { Cookie: s.pwflow, 'X-Observogram-CSRF': '1', Accept: 'application/json' } });
+    assert.deepEqual([r.status, (await r.json()).denied], [401, 'auth'], 'nor is it one to sign out the other sessions');
 
     // A sibling subdomain's auto-submitted form: refused, and nothing set.
     const form = (cookie, site, path = '/auth/change-password') => fetch(`${srv.base}${path}`, {
@@ -1250,6 +1624,14 @@ test('fresh loopback boot: the pwflow cookie alone reaches the forced change and
     assert.ok(session, 'the skip issues a session');
     r = await fetch(`${srv.base}/api/packs`, { headers: { Cookie: session } });
     assert.equal(r.status, 200);
+
+    // Beside a session, a pwflow cookie never wins on POST /auth/signout-others
+    // (session only): the session signs out the others — and the bump ends
+    // the pending forced change too.
+    r = await fetch(`${srv.base}/auth/signout-others`, { method: 'POST', headers: { Cookie: `${s.pwflow}; ${session}`, 'X-Observogram-CSRF': '1', Accept: 'application/json' } });
+    assert.equal(r.status, 200);
+    r = await fetch(`${srv.base}/auth/change-password`, { headers: { Cookie: s.pwflow }, redirect: 'manual' });
+    assert.deepEqual([r.status, r.headers.get('location')], [302, '/auth/login'], 'the pwflow cookie of before is refused');
   } finally {
     await srv.stop();
   }

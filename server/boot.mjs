@@ -698,12 +698,13 @@ function warnUnreadOrgRoots(ctx, warn, rows) {
   }
 }
 
-// OBSERVOGRAM_OIDC_JOIN_ROLE is read at the first start only (A-4).
+// OBSERVOGRAM_OIDC_JOIN_ROLE is read at the first start only (A-4); an owner
+// changes the recorded role through the identity API.
 export function warnIgnoredJoinRole(db, ctx, warn, { imported = false } = {}) {
   if (ctx.joinRoleEnv === undefined || imported) return;
   const recorded = getMeta(db, 'oidc_join_role');
   if ((ctx.joinRoleEnv ?? null) !== recorded) {
-    warn(`[store] OBSERVOGRAM_OIDC_JOIN_ROLE is read at the first start only; the store records ${recorded ?? 'none'}`);
+    warn(`[store] OBSERVOGRAM_OIDC_JOIN_ROLE is read at the first start only; the store records ${recorded ?? 'none'} — an owner changes it with PUT /api/admin/join-role`);
   }
 }
 

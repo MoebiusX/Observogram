@@ -25,13 +25,17 @@ mode in the current code.*
 is built in two PRs: 2a (PR #111: identity on the store — the boot order,
 the import, revocable sessions, tenancy always on) and 2b (the offline
 operations of §3 and §4: `packc store export`, `import --replace`,
-`rekey-issuer`, `purge-org`, and `restore`'s marker warning). Slice 2 is
-complete once 2a and 2b merge; slice 3 (roles enforced) is next.*
+`rekey-issuer`, `purge-org`, and `restore`'s marker warning). Both are on
+`develop` (PR #111 merged them together, `014d780`): slice 2 is complete.*
 
-*Slice 3 is built in two PRs: 3a (`codex/roles-enforced`: roles enforced
-on every route through `server/route-table.mjs`, the live pack per org,
-an MCP URL that keeps no credential parameter) and 3b (the identity API).
-Slice 4 follows. Offered to slice 4's `mcp_endpoints.url` refusal: 3a's
+*Slice 3 is built in two PRs: 3a (PR #119, `codex/roles-enforced`: roles
+enforced on every route through `server/route-table.mjs`, the live pack
+per org, an MCP URL that keeps no credential parameter) and 3b (PR
+pending, `codex/identity-api`, stacked on 3a: the identity API — the
+owner routes for users, orgs and the join role, the admin routes for the
+org's name and members, sign out everywhere and "sign out my other
+sessions" — every rule `server/identity-admin.mjs`'s, the CLIs' own).
+Slice 4 is next. Offered to slice 4's `mcp_endpoints.url` refusal: 3a's
 word rule for credential parameter names (`tools/lib/mcp-url-safety.mjs`
 `credentialParamName`), which refuses fewer third-party names (`signal`,
 `design`, `author`) than a substring list.*

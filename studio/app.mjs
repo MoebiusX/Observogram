@@ -17,7 +17,7 @@ import {
 import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } from './state.mjs';
 import {
   api, loadCatalog, validateUploaded, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel, deniedError, deployRefusal,
-  setSignedInLogin, recallMcpUrl, rememberMcpUrl, forgetMcpUrls,
+  setSignedInLogin, recallMcpUrl, rememberMcpUrl, forgetMcpUrls, signOutOthersText,
 } from './api.mjs';
 import {
   effectiveFocus, focusedPackId, focusedEnv, focusedPack,
@@ -5144,7 +5144,7 @@ function setupIdentityChip() {
   }
 
   // Account menu: who you are, change password (stand-alone mode — OIDC
-  // passwords belong to the IdP), sign out.
+  // passwords belong to the IdP), sign out my other sessions, sign out.
   const chip = document.createElement('span');
   chip.id = 'hdr-user';
   chip.className = 'hdr-user';
@@ -5155,8 +5155,9 @@ function setupIdentityChip() {
     <button type="button" class="ctrl-btn hdr-user-btn" aria-expanded="false"
             title="signed in as ${escapeHtml(me.email || me.sub)} (${escapeHtml(me.mode)})">⏣ ${escapeHtml(me.name || me.email || me.sub)} ▾</button>
     <div class="hdr-user-menu" hidden>
-      <div class="hdr-user-menu-id">signed in as <strong>${escapeHtml(me.email || me.sub)}</strong><span class="hdr-user-menu-mode">${escapeHtml(me.mode)}</span></div>
+      <div class="hdr-user-menu-id" aria-live="polite">signed in as <strong>${escapeHtml(me.email || me.sub)}</strong><span class="hdr-user-menu-mode">${escapeHtml(me.mode)}</span></div>
       ${me.mode === 'local-users' ? '<a class="hdr-user-menu-item" href="/auth/change-password">change password…</a>' : ''}
+      <button type="button" class="hdr-user-menu-item hdr-user-others">sign out my other sessions</button>
       <button type="button" class="hdr-user-menu-item hdr-user-out">sign out</button>
     </div>
   `;
@@ -5166,6 +5167,24 @@ function setupIdentityChip() {
   menuBtn.addEventListener('click', () => setOpen(menu.hidden));
   document.addEventListener('click', (e) => { if (!chip.contains(e.target)) setOpen(false); });
   chip.addEventListener('keydown', (e) => { if (e.key === 'Escape') { setOpen(false); menuBtn.focus(); } });
+  // Every other session of this user ends at its next request; this
+  // browser's cookie comes back re-issued (Set-Cookie). The id line says
+  // what happened — or the server's refusal, as it words it.
+  const others = chip.querySelector('.hdr-user-others');
+  others.addEventListener('click', async () => {
+    others.disabled = true;
+    let status = 0;
+    let body;
+    try {
+      const r = await fetch('/auth/signout-others', { method: 'POST', headers: { Accept: 'application/json', ...authHeaders() } });
+      status = r.status;
+      body = await r.json().catch(() => null);
+    } catch (e) {
+      body = { error: e?.message || String(e) };
+    }
+    chip.querySelector('.hdr-user-menu-id').textContent = signOutOthersText(status, body);
+    others.disabled = false;
+  });
   chip.querySelector('.hdr-user-out').addEventListener('click', async () => {
     forgetMcpUrls(me.user?.login);   // a shared browser keeps no MCP URL of this user
     await fetch('/auth/logout', { method: 'POST', headers: { ...authHeaders() } }).catch(() => {});

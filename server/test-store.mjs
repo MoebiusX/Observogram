@@ -1853,14 +1853,38 @@ test('grantOwner writes one row of its action and makes the user admin of the de
     assert.throws(() => identity.grantOwner(db, 'cli', carl.id, { action: 'user.owner.grant' }), /owner grant is one of/);
     const got = auditRepo.listAudit(db).reverse().slice(n0).map((r) => [r.action, r.actor, r.orgId, r.targetId, r.detail]);
     assert.deepEqual(got, [
-      ['owner.first-local-user', 'cli', null, 'alice', { via: 'users add', match: null, org: 'default', membership: 'added' }],
-      ['owner.bootstrap', 'system', null, 'bob', { via: 'OBSERVOGRAM_BOOTSTRAP_ADMIN', match: 'email', org: 'default', membership: 'raised' }],
-      ['owner.bootstrap', 'cli', null, 'carl', { via: 'users owner', match: null, org: 'default', membership: 'kept' }],
+      ['owner.first-local-user', 'cli', null, 'alice', { via: 'users add', match: null, org: 'default', membership: 'added', from: null }],
+      ['owner.bootstrap', 'system', null, 'bob', { via: 'OBSERVOGRAM_BOOTSTRAP_ADMIN', match: 'email', org: 'default', membership: 'raised', from: 'viewer' }],
+      ['owner.bootstrap', 'cli', null, 'carl', { via: 'users owner', match: null, org: 'default', membership: 'kept', from: 'admin' }],
     ]);
     for (const u of [alice, bob, carl]) {
       assert.equal(memberships.getMembership(db, 'default', u.id).role, 'admin', u.login);
       assert.equal(users.getUser(db, u.id).isOwner, true);
     }
+  } finally {
+    close();
+  }
+});
+
+test('owner.grant is a grant action; revokeOwner clears the flag with ONE owner.revoke row naming the default-org role kept, and touches no membership', async () => {
+  const { db, close } = await identityStore('revoke');
+  try {
+    const pw = { algo: 'scrypt', hash: 'aGFzaA==' };
+    const val = users.createUser(db, 'cli', { login: 'val', password: pw });
+    const solo = users.createUser(db, 'cli', { login: 'solo', password: pw, isOwner: true });
+    memberships.addMembership(db, 'cli', { orgId: 'default', userId: val.id, role: 'operator' });
+    const n0 = auditActions(db).length;
+    identity.grantOwner(db, 'olive', val.id, { action: 'owner.grant', via: 'api' });
+    assert.equal(identity.revokeOwner(db, 'olive', val.id, { via: 'api' }).isOwner, false);
+    assert.equal(identity.revokeOwner(db, 'olive', solo.id, { via: 'api' }).isOwner, false);
+    assert.throws(() => identity.revokeOwner(db, 'olive', 9999, { via: 'api' }), /no user 9999/);
+    assert.deepEqual(auditRepo.listAudit(db).reverse().slice(n0).map((r) => [r.action, r.actor, r.orgId, r.targetId, r.detail]), [
+      ['owner.grant', 'olive', null, 'val', { via: 'api', match: null, org: 'default', membership: 'raised', from: 'operator' }],
+      ['owner.revoke', 'olive', null, 'val', { via: 'api', org: 'default', role: 'admin' }],
+      ['owner.revoke', 'olive', null, 'solo', { via: 'api', org: 'default', role: null }],
+    ]);
+    assert.equal(memberships.getMembership(db, 'default', val.id).role, 'admin', 'the grant\'s admin membership stays');
+    assert.equal(memberships.getMembership(db, 'default', solo.id), null, 'no membership added');
   } finally {
     close();
   }
@@ -2271,6 +2295,474 @@ test('identity-admin orgs: create needs identity and an owner, refuses a non-emp
     admin.removeMemberByLogin(db, 'cli', { orgId: 'acme', arg: 'alice' });
     assert.deepEqual(rolesOf(db, 'alice'), [['default', 'admin']], 'the last admin of acme may be removed from the CLI');
     assert.throws(() => admin.removeMemberByLogin(db, 'cli', { orgId: 'acme', arg: 'alice' }), refused('alice is not a member of acme'));
+  } finally {
+    close();
+  }
+});
+
+// ---------- Slice 3b: the rules spoken to two surfaces (the API's texts are pinned here, unreachable until its routes) ----------
+
+// A refusal of exactly this text and kind ('invalid' → 400, 'missing' → 404, 'conflict' → 409 on the API).
+const refusedAs = (text, kind) => (e) => refused(text)(e) && e.kind === kind;
+const trail = (db, from = 0) => auditRepo.listAudit(db, { limit: 1000 }).reverse().slice(from)
+  .map((r) => [r.action, r.actor, r.orgId, r.targetId, r.detail]);
+const LOCAL_MODE = { kind: 'local', why: 'this server signs in with local passwords' };
+const OIDC_MODE = { kind: 'oidc', issuerKey: KEY, why: `this server signs in through OIDC issuer ${KEY}` };
+const OWNER_WAY = 'PUT /api/admin/users/<id>/owner with {"owner": true}';
+const FAKE_PW = { algo: 'scrypt', hash: 'aGFzaA==' };
+
+test('identity-admin kinds and surfaces: every CLI text keeps its words and gains a kind; the API names a route instead of a command; an unknown surface or kind is a TypeError', async () => {
+  const { path, db, close } = await freshStore('admin-kinds');
+  try {
+    assert.equal(new admin.AdminRefusal('x').kind, 'conflict');
+    assert.throws(() => new admin.AdminRefusal('x', 'forbidden'), TypeError, 'nothing maps to 403');
+    assert.deepEqual(admin.REFUSAL_KINDS, ['invalid', 'missing', 'conflict']);
+    assert.throws(() => admin.checkAddLocalUser(db, { login: 'alice', surface: 'web' }), /a surface is cli or api, not "web"/);
+    assert.throws(() => admin.parseRole('member'), refusedAs("roles are viewer, operator or admin ('member' is now 'operator')", 'invalid'));
+    assert.throws(() => admin.parseRole('owner'), refusedAs('roles are viewer, operator or admin, not "owner"', 'invalid'));
+    admin.addLocalUser(db, 'cli', { login: 'alice', password: 'pw123456' });
+    const bob = admin.addLocalUser(db, 'cli', { login: 'bob', password: 'pw123456' }).user;
+    const n = trail(db).length;
+    for (const surface of ['cli', 'api']) {
+      assert.throws(() => admin.checkAddLocalUser(db, { login: 'a', surface }), refusedAs('username must be 2–64 chars of [a-zA-Z0-9._@-]', 'invalid'));
+      assert.throws(() => admin.checkAddLocalUser(db, { login: 'carl', role: 'owner', surface }), refusedAs('roles are viewer, operator or admin, not "owner"', 'invalid'));
+      assert.throws(() => admin.checkAddLocalUser(db, { login: 'carl', orgId: 'nope', surface }), refusedAs('no live org "nope"', 'invalid'));
+      assert.throws(() => admin.disableUser(db, 'cli', 'nobody', { surface }), refusedAs(surface === 'cli' ? 'no such user: nobody' : 'no user nobody', 'missing'));
+      assert.throws(() => admin.enableUser(db, 'cli', 'nobody', { surface }), refusedAs(surface === 'cli' ? 'no such user: nobody' : 'no user nobody', 'missing'));
+      assert.throws(() => admin.removeOrgSoft(db, 'cli', 'nope', { surface }), refusedAs('no live org "nope"', 'missing'));
+      assert.throws(() => admin.removeOrgSoft(db, 'cli', 'default', { surface }), refusedAs('default is the default org and cannot be removed', 'conflict'));
+    }
+    assert.throws(() => admin.checkAddLocalUser(db, { login: 'bob' }), refusedAs('user exists: bob (use passwd)', 'conflict'));
+    assert.throws(() => admin.checkAddLocalUser(db, { login: 'bob', surface: 'api' }),
+      refusedAs(`user exists: bob — reset its password with POST /api/admin/users/${bob.id}/password`, 'conflict'));
+    admin.disableUser(db, 'cli', 'bob');
+    assert.throws(() => admin.checkAddLocalUser(db, { login: 'bob' }),
+      refusedAs('user exists: bob, disabled (npm run users -- enable bob; passwd sets a new password)', 'conflict'));
+    assert.throws(() => admin.checkAddLocalUser(db, { login: 'bob', surface: 'api' }),
+      refusedAs(`user exists: bob, disabled — enable it with POST /api/admin/users/${bob.id}/enable (POST /api/admin/users/${bob.id}/password sets a new password)`, 'conflict'));
+    assert.throws(() => admin.addLocalUser(db, 'cli', { login: 'carl', password: '' }), refusedAs('a password is required', 'invalid'));
+    assert.equal(admin.checkAddLocalUser(db, { login: 'carl', surface: 'api' }).role, 'operator');
+    for (const password of [undefined, '', 'seven77']) {
+      assert.throws(() => admin.addLocalUser(db, 'local', { login: 'carl', password, surface: 'api', mode: LOCAL_MODE }),
+        refusedAs('a password of at least 8 characters is required', 'invalid'));
+    }
+    orgs.createOrg(db, 'cli', { id: 'acme', name: 'Acme' });
+    assert.throws(() => admin.checkAddLocalUser(db, { login: 'carl' }), refusedAs('this deployment has 2 orgs: name one with --org', 'invalid'));
+    assert.throws(() => admin.checkAddLocalUser(db, { login: 'carl', surface: 'api' }), refusedAs('this deployment has 2 orgs: name one with "orgId"', 'invalid'));
+    // The shell's resolution keeps its words; its absences are 'missing', a malformed argument 'invalid'.
+    assert.throws(() => admin.resolveLogin(db, ''), refusedAs('a login is required', 'invalid'));
+    assert.throws(() => admin.resolveLogin(db, 'nope#x'), refusedAs('nope#x is not <issuer>#<sub>', 'invalid'));
+    assert.throws(() => admin.addMemberByLogin(db, 'cli', { orgId: 'acme', arg: 'ghost' }), refusedAs('no local user ghost — npm run users -- add ghost first', 'missing'));
+    assert.throws(() => admin.addMemberByLogin(db, 'cli', { orgId: 'nope', arg: 'bob' }), refusedAs('no live org "nope"', 'missing'));
+    assert.throws(() => admin.removeMemberByLogin(db, 'cli', { orgId: 'acme', arg: 'bob' }), refusedAs('bob is not a member of acme', 'missing'));
+    assert.throws(() => admin.setLocalPassword(db, 'cli', 'nobody', 'x12345678'), refusedAs('no local user nobody', 'missing'));
+    assert.throws(() => admin.grantOwnerByLogin(db, 'cli', 'bob'), refusedAs('bob is disabled — npm run users -- enable bob first', 'conflict'));
+    assert.throws(() => admin.createOrgFromAdmin(db, 'cli', { id: 'Bad!', base: dirname(path) }),
+      refusedAs('"Bad!" is not an org id (a slug: lowercase letters, digits, - and _)', 'invalid'));
+    assert.throws(() => admin.createOrgFromAdmin(db, 'cli', { id: 'bravo', name: '', base: dirname(path) }), refusedAs('an org name is 1–200 characters', 'invalid'));
+    assert.deepEqual(trail(db, n), [['user.disable', 'cli', null, 'bob', null], ['org.create', 'cli', null, 'acme', { name: 'Acme', root: 'orgs/acme' }]],
+      'no refusal wrote a row');
+  } finally {
+    close();
+  }
+});
+
+test('identity-admin reserved logins: system, cli, local and token are refused on both surfaces, after the shape; the API also refuses the token label; nothing is written', async () => {
+  const { db, close } = await freshStore('admin-reserved');
+  try {
+    identity.ensureDefaultOrg(db, 'cli');
+    const n = trail(db).length;
+    const uses = { system: "the store's automatic grants", cli: 'a shell', local: 'the server without sign-in', token: 'the API token' };
+    assert.deepEqual(admin.RESERVED_LOGINS, Object.keys(uses));
+    for (const [login, use] of Object.entries(uses)) {
+      const text = `"${login}" is reserved — the audit log uses it for ${use}; choose another username`;
+      assert.throws(() => admin.checkAddLocalUser(db, { login }), refusedAs(text, 'invalid'), login);
+      assert.throws(() => admin.addLocalUser(db, 'cli', { login, password: 'pw123456' }), refusedAs(text, 'invalid'), login);
+      assert.throws(() => admin.addLocalUser(db, 'local', { login, password: 'pw123456', surface: 'api', mode: LOCAL_MODE, tokenLabel: 'ci-bot' }),
+        refusedAs(text, 'invalid'), login);
+    }
+    assert.throws(() => admin.addLocalUser(db, 'local', { login: 'ci-bot', password: 'pw123456', surface: 'api', mode: LOCAL_MODE, tokenLabel: 'ci-bot' }),
+      refusedAs('"ci-bot" is reserved — the audit log uses it for the API token; choose another username', 'invalid'));
+    assert.throws(() => admin.checkAddLocalUser(db, { login: 'x', tokenLabel: 'x' }), refusedAs('username must be 2–64 chars of [a-zA-Z0-9._@-]', 'invalid'), 'the shape first');
+    assert.throws(() => admin.checkAddLocalUser(db, { login: 'system', role: 'member' }), refused(/is reserved/), 'before the role');
+    assert.equal(admin.checkAddLocalUser(db, { login: 'constructor' }).role, 'operator', 'only the four names');
+    assert.equal(admin.checkAddLocalUser(db, { login: 'System' }).role, 'operator', 'the actor names are exact');
+    assert.equal(admin.checkAddLocalUser(db, { login: 'ci-bot' }).role, 'operator', 'the CLI knows no token label');
+    assert.deepEqual(trail(db, n), []);
+  } finally {
+    close();
+  }
+});
+
+test('identity-admin liveSignInMode: the server\'s own environment — its OIDC issuer (even with OBSERVOGRAM_AUTH=off), else local, naming OBSERVOGRAM_AUTH=off', () => {
+  const keys = ['OBSERVOGRAM_OIDC_ISSUER', 'TOMOGRAPH_OIDC_ISSUER', 'OBSERVOGRAM_AUTH', 'TOMOGRAPH_AUTH'];
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  try {
+    for (const k of keys) delete process.env[k];
+    assert.deepEqual(admin.liveSignInMode(), LOCAL_MODE);
+    process.env.OBSERVOGRAM_AUTH = 'off';
+    assert.deepEqual(admin.liveSignInMode(), { kind: 'local', why: 'this server runs with OBSERVOGRAM_AUTH=off and without OIDC' });
+    process.env.OBSERVOGRAM_OIDC_ISSUER = 'https://idp.example/.well-known/openid-configuration';
+    assert.deepEqual(admin.liveSignInMode(), OIDC_MODE);
+    delete process.env.OBSERVOGRAM_AUTH;
+    assert.deepEqual(admin.liveSignInMode(), OIDC_MODE);
+  } finally {
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+});
+
+test('identity-admin addLocalUser on the API: the caller\'s mode wins over the shell\'s inference; A-16 via api, its grant recording from; ownerWithheld names the owner route', async () => {
+  const a = await freshStore('admin-api-add');
+  try {
+    // The store says OIDC; the server's own mode says local: A-16 applies.
+    meta.setMeta(a.db, 'system', 'identity_mode', `oidc:${KEY}`);
+    const n = trail(a.db).length;
+    const alice = admin.addLocalUser(a.db, 'local', { login: 'alice', password: 'pw123456', role: 'viewer', via: 'api', surface: 'api', mode: LOCAL_MODE });
+    assert.deepEqual([alice.owner, alice.ownerWithheld, alice.armed, alice.joined, alice.mode], [true, null, true, [{ orgId: 'default', role: 'admin' }], LOCAL_MODE]);
+    assert.deepEqual(trail(a.db, n), [
+      ['org.create', 'local', null, 'default', { name: 'Default', root: '.' }],
+      ['meta.set', 'local', null, 'default_org', null],
+      ['user.create', 'local', null, 'alice', { kind: 'local', isOwner: false, sessionEpoch: 1, disabled: false }],
+      ['owner.first-local-user', 'system', null, 'alice', { via: 'api', match: null, org: 'default', membership: 'added', from: null }],
+      ['meta.set', 'local', null, 'identity_armed', null],
+    ]);
+    const bob = admin.addLocalUser(a.db, 'alice', { login: 'bob', password: 'pw123456', role: 'viewer', via: 'api', surface: 'api', mode: LOCAL_MODE });
+    assert.deepEqual([bob.owner, bob.armed, bob.joined], [false, false, [{ orgId: 'default', role: 'viewer' }]]);
+  } finally {
+    a.close();
+  }
+  const b = await freshStore('admin-api-add-oidc');
+  try {
+    // The store says local; the server's own mode says OIDC: A-16 is withheld.
+    meta.setMeta(b.db, 'system', 'identity_mode', 'local');
+    const ops = admin.addLocalUser(b.db, 'boss', { login: 'ops', password: 'pw123456', via: 'api', surface: 'api', mode: OIDC_MODE });
+    assert.deepEqual([ops.owner, ops.user.isOwner, ops.joined], [false, false, [{ orgId: 'default', role: 'operator' }]]);
+    assert.equal(ops.ownerWithheld, `this server signs in through OIDC issuer ${KEY} and local users cannot sign in under it — `
+      + `ops is created without owner; make an IdP user an owner with ${OWNER_WAY}`);
+  } finally {
+    b.close();
+  }
+});
+
+test('identity-admin setLocalPassword on the API: a temporary password (must change, the epoch bumped, user.password); never the caller\'s own row nor an OIDC row; at least 8 characters', async () => {
+  const { db, close } = await freshStore('admin-api-passwd');
+  try {
+    const alice = admin.addLocalUser(db, 'cli', { login: 'alice', password: 'pw123456' }).user;
+    const bob = admin.addLocalUser(db, 'cli', { login: 'bob', password: 'pw123456' }).user;
+    const idp = users.createUser(db, 'cli', { kind: 'oidc', login: `${KEY}#u1`, issuer: KEY, sub: 'u1' });
+    const n = trail(db).length;
+    const api = { mustChange: true, surface: 'api', callerId: alice.id };
+    for (const pw of [undefined, '', 'seven77']) {
+      assert.throws(() => admin.setLocalPassword(db, 'alice', 'bob', pw, api), refusedAs('a temporary password of at least 8 characters is required', 'invalid'));
+    }
+    assert.throws(() => admin.setLocalPassword(db, 'cli', 'bob', ''), refusedAs('a password is required', 'invalid'));
+    assert.throws(() => admin.setLocalPassword(db, 'alice', 'nobody', 'temp-pass1', api), refusedAs('no user nobody', 'missing'));
+    assert.throws(() => admin.setLocalPassword(db, 'alice', 'alice', 'temp-pass1', api),
+      refusedAs('this is your own account — change your password at /auth/change-password', 'conflict'));
+    assert.throws(() => admin.setLocalPassword(db, 'alice', idp.login, 'temp-pass1', api),
+      refusedAs(`${idp.login} signs in through the IdP and has no password here — sign them out everywhere (POST /api/admin/users/${idp.id}/signout) or disable them`, 'conflict'));
+    assert.throws(() => admin.setLocalPassword(db, 'cli', idp.login, 'temp-pass1'), refusedAs(`no local user ${idp.login}`, 'missing'));
+    assert.deepEqual(trail(db, n), [], 'a refusal writes nothing');
+    const after = admin.setLocalPassword(db, 'alice', 'bob', 'temp-pass1', api);
+    assert.deepEqual([after.mustChange, after.seededDefault, after.sessionEpoch], [true, false, bob.sessionEpoch + 1]);
+    assert.ok(verifyPassword('temp-pass1', users.getUserByLogin(db, 'bob').password));
+    assert.deepEqual(trail(db, n), [['user.password', 'alice', null, 'bob', null]]);
+    assert.equal(admin.setLocalPassword(db, 'cli', 'bob', 'cli-pass12').mustChange, false, 'the shell\'s passwd is not temporary');
+  } finally {
+    close();
+  }
+});
+
+test('identity-admin disable, enable and the owner flag on the API: the last-owner rules, shared by a disable and a revoke; owner.grant records from; owner.revoke keeps memberships and says so; no-ops write nothing', async () => {
+  const { db, close } = await freshStore('admin-api-owner');
+  try {
+    admin.addLocalUser(db, 'cli', { login: 'alice', password: 'pw123456' });
+    const val = admin.addLocalUser(db, 'cli', { login: 'val', password: 'pw123456', role: 'viewer' }).user;
+    const boss = users.createUser(db, 'cli', { kind: 'oidc', login: `${KEY}#boss`, issuer: KEY, sub: 'boss', isOwner: true });
+    const api = { surface: 'api', mode: LOCAL_MODE };
+    let n = trail(db).length;
+    // The last owner who can sign in under the server's mode (boss is an owner, but not a local one).
+    const lastLocal = (way) => `alice is the last owner who can sign in with a local password (${LOCAL_MODE.why}) — ${way}`;
+    assert.throws(() => admin.disableUser(db, 'val', 'alice', api), refusedAs(lastLocal(`make another user who signs in that way an owner first (${OWNER_WAY})`), 'conflict'));
+    assert.throws(() => admin.setOwnerFlag(db, 'val', 'alice', false, api), refusedAs(lastLocal(`make another user who signs in that way an owner first (${OWNER_WAY})`), 'conflict'));
+    assert.throws(() => admin.disableUser(db, 'cli', 'alice', { mode: LOCAL_MODE }), refusedAs(lastLocal('grant another owner first (npm run users -- owner <login>)'), 'conflict'),
+      'the CLI text, with the mode the caller passed');
+    // The last enabled owner.
+    admin.disableUser(db, 'alice', boss.login, api);
+    const lastEnabled = `alice is the last enabled owner — make another user an owner first (${OWNER_WAY})`;
+    assert.throws(() => admin.disableUser(db, 'val', 'alice', api), refusedAs(lastEnabled, 'conflict'));
+    assert.throws(() => admin.setOwnerFlag(db, 'val', 'alice', false, api), refusedAs(lastEnabled, 'conflict'));
+    assert.throws(() => admin.disableUser(db, 'cli', 'alice'), refusedAs('alice is the last enabled owner — grant another owner first (npm run users -- owner <login>)', 'conflict'));
+    assert.deepEqual(trail(db, n), [['user.disable', 'alice', null, boss.login, null]]);
+    n = trail(db).length;
+    // A disabled owner is revoked without the last-owner rules (it is not one of the owners who act).
+    const bossOff = admin.setOwnerFlag(db, 'alice', boss.login, false, api);
+    assert.deepEqual([bossOff.changed, bossOff.user.isOwner, bossOff.memberships, bossOff.note], [true, false, [], null]);
+    assert.equal(admin.enableUser(db, 'alice', boss.login, { surface: 'api' }).disabled, false);
+    // Grant: an owner and the default org's admin, the role it replaced on the row.
+    const granted = admin.setOwnerFlag(db, 'alice', 'val', true, api);
+    assert.deepEqual([granted.changed, granted.user.isOwner, granted.memberships, granted.note], [true, true, [{ orgId: 'default', role: 'admin' }], null]);
+    assert.equal(admin.setOwnerFlag(db, 'alice', 'val', true, api).changed, false, 'already an owner');
+    // Revoke: the membership the grant raised stays, and the note says how to change it.
+    const revoked = admin.setOwnerFlag(db, 'alice', 'val', false, api);
+    assert.deepEqual([revoked.changed, revoked.user.isOwner, revoked.memberships], [true, false, [{ orgId: 'default', role: 'admin' }]]);
+    assert.equal(revoked.note, 'val is still an admin of default: an owner grant makes the user an admin of the default org '
+      + `(the grant's audit row records the role before it) — change it with PATCH /api/org/members/${val.id} in org default if that was not their role`);
+    const again = admin.setOwnerFlag(db, 'alice', 'val', false, api);
+    assert.deepEqual([again.changed, again.note], [false, null], 'not an owner: nothing to say');
+    assert.deepEqual(trail(db, n), [
+      ['owner.revoke', 'alice', null, boss.login, { via: 'api', org: 'default', role: null }],
+      ['user.enable', 'alice', null, boss.login, null],
+      ['owner.grant', 'alice', null, 'val', { via: 'api', match: null, org: 'default', membership: 'raised', from: 'viewer' }],
+      ['owner.revoke', 'alice', null, 'val', { via: 'api', org: 'default', role: 'admin' }],
+    ]);
+    n = trail(db).length;
+    assert.throws(() => admin.setOwnerFlag(db, 'alice', 'val', 'yes', api), refusedAs('"owner" is true or false', 'invalid'));
+    assert.throws(() => admin.setOwnerFlag(db, 'alice', 'nobody', true, api), refusedAs('no user nobody', 'missing'));
+    admin.disableUser(db, 'alice', 'val', api);
+    assert.throws(() => admin.setOwnerFlag(db, 'alice', 'val', true, api), refusedAs(`val is disabled — enable it first (POST /api/admin/users/${val.id}/enable)`, 'conflict'));
+    assert.throws(() => admin.setOwnerFlag(db, 'cli', 'val', true), refusedAs('val is disabled — npm run users -- enable val first', 'conflict'));
+    assert.equal(admin.disableUser(db, 'alice', 'val', api).disabled, true, 'already disabled: no row');
+    assert.equal(admin.enableUser(db, 'alice', 'alice', { surface: 'api' }).disabled, false, 'not disabled: no row');
+    // A disabled row still holding the seeded default password stays off until a temporary one is set.
+    const seed = users.createUser(db, 'cli', { login: 'seed', password: FAKE_PW, mustChange: true, seededDefault: true });
+    admin.disableUser(db, 'cli', 'seed');
+    assert.throws(() => admin.enableUser(db, 'alice', 'seed', { surface: 'api' }),
+      refusedAs(`seed still has the seeded default password — set a temporary one first (POST /api/admin/users/${seed.id}/password)`, 'conflict'));
+    assert.throws(() => admin.enableUser(db, 'cli', 'seed'), refusedAs('seed still has the seeded default password — npm run users -- passwd seed first', 'conflict'));
+    assert.deepEqual(trail(db, n), [['user.disable', 'alice', null, 'val', null], ['user.create', 'cli', null, 'seed', { kind: 'local', isOwner: false, sessionEpoch: 1, disabled: false }],
+      ['user.disable', 'cli', null, 'seed', null]]);
+  } finally {
+    close();
+  }
+});
+
+test('identity-admin signOutEverywhere bumps the epoch with one user.signout row; renameOrgFromAdmin writes org.rename, nothing when unchanged', async () => {
+  const { db, close } = await freshStore('admin-signout-rename');
+  try {
+    admin.addLocalUser(db, 'cli', { login: 'alice', password: 'pw123456' });
+    const bob = admin.addLocalUser(db, 'cli', { login: 'bob', password: 'pw123456' }).user;
+    const n = trail(db).length;
+    const out = admin.signOutEverywhere(db, 'alice', 'bob');
+    assert.deepEqual([out.sessionEpoch, out.user.sessionEpoch, out.user.login], [bob.sessionEpoch + 1, bob.sessionEpoch + 1, 'bob']);
+    assert.throws(() => admin.signOutEverywhere(db, 'alice', 'nobody'), refusedAs('no such user: nobody', 'missing'));
+    assert.throws(() => admin.signOutEverywhere(db, 'alice', 'nobody', { surface: 'api' }), refusedAs('no user nobody', 'missing'));
+    assert.deepEqual(admin.renameOrgFromAdmin(db, 'alice', 'default', 'Main').name, 'Main');
+    assert.equal(admin.renameOrgFromAdmin(db, 'alice', 'default', 'Main').name, 'Main', 'unchanged');
+    for (const name of ['', '   ', 'x'.repeat(201), 5, undefined]) {
+      assert.throws(() => admin.renameOrgFromAdmin(db, 'alice', 'default', name), refusedAs('an org name is 1–200 characters', 'invalid'), String(name));
+    }
+    assert.throws(() => admin.renameOrgFromAdmin(db, 'alice', 'nope', 'Nope'), refusedAs('no live org "nope"', 'missing'));
+    assert.deepEqual(trail(db, n), [
+      ['user.signout', 'alice', null, 'bob', { sessionEpoch: bob.sessionEpoch + 1 }],
+      ['org.rename', 'alice', 'default', 'default', { from: 'Default', to: 'Main' }],
+    ]);
+  } finally {
+    close();
+  }
+});
+
+test('identity-admin createOrgFromAdmin on the API: a server without identity is refused first (OBSERVOGRAM_AUTH=off named); the creator becomes its admin; the adopt text; adopted and path', async () => {
+  const { path, db, close } = await freshStore('admin-api-orgs');
+  const base = dirname(path);
+  try {
+    const alice = admin.addLocalUser(db, 'cli', { login: 'alice', password: 'pw123456' }).user;
+    const n = trail(db).length;
+    const offText = 'creating a second org needs identity: this server runs with OBSERVOGRAM_AUTH=off, and a second org would make its next start refuse — '
+      + 'restart it without OBSERVOGRAM_AUTH=off and sign in as an owner (npm run users -- add <login> first when no user exists), or configure OIDC';
+    const api = { base, serverIdentity: true, authOff: false, surface: 'api' };
+    assert.throws(() => admin.createOrgFromAdmin(db, 'local', { ...api, id: 'Bad!', serverIdentity: false, authOff: true }), refusedAs(offText, 'conflict'),
+      'before the id is checked');
+    assert.throws(() => admin.createOrgFromAdmin(db, 'local', { ...api, id: 'acme', serverIdentity: false }),
+      refusedAs('creating a second org needs identity: add the first user with npm run users -- add, or configure OIDC', 'conflict'));
+    assert.throws(() => admin.createOrgFromAdmin(db, 'alice', { ...api, id: 'Bad!' }), refusedAs('"Bad!" is not an org id (a slug: lowercase letters, digits, - and _)', 'invalid'));
+    assert.throws(() => admin.createOrgFromAdmin(db, 'alice', { ...api, id: 'acme', name: 'x'.repeat(201) }), refusedAs('an org name is 1–200 characters', 'invalid'));
+    mkdirSync(join(base, 'orgs', 'acme', 'packs'), { recursive: true });
+    assert.throws(() => admin.createOrgFromAdmin(db, 'alice', { ...api, id: 'acme' }),
+      refusedAs(`${join(base, 'orgs', 'acme')} exists and is not empty — send "adopt": true to take it over`, 'conflict'));
+    assert.deepEqual(trail(db, n), [], 'a refusal writes nothing');
+    const acme = admin.createOrgFromAdmin(db, 'alice', { ...api, id: 'acme', name: 'Acme', adopt: true, adminUserId: alice.id });
+    assert.deepEqual([acme.id, acme.name, acme.root, acme.adopted, acme.path], ['acme', 'Acme', 'orgs/acme', true, join(base, 'orgs', 'acme')]);
+    const bravo = admin.createOrgFromAdmin(db, 'alice', { ...api, id: 'bravo', adminUserId: alice.id });
+    assert.deepEqual([bravo.name, bravo.adopted, bravo.path], ['bravo', false, join(base, 'orgs', 'bravo')]);
+    assert.throws(() => admin.createOrgFromAdmin(db, 'alice', { ...api, id: 'bravo' }), refusedAs('org "bravo" exists or existed — a slug is never reused', 'conflict'));
+    assert.deepEqual(trail(db, n), [
+      ['org.create', 'alice', null, 'acme', { name: 'Acme', root: 'orgs/acme' }],
+      ['org.adopt', 'alice', null, 'acme', { path: join(base, 'orgs', 'acme') }],
+      ['membership.add', 'alice', 'acme', 'alice', { role: 'admin' }],
+      ['org.create', 'alice', null, 'bravo', { name: 'bravo', root: 'orgs/bravo' }],
+      ['membership.add', 'alice', 'bravo', 'alice', { role: 'admin' }],
+    ]);
+    assert.deepEqual(rolesOf(db, 'alice'), [['default', 'admin'], ['acme', 'admin'], ['bravo', 'admin']]);
+  } finally {
+    close();
+  }
+});
+
+test('identity-admin findMemberCandidate: an existing user by exact login or by the one enabled user with that verified email; an owner learns absent, disabled or several, an org admin gets one 404', async () => {
+  const { db, close } = await freshStore('admin-candidate');
+  try {
+    identity.ensureDefaultOrg(db, 'cli');
+    const mk = (login, fields = {}) => users.createUser(db, 'cli', { login, password: FAKE_PW, ...fields });
+    const ada = mk('ada');
+    const dan = mk('dan');
+    users.setDisabled(db, 'cli', dan.id, true);
+    const eve1 = mk('eve1', { email: 'eve@example.test', emailVerified: true });
+    const eve2 = mk('eve2', { email: 'Eve@Example.test', emailVerified: true });
+    const vic = mk('vic', { email: 'VIC@Example.test', emailVerified: true });
+    mk('unv', { email: 'unv@example.test' });
+    const dora = mk('dora', { email: 'dora@example.test', emailVerified: true });
+    users.setDisabled(db, 'cli', dora.id, true);
+    const n = trail(db).length;
+    const nameIt = 'name the user with "login" (the exact login) or "email" (a verified email)';
+    for (const q of [{}, { login: 'ada', email: 'vic@example.test' }, { login: '' }, { login: 5 }, { email: '' }, { email: ['x'] }, { login: null, email: null }]) {
+      for (const detailed of [false, true]) assert.throws(() => admin.findMemberCandidate(db, { ...q, detailed }), refusedAs(nameIt, 'invalid'), JSON.stringify(q));
+    }
+    for (const detailed of [false, true]) {
+      assert.equal(admin.findMemberCandidate(db, { login: 'ada', detailed }).id, ada.id);
+      assert.equal(admin.findMemberCandidate(db, { email: 'vic@example.test', detailed }).id, vic.id, 'case-insensitive');
+    }
+    // To an org admin: absent, disabled and several read the same.
+    const noLogin = (x) => `no enabled user "${x}" — an owner creates local users and re-enables disabled ones; an IdP user can be added after their first sign-in`;
+    const noEmail = (x) => `no single enabled user has the verified email ${x} (an email counts only when the sign-in verified it) — add them by login; an IdP user can be added after their first sign-in`;
+    assert.throws(() => admin.findMemberCandidate(db, { login: 'nobody' }), refusedAs(noLogin('nobody'), 'missing'));
+    assert.throws(() => admin.findMemberCandidate(db, { login: 'dan' }), refusedAs(noLogin('dan'), 'missing'));
+    for (const email of ['nobody@example.test', 'eve@example.test', 'dora@example.test', 'unv@example.test']) {
+      assert.throws(() => admin.findMemberCandidate(db, { email }), refusedAs(noEmail(email), 'missing'), email);
+    }
+    // To an owner: the detail, and the way out.
+    assert.throws(() => admin.findMemberCandidate(db, { login: 'nobody', detailed: true }),
+      refusedAs('no user "nobody" — create a local user with POST /api/admin/users; an IdP user exists after their first sign-in', 'missing'));
+    assert.throws(() => admin.findMemberCandidate(db, { login: 'dan', detailed: true }), refusedAs(`dan is disabled — enable it first (POST /api/admin/users/${dan.id}/enable)`, 'conflict'));
+    assert.throws(() => admin.findMemberCandidate(db, { email: 'EVE@example.test', detailed: true }), refusedAs('2 users have the verified email EVE@example.test — add one by login', 'conflict'));
+    assert.throws(() => admin.findMemberCandidate(db, { email: 'dora@example.test', detailed: true }),
+      refusedAs(`dora is disabled — enable it first (POST /api/admin/users/${dora.id}/enable)`, 'conflict'));
+    for (const email of ['nobody@example.test', 'unv@example.test']) {
+      assert.throws(() => admin.findMemberCandidate(db, { email, detailed: true }),
+        refusedAs(`no user has the verified email ${email} — an email counts only when the sign-in verified it; add them by login`, 'missing'), email);
+    }
+    users.setDisabled(db, 'cli', eve2.id, true);
+    assert.equal(admin.findMemberCandidate(db, { email: 'eve@example.test' }).id, eve1.id, 'one enabled match is the match');
+    users.setDisabled(db, 'cli', eve1.id, true);
+    assert.throws(() => admin.findMemberCandidate(db, { email: 'eve@example.test', detailed: true }), refusedAs('2 users have the verified email eve@example.test — add one by login', 'conflict'));
+    // The repository reads behind it.
+    assert.deepEqual(users.listUsersByVerifiedEmail(db, 'EVE@EXAMPLE.TEST').map((u) => u.login), []);
+    assert.deepEqual(users.listUsersByVerifiedEmail(db, 'EVE@EXAMPLE.TEST', { includeDisabled: true }).map((u) => u.login), ['eve1', 'eve2']);
+    assert.deepEqual(users.listUsersByVerifiedEmail(db, 'unv@example.test', { includeDisabled: true }), [], 'an unverified email never matches');
+    assert.throws(() => users.listUsersByVerifiedEmail(db, null), TypeError);
+    assert.deepEqual(trail(db, n), [['user.disable', 'cli', null, 'eve2', null], ['user.disable', 'cli', null, 'eve1', null]], 'a lookup writes nothing');
+  } finally {
+    close();
+  }
+});
+
+test('identity-admin the last admin: refused on every path that demotes or removes it — setMemberRole, removeMember and the upsert of addMember — unless by an owner; only enabled admins count; the CLI keeps its powers', async () => {
+  const { db, close } = await freshStore('admin-last-admin');
+  try {
+    identity.ensureDefaultOrg(db, 'cli');
+    orgs.createOrg(db, 'cli', { id: 'acme', name: 'Acme' });
+    const mk = (login) => users.createUser(db, 'cli', { login, password: FAKE_PW });
+    const ada = mk('ada');
+    const oscar = mk('oscar');
+    const vera = mk('vera');
+    // addMember: an add, an unchanged upsert, a role change; the role defaults to operator.
+    let n = trail(db).length;
+    const added = admin.addMember(db, 'olive', { orgId: 'acme', userId: ada.id, role: 'admin' });
+    assert.deepEqual([added.added, added.changed, added.membership.role, added.user.login], [true, null, 'admin', 'ada']);
+    const same = admin.addMember(db, 'olive', { orgId: 'acme', userId: ada.id, role: 'admin' });
+    assert.deepEqual([same.added, same.changed], [false, null]);
+    assert.equal(admin.addMember(db, 'ada', { orgId: 'acme', userId: oscar.id }).membership.role, 'operator', 'the role defaults to operator');
+    assert.equal(admin.addMember(db, 'ada', { orgId: 'acme', userId: vera.id, role: 'viewer' }).added, true);
+    assert.throws(() => admin.addMember(db, 'ada', { orgId: 'acme', userId: vera.id, role: 'member' }), refusedAs("roles are viewer, operator or admin ('member' is now 'operator')", 'invalid'));
+    assert.throws(() => admin.addMember(db, 'ada', { orgId: 'nope', userId: vera.id }), refusedAs('no live org "nope"', 'missing'));
+    assert.throws(() => admin.addMember(db, 'ada', { orgId: 'acme', userId: 9999 }), refusedAs('no user 9999', 'missing'));
+    assert.deepEqual(trail(db, n), [
+      ['membership.add', 'olive', 'acme', 'ada', { role: 'admin' }],
+      ['membership.add', 'ada', 'acme', 'oscar', { role: 'operator' }],
+      ['membership.add', 'ada', 'acme', 'vera', { role: 'viewer' }],
+    ]);
+    assert.equal(memberships.countEnabledAdmins(db, 'acme'), 1);
+    // ada is acme's only admin: no non-owner path demotes or removes her.
+    n = trail(db).length;
+    const last = 'ada is the last admin of acme: only an owner can demote or remove them — make another member an admin first (PATCH /api/org/members/<id> with {"role": "admin"})';
+    const paths = {
+      setMemberRole: (byOwner) => admin.setMemberRole(db, 'ada', { orgId: 'acme', userId: ada.id, role: 'viewer', byOwner }),
+      removeMember: (byOwner) => admin.removeMember(db, 'ada', { orgId: 'acme', userId: ada.id, byOwner }),
+      'addMember (the upsert)': (byOwner) => admin.addMember(db, 'ada', { orgId: 'acme', userId: ada.id, role: 'viewer', byOwner }),
+    };
+    for (const [name, run] of Object.entries(paths)) assert.throws(() => run(false), refusedAs(last, 'conflict'), name);
+    assert.throws(() => admin.addMember(db, 'ada', { orgId: 'acme', userId: ada.id }), refusedAs(last, 'conflict'), 'no role in the upsert is operator: a demotion too');
+    assert.deepEqual(trail(db, n), [], 'no row');
+    // An owner may, on each path (then the membership is put back).
+    assert.deepEqual(paths['addMember (the upsert)'](true).changed, { from: 'admin', to: 'viewer' });
+    assert.deepEqual(admin.setMemberRole(db, 'ada', { orgId: 'acme', userId: ada.id, role: 'admin' }).changed, { from: 'viewer', to: 'admin' }, 'a promotion needs no owner');
+    assert.deepEqual(paths.setMemberRole(true).changed, { from: 'admin', to: 'viewer' });
+    admin.setMemberRole(db, 'olive', { orgId: 'acme', userId: ada.id, role: 'admin' });
+    assert.deepEqual(paths.removeMember(true).membership.role, 'admin');
+    admin.addMember(db, 'olive', { orgId: 'acme', userId: ada.id, role: 'admin' });
+    // A disabled admin does not count as another admin; an enabled one does.
+    admin.setMemberRole(db, 'ada', { orgId: 'acme', userId: oscar.id, role: 'admin' });
+    users.setDisabled(db, 'cli', oscar.id, true);
+    assert.equal(memberships.countEnabledAdmins(db, 'acme'), 1);
+    assert.throws(() => paths.setMemberRole(false), refusedAs(last, 'conflict'));
+    users.setDisabled(db, 'cli', oscar.id, false);
+    assert.equal(memberships.countEnabledAdmins(db, 'acme'), 2);
+    assert.deepEqual(paths.setMemberRole(false).changed, { from: 'admin', to: 'viewer' }, 'another enabled admin exists');
+    // The last enabled admin is oscar now; a disabled last admin is not guarded (nobody it keeps signed in).
+    users.setDisabled(db, 'cli', oscar.id, true);
+    assert.equal(admin.removeMember(db, 'ada', { orgId: 'acme', userId: oscar.id }).membership.role, 'admin');
+    // setMemberRole and removeMember refusals.
+    assert.throws(() => admin.setMemberRole(db, 'ada', { orgId: 'acme', userId: ada.id }), refusedAs('a role is required: viewer, operator or admin', 'invalid'));
+    assert.throws(() => admin.setMemberRole(db, 'ada', { orgId: 'acme', userId: ada.id, role: 'owner' }), refusedAs('roles are viewer, operator or admin, not "owner"', 'invalid'));
+    assert.throws(() => admin.setMemberRole(db, 'ada', { orgId: 'acme', userId: oscar.id, role: 'viewer' }), refusedAs(`user ${oscar.id} is not a member of acme`, 'missing'));
+    assert.throws(() => admin.removeMember(db, 'ada', { orgId: 'acme', userId: 9999 }), refusedAs('user 9999 is not a member of acme', 'missing'));
+    assert.throws(() => admin.removeMember(db, 'ada', { orgId: 'nope', userId: ada.id }), refusedAs('no live org "nope"', 'missing'));
+    assert.equal(admin.setMemberRole(db, 'ada', { orgId: 'acme', userId: vera.id, role: 'viewer' }).changed, null, 'unchanged');
+    assert.throws(() => admin.assertNotLastAdmin(db, { orgId: 'acme', userId: ada.id }), /runs inside the atomic\(\)/);
+    // The shell is owner-equivalent: add-member and remove-member of a last admin still succeed.
+    admin.setMemberRole(db, 'olive', { orgId: 'acme', userId: ada.id, role: 'admin' });
+    admin.removeMember(db, 'olive', { orgId: 'acme', userId: vera.id });
+    assert.equal(memberships.countEnabledAdmins(db, 'acme'), 1);
+    assert.deepEqual(admin.addMemberByLogin(db, 'cli', { orgId: 'acme', arg: 'ada', role: 'viewer' }).changed, { from: 'admin', to: 'viewer' });
+    admin.addMemberByLogin(db, 'cli', { orgId: 'acme', arg: 'ada', role: 'admin' });
+    assert.equal(admin.removeMemberByLogin(db, 'cli', { orgId: 'acme', arg: 'ada' }).role, 'admin');
+    assert.equal(memberships.countEnabledAdmins(db, 'acme'), 0);
+  } finally {
+    close();
+  }
+});
+
+test('identity-admin setJoinRole: a role, or null / "none" for no automatic join, with one meta.set row { from, to }; unchanged writes nothing; admin needs confirm: true; anything else is invalid', async () => {
+  const { db, close } = await freshStore('admin-join-role');
+  try {
+    identity.ensureDefaultOrg(db, 'cli');
+    const n = trail(db).length;
+    assert.deepEqual(admin.setJoinRole(db, 'olive', 'viewer'), { role: 'viewer', from: null, changed: true });
+    assert.deepEqual(admin.setJoinRole(db, 'olive', ' viewer '), { role: 'viewer', from: 'viewer', changed: false });
+    const risk = 'every user the IdP lets in would become an admin of default — its name, its members and, from slice 4, its MCP endpoints; '
+      + 'to add admins one by one use POST /api/org/members with {"role": "admin"}, or send {"role": "admin", "confirm": true}';
+    for (const confirm of [undefined, false, 'true', 1]) {
+      assert.throws(() => admin.setJoinRole(db, 'olive', 'admin', { confirm }), refusedAs(risk, 'conflict'), String(confirm));
+    }
+    assert.deepEqual(admin.setJoinRole(db, 'olive', 'admin', { confirm: true }), { role: 'admin', from: 'viewer', changed: true });
+    assert.deepEqual(admin.setJoinRole(db, 'olive', null), { role: null, from: 'admin', changed: true });
+    assert.equal(meta.getMeta(db, 'oidc_join_role'), null);
+    assert.deepEqual(admin.setJoinRole(db, 'olive', 'none'), { role: null, from: null, changed: false });
+    admin.setJoinRole(db, 'olive', 'operator');
+    assert.deepEqual(admin.setJoinRole(db, 'olive', 'none'), { role: null, from: 'operator', changed: true });
+    const bad = 'the join role is viewer, operator, admin, or null for no automatic join — not ';
+    for (const [role, shown] of [[undefined, 'undefined'], ['', '""'], ['bogus', '"bogus"'], ['member', '"member"'], ['Admin', '"Admin"'], [5, '5'], [{ role: 'admin' }, '{"role":"admin"}']]) {
+      assert.throws(() => admin.setJoinRole(db, 'olive', role, { confirm: true }), refusedAs(bad + shown, 'invalid'), shown);
+    }
+    assert.deepEqual(trail(db, n), [
+      ['meta.set', 'olive', null, 'oidc_join_role', { from: null, to: 'viewer' }],
+      ['meta.set', 'olive', null, 'oidc_join_role', { from: 'viewer', to: 'admin' }],
+      ['meta.set', 'olive', null, 'oidc_join_role', { from: 'admin', to: null }],
+      ['meta.set', 'olive', null, 'oidc_join_role', { from: null, to: 'operator' }],
+      ['meta.set', 'olive', null, 'oidc_join_role', { from: 'operator', to: null }],
+    ]);
+    const idp = identity.createOidcUser(db, { issuerKey: KEY, issuerDisplay: KEY, sub: 'late', via: 'callback' });
+    assert.deepEqual(memberships.listMembershipsForUser(db, idp.id), [], 'cleared: no automatic join');
   } finally {
     close();
   }

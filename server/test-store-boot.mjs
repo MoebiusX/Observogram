@@ -630,7 +630,7 @@ test('the three every-boot warnings still print on a boot that does not import',
   const ws3 = workspace();
   assert.ok(boot(ws3, { env: OIDC_ENV, silent: false }).listening);
   r = boot(ws3, { env: { ...OIDC_ENV, OBSERVOGRAM_OIDC_JOIN_ROLE: 'viewer' }, silent: false });
-  assert.ok(r.listening && r.stderr.includes('[store] OBSERVOGRAM_OIDC_JOIN_ROLE is read at the first start only; the store records operator'), r.stderr);
+  assert.ok(r.listening && r.stderr.includes('[store] OBSERVOGRAM_OIDC_JOIN_ROLE is read at the first start only; the store records operator — an owner changes it with PUT /api/admin/join-role'), r.stderr);
 });
 
 // ====================== the CLI gate ======================
