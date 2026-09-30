@@ -575,6 +575,111 @@ test('the account menu\'s "sign out my other sessions": the route it posts to, a
   assert.match(fn, /chip\.querySelector\('\.hdr-user-menu-id'\)\.textContent = signOutOthersText\(status, body\);/);
 });
 
+// The deploy modal's saved targets (studio/api.mjs): per user, each MCP
+// URL stripped as the remembered URL is, the pre-slice-3 browser-wide key
+// adopted once, every key gone at sign-out. The rule is tools/lib's
+// (server/mcp-url.mjs re-exports it), handed in as the studio hands in the
+// one it loads from /lib.
+const { deployProfilesKey, safeDeployProfile, migrateDeployProfiles, deployProfileSavedText, forgetMcpUrls, setSignedInLogin, setActiveOrg } = await import('../studio/api.mjs');
+
+test('deploy target profiles keep no credential: per user, stripped like the remembered URL, the v1 key adopted once, cleared at sign-out', async () => {
+  const { stripMcpUrl, droppedNote } = await import('./mcp-url.mjs');
+
+  // The key: per user, not per org — a profile is a destination, not org data.
+  assert.equal(deployProfilesKey('ada'), 'deployProfiles.v2:ada');
+  assert.equal(deployProfilesKey(null), 'deployProfiles.v2:local', 'the open and token postures');
+  assert.equal(deployProfilesKey(''), 'deployProfiles.v2:local');
+
+  // One profile as it may be stored: the URL's safe form, the rest as given;
+  // nothing at all when what was typed is no URL (no name rule can read it).
+  assert.deepEqual(safeDeployProfile({ folder: 'obs', product: 'grafana', mcpUrl: ' https://u:p@mcp.test/obs?api_key=X&tier=y#f ' }, stripMcpUrl),
+    { profile: { folder: 'obs', product: 'grafana', mcpUrl: 'https://mcp.test/obs?tier=y' }, dropped: ['api_key'], notUrl: false });
+  assert.deepEqual(safeDeployProfile({ mcpUrl: 'https://mcp.test/obs?token=A&pwd=B' }, stripMcpUrl),
+    { profile: { mcpUrl: 'https://mcp.test/obs' }, dropped: ['token', 'pwd'], notUrl: false });
+  assert.deepEqual(safeDeployProfile({ mcpUrl: 'mcp.test/obs?token=abc' }, stripMcpUrl), { profile: { mcpUrl: '' }, dropped: [], notUrl: true }, 'no scheme: not a URL, not kept');
+  assert.deepEqual(safeDeployProfile({ mcpUrl: '' }, stripMcpUrl), { profile: { mcpUrl: '' }, dropped: [], notUrl: false }, 'no URL typed');
+  assert.deepEqual(safeDeployProfile({ folder: 'obs' }, stripMcpUrl), { profile: { folder: 'obs', mcpUrl: '' }, dropped: [], notUrl: false });
+  assert.deepEqual(safeDeployProfile(null, stripMcpUrl), { profile: { mcpUrl: '' }, dropped: [], notUrl: false });
+
+  // The status line: the lib's wording (the refresh note's), pointing at the auth field; nothing when stored as typed.
+  assert.equal(deployProfileSavedText('Prod', { dropped: ['api_key'] }, droppedNote),
+    'profile "Prod" saved · not kept in the profile: the "api_key" parameter of the MCP URL, which looks like a credential — put a token in the auth field instead');
+  assert.equal(deployProfileSavedText('Prod', { dropped: ['token', 'pwd'] }, droppedNote),
+    'profile "Prod" saved · not kept in the profile: the "token", "pwd" parameters of the MCP URL, which look like credentials — put a token in the auth field instead');
+  assert.equal(deployProfileSavedText('Prod', { notUrl: true }, droppedNote), 'profile "Prod" saved · not kept in the profile: the MCP URL, which is not a URL (scheme://host/…)');
+  assert.equal(deployProfileSavedText('Prod', { dropped: [] }, droppedNote), null);
+  assert.equal(deployProfileSavedText('Prod', {}, droppedNote), null);
+
+  // The pre-slice-3 map: every URL stripped, a name this user already has keeps the stored profile, garbage is {}.
+  const v1 = JSON.stringify({
+    Prod: { targetUrl: 'https://grafana.test', folder: 'obs', product: 'grafana', version: '12', mcpUrl: 'https://u:p@mcp.test/obs?token=SECRET&tier=gold#f' },
+    Local: { mcpUrl: 'mcp.test/obs?token=abc' },
+    Bare: { folder: 'x' },
+    junk: 'not a profile',
+  });
+  const m = migrateDeployProfiles(v1, null, stripMcpUrl);
+  assert.deepEqual(m, {
+    profiles: {
+      Prod: { targetUrl: 'https://grafana.test', folder: 'obs', product: 'grafana', version: '12', mcpUrl: 'https://mcp.test/obs?tier=gold' },
+      Local: { mcpUrl: '' },
+      Bare: { folder: 'x', mcpUrl: '' },
+    },
+    dropped: { Prod: ['token'] },
+  });
+  assert.ok(!JSON.stringify(m).includes('SECRET') && !JSON.stringify(m).includes('abc') && !JSON.stringify(m).includes('u:p@'), 'no credential survives the migration');
+  const m2 = migrateDeployProfiles(v1, JSON.stringify({ Prod: { mcpUrl: 'https://mcp.test/new' }, Stage: { mcpUrl: 'https://mcp.test/stage' } }), stripMcpUrl);
+  assert.deepEqual(Object.keys(m2.profiles).sort(), ['Bare', 'Local', 'Prod', 'Stage']);
+  assert.deepEqual(m2.profiles.Prod, { mcpUrl: 'https://mcp.test/new' }, 'the stored profile wins: already safe, and the newer');
+  for (const [legacy, current] of [['not json', '[1]'], [null, null], ['[1,2]', '"x"'], ['null', '{"a":1}']]) {
+    assert.deepEqual(migrateDeployProfiles(legacy, current, stripMcpUrl).profiles, {}, `garbage: ${legacy} / ${current}`);
+  }
+
+  // Sign-out: this login's remembered URLs, every deploy profile key (every user's, and v1), nothing else.
+  const store = new Map();
+  globalThis.localStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => { store.set(k, String(v)); },
+    removeItem: (k) => { store.delete(k); },
+    key: (i) => [...store.keys()][i] ?? null,
+    get length() { return store.size; },
+  };
+  try {
+    setSignedInLogin('ada');
+    setActiveOrg('acme');
+    assert.equal(deployProfilesKey(), 'deployProfiles.v2:ada', 'the active org is not in the key');
+    for (const [k, v] of [
+      ['mcpUrl.v2:ada:acme', 'https://mcp.acme.test/obs'], ['mcpUrl.v2:ada:bravo', 'https://mcp.bravo.test/obs'], ['mcpUrl.v2:bob:acme', 'https://mcp.bob.test/obs'], ['mcpUrl', 'x'],
+      ['deployProfiles.v2:ada', '{}'], ['deployProfiles.v2:bob', '{}'], ['deployProfiles.v2:local', '{}'], ['deployProfiles.v1', '{}'],
+      ['studioTheme', 'dark'],
+    ]) store.set(k, v);
+    forgetMcpUrls('ada');
+    assert.deepEqual([...store.keys()].sort(), ['mcpUrl.v2:bob:acme', 'studioOrg.v1', 'studioTheme']);
+  } finally {
+    setActiveOrg(null);
+    setSignedInLogin(null);
+    delete globalThis.localStorage;
+  }
+
+  // The studio: app.mjs names no key (storage is api.mjs's); the modal
+  // stores through storeDeployProfile and puts its text on the status
+  // line; the legacy key is read in loadDeployProfiles only, and removed
+  // there; the adoption runs at boot once the login is known.
+  const app = withoutComments(readFileSync(join(STUDIO, 'app.mjs'), 'utf8'));
+  assert.doesNotMatch(app, /['"`]deployProfiles|localStorage\.[gs]etItem\(['"`]deploy/, 'no key literal in app.mjs');
+  const save = functionSource(app, 'saveDeployProfile');
+  assert.match(save, /note = await storeDeployProfile\(name, \{/);
+  assert.match(save, /mcpUrl:\s+\$\('#deploy-target-mcp'\)\.value\.trim\(\),/);
+  assert.match(save, /setDeployStatus\(note \|\| '', note \? 'ok' : ''\);/);
+  const apiSrc = withoutComments(readFileSync(join(STUDIO, 'api.mjs'), 'utf8'));
+  assert.equal((apiSrc.match(/getItem\(LEGACY_DEPLOY_PROFILES_KEY\)/g) || []).length, 1, 'v1 is read in one place');
+  const load = functionSource(apiSrc, 'loadDeployProfiles');
+  assert.ok(load.indexOf('getItem(LEGACY_DEPLOY_PROFILES_KEY)') < load.indexOf('migrateDeployProfiles(legacy,') && load.indexOf('migrateDeployProfiles(legacy,') < load.indexOf('removeItem(LEGACY_DEPLOY_PROFILES_KEY)'),
+    'read, migrated, then removed');
+  const bootSrc = functionSource(app, 'boot');
+  assert.ok(bootSrc.indexOf('await loadIdentity();') < bootSrc.indexOf('loadDeployProfiles()'), 'adopted at boot, once the login is known');
+  assert.match(functionSource(app, 'setupIdentityChip'), /forgetMcpUrls\(me\.user\?\.login\);/);
+});
+
 // ---------- completeness: every route is classified and guarded (§14.1) ----------
 //
 // The expected class of every route, written from STORE_PLAN §5 — NOT

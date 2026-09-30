@@ -112,11 +112,14 @@ export function recallMcpUrl() {
   try { return localStorage.getItem(mcpUrlKey()) || null; } catch { return null; }
 }
 
+// The safety rule (tools/lib/mcp-url-safety.mjs), loaded at call time —
+// never statically: the Node suites that import this module have no /lib/.
+let mcpUrlSafety = null;
+const loadMcpUrlSafety = () => mcpUrlSafety || (mcpUrlSafety = import('/lib/mcp-url-safety.mjs'));
+
 // Stores the safe form; returns the names of the parameters it dropped.
-// The rule is loaded at call time — never statically: the Node suites that
-// import this module have no /lib/.
 export async function rememberMcpUrl(url) {
-  const { stripMcpUrl } = await import('/lib/mcp-url-safety.mjs');
+  const { stripMcpUrl } = await loadMcpUrlSafety();
   const { safe, dropped } = stripMcpUrl(url);
   try {
     localStorage.removeItem(LEGACY_MCP_URL_KEY);
@@ -125,15 +128,120 @@ export async function rememberMcpUrl(url) {
   return dropped;
 }
 
-// Every URL this login remembered, in every org, and the legacy key.
+// ---------- deploy target profiles (per user) ----------
+//
+// The deploy modal's saved targets (name → { targetUrl, folder, product,
+// version, mcpUrl }). Stored under deployProfiles.v2:<login or 'local'> —
+// per user, not per org: a profile is a destination the user deploys to,
+// not the org's data — each MCP URL in its safe form, as the remembered
+// URL is (stripMcpUrl: no userinfo, fragment or credential parameter, and
+// nothing at all when it is not a URL; a token belongs in the auth field),
+// and cleared at sign-out with the remembered URLs. The pre-slice-3 key
+// 'deployProfiles.v1' (one map for the whole browser, its URLs as typed)
+// is adopted once — every URL stripped, the map written under this
+// user's key, the key removed — and never read again.
+const DEPLOY_PROFILES_KEY_PREFIX = 'deployProfiles.v2:';
+const LEGACY_DEPLOY_PROFILES_KEY = 'deployProfiles.v1';
+export const deployProfilesKey = (login = signedInLogin) => `${DEPLOY_PROFILES_KEY_PREFIX}${login || 'local'}`;
+
+// A stored map (name → profile object), or {} for anything else: absent,
+// malformed, not an object; an entry that is no object is left out.
+function parseProfiles(text) {
+  if (typeof text !== 'string') return {};
+  let map;
+  try { map = JSON.parse(text); } catch { return {}; }
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return {};
+  return Object.fromEntries(Object.entries(map).filter(([, p]) => p && typeof p === 'object' && !Array.isArray(p)));
+}
+
+// Pure. One profile as it may be stored: its MCP URL in the safe form, the
+// other fields as given. { profile, dropped, notUrl }: the (decoded) names
+// of the parameters removed, and notUrl when something was typed that is
+// no URL — kept as nothing, since no name rule can read it. The rule is
+// handed in (the studio's is loaded from /lib; a test's from tools/lib).
+export function safeDeployProfile(profile, stripMcpUrl) {
+  const p = profile && typeof profile === 'object' ? profile : {};
+  const typed = String(p.mcpUrl ?? '').trim();
+  const { safe, dropped } = stripMcpUrl(typed);
+  return { profile: { ...p, mcpUrl: safe || '' }, dropped, notUrl: Boolean(typed) && !safe };
+}
+
+// Pure. The map to store when the pre-slice-3 key is found: its profiles,
+// each stripped, under the ones this user already has (a name in both
+// keeps the stored one: already safe, and the newer). `legacy` and
+// `current` are the keys' texts (null when absent). { profiles, dropped }
+// — dropped per legacy profile name, the parameters it lost.
+export function migrateDeployProfiles(legacy, current, stripMcpUrl) {
+  const profiles = {};
+  const dropped = {};
+  for (const [name, p] of Object.entries(parseProfiles(legacy))) {
+    const r = safeDeployProfile(p, stripMcpUrl);
+    profiles[name] = r.profile;
+    if (r.dropped.length) dropped[name] = r.dropped;
+  }
+  return { profiles: { ...profiles, ...parseProfiles(current) }, dropped };
+}
+
+// Pure. What the deploy modal's status line says after a save: null when
+// the profile is stored as typed; else what was not kept — worded as the
+// refresh panel's note is (the lib's droppedNote, handed in as stripMcpUrl
+// is) — and where a token goes: the auth field.
+export function deployProfileSavedText(name, { dropped = [], notUrl = false } = {}, droppedNote) {
+  const why = notUrl
+    ? 'not kept in the profile: the MCP URL, which is not a URL (scheme://host/…)'
+    : droppedNote(dropped, { where: 'not kept in the profile' });
+  return why ? `profile "${name}" saved · ${why}` : null;
+}
+
+function writeDeployProfiles(profiles) {
+  try { localStorage.setItem(deployProfilesKey(), JSON.stringify(profiles)); } catch { /* storage unavailable: nothing kept */ }
+}
+
+// This user's profiles — after adopting the pre-slice-3 key when it is
+// there (once: it is removed, and only once its profiles are written
+// stripped under this user's key). {} when storage is unavailable.
+export async function loadDeployProfiles() {
+  try {
+    const legacy = localStorage.getItem(LEGACY_DEPLOY_PROFILES_KEY);
+    if (legacy === null) return parseProfiles(localStorage.getItem(deployProfilesKey()));
+    const { stripMcpUrl } = await loadMcpUrlSafety();
+    const { profiles } = migrateDeployProfiles(legacy, localStorage.getItem(deployProfilesKey()), stripMcpUrl);
+    localStorage.setItem(deployProfilesKey(), JSON.stringify(profiles));
+    localStorage.removeItem(LEGACY_DEPLOY_PROFILES_KEY);
+    return profiles;
+  } catch { return {}; }
+}
+
+// Stores one profile in its safe form; returns the status line's text
+// (null when the profile is stored as typed).
+export async function storeDeployProfile(name, profile) {
+  const { stripMcpUrl, droppedNote } = await loadMcpUrlSafety();
+  const profiles = await loadDeployProfiles();
+  const { profile: safe, dropped, notUrl } = safeDeployProfile(profile, stripMcpUrl);
+  profiles[name] = safe;
+  writeDeployProfiles(profiles);
+  return deployProfileSavedText(name, { dropped, notUrl }, droppedNote);
+}
+
+export async function removeDeployProfile(name) {
+  const profiles = await loadDeployProfiles();
+  delete profiles[name];
+  writeDeployProfiles(profiles);
+}
+
+// At sign-out: every URL this login remembered, in every org, and the
+// legacy key — and every deploy target profile in the browser (every
+// user's, and the pre-slice-3 key): a shared browser keeps neither past
+// a sign-out.
 export function forgetMcpUrls(login = signedInLogin) {
   try {
     const prefix = `${MCP_URL_KEY_PREFIX}${login || 'local'}:`;
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const k = localStorage.key(i);
-      if (k && k.startsWith(prefix)) localStorage.removeItem(k);
+      if (k && (k.startsWith(prefix) || k.startsWith(DEPLOY_PROFILES_KEY_PREFIX))) localStorage.removeItem(k);
     }
     localStorage.removeItem(LEGACY_MCP_URL_KEY);
+    localStorage.removeItem(LEGACY_DEPLOY_PROFILES_KEY);
   } catch { /* storage unavailable */ }
 }
 
