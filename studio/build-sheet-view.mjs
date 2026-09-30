@@ -5,7 +5,7 @@
 // anchored to the right edge over the stack — role=dialog, labelled by its
 // title, Esc closes, focus moves in and returns to the slab head, the stack
 // stays visible and dimmed, one sheet at a time — with a large title (`L1 ·
-// Contract`), the layer's question, the layer's clauses at the tier with
+// SLI/SLO`), the layer's question, the layer's clauses at the tier with
 // their state (the same clause row the slabs and the summary draw), then
 // the layer's options:
 //

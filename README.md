@@ -72,8 +72,8 @@ column** on the left — the service, the tier as a segmented control (each
 segment with its MUST · SHOULD counts), the library entries as chips, the
 conformance summary (pass · on a placeholder · fail, the failing clauses,
 todos and placeholders left) — and, as the main surface, **the layer stack of
-the pack being compiled** — L1 Contract · L2 Telemetry · L3 Insight · L4 Action
-(policy · alerting · self-healing) · L5 Validation · GOV — drawn through the
+the pack being compiled** — L1 SLI/SLO · L2 Metrics/Logs/Traces · L3 Dashboards/Recording
+Rules · L4 Alerts/Policy/Self-healing (policy · alerting · self-healing) · L5 Self-check · GOV — drawn through the
 same adapter and the same artefact cards Discover uses, so what you build is
 exactly what Discover shows afterwards. Each slab's edge carries the rubric's
 verdict for that layer (green pass, amber pass on a placeholder, red fail —
@@ -146,12 +146,20 @@ Create or load a pack:
 
 The Discover view renders the observability Observogram across the layered model:
 
-- L1 Contract: SLIs and SLOs
-- L2 Telemetry: OTel, backends, collectors, pipelines
-- L3 Insight: recording rules, dashboards, derived views
-- L4 Action: alerts, routes, remediations
-- L5 Validation: baselines, synthetics, chaos, release checks
-- GOV: ownership and governance metadata
+- L1 SLI/SLO (the spec's *Contract*): SLIs and SLOs
+- L2 Metrics/Logs/Traces (*Telemetry*): OTel, backends, collectors, pipelines
+- L3 Dashboards/Recording Rules (*Insight*): recording rules, dashboards, derived views
+- L4 Alerts/Policy/Self-healing (*Action*): alerts, routes, remediations
+- L5 Self-check (*Validation*): baselines, synthetics, chaos, release checks
+- GOV Governance: ownership and governance metadata
+
+The studio names each layer by what sits on it; the spec's own layer names stay
+in a tooltip on the layer overview.
+
+An open layer lists its artefacts in one of four views: **List** (the name and a
+status mark), **Tiles** (the name with its kind, bound and status), **Cards** (the
+earlier card grid: ID, source, name, bound, summary, type and tags) or **Details**
+(the full row, the default). Selecting an artefact opens its full record in any of them.
 
 ![Observogram Discover view showing the layered observability inventory](docs/img/xray-discover.png)
 

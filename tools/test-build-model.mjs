@@ -1269,12 +1269,12 @@ test('the maturity number says the split: the pass share, then the share that pa
   assert.equal(rowOf(html, 'L1')[1], '100%', 'all pass: one number, no placeholder share');
   assert.ok(!/build-maturity-pct">100% <span/.test(html), 'a placeholder share is never printed beside a 100% pass');
   // The bar carries the counts for a screen reader (the segments are empty spans).
-  assert.ok(html.includes('<span class="build-maturity-bar" role="img" aria-label="L5 Validation: 0 pass, 2 need a real value, 0 fail of 2 clauses">'));
-  assert.ok(html.includes('aria-label="L2 Telemetry: 3 pass, 2 need a real value, 0 fail of 5 clauses"'));
+  assert.ok(html.includes('<span class="build-maturity-bar" role="img" aria-label="L5 Self-check: 0 pass, 2 need a real value, 0 fail of 2 clauses">'));
+  assert.ok(html.includes('aria-label="L2 Metrics/Logs/Traces: 3 pass, 2 need a real value, 0 fail of 5 clauses"'));
   // Dashboards off: L3 reads 50% (2 of 4 pass), the failing half is the red segment.
   const off = render(draft({ result: { ...draft().result, summary: DASHBOARDS_OFF_SUMMARY } }));
   assert.equal(rowOf(off, 'L3')[1], '50%');
-  assert.ok(off.includes('aria-label="L3 Insight: 2 pass, 0 need a real value, 2 fail of 4 clauses"'));
+  assert.ok(off.includes('aria-label="L3 Dashboards/Recording Rules: 2 pass, 0 need a real value, 2 fail of 4 clauses"'));
 });
 
 test('a section switched off dims the slab it feeds (L4 per subgroup); the open slabs come from `expanded`', () => {
@@ -2246,7 +2246,7 @@ test('renderBuildSheet draws the dialog headlessly: the ARIA, the title and ques
   assert.ok(entering.includes('<div class="build-sheet-scrim is-entering" data-close') && entering.includes('<aside class="build-sheet is-edit is-pass is-entering" role="dialog"'));
   assert.equal(buildSheetModel({ layerId: 'L1', build: draft(), library: LIBRARY, requirements: T2, mode: 'edit' }).entering, false, 'off by default: a re-render never replays the entrance');
   assert.ok(!l1.includes('is-entering'));
-  assert.ok(l1.includes('<h2 class="build-sheet-title" id="build-sheet-title">L1 · Contract</h2>'));
+  assert.ok(l1.includes('<h2 class="build-sheet-title" id="build-sheet-title">L1 · SLI/SLO</h2>'));
   assert.ok(l1.includes('<p class="build-sheet-question" id="build-sheet-question">What should we measure?</p>'));
   assert.ok(l1.includes('class="build-sheet-close" data-close aria-label="Close the layer sheet (Esc)"'));
   assert.ok(l1.includes('Clauses at tier-2 <span class="build-sheet-count">3</span>'));
@@ -2549,7 +2549,7 @@ test('the sheet’s handlers write through the existing actions: close (button, 
 test('the slab head opens the layer’s sheet: aria-haspopup, the "+" affordance, the open layer marked; the inline clause list is gone', () => {
   const html = buildStackHtml(stackOf());
   assert.ok(html.includes('class="build-slab-edge" data-slab="L1" aria-haspopup="dialog" aria-expanded="false"'));
-  assert.ok(html.includes('class="build-slab-add" data-slab="L1" aria-haspopup="dialog" aria-expanded="false" aria-label="Open L1 · Contract — What should we measure?"'));
+  assert.ok(html.includes('class="build-slab-add" data-slab="L1" aria-haspopup="dialog" aria-expanded="false" aria-label="Open L1 · SLI/SLO — What should we measure?"'));
   assert.ok(html.includes('<span class="build-slab-toggle">What should we measure?</span>'), 'the head invites with the question; the clause count is in the section count');
   assert.ok(!html.includes('build-slab-clauses'), 'the clauses live on the sheet');
   const open = buildStackHtml(stackOf({ expanded: { L2: true } }));
