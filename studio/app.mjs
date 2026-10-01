@@ -18,7 +18,6 @@ import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } fr
 import {
   api, loadCatalog, validateUploaded, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel, deniedError, deployRefusal,
   setSignedInLogin, recallMcpUrl, rememberMcpUrl, forgetMcpUrls, signOutOthersText,
-  loadDeployProfiles, storeDeployProfile, removeDeployProfile,
 } from './api.mjs';
 import {
   effectiveFocus, focusedPackId, focusedEnv, focusedPack,
@@ -1534,14 +1533,6 @@ async function boot() {
   // header has to be resolved before the catalog loads.
   await loadIdentity();
   resolveActiveOrg();
-  // The deploy target profiles saved before slice 3 (one browser-wide key,
-  // URLs as typed) become this user's, stripped, now — not at the first
-  // deploy: no credential waits in localStorage until then. Not on a boot
-  // /auth/me answered "no session": the login is not known yet and the
-  // shell is about to redirect to sign-in — adopted now, the profiles
-  // would sit under 'local', where the signed-in user never sees them.
-  // (state.identity stays null in the open posture, which adopts here.)
-  if (state.identity?.authenticated !== false) loadDeployProfiles().catch(() => {});
   syncApiLink();
   try { await loadCatalog(); }
   catch (e) {
@@ -4031,6 +4022,8 @@ const draftMcpState = {
 // with the selected items.
 // ============================================================
 
+const DEPLOY_PROFILES_KEY = 'deployProfiles.v1';
+
 const deployModalState = {
   manifest: null,        // [{id, type, name, group, flavor, artifact, dashboardId, scope}]
   packId: null,
@@ -4208,23 +4201,24 @@ function updateDeployTargetSummary() {
   $('#deploy-target-summary').textContent = `Target: ${prof}  |  ${prod} ${ver}  |  ${url}`;
 }
 
-// ----- Profiles (studio/api.mjs: per user, each URL in its safe form) -----
+// ----- Profiles in localStorage -----
 
-function setDeployStatus(msg, kind = '') {
-  const el = $('#deploy-modal-status');
-  if (!el) return;
-  el.textContent = msg;
-  el.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
+function loadDeployProfiles() {
+  try { return JSON.parse(localStorage.getItem(DEPLOY_PROFILES_KEY) || '{}'); }
+  catch { return {}; }
 }
-async function populateDeployProfileSelect() {
+function saveDeployProfiles(profiles) {
+  try { localStorage.setItem(DEPLOY_PROFILES_KEY, JSON.stringify(profiles)); } catch (_) {}
+}
+function populateDeployProfileSelect() {
   const sel = $('#deploy-target-profile');
-  const profiles = await loadDeployProfiles();
+  const profiles = loadDeployProfiles();
   sel.innerHTML = '<option value="">(no profile — fill manually)</option>'
     + Object.keys(profiles).sort().map(k => `<option value="${escapeHtml(k)}">${escapeHtml(k)}</option>`).join('');
 }
-async function loadDeployProfile(name) {
+function loadDeployProfile(name) {
   if (!name) return;
-  const p = (await loadDeployProfiles())[name];
+  const p = loadDeployProfiles()[name];
   if (!p) return;
   $('#deploy-target-url').value     = p.targetUrl || '';
   $('#deploy-target-folder').value  = p.folder || '';
@@ -4233,37 +4227,31 @@ async function loadDeployProfile(name) {
   $('#deploy-target-mcp').value     = p.mcpUrl || '';
   updateDeployTargetSummary();
 }
-async function saveDeployProfile() {
+function saveDeployProfile() {
   const name = prompt('Profile name (e.g. "Prod Grafana"):', $('#deploy-target-profile').selectedOptions?.[0]?.value || '');
   if (!name) return;
-  let note;
-  try {
-    // Stored stripped (no credential parameter); the field keeps what was
-    // typed — this deploy still sends it.
-    note = await storeDeployProfile(name, {
-      targetUrl: $('#deploy-target-url').value.trim(),
-      folder:    $('#deploy-target-folder').value.trim(),
-      product:   $('#deploy-target-product').value,
-      version:   $('#deploy-target-version').value,
-      mcpUrl:    $('#deploy-target-mcp').value.trim(),
-    });
-  } catch (e) {
-    toast(`Profile not saved: ${e.message}`, 'error');
-    return;
-  }
-  await populateDeployProfileSelect();
+  const profiles = loadDeployProfiles();
+  profiles[name] = {
+    targetUrl: $('#deploy-target-url').value.trim(),
+    folder:    $('#deploy-target-folder').value.trim(),
+    product:   $('#deploy-target-product').value,
+    version:   $('#deploy-target-version').value,
+    mcpUrl:    $('#deploy-target-mcp').value.trim(),
+  };
+  saveDeployProfiles(profiles);
+  populateDeployProfileSelect();
   $('#deploy-target-profile').value = name;
   updateDeployTargetSummary();
-  // What was not kept, if anything, stays on the status line after the toast.
-  setDeployStatus(note || '', note ? 'ok' : '');
   toast(`Saved deploy profile: ${name}`);
 }
-async function deleteDeployProfile() {
+function deleteDeployProfile() {
   const name = $('#deploy-target-profile').value;
   if (!name) return;
   if (!confirm(`Delete deploy profile "${name}"?`)) return;
-  await removeDeployProfile(name);
-  await populateDeployProfileSelect();
+  const profiles = loadDeployProfiles();
+  delete profiles[name];
+  saveDeployProfiles(profiles);
+  populateDeployProfileSelect();
   toast(`Deleted profile: ${name}`);
 }
 
@@ -4372,7 +4360,11 @@ async function doDeployBulk() {
   const folder = $('#deploy-target-folder').value.trim();
   const product = $('#deploy-target-product').value;
   const version = $('#deploy-target-version').value;
-  const setStatus = setDeployStatus;
+  const statusEl = $('#deploy-modal-status');
+  const setStatus = (msg, kind) => {
+    statusEl.textContent = msg;
+    statusEl.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
+  };
   if (!url) { setStatus('mcp url required', 'error'); return; }
   // Deploy what the review shows: a selected row the type filter hides is
   // not counted, not reviewed — and so not deployed.
@@ -5195,7 +5187,7 @@ function setupIdentityChip() {
     others.disabled = false;
   });
   chip.querySelector('.hdr-user-out').addEventListener('click', async () => {
-    forgetMcpUrls(me.user?.login);   // a shared browser keeps no MCP URL or deploy profile of this user
+    forgetMcpUrls(me.user?.login);   // a shared browser keeps no MCP URL of this user
     await fetch('/auth/logout', { method: 'POST', headers: { ...authHeaders() } }).catch(() => {});
     window.location.assign('/auth/login');
   });
