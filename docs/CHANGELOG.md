@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### The studio in one visual language, as a design system downstream apps can vendor
+The screens had grown their own treatments: three typefaces (a serif for numbers and headings, a monospace for every label and button, a sans for the rest), a gradient per journey, a different card, pill and button on each screen. One system now sits over all of them, after the *Observogram Studio* revamp prototype. It restyles and moves nothing: layout, markup and behaviour stay in the screen stylesheets.
+
+Observogram is upstream of other apps, so the look is not buried in this studio's stylesheet. It is four files, three of them vendorable (docs/VENDORING.md, *The design system*):
+- **`studio/design-tokens.css`** — every value and nothing else: palette, type and measures as `--og-*` custom properties, light and dark. Names are semantic (`--og-accent`, `--og-second`, `--og-warn`, `--og-fail`), so a host re-themes by overriding tokens. `studio/design-tokens.json` is the same values for code that cannot read CSS (`node tools/gen-design-tokens.mjs --write`).
+- **`studio/design-kit.css`** — the pieces as `.og-*` classes over the tokens: button (primary, second, text), panel, callout, stat tile, pill, input, steps, the A/B letter. No global rule, no element selector, no positioning.
+- **`studio/design-bridge.css`** — defines the theme properties the already-vendored `verdict-ui.css` and `proto.css` expect from their host (`--card`, `--ink`, `--mono`, `--CMP`, `--pr-green` …) from the tokens, so a downstream gets those widgets in the same look without a theme of its own.
+- **`studio/reskin.css`** — this studio's adapter, not portable: it maps the chrome's own names (`--obs-*`, `--ux-*`) and the classes the screens grew onto the tokens. It decides no colour of its own.
+
+`tools/test-design-system.mjs` (in `npm test`) holds each file to its role: tokens only in the tokens file, every colour in both themes, the JSON equal to the CSS, the kit and the bridge reading tokens only, no colour literal in the adapter, no stylesheet reading a token that does not exist, and the load order. `studio/discover-board.mjs` joins the vendorable set (pure builders; one import, `escapeHtml`).
+
+What the system is:
+- **Type.** One sans throughout (`Inter`, then the system UI face); `--serif` and the label `--mono` resolve to it, and nothing is set in italics for style. Monospace is kept for code only — queries, YAML, `pre`/`code` — as `--code`.
+- **Colour.** One page colour, one panel, one line. Lime is the primary action and "where I am" (the current step, the pressed option, Pack A); purple is the second voice (Pack B, the Build journey); amber is attention, rose is what fails. The studio's existing tokens (`--paper`, `--card`, `--ink…`, `--obs-*`, `--ux-*`, `--CMP`, `--BLD`, `--cmp-a/b`) are mapped onto the palette, so every rule that reads them is re-skinned without being rewritten. Both themes are defined; the layer colours (L1–GOV) stay, as data.
+- **Surfaces and controls.** A panel is a 1px line and a 9px radius, with no glow or gradient; a tone is a line down the panel's edge and the colour of its numbers, not a wash. One primary button (lime), one secondary (outlined), one text button; pills with a 5px radius; stat tiles as a quiet label, one number and one line; the stepper as plain steps with the current one underlined.
+- **Home.** The two journeys are cards with their own call to action (*Inspect a service*, *Create a pack*).
+- **The chrome's height is measured** like the context bar's (`--observa-chrome-h`), so what pins under the two bars follows the real heights whatever the type.
+
 ### Fixed: Discover is a catalogue again — no verdict before there is a reference
 The UX review made every screen answer "what needs my attention, what can I do next", Discover included. But Discover is the catalogue of one pack: with only Pack A loaded nothing live was checked and nothing was compared, so *0 with live evidence* and *N need attention* read as findings against a reference that does not exist. Removed from Discover (`studio/layers-view.mjs`): the decision sentence with its **Review what needs attention** and **Open the assessment** buttons, causes and measures (*Live evidence found*, *Declared only*, *Template values to complete*); the **Show** task filters (*Needs attention · Missing evidence · Template value · Live evidence · All*) and their default to *Needs attention*, which hid most of the catalogue on arrival; each layer's evidence split, *N need attention* / *Nothing needs attention* and *required checks not met* chips; the rubric line inside an open layer. `DISCOVER_TASKS`, `matchesTask` and `state.discoverTask` are gone with the filters; `tools/test-discover-rows.mjs` now holds the screen to this (no verdict, evidence count, task filter or next step in the Discover source).
 
