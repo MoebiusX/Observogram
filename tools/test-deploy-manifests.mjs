@@ -295,8 +295,8 @@ function smp(base, patch, key) {
 }
 
 // --- the README's rollback names two distinct images ---
-// The pre-store release is the git tag v0.4.0 and this build is still 0.4.0
-// in package.json, so an image tagged with the package version may be either
+// The pre-store release is the git tag v0.4.0, and develop builds up to 0.5.0
+// said 0.4.0 in package.json too, so an image tagged 0.4.0 may be either
 // build: the store image comes from the Deployment, the old one has a tag of
 // its own, or `kubectl set image … studio=$OLD_IMAGE` changes nothing.
 {

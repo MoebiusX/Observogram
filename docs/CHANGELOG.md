@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.5.0 — 2026-10-01
+
+**The build-and-compare release.** A pack can now be built as well as inspected: the Build journey (Define, Compile, Verify) with a seed, an editor and spec 1.3. The studio stores its state in a database, with local and OIDC sign-in, roles enforced on every route, organisations and deploy profiles. The monitor-of-monitors work continues with early-warning delivery, the neuron view and inventory coverage. The studio was reviewed and redrawn: the pack operations in the header, Compare as Pack A beside Pack B, Discover as a board that judges nothing, one visual language as a design system downstream apps can vendor. And the use case the product stands on now holds: a repository scan and the live draft of the same system match, with what the live side could not look at reported as not checked instead of missing. Also: routes match case-sensitively (the 0.4.1 hotfix on `main`, #118, is the same fix).
+
 ### Scan a repository, draft from live, compare: the same system now matches
 The use case the product stands on — scan a service's repository, draft a pack from the live system it deploys, compare — reported 68% overlap on a real platform (253 of 371 artefacts in both, 88 "only in the repo", 30 "only live", 1 drifted). Almost none of that was drift. The two readers described the same system in different artefacts, and the comparison called everything the live side could not see "missing". On the same platform it is now 281 in both, all aligned, nothing "only live", 15 reported as *not checked*, and 38 only in the repo — metrics the repository declares or queries that have no series in production, each confirmed against the metrics store.
 
