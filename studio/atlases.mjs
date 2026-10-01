@@ -14,12 +14,17 @@
 //   { a: layeredPack, b: layeredPack, diff: diffResult }.
 // opts.onArtefactClick(artefact, layerId) opens the drawer in app.mjs.
 
-import { LAYER_NAMES as SHARED_LAYER_NAMES } from './constants.mjs';
-
 const LAYERS = ['L1', 'L2', 'L3', 'L4', 'L5', 'GOV'];
 
-// The layer names the screens use (constants.mjs LAYER_DEFS; L2X is the spec v1.2 RFC-0001 sibling layer).
-const LAYER_NAMES = SHARED_LAYER_NAMES;
+const LAYER_NAMES = {
+  L1:  'Contract',
+  L2:  'Telemetry',
+  L2X: 'Extended',     // spec v1.2 RFC-0001 sibling layer
+  L3:  'Insight',
+  L4:  'Action',
+  L5:  'Validation',
+  GOV: 'Governance',
+};
 
 // Layer hex palette mirroring the CSS variables — SVG attributes need
 // explicit colors at definition time so we can build patterns/gradients
@@ -768,8 +773,7 @@ function renderSkyline(host, { a, b, diff }, opts = {}) {
   }
 
   const VB_W = 1100, VB_H = 560;
-  // The gutters hold the longest layer label ('L3 · Dashboards/Recording Rules').
-  const PAD_L = 240, PAD_R = 230, PAD_T = 40, PAD_B = 50;
+  const PAD_L = 220, PAD_R = 200, PAD_T = 40, PAD_B = 50;
   const plotW = VB_W - PAD_L - PAD_R, plotH = VB_H - PAD_T - PAD_B;
 
   let svg = `<svg viewBox="0 0 ${VB_W} ${VB_H}" class="skyline-svg atlas-svg" xmlns="http://www.w3.org/2000/svg" font-family="IBM Plex Sans, system-ui">`;
@@ -832,7 +836,7 @@ function renderSkyline(host, { a, b, diff }, opts = {}) {
     }
 
     svg += `<g class="slope-left" data-layer="${e.L}" data-side="a" style="cursor:pointer">
-      <rect x="${PAD_L - 230}" y="${e.labelYL - 13}" width="220" height="26" fill="transparent"/>
+      <rect x="${PAD_L - 200}" y="${e.labelYL - 13}" width="190" height="26" fill="transparent"/>
       <text x="${PAD_L - 14}" y="${e.labelYL - 2}" text-anchor="end"
         style="font-family:'IBM Plex Mono', monospace; font-size:11px; font-weight:600; fill:${e.color};">${e.L} · ${LAYER_NAMES[e.L]}</text>
       <text x="${PAD_L - 14}" y="${e.labelYL + 11}" text-anchor="end"
@@ -917,8 +921,7 @@ function renderTransit(host, { a, b, diff }, opts = {}) {
   }
 
   const VB_W = 1100, VB_H = 720;
-  // The lines start past the longest layer name ('Dashboards/Recording Rules', drawn from x=20).
-  const X_LEFT = 230, X_RIGHT = 1020;
+  const X_LEFT = 160, X_RIGHT = 1020;
   const Y = { L1: 100, L2: 190, L3: 280, L4_POL: 340, L4_ALR: 380, L4_HEAL: 420, L5: 520, GOV: 600 };
   const CARD = '#11192A', INK_3 = '#9BA3AD';
 
@@ -1024,8 +1027,8 @@ function renderTransit(host, { a, b, diff }, opts = {}) {
   }
 
   // L4 — junction + 3 branches
-  const JX = X_LEFT - 20, JY = Y.L4_ALR;
-  svg += lineLabel('L4', JY, LAYER_NAMES.L4);
+  const JX = 200, JY = Y.L4_ALR;
+  svg += lineLabel('L4', JY, 'Action');
   svg += `<line x1="${JX}" y1="${JY}" x2="${X_RIGHT + 20}" y2="${JY}"
     stroke="${TRANSIT_C.L4}" stroke-width="7" stroke-linecap="round"/>`;
   const POL_X0 = JX + 40, HEAL_X0 = JX + 40;
@@ -1165,8 +1168,7 @@ function renderArbor(host, { a, b, diff }, opts = {}) {
     const INK = '#3B2F1E', INK_SOFT = '#7A6A50';
     const ROOT_X = VB_W / 2, ROOT_Y = VB_H - 60;
     const Y = { L1: 640, L2: 520, L3: 400, L4: 290, L5: 180, GOV: 90 };
-    // The left gutter holds the longest layer name, right-anchored at X_LEFT - 50.
-    const X_LEFT = 200, X_RIGHT = VB_W - 200;
+    const X_LEFT = 100, X_RIGHT = VB_W - 100;
 
     // Synthesise per-layer list — include B-only items as gap "buds"
     // (only when otherPack exists).

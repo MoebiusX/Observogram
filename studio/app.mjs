@@ -153,7 +153,6 @@ async function rehydrateFromPersistence() {
   if (typeof saved.layersSearch === 'string') state.layersSearch = saved.layersSearch;
   if (typeof saved.layersDomain === 'string') state.layersDomain = saved.layersDomain;
   if (typeof saved.discoverTask === 'string') state.discoverTask = saved.discoverTask;
-  if (['list', 'tiles', 'cards', 'details'].includes(saved.discoverDetail)) state.discoverDetail = saved.discoverDetail;
   if (['summary', 'review', 'all'].includes(saved.compareFocus)) state.compareFocus = saved.compareFocus;
 
   // Make sure the picker can label an archived example by pushing the

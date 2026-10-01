@@ -2,9 +2,8 @@
 //
 // Discover's artefact rows (studio/card-html.mjs artefactRowHtml and its pure
 // helpers): the four-property status split, the task filters' definitions,
-// the "Inferred from recording rule" relationship, a row that leads with
-// name + what it does + status while the id and tags wait in Details, and the
-// View control's lighter drawings of that row (Cards, Tiles, List).
+// the "Inferred from recording rule" relationship, and a row that leads with
+// name + what it does + status while the id and tags wait in Details.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,7 +13,6 @@ import { adapt } from './lib/adapter.mjs';
 import { inferSlisFromRecordingRules } from './lib/sli-inference.mjs';
 import {
   artefactRowHtml, artefactStatus, matchesTask, inferredFrom, resolveInferredRule, artefactKind, DISCOVER_TASKS, artefactCardHtml,
-  DISCOVER_VIEWS, DISCOVER_VIEW_DEFAULT, discoverView, artefactLightRowHtml, artefactStatusMark, artefactStatusWords, STATUS_MARKS,
 } from '../studio/card-html.mjs';
 
 const allArtefacts = (pack) => Object.values(pack.layers).flatMap(v => (Array.isArray(v) ? v : Object.values(v).flat()));
@@ -124,90 +122,8 @@ test('a row leads with name + what it does + status; the id and tags wait in Det
   assert.ok(!qry.includes('dv-row-spec') && qry.includes('<dt>Summary</dt><dd>recording rule @ 30s</dd>'), 'a summary that repeats the kind waits in Details');
 });
 
-test('View has four degrees of detail, least first; Details is the full row and the default', () => {
-  assert.deepEqual(DISCOVER_VIEWS.map(v => v.id), ['list', 'tiles', 'cards', 'details']);
-  assert.ok(DISCOVER_VIEWS.every(v => v.label && v.tip && v.cap > 0));
-  assert.deepEqual(DISCOVER_VIEWS.map(v => v.cap), [...DISCOVER_VIEWS.map(v => v.cap)].sort((a, b) => b - a), 'a lighter view draws more rows before "Show all"');
-  assert.equal(DISCOVER_VIEW_DEFAULT, 'details');
-  assert.equal(discoverView('tiles').id, 'tiles');
-  assert.equal(discoverView('icons').id, 'details', 'an unknown (stale persisted) view is Details');
-  assert.equal(discoverView(undefined).id, 'details');
-  const sli = { id: 'SLI-01', title: 'slo_http', subtitle: '≤ 0.5 seconds', desc: 'Share of good requests', source: 'Verified', tags: ['sli'], spec: { description: 'Share of good requests' } };
-  const opts = { broken: 1, outsideFilter: true };
-  assert.equal(artefactRowHtml(sli, opts), artefactRowHtml(sli, { ...opts, view: 'details' }), 'no view is the full row');
-  assert.equal(artefactRowHtml(sli, { ...opts, view: 'tiles' }), artefactLightRowHtml(sli, { ...opts, view: 'tiles' }));
-  assert.equal(artefactRowHtml(sli, { ...opts, view: 'list' }), artefactLightRowHtml(sli, { ...opts, view: 'list' }));
-  const src = fs.readFileSync(new URL('../studio/app.mjs', import.meta.url), 'utf8');
-  assert.ok(src.includes(`[${DISCOVER_VIEWS.map(v => `'${v.id}'`).join(', ')}].includes(saved.discoverDetail)`), 'a reload restores only a known view');
-});
-
-test('each lighter view draws less of the same artefact, and still opens the full record', () => {
-  const sli = { id: 'SLI-01', title: 'slo_http_<b>', subtitle: '≤ 0.5 seconds', desc: 'Share of good requests', source: 'Verified', tags: ['sli'], defines: 'slis.slo_http', spec: { description: 'Share of good requests' } };
-  const details = artefactRowHtml(sli);
-  const card = artefactRowHtml(sli, { view: 'cards' });
-  const tile = artefactRowHtml(sli, { view: 'tiles' });
-  const line = artefactRowHtml(sli, { view: 'list' });
-  assert.ok(line.length < tile.length && tile.length < details.length && card.length < details.length);
-  for (const html of [details, card, tile, line]) {
-    assert.equal(html.match(/class="[^"]*\bdv-row-main"/g).length, 1, 'one button opens the full record in every view');
-    assert.ok(!html.includes('<b>') && html.includes('slo_') && html.includes('&lt;b&gt;'));
-  }
-  // Cards: the card the Build stack draws (id, source word, title, bound, summary, tags), its title the button.
-  assert.ok(card.includes('<span class="card-id">SLI-01</span>') && card.includes('<span class="card-source" data-source="Verified">Verified</span>'));
-  assert.ok(card.includes('<button type="button" class="card-title dv-row-main" title="Open the full record">slo_http_&lt;b&gt;</button>'));
-  assert.ok(card.includes('<div class="card-sub">≤ 0.5 seconds</div>') && card.includes('<div class="card-desc">Share of good requests</div>') && card.includes('<span class="tag">sli</span>'));
-  assert.ok(!card.includes('<details') && !card.includes('ux-chip') && !card.includes('dv-row-what'));
-  const plain = artefactCardHtml(sli);
-  assert.equal(card.replace(/<button type="button" class="card-title dv-row-main" title="Open the full record">(.*?)<\/button>/, '<div class="card-title">$1</div>'), plain, 'the same body as the Build stack card, but for the title button');
-  assert.ok(artefactRowHtml(sli, { view: 'cards', broken: 2, outsideFilter: true, benchmark: { slug: 'grafana', refPackId: 'ref', label: 'Grafana' } })
-    .match(/ref-indicator[\s\S]*benchmark-cta[\s\S]*<span class="card-note">Open in the detail panel · outside this filter<\/span>/), 'the card keeps its flags, the benchmark and the pinned note');
-  // Tiles: name, kind, bound and status chips; what it does and Details are left out.
-  assert.ok(tile.includes('Service level indicator') && tile.includes('≤ 0.5 seconds'));
-  assert.ok(tile.includes('ux-chip-evidence') && tile.includes('>Live</span>') && tile.includes('The live platform reports this signal'), 'a short chip keeps its tooltip');
-  assert.ok(tile.indexOf('dv-row-name') < tile.indexOf('dv-row-kind') && tile.indexOf('dv-row-kind') < tile.indexOf('dv-row-status'));
-  assert.ok(!tile.includes('dv-row-what') && !tile.includes('<details') && !tile.includes('SLI-01'));
-  // List: the name and a mark; kind, bound and status are words, not chips.
-  assert.ok(line.includes('dv-mark dv-mark-live') && !line.includes('ux-chip'));
-  assert.ok(!line.includes('dv-row-kind') && !line.includes('dv-row-bound') && !line.includes('<details'));
-  assert.ok(line.includes('title="Service level indicator · ≤ 0.5 seconds · Live evidence found"'));
-  assert.ok(line.includes('<span class="sr-text">Service level indicator. ≤ 0.5 seconds. Live evidence found.</span>'), 'the mark is never the only cue');
-  assert.ok(/aria-hidden="true"><\/span>/.test(line));
-  // A long name wraps after a separator, not mid-word.
-  assert.ok(artefactLightRowHtml({ id: 'QRY-01', title: 'slo:http_requests:error-ratio.5m' }, { view: 'list' })
-    .includes('slo:<wbr>http_<wbr>requests:<wbr>error-<wbr>ratio.<wbr>5m</span>'));
-  // …and a number stays whole: no break between digits or after a leading minus.
-  const nameOf = (title) => /<span class="dv-row-name">(.*?)<\/span>/.exec(artefactLightRowHtml({ id: 'X-01', title }, { view: 'list' }))[1];
-  assert.equal(nameOf('OTel SemConv 1.27.0'), 'OTel SemConv 1.27.0');
-  assert.equal(nameOf('p99.9 at 12:30 -5% base@1.4 sev1-3'), 'p99.9 at 12:30 -5% base@1.4 sev1-3');
-  assert.equal(nameOf('a-1 b_2 v1.x'), 'a-<wbr>1 b_<wbr>2 v1.<wbr>x', 'a letter beside the separator still breaks');
-  // The row's state survives the lighter views.
-  const scaffold = { id: 'POL-01', title: 'x', source: 'Scaffold' };
-  const pinnedTile = artefactLightRowHtml(scaffold, { broken: 2, outsideFilter: true, view: 'tiles' });
-  assert.ok(pinnedTile.includes('Template value') && pinnedTile.includes('>2 unresolved</span>') && pinnedTile.includes('outside this filter'));
-  const pinnedLine = artefactLightRowHtml(scaffold, { broken: 2, outsideFilter: true, view: 'list' });
-  assert.ok(pinnedLine.includes('dv-mark-broken') && pinnedLine.includes('Template value. 2 unresolved references. Open in the detail panel, outside this filter.'));
-});
-
-test('one status mark per artefact: what a person must act on wins, and every mark has words and a shape', () => {
-  const mark = (source, broken = 0) => artefactStatusMark(artefactStatus({ source }, { broken }));
-  assert.equal(mark('Verified'), 'live');
-  assert.equal(mark('Declared'), 'declared');
-  assert.equal(mark('Scaffold'), 'needsInput');
-  assert.equal(mark('Verified', 1), 'broken');
-  assert.equal(mark('Scaffold', 1), 'broken');
-  assert.deepEqual(artefactStatusWords(artefactStatus({ source: 'Scaffold' }, { broken: 1 })), ['Template value', '1 unresolved reference']);
-  assert.deepEqual(artefactStatusWords(artefactStatus({ source: 'Declared' })), ['Declared only']);
-  const ids = STATUS_MARKS.map(m => m.id);
-  for (const s of ['Verified', 'Declared', 'Scaffold', 'Missing']) assert.ok(ids.includes(mark(s)), `${s} has a legend entry`);
-  assert.ok(ids.includes('broken') && STATUS_MARKS.every(m => m.label));
-  const css = fs.readFileSync(new URL('../studio/ux-discover.css', import.meta.url), 'utf8');
-  for (const id of ids) assert.ok(css.includes(`.dv-mark-${id}`), `.dv-mark-${id} is drawn`);
-  for (const v of DISCOVER_VIEWS.filter(x => x.id !== DISCOVER_VIEW_DEFAULT)) assert.ok(css.includes(`.dv-rows[data-view="${v.id}"]`), `${v.id} has its layout`);
-});
-
 test('the Build stack card body is unchanged by the Discover row', () => {
   assert.ok(artefactCardHtml({ id: 'X', title: 'x', source: 'Declared' }).includes('<span class="card-id">X</span>'));
-  assert.ok(artefactCardHtml({ id: 'X', title: 'x', source: 'Declared' }).includes('<div class="card-title">x</div>'), 'its title is a button only where a caller asks (Discover\'s Cards view)');
 });
 
 test('no adapted artefact is ever Missing, so Discover never claims a missing artefact was detected', () => {

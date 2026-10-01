@@ -68,7 +68,6 @@
 
 import { escapeHtml, TRAPPED_DIALOGS } from './util.mjs';
 import { host as appHost } from './host.mjs';
-import { LAYER_NAMES } from './constants.mjs';
 import { editFieldHtml, evidenceBadge, fieldHelp, moreToggleHtml, moreTextHtml } from './build-atoms.mjs';
 import { checkEditorId, customFormModel, customDefFromDraft, createFormStatus, normalizeDraft, slugifySliId, SLO_WINDOWS, sliSummarySentence, sliRelationshipChecks, CHECKED_FIELDS } from './build-copies-model.mjs';
 
@@ -205,7 +204,7 @@ const statusClass = (kind) => `build-editor-status is-${escapeHtml(kind)}`;
 /** The header's inner HTML: the eyebrow, the title row, the esc button. */
 function headHtml(model) {
   const t = model.title;
-  const eyebrow = model.create ? `L1 · ${LAYER_NAMES.L1} · a new SLI` : `L1 · ${LAYER_NAMES.L1} · ${model.readOnly ? 'as compiled' : 'edit'} · ${model.type} SLI`;
+  const eyebrow = model.create ? 'L1 · Contract · a new SLI' : `L1 · Contract · ${model.readOnly ? 'as compiled' : 'edit'} · ${model.type} SLI`;
   return `
         <div class="build-editor-eyebrow">${escapeHtml(eyebrow)}</div>
         <div class="build-editor-title-row">

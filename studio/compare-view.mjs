@@ -11,7 +11,7 @@
 import { state } from './state.mjs';
 import { api } from './api.mjs';
 import { escapeHtml, toast } from './util.mjs';
-import { LAYER_DEFS, LAYER_NAMES, L4_SUBGROUPS } from './constants.mjs';
+import { LAYER_DEFS, L4_SUBGROUPS } from './constants.mjs';
 import { openDrawer } from './drawer.mjs';
 import { defaultEnvFor, refresh } from './app.mjs';
 import { host as appHost } from './host.mjs';
@@ -48,8 +48,15 @@ export { catalogEntryFor, LAYERS_FOR_DIFF };
 
 // ---------- compare view ----------
 
-// The layers as the screens name them (constants.mjs LAYER_DEFS), in order.
-const COMPARE_LAYERS = LAYER_DEFS.map(d => ({ id: d.id, name: d.name }));
+const COMPARE_LAYERS = [
+  { id: 'L1',  name: 'Contract'    },
+  { id: 'L2',  name: 'Telemetry'   },
+  { id: 'L2X', name: 'Extended'    },
+  { id: 'L3',  name: 'Insight'     },
+  { id: 'L4',  name: 'Action'      },
+  { id: 'L5',  name: 'Validation'  },
+  { id: 'GOV', name: 'Governance'  },
+];
 
 function defaultCompareB() {
   // First catalog pack that loaded OK and isn't the current A.
@@ -2983,7 +2990,7 @@ function renderCompareLayerRow(L, sets) {
   const bItems = layerItemsFor(state.packB, L);
   if (aItems.length === 0 && bItems.length === 0) return null;
 
-  const layerNames = LAYER_NAMES;
+  const layerNames = {L1:'Contract',L2:'Telemetry',L2X:'Extended',L3:'Insight',L4:'Action',L5:'Validation',GOV:'Governance'};
   const row = document.createElement('section');
   row.className = 'compare-layer-row';
   row.dataset.layer = L;
@@ -3221,7 +3228,7 @@ function renderComparePackSide(side, pack, sets) {
       const L4 = pack?.layers?.L4 || { policy: [], alerting: [], healing: [] };
       const total = (L4.policy?.length || 0) + (L4.alerting?.length || 0) + (L4.healing?.length || 0);
       if (total === 0) continue;
-      const sec = renderCompareSideLayer({ id: 'L4', num: 'L4', name: LAYER_NAMES.L4 }, [], side, sets, true);
+      const sec = renderCompareSideLayer({ id: 'L4', num: 'L4', name: 'Action' }, [], side, sets, true);
       col.appendChild(sec);
       // Sub-groups
       const grid = sec.querySelector('.compare-side-grid');
@@ -3238,7 +3245,7 @@ function renderComparePackSide(side, pack, sets) {
     }
     const items = pack?.layers?.[L] || [];
     if (!items.length) continue;
-    const def = { id: L, num: L, name: LAYER_NAMES[L] || L };
+    const def = { id: L, num: L, name: ({L1:'Contract',L2:'Telemetry',L2X:'Extended',L3:'Insight',L5:'Validation',GOV:'Governance'})[L] || L };
     const sec = renderCompareSideLayer(def, items, side, sets, false);
     col.appendChild(sec);
   }
@@ -3574,7 +3581,7 @@ const CRITERION_COPY = {
   'multi-modal': {
     title: 'Not every signal type is declared',
     why: 'Metrics, logs and traces together let you detect an incident and explain it; with fewer you can see that something is wrong, not why.',
-    fix: `Declare backends for the missing signal types in L2 ${LAYER_NAMES.L2}.`,
+    fix: 'Declare backends for the missing signal types in L2 Telemetry.',
   },
   correlated: {
     title: 'Signals cannot be joined',
@@ -3584,7 +3591,7 @@ const CRITERION_COPY = {
   calibrated: {
     title: 'Normal is not defined with numbers',
     why: 'Without numeric SLO objectives and MTTD/MTTR baselines nobody can tell whether a reading is bad.',
-    fix: `Give each SLO a numeric objective and declare MTTD/MTTR baselines in L5 ${LAYER_NAMES.L5}.`,
+    fix: 'Give each SLO a numeric objective and declare MTTD/MTTR baselines in L5 Validation.',
   },
   comprehensive: {
     title: 'Whole layers are unobserved',
@@ -3594,7 +3601,7 @@ const CRITERION_COPY = {
   'chaos-validated': {
     title: 'Recovery has never been tested',
     why: 'No chaos experiment shows that alerts fire and recovery works under a real fault; the response path is theoretical.',
-    fix: `Declare at least one chaos experiment in L5 ${LAYER_NAMES.L5}.`,
+    fix: 'Declare at least one chaos experiment in L5 Validation.',
   },
   'drift-free': {
     title: 'The declaration does not match live',

@@ -37,9 +37,11 @@ import {
 } from './diagnostic-grade.mjs';
 import { catalogEntryFor, loadDiff, LAYERS_FOR_DIFF } from './compare-view.mjs';
 import { host as appHost } from './host.mjs';
-import { LAYER_NAMES } from './constants.mjs';
 
-export const PROTO_LAYER_NAMES = LAYER_NAMES;
+export const PROTO_LAYER_NAMES = {
+  L1: 'Contract', L2: 'Telemetry', L2X: 'Extended', L3: 'Insight',
+  L4: 'Action', L5: 'Validation', GOV: 'Governance',
+};
 
 // ---------- comparison loading gate ----------
 //

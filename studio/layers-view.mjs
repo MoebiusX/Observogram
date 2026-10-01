@@ -12,14 +12,11 @@ import { LAYER_DEFS, L4_SUBGROUPS, DOMAIN_DEFS, DISCO_SLAB_ACCENT, discoGradeLet
 import { focusedConformance } from './focus.mjs';
 import { escapeHtml } from './util.mjs';
 import { openDrawer } from './drawer.mjs';
-import {
-  artefactRowHtml, artefactStatus, matchesTask, inferredFrom, resolveInferredRule, DISCOVER_TASKS,
-  DISCOVER_VIEWS, discoverView, STATUS_MARKS, artefactStatusMark, statusMarkHtml,
-} from './card-html.mjs';
+import { artefactRowHtml, artefactStatus, matchesTask, inferredFrom, resolveInferredRule, DISCOVER_TASKS } from './card-html.mjs';
 import { LENS_PRODUCTS } from './compare-view.mjs';
 import { buildSymbolTable, defaultEnvFor, layerArtefactCount, refresh, runBenchmark } from './app.mjs';
 import { host as appHost } from './host.mjs';
-import { decisionHeaderHtml, wireUxActions, statusChipHtml, emptyStateHtml, LAYER_PURPOSE, layerSpecTip, plural, announce } from './ux-kit.mjs';
+import { decisionHeaderHtml, wireUxActions, statusChipHtml, emptyStateHtml, LAYER_PURPOSE, plural, announce } from './ux-kit.mjs';
 
 export function renderDiscoverDashboard(view) {
   view.innerHTML = '';
@@ -298,9 +295,8 @@ export function renderDiscoverDashboard(view) {
 //                        tier), one sentence ("36 of 92 artefacts need
 //                        attention across 4 layers"), one primary action,
 //                        the causes behind it and a few defined counts
-//   2. filters           Show (task filters, one pressed), Refine (domain and
-//                        search) and View (how much of each artefact is
-//                        drawn), each labelled with what it does
+//   2. filters           Show (task filters, one pressed) and Refine (domain
+//                        and search), each labelled with what it does
 //   3. layer overview    one row per layer: code + plain purpose, the
 //                        artefact count, the evidence split, what needs
 //                        attention, the rubric checks not met. ONE layer
@@ -308,11 +304,7 @@ export function renderDiscoverDashboard(view) {
 //   4. the open layer    a readable list (at most three columns) of rows that
 //                        lead with name + what it does + status; ids, tags and
 //                        symbols sit in each row's Details, the full record in
-//                        the drawer. View (state.discoverDetail) draws the same
-//                        artefacts with less of each one: Cards (the card grid
-//                        Discover drew before the review), Tiles (name, kind,
-//                        bound, status) and List (name and a status mark);
-//                        Details, the full row, is the default
+//                        the drawer
 //
 // Counts have one definition each (COUNT_DEF): "artefacts in this layer" is
 // every item the adapter projects there, including detail-level evidence; the
@@ -320,15 +312,15 @@ export function renderDiscoverDashboard(view) {
 // subset a person must act on. Filters never change those counts — the
 // "N match" pill and the open layer's "Showing N of M" say what a filter does.
 //
-// The expanded layer, the task filter, the domain/search refinement, the view
-// and the detail toggles live in `state` (persisted); the scroll position is kept per
+// The expanded layer, the task filter, the domain/search refinement and the
+// detail toggles live in `state` (persisted); the scroll position is kept per
 // pack and restored when the user comes back from Diagnose or Remediate.
 
 const TASK_IDS = new Set(DISCOVER_TASKS.map(t => t.id));
 const TASK_BY_ID = Object.fromEntries(DISCOVER_TASKS.map(t => [t.id, t]));
 // Rows drawn before "Show all N" in an open layer (a production pack's L2
-// metric inventory runs to thousands; the task filters are the real answer)
-// are the active view's `cap` (DISCOVER_VIEWS): a lighter view draws more.
+// metric inventory runs to thousands; the task filters are the real answer).
+const ROW_CAP = 60;
 // Open layers whose full list the user asked for, per pack.
 const shownAll = new Set();
 
@@ -470,7 +462,6 @@ export function renderLayersView(view) {
           <div class="dv-tasks"></div>
         </div>
         <div class="dv-filter-row dv-refine"></div>
-        <div class="dv-filter-row dv-view"></div>
       </div>
       <ol class="dv-layers" aria-label="Layers of this pack"></ol>
     </section>`;
@@ -479,7 +470,6 @@ export function renderLayersView(view) {
   const ctx = { root, model };
   renderTasks(ctx);
   renderRefine(ctx);
-  renderViews(ctx);
   renderLayerList(ctx);
   wireUxActions(root, discoverHandlers(ctx));
   wireScrollMemory();
@@ -516,7 +506,7 @@ function summaryHtml(model) {
   let decision, note, tone, primary, secondary = [], causes = [];
   if (!t.total) {
     decision = 'This pack has no artefacts yet.';
-    note = `Checked every layer, L1 ${LAYER_PURPOSE.L1.name} to GOV ${LAYER_PURPOSE.GOV.name}.${rubricNote}`;
+    note = `Checked every layer, L1 Contract to GOV Governance.${rubricNote}`;
     tone = 'info';
     primary = { id: 'dv-assess', label: 'Open the assessment', action: 'dv-assess' };
   } else if (t.attention) {
@@ -628,28 +618,6 @@ function afterRefine(ctx) {
   renderLayerList(ctx);
 }
 
-// ---------- View: how much each artefact shows ----------
-
-// One glyph per view, drawn in the button's own colour.
-const VIEW_ICONS = {
-  list:    '<path d="M2 4h1.5M2 8h1.5M2 12h1.5M6 4h8M6 8h8M6 12h8"/>',
-  tiles:   '<rect x="2" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="2" y="9" width="4.5" height="4.5" rx="1"/><path d="M9 4h5M9 6h3M9 10.5h5M9 12.5h3"/>',
-  cards:   '<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/>',
-  details: '<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M4.5 5.5h7M4.5 8h7M4.5 10.5h4"/>',
-};
-
-function renderViews(ctx) {
-  const active = discoverView(state.discoverDetail).id;
-  ctx.root.querySelector('.dv-view').innerHTML = `
-    <span class="dv-filter-key" id="dv-view-key">View</span>
-    <div class="ux-segmented" role="group" aria-labelledby="dv-view-key" aria-describedby="dv-view-hint">
-      ${DISCOVER_VIEWS.map(v => `
-        <button type="button" data-ux-action="dv-view" data-view="${v.id}" data-dv-focus="view-${v.id}"
-          aria-pressed="${v.id === active}" title="${escapeHtml(v.tip)}"><svg class="dv-view-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">${VIEW_ICONS[v.id]}</svg>${escapeHtml(v.label)}</button>`).join('')}
-    </div>
-    <span class="dv-refine-hint" id="dv-view-hint">How much of each artefact the open layer shows. Every view lists the same artefacts; selecting one opens its full record.</span>`;
-}
-
 // ---------- the layer overview ----------
 
 function renderLayerList(ctx) {
@@ -661,8 +629,7 @@ function renderLayerList(ctx) {
 }
 
 function layerItemHtml(L, task, open) {
-  const p = LAYER_PURPOSE[L.id] || { name: L.def.name };
-  const specTip = layerSpecTip(L.id);
+  const p = LAYER_PURPOSE[L.id] || { name: L.def.name, question: '' };
   const c = L.counts;
   const s = (n) => (n === 1 ? '' : 's');
   const evidence = [
@@ -693,7 +660,7 @@ function layerItemHtml(L, task, open) {
           <button type="button" class="dv-layer-toggle" id="dv-toggle-${L.id}" data-dv-focus="toggle-${L.id}"
             aria-expanded="${open}" aria-controls="dv-panel-${L.id}">
             <span class="dv-layer-code">${escapeHtml(L.id)}</span>
-            <span class="dv-layer-title"><span class="dv-layer-name"${specTip ? ` title="${escapeHtml(specTip)}"` : ''}>${escapeHtml(p.name)}</span></span>
+            <span class="dv-layer-title"><span class="dv-layer-name">${escapeHtml(p.name)}</span>${p.question ? ` <span class="dv-layer-q">· ${escapeHtml(p.question)}</span>` : ''}</span>
           </button>
         </h3>
         <div class="dv-layer-stats">
@@ -739,10 +706,9 @@ function fillLayerPanel(ctx, L, task) {
     visible = L.entries.filter(e => keep.has(e));
   }
 
-  const view = discoverView(state.discoverDetail);
   const capKey = `${packKey()}|${L.id}`;
-  const capped = !shownAll.has(capKey) && visible.length > view.cap;
-  let rows = capped ? visible.slice(0, view.cap) : visible;
+  const capped = !shownAll.has(capKey) && visible.length > ROW_CAP;
+  let rows = capped ? visible.slice(0, ROW_CAP) : visible;
   if (capped && active && visible.includes(active) && !rows.includes(active)) rows = [...rows, active];
 
   const shownPhrase = [
@@ -781,17 +747,7 @@ function fillLayerPanel(ctx, L, task) {
     body.innerHTML = layerEmptyHtml(L, task, { byTask, matched, folded, buckets });
     return;
   }
-  // List draws a mark in place of the status chips: say what each mark on
-  // screen means, once, above the rows.
-  if (view.id === 'list') {
-    const onScreen = new Set(rows.map(e => artefactStatusMark(e.status)));
-    const legend = document.createElement('p');
-    legend.className = 'dv-legend';
-    legend.innerHTML = STATUS_MARKS.filter(m => onScreen.has(m.id))
-      .map(m => `<span class="dv-legend-item">${statusMarkHtml(m.id)}${escapeHtml(m.label)}</span>`).join('');
-    body.appendChild(legend);
-  }
-  const rowEl = (e) => renderCard(e.a, L.def, e.sub, { outsideFilter: e === pinned, view: view.id });
+  const rowEl = (e) => renderCard(e.a, L.def, e.sub, { outsideFilter: e === pinned });
   if (L.id === 'L4') {
     for (const sg of L4_SUBGROUPS) {
       const sgRows = rows.filter(e => e.sub === sg.key);
@@ -808,17 +764,16 @@ function fillLayerPanel(ctx, L, task) {
         body.appendChild(none);
         continue;
       }
-      body.appendChild(rowList(sgRows.map(rowEl), view.id));
+      body.appendChild(rowList(sgRows.map(rowEl)));
     }
   } else {
-    body.appendChild(rowList(rows.map(rowEl), view.id));
+    body.appendChild(rowList(rows.map(rowEl)));
   }
 }
 
-function rowList(els, view) {
+function rowList(els) {
   const list = document.createElement('div');
   list.className = 'dv-rows';
-  list.dataset.view = view;
   list.setAttribute('role', 'list');
   for (const el of els) list.appendChild(el);
   return list;
@@ -899,7 +854,6 @@ function discoverHandlers(ctx) {
       repaintList(ctx, `detail-${key}`);
     },
     'dv-show-all': (_ev, el) => showAllRows(ctx, el.dataset.layer),
-    'dv-view': (_ev, el) => setView(ctx, el.dataset.view),
     'dv-clear-refine': () => {
       state.layersSearch = '';
       state.layersDomain = 'all';
@@ -961,16 +915,6 @@ function setTask(ctx, task) {
   renderLayerList(ctx);
   ctx.root.querySelector(`[data-dv-focus="task-${task}"]`)?.focus({ preventScroll: true });
   announce(`Show: ${TASK_BY_ID[task].label}. ${plural(ctx.model.taskCounts[task], 'artefact')} across the pack.`);
-}
-
-function setView(ctx, id) {
-  const view = DISCOVER_VIEWS.find(v => v.id === id);
-  if (!view) return;
-  state.discoverDetail = view.id;
-  persistence.schedule();
-  renderViews(ctx);
-  repaintList(ctx, `view-${view.id}`);
-  announce(`View: ${view.label}. ${view.tip}`);
 }
 
 function toggleLayer(ctx, layerId) {
@@ -1132,9 +1076,8 @@ function findRecordingRule(name) {
 // data-key, is-active, has-broken-refs, is-scaffold) and owns the clicks:
 // the row (or its name button) opens the drawer, as a card did; the
 // "Inferred from recording rule" link opens that rule; the Benchmark CTA
-// runs the benchmark; Details expands in place. `view` (DISCOVER_VIEWS) draws
-// less of the row; the element, its classes and the drawer click are the same.
-export function renderCard(artefact, def, sublayerKey, { outsideFilter = false, view = 'details' } = {}) {
+// runs the benchmark; Details expands in place.
+export function renderCard(artefact, def, sublayerKey, { outsideFilter = false } = {}) {
   const layerDef = LAYER_DEFS.find(d => d.id === def?.id) || def;
   const row = document.createElement('div');
   row.className = 'card dv-row';
@@ -1161,9 +1104,7 @@ export function renderCard(artefact, def, sublayerKey, { outsideFilter = false, 
     ? { slug: refMatch.slug, refPackId: refMatch.refPackId, label: refMatch.label }
     : null;
 
-  // Only the full row names its recording rules, so the lighter views skip
-  // the lookup.
-  const inference = view === 'details' ? inferredFrom(artefact) : null;
+  const inference = inferredFrom(artefact);
   // Name each rule as the pack does, so a resolved good/total stem shows (and
   // opens) the real rule.
   const rules = inference ? inference.rules.map(name => {
@@ -1171,7 +1112,7 @@ export function renderCard(artefact, def, sublayerKey, { outsideFilter = false, 
     return { name: hit || name, found: !!hit };
   }) : null;
 
-  row.innerHTML = artefactRowHtml(artefact, { broken, benchmark, rules, outsideFilter, view });
+  row.innerHTML = artefactRowHtml(artefact, { broken, benchmark, rules, outsideFilter });
   row.addEventListener('click', (ev) => {
     const t = ev.target;
     const cta = t.closest?.('.benchmark-cta');

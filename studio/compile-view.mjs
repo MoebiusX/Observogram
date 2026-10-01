@@ -12,7 +12,6 @@
 import { state } from './state.mjs';
 import { api, authHeaders, orgQuery } from './api.mjs';
 import { escapeHtml, toast } from './util.mjs';
-import { LAYER_NAMES } from './constants.mjs';
 import {
   effectiveFocus, focusedPack, focusedPackId, focusedEnv,
   focusedCompileCatalog, setFocusedCompileCatalog,
@@ -330,7 +329,7 @@ const REMEDIATE_EFFECTS = {
   both:    { label: 'Changes the repository and live systems', note: 'the patch and the deploy are confirmed separately' },
 };
 
-const REMEDIATE_LAYER_NAMES = LAYER_NAMES;
+const REMEDIATE_LAYER_NAMES = { L1:'Contract', L2:'Telemetry', L2X:'Extended', L3:'Insight', L4:'Action', L5:'Validation', GOV:'Governance' };
 
 const SCOPE_WORDS = { service: 'service scope', family: 'family scope', all: 'all live artefacts' };
 

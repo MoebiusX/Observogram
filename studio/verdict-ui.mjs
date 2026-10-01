@@ -41,9 +41,11 @@ import {
   DELTA_BADNESS,
 } from './diagnostic-grade.mjs';
 import { LAYERS_FOR_DIFF } from './compare-catalog.mjs';
-import { LAYER_NAMES } from './constants.mjs';
 
-export const VERDICT_LAYER_NAMES = LAYER_NAMES;
+export const VERDICT_LAYER_NAMES = {
+  L1: 'Contract', L2: 'Telemetry', L2X: 'Extended', L3: 'Insight',
+  L4: 'Action', L5: 'Validation', GOV: 'Governance',
+};
 
 // ---------- plain words (docs/UX_SCREEN_GRAMMAR.md) ----------
 

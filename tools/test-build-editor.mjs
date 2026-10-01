@@ -332,7 +332,7 @@ test('the dialog headless in edit mode: role=dialog aria-modal=true labelled by 
   const html = renderHtml(dialogOf(b));
   assert.ok(html.startsWith('\n    <div class="build-editor-scrim" data-editor-close aria-hidden="true"></div>'));
   assert.ok(html.includes('<div class="build-editor is-edit" role="dialog" aria-modal="true" aria-labelledby="build-editor-title" aria-describedby="build-editor-status" data-editor-key="availability" data-editor-mode="edit" tabindex="-1">'));
-  assert.ok(html.includes('<div class="build-editor-eyebrow">L1 · SLI/SLO · edit · ratio SLI</div>'));
+  assert.ok(html.includes('<div class="build-editor-eyebrow">L1 · Contract · edit · ratio SLI</div>'));
   assert.ok(html.includes('<h2 class="build-editor-title" id="build-editor-title">availability</h2>'));
   assert.ok(html.includes('<span class="build-editor-product">HTTP service (OTel semconv) <span class="build-evidence build-evidence-semconv" title="semconv">semconv</span></span>') && html.includes('<span class="type-pill build-rolo-type">ratio</span>'));
   assert.ok(html.includes('<span class="build-rolo-chip is-customised" title="customised: objective">customised</span>'));
@@ -404,13 +404,13 @@ test('the dialog headless in edit mode: role=dialog aria-modal=true labelled by 
 test('the dialog headless in read-only mode (Verify): no input, the values as spans, the provenance, no reset, no switch, Close; and in create mode: the type select, Name → id, the submit disabled until the model allows, Cancel', () => {
   const b = draftWith({ overrides: { availability: { objective: 0.999 } }, editor: { key: 'availability', custom: false } });
   const ro = renderHtml(dialogOf(b, 'readonly'));
-  assert.ok(ro.includes('class="build-editor is-readonly" role="dialog" aria-modal="true"') && ro.includes('L1 · SLI/SLO · as compiled · ratio SLI'));
+  assert.ok(ro.includes('class="build-editor is-readonly" role="dialog" aria-modal="true"') && ro.includes('L1 · Contract · as compiled · ratio SLI'));
   assert.ok(!ro.includes('<input') && !ro.includes('<textarea') && !ro.includes('<select') && !ro.includes('role="switch"') && !ro.includes('data-reset') && !ro.includes('data-editor-reset-all'), 'no input on Verify — a value is a value, not a disabled field');
   assert.ok(ro.includes('<code class="build-edit-value" data-override-field="objective" data-sli="availability">99.9</code>') && ro.includes('<div class="build-edit-field is-overridden is-read" data-field="objective">'));
   assert.ok(ro.includes('<span class="build-editor-provenance">customised: objective — the rest is HTTP service (OTel semconv)’s</span>'));
   assert.ok(ro.includes('class="build-editor-status is-readonly"') && ro.includes('>as compiled · SLO availability_99_9 ') && ro.includes('data-editor-done data-editor-close data-focus-key="editor:done">Close</button>'));
   const cr = renderHtml(dialogOf({ ...b, editor: { create: true }, customDraft: { name: 'Checkout success' } }));
-  assert.ok(cr.includes('class="build-editor is-create is-custom" role="dialog" aria-modal="true"') && cr.includes('L1 · SLI/SLO · a new SLI') && cr.includes('<h2 class="build-editor-title" id="build-editor-title">checkout_success</h2>'));
+  assert.ok(cr.includes('class="build-editor is-create is-custom" role="dialog" aria-modal="true"') && cr.includes('L1 · Contract · a new SLI') && cr.includes('<h2 class="build-editor-title" id="build-editor-title">checkout_success</h2>'));
   assert.ok(cr.includes('<label class="build-edit-label" for="build-custom-name"><span>Name</span></label>') && cr.includes('data-focus-key="cf:name" data-custom-draft="name" value="Checkout success"'));
   assert.ok(cr.includes('<select class="build-edit-input" id="build-custom-type" data-focus-key="cf:type" data-custom-draft="type"') && !cr.includes('data-field="type">\n        <div class="build-edit-label-row"><span class="build-edit-label">'), 'the real select, not the fixed cell');
   assert.ok(cr.includes('data-custom-draft="good" required rows="2"') && cr.includes('data-custom-draft="semconv_metric"') && !cr.includes('data-custom-draft="query"'));
