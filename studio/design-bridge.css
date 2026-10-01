@@ -1,0 +1,70 @@
+/* studio/design-bridge.css — the theme bridge. VENDORABLE (docs/VENDORING.md).
+ *
+ * The view stylesheets a downstream app vendors (verdict-ui.css, proto.css)
+ * and this studio's own screen stylesheets were written against a set of
+ * theme properties — --card, --ink, --line, --mono, --CMP, --pr-green … —
+ * that each host had to define itself. This file defines every one of them
+ * from the tokens of studio/design-tokens.css, in both themes, and nothing
+ * else: only custom properties, on :root and the theme attribute.
+ *
+ * Load order: design-tokens.css, then the view stylesheets, then this file
+ * (it must come after any stylesheet that sets the same properties).
+ * A host that copies the three design-* files gets the vendored widgets in
+ * the same look as Observogram's without writing a theme of its own.
+ */
+
+:root, [data-theme="dark"], [data-theme="light"] {
+  /* type: one typeface. What was set in a serif or in the label monospace is
+     the sans; code asks for --code. */
+  --sans: var(--og-font);
+  --serif: var(--og-font);
+  --mono: var(--og-font);
+  --code: var(--og-font-code);
+  --r-sm: var(--og-radius-pill);
+  --r-md: 7px;
+  --r-lg: var(--og-radius-panel);
+
+  /* surfaces and text */
+  --paper: var(--og-bg);
+  --card: var(--og-panel);
+  --hover: var(--og-panel-2);
+  --line: var(--og-line);
+  --line-2: var(--og-line);
+  --ink: var(--og-text);
+  --ink-1: var(--og-text);
+  --ink-2: var(--og-text-2);
+  --ink-3: var(--og-muted);
+  --ink-4: var(--og-muted);
+  --ink-5: var(--og-muted);
+  --code-bg: var(--og-sunken);
+  --dot-rgba: transparent;
+
+  /* status */
+  --warn: var(--og-warn);            --warn-bg: var(--og-warn-bg);
+  --ok-text: var(--og-accent);       --ok-bg: var(--og-accent-bg);
+  --err-text: var(--og-fail);        --err-bg: var(--og-fail-bg);
+  --pass-bg: var(--og-accent-bg);    --pass-border: var(--og-accent);
+  --fail-bg: var(--og-fail-bg);      --fail-border: var(--og-fail);
+  --error-bg: var(--og-fail-bg);     --error-text: var(--og-fail);   --error-border: var(--og-fail);
+  --src-Declared: var(--og-muted);   --src-Verified: var(--og-accent); --src-Missing: var(--og-fail);
+
+  /* accents: comparing is the accent, A is the accent and B the second voice;
+     building is the second voice; conformance is attention. */
+  --CMP: var(--og-accent);   --CMP-bg: var(--og-accent-bg);   --CMP-tint: var(--og-panel);   --CMP-text: var(--og-accent);
+  --cmp-a: var(--og-accent); --cmp-a-bg: var(--og-accent-bg);
+  --cmp-b: var(--og-second); --cmp-b-bg: var(--og-second-bg);
+  --cmp-both: var(--og-muted); --cmp-both-bg: var(--og-panel-2);
+  --BLD: var(--og-second);   --BLD-bg: var(--og-second-bg);   --BLD-tint: var(--og-panel);   --BLD-text: var(--og-second);
+  --CONF: var(--og-warn);    --CONF-bg: var(--og-warn-bg);    --CONF-tint: var(--og-panel);  --CONF-text: var(--og-warn);
+  --ATL: var(--og-info);     --ATL-bg: var(--og-info-bg);     --ATL-tint: var(--og-panel);   --ATL-text: var(--og-info);
+
+  /* the widget palette verdict-ui.css and proto.css read */
+  --pr-green: var(--og-accent);
+  --pr-amber: var(--og-warn);
+  --pr-red: var(--og-fail);
+  --pr-blue: var(--og-info);
+  --pr-cyan: var(--og-info);
+  --pr-purple: var(--og-second);
+  --pr-gray: var(--og-muted);
+  --pr-cmp: var(--og-accent);
+}

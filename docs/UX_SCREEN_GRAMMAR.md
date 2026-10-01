@@ -119,8 +119,11 @@ hover and focus; `GLOSSARY` is the single place a definition lives.
 
 ## One visual language
 
-`studio/reskin.css` is the last stylesheet and the only place the studio's
-look is decided:
+The look is decided in one place and is portable (docs/VENDORING.md):
+`studio/design-tokens.css` holds every value, `studio/design-kit.css` the
+pieces (`.og-*`), `studio/design-bridge.css` themes the older view styles
+from the tokens, and `studio/reskin.css` — this studio's adapter, loaded
+last — maps the screens that predate the kit onto them. The system:
 
 - **Type** — one sans; monospace for code only (`--code`).
 - **Colour** — one page, one panel, one line. Lime: the primary action and
@@ -132,6 +135,6 @@ look is decided:
 - **Controls** — a primary button (lime), a secondary (outlined), a text
   button; pills with a 5px radius; inputs on the page colour.
 
-A new screen reads the tokens (`--rs-*`, or the `--ux-*` names mapped onto
-them) and reuses these pieces; it does not bring a font, a gradient or a
-button of its own.
+A new screen uses the `.og-*` classes and the `--og-*` tokens; it does not
+bring a font, a gradient or a button of its own, and it needs no line in
+`reskin.css`.
