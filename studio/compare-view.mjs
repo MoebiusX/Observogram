@@ -2442,24 +2442,31 @@ function buildCompareKeySets() {
   // arithmetic excludes them too.
   const aStatus = {}, bStatus = {};
   const aReason = new Map(), bReason = new Map();
+  const aEntry = new Map(), bEntry = new Map();
   for (const L of LAYERS_FOR_DIFF) {
     const bucket = state.diff.layers[L] || {};
     const a = new Map(), b = new Map();
     // A metric family stands for several of the pack's own artefacts (a
     // histogram's _bucket / _count / _sum series): every member takes the
     // family's status, not only the one the entry embeds.
-    const mark = (map, art, status) => {
-      for (const id of [art?.id, ...(art?.memberIds || [])]) if (id) map.set(id, status);
+    // `entry` remembers which diff entry a card belongs to, so a group can
+    // say how many artefacts it holds when several cards are one metric.
+    const mark = (map, art, status, side, key) => {
+      for (const id of [art?.id, ...(art?.memberIds || [])]) {
+        if (!id) continue;
+        map.set(id, status);
+        (side === 'b' ? bEntry : aEntry).set(`${L}:${id}`, key);
+      }
     };
     for (const e of bucket.inBoth || []) {
-      mark(a, e.a, 'both');
-      mark(b, e.b, 'both');
+      mark(a, e.a, 'both', 'a', e.key);
+      mark(b, e.b, 'both', 'b', e.key);
     }
-    for (const e of bucket.onlyInA || []) mark(a, e.artefact, 'only');
-    for (const e of bucket.onlyInB || []) mark(b, e.artefact, 'only');
+    for (const e of bucket.onlyInA || []) mark(a, e.artefact, 'only', 'a', e.key);
+    for (const e of bucket.onlyInB || []) mark(b, e.artefact, 'only', 'b', e.key);
     // Held by one pack in a family the other could not observe: unchecked.
     for (const e of bucket.notObserved || []) {
-      mark(e.side === 'b' ? b : a, e.artefact, 'unchecked');
+      mark(e.side === 'b' ? b : a, e.artefact, 'unchecked', e.side === 'b' ? 'b' : 'a', e.key);
       for (const id of [e.artefact?.id, ...(e.artefact?.memberIds || [])]) {
         if (id) (e.side === 'b' ? bReason : aReason).set(`${L}:${id}`, e.reason || '');
       }
@@ -2467,7 +2474,7 @@ function buildCompareKeySets() {
     aStatus[L] = a;
     bStatus[L] = b;
   }
-  return { aStatus, bStatus, aReason, bReason };
+  return { aStatus, bStatus, aReason, bReason, aEntry, bEntry };
 }
 
 // Why a card could not be checked, or ''.
@@ -3286,7 +3293,17 @@ function renderCompareLayerColumn(side, L, items, sets) {
     const h = document.createElement('div');
     h.className = `compare-col-group is-${k}`;
     h.title = titles[k][1];
-    h.innerHTML = `${escapeHtml(titles[k][0])} <span class="compare-col-group-n">${groups[k].length}</span>`;
+    // The number is what the summary counts: artefacts. A metric is one
+    // artefact however many series (cards) it is exposed as, so when the
+    // two differ the cards are said too — never two unexplained numbers.
+    const entryOf = side === 'a' ? sets.aEntry : sets.bEntry;
+    const artefacts = k === 'rest'
+      ? groups[k].length
+      : new Set(groups[k].map(art => entryOf?.get(`${L}:${art.id}`) || `id:${art.id}`)).size;
+    const cardsNote = artefacts !== groups[k].length
+      ? ` <span class="compare-col-group-cards" title="A metric is compared as one artefact; each of its series (_bucket, _count, _sum …) is a card.">${groups[k].length} cards</span>`
+      : '';
+    h.innerHTML = `${escapeHtml(titles[k][0])} <span class="compare-col-group-n">${artefacts}</span>${cardsNote}`;
     col.appendChild(h);
     if (k === 'unchecked' && reasons.length) {
       // The reason is the point of this group: say it on the screen, not
@@ -4365,6 +4382,9 @@ function compareSummaryHtml(digest, cmp, ctx) {
   if (cmp.extras) sItems.push(`<li class="ux-tone-info"><strong>${cmp.extras}</strong> ${drift ? `live artefact${s(cmp.extras)} not declared (shadow signals)` : `additional artefact${s(cmp.extras)} in the ${escapeHtml(r.aNoun)}`}</li>`);
   if (t.outOfScope) sItems.push(`<li class="ux-tone-muted"><strong>${t.outOfScope}</strong> live artefact${s(t.outOfScope)} outside the declared scope — platform inventory, not counted</li>`);
   if (t.scaffold) sItems.push(`<li class="ux-tone-muted"><strong>${t.scaffold}</strong> template placeholder${s(t.scaffold)} (scaffold) — not counted</li>`);
+  // Unchecked is said as plainly as missing would be: how many, and that
+  // the other pack had no way to look — Side by side prints each reason.
+  if (t.notObserved) sItems.push(`<li class="ux-tone-warn"><strong>${t.notObserved}</strong> artefact${s(t.notObserved)} could not be checked — the other pack had no way to observe ${t.notObserved === 1 ? 'its family' : 'their families'} (no tool for it, or its probe failed). Neither matched nor missing, not counted</li>`);
   const overlap = t.universe ? Math.round((t.shared / t.universe) * 100) : null;
   const structuralPanel = `
       <section class="compare-panel ux-tone-info" aria-labelledby="compare-structural-title">
