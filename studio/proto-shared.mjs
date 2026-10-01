@@ -103,7 +103,7 @@ export function buildProtoModel() {
   const bName = catalogEntryFor(state.compareBId)?.label
     || state.packB?.meta?.name || state.packB?.metadata?.name || state.packB?.id || 'Pack B';
 
-  const totals = { aligned: 0, drifted: 0, onlyInA: 0, onlyInB: 0, scaffold: 0, outOfScope: 0 };
+  const totals = { aligned: 0, drifted: 0, onlyInA: 0, onlyInB: 0, scaffold: 0, outOfScope: 0, notObserved: 0 };
   const layers = [];
   const items = [];
   const driftedEntries = [];
@@ -131,6 +131,9 @@ export function buildProtoModel() {
       totals.onlyInB += onlyInB.length;
       totals.scaffold += scaffold.length;
       totals.outOfScope += outOfScope.length;
+      // What one pack holds in a family the other could not observe
+      // (diffPacks `notObserved`): unchecked, so neither side's count.
+      totals.notObserved += (bucket.notObserved || []).length;
       driftedEntries.push(...drifted);
 
       if (aligned.length || drifted.length || onlyInA.length || onlyInB.length || outOfScope.length) {
@@ -427,6 +430,10 @@ export function scaffoldOosNotes(model) {
   }
   if (model.totals.outOfScope) {
     bits.push(`<p class="drift-oos-note">${model.totals.outOfScope} live artefact${model.totals.outOfScope === 1 ? '' : 's'} out of declared scope — members of families <strong>${escapeHtml(model.bName)}</strong> runs but your pack doesn't declare (the rest of the platform inventory). Shown for context, not counted as drift.</p>`);
+  }
+  if (model.totals.notObserved) {
+    const n = model.totals.notObserved;
+    bits.push(`<p class="drift-oos-note">Not checked: ${n} artefact${n === 1 ? '' : 's'} in ${n === 1 ? 'a family' : 'families'} the other pack had no way to observe (no tool for it, or its probe failed). Neither missing nor matched — excluded from drift badness. The Compare screen lists each with the reason.</p>`);
   }
   return bits.join('');
 }

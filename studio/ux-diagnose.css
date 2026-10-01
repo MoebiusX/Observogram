@@ -330,6 +330,20 @@ tr.diag-flash > td { animation: diag-flash-bg 1.8s ease-out; }
 .compare-layer-col-b .compare-col-group.is-only { color: var(--cmp-b); }
 .compare-col-group.is-both { color: var(--ux-ok); }
 .compare-col-group-n { font-weight: 600; color: var(--ink-2); }
+/* Held by one pack in a family the other had no way to observe: not a
+   difference, not a match. The reason is printed under the group title. */
+.compare-col-group.is-unchecked { color: var(--ux-warn); }
+.compare-col-group-cards { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--ink-3); }
+.compare-col-group-why {
+  grid-column: 1 / -1; margin: -2px 0 2px; max-width: 78ch;
+  font: 400 13px/1.45 var(--sans); color: var(--ink-3); overflow-wrap: anywhere;
+}
+.compare-view .compare-layer-col-a .compare-side-card.is-unchecked,
+.compare-view .compare-layer-col-b .compare-side-card.is-unchecked { border-left: 3px dashed var(--ux-warn); }
+.compare-side-card .diff-chip.chip-unchecked { background: var(--ux-warn-bg); color: var(--ux-warn); }
+.compare-summary.has-unchecked { grid-template-columns: repeat(6, 1fr); }
+.compare-cell.c-unchecked { border-top: 3px solid var(--ux-warn); }
+@media (max-width: 900px) { .compare-summary.has-unchecked { grid-template-columns: 1fr 1fr; } }
 
 /* View: how much of each artefact the two panes draw (state.compareDetail). */
 .compare-view-switch { display: inline-flex; align-items: center; gap: 8px; margin-left: 10px; }

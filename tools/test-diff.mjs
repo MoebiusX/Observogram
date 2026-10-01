@@ -12,6 +12,7 @@
 
 import { adapt } from './lib/adapter.mjs';
 import { diffPacks, deltasOf } from './lib/diff.mjs';
+import { metricFamilyResolver, foldMetricFamilies, isWithheldValue, REDACTED_CHANNEL_VALUE } from './lib/artefact-model.mjs';
 
 import { createHarness } from './lib/harness.mjs';
 const { assert, report } = createHarness();
@@ -616,6 +617,135 @@ process.stdout.write('\n--- scaffold placeholders never pair ---\n');
          'the repo scaffold route is parked on side a');
   assert(d2.layers.L4.onlyInB.some(e => e.artefact?.id === 'ALR-01'),
          'the live route the repo only had a placeholder for reads live, not declared');
+}
+
+// ---------- metric families: a metric and the series it is exposed as ----------
+{
+  const fam = (names, types = {}) => metricFamilyResolver(names, (n) => types[n] || null);
+
+  const hist = fam(['req_seconds', 'req_seconds_bucket', 'req_seconds_count', 'req_seconds_sum']);
+  assert(['req_seconds_bucket', 'req_seconds_count', 'req_seconds_sum', 'req_seconds'].every(n => hist(n) === 'req_seconds'),
+    'a histogram and its _bucket / _count / _sum series are one family');
+  assert(fam(['x_bucket'])('x_bucket') === 'x', '_bucket alone is enough: the suffix is reserved for histograms');
+  assert(fam(['queue_count'])('queue_count') === 'queue_count' && fam(['bytes_sum'])('bytes_sum') === 'bytes_sum',
+    'a lone _count or _sum is its own metric — a gauge that happens to end that way is not folded');
+  assert(fam(['gc_seconds_count', 'gc_seconds_sum'])('gc_seconds_count') === 'gc_seconds',
+    '_count and _sum together are a summary');
+  assert(fam(['lat', 'lat_count'], { lat: 'go-prometheus-histogram-vec' })('lat_count') === 'lat',
+    'a declared distribution type claims its _count even when no _bucket is known');
+  assert(fam(['jobs_total', 'jobs_created'])('jobs_created') === 'jobs_total',
+    'a counter\'s _created series folds into the counter');
+  assert(fam(['jobs', 'jobs_total', 'jobs_created'], { jobs: 'counter' })('jobs_total') === 'jobs'
+    && fam(['jobs', 'jobs_total', 'jobs_created'], { jobs: 'counter' })('jobs_created') === 'jobs',
+    'a counter declared without the suffix pairs with the _total (and _created) it is exposed as');
+  assert(fam(['jobs', 'jobs_total'], { jobs: 'gauge' })('jobs_total') === 'jobs_total'
+    && fam(['jobs', 'jobs_total'])('jobs_total') === 'jobs_total',
+    '_total is only folded into a metric DECLARED a counter — two unrelated names stay two metrics');
+  assert(fam(['orphan_created'])('orphan_created') === 'orphan_created', 'a _created with nothing to belong to stays itself');
+  assert(fam(['Req_Seconds_Bucket'])('REQ_SECONDS_BUCKET') === 'req_seconds', 'names are compared lowercase');
+
+  const metric = (name, extra = {}) => ({ id: `METRIC-${name}`, title: name, source: 'Verified', spec: { name, ...extra } });
+  const other = { id: 'SCRAPE-01', title: 'scrape: api', spec: { job: 'api' } };
+  const aItems = [metric('req_seconds', { metric_type: 'histogram' }), metric('up'), other];
+  const bItems = [metric('req_seconds_sum'), metric('req_seconds_bucket'), metric('req_seconds_count'), metric('up'), other];
+  const snapshot = JSON.stringify([aItems, bItems]);
+  const folded = foldMetricFamilies(aItems, bItems);
+  assert(JSON.stringify([aItems, bItems]) === snapshot, 'foldMetricFamilies never mutates its inputs');
+  assert(folded.a.length === 3 && folded.a[0] === aItems[0] && folded.a[1] === aItems[1] && folded.a[2] === other,
+    'a metric alone in its family, and every non-metric, is passed through untouched (same object)');
+  const live = folded.b.find(x => x.spec?.name === 'req_seconds');
+  assert(folded.b.length === 3 && live && live.title === 'req_seconds'
+    && JSON.stringify(live.series) === JSON.stringify(['req_seconds_bucket', 'req_seconds_count', 'req_seconds_sum']),
+    'three series fold into one artefact named like the family, carrying the series it stands for', folded.b.map(x => x.spec?.name || x.id));
+  assert(folded.b.indexOf(live) === 0, 'the family takes the place of its first member — order is otherwise kept');
+}
+
+// ---------- notObserved: what the other pack had no way to look at ----------
+{
+  const declared = clone(collisionPack);
+  const live = clone(collisionPack);
+  // The live side saw no dashboards (its probe failed) and has no tool for
+  // the collector configuration. What it holds of those families is a
+  // schema-forced placeholder.
+  live.spec.dashboards = [{ id: 'platform-overview', provider: { kind: 'grafana' }, folder: 'platform', source: 'file://dashboards/platform-overview.json' }];
+  live.spec.pipelines.receivers = [{ name: 'otlp' }];
+  live.metadata.annotations = {
+    'mcp.scaffold.dashboards.platform-overview': 'schema-required fallback; not attested by any MCP tool',
+    'mcp.scaffold.pipelines.receivers[0]': 'schema-required fallback; not attested by any MCP tool',
+    'observogram.unobserved.dashboard': 'the dashboards probe got no answer: HTTP 401',
+    'observogram.unobserved.pipeline_receiver': 'no MCP tool exposes the collector configuration',
+    // A family named unobserved whose artefacts DO pair is simply compared.
+    'observogram.unobserved.alert_route': 'not looked at',
+  };
+  const base = diffPacks(adapt(declared), adapt(clone(collisionPack)), { scopeMode: 'all' });
+  const d = diffPacks(adapt(declared), adapt(live), { scopeMode: 'all' });
+  const unseen = Object.values(d.layers).flatMap(l => l.notObserved);
+  const declaredDashboards = adapt(declared).layers.L3.filter(x => x.id.startsWith('DASH-')).length;
+  const declaredReceivers = adapt(declared).layers.L2.filter(x => x.id.startsWith('PIP-RCV-')).length;
+  assert(unseen.filter(e => e.key.startsWith('dashboard::')).length === declaredDashboards
+    && unseen.filter(e => e.key.startsWith('pipeline_receiver::')).length === declaredReceivers
+    && unseen.length === declaredDashboards + declaredReceivers,
+    'artefacts of a family the other pack could not observe are notObserved — every one, and nothing else',
+    unseen.map(e => e.key));
+  assert(unseen.every(e => e.side === 'a' && typeof e.artefact?.id === 'string')
+    && unseen.find(e => e.key.startsWith('dashboard::')).reason === 'the dashboards probe got no answer: HTTP 401',
+    'each entry carries the side that holds the artefact and the other side\'s reason');
+  assert(!Object.values(d.layers).some(l => l.onlyInA.some(e => /^(dashboard|pipeline_receiver)::/.test(e.key))),
+    'none of them reads "declared, not live"');
+  assert(d.summary.notObserved === unseen.length && d.summary.onlyInA === 0 && d.summary.onlyInB === 0,
+    'the summary counts them apart', d.summary);
+  assert(d.summary.union === base.summary.union - unseen.length && d.summary.jaccard === 1,
+    'they are outside the union: what could not be checked does not lower the match', [d.summary.union, base.summary.union, d.summary.jaccard]);
+  assert(d.layers.L4.inBoth.filter(e => e.key.startsWith('alert_route::')).length
+    === base.layers.L4.inBoth.filter(e => e.key.startsWith('alert_route::')).length,
+    'a family named unobserved whose artefacts pair anyway is compared as usual');
+  assert(Object.values(base.layers).every(l => Array.isArray(l.notObserved) && l.notObserved.length === 0) && base.summary.notObserved === 0,
+    'without the annotation the bucket is present and empty on every layer');
+
+  // Symmetric: the family is unobserved on side A; B's artefact is the unchecked one.
+  const blindRepo = clone(collisionPack);
+  blindRepo.spec.dashboards = [{ id: 'stub', provider: { kind: 'grafana' }, folder: 'x', source: 'file://stub.json' }];
+  blindRepo.metadata.annotations = {
+    'crawler.scaffold.dashboards.stub': 'schema-required fallback',
+    'observogram.unobserved.dashboard': 'no dashboard files in the scanned folder',
+  };
+  const d2 = diffPacks(adapt(blindRepo), adapt(clone(collisionPack)), { scopeMode: 'all' });
+  const unseenB = d2.layers.L3.notObserved;
+  assert(unseenB.length === declaredDashboards && unseenB.every(e => e.side === 'b' && e.reason === 'no dashboard files in the scanned folder')
+    && !d2.layers.L3.onlyInB.some(e => e.key.startsWith('dashboard::')),
+    'symmetric: B\'s artefacts of a family A could not observe are notObserved on side b, not "live, not declared"');
+}
+
+// ---------- an address a source would not state is not a difference ----------
+{
+  assert(isWithheldValue(REDACTED_CHANNEL_VALUE) && isWithheldValue('unresolved:WEBHOOK_URL')
+    && !isWithheldValue('https://hooks.example.com/x') && !isWithheldValue('${WEBHOOK_URL}') && !isWithheldValue(null),
+    'redacted:secret and unresolved:<VAR> are withheld values; a URL, a raw placeholder and null are not');
+  const route = (channels) => ({ id: 'ALR-01', title: 'SEV1 routes', spec: { severity: 'SEV1', channels } });
+  const fields = (a, b) => deltasOf(route(a), route(b)).map(x => x.field);
+  assert(fields([{ webhook: 'https://ntfy.sh/topic' }], [{ webhook: 'redacted:secret' }]).length === 0,
+    'a webhook address one side redacted is not a delta against the address the other side states');
+  assert(fields([{ webhook: 'unresolved:HOOK_URL' }], [{ webhook: 'redacted:secret' }]).length === 0,
+    'a deploy-time variable on one side and a redaction on the other: the same channel');
+  assert(fields([{ email: 'a@x.io' }, { webhook: 'https://h/1' }], [{ email: 'a@x.io' }, { webhook: 'redacted:secret' }]).length === 0,
+    'the kinds neither side withholds must still agree — and here they do');
+  assert(JSON.stringify(fields([{ email: 'a@x.io' }, { webhook: 'https://h/1' }], [{ email: 'b@x.io' }, { webhook: 'redacted:secret' }])) === '["channels"]',
+    'a different e-mail address beside a redacted webhook is still a delta');
+  assert(JSON.stringify(fields([{ webhook: 'https://h/1' }], [{ msteams: 'redacted:secret' }])) === '["channels"]',
+    'a different channel KIND is a delta, redacted or not');
+  assert(JSON.stringify(fields([{ webhook: 'https://h/1' }], [{ webhook: 'redacted:secret' }, { webhook: 'redacted:secret' }])) === '["channels"]',
+    'a different NUMBER of channels is a delta');
+  assert(JSON.stringify(fields([{ webhook: 'https://h/1' }], [{ webhook: 'https://h/2' }])) === '["channels"]',
+    'two stated addresses that differ are a delta, as before');
+}
+
+// ---------- an SLI's good / total are expressions: whitespace is not drift ----------
+{
+  const sli = (good, total) => ({ id: 'SLI-01', defines: 'slis.availability', spec: { id: 'availability', type: 'ratio', good, total } });
+  assert(deltasOf(sli('sum(rate(ok_total[5m]))', 'sum(rate(all_total[5m]))'), sli('sum(rate(ok_total[5m]))\n', 'sum( rate(all_total[5m]) )\n')).length === 0,
+    'a rule body with a trailing newline or inner blanks is the same SLI');
+  assert(deltasOf(sli('sum(rate(ok_total[5m]))', '1'), sli('sum(rate(ok_total[1m]))', '1')).map(x => x.field).join() === 'good',
+    'a different window in `good` is still a delta');
 }
 
 report('diff');

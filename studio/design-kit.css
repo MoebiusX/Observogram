@@ -1,0 +1,135 @@
+/* studio/design-kit.css — the component kit. VENDORABLE (docs/VENDORING.md).
+ *
+ * The pieces every screen is made of, as plain classes over the tokens of
+ * studio/design-tokens.css. It reads nothing else: no Observogram class, no
+ * global rule, no element selector, no positioning — so it can be dropped
+ * into any app next to the tokens without touching that app's markup.
+ * Every class is prefixed .og- ; modifiers are .og-<piece>--<variant>.
+ *
+ *   .og-app        the page: colour, type (put it on <body> or a root element)
+ *   .og-eyebrow    the small caps line over a heading
+ *   .og-h1 .og-h2 .og-h3   headings      .og-muted   secondary text
+ *   .og-panel      a surface: a line and a radius       (--pad adds padding)
+ *   .og-callout    a one-line notice    (--warn --fail --ok)
+ *   .og-stat       a stat tile: __label, __value, __note (--warn --fail --ok)
+ *   .og-btn        a button             (--primary --second --text)
+ *   .og-seg        a switch of .og-btn: the pressed one is [aria-pressed="true"]
+ *   .og-pill       a pill               (--ok --warn --fail --second --info)
+ *   .og-input      an input, select or textarea
+ *   .og-steps      a stepper: .og-step, the current one is [aria-current]
+ *   .og-letter     the A / B badge of two compared things (--second for B)
+ *
+ * Contract: class names are only ever added, never renamed or removed.
+ */
+
+.og-app { background: var(--og-bg); color: var(--og-text); font: var(--og-body-font); }
+.og-app ::selection { background: color-mix(in srgb, var(--og-accent) 35%, transparent); }
+
+.og-eyebrow {
+  margin: 0; font: var(--og-eyebrow-font); letter-spacing: var(--og-eyebrow-tracking);
+  text-transform: uppercase; color: var(--og-muted);
+}
+.og-h1 { margin: 0; font: var(--og-h1-font); letter-spacing: var(--og-h1-tracking); color: var(--og-text); }
+.og-h2 { margin: 0; font: var(--og-h2-font); letter-spacing: var(--og-h2-tracking); color: var(--og-text); }
+.og-h3 { margin: 0; font: var(--og-h3-font); color: var(--og-text); }
+.og-muted { color: var(--og-muted); }
+.og-code { font-family: var(--og-font-code); }
+
+.og-panel {
+  background: var(--og-panel); border: 1px solid var(--og-line); border-radius: var(--og-radius-panel);
+}
+.og-panel--pad { padding: var(--og-panel-padding); }
+.og-panel--sunken { background: var(--og-sunken); }
+/* A tone is a line down the edge, never a wash over the panel. */
+.og-panel--ok { box-shadow: inset 3px 0 0 var(--og-accent); }
+.og-panel--warn { box-shadow: inset 3px 0 0 var(--og-warn); }
+.og-panel--fail { box-shadow: inset 3px 0 0 var(--og-fail); }
+.og-panel--info { box-shadow: inset 3px 0 0 var(--og-info); }
+
+.og-callout {
+  display: flex; gap: 14px; align-items: flex-start; padding: 16px 20px;
+  background: var(--og-panel); border: 1px solid var(--og-line); border-radius: var(--og-radius-card);
+  color: var(--og-text);
+}
+.og-callout--warn { background: var(--og-warn-bg); border-color: var(--og-warn-line); }
+.og-callout--fail { background: var(--og-fail-bg); border-color: color-mix(in srgb, var(--og-fail) 40%, var(--og-line)); }
+.og-callout--ok { background: var(--og-accent-bg); border-color: var(--og-accent-line); }
+
+.og-stat {
+  display: grid; gap: 4px; align-content: start; padding: var(--og-stat-padding);
+  background: var(--og-panel); border: 1px solid var(--og-line); border-radius: var(--og-radius-card);
+}
+.og-stat__label { font: var(--og-label-font); color: var(--og-muted); }
+.og-stat__value { font: var(--og-stat-font); letter-spacing: var(--og-stat-tracking); color: var(--og-text); }
+.og-stat__note { font: var(--og-label-font); color: var(--og-muted); }
+.og-stat--ok .og-stat__value { color: var(--og-accent); }
+.og-stat--warn .og-stat__value { color: var(--og-warn); }
+.og-stat--fail .og-stat__value { color: var(--og-fail); }
+.og-stat--second .og-stat__value { color: var(--og-second); }
+
+.og-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  min-height: var(--og-control-height); padding: var(--og-control-padding);
+  background: var(--og-panel-2); border: 1px solid var(--og-line-strong); border-radius: var(--og-radius-control);
+  color: var(--og-text); font: var(--og-control-font); text-decoration: none; cursor: pointer;
+}
+.og-btn:hover { border-color: var(--og-accent-line); filter: brightness(1.12); }
+.og-btn:focus-visible { outline: 2px solid var(--og-accent); outline-offset: 2px; }
+.og-btn:disabled, .og-btn[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+.og-btn--primary {
+  padding: var(--og-button-padding); background: var(--og-accent-solid); border-color: var(--og-accent-solid);
+  color: var(--og-on-accent); font: var(--og-button-font);
+}
+.og-btn--second {
+  padding: var(--og-button-padding); background: var(--og-second-solid); border-color: var(--og-second-solid);
+  color: var(--og-on-second); font: var(--og-button-font);
+}
+.og-btn--primary:hover, .og-btn--second:hover { filter: brightness(1.08); }
+.og-btn--text { min-height: 0; padding: 4px 0; background: none; border-color: transparent; color: var(--og-accent); }
+.og-btn--text:hover { border-color: transparent; text-decoration: underline; filter: none; }
+.og-btn[aria-pressed="true"] { background: var(--og-accent-bg); border-color: var(--og-accent-line); color: var(--og-accent); }
+
+.og-seg { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+
+.og-pill {
+  display: inline-flex; align-items: center; gap: 5px; padding: var(--og-pill-padding);
+  border: 1px solid transparent; border-radius: var(--og-radius-pill);
+  background: var(--og-info-bg); color: var(--og-text-2); font: var(--og-pill-font); white-space: nowrap;
+}
+.og-pill--ok { background: var(--og-accent-bg); color: var(--og-accent); }
+.og-pill--warn { background: var(--og-warn-bg); color: var(--og-warn); }
+.og-pill--fail { background: var(--og-fail-bg); color: var(--og-fail); }
+.og-pill--second { background: var(--og-second-bg); color: var(--og-second); }
+.og-pill--info { background: var(--og-info-bg); color: var(--og-info); }
+
+.og-input {
+  min-height: var(--og-control-height); padding: 6px 11px;
+  background: var(--og-sunken); border: 1px solid var(--og-line-strong); border-radius: var(--og-radius-control);
+  color: var(--og-text); font: 400 14px/1.3 var(--og-font);
+}
+.og-input:focus-visible { outline: 2px solid var(--og-accent); outline-offset: 1px; }
+.og-input::placeholder { color: var(--og-muted); opacity: 0.8; }
+
+.og-steps { display: flex; gap: 32px; border-bottom: 1px solid var(--og-line); }
+.og-step {
+  display: inline-flex; align-items: center; gap: 8px; padding: 14px 0;
+  background: none; border: 0; border-bottom: 2px solid transparent;
+  color: var(--og-muted); font: 500 14px/1.3 var(--og-font); cursor: pointer;
+}
+.og-step__n {
+  display: inline-grid; place-items: center; width: 22px; height: 22px;
+  border: 1px solid currentColor; border-radius: 50%; font-size: 12px;
+}
+.og-step[aria-current], .og-step[aria-selected="true"] { color: var(--og-accent); border-bottom-color: var(--og-accent); }
+.og-step:disabled, .og-step[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+
+.og-letter {
+  display: inline-grid; place-items: center; width: 28px; height: 28px; flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--og-accent) 50%, transparent); border-radius: var(--og-radius-control);
+  background: color-mix(in srgb, var(--og-accent) 16%, transparent); color: var(--og-accent);
+  font: 600 14px/1 var(--og-font);
+}
+.og-letter--second {
+  border-color: color-mix(in srgb, var(--og-second) 50%, transparent);
+  background: color-mix(in srgb, var(--og-second) 16%, transparent); color: var(--og-second);
+}

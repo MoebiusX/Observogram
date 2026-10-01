@@ -47,6 +47,7 @@ import { emit as emitYaml } from './mini-yaml.mjs';
 import { resolveProfile } from './profiles.mjs';
 import { fileSlug as slug } from './slug.mjs';
 import { SPEC_VERSION } from './validator.mjs';
+import { isWithheldValue } from './artefact-model.mjs';
 import { assuranceMode, buildAssuranceRules, assuranceProducts, declaredScrapeJobs, ASSURANCE_GROUP_INTERVAL } from './assurance-rules.mjs';
 import {
   metricSafe, metricPrefix, packStepSeconds, sliLegs, burnAlertExpr, errorBudgetRecordingRules,
@@ -1180,6 +1181,12 @@ export function compileAlertmanager(canonical, opts = {}) {
       else if (kind === 'voice')   recCfg[key].push({ service_key_file: secretFile(`pagerduty_${slug(target.replace(/^.*:\/\//, ''))}`), details: { channel: target } });
       else if (kind === 'whatsapp')recCfg[key].push({ url_file: secretFile(`whatsapp_${slug(target)}`), send_resolved: true });
       else if (kind === 'email')   recCfg[key].push({ to: target, send_resolved: true });
+      // A webhook whose address the pack does not state (artefact-model.mjs):
+      // `unresolved:<VAR>` goes back out as the `${VAR}` the repository had,
+      // for the same deploy-time substitution; a redacted one is a secret
+      // like any other and is referenced by file.
+      else if (kind === 'webhook' && /^unresolved:[A-Za-z_][A-Za-z0-9_]*$/.test(target)) recCfg[key].push({ url: `\${${target.slice('unresolved:'.length)}}`, send_resolved: true });
+      else if (kind === 'webhook' && isWithheldValue(target)) recCfg[key].push({ url_file: secretFile(`webhook_${slug(recName)}`), send_resolved: true });
       else if (kind === 'webhook') recCfg[key].push({ url: target, send_resolved: true });
     }
     receivers.push(recCfg);

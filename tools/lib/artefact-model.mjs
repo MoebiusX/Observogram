@@ -73,6 +73,28 @@ function normalizeExpr(s) {
   return canonicalizePromql(s).text;
 }
 
+// ---------------------------------------------------------------------------
+// Values a source would not disclose
+// ---------------------------------------------------------------------------
+
+// A reader can know that a channel exists without being able to state its
+// address. A running Alertmanager reports its configuration with every
+// secret address replaced; a repository wires an address in at deploy time
+// (`url: ${WEBHOOK_URL}`). The reader keeps the channel and writes one of
+// these in place of the address (tools/lib/alert-routes.mjs):
+//   redacted:secret     the source withheld it
+//   unresolved:<VAR>    the source names the variable it is taken from
+// Both say "a channel of this kind exists, its address is not stated here" —
+// partial evidence, exactly like a reference-only expression: it cannot
+// contradict the address the other pack states, so it is never a difference
+// on its own. Both are URI-shaped, so a webhook carrying one validates.
+export const REDACTED_CHANNEL_VALUE = 'redacted:secret';
+export const UNRESOLVED_CHANNEL_PREFIX = 'unresolved:';
+
+export function isWithheldValue(value) {
+  return typeof value === 'string' && /^(?:redacted|unresolved):/i.test(value);
+}
+
 function stripRef(s) {
   if (typeof s !== 'string') return s ?? '';
   return s.replace(/^ref:/, '').replace(/^slos\./, '').replace(/^slis\./, '');
@@ -304,6 +326,16 @@ function behaviorFor(kind, spec) {
   if (kind === 'scrape_job') {
     return canonicalize({ job: spec.job });
   }
+  if (kind === 'sli') {
+    // An SLI's `good` and `total` are expressions like its `query`: the
+    // same cosmetic normalisation applies (a ruler returns its rule bodies
+    // with a trailing newline; a rule file does not).
+    const out = stripRefFields(spec);
+    for (const k of ['good', 'total']) {
+      if (typeof out?.[k] === 'string') out[k] = normalizeExpr(out[k]);
+    }
+    return canonicalize(out);
+  }
   return canonicalize(stripRefFields(spec));
 }
 
@@ -334,6 +366,7 @@ export function deltasOf(a, b) {
     const sa = JSON.stringify(ba[f] ?? null);
     const sb = JSON.stringify(bb[f] ?? null);
     if (sa !== sb && isPartialEvidenceExpressionDelta(kind, f, ba[f], bb[f])) continue;
+    if (sa !== sb && kind === 'alert_route' && f === 'channels' && isWithheldChannelDelta(ba[f], bb[f])) continue;
     if (sa !== sb) deltas.push({ field: f, a: ba[f] ?? null, b: bb[f] ?? null });
   }
   return deltas;
@@ -354,6 +387,38 @@ function isPartialEvidenceExpressionDelta(kind, field, aValue, bValue) {
   const aRef = isExpressionReferenceOnly(aValue);
   const bRef = isExpressionReferenceOnly(bValue);
   return aRef !== bRef;
+}
+
+// Two channel lists that differ only where one side's address is withheld.
+// The channel KINDS must agree one for one; for a kind where neither side
+// withholds an address, the addresses must agree too. Anything else is a
+// real delta.
+function isWithheldChannelDelta(aValue, bValue) {
+  const a = channelPairs(aValue);
+  const b = channelPairs(bValue);
+  if (!a || !b) return false;
+  if (![...a, ...b].some(([, v]) => isWithheldValue(v))) return false;
+  const kinds = (list) => list.map(([k]) => k).sort().join(',');
+  if (kinds(a) !== kinds(b)) return false;
+  for (const kind of new Set(a.map(([k]) => k))) {
+    const av = a.filter(([k]) => k === kind).map(([, v]) => v);
+    const bv = b.filter(([k]) => k === kind).map(([, v]) => v);
+    if (av.some(isWithheldValue) || bv.some(isWithheldValue)) continue;
+    if (JSON.stringify([...av].sort()) !== JSON.stringify([...bv].sort())) return false;
+  }
+  return true;
+}
+
+// [[kind, address], …] of a route's channels, or null when it is not one.
+function channelPairs(value) {
+  if (!Array.isArray(value)) return null;
+  const out = [];
+  for (const c of value) {
+    const entry = c && typeof c === 'object' ? Object.entries(c)[0] : null;
+    if (!entry) return null;
+    out.push(entry);
+  }
+  return out;
 }
 
 function isExpressionReferenceOnly(value) {
@@ -385,4 +450,119 @@ function stableStringify(value) {
     }
     return v;
   });
+}
+
+// ---------------------------------------------------------------------------
+// Metric families
+//
+// One declared metric is several series on the wire. A histogram `x` is
+// `x_bucket`, `x_count` and `x_sum`; a summary is `x`, `x_count` and `x_sum`;
+// the Python client adds `x_created` beside a counter's `x_total` and beside
+// a histogram's series. Source code declares the metric, a metrics store
+// lists the series, a query references one of them. Paired name for name, a
+// declared histogram reads "not live" while its own three series read "live,
+// not declared".
+//
+// The family is the unit that is compared: every series folds into the
+// metric it belongs to, on both sides, using what BOTH sides know.
+// ---------------------------------------------------------------------------
+
+const DISTRIBUTION_TYPE_RE = /histogram|summary|timer/i;
+
+/**
+ * A resolver from a series name to its family name.
+ *
+ * `names` is every metric name in play (both packs); `typeOf(name)` is the
+ * declared type of a metric when a pack states one (`histogram`,
+ * `go-prometheus-summary-vec`, …), else null. Names are compared lowercase.
+ *
+ *   x_bucket            → x                 (the suffix is reserved for histograms)
+ *   x_count, x_sum      → x   when x is a distribution: x_bucket is known,
+ *                             x is declared one, or both _count and _sum exist
+ *   x_total             → x   when x is known and declared a counter (a
+ *                             client that appends the suffix on exposition:
+ *                             the Python client, OpenMetrics, OTel → Prometheus)
+ *   x_created           → what x_total resolves to when that counter is
+ *                             known; x when x is a distribution or is known
+ *   anything else       → itself
+ */
+export function metricFamilyResolver(names, typeOf = () => null) {
+  const known = new Set();
+  for (const n of names || []) if (typeof n === 'string' && n) known.add(n.toLowerCase());
+  const isDistribution = (base) =>
+    known.has(`${base}_bucket`)
+    || DISTRIBUTION_TYPE_RE.test(String(typeOf(base) || ''))
+    || (known.has(`${base}_count`) && known.has(`${base}_sum`));
+  const counterFamily = (n) => {
+    const base = n.slice(0, -'_total'.length);
+    return base && known.has(base) && /counter/i.test(String(typeOf(base) || '')) ? base : n;
+  };
+  return (name) => {
+    const n = String(name || '').toLowerCase();
+    if (n.endsWith('_bucket')) return n.slice(0, -'_bucket'.length);
+    for (const suffix of ['_count', '_sum']) {
+      if (!n.endsWith(suffix)) continue;
+      const base = n.slice(0, -suffix.length);
+      return base && isDistribution(base) ? base : n;
+    }
+    if (n.endsWith('_total')) return counterFamily(n);
+    if (n.endsWith('_created')) {
+      const base = n.slice(0, -'_created'.length);
+      if (known.has(`${base}_total`)) return counterFamily(`${base}_total`);
+      if (base && (isDistribution(base) || known.has(base))) return base;
+    }
+    return n;
+  };
+}
+
+/**
+ * Fold the metric artefacts of two artefact lists into families.
+ *
+ * Returns { a, b }: the same lists, where every group of metric artefacts
+ * that belong to one family is replaced by ONE artefact carrying the family
+ * name (`spec.name`, `title`), `series` — the names it stands for, sorted —
+ * and `memberIds`, the ids of the artefacts it replaces, so a reader that
+ * lists a pack's own artefacts can say which family each belongs to. The
+ * artefact it is built from is the member named like the
+ * family when there is one (the declaration), else the first by name. A
+ * metric that is alone in its family and already named like it is passed
+ * through untouched, as is every artefact that is not a metric. Inputs are
+ * never mutated.
+ */
+export function foldMetricFamilies(aItems, bItems) {
+  const metricsOf = (items) => (items || []).filter((x) => classify(x) === 'metric');
+  const nameOf = (x) => String(x?.spec?.name || '').toLowerCase();
+  const all = [...metricsOf(aItems), ...metricsOf(bItems)];
+  if (!all.length) return { a: aItems || [], b: bItems || [] };
+  const types = new Map();
+  for (const x of all) {
+    const t = x?.spec?.metric_type;
+    if (t && !types.has(nameOf(x))) types.set(nameOf(x), t);
+  }
+  const familyOf = metricFamilyResolver(all.map(nameOf), (n) => types.get(n) || null);
+
+  const fold = (items) => {
+    const out = [];
+    const groups = new Map();
+    for (const x of items || []) {
+      if (classify(x) !== 'metric') { out.push(x); continue; }
+      const family = familyOf(nameOf(x));
+      if (!groups.has(family)) { groups.set(family, []); out.push({ family }); }
+      groups.get(family).push(x);
+    }
+    return out.map((slot) => {
+      if (!slot.family || !groups.has(slot.family) || classify(slot) === 'metric') return slot;
+      const members = groups.get(slot.family).slice().sort((x, y) => nameOf(x).localeCompare(nameOf(y)));
+      const head = members.find((x) => nameOf(x) === slot.family) || members[0];
+      if (members.length === 1 && nameOf(head) === slot.family) return head;
+      return {
+        ...head,
+        title: slot.family,
+        spec: { ...head.spec, name: slot.family },
+        series: [...new Set(members.map((x) => String(x.spec?.name || '')))].sort(),
+        memberIds: members.map((x) => x.id).filter(Boolean),
+      };
+    });
+  };
+  return { a: fold(aItems), b: fold(bItems) };
 }

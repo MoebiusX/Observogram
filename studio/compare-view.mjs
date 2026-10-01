@@ -1211,10 +1211,13 @@ function diffDigest(diff, packB, lens) {
     return productSurface(art, lens, pack);
   };
 
-  const totals = { aligned: 0, drifted: 0, onlyInA: 0, onlyInB: 0, outOfScope: 0, scaffold: 0 };
+  const totals = { aligned: 0, drifted: 0, onlyInA: 0, onlyInB: 0, outOfScope: 0, scaffold: 0, notObserved: 0 };
   const rows = [];
   for (const L of LAYERS_FOR_DIFF) {
     const bucket = diff.layers[L] || { onlyInA: [], onlyInB: [], inBoth: [], outOfScope: [] };
+    // Artefacts one pack holds in a family the other had no way to observe
+    // (the engine's `notObserved`): unchecked — not a difference, not a match.
+    const notObserved = (bucket.notObserved || []).filter(e => passesLens(e, e.side === 'b' ? 'b' : 'a'));
     // inBoth = shared identity. Split it: structurally-equal pairs are
     // aligned; same-identity-but-divergent pairs are drifted. Matching is
     // an object comparison, not a name check.
@@ -1236,14 +1239,15 @@ function diffDigest(diff, packB, lens) {
     // platform inventory. Shown muted, never counted as drift.
     const outOfScope = (bucket.outOfScope || []).filter(e => passesLens(e, 'b'));
     if (aligned.length === 0 && drifted.length === 0 && onlyInA.length === 0
-        && onlyInB.length === 0 && outOfScope.length === 0 && scaffold.length === 0) continue;
+        && onlyInB.length === 0 && outOfScope.length === 0 && scaffold.length === 0 && notObserved.length === 0) continue;
     totals.aligned += aligned.length;
     totals.drifted += drifted.length;
     totals.onlyInA += onlyInA.length;
     totals.onlyInB += onlyInB.length;
     totals.outOfScope += outOfScope.length;
     totals.scaffold += scaffold.length;
-    rows.push({ L, name: COMPARE_LAYERS.find(x => x.id === L)?.name || L, aligned, drifted, onlyInA, onlyInB, outOfScope, scaffold });
+    totals.notObserved += notObserved.length;
+    rows.push({ L, name: COMPARE_LAYERS.find(x => x.id === L)?.name || L, aligned, drifted, onlyInA, onlyInB, outOfScope, scaffold, notObserved });
   }
   totals.shared = totals.aligned + totals.drifted;
   totals.universe = totals.shared + totals.onlyInA + totals.onlyInB;
@@ -1468,6 +1472,7 @@ function renderDriftDrill(diff, packB, compareBId, lens) {
       </tfoot>
     </table>
     ${totScaffold ? `<p class="drift-oos-note">${totScaffold} template placeholder${totScaffold === 1 ? '' : 's'} (scaffold) had no source evidence in the selected environment. Shown in the pack, not counted as differences.</p>` : ''}
+    ${digest.totals.notObserved ? `<p class="drift-oos-note">${plural(digest.totals.notObserved, 'artefact')} could not be checked: the other pack had no way to observe ${digest.totals.notObserved === 1 ? 'its family' : 'their families'} (no tool for it, or its probe failed). Not counted as differences; Compare lists each with the reason.</p>` : ''}
     ${totOOS ? `<p class="drift-oos-note">${totOOS} live artefact${totOOS === 1 ? '' : 's'} out of declared scope — members of families <strong>${escapeHtml(bName)}</strong> runs but your pack doesn't declare (the rest of the platform inventory). Shown for context, not counted as drift.
       <button type="button" class="ctrl-link drift-oos-widen" title="Switch the live scope to 'All live' so the parked inventory is classified instead of parked">show them — widen scope</button></p>` : ''}
     ${diagUx.disclosureHtml('How differences are weighted', weightsBody, { cls: 'diag-weights-disclosure' })}
@@ -2436,23 +2441,51 @@ function buildCompareKeySets() {
   // Out-of-scope live artefacts stay unclassified on purpose — the summary
   // arithmetic excludes them too.
   const aStatus = {}, bStatus = {};
+  const aReason = new Map(), bReason = new Map();
+  const aEntry = new Map(), bEntry = new Map();
   for (const L of LAYERS_FOR_DIFF) {
     const bucket = state.diff.layers[L] || {};
     const a = new Map(), b = new Map();
+    // A metric family stands for several of the pack's own artefacts (a
+    // histogram's _bucket / _count / _sum series): every member takes the
+    // family's status, not only the one the entry embeds.
+    // `entry` remembers which diff entry a card belongs to, so a group can
+    // say how many artefacts it holds when several cards are one metric.
+    const mark = (map, art, status, side, key) => {
+      for (const id of [art?.id, ...(art?.memberIds || [])]) {
+        if (!id) continue;
+        map.set(id, status);
+        (side === 'b' ? bEntry : aEntry).set(`${L}:${id}`, key);
+      }
+    };
     for (const e of bucket.inBoth || []) {
-      if (e.a?.id) a.set(e.a.id, 'both');
-      if (e.b?.id) b.set(e.b.id, 'both');
+      mark(a, e.a, 'both', 'a', e.key);
+      mark(b, e.b, 'both', 'b', e.key);
     }
-    for (const e of bucket.onlyInA || []) if (e.artefact?.id) a.set(e.artefact.id, 'only');
-    for (const e of bucket.onlyInB || []) if (e.artefact?.id) b.set(e.artefact.id, 'only');
+    for (const e of bucket.onlyInA || []) mark(a, e.artefact, 'only', 'a', e.key);
+    for (const e of bucket.onlyInB || []) mark(b, e.artefact, 'only', 'b', e.key);
+    // Held by one pack in a family the other could not observe: unchecked.
+    for (const e of bucket.notObserved || []) {
+      mark(e.side === 'b' ? b : a, e.artefact, 'unchecked', e.side === 'b' ? 'b' : 'a', e.key);
+      for (const id of [e.artefact?.id, ...(e.artefact?.memberIds || [])]) {
+        if (id) (e.side === 'b' ? bReason : aReason).set(`${L}:${id}`, e.reason || '');
+      }
+    }
     aStatus[L] = a;
     bStatus[L] = b;
   }
-  return { aStatus, bStatus };
+  return { aStatus, bStatus, aReason, bReason, aEntry, bEntry };
 }
 
-// 'both' | 'only' | null for one card. null = not part of the comparison
-// (panels are excluded from the diff; out-of-scope live artefacts are parked).
+// Why a card could not be checked, or ''.
+function compareUncheckedReason(side, L, art, sets) {
+  return (side === 'a' ? sets.aReason : sets.bReason)?.get(`${L}:${art?.id}`) || '';
+}
+
+// 'both' | 'only' | 'unchecked' | null for one card. 'unchecked' = the other
+// pack had no way to observe this artefact's family; null = not part of the
+// comparison (panels are excluded from the diff; out-of-scope live artefacts
+// are parked).
 function compareStatusFor(side, L, art, sets) {
   const byId = side === 'a' ? sets.aStatus[L] : sets.bStatus[L];
   return (art?.id && byId?.get(art.id)) || null;
@@ -3235,29 +3268,51 @@ function renderCompareLayerColumn(side, L, items, sets) {
   // placeholders, live inventory outside the declared scope, dashboard panels).
   const pairAt = new Map();
   (state.diff?.layers?.[L]?.inBoth || []).forEach((e, i) => {
-    const id = side === 'a' ? e.a?.id : e.b?.id;
-    if (id && !pairAt.has(id)) pairAt.set(id, i);
+    const art = side === 'a' ? e.a : e.b;
+    // The members of a metric family sit together, at the family's place.
+    for (const id of [art?.id, ...(art?.memberIds || [])]) if (id && !pairAt.has(id)) pairAt.set(id, i);
   });
-  const groups = { both: [], only: [], rest: [] };
+  const groups = { both: [], only: [], unchecked: [], rest: [] };
   for (const art of items) {
     const status = compareStatusFor(side, L, art, sets);
-    groups[status === 'both' ? 'both' : status === 'only' ? 'only' : 'rest'].push(art);
+    groups[['both', 'only', 'unchecked'].includes(status) ? status : 'rest'].push(art);
   }
   groups.both.sort((x, y) => (pairAt.get(x.id) ?? Infinity) - (pairAt.get(y.id) ?? Infinity));
   const letter = side.toUpperCase();
+  const other = letter === 'A' ? 'B' : 'A';
+  const reasons = [...new Set(groups.unchecked.map(art => compareUncheckedReason(side, L, art, sets)).filter(Boolean))];
   const titles = {
     both: ['In both', 'In both packs, matched by behaviour. The same order on both sides.'],
-    only: [`Only in ${letter}`, `In Pack ${letter}, with no counterpart in Pack ${letter === 'A' ? 'B' : 'A'}.`],
+    only: [`Only in ${letter}`, `In Pack ${letter}, with no counterpart in Pack ${other}.`],
+    unchecked: [`Not checked in ${other}`, `In Pack ${letter}; Pack ${other} had no way to observe ${groups.unchecked.length === 1 ? 'this family' : 'these families'}, so ${groups.unchecked.length === 1 ? 'it is' : 'they are'} neither matched nor missing.${reasons.length ? ` Why: ${reasons.join('; ')}.` : ''}`],
     rest: ['Not compared', 'Not paired by the comparison: template placeholders, live inventory outside the declared scope and dashboard panels.'],
   };
   const def = { id: L, num: L, name: L };
-  for (const k of ['both', 'only', 'rest']) {
+  for (const k of ['both', 'only', 'unchecked', 'rest']) {
     if (!groups[k].length) continue;
     const h = document.createElement('div');
     h.className = `compare-col-group is-${k}`;
     h.title = titles[k][1];
-    h.innerHTML = `${escapeHtml(titles[k][0])} <span class="compare-col-group-n">${groups[k].length}</span>`;
+    // The number is what the summary counts: artefacts. A metric is one
+    // artefact however many series (cards) it is exposed as, so when the
+    // two differ the cards are said too — never two unexplained numbers.
+    const entryOf = side === 'a' ? sets.aEntry : sets.bEntry;
+    const artefacts = k === 'rest'
+      ? groups[k].length
+      : new Set(groups[k].map(art => entryOf?.get(`${L}:${art.id}`) || `id:${art.id}`)).size;
+    const cardsNote = artefacts !== groups[k].length
+      ? ` <span class="compare-col-group-cards" title="A metric is compared as one artefact; each of its series (_bucket, _count, _sum …) is a card.">${groups[k].length} cards</span>`
+      : '';
+    h.innerHTML = `${escapeHtml(titles[k][0])} <span class="compare-col-group-n">${artefacts}</span>${cardsNote}`;
     col.appendChild(h);
+    if (k === 'unchecked' && reasons.length) {
+      // The reason is the point of this group: say it on the screen, not
+      // only in a tooltip.
+      const why = document.createElement('p');
+      why.className = 'compare-col-group-why';
+      why.textContent = reasons.length === 1 ? reasons[0] : reasons.join(' · ');
+      col.appendChild(why);
+    }
     for (const art of groups[k]) col.appendChild(renderCompareCard(art, def, art._sub || null, side, sets));
   }
   return col;
@@ -3345,11 +3400,13 @@ function renderCompareCard(artefact, def, sublayerKey, side, sets) {
   const status = compareStatusFor(side, def.id, artefact, sets);
   const inBoth = status === 'both';
   const isOnlySide = status === 'only';
+  const isUnchecked = status === 'unchecked';
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'card compare-side-card';
   if (inBoth) btn.classList.add('is-both');
   if (isOnlySide) btn.classList.add('is-only', `is-only-${side}`);
+  if (isUnchecked) btn.classList.add('is-unchecked');
   const ckey = cardKey(def.id, sublayerKey, artefact.id);
   btn.dataset.key = ckey;
   if ((side === 'a' && ckey === state.activeCardKeyA) ||
@@ -3362,6 +3419,11 @@ function renderCompareCard(artefact, def, sublayerKey, side, sets) {
   const noun = side === 'a' ? sets?.roles?.aNoun : sets?.roles?.bNoun;
   if (inBoth) statusPill = '<span class="diff-chip chip-both" title="In both packs, matched by behaviour">in both</span>';
   else if (isOnlySide) statusPill = `<span class="diff-chip chip-only-${side}" title="${escapeHtml(noun ? `Only in the ${noun}` : `Pack ${side.toUpperCase()} only`)}">only in ${side.toUpperCase()}</span>`;
+  else if (isUnchecked) {
+    const otherLetter = side === 'a' ? 'B' : 'A';
+    const why = compareUncheckedReason(side, def.id, artefact, sets);
+    statusPill = `<span class="diff-chip chip-unchecked" title="${escapeHtml(`Pack ${otherLetter} had no way to observe this${why ? `: ${why}` : ''}. Not counted as a difference.`)}">not checked in ${otherLetter}</span>`;
+  }
 
   // Source pill — Declared/Verified/Missing (what the studio's
   // per-artefact taxonomy already says about this card's status in
@@ -3473,8 +3535,14 @@ export function renderComparePicker() {
 // same lensed digest as the summary so every number on the screen agrees;
 // the cells are named by the A / B letters of the cards above them.
 function renderCompareSummary(digest) {
-  const t = digest?.totals || { onlyInA: 0, onlyInB: 0, shared: 0, universe: 0 };
+  const t = digest?.totals || { onlyInA: 0, onlyInB: 0, shared: 0, universe: 0, notObserved: 0 };
   const jaccard = t.universe ? `${Math.round((t.shared / t.universe) * 100)}%` : '—';
+  // Shown only when there is something to say: artefacts one pack holds in
+  // a family the other had no way to observe. They are outside the union,
+  // so they do not lower the match.
+  const unchecked = t.notObserved
+    ? `<div class="compare-cell c-unchecked" title="Held by one pack in a family the other had no way to observe (no tool for it, or its probe failed). Neither matched nor missing; outside the union."><div class="c-key">not checked</div><div class="c-val">${t.notObserved}</div></div>`
+    : '';
   const wrap = document.createElement('div');
   wrap.className = 'compare-summary';
   wrap.innerHTML = `
@@ -3483,7 +3551,9 @@ function renderCompareSummary(digest) {
     <div class="compare-cell c-b" title="In Pack B, with no counterpart in Pack A"><div class="c-key">only in B</div><div class="c-val">${t.onlyInB}</div></div>
     <div class="compare-cell c-union" title="Union: A + B without duplicates"><div class="c-key">union</div><div class="c-val">${t.universe}</div></div>
     <div class="compare-cell c-jacc"><div class="c-key">${diagUx.termHtml('jaccard', 'jaccard')}</div><div class="c-val"${t.universe ? '' : ' title="Nothing was compared, so there is no overlap to measure"'}>${jaccard}</div></div>
+    ${unchecked}
   `;
+  if (t.notObserved) wrap.classList.add('has-unchecked');
   return wrap;
 }
 
@@ -4312,6 +4382,9 @@ function compareSummaryHtml(digest, cmp, ctx) {
   if (cmp.extras) sItems.push(`<li class="ux-tone-info"><strong>${cmp.extras}</strong> ${drift ? `live artefact${s(cmp.extras)} not declared (shadow signals)` : `additional artefact${s(cmp.extras)} in the ${escapeHtml(r.aNoun)}`}</li>`);
   if (t.outOfScope) sItems.push(`<li class="ux-tone-muted"><strong>${t.outOfScope}</strong> live artefact${s(t.outOfScope)} outside the declared scope — platform inventory, not counted</li>`);
   if (t.scaffold) sItems.push(`<li class="ux-tone-muted"><strong>${t.scaffold}</strong> template placeholder${s(t.scaffold)} (scaffold) — not counted</li>`);
+  // Unchecked is said as plainly as missing would be: how many, and that
+  // the other pack had no way to look — Side by side prints each reason.
+  if (t.notObserved) sItems.push(`<li class="ux-tone-warn"><strong>${t.notObserved}</strong> artefact${s(t.notObserved)} could not be checked — the other pack had no way to observe ${t.notObserved === 1 ? 'its family' : 'their families'} (no tool for it, or its probe failed). Neither matched nor missing, not counted</li>`);
   const overlap = t.universe ? Math.round((t.shared / t.universe) * 100) : null;
   const structuralPanel = `
       <section class="compare-panel ux-tone-info" aria-labelledby="compare-structural-title">

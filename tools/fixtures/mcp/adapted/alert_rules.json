@@ -212,7 +212,6 @@
   {
     "name": "ContainerOOMKilled",
     "expr": "kube_pod_container_status_last_terminated_reason{reason=\"OOMKilled\"} == 1",
-    "for": "5m",
     "labels": {
       "severity": "warning"
     },
