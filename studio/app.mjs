@@ -153,9 +153,8 @@ async function rehydrateFromPersistence() {
   if (typeof saved.expandL3Queries === 'boolean') state.expandL3Queries = saved.expandL3Queries;
   if (typeof saved.layersSearch === 'string') state.layersSearch = saved.layersSearch;
   if (typeof saved.layersDomain === 'string') state.layersDomain = saved.layersDomain;
-  if (typeof saved.discoverTask === 'string') state.discoverTask = saved.discoverTask;
+  if (['list', 'tiles', 'cards', 'details'].includes(saved.compareDetail)) state.compareDetail = saved.compareDetail;
   if (['list', 'tiles', 'cards', 'details'].includes(saved.discoverDetail)) state.discoverDetail = saved.discoverDetail;
-  if (['summary', 'review', 'all'].includes(saved.compareFocus)) state.compareFocus = saved.compareFocus;
 
   // Make sure the picker can label an archived example by pushing the
   // catalog-entry shape into state.catalog (same trick renderPackBSelect uses).
@@ -673,10 +672,9 @@ export function layerArtefactCount(layerId) {
 // ============================================================
 
 export function renderTabs() {
-  // Keep the OBSERVA chrome in sync on every re-render — the active tab and
-  // the per-view chrome (the baseline picker shows only where packs are
-  // compared). Views that switch state.view through the host seam
-  // (appHost.renderTabs) get the whole chrome, not just the tab highlight.
+  // Keep the OBSERVA chrome in sync on every re-render. Views that switch
+  // state.view through the host seam (appHost.renderTabs) get the whole
+  // chrome, not just the tab highlight.
   applyModeChrome();
   const tabs = $('#layer-tabs');
   if (!tabs) return;
@@ -1218,8 +1216,6 @@ function withPlaceholderPasses(res) {
   return res?.conformance && Array.isArray(onPlaceholder) ? { ...res.conformance, onPlaceholder } : res?.conformance;
 }
 
-// The views that read Pack B — the only ones whose header shows the baseline picker.
-const COMPARISON_VIEWS = new Set(['compare', 'benchmark', 'compare-artefacts', 'compile', 'traceability', 'atlas']);
 
 // The BUILD journey's three cards (docs/BUILD_JOURNEY.md) live in build-model.mjs
 // (BUILD_TABS, pure, tested): the same shape as OBSERVA_TABS and the same
@@ -1288,15 +1284,17 @@ function routeTo(id) {
 // .ux-decision.is-sticky) pin at chrome + --ux-context-h. The bar wraps onto
 // more rows on narrow screens and is hidden on home and in Build, so measure
 // it; ux.css holds the single-row default for when this cannot run.
+function syncContextBarHeight() {
+  const bar = document.querySelector('header.hdr');
+  if (!bar) return;
+  const h = Math.ceil(bar.getBoundingClientRect().height);
+  document.body.style.setProperty('--ux-context-h', `${h}px`);
+}
 function trackContextBarHeight() {
   const bar = document.querySelector('header.hdr');
   if (!bar || typeof ResizeObserver !== 'function') return;
-  const apply = () => {
-    const h = Math.ceil(bar.getBoundingClientRect().height);
-    document.body.style.setProperty('--ux-context-h', `${h}px`);
-  };
-  new ResizeObserver(apply).observe(bar);
-  apply();
+  new ResizeObserver(syncContextBarHeight).observe(bar);
+  syncContextBarHeight();
 }
 
 function installObservaChrome() {
@@ -1554,7 +1552,6 @@ async function boot() {
   setupIdentityChip();
   setupResetButton();
   setupExportButton();
-  setupHeaderActionsMenu();
   // Eagerly fetch /api/examples so the Pack B picker has the archived
   // reference packs available even before the user visits the home
   // examples disclosure. AWAITED so the persistence rehydrate below can
@@ -1928,15 +1925,12 @@ function applyModeChrome() {
   // Pack B picker stays visible whenever we're not on home — empty until
   // the user picks something. This is the unlock: no more rigid single
   // vs compare mode. Hide it on Compare for the same duplication reason.
-  // Comparison controls belong on the screens that compare (the UX
-  // review: keep them where they matter) — Diagnose, Remediate,
-  // Traceability and the Atlas; Discover and the single-pack tools work on
-  // the open pack alone.
+  // Loading Pack A, loading Pack B and comparing them is the studio's core
+  // operation, so the picker is on every workspace screen, Discover included.
   const packBCtrl = $('#ctrl-pack-b');
   const envBCtrl  = $('#ctrl-env-b');
-  const comparing = COMPARISON_VIEWS.has(state.view || 'layers');
-  if (packBCtrl) packBCtrl.hidden = isHome || onCompare || !comparing;
-  if (envBCtrl)  envBCtrl.hidden  = isHome || onCompare || !comparing || !state.packB;
+  if (packBCtrl) packBCtrl.hidden = isHome || onCompare;
+  if (envBCtrl)  envBCtrl.hidden  = isHome || onCompare || !state.packB;
   // Clear-B button only when B is loaded.
   const clearB = $('#pack-b-clear');
   if (clearB) clearB.hidden = !state.packB || onCompare;
@@ -1954,6 +1948,10 @@ function applyModeChrome() {
   // through here, so this is where the set is swapped (idempotent: the nav
   // is rebuilt only when the set changes).
   paintObservaActiveTab();
+  // The bar's controls just changed (a picker shown or hidden can wrap it
+  // onto another row): re-measure now, so what pins under it — the panels,
+  // the drawers, the sticky strips — is never a frame behind the observer.
+  syncContextBarHeight();
 }
 
 // RESET button — clears EVERYTHING (server uploads + client persistence)
@@ -1998,53 +1996,6 @@ function setupResetButton() {
     //    bypasses the disk cache for HTML.
     location.reload();
   };
-}
-
-// The working context bar's one Actions menu (index.html #hdr-actions).
-// Each item proxies to an original control that stays in the DOM, hidden,
-// so the upload / scan / draft / export flows keep their single wiring.
-function setupHeaderActionsMenu() {
-  const wrap = $('#hdr-actions');
-  const btn = $('#hdr-actions-btn');
-  const menu = $('#hdr-actions-menu');
-  if (!wrap || !btn || !menu) return;
-  const items = () => [...menu.querySelectorAll('.hdr-menu-item:not([disabled])')];
-  const close = (refocus) => {
-    if (menu.hidden) return;
-    menu.hidden = true;
-    btn.setAttribute('aria-expanded', 'false');
-    if (refocus) btn.focus();
-  };
-  const open = () => {
-    // Export needs a pack; say why instead of hiding the item.
-    for (const it of menu.querySelectorAll('[data-needs-pack]')) {
-      it.disabled = !focusedPackId();
-      it.title = it.disabled ? 'Open a pack first' : '';
-    }
-    menu.hidden = false;
-    btn.setAttribute('aria-expanded', 'true');
-    items()[0]?.focus();
-  };
-  btn.addEventListener('click', (e) => { e.stopPropagation(); if (menu.hidden) open(); else close(false); });
-  menu.addEventListener('click', (e) => {
-    const it = e.target.closest('.hdr-menu-item');
-    if (!it || it.disabled) return;
-    e.stopPropagation();
-    close(false);
-    const target = document.querySelector(it.dataset.proxy);
-    setTimeout(() => target?.click(), 0);
-  });
-  menu.addEventListener('keydown', (e) => {
-    const list = items();
-    const i = list.indexOf(document.activeElement);
-    if (e.key === 'ArrowDown') { e.preventDefault(); list[(i + 1) % list.length]?.focus(); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); list[(i - 1 + list.length) % list.length]?.focus(); }
-    else if (e.key === 'Home') { e.preventDefault(); list[0]?.focus(); }
-    else if (e.key === 'End') { e.preventDefault(); list[list.length - 1]?.focus(); }
-    else if (e.key === 'Escape') { e.preventDefault(); close(true); }
-    else if (e.key === 'Tab') close(false);
-  });
-  document.addEventListener('click', (e) => { if (!wrap.contains(e.target)) close(false); });
 }
 
 // Export button — download the focused pack as one ZIP: its canonical

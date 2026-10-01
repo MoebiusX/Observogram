@@ -957,7 +957,7 @@ function renderTraceRow(bucketKey, finding, resolvedSet) {
 //   · Assessment — the diagnostic-grade verdict + coverage/trust/evidence
 //                  report (formerly "Diagnostic Grade"; the formal term
 //                  lives on in the report's details)
-//   · Compare    — the artefact-level live-pack-vs-baseline diff
+//   · Compare    — the artefact-level Pack A vs Pack B side-by-side
 // Switching is local (state.diagnoseSub, ids unchanged) and persisted.
 function renderDiagnoseSubnav(active) {
   const nav = document.createElement('div');
@@ -966,7 +966,7 @@ function renderDiagnoseSubnav(active) {
   nav.setAttribute('aria-label', 'Diagnose views');
   const tabs = [
     { id: 'grade',   label: 'Assessment', sub: 'is it good enough?', title: 'The diagnostic grade: coverage, trust and evidence, with what keeps the pack below grade A.' },
-    { id: 'compare', label: 'Compare',    sub: 'what differs from the baseline?', title: 'Artefact by artefact: the pack (A) compared with the selected baseline (B).' },
+    { id: 'compare', label: 'Compare',    sub: 'A vs B — what differs?', title: 'Artefact by artefact: Pack A compared with Pack B, side by side.' },
   ];
   for (const t of tabs) {
     const btn = document.createElement('button');
@@ -2302,6 +2302,7 @@ function renderCompareView(view) {
   const scaffold = document.createElement('section');
   scaffold.className = 'section compare-view';
   scaffold.dataset.layer = 'COMPARE';
+  scaffold.dataset.cview = compareView(state.compareDetail);
   view.appendChild(scaffold);
 
   const haveA = !!state.pack;
@@ -2347,23 +2348,27 @@ function renderCompareView(view) {
     return;
   }
 
-  // The screen grammar: context (both packs named) · decision · next
-  // action first; then ONE switch — Summary (default) · Changes needing
-  // review · All differences — over the same lensed digest.
+  // Comparing two packs is the operation, so the two packs lead: the A and
+  // B cards (each with its own pickers, swap between them) and the set
+  // arithmetic are always on screen. ONE switch follows — Side by side
+  // (default) · Changes needing review · Summary — over the same lensed digest.
   const lens = state.compareLens || 'all';
   const ctx = diagnoseContext();
   const digest = diffDigest(state.diff, state.packB, lens);
   const cmp = buildCompareDecision(digest, ctx);
-  const focus = ['summary', 'review', 'all'].includes(state.compareFocus) ? state.compareFocus : 'summary';
+  const focus = ['summary', 'review', 'all'].includes(state.compareFocus) ? state.compareFocus : 'all';
 
   // Build per-layer key-set lookups once (the roles ride along so every
   // card and column names its side the same way).
   const sets = buildCompareKeySets();
   sets.roles = ctx.roles;
 
+  scaffold.appendChild(renderComparePackHeaders());
+  scaffold.appendChild(renderCompareSummary(digest));
+
   const lead = document.createElement('div');
-  lead.className = 'compare-digest';
-  lead.innerHTML = renderCompareDecisionHtml(cmp, ctx) + compareFocusSwitchHtml(focus, cmp);
+  lead.className = 'compare-digest compare-focus-row';
+  lead.innerHTML = compareFocusSwitchHtml(focus, cmp);
   scaffold.appendChild(lead);
 
   if (focus === 'summary') {
@@ -2371,25 +2376,18 @@ function renderCompareView(view) {
     body.className = 'compare-digest compare-digest-body';
     // Nothing compared: an empty state, not tiles that read "nothing
     // missing" / "100% overlap" over zero artefacts.
-    body.innerHTML = cmp.empty
+    body.innerHTML = renderCompareDecisionHtml(cmp, ctx) + (cmp.empty
       ? compareNothingComparedHtml(digest, lens)
-      : compareSummaryHtml(digest, cmp, ctx);
+      : compareSummaryHtml(digest, cmp, ctx));
     scaffold.appendChild(body);
-    // What is being compared, and the controls to change it — after the answer.
-    const packsHead = document.createElement('div');
-    packsHead.className = 'compare-digest compare-packs-head';
-    packsHead.innerHTML = `<h2 class="diag-block-title">Packs being compared</h2><p class="diag-block-lede">Change either side, or swap them. The ${escapeHtml(ctx.roles.aNoun)} is Pack A; the ${escapeHtml(ctx.roles.bNoun)} is Pack B.</p>`;
-    scaffold.appendChild(packsHead);
-    scaffold.appendChild(renderComparePackHeaders());
   } else if (focus === 'review') {
     scaffold.appendChild(renderCompareReview(digest, cmp, ctx));
   } else {
-    // All differences — the expert side-by-side: identity cards, the set
-    // arithmetic, slice filters + lens + scope + search, then the per-layer
-    // rows (layer head spanning both columns, A grid left, B grid right).
-    scaffold.appendChild(renderComparePackHeaders());
-    scaffold.appendChild(renderCompareSummary(digest, ctx));
+    // Side by side: slice filters + lens + scope + search, then the
+    // per-layer rows (layer head spanning both columns, A grid left, B
+    // grid right).
     scaffold.appendChild(renderCompareFilters());
+    scaffold.appendChild(renderCompareColumnHeads(ctx));
     for (const L of LAYERS_FOR_DIFF) {
       const row = renderCompareLayerRow(L, sets);
       if (row) scaffold.appendChild(row);
@@ -2411,6 +2409,23 @@ function compareNothingComparedHtml(digest, lens) {
     actions: lens !== 'all' ? [{ label: 'Show all artefacts', action: 'cmp-lens:all' }] : [],
     tone: 'warn',
   });
+}
+
+// Side by side means two panes: Pack A on the left, Pack B on the right. Their
+// heads stay pinned under the context bar while the layers scroll, so every
+// card on screen is under the name of the pack it belongs to.
+function renderCompareColumnHeads(ctx) {
+  const wrap = document.createElement('div');
+  wrap.className = 'compare-cols-head';
+  const head = (side, p, noun) => `
+    <div class="cch-side cch-${side}">
+      <span class="cch-letter" aria-hidden="true">${side.toUpperCase()}</span>
+      <span class="cch-key">Pack ${side.toUpperCase()}</span>
+      <span class="cch-name">${escapeHtml(p ? packLine(p) : '—')}</span>
+      <span class="cch-role">${escapeHtml(noun)}</span>
+    </div>`;
+  wrap.innerHTML = head('a', ctx.a, ctx.roles.aNoun) + head('b', ctx.b, ctx.roles.bNoun);
+  return wrap;
 }
 
 function buildCompareKeySets() {
@@ -2527,12 +2542,12 @@ function renderComparePackHeader(side, pack, diffMeta) {
     .map(e => `<option value="${escapeHtml(e)}" ${e === activeEnv ? 'selected' : ''}>${escapeHtml(e)}</option>`)
     .join('');
 
-  // Name the side by its role (live pack / declared pack / baseline); the
-  // A/B letter stays as the expert cross-reference.
+  // Pack A / Pack B lead (the names the header pickers use); the role
+  // (live pack / declared pack / baseline) follows.
   const roles = diagnoseContext().roles;
   const roleNoun = side === 'a' ? roles.aNoun : roles.bNoun;
   card.innerHTML = `
-    <div class="cpc-eyebrow" title="Pack ${side.toUpperCase()}">${escapeHtml(capitalize(roleNoun))} · Pack ${side.toUpperCase()}</div>
+    <div class="cpc-eyebrow">Pack ${side.toUpperCase()} · ${escapeHtml(roleNoun)}</div>
     <div class="cpc-pickers">
       <label class="cpc-pickfield">
         <span class="cpc-pickfield-key">pack</span>
@@ -2839,18 +2854,33 @@ function inferPackSource(pack) {
 }
 
 // Slice filter pills + search input.
+// How much of each artefact the two panes draw. Packs run to thousands of
+// artefacts, so the lighter views are what makes a comparison scannable:
+// List is one line per artefact. The choice is kept (state.compareDetail).
+export const COMPARE_VIEWS = [
+  { id: 'list',    label: 'List',    tip: 'One line per artefact: its ID, its name and whether it is in both packs. The most on one screen.' },
+  { id: 'tiles',   label: 'Tiles',   tip: 'The ID, name, comparison status and source of each artefact.' },
+  { id: 'cards',   label: 'Cards',   tip: 'Each artefact with its summary.' },
+  { id: 'details', label: 'Details', tip: 'One artefact per row in each pane, with its full summary.' },
+];
+export const COMPARE_VIEW_DEFAULT = 'cards';
+export function compareView(id) {
+  return COMPARE_VIEWS.some(v => v.id === id) ? id : COMPARE_VIEW_DEFAULT;
+}
+
 function renderCompareFilters() {
   const wrap = document.createElement('div');
   wrap.className = 'compare-filters';
-  // Plain side names first; the A/B set operations stay as expert slices.
+  // The slices are named by the A / B letters the pack cards carry; each
+  // hint says which role that side plays.
   const roles = diagnoseContext().roles;
   const slices = [
-    { id: 'all',   label: 'All',          hint: 'Every artefact from both packs, side by side.' },
-    { id: 'onlyA', label: roles.aOnly,    hint: `Pack A only: artefacts in the ${roles.aNoun} with no counterpart in the ${roles.bNoun}. The right column is empty.` },
-    { id: 'onlyB', label: roles.bOnly,    hint: `Pack B only: artefacts in the ${roles.bNoun} with no counterpart in the ${roles.aNoun}. The left column is empty.` },
-    { id: 'both',  label: 'Shared',       hint: 'In both packs (matched by behavioural identity — the same deployed control, whatever it is named).' },
-    { id: 'a-b',   label: 'A − B',        hint: `Expert · set difference: every artefact in A (the ${roles.aNoun}), minus anything also in B.` },
-    { id: 'a+b',   label: 'A + B',        hint: 'Expert · union: combined view of both packs without duplication.' },
+    { id: 'all',   label: 'All',       hint: 'Every artefact from both packs, side by side.' },
+    { id: 'onlyA', label: 'Only in A', hint: `Artefacts in Pack A (the ${roles.aNoun}) with no counterpart in Pack B (the ${roles.bNoun}). The right column is empty.` },
+    { id: 'onlyB', label: 'Only in B', hint: `Artefacts in Pack B (the ${roles.bNoun}) with no counterpart in Pack A (the ${roles.aNoun}). The left column is empty.` },
+    { id: 'both',  label: 'In both',   hint: 'In both packs (matched by behavioural identity — the same deployed control, whatever it is named).' },
+    { id: 'a-b',   label: 'A − B',     hint: 'Set difference: every artefact in A, minus anything also in B.' },
+    { id: 'a+b',   label: 'A + B',     hint: 'Union: combined view of both packs without duplication.' },
   ];
   const active = state.compareSlice || 'all';
   for (const s of slices) {
@@ -2896,6 +2926,25 @@ function renderCompareFilters() {
   lensWrap.appendChild(lensSel);
   wrap.appendChild(lensWrap);
   wrap.appendChild(renderLiveScopeControl());
+
+  // View — how much of each artefact both panes draw.
+  const activeView = compareView(state.compareDetail);
+  const viewWrap = document.createElement('div');
+  viewWrap.className = 'compare-view-switch';
+  viewWrap.innerHTML = `
+    <span class="compare-lens-label" id="compare-view-key">View</span>
+    <div class="ux-segmented" role="group" aria-labelledby="compare-view-key">
+      ${COMPARE_VIEWS.map(v => `<button type="button" data-cview="${v.id}" aria-pressed="${v.id === activeView}" title="${escapeHtml(v.tip)}">${escapeHtml(v.label)}</button>`).join('')}
+    </div>`;
+  viewWrap.addEventListener('click', (ev) => {
+    const id = ev.target.closest?.('[data-cview]')?.dataset.cview;
+    if (!id || id === compareView(state.compareDetail)) return;
+    state.compareDetail = id;
+    appHost.renderMainView();
+    document.querySelector(`.compare-view-switch [data-cview="${id}"]`)?.focus({ preventScroll: true });
+    diagUx.announce(`View: ${COMPARE_VIEWS.find(v => v.id === id).label}.`);
+  });
+  wrap.appendChild(viewWrap);
 
   const search = document.createElement('input');
   search.type = 'search';
@@ -3003,10 +3052,10 @@ function renderCompareLayerRow(L, sets) {
     <span class="section-name" title="${escapeHtml(diagUx.layerTitle(L))}">${escapeHtml(layerNames[L] || L)}</span>
     <span class="section-count" title="${escapeHtml(countTip)}">
       <span class="cli-pill cli-a">${filteredA.length}</span>
-      <span class="cli-side">in ${escapeHtml(roles.aNoun)}</span>
+      <span class="cli-side">in A</span>
       <span class="cli-vs">vs</span>
       <span class="cli-pill cli-b">${filteredB.length}</span>
-      <span class="cli-side">in ${escapeHtml(roles.bNoun)}</span>
+      <span class="cli-side">in B</span>
     </span>
   `;
   row.appendChild(head);
@@ -3180,9 +3229,36 @@ function renderCompareLayerColumn(side, L, items, sets) {
     col.appendChild(empty);
     return col;
   }
+  // What both packs hold leads each pane, in the diff's pair order, so a
+  // matched pair sits at the same place on both sides; then what only this
+  // side holds; then what the comparison does not pair (template
+  // placeholders, live inventory outside the declared scope, dashboard panels).
+  const pairAt = new Map();
+  (state.diff?.layers?.[L]?.inBoth || []).forEach((e, i) => {
+    const id = side === 'a' ? e.a?.id : e.b?.id;
+    if (id && !pairAt.has(id)) pairAt.set(id, i);
+  });
+  const groups = { both: [], only: [], rest: [] };
   for (const art of items) {
-    const def = { id: L, num: L, name: L };
-    col.appendChild(renderCompareCard(art, def, art._sub || null, side, sets));
+    const status = compareStatusFor(side, L, art, sets);
+    groups[status === 'both' ? 'both' : status === 'only' ? 'only' : 'rest'].push(art);
+  }
+  groups.both.sort((x, y) => (pairAt.get(x.id) ?? Infinity) - (pairAt.get(y.id) ?? Infinity));
+  const letter = side.toUpperCase();
+  const titles = {
+    both: ['In both', 'In both packs, matched by behaviour. The same order on both sides.'],
+    only: [`Only in ${letter}`, `In Pack ${letter}, with no counterpart in Pack ${letter === 'A' ? 'B' : 'A'}.`],
+    rest: ['Not compared', 'Not paired by the comparison: template placeholders, live inventory outside the declared scope and dashboard panels.'],
+  };
+  const def = { id: L, num: L, name: L };
+  for (const k of ['both', 'only', 'rest']) {
+    if (!groups[k].length) continue;
+    const h = document.createElement('div');
+    h.className = `compare-col-group is-${k}`;
+    h.title = titles[k][1];
+    h.innerHTML = `${escapeHtml(titles[k][0])} <span class="compare-col-group-n">${groups[k].length}</span>`;
+    col.appendChild(h);
+    for (const art of groups[k]) col.appendChild(renderCompareCard(art, def, art._sub || null, side, sets));
   }
   return col;
 }
@@ -3284,8 +3360,8 @@ function renderCompareCard(artefact, def, sublayerKey, side, sets) {
   // Comparison status pill — what this card means in the diff.
   let statusPill = '';
   const noun = side === 'a' ? sets?.roles?.aNoun : sets?.roles?.bNoun;
-  if (inBoth) statusPill = '<span class="diff-chip chip-both" title="In both packs, matched by behaviour">shared</span>';
-  else if (isOnlySide) statusPill = `<span class="diff-chip chip-only-${side}" title="Pack ${side.toUpperCase()} only">only in ${escapeHtml(noun || side.toUpperCase())}</span>`;
+  if (inBoth) statusPill = '<span class="diff-chip chip-both" title="In both packs, matched by behaviour">in both</span>';
+  else if (isOnlySide) statusPill = `<span class="diff-chip chip-only-${side}" title="${escapeHtml(noun ? `Only in the ${noun}` : `Pack ${side.toUpperCase()} only`)}">only in ${side.toUpperCase()}</span>`;
 
   // Source pill — Declared/Verified/Missing (what the studio's
   // per-artefact taxonomy already says about this card's status in
@@ -3393,22 +3469,20 @@ export function renderComparePicker() {
   return wrap;
 }
 
-// The set arithmetic (All differences). Counts come from the same lensed
-// digest as the summary so every number on the screen agrees; the sides
-// are named, A/B stays in the tooltips, and the Jaccard similarity is shown
-// as "overlap" with its formal definition on hover.
-function renderCompareSummary(digest, ctx) {
+// The set arithmetic, always under the two pack cards. Counts come from the
+// same lensed digest as the summary so every number on the screen agrees;
+// the cells are named by the A / B letters of the cards above them.
+function renderCompareSummary(digest) {
   const t = digest?.totals || { onlyInA: 0, onlyInB: 0, shared: 0, universe: 0 };
-  const r = ctx.roles;
-  const overlap = t.universe ? `${Math.round((t.shared / t.universe) * 100)}%` : '—';
+  const jaccard = t.universe ? `${Math.round((t.shared / t.universe) * 100)}%` : '—';
   const wrap = document.createElement('div');
   wrap.className = 'compare-summary';
   wrap.innerHTML = `
-    <div class="compare-cell c-a" title="Pack A only"><div class="c-key">${escapeHtml(r.aOnly)}</div><div class="c-val">${t.onlyInA}</div></div>
-    <div class="compare-cell c-both" title="In both A and B, matched by behaviour"><div class="c-key">shared</div><div class="c-val">${t.shared}</div></div>
-    <div class="compare-cell c-b" title="Pack B only"><div class="c-key">${escapeHtml(r.bOnly)}</div><div class="c-val">${t.onlyInB}</div></div>
-    <div class="compare-cell c-union" title="Union: A + B without duplicates"><div class="c-key">in either</div><div class="c-val">${t.universe}</div></div>
-    <div class="compare-cell c-jacc"><div class="c-key">${diagUx.termHtml('jaccard', 'overlap')}</div><div class="c-val"${t.universe ? '' : ' title="Nothing was compared, so there is no overlap to measure"'}>${overlap}</div></div>
+    <div class="compare-cell c-a" title="In Pack A, with no counterpart in Pack B"><div class="c-key">only in A</div><div class="c-val">${t.onlyInA}</div></div>
+    <div class="compare-cell c-both" title="In both A and B, matched by behaviour"><div class="c-key">in both</div><div class="c-val">${t.shared}</div></div>
+    <div class="compare-cell c-b" title="In Pack B, with no counterpart in Pack A"><div class="c-key">only in B</div><div class="c-val">${t.onlyInB}</div></div>
+    <div class="compare-cell c-union" title="Union: A + B without duplicates"><div class="c-key">union</div><div class="c-val">${t.universe}</div></div>
+    <div class="compare-cell c-jacc"><div class="c-key">${diagUx.termHtml('jaccard', 'jaccard')}</div><div class="c-val"${t.universe ? '' : ' title="Nothing was compared, so there is no overlap to measure"'}>${jaccard}</div></div>
   `;
   return wrap;
 }
@@ -4022,7 +4096,7 @@ function runDiagAction(id) {
       state.compareFocus = arg;
       appHost.renderMainView();
       document.querySelector(`.compare-focus [data-ux-action="cmp-focus:${arg}"]`)?.focus();
-      diagUx.announce(`Showing ${({ summary: 'the comparison summary', review: 'changes needing review', all: 'all differences' })[arg] || arg}.`);
+      diagUx.announce(`Showing ${({ summary: 'the comparison summary', review: 'changes needing review', all: 'both packs side by side' })[arg] || arg}.`);
       break;
     case 'cmp-lens':
       state.compareLens = arg || 'all';
@@ -4093,7 +4167,7 @@ export function buildCompareDecision(digest, ctx) {
       note: notes.join(' '),
       primary: digest?.useLens
         ? { label: 'Show all artefacts', action: 'cmp-lens:all' }
-        : { label: 'Show all differences', action: 'cmp-focus:all' },
+        : { label: 'Show side by side', action: 'cmp-focus:all' },
       secondary: [],
       missing: 0, extras: 0, changed: 0, review: 0, diffs: 0,
       totals: t,
@@ -4133,7 +4207,7 @@ export function buildCompareDecision(digest, ctx) {
     note: notes.join(' '),
     primary: review
       ? { label: `Review ${diagUx.plural(review, 'change')}`, action: 'cmp-focus:review' }
-      : { label: 'Show all differences', action: 'cmp-focus:all' },
+      : { label: 'Show side by side', action: 'cmp-focus:all' },
     secondary: review ? [{ label: 'Resolve in Remediate', action: 'diag-remediate' }] : [],
     missing, extras, changed, review,
     diffs: t.onlyInA + t.onlyInB + t.drifted,
@@ -4156,9 +4230,9 @@ function renderCompareDecisionHtml(cmp, ctx) {
 
 function compareFocusSwitchHtml(focus, cmp) {
   const opts = [
-    { id: 'summary', label: 'Summary', title: 'The answer, and what each number means' },
+    { id: 'all', label: 'Side by side', count: cmp.diffs, title: 'Every artefact of both packs, A on the left and B on the right, with the set filters' },
     { id: 'review', label: 'Changes needing review', count: cmp.review, title: 'Quality gaps only: missing artefacts, and shared artefacts whose fields changed — side by side' },
-    { id: 'all', label: 'All differences', count: cmp.diffs, title: 'Every artefact of both packs side by side, with the set filters (expert)' },
+    { id: 'summary', label: 'Summary', title: 'The comparison in one sentence, and what each number means' },
   ];
   return `
     <div class="ux-segmented compare-focus" role="group" aria-label="How much of the comparison to show">
@@ -4252,7 +4326,7 @@ function compareSummaryHtml(digest, cmp, ctx) {
 
   // Per-layer counts: what "36 vs 6" means. The first two columns are every
   // artefact each pack holds in the layer (after the product lens) — the
-  // pair shown on each layer in All differences; the last three count only
+  // pair shown on each layer in Side by side; the last three count only
   // what the comparison pairs.
   const lens = state.compareLens || 'all';
   const lensed = (items, pack) => (lens === 'all' ? items : items.filter(a => productSurface(a, lens, pack)));
@@ -4277,7 +4351,7 @@ function compareSummaryHtml(digest, cmp, ctx) {
   const layerTable = layerRows ? `
       <section class="compare-layer-counts" aria-labelledby="compare-counts-title">
         <h3 class="compare-panel-title" id="compare-counts-title">By layer</h3>
-        <p class="compare-counts-lede">“In ${escapeHtml(r.aNoun)}” and “In ${escapeHtml(r.bNoun)}” count every artefact each pack holds in the layer${example ? ` — the “${example.aN} vs ${example.bN}” shown on ${example.L} in All differences means ${example.aN} in the ${escapeHtml(r.aNoun)} and ${example.bN} in the ${escapeHtml(r.bNoun)}` : ''}. The last three columns count only what the comparison pairs by behaviour; template placeholders, out-of-scope live inventory and dashboard panels are not paired, so the columns need not add up.</p>
+        <p class="compare-counts-lede">“In ${escapeHtml(r.aNoun)}” and “In ${escapeHtml(r.bNoun)}” count every artefact each pack holds in the layer${example ? ` — the “${example.aN} vs ${example.bN}” shown on ${example.L} in Side by side means ${example.aN} in the ${escapeHtml(r.aNoun)} and ${example.bN} in the ${escapeHtml(r.bNoun)}` : ''}. The last three columns count only what the comparison pairs by behaviour; template placeholders, out-of-scope live inventory and dashboard panels are not paired, so the columns need not add up.</p>
         <div class="compare-counts-scroll">
           <table class="compare-counts-table">
             <thead><tr>
@@ -4370,7 +4444,7 @@ function renderCompareReview(digest, cmp, ctx) {
           </li>`;
         }).join('')}
       </ul>
-      ${missing.length > MAX_MISSING ? `<p class="compare-review-foot">+${missing.length - MAX_MISSING} more — <button type="button" class="ux-link-btn" data-ux-action="cmp-slice:${missingSide === 'a' ? 'onlyA' : 'onlyB'}">show all in All differences →</button></p>` : ''}
+      ${missing.length > MAX_MISSING ? `<p class="compare-review-foot">+${missing.length - MAX_MISSING} more — <button type="button" class="ux-link-btn" data-ux-action="cmp-slice:${missingSide === 'a' ? 'onlyA' : 'onlyB'}">show all in Side by side →</button></p>` : ''}
     </section>` : '';
 
   const costChip = (cost) => cost.className === 'decision'
@@ -4420,7 +4494,7 @@ function renderCompareReview(digest, cmp, ctx) {
           ${deltas.length > MAX_FIELDS ? `<p class="compare-review-foot">+${deltas.length - MAX_FIELDS} more field${deltas.length - MAX_FIELDS === 1 ? '' : 's'} — open either side for the full artefact.</p>` : ''}` : ''}
         </article>`;
       }).join('')}
-      ${changed.length > MAX_CHANGED ? `<p class="compare-review-foot">+${changed.length - MAX_CHANGED} more changed artefacts — <button type="button" class="ux-link-btn" data-ux-action="cmp-slice:both">show all shared in All differences →</button></p>` : ''}
+      ${changed.length > MAX_CHANGED ? `<p class="compare-review-foot">+${changed.length - MAX_CHANGED} more changed artefacts — <button type="button" class="ux-link-btn" data-ux-action="cmp-slice:both">show all shared in Side by side →</button></p>` : ''}
     </section>` : '';
 
   const structuralFoot = cmp.extras ? `
@@ -4438,7 +4512,7 @@ function renderCompareReview(digest, cmp, ctx) {
       title: 'Nothing needs review.',
       checked: `${diagUx.plural(cmp.totals.shared, 'shared artefact')} compared field by field, and every ${drift ? 'declared' : r.bNoun} artefact looked for in the ${drift ? 'live pack' : r.aNoun}.`,
       body: cmp.extras ? `${drift ? 'Undeclared live artefacts' : 'The additional artefacts'} (${cmp.extras}) are structural differences and are not listed here.` : '',
-      actions: [{ action: 'cmp-focus:all', label: 'Show all differences' }],
+      actions: [{ action: 'cmp-focus:all', label: 'Show side by side' }],
       tone: 'ok',
     })}
     ${structuralFoot}
