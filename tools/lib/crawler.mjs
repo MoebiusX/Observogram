@@ -27,6 +27,47 @@ import { materializeL2XFromBackends } from './l2x.mjs';
 import { PROMQL_KEYWORDS, extractPromqlMetricNames } from './promql.mjs';
 import { symbolSlug as slug } from './slug.mjs';
 
+// ---------- which files of a repository a scan reads ----------
+// One rule for every way a repository reaches the scanner — the CLI walker
+// (tools/crawl-repo.mjs), the studio's folder picker and its drop zone — so
+// a local scan reads the same files however the folder is handed over. The
+// folder picker lists EVERYTHING under the folder, node_modules included:
+// before it used this rule it staged 75,000 files (430 MB) of a repository
+// whose scannable sources are 600.
+export const SCAN_EXT = /\.(ya?ml|json|cjs|mjs|js|jsx|ts|tsx|py|go|java|kt|rs|cs)$/i;
+export const SCAN_MAX_FILE_BYTES = 5 * 1024 * 1024;
+export const SCAN_IGNORE_DIRS = new Set([
+  'node_modules', 'vendor', 'venv',
+  'dist', 'build', 'out', 'target',
+  '__pycache__', 'coverage',
+]);
+
+/**
+ * A file or folder name a scan never reads: any dot-entry — version control,
+ * CI, editor and agent state (`.git`, `.github`, `.vscode`, `.claude` with its
+ * worktree copies of the whole repository) — except `.observability`, and,
+ * for a folder, the dependency and build output folders.
+ */
+export function scanSkipsName(name, { dir = false } = {}) {
+  const n = String(name ?? '');
+  if (n.startsWith('.') && n !== '.observability') return true;
+  return dir && SCAN_IGNORE_DIRS.has(n);
+}
+
+/**
+ * Whether the file at `relPath` (forward slashes) is read: a scannable
+ * extension, and no skipped folder on the way to it. `skipRoot` leaves the
+ * first segment out of the check — the picked folder's own name, which is
+ * the user's choice whatever it is called.
+ */
+export function scanReadsPath(relPath, { skipRoot = false } = {}) {
+  const parts = String(relPath ?? '').split('/').filter(Boolean);
+  if (!parts.length) return false;
+  const file = parts[parts.length - 1];
+  if (parts.slice(skipRoot ? 1 : 0, -1).some(d => scanSkipsName(d, { dir: true }))) return false;
+  return !scanSkipsName(file) && SCAN_EXT.test(file);
+}
+
 // Parse a (possibly multi-document) YAML file into a list of non-null
 // documents. Prometheus rule files, Alertmanager configs and Kubernetes
 // manifests are frequently shipped as multi-document streams (`---`).

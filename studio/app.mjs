@@ -3416,18 +3416,10 @@ function setRefreshStatus(msg, kind = '') {
 // loads into the active session just like any other pack.
 // ============================================================
 
-const CRAWL_SCAN_EXT = /\.(ya?ml|json|cjs|mjs|js|jsx|ts|tsx|py|go|java|kt|rs|cs)$/i;
-const CRAWL_IGNORE_DIRS = new Set([
-  '.git', '.github', '.gitlab', '.circleci',     // CI and version control
-  'node_modules', 'vendor', 'venv', '.venv',
-  'dist', 'build', 'out', 'target', '.cache',
-  '.next', '.nuxt', '.svelte-kit',
-  '.terraform', '.serverless',
-  '__pycache__', '.pytest_cache', '.mypy_cache',
-  '.idea', '.vscode',
-  'coverage',
-]);
-const CRAWL_MAX_FILE_BYTES = 5 * 1024 * 1024;
+// Which files a scan reads — the extensions, the size cap and the folders it
+// never enters — is the crawler library's rule (scanReadsPath, scanSkipsName),
+// the same one the CLI walker applies, so a folder gives the same pack
+// whether it is picked, dropped or scanned from a terminal.
 const CRAWL_PAYLOAD_SOFT_CAP = 15 * 1024 * 1024;  // leave 1 MB headroom under the 16 MB server cap
 
 // Lazy-loaded reference to the shared crawler library (also used by
@@ -3444,6 +3436,7 @@ const crawlState = {
   files: new Map(),       // relPath → string content (ALL staged files)
   classified: new Map(),  // relPath → kind (only files that match an artefact)
   skipped: [],            // [{relPath, reason}] for the "what was skipped" disclosure
+  ignored: 0,             // files under folders a scan never enters (node_modules, dist, dot-folders…): not read
   rootName: null,
   lastResult: null,
 };
@@ -3509,7 +3502,8 @@ function setupCrawlPanel() {
       ? [...dt.items].map(i => i.webkitGetAsEntry?.()).filter(Boolean)
       : [];
     if (entries.length) {
-      for (const ent of entries) await readEntry(ent, '');
+      const lib = await getCrawlerLib();
+      for (const ent of entries) await readEntry(ent, '', lib);
       finalizeStaging();
     } else if (dt?.files?.length) {
       stageFileList(dt.files, null);
@@ -3539,34 +3533,49 @@ function setupCrawlPanel() {
   }
 }
 
-// Read a single FileSystemEntry recursively into the staged map.
-async function readEntry(entry, prefix) {
+// Read a single FileSystemEntry recursively into the staged map. The dropped
+// folder itself (no prefix yet) is the user's choice whatever its name; below
+// it the scan rule decides.
+async function readEntry(entry, prefix, lib) {
   if (!entry) return;
   if (entry.isFile) {
-    if (!CRAWL_SCAN_EXT.test(entry.name)) return;
+    if (lib.scanSkipsName(entry.name) || !lib.SCAN_EXT.test(entry.name)) return;
     const file = await new Promise((res, rej) => entry.file(res, rej));
-    if (file.size > CRAWL_MAX_FILE_BYTES) return;
+    if (file.size > lib.SCAN_MAX_FILE_BYTES) return;
     const rel = (prefix ? `${prefix}/` : '') + entry.name;
     const text = await file.text();
     crawlState.files.set(rel, text);
     if (!crawlState.rootName) crawlState.rootName = entry.fullPath?.split('/')[1] || null;
   } else if (entry.isDirectory) {
-    if (CRAWL_IGNORE_DIRS.has(entry.name)) return;
+    if (prefix && lib.scanSkipsName(entry.name, { dir: true })) { crawlState.ignored++; return; }
     const reader = entry.createReader();
     let batch;
     do {
       batch = await new Promise((res, rej) => reader.readEntries(res, rej));
-      for (const ent of batch) await readEntry(ent, (prefix ? `${prefix}/` : '') + entry.name);
+      for (const ent of batch) await readEntry(ent, (prefix ? `${prefix}/` : '') + entry.name, lib);
     } while (batch.length > 0);
   }
 }
 
 async function stageFileList(fileList, _rootHint) {
-  for (const f of fileList) {
-    if (!CRAWL_SCAN_EXT.test(f.name)) continue;
-    if (f.size > CRAWL_MAX_FILE_BYTES) continue;
-    // webkitRelativePath populated when picked via webkitdirectory.
+  // Taken now: the caller clears its input as soon as this returns its promise.
+  const files = [...fileList];
+  const lib = await getCrawlerLib();
+  const list = $('#crawl-staged-files');
+  const total = files.length;
+  let seen = 0;
+  for (const f of files) {
+    // The folder picker lists every file under the folder — node_modules,
+    // build output, agent worktrees — so the scan rule is applied to the
+    // PATH before anything is read. webkitRelativePath is set when picked
+    // via webkitdirectory; its first segment is the picked folder's name.
     const rel = f.webkitRelativePath || f.name;
+    if (++seen % 2000 === 0 && list) list.innerHTML = `<span class="crawl-staged-empty">reading the folder… ${seen} of ${total} files</span>`;
+    if (!lib.scanReadsPath(rel, { skipRoot: !!f.webkitRelativePath })) {
+      if (lib.SCAN_EXT.test(f.name)) crawlState.ignored++;
+      continue;
+    }
+    if (f.size > lib.SCAN_MAX_FILE_BYTES) continue;
     crawlState.files.set(rel, await f.text());
     if (!crawlState.rootName && f.webkitRelativePath) {
       crawlState.rootName = f.webkitRelativePath.split('/')[0];
@@ -3648,6 +3657,7 @@ function renderStagedList(totalBytes) {
     </div>
     ${kindCounts ? `<div class="crawl-staged-kinds">${kindCounts}</div>` : ''}
     <div class="crawl-staged-sample">${sampleHtml}</div>
+    ${crawlState.ignored ? `<div class="crawl-staged-ignored">${crawlState.ignored} ${crawlState.ignored === 1 ? 'entry' : 'entries'} under dependency, build or hidden folders (node_modules, dist, .git, .claude …) ${crawlState.ignored === 1 ? 'was' : 'were'} not read.</div>` : ''}
     ${skipped ? `
       <details class="crawl-staged-skipped">
         <summary>${skipped} file${skipped === 1 ? '' : 's'} skipped — not an observability artefact</summary>
@@ -3664,6 +3674,7 @@ function resetCrawlStaged() {
   crawlState.files.clear();
   crawlState.classified.clear();
   crawlState.skipped = [];
+  crawlState.ignored = 0;
   crawlState.rootName = null;
   crawlState.lastResult = null;
   finalizeStaging();
