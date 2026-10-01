@@ -29,6 +29,20 @@
 //                  `aligned` against the live pack's fallback entry, and a repo
 //                  placeholder must not read `declared, not live`. Parked here,
 //                  outside every ratio.
+//     - notObserved  artefacts one pack holds in a family the OTHER pack says
+//                  it had no way to look at (its `observogram.unobserved.<kind>`
+//                  annotation: no tool for it, or the tool failed). "Declared,
+//                  and the live side could not check" is a different statement
+//                  from "declared, and not there": a Grafana that refuses the
+//                  fetcher's login does not make seven dashboards missing.
+//                  Each entry carries the `side` that holds the artefact and
+//                  the other side's `reason`. Outside every ratio.
+//
+// METRIC FAMILIES
+//   Metrics are compared as families, not series: a declared histogram and
+//   the `_bucket` / `_count` / `_sum` series a store lists for it are one
+//   metric (artefact-model.mjs, foldMetricFamilies). A family's entry carries
+//   `series`, the names it stands for on that side.
 //
 //   The classic operations follow (over the concrete, non-scaffold artefacts):
 //     A ∪ B  = onlyInA ∪ inBoth ∪ onlyInB
@@ -41,6 +55,7 @@ import {
   identityKeyOf,
   behaviorOf,
   deltasOf,
+  foldMetricFamilies,
 } from './artefact-model.mjs';
 
 const LAYER_ORDER = ['L1', 'L2', 'L2X', 'L3', 'L4', 'L5', 'GOV'];
@@ -92,9 +107,12 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
 
   const scopeMode = normalizeScopeMode(opts.scopeMode);
   const serviceScope = buildServiceScope(aLayered, opts.service);
+  // The artefact families each pack says it could not observe, with why.
+  const aBlind = unobservedKinds(aLayered);
+  const bBlind = unobservedKinds(bLayered);
   const layers = {};
   const collisions = [];
-  let onlyInA = 0, onlyInB = 0, inBoth = 0, aligned = 0, drifted = 0, outOfScope = 0, scaffold = 0;
+  let onlyInA = 0, onlyInB = 0, inBoth = 0, aligned = 0, drifted = 0, outOfScope = 0, scaffold = 0, notObserved = 0;
 
   for (const layerId of LAYER_ORDER) {
     const aAll = layerArtefacts(aLayered, layerId);
@@ -102,8 +120,14 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     // Placeholders never pair (see the header): park them before matching
     // so a declared artefact cannot align with, or drift against, a
     // schema-forced fallback on the other side.
-    const aItems = aAll.filter((x) => !isScaffoldArtefact(x));
-    const bItems = bAll.filter((x) => !isScaffoldArtefact(x));
+    // Metrics pair as families (see the header), folded with what both
+    // sides know about which series belong together.
+    const folded = foldMetricFamilies(
+      aAll.filter((x) => !isScaffoldArtefact(x)),
+      bAll.filter((x) => !isScaffoldArtefact(x)),
+    );
+    const aItems = folded.a;
+    const bItems = folded.b;
     const parked = [
       ...aAll.filter(isScaffoldArtefact).map((artefact) => ({ side: 'a', artefact })),
       ...bAll.filter(isScaffoldArtefact).map((artefact) => ({ side: 'b', artefact })),
@@ -124,11 +148,15 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     const aKinds = new Set();
     for (const k of aByKey.keys()) aKinds.add(k.slice(0, k.indexOf('::')));
 
-    const bucket = { onlyInA: [], onlyInB: [], inBoth: [], outOfScope: [], scaffold: [] };
+    const bucket = { onlyInA: [], onlyInB: [], inBoth: [], outOfScope: [], scaffold: [], notObserved: [] };
 
     for (const [k, aGroup] of aByKey) {
+      const kind = k.slice(0, k.indexOf('::'));
       if (bByKey.has(k)) {
         matchGroups(k, aGroup, bByKey.get(k), bucket);
+      } else if (bBlind.has(kind)) {
+        // B never looked at this family: A's artefact is unchecked, not absent.
+        pushNotObserved(bucket.notObserved, k, aGroup, 'a', bBlind.get(kind));
       } else {
         pushUnmatched(bucket.onlyInA, k, aGroup);
       }
@@ -136,7 +164,9 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     for (const [k, bGroup] of bByKey) {
       if (aByKey.has(k)) continue;
       const kind = k.slice(0, k.indexOf('::'));
-      if (scopeMode === 'service' && isOutsideServiceScope(bGroup, serviceScope)) {
+      if (aBlind.has(kind)) {
+        pushNotObserved(bucket.notObserved, k, bGroup, 'b', aBlind.get(kind));
+      } else if (scopeMode === 'service' && isOutsideServiceScope(bGroup, serviceScope)) {
         pushUnmatched(bucket.outOfScope, k, bGroup);
       } else if (aKinds.has(kind) || scopeMode === 'all') {
         pushUnmatched(bucket.onlyInB, k, bGroup);
@@ -151,6 +181,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     bucket.onlyInB.sort((x, y) => x.key.localeCompare(y.key));
     bucket.inBoth.sort ((x, y) => x.key.localeCompare(y.key));
     bucket.outOfScope.sort((x, y) => x.key.localeCompare(y.key));
+    bucket.notObserved.sort((x, y) => `${x.side}:${x.key}`.localeCompare(`${y.side}:${y.key}`));
     // Parked placeholders keep their behavioural key (with the side, so a
     // placeholder present on both sides stays two entries) for display.
     parked
@@ -171,6 +202,7 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
     drifted += bucket.drifted;
     outOfScope += bucket.outOfScope.length;
     scaffold += bucket.scaffold.length;
+    notObserved += bucket.notObserved.length;
   }
 
   return {
@@ -196,6 +228,9 @@ export function diffPacks(aLayered, bLayered, opts = {}) {
       outOfScope,
       // Placeholders parked on either side (never paired, never counted).
       scaffold,
+      // Artefacts one side holds in a family the other side could not
+      // observe: unchecked, not missing. Never paired, never counted.
+      notObserved,
       union: onlyInA + onlyInB + inBoth,
       aTotal: onlyInA + inBoth,
       bTotal: onlyInB + inBoth,
@@ -423,6 +458,29 @@ function isUsefulMetricPrefix(prefix) {
 
 function compact(value) {
   return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+// The artefact families a pack's producer could not observe, as
+// kind → reason, read from its `observogram.unobserved.<kind>` annotations
+// (the adapter carries a pack's annotations on meta.annotations).
+const UNOBSERVED_PREFIX = 'observogram.unobserved.';
+function unobservedKinds(layered) {
+  const out = new Map();
+  const annotations = layered?.meta?.annotations;
+  if (!annotations || typeof annotations !== 'object') return out;
+  for (const [key, value] of Object.entries(annotations)) {
+    if (key.startsWith(UNOBSERVED_PREFIX) && key.length > UNOBSERVED_PREFIX.length) {
+      out.set(key.slice(UNOBSERVED_PREFIX.length), typeof value === 'string' && value ? value : 'not observed');
+    }
+  }
+  return out;
+}
+
+function pushNotObserved(target, baseKey, group, side, reason) {
+  const suffix = group.length > 1;
+  group.forEach((artefact, i) => {
+    target.push({ key: occurrenceKey(baseKey, i, suffix), side, artefact, reason });
+  });
 }
 
 // A schema-forced placeholder projected by the adapter from a

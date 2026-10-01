@@ -516,6 +516,13 @@ body.chrome-observa .compare-side-card .diff-chip.chip-only-a { background: var(
 body.chrome-observa .compare-side-card .diff-chip.chip-only-b { background: var(--og-second-bg); color: var(--og-second); }
 body.chrome-observa .compare-view .compare-side-card.is-both { border-left-color: var(--og-line-strong); }
 body.chrome-observa .compare-col-group.is-both { color: var(--og-muted); }
+body.chrome-observa .compare-col-group.is-unchecked { color: var(--og-warn); }
+body.chrome-observa .compare-col-group-why { font: 400 13px/1.45 var(--og-font); color: var(--og-muted); }
+body.chrome-observa .compare-side-card .diff-chip.chip-unchecked { background: var(--og-warn-bg); color: var(--og-warn); }
+body.chrome-observa .compare-view .compare-layer-col-a .compare-side-card.is-unchecked,
+body.chrome-observa .compare-view .compare-layer-col-b .compare-side-card.is-unchecked { border-left-color: var(--og-warn-line); }
+body.chrome-observa .compare-cell.c-unchecked { border-top: 1px solid var(--og-line); }
+body.chrome-observa .compare-cell.c-unchecked .c-val { color: var(--og-warn); }
 
 /* ============================================================
    9 · PANELS, DRAWERS, DIALOGS

@@ -1298,6 +1298,21 @@ app.post('/api/draft-from-mcp', authorize('POST /api/draft-from-mcp'), async (re
         alertRules:      Number(ann['mcp.discovered.alert_rules'] || 0),
         dashboards:      Number(ann['mcp.discovered.dashboards'] || (pack.spec?.dashboards || []).length),
         scrapeJobs:     (ann['mcp.discovered.scrape_jobs'] || '').split(',').filter(Boolean),
+        // Routes read from the running Alertmanager configuration.
+        alertingRoutes:  Number(ann['mcp.discovered.alerting_routes'] || 0),
+        // Alerting rules that guard a recorded SLO (read as burn-rate
+        // entries) and the operational ones that guard none.
+        alertRulesLinked:      Number(ann['mcp.discovered.alert_rules_linked'] || 0),
+        alertRulesOperational: Number(ann['mcp.discovered.alert_rules_operational'] || 0),
+        // Products the MCP can speak to that showed no sign of running:
+        // supported, not deployed — never listed as backends.
+        supportedOnly:  (ann['mcp.capabilities.unobserved'] || '').split(',').filter(Boolean),
+        // Artefact families this fetch had no way to look at, with why
+        // (observogram.unobserved.<family>) — a comparison reports them as
+        // "not checked", never as missing.
+        unobserved: Object.fromEntries(Object.entries(ann)
+          .filter(([k]) => k.startsWith('observogram.unobserved.'))
+          .map(([k, v]) => [k.slice('observogram.unobserved.'.length), String(v)])),
         // On-wire liveness: jobs whose every target is down, and rules the
         // ruler reports as failing to evaluate. Names, so the studio can
         // say WHICH ones — the pack's mcp.observed.* annotations carry the
@@ -1364,7 +1379,12 @@ app.post('/api/draft-from-mcp', authorize('POST /api/draft-from-mcp'), async (re
       summary.warnings.push('Alert-rule probes returned empty. Burn-rate alerts are synthesized from SLOs; existing fired alerts couldn\'t be surfaced.');
     }
     if (attemptedNothing('dashboards')) {
-      summary.warnings.push('Dashboard probes returned empty. The dashboards section is a stub — point the MCP at Grafana\'s /api/search to populate it.');
+      summary.warnings.push(probesFailed.includes('dashboards')
+        ? `The dashboards probe got no answer${probeErrors.dashboards ? ` (${probeErrors.dashboards})` : ''}. The dashboards section is a stub, and a comparison reports declared dashboards as not checked — not as missing.`
+        : 'Dashboard probes returned empty. The dashboards section is a stub — point the MCP at Grafana\'s /api/search to populate it.');
+    }
+    if (attemptedNothing('alerting_routes')) {
+      summary.warnings.push(`The running Alertmanager configuration could not be read${probeErrors.alerting_routes ? ` (${probeErrors.alerting_routes})` : ''}. The route in the draft is a placeholder, and a comparison reports declared routes as not checked.`);
     }
     if (attemptedNothing('scrape_configs')) {
       summary.warnings.push('Scrape-config probes returned empty. spec.telemetry.scrape_evidence is unknown — declare scrape jobs in the pack by hand if you can.');

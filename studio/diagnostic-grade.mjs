@@ -381,6 +381,7 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
       let behaviorDrifted = 0;
       let liveShadow = 0;
       let scaffoldExcluded = 0;
+      let notObserved = 0;
       const driftedEntries = [];
       for (const bucket of Object.values(diff.layers || {})) {
         const concreteOnlyInA = (bucket.onlyInA || []).filter(e => !isScaffoldDiffEntry(e));
@@ -392,6 +393,10 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
           // diffPacks parks placeholders in their own bucket (never paired);
           // older diffs without it still fall through the filters above.
           + (bucket.scaffold || []).length;
+        // Declared artefacts in a family the live side could not observe
+        // (diffPacks `notObserved`) are unchecked: they are not live
+        // evidence and not missing, so they move no weight.
+        notObserved += (bucket.notObserved || []).length;
         declaredMissing += concreteOnlyInA.length;
         const bucketDrifted = concreteInBoth.filter(e => e.match === 'drifted');
         behaviorDrifted += bucketDrifted.length;
@@ -411,7 +416,8 @@ export function computeDiagnosticGrade(packA, packB, posture, catalogBId, diff, 
       driftFree = weighted.health >= DRIFT_FIDELITY_TRUST_THRESHOLD;
       const fmtUnits = (n) => Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, '');
       const driftBreakdown = `${weighted.driftedBreakdown.decision} decision-bearing, ${weighted.driftedBreakdown.default} default, ${weighted.driftedBreakdown.cosmetic} cosmetic`;
-      const scaffoldNote = scaffoldExcluded ? `; ${scaffoldExcluded} scaffold excluded` : '';
+      const scaffoldNote = (scaffoldExcluded ? `; ${scaffoldExcluded} scaffold excluded` : '')
+        + (notObserved ? `; ${notObserved} not checked (the live side could not observe them)` : '');
       driftDetail = driftFree
         ? `weighted live-fidelity ${weighted.healthPct}% - declared-not-live ${declaredMissing}x1.0, drifted ${behaviorDrifted} (${driftBreakdown}), live-not-declared ${liveShadow}x0.15; ${fmtUnits(weighted.totalBadness)} badness units${scaffoldNote}`
         : `weighted live-fidelity ${weighted.healthPct}% (<${DRIFT_HEALTH_PASS_PCT}% trust threshold); declared-not-live ${declaredMissing}x1.0, drifted ${behaviorDrifted} (${driftBreakdown}), live-not-declared ${liveShadow}x0.15; ${fmtUnits(weighted.totalBadness)} badness units${scaffoldNote}`;

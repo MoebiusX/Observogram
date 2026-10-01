@@ -4896,16 +4896,35 @@ function renderDraftMcpResult(out) {
     ? row(`${plural(rulesUnhealthy.length, 'rule')} unhealthy`, rulesUnhealthy.join(', '))
     : '';
   const stackBlock = renderStackSelfMetricsBlock(out.summary, row);
+  // Backends are the products with evidence of running here. What the MCP
+  // can merely speak to is said apart, so "supported" never reads as
+  // "deployed".
+  const supportedOnly = d.supportedOnly || [];
+  const supportedOnlyRow = supportedOnly.length
+    ? row('supported by the MCP, not seen running', `${supportedOnly.length} — ${supportedOnly.slice(0, 8).join(', ')}${supportedOnly.length > 8 ? ', …' : ''}`, true)
+    : '';
+  const alertRulesSplitRow = probesS.has('alert_rules') && (d.alertRulesLinked || d.alertRulesOperational)
+    ? row('… guarding an SLO · operational', `${d.alertRulesLinked || 0} · ${d.alertRulesOperational || 0}`, true)
+    : '';
+  // What this fetch had no way to look at: a comparison reports these
+  // families as "not checked", never as missing.
+  const unobservedFamilies = Object.keys(d.unobserved || {});
+  const unobservedNote = unobservedFamilies.length
+    ? `<div class="crawl-evidence-note">Not observable through this MCP: ${escapeHtml(unobservedFamilies.map(k => k.replace(/_/g, ' ')).join(', '))}. A comparison shows what another pack declares there as <em>not checked</em>, not as missing.</div>`
+    : '';
   $('#draft-mcp-result-summary').innerHTML = `
     <h4>what the MCP attested</h4>
     <table class="crawl-summary-table">
       ${row('services', (d.servicesDiscovered || []).length)}
       ${row('backends', d.backends)}
+      ${supportedOnlyRow}
       ${row('active anomalies', d.activeAnomalies)}
       ${probeRow('recording rules', 'recording_rules', d.recordingRules)}
       ${recordingEvidenceRow}
       ${probeRow('alert rules',     'alert_rules',     d.alertRules)}
+      ${alertRulesSplitRow}
       ${alertEvidenceRow}
+      ${probeRow('alerting routes', 'alerting_routes', d.alertingRoutes)}
       ${probeRow('dashboards',      'dashboards',      d.dashboards)}
       ${probeRow('scrape jobs',     'scrape_configs',  (d.scrapeJobs || []).length)}
       ${scrapeDownRow}
@@ -4913,6 +4932,7 @@ function renderDraftMcpResult(out) {
       ${probeRow('metric names',    'metric_names',    d.metricNamesCount)}
     </table>
     ${stackBlock}
+    ${unobservedNote}
     ${alertsFiringCount > 0 || recordingFallbackCount > 0 ? `
       <div class="crawl-evidence-note">
         Rows in italic = fallback evidence. The standard rule endpoints came back empty,

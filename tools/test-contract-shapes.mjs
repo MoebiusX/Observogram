@@ -203,6 +203,58 @@ for (const c of SYNTHETIC_CASES) {
   assert(!vBroken.ok, `${c.capability} (${tag}): shape check FAILS when critical fields are removed`, vBroken);
 }
 
+// ---------- alerting_routes: the running configuration inside a status answer ----------
+//
+// The probe reads the ROUTES out of the `config` an Alertmanager status
+// answer carries. The recorded alertmanager_status.json has that field
+// scrubbed (receivers, SMTP settings, internal hostnames), so the payload
+// here is a hand-written one — synthetic/alertmanager_status.config.json —
+// with an adapted golden like the five discovery probes.
+{
+  const probe = PROBES.find(p => p.name === 'alerting_routes');
+  const shapeId = capability('alerting_routes').responseShape;
+  assert(!!probe && shapeId === 'status-object', 'alerting_routes: probe adapter and declared responseShape exist', { probe: !!probe, shapeId });
+  const fixture = JSON.parse(readFileSync(resolve(SYNTHETIC_DIR, 'alertmanager_status.config.json'), 'utf8'));
+  assert(typeof fixture._synthetic === 'string' && fixture._synthetic.startsWith('hand-written'),
+    'alerting_routes (synthetic): alertmanager_status.config.json is marked _synthetic', fixture._synthetic);
+  const v = validateResponseShape(shapeId, fixture);
+  assert(v.ok && probe.answers(fixture), 'alerting_routes (synthetic): the payload satisfies status-object and carries a configuration', v);
+
+  const adapted = probe.adapt(clone(fixture));
+  const goldenFile = resolve(ADAPTED_DIR, 'alerting_routes.json');
+  const actual = JSON.stringify(adapted, null, 2) + '\n';
+  if (UPDATE) {
+    writeFileSync(goldenFile, actual);
+  } else {
+    let golden = null;
+    try { golden = readFileSync(goldenFile, 'utf8'); } catch { /* missing */ }
+    assert(golden !== null, 'alerting_routes: adapted golden exists (run `node tools/test-contract-shapes.mjs --update`)');
+    if (golden !== null) {
+      assert(actual === golden, 'alerting_routes: adapt(fixture) matches the committed adapted golden',
+        actual === golden ? undefined : { expected: golden.slice(0, 200), actual: actual.slice(0, 200) });
+    }
+  }
+  assert(adapted.length === 6 && adapted.every(r => /^SEV[1-4]$/.test(r.severity) && r.channels.length >= 1),
+    'alerting_routes: the root route and its five children, each with a severity and a channel', adapted.map(r => r.severity));
+  assert(!JSON.stringify(adapted).includes('<secret>') && !JSON.stringify(adapted).includes('example.internal:1025'),
+    'alerting_routes: no redaction text and nothing of the configuration beyond the routes reaches the adapted output');
+
+  const extended = injectExtras(clone(fixture));
+  assert(validateResponseShape(shapeId, extended).ok && JSON.stringify(probe.adapt(extended)) === JSON.stringify(adapted),
+    'alerting_routes: unknown extra fields change neither the shape check nor the adapted routes');
+  assert(JSON.stringify(probe.adapt({ ...clone(fixture), config: { original: fixture.config } })) === JSON.stringify(adapted),
+    'alerting_routes: the raw API shape { config: { original } } adapts to the same routes');
+
+  // CRITICAL — without a configuration the answer is no answer for this
+  // probe; the recorded (scrubbed) status is exactly that case.
+  const trimmed = clone(fixture);
+  delete trimmed.config;
+  assert(probe.answers(trimmed) === false, 'alerting_routes: a status with its configuration removed does not answer the probe');
+  const recorded = JSON.parse(readFileSync(resolve(FIXTURE_DIR, 'alertmanager_status.json'), 'utf8'));
+  assert(validateResponseShape(shapeId, recorded).ok && probe.answers(recorded) === false,
+    'alerting_routes: the recorded status (config scrubbed) is a valid status and NOT an answer about routes — never "zero routes"');
+}
+
 // ---------- RECORDED stack instant vectors (recorder --write) ----------
 //
 // tools/fixtures/mcp/recorded-stack/<row id>.json — one metrics_query
