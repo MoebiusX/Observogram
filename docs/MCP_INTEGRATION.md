@@ -49,8 +49,10 @@ diagnostic-grade drift:
 | Scrape jobs | Prometheus/VictoriaMetrics scrape evidence |
 | Recording rules | full rule names and expressions where the MCP exposes them |
 | Alert rules | Grafana/Prometheus alerting rules; burn-rate alerts are mapped from them per SLO, never synthesised |
+| Alerting routes | the routes of the configuration the running Alertmanager reports — severities and channels, secret addresses as `redacted:secret` |
 | Dashboards | Grafana dashboard metadata plus dashboard bodies, panels, variables, and targets |
 | Baselines | none yet — MTTD/MTTR are platform defaults stamped `Scaffold`; anomaly baselines are only counted (`mcp.baselinesComputed`) |
+| Backends | the products with evidence of running — a version they report, a scrape target of theirs that is up, a tool of theirs that answered — never the list of what the MCP supports |
 | Backend versions | observed platform products and versions |
 
 This is what lets Observogram compare declared repo artifacts against live
@@ -148,6 +150,11 @@ JSON arrays (`annotationJson`) at 200 entries; error strings at 200 chars.
 | `mcp.observed.alert_rules` | JSON `[{name, state, health, lastError, lastEvaluation, activeAt, interval?, labels?}]` | every alerting rule's evaluation state; `interval` is the group evaluation interval when the ruler reports one (the alert adapter keeps it too), `labels` the burn-rate linkage labels the compiler stamps — `{ slo, burn_rate, window_short, window_long }`, present keys only, omitted when none — so the ladder links a live rule to its declared window by labels first, name second |
 | `mcp.servicesDiscovered`, `mcp.activeAnomalies`, `mcp.baselinesComputed` | comma list, counts | `system_health` / anomaly tools answered (not a measurement of anything in `spec.baselines`) |
 | `mcp.capabilities.*`, `mcp.versions.<product>[.*]` | strings | `backend_capabilities` inventory and observed product versions |
+| `mcp.capabilities.unobserved` | comma list of products | what the inventory lists and nothing showed to be running: supported, not deployed — never a backend |
+| `mcp.backends.evidence` | `<backend id>=<what attested it>` joined by `\|` | per backend: the version probe (`metrics_query/vm_app_version`), the scrape job (`scrape job promtail`) or the product tool (`vmalert_rules`) behind it |
+| `mcp.derived.<symbol>` | string | an entry READ from live rules without being attested as what the pack calls it — `policy.burn_rate_alerts[<i>]` read from plain alerting rules names the rules; projects as `Declared`, neither `Verified` nor `Scaffold` |
+| `mcp.discovered.alert_rules_linked` / `alert_rules_operational` | counts | alerting rules that guard a recorded SLO (read as burn-rate entries) / that guard none |
+| `observogram.unobserved.<family>` | reason string | an artefact family this fetch had no way to look at (see *What the fetch could not look at*) |
 | `mcp.stack.status` | `sampled` \| `not-attempted` | the stack self-metrics panel (step 2, "Stack self-metrics (sampling)"): whether it was sampled at all — signals, never verdicts; written whenever the fetcher ran the step-2 sampler (a caller that predates step 2 writes nothing) |
 | `mcp.stack.reason` | string | only when `not-attempted`: why (`metrics_query not exposed by this MCP (restricted tier)`) |
 | `mcp.stack.sampled` / `empty` / `failed` / `notInInventory` / `notAttempted` | counts (strings) | rows per outcome (`data` rows are `sampled`) |
@@ -172,12 +179,12 @@ one the adapter passes to `sourceOf`) and never `mcp.verified.<symbol>`:
 | Collector receiver / processors | `pipelines.receivers[0]`, `pipelines.processors[<i>]` | never |
 | Logs / traces exporters | `pipelines.exporters.logs`, `pipelines.exporters.traces` | never |
 | Metrics exporter | `pipelines.exporters.metrics` | scrape targets or a metric inventory came back |
-| Fallback backends (no `backend_capabilities`) | `telemetry.backends.metrics-prom` / `logs-elastic` / `traces-jaeger` | a `*_build_info` capture for prometheus/victoriametrics/mimir; the topology names jaeger or `traces_services` answered; never for elasticsearch |
+| Fallback backends (nothing evidenced any backend) | `telemetry.backends.metrics-prom` / `logs-elastic` / `traces-jaeger` | the topology names jaeger (traces-jaeger only); otherwise never — a product with evidence is minted under its own id instead and the fallback is not written |
 | Per-service availability SLI/SLO guesses, `platform_availability` | `slis.<id>`, `slos.<id>` | never as guesses — SLIs inferred from real recorded rules are `Verified` (unless a feeding rule is unhealthy); an SLO bound by a discovered burn-rate group — exact id or re-identified — drops its scaffold marker and is `Verified` unless that group is fed by an unhealthy rule (then `Declared`) |
 | Dashboard stub | `dashboards.platform-overview` | never (discovered dashboards replace it, each stamped `dashboards.<id>`) |
-| SEV1 → Teams route | `alerting.routes[0]` | never |
+| SEV1 → Teams route | `alerting.routes[0]` | never (the routes of the running Alertmanager configuration replace it, each stamped `alerting.routes[<i>]`) |
 | Baselines | `baselines` | never |
-| Burn-rate placeholder | `policy.burn_rate_alerts[0]` | never (mapped rules replace it) |
+| Burn-rate placeholder | `policy.burn_rate_alerts[0]` | never (mapped rules replace it; so do entries read from alerting rules that guard a recorded SLO — those carry `mcp.derived.*`, not `mcp.verified.*`) |
 
 `spec.baselines` is always the platform default for the declared criticality
 (`measurement_source: platform-default`). Earlier builds derived
@@ -267,8 +274,22 @@ first) and each emitted entry is stamped `mcp.verified.policy.burn_rate_alerts[<
   `mcp.verified.slos.<id>` — unless the group is fed by an unhealthy rule.
   A re-id is refused (group unmapped) when the discovered id is not a valid
   schema Slug (`^[a-z][a-z0-9_-]*[a-z0-9]$`, at most 64 chars).
-- Forecast rules (`labels.kind=forecast`) and plain threshold alerts are not
-  burn-rate alerts; their names still surface in `mcp.discovered.alert_rule_names`.
+- Forecast rules (`labels.kind=forecast`) are not burn-rate alerts; their
+  names still surface in `mcp.discovered.alert_rule_names`.
+- Every other alerting rule is read the way the repo crawler reads a rule
+  file (`burnAlertsFromAlertRules`, tools/lib/sli-inference.mjs): a rule
+  whose expression references a recorded series (`ns:metric:op`) guards that
+  series' SLO and contributes its window (`for`, severity) to the SLO's
+  entry; entries with fewer than two windows take the default pair; a rule
+  that references no recorded series is an operational alert and no SLO
+  contract. Hand-written rules carry neither the compiler's labels nor its
+  names — without this a platform with seventy alerting rules read as having
+  no burn-rate policy, and every alert its repository declares read "not
+  live". Such an entry is real (no scaffold marker) and **not** `Verified`:
+  the ruler attests an alert on the SLO's series, not a multi-window
+  burn-rate alert. It names its rules in `mcp.derived.policy.burn_rate_alerts[<i>]`;
+  `mcp.discovered.alert_rules_linked` / `alert_rules_operational` count the
+  two kinds.
 - A burn group for an SLO nobody inferred, or one with a single window (the
   schema requires two), is not representable and is listed in
   `mcp.discovered.alert_rules_unmapped` instead of being padded.
@@ -283,6 +304,86 @@ Dashboard search alone is not enough for diagnostic drift. The fetcher uses
 `grafana_dashboards_search` to find dashboard UIDs, then calls
 `grafana_dashboard_get` for each UID so Observogram captures panels, variables,
 targets, and sanitized dashboard JSON.
+
+### Backends are what runs, not what the MCP supports
+
+`backend_capabilities` lists every product the MCP server can speak to —
+five metrics stores side by side — and says nothing about which is deployed.
+A backend is declared only on evidence the product runs here:
+
+- a version it reported itself (`grafana_health`, a `*_build_info` series,
+  `traces_services` answering);
+- a scrape job for its own endpoint with a target up — job names resolve
+  through `backendForScrapeJob` (tools/lib/backend-products.mjs, exact names
+  only: `otel-mcp-server` is not the collector);
+- a tool that belongs to the product answering with data — the registry's
+  `attests` (`vmalert_rules` attests vmalert; the Alertmanager configuration
+  answering attests Alertmanager).
+
+Each is minted as `<signal>-<product>` with the product spelling and signal
+the crawler gives the same product's container image (one shared table), so a
+backend read live pairs with the one read from a repository. The inventory
+still supplies an evidenced product's version policy (`min`, `gating`,
+features) and is kept whole in `mcp.capabilities.*`. What it lists and
+nothing attested is in `mcp.capabilities.unobserved`; what attested each
+backend is in `mcp.backends.evidence`. With no evidence at all the
+schema-forced fallbacks stand in as scaffolds, and the family is named
+unobserved.
+
+### Alerting routes: the running Alertmanager configuration
+
+The `alerting_routes` probe reads the configuration a running Alertmanager
+reports with its status (API v2 `/status` → `config`, as text or as
+`{ original }`) and takes the routes out of it with the same reader the
+crawler uses on a config file (`routesFromAlertmanagerConfig`,
+tools/lib/alert-routes.mjs): the root route and its children, severities
+mapped to `SEV1…SEV4`, receivers to channels. Alertmanager prints secret
+addresses as `<secret>`; such a channel is kept with `redacted:secret` as its
+value, which the diff reads as "address not stated", never as a different
+address (docs/DIFF.md). Nothing else of the configuration text is kept — no
+annotation carries it. A status answer WITHOUT a configuration (a tier that
+trims it) is no answer for this probe: the family is `failed` with that
+reason, not `empty`, because it is not "zero routes".
+
+The status reading of the same tool (`mcp.observed.alertmanager`: version,
+uptime, silences) stays a signal and stamps nothing.
+
+### What the fetch could not look at
+
+For every artefact family the fetch had no way to observe, the pack carries
+`observogram.unobserved.<family>` = the reason. `<family>` is the behavioural
+model's kind (tools/lib/artefact-model.mjs).
+
+| Families | Named unobserved when | Reason |
+|---|---|---|
+| `otel`, `pipeline_receiver`, `pipeline_processor`, `pipeline_exporter_logs`, `pipeline_exporter_traces`, `storage_*`, `baselines`, `chaos`, `synthetic`, `remediation`, `derived_view`, `imports`, `forecast` | always | `no MCP tool exposes …` |
+| `pipeline_exporter_metrics` | no scrape target and no metric inventory attested it | same |
+| `dashboard`, `panel` · `burn_rate` · `metric` · `scrape_job` | the family's probe failed or is not offered | `the <family> probe got no answer: <its error>` / `this MCP offers no <family> tool` |
+| `recording_rule`, `sli`, `slo` | no recorded series at all and the rules probe failed or is not offered | same |
+| `alert_route` | the `alerting_routes` probe gave no routes | its failure, or that the status carries no configuration |
+| `backend`, `profiling`, `network`, `policy_engine`, `mesh`, `collection` | nothing evidenced any backend | `no version probe, scrape target or product tool answered` |
+
+A probe that ANSWERED — with data or with an honest zero — leaves its family
+observed. `diffPacks` reads these keys: an artefact the other pack holds in an
+unobserved family is reported **not checked** (`notObserved`), with the
+reason, instead of "declared, not live" (docs/DIFF.md).
+
+### One reading for the repository and for live
+
+A repository scan and a live draft of the same system must describe it in
+the same artefacts, or comparing them reports the difference between two
+readers instead of the difference between declaration and production. What
+both read, they read through one module:
+
+| What | Module | Repository input | Live input |
+|---|---|---|---|
+| SLIs / SLOs | `sli-inference.mjs` `inferSlisFromRecordingRules` | rule files | the ruler's rule list — choices are made by rule NAME, never by arrival order |
+| Burn-rate entries | `sli-inference.mjs` `burnAlertsFromAlertRules` | alerting rule files (`for: 2m`) | the ruler's alerting rules (`duration: 120`) |
+| Routes | `alert-routes.mjs` `routesFromAlertmanagerConfig` | the Alertmanager config file (`${VAR}` → `unresolved:<VAR>`) | the running configuration (`<secret>` → `redacted:secret`) |
+| Backends | `backend-products.mjs` | container images | scrape jobs, versions, product tools |
+| Extended surfaces | `l2x.mjs` | the backends above | the backends above |
+
+`tools/test-scan-live.mjs` holds the property end to end.
 
 ### Journeys read the vantage, and can gate on it
 

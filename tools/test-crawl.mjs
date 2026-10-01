@@ -9,6 +9,9 @@
 // ============================================================
 
 import { crawlFiles, detectArtefactKind, crawlToYaml, scanReadsPath, scanSkipsName, SCAN_EXT, SCAN_IGNORE_DIRS } from './lib/crawler.mjs';
+import { inferSlisFromRecordingRules, canonicalRuleDuration, burnAlertsFromAlertRules } from './lib/sli-inference.mjs';
+import { compileAlertmanager } from './lib/compile.mjs';
+import { backendForScrapeJob, knownBackendProduct, BACKEND_PATTERNS } from './lib/backend-products.mjs';
 import { validateCanonical, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { readFileSync } from 'node:fs';
@@ -819,19 +822,142 @@ assert(validateCanonical(ph.canonical, SCHEMA).length === 0,
   validateCanonical(ph.canonical, SCHEMA).slice(0, 2));
 const phRoutes = ph.canonical.spec.alerting.routes;
 const allChannelValues = phRoutes.flatMap(r => r.channels.map(c => c.webhook || c.msteams || c.email || c.voice || ''));
-assert(!allChannelValues.some(v => v === '${AUTO_REMEDIATION_WEBHOOK_URL}'),
-  'pure-placeholder webhook is NOT declared as a route channel', allChannelValues);
+assert(!allChannelValues.some(v => v.includes('${AUTO_REMEDIATION_WEBHOOK_URL}')),
+  'a pure placeholder is never written into the pack as an address', allChannelValues);
+assert(phRoutes.length === 4 && phRoutes.some(r => r.severity === 'SEV2'
+    && JSON.stringify(r.channels) === JSON.stringify([{ webhook: 'unresolved:AUTO_REMEDIATION_WEBHOOK_URL' }])),
+  'its route stays declared: the channel exists, with unresolved:<VAR> in place of the address it takes at deploy time', phRoutes);
 assert(allChannelValues.some(v => v.startsWith('https://ntfy.sh/')),
   'URI-shaped value with an embedded placeholder stays declared');
 assert(ph.summary.omitted.unresolvedChannels.length === 1,
-  'the excluded channel is recorded in summary.omitted.unresolvedChannels',
+  'the placeholder is recorded in summary.omitted.unresolvedChannels',
   ph.summary.omitted.unresolvedChannels);
-assert(ph.summary.warnings.some(w => /unresolved \$\{VAR\} placeholder/.test(w)),
-  'the crawl summary warns about the exclusion');
+assert(ph.summary.warnings.some(w => /unresolved \$\{VAR\} placeholder/.test(w) && /unresolved:<VAR>/.test(w)),
+  'the crawl summary says the address is a deploy-time placeholder and how it is declared');
 assert(ph.canonical.metadata.annotations['crawler.unresolvedChannelCount'] === '1',
   'annotation carries the unresolved-channel count');
 assert(/AUTO_REMEDIATION_WEBHOOK_URL/.test(ph.canonical.metadata.annotations['crawler.unresolved.alerting'] || ''),
   'annotation preserves the placeholder as evidence');
+
+// The compiler sends such an address back out as the repository had it,
+// and references a redacted one by file like any other secret.
+{
+  const am = compileAlertmanager(ph.canonical);
+  assert(/url: "?\$\{AUTO_REMEDIATION_WEBHOOK_URL\}"?/.test(am) && !/unresolved:/.test(am),
+    'compiling the scanned pack emits ${AUTO_REMEDIATION_WEBHOOK_URL} again — never the marker', am.split('\n').filter(l => /url/.test(l)));
+  const redacted = JSON.parse(JSON.stringify(ph.canonical));
+  redacted.spec.alerting.routes = [{ severity: 'SEV1', channels: [{ webhook: 'redacted:secret' }] }];
+  const am2 = compileAlertmanager(redacted);
+  assert(/url_file: "?\/etc\/alertmanager\/secrets\/webhook_/.test(am2) && !/redacted:/.test(am2),
+    'a redacted webhook compiles to a url_file secret reference — never the marker as a URL', am2.split('\n').filter(l => /url/.test(l)));
+}
+
+// ---------- one reading for both sides: SLIs, alert windows, products ----------
+{
+  // The same rules in two arrival orders infer the same SLI.
+  const rules = [
+    { name: 'svc:latency:p99_5m', expr: 'histogram_quantile(0.99, x)' },
+    { name: 'svc:latency:p95_5m', expr: 'histogram_quantile(0.95, x)' },
+    { name: 'svc:latency:p50_5m', expr: 'histogram_quantile(0.50, x)' },
+  ];
+  const forward = inferSlisFromRecordingRules(rules);
+  const backward = inferSlisFromRecordingRules(rules.slice().reverse());
+  assert(JSON.stringify(forward) === JSON.stringify(backward) && forward[0].sli.query === 'histogram_quantile(0.50, x)',
+    'SLI inference picks by rule NAME, not arrival order: file order and a ruler\'s group order agree', [forward[0].sli.query, backward[0].sli.query]);
+
+  assert(canonicalRuleDuration('120s') === '2m' && canonicalRuleDuration(120) === '2m' && canonicalRuleDuration('2m') === '2m'
+    && canonicalRuleDuration('1h30m') === '90m' && canonicalRuleDuration('90s') === '90s' && canonicalRuleDuration('3600') === '1h',
+    'a rule\'s `for` has one spelling: 120s, 120 (the ruler\'s seconds) and 2m are the same wait');
+  assert(canonicalRuleDuration(0) === null && canonicalRuleDuration('') === null && canonicalRuleDuration(undefined) === null
+    && canonicalRuleDuration('0s') === null,
+    'no wait is no window — never a default');
+
+  const slos = new Set(['svc_latency_99']);
+  const fromFile = burnAlertsFromAlertRules([
+    { alert: 'LatencyHigh', expr: 'svc:latency:p95_5m > 0.5', for: '5m', labels: { severity: 'warning' } },
+    { alert: 'LatencyVeryHigh', expr: 'svc:latency:p99_5m > 2', for: '900s', labels: { severity: 'critical' } },
+    { alert: 'DiskFull', expr: 'node_filesystem_avail_bytes < 1', for: '5m' },
+  ], (id) => slos.has(id));
+  const fromRuler = burnAlertsFromAlertRules([
+    { name: 'DiskFull', expr: 'node_filesystem_avail_bytes < 1\n', for: '5m', labels: {} },
+    { name: 'LatencyVeryHigh', expr: 'svc:latency:p99_5m > 2\n', for: '15m', labels: { severity: 'critical' } },
+    { name: 'LatencyHigh', expr: 'svc:latency:p95_5m > 0.5\n', for: '5m', labels: { severity: 'warning' } },
+  ], (id) => slos.has(id));
+  const windows = (r) => r.alerts.map(a => [a.slo, a.windows.map(w => w.short).sort()]);
+  assert(JSON.stringify(windows(fromFile)) === JSON.stringify(windows(fromRuler))
+    && JSON.stringify(windows(fromFile)) === JSON.stringify([['svc_latency_99', ['15m', '5m']]]),
+    'one rule set read from a file or from a ruler yields one burn-rate policy', [windows(fromFile), windows(fromRuler)]);
+  assert(JSON.stringify(fromFile.unlinked) === JSON.stringify(['DiskFull']) && fromFile.alerts[0].alertNames.length === 2,
+    'an alert that reads no recorded series is named unlinked; an entry names the rules it was read from', fromFile);
+
+  assert(JSON.stringify(backendForScrapeJob('otel-collector')) === JSON.stringify({ product: 'opentelemetry-collector', signal: 'collection' })
+    && JSON.stringify(backendForScrapeJob('node_exporter')) === JSON.stringify({ product: 'node-exporter', signal: 'metrics' }),
+    'a scrape job names the product whose endpoint it scrapes, with the signal an image of that product gets');
+  assert(backendForScrapeJob('otel-mcp-server') === null && backendForScrapeJob('grafana-agent') === null
+    && backendForScrapeJob('postgres-exporter') === null && backendForScrapeJob('') === null,
+    'a job that only resembles a product name, or scrapes something that is no backend, attests nothing');
+  assert(knownBackendProduct('fluentbit')?.product === 'fluent-bit' && knownBackendProduct('VictoriaMetrics')?.signal === 'metrics'
+    && knownBackendProduct('graylog') === null,
+    'a product named another way resolves to the table\'s spelling and signal; an unknown one to null');
+  for (const row of BACKEND_PATTERNS) {
+    const viaName = knownBackendProduct(row.product);
+    assert(viaName && viaName.product === row.product, `product table: ${row.product} resolves to itself`, viaName);
+  }
+}
+
+// ---------- a log-tailing config is not a metrics scrape job; exposition text declares metrics ----------
+{
+  const scan = crawlFiles({
+    'prometheus/scrape.yml': `scrape_configs:
+  - job_name: api
+    static_configs:
+      - targets: ['api:8080']
+`,
+    'promtail/config.yml': `clients:
+  - url: http://loki:3100/loki/api/v1/push
+positions:
+  filename: /tmp/positions.yaml
+scrape_configs:
+  - job_name: kubernetes-pods
+    kubernetes_sd_configs:
+      - role: pod
+`,
+    'alloy/logs.yml': `scrape_configs:
+  - job_name: varlogs
+    static_configs:
+      - targets: [localhost]
+        labels:
+          __path__: /var/log/*.log
+  - job_name: journal
+    pipeline_stages:
+      - json: {}
+`,
+    'scripts/push-metrics.js': `const lines = [
+  '# HELP batch_last_success_timestamp_seconds Last successful run',
+  '# TYPE batch_last_success_timestamp_seconds gauge',
+  '# TYPE batch_rows_processed_total counter',
+];`,
+    'tests/exposition.test.js': `const sample = '# TYPE only_in_a_test_total counter';`,
+    'rules.yml': `groups:
+  - name: g
+    rules:
+      - record: app:availability:ratio
+        expr: sum(rate(ok_total[5m]))
+`,
+  }, { repoName: 'logs-app', now: '2026-10-01T00:00:00.000Z' });
+  const jobs = JSON.parse(scan.canonical.metadata.annotations['crawler.discovered.scrape_jobs']);
+  assert(JSON.stringify(jobs) === JSON.stringify(['api']),
+    'a Promtail / Alloy scrape_configs entry (clients + positions, __path__, pipeline_stages) is not a metrics scrape job', jobs);
+  assert(scan.summary.discovered.logScrapeConfigs === 3, 'the log configs are counted, not dropped silently', scan.summary.discovered.logScrapeConfigs);
+  const names = JSON.parse(scan.canonical.metadata.annotations['crawler.discovered.metric_names']);
+  const origins = JSON.parse(scan.canonical.metadata.annotations['crawler.discovered.metric_origins']);
+  assert(names.includes('batch_last_success_timestamp_seconds') && names.includes('batch_rows_processed_total')
+    && origins.batch_last_success_timestamp_seconds.type === 'gauge'
+    && origins.batch_last_success_timestamp_seconds.help === 'Last successful run'
+    && origins.batch_last_success_timestamp_seconds.file === 'scripts/push-metrics.js',
+    'metrics written out in the exposition format (# TYPE / # HELP) are declared, with type, help and origin', names);
+  assert(!names.includes('only_in_a_test_total'), 'an exposition sample in a test file declares nothing', names);
+}
 
 // ---------- which files a scan reads: one rule for the picker, the drop zone and the CLI ----------
 // The folder picker lists everything under the folder; on a real repository

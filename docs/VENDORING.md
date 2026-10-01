@@ -76,7 +76,9 @@ never renamed or removed.
 **Optional inputs `computeDiagnosticGrade` reads.** The diff-bucket path
 counts a layer bucket's optional `scaffold` array (placeholders `diffPacks`
 parks before pairing) into its `N scaffold excluded` note; older diffs without
-it still pass through the `isScaffoldDiffEntry` filters. The Fresh criterion
+it still pass through the `isScaffoldDiffEntry` filters. It counts the
+optional `notObserved` array the same way (`N not checked`): artefacts one
+pack holds in a family the other could not observe move no weight. The Fresh criterion
 appends the live vantage to its `detail` (`vantage lost …` / `vantage partial
 …`) read through `partialLiveEvidence` from the same module — the pass/fail
 and every score are unchanged, and no import was added.
@@ -171,8 +173,17 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
   that is a re-copy, not a migration.
 - **Pack annotation namespace** — writers emit `observogram.*`
   (`observogram.diff.scopeMode`, `observogram.retrofeed.*`,
-  `observogram.services`); readers keep accepting the pre-rebrand
-  `tomograph.*` keys.
+  `observogram.services`, `observogram.unobserved.<kind>`); readers keep
+  accepting the pre-rebrand `tomograph.*` keys.
+- **Diff buckets and entry fields are only ever added.** `notObserved`
+  (per layer, and `summary.notObserved`) is the latest: a host whose live
+  pack comes from its own fetcher gets it by writing
+  `observogram.unobserved.<kind>` = reason for every artefact family that
+  fetcher cannot look at (docs/DIFF.md); a host that writes none sees an
+  empty array and the counts it always had. A metric family's entry adds
+  `series` and `memberIds` to the artefact it embeds; a consumer that lists
+  a pack's own artefacts beside the diff uses `memberIds` to give every
+  series its family's status (the studio's Compare does).
 - **`L4_SUBGROUPS`** is intentionally duplicated: `constants.mjs` owns the
   display copy, `diagnostic-grade.mjs` inlines a private copy so it stays
   zero-import. Change both or neither.
@@ -212,7 +223,10 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
    operators (`a / b` ≡ `a/b`) and `artefact-model.mjs` strips a leading
    `ref:` from reference fields before comparing behaviour — an older
    `artefact-model.mjs` over the newer canon (or vice versa) reports drift
-   the other half no longer sees.
+   the other half no longer sees. 2026-10: `diff.mjs` folds metrics into
+   families and reads `observogram.unobserved.*` through helpers that live
+   in `artefact-model.mjs` (`foldMetricFamilies`) — the newer `diff.mjs`
+   does not load over an older model.
 
 3. Re-copy the changed files, re-run your adapter's type-check, bump the
    recorded sha. Because the modules take their inputs explicitly, upstream
