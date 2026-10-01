@@ -8,7 +8,7 @@
 // works: crawler output is a valid pack.
 // ============================================================
 
-import { crawlFiles, detectArtefactKind, crawlToYaml } from './lib/crawler.mjs';
+import { crawlFiles, detectArtefactKind, crawlToYaml, scanReadsPath, scanSkipsName, SCAN_EXT, SCAN_IGNORE_DIRS } from './lib/crawler.mjs';
 import { validateCanonical, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { readFileSync } from 'node:fs';
@@ -832,5 +832,41 @@ assert(ph.canonical.metadata.annotations['crawler.unresolvedChannelCount'] === '
   'annotation carries the unresolved-channel count');
 assert(/AUTO_REMEDIATION_WEBHOOK_URL/.test(ph.canonical.metadata.annotations['crawler.unresolved.alerting'] || ''),
   'annotation preserves the placeholder as evidence');
+
+// ---------- which files a scan reads: one rule for the picker, the drop zone and the CLI ----------
+// The folder picker lists everything under the folder; on a real repository
+// that was 75,000 files (430 MB), 73,900 of them under node_modules.
+assert(scanReadsPath('repo/k8s/prometheus/rules.yaml', { skipRoot: true }), 'a rule file under the picked folder is read');
+assert(scanReadsPath('docker-compose.yml'), 'a top-level file with no folder is read');
+assert(!scanReadsPath('repo/node_modules/pkg/dashboards/overview.json', { skipRoot: true }), 'nothing under node_modules is read');
+assert(!scanReadsPath('repo/packages/api/node_modules/x/rules.yml', { skipRoot: true }), 'a nested node_modules neither');
+assert(!scanReadsPath('repo/dist/server/metrics.js', { skipRoot: true }), 'build output is not read');
+assert(!scanReadsPath('repo/.git/config.yaml', { skipRoot: true }) && !scanReadsPath('repo/.github/workflows/ci.yml', { skipRoot: true }),
+  'version control and CI folders are not read');
+assert(!scanReadsPath('repo/.claude/worktrees/w1/k8s/prometheus/rules.yaml', { skipRoot: true }),
+  'an agent worktree is a second copy of the repository: reading it would declare every artefact twice');
+assert(scanReadsPath('repo/.observability/pack.yaml', { skipRoot: true }), '.observability is the one dot-folder a scan enters');
+assert(!scanReadsPath('repo/.env.yaml', { skipRoot: true }), 'a dot-file is not read');
+assert(!scanReadsPath('repo/docs/README.md', { skipRoot: true }) && !scanReadsPath('repo/assets/logo.png', { skipRoot: true }),
+  'an extension the scanner does not parse is not read');
+assert(scanReadsPath('dist/k8s/rules.yaml', { skipRoot: true }) && scanReadsPath('.work/k8s/rules.yaml', { skipRoot: true }),
+  'the picked folder itself is the user\'s choice, whatever it is called');
+assert(!scanReadsPath('dist/k8s/rules.yaml'), 'without a picked root the first segment is a folder like any other');
+assert(scanSkipsName('node_modules', { dir: true }) && !scanSkipsName('node_modules'), 'the ignore list names folders, not files');
+assert(!scanReadsPath('') && !scanReadsPath(null), 'no path, nothing read');
+assert(['yaml', 'yml', 'json', 'ts', 'py', 'go', 'java'].every(e => SCAN_EXT.test(`x.${e}`)) && SCAN_IGNORE_DIRS.has('coverage'),
+  'the extensions and the ignore list are the library\'s, shared');
+// The three ways in all use it: the CLI walker and both studio paths.
+const cliSrc = readFileSync(new URL('./crawl-repo.mjs', import.meta.url), 'utf8');
+assert(/scanSkipsName\(ent\.name, \{ dir: ent\.isDirectory\(\) \}\)/.test(cliSrc) && !/IGNORE_DIRS = new Set/.test(cliSrc),
+  'the CLI walker applies the shared rule and keeps no list of its own');
+const studioSrc = readFileSync(new URL('../studio/app.mjs', import.meta.url), 'utf8');
+const stage = studioSrc.slice(studioSrc.indexOf('async function stageFileList'), studioSrc.indexOf('async function finalizeStaging'));
+assert(/lib\.scanReadsPath\(rel, \{ skipRoot: !!f\.webkitRelativePath \}\)/.test(stage),
+  'the folder picker applies the rule to each path');
+assert(stage.indexOf('scanReadsPath') < stage.indexOf('f.text()'), 'and before it reads the file, not after');
+const drop = studioSrc.slice(studioSrc.indexOf('async function readEntry'), studioSrc.indexOf('async function stageFileList'));
+assert(/lib\.scanSkipsName\(entry\.name, \{ dir: true \}\)/.test(drop), 'the drop zone applies the same rule to each folder');
+assert(!/CRAWL_IGNORE_DIRS|CRAWL_SCAN_EXT/.test(studioSrc), 'the studio keeps no list of its own');
 
 report('crawler');
