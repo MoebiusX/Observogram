@@ -1,6 +1,6 @@
 // tools/lib/adapter.mjs
 //
-// Projects a canonical ObservabilityPack v1.2 manifest into the studio's
+// Projects a canonical ObservabilityPack manifest into the studio's
 // layered display object. Browser-friendly ESM — no Node APIs — so the
 // studio HTML can `<script type="module">` import this same file as the
 // Node CLI wrapper (tools/adapt-spec-pack.mjs).
@@ -11,6 +11,8 @@
 //   applyEnvironmentOverlay(spec, env)  -> { spec, effective }
 
 import { annotationList, buildRequirementTraceability } from './traceability.mjs';
+import { boundText, hasDirection } from './good-when.mjs';
+import { SPEC_VERSION } from './validator.mjs';
 //
 // LAYERED DISPLAY OBJECT shape:
 //   {
@@ -33,10 +35,14 @@ import { annotationList, buildRequirementTraceability } from './traceability.mjs
 //     id: string,           // e.g. "SLI-01", "BAK-03"
 //     title: string,        // human label
 //     desc: string,         // one-line summary
+//     subtitle?: string,    // a threshold / distribution SLI's bound with its direction: '≤ 0.5 seconds', '≥ 2 consumers'
+//                           //   (spec 1.3 good_when through good-when.mjs boundText; absent means below)
 //     tool: string,         // implementation tool/family
 //     tags: string[],       // free-form tags
 //     source: 'Declared' | 'Verified' | 'Scaffold',
-//                              // 'Missing' added by Phase 3 conformance pass
+//                              // never 'Missing': the adapter projects only what the pack
+//                              //   holds; something it lacks is a failing rubric clause
+//                              //   (conformance.mjs), not an artefact
 //     defines?: string,     // symbol this artefact defines (e.g. "slis.api_availability")
 //     refs?: string[],      // symbols this artefact references (cross-ref check input)
 //     spec: object,         // raw canonical section/item (drawer detail)
@@ -54,7 +60,7 @@ export function adapt(canonical, opts = {}) {
   }
   if (canonical.apiVersion !== CANONICAL_API_VERSION || canonical.kind !== CANONICAL_KIND) {
     throw new Error(
-      `adapter: not a canonical ObservabilityPack v1.2 manifest ` +
+      `adapter: not a canonical ObservabilityPack v${SPEC_VERSION} manifest ` +
       `(apiVersion=${JSON.stringify(canonical.apiVersion)}, kind=${JSON.stringify(canonical.kind)})`
     );
   }
@@ -68,11 +74,13 @@ export function adapt(canonical, opts = {}) {
   // schema constrains metadata.annotations to {string: string}).
   const annotations = canonical.metadata?.annotations || {};
   const verifyPrefix = 'mcp.verified.';
-  // Scaffold markers come from two writers: the crawler (schema-forced
-  // placeholders with no repo evidence) and the live fetcher (schema-
-  // forced placeholders the MCP did not attest). Both project as
+  // Scaffold markers come from three writers: the crawler (schema-forced
+  // placeholders with no repo evidence), the live fetcher (schema-forced
+  // placeholders the MCP did not attest) and the library (an artefact whose
+  // value only the team can fill — a route target, a chaos target, a backend
+  // endpoint; tools/lib/library.mjs, `library.todo.<symbol>`). All project as
   // Scaffold — never Declared — so the grade parks them.
-  const scaffoldPrefixes = ['crawler.scaffold.', 'mcp.scaffold.'];
+  const scaffoldPrefixes = ['crawler.scaffold.', 'mcp.scaffold.', 'library.todo.'];
 
   const ctx = {
     spec,
@@ -200,6 +208,8 @@ function adaptSLIs(ctx) {
     id: `SLI-${pad(i + 1)}`,
     title: sli.id,
     desc: sli.description || `${sli.type ?? '(untyped)'} SLI`,
+    // The bound as the card's subtitle, with the side that is good (≤ a ceiling, ≥ a floor) — the one helper every reader prints it through.
+    ...(hasDirection(sli.type) && boundText(sli) ? { subtitle: boundText(sli) } : {}),
     tool: SLI_TYPE_LABEL[sli.type] || 'SLI',
     tags: ['sli', sli.type, ...(sli.semconv_metric ? ['semconv'] : [])].filter(Boolean),
     source: ctx.sourceOf(`slis.${sli.id}`),
@@ -383,7 +393,7 @@ function adaptSourceMetricDefinitions(ctx) {
 }
 
 // L2 EXPAND: scrape jobs projected from repo crawler annotations and live MCP
-// annotations. The canonical v1.2 schema does not have a first-class
+// annotations. The canonical schema does not have a first-class
 // scrape_jobs field, so both paths store them in annotations. Projecting them
 // here makes scrape evidence visible and comparable without changing the pack
 // schema.

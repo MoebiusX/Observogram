@@ -13,14 +13,14 @@
 
 import { readFileSync } from 'node:fs';
 import { retrofeedShadowSignals } from './lib/retrofeed.mjs';
-import { validateCanonical } from './lib/validator.mjs';
+import { validateCanonical, SPEC_SCHEMA_PATH, SPEC_DIR } from './lib/validator.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { adapt } from './lib/adapter.mjs';
 import { diffPacks } from './lib/diff.mjs';
 import { createHarness } from './lib/harness.mjs';
 
 const SCHEMA = JSON.parse(readFileSync(
-  new URL('../vendor/observability-pack-spec/v1.2/observability-pack.schema.json', import.meta.url), 'utf8'));
+  new URL(`../${SPEC_SCHEMA_PATH}`, import.meta.url), 'utf8'));
 const { assert, report } = createHarness();
 
 const k = (kind, idn) => `${kind}::${JSON.stringify(idn)}`;
@@ -89,7 +89,7 @@ assert(!('annotations' in (r4.updatedCanonical.metadata || {})) || !r4.updatedCa
 assert(r4.fragment === null, 'no fragment when nothing was adopted');
 
 // ---------- end-to-end with REAL packs: the output must validate ----------
-const A = parseYaml(readFileSync(new URL('../vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml', import.meta.url), 'utf8'));
+const A = parseYaml(readFileSync(new URL(`../${SPEC_DIR}/examples/payment-service.pack.yaml`, import.meta.url), 'utf8'));
 const B = parseYaml(readFileSync(new URL('../examples/production-curated.pack.yaml', import.meta.url), 'utf8'));
 const diff = diffPacks(adapt(A), adapt(B), { scopeMode: 'off' });
 const onlyInB = Object.values(diff.layers).flatMap(l => l.onlyInB || []);

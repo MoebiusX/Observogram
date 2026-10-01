@@ -1,8 +1,8 @@
 # =============================================================================
 # ObservabilityPack: prometheus
 # -----------------------------------------------------------------------------
-# State-of-the-art reference pack for Prometheus 2.x — the metrics-store that
-# observes everything else. Covers scrape health, WAL integrity, recording-rule
+# State-of-the-art reference pack for Prometheus 2.x and 3.x — the metrics-store
+# that observes everything else. Covers scrape health, WAL integrity, recording-rule
 # evaluation, query-engine saturation, query latency, alertmanager delivery,
 # TSDB compaction health, and federation freshness.
 #
@@ -42,7 +42,7 @@ metadata:
   annotations:
     catalogue_id: observability/prometheus
     docs: https://prometheus.io/docs/prometheus/latest/
-    target_versions: prometheus 2.45+, 2.55 LTS
+    target_versions: prometheus 2.45+, 2.55 LTS, 3.x (SLI queries measured live on 3.14.0, 2026-09-22)
     evidence: docs/catalogue-evidence/prometheus.md
     meta_observability: "monitor via a separate HA-redundant Meta-Prometheus; the prometheus instance under test scrapes its own metrics but alerting fires from the Meta-Prometheus"
     promote_for_certification: tier-2
@@ -148,11 +148,16 @@ spec:
 
     - id: scrape_duration_p99
       type: threshold
-      description: 99th-percentile target scrape duration. High values indicate slow targets or network degradation.
+      description: |
+        99th percentile of the per-target scrape duration over the last 5 minutes,
+        across every target. scrape_duration_seconds is one of the series Prometheus
+        itself writes with each scrape (docs, "Automatically generated labels and time
+        series"), a per-target gauge with no histogram form (0 _bucket series on
+        3.14.0), so the percentile is taken over its samples with quantile_over_time.
+        High values indicate slow targets or network degradation.
       semconv_metric: prometheus.target.scrape.duration
       query: |
-        histogram_quantile(0.99,
-          sum by (le)(rate(scrape_duration_seconds_bucket[5m])))
+        max(quantile_over_time(0.99, scrape_duration_seconds[5m]))
       threshold: 5
       unit: seconds
 
@@ -184,11 +189,22 @@ spec:
     # --- Query engine ---
     - id: query_latency_p99
       type: threshold
-      description: 99th-percentile query duration (PromQL queries via /api/v1/query and /api/v1/query_range).
+      description: |
+        99th-percentile latency of the HTTP query API (/api/v1/query and
+        /api/v1/query_range) from the server's own request-duration histogram
+        prometheus_http_request_duration_seconds{handler}, buckets 0.1 .. 120 s
+        (measured on 3.14.0; defined the same way at 2.55.1 per web/web.go). The
+        histogram resolves nothing below its first bucket: a healthy server reads
+        0.099 s (0.99 x 0.1, every request in le="0.1"), meaning "p99 <= 0.1 s"; the
+        1 s objective sits on the le="1.0" bound, where the comparison is exact. The
+        engine's prometheus_engine_query_duration_seconds is a summary (no _bucket
+        series); the 3.x-only prometheus_engine_query_duration_histogram_seconds_bucket
+        would give the engine-side view on 3.x alone. This is what a Grafana panel
+        waits for.
       semconv_metric: prometheus.query.duration
       query: |
         histogram_quantile(0.99,
-          sum by (le)(rate(prometheus_engine_query_duration_seconds_bucket[5m])))
+          sum by (le)(rate(prometheus_http_request_duration_seconds_bucket{handler=~"/api/v1/query|/api/v1/query_range"}[5m])))
       threshold: 1
       unit: seconds
 

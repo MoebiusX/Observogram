@@ -1,0 +1,415 @@
+/* studio/ux-discover.css — Discover — layer overview: screen-specific rules on top of the shared grammar in studio/ux.css. */
+
+/* ---------- the screen ---------- */
+.dv-root {
+  max-width: 1480px; margin: 0 auto; padding: 24px 28px 80px;
+  font-family: var(--sans); color: var(--ux-ink);
+}
+
+/* ---------- the board's head: which pack this is ---------- */
+.dvb-head {
+  display: grid; grid-template-columns: minmax(300px, 0.9fr) minmax(0, 2fr);
+  gap: 16px 28px; align-items: center; margin: 0 0 16px;
+}
+.dvb-eyebrow {
+  margin: 0 0 7px; font: 600 11px/1 var(--mono); letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--ux-info);
+}
+.dvb-h { margin: 0; font: 700 28px/1.12 var(--sans); letter-spacing: -0.015em; color: var(--ux-ink); }
+.dvb-h-of { font-weight: 600; }
+.dvb-lede { margin: 6px 0 0; font: 400 15px/1.4 var(--sans); color: var(--ux-info); }
+.dvb-facts { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(172px, 1fr)); gap: 8px; }
+.dvb-fact {
+  display: grid; grid-template-columns: 28px minmax(0, 1fr); column-gap: 10px; align-items: center;
+  padding: 9px 12px; border: 1px solid var(--ux-line); border-radius: 10px; background: var(--ux-bg);
+}
+.dvb-fact-ico { grid-row: 1 / span 2; width: 26px; height: 26px; color: var(--ux-info); }
+.dvb-fact dt { font: 400 12px/1.2 var(--sans); color: var(--ux-ink-3); }
+.dvb-fact dd {
+  margin: 0; font: 600 14px/1.3 var(--sans); color: var(--ux-ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ---------- Refine: one slim bar over the board ---------- */
+.dv-filters {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 24px;
+  margin: 0 0 12px; padding: 8px 12px;
+  border: 1px solid var(--ux-line); border-radius: 10px; background: var(--ux-bg);
+}
+.dv-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.dv-filter-key {
+  font: 600 11px/1.2 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ux-ink-3);
+}
+.dv-filters .ux-segmented { margin: 0; }
+.dv-refine-domain { display: inline-flex; align-items: center; gap: 8px; }
+.dv-refine-label { font: 500 14px/1.2 var(--sans); color: var(--ux-ink-2); }
+.dv-refine-select, .dv-refine-input {
+  min-height: 34px; padding: 5px 10px; border-radius: 8px;
+  border: 1px solid var(--ux-line); background: var(--ux-bg-2); color: var(--ux-ink);
+  font: 400 14px/1.3 var(--sans);
+}
+.dv-refine-input { width: min(300px, 70vw); }
+.dv-refine-clear[hidden] { display: none; }
+/* What each control does is its description for assistive tech; on screen the labels carry it. */
+.dv-refine-hint {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ---------- the board: one band per layer ---------- */
+.dv-layers { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.dv-layer {
+  --dv-accent: var(--ux-ink-3);
+  border: 1px solid color-mix(in srgb, var(--dv-accent) 38%, var(--ux-line)); border-radius: 12px;
+  background:
+    linear-gradient(90deg,
+      color-mix(in srgb, var(--dv-accent) 13%, transparent),
+      color-mix(in srgb, var(--dv-accent) 3%, transparent) 32%, transparent 62%),
+    var(--ux-bg);
+  scroll-margin-top: calc(var(--observa-chrome-h, 102px) + var(--ux-context-h, 56px) + 12px);
+}
+.dv-layer.is-open { box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24); }
+/* The layer tokens the legacy .card / .tag rules read, as .section[data-layer] sets them. */
+.dv-layer[data-layer="L1"]  { --dv-accent: var(--L1);  --accent: var(--L1);  --accent-bg: var(--L1-bg);  --accent-tint: var(--L1-tint); }
+.dv-layer[data-layer="L2"]  { --dv-accent: var(--L2);  --accent: var(--L2);  --accent-bg: var(--L2-bg);  --accent-tint: var(--L2-tint); }
+.dv-layer[data-layer="L2X"] { --dv-accent: var(--L2X); --accent: var(--L2X); --accent-bg: var(--L2X-bg); --accent-tint: var(--L2X-tint); }
+.dv-layer[data-layer="L3"]  { --dv-accent: var(--L3);  --accent: var(--L3);  --accent-bg: var(--L3-bg);  --accent-tint: var(--L3-tint); }
+.dv-layer[data-layer="L4"]  { --dv-accent: var(--L4);  --accent: var(--L4);  --accent-bg: var(--L4-bg);  --accent-tint: var(--L4-tint); }
+.dv-layer[data-layer="L5"]  { --dv-accent: var(--L5);  --accent: var(--L5);  --accent-bg: var(--L5-bg);  --accent-tint: var(--L5-tint); }
+.dv-layer[data-layer="GOV"] { --dv-accent: var(--GOV); --accent: var(--GOV); --accent-bg: var(--GOV-bg); --accent-tint: var(--GOV-tint); }
+
+.dv-band { display: grid; grid-template-columns: 214px minmax(0, 1fr); gap: 14px; padding: 12px; align-items: stretch; }
+.dv-layer.is-open > .dv-band { border-bottom: 1px solid var(--ux-line); }
+
+/* The band's identity: the layer's code, its names, and the way into its full list. */
+.dv-band-id {
+  display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 10px 12px;
+  align-content: center; padding: 4px 2px 4px 6px;
+}
+.dv-band-code {
+  width: 52px; height: 52px; display: grid; place-items: center; border-radius: 10px;
+  background: linear-gradient(160deg, var(--dv-accent), color-mix(in srgb, var(--dv-accent) 68%, #000));
+  color: #fff; font: 700 20px/1 var(--sans); letter-spacing: -0.02em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--dv-accent) 34%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+.dv-band-names { margin: 0; display: grid; gap: 2px; align-content: center; min-width: 0; font: inherit; }
+.dv-band-spec { font: 700 15px/1.2 var(--sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--dv-accent); }
+.dv-band-name { font: 400 14px/1.3 var(--sans); color: var(--ux-ink-2); }
+.dv-layer-toggle {
+  grid-column: 1 / -1; display: flex; align-items: baseline; gap: 7px; padding: 7px 10px;
+  border: 1px solid var(--ux-line); border-radius: 8px;
+  background: color-mix(in srgb, var(--ux-bg-2) 70%, transparent);
+  color: inherit; cursor: pointer; font: inherit; text-align: left;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.dv-layer-toggle:hover:not(:disabled), .dv-layer.is-open .dv-layer-toggle {
+  border-color: color-mix(in srgb, var(--dv-accent) 70%, transparent);
+  background: color-mix(in srgb, var(--dv-accent) 10%, var(--ux-bg-2));
+}
+.dv-layer-toggle:disabled { cursor: default; opacity: 0.6; }
+.dv-size-n { font: 600 18px/1 var(--mono); font-variant-numeric: tabular-nums; color: var(--ux-ink); }
+.dv-size-unit {
+  flex: 1 1 auto; font: 500 11px/1.2 var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--ux-ink-3);
+}
+.dv-chevron { align-self: center; color: var(--ux-ink-3); transition: transform 140ms ease, color 120ms ease; }
+.dv-chevron::before { content: "›"; display: block; font: 400 20px/0.8 var(--sans); }
+.dv-layer.is-open .dv-chevron { transform: rotate(90deg); color: var(--dv-accent); }
+.dv-layer-toggle:disabled .dv-chevron { visibility: hidden; }
+.dv-match {
+  grid-column: 1 / -1; justify-self: start; padding: 3px 10px; border-radius: 999px;
+  font: 700 13px/1.3 var(--sans); color: var(--ux-ink);
+  background: var(--ux-bg-2); border: 1px solid var(--ux-accent); cursor: help;
+}
+
+/* The band's groups: what the pack holds on this layer, family by family. */
+.dv-groups { display: flex; align-items: stretch; gap: 12px; min-width: 0; }
+.dv-groups.is-flow { gap: 28px; }
+.dvb-group {
+  position: relative; flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
+  padding: 8px 10px 10px;
+  border: 1px solid color-mix(in srgb, var(--dv-accent) 46%, transparent); border-radius: 9px;
+  background: var(--obs-bg, var(--ux-bg-2));
+}
+/* Signals move left to right: an arrow between one step and the next. */
+.dv-groups.is-flow .dvb-group:not(.is-aside) + .dvb-group:not(.is-aside)::before {
+  content: "→"; position: absolute; left: -23px; top: 50%; transform: translateY(-50%);
+  font: 400 18px/1 var(--sans); color: var(--dv-accent);
+}
+.dvb-group.is-aside { flex: 0 1 190px; border-style: dashed; }
+.dvb-group.is-empty { border-style: dashed; border-color: var(--ux-line); }
+.dvb-group-title {
+  margin: 0 0 8px; text-align: center; font: 600 13px/1.25 var(--sans); color: var(--dv-accent);
+}
+.dvb-group.is-empty .dvb-group-title { color: var(--ux-ink-3); }
+.dvb-group-n { margin-left: 4px; font: 600 11px/1 var(--mono); color: var(--ux-ink-3); }
+.dvb-none { margin: auto 0; padding: 6px 0; text-align: center; font: 400 12.5px/1.3 var(--sans); color: var(--ux-ink-3); }
+
+.dvb-items { display: grid; gap: 5px; align-content: start; }
+.dvb-items.is-tiles { grid-template-columns: repeat(auto-fill, minmax(108px, 1fr)); gap: 6px; }
+.dvb-item {
+  min-width: 0; border: 1px solid var(--ux-line); border-radius: 7px; background: var(--ux-bg);
+  color: var(--ux-ink); cursor: pointer; font: 400 13px/1.3 var(--sans); text-align: left;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.dvb-item:hover, .dvb-item:focus-visible {
+  border-color: color-mix(in srgb, var(--dv-accent) 75%, transparent);
+  background: color-mix(in srgb, var(--dv-accent) 10%, var(--ux-bg));
+}
+.dvb-name { min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dvb-sub { min-width: 0; font-size: 12px; color: var(--ux-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dvb-line { display: grid; gap: 1px; padding: 5px 9px; }
+
+.dvb-tile { display: grid; justify-items: center; align-content: start; gap: 4px; padding: 9px 6px 8px; text-align: center; }
+.dvb-tile .dvb-name {
+  display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical;
+  white-space: normal; overflow-wrap: anywhere; font-size: 12.5px; line-height: 1.25;
+}
+.dvb-ico { width: 30px; height: 30px; color: var(--dv-accent); }
+.dvb-ico-wide { width: 46px; }
+
+/* An objective's target: a 270° dial, filled to the target. */
+.dvb-dial { --dvb-fill: 0; position: relative; width: 62px; height: 50px; overflow: hidden; }
+.dvb-dial::before {
+  content: ""; position: absolute; left: 0; top: 0; width: 62px; height: 62px; border-radius: 50%;
+  background: conic-gradient(from 225deg,
+    var(--ux-ok) calc(var(--dvb-fill) * 2.7deg),
+    color-mix(in srgb, var(--ux-ink-3) 30%, transparent) 0 270deg, transparent 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
+}
+.dvb-dial-val {
+  position: absolute; left: 0; right: 0; top: 22px; text-align: center;
+  font: 700 13px/1 var(--sans); font-variant-numeric: tabular-nums; color: var(--ux-ink);
+}
+
+.dvb-facts-item { display: grid; gap: 4px; padding: 8px 10px; }
+.dvb-facts-item .dvb-name { margin-bottom: 2px; }
+.dvb-kv { display: grid; grid-template-columns: minmax(74px, auto) minmax(0, 1fr); gap: 8px; font-size: 12.5px; }
+.dvb-k { color: var(--ux-ink-3); }
+.dvb-v { color: var(--ux-ink); overflow-wrap: anywhere; }
+
+.dvb-signal, .dvb-route { display: flex; align-items: center; gap: 7px; padding: 5px 8px; }
+.dvb-arrow { flex: 0 0 auto; color: var(--ux-ink-3); }
+.dvb-chip {
+  flex: 0 0 auto; padding: 1px 7px; border-radius: 999px; font: 600 11px/1.5 var(--mono);
+  border: 1px solid var(--ux-line); color: var(--ux-ink-2);
+}
+.dvb-chip[data-signal="metrics"]  { color: var(--ux-ok);     border-color: color-mix(in srgb, var(--ux-ok) 45%, transparent); }
+.dvb-chip[data-signal="logs"]     { color: var(--ux-info);   border-color: color-mix(in srgb, var(--ux-info) 45%, transparent); }
+.dvb-chip[data-signal="traces"]   { color: var(--ux-accent); border-color: color-mix(in srgb, var(--ux-accent) 45%, transparent); }
+.dvb-chip[data-signal="profiles"] { color: var(--ux-warn);   border-color: color-mix(in srgb, var(--ux-warn) 45%, transparent); }
+.dvb-sev {
+  flex: 0 0 auto; padding: 1px 7px; border-radius: 4px; font: 700 11px/1.5 var(--mono);
+  color: var(--ux-ink-2); background: var(--ux-bg-2); border: 1px solid var(--ux-line);
+}
+.dvb-sev[data-sev="SEV1"] { color: var(--ux-fail); background: var(--ux-fail-bg); border-color: color-mix(in srgb, var(--ux-fail) 50%, transparent); }
+.dvb-sev[data-sev="SEV2"] { color: var(--ux-warn); background: var(--ux-warn-bg); border-color: color-mix(in srgb, var(--ux-warn) 50%, transparent); }
+.dvb-sev[data-sev="SEV3"] { color: var(--ux-info); background: var(--ux-info-bg); border-color: color-mix(in srgb, var(--ux-info) 50%, transparent); }
+
+.dvb-inv { display: grid; justify-items: start; gap: 3px; width: 100%; padding: 8px 10px; }
+.dvb-inv-n { font: 600 24px/1 var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; color: var(--ux-ink); }
+.dvb-inv-name { max-width: 100%; font-size: 12px; color: var(--ux-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dvb-more-text { margin-top: 2px; font: 600 12px/1.3 var(--sans); color: var(--dv-accent); }
+.dvb-more {
+  align-self: flex-start; margin-top: 6px; padding: 2px; border: 0; background: none;
+  color: var(--dv-accent); font: 600 12.5px/1.3 var(--sans); cursor: pointer;
+}
+.dvb-more:hover, .dvb-more:focus-visible { text-decoration: underline; }
+
+@media (max-width: 1240px) {
+  .dvb-head { grid-template-columns: 1fr; }
+  .dv-groups, .dv-groups.is-flow { flex-wrap: wrap; gap: 10px; }
+  .dv-groups.is-flow .dvb-group::before { content: none !important; }
+  .dvb-group, .dvb-group.is-aside { flex: 1 1 220px; }
+}
+@media (max-width: 820px) {
+  .dv-band { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dv-layer-toggle, .dv-chevron, .dvb-item { transition: none; }
+}
+
+/* ---------- the open layer ---------- */
+.dv-panel { padding: 14px 16px 18px; }
+.dv-panel[hidden] { display: none; }
+.dv-panel-intro { margin: 0 0 10px; font-size: 15px; color: var(--ux-ink-2); }
+.dv-panel-bar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 8px 16px; margin: 0 0 12px;
+}
+.dv-panel-count { margin: 0; font: 500 14px/1.4 var(--sans); color: var(--ux-ink-2); }
+.dv-detail-toggles { display: flex; flex-wrap: wrap; gap: 6px; }
+.dv-detail-toggle {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 5px 12px;
+  border-radius: 999px; border: 1px solid var(--ux-line); background: transparent;
+  color: var(--ux-ink-2); font: 500 14px/1.2 var(--sans); cursor: pointer;
+}
+.dv-detail-toggle:hover { border-color: var(--dv-accent); color: var(--ux-ink); }
+.dv-detail-toggle[aria-pressed="true"] { border-color: var(--dv-accent); color: var(--ux-ink); background: var(--ux-bg-2); }
+.dv-detail-count { font-weight: 700; color: var(--ux-ink); }
+.dv-show-all { margin-top: 14px; }
+.dv-subgroup { margin: 16px 0 8px; font: 600 15px/1.3 var(--sans); color: var(--ux-ink); }
+.dv-subgroup:first-child { margin-top: 0; }
+.dv-subgroup-none { margin: 0 0 8px; font-size: 14px; color: var(--ux-ink-3); }
+
+/* A readable list: at most three columns on the widest screens, one on a phone. */
+.dv-rows {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr));
+}
+
+/* ---------- an artefact row (keeps the .card contract the drawer reads) ---------- */
+.dv-row.card {
+  display: flex; flex-direction: column; gap: 6px;
+  width: auto; margin: 0; padding: 12px 14px;
+  background: var(--ux-bg-2); color: var(--ux-ink);
+  border: 1px solid var(--ux-line); border-radius: 8px;
+  text-align: left; cursor: pointer;
+}
+.dv-row.card:hover { background: var(--ux-bg-2); border-color: var(--dv-accent); }
+.dv-row.card.is-active { border-color: var(--dv-accent); box-shadow: inset 4px 0 0 var(--dv-accent); background: var(--ux-bg-2); }
+.dv-row.card.has-broken-refs { outline: none; background: var(--ux-bg-2); box-shadow: inset 4px 0 0 var(--ux-fail); }
+.dv-row.card.is-scaffold { outline: none; border-style: dashed; border-color: var(--ux-warn); }
+.dv-row.card.is-outside-filter { border-style: dotted; }
+
+.dv-row-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.dv-row-main {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0;
+  padding: 0; border: 0; background: none; color: inherit; cursor: pointer;
+  text-align: left; font: inherit;
+}
+.dv-row-kind { font: 500 13px/1.3 var(--sans); color: var(--ux-ink-3); }
+.dv-row-name { font: 600 15px/1.35 var(--sans); color: var(--ux-ink); overflow-wrap: anywhere; }
+.dv-row-main:hover .dv-row-name { text-decoration: underline; text-underline-offset: 3px; }
+.dv-row-bound { font: 500 13px/1.3 var(--mono); color: var(--ux-ink-2); }
+.dv-row-status { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; flex: 0 1 auto; }
+.dv-row-what {
+  margin: 0; font-size: 14px; line-height: 1.45; color: var(--ux-ink-2);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.dv-row-spec { margin: 0; font-size: 13px; line-height: 1.4; color: var(--ux-ink-3); overflow-wrap: anywhere; }
+.dv-row-source {
+  margin: 0; padding: 7px 10px; border-radius: 6px;
+  background: var(--ux-info-bg); font-size: 14px; line-height: 1.45; color: var(--ux-ink);
+}
+.dv-row-source-why { display: block; color: var(--ux-ink-2); font-size: 13px; }
+.dv-rule-link {
+  padding: 0; border: 0; background: none; cursor: pointer; color: var(--ux-accent);
+  font: inherit; text-decoration: underline; text-underline-offset: 3px;
+}
+.dv-rule-link code, .dv-rule-missing { font: 500 13px/1.3 var(--mono); overflow-wrap: anywhere; }
+.dv-rule-missing { color: var(--ux-ink-2); }
+
+.dv-row-foot { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px 12px; }
+.dv-row-foot .benchmark-cta { margin-left: auto; opacity: 1; font-family: var(--sans); font-size: 13px; }
+/* Closed, Details sits beside the row's actions; open, it takes its own line below them. */
+.dv-row-details { flex: 0 1 auto; min-width: 0; }
+.dv-row-details[open] { flex: 1 1 100%; order: 3; }
+.dv-row-details > summary {
+  display: inline-flex; align-items: center; min-height: 28px; cursor: pointer;
+  font: 500 13px/1.3 var(--sans); color: var(--ux-ink-2);
+}
+.dv-row-details > summary:hover { color: var(--ux-ink); }
+.dv-row-details dl {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px;
+  margin: 8px 0 4px; font-size: 13px;
+}
+.dv-row-details dt { color: var(--ux-ink-3); font-weight: 500; }
+.dv-row-details dd { margin: 0; color: var(--ux-ink-2); overflow-wrap: anywhere; }
+.dv-mono { font-family: var(--mono); font-size: 13px; }
+.dv-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.dv-row-details-hint { margin: 4px 0 0; font-size: 13px; color: var(--ux-ink-3); }
+.dv-row-pinned { font: 500 13px/1.3 var(--sans); color: var(--ux-ink-2); }
+
+/* ---------- View: the same artefacts, less of each one ----------
+   Details is the row above. Tiles keeps its head; List keeps the name and a
+   status mark. Lighter rows are narrower, so more of them sit side by side. */
+.dv-view { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.dv-view .ux-segmented { margin: 0; }
+.dv-view .ux-segmented button { display: inline-flex; align-items: center; gap: 6px; }
+.dv-view-icon {
+  flex: 0 0 auto; width: 16px; height: 16px;
+  fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
+}
+
+.dv-rows[data-view="tiles"] {
+  gap: 8px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+}
+/* Lighter rows are one button: the whole tile or line opens the full record. */
+.dv-rows:is([data-view="tiles"], [data-view="list"]) .dv-row.card { gap: 2px; padding: 0; }
+.dv-rows:is([data-view="tiles"], [data-view="list"]) .dv-row-main { width: 100%; }
+.dv-rows:is([data-view="tiles"], [data-view="list"]) .dv-row-pinned { padding: 0 12px 8px; }
+/* The name leads on its own line; kind and bound share the line under it,
+   the status at its end — or on a line of its own when both do not fit (two
+   chips on a narrow tile). */
+.dv-rows[data-view="tiles"] .dv-row-main {
+  flex-flow: row wrap; align-items: center; gap: 2px 10px;
+  padding: 8px 12px;
+}
+.dv-rows[data-view="tiles"] .dv-row-name { flex: 1 1 100%; min-width: 0; }
+.dv-rows[data-view="tiles"] .dv-row-status { margin-left: auto; }
+.dv-row-meta { flex: 1 1 auto; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-width: 0; }
+
+.dv-rows[data-view="list"] {
+  gap: 6px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
+}
+.dv-rows[data-view="list"] .dv-row-main { min-height: 34px; padding: 7px 10px; }
+/* min-width: 0 with the base overflow-wrap: anywhere: a name with no separator wraps inside its line. */
+.dv-rows[data-view="list"] .dv-row-name { flex: 1 1 auto; min-width: 0; font: 500 14px/1.35 var(--sans); }
+.dv-row-line { display: flex; align-items: flex-start; gap: 8px; width: 100%; min-width: 0; }
+.dv-row-line .dv-mark { margin-top: 4px; }
+
+/* Cards: the card grid Discover drew before the review. The body is the
+   Build stack's card (app.css .card-head … .card-foot); these rules give the
+   row back that card's frame, which .dv-row.card above replaces. */
+.dv-rows[data-view="cards"] {
+  gap: 0; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  border: 1px solid var(--accent); background: var(--line-2);
+}
+/* min-width: 0 and overflow-wrap: anywhere: a long rule name in a card's
+   summary wraps inside the card instead of widening the column (and, on a
+   phone, the page). */
+.dv-rows[data-view="cards"] .dv-row.card {
+  display: block; min-width: 0; padding: 12px 14px 10px; overflow-wrap: anywhere;
+  border: 0; border-right: 1px solid var(--line-2); border-bottom: 1px solid var(--line-2); border-radius: 0;
+  background: var(--card); color: var(--ink); box-shadow: none;
+}
+.dv-rows[data-view="cards"] .dv-row.card:hover { background: var(--accent-tint); }
+.dv-rows[data-view="cards"] .dv-row.card.is-active { background: var(--accent-bg); }
+.dv-rows[data-view="cards"] .dv-row.card.has-broken-refs { outline: 1.5px solid var(--src-Missing); outline-offset: -1.5px; background: var(--fail-bg); }
+.dv-rows[data-view="cards"] .dv-row.card.is-scaffold { outline: 1.5px dashed color-mix(in srgb, #64748B 70%, transparent); outline-offset: -3px; }
+.dv-rows[data-view="cards"] .dv-row.card.is-outside-filter { outline: 1.5px dotted var(--ux-ink-3); outline-offset: -3px; }
+/* Hover and the open card win over the unresolved-reference background (its outline stays), as on app.css's card. */
+.dv-rows[data-view="cards"] .dv-row.card.has-broken-refs:hover { background: var(--accent-tint); }
+.dv-rows[data-view="cards"] .dv-row.card.has-broken-refs.is-active { background: var(--accent-bg); }
+/* The title is the button that opens the record; it keeps the card title's type. */
+.dv-rows[data-view="cards"] .card-title {
+  display: block; width: 100%; margin: 0 0 4px;
+  font: 500 14px/1.4 var(--mono); color: var(--ink); word-break: break-word;
+}
+.dv-rows[data-view="cards"] .card-title:hover { text-decoration: underline; text-underline-offset: 3px; }
+.dv-rows[data-view="cards"] .dv-row.card.is-scaffold .card-title { color: var(--ink-3); }
+
+/* A status mark stands in for the chips where there is no room for words.
+   Shape carries the meaning, building on the chips (ux.css: evidence is a dot,
+   a failed assessment a cross). The mark's own: filled = live, hollow =
+   declared only, and a dashed box for a template value (the dashed frame such
+   a row has). */
+.dv-mark { flex: 0 0 auto; display: inline-block; box-sizing: border-box; width: 10px; height: 10px; border-radius: 50%; }
+.dv-mark-live { background: var(--ux-ok); }
+.dv-mark-declared { border: 2px solid var(--ux-ink-3); }
+.dv-mark-needsInput { border: 2px dashed var(--ux-warn); border-radius: 2px; }
+.dv-mark-missing { border: 2px solid var(--ux-fail); }
+.dv-mark-broken { position: relative; border-radius: 0; color: var(--ux-fail); }
+.dv-mark-broken::before { content: "✕"; position: absolute; inset: 0; display: grid; place-items: center; font: 700 12px/1 var(--sans); }
+.dv-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0 0 10px; font-size: 13px; color: var(--ux-ink-2); }
+.dv-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---------- small screens ---------- */
+@media (max-width: 720px) {
+  .dv-root { padding: 16px 16px 64px; }
+  .dv-row-head { flex-direction: column; }
+  .dv-row-status { justify-content: flex-start; }
+}

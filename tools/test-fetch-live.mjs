@@ -10,10 +10,14 @@
  *      markers in the flat key form `mcp.verified.<symbol>`.
  *   4. The pack adapts cleanly via the layered adapter (Verified source
  *      tags surface where the fetcher attested them).
+ *   5. The CLI (`npm run fetch-live`) writes the safe MCP URL — no
+ *      credential parameter — and says on stderr which one it dropped.
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from './lib/mini-yaml.mjs';
@@ -172,7 +176,7 @@ const scaffoldBurn = layered.layers.L4.policy.find(x => x.id === 'POL-01');
 assert(scaffoldBurn?.source === 'Scaffold', 'adapter projects the mcp.scaffold burn-rate placeholder as Scaffold',
        scaffoldBurn?.source, 'Scaffold');
 
-// ---------- case 1b: a build_info capture attests the metrics fallback backend ----------
+// ---------- case 1b: a version probe attests the product it names — and nothing is guessed beside it ----------
 {
   const attested = buildCanonicalPack({
     refreshedAt,
@@ -185,16 +189,25 @@ assert(scaffoldBurn?.source === 'Scaffold', 'adapter projects the mcp.scaffold b
     errors: {},
   });
   const ann = attested.metadata.annotations;
-  assert(typeof ann['mcp.verified.telemetry.backends.metrics-prom'] === 'string'
-         && ann['mcp.scaffold.telemetry.backends.metrics-prom'] === undefined,
-         'metrics-prom fallback is Verified (not Scaffold) when a metrics build_info capture exists');
-  assert(typeof ann['mcp.scaffold.telemetry.backends.traces-jaeger'] === 'string'
-         && ann['mcp.verified.telemetry.backends.traces-jaeger'] === undefined,
-         'traces-jaeger fallback is Scaffold when neither topology nor traces_services attested it');
+  const ids = attested.spec.telemetry.backends.map(b => b.id);
+  assert(JSON.stringify(ids) === JSON.stringify(['metrics-victoriametrics'])
+         && typeof ann['mcp.verified.telemetry.backends.metrics-victoriametrics'] === 'string',
+         'a build_info capture mints the backend it attests, under the product it names — Verified', ids);
+  assert(attested.spec.telemetry.backends[0].version?.declared === 'v1.113.0',
+         'the attested backend carries the live version', attested.spec.telemetry.backends[0].version);
+  assert(!ids.some(id => ['metrics-prom', 'logs-elastic', 'traces-jaeger'].includes(id))
+         && !Object.keys(ann).some(k => k.startsWith('mcp.scaffold.telemetry.backends.')),
+         'with one evidenced backend no fallback backend is guessed beside it', ids);
+  assert(ann['mcp.backends.evidence'] === 'metrics-victoriametrics=metrics_query/vm_app_version',
+         'mcp.backends.evidence says what attested each backend', ann['mcp.backends.evidence']);
+  assert(ann['observogram.unobserved.backend'] === undefined, 'backends are an observed family once anything attested one');
   const l = adapt(attested);
-  assert(l.layers.L2.find(x => x.title === 'metrics-prom')?.source === 'Verified', 'adapter projects the attested metrics-prom as Verified');
-  assert(l.layers.L2.find(x => x.title === 'traces-jaeger')?.source === 'Scaffold', 'adapter projects the unattested traces-jaeger as Scaffold');
+  assert(l.layers.L2.find(x => x.title === 'metrics-victoriametrics')?.source === 'Verified', 'adapter projects the attested backend as Verified');
 }
+// With no evidence at all the fallback stands in, and the pack says the
+// family was not observed (rich, above: only the topology named jaeger).
+assert(a['observogram.unobserved.backend'] === 'no version probe, scrape target or product tool answered',
+       'no backend evidence → backends are named an unobserved family', a['observogram.unobserved.backend']);
 
 // YAML round-trip
 const text = emitYaml(rich);
@@ -466,12 +479,29 @@ assert(probed.metadata.annotations['mcp.scaffold.dashboards.platform-overview'] 
   assert(l.layers.L1.find(x => x.id === 'SLI-01')?.source === 'Verified', 'adapter projects the rule-inferred SLI as Verified');
 }
 
-// A plain threshold alert is NOT a burn-rate alert: nothing maps, the
-// schema-forced placeholder stands in and is stamped scaffold, and no
-// mcp.verified.policy.* key is written on the strength of a NAME.
+// A plain threshold alert is not a compiler-shaped burn-rate alert, but
+// this one's expression reads the availability SLO's recorded ratio: it is
+// read exactly as the crawler reads the same rule in a repository
+// (sli-inference.mjs) — an entry bound to that SLO, its single `for`
+// window padded to the default pair. The entry is real (no scaffold
+// marker) and NOT Verified: the ruler attests an alert on the series, not
+// a multi-window burn-rate alert, and never on the strength of a NAME.
 assert(probed.spec.policy.burn_rate_alerts.length === 1
-       && typeof probed.metadata.annotations['mcp.scaffold.policy.burn_rate_alerts[0]'] === 'string',
-       'threshold alert alone → scaffold placeholder, not a Verified burn-rate alert');
+       && probed.spec.policy.burn_rate_alerts[0].slo === 'svc_checkout_availability_99'
+       && probed.metadata.annotations['mcp.scaffold.policy.burn_rate_alerts[0]'] === undefined,
+       'a threshold alert on an SLO\'s recorded series → an entry bound to that SLO, no scaffold placeholder',
+       probed.spec.policy.burn_rate_alerts);
+assert(JSON.stringify(probed.spec.policy.burn_rate_alerts[0].windows) === JSON.stringify([
+         { short: '5m', long: '1h', factor: 14, severity: 'SEV1' },
+         { short: '30m', long: '6h', factor: 6, severity: 'SEV2' }]),
+       'one stated window → the default pair, as the crawler pads it', probed.spec.policy.burn_rate_alerts[0].windows);
+assert(/CheckoutHighErrorRate/.test(probed.metadata.annotations['mcp.derived.policy.burn_rate_alerts[0]'] || '')
+       && probed.metadata.annotations['mcp.discovered.alert_rules_linked'] === '1'
+       && probed.metadata.annotations['mcp.discovered.alert_rules_operational'] === '0',
+       'mcp.derived.<symbol> names the rule the entry was read from; linked / operational counts annotated',
+       probed.metadata.annotations['mcp.derived.policy.burn_rate_alerts[0]']);
+assert(adapt(probed).layers.L4.policy[0]?.source === 'Declared',
+       'adapter projects the rule-derived entry as Declared — neither Verified nor Scaffold', adapt(probed).layers.L4.policy[0]?.source);
 assert(probed.metadata.annotations['mcp.verified.policy.burn_rate_alerts'] === undefined
        && probed.metadata.annotations['mcp.verified.policy.burn_rate_alerts[0]'] === undefined,
        'no burn-rate verification stamp on the strength of a discovered alert NAME');
@@ -1209,42 +1239,123 @@ async function withFakeMcp(handler, tools = FAKE_MCP_TOOLS) {
   }
 }
 
-// ---------- case 7: backend_capabilities materialises L2X extended surfaces ----------
+// ---------- case 7: backends come from EVIDENCE; backend_capabilities is a catalogue, not a deployment ----------
 
-const l2xLive = buildCanonicalPack({
+const CAPABILITY_CATALOGUE = {
+  gatingMode: 'warn',
+  protocolModel: 'otel-mcp',
+  skills: [
+    { skill: 'metrics', backends: [
+      { backend: 'Prometheus', productVersions: { must: ['2.51.0'] }, baselineFeatures: ['query'] },
+      { backend: 'VictoriaMetrics', productVersions: { must: ['1.113.0'] }, baselineFeatures: ['query'] },
+    ] },
+    { skill: 'logs', backends: [{ backend: 'Grafana Loki', productVersions: { must: ['3.0.0'] }, baselineFeatures: ['query'] }] },
+    { skill: 'traces', backends: [{ backend: 'Jaeger', productVersions: { must: ['1.56.0'] }, baselineFeatures: ['search'] }] },
+    { skill: 'pyroscope', backends: [{ backend: 'Grafana Pyroscope', productVersions: { must: ['1.7.0'] }, baselineFeatures: ['cpu'] }] },
+    { skill: 'cilium', backends: [{ backend: 'Cilium', productVersions: { must: ['1.15.0'] }, baselineFeatures: ['flows'] }] },
+    { skill: 'opa', backends: [{ backend: 'Open Policy Agent', productVersions: { must: ['0.63.0'] }, baselineFeatures: ['decisions'] }] },
+    { skill: 'envoy', backends: [{ backend: 'Envoy', productVersions: { must: ['1.31.0'] }, baselineFeatures: ['stats'] }] },
+    { skill: 'kong', backends: [{ backend: 'Kong', productVersions: { must: ['3.6.0'] }, baselineFeatures: ['admin_api'] }] },
+    { skill: 'pipeline', backends: [{ backend: 'Vector', productVersions: { must: ['0.36.0'] }, baselineFeatures: ['remap'] }] },
+  ],
+};
+const l2xBase = {
   refreshedAt,
   mcpUrl: 'https://fake-mcp.test/observability',
   health: { services: [{ name: 'svc-checkout' }] },
   topology: { dependencies: [] },
   anomaliesActive: {},
   baselinesData: { baselines: [] },
-  capabilities: {
-    gatingMode: 'warn',
-    protocolModel: 'otel-mcp',
-    skills: [
-      { skill: 'metrics', backends: [{ backend: 'Prometheus', productVersions: { must: ['2.51.0'] }, baselineFeatures: ['query'] }] },
-      { skill: 'logs', backends: [{ backend: 'Grafana Loki', productVersions: { must: ['3.0.0'] }, baselineFeatures: ['query'] }] },
-      { skill: 'traces', backends: [{ backend: 'Jaeger', productVersions: { must: ['1.56.0'] }, baselineFeatures: ['search'] }] },
-      { skill: 'pyroscope', backends: [{ backend: 'Grafana Pyroscope', productVersions: { must: ['1.7.0'] }, baselineFeatures: ['cpu'] }] },
-      { skill: 'cilium', backends: [{ backend: 'Cilium', productVersions: { must: ['1.15.0'] }, baselineFeatures: ['flows'] }] },
-      { skill: 'opa', backends: [{ backend: 'Open Policy Agent', productVersions: { must: ['0.63.0'] }, baselineFeatures: ['decisions'] }] },
-      { skill: 'envoy', backends: [{ backend: 'Envoy', productVersions: { must: ['1.31.0'] }, baselineFeatures: ['stats'] }] },
-      { skill: 'kong', backends: [{ backend: 'Kong', productVersions: { must: ['3.6.0'] }, baselineFeatures: ['admin_api'] }] },
-      { skill: 'pipeline', backends: [{ backend: 'Vector', productVersions: { must: ['0.36.0'] }, baselineFeatures: ['remap'] }] },
-    ],
-  },
+  capabilities: CAPABILITY_CATALOGUE,
   errors: {},
+};
+
+// The catalogue alone: ten products the MCP can speak to, none shown to
+// run. Not one becomes a backend or an extended surface.
+const catalogueOnly = buildCanonicalPack(l2xBase);
+{
+  const errors = validateCanonical(catalogueOnly, SCHEMA);
+  assert(errors.length === 0, 'catalogue-only pack validates against canonical schema', errors, []);
+  const ca = catalogueOnly.metadata.annotations;
+  const ids = catalogueOnly.spec.telemetry.backends.map(b => b.id);
+  assert(JSON.stringify(ids) === JSON.stringify(['metrics-prom', 'logs-elastic', 'traces-jaeger'])
+         && ids.every(id => typeof ca[`mcp.scaffold.telemetry.backends.${id}`] === 'string'),
+         'backend_capabilities alone mints NO backend: only the schema-forced fallbacks stand in, as scaffolds', ids);
+  assert(!Object.keys(ca).some(k => k.startsWith('mcp.verified.telemetry.backends.')),
+         'a product the MCP supports is never stamped Verified on the catalogue alone',
+         Object.keys(ca).filter(k => k.startsWith('mcp.verified.telemetry.backends.')));
+  assert(catalogueOnly.spec.profiling === undefined && catalogueOnly.spec.network === undefined
+         && catalogueOnly.spec.policy_engine === undefined && catalogueOnly.spec.mesh === undefined
+         && catalogueOnly.spec.collection === undefined && ca['mcp.discovered.extended_surfaces'] === '0',
+         'no extended surface is materialised from the catalogue', ca['mcp.discovered.extended_surfaces']);
+  assert(ca['mcp.capabilities.unobserved'] === 'prometheus,victoriametrics,loki,jaeger,pyroscope,cilium,opa,envoy,kong,vector',
+         'mcp.capabilities.unobserved names what is supported and was not seen running', ca['mcp.capabilities.unobserved']);
+  assert(ca['mcp.capabilities.backendCount'] === '10' && /^metrics:Prometheus:prometheus:2\.51\.0\|/.test(ca['mcp.capabilities.inventory']),
+         'the whole catalogue is still kept in mcp.capabilities.* for the connect screen', ca['mcp.capabilities.inventory']);
+  assert(typeof ca['observogram.unobserved.backend'] === 'string' && typeof ca['observogram.unobserved.mesh'] === 'string',
+         'with no evidence at all, backends and the surfaces built on them are named unobserved');
+}
+
+// The same catalogue WITH evidence: a version capture, scrape jobs with a
+// target up, and a product tool that answered. Those products — and only
+// those — become backends, each with the catalogue's version policy.
+const l2xLive = buildCanonicalPack({
+  ...l2xBase,
+  liveVersions: { victoriametrics: { declared: 'v1.113.0', source: 'metrics_query/vm_app_version' } },
+  probeResults: {
+    scrape_configs: { tool: 'metrics_targets', outcome: 'data', adapted: [
+      { job: 'pyroscope', targets: [{ instance: 'p:4040', health: 'up' }] },
+      { job: 'cilium-agent', targets: [{ instance: 'c:9962', health: 'up' }] },
+      { job: 'opa', targets: [{ instance: 'o:8181', health: 'up' }] },
+      { job: 'envoy', targets: [{ instance: 'e:9901', health: 'up' }] },
+      { job: 'kong', targets: [{ instance: 'k:8001', health: 'up' }] },
+      { job: 'vector', targets: [{ instance: 'v:9598', health: 'up' }] },
+      { job: 'node_exporter', targets: [{ instance: 'n:9100', health: 'up' }] },
+      // Every target down: the job name alone is not evidence the product runs.
+      { job: 'loki', targets: [{ instance: 'l:3100', health: 'down' }] },
+      // Not an observability backend, and not the collector either.
+      { job: 'otel-mcp-server', targets: [{ instance: 'm:3001', health: 'up' }] },
+    ] },
+    recording_rules: { tool: 'vmalert_rules', outcome: 'data', adapted: [
+      { name: 'svc:availability:ratio_5m', expr: 'sum(rate(ok_total[5m]))' },
+    ] },
+  },
 });
 {
   const errors = validateCanonical(l2xLive, SCHEMA);
   assert(errors.length === 0, 'L2X live pack validates against canonical schema', errors, []);
 }
+{
+  const ids = l2xLive.spec.telemetry.backends.map(b => b.id);
+  assert(JSON.stringify(ids) === JSON.stringify([
+           'metrics-victoriametrics', 'profiles-pyroscope', 'network-cilium', 'policy-opa', 'mesh-envoy',
+           'gateway-kong', 'collection-vector', 'metrics-node-exporter', 'alerting-vmalert']),
+         'evidenced products become backends: catalogue order first, then the ones it does not list, by name', ids);
+  assert(!ids.some(id => /prometheus|loki|jaeger/.test(id)),
+         'a catalogue product with no evidence (Prometheus, Jaeger) or only a down scrape job (Loki) is not minted', ids);
+  assert(!ids.some(id => /opentelemetry-collector/.test(id)),
+         'a job that merely resembles a product name (otel-mcp-server) attests nothing', ids);
+  const vm = l2xLive.spec.telemetry.backends.find(b => b.id === 'metrics-victoriametrics');
+  assert(vm.version.declared === 'v1.113.0' && vm.version.min === '1.113.0' && vm.version.gating === 'warn',
+         'an evidenced backend takes its live version and the catalogue\'s policy', vm.version);
+  const node = l2xLive.spec.telemetry.backends.find(b => b.id === 'metrics-node-exporter');
+  assert(node.product === 'node-exporter' && node.signal === 'metrics' && node.version === undefined,
+         'a product outside the catalogue is minted with the shared table\'s spelling and signal, and no invented version', node);
+  const ev = l2xLive.metadata.annotations['mcp.backends.evidence'];
+  assert(/network-cilium=scrape job cilium-agent/.test(ev) && /alerting-vmalert=vmalert_rules/.test(ev)
+         && /metrics-victoriametrics=metrics_query\/vm_app_version/.test(ev),
+         'mcp.backends.evidence names the scrape job, the tool or the version probe behind each backend', ev);
+  assert(l2xLive.metadata.annotations['mcp.capabilities.unobserved'] === 'prometheus,loki,jaeger',
+         'what stays supported-only is listed', l2xLive.metadata.annotations['mcp.capabilities.unobserved']);
+  assert(ids.every(id => typeof l2xLive.metadata.annotations[`mcp.verified.telemetry.backends.${id}`] === 'string'),
+         'every evidenced backend is stamped Verified');
+}
 assert(l2xLive.spec.profiling?.backend === 'profiles-pyroscope',
-       'live profiling surface materialised from backend_capabilities');
+       'live profiling surface materialised from an evidenced backend');
 assert(l2xLive.spec.network?.backend === 'network-cilium',
-       'live network surface materialised from backend_capabilities');
+       'live network surface materialised from an evidenced backend');
 assert(l2xLive.spec.policy_engine?.backend === 'policy-opa',
-       'live policy engine surface materialised from backend_capabilities');
+       'live policy engine surface materialised from an evidenced backend');
 assert(l2xLive.spec.mesh?.some(m => m.product === 'envoy' && m.role === 'proxy'),
        'live envoy mesh surface materialised');
 assert(l2xLive.spec.mesh?.some(m => m.product === 'kong' && m.role === 'gateway'),
@@ -1264,6 +1375,106 @@ assert(l2xLayered.layers.L2X.length === 6,
        'adapter renders all live L2X surfaces', l2xLayered.layers.L2X.length, 6);
 assert(l2xLayered.layers.L2X.every(x => x.source === 'Verified'),
        'adapter surfaces Verified source for live L2X surfaces');
+
+// ---------- case 7b: the running Alertmanager configuration → routes (the alerting_routes probe) ----------
+{
+  const routesProbe = PROBES.find(p => p.name === 'alerting_routes');
+  const status = {
+    version: '0.27.0', uptime: '2026-08-31T20:21:26.668Z', cluster: { status: 'ready', peers: 1 },
+    config: [
+      'route:',
+      '  receiver: oncall',
+      '  routes:',
+      '  - receiver: pager',
+      '    match:',
+      '      severity: critical',
+      '  - receiver: oncall',
+      '    match:',
+      '      severity: warning',
+      'receivers:',
+      '- name: oncall',
+      '  webhook_configs:',
+      '  - url: <secret>',
+      '- name: pager',
+      '  email_configs:',
+      '  - to: oncall@example.com',
+      '  webhook_configs:',
+      '  - url: <secret>',
+      '',
+    ].join('\n'),
+  };
+  assert(routesProbe.answers(status) === true && routesProbe.answers({ version: '0.27.0', cluster: { status: 'ready' } }) === false,
+         'alerting_routes: a status WITH a configuration answers the probe; one without it does not (it is not "zero routes")');
+  assert(routesProbe.answers({ ...status, config: { original: status.config } }) === true,
+         'alerting_routes: the raw API v2 shape { config: { original } } is read too');
+  const routes = routesProbe.adapt(status);
+  assert(JSON.stringify(routes) === JSON.stringify([
+           { severity: 'SEV2', channels: [{ webhook: 'redacted:secret' }] },
+           { severity: 'SEV1', channels: [{ email: 'oncall@example.com' }, { webhook: 'redacted:secret' }] },
+           { severity: 'SEV2', channels: [{ webhook: 'redacted:secret' }] }]),
+         'alerting_routes: root route and children, severities mapped, a redacted address kept as redacted:secret', routes);
+  assert(JSON.stringify(routesProbe.adapt({ config: 'not: [valid' })) === '[]' && JSON.stringify(routesProbe.adapt({ config: 'global: {}' })) === '[]',
+         'alerting_routes: a configuration that does not parse, or states no route, adapts to []');
+
+  const withRoutes = buildCanonicalPack({
+    refreshedAt, mcpUrl: 'https://fake-mcp.test/observability',
+    health: { services: [] }, topology: { dependencies: [] },
+    probeResults: { alerting_routes: { tool: 'alertmanager_status', outcome: 'data', adapted: routes } },
+  });
+  const ra = withRoutes.metadata.annotations;
+  assert(validateCanonical(withRoutes, SCHEMA).length === 0, 'a pack with live routes validates (redacted:secret is URI-shaped)', validateCanonical(withRoutes, SCHEMA));
+  assert(JSON.stringify(withRoutes.spec.alerting.routes) === JSON.stringify(routes)
+         && [0, 1, 2].every(i => typeof ra[`mcp.verified.alerting.routes[${i}]`] === 'string')
+         && ra['mcp.scaffold.alerting.routes[0]'] === undefined,
+         'live routes replace the SEV1 placeholder and are stamped Verified, index by index');
+  assert(ra['mcp.discovered.alerting_routes'] === '3' && ra['observogram.unobserved.alert_route'] === undefined,
+         'the family is counted and is not named unobserved', [ra['mcp.discovered.alerting_routes'], ra['observogram.unobserved.alert_route']]);
+  assert(!Object.values(ra).some(v => /receivers:|webhook_configs/.test(String(v))),
+         'the configuration text itself is written to no annotation');
+  assert(ra['mcp.backends.evidence'] === 'alerting-alertmanager=alertmanager_status',
+         'the configuration answering attests Alertmanager itself', ra['mcp.backends.evidence']);
+
+  const noConfig = buildCanonicalPack({
+    refreshedAt, mcpUrl: 'https://fake-mcp.test/observability',
+    health: { services: [] }, topology: { dependencies: [] },
+    probeResults: { alerting_routes: { tool: null, attempted: ['alertmanager_status'], adapted: null, outcome: 'failed' } },
+    probeFailures: { alertmanager_status: 'the Alertmanager status carries no configuration' },
+  }).metadata.annotations;
+  assert(typeof noConfig['mcp.scaffold.alerting.routes[0]'] === 'string'
+         && noConfig['observogram.unobserved.alert_route'] === 'the alerting routes probe got no answer: the Alertmanager status carries no configuration',
+         'no configuration → the placeholder route stays scaffold and routes are named unobserved, with the reason',
+         noConfig['observogram.unobserved.alert_route']);
+}
+
+// ---------- case 7c: what a fetch could not look at is said, family by family ----------
+{
+  const blind = buildCanonicalPack({
+    refreshedAt, mcpUrl: 'https://fake-mcp.test/observability',
+    health: { services: [] }, topology: { dependencies: [] },
+    probeResults: {
+      dashboards: { tool: null, attempted: ['grafana_dashboards_search'], adapted: null, outcome: 'failed' },
+      alert_rules: { tool: null, attempted: ['list_alert_rules'], adapted: null, outcome: 'unsupported' },
+      metric_names: { tool: 'list_metrics', adapted: [], outcome: 'empty' },
+      scrape_configs: { tool: 'metrics_targets', outcome: 'data', adapted: [{ job: 'api', targets: [{ instance: 'a:1', health: 'up' }] }] },
+    },
+    probeFailures: { grafana_dashboards_search: 'grafana_dashboards_search: Error: HTTP 401: Unauthorized' },
+  }).metadata.annotations;
+  const un = (kind) => blind[`observogram.unobserved.${kind}`];
+  assert(un('dashboard') === 'the dashboards probe got no answer: grafana_dashboards_search: Error: HTTP 401: Unauthorized'
+         && un('panel') === un('dashboard'),
+         'a failed probe → its family is unobserved, with the probe\'s own error as the reason', un('dashboard'));
+  assert(un('burn_rate') === 'this MCP offers no alert rules tool', 'an unsupported probe → unobserved, said as a tier fact', un('burn_rate'));
+  assert(un('metric') === undefined && un('scrape_job') === undefined,
+         'a probe that ANSWERED — with data or with an honest zero — leaves its family observed', [un('metric'), un('scrape_job')]);
+  assert(un('recording_rule') === 'the recording rules probe got no answer' && un('sli') === un('recording_rule') && un('slo') === un('recording_rule'),
+         'no recorded series at all → rules and the SLIs / SLOs inferred from them are unobserved', un('recording_rule'));
+  for (const kind of ['otel', 'pipeline_receiver', 'pipeline_processor', 'pipeline_exporter_logs', 'pipeline_exporter_traces',
+    'baselines', 'chaos', 'synthetic', 'remediation', 'derived_view', 'imports', 'forecast', 'storage_metrics']) {
+    assert(typeof un(kind) === 'string' && un(kind).length > 0, `${kind}: no MCP surface → always named unobserved`, un(kind));
+  }
+  assert(un('pipeline_exporter_metrics') === undefined,
+         'the metrics exporter is observed once a scrape target attests it');
+}
 
 // ---------- case 8: step 2 — stack self-metrics sampler (signals, never verdicts) ----------
 
@@ -1823,6 +2034,49 @@ const healthFor = (uid) => (uid === HEALTH_ERR.datasource?.uid ? HEALTH_ERR : HE
   }
 }
 
+// ---------- case 8e: the CLI (npm run fetch-live) writes the safe MCP URL ----------
+// main() is the third consumer of the one URL rule (tools/lib/mcp-url-safety.mjs):
+// it talks to MCP_URL as given, but the pack it writes keeps no credential
+// parameter and stderr names the one it dropped. Spawned as a child with an
+// explicit env (async — the fake MCP answers from this process's event loop).
+
+{
+  const fake = await withFakeMcp((name) => {
+    if (name === 'system_health') return { services: [] };
+    if (name === 'system_topology') return { dependencies: [] };
+    return {};
+  }, ['system_health', 'system_topology', 'anomalies_active', 'anomalies_baselines']);
+  const dir = mkdtempSync(resolve(tmpdir(), 'observogram-fetch-live-cli-'));
+  const output = resolve(dir, 'production-live.pack.yaml');
+  try {
+    const run = await new Promise((resolveRun) => {
+      const child = spawn(process.execPath, [resolve(__dirname, 'fetch-live-pack.mjs')], {
+        cwd: dir,
+        env: { MCP_URL: `${fake.url}?token=s3cret-cli&tier=x`, OUTPUT: output },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+      let stderr = '';
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (chunk) => { stderr += chunk; });
+      child.stdout.resume();
+      const timer = setTimeout(() => child.kill(), 60_000);
+      child.on('close', (code) => { clearTimeout(timer); resolveRun({ code, stderr }); });
+    });
+    assert(run.code === 0 && existsSync(output), 'the fetch-live CLI exits 0 and writes OUTPUT', run);
+    const text = existsSync(output) ? readFileSync(output, 'utf8') : '';
+    const written = text ? parseYaml(text).metadata?.annotations?.['mcp.url'] : undefined;
+    assert(written === `${fake.url}?tier=x`,
+           'the CLI\'s pack keeps the safe MCP URL: the token parameter dropped, tier kept', written, `${fake.url}?tier=x`);
+    assert(!text.includes('s3cret-cli'), 'the credential value appears nowhere in the written pack');
+    assert(/not kept in the pack: the token parameter/.test(run.stderr) && !run.stderr.includes('s3cret-cli'),
+           'stderr names the dropped parameter and never prints its value', run.stderr);
+  } finally {
+    await fake.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // ---------- sli-inference: the compiler's policy records round-trip ----------
 // compile.mjs emits `<svc>:<sli>:value_5m` + `<svc>:<sli>:error_ratio_5m` for a
 // threshold SLI and `<svc>:errorbudget:burn_5m|1h` per SLO; reading those back
@@ -1842,6 +2096,16 @@ const healthFor = (uid) => (uid === HEALTH_ERR.datasource?.uid ? HEALTH_ERR : HE
     { name: 'svc:lat:error_ratio_5m', expr: '(sum_over_time((max(svc:lat:value_5m) > bool 0.5)[5m:30s]) / 10)' },
   ]);
   assert(fractional[0]?.sli.threshold === 0.5, 'a fractional threshold is read back', fractional[0]?.sli.threshold, 0.5);
+  assert(!('good_when' in threshold[0].sli) && !('good_when' in fractional[0].sli), 'a `> bool` ceiling states no direction (absent means below)');
+  // A floor (spec 1.3 good_when: above) compiles to `< bool`: read back with its direction, a negative bound included.
+  const floor = inferSlisFromRecordingRules([
+    { name: 'svc:members:value_5m', expr: 'min(members)' },
+    { name: 'svc:members:error_ratio_5m', expr: '(sum_over_time((max(svc:members:value_5m) < bool 2)[5m:30s]) / 10)' },
+    { name: 'svc:skew:value_5m', expr: 'min(skew)' },
+    { name: 'svc:skew:error_ratio_5m', expr: '(sum_over_time((max(svc:skew:value_5m) < bool -1.5)[5m:30s]) / 10)' },
+  ]);
+  assert(floor.length === 2 && floor.every(x => x.sli.type === 'threshold' && x.sli.good_when === 'above') && floor[0].sli.threshold === 2 && floor[1].sli.threshold === -1.5,
+         'a `< bool` comparison reads back as a floor: good_when above with the bound as compiled', floor.map(x => [x.sli.id, x.sli.threshold, x.sli.good_when]), [['svc_members', 2, 'above'], ['svc_skew', -1.5, 'above']]);
   // A foreign value_* / error_ratio_* pair (the error ratio does not read the value series)
   // keeps the pre-existing ratio-family inference.
   const foreign = inferSlisFromRecordingRules([

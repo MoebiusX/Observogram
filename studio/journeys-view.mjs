@@ -8,11 +8,17 @@
 //
 // The re-render entrypoint comes through the studio host seam (host.mjs);
 // all host bindings are call-time only.
+//
+// Advanced → Neuron (neuron-view.mjs) composes the same pieces — the
+// loader `loadJourneysData`, the capture bar and the cards
+// (`renderJourneyCards`) — under its fleet tiles and charts, so a card
+// reads the same in both places.
 
 import { state } from './state.mjs';
 import { api } from './api.mjs';
 import { escapeHtml, toast } from './util.mjs';
 import { host as appHost } from './host.mjs';
+import { announce, emptyStateHtml, listSentence, plural } from './ux-kit.mjs';
 
 // tools/lib/stack-evidence.mjs — the browser-safe history helpers over the
 // run records (step 3). The server exposes tools/lib at /lib (the same
@@ -23,6 +29,14 @@ let _stackLib = null;
 async function stackEvidenceLib() {
   if (!_stackLib) _stackLib = await import('/lib/stack-evidence.mjs');
   return _stackLib;
+}
+// tools/lib/schedule.mjs — the same parser the server used for the
+// journey's schedule: (step 5); only windowMs is needed here, for the
+// posture-budget line. Loaded the same way, degrading to "no line".
+let _scheduleLib = null;
+async function scheduleLib() {
+  if (!_scheduleLib) _scheduleLib = await import('/lib/schedule.mjs');
+  return _scheduleLib;
 }
 
 // Tiny inline SVG sparkline over alignment % (0–100). Oldest → newest,
@@ -41,17 +55,100 @@ export function journeySparkline(values, { w = 120, h = 28 } = {}) {
   </svg>`;
 }
 
-const OUTCOME_META = {
-  'pass':         { icon: '✅', cls: 'is-pass' },
-  'gate-failed':  { icon: '❌', cls: 'is-fail' },
+// The outcomes a person must tell apart (the 2026-09 UX review, Neuron):
+// each has its own label, tone and remedy, because each implies a different
+// next step. The record's own words stay the keys. `tone` is the ux-kit
+// tone; `chip` the ux-chip tone (never-run is dashed and marked "–", so it
+// never reads like the warning of a lost vantage).
+export const CHECK_OUTCOMES = {
+  'never-run': {
+    label: 'Not run yet', tone: 'info', chip: 'muted', icon: '○', cls: '',
+    meaning: 'No run is on record, so nothing is being checked yet.',
+    remedy: 'Run it now for a first reading, then give it a schedule so it keeps checking.',
+  },
   // The live source did not answer at all — no verdict, recorded so the
   // loss shows up in the history instead of leaving a gap.
-  'vantage-lost': { icon: '⚠️', cls: 'is-lost' },
+  'vantage-lost': {
+    label: 'Unable to observe', tone: 'warn', chip: 'warn', icon: '⚠️', cls: 'is-lost',
+    meaning: 'The check lost its vantage point: the live source did not answer, so nothing was looked at. This says nothing about whether the artefacts work.',
+    remedy: 'Make sure the live source is reachable and its credentials are bound, then run again. Until then nothing is being checked.',
+  },
+  'gate-failed': {
+    label: 'Check failed', tone: 'fail', chip: 'fail', icon: '❌', cls: 'is-fail',
+    meaning: 'The check ran and the observability artefacts fell short of the journey\'s gate.',
+    remedy: 'Review the breached criteria and the candidate causes, fix the artefact, then run again to confirm the fix held.',
+  },
+  pass: {
+    label: 'Passed', tone: 'ok', chip: 'ok', icon: '✅', cls: 'is-pass',
+    meaning: 'The check ran and the observability artefacts met the journey\'s gate.',
+    remedy: 'Nothing to fix. Keep it on a schedule so a regression is caught early.',
+  },
+  unknown: {
+    label: 'Unrecognised outcome', tone: 'neutral', chip: 'muted', icon: '·', cls: '',
+    meaning: 'The newest record carries an outcome this studio does not know.',
+    remedy: 'Open the newest record to see what it holds.',
+  },
+};
+export const checkOutcome = (key) => CHECK_OUTCOMES[key] || CHECK_OUTCOMES.unknown;
+
+// Delivery of the newest record (neuron-model.mjs deliveryState). A failed
+// delivery is its own outcome: the check ran, but nobody was warned.
+export const DELIVERY_OUTCOMES = {
+  sent:             { label: 'Notification sent', chip: 'ok', meaning: 'The result was posted to the journey\'s webhook.' },
+  skipped:          { label: 'Nothing to notify', chip: 'muted', meaning: 'The notify policy had nothing to report for this run, so no message was sent.' },
+  failed:           { label: 'Notification failed', chip: 'fail', meaning: 'The check ran, but its notification could not be delivered: nobody was warned.',
+    remedy: 'Check the webhook env var and the endpoint behind it; the result is kept here either way.' },
+  'not-configured': { label: 'No notifications set up', chip: 'muted', meaning: 'This journey has no notify: block, so its results show only in the studio.',
+    remedy: 'Add notify: { urlEnv: MY_WEBHOOK_URL } to the journey file to be warned when it changes.' },
+  unknown:          { label: 'Delivery unknown', chip: 'muted', meaning: 'The record was written before delivery finished; the next run will tell.' },
 };
 
 function outcomeLabel(last) {
-  if (last.outcome === 'vantage-lost') return `${last.outcome} · live source unreachable`;
-  return `${last.outcome} · alignment ${last.alignmentPct}% · grade ${last.gradeScore}%`;
+  const o = checkOutcome(last.outcome);
+  if (last.outcome === 'vantage-lost') return `${o.label} · the live source did not answer`;
+  return `${o.label} · alignment ${last.alignmentPct ?? '?'}% · grade ${last.gradeScore ?? '?'}%`;
+}
+
+// One line for a finished run, for the toast (the #toast live region
+// announces it) — the plain outcome first, then the delivery if it failed.
+export function runResultText(name, rec) {
+  const n = rec?.gate?.breaches?.length ?? 0;
+  const what = rec?.outcome === 'pass' ? `passed · alignment ${rec.drift?.alignmentPct ?? '?'}%`
+    : rec?.outcome === 'gate-failed' ? `check failed — ${n} ${n === 1 ? 'criterion' : 'criteria'} breached`
+      : rec?.outcome === 'vantage-lost' ? 'unable to observe — the live source did not answer'
+        : checkOutcome(rec?.outcome).label.toLowerCase();
+  const notify = rec?.notify?.status === 'failed' ? ' · notification failed' : '';
+  return `${name}: ${what}${notify}`;
+}
+
+// A run the server could not finish (502): a live source that did not
+// answer still left an unable-to-observe record; a configuration error left
+// none. Said so, not guessed.
+export function runErrorText(name, err) {
+  return `${name}: the run did not finish — ${err?.message || err}. If the live source did not answer, the history now shows it as unable to observe.`;
+}
+
+// One line for several runs (Neuron's Run all): how many ended which way,
+// then why the runs that did not finish stopped — the first reason with
+// every journey it stopped (a refusal is the same for each), the journeys
+// stopped for another reason named, so a denial is said, not only counted.
+// `failures` is [{ name, message }] in run order.
+export function runAllText(names, tally, failures = []) {
+  const summary = listSentence([
+    tally.pass && `${tally.pass} passed`,
+    tally['gate-failed'] && `${tally['gate-failed']} failed`,
+    tally['vantage-lost'] && `${tally['vantage-lost']} unable to observe`,
+    tally.error && `${tally.error} did not finish`,
+  ]);
+  let why = '';
+  if (failures.length) {
+    const reason = failures[0].message;
+    const same = failures.filter((f) => f.message === reason).map((f) => f.name);
+    const other = failures.filter((f) => f.message !== reason).map((f) => f.name);
+    why = ` ${listSentence(same)}: ${reason}.`;
+    if (other.length) why += ` ${listSentence(other)}: another reason — run ${other.length === 1 ? 'it' : 'each'} alone to read it.`;
+  }
+  return `Ran ${plural(names.length, 'journey')}: ${summary}.${why}`;
 }
 
 export function renderJourneysView(view) {
@@ -76,7 +173,7 @@ export function renderJourneysView(view) {
 
 // "Save this comparison as a journey" — enabled when the session holds an
 // A/B pair; the server resolves both to durable sources.
-function renderCaptureBar(host) {
+export function renderCaptureBar(host) {
   if (!host) return;
   const ready = !!(state.selectedPackId && state.compareBId);
   if (!ready) {
@@ -116,44 +213,69 @@ function renderCaptureBar(host) {
   };
 }
 
+// The data behind the cards: the listing, each journey's newest `limit`
+// runs (newest first, as the API hands them; a failed history reads as
+// empty) and the two browser-safe helper modules (null when they fail to
+// load). Throws when the listing itself cannot be read. `fetchFn` is
+// injectable (docs/UI_CONVENTIONS.md §2).
+export async function loadJourneysData({ fetchFn = api, limit = 20 } = {}) {
+  const { journeys = [] } = await fetchFn('/api/journeys');
+  const runsByName = {};
+  let stackLib = null;
+  let schedLib = null;
+  await Promise.all([
+    ...journeys.map(async j => {
+      try { runsByName[j.name] = (await fetchFn(`/api/journeys/${encodeURIComponent(j.name)}/runs?limit=${limit}`)).runs || []; }
+      catch (_) { runsByName[j.name] = []; }
+    }),
+    (async () => { try { stackLib = await stackEvidenceLib(); } catch { stackLib = null; } })(),
+    (async () => { try { schedLib = await scheduleLib(); } catch { schedLib = null; } })(),
+  ]);
+  return { journeys, runsByName, stackLib, schedLib };
+}
+
 async function loadJourneysList(host) {
   if (!host) return;
-  let journeys = [];
+  let data;
   try {
-    ({ journeys } = await api('/api/journeys'));
+    data = await loadJourneysData();
   } catch (e) {
     host.innerHTML = `<div class="refs-empty refs-error">Couldn't load journeys: ${escapeHtml(e.message)}</div>`;
     return;
   }
+  renderJourneyCards(host, data);
+}
+
+// The cards, one per journey: definition summary, last outcome, sparkline,
+// run-now, the stack / posture / chains / cause / notify lines and the
+// history table. `onRun(name)` runs after a run-now completes — the Neuron
+// view refreshes its whole model from it; without it the list reloads
+// itself.
+export function renderJourneyCards(host, { journeys = [], runsByName = {}, stackLib = null, schedLib = null } = {}, { onRun = null } = {}) {
+  if (!host) return;
   if (!journeys.length) {
-    host.innerHTML = `<div class="refs-empty">No journeys saved yet. Capture one above, or add
-      <code>.observogram/journeys/&lt;name&gt;.journey.yaml</code> by hand.</div>`;
+    host.innerHTML = emptyStateHtml({
+      title: 'No journeys saved yet, so nothing is being watched.',
+      checked: 'the workspace\'s saved journeys (.observogram/journeys/)',
+      body: 'Save a Pack A vs Pack B comparison as a journey above, or add .observogram/journeys/<name>.journey.yaml by hand; then run it here, with packc journey run <name>, or on the schedule it declares.',
+      tone: 'info',
+    });
     return;
   }
-  // Fetch each journey's recent runs for the sparkline (small N, parallel).
-  const runsByName = {};
-  let stackLib = null;
-  await Promise.all([
-    ...journeys.map(async j => {
-      try { runsByName[j.name] = (await api(`/api/journeys/${encodeURIComponent(j.name)}/runs?limit=20`)).runs; }
-      catch (_) { runsByName[j.name] = []; }
-    }),
-    (async () => { try { stackLib = await stackEvidenceLib(); } catch { stackLib = null; } })(),
-  ]);
 
   host.innerHTML = journeys.map(j => {
     const runs = runsByName[j.name] || [];
     const series = runs.slice().reverse().map(r => r.drift?.alignmentPct);
     const last = j.lastRun;
-    const om = last ? (OUTCOME_META[last.outcome] || { icon: '·', cls: '' }) : null;
+    const om = last ? checkOutcome(last.outcome) : null;
     // gate.stack is a nested block (requireSampled / rows) — print it as JSON, not [object Object].
     const gateBits = Object.entries(j.gate || {}).map(([k, v]) => `${k}=${v && typeof v === 'object' ? JSON.stringify(v) : v}`).join(' · ') || 'no gate';
     return `
       <article class="journey-card" data-journey="${escapeHtml(j.name)}">
         <div class="journey-card-head">
           <span class="journey-name">${escapeHtml(j.name)}</span>
-          ${last ? `<span class="journey-outcome ${om.cls}">${om.icon} ${escapeHtml(outcomeLabel(last))}</span>`
-                 : '<span class="journey-outcome">never run</span>'}
+          ${last ? `<span class="journey-outcome ${om.cls}" title="${escapeHtml(om.meaning)}">${om.icon} ${escapeHtml(outcomeLabel(last))}</span>`
+                 : `<span class="journey-outcome" title="${escapeHtml(CHECK_OUTCOMES['never-run'].meaning)}">${escapeHtml(CHECK_OUTCOMES['never-run'].label)}</span>`}
           ${journeySparkline(series)}
           <button type="button" class="ctrl-btn journey-run-btn" data-journey="${escapeHtml(j.name)}">▶ run now</button>
         </div>
@@ -164,15 +286,17 @@ async function loadJourneysList(host) {
         </div>
         ${j.loadError ? `<div class="journey-card-meta"><span class="journey-load-error" title="loadJourneyDef">definition does not load: ${escapeHtml(j.loadError)}</span></div>` : ''}
         ${renderStackChips(last?.stack ?? null, runs, stackLib)}
+        ${renderPostureLines(j, runs, stackLib, schedLib)}
         ${renderChainsLine(last)}
         ${renderCauseLine(last)}
+        ${renderNotifyLine(last)}
         <div class="journey-runs">${renderRunsTable(runs)}</div>
         <div class="journey-result" hidden></div>
       </article>`;
   }).join('');
 
   host.querySelectorAll('.journey-run-btn').forEach(btn => {
-    btn.onclick = () => runJourneyNow(btn.dataset.journey, host, btn);
+    btn.onclick = () => runJourneyNow(btn.dataset.journey, host, btn, onRun);
   });
 }
 
@@ -267,30 +391,67 @@ function renderCauseLine(last) {
   return `<div class="journey-stack journey-cause">${cause}${mark}</div>`;
 }
 
+// Step 5: the sampled posture budget per gated stack row — SIGNAL, NOT
+// VERDICT (the function's own note says so in both branches). Computed
+// here from the fetched run history with the same browser-safe helpers the
+// server would use (stack-evidence.mjs stackPostureBudget) and the cadence
+// GET /api/journeys derived from the journey's schedule:. One muted line
+// per row in gate.stack.rows; nothing without a schedule or a budget; when
+// the cadence could not be derived (irregular cron) the parser's note is
+// printed instead. Nothing here enters gate, outcome or any score.
+function renderPostureLines(j, runs, lib, schedLib) {
+  const rows = j?.gate?.stack?.rows && typeof j.gate.stack.rows === 'object' ? Object.keys(j.gate.stack.rows) : [];
+  if (!rows.length || !j?.schedule) return '';
+  const line = (text) => `<div class="journey-stack journey-posture"><span class="journey-stack-label">${escapeHtml(text)}</span></div>`;
+  if (!j.schedule.cadenceMs) return j.schedule.cadenceNote ? line(`stack posture: ${j.schedule.cadenceNote}`) : '';
+  if (!lib || !schedLib || !j.stackBudget || typeof lib.stackPostureBudget !== 'function') return '';
+  const windowMs = schedLib.windowMs(j.stackBudget.window);
+  if (!windowMs) return '';
+  return rows.map(rowId => {
+    const b = lib.stackPostureBudget(lib.stackSeries(runs, rowId), { objective: j.stackBudget.objective, cadenceMs: j.schedule.cadenceMs, windowMs });
+    return line(`${rowId} posture over the last ${runs.length} runs: ${b.note}`);
+  }).join('');
+}
+
+// Step 5: the delivery outcome of the last run (GET /api/journeys'
+// lastRun.notify) — one muted plain-text line, `notify: sent (202) ·
+// <reason>`. Nothing when the record carries no notify object (no notify
+// block, or a record written before delivery — never "skipped").
+function renderNotifyLine(last) {
+  const n = last?.notify;
+  if (!n || typeof n !== 'object' || !n.status) return '';
+  const d = DELIVERY_OUTCOMES[n.status] || DELIVERY_OUTCOMES.unknown;
+  const status = `${d.label}${n.httpStatus != null ? ` (HTTP ${n.httpStatus})` : ''}`;
+  return `<div class="journey-stack journey-notify"><span class="journey-stack-label" title="${escapeHtml(d.meaning)}">${escapeHtml(`${status}${n.reason ? ` · ${n.reason}` : ''}`)}</span></div>`;
+}
+
 function renderRunsTable(runs) {
   if (!runs.length) return '';
   const rows = runs.slice(0, 8).map(r => {
-    const om = OUTCOME_META[r.outcome] || { icon: '·' };
+    const om = checkOutcome(r.outcome);
     return `<tr>
-      <td>${om.icon}</td>
+      <td><span title="${escapeHtml(om.label)}" aria-hidden="true">${om.icon}</span><span class="sr-text">${escapeHtml(om.label)}</span></td>
       <td>${escapeHtml(new Date(r.startedAt).toLocaleString())}</td>
       <td>${r.drift?.alignmentPct ?? '?'}%</td>
       <td>${r.grade?.score ?? '?'}%</td>
-      <td>${r.outcome === 'vantage-lost' ? escapeHtml(`vantage lost: ${r.error || 'unreachable'}`)
+      <td>${r.outcome === 'vantage-lost' ? escapeHtml(`unable to observe: ${r.error || 'the live source did not answer'}`)
             : r.gate?.breaches?.length ? escapeHtml(r.gate.breaches.map(b => b.criterion).join(', ')) : '—'}</td>
       <td>${r.tookMs ?? '?'} ms</td>
     </tr>`;
   }).join('');
   return `<table class="deploy-result-table journey-runs-table">
-    <thead><tr><th></th><th>When</th><th>Align</th><th>Grade</th><th>Breaches</th><th>Took</th></tr></thead>
+    <thead><tr><th><span class="sr-text">Outcome</span></th><th>When</th><th>Alignment</th><th>Grade</th><th>Breached criteria</th><th>Took</th></tr></thead>
     <tbody>${rows}</tbody></table>`;
 }
 
-async function runJourneyNow(name, listHost, btn) {
+async function runJourneyNow(name, listHost, btn, onRun = null) {
+  const after = () => (typeof onRun === 'function' ? onRun(name) : loadJourneysList(listHost));
   const card = listHost.querySelector(`.journey-card[data-journey="${CSS.escape(name)}"]`);
   const resultEl = card?.querySelector('.journey-result');
   btn.disabled = true;
+  btn.setAttribute('aria-busy', 'true');
   btn.textContent = '… running';
+  announce(`Running ${name}…`);
   try {
     const r = await api(`/api/journeys/${encodeURIComponent(name)}/run`, {
       method: 'POST',
@@ -298,23 +459,21 @@ async function runJourneyNow(name, listHost, btn) {
       body: '{}',
     });
     const rec = r.record;
-    toast(rec.outcome === 'pass'
-      ? `${name}: PASS · alignment ${rec.drift.alignmentPct}%`
-      : `${name}: gate failed (${rec.gate.breaches.length} breach${rec.gate.breaches.length === 1 ? '' : 'es'})`,
-      rec.outcome === 'pass' ? '' : 'error');
+    toast(runResultText(name, rec), rec.outcome === 'pass' ? '' : 'error');
     if (resultEl) {
       resultEl.hidden = false;
       resultEl.innerHTML = `<pre class="journey-result-pre">${escapeHtml(JSON.stringify({
-        outcome: rec.outcome, grade: rec.grade, drift: rec.drift, freshness: rec.freshness, breaches: rec.gate.breaches,
+        outcome: rec.outcome, grade: rec.grade, drift: rec.drift, freshness: rec.freshness, breaches: rec.gate?.breaches,
       }, null, 2))}</pre>`;
     }
     // Refresh the whole list so the sparkline + history pick up the run.
-    loadJourneysList(listHost);
+    after();
   } catch (e) {
-    toast(`Run failed: ${e.message}`, 'error');
+    toast(runErrorText(name, e), 'error');
     btn.disabled = false;
+    btn.removeAttribute('aria-busy');
     btn.textContent = '▶ run now';
     // A live source that did not answer still left a vantage-lost record.
-    loadJourneysList(listHost);
+    after();
   }
 }

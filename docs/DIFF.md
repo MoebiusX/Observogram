@@ -138,6 +138,7 @@ Each layer (`L1`, `L2`, `L2X`, `L3`, `L4`, `L5`, `GOV`) contains:
 | `inBoth` | same identity on both sides, with `aligned` or `drifted` verdict |
 | `outOfScope` | B has it, but A declares nothing in that artefact family |
 | `scaffold` | a placeholder (`source: Scaffold`) on either side — parked before pairing, never counted; entries carry `side` (`a`/`b`) and `artefact` |
+| `notObserved` | one pack holds it, in a family the OTHER pack says it had no way to observe — unchecked, never counted; entries carry `side`, `artefact` and the other side's `reason` |
 
 `outOfScope` prevents a single-service drift view from being flooded by the
 rest of a platform's live inventory. It is reported, but excluded from the
@@ -152,6 +153,58 @@ fallback entry — even when both carry the compiler's default windows on the
 same SLO — and a repo placeholder never reads `declared, not live`. A real
 live artefact whose repo counterpart is only a placeholder reads `live, not
 declared` as it should. `summary.scaffold` counts the parked entries.
+
+`notObserved` separates "the other pack looked and it is not there" from "the
+other pack could not look". A pack's producer names the artefact families it
+had no way to observe in `observogram.unobserved.<kind>` annotations — `<kind>`
+is the model's family (`dashboard`, `pipeline_receiver`, `alert_route`, …),
+the value the reason (`the dashboards probe got no answer: HTTP 401`, `no MCP
+tool exposes the collector configuration`). An artefact with no counterpart
+whose family the other pack names there goes to `notObserved` instead of
+`onlyInA` / `onlyInB`: a Grafana that refuses the fetcher's login does not
+make seven declared dashboards missing. An artefact that DOES have a
+counterpart is compared as usual, whatever the annotation says. The live
+fetcher writes these keys (docs/MCP_INTEGRATION.md, *What the fetch could not
+look at*); a pack without them behaves exactly as before.
+`summary.notObserved` counts the entries; they are outside the union.
+
+## Metric families
+
+Metrics are compared as **families**, not series. One declared metric is
+several series on the wire — a histogram `x` is `x_bucket`, `x_count` and
+`x_sum`; the Python client adds `x_created`; a counter declared `x` is exposed
+as `x_total`. Source code declares the metric, a metrics store lists the
+series, a query references one of them. Paired name for name, a declared
+histogram read "not live" while its own three series read "live, not
+declared".
+
+`foldMetricFamilies(aItems, bItems)` (artefact-model.mjs) folds each side's
+metric artefacts into one artefact per family before pairing, using what both
+sides know (`metricFamilyResolver`):
+
+| Series | Family | When |
+|---|---|---|
+| `x_bucket` | `x` | always — the suffix is reserved for histograms |
+| `x_count`, `x_sum` | `x` | `x_bucket` is known, or `x` is declared a histogram / summary / timer, or both `_count` and `_sum` exist |
+| `x_total` | `x` | `x` is known and declared a counter |
+| `x_created` | what `x_total` resolves to, else `x` | that counter is known; or `x` is a distribution or is itself known |
+| anything else | itself | a lone `queue_count` gauge is not folded |
+
+A family's entry carries `series` (the names it stands for on that side) and
+`memberIds` (the ids of the artefacts it replaces). A metric alone in its
+family is passed through untouched.
+
+## Addresses a source does not state
+
+An alert route's channels are compared by kind and address. Two readers can
+know a channel exists without being able to state its address: a running
+Alertmanager prints every secret URL as `<secret>`, and a repository wires one
+in at deploy time (`url: ${WEBHOOK_URL}`). They write `redacted:secret` and
+`unresolved:<VAR>` in its place (tools/lib/alert-routes.mjs). `deltasOf`
+treats such a value as partial evidence, like a reference-only expression:
+when the channel KINDS agree one for one, and every kind where neither side
+withholds an address agrees on its addresses, the route is aligned. A changed
+e-mail address beside a redacted webhook is still drift.
 
 ## Summary Ratios
 
@@ -231,7 +284,16 @@ diffPacks(aLayered, bLayered); // directional drift report
 - a declared route pairs with the live connector's fabricated placeholder
   route as channel drift, never as missing-in-live;
 - surplus duplicate controls are reported as drift rather than dropped;
-- empty arrays normalise like absent fields.
+- empty arrays normalise like absent fields;
+- metric families (each folding rule, and the lone `_count` that is not
+  folded), `notObserved` in both directions and outside the union, and an
+  address one side withholds.
+
+`tools/test-scan-live.mjs` is the end-to-end form: one system described as a
+repository and as the answers a live MCP gives for it, scanned, drafted and
+compared — nothing only on one side, nothing drifted — then with one rule,
+one route and one metric taken away from the live side, each of which shows
+and only it.
 
 `tools/test-packs.mjs` additionally asserts the self-diff invariant —
 `diffPacks(pack, pack)` preserves every flat-comparable artefact with

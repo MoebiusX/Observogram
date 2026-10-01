@@ -14,8 +14,12 @@ import {
   LAYER_DEFS, L4_SUBGROUPS, DOMAIN_DEFS,
   DISCO_SLAB_ACCENT, discoGradeLetter, discoGradeWord,
 } from './constants.mjs';
-import { state, $, $$, persistence } from './state.mjs';
-import { api, loadCatalog, validateUploaded, authHeaders, setActiveOrg, getActiveOrg, savedOrg } from './api.mjs';
+import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } from './state.mjs';
+import {
+  api, loadCatalog, validateUploaded, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel, deniedError, deployRefusal,
+  setSignedInLogin, recallMcpUrl, rememberMcpUrl, forgetMcpUrls, signOutOthersText,
+  loadDeployProfiles, storeDeployProfile, removeDeployProfile,
+} from './api.mjs';
 import {
   effectiveFocus, focusedPackId, focusedEnv, focusedPack,
   focusedConformance, setFocusedConformance,
@@ -25,7 +29,10 @@ import {
   focusedCompileFlavor, setFocusedCompileFlavor,
   focusedCompileArtifact, setFocusedCompileArtifact,
 } from './focus.mjs';
-import { escapeHtml, toast, fmtRelative, installDialogFocusTrap } from './util.mjs';
+import { escapeHtml, toast, fmtRelative, installDialogFocusTrap, downloadText } from './util.mjs';
+import {
+  personalName, announce, parseRecentServices, orderServicesByRecent,
+} from './ux-kit.mjs';
 import { renderSchemaView } from './schema-view.mjs';
 import { renderConformanceView } from './conformance-view.mjs';
 import { renderOtlpView } from './otlp-view.mjs';
@@ -34,12 +41,32 @@ import { renderCompileView, loadDeployMatrix } from './compile-view.mjs';
 import { openDrawer, closeDrawer } from './drawer.mjs';
 import { renderDiscoverDashboard, renderLayersView, renderCard, cardKey } from './layers-view.mjs';
 import { renderAtlasView } from './atlas-view.mjs';
-import { renderJourneysView } from './journeys-view.mjs';
+import { renderNeuronView } from './neuron-view.mjs';
 import { renderBenchmarkView, renderComparePicker, renderTraceabilityView, refreshDiff, loadDiff, LENS_PRODUCTS, activeDiffScopeMode } from './compare-view.mjs';
 import { catalogToDeployManifest } from './artifact-model.mjs';
 import { computeDeployTransitions } from './verify-deploy.mjs';
 import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-view.mjs';
 import { initHost } from './host.mjs';
+// The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
+import {
+  BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, enterStep as enterBuildStep, stepAfterInstantiate as buildStepAfterInstantiate, focusFallbackSelectors, instantiateBody as buildInstantiateBody,
+  buildDefineModel, buildCompileModel, buildVerifyModel, buildDefinitionModel, buildSheetModel, buildClauseChecklist, buildStatusLine, sheetModeFor, addSliSelection, placeholdersRemaining, retargetSlis, retargetSlisForEntries, retargetOverrides,
+  restoreBuildDraft as restoreBuildDraftModel, buildEditorModel, editorModeFor, editorDirtyAfterAnswer, BUILD_TABS, tabName,
+} from './build-model.mjs';
+import { fieldValueFor } from './build-copies-model.mjs';
+import { renderBuildEditor } from './build-editor-view.mjs';
+import {
+  loadLibrary as loadBuildLibrary, libraryCache as buildLibraryCache, loadRequirements as loadBuildRequirements,
+  requirementsCache as buildRequirementsCache, instantiate as instantiateBuild, compilePreview as compileBuildPreview,
+  registerBuiltPack, loadTargets as loadBuildTargets,
+} from './build-api.mjs';
+import { renderBuildDefine } from './build-define-view.mjs';
+import { renderBuildCompile } from './build-compile-view.mjs';
+import { renderBuildVerify } from './build-verify-view.mjs';
+import { renderBuildDefinition } from './build-definition-view.mjs';
+import { renderBuildSheet } from './build-sheet-view.mjs';
+import { revealTodo } from './build-atoms.mjs';
+import { loadBuildInfo, loadHealth, buildLabelModel, renderVersionChrome } from './build-label.mjs';
 
 // `state`, the `$`/`$$` DOM helpers and the persistence layer now live in
 // studio/state.mjs (imported above).
@@ -65,6 +92,14 @@ function setViewFocus(focus) {
 async function rehydrateFromPersistence() {
   const saved = persistence.read();
   if (!saved) return false;
+  // The BUILD draft: inputs only (state.mjs BUILD_PERSIST_FIELDS); the
+  // canonical is re-instantiated from them, never read back. A session
+  // that was building resumes on its step whether or not a pack was open.
+  if (saved.build && typeof saved.build === 'object') restoreBuildDraft(saved.build);
+  if (saved.mode === 'build') {
+    enterBuildMode(state.build.step);
+    return true;
+  }
   const allKnown = [...(state.catalog || []), ...(state._examplesCache || [])];
   const aMeta = allKnown.find(p => p.id === saved.selectedPackId);
   if (!aMeta) {
@@ -85,10 +120,13 @@ async function rehydrateFromPersistence() {
   // Permitted views: the three workflow tabs + the Advanced deep tools.
   // Anything else (legacy 'benchmark', the removed 'compare-artefacts')
   // routes to the compliance report so we never strand the user.
-  const PERMITTED_VIEWS = new Set(['layers', 'compare', 'compile', 'conformance', 'schema', 'otlp', 'traceability', 'atlas', 'references', 'journeys']);
+  // 'journeys' (the pre-Neuron Advanced item) is accepted and routed to
+  // Neuron, which carries the journey cards among its panels.
+  const PERMITTED_VIEWS = new Set(['layers', 'compare', 'compile', 'conformance', 'schema', 'otlp', 'traceability', 'atlas', 'references', 'neuron', 'journeys']);
   if (state.view && !PERMITTED_VIEWS.has(state.view)) {
     state.view = 'compare';
   }
+  if (state.view === 'journeys') state.view = 'neuron';
   if (typeof saved.layerFilter === 'string')   state.layerFilter = saved.layerFilter;
   if (typeof saved.compareSlice === 'string')  state.compareSlice = saved.compareSlice;
   if (typeof saved.compareSearch === 'string') state.compareSearch = saved.compareSearch;
@@ -115,6 +153,8 @@ async function rehydrateFromPersistence() {
   if (typeof saved.expandL3Queries === 'boolean') state.expandL3Queries = saved.expandL3Queries;
   if (typeof saved.layersSearch === 'string') state.layersSearch = saved.layersSearch;
   if (typeof saved.layersDomain === 'string') state.layersDomain = saved.layersDomain;
+  if (['list', 'tiles', 'cards', 'details'].includes(saved.compareDetail)) state.compareDetail = saved.compareDetail;
+  if (['list', 'tiles', 'cards', 'details'].includes(saved.discoverDetail)) state.discoverDetail = saved.discoverDetail;
 
   // Make sure the picker can label an archived example by pushing the
   // catalog-entry shape into state.catalog (same trick renderPackBSelect uses).
@@ -147,6 +187,9 @@ async function rehydrateFromPersistence() {
   return true;
 }
 
+// The /conformance report carries onPlaceholder itself — worked out for this
+// env overlay — whenever the pack carries library todos, and omits it when the
+// server cannot say, so it survives reloads and env switches as is.
 async function loadPack(id, env) {
   const q = env ? `?env=${encodeURIComponent(env)}` : '';
   const [pack, conformance] = await Promise.all([
@@ -211,8 +254,13 @@ function isLiveAggregatePack(p) {
   return /\b(live|mcp|production-live|draft-from-mcp)\b/.test(text);
 }
 
-function serviceCatalogue() {
+// `ownOnly` (the home tiles): only the packs in this workspace's catalog —
+// never the bundled reference examples, which are not the user's services
+// and do not open from a tile — and not the service of whatever pack
+// happens to be loaded.
+function serviceCatalogue({ ownOnly = false } = {}) {
   const byKey = new Map();
+  const counted = new Map();
   const add = (name, p) => {
     const key = normalizeServiceKey(name);
     if (!key) return;
@@ -221,14 +269,29 @@ function serviceCatalogue() {
       label: String(name).trim(),
       packCount: 0,
       liveCount: 0,
+      environments: [],
+      tiers: [],
     });
     const item = byKey.get(key);
     if (p) {
+      // A pack names its service more than once (bindings and services[]):
+      // count it once per service.
+      const seen = counted.get(key) || new Set();
+      counted.set(key, seen);
+      if (p.id != null && seen.has(p.id)) return;
+      if (p.id != null) seen.add(p.id);
       if (isLiveAggregatePack(p)) item.liveCount += 1;
       else item.packCount += 1;
+      // The home tiles tell services apart by environment and tier.
+      for (const env of p.environments || []) if (!item.environments.includes(env)) item.environments.push(env);
+      if (p.criticality && !item.tiers.includes(p.criticality)) item.tiers.push(p.criticality);
     }
   };
-  for (const p of [...(state.catalog || []), ...(state._examplesCache || [])]) {
+  const exampleIds = new Set((state._examplesCache || []).map(p => p?.id));
+  const packs = ownOnly
+    ? (state.catalog || []).filter(p => !exampleIds.has(p?.id))
+    : [...(state.catalog || []), ...(state._examplesCache || [])];
+  for (const p of packs) {
     if (!p?.ok) continue;
     const aggregate = isLiveAggregatePack(p);
     const primaryKey = serviceKeyForPack(p);
@@ -239,7 +302,7 @@ function serviceCatalogue() {
     }
   }
   const current = state.pack?.meta?.service;
-  if (current) add(current);
+  if (current && !ownOnly) add(current);
   return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label));
 }
 
@@ -609,8 +672,10 @@ export function layerArtefactCount(layerId) {
 // ============================================================
 
 export function renderTabs() {
-  // Keep the OBSERVA chrome's active tab in sync on every re-render.
-  paintObservaActiveTab();
+  // Keep the OBSERVA chrome in sync on every re-render. Views that switch
+  // state.view through the host seam (appHost.renderTabs) get the whole
+  // chrome, not just the tab highlight.
+  applyModeChrome();
   const tabs = $('#layer-tabs');
   if (!tabs) return;
   tabs.innerHTML = '';
@@ -706,15 +771,25 @@ export function renderMainView() {
     else renderHomeView();
     return;
   }
+  // The BUILD journey renders its own three steps (Define · Compile ·
+  // Verify) under BUILD_TABS; nothing below applies until "Open in
+  // Discover" hands the produced pack to the analysis journey. Its pop-up
+  // editor lives outside this view (syncBuildEditor draws or clears it).
+  if (state.mode === 'build') { renderBuildView(view); syncBuildEditor(); return; }
+  syncBuildEditor();
   if (!state.pack) {
     // In the workspace but no pack yet. Discover ("what do we have?") is
-    // where you LOAD or GENERATE a pack — so its empty state IS the three
+    // where you LOAD or COMPILE a pack — so its empty state IS the three
     // load options, never the marketing hero. Diagnose/Remediate need a
     // pack first, so they point the user back to Discover.
     if (state.view === 'layers') { renderDiscoverEmpty(view); return; }
     // References (Advanced) is a catalogue browser — it renders without a
     // pack loaded; the per-reference benchmark action then needs Pack A.
     if (state.view === 'references') { renderReferencesView(view); return; }
+    // Neuron (Advanced) reads the saved journeys and their run history from
+    // the workspace — no pack needs to be loaded; only the capture bar
+    // asks for an A/B pair.
+    if (state.view === 'neuron' || state.view === 'journeys') { renderNeuronView(view); return; }
     renderNeedPackPrompt(view); return;
   }
 
@@ -739,7 +814,8 @@ export function renderMainView() {
     case 'schema':             renderSchemaView(view); return;
     case 'otlp':               renderOtlpView(view); return;
     case 'references':         renderReferencesView(view); return;
-    case 'journeys':           renderJourneysView(view); return;
+    case 'journeys':                                          // pre-Neuron alias
+    case 'neuron':             renderNeuronView(view); return;
     case 'layers':
     default:
       // Discover ("What Do We Have?") IS the real layer inventory —
@@ -876,7 +952,7 @@ async function handleFile(file) {
       return;
     }
     state.pack = res.adapted;
-    state.conformance = res.conformance;
+    state.conformance = withPlaceholderPasses(res);
     state.symbolTable = buildSymbolTable(res.adapted);
     state.uploadedSource = file.name;
     state.activeLayer = 'L1';
@@ -907,7 +983,7 @@ async function handleFile(file) {
     renderTabs();
     renderMainView();
     if (res.legacy) {
-      toast(`Loaded ${file.name} — previous (layered JSON) format upconverted to canonical v1.2: ${res.legacy.mapped} artefacts mapped, ${res.legacy.scaffolded} scaffolds`);
+      toast(`Loaded ${file.name} — previous (layered JSON) format upconverted to canonical v1.3: ${res.legacy.mapped} artefacts mapped, ${res.legacy.scaffolded} scaffolds`);
     } else {
       toast(`Loaded ${file.name}`);
     }
@@ -959,6 +1035,11 @@ function setupUpload() {
       closePopover();
       if (action === 'pick-file') {
         fileInput.click();
+        return;
+      }
+      if (action === 'build-library') {
+        // No pack to upload yet: the BUILD journey makes one from the library.
+        enterBuildMode('define');
         return;
       }
       if (action === 'quick-krystaline') {
@@ -1085,25 +1166,25 @@ const OBSERVA_TABS = [
     label: 'What Do We Have?',
     sub: 'Discover',
     techName: 'Layers',
-    tagline: 'the Observogram Scan',
+    tagline: 'Layers, artefacts and evidence',
     accent: 'tab-blue',
   },
   {
     id: 'compare',
     n: '2',
-    label: 'Can We Trust It?',
+    label: 'How reliable is this pack?',
     sub: 'Diagnose',
     techName: 'Comparison',
-    tagline: 'Coverage & Fidelity',
+    tagline: 'Assessment and comparison',
     accent: 'tab-magenta',
   },
   {
     id: 'compile',
     n: '3',
-    label: 'Fix The Gaps',
+    label: 'Resolve gaps',
     sub: 'Remediate',
     techName: 'ObsOps',
-    tagline: 'Compile & Deploy',
+    tagline: 'Update, compile and deploy',
     accent: 'tab-emerald',
   },
 ];
@@ -1114,15 +1195,114 @@ const OBSERVA_TABS = [
 // chrome button (styled like the old action cluster) that opens a menu.
 // Each routes to a view that already exists in the dispatcher.
 const OBSERVA_ADV = [
+  // Neuron first: the monitor-of-monitors surface (journeys, chains, causes,
+  // stack posture, delivery, trends) — the Journeys item it replaces lives
+  // on as a route alias.
+  { id: 'neuron',       label: 'Neuron',       sub: 'observability control · journeys · chains · causes · posture · trends' },
   { id: 'references',   label: 'References',   sub: 'catalogue reference packs · benchmark vs best practice' },
   { id: 'conformance',  label: 'Conformance',  sub: 'maturity rubric · MUST/SHOULD per tier' },
-  { id: 'schema',       label: 'Schema',       sub: 'canonical YAML + v1.2 validation' },
+  { id: 'schema',       label: 'Schema',       sub: 'canonical YAML + v1.3 validation' },
   { id: 'otlp',         label: 'OTLP Coverage', sub: 'receiver protocols · per-signal exporters' },
-  { id: 'traceability', label: 'Traceability', sub: 'repo vs live · declared / verified / stale' },
+  { id: 'traceability', label: 'Traceability', sub: 'requirements · proof chain · repo vs live' },
   { id: 'atlas',        label: 'Atlas',        sub: 'visual atlases · strata · periodic · skyline' },
-  { id: 'journeys',     label: 'Journeys',     sub: 'saved drift checks · run history · trends' },
 ];
 const OBSERVA_ADV_VIEWS = new Set(OBSERVA_ADV.map(a => a.id));
+// The conformance report plus which clauses pass only on a placeholder, when
+// the answer carries it (a library-built or uploaded pack's validation
+// summary): Conformance then lists "Passes on placeholders" exactly instead of
+// hedging. (GET /api/packs/:id/conformance carries the same list itself.)
+function withPlaceholderPasses(res) {
+  const onPlaceholder = res?.summary?.onPlaceholder;
+  return res?.conformance && Array.isArray(onPlaceholder) ? { ...res.conformance, onPlaceholder } : res?.conformance;
+}
+
+
+// The BUILD journey's three cards (docs/BUILD_JOURNEY.md) live in build-model.mjs
+// (BUILD_TABS, pure, tested): the same shape as OBSERVA_TABS and the same
+// accents, rendered by the same header renderer whenever state.mode is 'build';
+// re-exported here for the studio's public surface.
+export { BUILD_TABS };
+
+// Which tab list the header shows: the analysis journey unless we are building.
+function activeTabSet() { return state.mode === 'build' ? 'build' : 'observa'; }
+function tabListFor(set) { return set === 'build' ? BUILD_TABS : OBSERVA_TABS; }
+
+// A tab's accessible name is its step word and tagline (tabName: "Define — Choose a service, tier, and starting point"), spelled
+// once for the title and aria-label — the content alone read as one run of number, eyebrow, question and tagline.
+function observaTabHtml(t) {
+  return `
+    <button type="button" role="tab" class="observa-tab ${t.accent}" data-view="${t.id}"
+            aria-selected="false" aria-label="${escapeHtml(tabName(t))}" title="${escapeHtml(tabName(t))}">
+      <span class="observa-tab-num">${t.n}</span>
+      <span class="observa-tab-text">
+        <span class="observa-tab-eyebrow">${escapeHtml(t.sub)}</span>
+        <span class="observa-tab-title">${escapeHtml(t.label)}</span>
+        <span class="observa-tab-tagline">${escapeHtml(t.tagline)}</span>
+      </span>
+    </button>`;
+}
+
+// (Re)render the header's tab cards for the active set. Idempotent per set:
+// the buttons are rebuilt only when the set changes (analysis ↔ build), so
+// the analysis journey's chrome is untouched while nobody is building.
+function syncObservaTabs() {
+  const nav = document.querySelector('.observa-tabs');
+  if (!nav) return;
+  const set = activeTabSet();
+  if (nav.dataset.set === set) return;
+  nav.dataset.set = set;
+  nav.innerHTML = tabListFor(set).map(observaTabHtml).join('');
+  for (const btn of nav.querySelectorAll('.observa-tab')) {
+    btn.addEventListener('click', () => (set === 'build' ? goToBuildStep(btn.dataset.view) : routeTo(btn.dataset.view)));
+  }
+  // The brand tagline names the journey on screen.
+  const steps = document.querySelectorAll('.observa-tagline-step');
+  const words = tabListFor(set).map(t => t.sub);
+  steps.forEach((el, i) => { if (words[i]) el.textContent = words[i]; });
+  document.body.classList.toggle('chrome-build', set === 'build');
+}
+
+// Route a header tab (or an Advanced item) to the existing view dispatcher.
+function routeTo(id) {
+  if (!id) return;
+  // Clicking any tab leaves the landing/reset hero (or the BUILD journey)
+  // and enters the workspace. Without this the no-pack state stays
+  // mode='home' and every tab would keep rendering the landing hero (the
+  // bug behind "why is Discover like the landing hero page?"). The pack is
+  // still null until the user loads one — Discover's empty state handles that.
+  if (state.mode === 'home' || state.mode === 'build') state.mode = 'single';
+  state.view = id;
+  state.activeCardKey = null;
+  state.activeLayer = ({ compile: 'COMPILE', conformance: 'CONF', schema: 'CONF', atlas: 'ATLAS', layers: state.layerFilter !== 'all' ? state.layerFilter : 'L1' })[id] || 'L1';
+  applyModeChrome();
+  paintObservaActiveTab();
+  renderTabs();
+  renderMainView();
+}
+
+// The sticky strips below the context bar (.ux-section-nav, .diag-sticky,
+// .ux-decision.is-sticky) pin at chrome + --ux-context-h. The bar wraps onto
+// more rows on narrow screens and is hidden on home and in Build, so measure
+// it; ux.css holds the single-row default for when this cannot run.
+function syncContextBarHeight() {
+  const bar = document.querySelector('header.hdr');
+  if (!bar) return;
+  const h = Math.ceil(bar.getBoundingClientRect().height);
+  document.body.style.setProperty('--ux-context-h', `${h}px`);
+  // The chrome above it too: its height follows the type and the stepper's
+  // wrapping, and everything pinned below counts from its real bottom edge.
+  const chrome = document.querySelector('.observa-hdr');
+  if (chrome) document.body.style.setProperty('--observa-chrome-h', `${Math.ceil(chrome.getBoundingClientRect().height)}px`);
+}
+function trackContextBarHeight() {
+  const bar = document.querySelector('header.hdr');
+  if (!bar || typeof ResizeObserver !== 'function') return;
+  const ro = new ResizeObserver(syncContextBarHeight);
+  ro.observe(bar);
+  const chrome = document.querySelector('.observa-hdr');
+  if (chrome) ro.observe(chrome);
+  syncContextBarHeight();
+}
 
 function installObservaChrome() {
   if (document.querySelector('.observa-hdr')) return;
@@ -1150,6 +1330,8 @@ function installObservaChrome() {
         <span class="observa-brand-text">
           <span class="observa-wordmark">OBSERVO<strong>GRAM</strong></span>
           <span class="observa-tagline">
+            <!-- Home names no journey: the stepper appears once one is chosen. -->
+            <span class="observa-tagline-home">the observability compiler</span>
             <span class="observa-tagline-step">Discover</span>
             <span class="observa-tagline-dot">·</span>
             <span class="observa-tagline-step">Diagnose</span>
@@ -1175,19 +1357,7 @@ function installObservaChrome() {
         <span class="observa-service-name" id="observa-service-name"></span>
       </span>
 
-      <nav class="observa-tabs" role="tablist" aria-label="Primary">
-        ${OBSERVA_TABS.map(t => `
-          <button type="button" role="tab" class="observa-tab ${t.accent}" data-view="${t.id}"
-                  aria-selected="false" title="${escapeHtml(t.techName + ' — ' + t.tagline)}">
-            <span class="observa-tab-num">${t.n}</span>
-            <span class="observa-tab-text">
-              <span class="observa-tab-eyebrow">${escapeHtml(t.sub)}</span>
-              <span class="observa-tab-title">${escapeHtml(t.label)}</span>
-              <span class="observa-tab-tagline">${escapeHtml(t.tagline)}</span>
-            </span>
-          </button>
-        `).join('')}
-      </nav>
+      <nav class="observa-tabs" role="tablist" aria-label="Primary"></nav>
 
       <div class="observa-actions" aria-label="Advanced tools">
         <div class="observa-adv-wrap">
@@ -1206,6 +1376,23 @@ function installObservaChrome() {
                 <span class="observa-adv-item-sub">${escapeHtml(a.sub)}</span>
               </button>
             `).join('')}
+            <div class="observa-adv-menu-head">Administration</div>
+            <button type="button" class="observa-adv-item" role="menuitem" data-action="mcp">
+              <span class="observa-adv-item-label">Live MCP connection</span>
+              <span class="observa-adv-item-sub" id="observa-adv-mcp-sub">refresh production-live from an MCP server</span>
+            </button>
+            <button type="button" class="observa-adv-item" role="menuitem" data-action="api">
+              <span class="observa-adv-item-label">Pack catalogue API</span>
+              <span class="observa-adv-item-sub">the raw JSON the studio reads · opens a new tab</span>
+            </button>
+            <button type="button" class="observa-adv-item" role="menuitem" data-action="theme">
+              <span class="observa-adv-item-label">Switch light / dark theme</span>
+              <span class="observa-adv-item-sub">also in the context bar while a pack is open</span>
+            </button>
+            <button type="button" class="observa-adv-item" role="menuitem" data-action="reset">
+              <span class="observa-adv-item-label">Reset the studio…</span>
+              <span class="observa-adv-item-sub">drop uploaded packs and saved state · asks first</span>
+            </button>
             <button type="button" class="observa-adv-item observa-adv-about" role="menuitem" data-action="about">
               <span class="observa-adv-item-label">About Observogram</span>
               <span class="observa-adv-item-sub" id="observa-about-sub">version &amp; build</span>
@@ -1217,26 +1404,9 @@ function installObservaChrome() {
   `;
   document.body.insertBefore(hdr, document.body.firstChild);
 
-  // Wire tab clicks → route to the existing view dispatcher.
-  const routeTo = (id) => {
-    if (!id) return;
-    // Clicking any tab leaves the landing/reset hero and enters the
-    // workspace. Without this the no-pack state stays mode='home' and
-    // every tab would keep rendering the landing hero (the bug behind
-    // "why is Discover like the landing hero page?"). The pack is still
-    // null until the user loads one — Discover's empty state handles that.
-    if (state.mode === 'home') state.mode = 'single';
-    state.view = id;
-    state.activeCardKey = null;
-    state.activeLayer = ({ compile: 'COMPILE', conformance: 'CONF', schema: 'CONF', atlas: 'ATLAS', layers: state.layerFilter !== 'all' ? state.layerFilter : 'L1' })[id] || 'L1';
-    applyModeChrome();
-    paintObservaActiveTab();
-    renderTabs();
-    renderMainView();
-  };
-  for (const btn of hdr.querySelectorAll('.observa-tab')) {
-    btn.addEventListener('click', () => routeTo(btn.dataset.view));
-  }
+  // The tab cards: the analysis journey's three (or the BUILD journey's
+  // three in build mode), one renderer — syncObservaTabs wires the clicks.
+  syncObservaTabs();
 
   // Wire the Advanced menu — deep tools off the main workflow.
   const advToggle = hdr.querySelector('.observa-adv-toggle');
@@ -1274,6 +1444,10 @@ function installObservaChrome() {
     e.stopPropagation();
     const willOpen = advMenu.hidden;
     if (!willOpen) { closeAdv(); return; }
+    // The MCP badge left the header; its state travels with the menu item.
+    const mcpSub = document.getElementById('observa-adv-mcp-sub');
+    const mcpBtn = document.getElementById('mcp-btn');
+    if (mcpSub && mcpBtn?.title) mcpSub.textContent = mcpBtn.title;
     advMenu.hidden = false;
     advToggle.setAttribute('aria-expanded', 'true');
     positionAdv();
@@ -1283,7 +1457,15 @@ function installObservaChrome() {
   hdr.querySelectorAll('.observa-adv-item').forEach(item => {
     item.addEventListener('click', () => {
       closeAdv();
-      if (item.dataset.action === 'about') { openAboutModal(); return; }
+      const action = item.dataset.action;
+      if (action === 'about') { openAboutModal(); return; }
+      // Admin tools proxy to the header's original controls. Deferred, so
+      // this click's own document-level outside-click handlers (the MCP
+      // panel closes on any click outside it) run before the panel opens.
+      if (action === 'mcp')   { setTimeout(() => $('#mcp-btn')?.click(), 0); return; }
+      if (action === 'reset') { setTimeout(() => $('#reset-btn')?.click(), 0); return; }
+      if (action === 'theme') { $('#theme-toggle')?.click(); return; }
+      if (action === 'api')   { window.open(`/api/packs${orgQuery()}`, '_blank', 'noopener'); return; }
       routeTo(item.dataset.view);
     });
   });
@@ -1304,9 +1486,27 @@ function installObservaChrome() {
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAdv(); });
 
   paintObservaActiveTab();
+  // Once the chrome is in the page: keep its height and the context bar's measured.
+  trackContextBarHeight();
 }
 
 function paintObservaActiveTab() {
+  syncObservaTabs();
+  if (state.mode === 'build') {
+    // BUILD: the current step is the active card; a step is reachable when
+    // the previous step's inputs are valid, locked otherwise.
+    const reach = buildStepReachability(state.build);
+    for (const btn of document.querySelectorAll('.observa-tab')) {
+      const id = btn.dataset.view;
+      const isActive = id === state.build.step;
+      btn.classList.toggle('is-active', isActive);
+      btn.classList.toggle('is-locked', !reach[id]);
+      btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      btn.setAttribute('aria-disabled', reach[id] ? 'false' : 'true');
+    }
+    document.querySelector('.observa-adv-toggle')?.classList.remove('is-active');
+    return;
+  }
   const v = state.view || 'layers';
   const active = (v === 'benchmark' || v === 'compare-artefacts') ? 'compare' : v;
   const advActive = OBSERVA_ADV_VIEWS.has(v);
@@ -1319,6 +1519,8 @@ function paintObservaActiveTab() {
     // and NOT on the landing screen.
     const isActive = !onLanding && !advActive && btn.dataset.view === active;
     btn.classList.toggle('is-active', isActive);
+    btn.classList.remove('is-locked');
+    btn.removeAttribute('aria-disabled');
     btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
   }
   const advToggle = document.querySelector('.observa-adv-toggle');
@@ -1329,11 +1531,24 @@ async function boot() {
   // Mount the new chrome FIRST so the user sees the demo shape even
   // while the catalog loads.
   installObservaChrome();
+  // Which build is this? Fire-and-forget: fills the footer span, the About
+  // entry, the header subtitle and the brand tooltip. /api/version is
+  // public, so it needs neither identity nor org — and never blocks boot.
+  loadVersion();
   // Identity + active org BEFORE the first /api call — with tenancy on,
   // /api/packs answers from the active org's workspace, so the org
   // header has to be resolved before the catalog loads.
   await loadIdentity();
   resolveActiveOrg();
+  // The deploy target profiles saved before slice 3 (one browser-wide key,
+  // URLs as typed) become this user's, stripped, now — not at the first
+  // deploy: no credential waits in localStorage until then. Not on a boot
+  // /auth/me answered "no session": the login is not known yet and the
+  // shell is about to redirect to sign-in — adopted now, the profiles
+  // would sit under 'local', where the signed-in user never sees them.
+  // (state.identity stays null in the open posture, which adopts here.)
+  if (state.identity?.authenticated !== false) loadDeployProfiles().catch(() => {});
+  syncApiLink();
   try { await loadCatalog(); }
   catch (e) {
     document.body.innerHTML = `<pre class="json" style="margin:48px;max-width:800px">Failed to reach Observogram's API.\n\n${escapeHtml(e.message)}\n\nMake sure the server is running: \`node server/index.mjs\` or \`npm run serve\`.</pre>`;
@@ -1427,7 +1642,7 @@ function goHome() {
   // you working on?", not the marketing hero. The hero stays for local
   // mode and for true cold starts (no services yet); the gate links to
   // it for "start something new".
-  state.homeVariant = (state.identity?.authenticated && serviceCatalogue().length) ? 'gate' : 'hero';
+  state.homeVariant = (state.identity?.authenticated && serviceCatalogue({ ownOnly: true }).length) ? 'gate' : 'hero';
   applyModeChrome();
   if (state.homeVariant === 'gate') renderServiceGate();
   else renderHomeView();
@@ -1441,34 +1656,151 @@ function goHome() {
 // service". docs/PRODUCTIZATION_PLAN.md Stage 1 UX.
 // ============================================================
 
-function renderServiceGate() {
-  const view = $('#layer-view');
-  if (!view) return;
-  const services = serviceCatalogue();
-  const who = state.identity?.name || state.identity?.email || state.identity?.sub || '';
-  view.innerHTML = `
-    <section class="svc-gate">
-      <div class="svc-gate-eyebrow">OBSERVOGRAM · THE OBSERVABILITY COMPILER</div>
-      <h1 class="svc-gate-title">Welcome back${who ? `, ${escapeHtml(who.split(' ')[0])}` : ''}.</h1>
-      <p class="svc-gate-sub">Which service are you working on?</p>
-      <div class="svc-gate-grid">
-        ${services.map(s => `
-          <button type="button" class="svc-gate-card" data-service="${escapeHtml(s.key)}">
-            <span class="svc-gate-name">${escapeHtml(s.label)}</span>
-            <span class="svc-gate-meta">${s.packCount} pack${s.packCount === 1 ? '' : 's'}${s.liveCount ? ` · ${s.liveCount} live draft${s.liveCount === 1 ? '' : 's'}` : ''}</span>
-          </button>`).join('')}
+// ============================================================
+// THE FIRST DECISION IS ABOUT THE PACK (docs/BUILD_JOURNEY.md "Where it
+// starts"): a service may already exist without one — Build comes first in time,
+// Check is the common case. Both landings — the
+// signed-in service gate and the local hero — open with the same question,
+// and both branches join at "Pack available in Discover".
+// ============================================================
+// The two journeys, equal-sized, under one question (the 2026-09 UX review,
+// docs/UX_SCREEN_GRAMMAR.md). Check opens its next step in place — recent
+// services, a search, the import / scan sources — so the service grid is no
+// longer a second, competing way to start. Build enters DEFINE.
+function homeChoiceHtml({ checkOpen }) {
+  return `
+    <div class="home-choice" role="group" aria-labelledby="home-title">
+      <div class="home-choice-cards">
+        <button type="button" class="home-choice-card is-check${checkOpen ? ' is-open' : ''}" id="home-choice-check"
+                aria-expanded="${checkOpen ? 'true' : 'false'}" aria-controls="home-check">
+          <span class="home-choice-key" aria-hidden="true">◎</span>
+          <span class="home-choice-title">Check an existing service or pack</span>
+          <span class="home-choice-sub">Inspect its artefacts, assess evidence, and resolve gaps.</span>
+          <span class="home-choice-path">Discover / Diagnose / Remediate</span>
+          <span class="home-choice-cta">Inspect a service</span>
+        </button>
+        <button type="button" class="home-choice-card is-build" id="home-choice-build">
+          <span class="home-choice-key" aria-hidden="true">⬡</span>
+          <span class="home-choice-title">Build a new pack</span>
+          <span class="home-choice-sub">Define a service and generate a pack you can review.</span>
+          <span class="home-choice-path">Define / Compile / Verify</span>
+          <span class="home-choice-cta">Create a pack</span>
+        </button>
       </div>
-      <button type="button" class="svc-gate-new" id="svc-gate-new">+ start something new — connect an MCP endpoint, upload or scan a repo</button>
-    </section>
-  `;
+    </div>`;
+}
+
+// When each service was last opened here — the tiles' "last activity". The
+// catalogue carries no timestamps, so this is this browser's own record.
+const RECENT_SERVICES_KEY = 'studioRecentServices';
+function recentServices() {
+  try { return parseRecentServices(localStorage.getItem(RECENT_SERVICES_KEY)); }
+  catch { return parseRecentServices(null); }
+}
+function recordRecentService(key) {
+  if (!key) return;
+  try {
+    const all = recentServices();
+    all[key] = new Date().toISOString();
+    localStorage.setItem(RECENT_SERVICES_KEY, JSON.stringify(all));
+  } catch (_) {}
+}
+
+// A tile carries what tells two services apart: environments, packs and
+// drafts, tier, when it was last opened, and the one issue worth knowing.
+function serviceTileHtml(s, openedAt) {
+  const packs = [
+    s.packCount ? `${s.packCount} pack${s.packCount === 1 ? '' : 's'}` : '',
+    s.liveCount ? `${s.liveCount} live draft${s.liveCount === 1 ? '' : 's'}` : '',
+  ].filter(Boolean).join(' · ') || 'no packs';
+  const envs = (s.environments || []).join(', ');
+  const tiers = (s.tiers || []).join(', ');
+  const issue = !s.packCount && s.liveCount ? 'Live draft only — no repository pack to compare with' : '';
+  return `
+    <button type="button" class="svc-gate-card" data-service="${escapeHtml(s.key)}"
+            data-search="${escapeHtml(`${s.label} ${envs} ${tiers}`.toLowerCase())}">
+      <span class="svc-gate-name">${escapeHtml(s.label)}</span>
+      <span class="svc-gate-meta">${escapeHtml([envs, packs, tiers].filter(Boolean).join(' · '))}</span>
+      <span class="svc-gate-activity">${openedAt ? `Opened ${escapeHtml(fmtRelative(openedAt))}` : 'Not opened here yet'}</span>
+      ${issue ? `<span class="svc-gate-issue">${escapeHtml(issue)}</span>` : ''}
+    </button>`;
+}
+
+// The check branch's next step: recent services first, a search, then the
+// sources a pack can come from (filled in by the caller).
+function homeCheckHtml(services, open) {
+  const opened = recentServices();
+  const ordered = orderServicesByRecent(services, opened);
+  const anyRecent = services.some(s => opened[s.key]);
+  return `
+    <div class="home-check" id="home-check"${open ? '' : ' hidden'}>
+      ${services.length ? `
+      <div class="home-check-head">
+        <h2 class="home-check-title" id="svc-gate-which">${anyRecent ? 'Recent services' : 'Your services'}</h2>
+        <label class="home-check-search">
+          <span class="sr-text">Search services</span>
+          <input type="search" id="home-service-search" placeholder="Search by service, environment or tier" autocomplete="off" aria-controls="home-service-grid">
+        </label>
+      </div>
+      <div class="svc-gate-grid" id="home-service-grid">
+        ${ordered.map(s => serviceTileHtml(s, opened[s.key])).join('')}
+      </div>
+      <p class="home-check-none" id="home-service-none" role="status" hidden>No service matches that search.</p>` : `
+      <p class="home-check-empty">No services yet. Bring a pack in from one of the sources below.</p>`}
+      <h2 class="home-check-title home-check-sources-title">Import or scan another source</h2>
+      <div class="home-sources" id="home-sources"></div>
+    </div>`;
+}
+
+// Greet a person only by a name that is a name — "Welcome back, Admin" read
+// as a role label, not a greeting.
+function homeGreetingHtml() {
+  const who = personalName(state.identity);
+  return who ? `<p class="home-greeting">Welcome back, ${escapeHtml(who)}.</p>` : '';
+}
+
+// Whether Check was the last choice here: a returning user lands on their
+// services instead of re-opening the branch every visit.
+function homeCheckRemembered() {
+  try { return localStorage.getItem('studioHomeChoice') === 'check'; } catch (_) { return false; }
+}
+
+function wireHomeChoice(view) {
+  const checkBtn = view.querySelector('#home-choice-check');
+  const panel = view.querySelector('#home-check');
+  checkBtn?.addEventListener('click', () => {
+    const open = checkBtn.getAttribute('aria-expanded') !== 'true';
+    checkBtn.setAttribute('aria-expanded', String(open));
+    checkBtn.classList.toggle('is-open', open);
+    if (panel) panel.hidden = !open;
+    try { localStorage.setItem('studioHomeChoice', open ? 'check' : ''); } catch (_) {}
+    if (open) {
+      panel?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      (view.querySelector('#home-service-search') || view.querySelector('#home-mcp-url'))?.focus({ preventScroll: true });
+    }
+  });
+  view.querySelector('#home-choice-build')?.addEventListener('click', () => enterBuildMode('define'));
   view.querySelectorAll('.svc-gate-card').forEach(card => {
     card.addEventListener('click', () => enterServiceWorkspace(card.dataset.service));
   });
-  view.querySelector('#svc-gate-new')?.addEventListener('click', () => {
-    state.homeVariant = 'hero';
-    renderHomeView();
+  const search = view.querySelector('#home-service-search');
+  search?.addEventListener('input', () => {
+    const q = search.value.trim().toLowerCase();
+    let shown = 0;
+    view.querySelectorAll('.svc-gate-card').forEach(card => {
+      const hit = !q || card.dataset.search.includes(q);
+      card.hidden = !hit;
+      if (hit) shown++;
+    });
+    const none = view.querySelector('#home-service-none');
+    if (none) none.hidden = shown > 0;
   });
 }
+
+// The signed-in service gate and the local hero are one screen now: the
+// same question and the same two choices. The gate opens straight onto the
+// user's services; both keep the import sources one step down.
+function renderServiceGate() { renderHomeView(); }
 
 // Reflect the active service into the always-visible OBSERVA-bar chip.
 // Called wherever the selection can change (service select, analyze
@@ -1477,10 +1809,10 @@ function updateObservaOrgChip() {
   const chip = document.getElementById('observa-org');
   if (!chip) return;
   const orgs = state.identity?.orgs || [];
-  const active = orgs.find(o => o.id === getActiveOrg()) || orgs[0];
-  if (!active) { chip.hidden = true; return; }
+  const { kind, active } = orgChipModel(orgs, getActiveOrg());
+  if (kind === 'none') { chip.hidden = true; return; }
   const name = document.getElementById('observa-org-name');
-  if (orgs.length > 1 && !chip.querySelector('select')) {
+  if (kind === 'switcher' && !chip.querySelector('select')) {
     const sel = document.createElement('select');
     sel.className = 'observa-org-select';
     sel.setAttribute('aria-label', 'Active organisation');
@@ -1512,7 +1844,7 @@ function updateObservaServiceChip() {
   const name = document.getElementById('observa-service-name');
   const services = serviceCatalogue();
   const active = services.find(s => s.key === state.selectedService);
-  if (state.mode === 'home' || !active) { chip.hidden = true; return; }
+  if (state.mode === 'home' || state.mode === 'build' || !active) { chip.hidden = true; return; }
   name.textContent = active.label;
   chip.hidden = false;
 }
@@ -1521,22 +1853,26 @@ function updateObservaServiceChip() {
 // service selected, its most recent pack loaded as Pack A, Discover open.
 function enterServiceWorkspace(serviceKey) {
   if (!serviceKey) return;
-  state.selectedService = serviceKey;
   // Catalog order is oldest→newest (workspace registry order, new
   // registrations appended) — the LAST match is the freshest. Prefer the
-  // declared (non-aggregate) pack; an aggregate live draft is a usable
-  // fallback when it's all the service has.
-  const matches = state.catalog.filter(p => p.ok && packMatchesService(p, serviceKey, { side: 'a' }));
+  // declared (non-aggregate) pack; an aggregate live draft that names the
+  // service is a usable fallback when it's all the service has. A live
+  // snapshot of some other service is never opened as this one's Pack A.
+  const matches = state.catalog.filter(p => p.ok
+    && (serviceKeyForPack(p) === serviceKey || packMatchesService(p, serviceKey, { side: 'a' })));
   const declared = matches.filter(p => !isLiveAggregatePack(p));
-  const pack = declared[declared.length - 1] || matches[matches.length - 1]
-    || state.catalog.filter(p => p.ok && packMatchesService(p, serviceKey, { side: 'b' })).pop();
+  const pack = declared[declared.length - 1] || matches[matches.length - 1];
   if (!pack) {
-    // A service with nothing loadable (e.g. example-derived) — fall back
-    // to the hero so the user can bring a pack in.
-    state.homeVariant = 'hero';
-    renderHomeView();
+    // Nothing loadable for it here: say so, open nothing, and record
+    // nothing — the tile must not then read "Opened".
+    const label = serviceCatalogue().find(s => s.key === serviceKey)?.label || serviceKey;
+    toast(`No pack for ${label} is loaded here yet. Import or scan one under "Import or scan another source".`);
     return;
   }
+  // Record the tile that was clicked: a pack can carry several services (or
+  // be a live aggregate), and enterAnalyzeMode records only its primary one.
+  recordRecentService(serviceKey);
+  state.selectedService = serviceKey;
   enterAnalyzeMode(pack.id, defaultEnvFor(pack.id));
 }
 
@@ -1547,6 +1883,7 @@ function enterAnalyzeMode(packId, env) {
   state.selectedEnv    = env || defaultEnvFor(packId);
   state.selectedService = serviceKeyForPack(state.catalog.find(p => p.id === packId)) || state.selectedService;
   state.activeLayer = 'L1';
+  recordRecentService(state.selectedService);
   state.activeCardKey = null;
   applyModeChrome();
   renderServiceSelect();
@@ -1576,7 +1913,9 @@ function enterCompareMode(aId, aEnv, bId, bEnv) {
 // api) stay visible because they're the entry points to creating a
 // new pack.
 function applyModeChrome() {
-  const isHome = state.mode === 'home';
+  // The BUILD journey hides the pack controls like home does: there is no
+  // pack until VERIFY's "Open pack in Discover" (with visible gaps, or without) registers one.
+  const isHome = state.mode === 'home' || state.mode === 'build';
   updateObservaServiceChip();
   // Under the OBSERVA chrome the pack/env selectors are PINNED as a
   // permanent master row — they are the user's primary controls and
@@ -1596,6 +1935,8 @@ function applyModeChrome() {
   // Pack B picker stays visible whenever we're not on home — empty until
   // the user picks something. This is the unlock: no more rigid single
   // vs compare mode. Hide it on Compare for the same duplication reason.
+  // Loading Pack A, loading Pack B and comparing them is the studio's core
+  // operation, so the picker is on every workspace screen, Discover included.
   const packBCtrl = $('#ctrl-pack-b');
   const envBCtrl  = $('#ctrl-env-b');
   if (packBCtrl) packBCtrl.hidden = isHome || onCompare;
@@ -1609,6 +1950,18 @@ function applyModeChrome() {
   // pack's manifest + compiled artefacts).
   const exportBtn = $('#export-btn');
   if (exportBtn) exportBtn.hidden = isHome || !focusedPackId();
+  // The header's cards follow the mode too: leaving the BUILD journey through
+  // its exit bar (goHome, or enterAnalyzeMode when a pack was open) once left
+  // the three build cards up, the last step highlighted and the tagline
+  // reading "Define · Compile · Verify" over the home hero, because only
+  // routeTo and openInDiscover repainted them. Every mode transition passes
+  // through here, so this is where the set is swapped (idempotent: the nav
+  // is rebuilt only when the set changes).
+  paintObservaActiveTab();
+  // The bar's controls just changed (a picker shown or hidden can wrap it
+  // onto another row): re-measure now, so what pins under it — the panels,
+  // the drawers, the sticky strips — is never a frame behind the observer.
+  syncContextBarHeight();
 }
 
 // RESET button — clears EVERYTHING (server uploads + client persistence)
@@ -1628,19 +1981,25 @@ function setupResetButton() {
       '  • reload the page to the empty home screen\n\n' +
       'Catalog-shipped example packs are unaffected (they live on disk).');
     if (!ok) return;
-    // 1. Stop persistence from racing the reload + writing stale state.
+    // 1. Drop server-side uploads FIRST. A refusal (a viewer, a signed-out
+    //    session) is shown and nothing is cleared — the browser's state
+    //    stays as it was. If the endpoint is unreachable we still reset
+    //    the client — the client-side reset is the higher-leverage part.
+    try {
+      const r = await fetch('/api/uploads', { method: 'DELETE', headers: { Accept: 'application/json', ...authHeaders() } });
+      if (!r.ok) {
+        const denial = deniedError(r.status, await r.text().catch(() => ''));
+        if (denial) { toast(`RESET refused — ${denial.message}`, 'error'); return; }
+      }
+    } catch (_) {}
+    // 2. Stop persistence from racing the reload + writing stale state.
     try { persistence.suspend(); } catch (_) {}
-    // 2. Wipe localStorage. Keep theme so the user's dark/light choice
+    // 3. Wipe localStorage. Keep theme so the user's dark/light choice
     //    survives — that's not session state, it's a preference.
     try {
       const theme = localStorage.getItem('studioTheme');
       localStorage.clear();
       if (theme) localStorage.setItem('studioTheme', theme);
-    } catch (_) {}
-    // 3. Drop server-side uploads. If the endpoint is unreachable we
-    //    still reload — the client-side reset is the higher-leverage part.
-    try {
-      await fetch('/api/uploads', { method: 'DELETE' });
     } catch (_) {}
     // 4. Reload. location.reload(true) is non-standard in modern Firefox;
     //    plain reload() picks up server changes since the navigation
@@ -1661,7 +2020,7 @@ function setupExportButton() {
     const env = focusedEnv();
     const qs = env ? `?env=${encodeURIComponent(env)}` : '';
     const a = document.createElement('a');
-    a.href = `/api/packs/${encodeURIComponent(id)}/export.zip${qs}`;
+    a.href = `/api/packs/${encodeURIComponent(id)}/export.zip${qs}${orgQuery(qs ? '&' : '?')}`;
     a.download = '';
     document.body.appendChild(a);
     a.click();
@@ -1669,13 +2028,663 @@ function setupExportButton() {
   };
 }
 
-// Logo click returns home.
+// Logo click returns home. The OBSERVA chrome's brand is an <a href="/">:
+// left to the browser a click reloads the page, and with mode 'build'
+// persisted the studio resumed the BUILD journey at the saved step instead
+// of landing on the hero — so the brand is bound here beside the legacy
+// header's h1 (the build draft stays in state.build; "Build a pack" resumes it).
 function setupHomeAffordance() {
-  const brand = document.querySelector('.hdr-brand h1');
-  if (!brand) return;
-  brand.style.cursor = 'pointer';
-  brand.title = 'Return home';
-  brand.onclick = () => goHome();
+  const legacy = document.querySelector('.hdr-brand h1');
+  if (legacy) {
+    legacy.style.cursor = 'pointer';
+    legacy.title = 'Return home';
+    legacy.onclick = () => goHome();
+  }
+  const brand = document.querySelector('.observa-brand');
+  if (brand) brand.addEventListener('click', (e) => { e.preventDefault(); goHome(); });
+}
+
+// ============================================================
+// The BUILD journey — Define · Compile · Verify (docs/BUILD_JOURNEY.md,
+// slice 2). The controller: state.build is the draft, the step modules
+// render it (build-define-view / build-compile-view / build-verify-view,
+// renderer-only), build-model.mjs computes what they show, build-api.mjs
+// talks to the six /api/library routes. Every change to the draft
+// re-instantiates through the API (debounced), because the PromQL grammar
+// check is Node-only; the result feeds the clause rail the three steps share.
+// ============================================================
+
+// Restore a persisted draft (inputs only) over the defaults — the pure part is the model's (a legacy step id
+// resumes on its current step, a pre-seed draft on COMPILE / VERIFY counts as seeded).
+function restoreBuildDraft(saved) {
+  state.build = restoreBuildDraftModel(saved, defaultBuildState(), BUILD_PERSIST_FIELDS);
+}
+
+export function enterBuildMode(step) {
+  state.mode = 'build';
+  state.activeCardKey = null;
+  // The step clamped to what is reachable now; a demoted step (VERIFY before the
+  // re-instantiation below has answered) is kept as wantedStep and honoured then.
+  Object.assign(state.build, enterBuildStep(state.build, step || state.build.step));
+  applyModeChrome();
+  paintObservaActiveTab();
+  renderTabs();
+  renderMainView();
+  // DEFINE shows what each tier requires and the rail the chosen tier's
+  // clauses; the draft needs a result if it is already complete (a reload
+  // lands here with inputs and no canonical).
+  for (const t of BUILD_TIERS) ensureBuildRequirements(t);
+  if (!state.build.result && buildDefineValid(state.build)) scheduleBuildInstantiate(0);
+  // VERIFY draws one artefact card per compile target.
+  if (!buildTargets) loadBuildTargets().then(t => { buildTargets = t; if (state.mode === 'build' && state.build.step === 'verify') rerenderBuild(); }).catch(() => { buildTargets = []; });
+  persistence.schedule();
+}
+let buildTargets = null;
+
+// Leave the journey without a hand-off: back to the pack that was open, or home.
+function exitBuildMode() {
+  if (state.mode !== 'build') return;
+  state.build.editor = null;   // the pop-up editor is UI state of the journey; the render that follows clears its host
+  if (state.selectedPackId) { state.mode = 'single'; state.view = 'layers'; enterAnalyzeMode(state.selectedPackId, state.selectedEnv); return; }
+  goHome();
+}
+
+// `todo` (a todo path) lands the step on that todo instead of its top — a card's
+// pin on COMPILE, whose todo is drawn on VERIFY only. `sheet` (a layer id) lands
+// it with that layer's sheet open; an open sheet otherwise stays open across
+// steps (one component on the three steps, its mode follows the step).
+function goToBuildStep(step, { todo = null, sheet } = {}) {
+  if (!BUILD_STEPS.includes(step)) return;
+  const reach = buildStepReachability(state.build);
+  if (!reach[step]) {
+    toast(step === 'compile' ? (buildDefineValid(state.build) ? 'Seed the pack first — "Seed the pack →" on Define opens Compile.' : 'Complete the definition first — a service name, a tier and at least one library entry — then seed the pack.')
+      : 'Generate a pack with at least one SLI first.', 'error');
+    return;
+  }
+  if (state.mode !== 'build') { enterBuildMode(step); return; }
+  state.build.step = step;
+  state.build.wantedStep = null;   // an explicit choice supersedes a step still waited for
+  state.build.preview = null;
+  if (sheet !== undefined) {
+    buildSheetEntering = !!sheet && sheet !== state.build.sheetOpen;   // reopening the same layer on another step is not an opening
+    state.build.sheetOpen = sheet;
+    if (sheet) buildFocusNext = '.build-sheet';
+  }
+  paintObservaActiveTab();
+  renderMainView();
+  focusAfterRender();
+  if (todo && revealTodo(document.querySelector(`.build-step [data-todo="${CSS.escape(todo)}"]`))) return;
+  if (!sheet) window.scrollTo({ top: 0 });
+}
+
+// A one-shot focus target for the render that follows: the sheet when it opens, the
+// slab head it belongs to when it closes (focus moves in and returns).
+let buildFocusNext = null;
+// A one-shot for the render that opens a layer's sheet: that render draws the sheet with
+// `is-entering` (the 200 ms entrance); every later re-render while it stays open — a
+// switch flipped, a param committed, a settled keystroke — rebuilds it without the class,
+// so the entrance never replays (measured: it slid in six times per SLI switch flip).
+let buildSheetEntering = false;
+function focusAfterRender() {
+  if (!buildFocusNext) return;
+  // A target inside the sheet that is not there (a product with no card yet) lands on the sheet itself.
+  // COMPILE draws a layer's slab only when it is selected: a slab edge that is not there lands on its layer row.
+  const head = /^\.build-slab\[data-layer="([^"]+)"\] \.build-slab-edge$/.exec(buildFocusNext);
+  const el = document.querySelector(buildFocusNext)
+    || (head ? document.querySelector(`.bres-layer-toggle[data-layer="${head[1]}"]`) : null)
+    || (buildFocusNext.startsWith('.build-sheet ') ? document.querySelector('.build-sheet') : null)
+    || focusFallbackSelectors(buildFocusNextKey).map(sel => document.querySelector(sel)).find(Boolean)
+    || null;
+  buildFocusNext = null;
+  buildFocusNextKey = null;
+  el?.focus({ preventScroll: true });
+  // A rolodex card landed on (a seed chip opened the sheet on its product) is centred in the snap track.
+  const card = el?.closest?.('[data-snap-card]');
+  const track = card?.closest('[data-scroll-key]');
+  if (card && track) track.scrollLeft = card.offsetLeft - (track.clientWidth - card.offsetWidth) / 2;
+}
+/** The selector of a focus key (`ov:<sli>:<field>`, `customise:<key>`, …) as the renderers stamp it. */
+const focusKeySelector = (key) => `[data-focus-key="${CSS.escape(key)}"]`;
+/** Nothing to re-render, but a field was left by Enter or Tab and nothing has the focus: give it back to the key. */
+function refocusBuild(focusKey) {
+  if (!focusKey || (document.activeElement && document.activeElement !== document.body)) return;
+  document.querySelector(focusKeySelector(focusKey))?.focus({ preventScroll: true });
+}
+
+// The pop-up SLI editor (docs/BUILD_JOURNEY.md "The editor") lives in a persistent host on <body>, outside the
+// re-rendered view, so a re-render of the stack, the sheet and the column under it never replaces the field being
+// typed in. syncBuildEditor draws or clears it after every render of the main view; the dialog itself is
+// re-rendered by build-editor-view.mjs with the focused field's text, focus and caret kept. `build.editor` (UI
+// state, never persisted) says which SLI it is over; the one-shots below carry the field to land on when it
+// opens and where focus returns when it closes.
+let buildEditorFocus = null;
+let buildEditorOpener = null;
+// The opener's raw focus key: kept so a renamed custom SLI's Edit button is re-keyed, and so a missing opener (the
+// SLI was removed) falls back through focusFallbackSelectors instead of dropping focus to <body>.
+let buildEditorOpenerKey = null;
+let buildFocusNextKey = null;
+/** Focus goes back where the editor was opened from; the key rides along for the fallback. */
+function returnFocusToOpener() {
+  buildFocusNext = editorReturnSelector();
+  buildFocusNextKey = buildEditorOpenerKey;
+  buildEditorOpener = null;
+  buildEditorOpenerKey = null;
+}
+function buildEditorHost() {
+  let el = document.getElementById('build-editor-host');
+  if (!el) { el = document.createElement('div'); el.id = 'build-editor-host'; document.body.appendChild(el); }
+  return el;
+}
+function syncBuildEditor() {
+  const el = document.getElementById('build-editor-host');
+  const b = state.build;
+  const library = buildLibraryCache();
+  if (state.mode !== 'build' || !b?.editor || !library) { if (el && el.innerHTML) el.innerHTML = ''; return; }
+  const model = buildEditorModel({ build: b, library, mode: editorModeFor(b.step) });
+  // The SLI it was over is gone (its entry deselected, a custom one removed): the editor closes.
+  if (!model) { b.editor = null; if (el) el.innerHTML = ''; return; }
+  renderBuildEditor(buildEditorHost(), model, buildHost, { focus: buildEditorFocus });
+  buildEditorFocus = null;
+}
+/** The selector focus returns to when the editor closes: the opener's focus key, else the L1 slab head. */
+const editorReturnSelector = () => buildEditorOpener || '.build-slab[data-layer="L1"] .build-slab-edge';
+
+// A tier's clauses, loaded once per tier; the view repaints when they land
+// (DEFINE shows what every tier requires, the rail the chosen tier's).
+function ensureBuildRequirements(tier) {
+  if (!tier || buildRequirementsCache()[tier]) return;
+  loadBuildRequirements(tier).then(() => { if (state.mode === 'build') rerenderBuild(); })
+    .catch(e => toast(`Could not load the ${tier} requirements: ${e.message}`, 'error'));
+}
+
+// Debounced re-instantiation. Stale answers are dropped by sequence, so a
+// fast second edit never paints an older pack over a newer one.
+let buildSeq = 0;
+let buildTimer = null;
+function scheduleBuildInstantiate(delay = 350) {
+  if (buildTimer) clearTimeout(buildTimer);
+  buildTimer = setTimeout(runBuildInstantiate, delay);
+}
+async function runBuildInstantiate() {
+  buildTimer = null;
+  const b = state.build;
+  if (!buildDefineValid(b)) {
+    b.editorDirty = false;
+    if (b.result || b.error || b.pending) { b.result = null; b.error = null; b.pending = false; rerenderBuild(); }
+    return;
+  }
+  // A draft restored from an older session may list an SLI of an entry no longer selected: drop those keys
+  // before sending (an SLI above the tier stays — the tier is a seed, not a gate); the body carries the
+  // overrides of the SLIs in the selection only (instantiateBody with the library).
+  const lib = buildLibraryCache();
+  if (lib) b.slis = retargetSlis(b, lib);
+  const seq = ++buildSeq;
+  b.pending = true;
+  paintBuildPending(true);
+  let res;
+  try { res = await instantiateBuild(b, { library: lib }); }
+  catch (e) { res = { ok: false, errors: [e.message] }; }
+  if (seq !== buildSeq || state.build !== b) return;
+  b.pending = false;
+  // The editor's last edit has an answer, so its status line reads it — unless a newer edit still waits on the
+  // debounce (buildTimer): this answer is to an older request and the status must keep reading applying…
+  b.editorDirty = editorDirtyAfterAnswer(b.editorDirty, !!buildTimer);
+  if (res?.ok) {
+    applyInstantiateOk(b, res);
+  } else {
+    // A usage error — a param value the engine refuses, every SLI unticked, a rejected customised value:
+    // the previous pack stays (the views mark it stale and show the error beside the field it names — on the
+    // editor's field when it is open, on the card's chip and in the compile note otherwise), so Validate stays
+    // reachable and nothing typed so far is lost. Dropping the result here once bounced the user from
+    // Validate to Generate, the one step without parameter inputs.
+    b.error = res?.errors || [res?.error || 'instantiation failed'];
+  }
+  // A step that is no longer reachable falls back — only when there is no
+  // pack to read: a kept pack keeps its step. A step waited for (a reload on
+  // VERIFY lands on COMPILE until the pack is back) is honoured now, once.
+  Object.assign(b, buildStepAfterInstantiate(b));
+  rerenderBuild();
+  persistence.schedule();
+}
+// A successful instantiate response onto the draft: the result the views read, the error cleared, the
+// preview (compiled from the previous canonical) dropped.
+function applyInstantiateOk(b, res) {
+  b.result = {
+    canonical: res.canonical, canonicalYaml: res.canonicalYaml || '', todos: res.todos || [], warnings: res.warnings || [],
+    summary: res.summary || null, conformance: res.conformance || null, schemaErrors: res.schemaErrors || [], provenance: res.provenance || null,
+    // The adapter's layered projection — what the stack draws and what Discover will show.
+    adapted: res.adapted || null,
+  };
+  b.error = null;
+  b.preview = null;
+}
+function paintBuildPending(on) {
+  document.querySelector('.build-summary')?.classList.toggle('is-pending', on);
+  document.querySelector('.build-shell')?.classList.toggle('is-pending', on);
+}
+
+// Re-render the build view keeping the focused input focused (a typed name
+// or an inline param re-instantiates and repaints while the caret is in it).
+// When the input is gone — a filled todo disappears with its inputs — focus
+// moves to the nearest thing on the same slab (or on the sheet) rather than
+// falling to <body>. The scroll offsets of the sheet body and the rolodex
+// track ([data-scroll-key]) survive too, so a switch flipped mid-list does
+// not throw the list back to its top; a focused rolodex card is re-centred.
+function rerenderBuild() {
+  if (state.mode !== 'build') return;
+  const el = document.activeElement;
+  // The render that opens the editor (or morphs it after 'Add to the pack') lands the focus in it — the generic
+  // restore below must not hand it back to the opener (measured: the Edit button took it back).
+  const key = buildEditorFocus ? null : (el?.dataset?.focusKey || null);
+  const sel = key && typeof el.selectionStart === 'number' ? [el.selectionStart, el.selectionEnd] : null;
+  const scrollY = window.scrollY;
+  const scrolls = Object.fromEntries([...document.querySelectorAll('[data-scroll-key]')].map(n => [n.dataset.scrollKey, [n.scrollTop, n.scrollLeft]]));
+  paintObservaActiveTab();
+  renderMainView();
+  for (const n of document.querySelectorAll('[data-scroll-key]')) {
+    const s = scrolls[n.dataset.scrollKey];
+    if (s) { n.scrollTop = s[0]; n.scrollLeft = s[1]; }
+  }
+  if (key) {
+    let next = document.querySelector(`[data-focus-key="${CSS.escape(key)}"]`);
+    let caret = sel;
+    if (!next) {
+      for (const s of focusFallbackSelectors(key)) { next = document.querySelector(s); if (next) break; }
+      caret = null;   // another input, or the slab's edge: the old caret means nothing there
+    }
+    if (next) {
+      next.focus({ preventScroll: true });
+      if (caret && typeof next.setSelectionRange === 'function') { try { next.setSelectionRange(caret[0], caret[1]); } catch { /* not a text input */ } }
+      const card = next.closest?.('[data-snap-card]');
+      const track = card?.closest('[data-scroll-key]');
+      if (card && track) track.scrollLeft = card.offsetLeft - (track.clientWidth - card.offsetWidth) / 2;
+    }
+  }
+  focusAfterRender();
+  window.scrollTo({ top: scrollY });
+}
+
+// The draft's instantiate body as runBuildInstantiate sends it (the overrides filtered to the selection).
+function instantiateBodyOf(b) { return buildInstantiateBody(b, buildLibraryCache()); }
+
+// The actions the step renderers call (they never import app.mjs).
+const buildActions = {
+  // Merge a patch into the draft; text fields re-instantiate after a pause,
+  // structural changes repaint at once.
+  update(patch, { rerender = false, reinstantiate = true, delay, focus = null } = {}) {
+    Object.assign(state.build, patch);
+    if (focus) buildFocusNext = focusKeySelector(focus);   // where the render that follows should land the focus (a face that opened: its first field)
+    if (rerender) rerenderBuild();
+    if (reinstantiate) scheduleBuildInstantiate(delay);
+    persistence.schedule();
+  },
+  setTier(tier) {
+    const b = state.build;
+    if (!BUILD_TIERS.includes(tier) || tier === b.tier) return;
+    const prev = b.tier;
+    b.tier = tier;
+    // The tier is a seed: an explicit SLI list keeps every SLI the user has (above the new tier too, with
+    // its overrides) and takes in what the new tier unlocks — the library's defaults refresh, the
+    // customisations stay (docs/BUILD_JOURNEY.md "The seed and the copies").
+    b.slis = retargetSlis(b, buildLibraryCache(), prev);
+    ensureBuildRequirements(tier);
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+  },
+  toggleEntry(id) {
+    const b = state.build;
+    const prevEntries = [...b.entries];
+    b.entries = b.entries.includes(id) ? b.entries.filter(x => x !== id) : [...b.entries, id];
+    // The other entries keep exactly the SLIs they had, re-keyed for the new composition; an entry that leaves
+    // takes its SLIs (and their overrides) with it, one that joins brings the tier's defaults of its own.
+    b.slis = retargetSlisForEntries({ build: b, library: buildLibraryCache() }, prevEntries);
+    b.overrides = retargetOverrides({ build: b, library: buildLibraryCache() }, prevEntries);
+    rerenderBuild();   // an open editor over an SLI of the entry that left closes here (syncBuildEditor finds no item)
+    scheduleBuildInstantiate(0);
+  },
+  setParam(key, value) {
+    const b = state.build;
+    const v = String(value ?? '').trim();
+    const params = { ...b.params };
+    if (v === '') delete params[key]; else params[key] = v;
+    if (JSON.stringify(params) === JSON.stringify(b.params)) return;
+    b.params = params;
+    scheduleBuildInstantiate(0);
+    persistence.schedule();
+  },
+  setSli(key, on, allKeys) {
+    const b = state.build;
+    const current = new Set(Array.isArray(b.slis) ? b.slis : allKeys);
+    if (on) current.add(key); else current.delete(key);
+    b.slis = [...current];
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+  },
+  setToggle(section, on) {
+    const b = state.build;
+    b.toggles = { ...b.toggles, [section]: !!on };
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+  },
+  // The rolodex's one action for an SLI of a product not yet selected: the entry joins
+  // the selection and the SLI is ticked, the rest of the selection kept (re-keyed for
+  // the new composition). Pure part: addSliSelection.
+  addSli(entryId, sliId) {
+    const b = state.build;
+    const prevEntries = [...b.entries];
+    const next = addSliSelection({ build: b, library: buildLibraryCache() }, entryId, sliId);
+    if (!next.changed) { if (next.reason) toast(`${sliId}: ${next.reason}`, 'error'); return; }
+    b.entries = next.entries;
+    b.slis = next.slis;
+    if (next.entries.length !== prevEntries.length) b.overrides = retargetOverrides({ build: b, library: buildLibraryCache() }, prevEntries);
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+  },
+  // DEFINE's primary action: the definition is confirmed once (seeded, persisted) and COMPILE opens; the
+  // column recedes into the seed card there. Idempotent: once seeded it is "Continue to Compile →".
+  seed() {
+    const b = state.build;
+    if (!buildDefineValid(b)) return;
+    b.seeded = true;
+    persistence.schedule();
+    goToBuildStep('compile');
+  },
+  // The copies (docs/BUILD_JOURNEY.md "The seed and the copies", "The editor"): an override is copy-on-write over
+  // the library's value for one field of one SLI, keyed by the id the library gives it (a rename — the `id`
+  // field — keeps that key, so the SLI stays attached to its library row); an empty value clears it. The engine
+  // validates on the re-instantiation and its `override <sli>.<field>: …` error lands under the editor's field.
+  // `live`: the editor commits on input — the draft changes, the dialog alone is redrawn (its status reads
+  // 'applying…'; the page under it follows when the pack answers) and the instantiate is debounced like a typed
+  // name, so a keystroke is never a request of its own. `focusKey`: the field to land the focus on after a full
+  // re-render when the commit found none focused (a field left by Enter or Tab has <body> active meanwhile).
+  setOverride(key, field, text, { focusKey = null, live = false } = {}) {
+    const b = state.build;
+    const value = fieldValueFor(field, text);
+    const current = { ...(Object.prototype.hasOwnProperty.call(b.overrides || {}, key) ? b.overrides[key] : {}) };
+    if (value === null) delete current[field]; else current[field] = value;
+    const overrides = { ...(b.overrides || {}) };
+    if (Object.keys(current).length) overrides[key] = current; else delete overrides[key];
+    if (JSON.stringify(overrides) === JSON.stringify(b.overrides || {})) { refocusBuild(focusKey); return false; }   // nothing changed: the editor's status stays as it was
+    b.overrides = overrides;
+    if (live) { b.editorDirty = true; syncBuildEditor(); scheduleBuildInstantiate(); persistence.schedule(); return true; }
+    if (focusKey) buildFocusNext = focusKeySelector(focusKey);
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+    persistence.schedule();
+    return true;
+  },
+  clearOverride(key, field) {
+    const b = state.build;
+    if (!Object.prototype.hasOwnProperty.call(b.overrides || {}, key)) return;
+    const current = { ...b.overrides[key] };
+    if (field) delete current[field];
+    const overrides = { ...b.overrides };
+    if (field && Object.keys(current).length) overrides[key] = current; else delete overrides[key];
+    b.overrides = overrides;
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+    persistence.schedule();
+  },
+  // A custom SLI is tried before it is kept: one instantiation with it added; the engine's usage errors
+  // (a 400) stay on the form, inline, and nothing changes in the pack; a success commits it and the pack.
+  async addCustom(def, draft = null) {
+    const b = state.build;
+    const custom = [...(b.custom || []), def];
+    const seq = ++buildSeq;
+    b.pending = true;
+    b.customDraftErrors = null;
+    paintBuildPending(true);
+    let res;
+    try { res = await instantiateBuild(b, { body: { ...instantiateBodyOf(b), custom } }); }
+    catch (e) { res = { ok: false, errors: [e.message] }; }
+    if (seq !== buildSeq || state.build !== b) return;
+    b.pending = false;
+    if (res?.ok) {
+      b.custom = custom;
+      b.customDraft = null;
+      b.customDraftErrors = null;
+      applyInstantiateOk(b, res);
+      // The editor stays open, now over the SLI it just added (edit mode): its status says what the pack made of it.
+      if (b.editor?.create) { b.editor = { key: def.id, custom: true }; buildEditorFocus = 'first'; }
+      persistence.schedule();
+    } else {
+      b.customDraft = draft || b.customDraft;
+      b.customDraftErrors = res?.errors || [res?.error || 'the custom SLI was refused'];
+    }
+    Object.assign(b, buildStepAfterInstantiate(b));
+    rerenderBuild();
+  },
+  // A custom SLI's field (`live` as setOverride's); its `id` renames it — the definition, the editor and its key follow.
+  // Both return whether anything changed (false: the editor's status line stays as it was).
+  updateCustom(id, field, text, { focusKey = null, live = false } = {}) {
+    const b = state.build;
+    const i = (b.custom || []).findIndex(d => d.id === id);
+    if (i < 0) return false;
+    const value = fieldValueFor(field, text);
+    const next = { ...b.custom[i] };
+    if (field === 'id') { if (value === null) return false; next.id = value; }
+    else if (value === null) delete next[field]; else next[field] = value;
+    if (JSON.stringify(next) === JSON.stringify(b.custom[i])) { refocusBuild(focusKey); return false; }
+    b.custom = b.custom.map((d, j) => (j === i ? next : d));
+    if (field === 'id' && b.editor?.custom && b.editor.key === id) b.editor = { ...b.editor, key: next.id };
+    // The Edit button that opened it carries the id in its focus key: follow the rename.
+    if (field === 'id' && buildEditorOpenerKey === `sugg-edit:${id}`) {
+      buildEditorOpenerKey = `sugg-edit:${next.id}`;
+      buildEditorOpener = focusKeySelector(buildEditorOpenerKey);
+    }
+    if (live) { b.editorDirty = true; syncBuildEditor(); scheduleBuildInstantiate(); persistence.schedule(); return true; }
+    if (focusKey) buildFocusNext = focusKeySelector(focusKey);
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+    persistence.schedule();
+    return true;
+  },
+  removeCustom(id) {
+    const b = state.build;
+    if (!(b.custom || []).some(d => d.id === id)) return;
+    b.custom = b.custom.filter(d => d.id !== id);
+    // The editor over the SLI just removed closes, focus back where it was opened from.
+    if (b.editor?.custom && b.editor.key === id) { b.editor = null; returnFocusToOpener(); }
+    rerenderBuild();
+    scheduleBuildInstantiate(0);
+    persistence.schedule();
+  },
+  // The pop-up editor (docs/BUILD_JOURNEY.md "The editor"): one at a time, on the draft (never persisted). It opens
+  // from an L1 card on the stack, a rolodex card's Edit or the '+ Custom SLI' card (`create`); `focus` names the
+  // field to land on (an SLO card lands on the objective); `opener` the focus key focus returns to on close.
+  openEditor({ key = null, custom = false, create = false, focus = null, opener = null } = {}) {
+    const b = state.build;
+    if (!create && !key) return;
+    b.editor = create ? { create: true } : { key, custom: !!custom };
+    buildEditorOpener = opener ? focusKeySelector(opener) : null;
+    buildEditorOpenerKey = opener || null;
+    // An existing SLI opens on the dialog's first field (Behavior leads; the id is a generated output now).
+    buildEditorFocus = focus || (create ? 'name' : 'first');
+    rerenderBuild();
+  },
+  closeEditor() {
+    const b = state.build;
+    if (!b.editor) return;
+    b.editor = null;
+    b.customDraftErrors = null;
+    returnFocusToOpener();
+    rerenderBuild();
+  },
+  // The layer sheet: one at a time, remembered on the draft (never persisted); focus
+  // moves into the sheet when it opens and returns to the slab head when it closes.
+  // `entry` (a seed-card chip): the L1 sheet lands on that product's first SLI card.
+  openSheet(layerId, { entry = null } = {}) {
+    const b = state.build;
+    if (!layerId) return;
+    buildSheetEntering = layerId !== b.sheetOpen;
+    b.sheetOpen = layerId;
+    buildFocusNext = entry ? `.build-sheet .build-rolo-card[data-entry="${CSS.escape(entry)}"] [data-edit-sli]` : '.build-sheet';
+    rerenderBuild();
+  },
+  closeSheet() {
+    const b = state.build;
+    if (!b.sheetOpen) return;
+    const layer = b.sheetOpen;
+    b.sheetOpen = null;
+    buildFocusNext = `.build-slab[data-layer="${CSS.escape(layer)}"] .build-slab-edge`;
+    rerenderBuild();
+  },
+  setStep: goToBuildStep,
+  exit: exitBuildMode,
+  // VERIFY: one compile target previewed from the generated canonical —
+  // nothing registered, nothing deployed.
+  async preview(target) {
+    const b = state.build;
+    if (!b.result) return;
+    b.preview = { target, label: target, filename: '', content: null, loading: true };
+    rerenderBuild();
+    const canonical = b.result.canonical;
+    let res;
+    try { res = await compileBuildPreview(canonical, target); }
+    catch (e) { res = { ok: false, error: e.message }; }
+    if (state.build !== b || b.result?.canonical !== canonical || b.preview?.target !== target) return;
+    b.preview = res?.ok
+      ? { target, label: res.label, filename: res.artifact.filename, contentType: res.contentType, content: res.artifact.content, warnings: res.artifact.warnings || [], profile: res.artifact.profile || null }
+      : { target, label: target, filename: '', content: null, error: res?.error || (res?.errors || []).join('; ') || 'compile failed' };
+    rerenderBuild();
+  },
+  async downloadArtifact(target) {
+    const b = state.build;
+    if (!b.result) return;
+    const p = b.preview?.target === target && b.preview.content != null ? b.preview : null;
+    if (p) { downloadText(p.filename, p.content, p.contentType); return; }
+    try {
+      const res = await compileBuildPreview(b.result.canonical, target);
+      if (!res?.ok) throw new Error(res?.error || 'compile failed');
+      downloadText(res.artifact.filename, res.artifact.content, res.contentType);
+    } catch (e) { toast(`Could not compile ${target}: ${e.message}`, 'error'); }
+  },
+  // The hand-off: register the pack the way an upload is registered and
+  // switch to the analysis journey with it selected — Discover, the layers
+  // view — saying how many placeholders remain (the todos travel with the
+  // pack in metadata.annotations; the summary keeps onPlaceholder honest).
+  async openInDiscover() {
+    const b = state.build;
+    if (!b.result) return;
+    const canonical = b.result.canonical;
+    let res;
+    try { res = await registerBuiltPack(canonical); }
+    catch (e) { res = { ok: false, errors: [e.message] }; }
+    if (!res?.ok) { toast(`Could not register the pack: ${(res?.errors || [res?.error || 'unknown error']).join('; ')}`, 'error'); return; }
+    const id = res.registered.id;
+    b.registeredId = id;
+    const left = placeholdersRemaining(b.result);
+    const onPh = res.summary?.onPlaceholder?.length || 0;
+    try { await loadCatalog(); } catch (e) { toast(`Registered, but the catalog did not refresh: ${e.message}`, 'error'); }
+    state.pack = res.adapted;
+    state.conformance = withPlaceholderPasses(res);
+    state.symbolTable = buildSymbolTable(res.adapted);
+    state.uploadedSource = res.registered.source;
+    state.mode = 'single';
+    state.view = 'layers';
+    state.layerFilter = 'all';
+    const annotatedEnv = canonical.metadata?.annotations?.['library.environment'] || null;
+    const env = annotatedEnv || defaultEnvFor(id);
+    // enterAnalyzeMode refetches the pack and its conformance report, which
+    // names the placeholder passes itself for a library-built pack.
+    enterAnalyzeMode(id, env);
+    paintObservaActiveTab();
+    // The hand-off says what the pack now is: the same kind of pack the check journey inspects.
+    // Never "every placeholder is filled" while a clause still rests on one or a todo is left.
+    const todosLeft = b.result.todos.length;
+    const gaps = [
+      left ? `${left} placeholder value${left === 1 ? '' : 's'}` : '',
+      onPh ? `${onPh} clause${onPh === 1 ? '' : 's'} passing only on a placeholder` : '',
+      todosLeft ? `${todosLeft} todo${todosLeft === 1 ? '' : 's'} to write or measure` : '',
+    ].filter(Boolean);
+    const opened = `Opened ${canonical.metadata.name} in Discover — the same kind of pack you inspect and improve there. `
+      + (gaps.length ? `It carries ${gaps.length > 1 ? `${gaps.slice(0, -1).join(', ')} and ${gaps[gaps.length - 1]}` : gaps[0]} as visible gaps.` : 'Every value is filled and no clause rests on a placeholder.');
+    toast(opened);
+    announce(opened);
+  },
+};
+
+// The host the Build renderers get (docs/UI_CONVENTIONS.md §3): the two stable hooks plus the journey's actions.
+const buildHost = { renderMainView, renderTabs, build: buildActions };
+
+// The build view — the pack is the axis (docs/BUILD_JOURNEY.md "The axis"): the
+// definition column on the left (service, tier, entries, the conformance summary,
+// sticky), the step with the stack as the main surface on the right, and, when a
+// layer is open, its sheet over the stack (one component on the three steps; its
+// mode follows the step: live on Define and Compile, read-only on Verify). The
+// pop-up editor is drawn after this, into its own host (syncBuildEditor).
+function renderBuildView(view) {
+  const b = state.build;
+  const shell = document.createElement('div');
+  shell.className = `build-shell build-step-${b.step}${b.pending ? ' is-pending' : ''}${b.sheetOpen ? ' has-sheet' : ''}`;
+  const exitBar = document.createElement('div');
+  exitBar.className = 'build-exit';
+  // Where leaving goes, said plainly: the open pack, or home (where the journeys are chosen).
+  exitBar.innerHTML = `<button type="button" class="build-exit-btn" title="Leave the Build journey — your definition is kept">← ${state.selectedPackId ? 'Back to the open pack' : 'Back to home'}</button>`;
+  exitBar.querySelector('button').addEventListener('click', exitBuildMode);
+  const def = document.createElement('aside');
+  def.className = 'build-def';
+  def.setAttribute('aria-label', 'Pack definition');
+  const main = document.createElement('div');
+  main.className = 'build-main';
+  shell.append(exitBar, def, main);
+  view.appendChild(shell);
+
+  const library = buildLibraryCache();
+  if (!library) {
+    main.innerHTML = '<div class="placeholder">Loading the library…</div>';
+    loadBuildLibrary().then(() => { if (state.mode === 'build') rerenderBuild(); })
+      .catch(e => { main.innerHTML = `<div class="error">Could not load the pack library: ${escapeHtml(e.message)}</div>`; });
+    return;
+  }
+  const requirements = buildRequirementsCache();
+  const clauses = requirements[b.tier] || [];
+  if (!clauses.length) ensureBuildRequirements(b.tier);
+  const host = buildHost;
+  const checklist = buildClauseChecklist(clauses, b.result?.summary || null);
+  const definition = buildDefinitionModel({ build: b, library, requirements, checklist });
+  renderBuildDefinition(def, definition, host);
+  // The status line goes to the one persistent live region (#build-status, outside this
+  // re-rendered tree) and only when it changed: the summary block itself is rebuilt on every
+  // re-render, so a live region on it announced nothing, or the whole block after each keystroke.
+  const status = buildStatusLine(definition.summary);
+  const live = document.getElementById('build-status');
+  if (live && status && live.textContent !== status) live.textContent = status;
+
+  const stepEl = document.createElement('div');
+  stepEl.className = 'build-step-host';
+  main.appendChild(stepEl);
+  let stack;
+  switch (b.step) {
+    case 'verify': {
+      const m = buildVerifyModel({ build: b, library, clauses, targets: buildTargets || [] });
+      stack = m.stack;
+      renderBuildVerify(stepEl, m, host);
+      break;
+    }
+    case 'compile': {
+      const m = buildCompileModel({ build: b, library, clauses });
+      stack = m.stack;
+      renderBuildCompile(stepEl, m, host);
+      break;
+    }
+    case 'define':
+    default: {
+      const m = buildDefineModel({ build: b, library, requirements });
+      stack = m.stack;
+      renderBuildDefine(stepEl, m, host);
+      break;
+    }
+  }
+  if (b.sheetOpen) {
+    // In the main column: the scrim dims the stack only (the definition column stays live),
+    // the panel itself is fixed to the viewport's right edge.
+    const sheetEl = document.createElement('div');
+    sheetEl.className = 'build-sheet-host';
+    main.appendChild(sheetEl);
+    renderBuildSheet(sheetEl, buildSheetModel({ layerId: b.sheetOpen, build: b, library, requirements: clauses, stack, checklist, mode: sheetModeFor(b.step), entering: buildSheetEntering }), host);
+  }
+  buildSheetEntering = false;   // the entrance plays once
 }
 
 // Hero / home screen — two big affordances. Mode-aware.
@@ -1784,7 +2793,7 @@ function renderDiscoverEmpty(view) {
         <button type="button" class="discover-load-card" data-load="upload">
           <span class="discover-load-glyph" aria-hidden="true">▤</span>
           <span class="discover-load-label">Upload a pack</span>
-          <span class="discover-load-sub">an existing canonical v1.2 YAML or JSON manifest</span>
+          <span class="discover-load-sub">an existing canonical v1.3 YAML or JSON manifest</span>
         </button>
       </div>
 
@@ -1839,22 +2848,28 @@ function renderHomeView() {
   // serif headline, single primary action (URL already filled in, just
   // hit Connect), capability surface presented as an executive summary
   // not a dashboard. Auth + manual paths still reachable but quiet.
-  const mcpUrl = (() => {
-    try { return localStorage.getItem('mcpUrl') || DEFAULT_MCP_URL; }
-    catch (_) { return DEFAULT_MCP_URL; }
-  })();
+  const mcpUrl = recallMcpUrl() || DEFAULT_MCP_URL;
 
+  // One question, two journeys. The signed-in gate opens on the user's
+  // services; the check branch is otherwise remembered from last time.
+  const services = serviceCatalogue({ ownOnly: true });
+  const checkOpen = (state.homeVariant === 'gate' && services.length > 0) || homeCheckRemembered();
   view.innerHTML = `
     <section class="home-hero">
-      <div class="home-hero-eyebrow">observogram · the observability compiler</div>
-      <h2 class="home-hero-title">Map your observability platform in seconds.</h2>
+      ${homeGreetingHtml()}
+      <h1 class="home-hero-title" id="home-title">What would you like to do?</h1>
       <p class="home-hero-lede">
-        Scan a service repo to capture what it <em>declares</em>, then draft
-        from a live OpenTelemetry MCP server to capture what the platform
-        <em>verifies</em> — Observogram diffs the two and shows you exactly where
-        they drift. Connect below to begin, or scan a repo from Discover.
+        Observogram compares what a service's repository <em>declares</em> with
+        what the live platform <em>verifies</em>, and helps you close the gap.
       </p>
 
+      ${homeChoiceHtml({ checkOpen })}
+      ${homeCheckHtml(services, checkOpen)}
+    </section>
+  `;
+  // The import sources live inside the check branch.
+  const sources = view.querySelector('#home-sources');
+  sources.innerHTML = `
       <div class="home-mcp-card">
         <label class="home-mcp-url-row">
           <span class="home-mcp-url-label">MCP endpoint</span>
@@ -1883,27 +2898,25 @@ function renderHomeView() {
         <div id="home-mcp-adopt-bar" class="home-mcp-adopt-bar" hidden>
           <button id="home-mcp-adopt" type="button" class="home-mcp-adopt-btn">
             <span class="home-mcp-adopt-title">Render the manifest</span>
-            <span class="home-mcp-adopt-sub" id="home-mcp-adopt-hint">canonical v1.2 · ready to compile and deploy</span>
+            <span class="home-mcp-adopt-sub" id="home-mcp-adopt-hint">canonical v1.3 · ready to compile and deploy</span>
           </button>
         </div>
       </div>
 
       <div class="home-alt">
-        <div class="home-alt-head"><span>or open a pack manually</span></div>
         <div class="home-alt-buttons">
           <button id="home-shortcut-upload" type="button" class="home-alt-btn">
             <span class="home-alt-key" aria-hidden="true">▤</span>
-            <span class="home-alt-label">Drop a YAML / JSON pack</span>
-            <span class="home-alt-sub">canonical v1.2 manifest</span>
+            <span class="home-alt-label">Upload a pack file</span>
+            <span class="home-alt-sub">a YAML or JSON manifest (spec v1.3) — or drop it anywhere on the page</span>
           </button>
           <button id="home-shortcut-crawl" type="button" class="home-alt-btn">
             <span class="home-alt-key" aria-hidden="true">↻</span>
-            <span class="home-alt-label">Scan a service repo</span>
-            <span class="home-alt-sub">walks Prom / OTel / Grafana / AM configs · or a GitHub URL</span>
+            <span class="home-alt-label">Scan a service repository</span>
+            <span class="home-alt-sub">reads its Prometheus, OpenTelemetry, Grafana and Alertmanager configuration — a folder or a GitHub URL</span>
           </button>
         </div>
       </div>
-    </section>
   `;
 
   $('#home-mcp-connect').onclick = () => doHomeMcpConnect();
@@ -1916,8 +2929,10 @@ function renderHomeView() {
     tog.setAttribute('aria-expanded', String(shown));
     if (shown) $('#home-mcp-auth')?.focus();
   };
-  $('#home-shortcut-upload').onclick = () => $('#upload-btn')?.click();
+  // The header (and its upload popover) is hidden on home: go straight to the file picker.
+  $('#home-shortcut-upload').onclick = () => $('#file-input')?.click();
   $('#home-shortcut-crawl').onclick  = () => $('#crawl-btn')?.click();
+  wireHomeChoice(view);
 }
 
 async function doHomeMcpConnect() {
@@ -1936,7 +2951,7 @@ async function doHomeMcpConnect() {
     statusEl.className = 'home-mcp-status is-error';
     return;
   }
-  try { localStorage.setItem('mcpUrl', url); } catch (_) {}
+  rememberMcpUrl(url).catch(() => {});
 
   goBtn.disabled = true;
   statusEl.textContent = 'contacting MCP…';
@@ -2270,7 +3285,7 @@ function renderMcpBadge(status) {
   ].filter(Boolean);
   const title = errored
     ? `MCP refresh had errors (${errorBits.join('; ')})`
-    : `Last refresh ${fmtRelative(status.refreshedAt)} from ${status.url || 'unknown'}`;
+    : `Last refresh ${fmtRelative(status.refreshedAt)} from ${status.url || status.origin || 'unknown'}`;
   btn.title = probesUnsupported
     ? `${title} · restricted tier: families ${probesUnsupported} not exposed`
     : title;
@@ -2280,12 +3295,12 @@ function renderMcpStatusBody(status) {
   const el = $('#mcp-status-body');
   if (!el) return;
   if (!status?.present) {
-    el.innerHTML = '<em>No production-live pack on disk yet.</em>';
+    el.innerHTML = '<em>No live pack for this org yet — refresh from an MCP server.</em>';
     return;
   }
   const rows = [
     ['refreshed',  status.refreshedAt ? `${fmtRelative(status.refreshedAt)} (${escapeHtml(status.refreshedAt)})` : '—'],
-    ['mcp url',    status.url || '—'],
+    ['mcp url',    status.url || status.origin || '—'],   // url: operators only
     ['tools called',  status.toolsCalled || '—'],
     ['tools failed',  status.toolsFailed || 'none'],
     ['probes failed', status.probesFailed || 'none'],
@@ -2305,8 +3320,8 @@ function openMcpPanel() {
   const urlInput = $('#mcp-url');
   // pre-fill: saved value > server-known value > empty
   if (!urlInput.value) {
-    const saved = (() => { try { return localStorage.getItem('mcpUrl'); } catch { return null; } })();
-    const liveUrl = state.mcpStatus?.url || null;
+    const saved = recallMcpUrl();                 // this user, this org
+    const liveUrl = state.mcpStatus?.url || null; // served to operators only
     urlInput.value = saved || liveUrl || '';
   }
   urlInput.focus();
@@ -2325,7 +3340,7 @@ async function refreshLive() {
     setRefreshStatus('mcp url required', 'error');
     return;
   }
-  try { localStorage.setItem('mcpUrl', url); } catch (_) {}
+  const dropped = await rememberMcpUrl(url).catch(() => []);
   const btn = $('#mcp-refresh-btn');
   btn.disabled = true;
   $('#mcp-btn').dataset.mcpState = 'active';
@@ -2363,7 +3378,13 @@ async function refreshLive() {
       $('#mcp-btn').dataset.mcpState = 'error';
       return;
     }
-    setRefreshStatus(`refreshed · ${fmtRelative(body.refreshedAt)}`, 'ok');
+    // Say what was not kept: the server's note (the live pack) and ours
+    // (the remembered URL).
+    setRefreshStatus([
+      `refreshed · ${fmtRelative(body.refreshedAt)}`,
+      body.note || null,
+      dropped.length ? `remembered without its ${dropped.map((n) => `"${n}"`).join(', ')} parameter${dropped.length === 1 ? '' : 's'} — put the token in the auth field` : null,
+    ].filter(Boolean).join(' · '), 'ok');
     // Replace live status from response annotations + refetch authoritative status
     state.mcpStatus = await loadLiveStatus();
     renderMcpBadge(state.mcpStatus);
@@ -2405,18 +3426,10 @@ function setRefreshStatus(msg, kind = '') {
 // loads into the active session just like any other pack.
 // ============================================================
 
-const CRAWL_SCAN_EXT = /\.(ya?ml|json|cjs|mjs|js|jsx|ts|tsx|py|go|java|kt|rs|cs)$/i;
-const CRAWL_IGNORE_DIRS = new Set([
-  '.git', '.github', '.gitlab', '.circleci',     // CI and version control
-  'node_modules', 'vendor', 'venv', '.venv',
-  'dist', 'build', 'out', 'target', '.cache',
-  '.next', '.nuxt', '.svelte-kit',
-  '.terraform', '.serverless',
-  '__pycache__', '.pytest_cache', '.mypy_cache',
-  '.idea', '.vscode',
-  'coverage',
-]);
-const CRAWL_MAX_FILE_BYTES = 5 * 1024 * 1024;
+// Which files a scan reads — the extensions, the size cap and the folders it
+// never enters — is the crawler library's rule (scanReadsPath, scanSkipsName),
+// the same one the CLI walker applies, so a folder gives the same pack
+// whether it is picked, dropped or scanned from a terminal.
 const CRAWL_PAYLOAD_SOFT_CAP = 15 * 1024 * 1024;  // leave 1 MB headroom under the 16 MB server cap
 
 // Lazy-loaded reference to the shared crawler library (also used by
@@ -2433,6 +3446,7 @@ const crawlState = {
   files: new Map(),       // relPath → string content (ALL staged files)
   classified: new Map(),  // relPath → kind (only files that match an artefact)
   skipped: [],            // [{relPath, reason}] for the "what was skipped" disclosure
+  ignored: 0,             // files under folders a scan never enters (node_modules, dist, dot-folders…): not read
   rootName: null,
   lastResult: null,
 };
@@ -2498,7 +3512,8 @@ function setupCrawlPanel() {
       ? [...dt.items].map(i => i.webkitGetAsEntry?.()).filter(Boolean)
       : [];
     if (entries.length) {
-      for (const ent of entries) await readEntry(ent, '');
+      const lib = await getCrawlerLib();
+      for (const ent of entries) await readEntry(ent, '', lib);
       finalizeStaging();
     } else if (dt?.files?.length) {
       stageFileList(dt.files, null);
@@ -2528,34 +3543,49 @@ function setupCrawlPanel() {
   }
 }
 
-// Read a single FileSystemEntry recursively into the staged map.
-async function readEntry(entry, prefix) {
+// Read a single FileSystemEntry recursively into the staged map. The dropped
+// folder itself (no prefix yet) is the user's choice whatever its name; below
+// it the scan rule decides.
+async function readEntry(entry, prefix, lib) {
   if (!entry) return;
   if (entry.isFile) {
-    if (!CRAWL_SCAN_EXT.test(entry.name)) return;
+    if (lib.scanSkipsName(entry.name) || !lib.SCAN_EXT.test(entry.name)) return;
     const file = await new Promise((res, rej) => entry.file(res, rej));
-    if (file.size > CRAWL_MAX_FILE_BYTES) return;
+    if (file.size > lib.SCAN_MAX_FILE_BYTES) return;
     const rel = (prefix ? `${prefix}/` : '') + entry.name;
     const text = await file.text();
     crawlState.files.set(rel, text);
     if (!crawlState.rootName) crawlState.rootName = entry.fullPath?.split('/')[1] || null;
   } else if (entry.isDirectory) {
-    if (CRAWL_IGNORE_DIRS.has(entry.name)) return;
+    if (prefix && lib.scanSkipsName(entry.name, { dir: true })) { crawlState.ignored++; return; }
     const reader = entry.createReader();
     let batch;
     do {
       batch = await new Promise((res, rej) => reader.readEntries(res, rej));
-      for (const ent of batch) await readEntry(ent, (prefix ? `${prefix}/` : '') + entry.name);
+      for (const ent of batch) await readEntry(ent, (prefix ? `${prefix}/` : '') + entry.name, lib);
     } while (batch.length > 0);
   }
 }
 
 async function stageFileList(fileList, _rootHint) {
-  for (const f of fileList) {
-    if (!CRAWL_SCAN_EXT.test(f.name)) continue;
-    if (f.size > CRAWL_MAX_FILE_BYTES) continue;
-    // webkitRelativePath populated when picked via webkitdirectory.
+  // Taken now: the caller clears its input as soon as this returns its promise.
+  const files = [...fileList];
+  const lib = await getCrawlerLib();
+  const list = $('#crawl-staged-files');
+  const total = files.length;
+  let seen = 0;
+  for (const f of files) {
+    // The folder picker lists every file under the folder — node_modules,
+    // build output, agent worktrees — so the scan rule is applied to the
+    // PATH before anything is read. webkitRelativePath is set when picked
+    // via webkitdirectory; its first segment is the picked folder's name.
     const rel = f.webkitRelativePath || f.name;
+    if (++seen % 2000 === 0 && list) list.innerHTML = `<span class="crawl-staged-empty">reading the folder… ${seen} of ${total} files</span>`;
+    if (!lib.scanReadsPath(rel, { skipRoot: !!f.webkitRelativePath })) {
+      if (lib.SCAN_EXT.test(f.name)) crawlState.ignored++;
+      continue;
+    }
+    if (f.size > lib.SCAN_MAX_FILE_BYTES) continue;
     crawlState.files.set(rel, await f.text());
     if (!crawlState.rootName && f.webkitRelativePath) {
       crawlState.rootName = f.webkitRelativePath.split('/')[0];
@@ -2637,6 +3667,7 @@ function renderStagedList(totalBytes) {
     </div>
     ${kindCounts ? `<div class="crawl-staged-kinds">${kindCounts}</div>` : ''}
     <div class="crawl-staged-sample">${sampleHtml}</div>
+    ${crawlState.ignored ? `<div class="crawl-staged-ignored">${crawlState.ignored} ${crawlState.ignored === 1 ? 'entry' : 'entries'} under dependency, build or hidden folders (node_modules, dist, .git, .claude …) ${crawlState.ignored === 1 ? 'was' : 'were'} not read.</div>` : ''}
     ${skipped ? `
       <details class="crawl-staged-skipped">
         <summary>${skipped} file${skipped === 1 ? '' : 's'} skipped — not an observability artefact</summary>
@@ -2653,6 +3684,7 @@ function resetCrawlStaged() {
   crawlState.files.clear();
   crawlState.classified.clear();
   crawlState.skipped = [];
+  crawlState.ignored = 0;
   crawlState.rootName = null;
   crawlState.lastResult = null;
   finalizeStaging();
@@ -2793,7 +3825,7 @@ function renderCrawlResult(out) {
   vBox.innerHTML = `
     <h4>schema validation</h4>
     ${out.validation.ok
-      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.2</div>`
+      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.3</div>`
       : `<div class="crawl-pill crawl-pill-err">✗ ${out.validation.errors.length} schema error(s)</div>
          <ul class="crawl-result-errs">${out.validation.errors.slice(0, 8).map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul>`}
   `;
@@ -2861,7 +3893,7 @@ function renderCrawlResult(out) {
 // kind ∈ {'repo','live'}. Returns true when it entered compare.
 async function adoptValidatedPack(res, sourceLabel, kind) {
   state.pack = res.adapted;
-  state.conformance = res.conformance;
+  state.conformance = withPlaceholderPasses(res);
   state.symbolTable = buildSymbolTable(res.adapted);
   state.uploadedSource = sourceLabel;
   state.activeCardKey = null;
@@ -2970,8 +4002,6 @@ const draftMcpState = {
 // per-row checkboxes, and POSTs to /api/packs/:id/deploy-bulk
 // with the selected items.
 // ============================================================
-
-const DEPLOY_PROFILES_KEY = 'deployProfiles.v1';
 
 const deployModalState = {
   manifest: null,        // [{id, type, name, group, flavor, artifact, dashboardId, scope}]
@@ -3150,24 +4180,23 @@ function updateDeployTargetSummary() {
   $('#deploy-target-summary').textContent = `Target: ${prof}  |  ${prod} ${ver}  |  ${url}`;
 }
 
-// ----- Profiles in localStorage -----
+// ----- Profiles (studio/api.mjs: per user, each URL in its safe form) -----
 
-function loadDeployProfiles() {
-  try { return JSON.parse(localStorage.getItem(DEPLOY_PROFILES_KEY) || '{}'); }
-  catch { return {}; }
+function setDeployStatus(msg, kind = '') {
+  const el = $('#deploy-modal-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
 }
-function saveDeployProfiles(profiles) {
-  try { localStorage.setItem(DEPLOY_PROFILES_KEY, JSON.stringify(profiles)); } catch (_) {}
-}
-function populateDeployProfileSelect() {
+async function populateDeployProfileSelect() {
   const sel = $('#deploy-target-profile');
-  const profiles = loadDeployProfiles();
+  const profiles = await loadDeployProfiles();
   sel.innerHTML = '<option value="">(no profile — fill manually)</option>'
     + Object.keys(profiles).sort().map(k => `<option value="${escapeHtml(k)}">${escapeHtml(k)}</option>`).join('');
 }
-function loadDeployProfile(name) {
+async function loadDeployProfile(name) {
   if (!name) return;
-  const p = loadDeployProfiles()[name];
+  const p = (await loadDeployProfiles())[name];
   if (!p) return;
   $('#deploy-target-url').value     = p.targetUrl || '';
   $('#deploy-target-folder').value  = p.folder || '';
@@ -3176,31 +4205,37 @@ function loadDeployProfile(name) {
   $('#deploy-target-mcp').value     = p.mcpUrl || '';
   updateDeployTargetSummary();
 }
-function saveDeployProfile() {
+async function saveDeployProfile() {
   const name = prompt('Profile name (e.g. "Prod Grafana"):', $('#deploy-target-profile').selectedOptions?.[0]?.value || '');
   if (!name) return;
-  const profiles = loadDeployProfiles();
-  profiles[name] = {
-    targetUrl: $('#deploy-target-url').value.trim(),
-    folder:    $('#deploy-target-folder').value.trim(),
-    product:   $('#deploy-target-product').value,
-    version:   $('#deploy-target-version').value,
-    mcpUrl:    $('#deploy-target-mcp').value.trim(),
-  };
-  saveDeployProfiles(profiles);
-  populateDeployProfileSelect();
+  let note;
+  try {
+    // Stored stripped (no credential parameter); the field keeps what was
+    // typed — this deploy still sends it.
+    note = await storeDeployProfile(name, {
+      targetUrl: $('#deploy-target-url').value.trim(),
+      folder:    $('#deploy-target-folder').value.trim(),
+      product:   $('#deploy-target-product').value,
+      version:   $('#deploy-target-version').value,
+      mcpUrl:    $('#deploy-target-mcp').value.trim(),
+    });
+  } catch (e) {
+    toast(`Profile not saved: ${e.message}`, 'error');
+    return;
+  }
+  await populateDeployProfileSelect();
   $('#deploy-target-profile').value = name;
   updateDeployTargetSummary();
+  // What was not kept, if anything, stays on the status line after the toast.
+  setDeployStatus(note || '', note ? 'ok' : '');
   toast(`Saved deploy profile: ${name}`);
 }
-function deleteDeployProfile() {
+async function deleteDeployProfile() {
   const name = $('#deploy-target-profile').value;
   if (!name) return;
   if (!confirm(`Delete deploy profile "${name}"?`)) return;
-  const profiles = loadDeployProfiles();
-  delete profiles[name];
-  saveDeployProfiles(profiles);
-  populateDeployProfileSelect();
+  await removeDeployProfile(name);
+  await populateDeployProfileSelect();
   toast(`Deleted profile: ${name}`);
 }
 
@@ -3246,6 +4281,13 @@ function renderDeployManifestTable() {
   const tbody = $('#deploy-manifest-tbody');
   const types = new Set([...document.querySelectorAll('#deploy-type-filters input:checked')].map(i => i.value));
   const rows = (deployModalState.manifest || []).filter(r => types.has(r.type));
+  // The deploy review (compile-view.mjs readDeployReview) says which selected
+  // rows a type filter hides — and so will not deploy — from these counts.
+  const hiddenSelected = {};
+  for (const r of deployModalState.manifest || []) {
+    if (!types.has(r.type) && deployModalState.selected.has(r.key)) hiddenSelected[r.type] = (hiddenSelected[r.type] || 0) + 1;
+  }
+  tbody.dataset.hiddenSelected = JSON.stringify(hiddenSelected);
   if (rows.length === 0) {
     tbody.innerHTML = '<tr><td colspan="5" class="placeholder">No artefacts of the selected types in this pack.</td></tr>';
     updateManifestCounter(0, 0);
@@ -3302,15 +4344,13 @@ async function doDeployBulk() {
   const folder = $('#deploy-target-folder').value.trim();
   const product = $('#deploy-target-product').value;
   const version = $('#deploy-target-version').value;
-  const statusEl = $('#deploy-modal-status');
-  const setStatus = (msg, kind) => {
-    statusEl.textContent = msg;
-    statusEl.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
-  };
+  const setStatus = setDeployStatus;
   if (!url) { setStatus('mcp url required', 'error'); return; }
-  if (deployModalState.selected.size === 0) { setStatus('select at least one artefact', 'error'); return; }
-
-  const items = [...deployModalState.selected].map(k => {
+  // Deploy what the review shows: a selected row the type filter hides is
+  // not counted, not reviewed — and so not deployed.
+  const types = new Set([...document.querySelectorAll('#deploy-type-filters input:checked')].map(i => i.value));
+  const visible = new Set((deployModalState.manifest || []).filter(r => types.has(r.type)).map(r => r.key));
+  const items = [...deployModalState.selected].filter(k => visible.has(k)).map(k => {
     const row = (deployModalState.manifest || []).find(r => r.key === k);
     return row && {
       group:       row.group,
@@ -3324,6 +4364,7 @@ async function doDeployBulk() {
       id:          row.id,
     };
   }).filter(Boolean);
+  if (items.length === 0) { setStatus('select at least one artefact', 'error'); return; }
 
   deployModalState.inflight = true;
   const goBtn = $('#deploy-modal-go');
@@ -3350,10 +4391,12 @@ async function doDeployBulk() {
       return;
     }
     const body = JSON.parse(raw);
-    if (body.summary) {
-      const { ok, failed, total } = body.summary;
-      setStatus(`${ok}/${total} deployed in ${body.tookMs}ms · ${failed} failed`, failed === 0 ? 'ok' : 'error');
-    }
+    // A refusal (a viewer's 403, an unknown pack, a bad URL) is no result:
+    // the status line says the server's text; no result table is drawn.
+    const refusal = deployRefusal(r.status, body);
+    if (refusal) throw refusal;
+    const { ok, failed, total } = body.summary;
+    setStatus(`${ok}/${total} deployed in ${body.tookMs}ms · ${failed} failed`, failed === 0 ? 'ok' : 'error');
     renderDeployBulkResult(body);
     // The attempt is in the audit log now (ok or not) — refresh the trail.
     loadDeployHistory(deployModalState.packId);
@@ -3593,7 +4636,7 @@ function setupDraftFromMcpPanel() {
       // panel uses, so the SRE doesn't have to retype.
       const urlInput = $('#draft-mcp-url');
       if (!urlInput.value) {
-        try { urlInput.value = localStorage.getItem('mcpUrl') || ''; } catch (_) {}
+        urlInput.value = recallMcpUrl() || '';
       }
       urlInput.focus();
     }
@@ -3622,7 +4665,7 @@ async function doDraftFromMcp() {
     statusEl.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
   };
   if (!url) { setStatus('mcp url required', 'error'); return; }
-  try { localStorage.setItem('mcpUrl', url); } catch (_) {}
+  rememberMcpUrl(url).catch(() => {});
 
   const goBtn = $('#draft-mcp-go-btn');
   goBtn.disabled = true;
@@ -3779,7 +4822,7 @@ function renderDraftMcpResult(out) {
   $('#draft-mcp-result-validation').innerHTML = `
     <h4>schema validation</h4>
     ${v.ok
-      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.2</div>`
+      ? `<div class="crawl-pill crawl-pill-ok">✓ valid v1.3</div>`
       : `<div class="crawl-pill crawl-pill-err">✗ ${v.errors.length} schema error(s)</div>
          <ul class="crawl-result-errs">${v.errors.slice(0, 8).map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul>`}
   `;
@@ -3853,16 +4896,35 @@ function renderDraftMcpResult(out) {
     ? row(`${plural(rulesUnhealthy.length, 'rule')} unhealthy`, rulesUnhealthy.join(', '))
     : '';
   const stackBlock = renderStackSelfMetricsBlock(out.summary, row);
+  // Backends are the products with evidence of running here. What the MCP
+  // can merely speak to is said apart, so "supported" never reads as
+  // "deployed".
+  const supportedOnly = d.supportedOnly || [];
+  const supportedOnlyRow = supportedOnly.length
+    ? row('supported by the MCP, not seen running', `${supportedOnly.length} — ${supportedOnly.slice(0, 8).join(', ')}${supportedOnly.length > 8 ? ', …' : ''}`, true)
+    : '';
+  const alertRulesSplitRow = probesS.has('alert_rules') && (d.alertRulesLinked || d.alertRulesOperational)
+    ? row('… guarding an SLO · operational', `${d.alertRulesLinked || 0} · ${d.alertRulesOperational || 0}`, true)
+    : '';
+  // What this fetch had no way to look at: a comparison reports these
+  // families as "not checked", never as missing.
+  const unobservedFamilies = Object.keys(d.unobserved || {});
+  const unobservedNote = unobservedFamilies.length
+    ? `<div class="crawl-evidence-note">Not observable through this MCP: ${escapeHtml(unobservedFamilies.map(k => k.replace(/_/g, ' ')).join(', '))}. A comparison shows what another pack declares there as <em>not checked</em>, not as missing.</div>`
+    : '';
   $('#draft-mcp-result-summary').innerHTML = `
     <h4>what the MCP attested</h4>
     <table class="crawl-summary-table">
       ${row('services', (d.servicesDiscovered || []).length)}
       ${row('backends', d.backends)}
+      ${supportedOnlyRow}
       ${row('active anomalies', d.activeAnomalies)}
       ${probeRow('recording rules', 'recording_rules', d.recordingRules)}
       ${recordingEvidenceRow}
       ${probeRow('alert rules',     'alert_rules',     d.alertRules)}
+      ${alertRulesSplitRow}
       ${alertEvidenceRow}
+      ${probeRow('alerting routes', 'alerting_routes', d.alertingRoutes)}
       ${probeRow('dashboards',      'dashboards',      d.dashboards)}
       ${probeRow('scrape jobs',     'scrape_configs',  (d.scrapeJobs || []).length)}
       ${scrapeDownRow}
@@ -3870,6 +4932,7 @@ function renderDraftMcpResult(out) {
       ${probeRow('metric names',    'metric_names',    d.metricNamesCount)}
     </table>
     ${stackBlock}
+    ${unobservedNote}
     ${alertsFiringCount > 0 || recordingFallbackCount > 0 ? `
       <div class="crawl-evidence-note">
         Rows in italic = fallback evidence. The standard rule endpoints came back empty,
@@ -3952,30 +5015,30 @@ function setupMcpPanel() {
 // ---------- theme ----------
 // ---------- about / version ----------
 //
-// /healthz carries { version, build, node } (server/version.mjs). Fetched
-// once at boot, displayed in the Advanced menu foot, the header subtitle,
-// and the About modal — "what exactly is running?" should never need a
-// terminal.
-let serverVersion = null;
+// Which build is this studio? GET /api/version (server/build-info.mjs)
+// names the commit the server was started from — 'v0.4.0 · build 975 ·
+// 9c4f827 · develop'; /healthz adds the spec version and the node runtime
+// for the About modal. studio/build-label.mjs owns the pieces
+// (docs/UI_CONVENTIONS.md §2: loaders, a pure model, renderers); this is
+// only their composition, run once at boot, fire-and-forget: the footer
+// span, the Advanced menu's About entry, the header subtitle and the brand
+// tooltip get painted — "what exactly is running?" should never need a
+// terminal. When the server does not answer, the footer keeps its
+// package.json fallback.
+let serverVersion = null;   // /healthz: { version, build, node, specVersion }
+let serverBuild = null;     // buildLabelModel(/api/version)
 
 async function loadVersion() {
-  try {
-    const r = await fetch('/healthz');
-    if (r.ok) serverVersion = await r.json();
-  } catch (_) { /* offline boot path already handles the error */ }
-  const label = serverVersion ? `v${serverVersion.version} · build ${serverVersion.build}` : null;
-  if (!label) return;
-  const sub = document.getElementById('observa-about-sub');
-  if (sub) sub.textContent = label;
-  const hdrSub = document.querySelector('.hdr-sub');
-  if (hdrSub && !hdrSub.textContent.includes('build')) hdrSub.textContent += ` · ${label}`;
-  const brand = document.querySelector('.observa-brand');
-  if (brand) brand.title = `Observogram ${label}`;
+  const [info, health] = await Promise.all([loadBuildInfo(), loadHealth()]);
+  serverVersion = health;
+  serverBuild = buildLabelModel(info);
+  renderVersionChrome(document, serverBuild);
 }
 
 function openAboutModal() {
   document.getElementById('about-modal')?.remove();
   const v = serverVersion || {};
+  const b = serverBuild;
   const row = (k, val) => val ? `<div class="about-row"><span class="about-key">${k}</span><span class="about-val">${escapeHtml(String(val))}</span></div>` : '';
   const overlay = document.createElement('div');
   overlay.id = 'about-modal';
@@ -3984,8 +5047,12 @@ function openAboutModal() {
     <div class="about-card" role="dialog" aria-modal="true" aria-label="About Observogram">
       <div class="about-brand">Observo<i>gram</i></div>
       <div class="about-tagline">the observability compiler</div>
-      <div class="about-version">${escapeHtml(v.version ? `v${v.version}` : 'version unknown')}<span class="about-build">${escapeHtml(v.build ? ` · build ${v.build}` : '')}</span></div>
+      <div class="about-version">${escapeHtml(b ? `v${b.version ?? '?'}` : v.version ? `v${v.version}` : 'version unknown')}<span class="about-build">${escapeHtml(b ? ` · build ${b.build ?? 'unknown'}` : v.build ? ` · build ${v.build}` : '')}</span></div>
       <div class="about-rows">
+        ${row('commit', b?.commit ? [b.commit, b.branch, b.dirty ? 'dirty' : null].filter(Boolean).join(' · ') : null)}
+        ${row('committed', b?.date)}
+        ${row('source', b?.source && b.source !== 'unknown' ? b.source : null)}
+        ${row('history', b?.shallow ? 'shallow clone — no commit count' : null)}
         ${row('spec', v.specVersion ? `ObservabilityPack v${v.specVersion}` : null)}
         ${row('server', v.node ? `node ${v.node}` : null)}
         ${row('identity', state.identity?.mode || 'local (no sign-in)')}
@@ -4010,19 +5077,28 @@ async function loadIdentity() {
     const r = await fetch('/auth/me');
     if (!r.ok) return null;
     state.identity = await r.json();
+    setSignedInLogin(state.identity?.authenticated ? state.identity.user?.login : null);
     return state.identity;
   } catch (_) { return null; }
 }
 
 // Stage 2 tenancy: pick the active org from the session's memberships
-// (/auth/me carries them when orgs.json is armed) — the persisted choice
-// when still valid, the first membership otherwise. Outside tenancy mode
-// this is a no-op and no org header is ever sent.
+// (/auth/me carries them in every identity posture) — the persisted choice
+// when still valid, the first membership otherwise. Without memberships
+// (the open posture) no org header is sent: the server runs the request in
+// the default org. The header is sent whatever the ORG chip shows.
 function resolveActiveOrg() {
   const orgs = state.identity?.orgs || [];
   if (!orgs.length) { setActiveOrg(null); return; }
   const saved = savedOrg();
   setActiveOrg((orgs.find(o => o.id === saved) || orgs[0]).id);
+}
+
+// The header's `api` link (studio/index.html #api-link) names the active
+// org in its query: a static href cannot know it.
+function syncApiLink() {
+  const link = document.getElementById('api-link');
+  if (link) link.href = `/api/packs${orgQuery()}`;
 }
 
 // Identity chip — only renders when the server runs in an identity
@@ -4033,16 +5109,18 @@ function setupIdentityChip() {
   const anchor = $('#theme-toggle');
   if (!anchor || document.getElementById('hdr-user')) return;
 
-  // Org indicator — a switcher when the user belongs to several orgs, a
-  // static label for exactly one. Switching reloads: every view is a
+  // Org indicator (orgChipModel) — a switcher when the user belongs to
+  // several orgs, a static label for one org that is not the default one,
+  // nothing for the default org alone. Switching reloads: every view is a
   // projection of the active org's workspace, so a clean re-boot is the
   // honest refresh.
   const orgs = me.orgs || [];
-  if (orgs.length && !document.getElementById('hdr-org')) {
+  const orgChip = orgChipModel(orgs, getActiveOrg());
+  if (orgChip.kind !== 'none' && !document.getElementById('hdr-org')) {
     const wrap = document.createElement('span');
     wrap.id = 'hdr-org';
     wrap.className = 'hdr-org';
-    if (orgs.length > 1) {
+    if (orgChip.kind === 'switcher') {
       wrap.innerHTML = `<span class="ctrl-key">ORG</span>`;
       const sel = document.createElement('select');
       sel.setAttribute('aria-label', 'Active organisation');
@@ -4059,7 +5137,7 @@ function setupIdentityChip() {
       });
       wrap.appendChild(sel);
     } else {
-      const active = orgs[0];
+      const active = orgChip.active;
       wrap.innerHTML = `<span class="ctrl-key">ORG</span><span class="hdr-org-name">${escapeHtml(active.name || active.id)}</span>`;
       wrap.title = `organisation: ${active.id}`;
     }
@@ -4067,7 +5145,7 @@ function setupIdentityChip() {
   }
 
   // Account menu: who you are, change password (stand-alone mode — OIDC
-  // passwords belong to the IdP), sign out.
+  // passwords belong to the IdP), sign out my other sessions, sign out.
   const chip = document.createElement('span');
   chip.id = 'hdr-user';
   chip.className = 'hdr-user';
@@ -4078,8 +5156,9 @@ function setupIdentityChip() {
     <button type="button" class="ctrl-btn hdr-user-btn" aria-expanded="false"
             title="signed in as ${escapeHtml(me.email || me.sub)} (${escapeHtml(me.mode)})">⏣ ${escapeHtml(me.name || me.email || me.sub)} ▾</button>
     <div class="hdr-user-menu" hidden>
-      <div class="hdr-user-menu-id">signed in as <strong>${escapeHtml(me.email || me.sub)}</strong><span class="hdr-user-menu-mode">${escapeHtml(me.mode)}</span></div>
+      <div class="hdr-user-menu-id" aria-live="polite">signed in as <strong>${escapeHtml(me.email || me.sub)}</strong><span class="hdr-user-menu-mode">${escapeHtml(me.mode)}</span></div>
       ${me.mode === 'local-users' ? '<a class="hdr-user-menu-item" href="/auth/change-password">change password…</a>' : ''}
+      <button type="button" class="hdr-user-menu-item hdr-user-others">sign out my other sessions</button>
       <button type="button" class="hdr-user-menu-item hdr-user-out">sign out</button>
     </div>
   `;
@@ -4089,7 +5168,26 @@ function setupIdentityChip() {
   menuBtn.addEventListener('click', () => setOpen(menu.hidden));
   document.addEventListener('click', (e) => { if (!chip.contains(e.target)) setOpen(false); });
   chip.addEventListener('keydown', (e) => { if (e.key === 'Escape') { setOpen(false); menuBtn.focus(); } });
+  // Every other session of this user ends at its next request; this
+  // browser's cookie comes back re-issued (Set-Cookie). The id line says
+  // what happened — or the server's refusal, as it words it.
+  const others = chip.querySelector('.hdr-user-others');
+  others.addEventListener('click', async () => {
+    others.disabled = true;
+    let status = 0;
+    let body;
+    try {
+      const r = await fetch('/auth/signout-others', { method: 'POST', headers: { Accept: 'application/json', ...authHeaders() } });
+      status = r.status;
+      body = await r.json().catch(() => null);
+    } catch (e) {
+      body = { error: e?.message || String(e) };
+    }
+    chip.querySelector('.hdr-user-menu-id').textContent = signOutOthersText(status, body);
+    others.disabled = false;
+  });
   chip.querySelector('.hdr-user-out').addEventListener('click', async () => {
+    forgetMcpUrls(me.user?.login);   // a shared browser keeps no MCP URL or deploy profile of this user
     await fetch('/auth/logout', { method: 'POST', headers: { ...authHeaders() } }).catch(() => {});
     window.location.assign('/auth/login');
   });

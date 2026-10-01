@@ -41,11 +41,30 @@ import {
   DELTA_BADNESS,
 } from './diagnostic-grade.mjs';
 import { LAYERS_FOR_DIFF } from './compare-catalog.mjs';
+import { LAYER_NAMES } from './constants.mjs';
 
-export const VERDICT_LAYER_NAMES = {
-  L1: 'Contract', L2: 'Telemetry', L2X: 'Extended', L3: 'Insight',
-  L4: 'Action', L5: 'Validation', GOV: 'Governance',
-};
+export const VERDICT_LAYER_NAMES = LAYER_NAMES;
+
+// ---------- plain words (docs/UX_SCREEN_GRAMMAR.md) ----------
+
+// In gap mode Pack B is the selected baseline and Pack A the pack being
+// assessed. A is "the live pack" only when it carries live-draft
+// provenance (mcp.url) or a live-like id — never claimed without it;
+// otherwise it is "the current pack".
+function assessedPackNoun(pack) {
+  if (!pack) return 'current pack';
+  if (partialLiveEvidence(pack).isLiveDraft) return 'live pack';
+  return /(^|[-_])(live|deployed|runtime)([-_]|$)/i.test(String(pack.id || '')) ? 'live pack' : 'current pack';
+}
+
+// The A-only phrase each built model was labelled with, so the partial-
+// evidence banner quotes the same words (no new keys on the model).
+const A_ONLY_PHRASE = new WeakMap();
+
+function aOnlyPhrase(model) {
+  if (model?.mode === 'drift') return 'declared, not live';
+  return A_ONLY_PHRASE.get(model) || 'additional in current pack';
+}
 
 // ---------- the normalized model ----------
 
@@ -70,7 +89,7 @@ export function buildVerdictModel({ pack, packB, diff, compareBId, catalogEntry 
     || packB?.meta?.name || packB?.metadata?.name || packB?.id || 'Pack B';
   const lensed = (entry, side) => !passesLens || passesLens(entry, side);
 
-  const totals = { aligned: 0, drifted: 0, onlyInA: 0, onlyInB: 0, scaffold: 0, outOfScope: 0 };
+  const totals = { aligned: 0, drifted: 0, onlyInA: 0, onlyInB: 0, scaffold: 0, outOfScope: 0, notObserved: 0 };
   const layers = [];
   const items = [];
   const driftedEntries = [];
@@ -98,6 +117,9 @@ export function buildVerdictModel({ pack, packB, diff, compareBId, catalogEntry 
       totals.onlyInB += onlyInB.length;
       totals.scaffold += scaffold.length;
       totals.outOfScope += outOfScope.length;
+      // What one pack holds in a family the other could not observe
+      // (diffPacks `notObserved`): unchecked, so neither side's count.
+      totals.notObserved += (bucket.notObserved || []).length;
       driftedEntries.push(...drifted);
 
       if (aligned.length || drifted.length || onlyInA.length || onlyInB.length || outOfScope.length) {
@@ -146,24 +168,26 @@ export function buildVerdictModel({ pack, packB, diff, compareBId, catalogEntry 
   });
 
   // Biggest-gap attribution: which badness bucket costs the most units.
+  const aOnly = mode === 'drift' ? 'declared, not live' : `additional in ${assessedPackNoun(pack)}`;
   const buckets = [
-    { kind: 'onlyInA', units: weighted.onlyInAUnits, n: totals.onlyInA,
-      label: mode === 'drift' ? 'declared, not live' : 'beyond target' },
+    { kind: 'onlyInA', units: weighted.onlyInAUnits, n: totals.onlyInA, label: aOnly },
     { kind: 'drifted', units: weighted.driftedUnits, n: totals.drifted, label: 'drifted' },
     { kind: 'onlyInB', units: weighted.onlyInBUnits, n: totals.onlyInB,
-      label: mode === 'drift' ? 'live, not declared' : 'missing vs target' },
+      label: mode === 'drift' ? 'live, not declared' : 'missing vs baseline' },
   ].sort((x, y) => y.units - x.units);
   const biggestGap = buckets[0].units > 0 ? buckets[0] : null;
 
   const deployableSet = deploySelectionFromItems(items);
 
-  return {
+  const model = {
     haveB, posture, diff: resolvedDiff, diagnostic, mode, bName,
     totals, layers, items, weighted, biggestGap, deployableSet,
     liveEvidence: partialLiveEvidence(packB),
     overallPct: diagnostic.overall.total === 0 ? 0
       : Math.round((diagnostic.overall.passed / diagnostic.overall.total) * 100),
   };
+  A_ONLY_PHRASE.set(model, aOnly);
+  return model;
 }
 
 // Deploy selection over triage items (optionally restricted to a basket
@@ -376,7 +400,7 @@ export function fmtUnits(n) {
 export function partialEvidenceBanner(model) {
   const ev = model.liveEvidence;
   if (!ev?.partial) return '';
-  const aLabel = model.mode === 'drift' ? 'declared, not live' : 'beyond target';
+  const aLabel = aOnlyPhrase(model);
   const ok = ev.attempted.filter(p => !ev.failed.includes(p));
   return `
     <div class="drift-partial-banner" title="Probe results recorded by the MCP fetcher in the pack's mcp.probesFailed annotation.${ok.length ? ` Answered: ${escapeHtml(ok.join(', '))}.` : ''}">
@@ -419,10 +443,15 @@ export function buildEvidenceRows(diagnostic) {
 export function scaffoldOosNotes(model) {
   const bits = [];
   if (model.totals.scaffold) {
-    bits.push(`<p class="drift-oos-note">${model.totals.scaffold} schema-required scaffold artefact${model.totals.scaffold === 1 ? '' : 's'} had no source evidence in the selected environment. Shown in the pack, excluded from drift badness.</p>`);
+    const n = model.totals.scaffold;
+    bits.push(`<p class="drift-oos-note">Template value needs completion: ${n} schema-required artefact${n === 1 ? '' : 's'} (scaffold) had no source evidence in the selected environment. Shown in the pack, excluded from drift badness.</p>`);
   }
   if (model.totals.outOfScope) {
     bits.push(`<p class="drift-oos-note">${model.totals.outOfScope} live artefact${model.totals.outOfScope === 1 ? '' : 's'} out of declared scope — members of families <strong>${escapeHtml(model.bName)}</strong> runs but your pack doesn't declare (the rest of the platform inventory). Shown for context, not counted as drift.</p>`);
+  }
+  if (model.totals.notObserved) {
+    const n = model.totals.notObserved;
+    bits.push(`<p class="drift-oos-note">Not checked: ${n} artefact${n === 1 ? '' : 's'} in ${n === 1 ? 'a family' : 'families'} the other pack had no way to observe (no tool for it, or its probe failed). Neither missing nor matched — excluded from drift badness. The Compare screen lists each with the reason.</p>`);
   }
   return bits.join('');
 }
@@ -445,16 +474,17 @@ export function operabilityNote(model) {
 
 // Fix-kind chip vocabulary shared by the triage surfaces.
 export function fixChip(fix) {
+  // Plain words on the chip; the formal term rides along as the tooltip.
   const map = {
     deploy: ['deploy', 'DEPLOY'],
-    retrofeed: ['retrofeed', 'RETROFEED'],
+    retrofeed: ['retrofeed', 'UPDATE REPOSITORY FROM LIVE', 'Retrofeed: copy the live signal into the repository pack as a patch you review'],
     adopt: ['retrofeed', 'ADOPT'],
     reconcile: ['reconcile', 'FIELD DECISION'],
     manual: ['manual', 'MANUAL'],
-    'beyond-target': ['manual', 'BEYOND TARGET'],
+    'beyond-target': ['manual', 'ADDITIONAL VS BASELINE', 'Present in this pack but not in the selected baseline'],
   };
-  const [cls, text] = map[fix] || ['manual', String(fix).toUpperCase()];
-  return `<span class="mc-fix is-${cls}">${text}</span>`;
+  const [cls, text, tip] = map[fix] || ['manual', String(fix).toUpperCase()];
+  return `<span class="mc-fix is-${cls}"${tip ? ` title="${escapeHtml(tip)}"` : ''}>${text}</span>`;
 }
 
 export function badnessClassChip(item) {

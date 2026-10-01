@@ -8,6 +8,7 @@
 import { state } from './state.mjs';
 import { focusedPack, focusedPackId, focusedEnv, effectiveFocus } from './focus.mjs';
 import { escapeHtml } from './util.mjs';
+import { authHeaders } from './api.mjs';
 
 const OTLP_SIGNALS = ['traces', 'metrics', 'logs', 'profiles'];
 const OTLP_EXPORTER_KINDS = new Set(['otlp', 'otlphttp', 'otlp-grpc', 'otlp-http']);
@@ -49,7 +50,7 @@ export function renderOtlpView(host) {
   if (state._otlpCanonical[cacheKey]) { apply(state._otlpCanonical[cacheKey]); return; }
   const envQ = env ? `?env=${encodeURIComponent(env)}` : '';
   fetch(`/api/packs/${encodeURIComponent(packId)}/canonical${envQ}`, {
-    headers: { Accept: 'application/json' },
+    headers: { Accept: 'application/json', ...authHeaders() },
   }).then(async r => {
     if (!r.ok) throw new Error(`server ${r.status}`);
     const c = await r.json();
@@ -208,7 +209,7 @@ function renderOtlpBody(host, canonical, layered) {
         <div class="otlp-summary-val">${hasOtlpReceiver ? 'pass' : 'fail'}</div>
       </div>
       <div class="otlp-summary-note">
-        Spec v1.2 §3 — every pack <strong>MUST</strong> declare an <code>otlp</code> receiver.
+        Spec v1.3 §3 — every pack <strong>MUST</strong> declare an <code>otlp</code> receiver.
         The OTLP-out column is informational: many production stacks intentionally use
         native protocols downstream (Prometheus remote-write, Loki native, Tempo OTLP)
         for backend efficiency.

@@ -8,7 +8,8 @@
  * makes it testable, so it gets its suite in the same commit.
  */
 
-import { validateMcpUrl, isLocalOrPrivateHost, redactCredentials } from './mcp-url.mjs';
+import { validateMcpUrl, isLocalOrPrivateHost, redactCredentials, safeMcpUrl, stripMcpUrl, mcpUrlOrigin, credentialParamName } from './mcp-url.mjs';
+import { readFileSync } from 'node:fs';
 import { createHarness } from '../tools/lib/harness.mjs';
 
 const { assert, report } = createHarness({ indent: '  ', truncate: 160 });
@@ -64,5 +65,78 @@ assert(!!validateMcpUrl('http://192.168.1.34:3001/mcp').error, 'strict posture r
 assert(!validateMcpUrl('https://mcp.example.com/x').error, 'strict posture still accepts public hosts');
 delete process.env.OBSERVOGRAM_ALLOW_LOCAL_MCP;
 assert(!validateMcpUrl('http://127.0.0.1:3001/mcp').error, 'default posture allows loopback (local dev)');
+
+// ---------- safeMcpUrl: what may be persisted, logged or served ----------
+// (tools/lib/mcp-url-safety.mjs, re-exported by server/mcp-url.mjs)
+assert(safeMcpUrl('https://u:p@mcp.example.com/obs#frag') === 'https://mcp.example.com/obs', 'safeMcpUrl removes userinfo and the fragment');
+for (const name of ['token', 'api_key', 'apiKey', 'X-Amz-Signature', 'access_token', 'password', 'pwd', 'jwt', 'session', 'bearer', 'sessionId', 'APIKey', 'auth']) {
+  const { safe, dropped } = stripMcpUrl(`https://mcp.example.com/obs?${encodeURIComponent(name)}=s3cret&tier=x`);
+  assert(safe === 'https://mcp.example.com/obs?tier=x' && dropped.length === 1 && dropped[0] === name, `a credential parameter is removed: ${name}`, [safe, dropped]);
+  assert(credentialParamName(name), `credentialParamName(${name})`);
+}
+// A name written as one run (no camelCase, no separator) or ending in a
+// digit is a credential too, whatever its case: APISECRET goes like apiSecret.
+for (const name of ['apitoken', 'APITOKEN', 'accesskey', 'ACCESSKEY', 'secretkey', 'clientsecret', 'CLIENTSECRET',
+  'APISECRET', 'API_SECRET', 'apiSecret', 'privatetoken', 'privatekey', 'authkey', 'xapikey', 'sessiontoken',
+  'refreshtoken', 'idtoken', 'mytoken', 'token1', 'password1', 'key2', 'passcode', 'jsessionid', 'urlsignature']) {
+  const { safe, dropped } = stripMcpUrl(`https://mcp.example.com/obs?${name}=s3cret&tier=x`);
+  assert(safe === 'https://mcp.example.com/obs?tier=x' && dropped.length === 1 && dropped[0] === name, `a run-together credential parameter is removed: ${name}`, [safe, dropped]);
+}
+// Every run ending in a credential word goes, not only a listed compound:
+// a key, pass, sig, auth, jwt, session, sessid, cookie or sas run, in
+// either case (appkey was kept, and reached deploys.jsonl and GET /api/deploys).
+const RUN_TOGETHER = ['appkey', 'clientkey', 'masterkey', 'subscriptionkey', 'accountkey', 'consumerkey', 'userkey',
+  'licensekey', 'devkey', 'sharedkey', 'encryptionkey', 'hmackey', 'passkey', 'apikeys', 'userpass', 'dbpass', 'urlsig',
+  'hmacsig', 'basicauth', 'apiauth', 'proxyauthorization', 'apijwt', 'usersession', 'phpsessid', 'authcookie', 'blobsas'];
+for (const name of [...RUN_TOGETHER, ...RUN_TOGETHER.map((n) => n.toUpperCase())]) {
+  const { safe, dropped } = stripMcpUrl(`https://mcp.example.com/obs?${name}=s3cret&tier=x`);
+  assert(safe === 'https://mcp.example.com/obs?tier=x' && dropped.length === 1 && dropped[0] === name, `a run ending in a credential word is removed: ${name}`, [safe, dropped]);
+}
+// The deploy routes write validateMcpUrl().safeUrl to deploys.jsonl and their log lines.
+assert(validateMcpUrl('https://mcp.example.com/obs?appkey=APPKEYSECRET7&tier=x').safeUrl === 'https://mcp.example.com/obs?tier=x',
+  'validateMcpUrl().safeUrl — what a deploy records — keeps no appkey');
+const both = stripMcpUrl('https://mcp.example.com/obs?token=A&apitoken=B&tier=x');
+assert(both.safe === 'https://mcp.example.com/obs?tier=x' && both.dropped.join() === 'token,apitoken',
+  'token and apitoken both go, and dropped names both', both);
+assert(safeMcpUrl('https://mcp.example.com/obs?tier=x;APITOKEN=B&design=1') === 'https://mcp.example.com/obs?design=1',
+  'a ;-separated pair naming a run-together credential is removed whole');
+assert(stripMcpUrl('https://mcp.example.com/obs?%74oken=s3cret').safe === 'https://mcp.example.com/obs'
+  && stripMcpUrl('https://mcp.example.com/obs?%74oken=s3cret').dropped[0] === 'token', 'an ENCODED name is decoded first: %74oken is token');
+assert(safeMcpUrl('https://mcp.example.com/obs?tier=x;pwd=hunter2&design=1') === 'https://mcp.example.com/obs?design=1',
+  'a value carrying a ;-separated credential pair is removed whole');
+const KEPT = ['signal', 'design', 'keyspace', 'author', 'bypass', 'tenant', 'tier', 'monkey', 'passive',
+  'turkey', 'hockey', 'keyword', 'tokenizer', 'secretary', 'obsession', 'compass', 'tier1', 'v2', 'sha256'];
+const kept = `https://mcp.example.com/obs?${KEPT.map((n, i) => `${n}=${i}`).join('&')}`;
+assert(safeMcpUrl(kept) === kept, 'names that merely contain a credential word are kept (a word rule, not a substring rule)', safeMcpUrl(kept));
+for (const n of KEPT) assert(!credentialParamName(n), `not a credential: ${n}`);
+// The ordinary words that merely end in a credential word stay, in either
+// case, and so does a name that ends in one (cache_bypass, noBypass).
+const ORDINARY = ['bypass', 'compass', 'overpass', 'surpass', 'monkey', 'donkey', 'turkey', 'hockey', 'jockey', 'whiskey', 'hotkey', 'obsession'];
+const ordinary = [...ORDINARY, ...ORDINARY.map((n) => n.toUpperCase()), 'cache_bypass', 'noBypass', 'encompass', 'hotkey2'];
+const ordinaryUrl = `https://mcp.example.com/obs?${ordinary.map((n, i) => `${n}=${i}`).join('&')}`;
+assert(safeMcpUrl(ordinaryUrl) === ordinaryUrl, 'an ordinary word ending in a credential word is kept', safeMcpUrl(ordinaryUrl));
+for (const n of ordinary) assert(!credentialParamName(n), `not a credential (an ordinary word): ${n}`);
+const pathSecret = 'https://mcp.example.com/mcp/s/sk-ak-0123456789abcdef/mcp';
+assert(safeMcpUrl(pathSecret) === pathSecret, 'a secret in the PATH is kept (names only: the server serves url to operators only)');
+assert(mcpUrlOrigin(pathSecret) === 'https://mcp.example.com' && mcpUrlOrigin('https://u:p@h.test:8443/x?token=1') === 'https://h.test:8443',
+  'mcpUrlOrigin: scheme://host:port, never a path, a query or userinfo');
+assert(safeMcpUrl('not a url') === null && mcpUrlOrigin('not a url') === null && mcpUrlOrigin('file:///etc/passwd') === null, 'not an http(s) URL → null');
+assert(safeMcpUrl('https://mcp.example.com/obs?a=%20b+c&tier=x') === 'https://mcp.example.com/obs?a=%20b+c&tier=x', 'nothing dropped → the query keeps its spelling');
+// Something dropped → only its segments go; the rest is not re-serialised
+// (%20 stays %20, a comma stays a comma, a bare flag stays bare), so a
+// journey drafted from the safe URL calls the user's URL minus the token.
+const spelled = stripMcpUrl('http://127.0.0.1:47111/mcp?token=T&flag&filter=a%20b&list=x,y');
+assert(spelled.safe === 'http://127.0.0.1:47111/mcp?flag&filter=a%20b&list=x,y' && spelled.dropped.join() === 'token',
+  'something dropped → the other parameters keep their spelling', spelled);
+assert(safeMcpUrl('https://mcp.example.com/obs?a+b=%E2%9C%93&token=1&tier=x;pwd=1&x=%zz&token=2&tier=y&q=1+2') === 'https://mcp.example.com/obs?a+b=%E2%9C%93&x=%zz&q=1+2',
+  'every segment of a dropped name goes (repeats, a ;-pair value) and the kept ones keep their spelling');
+assert(safeMcpUrl('https://mcp.example.com/obs??token=x&a=1') === 'https://mcp.example.com/obs?a=1'
+  && safeMcpUrl('https://mcp.example.com/obs?&token=x&') === 'https://mcp.example.com/obs',
+  'a name starting with ? is matched as searchParams decodes it; a query left with no parameter is removed');
+const creds = 'https://user:pw@mcp.example.com/obs?token=abc&tier=x#f';
+assert(validateMcpUrl(creds).safeUrl === safeMcpUrl(creds) && validateMcpUrl(creds).safeUrl === 'https://mcp.example.com/obs?tier=x',
+  'validateMcpUrl().safeUrl is safeMcpUrl()');
+const lib = readFileSync(new URL('../tools/lib/mcp-url-safety.mjs', import.meta.url), 'utf8');
+assert(!/^\s*import\b/m.test(lib) && !/\brequire\(/.test(lib) && !/node:/.test(lib), 'tools/lib/mcp-url-safety.mjs imports nothing (browser-safe: the studio loads it from /lib)');
 
 report('mcp-url', 'the SSRF guard rejects bad schemes, strips credentials, and classifies hosts correctly.');

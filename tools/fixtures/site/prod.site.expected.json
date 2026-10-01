@@ -1,0 +1,14 @@
+{
+  "generator": "gen-site",
+  "environment": "prod",
+  "expected": {
+    "generated_from": "gen-site inventory v1",
+    "environment": "prod",
+    "series_prefix": "fixture:inventory:",
+    "kinds": {
+      "qmgr": { "title": "queue manager", "label": "qmgr", "series": "fixture:inventory:qmgr", "jobs": ["exporter"], "names": ["QM1", "QM2", "QM3"], "by": {} },
+      "host": { "title": "host", "label": "host", "series": "fixture:inventory:host", "jobs": [], "names": ["h1", "h2"], "by": {} },
+      "queue": { "title": "queue", "label": "queue", "per": "qmgr", "query": "count by (qmgr) (last_over_time(fixture_queue_depth{queue=~\"APP.*\"}[5m]))", "min": { "QM1": 5 } }
+    }
+  }
+}

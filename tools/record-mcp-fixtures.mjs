@@ -52,7 +52,7 @@
  * never printed and never written: every string that leaves this process
  * passes through redact().
  *
- * Requires Node 18+.
+ * Requires Node 22.16+ (the package floor).
  */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';

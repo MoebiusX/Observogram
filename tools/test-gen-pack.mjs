@@ -9,7 +9,12 @@
  *   - the burn file parses, every policy window has its alert with the pack's slo/severity,
  *     every forecast has its alert, recording rules carry slo/sli/service labels;
  *   - the corrected PromQL forms are present (event denominators for rate-style ratios, bool
- *     comparisons for state-style ratios, the min-bad-samples floor, the capped forecast horizon).
+ *     comparisons for state-style ratios, the min-bad-samples floor, the capped forecast horizon);
+ *   - the layout invariant: every visual row of every board is 24 columns wide at one height, no
+ *     stat narrower than w3 or wider than w12 with a sparkline, no empty SLO selector — on the
+ *     reference packs and on synthetic packs with 1, 2, 3, 5, 7, 9, 12, 13 and 25 SLIs and 1, 3, 4
+ *     and 5 derived views — with the contract-block shapes, the tile rows, the legend by width, the
+ *     bound-SLO bar-gauge filter, unknown bindings and a pack module's tiles pinned.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,6 +23,8 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { genericBoards, checkBindings } from './lib/dashboards/generic.mjs';
+import { derivedViewPanel, derivedSliTiles, derivedSliTrend, thresholdSteps, okAbove, splitWidths, tileRows, viewWidths, stat, C } from './lib/dashboards/lib.mjs';
+import { compileGrafanaDashboard } from './lib/compile.mjs';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -27,6 +34,7 @@ import {
   durationSeconds, packSnippet,
 } from './lib/burn-rules.mjs';
 import { compilePrometheusRules } from './lib/compile.mjs';
+import { SPEC_DIR } from './lib/validator.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PACKS = readdirSync(resolve(ROOT, 'reference-packs')).filter(f => f.endsWith('.pack.yaml')).map(f => `reference-packs/${f}`);
@@ -136,9 +144,374 @@ for (const packPath of PACKS) {
   });
 }
 
+// ---------------------------------------------------------------- layout invariant
+/** Panels grouped by their visual row (gridPos.y), each row left to right. */
+const rowsOf = (panels) => {
+  const by = new Map();
+  for (const p of panels) { if (!by.has(p.gridPos.y)) by.set(p.gridPos.y, []); by.get(p.gridPos.y).push(p); }
+  return [...by.entries()].sort((a, b) => a[0] - b[0]).map(([y, ps]) => ({ y, panels: ps.sort((a, b) => a.gridPos.x - b.gridPos.x) }));
+};
+/**
+ * Every row is exactly 24 wide, tiled from x = 0 without a gap, at one height; rows and text
+ * panels are w24 on their own; no stat is narrower than w3 (a w2 stat with a title, a value, a
+ * unit and a sparkline is not legible) or wider than w12 with a sparkline (a banner); and no
+ * target carries the empty selector `{slo=~""}`.
+ */
+function assertSymmetric(boardId, panels) {
+  for (const { y, panels: ps } of rowsOf(panels)) {
+    const label = `${boardId} y=${y}: ${ps.map(p => `${p.type} ${p.gridPos.w}x${p.gridPos.h}`).join(' | ')}`;
+    assert.equal(ps.reduce((n, p) => n + p.gridPos.w, 0), 24, `row is not 24 wide — ${label}`);
+    assert.equal(new Set(ps.map(p => p.gridPos.h)).size, 1, `row has mixed heights — ${label}`);
+    let x = 0;
+    for (const p of ps) { assert.equal(p.gridPos.x, x, `gap at x=${x} — ${label}`); x += p.gridPos.w; }
+    for (const p of ps) if (p.type === 'row' || p.type === 'text') assert.equal(p.gridPos.w, 24, `${p.type} panel narrower than the row — ${label}`);
+    if (ps[0].type === 'row') assert.equal(ps[0].gridPos.h, 1, label);
+    for (const p of ps) if (p.type === 'stat') {
+      assert.ok(p.gridPos.w >= 3, `stat narrower than w3 — ${label}`);
+      assert.ok(p.gridPos.w <= 12 || p.options.graphMode !== 'area', `stat wider than w12 with a sparkline — ${label}`);
+    }
+    for (const p of ps) for (const t of p.targets || []) assert.doesNotMatch(String(t.expr || ''), /\{slo=~""\}/, `empty SLO selector — ${label}`);
+  }
+}
+/** The panels under the row whose title matches `re`, up to the next row. */
+const section = (panels, re) => {
+  const i = panels.findIndex(p => p.type === 'row' && re.test(p.title));
+  assert.ok(i >= 0, `row ${re} exists`);
+  const j = panels.findIndex((p, k) => k > i && p.type === 'row');
+  return panels.slice(i + 1, j < 0 ? panels.length : j);
+};
+const shape = (panels) => panels.map(p => [p.type, p.gridPos.w, p.gridPos.h]);
+const bound = (panels, prefix) => panels.filter(p => p.type === 'stat' && (p.pack?.binds_to || []).some(t => t.startsWith(prefix)));
+/** The widths of a run of tiles per visual row: [[5,5,5,5,4],[6,6,6,6]]. */
+const tileRowsOf = (tiles) => rowsOf(tiles).map(r => r.panels.map(p => p.gridPos.w));
+// The contract-block shapes (generic.mjs contractBlock), by bound SLIs N and SLOs M.
+const CURVES6 = [['bargauge', 12, 8], ['timeseries', 6, 8], ['timeseries', 6, 8]];
+const ONE = [['stat', 6, 8], ['stat', 6, 8], ['timeseries', 6, 8], ['timeseries', 6, 8]];                       // N = 1, M = 1: tile, burn tile, curves
+const ONE_MANY = [['stat', 6, 8], ['bargauge', 18, 8], ['timeseries', 12, 8], ['timeseries', 12, 8]];          // N = 1, M ≥ 2
+const TWO = [['stat', 6, 8], ['stat', 6, 8], ['bargauge', 12, 8], ['timeseries', 12, 8], ['timeseries', 12, 8]]; // N = 2
+const MANY = (n) => [...tileRows(n).flat().map(w => ['stat', w, 4]), ...CURVES6];                                 // N ≥ 3
+const TILES_ONLY = (n) => (n === 1 ? [['stat', 6, 8], ['timeseries', 18, 8]] : tileRows(n).flat().map(w => ['stat', w, 4])); // M = 0
+const contractOf = (n, m) => (m === 0 ? TILES_ONLY(n) : n === 0 ? CURVES6 : n >= 3 ? MANY(n) : n === 2 ? TWO : m === 1 ? ONE : ONE_MANY);
+const PROVIDER = { kind: 'grafana', version: '11.3', schemaVersion: 41 };
+const bindOf = (s, o, w) => [...s.map(x => ({ panel: `sli-${x}`, binds_to: `slis.${x}` })), ...o.map(x => ({ panel: `slo-${x}`, binds_to: `slos.${x}` })), ...w.map(x => ({ panel: `view-${x}`, binds_to: `ref:queries.${x}` }))];
+const srcBoard = (id, panel_bindings) => ({ id, provider: PROVIDER, folder: 'kafka', source: `file://dashboards/${id}.json`, panel_bindings });
+const burnBoard = (id, slos) => ({ id, provider: PROVIDER, folder: 'kafka', template: 'ref:platform/slo-burn-template', params: { slos } });
+/**
+ * A pack shaped like the kafka reference pack with n SLIs (its six, then synthesised threshold
+ * SLIs) and one SLO, policy window and — for the first three — forecast each, v renderable
+ * derived views plus the pack's golden-signals note view (first, so the layout has to move it
+ * below the graphs), and boards rebuilt to bind them: a source board per contract shape (all,
+ * first, pair, one SLI with two SLOs, a tile and a trend bound to the same SLI, SLOs only, SLIs
+ * only), a burn board of every SLO, of the first one and of none, and a per-resource board.
+ * checkBindings stays green on every one.
+ */
+function syntheticPack(n, v) {
+  const p = structuredClone(load('reference-packs/kafka.pack.yaml'));
+  const extra = (i) => ({ id: `synthetic_${i}`, type: 'threshold', description: `Synthetic SLI ${i}.`, query: `max(kafka_synthetic_${i})`, threshold: 10, unit: 'messages' });
+  const slis = [...p.spec.slis, ...Array.from({ length: Math.max(0, n - p.spec.slis.length) }, (_, i) => extra(p.spec.slis.length + i + 1))].slice(0, n);
+  const sliIds = slis.map(s => s.id);
+  const slos = [...p.spec.slos, ...slis.filter(s => s.id.startsWith('synthetic_')).map(s => ({ id: `${s.id}_99`, sli: s.id, objective: 0.99, window: '7d' }))].filter(s => sliIds.includes(s.sli));
+  const sloIds = slos.map(s => s.id);
+  assert.equal(sloIds.length, n, 'one SLO per SLI');
+  p.spec.slis = slis; p.spec.slos = slos;
+  p.spec.policy.burn_rate_alerts = [...p.spec.policy.burn_rate_alerts, ...slos.filter(s => s.id.endsWith('_99')).map(s => ({ slo: s.id, windows: [{ short: '5m', long: '1h', factor: 14, severity: 'SEV1' }] }))].filter(b => sloIds.includes(b.slo));
+  p.spec.policy.forecasts = (p.spec.policy.forecasts || []).filter(f => sloIds.includes(f.slo));
+  const graphs = Array.from({ length: v }, (_, i) => ({ id: `per_resource_${i + 1}`, bind: 'ref:platform/per-resource-rollup', params: { metric: `kafka_synthetic_${i + 1}_total{topic!=""}`, by: ['topic'] } }));
+  const viewIds = graphs.map(g => g.id);
+  p.spec.queries.derived_views = [p.spec.queries.derived_views.find(x => x.id === 'golden_signals_kafka'), ...graphs];
+  p.spec.dashboards = [
+    srcBoard('kafka-all', bindOf(sliIds, sloIds, viewIds)),
+    srcBoard('kafka-first', bindOf(sliIds.slice(0, 1), sloIds.slice(0, 1), viewIds.slice(0, 1))),
+    srcBoard('kafka-pair', bindOf(sliIds.slice(0, 2), sloIds.slice(0, 2), [])),
+    srcBoard('kafka-one-two', bindOf(sliIds.slice(0, 1), sloIds.slice(0, 2), [])),
+    srcBoard('kafka-dup', [...bindOf(sliIds.slice(0, 1), sloIds.slice(0, 1), []), { panel: 'trend', binds_to: `slis.${sliIds[0]}` }]),
+    srcBoard('kafka-slos-only', bindOf([], sloIds.slice(0, 1), [])),
+    srcBoard('kafka-slis-only', bindOf(sliIds, [], viewIds)),
+    burnBoard('kafka-burn-all', sloIds),
+    burnBoard('kafka-burn-first', sloIds.slice(0, 1)),
+    burnBoard('kafka-burn-none', []),
+    { id: 'kafka-view', provider: PROVIDER, folder: 'kafka', template: 'ref:platform/per-resource-template', params: { view: viewIds[0] } },
+  ];
+  return { pack: p, sliIds, sloIds, viewIds };
+}
+
+test('splitWidths, tileRows and viewWidths fill 24 columns with tiles that differ by at most one and are never narrower than w3', () => {
+  assert.deepEqual(splitWidths(1), [24]);
+  assert.deepEqual(splitWidths(2), [12, 12]);
+  assert.deepEqual(splitWidths(3), [8, 8, 8]);
+  assert.deepEqual(splitWidths(5), [5, 5, 5, 5, 4]);
+  assert.deepEqual(splitWidths(6), [4, 4, 4, 4, 4, 4]);
+  assert.deepEqual(splitWidths(7), [4, 4, 4, 3, 3, 3, 3]);
+  assert.deepEqual(splitWidths(8), [3, 3, 3, 3, 3, 3, 3, 3]);
+  assert.deepEqual(splitWidths(0), []);
+  assert.deepEqual(splitWidths(-1), []);
+  assert.deepEqual(splitWidths(25), Array(25).fill(1), 'more tiles than columns: every tile the narrowest column');
+  for (let n = 1; n <= 24; n++) {
+    const w = splitWidths(n);
+    assert.equal(w.length, n);
+    assert.equal(w.reduce((a, b) => a + b, 0), 24, `${n} tiles sum to 24`);
+    assert.ok(Math.max(...w) - Math.min(...w) <= 1, `${n} tiles differ by at most one`);
+    for (let i = 1; i < n; i++) assert.ok(w[i] <= w[i - 1], `${n}: the remainder sits on the first tiles`);
+  }
+  assert.deepEqual(splitWidths(3, 12), [4, 4, 4]);
+  // tileRows: at most eight per row, the fewest rows, larger rows first, so 9 SLIs never get w2 tiles
+  assert.deepEqual(tileRows(0), []);
+  assert.deepEqual(tileRows(1), [[24]]);
+  assert.deepEqual(tileRows(8), [Array(8).fill(3)]);
+  assert.deepEqual(tileRows(9), [[5, 5, 5, 5, 4], [6, 6, 6, 6]]);
+  assert.deepEqual(tileRows(12), [Array(6).fill(4), Array(6).fill(4)]);
+  assert.deepEqual(tileRows(13), [[4, 4, 4, 3, 3, 3, 3], Array(6).fill(4)]);
+  assert.deepEqual(tileRows(16), [Array(8).fill(3), Array(8).fill(3)]);
+  assert.deepEqual(tileRows(25), [[4, 4, 4, 3, 3, 3, 3], Array(6).fill(4), Array(6).fill(4), Array(6).fill(4)]);
+  for (let n = 1; n <= 64; n++) {
+    const rows = tileRows(n);
+    assert.equal(rows.length, Math.ceil(n / 8), `${n} tiles: the fewest rows of at most eight`);
+    assert.equal(rows.flat().length, n);
+    for (const r of rows) assert.equal(r.reduce((a, b) => a + b, 0), 24, `${n} tiles: every row sums to 24`);
+    assert.ok(Math.min(...rows.flat()) >= 3, `${n} tiles: none narrower than w3`);
+    const counts = rows.map(r => r.length);
+    assert.ok(Math.max(...counts) - Math.min(...counts) <= 1, `${n} tiles: row counts differ by at most one`);
+    for (let i = 1; i < counts.length; i++) assert.ok(counts[i] <= counts[i - 1], `${n} tiles: the larger rows come first`);
+  }
+  assert.deepEqual(viewWidths(0), []);
+  assert.deepEqual(viewWidths(1), [24]);
+  assert.deepEqual(viewWidths(2), [12, 12]);
+  assert.deepEqual(viewWidths(3), [8, 8, 8]);
+  assert.deepEqual(viewWidths(4), [12, 12, 12, 12]);
+  assert.deepEqual(viewWidths(5), [12, 12, 8, 8, 8]);
+  assert.deepEqual(viewWidths(7), [12, 12, 12, 12, 8, 8, 8]);
+  // laid out left to right, every row of views closes at 24
+  for (let n = 1; n <= 12; n++) {
+    let x = 0;
+    for (const w of viewWidths(n)) { x += w; if (x === 24) x = 0; assert.ok(x < 24, `${n} views: a row overflows`); }
+    assert.equal(x, 0, `${n} views: the last row is full`);
+  }
+});
+
+test('every generated row is 24 columns wide at one height: reference packs, and packs with 1, 2, 3, 5, 7, 9, 12, 13, 25 SLIs and 1, 3, 4, 5 derived views', () => {
+  for (const packPath of PACKS) for (const b of genericBoards(load(packPath))) assertSymmetric(b.id, b.dashboard.panels);
+  const burn1h = 'kafka:errorbudget:burn_1h';
+  const legendOf = (p) => [p.gridPos.w, p.options.legend.displayMode, p.options.legend.placement];
+  for (const n of [1, 2, 3, 5, 7, 9, 12, 13, 25]) for (const v of [1, 3, 4, 5]) {
+    const { pack, sloIds } = syntheticPack(n, v);
+    const boards = genericBoards(pack);
+    const at = (id) => boards.find(b => b.id === id).dashboard.panels;
+    assert.deepEqual(checkBindings(pack, boards), [], `${n} SLIs, ${v} views: every binding bound`);
+    for (const b of boards) assertSymmetric(`${n} SLIs/${v} views ${b.id}`, b.dashboard.panels);
+    // unified: the contract block holds every SLI and SLO, so it takes the same shape as a board binding them all
+    const contract = (id) => shape(section(at(id), /Contract/));
+    assert.deepEqual(contract('kafka-unified'), contractOf(n, n), `${n} SLIs: the unified contract block`);
+    // ... and its tiles come in rows of at most eight (9 → 5,5,5,5,4 over 6,6,6,6; 25 → four rows), never a w2 tile
+    const tiles = bound(at('kafka-unified'), 'slis.');
+    assert.equal(tiles.length, n);
+    if (n >= 3) assert.deepEqual(tileRowsOf(tiles), tileRows(n), `${n} SLIs: tile rows`);
+    else assert.deepEqual(tiles.map(t => [t.gridPos.w, t.gridPos.h]), Array(n).fill([6, 8]), `${n} SLIs: the tiles sit at the burn panels' height`);
+    // unified signals row: the graphs by viewWidths first, the pack's note view w24 below them
+    const signals = section(at('kafka-unified'), /Signals/);
+    const graphs = signals.filter(p => p.type === 'timeseries'), notes = signals.filter(p => p.type === 'text');
+    assert.deepEqual(graphs.map(g => g.gridPos.w), viewWidths(v), `${v} views: viewWidths on the unified board`);
+    assert.equal(notes.length, 1, 'the golden-signals view is a note');
+    assert.ok(notes[0].gridPos.w === 24 && notes[0].gridPos.y > graphs.at(-1).gridPos.y, 'the note sits under the graphs on its own row');
+    // a view on a trio row is w8 and gets the bottom list legend; on a full or half row the right-hand table (ts() legend 'auto')
+    assert.deepEqual(graphs.map(legendOf), viewWidths(v).map(w => [w, w >= 12 ? 'table' : 'list', w >= 12 ? 'right' : 'bottom']), `${v} views: the legend follows the width`);
+    // source boards: the contract block by the number of bound SLIs and SLOs
+    assert.deepEqual(contract('kafka-all'), contractOf(n, n), `${n} SLIs: a board binding them all`);
+    assert.deepEqual(contract('kafka-first'), ONE);
+    assert.deepEqual(contract('kafka-dup'), ONE, 'a tile and a trend bound to the same SLI render one tile');
+    assert.deepEqual(contract('kafka-pair'), n >= 2 ? TWO : ONE);
+    assert.deepEqual(contract('kafka-one-two'), n >= 2 ? ONE_MANY : ONE, 'one SLI with two SLOs: the tile beside a w18 bar gauge');
+    assert.deepEqual(contract('kafka-slos-only'), CURVES6);
+    assert.deepEqual(contract('kafka-slis-only'), TILES_ONLY(n), n === 1 ? 'a lone tile sits beside its trend' : 'no bound SLO: the tiles only');
+    if (n === 1) {
+      const trend = section(at('kafka-slis-only'), /Contract/)[1];
+      assert.deepEqual(trend.pack.binds_to, [`slis.${pack.spec.slis[0].id}`]);
+      assert.match(trend.title, / · over time$/);
+      assert.equal(trend.fieldConfig.defaults.custom.thresholdsStyle.mode, 'dashed', 'the objective is a dashed line');
+    }
+    // the burn tile that stands in for a one-bar gauge: bound to the SLO, its own series, its policy thresholds
+    const burnStat = section(at('kafka-first'), /Contract/)[1];
+    assert.deepEqual([burnStat.targets[0].expr, burnStat.pack.binds_to], [`${burn1h}{slo="${sloIds[0]}"}`, [`slos.${sloIds[0]}`]]);
+    assert.equal(section(at('kafka-first'), /Contract/).filter(p => p.type === 'bargauge').length, 0, 'one SLO: no bar gauge');
+    // derived views: viewWidths on a source board, the whole row on a per-resource board
+    assert.deepEqual(section(at('kafka-all'), /Derived views/).map(p => p.gridPos.w), viewWidths(v));
+    assert.deepEqual(section(at('kafka-first'), /Derived views/).map(p => p.gridPos.w), [24]);
+    assert.equal(at('kafka-view').find(p => p.type === 'timeseries').gridPos.w, 24);
+    // burn-template tiles: tile rows; a single SLO's tile stands beside the alert timeline with no bar gauge
+    const burnTilesOf = (id) => bound(at(id), 'slos.');
+    if (n >= 3) assert.deepEqual(tileRowsOf(burnTilesOf('kafka-burn-all')), tileRows(n));
+    else if (n === 2) assert.deepEqual(burnTilesOf('kafka-burn-all').map(t => [t.gridPos.w, t.gridPos.h]), [[12, 4], [12, 4]]);
+    assert.deepEqual(shape(at('kafka-burn-first').slice(1, 3)), [['stat', 6, 8], ['state-timeline', 18, 8]]);
+    assert.equal(at('kafka-burn-first').filter(p => p.type === 'bargauge').length, 0);
+    assert.equal(burnTilesOf('kafka-burn-none').length, 0);
+    // the bar gauge: filtered to the bound SLOs, bare when the board binds every SLO of the pack (or names none)
+    const bars = (id) => { const b = at(id).find(p => p.type === 'bargauge'); return [b.targets[0].expr, b.fieldConfig.overrides.map(o => o.matcher.options)]; };
+    if (n >= 2) for (const id of ['kafka-unified', 'kafka-all', 'kafka-burn-all']) assert.deepEqual(bars(id), [burn1h, sloIds], `${id} holds every SLO: the bare series`);
+    else assert.equal(bound(at('kafka-unified'), 'slos.')[0].targets[0].expr, `${burn1h}{slo="${sloIds[0]}"}`, 'a one-SLO pack: the unified board shows the burn tile');
+    assert.deepEqual(bars('kafka-burn-none'), [burn1h, sloIds], 'params.slos [] is not a filter');
+    assert.deepEqual(bars('kafka-slos-only'), [n === 1 ? burn1h : `${burn1h}{slo=~"${sloIds[0]}"}`, sloIds.slice(0, 1)]);
+    if (n >= 3) {
+      assert.deepEqual(bars('kafka-pair'), [`${burn1h}{slo=~"${sloIds[0]}|${sloIds[1]}"}`, sloIds.slice(0, 2)]);
+      assert.deepEqual(bars('kafka-one-two'), [`${burn1h}{slo=~"${sloIds[0]}|${sloIds[1]}"}`, sloIds.slice(0, 2)]);
+    }
+  }
+  // the committed kafka boards: consumer-lag binds one SLO and shows its burn tile instead of a one-bar gauge; the unified board's gauge is bare
+  const kafka = genericBoards(load('reference-packs/kafka.pack.yaml'));
+  const lag = kafka.find(b => b.id === 'kafka-consumer-lag').dashboard.panels;
+  assert.equal(lag.filter(p => p.type === 'bargauge').length, 0);
+  assert.equal(bound(lag, 'slos.')[0].targets[0].expr, `${burn1h}{slo="consumer_lag_99_under_60s"}`);
+  assert.equal(kafka.find(b => b.id === 'kafka-unified').dashboard.panels.find(p => p.type === 'bargauge').targets[0].expr, burn1h);
+  // eight SLOs on a burn-template board: eight tiles of w3 on one row
+  const grafana = load('reference-packs/grafana.pack.yaml');
+  assert.equal(grafana.spec.slos.length, 8);
+  grafana.spec.dashboards.find(d => /slo-burn-template$/.test(d.template || '')).params.slos = grafana.spec.slos.map(s => s.id);
+  const eight = bound(genericBoards(grafana).find(b => b.id === 'grafana-slo-burn').dashboard.panels, 'slos.');
+  assert.deepEqual(eight.map(t => [t.gridPos.w, t.gridPos.y]), Array(8).fill([3, eight[0].gridPos.y]));
+});
+
+test('a binding that names no SLI or SLO of the pack is reported, never rendered as an empty filter', () => {
+  const { pack } = syntheticPack(3, 1);
+  pack.spec.dashboards = [
+    srcBoard('kafka-typo', [{ panel: 'tile', binds_to: 'slis.nope' }, { panel: 'burn', binds_to: 'slos.nope' }, { panel: 'ok', binds_to: `slis.${pack.spec.slis[0].id}` }]),
+    burnBoard('kafka-burn-typo', ['nope', pack.spec.slos[0].id]),
+  ];
+  const boards = genericBoards(pack);
+  assert.deepEqual(checkBindings(pack, boards), [
+    'kafka-typo: binding slis.nope names no SLI of the pack',
+    'kafka-typo: binding slos.nope names no SLO of the pack',
+    'kafka-burn-typo: params.slos nope names no SLO of the pack',
+  ]);
+  for (const b of boards) assertSymmetric(b.id, b.dashboard.panels);
+  // the typo'd SLO does not shape the block: the board holds one SLI and no SLO, so the tile sits beside its trend
+  assert.deepEqual(shape(section(boards.find(b => b.id === 'kafka-typo').dashboard.panels, /Contract/)), TILES_ONLY(1));
+});
+
+test('spec 1.3 good_when on the boards: a floor SLI\'s tile colours lower-is-worse (amber under the bound, red under half of it), a ceiling higher-is-worse as before, absent means below; the dashed line sits at the bound either way; the descriptions name the direction', () => {
+  const sli = (over) => ({ id: 'members', type: 'threshold', description: 'Live settlement consumers.', query: 'min(members)', threshold: 2, unit: 'consumers', ...over });
+  const packOf = (s) => ({ metadata: { name: 'settle', version: '0.0.1' }, spec: { slis: [s], slos: [{ id: 'members_99_9', sli: 'members', objective: 0.999, window: '30d' }] } });
+  const floor = sli({ good_when: 'above' }), ceiling = sli({ good_when: 'below' }), plain = sli({});
+  // Through the generator: the unified board's tile bound to the floor SLI, every binding satisfied.
+  const boards = genericBoards(packOf(floor));
+  assert.deepEqual(checkBindings(packOf(floor), boards), []);
+  const tile = boards[0].dashboard.panels.find(p => p.type === 'stat' && p.pack?.binds_to?.includes('slis.members'));
+  assert.deepEqual(tile.fieldConfig.defaults.thresholds.steps, [{ color: C.red, value: null }, { color: C.amber, value: 1 }, { color: C.green, value: 2 }], 'a floor: red under 1, amber under 2, green at or above the bound');
+  assert.equal(tile.description, 'Live settlement consumers. SLO 99.9 % over 30d. Good when ≥ 2 consumers.');
+  // The same tile built for a ceiling, declared or absent: okAbove as every 1.2 board had it, the description with ≤.
+  const [ct] = derivedSliTiles(packOf(ceiling), null), [pt] = derivedSliTiles(packOf(plain), null);
+  assert.deepEqual(ct.fieldConfig.defaults.thresholds.steps, [{ color: C.green, value: null }, { color: C.amber, value: 2 }, { color: C.red, value: 4 }], 'a ceiling: green under the bound, amber at it, red at twice it');
+  assert.equal(ct.description, 'Live settlement consumers. SLO 99.9 % over 30d. Good when ≤ 2 consumers.');
+  assert.deepEqual({ ...pt, id: 0 }, { ...ct, id: 0 }, 'absent means below: the tile of a 1.2 SLI is the tile of a declared ceiling');
+  assert.deepEqual(thresholdSteps({ type: 'threshold', threshold: 0.5 }), okAbove(0.5, 1));
+  assert.deepEqual(thresholdSteps({ type: 'threshold', good_when: 'above', threshold: -2 }).map(s => s.value), [null, -3, -2], 'a negative floor keeps its steps ascending');
+  // A bound of 0 has no amber band (twice 0 and half of 0 are 0). Grafana paints the last step whose value is <= the
+  // sample, so two steps at 0 painted the good 0 of a ceiling red (bf00c01: [green, amber 0, red 0]) while the tile's
+  // description says "Good when ≤ 0 messages"; a floor at 0 got amber and green both at 0. The bound itself stays good.
+  const paint = (steps, v) => steps.filter(st => st.value === null || v >= st.value).at(-1).color;   // Grafana's getActiveThreshold on ascending steps
+  const zeroCeiling = thresholdSteps({ type: 'threshold', threshold: 0 }), zeroFloor = thresholdSteps({ type: 'threshold', good_when: 'above', threshold: 0 });
+  assert.deepEqual(zeroCeiling, [{ color: C.green, value: null }, { color: C.red, value: Number.MIN_VALUE }], 'a ceiling at 0: green up to and including 0, red from the smallest value above it, no amber');
+  assert.deepEqual(zeroFloor, [{ color: C.red, value: null }, { color: C.green, value: 0 }], 'a floor at 0: red under 0, green from 0, no amber');
+  assert.deepEqual([paint(zeroCeiling, 0), paint(zeroCeiling, 1e-9), paint(zeroCeiling, 1), paint(zeroFloor, 0), paint(zeroFloor, -1e-9), paint(zeroFloor, -1)], [C.green, C.red, C.red, C.green, C.red, C.red], 'the good 0 is green on both sides; anything past the bound is red');
+  assert.equal(JSON.parse(JSON.stringify(zeroCeiling))[1].value, Number.MIN_VALUE, 'the step survives the board JSON (5e-324 parses back)');
+  assert.ok(new Set(zeroCeiling.map(st => st.value)).size === 2 && new Set(zeroFloor.map(st => st.value)).size === 2, 'no two steps share a value');
+  const [zt] = derivedSliTiles(packOf(sli({ description: 'Dead-letter depth.', threshold: 0, unit: 'messages' })), null);
+  assert.deepEqual(zt.fieldConfig.defaults.thresholds.steps, zeroCeiling, 'the tile of a 0-bound ceiling (the library entry dlq_depth) carries the guarded steps');
+  assert.equal(zt.description, 'Dead-letter depth. SLO 99.9 % over 30d. Good when ≤ 0 messages.');
+  // The trend: the dashed line at the bound whichever way the SLI faces; the description says which side is good.
+  const ftr = derivedSliTrend(packOf(floor), floor), ctr = derivedSliTrend(packOf(ceiling), ceiling), ptr = derivedSliTrend(packOf(plain), plain);
+  assert.deepEqual([ftr, ctr, ptr].map(p => p.fieldConfig.defaults.thresholds.steps.at(-1).value), [2, 2, 2]);
+  assert.deepEqual([ftr, ctr, ptr].map(p => p.fieldConfig.defaults.custom.thresholdsStyle.mode), ['dashed', 'dashed', 'dashed']);
+  assert.equal(ftr.description, 'Live settlement consumers. The dashed line is the threshold — good when ≥ 2 consumers.');
+  assert.equal(ctr.description, 'Live settlement consumers. The dashed line is the threshold — good when ≤ 2 consumers.');
+  assert.equal(ptr.description, ctr.description);
+  // A ratio tile says nothing about a bound (it has none); a threshold SLI without a unit prints the bare bound.
+  const ratioPack = { metadata: { name: 'r', version: '0.0.1' }, spec: { slis: [{ id: 'ok', type: 'ratio', description: 'Ok.', good: 'g', total: 't' }], slos: [{ id: 'ok_99', sli: 'ok', objective: 0.99, window: '30d' }] } };
+  assert.equal(derivedSliTiles(ratioPack, null)[0].description, 'Ok. SLO 99 % over 30d.');
+  assert.match(derivedSliTiles(packOf(sli({ unit: undefined })), null)[0].description, / Good when ≤ 2\.$/);
+});
+
+test('a pack module\'s sliTiles gets the layout hint; tiles that ignore it keep their own row above the standard burn panels', () => {
+  const honouring = { sliTiles: (pack, ids, { widths, h }) => ids.map((id, i) => stat(`tile ${id}`, `up{sli="${id}"}`, { binds: `slis.${id}`, w: widths[i], h })) };
+  const ignoring = { sliTiles: (pack, ids) => ids.map(id => stat(`tile ${id}`, `up{sli="${id}"}`, { binds: `slis.${id}`, w: 4 })) };
+  for (const n of [1, 2, 3, 9]) {
+    const { pack } = syntheticPack(n, 1);
+    const own = genericBoards(pack, { module: honouring });
+    assert.deepEqual(checkBindings(pack, own), []);
+    for (const b of own) assertSymmetric(`honouring ${n} ${b.id}`, b.dashboard.panels);
+    const contract = (boards, id) => shape(section(boards.find(b => b.id === id).dashboard.panels, /Contract/));
+    assert.deepEqual(contract(own, 'kafka-first'), ONE);
+    assert.deepEqual(contract(own, 'kafka-slis-only'), TILES_ONLY(n));
+    assert.deepEqual(contract(own, 'kafka-unified'), contractOf(n, n));
+    // the hint ignored: the module's w4 h4 tiles as returned, then always the bar gauge w12 with the curves w6 — never
+    // the one- or two-tile shapes that assume w6 h8 tiles, and no trend appended to a lone tile
+    const theirs = genericBoards(pack, { module: ignoring });
+    assert.deepEqual(checkBindings(pack, theirs), []);
+    const tilesOf = (k) => Array(k).fill(['stat', 4, 4]);
+    assert.deepEqual(contract(theirs, 'kafka-first'), [...tilesOf(1), ...CURVES6]);
+    assert.deepEqual(contract(theirs, 'kafka-pair'), [...tilesOf(Math.min(n, 2)), ...CURVES6]);
+    assert.deepEqual(contract(theirs, 'kafka-unified'), [...tilesOf(n), ...CURVES6]);
+    assert.deepEqual(contract(theirs, 'kafka-slis-only'), tilesOf(n));
+  }
+});
+
+test('the §10 certification tiles render only for a pack that declares the certification scrape job', () => {
+  // The MQ harness's alert-sink is scraped as job `certification`; the reference packs declare no
+  // such job. The per-pack test above only checks the row header, which the note branch renders
+  // too, so a regression dropping the tiles for a pack WITH the feed would pass without this.
+  const section = (pack) => {
+    const panels = genericBoards(pack).find(b => b.id === `${pack.metadata.name}-unified`).dashboard.panels;
+    const i = panels.findIndex(p => p.type === 'row' && /MTTD, MTTR/.test(p.title));
+    assert.ok(i >= 0, 'the validation row exists');
+    const j = panels.findIndex((p, k) => k > i && p.type === 'row');
+    return panels.slice(i + 1, j < 0 ? panels.length : j);
+  };
+  const committed = load('reference-packs/kafka.pack.yaml');
+  const note = section(committed);
+  assert.equal(note.length, 1, 'one panel under the row without a feed');
+  assert.equal(note[0].type, 'text');
+  assert.equal(note[0].title, 'No certification feed');
+  assert.match(JSON.stringify(note[0]), /declares 4 chaos experiments \(chaos-mesh; staging, prod\) but no certification pipeline — a scrape job named `certification` — so nothing feeds MTTD, MTTR or a verdict here\./);
+  const withJob = (job) => {
+    const p = structuredClone(committed);
+    p.spec.pipelines.receivers.find(r => r.scrape_configs).scrape_configs.push({ job_name: job, static_configs: [{ targets: ['sink:9095'] }] });
+    return p;
+  };
+  const tiles = section(withJob('certification'));
+  assert.ok(!tiles.some(p => p.type === 'text'), 'no note when the feed exists');
+  assert.equal(tiles.length, 14, 'six verdict tiles, two bar gauges, six counters');
+  const titles = tiles.map(p => p.title);
+  for (const t of ['Last certification', 'Certified', 'MTTD p50', 'MTTD p95', 'MTTD per expected alert · against its budget', 'Resolution after recovery · per alert', 'Conformance passed', 'Synthetic passed', 'Chaos passed', 'Checks failed', 'Run duration', 'Webhooks in the ledger']) assert.ok(titles.includes(t), `${t} rendered`);
+  for (const p of tiles) for (const t of p.targets || []) assert.ok(/job="certification"/.test(t.expr) && /pack="kafka"/.test(t.expr), `${p.title} reads this pack's certification feed: ${t.expr}`);
+  // the job name is exact: one that merely starts with it is not the feed
+  const near = section(withJob('certification-x'));
+  assert.equal(near.length, 1);
+  assert.equal(near[0].type, 'text');
+});
+
+test('a derived view rates a counter with or without a label selector, and reads anything else as a gauge', () => {
+  // The selector is how a pack drops a series the rollup must not show: the JMX exporter's
+  // broker-wide kafka_server_brokertopicmetrics_messagesin_total has no topic label and rendered
+  // as a fourth "topic" {} equal to the sum of the others (measured 2026-09-22, kafka.md §1.4).
+  const pack = { metadata: { name: 'x', version: '0' }, spec: { slis: [] } };
+  const panel = (metric) => derivedViewPanel(pack, { id: 'per_topic', params: { metric, by: ['topic'] } }, 'ref:queries.per_topic');
+  const selected = panel('kafka_server_brokertopicmetrics_messagesin_total{topic!=""}');
+  assert.equal(selected.targets[0].expr, 'sum by (topic) (rate(kafka_server_brokertopicmetrics_messagesin_total{topic!=""}[5m]))');
+  assert.equal(selected.fieldConfig.defaults.unit, 'ops');
+  const bare = panel('kafka_server_brokertopicmetrics_messagesin_total');
+  assert.equal(bare.targets[0].expr, 'sum by (topic) (rate(kafka_server_brokertopicmetrics_messagesin_total[5m]))');
+  assert.equal(bare.fieldConfig.defaults.unit, 'ops');
+  const gauge = panel('kafka_log_size{topic!=""}');
+  assert.equal(gauge.targets[0].expr, 'max by (topic) (kafka_log_size{topic!=""})');
+  assert.equal(gauge.fieldConfig.defaults.unit, 'none');
+  // the committed kafka pack carries the selector, so its throughput board never shows the {} series
+  const kafka = load('reference-packs/kafka.pack.yaml');
+  const view = kafka.spec.queries.derived_views.find(v => v.id === 'per_topic_throughput');
+  assert.equal(view.params.metric, 'kafka_server_brokertopicmetrics_messagesin_total{topic!=""}');
+  const throughput = genericBoards(kafka).find(b => b.id === 'kafka-throughput');
+  assert.ok(throughput.dashboard.panels.some(p => (p.targets || []).some(t => t.expr === 'sum by (topic) (rate(kafka_server_brokertopicmetrics_messagesin_total{topic!=""}[5m]))')), 'kafka-throughput rates the selected counter');
+});
+
 test('dashboards for a dash-named pack read the slugged metric prefix everywhere', () => {
   // payment-service: every recording rule the generators and the compiler emit is payment_service:*
-  const pack = load('vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml');
+  const pack = load(`${SPEC_DIR}/examples/payment-service.pack.yaml`);
   const boards = genericBoards(pack);
   const json = JSON.stringify(boards);
   assert.ok(boards.length >= 2);
@@ -346,7 +719,7 @@ test('sliLegs recognises every SLI shape and never throws on one', () => {
   const warned2 = [];
   assert.equal(sliLegs({ id: 'c', type: 'custom', expression: 'x' }, '5m', { step: 30, warn: (m) => warned2.push(m) }), null);
   assert.equal(sliLegs({ id: 'd', type: 'distribution', query: 'x' }, '5m', ctx), null);
-  assert.equal(sliLegs({ id: 'n', type: 'threshold', query: 'x', threshold: -1 }, '5m', ctx), null);
+  assert.equal(sliLegs({ id: 'n', type: 'threshold', query: 'x', threshold: 'x' }, '5m', ctx), null);
   assert.equal(sliLegs({ id: 'r', type: 'ratio', good: 'x' }, '5m', ctx), null);
   assert.equal(sliLegs({ id: 'w', type: 'ratio', good: 'sum(rate(a[5m]))', total: 'sum(rate(b[5m]))' }, 'soon', ctx), null, 'a window that is not a duration');
   assert.equal(warned2.length, 1);
@@ -364,18 +737,72 @@ test('whitespace inside a label value survives the burn legs byte for byte', () 
   assert.ok(t.bad.includes('lag{q="A  B"}'), t.bad);
 });
 
-test('threshold SLIs are upper bounds; a ratio-valued one is warned about', () => {
+test('a threshold SLI with no declared direction is read as a ceiling; a ratio-valued one is warned about as a probable floor', () => {
   const warned = [];
   const ctx = { step: 30, series: 'svc:x:value_5m', seriesStep: 30, warn: (m) => warned.push(m) };
   assert.equal(sliLegs({ id: 'sat', type: 'threshold', query: 'max(sat)', threshold: 0.8, unit: 'ratio' }, '5m', ctx).kind, 'threshold');
   assert.equal(sliLegs({ id: 'avail', type: 'threshold', query: '(1 - error_ratio) * probe_success', threshold: 1 }, '5m', ctx).kind, 'threshold');
   assert.equal(sliLegs({ id: 'ok', type: 'threshold', query: 'a / b', threshold: 1, unit: 'percentunit' }, '5m', ctx).kind, 'threshold');
   assert.equal(warned.length, 3);
-  assert.ok(warned.every(m => /upper bound/.test(m) && /no direction field/.test(m)), warned.join('; '));
+  assert.ok(warned.every(m => /as a ceiling \(bad = samples above it\)/.test(m) && /looks like a floor — declare good_when: above/.test(m)), warned.join('; '));
+  assert.ok(warned.every(m => !/no direction field|cannot express/.test(m)), 'a floor is expressible now: the warning no longer says the spec cannot');
   warned.length = 0;
   sliLegs({ id: 'lat', type: 'threshold', query: 'histogram_quantile(0.99, sum(rate(x{path="/api"}[5m])) by (le))', threshold: 0.5, unit: 'seconds' }, '5m', ctx);
   sliLegs({ id: 'lag', type: 'threshold', query: 'max(lag)', threshold: 1 }, '5m', ctx);
   assert.deepEqual(warned, []);
+});
+
+test('spec 1.3 good_when: a floor SLI counts the samples UNDER its bound, a ceiling those above it, absent means below; a declared direction ends the floor guess; the bound stays strict; a negative bound is a number', () => {
+  const warned = [];
+  const ctx = { step: 30, series: 'svc:x:value_5m', seriesStep: 30, warn: (m) => warned.push(m) };
+  const floor = sliLegs({ id: 'members', type: 'threshold', good_when: 'above', query: 'min(members)', threshold: 2, unit: 'consumers' }, '5m', ctx);
+  assert.deepEqual([floor.kind, floor.bad, floor.denom, floor.ratio], ['threshold', 'sum_over_time((max(svc:x:value_5m) < bool 2)[5m:30s])', '10', '(sum_over_time((max(svc:x:value_5m) < bool 2)[5m:30s]) / 10)']);
+  const ceiling = sliLegs({ id: 'lag', type: 'threshold', good_when: 'below', query: 'max(lag)', threshold: 60, unit: 'seconds' }, '5m', ctx);
+  assert.equal(ceiling.ratio, '(sum_over_time((max(svc:x:value_5m) > bool 60)[5m:30s]) / 10)');
+  assert.equal(sliLegs({ id: 'lag', type: 'threshold', query: 'max(lag)', threshold: 60, unit: 'seconds' }, '5m', ctx).ratio, ceiling.ratio, 'absent means below: a 1.2 SLI reads exactly as it did');
+  assert.deepEqual(warned, []);
+  // The comparison is strict on the bad side whichever way the SLI faces: 2 consumers satisfy a floor of 2, 60 s a ceiling of 60 (never >= / <=).
+  assert.ok(!/<=|>=/.test(floor.bad) && !/<=|>=/.test(ceiling.bad));
+  // The alert expression and the error-ratio record through the generator, on a pack whose floor SLI has its own recording rule.
+  const pack = {
+    metadata: { name: 'settle', version: '0.0.1' },
+    spec: {
+      slis: [{ id: 'members', type: 'threshold', good_when: 'above', query: 'min(kafka_consumer_group_members{group="settler"})', threshold: 2, unit: 'consumers' }],
+      slos: [{ id: 'members_99_9', sli: 'members', objective: 0.999, window: '30d' }],
+      queries: { recording_rules: [{ name: 'settle:members:min_5m', expr: 'ref:slis.members', interval: '30s' }] },
+      policy: { burn_rate_alerts: [{ slo: 'members_99_9', windows: [{ short: '5m', long: '1h', factor: 14, severity: 'SEV2' }] }] },
+    },
+  };
+  const r = compileBurnRules(pack);
+  assert.deepEqual(r.warnings, []);
+  assert.equal(r.recording.find(x => x.record === 'settle:members:error_ratio_5m').expr, '(sum_over_time((max(settle:members:min_5m) < bool 2)[5m:30s]) / 10)');
+  const alert = r.groups.flatMap(g => g.rules).find(x => x.alert === 'members_99_9_burn_14x_5m_1h');
+  assert.equal(alert.expr, [
+    '(', '  (sum_over_time((max(settle:members:min_5m) < bool 2)[5m:30s]) / 10) > 0.014', ') and (',
+    '  (sum_over_time((max(settle:members:min_5m) < bool 2)[1h:30s]) / 120) > 0.014', ') and (',
+    '  sum_over_time((max(settle:members:min_5m) < bool 2)[5m:30s]) >= 2', ')',
+  ].join('\n'));
+  assert.ok(!alert.expr.includes('> bool'), 'no leg of a floor alert counts samples above the bound');
+  // The floor guess (a ratio unit, a ratio-shaped query at 1) is raised only while the pack declares nothing: a declared
+  // `above` is the floor it guessed, a declared `below` states the ceiling on purpose (the MQ headroom SLI, measured).
+  const ratioish = { id: 'ok', type: 'threshold', query: 'a / b', threshold: 1, unit: 'percentunit' };
+  warned.length = 0;
+  assert.equal(sliLegs({ ...ratioish, good_when: 'above' }, '5m', ctx).bad, 'sum_over_time((max(svc:x:value_5m) < bool 1)[5m:30s])');
+  assert.equal(sliLegs({ ...ratioish, good_when: 'below' }, '5m', ctx).bad, 'sum_over_time((max(svc:x:value_5m) > bool 1)[5m:30s])');
+  assert.deepEqual(warned, []);
+  sliLegs(ratioish, '5m', ctx);
+  assert.equal(warned.length, 1);
+  // A bound is any finite number now (a floor at -1, a ceiling on a signed skew); only a non-number gets no policy rules.
+  warned.length = 0;
+  assert.equal(sliLegs({ id: 'n', type: 'threshold', query: 'x', threshold: -1 }, '5m', ctx).bad, 'sum_over_time((max(svc:x:value_5m) > bool -1)[5m:30s])');
+  assert.equal(sliLegs({ id: 'n', type: 'threshold', good_when: 'above', query: 'x', threshold: -1.5 }, '5m', ctx).bad, 'sum_over_time((max(svc:x:value_5m) < bool -1.5)[5m:30s])');
+  assert.deepEqual(warned, []);
+  for (const bad of ['x', NaN, Infinity, -Infinity, undefined]) assert.equal(sliLegs({ id: 'n', type: 'threshold', good_when: 'above', query: 'x', threshold: bad }, '5m', ctx), null, `threshold ${String(bad)}`);
+  assert.ok(warned.length === 5 && warned.every(m => /threshold must be a finite number/.test(m) && /no policy rules$/.test(m)), warned.join('; '));
+  // A distribution SLI stays what it was: no error-ratio form, whatever its direction (nothing invented here).
+  warned.length = 0;
+  assert.equal(sliLegs({ id: 'd', type: 'distribution', good_when: 'above', query: 'x', threshold: 2, percentile: 0.99 }, '5m', ctx), null);
+  assert.match(warned[0], /type distribution has no error-ratio form/);
 });
 
 test('durations accept every spec unit and never throw', () => {
@@ -495,4 +922,30 @@ test('the committed reference-pack rules and dashboards are what the generators 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('one engine: packc compile … grafana-dashboard emits the committed reference boards (the same object, tags aside)', () => {
+  // compileGrafanaDashboard is genericBoards plus the platform contract (the version
+  // profile, the datasource placeholders, the tags). With the lab's datasource uids
+  // pinned — what the committed boards carry — every board is the same object, so the
+  // studio compiles exactly what gen-dashboards wrote and the lab validated live.
+  const lab = { prometheus: 'prom', loki: 'loki', tempo: 'tempo' };
+  const dashDir = resolve(ROOT, 'reference-packs', 'dashboards');
+  for (const packPath of PACKS) {
+    const pack = load(packPath);
+    const name = pack.metadata.name;
+    const files = readdirSync(dashDir).filter(f => f.startsWith(`${name}-`) && f.endsWith('.json'));
+    assert.ok(files.length >= 2, `${name}: committed boards found`);
+    for (const f of files) {
+      const committed = JSON.parse(readFileSync(join(dashDir, f), 'utf8'));
+      const compiled = JSON.parse(compileGrafanaDashboard(pack, committed.uid, { datasourceUids: lab }));
+      for (const t of committed.tags) assert.ok(compiled.tags.includes(t), `${f}: generator tag ${t} kept`);
+      assert.ok(compiled.tags.includes('observability-pack') && compiled.tags.includes(`obs-pack-id:${committed.uid}`), `${f}: platform tags added`);
+      assert.deepEqual({ ...compiled, tags: committed.tags }, committed, `${f}: the compiler's board differs from the generator's`);
+    }
+  }
+  // Without pinned uids the compiler emits the gateway placeholders the MCP bridge maps.
+  const placeholder = JSON.parse(compileGrafanaDashboard(load(PACKS[0]), `${load(PACKS[0]).metadata.name}-unified`));
+  const dsUids = new Set(placeholder.panels.flatMap(p => [p.datasource?.uid, ...(p.targets || []).map(t => t.datasource?.uid)]).filter(Boolean));
+  assert.ok(dsUids.has('${DS_PROMETHEUS}') && !dsUids.has('prom'), 'placeholders replace the lab uid');
 });

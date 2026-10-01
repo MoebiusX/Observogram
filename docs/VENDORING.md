@@ -32,6 +32,11 @@ promises to keep stable.
 | [`studio/compare-catalog.mjs`](../studio/compare-catalog.mjs) | `state.mjs` only | `catalogEntryFor()` + `LAYERS_FOR_DIFF` |
 | [`studio/host.mjs`](../studio/host.mjs) | zero-import | the studio-wide host seam: `initHost()` + the live `host` object |
 | [`studio/proto-synthesis.mjs`](../studio/proto-synthesis.mjs) | host-injected callbacks | the ratified Diagnose/Remediate synthesis view |
+| [`studio/design-tokens.css`](../studio/design-tokens.css) | **zero-dependency** (CI-asserted) | the design tokens: palette, type and measures as `--og-*` custom properties, light and dark — see *The design system* below |
+| [`studio/design-tokens.json`](../studio/design-tokens.json) | generated from the CSS (CI-asserted identical) | the same values for code that cannot read CSS (a TypeScript theme object, a chart palette) |
+| [`studio/design-kit.css`](../studio/design-kit.css) | `design-tokens.css` only (CI-asserted) | the component kit: `.og-btn`, `.og-panel`, `.og-stat`, `.og-pill`, `.og-steps`, `.og-input`, `.og-callout`, `.og-letter` … |
+| [`studio/design-bridge.css`](../studio/design-bridge.css) | `design-tokens.css` only (CI-asserted) | defines the theme properties `verdict-ui.css` and `proto.css` expect from the host (`--card`, `--ink`, `--mono`, `--CMP`, `--pr-green` …) from the tokens |
+| [`studio/discover-board.mjs`](../studio/discover-board.mjs) | `escapeHtml` from `util.mjs` | the pack board: `boardHeadHtml`, `boardGroupsHtml`, `boardGroups`, `BOARD_LAYERS` — pure HTML builders over an adapted pack; its styles are still in `ux-discover.css` (the `.dv-band*` / `.dvb-*` rules) and `reskin.css` |
 
 `tools/test-diagnostic-grade.mjs` fails CI if an import ever creeps into the
 two studio zero-import modules, and `tools/test-blast-radius.mjs` /
@@ -71,10 +76,51 @@ never renamed or removed.
 **Optional inputs `computeDiagnosticGrade` reads.** The diff-bucket path
 counts a layer bucket's optional `scaffold` array (placeholders `diffPacks`
 parks before pairing) into its `N scaffold excluded` note; older diffs without
-it still pass through the `isScaffoldDiffEntry` filters. The Fresh criterion
+it still pass through the `isScaffoldDiffEntry` filters. It counts the
+optional `notObserved` array the same way (`N not checked`): artefacts one
+pack holds in a family the other could not observe move no weight. The Fresh criterion
 appends the live vantage to its `detail` (`vantage lost …` / `vantage partial
 …`) read through `partialLiveEvidence` from the same module — the pass/fail
 and every score are unchanged, and no import was added.
+
+## The design system
+
+The studio's look is three files a downstream app copies verbatim, so its
+screens read as the same product without a theme of its own to maintain:
+
+1. **`design-tokens.css`** — every value, and only values: the palette, the
+   type and the measures as `--og-*` custom properties on `:root`, restated
+   for `[data-theme="dark"]`. No rule styles an element. Names are semantic
+   (`--og-accent`, `--og-second`, `--og-warn`, `--og-fail`, `--og-info`,
+   each with `-bg`; `--og-bg`, `--og-panel`, `--og-line`, `--og-text`,
+   `--og-muted`; `--og-font`, `--og-font-code`; `--og-radius-*`,
+   `--og-control-*`, `--og-button-*`, `--og-stat-*`), so a host changes a hue
+   by overriding a token, never by editing a rule. `design-tokens.json`
+   carries the same values (`themes.light` / `themes.dark`, names without
+   the prefix); regenerate it with `node tools/gen-design-tokens.mjs --write`.
+2. **`design-kit.css`** — the pieces, as `.og-*` classes that read the tokens
+   and nothing else: no global rule, no element selector, no positioning, so
+   it cannot collide with a host's own stylesheet. Put `.og-app` on the root.
+3. **`design-bridge.css`** — for the view stylesheets you already vendor:
+   `verdict-ui.css` and `proto.css` expect a set of theme properties from the
+   host; this file defines all of them from the tokens. Load it *after* them.
+
+```html
+<link rel="stylesheet" href="design-tokens.css">
+<link rel="stylesheet" href="verdict-ui.css">   <!-- and any other vendored view styles -->
+<link rel="stylesheet" href="design-kit.css">
+<link rel="stylesheet" href="design-bridge.css">
+```
+
+Set `data-theme="dark"` (or `"light"`) on `<html>`. `studio/reskin.css` is
+**not** vendorable: it is this studio's adapter, mapping its own chrome names
+and legacy classes onto the tokens. A downstream host writes its own adapter
+only for markup it already has; new markup uses the `.og-*` classes.
+
+`tools/test-design-system.mjs` holds each file to its role in CI: the tokens
+file contains nothing but tokens, both themes define every colour, the JSON
+equals the CSS, the kit and the bridge read tokens only, the adapter decides
+no colour of its own, and no stylesheet reads a token that does not exist.
 
 ## What the host supplies
 
@@ -120,10 +166,24 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
 - **The `initHost` hook names** (`loadPackB`, `openDeployModal`,
   `renderMainView`, `renderTabs`) — the host object never becomes a mirror
   of app.mjs (docs/UI_CONVENTIONS.md).
+- **Design token and kit names.** `--og-*` properties and `.og-*` classes
+  are only ever added, never renamed or removed; token names stay semantic
+  (a role, not a colour word — CI rejects `--og-lime`). `design-tokens.json`
+  keeps `version: 1` while that holds. Values (a hue, a radius) may change:
+  that is a re-copy, not a migration.
 - **Pack annotation namespace** — writers emit `observogram.*`
   (`observogram.diff.scopeMode`, `observogram.retrofeed.*`,
-  `observogram.services`); readers keep accepting the pre-rebrand
-  `tomograph.*` keys.
+  `observogram.services`, `observogram.unobserved.<kind>`); readers keep
+  accepting the pre-rebrand `tomograph.*` keys.
+- **Diff buckets and entry fields are only ever added.** `notObserved`
+  (per layer, and `summary.notObserved`) is the latest: a host whose live
+  pack comes from its own fetcher gets it by writing
+  `observogram.unobserved.<kind>` = reason for every artefact family that
+  fetcher cannot look at (docs/DIFF.md); a host that writes none sees an
+  empty array and the counts it always had. A metric family's entry adds
+  `series` and `memberIds` to the artefact it embeds; a consumer that lists
+  a pack's own artefacts beside the diff uses `memberIds` to give every
+  series its family's status (the studio's Compare does).
 - **`L4_SUBGROUPS`** is intentionally duplicated: `constants.mjs` owns the
   display copy, `diagnostic-grade.mjs` inlines a private copy so it stays
   zero-import. Change both or neither.
@@ -148,7 +208,9 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
      tools/lib/blast-radius.mjs tools/lib/chain-history.mjs \
      studio/diagnostic-grade.mjs studio/artifact-model.mjs \
      studio/constants.mjs studio/verdict-ui.mjs studio/verdict-ui.css \
-     studio/compare-catalog.mjs studio/host.mjs studio/proto-synthesis.mjs
+     studio/compare-catalog.mjs studio/host.mjs studio/proto-synthesis.mjs \
+     studio/design-tokens.css studio/design-tokens.json \
+     studio/design-kit.css studio/design-bridge.css studio/discover-board.mjs
    ```
 
    `diff.mjs` → `artefact-model.mjs` → `promql-canon.mjs` → `promql.mjs` is
@@ -161,7 +223,10 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
    operators (`a / b` ≡ `a/b`) and `artefact-model.mjs` strips a leading
    `ref:` from reference fields before comparing behaviour — an older
    `artefact-model.mjs` over the newer canon (or vice versa) reports drift
-   the other half no longer sees.
+   the other half no longer sees. 2026-10: `diff.mjs` folds metrics into
+   families and reads `observogram.unobserved.*` through helpers that live
+   in `artefact-model.mjs` (`foldMetricFamilies`) — the newer `diff.mjs`
+   does not load over an older model.
 
 3. Re-copy the changed files, re-run your adapter's type-check, bump the
    recorded sha. Because the modules take their inputs explicitly, upstream

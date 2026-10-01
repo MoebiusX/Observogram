@@ -12,15 +12,13 @@
 
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, relative, basename } from 'node:path';
-import { crawlToYaml } from './lib/crawler.mjs';
-import { validateCanonical } from './lib/validator.mjs';
+import { crawlToYaml, SCAN_EXT, SCAN_MAX_FILE_BYTES, scanSkipsName } from './lib/crawler.mjs';
+import { validateCanonical, SPEC_VERSION, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 import { brandEnv } from './lib/brand-env.mjs';
 import { readFileSync } from 'node:fs';
 const SCHEMA = JSON.parse(readFileSync(
-  new URL('../vendor/observability-pack-spec/v1.2/observability-pack.schema.json', import.meta.url), 'utf8'));
+  new URL(`../${SPEC_SCHEMA_PATH}`, import.meta.url), 'utf8'));
 
-const SCAN_EXT = /\.(ya?ml|json|cjs|mjs|js|jsx|ts|tsx|py|go|java|kt|rs|cs)$/i;
-const IGNORE_DIRS = new Set(['.git', 'node_modules', 'vendor', 'dist', 'build', '.cache', '.next', '.terraform']);
 const DIFF_SCOPE_TOKENS = new Set(['service', 'family', 'legacy', 'off', 'all', 'none', 'strict']);
 
 function argValue(a, prefix) {
@@ -34,16 +32,16 @@ async function walk(root) {
     try { entries = await readdir(dir, { withFileTypes: true }); }
     catch { return; }
     for (const ent of entries) {
-      if (ent.name.startsWith('.') && ent.name !== '.observability') continue;
+      // The one rule every way into the scanner shares (tools/lib/crawler.mjs).
+      if (scanSkipsName(ent.name, { dir: ent.isDirectory() })) continue;
       const abs = join(dir, ent.name);
       if (ent.isDirectory()) {
-        if (IGNORE_DIRS.has(ent.name)) continue;
         await visit(abs);
       } else if (ent.isFile() && SCAN_EXT.test(ent.name)) {
         // Cap per-file size at 5 MB so a stray big binary won't OOM us.
         try {
           const st = await stat(abs);
-          if (st.size > 5 * 1024 * 1024) continue;
+          if (st.size > SCAN_MAX_FILE_BYTES) continue;
           const rel = relative(root, abs).replace(/\\/g, '/');
           out.set(rel, await readFile(abs, 'utf8'));
         } catch (_) { /* unreadable; skip */ }
@@ -58,7 +56,7 @@ const USAGE = `\
 crawl-repo — Path A of pack creation.
 
 Walks a service repository and emits a draft canonical ObservabilityPack
-v1.2 manifest by introspecting common observability artefacts.
+manifest by introspecting common observability artefacts.
 
   Usage:
     node tools/crawl-repo.mjs <repo-path> [options]
@@ -169,7 +167,7 @@ async function main() {
     `#   evidence entries : ${Object.keys(evidence).length}`,
     schemaErrors.length
       ? `#   schema           : INVALID — ${schemaErrors.length} error(s); this is a crawler bug, please report it`
-      : `#   schema           : valid (spec v1.2)`,
+      : `#   schema           : valid (spec v${SPEC_VERSION})`,
     ...schemaErrors.map(e => `#     ✗ ${e}`),
     '',
   ].join('\n'));

@@ -44,6 +44,32 @@
 //                               #   transitions (default) — first run, any chain
 //                               #   verdict change, gate failure, or after a
 //                               #   vantage loss · always · never
+//   schedule: "*/15 * * * *"    # step 5: the cadence this journey is MEANT to run at.
+//                               #   Scheduling is delegated, not built (VALUE_BACKLOG 11):
+//                               #   nothing in the server or this module fires it —
+//                               #   `packc journey schedule <name>` prints the cron /
+//                               #   schtasks / GitHub Actions / CronJob snippet from it,
+//                               #   and the journeys view derives the cadence a sampled
+//                               #   posture budget needs. Also { cron, timezone? } or
+//                               #   { every: <N>m|<N>h|<N>d } (tools/lib/schedule.mjs).
+//   stackBudget: { objective: 0.99, window: 30d }
+//                               # optional, pairs with schedule: the sampled posture
+//                               #   budget the journeys view prints per gated stack row
+//                               #   (stack-evidence.mjs stackPostureBudget) — a posture
+//                               #   line, signal not verdict, never a gate.
+//   notify:                     # step 5: early-warning delivery — one bounded POST per run
+//     urlEnv: MY_JOURNEY_WEBHOOK_URL     # env var NAME holding the URL (required; a literal
+//                                        #   url:/token:/headers: is refused at load)
+//     authEnv: MY_JOURNEY_WEBHOOK_TOKEN  # optional; Authorization: Bearer <value>
+//     on: transitions                    # transitions (default) | breach | always
+//     format: json                       # json (default) | text (one line + markdown body)
+//     timeoutMs: 5000                    # per attempt, clamp [1000, 60000]; one retry on
+//                                        #   network error / 429 / 5xx (worst case 2× + connect)
+//     studioUrl: https://studio.example  # optional non-secret literal → links in the payload
+//   The decision table and the payload live in tools/lib/journey-notify.mjs
+//   (browser-safe); env vars are resolved at RUN time only, never at load,
+//   and the outcome lands on the record as `notify` — written AFTER the
+//   record itself is on disk (write → post → rewrite).
 //
 // Vantage: when Pack B is a live MCP source and the fetch itself fails
 // (endpoint down, core tools unavailable), the run still leaves a record
@@ -51,11 +77,11 @@
 // total loss of the observation point is a point in the drift history,
 // not a hole in it.
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync, openSync, readSync, closeSync } from 'node:fs';
-import { resolve, join, dirname, extname } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync, openSync, readSync, closeSync, realpathSync } from 'node:fs';
+import { resolve, join, dirname, extname, basename, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml, emit as emitYaml } from './mini-yaml.mjs';
-import { validateCanonical } from './validator.mjs';
+import { validateCanonical, SPEC_SCHEMA_PATH } from './validator.mjs';
 import { adapt } from './adapter.mjs';
 import { evaluateConformance } from './conformance.mjs';
 import { diffPacks } from './diff.mjs';
@@ -64,13 +90,21 @@ import { crawlFiles } from './crawler.mjs';
 import { baseWorkspacePath, brandEnv } from './brand-env.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from './contracts/stack-self-metrics.mjs';
 import { formatStackValue } from './stack-evidence.mjs';
+import { parseSchedule, windowMs } from './schedule.mjs';
+import { validateInventoryBlock, validateGateInventory, expectedFromSite, buildInventoryRecord, evaluateInventoryGate, inventorySummary, inventoryStatusLine, unknownKinds } from './inventory-coverage.mjs';
+import {
+  NOTIFY_POLICIES, NOTIFY_DEFAULT_POLICY, NOTIFY_FORMATS, NOTIFY_DEFAULT_FORMAT,
+  NOTIFY_TIMEOUT_DEFAULT_MS, NOTIFY_TIMEOUT_MIN_MS, NOTIFY_TIMEOUT_MAX_MS,
+  NOTIFY_KEYS, NOTIFY_FORBIDDEN_KEYS, ENV_NAME_RE,
+  notifyDecision, buildNotifyPayload, renderNotifyText, redactUrlCredentials,
+} from './journey-notify.mjs';
 import { branchRecordsFromGraph, chainSummary, diffRunBranches, rankCauses, deploysInWindow, topCause } from './chain-history.mjs';
 import { computeDiagnosticGrade, computePostureMatrix, partialLiveEvidence, DIAGNOSTIC_PASS_SCORE_THRESHOLD } from '../../studio/diagnostic-grade.mjs';
 import { sliBaseOfSloId } from '../../studio/verify-deploy.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA = JSON.parse(readFileSync(
-  resolve(__dirname, '../../vendor/observability-pack-spec/v1.2/observability-pack.schema.json'), 'utf8'));
+  resolve(__dirname, '../..', SPEC_SCHEMA_PATH), 'utf8'));
 
 // The engine stays server-agnostic: by default the root comes from env
 // (flat workspace), but a host can inject a context-aware resolver —
@@ -109,11 +143,13 @@ export function saveJourneyDef(name, def, { banner } = {}) {
 }
 
 // Resolve a journey by name (workspace journeys/) or by literal file path.
-export function loadJourneyDef(ref) {
-  const candidates = [
-    join(journeysDir(), `${sanitizeName(ref)}.journey.yaml`),
-    resolve(ref),
-  ];
+// The server passes { allowPath: false }: over the API a journey is only
+// ever a name under the org's journeys/ — Express decodes %2F into the
+// route parameter, so the path fallback would load any file on disk. The
+// CLI keeps it (`packc journey run ./some.journey.yaml`).
+export function loadJourneyDef(ref, { allowPath = true } = {}) {
+  const candidates = [join(journeysDir(), `${sanitizeName(ref)}.journey.yaml`)];
+  if (allowPath) candidates.push(resolve(ref));
   let text = null, source = null;
   for (const p of candidates) {
     try { text = readFileSync(p, 'utf8'); source = p; break; } catch (_) {}
@@ -128,11 +164,176 @@ export function loadJourneyDef(ref) {
   if (!def.packA || (!def.packA.file && !def.packA.crawl)) throw new Error(`journey ${def.name}: packA needs file: or crawl:`);
   if (!def.packB || (!def.packB.file && !def.packB.mcp)) throw new Error(`journey ${def.name}: packB needs file: or mcp:`);
   if (def.gate && typeof def.gate === 'object' && def.gate.stack !== undefined) validateGateStack(def.gate.stack, def.name);
+  // Inventory coverage: a malformed inventory: or gate.inventory block is a load-time error too.
+  if (def.gate && typeof def.gate === 'object' && def.gate.inventory !== undefined) validateGateInventory(def.gate.inventory, def.name);
+  if (def.inventory !== undefined) validateInventoryBlock(def.inventory, def.name);
   if (def.keepLivePack !== undefined && !KEEP_LIVE_PACK_POLICIES.includes(def.keepLivePack)) {
     throw new Error(`journey ${def.name}: keepLivePack must be one of ${KEEP_LIVE_PACK_POLICIES.join(', ')} (got ${JSON.stringify(def.keepLivePack)})`);
   }
+  // Step 5: a typo'd or malformed schedule / stackBudget block is a
+  // load-time configuration error (CLI `list` prints it, GET /api/journeys
+  // puts it in loadError, capture answers 400) — never a run that silently
+  // has no cadence.
+  if (def.schedule !== undefined) validateSchedule(def.schedule, def.name);
+  if (def.stackBudget !== undefined) validateStackBudget(def.stackBudget, def.name);
+  if (def.notify !== undefined) validateNotify(def.notify, def.name);
   def.__source = source;
   return def;
+}
+
+// Step 5: the notify policy vocabulary, re-exported from the browser-safe
+// module so the CLI, the server and the tests keep one import.
+export { NOTIFY_POLICIES, NOTIFY_DEFAULT_POLICY, NOTIFY_FORMATS, NOTIFY_TIMEOUT_DEFAULT_MS };
+
+// Step 5: `notify:` — validated at load time. Secrets never live in a
+// journey file: a literal url/token/headers key is refused with the env-var
+// alternative named; urlEnv (and authEnv) must be env var NAMES, which are
+// resolved at run time only (resolveNotifyTarget), never here.
+export function validateNotify(value, journeyName = '?') {
+  const where = `journey ${journeyName}: notify`;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${where} must be a mapping with urlEnv (got ${JSON.stringify(value)})`);
+  for (const k of Object.keys(value)) {
+    if (NOTIFY_FORBIDDEN_KEYS[k]) throw new Error(`${where}.${k} is not allowed — ${NOTIFY_FORBIDDEN_KEYS[k]} (secrets never live in a journey file)`);
+    if (!NOTIFY_KEYS.includes(k)) throw new Error(`${where}.${k} is not a known key (known: ${NOTIFY_KEYS.join(', ')})`);
+  }
+  if (typeof value.urlEnv !== 'string' || !ENV_NAME_RE.test(value.urlEnv)) throw new Error(`${where}.urlEnv must name an environment variable (got ${JSON.stringify(value.urlEnv)})`);
+  if (value.authEnv !== undefined && (typeof value.authEnv !== 'string' || !ENV_NAME_RE.test(value.authEnv))) throw new Error(`${where}.authEnv must name an environment variable (got ${JSON.stringify(value.authEnv)})`);
+  if (value.on !== undefined && !NOTIFY_POLICIES.includes(value.on)) throw new Error(`${where}.on must be one of ${NOTIFY_POLICIES.join(', ')} (got ${JSON.stringify(value.on)})`);
+  if (value.format !== undefined && !NOTIFY_FORMATS.includes(value.format)) throw new Error(`${where}.format must be one of ${NOTIFY_FORMATS.join(', ')} (got ${JSON.stringify(value.format)})`);
+  if (value.timeoutMs !== undefined && !(Number.isInteger(value.timeoutMs) && value.timeoutMs > 0)) throw new Error(`${where}.timeoutMs must be a positive integer (ms; clamped to [${NOTIFY_TIMEOUT_MIN_MS}, ${NOTIFY_TIMEOUT_MAX_MS}]) (got ${JSON.stringify(value.timeoutMs)})`);
+  if (value.studioUrl !== undefined) {
+    if (typeof value.studioUrl !== 'string' || !/^https?:\/\/[^\s@/]+(?:\/\S*)?$/.test(value.studioUrl)) {
+      throw new Error(`${where}.studioUrl must be a plain http(s) URL without credentials (got ${JSON.stringify(value.studioUrl)})`);
+    }
+  }
+  return value;
+}
+
+// Step 5: the run-time target of a notify block — env vars resolved NOW,
+// kept in a local by the caller, never on `def` or the record. An unset
+// urlEnv/authEnv is a configuration error of the same class as
+// packB.mcp.authEnv (exit 2, no record). null when the definition has no
+// notify block.
+export function resolveNotifyTarget(def) {
+  const n = def?.notify;
+  if (!n) return null;
+  const url = process.env[n.urlEnv];
+  if (!url) throw new Error(`journey ${def.name}: notify.urlEnv names ${n.urlEnv}, but that env var is not set`);
+  const auth = n.authEnv ? (process.env[n.authEnv] || null) : null;
+  if (n.authEnv && !auth) throw new Error(`journey ${def.name}: notify.authEnv names ${n.authEnv}, but that env var is not set`);
+  const format = NOTIFY_FORMATS.includes(n.format) ? n.format : NOTIFY_DEFAULT_FORMAT;
+  const raw = Number.isInteger(n.timeoutMs) ? n.timeoutMs : NOTIFY_TIMEOUT_DEFAULT_MS;
+  return {
+    url,
+    headers: {
+      'Content-Type': format === 'text' ? 'text/plain; charset=utf-8' : 'application/json',
+      ...(auth ? { Authorization: `Bearer ${auth}` } : {}),
+    },
+    on: NOTIFY_POLICIES.includes(n.on) ? n.on : NOTIFY_DEFAULT_POLICY,
+    format,
+    timeoutMs: Math.min(NOTIFY_TIMEOUT_MAX_MS, Math.max(NOTIFY_TIMEOUT_MIN_MS, raw)),
+    urlEnv: n.urlEnv,
+    studioUrl: typeof n.studioUrl === 'string' ? n.studioUrl.replace(/\/+$/, '') : null,
+  };
+}
+
+// Step 5: the bounded POST. One AbortController per attempt; attempt 2
+// only after a network error / timeout, a 429 or a 5xx — any other 4xx is
+// final (the receiver understood and refused). Never throws: the verdict
+// already exists and a notification failure must never change it.
+// `fetchImpl` is injectable for tests.
+export async function postNotification({ url, headers = {}, body = '', timeoutMs = NOTIFY_TIMEOUT_DEFAULT_MS, fetchImpl = globalThis.fetch } = {}) {
+  const t0 = Date.now();
+  let httpStatus = null;
+  let error = null;
+  let attempts = 0;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    attempts = attempt;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const res = await fetchImpl(url, { method: 'POST', headers, body, signal: ac.signal, redirect: 'manual' });
+      httpStatus = typeof res?.status === 'number' ? res.status : null;
+      // Drain the body so the connection can be reused/closed; still under
+      // this attempt's timer.
+      try { await res.arrayBuffer(); } catch { /* body is not the evidence */ }
+      if (res.ok) return { sent: true, httpStatus, attempts, tookMs: Date.now() - t0, error: null };
+      error = `HTTP ${httpStatus}`;
+      if (!(httpStatus === 429 || httpStatus >= 500)) break;
+    } catch (e) {
+      error = ac.signal.aborted ? `timeout after ${timeoutMs}ms` : redactUrlCredentials(String(e?.cause?.message || e?.message || e));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return { sent: false, httpStatus, attempts, tookMs: Date.now() - t0, error };
+}
+
+// The one-line summary a notification leads with:
+// `<journey>: <outcome> · <chain line> · <cause line> · <vantage line>`.
+function notifyTextLine(record) {
+  const bits = [`${record.journey}: ${record.outcome}`];
+  if (record.outcome === 'vantage-lost') bits.push(redactUrlCredentials(record.error || 'live source unreachable'));
+  else bits.push(chainStatusLine(record));
+  if (transitionGotWorse(record)) bits.push(causeLine(record));
+  const v = vantageLine(record);
+  if (v) bits.push(v);
+  return bits.join(' · ');
+}
+
+// Step 5: decide, build, post — and report on the record as `notify`:
+// { status: sent|skipped|failed, reason, triggers, httpStatus, attempts,
+//   tookMs, urlEnv, error }. The URL itself never lands on the record —
+// only the env var NAME. Never throws: a thrown notifier lands in `error`.
+export async function deliverNotification(def, target, record, previousRun, notifier = postNotification) {
+  if (!target) return null;
+  const decision = notifyDecision({ policy: target.on, record, previousRun });
+  const base = { status: 'skipped', reason: decision.reason, triggers: decision.triggers, httpStatus: null, attempts: 0, tookMs: 0, urlEnv: target.urlEnv, error: null };
+  if (!decision.send) return base;
+  const links = target.studioUrl
+    ? { runs: `${target.studioUrl}/api/journeys/${encodeURIComponent(def.name)}/runs?limit=1`, journey: `${target.studioUrl}/#journeys` }
+    : {};
+  const payload = buildNotifyPayload({ record, previousRun, decision, links, text: notifyTextLine(record) });
+  const body = target.format === 'text' ? renderNotifyText(payload) : JSON.stringify(payload);
+  try {
+    const r = await notifier({ url: target.url, headers: target.headers, body, timeoutMs: target.timeoutMs });
+    return {
+      ...base,
+      status: r?.sent ? 'sent' : 'failed',
+      httpStatus: typeof r?.httpStatus === 'number' ? r.httpStatus : null,
+      attempts: typeof r?.attempts === 'number' ? r.attempts : 0,
+      tookMs: typeof r?.tookMs === 'number' ? r.tookMs : 0,
+      error: r?.sent ? null : redactUrlCredentials(r?.error ?? 'notifier returned no result'),
+    };
+  } catch (e) {
+    return { ...base, status: 'failed', attempts: 1, error: redactUrlCredentials(String(e?.message || e)) };
+  }
+}
+
+// Step 5: `schedule:` — delegated to tools/lib/schedule.mjs (the studio
+// uses the same parser at /lib). Throws `journey <name>: schedule must be
+// …` with the offending value.
+export function validateSchedule(value, journeyName = '?') {
+  try { return parseSchedule(value); }
+  catch (e) { throw new Error(`journey ${journeyName}: ${e.message}`); }
+}
+
+// Step 5: `stackBudget: { objective, window }` — the inputs of a sampled
+// posture budget (stack-evidence.mjs stackPostureBudget). Stored as
+// declared; objective in [0, 1), window <N>m|<N>h|<N>d; nothing else.
+export function validateStackBudget(value, journeyName = '?') {
+  const where = `journey ${journeyName}: stackBudget`;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${where} must be a mapping { objective, window } (got ${JSON.stringify(value)})`);
+  for (const k of Object.keys(value)) {
+    if (k !== 'objective' && k !== 'window') throw new Error(`${where}.${k} is not a known key (known: objective, window)`);
+  }
+  if (!(typeof value.objective === 'number' && Number.isFinite(value.objective) && value.objective >= 0 && value.objective < 1)) {
+    throw new Error(`${where}.objective must be a number in [0, 1) (got ${JSON.stringify(value.objective)})`);
+  }
+  if (typeof value.window !== 'string' || windowMs(value.window) === null) {
+    throw new Error(`${where}.window must be <N>m, <N>h or <N>d (got ${JSON.stringify(value.window)})`);
+  }
+  return { objective: value.objective, window: value.window };
 }
 
 // Step 4: when the run keeps a snapshot of Pack B beside its record
@@ -179,8 +380,11 @@ export function validateGateStack(stack, journeyName = '?') {
 
 // ---------- pack sources ----------
 
-function loadPackFile(path, baseDir) {
+// scope: the studio run's crawl scope (below) — a file: source in another
+// org's part of the workspace is refused, as a crawl: root there is (A-24).
+function loadPackFile(path, baseDir, scope = null) {
   const p = resolve(baseDir || '.', path);
+  refuseOutOfScope(p, scope, 'pack file');
   const text = readFileSync(p, 'utf8');
   const pack = extname(p) === '.json' ? JSON.parse(text) : parseYaml(text);
   return { canonical: pack, source: p };
@@ -193,7 +397,42 @@ const SCAN_EXT = /\.(ya?ml|json|cs|go|java|py|ts|tsx|js|mjs|rs|kt)$/i;
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
 
-function walkRepo(root) {
+// The crawl scope of a studio-run journey (STORE_PLAN slice 2): a walk
+// never reads what is not the requesting org's own part of the workspace.
+// scope = { base, ownRoot } (both absolute); null is the CLI's walk,
+// unchanged. Paths are compared as realpaths, so a symlink cannot lead a
+// walk into another org's part.
+function realOrResolved(p) {
+  try { return realpathSync(p); } catch {
+    const parent = dirname(p);
+    return parent === p ? p : join(realOrResolved(parent), basename(p));
+  }
+}
+function within(p, dir) { return p === dir || p.startsWith(dir.endsWith(sep) ? dir : dir + sep); }
+function crawlScopeTest(scope) {
+  if (!scope) return null;
+  const base = realOrResolved(resolve(scope.base));
+  const ownRoot = realOrResolved(resolve(scope.ownRoot));
+  const orgsDir = join(base, 'orgs');
+  // Outside the workspace (a checkout elsewhere) is nobody's part; inside
+  // it only the org's own root is, and the default org at the base never
+  // enters <base>/orgs/, where the other orgs live.
+  return (real) => !within(real, base) || (within(real, ownRoot) && !(ownRoot === base && within(real, orgsDir)));
+}
+
+// A single path (a file: source, an inventory site) read under the scope.
+function refuseOutOfScope(p, scope, what) {
+  const inScope = crawlScopeTest(scope);
+  if (inScope && !inScope(realOrResolved(p))) {
+    throw new Error(`${what} ${p} belongs to another org's part of the workspace — refused`);
+  }
+}
+
+function walkRepo(root, { scope = null } = {}) {
+  const inScope = crawlScopeTest(scope);
+  if (inScope && !inScope(realOrResolved(root))) {
+    throw new Error(`crawl source ${root} belongs to another org's part of the workspace — refused`);
+  }
   const files = {};
   let total = 0;
   const stack = [root];
@@ -203,11 +442,16 @@ function walkRepo(root) {
     try { entries = readdirSync(dir, { withFileTypes: true }); } catch (_) { continue; }
     for (const e of entries) {
       if (e.isDirectory()) {
-        if (!SKIP_DIRS.has(e.name) && !e.name.startsWith('.')) stack.push(join(dir, e.name));
+        if (!SKIP_DIRS.has(e.name) && !e.name.startsWith('.')) {
+          const sub = join(dir, e.name);
+          if (inScope && !inScope(realOrResolved(sub))) continue;   // never descended into
+          stack.push(sub);
+        }
         continue;
       }
       if (!SCAN_EXT.test(e.name)) continue;
       const full = join(dir, e.name);
+      if (inScope && !inScope(realOrResolved(full))) continue;      // a symlinked file included: skipped
       let size = 0;
       try { size = statSync(full).size; } catch (_) { continue; }
       if (size > MAX_FILE_BYTES || total + size > MAX_TOTAL_BYTES) continue;
@@ -220,11 +464,11 @@ function walkRepo(root) {
   return files;
 }
 
-async function resolvePackA(def, baseDir) {
-  if (def.packA.file) return loadPackFile(def.packA.file, baseDir);
+async function resolvePackA(def, baseDir, crawlScope = null) {
+  if (def.packA.file) return loadPackFile(def.packA.file, baseDir, crawlScope);
   const c = def.packA.crawl;
   const root = resolve(baseDir || '.', c.path);
-  const files = walkRepo(root);
+  const files = walkRepo(root, { scope: crawlScope });
   if (!Object.keys(files).length) throw new Error(`crawl source ${root}: no scannable files found`);
   const out = crawlFiles(files, {
     repoName: c.name || undefined,
@@ -234,8 +478,8 @@ async function resolvePackA(def, baseDir) {
   return { canonical: out.canonical, source: `crawl:${root}` };
 }
 
-async function resolvePackB(def) {
-  if (def.packB.file) return loadPackFile(def.packB.file, def.__baseDir);
+async function resolvePackB(def, crawlScope = null) {
+  if (def.packB.file) return loadPackFile(def.packB.file, def.__baseDir, crawlScope);
   const m = def.packB.mcp;
   if (!m?.url) throw new Error(`journey ${def.name}: packB.mcp.url required`);
   const mcpAuth = m.authEnv ? (process.env[m.authEnv] || null) : null;
@@ -258,6 +502,64 @@ async function resolvePackB(def) {
     throw e;
   }
 }
+
+// ---------- inventory coverage ----------
+//
+// `inventory: { site, kinds? }` on the journey names a gen-site partition's site.json (relative
+// to the journey file); its `expected` block is what the inventory declares per kind. The live
+// half comes from fetch-live-pack.mjs observeInventory (the `up` series by label through the
+// MCP); tools/lib/inventory-coverage.mjs does the arithmetic and the gate. A file-sourced Pack B
+// has no live series (not-attempted, said so); a site that cannot be read or carries no
+// expected block is `failed` with the reason; an MCP without the metrics query tool is
+// not-attempted with the tier reason. Never touches the grade or the alignment.
+async function observeInventoryCoverage(def, checkedAt, crawlScope = null) {
+  const site = def.inventory.site;
+  const kinds = def.inventory.kinds || null;
+  let manifest;
+  try {
+    const sitePath = resolve(def.__baseDir || '.', site);
+    refuseOutOfScope(sitePath, crawlScope, 'inventory site');
+    manifest = JSON.parse(readFileSync(sitePath, 'utf8'));
+  }
+  catch (e) { return buildInventoryRecord({ site, expected: null, status: 'failed', reason: `cannot read ${site}: ${e.message}`, checkedAt }); }
+  const expected = expectedFromSite(manifest);
+  if (!expected) return buildInventoryRecord({ site, expected: null, status: 'failed', reason: `${site} carries no expected block (render the partition with gen-site)`, checkedAt });
+  const unknown = unknownKinds(expected, kinds);
+  if (unknown.length) return buildInventoryRecord({ site, expected, kinds, checkedAt });   // failed, naming the unknown kinds — no wire call
+  if (!def.packB?.mcp) return buildInventoryRecord({ site, expected, kinds, status: 'not-attempted', reason: 'file-sourced Pack B: no live series to compare', checkedAt });
+  const m = def.packB.mcp;
+  const mcpAuth = m.authEnv ? (process.env[m.authEnv] || null) : null;
+  const { observeInventory } = await import('../fetch-live-pack.mjs');
+  let obs;
+  try { obs = await observeInventory({ mcpUrl: m.url, mcpAuth, expected, kinds }); }
+  catch (e) { return buildInventoryRecord({ site, expected, kinds, status: 'failed', reason: `inventory observation failed: ${e.message}`, checkedAt }); }
+  if (obs.status !== 'checked') return buildInventoryRecord({ site, expected, kinds, status: obs.status, reason: obs.reason, checkedAt });
+  return buildInventoryRecord({ site, expected, observations: obs.observations, kinds, checkedAt });
+}
+
+// The markdown section: one row per kind of the record's inventory block.
+function inventoryTable(r) {
+  const inv = r?.inventory;
+  if (!inv || typeof inv !== 'object') return [];
+  const lines = [
+    '',
+    `### Inventory coverage — ${mdCell(inv.status)}${inv.reason ? ` (${mdCell(inv.reason)})` : ''}${inv.site ? ` · ${mdCell(inv.site)}` : ''}`,
+    '',
+    '| kind | expected | up | down | silent | unexpected | coverage |',
+    '|---|---|---|---|---|---|---|',
+  ];
+  for (const [k, c] of Object.entries(inv.kinds || {})) {
+    if (c.mode === 'counted') {
+      lines.push(`| ${mdCell(k)} (${mdCell(c.title)}, per ${mdCell(c.per || '?')}) | ${Object.keys(c.min || {}).length} floor(s) | ${c.total === null || c.total === undefined ? '—' : `total ${c.total}`} | — | — | ${c.below?.length ? `${c.below.length} below floor` : (c.missing?.length ? `no count for ${mdCell(c.missing.join(', '))}` : '—')} | ${mdCell(c.status)}${c.error ? ` — ${mdCell(c.error)}` : ''} |`);
+    } else {
+      lines.push(`| ${mdCell(k)} (${mdCell(c.title)}) | ${c.expected} | ${c.up ?? '—'} | ${c.down?.length ? mdCell(c.down.join(', ')) : '—'} | ${c.silent?.length ? mdCell(c.silent.join(', ')) : '—'} | ${c.unexpected?.length ? mdCell(c.unexpected.join(', ')) : '—'} | ${mdCell(c.status)}${c.coveragePct === null || c.coveragePct === undefined ? '' : ` · ${c.coveragePct}%`}${c.error ? ` — ${mdCell(c.error)}` : ''} |`);
+    }
+  }
+  lines.push('', '_Inventoried vs answering, as a point-in-time comparison of the site\'s expected sets with the live `up` series — never an SLO verdict._');
+  return lines;
+}
+
+export { inventoryStatusLine, inventorySummary };
 
 // ---------- gate ----------
 
@@ -317,6 +619,7 @@ export function evaluateGate(gate, facts) {
     }
   }
   if (gate.stack && typeof gate.stack === 'object') evaluateStackGate(gate.stack, facts.stackEvidence, add);
+  if (gate.inventory && typeof gate.inventory === 'object') evaluateInventoryGate(gate.inventory, facts.inventory ?? null, add);
   return breaches;
 }
 
@@ -613,21 +916,29 @@ export function pruneLiveSnapshots(recordFiles, liveFiles) {
 
 // ---------- the run ----------
 
-export async function runJourney(def, { baseDir } = {}) {
+// crawlScope: { base, ownRoot } from the server (a crawl: walk, a file:
+// source and an inventory site read only the org's own part of the
+// workspace, or outside it); null for the CLI.
+export async function runJourney(def, { baseDir, notifier = postNotification, crawlScope = null } = {}) {
   def.__baseDir = baseDir || (def.__source ? dirname(def.__source) : '.');
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
+  // Step 5: the notify target is resolved before anything else — an unset
+  // urlEnv/authEnv is a configuration error (exit 2, no record), like an
+  // unset packB.mcp.authEnv. Kept in this local only.
+  const notifyTarget = resolveNotifyTarget(def);
 
-  const a = await resolvePackA(def, def.__baseDir);
+  const a = await resolvePackA(def, def.__baseDir, crawlScope);
   let b;
   try {
-    b = await resolvePackB(def);
+    b = await resolvePackB(def, crawlScope);
   } catch (e) {
     // Only a LIVE source that reached the wire can lose its vantage; a
     // missing pack file or an unset authEnv is a configuration error and
     // leaves no record.
     if (def.packB?.mcp && e?.vantageLost) {
-      writeRunRecord(def.name, startedAt, {
+      const previousRun = readJourneyRuns(def.name, { limit: 1 })[0] || null;
+      const lost = {
         journey: def.name,
         startedAt,
         tookMs: Date.now() - t0,
@@ -637,7 +948,14 @@ export async function runJourney(def, { baseDir } = {}) {
         packB: { source: `mcp:${def.packB.mcp.url}` },
         scope: { env: def.env || null, service: def.service || null, scopeMode: def.scopeMode || null },
         gate: { thresholds: def.gate || {}, breaches: [] },
-      });
+      };
+      // Same write → post → rewrite order as the main path (see below).
+      if (!notifyTarget) lost.notify = null;
+      writeRunRecord(def.name, startedAt, lost);
+      if (notifyTarget) {
+        lost.notify = await deliverNotification(def, notifyTarget, lost, previousRun, notifier);
+        writeRunRecord(def.name, startedAt, lost);
+      }
     }
     throw e;
   }
@@ -664,6 +982,8 @@ export async function runJourney(def, { baseDir } = {}) {
 
   const liveRefreshedAt = b.canonical?.metadata?.annotations?.['mcp.refreshedAt'] || null;
   const live = liveEvidenceFacts(b.canonical);
+  // Inventory coverage (inventory-coverage.mjs): the site's expected sets against the live up series.
+  const inventory = def.inventory ? await observeInventoryCoverage(def, startedAt, crawlScope) : null;
   // grade.overall.audit is the canonical PASS/FAIL contract (score > 85%).
   const audit = grade.overall?.audit || { scorePctExact: 0, passes: false };
   const facts = {
@@ -676,6 +996,7 @@ export async function runJourney(def, { baseDir } = {}) {
     aligned: diff.summary?.aligned ?? 0,
     liveAgeHours: hoursSince(liveRefreshedAt),
     ...live,
+    inventory,
   };
   const breaches = evaluateGate(def.gate, facts);
   const rollup = diff.traceabilityGraph?.rollup || null;
@@ -787,6 +1108,8 @@ export async function runJourney(def, { baseDir } = {}) {
     // status), null when Pack B carries no panel. Point-in-time evidence
     // kept per run so the history is the time series; gate.stack reads it.
     stackEvidence: live.stackEvidence,
+    // Inventory coverage per kind (null when the journey declares no inventory: block).
+    inventory,
     gate: { thresholds: def.gate || {}, breaches },
     outcome,
   };
@@ -812,7 +1135,18 @@ export async function runJourney(def, { baseDir } = {}) {
   }
   if (livePackError) record.historyError = livePackError;
 
+  // Step 5: early-warning delivery. `notify` is appended AFTER causes /
+  // historyError (the pinned key run is untouched) and the record is on
+  // disk BEFORE anything touches the wire: write → post → rewrite (same
+  // stem, overwrite; pruning is idempotent). Readers must treat a record
+  // WITHOUT a `notify` key as "unknown" (a crash between the two writes),
+  // never as "skipped"; `null` means the definition has no notify block.
+  if (!notifyTarget) record.notify = null;
   writeRunRecord(def.name, startedAt, record);
+  if (notifyTarget) {
+    record.notify = await deliverNotification(def, notifyTarget, record, previousRun, notifier);
+    writeRunRecord(def.name, startedAt, record);
+  }
   return record;
 }
 
@@ -1031,6 +1365,7 @@ export function renderJourneyMarkdown(r) {
       `| Took | ${r.tookMs ?? '?'}ms |`,
       '',
       '_No verdict: the live vantage point did not answer, so nothing about the declared artefacts could be verified. Recorded so the loss is a point in history, not a gap._',
+      ...notifyLines(r),
     ].join('\n');
   }
   const icon = r.outcome === 'pass' ? '✅' : '❌';
@@ -1049,9 +1384,11 @@ export function renderJourneyMarkdown(r) {
     `| Live probes | ${probesLine(r)} |`,
     `| On-wire health | ${r.scrapeJobsDown ?? 0} scrape job(s) down · ${r.unhealthyRules ?? 0} unhealthy rule(s) |`,
     `| Stack self-metrics | ${stackLine(r)} |`,
+    `| Inventory coverage | ${inventoryStatusLine(r) ?? 'not declared'} |`,
     `| Took | ${r.tookMs}ms |`,
   ];
   lines.push(...stackEvidenceTable(r.stackEvidence));
+  lines.push(...inventoryTable(r));
   lines.push(...requirementChainsTable(r.branches));
   lines.push(...transitionsSection(r));
   lines.push(...causesSection(r));
@@ -1059,8 +1396,29 @@ export function renderJourneyMarkdown(r) {
     lines.push('', '### Gate breaches', '');
     for (const b of r.gate.breaches) lines.push(`- **${mdCell(b.criterion)}** — ${mdCell(b.detail)}`);
   }
+  lines.push(...notifyLines(r));
   lines.push('', '_Verification evidence (declared vs observed); not incident-validated._');
   return lines.join('\n');
+}
+
+// Step 5: the delivery outcome of a run in one line — only when the
+// record carries a `notify` object. `null` (no notify block) prints
+// nothing; a record WITHOUT the key (written before delivery, or by a
+// pre-step-5 runner) prints nothing either — never "skipped".
+function notifyLines(r) {
+  const n = r?.notify;
+  if (!n || typeof n !== 'object') return [];
+  if (n.status === 'sent') return ['', `notify: sent (${mdCell(n.httpStatus ?? '?')}) — ${mdCell(n.reason)}`];
+  if (n.status === 'failed') return ['', `notify: failed after ${mdCell(n.attempts ?? 0)} attempt${n.attempts === 1 ? '' : 's'} — ${mdCell(n.error || 'no error recorded')}`];
+  return ['', `notify: ${mdCell(n.status)} — ${mdCell(n.reason)}`];
+}
+
+// The same in a few words, for `packc journey list`: 'notify sent' /
+// 'notify skipped' / 'notify failed', or null when the record carries no
+// notify object (nothing to append).
+export function notifyStatusLine(record) {
+  const n = record?.notify;
+  return n && typeof n === 'object' && typeof n.status === 'string' ? `notify ${n.status}` : null;
 }
 
 // Every value interpolated into the report that came off the wire or the

@@ -10,6 +10,11 @@ node_modules/
 coverage/
 .nyc_output/
 
+# `npm run build:stamp` output (tools/stamp-build.mjs): the commit identity
+# for a copy of this tree without .git — written on the host before a
+# docker build, read by tools/lib/build-info.mjs. Per-build state, never source.
+/build.json
+
 # Local workspace — persisted packs, deploy audit, journey runs.
 # Per-machine state, never source. OBSERVOGRAM_WORKSPACE relocates it
 # (.tomograph/ is the pre-rebrand name; existing ones keep working).

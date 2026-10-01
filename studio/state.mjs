@@ -10,11 +10,65 @@
 export const $  = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
+// The BUILD journey's inputs (docs/BUILD_JOURNEY.md, slice 2): Define ·
+// Compile · Verify over the pack library. `slis: null` means "every SLI the
+// tier reaches" (the engine's defaultToggles) until the user edits the list
+// (any SLI of the selected entries may be in it, above the tier too: the
+// tier is a seed, not a gate); `params` holds only the overrides (a value
+// equal to the default is deleted so the placeholder stays a placeholder);
+// `overrides` the per-SLI copies over the library's values ({ [sliKey]:
+// { id, objective, window, threshold, good_when, query, good, total, description, unit, semconv_metric } },
+// copy-on-write: only the fields the user edited), `custom` the SLIs written
+// from scratch, `seeded` whether DEFINE was confirmed ("Seed the pack →"),
+// which is what opens COMPILE. `result` is the last instantiate response and
+// is never persisted — the canonical is re-instantiated on reload from the
+// inputs, which are.
+export function defaultBuildState() {
+  return {
+    step: 'define',           // 'define' | 'compile' | 'verify'
+    name: '',
+    owners: '',               // comma-separated, parsed by the model
+    environment: 'prod',
+    tier: 'tier-2',
+    entries: [],              // library entry ids, in selection order
+    params: {},               // { [paramKey]: value } overrides only
+    slis: null,               // null → the tier's defaults; [ids] once edited (any SLI of the selected entries)
+    toggles: { slos: true, policy: true, routes: true, dashboards: true, validation: true },
+    overrides: {},            // { [sliKey]: { <field>: value } } — the edited fields only (docs/BUILD_JOURNEY.md "The seed and the copies")
+    custom: [],               // [{ id, type, objective, window, good + total | query + threshold (+ good_when?), description?, unit? }] — SLIs written from scratch
+    seeded: false,            // DEFINE confirmed ("Seed the pack →"): what makes COMPILE reachable; persisted
+    result: null,             // { canonical, canonicalYaml, todos, warnings, summary, conformance, schemaErrors, provenance }
+    error: null,              // [messages] from a 400 instantiate
+    pending: false,           // an instantiate is in flight
+    preview: null,            // { target, label, filename, contentType, content, warnings } — the VERIFY artefact open
+    registeredId: null,       // the id VERIFY's "Continue …" exit registered
+    stackOpen: {},            // { [`${layerId}/detail`]: true } — the stack's open detail folds (UI state, never persisted)
+    sheetOpen: null,          // the layer whose sheet is open ('L1' … 'GOV'), one at a time (UI state, never persisted)
+    rolodexAll: false,        // the L1 rolodex shows every product's SLIs, not only the selected entries' (UI state, never persisted)
+    editor: null,             // the pop-up editor: { key, custom } over one SLI, or { create: true } for a new custom one (UI state, never persisted; docs/BUILD_JOURNEY.md "The editor")
+    editorDirty: false,       // an editor field changed and the debounced instantiate has not answered yet: the editor's status reads 'applying…' (UI state, never persisted)
+    customDraft: null,        // the editor's create form as typed, until it is added (UI state, never persisted)
+    customDraftErrors: null,  // the engine's usage errors on the last 'Add to the pack' attempt (UI state, never persisted)
+    wantedStep: null,         // the step asked for while unreachable (a reload on Verify before the pack is back); honoured once the instantiation answers (UI state, never persisted)
+    defineSub: null,          // DEFINE's substep on screen ('service' · 'tier' · 'technology' · 'review'); null = the first incomplete one (UI state, never persisted)
+    defineFolds: {},          // DEFINE's open folds ("Why these suggestions?", "Advanced review") (UI state, never persisted)
+    compileView: null,        // COMPILE's drawn layers: null (none) · 'all' · [layer ids] (UI state, never persisted)
+    accepted: {},             // VERIFY's warnings accepted with a reason, for this session only — never written into the pack (UI state, never persisted)
+    accepting: null,          // the warning whose "Accept with reason" form is open (UI state, never persisted)
+    acceptDraft: null,        // that form's reason as typed (UI state, never persisted)
+  };
+}
+// The build fields that survive a reload (never `result`, `preview`, `error`, `pending`).
+export const BUILD_PERSIST_FIELDS = ['step', 'name', 'owners', 'environment', 'tier', 'entries', 'params', 'slis', 'toggles', 'overrides', 'custom', 'seeded', 'registeredId'];
+
 export const state = {
   // 'home' starts the studio empty; user picks Analyze (one pack) or
   // Compare (two packs). Once chosen, mode becomes 'single' or 'compare'
   // and the header bar + tabs appear. Logo click returns to 'home'.
+  // 'build' is the BUILD journey (Define · Compile · Verify) — the
+  // header then renders BUILD_TABS through the same renderer.
   mode: 'home',
+  build: defaultBuildState(),
   // Which home renders: 'gate' (signed-in service picker) or 'hero'
   // (the marketing/connect landing). Authenticated users with services
   // land on the gate; local mode keeps the hero. Never persisted.
@@ -62,9 +116,23 @@ export const state = {
   // Discover content filters (only active on view='layers').
   layersSearch: '',            // free-text over card id/title/desc/tags/tool
   layersDomain: 'all',         // facet over artefact tool/system
-  // Secondary layer filter chips (only visible on view='layers').
-  // 'all' stacks every layer; the layer ids narrow to one.
+  // Discover's one expanded layer (the layer overview opens one at a time).
+  // 'all' = the overview with every layer collapsed; a layer id expands
+  // that layer. Anything that routes to Discover with a layer id (the
+  // traceability "open" action) lands with that layer open.
   layerFilter: 'all',
+  // Discover's View: how much of each artefact the open layer draws — 'list'
+  // (name and a status mark) | 'tiles' (name, kind, bound, status) | 'cards'
+  // (the card grid) | 'details' (the full row, the default). card-html.mjs
+  // DISCOVER_VIEWS. Persisted.
+  discoverDetail: 'details',
+  // Discover's scroll position ({ pack, y }), restored when the user comes
+  // back from Diagnose or Remediate to the same pack (UI state, never persisted).
+  discoverScroll: null,
+  // Compare's view: 'all' (both packs side by side) | 'review' | 'summary'.
+  // Side by side until the user picks another; a reload starts there again
+  // (UI state, never persisted).
+  compareFocus: 'all',
   // Legacy: kept for back-compat with code that still reads it
   // (drawer card highlight on per-layer cards, etc.). Mirrors view.
   activeLayer: 'L1',
@@ -77,6 +145,7 @@ export const state = {
   compareBEnv: null,
   compareSlice: 'all',         // 'all' | 'onlyA' | 'onlyB' | 'both' | 'a-b' | 'a+b'
   compareSearch: '',           // text filter applied to card id/title
+  compareDetail: 'cards',      // Compare's View: 'list' | 'tiles' | 'cards' | 'details' (compare-view.mjs COMPARE_VIEWS). Persisted.
   compareLens: 'all',          // 'all' | <product-slug>. Filters Compare/Benchmark to
                                // only artefacts in a product's surface (e.g. 'grafana'
                                // keeps backends with product=grafana, dashboards whose
@@ -89,12 +158,16 @@ export const state = {
   diff: null,                  // last fetched /api/diff result
   packB: null,                 // B's full layered pack (for atlases)
   atlasVariant: 'strata',      // 'strata' | 'periodic' | 'constellation' | 'skyline' | 'transit' | 'arbor'
+  // Advanced → Neuron: the focused journey (null → the one that most needs
+  // eyes, neuron-model.mjs defaultFocus), how many newest runs per journey
+  // the series keep, and which fleet metric the trend chart draws.
+  neuronJourney: null,
+  neuronWindow: 50,            // 20 | 50 | 100 | 200
+  neuronMetric: 'alignment',   // 'alignment' | 'grade'
   atlasMorph: 0,               // 0..1 for the constellation slider
   arborView: 'A',              // 'A' | 'B' | 'both' — arbor side-by-side toggle
   compileTarget: 'prometheus-rules',
-  compileDashId: null,
   compileContent: null,        // { filename, contentType, text, source } | { error }
-  compileTargets: null,        // legacy catalog from /api/compile/targets
   // Per-artifact compile state (Phase 7m).
   compileCatalog: null,        // { groups: [...] } from /api/packs/:id/compile-catalog
   compileGroup: 'rules',       // 'rules' | 'dashboards' | 'pipelines' | 'alertmanager'
@@ -103,7 +176,6 @@ export const state = {
   deployMatrix: null,          // catalog from /api/deploy/matrix
   deployProduct: 'grafana',    // chosen target product
   deployVersion: '12',         // chosen target version (string — matches matrix.versions)
-  deployScope: 'both',         // for prometheus-rules: both | recording | alerting
   // Reconcile mode. null → bidirectional when Pack B is loaded, otherwise
   // deploy-only. Legacy values (A/B/AUB/A-B) are migrated in compile-view.
   remediateOp: null,           // 'all' | 'deploy' | 'retrofeed' | 'drift'
@@ -121,18 +193,22 @@ export const state = {
 // pack that vanished from the catalog just drops silently.
 const PERSIST_KEY = 'studioState.v1';
 const PERSIST_FIELDS = [
+  'mode',                        // only 'build' is acted on at rehydrate; the pack ids decide the rest
+  'build',                       // snapshotted through BUILD_PERSIST_FIELDS (inputs only, never the canonical)
   'selectedService',
   'selectedPackId', 'selectedEnv',
   'compareBId', 'compareBEnv',
   'view', 'layerFilter', 'diagnoseSub',
-  'compareSlice', 'compareSearch', 'compareLens', 'diffScopeMode',
+  'compareSlice', 'compareSearch', 'compareLens', 'compareDetail', 'diffScopeMode',
   'viewFocus',
   'atlasVariant', 'arborView',
+  'neuronJourney', 'neuronWindow', 'neuronMetric',
   'compileGroup', 'compileFlavor', 'compileArtifact',
   'compileGroupB', 'compileFlavorB', 'compileArtifactB',
   'tracePrefs',
   'expandL2', 'expandL3Panels', 'expandL3Queries',
   'layersSearch', 'layersDomain',
+  'discoverDetail',
 ];
 export const persistence = {
   _suspended: true,  // boot-phase guard — flipped to false once rehydrate finishes
@@ -151,6 +227,9 @@ export const persistence = {
     if (this._suspended) return;
     const snap = {};
     for (const k of PERSIST_FIELDS) snap[k] = state[k];
+    // The build draft persists as inputs only: the instantiate result (a
+    // ~20 KB canonical plus its YAML) is re-derived on reload, never stored.
+    snap.build = Object.fromEntries(BUILD_PERSIST_FIELDS.map(k => [k, state.build?.[k]]));
     try { localStorage.setItem(PERSIST_KEY, JSON.stringify(snap)); } catch (_) {}
   },
   schedule() {

@@ -9,6 +9,7 @@
 //                                     a pre-rebrand .tomograph/ keeps working)
 //     packs/<id>.pack.yaml           one inspectable YAML file per pack
 //     packs/index.json               id → { label, source, createdAt, lastUsedAt }
+//     live/production-live.pack.yaml the org's live pack (POST /api/refresh-live)
 //
 // Design constraints (deliberate):
 //   - File-first, zero new dependencies: plain YAML files + one JSON index,
@@ -36,9 +37,10 @@ import { orgWorkspaceRoot } from './tenancy.mjs';
 
 const PACK_SUFFIX = '.pack.yaml';
 
-// Stage 2 tenancy: the root is context-aware — <workspace>/orgs/<orgId>/
-// inside a request that carries an org, the flat workspace otherwise
-// (byte-identical v1 behaviour when tenancy is off). See server/tenancy.mjs.
+// Stage 2 tenancy (always on): the root is context-aware — the root of the
+// request's org, fixed at its creation in the store (the default org's is
+// usually the workspace itself, '.'; a created org's is orgs/<orgId>/).
+// Outside an org context it throws. See server/tenancy.mjs.
 function workspaceRoot() {
   return orgWorkspaceRoot();
 }
@@ -93,7 +95,7 @@ function readIndex() {
   }
 }
 
-// In-memory index state is keyed BY ROOT: with tenancy on, each org has
+// In-memory index state is keyed BY ROOT: with tenancy, each org has
 // its own workspace subtree, and a process-wide single cache would bleed
 // one org's index (ids, labels, deletions) into another's flush. The
 // per-root record holds exactly the state the old module-level variables
@@ -365,6 +367,31 @@ export function readDeploySnapshot(deployId) {
 
 // Test hook: force any debounced index write to land now.
 export function flushWorkspaceIndex() { flushIndexNow(); }
+
+// ---------- the live pack (per org) ----------
+//
+// The last POST /api/refresh-live of THIS org, read by GET /api/live-status
+// for the studio's LIVE badge: <org root>/live/production-live.pack.yaml.
+// Replaced atomically, so a concurrent live-status never reads a torn file.
+// (Before STORE_PLAN slice 3 it was one file in the install, shared by every
+// org; the CLI `npm run fetch-live` still writes that path by default.)
+export const LIVE_PACK_FILE = 'production-live.pack.yaml';
+
+export function livePackPath() { return join(workspaceRoot(), 'live', LIVE_PACK_FILE); }
+
+export function writeLivePack(yamlText) {
+  mkdirSync(join(workspaceRoot(), 'live'), { recursive: true });
+  writeFileAtomic(livePackPath(), yamlText);
+}
+
+// The YAML text, or null when this org has none yet.
+export function readLivePack() {
+  try { return readFileSync(livePackPath(), 'utf8'); }
+  catch (e) {
+    if (e.code === 'ENOENT') return null;
+    throw e;
+  }
+}
 
 // Test hook: drop the in-memory index caches so a re-pointed
 // OBSERVOGRAM_WORKSPACE takes effect within the same process.

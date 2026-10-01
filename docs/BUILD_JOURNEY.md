@@ -1,0 +1,997 @@
+# The BUILD journey
+
+A second, parallel journey beside Discover · Diagnose · Remediate, for teams that
+have no pack yet. Three steps in the same visual language, ending where the
+existing journey begins. This document is the contract between the engine
+(slice 1, shipped: `tools/lib/library.mjs`, `library/`, `packc init`) and the
+studio + API built on top of it (slice 2, shipped: `/api/library/*`, `BUILD_TABS`,
+`studio/build-*.mjs` — see "Slice 2" below). Precedent, superseded by this
+design: [archive/COMPOSE_MODE_PLAN.md](archive/COMPOSE_MODE_PLAN.md) (drag-and-drop
+authoring from a block library — the library is now data, the canvas is the
+generated pack) and [archive/REFERENCE_CATALOGUE_PLAN.md](archive/REFERENCE_CATALOGUE_PLAN.md)
+(the catalogue those blocks came from — the reference packs are now the evidence
+behind the entries).
+
+## Where it starts
+
+The first decision is about the pack, because a service may already exist without
+one. Both landings — the signed-in service gate and the local hero — open with one
+question: **Do you want to check an existing service or pack, or build a new pack?**
+The first answer leads to the service picker or an import (upload, repo scan, live
+MCP draft); the second to DEFINE. The two paths join at *Pack available in Discover*:
+a newly compiled pack enters the same audit journey as an imported one, and its
+unresolved placeholders stay visible so Diagnose grades them as gaps, never as verified.
+
+```mermaid
+flowchart TD
+    A["Log in"] --> B{"What would you like to do?"}
+    B -->|"Check an existing service or pack"| C["Select service or import pack"]
+    B -->|"Build a new pack"| D["DEFINE<br/>What are we building for?"]
+    D --> E["COMPILE<br/>What did the pack produce?"]
+    E --> F["VERIFY<br/>What is ready, and what remains?"]
+    F --> G{"Ready to continue?"}
+    G -->|"Resolve or adjust"| D
+    G -->|"Open pack in Discover (with visible gaps)"| H["Pack available in Discover"]
+    C --> H
+    H --> I["DISCOVER<br/>What do we have?"]
+    I --> J["DIAGNOSE<br/>How reliable is this pack?"]
+    J --> K["REMEDIATE<br/>Resolve gaps"]
+    K --> I
+```
+
+## The three steps
+
+| Step | Question | Input | Output |
+|---|---|---|---|
+| 1 DEFINE | What are we building for? | service name, owners, criticality tier-1/2/3, environment, one or more library entries (products it runs on, or an archetype for a service built from scratch) — then **Seed the pack →**: the definition is confirmed once and recedes into a seed card | the entries' params with defaults; the tier's requirements (`tierRequirements`); the tier's default SLIs (`defaultToggles`) as the seed |
+| 2 COMPILE | What did the pack produce? | per-entry SLI toggles (**any** SLI of the entries, the tier's defaults pre-ticked), the copies (overrides per SLI, custom SLIs), params, section toggles (SLOs, policy + routes, dashboards, validation) | the canonical pack + todos + provenance (`instantiatePack`) |
+| 3 VERIFY | What is ready, and what remains? | the pack | which clauses pass, which pass only on a placeholder, which fail (`validationSummary`); the schema verdict; the compiled artifacts through the existing targets (Prometheus rules, OTel Collector, Alertmanager, Grafana dashboards) |
+
+**Hand-off.** VERIFY ends on *Ready to continue?* with two exits: *Resolve or adjust*
+returns to DEFINE; *Open pack in Discover with visible gaps* (*Open pack in Discover* when
+no placeholder remains) registers the produced pack in the studio's upload registry (the
+same path an uploaded pack takes) and switches to the existing journey:
+Discover shows its layers, Diagnose compares it with a live pack, Remediate compiles
+and deploys the delta. Nothing in Discover / Diagnose / Remediate changes; a
+library-built pack is an ordinary canonical pack with provenance annotations.
+
+## The screens, after the 2026-09 UX review
+
+The review (docs/UX_SCREEN_GRAMMAR.md) found Define asking for everything at once and
+Verify's *conformant* reading as *safe to deploy*. What changed, per step:
+
+- **DEFINE** is four short substeps inside the step — *Service* (name, owners,
+  environment), *Criticality* (each tier a card that says what it requires, from the
+  rubric: *Tier 2: availability and latency objectives; metrics, logs and traces;
+  burn-rate alerts; …*), *Technology* (each card says *Adds N suggested SLIs*, previewable
+  before it is picked), *Review suggestions* (the SLIs grouped by technology with *Select
+  recommended* and one checkbox each). The substep on screen is `build.defineSub` (UI
+  state). Rubric clauses and the layer mechanics moved into *Why these suggestions?* and
+  *Advanced review*. The definition column is a sticky progress summary, not a second
+  scrolling form.
+- **The editor** opens on a live sentence (*Queue depth headroom is healthy when its ratio
+  is at or below 0.8; target 99.9% of the time over 30 days.*), groups its fields, folds
+  PromQL and the generated names under *Advanced*, checks direction / bound / unit /
+  objective / window as the user types (beside the field and in a linked summary, the
+  typed values kept), and ends on **Save SLI** with *Include in this pack* as a checkbox.
+- **COMPILE** asks *What did the pack produce?* and leads with the result (*Pack
+  compiled. Two warnings need review; 19 values remain placeholders.*), three separate
+  states (generated · complete for this tier · ready to deploy), a *Needs review* queue
+  (warning, impacted artefact, suggested correction, *Review*), a layer overview whose
+  slabs are drawn only when selected (`build.compileView`), and a *Changes since Define*
+  disclosure.
+- **VERIFY** asks *What is ready, and what remains?* and shows four readiness states
+  independently — *Schema valid*, *Meets tier rubric*, *Implementation*, *Deployment
+  ready* — under a verdict such as *Ready for team completion; not ready for deployment.*
+  Meeting the rubric never masks placeholders: deployment is ready only when nothing
+  fails, no value or runbook is left, no clause rests on a placeholder and every warning
+  is reviewed. The smallest list of what remains follows, each item with *Fix now* and,
+  for a non-blocking warning, *Accept with reason* (this session only — `build.accepted`,
+  never written into the pack). One primary action: fix what blocks, complete required
+  values, or *Open pack in Discover*.
+
+## The library
+
+`library/products/<product>.library.yaml` and `library/archetypes/<archetype>.library.yaml`,
+format `library: v1`, one entry per product or archetype, each a parameterised pack
+fragment. The annotated example and the field list are in
+[library/README.md](../library/README.md); the shape in one breath:
+
+```
+id · kind (product | archetype) · version · title · product · summary · description · tags · derivedFrom
+evidence { status, verifiedOn, sources[], notes, gaps[] }
+params[] { id, label, default, description, placeholder? }
+otel { languages[], custom_attributes[] }
+telemetry { scrape_jobs[] { job_name, scrape_interval, targets[], minTier }, receivers[] }
+slis[] { id, type, minTier (the least stringent tier that includes it by default — never a gate), description, why, unit, metrics[], evidence { status, source },
+         good/total | query/threshold, slo { objective per tier, window per tier — a lower tier may be left out }, burn,
+         forecast?, chaos?, remediation? { runbook, automation, guardrails, minTier — no trigger: derived } }
+views[] · dashboards[] { id, minTier, binds[] } · synthetic[] { …, minTier }
+```
+
+Entries shipped in slice 1 and their evidence status:
+
+| Entry | Kind | Evidence | Derived from |
+|---|---|---|---|
+| kafka, prometheus, grafana | product | recorded-live (2026-09-22) | the reference packs + `docs/catalogue-evidence/*.md` "Measured live" |
+| ibm-mq | product | recorded-live (2026-09-16, certified) | mq-observability-pack `packs/ibmmq.pack.yaml` + its evidence docs (read-only) |
+| alertmanager, otel-collector | product | recorded-live (2026-09-07) | `tools/lib/contracts/stack-self-metrics.mjs` (pinned stack exposition + PromQL) |
+| loki, tempo | product | recorded-live (2026-09-07) | `up` of the lab's scrape job + the collector / promtail rows of the alias table; no `loki_*` / `tempo_*` request metric is in the evidence, so none is named (`evidence.gaps`) |
+| http-service, queue-consumer | archetype | semconv (v1.27.0, Prometheus spelling; not verified live in this repo, and the entry says so) | OTel semantic conventions + the Prometheus compatibility naming rules |
+
+## The tier scaffold
+
+One function, `tierScaffold`, shared by every entry. It produces the structural
+sections and grows them with the tier so that every MUST clause of
+`tools/lib/conformance.mjs` that applies at the tier is satisfied when every toggle
+is on — the rubric is the only definition of a tier; `tierRequirements(tier)` is that
+rubric filtered by `minTier`.
+
+| Section | tier-3 | tier-2 adds | tier-1 adds |
+|---|---|---|---|
+| otel | semconv 1.27.0, `service.name` + `deployment.environment`, head sampling 0.1 | `service.namespace`, `service.version`, `log_correlation: true` | `service.instance.id` (5 attrs), head ratio 1.0 (tail sampling decides) |
+| telemetry.backends | Prometheus + Loki + Tempo, `gating: warn`; the declared versions are placeholder params (`prometheus_version`, `loki_version`, `tempo_version`), `min` the scaffold floor | — | `gating: enforce` |
+| pipelines | otlp receiver, prometheus receiver with the entries' scrape jobs, memory_limiter + batch, three exporters (prometheusremotewrite, otlphttp → Loki, otlp → Tempo) | resource processor | tail_sampling processor |
+| storage | 15d / 7d / 3d, head-based | 90d / 30d / 7d | 13mo / 90d / 14d, tail-based |
+| queries | one `ref:slis.<id>` recording rule per SLI (`<svc>:<sli>:ratio_5m` / `value_5m`, the compiler's own names, deduplicated by it) + the entries' views | golden-signals view | — |
+| dashboards | `<svc>-overview` (every SLI and SLO) + the entries' boards | `<svc>-slo-burn` (burn template, every SLO) | `<svc>-deployment-overlay` (SLIs), `<svc>-customer-impact` (SLOs) |
+| policy | two-window burn alerts per SLO from the SLI's profile (availability / latency / saturation / slow), severities demoted one step | severities as declared | forecast on an availability SLO |
+| alerting | SEV1/SEV2 → chat, SEV3 → team chat, dedup | SEV1 voice, suppress contexts | SEV2 voice |
+| remediation | — | the entries' templates, each triggered by its SLI's fast burn alert under the compiler's name (`alert:<slo>_burn_<factor>x_<short>_<long>`): the alerts a library pack compiles, so the trigger resolves like a chaos `expected_alert` does | a generic manual-only one on the first SLO when the entries have none |
+| baselines | tier defaults | + p95 targets, `warn_only` | `block_release_if_either_breaches_target` |
+| validation | the entries' probes (or a fallback blackbox probe) | the entries' chaos experiments, monthly in staging (a generic one when none) | one experiment per SLO, the first one again weekly in prod, the first probe `otel_instrumentation: true` |
+
+Severities, windows and factors are the reference packs' (`BURN_PROFILES`); the
+retention and baseline numbers are starting points and are reported as todos.
+
+## Toggles and honest gaps
+
+`defaultToggles(entry, tier)` → `{ slis: [ids whose minTier the tier reaches], slos,
+policy, routes, dashboards, validation }`, every section on — what a pack **starts** with;
+any other SLI of the entries may be selected on top ("The seed and the copies" below). A
+section switched off is **absent** from the pack. The schema then reports the missing required key or the
+`minItems: 1` floor (`validateCanonical`), and the rubric reports the clauses the
+section satisfied (`evaluateConformance`) — VERIFY shows both, nothing is faked to
+keep a clause green. `slos: false` also drops policy (an SLO-less burn alert is
+meaningless); `policy: false` keeps the SLOs and drops the burn alerts and forecasts.
+
+## Placeholders and provenance
+
+**Placeholders** are the values the library cannot know. Every one is a parameter
+flagged `placeholder: true` (the scaffold's: `oncall_channel`, `team_channel`,
+`pager_service`, `pager_service_low`, `metrics_endpoint`, `remote_write_url`,
+`logs_endpoint`, `logs_otlp_endpoint`, `traces_endpoint`, `traces_otlp_endpoint`,
+`chaos_target`, `probe_target`, and the backend versions the pack declares —
+`prometheus_version`, `loki_version`, `tempo_version` (`version.declared` on each
+backend and `storage.<signal>.version`; `min` stays the scaffold's floor 2.53 / 3.0 / 2.5,
+what the wiring and the PromQL are known to work from, and tier-1 enforces the block);
+the entries': scrape targets, bootstrap addresses,
+workloads, canary queues). Left at its default it is written into the pack as a
+plausible value **and** reported as a todo at the artefact where it landed, plus the
+scaffold's own todos (an unwritten runbook, baseline targets, a generic chaos fault,
+defaulted owners). The annotation mirrors the crawler's stub marker
+(`crawler.scaffold.<symbol>` → `library.todo.<symbol>`, the symbol being the adapter's
+artefact id: `alerting.routes[0]`, `validation.synthetic_checks.<id>`,
+`telemetry.backends.<id>`, `pipelines.exporters.metrics`, `remediation[0]`, `baselines`)
+and `tools/lib/adapter.mjs` lists `library.todo.` beside `crawler.scaffold.` and
+`mcp.scaffold.` in its scaffold prefixes, so the studio parks a placeholder artefact
+as *Scaffold* — excluded from drift badness, never "declared and unverified" — exactly
+as it parks a crawler stub. The todo list returned by the engine is the same
+information structured: `{ path, fields, what, clause, clauses, params }` (one per
+artefact, its placeholder fields listed), where
+`clauses` names the conformance clauses the placeholder artefact holds up, so
+VERIFY can say "passes, on a placeholder".
+
+**A placeholder-laden pack is reported conformant.** `tools/lib/conformance.mjs` reads
+no annotations, so a pager route of `pagerduty://<svc>`, a generic pod-failure chaos
+experiment or an unwritten runbook satisfy their clauses like real ones: a kafka tier-2
+pack with its todos untouched scores `MUST 15/15` through `POST /api/validate` and
+`GET /api/packs/<id>/conformance` — the score itself ignores annotations; both answers now
+attach `onPlaceholder` beside it (from `validationSummary`), so the studio can say which
+passes rest on a placeholder — and at tier-1
+10 of the 25 MUST clauses pass on one. That is exactly how a crawler stub behaves today
+(aligned on purpose: the placeholder is parked as *Scaffold*, never graded as declared and
+unverified), and only `validationSummary(canonical, todos).onPlaceholder` — what
+`packc init` prints as "N clause(s) pass on a placeholder" — tells the two apart. Slice 2
+must carry it, not rediscover it: the VERIFY step shows a third state, *pass
+(placeholder)*, for those clauses; the register hand-off keeps the todos with the pack
+(they are already in `metadata.annotations`, so nothing is lost); `/api/validate` attaches
+`onPlaceholder` whenever `library.todo.*` annotations exist. A pack whose placeholders
+were never filled is conformant on paper and pages nobody.
+
+**Provenance**: `metadata.annotations['library.source'] = '<entry id>@<entry version>'`
+(comma-joined when composed), `library.format`, `library.tier`, `library.environment`,
+`library.toggles`, `library.slis`, `library.params` (the overrides), `library.evidence`
+and `library.evidence.slis.<id>` (per-SLI status and source), `library.todoCount`,
+`library.todo.<symbol>`; `metadata.labels.source = library`. Diff can tell
+library-derived from hand-written; a later library release compares
+`library.source` with its own version to propose an upgrade (slice 3).
+
+## The evidence bar for entries
+
+`evidence.status` per entry and per SLI: `recorded-live` (the name was read from a
+product's own exposition and the expression executed — the reference packs' "Measured
+live" sections, the MQ certification, the pinned docker stack of the alias table),
+`reference-pack` (taken from a reference pack whose evidence is documentary),
+`upstream-docs` (the product's documentation only), `semconv` (a named OpenTelemetry
+semantic-conventions version, Prometheus spelling by the compatibility rules). No
+metric name is invented: `validateLibraryEntry` checks that every name in
+`slis[].metrics` appears in the query, and the library README's quality bar says where
+a name may come from. Where a spelling could not be verified in this repository the
+entry says so; where a product has no evidence-backed metric for a signal, the SLI
+is absent and `evidence.gaps` says why (loki, tempo, alertmanager and otel-collector
+have no latency SLI; their tier-2 threshold SLIs are failure / drop rates and say so).
+
+## The engine API (`tools/lib/library.mjs`, pure, browser-safe, served at `/lib`)
+
+```
+parseLibraryEntry(textOrObject)                 → entry            (mini-yaml when given text)
+validateLibraryEntry(entry)                     → errors: string[] ([] when sound)
+libraryIndex(entries)                           → [{ id, kind, title, product, version, summary, tags,
+                                                     evidence { status, verifiedOn, sources[], gaps[] },
+                                                     params[], slis[] { id, type, minTier, evidence, metrics, objectives, windows },
+                                                     sliCountByTier, tiers }]
+tierRequirements(tier)                          → the conformance clauses that apply at the tier
+                                                  ({ id, dimension, severity, minTier, description, specRef })
+defaultToggles(entryOrEntries, tier)            → { slis: [ids], slos, policy, routes, dashboards, validation }
+instantiatePack(entryOrEntries, { name, tier, environment, owners, params, toggles, overrides, custom, promql })
+                                                → { canonical, todos: [{ path, fields, what, clause, clauses, params }],
+                                                    provenance: { entry, version, entries, source, tier, environment,
+                                                                  toggles, params, placeholders, overrides, custom,
+                                                                  slis: { [id]: { library { source, entry, sli }, evidence,
+                                                                                  customised[], custom, aboveTier, profileTier? } } },
+                                                    warnings: [{ kind, message, sli?, field? }] }
+tierScaffold({ tier, service, environment, owners, fragments, toggles })
+                                                → { canonical (with ${param} placeholders), todos }   (the one scaffold)
+validationSummary(canonical, todos)             → { tier, conformant, must, should, passing[], onPlaceholder[], failing[] }
+todosFromAnnotations(canonical)                 → the todo list rebuilt from the pack's library.todo.* annotations
+                                                  (clauses derived from the pack; what /api/validate and the register
+                                                  hand-off feed validationSummary with)
+hasLibraryTodos(canonical)                      → whether a pack carries library.todo.* annotations
+symbolOf(path, root)                            → { symbol, field }   (the adapter's artefact id for a pack path)
+sloIdFor(sliId, objective)                      → '<sli>_<pct>'        (broker_availability, 0.999 → broker_availability_99_9:
+                                                                        the SLO id of an SLI, derived here, never re-implemented)
+constants: LIBRARY_FORMAT ('v1'), TIERS, ENTRY_KINDS, EVIDENCE_STATUSES, SLI_TYPES, SLO_WINDOWS, SECTION_TOGGLES,
+           BURN_PROFILES, DEFAULT_BURN_PROFILE ({ ratio: availability, threshold: latency }), OVERRIDE_FIELDS, CUSTOM_FIELDS,
+           SLI_KEY_RE, CUSTOM_ID_RE, SCAFFOLD_PARAMS, SEMCONV_VERSION, MAX_PARAM_LENGTH (4096)
+```
+
+`instantiatePack` throws on a usage error (unknown tier, an unknown SLI, no entry, a
+param key that is not a parameter of the instantiation, a param value that is not a
+string, number or boolean, an override or custom SLI the rules below refuse) and never on
+an entry that validates. A mistyped param is never dropped silently: the error lists the
+known keys. Any SLI of the passed entries may be selected at any tier — the tier is a
+seed, not a gate ("The seed and the copies"); only a selection with nothing left and no
+custom SLI throws. The former `sli-excluded` warning is retired.
+
+**Params and PromQL.** A param value is spliced verbatim into label matchers, scrape
+targets and endpoints, so a string carrying a double quote, a backslash or a control
+character is refused (a usage error; `--param 'broker_job=brokers"}'` once produced
+`up{job="brokers"}"} == bool 1` in a pack that validated and passed every MUST), and so is
+a value longer than `MAX_PARAM_LENGTH` (4096 characters: a 3 MB value was once accepted and
+spliced into a 9 MB pack); the unknown-key error echoes at most ten of the unknown keys
+(200,000 bogus keys once made a 1.7 MB error). A value error reads `param <key>: …`, so a
+caller can point at the field. Every
+resolved SLI expression is then parsed with the parser given as `promql`: `packc init`
+passes the Lezer grammar (`tools/lib/promql-lezer.mjs`, an npm import, Node-only) and a
+failure is a `warnings` entry of kind `promql`, which makes the CLI exit 1. The
+browser-safe core (`tools/lib/promql.mjs`) extracts dependencies and reports no grammar
+error, so a caller with no parser gets no `promql` warning: the studio (slice 2) runs the
+instantiation through the API, where Node passes the grammar. `warnings` is what COMPILE
+shows beside the todos; its kinds: `promql` (the pack must not ship), `override` (an
+override names an SLI that is not in the pack; nothing is applied), `burn-rules` (the burn-rule generator's own warnings on
+the produced policy — `tools/lib/burn-rules.mjs` compiled once at build time, so a
+subtracted good leg without a presence guard or a ratio-unit threshold with no `good_when`
+declared, which it reads as a ceiling and flags as a probable floor, is seen when the pack
+is made, not when its alerts stay silent; the shipped
+entries draw none of the guardable ones, the suite checks). Several entries compose
+into one pack: ids are prefixed with the entry id (`kafka_broker_availability`,
+`http-service-…` boards), entry params are addressed as `<entry>.<param>` (a bare
+`<param>` reaches every entry that declares it), the scaffold sections are shared.
+
+Node side, `server/library.mjs`: `loadLibrary({ root })` → `{ root, entries, errors }`
+(reads `library/**/*.library.yaml`, parses and validates each, drops duplicates; a root
+that is not a directory is one error on the root itself, never an empty library, so an
+install without `library/` says why every entry is unknown), `findEntry`,
+`listLibraryFiles`, `defaultLibraryRoot`. `library/` ships in the npm package (`files`)
+beside `server/` and `tools/`. Nothing under `tools/lib` touches the filesystem.
+
+## The CLI
+
+```
+packc init --list                                   the entries table
+packc init --show <entry>                           params (entry + scaffold), SLIs per tier, objectives, evidence
+packc init --entry <id>[,<id>] --tier tier-2 --name <svc> [--env <env>] [--owner <team>]...
+           [--param k=v]... [--slis a,b | --sli <id>]... [--override <sli>.<id|objective|window|threshold|good_when|semconv_metric>=<value>]...
+           [--no-slos|--no-policy|--no-routes|--no-dashboards|--no-validation]
+           [--out <file>] [--json] [--library <dir>]
+```
+
+YAML to stdout (or `--out`), the todo list, the warnings and the conformance line to
+stderr; exit `0` ok, `1` the produced pack does not validate against the v1.3 schema (a
+section toggled off), fails a MUST clause of its tier (a `--slis` selection with no
+latency SLO at tier-2: `packc journey`'s "gate failed", so a CI caller can tell `MUST
+14/15` from `15/15`), an SLI is not valid PromQL once the `--param` values are in, or an
+entry fails validation, `2` usage error (an unknown `--param` key or a value carrying a
+quote is one) — the convention of `tools/validate-pack.mjs` and `packc journey`.
+
+## Slice 2 — the studio journey and the API (shipped)
+
+**The API** (`server/index.mjs`, registered after the write-route auth and tenancy
+middleware, so the routes carry the posture of `POST /api/validate` and `POST /api/crawl`:
+open in local mode, a session + CSRF header or a bearer in identity mode; the library is
+read from disk once per process):
+
+| Route | Contract |
+|---|---|
+| `GET /api/library` | `{ ok, entries: libraryIndex(loadLibrary().entries), scaffoldParams: SCAFFOLD_PARAMS, errors }` — the scaffold params ride along because every instantiation has them and DEFINE lists the selection's full parameter table |
+| `GET /api/library/requirements/:tier` | `{ ok, tier, clauses: tierRequirements(tier) }`; 400 naming the known tiers |
+| `GET /api/library/:id` | `{ ok, entry: <index row>, params, scaffoldParams, slis (full templates: metrics, good/total or query/threshold, per-tier slo, burn, evidence, why, chaos, remediation), description, evidence, otel, telemetry }`; 404 naming the known entries |
+| `POST /api/library/instantiate` | body `{ entries: [ids] \| id, name, tier, environment, owners, params, toggles, overrides?, custom? }` → `{ ok, canonical, canonicalYaml, todos, provenance, warnings, schemaErrors (validateCanonical), summary (validationSummary), conformance (evaluateConformance of the env-overlaid canonical, exactly as /api/validate computes it), adapted (adapt of the env-overlaid canonical, exactly as /api/validate returns it — what Build's layer stack draws) }`; Node passes the Lezer grammar as `opts.promql` like `packc init`; `overrides` at most 64 entries and `custom` at most 16 SLIs (400 beyond), every value validated by the engine; an engine usage error is `400 { ok: false, errors }`, never 500 |
+| `POST /api/library/compile` | body `{ canonical \| the instantiate inputs (entries, name, tier, …, overrides, custom), target, dashboardId? }` → `{ ok, target, label, description, contentType, artifact: { filename, content, warnings, profile } }` through `compile.mjs`, nothing registered; 400 naming the known targets, 400 when the pack will not compile as toggled or the inputs are refused (the engine's message) |
+| `POST /api/library/register` | body `{ canonical \| the instantiate inputs, source? }` → `registerUploadedPack` exactly as /api/validate (source hint `library:<entries>@<tier>` when none given and the pack carries `library.source`; `metadata.name` otherwise, as /api/validate labels an upload) → `{ ok, registered: { id, source }, adapted, conformance, summary }`; a schema-invalid canonical or refused inputs are `400 { ok: false, errors }` |
+
+`POST /api/validate` attaches `summary` (with `onPlaceholder`) whenever the canonical
+carries `library.todo.*` annotations. That needed the todos to be recoverable from a
+pack: `todosFromAnnotations(canonical)` (engine, new export) rebuilds `{ path, fields,
+what, clause, clauses, params }` from the annotations, the clauses derived from the pack
+itself (`clausesFor` learned the scaffold's one non-derivable clause, the tier-1 release
+gate the baseline todo holds up; clause lists are sorted so both paths produce the same
+list — verified for every entry at every tier and for a composed pack). `hasLibraryTodos`
+says whether a pack carries any.
+
+**The studio.** `state.mode === 'build'`; `BUILD_TABS` beside `OBSERVA_TABS` in
+`studio/app.mjs` (the same `{ id, n, label, sub, techName, tagline, accent }` shape and the
+same three accents), rendered by the one header renderer — the nav is rebuilt only when
+the active set changes, a step card is reachable when the previous step's inputs are valid
+(`buildStepReachability`), the current step is highlighted like today's active tab. DEFINE refuses a service name
+longer than 45 characters once slugged (`MAX_SERVICE_SLUG`: the schema's 64-character Slug
+minus the longest suffix the scaffold appends, tier-1's `-deployment-overlay` board id), so
+a name that would fail the schema two steps later is stopped where it is typed. A usage
+error from the engine (a param value it refuses, a selection with no SLI left) keeps the
+previous pack on screen, marked stale, with the reason on the row that carries the value
+(`param <key>: …` → the row on Select and under its todo on Validate); Validate stays
+reachable and the hand-off is blocked until the value is fixed. Entry
+points: a "Build a pack" card beside the hero's two, a "build a pack" action beside the
+gate's "start something new", "Build from the library…" in the upload popover; the logo
+returns home; an Advanced item or an analysis tab leaves build mode into the workspace.
+Nothing in Discover / Diagnose / Remediate changed.
+
+| Module | Role |
+|---|---|
+| `studio/build-model.mjs` | the pure models — `buildDefineModel`, `buildCompileModel`, `buildVerifyModel`, `buildClauseChecklist(clauses, summary)` (three states: `pass`, `placeholder`, `fail`; `pending` without a summary), `buildDefinitionModel`, `buildSheetModel`, `buildStackModel`, `rolodexItems`, `addSliSelection`, `sectionClauses` / `sectionDrops` / `sectionNotes`, `buildStepReachability`, `clampStep`, `paramRows`, `groupTodos`, `instantiateBody`, `summarizeWarnings`; every input explicit, no state, no fetch |
+| `studio/build-api.mjs` | the loaders — `loadLibrary`, `loadRequirements` (cached per tier), `loadEntry`, `loadTargets`, `instantiate`, `compilePreview`, `registerBuiltPack`; `fetchFn` injectable, a 4xx JSON body is an answer |
+| `studio/build-define-view.mjs` | DEFINE (the silhouette) + the step head and the compilation-error note the three steps share |
+| `studio/build-compile-view.mjs` | COMPILE (the live stack, the warnings, the YAML) |
+| `studio/build-verify-view.mjs` | VERIFY and the hand-off |
+| `studio/build-definition-view.mjs` | the definition column on every step ("The axis" below) |
+| `studio/build-sheet-view.mjs` | the per-layer sheet ("The axis" below) |
+| `studio/app.mjs` | the controller: `enterBuildMode`, the debounced, sequence-guarded re-instantiation on every change, the `host.build` actions the renderers call (never an import of app.mjs), `openInDiscover` |
+
+`state.build` holds the draft (`name, owners, environment, tier, entries, params, slis,
+toggles, overrides, custom, seeded, result, preview, registeredId`) and survives a reload
+through the existing persistence whitelist — inputs only (`BUILD_PERSIST_FIELDS`); the
+canonical is re-instantiated on reload, never stored. Objectives, windows, bounds and
+expressions are copies the user edits on the L1 sheet ("The seed and the copies").
+
+**Deviations from the contract above, all additive.** `instantiate` also returns
+`canonicalYaml` (the preview and the download without a browser YAML emitter) and
+`conformance`; `GET /api/library` also returns `scaffoldParams`; `libraryIndex` rows carry
+`windows` per tier beside `objectives` (COMPILE shows both); `POST /api/library/compile`
+exists so VERIFY previews without registering; the studio does not import
+`/lib/library.mjs` — the tier's clauses come from the requirements route (three tiny,
+cached requests) and every instantiation goes through the API.
+
+## The scan: Build renders the layer model
+
+The studio's identity is the layer model. Discover draws every pack as L1 SLI/SLO ·
+L2 Metrics/Logs/Traces · L2X Extended · L3 Dashboards/Recording Rules · L4
+Alerts/Policy/Self-healing · L5 Self-check · GOV (the names users asked for; the spec's
+Contract · Telemetry · Insight · Action · Validation stay as `spec` in `LAYER_DEFS`) — the layer
+tokens `--L1…--GOV`, the artefact cards, the slab dashboard under Advanced → Discover.
+Build, as shipped in slice 2, was forms plus a checklist rail: it produced a pack in that
+language without ever showing it. From this slice on, **the centre stage of every Build
+step is the layer stack of the pack being compiled**, drawn with the same artefact cards,
+palette and tints as Discover, and the three steps are three states of one picture.
+
+**Principles.** Nothing is invented:
+
+- **The artefacts are the adapter's.** Build renders the instantiated pack through
+  `tools/lib/adapter.mjs` `adapt(canonical, { environment })` — the projection Discover
+  reads — and the same card markup (`.card`, `.card-head`, `.card-id`, `.card-source`,
+  `.card-title`, `.card-desc`, `.card-foot`). `POST /api/library/instantiate` returns that
+  projection as `adapted`, computed exactly as `POST /api/validate` computes it, so what
+  Build shows on COMPILE is the artefact list Discover shows after the hand-off, id for id;
+  the two journeys cannot drift. A placeholder artefact is *Scaffold* in both.
+- **The silhouette is the rubric.** On DEFINE each slab carries one ghost card per clause
+  that applies at the chosen tier in that dimension (`tierRequirements(tier)` grouped by
+  `dimension`), so the tier is seen as the shape of the pack it demands, not read as a list;
+  changing the tier reshapes it. The selected entries' SLI and SLO candidates land on L1 as
+  ghost cards (id, type, objective and window at the tier, evidence badge), read-only —
+  ticking stays on COMPILE.
+- **The edge states are the checklist's.** Every slab's edge carries the rubric's verdict
+  for its dimension, derived from `buildClauseChecklist` grouped by dimension: red when a
+  clause fails, amber when the dimension holds up only on a placeholder, green when every
+  clause passes on the pack as written, neutral when no clause applies (GOV), pending before
+  the first result. A red edge names the clause and its description; a placeholder-laden
+  pack shows *pass on a placeholder*, never plain green. A clause still unmet on COMPILE
+  stays on its slab as a ghost card marked *Missing* — Discover's word for "required, not
+  present".
+- **The maturity bars are clause counts.** Per layer: pass, pass on a placeholder (its own
+  segment) and fail, over the clauses of the dimension at the tier.
+- **The todos live where their artefact lives.** On VERIFY each todo is pinned to the slab
+  of the artefact it names — routes and runbooks on L4 (alerting, self-healing), backends,
+  pipelines and storage on L2, probes, chaos and baselines on L5 — with the same inline
+  parameter inputs as before; the pin is the todo's path family, and where the path is an
+  adapter symbol the card it belongs to is marked.
+- **Cause and effect in one glance.** A section switched off dims its slab and its clauses
+  turn red on the edge; every re-instantiation re-renders the stack with the focused input
+  kept focused.
+- **The clause rail folds into the stack.** The per-layer clauses live on their slab (a
+  click on the slab head expands them); the rail becomes a compact summary — the counts and
+  the failing clauses — that expands to the full list on demand.
+
+**Modules.** `studio/build-model.mjs` `buildStackModel({ adapted, checklist, requirements,
+candidates, todos, params, mode, toggles, expanded })` → ordered slabs `[{ id, num, name,
+state, clauses[], artefacts[], ghosts[], todos[], subgroups? (L4: policy · alerting ·
+self-healing), counts, maturity, dimmed, offSections, expanded }]` (a slab's colour is its
+layer token, `.section[data-layer]`, never a field of the model) — L2X only when it has an
+artefact or a clause, GOV neutral, every input explicit, no state reads (tested under
+`node:test` in `tools/test-build-model.mjs`, including that the artefact list is the one the
+adapter gives Discover for the same canonical). `studio/build-stack-view.mjs`
+`renderBuildStack(container, model, host)` draws it; the card's inner HTML is one shared
+helper (`studio/card-html.mjs` `artefactCardHtml`) that Discover's `renderCard` and the stack
+both call, so the markup is written once.
+
+**Slices.**
+
+1. **Foundation (this slice, shipped).** The stack on all three steps: DEFINE the
+   silhouette (ghost per clause, L1 candidates from the entries, reshaping with the tier);
+   COMPILE the live stack as the canvas (the SLI rows and the section toggles stay as the
+   control area above it, the YAML as a collapsible below it), edges in the clause states,
+   ghosts for unmet clauses, Scaffold for placeholders, a section off dims its slab; VERIFY
+   the stack with the todos pinned to their slabs and the per-layer maturity bars on the
+   verdict card, the artefacts strip and *Ready to continue?* unchanged; the compact rail;
+   `adapted` on the instantiate response; light and dark themes.
+2. **Layer detail (planned).** L1 SLO gauges (objective, window, burn profile per SLO);
+   the L2 flow strip (instrumentation → receivers → processors → exporters → storage, drawn
+   from the pipelines and the backends); L3 dashboard wireframes rendered from the compiled
+   Grafana JSON; the L4 chain (policy → routing → remediation → guardrails); L5 cards for
+   baselines, chaos and synthetics with their schedules and expected MTTD.
+3. **The tomograph (planned).** The isometric slab stack with an acquisition animation —
+   slabs lighting up as content arrives — and the landings' miniature stacks (a pack's
+   silhouette on its picker row).
+
+## The axis: the pack is the axis of the Build screen
+
+The scan put the stack on every step but left the controls where slice 2 had them:
+DEFINE was a form with a silhouette under it, COMPILE an SLI table and a toggle grid over
+the stack, and the tier's clauses sat in a rail on the right. From this slice on the
+screen has one axis — **the pack** — and two columns on all three steps:
+
+- **LEFT, the definition column** (about 320 px, sticky; `studio/build-definition-view.mjs`,
+  `buildDefinitionModel({ build, library, requirements, checklist })`): what the pack *is*.
+  The service (name, owners, environment); the tier as a **segmented control** (tier-3 ·
+  tier-2 · tier-1, each segment with its MUST · SHOULD counts, the chosen tier's one-line
+  blurb beneath, a thumb that slides — `role=radiogroup`, arrow keys move); the library
+  entries as **chips** in a grid (products, then archetypes; title, evidence dot, SLIs at
+  this tier; a selected chip is filled — `aria-pressed`); and the **conformance summary**
+  that replaced the rail entirely: status, the three counts (pass · on a placeholder · fail),
+  the failing clauses named (the red edges on the stack), how many pass only on a
+  placeholder, todos, warnings and placeholders left. `renderClauseRail` and `buildRailModel`
+  are retired; the summary is part of the column. The column is rebuilt on every re-render,
+  so the summary is not a live region itself: its settled status goes as one line
+  (`buildStatusLine`: *meets the tier-2 rubric · 12 pass · 4 need real values · 0 fail*) to a
+  persistent visually-hidden `role=status` node outside the view (`#build-status`), written
+  only when it changes — never while the engine is still answering.
+- **RIGHT, the stack** is the main surface, full remaining width: the slabs of the scan,
+  unchanged in what they show. A slab head — or its **`+`** — opens the layer's sheet.
+
+**The per-layer sheet** (`studio/build-sheet-view.mjs`, `buildSheetModel({ layerId, build,
+library, requirements, stack, checklist, mode })`): *what you can add on each layer pops up
+when you click that layer.* A non-modal side panel anchored to the right edge over the
+stack — `role=dialog`, `aria-labelledby` its title, `aria-modal=false`, Esc closes, focus
+moves into the panel when it opens and returns to the slab head when it closes, the stack
+stays visible and dimmed (a scrim over the main column; the slab heads stay above it, so a
+click on another head switches the sheet; the definition column stays live — for the
+keyboard too: the studio's Tab trap, `installDialogFocusTrap`, skips an `aria-modal=false`
+dialog, so Tab walks on from the sheet to the heads and the column instead of cycling
+inside it), one sheet at a time, the open layer remembered in UI state
+(`state.build.sheetOpen`, never persisted). A
+large title (`L1 · SLI/SLO`) and the layer's question, then the layer's clauses at the tier
+with their state (the same `clauseRowHtml` the summary draws), then the layer's options —
+always what the pack actually carries, read from `adapted` (or the silhouette), never a
+made-up menu:
+
+| Layer | Question | Options on the sheet |
+|---|---|---|
+| L1 SLI/SLO | What should we measure? | the **SLI rolodex** — a horizontally scroll-snapping carousel of SLI cards (CSS `scroll-snap`, the arrow buttons and the arrow keys move one card, the card in view is emphasised and `aria-current`) drawn from the selected entries and, behind the *show every product* switch, from the whole library (`rolodexItems`); each card: the SLI id, its product with the evidence badge, the type pill, the metric names, the objective and window **it starts with** large (the library's at the current tier, or the user's override) and the library's other tiers muted, an add / remove **switch** (`role=switch`) — **any** SLI of the entries is addable; one above the tier carries an informational chip, *from the tier-1 profile*, never a disabled switch — **Edit**, which opens the SLI's pop-up editor ("The editor"), the custom SLIs as cards of their own, and the last card **+ Custom SLI** (the editor in create mode). Adding an SLI from a product not yet selected selects that product too — one action, `addSli(entryId, sliId)` in the controller, `addSliSelection` its pure part (the entry joins, the SLI is ticked, the rest of the selection is kept and re-keyed for the new composition). Below the rolodex the **SLOs** switch with its consequence in one line (*off is expected to drop 4 clauses of the tier: availability SLO, latency SLO, every SLI under an SLO, chaos in staging*; once off, *off — 4 clauses fail with it: …*, the engine's set — the burn-alert clause is not among them: quantified per SLO, it holds with none, while the chaos experiments lose the SLO their steady-state hypothesis names, so L5 fails and its head says *no SLO to test*); the SLOs in the pack listed |
+| L2 Metrics/Logs/Traces | Where does the telemetry flow? | the products' scrape jobs (job, targets, interval — from the prometheus receiver), the receivers, the backends (declared / min version, gating, endpoints), the exporters, the storage, the instrumentation contract; the **params** the layer shapes, editable (`paramRowHtml`): the entries' scrape targets and selectors, the scaffold's endpoints and backend versions. L2 has no switch |
+| L3 Dashboards/Recording Rules | How do we see it? | the **Dashboards** switch (*off is expected to drop 2 clauses of the tier: service overview board, SLO burn board* — exactly what the engine reports failing once it is off), the boards the pack carries (the overview, the burn board at tier-2+, the entries' boards, the tier-1 boards), the derived views, the recording rules |
+| L4 Alerts/Policy/Self-healing | What happens when it breaks? | the **Policy** switch (the burn windows per SLO listed, `14× 5m/1h SEV1 · 6× 30m/6h SEV2`; disabled and off when SLOs are off — meaningless without them), the **Routes** switch with the channel **params** (oncall, team, pager, pager-low), the routes listed with their channels, the remediation templates with their runbook and automation, the runbook directory param |
+| L5 Self-check | How do we prove it? | the **Validation** switch (*off is expected to drop … synthetic probe, chaos in staging*), the probes (kind, target, interval, severity) and the chaos experiments (engine, target, fault, schedule, environment, expected MTTD) with their target **params**, the baselines |
+| GOV Governance | Who owns it? | the owners (the definition column's field, shown read-only) and the imports |
+
+Where a param is edited is decided once (`paramLayer`): the scaffold's channels, pagers and
+runbook directory on L4, its chaos and probe targets on L5, its endpoints and backend versions
+on L2; an entry's params on L5 when they name a workload, a canary, a probe or a bootstrap
+address, on L2 otherwise. Every param of the drive's selection lands on exactly one sheet
+(the test asserts the partition covers `paramRows`). A section switch states its consequence
+in one line: while on, what switching it off is *expected* to drop (`sectionClauses`: the
+clauses in the section's scope — the slab(s) it feeds, narrowed where the slab carries more
+than the section, dashboards off leaving the recording rules and the derived views; for SLOs
+also the policy and the chaos experiments, which reference an SLO — minus the clauses
+quantified per SLO, which hold with none: the burn alert per SLO, the chaos per SLO); once
+off, what the engine actually failed among those (`sectionDrops`, read from the checklist),
+so the line never disagrees with the stack. The test instantiates with each section off and
+asserts both readings equal the engine's failing set. A section off dims its slab, puts an
+*off* chip on its head and turns its clauses red, as before; a slab that fails because of a
+section off elsewhere — L5 with SLOs off — carries a chip that says why (`sectionNotes`:
+*no SLO to test*, the failing clauses in its title).
+
+**One component on the three steps** (`sheetModeFor(step)`): on **DEFINE** and **COMPILE**
+the sheet is live — this is where composition happens, so the SLI rows table and the
+SECTIONS toggle grid are gone from the step; COMPILE keeps its summary line, the stack and
+the YAML collapsible; DEFINE is the seeding stage, but its pack is already instantiated, so
+it gets the same live sheet (the disabled preview with *Compose in Compile →* it first
+shipped with is retired — "The editor"); the silhouette stays the axis on DEFINE, whose main
+column is now the silhouette alone (the fields, the tier and the entries moved into the
+column; the params list moved to the L2 / L4 / L5 sheets). On **VERIFY** it is read-only and
+shows the layer's pinned todos with their inline
+params — the same `todoHtml` the slabs draw, keyed `param:<key>@<layer>/sheet/<todo path>`
+so a filled todo takes only its own inputs away; VERIFY keeps the verdict cards, the
+maturity bars, the artefacts strip and *Ready to continue?*. The sheet writes through the
+existing actions only (`setSli` / `addSli`, `setToggle`, `setParam`, `toggleEntry`,
+`setTier`) and re-instantiation redraws the stack, the sheet and the column; the scroll
+offsets of the sheet body and the rolodex track survive the redraw (`[data-scroll-key]`,
+keyed per layer — `sheet:L1`, `rolodex:L1` — so a switch flipped mid-list keeps its place
+while a newly opened layer starts at its top), a focused rolodex card is re-centred, and a
+sheet input whose todo disappeared hands focus
+to the sheet's next input, then its close control (`focusFallbackSelectors`).
+
+**The language.** Generous spacing between groups (24–32 px), 14–16 px radii on the sheet
+and the cards, a translucent sheet surface (`backdrop-filter: blur(20px) saturate(140%)`
+over the card colour, a solid `--card` where unsupported), soft layered shadows, hairline
+separators, real switches with a sliding knob, a segmented control with a sliding thumb, a
+large title + subtitle in the sheet, one accent per layer (the layer token) used sparingly
+— the sheet's border and accent bar, the on-state of its switches, its ids (as text — the
+eyebrow, the ids, a selected card's state — the accent is mixed 65 % towards ink,
+`--accent-text`, so a 10 px id clears WCAG AA in every layer and both themes; the raw light
+L1 amber reads 3.3:1); text at or below 12 px on the column and the sheet is `--ink-3`
+(`--ink-4` reads 4.27:1 on the dark card), `--ink-5` is never a text colour there, and the
+test computes every text colour of the block against its surface from the tokens — the
+studio's sans for controls and the mono for ids, 200 ms ease-out motion for the sheet's entrance
+(on the render that opens it only — `is-entering`, a one-shot the controller sets in
+`openSheet`; a re-render while it stays open rebuilds the panel without the class and never
+replays the slide), the thumb, the knob and the cards, with `prefers-reduced-motion`
+respected (no animation, no transition, `scroll-behavior: auto`), visible focus everywhere,
+both themes through the tokens only. Restraint: no 3D flips, no parallax, no new gradients.
+
+**Honest gaps stay.** *Pass on a placeholder* never reads as plain green — on the summary,
+on the slab edge and in the sheet's verdict pill; a section switched off says which clauses
+fail with it — the engine's set, not a prediction — and a slab that fails because of it
+says why; a param the engine refused is marked on its sheet row with the reason and the
+sheet says how many were rejected; an SLI above the tier says which profile it starts from;
+a customised expression never keeps the library's evidence badge.
+
+**Tests** (`tools/test-build-model.mjs`): `buildDefinitionModel` (fields, segments with
+counts, chips, the summary in its ok / fail / pending / error / idle states), the
+definition column headless (ARIA of the radiogroup and the chips, the summary, the wiring —
+a segment click, arrow keys, a chip), `rolodexItems` (the objective it starts with, the
+other tiers, above-tier informational — never disabled, the filter, composed keys),
+`addSliSelection` (the IBM MQ scenario: three entries, the seven kept plus one; one entry
+to two re-keys; completing the defaults collapses to null; above the tier added; pure), `paramLayer`
+partitioning every param, `sectionClauses` matching the engine's dashboards-off failures,
+`sectionSwitch` consequences, `buildSheetModel` per layer (title, question, clauses,
+switches, param groups, lists read from the fixture, the modes), the sheet headless per mode
+(dialog ARIA, the rolodex cards incl. the above-tier one, the switches, the read-only params
+and the todos on verify, escaping at the seam), the sheet's handlers through fake
+elements (close, scrim, Esc, the section and rolodex switches incl. a foreign SLI
+through `addSli`, the filter), the slab head's `aria-haspopup` and `+`, `stackExpanded`, the
+sheet focus fallbacks, one clause row for the summary and the sheet, and the stylesheet
+(the translucent surface with its fallback, the accent per layer, the thumb and knob
+motion, the snap, the reduced-motion block, no colour literal beyond the tokens).
+
+## The seed and the copies: the tier is a seed, the library values are copies, the definition is a wizard stage
+
+The axis shipped with three constraints the maintainer found wrong after trying it (2026-09-23):
+an SLI above the tier was disabled ("needs tier-1"), the objectives and windows were read-only
+library values, and the definition column stayed a live form on every step. *Selecting the
+tier is just a template — obviously users know what they need; we are constraining so much
+it's not useful. The definition should not be present at all times but in a sequential,
+wizard-install fashion. Library is fine, but entries need to be customisable once copied over
+into the current pack — they are not links, just a local copy.* Three principles follow.
+
+**1. The tier is a seed, not a constraint.** The tier decides two things only: what the pack
+*starts* with — `defaultToggles` (the SLIs whose `minTier` the tier reaches, pre-ticked) and
+the scaffold's sections — and which *rubric* grades it (`tierRequirements`). It never forbids
+an SLI. Any SLI of a selected entry may be in the pack at any tier: the engine's gate is gone
+(`instantiatePack` takes any SLI of the passed entries; the `sli-excluded` warning is
+retired), `packc init --slis` / `--sli` accepts one above the tier, the rolodex never
+disables a card and `addSliSelection` never refuses. A value declared per tier (the SLO
+objective, the window — anything read through `perTier`) resolves for an above-tier SLI by
+walking from the pack's tier towards the stricter tiers and taking the first declared value:
+a tier-2 pack adding an SLI declared for tier-1 only starts with the tier-1 objective; a
+tier-3 pack adding one declared for tier-2 and tier-1 takes tier-2's; where the library
+declares a value for that tier anyway (the shipped entries do, below the `minTier` too), that
+value stands — `validateLibraryEntry` requires the objective for the tiers the SLI reaches
+and lets a lower tier be left out. The card shows an informational chip, *from the tier-1
+profile*, and the objective it will start with; the L1 sheet's count reads *3 from a higher
+tier*; `provenance.slis[id].aboveTier` / `profileTier` say so on the result. An SLI's own
+tier features — a forecast, a chaos experiment, a remediation template with a `minTier` —
+keep their gating against the pack's tier: they are tier features, not the SLI. The rubric
+still grades the pack at the chosen tier; an extra SLI simply counts (a pack of one custom
+ratio SLI fails `L1.MUST.latency_slo` at tier-2 like any pack without a threshold SLI). A
+tier change keeps every SLI the user has (above the new tier too, with its overrides) and
+takes in what the new tier unlocks — the library's defaults refresh, the customisations stay
+(`retargetSlis`); an explicit list stays explicit (collapsed to null at tier-1, a round trip
+tier-2 → tier-1 → tier-2 lost the above-tier pick; measured live), so a tier change never
+removes an SLI — lower the tier and the higher tier's defaults stay, marked *from the tier-1
+profile*, to be switched off if unwanted. Only a list the user never edited (null) follows the
+tier's defaults.
+
+**2. Copies, not links** — copy-on-write over the library's defaults. Two new instantiate
+inputs, in the engine, the API and the studio (the CLI takes the scalar overrides):
+
+- `overrides: { [sliId]: { id?, objective?, window?, threshold?, good_when?, query?, good?, total?,
+  description?, unit?, semconv_metric? } }`, keyed by the SLI id as the library gives it to the
+  pack (prefixed when several entries compose — the keys `build.slis` uses; a renamed SLI — the
+  `id` field, "The editor" — stays keyed so). The engine validates every field as a usage
+  error (400 from the API, exit 2 from the CLI, never a 500): the objective a number in
+  (0, 1) — the ratio the pack stores; the studio shows and edits a percent — the window one of
+  the schema's SLO windows `7d | 28d | 30d | 90d` (the schema's enum, stricter than any
+  duration), the threshold a finite number for a threshold SLI only, `good_when` one of
+  `below | above` for a threshold SLI only (spec 1.3: the side of the bound that is good —
+  below, a ceiling, the default when absent; above, a floor; copied into the pack SLI as
+  declared and never synthesised, so a pack that says nothing stays 1.2-shaped; the evidence
+  stays the library's), `query` for a threshold
+  SLI and `good` / `total` for a ratio one — non-empty strings within `MAX_PARAM_LENGTH` that
+  carry no `${…}` placeholder (an override replaces the library's expression *after* the
+  params are in; nothing resolves a placeholder in it) — the description and unit bounded
+  strings; an unknown field is an error naming the fields; the retired `comparison` is refused
+  with the reason: the direction of a threshold is `good_when` (below — a ceiling, the default;
+  above — a floor), spec 1.3 — use `good_when`. Keys match `^[a-z][a-z0-9_]{0,63}$`; `__proto__`,
+  `constructor` and `prototype` are refused as keys and as fields and nothing is read through
+  the prototype chain (own keys only, a null-prototype copy). An override for an SLI not in
+  the pack (unknown, or known and not selected) is a warning `{ kind: 'override', sli,
+  message }`, never an error — the studio keeps it in the draft and sends only the overrides
+  of the SLIs in the selection, so it comes back with the SLI. An overridden objective flows
+  into the SLO (its id derives from the objective through `sloIdFor`, so `kafka_produce_latency_p99_99`
+  becomes `kafka_produce_latency_p99_99_5` — that is correct), into the policy's burn alerts
+  and into the boards' bindings; an overridden window into the SLO. An overridden `query` /
+  `good` / `total` **replaces** the library's PromQL (the grammar check still runs: a bad one
+  is a `promql` warning as today) and **drops the library's evidence honestly**: the SLI's
+  evidence becomes `{ status: 'custom', source: 'edited in the studio', note: 'the library
+  evidence no longer applies' }` (the annotation `library.evidence.slis.<id>` reads `custom:
+  edited in the studio — the library evidence no longer applies`) and the template's
+  `semconv_metric` claim goes with it. `provenance.slis[id].customised` lists the fields,
+  `provenance.overrides` the overrides applied, and the pack carries
+  `library.customised.slis.<id>` and `library.overrides` (JSON), so VERIFY and Discover can
+  say *customised: objective, query*; `library.source` is unchanged.
+- `custom: [ { id, type: 'ratio' | 'threshold', description?, unit?, query? + threshold? +
+  good_when? (threshold), good? + total? (ratio), objective, window } ]` — SLIs written from scratch,
+  outside any library entry. The id a slug `^[a-z][a-z0-9_]{1,62}$` (not the reserved
+  `errorbudget`) that no SLI of the passed entries owns — a clash with a library SLI (ticked,
+  or un-ticked: it would clash the moment it is ticked, and a draft carrying both would draw
+  two cards with one key) or with another custom one is a usage error naming both
+  (`clashes with` / `shadows the library SLI <id> of <entry>`); so is an SLO id two SLIs would
+  share — `sloIdFor` joins `<sli>_<pct>` with `_`, legal inside an id, so an overridden
+  `broker_availability` at 0.9999 and a custom `broker_availability_99` at 0.99 both make
+  `broker_availability_99_99` (`custom <id>.id: its SLO id … collides with <sli>'s`, or `override
+  <sli>.objective: …` when no custom SLI is involved); the objective and window required; the PromQL
+  required per type; the fields validated as above. A custom SLI gets an SLO (`sloIdFor`), a
+  recording rule, burn alerts from the **default burn profile** — `DEFAULT_BURN_PROFILE =
+  { ratio: 'availability', threshold: 'latency' }`, the profile a library template without
+  `burn` takes — SLI and SLO bindings on the overview board like any SLI, the evidence
+  `{ status: 'custom', source: 'written in the studio' }`, `provenance.slis[id].library.source
+  = 'custom'`, `provenance.custom = [ids]` and the annotation `library.custom`; at tier-1 it
+  may carry the forecast or the generic remediation like any first SLO. The rubric counts it
+  like any SLI, nothing more. The CLI does not take custom SLIs in this slice (the studio and
+  the API do).
+- The API: `POST /api/library/instantiate`, `/compile` and `/register` take `overrides` and
+  `custom` in the body — whitelisted and bounded: at most 64 override entries, 16 custom SLIs,
+  `MAX_PARAM_LENGTH` per string (the engine), anything else 400 with the engine's message;
+  `/compile` and `/register` accept the instantiate inputs in place of `canonical`, so a
+  customised pack is compiled or registered in one request. `GET /api/library` is unchanged
+  in shape; the index rows' SLIs now carry the PromQL templates and the bound (`good` /
+  `total` or `query` / `threshold`, `${param}` unresolved) and the metric (`semconv_metric`)
+  — the defaults the editor shows; since spec 1.3 a threshold row also carries `good_when`
+  (normalised: `below` where the template says nothing). `packc init` gains a repeatable
+  `--override <sliId>.<field>=<value>` for `id`, `objective`, `window`, `threshold`, `good_when` and
+  `semconv_metric` (a query, good or total is edited in the studio or in the pack file) and
+  `--sli <id>` as a repeatable alias of `--slis`.
+
+**3. The definition is a wizard stage.** DEFINE is the *seeding* step: the left column is
+the live form exactly as before (the fields, the segmented tier control, the chips, the
+summary) and the main surface the silhouette; its primary action is **Seed the pack →** —
+`build.seeded = true`, persisted, and on to COMPILE (`buildActions.seed`) — and reads
+**Continue to Compile →** once seeded. On COMPILE and VERIFY the left column is the **seed
+card** (`seedCardModel(build, library, requirements)`, `buildDefinitionModel.mode = 'seed'`):
+read-only and visually recessed — muted ink (`--ink-3` on the card, never `--ink-5`: WCAG AA
+in both themes, the stylesheet scan covers the new rules), no input, a thin border, the
+eyebrow SEED — and compact: the service name, owners and environment as a definition list,
+one tier chip (*seeded at tier-2 · 15 MUST · 1 SHOULD*), the entries as small muted chips,
+what the pack carries from them (*9 SLIs in the pack · 1 from a higher tier · 2 customised ·
+1 custom*), then **Change seed →**, which returns to DEFINE. Below the seed card the
+conformance **summary** stays live on every step: it is the grading, not the seed.
+Re-seeding loses nothing the user made — overrides, custom SLIs, params and toggles persist
+across a tier or entry change (an override follows its SLI when the composition re-keys the
+ids, `retargetOverrides`; the SLI picks of the other entries follow the same way,
+`retargetSlisForEntries` — an entry that joins brings the tier's defaults of its own, an SLI
+whose entry is deselected drops with its overrides, and the explicit list collapses to the
+defaults only when nothing user-made is left in it) — and
+the DEFINE column says so once seeded, in one line: *Seeded. Changing the tier re-grades the
+pack and refreshes library defaults; your customisations stay. Removing a product drops its
+SLIs.* `buildStepReachability`: COMPILE needs a valid definition **and** `seeded`; VERIFY
+additionally a result with at least one SLI; a draft persisted before this change on step
+compile or verify (`seeded` undefined) counts as seeded (`isSeeded`; the controller migrates
+the field on load and `clampStep` tolerates it). The `#build-status` live region line is
+unchanged.
+
+**The studio surface for the copies** is the pop-up editor ("The editor" below): **Edit** on a
+rolodex card (View on Verify), any SLI or SLO card on the stack, or the last rolodex card
+**+ Custom SLI** for one written from scratch. The copies first shipped as an in-card
+Customise face and a form card; the maintainer's drive found them half baked, and they are
+gone. The engine's `override <sli>.<field>: …` error lands under the editor's field and, with
+the editor closed, stays visible on the card (`is-error`, a *rejected: window* chip with the
+reason in its title) and in the step's compile note, which names the value and the card to
+open (`rejectedCopies`). Above-tier cards show their informational chip and are simply
+addable. The stack's L1 SLI cards carry the provenance line in their foot (`customisedMap`,
+the shared card body's optional `note`) wherever the provenance says so.
+
+**Modules.** Engine: `checkOverrides`, `checkCustom`, `checkCopyField`, `customFragment`,
+`evidenceOf` in `tools/lib/library.mjs`. Studio: `studio/build-copies-model.mjs` (pure:
+`overrideFor`, `effectiveSli`, `customisedFields`, `promqlEdited`, `sliEditorModel`,
+`customFormModel`, `customDefFromDraft`, `fieldValueFor`, `slugifySliId`, `percentText` /
+`ratioOf`; it imports nothing from `build-model.mjs`, which imports it); in
+`studio/build-model.mjs` `isSeeded`, `seedCardModel`, `allSliKeys` / `selectedSliKeys`,
+`retargetOverrides`, `effectiveOverrides`, `customisedMap`, `rolodexItems` with the copies,
+`buildSheetModel`, `buildEditorModel`; the actions `seed`, `setOverride`, `clearOverride`,
+`addCustom`, `updateCustom`, `removeCustom`, `openEditor`, `closeEditor` in `studio/app.mjs`;
+`seedCardHtml` in the definition view; `wireRolodexEditors` in the sheet view; the view
+`studio/build-editor-view.mjs`.
+
+**Honesty rules kept.** A customised SLI never keeps the library's evidence badge for an
+expression it no longer uses; *pass on a placeholder* stays distinct from pass; a section
+switched off says what fails with it (unchanged); the rubric is never bent by a custom SLI —
+it counts like any SLI, nothing more.
+
+## The editor: one pop-up over an SLI and its SLO
+
+The copies shipped as an in-card face (2026-09-23) and the maintainer, trying them on a test
+server, wrote: *the functionality is not there, I can't update an SLI. This looks half baked …
+updating should be easier — one has to scroll up and down to modify something that, if it's
+just 5 variables, maybe a pop-up would do.* The face worked mechanically but lived at the end
+of a long path (COMPILE → a slab head → a footer button → a form scrolling inside a card); the
+SLI and SLO cards on the stack were not clickable, on DEFINE the sheet was a disabled preview,
+the seed card's chips did nothing; the face could not rename an SLI or change its metric; its
+PromQL fields showed the library TEMPLATE with `${duration_metric}` / `${job}` unresolved —
+which the engine refuses in an override, so the effective query was never shown and editing
+meant hand-expanding parameters; the description box read empty under a "library default"
+label; and edits applied only on leaving the field. One design replaces it.
+
+**One pop-up editor.** Editing an SLI and its SLO is one centered modal dialog
+(`studio/build-editor-view.mjs`, `renderBuildEditor(container, model, host)` over the pure
+`sliEditorModel({ item, result, library, build, mode, errors, allKeys })` in
+`studio/build-copies-model.mjs`; `buildEditorModel({ build, library, mode })` in
+`build-model.mjs` finds the SLI the draft's `editor` names and assembles the inputs). It
+replaces both the in-card Customise face and the '+ Custom SLI' form card (deleted with their
+wiring and CSS); the rolodex card keeps its facts and its add / remove switch, its footer
+button reads **Edit** (View on Verify) and opens the pop-up, and the last rolodex card
+**+ Custom SLI** opens it in create mode.
+
+*Where it opens from.* (a) Any SLI or SLO card on the L1 slab of the stack: the whole card is a
+real control — a focusable card with button semantics (`role=button`, `tabindex=0`,
+`aria-haspopup=dialog`, Enter and Space, a hover and a focus ring; `build-stack-view.mjs`
+`editAttrs`, a Build-only wrapper around the card body Discover shares) — and an SLO card opens
+its SLI's editor on the objective; on COMPILE and VERIFY the adapter's artefacts carry the
+action (`stackCardActions` maps the id the pack carries to the editor's key, `buildStackModel`
+stamps `edit`), on DEFINE the SLI / SLO candidate ghosts do, with the library key; the card's
+accessible name reads *Edit <sli> — ratio SLI*, and on VERIFY *View <sli> — ratio SLI (as
+compiled)*, like the rolodex's button there. (b) The
+rolodex card's Edit. (c) The '+ Custom SLI' card. (d) A product chip on the seed card opens the
+L1 sheet on that product's first card (`openSheet('L1', { entry })`). It opens on DEFINE and
+COMPILE alike — DEFINE is the seeding stage but its pack is already instantiated, so the
+sheet's disabled preview mode is retired: `sheetModeFor` is `edit` on DEFINE and COMPILE,
+`verify` on VERIFY; *Compose in Compile →* is gone; the sheet on DEFINE is the same live sheet.
+On VERIFY the same dialog opens read-only (`editorModeFor`: the values as spans, the
+provenance line, no input).
+
+*Dialog semantics.* `role=dialog aria-modal=true` (so `installDialogFocusTrap` traps it —
+`TRAPPED_DIALOGS` skips the sheet's `aria-modal=false`, so only the editor traps while the
+sheet stays open underneath), `aria-labelledby` the SLI id, `aria-describedby` the status
+line, a scrim over everything, Esc leaves a focused field (its change commits) and closes,
+focus lands on the first field on open (the objective from an SLO card) and returns to the
+opener on close (the opener's focus key travels with `openEditor`: `card:<artefact id>`,
+`ghost:<key>`, `edit:<key>`, `edit:create`), one editor at a time, the open editor in UI state
+(`build.editor`, never persisted). The sheet may stay open underneath; the editor never
+scrolls the page (its body scrolls inside, `overscroll-behavior: contain`). It stacks above
+the sheet (z 61), the sticky header and the toast (z 100) — the scrim at 150, the dialog at 151
+— and below the drop overlay and the Advanced menu (z 200), the chrome's own layers: at
+1366×768 the title row of every threshold / create editor once sat behind the header, whose
+buttons took the clicks meant for the dialog (measured).
+
+*Layout.* No scrolling at 1920×1080 and none at 1366×768 for a library SLI (measured live).
+A title row (the id large, the product and its evidence badge, the type pill, the
+*customised* / *custom* / *from the tier-1 profile* / *was <key>* chips); a compact
+two-column grid: Id (a rename) · Description (PREFILLED with the library default); Objective
+(percent) · Window (the schema's four); for a threshold SLI Bound — with its direction beside
+the number, the two-segment *good when: below · above* control (spec 1.3 `good_when`, "The
+direction of the bound" below) — · Unit; Metric
+(`semconv_metric`) · Type (fixed — a different shape is a new custom SLI, the hint says so; no
+library SLI carries a percentile, so there is no percentile field); then the PromQL (Query, or
+Good and Total side by side) as monospace textareas of two rows that grow (to about eight
+lines, then scroll inside), showing the RESOLVED expression — the parameters in, read from
+the instantiated pack (`result.canonical.spec.slis` by the id the pack carries; before the
+engine has answered for it, the library template with `result.provenance.params` in) — with a
+small line *parameters: job=orders-api, duration_metric=… — edit them in L2*; the evidence
+line; a status line at the bottom that says what happened (*applying…* → *applied · SLO
+availability_99_9 · 2 burn alerts · rule orders_api:availability:ratio_5m*; the engine's error,
+which also sits under its field; *not in the pack — tick Include in this pack below*; *the last
+compilation failed elsewhere*; *as compiled · …* on Verify); per-field **↺ library default**
+(the PromQL default is the resolved library expression, named beside the label rather than
+printed), **Reset all** and **Save SLI**; the *Include in this pack* checkbox in the footer
+(a custom SLI gets **Remove SLI** instead). Since the 2026-09 review the fields are grouped
+Behavior · Objective · Data source · Generated outputs, a sentence in real units leads the
+dialog, and the relationship checks sit beside each field and in a linked summary (see
+"The screens, after the 2026-09 UX review" below). Both themes
+through the tokens; the rules sit in the axis block of `app.css`, so the AA scan covers them.
+
+*Live apply.* Every field commits ON INPUT through the existing actions with `live: true`
+(`setOverride(key, field, text, { live })` / `updateCustom(id, field, text, { live })`, both
+answering whether anything changed): the draft changes, the dialog alone is redrawn (its
+status reads *applying…*, `build.editorDirty`) and the instantiate is debounced like a typed
+name — a keystroke is never a request of its own; the page under it follows when the pack
+answers (`runBuildInstantiate` clears the flag — unless a newer edit still waits on the
+debounce, `editorDirtyAfterAnswer`: an older request answering must not read *applied · SLO
+<the stale id>* before the last edit was ever sent). A text that means the committed value (`99.90`
+for 0.999, a detour and back) changes nothing: the action says so and the status stays what
+the model says, never *applying…* with no request behind it.
+The editor lives in a persistent host on `<body>`, outside the re-rendered view
+(`syncBuildEditor` after every render of the main view). When the same editor (key and mode)
+is already mounted, `renderBuildEditor` redraws it IN PLACE — the head, the body and the
+footer's actions are replaced; the dialog node, the scrim and the status node stay — so the
+status line, a polite live region (`role=status aria-live=polite`), is the same node whose text
+changes when the pack answers: assistive technology announces a text change in an existing
+live region, not the initial text of a freshly inserted one (the *applied · …* answer once
+arrived by replacing the whole dialog's innerHTML and was never announced; the entrance
+animation replayed with it). Another key or mode renders the dialog whole. `renderBuildEditor`
+also keeps the focused control's TEXT, focus and caret across a re-render — the model's `99` never overwrites a
+typed `99.` — so typing three characters quickly loses none (measured live) and a value the
+engine rejects stays as typed beside its message (*got "abc"*). A field is found by its focus
+key, else by its field name when the key changed under it — a custom SLI's keys carry its id
+(`cu:<id>:<field>`), which a rename changes: the old key found nothing, the focus dropped to
+`<body>` after the first keystroke and every following one was lost (measured); the dialog's
+own controls carry keys too (`editor:done`, `editor:cancel`, `editor:reset-all`,
+`editor:close`; `focusFallbackSelectors` knows them), so the pack answering while Done has the
+focus does not drop it either. Esc closes the editor from inside (the dialog's handler) and,
+through one document listener per host, from `<body>` — inert while no dialog is mounted,
+deferring to a modal on top. The render that opens the editor skips `rerenderBuild`'s generic
+focus restore, which handed the focus back to the opener. Enter on a one-line input leaves it; a `change` that follows an `input` with the same
+text is not a second commit. The **Id is the exception**: a rename moves the SLO id, the
+recording rule, the boards and the burn alerts, so it is pre-checked on every keystroke
+(`paintIdState`: the clash / not-a-slug message under the field, the status *not applied — …*
+or *rename to <id> — Enter, Tab or Esc applies it*) and committed when the field is LEFT —
+committing every keystroke renamed the SLI to each valid prefix and left it at `error_rat`
+when the final `error_rate` clashed (measured live with real keys). A typed id the model does
+not carry survives the pack's answer with its message: the render that restores the kept text
+re-runs the check and paints it again.
+
+*Rename and metric* (`tools/lib/library.mjs`). `id` and `semconv_metric` join
+`OVERRIDE_FIELDS`. An `id` override renames the SLI in the pack while the override stays keyed
+by the id the library gives it (`entryFragment` carries `key` beside `id`), so the studio keeps
+a renamed SLI attached to its library row and the stack and the rolodex show the new id; the
+SLO id (`sloIdFor`), the recording rule, the boards' bindings, the burn alerts and the chaos /
+remediation references follow; `provenance.slis` sits under the new id with `library.sli` the
+template's and `customised: id`; the evidence stays the library's — the expression is still
+the library's. The id is validated like a custom SLI's (`CUSTOM_ID_RE`, not `errorbudget`);
+`checkSliIds` refuses a rename onto another SLI in the pack (a library one, a custom one, a
+second rename), onto an un-ticked library SLI of the entries (it would clash the moment it is
+ticked) and a custom id equal to a renamed id; `checkSloIds` spells its collision on the
+override's key. A rename to the id the pack already carries is no rename. `semconv_metric` is
+one bounded token (128 characters, no whitespace, quote or backslash): restated beside an
+edited expression it stays (the caller's claim); left alone, an edited expression still drops
+the template's claim. The index rows carry the library's metric as the default. The studio
+pre-checks a typed id the way the engine will (`checkEditorId`, `existingSliIds`: a slug, not
+reserved, not another SLI of the pack or of a selected product) and keeps an invalid one in
+the field with its message, never sent; the key itself typed back (or an empty field) clears
+the rename — the studio never sends an override that restates the key, which it would show as
+*customised: id* while the engine treats it as no rename. `packc init --override` accepts `<sli>.id=` and
+`<sli>.semconv_metric=`.
+
+*Create mode.* The same dialog over the custom form (`customFormModel`, one rule: Name → id
+with `slugifySliId`, a typed id sticks; Type — its hint *ratio: good over total events ·
+threshold: a value against a bound — good when below (a ceiling) or above (a floor)*;
+Description; Objective; Window; Bound with its direction + Unit for a threshold SLI; Metric,
+optional; the PromQL fields for the type), **Add to the pack**
+enabled from the model's `canSubmit` with the engine's messages inline (`customDraftErrors`);
+a success morphs the dialog into edit mode over the new SLI, whose status says what the pack
+made of it.
+
+*The direction of the bound (spec 1.3 `good_when`).* A threshold SLI's bound says which side of
+it is good: `below` — a ceiling, the default and the only meaning a 1.2 pack could express
+(latency, lag) — or `above`, a floor (replicas, consumers). The editor's Bound row carries it as
+a two-segment control in the tier control's idiom — `role=radiogroup` labelled *Good when*, one
+`role=radio` per side with `aria-checked`, the chosen side in the tab order, ArrowLeft / Up and
+ArrowRight / Down move and pick, a sliding thumb (`--dir-index`), each segment with a focus key
+of its own (`ov:<key>:good_when:<side>`) so the focus survives a re-render on it — for threshold
+SLIs in edit and create modes; `↺ library default` sits beside its label when overridden, and
+the read-only face prints the side as a code span. A pick commits live like every other field
+(`setOverride` / `updateCustom` with `live: true`), except that picking the library's own side
+on a library SLI clears the override, as ↺ does: the library's direction is no customisation.
+The Bound hint reads *the bound in the SLI's unit; good when below (a ceiling: latency, lag) or
+above (a floor: replicas, consumers)*. The model's `good_when` field (kind `direction`, its value
+`below` when the SLI says nothing — `studio/sli-direction.mjs` `goodWhen`, the browser copy of
+`tools/lib/good-when.mjs`, held together by a test) follows `threshold` in `fieldsForType`; the
+view draws it inside the Bound cell (`boundCellHtml` / `directionHtml`, `paintDirection`,
+`wireDirectionGroups`), never in a cell of its own. The rolodex card prints the bound with its
+glyph (`≤ 0.1 seconds`, `≥ 2 consumers`), the DEFINE candidate ghost and the adapter's card
+print it under the title (`.card-sub`), and the create form writes `good_when` only for a floor
+(below is the default). The engine copies the declaration into the pack SLI as declared and never
+synthesises one; the compiled burn alert of a floor counts the samples under the bound
+(`< bool t`); the schema refuses the field on a ratio SLI, and so does the engine before the
+schema is asked ("a ratio SLI has no bound, so no direction").
+
+*Small fixes in the same slice.* The header step tabs' accessible names read *Define —
+Service, tier & library* (and Compile, Verify; the taglines were renamed later, #110): `BUILD_TABS`
+lives in `build-model.mjs` (pure), `techName` is the step's own word, `tabName` spells the name once for the tab's
+`aria-label` and `title`. The description default bug (an empty box under a "library default"
+label) is gone with the face. The rolodex counts line and the L1 slab head are unchanged.
+
+**Honesty rules kept.** An edited PromQL drops the library evidence (`custom`, *edited — the
+library's evidence no longer applies*); a rename keeps the library provenance (`customised:
+id`); *pass on a placeholder* stays distinct; nothing in the rubric bends.
+
+**Modules.** Engine: `checkCopyField` (id, semconv_metric, good_when), `checkSliIds`, `entryFragment`'s
+`key` in `tools/lib/library.mjs`; `libraryIndex` rows carry `semconv_metric` and `good_when`;
+`tools/lib/good-when.mjs` (`goodWhen`, `boundText`). Studio:
+`sliEditorModel`, `checkEditorId`, `existingSliIds`, `resolveTemplate`, `templateParams`,
+`effectiveId`, `fieldsForType` in `studio/build-copies-model.mjs`; `studio/sli-direction.mjs`
+(the browser copy of the direction helper); `buildEditorModel`,
+`editorModeFor`, `stackCardActions`, `BUILD_TABS` / `tabName`, `sheetModeFor` in
+`studio/build-model.mjs`; the view `studio/build-editor-view.mjs` (`buildEditorHtml`,
+`renderBuildEditor`, `wireBuildEditor`, `growTextarea`, `paintFieldMessage`, `paintDirection`); the actions
+`openEditor`, `closeEditor`, `setOverride` / `updateCustom` with `live`, `openSheet` with
+`entry` and `syncBuildEditor` in `studio/app.mjs`; `editAttrs` in the stack view;
+`wireRolodexEditors` in the sheet view; `state.build.editor` / `editorDirty`.
+
+**Tests.** `tools/test-build-editor.mjs` (the model over a library ratio SLI, a threshold one
+with a unit, an above-tier one, a customised, a renamed and a custom one, create mode,
+read-only; the helpers; headless renders per mode — the ARIA, every describedby resolving, no
+input on Verify; the handlers — three quick characters, the id clash kept and not sent, ↺ /
+Reset all / the switch / Esc; the focus-caret-text preservation under a fake document; the
+create form's live draft; the Tab trap with the sheet underneath; the stylesheet's modal
+rules); `tools/test-build-model.mjs` (the rolodex's Edit and create card, a renamed id on the
+card and the DEFINE ghost, the stack cards' action and wiring, the live DEFINE sheet, the seed
+chips, the tab names, the AA scan over the new rules); `tools/test-library.mjs` (the rename
+through the SLO, the rule, the bindings, the compiled alert and the provenance; every clash;
+the metric; the CLI).
+
+## What the next slices add
+
+- **Slice 3.** Seeding DEFINE from a repo scan or a live MCP draft (the crawler's
+  discovered backends and scrape jobs pre-select entries and fill params); live
+  metric-name verification of an entry's `metrics[]` through the MCP capability
+  registry, promoting `semconv` / `upstream-docs` evidence to a recorded one per
+  deployment; library-upgrade proposals in Remediate (a pack whose `library.source`
+  is behind the shipped entry version gets the diff as a remediation).
+
+## Open questions
+
+- Should a toggled-off section be emitted empty rather than absent, so the pack stays
+  schema-valid at the price of a less honest gap? Today: absent (both the schema and
+  the rubric report it).
+- Parking a whole receiver as Scaffold when only its scrape targets are placeholders
+  matches the adapter's artefact granularity; a per-field marker would need the
+  adapter to learn one.
+- Tier-3 objectives (0.99 where the reference pack says 0.999) are the library's
+  judgement, not measured; the per-tier table in each entry is the place to argue.
+- The archetypes' semconv spellings need one live exposition (slice 3) before the
+  `semconv` status can become `recorded-live`.
+- Should `evaluateConformance` itself learn the placeholder state — a clause held up only
+  by `crawler.scaffold.*` / `library.todo.*` artefacts reported as *pass (placeholder)* —
+  so the CLI, the API and the studio agree without each attaching `onPlaceholder`
+  (`/api/validate`, `/api/library/register` and `GET /api/packs/:id/conformance` all
+  attach it from `validationSummary` today)? Today
+  the rubric is annotation-blind by design and the distinction lives in the engine's
+  `validationSummary`; the crawler's stubs would gain the same honesty.

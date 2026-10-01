@@ -19,7 +19,7 @@ is the condensed, agent-facing version — when in doubt, those docs win.
 
 - `npm run lint` (0 errors) and `npm test` (the full aggregate) must be green
   before every commit and push. There is NO build step: this is plain ESM
-  `.mjs` (Node 18+), not TypeScript — do not add transpilers or a build.
+  `.mjs` (Node 22.16+, the `engines` floor), not TypeScript — do not add transpilers or a build.
 - Changes visible in the studio UI must be browser-verified (boot the server,
   render the affected view, check the console) before the work is called done.
 - Conventional commit messages (`feat(server): …`, `fix(studio): …`,
@@ -50,6 +50,21 @@ them; change them at the source and update the gate in the same commit.
 - **The vendored spec** under `vendor/observability-pack-spec/` is synced,
   never hand-edited: use `npm run sync-spec`; `npm run sync-spec:check`
   verifies SHA256 integrity and runs in CI.
+- **Routes and roles:** every route is registered with
+  `authorize('<METHOD> <path>')` (`server/authz.mjs`) as its first handler,
+  per method (never `app.all` / `route.all`), and classified in
+  `server/route-table.mjs`; every router is
+  `express.Router({ caseSensitive: true })` mounted at the root.
+  `server/test-authz.mjs` fails the build on an unclassified, unguarded or
+  unprobed route (add its probe to `PROBES`); a class change updates
+  `EXPECTED_CLASS` there in the same commit.
+- **Identity rules:** every user, org, membership and join-role rule lives
+  once in `server/identity-admin.mjs`, applied by the CLIs (`npm run users`,
+  `npm run orgs`) and by the identity API (`server/routes/identity.mjs`,
+  with `surface: 'api'`, which changes only the way out a refusal names).
+  A refusal's `kind` (invalid / missing / conflict → 400 / 404 / 409) and
+  both surfaces' texts are pinned in `server/test-store.mjs`; never fork a
+  rule into a route.
 - **Browser-safety rule:** modules under `tools/lib/` (including
   `tools/lib/contracts/`) are imported by the studio in the browser — they
   must not import `node:*` APIs or read `process.env`. Node-only code lives

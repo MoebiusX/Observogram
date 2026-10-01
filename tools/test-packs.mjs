@@ -5,7 +5,7 @@
  * Round-trip + conformance suite for every archived canonical pack
  * (examples/*.pack.yaml). For each pack:
  *   1. Parse the YAML.
- *   2. Validate against the vendored v1.2 schema.
+ *   2. Validate against the vendored schema (tools/lib/validator.mjs SPEC_VERSION).
  *   3. Adapt via the layered adapter.
  *   4. Assert the self-diff invariant: diffPacks(pack, pack) preserves every
  *      flat-comparable artefact with alignment/jaccard 1.0 — identity-key
@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
 import { adapt } from './lib/adapter.mjs';
-import { classify } from './lib/artefact-model.mjs';
+import { classify, foldMetricFamilies } from './lib/artefact-model.mjs';
 import { diffPacks } from './lib/diff.mjs';
 import { evaluateConformance } from './lib/conformance.mjs';
 
@@ -89,7 +89,10 @@ function flatComparableCounts(layered) {
     ...(l.L5 || []), ...(l.GOV || []),
   ].filter(a => classify(a) !== 'panel');
   const scaffold = flat.filter(a => a.source === 'Scaffold').length;
-  return { concrete: flat.length - scaffold, scaffold };
+  // Metrics are compared as families (a histogram and its _bucket / _count /
+  // _sum series are one metric), so that is the unit a self-diff preserves.
+  const concrete = foldMetricFamilies(flat.filter(a => a.source !== 'Scaffold'), []).a.length;
+  return { concrete, scaffold };
 }
 
 if (!existsSync(PACKS_DIR)) {

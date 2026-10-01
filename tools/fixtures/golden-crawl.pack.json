@@ -197,6 +197,14 @@
           ]
         },
         {
+          "severity": "SEV2",
+          "channels": [
+            {
+              "webhook": "unresolved:GOLDEN_HOOK_URL"
+            }
+          ]
+        },
+        {
           "severity": "SEV3",
           "channels": [
             {

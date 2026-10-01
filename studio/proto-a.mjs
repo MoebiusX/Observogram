@@ -16,7 +16,7 @@ import {
   buildProtoModel, protoEnsureComparison, projectGrade, projectionSentence,
   ladderHtml, chip, criterionChip, donutSvg, fmtUnits, fixChip, badnessClassChip,
   partialEvidenceBanner, scaffoldOosNotes, verificationNote, operabilityNote,
-  buildEvidenceRows, deploySelectionFromItems,
+  buildEvidenceRows, deploySelectionFromItems, protoAdditionalLabel,
 } from './proto-shared.mjs';
 
 // Session-only "addressed" marks for the Remediate worklist progress
@@ -70,7 +70,7 @@ export function renderProtoDiagnoseA(view) {
       <div class="pa-verdict">
         <div class="pa-verdict-letter tier-${escapeHtml(ig.tier)}">${escapeHtml(ig.letter)}</div>
         <div class="pa-verdict-body">
-          <span class="pa-verdict-eyebrow">DIAGNOSTIC GRADE · ${escapeHtml(ig.label)}</span>
+          <span class="pa-verdict-eyebrow" title="The diagnostic grade: coverage, trust and evidence">ASSESSMENT · ${escapeHtml(ig.label)}</span>
           <span class="pa-verdict-word ${escapeHtml(verdict.level)}">${escapeHtml(verdict.word)}</span>
           <span class="pa-verdict-stats">
             <strong>${m.overallPct}%</strong> score
@@ -101,8 +101,10 @@ function renderActionBar(host, m) {
         ⇪ Deploy the missing set (${dep.identities.size})</button>` : ''}
     ${m.totals.onlyInB ? `
       <button type="button" class="proto-act" id="pa-retrofeed"
-        title="Open Remediate with the retrofeed set selected — adopt the live shadow signals into the pack">
-        ⤵ Plan retrofeed (${m.totals.onlyInB})</button>` : ''}
+        title="${m.mode === 'drift'
+          ? 'Retrofeed: open Remediate with the live-not-declared signals selected, to copy them into the repository pack'
+          : 'Open Remediate with the baseline’s missing declarations selected, to adopt them into the pack'}">
+        ⤵ ${m.mode === 'drift' ? 'Update repository from live' : 'Adopt from the baseline'} (${m.totals.onlyInB})</button>` : ''}
     <button type="button" class="proto-act" id="pa-reverify"
       title="Open Journeys to re-run the live verification">↻ Re-verify</button>
     <button type="button" class="proto-act is-quiet" id="pa-remediate">Open Remediate →</button>
@@ -134,8 +136,8 @@ function renderChapters(host, m, projection) {
     const C_DRIFTED = 'rgb(150, 90, 200)';
     const C_DECL = 'rgb(200, 70, 40)';
     const C_SHADOW = 'rgb(180, 120, 0)';
-    const aLabel = m.mode === 'drift' ? 'Declared, not live' : 'Beyond target';
-    const bLabel = m.mode === 'drift' ? 'Live, not declared' : 'Missing vs target';
+    const aLabel = m.mode === 'drift' ? 'Declared, not live' : protoAdditionalLabel();
+    const bLabel = m.mode === 'drift' ? 'Live, not declared' : 'Missing vs baseline';
     const layerRows = m.layers.map(r => `
       <tr>
         <th><span class="proto-lnum">${r.L}</span> ${escapeHtml(r.name)}</th>
@@ -163,7 +165,7 @@ function renderChapters(host, m, projection) {
             <li><span class="sw" style="background:${C_SHADOW}"></span>${m.totals.onlyInB} ${escapeHtml(bLabel.toLowerCase())} · w ${m.mode === 'drift' ? '0.15' : '1.0'}</li>
           </ul>
         </div>
-        <p class="drift-risk-note">Weighted badness: ${m.mode === 'drift' ? 'declared-not-live = 1.0' : 'missing target artefacts = 1.0'}; drifted = 0.5 by default, 1.0 for decision-bearing fields, 0.1 for cosmetic fields; ${m.mode === 'drift' ? 'live-not-declared' : 'beyond-target extras'} = 0.15. Health = aligned / (aligned + weighted badness).</p>
+        <p class="drift-risk-note">Weighted badness: ${m.mode === 'drift' ? 'declared-not-live = 1.0' : 'missing vs baseline = 1.0'}; drifted = 0.5 by default, 1.0 for decision-bearing fields, 0.1 for cosmetic fields; ${m.mode === 'drift' ? 'live-not-declared' : escapeHtml(aLabel.toLowerCase())} = 0.15. Health = aligned / (aligned + weighted badness).</p>
         <table class="pa-drift-table">
           <thead><tr><th>Layer</th><th>Aligned</th><th>Drifted</th><th>${escapeHtml(aLabel)}</th><th>${escapeHtml(bLabel)}</th></tr></thead>
           <tbody>${layerRows}</tbody>
@@ -267,7 +269,7 @@ export function renderProtoRemediateA(view) {
           <span class="pa-gap-eyebrow">NOTHING TO REMEDIATE</span>
           <p class="pa-gap-lede">${m.haveB
             ? `Every concrete artefact aligns with <strong>${escapeHtml(m.bName)}</strong>. Re-verify after the next deploy to keep it that way.`
-            : 'Load a <strong>Pack B</strong> from the header picker to compute the remediation set (drift, shadow signals, gaps to target).'}</p>
+            : 'Load a <strong>Pack B</strong> from the header picker to compute the remediation set (drift, shadow signals, gaps to the selected baseline).'}</p>
         </div>
       </header>`;
     return;
@@ -359,7 +361,8 @@ export function renderProtoRemediateA(view) {
   bar.innerHTML = `
     ${dep.identities.size ? `
       <button type="button" class="proto-act is-primary" id="pa-deploy-all">⇪ Deploy the missing set (${dep.identities.size})</button>` : ''}
-    ${m.totals.onlyInB ? `<button type="button" class="proto-act" id="pa-plan-retrofeed">⤵ Retrofeed ${m.totals.onlyInB} into the pack (classic view)</button>` : ''}
+    ${m.totals.onlyInB ? `<button type="button" class="proto-act" id="pa-plan-retrofeed"
+      title="${m.mode === 'drift' ? 'Retrofeed: copy the live-not-declared signals into the repository pack' : 'Adopt the baseline’s missing declarations into the pack'}">⤵ ${m.mode === 'drift' ? 'Update repository from live' : 'Adopt from the baseline'} — ${m.totals.onlyInB} artefact${m.totals.onlyInB === 1 ? '' : 's'} (classic view)</button>` : ''}
     ${depProjection && depProjection.afterPct > depProjection.beforePct
       ? `<span class="proto-deploybar-projection">deploying moves the grade
           ${escapeHtml(depProjection.before.overall.instrumentGrade.letter)} (${depProjection.beforePct}%) →

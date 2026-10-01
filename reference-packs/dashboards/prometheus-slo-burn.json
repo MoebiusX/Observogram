@@ -584,7 +584,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "prometheus:errorbudget:burn_1h",
+          "expr": "prometheus:errorbudget:burn_1h{slo=~\"scrape_success_99_9|wal_integrity_99_99|rule_evaluation_99_95|query_latency_99_p99_1s|alertmanager_delivery_99_9|tsdb_compaction_99_95\"}",
           "instant": true,
           "legendFormat": "{{slo}}"
         }

@@ -27,6 +27,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
+import { SPEC_DIR } from './lib/validator.mjs';
 import { compile, compileArtifact, TARGETS } from './lib/compile.mjs';
 import { createHarness } from './lib/harness.mjs';
 
@@ -43,7 +44,7 @@ const UPDATE = process.argv.includes('--update');
 // "well-formed" pack); edge-hostile-names exercises label/name escaping.
 // ---------------------------------------------------------------------------
 const PACKS = [
-  { id: 'payment-service',    path: 'vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml' },
+  { id: 'payment-service',    path: `${SPEC_DIR}/examples/payment-service.pack.yaml` },
   { id: 'edge-hostile-names', path: 'tools/fixtures/compile/edge-hostile-names.pack.yaml' },
   // Two SLOs on one SLI: the per-artifact matrix only (Grafana-managed uid/title uniqueness).
   { id: 'shared-sli',         path: 'tools/fixtures/compile/shared-sli.pack.yaml', artifactsOnly: true },
@@ -97,6 +98,9 @@ const ARTIFACTS = [
   { group: 'rules', flavor: 'prometheus', artifact: 'slo:checkout_latency_99_5_p99_300ms', packs: ['payment-service'] },
   { group: 'rules', flavor: 'grafana-managed', artifact: 'slo:checkout_latency_99_5_p99_300ms', packs: ['payment-service'] },
   { group: 'rules', flavor: 'prometheus', artifact: 'slo:hostile_availability_99', packs: ['edge-hostile-names'] },
+  // Step 5: the assurance group as its own file (the per-item file the studio deploys), both flavours.
+  { group: 'rules', flavor: 'prometheus', artifact: 'assurance', packs: ['payment-service'] },
+  { group: 'rules', flavor: 'grafana-managed', artifact: 'assurance', packs: ['payment-service'] },
 ];
 
 const artifactGoldenName = (packId, row) => {

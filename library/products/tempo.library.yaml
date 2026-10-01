@@ -1,0 +1,142 @@
+# Library entry: Grafana Tempo (trace store)
+# Seeded from tools/lib/contracts/stack-self-metrics.mjs. Neither repository records a Tempo
+# exposition (only tempo_build_info, the version probe), so this entry observes Tempo from the
+# outside with names that ARE recorded: the Prometheus-generated `up` for the Tempo scrape job
+# (the mq-observability-pack lab scrapes Tempo as job `tempo` and ships traces to it over OTLP)
+# and the span path INTO Tempo — the OpenTelemetry Collector's span export / receive counters
+# and its exporter queue (rows collector_export_failures_spans, collector_refused_spans,
+# collector_queue_saturation), verified on the pinned stack on 2026-09-07. The Jaeger v1 drop
+# counter of the contract (jaeger_collector_spans_dropped_total) is not used: Tempo is not Jaeger.
+library: v1
+id: tempo
+kind: product
+version: 1.0.0
+title: Grafana Tempo
+product: tempo
+summary: Availability of a Tempo trace store and the health of the span path into it — collector export failures, spans refused at the collector, exporter queue saturation.
+description: |
+  Tempo as the pack's traces backend (Grafana-native; the MQ lab moved from Jaeger 2.x to Tempo
+  because Grafana 12.4's Jaeger datasource speaks only the v1 API). Observed by the scrape
+  target's `up` and by the OpenTelemetry Collector's otelcol_exporter_send_failed_spans /
+  otelcol_receiver_refused_spans (lazily registered; presence-guarded zeros) and the exporter
+  queue fill ratio. A trace store that is up but whose feeder queue is full is the failure mode
+  this entry catches.
+tags: [observability, traces]
+evidence:
+  status: recorded-live
+  verifiedOn: 2026-09-07
+  sources:
+    - tools/lib/contracts/stack-self-metrics.mjs — rows collector_export_failures_spans, collector_refused_spans, collector_queue_saturation (otel/opentelemetry-collector-contrib:0.115.1 exposition + PromQL, 2026-09-07; queue_size / queue_capacity grouping measured on 0.115.1 and 0.154.0), scrape_success_ratio (up on prom/prometheus:v2.55.1 TSDB inventory)
+    - mq-observability-pack stack/prometheus/prometheus.yml — job tempo (tempo:3200) scraped by Prometheus 3.14.0; packs/ibmmq.pack.yaml exporters.traces otlp → tempo:4317
+    - docs/MCP_INTEGRATION.md "Lazily-registered counters"
+  notes: |
+    The only Tempo-native series in either repository is tempo_build_info (tools/fixtures/mcp, the
+    version probe of tools/lib/contracts/mcp-capabilities.mjs). Tempo's own request-duration and
+    ingester metrics are deliberately NOT named: no exposition of them is recorded and the library
+    does not guess spellings. Add them from a live exposition (slice 3).
+  gaps:
+    - No Tempo-side query-latency or ingestion SLI; the tier-2 threshold SLIs are failure / saturation signals on the path into Tempo, not latencies, and say so.
+    - Tempo itself was not measured; `up{job="tempo"}` is the Prometheus-generated series of the lab's scrape job.
+    - The exporter-name filter on the queue-saturation SLI (`exporter=~"otlp.*"`) is the library's addition to the verified unfiltered form; the label exists on both measured collectors.
+params:
+  - id: job
+    label: Tempo scrape job
+    default: tempo
+    description: The job label of the Tempo /metrics scrape.
+  - id: target
+    label: Tempo /metrics target
+    default: tempo:3200
+    placeholder: true
+    description: host:port of Tempo (its /metrics endpoint).
+  - id: base_url
+    label: Tempo base URL
+    default: http://tempo:3200
+    placeholder: true
+    description: The base URL the synthetic probe calls (/ready).
+  - id: traces_exporter
+    label: Collector traces exporter name (regex)
+    default: otlp.*
+    description: The collector exporter that pushes spans to Tempo (the `exporter` label of otelcol_exporter_queue_size).
+otel:
+  languages: [go]
+telemetry:
+  scrape_jobs:
+    - job_name: "${job}"
+      scrape_interval: 15s
+      targets: ["${target}"]
+slis:
+  - id: availability
+    type: ratio
+    minTier: tier-3
+    description: Fraction of Tempo scrape targets that are up.
+    why: The store must answer before any trace can; `up` is the one Tempo-side series the evidence records.
+    unit: ratio
+    metrics: [up]
+    evidence: { status: recorded-live, source: "stack-self-metrics scrape_success_ratio (up, 2026-09-07); mq-observability-pack prometheus.yml job tempo" }
+    good: |
+      sum(up{job="${job}"} == bool 1)
+    total: |
+      count(up{job="${job}"})
+    slo:
+      objective: { tier-1: 0.999, tier-2: 0.999, tier-3: 0.99 }
+      window: 30d
+    burn: availability
+    remediation:
+      runbook: tempo-down
+      automation: manual-only
+      guardrails: { max_invocations_per_hour: 1, requires_human_above: SEV2 }
+      minTier: tier-2
+  - id: span_export_failures
+    type: threshold
+    minTier: tier-2
+    description: Spans per second the OpenTelemetry Collector failed to export to Tempo (0 when the collector has exported spans and the failure counter does not exist yet — presence-guarded).
+    why: Failed span exports are traces that never reach Tempo; the first sign it is refusing or unreachable. A failure rate, not a latency (evidence.gaps).
+    unit: per_second
+    metrics: [otelcol_exporter_send_failed_spans, otelcol_exporter_sent_spans]
+    evidence: { status: recorded-live, source: "stack-self-metrics collector_export_failures_spans: verified on otel/opentelemetry-collector-contrib:0.115.1, 2026-09-07; send_failed_spans absent while sent_spans present on 0.154.0 (public tier)" }
+    query: |
+      sum(rate(otelcol_exporter_send_failed_spans[5m])) or (count(otelcol_exporter_sent_spans) * 0)
+    threshold: 0
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: saturation
+  - id: spans_refused
+    type: threshold
+    minTier: tier-1
+    description: Spans per second refused at the collector's receiver (presence-guarded on the accepted counter).
+    why: Backpressure from Tempo shows up as refusals at the receiver before it shows up as export failures.
+    unit: per_second
+    metrics: [otelcol_receiver_refused_spans, otelcol_receiver_accepted_spans]
+    evidence: { status: recorded-live, source: "stack-self-metrics collector_refused_spans: verified on otel/opentelemetry-collector-contrib:0.115.1, 2026-09-07" }
+    query: |
+      sum(rate(otelcol_receiver_refused_spans[5m])) or (count(otelcol_receiver_accepted_spans) * 0)
+    threshold: 0
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: slow
+  - id: export_queue_saturation
+    type: threshold
+    minTier: tier-1
+    description: Fill ratio of the collector's traces exporter queue (fullest queue of the matching exporters).
+    why: A filling queue is Tempo falling behind before a single span is dropped.
+    unit: ratio
+    metrics: [otelcol_exporter_queue_size, otelcol_exporter_queue_capacity]
+    evidence: { status: recorded-live, source: "stack-self-metrics collector_queue_saturation: verified on otel/opentelemetry-collector-contrib:0.115.1, 2026-09-07 (per-exporter max grouping; the exporter-name filter is this entry's addition)" }
+    query: |
+      max(max by (exporter, instance, job) (otelcol_exporter_queue_size{exporter=~"${traces_exporter}"}) / max by (exporter, instance, job) (otelcol_exporter_queue_capacity{exporter=~"${traces_exporter}"}))
+    threshold: 0.8
+    slo:
+      objective: 0.99
+      window: 7d
+    burn: slow
+synthetic:
+  - id: tempo-ready-probe
+    kind: blackbox-exporter
+    target: "${base_url}/ready"
+    interval: 1m
+    assertions:
+      - { status_code: 200 }
+    on_fail_severity: SEV2
+    minTier: tier-3

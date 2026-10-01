@@ -15,6 +15,11 @@ active research by the maintainer and will re-enter the queue when that
 research lands. Item numbers are stable identifiers — they do not imply
 order.
 
+**Resequencing note (2026-09-24):** "make it feel like a product" leads —
+items 10 and 12 move to the front on an embedded `node:sqlite` store for
+users, orgs, services, environments and the audit
+([STORE_PLAN.md](STORE_PLAN.md)); P1 resumes after it.
+
 Engineering-health work lives in REFACTORING_PLAN.md, not here.
 
 ---
@@ -106,6 +111,11 @@ Closes four of the eight rows in RELEASE_READINESS's Production Hardening
 Gate. Design constraint: stay **file-first, zero new runtime deps,
 local-first** — a workspace directory + append-only JSONL + one optional
 bearer token, not a database + user accounts.
+*Superseded 2026-09-24:* records (users, orgs, services, environments, MCP
+endpoints, the pack registry, the audit) move into an embedded `node:sqlite`
+store — still zero new dependencies; artefacts (pack YAML, snapshots,
+journeys, runs, `deploys.jsonl`) stay files. See
+[STORE_PLAN.md](STORE_PLAN.md).
 
 **A. Workspace persistence** — `.observogram/` (gitignored;
 `OBSERVOGRAM_WORKSPACE` to relocate): `packs/<id>.pack.yaml` (id = the
@@ -200,8 +210,31 @@ Canonical example: *"repo vs live drift check"* — crawl
   SLO verdict), and the journeys panel reads the bounded run history
   (`OBSERVOGRAM_JOURNEY_RUN_RETENTION`) as the time series; scheduling stays
   external as decided here.
+- *Status 2026-09-20 (step 5, early-warning delivery):* delivered — the
+  `notify:` webhook (`urlEnv` / `authEnv` names only; `transitions` ·
+  `breach` · `always`; one bounded, once-retried POST recorded as
+  `record.notify`, written after the record itself is on disk), the
+  `schedule:` declaration with `packc journey schedule <name>` printing the
+  cron line, the Windows `schtasks` command, a GitHub Actions workflow and a
+  Kubernetes CronJob from it, `packc journey run --all`, and the opt-in
+  kustomize component `deploy/k8s/components/journeys` (workspace PVC +
+  fleet CronJob + studio mount, applied via `deploy/k8s-journeys`). The
+  in-process timer was considered and **not chosen**: it would put a
+  scheduler, its retries and its clock inside the studio and make the
+  studio's uptime the journey's uptime; every scheduler the snippets target
+  already exists.
+- *Status 2026-09-20 (studio surface, second pass):* the journeys panel
+  becomes **Advanced → Neuron** — the fleet read as one instrument (tiles,
+  alignment / grade over time per journey, an outcome heatmap, breached
+  criteria and candidate-cause kinds), one journey in focus (ladder buckets
+  and integrity per run, stack self-metric rows as small multiples, run
+  duration, the newest record opened up to its chains, causes, transition,
+  gate, stack evidence, vantage, versions, delivery and schedule snippets)
+  and the cards below. Pure model `tools/lib/neuron-model.mjs`, zero-dep SVG
+  `tools/lib/svg-charts.mjs`, `GET /api/journeys/:name/schedule`. Still no
+  scheduler in the server.
 
-### 12. Identity · tenancy · hosted posture *(plan ratification pending — 2026-06-12)*
+### 12. Identity · tenancy · hosted posture *(Stages 1–2 delivered; the rest re-planned 2026-09-24 — [STORE_PLAN.md](STORE_PLAN.md))*
 The v1 non-goal ("multi-tenant persistence") activates as its own
 stream: **sign in → land in your org → see only your services** —
 packs, journeys, deploys, audit, MCP endpoints all org-scoped,
@@ -217,6 +250,12 @@ exception proposed: `openid-client` confined to `server/auth.mjs` —
 everything else stays `node:` builtins. Full design, efforts (~2
 weeks), and the three maintainer decisions:
 [PRODUCTIZATION_PLAN.md](PRODUCTIZATION_PLAN.md). Effort: L.
+*Status 2026-09-24:* Stages 1 and 2 delivered; the rest of the stream —
+roles enforced, services and environments as records, the settings
+surface — re-planned on the embedded store:
+[STORE_PLAN.md](STORE_PLAN.md) (slices 1–6b; decisions ratified 2026-09-24, refinements in its
+§9b). PRODUCTIZATION_PLAN §6 decision 3
+("file-first org registry") is reversed there.
 
 ## P3 — Make the verdict more trustworthy *(under research — re-enters the queue when the maintainer's research lands)*
 
@@ -288,7 +327,9 @@ operating layer above it doesn't. Note: items 10A (workspace) and 11
 
 ## Sequencing note
 
-The active execution order is P1 → P2: close the loop (9 before 4 — the
+*Superseded 2026-09-24 by the resequencing note at the top: P2 items 10
+and 12 lead, per [STORE_PLAN.md](STORE_PLAN.md).* The previous order was
+P1 → P2: close the loop (9 before 4 — the
 verify arrow makes bidirectional remediation safe to trust), then make the
 session durable (10A → 10C → 10B → 10D, with 11 building directly on 10A).
 Within the research track (P3) the original compounding logic still holds:

@@ -19,6 +19,10 @@
 //                layer; see probeCandidates(id, runtime))
 //   id           optional stable handle for callers that need to reference
 //                one candidate (e.g. the dashboards search/detail pair)
+//   attests      the product this tool belongs to, when its name says so:
+//                the tool answering with data is evidence that product runs
+//                (vmalert's rule list is evidence of vmalert). Left out for a
+//                protocol-level tool any compatible backend could be behind.
 //   deprecated   { since, removeAfter, aliasOf } — the alias keeps working
 //                until `removeAfter` (an Observogram version); CI fails a
 //                release past `removeAfter` while the row still exists
@@ -69,12 +73,12 @@ export const CAPABILITIES = Object.freeze({
     // returns BOTH recording and alert rules in one payload; the probe's
     // adapt filters to record-only rules.
     candidates: [
-      { tool: 'vmalert_rules' },
+      { tool: 'vmalert_rules', attests: 'vmalert' },
       { tool: 'metrics_alerts' },
       { tool: 'list_recording_rules' },
       { tool: 'prometheus_recording_rules' },
       { tool: 'metrics_recording_rules' },
-      { tool: 'mimir_recording_rules' },
+      { tool: 'mimir_recording_rules', attests: 'mimir' },
       { tool: 'rules_list_recording' },
       { tool: 'prometheus_rules' },
       { tool: 'rules_list' },
@@ -91,14 +95,14 @@ export const CAPABILITIES = Object.freeze({
     // alertmanager_alerts surfaces FIRING alerts (not declarations) but
     // counts as evidence the alerting stack works.
     candidates: [
-      { tool: 'vmalert_rules' },
+      { tool: 'vmalert_rules', attests: 'vmalert' },
       { tool: 'metrics_alerts' },
-      { tool: 'grafana_alert_rules' },
-      { tool: 'alertmanager_alerts' },
+      { tool: 'grafana_alert_rules', attests: 'grafana' },
+      { tool: 'alertmanager_alerts', attests: 'alertmanager' },
       { tool: 'list_alert_rules' },
       { tool: 'prometheus_alert_rules' },
       { tool: 'metrics_alert_rules' },
-      { tool: 'mimir_alert_rules' },
+      { tool: 'mimir_alert_rules', attests: 'mimir' },
       { tool: 'rules_list_alerting' },
       { tool: 'prometheus_alerts' },
     ],
@@ -116,7 +120,7 @@ export const CAPABILITIES = Object.freeze({
     // "Invalid arguments" error then masked the real search error (a 401
     // from Grafana on the public Krystaline tier, recorded 2026-09-07).
     candidates: [
-      { id: 'search', tool: 'grafana_dashboards_search', args: { type: 'dash-db' }, runtimeArgs: { limit: 'grafanaDashboardSearchLimit' } },
+      { id: 'search', tool: 'grafana_dashboards_search', args: { type: 'dash-db' }, runtimeArgs: { limit: 'grafanaDashboardSearchLimit' }, attests: 'grafana' },
       { tool: 'list_dashboards' },
       { tool: 'grafana_dashboards' },
       { tool: 'grafana_list_dashboards' },
@@ -158,12 +162,24 @@ export const CAPABILITIES = Object.freeze({
     ],
   },
 
+  alerting_routes: {
+    kind: 'probe',
+    responseShape: 'status-object',
+    // The configuration a running Alertmanager reports with its status
+    // (API v2 /status → `config`: the text itself, or { original: <text> }),
+    // secrets already redacted by Alertmanager. The probe reads the ROUTES
+    // out of it — the same reading the crawler gives a config file — and
+    // keeps nothing else of the text. An answer without a configuration
+    // (a tier that trims it) is no answer for this probe.
+    candidates: [{ tool: 'alertmanager_status', attests: 'alertmanager' }],
+  },
+
   // ---- enrichment: follow-up calls on a winning probe ---------------------
   dashboard_detail: {
     kind: 'enrich',
     // One call per dashboard UID after grafana_dashboards_search wins;
     // args (uid / include_json / panel_limit) are built at the call site.
-    candidates: [{ tool: 'grafana_dashboard_get' }],
+    candidates: [{ tool: 'grafana_dashboard_get', attests: 'grafana' }],
   },
 
   // ---- version / liveness probes ------------------------------------------
@@ -209,6 +225,8 @@ export const CAPABILITIES = Object.freeze({
     kind: 'evidence',
     responseShape: 'status-object',
     // Alertmanager API v2 /status: { versionInfo, uptime, cluster, config }.
+    // This row is the SIGNAL reading (version, uptime, cluster state); the
+    // `config` the same answer carries is the alerting_routes probe's.
     candidates: [{ tool: 'alertmanager_status' }],
   },
   alertmanager_silences: {
@@ -307,6 +325,17 @@ export function candidateTool(capId, candidateId) {
   const found = capability(capId).candidates.find((c) => c.id === candidateId);
   if (!found) throw new Error(`capability ${capId} has no candidate with id "${candidateId}"`);
   return found.tool;
+}
+
+// The product a tool's answer is evidence of, or null. Looked up by the tool
+// name a probe reports as its winner, so the fetcher never spells one.
+export function productAttestedByTool(toolName) {
+  for (const cap of Object.values(CAPABILITIES)) {
+    for (const c of cap.candidates) {
+      if (c.tool === toolName && c.attests) return c.attests;
+    }
+  }
+  return null;
 }
 
 // Every tool name any capability may call — for the guard test and drift

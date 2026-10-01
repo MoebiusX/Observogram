@@ -22,8 +22,24 @@ process.env.OBSERVOGRAM_WORKSPACE = SMOKE_WORKSPACE;
 // admin (Grafana-style bootstrap) and 401 everything — this line IS the
 // open-mode regression assertion the productization plan promises.
 process.env.OBSERVOGRAM_AUTH = 'off';
+// /healthz's composite build must come from the reader, not from a
+// BUILD override exported in the shell that runs the suite (the /healthz
+// vs /api/version assertions below compare the two). server/version.mjs
+// resolves on first request, so this still lands before it reads.
+delete process.env.OBSERVOGRAM_BUILD;
+delete process.env.TOMOGRAPH_BUILD;
+// Hermetic store (docs/STORE_PLAN.md slice 2): start() opens the store and
+// imports; a shell's OBSERVOGRAM_DB (or a seed / join-role knob) must not
+// leak in. The store lands in SMOKE_WORKSPACE. Read at start(), so these
+// land before it despite the hoisted import below.
+for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH']) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
 
 import { start } from './index.mjs';
+import { boot } from './fixtures/serve-child.mjs';
+import { SPEC_DIR, SPEC_VERSION } from '../tools/lib/validator.mjs';
 import { createServer } from 'node:http';
 
 const failures = [];
@@ -97,9 +113,46 @@ try {
   // /healthz
   const health = await getJson(base, '/healthz');
   assert(health.ok === true, 'GET /healthz returns ok');
-  assert(health.specVersion === '1.2', 'GET /healthz reports specVersion 1.2');
+  assert(health.specVersion === SPEC_VERSION, `GET /healthz reports specVersion ${SPEC_VERSION}`);
   assert(/^\d+\.\d+\.\d+/.test(health.version || ''), 'GET /healthz carries the app version', health.version);
   assert(typeof health.build === 'string' && health.build.length > 0, 'GET /healthz carries the build identifier', health.build);
+
+  // Tenancy is always on: the open posture runs in the default org at the
+  // workspace root, echoes it, and ignores the org header (A-9).
+  {
+    const r = await fetch(`${base}/api/packs`);
+    assert(r.status === 200 && r.headers.get('x-observogram-org') === 'default', 'open posture: /api echoes X-Observogram-Org: default', r.headers.get('x-observogram-org'), 'default');
+    const orgs = await (await fetch(`${base}/api/orgs`)).json();
+    assert(orgs.ok === true && orgs.tenancy === true && orgs.active === 'default'
+      && JSON.stringify(orgs.orgs) === JSON.stringify([{ id: 'default', name: 'Default', role: null, effectiveRole: 'admin' }]),
+    'open posture: GET /api/orgs lists the default org with role null, effectiveRole admin (local is an owner)', orgs);
+    const other = await fetch(`${base}/api/packs`, { headers: { 'X-Observogram-Org': 'nope' } });
+    assert(other.status === 200 && other.headers.get('x-observogram-org') === 'default', 'open posture: X-Observogram-Org: nope is ignored (200, echo default)', [other.status, other.headers.get('x-observogram-org')], [200, 'default']);
+  }
+
+  // /api/version — which build is this? (server/build-info.mjs)
+  const verRes = await fetch(`${base}/api/version`);
+  const ver = await verRes.json();
+  assert(verRes.status === 200 && ver.ok === true, 'GET /api/version answers 200 ok');
+  assert((verRes.headers.get('cache-control') || '') === 'no-store', 'GET /api/version is Cache-Control: no-store', verRes.headers.get('cache-control'), 'no-store');
+  assert(/application\/json/.test(verRes.headers.get('content-type') || ''), 'GET /api/version is JSON');
+  assert(ver.version === health.version, '/api/version and /healthz agree on the version', ver.version, health.version);
+  for (const k of ['version', 'build', 'commit', 'branch', 'dirty', 'date', 'shallow', 'source', 'label']) {
+    assert(k in ver, `GET /api/version carries ${k}`);
+  }
+  assert(['git', 'file', 'package'].includes(ver.source), '/api/version source is git | file | package', ver.source);
+  assert(typeof ver.dirty === 'boolean' && typeof ver.shallow === 'boolean', '/api/version dirty and shallow are booleans', { dirty: ver.dirty, shallow: ver.shallow });
+  assert(ver.build === null || Number.isInteger(ver.build), '/api/version build is an integer or null', ver.build);
+  assert(typeof ver.label === 'string' && ver.label.startsWith(`v${ver.version} · build `), '/api/version label starts with the version and the build', ver.label);
+  if (ver.source === 'git' && !ver.shallow) {
+    assert(Number.isInteger(ver.build) && ver.build > 0 && /^[0-9a-f]{7,}$/.test(ver.commit || ''), 'from git: build is a commit count and commit a short sha', { build: ver.build, commit: ver.commit });
+    assert(health.build.startsWith(`${ver.build}.${ver.commit}`), '/healthz composite build is <build>.<sha> from the same reader', health.build, `${ver.build}.${ver.commit}`);
+  } else if (ver.source === 'git') {
+    // CI's default checkout is shallow: no count to report, the sha still is
+    assert(ver.build === null && /^[0-9a-f]{7,}$/.test(ver.commit || '') && health.build.startsWith(ver.commit), 'from a shallow clone: build null, the sha carries /healthz', { build: ver.build, commit: ver.commit, health: health.build });
+  }
+  const shellHtml = await getText(base, '/');
+  assert(/<span id="build-label"[^>]*>v[^<]+<\/span>/.test(shellHtml), 'the served shell carries the footer build-label span with its fallback');
 
   // /api/packs catalog — empty by design as of Phase 7q (the studio
   // boots empty; user opens packs from disk via Upload / crawler /
@@ -154,9 +207,9 @@ try {
   assert(adapted.meta?.apiVersion === 'observability.platform/v1', 'adapted meta.apiVersion');
   assert(adapted.meta?.environment === 'prod', 'adapted default env = prod');
   assert(adapted.meta?.target === 'ske', 'adapted default target ske');
-  assert(adapted.layers?.L1?.length === 10, 'adapted L1 count', adapted.layers?.L1?.length, 10);
+  assert(adapted.layers?.L1?.length === 12, 'adapted L1 count (six SLIs and six SLOs: the 1.3 example adds the settlement-consumers floor)', adapted.layers?.L1?.length, 12);
   assert(adapted.layers?.L2X?.length === 7, 'adapted L2X count', adapted.layers?.L2X?.length, 7);
-  assert(adapted.layers?.L4?.policy?.length === 6, 'adapted L4.policy count');
+  assert(adapted.layers?.L4?.policy?.length === 7, 'adapted L4.policy count (five burn-rate blocks and two forecasts)', adapted.layers?.L4?.policy?.length, 7);
 
   // /api/packs/:id with env override
   const staging = await getJson(base, '/api/packs/payment-service?env=staging');
@@ -484,6 +537,14 @@ try {
   process.env.OBSERVOGRAM_API_TOKEN_LABEL = 'smoke-ci';
   const openRead = await fetch(`${base}/api/packs`);
   assert(openRead.status === 200, 'token set: GET routes stay open without auth');
+  assert(openRead.headers.get('x-observogram-org') === 'default', 'token set: an anonymous GET echoes the default org', openRead.headers.get('x-observogram-org'), 'default');
+  const anonOther = await fetch(`${base}/api/packs`, { headers: { 'X-Observogram-Org': 'nope' } });
+  assert(anonOther.status === 200 && anonOther.headers.get('x-observogram-org') === 'default', 'token set: an anonymous GET ignores X-Observogram-Org (200, echo default)', [anonOther.status, anonOther.headers.get('x-observogram-org')], [200, 'default']);
+  const anonOrgs = await (await fetch(`${base}/api/orgs`)).json();
+  assert(JSON.stringify(anonOrgs.orgs) === JSON.stringify([{ id: 'default', name: 'Default', role: null, effectiveRole: 'viewer' }]),
+    'token set: an anonymous GET /api/orgs → role null, effectiveRole viewer', anonOrgs.orgs);
+  const deniedBody = await (await fetch(`${base}/api/validate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+  assert(deniedBody.denied === 'auth', 'token set: the 401 body carries denied: auth', deniedBody);
   const denied = await fetch(`${base}/api/validate`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(authRaw),
   });
@@ -534,7 +595,7 @@ try {
   delete process.env.OBSERVOGRAM_INSECURE_NO_AUTH;
 
   // --- saved journeys API (item 11, studio surface) ---
-  const PAY = resolvePath('vendor/observability-pack-spec/v1.2/examples/payment-service.pack.yaml');
+  const PAY = resolvePath(SPEC_DIR, 'examples/payment-service.pack.yaml');
   const CUR = resolvePath('examples/production-curated.pack.yaml');
   mkdirSync(join(SMOKE_WORKSPACE, 'journeys'), { recursive: true });
   writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'smoke-journey.journey.yaml'), [
@@ -601,6 +662,60 @@ try {
   assert(Object.keys(seeded?.families || {}).sort().join() === 'logs,notify,scrape', 'lastRun.stack.families lists only the families present', Object.keys(seeded?.families || {}));
   const seededLast = jList3.journeys.find(j => j.name === 'stack-seeded')?.lastRun;
   assert(seededLast && seededLast.chains === null && seededLast.transition === null, 'a record without branches reads lastRun.chains null and transition null', seededLast && { c: seededLast.chains, t: seededLast.transition });
+  const plainEntry = jList3.journeys.find(j => j.name === 'stack-seeded');
+  assert(plainEntry.schedule === null && plainEntry.stackBudget === null && plainEntry.notify === null && plainEntry.lastRun.notify === null,
+         'without schedule:/stackBudget:/notify: the listing reads null for all three and lastRun.notify null (the seeded record carries no notify)', { s: plainEntry.schedule, b: plainEntry.stackBudget, n: plainEntry.notify, ln: plainEntry.lastRun.notify });
+
+  // Step 5: schedule / stackBudget / notify on the listing — names and the
+  // parsed cadence only; the delivery outcome of the last run beside it.
+  writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'delivery-seeded.journey.yaml'), [
+    'name: delivery-seeded',
+    `packA: { file: ${PAY.replaceAll('\\', '/')} }`,
+    `packB: { file: ${CUR.replaceAll('\\', '/')} }`,
+    'gate: { minAlignmentPct: 1, stack: { rows: { scrape_targets_down: { max: 0 } } } }',
+    'schedule: "*/15 * * * *"',
+    'stackBudget: { objective: 0.99, window: 30d }',
+    'notify: { urlEnv: SMOKE_HOOK_URL, authEnv: SMOKE_HOOK_TOKEN, on: breach, format: text }',
+  ].join('\n'));
+  const deliveredAt = '2026-09-20T10:15:00.000Z';
+  mkdirSync(join(SMOKE_WORKSPACE, 'runs', 'delivery-seeded'), { recursive: true });
+  writeFileSync(join(SMOKE_WORKSPACE, 'runs', 'delivery-seeded', `${deliveredAt.replace(/[:.]/g, '-')}.json`), JSON.stringify({
+    journey: 'delivery-seeded', startedAt: deliveredAt, tookMs: 5, outcome: 'gate-failed',
+    grade: { score: 70, pass: true }, drift: { alignmentPct: 90 }, gate: { thresholds: {}, breaches: [{ criterion: 'stack.scrape_targets_down', detail: 'scrape_targets_down = 2 count outside [-∞ … 0] — point-in-time sample, not an SLO verdict' }] },
+    stackEvidence: { status: 'sampled', reason: null, rows: [{ id: 'scrape_targets_down', family: 'scrape', product: 'generic', value: 2, unit: 'count', direction: 'lower', outcome: 'data', hint: 'nonzero', at: deliveredAt, referenceSli: null }], alertmanager: null, grafana: null },
+    notify: { status: 'sent', reason: 'gate failed: stack.scrape_targets_down', triggers: ['gate-failed:stack.scrape_targets_down'], httpStatus: 202, attempts: 1, tookMs: 12, urlEnv: 'SMOKE_HOOK_URL', error: null },
+  }, null, 2));
+  const delivered = (await getJson(base, '/api/journeys')).journeys.find(j => j.name === 'delivery-seeded');
+  assert(delivered && delivered.loadError === null && JSON.stringify(delivered.schedule) === JSON.stringify({ cron: '*/15 * * * *', timezone: null, every: null, cadenceMs: 900000, cadenceNote: null }),
+         'GET /api/journeys carries the parsed schedule with cadenceMs 900000', delivered && { e: delivered.loadError, s: delivered.schedule });
+  assert(JSON.stringify(delivered.stackBudget) === JSON.stringify({ objective: 0.99, window: '30d' }), 'GET /api/journeys carries stackBudget as declared', delivered.stackBudget);
+  assert(JSON.stringify(delivered.notify) === JSON.stringify({ urlEnv: 'SMOKE_HOOK_URL', authEnv: 'SMOKE_HOOK_TOKEN', on: 'breach', format: 'text' }) && !/http/.test(JSON.stringify(delivered.notify)),
+         'GET /api/journeys carries the notify block as env var NAMES + policy knobs — no URL, no value', delivered.notify);
+  assert(JSON.stringify(delivered.lastRun.notify) === JSON.stringify({ status: 'sent', httpStatus: 202, reason: 'gate failed: stack.scrape_targets_down' }), 'lastRun.notify is { status, httpStatus, reason }', delivered.lastRun.notify);
+  assert(!JSON.stringify(delivered.lastRun.notify).includes('SMOKE_HOOK') && !JSON.stringify(delivered).includes('triggers'), 'lastRun.notify is the trimmed summary (no env name, no triggers)');
+  // The Neuron view's schedule route mirrors `packc journey schedule --json`.
+  const sched = await getJson(base, '/api/journeys/delivery-seeded/schedule');
+  assert(sched.ok === true && sched.schedule?.cron === '*/15 * * * *' && sched.placeholder === false, 'GET /api/journeys/:name/schedule carries the parsed schedule', sched.schedule);
+  assert(JSON.stringify(Object.keys(sched.snippets || {}).sort()) === JSON.stringify(['actions', 'cron', 'k8s', 'schtasks']), 'the schedule route emits the four snippet formats', Object.keys(sched.snippets || {}));
+  assert(/\*\/15 \* \* \* \*/.test(sched.snippets.cron) && /delivery-seeded/.test(sched.snippets.cron), 'the cron snippet carries the journey cadence and name', sched.snippets.cron);
+  assert(JSON.stringify(sched.envNames) === JSON.stringify(['SMOKE_HOOK_URL', 'SMOKE_HOOK_TOKEN']) && /SMOKE_HOOK_URL/.test(JSON.stringify(sched.snippets)), 'env var NAMES ride along and the snippets bind them by name', sched.envNames);
+  const schedPlain = await getJson(base, '/api/journeys/smoke-journey/schedule');
+  assert(schedPlain.placeholder === true && schedPlain.schedule === null && /\*\/15 \* \* \* \*/.test(schedPlain.snippets.cron), 'without schedule: the route says placeholder and uses the placeholder cadence', { p: schedPlain.placeholder, s: schedPlain.schedule });
+  const schedMissing = await fetch(`${base}/api/journeys/no-such-journey/schedule`);
+  assert(schedMissing.status === 404, 'the schedule route 404s for an unknown journey', schedMissing.status);
+  const capNotifyBad = await fetch(`${base}/api/journeys/capture`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'captured-notify-bad', packAId: 'payment-service', packBId: 'production-curated', notify: { url: 'https://hooks.example/x' } }),
+  });
+  const capNotifyBadBody = await capNotifyBad.json();
+  assert(capNotifyBad.status === 400 && /notify\.url is not allowed — reference an env var name with urlEnv/.test(capNotifyBadBody.error || ''), 'capture with a literal notify.url → 400 with the env-var alternative', capNotifyBadBody);
+  const capNotifyOk = await fetch(`${base}/api/journeys/capture`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'captured-notify', packAId: 'payment-service', packBId: 'production-curated', notify: { urlEnv: 'SMOKE_HOOK_URL', on: 'always' }, schedule: { every: '2h' } }),
+  }).then(r => r.json());
+  const capturedNotify = (await getJson(base, '/api/journeys')).journeys.find(j => j.name === 'captured-notify');
+  assert(capNotifyOk.ok === true && capturedNotify?.notify?.urlEnv === 'SMOKE_HOOK_URL' && capturedNotify.notify.on === 'always' && capturedNotify.notify.format === 'json' && capturedNotify.schedule?.every === '2h' && capturedNotify.schedule.cadenceMs === 7200000,
+         'capture persists notify (names) and an every: schedule; the listing reads them back', capturedNotify && { n: capturedNotify.notify, s: capturedNotify.schedule });
 
   // Step 4: a run record carrying requirement chains (seeded the way the
   // runner writes them) surfaces lastRun.chains + lastRun.transition.
@@ -718,6 +833,24 @@ try {
     body: JSON.stringify({ name: 'captured-stack', packAId: 'payment-service', packBId: 'production-curated', gate: { minAlignmentPct: 1, stack: { requireSampled: true, rows: { scrape_targets_down: { max: 0 } } } } }),
   }).then(r => r.json());
   assert(capStackOk.ok === true, 'capture with a well-formed stack gate saves');
+  // Step 5: schedule / stackBudget ride through capture and are validated
+  // the way loadJourneyDef validates a file (400 on a malformed block).
+  const capSched = await fetch(`${base}/api/journeys/capture`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'captured-sched', packAId: 'payment-service', packBId: 'production-curated', gate: { minAlignmentPct: 1 }, schedule: '*/15 * * * *', stackBudget: { objective: 0.99, window: '30d' } }),
+  }).then(r => r.json());
+  assert(capSched.ok === true, 'capture with schedule + stackBudget saves');
+  const capSchedText = readFileSync(join(SMOKE_WORKSPACE, 'journeys', 'captured-sched.journey.yaml'), 'utf8');
+  assert(/^schedule: "\*\/15 \* \* \* \*"$/m.test(capSchedText) && /^stackBudget:\n {2}objective: 0\.99\n {2}window: 30d$/m.test(capSchedText),
+         'the captured file carries the cron quoted and the budget as a mapping', capSchedText);
+  const capSchedBad = await fetch(`${base}/api/journeys/capture`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'captured-sched-bad', packAId: 'payment-service', packBId: 'production-curated', schedule: '*/15 * * *' }),
+  });
+  const capSchedBadBody = await capSchedBad.json();
+  assert(capSchedBad.status === 400 && /journey captured-sched-bad: schedule must be a 5-field cron expression/.test(capSchedBadBody.error || ''),
+         'capture with a 4-field schedule → 400 naming the journey', capSchedBadBody);
+  assert(!(await getJson(base, '/api/journeys')).journeys.some(j => j.name === 'captured-sched-bad'), 'the refused schedule capture saved nothing');
   // A definition on disk that fails to load is listed with the reason.
   writeFileSync(join(SMOKE_WORKSPACE, 'journeys', 'bad-id.journey.yaml'), [
     'name: bad-id',
@@ -918,7 +1051,7 @@ try {
 
   // /api/maturity-rubric
   const rubric = await getJson(base, '/api/maturity-rubric');
-  assert(rubric.specVersion === '1.2', 'rubric specVersion 1.2');
+  assert(rubric.specVersion === SPEC_VERSION, `rubric specVersion ${SPEC_VERSION}`);
   assert(Array.isArray(rubric.clauses) && rubric.clauses.length >= 20, 'rubric clauses present');
   assert(!('evaluate' in (rubric.clauses[0] || {})), 'rubric clauses do not leak evaluate function');
 
@@ -931,52 +1064,49 @@ try {
   }
   // Probe-outcome honesty on the badge: when a live pack exists, the
   // status carries the failed AND the unsupported probe families as the
-  // same comma-string shape as toolsFailed. The live pack is an ignored
-  // runtime file (examples/production-live.pack.yaml); when the working
-  // tree has none, plant a minimal one for the assertion and remove it
-  // afterwards — never overwrite a real refresh.
+  // same comma-string shape as toolsFailed. The live pack is the org's
+  // <org root>/live/production-live.pack.yaml — the default org at '.' is
+  // this suite's workspace. Planted with a URL that carries a credential
+  // parameter and a path: it is served clean (a file written by an older
+  // build or by hand), `origin` to everyone, `url` to an operator and above
+  // (local, here). Removed afterwards: the refresh below writes its own.
   {
-    const livePackPath = resolvePath(dirname(fileURLToPath(import.meta.url)), '..', 'examples', 'production-live.pack.yaml');
-    const planted = !existsSync(livePackPath);
-    if (planted) {
-      writeFileSync(livePackPath, [
-        'apiVersion: observability.pack/v1',
-        'kind: ObservabilityPack',
-        'metadata:',
-        '  name: production-live',
-        '  annotations:',
-        '    mcp.refreshedAt: "2026-06-06T00:00:00Z"',
-        '    mcp.url: "https://fake-mcp.test/observability"',
-        '    mcp.toolsFailed: ""',
-        '    mcp.probesFailed: "dashboards"',
-        '    mcp.probesUnsupported: "scrape_configs,metric_names"',
-        '    mcp.probeErrors.dashboards: "HTTP 502 Bad Gateway"',
-        '    mcp.stack.status: "sampled"',
-        '    mcp.stack.sampled: "7"',
-        'spec: {}',
-        '',
-      ].join('\n'));
-    }
+    const livePackPath = join(SMOKE_WORKSPACE, 'live', 'production-live.pack.yaml');
+    mkdirSync(dirname(livePackPath), { recursive: true });
+    writeFileSync(livePackPath, [
+      'apiVersion: observability.pack/v1',
+      'kind: ObservabilityPack',
+      'metadata:',
+      '  name: production-live',
+      '  annotations:',
+      '    mcp.refreshedAt: "2026-06-06T00:00:00Z"',
+      '    mcp.url: "https://fake-mcp.test/mcp/s/sk-path-secret/observability?token=abc&tier=x"',
+      '    mcp.toolsFailed: ""',
+      '    mcp.probesFailed: "dashboards"',
+      '    mcp.probesUnsupported: "scrape_configs,metric_names"',
+      '    mcp.probeErrors.dashboards: "HTTP 502 Bad Gateway"',
+      '    mcp.stack.status: "sampled"',
+      '    mcp.stack.sampled: "7"',
+      'spec: {}',
+      '',
+    ].join('\n'));
     try {
       const withPack = await getJson(base, '/api/live-status');
-      assert(withPack.present === true, 'live-status reports present with a live pack on disk');
-      assert(typeof withPack.probesFailed === 'string' && typeof withPack.probesUnsupported === 'string',
-             'live-status carries probesFailed and probesUnsupported as comma strings',
+      assert(withPack.present === true, 'live-status reports present with the org\'s live pack on disk');
+      assert(withPack.probesFailed === 'dashboards' && withPack.probesUnsupported === 'scrape_configs,metric_names',
+             'live-status reads mcp.probesFailed / mcp.probesUnsupported straight from the pack annotations',
              [withPack.probesFailed, withPack.probesUnsupported]);
-      assert((withPack.stackStatus === null || typeof withPack.stackStatus === 'string') && typeof withPack.stackSampled === 'number',
-             'live-status carries stackStatus (string|null) and stackSampled (number)',
+      assert(withPack.stackStatus === 'sampled' && withPack.stackSampled === 7,
+             'live-status reads mcp.stack.status / mcp.stack.sampled straight from the pack annotations',
              [withPack.stackStatus, withPack.stackSampled]);
-      if (planted) {
-        assert(withPack.probesFailed === 'dashboards' && withPack.probesUnsupported === 'scrape_configs,metric_names',
-               'live-status reads mcp.probesFailed / mcp.probesUnsupported straight from the pack annotations',
-               [withPack.probesFailed, withPack.probesUnsupported]);
-        assert(withPack.stackStatus === 'sampled' && withPack.stackSampled === 7,
-               'live-status reads mcp.stack.status / mcp.stack.sampled straight from the pack annotations',
-               [withPack.stackStatus, withPack.stackSampled]);
-      }
+      assert(withPack.origin === 'https://fake-mcp.test', 'live-status serves the URL\'s origin', withPack.origin);
+      assert(withPack.url === 'https://fake-mcp.test/mcp/s/sk-path-secret/observability?tier=x',
+             'live-status serves the safe url to an operator and above — a hand-written token parameter is not served', withPack.url);
     } finally {
-      if (planted) rmSync(livePackPath, { force: true });
+      rmSync(livePackPath, { force: true });
     }
+    const gone = await getJson(base, '/api/live-status');
+    assert(gone.present === false, 'live-status: no live pack for the org → present: false (the install\'s examples/ file is not read)', gone);
   }
 
   // POST /api/draft-from-mcp — step 2 stack self-metrics on the summary.
@@ -1068,6 +1198,8 @@ try {
     try {
       const draft = await (await postJson('/api/draft-from-mcp', { mcpUrl: fakeRestricted.url })).json();
       assert(draft.ok === true, 'draft-from-mcp against the restricted fake succeeds', draft.error);
+      assert(draft.validation?.ok === true && typeof draft.registered?.id === 'string',
+             'the restricted fake\'s draft validates and registers (so a refresh from it can write a live pack)', draft.validation);
       const st = draft.summary?.stack;
       assert(st && st.status === 'not-attempted' && st.reason === 'metrics_query not exposed by this MCP (restricted tier)',
              'restricted tier → summary.stack.status not-attempted with the tier reason', st);
@@ -1077,8 +1209,70 @@ try {
              'restricted tier → the not-attempted warning', draft.summary.warnings);
       assert(draft.summary.alertmanager === null && draft.summary.grafana === null,
              'restricted tier → alertmanager / grafana summaries are null (not exposed), never fabricated');
+
+      // The MCP URL keeps no credential parameter — in a draft (visibly)
+      // and in the live pack, which is the org's own file.
+      const withToken = `${fakeRestricted.url}?token=abc&tier=x`;
+      const tokenDraft = await (await postJson('/api/draft-from-mcp', { mcpUrl: withToken })).json();
+      assert(tokenDraft.ok === true && tokenDraft.summary.mcpUrl === `${fakeRestricted.url}?tier=x`,
+             'draft-from-mcp: summary.mcpUrl is the safe form (no token parameter)', tokenDraft.summary?.mcpUrl);
+      assert(tokenDraft.canonical.metadata.annotations['mcp.url'] === `${fakeRestricted.url}?tier=x` && !tokenDraft.canonicalYaml.includes('token=abc'),
+             'draft-from-mcp: the drafted pack\'s mcp.url (and its YAML) keeps no token', tokenDraft.canonical.metadata.annotations['mcp.url']);
+      assert((tokenDraft.summary.warnings || []).some((w) => /^not kept in the draft: the "token" parameter of the MCP URL/.test(w)),
+             'draft-from-mcp: a summary.warnings entry names the dropped parameter', tokenDraft.summary.warnings);
+      const legacyLive = resolvePath(dirname(fileURLToPath(import.meta.url)), '..', 'examples', 'production-live.pack.yaml');
+      const legacyBefore = existsSync(legacyLive) ? readFileSync(legacyLive, 'utf8') : null;
+      const refreshed = await (await postJson('/api/refresh-live', { mcpUrl: withToken })).json();
+      assert(refreshed.ok === true, 'refresh-live against the restricted fake succeeds', refreshed.error);
+      assert(/^not kept in the live pack: the "token" parameter of the MCP URL, which looks like a credential — put a token in the auth field instead$/.test(refreshed.note || ''),
+             'refresh-live: the response\'s note names the dropped parameter', refreshed.note);
+      assert(refreshed.annotations['mcp.url'] === `${fakeRestricted.url}?tier=x`, 'refresh-live: the response\'s annotations carry the safe URL', refreshed.annotations['mcp.url']);
+      const orgLive = join(SMOKE_WORKSPACE, 'live', 'production-live.pack.yaml');
+      const written = existsSync(orgLive) ? readFileSync(orgLive, 'utf8') : '';
+      assert(/mcp\.url: "?[^\n]*\?tier=x"?\n/.test(written) && !written.includes('token=abc'),
+             'refresh-live writes <org root>/live/production-live.pack.yaml, its mcp.url ending ?tier=x', written.slice(0, 300));
+      assert((existsSync(legacyLive) ? readFileSync(legacyLive, 'utf8') : null) === legacyBefore,
+             'refresh-live leaves the install\'s examples/production-live.pack.yaml alone (not created, not changed)');
+      const status = await getJson(base, '/api/live-status');
+      assert(status.present === true && status.url === `${fakeRestricted.url}?tier=x` && status.origin === new URL(fakeRestricted.url).origin,
+             'live-status reads the org\'s refreshed pack', [status.present, status.url, status.origin]);
     } finally {
       await fakeRestricted.close();
+    }
+
+    // The boot line: while the install still has the old deployment-wide
+    // file and the default org has no live pack of its own, the start says
+    // where the badge reads now; after the org's first refresh it does not.
+    // The old file is a scratch copy the children are pointed at — never
+    // one planted in the checkout's examples/, which tools/test-validator.mjs,
+    // tools/test-packs.mjs and tools/test-backend-validate.mjs enumerate
+    // while this suite runs (an invalid pack there turns them red).
+    {
+      const installLegacy = resolvePath(dirname(fileURLToPath(import.meta.url)), '..', 'examples', 'production-live.pack.yaml');
+      const installBefore = existsSync(installLegacy) ? readFileSync(installLegacy, 'utf8') : null;
+      const installUntouched = () => (existsSync(installLegacy) ? readFileSync(installLegacy, 'utf8') : null) === installBefore;
+      const scratch = mkdtempSync(join(tmpdir(), 'observogram-smoke-bootline-'));
+      const bootWs = join(scratch, 'ws');
+      const legacyLive = join(scratch, 'examples', 'production-live.pack.yaml');
+      const PACK = 'apiVersion: observability.pack/v1\nkind: ObservabilityPack\nmetadata:\n  name: production-live\nspec: {}\n';
+      const bootEnv = { OBSERVOGRAM_AUTH: 'off', BOOT_LEGACY_LIVE_PACK: legacyLive };
+      try {
+        mkdirSync(bootWs, { recursive: true });
+        const LINE = '[studio] the studio no longer reads examples/production-live.pack.yaml: each org\'s live pack is <org root>/live/production-live.pack.yaml, written by the MCP panel\'s refresh (npm run detect-drift and the dry run still read the old file; OUTPUT=<org root>/live/production-live.pack.yaml npm run fetch-live writes the new one)';
+        const none = boot(bootWs, { silent: false, env: bootEnv });
+        assert(none.listening && !none.stdout.includes('no longer reads'), 'boot: no old live pack → no boot line', none.stdout);
+        mkdirSync(dirname(legacyLive), { recursive: true });
+        writeFileSync(legacyLive, PACK);
+        const first = boot(bootWs, { silent: false, env: bootEnv });
+        assert(first.listening && first.stdout.includes(LINE), 'boot: the old live pack exists, the default org has none → the boot line', first.stdout);
+        assert(installUntouched(), 'boot line: the check plants nothing in the checkout\'s examples/ (suites enumerating examples/*.pack.yaml run alongside)');
+        mkdirSync(join(bootWs, 'live'), { recursive: true });
+        writeFileSync(join(bootWs, 'live', 'production-live.pack.yaml'), PACK);
+        const second = boot(bootWs, { silent: false, env: bootEnv });
+        assert(second.listening && !second.stdout.includes('no longer reads'), 'boot: after the default org\'s first refresh → no boot line', second.stdout);
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
     }
   }
 
@@ -1182,7 +1376,7 @@ try {
   assert(crawlOut.canonical.spec.dashboards.some(d => d.provider?.kind === 'grafana'),
          'crawl emits grafana dashboard');
   assert(crawlOut.validation?.ok === true,
-         `crawl output passes v1.2 schema (errors: ${JSON.stringify(crawlOut.validation?.errors || []).slice(0, 200)})`);
+         `crawl output passes the vendored schema (errors: ${JSON.stringify(crawlOut.validation?.errors || []).slice(0, 200)})`);
   assert(typeof crawlOut.canonicalYaml === 'string' && crawlOut.canonicalYaml.includes('apiVersion'),
          'crawl returns canonical YAML');
   assert(crawlOut.summary?.discovered?.backends >= 2, 'crawl summary counts ≥2 backends');
@@ -1266,12 +1460,220 @@ try {
   assert(/too large/i.test(tooBigBody.error || ''),
          '413 error message names the size problem');
 
+  // ---- The BUILD journey API (docs/BUILD_JOURNEY.md, slice 2) ----
+  const postLib = (path, body) => fetch(`${base}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+  // GET /api/library — the index the DEFINE step lists.
+  const libIndex = await getJson(base, '/api/library');
+  assert(libIndex.ok === true && Array.isArray(libIndex.entries), 'GET /api/library returns { ok, entries[] }');
+  assert(libIndex.entries.length === 10, 'GET /api/library lists the ten shipped entries', libIndex.entries.length, 10);
+  assert(libIndex.entries[0].kind === 'product' && libIndex.entries.at(-1).kind === 'archetype', 'library index lists products first, archetypes last');
+  assert(Array.isArray(libIndex.scaffoldParams) && libIndex.scaffoldParams.length === 16, 'library index carries the 16 scaffold params', libIndex.scaffoldParams?.length, 16);
+  assert(Array.isArray(libIndex.errors) && libIndex.errors.length === 0, 'library index reports no file errors', libIndex.errors);
+  const kafkaRow = libIndex.entries.find(e => e.id === 'kafka');
+  assert(kafkaRow && kafkaRow.sliCountByTier['tier-2'] === 5 && kafkaRow.evidence.status === 'recorded-live', 'index row carries sliCountByTier + evidence status');
+  assert(kafkaRow.slis.every(s => s.objectives && s.windows), 'index SLIs carry objectives AND windows per tier');
+
+  // GET /api/library/requirements/:tier — the rubric filtered by minTier.
+  const reqT2 = await getJson(base, '/api/library/requirements/tier-2');
+  assert(reqT2.ok === true && reqT2.tier === 'tier-2' && reqT2.clauses.length === 16, 'GET /api/library/requirements/tier-2 returns the 16 clauses', reqT2.clauses?.length, 16);
+  assert(reqT2.clauses.filter(c => c.severity === 'MUST').length === 15, 'tier-2 requirements: 15 MUST');
+  const reqBad = await fetch(`${base}/api/library/requirements/tier-9`);
+  const reqBadBody = await reqBad.json();
+  assert(reqBad.status === 400 && reqBadBody.ok === false && /tier-3, tier-2, tier-1/.test(reqBadBody.error || ''), 'unknown tier → 400 naming the known tiers', reqBadBody.error);
+
+  // GET /api/library/:id — one entry, index row + full templates.
+  const kafkaEntry = await getJson(base, '/api/library/kafka');
+  assert(kafkaEntry.ok === true && kafkaEntry.entry?.id === 'kafka', 'GET /api/library/kafka returns the index row as entry');
+  assert(Array.isArray(kafkaEntry.params) && kafkaEntry.params.length === 7, 'GET /api/library/kafka carries the 7 entry params', kafkaEntry.params?.length, 7);
+  assert(Array.isArray(kafkaEntry.slis) && kafkaEntry.slis.length === 6 && kafkaEntry.slis[0].good && kafkaEntry.slis[0].slo && kafkaEntry.slis[0].why, 'GET /api/library/kafka carries the full SLI templates (good/total, slo, why)');
+  const entryMissing = await fetch(`${base}/api/library/nope`);
+  const entryMissingBody = await entryMissing.json();
+  assert(entryMissing.status === 404 && /known:.*kafka/.test(entryMissingBody.error || ''), 'unknown entry → 404 naming the known entries', entryMissingBody.error);
+
+  // POST /api/library/instantiate — the drive's inputs.
+  const instBody = { entries: ['kafka', 'http-service'], name: 'orders-api', tier: 'tier-2', environment: 'prod', owners: ['team-orders'] };
+  const instRes = await postLib('/api/library/instantiate', instBody);
+  assert(instRes.status === 200, 'POST /api/library/instantiate → 200', instRes.status, 200);
+  const inst = await instRes.json();
+  assert(inst.ok === true && inst.canonical?.metadata?.name === 'orders-api', 'instantiate returns the canonical');
+  assert(typeof inst.canonicalYaml === 'string' && inst.canonicalYaml.includes('apiVersion'), 'instantiate returns canonicalYaml');
+  assert(Array.isArray(inst.todos) && inst.todos.length === 21, 'instantiate returns the 21 todos of kafka+http-service@tier-2', inst.todos?.length, 21);
+  assert(inst.todos.every(t => t.path && Array.isArray(t.clauses) && Array.isArray(t.params)), 'each todo carries path, clauses, params');
+  assert(inst.provenance?.source === 'kafka@1.0.0,http-service@1.0.0' && inst.provenance.tier === 'tier-2', 'instantiate returns the provenance');
+  assert(Array.isArray(inst.warnings) && inst.warnings.length === 0, 'instantiate: no warnings on the shipped entries (the Lezer grammar ran)', inst.warnings);
+  assert(Array.isArray(inst.schemaErrors) && inst.schemaErrors.length === 0, 'instantiate: the pack validates against the schema', inst.schemaErrors);
+  assert(inst.summary?.must?.passed === 15 && inst.summary.must.total === 15, 'instantiate summary: MUST 15/15 at tier-2', inst.summary?.must);
+  assert(inst.summary.onPlaceholder.length === 4, 'instantiate summary: 4 clauses pass on a placeholder', inst.summary.onPlaceholder.length, 4);
+  assert(inst.conformance?.declaredTier === 'tier-2' && inst.conformance.mustPercent === 100, 'instantiate conformance is evaluated on the env-overlaid canonical');
+  assert(inst.canonical.spec.slis.length === 7, 'instantiate: 7 SLIs (5 kafka + 2 http-service at tier-2)', inst.canonical.spec.slis.length, 7);
+  // `adapted`: the adapter's layered projection of the env-overlaid canonical — what Build's stack draws.
+  assert(inst.adapted?.meta?.apiVersion === 'observability.platform/v1' && inst.adapted.meta.environment === 'prod' && inst.adapted.meta.criticality === 'tier-2', 'instantiate returns adapted (env-overlaid: prod, tier-2)', JSON.stringify(inst.adapted?.meta && { environment: inst.adapted.meta.environment, criticality: inst.adapted.meta.criticality }));
+  assert(inst.adapted.layers?.L1?.length === 14 && inst.adapted.layers.L4?.alerting?.length === 3 && inst.adapted.layers.L5?.length === 6, 'instantiate adapted: L1 14 (7 SLIs + 7 SLOs), L4.alerting 3, L5 6', JSON.stringify({ L1: inst.adapted.layers?.L1?.length, alerting: inst.adapted.layers?.L4?.alerting?.length, L5: inst.adapted.layers?.L5?.length }));
+  assert(inst.adapted.layers.L4.alerting.every(a => a.source === 'Scaffold') && inst.adapted.layers.L1.every(a => a.source === 'Declared'), 'instantiate adapted: placeholder routes project as Scaffold, SLIs as Declared');
+  // The toggles: an SLI unticked, dashboards off → exactly the dashboard clauses fail and the schema says why.
+  const instOff = await (await postLib('/api/library/instantiate', { ...instBody, toggles: { dashboards: false, slis: ['kafka_broker_availability', 'kafka_produce_latency_p99'] } })).json();
+  assert(instOff.ok === true && instOff.canonical.spec.slis.length === 2, 'instantiate honours toggles.slis', instOff.canonical?.spec?.slis?.length, 2);
+  assert(instOff.summary.failing.map(f => f.id).sort().join(',') === 'L3.MUST.service_overview_dashboard,L3.MUST.slo_burn_dashboard', 'dashboards off → exactly the two L3 dashboard clauses fail', instOff.summary.failing.map(f => f.id));
+  assert(instOff.schemaErrors.some(e => /dashboards/.test(e)), 'dashboards off → the schema reports the missing key', instOff.schemaErrors);
+  assert(instOff.adapted?.layers?.L1?.length === 4 && !instOff.adapted.layers.L3.some(a => /^DASH-/.test(a.id)), 'dashboards off → adapted has no DASH card and L1 follows the SLI selection (2 SLIs + 2 SLOs)', JSON.stringify({ L1: instOff.adapted?.layers?.L1?.length, dash: instOff.adapted?.layers?.L3?.filter(a => /^DASH-/.test(a.id)).length }));
+  // The tier is a seed, not a gate: a tier-1 SLI in a tier-2 pack is in it, with its own profile's objective and an SLO; no warning.
+  const instAbove = await (await postLib('/api/library/instantiate', { ...instBody, toggles: { slis: ['kafka_broker_availability', 'kafka_produce_latency_p99', 'kafka_controller_election_rate'] } })).json();
+  assert(instAbove.ok === true && instAbove.warnings.length === 0 && instAbove.canonical.spec.slis.some(x => x.id === 'kafka_controller_election_rate'), 'an SLI above the tier is simply in the pack (no sli-excluded warning)', JSON.stringify(instAbove.warnings));
+  const aboveSlo = instAbove.canonical.spec.slos.find(x => x.sli === 'kafka_controller_election_rate');
+  assert(aboveSlo && aboveSlo.id === 'kafka_controller_election_rate_99' && aboveSlo.objective === 0.99 && aboveSlo.window === '7d', 'the above-tier SLI carries the SLO of its own (tier-1) profile', JSON.stringify(aboveSlo));
+  assert(instAbove.provenance.slis.kafka_controller_election_rate.aboveTier === true && instAbove.provenance.slis.kafka_controller_election_rate.profileTier === 'tier-1', 'provenance.slis says which profile an above-tier SLI starts from', JSON.stringify(instAbove.provenance.slis.kafka_controller_election_rate));
+  assert(instAbove.summary.must.passed === 15 && instAbove.schemaErrors.length === 0, 'the rubric still grades the pack at tier-2 and the schema holds', JSON.stringify([instAbove.summary.must, instAbove.schemaErrors]));
+  // Overrides: the objective changes the SLO id and the objective, the window the SLO's window; provenance lists the fields.
+  const instOv = await (await postLib('/api/library/instantiate', { ...instBody, overrides: { kafka_produce_latency_p99: { objective: 0.995, window: '7d' } } })).json();
+  const ovSlo = instOv.ok && instOv.canonical.spec.slos.find(x => x.sli === 'kafka_produce_latency_p99');
+  assert(ovSlo && ovSlo.id === 'kafka_produce_latency_p99_99_5' && ovSlo.objective === 0.995 && ovSlo.window === '7d', 'an override of the objective and the window changes the SLO id, objective and window', JSON.stringify(ovSlo));
+  assert(instOv.provenance.slis.kafka_produce_latency_p99.customised.join() === 'objective,window' && instOv.provenance.slis.kafka_produce_latency_p99.evidence.status === 'recorded-live', 'provenance.customised lists the fields; the library evidence stays for an unedited expression', JSON.stringify(instOv.provenance.slis.kafka_produce_latency_p99));
+  assert(instOv.canonical.metadata.annotations['library.customised.slis.kafka_produce_latency_p99'] === 'objective,window' && instOv.schemaErrors.length === 0 && instOv.warnings.length === 0, 'the customised annotation is on the pack; schema valid; no warning', JSON.stringify([instOv.canonical.metadata.annotations['library.customised.slis.kafka_produce_latency_p99'], instOv.schemaErrors, instOv.warnings]));
+  // An edited query replaces the library's PromQL and drops its evidence to custom.
+  const instQ = await (await postLib('/api/library/instantiate', { ...instBody, overrides: { kafka_produce_latency_p99: { query: 'up' } } })).json();
+  const qSli = instQ.ok && instQ.canonical.spec.slis.find(x => x.id === 'kafka_produce_latency_p99');
+  assert(qSli && qSli.query === 'up' && qSli.threshold === 0.1, 'an overridden query replaces the library expression, the bound stays', JSON.stringify(qSli));
+  const qProv = instQ.provenance.slis.kafka_produce_latency_p99;
+  assert(qProv.evidence.status === 'custom' && qProv.evidence.source === 'edited in the studio' && qProv.evidence.note === 'the library evidence no longer applies' && qProv.customised.join() === 'query', 'an edited query drops the evidence to custom and provenance.customised is [query]', JSON.stringify(qProv));
+  assert(instQ.canonical.metadata.annotations['library.evidence.slis.kafka_produce_latency_p99'] === 'custom: edited in the studio — the library evidence no longer applies', 'the evidence annotation says so on the pack', instQ.canonical.metadata.annotations['library.evidence.slis.kafka_produce_latency_p99']);
+  // A custom ratio SLI lands in every section the scaffold derives, and the schema holds.
+  const checkout = { id: 'checkout_success', type: 'ratio', good: 'sum(rate(checkout_ok_total[5m]))', total: 'sum(rate(checkout_total[5m]))', objective: 0.999, window: '30d' };
+  const instC = await (await postLib('/api/library/instantiate', { ...instBody, custom: [checkout] })).json();
+  assert(instC.ok === true && instC.canonical.spec.slis.some(x => x.id === 'checkout_success' && x.good === checkout.good), 'a custom SLI is in slis', JSON.stringify(instC.canonical?.spec?.slis?.map(x => x.id)));
+  assert(instC.canonical.spec.slos.some(x => x.id === 'checkout_success_99_9' && x.sli === 'checkout_success'), 'a custom SLI gets its SLO (sloIdFor)', JSON.stringify(instC.canonical.spec.slos.map(x => x.id)));
+  assert(instC.canonical.spec.queries.recording_rules.some(r => r.expr === 'ref:slis.checkout_success' && r.name === 'orders_api:checkout_success:ratio_5m'), 'a custom SLI gets its recording rule');
+  assert(instC.canonical.spec.policy.burn_rate_alerts.some(a => a.slo === 'checkout_success_99_9' && a.windows.length === 2 && a.windows[0].factor === 14), 'a custom SLI gets the default availability burn profile');
+  assert(instC.canonical.spec.dashboards[0].panel_bindings.some(p => p.binds_to === 'slis.checkout_success') && instC.canonical.spec.dashboards[0].panel_bindings.some(p => p.binds_to === 'slos.checkout_success_99_9'), 'a custom SLI is bound on the overview board');
+  assert(instC.schemaErrors.length === 0 && instC.warnings.length === 0 && instC.summary.must.passed === 15, 'a pack with a custom SLI validates against the schema and grades as before', JSON.stringify([instC.schemaErrors, instC.warnings, instC.summary.must]));
+  assert(instC.provenance.slis.checkout_success.custom === true && instC.provenance.slis.checkout_success.library.source === 'custom' && instC.provenance.custom.join() === 'checkout_success', 'provenance marks the custom SLI', JSON.stringify(instC.provenance.slis.checkout_success));
+  assert(instC.adapted.layers.L1.some(a => a.title === 'checkout_success'), 'the adapter projects the custom SLI onto L1 like any SLI');
+  // The 400s: an unknown field, a bad window, a polluting key, a duplicate custom id, too many custom SLIs, too many overrides, a wrong shape.
+  const copyBad = [
+    [{ ...instBody, overrides: { kafka_produce_latency_p99: { nope: 1 } } }, /^override kafka_produce_latency_p99\.nope: unknown field/, 'an unknown override field'],
+    [{ ...instBody, overrides: { kafka_produce_latency_p99: { window: '30x' } } }, /^override kafka_produce_latency_p99\.window: the window is one of 7d \| 28d \| 30d \| 90d/, 'a bad window'],
+    [{ ...instBody, overrides: JSON.parse('{"__proto__": {"objective": 0.5}}') }, /^override __proto__: not an SLI id/, 'a __proto__ key'],
+    [{ ...instBody, custom: [checkout, checkout] }, /^custom checkout_success\.id: declared twice/, 'a duplicate custom id'],
+    [{ ...instBody, toggles: { slis: ['kafka_produce_latency_p99'] }, custom: [{ ...checkout, id: 'kafka_broker_availability' }] }, /^custom kafka_broker_availability\.id: shadows the library SLI kafka_broker_availability of kafka \(not in the pack now/, 'a custom id shadowing an un-ticked library SLI'],
+    [{ ...instBody, overrides: { kafka_broker_availability: { objective: 0.9999 } }, custom: [{ ...checkout, id: 'kafka_broker_availability_99', objective: 0.99 }] }, /^custom kafka_broker_availability_99\.id: its SLO id kafka_broker_availability_99_99 collides with kafka_broker_availability's \(objective 0\.9999\)/, 'two SLIs sharing one SLO id'],
+    [{ ...instBody, custom: Array.from({ length: 17 }, (_, i) => ({ ...checkout, id: `c_${i}` })) }, /^custom: at most 16 custom SLIs \(17 given\)/, '17 custom SLIs'],
+    [{ ...instBody, overrides: Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`o_${i}`, { objective: 0.5 }])) }, /^overrides: at most 64 entries \(65 given\)/, '65 overrides'],
+    [{ ...instBody, overrides: ['x'] }, /^overrides: expected an object/, 'overrides as a list'],
+    [{ ...instBody, custom: { id: 'x' } }, /^custom: expected a list/, 'custom as an object'],
+    [{ ...instBody, custom: [{ ...checkout, comparison: '<' }] }, /comparison: not a field: the direction of a threshold is good_when .* — use good_when/, 'comparison is not a field (spec 1.3: good_when is)'],
+  ];
+  for (const [body, re, label] of copyBad) {
+    const r = await postLib('/api/library/instantiate', body);
+    const j = await r.json();
+    assert(r.status === 400 && j.ok === false && Array.isArray(j.errors) && re.test(j.errors.join(' ')), `instantiate copies usage error (${label}) → 400 { ok:false, errors }`, `${r.status} ${JSON.stringify(j.errors)}`, `400 ${re}`);
+  }
+  // 16 custom SLIs and 64 overrides are exactly the caps: accepted (the overrides for absent SLIs are warnings).
+  const atCap = await (await postLib('/api/library/instantiate', { ...instBody, custom: Array.from({ length: 16 }, (_, i) => ({ ...checkout, id: `c_${i}` })), overrides: Object.fromEntries(Array.from({ length: 64 }, (_, i) => [`o_${i}`, { objective: 0.5 }])) })).json();
+  assert(atCap.ok === true && atCap.canonical.spec.slis.length === 7 + 16 && atCap.warnings.filter(w => w.kind === 'override').length === 64, 'exactly the caps are accepted; an override for an absent SLI is a warning of kind override', JSON.stringify([atCap.ok, atCap.canonical?.spec?.slis?.length, atCap.warnings?.length]));
+  // compile and register take the instantiate inputs in place of a canonical: one request for a customised pack.
+  const compFromInputs = await (await postLib('/api/library/compile', { ...instBody, custom: [checkout], target: 'prometheus-rules' })).json();
+  assert(compFromInputs.ok === true && /checkout_success_99_9_burn_14x_5m_1h/.test(compFromInputs.artifact.content), 'POST /api/library/compile with the instantiate inputs compiles the customised pack', JSON.stringify(compFromInputs.ok));
+  const compBadInputs = await postLib('/api/library/compile', { ...instBody, overrides: { kafka_produce_latency_p99: { window: '30x' } }, target: 'prometheus-rules' });
+  const compBadBody = await compBadInputs.json();
+  assert(compBadInputs.status === 400 && /override kafka_produce_latency_p99\.window/.test(compBadBody.error || ''), 'compile from bad inputs → 400 with the engine\'s message', `${compBadInputs.status} ${compBadBody.error}`);
+  const regFromInputs = await (await postLib('/api/library/register', { ...instBody, overrides: { kafka_produce_latency_p99: { objective: 0.995 } } })).json();
+  assert(regFromInputs.ok === true && /^uploaded-orders-api-[0-9a-f]{8}$/.test(regFromInputs.registered?.id || '') && regFromInputs.registered.source === 'library:kafka,http-service@tier-2', 'POST /api/library/register with the instantiate inputs registers the customised pack', JSON.stringify(regFromInputs.registered));
+  assert(regFromInputs.adapted.layers.L1.some(a => a.title === 'kafka_produce_latency_p99_99_5'), 'the registered pack carries the overridden SLO id');
+  const regBadInputs = await postLib('/api/library/register', { ...instBody, custom: [checkout, checkout] });
+  assert(regBadInputs.status === 400 && /declared twice/.test((await regBadInputs.json()).errors.join(' ')), 'register from bad inputs → 400 with the engine\'s message');
+  // Usage errors are 400 { ok:false, errors }, never 500.
+  const badCases = [
+    [{ ...instBody, entries: ['nope'] }, /unknown library entry "nope"/, 'unknown entry'],
+    [{ ...instBody, tier: 'tier-7' }, /unknown tier "tier-7"/, 'unknown tier'],
+    [{ ...instBody, name: '' }, /service name is required/, 'missing name'],
+    [{ ...instBody, params: { nope: '1' } }, /unknown param|not a parameter|nope/, 'unknown param key'],
+    [{ ...instBody, params: { 'kafka.broker_job': 'a"b' } }, /quote|"/, 'a quote in a param value'],
+    [{ ...instBody, toggles: { slis: [] } }, /at least one SLI must stay selected \(or a custom SLI added\)/, 'a selection with nothing left and no custom SLI'],
+    [{}, /entries/, 'an empty body'],
+  ];
+  for (const [body, re, label] of badCases) {
+    const r = await postLib('/api/library/instantiate', body);
+    const j = await r.json();
+    assert(r.status === 400 && j.ok === false && Array.isArray(j.errors) && re.test(j.errors.join(' ')), `instantiate usage error (${label}) → 400 { ok:false, errors }`, `${r.status} ${JSON.stringify(j.errors)}`, `400 ${re}`);
+  }
+
+  // POST /api/library/compile — every target from the generated canonical, nothing registered.
+  const packsBefore = (await getJson(base, '/api/packs')).packs.length;
+  for (const target of ['prometheus-rules', 'otel-collector', 'alertmanager', 'grafana-dashboard']) {
+    const c = await (await postLib('/api/library/compile', { canonical: inst.canonical, target })).json();
+    assert(c.ok === true && c.target === target && typeof c.label === 'string' && typeof c.contentType === 'string', `POST /api/library/compile ${target} → ok, label, contentType`);
+    assert(typeof c.artifact?.filename === 'string' && typeof c.artifact.content === 'string' && c.artifact.content.length > 100 && Array.isArray(c.artifact.warnings), `compile ${target} returns artifact { filename, content, warnings }`);
+  }
+  assert((await getJson(base, '/api/packs')).packs.length === packsBefore, 'compile previews register nothing');
+  const compileBad = await postLib('/api/library/compile', { canonical: inst.canonical, target: 'nope' });
+  const compileBadBody = await compileBad.json();
+  assert(compileBad.status === 400 && /prometheus-rules, otel-collector, alertmanager, grafana-dashboard/.test(compileBadBody.error || ''), 'unknown compile target → 400 naming the known targets', compileBadBody.error);
+  const compileNoCanonical = await postLib('/api/library/compile', { target: 'alertmanager' });
+  assert(compileNoCanonical.status === 400, 'compile without a canonical → 400', compileNoCanonical.status, 400);
+
+  // POST /api/library/register — into the upload registry, as /api/validate registers.
+  const reg = await (await postLib('/api/library/register', { canonical: inst.canonical })).json();
+  assert(reg.ok === true && /^uploaded-orders-api-[0-9a-f]{8}$/.test(reg.registered?.id || ''), 'POST /api/library/register returns an uploaded-* id', reg.registered?.id);
+  assert(reg.registered.source === 'library:kafka,http-service@tier-2', 'register defaults the source hint to library:<entries>@<tier>', reg.registered.source);
+  assert(reg.adapted?.meta?.apiVersion === 'observability.platform/v1' && typeof reg.conformance?.mustPercent === 'number', 'register returns adapted + conformance like /api/validate');
+  assert(reg.summary?.onPlaceholder?.length === 4, 'register returns the summary with onPlaceholder', reg.summary?.onPlaceholder?.length, 4);
+  const regList = (await getJson(base, '/api/packs')).packs;
+  const regRow = regList.find(p => p.id === reg.registered.id);
+  assert(!!regRow && regRow.source === 'uploaded' && regRow.description === 'Uploaded pack — library:kafka,http-service@tier-2', 'the registered pack is in the catalog as an upload, its description carrying the source hint', regRow && [regRow.source, regRow.description]);
+  const regConf = await getJson(base, `/api/packs/${reg.registered.id}/conformance`);
+  assert(regConf.declaredTier === 'tier-2' && regConf.mustPercent === 100, 'the registered pack answers /api/packs/:id/conformance like an upload');
+  // /conformance names the placeholder passes itself for a library-built pack — for the env the
+  // registration worked them out for (library.environment), the same list the register summary carries —
+  // and omits the key (not []) for a plain pack, where it is not known.
+  const regEnv = inst.canonical.metadata?.annotations?.['library.environment'] || '';
+  const regConfEnv = await getJson(base, `/api/packs/${reg.registered.id}/conformance${regEnv ? `?env=${encodeURIComponent(regEnv)}` : ''}`);
+  assert(Array.isArray(regConfEnv.onPlaceholder) && JSON.stringify(regConfEnv.onPlaceholder) === JSON.stringify(reg.summary.onPlaceholder),
+    'a library-built registered pack\'s /conformance carries onPlaceholder matching the register summary', regConfEnv.onPlaceholder?.length, reg.summary?.onPlaceholder?.length);
+  assert(Array.isArray(regConf.onPlaceholder), 'a library-built registered pack\'s /conformance carries onPlaceholder without ?env too', typeof regConf.onPlaceholder);
+  const plainConf = await getJson(base, '/api/packs/payment-service/conformance');
+  assert(typeof plainConf.mustPercent === 'number' && !('onPlaceholder' in plainConf), 'a plain example pack\'s /conformance carries no onPlaceholder key', Object.keys(plainConf));
+  const regAgain = await (await postLib('/api/library/register', { canonical: inst.canonical, source: 'my-source' })).json();
+  assert(regAgain.registered.id === reg.registered.id && regAgain.registered.source === 'my-source', 'register is idempotent on content and honours an explicit source');
+  const regBad = await postLib('/api/library/register', { canonical: { apiVersion: 'x' } });
+  const regBadBody = await regBad.json();
+  assert(regBad.status === 400 && regBadBody.ok === false && Array.isArray(regBadBody.errors), 'register of a non-canonical → 400 { ok:false, errors }', regBad.status, 400);
+  // A canonical without library annotations registered here is labelled like an upload (metadata.name), never library:<name>@<tier>.
+  const regPlain = await (await postLib('/api/library/register', { canonical: authRaw })).json();
+  assert(regPlain.ok === true && regPlain.registered.source === authRaw.metadata.name && !/^library:/.test(regPlain.registered.source),
+    'register of a plain pack defaults the source hint to metadata.name, not library:…', regPlain.registered?.source, authRaw.metadata?.name);
+
+  // POST /api/validate carries summary.onPlaceholder for a library-built pack — and not for a plain one.
+  const valLib = await (await postLib('/api/validate', inst.canonical)).json();
+  assert(valLib.ok === true && valLib.summary?.onPlaceholder?.length === 4, '/api/validate of a library pack attaches summary.onPlaceholder', valLib.summary?.onPlaceholder?.length, 4);
+  assert(valLib.registered.id === reg.registered.id, '/api/validate registers the same id as /api/library/register (same content)');
+  assert(JSON.stringify(valLib.adapted) === JSON.stringify(inst.adapted), 'instantiate\'s adapted is byte-identical to /api/validate\'s for the same canonical (Build and Discover draw the same artefacts)');
+  const valPlain = await (await postLib('/api/validate', authRaw)).json();
+  assert(valPlain.ok === true && valPlain.summary === undefined, '/api/validate of a plain pack carries no summary');
+  await fetch(`${base}/api/uploads`, { method: 'DELETE' });
+
+  // The studio ships the journey.
+  const shellBuild = await getText(base, '/');
+  assert(shellBuild.includes('data-action="build-library"'), 'shell: the upload popover offers Build from the library…');
+  for (const mod of ['build-model.mjs', 'build-api.mjs', 'build-define-view.mjs', 'build-compile-view.mjs', 'build-verify-view.mjs']) {
+    const r = await fetch(`${base}/${mod}`);
+    assert(r.status === 200, `/${mod} served`, r.status, 200);
+  }
+
   // Static assets
   const css = await getText(base, '/app.css');
   assert(css.includes('--L2X:'), '/app.css served with L2X palette');
   assert(css.includes('.crawl-dropzone'), '/app.css ships crawl-dropzone styles');
+  assert(css.includes('.build-rail'), '/app.css ships the BUILD journey styles');
   const js = await getText(base, '/app.mjs');
   assert(js.includes('LAYER_DEFS'), '/app.mjs served');
+  assert(js.includes('BUILD_TABS'), '/app.mjs ships BUILD_TABS');
+  // The header's cards follow the mode: every mode transition passes through applyModeChrome, which
+  // must repaint them — leaving the BUILD journey once left the build cards up over the home hero.
+  const fnBody = (name) => (js.split(`function ${name}(`)[1] || '').split('\n}\n')[0];
+  assert(fnBody('applyModeChrome').includes('paintObservaActiveTab()'), 'app.mjs: applyModeChrome repaints the header cards (build ↔ analysis)');
+  // The visible brand is the OBSERVA chrome's <a class="observa-brand" href="/">: the home affordance must bind it,
+  // or a click reloads the page and a persisted build mode resumes the journey instead of returning home.
+  assert(fnBody('setupHomeAffordance').includes('.observa-brand') && fnBody('setupHomeAffordance').includes('goHome()'), 'app.mjs: setupHomeAffordance binds .observa-brand → goHome');
   assert(js.includes('setupCrawlPanel'), '/app.mjs wires setupCrawlPanel');
   assert(js.includes('renderCrawlResult'), '/app.mjs ships renderCrawlResult');
   assert(js.includes('setupDraftFromMcpPanel'), '/app.mjs wires setupDraftFromMcpPanel (Phase 7n)');

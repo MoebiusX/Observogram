@@ -2,7 +2,7 @@
 // crawler.mjs — Path A of the pack-creation user journey.
 //
 // Walks a service repository and emits a draft canonical
-// ObservabilityPack v1.2 manifest by introspecting common
+// ObservabilityPack manifest by introspecting common
 // observability artefacts: docker-compose backends, Prometheus
 // rules, Alertmanager configs, OTel Collector pipelines, Grafana
 // dashboard JSONs, Helm values/templates, and Kubernetes workloads.
@@ -22,10 +22,56 @@
 // ============================================================
 
 import { parse as parseYaml, parseAll as parseYamlAll, emit as emitYaml } from './mini-yaml.mjs';
-import { inferSlisFromRecordingRules, ruleNameToSliId, ruleNameToSloId } from './sli-inference.mjs';
+import {
+  inferSlisFromRecordingRules, ruleNameToSliId,
+  burnCandidateFromAlertRule, recordedSloForExpr, mergeBurnAlertsBySlo, defaultBurnWindows,
+} from './sli-inference.mjs';
 import { materializeL2XFromBackends } from './l2x.mjs';
+import { routesFromAlertmanagerConfig } from './alert-routes.mjs';
+import { BACKEND_PATTERNS } from './backend-products.mjs';
 import { PROMQL_KEYWORDS, extractPromqlMetricNames } from './promql.mjs';
 import { symbolSlug as slug } from './slug.mjs';
+
+// ---------- which files of a repository a scan reads ----------
+// One rule for every way a repository reaches the scanner — the CLI walker
+// (tools/crawl-repo.mjs), the studio's folder picker and its drop zone — so
+// a local scan reads the same files however the folder is handed over. The
+// folder picker lists EVERYTHING under the folder, node_modules included:
+// before it used this rule it staged 75,000 files (430 MB) of a repository
+// whose scannable sources are 600.
+export const SCAN_EXT = /\.(ya?ml|json|cjs|mjs|js|jsx|ts|tsx|py|go|java|kt|rs|cs)$/i;
+export const SCAN_MAX_FILE_BYTES = 5 * 1024 * 1024;
+export const SCAN_IGNORE_DIRS = new Set([
+  'node_modules', 'vendor', 'venv',
+  'dist', 'build', 'out', 'target',
+  '__pycache__', 'coverage',
+]);
+
+/**
+ * A file or folder name a scan never reads: any dot-entry — version control,
+ * CI, editor and agent state (`.git`, `.github`, `.vscode`, `.claude` with its
+ * worktree copies of the whole repository) — except `.observability`, and,
+ * for a folder, the dependency and build output folders.
+ */
+export function scanSkipsName(name, { dir = false } = {}) {
+  const n = String(name ?? '');
+  if (n.startsWith('.') && n !== '.observability') return true;
+  return dir && SCAN_IGNORE_DIRS.has(n);
+}
+
+/**
+ * Whether the file at `relPath` (forward slashes) is read: a scannable
+ * extension, and no skipped folder on the way to it. `skipRoot` leaves the
+ * first segment out of the check — the picked folder's own name, which is
+ * the user's choice whatever it is called.
+ */
+export function scanReadsPath(relPath, { skipRoot = false } = {}) {
+  const parts = String(relPath ?? '').split('/').filter(Boolean);
+  if (!parts.length) return false;
+  const file = parts[parts.length - 1];
+  if (parts.slice(skipRoot ? 1 : 0, -1).some(d => scanSkipsName(d, { dir: true }))) return false;
+  return !scanSkipsName(file) && SCAN_EXT.test(file);
+}
 
 // Parse a (possibly multi-document) YAML file into a list of non-null
 // documents. Prometheus rule files, Alertmanager configs and Kubernetes
@@ -33,48 +79,6 @@ import { symbolSlug as slug } from './slug.mjs';
 function parseYamlDocs(content) {
   return parseYamlAll(content).filter(d => d && typeof d === 'object');
 }
-
-// Known backend image-name fragments → spec.telemetry.backends.product enum.
-// Prefix match against the docker-compose service image. Order matters —
-// most-specific first.
-// Signal enum per schema: metrics, logs, traces, profiles, network,
-// policy, mesh, gateway, collection, alerting, dashboards. No "all" —
-// products that handle multiple signals (Grafana, OTel Collector,
-// Alertmanager) get their primary classification.
-const BACKEND_PATTERNS = [
-  { match: /opentelemetry[/-]?collector|otel\/opentelemetry-collector/i, product: 'opentelemetry-collector', signal: 'collection' },
-  { match: /^prom\/prometheus|prometheus:|prometheus-community/i,         product: 'prometheus',              signal: 'metrics' },
-  { match: /^grafana\/loki|grafana\/loki-docker|loki:/i,                  product: 'loki',                    signal: 'logs' },
-  { match: /^grafana\/tempo|tempo:/i,                                     product: 'tempo',                   signal: 'traces' },
-  { match: /^grafana\/mimir|mimir:|grafana\/mimirtool/i,                  product: 'mimir',                   signal: 'metrics' },
-  { match: /^grafana\/grafana|grafana:|grafana\/grafana-/i,               product: 'grafana',                 signal: 'dashboards' },
-  { match: /^elastic\/|elasticsearch:|opensearch/i,                       product: 'elasticsearch',           signal: 'logs' },
-  { match: /^jaegertracing\/|jaegertracing\/all-in-one|jaeger:/i,         product: 'jaeger',                  signal: 'traces' },
-  { match: /^thanos\/|thanos:|quay\.io\/thanos/i,                         product: 'thanos',                  signal: 'metrics' },
-  { match: /^prom\/alertmanager|alertmanager:|prometheus-community.*alertmanager/i, product: 'alertmanager',  signal: 'alerting' },
-  { match: /^pyroscope|grafana\/pyroscope/i,                              product: 'pyroscope',               signal: 'profiles' },
-  { match: /^cilium\/cilium|quay\.io\/cilium\/cilium|cilium:/i,             product: 'cilium',                  signal: 'network' },
-  { match: /^openpolicyagent\/opa|^opa:/i,                                  product: 'opa',                     signal: 'policy' },
-  { match: /^envoyproxy\/envoy|^envoy:/i,                                   product: 'envoy',                   signal: 'mesh' },
-  { match: /^consul:|^hashicorp\/consul/i,                                  product: 'consul',                  signal: 'mesh' },
-  { match: /^kong:|^kong\/kong/i,                                           product: 'kong',                    signal: 'gateway' },
-  { match: /^traefik:|^traefik\/traefik/i,                                  product: 'traefik',                 signal: 'gateway' },
-  { match: /fluent[-/]?bit|fluent-bit/i,                                  product: 'fluent-bit',              signal: 'logs' },
-  { match: /^grafana\/alloy|^alloy:/i,                                      product: 'alloy',                   signal: 'collection' },
-  { match: /^elastic\/beats|^beats:/i,                                      product: 'beats',                   signal: 'collection' },
-  { match: /timberio\/vector|vector:/i,                                   product: 'vector',                  signal: 'collection' },
-  // Additional common production stacks
-  { match: /victoriametrics\/victoria-metrics|victoriametrics\/vmselect|victoriametrics\/vminsert|victoriametrics\/vmstorage|victoriametrics\/vmagent/i,
-                                                                          product: 'victoriametrics',         signal: 'metrics' },
-  { match: /victoriametrics\/vmalert/i,                                   product: 'vmalert',                 signal: 'alerting' },
-  { match: /kube-state-metrics/i,                                          product: 'kube-state-metrics',      signal: 'metrics' },
-  { match: /prom\/node-exporter|node_exporter/i,                          product: 'node-exporter',           signal: 'metrics' },
-  { match: /grafana\/promtail|promtail:/i,                                product: 'promtail',                signal: 'logs' },
-  { match: /grafana\/k6|loadimpact\/k6/i,                                 product: 'k6',                      signal: 'metrics' },
-  { match: /^otel\/opentelemetry-collector-contrib/i,                     product: 'opentelemetry-collector', signal: 'collection' },
-  { match: /opensearchproject\/opensearch|opensearch:/i,                  product: 'opensearch',              signal: 'logs' },
-  { match: /datadog\/agent|datadoghq\/agent/i,                            product: 'datadog-agent',           signal: 'collection' },
-];
 
 // Kubernetes workload kinds whose pod template carries container images we
 // can decompile into telemetry.backends. Helm charts ship observability
@@ -515,7 +519,7 @@ export function crawlFiles(filesInput, opts = {}) {
   // the live system.
   const haveRecordedSlis = sliMap.size > 0;
   for (const alert of burnRateAlerts) {
-    const linked = linkAlertToRecordedSlo(alert, sloMap);
+    const linked = recordedSloForExpr(alert.expr, (id) => sloMap.has(id));
     if (linked) { alert.slo = linked; continue; }
 
     if (haveRecordedSlis) { alert._drop = true; continue; }
@@ -554,7 +558,7 @@ export function crawlFiles(filesInput, opts = {}) {
   for (let i = burnRateAlerts.length - 1; i >= 0; i--) {
     if (burnRateAlerts[i]._drop) burnRateAlerts.splice(i, 1);
   }
-  dedupeBurnRateAlerts(burnRateAlerts);
+  mergeBurnAlertsBySlo(burnRateAlerts);
 
 
   // If still no SLI/SLO discovered, fill the minimum tier-3 stub so the
@@ -585,25 +589,14 @@ export function crawlFiles(filesInput, opts = {}) {
   // minItems: 2 constraint on windows.
   if (burnRateAlerts.length === 0) {
     for (const slo of sloMap.values()) {
-      burnRateAlerts.push({
-        slo: slo.id,
-        windows: [
-          { short: '5m',  long: '1h', factor: 14, severity: 'SEV1' },
-          { short: '30m', long: '6h', factor: 6,  severity: 'SEV2' },
-        ],
-      });
+      burnRateAlerts.push({ slo: slo.id, windows: defaultBurnWindows() });
     }
     summary.warnings.push('Synthesized two-window burn-rate alerts for stub SLOs (Google SRE pattern).');
   } else {
     // Repo HAD recording-rule-style alerts. Translate them to the spec's
     // burn-rate shape with conservative defaults.
     for (const a of burnRateAlerts) {
-      if (!a.windows || a.windows.length < 2) {
-        a.windows = [
-          { short: '5m',  long: '1h', factor: 14, severity: 'SEV1' },
-          { short: '30m', long: '6h', factor: 6,  severity: 'SEV2' },
-        ];
-      }
+      if (!a.windows || a.windows.length < 2) a.windows = defaultBurnWindows();
     }
   }
 
@@ -676,7 +669,7 @@ export function crawlFiles(filesInput, opts = {}) {
   }
   if (summary.omitted.unresolvedChannels.length) {
     const n = summary.omitted.unresolvedChannels.length;
-    summary.warnings.push(`Excluded ${n} alerting channel(s) whose value is an unresolved \${VAR} placeholder (deploy-time substitution). They are recorded as evidence in crawler.unresolved.* annotations, not declared as routes — resolve the variable or declare a literal URL to include them.`);
+    summary.warnings.push(`${n} alerting channel(s) have an unresolved \${VAR} placeholder (deploy-time substitution) for an address. Each is declared as \`unresolved:<VAR>\` — the channel exists, its address is not in the repository — and recorded in the crawler.unresolved.* annotations; declare a literal URL to pin the address.`);
   }
 
   inferDashboardPanelBindings(dashboards, sliMap, sloMap, recordingRules, summary);
@@ -733,7 +726,7 @@ export function crawlFiles(filesInput, opts = {}) {
         'crawler.syntheticRecordingRulesSkipped': String(summary.omitted.syntheticRecordingRules.length),
         'crawler.extendedSurfaces': String(summary.discovered.extendedSurfaces),
         'crawler.scaffoldCount':   String(scaffoldSymbols.length),
-        // Channels excluded for unresolved ${VAR} placeholders — evidence
+        // Channels whose address is an unresolved ${VAR} placeholder — evidence
         // of declared intent the crawler could not resolve at crawl time.
         ...(summary.omitted.unresolvedChannels.length ? {
           'crawler.unresolvedChannelCount': String(summary.omitted.unresolvedChannels.length),
@@ -974,7 +967,18 @@ function looksLikeMetricSource(content, relPath = '') {
       || /\b(?:Counter|Gauge|Histogram|Summary)\s*\(\s*['"][A-Za-z_:][A-Za-z0-9_:]*['"]/.test(content)
       || /io\.micrometer|MeterRegistry|(?:Counter|Gauge|Timer|DistributionSummary|LongTaskTimer)\.builder\s*\(/.test(content)
       || /METRIC_NAME|String\.format\s*\(\s*["'][^"']*%s_|(?:^|[.\s])(?:name|put)\s*\(\s*["'][A-Za-z_:][A-Za-z0-9_:.-]*["']/.test(content)
-      || (metricSourcePathLooksRelevant(p) && /(?:metric|prometheus|counter|histogram|gauge|summary)[\s\S]{0,120}['"][A-Za-z_:][A-Za-z0-9_:.-]+['"]/i.test(content));
+      || (metricSourcePathLooksRelevant(p) && /(?:metric|prometheus|counter|histogram|gauge|summary)[\s\S]{0,120}['"][A-Za-z_:][A-Za-z0-9_:.-]+['"]/i.test(content))
+      || (!isTestPath(p) && EXPOSITION_TYPE_RE.test(content));
+}
+
+// The text exposition format, written out by hand: a script that builds
+// `# TYPE <name> <type>` lines and pushes them to a Pushgateway declares
+// those metrics just as a client library call does. Not read from test
+// files, where such lines are sample input, not a declaration.
+const EXPOSITION_TYPE_RE = /#\s*TYPE\s+[A-Za-z_:][A-Za-z0-9_:]*\s+(?:counter|gauge|histogram|summary|untyped)\b/;
+
+function isTestPath(relPath) {
+  return /(^|\/)(tests?|__tests__|specs?|fixtures?|testdata)(\/|$)|\.(?:test|spec)\.[a-z]+$|_test\.[a-z]+$/i.test(normalizeRepoPath(relPath));
 }
 
 function metricSourcePathLooksRelevant(relPath) {
@@ -1111,6 +1115,22 @@ function walkMetricSourceCode(f, metricDefinitions, evidence, summary, repoName 
         sourceName: match[2],
         type: `micrometer-${match[1].toLowerCase()}`,
         help: '',
+        labels: [],
+        service,
+        origin: f.relPath,
+        originKind: 'source-code',
+      });
+    }
+  }
+
+  if (!isTestPath(f.relPath)) {
+    const helps = new Map();
+    for (const m of text.matchAll(/#\s*HELP\s+([A-Za-z_:][A-Za-z0-9_:]*)\s+([^\n`'"\\]+)/g)) helps.set(m[1], m[2].trim());
+    for (const m of text.matchAll(/#\s*TYPE\s+([A-Za-z_:][A-Za-z0-9_:]*)\s+(counter|gauge|histogram|summary|untyped)\b/g)) {
+      addMetricDefinition(metricDefinitions, evidence, summary, {
+        name: m[1],
+        type: m[2],
+        help: helps.get(m[1]) || '',
         labels: [],
         service,
         origin: f.relPath,
@@ -1704,12 +1724,13 @@ function walkPrometheusRules(f, recordingRules, burnRateAlerts, metricDefinition
           // `rule.alert` is the Prometheus form; `rule.title` is the Grafana
           // unified-alerting form (provisioned alert rules). Both target an
           // SLO we synthesize from the alert name.
-          const alertName = rule.alert || rule.title;
-          const sloId = slug(alertName).replace(/-burn-?rate.*$/, '_99');
-          if (!burnRateAlerts.some(a => a.slo === sloId)) {
-            const windows = parseAlertWindows(rule);
-            const expr = typeof rule.expr === 'string' ? rule.expr : String(rule.expr || '');
-            burnRateAlerts.push({ slo: sloId, windows, expr, alertName });
+          // The entry an alert starts as, and later the SLO it binds to, are
+          // the shared derivation (sli-inference.mjs) the live fetcher applies
+          // to the ruler's rules: one rule set, one policy.
+          const candidate = burnCandidateFromAlertRule(rule);
+          const { alertName, expr } = candidate;
+          if (!burnRateAlerts.some(a => a.slo === candidate.slo)) {
+            burnRateAlerts.push(candidate);
             const id = `pol-${burnRateAlerts.length}`;
             evidence[id] = `${f.relPath}#${group.name || '_'}/${alertName}`;
             summary.discovered.burnRateAlerts++;
@@ -1733,6 +1754,14 @@ function walkPrometheusScrapeConfig(f, scrapeJobs, evidence, summary) {
     for (const cfg of obj.scrape_configs) {
       const job = String(cfg?.job_name || '').trim();
       if (!job) continue;
+      // Promtail and Alloy use the same `scrape_configs` / `job_name` keys
+      // to say which LOG FILES to tail. Such an entry is not a metrics
+      // scrape job and never appears among a metrics store's targets;
+      // declaring it made it read "not live" on every platform.
+      if (isLogScrapeConfig(cfg, obj)) {
+        summary.discovered.logScrapeConfigs = (summary.discovered.logScrapeConfigs || 0) + 1;
+        continue;
+      }
       addScrapeJob(scrapeJobs, evidence, summary, {
         job,
         metrics_path: cfg.metrics_path || '/metrics',
@@ -1742,6 +1771,17 @@ function walkPrometheusScrapeConfig(f, scrapeJobs, evidence, summary) {
       });
     }
   }
+}
+
+// A log-collection scrape config (Promtail, Alloy's loki.source): it has
+// pipeline stages, or points at files through the `__path__` label, or
+// sits in a document that ships to log `clients` from saved `positions`.
+function isLogScrapeConfig(cfg, doc) {
+  if (Array.isArray(cfg?.pipeline_stages)) return true;
+  if (doc && typeof doc === 'object' && (Array.isArray(doc.clients) || doc.positions)) return true;
+  const pathLabel = (v) => v === '__path__';
+  if ((cfg?.relabel_configs || []).some(r => pathLabel(r?.target_label))) return true;
+  return (cfg?.static_configs || []).some(sc => sc?.labels && Object.keys(sc.labels).some(pathLabel));
 }
 
 function walkActuatorMetricsConfig(f, scrapeJobs, evidence, summary, repoName = null) {
@@ -1785,61 +1825,17 @@ function scrapeTargets(cfg) {
   return [...out].sort();
 }
 
-function parseAlertWindows(rule) {
-  // Extract a single window from `for:` and `labels.severity`. Real
-  // multi-window decomposition can't be recovered from a single rule;
-  // we record what's there and let the synthesizer fill the rest.
-  const out = [];
-  const sev = rule.labels?.severity?.toString()?.toUpperCase();
-  const severity = /^SEV[123]$/.test(sev) ? sev : 'SEV2';
-  if (typeof rule.for === 'string') {
-    out.push({ short: rule.for, long: '6h', factor: 6, severity });
-  }
-  return out;
-}
-
-// Map a burn-rate alert to a recording-rule-derived SLO by scanning its
-// expression for any `ns:metric:op` recorded-series reference. Returns the
-// matching SLO id present in `sloMap`, or null. This is the inverse of the
-// compiler, which builds burn-rate alerts on top of the recorded ratios.
-function linkAlertToRecordedSlo(alert, sloMap) {
-  const expr = typeof alert?.expr === 'string' ? alert.expr : '';
-  if (!expr) return null;
-  const re = /[a-z][a-z0-9_]*:[a-z][a-z0-9_]*:[a-z0-9_]+/g;
-  let m;
-  while ((m = re.exec(expr)) !== null) {
-    const sloId = ruleNameToSloId(m[0]);
-    if (sloId && sloMap.has(sloId)) return sloId;
-  }
-  return null;
-}
-
-// Collapse burn-rate alerts that now share an SLO (after linking) into one
-// entry per SLO, unioning their windows (de-duplicated by short/long/factor)
-// so spec.policy.burn_rate_alerts stays one-entry-per-SLO and valid.
-function dedupeBurnRateAlerts(alerts) {
-  const bySlo = new Map();
-  for (const a of alerts) {
-    if (!bySlo.has(a.slo)) { bySlo.set(a.slo, a); continue; }
-    const tgt = bySlo.get(a.slo);
-    const seen = new Set((tgt.windows || []).map(w => `${w.short}|${w.long}|${w.factor}`));
-    for (const w of a.windows || []) {
-      const k = `${w.short}|${w.long}|${w.factor}`;
-      if (!seen.has(k)) { tgt.windows.push(w); seen.add(k); }
-    }
-    a._drop = true;
-  }
-  for (let i = alerts.length - 1; i >= 0; i--) {
-    if (alerts[i]._drop) alerts.splice(i, 1);
-  }
-}
-
 function walkAlertmanager(f, routes, evidence, summary) {
   for (const obj of parseYamlDocs(f.content)) {
     if (!obj?.route) continue;
-    // Walk top-level route + its children. Each route → one entry per severity.
-    const collected = [];
-    walkRoute(obj.route, collected, obj.receivers || [], summary.omitted.unresolvedChannels, f.relPath);
+    // Walk top-level route + its children. Each route → one entry per
+    // severity. The reading itself is shared with the live fetcher
+    // (alert-routes.mjs): the config a repo ships and the config a running
+    // Alertmanager reports give the same routes.
+    const collected = routesFromAlertmanagerConfig(obj, {
+      unresolved: summary.omitted.unresolvedChannels,
+      source: f.relPath,
+    });
     for (const r of collected) {
       const id = `ALR-${routes.length + 1}`;
       routes.push(r);
@@ -1847,80 +1843,6 @@ function walkAlertmanager(f, routes, evidence, summary) {
       summary.discovered.alertingRoutes++;
     }
   }
-}
-
-function walkRoute(route, out, receivers, unresolved, relPath) {
-  const sev = route.match?.severity || route.match_re?.severity || route.matchers?.find?.(m => /severity/i.test(m))?.split('=')?.[1]?.replace(/"/g, '');
-  const recvName = route.receiver;
-  const recv = receivers.find(r => r.name === recvName);
-  const before = unresolved.length;
-  const channels = recv ? receiverChannels(recv, unresolved, { severity: normalizeSeverity(sev), source: relPath }) : [];
-  const droppedHere = unresolved.length - before;
-  if (channels.length) {
-    out.push({ severity: normalizeSeverity(sev), channels });
-  } else if ((sev || recvName) && droppedHere === 0) {
-    // Receiver kinds we can't map → keep the route on a synthetic Teams
-    // placeholder (long-standing behaviour for unmapped receivers). But
-    // when this receiver's channels were EXCLUDED as unresolved ${VAR}
-    // placeholders, fabricating a channel here would over-declare: the
-    // route stays out of the declared spec and lives on as evidence in
-    // the crawler.unresolved.* annotations instead.
-    out.push({ severity: normalizeSeverity(sev), channels: [{ msteams: `#${recvName || 'oncall'}` }] });
-  }
-  for (const child of route.routes || []) walkRoute(child, out, receivers, unresolved, relPath);
-}
-
-// Does this channel value carry an unresolved deploy-time placeholder
-// (${VAR}) AND fail the spec's URI shape? Embedded placeholders inside an
-// otherwise URI-shaped value (https://ntfy.sh/${TOPIC}?…) still parse as a
-// webhook target and stay declared. A value that is ONLY a placeholder has
-// no scheme, cannot pass `format: uri`, and must not be declared as a real
-// channel — the crawler records it as evidence instead of emitting a pack
-// that fails its own schema.
-const CHANNEL_URI_RE = /^[a-z][a-z0-9+.-]*:\S+$/i;   // mirrors validator.mjs URI_RE
-function isUnresolvedChannelValue(value) {
-  const v = String(value || '');
-  return v.includes('${') && !CHANNEL_URI_RE.test(v);
-}
-
-// Map Prometheus / Alertmanager severity labels to the spec v1.2
-// enum: SEV1 (critical) / SEV2 (warning) / SEV3 (info) / SEV4 (debug).
-// If the input already matches SEV1..SEV4, pass through. Common
-// Prometheus conventions map as below.
-function normalizeSeverity(s) {
-  if (!s) return 'SEV2';
-  const up = String(s).toUpperCase();
-  if (/^SEV[1234]$/.test(up)) return up;
-  if (/^(CRITICAL|FATAL|EMERGENCY|PAGE)$/.test(up)) return 'SEV1';
-  if (/^(WARNING|ERROR|MAJOR|HIGH)$/.test(up))      return 'SEV2';
-  if (/^(INFO|NOTICE|MINOR|LOW)$/.test(up))         return 'SEV3';
-  if (/^(DEBUG|TRACE)$/.test(up))                   return 'SEV4';
-  return 'SEV2';
-}
-
-function receiverChannels(recv, unresolved = [], ctx = {}) {
-  // Spec Channel allows only: msteams, voice, whatsapp, email, webhook.
-  // Map Alertmanager's broader vocabulary onto that closed set; flag
-  // anything we couldn't map as a webhook with a placeholder URL.
-  // Webhook URLs that are unresolved ${VAR} placeholders are screened out
-  // (see isUnresolvedChannelValue) and recorded for the evidence
-  // annotation — the crawler must never emit a pack that fails its own
-  // schema.
-  const out = [];
-  const webhook = (url, fallback) => {
-    const v = url || fallback;
-    if (isUnresolvedChannelValue(v)) {
-      unresolved.push({ receiver: recv.name || null, severity: ctx.severity || null, value: String(v), source: ctx.source || null });
-      return;
-    }
-    out.push({ webhook: v });
-  };
-  if (Array.isArray(recv.email_configs))     out.push(...recv.email_configs.map(c => ({ email: c.to || `oncall@${recv.name || 'example'}.com` })));
-  if (Array.isArray(recv.msteams_configs))   out.push(...recv.msteams_configs.map(c => ({ msteams: c.channel_url || `#${recv.name || 'oncall'}` })));
-  if (Array.isArray(recv.webhook_configs))   for (const c of recv.webhook_configs) webhook(c.url, 'https://hooks.example.com/oncall');
-  if (Array.isArray(recv.pagerduty_configs)) out.push({ voice: `pagerduty:${recv.name || 'oncall'}` });
-  if (Array.isArray(recv.slack_configs))     for (const c of recv.slack_configs) webhook(c.api_url, `https://hooks.slack.example.com/${c.channel || 'oncall'}`);
-  return out;
 }
 
 function walkOtelCollector(f, pipelines, evidence, summary) {

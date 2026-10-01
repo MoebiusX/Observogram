@@ -1,4 +1,4 @@
-# Grafana-managed rules — SLO checkout_latency_99_5_p99_300ms compiled from ObservabilityPack v1.2
+# Grafana-managed rules — SLO checkout_latency_99_5_p99_300ms compiled from ObservabilityPack v1.3
 # Pack: payment-service · version 1.5.0
 # Format: Grafana 9+ provisioning YAML (apiVersion: 1).
 # Apply via: copy under provisioning/alerting/ OR POST to /api/v1/provisioning/alert-rules

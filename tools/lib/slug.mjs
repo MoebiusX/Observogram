@@ -26,3 +26,9 @@ export function serviceSlug(s, fallback = 'svc') {
 export function symbolSlug(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9-]+/g, '_').replace(/^_+|_+$/g, '');
 }
+
+// The metric-name prefix of a pack: fileSlug with '-' → '_' (`payment-service` →
+// `payment_service`). Every recording rule the generators emit is named with it
+// (`<prefix>:<sli>:…`, `<prefix>:inventory:<kind>`), so it lives here, a leaf module, and
+// burn-rules.mjs re-exports it: a downstream that vendors only the site core needs no more.
+export const metricPrefix = (name) => fileSlug(String(name ?? 'pack'), 'pack').replace(/-/g, '_');

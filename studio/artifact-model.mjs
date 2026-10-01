@@ -164,6 +164,22 @@ export function catalogToDeployManifest(catalog) {
             deployable,
             source: 'Repo',
           });
+        } else if (it.kind === 'rules-assurance') {
+          // Step 5: the assurance group (Watchdog + instrument liveness) as
+          // one alerting row — its own compiled file, deployed like a per-SLO
+          // alert file.
+          out.push({
+            key: 'rules:alert:assurance',
+            type: 'alert',
+            name: it.label,
+            id: 'assurance',
+            group: 'rules',
+            flavor: 'prometheus',
+            artifact: 'assurance',
+            scope: 'alerting',
+            deployable,
+            source: 'Repo',
+          });
         }
       }
     } else if (g.id === 'dashboards') {
@@ -178,7 +194,12 @@ export function catalogToDeployManifest(catalog) {
           group: 'dashboards',
           flavor: 'grafana',
           dashboardId: it.dashboardId,
-          deployable,
+          // A generated board the pack does not declare (the unified board on
+          // a pack without it in spec.dashboards[]) compiles and downloads but
+          // is not deployed from here: it would come back as undeclared drift
+          // and never verify. The catalog says so in its subtitle.
+          deployable: deployable && !it.generated,
+          generated: !!it.generated,
           source: 'Repo',
         });
       }

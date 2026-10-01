@@ -2,16 +2,26 @@
 /**
  * tools/fetch-live-pack.mjs
  *
- * Build a canonical ObservabilityPack v1.2 manifest from a live MCP
+ * Build a canonical ObservabilityPack manifest from a live MCP
  * server's responses, validate it against the vendored schema, and write
  * it as a local generated YAML file.
  *
- * Phase 4 rewrite: emits canonical v1.2 only. No EMIT_FORMAT flag, no
- * studio-shape output. Sections MCP cannot directly verify (SLIs, SLOs,
- * dashboards, alerting, …) are populated with minimal stubs derived from
- * MCP context (discovered services, baseline thresholds) — the canonical
- * schema requires them. Items MCP could verify carry their evidence in
- * flat annotation keys (`mcp.verified.<symbol>`).
+ * Phase 4 rewrite: emits the canonical manifest only. No EMIT_FORMAT flag, no
+ * studio-shape output. Sections MCP cannot directly verify are populated
+ * with minimal stubs — the canonical schema requires them — stamped
+ * `mcp.scaffold.<symbol>`. Items MCP could verify carry their evidence in
+ * flat annotation keys (`mcp.verified.<symbol>`). Every artefact family the
+ * fetch could not LOOK at (no tool, or the tool failed) is named in
+ * `observogram.unobserved.<family>` with the reason, so a comparison can
+ * say "not checked" where it would otherwise say "not there".
+ *
+ * What is read back is read the way the repo crawler reads it: SLIs from
+ * recorded series, burn-rate entries from the alerting rules that guard
+ * them (tools/lib/sli-inference.mjs), routes from the running Alertmanager
+ * configuration (tools/lib/alert-routes.mjs), backends from the products
+ * that are evidently there (tools/lib/backend-products.mjs). The same
+ * system scanned from its repository and fetched live then describes
+ * itself in the same artefacts.
  *
  * Usage:
  *   node tools/fetch-live-pack.mjs
@@ -20,7 +30,9 @@
  *
  * Env:
  *   MCP_URL   — MCP server endpoint. Default: https://mcp.example.com/observability
- *   OUTPUT    — Output path. Default: examples/production-live.pack.yaml
+ *   OUTPUT    — Output path. Default: examples/production-live.pack.yaml (the
+ *               studio reads <org root>/live/production-live.pack.yaml —
+ *               point OUTPUT there to feed an org's LIVE badge)
  *               (generated locally; ignored by git)
  *   MCP_AUTH  — Optional bearer token if your MCP requires auth.
  *   PACK_NAME — Pack metadata.name.  Default: production-live
@@ -29,23 +41,27 @@
  *   0  success
  *   1  hard failure (no file written; previous file is kept)
  *
- * Requires Node 18+.
+ * Requires Node 22.16+ (the package floor).
  */
 
 import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { emit as emitYaml } from './lib/mini-yaml.mjs';
+import { emit as emitYaml, parse as parseYaml } from './lib/mini-yaml.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
-import { inferSlisFromRecordingRules, ruleNameToSliId } from './lib/sli-inference.mjs';
+import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules } from './lib/sli-inference.mjs';
 import { materializeL2XFromBackends } from './lib/l2x.mjs';
+import { routesFromAlertmanagerConfig } from './lib/alert-routes.mjs';
+import { backendForScrapeJob, knownBackendProduct } from './lib/backend-products.mjs';
 import { serviceSlug as slug } from './lib/slug.mjs';
-import { probeCandidates, capabilityTool, candidateTool, BUILD_INFO_PROBES } from './lib/contracts/mcp-capabilities.mjs';
+import { probeCandidates, capabilityTool, candidateTool, productAttestedByTool, BUILD_INFO_PROBES } from './lib/contracts/mcp-capabilities.mjs';
+import { promqlForKind } from './lib/inventory-coverage.mjs';
 import { validateResponseShape, locateObjectPayload } from './lib/contracts/response-shapes.mjs';
 import {
   STACK_SELF_METRIC_PROBES, STACK_FAMILIES, eligibleAliases, productPreferenceOrder, bestOutcome,
 } from './lib/contracts/stack-self-metrics.mjs';
 import { brandEnv } from './lib/brand-env.mjs';
+import { stripMcpUrl } from './lib/mcp-url-safety.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = resolve(__dirname, '..', 'vendor', 'observability-pack-spec', `v${SPEC_VERSION}`, 'observability-pack.schema.json');
@@ -189,7 +205,7 @@ export function createMcpClient({ mcpUrl, mcpAuth = null } = {}) {
 
 // ============================================================
 // Pack builder — pure, takes stubbed MCP responses, returns a canonical
-// v1.2 manifest. Exported for offline tests.
+// manifest. Exported for offline tests.
 // ============================================================
 
 function pickCriticality(services) {
@@ -1099,6 +1115,35 @@ export async function observeGrafana({
   return out;
 }
 
+// The configuration text inside an Alertmanager status answer, or null:
+// `config` as text (otel-mcp-server) or as { original } (the raw API v2).
+function alertmanagerConfigText(response) {
+  const obj = locateObject('status-object', response) || response;
+  const config = typeof obj?.config === 'string' ? obj.config : obj?.config?.original;
+  return typeof config === 'string' && config.trim() ? config : null;
+}
+
+// The routes of the Alertmanager configuration a status call returned, read
+// exactly as the crawler reads a config file. Returns [] when there is no
+// configuration, it does not parse, or it declares no route with a channel
+// the schema admits. Nothing else of the text is kept.
+const WEBHOOK_URI_RE = /^[a-z][a-z0-9+.-]*:\S+$/i;   // mirrors validator.mjs URI_RE
+export function routesFromLiveAlertmanager(configText) {
+  if (typeof configText !== 'string' || !configText.trim()) return [];
+  let config;
+  try { config = parseYaml(configText); } catch { return []; }
+  const routes = routesFromAlertmanagerConfig(config, { source: 'alertmanager status' });
+  return routes
+    .map(r => ({
+      severity: r.severity,
+      channels: (r.channels || []).filter(c => {
+        const [kind, value] = Object.entries(c || {})[0] || [];
+        return typeof value === 'string' && value && (kind !== 'webhook' || WEBHOOK_URI_RE.test(value));
+      }),
+    }))
+    .filter(r => r.channels.length > 0);
+}
+
 export function buildCanonicalPack({
   refreshedAt,
   mcpUrl,
@@ -1346,18 +1391,26 @@ export function buildCanonicalPack({
   markScaffold('otel');
 
   // ---- spec.telemetry.backends ----
-  // When the MCP exposes backend_capabilities, drive backends from the
-  // canonical skill→backend→product→version inventory. Each entry gets
-  // a real version block (declared from must[0], gating from the
-  // server's own gatingMode, capabilities from baselineFeatures). When
-  // capabilities are absent, fall back to the legacy hardcoded set so
-  // older MCPs still produce a valid pack.
+  // A backend is declared only on EVIDENCE that the product runs here:
+  //   • a version the product itself reported (grafana_health, a
+  //     `*_build_info` series, traces answering);
+  //   • a scrape job for the product's own endpoint with a target up;
+  //   • a tool that belongs to the product answering with data (the
+  //     ruler's rule list attests the ruler).
+  // backend_capabilities is NOT such evidence. It lists every product the
+  // MCP server can SPEAK to — five metrics stores side by side — and says
+  // nothing about which of them is deployed. Minting a Verified backend per
+  // row declared Cilium, Consul and Graylog live on platforms that run none
+  // of them, while a collector with its scrape target up went unlisted.
+  // The inventory still supplies the version POLICY of an evidenced product
+  // (must / should / gating / features), and is kept whole in the
+  // mcp.capabilities.* annotations for the connect screen.
   const backends = [];
   const seenIds = new Set();
   // `verifiedBy` is the tool whose answer attested the backend (a tool
   // name, checked against `errors`) or `true` when the evidence was
-  // established elsewhere (a live version capture). A fallback entry
-  // with no evidence at all is stamped mcp.scaffold.telemetry.backends.<id>.
+  // established elsewhere. A fallback entry with no evidence at all is
+  // stamped mcp.scaffold.telemetry.backends.<id>.
   const pushBackend = (b, verifiedBy, { fallback = false } = {}) => {
     if (seenIds.has(b.id)) return;
     seenIds.add(b.id);
@@ -1372,11 +1425,39 @@ export function buildCanonicalPack({
   const productAttested = (...products) =>
     products.some(p => liveVersions?.[p]?.declared || liveVersions?.[p]?.alive);
 
+  // Product → what attested it. The spelling is the shared table's
+  // (backend-products.mjs) when it knows the product, so a backend read
+  // live pairs with the same backend read from a repository's images.
+  const scrapeJobs = normalizeScrapeJobs(probeResults?.scrape_configs?.adapted);
+  const backendEvidence = new Map();
+  const attestProduct = (name, by) => {
+    const product = knownBackendProduct(name)?.product || name;
+    if (product && !backendEvidence.has(product)) backendEvidence.set(product, by);
+  };
+  const liveVersionOf = new Map();   // product (table spelling) → its version capture
+  for (const [product, info] of Object.entries(liveVersions || {})) {
+    if (!(info?.declared || info?.alive)) continue;
+    liveVersionOf.set(knownBackendProduct(product)?.product || product, info);
+    attestProduct(product, info.source || 'version probe');
+  }
+  for (const job of scrapeJobs) {
+    if (scrapeJobDown(job)) continue;
+    const hit = backendForScrapeJob(job.job);
+    if (hit) attestProduct(hit.product, `scrape job ${job.job}`);
+  }
+  for (const v of Object.values(probeResults)) {
+    if (classify(v) !== 'data') continue;
+    for (const tool of String(v.tool || '').split('+').filter(Boolean)) {
+      attestProduct(productAttestedByTool(tool), tool);
+    }
+  }
+
   // Capability-derived inventory annotations (one row per skill+backend)
   // get stamped regardless of whether the entry becomes a telemetry
   // backend — the studio's connect screen reads these to render the
   // full version-gating story.
   const capabilityRows = [];
+  const policyByProduct = new Map();   // product → { signal, row } (first row wins)
   if (capabilities && Array.isArray(capabilities.skills)) {
     for (const s of capabilities.skills) {
       const signal = SKILL_TO_SIGNAL[s.skill] ?? null;
@@ -1400,48 +1481,65 @@ export function buildCanonicalPack({
           signal,
         };
         capabilityRows.push(row);
-
-        // Only mint a telemetry.backends[] entry when the skill maps
-        // to one of the spec's Signal values AND the product slug
-        // matches the Product pattern (`^[a-z][a-z0-9_-]*$`).
-        if (!signal || !productSlug || !/^[a-z][a-z0-9_-]*$/.test(productSlug)) continue;
-        const id = slug(`${signal}-${productSlug}`);
-        if (!/^[a-z][a-z0-9_-]*[a-z0-9]$/.test(id)) continue;
-
-        // Build the version block. `declared` is the LIVE, authoritative
-        // version from a version-revealing probe when available (e.g.
-        // grafana_health returns "12.4.0"; metrics_query vm_app_version
-        // returns "v1.113.0"). When the live version is missing, fall
-        // back to the backend_capabilities policy must[0]. `min` always
-        // carries the policy floor so the user can see both the live
-        // version AND the supported range.
-        const live = liveVersions[productSlug]?.declared || null;
-        const declared = live || must[0] || should[0] || optional[0] || null;
-        const version = {};
-        if (declared) version.declared = declared;
-        if (must.length) version.min = must[must.length - 1];
-        const gating = capabilities.gatingMode;
-        if (gating === 'off' || gating === 'warn' || gating === 'enforce') {
-          version.gating = gating;
-        }
-        // baselineFeatures already match the Product capability pattern
-        // (lowercase, underscore-separated). Cap to 32 so a pack with
-        // a chatty skill (e.g. elasticsearch with 60 features) stays
-        // readable.
-        const caps = (b.baselineFeatures || [])
-          .filter(c => /^[a-z][a-z0-9_-]*$/.test(c))
-          .slice(0, 32);
-        if (caps.length) version.capabilities = caps;
-
-        pushBackend({
-          id,
-          signal,
-          product: productSlug,
-          ...(Object.keys(version).length ? { version } : {}),
-        }, TOOL.backendCapabilities);
+        if (!productSlug) continue;
+        const known = knownBackendProduct(productSlug);
+        const product = known?.product || productSlug;
+        const rowSignal = known?.signal || signal;
+        if (rowSignal && !policyByProduct.has(product)) policyByProduct.set(product, { signal: rowSignal, row });
       }
     }
   }
+
+  // One backend per evidenced product. Its version block: `declared` is the
+  // LIVE version from a version-revealing probe when there is one (e.g.
+  // grafana_health returns "12.4.0"), else the inventory's policy must[0];
+  // `min` carries the policy floor so the user sees both the live version
+  // and the supported range.
+  const mintBackend = (product) => {
+    const policy = policyByProduct.get(product);
+    const signal = knownBackendProduct(product)?.signal || policy?.signal || null;
+    // The spec's Signal and Product patterns (`^[a-z][a-z0-9_-]*$`).
+    if (!signal || !/^[a-z][a-z0-9_-]*$/.test(product)) return;
+    const id = slug(`${signal}-${product}`);
+    if (!/^[a-z][a-z0-9_-]*[a-z0-9]$/.test(id)) return;
+    const must = policy?.row.versions.must || [];
+    const should = policy?.row.versions.should || [];
+    const optional = policy?.row.versions.optional || [];
+    const live = liveVersionOf.get(product)?.declared || null;
+    const declared = live || must[0] || should[0] || optional[0] || null;
+    const version = {};
+    if (declared) version.declared = declared;
+    if (must.length) version.min = must[must.length - 1];
+    const gating = policy ? capabilities.gatingMode : null;
+    if (gating === 'off' || gating === 'warn' || gating === 'enforce') version.gating = gating;
+    // baselineFeatures already match the Product capability pattern
+    // (lowercase, underscore-separated). Cap to 32 so a pack with a
+    // chatty skill (e.g. elasticsearch with 60 features) stays readable.
+    const caps = (policy?.row.baselineFeatures || [])
+      .filter(c => /^[a-z][a-z0-9_-]*$/.test(c))
+      .slice(0, 32);
+    if (caps.length) version.capabilities = caps;
+    pushBackend({
+      id,
+      signal,
+      product,
+      ...(Object.keys(version).length ? { version } : {}),
+    }, true);
+  };
+  // Inventory order first (the order such packs have always been written
+  // in), then evidenced products the inventory does not list, by name.
+  for (const product of policyByProduct.keys()) {
+    if (backendEvidence.has(product)) mintBackend(product);
+  }
+  for (const product of [...backendEvidence.keys()].sort()) mintBackend(product);
+  if (backends.length) {
+    annotations['mcp.backends.evidence'] = backends
+      .map(b => `${b.id}=${trimError(backendEvidence.get(b.product)) || 'observed'}`).join('|');
+  }
+  // What the MCP could speak to and found no trace of — said plainly, so
+  // "supported" is never read as "deployed".
+  const supportedOnly = [...policyByProduct.keys()].filter(p => !backendEvidence.has(p));
+  if (supportedOnly.length) annotations['mcp.capabilities.unobserved'] = supportedOnly.join(',');
 
   // Fallback / floor: ensure the headline platform backends are
   // always present even when backend_capabilities was unavailable.
@@ -1792,6 +1890,37 @@ export function buildCanonicalPack({
   if (burnMapping.unmapped.length) {
     annotations['mcp.discovered.alert_rules_unmapped'] = burnMapping.unmapped.slice(0, 64).join(',');
   }
+  // Every other alerting rule is read the way the crawler reads a rule
+  // file (sli-inference.mjs): a rule whose expression references a
+  // recorded series guards that series' SLO and contributes its window to
+  // the SLO's entry; a rule that references none is an operational alert,
+  // not an SLO contract. Hand-written rules carry neither the compiler's
+  // labels nor its names, so without this a platform with seventy alerting
+  // rules read as having no burn-rate policy at all — and every alert its
+  // repository declares read "not live".
+  const compilerShaped = new Set(
+    discoveredAlerts.filter(a => a?.labels?.kind !== 'forecast' && parseBurnAlert(a)).map(a => a.name));
+  const linkedBurn = burnAlertsFromAlertRules(
+    discoveredAlerts.filter(a => a?.name && a?.labels?.kind !== 'forecast' && !compilerShaped.has(a.name)),
+    (id) => slos.some(s => s.id === id));
+  //
+  // Such an entry is NOT stamped mcp.verified: what the ruler attests is an
+  // alert on the SLO's series, not a multi-window burn-rate alert, and the
+  // windows beyond the rule's own `for` are the reading's defaults. It
+  // carries no scaffold marker either — it is read from a real rule — and
+  // names the rules it came from in mcp.derived.<symbol>.
+  let linkedCount = 0;
+  for (const entry of linkedBurn.alerts) {
+    if (burnRateAlerts.some(b => b.slo === entry.slo)) continue;
+    burnRateAlerts.push({ slo: entry.slo, windows: entry.windows });
+    linkedCount += 1;
+    annotations[`mcp.derived.policy.burn_rate_alerts[${burnRateAlerts.length - 1}]`] =
+      `alerting rule(s) on the SLO's recorded series: ${entry.alertNames.slice(0, 16).join(', ')}`;
+  }
+  if (discoveredAlerts.length) {
+    annotations['mcp.discovered.alert_rules_linked'] = String(linkedCount);
+    annotations['mcp.discovered.alert_rules_operational'] = String(linkedBurn.unlinked.length);
+  }
   if (burnMapping.severityInferred.length) {
     annotations['mcp.discovered.alert_rules_severity_inferred'] = burnMapping.severityInferred.slice(0, 64).join(',');
   }
@@ -1848,7 +1977,6 @@ export function buildCanonicalPack({
   // pipelines.exporters.metrics. Jobs whose every target is 'down' are
   // listed in mcp.discovered.scrape_jobs_down, and every target's health,
   // lastScrape and lastError is kept in mcp.observed.scrape_targets.
-  const scrapeJobs = normalizeScrapeJobs(probeResults?.scrape_configs?.adapted);
   if (scrapeJobs.length) {
     const upJobs = scrapeJobs.filter(j => !scrapeJobDown(j)).map(j => j.job);
     const downJobs = scrapeJobs.filter(scrapeJobDown).map(j => j.job);
@@ -1886,15 +2014,27 @@ export function buildCanonicalPack({
   if (!annotations['mcp.verified.pipelines.exporters.metrics']) markScaffold('pipelines.exporters.metrics');
 
   // ---- spec.alerting ----
-  // Schema-forced route (alerting.routes minItems 1). No MCP tool reads
-  // the Alertmanager config, so the SEV1 → Teams route is a guess.
+  // The routes of the configuration the running Alertmanager reports (the
+  // alerting_routes probe) — read exactly as the crawler reads the config
+  // file a repository ships, so the two compare route for route.
+  // Alertmanager redacts secret addresses itself; such a channel is kept
+  // with the redaction marker as its value. Without a configuration the
+  // schema still forces one route (alerting.routes minItems 1): a guess,
+  // stamped scaffold.
+  const liveRoutes = Array.isArray(probeResults?.alerting_routes?.adapted)
+    ? probeResults.alerting_routes.adapted.filter(r => r && r.severity && Array.isArray(r.channels) && r.channels.length)
+    : [];
   const alerting = {
-    routes: [{
+    routes: liveRoutes.length ? liveRoutes : [{
       severity: 'SEV1',
       channels: [{ msteams: '#platform-oncall' }],
     }],
   };
-  markScaffold('alerting.routes[0]');
+  if (liveRoutes.length) {
+    liveRoutes.forEach((_, i) => markVerified(`alerting.routes[${i}]`));
+  } else {
+    markScaffold('alerting.routes[0]');
+  }
 
   // ---- spec.baselines ----
   // Platform defaults for the declared criticality, stamped scaffold.
@@ -1916,6 +2056,54 @@ export function buildCanonicalPack({
   // ---- spec.validation ----
   // Empty — MCP can't directly attest chaos / synthetics.
   const validation = {};
+
+  // ---- what this fetch could not look at ----
+  // One key per artefact family (the behavioural model's kinds,
+  // tools/lib/artefact-model.mjs) the fetch had NO WAY to observe: no tool
+  // for it, or the tool for it failed or is not offered on this tier. The
+  // value says why. A comparison reads these to tell "the other pack
+  // declares it and this one could not check" from "this one looked and it
+  // is not there" (diff.mjs, the `notObserved` bucket). A family whose
+  // probe answered — even with nothing — is observed and gets no key.
+  const unobserved = (kinds, reason) => {
+    for (const kind of [].concat(kinds)) annotations[`observogram.unobserved.${kind}`] = reason;
+  };
+  const noTool = (what) => `no MCP tool exposes ${what}`;
+  // Why a probe family is blind, or null when it answered (data or empty).
+  const blind = (family) => {
+    const outcome = classify(probeResults?.[family]);
+    if (outcome === 'unsupported') return `this MCP offers no ${family.replace(/_/g, ' ')} tool`;
+    if (outcome === 'failed') return `the ${family.replace(/_/g, ' ')} probe got no answer${probeErrors[family] ? `: ${probeErrors[family]}` : ''}`;
+    return null;
+  };
+  unobserved('otel', noTool('the SDK configuration'));
+  unobserved(['pipeline_receiver', 'pipeline_processor', 'pipeline_exporter_logs', 'pipeline_exporter_traces'],
+    noTool('the collector configuration'));
+  if (annotations['mcp.scaffold.pipelines.exporters.metrics']) {
+    unobserved('pipeline_exporter_metrics', noTool('the collector configuration'));
+  }
+  unobserved(['storage_metrics', 'storage_logs', 'storage_traces'], noTool('storage settings'));
+  unobserved('baselines', noTool('MTTD / MTTR measurements'));
+  unobserved('chaos', noTool('chaos experiments'));
+  unobserved('synthetic', noTool('synthetic checks'));
+  unobserved('remediation', noTool('remediation automation'));
+  unobserved('derived_view', noTool('derived views'));
+  unobserved('imports', noTool('pack imports'));
+  unobserved('forecast', 'forecast rules are not read back from the ruler');
+  if (blind('dashboards')) unobserved(['dashboard', 'panel'], blind('dashboards'));
+  if (blind('alert_rules')) unobserved('burn_rate', blind('alert_rules'));
+  if (blind('metric_names')) unobserved('metric', blind('metric_names'));
+  if (blind('scrape_configs')) unobserved('scrape_job', blind('scrape_configs'));
+  if (recordedRules.length === 0 && blind('recording_rules')) {
+    unobserved(['recording_rule', 'sli', 'slo'], blind('recording_rules'));
+  }
+  if (!liveRoutes.length) {
+    unobserved('alert_route', blind('alerting_routes') || 'the Alertmanager configuration states no route this pack can hold');
+  }
+  if (backendEvidence.size === 0) {
+    unobserved(['backend', 'profiling', 'network', 'policy_engine', 'mesh', 'collection'],
+      'no version probe, scrape target or product tool answered');
+  }
 
   // ---- assemble ----
   const pack = {
@@ -2045,7 +2233,11 @@ export const PROBES = [
           return {
             name: r.alert || r.name,
             expr: r.expr || r.query || '',
-            for: r.for || (r.duration ? secondsToPromDuration(r.duration) : null) || '5m',
+            // What the ruler said and nothing else: a rule with no wait
+            // has no `for`. (A defaulted '5m' here read as a window the
+            // rule never stated.)
+            ...((r.for || (r.duration ? secondsToPromDuration(r.duration) : null))
+              ? { for: r.for || secondsToPromDuration(r.duration) } : {}),
             labels: r.labels || (r.severity ? { severity: r.severity } : {}),
             annotations: r.annotations || {},
             ...(interval ? { interval } : {}),
@@ -2111,6 +2303,18 @@ export const PROBES = [
       }
       return [...byJob.values()];
     },
+  },
+  {
+    name: 'alerting_routes',
+    // The running Alertmanager configuration, carried by its status answer.
+    candidates: probeCandidates('alerting_routes'),
+    target: 'spec.alerting.routes',
+    // An answer WITHOUT a configuration (a tier that trims it) says
+    // nothing about routes: it is not "zero routes", so it must not count
+    // as an answer for this family.
+    answers: (response) => alertmanagerConfigText(response) !== null,
+    unanswered: 'the Alertmanager status carries no configuration',
+    adapt: (response) => routesFromLiveAlertmanager(alertmanagerConfigText(response)),
   },
   {
     name: 'metric_names',
@@ -2308,6 +2512,12 @@ export async function fetchMcp({ mcpUrl, mcpAuth = null, refreshedAt = null } = 
       attempted.push(name);
       const response = await cachedCall(name, args);
       if (response == null) continue;          // tool errored or returned nothing
+      // A probe may say an answer does not speak to its question at all
+      // (probe.answers): that is no answer, not an empty one.
+      if (typeof probe.answers === 'function' && !probe.answers(response)) {
+        if (!probeFailures[name]) probeFailures[name] = probe.unanswered || 'the answer does not carry what this probe reads';
+        continue;
+      }
       let adapted;
       try { adapted = probe.adapt(response); }
       catch (_) { adapted = null; }
@@ -2683,10 +2893,16 @@ export async function buildAndValidate({ mcpUrl, mcpAuth, packName, refreshedAt 
 }
 
 async function main() {
-  process.stderr.write(`[fetch-live-pack] talking to ${MCP_URL_DEFAULT}\n`);
+  // The pack keeps the safe URL — what the studio's refresh writes: no
+  // userinfo, fragment or credential query parameter (MCP_AUTH is the
+  // place for a token; it is sent as a header and never stored).
+  const { safe, dropped } = stripMcpUrl(MCP_URL_DEFAULT);
+  const safeUrl = safe ?? MCP_URL_DEFAULT;
+  process.stderr.write(`[fetch-live-pack] talking to ${safeUrl}\n`);
+  if (dropped.length) process.stderr.write(`[fetch-live-pack] not kept in the pack: the ${dropped.join(', ')} parameter(s) of MCP_URL — put a token in MCP_AUTH instead\n`);
   const fetched = await fetchMcp({ mcpUrl: MCP_URL_DEFAULT, mcpAuth: MCP_AUTH_DEFAULT });
   const refreshedAt = new Date().toISOString();
-  const pack = buildCanonicalPack({ refreshedAt, mcpUrl: MCP_URL_DEFAULT, ...fetched });
+  const pack = buildCanonicalPack({ refreshedAt, mcpUrl: safeUrl, ...fetched });
 
   const errs = validateCanonical(pack, SCHEMA);
   if (errs.length) {
@@ -2711,4 +2927,61 @@ async function main() {
 const invokedDirectly = resolve(process.argv[1] || '') === resolve(fileURLToPath(import.meta.url));
 if (invokedDirectly) {
   main().catch(e => { process.stderr.write(`[fetch-live-pack] FATAL: ${e.message}\n`); process.exit(1); });
+}
+
+// ============================================================
+// Inventory coverage — the live half of "is the right number of things being monitored?".
+// The rendered site's `expected` block (tools/lib/site/expected.mjs, in site.json) says what
+// the inventory declares per kind; this asks the MCP's metrics query tool, once per kind, for
+// the `up` series by that kind's label (enumerated kinds) or the site's own count query
+// (counted kinds), and hands the reduced instant vectors to tools/lib/inventory-coverage.mjs
+// for the arithmetic. Same client, handshake, tools/list gating and instant-vector reading as
+// the stack sampler above; the tool name comes from the capability registry, never a literal.
+// Returns { status: 'checked' | 'not-attempted', reason, tool, callsMade, observations:
+// { [kind]: { values: { [labelValue]: number }, query, series?, error? } } }. A kind whose
+// query failed carries `error` and empty values — a fact the record keeps, never a zero.
+// ============================================================
+export async function observeInventory({ mcpUrl, mcpAuth = null, expected, kinds = null, maxCalls = 16 } = {}) {
+  if (!mcpUrl) throw new Error('observeInventory: mcpUrl required');
+  const wanted = expected && expected.kinds ? Object.entries(expected.kinds).filter(([k]) => !kinds || kinds.includes(k)) : [];
+  const tool = TOOL.stackSelfMetrics;
+  const { rpc, notify, callTool } = createMcpClient({ mcpUrl, mcpAuth });
+  const initialized = await rpc('initialize', {
+    protocolVersion: '2025-06-18',
+    capabilities: {},
+    clientInfo: { name: 'observogram-inventory', version: '0.4.0' },
+  }).then(() => true).catch(() => false);
+  if (initialized) await notify('notifications/initialized').catch(() => {});
+  const toolsList = await rpc('tools/list').catch(() => null);
+  const hasToolsList = Array.isArray(toolsList?.tools);
+  const advertised = new Set(hasToolsList ? toolsList.tools.map(t => t.name) : []);
+  if (hasToolsList && !advertised.has(tool)) {
+    return { status: 'not-attempted', reason: STACK_NOT_EXPOSED(tool), tool, callsMade: 0, observations: {} };
+  }
+  const observations = {};
+  let callsMade = 0;
+  for (const [k, spec] of wanted) {
+    const { query, by } = promqlForKind(spec);
+    if (callsMade >= maxCalls) { observations[k] = { values: {}, query, error: `call budget of ${maxCalls} exhausted` }; continue; }
+    callsMade += 1;
+    try {
+      const response = await callTool(tool, { query });
+      const result = instantVectorResult(response);
+      if (result === null) {
+        const v = validateResponseShape('instant-vector', response);
+        observations[k] = { values: {}, query, error: trimError(v.reason || 'response is not an instant vector') };
+        continue;
+      }
+      const values = {};
+      for (const s of result) {
+        const name = s?.metric?.[by];
+        const v = Number(s?.value?.[1]);
+        if (typeof name === 'string' && name && Number.isFinite(v)) values[name] = v;
+      }
+      observations[k] = { values, query, series: result.length };
+    } catch (e) {
+      observations[k] = { values: {}, query, error: trimError(e?.message || String(e)) };
+    }
+  }
+  return { status: 'checked', reason: null, tool, callsMade, observations };
 }

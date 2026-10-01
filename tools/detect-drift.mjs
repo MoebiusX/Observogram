@@ -2,7 +2,7 @@
 /**
  * tools/detect-drift.mjs
  *
- * Drift detection across two ObservabilityPack v1.2 snapshots. Built to
+ * Drift detection across two ObservabilityPack snapshots. Built to
  * run in a cron context: after the fetcher refreshes the live pack,
  * call this against the new file and either a second file OR a git
  * rev N hours ago. Emits a structured drift report (markdown by default,
@@ -48,7 +48,7 @@
  *   1 — drift detected; cron should fire the notification
  *   2 — error (file missing, parse failure, git rev unknown)
  *
- * Requires Node 18+. No dependencies.
+ * Requires Node 22.16+ (the package floor). No dependencies.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';

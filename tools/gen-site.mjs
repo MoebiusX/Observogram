@@ -29,7 +29,7 @@
  *   --strict     warnings are errors (compileBurnRules warnings, a pack without
  *                spec.environments.<env>, module warnings)
  *   --repo-url   base URL for runbook links (default: the environment's repo_url)
- *   --schema     the ObservabilityPack JSON schema (default: the vendored v1.2 schema)
+ *   --schema     the ObservabilityPack JSON schema (default: the vendored schema — tools/lib/validator.mjs SPEC_VERSION)
  *
  * Exit codes: 0 ok, 1 validation or self-check failed (nothing written), 2 usage.
  */
@@ -37,7 +37,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
-import { validateCanonical } from './lib/validator.mjs';
+import { validateCanonical, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 import { run } from './lib/site/run.mjs';
 import * as lib from './lib/dashboards/lib.mjs';
 
@@ -78,7 +78,7 @@ if (!packPath) {
 }
 const packText = read(packPath, 'pack');
 let pack; try { pack = parseYaml(packText); } catch (e) { die(`${packPath}: ${e.message}`, 1); }
-const schema = JSON.parse(read(opts.schema ? resolve(opts.schema) : resolve(HERE, '..', 'vendor', 'observability-pack-spec', 'v1.2', 'observability-pack.schema.json'), 'pack schema'));
+const schema = JSON.parse(read(opts.schema ? resolve(opts.schema) : resolve(HERE, '..', SPEC_SCHEMA_PATH), 'pack schema'));
 const packErrors = validateCanonical(pack, schema);
 if (packErrors.length) { for (const e of packErrors) console.error(`✗ ${packPath}: ${e}`); process.exit(1); }
 const inventorySchema = JSON.parse(read(resolve(HERE, 'lib', 'site', 'inventory.schema.json'), 'inventory schema'));
@@ -98,7 +98,7 @@ const out = resolve(opts.out || 'sites');
 const write = !(opts.check || opts['dry-run']);
 for (const [env, p] of Object.entries(r.partitions)) {
   const m = p.manifest;
-  console.log(`${env}: ${m.queue_managers.length} queue manager${m.queue_managers.length === 1 ? '' : 's'}, ${m.hosts.length} host${m.hosts.length === 1 ? '' : 's'}, ${p.files.length} files → ${write ? resolve(out, env) : '(not written)'} (step ${m.timing.step}s, vantage ${m.vantage}, profile ${m.profile}, burn ${m.burn.alerts} alerts/${m.burn.recording} recording${m.removed.length ? `, removed ${m.removed.join('; ')}` : ''})`);
+  console.log(`${env}: ${m.instances.length} ${m.instance_kind.title}${m.instances.length === 1 ? '' : 's'}, ${m.hosts.length} host${m.hosts.length === 1 ? '' : 's'}, ${p.files.length} files → ${write ? resolve(out, env) : '(not written)'} (step ${m.timing.step}s, vantage ${m.vantage}, profile ${m.profile}, burn ${m.burn.alerts} alerts/${m.burn.recording} recording${m.removed.length ? `, removed ${m.removed.join('; ')}` : ''})`);
   if (opts['dry-run']) for (const f of p.files) console.log(`  ${env}/${f.path}`);
   if (write) for (const f of p.files) { const target = resolve(out, env, f.path); mkdirSync(dirname(target), { recursive: true }); writeFileSync(target, f.content); }
 }

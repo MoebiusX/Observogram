@@ -1,4 +1,4 @@
-# Grafana-managed rules compiled from ObservabilityPack v1.2
+# Grafana-managed rules compiled from ObservabilityPack v1.3
 # Pack: payment-service · version 1.5.0
 # Format: Grafana 9+ provisioning YAML (apiVersion: 1).
 # Apply via: copy under provisioning/alerting/ OR POST to /api/v1/provisioning/alert-rules
@@ -548,6 +548,124 @@ groups:
           metric: payment_service:errorbudget:burn_1h
           from: A
         is_paused: false
+      - uid: rec-payment_service-settlement_c-1emkvuq
+        title: payment_service:settlement_consumers_active:value_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                min(kafka_consumer_group_members{
+                  group="payment-settler"
+                })
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: settlement_consumers_99_9_min_2
+          sli: settlement_consumers_active
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:settlement_consumers_active:value_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-settlement_c-0owxjzb
+        title: payment_service:settlement_consumers_active:error_ratio_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(payment_service:settlement_consumers_active:value_5m) < bool 2)[5m:30s]) / 10)
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          sli: settlement_consumers_active
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:settlement_consumers_active:error_ratio_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-errorbudget--0pgdjcv
+        title: payment_service:errorbudget:burn_5m{slo="settlement_consumers_99_9_min_2"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(payment_service:settlement_consumers_active:value_5m) < bool 2)[5m:30s]) / 10) / 0.001
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: settlement_consumers_99_9_min_2
+          sli: settlement_consumers_active
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:errorbudget:burn_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment_service-errorbudget--0lfq7gc
+        title: payment_service:errorbudget:burn_1h{slo="settlement_consumers_99_9_min_2"}
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: (sum_over_time((max(payment_service:settlement_consumers_active:value_5m) < bool 2)[1h:30s]) / 120) / 0.001
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          slo: settlement_consumers_99_9_min_2
+          sli: settlement_consumers_active
+          service: payment-service
+        annotations: {}
+        record:
+          metric: payment_service:errorbudget:burn_1h
+          from: A
+        is_paused: false
       - uid: rec-payment_service-consumer_pro-0l4j13w
         title: payment_service:consumer_processing_success:good_5m
         condition: A
@@ -851,6 +969,35 @@ groups:
         annotations: {}
         record:
           metric: payment:consumer_lag:seconds_max_5m
+          from: A
+        is_paused: false
+      - uid: rec-payment-settlement_consumers-1wkm2uc
+        title: payment:settlement_consumers:members_min_5m
+        condition: A
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (min(kafka_consumer_group_members{
+                  group="payment-settler"
+                }))
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels: {}
+        annotations: {}
+        record:
+          metric: payment:settlement_consumers:members_min_5m
           from: A
         is_paused: false
   - orgId: 1
@@ -1223,6 +1370,129 @@ groups:
           runbook: (supply runbook URL)
         is_paused: false
   - orgId: 1
+    name: payment_service_settlement_consumers_99_9_min_2_burn
+    folder: observability-pack
+    interval: 30s
+    rules:
+      - uid: alr-settlement_consumers_99_9_mi-0xxugay
+        title: settlement_consumers_99_9_min_2_burn_14x_5m_1h
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (
+                  (sum_over_time((max(payment_service:settlement_consumers_active:value_5m) < bool 2)[5m:30s]) / 10) > 0.014
+                ) and (
+                  (sum_over_time((max(payment_service:settlement_consumers_active:value_5m) < bool 2)[1h:30s]) / 120) > 0.014
+                ) and (
+                  sum_over_time((max(payment_service:settlement_consumers_active:value_5m) < bool 2)[5m:30s]) >= 2
+                )
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 2m
+        labels:
+          severity: SEV2
+          slo: settlement_consumers_99_9_min_2
+          sli: settlement_consumers_active
+          service: payment-service
+          burn_rate: "14"
+          window_short: 5m
+          window_long: 1h
+          pack: payment-service
+        annotations:
+          summary: Burn rate 14× on settlement_consumers_99_9_min_2
+          description: Both the 5m and 1h error ratios exceed 14× of the 0.100% error budget for settlement_consumers_99_9_min_2, with at least 2 bad samples in the 5m window.
+          slo_objective: 99.900%
+          slo_window: 30d
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-settlement_consumers_99_9_mi-0klsfzq
+        title: settlement_consumers_99_9_min_2_burn_6x_30m_6h
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: |
+                (
+                  (sum_over_time((max(payment_service:settlement_consumers_active:value_5m) < bool 2)[30m:30s]) / 60) > 0.006
+                ) and (
+                  (sum_over_time((max(payment_service:settlement_consumers_active:value_5m) < bool 2)[6h:30s]) / 720) > 0.006
+                ) and (
+                  sum_over_time((max(payment_service:settlement_consumers_active:value_5m) < bool 2)[30m:30s]) >= 2
+                )
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 5m
+        labels:
+          severity: SEV3
+          slo: settlement_consumers_99_9_min_2
+          sli: settlement_consumers_active
+          service: payment-service
+          burn_rate: "6"
+          window_short: 30m
+          window_long: 6h
+          pack: payment-service
+        annotations:
+          summary: Burn rate 6× on settlement_consumers_99_9_min_2
+          description: Both the 30m and 6h error ratios exceed 6× of the 0.100% error budget for settlement_consumers_99_9_min_2, with at least 2 bad samples in the 30m window.
+          slo_objective: 99.900%
+          slo_window: 30d
+          runbook: (supply runbook URL)
+        is_paused: false
+  - orgId: 1
     name: payment_service_consumer_success_99_95_burn
     folder: observability-pack
     interval: 30s
@@ -1449,4 +1719,338 @@ groups:
           on_projected_breach: post_warning
           horizon: 1d
           horizon_declared: 3d
+        is_paused: false
+  - orgId: 1
+    name: payment_service_assurance
+    folder: observability-pack
+    interval: 30s
+    rules:
+      - uid: alr-payment_service_watchdog
+        title: Watchdog
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: vector(1)
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 0s
+        labels:
+          severity: none
+          kind: assurance
+          instrument: watchdog
+          service: payment-service
+          pack: payment-service
+        annotations:
+          summary: payment-service assurance watchdog — always firing
+          description: "Dead-man contract for pack payment-service: this alert fires continuously by construction. Route alertname=\"Watchdog\", pack=\"payment-service\" to a heartbeat receiver and page when the heartbeat STOPS — silence means the ruler, Alertmanager or the notification path is down. Until a heartbeat route is added at deploy time it falls to the compiled Alertmanager's null receiver."
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-payment_service_scrape_target_down
+        title: payment_service_scrape_target_down
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: up{job=~"payment-api"} == 0
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 2m
+        labels:
+          severity: SEV2
+          kind: assurance
+          instrument: scrape
+          service: payment-service
+          pack: payment-service
+        annotations:
+          summary: A declared scrape target of payment-service is down
+          description: "up == 0 for {{ $labels.job }}/{{ $labels.instance }} for 2m. The pack declares scrape job(s) payment-api: every SLI, recording rule and burn alert of payment-service reading them is blind while this fires."
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-payment_service_ruler_silent-0vzlf0n
+        title: payment_service_ruler_silent_prometheus
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: absent_over_time(prometheus_rule_group_last_evaluation_timestamp_seconds[5m])
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 10m
+        labels:
+          severity: SEV2
+          kind: assurance
+          instrument: ruler/prometheus
+          service: payment-service
+          pack: payment-service
+        annotations:
+          summary: prometheus ruler instrument silent for payment-service
+          description: "prometheus_rule_group_last_evaluation_timestamp_seconds has not been scraped for 5m (10m sustained): the prometheus ruler that evaluates payment-service's rules is not exposing itself — stopped, unscraped or renamed. Its rules are unproven while this fires. (Stack self-metric row rule_evaluation_staleness.)"
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-payment_service_notify_silen-0qcogte
+        title: payment_service_notify_silent_prometheus
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: absent_over_time(prometheus_notifications_sent_total[5m])
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 10m
+        labels:
+          severity: SEV2
+          kind: assurance
+          instrument: notify/prometheus
+          service: payment-service
+          pack: payment-service
+        annotations:
+          summary: prometheus notify instrument silent for payment-service
+          description: "prometheus_notifications_sent_total has not been scraped for 5m (10m sustained): the prometheus notify that delivers payment-service's rules is not exposing itself — stopped, unscraped or renamed. Its rules are unproven while this fires. (Stack self-metric row notifications_sent.)"
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-payment_service_ruler_stale_-0a8mra5
+        title: payment_service_ruler_stale_prometheus
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: max(time() - prometheus_rule_group_last_evaluation_timestamp_seconds) > 120
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 2m
+        labels:
+          severity: SEV3
+          kind: assurance
+          instrument: ruler/prometheus
+          service: payment-service
+          pack: payment-service
+        annotations:
+          summary: prometheus rule evaluation stale for payment-service
+          description: "The newest rule-group evaluation is older than 120s for 2m: payment-service's recording rules and burn alerts are being evaluated late. Caveat: a fully stopped ruler cannot evaluate this alert — the Watchdog covers that case. (Stack self-metric row rule_evaluation_staleness.)"
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-payment_service_ruler_errors-1jh2edl
+        title: payment_service_ruler_errors_prometheus
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: increase(prometheus_rule_evaluation_failures_total[5m]) > 0
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 2m
+        labels:
+          severity: SEV3
+          kind: assurance
+          instrument: ruler/prometheus
+          service: payment-service
+          pack: payment-service
+        annotations:
+          summary: prometheus rule evaluation errors for payment-service
+          description: "prometheus_rule_evaluation_failures_total increased in the last 5m for 2m: some of payment-service's rules fail to evaluate — a failing rule records nothing and its burn alert can never fire. (Stack self-metric row rule_evaluation_failures.)"
+          runbook: (supply runbook URL)
+        is_paused: false
+      - uid: alr-payment_service_notify_error-1r64qlw
+        title: payment_service_notify_errors_prometheus
+        condition: B
+        data:
+          - refId: A
+            queryType: ''
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: ${DS_PROMETHEUS}
+            model:
+              refId: A
+              expr: increase(prometheus_notifications_errors_total[5m]) > 0
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            queryType: ''
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params:
+                      - 0
+        no_data_state: OK
+        exec_err_state: Error
+        for: 2m
+        labels:
+          severity: SEV3
+          kind: assurance
+          instrument: notify/prometheus
+          service: payment-service
+          pack: payment-service
+        annotations:
+          summary: prometheus notification errors for payment-service
+          description: "prometheus_notifications_errors_total increased in the last 5m for 2m: prometheus failed to deliver notifications — payment-service's alerts may fire unseen. (Stack self-metric row notification_errors.)"
+          runbook: (supply runbook URL)
         is_paused: false

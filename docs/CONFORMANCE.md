@@ -2,7 +2,7 @@
 
 The conformance scorer (`tools/lib/conformance.mjs`) evaluates a canonical
 pack against a hand-curated subset of the maturity rubric from
-[spec §5 + §7](../vendor/observability-pack-spec/v1.2/spec.md). The studio
+[spec §5 + §7](../vendor/observability-pack-spec/v1.3/spec.md). The studio
 exposes the scoring under **Advanced -> Conformance** and via
 `GET /api/packs/:id/conformance?env=<name>`.
 
@@ -49,6 +49,13 @@ The rubric is intentionally **content-focused** — schema-enforced rules (e.g. 
 | `L5.MUST.tier1_chaos_for_each_slo` | L5 | MUST | tier-1 | §5.11 |
 | `L5.MUST.tier1_weekly_prod_chaos` | L5 | MUST | tier-1 | §5.11 |
 | `L5.SHOULD.tier1_release_gate` | L5 | SHOULD | tier-1 | §5.10 |
+
+**`L1.MUST.latency_slo` counts by type, not by direction.** The clause asks for one SLI of type
+`threshold` or `distribution` under an SLO. Since spec 1.3 such an SLI carries a direction
+(`good_when: below | above`, absent meaning below), and a floor — `good_when: above`, connected
+consumers, in-sync replicas — satisfies the clause exactly as a latency ceiling does: the check is
+by type, as the upstream maturity model states in the clause's conformance cell. Tightening it to
+`good_when: below` would be a rubric revision, not part of the 1.3 adoption; no clause changed.
 
 ## Scoring
 

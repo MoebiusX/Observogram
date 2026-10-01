@@ -1,0 +1,53 @@
+[
+  {
+    "severity": "SEV2",
+    "channels": [
+      {
+        "webhook": "redacted:secret"
+      }
+    ]
+  },
+  {
+    "severity": "SEV2",
+    "channels": [
+      {
+        "webhook": "redacted:secret"
+      }
+    ]
+  },
+  {
+    "severity": "SEV1",
+    "channels": [
+      {
+        "email": "oncall@example.internal"
+      },
+      {
+        "webhook": "redacted:secret"
+      }
+    ]
+  },
+  {
+    "severity": "SEV1",
+    "channels": [
+      {
+        "webhook": "redacted:secret"
+      }
+    ]
+  },
+  {
+    "severity": "SEV2",
+    "channels": [
+      {
+        "webhook": "redacted:secret"
+      }
+    ]
+  },
+  {
+    "severity": "SEV3",
+    "channels": [
+      {
+        "webhook": "redacted:secret"
+      }
+    ]
+  }
+]

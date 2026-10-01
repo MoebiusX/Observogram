@@ -25,8 +25,8 @@ that answer.
 The primary chrome uses these questions directly:
 
 1. **Discover - What Do We Have?**
-2. **Diagnose - Can We Trust It?**
-3. **Remediate - Fix The Gaps**
+2. **Diagnose - How reliable is this pack?**
+3. **Remediate - Resolve gaps**
 
 Advanced views exist, but they are not the core journey. They support expert
 analysis: References, Conformance, Schema, OTLP Coverage, Traceability, Atlas.
@@ -68,7 +68,7 @@ Load Pack B: live production posture
   v
 Diagnose
   |
-  |-- Diagnostic Grade
+  |-- Assessment (diagnostic grade)
   |-- Coverage criteria
   |-- Trust criteria
   |-- Drift drill
@@ -179,6 +179,78 @@ The dry-run path is **repo vs live**, not repo vs aspirational reference.
    but reset and source labels must make stale comparisons easy to clear.
 
 ## What Belongs In Each Step
+
+### Build (no pack yet)
+
+A parallel journey for a service that has no pack, in the same visual language
+as the three steps below and ending in Discover
+([`BUILD_JOURNEY.md`](BUILD_JOURNEY.md)). It is reached from the home hero, the
+service gate and the upload popover, never from the three primary tabs, and it
+does not change what Discover, Diagnose or Remediate show. Both landings open with
+the first decision — check an existing service or pack, or build a new one — and
+both paths join at Discover.
+
+Belongs here:
+
+- the pack as the axis of the screen on every step: a sticky definition column
+  on the left — on Define the live form (the service; the tier as a segmented
+  control with its MUST · SHOULD counts; the library entries as chips with their
+  evidence dot), on Compile and Verify the read-only seed card it becomes once
+  the pack is seeded (*Seed the pack →*; *Change seed →* returns), and under
+  both the conformance summary — pass · on a placeholder · fail, the failing
+  clauses, todos and placeholders left — and the layer stack of the pack being compiled
+  as the main surface — L1 SLI/SLO · L2 Metrics/Logs/Traces · (L2X) · L3
+  Dashboards/Recording Rules · L4 Alerts/Policy/Self-healing · L5 Self-check · GOV
+  — drawn through the same adapter and the same
+  artefact cards Discover uses, each slab's edge carrying the rubric's verdict
+  for that layer (pass · pass on a placeholder · fail · neutral when no clause
+  applies), a placeholder artefact as Scaffold, a clause the tier still needs as
+  a ghost card on its slab
+- a sheet per layer, opened from the slab head: the layer's question (L1 *What
+  should we measure?* … GOV *Who owns it?*), its clauses at the tier with their
+  state, and what the pack can carry on that layer — always read from the
+  instantiated pack, never a made-up menu; one sheet at a time, Esc closes,
+  focus returns to the slab; a preview on Define (*Compose in Compile →*),
+  editable on Compile, read-only with the layer's todos on Verify
+- Define: the service name, owners, environment, the criticality tier and the
+  library entries in the definition column; the tier as the silhouette of the
+  pack it demands (one ghost per clause per slab, reshaping with the tier), the
+  entries' SLIs and their SLOs as candidates on L1
+- Compile: composition on the sheets — the SLI rolodex on L1 (the selected
+  entries' SLIs, every product's behind a filter, any SLI addable — one above
+  the tier says which profile it starts from; the tier is a seed, not a gate —
+  the objective and window it starts with, add / remove as a switch; adding
+  from a product not yet selected selects it too; *Customise* edits a card's
+  copy of the library's values in place — objective, window, bound, PromQL,
+  description, each back to the library default in one click, an edited
+  expression dropping the library's evidence to *custom* — and *+ Custom SLI*
+  writes one from scratch) and the SLOs
+  switch; the Dashboards, Policy, Routes and Validation switches on their
+  layers, each saying which clauses it drops; the scrape targets, endpoints,
+  channels and probe targets as params on the layer they shape — over the live
+  stack of the instantiated pack (a section off dims its slab, marks its head
+  *off* and its clauses go red on the edge), the pack YAML as a collapsible below
+- Verify: the conformance verdict at the tier with three clause states (pass
+  · pass on a placeholder · fail) and a maturity bar per layer, the schema
+  verdict, the warnings, the stack with the todos pinned to the slab of the
+  artefact each names (and on that layer's sheet) and the parameter that fills
+  each one, the compiled artefacts, the hand-off ("Ready to continue?": resolve
+  or adjust at Define, or continue with visible gaps, which registers the pack
+  as an upload)
+
+Does not belong here:
+
+- a fourth primary tab (the header shows the build cards only while building)
+- a pack that pages nobody presented as done: a placeholder-laden pack is
+  conformant on paper, so the third clause state, the amber slab edges and the
+  todo count travel with it into Discover
+- a library value that cannot be changed, or a tier that forbids an SLI: the
+  library seeds and the rubric grades; what the team measures is the team's
+  (an edited expression carries no library evidence, and says so)
+- a second rendering of the pack: the stack is the adapter's projection — the
+  artefacts Discover will show, id for id — never a Build-only drawing of the
+  canonical
+- deploy actions (Remediate's, on the registered pack)
 
 ### Discover
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * tools/upconvert-legacy.mjs — convert a previous-format (layered JSON)
- * pack into a canonical ObservabilityPack v1.2 manifest.
+ * pack into a canonical ObservabilityPack manifest (the vendored spec, tools/lib/validator.mjs SPEC_VERSION).
  *
  *   node tools/upconvert-legacy.mjs examples/legacy/production-curated.json
  *   node tools/upconvert-legacy.mjs old-pack.json -o new-pack.pack.json
@@ -12,7 +12,7 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { isLegacyLayeredPack, upconvertLegacyPack } from './lib/legacy.mjs';
-import { validateCanonical } from './lib/validator.mjs';
+import { validateCanonical, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 
 const args = process.argv.slice(2);
 const input = args.find(a => !a.startsWith('-'));
@@ -32,7 +32,7 @@ if (!isLegacyLayeredPack(raw)) {
 
 const { canonical, report } = upconvertLegacyPack(raw, { now: new Date().toISOString() });
 
-const SCHEMA = JSON.parse(readFileSync(new URL('../vendor/observability-pack-spec/v1.2/observability-pack.schema.json', import.meta.url), 'utf8'));
+const SCHEMA = JSON.parse(readFileSync(new URL(`../${SPEC_SCHEMA_PATH}`, import.meta.url), 'utf8'));
 const errors = validateCanonical(canonical, SCHEMA);
 if (errors.length) {
   console.error(`upconvert produced an invalid manifest (bug — please report):\n  ${errors.join('\n  ')}`);

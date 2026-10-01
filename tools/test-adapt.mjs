@@ -15,13 +15,10 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { adapt, listEnvironments } from './lib/adapter.mjs';
+import { SPEC_DIR } from './lib/validator.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const FIXTURE = resolve(
-  __dirname, '..',
-  'vendor', 'observability-pack-spec', 'v1.2',
-  'examples', 'payment-service.pack.yaml',
-);
+const FIXTURE = resolve(__dirname, '..', SPEC_DIR, 'examples', 'payment-service.pack.yaml');
 
 import { createHarness } from './lib/harness.mjs';
 const { assert, report } = createHarness();
@@ -51,11 +48,11 @@ assert(prod.meta.criticality === 'tier-1',                   'prod criticality')
 assert(prod.badge === 'TIER-1',                              'badge derived from criticality');
 
 // Layer counts (each section of the canonical example contributes a known number)
-assert(prod.layers.L1.length === 10,           'L1 = 5 SLIs + 5 SLOs', prod.layers.L1.length, 10);
+assert(prod.layers.L1.length === 12,           'L1 = 6 SLIs + 6 SLOs (the 1.3 example adds the settlement-consumers floor)', prod.layers.L1.length, 12);
 assert(prod.layers.L2.length === 24,           'L2 = 1 otel + 9 backends + 8 pipelines + 3 exporters + 3 storage', prod.layers.L2.length, 24);
 assert(prod.layers.L2X.length === 7,           'L2X = profiling + network + policy_engine + 2 mesh + 2 collection', prod.layers.L2X.length, 7);
-assert(prod.layers.L3.length === 14,           'L3 = 4 recording + 2 derived + 4 dashboards + 4 panels (expand)', prod.layers.L3.length, 14);
-assert(prod.layers.L4.policy.length === 6,    'L4.policy = 4 burn-rate + 2 forecasts', prod.layers.L4.policy.length, 6);
+assert(prod.layers.L3.length === 16,           'L3 = 5 recording + 2 derived + 4 dashboards + 5 panels (expand)', prod.layers.L3.length, 16);
+assert(prod.layers.L4.policy.length === 7,    'L4.policy = 5 burn-rate + 2 forecasts', prod.layers.L4.policy.length, 7);
 assert(prod.layers.L4.alerting.length === 3,  'L4.alerting = SEV1/SEV2/SEV3 routes', prod.layers.L4.alerting.length, 3);
 assert(prod.layers.L4.healing.length === 3,   'L4.healing = 3 remediations', prod.layers.L4.healing.length, 3);
 assert(prod.layers.L5.length === 6,           'L5 = 1 baseline + 3 chaos + 2 synthetic', prod.layers.L5.length, 6);
@@ -66,6 +63,23 @@ const sli = prod.layers.L1.find(a => a.title === 'api_availability');
 assert(sli && sli.defines === 'slis.api_availability', 'SLI defines slis.<id>', sli && sli.defines, 'slis.api_availability');
 assert(sli && sli.id === 'SLI-01',                     'SLI id pattern',         sli && sli.id, 'SLI-01');
 assert(sli && sli.source === 'Declared',               'SLI source = Declared',  sli && sli.source, 'Declared');
+// The bound with its direction as the card's subtitle (spec 1.3 good_when through good-when.mjs boundText):
+// a ratio SLI has none; a threshold SLI without good_when is a ceiling (≤); a floor prints ≥.
+assert(!('subtitle' in sli), 'a ratio SLI has no bound, no subtitle');
+const latency = prod.layers.L1.find(a => a.title === 'api_latency_p99');
+assert(latency?.subtitle === '≤ 0.5 seconds', 'a threshold SLI\'s subtitle is its bound with ≤ (absent good_when means below)', latency?.subtitle, '≤ 0.5 seconds');
+{
+  const floorPack = clone(canonical);
+  const lat = floorPack.spec.slis.find(s => s.id === 'api_latency_p99');
+  Object.assign(lat, { good_when: 'above', threshold: 2, unit: 'consumers' });
+  const floor = adapt(floorPack).layers.L1.find(a => a.title === 'api_latency_p99');
+  assert(floor?.subtitle === '≥ 2 consumers', 'a floor (good_when: above) prints ≥', floor?.subtitle, '≥ 2 consumers');
+  delete lat.unit;
+  assert(adapt(floorPack).layers.L1.find(a => a.title === 'api_latency_p99')?.subtitle === '≥ 2', 'no unit: the bare bound', adapt(floorPack).layers.L1.find(a => a.title === 'api_latency_p99')?.subtitle, '≥ 2');
+  const noBound = clone(canonical);
+  delete noBound.spec.slis.find(s => s.id === 'api_latency_p99').threshold;
+  assert(!('subtitle' in adapt(noBound).layers.L1.find(a => a.title === 'api_latency_p99')), 'no bound, no subtitle');
+}
 
 const slo = prod.layers.L1.find(a => a.title === 'api_availability_99_9');
 assert(slo && slo.defines === 'slos.api_availability_99_9',

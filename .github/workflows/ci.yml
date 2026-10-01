@@ -26,7 +26,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -71,7 +71,7 @@ jobs:
       - name: Verify vendored spec checksums
         run: npm run sync-spec:check
 
-      - name: Validate canonical example against spec v1.2 schema
+      - name: Validate canonical example against the vendored spec schema (tools/lib/validator.mjs SPEC_VERSION)
         run: npm run validate
 
       - name: Backend validation — strict (promtool / amtool / otelcol-contrib)
@@ -92,6 +92,28 @@ jobs:
         run: |
           node -e "const fs=require('fs');const html=fs.readFileSync('studio/index.html','utf8');if(!html.includes('</html>'))process.exit(1);console.log('studio html ok ('+html.length+' bytes)')"
 
+  # The Node floor. package.json engines says >=22.16.0 (node:sqlite, the
+  # embedded store — docs/STORE_PLAN.md §1), and `node-version: '22'`
+  # above resolves to the latest 22.x, which would never exercise the
+  # floor: code could lean on a later 22.x API or fix and still pass.
+  # This leg runs the suite on exactly the floor.
+  node-floor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.16.0'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test suites on the Node floor
+        run: npm test
+
   # T4 — the product-story round trip against a REAL Grafana:
   # compile → deploy-bulk (real MCP path) → fetch-live → diff → aligned.
   # Separate job: needs docker; the validate job stays fast.
@@ -103,7 +125,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -111,3 +133,33 @@ jobs:
 
       - name: Round trip vs live Grafana (strict)
         run: npm run test:backend:live:strict
+
+  # The Export gate against a REAL pre-store build (docs/STORE_PLAN.md §8):
+  # tag v0.4.0 (auth and tenancy byte-identical to develop before slice 2)
+  # in a worktree with its own npm ci, booted over HTTP on workspaces this
+  # build exported in place. The fast half runs in `npm test`
+  # (server/test-store-ops.mjs over server/fixtures/pre-store-build.mjs).
+  store-prestore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check out the pre-store build (v0.4.0)
+        run: |
+          git fetch --depth 1 origin tag v0.4.0
+          git worktree add "$RUNNER_TEMP/prestore" v0.4.0
+          cd "$RUNNER_TEMP/prestore" && npm ci
+
+      - name: Export gate vs the pre-store build (strict)
+        run: npm run test:store:prestore:strict
+        env:
+          PRESTORE_BUILD_DIR: ${{ runner.temp }}/prestore
