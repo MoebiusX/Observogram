@@ -76,10 +76,6 @@ import { getUserByLogin, setPassword, touchLogin } from './store/users.mjs';
 import {
   canonIssuer, firstSightOidc, oidcLogin, oidcSignIn, parseBootstrapAdmin, preStoreSub, sanitiseClaims,
 } from './store/identity.mjs';
-// The management rules (the self route's sign-out). identity-admin.mjs
-// imports this module too: a cycle ESM resolves because neither module
-// calls the other at load, only from functions.
-import { signOutEverywhere } from './identity-admin.mjs';
 
 const SESSION_COOKIE = 'observogram_session';
 // Sessions signed before the rebrand stay valid (same HMAC secret): read
@@ -308,12 +304,8 @@ export function resolvePwflow(req, db) {
 }
 
 // Issue the signed session cookie for a store row. Shared by the login
-// paths, the forced change, the OIDC callback and "sign out my other
-// sessions" — which passes the session's own `exp`: re-issuing a cookie at
-// a new epoch never extends it (a sign-in, or the current password, does).
-function issueSession(res, db, user, { exp = null } = {}) {
-  const now = Date.now();
-  const until = exp ?? now + sessionTtlMs();
+// paths, the forced change and the OIDC callback.
+function issueSession(res, db, user) {
   const session = {
     sub: preStoreSub(user),
     login: user.login,
@@ -321,10 +313,10 @@ function issueSession(res, db, user, { exp = null } = {}) {
     purpose: 'session',
     email: user.email || null,
     name: user.name || (user.kind === 'local' ? user.login : null),
-    iat: now,
-    exp: until,
+    iat: Date.now(),
+    exp: Date.now() + sessionTtlMs(),
   };
-  setCookie(res, SESSION_COOKIE, sign(session), Math.max(0, Math.floor((until - now) / 1000)));
+  setCookie(res, SESSION_COOKIE, sign(session), Math.floor(sessionTtlMs() / 1000));
 }
 
 // The user's live orgs, first membership first; `default: true` marks the
@@ -424,19 +416,6 @@ function registerShared(app, mode, authorize) {
       // (X-Observogram-Org) from these before the first /api call.
       orgs: orgsOf(db, s.user),
     });
-  });
-  // "Sign out my other sessions" (the account menu): a self route — the
-  // caller's own session, never the pwflow cookie; the CSRF header in
-  // every mode (selfGate, server/authz.mjs). The caller's epoch is bumped
-  // (one user.signout row, the caller its actor), so every cookie of
-  // theirs issued before is refused from its next request, and this
-  // browser's is re-issued at the new epoch with its own expiry.
-  app.post('/auth/signout-others', authorize('POST /auth/signout-others'), (req, res) => {
-    const db = currentStore();
-    const { user, session } = req.observogramSelf;
-    const { user: updated, sessionEpoch } = signOutEverywhere(db, user.login, user.login, { surface: 'api' });
-    issueSession(res, db, updated, { exp: session.exp });
-    res.json({ ok: true, sessionEpoch });
   });
 }
 

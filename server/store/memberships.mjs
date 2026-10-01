@@ -37,13 +37,6 @@ export function listMembershipsForUser(db, userId) {
     WHERE m.user_id = ? AND o.removed_at IS NULL ORDER BY m.created_at, m.rowid`).all(userId).map(rowToMembership);
 }
 
-// The admins who can act for the org: its admin memberships held by
-// enabled users (the last-admin rule, server/identity-admin.mjs).
-export function countEnabledAdmins(db, orgId) {
-  return prepare(db, `SELECT count(*) AS n FROM memberships m JOIN users u ON u.id = m.user_id
-    WHERE m.org_id = ? AND m.role = 'admin' AND u.disabled = 0`).get(orgId).n;
-}
-
 function subjects(db, orgId, userId) {
   const org = getOrg(db, orgId);
   if (!org || org.removedAt) throw notFound('org', orgId);

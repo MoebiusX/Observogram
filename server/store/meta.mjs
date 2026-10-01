@@ -26,13 +26,11 @@ function upsert(db, key, value) {
   prepare(db, 'INSERT INTO schema_meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value').run(key, value);
 }
 
-// `detail` goes on the meta.set row (the join role records { from, to });
-// null, the default, leaves the row as every other key writes it.
-export function setMeta(db, actor, key, value, { detail = null } = {}) {
+export function setMeta(db, actor, key, value) {
   checkWrite(key, value);
   return atomic(db, () => {
     upsert(db, key, value);
-    writeAudit(db, actor, { action: 'meta.set', targetKind: 'meta', targetId: key, detail });
+    writeAudit(db, actor, { action: 'meta.set', targetKind: 'meta', targetId: key });
     return value;
   });
 }

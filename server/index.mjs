@@ -69,7 +69,6 @@ import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
 import { validateMcpUrl, redactCredentials, stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
-import { identityRoutes } from './routes/identity.mjs';
 import { authGate, orgContext, authorize, effectiveRoleOf, rankOf, rankOfRole } from './authz.mjs';
 import { versionInfo } from './version.mjs';
 import { buildInfo, buildLabel } from './build-info.mjs';
@@ -751,12 +750,6 @@ app.get('/api/packs/:id/export.zip', authorize('GET /api/packs/:id/export.zip'),
 // the shaping transforms in server/deploy-helpers.mjs. The pack-registry
 // seam is injected until the registry extraction slice.
 app.use(deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readEnv, actorForRequest, contentHash, authorize }));
-
-// The identity API (STORE_PLAN slice 3b) lives in server/routes/identity.mjs:
-// the deployment's users, orgs and join role under /api/admin/* (owners),
-// the request's org — its name and its members — under /api/org* (its
-// admins), every rule server/identity-admin.mjs's — the CLIs' own.
-app.use(identityRoutes({ authorize }));
 
 // ---------- saved journeys (VALUE_BACKLOG item 11, studio surface) ----------
 

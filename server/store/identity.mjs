@@ -219,13 +219,11 @@ export function createOidcUser(db, { issuerKey, issuerDisplay, sub, email = null
   });
 }
 
-const GRANT_ACTIONS = ['owner.bootstrap', 'owner.first-local-user', 'owner.grant'];
+const GRANT_ACTIONS = ['owner.bootstrap', 'owner.first-local-user'];
 
 // Makes the user an owner and an admin of the default org (added, or a
 // viewer/operator membership raised), writing ONE row of `action` — no
-// user.owner.grant or membership.* rows. The row's `from` is the default
-// org's role before the grant (null when the membership was added), read
-// before it is raised: what a later revoke leaves behind is on record.
+// user.owner.grant or membership.* rows.
 export function grantOwner(db, actor, userId, { action, via, match = null }) {
   if (!GRANT_ACTIONS.includes(action)) throw new TypeError(`observogram store: an owner grant is one of ${GRANT_ACTIONS.join(', ')}, not ${JSON.stringify(action)}`);
   return atomic(db, () => {
@@ -233,30 +231,12 @@ export function grantOwner(db, actor, userId, { action, via, match = null }) {
     if (!found) throw new Error(`observogram store: no user ${JSON.stringify(userId)}`);
     const org = defaultOrgId(db);
     if (!liveOrg(db, org)) throw new Error(`observogram store: the default org ${JSON.stringify(org)} is not live`);
-    const current = getMembership(db, org, userId);
-    const from = current ? current.role : null;
     const user = setOwnerRow(db, userId, true);
+    const current = getMembership(db, org, userId);
     let membership = 'kept';
     if (!current) { insertMembershipRow(db, { orgId: org, userId, role: 'admin' }); membership = 'added'; }
     else if (current.role !== 'admin') { setRoleRow(db, org, userId, 'admin'); membership = 'raised'; }
-    writeAudit(db, actor, { action, targetKind: 'user', targetId: user.login, detail: { via, match, org, membership, from } });
-    return user;
-  });
-}
-
-// The twin of owner.grant: the owner flag cleared and ONE owner.revoke row
-// (detail: via, the default org and the role the user keeps there — null
-// without a membership). No membership changes: the default org's admin
-// membership a grant gave stays until someone changes it. Like grantOwner
-// it writes its row whatever the flag was: the caller skips a no-op.
-export function revokeOwner(db, actor, userId, { via }) {
-  return atomic(db, () => {
-    const found = getUser(db, userId);
-    if (!found) throw new Error(`observogram store: no user ${JSON.stringify(userId)}`);
-    const org = defaultOrgId(db);
-    const user = setOwnerRow(db, userId, false);
-    const role = getMembership(db, org, userId)?.role ?? null;
-    writeAudit(db, actor, { action: 'owner.revoke', targetKind: 'user', targetId: user.login, detail: { via, org, role } });
+    writeAudit(db, actor, { action, targetKind: 'user', targetId: user.login, detail: { via, match, org, membership } });
     return user;
   });
 }

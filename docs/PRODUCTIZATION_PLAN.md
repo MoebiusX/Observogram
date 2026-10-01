@@ -172,10 +172,9 @@ enforced server-side, not hidden client-side.
 > **Stage 3 status — re-planned 2026-09-24** on the embedded store:
 > roles, the deployment-level owner and the route table in
 > [STORE_PLAN.md](STORE_PLAN.md) §5 / slice 3; org-scoped MCP endpoints
-> in slice 4. *Delivered on the store (STORE_PLAN slice 3): roles per org
-> enforced through one route table (`server/route-table.mjs`), the
-> deployment-level owner, the identity API (users, orgs, members, the join
-> role), sign-out everywhere; org-scoped MCP endpoints follow in slice 4.*
+> in slice 4. *In delivery on the store (STORE_PLAN slice 3): roles per
+> org enforced through one route table (`server/route-table.mjs`); the
+> identity API follows in 3b.*
 
 - **Roles per org:** `viewer` (read everything), `operator` (+ crawl /
   draft / register / deploy / retrofeed), `admin` (+ org settings,

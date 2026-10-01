@@ -41,15 +41,6 @@ export function listUsers(db) {
   return prepare(db, 'SELECT * FROM users ORDER BY id').all().map(rowToUser);
 }
 
-// The users whose sign-in verified this email (compared case-insensitively),
-// by id: the enabled ones, or with includeDisabled every one — the second
-// read lets a refusal say that the only match is disabled.
-export function listUsersByVerifiedEmail(db, email, { includeDisabled = false } = {}) {
-  if (typeof email !== 'string') throw new TypeError('observogram store: an email is a string');
-  return prepare(db, `SELECT * FROM users WHERE email_verified = 1 AND lower(email) = lower(:email)
-    AND (:all = 1 OR disabled = 0) ORDER BY id`).all({ email, all: bit(includeDisabled) }).map(rowToUser);
-}
-
 function mustGet(db, id) {
   const user = getUser(db, id);
   if (!user) throw notFound('user', id);

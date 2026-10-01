@@ -221,11 +221,8 @@ function hostOf(value) {
   return { name: m[1].replace(/^\[|\]$/g, ''), port: m[2] ?? null };
 }
 const LOOPBACK_V4 = /^127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
-// The headers a proxy adds: Forwarded, Via, every X-Forwarded-* and
-// X-Original-Forwarded-*, X-Real-IP, and the client-IP headers a CDN or a
-// tunnel adds instead of X-Forwarded-For (CF-Connecting-IP, True-Client-IP,
-// X-Client-IP, X-Cluster-Client-IP, Fastly-Client-IP, X-Azure-ClientIP).
-const PROXY_HEADER = /^(?:forwarded|via|x-real-ip|x-forwarded-.*|x-original-forwarded-.*|cf-connecting-ip(?:v6)?|[a-z0-9-]*client-?ip)$/i;
+// The headers a proxy adds: Forwarded, Via, every X-Forwarded-*, X-Real-IP.
+const PROXY_HEADER = /^(?:forwarded|via|x-real-ip|x-forwarded-.*)$/i;
 
 // A request sent straight to a loopback address (the open postures'
 // identity API, STORE_PLAN §5): Host names localhost, 127.x.x.x or [::1];
@@ -301,7 +298,7 @@ export function authzDecision(entry, ctx) {
   }
   // 2. Without sign-in, the identity API answers a person at this machine only.
   if (open && entry.identityApi && !ctx.direct) {
-    return deny(403, 'posture', `on a server without sign-in the identity API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:${ctx.port ?? '<port>'}, or use the CLIs from this machine (npm run users -- add <login>, passwd <login>, owner <login>)`);
+    return deny(403, 'posture', `on a server without sign-in the identity API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / Via / X-Forwarded-* / X-Real-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:${ctx.port ?? '<port>'}, or use the CLIs from this machine (npm run users -- add <login>, passwd <login>, owner <login>)`);
   }
   // 3. Identity changes carry the CSRF header from every principal but the bearer.
   if (entry.csrf === 'always' && p.kind !== 'bearer' && !ctx.csrf) return deny(403, 'csrf', CSRF_ALWAYS_TEXT);

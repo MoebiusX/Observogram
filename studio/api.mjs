@@ -73,16 +73,6 @@ export function deniedError(status, body) {
   return err;
 }
 
-// What the account menu says after "sign out my other sessions" (POST
-// /auth/signout-others): done, or the server's refusal as it words it —
-// `${status}: ${error}`, as deniedError() does. `body` is the parsed answer
-// or null; status 0 is no answer at all (`body.error` the network's).
-export function signOutOthersText(status, body) {
-  if (status === 200 && body?.ok === true) return 'other sessions signed out';
-  if (body?.error) return status ? `${status}: ${body.error}` : String(body.error);
-  return status ? `${status}: the other sessions were not signed out` : 'the other sessions were not signed out — the server did not answer';
-}
-
 // A deploy-bulk answer that is no deploy result — the guard's denial, or
 // the route's own refusal (an unknown pack, a bad URL, strict snapshot
 // mode) — as the Error the deploy modal shows: the server's text, as
