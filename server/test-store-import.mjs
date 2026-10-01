@@ -287,7 +287,7 @@ test('migrateFlatWorkspace: a corrupt orgs.json fails naming its path before any
 
 // ---------- commit 4: the Import gate ----------
 
-const { applyImport, formatReplace, formatReport, planImport, projectedMigration, readLegacy } = await import('./store/import.mjs');
+const { applyImport, formatReport, planImport, projectedMigration, readLegacy } = await import('./store/import.mjs');
 const users = await import('./store/users.mjs');
 const orgsRepo = await import('./store/orgs.mjs');
 const membershipsRepo = await import('./store/memberships.mjs');
@@ -640,33 +640,10 @@ test('Import: unknown and messy roles map without refusing — owner, Admin, \' 
     ]);
     assert.deepEqual(report.memberships.viewers, [{ org: 'acme', key: 'c' }]);
     const mapped = formatReport(report).find((l) => l.startsWith('[store]   roles mapped:'));
-    assert.ok(mapped.includes("acme/c ' Viewer ' → viewer (read-only: roles are enforced)"), mapped);
+    assert.ok(mapped.includes("acme/c ' Viewer ' → viewer (loses write power when roles are enforced)"), mapped);
   } finally {
     close();
   }
-});
-
-test('Import: the viewers line and the replace report say roles are enforced (read-only)', async () => {
-  const base = workspace({
-    users: { users: { a: { password: PW }, v: { password: PW } } },
-    orgs: { acme: { members: { a: 'admin', v: 'viewer' } } },
-  });
-  const ctx = contextFor(base);
-  const { db, close } = await storeFor(ctx);
-  try {
-    const { report } = runImport(db, ctx);
-    assert.ok(formatReport(report).includes('[store]   viewers (read-only: roles are enforced): acme/v'), formatReport(report).join('\n'));
-  } finally {
-    close();
-  }
-  // The replace report's roles-mapped line (formatReplace), over a minimal report.
-  const none = { created: [], updated: [], enabled: [], disabled: [], renamed: [], removed: [], added: [], changed: [], dropped: [], conflicts: [], droppedFields: [] };
-  const lines = formatReplace({
-    files: { users: { present: false }, orgs: { present: true, path: 'orgs.json', entries: 1 } }, dbPath: 'observogram.db', storeId: 's',
-    users: none, orgs: none, memberships: { ...none, inexact: [{ org: 'acme', key: 'c', from: 'read-only', to: 'viewer' }] },
-    migration: { moved: [], leftBehind: [] }, rootChanged: false, journeys: [], leftovers: [], sessionsEnded: [],
-  });
-  assert.ok(lines.includes("[store]   roles mapped: acme/c 'read-only' → viewer (read-only: roles are enforced)"), lines.join('\n'));
 });
 
 test('Import: an orgs.json of {} — default at orgs/default (A-5)', async () => {

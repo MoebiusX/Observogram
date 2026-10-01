@@ -42,7 +42,6 @@ const {
   resetWorkspaceCache, workspaceInfo,
   appendDeployRecord, appendDeployVerify, readDeployRecords,
   saveDeploySnapshot, readDeploySnapshot,
-  livePackPath, writeLivePack, readLivePack,
 } = await import('./workspace.mjs');
 const { openStore } = await import('./store/db.mjs');
 const { createOrg } = await import('./store/orgs.mjs');
@@ -239,15 +238,6 @@ try {
   assert(dropped >= 2, 'clear reports dropped pack files', dropped, '>=2');
   assert(loadWorkspacePacks().length === 0, 'workspace is empty after clear');
   assert(readDeployRecords().length === 2, 'deploy audit survives a registry clear — reset is not amnesia');
-
-  // --- the org's live pack: <org root>/live/, replaced atomically ---
-  assert(readLivePack() === null, 'readLivePack: null before the first refresh');
-  assert(livePackPath() === join(TMP, 'live', 'production-live.pack.yaml'), 'livePackPath: <org root>/live/production-live.pack.yaml', livePackPath());
-  writeLivePack('kind: ObservabilityPack\nmetadata:\n  name: one\n');
-  writeLivePack('kind: ObservabilityPack\nmetadata:\n  name: two\n');
-  assert(readLivePack() === 'kind: ObservabilityPack\nmetadata:\n  name: two\n', 'writeLivePack replaces the live pack; readLivePack reads it back');
-  assert(JSON.stringify(readdirSync(join(TMP, 'live'))) === JSON.stringify(['production-live.pack.yaml']), 'writeLivePack leaves no .tmp file behind', readdirSync(join(TMP, 'live')));
-  assert(clearWorkspacePacks() === 0 && readLivePack() !== null, 'a registry clear (RESET) keeps the live pack');
 
   // --- cache reset honors a re-pointed workspace ---
   const TMP2 = mkdtempSync(join(tmpdir(), 'observogram-ws2-'));

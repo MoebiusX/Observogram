@@ -337,20 +337,13 @@ async function bootBlock(ws, { env = {} } = {}) {
   try {
     let r = await fetch(`${booted.root}/api/orgs`, { headers: { Cookie: preUpgradeCookie({ sub: 'user-42' }) } });
     const j = await r.json();
-    assert(r.status === 200 && JSON.stringify(j.orgs) === JSON.stringify([{ id: 'acme', name: 'Acme', role: 'viewer', effectiveRole: 'viewer' }]),
+    assert(r.status === 200 && JSON.stringify(j.orgs) === JSON.stringify([{ id: 'acme', name: 'Acme', role: 'viewer' }]),
       "boot 2: user-42's pre-upgrade cookie → /api/orgs [acme, viewer]", j.orgs);
     const got = await signIn(booted.root, DEFAULT_CLAIMS);
     assert(got.status === 302 && listUsers(currentStore()).filter(u => u.sub === 'user-42').length === 1,
       'boot 2: a fresh sign-in reuses the single user-42 row (no duplicate login)', got.status);
     r = await fetch(`${booted.root}/api/packs`, { headers: { Cookie: got.session } });
     assert(r.status === 200 && r.headers.get('x-observogram-org') === 'acme', 'boot 2: the signed-in user-42 lands in acme', r.status, 200);
-    // Roles are enforced: user-42 is a viewer of acme — every read, no write.
-    r = await fetch(`${booted.root}/api/validate`, {
-      method: 'POST', headers: { Cookie: got.session, 'X-Observogram-CSRF': '1', 'Content-Type': 'application/json', Accept: 'application/json' }, body: '{}',
-    });
-    const denied = await r.json().catch(() => ({}));
-    assert(r.status === 403 && denied.denied === 'role' && /requires the operator role in org 'acme' \(you are viewer\)/.test(denied.error || ''),
-      'boot 2: user-42 (acme viewer) POST /api/validate → 403 role, naming viewer and operator', [r.status, denied]);
   } finally {
     process.env.OBSERVOGRAM_OIDC_ISSUER = issuer;
     if (booted?.srv) await new Promise(res => booted.srv.close(res));

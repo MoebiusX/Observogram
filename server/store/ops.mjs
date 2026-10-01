@@ -41,7 +41,7 @@
 //   0. users.json / orgs.json, where it writes them, are as the store last
 //      imported or exported them (a file a pre-store build edited since
 //      is refused naming `import --replace`, never overwritten);
-//   1. dry run: no ORG_ENTRIES entry present at the base has an
+//   1. dry run: no MIGRATABLE entry present at the base has an
 //      orgs/default/ twin (refused listing every conflict), and every
 //      journey whose file: paths it rewrites still parses;
 //   2. rename each entry into orgs/default/;
@@ -71,7 +71,7 @@ import { listMembers } from './memberships.mjs';
 import { disableOidcRows, listUsers, rewriteLoginPrefix } from './users.mjs';
 import { CLI, canonIssuer, preStoreSub } from './identity.mjs';
 import {
-  ORG_ENTRIES, lexists, markerPath, orgsFilePath, readMarker, sha256File, usersHashKey, writeMarker, writeOrgsFile, writeUsersFile,
+  MIGRATABLE, lexists, markerPath, orgsFilePath, readMarker, sha256File, usersHashKey, writeMarker, writeOrgsFile, writeUsersFile,
 } from './legacy-files.mjs';
 
 const MEMORY = ':memory:';
@@ -239,7 +239,7 @@ export function planExport(db, { inPlace, target, base }) {
     if (atRoot.id !== 'default') {
       throw refuse(`org ${atRoot.id} keeps the workspace root, but only the default org "default" can move to ${DEFAULT_MOVED} — nothing was changed`);
     }
-    move = ORG_ENTRIES.filter((entry) => lexists(join(base, entry)));
+    move = MIGRATABLE.filter((entry) => lexists(join(base, entry)));
     const conflicts = move.filter((entry) => lexists(join(base, DEFAULT_MOVED, entry)));
     if (conflicts.length) {
       throw refuse(`the default org's entries must move to ${join(base, DEFAULT_MOVED)} for a pre-store build, but it already holds `

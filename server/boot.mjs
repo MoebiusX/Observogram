@@ -55,7 +55,7 @@ import {
   applyImport, applyReplace, formatReplace, formatReport, planImport, planReplace, projectedMigration, readLegacy, unreadDefaultText,
 } from './store/import.mjs';
 import {
-  compareHashes, hasData, legacyUsersPath, lexists, markerPath, ORG_ENTRIES, orgsFilePath, readMarker, sha256File, writeMarker,
+  compareHashes, hasData, legacyUsersPath, lexists, markerPath, MIGRATABLE, orgsFilePath, readMarker, sha256File, writeMarker,
 } from './store/legacy-files.mjs';
 
 // ---------- the refusal ----------
@@ -627,7 +627,7 @@ export function leftoverWarning(path, code) {
 export function removeEmptyLeftovers(db, ctx, log, warn, { kept = [] } = {}) {
   if (ctx.memory || listOrgs(db).some((o) => o.root === '.')) return;
   const removed = [];
-  for (const entry of ORG_ENTRIES) {
+  for (const entry of MIGRATABLE) {
     const path = join(ctx.base, entry);
     if (kept.includes(path)) continue;
     try {
@@ -651,7 +651,7 @@ export function warnLeftBehind(db, ctx, warn) {
   const moved = join(ctx.base, 'orgs', 'default');
   const movedUnread = !live.some((o) => o.root === 'orgs/default') && hasData(moved);
   if (!atBase) {
-    for (const entry of ORG_ENTRIES) {
+    for (const entry of MIGRATABLE) {
       const path = join(ctx.base, entry);
       if (!hasData(path)) continue;
       // :memory: over a half-migrated workspace: a file-store start would

@@ -25,10 +25,6 @@
  *    fixtures import server/store/legacy-files.mjs — nothing else reads
  *    users.json or orgs.json.
  *
- * 5. The route table (slice 3): server/route-table.mjs is pure data — it
- *    imports nothing — and only server/authz.mjs, the route-inventory
- *    fixture and the suites import it.
- *
  * The matchers are tested on known-good and known-bad snippets first, so
  * the guard cannot pass by matching nothing.
  */
@@ -166,32 +162,4 @@ test('only the boot, the migration, the store import/ops/cli, the suites and fix
   assert.ok(importers.includes('server/boot.mjs') && importers.includes('server/store/import.mjs'), `found the importers (${importers.join(', ')})`);
   const offenders = importers.filter((f) => !LEGACY_FILES_IMPORTERS.some((re) => re.test(f)));
   assert.deepEqual(offenders, [], 'nothing else reads users.json or orgs.json after the switch');
-});
-
-// ---------- 5. the route table ----------
-
-const NAMES_ROUTE_TABLE = /route-table\.mjs['"`]/;
-const ANY_IMPORT = /(?:^|[\s;])(?:import\b\s*(?:[\w{*]|['"`]|\()|export\s*(?:\*|\{[^}]*\})\s*from\b)/m;
-const ROUTE_TABLE_IMPORTERS = [/^server\/authz\.mjs$/, /^server\/fixtures\/route-inventory\.mjs$/, /^server\/test-[^/]*\.mjs$/];
-
-test('the route-table matchers flag what they must and pass what they must', () => {
-  for (const bad of ["import { ROUTES } from './route-table.mjs';", "const t = await import('../route-table.mjs');"]) {
-    assert.ok(NAMES_ROUTE_TABLE.test(withoutComments(bad)), bad);
-  }
-  assert.ok(!NAMES_ROUTE_TABLE.test(withoutComments('// server/route-table.mjs classifies it')), 'a comment is not an import');
-  for (const bad of ["import { a } from './x.mjs';", "import './x.mjs';", "const m = await import('node:fs');", "export { b } from './y.mjs';", "export * from './z.mjs';"]) {
-    assert.ok(ANY_IMPORT.test(bad), bad);
-  }
-  for (const good of ["export const ROUTES = Object.freeze({ 'GET /api/packs': { class: 'viewer' } });", "// import nothing", "const important = 1;"]) {
-    assert.ok(!ANY_IMPORT.test(withoutComments(good)), good);
-  }
-});
-
-test('server/route-table.mjs imports nothing, and only authz, the inventory fixture and the suites import it', () => {
-  assert.ok(!ANY_IMPORT.test(withoutComments(readFileSync(join(ROOT, 'server', 'route-table.mjs'), 'utf8'))), 'the route table is pure data');
-  const files = sourceFiles().filter((f) => f !== 'server/route-table.mjs' && f !== SELF);
-  const importers = files.filter((f) => NAMES_ROUTE_TABLE.test(withoutComments(readFileSync(join(ROOT, f), 'utf8'))));
-  assert.ok(importers.includes('server/authz.mjs'), `found the importers (${importers.join(', ')})`);
-  const offenders = importers.filter((f) => !ROUTE_TABLE_IMPORTERS.some((re) => re.test(f)));
-  assert.deepEqual(offenders, [], 'the table is read through server/authz.mjs');
 });

@@ -32,11 +32,11 @@ import {
 import { createMcpClient } from '../../tools/fetch-live-pack.mjs';
 import { compile, compileArtifact } from '../../tools/lib/compile.mjs';
 
-export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readEnv, actorForRequest, contentHash, authorize }) {
+export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readEnv, actorForRequest, contentHash }) {
   // Case-sensitive like the app (server/index.mjs): a nested router does not inherit the app's setting.
   const router = express.Router({ caseSensitive: true });
 
-  router.get('/api/deploy/matrix', authorize('GET /api/deploy/matrix'), (req, res) => {
+  router.get('/api/deploy/matrix', (req, res) => {
     // Surface the deployable targets + products + versions so the client
     // can drive the UI from one source of truth.
     res.json({
@@ -72,7 +72,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
   // GET /api/deploys — the audit trail (VALUE_BACKLOG 10C). Newest first;
   // ?pack=<id> filters, ?limit=N caps (default 50). Records include the
   // post-deploy verify outcome once item 9 writes it back.
-  router.get('/api/deploys', authorize('GET /api/deploys'), (req, res) => {
+  router.get('/api/deploys', (req, res) => {
     const packId = typeof req.query.pack === 'string' && req.query.pack ? req.query.pack : undefined;
     const limit = Math.max(1, Math.min(500, parseInt(req.query.limit, 10) || 50));
     try {
@@ -87,7 +87,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
   // own record and merged at read time; the original deploy line is never
   // rewritten. A verify outcome is read-path evidence — "deployed" stays
   // distinct from "verified live" (Phase 1 language contract).
-  router.post('/api/deploys/:deployId/verify', authorize('POST /api/deploys/:deployId/verify'), (req, res) => {
+  router.post('/api/deploys/:deployId/verify', (req, res) => {
     const deployId = String(req.params.deployId || '');
     if (!/^dep_[A-Za-z0-9_-]+$/.test(deployId)) {
       return res.status(400).json({ ok: false, error: 'malformed deployId' });
@@ -113,7 +113,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
 
   // GET /api/deploys/:deployId/rollback-plan — what a rollback WOULD do
   // (10D). No MCP contact: derived from the snapshot taken at deploy time.
-  router.get('/api/deploys/:deployId/rollback-plan', authorize('GET /api/deploys/:deployId/rollback-plan'), (req, res) => {
+  router.get('/api/deploys/:deployId/rollback-plan', (req, res) => {
     const deployId = String(req.params.deployId || '');
     if (!/^dep_[A-Za-z0-9_-]+$/.test(deployId)) return res.status(400).json({ ok: false, error: 'malformed deployId' });
     const snap = readDeploySnapshot(deployId);
@@ -135,7 +135,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
   // write tools; creates need delete tools the MCP doesn't expose yet and are
   // returned as manual steps with exact identities. The rollback is itself a
   // deploy-shaped act and lands in the audit log with `rollbackOf`.
-  router.post('/api/deploys/:deployId/rollback', authorize('POST /api/deploys/:deployId/rollback'), async (req, res) => {
+  router.post('/api/deploys/:deployId/rollback', async (req, res) => {
     const rollbackOf = String(req.params.deployId || '');
     if (!/^dep_[A-Za-z0-9_-]+$/.test(rollbackOf)) return res.status(400).json({ ok: false, error: 'malformed deployId' });
     const original = readDeployRecords({ limit: 0 }).find(d => d.deployId === rollbackOf);
@@ -248,7 +248,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
   // Returns per-item ok/error so the UI can show partial success
   // instead of failing the whole batch.
   // ----------------------------------------------------------------
-  router.post('/api/packs/:id/deploy-bulk', authorize('POST /api/packs/:id/deploy-bulk'), async (req, res) => {
+  router.post('/api/packs/:id/deploy-bulk', async (req, res) => {
     const meta = findPackMeta(req.params.id);
     if (!meta) return res.status(404).json({ ok: false, error: `unknown pack: ${req.params.id}` });
     const body = req.body || {};
@@ -423,7 +423,7 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
     });
   });
 
-  router.post('/api/packs/:id/deploy/:target', authorize('POST /api/packs/:id/deploy/:target'), async (req, res) => {
+  router.post('/api/packs/:id/deploy/:target', async (req, res) => {
     const meta = findPackMeta(req.params.id);
     if (!meta) return res.status(404).json({ ok: false, error: `unknown pack: ${req.params.id}` });
 

@@ -146,30 +146,22 @@ function apiRoutes() {
   return [...new Set(out)];
 }
 
-// The catalogue and the stateless routes. (The live pack is per org since
-// STORE_PLAN slice 3: its two routes are org-scoped below.)
+// The catalogue and the stateless routes, and the live pack (deployment-
+// wide until slice 3 moves it per org).
 const DEPLOYMENT_GLOBAL = new Set([
   'GET /api/version', 'GET /api/orgs', 'GET /api/examples', 'GET /api/references', 'GET /api/library',
   'GET /api/library/:id', 'GET /api/library/requirements/:tier', 'POST /api/library/instantiate',
   'POST /api/library/compile', 'GET /api/maturity-rubric', 'GET /api/compile/targets', 'GET /api/deploy/matrix',
+  'POST /api/refresh-live', 'GET /api/live-status',
 ]);
 
 // alice, in `org`, creates the objects the sweep addresses: a registered
-// pack, a deploy with a snapshot against the fake MCP, a verify on it, a
-// journey captured and run once, and the org's live pack (planted; the
-// route's own write into a created org is the default-at-'.' block's).
+// pack, a deploy with a snapshot against the fake MCP, a verify on it, and
+// a journey captured and run once.
 async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   const h = { Cookie: cookie, 'X-Observogram-CSRF': '1', 'X-Observogram-Org': org };
-  mkdirSync(join(dir, 'live'), { recursive: true });
-  writeFileSync(join(dir, 'live', 'production-live.pack.yaml'), [
-    'apiVersion: observability.pack/v1', 'kind: ObservabilityPack', 'metadata:', `  name: ${org}-live`, '  annotations:',
-    `    mcp.refreshedAt: "2026-06-06T00:00:00Z"`, `    mcp.url: "https://${org}.mcp.test/observability"`, 'spec: {}', '',
-  ].join('\n'));
-  let r = await fetch(`${root}/api/live-status`, { headers: h });
+  let r = await fetch(`${root}/api/validate?source=pay.yaml`, { method: 'POST', headers: { ...h, 'Content-Type': 'text/yaml' }, body: PAY_YAML });
   let j = await r.json();
-  assert(j.present === true && j.url === `https://${org}.mcp.test/observability`, `alice reads ${org}'s live pack`, j);
-  r = await fetch(`${root}/api/validate?source=pay.yaml`, { method: 'POST', headers: { ...h, 'Content-Type': 'text/yaml' }, body: PAY_YAML });
-  j = await r.json();
   const packId = j.registered?.id;
   assert(!!packId && existsSync(join(dir, 'packs', `${packId}.pack.yaml`)), `alice registers a pack into ${org}`, j.registered);
   r = await fetch(`${root}/api/packs/${packId}/deploy-bulk`, {
@@ -248,10 +240,6 @@ async function sweep({ root, cookie, who, ids, mcp, dir }) {
     'POST /api/crawl-github': ['/api/crawl-github', {}, () => {}],
     'POST /api/draft-from-mcp': ['/api/draft-from-mcp', {}, () => {}],
     'POST /api/library/register': ['/api/library/register', {}, () => {}],
-    // The live pack is the org's own: the other org's is never read, and a
-    // refresh (here refused before any fetch) could only write the caller's.
-    'GET /api/live-status': ['/api/live-status', undefined, (r) => assert(r.status === 200 && r.json.present === false, `${who}: GET /api/live-status does not read the other org's live pack`, r.json)],
-    'POST /api/refresh-live': ['/api/refresh-live', {}, (r) => assert(r.status === 400, `${who}: POST /api/refresh-live {} → 400`, r.status, 400)],
     'DELETE /api/uploads': ['/api/uploads', undefined, (r) => assert(r.status === 200, `${who}: DELETE /api/uploads clears only the caller's org`, r.status, 200)],
   };
   const before = tree(dir);
@@ -595,28 +583,6 @@ try {
     j = await r.json();
     assert(!j.journeys.some(x => x.name === ids.journey), "carlos's /api/journeys in default never lists delta's journey");
     await sweep({ root: base4, cookie: carlos, who: 'carlos (default at .)', ids, mcp, dir: deltaDir });
-
-    // The refresh writes the caller's org's live pack — orgs/delta/live/ —
-    // and never the default org's at the base (whose root contains delta's).
-    const deltaLive = join(deltaDir, 'live', 'production-live.pack.yaml');
-    const baseLive = join(WS4, 'live', 'production-live.pack.yaml');
-    const liveUrl = `${mcp.url}?from=delta`;
-    r = await fetch(`${base4}/api/refresh-live`, {
-      method: 'POST',
-      headers: { Cookie: alice, 'X-Observogram-CSRF': '1', 'X-Observogram-Org': 'delta', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mcpUrl: liveUrl }),
-    });
-    j = await r.json();
-    assert(r.status === 200 && j.ok === true && j.annotations?.['mcp.url'] === liveUrl, 'alice refreshes the live pack in delta', [r.status, j.error]);
-    assert(existsSync(deltaLive) && readFileSync(deltaLive, 'utf8').includes(liveUrl),
-      "the refresh wrote orgs/delta/live/production-live.pack.yaml (its mcp.url is the refresh's)", existsSync(deltaLive) ? readFileSync(deltaLive, 'utf8').slice(0, 300) : 'absent');
-    assert(!existsSync(baseLive), "delta's refresh wrote no live pack for the default org at the base", baseLive);
-    r = await fetch(`${base4}/api/live-status`, { headers: { Cookie: alice, 'X-Observogram-Org': 'delta' } });
-    j = await r.json();
-    assert(j.present === true && j.url === liveUrl, "alice's live-status in delta reads the refreshed pack", [j.present, j.url]);
-    r = await fetch(`${base4}/api/live-status`, { headers: { Cookie: carlos } });
-    j = await r.json();
-    assert(r.headers.get('x-observogram-org') === 'default' && j.present === false, "carlos's live-status in default: still no live pack", [r.headers.get('x-observogram-org'), j.present]);
   } finally {
     await new Promise(res => srv4.close(res));
     rmSync(WS4, { recursive: true, force: true });

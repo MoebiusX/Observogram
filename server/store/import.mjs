@@ -405,10 +405,10 @@ export function formatReport(r) {
   if (r.migration.leftBehind.length) out.push(`[store]   left behind (orgs/default/ already has them; neither moved nor merged): ${r.migration.leftBehind.join(', ')}`);
   if (r.users.disabled.length) out.push(`[store]   users-file users imported disabled (OIDC is configured): ${r.users.disabled.join(', ')}`);
   if (r.memberships.inexact.length) {
-    out.push(`[store]   roles mapped: ${r.memberships.inexact.map((m) => `${m.org}/${m.key} ${q(m.from)} → ${m.to}${m.to === 'viewer' ? ' (read-only: roles are enforced)' : ''}`).join(' · ')}`);
+    out.push(`[store]   roles mapped: ${r.memberships.inexact.map((m) => `${m.org}/${m.key} ${q(m.from)} → ${m.to}${m.to === 'viewer' ? ' (loses write power when roles are enforced)' : ''}`).join(' · ')}`);
   }
   const exactViewers = r.memberships.viewers.filter((v) => !r.memberships.inexact.some((m) => m.org === v.org && m.key === v.key));
-  if (exactViewers.length) out.push(`[store]   viewers (read-only: roles are enforced): ${exactViewers.map((v) => `${v.org}/${v.key}`).join(' · ')}`);
+  if (exactViewers.length) out.push(`[store]   viewers (lose write power when roles are enforced): ${exactViewers.map((v) => `${v.org}/${v.key}`).join(' · ')}`);
   const dropped = [
     ...r.orgs.dropped.map((d) => `org ${d.id} (${d.reason})`),
     ...r.memberships.dropped.map((d) => `member ${d.org}/${d.key} (${d.reason})`),
@@ -828,7 +828,7 @@ export function formatReplace(r) {
   if (r.leftovers.length) out.push(`[store]   removed empty leftovers of a pre-store build: ${r.leftovers.join(', ')}`);
   if (r.sessionsEnded.length) out.push(`[store]   sessions ended (changed or disabled): ${r.sessionsEnded.join(', ')}`);
   if (r.memberships.inexact.length) {
-    out.push(`[store]   roles mapped: ${r.memberships.inexact.map((m) => `${m.org}/${m.key} ${q(m.from)} → ${m.to}${m.to === 'viewer' ? ' (read-only: roles are enforced)' : ''}`).join(' · ')}`);
+    out.push(`[store]   roles mapped: ${r.memberships.inexact.map((m) => `${m.org}/${m.key} ${q(m.from)} → ${m.to}${m.to === 'viewer' ? ' (loses write power when roles are enforced)' : ''}`).join(' · ')}`);
   }
   const dropped = [
     ...r.orgs.dropped.map((d) => `org ${d.id} (${d.reason})`),

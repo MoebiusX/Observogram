@@ -53,7 +53,7 @@ import { api } from './api.mjs';
 import { escapeHtml, toast } from './util.mjs';
 import { host as appHost } from './host.mjs';
 import {
-  renderCaptureBar, renderJourneyCards, CHECK_OUTCOMES, checkOutcome, DELIVERY_OUTCOMES, runResultText, runErrorText, runAllText,
+  renderCaptureBar, renderJourneyCards, CHECK_OUTCOMES, checkOutcome, DELIVERY_OUTCOMES, runResultText, runErrorText,
 } from './journeys-view.mjs';
 import {
   decisionHeaderHtml, wireUxActions, emptyStateHtml, disclosureHtml, termHtml, announce, plural, listSentence,
@@ -1085,7 +1085,6 @@ async function runJourneys(names, { container, host, btn = null }) {
   container.querySelectorAll('#nrn-run-now, #nrn-run-all, .nrn-run-focus').forEach((b) => { b.disabled = true; });
   btn?.setAttribute('aria-busy', 'true');
   const tally = { pass: 0, 'gate-failed': 0, 'vantage-lost': 0, error: 0 };
-  const failures = [];
   for (const [i, name] of names.entries()) {
     if (btn) btn.textContent = names.length > 1 ? `Running ${i + 1} of ${names.length}…` : 'Running…';
     announce(names.length > 1 ? `Running ${i + 1} of ${names.length}: ${name}…` : `Running ${name}…`);
@@ -1096,11 +1095,18 @@ async function runJourneys(names, { container, host, btn = null }) {
       if (names.length === 1) toast(runResultText(name, rec), rec.outcome === 'pass' && rec.notify?.status !== 'failed' ? '' : 'error');
     } catch (err) {
       tally.error += 1;
-      failures.push({ name, message: err?.message || String(err) });
       if (names.length === 1) toast(runErrorText(name, err), 'error');
     }
   }
-  if (names.length > 1) toast(runAllText(names, tally, failures), tally.pass === names.length ? '' : 'error');
+  if (names.length > 1) {
+    const summary = listSentence([
+      tally.pass && `${tally.pass} passed`,
+      tally['gate-failed'] && `${tally['gate-failed']} failed`,
+      tally['vantage-lost'] && `${tally['vantage-lost']} unable to observe`,
+      tally.error && `${tally.error} did not finish`,
+    ]);
+    toast(`Ran ${plural(names.length, 'journey')}: ${summary}.`, tally.pass === names.length ? '' : 'error');
+  }
   await refreshNeuron(container, host);
 }
 

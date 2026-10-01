@@ -19,15 +19,6 @@ examples/production-live.pack.yaml
 That file is runtime evidence, not a committed fixture. Upload it through the
 studio or generate it locally when you need a live Pack B.
 
-The studio's own live pack — the LIVE badge — is per org: the MCP panel's
-refresh (`POST /api/refresh-live`) writes the active org's
-`<org root>/live/production-live.pack.yaml`, and `GET /api/live-status`
-reads it. `OUTPUT=<org root>/live/production-live.pack.yaml npm run fetch-live`
-writes the same file from the CLI. The MCP URL is stored without userinfo,
-fragment or credential query parameters (`token`, `api_key`, …); a token goes
-in the auth field (`mcpAuth`; `MCP_AUTH` for the CLI), sent as a header and
-never stored — never in the URL's path.
-
 The studio can also call the same flow through `POST /api/draft-from-mcp`.
 Successful drafts are registered in memory and become selectable as Pack B.
 

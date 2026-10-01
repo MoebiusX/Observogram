@@ -8,7 +8,6 @@
 import { state } from './state.mjs';
 import { focusedPack, focusedPackId, focusedEnv, effectiveFocus } from './focus.mjs';
 import { escapeHtml } from './util.mjs';
-import { authHeaders } from './api.mjs';
 
 const OTLP_SIGNALS = ['traces', 'metrics', 'logs', 'profiles'];
 const OTLP_EXPORTER_KINDS = new Set(['otlp', 'otlphttp', 'otlp-grpc', 'otlp-http']);
@@ -50,7 +49,7 @@ export function renderOtlpView(host) {
   if (state._otlpCanonical[cacheKey]) { apply(state._otlpCanonical[cacheKey]); return; }
   const envQ = env ? `?env=${encodeURIComponent(env)}` : '';
   fetch(`/api/packs/${encodeURIComponent(packId)}/canonical${envQ}`, {
-    headers: { Accept: 'application/json', ...authHeaders() },
+    headers: { Accept: 'application/json' },
   }).then(async r => {
     if (!r.ok) throw new Error(`server ${r.status}`);
     const c = await r.json();

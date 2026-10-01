@@ -28,14 +28,6 @@ operations of §3 and §4: `packc store export`, `import --replace`,
 `rekey-issuer`, `purge-org`, and `restore`'s marker warning). Slice 2 is
 complete once 2a and 2b merge; slice 3 (roles enforced) is next.*
 
-*Slice 3 is built in two PRs: 3a (`codex/roles-enforced`: roles enforced
-on every route through `server/route-table.mjs`, the live pack per org,
-an MCP URL that keeps no credential parameter) and 3b (the identity API).
-Slice 4 follows. Offered to slice 4's `mcp_endpoints.url` refusal: 3a's
-word rule for credential parameter names (`tools/lib/mcp-url-safety.mjs`
-`credentialParamName`), which refuses fewer third-party names (`signal`,
-`design`, `author`) than a substring list.*
-
 ## 0 · Status quo — what exists and what is missing
 
 | Concern | Today | Where | Gap |

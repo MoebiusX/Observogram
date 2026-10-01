@@ -18,7 +18,7 @@ import { state } from './state.mjs';
 import { api } from './api.mjs';
 import { escapeHtml, toast } from './util.mjs';
 import { host as appHost } from './host.mjs';
-import { announce, emptyStateHtml, listSentence, plural } from './ux-kit.mjs';
+import { announce, emptyStateHtml } from './ux-kit.mjs';
 
 // tools/lib/stack-evidence.mjs — the browser-safe history helpers over the
 // run records (step 3). The server exposes tools/lib at /lib (the same
@@ -126,29 +126,6 @@ export function runResultText(name, rec) {
 // none. Said so, not guessed.
 export function runErrorText(name, err) {
   return `${name}: the run did not finish — ${err?.message || err}. If the live source did not answer, the history now shows it as unable to observe.`;
-}
-
-// One line for several runs (Neuron's Run all): how many ended which way,
-// then why the runs that did not finish stopped — the first reason with
-// every journey it stopped (a refusal is the same for each), the journeys
-// stopped for another reason named, so a denial is said, not only counted.
-// `failures` is [{ name, message }] in run order.
-export function runAllText(names, tally, failures = []) {
-  const summary = listSentence([
-    tally.pass && `${tally.pass} passed`,
-    tally['gate-failed'] && `${tally['gate-failed']} failed`,
-    tally['vantage-lost'] && `${tally['vantage-lost']} unable to observe`,
-    tally.error && `${tally.error} did not finish`,
-  ]);
-  let why = '';
-  if (failures.length) {
-    const reason = failures[0].message;
-    const same = failures.filter((f) => f.message === reason).map((f) => f.name);
-    const other = failures.filter((f) => f.message !== reason).map((f) => f.name);
-    why = ` ${listSentence(same)}: ${reason}.`;
-    if (other.length) why += ` ${listSentence(other)}: another reason — run ${other.length === 1 ? 'it' : 'each'} alone to read it.`;
-  }
-  return `Ran ${plural(names.length, 'journey')}: ${summary}.${why}`;
 }
 
 export function renderJourneysView(view) {

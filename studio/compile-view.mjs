@@ -10,7 +10,7 @@
 // Screen grammar: docs/UX_SCREEN_GRAMMAR.md, studio/ux-kit.mjs.
 
 import { state } from './state.mjs';
-import { api, authHeaders, orgQuery } from './api.mjs';
+import { api } from './api.mjs';
 import { escapeHtml, toast } from './util.mjs';
 import {
   effectiveFocus, focusedPack, focusedPackId, focusedEnv,
@@ -66,7 +66,7 @@ async function loadCompileCatalog() {
   const params = new URLSearchParams();
   if (env) params.set('env', env);
   try {
-    const r = await fetch(`/api/packs/${encodeURIComponent(packId)}/compile-catalog?${params}`, { headers: { ...authHeaders() } });
+    const r = await fetch(`/api/packs/${encodeURIComponent(packId)}/compile-catalog?${params}`);
     if (!r.ok) {
       // CRITICAL: must NOT leave catalog null on failure. renderCompileView
       // re-fires loadCompileCatalog every time the catalog is null, so a
@@ -130,7 +130,7 @@ async function loadCompiled() {
   if (focusedCompileArtifact()) params.set('artifact', focusedCompileArtifact());
   const url = `/api/packs/${encodeURIComponent(packId)}/compile-artifact?${params}`;
   try {
-    const r = await fetch(url, { headers: { ...authHeaders() } });
+    const r = await fetch(url);
     const ct = r.headers.get('content-type') || '';
     if (!r.ok) {
       let msg = `HTTP ${r.status}`;
@@ -1497,7 +1497,7 @@ function renderDeployReview(doc) {
   if (!host) return;
   const { model, packId, hiddenNote } = readDeployReview(doc);
   const env = state.selectedEnv;
-  const downloadHref = packId ? `/api/packs/${encodeURIComponent(packId)}/export.zip${env ? `?env=${encodeURIComponent(env)}` : ''}${orgQuery(env ? '&' : '?')}` : '';
+  const downloadHref = packId ? `/api/packs/${encodeURIComponent(packId)}/export.zip${env ? `?env=${encodeURIComponent(env)}` : ''}` : '';
   host.innerHTML = deployReviewHtml(model, { downloadHref, hiddenNote });
   // The Deploy button says what it does and where (app.mjs only toggles
   // its disabled state, never its label).

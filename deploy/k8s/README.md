@@ -344,9 +344,9 @@ docroot. That architecture is gone:
   [deployment-studio.yaml](deployment-studio.yaml) to raise GitHub rate
   limits / allow private repos for `POST /api/crawl-github`.
 - What persists: everything in the workspace and the database, on the store
-  volume above — each org's live pack included
-  (`<org root>/live/production-live.pack.yaml`, written by
-  `POST /api/refresh-live`; the default org's at `/data/workspace/live/`).
+  volume above. What does not: `examples/production-live.pack.yaml`, which
+  `POST /api/refresh-live` writes to the container filesystem; a pod
+  restart clears it, by design.
 
 ## Scheduled journeys (opt-in)
 

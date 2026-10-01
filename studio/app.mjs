@@ -15,10 +15,7 @@ import {
   DISCO_SLAB_ACCENT, discoGradeLetter, discoGradeWord,
 } from './constants.mjs';
 import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } from './state.mjs';
-import {
-  api, loadCatalog, validateUploaded, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel, deniedError, deployRefusal,
-  setSignedInLogin, recallMcpUrl, rememberMcpUrl, forgetMcpUrls,
-} from './api.mjs';
+import { api, loadCatalog, validateUploaded, authHeaders, setActiveOrg, getActiveOrg, savedOrg, orgChipModel } from './api.mjs';
 import {
   effectiveFocus, focusedPackId, focusedEnv, focusedPack,
   focusedConformance, setFocusedConformance,
@@ -1459,7 +1456,7 @@ function installObservaChrome() {
       if (action === 'mcp')   { setTimeout(() => $('#mcp-btn')?.click(), 0); return; }
       if (action === 'reset') { setTimeout(() => $('#reset-btn')?.click(), 0); return; }
       if (action === 'theme') { $('#theme-toggle')?.click(); return; }
-      if (action === 'api')   { window.open(`/api/packs${orgQuery()}`, '_blank', 'noopener'); return; }
+      if (action === 'api')   { window.open('/api/packs', '_blank', 'noopener'); return; }
       routeTo(item.dataset.view);
     });
   });
@@ -1532,7 +1529,6 @@ async function boot() {
   // header has to be resolved before the catalog loads.
   await loadIdentity();
   resolveActiveOrg();
-  syncApiLink();
   try { await loadCatalog(); }
   catch (e) {
     document.body.innerHTML = `<pre class="json" style="margin:48px;max-width:800px">Failed to reach Observogram's API.\n\n${escapeHtml(e.message)}\n\nMake sure the server is running: \`node server/index.mjs\` or \`npm run serve\`.</pre>`;
@@ -1963,25 +1959,19 @@ function setupResetButton() {
       '  • reload the page to the empty home screen\n\n' +
       'Catalog-shipped example packs are unaffected (they live on disk).');
     if (!ok) return;
-    // 1. Drop server-side uploads FIRST. A refusal (a viewer, a signed-out
-    //    session) is shown and nothing is cleared — the browser's state
-    //    stays as it was. If the endpoint is unreachable we still reset
-    //    the client — the client-side reset is the higher-leverage part.
-    try {
-      const r = await fetch('/api/uploads', { method: 'DELETE', headers: { Accept: 'application/json', ...authHeaders() } });
-      if (!r.ok) {
-        const denial = deniedError(r.status, await r.text().catch(() => ''));
-        if (denial) { toast(`RESET refused — ${denial.message}`, 'error'); return; }
-      }
-    } catch (_) {}
-    // 2. Stop persistence from racing the reload + writing stale state.
+    // 1. Stop persistence from racing the reload + writing stale state.
     try { persistence.suspend(); } catch (_) {}
-    // 3. Wipe localStorage. Keep theme so the user's dark/light choice
+    // 2. Wipe localStorage. Keep theme so the user's dark/light choice
     //    survives — that's not session state, it's a preference.
     try {
       const theme = localStorage.getItem('studioTheme');
       localStorage.clear();
       if (theme) localStorage.setItem('studioTheme', theme);
+    } catch (_) {}
+    // 3. Drop server-side uploads. If the endpoint is unreachable we
+    //    still reload — the client-side reset is the higher-leverage part.
+    try {
+      await fetch('/api/uploads', { method: 'DELETE' });
     } catch (_) {}
     // 4. Reload. location.reload(true) is non-standard in modern Firefox;
     //    plain reload() picks up server changes since the navigation
@@ -2049,7 +2039,7 @@ function setupExportButton() {
     const env = focusedEnv();
     const qs = env ? `?env=${encodeURIComponent(env)}` : '';
     const a = document.createElement('a');
-    a.href = `/api/packs/${encodeURIComponent(id)}/export.zip${qs}${orgQuery(qs ? '&' : '?')}`;
+    a.href = `/api/packs/${encodeURIComponent(id)}/export.zip${qs}`;
     a.download = '';
     document.body.appendChild(a);
     a.click();
@@ -2877,7 +2867,10 @@ function renderHomeView() {
   // serif headline, single primary action (URL already filled in, just
   // hit Connect), capability surface presented as an executive summary
   // not a dashboard. Auth + manual paths still reachable but quiet.
-  const mcpUrl = recallMcpUrl() || DEFAULT_MCP_URL;
+  const mcpUrl = (() => {
+    try { return localStorage.getItem('mcpUrl') || DEFAULT_MCP_URL; }
+    catch (_) { return DEFAULT_MCP_URL; }
+  })();
 
   // One question, two journeys. The signed-in gate opens on the user's
   // services; the check branch is otherwise remembered from last time.
@@ -2980,7 +2973,7 @@ async function doHomeMcpConnect() {
     statusEl.className = 'home-mcp-status is-error';
     return;
   }
-  rememberMcpUrl(url).catch(() => {});
+  try { localStorage.setItem('mcpUrl', url); } catch (_) {}
 
   goBtn.disabled = true;
   statusEl.textContent = 'contacting MCP…';
@@ -3314,7 +3307,7 @@ function renderMcpBadge(status) {
   ].filter(Boolean);
   const title = errored
     ? `MCP refresh had errors (${errorBits.join('; ')})`
-    : `Last refresh ${fmtRelative(status.refreshedAt)} from ${status.url || status.origin || 'unknown'}`;
+    : `Last refresh ${fmtRelative(status.refreshedAt)} from ${status.url || 'unknown'}`;
   btn.title = probesUnsupported
     ? `${title} · restricted tier: families ${probesUnsupported} not exposed`
     : title;
@@ -3324,12 +3317,12 @@ function renderMcpStatusBody(status) {
   const el = $('#mcp-status-body');
   if (!el) return;
   if (!status?.present) {
-    el.innerHTML = '<em>No live pack for this org yet — refresh from an MCP server.</em>';
+    el.innerHTML = '<em>No production-live pack on disk yet.</em>';
     return;
   }
   const rows = [
     ['refreshed',  status.refreshedAt ? `${fmtRelative(status.refreshedAt)} (${escapeHtml(status.refreshedAt)})` : '—'],
-    ['mcp url',    status.url || status.origin || '—'],   // url: operators only
+    ['mcp url',    status.url || '—'],
     ['tools called',  status.toolsCalled || '—'],
     ['tools failed',  status.toolsFailed || 'none'],
     ['probes failed', status.probesFailed || 'none'],
@@ -3349,8 +3342,8 @@ function openMcpPanel() {
   const urlInput = $('#mcp-url');
   // pre-fill: saved value > server-known value > empty
   if (!urlInput.value) {
-    const saved = recallMcpUrl();                 // this user, this org
-    const liveUrl = state.mcpStatus?.url || null; // served to operators only
+    const saved = (() => { try { return localStorage.getItem('mcpUrl'); } catch { return null; } })();
+    const liveUrl = state.mcpStatus?.url || null;
     urlInput.value = saved || liveUrl || '';
   }
   urlInput.focus();
@@ -3369,7 +3362,7 @@ async function refreshLive() {
     setRefreshStatus('mcp url required', 'error');
     return;
   }
-  const dropped = await rememberMcpUrl(url).catch(() => []);
+  try { localStorage.setItem('mcpUrl', url); } catch (_) {}
   const btn = $('#mcp-refresh-btn');
   btn.disabled = true;
   $('#mcp-btn').dataset.mcpState = 'active';
@@ -3407,13 +3400,7 @@ async function refreshLive() {
       $('#mcp-btn').dataset.mcpState = 'error';
       return;
     }
-    // Say what was not kept: the server's note (the live pack) and ours
-    // (the remembered URL).
-    setRefreshStatus([
-      `refreshed · ${fmtRelative(body.refreshedAt)}`,
-      body.note || null,
-      dropped.length ? `remembered without its ${dropped.map((n) => `"${n}"`).join(', ')} parameter${dropped.length === 1 ? '' : 's'} — put the token in the auth field` : null,
-    ].filter(Boolean).join(' · '), 'ok');
+    setRefreshStatus(`refreshed · ${fmtRelative(body.refreshedAt)}`, 'ok');
     // Replace live status from response annotations + refetch authoritative status
     state.mcpStatus = await loadLiveStatus();
     renderMcpBadge(state.mcpStatus);
@@ -4410,12 +4397,10 @@ async function doDeployBulk() {
       return;
     }
     const body = JSON.parse(raw);
-    // A refusal (a viewer's 403, an unknown pack, a bad URL) is no result:
-    // the status line says the server's text; no result table is drawn.
-    const refusal = deployRefusal(r.status, body);
-    if (refusal) throw refusal;
-    const { ok, failed, total } = body.summary;
-    setStatus(`${ok}/${total} deployed in ${body.tookMs}ms · ${failed} failed`, failed === 0 ? 'ok' : 'error');
+    if (body.summary) {
+      const { ok, failed, total } = body.summary;
+      setStatus(`${ok}/${total} deployed in ${body.tookMs}ms · ${failed} failed`, failed === 0 ? 'ok' : 'error');
+    }
     renderDeployBulkResult(body);
     // The attempt is in the audit log now (ok or not) — refresh the trail.
     loadDeployHistory(deployModalState.packId);
@@ -4655,7 +4640,7 @@ function setupDraftFromMcpPanel() {
       // panel uses, so the SRE doesn't have to retype.
       const urlInput = $('#draft-mcp-url');
       if (!urlInput.value) {
-        urlInput.value = recallMcpUrl() || '';
+        try { urlInput.value = localStorage.getItem('mcpUrl') || ''; } catch (_) {}
       }
       urlInput.focus();
     }
@@ -4684,7 +4669,7 @@ async function doDraftFromMcp() {
     statusEl.className = 'mcp-refresh-status' + (kind ? ' is-' + kind : '');
   };
   if (!url) { setStatus('mcp url required', 'error'); return; }
-  rememberMcpUrl(url).catch(() => {});
+  try { localStorage.setItem('mcpUrl', url); } catch (_) {}
 
   const goBtn = $('#draft-mcp-go-btn');
   goBtn.disabled = true;
@@ -5076,7 +5061,6 @@ async function loadIdentity() {
     const r = await fetch('/auth/me');
     if (!r.ok) return null;
     state.identity = await r.json();
-    setSignedInLogin(state.identity?.authenticated ? state.identity.user?.login : null);
     return state.identity;
   } catch (_) { return null; }
 }
@@ -5091,13 +5075,6 @@ function resolveActiveOrg() {
   if (!orgs.length) { setActiveOrg(null); return; }
   const saved = savedOrg();
   setActiveOrg((orgs.find(o => o.id === saved) || orgs[0]).id);
-}
-
-// The header's `api` link (studio/index.html #api-link) names the active
-// org in its query: a static href cannot know it.
-function syncApiLink() {
-  const link = document.getElementById('api-link');
-  if (link) link.href = `/api/packs${orgQuery()}`;
 }
 
 // Identity chip — only renders when the server runs in an identity
@@ -5167,7 +5144,6 @@ function setupIdentityChip() {
   document.addEventListener('click', (e) => { if (!chip.contains(e.target)) setOpen(false); });
   chip.addEventListener('keydown', (e) => { if (e.key === 'Escape') { setOpen(false); menuBtn.focus(); } });
   chip.querySelector('.hdr-user-out').addEventListener('click', async () => {
-    forgetMcpUrls(me.user?.login);   // a shared browser keeps no MCP URL of this user
     await fetch('/auth/logout', { method: 'POST', headers: { ...authHeaders() } }).catch(() => {});
     window.location.assign('/auth/login');
   });

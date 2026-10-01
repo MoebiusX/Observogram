@@ -20,9 +20,7 @@
  *
  * Env:
  *   MCP_URL   — MCP server endpoint. Default: https://mcp.example.com/observability
- *   OUTPUT    — Output path. Default: examples/production-live.pack.yaml (the
- *               studio reads <org root>/live/production-live.pack.yaml —
- *               point OUTPUT there to feed an org's LIVE badge)
+ *   OUTPUT    — Output path. Default: examples/production-live.pack.yaml
  *               (generated locally; ignored by git)
  *   MCP_AUTH  — Optional bearer token if your MCP requires auth.
  *   PACK_NAME — Pack metadata.name.  Default: production-live
@@ -49,7 +47,6 @@ import {
   STACK_SELF_METRIC_PROBES, STACK_FAMILIES, eligibleAliases, productPreferenceOrder, bestOutcome,
 } from './lib/contracts/stack-self-metrics.mjs';
 import { brandEnv } from './lib/brand-env.mjs';
-import { stripMcpUrl } from './lib/mcp-url-safety.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = resolve(__dirname, '..', 'vendor', 'observability-pack-spec', `v${SPEC_VERSION}`, 'observability-pack.schema.json');
@@ -2687,16 +2684,10 @@ export async function buildAndValidate({ mcpUrl, mcpAuth, packName, refreshedAt 
 }
 
 async function main() {
-  // The pack keeps the safe URL — what the studio's refresh writes: no
-  // userinfo, fragment or credential query parameter (MCP_AUTH is the
-  // place for a token; it is sent as a header and never stored).
-  const { safe, dropped } = stripMcpUrl(MCP_URL_DEFAULT);
-  const safeUrl = safe ?? MCP_URL_DEFAULT;
-  process.stderr.write(`[fetch-live-pack] talking to ${safeUrl}\n`);
-  if (dropped.length) process.stderr.write(`[fetch-live-pack] not kept in the pack: the ${dropped.join(', ')} parameter(s) of MCP_URL — put a token in MCP_AUTH instead\n`);
+  process.stderr.write(`[fetch-live-pack] talking to ${MCP_URL_DEFAULT}\n`);
   const fetched = await fetchMcp({ mcpUrl: MCP_URL_DEFAULT, mcpAuth: MCP_AUTH_DEFAULT });
   const refreshedAt = new Date().toISOString();
-  const pack = buildCanonicalPack({ refreshedAt, mcpUrl: safeUrl, ...fetched });
+  const pack = buildCanonicalPack({ refreshedAt, mcpUrl: MCP_URL_DEFAULT, ...fetched });
 
   const errs = validateCanonical(pack, SCHEMA);
   if (errs.length) {
