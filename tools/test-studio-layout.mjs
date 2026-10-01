@@ -119,3 +119,15 @@ test('a modal is stacked over the chrome and the context bar, never under them',
     assert.ok(all.some(r => r.selector.includes(`.${cls}`)), `.${cls} is styled`);
   }
 });
+
+test('one visual language: the re-skin is the last stylesheet, in both themes, with one typeface', () => {
+  const html = fs.readFileSync(new URL('index.html', dir), 'utf8');
+  const sheets = [...html.matchAll(/<link rel="stylesheet" href="\/([\w.-]+\.css)">/g)].map(m => m[1]);
+  assert.equal(sheets.at(-1), 'reskin.css', 'reskin.css is loaded after every screen stylesheet');
+  const css = fs.readFileSync(new URL('reskin.css', dir), 'utf8');
+  assert.ok(/--serif:\s*var\(--sans\)/.test(css) && /--mono:\s*var\(--sans\)/.test(css), 'the serif and the label monospace resolve to the sans');
+  assert.ok(/--code:/.test(css) && /font-family:\s*var\(--code\)/.test(css), 'code keeps a monospace of its own');
+  assert.ok(/html\[data-theme="dark"\]\s*\{[^}]*--rs-bg:/.test(css) && /:root\s*\{[^}]*--rs-bg:/.test(css), 'the palette is defined for the light and the dark theme');
+  // It restyles; it moves nothing: no positioning of its own.
+  assert.ok(!/position:\s*(fixed|sticky|absolute)/.test(css.replace(/\/\*[\s\S]*?\*\//g, '')), 'no positioning in the re-skin layer');
+});

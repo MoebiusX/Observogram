@@ -116,3 +116,22 @@ hover and focus; `GLOSSARY` is the single place a definition lives.
   required clause do not share a colour.
 - Readable defaults: body copy 15px, labels 13–14px, monospace only for IDs,
   expressions and generated code; muted text meets WCAG 2.2 AA contrast.
+
+## One visual language
+
+`studio/reskin.css` is the last stylesheet and the only place the studio's
+look is decided:
+
+- **Type** — one sans; monospace for code only (`--code`).
+- **Colour** — one page, one panel, one line. Lime: the primary action and
+  "where I am" (current step, pressed option, Pack A). Purple: the second
+  voice (Pack B, Build). Amber: attention. Rose: what fails or is removed.
+  Layer colours (L1–GOV) are data and stay.
+- **Surface** — a 1px line and a 9px radius. No glow, no gradient, no wash:
+  a tone is a line down the panel's edge and the colour of its numbers.
+- **Controls** — a primary button (lime), a secondary (outlined), a text
+  button; pills with a 5px radius; inputs on the page colour.
+
+A new screen reads the tokens (`--rs-*`, or the `--ux-*` names mapped onto
+them) and reuses these pieces; it does not bring a font, a gradient or a
+button of its own.
