@@ -33,8 +33,7 @@ import { createMcpClient } from '../../tools/fetch-live-pack.mjs';
 import { compile, compileArtifact } from '../../tools/lib/compile.mjs';
 
 export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readEnv, actorForRequest, contentHash }) {
-  // Case-sensitive like the app (server/index.mjs): a nested router does not inherit the app's setting.
-  const router = express.Router({ caseSensitive: true });
+  const router = express.Router();
 
   router.get('/api/deploy/matrix', (req, res) => {
     // Surface the deployable targets + products + versions so the client

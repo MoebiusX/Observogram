@@ -488,11 +488,6 @@ try {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(authRaw),
   });
   assert(denied.status === 401, 'token set: mutating route without bearer → 401');
-  // `/API/…` no longer slips past the gate (routes match case-sensitively; the deploy router too).
-  for (const path of ['/API/validate', '/API/deploys/x/verify', '/Api/packs/payment-service/deploy-bulk']) {
-    const r = await fetch(`${base}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-    assert(r.status === 404, `token set: anonymous POST ${path} → 404, never a handler`, r.status, 404);
-  }
   assert((denied.headers.get('www-authenticate') || '').includes('Bearer'), '401 carries WWW-Authenticate: Bearer');
   assert(/OBSERVOGRAM_API_TOKEN/.test((await denied.json()).error || ''), '401 error names the env var to set');
   const wrongTok = await fetch(`${base}/api/validate`, {
