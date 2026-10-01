@@ -121,10 +121,6 @@ export const state = {
   // that layer. Anything that routes to Discover with a layer id (the
   // traceability "open" action) lands with that layer open.
   layerFilter: 'all',
-  // Discover's task filter: 'attention' | 'missingEvidence' | 'scaffold' |
-  // 'live' | 'all'. null = the default (Needs attention when anything needs
-  // it, else All) until the user picks one. Persisted.
-  discoverTask: null,
   // Discover's View: how much of each artefact the open layer draws — 'list'
   // (name and a status mark) | 'tiles' (name, kind, bound, status) | 'cards'
   // (the card grid) | 'details' (the full row, the default). card-html.mjs
@@ -133,9 +129,10 @@ export const state = {
   // Discover's scroll position ({ pack, y }), restored when the user comes
   // back from Diagnose or Remediate to the same pack (UI state, never persisted).
   discoverScroll: null,
-  // Compare's view: 'summary' | 'review' | 'all' — Summary until the user
-  // picks another. Persisted.
-  compareFocus: 'summary',
+  // Compare's view: 'all' (both packs side by side) | 'review' | 'summary'.
+  // Side by side until the user picks another; a reload starts there again
+  // (UI state, never persisted).
+  compareFocus: 'all',
   // Legacy: kept for back-compat with code that still reads it
   // (drawer card highlight on per-layer cards, etc.). Mirrors view.
   activeLayer: 'L1',
@@ -148,6 +145,7 @@ export const state = {
   compareBEnv: null,
   compareSlice: 'all',         // 'all' | 'onlyA' | 'onlyB' | 'both' | 'a-b' | 'a+b'
   compareSearch: '',           // text filter applied to card id/title
+  compareDetail: 'cards',      // Compare's View: 'list' | 'tiles' | 'cards' | 'details' (compare-view.mjs COMPARE_VIEWS). Persisted.
   compareLens: 'all',          // 'all' | <product-slug>. Filters Compare/Benchmark to
                                // only artefacts in a product's surface (e.g. 'grafana'
                                // keeps backends with product=grafana, dashboards whose
@@ -201,7 +199,7 @@ const PERSIST_FIELDS = [
   'selectedPackId', 'selectedEnv',
   'compareBId', 'compareBEnv',
   'view', 'layerFilter', 'diagnoseSub',
-  'compareSlice', 'compareSearch', 'compareLens', 'diffScopeMode',
+  'compareSlice', 'compareSearch', 'compareLens', 'compareDetail', 'diffScopeMode',
   'viewFocus',
   'atlasVariant', 'arborView',
   'neuronJourney', 'neuronWindow', 'neuronMetric',
@@ -210,8 +208,7 @@ const PERSIST_FIELDS = [
   'tracePrefs',
   'expandL2', 'expandL3Panels', 'expandL3Queries',
   'layersSearch', 'layersDomain',
-  'discoverTask', 'discoverDetail',
-  'compareFocus',
+  'discoverDetail',
 ];
 export const persistence = {
   _suspended: true,  // boot-phase guard — flipped to false once rehydrate finishes

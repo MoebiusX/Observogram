@@ -1,9 +1,10 @@
 // studio/layers-view.mjs
 //
 // Discover — the observogram scan dashboard (legacy, unrouted) — plus the
-// Discover screen proper (renderLayersView): a decision header, the task
-// filters, a layer overview that opens one layer at a time, and the artefact
-// rows (renderCard/cardKey, shared with the drawer and compare views).
+// Discover screen proper (renderLayersView): the pack's catalogue as a board
+// (discover-board.mjs) — one band per layer holding what the pack has there —
+// with each layer's full list one click away, and the artefact rows
+// (renderCard/cardKey, shared with the drawer and compare views).
 // Re-renders via the host seam (host.mjs); still imports scan helpers back
 // from app.mjs and the drawer opener (safe cycles).
 
@@ -13,13 +14,13 @@ import { focusedConformance } from './focus.mjs';
 import { escapeHtml } from './util.mjs';
 import { openDrawer } from './drawer.mjs';
 import {
-  artefactRowHtml, artefactStatus, matchesTask, inferredFrom, resolveInferredRule, DISCOVER_TASKS,
+  artefactRowHtml, artefactStatus, inferredFrom, resolveInferredRule,
   DISCOVER_VIEWS, discoverView, STATUS_MARKS, artefactStatusMark, statusMarkHtml,
 } from './card-html.mjs';
 import { LENS_PRODUCTS } from './compare-view.mjs';
 import { buildSymbolTable, defaultEnvFor, layerArtefactCount, refresh, runBenchmark } from './app.mjs';
-import { host as appHost } from './host.mjs';
-import { decisionHeaderHtml, wireUxActions, statusChipHtml, emptyStateHtml, LAYER_PURPOSE, layerSpecTip, plural, announce } from './ux-kit.mjs';
+import { wireUxActions, emptyStateHtml, LAYER_PURPOSE, layerSpecTip, plural, announce } from './ux-kit.mjs';
+import { boardHeadHtml, boardGroupsHtml } from './discover-board.mjs';
 
 export function renderDiscoverDashboard(view) {
   view.innerHTML = '';
@@ -291,51 +292,51 @@ export function renderDiscoverDashboard(view) {
 // ============================================================
 // DISCOVER — the layer overview (the 2026-09 UX review, docs/UX_SCREEN_GRAMMAR.md)
 //
-// The screen answers what am I looking at, what needs my attention, and what
-// can I do next, before any artefact is listed:
+// Discover is the catalogue of the open pack: what it holds, layer by layer.
+// It judges nothing. With one pack loaded there is no reference to judge
+// against — no live evidence was looked for, nothing was compared — so the
+// screen makes no recommendation, counts no gap and proposes no fix; those
+// are Diagnose's (assessment, comparison) and Remediate's.
 //
-//   1. decision header   context (service · environment · pack + version ·
-//                        tier), one sentence ("36 of 92 artefacts need
-//                        attention across 4 layers"), one primary action,
-//                        the causes behind it and a few defined counts
-//   2. filters           Show (task filters, one pressed), Refine (domain and
-//                        search) and View (how much of each artefact is
-//                        drawn), each labelled with what it does
-//   3. layer overview    one row per layer: code + plain purpose, the
-//                        artefact count, the evidence split, what needs
-//                        attention, the rubric checks not met. ONE layer
-//                        expands at a time (state.layerFilter; 'all' = none)
-//   4. the open layer    a readable list (at most three columns) of rows that
-//                        lead with name + what it does + status; ids, tags and
-//                        symbols sit in each row's Details, the full record in
-//                        the drawer. View (state.discoverDetail) draws the same
-//                        artefacts with less of each one: Cards (the card grid
-//                        Discover drew before the review), Tiles (name, kind,
-//                        bound, status) and List (name and a status mark);
-//                        Details, the full row, is the default
+//   1. head              which pack this is: its service, the size of the
+//                        pack ("630 artefacts across 6 layers") and the facts
+//                        the manifest states (criticality, environment,
+//                        owners, semantic conventions, languages, backends)
+//   2. the board         one band per layer: the layer's code and names, then
+//                        its groups — SLI tiles and SLO dials on L1, the
+//                        telemetry pipeline in flow order on L2, rules →
+//                        views → dashboards on L3, detection → routing →
+//                        remediation on L4, validation on L5. Every item is
+//                        an artefact and opens its record. ONE band opens
+//                        its full list at a time (state.layerFilter; 'all'
+//                        = none)
+//   3. the open list     narrowed by Refine (domain and search, above the
+//                        board) and drawn by View (in the list's own bar: how
+//                        much of each artefact is shown): a readable list (at most three columns) of rows that
+//                        lead with name + what it does + its source; ids, tags
+//                        and symbols sit in each row's Details, the full record
+//                        in the drawer. View (state.discoverDetail) draws the
+//                        same artefacts with less of each one: Cards (the card
+//                        grid Discover drew before the review), Tiles (name,
+//                        kind, bound, status) and List (name and a status
+//                        mark); Details, the full row, is the default
 //
-// Counts have one definition each (COUNT_DEF): "artefacts in this layer" is
-// every item the adapter projects there, including detail-level evidence; the
-// evidence split partitions the same artefacts; "needs attention" is the
-// subset a person must act on. Filters never change those counts — the
-// "N match" pill and the open layer's "Showing N of M" say what a filter does.
+// "Artefacts in this layer" is every item the adapter projects there,
+// including detail-level evidence (COUNT_DEF). Filters never change that
+// count — the "N match" pill on a band and the open layer's "Showing N of M"
+// say what a filter does.
 //
-// The expanded layer, the task filter, the domain/search refinement, the view
-// and the detail toggles live in `state` (persisted); the scroll position is kept per
-// pack and restored when the user comes back from Diagnose or Remediate.
+// The expanded layer, the domain/search refinement, the view and the detail
+// toggles live in `state` (persisted); the scroll position is kept per pack
+// and restored when the user comes back from Diagnose or Remediate.
 
-const TASK_IDS = new Set(DISCOVER_TASKS.map(t => t.id));
-const TASK_BY_ID = Object.fromEntries(DISCOVER_TASKS.map(t => [t.id, t]));
 // Rows drawn before "Show all N" in an open layer (a production pack's L2
-// metric inventory runs to thousands; the task filters are the real answer)
-// are the active view's `cap` (DISCOVER_VIEWS): a lighter view draws more.
+// metric inventory runs to thousands) are the active view's `cap`
+// (DISCOVER_VIEWS): a lighter view draws more.
 // Open layers whose full list the user asked for, per pack.
 const shownAll = new Set();
 
-const COUNT_DEF = 'Artefacts in a layer: every item the pack projects onto it, including detail-level evidence (metric inventory, scrape jobs, dashboard panels, recording rules). '
-  + 'The evidence split (live evidence found · declared only · template value) divides the same artefacts, so it adds up to the layer total. '
-  + 'Needs attention counts the artefacts a person must act on: a template value to complete or a reference that does not resolve; each counts once. '
-  + 'Required checks are clauses of the tier rubric, not artefacts. Discover lists only what the pack has; when a check fails because something is absent, the check says so. Filters never change these counts.';
+const COUNT_DEF = 'Artefacts in a layer: every item the pack projects onto it, including detail-level evidence (metric inventory, scrape jobs, dashboard panels, recording rules). Filters never change this count.';
 
 // What "no artefacts" means on each layer: what the adapter looked for.
 const LAYER_CHECKED = {
@@ -348,9 +349,8 @@ const LAYER_CHECKED = {
   GOV: 'the pack’s imports',
 };
 
-// The detail-level artefacts an open layer folds behind its own toggle on
-// the broad views (All, Missing evidence) — the per-section Expand model, now
-// inside the open layer. The keys are the persisted state flags;
+// The detail-level artefacts an open layer folds behind its own toggle —
+// the per-section Expand model, now inside the open layer. The keys are the persisted state flags;
 // build-model.mjs isDetailArtefact mirrors this classification.
 const DETAIL_BUCKETS = {
   L2: [{ key: 'expandL2', label: 'metric inventory and scrape jobs', test: (a) => !!a.expand,
@@ -376,13 +376,12 @@ function layerEntries(layerId) {
   return (layers[layerId] || []).map(a => ({ a, sub: null }));
 }
 
-// The whole-pack model the header, the filters and the overview read. Pure
-// over state.pack / state.symbolTable / state.conformance; filters do not
-// enter it, so its counts are stable.
+// The whole-pack model the header and the overview read: each layer with its
+// artefacts. Each entry carries its own status (the row draws it — the
+// artefact's source, a template value, an unresolved reference); nothing is
+// summed into a verdict. Filters do not enter it, so its counts are stable.
 function discoverModel() {
   const broken = state.symbolTable?.broken;
-  const clauses = state.conformance?.clauses || [];
-  const failing = clauses.filter(cl => cl.applies && cl.pass === false && cl.severity === 'MUST');
   const layers = [];
   for (const def of LAYER_DEFS) {
     const entries = layerEntries(def.id).map(({ a, sub }) => {
@@ -391,47 +390,14 @@ function discoverModel() {
     });
     // L2X is optional in the spec: no row when the pack has nothing there.
     if (def.id === 'L2X' && !entries.length) continue;
-    // The adapter's sources are Declared, Verified and Scaffold, so the split
-    // is live · template value · declared only. artefactStatus reads any other
-    // source (an unknown word included) as declared, so it counts as declared
-    // only; the one source left out of the split, counted in the total alone,
-    // is 'Missing', which the adapter never emits. What the pack lacks is a
-    // required check not met (rubricFails below), never a detected artefact.
-    const counts = { total: entries.length, live: 0, declared: 0, needsInput: 0, attention: 0, broken: 0 };
-    for (const e of entries) {
-      if (e.status.live) counts.live++;
-      else if (e.status.completion === 'needsInput') counts.needsInput++;
-      else if (e.status.evidence === 'declared') counts.declared++;
-      if (e.status.attention) counts.attention++;
-      if (e.status.broken) counts.broken++;
-    }
-    layers.push({ id: def.id, def, entries, counts, rubricFails: failing.filter(cl => cl.dimension === def.id) });
+    layers.push({ id: def.id, def, entries, total: entries.length });
   }
-  const sum = (k) => layers.reduce((n, L) => n + L.counts[k], 0);
-  const totals = {
-    total: sum('total'), live: sum('live'), declared: sum('declared'), needsInput: sum('needsInput'),
-    attention: sum('attention'), broken: sum('broken'),
-  };
-  const taskCounts = {
-    attention: totals.attention, missingEvidence: totals.total - totals.live,
-    scaffold: totals.needsInput, live: totals.live, all: totals.total,
-  };
-  return { layers, totals, taskCounts, rubricFails: failing };
-}
-
-// The pressed task filter: the user's choice, else Needs attention when
-// anything needs it, else All.
-function activeTask(model) {
-  const t = state.discoverTask;
-  if (t && TASK_IDS.has(t)) return t;
-  return model.totals.attention > 0 ? 'attention' : 'all';
+  return { layers, total: layers.reduce((n, L) => n + L.total, 0) };
 }
 
 function refineActive() {
   return !!(state.layersSearch || '').trim() || (!!state.layersDomain && state.layersDomain !== 'all');
 }
-
-const matches = (e, layerId, task) => matchesTask(e.status, task) && passesLayersFilter(e.a, layerId);
 
 // ---------- the view ----------
 
@@ -444,7 +410,7 @@ export function renderLayersView(view) {
   // Arriving on an artefact (Traceability, Conformance or Diagnose set
   // state.activeCardKey, usually with state.layerFilter): its layer opens.
   // A caller's explicit layer wins; with none, the card's own layer opens.
-  // Whatever the task filter, the card itself is always listed (fillLayerPanel
+  // Whatever the refinement, the card itself is always listed (fillLayerPanel
   // pins it, marked "outside this filter").
   if (state.activeCardKey && (!state.layerFilter || state.layerFilter === 'all')) {
     const layerId = String(state.activeCardKey).split('/')[0];
@@ -457,29 +423,17 @@ export function renderLayersView(view) {
   const root = document.createElement('div');
   root.className = 'dv-root';
   root.innerHTML = `
-    ${summaryHtml(model)}
-    <section class="dv-overview" aria-labelledby="dv-overview-title">
-      <div class="dv-overview-head">
-        <h2 class="dv-h2" id="dv-overview-title">Layers</h2>
-        <p class="dv-overview-sub">Open one layer at a time to see its artefacts.
-          <span class="ux-term" tabindex="0" title="${escapeHtml(COUNT_DEF)}">How the counts are defined</span></p>
-      </div>
+    ${headHtml(model)}
+    <section class="dv-overview" aria-label="The pack, layer by layer">
       <div class="dv-filters">
-        <div class="dv-filter-row dv-show">
-          <span class="dv-filter-key" id="dv-show-key">Show</span>
-          <div class="dv-tasks"></div>
-        </div>
         <div class="dv-filter-row dv-refine"></div>
-        <div class="dv-filter-row dv-view"></div>
       </div>
       <ol class="dv-layers" aria-label="Layers of this pack"></ol>
     </section>`;
   view.appendChild(root);
 
   const ctx = { root, model };
-  renderTasks(ctx);
   renderRefine(ctx);
-  renderViews(ctx);
   renderLayerList(ctx);
   wireUxActions(root, discoverHandlers(ctx));
   wireScrollMemory();
@@ -500,81 +454,16 @@ export function renderLayersView(view) {
   }
 }
 
-// 1–4 of the screen grammar.
-function summaryHtml(model) {
-  const meta = state.pack?.meta || {};
-  const t = model.totals;
-  const withArtefacts = model.layers.filter(L => L.counts.total > 0).length;
-  const attnLayers = model.layers.filter(L => L.counts.attention > 0).length;
-  const rubricN = model.rubricFails.length;
-  const withoutLive = t.total - t.live;
-  const evidenceNote = `Evidence is counted separately: ${t.live} with live evidence, ${withoutLive} without.`;
-  const rubricNote = rubricN
-    ? ` The tier rubric has ${plural(rubricN, 'required check')} not met; the assessment explains ${rubricN === 1 ? 'it' : 'them'}.`
-    : '';
-
-  let decision, note, tone, primary, secondary = [], causes = [];
-  if (!t.total) {
-    decision = 'This pack has no artefacts yet.';
-    note = `Checked every layer, L1 ${LAYER_PURPOSE.L1.name} to GOV ${LAYER_PURPOSE.GOV.name}.${rubricNote}`;
-    tone = 'info';
-    primary = { id: 'dv-assess', label: 'Open the assessment', action: 'dv-assess' };
-  } else if (t.attention) {
-    decision = `${t.attention} of ${plural(t.total, 'artefact')} ${t.attention === 1 ? 'needs' : 'need'} attention across ${plural(attnLayers, 'layer')}.`;
-    note = `Needs attention means a template value still to complete or a reference that does not resolve. ${evidenceNote}${rubricNote}`;
-    tone = 'warn';
-    primary = { id: 'dv-review', label: 'Review what needs attention', action: 'dv-review' };
-    secondary = [{ id: 'dv-assess', label: 'Open the assessment', action: 'dv-assess' }];
-    const c = [];
-    if (t.needsInput) c.push({ n: t.needsInput, tone: 'warn', actionId: 'dv-show-scaffold',
-      title: `${plural(t.needsInput, 'template value')} to complete`,
-      why: 'Generated from a template so the requirement is represented; a person must supply the real value.' });
-    if (t.broken) c.push({ n: t.broken, tone: 'fail', actionId: 'dv-show-broken',
-      title: `${plural(t.broken, 'artefact')} with unresolved references`,
-      why: 'Each names something this pack does not define, so the chain between them is broken.' });
-    causes = c.sort((x, y) => y.n - x.n).slice(0, 3).map(x => ({ ...x, actionLabel: 'Show them' }));
-  } else {
-    decision = `None of the ${plural(t.total, 'artefact')} across ${plural(withArtefacts, 'layer')} needs attention.`;
-    note = `Every template value is filled in and every reference resolves. ${evidenceNote}${rubricNote}`;
-    tone = rubricN ? 'info' : 'ok';
-    primary = { id: 'dv-assess', label: 'Open the assessment', action: 'dv-assess' };
-  }
-
-  const measures = t.total ? [
-    { label: 'Artefacts', value: String(t.total), note: `across ${plural(withArtefacts, 'layer')}`, title: COUNT_DEF },
-    { label: 'Live evidence found', value: String(t.live), tone: t.live ? 'ok' : 'neutral',
-      title: 'The live platform reported these signals when the pack was drafted or refreshed.' },
-    { label: 'Declared only', value: String(t.declared),
-      title: 'Declared in the pack or repository; no live evidence was checked or found.' },
-    { label: 'Template values to complete', value: String(t.needsInput), tone: t.needsInput ? 'warn' : 'neutral',
-      title: 'Generated from a template so the requirement is represented; a person must supply the real value.' },
-  ] : [];
-
-  return decisionHeaderHtml({
-    id: 'dv-summary',
-    eyebrow: 'Discover · What do we have?',
-    context: [
-      { key: 'Service', value: meta.service || state.selectedService || '' },
-      { key: 'Environment', value: state.selectedEnv || meta.environment || '' },
-      { key: 'Pack', value: [meta.name || state.pack?.id || '', meta.version ? `v${meta.version}` : ''].filter(Boolean).join(' ') },
-      { key: 'Tier', value: meta.criticality || '' },
-    ],
-    decision, note, tone, primary, secondary, causes, measures,
+// The board's head: which pack this is and how much it holds. No decision,
+// no next action — Discover has no reference to decide against.
+function headHtml(model) {
+  return boardHeadHtml({
+    meta: { ...(state.pack?.meta || {}), service: state.pack?.meta?.service || state.selectedService || '' },
+    env: state.selectedEnv || '',
+    total: model.total,
+    layers: model.layers.filter(L => L.total > 0).length,
+    artefacts: model.layers.flatMap(L => L.entries.map(e => e.a)),
   });
-}
-
-// ---------- Show: the task filters ----------
-
-function renderTasks(ctx) {
-  const task = activeTask(ctx.model);
-  const counts = ctx.model.taskCounts;
-  ctx.root.querySelector('.dv-tasks').innerHTML = `
-    <div class="ux-segmented" role="group" aria-labelledby="dv-show-key">
-      ${DISCOVER_TASKS.map(t => `
-        <button type="button" data-ux-action="dv-task" data-task="${t.id}" data-dv-focus="task-${t.id}"
-          aria-pressed="${t.id === task}" title="${escapeHtml(t.tip)}"
-          aria-label="${escapeHtml(`${t.label}: ${plural(counts[t.id], 'artefact')}`)}">${escapeHtml(t.label)}<span class="ux-seg-count" aria-hidden="true">${counts[t.id]}</span></button>`).join('')}
-    </div>`;
 }
 
 // ---------- Refine: domain + search ----------
@@ -608,7 +497,7 @@ function renderRefine(ctx) {
       <input type="search" class="dv-refine-input" placeholder="Search names, IDs, tags…" aria-describedby="dv-refine-hint">
     </label>
     <button type="button" class="ux-link-btn dv-refine-clear" data-ux-action="dv-clear-refine"${refineActive() ? '' : ' hidden'}>Clear refinement</button>
-    <span class="dv-refine-hint" id="dv-refine-hint">Narrows the list inside the open layer. The counts on each layer stay whole-pack; “match” shows what the filters leave.</span>`;
+    <span class="dv-refine-hint" id="dv-refine-hint">Narrows the list of the open layer. The board above stays whole-pack; “match” on a band shows what the refinement leaves.</span>`;
 
   const sel = wrap.querySelector('.dv-refine-select');
   if (sel) {
@@ -638,91 +527,78 @@ const VIEW_ICONS = {
   details: '<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M4.5 5.5h7M4.5 8h7M4.5 10.5h4"/>',
 };
 
-function renderViews(ctx) {
+// The View switch, drawn in the bar of the open layer's list — the list it
+// changes — so pressing a view always shows its effect.
+function viewSwitchHtml(layerId) {
   const active = discoverView(state.discoverDetail).id;
-  ctx.root.querySelector('.dv-view').innerHTML = `
-    <span class="dv-filter-key" id="dv-view-key">View</span>
-    <div class="ux-segmented" role="group" aria-labelledby="dv-view-key" aria-describedby="dv-view-hint">
-      ${DISCOVER_VIEWS.map(v => `
-        <button type="button" data-ux-action="dv-view" data-view="${v.id}" data-dv-focus="view-${v.id}"
-          aria-pressed="${v.id === active}" title="${escapeHtml(v.tip)}"><svg class="dv-view-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">${VIEW_ICONS[v.id]}</svg>${escapeHtml(v.label)}</button>`).join('')}
-    </div>
-    <span class="dv-refine-hint" id="dv-view-hint">How much of each artefact the open layer shows. Every view lists the same artefacts; selecting one opens its full record.</span>`;
+  return `
+    <div class="dv-view">
+      <span class="dv-filter-key" id="dv-view-key-${layerId}">View</span>
+      <div class="ux-segmented" role="group" aria-labelledby="dv-view-key-${layerId}">
+        ${DISCOVER_VIEWS.map(v => `
+          <button type="button" data-ux-action="dv-view" data-view="${v.id}" data-dv-focus="view-${v.id}"
+            aria-pressed="${v.id === active}" title="${escapeHtml(v.tip)}"><svg class="dv-view-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">${VIEW_ICONS[v.id]}</svg>${escapeHtml(v.label)}</button>`).join('')}
+      </div>
+    </div>`;
 }
 
 // ---------- the layer overview ----------
 
 function renderLayerList(ctx) {
-  const task = activeTask(ctx.model);
   const list = ctx.root.querySelector('.dv-layers');
-  list.innerHTML = ctx.model.layers.map(L => layerItemHtml(L, task, state.layerFilter === L.id)).join('');
+  list.innerHTML = ctx.model.layers.map(L => layerItemHtml(L, state.layerFilter === L.id)).join('');
   const open = ctx.model.layers.find(L => L.id === state.layerFilter);
-  if (open) fillLayerPanel(ctx, open, task);
+  if (open) fillLayerPanel(ctx, open);
 }
 
-function layerItemHtml(L, task, open) {
-  const p = LAYER_PURPOSE[L.id] || { name: L.def.name };
+// One band of the board: the layer's identity, its groups (discover-board.mjs)
+// and, when open, the full list of its artefacts.
+function layerItemHtml(L, open) {
+  const p = LAYER_PURPOSE[L.id] || { name: L.def.name, spec: L.def.spec };
   const specTip = layerSpecTip(L.id);
-  const c = L.counts;
-  const s = (n) => (n === 1 ? '' : 's');
-  const evidence = [
-    c.live ? statusChipHtml('evidence', 'live', { label: `${c.live} live evidence` }) : '',
-    c.declared ? statusChipHtml('evidence', 'declared', { label: `${c.declared} declared only` }) : '',
-    c.needsInput ? statusChipHtml('completion', 'needsInput', { label: `${c.needsInput} template value${s(c.needsInput)}` }) : '',
-  ].filter(Boolean).join(' ');
-  const attention = c.attention
-    ? `<span class="dv-attn" title="${escapeHtml(TASK_BY_ID.attention.tip)}">${c.attention} need${c.attention === 1 ? 's' : ''} attention</span>`
-    // Calm only when the rubric agrees: a required check not met here (the
-    // chip beside it) is exactly what attention does not count.
-    : (c.total && !L.rubricFails.length ? '<span class="dv-calm">Nothing needs attention</span>' : '');
-  const rubric = L.rubricFails.length
-    ? statusChipHtml('assessment', 'fail', {
-        label: `${L.rubricFails.length} required check${s(L.rubricFails.length)} not met`,
-        extraTip: 'Clauses of the tier rubric for this layer: checks on the pack, not artefacts. The assessment lists them.' })
-    : '';
-  // The filter's effect on this layer, only when a filter narrows beyond the
-  // counts already shown (Needs attention has its own count above).
-  const narrowing = (task !== 'all' && task !== 'attention') || refineActive();
-  const matchN = narrowing ? L.entries.filter(e => matches(e, L.id, task)).length : 0;
-  const matchTip = `Artefacts in this layer that match Show: ${TASK_BY_ID[task].label}${refineActive() ? ' and the refinement' : ''}.`;
+  // The refinement's effect on this layer, only while one is set.
+  const narrowing = refineActive();
+  const matchN = narrowing ? L.entries.filter(e => passesLayersFilter(e.a, L.id)).length : 0;
+  const matchTip = 'Artefacts in this layer that match the refinement.';
 
   return `
-    <li class="dv-layer${open ? ' is-open' : ''}${c.total ? '' : ' is-empty'}" id="dv-layer-${L.id}" data-layer="${L.id}">
-      <div class="dv-layer-head" data-ux-action="dv-toggle" data-layer="${L.id}">
-        <h3 class="dv-layer-h">
+    <li class="dv-layer${open ? ' is-open' : ''}${L.total ? '' : ' is-empty'}" id="dv-layer-${L.id}" data-layer="${L.id}">
+      <div class="dv-band">
+        <div class="dv-band-id">
+          <span class="dv-band-code" aria-hidden="true">${escapeHtml(L.id)}</span>
+          <h3 class="dv-band-names"${specTip ? ` title="${escapeHtml(specTip)}"` : ''}>
+            <span class="sr-text">${escapeHtml(L.id)} </span>
+            <span class="dv-band-spec">${escapeHtml(p.spec || p.name)}</span>
+            ${p.spec && p.spec !== p.name ? `<span class="dv-band-name">${escapeHtml(p.name)}</span>` : ''}
+          </h3>
           <button type="button" class="dv-layer-toggle" id="dv-toggle-${L.id}" data-dv-focus="toggle-${L.id}"
-            aria-expanded="${open}" aria-controls="dv-panel-${L.id}">
-            <span class="dv-layer-code">${escapeHtml(L.id)}</span>
-            <span class="dv-layer-title"><span class="dv-layer-name"${specTip ? ` title="${escapeHtml(specTip)}"` : ''}>${escapeHtml(p.name)}</span></span>
+            data-ux-action="dv-toggle" data-layer="${L.id}" aria-expanded="${open}" aria-controls="dv-panel-${L.id}"
+            title="${escapeHtml(`${open ? 'Close' : 'Open'} the full list of this layer. ${COUNT_DEF}`)}"${L.total ? '' : ' disabled'}>
+            <span class="dv-size-n">${L.total}</span>
+            <span class="dv-size-unit">${L.total === 1 ? 'artefact' : 'artefacts'}</span>
+            <span class="dv-chevron" aria-hidden="true"></span>
           </button>
-        </h3>
-        <div class="dv-layer-stats">
-          <span class="dv-count" title="${escapeHtml(COUNT_DEF)}">${c.total ? `${plural(c.total, 'artefact')} in this layer` : 'No artefacts in this layer'}</span>
-          ${evidence} ${attention} ${rubric}
+          ${narrowing ? `<span class="dv-match" title="${escapeHtml(matchTip)}">${matchN} match</span>` : ''}
         </div>
-        ${narrowing ? `<span class="dv-match" title="${escapeHtml(matchTip)}">${matchN} match</span>` : '<span class="dv-match-slot" aria-hidden="true"></span>'}
-        <span class="dv-chevron" aria-hidden="true"></span>
+        ${boardGroupsHtml(L.id, L.entries)}
       </div>
       <div class="dv-panel" id="dv-panel-${L.id}" role="region" aria-labelledby="dv-toggle-${L.id}"${open ? '' : ' hidden'}></div>
     </li>`;
 }
 
-// The open layer: its purpose, what the filters leave, the detail toggles,
-// and the rows (L4 grouped by subgroup).
-function fillLayerPanel(ctx, L, task) {
+// The open layer: its purpose, what the refinement leaves, the detail
+// toggles, and the rows (L4 grouped by subgroup).
+function fillLayerPanel(ctx, L) {
   const panel = ctx.root.querySelector(`#dv-panel-${L.id}`);
   if (!panel) return;
   const p = LAYER_PURPOSE[L.id] || { name: L.def.name, blurb: '' };
   const searching = !!(state.layersSearch || '').trim();
   const refining = refineActive();
 
-  const byTask = L.entries.filter(e => matchesTask(e.status, task));
-  const matched = byTask.filter(e => passesLayersFilter(e.a, L.id));
-  // Detail buckets fold behind their toggle only on the broad views (All,
-  // Missing evidence) and never under a search: a narrow filter (Needs
-  // attention, a template value, live evidence) or a search never hides its
-  // own matches — the row cap handles the volume instead.
-  const foldable = !searching && (task === 'all' || task === 'missingEvidence');
+  const matched = L.entries.filter(e => passesLayersFilter(e.a, L.id));
+  // Detail buckets fold behind their toggle, never under a search: a search
+  // never hides its own matches — the row cap handles the volume instead.
+  const foldable = !searching;
   const buckets = (DETAIL_BUCKETS[L.id] || [])
     .map(b => ({ ...b, items: matched.filter(e => b.test(e.a)) }))
     .filter(b => b.items.length);
@@ -746,8 +622,7 @@ function fillLayerPanel(ctx, L, task) {
   if (capped && active && visible.includes(active) && !rows.includes(active)) rows = [...rows, active];
 
   const shownPhrase = [
-    `Showing ${rows.length} of ${plural(L.counts.total, 'artefact')} in ${L.id}`,
-    task !== 'all' ? `Show: ${TASK_BY_ID[task].label}` : '',
+    `Showing ${rows.length} of ${plural(L.total, 'artefact')} in ${L.id}`,
     refining ? 'refined' : '',
     folded.size ? `${folded.size} detail-level folded` : '',
   ].filter(Boolean).join(' · ');
@@ -758,27 +633,20 @@ function fillLayerPanel(ctx, L, task) {
       aria-pressed="${on}" title="${escapeHtml(b.tip)}">${on ? 'Fold' : 'Include'} ${escapeHtml(b.label)} <span class="dv-detail-count">${b.items.length}</span></button>`;
   }).join('');
 
-  const rubric = L.rubricFails.length ? `
-    <div class="dv-panel-rubric">
-      <span>${statusChipHtml('assessment', 'fail', { label: `${L.rubricFails.length} required check${L.rubricFails.length === 1 ? '' : 's'} not met` })}</span>
-      <span class="dv-panel-rubric-text">${escapeHtml(L.rubricFails[0].description || L.rubricFails[0].id)}${L.rubricFails.length > 1 ? ` (and ${L.rubricFails.length - 1} more)` : ''}</span>
-      <button type="button" class="ux-link-btn" data-ux-action="dv-assess">Open the assessment →</button>
-    </div>` : '';
-
   panel.innerHTML = `
     ${p.blurb ? `<p class="dv-panel-intro">${escapeHtml(p.blurb)}</p>` : ''}
-    ${rubric}
-    ${L.counts.total ? `
+    ${L.total ? `
     <div class="dv-panel-bar">
       <p class="dv-panel-count">${escapeHtml(shownPhrase)}</p>
       ${toggles ? `<div class="dv-detail-toggles" role="group" aria-label="Detail-level artefacts">${toggles}</div>` : ''}
+      ${viewSwitchHtml(L.id)}
     </div>` : ''}
     <div class="dv-panel-body"></div>
     ${capped ? `<button type="button" class="ux-secondary-btn dv-show-all" data-ux-action="dv-show-all" data-layer="${L.id}" data-dv-focus="show-all-${L.id}">Show all ${visible.length} artefacts</button>` : ''}`;
 
   const body = panel.querySelector('.dv-panel-body');
   if (!rows.length) {
-    body.innerHTML = layerEmptyHtml(L, task, { byTask, matched, folded, buckets });
+    body.innerHTML = layerEmptyHtml(L, { matched, folded, buckets });
     return;
   }
   // List draws a mark in place of the status chips: say what each mark on
@@ -796,7 +664,7 @@ function fillLayerPanel(ctx, L, task) {
     for (const sg of L4_SUBGROUPS) {
       const sgRows = rows.filter(e => e.sub === sg.key);
       const declared = L.entries.some(e => e.sub === sg.key);
-      if (!sgRows.length && (declared || task !== 'all' || refining)) continue;
+      if (!sgRows.length && (declared || refining)) continue;
       const h = document.createElement('h4');
       h.className = 'dv-subgroup';
       h.textContent = `${sg.label}${sgRows.length ? ` · ${sgRows.length}` : ''}`;
@@ -824,17 +692,15 @@ function rowList(els, view) {
   return list;
 }
 
-// An open layer with nothing to list says what was checked and offers the
-// next step — never a bare "no results".
-function layerEmptyHtml(L, task, { byTask, matched, folded, buckets }) {
+// An open layer with nothing to list says what was looked for, and how to
+// widen the list when a refinement or a fold is why — never a bare "no results".
+function layerEmptyHtml(L, { matched, folded, buckets }) {
   const p = LAYER_PURPOSE[L.id] || { name: L.def.name };
   const where = `${L.id} ${p.name}`;
-  if (!L.counts.total) {
+  if (!L.total) {
     return emptyStateHtml({
       title: `No artefacts on ${where}`,
       checked: LAYER_CHECKED[L.id] || 'this layer of the pack',
-      body: L.rubricFails.length ? `The tier rubric expects ${plural(L.rubricFails.length, 'required check')} here that the pack does not meet yet.` : '',
-      actions: L.rubricFails.length ? [{ action: 'dv-assess', label: 'Open the assessment' }] : [],
     });
   }
   if (matched.length && folded.size === matched.length) {
@@ -846,51 +712,23 @@ function layerEmptyHtml(L, task, { byTask, matched, folded, buckets }) {
         <div class="ux-empty-actions"><button type="button" class="ux-secondary-btn" data-ux-action="dv-detail" data-key="${b.key}">Include ${escapeHtml(b.label)}</button></div>
       </div>`;
   }
-  if (byTask.length && !matched.length) {
+  if (!matched.length) {
     return emptyStateHtml({
       title: `Nothing in ${where} matches the refinement`,
-      checked: `${plural(byTask.length, 'artefact')} that match Show: ${TASK_BY_ID[task].label}`,
+      checked: `${plural(L.total, 'artefact')} in this layer`,
       actions: [{ action: 'dv-clear-refine', label: 'Clear refinement' }],
     });
   }
-  const all = { action: 'dv-task-all', label: `Show all ${plural(L.counts.total, 'artefact')}` };
-  const checked = `${plural(L.counts.total, 'artefact')} in this layer`;
-  switch (task) {
-    case 'attention':
-      // Attention covers template values and references only. A required
-      // check not met here is still open, so the layer is never "ok".
-      if (L.rubricFails.length) {
-        return emptyStateHtml({
-          tone: 'warn',
-          title: `No artefact in ${where} needs attention, but ${plural(L.rubricFails.length, 'required check')} ${L.rubricFails.length === 1 ? 'is' : 'are'} not met`,
-          checked: `${checked}: template values and references`,
-          body: 'Required checks are clauses of the tier rubric, not artefacts, so this list cannot show them. The assessment explains each one and its fix.',
-          actions: [{ action: 'dv-assess', label: 'Open the assessment' }, all],
-        });
-      }
-      return emptyStateHtml({ tone: 'ok', title: `Nothing in ${where} needs attention`, checked: `${checked}: template values and references`, actions: [all] });
-    case 'missingEvidence':
-      return emptyStateHtml({ tone: 'ok', title: `Every artefact in ${where} has live evidence`, checked, actions: [all] });
-    case 'scaffold':
-      return emptyStateHtml({ tone: 'ok', title: `No template values to complete in ${where}`, checked, actions: [all] });
-    case 'live':
-      return emptyStateHtml({
-        title: `No live evidence for ${where} yet`, checked,
-        body: 'Live evidence comes from drafting or refreshing the pack from a live MCP server (Actions menu). Declared artefacts are not wrong; nothing live has confirmed them.',
-        actions: [all],
-      });
-    default:
-      return emptyStateHtml({ title: `Nothing to list on ${where}`, checked });
-  }
+  return emptyStateHtml({ title: `Nothing to list on ${where}`, checked: `${plural(L.total, 'artefact')} in this layer` });
 }
 
 // ---------- actions ----------
 
 function discoverHandlers(ctx) {
   return {
-    'dv-task': (_ev, el) => setTask(ctx, el.dataset.task),
-    'dv-task-all': () => setTask(ctx, 'all'),
     'dv-toggle': (_ev, el) => toggleLayer(ctx, el.dataset.layer),
+    'dv-open': (_ev, el) => openLayer(ctx, el.dataset.layer),
+    'dv-item': (_ev, el) => openItem(ctx, el.dataset.key),
     'dv-detail': (_ev, el) => {
       const key = el.dataset.key;
       if (!key) return;
@@ -909,10 +747,6 @@ function discoverHandlers(ctx) {
       ctx.root.querySelector('.dv-refine-input')?.focus();
       announce('Refinement cleared.');
     },
-    'dv-review':        () => focusTask(ctx, 'attention', L => L.counts.attention > 0),
-    'dv-show-scaffold': () => focusTask(ctx, 'scaffold',  L => L.counts.needsInput > 0),
-    'dv-show-broken':   () => focusTask(ctx, 'attention', L => L.counts.broken > 0),
-    'dv-assess': () => goToAssessment(),
   };
 }
 
@@ -953,24 +787,30 @@ function showAllRows(ctx, layer) {
   el.focus({ preventScroll: !!next && before != null });
 }
 
-function setTask(ctx, task) {
-  if (!TASK_IDS.has(task)) return;
-  state.discoverTask = task;
-  persistence.schedule();
-  renderTasks(ctx);
-  renderLayerList(ctx);
-  ctx.root.querySelector(`[data-dv-focus="task-${task}"]`)?.focus({ preventScroll: true });
-  announce(`Show: ${TASK_BY_ID[task].label}. ${plural(ctx.model.taskCounts[task], 'artefact')} across the pack.`);
-}
-
 function setView(ctx, id) {
   const view = DISCOVER_VIEWS.find(v => v.id === id);
   if (!view) return;
   state.discoverDetail = view.id;
   persistence.schedule();
-  renderViews(ctx);
   repaintList(ctx, `view-${view.id}`);
   announce(`View: ${view.label}. ${view.tip}`);
+}
+
+// "+N more" on a group: open the layer's full list (never close it) and
+// bring the list up.
+function openLayer(ctx, layerId) {
+  if (!layerId) return;
+  if (state.layerFilter !== layerId) toggleLayer(ctx, layerId);
+  else ctx.root.querySelector(`[data-dv-focus="toggle-${layerId}"]`)?.focus({ preventScroll: true });
+  ctx.root.querySelector(`#dv-panel-${layerId}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// An item on the board: its full record, in the drawer.
+function openItem(ctx, key) {
+  for (const L of ctx.model.layers) {
+    const e = L.entries.find(x => x.key === key);
+    if (e) { openDrawer(e.a, L.def, e.sub ?? undefined); return; }
+  }
 }
 
 function toggleLayer(ctx, layerId) {
@@ -984,43 +824,8 @@ function toggleLayer(ctx, layerId) {
   const L = ctx.model.layers.find(x => x.id === layerId);
   const p = LAYER_PURPOSE[layerId];
   announce(opening
-    ? `${layerId} ${p?.name || ''} opened: ${ctx.root.querySelector(`#dv-panel-${layerId} .dv-panel-count`)?.textContent || plural(L?.counts.total || 0, 'artefact')}.`
+    ? `${layerId} ${p?.name || ''} opened: ${ctx.root.querySelector(`#dv-panel-${layerId} .dv-panel-count`)?.textContent || plural(L?.total || 0, 'artefact')}.`
     : `${layerId} ${p?.name || ''} closed.`);
-}
-
-// A header action: press a task filter, open the first layer it concerns and
-// bring that layer to the top of the screen.
-function focusTask(ctx, task, pick) {
-  state.discoverTask = task;
-  const L = ctx.model.layers.find(pick);
-  if (L) { state.layerFilter = L.id; state.activeLayer = L.id; }
-  persistence.schedule();
-  renderTasks(ctx);
-  renderLayerList(ctx);
-  if (!L) return;
-  const item = ctx.root.querySelector(`#dv-layer-${L.id}`);
-  item?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  ctx.root.querySelector(`#dv-toggle-${L.id}`)?.focus({ preventScroll: true });
-  announce(`${TASK_BY_ID[task].label}: ${L.id} ${LAYER_PURPOSE[L.id]?.name || ''} opened.`);
-}
-
-// Discover → Diagnose (the assessment). Through the chrome's Diagnose tab
-// when it is there, so the route runs exactly as a tab click does (the
-// working context bar shows the baseline on comparison screens); the host
-// seam otherwise. The Discover scroll position is already remembered, and
-// coming back restores it.
-function goToAssessment() {
-  state.diagnoseSub = 'grade';
-  const tab = document.querySelector('.observa-tab[data-view="compare"]');
-  if (tab) {
-    tab.click();
-  } else {
-    state.view = 'compare';
-    state.activeCardKey = null;
-    appHost.renderTabs();
-    appHost.renderMainView();
-  }
-  window.scrollTo({ top: 0 });
 }
 
 // Remember where the user is on Discover, per pack, while Discover is showing.
