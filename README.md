@@ -256,8 +256,8 @@ npm run dev
 Open `http://127.0.0.1:8000` and sign in with **admin / admin** — first
 boot seeds this default user and asks for a password change at sign-in
 (skippable for now; it asks again each sign-in until a real password
-lands — or change it any time from the account menu, top right once a
-pack is open, which also has **sign out my other sessions**). From
+lands — or change it any time from the account menu, top right on every
+screen, which also has **sign out my other sessions**). From
 there it's a signed-in app: your packs, deploy audit and run history
 belong to you. (`OBSERVOGRAM_AUTH=off` skips login entirely
 for a throwaway open sandbox.)

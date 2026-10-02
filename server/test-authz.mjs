@@ -575,6 +575,54 @@ test('the account menu\'s "sign out my other sessions": the route it posts to, a
   assert.match(fn, /chip\.querySelector\('\.hdr-user-menu-id'\)\.textContent = signOutOthersText\(status, body\);/);
 });
 
+// The account menu is on every screen. setupIdentityChip mounts it in the
+// chrome's action cluster (.observa-hdr .observa-actions), which boot mounts
+// first and no mode rule hides. The context bar (.hdr) it used to sit in IS
+// hidden on the home and Build screens — where a signed-in user then had no
+// way to sign out or change a password until a pack was open.
+test('the account menu mounts in the one bar every screen shows — not the context bar the home and Build screens hide', () => {
+  const src = withoutComments(readFileSync(join(STUDIO, 'app.mjs'), 'utf8'));
+  const fn = functionSource(src, 'setupIdentityChip');
+  assert.match(fn, /const actions = document\.querySelector\('\.observa-hdr \.observa-actions'\);/, 'the chrome\'s action cluster');
+  assert.match(fn, /\n {2}actions\.appendChild\(chip\);\n\}$/, 'the chip is its last child');
+  assert.doesNotMatch(fn, /insertBefore\(chip,/, 'not beside the theme toggle in the context bar');
+  const boot = functionSource(src, 'boot');
+  const chromeAt = boot.indexOf('installObservaChrome();');
+  assert.ok(chromeAt >= 0 && chromeAt < boot.indexOf('setupIdentityChip();'), 'boot mounts the chrome before the chip');
+  // Beside the tabs the chip's name gives way — ten characters at a laptop
+  // width, the glyph at phone width — so the tabs keep their room and the
+  // popover stays on screen. The cap is on the name, never the button: the
+  // glyph and the caret that marks it a menu stay. (The chrome's height is
+  // measured by syncContextBarHeight, so a chrome the chip makes taller still
+  // has the context bar flush under it.)
+  assert.match(functionSource(src, 'syncContextBarHeight'), /setProperty\('--observa-chrome-h',/, 'the chrome\'s height is measured, not assumed');
+  assert.doesNotMatch(src, /trackChromeHeight/, 'by one measurer, not two');
+  // Its outside-click closer listens on the way down: the Advanced toggle
+  // beside it stops its click from bubbling, and both menus stayed open.
+  assert.match(fn, /document\.addEventListener\('click', \(e\) => \{ if \(!chip\.contains\(e\.target\)\) setOpen\(false\); \}, true\);/, 'opening Advanced closes the account menu');
+  assert.match(fn, /<span class="hdr-user-name">\$\{escapeHtml\(me\.name \|\| me\.email \|\| me\.sub\)\}<\/span>/, 'the name is its own span, so a stylesheet can let it give way');
+  const ux = readFileSync(join(STUDIO, 'ux.css'), 'utf8');
+  const at1280 = ux.indexOf('@media (max-width: 1280px) {');
+  const cap = ux.indexOf('.observa-actions .hdr-user-name { display: inline-block; max-width: 10ch;');
+  assert.ok(!ux.includes('.observa-actions .hdr-user-btn { max-width'), 'the button itself is not capped: that clipped the caret');
+  const at720 = ux.search(/@media \(max-width: 720px\) \{\r?\n\s*\.observa-actions \.hdr-user-name \{ position: absolute; width: 1px;/);
+  assert.ok(at1280 >= 0 && cap > at1280 && at720 > cap, 'the chip gives way at a laptop width (ten characters) and at phone width (its glyph)');
+
+  // Every selector a mode rule hides, from every studio stylesheet.
+  const hidden = [];
+  for (const f of readdirSync(STUDIO).filter((n) => n.endsWith('.css'))) {
+    const css = readFileSync(join(STUDIO, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ' ');
+    for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (!/(display\s*:\s*none|visibility\s*:\s*hidden)/.test(m[2])) continue;
+      for (const sel of m[1].split(',')) if (sel.includes('[data-mode=')) hidden.push(sel.trim());
+    }
+  }
+  for (const mode of ['home', 'build']) {
+    assert.ok(hidden.some((s) => s.endsWith(`[data-mode="${mode}"] .hdr`)), `the context bar is hidden in ${mode} mode (why the menu moved)`);
+  }
+  for (const s of hidden) assert.doesNotMatch(s, /observa-hdr|observa-actions|hdr-user/, `a mode rule hides the account menu's bar: ${s}`);
+});
+
 // The deploy modal's saved targets (studio/api.mjs): per user, each MCP
 // URL stripped as the remembered URL is, the pre-slice-3 browser-wide key
 // adopted once, every key gone at sign-out. The rule is tools/lib's
