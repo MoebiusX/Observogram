@@ -191,7 +191,7 @@ tr.diag-flash > td { animation: diag-flash-bg 1.8s ease-out; }
 
 /* ============================================================
    COMPARE (Diagnose → Compare, compare-view.mjs renderCompareView)
-   Task summary · Summary / Changes needing review / All differences.
+   Side by side / Changes needing review / Summary.
    ============================================================ */
 
 .compare-digest { padding: 16px 24px 0; }
@@ -280,8 +280,109 @@ tr.diag-flash > td { animation: diag-flash-bg 1.8s ease-out; }
 .compare-counts-table tbody th { font-weight: 600; color: var(--ux-ink); white-space: nowrap; }
 .compare-counts-table td { font-variant-numeric: tabular-nums; }
 .compare-counts-differ { font-size: 13px; color: var(--ux-warn); }
-.compare-packs-head { padding-top: 8px; }
-.compare-packs-head .diag-block-title { font-size: 17px; }
+.compare-focus-row { padding-top: 4px; }
+
+/* Side by side: two panes, Pack A on the left and Pack B on the right. The
+   heads stay pinned under the context bar, each pane carries its pack's
+   colour, and a rule runs between them. */
+.compare-cols-head {
+  position: sticky; top: calc(var(--observa-chrome-h, 96px) + var(--ux-context-h, 0px)); z-index: 40;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 3px;
+  background: var(--line-2); border-bottom: 1px solid var(--line-2);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.22);
+}
+.cch-side {
+  --cch: var(--cmp-a);
+  display: flex; align-items: center; gap: 10px; min-width: 0; padding: 9px 18px;
+  border-top: 3px solid var(--cch);
+  background: color-mix(in srgb, var(--cch) 14%, var(--card));
+}
+.cch-b { --cch: var(--cmp-b); }
+.cch-letter {
+  flex: 0 0 auto; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px;
+  background: var(--cch); color: #0b0e1a; font: 700 15px/1 var(--sans);
+}
+.cch-key {
+  flex: 0 0 auto; font: 700 12px/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--cch);
+}
+.cch-name {
+  min-width: 0; font: 600 15px/1.3 var(--sans); color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cch-role {
+  flex: 0 0 auto; margin-left: auto; font: 500 11px/1 var(--mono); letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.compare-view .compare-layer-grid { gap: 3px; background: var(--line-2); }
+.compare-view .compare-layer-col-a { background: color-mix(in srgb, var(--cmp-a) 5%, var(--card)); }
+.compare-view .compare-layer-col-b { background: color-mix(in srgb, var(--cmp-b) 5%, var(--card)); }
+.compare-view .compare-layer-col-a .compare-side-card { border-left: 3px solid color-mix(in srgb, var(--cmp-a) 55%, transparent); }
+.compare-view .compare-layer-col-b .compare-side-card { border-left: 3px solid color-mix(in srgb, var(--cmp-b) 55%, transparent); }
+.compare-view .compare-side-card.is-both { border-left-color: var(--ux-ok); }
+.compare-view .compare-side-card.is-only-a { border-left-color: var(--cmp-a); }
+.compare-view .compare-side-card.is-only-b { border-left-color: var(--cmp-b); }
+.compare-col-group {
+  grid-column: 1 / -1; display: flex; align-items: baseline; gap: 8px; margin: 2px 0 0; cursor: help;
+  font: 700 11.5px/1.3 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3);
+}
+.compare-col-group + .compare-side-card { margin-top: 0; }
+.compare-layer-col-a .compare-col-group.is-only { color: var(--cmp-a); }
+.compare-layer-col-b .compare-col-group.is-only { color: var(--cmp-b); }
+.compare-col-group.is-both { color: var(--ux-ok); }
+.compare-col-group-n { font-weight: 600; color: var(--ink-2); }
+/* Held by one pack in a family the other had no way to observe: not a
+   difference, not a match. The reason is printed under the group title. */
+.compare-col-group.is-unchecked { color: var(--ux-warn); }
+.compare-col-group-cards { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--ink-3); }
+.compare-col-group-why {
+  grid-column: 1 / -1; margin: -2px 0 2px; max-width: 78ch;
+  font: 400 13px/1.45 var(--sans); color: var(--ink-3); overflow-wrap: anywhere;
+}
+.compare-view .compare-layer-col-a .compare-side-card.is-unchecked,
+.compare-view .compare-layer-col-b .compare-side-card.is-unchecked { border-left: 3px dashed var(--ux-warn); }
+.compare-side-card .diff-chip.chip-unchecked { background: var(--ux-warn-bg); color: var(--ux-warn); }
+.compare-summary.has-unchecked { grid-template-columns: repeat(6, 1fr); }
+.compare-cell.c-unchecked { border-top: 3px solid var(--ux-warn); }
+@media (max-width: 900px) { .compare-summary.has-unchecked { grid-template-columns: 1fr 1fr; } }
+
+/* View: how much of each artefact the two panes draw (state.compareDetail). */
+.compare-view-switch { display: inline-flex; align-items: center; gap: 8px; margin-left: 10px; }
+.compare-view-switch .ux-segmented { margin: 0; }
+.compare-view-switch .ux-segmented button { min-height: 30px; padding: 4px 12px; font-size: 13px; }
+/* List — one line per artefact: ID · name · comparison status. */
+.compare-view[data-cview="list"] .compare-layer-col {
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 3px; padding: 8px 12px;
+}
+.compare-view[data-cview="list"] .compare-side-card {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: baseline; gap: 8px;
+  padding: 4px 9px; border-right: 0; border-bottom: 0;
+}
+.compare-view[data-cview="list"] .compare-side-card .card-head { display: contents; }
+.compare-view[data-cview="list"] .compare-side-card .card-id { order: 1; font-size: 12px; }
+.compare-view[data-cview="list"] .compare-side-card .card-title {
+  order: 2; margin: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.compare-view[data-cview="list"] .compare-side-card .diff-chip { order: 3; font-size: 10.5px; padding: 1px 5px; }
+.compare-view[data-cview="list"] .compare-side-card .gating-chip,
+.compare-view[data-cview="list"] .compare-side-card .card-desc,
+.compare-view[data-cview="list"] .compare-side-card .card-foot { display: none; }
+.compare-view[data-cview="list"] .compare-col-group { margin-top: 4px; }
+/* Tiles — ID, name, status and source; no summary. */
+.compare-view[data-cview="tiles"] .compare-layer-col {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px;
+}
+.compare-view[data-cview="tiles"] .compare-side-card { padding: 8px 10px 7px; }
+.compare-view[data-cview="tiles"] .compare-side-card .card-desc { display: none; }
+.compare-view[data-cview="tiles"] .compare-side-card .card-title { font-size: 13px; }
+.compare-view[data-cview="tiles"] .compare-side-card .card-foot { margin-top: 4px; }
+/* Details — one artefact per row in each pane, the summary in full. */
+.compare-view[data-cview="details"] .compare-layer-col { grid-template-columns: minmax(0, 1fr); }
+.compare-view[data-cview="details"] .compare-side-card .card-desc {
+  display: block; -webkit-line-clamp: unset; line-clamp: unset; overflow: visible;
+}
+@media (max-width: 880px) {
+  .compare-cols-head { position: static; grid-template-columns: 1fr; }
+}
 
 /* The "36 vs 6" layer head, said in words. */
 .cli-side { font: 13px/1.3 var(--sans); color: var(--ux-ink-3); }

@@ -153,9 +153,8 @@ async function rehydrateFromPersistence() {
   if (typeof saved.expandL3Queries === 'boolean') state.expandL3Queries = saved.expandL3Queries;
   if (typeof saved.layersSearch === 'string') state.layersSearch = saved.layersSearch;
   if (typeof saved.layersDomain === 'string') state.layersDomain = saved.layersDomain;
-  if (typeof saved.discoverTask === 'string') state.discoverTask = saved.discoverTask;
+  if (['list', 'tiles', 'cards', 'details'].includes(saved.compareDetail)) state.compareDetail = saved.compareDetail;
   if (['list', 'tiles', 'cards', 'details'].includes(saved.discoverDetail)) state.discoverDetail = saved.discoverDetail;
-  if (['summary', 'review', 'all'].includes(saved.compareFocus)) state.compareFocus = saved.compareFocus;
 
   // Make sure the picker can label an archived example by pushing the
   // catalog-entry shape into state.catalog (same trick renderPackBSelect uses).
@@ -673,10 +672,9 @@ export function layerArtefactCount(layerId) {
 // ============================================================
 
 export function renderTabs() {
-  // Keep the OBSERVA chrome in sync on every re-render — the active tab and
-  // the per-view chrome (the baseline picker shows only where packs are
-  // compared). Views that switch state.view through the host seam
-  // (appHost.renderTabs) get the whole chrome, not just the tab highlight.
+  // Keep the OBSERVA chrome in sync on every re-render. Views that switch
+  // state.view through the host seam (appHost.renderTabs) get the whole
+  // chrome, not just the tab highlight.
   applyModeChrome();
   const tabs = $('#layer-tabs');
   if (!tabs) return;
@@ -1218,8 +1216,6 @@ function withPlaceholderPasses(res) {
   return res?.conformance && Array.isArray(onPlaceholder) ? { ...res.conformance, onPlaceholder } : res?.conformance;
 }
 
-// The views that read Pack B — the only ones whose header shows the baseline picker.
-const COMPARISON_VIEWS = new Set(['compare', 'benchmark', 'compare-artefacts', 'compile', 'traceability', 'atlas']);
 
 // The BUILD journey's three cards (docs/BUILD_JOURNEY.md) live in build-model.mjs
 // (BUILD_TABS, pure, tested): the same shape as OBSERVA_TABS and the same
@@ -1288,15 +1284,24 @@ function routeTo(id) {
 // .ux-decision.is-sticky) pin at chrome + --ux-context-h. The bar wraps onto
 // more rows on narrow screens and is hidden on home and in Build, so measure
 // it; ux.css holds the single-row default for when this cannot run.
+function syncContextBarHeight() {
+  const bar = document.querySelector('header.hdr');
+  if (!bar) return;
+  const h = Math.ceil(bar.getBoundingClientRect().height);
+  document.body.style.setProperty('--ux-context-h', `${h}px`);
+  // The chrome above it too: its height follows the type and the stepper's
+  // wrapping, and everything pinned below counts from its real bottom edge.
+  const chrome = document.querySelector('.observa-hdr');
+  if (chrome) document.body.style.setProperty('--observa-chrome-h', `${Math.ceil(chrome.getBoundingClientRect().height)}px`);
+}
 function trackContextBarHeight() {
   const bar = document.querySelector('header.hdr');
   if (!bar || typeof ResizeObserver !== 'function') return;
-  const apply = () => {
-    const h = Math.ceil(bar.getBoundingClientRect().height);
-    document.body.style.setProperty('--ux-context-h', `${h}px`);
-  };
-  new ResizeObserver(apply).observe(bar);
-  apply();
+  const ro = new ResizeObserver(syncContextBarHeight);
+  ro.observe(bar);
+  const chrome = document.querySelector('.observa-hdr');
+  if (chrome) ro.observe(chrome);
+  syncContextBarHeight();
 }
 
 // The context bar and those strips pin under the chrome by
@@ -1319,7 +1324,6 @@ function trackChromeHeight(hdr) {
 function installObservaChrome() {
   if (document.querySelector('.observa-hdr')) return;
   document.body.classList.add('chrome-observa');
-  trackContextBarHeight();
 
   const hdr = document.createElement('header');
   hdr.className = 'observa-hdr';
@@ -1501,6 +1505,8 @@ function installObservaChrome() {
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAdv(); });
 
   paintObservaActiveTab();
+  // Once the chrome is in the page: keep its height and the context bar's measured.
+  trackContextBarHeight();
 }
 
 function paintObservaActiveTab() {
@@ -1573,7 +1579,6 @@ async function boot() {
   setupIdentityChip();
   setupResetButton();
   setupExportButton();
-  setupHeaderActionsMenu();
   // Eagerly fetch /api/examples so the Pack B picker has the archived
   // reference packs available even before the user visits the home
   // examples disclosure. AWAITED so the persistence rehydrate below can
@@ -1690,13 +1695,15 @@ function homeChoiceHtml({ checkOpen }) {
           <span class="home-choice-key" aria-hidden="true">◎</span>
           <span class="home-choice-title">Check an existing service or pack</span>
           <span class="home-choice-sub">Inspect its artefacts, assess evidence, and resolve gaps.</span>
-          <span class="home-choice-path">Discover → Diagnose → Remediate</span>
+          <span class="home-choice-path">Discover / Diagnose / Remediate</span>
+          <span class="home-choice-cta">Inspect a service</span>
         </button>
         <button type="button" class="home-choice-card is-build" id="home-choice-build">
           <span class="home-choice-key" aria-hidden="true">⬡</span>
           <span class="home-choice-title">Build a new pack</span>
           <span class="home-choice-sub">Define a service and generate a pack you can review.</span>
-          <span class="home-choice-path">Define → Compile → Verify</span>
+          <span class="home-choice-path">Define / Compile / Verify</span>
+          <span class="home-choice-cta">Create a pack</span>
         </button>
       </div>
     </div>`;
@@ -1947,15 +1954,12 @@ function applyModeChrome() {
   // Pack B picker stays visible whenever we're not on home — empty until
   // the user picks something. This is the unlock: no more rigid single
   // vs compare mode. Hide it on Compare for the same duplication reason.
-  // Comparison controls belong on the screens that compare (the UX
-  // review: keep them where they matter) — Diagnose, Remediate,
-  // Traceability and the Atlas; Discover and the single-pack tools work on
-  // the open pack alone.
+  // Loading Pack A, loading Pack B and comparing them is the studio's core
+  // operation, so the picker is on every workspace screen, Discover included.
   const packBCtrl = $('#ctrl-pack-b');
   const envBCtrl  = $('#ctrl-env-b');
-  const comparing = COMPARISON_VIEWS.has(state.view || 'layers');
-  if (packBCtrl) packBCtrl.hidden = isHome || onCompare || !comparing;
-  if (envBCtrl)  envBCtrl.hidden  = isHome || onCompare || !comparing || !state.packB;
+  if (packBCtrl) packBCtrl.hidden = isHome || onCompare;
+  if (envBCtrl)  envBCtrl.hidden  = isHome || onCompare || !state.packB;
   // Clear-B button only when B is loaded.
   const clearB = $('#pack-b-clear');
   if (clearB) clearB.hidden = !state.packB || onCompare;
@@ -1973,6 +1977,10 @@ function applyModeChrome() {
   // through here, so this is where the set is swapped (idempotent: the nav
   // is rebuilt only when the set changes).
   paintObservaActiveTab();
+  // The bar's controls just changed (a picker shown or hidden can wrap it
+  // onto another row): re-measure now, so what pins under it — the panels,
+  // the drawers, the sticky strips — is never a frame behind the observer.
+  syncContextBarHeight();
 }
 
 // RESET button — clears EVERYTHING (server uploads + client persistence)
@@ -2017,53 +2025,6 @@ function setupResetButton() {
     //    bypasses the disk cache for HTML.
     location.reload();
   };
-}
-
-// The working context bar's one Actions menu (index.html #hdr-actions).
-// Each item proxies to an original control that stays in the DOM, hidden,
-// so the upload / scan / draft / export flows keep their single wiring.
-function setupHeaderActionsMenu() {
-  const wrap = $('#hdr-actions');
-  const btn = $('#hdr-actions-btn');
-  const menu = $('#hdr-actions-menu');
-  if (!wrap || !btn || !menu) return;
-  const items = () => [...menu.querySelectorAll('.hdr-menu-item:not([disabled])')];
-  const close = (refocus) => {
-    if (menu.hidden) return;
-    menu.hidden = true;
-    btn.setAttribute('aria-expanded', 'false');
-    if (refocus) btn.focus();
-  };
-  const open = () => {
-    // Export needs a pack; say why instead of hiding the item.
-    for (const it of menu.querySelectorAll('[data-needs-pack]')) {
-      it.disabled = !focusedPackId();
-      it.title = it.disabled ? 'Open a pack first' : '';
-    }
-    menu.hidden = false;
-    btn.setAttribute('aria-expanded', 'true');
-    items()[0]?.focus();
-  };
-  btn.addEventListener('click', (e) => { e.stopPropagation(); if (menu.hidden) open(); else close(false); });
-  menu.addEventListener('click', (e) => {
-    const it = e.target.closest('.hdr-menu-item');
-    if (!it || it.disabled) return;
-    e.stopPropagation();
-    close(false);
-    const target = document.querySelector(it.dataset.proxy);
-    setTimeout(() => target?.click(), 0);
-  });
-  menu.addEventListener('keydown', (e) => {
-    const list = items();
-    const i = list.indexOf(document.activeElement);
-    if (e.key === 'ArrowDown') { e.preventDefault(); list[(i + 1) % list.length]?.focus(); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); list[(i - 1 + list.length) % list.length]?.focus(); }
-    else if (e.key === 'Home') { e.preventDefault(); list[0]?.focus(); }
-    else if (e.key === 'End') { e.preventDefault(); list[list.length - 1]?.focus(); }
-    else if (e.key === 'Escape') { e.preventDefault(); close(true); }
-    else if (e.key === 'Tab') close(false);
-  });
-  document.addEventListener('click', (e) => { if (!wrap.contains(e.target)) close(false); });
 }
 
 // Export button — download the focused pack as one ZIP: its canonical
@@ -3484,18 +3445,10 @@ function setRefreshStatus(msg, kind = '') {
 // loads into the active session just like any other pack.
 // ============================================================
 
-const CRAWL_SCAN_EXT = /\.(ya?ml|json|cjs|mjs|js|jsx|ts|tsx|py|go|java|kt|rs|cs)$/i;
-const CRAWL_IGNORE_DIRS = new Set([
-  '.git', '.github', '.gitlab', '.circleci',     // CI and version control
-  'node_modules', 'vendor', 'venv', '.venv',
-  'dist', 'build', 'out', 'target', '.cache',
-  '.next', '.nuxt', '.svelte-kit',
-  '.terraform', '.serverless',
-  '__pycache__', '.pytest_cache', '.mypy_cache',
-  '.idea', '.vscode',
-  'coverage',
-]);
-const CRAWL_MAX_FILE_BYTES = 5 * 1024 * 1024;
+// Which files a scan reads — the extensions, the size cap and the folders it
+// never enters — is the crawler library's rule (scanReadsPath, scanSkipsName),
+// the same one the CLI walker applies, so a folder gives the same pack
+// whether it is picked, dropped or scanned from a terminal.
 const CRAWL_PAYLOAD_SOFT_CAP = 15 * 1024 * 1024;  // leave 1 MB headroom under the 16 MB server cap
 
 // Lazy-loaded reference to the shared crawler library (also used by
@@ -3512,6 +3465,7 @@ const crawlState = {
   files: new Map(),       // relPath → string content (ALL staged files)
   classified: new Map(),  // relPath → kind (only files that match an artefact)
   skipped: [],            // [{relPath, reason}] for the "what was skipped" disclosure
+  ignored: 0,             // files under folders a scan never enters (node_modules, dist, dot-folders…): not read
   rootName: null,
   lastResult: null,
 };
@@ -3577,7 +3531,8 @@ function setupCrawlPanel() {
       ? [...dt.items].map(i => i.webkitGetAsEntry?.()).filter(Boolean)
       : [];
     if (entries.length) {
-      for (const ent of entries) await readEntry(ent, '');
+      const lib = await getCrawlerLib();
+      for (const ent of entries) await readEntry(ent, '', lib);
       finalizeStaging();
     } else if (dt?.files?.length) {
       stageFileList(dt.files, null);
@@ -3607,34 +3562,49 @@ function setupCrawlPanel() {
   }
 }
 
-// Read a single FileSystemEntry recursively into the staged map.
-async function readEntry(entry, prefix) {
+// Read a single FileSystemEntry recursively into the staged map. The dropped
+// folder itself (no prefix yet) is the user's choice whatever its name; below
+// it the scan rule decides.
+async function readEntry(entry, prefix, lib) {
   if (!entry) return;
   if (entry.isFile) {
-    if (!CRAWL_SCAN_EXT.test(entry.name)) return;
+    if (lib.scanSkipsName(entry.name) || !lib.SCAN_EXT.test(entry.name)) return;
     const file = await new Promise((res, rej) => entry.file(res, rej));
-    if (file.size > CRAWL_MAX_FILE_BYTES) return;
+    if (file.size > lib.SCAN_MAX_FILE_BYTES) return;
     const rel = (prefix ? `${prefix}/` : '') + entry.name;
     const text = await file.text();
     crawlState.files.set(rel, text);
     if (!crawlState.rootName) crawlState.rootName = entry.fullPath?.split('/')[1] || null;
   } else if (entry.isDirectory) {
-    if (CRAWL_IGNORE_DIRS.has(entry.name)) return;
+    if (prefix && lib.scanSkipsName(entry.name, { dir: true })) { crawlState.ignored++; return; }
     const reader = entry.createReader();
     let batch;
     do {
       batch = await new Promise((res, rej) => reader.readEntries(res, rej));
-      for (const ent of batch) await readEntry(ent, (prefix ? `${prefix}/` : '') + entry.name);
+      for (const ent of batch) await readEntry(ent, (prefix ? `${prefix}/` : '') + entry.name, lib);
     } while (batch.length > 0);
   }
 }
 
 async function stageFileList(fileList, _rootHint) {
-  for (const f of fileList) {
-    if (!CRAWL_SCAN_EXT.test(f.name)) continue;
-    if (f.size > CRAWL_MAX_FILE_BYTES) continue;
-    // webkitRelativePath populated when picked via webkitdirectory.
+  // Taken now: the caller clears its input as soon as this returns its promise.
+  const files = [...fileList];
+  const lib = await getCrawlerLib();
+  const list = $('#crawl-staged-files');
+  const total = files.length;
+  let seen = 0;
+  for (const f of files) {
+    // The folder picker lists every file under the folder — node_modules,
+    // build output, agent worktrees — so the scan rule is applied to the
+    // PATH before anything is read. webkitRelativePath is set when picked
+    // via webkitdirectory; its first segment is the picked folder's name.
     const rel = f.webkitRelativePath || f.name;
+    if (++seen % 2000 === 0 && list) list.innerHTML = `<span class="crawl-staged-empty">reading the folder… ${seen} of ${total} files</span>`;
+    if (!lib.scanReadsPath(rel, { skipRoot: !!f.webkitRelativePath })) {
+      if (lib.SCAN_EXT.test(f.name)) crawlState.ignored++;
+      continue;
+    }
+    if (f.size > lib.SCAN_MAX_FILE_BYTES) continue;
     crawlState.files.set(rel, await f.text());
     if (!crawlState.rootName && f.webkitRelativePath) {
       crawlState.rootName = f.webkitRelativePath.split('/')[0];
@@ -3716,6 +3686,7 @@ function renderStagedList(totalBytes) {
     </div>
     ${kindCounts ? `<div class="crawl-staged-kinds">${kindCounts}</div>` : ''}
     <div class="crawl-staged-sample">${sampleHtml}</div>
+    ${crawlState.ignored ? `<div class="crawl-staged-ignored">${crawlState.ignored} ${crawlState.ignored === 1 ? 'entry' : 'entries'} under dependency, build or hidden folders (node_modules, dist, .git, .claude …) ${crawlState.ignored === 1 ? 'was' : 'were'} not read.</div>` : ''}
     ${skipped ? `
       <details class="crawl-staged-skipped">
         <summary>${skipped} file${skipped === 1 ? '' : 's'} skipped — not an observability artefact</summary>
@@ -3732,6 +3703,7 @@ function resetCrawlStaged() {
   crawlState.files.clear();
   crawlState.classified.clear();
   crawlState.skipped = [];
+  crawlState.ignored = 0;
   crawlState.rootName = null;
   crawlState.lastResult = null;
   finalizeStaging();
@@ -4943,16 +4915,35 @@ function renderDraftMcpResult(out) {
     ? row(`${plural(rulesUnhealthy.length, 'rule')} unhealthy`, rulesUnhealthy.join(', '))
     : '';
   const stackBlock = renderStackSelfMetricsBlock(out.summary, row);
+  // Backends are the products with evidence of running here. What the MCP
+  // can merely speak to is said apart, so "supported" never reads as
+  // "deployed".
+  const supportedOnly = d.supportedOnly || [];
+  const supportedOnlyRow = supportedOnly.length
+    ? row('supported by the MCP, not seen running', `${supportedOnly.length} — ${supportedOnly.slice(0, 8).join(', ')}${supportedOnly.length > 8 ? ', …' : ''}`, true)
+    : '';
+  const alertRulesSplitRow = probesS.has('alert_rules') && (d.alertRulesLinked || d.alertRulesOperational)
+    ? row('… guarding an SLO · operational', `${d.alertRulesLinked || 0} · ${d.alertRulesOperational || 0}`, true)
+    : '';
+  // What this fetch had no way to look at: a comparison reports these
+  // families as "not checked", never as missing.
+  const unobservedFamilies = Object.keys(d.unobserved || {});
+  const unobservedNote = unobservedFamilies.length
+    ? `<div class="crawl-evidence-note">Not observable through this MCP: ${escapeHtml(unobservedFamilies.map(k => k.replace(/_/g, ' ')).join(', '))}. A comparison shows what another pack declares there as <em>not checked</em>, not as missing.</div>`
+    : '';
   $('#draft-mcp-result-summary').innerHTML = `
     <h4>what the MCP attested</h4>
     <table class="crawl-summary-table">
       ${row('services', (d.servicesDiscovered || []).length)}
       ${row('backends', d.backends)}
+      ${supportedOnlyRow}
       ${row('active anomalies', d.activeAnomalies)}
       ${probeRow('recording rules', 'recording_rules', d.recordingRules)}
       ${recordingEvidenceRow}
       ${probeRow('alert rules',     'alert_rules',     d.alertRules)}
+      ${alertRulesSplitRow}
       ${alertEvidenceRow}
+      ${probeRow('alerting routes', 'alerting_routes', d.alertingRoutes)}
       ${probeRow('dashboards',      'dashboards',      d.dashboards)}
       ${probeRow('scrape jobs',     'scrape_configs',  (d.scrapeJobs || []).length)}
       ${scrapeDownRow}
@@ -4960,6 +4951,7 @@ function renderDraftMcpResult(out) {
       ${probeRow('metric names',    'metric_names',    d.metricNamesCount)}
     </table>
     ${stackBlock}
+    ${unobservedNote}
     ${alertsFiringCount > 0 || recordingFallbackCount > 0 ? `
       <div class="crawl-evidence-note">
         Rows in italic = fallback evidence. The standard rule endpoints came back empty,

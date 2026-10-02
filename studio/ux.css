@@ -225,31 +225,6 @@ body.chrome-observa[data-mode="home"] .observa-tagline-step,
 body.chrome-observa[data-mode="home"] .observa-tagline-dot { display: none; }
 body.chrome-observa[data-mode="home"] .observa-tagline-home { display: inline; }
 
-/* The working context bar: context stays, infrequent actions fold away. */
-body.chrome-observa .hdr .hdr-src { display: none !important; }
-.hdr-menu { position: relative; margin-left: auto; }
-.hdr-menu + .theme-toggle { margin-left: 0; }
-.hdr-menu-btn { min-height: 32px; }
-.hdr-menu-panel {
-  position: absolute; right: 0; top: calc(100% + 8px); z-index: 120;
-  width: 320px; max-width: calc(100vw - 32px);
-  padding: 6px; border-radius: 10px;
-  background: var(--ux-bg); border: 1px solid var(--ux-line);
-  box-shadow: 0 18px 40px rgba(0,0,0,0.35);
-}
-.hdr-menu-group {
-  padding: 10px 10px 4px; font: 600 12px/1.2 var(--sans);
-  text-transform: uppercase; letter-spacing: 0.05em; color: var(--ux-ink-3);
-}
-.hdr-menu-item {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%;
-  padding: 8px 10px; min-height: 40px; border: 0; border-radius: 6px; cursor: pointer;
-  background: transparent; color: var(--ux-ink); text-align: left; font: 500 14px/1.3 var(--sans);
-}
-.hdr-menu-item:hover, .hdr-menu-item:focus-visible { background: var(--ux-bg-2); }
-.hdr-menu-item[disabled] { opacity: 0.55; cursor: not-allowed; }
-.hdr-menu-sub { font: 400 13px/1.35 var(--sans); color: var(--ux-ink-3); }
-
 /* ---------- home: one question, two equal choices ---------- */
 .home-hero { max-width: 880px; }
 .home-greeting { margin: 0 0 6px; font: 500 16px/1.4 var(--sans); color: var(--ux-ink-2); }
@@ -309,6 +284,55 @@ body.chrome-observa { --observa-chrome-h: 102px; }
    where the bar is hidden. */
 body.chrome-observa { --ux-context-h: 56px; }
 body.chrome-observa[data-mode="home"], body.chrome-observa[data-mode="build"] { --ux-context-h: 0px; }
+/* The header's panels (refresh from MCP, draft from live, scan a repo) open
+   under the chrome and the context bar, never behind them: both are pinned,
+   and the bar is two rows tall with the pack operations in it. */
+body.chrome-observa .mcp-panel,
+body.chrome-observa .crawl-panel {
+  top: calc(var(--observa-chrome-h, 102px) + var(--ux-context-h, 56px) + 8px);
+  max-height: calc(100vh - var(--observa-chrome-h, 102px) - var(--ux-context-h, 56px) - 24px);
+  z-index: 96;
+}
+body.chrome-observa .mcp-panel { overflow: auto; }
+/* The artefact drawers (one on the right; Pack A's on the left in Compare)
+   start under both pinned bars too: from the top of the window their heads —
+   the artefact's name and the close button — sat behind the chrome. */
+body.chrome-observa .drawer { top: calc(var(--observa-chrome-h, 102px) + var(--ux-context-h, 56px)); }
+/* The deploy dialog is modal: it and its scrim sit over the chrome and the
+   context bar (100 and 90), which otherwise covered its title and close
+   button on a short window. Toasts stay readable over the scrim. */
+body.chrome-observa .deploy-modal { z-index: 110; }
+body.chrome-observa .toast { z-index: 120; }
+
+/* ---------- About Observogram (app.mjs openAboutModal) ---------- */
+/* A modal over everything: the dialog shipped without a rule of its own and
+   drew as loose text at the foot of the page. */
+.about-overlay {
+  position: fixed; inset: 0; z-index: 220; display: grid; place-items: center; padding: 24px;
+  background: rgba(4, 9, 18, 0.6);
+}
+.about-card {
+  position: relative; width: min(440px, 100%); max-height: calc(100dvh - 48px); overflow: auto;
+  padding: 28px 28px 22px; border-radius: 14px;
+  background: var(--ux-bg); border: 1px solid var(--ux-line); color: var(--ux-ink);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45); font-family: var(--sans);
+}
+.about-brand { font: 700 26px/1.1 var(--sans); letter-spacing: -0.01em; }
+.about-brand i { font-style: normal; color: var(--ux-accent); }
+.about-tagline { margin-top: 4px; font: 400 14px/1.4 var(--sans); color: var(--ux-ink-3); }
+.about-version { margin: 16px 0 12px; font: 600 16px/1.3 var(--mono); }
+.about-version span { margin-left: 8px; font-weight: 400; color: var(--ux-ink-3); }
+.about-rows { display: grid; gap: 6px; padding: 12px 0; border-top: 1px solid var(--ux-line); border-bottom: 1px solid var(--ux-line); }
+.about-row { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 12px; font-size: 14px; }
+.about-key { font: 500 11px/1.9 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ux-ink-3); }
+.about-val { overflow-wrap: anywhere; }
+.about-link { display: inline-block; margin-top: 14px; color: var(--ux-accent); font: 500 14px/1.3 var(--sans); }
+.about-close {
+  position: absolute; top: 14px; right: 14px; padding: 4px 9px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--ux-line); background: var(--ux-bg-2); color: var(--ux-ink-2);
+  font: 500 11px/1.4 var(--mono); letter-spacing: 0.08em; text-transform: uppercase;
+}
+.about-close:hover, .about-close:focus-visible { border-color: var(--ux-accent); color: var(--ux-ink); }
 /* Build carries no utility toolbar into its steps: there is no pack to act
    on yet, and the steps have their own actions. Theme lives in Advanced. */
 body.chrome-observa[data-mode="build"] .hdr { display: none !important; }

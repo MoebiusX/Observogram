@@ -1,0 +1,556 @@
+/* studio/reskin.css — Observogram's adapter onto the design system. Loaded last.
+ *
+ * The look itself lives in three vendorable files (docs/VENDORING.md):
+ *
+ *   design-tokens.css   every value: palette, type, measures, both themes
+ *   design-kit.css      the pieces (.og-btn, .og-panel, .og-stat, .og-pill …)
+ *   design-bridge.css   the theme properties vendored view styles read
+ *
+ * This file is the part that is NOT portable: it maps this studio's own
+ * screens — their chrome names (--obs-*, --ux-*) and the classes their
+ * stylesheets grew (.ctrl-btn, .ux-decision, .compare-cell …) — onto the
+ * tokens, so the screens that predate the kit wear the same look. It reads
+ * tokens only; it decides no value of its own that a token names. A new
+ * screen uses the .og-* classes and needs no line here.
+ *
+ * It restyles; it moves nothing. Layout, markup and behaviour stay in the
+ * screen stylesheets (app.css, ux*.css). Layer colours (L1–GOV) stay: they
+ * are data, not decoration.
+ */
+
+/* ============================================================
+   1 · THE CHROME'S OWN THEME NAMES, FROM THE TOKENS
+   (--obs-* and --ux-* are this studio's; the properties vendored view
+   styles read are in design-bridge.css)
+   ============================================================ */
+body.chrome-observa, html[data-theme="light"] body.chrome-observa {
+  --obs-bg: var(--og-bg);
+  --obs-bg-2: var(--og-panel);
+  --obs-bg-3: var(--og-panel-2);
+  --obs-line: var(--og-line);
+  --obs-line-2: var(--og-line);
+  --obs-ink: var(--og-text);
+  --obs-ink-2: var(--og-text-2);
+  --obs-ink-3: var(--og-muted);
+  --obs-ink-4: var(--og-muted);
+  --obs-purple: var(--og-second);
+  --obs-pink: var(--og-second);
+  --obs-blue: var(--og-accent);
+  --obs-cyan: var(--og-accent);
+  --obs-emerald: var(--og-accent);
+  --obs-teal: var(--og-accent);
+  --obs-amber: var(--og-warn);
+  --obs-hdr-bg: var(--og-panel);
+  --ux-ink: var(--og-text);
+  --ux-ink-2: var(--og-text-2);
+  --ux-ink-3: var(--og-muted);
+  --ux-bg: var(--og-panel);
+  --ux-bg-2: var(--og-panel-2);
+  --ux-line: var(--og-line);
+  --ux-accent: var(--og-accent);
+  --ux-ok: var(--og-accent);     --ux-ok-bg: var(--og-accent-bg);
+  --ux-warn: var(--og-warn);  --ux-warn-bg: var(--og-warn-bg);
+  --ux-fail: var(--og-fail);   --ux-fail-bg: var(--og-fail-bg);
+  --ux-info: var(--og-info);   --ux-info-bg: var(--og-info-bg);
+  background: var(--og-bg);
+  color: var(--og-text);
+}
+
+/* Screens that scope the widget palette to themselves read the bridge's. */
+.neuron-view, [data-theme="dark"] .neuron-view,
+.proto-root, [data-theme="dark"] .proto-root {
+  --pr-green: var(--og-accent); --pr-amber: var(--og-warn); --pr-red: var(--og-fail); --pr-blue: var(--og-info);
+  --pr-cyan: var(--og-info); --pr-purple: var(--og-second); --pr-gray: var(--og-muted);
+}
+
+/* ============================================================
+   2 · TYPE
+   ============================================================ */
+body { font: var(--og-body-font); background: var(--og-bg); color: var(--og-text); }
+body::before { display: none; }           /* the dotted paper */
+/* Nothing is set in italics for style; emphasis in prose keeps them. */
+body.chrome-observa :not(em):not(i):not(cite):not(dfn):not(var) { font-style: normal !important; }
+/* Code is code. */
+body.chrome-observa pre,
+body.chrome-observa code,
+body.chrome-observa kbd,
+body.chrome-observa samp,
+body.chrome-observa textarea,
+body.chrome-observa [class*="yaml"],
+body.chrome-observa [class*="promql"],
+body.chrome-observa [class*="-code"],
+body.chrome-observa [class*="query"]:not(input) { font-family: var(--og-font-code) !important; }
+body.chrome-observa h1, body.chrome-observa h2, body.chrome-observa h3, body.chrome-observa h4 {
+  font-family: var(--og-font); letter-spacing: -0.01em;
+}
+body.chrome-observa button, body.chrome-observa input, body.chrome-observa select { font-family: var(--og-font); }
+body.chrome-observa ::selection { background: color-mix(in srgb, var(--og-accent) 35%, transparent); }
+body.chrome-observa :focus-visible { outline: 2px solid var(--og-accent); outline-offset: 2px; }
+
+/* ============================================================
+   3 · THE CHROME: brand, stepper, Advanced
+   ============================================================ */
+.observa-hdr { background: var(--og-panel); border-bottom: 1px solid var(--og-line); backdrop-filter: none; }
+.observa-hdr-inner { gap: 32px; }
+.observa-wordmark {
+  font: 650 19px/1 var(--og-font); letter-spacing: -0.03em; text-transform: lowercase; color: var(--og-text);
+}
+.observa-wordmark strong {
+  font-weight: 650; background: none; -webkit-text-fill-color: currentColor; color: inherit;
+}
+.observa-tagline, .observa-tagline-home {
+  font: 600 10.5px/1 var(--og-font); letter-spacing: 0.28em; color: var(--og-muted);
+}
+.observa-tagline-step { background: none; -webkit-text-fill-color: currentColor; color: var(--og-muted); opacity: 1; }
+.observa-logo { color: var(--og-accent); width: 32px; height: 32px; }
+.observa-logo svg path { stroke: var(--og-accent); fill: none; }
+.observa-logo svg circle { fill: var(--og-accent); }
+
+/* The stepper: plain steps, the current one in lime with a line under it. */
+.observa-tabs { gap: 8px; }
+.observa-tab {
+  grid-template-columns: 30px 1fr; gap: 10px; padding: 6px 14px; border-bottom: 2px solid transparent;
+  color: var(--og-muted);
+}
+.observa-tab + .observa-tab { border-left: 0; }
+.observa-tab:hover { background: var(--og-panel-2); color: var(--og-text); border-radius: 7px 7px 0 0; }
+.observa-tab-num {
+  width: 26px; height: 26px; border: 1px solid currentColor; font: 500 13px/1 var(--og-font);
+}
+.observa-tab.is-active .observa-tab-num,
+.observa-tab.tab-blue.is-active .observa-tab-num,
+.observa-tab.tab-magenta.is-active .observa-tab-num,
+.observa-tab.tab-emerald.is-active .observa-tab-num {
+  background: none; color: var(--og-accent); border-color: var(--og-accent);
+}
+.observa-tab-eyebrow,
+.observa-tab.tab-blue.is-active .observa-tab-eyebrow,
+.observa-tab.tab-magenta.is-active .observa-tab-eyebrow,
+.observa-tab.tab-emerald.is-active .observa-tab-eyebrow {
+  font: 650 11px/1 var(--og-font); letter-spacing: 0.14em; color: var(--og-muted);
+}
+.observa-tab.is-active .observa-tab-eyebrow { color: var(--og-accent) !important; }
+.observa-tab-title { font: 550 15px/1.25 var(--og-font); letter-spacing: -0.01em; }
+.observa-tab.is-active .observa-tab-title { color: var(--og-text); }
+.observa-tab-tagline { font: 400 12.5px/1.3 var(--og-font); color: var(--og-muted); }
+.observa-tab.is-active::after,
+.observa-tab.tab-blue.is-active::after,
+.observa-tab.tab-magenta.is-active::after,
+.observa-tab.tab-emerald.is-active::after {
+  left: 0; right: 0; height: 2px; border-radius: 0; background: var(--og-accent);
+}
+.observa-tab.is-locked { opacity: 0.45; }
+
+.observa-action { border-radius: 7px; color: var(--og-muted); font: 500 14px/1.2 var(--og-font); }
+.observa-action:not([disabled]):hover { background: var(--og-panel-2); color: var(--og-text); }
+.observa-action-glyph, .observa-adv-toggle .observa-action-glyph {
+  background: var(--og-second-bg); color: var(--og-second); font-family: var(--og-font);
+}
+.observa-adv-toggle.is-active, .observa-adv-toggle[aria-expanded="true"] { background: var(--og-panel-2); color: var(--og-text); }
+.observa-adv-toggle.is-active .observa-action-glyph { background: var(--og-second-bg); color: var(--og-second); }
+.observa-adv-menu {
+  background: var(--og-panel); border: 1px solid var(--og-line-strong); border-radius: 10px; box-shadow: var(--og-shadow);
+}
+.observa-adv-menu-head { font: 650 11px/1 var(--og-font); letter-spacing: 0.14em; color: var(--og-muted); }
+.observa-adv-item { border-radius: 7px; }
+.observa-adv-item:hover, .observa-adv-item:focus-visible { background: var(--og-panel-2); }
+.observa-adv-item-label { font: 550 14px/1.3 var(--og-font); color: var(--og-text); }
+.observa-adv-item-sub { font: 400 12.5px/1.35 var(--og-font); color: var(--og-muted); }
+/* The service chip beside the brand. */
+.observa-service-chip {
+  background: var(--og-panel-2); border: 1px solid var(--og-line); border-radius: var(--og-radius-control); color: var(--og-text);
+  font: 550 13px/1 var(--og-font);
+}
+
+/* ============================================================
+   4 · THE CONTEXT BAR: pickers and operations
+   ============================================================ */
+body.chrome-observa .hdr { background: var(--og-bg); border-bottom: 1px solid var(--og-line); padding: 10px 28px; }
+body.chrome-observa .hdr-controls { gap: 8px; }
+body.chrome-observa .hdr .ctrl {
+  background: var(--og-sunken); border: 1px solid var(--og-line-strong); border-radius: var(--og-radius-control); min-height: 36px;
+  padding: 0 4px 0 12px; gap: 8px; box-shadow: none;
+}
+body.chrome-observa .hdr .ctrl:focus-within { border-color: var(--og-accent); }
+body.chrome-observa .hdr .ctrl-key,
+body.chrome-observa .hdr .ctrl-pack-b .ctrl-key {
+  font: 650 11px/1 var(--og-font); letter-spacing: 0.1em; color: var(--og-muted);
+}
+body.chrome-observa .hdr .ctrl-pack-b { border-left: 1px solid var(--og-line-strong); padding-left: 12px; }
+body.chrome-observa .hdr .ctrl select { font: 500 14px/1.3 var(--og-font); color: var(--og-text); background-color: transparent; }
+body.chrome-observa .hdr .ctrl-service { border-color: var(--og-accent-line); }
+
+/* Buttons, everywhere: secondary by default, lime when it is the one action. */
+body.chrome-observa .ctrl-btn,
+body.chrome-observa .ctrl-link,
+body.chrome-observa .ux-secondary-btn,
+body.chrome-observa .cpc-action-btn,
+body.chrome-observa .dv-detail-toggle {
+  background: var(--og-panel-2); border: 1px solid var(--og-line-strong); border-radius: var(--og-radius-control); color: var(--og-text);
+  font: var(--og-control-font); letter-spacing: 0; text-transform: none; box-shadow: none;
+  min-height: var(--og-control-height); padding: var(--og-control-padding);
+}
+body.chrome-observa .ctrl-btn::first-letter,
+body.chrome-observa .ctrl-link::first-letter,
+body.chrome-observa .cpc-action-btn::first-letter { text-transform: uppercase; }
+body.chrome-observa .ctrl-btn:hover,
+body.chrome-observa .ctrl-link:hover,
+body.chrome-observa .ux-secondary-btn:hover,
+body.chrome-observa .cpc-action-btn:hover,
+body.chrome-observa .dv-detail-toggle:hover {
+  background: var(--og-panel-2); border-color: var(--og-accent-line); color: var(--og-text); filter: brightness(1.12);
+}
+body.chrome-observa .ctrl-link { display: inline-flex; align-items: center; text-decoration: none; border-style: solid; text-transform: uppercase; }
+body.chrome-observa .theme-toggle,
+body.chrome-observa .cpc-action-btn { text-transform: capitalize; }
+body.chrome-observa .ctrl-reset:hover { border-color: var(--og-fail); color: var(--og-fail); }
+body.chrome-observa .mcp-btn { gap: 7px; }
+body.chrome-observa .mcp-btn-label { text-transform: uppercase; }
+body.chrome-observa .mcp-btn-age { font: 400 12px/1 var(--og-font); color: var(--og-muted); }
+
+body.chrome-observa .ux-primary-btn,
+body.chrome-observa .mcp-refresh-btn,
+body.chrome-observa .remediate-deploy-btn,
+body.chrome-observa .home-mcp-connect,
+body.chrome-observa #home-mcp-connect {
+  background: var(--og-accent-solid); border: 1px solid var(--og-accent-solid); border-radius: var(--og-radius-control); color: var(--og-on-accent);
+  font: var(--og-button-font); letter-spacing: 0; text-transform: none; box-shadow: none; padding: var(--og-button-padding);
+}
+body.chrome-observa .ux-primary-btn:hover,
+body.chrome-observa .mcp-refresh-btn:hover,
+body.chrome-observa .remediate-deploy-btn:hover:not(:disabled),
+body.chrome-observa #home-mcp-connect:hover { filter: brightness(1.08); background: var(--og-accent-solid); color: var(--og-on-accent); }
+body.chrome-observa .mcp-refresh-btn::first-letter { text-transform: uppercase; }
+body.chrome-observa .ux-link-btn { color: var(--og-accent); font: 550 14px/1.3 var(--og-font); }
+body.chrome-observa button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Inputs. */
+body.chrome-observa input[type="text"],
+body.chrome-observa input[type="url"],
+body.chrome-observa input[type="search"],
+body.chrome-observa input[type="password"],
+body.chrome-observa select:not(.hdr select),
+body.chrome-observa textarea {
+  background: var(--og-sunken); border: 1px solid var(--og-line-strong); border-radius: var(--og-radius-control); color: var(--og-text);
+}
+body.chrome-observa input::placeholder { color: var(--og-muted); opacity: 0.8; }
+
+/* One switch: the pressed option is "where I am". */
+body.chrome-observa .ux-segmented { background: none; border: 0; gap: 6px; padding: 0; }
+body.chrome-observa .ux-segmented button {
+  background: var(--og-panel-2); border: 1px solid var(--og-line-strong); border-radius: var(--og-radius-control); color: var(--og-text-2);
+  font: var(--og-control-font); min-height: var(--og-control-height); padding: var(--og-control-padding);
+}
+body.chrome-observa .ux-segmented button:hover { border-color: var(--og-accent-line); color: var(--og-text); }
+body.chrome-observa .ux-segmented button[aria-pressed="true"] {
+  background: var(--og-accent-bg); border-color: var(--og-accent-line); color: var(--og-accent);
+}
+body.chrome-observa .ux-segmented .ux-seg-count { opacity: 1; font-weight: 500; color: inherit; }
+
+/* ============================================================
+   5 · SURFACES: panels, decision headers, stat tiles, pills
+   ============================================================ */
+body.chrome-observa .eyebrow,
+body.chrome-observa .ux-eyebrow,
+body.chrome-observa .dvb-eyebrow,
+body.chrome-observa .benchmark-block-eyebrow,
+body.chrome-observa .svc-gate-eyebrow {
+  font: var(--og-eyebrow-font); letter-spacing: var(--og-eyebrow-tracking); text-transform: uppercase; color: var(--og-muted);
+}
+
+body.chrome-observa .ux-decision {
+  background: var(--og-panel); border: 1px solid var(--og-line); border-radius: var(--og-radius-panel); box-shadow: none;
+  padding: var(--og-panel-padding); border-left-width: 1px;
+}
+/* The tone is a line down the panel's edge and the colour of its numbers —
+   never a wash over the whole panel. */
+body.chrome-observa .ux-decision.ux-tone-warn { box-shadow: inset 3px 0 0 var(--og-warn); }
+body.chrome-observa .ux-decision.ux-tone-fail { box-shadow: inset 3px 0 0 var(--og-fail); }
+body.chrome-observa .ux-decision.ux-tone-ok { box-shadow: inset 3px 0 0 var(--og-accent); }
+body.chrome-observa .ux-decision.ux-tone-info { box-shadow: inset 3px 0 0 var(--og-info); }
+body.chrome-observa .ux-decision-sentence { font: var(--og-h2-font); letter-spacing: var(--og-h2-tracking); color: var(--og-text); }
+body.chrome-observa .ux-decision-note { font: 400 14px/1.55 var(--og-font); color: var(--og-muted); }
+body.chrome-observa .ux-ctx { font: 400 14px/1.4 var(--og-font); color: var(--og-muted); }
+body.chrome-observa .ux-ctx-key { font: 400 14px/1.4 var(--og-font); letter-spacing: 0; text-transform: none; color: var(--og-muted); }
+body.chrome-observa .ux-ctx-val { font: 550 14px/1.4 var(--og-font); color: var(--og-text); }
+body.chrome-observa .ux-verdict { border-radius: var(--og-radius-control); font-family: var(--og-font); }
+
+/* The stat tile: a quiet label, one number, one line under it. */
+body.chrome-observa .ux-measures { gap: 14px; }
+body.chrome-observa .ux-measure {
+  background: var(--og-panel); border: 1px solid var(--og-line); border-radius: var(--og-radius-card); padding: var(--og-stat-padding); box-shadow: none;
+}
+body.chrome-observa .ux-measure dt { font: var(--og-label-font); letter-spacing: 0; text-transform: none; color: var(--og-muted); }
+body.chrome-observa .ux-measure-val { font: var(--og-stat-font); letter-spacing: var(--og-stat-tracking); color: var(--og-text); }
+body.chrome-observa .ux-measure.ux-tone-warn .ux-measure-val { color: var(--og-warn); }
+body.chrome-observa .ux-measure.ux-tone-fail .ux-measure-val { color: var(--og-fail); }
+body.chrome-observa .ux-measure.ux-tone-ok .ux-measure-val { color: var(--og-accent); }
+body.chrome-observa .ux-measure-note { font: 400 13.5px/1.4 var(--og-font); color: var(--og-muted); }
+
+body.chrome-observa .ux-cause { background: var(--og-panel); border: 1px solid var(--og-line); border-radius: var(--og-radius-card); }
+body.chrome-observa .ux-cause-title { font: 550 15px/1.35 var(--og-font); color: var(--og-text); }
+body.chrome-observa .ux-cause-why { font: 400 14px/1.5 var(--og-font); color: var(--og-muted); }
+
+/* Pills. */
+body.chrome-observa .ux-chip,
+body.chrome-observa .diff-chip,
+body.chrome-observa .source-chip,
+body.chrome-observa .tag,
+body.chrome-observa .cpc-meta-pill,
+body.chrome-observa .cpc-source-pill,
+body.chrome-observa .cli-pill,
+body.chrome-observa .dvb-chip,
+body.chrome-observa .dvb-sev,
+body.chrome-observa .gating-chip {
+  border-radius: var(--og-radius-pill); font: var(--og-pill-font); letter-spacing: 0; text-transform: none; padding: var(--og-pill-padding);
+}
+body.chrome-observa .source-chip,
+body.chrome-observa .tag,
+body.chrome-observa .cpc-meta-pill { background: var(--og-info-bg); color: var(--og-text-2); border: 1px solid transparent; }
+body.chrome-observa .source-chip[data-source="Verified"] { background: var(--og-accent-bg); color: var(--og-accent); }
+body.chrome-observa .source-chip[data-source="Scaffold"] { background: var(--og-warn-bg); color: var(--og-warn); }
+body.chrome-observa .source-chip[data-source="Missing"] { background: var(--og-fail-bg); color: var(--og-fail); }
+
+/* Panels that carried their own look. */
+body.chrome-observa .ux-empty { background: var(--og-panel); border: 1px solid var(--og-line); border-radius: var(--og-radius-panel); }
+body.chrome-observa .ux-disclosure,
+body.chrome-observa details.ux-disclosure { border: 1px solid var(--og-line); border-radius: var(--og-radius-panel); background: var(--og-panel); }
+body.chrome-observa .ux-section-nav { background: var(--og-bg); border-bottom: 1px solid var(--og-line); }
+body.chrome-observa table th {
+  background: var(--og-panel-2); color: var(--og-muted); font: 500 12px/1.3 var(--og-font); letter-spacing: 0; text-transform: none;
+}
+
+/* The artefact card (compare panes, the Cards view). */
+body.chrome-observa .card {
+  background: var(--og-panel); border: 1px solid var(--og-line); border-radius: var(--og-radius-card);
+}
+body.chrome-observa .card:hover { background: var(--og-panel-2); transform: none; }
+body.chrome-observa .card-id { font: 500 12px/1.3 var(--og-font); letter-spacing: 0.02em; color: var(--og-muted); }
+body.chrome-observa .card-title { font: 550 14px/1.35 var(--og-font); color: var(--og-text); }
+body.chrome-observa .card-desc { font: 400 13.5px/1.5 var(--og-font); color: var(--og-muted); }
+body.chrome-observa .card .tool { font: 400 12px/1.4 var(--og-font); color: var(--og-muted); }
+
+/* ============================================================
+   6 · HOME
+   ============================================================ */
+body.chrome-observa .home-hero { max-width: 1180px; padding-top: 38px; }
+body.chrome-observa .home-hero-title { font: var(--og-h1-font); letter-spacing: var(--og-h1-tracking); color: var(--og-text); }
+body.chrome-observa .home-hero-lede { font: 400 16px/1.55 var(--og-font); color: var(--og-muted); max-width: 720px; }
+body.chrome-observa .home-greeting { font: var(--og-eyebrow-font); letter-spacing: var(--og-eyebrow-tracking); text-transform: uppercase; color: var(--og-muted); }
+body.chrome-observa .home-choice-cards { gap: 20px; }
+body.chrome-observa .home-choice-card,
+body.chrome-observa .home-choice-card.is-check,
+body.chrome-observa .home-choice-card.is-build {
+  background: var(--og-panel); border: 1px solid var(--og-line); border-radius: 10px; padding: 27px 28px; box-shadow: none;
+  gap: 8px;
+}
+body.chrome-observa .home-choice-card:hover,
+body.chrome-observa .home-choice-card.is-open { box-shadow: none; }
+body.chrome-observa .home-choice-card.is-check:hover,
+body.chrome-observa .home-choice-card.is-check.is-open { border-color: var(--og-accent-line); background: var(--og-panel); }
+body.chrome-observa .home-choice-card.is-build:hover { border-color: color-mix(in srgb, var(--og-second) 55%, var(--og-line)); background: var(--og-panel); }
+body.chrome-observa .home-choice-key,
+body.chrome-observa .home-choice-card.is-check .home-choice-key { font-size: 30px; line-height: 1; margin-bottom: 16px; color: var(--og-accent); }
+body.chrome-observa .home-choice-card.is-build .home-choice-key { color: var(--og-second); }
+body.chrome-observa .home-choice-title { font: var(--og-h2-font); letter-spacing: var(--og-h2-tracking); color: var(--og-text); }
+body.chrome-observa .home-choice-sub { font: 400 16px/1.55 var(--og-font); color: var(--og-muted); }
+body.chrome-observa .home-choice-path,
+body.chrome-observa .home-choice-card.is-check .home-choice-path,
+body.chrome-observa .home-choice-card.is-build .home-choice-path {
+  font: 600 12px/1.3 var(--og-font); letter-spacing: 0.06em; text-transform: uppercase; color: var(--og-muted); margin: 14px 0 6px;
+}
+body.chrome-observa .home-choice-cta {
+  display: inline-flex; align-self: flex-start; margin-top: 8px; padding: var(--og-button-padding); border-radius: var(--og-radius-control);
+  background: var(--og-accent-solid); color: var(--og-on-accent); font: var(--og-button-font);
+}
+body.chrome-observa .home-choice-card.is-build .home-choice-cta { background: var(--og-second-solid); color: var(--og-on-second); }
+body.chrome-observa .home-check-title { font: var(--og-h2-font); letter-spacing: var(--og-h2-tracking); color: var(--og-text); }
+body.chrome-observa .svc-gate-card,
+body.chrome-observa .home-mcp-card,
+body.chrome-observa .home-alt-btn {
+  background: var(--og-panel); border: 1px solid var(--og-line); border-radius: var(--og-radius-panel); box-shadow: none;
+}
+body.chrome-observa .svc-gate-card:hover,
+body.chrome-observa .home-alt-btn:hover { border-color: var(--og-accent-line); background: var(--og-panel); }
+body.chrome-observa .svc-gate-name { font: 550 15px/1.3 var(--og-font); color: var(--og-text); }
+body.chrome-observa .svc-gate-meta,
+body.chrome-observa .svc-gate-activity { font: 400 13px/1.45 var(--og-font); color: var(--og-muted); }
+body.chrome-observa .home-mcp-url-label,
+body.chrome-observa .home-alt-sub { font: 400 14px/1.45 var(--og-font); letter-spacing: 0; text-transform: none; color: var(--og-muted); }
+body.chrome-observa .home-alt-label { font: 550 15px/1.3 var(--og-font); color: var(--og-text); }
+body.chrome-observa .home-alt-key { color: var(--og-accent); }
+
+/* ============================================================
+   7 · DISCOVER: the pack board
+   ============================================================ */
+body.chrome-observa .dvb-h { font: var(--og-h1-font); letter-spacing: var(--og-h1-tracking); }
+body.chrome-observa .dvb-h-of { font-weight: 550; color: var(--og-text); }
+body.chrome-observa .dvb-lede { font: 400 16px/1.55 var(--og-font); color: var(--og-muted); }
+body.chrome-observa .dvb-fact { background: var(--og-panel); border: 1px solid var(--og-line); border-radius: var(--og-radius-card); padding: 12px 14px; }
+body.chrome-observa .dvb-fact-ico { color: var(--og-muted); width: 22px; height: 22px; }
+body.chrome-observa .dvb-fact dt { font: 400 12.5px/1.3 var(--og-font); color: var(--og-muted); }
+body.chrome-observa .dvb-fact dd { font: 550 14px/1.35 var(--og-font); color: var(--og-text); }
+body.chrome-observa .dv-filters { background: none; border: 0; padding: 0; margin-bottom: 16px; }
+body.chrome-observa .dv-filter-key,
+body.chrome-observa .compare-lens-label { font: 650 11px/1 var(--og-font); letter-spacing: 0.13em; text-transform: uppercase; color: var(--og-muted); }
+
+/* A band: one panel; the layer's colour is its badge and a hairline, not a glow. */
+body.chrome-observa .dv-layer {
+  background: var(--og-panel); border: 1px solid var(--og-line); border-radius: 10px; box-shadow: none;
+}
+body.chrome-observa .dv-layer.is-open { box-shadow: none; border-color: var(--og-line-strong); }
+body.chrome-observa .dv-band { padding: 16px; gap: 18px; }
+body.chrome-observa .dv-band-code {
+  width: 44px; height: 44px; border-radius: var(--og-radius-card); box-shadow: none; text-shadow: none;
+  background: color-mix(in srgb, var(--dv-accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--dv-accent) 50%, transparent);
+  color: var(--dv-accent); font: 650 15px/1 var(--og-font); letter-spacing: 0;
+}
+body.chrome-observa .dv-band-id { grid-template-columns: 44px minmax(0, 1fr); }
+body.chrome-observa .dv-band-spec { font: 650 12px/1.3 var(--og-font); letter-spacing: 0.13em; color: var(--og-muted); }
+body.chrome-observa .dv-band-name { font: 550 16px/1.3 var(--og-font); letter-spacing: -0.01em; color: var(--og-text); }
+body.chrome-observa .dv-layer-toggle {
+  background: var(--og-panel-2); border: 1px solid var(--og-line-strong); border-radius: var(--og-radius-control); padding: 8px 12px;
+}
+body.chrome-observa .dv-layer-toggle:hover:not(:disabled),
+body.chrome-observa .dv-layer.is-open .dv-layer-toggle { background: var(--og-panel-2); border-color: var(--og-accent-line); }
+body.chrome-observa .dv-size-n { font: 550 17px/1 var(--og-font); color: var(--og-text); }
+body.chrome-observa .dv-size-unit { font: 400 13px/1.2 var(--og-font); letter-spacing: 0; text-transform: none; color: var(--og-muted); }
+body.chrome-observa .dv-layer.is-open .dv-chevron { color: var(--og-accent); }
+body.chrome-observa .dvb-group {
+  background: var(--og-sunken); border: 1px solid var(--og-line); border-radius: var(--og-radius-card); padding: 12px;
+}
+body.chrome-observa .dvb-group.is-aside, body.chrome-observa .dvb-group.is-empty { border-style: dashed; }
+body.chrome-observa .dvb-group-title {
+  text-align: left; margin-bottom: 10px; font: 650 11.5px/1.3 var(--og-font); letter-spacing: 0.11em; text-transform: uppercase;
+  color: var(--og-muted);
+}
+body.chrome-observa .dvb-group-n { font: 500 12px/1 var(--og-font); letter-spacing: 0; color: var(--og-text-2); }
+body.chrome-observa .dv-groups.is-flow .dvb-group:not(.is-aside) + .dvb-group:not(.is-aside)::before { color: var(--og-muted); }
+body.chrome-observa .dvb-item { background: var(--og-panel); border: 1px solid var(--og-line); border-radius: var(--og-radius-control); font: 400 13.5px/1.35 var(--og-font); }
+body.chrome-observa .dvb-item:hover, body.chrome-observa .dvb-item:focus-visible { background: var(--og-panel-2); border-color: var(--og-accent-line); }
+body.chrome-observa .dvb-name { font-weight: 550; color: var(--og-text); }
+body.chrome-observa .dvb-sub { color: var(--og-muted); }
+body.chrome-observa .dvb-ico { color: var(--og-muted); width: 26px; height: 26px; }
+body.chrome-observa .dvb-dial-val { font: 600 13px/1 var(--og-font); }
+body.chrome-observa .dvb-inv-n { font: var(--og-stat-font); letter-spacing: var(--og-stat-tracking); }
+body.chrome-observa .dvb-more, body.chrome-observa .dvb-more-text { color: var(--og-accent); font: 550 13px/1.3 var(--og-font); }
+body.chrome-observa .dvb-none { color: var(--og-muted); }
+body.chrome-observa .dvb-k { color: var(--og-muted); }
+body.chrome-observa .dv-panel-intro { font: 400 15px/1.55 var(--og-font); color: var(--og-muted); }
+body.chrome-observa .dv-panel-count { font: 400 14px/1.4 var(--og-font); color: var(--og-muted); }
+body.chrome-observa .dv-row { border-radius: var(--og-radius-card); }
+body.chrome-observa .dv-match { background: var(--og-accent-bg); border: 1px solid var(--og-accent-line); color: var(--og-accent); border-radius: var(--og-radius-pill); font: 550 12px/1.4 var(--og-font); }
+
+/* ============================================================
+   8 · DIAGNOSE: assessment and compare
+   ============================================================ */
+body.chrome-observa .diag-subnav { background: none; border-bottom: 1px solid var(--og-line); padding: 0 28px; gap: 28px; }
+body.chrome-observa .diag-subtab {
+  background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 14px 0 12px; color: var(--og-muted);
+}
+body.chrome-observa .diag-subtab.is-active { background: none; border-bottom-color: var(--og-accent); color: var(--og-accent); box-shadow: none; }
+body.chrome-observa .diag-subtab-label { font: 550 15px/1.3 var(--og-font); color: inherit; }
+body.chrome-observa .diag-subtab-sub { font: 400 13px/1.3 var(--og-font); color: var(--og-muted); }
+
+/* The two packs: a slot each, A in lime and B in purple, as on every screen. */
+body.chrome-observa .compare-pack-headers { background: none; border-bottom: 0; padding: 20px 28px 8px; gap: 14px; }
+body.chrome-observa .compare-pack-card {
+  background: var(--og-panel); border: 1px solid var(--og-line); border-top: 1px solid var(--og-line); border-radius: var(--og-radius-card); padding: 18px 19px;
+}
+body.chrome-observa .cpc-eyebrow { font: var(--og-eyebrow-font); letter-spacing: var(--og-eyebrow-tracking); }
+body.chrome-observa .cpc-pickfield-key { font: 400 13px/1.3 var(--og-font); letter-spacing: 0; text-transform: none; color: var(--og-muted); }
+body.chrome-observa .cpc-name { font: 550 16px/1.3 var(--og-font); color: var(--og-text); }
+body.chrome-observa .compare-swap-btn {
+  background: var(--og-panel-2); border: 1px solid var(--og-line-strong); border-radius: var(--og-radius-control); color: var(--og-text);
+}
+body.chrome-observa .compare-swap-btn:hover { background: var(--og-panel-2); border-color: var(--og-accent-line); color: var(--og-accent); }
+body.chrome-observa .csb-label { font: 550 12px/1 var(--og-font); letter-spacing: 0; text-transform: none; }
+body.chrome-observa .csb-label::first-letter { text-transform: uppercase; }
+
+/* The set arithmetic: five stat tiles. */
+body.chrome-observa .compare-summary {
+  margin: 12px 28px 0; gap: 14px; background: none; border: 0;
+}
+body.chrome-observa .compare-cell {
+  background: var(--og-panel); border: 1px solid var(--og-line); border-radius: var(--og-radius-card); padding: 16px 18px; text-align: left;
+}
+body.chrome-observa .compare-cell.c-a, body.chrome-observa .compare-cell.c-both, body.chrome-observa .compare-cell.c-b,
+body.chrome-observa .compare-cell.c-union, body.chrome-observa .compare-cell.c-jacc { border-top: 1px solid var(--og-line); }
+body.chrome-observa .compare-cell .c-key { font: var(--og-label-font); letter-spacing: 0; text-transform: none; color: var(--og-muted); }
+body.chrome-observa .compare-cell .c-key::first-letter { text-transform: uppercase; }
+body.chrome-observa .compare-cell .c-val { font: var(--og-stat-font); letter-spacing: var(--og-stat-tracking); color: var(--og-text); }
+body.chrome-observa .compare-cell.c-a .c-val { color: var(--og-accent); }
+body.chrome-observa .compare-cell.c-b .c-val { color: var(--og-second); }
+body.chrome-observa .compare-digest { padding-left: 28px; padding-right: 28px; }
+body.chrome-observa .compare-filters { background: none; border-bottom: 0; padding: 12px 28px 14px; gap: 8px; }
+body.chrome-observa .compare-slice-pill {
+  background: var(--og-panel-2); border: 1px solid var(--og-line-strong); border-radius: var(--og-radius-control); color: var(--og-text-2);
+  font: var(--og-control-font); padding: 7px 12px;
+}
+body.chrome-observa .compare-slice-pill.is-active { background: var(--og-accent-bg); border-color: var(--og-accent-line); color: var(--og-accent); }
+body.chrome-observa .compare-lens-select,
+body.chrome-observa .compare-search-input { font: var(--og-label-font); min-height: var(--og-control-height); }
+
+body.chrome-observa .compare-cols-head { background: var(--og-line); box-shadow: none; gap: 1px; border-bottom: 1px solid var(--og-line); }
+body.chrome-observa .cch-side { background: var(--og-panel-2); border-top: 0; padding: 12px 28px; }
+body.chrome-observa .cch-letter {
+  background: color-mix(in srgb, var(--cch) 16%, transparent); border: 1px solid color-mix(in srgb, var(--cch) 50%, transparent);
+  color: var(--cch); border-radius: var(--og-radius-control); font: 600 14px/1 var(--og-font);
+}
+body.chrome-observa .cch-key { font: 650 12px/1 var(--og-font); letter-spacing: 0.13em; }
+body.chrome-observa .cch-name { font: 550 15px/1.3 var(--og-font); }
+body.chrome-observa .cch-role { font: 400 13px/1 var(--og-font); letter-spacing: 0; text-transform: none; color: var(--og-muted); }
+body.chrome-observa .compare-layer-row { background: none; border-bottom: 1px solid var(--og-line); }
+body.chrome-observa .compare-layer-row .compare-layer-head,
+body.chrome-observa .compare-layer-row[data-layer] .compare-layer-head { background: var(--og-bg); border-bottom: 1px solid var(--og-line); padding: 12px 28px; }
+body.chrome-observa .compare-layer-row .compare-layer-head .section-num { font: 650 12px/1.3 var(--og-font); letter-spacing: 0.1em; color: var(--og-muted); }
+body.chrome-observa .compare-layer-row .compare-layer-head .section-name { font: 550 16px/1.3 var(--og-font); color: var(--og-text); }
+body.chrome-observa .cli-vs, body.chrome-observa .cli-side { font: 400 13px/1.3 var(--og-font); color: var(--og-muted); }
+body.chrome-observa .compare-view .compare-layer-grid { gap: 1px; background: var(--og-line); }
+body.chrome-observa .compare-view .compare-layer-col-a,
+body.chrome-observa .compare-view .compare-layer-col-b { background: var(--og-bg); padding: 14px 28px 18px; }
+body.chrome-observa .compare-col-group { font: 650 11.5px/1.3 var(--og-font); letter-spacing: 0.11em; }
+body.chrome-observa .compare-side-card .diff-chip.chip-both { background: var(--og-panel-2); color: var(--og-text-2); }
+body.chrome-observa .compare-side-card .diff-chip.chip-only-a { background: var(--og-accent-bg); color: var(--og-accent); }
+body.chrome-observa .compare-side-card .diff-chip.chip-only-b { background: var(--og-second-bg); color: var(--og-second); }
+body.chrome-observa .compare-view .compare-side-card.is-both { border-left-color: var(--og-line-strong); }
+body.chrome-observa .compare-col-group.is-both { color: var(--og-muted); }
+body.chrome-observa .compare-col-group.is-unchecked { color: var(--og-warn); }
+body.chrome-observa .compare-col-group-cards { font: 400 12px/1.3 var(--og-font); color: var(--og-muted); }
+body.chrome-observa .compare-col-group-why { font: 400 13px/1.45 var(--og-font); color: var(--og-muted); }
+body.chrome-observa .compare-side-card .diff-chip.chip-unchecked { background: var(--og-warn-bg); color: var(--og-warn); }
+body.chrome-observa .compare-view .compare-layer-col-a .compare-side-card.is-unchecked,
+body.chrome-observa .compare-view .compare-layer-col-b .compare-side-card.is-unchecked { border-left-color: var(--og-warn-line); }
+body.chrome-observa .compare-cell.c-unchecked { border-top: 1px solid var(--og-line); }
+body.chrome-observa .compare-cell.c-unchecked .c-val { color: var(--og-warn); }
+
+/* ============================================================
+   9 · PANELS, DRAWERS, DIALOGS
+   ============================================================ */
+body.chrome-observa .mcp-panel,
+body.chrome-observa .crawl-panel,
+body.chrome-observa .deploy-modal,
+body.chrome-observa .about-card {
+  background: var(--og-panel); border: 1px solid var(--og-line-strong); border-radius: var(--og-radius-dialog); box-shadow: var(--og-shadow);
+}
+body.chrome-observa .deploy-modal { box-shadow: 0 0 0 100vmax var(--og-scrim), var(--og-shadow); }
+body.chrome-observa .mcp-panel-title,
+body.chrome-observa .deploy-modal-title h2 { font: 550 17px/1.3 var(--og-font); letter-spacing: -0.01em; color: var(--og-text); }
+body.chrome-observa .mcp-panel-head,
+body.chrome-observa .crawl-panel-head,
+body.chrome-observa .deploy-modal-head { background: none; border-bottom: 1px solid var(--og-line); }
+body.chrome-observa .crawl-lede,
+body.chrome-observa .deploy-modal-lede { font: 400 14px/1.55 var(--og-font); color: var(--og-muted); }
+body.chrome-observa .deploy-section-head,
+body.chrome-observa .deploy-field-key,
+body.chrome-observa .mcp-field-key,
+body.chrome-observa .crawl-field-key { font: 500 13px/1.3 var(--og-font); letter-spacing: 0; text-transform: none; color: var(--og-text-2); }
+body.chrome-observa .drawer { background: var(--og-panel); border-color: var(--og-line-strong); box-shadow: var(--og-shadow); }
+body.chrome-observa .drawer-head { background: var(--og-panel); border-bottom: 1px solid var(--og-line); }
+body.chrome-observa .drawer-close {
+  background: var(--og-panel-2); border: 1px solid var(--og-line-strong); border-radius: var(--og-radius-control); color: var(--og-text-2);
+  font: 500 11px/1.4 var(--og-font); letter-spacing: 0.06em; text-transform: uppercase;
+}
+body.chrome-observa .toast { background: var(--og-accent-solid); color: var(--og-on-accent); border: 0; border-radius: 7px; font: 550 14px/1.3 var(--og-font); padding: 12px 22px; box-shadow: var(--og-shadow); }
+body.chrome-observa .toast.is-error { background: var(--og-fail); color: var(--og-on-fail); }

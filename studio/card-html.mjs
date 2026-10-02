@@ -138,9 +138,9 @@ export function artefactKind(artefact) {
 // view's clause ghosts use that word); no artefact carries it, so Discover
 // never counts or lists one. Something the pack lacks is a required check not
 // met, reported by the tier rubric, never a detected artefact.
-// `attention` is Discover's definition of an artefact a person must act on: a
-// template value to complete or a reference that does not resolve. Evidence
-// alone never makes it one — a repository pack is declared-only by nature.
+// `attention` marks an artefact a person must act on: a template value to
+// complete or a reference that does not resolve. Evidence alone never makes
+// it one — a repository pack is declared-only by nature.
 export function artefactStatus(artefact, { broken = 0 } = {}) {
   const src = String(artefact?.source || 'Declared');
   const scaffold = src === 'Scaffold';
@@ -155,32 +155,6 @@ export function artefactStatus(artefact, { broken = 0 } = {}) {
     live,
     attention: scaffold || nBroken > 0,
   };
-}
-
-// Discover's task filters: the review's "Needs attention · Missing evidence ·
-// Scaffold · Verified · All" in the studio's plain wording. Each has a stable
-// definition, repeated in its tooltip.
-export const DISCOVER_TASKS = [
-  { id: 'attention',       label: 'Needs attention',
-    tip: 'Artefacts a person must act on: a template value still to complete, or a reference that does not resolve. Each artefact counts once, however many reasons apply. Something the pack lacks is not an artefact here: when the tier rubric requires it, it shows as a required check not met.' },
-  { id: 'missingEvidence', label: 'Missing evidence',
-    tip: 'Artefacts with no live evidence: declared in the pack only, or template values. Live evidence means the live platform reported the signal when the pack was drafted or refreshed.' },
-  { id: 'scaffold',        label: 'Template value needs completion',
-    tip: 'Generated from a template so the requirement is represented; a person must supply the real value (formerly "Scaffold").' },
-  { id: 'live',            label: 'Live evidence',
-    tip: 'The live platform reported this signal (formerly "Verified"). That shows it exists; it does not by itself prove every link of a requirement.' },
-  { id: 'all',             label: 'All',
-    tip: 'Every artefact on the layer, including detail-level evidence.' },
-];
-
-export function matchesTask(status, task) {
-  switch (task) {
-    case 'attention':       return !!status?.attention;
-    case 'missingEvidence': return !status?.live;
-    case 'scaffold':        return status?.completion === 'needsInput';
-    case 'live':            return !!status?.live;
-    default:                return true;
-  }
 }
 
 // "Inferred from recording rule slo:x:ratio_5m." — the live fetcher's SLI

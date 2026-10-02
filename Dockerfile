@@ -1,7 +1,7 @@
 # Observogram — studio + API in one Express server (server/index.mjs).
 #
-# Build:  npm run build:stamp && docker build -t observogram:0.4.0 .
-# Run:    docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.4.0
+# Build:  npm run build:stamp && docker build -t observogram:0.5.0 .
+# Run:    docker run --rm -p 8000:8000 -e OBSERVOGRAM_ADMIN_PASSWORD=<secret> observogram:0.5.0
 #         (the image binds 0.0.0.0, and the server refuses to start off
 #         loopback without a seeded sign-in or OBSERVOGRAM_API_TOKEN; the
 #         workspace lives at /app/.observogram — mount a volume there or
@@ -18,10 +18,10 @@ FROM node:22-alpine
 # package.json. server/build-info.mjs then answers the studio footer,
 # GET /api/version and /healthz from that file (source 'file'); without it
 # they say "build unknown" — never a guess.
-#   npm run build:stamp && docker build -t observogram:0.4.0 .
+#   npm run build:stamp && docker build -t observogram:0.5.0 .
 # OBSERVOGRAM_BUILD, when given, overrides the composite build string on
 # /healthz only (a CI run number or tag); /api/version stays the stamp.
-#   docker build --build-arg OBSERVOGRAM_BUILD=ci-412 -t observogram:0.4.0 .
+#   docker build --build-arg OBSERVOGRAM_BUILD=ci-412 -t observogram:0.5.0 .
 ARG OBSERVOGRAM_BUILD=
 ENV OBSERVOGRAM_BUILD=$OBSERVOGRAM_BUILD
 

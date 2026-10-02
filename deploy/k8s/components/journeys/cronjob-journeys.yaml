@@ -71,7 +71,7 @@ spec:
               # applies to the kustomization that declares it), so
               # deploy/k8s-journeys/kustomization.yaml repeats the `images:`
               # entry; tools/test-deploy-manifests.mjs pins it to the base's.
-              image: observogram:0.4.0
+              image: observogram:0.5.0
               imagePullPolicy: IfNotPresent
               workingDir: /app
               command: ["node", "tools/cli.mjs", "journey", "run", "--all"]

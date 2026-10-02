@@ -135,7 +135,7 @@ if (golden !== null) {
       { firstDivergenceAtLine: line + 1, expected: g[line], actual: a[line] });
   }
   assert(summary.warnings.some(w => /unresolved \$\{VAR\}/.test(w)),
-    'fixture exercises the placeholder-exclusion path (guards the guard)');
+    'fixture exercises the pure-placeholder path: the address is declared as unresolved:<VAR> (guards the guard)');
 }
 
 report('golden-crawl', 'crawler output matches the golden byte-for-byte.');

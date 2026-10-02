@@ -13,9 +13,10 @@ import { parse } from './lib/mini-yaml.mjs';
 import { adapt } from './lib/adapter.mjs';
 import { inferSlisFromRecordingRules } from './lib/sli-inference.mjs';
 import {
-  artefactRowHtml, artefactStatus, matchesTask, inferredFrom, resolveInferredRule, artefactKind, DISCOVER_TASKS, artefactCardHtml,
+  artefactRowHtml, artefactStatus, inferredFrom, resolveInferredRule, artefactKind, artefactCardHtml,
   DISCOVER_VIEWS, DISCOVER_VIEW_DEFAULT, discoverView, artefactLightRowHtml, artefactStatusMark, artefactStatusWords, STATUS_MARKS,
 } from '../studio/card-html.mjs';
+import { BOARD_LAYERS, BOARD_ITEMS_SHOWN, boardGroups, boardGroupsHtml, boardHeadHtml, objectivePct } from '../studio/discover-board.mjs';
 
 const allArtefacts = (pack) => Object.values(pack.layers).flatMap(v => (Array.isArray(v) ? v : Object.values(v).flat()));
 const carlos = adapt(parse(fs.readFileSync(new URL('../examples/krystaline-repo-carlos.pack.yaml', import.meta.url), 'utf8')));
@@ -30,18 +31,6 @@ test('the adapter source word splits onto evidence and completion; attention is 
   assert.equal(scaffold.attention, true);
   assert.equal(artefactStatus({ source: 'Declared' }).attention, false, 'declared-only is not a defect');
   assert.equal(artefactStatus({ source: 'Declared' }, { broken: 2 }).attention, true);
-});
-
-test('the task filters have one definition each', () => {
-  assert.deepEqual(DISCOVER_TASKS.map(t => t.id), ['attention', 'missingEvidence', 'scaffold', 'live', 'all']);
-  assert.ok(DISCOVER_TASKS.every(t => t.label && t.tip));
-  const s = (source, broken = 0) => artefactStatus({ source }, { broken });
-  assert.equal(matchesTask(s('Scaffold'), 'missingEvidence'), true);
-  assert.equal(matchesTask(s('Verified'), 'missingEvidence'), false);
-  assert.equal(matchesTask(s('Verified', 1), 'attention'), true);
-  assert.equal(matchesTask(s('Scaffold'), 'scaffold'), true);
-  assert.equal(matchesTask(s('Declared'), 'live'), false);
-  assert.equal(matchesTask(s('Declared'), 'all'), true);
 });
 
 test('every adapter id family has a plain kind and role', () => {
@@ -97,12 +86,6 @@ test('the inference sentence claims no more than the evidence: declared is not l
   assert.ok(!partly.includes('Its query comes from'));
   const unchecked = artefactRowHtml(sli('Declared'));
   assert.ok(!unchecked.includes('No recording rule of this name is in this pack'), 'nothing was checked, so nothing is claimed absent');
-});
-
-test('Needs attention does not claim to cover required artefacts the pack lacks', () => {
-  const tip = DISCOVER_TASKS.find(t => t.id === 'attention').tip;
-  assert.ok(!/required artefact that is missing/.test(tip));
-  assert.ok(/required check not met/.test(tip), 'and says where a missing required artefact shows instead');
 });
 
 test('a row leads with name + what it does + status; the id and tags wait in Details', () => {
@@ -220,11 +203,68 @@ test('no adapted artefact is ever Missing, so Discover never claims a missing ar
   }
   // The shared vocabulary still maps the word, but it never makes an artefact need attention.
   assert.equal(artefactStatus({ source: 'Missing' }).attention, false);
-  assert.ok(!/missing\b/.test(DISCOVER_TASKS.find(t => t.id === 'missingEvidence').tip.replace('Missing evidence', '')),
-    'Missing evidence lists declared and template values only');
+});
+
+test('Discover is a catalogue: no verdict, no evidence count, no task filter, no next step', () => {
   const src = fs.readFileSync(new URL('../studio/layers-view.mjs', import.meta.url), 'utf8');
-  assert.ok(!src.includes('dv-show-missing'), 'no cause or action for missing artefacts');
-  assert.ok(!/label: 'Missing'/.test(src), 'no Missing measure');
-  assert.ok(!/statusChipHtml\('evidence', 'missing'/.test(src), 'no per-layer missing chip');
-  assert.ok(!/required artefact'\)\} missing/.test(src));
+  const discover = src.slice(src.indexOf('export function renderLayersView'));
+  for (const word of ['needs attention', 'Needs attention', 'live evidence', 'Live evidence', 'declared only', 'Declared only', 'required check', 'assessment'])
+    assert.ok(!discover.includes(word), `the Discover screen says nothing about "${word}"`);
+  for (const gone of ['statusChipHtml', 'matchesTask', 'DISCOVER_TASKS', 'dv-task', 'dv-review', 'dv-assess', 'dv-show-missing', 'primary:', 'causes', 'measures'])
+    assert.ok(!src.includes(gone), `${gone} is not part of Discover`);
+  const state = fs.readFileSync(new URL('../studio/state.mjs', import.meta.url), 'utf8');
+  assert.ok(!state.includes('discoverTask'), 'no task filter is kept or restored');
+});
+
+test('the board places every artefact of a layer in a group, and hides none', () => {
+  const layerEntries = (pack, L) => (L === 'L4'
+    ? ['policy', 'alerting', 'healing'].flatMap(k => pack.layers.L4?.[k] || [])
+    : pack.layers[L] || []).map((a, i) => ({ a, key: `${L}//${a.id}#${i}` }));
+  for (const L of Object.keys(BOARD_LAYERS)) {
+    const entries = layerEntries(carlos, L);
+    const { groups } = boardGroups(L, entries);
+    assert.equal(groups.reduce((n, g) => n + g.entries.length, 0), entries.length, `${L}: every artefact is in exactly one group`);
+  }
+  // An id no group claims lands in Other, drawn last.
+  const odd = boardGroups('L1', [{ a: { id: 'ZZZ-01', title: 'odd' }, key: 'L1//ZZZ-01' }]).groups;
+  assert.equal(odd.at(-1).id, 'other');
+  assert.equal(odd.at(-1).entries.length, 1);
+  // The longer families do not lose to the shorter ones on the same layer.
+  const l2 = boardGroups('L2', [{ a: { id: 'SCRAPE-SRC-01' }, key: 'a' }, { a: { id: 'METRIC-SRC-01' }, key: 'b' }, { a: { id: 'PIP-EXP-MET' }, key: 'c' }]).groups;
+  assert.deepEqual(l2.filter(g => g.entries.length).map(g => g.id), ['rcv', 'exp', 'metrics']);
+});
+
+test('a board group draws its artefacts as buttons that open the record, and caps a long family', () => {
+  const sli = (i) => ({ a: { id: `SLI-0${i}`, title: `slo_<b>_${i}`, spec: { type: i % 2 ? 'ratio' : 'threshold' } }, key: `L1//SLI-0${i}` });
+  const slo = { a: { id: 'SLO-01', title: 'x_99_9', spec: { sli: 'x', objective: 0.999, window: '30d' } }, key: 'L1//SLO-01' };
+  const html = boardGroupsHtml('L1', [...[1, 2, 3, 4, 5, 6, 7, 8].map(sli), slo]);
+  assert.equal((html.match(/data-ux-action="dv-item"/g) || []).length, BOARD_ITEMS_SHOWN + 1, 'six indicators and the objective');
+  assert.ok(html.includes(`+${8 - BOARD_ITEMS_SHOWN} more`) && html.includes('data-ux-action="dv-open" data-layer="L1"'), 'the rest is one click away');
+  assert.ok(html.includes('data-key="L1//SLO-01"') && html.includes('99.9%') && html.includes('/ 30d'));
+  assert.ok(!html.includes('<b>') && html.includes('slo_&lt;b&gt;_1'));
+  // An empty family of the layer's model is shown as empty, not as a gap or a failure.
+  const l4 = boardGroupsHtml('L4', [{ a: { id: 'ALR-01', title: 'SEV1 routes', spec: { severity: 'SEV1', channels: [{ msteams: '#oncall' }] } }, key: 'L4/alerting/ALR-01' }]);
+  assert.ok(l4.includes('data-sev="SEV1"') && l4.includes('msteams #oncall'));
+  assert.ok(l4.includes('None in this pack') && l4.includes('is-flow'));
+  assert.ok(!/missing|required|fail|attention/i.test(l4), 'the board judges nothing');
+});
+
+test('an objective reads as a percentage whatever its scale', () => {
+  assert.equal(objectivePct(0.99), '99%');
+  assert.equal(objectivePct(0.999), '99.9%');
+  assert.equal(objectivePct(0.9995), '99.95%');
+  assert.equal(objectivePct(99.5), '99.5%');
+  assert.equal(objectivePct(undefined), null);
+});
+
+test('the board head states which pack this is, from the manifest', () => {
+  const html = boardHeadHtml({
+    meta: { service: 'pay<ments', name: 'payments', version: '1.2.0', criticality: 'tier-1', owners: ['team-a', 'team-b'] },
+    env: 'prod', total: 30, layers: 5,
+    artefacts: [{ id: 'OTEL-01', spec: { semconv: '1.27.0', sdk: { languages: ['go', 'java'] } } }, { id: 'BAK-01', spec: { product: 'prometheus' } }],
+  });
+  assert.ok(html.includes('ObservabilityPack') && html.includes('pay&lt;ments') && !html.includes('pay<ments'));
+  assert.ok(html.includes('payments v1.2.0 · 30 artefacts across 5 layers'));
+  for (const fact of ['tier-1', 'prod', 'team-a, team-b', '1.27.0', 'go, java', 'prometheus']) assert.ok(html.includes(fact), fact);
+  assert.ok(!html.includes('Imports'), 'a fact the pack does not state is not drawn');
 });
