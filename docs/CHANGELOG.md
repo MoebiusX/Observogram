@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Compare says what reads a metric only one pack holds
+*Only in A 38* was a count. On the platform this is checked against — a repository scan beside the live draft of the same system — those 38 are metrics the repository declares and the live system does not report, and the scan already records on each one what in the repository reads it. Compare now says it: **6 alert rules, 36 dashboard panels and 6 recording rules read 30 of them**, the alert rules by name; the other 8 are emitted by code and read by nothing. Studio only: no engine, diff or output change.
+- **`studio/metric-readers.mjs`** (pure, zero-import). `metricReaders` reads `spec.used_by` (`alert:<rule>`, `dashboard:<dashboard>/<panel>`, `recording_rule:<record>`) and `spec.origin_kind` across every artefact that stands for a metric — a family's `_bucket` / `_count` / `_sum` series are separate artefacts, and a query names the series. A recording rule is not a reader of its own output. `readersDigest` counts each reader once however many metrics it reads; `readersSentence`, `readerLine` and `readerRank` are the words and the order.
+- **Side by side.** The *Only in* group prints the sentence under its title, leads with the metrics an alert rule reads, then those anything reads, and each card says its readers (*Read by alert rule RabbitMQDown*) or, when nothing reads it, where it comes from (*Emitted by code; nothing in this pack reads it*).
+- **Summary.** *Quality gaps* gains a line: how many alert rules, dashboard panels and recording rules read a metric not seen live, the alert rules by name.
+- **Changes needing review.** The missing list is in the same order and each row says its readers.
+- **What it does not say.** "Reads a metric Pack B does not hold" is a fact of the two packs. "This alert can never fire" is not — a rule built on `absent()` fires exactly then — so no such verdict is printed. A pack that records nothing about a metric (a live draft, a hand-written pack) gets no line: unknown is not "unread".
+- **Tests.** `tools/test-metric-readers.mjs` (in `npm test`): the readers of one metric and of a family, the digest, the words, the order, a scanned repository carrying the record, and the view's three places pinned in source.
+
 ### Pick a folder walks the repository itself: its dependencies are never listed
 **Scan a repo → pick a folder** used a folder input, which hands the page every file under the folder before the scan rule can apply: 105,810 files in 11,874 folders for a repository whose scan reads 631 files in 157. Since 0.5.0 the rule kept the rest from being *read*; the browser still listed them all before the page saw the first one.
 - **`walkScanFolder`** (`tools/lib/crawler.mjs`) walks a directory handle with the shared rule (`scanSkipsName`, `SCAN_EXT`) and does not enter a skipped folder, so `node_modules`, `.git`, build output and agent worktrees are never asked for their entries. Paths are rooted at the picked folder's name, as `webkitRelativePath` is, in name order; the picked folder is entered whatever it is called.

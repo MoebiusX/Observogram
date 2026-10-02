@@ -41,6 +41,7 @@ import { driftedEntryBadness as diagDriftCost } from './diagnostic-grade.mjs';
 // Requirements traceability (the TRACEABILITY VIEW section below).
 import { decisionHeaderHtml, disclosureHtml, emptyStateHtml, LAYER_PURPOSE, layerTitle, plural, wireUxActions } from './ux-kit.mjs';
 import { LINK_STATES, readTraceability, traceIssue } from './trace-chain.mjs';
+import { metricReaders, readersDigest, readersSentence, readerLine, readerRank, readerCounts, alertNames } from './metric-readers.mjs';
 
 // Re-exported: these two lived here before moving to compare-catalog.mjs
 // (kept importable from the view for compile-view.mjs and proto-shared.mjs).
@@ -2482,6 +2483,17 @@ function compareUncheckedReason(side, L, art, sets) {
   return (side === 'a' ? sets.aReason : sets.bReason)?.get(`${L}:${art?.id}`) || '';
 }
 
+// The artefacts that stand for one diff entry in the pack that holds it: the
+// entry's own artefact, or every member of its metric family. The entry embeds
+// one head artefact; what reads a metric is recorded on each series
+// (studio/metric-readers.mjs), so the readers are asked of the members.
+function entryMemberArtefacts(entry, pack, L) {
+  const art = entry?.artefact;
+  const ids = new Set([art?.id, ...(art?.memberIds || [])].filter(Boolean));
+  const held = layerItemsFor(pack, L).filter(a => ids.has(a.id));
+  return held.length ? held : [art].filter(Boolean);
+}
+
 // 'both' | 'only' | 'unchecked' | null for one card. 'unchecked' = the other
 // pack had no way to observe this artefact's family; null = not part of the
 // comparison (panels are excluded from the diff; out-of-scope live artefacts
@@ -3280,6 +3292,24 @@ function renderCompareLayerColumn(side, L, items, sets) {
   groups.both.sort((x, y) => (pairAt.get(x.id) ?? Infinity) - (pairAt.get(y.id) ?? Infinity));
   const letter = side.toUpperCase();
   const other = letter === 'A' ? 'B' : 'A';
+  const entryOf = side === 'a' ? sets.aEntry : sets.bEntry;
+  // What only this side holds, by what reads it (studio/metric-readers.mjs):
+  // the metrics an alert rule reads lead the group, and the group says in
+  // words what reads them — "only in A" is a count, this is what it costs.
+  const onlyByEntry = new Map();
+  for (const art of groups.only) {
+    const k = entryOf?.get(`${L}:${art.id}`) || `id:${art.id}`;
+    if (!onlyByEntry.has(k)) onlyByEntry.set(k, []);
+    onlyByEntry.get(k).push(art);
+  }
+  const onlyRank = new Map();
+  for (const arts of onlyByEntry.values()) {
+    const rank = readerRank(metricReaders(arts));
+    for (const art of arts) onlyRank.set(art.id, rank);
+  }
+  groups.only.sort((x, y) => onlyRank.get(x.id) - onlyRank.get(y.id));
+  const otherIsLive = side === 'a' ? isLivePack(state.packB, state.compareBId) : isLivePack(state.pack, state.selectedPackId);
+  const onlyWhy = readersSentence(readersDigest([...onlyByEntry.values()]), { holder: letter, other, otherIsLive });
   const reasons = [...new Set(groups.unchecked.map(art => compareUncheckedReason(side, L, art, sets)).filter(Boolean))];
   const titles = {
     both: ['In both', 'In both packs, matched by behaviour. The same order on both sides.'],
@@ -3296,7 +3326,6 @@ function renderCompareLayerColumn(side, L, items, sets) {
     // The number is what the summary counts: artefacts. A metric is one
     // artefact however many series (cards) it is exposed as, so when the
     // two differ the cards are said too — never two unexplained numbers.
-    const entryOf = side === 'a' ? sets.aEntry : sets.bEntry;
     const artefacts = k === 'rest'
       ? groups[k].length
       : new Set(groups[k].map(art => entryOf?.get(`${L}:${art.id}`) || `id:${art.id}`)).size;
@@ -3311,6 +3340,12 @@ function renderCompareLayerColumn(side, L, items, sets) {
       const why = document.createElement('p');
       why.className = 'compare-col-group-why';
       why.textContent = reasons.length === 1 ? reasons[0] : reasons.join(' · ');
+      col.appendChild(why);
+    }
+    if (k === 'only' && onlyWhy) {
+      const why = document.createElement('p');
+      why.className = 'compare-col-group-why';
+      why.textContent = onlyWhy;
       col.appendChild(why);
     }
     for (const art of groups[k]) col.appendChild(renderCompareCard(art, def, art._sub || null, side, sets));
@@ -3425,6 +3460,9 @@ function renderCompareCard(artefact, def, sublayerKey, side, sets) {
     statusPill = `<span class="diff-chip chip-unchecked" title="${escapeHtml(`Pack ${otherLetter} had no way to observe this${why ? `: ${why}` : ''}. Not counted as a difference.`)}">not checked in ${otherLetter}</span>`;
   }
 
+  // What reads a metric only this side holds, in this pack's own words.
+  const readers = isOnlySide ? readerLine(metricReaders(artefact)) : '';
+
   // Source pill — Declared/Verified/Missing (what the studio's
   // per-artefact taxonomy already says about this card's status in
   // its own pack, independent of the comparison).
@@ -3446,6 +3484,7 @@ function renderCompareCard(artefact, def, sublayerKey, side, sets) {
     </div>
     <div class="card-title">${escapeHtml(artefact.title || artefact.id)}</div>
     ${artefact.desc ? `<div class="card-desc">${escapeHtml(artefact.desc)}</div>` : ''}
+    ${readers ? `<div class="card-readers">${escapeHtml(readers)}</div>` : ''}
     <div class="card-foot card-foot-compare">
       ${sourcePill}
       ${artefact.tool ? `<span class="tool">${escapeHtml(artefact.tool)}</span>` : ''}
@@ -4368,6 +4407,14 @@ function compareSummaryHtml(digest, cmp, ctx) {
   const cosmeticCount = driftedEntries.filter(e => diagDriftCost(e).className === 'cosmetic').length;
   const qItems = [];
   if (cmp.missing) qItems.push(`<li class="ux-tone-fail"><strong>${cmp.missing}</strong> ${drift ? `declared artefact${s(cmp.missing)} not seen live` : `artefact${s(cmp.missing)} from the ${escapeHtml(r.bNoun)} missing from the ${escapeHtml(r.aNoun)}`}</li>`);
+  // What the missing metrics cost, where the pack that holds them says what
+  // reads them: counted once each, the alert rules by name.
+  const gapPack = drift ? state.pack : state.packB;
+  const gapReaders = readersDigest((digest?.rows || []).flatMap(row => (drift ? row.onlyInA : row.onlyInB).map(e => entryMemberArtefacts(e, gapPack, row.L))));
+  if (gapReaders.read) {
+    const n = gapReaders.alerts.length + gapReaders.panels.length + gapReaders.rules.length;
+    qItems.push(`<li class="ux-tone-fail compare-readers-item"><strong>${escapeHtml(readerCounts(gapReaders))}</strong> in the ${escapeHtml(drift ? r.aNoun : r.bNoun)} read${n === 1 ? 's' : ''} ${gapReaders.read === 1 ? 'a metric' : `${gapReaders.read} metrics`} ${drift ? 'not seen live' : `the ${escapeHtml(r.aNoun)} does not hold`}${gapReaders.alerts.length ? ` — alert rule${gapReaders.alerts.length === 1 ? '' : 's'}: ${escapeHtml(alertNames(gapReaders.alerts))}` : ''}</li>`);
+  }
   if (cmp.changed) qItems.push(`<li class="ux-tone-warn"><strong>${cmp.changed}</strong> shared artefact${s(cmp.changed)} with changed fields${decisionCount ? ` — ${decisionCount} affect${decisionCount === 1 ? 's' : ''} decisions (objectives, thresholds, queries, routing)` : ''}${cosmeticCount ? `${decisionCount ? ',' : ' —'} ${cosmeticCount} cosmetic` : ''}</li>`);
   const qualityPanel = `
       <section class="compare-panel ux-tone-${cmp.missing ? 'fail' : cmp.changed ? 'warn' : 'ok'}" aria-labelledby="compare-quality-title">
@@ -4495,7 +4542,11 @@ function renderCompareReview(digest, cmp, ctx) {
   const MAX_FIELDS = 8;
 
   const missingSide = drift ? 'a' : 'b';
-  const missing = (digest?.rows || []).flatMap(row => (drift ? row.onlyInA : row.onlyInB).map(e => ({ L: row.L, e })));
+  // What an alert rule reads leads the queue, then what anything reads
+  // (studio/metric-readers.mjs); each row says its readers.
+  const missingPack = drift ? state.pack : state.packB;
+  const missing = (digest?.rows || []).flatMap(row => (drift ? row.onlyInA : row.onlyInB).map(e => ({ L: row.L, e, readers: metricReaders(entryMemberArtefacts(e, missingPack, row.L)) })))
+    .sort((x, y) => readerRank(x.readers) - readerRank(y.readers));
   const changed = (digest?.rows || []).flatMap(row => row.drifted.map(e => ({ L: row.L, e, cost: diagDriftCost(e) })))
     .sort((x, y) => y.cost.weight - x.cost.weight);
 
@@ -4506,12 +4557,13 @@ function renderCompareReview(digest, cmp, ctx) {
         ? 'The declared pack promises these; the live pack shows no behavioural counterpart.'
         : `The ${escapeHtml(r.bNoun)} declares these; the ${escapeHtml(r.aNoun)} has no behavioural counterpart.`}</p>
       <ul class="compare-missing-list">
-        ${missing.slice(0, MAX_MISSING).map(({ L, e }) => {
+        ${missing.slice(0, MAX_MISSING).map(({ L, e, readers }) => {
           const art = e.artefact || (missingSide === 'a' ? e.a : e.b);
+          const readBy = readerLine(readers);
           return `
           <li class="compare-missing-item ux-tone-fail">
             <span class="drift-row-num" title="${escapeHtml(diagUx.layerTitle(L))}">${escapeHtml(L)}</span>
-            <span class="compare-missing-label">${escapeHtml(diffEntryLabel(e))}</span>
+            <span class="compare-missing-label">${escapeHtml(diffEntryLabel(e))}${readBy ? `<span class="compare-missing-readers">${escapeHtml(readBy)}</span>` : ''}</span>
             ${art?.id ? `<code class="compare-missing-id">${escapeHtml(art.id)}</code>` : ''}
             ${openBtn(art, L, missingSide, 'Open')}
           </li>`;

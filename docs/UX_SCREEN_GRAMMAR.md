@@ -65,6 +65,11 @@ It does not fold away what the user *does* with a pack:
   and the set arithmetic (only in A · in both · only in B · union · jaccard),
   and opens on **Side by side**. *Changes needing review* and *Summary* (the
   decision header and what each number means) are the other two views.
+- An *only in* group says what that costs, where the pack records it: for
+  the metrics a repository scan declares, the alert rules, dashboard panels
+  and recording rules that read them (`studio/metric-readers.mjs`). It says
+  what the two packs show — "reads a metric Pack B does not hold" — never a
+  verdict they do not, such as "this alert cannot fire".
 
 ## One status vocabulary, four properties
 
