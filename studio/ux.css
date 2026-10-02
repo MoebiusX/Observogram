@@ -274,8 +274,6 @@ body.chrome-observa:not([data-mode="home"]) .observa-brand-text .observa-tagline
 .observa-tab { grid-template-columns: 32px 1fr; gap: 10px; padding: 8px 14px; }
 .observa-tab-num { width: 30px; height: 30px; font-size: 14px; }
 .observa-tab-eyebrow { letter-spacing: 0.08em; }
-/* The chrome's single-row height; app.mjs replaces it with the measured one
-   (trackChromeHeight: the tab titles wrap at a laptop width). */
 body.chrome-observa { --observa-chrome-h: 102px; }
 /* The context bar (.hdr) is sticky right under the chrome, so the sticky
    strips (.ux-section-nav, .ux-decision.is-sticky, .diag-sticky) pin below it
@@ -346,8 +344,9 @@ body.chrome-observa[data-mode="build"] .hdr { display: none !important; }
   .observa-service-key { display: none; }
   .observa-actions .observa-action-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   /* The account menu's name too (its title and menu say it in full): at its
-     full width the chip took the tabs' room and their titles wrapped. */
-  .observa-actions .hdr-user-btn { max-width: 10ch; }
+     full width the chip took the tabs' room and their titles wrapped. The
+     cap is on the name, so the glyph and the caret that marks a menu stay. */
+  .observa-actions .hdr-user-name { display: inline-block; max-width: 10ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
   .observa-hdr-inner { gap: 14px; }
   .observa-tab-title {
     white-space: normal; font-size: 14px; line-height: 1.25;

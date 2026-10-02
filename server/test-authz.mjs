@@ -589,18 +589,22 @@ test('the account menu mounts in the one bar every screen shows — not the cont
   const boot = functionSource(src, 'boot');
   const chromeAt = boot.indexOf('installObservaChrome();');
   assert.ok(chromeAt >= 0 && chromeAt < boot.indexOf('setupIdentityChip();'), 'boot mounts the chrome before the chip');
-  // The chrome's height is measured into --observa-chrome-h (the context bar
-  // and the sticky strips pin under it): beside the account menu the tab
-  // titles wrap at a laptop width, and the constant alone left the context
-  // bar under the chrome by the difference. The chip's name gives way there
-  // (ten characters) and at phone width (the glyph), so the tabs keep their
-  // room and the popover stays on screen.
-  assert.match(src, /syncObservaTabs\(\);\s*trackChromeHeight\(hdr\);/, 'the chrome is measured once its tabs are in it');
-  assert.match(functionSource(src, 'trackChromeHeight'), /setProperty\('--observa-chrome-h', `\$\{Math\.ceil\(hdr\.getBoundingClientRect\(\)\.height\)\}px`\)[\s\S]*new ResizeObserver\(apply\)\.observe\(hdr\);[\s\S]*addEventListener\('resize', apply\);[\s\S]*apply\(\);\s*\}$/);
+  // Beside the tabs the chip's name gives way — ten characters at a laptop
+  // width, the glyph at phone width — so the tabs keep their room and the
+  // popover stays on screen. The cap is on the name, never the button: the
+  // glyph and the caret that marks it a menu stay. (The chrome's height is
+  // measured by syncContextBarHeight, so a chrome the chip makes taller still
+  // has the context bar flush under it.)
+  assert.match(functionSource(src, 'syncContextBarHeight'), /setProperty\('--observa-chrome-h',/, 'the chrome\'s height is measured, not assumed');
+  assert.doesNotMatch(src, /trackChromeHeight/, 'by one measurer, not two');
+  // Its outside-click closer listens on the way down: the Advanced toggle
+  // beside it stops its click from bubbling, and both menus stayed open.
+  assert.match(fn, /document\.addEventListener\('click', \(e\) => \{ if \(!chip\.contains\(e\.target\)\) setOpen\(false\); \}, true\);/, 'opening Advanced closes the account menu');
   assert.match(fn, /<span class="hdr-user-name">\$\{escapeHtml\(me\.name \|\| me\.email \|\| me\.sub\)\}<\/span>/, 'the name is its own span, so a stylesheet can let it give way');
   const ux = readFileSync(join(STUDIO, 'ux.css'), 'utf8');
   const at1280 = ux.indexOf('@media (max-width: 1280px) {');
-  const cap = ux.indexOf('.observa-actions .hdr-user-btn { max-width: 10ch; }');
+  const cap = ux.indexOf('.observa-actions .hdr-user-name { display: inline-block; max-width: 10ch;');
+  assert.ok(!ux.includes('.observa-actions .hdr-user-btn { max-width'), 'the button itself is not capped: that clipped the caret');
   const at720 = ux.search(/@media \(max-width: 720px\) \{\r?\n\s*\.observa-actions \.hdr-user-name \{ position: absolute; width: 1px;/);
   assert.ok(at1280 >= 0 && cap > at1280 && at720 > cap, 'the chip gives way at a laptop width (ten characters) and at phone width (its glyph)');
 

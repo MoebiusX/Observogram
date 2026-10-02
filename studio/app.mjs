@@ -1304,23 +1304,6 @@ function trackContextBarHeight() {
   syncContextBarHeight();
 }
 
-// The context bar and those strips pin under the chrome by
-// --observa-chrome-h. ux.css holds its single-row height; the chrome grows
-// when its tab titles wrap (a laptop width, with the account menu beside
-// them), and a constant would leave the context bar under the chrome by
-// the difference — so measure it, as the context bar is.
-function trackChromeHeight(hdr) {
-  const apply = () => {
-    document.body.style.setProperty('--observa-chrome-h', `${Math.ceil(hdr.getBoundingClientRect().height)}px`);
-  };
-  if (typeof ResizeObserver === 'function') new ResizeObserver(apply).observe(hdr);
-  // A tab in the background gets no resize notifications until it is shown
-  // again — and not always then.
-  window.addEventListener('resize', apply);
-  document.addEventListener('visibilitychange', apply);
-  apply();
-}
-
 function installObservaChrome() {
   if (document.querySelector('.observa-hdr')) return;
   document.body.classList.add('chrome-observa');
@@ -1376,7 +1359,7 @@ function installObservaChrome() {
 
       <nav class="observa-tabs" role="tablist" aria-label="Primary"></nav>
 
-      <div class="observa-actions" aria-label="Advanced tools">
+      <div class="observa-actions" aria-label="Advanced tools and account">
         <div class="observa-adv-wrap">
           <button type="button" class="observa-action observa-adv-toggle"
                   aria-haspopup="true" aria-expanded="false" aria-controls="observa-adv-menu"
@@ -1424,8 +1407,6 @@ function installObservaChrome() {
   // The tab cards: the analysis journey's three (or the BUILD journey's
   // three in build mode), one renderer — syncObservaTabs wires the clicks.
   syncObservaTabs();
-  // Measured with the tabs in it: they set its height.
-  trackChromeHeight(hdr);
 
   // Wire the Advanced menu — deep tools off the main workflow.
   const advToggle = hdr.querySelector('.observa-adv-toggle');
@@ -5237,7 +5218,9 @@ function setupIdentityChip() {
   const menu = chip.querySelector('.hdr-user-menu');
   const setOpen = (open) => { menu.hidden = !open; menuBtn.setAttribute('aria-expanded', String(open)); };
   menuBtn.addEventListener('click', () => setOpen(menu.hidden));
-  document.addEventListener('click', (e) => { if (!chip.contains(e.target)) setOpen(false); });
+  // On the way down (capture): the Advanced toggle beside it stops its own
+  // click from bubbling, and would leave this menu open under that one.
+  document.addEventListener('click', (e) => { if (!chip.contains(e.target)) setOpen(false); }, true);
   chip.addEventListener('keydown', (e) => { if (e.key === 'Escape') { setOpen(false); menuBtn.focus(); } });
   // Every other session of this user ends at its next request; this
   // browser's cookie comes back re-issued (Set-Cookie). The id line says
