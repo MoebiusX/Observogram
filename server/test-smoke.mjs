@@ -62,6 +62,20 @@ async function getText(base, path) {
   return r.text();
 }
 
+// The studio's HTTP layer (studio/api.mjs) fetches origin-relative paths:
+// run `fn` with them resolved against the server under test.
+async function asStudio(base, fn) {
+  const real = globalThis.fetch;
+  globalThis.fetch = (url, opts) => real(typeof url === 'string' && url.startsWith('/') ? `${base}${url}` : url, opts);
+  try { return await fn(); } finally { globalThis.fetch = real; }
+}
+
+// The upload-registry entries of the catalogue whose pack carries `name`, as "id | label".
+async function uploadedEntries(base, name) {
+  const { packs } = await getJson(base, '/api/packs');
+  return packs.filter(p => p.source === 'uploaded' && p.name === name).map(p => `${p.id} | ${p.label}`);
+}
+
 // `handler(name, args)` answers tools/call when given; the default echoes
 // { ok, name } (enough for the deploy path, whose tools return opaque ids).
 async function startFakeMcp(toolNames, handler = null) {
@@ -1200,6 +1214,18 @@ try {
       assert(draft.ok === true, 'draft-from-mcp against the restricted fake succeeds', draft.error);
       assert(draft.validation?.ok === true && typeof draft.registered?.id === 'string',
              'the restricted fake\'s draft validates and registers (so a refresh from it can write a live pack)', draft.validation);
+      // One live draft, then "Load" (the panel's button and the home screen's
+      // "Render the manifest" share the adopt): one catalogue entry.
+      {
+        const { registeredOrValidated } = await import('../studio/api.mjs');
+        const name = draft.canonical.metadata.name;
+        const draftEntry = `${draft.registered.id} | ${name} (live MCP draft)`;
+        const adopted = await asStudio(base, () => registeredOrValidated(draft));
+        assert(adopted.ok === true && adopted.registered?.id === draft.registered.id,
+               'adopting a live draft selects the entry the draft registered', adopted.registered);
+        assert(JSON.stringify(await uploadedEntries(base, name)) === JSON.stringify([draftEntry]),
+               'one live draft + adopt → one catalogue entry', await uploadedEntries(base, name), [draftEntry]);
+      }
       const st = draft.summary?.stack;
       assert(st && st.status === 'not-attempted' && st.reason === 'metrics_query not exposed by this MCP (restricted tier)',
              'restricted tier → summary.stack.status not-attempted with the tier reason', st);
@@ -1384,6 +1410,52 @@ try {
          'crawl returns evidence pointers');
   assert(typeof crawlOut.conformance?.declaredTier === 'string',
          'crawl includes conformance report');
+
+  // One scan, then "Load": the catalogue holds one entry. The scan route
+  // registers the pack (registered.id); the studio's adopt selects that
+  // entry (studio/api.mjs registeredOrValidated) and goes through POST
+  // /api/validate — which registers what it validates, under another id —
+  // only when the scan registered nothing or its entry is gone.
+  {
+    const { registeredOrValidated } = await import('../studio/api.mjs');
+    const scanEntry = `${crawlOut.registered?.id} | smoke-crawl (scanned)`;
+    assert(JSON.stringify(await uploadedEntries(base, 'smoke-crawl')) === JSON.stringify([scanEntry]),
+           'one scan registers one catalogue entry, under its "(scanned)" label', await uploadedEntries(base, 'smoke-crawl'), [scanEntry]);
+    const adopted = await asStudio(base, () => registeredOrValidated(crawlOut));
+    assert(adopted.ok === true && adopted.registered?.id === crawlOut.registered.id && !('adapted' in adopted),
+           'adopting a scan selects the entry the scan registered (no second registration)', adopted.registered);
+    assert(JSON.stringify(await uploadedEntries(base, 'smoke-crawl')) === JSON.stringify([scanEntry]),
+           'one scan + adopt → one catalogue entry', await uploadedEntries(base, 'smoke-crawl'), [scanEntry]);
+    const viaId = await getJson(base, `/api/packs/${crawlOut.registered.id}`);
+    assert(viaId.meta?.apiVersion === 'observability.platform/v1', 'the adopted id loads as a layered pack (what the studio then fetches)');
+
+    // A scan that failed validation registered nothing: adopt validates it,
+    // answers the errors and adds no entry.
+    const rejected = await asStudio(base, () => registeredOrValidated({ registered: null, canonicalYaml: 'apiVersion: nope\n' }));
+    assert(rejected.ok === false && Array.isArray(rejected.errors) && rejected.errors.length > 0,
+           'adopting an unregistered scan goes through /api/validate and answers its errors', rejected);
+    assert((await uploadedEntries(base, 'smoke-crawl')).length === 1, 'a refused adopt adds no catalogue entry');
+
+    // A second scan under the same label replaces the first — still one entry.
+    const rescan = await (await fetch(`${base}/api/crawl`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(crawlBody),
+    })).json();
+    const rescanEntry = `${rescan.registered?.id} | smoke-crawl (scanned)`;
+    await asStudio(base, () => registeredOrValidated(rescan));
+    assert(JSON.stringify(await uploadedEntries(base, 'smoke-crawl')) === JSON.stringify([rescanEntry]),
+           'a re-scan + adopt replaces the earlier scan: one catalogue entry', await uploadedEntries(base, 'smoke-crawl'), [rescanEntry]);
+
+    // The first scan's entry is gone now: adopting that stale result falls
+    // back to /api/validate, which registers it and answers the adapted pack.
+    const stale = await asStudio(base, () => registeredOrValidated(crawlOut));
+    assert(stale.ok === true && typeof stale.registered?.id === 'string' && stale.registered.id !== crawlOut.registered.id && !!stale.adapted,
+           'adopting a scan whose entry is gone registers it through /api/validate', stale.registered);
+
+    // No studio path hands a scan's or a draft's YAML straight to /api/validate.
+    const appSrc = readFileSync(resolvePath(dirname(fileURLToPath(import.meta.url)), '..', 'studio', 'app.mjs'), 'utf8');
+    assert(!/validateUploaded\(\s*out\./.test(appSrc) && (appSrc.match(/registeredOrValidated\(out\b/g) || []).length === 3,
+           'studio/app.mjs: the scan adopt, the live-draft adopt and the post-deploy check all select the registered entry');
+  }
 
   // POST /api/crawl — empty body → 400
   const crawlEmpty = await fetch(`${base}/api/crawl`, {

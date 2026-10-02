@@ -16,7 +16,7 @@ import {
 } from './constants.mjs';
 import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } from './state.mjs';
 import {
-  api, loadCatalog, validateUploaded, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel, deniedError, deployRefusal,
+  api, loadCatalog, validateUploaded, registeredOrValidated, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel, deniedError, deployRefusal,
   setSignedInLogin, recallMcpUrl, rememberMcpUrl, forgetMcpUrls, signOutOthersText,
   loadDeployProfiles, storeDeployProfile, removeDeployProfile,
 } from './api.mjs';
@@ -3000,6 +3000,7 @@ async function doHomeMcpConnect() {
     const out = await r.json();
     if (!out.ok) throw new Error(out.error || 'MCP draft failed');
     draftMcpState.lastResult = out;
+    followReplacedPack(out.registered?.id).catch(() => {});
 
     statusEl.textContent = `connected · ${out.summary.discovered.backends} backend(s) · ${out.tookMs}ms`;
     statusEl.className = 'home-mcp-status is-ok';
@@ -3760,6 +3761,7 @@ async function doCrawl() {
     if (!out.ok) { setStatus(`error: ${out.error || 'unknown'}`, 'error'); return; }
     crawlState.lastResult = out;
     renderCrawlResult(out);
+    followReplacedPack(out.registered?.id).catch(() => {});
     setStatus(`done in ${out.tookMs}ms · ${out.summary.files.classified}/${out.summary.files.scanned} files classified`, 'ok');
   } catch (e) {
     setStatus(`error: ${e.message}`, 'error');
@@ -3819,6 +3821,7 @@ async function doCrawlFromGithub() {
     }
     crawlState.lastResult = out;
     renderCrawlResult(out);
+    followReplacedPack(out.registered?.id).catch(() => {});
     if (out.canonical) {
       setGhStatus(`done in ${out.tookMs}ms · ${out.summary?.files?.classified ?? 0} files classified from ${out.summary?.repo}@${out.summary?.ref}`, 'ok');
     } else {
@@ -3911,9 +3914,13 @@ function renderCrawlResult(out) {
 //
 // kind ∈ {'repo','live'}. Returns true when it entered compare.
 async function adoptValidatedPack(res, sourceLabel, kind) {
-  state.pack = res.adapted;
-  state.conformance = withPlaceholderPasses(res);
-  state.symbolTable = buildSymbolTable(res.adapted);
+  // An entry the scan or draft route registered arrives as its id alone
+  // (registeredOrValidated): enterAnalyzeMode / enterCompareMode load it.
+  if (res.adapted) {
+    state.pack = res.adapted;
+    state.conformance = withPlaceholderPasses(res);
+    state.symbolTable = buildSymbolTable(res.adapted);
+  }
   state.uploadedSource = sourceLabel;
   state.activeCardKey = null;
 
@@ -3975,14 +3982,44 @@ async function adoptValidatedPack(res, sourceLabel, kind) {
   return false;
 }
 
+// A scan or draft that carries the label of an earlier one replaces it on
+// the server (registerUploadedPack drops the older id), and adopting selects
+// that labelled entry — so the pack it replaced can be the one on screen.
+// Pack A or Pack B then follows to the new id; left alone it would name a
+// pack that no longer exists. Both gone at once is a reset, not a
+// replacement, and is left as it is.
+async function followReplacedPack(newId) {
+  if (!newId || (state.mode !== 'single' && state.mode !== 'compare')) return;
+  await loadCatalog();
+  const replaced = (id) => typeof id === 'string' && id.startsWith('uploaded-') && !state.catalog.some(p => p.id === id);
+  const aGone = replaced(state.selectedPackId);
+  const bGone = replaced(state.compareBId);
+  if (aGone === bGone || state.selectedPackId === newId || state.compareBId === newId) return;
+  if (aGone) {
+    state.selectedPackId = newId;
+    state.selectedEnv = defaultEnvFor(newId);
+    await refresh();
+  } else {
+    state.compareBId = newId;
+    state.compareBEnv = defaultEnvFor(newId);
+    state.packB = null; state.diff = null;
+    await loadPackB();
+    renderPackBSelect();
+  }
+  if (state.compareBId) await refreshDiff();
+  const label = state.catalog.find(p => p.id === newId)?.label || newId;
+  toast(`Pack ${aGone ? 'A' : 'B'} now shows the newer ${label} — it replaced the one that was loaded`);
+}
+
 async function adoptCrawlResult() {
   const out = crawlState.lastResult;
   if (!out) return;
-  // Reuse the upload flow: POST /api/validate → if ok, route the pack
-  // into the drift journey (repo scan → Pack A). Same validation path
-  // as drag-dropping a yaml file onto the studio shell.
+  // Route the pack the scan registered into the drift journey (repo scan
+  // → Pack A). A scan that failed validation registered nothing: it goes
+  // through POST /api/validate, as a yaml file dropped on the studio does,
+  // and its errors are the toast.
   try {
-    const res = await validateUploaded(out.canonicalYaml, 'application/x-yaml', state.selectedEnv);
+    const res = await registeredOrValidated(out, state.selectedEnv);
     if (!res.ok) {
       toast(`Could not adopt — ${res.errors.length} validation error(s)`, 'error');
       return;
@@ -4003,8 +4040,8 @@ async function adoptCrawlResult() {
 // Parallel to the crawler (Path A). The SRE enters their MCP URL,
 // optionally an auth token, and a pack name; the server hits the
 // MCP, builds a canonical pack from what the MCP can attest to, and
-// returns it for review. Adoption round-trips through /api/validate
-// like every other pack path.
+// returns it for review, registered. Adoption selects that entry
+// (registeredOrValidated), as a repo scan's does.
 // ============================================================
 
 const draftMcpState = {
@@ -4482,9 +4519,13 @@ export async function startDeployVerify({ deployId, packId, env, mcpUrl, mcpAuth
         body: JSON.stringify({ mcpUrl, mcpAuth }),
       });
       if (!out.ok) throw new Error(out.error || 'MCP draft failed');
-      const reg = await validateUploaded(out.canonicalYaml, 'application/x-yaml');
+      // The draft is registered by the route that answered it; it replaces
+      // the earlier draft of the same label — the previous check's, or the
+      // live draft loaded as Pack B, which then follows to this one.
+      const reg = await registeredOrValidated(out);
       if (!reg.ok || !reg.registered?.id) throw new Error('live draft failed validation');
       packBId = reg.registered.id;
+      followReplacedPack(packBId).catch(() => {});
       refreshedAt = out.canonical?.metadata?.annotations?.['mcp.refreshedAt'] || null;
       const params = new URLSearchParams({ a: packId, b: packBId });
       if (env) params.set('aEnv', env);
@@ -4707,6 +4748,7 @@ async function doDraftFromMcp() {
     if (!out.ok) { setStatus(`error: ${out.error || 'unknown'}`, 'error'); return; }
     draftMcpState.lastResult = out;
     renderDraftMcpResult(out);
+    followReplacedPack(out.registered?.id).catch(() => {});
     setStatus(`drafted in ${out.tookMs}ms · ${out.summary.discovered.backends} backend(s) discovered`, 'ok');
   } catch (e) {
     setStatus(`error: ${e.message}`, 'error');
@@ -4994,7 +5036,7 @@ async function adoptDraftFromMcpResult() {
   const out = draftMcpState.lastResult;
   if (!out) return;
   try {
-    const res = await validateUploaded(out.canonicalYaml, 'application/x-yaml', state.selectedEnv);
+    const res = await registeredOrValidated(out, state.selectedEnv);
     if (!res.ok) {
       toast(`Could not adopt — ${res.errors.length} validation error(s)`, 'error');
       return;
