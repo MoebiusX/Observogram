@@ -8,7 +8,7 @@
 // works: crawler output is a valid pack.
 // ============================================================
 
-import { crawlFiles, detectArtefactKind, crawlToYaml, scanReadsPath, scanSkipsName, SCAN_EXT, SCAN_IGNORE_DIRS } from './lib/crawler.mjs';
+import { crawlFiles, detectArtefactKind, crawlToYaml, scanReadsPath, scanSkipsName, walkScanFolder, SCAN_EXT, SCAN_IGNORE_DIRS } from './lib/crawler.mjs';
 import { inferSlisFromRecordingRules, canonicalRuleDuration, burnAlertsFromAlertRules } from './lib/sli-inference.mjs';
 import { compileAlertmanager } from './lib/compile.mjs';
 import { backendForScrapeJob, knownBackendProduct, BACKEND_PATTERNS } from './lib/backend-products.mjs';
@@ -994,5 +994,65 @@ assert(stage.indexOf('scanReadsPath') < stage.indexOf('f.text()'), 'and before i
 const drop = studioSrc.slice(studioSrc.indexOf('async function readEntry'), studioSrc.indexOf('async function stageFileList'));
 assert(/lib\.scanSkipsName\(entry\.name, \{ dir: true \}\)/.test(drop), 'the drop zone applies the same rule to each folder');
 assert(!/CRAWL_IGNORE_DIRS|CRAWL_SCAN_EXT/.test(studioSrc), 'the studio keeps no list of its own');
+
+// ---------- the folder handed over as a handle: skipped folders are never listed ----------
+// A stand-in for FileSystemDirectoryHandle / FileSystemFileHandle. `listed`
+// records every folder whose entries were asked for: the point of the walk
+// is that node_modules is not among them.
+{
+  const listed = [];
+  const fileHandle = (name) => ({ kind: 'file', name });
+  const dirHandle = (name, children) => ({
+    kind: 'directory',
+    name,
+    async *entries() {
+      listed.push(name);
+      // Out of name order on purpose: a platform lists in its own order.
+      for (const c of [...children].reverse()) yield [c.name, c];
+    },
+  });
+  const repo = dirHandle('dist', [                       // the picked folder: named like a skipped one
+    fileHandle('docker-compose.yml'),
+    fileHandle('README.md'),
+    fileHandle('.env.yaml'),
+    dirHandle('k8s', [dirHandle('prometheus', [fileHandle('rules.yaml'), fileHandle('alerts.yml')])]),
+    dirHandle('node_modules', [dirHandle('pkg', [fileHandle('index.js'), fileHandle('dash.json')])]),
+    dirHandle('packages', [dirHandle('api', [
+      dirHandle('node_modules', [fileHandle('x.yml')]),
+      dirHandle('src', [fileHandle('metrics.ts')]),
+    ])]),
+    dirHandle('.git', [fileHandle('config.yaml')]),
+    dirHandle('.claude', [dirHandle('worktrees', [dirHandle('w1', [fileHandle('rules.yaml')])])]),
+    dirHandle('.observability', [fileHandle('pack.yaml')]),
+    dirHandle('build', [fileHandle('out.json')]),
+  ]);
+  const read = [];
+  const notEntered = await walkScanFolder(repo, async (rel, handle) => { read.push(rel); assert(handle.kind === 'file', 'onFile gets the file handle'); });
+  assert(JSON.stringify(read) === JSON.stringify([
+    'dist/.observability/pack.yaml',
+    'dist/docker-compose.yml',
+    'dist/k8s/prometheus/alerts.yml',
+    'dist/k8s/prometheus/rules.yaml',
+    'dist/packages/api/src/metrics.ts',
+  ]), 'the walk reads what the rule reads, rooted at the picked folder, in name order', read);
+  assert(read.every(r => scanReadsPath(r, { skipRoot: true })), 'every path it reads is one the folder input would have read');
+  assert(notEntered === 5, 'node_modules (twice), .git, .claude and build are counted as not entered', notEntered);
+  assert(!listed.includes('node_modules') && !listed.includes('.git') && !listed.includes('worktrees') && !listed.includes('pkg'),
+    'and their entries are never asked for — the dependencies are not listed, not merely filtered', listed);
+  assert(listed.includes('dist') && listed.includes('.observability'), 'the picked folder is entered whatever its name; .observability too');
+
+  const empty = await walkScanFolder(dirHandle('nothing', []), async () => { throw new Error('no file to read'); });
+  assert(empty === 0, 'an empty folder reads nothing and skips nothing');
+
+  // The studio's "pick a folder" goes through the handle where the browser
+  // has one, and keeps the folder input as the fallback.
+  const pick = studioSrc.slice(studioSrc.indexOf('async function pickScanFolder'), studioSrc.indexOf('async function stageFileList'));
+  assert(/pickFolderBtn\.onclick = \(\) => pickScanFolder\(folderInput\)/.test(studioSrc), 'pick a folder calls the picker, not the input');
+  assert(/typeof window\.showDirectoryPicker !== 'function'\) \{ folderInput\.click\(\); return; \}/.test(pick),
+    'a browser without showDirectoryPicker falls back to the folder input');
+  assert(/e\?\.name !== 'AbortError'\) folderInput\.click\(\)/.test(pick), 'a refusal falls back too; a closed dialog does nothing');
+  assert(/lib\.walkScanFolder\(dir,/.test(pick) && !/scanSkipsName|SCAN_EXT/.test(pick), 'and the walk is the library\'s — the studio keeps no rule of its own');
+  assert(pick.indexOf('SCAN_MAX_FILE_BYTES') < pick.indexOf('file.text()'), 'the size cap applies before the file is read');
+}
 
 report('crawler');

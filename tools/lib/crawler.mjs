@@ -35,10 +35,11 @@ import { symbolSlug as slug } from './slug.mjs';
 // ---------- which files of a repository a scan reads ----------
 // One rule for every way a repository reaches the scanner — the CLI walker
 // (tools/crawl-repo.mjs), the studio's folder picker and its drop zone — so
-// a local scan reads the same files however the folder is handed over. The
-// folder picker lists EVERYTHING under the folder, node_modules included:
+// a local scan reads the same files however the folder is handed over. A
+// folder input lists EVERYTHING under the folder, node_modules included:
 // before it used this rule it staged 75,000 files (430 MB) of a repository
-// whose scannable sources are 600.
+// whose scannable sources are 600. Where the browser hands over the folder
+// itself, walkScanFolder (below) does not list them in the first place.
 export const SCAN_EXT = /\.(ya?ml|json|cjs|mjs|js|jsx|ts|tsx|py|go|java|kt|rs|cs)$/i;
 export const SCAN_MAX_FILE_BYTES = 5 * 1024 * 1024;
 export const SCAN_IGNORE_DIRS = new Set([
@@ -71,6 +72,36 @@ export function scanReadsPath(relPath, { skipRoot = false } = {}) {
   const file = parts[parts.length - 1];
   if (parts.slice(skipRoot ? 1 : 0, -1).some(d => scanSkipsName(d, { dir: true }))) return false;
   return !scanSkipsName(file) && SCAN_EXT.test(file);
+}
+
+/**
+ * Walk a picked folder through its directory handle (the File System Access
+ * API's FileSystemDirectoryHandle, or anything shaped like one: `name`,
+ * `entries()` yielding `[name, handle]`, `handle.kind`). A folder a scan
+ * never enters is not listed at all — where a `webkitdirectory` input hands
+ * the page every file under the folder before the rule can apply (105,000
+ * for a repository whose scan reads 630, most of them under node_modules).
+ *
+ * `onFile(relPath, fileHandle)` is awaited for each file the rule reads, in
+ * name order, `relPath` rooted at the picked folder's own name (as
+ * `webkitRelativePath` is). The picked folder is the user's choice whatever
+ * it is called. Answers how many folders were not entered.
+ */
+export async function walkScanFolder(dir, onFile, prefix = String(dir?.name ?? '')) {
+  const entries = [];
+  for await (const [name, handle] of dir.entries()) entries.push([name, handle]);
+  entries.sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0));
+  let notEntered = 0;
+  for (const [name, handle] of entries) {
+    const rel = prefix ? `${prefix}/${name}` : name;
+    if (handle.kind === 'directory') {
+      if (scanSkipsName(name, { dir: true })) notEntered++;
+      else notEntered += await walkScanFolder(handle, onFile, rel);
+    } else if (!scanSkipsName(name) && SCAN_EXT.test(name)) {
+      await onFile(rel, handle);
+    }
+  }
+  return notEntered;
 }
 
 // Parse a (possibly multi-document) YAML file into a list of non-null

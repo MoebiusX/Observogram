@@ -3473,7 +3473,7 @@ function setupCrawlPanel() {
   resultCloseBtn.onclick = () => { $('#crawl-result').hidden = true; };
   resetBtn.onclick = () => { resetCrawlStaged(); };
 
-  pickFolderBtn.onclick = () => folderInput.click();
+  pickFolderBtn.onclick = () => pickScanFolder(folderInput);
   pickFilesBtn.onclick = () => {
     if (!multiInput) {
       multiInput = document.createElement('input');
@@ -3566,6 +3566,47 @@ async function readEntry(entry, prefix, lib) {
       for (const ent of batch) await readEntry(ent, (prefix ? `${prefix}/` : '') + entry.name, lib);
     } while (batch.length > 0);
   }
+}
+
+// "pick a folder". Where the browser can hand over the folder itself
+// (showDirectoryPicker: Chromium, a secure context such as localhost) the
+// studio walks it and never enters node_modules, so a large repository is
+// staged in the time it takes to read its own sources. Elsewhere — Firefox,
+// Safari, plain http on a LAN address, a frame the API is refused in — the
+// folder input lists every file under the folder first (stageFileList).
+async function pickScanFolder(folderInput) {
+  if (typeof window.showDirectoryPicker !== 'function') { folderInput.click(); return; }
+  let dir;
+  try {
+    dir = await window.showDirectoryPicker({ id: 'observogram-scan', mode: 'read' });
+  } catch (e) {
+    // AbortError: the dialog was closed. Anything else: the API is there but
+    // refused here — the input still works.
+    if (e?.name !== 'AbortError') folderInput.click();
+    return;
+  }
+  await stageFolderHandle(dir);
+}
+
+async function stageFolderHandle(dir) {
+  const lib = await getCrawlerLib();
+  const list = $('#crawl-staged-files');
+  const say = (n) => { if (list) list.innerHTML = `<span class="crawl-staged-empty">reading ${escapeHtml(dir.name || 'the folder')}… ${n} file${n === 1 ? '' : 's'}</span>`; };
+  let read = 0;
+  say(0);
+  try {
+    crawlState.ignored += await lib.walkScanFolder(dir, async (rel, handle) => {
+      const file = await handle.getFile();
+      if (file.size > lib.SCAN_MAX_FILE_BYTES) return;
+      crawlState.files.set(rel, await file.text());
+      if (++read % 25 === 0) say(read);
+    });
+  } catch (e) {
+    // A file removed or locked mid-walk: what was read is still staged.
+    toast(`Stopped reading the folder: ${e.message}`, 'error');
+  }
+  if (!crawlState.rootName) crawlState.rootName = dir.name || null;
+  finalizeStaging();
 }
 
 async function stageFileList(fileList, _rootHint) {
