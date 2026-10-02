@@ -343,11 +343,24 @@ body.chrome-observa[data-mode="build"] .hdr { display: none !important; }
   .observa-brand-text { display: none; }
   .observa-service-key { display: none; }
   .observa-actions .observa-action-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  /* The account menu's name too (its title and menu say it in full): at its
+     full width the chip took the tabs' room and their titles wrapped. The
+     cap is on the name, so the glyph and the caret that marks a menu stay. */
+  .observa-actions .hdr-user-name { display: inline-block; max-width: 10ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
   .observa-hdr-inner { gap: 14px; }
   .observa-tab-title {
     white-space: normal; font-size: 14px; line-height: 1.25;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   }
+}
+/* Phone width: the account menu is its glyph (the name stays for assistive
+   technology), the action cluster gives way before the tabs do, and the
+   popover never runs past the viewport's edge. */
+@media (max-width: 720px) {
+  .observa-actions .hdr-user-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .observa-hdr-inner > .observa-actions { flex: 0 1 auto; min-width: 0; }
+  .observa-actions .hdr-user, .observa-actions .hdr-user-btn { min-width: 0; }
+  .observa-actions .hdr-user-menu { max-width: calc(100vw - 32px); }
 }
 /* The pickers show the pack name; the long provenance tail may ellipsize. */
 body.chrome-observa .hdr .ctrl select { max-width: min(380px, 42vw); text-overflow: ellipsis; }

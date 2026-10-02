@@ -1359,7 +1359,7 @@ function installObservaChrome() {
 
       <nav class="observa-tabs" role="tablist" aria-label="Primary"></nav>
 
-      <div class="observa-actions" aria-label="Advanced tools">
+      <div class="observa-actions" aria-label="Advanced tools and account">
         <div class="observa-adv-wrap">
           <button type="button" class="observa-action observa-adv-toggle"
                   aria-haspopup="true" aria-expanded="false" aria-controls="observa-adv-menu"
@@ -5144,21 +5144,28 @@ function syncApiLink() {
 }
 
 // Identity chip — only renders when the server runs in an identity
-// posture and a session exists.
+// posture and a session exists. The account menu mounts in the chrome's
+// action cluster (installObservaChrome runs first in boot): the one bar
+// every screen shows. The context bar (.hdr) is hidden on the home and
+// Build screens (app.css, ux.css), so a menu there left a signed-in user
+// no way to sign out or change a password until a pack was open.
 function setupIdentityChip() {
   const me = state.identity;
   if (!me?.authenticated) return;
-  const anchor = $('#theme-toggle');
-  if (!anchor || document.getElementById('hdr-user')) return;
+  const actions = document.querySelector('.observa-hdr .observa-actions');
+  if (!actions || document.getElementById('hdr-user')) return;
 
   // Org indicator (orgChipModel) — a switcher when the user belongs to
   // several orgs, a static label for one org that is not the default one,
   // nothing for the default org alone. Switching reloads: every view is a
   // projection of the active org's workspace, so a clean re-boot is the
   // honest refresh.
+  // This copy sits with the pack pickers in the context bar; the OBSERVA
+  // bar's own ORG chip (updateObservaOrgChip) shows on every screen.
   const orgs = me.orgs || [];
   const orgChip = orgChipModel(orgs, getActiveOrg());
-  if (orgChip.kind !== 'none' && !document.getElementById('hdr-org')) {
+  const anchor = $('#theme-toggle');
+  if (anchor && orgChip.kind !== 'none' && !document.getElementById('hdr-org')) {
     const wrap = document.createElement('span');
     wrap.id = 'hdr-org';
     wrap.className = 'hdr-org';
@@ -5188,6 +5195,9 @@ function setupIdentityChip() {
 
   // Account menu: who you are, change password (stand-alone mode — OIDC
   // passwords belong to the IdP), sign out my other sessions, sign out.
+  // The name is its own span: beside the tabs it gives way (ux.css — ten
+  // characters at a laptop width, the glyph alone at phone width), so the
+  // tab titles keep their room; the title and the menu say it in full.
   const chip = document.createElement('span');
   chip.id = 'hdr-user';
   chip.className = 'hdr-user';
@@ -5196,7 +5206,7 @@ function setupIdentityChip() {
   // buttons are natively focusable and honest about what this is.
   chip.innerHTML = `
     <button type="button" class="ctrl-btn hdr-user-btn" aria-expanded="false"
-            title="signed in as ${escapeHtml(me.email || me.sub)} (${escapeHtml(me.mode)})">⏣ ${escapeHtml(me.name || me.email || me.sub)} ▾</button>
+            title="signed in as ${escapeHtml(me.email || me.sub)} (${escapeHtml(me.mode)})">⏣ <span class="hdr-user-name">${escapeHtml(me.name || me.email || me.sub)}</span> ▾</button>
     <div class="hdr-user-menu" hidden>
       <div class="hdr-user-menu-id" aria-live="polite">signed in as <strong>${escapeHtml(me.email || me.sub)}</strong><span class="hdr-user-menu-mode">${escapeHtml(me.mode)}</span></div>
       ${me.mode === 'local-users' ? '<a class="hdr-user-menu-item" href="/auth/change-password">change password…</a>' : ''}
@@ -5208,7 +5218,9 @@ function setupIdentityChip() {
   const menu = chip.querySelector('.hdr-user-menu');
   const setOpen = (open) => { menu.hidden = !open; menuBtn.setAttribute('aria-expanded', String(open)); };
   menuBtn.addEventListener('click', () => setOpen(menu.hidden));
-  document.addEventListener('click', (e) => { if (!chip.contains(e.target)) setOpen(false); });
+  // On the way down (capture): the Advanced toggle beside it stops its own
+  // click from bubbling, and would leave this menu open under that one.
+  document.addEventListener('click', (e) => { if (!chip.contains(e.target)) setOpen(false); }, true);
   chip.addEventListener('keydown', (e) => { if (e.key === 'Escape') { setOpen(false); menuBtn.focus(); } });
   // Every other session of this user ends at its next request; this
   // browser's cookie comes back re-issued (Set-Cookie). The id line says
@@ -5233,7 +5245,7 @@ function setupIdentityChip() {
     await fetch('/auth/logout', { method: 'POST', headers: { ...authHeaders() } }).catch(() => {});
     window.location.assign('/auth/login');
   });
-  anchor.parentNode.insertBefore(chip, anchor);
+  actions.appendChild(chip);
 }
 
 // The inline script in <head> already applied the persisted/system theme
