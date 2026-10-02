@@ -326,3 +326,21 @@ export async function validateUploaded(body, contentType, env) {
   if (denial) throw denial;
   return json;
 }
+
+// The pack an adopt selects. A scan or a live draft is registered by the
+// route that answers it (`out.registered.id` — POST /api/crawl,
+// /api/crawl-github, /api/draft-from-mcp), so adopting it selects that
+// catalogue entry. POST /api/validate registers what it validates under
+// another id (the YAML is not the registered object byte for byte, so its
+// content hash differs): it is the path only when the route registered
+// nothing (the pack failed validation) or the entry has left the catalogue
+// since (a reset). Answers as validateUploaded does; an entry already
+// registered carries no `adapted` / `conformance` — the caller loads it by id.
+export async function registeredOrValidated(out, env) {
+  const id = out?.registered?.id;
+  if (id) {
+    await loadCatalog();
+    if (state.catalog.some(p => p.id === id)) return { ok: true, registered: { id } };
+  }
+  return validateUploaded(out.canonicalYaml, 'application/x-yaml', env);
+}
