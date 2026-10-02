@@ -342,6 +342,12 @@ tr.diag-flash > td { animation: diag-flash-bg 1.8s ease-out; }
 .compare-view .compare-layer-col-b .compare-side-card.is-unchecked { border-left: 3px dashed var(--ux-warn); }
 .compare-side-card .diff-chip.chip-unchecked { background: var(--ux-warn-bg); color: var(--ux-warn); }
 .compare-summary.has-unchecked { grid-template-columns: repeat(6, 1fr); }
+/* What reads a metric only one pack holds (studio/metric-readers.mjs): on
+   the card, and beside the row in the review queue. */
+.compare-side-card .card-readers { margin-top: 6px; font: 500 12px/1.4 var(--sans); color: var(--ink-2); overflow-wrap: anywhere; }
+.compare-view[data-cview="list"] .compare-side-card .card-readers,
+.compare-view[data-cview="tiles"] .compare-side-card .card-readers { display: none; }
+.compare-missing-readers { display: block; margin-top: 2px; font: 400 12.5px/1.4 var(--sans); color: var(--ux-ink-3); }
 .compare-cell.c-unchecked { border-top: 3px solid var(--ux-warn); }
 @media (max-width: 900px) { .compare-summary.has-unchecked { grid-template-columns: 1fr 1fr; } }
 
