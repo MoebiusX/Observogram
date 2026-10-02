@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Pick a folder walks the repository itself: its dependencies are never listed
+**Scan a repo → pick a folder** used a folder input, which hands the page every file under the folder before the scan rule can apply: 105,810 files in 11,874 folders for a repository whose scan reads 631 files in 157. Since 0.5.0 the rule kept the rest from being *read*; the browser still listed them all before the page saw the first one.
+- **`walkScanFolder`** (`tools/lib/crawler.mjs`) walks a directory handle with the shared rule (`scanSkipsName`, `SCAN_EXT`) and does not enter a skipped folder, so `node_modules`, `.git`, build output and agent worktrees are never asked for their entries. Paths are rooted at the picked folder's name, as `webkitRelativePath` is, in name order; the picked folder is entered whatever it is called.
+- **The studio** uses `showDirectoryPicker` where the browser has it (Chromium, on localhost or https) and keeps the folder input as the fallback: Firefox, Safari, plain http on a LAN address, a frame the API is refused in. The staged line counts the files as they are read. *Drop a folder* already walked this way.
+- **Tests.** `tools/test-crawl.mjs`: the walk over a stand-in handle tree — what it reads, in what order, and that a skipped folder's entries are never asked for — and the studio's use of it with both fallbacks, pinned in source.
+
 ### Fixed: the account menu is reachable on every screen
 Studio only. The account menu is on every screen: it moved from the context bar — hidden on the home and Build screens, so until a pack was open a signed-in user had no way to sign out or change a password — to the OBSERVA bar beside Advanced, which every screen shows. The same menu everywhere (who you are, change password…, sign out my other sessions, sign out), still none without sign-in; the ORG chip is unchanged (the OBSERVA bar already carries its own on every screen). Beside the tabs the chip's name gives way — ten characters at a laptop width, the glyph alone at phone width (its title and menu say it in full); the glyph and the caret that marks it a menu always show — so the tab titles keep their room and the popover stays on screen. Opening Advanced closes it (that toggle stops its click from bubbling, so the two menus could sit open one over the other). `server/test-authz.mjs` pins the mount, the give-way rules, the closer and that no mode rule hides its bar.
 ### Fixed: one scan or one live draft is one pack in the catalogue
