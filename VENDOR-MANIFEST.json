@@ -546,6 +546,24 @@
       "npm": [],
       "changedSinceRelease": false
     },
+    "tools/lib/mcp-client.mjs": {
+      "sha256": "469d47eadf65c2ef96e7a7c8f4b8cf698d1851acbc941bc4e0d72d1dc18187c6",
+      "bytes": 11906,
+      "exports": [
+        "INERT_TRANSPORT",
+        "MCP_PROTOCOL_VERSION",
+        "TransportHookError",
+        "createMcpClient",
+        "isTransportHookError",
+        "normaliseTransport"
+      ],
+      "imports": [
+        "tools/lib/mcp-url-safety.mjs"
+      ],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
+    },
     "tools/lib/mcp-url-safety.mjs": {
       "sha256": "dfd878dda8839881d8b87e52dc6555bc8ba9b8d9da43b05d8668f15cbd3acb0a",
       "bytes": 6008,

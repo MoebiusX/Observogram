@@ -48,6 +48,7 @@ import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emit as emitYaml, parse as parseYaml } from './lib/mini-yaml.mjs';
+import { createMcpClient as createMcpClientCore } from './lib/mcp-client.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
 import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule } from './lib/sli-inference.mjs';
 import { materializeL2XFromBackends } from './lib/l2x.mjs';
@@ -117,90 +118,13 @@ function annotationJson(value) {
 // ============================================================
 
 // createMcpClient is exported so the server can drive ad-hoc MCP
-// interactions (deploy, refresh) without spawning a subprocess.
-export function createMcpClient({ mcpUrl, mcpAuth = null } = {}) {
-  if (!mcpUrl) throw new Error('createMcpClient: mcpUrl required');
-  let session = null;
-  let nextId = 1;
-
-  async function rpc(method, params = {}) {
-    const headers = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json, text/event-stream',
-      'MCP-Protocol-Version': '2025-06-18',
-    };
-    if (mcpAuth) headers['Authorization'] = `Bearer ${mcpAuth}`;
-    if (session) headers['Mcp-Session-Id'] = session;
-
-    const res = await fetch(mcpUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ jsonrpc: '2.0', id: nextId++, method, params }),
-      signal: AbortSignal.timeout(MCP_TIMEOUT_MS),
-    });
-    if (!res.ok) throw new Error(`MCP HTTP ${res.status} on ${method}: ${await res.text().catch(() => '')}`);
-    if (res.headers.get('mcp-session-id')) session = res.headers.get('mcp-session-id');
-
-    const ctype = res.headers.get('content-type') || '';
-    if (ctype.includes('text/event-stream')) {
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (value) buf += decoder.decode(value, { stream: true });
-        const frameEnd = buf.indexOf('\n\n');
-        if (frameEnd !== -1) {
-          const frame = buf.slice(0, frameEnd);
-          const text = frame.split('\n').filter(l => l.startsWith('data:')).map(l => l.replace(/^data:\s?/, '')).join('\n');
-          if (text) {
-            const obj = JSON.parse(text);
-            if (obj.error) throw new Error(`${method}: ${obj.error.message}`);
-            return obj.result;
-          }
-          buf = buf.slice(frameEnd + 2);
-        }
-        if (done) break;
-      }
-      throw new Error(`MCP ${method}: SSE stream ended with no complete frame`);
-    }
-    const data = await res.json();
-    if (data.error) throw new Error(`${method}: ${data.error.message}`);
-    return data.result;
-  }
-
-  async function notify(method, params = {}) {
-    const headers = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json, text/event-stream',
-      'MCP-Protocol-Version': '2025-06-18',
-    };
-    if (mcpAuth) headers['Authorization'] = `Bearer ${mcpAuth}`;
-    if (session) headers['Mcp-Session-Id'] = session;
-
-    const res = await fetch(mcpUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ jsonrpc: '2.0', method, params }),
-      signal: AbortSignal.timeout(MCP_TIMEOUT_MS),
-    });
-    if (!res.ok) throw new Error(`MCP HTTP ${res.status} on ${method}: ${await res.text().catch(() => '')}`);
-    if (res.headers.get('mcp-session-id')) session = res.headers.get('mcp-session-id');
-  }
-
-  async function callTool(name, args = {}) {
-    const result = await rpc('tools/call', { name, arguments: args });
-    if (result?.isError) {
-      const txt = result?.content?.map(c => c.text).filter(Boolean).join(' ') || 'tool returned isError';
-      throw new Error(`${name}: ${txt}`);
-    }
-    const text = result?.content?.[0]?.text;
-    if (typeof text !== 'string') return result;
-    try { return JSON.parse(text); }
-    catch { return text; }
-  }
-
-  return { rpc, notify, callTool };
+// interactions (deploy, refresh) without spawning a subprocess. The client
+// itself lives in tools/lib/mcp-client.mjs (pure, vendorable); this wrapper
+// fills in the Node-side defaults — the MCP_TIMEOUT_MS budget and the
+// transport (docs/MCP_INTEGRATION.md "Transport hook") — so the recorder
+// and the server's deploy routes keep importing it from here.
+export function createMcpClient({ mcpUrl, mcpAuth = null, transport = null } = {}) {
+  return createMcpClientCore({ mcpUrl, mcpAuth, timeoutMs: MCP_TIMEOUT_MS, transport });
 }
 
 // ============================================================

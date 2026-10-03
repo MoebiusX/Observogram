@@ -46,7 +46,7 @@ const { assert, report } = createHarness({ indent: '  ', truncate: 160 });
 
 // The recorder verifies the registry against a live server, so it must
 // not carry a second copy of any name either.
-const GUARDED_FILES = ['tools/fetch-live-pack.mjs', 'tools/record-mcp-fixtures.mjs'];
+const GUARDED_FILES = ['tools/fetch-live-pack.mjs', 'tools/record-mcp-fixtures.mjs', 'tools/lib/mcp-client.mjs'];
 // String literal directly inside a tool-call position. `rpc('tools/list')`
 // and safe/quiet LABELS are out of scope: rpc takes protocol methods, and
 // labels are diagnostics (kept aligned by sharing the TOOL constants).
