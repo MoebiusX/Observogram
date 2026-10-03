@@ -975,6 +975,11 @@ the metric; the CLI).
   registry, promoting `semconv` / `upstream-docs` evidence to a recorded one per
   deployment; library-upgrade proposals in Remediate (a pack whose `library.source`
   is behind the shipped entry version gets the diff as a remediation).
+- **Updating a pack that exists.** Build cannot open a pack once it is registered:
+  the draft holds inputs only, and a second SLO on an SLI, a burn alert with its
+  own windows and a fourth route are outside what the generator writes. The
+  journey for it — *Build or update a pack* — is proposed in
+  [`UPDATE_JOURNEY.md`](UPDATE_JOURNEY.md).
 
 ## Open questions
 

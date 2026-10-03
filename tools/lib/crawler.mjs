@@ -1721,62 +1721,99 @@ function inferEndpoint(svc, product) {
   return null;
 }
 
+// The PromQL a Grafana unified-alerting rule evaluates. A provisioned rule
+// carries no `expr`; its queries sit in `data[].model`, one entry per
+// datasource query or expression node. The model is a mapping in Grafana's
+// own export and a JSON string in files written by other tooling (the HTTP
+// provisioning API, Terraform). Returns the first query model's `expr`, or
+// null when the rule states none. Throws when a model is a JSON string that
+// does not parse: that rule cannot be read, the caller decides what to do.
+function grafanaRuleExpr(rule) {
+  if (!Array.isArray(rule?.data)) return null;
+  for (const item of rule.data) {
+    let model = item?.model;
+    if (typeof model === 'string') {
+      try { model = JSON.parse(model); }
+      catch (e) { throw new Error(`model JSON could not be parsed (${e.message})`, { cause: e }); }
+    }
+    if (model && typeof model.expr === 'string' && model.expr.trim()) return model.expr;
+  }
+  return null;
+}
+
 function walkPrometheusRules(f, recordingRules, burnRateAlerts, metricDefinitions, evidence, summary) {
-  let any = false;
+  // A rule that cannot be read is skipped on its own; the file and its other
+  // rules survive, and one warning per file says how many were lost and why.
+  let ruleCount = 0;
+  const skipped = [];
   for (const obj of parseYamlDocs(f.content)) {
     if (!Array.isArray(obj.groups)) continue;
-    any = true;
     for (const group of obj.groups) {
       for (const rule of group.rules || []) {
-        if (rule.record) {
-          const id = `QRY-${recordingRules.length + 1}-${slug(rule.record).slice(0, 16)}`;
-          const expr = typeof rule.expr === 'string' ? rule.expr : String(rule.expr || '');
-          const entry = {
-            name: rule.record,
-            expr,
-          };
-          if (group.interval) entry.interval = group.interval;
-          recordingRules.push(entry);
-          evidence[id] = `${f.relPath}#${group.name || '_'}/${rule.record}`;
-          summary.discovered.recordingRules++;
-          const origin = `${f.relPath}#${group.name || '_'}/${rule.record}`;
-          addRecordingRuleOutputMetric(metricDefinitions, evidence, summary, rule, {
-            origin,
-            expr,
-            usedBy: `recording_rule:${rule.record}`,
-          });
-          addPromqlMetricReferences(metricDefinitions, evidence, summary, expr, {
-            kind: 'recording-rule',
-            name: rule.record,
-            origin,
-            usedBy: `recording_rule:${rule.record}`,
-          });
-        } else if (rule.alert || rule.title) {
-          // `rule.alert` is the Prometheus form; `rule.title` is the Grafana
-          // unified-alerting form (provisioned alert rules). Both target an
-          // SLO we synthesize from the alert name.
-          // The entry an alert starts as, and later the SLO it binds to, are
-          // the shared derivation (sli-inference.mjs) the live fetcher applies
-          // to the ruler's rules: one rule set, one policy.
-          const candidate = burnCandidateFromAlertRule(rule);
-          const { alertName, expr } = candidate;
-          if (!burnRateAlerts.some(a => a.slo === candidate.slo)) {
-            burnRateAlerts.push(candidate);
-            const id = `pol-${burnRateAlerts.length}`;
-            evidence[id] = `${f.relPath}#${group.name || '_'}/${alertName}`;
-            summary.discovered.burnRateAlerts++;
-            addPromqlMetricReferences(metricDefinitions, evidence, summary, expr, {
-              kind: 'alert-rule',
-              name: alertName,
-              origin: `${f.relPath}#${group.name || '_'}/${alertName}`,
-              usedBy: `alert:${alertName}`,
-            });
-          }
+        ruleCount++;
+        try {
+          walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, metricDefinitions, evidence, summary);
+        } catch (e) {
+          skipped.push(e?.message || String(e));
         }
       }
     }
   }
-  if (!any) return;
+  if (skipped.length) {
+    const reason = skipped.every(m => /^model JSON could not be parsed/.test(m))
+      ? 'model JSON could not be parsed'
+      : skipped[0];
+    summary.warnings.push(`Skipped ${skipped.length} of ${ruleCount} alert rule(s) in ${f.relPath}: ${reason}`);
+  }
+}
+
+function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, metricDefinitions, evidence, summary) {
+  if (rule.record) {
+    const id = `QRY-${recordingRules.length + 1}-${slug(rule.record).slice(0, 16)}`;
+    const expr = typeof rule.expr === 'string' ? rule.expr : String(rule.expr || '');
+    const entry = {
+      name: rule.record,
+      expr,
+    };
+    if (group.interval) entry.interval = group.interval;
+    recordingRules.push(entry);
+    evidence[id] = `${f.relPath}#${group.name || '_'}/${rule.record}`;
+    summary.discovered.recordingRules++;
+    const origin = `${f.relPath}#${group.name || '_'}/${rule.record}`;
+    addRecordingRuleOutputMetric(metricDefinitions, evidence, summary, rule, {
+      origin,
+      expr,
+      usedBy: `recording_rule:${rule.record}`,
+    });
+    addPromqlMetricReferences(metricDefinitions, evidence, summary, expr, {
+      kind: 'recording-rule',
+      name: rule.record,
+      origin,
+      usedBy: `recording_rule:${rule.record}`,
+    });
+  } else if (rule.alert || rule.title) {
+    // `rule.alert` is the Prometheus form; `rule.title` is the Grafana
+    // unified-alerting form (provisioned alert rules). Both target an
+    // SLO we synthesize from the alert name.
+    // The entry an alert starts as, and later the SLO it binds to, are
+    // the shared derivation (sli-inference.mjs) the live fetcher applies
+    // to the ruler's rules: one rule set, one policy.
+    const grafanaExpr = typeof rule.expr === 'string' ? null : grafanaRuleExpr(rule);
+    const candidate = burnCandidateFromAlertRule(grafanaExpr === null ? rule : { ...rule, expr: grafanaExpr });
+    const { alertName, expr } = candidate;
+    if (!burnRateAlerts.some(a => a.slo === candidate.slo)) {
+      burnRateAlerts.push(candidate);
+      const id = `pol-${burnRateAlerts.length}`;
+      evidence[id] = `${f.relPath}#${group.name || '_'}/${alertName}`;
+      summary.discovered.burnRateAlerts++;
+      addPromqlMetricReferences(metricDefinitions, evidence, summary, expr, {
+        kind: 'alert-rule',
+        name: alertName,
+        origin: `${f.relPath}#${group.name || '_'}/${alertName}`,
+        usedBy: `alert:${alertName}`,
+      });
+    }
+  }
 }
 
 function walkPrometheusScrapeConfig(f, scrapeJobs, evidence, summary) {
