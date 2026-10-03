@@ -646,7 +646,11 @@ export function packIndexGuard(db, ctx, id, files = packFiles, { noMarker = fals
           `start once (it records ${them} absent and rewrites the marker), stop the server, put ${them} back, then run ${REPLACE}: the next start ${takes}, or`
         : `  - run ${REPLACE}: the next start ${takes}, or`,
       ...stale.flatMap(({ path, was }) => [
-        ...(was.absent ? [] : [`  - put ${path} back as it was (canonical SHA-256 ${was.sha256}: its entries without lastUsedAt), or`]),
+        ...(was.absent ? [] : [was.canon === 'raw'
+          // packIndexHash records a corrupt index by the SHA-256 of its bytes (no entries to canonicalise): say so,
+          // or the operator is sent looking for an entry set no file can reproduce.
+          ? `  - put ${path} back as it was (SHA-256 of its bytes ${was.sha256}: the file was corrupt when recorded, so it is compared byte for byte), or`
+          : `  - put ${path} back as it was (canonical SHA-256 ${was.sha256}: its entries without lastUsedAt), or`]),
         `  - move ${path} aside${was.absent ? '' : ' (the store\'s registry stands; the rollback\'s registrations are then adopted from their pack files with no label)'}.`,
       ]),
     ];

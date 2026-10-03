@@ -1641,7 +1641,7 @@ test('Import (packs) 2: an orgs.json-armed, not-yet-moved flat workspace — the
   }
 });
 
-test('Import (packs) 3: a corrupt index.json — the rows rebuilt from the pack files, label null, source workspace, at the file\'s mtime; the report names the path and says the labels were lost; the raw bytes hashed', async () => {
+test('Import (packs) 3: a corrupt index.json — the rows rebuilt from the pack files, label null, source workspace, at the file\'s mtime; the report names the path and says the labels were lost; the raw bytes hashed — and the guard\'s way back names that hash as the bytes', async () => {
   const text = '{"a": {"label": "WS';
   const base = workspace({ users: { users: { alice: { password: PW } } }, files: { 'packs/a.pack.yaml': PACK_OF('a'), 'packs/index.json': text } });
   try {
@@ -1659,6 +1659,18 @@ test('Import (packs) 3: a corrupt index.json — the rows rebuilt from the pack 
     assert.ok(readFileSync(join(base, 'packs', 'index.json'), 'utf8') === text, 'left as it is');
     const again = await bootIn(base);
     assert.equal(again.packs, null, 'frozen: the corrupt file compares equal to its own bytes');
+    // The file replaced (a RESET on the old build): refused; the way back names the hash it recorded for what it is —
+    // the SHA-256 of the corrupt file's BYTES, not a canonical hash of entries no entry set can reproduce.
+    const path = join(base, 'packs', 'index.json');
+    write(path, '{}');
+    const changed = `refusing to start: ${path} changed since store ${meta.storeId(r.db)} last imported or exported it: a build before slice 4 registered, relabelled or removed a pack during a rollback (the registry it wrote: 0 entries, the store's: 1).\n`
+      + 'Nothing was changed. The store keeps its own pack registry; the file is only compared, never read again. With the server stopped:\n'
+      + `  - run ${REPLACE}: the next start ${TAKES}, or\n`
+      + `  - put ${path} back as it was (SHA-256 of its bytes ${legacy.sha256Of(Buffer.from(text))}: the file was corrupt when recorded, so it is compared byte for byte), or\n`
+      + `  - move ${path} aside (the store's registry stands; the rollback's registrations are then adopted from their pack files with no label).`;
+    await assert.rejects(bootIn(base), (e) => refusal(changed)(e) && e.nothingMoved === true);
+    write(path, text);
+    assert.equal((await bootIn(base)).packs, null, 'put back byte for byte, it passes');
   } finally {
     closeBase(base);
   }

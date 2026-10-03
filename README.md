@@ -1310,7 +1310,8 @@ belong together. Each refusal says `Nothing was …` and names its ways out:
   entries into the store — labels and sources from the file; packs it no
   longer lists are removed on positive evidence); put the file back as it
   was (the refusal prints the canonical SHA-256: its entries without
-  `lastUsedAt`); or move it aside (the store's registry stands; the
+  `lastUsedAt` — or, for a file that was corrupt when recorded, the
+  SHA-256 of its bytes); or move it aside (the store's registry stands; the
   rollback's registrations are then adopted from their pack files with no
   label). An index that appeared in a root the store had recorded as
   having none is refused the same way. Only roots whose hash is recorded
