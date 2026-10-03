@@ -1356,6 +1356,7 @@ export const ARTEFACT_TYPES = [
   { match: /^POL-/, type: 'Burn-rate alerts', purpose: 'when an objective is at risk' },
   { match: /^FCST-/, type: 'Forecasts', purpose: 'an objective at risk before it burns' },
   { match: /^ALR-/, type: 'Alert routes', purpose: 'who is told, and how' },
+  { match: /^RULE-/, type: 'Alert rules', purpose: 'operational alerts: something is wrong now' },
   { match: /^HEAL-/, type: 'Remediations', purpose: 'what runs when it breaks' },
   { match: /^SYN-/, type: 'Synthetic probes', purpose: 'checks that the service answers' },
   { match: /^CHAOS-/, type: 'Chaos experiments', purpose: 'proof that the alerts fire' },
@@ -1557,7 +1558,7 @@ export function artefactSymbol(a) {
   if (fixed[id]) return fixed[id];
   const indexed = [
     [/^PIP-RCV-(\d+)$/, 'pipelines.receivers'], [/^PIP-PRC-(\d+)$/, 'pipelines.processors'], [/^QRY-(\d+)$/, 'queries.recording_rules'],
-    [/^POL-(\d+)$/, 'policy.burn_rate_alerts'], [/^FCST-(\d+)$/, 'policy.forecasts'], [/^ALR-(\d+)$/, 'alerting.routes'],
+    [/^POL-(\d+)$/, 'policy.burn_rate_alerts'], [/^FCST-(\d+)$/, 'policy.forecasts'], [/^ALR-(\d+)$/, 'alerting.routes'], [/^RULE-(\d+)$/, 'alerting.rules'],
     [/^HEAL-(\d+)$/, 'remediation'], [/^MESH-(\d+)$/, 'mesh'], [/^COL-(\d+)$/, 'collection'],
   ];
   for (const [re, head] of indexed) { const m = re.exec(id); if (m) return `${head}[${Number(m[1]) - 1}]`; }

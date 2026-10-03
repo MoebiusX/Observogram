@@ -181,6 +181,7 @@ function renderTypedPanels(artefact, def) {
   if (id.startsWith('POL-'))     return panelBurnRate(s);
   if (id.startsWith('FCST-'))    return panelForecast(s);
   if (id.startsWith('ALR-'))     return panelAlertRoute(s);
+  if (id.startsWith('RULE-'))    return panelAlertRule(s);
   if (id.startsWith('HEAL-'))    return panelRemediation(s);
   if (id.startsWith('BASE-'))    return panelBaselines(s);
   if (id.startsWith('CHAOS-'))   return panelChaos(s);
@@ -579,6 +580,24 @@ function panelForecast(s) {
     sloSpan.appendChild(a);
   }
   p.appendChild(dl([['slo', sloSpan], ['method', s.method], ['horizon', s.horizon], ['on projected breach', s.on_projected_breach]]));
+  return p;
+}
+
+// An operational alert rule (spec 1.4 alerting.rules): the rule as its
+// engine holds it — name, expression, wait, the pack's severity beside the
+// engine's own label, and where it was read from.
+function panelAlertRule(s) {
+  const p = panel('Alert rule', 'p-alert');
+  p.appendChild(dl([
+    ['name', s.name],
+    ['engine', s.engine || 'prometheus (default)'],
+    ['severity', s.severity || '—'],
+    ['for', s.for || '—'],
+  ]));
+  if (s.expr) { const sec = subpanel('expr'); const pre = document.createElement('pre'); pre.textContent = s.expr; sec.appendChild(pre); p.appendChild(sec); }
+  if (s.labels && Object.keys(s.labels).length) { const sec = subpanel('labels'); sec.appendChild(dl(Object.entries(s.labels))); p.appendChild(sec); }
+  if (s.annotations && Object.keys(s.annotations).length) { const sec = subpanel('annotations'); sec.appendChild(dl(Object.entries(s.annotations))); p.appendChild(sec); }
+  if (s.source) p.appendChild(dl([['source', s.source]]));
   return p;
 }
 

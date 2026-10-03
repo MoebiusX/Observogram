@@ -49,7 +49,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { emit as emitYaml, parse as parseYaml } from './lib/mini-yaml.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
-import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules } from './lib/sli-inference.mjs';
+import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule } from './lib/sli-inference.mjs';
 import { materializeL2XFromBackends } from './lib/l2x.mjs';
 import { routesFromAlertmanagerConfig } from './lib/alert-routes.mjs';
 import { backendForScrapeJob, knownBackendProduct } from './lib/backend-products.mjs';
@@ -1921,6 +1921,30 @@ export function buildCanonicalPack({
     annotations['mcp.discovered.alert_rules_linked'] = String(linkedCount);
     annotations['mcp.discovered.alert_rules_operational'] = String(linkedBurn.unlinked.length);
   }
+  // The operational rules are not dropped either: spec 1.4 keeps them in
+  // spec.alerting.rules, read with the same reading the crawler applies to
+  // a rule file (operationalAlertRule), so the rule a repository declares
+  // and the rule the ruler reports pair by name. The engine is what the
+  // answering tool attests (the registry's `attests`: grafana, mimir,
+  // vmalert → victoriametrics); a plain Prometheus-API answer states none,
+  // which means prometheus. A rule the ruler reports unhealthy is declared
+  // but not stamped Verified, as a burn entry fed by such a rule is not.
+  const liveAlertRules = [];
+  {
+    const unlinked = new Set(linkedBurn.unlinked);
+    const unhealthy = new Set(unhealthyRuleNames(discoveredAlerts));
+    const attested = productAttestedByTool(String(probeResults?.alert_rules?.tool || '').split('+')[0]);
+    const engine = attested === 'vmalert' ? 'victoriametrics'
+      : ['grafana', 'mimir', 'loki', 'thanos', 'alertmanager'].includes(attested) ? attested : undefined;
+    for (const a of discoveredAlerts) {
+      if (!a?.name || !unlinked.has(a.name) || a?.labels?.kind === 'forecast') continue;
+      if (liveAlertRules.some(r => r.name === a.name)) continue;
+      const entry = operationalAlertRule(a, { engine });
+      if (!entry) continue;   // a rule the ruler listed without its expression cannot be declared (expr is required)
+      liveAlertRules.push(entry);
+      if (!unhealthy.has(a.name)) markVerified(`alerting.rules[${liveAlertRules.length - 1}]`);
+    }
+  }
   if (burnMapping.severityInferred.length) {
     annotations['mcp.discovered.alert_rules_severity_inferred'] = burnMapping.severityInferred.slice(0, 64).join(',');
   }
@@ -2029,6 +2053,9 @@ export function buildCanonicalPack({
       severity: 'SEV1',
       channels: [{ msteams: '#platform-oncall' }],
     }],
+    // Operational alert rules (spec 1.4), read above beside the burn-rate
+    // mapping; absent means the ruler reported none.
+    ...(liveAlertRules.length ? { rules: liveAlertRules } : {}),
   };
   if (liveRoutes.length) {
     liveRoutes.forEach((_, i) => markVerified(`alerting.routes[${i}]`));

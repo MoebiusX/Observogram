@@ -382,6 +382,15 @@ assert(both('L4').burn_rate === 2,
   'L4: the alerts that guard a recorded SLO pair as burn-rate entries on both sides', both('L4'));
 assert(both('L4').alert_route === 4,
   'L4: all four routes pair — including the one whose address the repository takes from a deploy-time variable', both('L4'));
+assert(both('L4').alert_rule === 1
+  && repoPack.spec.alerting.rules.map(r => r.name).join() === 'DiskAlmostFull'
+  && livePack.spec.alerting.rules.map(r => r.name).join() === 'DiskAlmostFull',
+'L4: the operational alert (spec 1.4 alerting.rules) pairs by its exact name — the rule file\'s `alert:` against the ruler\'s listing', [both('L4'), repoPack.spec.alerting.rules, livePack.spec.alerting.rules]);
+{
+  const rule = diff.layers.L4.inBoth.find(e => e.key.startsWith('alert_rule::'));
+  assert(rule?.match === 'aligned' && rule.deltas.length === 0 && rule.a.spec.engine === 'prometheus' && rule.b.spec.engine === 'victoriametrics',
+    'the operational rule is aligned with no delta: the file says prometheus and the ruler attests victoriametrics, and the engine is reader knowledge, not behaviour; its `duration: 0` is no wait, like the file\'s absent `for`', rule && [rule.match, rule.deltas, rule.a.spec, rule.b.spec]);
+}
 assert(both('L2').backend === 7,
   'L2: the seven products the repository deploys are the seven the live side found evidence of', both('L2'));
 assert(both('L2').scrape_job === 3, 'L2: the three metrics scrape jobs pair', both('L2'));
@@ -465,7 +474,14 @@ assert(both('L2').metric >= 11, 'L2: declared metrics pair with the series the s
     && missing.includes('sli::{"id":"shop_latency"}') && missing.includes('slo::{"id":"shop_latency_99"}')
     && missing.includes('burn_rate::{"slo":"shop_latency_99"}'),
   'rules that are not deployed: the rules, the SLI / SLO they carry and the alert that guards it read "not live"', missing);
-  assert(missing.every(k => /latency/.test(k)) && d.summary.onlyInB === 0, 'and nothing else does', [missing, keysOf(d, 'onlyInB')]);
+  assert(missing.every(k => /latency/.test(k)), 'and nothing else does', missing);
+  // The latency alerting rule itself still runs live — but with its recorded
+  // series gone it guards no SLO there, so the live side reads it as an
+  // operational alert (alerting.rules) while the repository reads it as the
+  // burn-rate alert on shop_latency_99: the one "live, not declared" entry,
+  // and a true one — the rule is deployed, what it stands for is not.
+  assert(JSON.stringify(keysOf(d, 'onlyInB')) === JSON.stringify(['alert_rule::{"name":"shoplatencyhigh"}']),
+    'the undeployed SLO\'s alerting rule, still evaluated live, reads as a live operational rule — and nothing else reads "live, not declared"', keysOf(d, 'onlyInB'));
 }
 {
   // The live Alertmanager has no route for DiskAlmostFull.

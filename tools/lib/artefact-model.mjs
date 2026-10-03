@@ -180,6 +180,7 @@ export function classify(artefact) {
   if (id.startsWith('POL-'))     return 'burn_rate';
   if (id.startsWith('FCST-'))    return 'forecast';
   if (id.startsWith('ALR-'))     return 'alert_route';
+  if (id.startsWith('RULE-'))    return 'alert_rule';
   if (id.startsWith('HEAL-'))    return 'remediation';
   if (id === 'BASE-01')          return 'baselines';
   if (id.startsWith('CHAOS-'))   return 'chaos';
@@ -263,6 +264,11 @@ const IDENTITY = {
   // decision-bearing drift on the paired route instead; same-severity
   // duplicates survive via the diff's occurrence ordinals and `collisions`.
   alert_route:  (s) => ({ severity: low(s.severity) }),
+  // An operational alert rule (spec 1.4 alerting.rules) IS its name: the
+  // exact name the engine evaluates it under — `alert:` in a rule file,
+  // `title` of a Grafana-managed rule, `name` in a ruler's listing — is
+  // what a repository and a live listing share. Never the RULE-NN index.
+  alert_rule:   (s) => ({ name: low(s.name) }),
   remediation:  (s) => ({ trigger: low(s.trigger) }),
   // spec.baselines is a singular object (fixed BASE-01 id, at most one per
   // pack) — empty identity is the documented singleton invariant, like otel.
@@ -325,6 +331,16 @@ function behaviorFor(kind, spec) {
   }
   if (kind === 'scrape_job') {
     return canonicalize({ job: spec.job });
+  }
+  if (kind === 'alert_rule') {
+    // What the rule does: its expression (normalised like every expr), its
+    // wait, its labels and the pack's severity. Not `engine`: a rule file
+    // cannot tell a Prometheus ruler from a Mimir or VictoriaMetrics one
+    // and a live listing may know more than the repository — reader
+    // knowledge, not deployed behaviour. `source` and `annotations` are
+    // volatile already.
+    const { engine: _engine, ...rest } = stripRefFields(spec) || {};
+    return canonicalize(rest);
   }
   if (kind === 'sli') {
     // An SLI's `good` and `total` are expressions like its `query`: the
