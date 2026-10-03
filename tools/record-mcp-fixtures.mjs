@@ -13,6 +13,10 @@
  *   MCP_URL=https://your-mcp/path [MCP_AUTH=token] npm run record-fixtures
  *   MCP_URL=… npm run record-fixtures -- --write [--out <dir>]
  *
+ * OBSERVOGRAM_TRANSPORT_HOOK applies to every call the recorder makes
+ * (docs/MCP_INTEGRATION.md "Transport hook"); a hook fault is FATAL (exit 1,
+ * no fixture written — writes happen only after every probe).
+ *
  * Default mode prints a REPORT and writes nothing:
  *   - the tools/list surface, with drift against the contract registry
  *     (advertised tools the registry does not know; step-2 tools the
@@ -59,6 +63,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { resolve, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMcpClient, PROBES, sampleFromInstantVector, stackInventoryTrust } from './fetch-live-pack.mjs';
+import { isTransportHookError } from './lib/mcp-client.mjs';
 import { capabilityTool, allKnownToolNames, capability, BUILD_INFO_PROBES } from './lib/contracts/mcp-capabilities.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_FAMILIES } from './lib/contracts/stack-self-metrics.mjs';
 import { validateResponseShape } from './lib/contracts/response-shapes.mjs';
@@ -116,9 +121,17 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
 // ---- MCP client (the fetcher's own) ------------------------------------
 
 const { rpc, notify, callTool } = createMcpClient({ mcpUrl: MCP_URL, mcpAuth: MCP_AUTH });
+// A transport hook fault (a hook that fails to load or breaks its contract)
+// is never a probe result: it ends the run here, before any file is written
+// (the --write block runs after every probe), with the token redacted.
+const fatalOnHookFault = (e) => {
+  if (!isTransportHookError(e)) return;
+  process.stderr.write(`[record-mcp-fixtures] FATAL: ${redact(e.message)}\n`);
+  process.exit(1);
+};
 const attempt = async (fn) => {
   try { return { response: await fn(), error: null }; }
-  catch (e) { return { response: null, error: trimError(e?.message || String(e)) }; }
+  catch (e) { fatalOnHookFault(e); return { response: null, error: trimError(e?.message || String(e)) }; }
 };
 const recordedAt = new Date().toISOString();
 
@@ -126,8 +139,8 @@ await rpc('initialize', {
   protocolVersion: '2025-06-18',
   capabilities: {},
   clientInfo: { name: 'observogram-recorder', version: '0.4.0' },
-}).catch(() => null);
-await notify('notifications/initialized').catch(() => {});
+}).catch((e) => { fatalOnHookFault(e); return null; });
+await notify('notifications/initialized').catch(fatalOnHookFault);
 
 // ---- tools/list surface + registry drift -------------------------------
 

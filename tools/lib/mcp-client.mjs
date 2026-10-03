@@ -8,7 +8,7 @@
 // through the single private send() below, which is where the transport
 // hook (docs/MCP_INTEGRATION.md "Transport hook") is applied.
 //
-// Pure and browser-safe: no node:* import, no process, no env. The only
+// Pure and browser-safe: no Node built-in import, no process, no env. The only
 // import is ./mcp-url-safety.mjs (the URL policy the final URL is checked
 // against). A vendorable module (docs/DOWNSTREAM.md).
 //

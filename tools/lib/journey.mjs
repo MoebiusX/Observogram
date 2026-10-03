@@ -88,6 +88,7 @@ import { diffPacks } from './diff.mjs';
 import { comparePackBranches } from './traceability-graph.mjs';
 import { crawlFiles } from './crawler.mjs';
 import { baseWorkspacePath, brandEnv } from './brand-env.mjs';
+import { isTransportHookError } from './mcp-client.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from './contracts/stack-self-metrics.mjs';
 import { formatStackValue } from './stack-evidence.mjs';
 import { parseSchedule, windowMs } from './schedule.mjs';
@@ -495,9 +496,11 @@ async function resolvePackB(def, crawlScope = null) {
     const canonical = buildCanonicalPack({ refreshedAt, mcpUrl: m.url, ...fetched });
     return { canonical, source: `mcp:${m.url}` };
   } catch (e) {
-    // The vantage point itself failed (unreachable, core tools missing,
-    // unbuildable answer) — distinct from the configuration errors above,
-    // which never reach the wire and leave no run record.
+    // A transport hook fault (OBSERVOGRAM_TRANSPORT_HOOK failing to load or
+    // breaking its contract) is a configuration error like the ones above:
+    // it leaves no run record. Everything else here is the vantage point
+    // itself failing (unreachable, core tools missing, unbuildable answer).
+    if (isTransportHookError(e)) throw e;
     e.vantageLost = true;
     throw e;
   }
@@ -532,7 +535,11 @@ async function observeInventoryCoverage(def, checkedAt, crawlScope = null) {
   const { observeInventory } = await import('../fetch-live-pack.mjs');
   let obs;
   try { obs = await observeInventory({ mcpUrl: m.url, mcpAuth, expected, kinds }); }
-  catch (e) { return buildInventoryRecord({ site, expected, kinds, status: 'failed', reason: `inventory observation failed: ${e.message}`, checkedAt }); }
+  catch (e) {
+    // A misconfigured transport hook never produces an evidence record.
+    if (isTransportHookError(e)) throw e;
+    return buildInventoryRecord({ site, expected, kinds, status: 'failed', reason: `inventory observation failed: ${e.message}`, checkedAt });
+  }
   if (obs.status !== 'checked') return buildInventoryRecord({ site, expected, kinds, status: obs.status, reason: obs.reason, checkedAt });
   return buildInventoryRecord({ site, expected, observations: obs.observations, kinds, checkedAt });
 }

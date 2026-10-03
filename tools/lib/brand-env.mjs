@@ -10,14 +10,21 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-// brandEnv('SESSION_SECRET') → OBSERVOGRAM_SESSION_SECRET, falling back to
-// TOMOGRAPH_SESSION_SECRET. Returns '' when neither is set (matching the
-// `(process.env[k] || '').trim()` idiom the call sites already used).
-export function brandEnv(suffix) {
-  const modern = process.env[`OBSERVOGRAM_${suffix}`];
+// brandEnvFrom(env, 'SESSION_SECRET') → env.OBSERVOGRAM_SESSION_SECRET,
+// falling back to env.TOMOGRAPH_SESSION_SECRET. Returns '' when neither is
+// set (matching the `(env[k] || '').trim()` idiom the call sites already
+// used). The env is a parameter so a loader can be tested against a plain
+// object without mutating process.env (tools/mcp-transport.mjs).
+export function brandEnvFrom(env, suffix) {
+  const modern = env?.[`OBSERVOGRAM_${suffix}`];
   if (modern !== undefined && String(modern).trim() !== '') return String(modern).trim();
-  const legacy = process.env[`TOMOGRAPH_${suffix}`];
+  const legacy = env?.[`TOMOGRAPH_${suffix}`];
   return legacy === undefined ? '' : String(legacy).trim();
+}
+
+// brandEnv(suffix) — the same rule against process.env.
+export function brandEnv(suffix) {
+  return brandEnvFrom(process.env, suffix);
 }
 
 // The deployment-level workspace root (packs, users.json, orgs.json…).
