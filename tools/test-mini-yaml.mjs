@@ -90,4 +90,31 @@ roundTrip('crawler-shaped document', {
   multiline: 'line one\nline two: with colon\n',
 });
 
+process.stdout.write('\n--- double-quoted escapes ---\n');
+// JSON's escapes, decoded exactly as before.
+for (const [yaml, want] of [
+  ['"a\\"b"', 'a"b'], ['"a\\\\b"', 'a\\b'], ['"a\\/b"', 'a/b'], ['"\\b\\f\\n\\r\\t"', '\b\f\n\r\t'],
+  ['"\\u00e9"', 'é'], ['"\\ud83d\\ude80"', '🚀'], ['"{\\"expr\\": \\"up{job=\\\\\\"a\\\\\\"}\\"}"', '{"expr": "up{job=\\"a\\"}"}'],
+]) {
+  assert(same(parse(`k: ${yaml}\n`), { k: want }), `JSON-compatible escape ${yaml}`, parse(`k: ${yaml}\n`), { k: want });
+}
+// YAML's own escapes (§5.7), the ones PyYAML writes for non-ASCII text.
+for (const [yaml, want] of [
+  ['"Latence \\xE9lev\\xE9e"', 'Latence élevée'], ['"\\U0001F6A8 alert"', '🚨 alert'], ['"\\u2014"', '—'],
+  ['"\\0\\a\\v\\e"', '\0\x07\v\x1b'], ['"a\\ b"', 'a b'], ['"\\N\\_\\L\\P"', '\u0085\u00a0\u2028\u2029'],
+  ['"tab\there"', 'tab\there'],
+]) {
+  let got; try { got = parse(`k: ${yaml}\n`); } catch (e) { got = `THROWS ${e.message}`; }
+  assert(same(got, { k: want }), `YAML escape ${yaml}`, got, { k: want });
+}
+const tryParse = (yaml) => { try { return parse(yaml); } catch (e) { return `THROWS ${e.message}`; } };
+assert(same(tryParse('- "\\xE9"\n'), ['é']), 'YAML escape in a sequence item', tryParse('- "\\xE9"\n'));
+assert(same(tryParse('m: {k: "\\xE9", "\\xE9": v}\n'), { m: { k: 'é', 'é': 'v' } }), 'YAML escape in a flow mapping value and key', tryParse('m: {k: "\\xE9", "\\xE9": v}\n'));
+for (const bad of ['k: "\\q"\n', 'k: "\\x4"\n', 'k: "\\xZZ"\n', 'k: "\\U00110000"\n', 'k: "abc\\"\n']) {
+  let msg = null; try { parse(bad); } catch (e) { msg = e.message; }
+  assert(msg !== null && /^yaml: /.test(msg), `invalid escape ${JSON.stringify(bad.trim())} is a yaml error`, msg);
+}
+// The emitter's JSON-style quoting still reads back through the YAML decoder.
+roundTrip('emitted escapes', { k: 'tab\t"quote" back\\slash é 🚀 \u0085' });
+
 report('mini-yaml round-trip');
