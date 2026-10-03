@@ -89,7 +89,7 @@ import { listMembers } from './memberships.mjs';
 import { disableOidcRows, listUsers, rewriteLoginPrefix } from './users.mjs';
 import { CLI, canonIssuer, preStoreSub } from './identity.mjs';
 import {
-  canonicalPackIndex, ORG_ENTRIES, lexists, markerPath, orgsFilePath, packIndexHash, packIndexKey, readMarker, readPackIndexStrict, sha256File,
+  adoptionsResolved, canonicalPackIndex, ORG_ENTRIES, lexists, markerPath, orgsFilePath, packIndexHash, packIndexKey, readMarker, readPackIndexStrict, sha256File,
   usersHashKey, writeMarker, writeOrgsFile, writePackIndexFile, writeUsersFile,
 } from './legacy-files.mjs';
 import { applyPackExport, packIndexDataOf, planPackExport } from './pack-import.mjs';
@@ -186,7 +186,8 @@ export function planJourneyRewrites(base, moved, { dir = join(base, 'journeys') 
 // and compared CANONICALLY (design D13): an index whose canonical form —
 // entries by id with label, source, createdAt; lastUsedAt dropped — equals
 // the recorded hash, or says what the store will hold after this export's
-// reconcile (an older build adopted a hand-copied file; a lastUsedAt
+// reconcile (an older build adopted a hand-copied file, or a pack the store
+// holds a row for — read as the row, adoptionsResolved; a lastUsedAt
 // rewrite), is overwritten (it is what the export writes anyway); one that
 // differs — an entry added with a label, relabelled or removed by a
 // rolled-back build — holds the only copy of that registry and is refused.
@@ -222,8 +223,8 @@ function assertUnedited(db, id, base, files, indexes = []) {
     const rec = packHashes[plan.key];
     const was = rec?.absent ? null : typeof rec?.sha256 === 'string' ? rec.sha256 : null;
     if (now.sha256 === was) continue;
-    const reference = canonicalPackIndex(plan.packs.map((r) => [r.id, { label: r.label, source: r.source, createdAt: r.createdAt }]));
-    if (!idx.corrupt && canonicalPackIndex(idx.entries) === reference) continue;
+    const reference = plan.packs.map((r) => [r.id, { label: r.label, source: r.source, createdAt: r.createdAt }]);
+    if (!idx.corrupt && canonicalPackIndex(adoptionsResolved(idx.entries, reference)) === canonicalPackIndex(reference)) continue;
     edited.push(`${path} (${was ? `it was canonical SHA-256 ${was}` : 'it was absent'}, it is ${now.sha256})`);
   }
   if (!edited.length) return;

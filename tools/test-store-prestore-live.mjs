@@ -377,6 +377,43 @@ async function rollbackReadsAndRegisters() {
   eq(again.filter((l) => /index\.json|packs:/.test(l)), [], 'the start after passes');
 }
 
+// (iii) A rollback WITHOUT a fresh export: a pack registered on the store
+// build after the export has a file but no index entry, so the old build
+// ADOPTS it (label null, source 'workspace', the file's mtime) and flushes
+// that. An adoption records no decision the old build took: the store
+// build starts with the bookkeeping line, and the row keeps the label
+// given here — no refusal, no `import --replace` that would null it.
+async function rollbackWithoutExportAdopts() {
+  process.stdout.write('\na rollback without a fresh export (the old build adopts a pack registered here):\n');
+  const base = tempDir();
+  usersJson(base, ['alice']);
+  pack(base, 'p1');
+  await storeStart(base);
+  await exportInPlace(base);
+  const idx = join(base, 'packs', 'index.json');
+  const before = readFileSync(idx, 'utf8');
+  // Registered here after the export (a scan: a file and a labelled row); index.json, frozen at the export, does not list it.
+  pack(base, 'p2');
+  await change(base, (db) => runWithOrg('default', () => packsRepo.addPack(db, 'alice', { id: 'p2', label: 'Second scan', source: 'Second scan' })));
+  eq(Object.keys(readIndex(idx)), ['p1'], 'the index the old build starts on does not list p2');
+
+  const srv = await preStore(base);
+  try {
+    const alice = await signsIn(srv, 'alice', PW.alice, 'alice signs in');
+    eq(labelled(await srv.get('/api/packs', alice)), [['p1', 'p1'], ['p2', 'p2']], 'the old build adopts p2, unlabelled (the name stands in)');
+    await indexRewritten(idx, before, 'the old build wrote the adoption into index.json');
+  } finally {
+    await srv.stop();
+  }
+  const p2 = readIndex(idx).p2;
+  eq([p2?.label ?? null, p2?.source], [null, 'workspace'], 'the entry it wrote is an adoption');
+  const logs = await storeStart(base);
+  eq(logs.filter((l) => /index\.json|packs:/.test(l)),
+    [`[store] ${idx} was rewritten by a build before slice 4 (it says exactly what the store holds — bookkeeping, not a change); the store's registry stands`],
+    'the store build starts: an adoption is nothing the store does not know');
+  await change(base, (db) => eq(packRows(db, 'default'), [['p1', null, 'workspace'], ['p2', 'Second scan', 'Second scan']], 'the label given here stands'));
+}
+
 async function orgsJsonDeployment() {
   process.stdout.write('\nan orgs.json deployment:\n');
   const base = tempDir();
@@ -405,7 +442,7 @@ async function orgsJsonDeployment() {
 }
 
 process.stdout.write(`store-prestore: the Export gate against ${BUILD}\n`);
-for (const c of [flatDeployment, flatPlusCreatedOrg, orgsJsonDeployment, rollbackReadsAndRegisters]) {
+for (const c of [flatDeployment, flatPlusCreatedOrg, orgsJsonDeployment, rollbackReadsAndRegisters, rollbackWithoutExportAdopts]) {
   try {
     await c();
   } catch (e) {

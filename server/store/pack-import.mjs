@@ -63,7 +63,7 @@ import { runWithOrg } from '../org-context.mjs';
 import { SYSTEM } from './identity.mjs';
 import { addPack, clampPackText, getPack, listPacks, removePack, upsertPack } from './packs.mjs';
 import { linkPack } from './pack-links.mjs';
-import { isoOf, LegacyFileError, PACK_INDEX_TAIL, packIndexHash, packIndexKey, readPackIndexStrict } from './legacy-files.mjs';
+import { isAdoptionEntry, isoOf, LegacyFileError, PACK_INDEX_TAIL, packIndexHash, packIndexKey, readPackIndexStrict } from './legacy-files.mjs';
 
 const TEXT_MAX = 200;
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -331,7 +331,9 @@ export function applyPackExport(db, actor, plans) {
 //   relabel  — a row and an entry whose label or source differ: the index
 //              is the downgrade's record (pack.update { fields, via });
 //   remove   — a row whose file is gone, on positive evidence;
-//   nothing  — a row, a file, no entry or an unchanged one;
+//   nothing  — a row, a file, no entry or an unchanged one — or an entry
+//              the downgrade only ADOPTED (label null, source 'workspace':
+//              isAdoptionEntry), which records no decision of its own;
 //   corrupt  — reported; the rows keep their labels (nothing relabelled),
 //              files without a row are adopted.
 export function planPackReplace(db, orgs, ctx, files) {
@@ -361,7 +363,7 @@ export function planPackReplace(db, orgs, ctx, files) {
         plan.add.push({ id, ...fields, adopted: !meta, canonical, entry: canonical ? entryOf(id, fields, canonical) : null });
         continue;
       }
-      if (!meta) continue;
+      if (!meta || isAdoptionEntry(meta)) continue;
       const changed = [...(fields.label !== row.label ? ['label'] : []), ...(fields.source !== row.source ? ['source'] : [])];
       if (!changed.length) continue;
       const read = files.read(root, id);

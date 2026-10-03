@@ -1837,6 +1837,18 @@ test('Import (packs) 11: the stale-import guard on index.json — a lastUsedAt r
     const adopted = await bootIn(base);
     assert.deepEqual(adopted.logs, [`[store] ${path} was rewritten by a build before slice 4 (it says exactly what the store holds — bookkeeping, not a change); the store's registry stands`]);
     assert.deepEqual(hashes(), indexHashOf(withC));
+    // (v′) a's entry an adoption too (a was registered here after the export the old build started on: the index it was left did
+    // not list a, so the old build adopted the FILE — label null, source workspace, its mtime): it recorded no decision, the store's
+    // row with its label stands — bookkeeping, not a change; the hash of the file as it stands is recorded.
+    const am = lstatSync(join(base, 'packs', 'a.pack.yaml')).mtimeMs;
+    const aAdopted = JSON.stringify({ ...entries, a: { label: null, source: 'workspace', createdAt: am, lastUsedAt: am }, c: { label: null, source: 'workspace', createdAt: cm, lastUsedAt: cm } });
+    write(path, aAdopted);
+    const stale = await bootIn(base);
+    assert.deepEqual(stale.logs, [`[store] ${path} was rewritten by a build before slice 4 (it says exactly what the store holds — bookkeeping, not a change); the store's registry stands`]);
+    assert.deepEqual(hashes(), indexHashOf(aAdopted));
+    assert.deepEqual(packRows(r.db, 'default').map((row) => row.slice(0, 3)), [['a', 'A', 'upload'], ['b', 'B', 'upload']], 'a keeps the label the store holds');
+    write(path, withC);
+    assert.deepEqual((await bootIn(base)).logs, [`[store] ${path} was rewritten by a build before slice 4 (it says exactly what the store holds — bookkeeping, not a change); the store's registry stands`]);
     rmSync(join(base, 'packs', 'c.pack.yaml'));
     // (vi) the file put back as imported (c gone): it differs from the recorded form of (v) but says what the store holds — bookkeeping; moved aside: recorded absent, once.
     write(path, idx);

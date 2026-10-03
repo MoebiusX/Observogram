@@ -1179,8 +1179,11 @@ always did, and the hash this build keeps for the index lives under a key
 of its own (`pack_index_hashes`) that 0.5.0's stale-import check never
 reads, so its own rewrites never make it refuse. Without the export,
 0.5.0 starts on the `index.json` frozen at the upgrade: a pack registered
-since has no label there, 0.5.0 adopts it unlabelled, and the way back
-then needs `import --replace`. On the way back (stop 0.5.0, start this
+since has no entry there, so 0.5.0 adopts its file unlabelled (listing it
+by name) and writes that adoption into the file — an entry with no label
+and source `workspace` records nothing the store does not know, so the way
+back starts with the bookkeeping line below and the store's label stands.
+On the way back (stop 0.5.0, start this
 build): a rollback that only **read** packs (0.5.0 rewrites `lastUsedAt`
 on every read) or restarted starts, with one log line — `[store] <path>
 was rewritten by a build before slice 4 (lastUsedAt only — bookkeeping,
@@ -1294,7 +1297,9 @@ belong together. Each refusal says `Nothing was …` and names its ways out:
 - **`packs/index.json` changed after the import or the export** — compared
   per org root, **without `lastUsedAt`**: an older build rewrites that
   field on every pack read, and a read is not an edit, so that rewrite
-  (or a file that says exactly what the store holds) is logged — `[store]
+  (or a file that says exactly what the store holds — an entry the older
+  build only adopted, no label and source `workspace`, for a pack the store
+  holds counts as the store's row) is logged — `[store]
   <path> was rewritten by a build before slice 4 (lastUsedAt only —
   bookkeeping, not a change); the store's registry stands` — and never
   refused. An entry added, dropped or relabelled is: `<path> changed since

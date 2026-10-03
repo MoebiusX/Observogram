@@ -346,6 +346,13 @@ test('Export: a recorded index.json a rolled-back build changed (a relabel, a la
   assert.deepEqual(adopted.indexes[0].adopt.map((a) => a.id), ['q1']);
   assert.deepEqual(Object.keys(readIndex(path)), ['p1', 'q1']);
   await read(base, (db) => assert.deepEqual(packRows(db, 'default'), [['p1', 'First', 'workspace'], ['q1', null, 'workspace']]));
+  // (ii′) the old build adopted the FILE of a pack the store holds with a label (a rollback without a fresh export: the index it was
+  // left did not list p1): an adoption records no decision — overwritten from the rows, the label kept, nothing refused.
+  const pm = statSync(join(base, 'packs', 'p1.pack.yaml')).mtimeMs;
+  writeFileSync(path, JSON.stringify({ ...readIndex(path), p1: { label: null, source: 'workspace', createdAt: pm, lastUsedAt: pm } }, null, 2));
+  await exportIt(base);
+  assert.equal(readIndex(path).p1.label, 'First', 'written again from the rows: the label the store holds');
+  await read(base, (db) => assert.deepEqual(packRows(db, 'default'), [['p1', 'First', 'workspace'], ['q1', null, 'workspace']], 'no row changed'));
   const before = await read(base, (db) => ({ rows: actions(db).length, hash: meta.getMetaJson(db, 'pack_index_hashes') }));
   const current = readFileSync(path, 'utf8');
   // (iii) a relabel on the old build: refused, nothing written.
@@ -1204,10 +1211,15 @@ test('Stale import, the rollback round trip: a rolled-back build registers (with
   const id = await read(base, (db) => meta.storeId(db));
   const exported = readIndex(path);
 
-  // The rolled-back build: a register with a label (a new file and its entry), p1 relabelled.
+  // The rolled-back build: a register with a label (a new file and its entry), p1 relabelled — and p2's FILE adopted (label null,
+  // source workspace, its mtime: the index it was left did not list p2, as after a rollback without a fresh export). The adoption
+  // records no decision: the replace takes the register and the relabel in and leaves p2's label alone.
   pack(base, 'c');
   const now = Date.now();
-  writeFileSync(path, JSON.stringify({ ...exported, p1: { ...exported.p1, label: 'P-one' }, c: { label: 'C', source: 'upload', createdAt: now, lastUsedAt: now } }, null, 2));
+  const p2m = statSync(join(base, 'packs', 'p2.pack.yaml')).mtimeMs;
+  writeFileSync(path, JSON.stringify({
+    ...exported, p1: { ...exported.p1, label: 'P-one' }, p2: { label: null, source: 'workspace', createdAt: p2m, lastUsedAt: p2m }, c: { label: 'C', source: 'upload', createdAt: now, lastUsedAt: now },
+  }, null, 2));
   const e = await refused(base);
   assert.ok(e.message.startsWith(`refusing to start: ${path} changed since store ${id} last imported or exported it: a build before slice 4 registered, relabelled or removed a pack during a rollback (the registry it wrote: 3 entries, the store's: 3).\n`), e.message);
   assert.ok(e.message.includes('  - run `packc store import --replace`: the next start takes the file\'s entries into the store (labels and sources from the file; packs it no longer lists are removed on positive evidence), or\n'), e.message);

@@ -221,6 +221,26 @@ export function canonicalPackIndex(entries) {
   return JSON.stringify(rows);
 }
 
+// An entry as every writer before this slice ADOPTED a pack file it found
+// with no entry (v0.4.0 / v0.5.0 workspace.mjs: label null, source
+// 'workspace', createdAt the file's mtime). It records no decision: a
+// rolled-back build that adopted a file whose row the store holds — the
+// file of a pack registered on this build after the last export, which the
+// index it was left did not list — wrote nothing the store does not know.
+// So, compared with the store's registry (the guard, the export's check)
+// and taken into it (the replace), such an entry stands for the row; one
+// with a label, or another source, is a register or a relabel.
+export const isAdoptionEntry = (meta) => isPlainObject(meta) && (meta.label === null || meta.label === undefined) && meta.source === 'workspace';
+
+// `entries` (an index's) with each adoption-shaped entry whose id
+// `reference` (the store's, [id, { label, source, createdAt }]) holds
+// replaced by the reference's entry, so canonicalPackIndex of the two
+// agrees when the file differs from the store by adoptions alone.
+export function adoptionsResolved(entries, reference) {
+  const known = new Map(reference.map(([id, meta]) => [String(id), meta]));
+  return entries.map(([id, meta]) => (isAdoptionEntry(meta) && known.has(String(id)) ? [id, known.get(String(id))] : [id, meta]));
+}
+
 export const PACK_INDEX_CANON = 'pack-index-v1';
 
 // The hash recorded for a read index: the canonical form's SHA-256 (what

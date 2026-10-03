@@ -64,8 +64,8 @@ import {
   applyImport, applyReplace, formatReplace, formatReport, planImport, planReplace, projectedMigration, readLegacy, unreadDefaultText,
 } from './store/import.mjs';
 import {
-  canonicalPackIndex, compareHashes, hasData, isoOf, legacyUsersPath, lexists, markerPath, ORG_ENTRIES, orgsFilePath, packIndexHash,
-  packIndexKey, readMarker, readPackIndexStrict, sha256File, writeMarker,
+  adoptionsResolved, canonicalPackIndex, compareHashes, hasData, isoOf, legacyUsersPath, lexists, markerPath, ORG_ENTRIES, orgsFilePath,
+  packIndexHash, packIndexKey, readMarker, readPackIndexStrict, sha256File, writeMarker,
 } from './store/legacy-files.mjs';
 
 // The pack-file reads boot step 5 and the stale-import guard take, over
@@ -571,10 +571,13 @@ export function staleImportGuard(db, ctx, { files = packFiles } = {}) {
 // org's rows, plus every pack file without a row adopted as the rehydrate
 // would (label null, source 'workspace', at its mtime). A rolled-back build
 // that only READ packs rewrote lastUsedAt (dropped by the canonical form);
-// one that only ADOPTED files the store already holds, or will adopt
-// itself, wrote nothing the store does not know. Rows whose file is gone
-// stay in the reference: a RESET, a removal, a register with a label or a
-// relabel on the old build all differ from it, and refuse.
+// one that only ADOPTED files — ones the store will adopt itself, or ones
+// it already holds a row for (a pack registered here after the last
+// export: the index it was left did not list it) — wrote nothing the store
+// does not know: the guard reads such an entry as the row
+// (adoptionsResolved). Rows whose file is gone stay in the reference: a
+// RESET, a removal, a register with a label or a relabel on the old build
+// all differ from it, and refuse.
 function referenceIndex(db, org, root, files) {
   const rows = runWithOrg(org.id, () => listPacks(db));
   const entries = rows.map((r) => [r.id, { label: r.label, source: r.source, createdAt: r.createdAt }]);
@@ -620,7 +623,7 @@ export function packIndexGuard(db, ctx, id, files = packFiles, { noMarker = fals
     }
     const org = orgs.find((o) => packIndexKey(o.root) === key) ?? null;
     const reference = org ? referenceIndex(db, org, join(ctx.base, org.root), files) : null;
-    if (reference && !idx.corrupt && canonicalPackIndex(idx.entries) === canonicalPackIndex(reference)) {
+    if (reference && !idx.corrupt && canonicalPackIndex(adoptionsResolved(idx.entries, reference)) === canonicalPackIndex(reference)) {
       out.rewritten[key] = { hash: now, why: 'it says exactly what the store holds — bookkeeping, not a change' };
       continue;
     }
