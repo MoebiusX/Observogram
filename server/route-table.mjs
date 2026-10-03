@@ -23,6 +23,12 @@
 //   exposed      allow · refuse · rule — the open-exposed posture's answer;
 //                admin / owner → refuse, else allow
 //   identityApi  the identity API (/api/admin/*, /api/org*)
+//   direct       without sign-in (the open postures) answered only to a
+//                request sent straight to a loopback address — default
+//                identityApi; true for the MCP endpoint mutations too, a
+//                durable record the server will send a token to
+//   closedAs     how the posture refusals name the route — 'the identity
+//                API' (default) or 'the MCP endpoints'
 //   modes        where the route is registered: local, oidc, off (the
 //                /auth/* routes follow initAuth()'s mode)
 //   self         { pwflow, session, unauth } — class self only
@@ -104,6 +110,9 @@ export const ROUTES = Object.freeze({
   'GET /api/services/:id': { class: 'viewer' },
   'GET /api/services/:id/environments': { class: 'viewer' },
   'GET /api/environments/:id': { class: 'viewer' },
+  // The org's MCP endpoint records: the name and origin to every member,
+  // the URL and the token variable's name to operators and above.
+  'GET /api/mcp-endpoints': { class: 'viewer' },
 
   // ---------- operator: every existing mutation ----------
   'DELETE /api/uploads': { class: 'operator', audit: ['pack.clear'] },
@@ -145,6 +154,15 @@ export const ROUTES = Object.freeze({
   },
   'PATCH /api/org/members/:userId': { class: 'admin', identityApi: true, csrf: 'always', exposed: 'refuse', audit: ['membership.role'] },
   'DELETE /api/org/members/:userId': { class: 'admin', identityApi: true, csrf: 'always', exposed: 'refuse', audit: ['membership.remove'] },
+  // The MCP endpoints (server/routes/services.mjs, STORE_PLAN slice 4): a
+  // record is durable configuration the server will fetch with a token it
+  // reads from its own environment, so the three changes take exactly the
+  // identity API's defences — the CSRF header in every posture, closed in
+  // the open, exposed posture and, without sign-in, answered only to a
+  // direct loopback request — without being the identity API.
+  'POST /api/mcp-endpoints': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoints', audit: ['mcp_endpoint.create'] },
+  'PATCH /api/mcp-endpoints/:id': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoints', audit: ['mcp_endpoint.update'] },
+  'DELETE /api/mcp-endpoints/:id': { class: 'admin', csrf: 'always', exposed: 'refuse', direct: true, closedAs: 'the MCP endpoints', audit: ['mcp_endpoint.delete'] },
 
   // ---------- owner: the deployment's users, orgs and join role ----------
   // The identity API (server/routes/identity.mjs), whatever org the request
@@ -202,6 +220,8 @@ export function routeEntry(key) {
     csrf: raw.csrf ?? (method === 'GET' || !isApi ? 'none' : 'session'),
     exposed: raw.exposed ?? (raw.class === 'admin' || raw.class === 'owner' ? 'refuse' : 'allow'),
     identityApi: raw.identityApi === true,
+    direct: raw.direct ?? (raw.identityApi === true),
+    closedAs: raw.closedAs ?? 'the identity API',
     modes: Object.freeze([...(raw.modes || MODES)]),
     self: raw.self ? Object.freeze({ ...raw.self }) : null,
   });

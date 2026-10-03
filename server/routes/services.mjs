@@ -1,10 +1,21 @@
-// server/routes/services.mjs — the services and environments API
-// (docs/STORE_PLAN.md slice 4, design §7): the request's org's service
-// records under /api/services and their environments under
-// /api/environments. Every GET is `viewer`, every mutation `operator`
-// (server/route-table.mjs). No path names an org: the org is the one the
-// org middleware resolved, so a member never reaches another org's rows —
-// another org's id is "no service <id>" here.
+// server/routes/services.mjs — the services, environments and MCP
+// endpoints API (docs/STORE_PLAN.md slice 4, design §7): the request's
+// org's service records under /api/services, their environments under
+// /api/environments and its MCP endpoint records under /api/mcp-endpoints.
+// Every GET is `viewer`, every service and environment mutation `operator`,
+// every MCP endpoint mutation `admin` (server/route-table.mjs). No path
+// names an org: the org is the one the org middleware resolved, so a
+// member never reaches another org's rows — another org's id is "no
+// service <id>" here.
+//
+// An MCP endpoint record is durable configuration the server will fetch
+// with a token it reads from its own environment (the variable's NAME is
+// the record's; its value is never stored, returned or logged), so its
+// three changes take the identity API's defences in the route table — the
+// CSRF header in every posture, closed in the open, exposed posture, a
+// direct loopback request only without sign-in — and its GET shows the
+// URL and the variable to operators and above, the name and origin to
+// every member (mcpEndpointViewOf by rank).
 //
 // Every rule is server/service-admin.mjs's — the vocabulary (a tier is
 // tier-1 | tier-2 | tier-3 | null, "graded by the pack"), the shapes of
@@ -23,11 +34,14 @@
 // service re-creates it, by the person registering (server/pack-registry.mjs).
 
 import express from 'express';
+import { rankOf } from '../authz.mjs';
 import {
-  WAYS, createEnvironmentFromApi, createServiceFromApi, deleteEnvironmentFromApi, deleteServiceFromApi, environmentViewOf,
-  listServiceViews, serviceViewOf, updateEnvironmentFromApi, updateServiceFromApi,
+  WAYS, createEnvironmentFromApi, createMcpEndpointFromApi, createServiceFromApi, deleteEnvironmentFromApi, deleteMcpEndpointFromApi,
+  deleteServiceFromApi, environmentViewOf, listServiceViews, mcpEndpointViewOf, serviceViewOf, updateEnvironmentFromApi,
+  updateMcpEndpointFromApi, updateServiceFromApi,
 } from '../service-admin.mjs';
 import { getEnvironment, listEnvironments } from '../store/environments.mjs';
+import { listMcpEndpoints } from '../store/mcp-endpoints.mjs';
 import { getService } from '../store/services.mjs';
 import { bodyOf, handler, pathId } from './util.mjs';
 
@@ -132,6 +146,39 @@ export function servicesRoutes({ authorize }) {
     if (id === null) return;
     const { environment } = deleteEnvironmentFromApi(db, actor, id);
     res.json({ ok: true, deleted: environment });
+  }));
+
+  // ---------- MCP endpoints ----------
+
+  // The reader's rank decides the view: the URL and the variable's name to
+  // operators and above, null to a viewer (the live-status precedent).
+  const endpointView = (db, principal, ep) => mcpEndpointViewOf(db, ep, { rank: rankOf(principal) });
+
+  router.get('/api/mcp-endpoints', authorize('GET /api/mcp-endpoints'), handler((req, res, { db, principal }) => {
+    res.json({ ok: true, endpoints: listMcpEndpoints(db).map((ep) => endpointView(db, principal, ep)) });
+  }));
+
+  router.post('/api/mcp-endpoints', authorize('POST /api/mcp-endpoints'), handler((req, res, { db, principal, actor }) => {
+    const endpoint = createMcpEndpointFromApi(db, actor, bodyOf(req));
+    res.status(201).json({ ok: true, endpoint: endpointView(db, principal, endpoint) });
+  }));
+
+  // Any of name, url, readTokenEnv (null clears it). Nothing differing →
+  // 200 with changed: [] and no row.
+  router.patch('/api/mcp-endpoints/:id', authorize('PATCH /api/mcp-endpoints/:id'), handler((req, res, { db, principal, actor }) => {
+    const id = pathId(req, res, 'id', 'MCP endpoint');
+    if (id === null) return;
+    const { endpoint, changed } = updateMcpEndpointFromApi(db, actor, id, bodyOf(req));
+    res.json({ ok: true, endpoint: endpointView(db, principal, endpoint), changed });
+  }));
+
+  // The environments checked through it keep their row, unbound (their
+  // ids are `unbound`); the view is the record as it was.
+  router.delete('/api/mcp-endpoints/:id', authorize('DELETE /api/mcp-endpoints/:id'), handler((req, res, { db, actor }) => {
+    const id = pathId(req, res, 'id', 'MCP endpoint');
+    if (id === null) return;
+    const { endpoint, unbound } = deleteMcpEndpointFromApi(db, actor, id);
+    res.json({ ok: true, deleted: endpoint, unbound });
   }));
 
   return router;

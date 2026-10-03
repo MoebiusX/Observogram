@@ -1404,8 +1404,12 @@ Every route's class — public, self, viewer, operator, admin, owner — is in
 [`server/route-table.mjs`](server/route-table.mjs) (see [Roles](#roles)).
 Below, `/healthz` and `/api/version` are `public` and `/auth/signout-others`
 is `self`; `/api/org` and every `/api/org/…` route are `admin`, every
-`/api/admin/…` route `owner` (see [The Identity API](#the-identity-api));
-every other `GET` is `viewer` and every other route `operator`.
+`/api/admin/…` route `owner` (see [The Identity API](#the-identity-api)),
+and every `/api/mcp-endpoints` route but its `GET` is `admin` (an endpoint
+record is where the server will send the org's read token: its changes take
+the identity API's defences — the `X-Observogram-CSRF: 1` header in every
+posture, closed on an exposed server without sign-in); every other `GET` is
+`viewer` and every other route `operator`.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -1448,6 +1452,10 @@ every other `GET` is `viewer` and every other route `operator`.
 | `GET` | `/api/environments/:id` | One environment with its service |
 | `PATCH` | `/api/environments/:id` | Changes `name`, `tier`, `bindings`, `endpoints`, `mcpEndpointId` (`null` unbinds) |
 | `DELETE` | `/api/environments/:id` | Removes an environment |
+| `GET` | `/api/mcp-endpoints` | The org's MCP endpoint records, by name: `id`, `name`, `origin`, how many environments are checked through each; `url` and `readTokenEnv` to operators and above, `null` to a viewer |
+| `POST` | `/api/mcp-endpoints` | An MCP endpoint record (201): `{ name, url, readTokenEnv? }` — the URL carries no credential (a query parameter named like one is refused by name), `readTokenEnv` names a variable of this org, `OBSERVOGRAM_ORG_<ORG>_<NAME>` |
+| `PATCH` | `/api/mcp-endpoints/:id` | Changes `name`, `url`, `readTokenEnv` (`null` clears it; `changed` lists what differed) |
+| `DELETE` | `/api/mcp-endpoints/:id` | Removes an MCP endpoint record; the environments checked through it stay, unbound (`unbound` lists their ids) |
 | `GET` | `/api/admin/users` | Every user, disabled ones too, with their memberships — never a password |
 | `POST` | `/api/admin/users` | Create a local user (201) |
 | `POST` | `/api/admin/users/:id/disable` | Disable a user: every session ends |

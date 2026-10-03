@@ -39,10 +39,10 @@ export const handler = (fn) => function ruleHandler(req, res) {
 export const bodyOf = (req) => (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {});
 
 // The row id a path parameter holds, bound as a number — or null, the 400
-// sent, naming the kind of row ('user', 'service', 'environment'). A
-// 16-digit id past 2^53 - 1 is refused too, and the text says why: as a
-// number it would round, and a refusal would name an id the caller never
-// sent.
+// sent, naming the kind of row ('user', 'service', 'environment', 'MCP
+// endpoint'). A 16-digit id past 2^53 - 1 is refused too, and the text
+// says why: as a number it would round, and a refusal would name an id the
+// caller never sent.
 export function pathId(req, res, param, kind = 'user') {
   const id = req.params[param];
   const n = PATH_ID.test(id) ? Number(id) : NaN;

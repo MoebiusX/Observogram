@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * server/test-services-api.mjs — the services and environments API
- * (docs/STORE_PLAN.md slice 4, design §7), in-process over HTTP on one
- * stand-alone identity server, as test-identity-api.mjs does.
+ * server/test-services-api.mjs — the services, environments and MCP
+ * endpoints API (docs/STORE_PLAN.md slice 4, design §7), in-process over
+ * HTTP on one stand-alone identity server, as test-identity-api.mjs does.
  *
  * For every route of server/routes/services.mjs: the success path with its
  * exact response and its exact audit rows (action, actor = the caller's
@@ -21,7 +21,13 @@
  * (A6: the slugs the API serves equal the keys the studio's
  * serviceCatalogue() computes in Node over GET /api/packs); a viewer reads
  * an environment's endpoints in full (D14); DELETE /api/uploads keeps the
- * services.
+ * services. The MCP endpoints (admin): the create, update and delete with
+ * their rows (the origin and the variable's name, never the URL's path —
+ * A9), every refusal (the URL word rule and the per-org variable, the
+ * repository's texts), the view by rank (a viewer reads no url and no
+ * variable), an environment bound to one and unbound by its deletion, and
+ * the guard's answers in this posture (the admin role; the CSRF header
+ * from every session, under the endpoints' own text).
  *
  * Who may reach these routes in each posture is test-authz's (the AuthZ
  * matrix) and which org's rows a member reaches is test-tenancy's; this
@@ -71,6 +77,7 @@ const { runWithOrg } = await import('./org-context.mjs');
 const { registerPack, resetPackRegistry } = await import('./pack-registry.mjs');
 const { listServicesForPack } = await import('./store/pack-services.mjs');
 const { WAYS, serviceTierFor } = await import('./service-admin.mjs');
+const { envNameOwnerText, envNameShapeText } = await import('./store/mcp-endpoints.mjs');
 const { routeEntry } = await import('./route-table.mjs');
 const { parse: parseYaml } = await import('../tools/lib/mini-yaml.mjs');
 const serviceKeys = await import('../tools/lib/service-keys.mjs');
@@ -108,8 +115,9 @@ for (const login of ['olive', 'ada', 'oscar', 'vera', 'bob']) await signInAs(BAS
 const CSRF = { 'X-Observogram-CSRF': '1' };
 
 // One request as `who` (a login whose cookie is held): { status, json, text }.
+// olive, an owner with no acme membership, names acme (else her default org).
 async function call(who, method, path, body, extra = {}) {
-  const headers = { Accept: 'application/json', ...CSRF, Cookie: cookies[who], ...extra };
+  const headers = { Accept: 'application/json', ...CSRF, Cookie: cookies[who], ...(who === 'olive' ? { 'X-Observogram-Org': 'acme' } : {}), ...extra };
   let payload;
   if (body !== undefined) {
     headers['Content-Type'] ??= 'application/json';
@@ -162,6 +170,7 @@ const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const BAD_IDS = ['abc', '0', '01', '-1', '1.5', '1e3', '12345678901234567', '9007199254740992', '9007199254740993', '9999999999999999'];
 const SERVICE_ID_TEXT = 'service id must be a positive integer, at most 9007199254740991';
 const ENVIRONMENT_ID_TEXT = 'environment id must be a positive integer, at most 9007199254740991';
+const MCP_ENDPOINT_ID_TEXT = 'MCP endpoint id must be a positive integer, at most 9007199254740991';
 
 const SERVICE_KEYS = ['id', 'slug', 'name', 'owners', 'tier', 'description', 'source', 'createdAt', 'updatedAt', 'environments', 'packs'];
 const ENVIRONMENT_KEYS = ['id', 'serviceId', 'name', 'tier', 'effectiveTier', 'bindings', 'endpoints', 'mcpEndpoint', 'createdAt', 'updatedAt'];
@@ -173,6 +182,11 @@ const isServiceView = (s) => {
 const isEnvironmentView = (e) => {
   assert.deepEqual(Object.keys(e), ENVIRONMENT_KEYS, `the environment view of ${e.name}: named fields only`);
   assert.ok(ISO.test(e.createdAt) && ISO.test(e.updatedAt), 'timestamps');
+};
+const MCP_ENDPOINT_KEYS = ['id', 'name', 'origin', 'url', 'readTokenEnv', 'environments', 'createdAt'];
+const isMcpEndpointView = (e) => {
+  assert.deepEqual(Object.keys(e), MCP_ENDPOINT_KEYS, `the MCP endpoint view of ${e.name}: named fields only`);
+  assert.ok(ISO.test(e.createdAt), 'timestamp');
 };
 // A view with its timestamps replaced, for a deepEqual.
 const stamped = (v) => (v === null ? null : { ...v, createdAt: 'T', updatedAt: 'T', ...(v.environments ? { environments: v.environments.map(stamped) } : {}) });
@@ -421,6 +435,174 @@ test('DELETE /api/environments/:id: the view as it was, one row; gone afterwards
   for (const id of BAD_IDS) await refused(K, 'oscar', `/api/environments/${id}`, 400, ENVIRONMENT_ID_TEXT);
   const list = await ok('GET /api/services/:id/environments', 'vera', `/api/services/${ids.checkout}/environments`);
   assert.deepEqual(list.json.environments.map((e) => e.name), ['prod']);
+});
+
+// ---------- MCP endpoints (admin; the identity API's defences) ----------
+
+const MCP_URL = 'https://mcp.acme.test/mcp/s/sk-path-secret/obs?tier=x';
+const MCP_ORIGIN = 'https://mcp.acme.test';
+const ACME_TOKEN = 'OBSERVOGRAM_ORG_ACME_MCP_TOKEN';
+// A 403 is the guard's: { ok, error, denied, … }, and no row.
+async function denied(key, who, path, body, kind, error) {
+  const { method } = routeEntry(key);
+  if (noBody(method)) [body, kind, error] = [undefined, body, kind];
+  const seq = seqNow();
+  const r = await call(who, method, path, body);
+  assert.deepEqual([r.status, r.json.ok, r.json.denied, r.json.error], [403, false, kind, error], `${key} as ${who}`);
+  assert.deepEqual(rowsAfter(seq), [], `${key}: a refusal writes no row`);
+}
+
+test('POST /api/mcp-endpoints: a record (201) as the admin\'s own view, its exact row (the origin and the variable, never the URL\'s path); an owner too; the CSRF header from every session; operators and viewers refused by the guard', async () => {
+  const K = 'POST /api/mcp-endpoints';
+  const { json, rows } = await ok(K, 'ada', '/api/mcp-endpoints', { name: 'prod-mcp', url: MCP_URL, readTokenEnv: ACME_TOKEN, extra: 1 }, 201);
+  isMcpEndpointView(json.endpoint);
+  ids.mcp = json.endpoint.id;
+  assert.deepEqual({ ...json.endpoint, createdAt: 'T' }, { id: ids.mcp, name: 'prod-mcp', origin: MCP_ORIGIN, url: MCP_URL, readTokenEnv: ACME_TOKEN, environments: 0, createdAt: 'T' });
+  assert.deepEqual(rows, [['mcp_endpoint.create', 'ada', 'acme', 'prod-mcp', { fields: ['name', 'url', 'readTokenEnv'], origin: MCP_ORIGIN, readTokenEnv: ACME_TOKEN }]]);
+  assert.ok(!JSON.stringify(rows).includes('sk-path-secret'), 'the row never holds the URL\'s path');
+  // An owner in the org; no variable → null.
+  const second = await ok(K, 'olive', '/api/mcp-endpoints', { name: 'staging-mcp', url: 'http://mcp-staging.acme.test:8080/mcp' }, 201);
+  ids.mcpStaging = second.json.endpoint.id;
+  assert.deepEqual({ ...second.json.endpoint, createdAt: 'T' }, {
+    id: ids.mcpStaging, name: 'staging-mcp', origin: 'http://mcp-staging.acme.test:8080', url: 'http://mcp-staging.acme.test:8080/mcp', readTokenEnv: null, environments: 0, createdAt: 'T',
+  });
+  assert.deepEqual(second.rows, [['mcp_endpoint.create', 'olive', 'acme', 'staging-mcp', { fields: ['name', 'url', 'readTokenEnv'], origin: 'http://mcp-staging.acme.test:8080', readTokenEnv: null }]]);
+  // The guard: the admin role, and the header in every posture (csrf: always).
+  await denied(K, 'oscar', '/api/mcp-endpoints', { name: 'x', url: MCP_URL }, 'role', "requires the admin role in org 'acme' (you are operator) — ask an admin of acme");
+  await denied(K, 'vera', '/api/mcp-endpoints', { name: 'x', url: MCP_URL }, 'role', "requires the admin role in org 'acme' (you are viewer) — ask an admin of acme");
+  const seq = seqNow();
+  const bare = await fetch(`${BASE}/api/mcp-endpoints`, {
+    method: 'POST', headers: { Accept: 'application/json', Cookie: cookies.ada, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'x', url: MCP_URL }),
+  });
+  // (With sign-in, the session gate's own CSRF check answers first; the
+  // entry's always-text is what `local` reads without sign-in — test-authz.)
+  assert.deepEqual([bare.status, await bare.json()], [403, { ok: false, denied: 'csrf', error: 'missing X-Observogram-CSRF header on a session-authenticated mutation' }], 'ada without the header');
+  assert.deepEqual(rowsAfter(seq), []);
+});
+
+test('POST /api/mcp-endpoints: every refusal, its status and text, and no row — the name, a clash, the URL rules (never echoing the URL), the per-org variable', async () => {
+  const K = 'POST /api/mcp-endpoints';
+  const P = '/api/mcp-endpoints';
+  for (const name of [undefined, '', 'x'.repeat(201), 3]) await refused(K, 'ada', P, { name, url: MCP_URL }, 400, WAYS.mcpEndpointName);
+  assert.equal(WAYS.mcpEndpointName, 'an MCP endpoint name is 1–200 characters');
+  await refused(K, 'ada', P, { name: 'prod-mcp', url: MCP_URL }, 409, `MCP endpoint "prod-mcp" exists (id ${ids.mcp}) — PATCH /api/mcp-endpoints/${ids.mcp} changes it`);
+  // The URL: the repository's texts (a TypeError → 400), none echoing the URL.
+  for (const url of [undefined, '', 42, 'x'.repeat(2001)]) await refused(K, 'ada', P, { name: 'u', url }, 400, 'observogram store: url must be a non-empty string of at most 2000 characters');
+  await refused(K, 'ada', P, { name: 'u', url: 'not a url' }, 400, 'observogram store: url is not a URL');
+  await refused(K, 'ada', P, { name: 'u', url: 'ftp://mcp.acme.test/x' }, 400, 'observogram store: an MCP endpoint is http(s)');
+  await refused(K, 'ada', P, { name: 'u', url: 'https://user:pw@mcp.acme.test/x' }, 400, 'observogram store: an MCP endpoint URL may not carry credentials — name an env var in readTokenEnv');
+  await refused(K, 'ada', P, { name: 'u', url: 'https://mcp.acme.test/x#frag' }, 400, 'observogram store: an MCP endpoint URL has no fragment');
+  const WORD = (names) => `observogram store: an MCP endpoint URL may not carry credentials in its query — the parameter(s) ${names} look like credentials; remove them and name an env var in readTokenEnv`;
+  await refused(K, 'ada', P, { name: 'u', url: 'https://mcp.acme.test/x?token=abc&sig=x&tier=x' }, 400, WORD('"token", "sig"'));
+  await refused(K, 'ada', P, { name: 'u', url: 'https://mcp.acme.test/x?%74oken=abc' }, 400, WORD('"token"'));
+  await refused(K, 'ada', P, { name: 'u', url: 'https://mcp.acme.test/x?api_key=1' }, 400, WORD('"api_key"'));
+  await refused(K, 'ada', P, { name: 'u', url: 'https://mcp.acme.test/x?tier=x;pwd=y' }, 400, WORD('"tier"'));
+  // The variable: this org's, OBSERVOGRAM_ORG_ACME_<NAME>; another org's is
+  // refused naming its owner; a name no org owns, or of the wrong shape, the shape.
+  for (const readTokenEnv of ['MCP_TOKEN', 'OBSERVOGRAM_ORG_ACME_', 'observogram_org_acme_token', 'OBSERVOGRAM_ORG_NOBODY_X', 42]) {
+    await refused(K, 'ada', P, { name: 'u', url: MCP_URL, readTokenEnv }, 400, envNameShapeText(readTokenEnv, 'acme'));
+  }
+  assert.equal(envNameShapeText('MCP_TOKEN', 'acme'),
+    'observogram store: readTokenEnv names an env var of this org, OBSERVOGRAM_ORG_<KEY>_<NAME> with <NAME> of [A-Z0-9_]+ (for example OBSERVOGRAM_ORG_ACME_MCP_TOKEN), not "MCP_TOKEN" — an admin may only name variables set aside for their org');
+  await refused(K, 'ada', P, { name: 'u', url: MCP_URL, readTokenEnv: 'OBSERVOGRAM_ORG_BRAVO_TOKEN' }, 400, envNameOwnerText('OBSERVOGRAM_ORG_BRAVO_TOKEN', ['bravo']));
+  assert.equal(envNameOwnerText('OBSERVOGRAM_ORG_BRAVO_TOKEN', ['bravo']),
+    'observogram store: OBSERVOGRAM_ORG_BRAVO_TOKEN belongs to org bravo (the longest org prefix wins) — an admin may only name variables set aside for their org');
+  // The name clash is checked after the name, before the URL and the variable.
+  await refused(K, 'ada', P, { name: 'prod-mcp', url: 'not a url' }, 409, `MCP endpoint "prod-mcp" exists (id ${ids.mcp}) — PATCH /api/mcp-endpoints/${ids.mcp} changes it`);
+});
+
+test('GET /api/mcp-endpoints by rank: the url and the variable to an operator and above, null to a viewer; the origin and the name to every member; by name; another org lists its own only', async () => {
+  const K = 'GET /api/mcp-endpoints';
+  const vera = await ok(K, 'vera', '/api/mcp-endpoints');
+  vera.json.endpoints.forEach(isMcpEndpointView);
+  assert.deepEqual(vera.json.endpoints.map((e) => ({ ...e, createdAt: 'T' })), [
+    { id: ids.mcp, name: 'prod-mcp', origin: MCP_ORIGIN, url: null, readTokenEnv: null, environments: 0, createdAt: 'T' },
+    { id: ids.mcpStaging, name: 'staging-mcp', origin: 'http://mcp-staging.acme.test:8080', url: null, readTokenEnv: null, environments: 0, createdAt: 'T' },
+  ], 'vera: the name and origin only, by name');
+  const veraText = JSON.stringify(vera.json);
+  assert.ok(!veraText.includes('sk-path-secret') && !veraText.includes('OBSERVOGRAM_ORG'), 'nothing of the url or the variable reaches a viewer');
+  for (const who of ['oscar', 'ada', 'olive']) {
+    const { json } = await ok(K, who, '/api/mcp-endpoints');
+    assert.deepEqual(json.endpoints.map((e) => [e.name, e.url, e.readTokenEnv]), [['prod-mcp', MCP_URL, ACME_TOKEN], ['staging-mcp', 'http://mcp-staging.acme.test:8080/mcp', null]], `${who}: the url and the variable`);
+  }
+  // bob, bravo's admin: his org's list; acme's ids are not his to change.
+  assert.deepEqual((await ok(K, 'bob', '/api/mcp-endpoints')).json.endpoints, []);
+  const bravo = await ok('POST /api/mcp-endpoints', 'bob', '/api/mcp-endpoints', { name: 'bravo-mcp', url: 'https://mcp.bravo.test/mcp', readTokenEnv: 'OBSERVOGRAM_ORG_BRAVO_TOKEN' }, 201);
+  ids.bravoMcp = bravo.json.endpoint.id;
+  assert.deepEqual(bravo.rows, [['mcp_endpoint.create', 'bob', 'bravo', 'bravo-mcp', { fields: ['name', 'url', 'readTokenEnv'], origin: 'https://mcp.bravo.test', readTokenEnv: 'OBSERVOGRAM_ORG_BRAVO_TOKEN' }]]);
+  assert.deepEqual((await ok(K, 'bob', '/api/mcp-endpoints')).json.endpoints.map((e) => e.id), [ids.bravoMcp]);
+  assert.deepEqual((await ok(K, 'vera', '/api/mcp-endpoints')).json.endpoints.map((e) => e.id), [ids.mcp, ids.mcpStaging], 'acme lists none of bravo\'s');
+  await refused('PATCH /api/mcp-endpoints/:id', 'bob', `/api/mcp-endpoints/${ids.mcp}`, { name: 'taken' }, 404, `no MCP endpoint ${ids.mcp}`);
+  await refused('DELETE /api/mcp-endpoints/:id', 'bob', `/api/mcp-endpoints/${ids.mcp}`, 404, `no MCP endpoint ${ids.mcp}`);
+  // ada, acme's admin, cannot name bravo's endpoint for an acme environment.
+  await refused('PATCH /api/environments/:id', 'ada', `/api/environments/${ids.prod}`, { mcpEndpointId: ids.bravoMcp }, 400, WAYS.noMcpEndpointInOrg(ids.bravoMcp));
+});
+
+test('PATCH /api/mcp-endpoints/:id: name, url, readTokenEnv (null clears) with `changed` and one row naming the columns, the origin and the variable after the change; nothing differing → no row; a rename clash is 409; the refusals; the id rule', async () => {
+  const K = 'PATCH /api/mcp-endpoints/:id';
+  const P = `/api/mcp-endpoints/${ids.mcp}`;
+  const { json, rows } = await ok(K, 'ada', P, { name: 'prod-mcp-2', url: 'https://mcp2.acme.test/mcp/v2?tier=y', readTokenEnv: null });
+  assert.deepEqual(json.changed, ['name', 'url', 'readTokenEnv']);
+  assert.deepEqual({ ...json.endpoint, createdAt: 'T' }, { id: ids.mcp, name: 'prod-mcp-2', origin: 'https://mcp2.acme.test', url: 'https://mcp2.acme.test/mcp/v2?tier=y', readTokenEnv: null, environments: 0, createdAt: 'T' });
+  assert.deepEqual(rows, [['mcp_endpoint.update', 'ada', 'acme', 'prod-mcp', { fields: ['name', 'url', 'read_token_env'], origin: 'https://mcp2.acme.test', readTokenEnv: null }]], 'the row names the record as it was, the columns written, and where the token goes next');
+  const same = await ok(K, 'ada', P, { name: 'prod-mcp-2', readTokenEnv: null, extra: true });
+  assert.deepEqual([same.json.changed, same.rows], [[], []]);
+  const back = await ok(K, 'olive', P, { name: 'prod-mcp', url: MCP_URL, readTokenEnv: ACME_TOKEN });
+  assert.deepEqual([back.json.changed, back.json.endpoint.url, back.json.endpoint.readTokenEnv], [['name', 'url', 'readTokenEnv'], MCP_URL, ACME_TOKEN]);
+  assert.deepEqual(back.rows, [['mcp_endpoint.update', 'olive', 'acme', 'prod-mcp-2', { fields: ['name', 'url', 'read_token_env'], origin: MCP_ORIGIN, readTokenEnv: ACME_TOKEN }]]);
+  const only = await ok(K, 'ada', P, { readTokenEnv: 'OBSERVOGRAM_ORG_ACME_OTHER' });
+  assert.deepEqual([only.json.changed, only.rows], [['readTokenEnv'], [['mcp_endpoint.update', 'ada', 'acme', 'prod-mcp', { fields: ['read_token_env'], origin: MCP_ORIGIN, readTokenEnv: 'OBSERVOGRAM_ORG_ACME_OTHER' }]]]);
+  await ok(K, 'ada', P, { readTokenEnv: ACME_TOKEN });
+  // The refusals.
+  await refused(K, 'ada', P, { name: 'staging-mcp' }, 409, `MCP endpoint "staging-mcp" exists (id ${ids.mcpStaging}) — PATCH /api/mcp-endpoints/${ids.mcpStaging} changes it`);
+  await refused(K, 'ada', P, { name: '' }, 400, WAYS.mcpEndpointName);
+  await refused(K, 'ada', P, { url: 'https://mcp.acme.test/x?token=1' }, 400, 'observogram store: an MCP endpoint URL may not carry credentials in its query — the parameter(s) "token" look like credentials; remove them and name an env var in readTokenEnv');
+  await refused(K, 'ada', P, { url: 'ftp://x' }, 400, 'observogram store: an MCP endpoint is http(s)');
+  await refused(K, 'ada', P, { readTokenEnv: 'OBSERVOGRAM_ORG_BRAVO_TOKEN' }, 400, envNameOwnerText('OBSERVOGRAM_ORG_BRAVO_TOKEN', ['bravo']));
+  await refused(K, 'ada', P, { readTokenEnv: 'TOKEN' }, 400, envNameShapeText('TOKEN', 'acme'));
+  await refused(K, 'ada', '/api/mcp-endpoints/999999', { name: 'x' }, 404, 'no MCP endpoint 999999');
+  for (const id of BAD_IDS) await refused(K, 'ada', `/api/mcp-endpoints/${id}`, { name: 'x' }, 400, MCP_ENDPOINT_ID_TEXT);
+  await denied(K, 'oscar', P, { name: 'x' }, 'role', "requires the admin role in org 'acme' (you are operator) — ask an admin of acme");
+  // The same name as its own is no clash.
+  const own = await ok(K, 'ada', P, { name: 'prod-mcp' });
+  assert.deepEqual([own.json.changed, own.rows], [[], []]);
+});
+
+test('an environment bound to an endpoint: PATCH /api/environments/:id { mcpEndpointId } with its row; the view says { id, name, origin } — a viewer reads no url; the endpoint counts it', async () => {
+  const bind = await ok('PATCH /api/environments/:id', 'oscar', `/api/environments/${ids.prod}`, { mcpEndpointId: ids.mcp });
+  assert.deepEqual(bind.json.changed, ['mcpEndpointId']);
+  assert.deepEqual(bind.json.environment.mcpEndpoint, { id: ids.mcp, name: 'prod-mcp', origin: MCP_ORIGIN });
+  assert.deepEqual(bind.rows, [['environment.update', 'oscar', 'acme', 'checkout-service/prod', { fields: ['mcp_endpoint_id'] }]]);
+  const again = await ok('PATCH /api/environments/:id', 'oscar', `/api/environments/${ids.prod}`, { mcpEndpointId: String(ids.mcp) });
+  assert.deepEqual([again.json.changed, again.rows], [[], []], 'the same id (as a string) differs in nothing');
+  const read = await ok('GET /api/environments/:id', 'vera', `/api/environments/${ids.prod}`);
+  assert.deepEqual(read.json.environment.mcpEndpoint, { id: ids.mcp, name: 'prod-mcp', origin: MCP_ORIGIN });
+  assert.ok(!JSON.stringify(read.json).includes('sk-path-secret'), 'the URL\'s path is nowhere in an environment');
+  const list = await ok('GET /api/services', 'vera', '/api/services');
+  assert.deepEqual(list.json.services.find((s) => s.id === ids.checkout).environments.find((e) => e.id === ids.prod).mcpEndpoint, { id: ids.mcp, name: 'prod-mcp', origin: MCP_ORIGIN });
+  assert.ok(!JSON.stringify(list.json).includes('sk-path-secret'));
+  const eps = await ok('GET /api/mcp-endpoints', 'vera', '/api/mcp-endpoints');
+  assert.deepEqual(eps.json.endpoints.map((e) => [e.name, e.environments]), [['prod-mcp', 1], ['staging-mcp', 0]]);
+});
+
+test('DELETE /api/mcp-endpoints/:id: the view as it was, the environments it unbinds, one row { origin, unbound }; the environment reads mcpEndpoint null; gone afterwards; the id rule; the guard', async () => {
+  const K = 'DELETE /api/mcp-endpoints/:id';
+  await denied(K, 'oscar', `/api/mcp-endpoints/${ids.mcp}`, 'role', "requires the admin role in org 'acme' (you are operator) — ask an admin of acme");
+  const { json, rows } = await ok(K, 'ada', `/api/mcp-endpoints/${ids.mcp}`);
+  assert.deepEqual({ ...json, deleted: { ...json.deleted, createdAt: 'T' } }, {
+    ok: true, deleted: { id: ids.mcp, name: 'prod-mcp', origin: MCP_ORIGIN, url: MCP_URL, readTokenEnv: ACME_TOKEN, environments: 1, createdAt: 'T' }, unbound: [ids.prod],
+  });
+  assert.deepEqual(rows, [['mcp_endpoint.delete', 'ada', 'acme', 'prod-mcp', { origin: MCP_ORIGIN, unbound: 1 }]], 'one row; the unbound environment writes none of its own');
+  const env = await ok('GET /api/environments/:id', 'vera', `/api/environments/${ids.prod}`);
+  assert.deepEqual([env.json.environment.mcpEndpoint, env.json.environment.name], [null, 'prod'], 'the environment stays, unbound');
+  await refused(K, 'ada', `/api/mcp-endpoints/${ids.mcp}`, 404, `no MCP endpoint ${ids.mcp}`);
+  await refused('PATCH /api/mcp-endpoints/:id', 'ada', `/api/mcp-endpoints/${ids.mcp}`, { name: 'x' }, 404, `no MCP endpoint ${ids.mcp}`);
+  await refused('PATCH /api/environments/:id', 'oscar', `/api/environments/${ids.prod}`, { mcpEndpointId: ids.mcp }, 400, WAYS.noMcpEndpointInOrg(ids.mcp));
+  for (const id of BAD_IDS) await refused(K, 'ada', `/api/mcp-endpoints/${id}`, 400, MCP_ENDPOINT_ID_TEXT);
+  assert.deepEqual((await ok('GET /api/mcp-endpoints', 'vera', '/api/mcp-endpoints')).json.endpoints.map((e) => e.name), ['staging-mcp']);
+  // Nothing bound: unbound is [].
+  const none = await ok(K, 'olive', `/api/mcp-endpoints/${ids.mcpStaging}`);
+  assert.deepEqual([none.json.unbound, none.rows], [[], [['mcp_endpoint.delete', 'olive', 'acme', 'staging-mcp', { origin: 'http://mcp-staging.acme.test:8080', unbound: 0 }]]]);
 });
 
 test('DELETE /api/services/:id on a record without packs: the view as it was, the cascaded environments counted, one row', async () => {
