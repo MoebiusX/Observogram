@@ -71,6 +71,9 @@ jobs:
       - name: Verify vendored spec checksums
         run: npm run sync-spec:check
 
+      - name: Verify VENDOR-MANIFEST.json is in sync (tools/gen-vendor-manifest.mjs)
+        run: npm run vendor-manifest:check
+
       - name: Validate canonical example against the vendored spec schema (tools/lib/validator.mjs SPEC_VERSION)
         run: npm run validate
 

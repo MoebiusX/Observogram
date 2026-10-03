@@ -1550,6 +1550,7 @@ deploy/k8s/
 - [`docs/REFACTORING_PLAN.md`](docs/REFACTORING_PLAN.md) - maintainability refactor backlog from the 2026-06 audit
 - [`docs/BRANCHING.md`](docs/BRANCHING.md) - the branching model: lanes, per-commit bar, multi-writer rules, promotion cadence
 - [`docs/VENDORING.md`](docs/VENDORING.md) - vendoring the verdict/diff engines into a downstream studio, and how to stay current
+- [`docs/DOWNSTREAM.md`](docs/DOWNSTREAM.md) - vendoring the pure libraries by manifest (`VENDOR-MANIFEST.json`): snapshot → verify hashes → smoke → bump
 - [`docs/UI_CONVENTIONS.md`](docs/UI_CONVENTIONS.md) - studio view-module conventions: the host seam, loader/renderer split, render signatures, CSS zones
 
 Superseded planning docs live in [`docs/archive/`](docs/archive/README.md).
