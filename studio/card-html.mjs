@@ -114,6 +114,7 @@ export const ARTEFACT_KINDS = [
   ['POL-',        'Burn-rate alert',              'Warns when an objective burns its error budget too fast.'],
   ['FCST-',       'Forecast',                     'Predicts when a budget or capacity runs out.'],
   ['ALR-',        'Alert route',                  'Sends alerts of one severity to the people who act on them.'],
+  ['RULE-',       'Alert rule',                   'An operational alert the engine evaluates: something is wrong now, not a budget burning.'],
   ['HEAL-',       'Self-healing action',          'Runs a remediation when an alert fires.'],
   ['BASE-',       'Baselines',                    'Records normal behaviour to compare against.'],
   ['CHAOS-',      'Chaos experiment',             'Breaks something on purpose to prove the alerts fire.'],

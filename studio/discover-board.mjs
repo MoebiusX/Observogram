@@ -47,6 +47,7 @@ export const BOARD_LAYERS = {
   L4: { flow: true, groups: [
     { id: 'pol', title: 'Policy & detection', prefixes: ['POL-', 'FCST-'] },
     { id: 'alr', title: 'Alert routing', prefixes: ['ALR-'], draw: 'route' },
+    { id: 'rule', title: 'Operational alert rules', prefixes: ['RULE-'], optional: true },
     { id: 'heal', title: 'Remediation', prefixes: ['HEAL-'] },
   ] },
   L5: { groups: [

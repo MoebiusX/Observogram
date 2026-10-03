@@ -10,7 +10,7 @@ The read path powers Diagnose. The write path powers Remediate.
 ## Read Path: Live Pack Generation
 
 `tools/fetch-live-pack.mjs` interrogates an MCP endpoint and emits a canonical
-ObservabilityPack v1.3 manifest. By default it writes the ignored local file:
+ObservabilityPack v1.4 manifest. By default it writes the ignored local file:
 
 ```text
 examples/production-live.pack.yaml
@@ -48,7 +48,7 @@ diagnostic-grade drift:
 | Metrics | metric inventory and names observed from the live platform |
 | Scrape jobs | Prometheus/VictoriaMetrics scrape evidence |
 | Recording rules | full rule names and expressions where the MCP exposes them |
-| Alert rules | Grafana/Prometheus alerting rules; burn-rate alerts are mapped from them per SLO, never synthesised |
+| Alert rules | Grafana/Prometheus alerting rules; burn-rate alerts are mapped from them per SLO, never synthesised; every other rule is declared in `spec.alerting.rules` (spec 1.4) under its exact name |
 | Alerting routes | the routes of the configuration the running Alertmanager reports — severities and channels, secret addresses as `redacted:secret` |
 | Dashboards | Grafana dashboard metadata plus dashboard bodies, panels, variables, and targets |
 | Baselines | none yet — MTTD/MTTR are platform defaults stamped `Scaffold`; anomaly baselines are only counted (`mcp.baselinesComputed`) |
@@ -153,7 +153,7 @@ JSON arrays (`annotationJson`) at 200 entries; error strings at 200 chars.
 | `mcp.capabilities.unobserved` | comma list of products | what the inventory lists and nothing showed to be running: supported, not deployed — never a backend |
 | `mcp.backends.evidence` | `<backend id>=<what attested it>` joined by `\|` | per backend: the version probe (`metrics_query/vm_app_version`), the scrape job (`scrape job promtail`) or the product tool (`vmalert_rules`) behind it |
 | `mcp.derived.<symbol>` | string | an entry READ from live rules without being attested as what the pack calls it — `policy.burn_rate_alerts[<i>]` read from plain alerting rules names the rules; projects as `Declared`, neither `Verified` nor `Scaffold` |
-| `mcp.discovered.alert_rules_linked` / `alert_rules_operational` | counts | alerting rules that guard a recorded SLO (read as burn-rate entries) / that guard none |
+| `mcp.discovered.alert_rules_linked` / `alert_rules_operational` | counts | alerting rules that guard a recorded SLO (read as burn-rate entries) / that guard none — the latter are declared in `spec.alerting.rules` (spec 1.4), each stamped `mcp.verified.alerting.rules[<i>]` unless the ruler reports it unhealthy |
 | `observogram.unobserved.<family>` | reason string | an artefact family this fetch had no way to look at (see *What the fetch could not look at*) |
 | `mcp.stack.status` | `sampled` \| `not-attempted` | the stack self-metrics panel (step 2, "Stack self-metrics (sampling)"): whether it was sampled at all — signals, never verdicts; written whenever the fetcher ran the step-2 sampler (a caller that predates step 2 writes nothing) |
 | `mcp.stack.reason` | string | only when `not-attempted`: why (`metrics_query not exposed by this MCP (restricted tier)`) |
@@ -282,7 +282,8 @@ first) and each emitted entry is stamped `mcp.verified.policy.burn_rate_alerts[<
   series' SLO and contributes its window (`for`, severity) to the SLO's
   entry; entries with fewer than two windows take the default pair; a rule
   that references no recorded series is an operational alert and no SLO
-  contract. Hand-written rules carry neither the compiler's labels nor its
+  contract — since spec 1.4 it is declared in `spec.alerting.rules` (below),
+  not dropped. Hand-written rules carry neither the compiler's labels nor its
   names — without this a platform with seventy alerting rules read as having
   no burn-rate policy, and every alert its repository declares read "not
   live". Such an entry is real (no scaffold marker) and **not** `Verified`:
@@ -293,6 +294,22 @@ first) and each emitted entry is stamped `mcp.verified.policy.burn_rate_alerts[<
 - A burn group for an SLO nobody inferred, or one with a single window (the
   schema requires two), is not representable and is listed in
   `mcp.discovered.alert_rules_unmapped` instead of being padded.
+- **Operational rules are declared, not lost (spec 1.4 `alerting.rules`).**
+  Every alerting rule the ruler reports that binds to no SLO is read with
+  the same reading the crawler applies to a rule file
+  (`sli-inference.mjs` `operationalAlertRule`): its exact `name` (the join
+  key), `expr` (`query` on the wire), `for` as the canonical duration
+  (`duration: 600` is `10m`), the pack's `severity` from `labels.severity`
+  beside the engine's own word in `labels`, and `engine` from what the
+  answering tool attests (the contract registry's `attests`: grafana,
+  mimir, vmalert → victoriametrics; a plain Prometheus-API answer states
+  none, which means prometheus). The repository's crawler declares the
+  same rules from the rule files, so the two sides pair rule for rule by
+  name in Compare — the engine is not compared (a rule file cannot tell a
+  Prometheus ruler from a VictoriaMetrics one), the expression, wait,
+  labels and severity are. Until 1.4 these rules were counted
+  (`alert_rules_operational`) and carried nowhere, and a live Grafana
+  snapshot matched zero alerts against the repository that provisioned them.
 - A rule with no recognisable severity gets one from its burn factor
   (`>= 10x` SEV1, `>= 5x` SEV2, else SEV3) and is listed in
   `mcp.discovered.alert_rules_severity_inferred`.
@@ -379,6 +396,7 @@ both read, they read through one module:
 |---|---|---|---|
 | SLIs / SLOs | `sli-inference.mjs` `inferSlisFromRecordingRules` | rule files | the ruler's rule list — choices are made by rule NAME, never by arrival order |
 | Burn-rate entries | `sli-inference.mjs` `burnAlertsFromAlertRules` | alerting rule files (`for: 2m`) | the ruler's alerting rules (`duration: 120`) |
+| Operational alert rules (spec 1.4 `alerting.rules`) | `sli-inference.mjs` `operationalAlertRule` | the rules of a rule file or Grafana provisioning YAML that guard no SLO (`alert:` / `title:`, `expr` or `data[].model.expr`) | the ruler's alerting rules that bind to no SLO (`name`, `query`, `duration`) — paired by exact name |
 | Routes | `alert-routes.mjs` `routesFromAlertmanagerConfig` | the Alertmanager config file (`${VAR}` → `unresolved:<VAR>`) | the running configuration (`<secret>` → `redacted:secret`) |
 | Backends | `backend-products.mjs` | container images | scrape jobs, versions, product tools |
 | Extended surfaces | `l2x.mjs` | the backends above | the backends above |

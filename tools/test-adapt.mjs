@@ -15,6 +15,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { adapt, listEnvironments } from './lib/adapter.mjs';
+import { diffPacks } from './lib/diff.mjs';
 import { SPEC_DIR } from './lib/validator.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -53,7 +54,7 @@ assert(prod.layers.L2.length === 24,           'L2 = 1 otel + 9 backends + 8 pip
 assert(prod.layers.L2X.length === 7,           'L2X = profiling + network + policy_engine + 2 mesh + 2 collection', prod.layers.L2X.length, 7);
 assert(prod.layers.L3.length === 16,           'L3 = 5 recording + 2 derived + 4 dashboards + 5 panels (expand)', prod.layers.L3.length, 16);
 assert(prod.layers.L4.policy.length === 7,    'L4.policy = 5 burn-rate + 2 forecasts', prod.layers.L4.policy.length, 7);
-assert(prod.layers.L4.alerting.length === 3,  'L4.alerting = SEV1/SEV2/SEV3 routes', prod.layers.L4.alerting.length, 3);
+assert(prod.layers.L4.alerting.length === 6,  'L4.alerting = SEV1/SEV2/SEV3 routes + 3 operational alert rules (the 1.4 example)', prod.layers.L4.alerting.length, 6);
 assert(prod.layers.L4.healing.length === 3,   'L4.healing = 3 remediations', prod.layers.L4.healing.length, 3);
 assert(prod.layers.L5.length === 6,           'L5 = 1 baseline + 3 chaos + 2 synthetic', prod.layers.L5.length, 6);
 assert(prod.layers.GOV.length === 3,          'GOV = 3 imports', prod.layers.GOV.length, 3);
@@ -321,5 +322,46 @@ assert(adapt(legacyScopeFixture).meta.diffScopeMode === 'service',
        'observogram.diff.scopeMode wins over the legacy key when both exist', adapt(legacyScopeFixture).meta.diffScopeMode, 'service');
 
 // ---------- summary ----------
+
+// ---------- operational alert rules (spec 1.4 alerting.rules) ----------
+// One L4 alerting artefact per rule, titled by the rule's exact name, beside
+// the routes; the artefact model keys an alert_rule on that name, so the
+// rule a repository declares and the same rule a live listing reports pair.
+{
+  const rules = prod.layers.L4.alerting.filter(a => a.id.startsWith('RULE-'));
+  assert(rules.map(a => a.id).join() === 'RULE-01,RULE-02,RULE-03', 'RULE-NN ids follow alerting.rules order', rules.map(a => a.id));
+  assert(rules.map(a => a.title).join() === 'PaymentServicePodRestarting,PaymentDbConnectionPoolSaturated,PaymentCertificateExpiringSoon',
+    'each alert rule artefact is titled by the rule\'s exact name', rules.map(a => a.title));
+  assert(rules.map(a => a.tool).join() === 'PrometheusRule,PrometheusRule,Grafana alerting',
+    'tool follows the engine: PrometheusRule for the PromQL rulers (absent engine means prometheus), Grafana alerting for a Grafana-managed rule', rules.map(a => a.tool));
+  assert(rules.every(a => a.source === 'Declared') && rules[0].tags.includes('alert-rule') && rules[0].tags.includes('SEV3'),
+    'alert rules project as Declared and carry the alert-rule tag and their severity', rules.map(a => [a.source, a.tags]));
+  assert(rules[0].desc === 'prometheus alert rule · for 10m · SEV3 · labels.severity warning',
+    'desc states engine, wait, the pack\'s severity and the engine\'s own label when they differ', rules[0].desc);
+  assert(prod.layers.L4.alerting.filter(a => a.id.startsWith('ALR-')).length === 3, 'the three routes are still there beside the rules');
+
+  // Pairing: a "live" pack that holds the same rules under other spellings
+  // of everything but the name — a ruler's trailing newline in the
+  // expression, no engine, no source, no annotations — pairs rule for rule
+  // and reads aligned; a rule whose expression changed reads drifted; a
+  // rule only one side holds reads only there.
+  const live = clone(canonical);
+  live.spec.alerting.rules = canonical.spec.alerting.rules.map(({ name, expr, severity, labels }, i) => ({
+    name, expr: `${expr}\n`, severity, labels, ...(canonical.spec.alerting.rules[i].for ? { for: canonical.spec.alerting.rules[i].for } : {}),
+  }));
+  live.spec.alerting.rules[1].expr = live.spec.alerting.rules[1].expr.replace('> 0.9', '> 0.95');
+  live.spec.alerting.rules.push({ name: 'PaymentNodeDown', expr: 'up{job="payment-service"} == 0', severity: 'SEV1' });
+  const d = diffPacks(prod, adapt(live));
+  const ruleEntries = (bucket) => d.layers.L4[bucket].filter(e => e.key.startsWith('alert_rule::'));
+  assert(ruleEntries('inBoth').length === 3 && ruleEntries('inBoth').every(e => e.a.title === e.b.title),
+    'the three rules pair by name — engine, source, annotations and a trailing newline in the expression are not identity', ruleEntries('inBoth').map(e => [e.key, e.match]));
+  assert(ruleEntries('inBoth').filter(e => e.match === 'aligned').map(e => e.a.title).sort().join() === 'PaymentCertificateExpiringSoon,PaymentServicePodRestarting',
+    'the unchanged rules read aligned although the live side states no engine and no source', ruleEntries('inBoth').map(e => [e.a.title, e.match, e.deltas]));
+  const drifted = ruleEntries('inBoth').find(e => e.match === 'drifted');
+  assert(drifted?.a.title === 'PaymentDbConnectionPoolSaturated' && drifted.deltas.map(x => x.field).join() === 'expr',
+    'a rule whose expression changed reads drifted, on expr', drifted && [drifted.a.title, drifted.deltas]);
+  assert(ruleEntries('onlyInB').map(e => e.artefact.title).join() === 'PaymentNodeDown' && ruleEntries('onlyInA').length === 0,
+    'a rule only the live side holds reads "live, not declared"', [ruleEntries('onlyInA').length, ruleEntries('onlyInB').map(e => e.artefact.title)]);
+}
 
 report('adapter');

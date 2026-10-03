@@ -324,6 +324,8 @@ See [`DRY_RUN.md`](DRY_RUN.md) for the executable checklist.
 
 ## See Also
 
+- [`BUILD_JOURNEY.md`](BUILD_JOURNEY.md) - building a new pack: Define, Compile, Verify
+- [`UPDATE_JOURNEY.md`](UPDATE_JOURNEY.md) - proposal: changing a pack that already exists
 - [`DIFF.md`](DIFF.md) - structural drift model
 - [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md) - live scan and write-back path
 - [`CONFORMANCE.md`](CONFORMANCE.md) - maturity rubric scoring

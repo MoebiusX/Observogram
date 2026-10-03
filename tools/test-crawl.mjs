@@ -1055,4 +1055,55 @@ assert(!/CRAWL_IGNORE_DIRS|CRAWL_SCAN_EXT/.test(studioSrc), 'the studio keeps no
   assert(pick.indexOf('SCAN_MAX_FILE_BYTES') < pick.indexOf('file.text()'), 'the size cap applies before the file is read');
 }
 
+// ---------- Grafana unified-alerting provisioning ----------
+process.stdout.write('\n--- grafana alert provisioning ---\n');
+{
+  // A provisioning export as other tooling writes it back: query models as
+  // JSON strings, non-ASCII annotations as YAML \xHH escapes (PyYAML's
+  // default), and one rule whose model JSON is broken. See the fixture README.
+  const PROV_PATH = 'grafana/provisioning/alerting/alert-rules.yaml';
+  const PROV = readFileSync(new URL('./fixtures/crawl/grafana-provisioning/alert-rules.yaml', import.meta.url), 'utf8');
+  const RULES = [
+    'groups:',
+    '  - name: slo',
+    '    rules:',
+    '      - record: checkout:availability:good',
+    '        expr: sum(rate(http_requests_total{code!~"5.."}[5m]))',
+    '      - record: checkout:availability:total',
+    '        expr: sum(rate(http_requests_total[5m]))',
+    '',
+  ].join('\n');
+  assert(detectArtefactKind(PROV_PATH, PROV) === 'prometheus-rules', 'provisioned alert rules detected as a rule file');
+
+  const prov = crawlFiles({ [PROV_PATH]: PROV, 'prometheus/rules.yml': RULES }, { repoName: 'checkout', now: '2026-06-05T00:00:00.000Z' });
+  const provWarnings = prov.summary.warnings;
+  assert(!provWarnings.some(w => /Failed to parse/.test(w)),
+    'YAML \\xHH escapes in an annotation do not fail the file', provWarnings.filter(w => /Failed to parse/.test(w)));
+  assert(Object.values(prov.evidence).some(v => v === `${PROV_PATH}#checkout-slo/CheckoutAvailabilityBurnRate`),
+    'the rule with a mapping model survives');
+  assert(Object.values(prov.evidence).some(v => v === `${PROV_PATH}#checkout-slo/CheckoutLatencyBurnRate`),
+    'the rule with a well-formed JSON-string model survives');
+  assert(!Object.values(prov.evidence).some(v => /CheckoutQueueDepthBurnRate/.test(v)),
+    'the rule whose model JSON does not parse is skipped, not declared');
+  assert(prov.summary.discovered.burnRateAlerts === 2,
+    'two of three alert rules discovered', prov.summary.discovered.burnRateAlerts, 2);
+  const skipped = provWarnings.filter(w => /^Skipped .* alert rule\(s\)/.test(w));
+  assert(skipped.length === 1, 'exactly one skip warning for the file', skipped);
+  assert(skipped[0] === `Skipped 1 of 3 alert rule(s) in ${PROV_PATH}: model JSON could not be parsed`,
+    'the warning names the file, the count lost and the cause', skipped[0],
+    `Skipped 1 of 3 alert rule(s) in ${PROV_PATH}: model JSON could not be parsed`);
+
+  // The expr read from data[].model is the one the SLO binding and the metric
+  // inventory use, for a mapping model and for a JSON-string model alike.
+  assert(prov.canonical.spec.policy.burn_rate_alerts.some(a => a.slo === 'checkout_availability_99'),
+    'the mapping model\'s expr binds the alert to the recorded SLO', prov.canonical.spec.policy.burn_rate_alerts);
+  assert(prov.evidence['metrics.checkout:latency_p99:ms'] !== undefined,
+    'the JSON-string model\'s expr feeds the metric inventory', Object.keys(prov.evidence).filter(k => /^metrics\./.test(k)));
+  assert(validateCanonical(prov.canonical, SCHEMA).length === 0, 'provisioning crawl validates against the vendored schema');
+
+  // A clean file keeps no skip warning.
+  const clean = crawlFiles({ 'prometheus/rules.yml': RULES }, { repoName: 'checkout', now: '2026-06-05T00:00:00.000Z' });
+  assert(!clean.summary.warnings.some(w => /^Skipped .* alert rule/.test(w)), 'no skip warning when every rule reads');
+}
+
 report('crawler');

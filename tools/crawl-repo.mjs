@@ -155,6 +155,7 @@ async function main() {
     `#   backends         : ${summary.discovered.backends}`,
     `#   recording rules  : ${summary.discovered.recordingRules}`,
     `#   burn-rate alerts : ${summary.discovered.burnRateAlerts}`,
+    `#   alert rules      : ${summary.discovered.alertRules} (operational, alerting.rules)`,
     `#   metric definitions: ${summary.discovered.metricDefinitions}`,
     `#   scrape jobs       : ${summary.discovered.scrapeJobs}`,
     `#   dashboards       : ${summary.discovered.dashboards}`,

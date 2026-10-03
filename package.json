@@ -1,7 +1,7 @@
 {
   "name": "observogram",
   "version": "0.5.0",
-  "description": "Observogram — the Observability Compiler. Compiles, scans, and scores ObservabilityPack spec v1.3 manifests. Express server + thin client.",
+  "description": "Observogram — the Observability Compiler. Compiles, scans, and scores ObservabilityPack spec v1.4 manifests. Express server + thin client.",
   "type": "module",
   "engines": {
     "node": ">=22.16.0"
@@ -43,7 +43,7 @@
     "drift:profiles": "node tools/drift-profiles.mjs",
     "lint:drift": "node --check tools/detect-drift.mjs",
     "validate-pack": "node tools/validate-pack.mjs",
-    "validate": "node tools/validate-pack.mjs vendor/observability-pack-spec/v1.3/examples/payment-service.pack.yaml",
+    "validate": "node tools/validate-pack.mjs vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml",
     "lint:fetcher": "node --check tools/fetch-live-pack.mjs",
     "lint:recorder": "node --check tools/record-mcp-fixtures.mjs",
     "test:fetch": "node tools/test-fetch-live.mjs",
@@ -62,6 +62,7 @@
     "crawl": "node tools/crawl-repo.mjs",
     "test:adapt": "node tools/test-adapt.mjs",
     "test:crawl": "node tools/test-crawl.mjs",
+    "test:crawl:alerting": "node tools/test-crawl-alerting-rules.mjs",
     "test:diff": "node tools/test-diff.mjs",
     "test:promql": "node tools/test-promql.mjs",
     "test:diagnostic": "node tools/test-diagnostic-grade.mjs",
@@ -71,6 +72,7 @@
     "test:profiles": "node tools/test-profiles.mjs",
     "test:server": "node server/test-smoke.mjs",
     "test:zip": "node tools/test-zip.mjs",
+    "test:mini-yaml": "node tools/test-mini-yaml.mjs",
     "test:workspace": "node server/test-workspace.mjs",
     "test:verify-deploy": "node tools/test-verify-deploy.mjs",
     "test:journey": "node tools/test-journey.mjs",
@@ -104,7 +106,7 @@
     "test:store:prestore:strict": "node tools/test-store-prestore-live.mjs --strict",
     "test:auth": "node server/test-auth-local.mjs && node server/test-auth-oidc.mjs && node --test server/test-authz.mjs && node --test server/test-identity-api.mjs",
     "users": "node tools/user-admin.mjs",
-    "test": "node --test server/test-auth-local.mjs server/test-auth-oidc.mjs server/test-authz.mjs server/test-deploy-helpers.mjs server/test-identity-api.mjs server/test-mcp-url.mjs server/test-smoke.mjs server/test-store-boot.mjs server/test-store-guards.mjs server/test-store-import.mjs server/test-store-ops.mjs server/test-store.mjs server/test-tenancy.mjs server/test-workspace.mjs tools/test-adapt.mjs tools/test-backend-validate.mjs tools/test-blast-radius.mjs tools/test-build-editor.mjs tools/test-build-info.mjs tools/test-build-model.mjs tools/test-chain-history.mjs tools/test-compile.mjs tools/test-contract-guard.mjs tools/test-contract-shapes.mjs tools/test-crawl.mjs tools/test-deploy-manifests.mjs tools/test-design-system.mjs tools/test-diagnostic-grade.mjs tools/test-diff.mjs tools/test-discover-rows.mjs tools/test-fetch-live.mjs tools/test-gen-pack.mjs tools/test-gen-site.mjs tools/test-golden-compile.mjs tools/test-golden-crawl.mjs tools/test-inventory-coverage.mjs tools/test-journey-notify.mjs tools/test-journey.mjs tools/test-legacy-pack.mjs tools/test-library.mjs tools/test-metric-readers.mjs tools/test-neuron-model.mjs tools/test-packs.mjs tools/test-profiles.mjs tools/test-promql-canon.mjs tools/test-promql.mjs tools/test-record-fixtures.mjs tools/test-retrofeed.mjs tools/test-scan-live.mjs tools/test-schedule-snippets.mjs tools/test-schedule.mjs tools/test-service-keys.mjs tools/test-stack-evidence.mjs tools/test-stack-self-metrics.mjs tools/test-studio-graph.mjs tools/test-studio-layout.mjs tools/test-svg-charts.mjs tools/test-traceability-graph.mjs tools/test-ux-kit.mjs tools/test-validator.mjs tools/test-verify-deploy.mjs tools/test-zip.mjs",
+    "test": "node --test server/test-auth-local.mjs server/test-auth-oidc.mjs server/test-authz.mjs server/test-deploy-helpers.mjs server/test-identity-api.mjs server/test-mcp-url.mjs server/test-smoke.mjs server/test-store-boot.mjs server/test-store-guards.mjs server/test-store-import.mjs server/test-store-ops.mjs server/test-store.mjs server/test-tenancy.mjs server/test-workspace.mjs tools/test-adapt.mjs tools/test-backend-validate.mjs tools/test-blast-radius.mjs tools/test-build-editor.mjs tools/test-build-info.mjs tools/test-build-model.mjs tools/test-chain-history.mjs tools/test-compile.mjs tools/test-contract-guard.mjs tools/test-contract-shapes.mjs tools/test-crawl.mjs tools/test-crawl-alerting-rules.mjs tools/test-deploy-manifests.mjs tools/test-design-system.mjs tools/test-diagnostic-grade.mjs tools/test-diff.mjs tools/test-discover-rows.mjs tools/test-fetch-live.mjs tools/test-gen-pack.mjs tools/test-gen-site.mjs tools/test-golden-compile.mjs tools/test-golden-crawl.mjs tools/test-inventory-coverage.mjs tools/test-journey-notify.mjs tools/test-journey.mjs tools/test-legacy-pack.mjs tools/test-library.mjs tools/test-metric-readers.mjs tools/test-mini-yaml.mjs tools/test-neuron-model.mjs tools/test-packs.mjs tools/test-profiles.mjs tools/test-promql-canon.mjs tools/test-promql.mjs tools/test-record-fixtures.mjs tools/test-retrofeed.mjs tools/test-scan-live.mjs tools/test-schedule-snippets.mjs tools/test-schedule.mjs tools/test-service-keys.mjs tools/test-stack-evidence.mjs tools/test-stack-self-metrics.mjs tools/test-studio-graph.mjs tools/test-studio-layout.mjs tools/test-svg-charts.mjs tools/test-traceability-graph.mjs tools/test-ux-kit.mjs tools/test-validator.mjs tools/test-verify-deploy.mjs tools/test-zip.mjs",
     "lint": "eslint .",
     "coverage": "c8 npm test",
     "sync-spec": "node tools/sync-spec.mjs",
@@ -162,7 +164,7 @@
     "grafana",
     "alertmanager",
     "spec",
-    "v1.3"
+    "v1.4"
   ],
   "devDependencies": {
     "@eslint/js": "^10.0.1",

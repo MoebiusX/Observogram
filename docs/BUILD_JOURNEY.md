@@ -308,7 +308,7 @@ packc init --entry <id>[,<id>] --tier tier-2 --name <svc> [--env <env>] [--owner
 ```
 
 YAML to stdout (or `--out`), the todo list, the warnings and the conformance line to
-stderr; exit `0` ok, `1` the produced pack does not validate against the v1.3 schema (a
+stderr; exit `0` ok, `1` the produced pack does not validate against the v1.4 schema (a
 section toggled off), fails a MUST clause of its tier (a `--slis` selection with no
 latency SLO at tier-2: `packc journey`'s "gate failed", so a CI caller can tell `MUST
 14/15` from `15/15`), an SLI is not valid PromQL once the `--param` values are in, or an
@@ -975,6 +975,11 @@ the metric; the CLI).
   registry, promoting `semconv` / `upstream-docs` evidence to a recorded one per
   deployment; library-upgrade proposals in Remediate (a pack whose `library.source`
   is behind the shipped entry version gets the diff as a remediation).
+- **Updating a pack that exists.** Build cannot open a pack once it is registered:
+  the draft holds inputs only, and a second SLO on an SLI, a burn alert with its
+  own windows and a fourth route are outside what the generator writes. The
+  journey for it — *Build or update a pack* — is proposed in
+  [`UPDATE_JOURNEY.md`](UPDATE_JOURNEY.md).
 
 ## Open questions
 

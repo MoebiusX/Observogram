@@ -1,0 +1,36 @@
+groups:
+  - name: payments.slo
+    interval: 30s
+    rules:
+      - record: payments:availability:good_5m
+        expr: sum(rate(http_requests_total{service="payments",code!~"5.."}[5m]))
+      - record: payments:availability:total_5m
+        expr: sum(rate(http_requests_total{service="payments"}[5m]))
+      - record: payments:availability:ratio_5m
+        expr: payments:availability:good_5m / payments:availability:total_5m
+      - record: payments:latency:p99_5m
+        expr: histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service="payments"}[5m])) by (le))
+  - name: payments.alerts
+    rules:
+      - alert: PaymentsAvailabilityBurnFast
+        expr: payments:availability:ratio_5m < 0.99
+        for: 2m
+        labels:
+          severity: critical
+          team: payments
+      - alert: PaymentsPodRestarting
+        expr: increase(kube_pod_container_status_restarts_total{namespace="payments"}[15m]) > 3
+        for: 10m
+        labels:
+          severity: warning
+          team: payments
+        annotations:
+          summary: "payments pod restarted more than 3 times in 15m"
+          runbook_url: "https://runbooks.example.internal/payments/pod-restarts"
+      - alert: PaymentsDbPoolSaturated
+        expr: sum(pg_stat_activity_count{datname="payments"}) / sum(pg_settings_max_connections{datname="payments"}) > 0.9
+        for: 300s
+        labels:
+          severity: critical
+        annotations:
+          summary: "payments connection pool above 90% for 5m — see the runbook:"

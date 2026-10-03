@@ -25,6 +25,7 @@ import { parse as parseYaml, parseAll as parseYamlAll, emit as emitYaml } from '
 import {
   inferSlisFromRecordingRules, ruleNameToSliId,
   burnCandidateFromAlertRule, recordedSloForExpr, mergeBurnAlertsBySlo, defaultBurnWindows,
+  operationalAlertRules, isGrafanaManagedRule, alertRuleExpr,
 } from './sli-inference.mjs';
 import { materializeL2XFromBackends } from './l2x.mjs';
 import { routesFromAlertmanagerConfig } from './alert-routes.mjs';
@@ -219,6 +220,9 @@ export function detectArtefactKind(relPath, content) {
   if (/alertmanager(\.config)?\.ya?ml$/.test(lower))              return 'alertmanager';
   if (/(^|\/)(otel|otelcol|collector)[-_a-z]*\.ya?ml$/.test(lower)) return 'otel-collector';
   if (/(rules?|alerts?|recording|burn[-_ ]?rate)\.ya?ml$/.test(lower)) return 'prometheus-rules';
+  // Grafana unified-alerting provisioning (`provisioning/alerting/<file>.yaml`):
+  // rule groups of `title` + `data[]` rules, walked by the rules walker.
+  if (/(^|\/)provisioning\/alerting\/[^/]+\.ya?ml$/.test(lower))        return 'prometheus-rules';
 
   // Content sniff fallback.
   let obj;
@@ -226,7 +230,7 @@ export function detectArtefactKind(relPath, content) {
   if (!obj || typeof obj !== 'object') return 'unknown';
 
   if (obj.groups && Array.isArray(obj.groups)
-      && obj.groups.some(g => g.rules?.some(r => 'record' in r || 'alert' in r))) {
+      && obj.groups.some(g => g.rules?.some(r => r && typeof r === 'object' && ('record' in r || 'alert' in r || isGrafanaManagedRule(r))))) {
     return 'prometheus-rules';
   }
   if (Array.isArray(obj.scrape_configs)
@@ -449,7 +453,7 @@ export function crawlFiles(filesInput, opts = {}) {
       diffScopeMode,
     },
     discovered: {
-      backends: 0, recordingRules: 0, burnRateAlerts: 0,
+      backends: 0, recordingRules: 0, burnRateAlerts: 0, alertRules: 0,
       metricDefinitions: 0, scrapeJobs: 0,
       pipelines: 0, dashboards: 0, alertingRoutes: 0,
       extendedSurfaces: 0,
@@ -467,6 +471,7 @@ export function crawlFiles(filesInput, opts = {}) {
   const backends = [];
   const recordingRules = [];
   const burnRateAlerts = [];
+  const alertRules = [];       // every alert rule found, raw, with its file and group (classified below)
   const metricDefinitions = [];
   const scrapeJobs = [];
   const dashboards = [];
@@ -500,14 +505,14 @@ export function crawlFiles(filesInput, opts = {}) {
     try {
       switch (f.kind) {
         case 'docker-compose':   walkDockerCompose(f, backends, pipelines, evidence, summary); break;
-        case 'prometheus-rules': walkPrometheusRules(f, recordingRules, burnRateAlerts, metricDefinitions, evidence, summary); break;
+        case 'prometheus-rules': walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary); break;
         case 'prometheus-scrape-config': walkPrometheusScrapeConfig(f, scrapeJobs, evidence, summary); break;
         case 'actuator-metrics-config': walkActuatorMetricsConfig(f, scrapeJobs, evidence, summary, repoName); break;
         case 'metric-source-code': walkMetricSourceCode(f, metricDefinitions, evidence, summary, repoName); break;
         case 'alertmanager':     walkAlertmanager(f, alertingRoutes, evidence, summary); break;
         case 'otel-collector':   walkOtelCollector(f, pipelines, evidence, summary); break;
         case 'grafana-dashboard':walkGrafanaDashboard(f, dashboards, metricDefinitions, evidence, summary); break;
-        case 'helm-template':    walkHelmTemplate(f, { backends, recordingRules, burnRateAlerts, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, repoName }, evidence, summary); break;
+        case 'helm-template':    walkHelmTemplate(f, { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, repoName }, evidence, summary); break;
         case 'helm-values':      walkHelmValues(f, backends, pipelines, evidence, summary, disabledComponents); break;
         case 'k8s-workload':     walkK8sWorkload(f, backends, pipelines, evidence, summary); break;
         // Chart.yaml itself carries no observability contracts — the payloads
@@ -579,17 +584,43 @@ export function crawlFiles(filesInput, opts = {}) {
     }
   }
 
-  // Drop operational (non-SLO) alerts, then fold the remaining burn-rate
-  // alerts that now share a recording-rule SLO into one entry per SLO,
-  // unioning their windows so the emitted policy stays valid.
-  const droppedOps = burnRateAlerts.filter(a => a._drop).length;
-  if (droppedOps) {
-    summary.warnings.push(`Excluded ${droppedOps} operational alert(s) from burn-rate policy — not SLO burn-rate alerts (no recorded-ratio reference). They remain available as alerting signals.`);
-  }
+  // Take the operational (non-SLO) alerts out of the burn-rate policy, then
+  // fold the remaining burn-rate alerts that now share a recording-rule SLO
+  // into one entry per SLO, unioning their windows so the emitted policy
+  // stays valid.
   for (let i = burnRateAlerts.length - 1; i >= 0; i--) {
     if (burnRateAlerts[i]._drop) burnRateAlerts.splice(i, 1);
   }
   mergeBurnAlertsBySlo(burnRateAlerts);
+
+  // The operational alerts are not lost: spec 1.4 keeps them in
+  // spec.alerting.rules, one entry per rule with its EXACT name (the key a
+  // live Grafana or ruler listing is reconciled on), its expression, wait,
+  // labels, annotations, the engine that evaluates it and where it was read
+  // from (sli-inference.mjs operationalAlertRule — the reading the live
+  // fetcher applies to a ruler's rules). The classification is the one
+  // above, exactly: a rule whose expression references a recorded SLO
+  // series is a burn-rate alert and stays in the policy; every other rule
+  // is operational, when the repo records SLIs at all — a repo with no
+  // recording rules still reads every alert as an SLO contract (the tier-3
+  // fallback), and then declares no operational rules.
+  const ruleMeta = new Map(alertRules.map(r => [r.rule, r]));
+  const operational = haveRecordedSlis
+    ? operationalAlertRules(alertRules.map(r => r.rule), (id) => sloMap.has(id), {
+      engineOf: (rule) => alertRuleEngine(rule, ruleMeta.get(rule)?.relPath),
+      sourceOf: (rule) => ruleMeta.get(rule)?.source,
+    })
+    : { kept: [], skipped: [] };
+  summary.discovered.alertRules = operational.kept.length;
+  if (operational.kept.length) {
+    const names = operational.kept.map(r => r.name);
+    const shown = names.slice(0, 8).join(', ') + (names.length > 8 ? `, … (${names.length - 8} more)` : '');
+    summary.warnings.push(`${operational.kept.length} operational alert rule(s) kept in alerting.rules — not SLO burn-rate alerts (no recorded-ratio reference): ${shown}. ${burnRateAlerts.length} burn-rate alert(s) in policy.burn_rate_alerts.`);
+  }
+  if (operational.skipped.length) {
+    summary.warnings.push(`${operational.skipped.length} alert rule(s) state no expression and are not declared: ${operational.skipped.slice(0, 8).join(', ')}.`);
+  }
+  operational.kept.forEach((r, i) => { evidence[`RULE-${i + 1}`] = r.source; });
 
 
   // If still no SLI/SLO discovered, fill the minimum tier-3 stub so the
@@ -785,7 +816,11 @@ export function crawlFiles(filesInput, opts = {}) {
       queries: { recording_rules: recordingRules },
       dashboards,
       policy: { burn_rate_alerts: burnRateAlerts.map(({ slo, windows }) => ({ slo, windows })) },
-      alerting: { routes: alertingRoutes },
+      alerting: {
+        routes: alertingRoutes,
+        // Absent means "no operational rules" (spec 1.4): the key appears only when there are some.
+        ...(operational.kept.length ? { rules: operational.kept } : {}),
+      },
       baselines,
       validation: {
         synthetic_checks: [{
@@ -1617,10 +1652,10 @@ function walkK8sWorkload(f, backends, pipelines, evidence, summary) {
 // like a rule shipped as a standalone file. If the template embeds nothing, we
 // strip the scaffolding and treat the document itself as a single manifest.
 function walkHelmTemplate(f, buckets, evidence, summary) {
-  const { backends, recordingRules, burnRateAlerts, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, repoName } = buckets;
+  const { backends, recordingRules, burnRateAlerts, alertRules, metricDefinitions, scrapeJobs, alertingRoutes, dashboards, pipelines, repoName } = buckets;
   const route = (kind, sub) => {
     switch (kind) {
-      case 'prometheus-rules': walkPrometheusRules(sub, recordingRules, burnRateAlerts, metricDefinitions, evidence, summary); return true;
+      case 'prometheus-rules': walkPrometheusRules(sub, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary); return true;
       case 'prometheus-scrape-config': walkPrometheusScrapeConfig(sub, scrapeJobs, evidence, summary); return true;
       case 'actuator-metrics-config': walkActuatorMetricsConfig(sub, scrapeJobs, evidence, summary, repoName); return true;
       case 'alertmanager':     walkAlertmanager(sub, alertingRoutes, evidence, summary); return true;
@@ -1721,62 +1756,128 @@ function inferEndpoint(svc, product) {
   return null;
 }
 
-function walkPrometheusRules(f, recordingRules, burnRateAlerts, metricDefinitions, evidence, summary) {
-  let any = false;
+// A LogQL condition: a stream selector (`{app="x"}`) that is not a metric's
+// label matcher — it opens the expression or follows an operator / paren —
+// and is followed by a line filter (`|=`, `|~`, `!=`, `!~`), a parser stage
+// (`| json`, `| logfmt`, …) or a range (`[5m]`), as `rate({app="x"}[5m])` is.
+const LOGQL_STAGE_RE = /\{[^}]*\}\s*(?:\|[=~]|![=~]|\|\s*(?:json|logfmt|pattern|regexp|unpack|unwrap|line_format|label_format|drop|keep|decolorize)\b)/;
+const LOGQL_RANGE_RE = /(?:^|[(\s,])\{[^}]*\}\s*\[/;
+function looksLikeLogQL(expr) {
+  const e = String(expr || '');
+  return LOGQL_STAGE_RE.test(e) || LOGQL_RANGE_RE.test(e);
+}
+
+// The engine that evaluates an alert rule, in the Product registry's words
+// (spec 1.4 $defs/AlertEngine): a Grafana-managed rule by its shape
+// (`title` + `data[]`), a Loki rule by the path it ships under or by its
+// LogQL, everything else the Prometheus rule-file format — `prometheus`,
+// the default, since a rule file cannot tell a Prometheus ruler from a
+// Mimir, Thanos or VictoriaMetrics one (the backends do).
+function alertRuleEngine(rule, relPath) {
+  if (isGrafanaManagedRule(rule)) return 'grafana';
+  if (/(^|[/_.-])loki([/_.-]|$)/i.test(String(relPath || '')) || looksLikeLogQL(alertRuleExpr(rule))) return 'loki';
+  return 'prometheus';
+}
+
+// The PromQL a Grafana unified-alerting rule evaluates. A provisioned rule
+// carries no `expr`; its queries sit in `data[].model`, one entry per
+// datasource query or expression node. The model is a mapping in Grafana's
+// own export and a JSON string in files written by other tooling (the HTTP
+// provisioning API, Terraform). Returns the first query model's `expr`, or
+// null when the rule states none. Throws when a model is a JSON string that
+// does not parse: that rule cannot be read, the caller decides what to do.
+function grafanaRuleExpr(rule) {
+  if (!Array.isArray(rule?.data)) return null;
+  for (const item of rule.data) {
+    let model = item?.model;
+    if (typeof model === 'string') {
+      try { model = JSON.parse(model); }
+      catch (e) { throw new Error(`model JSON could not be parsed (${e.message})`, { cause: e }); }
+    }
+    if (model && typeof model.expr === 'string' && model.expr.trim()) return model.expr;
+  }
+  return null;
+}
+
+function walkPrometheusRules(f, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary) {
+  // A rule that cannot be read is skipped on its own; the file and its other
+  // rules survive, and one warning per file says how many were lost and why.
+  let ruleCount = 0;
+  const skipped = [];
   for (const obj of parseYamlDocs(f.content)) {
     if (!Array.isArray(obj.groups)) continue;
-    any = true;
     for (const group of obj.groups) {
       for (const rule of group.rules || []) {
-        if (rule.record) {
-          const id = `QRY-${recordingRules.length + 1}-${slug(rule.record).slice(0, 16)}`;
-          const expr = typeof rule.expr === 'string' ? rule.expr : String(rule.expr || '');
-          const entry = {
-            name: rule.record,
-            expr,
-          };
-          if (group.interval) entry.interval = group.interval;
-          recordingRules.push(entry);
-          evidence[id] = `${f.relPath}#${group.name || '_'}/${rule.record}`;
-          summary.discovered.recordingRules++;
-          const origin = `${f.relPath}#${group.name || '_'}/${rule.record}`;
-          addRecordingRuleOutputMetric(metricDefinitions, evidence, summary, rule, {
-            origin,
-            expr,
-            usedBy: `recording_rule:${rule.record}`,
-          });
-          addPromqlMetricReferences(metricDefinitions, evidence, summary, expr, {
-            kind: 'recording-rule',
-            name: rule.record,
-            origin,
-            usedBy: `recording_rule:${rule.record}`,
-          });
-        } else if (rule.alert || rule.title) {
-          // `rule.alert` is the Prometheus form; `rule.title` is the Grafana
-          // unified-alerting form (provisioned alert rules). Both target an
-          // SLO we synthesize from the alert name.
-          // The entry an alert starts as, and later the SLO it binds to, are
-          // the shared derivation (sli-inference.mjs) the live fetcher applies
-          // to the ruler's rules: one rule set, one policy.
-          const candidate = burnCandidateFromAlertRule(rule);
-          const { alertName, expr } = candidate;
-          if (!burnRateAlerts.some(a => a.slo === candidate.slo)) {
-            burnRateAlerts.push(candidate);
-            const id = `pol-${burnRateAlerts.length}`;
-            evidence[id] = `${f.relPath}#${group.name || '_'}/${alertName}`;
-            summary.discovered.burnRateAlerts++;
-            addPromqlMetricReferences(metricDefinitions, evidence, summary, expr, {
-              kind: 'alert-rule',
-              name: alertName,
-              origin: `${f.relPath}#${group.name || '_'}/${alertName}`,
-              usedBy: `alert:${alertName}`,
-            });
-          }
+        ruleCount++;
+        try {
+          walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary);
+        } catch (e) {
+          skipped.push(e?.message || String(e));
         }
       }
     }
   }
-  if (!any) return;
+  if (skipped.length) {
+    const reason = skipped.every(m => /^model JSON could not be parsed/.test(m))
+      ? 'model JSON could not be parsed'
+      : skipped[0];
+    summary.warnings.push(`Skipped ${skipped.length} of ${ruleCount} alert rule(s) in ${f.relPath}: ${reason}`);
+  }
+}
+
+function walkPrometheusRule(f, group, rule, recordingRules, burnRateAlerts, alertRules, metricDefinitions, evidence, summary) {
+  if (rule.record) {
+    const id = `QRY-${recordingRules.length + 1}-${slug(rule.record).slice(0, 16)}`;
+    const expr = typeof rule.expr === 'string' ? rule.expr : String(rule.expr || '');
+    const entry = {
+      name: rule.record,
+      expr,
+    };
+    if (group.interval) entry.interval = group.interval;
+    recordingRules.push(entry);
+    evidence[id] = `${f.relPath}#${group.name || '_'}/${rule.record}`;
+    summary.discovered.recordingRules++;
+    const origin = `${f.relPath}#${group.name || '_'}/${rule.record}`;
+    addRecordingRuleOutputMetric(metricDefinitions, evidence, summary, rule, {
+      origin,
+      expr,
+      usedBy: `recording_rule:${rule.record}`,
+    });
+    addPromqlMetricReferences(metricDefinitions, evidence, summary, expr, {
+      kind: 'recording-rule',
+      name: rule.record,
+      origin,
+      usedBy: `recording_rule:${rule.record}`,
+    });
+  } else if (rule.alert || rule.title) {
+    // `rule.alert` is the Prometheus form; `rule.title` is the Grafana
+    // unified-alerting form (provisioned alert rules). Both target an
+    // SLO we synthesize from the alert name.
+    // The entry an alert starts as, and later the SLO it binds to, are
+    // the shared derivation (sli-inference.mjs) the live fetcher applies
+    // to the ruler's rules: one rule set, one policy.
+    const grafanaExpr = typeof rule.expr === 'string' ? null : grafanaRuleExpr(rule);
+    const read = grafanaExpr === null ? rule : { ...rule, expr: grafanaExpr };
+    const candidate = burnCandidateFromAlertRule(read);
+    const { alertName, expr } = candidate;
+    // Every alert rule that reads is kept raw as well, with where it was
+    // read from: the ones that turn out to guard no SLO are declared in
+    // alerting.rules (crawlFiles), name for name. A rule skipped above
+    // (its model could not be read) is not declared either.
+    alertRules.push({ rule: read, relPath: f.relPath, source: `${f.relPath}#${group.name || '_'}/${alertName}` });
+    if (!burnRateAlerts.some(a => a.slo === candidate.slo)) {
+      burnRateAlerts.push(candidate);
+      const id = `pol-${burnRateAlerts.length}`;
+      evidence[id] = `${f.relPath}#${group.name || '_'}/${alertName}`;
+      summary.discovered.burnRateAlerts++;
+      addPromqlMetricReferences(metricDefinitions, evidence, summary, expr, {
+        kind: 'alert-rule',
+        name: alertName,
+        origin: `${f.relPath}#${group.name || '_'}/${alertName}`,
+        usedBy: `alert:${alertName}`,
+      });
+    }
+  }
 }
 
 function walkPrometheusScrapeConfig(f, scrapeJobs, evidence, summary) {

@@ -122,7 +122,10 @@ export function adapt(canonical, opts = {}) {
         ...adaptBurnRateAlerts(ctx),
         ...adaptForecasts(ctx),
       ],
-      alerting: adaptAlertingRoutes(ctx),
+      alerting: [
+        ...adaptAlertingRoutes(ctx),
+        ...adaptAlertRules(ctx),
+      ],
       healing: adaptRemediation(ctx),
     },
     L5: [
@@ -701,6 +704,38 @@ function adaptAlertingRoutes(ctx) {
       tags: ['routing', r.severity, ...channelKinds],
       source: ctx.sourceOf(`alerting.routes[${i}]`),
       spec: r,
+    };
+  });
+}
+
+// Operational (non-SLO) alert rules, spec 1.4 alerting.rules[] (RFC-0003):
+// one artefact per rule, titled by the rule's exact name — the key the
+// artefact model pairs on (alert_rule identity = name), so a rule the
+// crawler read from a repository and the same rule a live Grafana or ruler
+// reports are one artefact in a comparison. `tool` names the evaluator the
+// way the operator renders rules: a PrometheusRule for the PromQL rulers,
+// Grafana alerting for a Grafana-managed rule, the Loki ruler for LogQL.
+const ALERT_RULE_TOOL = {
+  prometheus: 'PrometheusRule', mimir: 'PrometheusRule', thanos: 'PrometheusRule', victoriametrics: 'PrometheusRule',
+  loki: 'Loki ruler', grafana: 'Grafana alerting', alertmanager: 'Alertmanager',
+};
+function adaptAlertRules(ctx) {
+  return (ctx.spec.alerting?.rules || []).map((r, i) => {
+    const engine = r.engine || 'prometheus';   // absent means prometheus (spec 1.4)
+    return {
+      id: `RULE-${pad(i + 1)}`,
+      title: r.name,
+      desc: [
+        `${engine} alert rule`,
+        r.for ? `for ${r.for}` : null,
+        r.severity ? r.severity : null,
+        r.labels?.severity && r.labels.severity !== r.severity ? `labels.severity ${r.labels.severity}` : null,
+      ].filter(Boolean).join(' · '),
+      tool: ALERT_RULE_TOOL[engine] || 'PrometheusRule',
+      tags: ['alert-rule', engine, r.severity].filter(Boolean),
+      source: ctx.sourceOf(`alerting.rules[${i}]`),
+      spec: r,
+      mcp: ctx.mcpEvidence(`alerting.rules[${i}]`),
     };
   });
 }
