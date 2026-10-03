@@ -1197,6 +1197,8 @@ build): a rollback that only **read** packs (0.5.0 rewrites `lastUsedAt`
 on every read) or restarted starts, with one log line — `[store] <path>
 was rewritten by a build before slice 4 (lastUsedAt only — bookkeeping,
 not a change); the store's registry stands` — and nothing written; one
+that only **adopted** files the same, with its own parenthesis — `(it
+says exactly what the store holds — bookkeeping, not a change)`; one
 that **registered, relabelled, removed or RESET** packs refuses (see
 [Stale Import](#stale-import)): `packc store import --replace` takes the
 file's entries into the store, or put the file back, or move it aside.
@@ -1306,12 +1308,14 @@ belong together. Each refusal says `Nothing was …` and names its ways out:
 - **`packs/index.json` changed after the import or the export** — compared
   per org root, **without `lastUsedAt`**: an older build rewrites that
   field on every pack read, and a read is not an edit, so that rewrite
-  (or a file that says exactly what the store holds — an entry the older
-  build only adopted, no label and source `workspace`, for a pack the store
-  holds counts as the store's row) is logged — `[store]
-  <path> was rewritten by a build before slice 4 (lastUsedAt only —
-  bookkeeping, not a change); the store's registry stands` — and never
-  refused. An entry added, dropped or relabelled is: `<path> changed since
+  is logged — `[store] <path> was rewritten by a build before slice 4
+  (lastUsedAt only — bookkeeping, not a change); the store's registry
+  stands` — and never refused. A file that says exactly what the store
+  holds (an entry the older build only adopted, no label and source
+  `workspace`, for a pack the store holds counts as the store's row) is
+  logged the same way with its own parenthesis — `(it says exactly what
+  the store holds — bookkeeping, not a change)` — and never refused. An
+  entry added, dropped or relabelled is: `<path> changed since
   store <id> last imported or exported it: a build before slice 4
   registered, relabelled or removed a pack during a rollback (the registry
   it wrote: 4 entries, the store's: 3)`. Its ways out, with the server
