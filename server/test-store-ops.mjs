@@ -873,6 +873,37 @@ test('in place: refused while the store is in use, before the server first start
   await assert.rejects(exportStore(base, { dbPath: ':memory:', base, out: silent }), refused(/:memory:/));
 });
 
+// A store a 0.5.0 build left (import_done set, the pack registry still in
+// packs/index.json: packs_imported unset, no pack row) whose only start of
+// this build was refused before step 5 — README's rollback drill runs the
+// export first: with no rows the reconcile would adopt every file label-null
+// and overwrite the labels' only copy.
+test('in place: refused while the pack registry is still only in packs/index.json (packs_imported unset) — the file keeps its labels, the next start imports them and the export then passes', async () => {
+  const refused = (re) => (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && re.test(e.message);
+  const base = tempDir();
+  usersJson(base, ['alice']);
+  pack(base, 'payments');
+  const labelled = JSON.stringify({ payments: { label: 'Payments scan', source: 'upload', createdAt: 1700000000000, lastUsedAt: 1700000000000 } });
+  writeFileSync(join(base, 'packs', 'index.json'), labelled);
+  await start(base);
+  await change(base, (db) => tx(db, () => {     // back to what 0.5.0 leaves: rows gone, the registry never imported
+    runWithOrg('default', () => packsRepo.clearPacks(db, 'cli'));
+    meta.putMeta(db, 'packs_imported', null);
+    meta.putMeta(db, 'pack_index_hashes', null);
+  }));
+  writeFileSync(join(base, 'packs', 'index.json'), labelled);
+
+  const idx = join(base, 'packs', 'index.json');
+  await assert.rejects(exportIt(base), refused(new RegExp(`has not imported its pack registry \\(packs_imported is unset\\): ${idx.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} holds the labels .* Nothing was changed\\. Start the server once`)));
+  assert.equal(readFileSync(idx, 'utf8'), labelled, 'the 0.5.0 index is untouched');
+  await read(base, (db) => { assert.equal(meta.getMeta(db, 'packs_imported'), null); assert.deepEqual(packRows(db, 'default'), []); });
+
+  await start(base);                             // step 5 takes the registry in, with its label
+  await read(base, (db) => assert.deepEqual(packRows(db, 'default'), [['payments', 'Payments scan', 'upload']]));
+  await exportIt(base);
+  assert.deepEqual(Object.entries(readIndex(idx)).map(([id, e]) => [id, e.label, e.source]), [['payments', 'Payments scan', 'upload']]);
+});
+
 test('in place: a markerless workspace holding another store\'s database is refused naming it — nothing moved or written; the ways out it names work', async () => {
   const s1 = tempDir();
   usersJson(s1, ['alice']);

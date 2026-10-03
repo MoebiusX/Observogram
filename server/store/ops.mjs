@@ -265,6 +265,21 @@ export function planExport(db, { inPlace, target, base }) {
   // orgs.json: when the deployment had one, has more than one live org, or
   // keeps the default org anywhere but the workspace root (A-30).
   const live = listOrgs(db);
+  // A store whose pack registry is still in the files (import_done set by
+  // a build before slice 4, and this build's step 5 never ran — its only
+  // start was refused earlier, or there was none): an org root's
+  // packs/index.json holds the only copy of the labels, and the reconcile
+  // below, with no rows, would adopt every file label-null over it. Refused
+  // as the identity half is: start the server once.
+  if (inPlace && !getMeta(db, 'packs_imported')) {
+    const pending = live.map((org) => join(base, org.root, 'packs', 'index.json')).filter((p) => lexists(p));
+    if (pending.length) {
+      throw refuse(`store ${id} has not imported its pack registry (packs_imported is unset): ${pending.join(', ')} `
+        + `${pending.length === 1 ? 'holds' : 'hold'} the labels the store has no rows for yet, and an in-place export writes `
+        + `${pending.length === 1 ? 'it' : 'them'} from the rows. Nothing was changed. Start the server once with its environment, `
+        + 'so the store takes the registry in, then export again; or export to a directory');
+    }
+  }
   const atRoot = live.find((o) => o.root === '.') ?? null;
   const report = getMetaJson(db, 'import_report', null);
   const writeOrgs = !!report?.orgsJson || live.length > 1 || !atRoot;

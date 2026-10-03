@@ -1168,7 +1168,10 @@ What the export writes:
 but keeps the pack registry in `packs/index.json`) the same way: stop the
 server, `packc store export <workspace>` in place as above — it writes
 each org root's `index.json` from the store's rows, so 0.5.0 finds every
-pack with its label and has nothing to adopt — then start the 0.5.0 image
+pack with its label and has nothing to adopt (while this build has never
+completed a start on the store, the registry is still only in the file
+and the export refuses naming it: start the server once first, or roll
+back without the export) — then start the 0.5.0 image
 on the same `OBSERVOGRAM_DB` and workspace. It needs no `users.json` /
 `orgs.json` (it reads the store; the export's files are harmless to it)
 and restarts as often as needed: it reads and rewrites `index.json` as it

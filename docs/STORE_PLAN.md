@@ -855,8 +855,11 @@ byte-level round trip.
   written goes into `pack_index_hashes`, never `legacy_hashes` or the
   marker; an index whose canonical form differs from the recorded hash is
   refused naming `import --replace`, as the identity files are, while one
-  that differs in `lastUsedAt` only is overwritten. A directory export
-  writes no index.
+  that differs in `lastUsedAt` only is overwritten. While `packs_imported`
+  is unset (a 0.5.0 store this build never completed a start on) an org
+  root's `index.json` is the registry's only copy, and the in-place export
+  refuses naming it ("start the server once"). A directory export writes
+  no index.
 - **`orgs.json`** is written only if the deployment had one or has more
   than one org.
   - Member keys are the pre-store session sub: the username, or the bare
