@@ -1196,7 +1196,9 @@ On the way back (stop 0.5.0, start this
 build): a rollback that only **read** packs (0.5.0 rewrites `lastUsedAt`
 on every read) or restarted starts, with one log line — `[store] <path>
 was rewritten by a build before slice 4 (lastUsedAt only — bookkeeping,
-not a change); the store's registry stands` — and nothing written; one
+not a change); the store's registry stands` — no row or file written,
+only the file's new byte hash recorded under `pack_index_hashes` so the
+line is said once, not at every start; one
 that only **adopted** files the same, with its own parenthesis — `(it
 says exactly what the store holds — bookkeeping, not a change)`; one
 that **registered, relabelled, removed or RESET** packs refuses (see
