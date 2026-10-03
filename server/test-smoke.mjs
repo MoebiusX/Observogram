@@ -1357,6 +1357,32 @@ try {
   const servicesAfterRegister = runWithOrg('default', () => listServices(currentStore())).map(s => s.slug);
   assert(servicesAfterRegister.includes(authRaw.metadata.bindings.service), 'the register created the service row the pack names', servicesAfterRegister, authRaw.metadata.bindings.service);
 
+  // The tier rule (STORE_PLAN slice 4 §9): the conformance report of an
+  // uploaded pack is graded at its service record's tier when one is set.
+  // No tier set: the pack's own, `tier.from: 'pack'` — the report as before
+  // but for the `tier` object. PATCH the service's tier: `declaredTier` is
+  // the graded tier, `tier.pack` the pack's own, `tier.mismatch` says they
+  // differ (shown, never blocked). Unset again before RESET.
+  const packTier = authRaw.metadata.bindings.criticality;
+  const ownConf = await getJson(base, `/api/packs/${registeredId}/conformance`);
+  const serviceRow = runWithOrg('default', () => listServices(currentStore())).find(s => s.slug === authRaw.metadata.bindings.service);
+  assert(JSON.stringify(ownConf.tier) === JSON.stringify({ graded: packTier, pack: packTier, from: 'pack', service: { id: serviceRow.id, slug: serviceRow.slug }, environment: null, mismatch: false })
+      && ownConf.declaredTier === packTier,
+    'conformance of an uploaded pack without a record tier: graded by the pack, tier.from pack', ownConf.tier, { graded: packTier, from: 'pack' });
+  const patchTier = (tier) => fetch(`${base}/api/services/${serviceRow.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tier }) }).then(r => r.json());
+  const patched = await patchTier('tier-2');
+  assert(patched.ok === true && patched.service?.tier === 'tier-2', 'PATCH /api/services/:id sets the record\'s tier', patched, { ok: true, tier: 'tier-2' });
+  const recordConf = await getJson(base, `/api/packs/${registeredId}/conformance`);
+  assert(recordConf.declaredTier === 'tier-2' && recordConf.tier?.graded === 'tier-2' && recordConf.tier.pack === packTier
+      && recordConf.tier.from === 'service' && recordConf.tier.mismatch === true && recordConf.tier.service?.slug === serviceRow.slug,
+    'conformance of an uploaded pack with a service tier: graded at the record\'s tier, declaredTier moves with it, mismatch shown',
+    recordConf.tier, { graded: 'tier-2', pack: packTier, from: 'service', mismatch: true });
+  assert(recordConf.clauses.filter(c => c.applies).length < ownConf.clauses.filter(c => c.applies).length, 'fewer clauses apply at tier-2 than at the pack\'s tier-1');
+  const catConf = await getJson(base, '/api/packs/payment-service/conformance');
+  assert(catConf.declaredTier === 'tier-1' && catConf.tier?.from === 'pack' && catConf.tier.service === null, 'the catalogue pack has no record: graded by itself', catConf.tier, { from: 'pack', service: null });
+  const unset = await patchTier(null);
+  assert(unset.ok === true && unset.service?.tier === null, 'PATCH /api/services/:id { tier: null }: graded by the pack again', unset, { ok: true, tier: null });
+
   // DELETE /api/uploads clears the rows and the disk copies too — reset
   // means reset — but keeps the services the packs named (RESET is the
   // browser's working set, not the org's services).

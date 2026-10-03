@@ -79,6 +79,7 @@ const { listServicesForPack } = await import('./store/pack-services.mjs');
 const { WAYS, serviceTierFor } = await import('./service-admin.mjs');
 const { envNameOwnerText, envNameShapeText } = await import('./store/mcp-endpoints.mjs');
 const { routeEntry } = await import('./route-table.mjs');
+const { evaluateConformance } = await import('../tools/lib/conformance.mjs');
 const { parse: parseYaml } = await import('../tools/lib/mini-yaml.mjs');
 const serviceKeys = await import('../tools/lib/service-keys.mjs');
 
@@ -775,6 +776,75 @@ test('the reconcile (A5): a pack re-registered byte-identical as a live aggregat
   const { tiles, rows } = await tilesAndRows();
   assert.deepEqual(rows, tiles);
   assert.ok(tiles.includes('billing') && tiles.includes('refunds') && !tiles.includes('ledger'), tiles);
+});
+
+// ---------- the tier rule (design §9): the conformance report is graded at the record's tier ----------
+
+// The report's own keys (environment and tier aside), for a byte-equal check
+// against tools/lib/conformance.mjs grading the same canonical in process.
+const reportOf = (json) => { const { environment, tier, ...report } = json; return { environment, tier, report }; };
+// A read of the route as `who` (200, no row — the report carries no `ok`): its JSON.
+async function conformance(who, path) {
+  const seq = seqNow();
+  const r = await call(who, 'GET', path);
+  assert.equal(r.status, 200, `${path} as ${who}: ${r.text.slice(0, 300)}`);
+  assert.deepEqual(rowsAfter(seq), [], 'a read writes no row');
+  return r.json;
+}
+
+test('GET /api/packs/:id/conformance grades an uploaded pack at its service record\'s tier — the pack\'s own without one (byte-equal to the scorer), the service\'s, the environment\'s for ?env=; declaredTier is the graded tier and tier.mismatch says it differs; a catalogue pack has no record; a viewer reads all of it', async () => {
+  // A fresh pack naming a fresh service (the demo record above already carries a tier).
+  const tiered = { ...DEMO, metadata: { ...DEMO.metadata, name: 'tiered-skeleton', bindings: { ...DEMO.metadata.bindings, service: 'tiered' } } };
+  const reg = await call('oscar', 'POST', '/api/validate', JSON.stringify(tiered), { 'Content-Type': 'application/json' });
+  assert.equal(reg.status, 200, reg.text.slice(0, 300));
+  const packId = reg.json.registered.id;
+  const svc = (await ok('GET /api/services', 'vera', '/api/services')).json.services.find((s) => s.slug === 'tiered');
+  assert.deepEqual([svc.tier, svc.environments.map((e) => [e.name, e.tier])], [null, [['prod', null]]], 'the register sets no tier');
+  const prodId = svc.environments[0].id;
+  const record = { service: { id: svc.id, slug: 'tiered' }, environment: null };
+
+  // No tier set anywhere: graded by the pack, as every pack was before — the report byte-equal to the scorer's.
+  const { environment, tier, report } = reportOf(await conformance('vera', `/api/packs/${packId}/conformance`));
+  assert.deepEqual([environment, tier], [null, { graded: 'tier-3', pack: 'tier-3', from: 'pack', ...record, mismatch: false }]);
+  assert.deepEqual(report, evaluateConformance(tiered), 'the report is the scorer\'s own over the pack');
+  assert.equal(tier.graded, report.declaredTier);
+  const applied = report.clauses.filter((c) => c.applies).length;
+
+  // The service's tier: graded there, mismatch shown (never blocked), more clauses apply at tier-1.
+  await ok('PATCH /api/services/:id', 'oscar', `/api/services/${svc.id}`, { tier: 'tier-1' });
+  const bySvc = reportOf(await conformance('vera', `/api/packs/${packId}/conformance`));
+  assert.deepEqual(bySvc.tier, { graded: 'tier-1', pack: 'tier-3', from: 'service', ...record, mismatch: true });
+  assert.equal(bySvc.report.declaredTier, 'tier-1', 'declaredTier is the graded tier');
+  assert.equal(bySvc.tier.graded, bySvc.report.declaredTier);
+  assert.ok(bySvc.report.clauses.filter((c) => c.applies).length > applied, 'more clauses apply at tier-1');
+  assert.deepEqual(bySvc.report, evaluateConformance({ ...tiered, metadata: { ...tiered.metadata, bindings: { ...tiered.metadata.bindings, criticality: 'tier-1' } } }),
+    'the scorer\'s own report at tier-1: tools/lib/conformance.mjs grades a copy of the pack with the record\'s tier');
+  const canonical = await call('vera', 'GET', `/api/packs/${packId}/canonical`);
+  assert.equal(canonical.json.metadata.bindings.criticality, 'tier-3', 'the registry\'s pack is not mutated');
+
+  // The environment's tier wins for ?env=; an env without a row (staging) falls back to the service's.
+  await ok('PATCH /api/environments/:id', 'oscar', `/api/environments/${prodId}`, { tier: 'tier-2' });
+  const byEnv = reportOf(await conformance('vera', `/api/packs/${packId}/conformance?env=prod`));
+  assert.deepEqual([byEnv.environment, byEnv.tier], ['prod', { graded: 'tier-2', pack: 'tier-3', from: 'environment', service: record.service, environment: { id: prodId, name: 'prod' }, mismatch: true }]);
+  assert.equal(byEnv.report.declaredTier, 'tier-2');
+  const staging = reportOf(await conformance('vera', `/api/packs/${packId}/conformance?env=staging`));
+  assert.deepEqual([staging.environment, staging.tier], ['staging', { graded: 'tier-1', pack: 'tier-3', from: 'service', ...record, mismatch: true }]);
+  // The record's tier equal to the pack's: graded from the record, no mismatch.
+  await ok('PATCH /api/services/:id', 'oscar', `/api/services/${svc.id}`, { tier: 'tier-3' });
+  const same = reportOf(await conformance('vera', `/api/packs/${packId}/conformance`));
+  assert.deepEqual(same.tier, { graded: 'tier-3', pack: 'tier-3', from: 'service', ...record, mismatch: false });
+  assert.deepEqual(same.report, report, 'byte-equal to the pack\'s own report');
+  // Unset again: graded by the pack.
+  await ok('PATCH /api/services/:id', 'oscar', `/api/services/${svc.id}`, { tier: null });
+  assert.deepEqual(reportOf(await conformance('vera', `/api/packs/${packId}/conformance`)).tier,
+    { graded: 'tier-3', pack: 'tier-3', from: 'pack', ...record, mismatch: false });
+
+  // A catalogue pack has no record: its own tier, service null.
+  const cat = await conformance('vera', '/api/packs/production-curated/conformance');
+  assert.deepEqual(cat.tier, { graded: cat.declaredTier, pack: cat.declaredTier, from: 'pack', service: null, environment: null, mismatch: false });
+  // Another org's member reads none of it: the pack is acme's.
+  const other = await call('bob', 'GET', `/api/packs/${packId}/conformance`);
+  assert.equal(other.status, 404);
 });
 
 // ---------- a service's deletion and the registry ----------
