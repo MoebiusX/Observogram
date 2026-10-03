@@ -858,8 +858,12 @@ byte-level round trip.
   that differs in `lastUsedAt` only is overwritten. While `packs_imported`
   is unset (a 0.5.0 store this build never completed a start on) an org
   root's `index.json` is the registry's only copy, and the in-place export
-  refuses naming it ("start the server once"). A directory export writes
-  no index.
+  refuses naming it ("start the server once"). The file is written before
+  the transaction that applies the adoptions and prunes (not after, as the
+  design first said): its content is the reconciled list the rows hold
+  once that transaction commits, the hash recorded is of the bytes
+  written, and no file I/O runs inside the transaction — the order the
+  identity files already use. A directory export writes no index.
 - **`orgs.json`** is written only if the deployment had one or has more
   than one org.
   - Member keys are the pre-store session sub: the username, or the bare

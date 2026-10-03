@@ -70,6 +70,16 @@
 //      'packs/index.json' key dropped when the default org moved), one
 //      store.export row;
 //   6. the marker (by 'export'; the identity files only — never a pack key).
+// Step 4's index files are written BEFORE step 5's tx applies the adoptions
+// and prunes — the design (§10.1) orders the rows first. The order here is
+// deliberate: the file's content is the plan's reconciled list, which is
+// exactly what the rows hold once the tx commits, so file and rows agree
+// either way; the hash recorded in the tx is of the bytes written; and no
+// file I/O runs inside tx(), as users.json / orgs.json already did not. A
+// kill between 4 and 5 leaves the file ahead of the rows, the same window
+// the identity files have, and the next boot's guard accepts it (adopted
+// files match the reference; a prune ahead of its row refuses naming
+// import --replace).
 // A failure in 2–5 undoes what ran from in-memory copies (renames back,
 // journey, legacy and index file contents restored) and says so.
 // A directory export writes no index and reconciles nothing: it carries no
