@@ -17,10 +17,15 @@
 // contributes (the SLO it guards, its window) is derived here too, so the
 // rules a repository declares and the rules a ruler reports turn into the
 // SAME spec.policy.burn_rate_alerts — see burnAlertsFromAlertRules below.
+// And the rules that guard no SLO — the operational alerts spec 1.4 keeps
+// in spec.alerting.rules — are read into that shape here as well
+// (operationalAlertRule), so a rule file and a ruler's listing of the same
+// rule become the same entry, name for name.
 //
 // Pure ESM, no Node APIs.
 
 import { symbolSlug } from './slug.mjs';
+import { normalizeSeverity } from './alert-routes.mjs';
 
 // `<service>:<metric>:<op>` — Prometheus recording-rule naming convention.
 const RULE_NAME_RE = /^([a-z][a-z0-9_]*):([a-z][a-z0-9_]*):([a-z0-9_]+)$/;
@@ -217,15 +222,125 @@ export function recordedSloForExpr(expr, hasSlo) {
   return null;
 }
 
+// Grafana expression-node types: a `data[]` node of one of these is a
+// reduce / math / threshold step over another node, not the query itself.
+const GRAFANA_EXPRESSION_TYPES = new Set(['reduce', 'math', 'threshold', 'classic_conditions', 'resample', 'sql']);
+
+/** A Grafana-managed (unified alerting) rule as provisioning YAML or the ruler API spells it: `title` + `data[]`. */
+export function isGrafanaManagedRule(rule) {
+  return !!rule && typeof rule === 'object' && typeof rule.title === 'string' && Array.isArray(rule.data);
+}
+
+// A Grafana data node's `model`: an object in provisioning YAML, sometimes a
+// JSON string on the wire. Unparseable is `null`, never a throw — one bad
+// node must not lose the rule.
+function grafanaModel(node) {
+  const m = node?.model;
+  if (m && typeof m === 'object') return m;
+  if (typeof m === 'string') { try { return JSON.parse(m); } catch { return null; } }
+  return null;
+}
+
+/**
+ * The condition an alerting rule evaluates, in the engine's own words.
+ * A Prometheus or Loki rule says it in `expr`. A Grafana-managed rule
+ * says it in its query node (`data[].model.expr`, the first node that is
+ * not an expression step); a rule built from expression nodes only has no
+ * query text, and its `condition` reference (`C`) stands for it, as spec
+ * 1.4 §5.8 allows. Empty when the rule states none.
+ */
+export function alertRuleExpr(rule) {
+  if (typeof rule?.expr === 'string' && rule.expr.trim()) return rule.expr;
+  if (rule?.expr != null && typeof rule.expr !== 'object') return String(rule.expr);
+  if (typeof rule?.query === 'string' && rule.query.trim()) return rule.query;
+  if (Array.isArray(rule?.data)) {
+    for (const node of rule.data) {
+      const model = grafanaModel(node);
+      if (!model || typeof model.expr !== 'string' || !model.expr.trim()) continue;
+      if (GRAFANA_EXPRESSION_TYPES.has(model.type) || node?.datasourceUid === '__expr__' || model.datasource?.uid === '__expr__') continue;
+      return model.expr;
+    }
+    if (typeof rule.condition === 'string' && rule.condition.trim()) return rule.condition.trim();
+    const first = rule.data.find(n => typeof n?.refId === 'string' && n.refId.trim())?.refId;
+    if (first) return first.trim();
+  }
+  return '';
+}
+
 /** The entry an alerting rule starts as, keyed by the id its NAME derives. */
 export function burnCandidateFromAlertRule(rule) {
   const alertName = rule?.alert || rule?.title || rule?.name || '';
   return {
     slo: symbolSlug(alertName).replace(/-burn-?rate.*$/, '_99'),
     windows: alertRuleWindows(rule),
-    expr: typeof rule?.expr === 'string' ? rule.expr : String(rule?.expr || ''),
+    expr: alertRuleExpr(rule),
     alertName,
   };
+}
+
+// A label / annotation map as the schema wants it: string values only.
+function stringMap(value) {
+  const out = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
+  for (const [k, v] of Object.entries(value)) {
+    if (v === null || v === undefined) continue;
+    out[k] = typeof v === 'string' ? v : typeof v === 'object' ? JSON.stringify(v) : String(v);
+  }
+  return out;
+}
+
+/**
+ * An operational (non-SLO) alert rule as spec 1.4 `alerting.rules[]`
+ * declares it, read from a rule as a rule file (`alert:` / `title:`) or a
+ * ruler (`name`, `query`, `duration`) spells it — the one reading for the
+ * repository and for live, so the two sides pair by name:
+ *   name        the rule's exact name (the join key; never slugged)
+ *   expr        alertRuleExpr: PromQL / LogQL, or a Grafana query node
+ *   severity    the pack's SEV1..SEV4 from labels.severity (normalizeSeverity),
+ *               only when the rule states a severity label
+ *   for         canonicalRuleDuration: `600s` in a file and `duration: 600`
+ *               from a ruler are one `10m`; none / zero is omitted
+ *   labels, annotations   verbatim (string values), the engine's severity
+ *               word among them
+ *   engine, source        what the caller knows: the evaluator and the
+ *               provenance (`<file>#<group>/<name>`)
+ * Null when the rule has no name or no expression — nothing to declare.
+ */
+export function operationalAlertRule(rule, { engine, source } = {}) {
+  const name = String(rule?.alert ?? rule?.title ?? rule?.name ?? '').trim();
+  const expr = alertRuleExpr(rule).trim();
+  if (!name || !expr) return null;
+  const out = { name, expr };
+  const labels = stringMap(rule?.labels);
+  const annotations = stringMap(rule?.annotations);
+  if (labels.severity) out.severity = normalizeSeverity(labels.severity);
+  const wait = canonicalRuleDuration(rule?.for ?? rule?.duration);
+  if (wait) out.for = wait;
+  if (Object.keys(labels).length) out.labels = labels;
+  if (Object.keys(annotations).length) out.annotations = annotations;
+  if (engine) out.engine = engine;
+  if (source) out.source = source;
+  return out;
+}
+
+/**
+ * Operational rules among `rules`: the ones whose expression references
+ * no recorded series of an SLO `hasSlo` knows — the complement of the
+ * burn-rate classification (recordedSloForExpr), so a rule is one or the
+ * other, never both. Each is read with operationalAlertRule; `engineOf`
+ * and `sourceOf` supply what only the caller knows. Rules with no name or
+ * expression are skipped and returned in `skipped`.
+ */
+export function operationalAlertRules(rules, hasSlo, { engineOf = () => undefined, sourceOf = () => undefined } = {}) {
+  const kept = [];
+  const skipped = [];
+  for (const rule of rules || []) {
+    if (recordedSloForExpr(alertRuleExpr(rule), hasSlo)) continue;
+    const entry = operationalAlertRule(rule, { engine: engineOf(rule), source: sourceOf(rule) });
+    if (entry) kept.push(entry);
+    else skipped.push(String(rule?.alert ?? rule?.title ?? rule?.name ?? '').trim() || '(unnamed)');
+  }
+  return { kept, skipped };
 }
 
 /**
