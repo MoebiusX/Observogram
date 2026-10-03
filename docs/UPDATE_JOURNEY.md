@@ -1,0 +1,427 @@
+# The UPDATE journey
+
+**Status: proposal, 2026-10-02. Nothing in this document is built.** It is the
+user journey for changing a pack that already exists — the second half of
+*Build or update a pack*. It is written against today's code: every stage says
+what it reuses and what is new, and the examples use numbers the engine
+actually produces. It comes in three slices. **Adding an SLO, an alert or a
+route arrives with the second**; the first only opens the door. Eight
+decisions at the end are the owner's.
+
+The BUILD journey ([`BUILD_JOURNEY.md`](BUILD_JOURNEY.md)) is for a team with no
+pack. Once the pack exists, the studio has no way to adapt it.
+
+## The job
+
+> We shipped the pack for `checkout` last month. I need to add a 99.95% SLO, send
+> SEV2 to the new on-call webhook as well, and fill the on-call channel we left
+> as a placeholder — without rebuilding the pack from the wizard and without
+> losing what is in it.
+
+Four more jobs the journey must answer, one way or another:
+
+- change an objective, a threshold or a window;
+- add an alert;
+- the pack was scanned from our repository and I want to adapt it;
+- Compare showed alert rules reading a metric production does not emit — fix it.
+
+## Why it is hard today
+
+Three facts about the code decide what this journey can promise.
+
+1. **Build is a generator, not an editor.** A pack is a pure function of nine
+   inputs (name, owners, environment, tier, library entries, params, section
+   switches, SLI selection with overrides, custom SLIs), and every change
+   regenerates the whole pack (`instantiatePack`, `tools/lib/library.mjs`).
+   Nothing patches a pack. Build keeps one draft of *inputs* in the browser and
+   cannot load a pack at all.
+2. **The owner's own examples are outside the generator.** It writes exactly one
+   SLO per SLI, with the id built from the objective; one burn-rate alert per
+   SLO, with windows from fixed profiles; exactly three routes. A second SLO on
+   an SLI, an alert with its own windows and a fourth route cannot be
+   expressed. Today "add an SLO" can only mean "add another SLI".
+3. **A pack has no identity that survives an edit.** The catalogue id is a hash of
+   the content and the version is the constant `0.1.0`. Saving a changed pack
+   adds a second entry beside the first; the two read identically in the picker
+   and nothing links them.
+
+Two things work in the journey's favour. A pack Build made carries its own inputs
+as `library.*` annotations, and regenerating from them gives back the same pack.
+A first run over six cases was identical in five; the sixth is a custom SLI in a
+pack with SLOs switched off, whose objective is stored nowhere. The same run on
+a pack edited by hand (a fourth route, a third SLO) regenerated it with three
+routes and two SLOs and no warning: that silent loss is what the first stage
+exists to prevent. And the working surface already exists: the layer stack, the
+per-layer sheets and the one pop-up editor.
+
+## One idea the journey rests on: additions
+
+Build cannot write a second SLO or a fourth route, and widening the generator
+for each is slow. So a pack an update has touched is **Build's output plus a
+recorded list of additions**. An addition is one artefact the user added by
+hand; it is recorded in the pack itself and put back after every regenerate, so
+it can never be dropped. For a pack Build did not make, the pack is simply the
+saved pack plus additions. This is decision 2.
+
+## The journey at a glance
+
+One journey, two starts. Build keeps its three steps, their names and its
+screen. *Update* is a second door that opens an existing pack and lands on the
+pack itself, not on the wizard's first question. The tabs read the same in both:
+**Define · Compile · Verify**.
+
+```mermaid
+flowchart TD
+    N["Start a new pack"] --> D["DEFINE<br/>What are we building for?"]
+    D --> C
+    U["update · on the pack you have"] --> O{"OPEN<br/>Can the studio reopen this pack<br/>without losing anything?"}
+    O -->|"yes: no screen"| C["COMPILE · the pack<br/>stack · sheets · one editor<br/>Changes since v0.1.0"]
+    O -->|"not exactly"| G["One panel: what kind of pack this is,<br/>what can be changed here, what cannot"]
+    G -->|"when it can be opened"| C
+    R["Remediate additions ·<br/>an uploaded file"] --> V
+    C --> V["VERIFY · review and save<br/>Saved v0.1.0 beside With your changes v0.2.0<br/>Save as checkout v0.2.0"]
+    V -->|"Resolve or adjust"| C
+    V --> H["HAND OFF<br/>back where you came from ·<br/>export · deploy the changed rules"]
+```
+
+| Stage | The user's question | The studio's answer |
+|---|---|---|
+| Open | Can I change this pack, and will anything be lost? | Proves it can rebuild the pack as saved, or says exactly what it cannot. |
+| Compile | Where do I add or adjust it? | The pack on the Build screen, with a running list of changes. |
+| Verify | What does my change do, and is it fit to save? | The saved pack beside the pack with the changes; then the next version of the same pack. |
+| Hand off | How does it reach production and the repository? | Export; deploy the changed rules and dashboards; nothing claimed that no record shows. |
+
+## Where it starts
+
+`update` is an operation on a pack, so it sits with the other operations.
+
+| From | Control | Lands on |
+|---|---|---|
+| Any workspace screen with Pack A loaded | Header button **`update`**, in the operations row beside `export`, shown when a pack is open. A button like its neighbours, never a menu item. | Compile, on that pack (one click when the pack reopens exactly). |
+| Home | The second card becomes **Build or update a pack**: *Start a new pack* · *Update a pack you have*, followed by this workspace's packs (`name · version · where it came from`). | Define for a new pack; Compile for a picked one. |
+| Remediate, after *Update repository from live* generates its additions (slice 2) | **Open as the next version of `<pack>`**, beside the two downloads it offers today. | Verify, with what was adopted as additions. |
+| `upload`, when the file's name is a pack you own (slice 2) | **Save as the next version of `<pack>`** · *Keep as a separate pack*. | Verify, with the file's differences as the changes. |
+
+Writing a pack needs the operator role, as every write does today. A viewer
+sees `update` disabled, with the reason. Discover gains nothing: it stays a
+catalogue with no next action.
+
+## The stages
+
+### 1. Open
+
+**The user wants** the pack they already have, editable, without re-answering the
+wizard — and to know nothing in it will be lost by opening it.
+
+**What the studio does.** It reads the pack as stored, recovers Build's inputs
+and the recorded additions from it, regenerates, and compares the result with
+the stored pack, ignoring formatting differences. It trusts no marker: a pack
+edited by hand keeps its `library.*` annotations, so only the comparison can
+tell.
+
+**What the user sees.**
+
+- *The pack reopens exactly*: no screen. They land on Compile with one line:
+  *Opened checkout v0.1.0. Build rebuilt it from its own definition and got the
+  same pack.*
+- *Otherwise*, one panel in the screen grammar — context
+  (`checkout · prod · Pack A · v0.1.0 · made in Build`), one sentence, one action,
+  and two lists written for this pack: **Can be changed here** / **Cannot be
+  changed here yet**.
+
+| The pack | The sentence | The action |
+|---|---|---|
+| Build already holds unfinished work (a new pack, or an update of another pack) | *You are updating orders (3 changes, not saved).* The changes are named. | *Continue it* · *Discard it and open checkout*. Never replaced unasked. |
+| Made in Build; Build would write some values differently today | *Build would write 2 values differently.* Each is listed, pack value beside Build's. No cause is claimed: the studio cannot tell a hand edit from a library change. | *Open with Build's values* — each then appears on Verify as a change. An SLI's values can instead be kept as the pack has them; the SLI then reads *customised*. Other values cannot be kept before slice 3: *Leave the pack as it is*. |
+| Made in Build; holds things Build did not write (a hand-added route, artefacts adopted from live) | *This pack holds 3 things Build did not write.* Each is named. | Slice 2: they are read in as additions and the pack opens. Slice 1: *Leave the pack as it is*; the alternative is a new pack under a new name, without the three named things. The original is never changed. |
+| Several packs in the workspace share this name (today's Build hand-offs left twins) | *3 packs are called checkout.* Each is listed with its date and deploy records. | Opens the one in Pack A. The first Save asks, for each other one: *an earlier version* or *a separate pack*. |
+| Uploaded or written by hand | *Build did not make this pack, so it has no definition to reopen.* | Slice 2: add to it; change it by file (*upload as the next version*). |
+| Scanned from a repository | *This is a reading of the repository taken on 1 Oct. The next scan replaces it. To change what it holds, change the repository and scan again.* | Slice 3: *Keep as my pack* (decision 3). Before that, no action here. |
+| Drafted from live | *This is what the live system reported at 14:02. The next draft replaces it.* | Same as a scan. |
+| A reference or example pack | *It ships with the studio and is read-only.* | *Save a copy as your pack…* |
+
+**Reuses:** the `library.*` annotations, `instantiatePack`, `restoreBuildDraft`
+(a seeded draft lands on Compile), the decision header.
+**New:** the reader (pack → Build inputs), the comparison and its normal form,
+the panel, the draft tied to the pack it updates.
+
+### 2. Compile — change the pack
+
+**The user wants** to do the job: add the SLO, the route, change the objective,
+fill the value.
+
+**What the user sees.** Today's Compile: the definition column on the left, the
+layer stack on the right, a sheet per layer, the one pop-up editor. Four things
+change.
+
+- **The context line names source and destination**:
+  `checkout · prod · tier-2 · updating v0.1.0 → saves as v0.2.0`. An update
+  edits the pack's own values, not an environment's overlay; when ENV A is not
+  the pack's environment the line says so.
+- **The definition column lists the add actions as buttons** — `+ SLI` ·
+  `+ SLO` · `+ Route` — each opening the sheet where it lives (L1, L1, L4), so
+  nobody has to know the layer first.
+- **Under them, "Changes since v0.1.0"**: one row per thing the user did, in
+  their own terms, each with *undo* —
+  *Added SLO availability 99.95%, with its burn-rate alert*;
+  *Added route SEV2 → webhook*;
+  *Filled on-call channel → routes SEV1 and SEV2 no longer rest on a template value*.
+  It replaces *Changes since Define*, which compares with library defaults. On
+  the stack the same facts show as `new` and `changed` chips.
+- **Where something cannot be changed yet, the sheet says so** in the place the
+  user would look for the control.
+
+**What can be changed.**
+
+| What | Add | Change | Remove | Arrives |
+|---|---|---|---|---|
+| SLI, with its SLO, burn-rate alert, recording rule and panels | yes | yes (11 fields, rename included) | yes | slice 1 (Build does this today) |
+| Objective, window, threshold, direction, expression | — | yes | — | slice 1 |
+| Values: channels, pager, endpoints, versions, runbook folder | — | yes | — | slice 1 |
+| A whole section (SLOs, policy, routes, dashboards, validation) | switch on | — | switch off | slice 1 |
+| Technology (library entries), tier | yes | yes | yes | slice 1 |
+| **A second SLO on an SLI, with its burn-rate alert** (own windows and severity) | yes | — | only what was added | slice 2, as an addition |
+| **A route** (severity → channels) | yes | — | only what was added | slice 2, as an addition |
+| The windows of an alert Build generated; a generated route | — | — | — | slice 3; by file until then |
+| Recording rules, dashboards and panels, backends, pipelines, baselines | — | — | — | slice 3; by file until then |
+
+Three limits the forms state before a change is accepted:
+
+- **A burn-rate alert belongs to one SLO, and an SLO has one.** Every SLO Build
+  writes already has its alert, so an alert is added *with* an SLO, not on its
+  own (decision 1).
+- **An added SLO is not wired like a generated one.** It has its alert; it is
+  not on the overview or SLO-burn boards and has no forecast until slice 3.
+  The form says so.
+- **A route is added beside the generated ones.** A second SEV2 route sends
+  SEV2 to the webhook *as well as* the existing channel; the generated SEV2
+  route cannot be changed or removed before slice 3.
+
+**Reuses:** `build-stack-view`, `build-sheet-view`, `build-editor-view`, every
+action on `host.build`, the retarget helpers that keep edits across a tier change.
+**New:** the changes list (a diff of the definition, plus the additions), the
+two *add* forms in the editor, the add buttons in the definition column.
+
+### 3. Verify — review and save
+
+**The user wants** to see what the change does before it replaces the pack, and
+then have the pack they use be the changed one.
+
+**What the user sees**, in this order:
+
+1. **Two pack cards side by side**: *Saved · v0.1.0* and *With your changes ·
+   v0.2.0*, and under them `only in saved 0 · in both 38 (2 changed) · only with
+   your changes 3`.
+2. **One decision sentence and the primary action**: *3 changes: 3 artefacts
+   added, 2 changed, none removed. The pack still meets tier-2.* →
+   **Save as checkout v0.2.0**. Secondary: *Save as a new pack…*
+3. **Two columns**, one row per touched artefact, an edit as one row with the
+   old value on the left and the new on the right. The rows come from the
+   changes list and from a comparison of the two packs, artefact by artefact;
+   anything the list does not explain is shown under **Also changes**, so
+   nothing moves silently.
+4. **No longer in the pack, possibly still live** — named, when a change removes
+   or renames an artefact. Deploy creates rules and does not delete them.
+5. **Does it measure anything?** For each new or changed expression: *reported
+   by the live system at 14:02* / *not reported* / *not checked — no live pack
+   is loaded*. An update must not create the very finding Compare exists to
+   catch (decision 6).
+6. **What is ready and what remains** — Verify's four readiness states and the
+   placeholders with their inline inputs, as today.
+
+The comparison uses the pack as stored, not the environment-overlaid one. The
+existing Compare is not used: run on two versions of one Build pack it showed
+what was added but put a changed objective's old SLO out of scope and never
+showed a filled value, because template values are not paired. It stays what it
+is — Pack A beside Pack B — and this journey does not change it.
+
+**What Save does.**
+
+- **Same name, same pack.** The pickers list the pack once, at its current
+  version: `checkout · v0.2.0`. Earlier versions sit under it
+  (`checkout · v0.1.0`) and can be picked like any pack.
+- **Versions are kept.** A save removes nothing. Saved versions are exempt from
+  the workspace's 200-pack limit, and `reset` says how many it will delete
+  (decision 7).
+- **Pack A moves** to the new version. **Pack B is never touched.**
+- **Going back** is *Restore v0.1.0*: its content saved as the next version.
+- **Save is refused** if someone else saved the pack since this update began;
+  the changes are shown again on the newer version, and any that no longer
+  apply are kept in the list and marked, not dropped.
+- **Unsaved work is never a pack in the catalogue**, so it cannot be exported,
+  compared or deployed by accident.
+
+**Reuses:** Verify's readiness and its clause states, the compile previews,
+the look of Compare (cards, the three numbers, two columns),
+`POST /api/library/register`, the way *Open pack in Discover* selects Pack A.
+**New:** the review model (changes list + artefact-by-artefact comparison),
+the *possibly still live* list, the live check line; a register that takes the
+pack's name as identity, bumps the version and keeps the one it replaces (the
+existing replace-by-label deletes it); restore; the refusal on a moved base;
+the exemption from eviction.
+
+### 4. Hand off
+
+**The user wants** the change to exist where it matters.
+
+After Save they are back on the screen they came from, with one message built
+only from records:
+
+> Saved checkout v0.2.0 — 3 changes. v0.1.0 is kept. No deploy of v0.2.0 is
+> recorded here; v0.1.0 was deployed to prod on 5 Sep.
+
+or, when there is no record: *…so what is live is not known from here.*
+
+The primary action is **Export v0.2.0** — the pack and every compiled file,
+for the repository. The studio deploys rules and dashboards only; **routes,
+pipelines and backend values leave by export**. A scan reads the compiled
+files, not a committed `pack.yaml`; the message says which files changed.
+
+Two more buttons:
+
+- **Deploy the changed rules and dashboards** — Remediate's deploy review with
+  the rows this update changed selected.
+- **Put v0.1.0 in Pack B** — Compare then shows what was added; a changed
+  objective or a filled value is shown truthfully only on Verify, and the
+  button says so.
+
+A captured check (a saved *journey*, which re-checks a pack on a schedule)
+moves to the new version, or the message says it is still checking the old one.
+
+**Reuses:** Remediate's deploy review and its records, `export`.
+**New:** the pre-selection, the message, exporting the pack as stored, the
+captured check following the pack.
+
+## Four walkthroughs
+
+Counts are from a tier-2 `http-service` pack: 38 artefacts.
+
+**Add a 99.95% SLO** (slice 2). `update` → Compile on checkout v0.1.0 → `+ SLO` →
+the L1 sheet, on the availability SLI → type `99.95`; the window stays 30d; its
+burn-rate alert is on, windows prefilled → *Add* → **Verify** →
+`only with your changes 2` (the SLO and its alert) → **Save as checkout v0.2.0**.
+Six clicks and one typed value. The alert becomes two rules when compiled;
+*Deploy the changed rules* puts them live.
+
+**Send SEV2 to the new webhook as well** (slice 2). `update` → `+ Route` → the L4
+sheet → severity `SEV2`, channel kind `webhook`, the URL → *Add* → Verify →
+`only with your changes 1` → Save. SEV2 now goes to the existing channel and to
+the webhook. The route is an Alertmanager file: it leaves by **Export**, not by
+deploy.
+
+**Change an objective** (slice 1). `update` → the availability SLI card → the
+editor → objective `99.5` → `99.9` → *Save SLI* → Verify. One row for the SLO —
+its id is built from the objective, so `availability_99_5` becomes
+`availability_99_9` — and under **Also changes** the five artefacts that name
+it: its burn-rate alert, the two boards, a panel and the chaos experiment. At
+tier-1 the forecast, the customer-impact board and the remediation trigger move
+too. Under *No longer in the pack, possibly still live*: the old SLO's
+recording and burn-rate rules → Save.
+
+**Compare showed six alert rules reading a metric production does not emit.**
+Pack A is a scan. Those rules are files in the repository that the scan
+recorded as readers; they are not pack artefacts. The honest path is the
+repository: change the rules, scan again, and the finding clears or stays.
+`update` on the scan says so. Once the scan can be kept as an owned pack
+(slice 3), what can be done there is add — the SLO and alert the service
+should have had.
+
+## What the journey never does
+
+- Drop something from a pack without naming it first.
+- Let a pack that is an observation (a scan, a live draft) be edited in place.
+- Say a version is deployed, or was cleaned up, when no record shows it.
+- Show an edited artefact as *Verified* by a live check that predates the edit.
+- Move a value the user did not touch without listing it under *Also changes*.
+- Offer a control that cannot do what its label says.
+
+## What it needs before it is promised
+
+Two tests, written first, because the one-click path rests on them:
+
+1. **The round trip.** Every library entry at every tier, with and without
+   edits, saved to the workspace as YAML and reloaded: recover the inputs,
+   regenerate, compare. Today a reloaded pack is not equal to itself —
+   multi-line expressions gain a newline on the way through YAML — so the
+   comparison needs one defined normal form (or the YAML fixed).
+2. **The change list is true.** For a scripted set of edits the review must
+   report exactly the artefacts that differ between the two packs.
+
+## Slices
+
+| Slice | What the user gets | What it cannot do yet | Size of the change |
+|---|---|---|---|
+| **1. The door and the version** | `update` on a pack made in Build and untouched since: open, change what Build can already change, review, save as the next version, export, deploy the changed rules. | Add a second SLO, an alert or a route. Open a pack that was added to by hand or by Remediate. Anything on a scan or a live draft. | Studio and server. No change to generated output. |
+| **2. The additions** | **+ SLO on an SLI with its alert, + route**, recorded in the pack and kept across every regenerate. Packs added to by hand or by Remediate open. *Open as the next version* from Remediate; *upload as the next version*. | Change or remove what Build generated beyond its inputs. Scans and live drafts. | A new engine module built from the insert logic in `tools/lib/retrofeed.mjs`, with a real duplicate check for routes and an id check that sees additions; the instantiate and register routes; the Build stack, sheet and Verify models, which read the generator's output only today; upload that validates without registering. No change to generated output. |
+| **3. Any pack** | *Keep as my pack* for a scan or a live draft; changing and removing artefacts Build did not write, and the windows and routes it did; wiring an added SLO to the boards; environments. | — | A second edit model (patch the pack). |
+
+## Decisions for the owner
+
+1. **What is "an alert"?** The pack spec has two kinds, both bound to an SLO: a
+   burn-rate alert and a forecast, plus routes. A scanned repository also holds
+   plain alert rules (*queue depth above 1000 for 5 minutes*), which are not
+   pack artefacts. (a) In this journey "add an alert" means *add an SLO with
+   its burn-rate alert*, with its own windows and severity. (b) Plain threshold
+   alerts become pack artefacts: a change to the spec, the compiler and the
+   downstream studio; until then they cannot be added in any slice.
+   *Recommended:* (a) now; (b) is worth its own decision, because it is what
+   most people mean by "add an alert".
+2. **How do things Build cannot generate get into a pack?** (a) As *additions*
+   recorded in the pack on top of Build's output and re-applied on every
+   regenerate. Cost: an added SLO has its alert but is not on the boards and
+   has no forecast until slice 3. (b) By widening the generator's inputs: fully
+   wired, but slower, only for packs Build made, and every change moves the
+   library fixtures.
+   *Recommended:* (a). It is the only option that works for a pack of any
+   origin and makes hand-edited packs openable.
+3. **Scanned and live-drafted packs.** (a) Never edited in place; *Keep as my
+   pack* makes an owned copy; the scan stays in the catalogue and Pack B is
+   left as it is. In slice 3 — or adds-only in slice 2, at the cost of a second
+   set of sheets for packs Build did not make. (b) Refuse, and start a new pack
+   in Build.
+   *Recommended:* (a), in slice 3. Until then `update` on your own scan and
+   live-draft packs answers with what they are and no action; if adapting a
+   scanned pack is the first thing you want to show, say so and adds-only
+   moves into slice 2.
+4. **What Save does with the version it replaces.** (a) One row per pack, earlier
+   versions kept under it and restorable; (b) every version a separate row in
+   the picker.
+   *Recommended:* (a).
+5. **A shortcut from the artefact drawer.** A *Change in the pack →* button on
+   an artefact in Discover would save two clicks, and would be the first next
+   action on a screen that has none.
+   *Recommended:* no, for now.
+6. **Check new expressions against live before saving.** *Recommended:* yes, as
+   a line on Verify that states what was checked and when — never a gate.
+7. **Where a saved pack durably lives.** Today a workspace holds 200 packs,
+   removes the oldest beyond that, and `reset` clears them all. (a) Saved
+   versions are exempt from both, and `reset` names what it deletes; (b) the
+   workspace stays a scratch space and every Save ends with *export and
+   commit* as the durable copy.
+   *Recommended:* (a), with Export as the primary hand-off either way.
+8. **What ships, under what name.** Slice 1 alone opens the door onto what Build
+   can already do. (a) Ship slices 1 and 2 together as *Build or update a
+   pack*; (b) ship slice 1 first, with the button named `open in build` until
+   slice 2 lands.
+   *Recommended:* (a). A button named `update` that cannot add an SLO would be
+   the first thing you try and the first thing that says no.
+
+## Not in this journey
+
+- Editing dashboards, panels, recording rules, backends, pipelines and
+  baselines artefact by artefact (by file until slice 3).
+- Editing the environment overlays of a pack.
+- Removing rules from a live system. Deploy creates and does not delete; the
+  journey lists what is left behind.
+- An audit of who changed what. The write routes record nothing today
+  ([`STORE_PLAN.md`](STORE_PLAN.md), slice 4).
+- Updating a pack from the command line. `packc` can create a pack (`init`)
+  but has no command that updates one.
+
+## See also
+
+- [`BUILD_JOURNEY.md`](BUILD_JOURNEY.md) — the journey this extends: the steps,
+  the screen, the library, the editor.
+- [`UX_SCREEN_GRAMMAR.md`](UX_SCREEN_GRAMMAR.md) — context, decision, next
+  action; what is not simplified.
+- [`USER_JOURNEY.md`](USER_JOURNEY.md) — Discover, Diagnose, Remediate.
