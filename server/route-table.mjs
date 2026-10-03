@@ -98,6 +98,12 @@ export const ROUTES = Object.freeze({
   'GET /api/library': { class: 'viewer' },
   'GET /api/library/requirements/:tier': { class: 'viewer' },
   'GET /api/library/:id': { class: 'viewer' },
+  // The services and environments API (server/routes/services.mjs, STORE_PLAN
+  // slice 4): the request's org's service records and their environments.
+  'GET /api/services': { class: 'viewer' },
+  'GET /api/services/:id': { class: 'viewer' },
+  'GET /api/services/:id/environments': { class: 'viewer' },
+  'GET /api/environments/:id': { class: 'viewer' },
 
   // ---------- operator: every existing mutation ----------
   'DELETE /api/uploads': { class: 'operator', audit: ['pack.clear'] },
@@ -116,6 +122,15 @@ export const ROUTES = Object.freeze({
   'POST /api/library/instantiate': { class: 'operator', later: 'none (computes)' },
   'POST /api/library/compile': { class: 'operator', later: 'none (computes)' },
   'POST /api/library/register': { class: 'operator', audit: PACK_REGISTER },
+  // The services and environments API (server/routes/services.mjs): a
+  // service's deletion cascades its environments and pack links, which
+  // write no row of their own (the service.delete detail counts them).
+  'POST /api/services': { class: 'operator', audit: ['service.create'] },
+  'PATCH /api/services/:id': { class: 'operator', audit: ['service.update'] },
+  'DELETE /api/services/:id': { class: 'operator', audit: ['service.delete'] },
+  'POST /api/services/:id/environments': { class: 'operator', audit: ['environment.create'] },
+  'PATCH /api/environments/:id': { class: 'operator', audit: ['environment.update'] },
+  'DELETE /api/environments/:id': { class: 'operator', audit: ['environment.delete'] },
 
   // ---------- admin: the request's org — its name and its members ----------
   // The identity API (server/routes/identity.mjs) for the org the request

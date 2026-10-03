@@ -1438,6 +1438,16 @@ every other `GET` is `viewer` and every other route `operator`.
 | `GET` | `/api/journeys/:name/schedule` | The parsed `schedule:` and the cron / schtasks / GitHub Actions / CronJob snippets (env var names only; `placeholder: true` without a schedule) |
 | `POST` | `/api/journeys/:name/run` | Run a saved journey now |
 | `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file |
+| `GET` | `/api/services` | The org's service records, by slug, each with its environments (their MCP endpoint as `{ id, name, origin }`) and the packs linked to it (`id`, `label`, `source`, `role`) |
+| `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack) |
+| `GET` | `/api/services/:id` | One service record with its environments and packs |
+| `PATCH` | `/api/services/:id` | Changes `name`, `owners`, `tier`, `description` (`changed` lists what differed; nothing → no audit row) |
+| `DELETE` | `/api/services/:id` | Removes the service with its environments and pack links (the packs stay registered; registering a pack that names the service re-creates it) |
+| `GET` | `/api/services/:id/environments` | The service's environments |
+| `POST` | `/api/services/:id/environments` | An environment (201): `{ name, tier?, bindings?, endpoints?, mcpEndpointId? }`; `endpoints` are links every member may open — never put a token in one |
+| `GET` | `/api/environments/:id` | One environment with its service |
+| `PATCH` | `/api/environments/:id` | Changes `name`, `tier`, `bindings`, `endpoints`, `mcpEndpointId` (`null` unbinds) |
+| `DELETE` | `/api/environments/:id` | Removes an environment |
 | `GET` | `/api/admin/users` | Every user, disabled ones too, with their memberships — never a password |
 | `POST` | `/api/admin/users` | Create a local user (201) |
 | `POST` | `/api/admin/users/:id/disable` | Disable a user: every session ends |

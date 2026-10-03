@@ -1,0 +1,724 @@
+#!/usr/bin/env node
+/**
+ * server/test-services-api.mjs — the services and environments API
+ * (docs/STORE_PLAN.md slice 4, design §7), in-process over HTTP on one
+ * stand-alone identity server, as test-identity-api.mjs does.
+ *
+ * For every route of server/routes/services.mjs: the success path with its
+ * exact response and its exact audit rows (action, actor = the caller's
+ * login, org, target, detail — each action one the route table lists for
+ * it), and every refusal of design §7.4 with its status, text and no new
+ * row. Then the registry's side of the records (STORE_PLAN slice 4 §4):
+ * a register writes the service, environment and link rows by the person
+ * registering, the same content again writes none; a service's deletion
+ * cascades its environments and links, the packs stay — and the deletion
+ * HOLDS across a rehydrate and a restart (A3: a rehydrate links only the
+ * files it adopts; nothing under actor `system` recreates the service),
+ * until the next register of a pack naming it recreates it by that
+ * person; the reconcile of a pack's links when its plan moves (A5/B4: a
+ * relabelled name-less pack, a pack relabelled into a live aggregate —
+ * one primary at most, no stale primary for the tier rule); rows = tiles
+ * (A6: the slugs the API serves equal the keys the studio's
+ * serviceCatalogue() computes in Node over GET /api/packs); a viewer reads
+ * an environment's endpoints in full (D14); DELETE /api/uploads keeps the
+ * services.
+ *
+ * Who may reach these routes in each posture is test-authz's (the AuthZ
+ * matrix) and which org's rows a member reaches is test-tenancy's; this
+ * suite is what the routes do once reached.
+ *
+ * The fixture is test-identity-api's: default {olive: admin} (an owner),
+ * acme {ada: admin, oscar: operator, vera: viewer}, bravo {bob: admin}.
+ */
+
+// Hermetic (§0): a developer shell's store, identity or per-org token
+// variables never reach this process's imports. serve-child.mjs imports no
+// server code.
+const { STRIP, serve, signIn } = await import('./fixtures/serve-child.mjs');
+for (const k of STRIP) {
+  delete process.env[`OBSERVOGRAM_${k}`];
+  delete process.env[`TOMOGRAPH_${k}`];
+}
+for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) delete process.env[k];
+
+const { test, after } = await import('node:test');
+const assert = (await import('node:assert/strict')).default;
+const { mkdtempSync, readFileSync, rmSync } = await import('node:fs');
+const { tmpdir } = await import('node:os');
+const { dirname, join } = await import('node:path');
+const { fileURLToPath } = await import('node:url');
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(HERE, '..');
+const WORKSPACE = mkdtempSync(join(tmpdir(), 'observogram-services-api-'));
+process.env.OBSERVOGRAM_WORKSPACE = WORKSPACE;
+
+const { hashPassword } = await import('./auth.mjs');
+const { writeUsersFile, writeOrgsFile } = await import('./store/legacy-files.mjs');
+
+const pw = (login) => `${login}-passw0rd-api`;
+const LOGINS = ['olive', 'ada', 'oscar', 'vera', 'bob'];
+writeUsersFile({ users: Object.fromEntries(LOGINS.map((l) => [l, { name: l, createdAt: 'test', password: hashPassword(pw(l)) }])) }, join(WORKSPACE, 'users.json'));
+writeOrgsFile({
+  default: { name: 'Default', members: { olive: 'admin' } },
+  acme: { name: 'Acme', members: { ada: 'admin', oscar: 'operator', vera: 'viewer' } },
+  bravo: { name: 'Bravo', members: { bob: 'admin' } },
+}, join(WORKSPACE, 'orgs.json'));
+
+const { start } = await import('./index.mjs');
+const { currentStore, closeStore, openRaw, prepare } = await import('./store/db.mjs');
+const { runWithOrg } = await import('./org-context.mjs');
+const { registerPack, resetPackRegistry } = await import('./pack-registry.mjs');
+const { listServicesForPack } = await import('./store/pack-services.mjs');
+const { WAYS, serviceTierFor } = await import('./service-admin.mjs');
+const { routeEntry } = await import('./route-table.mjs');
+const { parse: parseYaml } = await import('../tools/lib/mini-yaml.mjs');
+const serviceKeys = await import('../tools/lib/service-keys.mjs');
+
+let srv = await start({ port: 0, host: '127.0.0.1', silent: true });
+let BASE = `http://127.0.0.1:${srv.address().port}`;
+const db = currentStore();
+
+// The in-process server and its store close before the restart test
+// starts a child on the same workspace; `after` closes what is still open.
+let inProcess = true;
+async function closeInProcess() {
+  if (!inProcess) return;
+  inProcess = false;
+  await new Promise((resolve) => srv.close(resolve));
+  closeStore();
+}
+after(async () => {
+  await closeInProcess();
+  rmSync(WORKSPACE, { recursive: true, force: true });
+});
+
+const cookies = {};
+async function signInAs(base, login) {
+  const s = await signIn(base, login, pw(login));
+  assert.equal(s.status, 200, `${login} signs in: ${JSON.stringify(s.json)}`);
+  assert.ok(s.session, `${login} gets a session`);
+  cookies[login] = s.session;
+  return s.session;
+}
+for (const login of ['olive', 'ada', 'oscar', 'vera', 'bob']) await signInAs(BASE, login);
+
+// ---------- requests and the audit trail ----------
+
+const CSRF = { 'X-Observogram-CSRF': '1' };
+
+// One request as `who` (a login whose cookie is held): { status, json, text }.
+async function call(who, method, path, body, extra = {}) {
+  const headers = { Accept: 'application/json', ...CSRF, Cookie: cookies[who], ...extra };
+  let payload;
+  if (body !== undefined) {
+    headers['Content-Type'] ??= 'application/json';
+    payload = typeof body === 'string' ? body : JSON.stringify(body);
+  }
+  const r = await fetch(`${BASE}${path}`, { method, headers, body: payload, redirect: 'manual' });
+  const text = await r.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* not JSON */ }
+  return { status: r.status, json, text };
+}
+
+const seqNow = () => prepare(db, 'SELECT coalesce(max(seq), 0) AS s FROM audit').get().s;
+// The rows after `seq`: [action, actor, org, target, detail].
+const rowsAfter = (seq) => prepare(db, 'SELECT org_id, actor, action, target_id, detail FROM audit WHERE seq > ? ORDER BY seq').all(seq)
+  .map((r) => [r.action, r.actor, r.org_id, r.target_id, r.detail === null ? null : JSON.parse(r.detail)]);
+
+// A GET or a DELETE sends no body: its helpers take (key, who, path, …) and
+// the rest shifts.
+const noBody = (method) => method === 'GET' || method === 'DELETE';
+
+// A successful call of route `key`: its status, and the rows it wrote —
+// each an action the route table lists for the route (exact per build).
+async function ok(key, who, path, body, status) {
+  const { method } = routeEntry(key);
+  if (noBody(method)) [body, status] = [undefined, body];
+  const seq = seqNow();
+  const r = await call(who, method, path, body);
+  assert.equal(r.status, status ?? 200, `${key} as ${who}: ${r.text.slice(0, 300)}`);
+  assert.equal(r.json.ok, true);
+  const rows = rowsAfter(seq);
+  const listed = routeEntry(key).audit;
+  assert.deepEqual(rows.map(([action]) => action).filter((a) => !listed.includes(a)), [], `${key}: rows the route table does not list`);
+  return { json: r.json, rows };
+}
+
+// A refusal: exactly { ok: false, error } at `status`, and no row.
+async function refused(key, who, path, body, status, error) {
+  const { method } = routeEntry(key);
+  if (noBody(method)) [body, status, error] = [undefined, body, status];
+  const seq = seqNow();
+  const r = await call(who, method, path, body);
+  assert.deepEqual([r.status, r.json], [status, { ok: false, error }], `${key} ${path} ${JSON.stringify(body)}`);
+  assert.deepEqual(rowsAfter(seq), [], `${key}: a refusal writes no row`);
+}
+
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+// A 16-digit id past 2^53 - 1 is refused too: bound as a number it would
+// round, and a refusal would name an id the caller never sent.
+const BAD_IDS = ['abc', '0', '01', '-1', '1.5', '1e3', '12345678901234567', '9007199254740992', '9007199254740993', '9999999999999999'];
+const SERVICE_ID_TEXT = 'service id must be a positive integer, at most 9007199254740991';
+const ENVIRONMENT_ID_TEXT = 'environment id must be a positive integer, at most 9007199254740991';
+
+const SERVICE_KEYS = ['id', 'slug', 'name', 'owners', 'tier', 'description', 'source', 'createdAt', 'updatedAt', 'environments', 'packs'];
+const ENVIRONMENT_KEYS = ['id', 'serviceId', 'name', 'tier', 'effectiveTier', 'bindings', 'endpoints', 'mcpEndpoint', 'createdAt', 'updatedAt'];
+const isServiceView = (s) => {
+  assert.deepEqual(Object.keys(s), SERVICE_KEYS, `the service view of ${s.slug}: named fields only`);
+  assert.ok(ISO.test(s.createdAt) && ISO.test(s.updatedAt), 'timestamps');
+  s.environments.forEach(isEnvironmentView);
+};
+const isEnvironmentView = (e) => {
+  assert.deepEqual(Object.keys(e), ENVIRONMENT_KEYS, `the environment view of ${e.name}: named fields only`);
+  assert.ok(ISO.test(e.createdAt) && ISO.test(e.updatedAt), 'timestamps');
+};
+// A view with its timestamps replaced, for a deepEqual.
+const stamped = (v) => (v === null ? null : { ...v, createdAt: 'T', updatedAt: 'T', ...(v.environments ? { environments: v.environments.map(stamped) } : {}) });
+
+const DEMO_YAML = readFileSync(join(ROOT, 'examples', 'demo-skeleton.pack.yaml'), 'utf8');
+const DEMO = parseYaml(DEMO_YAML);
+const YAML = { 'Content-Type': 'text/yaml' };
+
+// The ids the tests create, by name.
+const ids = {};
+
+// ---------- the reads on an empty org ----------
+
+test('GET /api/services on an org without a record: an empty list, no row; a viewer reads it', async () => {
+  const { json, rows } = await ok('GET /api/services', 'vera', '/api/services');
+  assert.deepEqual([json, rows], [{ ok: true, services: [] }, []]);
+});
+
+// ---------- services ----------
+
+test('POST /api/services: a service record (201) as the view, its exact row; the defaults; the slug is the name\'s key', async () => {
+  const { json, rows } = await ok('POST /api/services', 'oscar', '/api/services', {
+    name: 'Checkout Service', owners: [' team-pay ', 'sre'], tier: 'tier-1', description: 'the checkout', ignored: 'field',
+  }, 201);
+  isServiceView(json.service);
+  ids.checkout = json.service.id;
+  assert.deepEqual(stamped(json.service), {
+    id: ids.checkout, slug: 'checkout-service', name: 'Checkout Service', owners: ['team-pay', 'sre'], tier: 'tier-1', description: 'the checkout',
+    source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+  });
+  assert.deepEqual(rows, [['service.create', 'oscar', 'acme', 'checkout-service', null]]);
+  // The defaults: owners [], tier null (graded by the pack), description null; an explicit slug.
+  const second = await ok('POST /api/services', 'ada', '/api/services', { name: 'Payments', slug: 'payments' }, 201);
+  ids.payments = second.json.service.id;
+  assert.deepEqual(stamped(second.json.service), {
+    id: ids.payments, slug: 'payments', name: 'Payments', owners: [], tier: null, description: null,
+    source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+  });
+  assert.deepEqual(second.rows, [['service.create', 'ada', 'acme', 'payments', null]]);
+  // tier: null is "graded by the pack", explicitly.
+  const third = await ok('POST /api/services', 'oscar', '/api/services', { name: 'Ledger Nulls', tier: null, description: null }, 201);
+  ids.ledgerNulls = third.json.service.id;
+  assert.deepEqual([third.json.service.tier, third.json.service.description], [null, null]);
+});
+
+test('POST /api/services: every refusal, its status and text, and no row', async () => {
+  const K = 'POST /api/services';
+  const P = '/api/services';
+  for (const name of [undefined, '', '   ', 'x'.repeat(201), 42, null]) await refused(K, 'oscar', P, { name }, 400, WAYS.serviceName);
+  await refused(K, 'oscar', P, '["Checkout"]', 400, WAYS.serviceName);           // not a JSON object: nothing named
+  for (const slug of ['Pay Ments', 'pay_ments', '-pay', 'pay-', 'p'.repeat(201), 7]) {
+    await refused(K, 'oscar', P, { name: 'Pay', slug }, 400, WAYS.slug(slug));
+  }
+  assert.equal(WAYS.slug('Pay Ments'), '"Pay Ments" is not a service slug (lowercase letters, digits and -, as the catalogue keys services: "pay-ments")');
+  await refused(K, 'oscar', P, { name: '!!!' }, 400, WAYS.noSlug('!!!'));
+  assert.equal(WAYS.noSlug('!!!'), '"!!!" yields no slug — send "slug"');
+  for (const owners of ['team', {}, Array(51).fill('t'), [''], ['x'.repeat(201)], [42], [null]]) await refused(K, 'oscar', P, { name: 'Pay', owners }, 400, WAYS.owners);
+  for (const tier of ['gold', 'tier-4', 'TIER-1', 1, '']) await refused(K, 'oscar', P, { name: 'Pay', tier }, 400, WAYS.tier(tier));
+  assert.equal(WAYS.tier('gold'), 'a tier is tier-1, tier-2 or tier-3 (or null: graded by the pack), not "gold"');
+  for (const description of ['d'.repeat(4001), 42, {}]) await refused(K, 'oscar', P, { name: 'Pay', description }, 400, WAYS.description);
+  await refused(K, 'oscar', P, { name: 'Checkout Service' }, 409, `service "checkout-service" exists (id ${ids.checkout}) — PATCH /api/services/${ids.checkout} changes it`);
+  await refused(K, 'oscar', P, { name: 'Other', slug: 'payments' }, 409, `service "payments" exists (id ${ids.payments}) — PATCH /api/services/${ids.payments} changes it`);
+});
+
+test('GET /api/services and GET /api/services/:id: the views by slug, as a viewer; 404 and the id rule', async () => {
+  const { json, rows } = await ok('GET /api/services', 'vera', '/api/services');
+  assert.deepEqual(rows, []);
+  json.services.forEach(isServiceView);
+  assert.deepEqual(json.services.map((s) => s.slug), ['checkout-service', 'ledger-nulls', 'payments']);
+  const one = await ok('GET /api/services/:id', 'vera', `/api/services/${ids.checkout}`);
+  assert.deepEqual(stamped(one.json.service), {
+    id: ids.checkout, slug: 'checkout-service', name: 'Checkout Service', owners: ['team-pay', 'sre'], tier: 'tier-1', description: 'the checkout',
+    source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+  });
+  await refused('GET /api/services/:id', 'vera', '/api/services/999999', 404, 'no service 999999');
+  for (const id of BAD_IDS) await refused('GET /api/services/:id', 'vera', `/api/services/${id}`, 400, SERVICE_ID_TEXT);
+});
+
+test('PATCH /api/services/:id: name, owners, tier, description with `changed` and one row; nothing differing → changed [] and no row; the slug is fixed', async () => {
+  const K = 'PATCH /api/services/:id';
+  const P = `/api/services/${ids.checkout}`;
+  const { json, rows } = await ok(K, 'oscar', P, { name: 'Checkout', owners: ['team-pay'], tier: 'tier-2', description: null, slugx: 'ignored' });
+  assert.deepEqual(json.changed, ['name', 'owners', 'tier', 'description']);
+  assert.deepEqual(stamped(json.service), {
+    id: ids.checkout, slug: 'checkout-service', name: 'Checkout', owners: ['team-pay'], tier: 'tier-2', description: null,
+    source: { kind: 'observogram' }, createdAt: 'T', updatedAt: 'T', environments: [], packs: [],
+  });
+  assert.deepEqual(rows, [['service.update', 'oscar', 'acme', 'checkout-service', { fields: ['name', 'owners', 'tier', 'description'] }]]);
+  // Only what differs is a change (and a row names only those fields).
+  const partial = await ok(K, 'ada', P, { name: 'Checkout', tier: 'tier-1' });
+  assert.deepEqual([partial.json.changed, partial.rows], [['tier'], [['service.update', 'ada', 'acme', 'checkout-service', { fields: ['tier'] }]]]);
+  const same = await ok(K, 'oscar', P, { name: 'Checkout', owners: ['team-pay'], tier: 'tier-1' });
+  assert.deepEqual([same.json.changed, same.rows], [[], []]);
+  const empty = await ok(K, 'oscar', P, {});
+  assert.deepEqual([empty.json.changed, empty.rows, empty.json.service.tier], [[], [], 'tier-1']);
+  // tier: null clears a tier (graded by the pack again).
+  const cleared = await ok(K, 'oscar', `/api/services/${ids.payments}`, { tier: 'tier-3' });
+  assert.deepEqual(cleared.json.changed, ['tier']);
+  const back = await ok(K, 'oscar', `/api/services/${ids.payments}`, { tier: null });
+  assert.deepEqual([back.json.changed, back.json.service.tier, back.rows], [['tier'], null, [['service.update', 'oscar', 'acme', 'payments', { fields: ['tier'] }]]]);
+  // The refusals.
+  await refused(K, 'oscar', P, { slug: 'checkout' }, 400, WAYS.slugFixed);
+  assert.equal(WAYS.slugFixed, "a service's slug is fixed (packs link to it by slug) — create a new service with POST /api/services");
+  await refused(K, 'oscar', P, { slug: 'checkout-service' }, 400, WAYS.slugFixed);   // even its own: the field is not patchable
+  await refused(K, 'oscar', P, { name: '' }, 400, WAYS.serviceName);
+  await refused(K, 'oscar', P, { owners: 'x' }, 400, WAYS.owners);
+  await refused(K, 'oscar', P, { tier: 'gold' }, 400, WAYS.tier('gold'));
+  await refused(K, 'oscar', P, { description: 'd'.repeat(4001) }, 400, WAYS.description);
+  await refused(K, 'oscar', '/api/services/999999', { name: 'x' }, 404, 'no service 999999');
+  for (const id of BAD_IDS) await refused(K, 'oscar', `/api/services/${id}`, { name: 'x' }, 400, SERVICE_ID_TEXT);
+});
+
+// ---------- environments ----------
+
+test('POST /api/services/:id/environments: an environment (201) as the view, its exact row; effectiveTier falls back to the service\'s', async () => {
+  const K = 'POST /api/services/:id/environments';
+  const P = `/api/services/${ids.checkout}/environments`;
+  const endpoints = { grafana: 'https://grafana.example/d/abc?tier=gold&orgId=1', runbook: 'http://wiki.example/checkout' };
+  const { json, rows } = await ok(K, 'oscar', P, { name: 'prod', bindings: { region: 'eu-west-1', cluster: 'prod-a' }, endpoints, extra: 1 }, 201);
+  isEnvironmentView(json.environment);
+  ids.prod = json.environment.id;
+  assert.deepEqual(stamped(json.environment), {
+    id: ids.prod, serviceId: ids.checkout, name: 'prod', tier: null, effectiveTier: 'tier-1',
+    bindings: { region: 'eu-west-1', cluster: 'prod-a' }, endpoints, mcpEndpoint: null, createdAt: 'T', updatedAt: 'T',
+  });
+  assert.deepEqual(rows, [['environment.create', 'oscar', 'acme', 'checkout-service/prod', null]]);
+  // Its own tier overrides the service's; the defaults are {} and {}.
+  const staging = await ok(K, 'ada', P, { name: 'staging', tier: 'tier-3' }, 201);
+  ids.staging = staging.json.environment.id;
+  assert.deepEqual(stamped(staging.json.environment), {
+    id: ids.staging, serviceId: ids.checkout, name: 'staging', tier: 'tier-3', effectiveTier: 'tier-3',
+    bindings: {}, endpoints: {}, mcpEndpoint: null, createdAt: 'T', updatedAt: 'T',
+  });
+  assert.deepEqual(staging.rows, [['environment.create', 'ada', 'acme', 'checkout-service/staging', null]]);
+  // A service without a tier: effectiveTier null (graded by the pack).
+  const dev = await ok(K, 'oscar', `/api/services/${ids.payments}/environments`, { name: 'dev' }, 201);
+  ids.paymentsDev = dev.json.environment.id;
+  assert.deepEqual([dev.json.environment.tier, dev.json.environment.effectiveTier], [null, null]);
+});
+
+test('POST /api/services/:id/environments: every refusal, its status and text, and no row', async () => {
+  const K = 'POST /api/services/:id/environments';
+  const P = `/api/services/${ids.checkout}/environments`;
+  await refused(K, 'oscar', '/api/services/999999/environments', { name: 'prod' }, 404, 'no service 999999');
+  for (const id of BAD_IDS) await refused(K, 'oscar', `/api/services/${id}/environments`, { name: 'prod' }, 400, SERVICE_ID_TEXT);
+  for (const name of [undefined, '', 'x'.repeat(201), 3]) await refused(K, 'oscar', P, { name }, 400, WAYS.environmentName);
+  await refused(K, 'oscar', P, { name: 'prod' }, 409, `environment "prod" of checkout-service exists (id ${ids.prod}) — PATCH /api/environments/${ids.prod} changes it`);
+  await refused(K, 'oscar', P, { name: 'qa', tier: 'gold' }, 400, WAYS.tier('gold'));
+  for (const bindings of ['eu', [], { region: 1 }, { region: '' }, { ['k'.repeat(257)]: 'v' }, { region: 'v'.repeat(257) },
+    Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`k${i}`, 'v']))]) {
+    await refused(K, 'oscar', P, { name: 'qa', bindings }, 400, WAYS.bindings);
+  }
+  assert.equal(WAYS.bindings, 'bindings is an object of at most 32 string values; keys and values are 1–256 characters');
+  for (const endpoints of ['https://x', [], Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`e${i}`, 'https://x.example/']))]) {
+    await refused(K, 'oscar', P, { name: 'qa', endpoints }, 400, WAYS.endpoints());
+  }
+  assert.equal(WAYS.endpoints(), 'endpoints is an object of at most 20 http(s) URLs by name');
+  for (const bad of ['not a url', 'ftp://x.example/', 'mailto:a@b', '', 42]) {
+    await refused(K, 'oscar', P, { name: 'qa', endpoints: { grafana: bad } }, 400, WAYS.endpoints('grafana'));
+  }
+  assert.equal(WAYS.endpoints('grafana'), 'endpoints is an object of at most 20 http(s) URLs by name; "grafana" is not one');
+  // A credential in a link: the §7.5 word rule (names only, never a value;
+  // the decoded name — %74oken is "token"; the carrying parameter of a ;-pair).
+  const CRED = (where, note) => `${where} carries ${note} — a token goes in the auth field, never in a URL`;
+  await refused(K, 'oscar', P, { name: 'qa', endpoints: { grafana: 'https://g.example/?token=abc&sig=x' } }, 400, CRED('endpoints.grafana', 'the parameter(s) "token", "sig", which look like credentials'));
+  await refused(K, 'oscar', P, { name: 'qa', endpoints: { prom: 'https://p.example/?%74oken=abc' } }, 400, CRED('endpoints.prom', 'the parameter(s) "token", which look like credentials'));
+  await refused(K, 'oscar', P, { name: 'qa', endpoints: { prom: 'https://p.example/?tier=x;pwd=y' } }, 400, CRED('endpoints.prom', 'the parameter(s) "tier", which look like credentials'));
+  await refused(K, 'oscar', P, { name: 'qa', endpoints: { prom: 'https://user:pw@p.example/' } }, 400, CRED('endpoints.prom', 'userinfo'));
+  await refused(K, 'oscar', P, { name: 'qa', endpoints: { prom: 'https://p.example/#frag' } }, 400, CRED('endpoints.prom', 'a fragment'));
+  // An endpoint id no record of this org holds (none exists yet).
+  for (const mcpEndpointId of [999999, '999999', 0, 'x', true]) {
+    await refused(K, 'oscar', P, { name: 'qa', mcpEndpointId }, 400, WAYS.noMcpEndpointInOrg(mcpEndpointId));
+  }
+  assert.equal(WAYS.noMcpEndpointInOrg(999999), 'no MCP endpoint 999999 in this org — GET /api/mcp-endpoints lists them');
+  // A name clash is checked after the fields: a bad tier on an existing name is the 400.
+  await refused(K, 'oscar', P, { name: 'prod', tier: 'gold' }, 400, WAYS.tier('gold'));
+});
+
+test('GET /api/services/:id/environments and GET /api/environments/:id: the views by name, as a viewer — endpoints in full (D14); 404 and the id rule', async () => {
+  const list = await ok('GET /api/services/:id/environments', 'vera', `/api/services/${ids.checkout}/environments`);
+  assert.deepEqual(list.rows, []);
+  assert.deepEqual(list.json.service, { id: ids.checkout, slug: 'checkout-service', name: 'Checkout', tier: 'tier-1' });
+  list.json.environments.forEach(isEnvironmentView);
+  assert.deepEqual(list.json.environments.map((e) => [e.name, e.effectiveTier]), [['prod', 'tier-1'], ['staging', 'tier-3']]);
+  await refused('GET /api/services/:id/environments', 'vera', '/api/services/999999/environments', 404, 'no service 999999');
+  for (const id of BAD_IDS) await refused('GET /api/services/:id/environments', 'vera', `/api/services/${id}/environments`, 400, SERVICE_ID_TEXT);
+  const one = await ok('GET /api/environments/:id', 'vera', `/api/environments/${ids.prod}`);
+  assert.deepEqual(one.rows, []);
+  assert.deepEqual({ ...one.json, environment: stamped(one.json.environment) }, {
+    ok: true,
+    environment: {
+      id: ids.prod, serviceId: ids.checkout, name: 'prod', tier: null, effectiveTier: 'tier-1', bindings: { region: 'eu-west-1', cluster: 'prod-a' },
+      endpoints: { grafana: 'https://grafana.example/d/abc?tier=gold&orgId=1', runbook: 'http://wiki.example/checkout' }, mcpEndpoint: null, createdAt: 'T', updatedAt: 'T',
+    },
+    service: { id: ids.checkout, slug: 'checkout-service', name: 'Checkout', tier: 'tier-1' },
+  });
+  // The service view carries its environments by name, with the same endpoints.
+  const svc = await ok('GET /api/services/:id', 'vera', `/api/services/${ids.checkout}`);
+  assert.deepEqual(svc.json.service.environments.map((e) => e.id), [ids.prod, ids.staging]);
+  assert.deepEqual(svc.json.service.environments[0].endpoints, { grafana: 'https://grafana.example/d/abc?tier=gold&orgId=1', runbook: 'http://wiki.example/checkout' });
+  await refused('GET /api/environments/:id', 'vera', '/api/environments/999999', 404, 'no environment 999999');
+  for (const id of BAD_IDS) await refused('GET /api/environments/:id', 'vera', `/api/environments/${id}`, 400, ENVIRONMENT_ID_TEXT);
+});
+
+test('PATCH /api/environments/:id: name, tier, bindings, endpoints, mcpEndpointId with `changed` and one row; a rename clash is 409; nothing differing → no row', async () => {
+  const K = 'PATCH /api/environments/:id';
+  const P = `/api/environments/${ids.prod}`;
+  const { json, rows } = await ok(K, 'oscar', P, { name: 'production', tier: 'tier-2', bindings: { region: 'eu-west-1' }, endpoints: {}, mcpEndpointId: null });
+  assert.deepEqual(json.changed, ['name', 'tier', 'bindings', 'endpoints']);   // mcpEndpointId: null on an unbound environment differs in nothing
+  assert.deepEqual(stamped(json.environment), {
+    id: ids.prod, serviceId: ids.checkout, name: 'production', tier: 'tier-2', effectiveTier: 'tier-2',
+    bindings: { region: 'eu-west-1' }, endpoints: {}, mcpEndpoint: null, createdAt: 'T', updatedAt: 'T',
+  });
+  // The row names the environment as it was and the columns written.
+  assert.deepEqual(rows, [['environment.update', 'oscar', 'acme', 'checkout-service/prod', { fields: ['name', 'tier', 'bindings', 'endpoints'] }]]);
+  const same = await ok(K, 'oscar', P, { name: 'production', bindings: { region: 'eu-west-1' }, mcpEndpointId: null });
+  assert.deepEqual([same.json.changed, same.rows], [[], []]);
+  const back = await ok(K, 'ada', P, { name: 'prod', tier: null, endpoints: { grafana: 'https://grafana.example/d/abc?tier=gold&orgId=1' } });
+  assert.deepEqual([back.json.changed, back.json.environment.effectiveTier], [['name', 'tier', 'endpoints'], 'tier-1']);
+  assert.deepEqual(back.rows, [['environment.update', 'ada', 'acme', 'checkout-service/production', { fields: ['name', 'tier', 'endpoints'] }]]);
+  // The refusals.
+  await refused(K, 'oscar', P, { name: 'staging' }, 409, `environment "staging" of checkout-service exists (id ${ids.staging}) — PATCH /api/environments/${ids.staging} changes it`);
+  await refused(K, 'oscar', P, { name: '' }, 400, WAYS.environmentName);
+  await refused(K, 'oscar', P, { tier: 'gold' }, 400, WAYS.tier('gold'));
+  await refused(K, 'oscar', P, { bindings: [] }, 400, WAYS.bindings);
+  await refused(K, 'oscar', P, { endpoints: { g: 'ftp://x' } }, 400, WAYS.endpoints('g'));
+  await refused(K, 'oscar', P, { endpoints: { g: 'https://x.example/?api_key=1' } }, 400, 'endpoints.g carries the parameter(s) "api_key", which look like credentials — a token goes in the auth field, never in a URL');
+  await refused(K, 'oscar', P, { mcpEndpointId: 999999 }, 400, WAYS.noMcpEndpointInOrg(999999));
+  await refused(K, 'oscar', '/api/environments/999999', { tier: 'tier-1' }, 404, 'no environment 999999');
+  for (const id of BAD_IDS) await refused(K, 'oscar', `/api/environments/${id}`, { tier: 'tier-1' }, 400, ENVIRONMENT_ID_TEXT);
+  // The same name as its own is no clash.
+  const own = await ok(K, 'oscar', P, { name: 'prod' });
+  assert.deepEqual([own.json.changed, own.rows], [[], []]);
+});
+
+test('DELETE /api/environments/:id: the view as it was, one row; gone afterwards', async () => {
+  const K = 'DELETE /api/environments/:id';
+  const { json, rows } = await ok(K, 'oscar', `/api/environments/${ids.staging}`);
+  assert.deepEqual(stamped(json.deleted), {
+    id: ids.staging, serviceId: ids.checkout, name: 'staging', tier: 'tier-3', effectiveTier: 'tier-3',
+    bindings: {}, endpoints: {}, mcpEndpoint: null, createdAt: 'T', updatedAt: 'T',
+  });
+  assert.deepEqual(rows, [['environment.delete', 'oscar', 'acme', 'checkout-service/staging', null]]);
+  await refused('GET /api/environments/:id', 'vera', `/api/environments/${ids.staging}`, 404, `no environment ${ids.staging}`);
+  await refused(K, 'oscar', `/api/environments/${ids.staging}`, 404, `no environment ${ids.staging}`);
+  for (const id of BAD_IDS) await refused(K, 'oscar', `/api/environments/${id}`, 400, ENVIRONMENT_ID_TEXT);
+  const list = await ok('GET /api/services/:id/environments', 'vera', `/api/services/${ids.checkout}/environments`);
+  assert.deepEqual(list.json.environments.map((e) => e.name), ['prod']);
+});
+
+test('DELETE /api/services/:id on a record without packs: the view as it was, the cascaded environments counted, one row', async () => {
+  const K = 'DELETE /api/services/:id';
+  const { json, rows } = await ok(K, 'ada', `/api/services/${ids.payments}`);
+  assert.deepEqual({ ...json, deleted: stamped(json.deleted) }, {
+    ok: true,
+    deleted: {
+      id: ids.payments, slug: 'payments', name: 'Payments', owners: [], tier: null, description: null, source: { kind: 'observogram' },
+      createdAt: 'T', updatedAt: 'T',
+      environments: [{ id: ids.paymentsDev, serviceId: ids.payments, name: 'dev', tier: null, effectiveTier: null, bindings: {}, endpoints: {}, mcpEndpoint: null, createdAt: 'T', updatedAt: 'T' }],
+      packs: [],
+    },
+    environments: 1, packLinks: 0,
+  });
+  assert.deepEqual(rows, [['service.delete', 'ada', 'acme', 'payments', { environments: 1, packLinks: 0 }]]);
+  await refused('GET /api/services/:id', 'vera', `/api/services/${ids.payments}`, 404, `no service ${ids.payments}`);
+  await refused('GET /api/environments/:id', 'vera', `/api/environments/${ids.paymentsDev}`, 404, `no environment ${ids.paymentsDev}`);
+  await refused(K, 'ada', `/api/services/${ids.payments}`, 404, `no service ${ids.payments}`);
+  for (const id of BAD_IDS) await refused(K, 'ada', `/api/services/${id}`, 400, SERVICE_ID_TEXT);
+  // The slug is free again.
+  const again = await ok('POST /api/services', 'oscar', '/api/services', { name: 'Payments' }, 201);
+  ids.payments = again.json.service.id;
+});
+
+// ---------- the registry's side: a register writes the rows ----------
+
+test('a register writes the service, environment and link rows by the person registering; the same content again writes none', async () => {
+  const seq = seqNow();
+  const r = await call('oscar', 'POST', '/api/validate', DEMO_YAML, YAML);
+  assert.equal(r.status, 200, r.text.slice(0, 300));
+  ids.demoPack = r.json.registered.id;
+  assert.ok(ids.demoPack.startsWith('uploaded-demo-skeleton-'), ids.demoPack);
+  assert.deepEqual(rowsAfter(seq), [
+    ['pack.register', 'oscar', 'acme', ids.demoPack, { label: null, source: 'demo-skeleton' }],
+    ['service.create', 'oscar', 'acme', 'demo-skeleton', { via: 'register', pack: ids.demoPack }],
+    ['environment.create', 'oscar', 'acme', 'demo-skeleton/prod', { via: 'register', pack: ids.demoPack }],
+    ['pack.link', 'oscar', 'acme', ids.demoPack, { service: 'demo-skeleton', role: 'primary' }],
+  ]);
+  const again = seqNow();
+  const r2 = await call('oscar', 'POST', '/api/validate', DEMO_YAML, YAML);
+  assert.deepEqual([r2.status, r2.json.registered.id, rowsAfter(again)], [200, ids.demoPack, []], 'the same content again: a touch, no row');
+  // The record the API serves: tier null (graded by the pack), the pack linked as primary.
+  const { json } = await ok('GET /api/services', 'vera', '/api/services');
+  const demo = json.services.find((s) => s.slug === 'demo-skeleton');
+  ids.demo = demo.id;
+  ids.demoProd = demo.environments[0].id;
+  assert.deepEqual(stamped(demo), {
+    id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: [], tier: null, description: null, source: { kind: 'observogram' },
+    createdAt: 'T', updatedAt: 'T',
+    environments: [{ id: ids.demoProd, serviceId: ids.demo, name: 'prod', tier: null, effectiveTier: null, bindings: {}, endpoints: {}, mcpEndpoint: null, createdAt: 'T', updatedAt: 'T' }],
+    packs: [{ id: ids.demoPack, label: null, source: 'demo-skeleton', role: 'primary' }],
+  });
+  // A record is a record: its tier is set on the row the register created.
+  const patched = await ok('PATCH /api/services/:id', 'oscar', `/api/services/${ids.demo}`, { tier: 'tier-1', owners: ['team-demo'] });
+  assert.deepEqual(patched.json.changed, ['owners', 'tier'], 'changed lists the fields in the rule\'s order (name, owners, tier, description)');
+});
+
+// Every pack of the org as GET /api/packs serves it, and the studio's
+// serviceCatalogue() — its source read from studio/app.mjs and run here
+// with the module's functions bound and `state` stubbed — over those
+// entries: the keys of the tiles a studio would draw for this org.
+async function tilesAndRows() {
+  const packs = (await call('vera', 'GET', '/api/packs')).json.packs;
+  const studio = readFileSync(join(ROOT, 'studio', 'app.mjs'), 'utf8');
+  const from = studio.indexOf('\nfunction serviceCatalogue(');
+  const to = studio.indexOf('\n}\n', from);
+  assert.ok(from > 0 && to > from, 'studio/app.mjs declares serviceCatalogue');
+  const source = studio.slice(from, to + 3);
+  const uploaded = packs.filter((p) => p.source === 'uploaded');
+  const state = { catalog: packs, _examplesCache: packs.filter((p) => p.source !== 'uploaded'), pack: null };
+  const { normalizeServiceKey, isLiveAggregatePack, servicesForPack } = serviceKeys;
+  const serviceCatalogue = new Function('normalizeServiceKey', 'isLiveAggregatePack', 'servicesForPack', 'state', `${source}; return serviceCatalogue;`)(
+    normalizeServiceKey, isLiveAggregatePack, servicesForPack, state);
+  const tiles = serviceCatalogue({ ownOnly: true }).map((t) => t.key).sort();
+  const services = (await call('vera', 'GET', '/api/services')).json.services;
+  return { tiles, rows: services.filter((s) => s.packs.length > 0).map((s) => s.slug).sort(), uploaded, services };
+}
+
+test('rows = tiles (A6): the slugs with a pack linked equal the keys of the studio\'s serviceCatalogue() over GET /api/packs, for every kind of register', async () => {
+  // A ?source= hint naming an MCP file makes the pack a live aggregate (the
+  // studio's verbatim regex): no primary, and its own name is skipped — no
+  // service row at all for a pack naming only itself.
+  const hinted = { ...DEMO, metadata: { ...DEMO.metadata, name: 'hinted-skeleton', bindings: { ...DEMO.metadata.bindings, service: 'hinted-skeleton' } } };
+  let seq = seqNow();
+  const r = await call('oscar', 'POST', '/api/validate?source=mcp-x.yaml', JSON.stringify(hinted), { 'Content-Type': 'application/json' });
+  assert.equal(r.status, 200, r.text.slice(0, 300));
+  ids.hintedPack = r.json.registered.id;
+  assert.deepEqual(rowsAfter(seq), [['pack.register', 'oscar', 'acme', ids.hintedPack, { label: null, source: 'mcp-x.yaml' }]], 'an aggregate naming only itself links nothing');
+  // A name-less canonical, with a label and without one (the label, then
+  // the id, is the primary's name — as the studio's tile).
+  const nameless = { apiVersion: 'observability.platform/v1', kind: 'ObservabilityPack', metadata: { version: '0.1.0' }, spec: {} };
+  const nameless2 = { ...nameless, metadata: { version: '0.2.0' } };
+  seq = seqNow();
+  runWithOrg('acme', () => {
+    ids.labelledPack = registerPack(db, 'oscar', { canonical: nameless, source: 'upload', label: 'L1' });
+    ids.unlabelledPack = registerPack(db, 'oscar', { canonical: nameless2, source: 'upload', label: null });
+  });
+  assert.deepEqual(rowsAfter(seq), [
+    ['pack.register', 'oscar', 'acme', ids.labelledPack, { label: 'L1', source: 'upload' }],
+    ['service.create', 'oscar', 'acme', 'l1', { via: 'register', pack: ids.labelledPack }],
+    ['pack.link', 'oscar', 'acme', ids.labelledPack, { service: 'l1', role: 'primary' }],
+    ['pack.register', 'oscar', 'acme', ids.unlabelledPack, { label: null, source: 'upload' }],
+    ['service.create', 'oscar', 'acme', ids.unlabelledPack, { via: 'register', pack: ids.unlabelledPack }],
+    ['pack.link', 'oscar', 'acme', ids.unlabelledPack, { service: ids.unlabelledPack, role: 'primary' }],
+  ]);
+  const { tiles, rows, uploaded } = await tilesAndRows();
+  assert.deepEqual(uploaded.map((p) => p.id).sort(), [ids.demoPack, ids.hintedPack, ids.labelledPack, ids.unlabelledPack].sort(), 'GET /api/packs serves the four');
+  assert.deepEqual(rows, tiles);
+  assert.deepEqual(tiles, ['demo-skeleton', 'l1', ids.unlabelledPack].sort());
+});
+
+test('the reconcile (A5/B4): a name-less pack relabelled moves its primary — one pack.update, pack.unlink relabelled, pack.link to the new primary, exactly one primary, no 500', async () => {
+  const nameless = { apiVersion: 'observability.platform/v1', kind: 'ObservabilityPack', metadata: { version: '0.1.0' }, spec: {} };
+  const seq = seqNow();
+  let id;
+  runWithOrg('acme', () => { id = registerPack(db, 'ada', { canonical: nameless, source: 'upload', label: 'L2' }); });
+  assert.equal(id, ids.labelledPack, 'the same content under the same source: the same id');
+  assert.deepEqual(rowsAfter(seq), [
+    ['pack.update', 'ada', 'acme', id, { fields: ['label'] }],
+    ['pack.unlink', 'ada', 'acme', id, { service: 'l1', reason: 'relabelled' }],
+    ['service.create', 'ada', 'acme', 'l2', { via: 'register', pack: id }],
+    ['pack.link', 'ada', 'acme', id, { service: 'l2', role: 'primary' }],
+  ]);
+  const links = runWithOrg('acme', () => listServicesForPack(db, id));
+  assert.deepEqual(links.map((l) => [l.slug, l.role]), [['l2', 'primary']], 'exactly one primary, the new one');
+  const { json } = await ok('GET /api/services', 'vera', '/api/services');
+  const bySlug = Object.fromEntries(json.services.map((s) => [s.slug, s]));
+  assert.deepEqual([bySlug.l1.packs, bySlug.l2.packs], [[], [{ id, label: 'L2', source: 'upload', role: 'primary' }]], 'l1 stays as a record without a pack; l2 holds the link');
+  const { tiles, rows } = await tilesAndRows();
+  assert.deepEqual(rows, tiles);
+});
+
+test('the reconcile (A5): a pack re-registered byte-identical as a live aggregate loses its primary, its members stay linked, and serviceTierFor reads no stale primary', async () => {
+  const ledger = {
+    ...DEMO,
+    metadata: {
+      ...DEMO.metadata, name: 'ledger-skeleton', bindings: { ...DEMO.metadata.bindings, service: 'ledger' },
+      annotations: { 'mcp.servicesDiscovered': 'billing,refunds' },
+    },
+  };
+  let seq = seqNow();
+  let id;
+  runWithOrg('acme', () => { id = registerPack(db, 'oscar', { canonical: ledger, source: 'ledger-skeleton', label: null }); });
+  assert.deepEqual(rowsAfter(seq), [
+    ['pack.register', 'oscar', 'acme', id, { label: null, source: 'ledger-skeleton' }],
+    ['service.create', 'oscar', 'acme', 'ledger', { via: 'register', pack: id }],
+    ['environment.create', 'oscar', 'acme', 'ledger/prod', { via: 'register', pack: id }],
+    ['pack.link', 'oscar', 'acme', id, { service: 'ledger', role: 'primary' }],
+    ['service.create', 'oscar', 'acme', 'billing', { via: 'register', pack: id }],
+    ['environment.create', 'oscar', 'acme', 'billing/prod', { via: 'register', pack: id }],
+    ['pack.link', 'oscar', 'acme', id, { service: 'billing', role: 'member' }],
+    ['service.create', 'oscar', 'acme', 'refunds', { via: 'register', pack: id }],
+    ['environment.create', 'oscar', 'acme', 'refunds/prod', { via: 'register', pack: id }],
+    ['pack.link', 'oscar', 'acme', id, { service: 'refunds', role: 'member' }],
+  ]);
+  await ok('PATCH /api/services/:id', 'oscar', `/api/services/${(await ok('GET /api/services', 'vera', '/api/services')).json.services.find((s) => s.slug === 'ledger').id}`, { tier: 'tier-2' });
+  assert.deepEqual(runWithOrg('acme', () => serviceTierFor(db, id, 'prod')).tier, 'tier-2', 'graded at the primary\'s tier while it is the primary');
+  seq = seqNow();
+  let same;
+  runWithOrg('acme', () => { same = registerPack(db, 'oscar', { canonical: ledger, source: 'ledger-skeleton', label: 'Ledger (live MCP draft)' }); });
+  assert.equal(same, id);
+  assert.deepEqual(rowsAfter(seq), [
+    ['pack.update', 'oscar', 'acme', id, { fields: ['label'] }],
+    ['pack.unlink', 'oscar', 'acme', id, { service: 'ledger', reason: 'relabelled' }],
+  ], 'the primary link goes; the members were linked already (nothing written for them)');
+  const links = runWithOrg('acme', () => listServicesForPack(db, id));
+  assert.deepEqual(links.map((l) => [l.slug, l.role]).sort(), [['billing', 'member'], ['refunds', 'member']]);
+  assert.equal(runWithOrg('acme', () => serviceTierFor(db, id, 'prod')), null, 'no primary: graded by the pack, never the stale one');
+  const { tiles, rows } = await tilesAndRows();
+  assert.deepEqual(rows, tiles);
+  assert.ok(tiles.includes('billing') && tiles.includes('refunds') && !tiles.includes('ledger'), tiles);
+});
+
+// ---------- a service's deletion and the registry ----------
+
+test('DELETE /api/services/:id cascades the environments and the pack links; the packs stay registered; the deletion holds across a rehydrate (A3)', async () => {
+  const K = 'DELETE /api/services/:id';
+  const { json, rows } = await ok(K, 'oscar', `/api/services/${ids.demo}`);
+  assert.deepEqual({ ...json, deleted: stamped(json.deleted) }, {
+    ok: true,
+    deleted: {
+      id: ids.demo, slug: 'demo-skeleton', name: 'demo-skeleton', owners: ['team-demo'], tier: 'tier-1', description: null, source: { kind: 'observogram' },
+      createdAt: 'T', updatedAt: 'T',
+      environments: [{ id: ids.demoProd, serviceId: ids.demo, name: 'prod', tier: null, effectiveTier: 'tier-1', bindings: {}, endpoints: {}, mcpEndpoint: null, createdAt: 'T', updatedAt: 'T' }],
+      packs: [{ id: ids.demoPack, label: null, source: 'demo-skeleton', role: 'primary' }],
+    },
+    environments: 1, packLinks: 1,
+  });
+  assert.deepEqual(rows, [['service.delete', 'oscar', 'acme', 'demo-skeleton', { environments: 1, packLinks: 1 }]]);
+  await refused('GET /api/environments/:id', 'vera', `/api/environments/${ids.demoProd}`, 404, `no environment ${ids.demoProd}`);
+  const packs = (await call('vera', 'GET', '/api/packs')).json.packs;
+  assert.ok(packs.some((p) => p.id === ids.demoPack), 'the pack stays registered');
+  assert.equal(runWithOrg('acme', () => listServicesForPack(db, ids.demoPack)).length, 0, 'its link is gone');
+  // A rehydrate from the rows and the files (the maps dropped, GET /api/packs
+  // rebuilds them): the pack has a row, so nothing links it again.
+  const seq = seqNow();
+  resetPackRegistry();
+  const after = (await call('vera', 'GET', '/api/packs')).json.packs;
+  assert.deepEqual(after.filter((p) => p.source === 'uploaded').map((p) => p.id).sort(), packs.filter((p) => p.source === 'uploaded').map((p) => p.id).sort(), 'the rehydrate serves the same packs');
+  assert.deepEqual(rowsAfter(seq), [], 'the rehydrate writes nothing — no service.create by system');
+  const services = (await call('vera', 'GET', '/api/services')).json.services;
+  assert.ok(!services.some((s) => s.slug === 'demo-skeleton'), 'the deleted service is not back');
+  assert.equal(runWithOrg('acme', () => serviceTierFor(db, ids.demoPack, 'prod')), null, 'the pack is graded by itself again');
+});
+
+test('the next register of a pack naming a deleted service re-creates it, by the person registering', async () => {
+  const seq = seqNow();
+  const r = await call('ada', 'POST', '/api/validate', DEMO_YAML, YAML);
+  assert.deepEqual([r.status, r.json.registered.id], [200, ids.demoPack]);
+  assert.deepEqual(rowsAfter(seq), [
+    ['service.create', 'ada', 'acme', 'demo-skeleton', { via: 'register', pack: ids.demoPack }],
+    ['environment.create', 'ada', 'acme', 'demo-skeleton/prod', { via: 'register', pack: ids.demoPack }],
+    ['pack.link', 'ada', 'acme', ids.demoPack, { service: 'demo-skeleton', role: 'primary' }],
+  ], 'the pack row exists (a touch); the service, its environment and the link are new, by ada');
+  const demo = (await call('vera', 'GET', '/api/services')).json.services.find((s) => s.slug === 'demo-skeleton');
+  assert.ok(demo && demo.id !== ids.demo, 'a new record (a new id), its tier unset again');
+  assert.deepEqual([demo.tier, demo.owners, demo.packs.map((p) => p.role)], [null, [], ['primary']]);
+  ids.demo = demo.id;
+});
+
+test('the quick-start dedup: the same label on new content replaces the old pack (pack.replace on the old id) and links the new', async () => {
+  const v1 = { ...DEMO, metadata: { ...DEMO.metadata, name: 'quick-start', version: '1.0.0', bindings: { ...DEMO.metadata.bindings, service: 'quick-start' } } };
+  const v2 = { ...v1, metadata: { ...v1.metadata, version: '2.0.0' } };
+  let first;
+  let second;
+  runWithOrg('acme', () => { first = registerPack(db, 'oscar', { canonical: v1, source: 'quick-start', label: 'Quick Start' }); });
+  const seq = seqNow();
+  runWithOrg('acme', () => { second = registerPack(db, 'oscar', { canonical: v2, source: 'quick-start', label: 'Quick Start' }); });
+  assert.notEqual(first, second);
+  assert.deepEqual(rowsAfter(seq), [
+    ['pack.replace', 'oscar', 'acme', first, { label: 'Quick Start', replacedBy: second }],
+    ['pack.register', 'oscar', 'acme', second, { label: 'Quick Start', source: 'quick-start' }],
+    ['pack.link', 'oscar', 'acme', second, { service: 'quick-start', role: 'primary' }],
+  ], 'the service and its environment exist from the first register; the replaced pack\'s link cascaded with its row');
+  const qs = (await call('vera', 'GET', '/api/services')).json.services.find((s) => s.slug === 'quick-start');
+  assert.deepEqual(qs.packs, [{ id: second, label: 'Quick Start', source: 'quick-start', role: 'primary' }]);
+  const { tiles, rows } = await tilesAndRows();
+  assert.deepEqual(rows, tiles);
+});
+
+test('another org reads none of it: bob (bravo) lists no service and every acme id is 404 there', async () => {
+  const { json } = await ok('GET /api/services', 'bob', '/api/services');
+  assert.deepEqual(json.services, []);
+  await refused('GET /api/services/:id', 'bob', `/api/services/${ids.checkout}`, 404, `no service ${ids.checkout}`);
+  await refused('GET /api/environments/:id', 'bob', `/api/environments/${ids.prod}`, 404, `no environment ${ids.prod}`);
+  await refused('PATCH /api/services/:id', 'bob', `/api/services/${ids.checkout}`, { tier: 'tier-1' }, 404, `no service ${ids.checkout}`);
+  await refused('DELETE /api/services/:id', 'bob', `/api/services/${ids.checkout}`, 404, `no service ${ids.checkout}`);
+});
+
+test('DELETE /api/uploads drops the packs (one pack.clear row) and keeps the services, now without packs', async () => {
+  const before = (await call('vera', 'GET', '/api/services')).json.services;
+  const uploaded = (await call('vera', 'GET', '/api/packs')).json.packs.filter((p) => p.source === 'uploaded').length;
+  assert.ok(uploaded >= 5, `${uploaded} uploaded packs`);
+  const seq = seqNow();
+  const r = await call('oscar', 'DELETE', '/api/uploads');
+  assert.equal(r.status, 200, r.text);
+  assert.deepEqual(rowsAfter(seq), [['pack.clear', 'oscar', 'acme', null, { dropped: uploaded }]]);
+  const after = (await call('vera', 'GET', '/api/services')).json.services;
+  assert.deepEqual(after.map((s) => s.slug), before.map((s) => s.slug), 'every service stays');
+  assert.deepEqual(after.flatMap((s) => s.packs), [], 'no pack is linked any more');
+  assert.deepEqual(after.map((s) => s.environments.length), before.map((s) => s.environments.length), 'the environments stay');
+  const { tiles, rows } = await tilesAndRows();
+  assert.deepEqual([rows, tiles], [[], []]);
+});
+
+// ---------- the deletion holds across a restart (A3) ----------
+
+test('a restart (a child server on the same workspace) rehydrates the packs without recreating a deleted service; no service.create by system', async () => {
+  // A pack whose service is then deleted, left on disk for the restart.
+  const r = await call('oscar', 'POST', '/api/validate', DEMO_YAML, YAML);
+  assert.equal(r.status, 200, r.text.slice(0, 300));
+  const demo = (await call('vera', 'GET', '/api/services')).json.services.find((s) => s.slug === 'demo-skeleton');
+  const del = await ok('DELETE /api/services/:id', 'oscar', `/api/services/${demo.id}`);
+  assert.deepEqual([del.json.environments, del.json.packLinks], [1, 1]);
+  const slugsBefore = (await call('vera', 'GET', '/api/services')).json.services.map((s) => s.slug);
+  const seq = seqNow();
+  await closeInProcess();
+  const child = await serve(WORKSPACE);
+  try {
+    const session = (await signIn(child.base, 'vera', pw('vera'))).session;
+    assert.ok(session, 'vera signs in to the restarted server');
+    const h = { Cookie: session, Accept: 'application/json' };
+    const packs = await (await fetch(`${child.base}/api/packs`, { headers: h })).json();
+    assert.ok(packs.packs.some((p) => p.id === ids.demoPack), 'the restarted server rehydrates the pack from its row and file');
+    const services = await (await fetch(`${child.base}/api/services`, { headers: h })).json();
+    assert.deepEqual(services.services.map((s) => s.slug), slugsBefore, 'the deleted service is not back; every other record is');
+    assert.ok(!services.services.some((s) => s.slug === 'demo-skeleton'));
+  } finally {
+    await child.stop();
+  }
+  const raw = await openRaw(join(WORKSPACE, 'observogram.db'), { readOnly: true });
+  try {
+    // A boot over an upgraded store and a sign-in write no row: nothing at
+    // all since the deletion — no service.create, no pack.link, nothing by system.
+    const rows = prepare(raw, 'SELECT actor, action, target_id FROM audit WHERE seq > ? ORDER BY seq').all(seq);
+    assert.deepEqual(rows, [], 'the restart wrote no row');
+  } finally {
+    raw.close();
+  }
+});

@@ -67,6 +67,7 @@ import { validateMcpUrl, redactCredentials, stripMcpUrl, mcpUrlOrigin, droppedNo
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
 import { identityRoutes } from './routes/identity.mjs';
+import { servicesRoutes } from './routes/services.mjs';
 import { authGate, orgContext, authorize, effectiveRoleOf, rankOf, rankOfRole } from './authz.mjs';
 import { versionInfo } from './version.mjs';
 import { buildInfo, buildLabel } from './build-info.mjs';
@@ -633,6 +634,12 @@ app.use(deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonical, readE
 // the request's org — its name and its members — under /api/org* (its
 // admins), every rule server/identity-admin.mjs's — the CLIs' own.
 app.use(identityRoutes({ authorize }));
+
+// The services and environments API (STORE_PLAN slice 4) lives in
+// server/routes/services.mjs: the request's org's service records under
+// /api/services (viewer reads, operator writes) and their environments
+// under /api/environments, every rule server/service-admin.mjs's.
+app.use(servicesRoutes({ authorize }));
 
 // ---------- saved journeys (VALUE_BACKLOG item 11, studio surface) ----------
 

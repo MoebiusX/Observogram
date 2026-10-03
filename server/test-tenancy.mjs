@@ -169,8 +169,10 @@ const OWNER_ONLY = new Set([
 
 // alice, in `org`, creates the objects the sweep addresses: a registered
 // pack, a deploy with a snapshot against the fake MCP, a verify on it, a
-// journey captured and run once, and the org's live pack (planted; the
-// route's own write into a created org is the default-at-'.' block's).
+// journey captured and run once, the org's live pack (planted; the
+// route's own write into a created org is the default-at-'.' block's), and
+// — STORE_PLAN slice 4 — a service record with one environment through
+// the API (rows in the store, nothing under `dir`).
 async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   const h = { Cookie: cookie, 'X-Observogram-CSRF': '1', 'X-Observogram-Org': org };
   mkdirSync(join(dir, 'live'), { recursive: true });
@@ -212,7 +214,19 @@ async function createObjects({ root, cookie, org, journey, mcp, dir }) {
   r = await fetch(`${root}/api/journeys/${journey}/run`, { method: 'POST', headers: { ...h, 'Content-Type': 'application/json' }, body: '{}' });
   j = await r.json();
   assert(j.ok === true && existsSync(join(dir, 'runs')), `alice runs ${journey} once in ${org} (a runs/ record)`, j.error);
-  return { packId, deployId, journey };
+  r = await fetch(`${root}/api/services`, {
+    method: 'POST', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: `${org} sweep service` }),
+  });
+  j = await r.json();
+  const serviceId = j.service?.id;
+  assert(r.status === 201 && Number.isInteger(serviceId) && j.service.slug === `${org}-sweep-service`, `alice creates a service in ${org}`, [r.status, j]);
+  r = await fetch(`${root}/api/services/${serviceId}/environments`, {
+    method: 'POST', headers: { ...h, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'prod' }),
+  });
+  j = await r.json();
+  const environmentId = j.environment?.id;
+  assert(r.status === 201 && Number.isInteger(environmentId) && j.environment.serviceId === serviceId, `alice creates an environment in ${org}`, [r.status, j]);
+  return { packId, deployId, journey, serviceId, environmentId };
 }
 
 // The cross-org route sweep: `who` (a session in another org) calls every
@@ -231,7 +245,7 @@ async function sweep({ root, cookie, who, ids, mcp, dir }) {
     const parse = () => { try { return JSON.parse(text); } catch { return null; } };
     return { status: r.status, json: parse() };
   };
-  const { packId, deployId, journey, userId } = ids;
+  const { packId, deployId, journey, userId, serviceId, environmentId } = ids;
   const p = encodeURIComponent(packId);
   const is404 = (label) => (r) => assert(r.status === 404, `${who}: ${label} → 404`, r.status, 404);
   const ORG_SCOPED = {
@@ -275,6 +289,19 @@ async function sweep({ root, cookie, who, ids, mcp, dir }) {
     'DELETE /api/org/members/:userId': [`/api/org/members/${userId}`, undefined, is404('DELETE /api/org/members/:userId')],
     'POST /api/org/members': ['/api/org/members', {}, (r) => assert(r.status === 400, `${who}: POST /api/org/members {} → 400`, r.status, 400)],
     'PATCH /api/org': ['/api/org', {}, (r) => assert(r.status === 400, `${who}: PATCH /api/org {} → 400`, r.status, 400)],
+    // The services and environments API (STORE_PLAN slice 4): the list holds
+    // none of the other org's ids, each :id route answers 404, and a write
+    // that takes no id lands in the caller's own org (here refused: {} → 400).
+    'GET /api/services': ['/api/services', undefined, (r) => assert(r.status === 200 && !r.json.services.some(s => s.id === serviceId), `${who}: GET /api/services lacks the other org's service`)],
+    'GET /api/services/:id': [`/api/services/${serviceId}`, undefined, is404('GET /api/services/:id')],
+    'GET /api/services/:id/environments': [`/api/services/${serviceId}/environments`, undefined, is404('GET /api/services/:id/environments')],
+    'GET /api/environments/:id': [`/api/environments/${environmentId}`, undefined, is404('GET /api/environments/:id')],
+    'POST /api/services': ['/api/services', {}, (r) => assert(r.status === 400, `${who}: POST /api/services {} → 400`, r.status, 400)],
+    'PATCH /api/services/:id': [`/api/services/${serviceId}`, { tier: 'tier-1' }, is404('PATCH /api/services/:id')],
+    'DELETE /api/services/:id': [`/api/services/${serviceId}`, undefined, is404('DELETE /api/services/:id')],
+    'POST /api/services/:id/environments': [`/api/services/${serviceId}/environments`, { name: 'staging' }, is404('POST /api/services/:id/environments')],
+    'PATCH /api/environments/:id': [`/api/environments/${environmentId}`, { tier: 'tier-1' }, is404('PATCH /api/environments/:id')],
+    'DELETE /api/environments/:id': [`/api/environments/${environmentId}`, undefined, is404('DELETE /api/environments/:id')],
   };
   const memberships = () => JSON.stringify(listMembershipsForUser(currentStore(), userId));
   const membershipsBefore = memberships();
