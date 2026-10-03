@@ -17,7 +17,9 @@
 // by a build before slice 4 is read ONCE, at the first start of this build
 // (boot step 5, server/store/pack-import.mjs), and never again: it stays
 // in place, frozen, hashed by the stale-import guard. No server path
-// writes it.
+// writes it; the one writer is `packc store export` in place
+// (server/store/ops.mjs), which rewrites it from the rows for an older
+// build to boot on.
 //
 // Design constraints (deliberate):
 //   - Zero new dependencies: plain YAML files, inspectable with `cat`.
