@@ -16,7 +16,8 @@
     "tools/",
     "vendor/",
     "examples/",
-    "library/"
+    "library/",
+    "VENDOR-MANIFEST.json"
   ],
   "repository": {
     "type": "git",
@@ -111,6 +112,9 @@
     "coverage": "c8 npm test",
     "sync-spec": "node tools/sync-spec.mjs",
     "sync-spec:check": "node tools/sync-spec.mjs --check",
+    "vendor-manifest": "node tools/gen-vendor-manifest.mjs --write",
+    "vendor-manifest:check": "node tools/gen-vendor-manifest.mjs --check",
+    "lint:vendor-manifest": "node --check tools/gen-vendor-manifest.mjs",
     "test:promql-canon": "node tools/test-promql-canon.mjs",
     "upconvert-legacy": "node tools/upconvert-legacy.mjs",
     "orgs": "node tools/org-admin.mjs",
