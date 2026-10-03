@@ -1314,9 +1314,10 @@ belong together. Each refusal says `Nothing was …` and names its ways out:
   SHA-256 of its bytes); or move it aside (the store's registry stands; the
   rollback's registrations are then adopted from their pack files with no
   label). An index that appeared in a root the store had recorded as
-  having none is refused the same way. Only roots whose hash is recorded
-  are compared; a root that never had an index gets its key at the next
-  export. An
+  having none is refused the same way unless it says exactly what the
+  store holds, which passes with the bookkeeping line. Only roots whose
+  hash is recorded are compared; a root that never had an index gets its
+  key at the next export. An
   `index.json` the server cannot read (anything but absent) aborts the
   start naming the path, before any write — on a store's first start,
   after the identity import committed; the next start imports only the
