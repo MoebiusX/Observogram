@@ -457,9 +457,14 @@ function needsQuoting(s) {
   if (/^[\s\-?:,[\]{}#&*!|>'"%@`]/.test(s)) return true;
   // Trailing whitespace would lose data on parse
   if (/[\s]$/.test(s)) return true;
-  // Embedded ": " (mapping ambiguity) or " #" (comment ambiguity)
-  if (/: /.test(s)) return true;
-  if (/ #/.test(s)) return true;
+  // Trailing ":" reads as a mapping key with an empty value (`job:metric:`,
+  // the recording-rule naming convention, is the common victim: as a
+  // sequence item it re-parses as `{ "job:metric": null }`).
+  if (/:$/.test(s)) return true;
+  // Embedded ":<ws>" (mapping ambiguity) or "<ws>#" (comment ambiguity).
+  // The parser treats a tab like a space in both positions.
+  if (/:\s/.test(s)) return true;
+  if (/\s#/.test(s)) return true;
   return false;
 }
 
