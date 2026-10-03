@@ -565,18 +565,28 @@
       "releasedExports": null
     },
     "tools/lib/mcp-url-safety.mjs": {
-      "sha256": "dfd878dda8839881d8b87e52dc6555bc8ba9b8d9da43b05d8668f15cbd3acb0a",
-      "bytes": 6008,
+      "sha256": "7761ed815452e70864ffe8c895737ceb8485a6d244226a0052534cecf6cb6323",
+      "bytes": 8621,
       "exports": [
         "credentialParamName",
         "droppedNote",
+        "isLocalOrPrivateHost",
         "mcpUrlOrigin",
+        "mcpUrlPolicy",
+        "redactCredentials",
         "safeMcpUrl",
         "stripMcpUrl"
       ],
       "imports": [],
       "npm": [],
-      "changedSinceRelease": false
+      "changedSinceRelease": true,
+      "releasedExports": [
+        "credentialParamName",
+        "droppedNote",
+        "mcpUrlOrigin",
+        "safeMcpUrl",
+        "stripMcpUrl"
+      ]
     },
     "tools/lib/mini-yaml.mjs": {
       "sha256": "c4a903325dd1119f859fbeac1fa3e17b4104ebc2af08f721387dc7a6be7862fd",

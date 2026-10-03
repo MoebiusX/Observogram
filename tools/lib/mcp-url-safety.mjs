@@ -117,3 +117,59 @@ export function droppedNote(dropped, { where = 'not kept in the live pack', of =
   const names = dropped.map((n) => `"${n}"`).join(', ');
   return `${where}: the ${names} parameter${dropped.length === 1 ? '' : 's'} of ${of}, which look${dropped.length === 1 ? 's' : ''} like ${dropped.length === 1 ? 'a credential' : 'credentials'}${hint}`;
 }
+
+// ---------- the fetch policy: what may be FETCHED, not only persisted ----------
+//
+// server/mcp-url.mjs's validateMcpUrl() (the SSRF gate every caller-supplied
+// mcpUrl passes) is this policy plus the server's stderr note; the MCP client
+// (tools/lib/mcp-client.mjs) runs the same policy on the URL a transport hook
+// returns, so a hook cannot reach what the caller's URL could not. Pure: the
+// posture (`allowLocal`) is an argument, never an env read.
+
+const PRIVATE_V4 = [
+  /^127\./, /^10\./, /^192\.168\./, /^169\.254\./, /^0\./,
+  /^172\.(1[6-9]|2\d|3[01])\./,
+];
+
+// localhost / loopback / private / link-local, by literal host — hostnames
+// that RESOLVE to private addresses are not caught (no DNS lookup here); the
+// literal-IP check covers hex/decimal/octal IPv4 forms because the WHATWG URL
+// parser normalises those to dotted-decimal before this runs.
+export function isLocalOrPrivateHost(hostname) {
+  const host = String(hostname ?? '').replace(/^\[|\]$/g, '').toLowerCase();
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  if (PRIVATE_V4.some(re => re.test(host))) return true;
+  // IPv6: loopback/unspecified, unique-local fc00::/7, link-local fe80::/10,
+  // and IPv4-mapped forms of any of the above.
+  if (host === '::1' || host === '::') return true;
+  if (/^f[cd]/.test(host) || /^fe[89ab]/.test(host)) return true;
+  if (host.startsWith('::ffff:')) return isLocalOrPrivateHost(host.slice(7));
+  return false;
+}
+
+// Every `//user:pass@` / `//token@` occurrence in a text → `//***@`.
+export function redactCredentials(text) {
+  return String(text).replace(/\/\/[^/\s@]+@/g, '//***@');
+}
+
+// { error } when the URL must be refused, else { safeUrl, local }: safeUrl is
+// safeMcpUrl(url) (what may be persisted or logged), local says the host is
+// local/private (allowed unless `allowLocal` is false — the server reads
+// OBSERVOGRAM_ALLOW_LOCAL_MCP=0 into that flag). Texts are the server's own.
+export function mcpUrlPolicy(raw, { allowLocal = true } = {}) {
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    return { error: `mcpUrl is not a valid URL: ${redactCredentials(raw)}` };
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return { error: `mcpUrl must be http or https; got scheme '${url.protocol.replace(/:$/, '')}'` };
+  }
+  const safeUrl = safeMcpUrl(url.href);
+  const local = isLocalOrPrivateHost(url.hostname);
+  if (local && !allowLocal) {
+    return { error: `mcpUrl targets a local/private address (${url.hostname}), which OBSERVOGRAM_ALLOW_LOCAL_MCP=0 forbids` };
+  }
+  return { safeUrl, local };
+}
