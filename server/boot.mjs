@@ -601,6 +601,11 @@ function referenceIndex(db, org, root, files) {
 // out is `packc store import --replace` (the replace's pack half takes the
 // file's entries into the store, design §10.2) — with the marker missing,
 // the request needs the (e) repair first, as the identity text says.
+// A key whose root no live org serves — a removed org's, recorded while it
+// was live — is not compared, nor read: the store serves nothing at that
+// root, the replace re-imports live roots only (so it could not clear a
+// refusal here), and the file waits, frozen, for `packc store purge-org`,
+// which drops the key.
 export function packIndexGuard(db, ctx, id, files = packFiles, { noMarker = false } = {}) {
   const recorded = getMetaJson(db, 'pack_index_hashes', {}) || {};
   const out = { disappeared: [], rewritten: {} };
@@ -609,6 +614,8 @@ export function packIndexGuard(db, ctx, id, files = packFiles, { noMarker = fals
   const orgs = listOrgs(db);
   const stale = [];
   for (const key of keys) {
+    const org = orgs.find((o) => packIndexKey(o.root) === key) ?? null;
+    if (!org) continue;
     const path = join(ctx.base, key);
     const idx = readPackIndexStrict(path);
     const now = packIndexHash(idx);
@@ -621,9 +628,8 @@ export function packIndexGuard(db, ctx, id, files = packFiles, { noMarker = fals
       if (typeof was.raw === 'string' && was.raw !== now.raw) out.rewritten[key] = { hash: now, why: 'lastUsedAt only — bookkeeping, not a change' };
       continue;
     }
-    const org = orgs.find((o) => packIndexKey(o.root) === key) ?? null;
-    const reference = org ? referenceIndex(db, org, join(ctx.base, org.root), files) : null;
-    if (reference && !idx.corrupt && canonicalPackIndex(adoptionsResolved(idx.entries, reference)) === canonicalPackIndex(reference)) {
+    const reference = referenceIndex(db, org, join(ctx.base, org.root), files);
+    if (!idx.corrupt && canonicalPackIndex(adoptionsResolved(idx.entries, reference)) === canonicalPackIndex(reference)) {
       out.rewritten[key] = { hash: now, why: 'it says exactly what the store holds — bookkeeping, not a change' };
       continue;
     }
@@ -632,7 +638,7 @@ export function packIndexGuard(db, ctx, id, files = packFiles, { noMarker = fals
   if (stale.length) {
     const lines = stale.map(({ path, was, idx, reference }) => {
       const wrote = idx.corrupt ? `the file it left is corrupt: ${idx.corrupt}` : `the registry it wrote: ${idx.entries.length} entr${idx.entries.length === 1 ? 'y' : 'ies'}`;
-      const holds = reference ? `, the store's: ${reference.length}` : ', the store serves no org at that root';
+      const holds = `, the store's: ${reference.length}`;
       return was.absent
         ? `${path} appeared since store ${id} imported the pack registry (that root had no index.json then): a build before slice 4 registered, relabelled or removed a pack during a rollback (${wrote}${holds}).`
         : `${path} changed since store ${id} last imported or exported it: a build before slice 4 registered, relabelled or removed a pack during a rollback (${wrote}${holds}).`;

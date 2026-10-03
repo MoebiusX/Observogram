@@ -1793,6 +1793,41 @@ test('Import (packs) 8: two orgs, one with no packs/ — "0 packs" reported and 
   }
 });
 
+test('Import (packs) 8b: a removed org\'s index.json is neither compared nor read — relabelled, deleted or unreadable it starts with no line; its key stays (for purge-org) and is never recorded absent', async () => {
+  const idx = JSON.stringify({ a: { label: 'A one', source: 'upload', createdAt: MS.a, lastUsedAt: MS.a } });
+  const base = workspace({
+    users: { users: { alice: { password: PW } } }, orgs: { default: { members: { alice: 'admin' } }, acme: { name: 'Acme', members: { alice: 'admin' } } },
+    files: { 'orgs/acme/packs/a.pack.yaml': PACK_OF('a'), 'orgs/acme/packs/index.json': idx },
+  });
+  const acmeIdx = join(base, 'orgs', 'acme', 'packs', 'index.json');
+  const key = 'orgs/acme/packs/index.json';
+  try {
+    const r = await bootIn(base);
+    const recorded = indexHashOf(idx);
+    assert.deepEqual(meta.getMetaJson(r.db, 'pack_index_hashes')[key], recorded, 'recorded while acme was live');
+    const hashes = () => meta.getMetaJson(r.db, 'pack_index_hashes');
+    const before = hashes();
+    admin.removeOrgSoft(r.db, 'cli', 'acme');
+    assert.deepEqual((await bootIn(base)).logs, [], 'the removal changes nothing for the guard');
+    // A relabel in the frozen root (a hand edit, or an older build): the store serves no org there, the replace
+    // re-imports live roots only, so a refusal here could name no way out that works — it is not compared.
+    write(acmeIdx, JSON.stringify({ a: { label: 'A two', source: 'upload', createdAt: MS.a, lastUsedAt: MS.a } }));
+    assert.deepEqual((await bootIn(base)).logs, [], 'a relabel in a removed org\'s index is not a change');
+    assert.deepEqual(hashes(), before, 'the key stays as recorded: purge-org drops it');
+    assert.deepEqual(packRows(r.db, 'acme').map(([id, label]) => [id, label]), [['a', 'A one']], 'the removed org\'s rows stand, untouched');
+    // Deleted: not a disappearance to record.
+    rmSync(acmeIdx);
+    assert.deepEqual((await bootIn(base)).logs, [], 'not recorded absent');
+    assert.deepEqual(hashes(), before);
+    // Unreadable (a directory where the file was): never read, so it does not abort the start.
+    mkdirSync(acmeIdx);
+    assert.deepEqual((await bootIn(base)).logs, [], 'never read');
+    assert.deepEqual(hashes(), before);
+  } finally {
+    closeBase(base);
+  }
+});
+
 test('Import (packs) 9: OBSERVOGRAM_DB=:memory: — the rows and the report, every start; no marker, no file or directory written', async () => {
   const idx = JSON.stringify({ a: { label: 'A', source: 'upload', createdAt: MS.a, lastUsedAt: MS.a } });
   const base = workspace({ users: { users: { alice: { password: PW } } }, orgs: { default: { members: { alice: 'admin' } }, acme: { members: { alice: 'admin' } } }, files: { 'packs/a.pack.yaml': PACK_OF('a'), 'packs/index.json': idx } });
