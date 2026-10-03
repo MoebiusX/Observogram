@@ -48,8 +48,9 @@ first start of this build (the file stays, read once and compared at
 every start); `packc store export` rewrites it from the rows for an older
 image, 0.5.0 included — see the README's Upgrade And Roll Back.
 The studio opens the store at start; its first start imports the legacy
-files (`users.json`, `orgs.json`) once, prints a report in the pod log and
-leaves them in place, never read again
+files (`users.json`, `orgs.json`, `packs/index.json`) once, prints a report
+in the pod log and leaves them in place: the identity files are never read
+again, `packs/index.json` is compared at every start as above
 ([docs/STORE_PLAN.md](../../docs/STORE_PLAN.md)). From then on the user and
 org CLIs (`kubectl exec … -- node tools/user-admin.mjs …`,
 `tools/org-admin.mjs …`) change users and orgs; a `users.json` or
