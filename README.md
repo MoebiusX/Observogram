@@ -1323,8 +1323,15 @@ belong together. Each refusal says `Nothing was …` and names its ways out:
   SHA-256 of its bytes); or move it aside (the store's registry stands; the
   rollback's registrations are then adopted from their pack files with no
   label). An index that appeared in a root the store had recorded as
-  having none is refused the same way unless it says exactly what the
-  store holds, which passes with the bookkeeping line. Only roots whose
+  having none is refused too, with its own first line — `<path> appeared
+  since store <id> imported the pack registry (that root had no index.json
+  then): a build before slice 4 registered, relabelled or removed a pack
+  during a rollback (the registry it wrote: 1 entry, the store's: 0)` —
+  and two ways out: `packc store import --replace`, or move it aside
+  (there was no file to put back). One that says exactly what the store
+  holds passes, logged as `[store] <path> was rewritten by a build before
+  slice 4 (it says exactly what the store holds — bookkeeping, not a
+  change); the store's registry stands`. Only roots whose
   hash is recorded are compared; a root that never had an index gets its
   key at the next export. An
   `index.json` the server cannot read (anything but absent) aborts the
