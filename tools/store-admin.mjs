@@ -6,11 +6,13 @@
  *
  *   packc store backup <path>      a consistent copy, safe while the server runs
  *   packc store restore <backup>   with the server stopped
- *   packc store export <dir>       users.json / orgs.json a pre-store build boots
- *                                  on; <dir> = the workspace exports in place
+ *   packc store export <dir>       users.json / orgs.json and each org's
+ *                                  packs/index.json a pre-store build boots on;
+ *                                  <dir> = the workspace exports in place
  *                                  (server stopped) — the rollback's first step
  *   packc store import --replace   ask the next server start to re-import
- *                                  users.json / orgs.json as they stand (server
+ *                                  users.json / orgs.json and each org's
+ *                                  packs/index.json as they stand (server
  *                                  stopped) — the re-upgrade after a rollback
  *   packc store rekey-issuer --to <issuer> | --clear
  *                                  the OIDC users follow the IdP to a new URL,
@@ -28,10 +30,10 @@ import {
 
 const USAGE = `usage: packc store backup <path>      Write a consistent copy of the store (safe while the server runs)
        packc store restore <backup>   Replace the store with a backup (server stopped; the old files are moved aside)
-       packc store export <dir>       Write users.json / orgs.json a pre-store build boots on; <dir> = the workspace
-                                      exports in place (server stopped: before rolling the image back)
-       packc store import --replace   Ask the next server start to re-import users.json / orgs.json as they stand
-                                      (server stopped: after a rollback, before starting the store build again)
+       packc store export <dir>       Write users.json / orgs.json and each org's packs/index.json a pre-store build boots on;
+                                      <dir> = the workspace exports in place (server stopped: before rolling the image back)
+       packc store import --replace   Ask the next server start to re-import users.json / orgs.json and each org's packs/index.json
+                                      as they stand (server stopped: after a rollback, before starting the store build again)
        packc store rekey-issuer --to <issuer> | --clear
                                       Move the OIDC users to the IdP's new URL (--to), or disable them for another
                                       IdP (--clear; OBSERVOGRAM_BOOTSTRAP_ADMIN names the next owner) (server stopped)

@@ -2,16 +2,19 @@
 // (docs/STORE_PLAN.md §4 "packc store export <dir> — the exit and the
 // downgrade path").
 //
-//   exportStore(dir, { dbPath, base })   users.json / orgs.json a pre-store
+//   exportStore(dir, { dbPath, base })   users.json / orgs.json, and each
+//                                        org's packs/index.json, a pre-store
 //                                        build boots on, to a directory or
 //                                        in place (with the default org's
 //                                        move); planExport is its read-only half
 //   formatExport(result)                 the CLI's report lines
 //   requestReplace({ dbPath, base })     `packc store import --replace`: asks the
 //                                        next server start to re-import
-//                                        users.json / orgs.json as they stand
-//                                        (boot step 3, planReplace/applyReplace
-//                                        in server/store/import.mjs)
+//                                        users.json / orgs.json and each org's
+//                                        packs/index.json as they stand (boot
+//                                        step 3, planReplace/applyReplace in
+//                                        server/store/import.mjs, planPackReplace
+//                                        in pack-import.mjs)
 //   rekeyIssuer({ to | clear })          `packc store rekey-issuer`: the OIDC
 //                                        users follow the IdP to a new URL
 //                                        (--to), or are retired for another
@@ -601,7 +604,7 @@ function exportInPlace(db, plan) {
 
 // ---------- import --replace: the request ----------
 
-export const REPLACE_REQUESTED = "replace requested: the next server start re-imports users.json/orgs.json with the unit's environment";
+export const REPLACE_REQUESTED = "replace requested: the next server start re-imports users.json/orgs.json and each org's packs/index.json with the unit's environment";
 
 // Only a request: the replace itself runs at the next start, with the
 // unit's environment (its OIDC issuer, its users file), which this shell

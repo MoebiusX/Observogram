@@ -1206,7 +1206,7 @@ store build again.
 ```bash
 packc store import --replace
 # store: /app/.observogram/observogram.db
-# replace requested: the next server start re-imports users.json/orgs.json with the unit's environment
+# replace requested: the next server start re-imports users.json/orgs.json and each org's packs/index.json with the unit's environment
 ```
 
 The next start re-imports the files as they stand, with the unit's own

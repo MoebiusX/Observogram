@@ -2277,6 +2277,32 @@ test('purge-org: a removed org\'s files deleted, its keys dropped from legacy_ha
   await assert.rejects(purge(base, 'acme'), refusedOp(/^org acme was purged already and nothing of it is left at /));
 });
 
+test('replace and export texts: the CLI confirmation, both usages and the README\'s quoted line name packs/index.json beside users.json / orgs.json', () => {
+  // The refusal after a rollback that only registered packs names `packc store import --replace` as
+  // the way to take index.json in (§5.6); the command's own confirmation and help must say it does.
+  const namesPacks = (text, what) => {
+    assert.match(text, /users\.json/, `${what}: names users.json`);
+    assert.match(text, /orgs\.json/, `${what}: names orgs.json`);
+    assert.match(text, /packs\/index\.json/, `${what}: names packs/index.json`);
+  };
+  namesPacks(REPLACE_REQUESTED, 'REPLACE_REQUESTED');
+  const shell = { ...process.env };
+  for (const k of STRIP) { delete shell[`OBSERVOGRAM_${k}`]; delete shell[`TOMOGRAPH_${k}`]; }
+  const usage = (args, status) => {
+    const r = spawnSync(process.execPath, [PACKC, ...args], { env: shell, encoding: 'utf8', timeout: 60_000 });
+    assert.equal(r.status, status, `packc ${args.join(' ')}: exit ${status}`);
+    return r.stderr + r.stdout;
+  };
+  // `packc store` alone is a usage error (2); bare `packc` prints the help and exits 0.
+  for (const [args, status, re] of [[['store'], 2, /^\s*packc store (export|import) .*$/gm], [[], 0, /^\s*packc store\s+(export|import) .*$/gm]]) {
+    const lines = usage(args, status).match(re) || [];
+    assert.equal(lines.length, 2, `packc ${args.join(' ')}: one usage line each for export and import --replace\n${lines.join('\n')}`);
+    for (const line of lines) namesPacks(line, `packc ${args.join(' ')} usage: ${line.trim()}`);
+  }
+  const readme = readFileSync(join(HERE, '..', 'README.md'), 'utf8');
+  assert.ok(readme.includes(`\n# ${REPLACE_REQUESTED}\n`), 'the README quotes the confirmation line as the CLI prints it');
+});
+
 test('purge-org docs: the README and the k8s note say it cannot be undone, what it deletes, and that a store backup holds none of it', () => {
   const section = (text, heading) => {
     const at = text.indexOf(heading);
