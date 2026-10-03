@@ -74,8 +74,9 @@
 // and prunes — the design (§10.1) orders the rows first. The order here is
 // deliberate: the file's content is the plan's reconciled list, which is
 // exactly what the rows hold once the tx commits, so file and rows agree
-// either way; the hash recorded in the tx is of the bytes written; and no
-// file I/O runs inside tx(), as users.json / orgs.json already did not. A
+// either way; the hash recorded in the tx is the canonical hash of the file
+// as written (its bytes' SHA-256 rides along as `raw` only); and no file
+// I/O runs inside tx(), as users.json / orgs.json already did not. A
 // kill between 4 and 5 leaves the file ahead of the rows, the same window
 // the identity files have, and the next boot's guard accepts it (adopted
 // files match the reference; a prune ahead of its row refuses naming

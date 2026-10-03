@@ -861,9 +861,10 @@ byte-level round trip.
   refuses naming it ("start the server once"). The file is written before
   the transaction that applies the adoptions and prunes (not after, as the
   design first said): its content is the reconciled list the rows hold
-  once that transaction commits, the hash recorded is of the bytes
-  written, and no file I/O runs inside the transaction — the order the
-  identity files already use. A directory export writes no index.
+  once that transaction commits, the hash recorded is the canonical
+  hash of the file as written (not of its bytes), and no file I/O runs
+  inside the transaction — the order the identity files already use. A
+  directory export writes no index.
 - **`orgs.json`** is written only if the deployment had one or has more
   than one org.
   - Member keys are the pre-store session sub: the username, or the bare
