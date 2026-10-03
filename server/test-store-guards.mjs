@@ -129,8 +129,11 @@ test('no BEGIN, SAVEPOINT or raw handle prepare()/exec() in server/store outside
 
 const NAMES_LEGACY_FILES = /legacy-files\.mjs['"`]/;
 const IMPORTS_SERVER = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s*)['"`](?:\.\.\/)+server\//;
+// pack-import.mjs (slice 4, boot step 5) reads each org root's
+// packs/index.json once, with the strict reader legacy-files.mjs holds, and
+// hashes it: the same "read once, never again" rule as users.json.
 const LEGACY_FILES_IMPORTERS = [
-  /^server\/boot\.mjs$/, /^server\/tenancy\.mjs$/, /^server\/store\/(?:import|ops|cli)\.mjs$/,
+  /^server\/boot\.mjs$/, /^server\/tenancy\.mjs$/, /^server\/store\/(?:import|ops|cli|pack-import)\.mjs$/,
   /^server\/test-[^/]*\.mjs$/, /^server\/fixtures\//, /^tools\/test-store-prestore-live\.mjs$/,
 ];
 
@@ -166,6 +169,26 @@ test('only the boot, the migration, the store import/ops/cli, the suites and fix
   assert.ok(importers.includes('server/boot.mjs') && importers.includes('server/store/import.mjs'), `found the importers (${importers.join(', ')})`);
   const offenders = importers.filter((f) => !LEGACY_FILES_IMPORTERS.some((re) => re.test(f)));
   assert.deepEqual(offenders, [], 'nothing else reads users.json or orgs.json after the switch');
+});
+
+// ---------- 4b. new SQL lives in repositories only (slice 4) ----------
+
+// A string literal that opens an SQL statement. The modules that compose
+// repository calls — the registry over files and rows, the pack → service
+// rule, boot step 5 — hold none of their own.
+const SQL_LITERAL = /['"`]\s*(?:SELECT\s|INSERT\s+INTO\b|UPDATE\s+\w+\s+SET\b|DELETE\s+FROM\b|WITH\s+\w+\s+AS\b)/i;
+const SQL_FREE = ['server/pack-registry.mjs', 'server/store/pack-links.mjs', 'server/store/pack-import.mjs'];
+
+test('the SQL-literal matcher flags what it must and passes what it must', () => {
+  for (const bad of ["prepare(db, 'SELECT * FROM packs')", 'prepare(db, `\n  UPDATE packs SET x = 1`)', 'x("delete from a")']) assert.ok(SQL_LITERAL.test(bad), bad);
+  for (const good of ["removePack(db, actor, id, { action: 'pack.remove' })", "'DELETE /api/uploads'", "const selected = 'yes'", "'update the label'"]) assert.ok(!SQL_LITERAL.test(good), good);
+});
+
+test('server/pack-registry.mjs, pack-links.mjs and pack-import.mjs hold no SQL of their own (the repositories do)', () => {
+  for (const f of SQL_FREE) {
+    const code = withoutComments(readFileSync(join(ROOT, f), 'utf8'));
+    assert.ok(!SQL_LITERAL.test(code), `${f}: new SQL lives in server/store/{packs,pack-services,services,environments,mcp-endpoints}.mjs`);
+  }
 });
 
 // ---------- 5. the route table ----------

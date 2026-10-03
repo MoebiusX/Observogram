@@ -121,8 +121,8 @@ Usage:
   packc journey  list             List saved journeys + their last outcome
   packc store    backup <path>    Write a consistent copy of the store (safe while the server runs)
   packc store    restore <backup> Replace the store with a backup (server stopped; old files moved aside)
-  packc store    export <dir>     Write users.json / orgs.json a pre-store build boots on (<dir> = the workspace: in place, server stopped)
-  packc store    import --replace Ask the next server start to re-import users.json / orgs.json as they stand (server stopped)
+  packc store    export <dir>     Write users.json / orgs.json and each org's packs/index.json a pre-store build boots on (<dir> = the workspace: in place, server stopped)
+  packc store    import --replace Ask the next server start to re-import users.json / orgs.json and each org's packs/index.json as they stand (server stopped)
   packc store    rekey-issuer --to <issuer> | --clear  Move the OIDC users to the IdP's new URL, or disable them for another IdP (server stopped)
   packc store    purge-org <id>   Delete the files of an org removed with \`npm run orgs -- remove\` (server stopped)
   packc serve                     Boot the studio (Express server)

@@ -50,7 +50,9 @@ const { getOrg } = await import('./store/orgs.mjs');
 const { getMeta, getMetaJson } = await import('./store/meta.mjs');
 const { listUsers } = await import('./store/users.mjs');
 const { listMembershipsForUser } = await import('./store/memberships.mjs');
-const { orgWorkspaceRoot } = await import('./tenancy.mjs');
+const { orgWorkspaceRoot, runWithOrg } = await import('./tenancy.mjs');
+const { listPacks } = await import('./store/packs.mjs');
+const { listServices } = await import('./store/services.mjs');
 const { orgChipModel } = await import('../studio/api.mjs');
 const { GRAFANA_ALERT_RULE_TOOL, GRAFANA_DASHBOARD_TOOL } = await import('./deploy-helpers.mjs');
 const { allKnownToolNames } = await import('../tools/lib/contracts/mcp-capabilities.mjs');
@@ -520,12 +522,26 @@ try {
   writeUsersFile({ users: { alice: { createdAt: 'test', password: hashPassword('alice-passw0rd!') } } }, process.env.OBSERVOGRAM_USERS_FILE);
   writeOrgsFile({ acme: { name: 'Acme', members: { alice: 'admin' } } }, join(WS2, 'orgs.json'));   // note: no 'default' declared
 
-  const { resetWorkspaceCache } = await import('./workspace.mjs');
-  resetWorkspaceCache();
+  const { resetPackRegistry } = await import('./pack-registry.mjs');
+  resetPackRegistry();
   const srv2 = await start({ port: 0, host: '127.0.0.1', silent: true });
   try {
     assert(existsSync(join(WS2, 'orgs', 'default', 'packs', 'flat-pack.pack.yaml')),
       'migration moved the flat pack to orgs/default/packs/');
+    // STORE_PLAN slice 4: the pre-slice-4 index.json moved with packs/ and
+    // was imported at boot step 5 — the label survives the move + import as
+    // a row, the file is frozen in place and hashed under its moved key.
+    const rows = runWithOrg('default', () => listPacks(currentStore()));
+    assert(JSON.stringify(rows.map(p => [p.id, p.label, p.source, p.createdAt])) === JSON.stringify([['flat-pack', 'Flat', 'upload', new Date(1).toISOString()]]),
+      "the moved index.json's entry is a row of org default with its label", rows);
+    assert(existsSync(join(WS2, 'orgs', 'default', 'packs', 'index.json')), 'the index.json moved with packs/ and stays in place (read once, never written)');
+    const hashes = getMetaJson(currentStore(), 'pack_index_hashes');
+    assert(Object.keys(hashes).sort().join() === 'orgs/acme/packs/index.json,orgs/default/packs/index.json'
+      && hashes['orgs/acme/packs/index.json'].absent === true && hashes['orgs/default/packs/index.json'].canon === 'pack-index-v1',
+      'pack_index_hashes holds the moved key (hashed canonically) and acme\'s root (absent)', hashes);
+    assert(!Object.keys(getMetaJson(currentStore(), 'legacy_hashes')).some(k => k.endsWith('index.json')), 'legacy_hashes never holds a pack key');
+    assert(runWithOrg('default', () => listServices(currentStore())).map(s => s.slug).join() === 'demo-skeleton',
+      'the backfill created the service the pack names (demo-skeleton) in org default', runWithOrg('default', () => listServices(currentStore())).map(s => s.slug));
     assert(existsSync(join(WS2, 'orgs', 'default', 'deploys.jsonl')),
       'migration moved deploys.jsonl to orgs/default/');
     assert(!existsSync(join(WS2, 'packs')), 'the flat packs/ dir is gone after migration');

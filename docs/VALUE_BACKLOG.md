@@ -120,7 +120,9 @@ journeys, runs, `deploys.jsonl`) stay files. See
 **A. Workspace persistence** — `.observogram/` (gitignored;
 `OBSERVOGRAM_WORKSPACE` to relocate): `packs/<id>.pack.yaml` (id = the
 existing deterministic content hash, so **zero client changes**),
-`packs/index.json` (label/source/createdAt/lastUsedAt),
+the store's `packs` table (label/source/createdAt/lastUsedAt and the
+services a pack names — [STORE_PLAN.md](STORE_PLAN.md) slice 4; it was
+`packs/index.json` until then, read once and frozen since),
 `deploys.jsonl`, `snapshots/<deployId>/`. `registerUploadedPack` writes
 through; boot rehydrates. The in-memory LRU-20 becomes a disk retention
 policy (keep ~200, prune by lastUsedAt) and eviction stops being silent.

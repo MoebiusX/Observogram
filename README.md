@@ -420,9 +420,16 @@ MCP write tokens are unrelated to the API token: they pass through per
 request and are never stored server-side. Userinfo, the fragment and query
 parameters named like credentials (`token`, `api_key`, `X-Amz-Signature`, …)
 are never kept in the live pack or a draft; put a token in the auth field —
-never in the URL's path. Registered packs and the deploy
-audit live in the `.observogram/` workspace (`OBSERVOGRAM_WORKSPACE`
-relocates it).
+never in the URL's path. Registered packs (one `packs/<id>.pack.yaml`
+each) and the deploy audit live in the `.observogram/` workspace
+(`OBSERVOGRAM_WORKSPACE` relocates it); a pack's label, source, times and
+the services it names are rows in the store (the `packs` and
+`pack_services` tables). A `packs/index.json` left by a build before the
+pack registry moved (0.5.0 and earlier) is read once, at the first start
+of this build, then frozen in place: the server never writes it again and
+only compares it at every start (see [Stale Import](#stale-import));
+`packc store export` rewrites it from the rows for an older build (see
+[Upgrade And Roll Back](#upgrade-and-roll-back)).
 
 Two read routes answer without a session in every posture: `/healthz`
 (probes) and `GET /api/version` — version, build, commit, branch, dirty,
@@ -1051,7 +1058,13 @@ stderr — `the restored store is <id>; <base>/.store-imported names <other>
 2. Start the store build. Its first start imports `users.json` /
    `orgs.json` once, prints the `[store]` report and records what it read
    (the files' SHA-256 in the store, and the `.store-imported` marker in
-   the workspace). Take a `packc store backup` once it runs.
+   the workspace). From this build on it also imports each org root's
+   `packs/index.json` once — the pack registry: every pack's label, source
+   and times, and the services it names — prints `[store] imported the
+   pack registry of N org(s) into <database> (store <id>): …` and records
+   the file's canonical SHA-256 (its entries without `lastUsedAt`) under a
+   key of its own; the file stays where it is, frozen (an upgrade from
+   0.5.0 does only this half). Take a `packc store backup` once it runs.
 
 **Roll back** to a pre-store build (the image before the store) only this
 way. A pre-store build reads `users.json` / `orgs.json`, not the store, so
@@ -1067,6 +1080,7 @@ packc store export /app/.observogram
 # export: in place in /app/.observogram (store 3f0c…)
 # users.json: /app/.observogram/users.json (3 enabled local users; OIDC users are never written)
 # orgs.json: not written (one org at the workspace root, and the deployment never had one)
+# index.json: 1 org root — /app/.observogram/packs/index.json (3 packs)
 # recorded what it wrote in the store and /app/.observogram/.store-imported: a store build starts on these files without refusing
 # note: users revoked in the store stay signed in on a pre-store build until their cookies expire; rotating OBSERVOGRAM_SESSION_SECRET signs everyone out
 # 3. Start the pre-store image on the same workspace.
@@ -1091,6 +1105,25 @@ What the export writes:
   or keeps the default org anywhere but the workspace root: the live orgs,
   their enabled members (an OIDC member by its `sub`, under the recorded
   issuer only) and their roles (`operator` is written as `member`).
+- `packs/index.json` — one per live org root (`<root>/packs/index.json`),
+  in the shape every earlier build wrote (`{ "<id>": { label, source,
+  createdAt, lastUsedAt } }`, times in ms, mode 0644), from the store's
+  rows — after reconciling them with the pack files: a `*.pack.yaml` with
+  no row is adopted (no label, source `workspace`, the file's mtime; its
+  services get rows, actor `cli`), a row whose file is gone is removed on
+  positive evidence. So the older build finds every pack with its label
+  and has nothing to adopt or prune at its first start. The report's line
+  names each path with its pack count and what it adopted or pruned
+  (`index.json: 1 org root — <path> (3 packs; adopted a1; pruned b2)`), or
+  says `index.json: none (no org holds a pack)`. The export records the
+  canonical SHA-256 of each file it wrote (its entries without
+  `lastUsedAt`), so the store build starts on it. It refuses, changing
+  nothing, an `index.json` whose entries differ from what the store last
+  imported or exported (an older build registered, relabelled or removed
+  a pack during a rollback — `packc store import --replace` takes them in,
+  see Re-upgrade below); one that differs in `lastUsedAt` only is
+  overwritten. A `packs/` it cannot list or an index it cannot read
+  refuses before any write. A directory export writes no index.
 - It is the same membership, not the same access: a pre-store build
   enforces no roles, so every viewer and operator regains full write there
   (the report lists them). It has no owners either: an owner enters only
@@ -1140,19 +1173,53 @@ What the export writes:
   the workspace (as on k8s), export to a new directory beside it, such as
   `/data/db/export-$(date +%Y%m%d%H%M%S)`.
 
+**Roll back to 0.5.0** (the first store build: it holds the same database
+but keeps the pack registry in `packs/index.json`) the same way: stop the
+server, `packc store export <workspace>` in place as above — it writes
+each org root's `index.json` from the store's rows, so 0.5.0 finds every
+pack with its label and has nothing to adopt (while this build has never
+completed a start on the store, the registry is still only in the file
+and the export refuses naming it: start the server once first, or roll
+back without the export) — then start the 0.5.0 image
+on the same `OBSERVOGRAM_DB` and workspace. It needs no `users.json` /
+`orgs.json` (it reads the store; the export's files are harmless to it)
+and restarts as often as needed: it reads and rewrites `index.json` as it
+always did, and the hash this build keeps for the index lives under a key
+of its own (`pack_index_hashes`) that 0.5.0's stale-import check never
+reads, so its own rewrites never make it refuse. Without the export,
+0.5.0 starts on the `index.json` frozen at the upgrade: a pack registered
+since has no entry there, so 0.5.0 adopts its file unlabelled (listing it
+by name) and writes that adoption into the file — an entry with no label
+and source `workspace` records nothing the store does not know, so the way
+back starts with the bookkeeping line below and the store's label stands.
+On the way back (stop 0.5.0, start this
+build): a rollback that only **read** packs (0.5.0 rewrites `lastUsedAt`
+on every read) or restarted starts, with one log line — `[store] <path>
+was rewritten by a build before slice 4 (lastUsedAt only — bookkeeping,
+not a change); the store's registry stands` — no row or file written,
+only the file's new byte hash recorded under `pack_index_hashes` so the
+line is said once, not at every start; one
+that only **adopted** files the same, with its own parenthesis — `(it
+says exactly what the store holds — bookkeeping, not a change)`; one
+that **registered, relabelled, removed or RESET** packs refuses (see
+[Stale Import](#stale-import)): `packc store import --replace` takes the
+file's entries into the store, or put the file back, or move it aside.
+
 **Re-upgrade** after a rollback: stop the pre-store build and start the
 store build again.
 
 - **Nothing changed** on the pre-store build: the store build starts on the
   exported files without refusing.
 - **Users or orgs changed** on the pre-store build (its `npm run users` /
-  `npm run orgs`): the start refuses (see [Stale Import](#stale-import)).
-  With the server stopped, request a replace, then start:
+  `npm run orgs`), or **packs changed** on it or on 0.5.0 (a pack
+  registered, relabelled, removed or RESET): the start refuses (see
+  [Stale Import](#stale-import)). With the server stopped, request a
+  replace, then start:
 
 ```bash
 packc store import --replace
 # store: /app/.observogram/observogram.db
-# replace requested: the next server start re-imports users.json/orgs.json with the unit's environment
+# replace requested: the next server start re-imports users.json/orgs.json and each org's packs/index.json with the unit's environment
 ```
 
 The next start re-imports the files as they stand, with the unit's own
@@ -1184,6 +1251,19 @@ may not have), prints a `[store] replaced from …` report and writes one
   removes the default org's memberships (the report lists them) and only
   owners reach it; the others get `no org membership — ask an admin to add
   you` until `npm run orgs -- add-member default <login>`.
+- **Packs**, from each live org root's `packs/index.json` as it stands —
+  the rolled-back build's record: a pack file with no row is added with
+  the entry's label and source (without an entry: adopted, no label), a
+  row whose entry carries another label or source takes the file's (a
+  `pack.update` row), a row whose file is gone is removed on positive
+  evidence (the listing succeeded and the file is absent); a corrupt index
+  keeps the store's labels, and files without a row are still adopted.
+  The report line: `[store]   packs: <org>: added a1 · relabelled b2 ·
+  removed c3 (file gone)` (`· index.json corrupt (<reason>; labels kept
+  from the store)` when it is). An index or a `packs/` it cannot read
+  refuses before any write, and the request stays pending. Services,
+  environments and their links are kept (a new pack may add rows). The
+  recorded index hashes are rewritten to the files as they stand.
 - It refuses, and moves nothing, when a flat entry with data sits beside
   its `orgs/default/` twin, when a rewritten journey would no longer
   parse, or when it would leave no enabled owner who can sign in under the
@@ -1227,6 +1307,43 @@ belong together. Each refusal says `Nothing was …` and names its ways out:
   After a restore of a backup taken before an in-place export, the
   refusal says the files are the export's and names the database the
   export wrote (see [Upgrade And Roll Back](#upgrade-and-roll-back)).
+- **`packs/index.json` changed after the import or the export** — compared
+  per org root, **without `lastUsedAt`**: an older build rewrites that
+  field on every pack read, and a read is not an edit, so that rewrite
+  is logged — `[store] <path> was rewritten by a build before slice 4
+  (lastUsedAt only — bookkeeping, not a change); the store's registry
+  stands` — and never refused. A file that says exactly what the store
+  holds (an entry the older build only adopted, no label and source
+  `workspace`, for a pack the store holds counts as the store's row) is
+  logged the same way with its own parenthesis — `(it says exactly what
+  the store holds — bookkeeping, not a change)` — and never refused. An
+  entry added, dropped or relabelled is: `<path> changed since
+  store <id> last imported or exported it: a build before slice 4
+  registered, relabelled or removed a pack during a rollback (the registry
+  it wrote: 4 entries, the store's: 3)`. Its ways out, with the server
+  stopped: `packc store import --replace` (the next start takes the file's
+  entries into the store — labels and sources from the file; packs it no
+  longer lists are removed on positive evidence); put the file back as it
+  was (the refusal prints the canonical SHA-256: its entries without
+  `lastUsedAt` — or, for a file that was corrupt when recorded, the
+  SHA-256 of its bytes); or move it aside (the store's registry stands; the
+  rollback's registrations are then adopted from their pack files with no
+  label). An index that appeared in a root the store had recorded as
+  having none is refused too, with its own first line — `<path> appeared
+  since store <id> imported the pack registry (that root had no index.json
+  then): a build before slice 4 registered, relabelled or removed a pack
+  during a rollback (the registry it wrote: 1 entry, the store's: 0)` —
+  and two ways out: `packc store import --replace`, or move it aside
+  (there was no file to put back). One that says exactly what the store
+  holds passes, logged as `[store] <path> was rewritten by a build before
+  slice 4 (it says exactly what the store holds — bookkeeping, not a
+  change); the store's registry stands`. Only roots whose
+  hash is recorded are compared; a root that never had an index gets its
+  key at the next export. An
+  `index.json` the server cannot read (anything but absent) aborts the
+  start naming the path, before any write — on a store's first start,
+  after the identity import committed; the next start imports only the
+  packs.
 
 A marker or legacy file that disappeared is repaired and logged, not
 refused. `packc store restore` warns (above) when the marker names another
@@ -1266,7 +1383,9 @@ packc store purge-org acme
 ```
 
 It deletes `orgs/<id>/` and drops that root's entries from the store's
-legacy hashes, writes one `org.purge` audit row and rewrites the marker.
+legacy hashes and its pack index hashes (`dropped from pack_index_hashes:
+orgs/<id>/packs/index.json`), writes one `org.purge` audit row and
+rewrites the marker.
 It runs only on a removed, non-default org whose root is `orgs/<id>`, and
 refuses a root that is a symlink or resolves outside `<workspace>/orgs`,
 and a workspace whose marker names another store. The org row stays, so

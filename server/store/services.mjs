@@ -39,7 +39,9 @@ export function listServices(db) {
   return prepare(db, 'SELECT * FROM services WHERE org_id = ? ORDER BY slug').all(org).map(rowToService);
 }
 
-export function createService(db, actor, { slug, name, owners = [], tier = null, description = null }) {
+// detail extends the service.create row ({ via: 'pack', pack } when a
+// register or the import created it).
+export function createService(db, actor, { slug, name, owners = [], tier = null, description = null }, { detail = null } = {}) {
   const org = requireOrg(REPO);
   requireText(slug, 'slug');
   requireText(name, 'name');
@@ -48,7 +50,7 @@ export function createService(db, actor, { slug, name, owners = [], tier = null,
     const row = prepare(db, `INSERT INTO services (org_id, slug, name, owners, tier, description, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`).get(
       org, slug, name, toJson(requireOwners(owners)), optionalText(tier, 'tier'), optionalText(description, 'description', { max: 4000 }), at, at);
-    writeAudit(db, actor, { orgId: org, action: 'service.create', targetKind: 'service', targetId: slug });
+    writeAudit(db, actor, { orgId: org, action: 'service.create', targetKind: 'service', targetId: slug, detail });
     return rowToService(row);
   });
 }

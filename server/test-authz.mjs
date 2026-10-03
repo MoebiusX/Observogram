@@ -1268,6 +1268,17 @@ async function sweep(base, variants, expect) {
   return { bad, n };
 }
 
+// What a matrix sweep writes: nothing — but RESET (DELETE /api/uploads)
+// records one pack.clear row per cell it answered, even with nothing to
+// drop (a reset is an action a person took; STORE_PLAN slice 4).
+async function onlyResets(ws, before, variants, expect) {
+  const rows = await auditRowsAfter(ws, before);
+  const resets = variants.filter((v) => expect(v, 'DELETE /api/uploads') === 'allowed').length;
+  assert.ok(resets >= 1 && rows.length >= resets && rows.length <= variants.length, `${rows.length} rows for ${resets} answered RESET cells of ${variants.length} variants`);
+  assert.deepEqual(rows.map((r) => [r[0], r[3], r[4]]), Array(rows.length).fill(['pack.clear', null, { dropped: 0 }]),
+    'the matrix wrote nothing but pack.clear { dropped: 0 } rows — one per RESET it answered');
+}
+
 // The audit log's high-water mark, read beside the running child (WAL)
 // through a separate read-only connection.
 async function auditSeq(ws) {
@@ -1468,7 +1479,7 @@ test('the AuthZ matrix — identity posture: every /api route × every principal
     assert.deepEqual(await caseRows(srv.base, variants.find((v) => v.name === 'ada@acme').headers), [], 'ada /API/…');
 
     // Refused requests (and every probe) wrote nothing.
-    assert.equal(await auditSeq(ws), before, 'the matrix wrote no audit row');
+    await onlyResets(ws, before, variants, expectIdentity);
 
     // What the org lists say (§4.2): role = the membership's, effectiveRole = the guard's.
     const orgsOf = async (headers) => (await call(srv.base, ['GET', '/api/orgs'], { headers })).json;
@@ -1531,18 +1542,33 @@ test('the AuthZ matrix — identity posture: every /api route × every principal
     assert.match(plain.headers.get('content-type') || '', /text\/plain/);
     for (const site of ['same-origin', 'none', null]) assert.equal((await loginForm(site)).status, 200, String(site));
 
-    // Existing routes write no audit rows yet (their rows are slices 4–5).
+    // The register routes write their rows (STORE_PLAN slice 4): oscar's
+    // POST /api/validate of examples/demo-skeleton.pack.yaml registers the
+    // pack (pack.register, source = the pack's name: no ?source= hint) and
+    // links it to the service and environment it names, created by him;
+    // the capture writes none (slice 5); RESET writes one pack.clear.
     const oscar = variants.find((v) => v.name === 'oscar@acme').headers;
     const yaml = readFileSync(join(REPO, 'examples', 'demo-skeleton.pack.yaml'), 'utf8');
     const seq = await auditSeq(ws);
     const reg = await call(srv.base, PROBES['POST /api/validate'], { headers: { ...oscar, 'Content-Type': 'application/x-yaml' }, body: yaml });
     assert.equal(reg.json?.ok, true, reg.text.slice(0, 200));
     const id = reg.json.registered.id;
+    assert.deepEqual(await auditRowsAfter(ws, seq), [
+      ['pack.register', 'oscar', 'acme', id, { label: null, source: 'demo-skeleton' }],
+      ['service.create', 'oscar', 'acme', 'demo-skeleton', { via: 'register', pack: id }],
+      ['environment.create', 'oscar', 'acme', 'demo-skeleton/prod', { via: 'register', pack: id }],
+      ['pack.link', 'oscar', 'acme', id, { service: 'demo-skeleton', role: 'primary' }],
+    ], 'the register\'s exact rows, by oscar, in acme');
+    const afterReg = await auditSeq(ws);
+    const again = await call(srv.base, PROBES['POST /api/validate'], { headers: { ...oscar, 'Content-Type': 'application/x-yaml' }, body: yaml });
+    assert.equal(again.json?.registered?.id, id);
+    assert.equal(await auditSeq(ws), afterReg, 'the same YAML again: the same id, a touch, no new row');
     const cap = await call(srv.base, ['POST', '/api/journeys/capture'], { headers: oscar, body: JSON.stringify({ name: 'authz-capture', packAId: id, packBId: id }) });
     assert.equal(cap.json?.ok, true, cap.text.slice(0, 200));
+    assert.equal(await auditSeq(ws), afterReg, 'the capture wrote no audit row (slice 5)');
     const wipe = await call(srv.base, ['DELETE', '/api/uploads'], { headers: oscar });
-    assert.equal(wipe.json?.dropped >= 1, true, wipe.text);
-    assert.equal(await auditSeq(ws), seq, 'validate, capture and reset wrote no audit row');
+    assert.equal(wipe.json?.dropped, 1, wipe.text);
+    assert.deepEqual(await auditRowsAfter(ws, afterReg), [['pack.clear', 'oscar', 'acme', null, { dropped: 1 }]], 'RESET: one pack.clear row; the service stays (no service.delete)');
 
     // Self rows: POST /auth/signout-others answers the caller's own session,
     // with the CSRF header — never an anonymous caller, the bearer or a
@@ -1597,7 +1623,7 @@ test('the AuthZ matrix — token posture: anonymous reads, the bearer an operato
     assert.deepEqual(bad, [], `${bad.length} of ${n} cells disagree`);
     assert.deepEqual(await caseRows(srv.base), []);
     assert.deepEqual(await caseRows(srv.base, variants[1].headers), []);
-    assert.equal(await auditSeq(ws), before);
+    await onlyResets(ws, before, variants, expectToken);
     const o = (await call(srv.base, ['GET', '/api/orgs'])).json;
     assert.deepEqual(o.orgs, [{ id: 'default', name: 'Default', role: null, effectiveRole: 'viewer' }]);
     // live-status by rank: an anonymous caller (a viewer) gets the origin only; the bearer the safe url.
@@ -1680,7 +1706,7 @@ for (const posture of OPEN) {
       const { bad, n } = await sweep(srv.base, variants, expectOpen(posture.tag));
       assert.deepEqual(bad, [], `${bad.length} of ${n} cells disagree`);
       assert.deepEqual(await caseRows(srv.base), []);
-      assert.equal(await auditSeq(ws), before);
+      await onlyResets(ws, before, variants, expectOpen(posture.tag));
       const o = (await call(srv.base, ['GET', '/api/orgs'])).json;
       assert.deepEqual(o.orgs, [{ id: 'default', name: 'Default', role: null, effectiveRole: 'admin' }]);
 

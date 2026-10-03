@@ -219,40 +219,20 @@ function packSelectLabel(p, { prefixUploaded = false } = {}) {
   return `${prefix}${p.label} · v${version}${source ? ` · from ${source}` : ''}`;
 }
 
-function normalizeServiceKey(value) {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
-
-function serviceNamesForPack(p) {
-  const names = new Set();
-  const add = (value) => {
-    const v = String(value || '').trim();
-    if (v) names.add(v);
-  };
-  add(p?.service);
-  add(p?.namespace);
-  add(p?.name);
-  if (Array.isArray(p?.services)) p.services.forEach(add);
-  return [...names];
-}
-
-function primaryServiceName(p) {
-  return String(p?.service || p?.namespace || p?.name || p?.label || '').trim();
-}
-
-function serviceKeyForPack(p) {
-  return normalizeServiceKey(primaryServiceName(p));
-}
-
-function isLiveAggregatePack(p) {
-  const text = [
-    p?.id, p?.label, p?.name, p?.description, p?.source,
-  ].filter(Boolean).join(' ').toLowerCase();
-  return /\b(live|mcp|production-live|draft-from-mcp)\b/.test(text);
-}
+// The service rules — the key every service goes by, the names a pack
+// spells, its primary, the live-aggregate test and the per-pack plan
+// (`servicesForPack`) — live in tools/lib/service-keys.mjs, shared with
+// the server so the rows it writes and the tiles drawn here can never name
+// different services. Bound in boot() from `/lib/service-keys.mjs` (the
+// studio loads tools/lib at call time, never statically: a static import
+// would make the Node suites that import this module resolve `/lib/`).
+// Only what the studio calls is bound: `primaryServiceName` is reached
+// through `serviceKeyForPack` and `servicesForPack`.
+let normalizeServiceKey;
+let serviceNamesForPack;
+let serviceKeyForPack;
+let isLiveAggregatePack;
+let servicesForPack;
 
 // `ownOnly` (the home tiles): only the packs in this workspace's catalog —
 // never the bundled reference examples, which are not the user's services
@@ -293,13 +273,10 @@ function serviceCatalogue({ ownOnly = false } = {}) {
     : [...(state.catalog || []), ...(state._examplesCache || [])];
   for (const p of packs) {
     if (!p?.ok) continue;
-    const aggregate = isLiveAggregatePack(p);
-    const primaryKey = serviceKeyForPack(p);
-    if (!aggregate) add(primaryServiceName(p), p);
-    for (const svc of p.services || []) {
-      if (aggregate && normalizeServiceKey(svc) === primaryKey) continue;
-      add(svc, p);
-    }
+    // The per-pack rule (the primary unless the pack is an aggregate, then
+    // its services[] members) is the module's: the same plan the server
+    // links as rows.
+    for (const s of servicesForPack(p)) add(s.name, p);
   }
   const current = state.pack?.meta?.service;
   if (current && !ownOnly) add(current);
@@ -1531,6 +1508,10 @@ async function boot() {
   // Mount the new chrome FIRST so the user sees the demo shape even
   // while the catalog loads.
   installObservaChrome();
+  // The shared service rules (tools/lib/service-keys.mjs), bound before the
+  // first catalogue read — loaded at call time like every tools/lib module.
+  ({ normalizeServiceKey, serviceNamesForPack, serviceKeyForPack, isLiveAggregatePack, servicesForPack }
+    = await import('/lib/service-keys.mjs'));
   // Which build is this? Fire-and-forget: fills the footer span, the About
   // entry, the header subtitle and the brand tooltip. /api/version is
   // public, so it needs neither identity nor org — and never blocks boot.

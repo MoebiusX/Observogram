@@ -39,6 +39,10 @@ for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'I
 
 import { start } from './index.mjs';
 import { boot } from './fixtures/serve-child.mjs';
+import { currentStore } from './store/db.mjs';
+import { runWithOrg } from './tenancy.mjs';
+import { listPacks } from './store/packs.mjs';
+import { listServices } from './store/services.mjs';
 import { SPEC_DIR, SPEC_VERSION } from '../tools/lib/validator.mjs';
 import { createServer } from 'node:http';
 
@@ -1337,20 +1341,34 @@ try {
   assert(typeof validateRes.conformance?.scorePercent === 'number', 'validate response includes conformance report');
 
   // Workspace persistence (10A): registering a pack writes it through to
-  // the .observogram/ workspace as an inspectable YAML file + index entry.
+  // the .observogram/ workspace as an inspectable YAML file, and (STORE_PLAN
+  // slice 4) a `packs` row — the registry of record for its label, source
+  // and times — linked to the service the pack names. No index.json.
   const registeredId = validateRes.registered?.id;
   assert(typeof registeredId === 'string' && registeredId.length > 0, 'validate returns a registered pack id');
   const wsPackFile = join(SMOKE_WORKSPACE, 'packs', `${registeredId}.pack.yaml`);
   assert(existsSync(wsPackFile), 'registered pack is persisted to the workspace', wsPackFile, 'exists');
-  assert(existsSync(join(SMOKE_WORKSPACE, 'packs', 'index.json')), 'workspace index.json exists after registration');
+  assert(!existsSync(join(SMOKE_WORKSPACE, 'packs', 'index.json')), 'no packs/index.json is written any more (the registry is the packs table)');
+  const rowsAfterRegister = runWithOrg('default', () => listPacks(currentStore()));
+  const registeredRow = rowsAfterRegister.find(p => p.id === registeredId);
+  assert(JSON.stringify([registeredRow?.label, registeredRow?.source]) === JSON.stringify([null, authRaw.metadata.name]),
+    'the registered pack is a row of org default: no label (none given), source = the pack\'s name (no ?source= hint)',
+    [registeredRow?.label, registeredRow?.source], [null, authRaw.metadata.name]);
+  const servicesAfterRegister = runWithOrg('default', () => listServices(currentStore())).map(s => s.slug);
+  assert(servicesAfterRegister.includes(authRaw.metadata.bindings.service), 'the register created the service row the pack names', servicesAfterRegister, authRaw.metadata.bindings.service);
 
-  // DELETE /api/uploads clears the disk copies too — reset means reset.
+  // DELETE /api/uploads clears the rows and the disk copies too — reset
+  // means reset — but keeps the services the packs named (RESET is the
+  // browser's working set, not the org's services).
   const cleared = await fetch(`${base}/api/uploads`, { method: 'DELETE' }).then(r => r.json());
-  assert(cleared.ok === true, 'DELETE /api/uploads responds ok');
+  assert(cleared.ok === true && cleared.dropped === rowsAfterRegister.length, 'DELETE /api/uploads responds ok with the rows dropped', cleared, { ok: true, dropped: rowsAfterRegister.length });
   const wsLeft = existsSync(join(SMOKE_WORKSPACE, 'packs'))
     ? readdirSync(join(SMOKE_WORKSPACE, 'packs')).filter(f => f.endsWith('.pack.yaml')).length
     : 0;
   assert(wsLeft === 0, 'DELETE /api/uploads clears persisted workspace packs', wsLeft, 0);
+  assert(runWithOrg('default', () => listPacks(currentStore())).length === 0, 'DELETE /api/uploads clears the pack rows');
+  assert(JSON.stringify(runWithOrg('default', () => listServices(currentStore())).map(s => s.slug)) === JSON.stringify(servicesAfterRegister),
+    'DELETE /api/uploads keeps the services the packs named');
 
   // POST /api/validate — pre-1.2 should fail gatekeeper
   const bad = await fetch(`${base}/api/validate`, {

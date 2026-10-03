@@ -788,6 +788,7 @@ const environments = await import('./store/environments.mjs');
 const mcpEndpoints = await import('./store/mcp-endpoints.mjs');
 const packs = await import('./store/packs.mjs');
 const packServices = await import('./store/pack-services.mjs');
+const packLinks = await import('./store/pack-links.mjs');
 
 async function freshStore(tag) {
   const path = join(tempDir(tag), 'observogram.db');
@@ -995,8 +996,19 @@ test('context-scoped repositories throw outside runWithOrg()', async () => {
       'packs.list': () => packs.listPacks(db),
       'packs.add': () => packs.addPack(db, 'a', { id: 'p' }),
       'packs.touch': () => packs.touch(db, 'p'),
+      'packs.upsert': () => packs.upsertPack(db, 'a', { id: 'p' }),
+      'packs.remove': () => packs.removePack(db, 'a', 'p'),
+      'packs.touchMany': () => packs.touchMany(db, [['p', '2030-01-01T00:00:00.000Z']]),
+      'packs.clear': () => packs.clearPacks(db, 'a'),
+      'environments.getByName': () => environments.getEnvironmentByName(db, 1, 'prod'),
+      'environments.listForOrg': () => environments.listEnvironmentsForOrg(db),
+      'environments.countBoundTo': () => environments.countEnvironmentsBoundTo(db, 1),
       'pack_services.list': () => packServices.listServicesForPack(db, 'p'),
+      'pack_services.listForOrg': () => packServices.listLinksForOrg(db),
       'pack_services.link': () => packServices.linkPackService(db, 'a', { packId: 'p', serviceId: 1 }),
+      'pack_services.linkIfAbsent': () => packServices.linkPackService(db, 'a', { packId: 'p', serviceId: 1 }, { ifAbsent: true }),
+      'pack_services.unlink': () => packServices.unlinkPackService(db, 'a', 'p', 1, { detail: { service: 's', reason: 'replan' } }),
+      'pack_links.link': () => packLinks.linkPack(db, 'a', { packId: 'p', entry: { id: 'p', service: 's' }, canonical: {}, via: 'register' }),
     };
     for (const [name, call] of Object.entries(calls)) assert.throws(call, /org-scoped — call it inside runWithOrg\(\)/, name);
     assert.deepEqual(auditActions(db), []);
@@ -1042,30 +1054,70 @@ test('Tenancy isolation: org B reads and writes nothing of org A through any con
       assert.deepEqual(packServices.listServicesForPack(db, a.pack.id), []);
       assert.deepEqual(packServices.listPacksForService(db, a.svc.id), []);
       assert.throws(() => packServices.unlinkPackService(db, 'bob', a.pack.id, a.svc.id), /no pack link/);
+      assert.throws(() => packServices.unlinkPackService(db, 'bob', a.pack.id, a.svc.id, { detail: { service: 'checkout', reason: 'replan' } }), /no pack link/);
+      // The org-wide reads and the bookkeeping writes: nothing of A's.
+      assert.equal(environments.getEnvironmentByName(db, a.svc.id, 'prod'), null);
+      assert.deepEqual(environments.listEnvironmentsForOrg(db), []);
+      assert.deepEqual(environments.countEnvironmentsBoundTo(db, a.ep.id), []);
+      assert.deepEqual(packServices.listLinksForOrg(db), []);
+      assert.equal(packs.touchMany(db, [[a.pack.id, '2031-01-01T00:00:00.000Z']]), 0);
+      assert.throws(() => packs.removePack(db, 'bob', a.pack.id, { action: 'pack.evict', detail: { cap: 200 } }), /no pack/);
       // B's own rows, reaching for A's: A's service and A's endpoint are not found.
       const bSvc = services.createService(db, 'bob', { slug: 'checkout', name: 'Bravo checkout' });
       assert.throws(() => environments.createEnvironment(db, 'bob', { serviceId: bSvc.id, name: 'prod', mcpEndpointId: a.ep.id }), /no MCP endpoint/);
       const bEnv = environments.createEnvironment(db, 'bob', { serviceId: bSvc.id, name: 'prod' });
       assert.throws(() => environments.updateEnvironment(db, 'bob', bEnv.id, { mcpEndpointId: a.ep.id }), /no MCP endpoint/);
-      packs.addPack(db, 'bob', { id: 'uploaded-checkout-0123abcd' });
+      assert.equal(environments.getEnvironmentByName(db, a.svc.id, 'prod'), null, 'A\'s service id with a name B also uses');
+      assert.deepEqual(environments.listEnvironmentsForOrg(db).map((e) => e.id), [bEnv.id]);
+      // upsertPack of A's id creates a B row and leaves A's label alone.
+      const up = packs.upsertPack(db, 'bob', { id: 'uploaded-checkout-0123abcd', label: 'Bravo checkout', source: 'upload' });
+      assert.deepEqual([up.created, up.changed, up.pack.orgId, up.pack.label], [true, false, 'bravo', 'Bravo checkout']);
       assert.throws(() => packServices.linkPackService(db, 'bob', { packId: 'uploaded-checkout-0123abcd', serviceId: a.svc.id }), /no service/);
+      assert.throws(() => packServices.linkPackService(db, 'bob', { packId: 'uploaded-checkout-0123abcd', serviceId: a.svc.id }, { ifAbsent: true }), /no service/);
+      assert.equal(packs.touchMany(db, [[a.pack.id, '2031-01-01T00:00:00.000Z']]), 1, 'B\'s own row of that id now — A\'s is unchanged (below)');
+      assert.deepEqual(packServices.listLinksForOrg(db), [], 'B linked nothing');
+      // linkPack from B for A's pack id: B's rows only (B's own checkout service, its prod environment already there).
+      const linked = packLinks.linkPack(db, 'bob', {
+        packId: 'uploaded-checkout-0123abcd', entry: { id: 'uploaded-checkout-0123abcd', service: 'checkout', services: ['checkout'] },
+        canonical: { metadata: { bindings: { service: 'checkout', environments: ['prod'] } } }, via: 'register',
+      });
+      assert.deepEqual(linked, { services: [], environments: [], links: ['checkout'], unlinked: [] });
+      assert.deepEqual(packServices.listLinksForOrg(db).map((l) => [l.packId, l.serviceId, l.role]), [['uploaded-checkout-0123abcd', bSvc.id, 'primary']]);
     });
     // A is untouched.
     runWithOrg('acme', () => {
       assert.equal(services.getService(db, a.svc.id).name, 'Checkout');
       assert.equal(environments.getEnvironment(db, a.env.id).mcpEndpointId, a.ep.id);
+      assert.equal(environments.getEnvironmentByName(db, a.svc.id, 'prod').id, a.env.id);
+      assert.deepEqual(environments.listEnvironmentsForOrg(db).map((e) => e.id), [a.env.id]);
+      assert.deepEqual(environments.countEnvironmentsBoundTo(db, a.ep.id), [a.env.id]);
       assert.equal(mcpEndpoints.getMcpEndpoint(db, a.ep.id).url, 'https://mcp.acme.example/mcp');
       assert.equal(packs.listPacks(db).length, 1);
-      assert.deepEqual(packServices.listServicesForPack(db, a.pack.id).map((l) => l.role), ['primary']);
+      assert.equal(packs.getPack(db, a.pack.id).label, 'Checkout', 'B\'s upsert of the same id left A\'s label');
+      assert.equal(packs.getPack(db, a.pack.id).lastUsedAt, a.pack.lastUsedAt, 'B\'s touchMany of A\'s id changed nothing');
+      assert.deepEqual(packServices.listServicesForPack(db, a.pack.id).map((l) => [l.role, l.slug]), [['primary', 'checkout']]);
+      assert.deepEqual(packServices.listLinksForOrg(db).map((l) => [l.packId, l.serviceId, l.role, l.label, l.source]),
+        [[a.pack.id, a.svc.id, 'primary', 'Checkout', 'upload']]);
       assert.equal(packs.touch(db, a.pack.id, '2030-01-01T00:00:00.000Z'), true);
       assert.throws(() => packs.touch(db, a.pack.id, new Date()), /cannot bind Date/, 'not a silent false from ? values shifted one slot');
       assert.equal(packs.getPack(db, a.pack.id).lastUsedAt, '2030-01-01T00:00:00.000Z');
     });
     assert.deepEqual(auditActions(db, { orgId: 'acme' }), ['mcp_endpoint.create', 'service.create', 'environment.create', 'pack.register', 'pack.link'],
-      'every write audited in its org, touch() not at all');
-    assert.deepEqual(auditActions(db, { orgId: 'bravo' }), ['service.create', 'environment.create', 'pack.register']);
+      'every write audited in its org, touch() and touchMany() not at all');
+    assert.deepEqual(auditActions(db, { orgId: 'bravo' }), ['service.create', 'environment.create', 'pack.register', 'pack.link']);
     // The schema holds the same line: a link across orgs is a foreign-key failure.
     assert.throws(() => prepare(db, "INSERT INTO pack_services (org_id, pack_id, service_id, role) VALUES ('bravo', 'uploaded-checkout-0123abcd', ?, 'member')").run(a.svc.id), /FOREIGN KEY/);
+    // clearPacks from B drops B's rows only.
+    runWithOrg('bravo', () => {
+      assert.equal(packs.clearPacks(db, 'bob'), 1);
+      assert.deepEqual(packs.listPacks(db), []);
+    });
+    runWithOrg('acme', () => {
+      assert.equal(packs.listPacks(db).length, 1);
+      assert.deepEqual(packServices.listServicesForPack(db, a.pack.id).map((l) => l.role), ['primary']);
+    });
+    assert.deepEqual(auditActions(db, { orgId: 'bravo' }), ['service.create', 'environment.create', 'pack.register', 'pack.link', 'pack.clear']);
+    assert.deepEqual(auditRepo.listAudit(db, { orgId: 'bravo', action: 'pack.clear' }).map((r) => [r.targetId, r.detail]), [[null, { dropped: 1 }]]);
   } finally {
     close();
   }
@@ -1103,6 +1155,201 @@ test('context-scoped updates, deletes and cascades within one org', async () => 
       'mcp_endpoint.create', 'service.create', 'service.update', 'environment.create', 'environment.update', 'mcp_endpoint.delete',
       'pack.register', 'pack.link', 'service.create', 'pack.link', 'pack.unlink', 'service.delete', 'pack.remove',
     ]);
+  } finally {
+    close();
+  }
+});
+
+test('the pack registry\'s repository calls: upsertPack, the removal actions, touchMany, clearPacks, clampPackText, the create details, the environment reads, idempotent links', async () => {
+  const { db, close } = await freshStore('registry');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    const rows = (action) => auditRepo.listAudit(db, { orgId: 'acme', action, limit: 1000 }).reverse().map((r) => [r.actor, r.targetId, r.detail]);
+    // clampPackText: pure.
+    assert.equal(packs.clampPackText('  Checkout (scanned) '), 'Checkout (scanned)');
+    assert.equal(packs.clampPackText('x'.repeat(201)), 'x'.repeat(200));
+    assert.equal(packs.clampPackText(` ${'y'.repeat(300)}`), 'y'.repeat(200), 'trimmed, then cut');
+    for (const v of ['', '   ', null, undefined, 7, {}, ['a']]) assert.equal(packs.clampPackText(v), null, JSON.stringify(v));
+    runWithOrg('acme', () => {
+      // addPack: the two times bound as given, ISO strings only; detail merged into pack.register.
+      const old = packs.addPack(db, 'system', { id: 'old', label: 'Old', source: 'workspace', createdAt: '2024-01-02T03:04:05.000Z', lastUsedAt: '2024-02-02T00:00:00.000Z', detail: { imported: true } });
+      assert.deepEqual([old.createdAt, old.lastUsedAt], ['2024-01-02T03:04:05.000Z', '2024-02-02T00:00:00.000Z']);
+      assert.deepEqual(rows('pack.register'), [['system', 'old', { label: 'Old', source: 'workspace', imported: true }]]);
+      assert.throws(() => packs.addPack(db, 'system', { id: 'ms', createdAt: 1700000000000 }), /createdAt must be an ISO time string/);
+      assert.throws(() => packs.addPack(db, 'system', { id: 'ms', lastUsedAt: '2024-01-02' }), /lastUsedAt must be an ISO time string/);
+      assert.throws(() => packs.addPack(db, 'system', { id: 'ms', createdAt: new Date() }), /createdAt must be an ISO time string/);
+      assert.equal(packs.getPack(db, 'ms'), null, 'nothing written');
+      const defaulted = packs.addPack(db, 'alice', { id: 'now', label: 'x'.repeat(200) });
+      assert.equal(defaulted.createdAt, defaulted.lastUsedAt, 'lastUsedAt defaults to createdAt');
+      assert.throws(() => packs.addPack(db, 'alice', { id: 'long', label: 'x'.repeat(201) }), /label must be a non-empty string of at most 200/, 'the repository keeps its limit: the callers clamp');
+      // upsertPack: created → pack.register; changed → pack.update { fields } and last_used_at; equal → a touch, no row.
+      const c = packs.upsertPack(db, 'alice', { id: 'uploaded-checkout-0123abcd', label: 'Checkout', source: 'upload' });
+      assert.deepEqual([c.created, c.changed, c.pack.label, c.pack.source], [true, false, 'Checkout', 'upload']);
+      assert.deepEqual(rows('pack.register').at(-1), ['alice', 'uploaded-checkout-0123abcd', { label: 'Checkout', source: 'upload' }]);
+      const before = packs.getPack(db, 'uploaded-checkout-0123abcd');
+      const u = packs.upsertPack(db, 'alice', { id: 'uploaded-checkout-0123abcd', label: 'Checkout (scanned)', source: 'upload' });
+      assert.deepEqual([u.created, u.changed, u.pack.label, u.pack.source], [false, true, 'Checkout (scanned)', 'upload']);
+      assert.ok(u.pack.lastUsedAt >= before.lastUsedAt, 'last_used_at moves with the update');
+      assert.equal(u.pack.createdAt, before.createdAt);
+      assert.deepEqual(rows('pack.update'), [['alice', 'uploaded-checkout-0123abcd', { fields: ['label'] }]]);
+      const both = packs.upsertPack(db, 'alice', { id: 'uploaded-checkout-0123abcd', label: null, source: 'mcp-notes.yaml' });
+      assert.deepEqual([both.changed, both.pack.label, both.pack.source], [true, null, 'mcp-notes.yaml']);
+      assert.deepEqual(rows('pack.update').at(-1), ['alice', 'uploaded-checkout-0123abcd', { fields: ['label', 'source'] }]);
+      const same = packs.upsertPack(db, 'alice', { id: 'uploaded-checkout-0123abcd', label: null, source: 'mcp-notes.yaml' });
+      assert.deepEqual([same.created, same.changed, same.pack.id], [false, false, 'uploaded-checkout-0123abcd']);
+      assert.equal(rows('pack.update').length, 2, 'an unchanged upsert writes no row');
+      assert.equal(rows('pack.register').length, 3);
+      assert.equal(packs.getPack(db, 'uploaded-checkout-0123abcd').lastUsedAt, same.pack.lastUsedAt, 'but touches');
+      assert.throws(() => packs.upsertPack(db, 'alice', { id: 'uploaded-checkout-0123abcd', label: 'x'.repeat(201) }), /label must be/);
+      // the create details.
+      const svc = services.createService(db, 'alice', { slug: 'checkout', name: 'Checkout' }, { detail: { via: 'register', pack: 'uploaded-checkout-0123abcd' } });
+      const plain = services.createService(db, 'alice', { slug: 'ledger', name: 'Ledger' });
+      assert.deepEqual(rows('service.create'), [['alice', 'checkout', { via: 'register', pack: 'uploaded-checkout-0123abcd' }], ['alice', 'ledger', null]]);
+      const ep = mcpEndpoints.createMcpEndpoint(db, 'alice', { name: 'mcp', url: 'https://mcp.acme.example/mcp' });
+      const prod = environments.createEnvironment(db, 'alice', { serviceId: svc.id, name: 'prod', mcpEndpointId: ep.id }, { detail: { via: 'register', pack: 'uploaded-checkout-0123abcd' } });
+      const staging = environments.createEnvironment(db, 'alice', { serviceId: svc.id, name: 'staging' });
+      const ledgerProd = environments.createEnvironment(db, 'alice', { serviceId: plain.id, name: 'prod', mcpEndpointId: ep.id });
+      assert.deepEqual(rows('environment.create'), [['alice', 'checkout/prod', { via: 'register', pack: 'uploaded-checkout-0123abcd' }], ['alice', 'checkout/staging', null], ['alice', 'ledger/prod', null]]);
+      // the environment reads.
+      assert.equal(environments.getEnvironmentByName(db, svc.id, 'prod').id, prod.id);
+      assert.equal(environments.getEnvironmentByName(db, svc.id, 'dev'), null);
+      assert.equal(environments.getEnvironmentByName(db, 999999, 'prod'), null);
+      assert.deepEqual(environments.listEnvironmentsForOrg(db).map((e) => [e.serviceId, e.name]), [[svc.id, 'prod'], [svc.id, 'staging'], [plain.id, 'prod']], 'by service id, then name');
+      assert.deepEqual(environments.countEnvironmentsBoundTo(db, ep.id), [prod.id, ledgerProd.id].sort((x, y) => x - y));
+      assert.deepEqual(environments.countEnvironmentsBoundTo(db, 999999), []);
+      assert.equal(staging.mcpEndpointId, null);
+      // links: slug in the list; ifAbsent; the unlink detail; the org-wide list.
+      const link = packServices.linkPackService(db, 'alice', { packId: 'uploaded-checkout-0123abcd', serviceId: svc.id, role: 'primary' }, { ifAbsent: true });
+      assert.deepEqual([link.role, link.serviceId], ['primary', svc.id]);
+      assert.equal(packServices.linkPackService(db, 'alice', { packId: 'uploaded-checkout-0123abcd', serviceId: svc.id, role: 'primary' }, { ifAbsent: true }), null);
+      assert.equal(packServices.linkPackService(db, 'alice', { packId: 'uploaded-checkout-0123abcd', serviceId: svc.id, role: 'member' }, { ifAbsent: true }), null, 'the pair, in any role');
+      assert.throws(() => packServices.linkPackService(db, 'alice', { packId: 'uploaded-checkout-0123abcd', serviceId: svc.id }), /UNIQUE/, 'without ifAbsent the schema refuses');
+      assert.equal(rows('pack.link').length, 1);
+      packServices.linkPackService(db, 'alice', { packId: 'uploaded-checkout-0123abcd', serviceId: plain.id }, { ifAbsent: true });
+      packServices.linkPackService(db, 'alice', { packId: 'old', serviceId: plain.id, role: 'primary' });
+      assert.deepEqual(packServices.listServicesForPack(db, 'uploaded-checkout-0123abcd').map((l) => [l.role, l.slug, l.serviceId]),
+        [['primary', 'checkout', svc.id], ['member', 'ledger', plain.id]]);
+      assert.deepEqual(packServices.listLinksForOrg(db).map((l) => [l.serviceId, l.role, l.packId, l.label, l.source]), [
+        [svc.id, 'primary', 'uploaded-checkout-0123abcd', null, 'mcp-notes.yaml'],
+        [plain.id, 'primary', 'old', 'Old', 'workspace'],
+        [plain.id, 'member', 'uploaded-checkout-0123abcd', null, 'mcp-notes.yaml'],
+      ], 'by service, primary first, then pack id; with the pack\'s label and source');
+      packServices.unlinkPackService(db, 'alice', 'uploaded-checkout-0123abcd', plain.id, { detail: { service: 'ledger', reason: 'replan' } });
+      packServices.unlinkPackService(db, 'alice', 'old', plain.id);
+      assert.deepEqual(rows('pack.unlink'), [['alice', 'uploaded-checkout-0123abcd', { service: 'ledger', reason: 'replan' }], ['alice', 'old', { service: 'ledger' }]]);
+      // touchMany: one transaction, the count changed, no audit row, ISO strings only.
+      const n = auditRepo.listAudit(db, { orgId: 'acme', limit: 1000 }).length;
+      assert.equal(packs.touchMany(db, [['old', '2032-01-01T00:00:00.000Z'], ['now', '2032-01-02T00:00:00.000Z'], ['missing', '2032-01-03T00:00:00.000Z']]), 2);
+      assert.deepEqual([packs.getPack(db, 'old').lastUsedAt, packs.getPack(db, 'now').lastUsedAt], ['2032-01-01T00:00:00.000Z', '2032-01-02T00:00:00.000Z']);
+      assert.equal(packs.touchMany(db, []), 0);
+      assert.throws(() => packs.touchMany(db, [['old', 1700000000000]]), /at must be an ISO time string/);
+      assert.throws(() => packs.touchMany(db, [['old', new Date()]]), /at must be an ISO time string/);
+      assert.throws(() => packs.touchMany(db, [['old']]), /\[id, at\] entries/);
+      assert.throws(() => packs.touchMany(db, new Map()), /array of \[id, at\] entries/);
+      assert.equal(auditRepo.listAudit(db, { orgId: 'acme', limit: 1000 }).length, n, 'bookkeeping, not audited');
+      // removePack: the action names why; anything else is refused before any write.
+      assert.deepEqual(packs.removePack(db, 'alice', 'old', { action: 'pack.replace', detail: { label: 'Old', replacedBy: 'now' } }).id, 'old');
+      assert.deepEqual(rows('pack.replace'), [['alice', 'old', { label: 'Old', replacedBy: 'now' }]]);
+      packs.addPack(db, 'alice', { id: 'evicted' });
+      packs.removePack(db, 'alice', 'evicted', { action: 'pack.evict', detail: { cap: 200 } });
+      assert.deepEqual(rows('pack.evict'), [['alice', 'evicted', { cap: 200 }]]);
+      assert.throws(() => packs.removePack(db, 'alice', 'now', { action: 'pack.delete' }), /recorded as pack\.remove, pack\.replace, pack\.evict, not "pack\.delete"/);
+      assert.throws(() => packs.removePack(db, 'alice', 'now', { action: 'pack.clear' }), TypeError);
+      assert.ok(packs.getPack(db, 'now'), 'a refused action removes nothing');
+      packs.removePack(db, 'system', 'now', { detail: { reason: 'file gone' } });
+      assert.deepEqual(rows('pack.remove'), [['system', 'now', { reason: 'file gone' }]]);
+      assert.throws(() => packs.removePack(db, 'alice', 'now'), /no pack "now"/);
+      // clearPacks: the links cascade, the services and environments stay, one pack.clear { dropped }.
+      packs.addPack(db, 'alice', { id: 'p2' });
+      packServices.linkPackService(db, 'alice', { packId: 'p2', serviceId: plain.id, role: 'primary' });
+      assert.equal(packs.listPacks(db).length, 2);
+      assert.equal(packs.clearPacks(db, 'alice'), 2);
+      assert.deepEqual(packs.listPacks(db), []);
+      assert.deepEqual(packServices.listLinksForOrg(db), [], 'the links went with the packs');
+      assert.deepEqual(services.listServices(db).map((s) => s.slug), ['checkout', 'ledger'], 'the services stay');
+      assert.equal(environments.listEnvironmentsForOrg(db).length, 3, 'and their environments');
+      assert.deepEqual(rows('pack.clear'), [['alice', null, { dropped: 2 }]]);
+      assert.equal(packs.clearPacks(db, 'alice'), 0);
+      assert.deepEqual(rows('pack.clear').at(-1), ['alice', null, { dropped: 0 }]);
+    });
+    assert.deepEqual(auditActions(db, { orgId: 'acme' }).filter((x) => x.startsWith('pack.')), [
+      'pack.register', 'pack.register', 'pack.register', 'pack.update', 'pack.update',
+      'pack.link', 'pack.link', 'pack.link', 'pack.unlink', 'pack.unlink',
+      'pack.replace', 'pack.register', 'pack.evict', 'pack.remove', 'pack.register', 'pack.link', 'pack.clear', 'pack.clear',
+    ]);
+  } finally {
+    close();
+  }
+});
+
+// The one pack → rows rule (server/store/pack-links.mjs): the plan from
+// tools/lib/service-keys.mjs over the catalogue entry, reconciled with the
+// pack's links — created once, nothing twice, a changed plan unlinks first.
+test('linkPack: creates the service, environment and link rows a pack names once; a second call writes nothing; an aggregate links members only; a moved primary unlinks first; the via vocabulary', async () => {
+  const { db, close } = await freshStore('links');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    const rows = (sinceSeq = 0) => auditRepo.listAudit(db, { orgId: 'acme', limit: 1000 }).filter((r) => r.seq > sinceSeq).reverse().map((r) => [r.action, r.actor, r.targetId, r.detail]);
+    const last = () => auditRepo.listAudit(db, { orgId: 'acme', limit: 1 })[0]?.seq ?? 0;
+    runWithOrg('acme', () => {
+      packs.addPack(db, 'alice', { id: 'p1', label: 'Checkout (scanned)', source: 'upload' });
+      packs.addPack(db, 'alice', { id: 'live', label: 'production-live (live MCP draft)', source: 'production-live (live MCP draft)' });
+      packs.addPack(db, 'alice', { id: 'bare', label: null, source: 'upload' });
+      // A plain pack: primary = service, one environment per binding.
+      const plain = { id: 'p1', label: 'Checkout (scanned)', description: 'Uploaded pack — upload', name: 'checkout', service: 'Checkout', namespace: 'payments', services: ['Checkout', 'payments'], source: 'uploaded' };
+      const c1 = { metadata: { name: 'checkout', bindings: { service: 'Checkout', namespace: 'payments', environments: ['prod', 'staging'] } }, spec: { environments: { prod: {}, dev: {} } } };
+      assert.deepEqual(packLinks.planPackServices(plain, c1), { services: [{ name: 'Checkout', key: 'checkout', role: 'primary' }, { name: 'payments', key: 'payments', role: 'member' }], environments: ['prod', 'dev', 'staging'] });
+      let r = packLinks.linkPack(db, 'alice', { packId: 'p1', entry: plain, canonical: c1, via: 'register' });
+      assert.deepEqual(r, { services: ['checkout', 'payments'], environments: ['checkout/prod', 'checkout/dev', 'checkout/staging', 'payments/prod', 'payments/dev', 'payments/staging'], links: ['checkout', 'payments'], unlinked: [] });
+      assert.deepEqual(rows().map((x) => x[0]).filter((a) => a !== 'pack.register'), [
+        'service.create', 'environment.create', 'environment.create', 'environment.create', 'pack.link',
+        'service.create', 'environment.create', 'environment.create', 'environment.create', 'pack.link',
+      ]);
+      assert.deepEqual(rows().filter((x) => x[0] === 'service.create').map((x) => [x[1], x[2], x[3]]), [['alice', 'checkout', { via: 'register', pack: 'p1' }], ['alice', 'payments', { via: 'register', pack: 'p1' }]]);
+      assert.deepEqual(rows().filter((x) => x[0] === 'pack.link').map((x) => x[3]), [{ service: 'checkout', role: 'primary' }, { service: 'payments', role: 'member' }]);
+      assert.deepEqual(services.listServices(db).map((s) => [s.slug, s.name, s.tier, s.owners]), [['checkout', 'Checkout', null, []], ['payments', 'payments', null, []]], 'tier and owners unset: nothing invented');
+      // The same plan again: nothing.
+      const seq = last();
+      r = packLinks.linkPack(db, 'alice', { packId: 'p1', entry: plain, canonical: c1, via: 'register' });
+      assert.deepEqual(r, { services: [], environments: [], links: [], unlinked: [] });
+      assert.deepEqual(rows(seq), []);
+      // A live aggregate: no primary, members for its discovered services (its own key skipped), environments for every member.
+      const agg = { id: 'live', label: 'production-live (live MCP draft)', description: 'Uploaded pack — production-live (live MCP draft)', name: 'production-live', service: 'production-live', namespace: 'production-live', services: ['checkout', 'ledger', 'production-live'], source: 'uploaded' };
+      const c2 = { metadata: { name: 'production-live', annotations: { 'mcp.servicesDiscovered': 'checkout,ledger,production-live' }, bindings: { environments: ['prod'] } } };
+      r = packLinks.linkPack(db, 'system', { packId: 'live', entry: agg, canonical: c2, via: 'import' });
+      assert.deepEqual(r, { services: ['ledger'], environments: ['ledger/prod'], links: ['checkout', 'ledger'], unlinked: [] });
+      assert.deepEqual(packServices.listServicesForPack(db, 'live').map((l) => [l.role, l.slug]), [['member', 'checkout'], ['member', 'ledger']]);
+      assert.deepEqual(rows(seq).filter((x) => x[0] === 'service.create').map((x) => [x[1], x[2], x[3]]), [['system', 'ledger', { via: 'import', pack: 'live' }]]);
+      // A moved primary (a name-less pack re-labelled): the old primary unlinked FIRST, the new linked — one primary, no UNIQUE failure.
+      const c3 = { metadata: { bindings: { environments: ['prod'] } } };
+      const l1 = { id: 'bare', label: 'L1', description: 'Uploaded pack — upload', service: '', namespace: '', services: [], source: 'uploaded' };
+      const l2 = { ...l1, label: 'L2' };
+      packLinks.linkPack(db, 'alice', { packId: 'bare', entry: l1, canonical: c3, via: 'register' });
+      assert.deepEqual(packServices.listServicesForPack(db, 'bare').map((l) => [l.role, l.slug]), [['primary', 'l1']]);
+      const seq2 = last();
+      r = packLinks.linkPack(db, 'alice', { packId: 'bare', entry: l2, canonical: c3, via: 'register' });
+      assert.deepEqual(r, { services: ['l2'], environments: ['l2/prod'], links: ['l2'], unlinked: ['l1'] });
+      assert.deepEqual(packServices.listServicesForPack(db, 'bare').map((l) => [l.role, l.slug]), [['primary', 'l2']]);
+      assert.deepEqual(rows(seq2).map((x) => [x[0], x[3]]), [
+        ['pack.unlink', { service: 'l1', reason: 'relabelled' }],
+        ['service.create', { via: 'register', pack: 'bare' }], ['environment.create', { via: 'register', pack: 'bare' }], ['pack.link', { service: 'l2', role: 'primary' }],
+      ]);
+      assert.ok(services.getServiceBySlug(db, 'l1'), 'the service the plan no longer names stays: a service without a pack exists');
+      // The same pack as an aggregate (a label with "live"): its primary goes, the members stay; the reason follows the via.
+      const seq3 = last();
+      r = packLinks.linkPack(db, 'system', { packId: 'bare', entry: { ...l2, label: 'bare (live MCP draft)', services: ['checkout'] }, canonical: c3, via: 'adopt' });
+      assert.deepEqual(r, { services: [], environments: [], links: ['checkout'], unlinked: ['l2'] });
+      assert.deepEqual(rows(seq3).map((x) => [x[0], x[3]]), [['pack.unlink', { service: 'l2', reason: 'replan' }], ['pack.link', { service: 'checkout', role: 'member' }]]);
+      // The vocabulary; an unusable environment name is left out; a long display name is cut, its key bounded by the plan.
+      assert.throws(() => packLinks.linkPack(db, 'alice', { packId: 'p1', entry: plain, canonical: c1, via: 'manual' }), /linked via one of register, import, adopt, replace, export, not "manual"/);
+      const longName = `${'Long  '.repeat(35)}name`;   // 214 characters; its key (runs of spaces collapse) 179
+      const c4 = { metadata: { bindings: { service: longName, environments: ['ok', 'x'.repeat(201)] } } };
+      r = packLinks.linkPack(db, 'alice', { packId: 'p1', entry: { ...plain, service: longName, namespace: '', services: [] }, canonical: c4, via: 'register' });
+      assert.deepEqual([r.services.length, r.environments.length, r.unlinked], [1, 1, ['checkout', 'payments']]);
+      const created = services.getServiceBySlug(db, r.services[0]);
+      assert.equal(created.name.length, 200, 'the display name is cut to the text limit');
+      assert.deepEqual(environments.listEnvironments(db, created.id).map((e) => e.name), ['ok'], 'the 201-character environment name is dropped, never cut');
+    });
   } finally {
     close();
   }
