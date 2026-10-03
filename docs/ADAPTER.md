@@ -1,6 +1,6 @@
 # Adapter — canonical → layered
 
-The adapter (`tools/lib/adapter.mjs`) projects a canonical ObservabilityPack v1.3 manifest into the studio's layered display object. Pure ESM, no Node APIs — the Express server, the `npm run adapt` CLI, and (potentially) browser-side consumers all import the same module.
+The adapter (`tools/lib/adapter.mjs`) projects a canonical ObservabilityPack v1.4 manifest into the studio's layered display object. Pure ESM, no Node APIs — the Express server, the `npm run adapt` CLI, and (potentially) browser-side consumers all import the same module.
 
 ## Public API
 
@@ -155,7 +155,7 @@ SLO -> SLI -> metrics -> exporter/scrape -> dashboard -> alert chain.
 
 The inverse-direction sibling lives in `tools/lib/legacy.mjs`: it detects the
 pre-v1.2 layered "studio-shape" JSON (the original pack format — working
-examples in `examples/legacy/`) and upconverts it into a canonical v1.3
+examples in `examples/legacy/`) and upconverts it into a canonical v1.4
 manifest, so the one canonical pipeline serves old packs too.
 
 ```js

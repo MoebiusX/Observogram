@@ -3,12 +3,15 @@
  * tools/test-validator.mjs — the vendored spec through tools/lib/validator.mjs.
  *
  * Spec 1.3 (RFC-0002) adds `good_when: below | above` to threshold and distribution SLIs and forbids
- * it on ratio and custom ones with a `not` sub-schema, the form this walker enforces. This suite
- * pins: the version constants agree with the vendored manifest and the one directory on disk; the
- * 1.3 schema accepts good_when where the spec allows it and rejects it where it does not, naming
- * the error; a bad value is named; and every pack the repo ships or tests with — all 1.2-shaped,
- * none carries good_when — validates unchanged, so a 1.2 pack reaches the same verdict. Then the
- * drift guard: no code, studio text, workflow or current-version doc names another spec version.
+ * it on ratio and custom ones with a `not` sub-schema, the form this walker enforces. Spec 1.4
+ * (RFC-0003) adds `alerting.rules[]`, the operational (non-SLO) alert rules: name and expr required,
+ * engine a closed enum, routes still the only required key. This suite pins: the version constants
+ * agree with the vendored manifest and the one directory on disk; the schema accepts good_when where
+ * the spec allows it and rejects it where it does not, naming the error; it accepts alerting.rules
+ * and names a rule missing expr, an unknown engine, a non-SEV severity; and every pack the repo ships
+ * or tests with — all 1.3-shaped, none carries alerting.rules — validates unchanged, so a 1.3 pack
+ * reaches the same verdict. Then the drift guard: no code, studio text, workflow or current-version
+ * doc names another spec version.
  */
 
 import { test } from 'node:test';
@@ -26,17 +29,17 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
 const example = () => parseYaml(readFileSync(EXAMPLE, 'utf8'));
 const errorsOf = (pack) => validateCanonical(pack, SCHEMA);
 
-test('the version constants, the vendored manifest and the one directory on disk agree (spec 1.3)', () => {
-  assert.equal(SPEC_VERSION, '1.3');
-  assert.equal(SPEC_DIR, 'vendor/observability-pack-spec/v1.3');
-  assert.equal(SPEC_SCHEMA_PATH, 'vendor/observability-pack-spec/v1.3/observability-pack.schema.json');
+test('the version constants, the vendored manifest and the one directory on disk agree (spec 1.4)', () => {
+  assert.equal(SPEC_VERSION, '1.4');
+  assert.equal(SPEC_DIR, 'vendor/observability-pack-spec/v1.4');
+  assert.equal(SPEC_SCHEMA_PATH, 'vendor/observability-pack-spec/v1.4/observability-pack.schema.json');
   const manifest = JSON.parse(readFileSync(resolve(ROOT, 'vendor/observability-pack-spec/VERSIONS.json'), 'utf8'));
   assert.equal(manifest.schema, SPEC_VERSION, 'VERSIONS.json names the spec version the validator serves');
   assert.ok(Object.keys(manifest.files).every(f => f.startsWith(`v${SPEC_VERSION}/`)), 'every vendored file sits under the current version directory');
   const dirs = readdirSync(resolve(ROOT, 'vendor/observability-pack-spec')).filter(n => /^v\d+\.\d+$/.test(n) && statSync(join(ROOT, 'vendor/observability-pack-spec', n)).isDirectory());
-  assert.deepEqual(dirs, [`v${SPEC_VERSION}`], 'one version directory: 1.3 validates every 1.2 pack, so 1.2 is history (git keeps it)');
+  assert.deepEqual(dirs, [`v${SPEC_VERSION}`], 'one version directory: 1.4 validates every 1.3 pack (as 1.3 did every 1.2 pack), so 1.3 is history (git keeps it)');
   for (const f of ['observability-pack.schema.json', 'spec.md', 'examples/payment-service.pack.yaml', 'docs/maturity-model.md']) assert.ok(existsSync(resolve(ROOT, SPEC_DIR, f)), f);
-  // The schema is the 1.3 one: good_when on the SLI, forbidden by `not` on ratio and custom.
+  // The schema carries 1.3's good_when on the SLI, forbidden by `not` on ratio and custom.
   const sli = SCHEMA.$defs.SLI;
   assert.deepEqual(sli.properties.good_when.enum, ['below', 'above']);
   assert.equal(sli.properties.good_when.default, 'below');
@@ -45,7 +48,17 @@ test('the version constants, the vendored manifest and the one directory on disk
   assert.deepEqual(branch('custom').properties, { good_when: { not: {} } });
   assert.equal(branch('threshold').properties, undefined);
   assert.equal(branch('distribution').properties, undefined);
-  assert.match(readFileSync(resolve(ROOT, SPEC_DIR, 'spec.md'), 'utf8'), /^\| Spec version \| 1\.3 \|/m);
+  // And 1.4's alerting.rules: AlertRule (name and expr required, closed) under Alerting, whose only required key is still routes.
+  const alerting = SCHEMA.$defs.Alerting;
+  assert.deepEqual(alerting.required, ['routes']);
+  assert.deepEqual(alerting.properties.rules.items, { $ref: '#/$defs/AlertRule' });
+  const rule = SCHEMA.$defs.AlertRule;
+  assert.deepEqual(rule.required, ['name', 'expr']);
+  assert.equal(rule.additionalProperties, false);
+  assert.deepEqual(Object.keys(rule.properties).sort(), ['annotations', 'engine', 'expr', 'for', 'labels', 'name', 'severity', 'source']);
+  assert.deepEqual(rule.properties.engine, { $ref: '#/$defs/AlertEngine' });
+  assert.deepEqual(SCHEMA.$defs.AlertEngine.enum, ['prometheus', 'mimir', 'thanos', 'victoriametrics', 'loki', 'grafana', 'alertmanager']);
+  assert.match(readFileSync(resolve(ROOT, SPEC_DIR, 'spec.md'), 'utf8'), /^\| Spec version \| 1\.4 \|/m);
   // package.json validates the vendored example through the same directory.
   const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
   assert.equal(pkg.scripts.validate, `node tools/validate-pack.mjs ${SPEC_DIR}/examples/payment-service.pack.yaml`);
@@ -91,21 +104,53 @@ test('good_when is refused on ratio and custom SLIs through the `not` sub-schema
   assert.deepEqual(errorsOf(pack), [`$.spec.slis[${lat}].good_when: expected string, got boolean`]);
 });
 
-// Every schema-valid pack the repo ships or tests with, 1.2-shaped (none carries good_when): the 1.3 schema accepts
-// each unchanged. (tools/fixtures/compile/ holds the compiler's SHAPE fixtures — partial packs and hostile names,
+test('alerting.rules (spec 1.4): the example declares three operational rules; name and expr are required, engine and severity are closed, routes alone still suffice', () => {
+  const pack = example();
+  const rules = pack.spec.alerting.rules;
+  assert.deepEqual(rules.map(r => r.name), ['PaymentServicePodRestarting', 'PaymentDbConnectionPoolSaturated', 'PaymentCertificateExpiringSoon']);
+  assert.deepEqual(rules.map(r => r.engine), ['prometheus', undefined, 'grafana'], 'the second rule leaves engine absent: absent means prometheus');
+  assert.ok(rules.every(r => r.expr && r.for && r.severity && r.labels?.severity && r.source), 'each states expr, for, severity, labels.severity and source');
+  // Absent and empty mean the same: no operational rules. A 1.3-shaped alerting block validates unchanged.
+  delete pack.spec.alerting.rules;
+  assert.deepEqual(errorsOf(pack), []);
+  pack.spec.alerting.rules = [];
+  assert.deepEqual(errorsOf(pack), []);
+  // The shape: name and expr required; an unknown engine, a non-SEV severity, an unknown property are each refused and named.
+  pack.spec.alerting.rules = [{ name: 'HighCPU', expr: 'avg(rate(node_cpu_seconds_total{mode!="idle"}[5m])) > 0.9' }];
+  assert.deepEqual(errorsOf(pack), [], 'name and expr alone suffice');
+  pack.spec.alerting.rules = [{ name: 'HighCPU' }];
+  assert.deepEqual(errorsOf(pack), ["$.spec.alerting.rules[0]: missing required key 'expr'"]);
+  pack.spec.alerting.rules = [{ expr: 'up == 0' }];
+  assert.deepEqual(errorsOf(pack), ["$.spec.alerting.rules[0]: missing required key 'name'"]);
+  pack.spec.alerting.rules = [{ name: 'HighCPU', expr: 'up == 0', engine: 'nagios' }];
+  assert.deepEqual(errorsOf(pack), ['$.spec.alerting.rules[0].engine: not in enum ["prometheus","mimir","thanos","victoriametrics","loki","grafana","alertmanager"], got "nagios"']);
+  pack.spec.alerting.rules = [{ name: 'HighCPU', expr: 'up == 0', severity: 'critical' }];
+  assert.deepEqual(errorsOf(pack), ['$.spec.alerting.rules[0].severity: not in enum ["SEV1","SEV2","SEV3","SEV4"], got "critical"'], "the engine's label belongs in labels.severity");
+  pack.spec.alerting.rules = [{ name: 'HighCPU', expr: 'up == 0', keep_firing_for: '5m' }];
+  assert.equal(errorsOf(pack).length, 1);
+  assert.match(errorsOf(pack)[0], /^\$\.spec\.alerting\.rules\[0\]/);
+  // A rule as the crawler emits one: the engine's labels verbatim beside the pack's severity, provenance in source.
+  pack.spec.alerting.rules = [{ name: 'Payment API — 5xx spike', expr: 'sum(rate(http_requests_total{code=~"5.."}[5m])) > 10', for: '0s', severity: 'SEV2', engine: 'grafana',
+    labels: { severity: 'critical', team: 'payments' }, annotations: { summary: '5xx above 10/s' }, source: 'grafana/provisioning/alerting/payments.yaml#payments/api/Payment API — 5xx spike' }];
+  assert.deepEqual(errorsOf(pack), [], 'a Grafana title with spaces and punctuation is a valid name');
+});
+
+// Every schema-valid pack the repo ships or tests with, 1.3-shaped (none carries alerting.rules; none carries good_when
+// either, 1.2-shaped as they were): the 1.4 schema accepts each unchanged. (tools/fixtures/compile/ holds the compiler's SHAPE fixtures — partial packs and hostile names,
 // never schema-valid under any version — so they are not here.)
 const yamlPacks = (dir) => (existsSync(resolve(ROOT, dir)) ? readdirSync(resolve(ROOT, dir)).filter(f => f.endsWith('.pack.yaml')).map(f => `${dir}/${f}`) : []);
 const FIXTURES = [
   ...yamlPacks('examples'), ...yamlPacks('reference-packs'), ...yamlPacks('tools/fixtures/library'),
   'tools/fixtures/site/fixture.pack.yaml', 'tools/fixtures/golden-crawl.pack.json',
 ];
-test('every 1.2-shaped pack of the repo validates unchanged against the 1.3 schema', () => {
+test('every 1.3-shaped pack of the repo validates unchanged against the 1.4 schema', () => {
   assert.ok(FIXTURES.length >= 12, `fixtures found: ${FIXTURES.length}`);
   for (const rel of FIXTURES) {
     const text = readFileSync(resolve(ROOT, rel), 'utf8');
     const pack = rel.endsWith('.json') ? JSON.parse(text) : parseYaml(text);
     assert.deepEqual(errorsOf(pack), [], rel);
-    assert.ok((pack.spec.slis || []).every(s => !('good_when' in s)), `${rel} is 1.2-shaped: no SLI carries good_when`);
+    assert.ok(!('rules' in (pack.spec.alerting || {})), `${rel} is 1.3-shaped: alerting carries no rules`);
+    assert.ok((pack.spec.slis || []).every(s => !('good_when' in s)), `${rel} is 1.2-shaped too: no SLI carries good_when`);
     // The meaning is unchanged too: with an explicit `below` on every threshold / distribution SLI the pack still validates.
     const stated = clone(pack);
     for (const s of stated.spec.slis || []) if (s.type === 'threshold' || s.type === 'distribution') s.good_when = 'below';
@@ -124,9 +169,10 @@ const SCANNED = [
   ...walk(resolve(ROOT, 'studio')).filter(p => /\.(mjs|html)$/.test(p)),
   ...['package.json', '.github/workflows/ci.yml', 'README.md', 'docs/MODEL.md', 'docs/CONFORMANCE.md', 'docs/gen-site.md', 'docs/MCP_INTEGRATION.md', 'docs/ADAPTER.md', 'docs/BUILD_JOURNEY.md', 'library/README.md', 'vendor/observability-pack-spec/README.md'].map(f => resolve(ROOT, f)),
 ];
-// Lines that name an older version on purpose: the spec's own lineage, RFC-0001 (a 1.2 sibling layer), the layered
-// JSON that predates the canonical manifest, the VersionSpec history.
-const HISTORY = /RFC-0001|pre-v1\.2|predates (the )?canonical|Spec v1\.2 §VersionSpec|SPEC_v1\.2_GAP|spec 1\.2 → 1\.3|spec 1\.2 -> 1\.3|1\.2 pack|1\.2 packs|1\.2 SLI|1\.2 reader|1\.2 meaning|1\.2 shaped|1\.2-shaped|1\.2 fixture|1\.2 board|1\.2 commit|stopped at 1\.2|every 1\.2|a 1\.2 |v1\.2\/ → v1\.3\/|remove v1\.2\/|v1\.2\/ stays|\(1\.2\)|1\.2 could express/;
+// Lines that name an older version on purpose: the spec's own lineage, RFC-0001 (a 1.2 sibling layer), RFC-0002 (1.3's
+// good_when — every mention of the direction of a bound dates it), the layered JSON that predates the canonical manifest,
+// the VersionSpec history.
+const HISTORY = /RFC-0001|RFC-0002|good_when|[Tt]he direction of|since spec 1\.3|has a direction|carries a direction|its direction|the direction of|side of (?:a|the|its) [^.]*bound|the bound|a floor|a ceiling|1\.3 → 1\.4|1\.3 -> 1\.4|v1\.3\/ → v1\.4\/|remove v1\.3\/|1\.3 pack|1\.3 packs|1\.3-shaped|1\.3 example|every 1\.3|a 1\.3 |develop\) 1\.3|develop` 1\.3|pre-v1\.2|predates (the )?canonical|Spec v1\.2 §VersionSpec|SPEC_v1\.2_GAP|spec 1\.2 → 1\.3|spec 1\.2 -> 1\.3|1\.2 pack|1\.2 packs|1\.2 SLI|1\.2 reader|1\.2 meaning|1\.2 shaped|1\.2-shaped|1\.2 fixture|1\.2 board|1\.2 commit|stopped at 1\.2|every 1\.2|a 1\.2 |v1\.2\/ → v1\.3\/|remove v1\.2\/|v1\.2\/ stays|\(1\.2\)|1\.2 could express/;
 test('no scanned file names a spec version other than the current one', () => {
   // `(?!\.\d|\d)`: not a longer version (1.2.3, 1.23) — a sentence-final "v1.2." still counts.
   const other = new RegExp(`\\b(?:spec|Spec|canonical|schema|pack|manifest|ObservabilityPack|valid|version)\\s+v?1\\.\\d(?!\\.\\d|\\d)|vendor/observability-pack-spec/v1\\.\\d(?!\\.\\d|\\d)|\\bv1\\.\\d(?!\\.\\d|\\d)\\b`, 'g');
@@ -139,12 +185,12 @@ test('no scanned file names a spec version other than the current one', () => {
       for (const m of line.matchAll(other)) if (!m[0].includes(SPEC_VERSION)) offenders.push(`${rel}:${i + 1}: ${m[0]}`);
     });
   }
-  assert.deepEqual(offenders, [], 'every current-version mention follows SPEC_VERSION (1.3)');
+  assert.deepEqual(offenders, [], 'every current-version mention follows SPEC_VERSION (1.4)');
 });
 
-// The studio's links to upstream: the footer's "spec v1.3", the Schema view's "ObservabilityPack v1.3 JSON Schema"
-// and "Spec document", the Conformance view's "maturity rubric". Upstream's default branch is develop (1.3) and main
-// stopped at the 1.2 commit, so a link labelled with the version must open the commit VERSIONS.json vendored — never
+// The studio's links to upstream: the footer's "spec v1.4", the Schema view's "ObservabilityPack v1.4 JSON Schema"
+// and "Spec document", the Conformance view's "maturity rubric". Upstream's default branch is develop (1.3), main
+// stopped at the 1.2 commit and 1.4 is on its RFC branch, so a link labelled with the version must open the commit VERSIONS.json vendored — never
 // a branch, which serves whatever it serves that day. After a re-vendor (node tools/sync-spec.mjs) the hrefs follow
 // upstream.commit; this test names the ones that do not.
 test('every studio link into the upstream spec repo opens the vendored commit, not a branch', () => {
@@ -158,6 +204,6 @@ test('every studio link into the upstream spec repo opens the vendored commit, n
       for (const m of line.matchAll(link)) { seen.push(rel); if (m[1] !== upstream.commit) offenders.push(`${rel}:${i + 1}: blob/${m[1]}`); }
     });
   }
-  assert.deepEqual(offenders, [], `a studio link into ${upstream.repo} opens blob/${upstream.commit} (VERSIONS.json upstream.commit; upstream main serves 1.2)`);
+  assert.deepEqual(offenders, [], `a studio link into ${upstream.repo} opens blob/${upstream.commit} (VERSIONS.json upstream.commit; upstream main serves 1.2, develop 1.3)`);
   assert.deepEqual([...new Set(seen)].sort(), ['studio/conformance-view.mjs', 'studio/index.html', 'studio/schema-view.mjs'], 'the footer, the Schema view and the Conformance view link upstream');
 });

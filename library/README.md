@@ -3,7 +3,7 @@
 Versioned, parameterised pack fragments — one YAML entry per **product** a service
 runs on (`products/`) or per **archetype** of a service built from scratch
 (`archetypes/`). `packc init` and the studio's DEFINE / COMPILE / VERIFY steps
-instantiate an entry into a canonical ObservabilityPack v1.3 at a chosen criticality
+instantiate an entry into a canonical ObservabilityPack v1.4 at a chosen criticality
 tier. The engine is `tools/lib/library.mjs` (pure, browser-safe); the loader is
 `server/library.mjs`; the design is [docs/BUILD_JOURNEY.md](../docs/BUILD_JOURNEY.md).
 
@@ -128,7 +128,7 @@ the pack stores; the studio shows a percent), `window` (one of the schema's SLO 
 | 28d | 30d | 90d` — the schema's enum, not any duration), `threshold` (a finite number, a
 threshold SLI only — the bound), `good_when` (`below` | `above`, a threshold SLI only: the
 side of the bound that is good — below, a ceiling, the default when absent; above, a floor
-(spec 1.3). It is copied into the pack SLI as declared, never synthesised, so a pack that
+(since spec 1.3). It is copied into the pack SLI as declared, never synthesised, so a pack that
 says nothing stays 1.2-shaped; it keeps the library's evidence — the expression is still
 the library's; the retired `comparison` is refused with the reason "the direction of a
 threshold is good_when … — use good_when"), `query` (threshold)
@@ -240,7 +240,7 @@ says nothing) and `semconv_metric` — the defaults the editor shows.
 toggles:
 
 - the entry parses and `validateLibraryEntry` returns no error;
-- `validateCanonical` accepts the produced pack (spec v1.3 schema);
+- `validateCanonical` accepts the produced pack (spec v1.4 schema);
 - every `compile.mjs` target compiles it without throwing (Prometheus rules, OTel
   Collector, Alertmanager, Grafana dashboard);
 - the generic dashboard generator builds every board and `checkBindings` reports

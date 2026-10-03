@@ -1,7 +1,7 @@
 {
   "name": "observogram",
   "version": "0.5.0",
-  "description": "Observogram — the Observability Compiler. Compiles, scans, and scores ObservabilityPack spec v1.3 manifests. Express server + thin client.",
+  "description": "Observogram — the Observability Compiler. Compiles, scans, and scores ObservabilityPack spec v1.4 manifests. Express server + thin client.",
   "type": "module",
   "engines": {
     "node": ">=22.16.0"
@@ -43,7 +43,7 @@
     "drift:profiles": "node tools/drift-profiles.mjs",
     "lint:drift": "node --check tools/detect-drift.mjs",
     "validate-pack": "node tools/validate-pack.mjs",
-    "validate": "node tools/validate-pack.mjs vendor/observability-pack-spec/v1.3/examples/payment-service.pack.yaml",
+    "validate": "node tools/validate-pack.mjs vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml",
     "lint:fetcher": "node --check tools/fetch-live-pack.mjs",
     "lint:recorder": "node --check tools/record-mcp-fixtures.mjs",
     "test:fetch": "node tools/test-fetch-live.mjs",
@@ -161,7 +161,7 @@
     "grafana",
     "alertmanager",
     "spec",
-    "v1.3"
+    "v1.4"
   ],
   "devDependencies": {
     "@eslint/js": "^10.0.1",
