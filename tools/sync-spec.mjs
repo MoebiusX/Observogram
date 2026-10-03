@@ -5,7 +5,7 @@
  * Refreshes the vendored copy of the ObservabilityPack spec under
  * vendor/observability-pack-spec/. Pulls the four canonical files (SOURCE_FILES) from
  * MoebiusX/otel-observability-pack via `gh api`, writes them under v<spec version>/ — the
- * version is read from the header table of the fetched spec (`| Spec version | 1.3 |`), never
+ * version is read from the header table of the fetched spec (`| Spec version | 1.4 |`), never
  * typed here — recomputes sha256 checksums, and rewrites VERSIONS.json.
  *
  * Usage:
@@ -13,7 +13,7 @@
  *   node tools/sync-spec.mjs --ref <ref>  # sync to a specific branch, tag or sha
  *   node tools/sync-spec.mjs --check      # verify on-disk checksums match VERSIONS.json; exit 1 on drift
  *
- * A spec bump lands in a new directory (v1.2/ → v1.3/) and VERSIONS.json follows it; the previous
+ * A spec bump lands in a new directory (v1.3/ → v1.4/) and VERSIONS.json follows it; the previous
  * directory is not deleted here — remove it in the commit that moves tools/lib/validator.mjs
  * SPEC_VERSION (git history keeps it).
  *

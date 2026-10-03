@@ -466,6 +466,43 @@ spec:
         channels:
           - { msteams: "#payments-team" }
 
+    # Operational (non-SLO) alert rules, spec 1.4 — the rules that say something
+    # is wrong now rather than that an error budget is being spent. `name` is
+    # the rule's exact name (the key a reconciler joins on against the live
+    # engine); `severity` is the pack's routing severity, the engine's own
+    # label stays in `labels`. Burn-rate alerts stay under policy above.
+    rules:
+      - name: PaymentServicePodRestarting
+        expr: increase(kube_pod_container_status_restarts_total{namespace="payments",container="payment-service"}[15m]) > 3
+        for: 10m
+        severity: SEV3
+        engine: prometheus
+        labels: { severity: warning, team: payments }
+        annotations:
+          summary: "payment-service restarted more than 3 times in 15m"
+          runbook_url: "https://runbooks.example.internal/payments/pod-restarts"
+        source: observability/alerts.yml#payment-service.operational/PaymentServicePodRestarting
+
+      - name: PaymentDbConnectionPoolSaturated
+        expr: sum(pg_stat_activity_count{datname="payments"}) / sum(pg_settings_max_connections{datname="payments"}) > 0.9
+        for: 5m
+        severity: SEV2
+        labels: { severity: critical, team: payments }
+        annotations:
+          summary: "payments database connection pool above 90% for 5m"
+          runbook_url: "https://runbooks.example.internal/payments/db-pool"
+        source: observability/alerts.yml#payment-service.operational/PaymentDbConnectionPoolSaturated
+
+      - name: PaymentCertificateExpiringSoon                      # Grafana-managed rule over the blackbox probe's series
+        expr: min(probe_ssl_earliest_cert_expiry{job="blackbox",instance=~"https://payments.example.com.*"}) - time() < 14 * 24 * 3600
+        for: 1h
+        severity: SEV3
+        engine: grafana
+        labels: { severity: warning, team: platform-sre }
+        annotations:
+          summary: "payments.example.com TLS certificate expires in under 14 days"
+        source: grafana/provisioning/alerting/payments.yaml#payments/certificates/PaymentCertificateExpiringSoon
+
     dedup: ref:platform/std-dedup
     suppress: [ maintenance_windows, deploy_freezes, dependency_outage ]
 

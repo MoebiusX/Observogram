@@ -3,7 +3,7 @@
 *(formerly **Tomograph** — pre-rebrand env vars, headers, workspaces, and pack annotations keep working; see docs/CHANGELOG.md.)*
 
 **Observogram is the observability compiler and diagnostic workspace for
-ObservabilityPack spec v1.3.**
+ObservabilityPack spec v1.4.**
 
 It answers one operational question:
 
@@ -35,7 +35,7 @@ The gap between those two packs is the diagnostic finding.
 The canonical specification lives at
 [MoebiusX/otel-observability-pack](https://github.com/MoebiusX/otel-observability-pack).
 A checksummed copy is vendored under
-[`vendor/observability-pack-spec/v1.3/`](vendor/observability-pack-spec/v1.3/).
+[`vendor/observability-pack-spec/v1.4/`](vendor/observability-pack-spec/v1.4/).
 
 ## Why It Exists
 
@@ -640,15 +640,24 @@ npm run validate-pack -- repo.pack.yaml
 
 The crawler reads source files such as:
 
-- Prometheus rule files
+- Prometheus rule files (recording rules, burn-rate and operational alerts)
+- Grafana unified-alerting provisioning YAML and Loki rule files
 - Grafana dashboard JSON
 - Alertmanager config
 - OTel Collector config
 - Helm and Kubernetes manifests
 - Docker Compose files
 
-It emits a canonical v1.3 pack plus crawler annotations describing what was
-scanned and what was inferred.
+It emits a canonical v1.4 pack plus crawler annotations describing what was
+scanned and what was inferred. Every alert rule is kept: a rule whose
+expression references a recorded SLO series is a burn-rate alert
+(`spec.policy.burn_rate_alerts`); every other rule — a pod restarting, a pool
+saturated, a certificate expiring — is an operational alert and is declared in
+`spec.alerting.rules` (spec 1.4) under its exact name, with its expression,
+wait, severity, labels, engine (`prometheus`, `grafana`, `loki`) and the file
+and group it was read from. The same name is what a live Grafana or ruler
+listing is reconciled on, so the repository's rule and the running rule pair
+in Compare.
 
 ### Fetch Live From MCP
 
@@ -717,7 +726,7 @@ heartbeat route.
 
 For a service that has no pack yet: pick the products it runs on (or an archetype
 for a service built from scratch), a criticality tier and a name, and `packc init`
-instantiates the library entries into a canonical v1.3 pack that validates,
+instantiates the library entries into a canonical v1.4 pack that validates,
 compiles through every target and passes every MUST clause of the tier — with the
 values only the team can fill (pager service, chaos target, endpoints) reported as
 todos, never hidden. The same engine drives the studio's Build journey (Define ·
@@ -758,7 +767,7 @@ todos (20) — placeholders only the team can fill:
   - telemetry.backends.metrics-prom: version.declared: Prometheus version you run: placeholder '3.14' (param prometheus_version) — … · endpoints.0: Prometheus query endpoint: placeholder 'http://prometheus:9090' (param metrics_endpoint) — …  [L2.MUST.metrics_logs_traces_backends]
   - validation.synthetic_checks.produce-consume-canary: target: Bootstrap servers: placeholder 'kafka.kafka:9092' (param bootstrap) — …  [L5.MUST.synthetic_probe]
   …
-schema: valid (spec v1.3)
+schema: valid (spec v1.4)
 ```
 
 The pack goes to stdout or `--out`; the todo list and the conformance line go to
@@ -1380,7 +1389,7 @@ examples/
   target-advanced.pack.yaml
   demo-skeleton.pack.yaml
 
-vendor/observability-pack-spec/v1.3/examples/
+vendor/observability-pack-spec/v1.4/examples/
   payment-service.pack.yaml
 
 reference-packs/

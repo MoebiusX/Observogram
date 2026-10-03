@@ -2,11 +2,11 @@
 
 | | |
 |---|---|
-| Spec version | 1.3 |
+| Spec version | 1.4 |
 | Status | Draft for review |
 | Author | Carlos Montero  |
 | First publication | 2026-05-08 |
-| Last updated | 2026-09-23 |
+| Last updated | 2026-10-03 |
 | Default binding | `otel-elastic-prometheus-grafana` |
 | Audience | Service owners, SREs, platform engineers, security & compliance, leadership |
 
@@ -36,9 +36,9 @@ This document defines the contract for an ObservabilityPack: its conceptual mode
 
 ### 1.3 Versioning
 
-This document — the standard itself — carries an explicit **spec version** (see the header table; currently **1.3**), a two-part `major.minor` number: the minor part moves for backward-compatible additions and clarifications, the major part for breaking changes to the contract. The lineage: **1.0** was the generic observability standard; **1.1** added the OpenTelemetry instrumentation contract as a separate concern; **1.2** consolidates the two into this single unified document; **1.3** gives `threshold` and `distribution` SLIs a direction (`good_when`, §5.1), an additive minor. Because the consolidation and the addition both preserve the manifest contract (`apiVersion` stays `observability.platform/v1`, existing packs still validate and keep their meaning), each is a backward-compatible minor bump rather than a breaking `2.0`. Beyond the spec version, five independent versioning axes appear inside the contract and should not be confused with one another:
+This document — the standard itself — carries an explicit **spec version** (see the header table; currently **1.4**), a two-part `major.minor` number: the minor part moves for backward-compatible additions and clarifications, the major part for breaking changes to the contract. The lineage: **1.0** was the generic observability standard; **1.1** added the OpenTelemetry instrumentation contract as a separate concern; **1.2** consolidates the two into this single unified document; **1.3** gives `threshold` and `distribution` SLIs a direction (`good_when`, §5.1), an additive minor; **1.4** gives operational (non-SLO) alert rules a home (`alerting.rules`, §5.8), an additive minor. Because the consolidation and the additions all preserve the manifest contract (`apiVersion` stays `observability.platform/v1`, existing packs still validate and keep their meaning), each is a backward-compatible minor bump rather than a breaking `2.0`. Beyond the spec version, five independent versioning axes appear inside the contract and should not be confused with one another:
 
-- **Spec version** (`1.3`) — the version of this prose standard, in the header table. Owned by the platform engineering team. `major.minor`; bumped whenever this document changes.
+- **Spec version** (`1.4`) — the version of this prose standard, in the header table. Owned by the platform engineering team. `major.minor`; bumped whenever this document changes.
 - **`apiVersion: observability.platform/v1`** — the stable API surface for pack manifests, in the Kubernetes-style sense. A breaking change to the manifest shape would bump this to `v2`. Tracks the spec's major version but is not identical to it: an editorial spec patch does not move `apiVersion`.
 - **`metadata.version`** on each pack — SemVer per pack instance, owned by the service team. Bumped on every pack change. Unrelated to the spec.
 - **Binding name** (currently `otel-elastic-prometheus-grafana`) — the realisation contract for a specific stack. Future bindings live as separate documents under `bindings/` and do not bump the `apiVersion`.
@@ -286,10 +286,33 @@ Routes triggered policy events to humans or automation. The default binding supp
 
 Three suppression contexts: `maintenance_windows`, `deploy_freezes`, `dependency_outage`. Suppression MUST NOT silence the underlying alert in the audit log.
 
+**Operational alert rules (`alerting.rules`, since 1.4).** Not every alert a service runs is a burn-rate alert on an SLO. A pod restarting, a connection pool near its limit, a certificate about to expire, an error-log spike: these are operational alerts — they say something is wrong now, not that an error budget is being spent — and they outnumber burn-rate alerts in every real repository and every running Grafana or Prometheus. Spec 1.3 had no home for them: `policy.burn_rate_alerts` requires an SLO, so a reader that wanted to be faithful to the pack had to drop every other rule, and a reconciler comparing the pack with the live engine found nothing to match the engine's rules against although the repository held the very files they were provisioned from. `alerting.rules[]` declares them, one entry per rule, as the engine holds them:
+
+```yaml
+alerting:
+  routes: [ ... ]
+  rules:
+    - name: PaymentServicePodRestarting           # the rule's exact name: the key a reconciler joins on
+      expr: increase(kube_pod_container_status_restarts_total{namespace="payments",container="payment-service"}[15m]) > 3
+      for: 10m
+      severity: SEV3                              # the pack's routing severity; the engine's own label stays in labels
+      engine: prometheus                          # default; also mimir | thanos | victoriametrics | loki | grafana | alertmanager
+      labels: { severity: warning, team: payments }
+      annotations: { summary: "payment-service restarted more than 3 times in 15m" }
+      source: observability/alerts.yml#payment-service.operational/PaymentServicePodRestarting
+```
+
+`name` and `expr` are required; everything else is optional. `name` is the rule's exact name — `alert:` in a Prometheus or Loki rule file, `title` of a Grafana-managed rule — and is deliberately not a Slug: it is the join key against the live engine, so it must be the engine's spelling. `expr` is the condition in the engine's own language (PromQL, LogQL; for a Grafana-managed rule the query of its data node, or the condition reference when the rule is built from expression nodes only); it is evaluated by the engine, never resolved by the pack. `engine` names the evaluator with the Product registry's name for it, so a rule joins to `telemetry.backends[].product`; absent means `prometheus`. `severity` is the pack's SEV1–SEV4 so that `routes` apply to the rule; the engine's own `labels.severity` (`critical`, `warning`, …) is kept verbatim in `labels`. `source` records where the rule was read from and is never used for matching.
+
+The division of labour is by kind, not by engine: a rule that guards an SLO's recorded series is a burn-rate alert and belongs in `policy.burn_rate_alerts`; every other rule belongs here. A rule MUST NOT appear in both. `routes` stays the only required key of `alerting`, so every 1.3 pack validates unchanged, and an absent or empty `rules` means the service declares no operational rules.
+
 **Conformance:**
 - MUST: tier-1 SEV1 routes include at least one voice channel.
 - MUST: every alert has at least one routing rule.
+- MUST: every `alerting.rules[]` entry has a `name` and an `expr`; an `engine` outside the enumerated set is invalid; absent means `prometheus`.
+- MUST: a rule appears in `alerting.rules` or is a burn-rate alert in `policy.burn_rate_alerts`, never both.
 - SHOULD: chat-only routing reserved for SEV3 and below.
+- SHOULD: an operational rule declares `severity` so that a route applies to it.
 
 ### 5.9 Self-healing remediation (L4)
 
@@ -513,6 +536,7 @@ Exceptions are time-bounded (default 90 days), reviewed by the platform engineer
 | `policy.burn_rate_alerts` | Prometheus alerting rules | Alertmanager |
 | `dashboards` | Grafana dashboard JSON (schemaVersion >= 39) | Grafana 11 |
 | `alerting.routes` | Alertmanager route tree + receivers | Alertmanager / PagerDuty |
+| `alerting.rules` | Prometheus / Loki alerting rule group YAML, or Grafana-managed (provisioned) alert rules, per `engine` | Prometheus / Mimir ruler, Loki ruler, Grafana unified alerting |
 | `remediation` | Argo Events Sensor + WorkflowTemplate | Argo Workflows |
 | `baselines` | Derived MTTD/MTTR metrics | Platform observability service |
 | `validation.chaos` | Chaos Mesh Workflow/Schedule CRDs | Chaos Mesh |

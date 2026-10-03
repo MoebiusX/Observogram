@@ -1,16 +1,16 @@
 # The ObservabilityPack model
 
 The studio is a faithful renderer of the [ObservabilityPack spec
-v1.3](../vendor/observability-pack-spec/v1.3/spec.md). The canonical model
+v1.4](../vendor/observability-pack-spec/v1.4/spec.md). The canonical model
 — `apiVersion`, `kind`, `metadata`, `spec`, the ten dimensions L1–L5 — is
 defined there; this document covers only the parts the studio adds or
 shapes for the display, not the canonical model itself.
 
 For the canonical model, read:
 
-- **[`../vendor/observability-pack-spec/v1.3/spec.md`](../vendor/observability-pack-spec/v1.3/spec.md)** — §3 the conceptual model, §4 the manifest shape, §5 each dimension with conformance, §7 the maturity rubric summary.
-- **[`../vendor/observability-pack-spec/v1.3/docs/maturity-model.md`](../vendor/observability-pack-spec/v1.3/docs/maturity-model.md)** — the full tier-3 → tier-2 → tier-1 clause rubric.
-- **[`../vendor/observability-pack-spec/v1.3/examples/payment-service.pack.yaml`](../vendor/observability-pack-spec/v1.3/examples/payment-service.pack.yaml)** — the canonical example.
+- **[`../vendor/observability-pack-spec/v1.4/spec.md`](../vendor/observability-pack-spec/v1.4/spec.md)** — §3 the conceptual model, §4 the manifest shape, §5 each dimension with conformance, §7 the maturity rubric summary.
+- **[`../vendor/observability-pack-spec/v1.4/docs/maturity-model.md`](../vendor/observability-pack-spec/v1.4/docs/maturity-model.md)** — the full tier-3 → tier-2 → tier-1 clause rubric.
+- **[`../vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml`](../vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml)** — the canonical example.
 
 ## What the studio projects — L2X (Extended Surfaces)
 

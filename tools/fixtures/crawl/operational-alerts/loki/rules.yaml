@@ -1,0 +1,10 @@
+groups:
+  - name: payments.logs
+    rules:
+      - alert: PaymentsErrorLogSpike
+        expr: sum(rate({namespace="payments", app="payments"} |= "level=error" [5m])) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "payments logs more than 5 errors/s for 10m"
