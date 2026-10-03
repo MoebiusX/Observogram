@@ -1310,6 +1310,16 @@ test('Stale import, the 0.5.0 rollback (A1): the 0.5.0 guard loop (fixture) over
     && e.message.endsWith('  - or run `packc store import --replace`: the next start re-imports the files as they stand.')));
 });
 
+test('the 0.5.0 guard fixture labels the line range it copies: the verbatim block is as long as the range says', () => {
+  const src = readFileSync(join(HERE, 'fixtures', 'store-050-guard.mjs'), 'utf8');
+  const labels = [...src.matchAll(/lines (\d+)–(\d+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+  assert.equal(labels.length, 2, 'the header and the inline marker both name the range');
+  assert.deepEqual(labels[0], labels[1], 'both labels name the same range');
+  const block = src.split(/\n *\/\/ ---- v0\.5\.0 server\/boot\.mjs lines \d+–\d+, verbatim ----\n/)[1].split(/\n *\/\/ ---- end of the verbatim copy ----/)[0];
+  const [from, to] = labels[0];
+  assert.equal(block.split('\n').length, to - from + 1, `the copy spans ${to - from + 1} lines, as the label says`);
+});
+
 test('Stale import: with the marker missing (lost after an export, or moved aside as (a) says on an imported store) the refusals name a replace that works — aside, start once, back, request, start', async () => {
   const refusedOp = (re) => (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED' && re.test(e.message);
   const usersPath = (base) => join(base, 'users.json');

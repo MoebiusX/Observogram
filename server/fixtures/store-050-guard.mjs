@@ -1,7 +1,7 @@
 // server/fixtures/store-050-guard.mjs — a frozen copy of what a 0.5.0 build
 // (tag v0.5.0; develop before STORE_PLAN slice 4) does at boot step 2 (d)
 // with the hashes a store recorded: the loop of staleImportGuard() in
-// server/boot.mjs at that tag (lines 474–520), byte for byte, its imports
+// server/boot.mjs at that tag (lines 474–538), byte for byte, its imports
 // rewired to this fixture. It compares EVERY key it finds in
 // schema_meta legacy_hashes against the file at that path, and refuses on a
 // difference — which is why slice 4 records packs/index.json under a key of
@@ -43,7 +43,7 @@ export function guard050(db, ctx) {
   const id = storeId(db);
   const marker = ctx.memory ? null : readMarker(ctx.base);
   const usersPath = legacyUsersPath(db, ctx.base);
-  // ---- v0.5.0 server/boot.mjs lines 474–520, verbatim ----
+  // ---- v0.5.0 server/boot.mjs lines 474–538, verbatim ----
   // (d) files edited since the import.
   const recorded = getMetaJson(db, 'legacy_hashes', {}) || {};
   const usersKey = getMeta(db, 'users_file') || 'users.json';
