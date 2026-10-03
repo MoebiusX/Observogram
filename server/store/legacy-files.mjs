@@ -257,6 +257,16 @@ export function writeOrgsFile(orgs, path) {
   try { renameSync(tmp, path); } catch (e) { try { rmSync(tmp, { force: true }); } catch { /* best effort */ } throw e; }
 }
 
+// packs/index.json as `packc store export` writes it back for an older
+// build (slice 4, design §10.1): 2-space JSON, a temp file renamed over it.
+// Mode 0644 — it holds labels and timestamps, no secret — unlike users.json.
+export function writePackIndexFile(path, data) {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o644 });
+  try { renameSync(tmp, path); } catch (e) { try { rmSync(tmp, { force: true }); } catch { /* best effort */ } throw e; }
+}
+
 // ---------- hashes ----------
 
 export function sha256Of(bytes) {

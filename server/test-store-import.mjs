@@ -1542,6 +1542,9 @@ const indexHashOf = (text) => {
   const entries = Object.entries(JSON.parse(text));
   return { sha256: legacy.sha256Of(legacy.canonicalPackIndex(entries)), canon: 'pack-index-v1', raw: legacy.sha256Of(Buffer.from(text)) };
 };
+// The pack guard's first way out, and what the replace's pack half does (design §5.6, §10.2).
+const REPLACE = '`packc store import --replace`';
+const TAKES = 'takes the file\'s entries into the store (labels and sources from the file; packs it no longer lists are removed on positive evidence)';
 const packLogs = (r) => r.logs.filter((l) => /pack registry|\[store\] {3}\w+: |services: \d+ created|rewritten by a build before slice 4|disappeared since the pack registry/.test(l));
 
 test('readPackIndexStrict, canonicalPackIndex, packIndexHash, isoOf, packIndexKey: the index read once — absent, entries as parsed, corrupt shapes (not an error), an unreadable file throws naming it; the canonical form drops lastUsedAt and normalises times', () => {
@@ -1753,10 +1756,11 @@ test('Import (packs) 8: two orgs, one with no packs/ — "0 packs" reported and 
     assert.ok(r.logs.includes(`[store] imported the pack registry of 2 orgs into ${dbOf(base)} (store ${id}): default (orgs/default) 1 pack (no index.json: adopted from the pack files) · acme (orgs/acme) 0 packs (no index.json: adopted from the pack files)`), r.logs.join('\n'));
     assert.deepEqual(packRows(r.db, 'acme'), []);
     assert.ok(!existsSync(join(base, 'orgs', 'acme', 'packs')), 'the import makes no directory');
-    // A registry someone wrote during a rollback: refused, with the two ways that work in this build.
+    // A registry someone wrote during a rollback: refused, with the ways that work in this build (the replace first: it takes the entries in).
     write(acmeIdx, JSON.stringify({ x: { label: 'X', source: 'upload', createdAt: MS.a, lastUsedAt: MS.a } }));
     const expected = `refusing to start: ${acmeIdx} appeared since store ${id} imported the pack registry (that root had no index.json then): a build before slice 4 registered, relabelled or removed a pack during a rollback (the registry it wrote: 1 entry, the store's: 0).\n`
       + 'Nothing was changed. The store keeps its own pack registry; the file is only compared, never read again. With the server stopped:\n'
+      + `  - run ${REPLACE}: the next start ${TAKES}, or\n`
       + `  - move ${acmeIdx} aside.`;
     await assert.rejects(bootIn(base), (e) => refusal(expected)(e) && e.nothingMoved === true);
     assert.deepEqual(packRows(r.db, 'acme'), [], 'nothing read, nothing written');
@@ -1815,6 +1819,7 @@ test('Import (packs) 11: the stale-import guard on index.json — a lastUsedAt r
     write(path, JSON.stringify({ ...entries, a: { ...entries.a, label: 'A2' } }));
     const changed = `refusing to start: ${path} changed since store ${id} last imported or exported it: a build before slice 4 registered, relabelled or removed a pack during a rollback (the registry it wrote: 2 entries, the store's: 2).\n`
       + 'Nothing was changed. The store keeps its own pack registry; the file is only compared, never read again. With the server stopped:\n'
+      + `  - run ${REPLACE}: the next start ${TAKES}, or\n`
       + `  - put ${path} back as it was (canonical SHA-256 ${recorded.sha256}: its entries without lastUsedAt), or\n`
       + `  - move ${path} aside (the store's registry stands; the rollback's registrations are then adopted from their pack files with no label).`;
     await assert.rejects(bootIn(base), (e) => refusal(changed)(e) && e.nothingMoved === true);

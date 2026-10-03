@@ -561,7 +561,7 @@ export function staleImportGuard(db, ctx, { files = packFiles } = {}) {
   repairs.recorded = recorded;
   // (d), the pack registry's files (slice 4): compared canonically, against
   // their recorded hash and, failing that, against the store's own registry.
-  repairs.packIndex = packIndexGuard(db, ctx, id, files);
+  repairs.packIndex = packIndexGuard(db, ctx, id, files, { noMarker: !ctx.memory && !marker });
   return { replacePending: false, repairs };
 }
 
@@ -590,12 +590,15 @@ function referenceIndex(db, org, root, files) {
 }
 
 // Refuses an index.json whose canonical form differs from both the hash
-// recorded at the import and the store's registry; returns what (e)
-// repairs: a file that disappeared (recorded absent) and a rewrite that
-// changed nothing canonical (its new hash recorded, one log line). Writes
-// nothing. An unreadable file throws (LegacyFileError, naming it) before
-// any write, as the identity files do.
-export function packIndexGuard(db, ctx, id, files = packFiles) {
+// recorded at the import or the last export and the store's registry;
+// returns what (e) repairs: a file that disappeared (recorded absent) and a
+// rewrite that changed nothing canonical (its new hash recorded, one log
+// line). Writes nothing. An unreadable file throws (LegacyFileError, naming
+// it) before any write, as the identity files do. The refusal's first way
+// out is `packc store import --replace` (the replace's pack half takes the
+// file's entries into the store, design §10.2) — with the marker missing,
+// the request needs the (e) repair first, as the identity text says.
+export function packIndexGuard(db, ctx, id, files = packFiles, { noMarker = false } = {}) {
   const recorded = getMetaJson(db, 'pack_index_hashes', {}) || {};
   const out = { disappeared: [], rewritten: {} };
   const keys = Object.keys(recorded);
@@ -631,10 +634,19 @@ export function packIndexGuard(db, ctx, id, files = packFiles) {
         ? `${path} appeared since store ${id} imported the pack registry (that root had no index.json then): a build before slice 4 registered, relabelled or removed a pack during a rollback (${wrote}${holds}).`
         : `${path} changed since store ${id} last imported or exported it: a build before slice 4 registered, relabelled or removed a pack during a rollback (${wrote}${holds}).`;
     });
-    const ways = stale.flatMap(({ path, was }) => [
-      ...(was.absent ? [] : [`  - put ${path} back as it was (canonical SHA-256 ${was.sha256}: its entries without lastUsedAt), or`]),
-      `  - move ${path} aside${was.absent ? '' : ' (the store\'s registry stands; the rollback\'s registrations are then adopted from their pack files with no label)'}.`,
-    ]);
+    const paths = stale.map((s) => s.path);
+    const them = paths.length === 1 ? 'it' : 'them';
+    const takes = 'takes the file\'s entries into the store (labels and sources from the file; packs it no longer lists are removed on positive evidence)';
+    const ways = [
+      noMarker
+        ? `  - to take the file's entries into the store: ${REPLACE} needs ${markerPath(ctx.base)}, which is missing — move ${paths.join(' and ')} aside, ` +
+          `start once (it records ${them} absent and rewrites the marker), stop the server, put ${them} back, then run ${REPLACE}: the next start ${takes}, or`
+        : `  - run ${REPLACE}: the next start ${takes}, or`,
+      ...stale.flatMap(({ path, was }) => [
+        ...(was.absent ? [] : [`  - put ${path} back as it was (canonical SHA-256 ${was.sha256}: its entries without lastUsedAt), or`]),
+        `  - move ${path} aside${was.absent ? '' : ' (the store\'s registry stands; the rollback\'s registrations are then adopted from their pack files with no label)'}.`,
+      ]),
+    ];
     throw new BootRefusal(
       `refusing to start: ${lines.join('\n  ')}\n` +
       'Nothing was changed. The store keeps its own pack registry; the file is only compared, never read again. With the server stopped:\n' +
@@ -867,13 +879,13 @@ export async function bootStore({ host, log = () => {}, warn = () => {} } = {}) 
     const migrate = legacy1.orgs.exists && (!atRoot || atRoot.id === 'default');
     const flat = migrate ? planFlatMigration({ base: ctx.base }) : null;
     decision = seedDecision(legacyView(db, ctx, legacy1));
-    const plan1 = planReplace(db, legacy1, ctx, projectedMigration({ flat, migrate, orgs: legacy1.orgs }));
+    const plan1 = planReplace(db, legacy1, ctx, projectedMigration({ flat, migrate, orgs: legacy1.orgs }), { files: packFiles });
     assertBootChecks(legacyChecksInput(db, ctx, legacy1, decision, plan1));   // no write before this line (check D)
     const migration = migrate
       ? { ...migrateFlatWorkspace({ log, base: ctx.base }), skipped: null }
       : projectedMigration({ flat, migrate, orgs: legacy1.orgs });
     const legacy2 = readLegacy(db, ctx);
-    const plan2 = planReplace(db, legacy2, ctx, migration);
+    const plan2 = planReplace(db, legacy2, ctx, migration, { files: packFiles });
     report = applyReplace(db, plan2, ctx);
     resetOrgRootCache();
     writeMarker(ctx.base, { storeId: storeId(db), files: plan2.legacyHashes, by: 'replace' });

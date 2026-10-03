@@ -69,9 +69,10 @@ export function addPack(db, actor, { id, label = null, source = null, createdAt 
 }
 
 // A register: absent → addPack (pack.register); present with another label
-// or source → the fields and last_used_at updated (pack.update { fields });
-// present and equal → a touch, no audit row.
-export function upsertPack(db, actor, { id, label = null, source = null }) {
+// or source → the fields and last_used_at updated (pack.update { fields,
+// ...detail } — the replace adds { via: 'replace' }); present and equal → a
+// touch, no audit row.
+export function upsertPack(db, actor, { id, label = null, source = null }, { detail = null } = {}) {
   const org = requireOrg(REPO);
   requireText(id, 'id');
   const nextLabel = optionalText(label, 'label');
@@ -89,7 +90,7 @@ export function upsertPack(db, actor, { id, label = null, source = null }) {
     }
     prepare(db, 'UPDATE packs SET label = :label, source = :source, last_used_at = :at WHERE org_id = :org_id AND id = :id')
       .run({ label: nextLabel, source: nextSource, at, org_id: org, id });
-    writeAudit(db, actor, { orgId: org, action: 'pack.update', targetKind: 'pack', targetId: id, detail: { fields } });
+    writeAudit(db, actor, { orgId: org, action: 'pack.update', targetKind: 'pack', targetId: id, detail: { fields, ...(detail ?? {}) } });
     return { pack: getPack(db, id), created: false, changed: true };
   });
 }
