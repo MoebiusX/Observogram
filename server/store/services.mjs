@@ -76,14 +76,16 @@ export function updateService(db, actor, id, patch) {
   });
 }
 
-// Deletes the service with its environments and pack links (ON DELETE CASCADE).
-export function deleteService(db, actor, id) {
+// Deletes the service with its environments and pack links (ON DELETE
+// CASCADE); detail is the service.delete row's ({ environments, packLinks }
+// — the cascaded rows write none of their own).
+export function deleteService(db, actor, id, { detail = null } = {}) {
   const org = requireOrg(REPO);
   return atomic(db, () => {
     const current = getService(db, id);
     if (!current) throw notFound('service', id);
     prepare(db, 'DELETE FROM services WHERE org_id = ? AND id = ?').run(org, id);
-    writeAudit(db, actor, { orgId: org, action: 'service.delete', targetKind: 'service', targetId: current.slug });
+    writeAudit(db, actor, { orgId: org, action: 'service.delete', targetKind: 'service', targetId: current.slug, detail });
     return current;
   });
 }
