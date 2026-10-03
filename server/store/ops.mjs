@@ -238,7 +238,12 @@ function assertUnedited(db, id, base, files, indexes = []) {
     if (now.sha256 === was) continue;
     const reference = plan.packs.map((r) => [r.id, { label: r.label, source: r.source, createdAt: r.createdAt }]);
     if (!idx.corrupt && canonicalPackIndex(adoptionsResolved(idx.entries, reference)) === canonicalPackIndex(reference)) continue;
-    edited.push(`${path} (${was ? `it was canonical SHA-256 ${was}` : 'it was absent'}, it is ${now.sha256})`);
+    // packIndexHash records a corrupt index by the SHA-256 of its bytes (no entries to canonicalise), as boot's guard says: name
+    // it as such, or the operator is sent looking for an entry set no file can reproduce.
+    const label = rec?.canon === 'raw'
+      ? `it was SHA-256 ${was} of its bytes — the file was corrupt when recorded, so it is compared byte for byte;`
+      : `it was canonical SHA-256 ${was},`;
+    edited.push(`${path} (${was ? label : 'it was absent,'} it is ${now.sha256})`);
   }
   if (!edited.length) return;
   throw refuse(`${edited.join(', ')} ${edited.length === 1 ? 'differs' : 'differ'} from what store ${id} last imported or exported — `

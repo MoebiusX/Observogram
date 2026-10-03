@@ -163,6 +163,28 @@ const indexHashOf = (text) => {
 const readIndex = (path) => JSON.parse(readFileSync(path, 'utf8'));
 const relabel = (db, org, id, label) => runWithOrg(org, () => packsRepo.upsertPack(db, 'cli', { id, label, source: packsRepo.getPack(db, id).source }));
 
+test('in place: an index that was corrupt when recorded is compared byte for byte — the refusal says so, not "canonical SHA-256"', async () => {
+  const base = tempDir();
+  pack(base, 'a');
+  const path = join(base, 'packs', 'index.json');
+  const corrupt = '{"a": {"label": "WS';
+  writeFileSync(path, corrupt);
+  await start(base);
+  const rawHash = legacy.sha256Of(Buffer.from(corrupt));
+  await read(base, (db) => assert.deepEqual(meta.getMetaJson(db, 'pack_index_hashes'), { 'packs/index.json': { sha256: rawHash, canon: 'raw', raw: rawHash } }, 'a corrupt index hashes its bytes'));
+  // Edited since: refused, and the recorded hash is named for what it is — packIndexHash records a corrupt
+  // index by the SHA-256 of its bytes, so "canonical SHA-256" would send the operator after an entry set no file reproduces.
+  writeFileSync(path, '{}');
+  await assert.rejects(exportIt(base), (e) => e.code === 'ERR_OBSERVOGRAM_STORE_REFUSED'
+    && e.message.startsWith(`${path} (it was SHA-256 ${rawHash} of its bytes — the file was corrupt when recorded, so it is compared byte for byte; it is ${indexHashOf('{}').sha256}) differs from what store `)
+    && !e.message.includes('canonical'));
+  assert.equal(readFileSync(path, 'utf8'), '{}', 'not overwritten');
+  // The same corrupt bytes put back: the export passes and re-records the index it wrote.
+  writeFileSync(path, corrupt);
+  await exportIt(base);
+  await read(base, (db) => assert.equal(meta.getMetaJson(db, 'pack_index_hashes')['packs/index.json'].canon, 'pack-index-v1'));
+});
+
 // ---------- the Export gate ----------
 
 test('Export gate: a flat deployment — no orgs.json; the same enabled users sign in, the same packs and journeys', async () => {
