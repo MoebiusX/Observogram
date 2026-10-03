@@ -38,6 +38,20 @@ assert(!/\bnode:/.test(source) && !/\bprocess\.env\b/.test(source) && !/\brequir
 assert(/^export function (normalizeServiceKey|serviceMetadata|serviceNamesForPack|primaryServiceName|serviceKeyForPack|isLiveAggregatePack|servicesForPack|catalogEntryOf)\(/m.test(source),
   'the module exports plain functions');
 
+// ---------- the studio reads the module, and keeps no copy ----------
+// studio/app.mjs declares none of the five moved functions and binds them
+// from `/lib/service-keys.mjs` exactly once — at call time, inside boot(),
+// so the Node suite that links app.mjs (tools/test-studio-graph.mjs) never
+// reaches a `/lib/` specifier.
+const studio = readFileSync(join(ROOT, 'studio/app.mjs'), 'utf8');
+const STUDIO_MOVED = ['normalizeServiceKey', 'serviceNamesForPack', 'primaryServiceName', 'serviceKeyForPack', 'isLiveAggregatePack'];
+for (const name of STUDIO_MOVED) {
+  assert(!new RegExp(`\\bfunction\\s+${name}\\s*\\(`).test(studio), `studio/app.mjs declares no function ${name} (it is the module's)`);
+}
+assert((studio.match(/import\(\s*['"]\/lib\/service-keys\.mjs['"]\s*\)/g) || []).length === 1, 'studio/app.mjs imports /lib/service-keys.mjs exactly once');
+assert(!/^import\b[^\n]*service-keys/m.test(studio), 'studio/app.mjs never imports service-keys.mjs statically');
+assert(/\bservicesForPack\(p\)/.test(studio), 'the studio\'s serviceCatalogue() iterates servicesForPack(p)');
+
 // ---------- normalizeServiceKey ----------
 for (const [input, want] of [
   ['Checkout', 'checkout'],
