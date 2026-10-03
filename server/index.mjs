@@ -40,6 +40,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
 import { adapt, listEnvironments, applyEnvironmentOverlay } from '../tools/lib/adapter.mjs';
+import { serviceMetadata } from '../tools/lib/service-keys.mjs';
 import { isLegacyLayeredPack, upconvertLegacyPack } from '../tools/lib/legacy.mjs';
 import { validateCanonical, SPEC_VERSION, SPEC_DIR, SPEC_SCHEMA_PATH } from '../tools/lib/validator.mjs';
 import { evaluateConformance, RUBRIC } from '../tools/lib/conformance.mjs';
@@ -334,28 +335,6 @@ function catalogEntry(meta) {
   } catch (e) {
     return { id: meta.id, label: meta.label, ok: false, error: e.message };
   }
-}
-
-function serviceMetadata(canonical) {
-  const bindings = canonical?.metadata?.bindings || {};
-  const annotations = canonical?.metadata?.annotations || {};
-  const services = new Set();
-  const add = (value) => {
-    for (const part of String(value || '').split(',')) {
-      const service = part.trim();
-      if (service) services.add(service);
-    }
-  };
-  add(bindings.service);
-  add(bindings.namespace);
-  add(annotations['mcp.servicesDiscovered']);
-  add(annotations['observogram.services']);
-  add(annotations['tomograph.services']);   // legacy namespace (pre-rebrand packs)
-  return {
-    service: bindings.service || canonical?.metadata?.name || '',
-    namespace: bindings.namespace || bindings.service || canonical?.metadata?.name || '',
-    services: [...services].sort(),
-  };
 }
 
 function readEnv(query) {
