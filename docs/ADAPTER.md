@@ -95,6 +95,7 @@ The adapter walks each top-level spec section into a deterministic family of lay
 | `spec.policy.burn_rate_alerts[]` | L4 . policy | `POL-{NN}` | `refs` includes the bound SLO |
 | `spec.policy.forecasts[]` | L4 . policy | `FCST-{NN}` | |
 | `spec.alerting.routes[]` | L4 . alerting | `ALR-{NN}` | One per severity route |
+| `spec.alerting.rules[]` | L4 . alerting | `RULE-{NN}` | One per operational alert rule (spec 1.4), titled by the rule's exact name; `tool` by engine (`PrometheusRule`, `Grafana alerting`, `Loki ruler`); the artefact model keys it on the name, so a repository's rule and a live listing's rule pair |
 | `spec.remediation[]` | L4 . healing | `HEAL-{NN}` | `refs` includes the trigger alert |
 | `spec.baselines` | L5 | `BASE-01` | |
 | `spec.validation.chaos_experiments[]` | L5 | `CHAOS-{NN}` | `refs` = steady-state SLO + each `expected_alerts` entry |

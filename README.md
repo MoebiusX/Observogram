@@ -640,7 +640,8 @@ npm run validate-pack -- repo.pack.yaml
 
 The crawler reads source files such as:
 
-- Prometheus rule files
+- Prometheus rule files (recording rules, burn-rate and operational alerts)
+- Grafana unified-alerting provisioning YAML and Loki rule files
 - Grafana dashboard JSON
 - Alertmanager config
 - OTel Collector config
@@ -648,7 +649,15 @@ The crawler reads source files such as:
 - Docker Compose files
 
 It emits a canonical v1.4 pack plus crawler annotations describing what was
-scanned and what was inferred.
+scanned and what was inferred. Every alert rule is kept: a rule whose
+expression references a recorded SLO series is a burn-rate alert
+(`spec.policy.burn_rate_alerts`); every other rule — a pod restarting, a pool
+saturated, a certificate expiring — is an operational alert and is declared in
+`spec.alerting.rules` (spec 1.4) under its exact name, with its expression,
+wait, severity, labels, engine (`prometheus`, `grafana`, `loki`) and the file
+and group it was read from. The same name is what a live Grafana or ruler
+listing is reconciled on, so the repository's rule and the running rule pair
+in Compare.
 
 ### Fetch Live From MCP
 
