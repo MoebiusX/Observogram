@@ -63,12 +63,12 @@ import {
 } from '../tools/lib/journey.mjs';
 import { retrofeedShadowSignals } from '../tools/lib/retrofeed.mjs';
 import { initAuth, localUsersEnabled, touchSessionSecret } from './auth.mjs';
-import { validateMcpUrl, redactCredentials, stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
+import { redactCredentials, stripMcpUrl, mcpUrlOrigin, droppedNote } from './mcp-url.mjs';
 import { parseGithubUrl, isCrawlerFile, ghFetch } from './github-crawl.mjs';
 import { deployRoutes } from './routes/deploy.mjs';
 import { identityRoutes } from './routes/identity.mjs';
 import { servicesRoutes } from './routes/services.mjs';
-import { serviceTierFor } from './service-admin.mjs';
+import { resolveMcpTarget, serviceTierFor } from './service-admin.mjs';
 import { authGate, orgContext, authorize, effectiveRoleOf, rankOf, rankOfRole } from './authz.mjs';
 import { versionInfo } from './version.mjs';
 import { buildInfo, buildLabel } from './build-info.mjs';
@@ -258,8 +258,10 @@ function readEnv(query) {
 }
 
 // MCP URL validation (SSRF guard) lives in server/mcp-url.mjs — every
-// deploy / draft / refresh endpoint goes through validateMcpUrl(), and
-// stderr logs use redactCredentials()/safeUrl, never the raw URL.
+// deploy / draft / refresh endpoint goes through validateMcpUrl() (inside
+// resolveMcpTarget, server/service-admin.mjs, which also takes the org's
+// MCP endpoint by id — STORE_PLAN slice 4 §7.6), and stderr logs use
+// redactCredentials()/safeUrl, never the raw URL.
 
 // Returns a canonical object with the env overlay applied to spec.* AND
 // effective criticality/target propagated up to metadata.bindings so the
@@ -1144,20 +1146,20 @@ app.get('/api/live-status', authorize('GET /api/live-status'), (req, res) => {
 // disk. The studio shows the preview + summary; "use this pack"
 // round-trips it through /api/validate just like the crawler flow.
 //
-// Body: { mcpUrl, mcpAuth?, packName? }
+// Body: { mcpUrl | mcpEndpointId, mcpAuth?, packName? } — an endpoint by id
+// is the org's record (STORE_PLAN slice 4 §7.6): its URL, and its read
+// token from the org's own variable when the request sends none.
 // Response: { ok, canonical, canonicalYaml, summary, validation,
-//             conformance, annotations, tookMs }
+//             conformance, annotations, registered, mcpEndpoint, tookMs }
 // ----------------------------------------------------------------
 app.post('/api/draft-from-mcp', authorize('POST /api/draft-from-mcp'), async (req, res) => {
   const body = req.body || {};
-  const mcpUrl  = typeof body.mcpUrl  === 'string' && body.mcpUrl.trim() ? body.mcpUrl.trim() : null;
-  const mcpAuth = typeof body.mcpAuth === 'string' && body.mcpAuth ? body.mcpAuth : null;
   const packName = typeof body.packName === 'string' && body.packName.trim()
     ? body.packName.trim()
     : null;
-  if (!mcpUrl) return res.status(400).json({ ok: false, error: 'mcpUrl required in JSON body' });
-  const { error: mcpUrlError, safeUrl: safeMcpUrl } = validateMcpUrl(mcpUrl);
-  if (mcpUrlError) return res.status(400).json({ ok: false, error: mcpUrlError });
+  const target = resolveMcpTarget(currentStore(), body, { forWrite: false });
+  if (target.status) return res.status(target.status).json({ ok: false, error: target.error });
+  const { mcpUrl, safeMcpUrl, mcpAuth, endpoint: mcpEndpoint } = target;
   // The draft is a registered pack every viewer of the org reads: it keeps
   // the safe URL (a journey captured from it re-drafts from it; a header
   // token rides packB.mcp.authEnv), and says what it dropped.
@@ -1351,6 +1353,7 @@ app.post('/api/draft-from-mcp', authorize('POST /api/draft-from-mcp'), async (re
       validation: { ok: errors.length === 0, errors },
       conformance,
       registered,
+      mcpEndpoint,
       tookMs: Date.now() - t0,
     });
   } catch (e) {
@@ -1379,13 +1382,14 @@ function banner(pack) {
   ].join('\n');
 }
 
+// Body: { mcpUrl | mcpEndpointId, mcpAuth? } (as draft-from-mcp). The
+// response says which record was used (mcpEndpoint: { id, name } | null);
+// the live pack keeps the safe URL, never a token.
 app.post('/api/refresh-live', authorize('POST /api/refresh-live'), async (req, res) => {
   const body = req.body || {};
-  const mcpUrl = typeof body.mcpUrl === 'string' && body.mcpUrl.trim() ? body.mcpUrl.trim() : null;
-  const mcpAuth = typeof body.mcpAuth === 'string' && body.mcpAuth ? body.mcpAuth : null;
-  if (!mcpUrl) return res.status(400).json({ ok: false, error: 'mcpUrl required in JSON body' });
-  const { error: mcpUrlError, safeUrl: safeMcpUrl } = validateMcpUrl(mcpUrl);
-  if (mcpUrlError) return res.status(400).json({ ok: false, error: mcpUrlError });
+  const target = resolveMcpTarget(currentStore(), body, { forWrite: false });
+  if (target.status) return res.status(target.status).json({ ok: false, error: target.error });
+  const { mcpUrl, safeMcpUrl, mcpAuth, endpoint: mcpEndpoint } = target;
   const { dropped } = stripMcpUrl(mcpUrl);
 
   const t0 = Date.now();
@@ -1409,6 +1413,7 @@ app.post('/api/refresh-live', authorize('POST /api/refresh-live'), async (req, r
       refreshedAt,
       pack: adapt(pack),
       annotations: pack.metadata.annotations,
+      mcpEndpoint,
       ...(note ? { note } : {}),
     });
   } catch (e) {

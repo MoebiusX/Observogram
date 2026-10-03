@@ -436,11 +436,16 @@ const MISSING = Symbol('missing');
 // or { status: 400, error }; the token's value is in mcpAuth alone.
 export function resolveMcpTarget(db, body = {}, { forWrite = false } = {}) {
   const bad = (error) => ({ status: 400, error });
-  if (body.mcpUrl && body.mcpEndpointId !== null && body.mcpEndpointId !== undefined) return bad(WAYS.bothTargets);
+  // The body's fields as the routes read them: a trimmed URL or null, a
+  // non-empty token or null.
+  const sentUrl = typeof body.mcpUrl === 'string' && body.mcpUrl.trim() ? body.mcpUrl.trim() : null;
+  const sentAuth = typeof body.mcpAuth === 'string' && body.mcpAuth ? body.mcpAuth : null;
+  const byId = body.mcpEndpointId !== null && body.mcpEndpointId !== undefined;
+  if (sentUrl && byId) return bad(WAYS.bothTargets);
   let mcpUrl;
   let mcpAuth;
   let endpoint = null;
-  if (body.mcpEndpointId !== null && body.mcpEndpointId !== undefined) {
+  if (byId) {
     const id = positiveId(body.mcpEndpointId);
     if (id === null) return bad(WAYS.mcpEndpointIdShape);
     const ep = getMcpEndpoint(db, id);
@@ -455,14 +460,13 @@ export function resolveMcpTarget(db, body = {}, { forWrite = false } = {}) {
       }
     }
     mcpUrl = ep.url;
-    mcpAuth = typeof body.mcpAuth === 'string' && body.mcpAuth ? body.mcpAuth
-      : readsToken ? process.env[ep.readTokenEnv] ?? MISSING : null;
+    mcpAuth = sentAuth ?? (readsToken ? process.env[ep.readTokenEnv] ?? MISSING : null);
     if (mcpAuth === MISSING) return bad(WAYS.tokenUnset(ep));
     endpoint = { id: ep.id, name: ep.name };
   } else {
-    if (!body.mcpUrl) return bad(WAYS.neitherTarget);
-    mcpUrl = body.mcpUrl;
-    mcpAuth = body.mcpAuth;
+    if (!sentUrl) return bad(WAYS.neitherTarget);
+    mcpUrl = sentUrl;
+    mcpAuth = sentAuth;
   }
   const { error, safeUrl } = validateMcpUrl(mcpUrl);
   if (error) return bad(error);

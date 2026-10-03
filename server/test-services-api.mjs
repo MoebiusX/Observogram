@@ -586,6 +586,84 @@ test('an environment bound to an endpoint: PATCH /api/environments/:id { mcpEndp
   assert.deepEqual(eps.json.endpoints.map((e) => [e.name, e.environments]), [['prod-mcp', 1], ['staging-mcp', 0]]);
 });
 
+// ---------- an endpoint picked by id (§7.6, C11) ----------
+
+// resolveMcpTarget's refusals through POST /api/refresh-live: each a 400
+// before any fetch (no MCP runs here; the one URL that would be fetched
+// is a closed loopback port, so a request that passes the resolver ends in
+// a 502 that proves it passed). The success path with a live fake and the
+// written pack is test-smoke's.
+test('POST /api/refresh-live { mcpEndpointId }: both fields, neither, the id shape, an unknown or another org\'s id, the unset variable (naming it), the owner re-checked once acme-eu exists — each a 400 before any fetch; the PATCH way out works; a token value never comes back', async () => {
+  const K = 'POST /api/refresh-live';
+  const P = '/api/refresh-live';
+  const LOOP = 'http://127.0.0.1:1/mcp';   // a closed port: a fetch there fails at once
+  assert.equal(WAYS.bothTargets, 'send mcpUrl or mcpEndpointId, not both');
+  assert.equal(WAYS.neitherTarget, 'mcpUrl or mcpEndpointId required in JSON body');
+  assert.equal(WAYS.mcpEndpointIdShape, 'mcpEndpointId must be a positive integer');
+  await refused(K, 'oscar', P, { mcpUrl: LOOP, mcpEndpointId: ids.mcp }, 400, WAYS.bothTargets);
+  await refused(K, 'oscar', P, {}, 400, WAYS.neitherTarget);
+  await refused(K, 'oscar', P, { mcpUrl: '  ', mcpAuth: 'x' }, 400, WAYS.neitherTarget);
+  for (const mcpEndpointId of ['abc', 0, -1, 1.5, '01', true, '9007199254740992']) await refused(K, 'oscar', P, { mcpEndpointId }, 400, WAYS.mcpEndpointIdShape);
+  await refused(K, 'oscar', P, { mcpEndpointId: 999999 }, 400, 'no MCP endpoint 999999 in this org — GET /api/mcp-endpoints lists them');
+  await refused(K, 'oscar', P, { mcpEndpointId: ids.bravoMcp }, 400, `no MCP endpoint ${ids.bravoMcp} in this org — GET /api/mcp-endpoints lists them`);
+  // The variable this org's endpoint names is not set in this process.
+  assert.equal(process.env[ACME_TOKEN], undefined, 'hermetic: the suite stripped every OBSERVOGRAM_ORG_* variable');
+  const UNSET = `MCP endpoint "prod-mcp" reads its token from ${ACME_TOKEN}, which is not set in the server's environment — set it on the server (the k8s Deployment's env), or send mcpAuth with this request`;
+  assert.equal(WAYS.tokenUnset({ name: 'prod-mcp', readTokenEnv: ACME_TOKEN }), UNSET);
+  await refused(K, 'oscar', P, { mcpEndpointId: ids.mcp }, 400, UNSET);
+  await refused(K, 'oscar', P, { mcpEndpointId: String(ids.mcp), mcpAuth: '' }, 400, UNSET);   // an empty token is none
+  // An endpoint at the closed port: set, the variable is read and the
+  // request goes on to the fetch (a 502, not a 400); the token's value is
+  // in no response. A sent mcpAuth needs no variable.
+  const loop = await ok('POST /api/mcp-endpoints', 'ada', '/api/mcp-endpoints', { name: 'loop-mcp', url: LOOP, readTokenEnv: ACME_TOKEN }, 201);
+  const loopId = loop.json.endpoint.id;
+  const sent = await call('oscar', 'POST', P, { mcpEndpointId: loopId, mcpAuth: 'sent-token-value' });
+  assert.equal(sent.status, 502, `a sent token passes the resolver: ${sent.text.slice(0, 200)}`);
+  assert.ok(!sent.text.includes('sent-token-value'), 'the token is in no response');
+  process.env[ACME_TOKEN] = 'env-token-value';
+  try {
+    const fetched = await call('oscar', 'POST', P, { mcpEndpointId: loopId });
+    assert.equal(fetched.status, 502, `the variable set: past the resolver, to the fetch: ${fetched.text.slice(0, 200)}`);
+    assert.ok(!fetched.text.includes('env-token-value'), 'the variable\'s value is in no response');
+  } finally {
+    delete process.env[ACME_TOKEN];
+  }
+  // The owner is re-checked at request time (A4): a name registered while
+  // acme owned it is acme-eu's once that org exists — refused naming the
+  // owner and the PATCH way out, before the variable is read; the PATCH
+  // works, and the write routes never read a variable.
+  const EU_VAR = 'OBSERVOGRAM_ORG_ACME_EU_TOKEN';
+  const eu = await ok('POST /api/mcp-endpoints', 'ada', '/api/mcp-endpoints', { name: 'eu-mcp', url: LOOP, readTokenEnv: EU_VAR }, 201);
+  const euId = eu.json.endpoint.id;
+  process.env[EU_VAR] = 'eu-token-value';
+  try {
+    assert.equal((await call('oscar', 'POST', P, { mcpEndpointId: euId })).status, 502, 'before acme-eu exists the name is acme\'s: read, fetched');
+    const org = await ok('POST /api/admin/orgs', 'olive', '/api/admin/orgs', { id: 'acme-eu', name: 'Acme EU' }, 201);
+    assert.equal(org.json.org.id, 'acme-eu');
+    const OWNER = `${envNameOwnerText(EU_VAR, ['acme-eu'])} — PATCH /api/mcp-endpoints/${euId} names another variable`;
+    assert.equal(OWNER, `observogram store: OBSERVOGRAM_ORG_ACME_EU_TOKEN belongs to org acme-eu (the longest org prefix wins) — an admin may only name variables set aside for their org — PATCH /api/mcp-endpoints/${euId} names another variable`);
+    await refused(K, 'oscar', P, { mcpEndpointId: euId }, 400, OWNER);
+    await refused(K, 'oscar', P, { mcpEndpointId: euId, mcpAuth: 'sent' }, 400, OWNER);   // a sent token does not excuse a name that is another org's
+    await refused('POST /api/draft-from-mcp', 'oscar', '/api/draft-from-mcp', { mcpEndpointId: euId }, 400, OWNER);
+    // The write routes take the URL only: no variable, nothing to own — the
+    // request reaches the MCP (a 502 at the closed port, no 400).
+    const write = await call('oscar', 'POST', `/api/packs/payment-service/deploy/grafana-dashboard`, { mcpEndpointId: euId, dryRun: true });
+    assert.notEqual(write.status, 400, `deploy with mcpEndpointId takes the record's URL: ${write.text.slice(0, 200)}`);
+    assert.ok(!write.text.includes('eu-token-value'));
+    // The way out: a name under acme's prefix that is not acme-eu's
+    // (OBSERVOGRAM_ORG_ACME_EU_<X> would be — the longest prefix owns it).
+    const patched = await ok('PATCH /api/mcp-endpoints/:id', 'ada', `/api/mcp-endpoints/${euId}`, { readTokenEnv: 'OBSERVOGRAM_ORG_ACME_EU2_MCP' });
+    assert.deepEqual(patched.json.changed, ['readTokenEnv']);
+    await refused(K, 'oscar', P, { mcpEndpointId: euId }, 400, `MCP endpoint "eu-mcp" reads its token from OBSERVOGRAM_ORG_ACME_EU2_MCP, which is not set in the server's environment — set it on the server (the k8s Deployment's env), or send mcpAuth with this request`);
+  } finally {
+    delete process.env[EU_VAR];
+  }
+  // The two endpoints of this test go; the list reads as before it.
+  await ok('DELETE /api/mcp-endpoints/:id', 'ada', `/api/mcp-endpoints/${loopId}`);
+  await ok('DELETE /api/mcp-endpoints/:id', 'ada', `/api/mcp-endpoints/${euId}`);
+  assert.deepEqual((await ok('GET /api/mcp-endpoints', 'vera', '/api/mcp-endpoints')).json.endpoints.map((e) => e.name), ['prod-mcp', 'staging-mcp']);
+});
+
 test('DELETE /api/mcp-endpoints/:id: the view as it was, the environments it unbinds, one row { origin, unbound }; the environment reads mcpEndpoint null; gone afterwards; the id rule; the guard', async () => {
   const K = 'DELETE /api/mcp-endpoints/:id';
   await denied(K, 'oscar', `/api/mcp-endpoints/${ids.mcp}`, 'role', "requires the admin role in org 'acme' (you are operator) — ask an admin of acme");

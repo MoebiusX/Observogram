@@ -681,6 +681,23 @@ reads each org's own live pack, `<org root>/live/production-live.pack.yaml`
 refresh; `OUTPUT=<org root>/live/production-live.pack.yaml npm run fetch-live`
 feeds it from the CLI. Both keep the same safe URL: no userinfo, fragment or
 credential query parameter (`MCP_AUTH` is the place for a token).
+
+The studio's `POST /api/refresh-live` and `POST /api/draft-from-mcp` take
+either `mcpUrl` (with an optional `mcpAuth`, as before) or `mcpEndpointId`:
+one of the org's named MCP endpoints (`GET /api/mcp-endpoints`; an admin
+registers them with `POST /api/mcp-endpoints`). With an id the server uses the
+record's URL, and when the request sends no `mcpAuth` it reads the endpoint's
+read token from the variable the record names, `OBSERVOGRAM_ORG_<ORG>_<NAME>`
+(`ORG` = the org id in upper case, `-` → `_`; for example
+`OBSERVOGRAM_ORG_DEFAULT_MCP_TOKEN`), set in the server's own environment (the
+k8s Deployment's `env`, from a Secret). An admin may name only their org's
+variables; the owning org is the one whose prefix is the longest match, so
+`OBSERVOGRAM_ORG_ACME_EU_X` is `acme-eu`'s, not `acme`'s, and the check runs
+again at each request. A variable that is not set is a 400 naming it, before
+anything is fetched. The response says which record was used (`mcpEndpoint:
+{ id, name }`, or `null` for a URL); the live pack and the draft keep the safe
+URL and never the token. The deploy and rollback routes take `mcpEndpointId`
+for the URL only — a write token stays the request's `mcpAuth`.
 When the MCP exposes `metrics_query`, the fetch also samples the observability
 stack's own self-metrics (scrape, ruler, notify, tsdb, collector, dashboards,
 synthetic, logs, traces) as point-in-time signals — never verdicts, stamps or

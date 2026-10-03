@@ -387,9 +387,13 @@ test('resolveMcpTarget: mcpUrl as today, or mcpEndpointId — the record\'s URL,
       // the body as today
       assert.deepEqual(admin.resolveMcpTarget(db, { mcpUrl: 'https://alice:pw@mcp.example/mcp?token=t', mcpAuth: 'Bearer x' }),
         { mcpUrl: 'https://alice:pw@mcp.example/mcp?token=t', safeMcpUrl: 'https://mcp.example/mcp', mcpAuth: 'Bearer x', endpoint: null });
-      assert.deepEqual(admin.resolveMcpTarget(db, { mcpUrl: 'https://mcp.example/mcp' }).mcpAuth, undefined);
+      assert.deepEqual(admin.resolveMcpTarget(db, { mcpUrl: 'https://mcp.example/mcp' }).mcpAuth, null, 'no token sent → null, as the routes passed it');
+      assert.deepEqual(admin.resolveMcpTarget(db, { mcpUrl: '  https://mcp.example/mcp ', mcpAuth: '' }),
+        { mcpUrl: 'https://mcp.example/mcp', safeMcpUrl: 'https://mcp.example/mcp', mcpAuth: null, endpoint: null }, 'the URL trimmed, an empty token none — the routes\' reading of the body');
       bad({}, 'mcpUrl or mcpEndpointId required in JSON body');
       bad({ mcpUrl: '' }, 'mcpUrl or mcpEndpointId required in JSON body');
+      bad({ mcpUrl: '   ' }, 'mcpUrl or mcpEndpointId required in JSON body');
+      bad({ mcpUrl: 42 }, 'mcpUrl or mcpEndpointId required in JSON body');
       bad({ mcpAuth: 'x' }, 'mcpUrl or mcpEndpointId required in JSON body');
       bad({ mcpUrl: 'ftp://mcp.example' }, "mcpUrl must be http or https; got scheme 'ftp'");
       bad({ mcpUrl: 'https://mcp.example', mcpEndpointId: ep.id }, 'send mcpUrl or mcpEndpointId, not both');
