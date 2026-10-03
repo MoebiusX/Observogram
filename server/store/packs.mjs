@@ -1,8 +1,10 @@
 // server/store/packs.mjs — the pack registry's records (context-scoped;
 // docs/STORE_PLAN.md §2–§3). The pack file <org root>/packs/<id>.pack.yaml
-// stays the artefact; this table replaces packs/index.json (slice 4 wires
-// it in). last_used_at is bookkeeping and goes through touch() / touchMany(),
-// the one audit-free write.
+// stays the artefact; this table is the registry — it replaced
+// packs/index.json at slice 4 (server/pack-registry.mjs over it, the
+// one-shot import in server/store/pack-import.mjs). last_used_at is
+// bookkeeping and goes through touch() / touchMany(), the one audit-free
+// write.
 
 import { atomic, nowIso, prepare } from './db.mjs';
 import { writeAudit } from './audit.mjs';

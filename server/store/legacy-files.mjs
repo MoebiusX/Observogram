@@ -4,8 +4,14 @@
 // users.json and orgs.json were the source of truth before the store. The
 // first start of a store build imports them, records their SHA-256 in
 // schema_meta legacy_hashes and in <base>/.store-imported (the marker), and
-// never reads them again except to compare hashes. This module is the only
-// place that knows their paths, their structure and how they are written:
+// never reads them again except to compare hashes. Each org root's
+// packs/index.json (the pack registry before STORE_PLAN slice 4) goes the
+// same way at boot step 5 — read once, hashed under schema_meta
+// pack_index_hashes (a key of its own: a 0.5.0 build's guard compares every
+// legacy_hashes key and rewrites index.json on every pack read, so a pack
+// key there would brick a rollback), in a CANONICAL form that drops
+// lastUsedAt (canonicalPackIndex below). This module is the only place that
+// knows their paths, their structure and how they are written:
 //
 //   - strict readers: they refuse only what makes the FILE unusable — a
 //     read error other than ENOENT, a parse error, or the wrong structure.
@@ -21,8 +27,8 @@
 //     the flat-workspace migration and the empty-default-org test.
 //
 // Only server/boot.mjs, server/tenancy.mjs (the migration),
-// server/store/{import,ops,cli}.mjs, the suites and server/fixtures/* may
-// import it.
+// server/store/{import,ops,cli,pack-import}.mjs, the suites and
+// server/fixtures/* may import it.
 
 import { createHash } from 'node:crypto';
 import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -41,9 +47,19 @@ export const MIGRATABLE = Object.freeze(['packs', 'deploys.jsonl', 'snapshots', 
 // this list.
 export const ORG_ENTRIES = Object.freeze([...MIGRATABLE, 'live']);
 export const MARKER = '.store-imported';
-const MARKER_BY = Object.freeze(['import', 'replace', 'export', 'repair', 'purge-org']);
+// Who last wrote the marker. 'packs-import' is reserved for the pack
+// registry's import (boot step 5); today that step writes NO marker — the
+// marker records the identity files only (a 0.5.0 build's applyRepairs
+// rewrites it whenever its files differ from legacy_hashes, so a pack key
+// there would be fought over).
+const MARKER_BY = Object.freeze(['import', 'replace', 'export', 'repair', 'purge-org', 'packs-import']);
 
 const LEGACY_TAIL = 'the upgrade imports nothing until it is fixed';
+// A packs/index.json that exists but cannot be read (or a packs/ that
+// cannot be listed) at boot step 5: the 2026-06-11 incident's rule.
+export const PACK_INDEX_TAIL = 'the start imports no pack registry until it can be read — a transient EPERM or EBUSY must not become an empty '
+  + 'registry (the 2026-06-11 incident); with the server stopped, make it readable or move it aside (its labels are then lost: the rows are '
+  + 'rebuilt from the pack files) and start again: the next start imports only the packs';
 // The marker is written by the store, not by a person, and a corrupt one
 // on an imported store is not an upgrade problem: say so and name the way
 // out (applyRepairs rewrites a missing marker from the database).
@@ -137,6 +153,86 @@ export function readOrgsFileStrict(path) {
     return [id, { name: org.name, members: Object.entries(org.members || {}) }];
   });
   return { path, exists: true, raw, entries };
+}
+
+// ---------- the pack index (STORE_PLAN slice 4, boot step 5) ----------
+
+// The pack_index_hashes key of an org root: base-relative, forward slashes
+// ('packs/index.json' for the root '.', 'orgs/<id>/packs/index.json'
+// otherwise) — so purge-org's `orgs/<id>/` prefix filter matches.
+export function packIndexKey(root) {
+  const rel = String(root).replaceAll('\\', '/').replace(/^\.\/+/, '').replace(/\/+$/, '');
+  return rel === '.' || rel === '' ? 'packs/index.json' : `${rel}/packs/index.json`;
+}
+
+// A time as index.json held it (ms numbers; a build may also have written
+// a string) → the ISO string the rows hold; null when it is no time at
+// all. Shared by the import (an unusable value falls back to the file's
+// mtime) and the canonical form below.
+export function isoOf(value) {
+  const ms = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Date.parse(value) : NaN;
+  if (!Number.isFinite(ms) || Math.abs(ms) > 8.64e15) return null;
+  return new Date(ms).toISOString();
+}
+
+// → { path, exists: false }                                   ENOENT
+//   { path, exists: true, raw, entries: [[id, meta]] }       an object of entries (meta as parsed; the import validates each field)
+//   { path, exists: true, raw, corrupt: '<reason>' }          unparseable JSON, an array, null, a scalar — not an error (the rows
+//                                                            are rebuilt from the pack files, the labels are lost)
+// Any read error but ENOENT throws LegacyFileError(path, …, PACK_INDEX_TAIL):
+// an unreadable registry is not an empty one.
+export function readPackIndexStrict(path) {
+  let raw;
+  try {
+    raw = readFileSync(path);
+  } catch (e) {
+    if (e?.code === 'ENOENT') return { path, exists: false };
+    throw new LegacyFileError(path, `cannot be read (${e?.code || e?.message})`, { cause: e }, PACK_INDEX_TAIL);
+  }
+  let data;
+  try {
+    data = JSON.parse(raw.toString('utf8'));
+  } catch (e) {
+    return { path, exists: true, raw, corrupt: `not valid JSON (${e.message})` };
+  }
+  if (!isPlainObject(data)) {
+    const what = data === null ? 'null' : Array.isArray(data) ? 'an array' : `a ${typeof data}`;
+    return { path, exists: true, raw, corrupt: `${what}, not an object of id → entry` };
+  }
+  return { path, exists: true, raw, entries: Object.entries(data) };
+}
+
+// The canonical form the stale-import guard compares: the entries sorted
+// by id, each reduced to { label, source, createdAt } — lastUsedAt dropped
+// (a 0.4.0 / 0.5.0 build rewrites it on every pack READ, and a read is not
+// an edit), the fields read as the import reads them (a label that is no
+// string → null; a source that is no string, or empty → 'upload', as every
+// pre-slice-4 writer defaulted it), createdAt normalised to the ISO form
+// the rows hold (a number re-serialised, or a float mtime cut to the
+// millisecond, is the same time). JSON.stringify with no spacing. The same
+// form is built from the store's rows (the guard's reference), so a file
+// that says exactly what the store holds hashes equal.
+export function canonicalPackIndex(entries) {
+  const rows = [...entries].map(([id, meta]) => [String(id), {
+    label: typeof meta?.label === 'string' ? meta.label : null,
+    source: typeof meta?.source === 'string' && meta.source ? meta.source : 'upload',
+    createdAt: isoOf(meta?.createdAt),
+  }]).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return JSON.stringify(rows);
+}
+
+export const PACK_INDEX_CANON = 'pack-index-v1';
+
+// The hash recorded for a read index: the canonical form's SHA-256 (what
+// compareHashes reads), plus `raw` — the bytes' SHA-256 — so a rewrite
+// that changed nothing canonical can still be told and logged. A corrupt
+// index hashes its raw bytes only (canon 'raw'): any change to it is a
+// change. An absent one is { absent: true }.
+export function packIndexHash(idx) {
+  if (!idx?.exists) return { absent: true };
+  const raw = sha256Of(idx.raw);
+  if (idx.corrupt) return { sha256: raw, canon: 'raw', raw };
+  return { sha256: sha256Of(canonicalPackIndex(idx.entries)), canon: PACK_INDEX_CANON, raw };
 }
 
 // ---------- writers (today's, verbatim) ----------

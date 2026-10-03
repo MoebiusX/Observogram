@@ -25,7 +25,12 @@
 //                                  nothing, checked first; the issuer record;
 //                                  the sign-in mode record; the every-boot
 //                                  warnings
-//   step 5  importPacksOnce()      slice 4's hook
+//   step 5  importPacksOnce()      once: every live org's packs/index.json
+//                                  (read strictly) and pack files become
+//                                  `packs` rows, linked to the services and
+//                                  environments they name; the index hashed
+//                                  under pack_index_hashes (its own key —
+//                                  never legacy_hashes, see step 2 below)
 //
 // The seed decision (today's maybeSeedDefaultAdmin, split): seedDecision()
 // is pure over a view of the facts; the legacy view (step 3) takes them
@@ -42,6 +47,10 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { baseWorkspacePath, brandEnv } from '../tools/lib/brand-env.mjs';
 import { authDisabled, hashPassword, oidcEnabled } from './auth.mjs';
 import { migrateFlatWorkspace, planFlatMigration, resetOrgRootCache } from './tenancy.mjs';
+import { listPackFiles, packFileStat, readPackFile } from './workspace.mjs';
+import { runWithOrg } from './org-context.mjs';
+import { listPacks } from './store/packs.mjs';
+import { applyPackImport, formatPackReport, planPackImport } from './store/pack-import.mjs';
 import { atomic, nowIso, openStore, prepare, resolveDbPath, tx } from './store/db.mjs';
 import { getMeta, getMetaJson, isIdentityArmed, putMeta, setMeta, storeId } from './store/meta.mjs';
 import { listOrgs } from './store/orgs.mjs';
@@ -55,8 +64,19 @@ import {
   applyImport, applyReplace, formatReplace, formatReport, planImport, planReplace, projectedMigration, readLegacy, unreadDefaultText,
 } from './store/import.mjs';
 import {
-  compareHashes, hasData, legacyUsersPath, lexists, markerPath, ORG_ENTRIES, orgsFilePath, readMarker, sha256File, writeMarker,
+  canonicalPackIndex, compareHashes, hasData, isoOf, legacyUsersPath, lexists, markerPath, ORG_ENTRIES, orgsFilePath, packIndexHash,
+  packIndexKey, readMarker, readPackIndexStrict, sha256File, writeMarker,
 } from './store/legacy-files.mjs';
+
+// The pack-file reads boot step 5 and the stale-import guard take, over
+// server/workspace.mjs's read-only readers against an explicit org root
+// (server/store/pack-import.mjs may not import the workspace module: a
+// store module stays below the server layer).
+export const packFiles = Object.freeze({
+  list: (root) => listPackFiles({ root }),
+  read: (root, id) => readPackFile(id, { root }),
+  stat: (root, id) => packFileStat(id, { root }),
+});
 
 // ---------- the refusal ----------
 
@@ -397,7 +417,7 @@ function describeStore(db, id, importDone) {
 
 // Refuses a stale store (a), a changed issuer (b) and files edited after
 // the import (d); returns what (e) repairs. Writes nothing.
-export function staleImportGuard(db, ctx) {
+export function staleImportGuard(db, ctx, { files = packFiles } = {}) {
   const id = storeId(db);
   const importDone = getMeta(db, 'import_done');
   const marker = ctx.memory ? null : readMarker(ctx.base);   // corrupt → LegacyFileError naming it
@@ -539,7 +559,89 @@ export function staleImportGuard(db, ctx) {
   repairs.disappeared = cmp.disappeared.filter((key) => !recorded[key]?.absent);
   repairs.returned = Object.keys(recorded).filter((key) => importedOf(key) && current[key]?.sha256 === importedOf(key));
   repairs.recorded = recorded;
+  // (d), the pack registry's files (slice 4): compared canonically, against
+  // their recorded hash and, failing that, against the store's own registry.
+  repairs.packIndex = packIndexGuard(db, ctx, id, files);
   return { replacePending: false, repairs };
+}
+
+// ---------- step 2 (d) for packs/index.json (slice 4) ----------
+
+// What the store's registry says an org root's index.json would hold: the
+// org's rows, plus every pack file without a row adopted as the rehydrate
+// would (label null, source 'workspace', at its mtime). A rolled-back build
+// that only READ packs rewrote lastUsedAt (dropped by the canonical form);
+// one that only ADOPTED files the store already holds, or will adopt
+// itself, wrote nothing the store does not know. Rows whose file is gone
+// stay in the reference: a RESET, a removal, a register with a label or a
+// relabel on the old build all differ from it, and refuse.
+function referenceIndex(db, org, root, files) {
+  const rows = runWithOrg(org.id, () => listPacks(db));
+  const entries = rows.map((r) => [r.id, { label: r.label, source: r.source, createdAt: r.createdAt }]);
+  const listed = files.list(root);
+  if (!listed.error) {
+    const known = new Set(rows.map((r) => r.id));
+    for (const id of listed.ids) {
+      if (known.has(id)) continue;
+      entries.push([id, { label: null, source: 'workspace', createdAt: isoOf(files.stat(root, id)?.mtimeMs) }]);
+    }
+  }
+  return entries;
+}
+
+// Refuses an index.json whose canonical form differs from both the hash
+// recorded at the import and the store's registry; returns what (e)
+// repairs: a file that disappeared (recorded absent) and a rewrite that
+// changed nothing canonical (its new hash recorded, one log line). Writes
+// nothing. An unreadable file throws (LegacyFileError, naming it) before
+// any write, as the identity files do.
+export function packIndexGuard(db, ctx, id, files = packFiles) {
+  const recorded = getMetaJson(db, 'pack_index_hashes', {}) || {};
+  const out = { disappeared: [], rewritten: {} };
+  const keys = Object.keys(recorded);
+  if (!keys.length) return out;
+  const orgs = listOrgs(db);
+  const stale = [];
+  for (const key of keys) {
+    const path = join(ctx.base, key);
+    const idx = readPackIndexStrict(path);
+    const now = packIndexHash(idx);
+    const was = recorded[key] || {};
+    if (!idx.exists) {
+      if (!was.absent) out.disappeared.push(key);
+      continue;
+    }
+    if (!was.absent && was.sha256 === now.sha256) {
+      if (typeof was.raw === 'string' && was.raw !== now.raw) out.rewritten[key] = { hash: now, why: 'lastUsedAt only — bookkeeping, not a change' };
+      continue;
+    }
+    const org = orgs.find((o) => packIndexKey(o.root) === key) ?? null;
+    const reference = org ? referenceIndex(db, org, join(ctx.base, org.root), files) : null;
+    if (reference && !idx.corrupt && canonicalPackIndex(idx.entries) === canonicalPackIndex(reference)) {
+      out.rewritten[key] = { hash: now, why: 'it says exactly what the store holds — bookkeeping, not a change' };
+      continue;
+    }
+    stale.push({ key, path, was, now, idx, reference });
+  }
+  if (stale.length) {
+    const lines = stale.map(({ path, was, idx, reference }) => {
+      const wrote = idx.corrupt ? `the file it left is corrupt: ${idx.corrupt}` : `the registry it wrote: ${idx.entries.length} entr${idx.entries.length === 1 ? 'y' : 'ies'}`;
+      const holds = reference ? `, the store's: ${reference.length}` : ', the store serves no org at that root';
+      return was.absent
+        ? `${path} appeared since store ${id} imported the pack registry (that root had no index.json then): a build before slice 4 registered, relabelled or removed a pack during a rollback (${wrote}${holds}).`
+        : `${path} changed since store ${id} last imported or exported it: a build before slice 4 registered, relabelled or removed a pack during a rollback (${wrote}${holds}).`;
+    });
+    const ways = stale.flatMap(({ path, was }) => [
+      ...(was.absent ? [] : [`  - put ${path} back as it was (canonical SHA-256 ${was.sha256}: its entries without lastUsedAt), or`]),
+      `  - move ${path} aside${was.absent ? '' : ' (the store\'s registry stands; the rollback\'s registrations are then adopted from their pack files with no label)'}.`,
+    ]);
+    throw new BootRefusal(
+      `refusing to start: ${lines.join('\n  ')}\n` +
+      'Nothing was changed. The store keeps its own pack registry; the file is only compared, never read again. With the server stopped:\n' +
+      `${ways.join('\n')}`,
+      { nothingMoved: true });
+  }
+  return out;
 }
 
 // (e) — only when nothing refused and no import runs this boot: a file
@@ -547,7 +649,7 @@ export function staleImportGuard(db, ctx) {
 // membership row touched — A-20); the marker is rewritten from the
 // database whenever it differs.
 export function applyRepairs(db, ctx, guard, { log = () => {} } = {}) {
-  const { disappeared, returned = [], recorded } = guard.repairs;
+  const { disappeared, returned = [], recorded, packIndex = null } = guard.repairs;
   if (disappeared.length || returned.length) {
     const next = { ...recorded };
     // The imported hash is kept, so the file put back byte for byte is
@@ -557,6 +659,18 @@ export function applyRepairs(db, ctx, guard, { log = () => {} } = {}) {
     tx(db, () => putMeta(db, 'legacy_hashes', JSON.stringify(next)));
     for (const key of disappeared) log(`[store] ${key} disappeared since the import; recorded as absent`);
     for (const key of returned) log(`[store] ${key} is back as it was imported; recorded as present`);
+  }
+  // The pack registry's files (slice 4): pack_index_hashes only — never
+  // legacy_hashes, never the marker.
+  if (packIndex && (packIndex.disappeared.length || Object.keys(packIndex.rewritten).length)) {
+    const next = { ...(getMetaJson(db, 'pack_index_hashes', {}) || {}) };
+    for (const key of packIndex.disappeared) next[key] = { absent: true };
+    for (const [key, { hash }] of Object.entries(packIndex.rewritten)) next[key] = hash;
+    tx(db, () => putMeta(db, 'pack_index_hashes', JSON.stringify(next)));
+    for (const key of packIndex.disappeared) log(`[store] ${key} disappeared since the pack registry's import; recorded as absent`);
+    for (const [key, { why }] of Object.entries(packIndex.rewritten)) {
+      log(`[store] ${join(ctx.base, key)} was rewritten by a build before slice 4 (${why}); the store's registry stands`);
+    }
   }
   if (!getMeta(db, 'import_done') || ctx.memory) return;
   const id = storeId(db);
@@ -708,11 +822,20 @@ export function warnIgnoredJoinRole(db, ctx, warn, { imported = false } = {}) {
   }
 }
 
-// ---------- step 5 ----------
+// ---------- step 5: the pack registry's import ----------
 
-function importPacksOnce(db) {
-  if (getMeta(db, 'packs_imported')) return;
-  // slice 4: boot step 5 (STORE_PLAN §4 items 4–5)
+// Once per store (a :memory: store forgets, so every start): every live
+// org's packs/index.json and pack files become rows, linked to the services
+// and environments they name (server/store/pack-import.mjs). Reads only
+// until one tx() writes it all; a throw (an unreadable index.json or
+// packs/) aborts the start with packs_imported unset, so the next start
+// imports exactly the packs. No marker: it records the identity files only.
+export function importPacksOnce(db, ctx, { log = () => {}, files = packFiles } = {}) {
+  if (getMeta(db, 'packs_imported')) return null;
+  const plans = listOrgs(db).map((org) => planPackImport(db, org, ctx, files));
+  const report = applyPackImport(db, plans, ctx);
+  for (const line of formatPackReport(report)) log(line);
+  return report;
 }
 
 // ---------- the boot ----------
@@ -800,8 +923,20 @@ export async function bootStore({ host, log = () => {}, warn = () => {} } = {}) 
   warnLeftBehind(db, ctx, warn);
   warnIgnoredJoinRole(db, ctx, warn, { imported: report !== null });
 
-  // step 5
-  importPacksOnce(db);
-  return { db, ctx, decision, report };
+  // step 5. On a store's FIRST boot this runs after the identity import
+  // committed and the flat workspace moved: an unreadable index.json then
+  // aborts with users and orgs imported, and the refusal says so (the next
+  // start resumes here: import_done set, packs_imported unset).
+  let packs;
+  try {
+    packs = importPacksOnce(db, ctx, { log, files: packFiles });
+  } catch (e) {
+    if (e?.code === 'ERR_OBSERVOGRAM_LEGACY_FILE' && report !== null) {
+      const moved = report.migration?.moved?.length > 0 || report.rootChange;
+      e.message = `users and orgs were imported at this start${moved ? ' and the workspace was migrated' : ''}; the pack registry was not — ${e.message}`;
+    }
+    throw e;
+  }
+  return { db, ctx, decision, report, packs };
 }
 

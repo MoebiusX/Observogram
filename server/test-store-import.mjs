@@ -23,7 +23,7 @@ const { test } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
 const { spawnSync } = await import('node:child_process');
 const {
-  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, rmSync, symlinkSync, writeFileSync,
 } = await import('node:fs');
 const { tmpdir } = await import('node:os');
 const { dirname, join } = await import('node:path');
@@ -1514,5 +1514,375 @@ test('orgRootOf: the store\'s root, cached per handle; an unknown org throws; re
   } finally {
     closeBase(flat);
     closeBase(armed);
+  }
+});
+
+// ====================== slice 4: boot step 5 — the pack registry's import ======================
+//
+// Each fixture through bootStore() in-process, asserted row by row with its
+// report and pack_index_hashes; legacy_hashes and the marker are never
+// touched by step 5 (the Import gate's pack rows; the Stale-import gate's
+// three outcomes on the index file).
+
+const packsRepo = await import('./store/packs.mjs');
+const servicesRepo = await import('./store/services.mjs');
+const packServicesRepo = await import('./store/pack-services.mjs');
+const { runWithOrg } = await import('./org-context.mjs');
+
+const PACK_OF = (name, { service = name, environments = ['prod'] } = {}) =>
+  `apiVersion: observability.platform/v1\nkind: ObservabilityPack\nmetadata:\n  name: ${name}\n  bindings:\n    service: ${service}\n    environments: [${environments.join(', ')}]\n`;
+const MS = { a: 1700000000000, b: 1700000002000 };
+const ISO = (ms) => new Date(ms).toISOString();
+const packRows = (db, org) => runWithOrg(org, () => packsRepo.listPacks(db).map((p) => [p.id, p.label, p.source, p.createdAt, p.lastUsedAt]));
+const slugsOf = (db, org) => runWithOrg(org, () => servicesRepo.listServices(db).map((s) => s.slug));
+const linksOf = (db, org) => runWithOrg(org, () => packServicesRepo.listLinksForOrg(db).map((l) => [l.packId, l.role]));
+const orgAudit = (db, org) => auditRepo.listAudit(db, { orgId: org, limit: 1000 }).reverse().map((r) => [r.action, r.actor, r.targetId, r.detail]);
+const mtimeIso = (path) => new Date(lstatSync(path).mtimeMs).toISOString();
+const indexHashOf = (text) => {
+  const entries = Object.entries(JSON.parse(text));
+  return { sha256: legacy.sha256Of(legacy.canonicalPackIndex(entries)), canon: 'pack-index-v1', raw: legacy.sha256Of(Buffer.from(text)) };
+};
+const packLogs = (r) => r.logs.filter((l) => /pack registry|\[store\] {3}\w+: |services: \d+ created|rewritten by a build before slice 4|disappeared since the pack registry/.test(l));
+
+test('readPackIndexStrict, canonicalPackIndex, packIndexHash, isoOf, packIndexKey: the index read once — absent, entries as parsed, corrupt shapes (not an error), an unreadable file throws naming it; the canonical form drops lastUsedAt and normalises times', () => {
+  const dir = tempDir('pack-index');
+  const p = join(dir, 'index.json');
+  assert.deepEqual(legacy.readPackIndexStrict(p), { path: p, exists: false });
+  write(p, '{ "a": { "label": "A", "source": "upload", "createdAt": 1, "lastUsedAt": 2 }, "b": 5 }');
+  const read = legacy.readPackIndexStrict(p);
+  assert.deepEqual([read.exists, read.corrupt, read.entries], [true, undefined, [['a', { label: 'A', source: 'upload', createdAt: 1, lastUsedAt: 2 }], ['b', 5]]], 'entries as parsed: the import validates the fields');
+  for (const [text, reason] of [['{ "a": ', /not valid JSON/], ['[]', /an array, not an object/], ['null', /null, not an object/], ['"x"', /a string, not an object/], ['7', /a number, not an object/]]) {
+    write(p, text);
+    const r = legacy.readPackIndexStrict(p);
+    assert.ok(r.exists && r.raw.toString() === text && reason.test(r.corrupt) && !r.entries, `${text}: ${r.corrupt}`);
+    assert.deepEqual(legacy.packIndexHash(r), { sha256: legacy.sha256Of(Buffer.from(text)), canon: 'raw', raw: legacy.sha256Of(Buffer.from(text)) }, 'a corrupt index hashes its bytes');
+  }
+  mkdirSync(join(dir, 'dir.json'));
+  assert.throws(() => legacy.readPackIndexStrict(join(dir, 'dir.json')), (e) => e instanceof legacy.LegacyFileError && e.path === join(dir, 'dir.json')
+    && e.message.startsWith(`${join(dir, 'dir.json')}: cannot be read (EISDIR) — the start imports no pack registry until it can be read`)
+    && /the next start imports only the packs$/.test(e.message));
+  assert.deepEqual(legacy.packIndexHash({ path: p, exists: false }), { absent: true });
+  // The canonical form: sorted by id; label, source (defaulted as the writers did), createdAt as ISO; lastUsedAt and anything else dropped.
+  const A = [['b', { label: 'B', source: 'crawl', createdAt: 1700000002000, lastUsedAt: 5 }], ['a', { label: 'A', source: 'upload', createdAt: 1700000000000, lastUsedAt: 1 }]];
+  const B = [['a', { label: 'A', source: 'upload', createdAt: 1700000000000.4, lastUsedAt: 999, extra: true }], ['b', { label: 'B', source: 'crawl', createdAt: '2023-11-14T22:13:22.000Z' }]];
+  assert.equal(legacy.canonicalPackIndex(A), legacy.canonicalPackIndex(B), 'a lastUsedAt rewrite, a re-serialisation, a float mtime and an ISO string of the same time are the same form');
+  assert.equal(legacy.canonicalPackIndex(A), '[["a",{"label":"A","source":"upload","createdAt":"2023-11-14T22:13:20.000Z"}],["b",{"label":"B","source":"crawl","createdAt":"2023-11-14T22:13:22.000Z"}]]');
+  assert.equal(legacy.canonicalPackIndex([['x', {}], ['y', 5]]), '[["x",{"label":null,"source":"upload","createdAt":null}],["y",{"label":null,"source":"upload","createdAt":null}]]', 'no fields: label null, source upload (the writers\' default), no time');
+  assert.notEqual(legacy.canonicalPackIndex(A), legacy.canonicalPackIndex([A[0], ['a', { ...A[1][1], label: 'A2' }]]), 'a relabel is a change');
+  assert.notEqual(legacy.canonicalPackIndex(A), legacy.canonicalPackIndex([A[0]]), 'a dropped entry is a change');
+  assert.deepEqual([legacy.isoOf(1700000000000), legacy.isoOf('2023-11-14T22:13:20Z'), legacy.isoOf('yesterday'), legacy.isoOf(null), legacy.isoOf(undefined), legacy.isoOf(''), legacy.isoOf(1e300), legacy.isoOf(NaN)],
+    ['2023-11-14T22:13:20.000Z', '2023-11-14T22:13:20.000Z', null, null, null, null, null, null]);
+  assert.deepEqual([legacy.packIndexKey('.'), legacy.packIndexKey('orgs/acme'), legacy.packIndexKey('./orgs/acme/')], ['packs/index.json', 'orgs/acme/packs/index.json', 'orgs/acme/packs/index.json']);
+});
+
+test('Import (packs) 1: a flat workspace with a full index.json — rows with the labels, sources and ISO times; pack.register { imported } and the backfill by system; the canonical hash under pack_index_hashes; legacy_hashes and the marker untouched; a second boot imports nothing', async () => {
+  const idx = JSON.stringify({ a: { label: 'A', source: 'upload', createdAt: MS.a, lastUsedAt: MS.a + 1000 }, b: { label: 'B', source: 'crawl (scanned)', createdAt: MS.b, lastUsedAt: MS.b + 1000 } }, null, 2);
+  const base = workspace({ users: { users: { alice: { password: PW } } }, files: { 'packs/a.pack.yaml': PACK_OF('a'), 'packs/b.pack.yaml': PACK_OF('b', { environments: ['prod', 'staging'] }), 'packs/index.json': idx } });
+  try {
+    const r = await bootIn(base);
+    const db = r.db;
+    const id = meta.storeId(db);
+    assert.deepEqual(packRows(db, 'default'), [['a', 'A', 'upload', ISO(MS.a), ISO(MS.a + 1000)], ['b', 'B', 'crawl (scanned)', ISO(MS.b), ISO(MS.b + 1000)]]);
+    assert.deepEqual(slugsOf(db, 'default'), ['a', 'b']);
+    assert.deepEqual(linksOf(db, 'default'), [['a', 'primary'], ['b', 'primary']]);
+    assert.deepEqual(orgAudit(db, 'default'), [
+      ['pack.register', 'system', 'a', { label: 'A', source: 'upload', imported: true }],
+      ['service.create', 'system', 'a', { via: 'import', pack: 'a' }],
+      ['environment.create', 'system', 'a/prod', { via: 'import', pack: 'a' }],
+      ['pack.link', 'system', 'a', { service: 'a', role: 'primary' }],
+      ['pack.register', 'system', 'b', { label: 'B', source: 'crawl (scanned)', imported: true }],
+      ['service.create', 'system', 'b', { via: 'import', pack: 'b' }],
+      ['environment.create', 'system', 'b/prod', { via: 'import', pack: 'b' }],
+      ['environment.create', 'system', 'b/staging', { via: 'import', pack: 'b' }],
+      ['pack.link', 'system', 'b', { service: 'b', role: 'primary' }],
+    ], 'the registry\'s history starts with its import, per pack, by system');
+    const [row] = auditRepo.listAudit(db, { action: 'store.packs-import' });
+    assert.deepEqual([row.actor, row.orgId, row.targetId, row.detail], ['system', null, id, { orgs: 1, packs: 2, adopted: 0, dropped: 0, corrupt: [], services: 2, environments: 3, links: 2, conflicts: 0 }]);
+    assert.ok(meta.getMeta(db, 'packs_imported'));
+    assert.deepEqual(meta.getMetaJson(db, 'pack_index_hashes'), { 'packs/index.json': indexHashOf(idx) }, 'the canonical hash (and the raw one), under its OWN key');
+    assert.deepEqual(Object.keys(meta.getMetaJson(db, 'legacy_hashes')).sort(), ['orgs.json', 'users.json'], 'never in legacy_hashes');
+    assert.deepEqual(legacy.readMarker(base).files, meta.getMetaJson(db, 'legacy_hashes'), 'the marker records the identity files only');
+    assert.equal(legacy.readMarker(base).by, 'import');
+    assert.equal(readFileSync(join(base, 'packs', 'index.json'), 'utf8'), idx, 'the file is frozen in place, never rewritten');
+    assert.deepEqual(packLogs(r), [
+      `[store] imported the pack registry of 1 org into ${dbOf(base)} (store ${id}): default (.) 2 packs from packs/index.json`,
+      '[store]   services: 2 created, 3 environments, 2 pack links; 0 packs name no service',
+    ]);
+    assert.deepEqual(r.packs.orgs.map((o) => [o.org, o.root, o.key, o.present, o.corrupt, o.packs]), [['default', '.', 'packs/index.json', true, null, 2]]);
+    assert.deepEqual(JSON.parse(meta.getMeta(db, 'packs_import_report')).totals, r.packs.totals);
+    const audit = auditRows(db);
+    const again = await bootIn(base);
+    assert.equal(again.packs, null, 'a second boot imports nothing');
+    assert.deepEqual(auditRows(db), audit);
+    assert.deepEqual(again.logs, []);
+  } finally {
+    closeBase(base);
+  }
+});
+
+test('Import (packs) 2: an orgs.json-armed, not-yet-moved flat workspace — the migration moves packs/ first; the rows under default at orgs/default keep the labels; the key is the moved path', async () => {
+  const idx = JSON.stringify({ a: { label: 'A', source: 'upload', createdAt: MS.a, lastUsedAt: MS.a } });
+  const base = workspace({
+    users: { users: { alice: { password: PW } } }, orgs: { default: { members: { alice: 'admin' } } },
+    files: { 'packs/a.pack.yaml': PACK_OF('a'), 'packs/index.json': idx },
+  });
+  try {
+    const r = await bootIn(base);
+    assert.equal(orgRootOf('default', r.db), 'orgs/default');
+    assert.ok(existsSync(join(base, 'orgs', 'default', 'packs', 'index.json')) && !existsSync(join(base, 'packs')), 'the index moved with packs/');
+    assert.deepEqual(packRows(r.db, 'default'), [['a', 'A', 'upload', ISO(MS.a), ISO(MS.a)]], 'labels kept across the move');
+    assert.deepEqual(meta.getMetaJson(r.db, 'pack_index_hashes'), { 'orgs/default/packs/index.json': indexHashOf(idx) });
+    assert.ok(r.logs.includes(`[store] imported the pack registry of 1 org into ${dbOf(base)} (store ${meta.storeId(r.db)}): default (orgs/default) 1 pack from packs/index.json`), r.logs.join('\n'));
+  } finally {
+    closeBase(base);
+  }
+});
+
+test('Import (packs) 3: a corrupt index.json — the rows rebuilt from the pack files, label null, source workspace, at the file\'s mtime; the report names the path and says the labels were lost; the raw bytes hashed', async () => {
+  const text = '{"a": {"label": "WS';
+  const base = workspace({ users: { users: { alice: { password: PW } } }, files: { 'packs/a.pack.yaml': PACK_OF('a'), 'packs/index.json': text } });
+  try {
+    const r = await bootIn(base);
+    const at = mtimeIso(join(base, 'packs', 'a.pack.yaml'));
+    assert.deepEqual(packRows(r.db, 'default'), [['a', null, 'workspace', at, at]]);
+    assert.deepEqual(slugsOf(r.db, 'default'), ['a'], 'the services come from the pack file, not the index');
+    assert.match(r.packs.orgs[0].corrupt, /^not valid JSON \(/);
+    assert.deepEqual(r.packs.orgs[0].adopted, [], 'a corrupt index adopts nothing: every file is simply rebuilt');
+    const line = r.logs.find((l) => /is corrupt/.test(l));
+    assert.ok(line?.startsWith(`[store]   default: ${join(base, 'packs', 'index.json')} is corrupt (not valid JSON (`) && line.endsWith(')) — 1 row rebuilt from the pack files, labels lost (null)'), line);
+    assert.ok(r.logs.includes(`[store] imported the pack registry of 1 org into ${dbOf(base)} (store ${meta.storeId(r.db)}): default (.) 1 pack index.json corrupt: rebuilt from the pack files`), r.logs.join('\n'));
+    assert.deepEqual(meta.getMetaJson(r.db, 'pack_index_hashes'), { 'packs/index.json': { sha256: legacy.sha256Of(Buffer.from(text)), canon: 'raw', raw: legacy.sha256Of(Buffer.from(text)) } });
+    assert.deepEqual(auditRepo.listAudit(db_(r), { action: 'store.packs-import' })[0].detail.corrupt, [join(base, 'packs', 'index.json')]);
+    assert.ok(readFileSync(join(base, 'packs', 'index.json'), 'utf8') === text, 'left as it is');
+    const again = await bootIn(base);
+    assert.equal(again.packs, null, 'frozen: the corrupt file compares equal to its own bytes');
+  } finally {
+    closeBase(base);
+  }
+});
+const db_ = (r) => r.db;
+
+test('Import (packs) 4–5: orphan files adopted (reported) and a dangling entry dropped (reported); an unparseable pack file is a row with no services (reported)', async () => {
+  const idx = JSON.stringify({ a: { label: 'A', source: 'upload', createdAt: MS.a, lastUsedAt: MS.a }, gone: { label: 'Gone', source: 'upload', createdAt: 1, lastUsedAt: 1 }, broken: { label: 'Broken', source: 'upload', createdAt: MS.b, lastUsedAt: MS.b } });
+  const base = workspace({ users: { users: { alice: { password: PW } } }, files: { 'packs/a.pack.yaml': PACK_OF('a'), 'packs/orphan.pack.yaml': PACK_OF('orphan'), 'packs/broken.pack.yaml': '{{{{ not yaml [', 'packs/index.json': idx } });
+  try {
+    const r = await bootIn(base);
+    const at = mtimeIso(join(base, 'packs', 'orphan.pack.yaml'));
+    assert.deepEqual(packRows(r.db, 'default'), [['a', 'A', 'upload', ISO(MS.a), ISO(MS.a)], ['broken', 'Broken', 'upload', ISO(MS.b), ISO(MS.b)], [ 'orphan', null, 'workspace', at, at]].sort((x, y) => (x[3] < y[3] ? -1 : x[3] > y[3] ? 1 : x[0] < y[0] ? -1 : 1)));
+    assert.deepEqual(slugsOf(r.db, 'default'), ['a', 'orphan'], 'the unparseable file names no service');
+    assert.deepEqual(linksOf(r.db, 'default'), [['a', 'primary'], ['orphan', 'primary']]);
+    assert.deepEqual(orgAudit(r.db, 'default').filter((x) => x[0] === 'pack.register').map((x) => [x[2], x[3]]), [
+      ['a', { label: 'A', source: 'upload', imported: true }], ['broken', { label: 'Broken', source: 'upload', imported: true }], ['orphan', { label: null, source: 'workspace', imported: true, adopted: true }],
+    ]);
+    assert.deepEqual([r.packs.orgs[0].adopted, r.packs.orgs[0].dropped, r.packs.orgs[0].unparseable, r.packs.totals.noService], [['orphan'], ['gone'], ['broken'], 1]);
+    assert.deepEqual(packLogs(r).slice(1), [
+      '[store]   services: 2 created, 2 environments, 2 pack links; 1 pack name no service',
+      '[store]   default: adopted 1 pack file with no index entry: orphan · dropped 1 index entry whose file is gone: gone',
+      '[store]   default: unparseable pack files (registered, no services): broken',
+    ]);
+    assert.deepEqual(auditRepo.listAudit(r.db, { action: 'store.packs-import' })[0].detail, { orgs: 1, packs: 3, adopted: 1, dropped: 1, corrupt: [], services: 2, environments: 2, links: 2, conflicts: 0 });
+  } finally {
+    closeBase(base);
+  }
+});
+
+test('Import (packs) 6: a live aggregate — no primary link, one member service per discovered service (its own name skipped), environments for every member', async () => {
+  const live = 'apiVersion: observability.platform/v1\nkind: ObservabilityPack\nmetadata:\n  name: production-live\n  annotations:\n    mcp.servicesDiscovered: checkout,ledger,production-live\n  bindings:\n    environments: [prod]\n';
+  const idx = JSON.stringify({ live: { label: 'production-live (live MCP draft)', source: 'production-live (live MCP draft)', createdAt: MS.a, lastUsedAt: MS.a } });
+  const base = workspace({ users: { users: { alice: { password: PW } } }, files: { 'packs/live.pack.yaml': live, 'packs/index.json': idx } });
+  try {
+    const r = await bootIn(base);
+    assert.deepEqual(slugsOf(r.db, 'default'), ['checkout', 'ledger'], 'the aggregate itself is no service');
+    assert.deepEqual(linksOf(r.db, 'default'), [['live', 'member'], ['live', 'member']]);
+    assert.deepEqual(runWithOrg('default', () => packServicesRepo.listServicesForPack(r.db, 'live').map((l) => [l.role, l.slug])), [['member', 'checkout'], ['member', 'ledger']]);
+    assert.deepEqual(orgAudit(r.db, 'default').filter((x) => x[0] === 'environment.create').map((x) => x[2]), ['checkout/prod', 'ledger/prod']);
+    assert.equal(r.packs.totals.noService, 0);
+  } finally {
+    closeBase(base);
+  }
+});
+
+test('Import (packs) 7 and 7b: bad index fields never refuse — a label that is no string, a createdAt that is no time (the mtime), an entry that is no object, a lastUsedAt that is no time; oversize fields cut to 200 and reported; a 230-character file name skipped and reported; the boot succeeds', async () => {
+  const longLabel = 'L'.repeat(201);
+  const longSource = `library:${'s'.repeat(300)}`;
+  const longId = 'n'.repeat(230);   // over the text limit, under the file system's 255
+  const idx = JSON.stringify({
+    a: { label: 5, source: '', createdAt: 'yesterday', lastUsedAt: 'nope' },
+    b: 'not an object',
+    c: { label: longLabel, source: longSource, createdAt: MS.a, lastUsedAt: MS.a },
+    d: { label: '   ', source: 7, createdAt: '2023-11-14T22:13:20Z' },
+  });
+  const base = workspace({ users: { users: { alice: { password: PW } } }, files: {
+    'packs/a.pack.yaml': PACK_OF('a'), 'packs/b.pack.yaml': PACK_OF('b'), 'packs/c.pack.yaml': PACK_OF('c'), 'packs/d.pack.yaml': PACK_OF('d'), [`packs/${longId}.pack.yaml`]: PACK_OF('long'), 'packs/index.json': idx,
+  } });
+  try {
+    const r = await bootIn(base);
+    const atA = mtimeIso(join(base, 'packs', 'a.pack.yaml'));
+    const atB = mtimeIso(join(base, 'packs', 'b.pack.yaml'));
+    assert.deepEqual(Object.fromEntries(packRows(r.db, 'default').map(([id, ...rest]) => [id, rest])), {
+      a: [null, 'upload', atA, atA],
+      b: [null, 'upload', atB, atB],
+      c: [longLabel.slice(0, 200), longSource.slice(0, 200), ISO(MS.a), ISO(MS.a)],
+      d: [null, 'upload', '2023-11-14T22:13:20.000Z', '2023-11-14T22:13:20.000Z'],
+    });
+    assert.deepEqual(r.packs.orgs[0].badFields, [
+      { id: 'a', field: 'label', reason: 'not a string' }, { id: 'a', field: 'createdAt', reason: 'not a timestamp — the file\'s mtime is used' }, { id: 'a', field: 'lastUsedAt', reason: 'not a timestamp — createdAt is used' },
+      { id: 'b', field: 'entry', reason: 'not an object — imported with its id only' },
+      { id: 'c', field: 'label', reason: 'over 200 characters, cut' }, { id: 'c', field: 'source', reason: 'over 200 characters, cut' },
+      { id: 'd', field: 'source', reason: 'not a string' },
+    ]);
+    assert.deepEqual(r.packs.orgs[0].skipped, [{ id: `${'n'.repeat(60)}…`, reason: 'name over 200 characters' }]);
+    assert.ok(r.logs.includes(`[store]   default: pack files skipped (name over 200 characters — rename the file and start again, the rehydrate adopts it): ${'n'.repeat(60)}…`), r.logs.join('\n'));
+    assert.ok(r.logs.some((l) => l.startsWith('[store]   default: index fields dropped: a label (not a string) · a createdAt (not a timestamp — the file\'s mtime is used) · ')), r.logs.join('\n'));
+    assert.equal(r.packs.orgs[0].packs, 4);
+  } finally {
+    closeBase(base);
+  }
+});
+
+test('Import (packs) 8: two orgs, one with no packs/ — "0 packs" reported and { absent: true } recorded for every live root without an index; an index planted there afterwards refuses as a change naming the path and the way out, one that says what the store holds passes with a line', async () => {
+  const base = workspace({
+    users: { users: { alice: { password: PW } } }, orgs: { default: { members: { alice: 'admin' } }, acme: { name: 'Acme', members: { alice: 'admin' } } },
+    files: { 'packs/a.pack.yaml': PACK_OF('a') },
+  });
+  const acmeIdx = join(base, 'orgs', 'acme', 'packs', 'index.json');
+  try {
+    const r = await bootIn(base);
+    const id = meta.storeId(r.db);
+    assert.deepEqual(meta.getMetaJson(r.db, 'pack_index_hashes'), { 'orgs/default/packs/index.json': { absent: true }, 'orgs/acme/packs/index.json': { absent: true } });
+    assert.ok(r.logs.includes(`[store] imported the pack registry of 2 orgs into ${dbOf(base)} (store ${id}): default (orgs/default) 1 pack (no index.json: adopted from the pack files) · acme (orgs/acme) 0 packs (no index.json: adopted from the pack files)`), r.logs.join('\n'));
+    assert.deepEqual(packRows(r.db, 'acme'), []);
+    assert.ok(!existsSync(join(base, 'orgs', 'acme', 'packs')), 'the import makes no directory');
+    // A registry someone wrote during a rollback: refused, with the two ways that work in this build.
+    write(acmeIdx, JSON.stringify({ x: { label: 'X', source: 'upload', createdAt: MS.a, lastUsedAt: MS.a } }));
+    const expected = `refusing to start: ${acmeIdx} appeared since store ${id} imported the pack registry (that root had no index.json then): a build before slice 4 registered, relabelled or removed a pack during a rollback (the registry it wrote: 1 entry, the store's: 0).\n`
+      + 'Nothing was changed. The store keeps its own pack registry; the file is only compared, never read again. With the server stopped:\n'
+      + `  - move ${acmeIdx} aside.`;
+    await assert.rejects(bootIn(base), (e) => refusal(expected)(e) && e.nothingMoved === true);
+    assert.deepEqual(packRows(r.db, 'acme'), [], 'nothing read, nothing written');
+    rmSync(acmeIdx);
+    assert.deepEqual((await bootIn(base)).logs, []);
+    // An index that says exactly what the store holds, or would adopt (an old build adopted a hand-copied file): bookkeeping.
+    const h = write(join(base, 'orgs', 'acme', 'packs', 'h.pack.yaml'), PACK_OF('h'));
+    const mtime = lstatSync(h).mtimeMs;
+    const adopted = JSON.stringify({ h: { label: null, source: 'workspace', createdAt: mtime, lastUsedAt: mtime } }, null, 2);
+    write(acmeIdx, adopted);
+    const ok = await bootIn(base);
+    assert.deepEqual(ok.logs, [`[store] ${acmeIdx} was rewritten by a build before slice 4 (it says exactly what the store holds — bookkeeping, not a change); the store's registry stands`]);
+    assert.deepEqual(meta.getMetaJson(r.db, 'pack_index_hashes')['orgs/acme/packs/index.json'], indexHashOf(adopted), 'recorded by the repair');
+    assert.deepEqual((await bootIn(base)).logs, [], 'once');
+    assert.deepEqual(packRows(r.db, 'acme'), [], 'the boot adopts nothing itself (the rehydrate does, at start)');
+  } finally {
+    closeBase(base);
+  }
+});
+
+test('Import (packs) 9: OBSERVOGRAM_DB=:memory: — the rows and the report, every start; no marker, no file or directory written', async () => {
+  const idx = JSON.stringify({ a: { label: 'A', source: 'upload', createdAt: MS.a, lastUsedAt: MS.a } });
+  const base = workspace({ users: { users: { alice: { password: PW } } }, orgs: { default: { members: { alice: 'admin' } }, acme: { members: { alice: 'admin' } } }, files: { 'packs/a.pack.yaml': PACK_OF('a'), 'packs/index.json': idx } });
+  const before = treeOf(base);
+  try {
+    const r = await bootIn(base, { OBSERVOGRAM_DB: ':memory:' });
+    assert.deepEqual(packRows(r.db, 'default'), [['a', 'A', 'upload', ISO(MS.a), ISO(MS.a)]], 'the flat data read in place (the projected migration)');
+    assert.deepEqual(meta.getMetaJson(r.db, 'pack_index_hashes'), { 'packs/index.json': indexHashOf(idx), 'orgs/acme/packs/index.json': { absent: true } });
+    assert.ok(r.logs.some((l) => l.startsWith('[store] imported the pack registry of 2 orgs into :memory:')), r.logs.join('\n'));
+    assert.deepEqual(treeOf(base), before, 'nothing written: no marker, no index, no packs/ directory under orgs/acme');
+  } finally {
+    closeStore(':memory:');
+  }
+});
+
+test('Import (packs) 11: the stale-import guard on index.json — a lastUsedAt rewrite passes with the bookkeeping line (once); a relabel, a dropped entry (a RESET) or a register on the old build refuses with the change text and the ways out; the file removed is recorded absent, put back it passes; an unreadable one throws before any write', async () => {
+  const entries = { a: { label: 'A', source: 'upload', createdAt: MS.a, lastUsedAt: MS.a }, b: { label: 'B', source: 'upload', createdAt: MS.b, lastUsedAt: MS.b } };
+  const idx = JSON.stringify(entries, null, 2);
+  const base = workspace({ users: { users: { alice: { password: PW } } }, files: { 'packs/a.pack.yaml': PACK_OF('a'), 'packs/b.pack.yaml': PACK_OF('b'), 'packs/index.json': idx } });
+  const path = join(base, 'packs', 'index.json');
+  try {
+    const r = await bootIn(base);
+    const id = meta.storeId(r.db);
+    const recorded = indexHashOf(idx);
+    const rowsBefore = packRows(r.db, 'default');
+    const auditBefore = auditRows(r.db);
+    const hashes = () => meta.getMetaJson(r.db, 'pack_index_hashes')['packs/index.json'];
+    // (i) a read on the old build: lastUsedAt rewritten, the file re-serialised.
+    const touched = JSON.stringify({ b: { ...entries.b, lastUsedAt: MS.b + 50_000 }, a: { ...entries.a, lastUsedAt: MS.a + 99_000 } });
+    write(path, touched);
+    const t = await bootIn(base);
+    assert.deepEqual(t.logs, [`[store] ${path} was rewritten by a build before slice 4 (lastUsedAt only — bookkeeping, not a change); the store's registry stands`]);
+    assert.deepEqual(hashes(), { ...recorded, raw: legacy.sha256Of(Buffer.from(touched)) }, 'the same canonical hash, the new raw one');
+    assert.deepEqual((await bootIn(base)).logs, [], 'said once');
+    // (ii) a relabel on the old build.
+    write(path, JSON.stringify({ ...entries, a: { ...entries.a, label: 'A2' } }));
+    const changed = `refusing to start: ${path} changed since store ${id} last imported or exported it: a build before slice 4 registered, relabelled or removed a pack during a rollback (the registry it wrote: 2 entries, the store's: 2).\n`
+      + 'Nothing was changed. The store keeps its own pack registry; the file is only compared, never read again. With the server stopped:\n'
+      + `  - put ${path} back as it was (canonical SHA-256 ${recorded.sha256}: its entries without lastUsedAt), or\n`
+      + `  - move ${path} aside (the store's registry stands; the rollback's registrations are then adopted from their pack files with no label).`;
+    await assert.rejects(bootIn(base), (e) => refusal(changed)(e) && e.nothingMoved === true);
+    // (iii) a RESET on the old build: every file gone, the index {} — the store's rows stand, so it is a change.
+    write(path, '{}');
+    await assert.rejects(bootIn(base), refusal(new RegExp(`^refusing to start: ${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} changed since store ${id} .*\\(the registry it wrote: 0 entries, the store's: 2\\)`)));
+    // (iv) a register on the old build: a new file with a labelled entry.
+    write(join(base, 'packs', 'c.pack.yaml'), PACK_OF('c'));
+    write(path, JSON.stringify({ ...entries, c: { label: 'C', source: 'upload', createdAt: Date.now(), lastUsedAt: Date.now() } }));
+    await assert.rejects(bootIn(base), refusal(new RegExp('the registry it wrote: 3 entries, the store\'s: 3\\)')));
+    // (v) the same new file adopted by the old build (no label, source workspace, its mtime): what the store would adopt — bookkeeping.
+    const cm = lstatSync(join(base, 'packs', 'c.pack.yaml')).mtimeMs;
+    const withC = JSON.stringify({ ...entries, c: { label: null, source: 'workspace', createdAt: cm, lastUsedAt: cm } });
+    write(path, withC);
+    const adopted = await bootIn(base);
+    assert.deepEqual(adopted.logs, [`[store] ${path} was rewritten by a build before slice 4 (it says exactly what the store holds — bookkeeping, not a change); the store's registry stands`]);
+    assert.deepEqual(hashes(), indexHashOf(withC));
+    rmSync(join(base, 'packs', 'c.pack.yaml'));
+    // (vi) the file put back as imported (c gone): it differs from the recorded form of (v) but says what the store holds — bookkeeping; moved aside: recorded absent, once.
+    write(path, idx);
+    assert.deepEqual((await bootIn(base)).logs, [`[store] ${path} was rewritten by a build before slice 4 (it says exactly what the store holds — bookkeeping, not a change); the store's registry stands`]);
+    assert.deepEqual(hashes(), recorded);
+    renameSync(path, `${path}.aside`);
+    const gone = await bootIn(base);
+    assert.deepEqual(gone.logs, ['[store] packs/index.json disappeared since the pack registry\'s import; recorded as absent']);
+    assert.deepEqual(hashes(), { absent: true });
+    assert.deepEqual((await bootIn(base)).logs, []);
+    // (vii) it comes back saying what the store holds: bookkeeping, recorded again; the rows and the audit never moved.
+    renameSync(`${path}.aside`, path);
+    const back = await bootIn(base);
+    assert.deepEqual(back.logs, [`[store] ${path} was rewritten by a build before slice 4 (it says exactly what the store holds — bookkeeping, not a change); the store's registry stands`]);
+    assert.deepEqual(hashes(), recorded);
+    assert.deepEqual(packRows(r.db, 'default'), rowsBefore, 'no row changed through any of it');
+    assert.deepEqual(auditRows(r.db), auditBefore, 'no audit row');
+    assert.deepEqual(Object.keys(meta.getMetaJson(r.db, 'legacy_hashes')).sort(), ['orgs.json', 'users.json']);
+    // (viii) an unreadable index on an upgraded store: the guard throws, before any write, with no "imported at this start" prefix.
+    rmSync(path);
+    mkdirSync(path);
+    await assert.rejects(bootIn(base), (e) => e instanceof legacy.LegacyFileError && e.path === path && e.message.startsWith(`${path}: cannot be read (EISDIR)`) && !/imported at this start/.test(e.message));
+    rmdirSync(path);
+    write(path, idx);
+    assert.ok(await bootIn(base));
+  } finally {
+    closeBase(base);
+  }
+});
+
+test('Import (packs), A7: an unreadable index.json on a store\'s FIRST boot aborts after the identity import — the refusal says so; import_done set, packs_imported unset, no pack row; the next start imports only the packs', async () => {
+  const base = workspace({ users: { users: { alice: { password: PW } } }, files: { 'packs/a.pack.yaml': PACK_OF('a') } });
+  const path = join(base, 'packs', 'index.json');
+  mkdirSync(path);
+  try {
+    await assert.rejects(bootIn(base), (e) => e instanceof legacy.LegacyFileError && e.code === 'ERR_OBSERVOGRAM_LEGACY_FILE' && e.path === path
+      && e.message.startsWith(`users and orgs were imported at this start; the pack registry was not — ${path}: cannot be read (EISDIR) — the start imports no pack registry until it can be read`));
+    const db = await openStore({ path: dbOf(base) });
+    assert.ok(meta.getMeta(db, 'import_done'));
+    assert.equal(meta.getMeta(db, 'packs_imported'), null);
+    assert.equal(meta.getMeta(db, 'pack_index_hashes'), null);
+    assert.deepEqual(packRows(db, 'default'), []);
+    assert.deepEqual(auditRows(db).map((x) => x[0]).filter((a) => a.startsWith('store.')), ['store.import']);
+    assert.ok(existsSync(legacy.markerPath(base)), 'the marker was written by the identity import');
+    rmdirSync(path);
+    const r = await bootIn(base);
+    assert.equal(r.report, null, 'the identity import does not run again');
+    assert.deepEqual(packRows(db, 'default').map((x) => [x[0], x[1], x[2]]), [['a', null, 'workspace']]);
+    assert.deepEqual(auditRows(db).map((x) => x[0]).filter((a) => a.startsWith('store.')), ['store.import', 'store.packs-import']);
+    assert.ok(r.logs.some((l) => l.startsWith('[store] imported the pack registry of 1 org')), r.logs.join('\n'));
+  } finally {
+    closeBase(base);
   }
 });

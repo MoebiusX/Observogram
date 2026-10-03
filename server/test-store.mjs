@@ -788,6 +788,7 @@ const environments = await import('./store/environments.mjs');
 const mcpEndpoints = await import('./store/mcp-endpoints.mjs');
 const packs = await import('./store/packs.mjs');
 const packServices = await import('./store/pack-services.mjs');
+const packLinks = await import('./store/pack-links.mjs');
 
 async function freshStore(tag) {
   const path = join(tempDir(tag), 'observogram.db');
@@ -1007,6 +1008,7 @@ test('context-scoped repositories throw outside runWithOrg()', async () => {
       'pack_services.link': () => packServices.linkPackService(db, 'a', { packId: 'p', serviceId: 1 }),
       'pack_services.linkIfAbsent': () => packServices.linkPackService(db, 'a', { packId: 'p', serviceId: 1 }, { ifAbsent: true }),
       'pack_services.unlink': () => packServices.unlinkPackService(db, 'a', 'p', 1, { detail: { service: 's', reason: 'replan' } }),
+      'pack_links.link': () => packLinks.linkPack(db, 'a', { packId: 'p', entry: { id: 'p', service: 's' }, canonical: {}, via: 'register' }),
     };
     for (const [name, call] of Object.entries(calls)) assert.throws(call, /org-scoped — call it inside runWithOrg\(\)/, name);
     assert.deepEqual(auditActions(db), []);
@@ -1074,6 +1076,13 @@ test('Tenancy isolation: org B reads and writes nothing of org A through any con
       assert.throws(() => packServices.linkPackService(db, 'bob', { packId: 'uploaded-checkout-0123abcd', serviceId: a.svc.id }, { ifAbsent: true }), /no service/);
       assert.equal(packs.touchMany(db, [[a.pack.id, '2031-01-01T00:00:00.000Z']]), 1, 'B\'s own row of that id now — A\'s is unchanged (below)');
       assert.deepEqual(packServices.listLinksForOrg(db), [], 'B linked nothing');
+      // linkPack from B for A's pack id: B's rows only (B's own checkout service, its prod environment already there).
+      const linked = packLinks.linkPack(db, 'bob', {
+        packId: 'uploaded-checkout-0123abcd', entry: { id: 'uploaded-checkout-0123abcd', service: 'checkout', services: ['checkout'] },
+        canonical: { metadata: { bindings: { service: 'checkout', environments: ['prod'] } } }, via: 'register',
+      });
+      assert.deepEqual(linked, { services: [], environments: [], links: ['checkout'], unlinked: [] });
+      assert.deepEqual(packServices.listLinksForOrg(db).map((l) => [l.packId, l.serviceId, l.role]), [['uploaded-checkout-0123abcd', bSvc.id, 'primary']]);
     });
     // A is untouched.
     runWithOrg('acme', () => {
@@ -1095,7 +1104,7 @@ test('Tenancy isolation: org B reads and writes nothing of org A through any con
     });
     assert.deepEqual(auditActions(db, { orgId: 'acme' }), ['mcp_endpoint.create', 'service.create', 'environment.create', 'pack.register', 'pack.link'],
       'every write audited in its org, touch() and touchMany() not at all');
-    assert.deepEqual(auditActions(db, { orgId: 'bravo' }), ['service.create', 'environment.create', 'pack.register']);
+    assert.deepEqual(auditActions(db, { orgId: 'bravo' }), ['service.create', 'environment.create', 'pack.register', 'pack.link']);
     // The schema holds the same line: a link across orgs is a foreign-key failure.
     assert.throws(() => prepare(db, "INSERT INTO pack_services (org_id, pack_id, service_id, role) VALUES ('bravo', 'uploaded-checkout-0123abcd', ?, 'member')").run(a.svc.id), /FOREIGN KEY/);
     // clearPacks from B drops B's rows only.
@@ -1107,7 +1116,7 @@ test('Tenancy isolation: org B reads and writes nothing of org A through any con
       assert.equal(packs.listPacks(db).length, 1);
       assert.deepEqual(packServices.listServicesForPack(db, a.pack.id).map((l) => l.role), ['primary']);
     });
-    assert.deepEqual(auditActions(db, { orgId: 'bravo' }), ['service.create', 'environment.create', 'pack.register', 'pack.clear']);
+    assert.deepEqual(auditActions(db, { orgId: 'bravo' }), ['service.create', 'environment.create', 'pack.register', 'pack.link', 'pack.clear']);
     assert.deepEqual(auditRepo.listAudit(db, { orgId: 'bravo', action: 'pack.clear' }).map((r) => [r.targetId, r.detail]), [[null, { dropped: 1 }]]);
   } finally {
     close();
@@ -1268,6 +1277,79 @@ test('the pack registry\'s repository calls: upsertPack, the removal actions, to
       'pack.link', 'pack.link', 'pack.link', 'pack.unlink', 'pack.unlink',
       'pack.replace', 'pack.register', 'pack.evict', 'pack.remove', 'pack.register', 'pack.link', 'pack.clear', 'pack.clear',
     ]);
+  } finally {
+    close();
+  }
+});
+
+// The one pack → rows rule (server/store/pack-links.mjs): the plan from
+// tools/lib/service-keys.mjs over the catalogue entry, reconciled with the
+// pack's links — created once, nothing twice, a changed plan unlinks first.
+test('linkPack: creates the service, environment and link rows a pack names once; a second call writes nothing; an aggregate links members only; a moved primary unlinks first; the via vocabulary', async () => {
+  const { db, close } = await freshStore('links');
+  try {
+    orgs.createOrg(db, 'system', { id: 'acme', name: 'Acme' });
+    const rows = (sinceSeq = 0) => auditRepo.listAudit(db, { orgId: 'acme', limit: 1000 }).filter((r) => r.seq > sinceSeq).reverse().map((r) => [r.action, r.actor, r.targetId, r.detail]);
+    const last = () => auditRepo.listAudit(db, { orgId: 'acme', limit: 1 })[0]?.seq ?? 0;
+    runWithOrg('acme', () => {
+      packs.addPack(db, 'alice', { id: 'p1', label: 'Checkout (scanned)', source: 'upload' });
+      packs.addPack(db, 'alice', { id: 'live', label: 'production-live (live MCP draft)', source: 'production-live (live MCP draft)' });
+      packs.addPack(db, 'alice', { id: 'bare', label: null, source: 'upload' });
+      // A plain pack: primary = service, one environment per binding.
+      const plain = { id: 'p1', label: 'Checkout (scanned)', description: 'Uploaded pack — upload', name: 'checkout', service: 'Checkout', namespace: 'payments', services: ['Checkout', 'payments'], source: 'uploaded' };
+      const c1 = { metadata: { name: 'checkout', bindings: { service: 'Checkout', namespace: 'payments', environments: ['prod', 'staging'] } }, spec: { environments: { prod: {}, dev: {} } } };
+      assert.deepEqual(packLinks.planPackServices(plain, c1), { services: [{ name: 'Checkout', key: 'checkout', role: 'primary' }, { name: 'payments', key: 'payments', role: 'member' }], environments: ['prod', 'dev', 'staging'] });
+      let r = packLinks.linkPack(db, 'alice', { packId: 'p1', entry: plain, canonical: c1, via: 'register' });
+      assert.deepEqual(r, { services: ['checkout', 'payments'], environments: ['checkout/prod', 'checkout/dev', 'checkout/staging', 'payments/prod', 'payments/dev', 'payments/staging'], links: ['checkout', 'payments'], unlinked: [] });
+      assert.deepEqual(rows().map((x) => x[0]).filter((a) => a !== 'pack.register'), [
+        'service.create', 'environment.create', 'environment.create', 'environment.create', 'pack.link',
+        'service.create', 'environment.create', 'environment.create', 'environment.create', 'pack.link',
+      ]);
+      assert.deepEqual(rows().filter((x) => x[0] === 'service.create').map((x) => [x[1], x[2], x[3]]), [['alice', 'checkout', { via: 'register', pack: 'p1' }], ['alice', 'payments', { via: 'register', pack: 'p1' }]]);
+      assert.deepEqual(rows().filter((x) => x[0] === 'pack.link').map((x) => x[3]), [{ service: 'checkout', role: 'primary' }, { service: 'payments', role: 'member' }]);
+      assert.deepEqual(services.listServices(db).map((s) => [s.slug, s.name, s.tier, s.owners]), [['checkout', 'Checkout', null, []], ['payments', 'payments', null, []]], 'tier and owners unset: nothing invented');
+      // The same plan again: nothing.
+      const seq = last();
+      r = packLinks.linkPack(db, 'alice', { packId: 'p1', entry: plain, canonical: c1, via: 'register' });
+      assert.deepEqual(r, { services: [], environments: [], links: [], unlinked: [] });
+      assert.deepEqual(rows(seq), []);
+      // A live aggregate: no primary, members for its discovered services (its own key skipped), environments for every member.
+      const agg = { id: 'live', label: 'production-live (live MCP draft)', description: 'Uploaded pack — production-live (live MCP draft)', name: 'production-live', service: 'production-live', namespace: 'production-live', services: ['checkout', 'ledger', 'production-live'], source: 'uploaded' };
+      const c2 = { metadata: { name: 'production-live', annotations: { 'mcp.servicesDiscovered': 'checkout,ledger,production-live' }, bindings: { environments: ['prod'] } } };
+      r = packLinks.linkPack(db, 'system', { packId: 'live', entry: agg, canonical: c2, via: 'import' });
+      assert.deepEqual(r, { services: ['ledger'], environments: ['ledger/prod'], links: ['checkout', 'ledger'], unlinked: [] });
+      assert.deepEqual(packServices.listServicesForPack(db, 'live').map((l) => [l.role, l.slug]), [['member', 'checkout'], ['member', 'ledger']]);
+      assert.deepEqual(rows(seq).filter((x) => x[0] === 'service.create').map((x) => [x[1], x[2], x[3]]), [['system', 'ledger', { via: 'import', pack: 'live' }]]);
+      // A moved primary (a name-less pack re-labelled): the old primary unlinked FIRST, the new linked — one primary, no UNIQUE failure.
+      const c3 = { metadata: { bindings: { environments: ['prod'] } } };
+      const l1 = { id: 'bare', label: 'L1', description: 'Uploaded pack — upload', service: '', namespace: '', services: [], source: 'uploaded' };
+      const l2 = { ...l1, label: 'L2' };
+      packLinks.linkPack(db, 'alice', { packId: 'bare', entry: l1, canonical: c3, via: 'register' });
+      assert.deepEqual(packServices.listServicesForPack(db, 'bare').map((l) => [l.role, l.slug]), [['primary', 'l1']]);
+      const seq2 = last();
+      r = packLinks.linkPack(db, 'alice', { packId: 'bare', entry: l2, canonical: c3, via: 'register' });
+      assert.deepEqual(r, { services: ['l2'], environments: ['l2/prod'], links: ['l2'], unlinked: ['l1'] });
+      assert.deepEqual(packServices.listServicesForPack(db, 'bare').map((l) => [l.role, l.slug]), [['primary', 'l2']]);
+      assert.deepEqual(rows(seq2).map((x) => [x[0], x[3]]), [
+        ['pack.unlink', { service: 'l1', reason: 'relabelled' }],
+        ['service.create', { via: 'register', pack: 'bare' }], ['environment.create', { via: 'register', pack: 'bare' }], ['pack.link', { service: 'l2', role: 'primary' }],
+      ]);
+      assert.ok(services.getServiceBySlug(db, 'l1'), 'the service the plan no longer names stays: a service without a pack exists');
+      // The same pack as an aggregate (a label with "live"): its primary goes, the members stay; the reason follows the via.
+      const seq3 = last();
+      r = packLinks.linkPack(db, 'system', { packId: 'bare', entry: { ...l2, label: 'bare (live MCP draft)', services: ['checkout'] }, canonical: c3, via: 'adopt' });
+      assert.deepEqual(r, { services: [], environments: [], links: ['checkout'], unlinked: ['l2'] });
+      assert.deepEqual(rows(seq3).map((x) => [x[0], x[3]]), [['pack.unlink', { service: 'l2', reason: 'replan' }], ['pack.link', { service: 'checkout', role: 'member' }]]);
+      // The vocabulary; an unusable environment name is left out; a long display name is cut, its key bounded by the plan.
+      assert.throws(() => packLinks.linkPack(db, 'alice', { packId: 'p1', entry: plain, canonical: c1, via: 'manual' }), /linked via one of register, import, adopt, replace, export, not "manual"/);
+      const longName = `${'Long  '.repeat(35)}name`;   // 214 characters; its key (runs of spaces collapse) 179
+      const c4 = { metadata: { bindings: { service: longName, environments: ['ok', 'x'.repeat(201)] } } };
+      r = packLinks.linkPack(db, 'alice', { packId: 'p1', entry: { ...plain, service: longName, namespace: '', services: [] }, canonical: c4, via: 'register' });
+      assert.deepEqual([r.services.length, r.environments.length, r.unlinked], [1, 1, ['checkout', 'payments']]);
+      const created = services.getServiceBySlug(db, r.services[0]);
+      assert.equal(created.name.length, 200, 'the display name is cut to the text limit');
+      assert.deepEqual(environments.listEnvironments(db, created.id).map((e) => e.name), ['ok'], 'the 201-character environment name is dropped, never cut');
+    });
   } finally {
     close();
   }

@@ -30,7 +30,14 @@
 export const CLASSES = Object.freeze(['public', 'self', 'viewer', 'operator', 'admin', 'owner']);
 export const MODES = Object.freeze(['local', 'oidc', 'off']);
 
-const SLICE4_PACK = 'slice 4: pack.register, pack.evict, pack.replace';
+// A route that registers a pack (server/pack-registry.mjs): the pack's row
+// (pack.register, or pack.update for the same content under another label
+// or source), the quick-start dedup (pack.replace), the cap (pack.evict),
+// and the reconcile of its service links (pack.link / pack.unlink, with
+// service.create / environment.create for the rows it names when absent).
+const PACK_REGISTER = Object.freeze([
+  'pack.register', 'pack.update', 'pack.replace', 'pack.evict', 'pack.link', 'pack.unlink', 'service.create', 'environment.create',
+]);
 
 export const ROUTES = Object.freeze({
   // ---------- public ----------
@@ -93,7 +100,7 @@ export const ROUTES = Object.freeze({
   'GET /api/library/:id': { class: 'viewer' },
 
   // ---------- operator: every existing mutation ----------
-  'DELETE /api/uploads': { class: 'operator', later: 'slice 4: pack.clear' },
+  'DELETE /api/uploads': { class: 'operator', audit: ['pack.clear'] },
   'POST /api/packs/:id/retrofeed': { class: 'operator', later: 'none (computes; writes nothing)' },
   'POST /api/deploys/:deployId/verify': { class: 'operator', later: 'slice 5: deploy.verify' },
   'POST /api/deploys/:deployId/rollback': { class: 'operator', later: 'slice 5: deploy.rollback' },
@@ -101,14 +108,14 @@ export const ROUTES = Object.freeze({
   'POST /api/packs/:id/deploy/:target': { class: 'operator', later: 'slice 5: deploy.run' },
   'POST /api/journeys/:name/run': { class: 'operator', later: 'slice 5: journey.run' },
   'POST /api/journeys/capture': { class: 'operator', later: 'slice 5: journey.capture' },
-  'POST /api/draft-from-mcp': { class: 'operator', later: SLICE4_PACK },
+  'POST /api/draft-from-mcp': { class: 'operator', audit: PACK_REGISTER },
   'POST /api/refresh-live': { class: 'operator', later: 'slice 5: live.refresh' },
-  'POST /api/crawl': { class: 'operator', later: SLICE4_PACK },
-  'POST /api/crawl-github': { class: 'operator', later: SLICE4_PACK },
-  'POST /api/validate': { class: 'operator', later: SLICE4_PACK },
+  'POST /api/crawl': { class: 'operator', audit: PACK_REGISTER },
+  'POST /api/crawl-github': { class: 'operator', audit: PACK_REGISTER },
+  'POST /api/validate': { class: 'operator', audit: PACK_REGISTER },
   'POST /api/library/instantiate': { class: 'operator', later: 'none (computes)' },
   'POST /api/library/compile': { class: 'operator', later: 'none (computes)' },
-  'POST /api/library/register': { class: 'operator', later: SLICE4_PACK },
+  'POST /api/library/register': { class: 'operator', audit: PACK_REGISTER },
 
   // ---------- admin: the request's org — its name and its members ----------
   // The identity API (server/routes/identity.mjs) for the org the request

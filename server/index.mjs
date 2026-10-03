@@ -37,10 +37,9 @@ import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHash } from 'node:crypto';
 import { parse as parseYaml, emit as emitYaml } from '../tools/lib/mini-yaml.mjs';
 import { adapt, listEnvironments, applyEnvironmentOverlay } from '../tools/lib/adapter.mjs';
-import { serviceMetadata } from '../tools/lib/service-keys.mjs';
+import { serviceMetadata, catalogEntryOf } from '../tools/lib/service-keys.mjs';
 import { isLegacyLayeredPack, upconvertLegacyPack } from '../tools/lib/legacy.mjs';
 import { validateCanonical, SPEC_VERSION, SPEC_DIR, SPEC_SCHEMA_PATH } from '../tools/lib/validator.mjs';
 import { evaluateConformance, RUBRIC } from '../tools/lib/conformance.mjs';
@@ -56,11 +55,8 @@ import {
   TIERS, SCAFFOLD_PARAMS,
 } from '../tools/lib/library.mjs';
 import { parsePromqlDependencies as parsePromql } from '../tools/lib/promql-lezer.mjs';
-import {
-  saveWorkspacePack, deleteWorkspacePack, touchWorkspacePack,
-  loadWorkspacePacks, clearWorkspacePacks, workspaceInfo,
-  writeLivePack, readLivePack, LIVE_PACK_FILE,
-} from './workspace.mjs';
+import { workspaceInfo, writeLivePack, readLivePack, LIVE_PACK_FILE } from './workspace.mjs';
+import { registerPack, uploadsMap, ensureOrgLoaded, touchPack, clearPacks, contentHash, slugify } from './pack-registry.mjs';
 import {
   listJourneys, loadJourneyDef, runJourney, readJourneyRuns, saveJourneyDef, validateGateStack,
   validateSchedule, validateStackBudget, validateNotify,
@@ -187,121 +183,39 @@ function loadPackFile(relPath) {
 // by an id under /api/packs/:id/*. Without this they'd be opaque blobs the
 // server can't refer back to.
 //
-// Capped at MAX_UPLOADS to bound memory; oldest entry evicted on overflow.
-// Backed by the workspace directory (server/workspace.mjs): every
-// registration writes through to disk and start() rehydrates the map, so
-// crawled / drafted / uploaded packs survive restarts. Eviction at the cap
-// prunes both the map and the disk copy (retention by least-recently-used).
-// Tenancy is always on: each org has its own registry — a process-wide
-// map would leak one org's packs into another's catalog, which is exactly
-// what the Stage 2 isolation gate forbids. The scope key is the request's
-// org (currentOrg()) within a store handle, so a suite that re-points the
-// workspace (and so the store) between boots in one process never sees
-// the previous workspace's packs. An org's map rehydrates from its own
-// workspace subtree on first touch (boot step 6 touches every live org).
-const UPLOAD_REGISTRIES = new WeakMap();   // store handle → Map(orgId → Map(id → { canonical, source, label, createdAt }))
-const MAX_UPLOADS = 200;
+// The org's upload registry — crawled / drafted / uploaded packs — lives in
+// server/pack-registry.mjs (STORE_PLAN slice 4): one pack file per pack
+// (server/workspace.mjs), one `packs` row with its service links, and the
+// per-org in-memory Map this module reads (uploadsMap(), rehydrated from the
+// rows and files on an org's first touch — boot step 6 touches every live
+// org). A register writes the file, the rows and their audit rows under the
+// request's principal; a read touches lastUsedAt (debounced, audit-free).
+// The actor is the principal's (a login, the bearer's label, `local`); an
+// anonymous principal has none and never reaches an operator route — a
+// missing one fails closed in the repository (requireActor), never defaults.
+const actorOf = (req) => req.observogramPrincipal?.actor;
 
-function rehydrateInto(m, scope) {
-  let restored = 0;
-  try {
-    // loadWorkspacePacks resolves the org root from the AsyncLocalStorage
-    // context. Entries arrive oldest lastUsedAt first, preserving the
-    // map's LRU insertion order.
-    for (const p of loadWorkspacePacks()) {
-      if (m.has(p.id)) continue;
-      m.set(p.id, { canonical: p.canonical, source: p.source, label: p.label, createdAt: p.createdAt });
-      restored++;
-    }
-  } catch (e) {
-    process.stderr.write(`[workspace] org '${scope}' rehydrate failed: ${e.message}\n`);
-  }
-  return restored;
-}
-
-let lastRehydrated = 0;
-function uploadsMap() {
-  const scope = currentOrg();
-  if (!scope) throw new Error('uploadsMap() outside an org context');
-  const db = currentStore();
-  let byOrg = UPLOAD_REGISTRIES.get(db);
-  if (!byOrg) { byOrg = new Map(); UPLOAD_REGISTRIES.set(db, byOrg); }
-  let m = byOrg.get(scope);
-  if (!m) {
-    m = new Map();
-    byOrg.set(scope, m);
-    lastRehydrated = rehydrateInto(m, scope);
-  }
-  return m;
-}
-
-function slugify(s) {
-  return String(s || 'pack')
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40) || 'pack';
-}
-
-// Deterministic content hash — same canonical → same id across restarts,
-// engineers, and environments. The first 8 hex chars of SHA-256 over the
-// JSON.stringify of the canonical pack object. 8 chars = 32 bits = ~4B
-// slots, comfortably collision-free for the demo's 20-pack cap. Run-time
-// annotations (metadata.annotations.mcp.refreshedAt etc.) ARE included in
-// the hash on purpose — two packs that differ only in their refreshedAt
-// timestamp are genuinely different snapshots and deserve distinct ids.
-function contentHash(canonical) {
-  const json = JSON.stringify(canonical || {});
-  return createHash('sha256').update(json).digest('hex').slice(0, 8);
-}
-
-function registerUploadedPack(canonical, source, label) {
-  const slug = slugify(canonical?.metadata?.name || source || 'pack');
-  const id = `uploaded-${slug}-${contentHash(canonical)}`;
-  // Idempotent: if the same canonical content was already registered,
-  // delete + re-insert refreshes its LRU position without minting a new
-  // id. That makes re-upload safe (no duplicate entries) AND keeps the
-  // user's pick alive when they're actively working with that pack.
-  const uploads = uploadsMap();
-  if (uploads.has(id)) uploads.delete(id);
-  // ALSO drop any older entry whose friendly label collides with the
-  // new one. This is how the quick-start cases stay deduplicated:
-  // a second "KrystalineX (repo scan)" replaces the first instead of
-  // accumulating clones in the picker.
-  if (label) {
-    for (const [otherId, rec] of [...uploads.entries()]) {
-      if (rec.label === label && otherId !== id) {
-        uploads.delete(otherId);
-        deleteWorkspacePack(otherId);
-      }
-    }
-  }
-  const rec = { canonical, source: source || 'upload', label, createdAt: Date.now() };
-  uploads.set(id, rec);
-  saveWorkspacePack(id, rec);
-  // Evict the oldest if we've blown the cap — disk copy goes with it.
-  while (uploads.size > MAX_UPLOADS) {
-    const oldestKey = uploads.keys().next().value;
-    uploads.delete(oldestKey);
-    deleteWorkspacePack(oldestKey);
-  }
-  return id;
+function registerUploadedPack(req, canonical, source, label) {
+  return registerPack(currentStore(), actorOf(req), { canonical, source, label });
 }
 
 function uploadedMeta(id) {
   const upl = uploadsMap().get(id);
   if (!upl) return null;
-  touchWorkspacePack(id);   // keeps lastUsedAt-based retention honest (debounced)
+  touchPack(currentStore(), id);   // keeps lastUsedAt-based retention honest (debounced)
+  // The catalogue entry GET /api/packs serves for it — the one builder the
+  // registry's rows and the studio's tiles read too (tools/lib/service-keys.mjs):
+  // the label falls back to the canonical pack name, then the id.
+  const entry = catalogEntryOf(id, { label: upl.label, source: upl.source }, upl.canonical, listEnvironments(upl.canonical));
   return {
     id,
     path: null,        // signal: not file-backed
     canonical: upl.canonical,
-    // Prefer the explicit friendly label when present, fall back to
-    // the canonical pack name. This is what the picker dropdown reads.
-    label: upl.label || upl.canonical?.metadata?.name || id,
-    description: `Uploaded pack — ${upl.source}`,
+    label: entry.label,
+    description: entry.description,
     source: upl.source,
     uploaded: true,
+    entry,
   };
 }
 
@@ -442,15 +356,16 @@ app.get('/healthz', authorize('GET /healthz'), (req, res) => {
   });
 });
 
-// Wipe in-memory uploaded / crawled / drafted packs. Used by the
-// studio's RESET button so the user can start truly fresh — the client
-// pairs this with a localStorage.clear() + reload. No body, no params.
-// Returns the number of entries dropped so the client can echo it.
+// Wipe the org's uploaded / crawled / drafted packs. Used by the studio's
+// RESET button so the user can start truly fresh — the client pairs this
+// with a localStorage.clear() + reload. No body, no params. The rows go
+// (their service links with them; one pack.clear audit row), the map and
+// the disk copies go too — reset means reset — but the services and
+// environments the packs named STAY: a reset of the working set is not a
+// deletion of the org's services. Returns the number of packs dropped so
+// the client can echo it.
 app.delete('/api/uploads', authorize('DELETE /api/uploads'), (req, res) => {
-  const uploads = uploadsMap();
-  const dropped = uploads.size;
-  uploads.clear();
-  clearWorkspacePacks();   // reset means reset — the disk copies go too
+  const dropped = clearPacks(currentStore(), actorOf(req));
   res.json({ ok: true, dropped });
 });
 
@@ -493,25 +408,7 @@ app.get('/api/packs', authorize('GET /api/packs'), (req, res) => {
 });
 
 function catalogEntryForUpload(id) {
-  const meta = uploadedMeta(id);
-  if (!meta) return null;
-  const c = meta.canonical;
-  const svc = serviceMetadata(c);
-  return {
-    id,
-    label: meta.label,
-    description: meta.description,
-    name: c?.metadata?.name,
-    version: c?.metadata?.version,
-    binding: c?.metadata?.binding,
-    criticality: c?.metadata?.bindings?.criticality,
-    service: svc.service,
-    namespace: svc.namespace,
-    services: svc.services,
-    environments: listEnvironments(c),
-    source: 'uploaded',
-    ok: true,
-  };
+  return uploadedMeta(id)?.entry ?? null;
 }
 
 // Opt-in lookup across uploads + catalog + examples — used by every
@@ -1385,7 +1282,7 @@ app.post('/api/draft-from-mcp', authorize('POST /api/draft-from-mcp'), async (re
       ? body.label.trim()
       : `${pack.metadata?.name || 'mcp-draft'} (live MCP draft)`;
     const registered = errors.length === 0
-      ? { id: registerUploadedPack(pack, friendlyLabel, friendlyLabel) }
+      ? { id: registerUploadedPack(req, pack, friendlyLabel, friendlyLabel) }
       : null;
     process.stderr.write(`[draft-from-mcp]   ok in ${Date.now() - t0}ms; ` +
       `valid=${errors.length === 0}; ` +
@@ -1533,7 +1430,7 @@ app.post('/api/crawl', authorize('POST /api/crawl'), (req, res) => {
       ? body.label.trim()
       : `${opts.repoName || canonical.metadata?.name || 'crawl'} (scanned)`;
     const registered = validationErrors.length === 0
-      ? { id: registerUploadedPack(canonical, friendlyLabel, friendlyLabel) }
+      ? { id: registerUploadedPack(req, canonical, friendlyLabel, friendlyLabel) }
       : null;
     process.stderr.write(`[crawl] ${entries.length} files, ${summary.files.classified} classified, ${Object.keys(evidence).length} evidence, tier=${summary.inferred.tier}, valid=${validationErrors.length === 0}, registered=${registered?.id || '-'}, ${Date.now() - t0}ms\n`);
     res.json({
@@ -1681,7 +1578,7 @@ app.post('/api/crawl-github', authorize('POST /api/crawl-github'), async (req, r
       ? body.label.trim()
       : `${owner}/${repo} (repo scan)`;
     const registered = validationErrors.length === 0
-      ? { id: registerUploadedPack(canonical, friendlyLabel, friendlyLabel) }
+      ? { id: registerUploadedPack(req, canonical, friendlyLabel, friendlyLabel) }
       : null;
 
     summary.source = 'github';
@@ -1745,7 +1642,7 @@ app.post('/api/validate', authorize('POST /api/validate'), (req, res) => {
     // client describe where the pack came from (file name, crawl target,
     // mcp URL); falls back to the canonical's metadata.name.
     const sourceHint = typeof req.query.source === 'string' && req.query.source ? req.query.source : null;
-    const id = registerUploadedPack(canonical, sourceHint || canonical.metadata?.name || 'upload');
+    const id = registerUploadedPack(req, canonical, sourceHint || canonical.metadata?.name || 'upload');
     // A library-built pack (docs/BUILD_JOURNEY.md, Placeholders) is conformant
     // on paper: the rubric reads no annotations, so a pager route of
     // `pagerduty://<svc>` satisfies its clause like a real one. Only the
@@ -1980,7 +1877,7 @@ app.post('/api/library/register', authorize('POST /api/library/register'), (req,
     const { canonical: overlaid } = overlaidCanonical(canonical, env);
     const conformance = evaluateConformance(overlaid);
     const summary = librarySummaryFor(overlaid) || validationSummary(overlaid, []);
-    const id = registerUploadedPack(canonical, source);
+    const id = registerUploadedPack(req, canonical, source);
     res.json({ ok: true, registered: { id, source }, adapted, conformance, summary });
   } catch (e) {
     res.status(400).json({ ok: false, errors: [e.message] });
@@ -2019,17 +1916,13 @@ const HOST = process.env.HOST || '127.0.0.1';
 
 export { app };
 
-// Boot step 6: rehydrate each live org's upload registry from its
-// workspace subtree. Idempotent per store: a map that exists is not
+// Boot step 6: rehydrate each live org's upload registry from its rows and
+// its workspace subtree. Idempotent per store: a map that exists is not
 // refilled (suites call start() several times in one process).
 function rehydrateOrgs(silent) {
   let restored = 0;
   for (const org of listOrgs(currentStore())) {
-    runWithOrg(org.id, () => {
-      lastRehydrated = 0;
-      uploadsMap();
-      restored += lastRehydrated;
-    });
+    runWithOrg(org.id, () => { restored += ensureOrgLoaded(currentStore()); });
   }
   if (restored && !silent) process.stdout.write(`[studio] restored ${restored} pack${restored === 1 ? '' : 's'} from workspace\n`);
 }
