@@ -29,7 +29,7 @@ derived from that constant.
 node tools/sync-spec.mjs
 
 # Sync to a specific branch, tag or commit
-node tools/sync-spec.mjs --ref 6674072e
+node tools/sync-spec.mjs --ref e64e5813
 
 # Verify on-disk files match VERSIONS.json (CI-friendly)
 node tools/sync-spec.mjs --check
@@ -41,6 +41,6 @@ the commit that moves `SPEC_VERSION` (git history keeps it). The sync script use
 authentication and rate-limit headroom; no npm deps.
 
 The studio links into the upstream repository at the vendored commit (`upstream.commit`), never at a branch:
-upstream `main` still serves 1.2 and `develop` 1.3 while 1.4 is on its RFC branch, so a link labelled with the
+upstream `main` still serves 1.2 while `develop` carries 1.4, so a link labelled with the
 version must open the file the label names. After a refresh, move the hrefs in `studio/index.html` (footer), `studio/schema-view.mjs`
 and `studio/conformance-view.mjs` to the new commit; `tools/test-validator.mjs` names the ones left behind.

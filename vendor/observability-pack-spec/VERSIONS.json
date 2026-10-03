@@ -2,10 +2,10 @@
   "schema": "1.4",
   "upstream": {
     "repo": "MoebiusX/otel-observability-pack",
-    "ref": "6674072e4d3593f3e8345c4032a6eec23b7b19b7",
-    "commit": "6674072e4d3593f3e8345c4032a6eec23b7b19b7"
+    "ref": "develop",
+    "commit": "e64e58132a46364afd5432a86e67d470858936cf"
   },
-  "fetchedAt": "2026-10-03T12:53:22Z",
+  "fetchedAt": "2026-10-03T13:29:01Z",
   "files": {
     "v1.4/spec.md": {
       "sourcePath": "spec/ObservabilityPack-Spec.md",

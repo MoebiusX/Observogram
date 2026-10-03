@@ -189,8 +189,8 @@ test('no scanned file names a spec version other than the current one', () => {
 });
 
 // The studio's links to upstream: the footer's "spec v1.4", the Schema view's "ObservabilityPack v1.4 JSON Schema"
-// and "Spec document", the Conformance view's "maturity rubric". Upstream's default branch is develop (1.3), main
-// stopped at the 1.2 commit and 1.4 is on its RFC branch, so a link labelled with the version must open the commit VERSIONS.json vendored — never
+// and "Spec document", the Conformance view's "maturity rubric". Upstream's default branch is develop (1.4), main
+// stopped at the 1.2 commit, so a link labelled with the version must open the commit VERSIONS.json vendored — never
 // a branch, which serves whatever it serves that day. After a re-vendor (node tools/sync-spec.mjs) the hrefs follow
 // upstream.commit; this test names the ones that do not.
 test('every studio link into the upstream spec repo opens the vendored commit, not a branch', () => {
