@@ -1,0 +1,111 @@
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: payments-slo
+    folder: Payments
+    interval: 1m
+    rules:
+      - uid: payments-availability-burn-slow
+        title: PaymentsAvailabilityBurnSlow
+        condition: C
+        for: 30m
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              editorMode: code
+              expr: payments:availability:ratio_5m < 0.995
+              instant: true
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              expression: A
+              refId: C
+              type: threshold
+        labels:
+          severity: SEV2
+      - uid: payments-latency-burn
+        title: PaymentsLatencyBurn
+        condition: B
+        for: 10m
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model: "{\"editorMode\":\"code\",\"expr\":\"payments:latency:p99_5m > 0.3\",\"instant\":true,\"refId\":\"A\"}"
+          - refId: B
+            datasourceUid: __expr__
+            model: "{\"expression\":\"A\",\"refId\":\"B\",\"type\":\"threshold\"}"
+        labels:
+          severity: SEV2
+  - orgId: 1
+    name: payments-operational
+    folder: Payments
+    interval: 1m
+    rules:
+      - uid: payments-cert-expiring
+        title: "Payments: certificate expiring"
+        condition: B
+        for: 1h
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              expr: min(probe_ssl_earliest_cert_expiry{job="blackbox",instance=~"https://payments.example.com.*"}) - time() < 14 * 24 * 3600
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              expression: A
+              refId: B
+              type: threshold
+        labels:
+          severity: warning
+          team: platform-sre
+        annotations:
+          summary: "payments.example.com TLS certificate expires in under 14 days"
+          dashboard: "https://grafana.example.internal/d/payments #certificates"
+      - uid: payments-queue-backlog
+        title: Payments queue backlog
+        condition: C
+        for: 15m
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              expr: sum(rabbitmq_queue_messages_ready{queue=~"payments\\..*"})
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              expression: A
+              reducer: last
+              refId: B
+              type: reduce
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 10000
+                    type: gt
+              expression: B
+              refId: C
+              type: threshold
+        labels:
+          severity: critical
+          team: payments
+      - uid: payments-5xx-spike
+        title: Payments 5xx spike
+        condition: B
+        for: 0s
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model: "{\"expr\":\"sum(rate(http_requests_total{service=\\\"payments\\\",code=~\\\"5..\\\"}[5m])) > 10\",\"refId\":\"A\"}"
+          - refId: B
+            datasourceUid: __expr__
+            model: "{\"expression\":\"A\",\"refId\":\"B\",\"type\":\"threshold\"}"
+        labels:
+          severity: page
