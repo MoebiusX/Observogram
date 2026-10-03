@@ -183,7 +183,9 @@ test('hashes and the marker: sha256File absent vs present; compareHashes changed
   const m = legacy.readMarker(base);
   assert.deepEqual([m.storeId, m.files, m.by], ['store-1', files, 'import']);
   assert.ok(Number.isFinite(Date.parse(m.writtenAt)));
-  assert.throws(() => legacy.writeMarker(base, { storeId: 'store-1', files, by: 'whim' }), /written by one of/);
+  for (const by of ['whim', 'packs-import']) { // boot step 5 writes no marker, so it has no `by` either
+    assert.throws(() => legacy.writeMarker(base, { storeId: 'store-1', files, by }), /written by one of/);
+  }
   for (const text of ['{', '[]', '{ "storeId": "", "files": {}, "by": "import", "writtenAt": "x" }', '{ "storeId": "s", "files": [], "by": "import", "writtenAt": "x" }']) {
     write(p, text);
     assert.throws(() => legacy.readMarker(base), (e) => e instanceof legacy.LegacyFileError && e.code === 'ERR_OBSERVOGRAM_LEGACY_FILE'

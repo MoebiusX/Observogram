@@ -47,12 +47,11 @@ export const MIGRATABLE = Object.freeze(['packs', 'deploys.jsonl', 'snapshots', 
 // this list.
 export const ORG_ENTRIES = Object.freeze([...MIGRATABLE, 'live']);
 export const MARKER = '.store-imported';
-// Who last wrote the marker. 'packs-import' is reserved for the pack
-// registry's import (boot step 5); today that step writes NO marker — the
-// marker records the identity files only (a 0.5.0 build's applyRepairs
-// rewrites it whenever its files differ from legacy_hashes, so a pack key
-// there would be fought over).
-const MARKER_BY = Object.freeze(['import', 'replace', 'export', 'repair', 'purge-org', 'packs-import']);
+// Who last wrote the marker. The pack registry's import (boot step 5)
+// writes NO marker and has no entry here: the marker records the identity
+// files only (a 0.5.0 build's applyRepairs rewrites it whenever its files
+// differ from legacy_hashes, so a pack key there would be fought over).
+const MARKER_BY = Object.freeze(['import', 'replace', 'export', 'repair', 'purge-org']);
 
 const LEGACY_TAIL = 'the upgrade imports nothing until it is fixed';
 // A packs/index.json that exists but cannot be read (or a packs/ that
