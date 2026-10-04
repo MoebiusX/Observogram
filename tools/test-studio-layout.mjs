@@ -56,6 +56,7 @@ const EXEMPT = {
   '.hdr': 'the context bar itself: pinned under the chrome by its height',
   '.drawer-head': 'sticky inside the drawer, which scrolls on its own',
   '.toast': 'bottom of the window',
+  '.no-backend-notice': 'bottom of the window, like .toast — the static bundle\'s notice (studio/static-backend.mjs; the live studio never links its stylesheet)',
   '.drop-overlay': 'covers the whole window while a file is dragged over it',
   '.deploy-modal': 'a centred modal, stacked over both bars',
   '.about-overlay': 'a modal overlay covering the whole window',
