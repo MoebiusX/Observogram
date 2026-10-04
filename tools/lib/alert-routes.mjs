@@ -62,6 +62,14 @@ export function normalizeSeverity(s) {
   return 'SEV2';
 }
 
+/**
+ * The channels an Alertmanager receiver resolves to, in spec Channel shape.
+ * `ctx.invented`, when given, collects every address this reading had to
+ * INVENT — a receiver kind the spec Channel cannot carry, or a config that
+ * states no address — as `{ routeIndex: ctx.routeIndex, channelIndex, receiver,
+ * kind, value }`, by position (the crawler marks that channel as a scaffold).
+ * Values are unchanged whether or not a collector is passed.
+ */
 export function receiverChannels(recv, unresolved = [], ctx = {}) {
   // Spec Channel allows only: msteams, voice, whatsapp, email, webhook.
   // Map Alertmanager's broader vocabulary onto that closed set; flag
@@ -73,8 +81,12 @@ export function receiverChannels(recv, unresolved = [], ctx = {}) {
   // out instead made a route the repository declares read "not declared"
   // beside the same route on the running Alertmanager.
   const out = [];
+  const invent = (kind, value) => {
+    if (Array.isArray(ctx.invented)) ctx.invented.push({ routeIndex: ctx.routeIndex ?? null, channelIndex: out.length, receiver: recv.name || null, kind, value });
+  };
   const webhook = (url, fallback) => {
     const v = url || fallback;
+    if (!url) invent('webhook', v);
     if (isRedactedChannelValue(v)) {
       out.push({ webhook: isWithheldValue(v) ? v : REDACTED_CHANNEL_VALUE });
       return;
@@ -86,27 +98,38 @@ export function receiverChannels(recv, unresolved = [], ctx = {}) {
     }
     out.push({ webhook: v });
   };
-  if (Array.isArray(recv.email_configs))     out.push(...recv.email_configs.map(c => ({ email: c.to || `oncall@${recv.name || 'example'}.com` })));
-  if (Array.isArray(recv.msteams_configs))   out.push(...recv.msteams_configs.map(c => ({ msteams: c.channel_url || `#${recv.name || 'oncall'}` })));
+  if (Array.isArray(recv.email_configs)) {
+    for (const c of recv.email_configs) {
+      if (!c.to) invent('email', `oncall@${recv.name || 'example'}.com`);
+      out.push({ email: c.to || `oncall@${recv.name || 'example'}.com` });
+    }
+  }
+  if (Array.isArray(recv.msteams_configs)) {
+    for (const c of recv.msteams_configs) {
+      if (!c.channel_url) invent('msteams', `#${recv.name || 'oncall'}`);
+      out.push({ msteams: c.channel_url || `#${recv.name || 'oncall'}` });
+    }
+  }
   if (Array.isArray(recv.webhook_configs))   for (const c of recv.webhook_configs) webhook(c.url, 'https://hooks.example.com/oncall');
-  if (Array.isArray(recv.pagerduty_configs)) out.push({ voice: `pagerduty:${recv.name || 'oncall'}` });
+  if (Array.isArray(recv.pagerduty_configs)) { invent('pagerduty', `pagerduty:${recv.name || 'oncall'}`); out.push({ voice: `pagerduty:${recv.name || 'oncall'}` }); }
   if (Array.isArray(recv.slack_configs))     for (const c of recv.slack_configs) webhook(c.api_url, `https://hooks.slack.example.com/${c.channel || 'oncall'}`);
   return out;
 }
 
-function walkRoute(route, out, receivers, unresolved, source) {
+function walkRoute(route, out, receivers, unresolved, source, invented) {
   const sev = route.match?.severity || route.match_re?.severity || route.matchers?.find?.(m => /severity/i.test(m))?.split('=')?.[1]?.replace(/"/g, '');
   const recvName = route.receiver;
   const recv = receivers.find(r => r.name === recvName);
-  const channels = recv ? receiverChannels(recv, unresolved, { severity: normalizeSeverity(sev), source }) : [];
+  const channels = recv ? receiverChannels(recv, unresolved, { severity: normalizeSeverity(sev), source, invented, routeIndex: out.length }) : [];
   if (channels.length) {
     out.push({ severity: normalizeSeverity(sev), channels });
   } else if (sev || recvName) {
     // Receiver kinds we can't map → keep the route on a synthetic Teams
     // placeholder (long-standing behaviour for unmapped receivers).
+    if (Array.isArray(invented)) invented.push({ routeIndex: out.length, channelIndex: 0, receiver: recvName || null, kind: 'receiver', value: `#${recvName || 'oncall'}` });
     out.push({ severity: normalizeSeverity(sev), channels: [{ msteams: `#${recvName || 'oncall'}` }] });
   }
-  for (const child of route.routes || []) walkRoute(child, out, receivers, unresolved, source);
+  for (const child of route.routes || []) walkRoute(child, out, receivers, unresolved, source, invented);
 }
 
 /**
@@ -114,11 +137,13 @@ function walkRoute(route, out, receivers, unresolved, source) {
  * children, one entry per route node that resolves to at least one channel.
  * `config` is the parsed document ({ route, receivers }); `unresolved`
  * collects the channels whose address is a deploy-time placeholder;
- * `source` names where the config came from, for that evidence.
+ * `invented` (optional array) collects the addresses the reading had to
+ * invent, by route and channel index (see receiverChannels); `source` names
+ * where the config came from, for that evidence.
  */
-export function routesFromAlertmanagerConfig(config, { unresolved = [], source = null } = {}) {
+export function routesFromAlertmanagerConfig(config, { unresolved = [], invented = null, source = null } = {}) {
   if (!config?.route) return [];
   const out = [];
-  walkRoute(config.route, out, Array.isArray(config.receivers) ? config.receivers : [], unresolved, source);
+  walkRoute(config.route, out, Array.isArray(config.receivers) ? config.receivers : [], unresolved, source, invented);
   return out;
 }

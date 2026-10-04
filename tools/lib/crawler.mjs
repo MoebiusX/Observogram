@@ -165,6 +165,7 @@ function registerBackendFromImage(image, relPath, backends, evidence, summary, {
       auth: { kind: 'none' },
     };
     if (tag && /^v?\d/.test(tag)) backend.version = { declared: tag.replace(/^v/, ''), gating: 'off' };
+    if (summary.invented) summary.invented.endpoints.push(id);   // a workload image states no port
     backends.push(backend);
     evidence[id] = relPath;
     summary.discovered.backends++;
@@ -513,6 +514,9 @@ export function crawlFiles(filesInput, opts = {}) {
     warnings: [],
     omitted: { syntheticRecordingRules: [], unresolvedChannels: [], recordingRules: [], ruleIntervals: [] },
     normalized,
+    // What the crawler had to INVENT (no evidence in the repository): every
+    // entry below becomes a `crawler.scaffold.<symbol>` mark (see `mark`).
+    invented: { endpoints: [], channels: [] },
     scaffold: [],
   };
   summary.warnings.push(...inputWarnings);
@@ -530,7 +534,23 @@ export function crawlFiles(filesInput, opts = {}) {
   const dashboards = [];
   const alertingRoutes = [];
   const pipelines = { receivers: [], processors: [], exporters: { metrics: null, logs: null, traces: null } };
-  const scaffoldSymbols = [];
+  // symbol → why the crawler could not know it. An ARTEFACT symbol (exactly an
+  // id adapter.mjs passes to sourceOf: `baselines`, `dashboards.<id>`,
+  // `slis.<id>`, …) parks that artefact as Scaffold; a FIELD symbol (an
+  // artefact symbol plus `.<field>` or an index: `otel.semconv`,
+  // `telemetry.backends.<id>.endpoints`, `alerting.routes[0].channels[1]`,
+  // `metadata.owners`) parks nothing in the studio or in Compare and exists
+  // for the conformance report (tools/lib/pack-conformance.mjs). Same grammar
+  // as legacy.mjs (`crawler.scaffold.*`), library.mjs (`library.todo.*`) and
+  // the fetcher (`mcp.scaffold.*`).
+  const SCAFFOLD_NOTE = 'schema-required fallback; no source evidence found in selected environment';
+  const scaffoldMarks = new Map();
+  const mark = (symbol, note = SCAFFOLD_NOTE) => { if (!scaffoldMarks.has(symbol)) scaffoldMarks.set(symbol, note); };
+  const scaffoldSymbols = { push: (...symbols) => symbols.forEach(s => mark(s)) };
+  // Marks for what the crawler invents beside the schema-required stubs are
+  // appended AFTER those (the existing marks keep their order and text).
+  const inventedMarks = [];
+  const markInvented = (symbol, note) => { inventedMarks.push([symbol, note]); };
 
   // ----- pass 1: classify -----
   const classified = [];
@@ -634,6 +654,7 @@ export function crawlFiles(filesInput, opts = {}) {
         error_budget_policy: 'ref:platform/default-budget',
       });
       summary.inferred.slos++;
+      markInvented(`slos.${sloId}`, 'derived from the alert name only; good/total, objective and window are defaults');
       if (!sliMap.has(sliId)) {
         sliMap.set(sliId, {
           id: sliId,
@@ -643,6 +664,7 @@ export function crawlFiles(filesInput, opts = {}) {
           total: `sum(rate(http_requests_total{service="${repoName}"}[5m]))`,
         });
         summary.inferred.slis++;
+        markInvented(`slis.${sliId}`, 'derived from the alert name only; good/total, objective and window are defaults');
       }
     }
   }
@@ -714,6 +736,8 @@ export function crawlFiles(filesInput, opts = {}) {
     });
     summary.inferred.slis = 1;
     summary.inferred.slos = 1;
+    markInvented('slis.service_availability', 'stub; no recording rule or SLO reference found — REPLACE WITH REAL QUERY');
+    markInvented('slos.service_availability_99', 'stub; no recording rule or SLO reference found — REPLACE WITH REAL QUERY');
     summary.warnings.push('No burn-rate alerts found — emitted stub SLI/SLO that must be replaced.');
   }
 
@@ -823,11 +847,48 @@ export function crawlFiles(filesInput, opts = {}) {
   summary.discovered.extendedSurfaces = l2x.evidence.length;
   const syntheticCheckId = suffixedId(repoName, '-health-canary');
   scaffoldSymbols.push(`validation.synthetic_checks.${syntheticCheckId}`);
-  summary.scaffold = [...scaffoldSymbols];
+
+  // ----- dashboards: the provider version is the Grafana the repository
+  // deploys (its image tag), never the dashboard's own revision counter; two
+  // files with the same uid get distinct ids -----
+  const grafana = backends.find(b => b.product === 'grafana' && b.version?.declared);
+  const seenDashIds = new Set();
+  const dashDupes = new Map();
+  for (const d of dashboards) {
+    if (d.provider?.kind === 'grafana') {
+      if (grafana) d.provider.version = grafana.version.declared;
+      else delete d.provider.version;
+    }
+    if (seenDashIds.has(d.id)) {
+      const base = d.id;
+      let n = 2, next = suffixedId(base, `-${n}`);
+      while (seenDashIds.has(next)) next = suffixedId(base, `-${++n}`);
+      dashDupes.set(base, (dashDupes.get(base) || [base]).concat(next));
+      d.id = next;
+    }
+    seenDashIds.add(d.id);
+  }
+  for (const [base, ids] of dashDupes) {
+    summary.warnings.push(`dashboard uid '${base}' appears in ${ids.length} files; declared as ${ids.join(', ')}.`);
+  }
+
+  // ----- every value the crawler invented, marked -----
+  for (const id of summary.invented.endpoints) {
+    markInvented(`telemetry.backends.${id}.endpoints`, 'port not stated in the repository; http://<product>:80 assumed');
+  }
+  for (const ch of summary.invented.channels) {
+    markInvented(`alerting.routes[${ch.routeIndex}].channels[${ch.channelIndex}]`, `address invented: the Alertmanager ${ch.kind} receiver '${ch.receiver ?? 'oncall'}' has no spec channel or states no address`);
+  }
+  if (ownersDefaulted) markInvented('metadata.owners', "default owner 'team-platform'; no source evidence (pass --owners)");
+  for (const field of ['semconv', 'resource_attributes', 'sdk.languages', 'sdk.sampling', 'sdk.propagators']) {
+    markInvented(`otel.${field}`, 'default; the repository states no SDK configuration');
+  }
+  for (const [symbol, note] of inventedMarks) mark(symbol, note);
+  summary.scaffold = [...scaffoldMarks.keys()];
 
   const scaffoldAnnotations = {};
-  for (const symbol of scaffoldSymbols) {
-    scaffoldAnnotations[`crawler.scaffold.${symbol}`] = 'schema-required fallback; no source evidence found in selected environment';
+  for (const [symbol, note] of scaffoldMarks) {
+    scaffoldAnnotations[`crawler.scaffold.${symbol}`] = note;
   }
   curateMetricDefinitions(metricDefinitions, summary);
   const metricAnnotations = buildMetricDefinitionAnnotations(metricDefinitions);
@@ -859,7 +920,7 @@ export function crawlFiles(filesInput, opts = {}) {
         'crawler.warningCount':    String(summary.warnings.length),
         'crawler.syntheticRecordingRulesSkipped': String(summary.omitted.syntheticRecordingRules.length),
         'crawler.extendedSurfaces': String(summary.discovered.extendedSurfaces),
-        'crawler.scaffoldCount':   String(scaffoldSymbols.length),
+        'crawler.scaffoldCount':   String(scaffoldMarks.size),
         // An input that was not a spec Slug or not in a spec vocabulary — the
         // original name and environment are kept here (owners only in the
         // summary: an owner string may be an address).
@@ -1818,6 +1879,7 @@ function walkDockerCompose(f, backends, pipelines, evidence, summary) {
         if (versionTag && /^v?\d/.test(versionTag)) {
           backend.version = { declared: versionTag.replace(/^v/, ''), gating: 'off' };
         }
+        if (!endpoint && summary.invented) summary.invented.endpoints.push(id);
         backends.push(backend);
         evidence[id] = f.relPath;
         summary.discovered.backends++;
@@ -2065,10 +2127,17 @@ function walkAlertmanager(f, routes, evidence, summary) {
     // severity. The reading itself is shared with the live fetcher
     // (alert-routes.mjs): the config a repo ships and the config a running
     // Alertmanager reports give the same routes.
+    const invented = [];
     const collected = routesFromAlertmanagerConfig(obj, {
       unresolved: summary.omitted.unresolvedChannels,
+      invented,
       source: f.relPath,
     });
+    // Positions are relative to this config's routes; the bucket may already
+    // hold routes from another file.
+    for (const ch of invented) {
+      summary.invented.channels.push({ ...ch, routeIndex: routes.length + ch.routeIndex, source: f.relPath });
+    }
     for (const r of collected) {
       const id = `ALR-${routes.length + 1}`;
       routes.push(r);
@@ -2145,17 +2214,20 @@ function walkGrafanaDashboard(f, dashboards, metricDefinitions, evidence, summar
   const panels = dashboardPromqlQueries(dash);
   // provider.schemaVersion has a spec minimum (30): an older dashboard keeps
   // its value in the free-form params instead of failing the schema.
+  // A dashboard that states no schemaVersion declares none (the key is
+  // optional); one below the minimum keeps its value in params. The
+  // provider version is filled in by crawlFiles from the Grafana image the
+  // repository deploys — the dashboard's own `version` is a revision counter.
   const sv = dash.schemaVersion;
-  const declaredSchemaVersion = sv === undefined || sv === null || typeof sv !== 'number' ? 41
-    : Number.isInteger(sv) && sv >= 30 ? sv : null;
-  if (declaredSchemaVersion === null) {
+  const stated = typeof sv === 'number';
+  const declaredSchemaVersion = stated && Number.isInteger(sv) && sv >= 30 ? sv : null;
+  if (stated && declaredSchemaVersion === null) {
     summary.warnings.push(`dashboard ${id}: schemaVersion ${sv} is below the spec minimum (30) and is not declared; kept in params.schema_version.`);
   }
   dashboards.push({
     id,
     provider: {
       kind: 'grafana',
-      version: dash.version ? String(dash.version) : '12.0',
       ...(declaredSchemaVersion !== null ? { schemaVersion: declaredSchemaVersion } : {}),
     },
     folder: dash.tags?.[0] || 'crawled',
@@ -2166,7 +2238,7 @@ function walkGrafanaDashboard(f, dashboards, metricDefinitions, evidence, summar
       panel_count: countDashboardPanels(dash.panels),
       query_panel_count: panels.length,
       panels,
-      ...(declaredSchemaVersion === null ? { schema_version: sv } : {}),
+      ...(stated && declaredSchemaVersion === null ? { schema_version: sv } : {}),
     },
   });
   evidence[id] = f.relPath;

@@ -28,8 +28,8 @@
       ]
     },
     "tools/lib/alert-routes.mjs": {
-      "sha256": "f3f1c8c0d15eb274f6d5c7c1a6468044e3c78c55066a669f5494fd961bac091d",
-      "bytes": 6527,
+      "sha256": "ab5be6d93f293c69a0896f4805e0dd4fd0836654b52a5afae9b859e881a0c1ef",
+      "bytes": 7876,
       "exports": [
         "REDACTED_CHANNEL_VALUE",
         "UNRESOLVED_CHANNEL_PREFIX",
@@ -337,8 +337,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/crawler.mjs": {
-      "sha256": "06622067d323dac4e37f1570f6f88872889d5fbb27ca3a84bbeb054935200e8d",
-      "bytes": 104320,
+      "sha256": "a1c62869b1cd14d42e235631125eaa3ebc0f938b24bf02cc90da377be2d15006",
+      "bytes": 108794,
       "exports": [
         "SCAN_EXT",
         "SCAN_IGNORE_DIRS",

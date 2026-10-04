@@ -30,7 +30,7 @@
       "crawler.warningCount": "3",
       "crawler.syntheticRecordingRulesSkipped": "1",
       "crawler.extendedSurfaces": "0",
-      "crawler.scaffoldCount": "4",
+      "crawler.scaffoldCount": "10",
       "crawler.unresolvedChannelCount": "1",
       "crawler.unresolved.alerting": "SEV2:${GOLDEN_HOOK_URL} (alertmanager.yml)",
       "crawler.discovered.metric_names": "[\"golden:availability:good\",\"golden:availability:total\",\"http_requests_total\"]",
@@ -39,7 +39,13 @@
       "crawler.scaffold.pipelines.exporters.logs": "schema-required fallback; no source evidence found in selected environment",
       "crawler.scaffold.pipelines.exporters.traces": "schema-required fallback; no source evidence found in selected environment",
       "crawler.scaffold.baselines": "schema-required fallback; no source evidence found in selected environment",
-      "crawler.scaffold.validation.synthetic_checks.golden-health-canary": "schema-required fallback; no source evidence found in selected environment"
+      "crawler.scaffold.validation.synthetic_checks.golden-health-canary": "schema-required fallback; no source evidence found in selected environment",
+      "crawler.scaffold.metadata.owners": "default owner 'team-platform'; no source evidence (pass --owners)",
+      "crawler.scaffold.otel.semconv": "default; the repository states no SDK configuration",
+      "crawler.scaffold.otel.resource_attributes": "default; the repository states no SDK configuration",
+      "crawler.scaffold.otel.sdk.languages": "default; the repository states no SDK configuration",
+      "crawler.scaffold.otel.sdk.sampling": "default; the repository states no SDK configuration",
+      "crawler.scaffold.otel.sdk.propagators": "default; the repository states no SDK configuration"
     }
   },
   "spec": {
@@ -122,8 +128,8 @@
         "id": "golden-overview",
         "provider": {
           "kind": "grafana",
-          "version": "1",
-          "schemaVersion": 41
+          "schemaVersion": 41,
+          "version": "12.0.0"
         },
         "folder": "crawled",
         "source": "file://dashboards/golden.json",

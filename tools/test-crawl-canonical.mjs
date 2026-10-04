@@ -27,6 +27,8 @@ import { isSpecRecordingRuleName, SPEC_DURATION_RE } from './lib/sli-inference.m
 import { validate, validateCanonical, SPEC_VERSION, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { adapt } from './lib/adapter.mjs';
+import { diffPacks } from './lib/diff.mjs';
+import { buildCanonicalPack } from './fetch-live-pack.mjs';
 import { createHarness } from './lib/harness.mjs';
 
 const { assert, report } = createHarness({ truncate: 600 });
@@ -99,8 +101,10 @@ assert(diskFull && diskFull.labels.priority === '1', 'DiskFull is declared in al
 
 // 5. dashboards: ids always Slugs, an old schemaVersion kept in params
 const dashIds = canonical.spec.dashboards.map(d => d.id).sort();
-assert(JSON.stringify(dashIds) === JSON.stringify(['a'.repeat(59), 'legacy', 'same', 'same']),
-  'uid `--` falls back to the title, a 70-char uid is cut and trimmed, two same-uid files keep one id (commit 1)', dashIds);
+assert(JSON.stringify(dashIds) === JSON.stringify(['a'.repeat(59), 'legacy', 'same', 'same-2']),
+  'uid `--` falls back to the title, a 70-char uid is cut and trimmed, the second of two same-uid files is suffixed', dashIds);
+assert(summary.warnings.some(w => /dashboard uid 'same' appears in 2 files; declared as same, same-2/.test(w)), 'the summary warns about the duplicate uid', summary.warnings);
+assert(canonical.spec.dashboards.every(d => d.provider.version === '12.0.0'), 'every grafana dashboard carries the Grafana image tag as provider.version, never its own revision', canonical.spec.dashboards.map(d => d.provider));
 assert(canonical.spec.dashboards.every(d => SLUG_RE.test(d.id) && d.id.length <= 64), 'every dashboard id matches the Slug pattern', dashIds);
 const legacyDash = canonical.spec.dashboards.find(d => d.id === 'legacy');
 assert(legacyDash.provider.schemaVersion === undefined && legacyDash.params.schema_version === 16,
@@ -121,12 +125,41 @@ assert('published_total' in origins, 'the Java counter under event/ is read unde
 assert(canonical.metadata.bindings.criticality === 'tier-2', 'rules + dashboards + alertmanager infer tier-2', canonical.metadata.bindings.criticality);
 assert(summary.scaffold.every(s => !/^telemetry\.backends\.[^.]+$/.test(s)), 'no real backend is parked as a scaffold', summary.scaffold);
 
+// 9. provenance: every value the crawler invented is marked — at the FIELD level wherever an artefact-level mark would move Compare
+const marks = Object.keys(ann).filter(k => k.startsWith('crawler.scaffold.')).map(k => k.slice('crawler.scaffold.'.length));
+assert(ann['crawler.scaffold.telemetry.backends.metrics-prometheus.endpoints'] !== undefined && !marks.some(m => /^telemetry\.backends\.dashboards-grafana/.test(m)),
+  'the backend whose compose service states no port carries an endpoints mark; the one with a stated port does not', marks);
+assert(marks.includes('alerting.routes[1].channels[0]') && marks.includes('alerting.routes[2].channels[0]'),
+  'the slack webhook and the pagerduty voice addresses are marked as invented, by position', marks);
+assert(marks.includes('alerting.routes[0].channels[0]') && !marks.includes('alerting.routes[3].channels[0]'),
+  'the msteams receiver without channel_url is marked; the one that states `#oncall` is not — exactly one of the two same-valued channels', marks);
+assert(/address invented: the Alertmanager pagerduty receiver 'pd'/.test(ann['crawler.scaffold.alerting.routes[2].channels[0]']), 'a channel mark names its receiver and kind', ann['crawler.scaffold.alerting.routes[2].channels[0]']);
+assert(ann['crawler.scaffold.metadata.owners'] !== undefined, 'the defaulted owner is marked');
+assert(!('crawler.scaffold.metadata.owners' in crawlFiles({}, { repoName: 'svc', owners: ['team-x'], now: NOW }).canonical.metadata.annotations), 'an owner passed in is not marked');
+assert(['semconv', 'resource_attributes', 'sdk.languages', 'sdk.sampling', 'sdk.propagators'].every(f => marks.includes(`otel.${f}`)) && !marks.includes('otel'),
+  'the five otel fields are marked, never the otel artefact', marks);
+assert(ann['crawler.scaffoldCount'] === String(summary.scaffold.length) && summary.scaffold.length === marks.length, 'crawler.scaffoldCount counts every mark', [ann['crawler.scaffoldCount'], summary.scaffold.length]);
+assert(JSON.stringify(summary.scaffold.slice(0, 3)) === JSON.stringify(['pipelines.exporters.logs', 'baselines', 'validation.synthetic_checks.hostile_repo-health-canary']) && ann['crawler.scaffold.baselines'] === 'schema-required fallback; no source evidence found in selected environment',
+  'the schema-required marks keep their order and their text; the invented-value marks follow', summary.scaffold);
+{
+  const adapted = adapt(canonical);
+  const all = Object.values(adapted.layers).flatMap(v => (Array.isArray(v) ? v : [...v.policy, ...v.alerting, ...v.healing]));
+  const sourceOf = (prefix) => all.filter(a => a.id.startsWith(prefix)).map(a => a.source);
+  assert(sourceOf('OTEL-').every(s => s === 'Declared') && sourceOf('DASH-').every(s => s === 'Declared') && sourceOf('ALR-').every(s => s === 'Declared') && sourceOf('TEL-').every(s => s === 'Declared'),
+    'field marks flip nothing: OTEL-01, the dashboards, the routes and the backends stay Declared', { otel: sourceOf('OTEL-'), dash: sourceOf('DASH-'), alr: sourceOf('ALR-'), tel: sourceOf('TEL-') });
+  // The partition: an ARTEFACT symbol is exactly an id the adapter produced an artefact for; everything else is a FIELD symbol.
+  const artefactIds = new Set(all.map(a => a.id));
+  const isArtefact = (sym) => all.some(a => a.symbol === sym) || artefactIds.has(sym);
+  const fields = marks.filter(m => /^(metadata\.|otel\.|telemetry\.backends\.[^.]+\.|alerting\.routes\[\d+\]\.)/.test(m));
+  assert(fields.length === 10 && fields.every(m => !isArtefact(m)), 'the five otel fields, the endpoints, the owners and the three channels are the field partition', fields);
+}
+
 // ---------- the Helm ConfigMap path: a dashboard without schemaVersion ----------
 const helm = crawlFiles(readTree(HELM_DIR), { repoName: 'helm-dashboard', now: NOW });
 assert(errorsOf(helm.canonical).length === 0, 'the Helm ConfigMap dashboard crawl validates', errorsOf(helm.canonical).slice(0, 3));
 const helmDash = helm.canonical.spec.dashboards.find(d => d.id === 'helm-ops');
-assert(helmDash && helmDash.params.schema_version === undefined && helmDash.provider.schemaVersion === 41,
-  'a dashboard that states no schemaVersion keeps the 41 default (commit 1) and nothing in params', helmDash?.provider);
+assert(helmDash && helmDash.params.schema_version === undefined && !('schemaVersion' in helmDash.provider) && !('version' in helmDash.provider),
+  'a dashboard that states no schemaVersion declares none, and with no Grafana image in the repository no provider.version', helmDash?.provider);
 
 // ---------- tier-3 fallback: alert-derived ids are Slugs and Refs ----------
 const tier3 = crawlFiles(readTree(TIER3_DIR), { repoName: 'tier3-alerts', now: NOW });
@@ -141,12 +174,24 @@ const tier3 = crawlFiles(readTree(TIER3_DIR), { repoName: 'tier3-alerts', now: N
   assert(c.spec.policy.burn_rate_alerts.every(a => sloIds.has(a.slo)), 'every burn-rate alert references an emitted SLO', c.spec.policy.burn_rate_alerts.map(a => a.slo));
   assert(c.spec.slos.some(s => s.id.startsWith('tier3_alerts_5xxspike')), 'a digit-led alert name is prefixed with the service namespace', c.spec.slos.map(s => s.id));
   assert(adapt(c).layers.L1.length === 4, 'the adapter projects the two derived pairs', adapt(c).layers.L1.map(a => a.id));
+  const a = c.metadata.annotations;
+  assert(c.spec.slis.every(s => a[`crawler.scaffold.slis.${s.id}`]) && c.spec.slos.every(s => a[`crawler.scaffold.slos.${s.id}`]),
+    'every alert-derived SLI and SLO carries an artefact-level mark', Object.keys(a).filter(k => /scaffold\.sl/.test(k)));
+  assert(adapt(c).layers.L1.every(x => x.source === 'Scaffold'), 'the adapter parks the derived pairs as Scaffold', adapt(c).layers.L1.map(x => x.source));
+  // Compare: the derived pairs are parked (side a), never "declared, not live"; nothing pairs with the live side's own (marked) stubs.
+  const live = buildCanonicalPack({ refreshedAt: '2026-06-06T00:00:00Z', mcpUrl: 'https://fake-mcp.test/observability', health: { services: [{ name: 'svc-checkout' }] }, topology: { dependencies: [] }, anomaliesActive: {}, baselinesData: { baselines: [] }, errors: {} });
+  const d = diffPacks(adapt(c), adapt(live));
+  assert(d.layers.L1.onlyInA.length === 0 && d.layers.L1.inBoth.length === 0 && d.layers.L1.scaffold.filter(x => x.side === 'a').length === 4,
+    'a repository with no recording rules shows its L1 placeholders as parked, not declared-not-live (the reading the live side applies to its own stubs)', { onlyInA: d.layers.L1.onlyInA.length, scaffold: d.layers.L1.scaffold.map(x => x.side) });
 }
 
 // ---------- the empty repository and the programmatic doors ----------
 {
   const empty = crawlFiles({}, { repoName: 'svc', now: NOW });
   assert(errorsOf(empty.canonical).length === 0, 'an empty repository validates', errorsOf(empty.canonical).slice(0, 3));
+  const ea = empty.canonical.metadata.annotations;
+  assert(ea['crawler.scaffold.slis.service_availability'] && ea['crawler.scaffold.slos.service_availability_99'] && empty.summary.scaffold.includes('slis.service_availability') && ea['crawler.scaffoldCount'] === String(empty.summary.scaffold.length),
+    'the stub SLI/SLO pair is marked and counted', [empty.summary.scaffold, ea['crawler.scaffoldCount']]);
   const gh = crawlFiles({}, { repoName: '1password-x', now: NOW });
   assert(gh.canonical.metadata.name === 'svc-1password-x' && errorsOf(gh.canonical).length === 0,
     'a digit-led default name (the GitHub door\'s owner-repo) is prefixed, never truncated at the front', gh.canonical.metadata.name);
