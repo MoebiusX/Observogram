@@ -22,6 +22,7 @@
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { authDisabled, hashPassword, issuerKey } from './auth.mjs';
+import { proxyAuthConfig } from './auth-proxy.mjs';
 import { validOrgId } from './org-context.mjs';
 import { atomic, prepare } from './store/db.mjs';
 import { writeAudit } from './store/audit.mjs';
@@ -36,7 +37,7 @@ import {
 import { textOk } from './store/rows.mjs';
 import {
   canonIssuer, CLI, defaultOrgId, ensureDefaultOrg, grantOwner, liveOrg, oidcLogin, parseJoinRole, revokeOwner,
-  signInOwnerCount, SYSTEM,
+  signInOwnerCount, SYSTEM, isProxyIssuerKey,
 } from './store/identity.mjs';
 
 export const REFUSAL_KINDS = Object.freeze(['invalid', 'missing', 'conflict']);
@@ -170,6 +171,13 @@ export function resolveLogin(db, arg, { shellIssuerRaw = null } = {}) {
     if (local && local.kind === 'local' && (K === null || !isHttpUrl(arg.slice(0, hash)))) {
       return { kind: 'local', login: arg, row: local };
     }
+    // 2a. proxy://<realm>#<user> — a reverse proxy's user (server/auth-proxy.mjs):
+    // never an http(s) key, so the recorded OIDC issuer has no say.
+    if (isProxyIssuerKey(arg.slice(0, hash))) {
+      const sub = arg.slice(hash + 1);
+      if (!textOk(sub, { max: 2000 })) invalid(`${arg} is not proxy://<realm>#<user>`);
+      return oidcTarget(db, arg, sub, arg.slice(0, hash));
+    }
     // 2. <issuer>#<sub>
     let key;
     try { key = canonIssuer(arg.slice(0, hash)); } catch { invalid(`${arg} is not <issuer>#<sub>`); }
@@ -219,6 +227,10 @@ export function serverSignInMode(db, { shellIssuerRaw = null } = {}) {
     const key = M.slice('oidc:'.length);
     return { kind: 'oidc', issuerKey: key, why: `the server last started with OIDC issuer ${key}` };
   }
+  if (M !== null && M.startsWith('proxy:')) {
+    const key = M.slice('proxy:'.length);
+    return { kind: 'oidc', issuerKey: key, why: `the server last started behind a reverse proxy (identity key ${key})` };
+  }
   const last = {
     local: 'the server last started without OIDC, with local sign-in',
     token: 'the server last started without OIDC, with only OBSERVOGRAM_API_TOKEN',
@@ -242,6 +254,8 @@ export function serverSignInMode(db, { shellIssuerRaw = null } = {}) {
 export function liveSignInMode() {
   const key = issuerKey();
   if (key) return { kind: 'oidc', issuerKey: key, why: `this server signs in through OIDC issuer ${key}` };
+  const proxy = proxyAuthConfig();
+  if (proxy) return { kind: 'oidc', issuerKey: proxy.issuerKey, why: `this server takes identity from its reverse proxy (key ${proxy.issuerKey})` };
   return {
     kind: 'local',
     why: authDisabled() ? 'this server runs with OBSERVOGRAM_AUTH=off and without OIDC' : 'this server signs in with local passwords',
