@@ -37,9 +37,12 @@ them; change them at the source and update the gate in the same commit.
   fails the build. Changing the registry requires updating
   `EXPECTED_TOOL_SURFACE` in that guard in the same commit; the diff is the
   wire-surface changelog.
-- **Compiler and crawler output is golden-gated.** Any change to what the
-  crawler or a compiler *emits* must pass `npm run test:golden` (crawl) and
-  `npm run test:golden:compile` (per target, per version band). For intended
+- **Compiler, crawler and board output is golden-gated.** Any change to what
+  the crawler or a compiler *emits* must pass `npm run test:golden` (crawl)
+  and `npm run test:golden:compile` (per target, per version band); any
+  change to how artefacts are classified or grouped must pass
+  `npm run test:golden:board` (the Discover board and the artefact families
+  of every catalogue pack). For intended
   output changes, regenerate with the matching `:update` script in the same
   commit and explain the golden diff in the commit/PR description. An
   unexplained golden diff is a blocker, not a formality.
