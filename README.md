@@ -1156,7 +1156,10 @@ carry a `type` (kept through the upconvert as
 the adapter as the artefact's `type`, see [docs/ADAPTER.md](docs/ADAPTER.md),
 "Id families and the classifier") or as a layered pack a downstream server
 or bundle serves directly. `tools/fixtures/taxonomy/` holds a worked example
-of both the pack and the override.
+of both the pack and the override. The static bundle bakes the same file with
+`npm run build:studio -- --taxonomy <file>` (or `OBSERVOGRAM_TAXONOMY` when
+the flag is absent) and groups as the server does ("Serve The Studio Without
+The Server", *Bake the seams*).
 
 ### Rebadge The Studio (brand config)
 
@@ -1255,8 +1258,10 @@ tools/gen-design-tokens.mjs --brand brand.json --out dist/design-tokens.json`
 writes the rebadged document (a `brand` key names it); the generator never
 reads `OBSERVOGRAM_BRAND_FILE`, and `--brand` with `--write` refuses, so
 `studio/design-tokens.json` stays the vendorable default. The static bundle
-(`npm run build:studio`) is built from the unbranded shell and stays
-unbranded; a `--brand` for it is the follow-up.
+(`npm run build:studio`) bakes the same file with `--brand` — the server's
+loader and the server's shell renderer, so the chrome is the same — and
+honours `OBSERVOGRAM_BRAND_FILE` / the scalars when the flag is absent ("Serve
+The Studio Without The Server", *Bake the seams*).
 
 ### Compile Artifacts
 
@@ -1299,6 +1304,11 @@ npm run build:studio -- \
 # A pack the page fetches at its first catalogue read (the host must answer CORS):
 npm run build:studio -- --pack-url https://packs.example.com/orders.pack.yaml --label Orders
 
+# The two seams a server reads from its environment, baked in: the taxonomy
+# override ("Classify Typed Packs") and the brand ("Rebadge The Studio").
+npm run build:studio -- --pack my-service.pack.yaml \
+  --taxonomy tools/fixtures/taxonomy/taxonomy.json --brand brand.json
+
 # Check the build without writing (also --json): the graph, the stylesheets, the packs.
 npm run build:studio -- --check --pack my-service.pack.yaml
 ```
@@ -1308,6 +1318,37 @@ Each `--pack` / `--pack-url` takes its own `--id` (default: the file name),
 `--description` — the catalogue row the bundled studio shows, field for field
 what a server-side pack row carries. `--no-remote-fonts` drops the Google Fonts
 links for an offline host.
+
+**Bake the seams.** `--taxonomy <file.json>` bakes the artefact-taxonomy
+override (the file a server reads from `OBSERVOGRAM_TAXONOMY`, "Classify
+Typed Packs"): validated at build time with the server's `validateTaxonomy` —
+a bad file fails the build with `--taxonomy: <path>: <reason>`, the server's
+own texts — and served by the bundle's `GET /api/taxonomy` as
+`{ ok, taxonomy, configured: true }`, so Discover groups a typed pack exactly
+as a server started with that file does (`tools/test-studio-bundle.mjs` T8
+proves it byte for byte against the board goldens). `--brand <file.json>`
+bakes the brand ("Rebadge The Studio"): the server's loader
+(`tools/lib/brand-env.mjs`, so the `OBSERVOGRAM_BRAND_*` scalars apply on top
+of the file, as on a server) and the server's shell renderer
+(`brandShellHtml`: title, description, header, footer, `#brand-config`,
+`#brand-tokens`, favicon), which the studio chrome, the notice and the `501`
+texts all read — a `--brand` bundle names its own product and never the
+upstream one. When a flag is absent the server's variables are honoured —
+`OBSERVOGRAM_TAXONOMY`, `OBSERVOGRAM_BRAND_FILE`, the `OBSERVOGRAM_BRAND_*`
+scalars (the one-field rebadge is `OBSERVOGRAM_BRAND_NAME=Acme npm run
+build:studio`) — so a build machine configured for a server bakes what that
+server shows; build unbranded there with `env -u OBSERVOGRAM_BRAND_FILE …`
+(there is no `--no-brand`). The summary line and `--json` always say what was
+baked (`taxonomy: { source, file, types, ids } | null`, `brand: { source,
+file, name } | null` — the paths, never the contents, and neither path lands
+in the bundle). Brand URLs must not be server paths: `favicon`, `logo.url`
+and `hero.src` are an absolute URL, a `data:` URL or a path relative to the
+bundle's own directory (resolved against the page's URL by the static host) —
+`/assets/x.ico` fails the build naming the field and the fix. A configured
+brand that gives no `name` keeps the upstream strings, as on a server; and
+the unbranded bundle's Discover hero is the server asset
+`/assets/observogram-hero.png` (the default brand's `hero.src`), so a static
+host serves that asset or the brand names its own `hero.src`.
 
 What the file is (`tools/build-studio-bundle.mjs`): `studio/index.html` with
 every stylesheet inlined in place, an inline **import map** whose keys are the
