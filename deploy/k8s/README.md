@@ -409,7 +409,15 @@ What the component adds ([components/journeys](components/journeys)):
   (`packB.mcp.authEnv`, `notify.urlEnv`, `notify.authEnv`) are bound there
   from Secrets (`secretKeyRef`, commented stanzas) — never as literals. It
   never mounts the store claim and sets no `OBSERVOGRAM_DB`: the journey
-  runner opens no database.
+  runner opens no database. The read tokens an org's MCP endpoint records
+  name (`readTokenEnv`, `OBSERVOGRAM_ORG_<ORG>_<NAME>` — `ORG` the org id
+  upper-cased, `-` → `_`; an admin may name only their org's) are **the
+  studio Deployment's** `env`, bound from a Secret with `secretKeyRef`:
+  the studio reads the variable when `POST /api/refresh-live` or
+  `/api/draft-from-mcp` picks the endpoint by `mcpEndpointId`. Never set
+  them on the CronJob — the journey runner reads `packB.mcp.authEnv`, its
+  own names, and a write token is never a variable at all (deploys and
+  rollbacks take theirs per request).
 - `patch-studio-workspace.yaml` — mounts the same PVC into the studio at
   `/workspace` and sets its `OBSERVOGRAM_WORKSPACE`. It never touches
   `OBSERVOGRAM_DB`, the `store` volume or the strategy: the database stays

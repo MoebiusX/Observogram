@@ -40,7 +40,7 @@ word rule for credential parameter names (`tools/lib/mcp-url-safety.mjs`
 `credentialParamName`), which refuses fewer third-party names (`signal`,
 `design`, `author`) than a substring list.*
 
-*Slice 4 is built in two PRs: 4a (PR pending, `codex/pack-registry`: the
+*Slice 4 is built in two PRs: 4a (PR #140, `codex/pack-registry`: the
 pack registry on the store — `packs/index.json` read once at boot step 5
 and frozen in place, every pack operation a row, services and
 environments backfilled from the registered packs with no tier,
@@ -49,10 +49,15 @@ export writing `index.json` after reconciling the rows with the pack
 files and `import --replace` re-importing it; the index hashes under
 `schema_meta.pack_index_hashes`, a key of their own that 0.5.0's guard
 never reads, so a rollback to 0.5.0 restarts freely — §4 item 4) and 4b
-(stacked on 4a, to follow: services, environments and MCP endpoints — the
-API, the operator and admin roles, the MCP URL word rule and the per-org
-token variable, the conformance tier from the service record,
-`mcpEndpointId`). Slice 5 is next, after 4b.*
+(this PR, `codex/services-api`, from `develop` after 4a: services,
+environments and MCP endpoints over HTTP — the API, every rule once in
+`server/service-admin.mjs`; the operator and admin roles; the MCP endpoint
+changes behind the identity API's defences (the route table's `direct` /
+`closedAs`); the MCP URL word rule and the per-org token variable with the
+longest-prefix owner, re-checked at request time; the conformance tier from
+the service record, `declaredTier` the graded tier and `tier.mismatch`;
+`mcpEndpointId` in refresh-live, draft-from-mcp and the deploy routes).
+Slice 5 is next.*
 
 ## 0 · Status quo — what exists and what is missing
 
@@ -289,6 +294,25 @@ audit           seq PK AUTOINCREMENT, at, org_id NULL, actor, action, target_kin
   looks like a credential (`token`, `key`, `secret`, `pass`, `auth`, `sig`,
   `credential`, case-insensitive substring), without echoing the URL in the
   error. The SSRF / local-address rule stays where the URL is fetched.
+  *Amended in slice 4:* the credential test is 3a's word rule
+  (`tools/lib/mcp-url-safety.mjs` `credentialParamName`, applied to each
+  decoded parameter name: `signal`, `design`, `author` pass; `token`,
+  `api_key`, `%74oken`, `tier=x;pwd=…` refuse) and the refusal names the
+  parameter names, never the URL. And the variable's name is the org's:
+  `OBSERVOGRAM_ORG_<KEY>_<NAME>` (`KEY` the org id upper-cased, `-` →
+  `_`; `NAME` of `[A-Z0-9_]+`), owned by the org whose prefix
+  `OBSERVOGRAM_ORG_<KEY>_` is the longest match among every org row, live
+  or removed (`OBSERVOGRAM_ORG_ACME_EU_X` is `acme-eu`'s, not `acme`'s; a
+  tie — `a-b` and `a_b` share a key — that includes the request's org
+  passes), and that owner must be the request's org — else an org admin
+  who is not an owner could have the server send any variable of its
+  process to a URL of their choice (NEURON_FLEET_PLAN decision 5). The
+  repository (`server/store/mcp-endpoints.mjs`) applies both, so every
+  caller gets them; `resolveMcpTarget` (`server/service-admin.mjs`) runs
+  the owner rule again at each request that reads the variable, since an
+  org created later can become a stored name's owner. `POST /api/admin/orgs`
+  is not made to refuse an id over it; the README's convention says to
+  pick a `NAME` that is not another org's id followed by `_`.
 - **`pack_services`** exists because a pack is not always one service. The
   live aggregate packs carry many.
 - **Tier is criticality, not `minTier`.** `minTier` belongs to library SLIs

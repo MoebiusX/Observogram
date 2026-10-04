@@ -64,26 +64,28 @@ export function updateService(db, actor, id, patch) {
     tier: patch.tier === undefined ? undefined : optionalText(patch.tier, 'tier'),
     description: patch.description === undefined ? undefined : optionalText(patch.description, 'description', { max: 4000 }),
   };
-  const { sql, params } = setClause(values, { slug: 'slug', name: 'name', owners: 'owners', tier: 'tier', description: 'description' });
+  const { sql, params, fields } = setClause(values, { slug: 'slug', name: 'name', owners: 'owners', tier: 'tier', description: 'description' });
   return atomic(db, () => {
     const current = getService(db, id);
     if (!current) throw notFound('service', id);
     if (!sql) return current;
     prepare(db, `UPDATE services SET ${sql}, updated_at = :updated_at WHERE org_id = :org_id AND id = :id`)
       .run({ ...params, updated_at: nowIso(), org_id: org, id });
-    writeAudit(db, actor, { orgId: org, action: 'service.update', targetKind: 'service', targetId: current.slug, detail: { fields: Object.keys(params) } });
+    writeAudit(db, actor, { orgId: org, action: 'service.update', targetKind: 'service', targetId: current.slug, detail: { fields } });
     return getService(db, id);
   });
 }
 
-// Deletes the service with its environments and pack links (ON DELETE CASCADE).
-export function deleteService(db, actor, id) {
+// Deletes the service with its environments and pack links (ON DELETE
+// CASCADE); detail is the service.delete row's ({ environments, packLinks }
+// — the cascaded rows write none of their own).
+export function deleteService(db, actor, id, { detail = null } = {}) {
   const org = requireOrg(REPO);
   return atomic(db, () => {
     const current = getService(db, id);
     if (!current) throw notFound('service', id);
     prepare(db, 'DELETE FROM services WHERE org_id = ? AND id = ?').run(org, id);
-    writeAudit(db, actor, { orgId: org, action: 'service.delete', targetKind: 'service', targetId: current.slug });
+    writeAudit(db, actor, { orgId: org, action: 'service.delete', targetKind: 'service', targetId: current.slug, detail });
     return current;
   });
 }

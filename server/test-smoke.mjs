@@ -36,6 +36,14 @@ for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'I
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];
 }
+// The one per-org MCP read token this suite's endpoint names (STORE_PLAN
+// slice 4 §7.6): a value of this process alone, set before start() and
+// read at request time; a shell's real OBSERVOGRAM_ORG_* variables never
+// reach the server.
+for (const k of Object.keys(process.env)) if (k.startsWith('OBSERVOGRAM_ORG_')) delete process.env[k];
+const SMOKE_TOKEN_VAR = 'OBSERVOGRAM_ORG_DEFAULT_SMOKE_TOKEN';
+const SMOKE_TOKEN_VALUE = 'smoke-read-token-value';
+process.env[SMOKE_TOKEN_VAR] = SMOKE_TOKEN_VALUE;
 
 import { start } from './index.mjs';
 import { boot } from './fixtures/serve-child.mjs';
@@ -84,7 +92,9 @@ async function uploadedEntries(base, name) {
 // { ok, name } (enough for the deploy path, whose tools return opaque ids).
 async function startFakeMcp(toolNames, handler = null) {
   const calls = [];
+  const authHeaders = [];   // the Authorization header of every request, null when none
   const srv = createServer(async (req, res) => {
+    authHeaders.push(req.headers.authorization ?? null);
     let raw = '';
     req.setEncoding('utf8');
     for await (const chunk of req) raw += chunk;
@@ -118,6 +128,7 @@ async function startFakeMcp(toolNames, handler = null) {
   return {
     url: `http://${addr.address}:${addr.port}/mcp`,
     calls,
+    authHeaders,
     close: () => new Promise(resolve => srv.close(resolve)),
   };
 }
@@ -1266,6 +1277,59 @@ try {
       const status = await getJson(base, '/api/live-status');
       assert(status.present === true && status.url === `${fakeRestricted.url}?tier=x` && status.origin === new URL(fakeRestricted.url).origin,
              'live-status reads the org\'s refreshed pack', [status.present, status.url, status.origin]);
+
+      // An endpoint picked by id (STORE_PLAN slice 4 §7.6): the org's record
+      // names the fake and the variable set before start(); a refresh by
+      // mcpEndpointId reads the token from it (the fake sees the bearer),
+      // writes the live pack with the record's URL and names the record —
+      // the token's value in no response and no file. The variable unset:
+      // a 400 naming it, before any fetch.
+      const epCreated = await fetch(`${base}/api/mcp-endpoints`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Observogram-CSRF': '1' },
+        body: JSON.stringify({ name: 'smoke', url: fakeRestricted.url, readTokenEnv: SMOKE_TOKEN_VAR }),
+      });
+      const epBody = await epCreated.json();
+      assert(epCreated.status === 201 && epBody.ok === true && epBody.endpoint?.name === 'smoke' && epBody.endpoint.readTokenEnv === SMOKE_TOKEN_VAR,
+             'POST /api/mcp-endpoints (open loopback, the CSRF header): the record with the fake\'s URL and the variable', epBody);
+      const mcpEndpointId = epBody.endpoint.id;
+      const fakeRequestsBefore = fakeRestricted.authHeaders.length;
+      const byIdRes = await postJson('/api/refresh-live', { mcpEndpointId });
+      const byId = await byIdRes.json();
+      assert(byIdRes.status === 200 && byId.ok === true, 'refresh-live { mcpEndpointId } succeeds', byId.error);
+      assert(JSON.stringify(byId.mcpEndpoint) === JSON.stringify({ id: mcpEndpointId, name: 'smoke' }),
+             'refresh-live { mcpEndpointId }: the response names the record { id, name }', byId.mcpEndpoint);
+      assert(byId.annotations?.['mcp.url'] === fakeRestricted.url && byId.note === undefined,
+             'refresh-live { mcpEndpointId }: the record\'s URL is the pack\'s mcp.url; nothing dropped', [byId.annotations?.['mcp.url'], byId.note]);
+      const seen = fakeRestricted.authHeaders.slice(fakeRequestsBefore);
+      assert(seen.length > 0 && seen.every(h => h === `Bearer ${SMOKE_TOKEN_VALUE}`),
+             'the fake saw the read token from the variable on every request of the refresh', seen);
+      const liveById = existsSync(orgLive) ? readFileSync(orgLive, 'utf8') : '';
+      assert(liveById.includes(`mcp.url: ${fakeRestricted.url}`) || liveById.includes(`mcp.url: "${fakeRestricted.url}"`),
+             'the live pack was written with the record\'s URL', liveById.slice(0, 300));
+      assert(!JSON.stringify(byId).includes(SMOKE_TOKEN_VALUE) && !liveById.includes(SMOKE_TOKEN_VALUE),
+             'the token\'s value is in no response and not in the live pack');
+      const byUrl = await (await postJson('/api/refresh-live', { mcpUrl: fakeRestricted.url })).json();
+      assert(byUrl.ok === true && byUrl.mcpEndpoint === null, 'refresh-live { mcpUrl }: mcpEndpoint null', byUrl.mcpEndpoint);
+      const draftById = await (await postJson('/api/draft-from-mcp', { mcpEndpointId })).json();
+      assert(draftById.ok === true && JSON.stringify(draftById.mcpEndpoint) === JSON.stringify({ id: mcpEndpointId, name: 'smoke' })
+             && draftById.summary.mcpUrl === fakeRestricted.url,
+             'draft-from-mcp { mcpEndpointId }: the record named, its URL the draft\'s', [draftById.mcpEndpoint, draftById.summary?.mcpUrl]);
+      const bothRes = await postJson('/api/refresh-live', { mcpUrl: fakeRestricted.url, mcpEndpointId });
+      assert(bothRes.status === 400 && (await bothRes.json()).error === 'send mcpUrl or mcpEndpointId, not both', 'both fields → 400');
+      delete process.env[SMOKE_TOKEN_VAR];
+      const requestsBeforeUnset = fakeRestricted.authHeaders.length;
+      try {
+        const unsetRes = await postJson('/api/refresh-live', { mcpEndpointId });
+        const unset = await unsetRes.json();
+        assert(unsetRes.status === 400 && unset.error === `MCP endpoint "smoke" reads its token from ${SMOKE_TOKEN_VAR}, which is not set in the server's environment — set it on the server (the k8s Deployment's env), or send mcpAuth with this request`,
+               'the variable unset → 400 naming it, before any fetch', unset.error);
+        assert(fakeRestricted.authHeaders.length === requestsBeforeUnset, 'the unset variable refuses before any request reaches the MCP');
+      } finally {
+        process.env[SMOKE_TOKEN_VAR] = SMOKE_TOKEN_VALUE;
+      }
+      const epGone = await fetch(`${base}/api/mcp-endpoints/${mcpEndpointId}`, { method: 'DELETE', headers: { 'X-Observogram-CSRF': '1' } });
+      assert(epGone.status === 200, 'DELETE /api/mcp-endpoints/:id removes the smoke endpoint');
     } finally {
       await fakeRestricted.close();
     }
@@ -1356,6 +1420,32 @@ try {
     [registeredRow?.label, registeredRow?.source], [null, authRaw.metadata.name]);
   const servicesAfterRegister = runWithOrg('default', () => listServices(currentStore())).map(s => s.slug);
   assert(servicesAfterRegister.includes(authRaw.metadata.bindings.service), 'the register created the service row the pack names', servicesAfterRegister, authRaw.metadata.bindings.service);
+
+  // The tier rule (STORE_PLAN slice 4 §9): the conformance report of an
+  // uploaded pack is graded at its service record's tier when one is set.
+  // No tier set: the pack's own, `tier.from: 'pack'` — the report as before
+  // but for the `tier` object. PATCH the service's tier: `declaredTier` is
+  // the graded tier, `tier.pack` the pack's own, `tier.mismatch` says they
+  // differ (shown, never blocked). Unset again before RESET.
+  const packTier = authRaw.metadata.bindings.criticality;
+  const ownConf = await getJson(base, `/api/packs/${registeredId}/conformance`);
+  const serviceRow = runWithOrg('default', () => listServices(currentStore())).find(s => s.slug === authRaw.metadata.bindings.service);
+  assert(JSON.stringify(ownConf.tier) === JSON.stringify({ graded: packTier, pack: packTier, from: 'pack', service: { id: serviceRow.id, slug: serviceRow.slug }, environment: null, mismatch: false })
+      && ownConf.declaredTier === packTier,
+    'conformance of an uploaded pack without a record tier: graded by the pack, tier.from pack', ownConf.tier, { graded: packTier, from: 'pack' });
+  const patchTier = (tier) => fetch(`${base}/api/services/${serviceRow.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tier }) }).then(r => r.json());
+  const patched = await patchTier('tier-2');
+  assert(patched.ok === true && patched.service?.tier === 'tier-2', 'PATCH /api/services/:id sets the record\'s tier', patched, { ok: true, tier: 'tier-2' });
+  const recordConf = await getJson(base, `/api/packs/${registeredId}/conformance`);
+  assert(recordConf.declaredTier === 'tier-2' && recordConf.tier?.graded === 'tier-2' && recordConf.tier.pack === packTier
+      && recordConf.tier.from === 'service' && recordConf.tier.mismatch === true && recordConf.tier.service?.slug === serviceRow.slug,
+    'conformance of an uploaded pack with a service tier: graded at the record\'s tier, declaredTier moves with it, mismatch shown',
+    recordConf.tier, { graded: 'tier-2', pack: packTier, from: 'service', mismatch: true });
+  assert(recordConf.clauses.filter(c => c.applies).length < ownConf.clauses.filter(c => c.applies).length, 'fewer clauses apply at tier-2 than at the pack\'s tier-1');
+  const catConf = await getJson(base, '/api/packs/payment-service/conformance');
+  assert(catConf.declaredTier === 'tier-1' && catConf.tier?.from === 'pack' && catConf.tier.service === null, 'the catalogue pack has no record: graded by itself', catConf.tier, { from: 'pack', service: null });
+  const unset = await patchTier(null);
+  assert(unset.ok === true && unset.service?.tier === null, 'PATCH /api/services/:id { tier: null }: graded by the pack again', unset, { ok: true, tier: null });
 
   // DELETE /api/uploads clears the rows and the disk copies too — reset
   // means reset — but keeps the services the packs named (RESET is the

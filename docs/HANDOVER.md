@@ -25,16 +25,16 @@ next to Discover · Diagnose · Remediate. In order:
 `npm test` passes on Node 22.16+ (the `package.json` `engines` floor, for `node:sqlite`;
 the Node 22.22 pipe truncation in `packc journey run --all --json` that failed
 `tools/test-journey.mjs` was fixed in [STORE_PLAN.md](STORE_PLAN.md) slice 1). `npm run lint`:
-0 errors, 156 warnings on `codex/pack-registry` (a baseline of `preserve-caught-error`-style
+0 errors, 156 warnings on `codex/services-api` (a baseline of `preserve-caught-error`-style
 warnings; slice 2a removed five with the file readers it deleted, slice 3a some unused catch
-bindings, slice 3b added none and slice 4a removed nine with the index code it deleted; do not
-add to it). CI on a PR: `validate`
+bindings, slice 3b added none, slice 4a removed nine with the index code it deleted and 4b
+added none; do not add to it). CI on a PR: `validate`
 (includes the vendored-spec check) and `backend-live` on the
 latest 22, `node-floor` (`npm test` on exactly 22.16.0), `store-prestore` (from slice 2b:
 the Export gate against a `v0.4.0` worktree). `refresh-live-pack` runs only on
 demand or when the fetcher changes.
 
-**The store (backlog 0) — slices 1 and 2 on `develop`; slice 3a (roles enforced) and 3b (the identity API) delivered; slice 4a (the pack registry on the store) delivered, 4b (services, environments, MCP endpoints) to follow; then slice 5 is next.**
+**The store (backlog 0) — slices 1 and 2 on `develop`; slice 3a (roles enforced) and 3b (the identity API) delivered; slice 4a (the pack registry on the store, PR #140) and 4b (services, environments, MCP endpoints) delivered; slice 5 is next.**
 Slice 1 (the store foundation: `server/store/*`, `packc store backup` / `restore`, the k8s
 store volume) is PR #109. Slice 2a (PR #111, branch `codex/store-identity`, stacked on it)
 moves identity onto the store: `start()` runs `bootStore()` (`server/boot.mjs`: the boot
@@ -85,7 +85,7 @@ admins list members, enable and owner grant / revoke ship (the revoke leaves the
 org's admin membership, and says so), the join role `admin` needs `"confirm": true`, and
 the open-loopback posture keeps the HTTP identity API behind the direct-loopback rule.
 
-**Slice 4a delivered (branch `codex/pack-registry`, from `develop` after 3b; PR pending): the
+**Slice 4a delivered (branch `codex/pack-registry`, from `develop` after 3b; PR #140): the
 pack registry on the store.** `packs/index.json` is read once, at boot step 5
 (`server/store/pack-import.mjs`), and frozen in place; a pack's label, source, times and the
 services it names are rows (`server/pack-registry.mjs` over `server/store/packs.mjs` and
@@ -106,8 +106,30 @@ the plan's guard rule, the aggregate regex verbatim, RESET keeps rows, the canon
 comparison with the export reconciling first). Recommended, not built: a CI job over a
 v0.5.0 worktree running the live suite against that build (it needs `OBSERVOGRAM_DB` per
 start, so the suite's child env would have to grow a `--build` flag).
-Next is slice 4b (services, environments and org-scoped MCP endpoints over HTTP — the API,
-the roles, the tier rule, `mcpEndpointId`), then slice 5.
+**Slice 4b delivered (branch `codex/services-api`, from `develop` after 4a; PR pending):
+services, environments and MCP endpoints over HTTP.** Every rule lives once in
+`server/service-admin.mjs` (a sibling of `identity-admin.mjs`, the same `AdminRefusal` kinds),
+the fourteen routes in `server/routes/services.mjs` (the handler helpers `routes/identity.mjs`
+had — `pathId`, `refused`, `bodyOf`, `handler` — moved to `routes/util.mjs`, texts unchanged).
+Operators manage services (`slug` fixed; `tier` `null` = graded by the pack) and environments
+(`bindings`, `endpoints`, an optional MCP endpoint); admins manage the org's MCP endpoint
+records, whose three changes take the identity API's defences — the route table's `direct` /
+`closedAs` fields parametrise `authz.mjs`'s step texts and `csrfAlwaysText`, byte-identical for
+identity entries. `mcp_endpoints.url` refuses credential-looking parameter *names* by 3a's
+word rule; `readTokenEnv` must be `OBSERVOGRAM_ORG_<ORG>_<NAME>` and the request's org's — the
+owner is the org with the longest matching prefix, live or removed orgs included, re-checked
+at request time by `resolveMcpTarget`. `GET /api/packs/:id/conformance` grades at the record's
+tier (`declaredTier` is the graded tier; `tier.pack`, `tier.mismatch`; `tools/lib/conformance.mjs`
+untouched). `refresh-live`, `draft-from-mcp`, `deploy`, `deploy-bulk` and `rollback` take
+`mcpEndpointId`; the read token comes from the variable at request time, write tokens stay per
+request. Suites: `server/test-service-admin.mjs`, `server/test-services-api.mjs`; test-authz's
+synthetic entries, test-tenancy's `ORG_SCOPED`, test-smoke's restricted-tier fake reused for
+the token case (no new tool literal). The design's §19 decisions were all taken as
+recommended (`OBSERVOGRAM_ORG_<ORGKEY>_*` with the longest-prefix owner, the MCP endpoint
+mutations behind the identity API's defences, null tiers, the tier enum, `environments.endpoints`
+in full to viewers). What waits: the studio's pickers still type a URL — 6b replaces them with
+the org's list and sends `mcpEndpointId`; the deploy audit (`deploys.jsonl` → rows) is slice 5.
+Next is slice 5.
 
 ### otel-observability-pack (the spec) — `develop` at the merge of PR #8
 
@@ -216,8 +238,8 @@ decisions are ratified; its §9b lists the refinements made since, which merging
 *Status:* slice 1 (the foundation) is PR #109; slice 2 is complete once 2a (identity on the
 store, PR #111) and 2b (export, `import --replace`, `rekey-issuer`, `purge-org`) merge; slice 3a
 (roles enforced, the live pack per org; PR #119) and 3b (the identity API) are delivered; slice
-4a (the pack registry on the store) is delivered and 4b (services, environments, MCP endpoints)
-follows, then slice 5 is next — see §1.
+4a (the pack registry on the store, PR #140) and 4b (services, environments, MCP endpoints) are
+delivered; slice 5 is next — see §1.
 
 **A. Decide: "the draft becomes the pack".** The root cause of every remaining Build gap is
 that the draft is a set of inputs re-instantiated from the seed on each change, with
@@ -307,8 +329,8 @@ read-only by design; the SLI rolodex shows the bare library id until a rename.
   the audit live in the store from slice 2a; `users.json` / `orgs.json` are imported once and
   never read again. From slice 4a the pack registry is rows too (`packs` and
   `pack_services`; `packs/index.json` is read once, then frozen and compared), and services
-  and environments are records backfilled from the packs — their API, owners, tiers and MCP
-  endpoints are 4b's. Artefacts (`packs/*.pack.yaml`, snapshots, journeys, runs,
+  and environments are records backfilled from the packs; from 4b their API, owners, tiers and
+  the org's MCP endpoints (`server/service-admin.mjs`, `server/routes/services.mjs`). Artefacts (`packs/*.pack.yaml`, snapshots, journeys, runs,
   `deploys.jsonl`) stay files by design. The rollback to a pre-store build or to 0.5.0 is
   `packc store export` in place, with the server stopped (it writes `index.json` from the
   rows), and the way back after one that changed users, orgs or packs is `packc store import

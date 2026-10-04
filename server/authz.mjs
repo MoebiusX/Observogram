@@ -228,7 +228,8 @@ const LOOPBACK_V4 = /^127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
 const PROXY_HEADER = /^(?:forwarded|via|x-real-ip|x-forwarded-.*|x-original-forwarded-.*|cf-connecting-ip(?:v6)?|[a-z0-9-]*client-?ip)$/i;
 
 // A request sent straight to a loopback address (the open postures'
-// identity API, STORE_PLAN §5): Host names localhost, 127.x.x.x or [::1];
+// `direct` entries — the identity API and the MCP endpoint changes,
+// STORE_PLAN §5 and slice 4): Host names localhost, 127.x.x.x or [::1];
 // an Origin, if any, is that same host and port; no proxy header. Pure
 // over the headers. A DNS-rebinding page sends its own name in Host, a
 // browser behind a proxy the public origin in Origin, and most proxies add
@@ -280,7 +281,13 @@ export function effectiveRoleOf(principal, membershipRole = null) {
 // ---------- the decision ----------
 
 const NO_SIGN_IN_WAY = 'this server has no sign-in: add the first user with npm run users -- add <login>, or configure OIDC';
-const CSRF_ALWAYS_TEXT = "missing X-Observogram-CSRF: 1 — identity changes need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')";
+// The csrf: 'always' refusal, by what the entry is closed as: 'identity
+// changes' for the identity API (and the self route that changes a
+// session), 'changes to the MCP endpoint API' for those rows.
+export function csrfAlwaysText(entry) {
+  const what = entry.closedAs === 'the identity API' ? 'identity changes' : `changes to ${entry.closedAs}`;
+  return `missing X-Observogram-CSRF: 1 — ${what} need it in every posture, so a cross-site form cannot make them (the studio sends it; with curl add -H 'X-Observogram-CSRF: 1')`;
+}
 
 const deny = (status, denied, error, extra = {}) => ({ status, body: { ok: false, error, denied, ...extra } });
 
@@ -295,16 +302,19 @@ export function authzDecision(entry, ctx) {
   // 1. The open, exposed posture closes what the entry says it refuses.
   if (ctx.posture === 'open-exposed' && entry.exposed === 'refuse') {
     const why = ctx.authOff
-      ? `the identity API is closed on a server bound to ${ctx.host} without sign-in (OBSERVOGRAM_INSECURE_NO_AUTH=1, OBSERVOGRAM_AUTH=off): restart it without OBSERVOGRAM_AUTH=off and sign in as an owner, or bind it to loopback`
-      : `the identity API is closed on a server bound to ${ctx.host} without sign-in (OBSERVOGRAM_INSECURE_NO_AUTH=1): add the first user with npm run users -- add <login> (it arms sign-in without a restart; the first local user is an owner), or configure OIDC`;
+      ? `${entry.closedAs} is closed on a server bound to ${ctx.host} without sign-in (OBSERVOGRAM_INSECURE_NO_AUTH=1, OBSERVOGRAM_AUTH=off): restart it without OBSERVOGRAM_AUTH=off and sign in as an owner, or bind it to loopback`
+      : `${entry.closedAs} is closed on a server bound to ${ctx.host} without sign-in (OBSERVOGRAM_INSECURE_NO_AUTH=1): add the first user with npm run users -- add <login> (it arms sign-in without a restart; the first local user is an owner), or configure OIDC`;
     return deny(403, 'posture', why);
   }
-  // 2. Without sign-in, the identity API answers a person at this machine only.
-  if (open && entry.identityApi && !ctx.direct) {
-    return deny(403, 'posture', `on a server without sign-in the identity API answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:${ctx.port ?? '<port>'}, or use the CLIs from this machine (npm run users -- add <login>, passwd <login>, owner <login>)`);
+  // 2. Without sign-in, a `direct` entry (the identity API, the MCP endpoint
+  //    changes) answers a person at this machine only. The CLI way out is
+  //    the identity API's: no CLI manages endpoints.
+  if (open && entry.direct && !ctx.direct) {
+    const cli = entry.identityApi ? ', or use the CLIs from this machine (npm run users -- add <login>, passwd <login>, owner <login>)' : '';
+    return deny(403, 'posture', `on a server without sign-in ${entry.closedAs} answers only requests sent straight to a loopback address (Host localhost, 127.0.0.1 or [::1]; no Forwarded / Via / X-Forwarded-* / X-Real-IP / client-IP header; an Origin, if any, naming that host) — open the studio at http://127.0.0.1:${ctx.port ?? '<port>'}${cli}`);
   }
-  // 3. Identity changes carry the CSRF header from every principal but the bearer.
-  if (entry.csrf === 'always' && p.kind !== 'bearer' && !ctx.csrf) return deny(403, 'csrf', CSRF_ALWAYS_TEXT);
+  // 3. An always-CSRF change carries the header from every principal but the bearer.
+  if (entry.csrf === 'always' && p.kind !== 'bearer' && !ctx.csrf) return deny(403, 'csrf', csrfAlwaysText(entry));
   // 4–5. The class.
   const allowed = entry.class === 'owner' ? p.owner === true : rankOf(p) >= rankOfRole(entry.class);
   if (allowed) return null;
@@ -401,7 +411,7 @@ export function selfGate(entry, req, res, next) {
     }
   }
   // An identity change from the caller's own session carries the header too.
-  if (entry.csrf === 'always' && !hasCsrfHeader(req)) return res.status(403).json({ ok: false, error: CSRF_ALWAYS_TEXT, denied: 'csrf' });
+  if (entry.csrf === 'always' && !hasCsrfHeader(req)) return res.status(403).json({ ok: false, error: csrfAlwaysText(entry), denied: 'csrf' });
   req.observogramSelf = flow ? { via: 'pwflow', user: flow.user } : { via: 'session', user: session.user, session };
   return next();
 }
