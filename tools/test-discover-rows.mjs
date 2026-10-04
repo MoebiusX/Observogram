@@ -17,9 +17,31 @@ import {
   DISCOVER_VIEWS, DISCOVER_VIEW_DEFAULT, discoverView, artefactLightRowHtml, artefactStatusMark, artefactStatusWords, STATUS_MARKS,
 } from '../studio/card-html.mjs';
 import { BOARD_LAYERS, BOARD_ITEMS_SHOWN, boardGroups, boardGroupsHtml, boardHeadHtml, objectivePct } from '../studio/discover-board.mjs';
+import { bindTaxonomy, classifyArtefact, taxonomyBound, UNBOUND } from '../studio/taxonomy.mjs';
+import * as artefactClassify from './lib/artefact-classify.mjs';
 
 const allArtefacts = (pack) => Object.values(pack.layers).flatMap(v => (Array.isArray(v) ? v : Object.values(v).flat()));
 const carlos = adapt(parse(fs.readFileSync(new URL('../examples/krystaline-repo-carlos.pack.yaml', import.meta.url), 'utf8')));
+
+// The taxonomy binding (studio/taxonomy.mjs) — this test runs first and
+// binds at its end, the way boot() binds before the first render; every
+// test below sees the bound default families.
+test('unbound, the row kinds degrade to the adapter table and the board throws the named error; bindTaxonomy() fixes both', () => {
+  assert.equal(taxonomyBound(), false);
+  assert.deepEqual(classifyArtefact({ id: 'SLI-01' }), { ...UNBOUND });
+  assert.equal(classifyArtefact({ id: 'SLI-01' }).via, 'unbound');
+  assert.deepEqual(artefactKind({ id: 'SLI-01' }), { kind: 'Service level indicator', role: 'Measures how the service behaves.' }, 'an adapted artefact reads ARTEFACT_KINDS unbound');
+  assert.deepEqual(artefactKind({ id: 'METRIC-SRC-01' }).kind, 'Metric defined in the code');
+  assert.deepEqual(artefactKind({ type: 'PackSLI', id: 'svc-checkout' }), { kind: 'Artefact', role: '' }, 'a typed foreign artefact has no kind until the taxonomy is bound');
+  assert.throws(() => boardGroups('L1', []), { message: 'taxonomy unbound: bindTaxonomy() runs in boot() before the first render' });
+  assert.throws(() => boardHeadHtml({}), { message: /^taxonomy unbound: bindTaxonomy\(\) runs in boot\(\)/ });
+  assert.throws(() => bindTaxonomy({}), { message: 'bindTaxonomy: expected the artefact-classify module' });
+  assert.equal(taxonomyBound(), false);
+  assert.equal(bindTaxonomy(artefactClassify, null), artefactClassify);
+  assert.equal(taxonomyBound(), true);
+  assert.equal(classifyArtefact({ id: 'SLI-01' }).via, 'id');
+  assert.equal(artefactClassify.activeTaxonomy(), null, 'bound with no override: the default families');
+});
 
 test('the adapter source word splits onto evidence and completion; attention is what a person must act on', () => {
   assert.equal(artefactStatus({ source: 'Verified' }).evidence, 'live');
@@ -232,6 +254,32 @@ test('the board places every artefact of a layer in a group, and hides none', ()
   // The longer families do not lose to the shorter ones on the same layer.
   const l2 = boardGroups('L2', [{ a: { id: 'SCRAPE-SRC-01' }, key: 'a' }, { a: { id: 'METRIC-SRC-01' }, key: 'b' }, { a: { id: 'PIP-EXP-MET' }, key: 'c' }]).groups;
   assert.deepEqual(l2.filter(g => g.entries.length).map(g => g.id), ['rcv', 'exp', 'metrics']);
+  // The group a BOARD_LAYERS entry draws is the family's home (tools/lib/artefact-classify.mjs FAMILY_HOME).
+  for (const [layer, def] of Object.entries(BOARD_LAYERS)) for (const g of def.groups) assert.ok(!('prefixes' in g), `${layer}/${g.id}: the board holds no prefix table of its own`);
+});
+
+test('a typed foreign artefact lands in its family\'s group on its own layer; the board never moves an artefact across layers', () => {
+  // A family name in `type` is read with no override at all.
+  const l1 = boardGroups('L1', [{ a: { type: 'sli', id: 'svc-checkout-availability', title: 'availability' }, key: 'L1//svc-checkout-availability' }]).groups;
+  assert.deepEqual(l1.filter(g => g.entries.length).map(g => g.id), ['sli']);
+  // The same artefact placed on L2 is L2's "Other": its home is L1, and the board does not relocate it.
+  const l2 = boardGroups('L2', [{ a: { type: 'sli', id: 'svc-checkout-availability' }, key: 'L2//svc-checkout-availability' }]).groups;
+  assert.deepEqual(l2.filter(g => g.entries.length).map(g => g.id), ['other']);
+  // A foreign type name needs the override; with it, the row kind is the override's label, and an adapted row keeps its wording.
+  assert.equal(boardGroups('L1', [{ a: { type: 'PackSLO', id: 'svc-slo-1' }, key: 'k' }]).groups.at(-1).id, 'other');
+  bindTaxonomy(artefactClassify, { version: 1, types: { PackSLO: { family: 'slo', label: 'Pack objective' } }, ids: [{ pattern: '^promrule-', family: 'alert_rule' }] });
+  try {
+    assert.deepEqual(boardGroups('L1', [{ a: { type: 'PackSLO', id: 'svc-slo-1' }, key: 'k' }]).groups.filter(g => g.entries.length).map(g => g.id), ['slo']);
+    assert.deepEqual(artefactKind({ type: 'PackSLO', id: 'svc-slo-1' }), { kind: 'Pack objective', role: 'Sets the target an indicator must meet over a window.' });
+    assert.deepEqual(artefactKind({ id: 'promrule-HighErrorRate' }), { kind: 'Alert rule', role: 'An operational alert the engine evaluates: something is wrong now, not a budget burning.' }, 'an id override takes the family\'s home label');
+    assert.equal(artefactKind({ id: 'METRIC-SRC-01' }).kind, 'Metric defined in the code', 'an adapted artefact is untouched by the override');
+    assert.equal(artefactKind({ id: 'SLO-01', defines: 'slos.x' }).kind, 'Objective');
+    const html = boardGroupsHtml('L4', [{ a: { id: 'promrule-HighErrorRate', title: 'HighErrorRate' }, key: 'L4/alerting/promrule-HighErrorRate' }]);
+    assert.ok(html.includes('data-group="rule"') && !html.includes('data-group="other"'));
+  } finally {
+    bindTaxonomy(artefactClassify, null);
+  }
+  assert.equal(boardGroups('L1', [{ a: { type: 'PackSLO', id: 'svc-slo-1' }, key: 'k' }]).groups.at(-1).id, 'other', 'the override is gone');
 });
 
 test('a board group draws its artefacts as buttons that open the record, and caps a long family', () => {

@@ -27,6 +27,7 @@
 
 import { escapeHtml } from './util.mjs';
 import { statusChipHtml, statusRecord } from './ux-kit.mjs';
+import { classifyArtefact } from './taxonomy.mjs';
 
 /**
  * artefactCardHtml(artefact, { broken, benchmark, tagLimit, note }) → the HTML inside a `.card`.
@@ -88,7 +89,9 @@ export function artefactCardHtml(artefact, { broken = 0, benchmark = null, tagLi
 // What an artefact IS, in plain words, by the adapter's id family
 // (tools/lib/adapter.mjs). Order matters: the longer prefixes first.
 // `role` is the one-line "what it does" when the adapter's desc says nothing
-// more useful.
+// more useful. An artefact the taxonomy places by an explicit `type` or by
+// an operator override (studio/taxonomy.mjs) takes the taxonomy's label and
+// role instead; everything else — every adapted artefact — reads this table.
 export const ARTEFACT_KINDS = [
   ['SLI-',        'Service level indicator',      'Measures how the service behaves.'],
   ['SLO-',        'Objective',                    'Sets the target an indicator must meet over a window.'],
@@ -123,6 +126,8 @@ export const ARTEFACT_KINDS = [
 ];
 
 export function artefactKind(artefact) {
+  const c = classifyArtefact(artefact);
+  if ((c.via === 'type' || c.via === 'override') && c.label) return { kind: c.label, role: c.role || '' };
   const id = String(artefact?.id ?? '');
   const hit = ARTEFACT_KINDS.find(([prefix]) => id.startsWith(prefix));
   return hit

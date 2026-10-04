@@ -47,6 +47,7 @@ import { catalogToDeployManifest } from './artifact-model.mjs';
 import { computeDeployTransitions } from './verify-deploy.mjs';
 import { protoActive, renderProtoDiagnose, renderProtoRemediate } from './proto-view.mjs';
 import { initHost } from './host.mjs';
+import { bindTaxonomy } from './taxonomy.mjs';
 // The BUILD journey (docs/BUILD_JOURNEY.md, slice 2): models, loaders, steps.
 import {
   BUILD_STEPS, TIERS as BUILD_TIERS, defineValid as buildDefineValid, buildStepReachability, enterStep as enterBuildStep, stepAfterInstantiate as buildStepAfterInstantiate, focusFallbackSelectors, instantiateBody as buildInstantiateBody,
@@ -1521,6 +1522,10 @@ async function boot() {
   // header has to be resolved before the catalog loads.
   await loadIdentity();
   resolveActiveOrg();
+  // The artefact taxonomy (tools/lib/artefact-classify.mjs), bound before
+  // the first render: the Discover board groups by it, the row kinds and
+  // the drawer read it for typed artefacts.
+  bindTaxonomy(await import('/lib/artefact-classify.mjs'), null);
   // The deploy target profiles saved before slice 3 (one browser-wide key,
   // URLs as typed) become this user's, stripped, now — not at the first
   // deploy: no credential waits in localStorage until then. Not on a boot

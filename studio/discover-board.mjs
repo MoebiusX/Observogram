@@ -9,54 +9,58 @@
 // state, no DOM), like card-html.mjs; layers-view.mjs wires the actions.
 
 import { escapeHtml } from './util.mjs';
+import { classifyArtefact, requireTaxonomy } from './taxonomy.mjs';
 
 // Items a group draws before "+N more" (which opens the layer's full list).
 export const BOARD_ITEMS_SHOWN = 6;
 
-// Per layer: its groups, in order. A group takes the artefacts whose id starts
-// with one of its prefixes (the adapter's id families, tools/lib/adapter.mjs);
+// Per layer: its groups, in order. A group takes the artefacts whose family
+// (tools/lib/artefact-classify.mjs, bound through studio/taxonomy.mjs) has
+// its home there — FAMILY_HOME maps every family to one layer and group;
 // anything no group claims lands in a trailing "Other" group, so the board
-// never hides an artefact. `flow` draws an arrow between consecutive groups
-// (signals move left to right); an `aside` group is an inventory beside the
-// flow, not a step in it. An `optional` group is not drawn when empty.
+// never hides an artefact, and the board never moves an artefact across
+// layers: an artefact whose family lives elsewhere is this layer's "Other".
+// `flow` draws an arrow between consecutive groups (signals move left to
+// right); an `aside` group is an inventory beside the flow, not a step in
+// it. An `optional` group is not drawn when empty.
 export const BOARD_LAYERS = {
   L1: { groups: [
-    { id: 'sli', title: 'SLIs', prefixes: ['SLI-'], draw: 'sli' },
-    { id: 'slo', title: 'SLOs · targets', prefixes: ['SLO-'], draw: 'slo' },
+    { id: 'sli', title: 'SLIs', draw: 'sli' },
+    { id: 'slo', title: 'SLOs · targets', draw: 'slo' },
   ] },
   L2: { flow: true, groups: [
-    { id: 'otel', title: 'Instrumentation', prefixes: ['OTEL-'], draw: 'otel' },
-    { id: 'rcv', title: 'Receivers', prefixes: ['PIP-RCV-', 'SCRAPE-SRC-', 'SCRAPE-'] },
-    { id: 'prc', title: 'Processors', prefixes: ['PIP-PRC-'] },
-    { id: 'exp', title: 'Exporters & storage', prefixes: ['PIP-EXP-', 'BAK-', 'STO-'], draw: 'signal' },
-    { id: 'metrics', title: 'Metric inventory', prefixes: ['METRIC-SRC-', 'METRIC-'], draw: 'inventory', aside: true, optional: true },
+    { id: 'otel', title: 'Instrumentation', draw: 'otel' },
+    { id: 'rcv', title: 'Receivers' },
+    { id: 'prc', title: 'Processors' },
+    { id: 'exp', title: 'Exporters & storage', draw: 'signal' },
+    { id: 'metrics', title: 'Metric inventory', draw: 'inventory', aside: true, optional: true },
   ] },
   L2X: { groups: [
-    { id: 'prof', title: 'Profiles', prefixes: ['PROF-'], optional: true },
-    { id: 'net', title: 'Network', prefixes: ['NET-'], optional: true },
-    { id: 'poe', title: 'Policy engine', prefixes: ['POE-'], optional: true },
-    { id: 'mesh', title: 'Service mesh', prefixes: ['MESH-'], optional: true },
-    { id: 'col', title: 'Collection', prefixes: ['COL-'], optional: true },
+    { id: 'prof', title: 'Profiles', optional: true },
+    { id: 'net', title: 'Network', optional: true },
+    { id: 'poe', title: 'Policy engine', optional: true },
+    { id: 'mesh', title: 'Service mesh', optional: true },
+    { id: 'col', title: 'Collection', optional: true },
   ] },
   L3: { flow: true, groups: [
-    { id: 'qry', title: 'Recording rules', prefixes: ['QRY-'] },
-    { id: 'view', title: 'Derived views', prefixes: ['VIEW-'] },
-    { id: 'dash', title: 'Dashboards', prefixes: ['DASH-'], draw: 'dash' },
-    { id: 'panel', title: 'Dashboard panels', prefixes: ['PANEL-'], draw: 'inventory', aside: true, optional: true },
+    { id: 'qry', title: 'Recording rules' },
+    { id: 'view', title: 'Derived views' },
+    { id: 'dash', title: 'Dashboards', draw: 'dash' },
+    { id: 'panel', title: 'Dashboard panels', draw: 'inventory', aside: true, optional: true },
   ] },
   L4: { flow: true, groups: [
-    { id: 'pol', title: 'Policy & detection', prefixes: ['POL-', 'FCST-'] },
-    { id: 'alr', title: 'Alert routing', prefixes: ['ALR-'], draw: 'route' },
-    { id: 'rule', title: 'Operational alert rules', prefixes: ['RULE-'], optional: true },
-    { id: 'heal', title: 'Remediation', prefixes: ['HEAL-'] },
+    { id: 'pol', title: 'Policy & detection' },
+    { id: 'alr', title: 'Alert routing', draw: 'route' },
+    { id: 'rule', title: 'Operational alert rules', optional: true },
+    { id: 'heal', title: 'Remediation' },
   ] },
   L5: { groups: [
-    { id: 'base', title: 'Baselines & performance', prefixes: ['BASE-'], draw: 'baseline' },
-    { id: 'chaos', title: 'Chaos experiments', prefixes: ['CHAOS-'] },
-    { id: 'syn', title: 'Synthetic checks', prefixes: ['SYN-'] },
+    { id: 'base', title: 'Baselines & performance', draw: 'baseline' },
+    { id: 'chaos', title: 'Chaos experiments' },
+    { id: 'syn', title: 'Synthetic checks' },
   ] },
   GOV: { groups: [
-    { id: 'imp', title: 'Imports', prefixes: ['IMP-'] },
+    { id: 'imp', title: 'Imports' },
   ] },
 };
 
@@ -186,14 +190,18 @@ const TILE_DRAWS = new Set(['sli', 'slo', 'dash']);
 
 // ---------- a layer's groups ----------
 
-/** Split a layer's entries ({ a, key }) onto its groups; the rest go to "Other". */
+/**
+ * Split a layer's entries ({ a, key }) onto its groups by family; the rest
+ * go to "Other". Throws until bindTaxonomy() has run (studio/taxonomy.mjs).
+ */
 export function boardGroups(layerId, entries) {
+  requireTaxonomy();
   const def = BOARD_LAYERS[layerId] || { groups: [] };
   const groups = def.groups.map(g => ({ ...g, entries: [] }));
-  const other = { id: 'other', title: 'Other', prefixes: [], optional: true, entries: [] };
+  const other = { id: 'other', title: 'Other', optional: true, entries: [] };
   for (const e of entries || []) {
-    const id = String(e.a?.id ?? '');
-    const g = groups.find(x => x.prefixes.some(p => id.startsWith(p)));
+    const c = classifyArtefact(e.a);
+    const g = c.layer === layerId ? groups.find(x => x.id === c.group) : null;
     (g || other).entries.push(e);
   }
   return { flow: !!def.flow, groups: [...groups, other].filter(g => g.entries.length || !g.optional) };
@@ -239,10 +247,11 @@ export function boardGroupsHtml(layerId, entries) {
  * the instrumentation contract, the backends, the imports).
  */
 export function boardHeadHtml({ meta = {}, env = '', total = 0, layers = 0, artefacts = [] } = {}) {
-  const byPrefix = (p) => artefacts.filter(a => String(a?.id ?? '').startsWith(p));
-  const otel = byPrefix('OTEL-')[0]?.spec || {};
-  const backends = [...new Set(byPrefix('BAK-').map(a => a.spec?.product || a.tool).filter(Boolean))];
-  const imports = byPrefix('IMP-');
+  requireTaxonomy();
+  const byFamily = (f) => artefacts.filter(a => classifyArtefact(a).family === f);
+  const otel = byFamily('otel')[0]?.spec || {};
+  const backends = [...new Set(byFamily('backend').map(a => a.spec?.product || a.tool).filter(Boolean))];
+  const imports = byFamily('imports');
   const facts = [
     ['service', 'Service', meta.service],
     ['tier', 'Criticality', meta.criticality],

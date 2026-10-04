@@ -37,10 +37,16 @@ import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { SPEC_DIR } from './lib/validator.mjs';
 import { adapt } from './lib/adapter.mjs';
 import { classify } from './lib/artefact-model.mjs';
-import { classifyArtefact } from './lib/artefact-classify.mjs';
+import * as artefactClassify from './lib/artefact-classify.mjs';
+import { bindTaxonomy } from '../studio/taxonomy.mjs';
 import { createHarness } from './lib/harness.mjs';
 import { LAYER_DEFS, L4_SUBGROUPS } from '../studio/constants.mjs';
 import { boardHeadHtml, boardGroupsHtml } from '../studio/discover-board.mjs';
+
+const { classifyArtefact } = artefactClassify;
+// The board groups through the bound taxonomy (studio/taxonomy.mjs), as the
+// studio's boot() binds it — here with no override: the default families.
+bindTaxonomy(artefactClassify, null);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');

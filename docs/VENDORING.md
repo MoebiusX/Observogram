@@ -50,7 +50,8 @@ prose contracts that follow.
 | [`studio/design-tokens.json`](../studio/design-tokens.json) | generated from the CSS (CI-asserted identical) | the same values for code that cannot read CSS (a TypeScript theme object, a chart palette) |
 | [`studio/design-kit.css`](../studio/design-kit.css) | `design-tokens.css` only (CI-asserted) | the component kit: `.og-btn`, `.og-panel`, `.og-stat`, `.og-pill`, `.og-steps`, `.og-input`, `.og-callout`, `.og-letter` … |
 | [`studio/design-bridge.css`](../studio/design-bridge.css) | `design-tokens.css` only (CI-asserted) | defines the theme properties `verdict-ui.css` and `proto.css` expect from the host (`--card`, `--ink`, `--mono`, `--CMP`, `--pr-green` …) from the tokens |
-| [`studio/discover-board.mjs`](../studio/discover-board.mjs) | `escapeHtml` from `util.mjs` | the pack board: `boardHeadHtml`, `boardGroupsHtml`, `boardGroups`, `BOARD_LAYERS` — pure HTML builders over an adapted pack; its styles are still in `ux-discover.css` (the `.dv-band*` / `.dvb-*` rules) and `reskin.css` |
+| [`studio/discover-board.mjs`](../studio/discover-board.mjs) | `escapeHtml` from `util.mjs`; `classifyArtefact` / `requireTaxonomy` from `taxonomy.mjs` | the pack board: `boardHeadHtml`, `boardGroupsHtml`, `boardGroups`, `BOARD_LAYERS` — pure HTML builders over an adapted pack, grouping by the family's home (`FAMILY_HOME`); `bindTaxonomy()` must have run before `boardGroups` (it throws `taxonomy unbound: …` otherwise); its styles are still in `ux-discover.css` (the `.dv-band*` / `.dvb-*` rules) and `reskin.css` |
+| [`studio/taxonomy.mjs`](../studio/taxonomy.mjs) | zero-import; bound at boot to `tools/lib/artefact-classify.mjs` | the studio's taxonomy binding: `bindTaxonomy(mod, json)`, `classifyArtefact` (degrades to `via: 'unbound'` before boot), `requireTaxonomy` |
 
 `tools/test-diagnostic-grade.mjs` fails CI if an import ever creeps into the
 two studio zero-import modules, and `tools/test-blast-radius.mjs` /
@@ -224,7 +225,8 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
      studio/constants.mjs studio/verdict-ui.mjs studio/verdict-ui.css \
      studio/compare-catalog.mjs studio/host.mjs studio/proto-synthesis.mjs \
      studio/design-tokens.css studio/design-tokens.json \
-     studio/design-kit.css studio/design-bridge.css studio/discover-board.mjs
+     studio/design-kit.css studio/design-bridge.css studio/discover-board.mjs \
+     studio/taxonomy.mjs
    ```
 
    `diff.mjs` → `artefact-model.mjs` → `promql-canon.mjs` → `promql.mjs` is
