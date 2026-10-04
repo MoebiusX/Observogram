@@ -276,11 +276,11 @@ for a throwaway open sandbox.)
    wherever you need (`HOST=0.0.0.0`). Mutating `/api/*` routes (crawl,
    draft, validate-register, deploy, verify, reset) then require
    `Authorization: Bearer <secret>`; read routes stay open. Set
-   `OBSERVOGRAM_API_TOKEN_LABEL=<team-or-owner>` to stamp the deploy audit
-   log with the token's ownership — the secret itself never lands in any
-   log. The label must not be a user's login: the audit log names the
-   bearer by it (default `token`), and the identity API refuses a new user
-   by that name. A token configured on a fresh workspace suppresses the
+   `OBSERVOGRAM_API_TOKEN_LABEL=<team-or-owner>` to stamp `deploys.jsonl`
+   and the audit ([The Audit](#the-audit)) with the token's ownership — the
+   secret itself never lands in any log. The label must not be a user's
+   login: the audit names the bearer by it (default `token`), and the
+   identity API refuses a new user by that name. A token configured on a fresh workspace suppresses the
    default-admin seed: the token is the expressed auth intent.
 3. **Exposed without any auth.** The server **refuses to start** with a
    clear message. `OBSERVOGRAM_INSECURE_NO_AUTH=1` overrides knowingly (it
@@ -457,8 +457,8 @@ the server registers, and each route's first handler is its guard.
 |---|---|
 | `viewer` | every read (`GET`) in the org |
 | `operator` | every existing write in the org as well: scan, draft, register, instantiate and compile, deploy, verify and roll back, retrofeed, journeys, the live refresh, RESET, and the org's services and environments ([Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)) |
-| `admin` | the org's name, members and MCP endpoints as well ([the identity API](#the-identity-api), [Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)) |
-| owner | a deployment-level flag, not an org role: an owner acts as `admin` in every org, plus users, orgs and the join role ([the identity API](#the-identity-api)) |
+| `admin` | the org's name, members and MCP endpoints as well ([the identity API](#the-identity-api), [Services, Environments And MCP Endpoints](#services-environments-and-mcp-endpoints)), and the org's audit (`GET /api/audit`, [The Audit](#the-audit)) |
+| owner | a deployment-level flag, not an org role: an owner acts as `admin` in every org, plus users, orgs and the join role ([the identity API](#the-identity-api)) and the deployment's audit (`GET /api/audit?scope=all`) |
 
 The role is the membership **of the request's org** (`X-Observogram-Org`,
 `?org=`). `orgs.json` roles are mapped on import: `admin` / `owner` →
@@ -809,6 +809,120 @@ with their URLs, and never changes an endpoint.
   `{ id, name, origin }`. The MCP URL itself and the variable's name go to
   operators and above (`GET /api/mcp-endpoints`); the token's value to
   nobody.
+
+### The Audit
+
+Every change a principal makes through the server is one row in the store's
+`audit` table ([docs/STORE_PLAN.md](docs/STORE_PLAN.md) §5): an action
+`<kind>.<verb>` — who (`actor`), when (`at`), in which org (`orgId`; `null`
+for a deployment-level change: a user, an org, an owner grant, a store
+import), on what (`targetKind`, `targetId`) and a small, bounded `detail`
+(it must serialize to at most 8192 characters; every free-text field is cut
+to 200). The table is append-only — a trigger refuses every `UPDATE` and
+`DELETE` (`audit is append-only`) — and no row carries a secret, an email,
+or, in the deploy, journey and live rows, a URL beyond its origin. The route
+table ([`server/route-table.mjs`](server/route-table.mjs)) says per route
+which actions a successful call writes; nothing is implied, and a refused
+request writes no row.
+
+**The actor** is the principal's stable identifier: a user's `login` (a
+local username, or `<issuerKey>#<sub>` for an OIDC user — never the email,
+an unverified claim the IdP re-syncs), the bearer's label
+(`OBSERVOGRAM_API_TOKEN_LABEL`, default `token`), `local` on a server
+without sign-in; `system` for a join made outside a route (`user.jit`,
+`membership.jit`, `owner.bootstrap`, `owner.first-local-user`) and `cli`
+for `npm run users` / `npm run orgs`. **The same actor is stamped in
+`deploys.jsonl`**: a new line names the login where it named the email (an
+OIDC deployer who was `ada@acme.test` is `https://idp.example/realms/acme#9a3e0f`;
+a local user with an email on her row is `ada`), so every viewer of
+`GET /api/deploys` and of the Neuron evidence string sees logins. Old lines
+keep their actor; the bearer's label and `local` are unchanged. Where a
+display name is wanted, the `users` row has `email` and `name` by `login`
+(`GET /api/admin/users` for owners, the member list for admins).
+
+**What an org admin sees** (`GET /api/audit`): every row of their org,
+whoever the actor — including an owner who acted in the org without being
+a member, the bearer, `system`. An admin cannot list the deployment's
+users; the audit does show them the login of every owner who ever changed
+their org, because who changed your org is yours to know. A deployment row
+(`orgId: null`) is an owner's only.
+
+**The file-first rows.** The deploy routes, the journey capture and run,
+and the live refresh change a file of the org's, not a table, so their row
+is written after the file ([`server/audit-after.mjs`](server/audit-after.mjs)),
+in a transaction of its own. `deploys.jsonl` stays the deploy file of
+record, keyed by the `deployId` the row names: the row carries counts and
+the MCP **origin**, never the URL, an item's error or a tool name.
+
+| Route | Action | `targetId` | `detail` |
+|---|---|---|---|
+| `POST /api/packs/:id/deploy/:target` | `deploy.run` | the new `deployId` | `{ pack: { id, version }, env, target: { product, version, folder }, mode, dryRun, origin, mcpEndpoint: { id, name } \| null, items, ok, failed, tookMs }` — on a 502 too (`ok: 0, failed: 1`), as the file records it |
+| `POST /api/packs/:id/deploy-bulk` | `deploy.bulk` | the `deployId` | the same, plus `snapshot` (the pre-deploy snapshot's status) |
+| `POST /api/deploys/:deployId/rollback` | `deploy.rollback` | the rollback's own `deployId` | `{ rollbackOf, pack, env, dryRun, origin, mcpEndpoint, items, ok, failed, manual, tookMs }` |
+| `POST /api/deploys/:deployId/verify` | `deploy.verify` | the verified `deployId` | `{ outcome, alignment, attempts }` (`outcome` cut to 100 characters; the summary and transitions stay in the line) |
+| `POST /api/journeys/capture` | `journey.capture` | the journey name | `{ packA, packB, live, env, service, scopeMode }` — the two pack ids and whether Pack B was saved as a live `mcp:` source, never the paths or the MCP URL the file holds |
+| `POST /api/journeys/:name/run` | `journey.run` | the journey name | `{ startedAt, outcome, alignmentPct, gradeScore, gradePass, breaches, tookMs }` — **one row per attempt past the 404**: a run that fails from the studio leaves a row with `outcome: "error"`, or `"vantage-lost"` when a live source lost its vantage (the engine wrote a run record and may have notified), the four record fields `null`; never the error's message |
+| `POST /api/refresh-live` | `live.refresh` | the MCP origin | `{ mcpEndpoint, refreshedAt, servicesDiscovered, toolsFailed }` (counts) |
+
+When one of the two writes fails: the operation stands. A row the store
+refused (a blocked insert, a `detail` over 8192 characters) puts
+`auditError` with the store's message on the response and one line on
+stderr (`[deploy-bulk]   audit row failed: … (the operation stands;
+deploy.bulk dep_… is not on the record)`); a line that could not be appended (disk
+full, `deploys.jsonl` a directory) still gets its row, flagged
+`detail.fileError: true`, so the record of a deploy never vanishes with the
+file — the verify's 500 carries its flagged row the same way. A request
+refused before the MCP was contacted (400, 404, 409, 412) writes neither;
+a capture, run or refresh whose file write threw writes no row (nothing of
+the org's changed), the run's `vantage-lost` path excepted. CLI runs
+(`packc journey run`, the CronJob) are not audited: the CLI never opens the
+database.
+
+**Reading it — `GET /api/audit`** (`admin`). An org admin reads the rows of
+the request's org (`X-Observogram-Org`, `?org=`): `scope=org`, the only
+scope an admin may ask for. An owner reads the deployment's: `scope=all`
+(the default for an owner: every org's and the deployment's rows in one
+sequence), `scope=org` (the request's org — the org selector picks it, as
+everywhere; `?org=` is never a filter) or `scope=deployment` (the rows with
+no org). An admin asking `scope=all` or `scope=deployment` is refused, 400:
+`the deployment's audit (scope=deployment, scope=all) is an owner's: as an
+admin of org 'acme' you read its rows (scope=org, the default) — drop scope,
+or ask an owner`. The filters, each optional, ANDed: `actor` (exact — a
+login, the bearer's label, `local`, `system`), `action` (`<kind>.<verb>`),
+`kind` (every action of a kind: `deploy`, `pack`, `mcp_endpoint`, …),
+`targetKind`, `targetId` (a `deployId`, a journey name, a pack id, a
+login), `since` / `until` (`2026-10-04` or `2026-10-04T09:00:00Z`;
+`at >= since`, `at < until`), `limit` (1–500, default 100). Rows come
+newest first; `next` is the `seq` of the page's last row when another page
+exists, else `null` — no more, never "try again"; send it back as
+`before=` for the next page, with the same filters. Every refusal is a 400
+whose text names the way out (`limit must be an integer from 1 to 500`,
+`since must be a date or a UTC time: 2026-10-04 or 2026-10-04T09:00:00Z`,
+`scope is org, deployment or all`); an empty value is "not given"; unknown
+parameters are ignored. The response is `{ ok, scope, org, limit, rows,
+next }` — `org` the request's org for `scope=org`, `null` otherwise — and
+each row `{ seq, at, orgId, actor, action, targetKind, targetId, detail }`.
+
+```bash
+# an admin of acme: the org's deploy rows since a date, 50 a page
+curl -sS -b cookies.txt -H 'X-Observogram-Org: acme' \
+  'http://127.0.0.1:8000/api/audit?kind=deploy&since=2026-09-28&limit=50'
+# the next page: the previous answer's next as before=
+curl -sS -b cookies.txt -H 'X-Observogram-Org: acme' \
+  'http://127.0.0.1:8000/api/audit?kind=deploy&since=2026-09-28&limit=50&before=318'
+# an owner: the deployment-level rows only (users, orgs, owners, imports)
+curl -sS -b cookies.txt 'http://127.0.0.1:8000/api/audit?scope=deployment'
+```
+
+The listing holds every login and every MCP origin of the deployment, so
+the route is closed where the member and user lists are: on an exposed
+server without sign-in (403 `posture`, `the audit API is closed on a server
+bound to …`) and, on a loopback server without sign-in, answered only to a
+request sent straight to a loopback address (`on a server without sign-in
+the audit API answers only requests sent straight to a loopback address …`),
+as [the identity API](#the-identity-api) is. Below `admin` it is the
+guard's 403 `role`; the bearer is an operator and cannot read it. The read
+writes no row.
 
 ### Run In Docker Or Kubernetes
 
@@ -1910,14 +2024,18 @@ open, exposed posture); every other `GET` is `viewer` and every other route
 | `POST` | `/api/crawl` | Draft a pack from uploaded repo files |
 | `POST` | `/api/crawl-github` | Draft a pack from a GitHub URL |
 | `POST` | `/api/draft-from-mcp` | Draft a live pack from an MCP endpoint: `mcpUrl` (and `mcpAuth`), or `mcpEndpointId` — one of the org's MCP endpoint records, its read token from the variable the record names when the request sends none; the answer's `mcpEndpoint` says which |
-| `POST` | `/api/packs/:id/deploy-bulk` | Deploy selected compiled artifacts (`mcpUrl` or `mcpEndpointId` for the URL; the write token is the request's `mcpAuth`) |
-| `POST` | `/api/packs/:id/deploy/:target` | Deploy one compiled target (`mcpUrl` or `mcpEndpointId` for the URL; the write token is the request's `mcpAuth`) |
+| `POST` | `/api/packs/:id/deploy-bulk` | Deploy selected compiled artifacts (`mcpUrl` or `mcpEndpointId` for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.bulk` |
+| `POST` | `/api/packs/:id/deploy/:target` | Deploy one compiled target (`mcpUrl` or `mcpEndpointId` for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.run` |
+| `GET` | `/api/deploys?pack=&limit=` | The org's deploy records from `deploys.jsonl`, newest first, the latest verify merged in; `actor` is the deployer's login (an OIDC deployer as `<issuerKey>#<sub>`), the bearer's label or `local` |
+| `POST` | `/api/deploys/:deployId/verify` | Record a post-deploy verification (`outcome`, `alignment`, `attempts`, `summary`, …) against a deploy; an audit row: `deploy.verify` |
+| `POST` | `/api/deploys/:deployId/rollback` | Roll a deploy back from its snapshot (`mcpUrl` or `mcpEndpointId` for the URL; the write token is the request's `mcpAuth`); an audit row: `deploy.rollback` |
 | `DELETE` | `/api/uploads` | Clear uploaded/crawled/drafted packs |
 | `GET` | `/api/journeys` | Saved journeys with their `schedule` (parsed: `cron`, `timezone`, `every`, `cadenceMs`, `cadenceNote`), `stackBudget`, `notify` (env-var names + policy, never a URL) and the last run (outcome, alignment, grade, breaches, `stack` summary, `chains` summary, `transition` counts, `topCause`, `vantageChanged`, `notify` `{ status, httpStatus, reason }`, `inventory` `{ status, reason, environment, kinds }`) |
 | `GET` | `/api/journeys/:name/runs?limit=` | Run history, newest first (the drift-over-time series) |
 | `GET` | `/api/journeys/:name/schedule` | The parsed `schedule:` and the cron / schtasks / GitHub Actions / CronJob snippets (env var names only; `placeholder: true` without a schedule) |
-| `POST` | `/api/journeys/:name/run` | Run a saved journey now |
-| `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file |
+| `POST` | `/api/journeys/:name/run` | Run a saved journey now; an audit row: `journey.run`, on a failed run too |
+| `POST` | `/api/journeys/capture` | Freeze the current A/B session as a journey file; an audit row: `journey.capture` |
+| `POST` | `/api/refresh-live` | Fetch the org's live pack from an MCP endpoint (`mcpUrl` or `mcpEndpointId`); an audit row: `live.refresh` |
 | `GET` | `/api/services` | The org's service records, by slug, each with its environments (their MCP endpoint as `{ id, name, origin }`) and the packs linked to it (`id`, `label`, `source`, `role`) |
 | `POST` | `/api/services` | A service record (201): `{ name, slug?, owners?, tier?, description? }`; the slug defaults to the name's key and is fixed; `tier` is `tier-1`, `tier-2`, `tier-3` or `null` (graded by the pack) |
 | `GET` | `/api/services/:id` | One service record with its environments and packs |
@@ -1949,7 +2067,7 @@ open, exposed posture); every other `GET` is `viewer` and every other route
 | `POST` | `/api/org/members` | Add an existing user by login or verified email (201), or change a member's role |
 | `PATCH` | `/api/org/members/:userId` | Change a member's role |
 | `DELETE` | `/api/org/members/:userId` | Remove a member |
-| `GET` | `/api/audit?scope=&actor=&action=&kind=&targetKind=&targetId=&since=&until=&limit=&before=` | The org's audit rows, newest first (admins; an owner reads every org's and the deployment's with `scope=all` or `scope=deployment`); `next` pages. Closed in the open, exposed posture. |
+| `GET` | `/api/audit?scope=&actor=&action=&kind=&targetKind=&targetId=&since=&until=&limit=&before=` | The org's audit rows, newest first (admins; an owner reads every org's and the deployment's with `scope=all` or `scope=deployment`); `next` pages. Closed in the open, exposed posture ([The Audit](#the-audit)). |
 | `POST` | `/auth/signout-others` | Sign out my other sessions: this browser's cookie is re-issued, every other one refused |
 
 ## Repository Map

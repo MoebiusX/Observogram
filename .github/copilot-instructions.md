@@ -78,10 +78,15 @@ them; change them at the source and update the gate in the same commit.
   `OBSERVOGRAM_ORG_<ORG>_*` token variable, an MCP target picked by
   `mcpEndpointId` — lives once in `server/service-admin.mjs` (over
   `server/store/mcp-endpoints.mjs`), applied by `server/routes/services.mjs`
-  and the refresh, draft and deploy routes. A refusal's `kind` (invalid /
-  missing / conflict → 400 / 404 / 409) and the texts are pinned in
-  `server/test-store.mjs`, `server/test-service-admin.mjs` and
-  `server/test-services-api.mjs`; never fork a rule into a route.
+  and the refresh, draft and deploy routes; the audit reader's query rule
+  — the scope by principal, every filter, the 500-row cap — lives once in
+  `server/audit-admin.mjs` (`GET /api/audit`, `server/routes/audit.mjs`),
+  and the file-first routes write their row through
+  `server/audit-after.mjs`, after the file, never inside the operation. A
+  refusal's `kind` (invalid / missing / conflict → 400 / 404 / 409) and the
+  texts are pinned in `server/test-store.mjs`,
+  `server/test-service-admin.mjs`, `server/test-services-api.mjs` and
+  `server/test-audit-api.mjs`; never fork a rule into a route.
 - **Browser-safety rule:** modules under `tools/lib/` (including
   `tools/lib/contracts/`) are imported by the studio in the browser — they
   must not import `node:*` APIs or read `process.env`. Node-only code lives

@@ -19,12 +19,12 @@ designed so this stream attaches without re-architecture:
 
 | Seam | What exists today | Where | Role in this plan |
 |---|---|---|---|
-| **Actor** | `requireAuth` middleware enforces `Authorization: Bearer` on mutating routes when `OBSERVOGRAM_API_TOKEN` is set, and stamps `req.observogramActor` (today: a token *label*) into every audit record | `server/index.mjs` ~392–418 | identity replaces the label with a real subject — **one assignment changes** |
+| **Actor** | `requireAuth` middleware enforces `Authorization: Bearer` on mutating routes when `OBSERVOGRAM_API_TOKEN` is set, and stamps `req.observogramActor` (today: a token *label*) into every audit record | `server/index.mjs` ~392–418 | identity replaces the label with a real subject — **one assignment changes**. *Delivered (STORE_PLAN slice 5): the subject is the store row's `login`, in the audit and in `deploys.jsonl`* |
 | **Fail-closed exposure** | binding beyond loopback without a token refuses to start | `server/index.mjs` `start()` ~2317 | becomes the hosted front-door invariant: no identity configured → no network exposure |
 | **Tenancy root** | ALL state is file-rooted under one function: `workspaceRoot()` → packs registry, `deploys.jsonl`, `snapshots/`, `journeys/`, `runs/` | `server/workspace.mjs:32`, `tools/lib/journey.mjs:50` | tenancy = making this function answer *per request* instead of per process |
 | **Service scoping** | packs carry `bindings.service`; the studio's SERVICE selector and diff scope-modes already partition by service | studio header, adapter | the unit a role grant will reference |
 | **Secrets posture** | MCP write tokens are per-request pass-through, never stored; audit records ownership label only | deploy routes | the rule this plan keeps, extended per-org |
-| **Audit** | append-only `deploys.jsonl` with deployId, actor, outcomes, verify write-back | `server/workspace.mjs` | gains real identities for free at Stage 1 |
+| **Audit** | append-only `deploys.jsonl` with deployId, actor, outcomes, verify write-back | `server/workspace.mjs` | gains real identities for free at Stage 1 — *and one audit row per append (slice 5)* |
 
 Nothing in this plan touches the engines, and the studio stays a thin
 vanilla-JS client.

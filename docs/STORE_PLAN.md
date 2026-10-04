@@ -56,8 +56,27 @@ changes behind the identity API's defences (the route table's `direct` /
 `closedAs`); the MCP URL word rule and the per-org token variable with the
 longest-prefix owner, re-checked at request time; the conformance tier from
 the service record, `declaredTier` the graded tier and `tier.mismatch`;
-`mcpEndpointId` in refresh-live, draft-from-mcp and the deploy routes).
-Slice 5 is next.*
+`mcpEndpointId` in refresh-live, draft-from-mcp and the deploy routes).*
+
+*Slice 5 is built (`codex/audit`): the audit. The file-first routes —
+deploy, deploy-bulk, rollback, verify, the journey capture and run, the
+live refresh — write their row after their file (`server/audit-after.mjs`;
+`auditError` on the response when the insert failed, a row flagged
+`fileError` when the `deploys.jsonl` append did); `journey.run` is written
+for every attempt past the 404 (`outcome` `error` or `vantage-lost` on a
+502); the actor in `deploys.jsonl` is the principal's login, as the rows'
+is, so viewers of `GET /api/deploys` see logins; `GET /api/audit`
+(`server/routes/audit.mjs`, the rule in `server/audit-admin.mjs`) reads the
+org's rows to its admins and the deployment's to owners, filtered and
+paged by `next`, closed where the member and user lists are (`exposed:
+'refuse'`, `direct`, `closedAs: 'the audit API'`); `listAudit` gained the
+`kind` prefix predicate and `writeAudit` the 8192-character detail bound;
+the route table lost `later`. The design's §19 decisions were all taken as
+recommended: a CLI reader as the last, droppable commit; the `journey.run`
+row on a 502; the `fileError` row; no email in any row (§5's sentence
+below is the one plan sentence this slice changed); viewers see logins;
+an org admin sees a non-member owner's actor as is. Slice 6 (6a, the
+Services home) is next.*
 
 ## 0 · Status quo — what exists and what is missing
 
@@ -1037,7 +1056,8 @@ Stage 3 ships **before** the settings surface.
     `<issuerKey>#<sub>`. That replaces today's `session.email ||
     session.sub`, an unverified claim under OIDC, in the audit and in
     `deploys.jsonl`. The bearer keeps its label and the open posture keeps
-    `local`. Email goes in `detail`, for display only.
+    `local`. No row carries the email: it is an unverified, re-synced
+    claim; a reader joins the `users` row by `login` (6b).
   - **A store change and its audit rows commit in the same `tx()`.** For
     example, `packs.register()` writes the `packs` rows together with
     their `pack.register`, `pack.evict` and `pack.replace` rows.
