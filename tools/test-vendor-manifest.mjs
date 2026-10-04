@@ -31,7 +31,8 @@ const pkg = JSON.parse(read('package.json'));
 // The vendorable set, pinned like EXPECTED_TOOL_SURFACE in test-contract-guard.mjs: a purity rule that grows a
 // false positive, or a module that leaves the set, fails here by name instead of quietly shrinking the manifest.
 const EXPECTED_MODULES = [
-  'tools/lib/adapter.mjs', 'tools/lib/alert-routes.mjs', 'tools/lib/artefact-model.mjs', 'tools/lib/assurance-rules.mjs',
+  'tools/lib/adapter.mjs', 'tools/lib/alert-routes.mjs', 'tools/lib/artefact-classify.mjs', 'tools/lib/artefact-model.mjs',
+  'tools/lib/assurance-rules.mjs',
   'tools/lib/backend-products.mjs', 'tools/lib/blast-radius.mjs', 'tools/lib/burn-rules.mjs', 'tools/lib/chain-history.mjs',
   'tools/lib/compile.mjs', 'tools/lib/conformance.mjs', 'tools/lib/contracts/mcp-capabilities.mjs',
   'tools/lib/contracts/response-shapes.mjs', 'tools/lib/contracts/stack-self-metrics.mjs', 'tools/lib/crawler.mjs',

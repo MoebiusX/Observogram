@@ -40,9 +40,33 @@
       "npm": [],
       "changedSinceRelease": false
     },
+    "tools/lib/artefact-classify.mjs": {
+      "sha256": "a00440b810c9b29c1bb211b25ead2e20adbb5615a2326de2254752c706a43db8",
+      "bytes": 16695,
+      "exports": [
+        "DEFINES_RULES",
+        "FAMILIES",
+        "FAMILY_HOME",
+        "ID_MATCH_LENGTH",
+        "ID_RULES",
+        "PATTERN_MAX_LENGTH",
+        "TAXONOMY_VERSION",
+        "activeTaxonomy",
+        "classifyArtefact",
+        "compileTaxonomy",
+        "configureTaxonomy",
+        "describeTaxonomy",
+        "familyOf",
+        "validateTaxonomy"
+      ],
+      "imports": [],
+      "npm": [],
+      "changedSinceRelease": true,
+      "releasedExports": null
+    },
     "tools/lib/artefact-model.mjs": {
-      "sha256": "7f0b447800d23c815f056d099ae761bc805d53baf720afd0187cdab688ea50be",
-      "bytes": 26986,
+      "sha256": "e9bc0ee9ddd62057d2b141386097d98c4d7ed359175733fd482d4c359edbbc77",
+      "bytes": 25227,
       "exports": [
         "REDACTED_CHANNEL_VALUE",
         "UNRESOLVED_CHANNEL_PREFIX",
@@ -58,6 +82,7 @@
         "modelOf"
       ],
       "imports": [
+        "tools/lib/artefact-classify.mjs",
         "tools/lib/promql-canon.mjs"
       ],
       "npm": [],

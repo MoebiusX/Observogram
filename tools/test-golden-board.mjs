@@ -9,7 +9,8 @@
  * head (boardHeadHtml) and one band of groups per layer (boardGroupsHtml),
  * the entries built exactly as layerEntries()/discoverModel() build them —
  * and every artefact's family (tools/lib/artefact-model.mjs classify) is
- * written beside the rule that decided it. Both must be byte-identical to
+ * written beside the rule that decided it (tools/lib/artefact-classify.mjs
+ * classifyArtefact().via). Both must be byte-identical to
  * the committed goldens:
  *
  *   tools/fixtures/golden/board/<pack>.board.html
@@ -36,6 +37,7 @@ import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { SPEC_DIR } from './lib/validator.mjs';
 import { adapt } from './lib/adapter.mjs';
 import { classify } from './lib/artefact-model.mjs';
+import { classifyArtefact } from './lib/artefact-classify.mjs';
 import { createHarness } from './lib/harness.mjs';
 import { LAYER_DEFS, L4_SUBGROUPS } from '../studio/constants.mjs';
 import { boardHeadHtml, boardGroupsHtml } from '../studio/discover-board.mjs';
@@ -89,20 +91,13 @@ export function renderBoard(pack, { env = '' } = {}) {
   return `${head}\n${groups.join('\n')}\n`;
 }
 
-// Which rule decided the family (tools/lib/artefact-model.mjs classify):
-// the canonical `defines` symbol, else the id, else none.
-const DEFINES_PREFIXES = ['slis.', 'slos.', 'telemetry.backends.', 'queries.derived_views.', 'dashboards.'];
-function viaOf(a, family) {
-  if (DEFINES_PREFIXES.some(p => String(a?.defines || '').startsWith(p))) return 'defines';
-  return family === 'unknown' ? 'none' : 'id';
-}
-
 export function familiesOf(pack) {
   const out = {};
   for (const def of LAYER_DEFS) {
     for (const e of boardEntries(pack, def.id)) {
       const family = classify(e.a);
-      out[`${def.id}:${e.sub ?? ''}:${e.a.id}`] = { family, via: viaOf(e.a, family) };
+      const { via } = classifyArtefact(e.a);
+      out[`${def.id}:${e.sub ?? ''}:${e.a.id}`] = { family, via };
     }
   }
   return Object.fromEntries(Object.entries(out).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)));

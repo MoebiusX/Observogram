@@ -29,7 +29,8 @@ prose contracts that follow.
 | Module | Dependencies | Notes |
 | --- | --- | --- |
 | [`tools/lib/diff.mjs`](../tools/lib/diff.mjs) | imports `artefact-model.mjs` | pack arithmetic — the diff buckets everything downstream consumes |
-| [`tools/lib/artefact-model.mjs`](../tools/lib/artefact-model.mjs) | imports `promql-canon.mjs` | behavioural identity + contract projection — `identityKeyOf`, `behaviorOf`, `deltasOf`, `classify` |
+| [`tools/lib/artefact-model.mjs`](../tools/lib/artefact-model.mjs) | imports `promql-canon.mjs`, `artefact-classify.mjs` | behavioural identity + contract projection — `identityKeyOf`, `behaviorOf`, `deltasOf`, `classify` (delegates to `familyOf`) |
+| [`tools/lib/artefact-classify.mjs`](../tools/lib/artefact-classify.mjs) | zero-import, no Node APIs | the artefact taxonomy — `FAMILIES`, `FAMILY_HOME`, `ID_RULES`, `classifyArtefact` (type → defines → override ids → id prefix), `compileTaxonomy` / `configureTaxonomy` for the operator override |
 | [`tools/lib/promql-canon.mjs`](../tools/lib/promql-canon.mjs) | imports `promql.mjs` | parser-proven PromQL canonicalisation |
 | [`tools/lib/promql.mjs`](../tools/lib/promql.mjs) | pure ESM, no Node APIs | PromQL tokeniser/dependency reader |
 | [`tools/lib/protocols.mjs`](../tools/lib/protocols.mjs) | pure data | the versioned protocol/feature canon |
@@ -214,7 +215,7 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
 
    ```sh
    git -C observogram diff <UPSTREAM_SHA>..HEAD -- \
-     tools/lib/diff.mjs tools/lib/artefact-model.mjs \
+     tools/lib/diff.mjs tools/lib/artefact-model.mjs tools/lib/artefact-classify.mjs \
      tools/lib/promql-canon.mjs tools/lib/promql.mjs \
      tools/lib/protocols.mjs \
      tools/lib/stack-evidence.mjs tools/lib/contracts/stack-self-metrics.mjs \
@@ -227,7 +228,8 @@ Views import the live object as `import { host as appHost } from './host.mjs'`
    ```
 
    `diff.mjs` → `artefact-model.mjs` → `promql-canon.mjs` → `promql.mjs` is
-   one import chain: always re-copy these four together. A mixed-generation
+   one import chain (`artefact-model.mjs` also pulls `artefact-classify.mjs`):
+   always re-copy these five together. A mixed-generation
    copy (e.g. a newer `diff.mjs` over an older identity model) is exactly the
    silent drift this contract exists to prevent — a downstream studio's 2026-08
    collision report was filed from such a copy, against engine code this repo
