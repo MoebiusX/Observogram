@@ -4,7 +4,7 @@
 // Without The Server").
 //
 //   node tools/build-studio-bundle.mjs [--pack <file> [--id <id>] [--label <text>] [--description <text>]]…
-//        [--pack-url <url> [--id <id>] [--label <text>]]… [--out dist/studio/index.html]
+//        [--pack-url <url> [--id <id>] [--label <text>] [--description <text>]]… [--out dist/studio/index.html]
 //        [--no-remote-fonts] [--check] [--json]
 //
 // --pack is parsed (YAML or .json) and validated against the spec schema at
@@ -53,7 +53,7 @@ export const ENTRIES = ['studio/app.mjs', 'studio/static-backend.mjs'];
 export const CONFIG_ID = 'observogram-static-config';
 export const DEFAULT_OUT = 'dist/studio/index.html';
 const NOTICE_CSS = 'static-backend.css';
-const usage = `usage: build-studio-bundle.mjs [--pack <file> [--id <id>] [--label <text>] [--description <text>]]… [--pack-url <url> [--id <id>] [--label <text>]]… [--out ${DEFAULT_OUT}] [--no-remote-fonts] [--check] [--json]`;
+const usage = `usage: build-studio-bundle.mjs [--pack <file> [--id <id>] [--label <text>] [--description <text>]]… [--pack-url <url> [--id <id>] [--label <text>] [--description <text>]]… [--out ${DEFAULT_OUT}] [--no-remote-fonts] [--check] [--json]`;
 
 // ---------- the module graph ----------
 

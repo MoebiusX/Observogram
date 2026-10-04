@@ -986,7 +986,7 @@ S3 bucket, a reverse proxy's `root` — builds it as one HTML file:
 # One file: every module, every stylesheet, the packs it names.
 npm run build:studio -- \
   --pack vendor/observability-pack-spec/v1.4/examples/payment-service.pack.yaml --label "Payment service" \
-  --pack my-service.pack.yaml --id my-service \
+  --pack my-service.pack.yaml --id my-service --description "Checkout, orders and the ledger" \
   --out dist/studio/index.html
 
 # A pack the page fetches at its first catalogue read (the host must answer CORS):
@@ -995,6 +995,12 @@ npm run build:studio -- --pack-url https://packs.example.com/orders.pack.yaml --
 # Check the build without writing (also --json): the graph, the stylesheets, the packs.
 npm run build:studio -- --check --pack my-service.pack.yaml
 ```
+
+Each `--pack` / `--pack-url` takes its own `--id` (default: the file name),
+`--label` (default: the pack's `metadata.name`, else the id) and
+`--description` — the catalogue row the bundled studio shows, field for field
+what a server-side pack row carries. `--no-remote-fonts` drops the Google Fonts
+links for an offline host.
 
 What the file is (`tools/build-studio-bundle.mjs`): `studio/index.html` with
 every stylesheet inlined in place, an inline **import map** whose keys are the

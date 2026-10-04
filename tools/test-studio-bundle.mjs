@@ -344,7 +344,30 @@ test('T3 the CLI: writes, --check writes nothing, --json, --no-remote-fonts, a p
     assert.match(u.stderr, /usage: build-studio-bundle\.mjs/);
   }
   assert.equal(cli(['--help']).status, 0);
-  assert.deepEqual(parseArgs(['--pack', 'a.yaml', '--id', 'a', '--label', 'A', '--pack-url', 'https://x/y.yaml', '--check']).packs, [{ file: 'a.yaml', id: 'a', label: 'A' }, { url: 'https://x/y.yaml' }]);
+  assert.deepEqual(parseArgs(['--pack', 'a.yaml', '--id', 'a', '--label', 'A', '--description', 'D', '--pack-url', 'https://x/y.yaml', '--description', 'E', '--check']).packs,
+    [{ file: 'a.yaml', id: 'a', label: 'A', description: 'D' }, { url: 'https://x/y.yaml', description: 'E' }]);
+});
+
+test('T3b every flag the CLI accepts is in its usage line, the README synopsis and DOWNSTREAM §9/§10', () => {
+  const src = readFileSync(join(DEFAULT_ROOT, 'tools', 'build-studio-bundle.mjs'), 'utf8');
+  const flags = [...new Set([...src.matchAll(/a === '(--[a-z-]+)'/g)].map(m => m[1]))];
+  assert.ok(flags.includes('--description') && flags.length >= 8, flags.join(' '));
+  const usageLine = src.match(/^const usage = `([^`]*)`/m)[1];
+  const readme = readFileSync(join(DEFAULT_ROOT, 'README.md'), 'utf8');
+  const readmeSection = readme.slice(readme.indexOf('### Serve The Studio Without The Server'));
+  const downstream = readFileSync(join(DEFAULT_ROOT, 'docs', 'DOWNSTREAM.md'), 'utf8');
+  const row = downstream.split('\n').find(l => l.startsWith('| Studio bundle (W6) |'));
+  const embedding = downstream.slice(downstream.indexOf('## 10. Embedding the studio'));
+  assert.ok(readmeSection.length > 0 && row && embedding.length > 0, 'the three documented places exist');
+  const packFlags = ['--pack', '--pack-url', '--id', '--label', '--description'];
+  for (const f of flags) {
+    if (f === '--help') continue;
+    for (const [name, text] of [['usage line', usageLine], ['README', readmeSection]]) assert.ok(text.includes(f), `${f} is documented in the ${name}`);
+    if (!packFlags.includes(f)) continue; // --check/--json/--out/--no-remote-fonts are the CLI's, not the pack catalogue's
+    for (const [name, text] of [['DOWNSTREAM §9 row', row], ['DOWNSTREAM §10', embedding]]) assert.ok(text.includes(f), `${f} is documented in the ${name}`);
+  }
+  // --description is a per-pack option of both --pack and --pack-url.
+  assert.match(usageLine, /--pack-url <url> \[--id <id>\] \[--label <text>\] \[--description <text>\]/);
 });
 
 // ---------- T4 inert by default ----------
