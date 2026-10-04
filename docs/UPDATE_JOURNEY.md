@@ -704,3 +704,41 @@ default-behaviour change, acknowledged in the CHANGELOG). Inert when unused:
 nothing under `server/`, `tools/lib` or the live studio changes and a build
 leaves every source file byte-identical (proven), so the goldens are
 byte-identical. Tests: 745 → 753 (`tools/test-studio-bundle.mjs`).
+
+### Rebadge batch 2, B1: bundle parity
+
+**B1 — the taxonomy and the brand baked into the bundle.** Delivered as
+`--taxonomy` and `--brand` on `tools/build-studio-bundle.mjs` and a
+`config.taxonomy`-aware, product-aware `studio/static-backend.mjs` (README,
+"Serve The Studio Without The Server", *Bake the seams*;
+[`DOWNSTREAM.md`](DOWNSTREAM.md) §10). Decisions: one function per seam on
+both sides — the server's own `validateTaxonomy` and its texts for the
+taxonomy, the server's own `loadBrand` and `brandShellHtml` for the brand —
+so "renders identically" holds by construction and nothing under `server/` or
+`tools/lib` changes. The `OBSERVOGRAM_BRAND_*` scalars are honoured by the
+build (the server's loader applies them on top of the file; the one-field
+rebadge the README promises is `OBSERVOGRAM_BRAND_NAME=Acme npm run
+build:studio`), and so are `OBSERVOGRAM_TAXONOMY` and `OBSERVOGRAM_BRAND_FILE`
+when the flags are absent — a build machine with the server's env bakes what
+the server shows, the summary line and `--json` always say so, and `env -u`
+is the escape hatch (no `--no-brand`: every flag costs three documented
+places). Root-relative brand URLs are refused with the field and the fix
+named — the bundle has no server behind it, and the leftover guard would
+refuse the favicon anyway with a worse message; the default hero an unnamed
+brand inherits is exempt, as in every unbranded bundle (documented, not
+fixed). `--json` carries `taxonomy` and `brand` always (`null` when nothing is
+baked): the report already printed every key unconditionally and no golden
+covers it; the bundle bytes are what inert-by-default governs. The shim does
+not configure the classifier itself: the studio's `boot()` binds it from
+`GET /api/taxonomy` exactly as against a server, and the import map gives
+both modules the one `lib/artefact-classify.mjs`. `builtAt` is the only
+non-determinism the build has, so the inert proof pins it and compares a
+no-flag, stripped-env build with the same tree's build with the seams unset
+(byte for byte) — not with the previous tree's, since the shim's source
+changed and is inlined as a `data:` address (outside the import map the two
+are identical, measured). Compare is deferred with its four blockers measured
+and written down in §10 (the inlining is feasible; the port of `/api/diff`,
+the licence embedding, the `node_modules` dependence at build and the
+bare-specifier allowlist are the work). Tests: 843 → 847
+(`tools/test-studio-bundle.mjs` 9 → 13; `tools/test-golden-board.mjs` +4
+goldens, none changed).

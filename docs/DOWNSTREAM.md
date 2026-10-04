@@ -189,9 +189,9 @@ a bump. The surface so far:
 |---|---|---|
 | Backend access (W2) | `OBSERVOGRAM_TRANSPORT_HOOK=<path.mjs \| file:URL>` — a module exporting `prepareRequest({ url, headers })` and/or `fetchImpl(url, init)`, applied to every MCP request of the CLI, the recorder, the probes, journeys and the studio server; `OBSERVOGRAM_ALLOW_LOCAL_MCP=0` still binds the URL it returns | [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md), "Transport hook" |
 | Reverse-proxy identity (W5) | `OBSERVOGRAM_TRUST_PROXY_AUTH=1` + `OBSERVOGRAM_TRUST_PROXY_AUTH_ACK=only-the-proxy-reaches-this-port`, the header names (`PROXY_AUTH_USER_HEADER`, `_EMAIL_HEADER`, `_NAME_HEADER`, `_GROUPS_HEADER`), `PROXY_AUTH_GROUP_ROLES` (`g=role,*=role`, authoritative in `PROXY_AUTH_ORG`), `PROXY_AUTH_JOIN_ROLE`, `PROXY_AUTH_OWNERS` (grant-only), `PROXY_AUTH_SHARED_SECRET` + `_SECRET_HEADER` (required beyond loopback), `PROXY_AUTH_LOGOUT_URL`, `PROXY_AUTH_REALM`; users are `proxy://<realm>#<user>` rows of kind `oidc`; refuses to start without the ACK, beside OIDC, exposed without the secret, or with a join role beside a groups header | README, "Behind a reverse proxy (trusted headers)" |
-| Studio bundle (W6) | `npm run build:studio -- [--pack <file> [--id] [--label] [--description]]… [--pack-url <url> [--id] [--label] [--description]]… [--out dist/studio/index.html] [--no-remote-fonts]` — one static HTML file: every studio and `tools/lib` module in an import map of `data:` URLs, the stylesheets inlined, the packs and the schema as JSON, `studio/static-backend.mjs` answering the read-only pack routes in the browser and `501 denied: 'no-backend'` for the rest; no server configuration at all | §10 below; README, "Serve The Studio Without The Server" |
-| Branding (W4) | `OBSERVOGRAM_BRAND_FILE=<path.json>` — `{ name, shortName?, wordmark?: { lead, tail }, tagline?, titleSuffix?, description?, logo?: { url \| svg }, favicon?, docsUrl?, footer?: { text, links[] }, about?: { changelogUrl }, hero?: { src, alt }, tokens?: { light, dark } }`, and/or the scalars `OBSERVOGRAM_BRAND_NAME` / `_SHORT_NAME` / `_TAGLINE` / `_LOGO_URL` / `_DOCS_URL` / `_FOOTER` / `_ACCENT` / `_ACCENT_DARK`; one `name` derives every other string. Read once at start (a bad file refuses the start), rendered into the shell (`GET /`, `GET /index.html`, the SPA fallback: title, description, header, footer, `#brand-config`, `#brand-tokens`, favicon), the auth pages and, through `#brand-config`, the studio chrome; `node tools/gen-design-tokens.mjs --brand <file> --out <path>` for the tokens as JSON. The brand module (`tools/lib/brand.mjs`) is a listed module: a downstream studio can normalize and render the same object | README, "Rebadge The Studio (brand config)"; [`UI_CONVENTIONS.md`](UI_CONVENTIONS.md) §3 |
-| Artefact taxonomy (W3) | `OBSERVOGRAM_TAXONOMY=<path.json>` — `{ version: 1, types: { <TypeName>: <family> \| { family, label?, role? } }, ids: [{ pattern, family, flags?, label?, role? }] }`, read once at start, installed process-wide for the diff and the graphs, served to the studio at `GET /api/taxonomy`; an unreadable or invalid file refuses the start. The classifier itself (`tools/lib/artefact-classify.mjs`) is a listed module | README, "Classify Typed Packs"; [`ADAPTER.md`](ADAPTER.md), "Id families and the classifier" |
+| Studio bundle (W6) | `npm run build:studio -- [--pack <file> [--id] [--label] [--description]]… [--pack-url <url> [--id] [--label] [--description]]… [--taxonomy <file.json>] [--brand <file.json>] [--out dist/studio/index.html] [--no-remote-fonts]` — one static HTML file: every studio and `tools/lib` module in an import map of `data:` URLs, the stylesheets inlined, the packs and the schema as JSON, `studio/static-backend.mjs` answering the read-only pack routes in the browser and `501 denied: 'no-backend'` for the rest; no server configuration at all; the taxonomy and the brand baked (W3/W4 kept at the edge: `--taxonomy` / `--brand`, or the server's own variables when the flags are absent) | §10 below; README, "Serve The Studio Without The Server" |
+| Branding (W4) | `OBSERVOGRAM_BRAND_FILE=<path.json>` — `{ name, shortName?, wordmark?: { lead, tail }, tagline?, titleSuffix?, description?, logo?: { url \| svg }, favicon?, docsUrl?, footer?: { text, links[] }, about?: { changelogUrl }, hero?: { src, alt }, tokens?: { light, dark } }`, and/or the scalars `OBSERVOGRAM_BRAND_NAME` / `_SHORT_NAME` / `_TAGLINE` / `_LOGO_URL` / `_DOCS_URL` / `_FOOTER` / `_ACCENT` / `_ACCENT_DARK`; one `name` derives every other string. Read once at start (a bad file refuses the start), rendered into the shell (`GET /`, `GET /index.html`, the SPA fallback: title, description, header, footer, `#brand-config`, `#brand-tokens`, favicon), the auth pages and, through `#brand-config`, the studio chrome; `node tools/gen-design-tokens.mjs --brand <file> --out <path>` for the tokens as JSON. The brand module (`tools/lib/brand.mjs`) is a listed module: a downstream studio can normalize and render the same object. Baked into the static bundle by `--brand` (§10) | README, "Rebadge The Studio (brand config)"; [`UI_CONVENTIONS.md`](UI_CONVENTIONS.md) §3 |
+| Artefact taxonomy (W3) | `OBSERVOGRAM_TAXONOMY=<path.json>` — `{ version: 1, types: { <TypeName>: <family> \| { family, label?, role? } }, ids: [{ pattern, family, flags?, label?, role? }] }`, read once at start, installed process-wide for the diff and the graphs, served to the studio at `GET /api/taxonomy`; an unreadable or invalid file refuses the start. The classifier itself (`tools/lib/artefact-classify.mjs`) is a listed module. Baked into the static bundle by `--taxonomy` (§10) | README, "Classify Typed Packs"; [`ADAPTER.md`](ADAPTER.md), "Id families and the classifier" |
 
 A minimal plugin layer for the backend seam is one file the deployment
 points at:
@@ -218,6 +218,7 @@ as one file and serves that:
 node tools/build-studio-bundle.mjs \
   --pack packs/orders.pack.yaml --id orders --label "Orders" --description "Order intake and fulfilment" \
   --pack-url https://packs.example.internal/payments.pack.yaml --label "Payments" \
+  --taxonomy taxonomy.json --brand brand.json \
   --out dist/studio/index.html --no-remote-fonts
 ```
 
@@ -237,7 +238,7 @@ entry names) against a running server:
 
 | Answered in the browser | Answered `501 { ok: false, denied: 'no-backend', error: '<Feature> needs the Observogram server; this studio is a static bundle built without one.' }` |
 |---|---|
-| `GET /api/packs`, `/api/packs/:id` (+ `?env=`), `/canonical` (JSON, `?format=yaml`), `/conformance`, `/compile-catalog`, `/compile-artifact`, `/compile/:target`, `/export.zip` (the Export button downloads it as a Blob); `/api/compile/targets`, `/api/maturity-rubric`, `/api/version`, `/healthz`, `/api/taxonomy` (unconfigured), `/api/examples` and `/api/references` (empty), `/api/live-status` (`present: false`); `/auth/me` → `404 { ok: false, error: 'identity not configured' }` (the open posture) | every other `/api` or `/auth` path and every non-GET: Scan a repo (`/api/crawl*`), Draft from MCP, Refresh from MCP, uploads (`/api/validate`, `/api/uploads`), Compare (`/api/diff`, retrofeed), Deploy, Journeys, Build (`/api/library*`), sign-in (`/auth/*`) |
+| `GET /api/packs`, `/api/packs/:id` (+ `?env=`), `/canonical` (JSON, `?format=yaml`), `/conformance`, `/compile-catalog`, `/compile-artifact`, `/compile/:target`, `/export.zip` (the Export button downloads it as a Blob); `/api/compile/targets`, `/api/maturity-rubric`, `/api/version`, `/healthz`, `/api/taxonomy` (unconfigured, or the document `--taxonomy` baked), `/api/examples` and `/api/references` (empty), `/api/live-status` (`present: false`); `/auth/me` → `404 { ok: false, error: 'identity not configured' }` (the open posture) | every other `/api` or `/auth` path and every non-GET: Scan a repo (`/api/crawl*`), Draft from MCP, Refresh from MCP, uploads (`/api/validate`, `/api/uploads`), Compare (`/api/diff`, retrofeed), Deploy, Journeys, Build (`/api/library*`), sign-in (`/auth/*`) |
 
 Swapping packs is a rebuild: `--pack` inlines a file validated against the
 schema at build time; `--pack-url` names a URL the page fetches at its first
@@ -247,11 +248,47 @@ credential query parameter is refused, because the file is distributed).
 Upgrading is a snapshot bump and a rebuild — the bundle has no configuration
 of its own to migrate.
 
-Compare is excluded on purpose: the server's `GET /api/diff` carries
-`comparePackBranches` (`tools/lib/traceability-graph.mjs`), whose PromQL parser
-is the bare node dependency `@prometheus-io/lezer-promql`; a diff without the
-graph changes the diagnostic grade, and the bundle must never show a verdict
-the server would not. Inlining that dependency's ESM dists is the follow-up
-that would bring Compare offline. The other follow-up is `--split`, a
-directory form without `data:` URLs for a host whose Content-Security-Policy
-forbids them in `script-src`.
+### Rebadge batch 2, B1: baking the taxonomy and the brand
+
+The two seams a server reads from its environment (§9, W3 and W4) are baked
+at build time, through the server's own code on both sides. `--taxonomy
+<file.json>` is read, parsed and validated with `validateTaxonomy`
+(`tools/lib/artefact-classify.mjs`) exactly as `server/taxonomy.mjs` does — a
+bad file fails the build with `--taxonomy: <path>: <reason>`, the server's
+texts — and the document is written into the bundle's config; the shim's
+`GET /api/taxonomy` then answers `{ ok, taxonomy, configured: true }` with
+`Cache-Control: no-store`, the server's shape, and the studio's boot binds it
+as it binds a server's, so Discover groups a typed pack as a server started
+with `OBSERVOGRAM_TAXONOMY` does. `--brand <file.json>` goes through
+`tools/lib/brand-env.mjs loadBrand` — the server's one loader, so the
+`OBSERVOGRAM_BRAND_*` scalars apply on top of the file as on a server — and
+the shell is `brandShellHtml`'s rendering of `studio/index.html` (title,
+description, header, footer, `#brand-config`, `#brand-tokens`, favicon)
+before the stylesheets are inlined, so `#brand-tokens` lands after
+`design-tokens.css` as on the server; the chrome, the notice and the `501`
+texts read the product from `#brand-config`, and a branded bundle renders
+the upstream name nowhere. When a flag is absent the server's variables are
+honoured (`OBSERVOGRAM_TAXONOMY`, `OBSERVOGRAM_BRAND_FILE`, the scalars, the
+legacy `TOMOGRAPH_` spelling): a build machine configured for a server bakes
+what that server shows; build unbranded there with `env -u`. Brand URLs must
+not be server paths — `favicon`, `logo.url` and `hero.src` are an absolute
+URL, a `data:` URL or a path relative to the bundle's own directory (resolved
+against the page's URL by the static host; the builder copies no asset), and
+`/assets/x` fails the build naming the field and the fix. The default brand's
+Discover hero is the server asset `/assets/observogram-hero.png` in every
+unbranded bundle, and an unnamed but configured brand inherits it: the static
+host serves that asset or the brand names its own `hero.src`. The summary
+line and `--json` always say what was baked (`taxonomy: { source, file,
+types, ids } | null`, `brand: { source, file, name } | null` — the paths,
+never the contents; no operator path lands in the bundle). Proof:
+`tools/test-studio-bundle.mjs` T8 compares a `--taxonomy` bundle with a
+server started with the same file (body, header, the board byte-identical to
+the `typed-canonical.mapped` golden of `tools/test-golden-board.mjs`), T8b a
+`--brand` bundle's shell fragments with a branded server's, T4b the
+unconfigured build with the same tree's build with the seams unset (byte for
+byte), T9 the baked bundle in headless Chromium.
+
+Compare stays excluded in this batch; the inlining itself is not the blocker. Measured at the pinned versions (node_modules, 2026-10-04): `@prometheus-io/lezer-promql@0.312.0-rc.0` `dist/index.es.js` 24,549 B (imports `@lezer/lr`, `@lezer/highlight`), `@lezer/lr@1.4.10` `dist/index.js` 71,678 B (imports `@lezer/common`; one guarded `typeof process != 'undefined' && process.env.LOG` read), `@lezer/highlight@1.2.3` `dist/index.js` 29,915 B, `@lezer/common@1.5.2` `dist/index.js` 83,319 B — 209,461 B, 279,284 B as base64 (+7 % on today's 3.9 MB), all ESM (`"type": "module"`, `exports.import`), no CommonJS, no `node:` import; every specifier between them is bare and equal to the package name, so the import map can carry them under their own names with no rewrite, and `import.meta.resolve(<package>)` (Node ≥ 22.16) gives each dist's path without a bundler. What blocks it: (1) `GET /api/diff` (server/index.mjs:556-580 — `diffPacks(aLayered, bLayered, { scopeMode, service })` plus `traceabilityGraph: comparePackBranches(aLayered, bLayered)`, `scopeMode` from the query or the `observogram.diff.scopeMode` annotation) has to be ported to `studio/static-backend.mjs` over two bundled packs and proven T5-style against a server body for body, and the Compare view's server-only limbs (uploads as pack B, live refresh, retrofeed) have to degrade visibly; (2) the bundle would redistribute third-party code under MIT (`@lezer/*`) and Apache-2.0 (`@prometheus-io/lezer-promql`), so the build must embed the license texts and copyright notices in the file and the docs must state it; (3) the build would depend on an installed `node_modules` (today it reads the repository tree only), which changes the snapshot recipe above; (4) `tools/lib/promql-lezer.mjs` is documented as not for browser-served modules and `tools/test-studio-bundle.mjs` T1 asserts no bare specifier in the graph — both become an allowlist of exactly these four names, with the vendor manifest's `npm` field as its source. Until then `/api/diff` answers `501 denied: 'no-backend'`, the notice names Compare among the server-only features, and a diff without the graph is never shown because it would grade differently from the server.
+
+The other follow-up is `--split`, a directory form without `data:` URLs for a
+host whose Content-Security-Policy forbids them in `script-src`.

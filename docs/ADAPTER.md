@@ -139,8 +139,9 @@ Nothing the crawler, the live fetcher or the library produces declares one,
 so every pack of the catalogue adapts without a `type` key — the guard the
 classifier's inert-by-default argument rests on. A family name in `type`
 (`sli`, `alert_rule` …) classifies by itself; a foreign name (`PackSLI`)
-needs the operator override (`OBSERVOGRAM_TAXONOMY`, README "Classify
-Typed Packs"), which can also place foreign ids by pattern — but never an
+needs the operator override (`OBSERVOGRAM_TAXONOMY` on a server, `--taxonomy`
+for the static bundle; README "Classify Typed Packs"), which can also place
+foreign ids by pattern — but never an
 artefact that carries `defines`.
 
 ## Cross-references and the symbol table

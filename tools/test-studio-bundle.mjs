@@ -417,10 +417,12 @@ test('T3b every flag the CLI accepts is in its usage line, the README synopsis a
   const embedding = downstream.slice(downstream.indexOf('## 10. Embedding the studio'));
   assert.ok(readmeSection.length > 0 && row && embedding.length > 0, 'the three documented places exist');
   const packFlags = ['--pack', '--pack-url', '--id', '--label', '--description'];
+  const bakeFlags = ['--taxonomy', '--brand'];
+  assert.ok(bakeFlags.every((f) => flags.includes(f)), 'the two seams are flags');
   for (const f of flags) {
     if (f === '--help') continue;
     for (const [name, text] of [['usage line', usageLine], ['README', readmeSection]]) assert.ok(text.includes(f), `${f} is documented in the ${name}`);
-    if (!packFlags.includes(f)) continue; // --check/--json/--out/--no-remote-fonts are the CLI's, not the pack catalogue's
+    if (!packFlags.includes(f) && !bakeFlags.includes(f)) continue; // --check/--json/--out/--no-remote-fonts are the CLI's, not the pack catalogue's or the seams'
     for (const [name, text] of [['DOWNSTREAM §9 row', row], ['DOWNSTREAM §10', embedding]]) assert.ok(text.includes(f), `${f} is documented in the ${name}`);
   }
   // --description is a per-pack option of both --pack and --pack-url.
