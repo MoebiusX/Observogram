@@ -545,6 +545,55 @@ byte-identical, with and without an override installed. Tests: 706 → 731
 `tools/test-declared-type.mjs`, `server/test-taxonomy.mjs`;
 `test-discover-rows`, `test-smoke`, `test-authz`, `test-tenancy` extended).
 
+**W4 — the rebadge pack.** Delivered as `tools/lib/brand.mjs` (zero-import,
+vendorable) with `loadBrand()` in `tools/lib/brand-env.mjs`, the shell routes
+`GET /` and `GET /index.html` in `server/index.mjs`, `studio/brand.mjs` →
+`state.brand.chrome` in the studio, the auth pages from the brand, and
+`--brand` / `--out` on `tools/gen-design-tokens.mjs` (README, "Rebadge The
+Studio (brand config)"; [`DOWNSTREAM.md`](DOWNSTREAM.md) §9). Decisions:
+*injection, not a `/brand.json` fetch* — the server renders the brand into
+the shell (`#brand-config`) so the studio's first paint already has it and a
+static host could do the same; *routes, not the static index* — `GET /`
+and `GET /index.html` are handlers before the mount (`index: false`,
+no `extensions`), which is what lets the default stay `res.sendFile` (the
+same `send` pipeline, byte-identical, the same headers, 304 on a
+conditional GET) while a branded deployment answers a rendering, and what
+closed the `GET /index` leak the old `extensions: ['html']` left open; *one
+name derives everything* — `shortName`, the wordmark, the scanner title,
+the compass mark, the footer text, the hero alt, the description, the links
+and the changelog link all follow `name` unless the file names them, so a
+one-variable `OBSERVOGRAM_BRAND_NAME` rebadge leaves no upstream string
+behind (and a named brand shows the CSS fallback rather than upstream's hero
+art), while `DEFAULT_BRAND = normalizeBrand({})` keeps today's literals
+exactly; *no literal fallback in the studio* — every chrome renderer reads
+`state.brand.chrome`, and a renderer without it paints nothing in that place
+(`renderVersionChrome`'s tooltip, the atlas compass), because a fallback
+literal is a second source of truth the source guard would then have to
+allow; *the brand is read in `start()`*, not at import, so the in-process
+suites' env hygiene (set before `start()`, after the hoisted import) holds
+for it as it does for the taxonomy and the transport hook; *escaping
+everywhere, one raw field* — `logo.svg` is inline SVG trusted like the
+brand file itself, injected only by `innerHTML` in the JS header, refused
+on `<script`, and never reaches the server-rendered shell or auth pages;
+*the tokens mirror the cascade* — the JSON generator applies the light map to
+both themes because the injected `:root{}` wins over the CSS's
+`[data-theme="dark"]{}` at equal specificity, and takes `--brand` only
+explicitly so `--write` keeps regenerating the vendorable default; *the
+default-mode boot order changed and says so* — `boot()` awaits the brand
+before mounting the header, the load is kicked off at module top level and
+preloaded by the shell, and the CHANGELOG states the extra request rather
+than claiming zero behavioural change. Deferred: `--brand` for the static
+bundle (built from the unbranded shell; `studio/static-backend.mjs` is
+exempt from the source guard for that reason), the CLI banner and the
+schedule snippets (CLI output, not studio chrome), and the lowercase noun
+"its observogram" (the diagram's name, kept). Inert when unset: the shell
+is the same string, every chrome string is the literal it replaced, the
+goldens and `studio/design-tokens.json` are untouched. Tests: 753 → 776
+(`tools/test-brand.mjs`, `server/test-brand-shell.mjs`; `test-authz`,
+`test-build-info`, `test-vendor-manifest` extended). Verified in headless
+Chromium at 1366 and 390 px: header, footer, About and the sign-in page,
+default and branded.
+
 **W5 — reverse-proxy identity passthrough.** Delivered as
 `server/auth-proxy.mjs` behind `OBSERVOGRAM_TRUST_PROXY_AUTH=1` (README,
 "Behind a reverse proxy (trusted headers)"), with `proxySignIn` /

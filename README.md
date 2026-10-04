@@ -849,6 +849,106 @@ the adapter as the artefact's `type`, see [docs/ADAPTER.md](docs/ADAPTER.md),
 or bundle serves directly. `tools/fixtures/taxonomy/` holds a worked example
 of both the pack and the override.
 
+### Rebadge The Studio (brand config)
+
+Everything the studio says about the *product* — its name, wordmark,
+tagline, logo, page title and description, footer text and links, the About
+card, the Discover scanner title and hero, the sign-in pages — comes from
+one brand object (`tools/lib/brand.mjs`, zero-import, vendorable). With no
+brand configured the server serves `studio/index.html` byte for byte and
+every chrome string is today's Observogram (`DEFAULT_BRAND`). A downstream
+rebadges with a JSON file, or with a few environment scalars; **one `name` is
+enough** — every other string derives from it unless the file names it:
+
+```json
+{
+  "name": "Acme Watch",
+  "shortName": "Acme",
+  "wordmark": { "lead": "Acme", "tail": "Watch" },
+  "tagline": "reliability, watched",
+  "titleSuffix": "the Reliability Console",
+  "description": "Acme Watch — …",
+  "logo": { "url": "/assets/acme-mark.svg" },
+  "favicon": "/assets/acme.ico",
+  "docsUrl": "https://docs.example.com/acme-watch",
+  "footer": { "text": "Acme Watch · a product of Acme Corp",
+              "links": [{ "label": "docs", "href": "https://docs.example.com/acme-watch" }] },
+  "about": { "changelogUrl": "https://docs.example.com/acme-watch/releases" },
+  "hero": { "src": "/assets/acme-hero.png", "alt": "Acme Watch posture scan" },
+  "tokens": { "light": { "accent": "#b3261e" }, "dark": { "accent": "#f28b82" } }
+}
+```
+
+```bash
+OBSERVOGRAM_BRAND_FILE=./brand.json npm run dev
+# or, without a file (a file's values first, these on top):
+OBSERVOGRAM_BRAND_NAME="Acme Watch" OBSERVOGRAM_BRAND_ACCENT="#b3261e" npm run dev
+```
+
+The scalars are `OBSERVOGRAM_BRAND_NAME`, `_SHORT_NAME`, `_TAGLINE`,
+`_LOGO_URL`, `_DOCS_URL` (→ the footer's `docs` link and the About card's
+changelog link), `_FOOTER` (→ `footer.text`), `_ACCENT` and `_ACCENT_DARK`
+(→ `tokens.light.accent` / `tokens.dark.accent`); the legacy `TOMOGRAPH_*`
+spelling is honoured. The defaults, and what derives from `name` when a
+brand names one: `shortName` ← `name`; the wordmark ← `name` in one piece
+(the default's `Observo`/`gram` split is upstream's); the scanner title
+`<SHORTNAME> SCAN`; the atlas compass mark `<SHORTNAME>` (default `OBSERVO`);
+the footer text `<name> · <titleSuffix>`; the hero alt `<name> scan` — and a
+named brand shows the CSS fallback instead of upstream's hero art until it
+sets `hero.src`; the description `<name> — write one ObservabilityPack
+manifest, …`; the footer links keep the spec link and drop the upstream repo
+link (a `docsUrl` adds a `docs` link); the About changelog link ← `docsUrl`
+(none ⇒ no link). `tokens.light` / `tokens.dark` override design-token values
+by name (`accent`, `accent-solid`, `bg`, … — the names in
+`studio/design-tokens.css` without the `--og-` prefix); a light override
+applies to both themes unless the dark map restates it.
+
+What the server does with it: `GET /`, `GET /index.html` and every
+non-`/api` path answer the shell with the title, meta description, legacy
+header, footer text (the `#build-label` version span kept) and links
+replaced, plus — after the design-tokens link — a `<style id="brand-tokens">`
+when tokens are set, the normalized brand as `<script type="application/json"
+id="brand-config">` (the studio reads it back; never the file's path), and a
+`<link rel="icon">` when a favicon is set. The studio (`studio/brand.mjs`,
+`state.brand.chrome`) paints the header, About, scanner, origin tip, compass
+mark, reset confirm, API-unreachable screen and version tooltip from it;
+`server/auth.mjs` renders the sign-in, change-password and reverse-proxy
+explainer pages from it. The start log says `[studio] brand: <name> (<path> |
+OBSERVOGRAM_BRAND_* env)` once. An unreadable or invalid file **refuses the
+start** with `brand file <path>: not found | is a directory | unreadable | not
+valid JSON | not a JSON object` — the message never carries the contents;
+`brand: tokens.<theme>.<name> is not a design token name`, `brand: token
+value for <name> contains ;{}<>` and `brand: logo.svg is not inline SVG`
+refuse a malformed brand.
+
+Trust: every brand string is escaped where it lands (text and attributes).
+The one raw field is `logo.svg` — inline SVG markup, injected only into the
+JS header through `innerHTML` (never into the server-rendered shell or the
+auth pages); it must start with `<svg` and must not contain `<script`, which
+is a tripwire for a pasted page, not a sanitizer — the brand file is
+operator config like any other server file. `studio/reskin.css` re-strokes
+the header SVG with `--og-accent`, so a custom mark inherits the accent.
+
+What is **never** rebranded, because it is protocol or storage, not chrome:
+the `X-Observogram-CSRF` / `X-Observogram-Org` headers, the `observogram_*`
+cookies, the `observogram.*` annotation keys in packs, the `.observogram/`
+workspace directory, `/api/*` JSON (`/healthz`, `/api/version`), compiled
+artefacts and the gen-site output (golden-gated, brand-free), the CLI's
+banner, and the `/assets/observogram-hero.png` path the default hero reads.
+`tools/test-brand.mjs` keeps the product's name out of every studio and
+auth-page source outside `tools/lib/brand.mjs` (a comment-stripping source
+guard), and proves the inert case: the unconfigured shell is the same string,
+the default chrome is the literal it replaced, `loadBrand({ env: {} })` is
+the default.
+
+The design tokens as JSON follow the same rule: `node
+tools/gen-design-tokens.mjs --brand brand.json --out dist/design-tokens.json`
+writes the rebadged document (a `brand` key names it); the generator never
+reads `OBSERVOGRAM_BRAND_FILE`, and `--brand` with `--write` refuses, so
+`studio/design-tokens.json` stays the vendorable default. The static bundle
+(`npm run build:studio`) is built from the unbranded shell and stays
+unbranded; a `--brand` for it is the follow-up.
+
 ### Compile Artifacts
 
 ```bash
@@ -1676,6 +1776,7 @@ studio/
   compare-view.mjs         Assessment (diagnostic grade), Compare, drift, traceability
   compile-view.mjs         Remediate, compile catalog, deploy surfaces
   layers-view.mjs          Discover Observogram and artifact cards
+  brand.mjs                The studio's brand: reads the shell's #brand-config, loads /lib/brand.mjs the house way, hands state.brand its chrome strings
   neuron-view.mjs          Advanced → Neuron: fleet tiles, trend / heatmap / bar panels, the journey in focus, the newest record opened up
   journeys-view.mjs        Saved journeys: capture, run-now, history, stack chips, chains + cause lines (the cards Neuron composes)
   static-backend.mjs       The static bundle's backend in the browser: the read-only pack routes from tools/lib, 501 no-backend for the rest, the Export download, the notice (bundle-only; the live studio never imports it)
@@ -1699,6 +1800,8 @@ tools/
   lib/
     adapter.mjs            Canonical pack -> layered UI model
     blast-radius.mjs       Blind-spot blast radius over the requirement graph (zero-import, vendorable)
+    brand.mjs              The one brand config: DEFAULT_BRAND (today's Observogram), normalizeBrand, the chrome / shell / token renderers (zero-import, vendorable)
+    brand-env.mjs          OBSERVOGRAM_* / TOMOGRAPH_* env names, the workspace root, loadBrand() (node-only)
     chain-history.mjs      Requirement-chain records per run, transitions, candidate causes (zero-import, vendorable)
     compile.mjs            packc compiler
     conformance.mjs        Maturity rubric
