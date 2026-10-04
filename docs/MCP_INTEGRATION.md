@@ -115,7 +115,10 @@ and no deploy or rollback record. **Network failures are not hook faults**:
 a rejection from `fetchImpl` (or from native `fetch` through a
 `prepareRequest`-only hook), a refused connection or an HTTP 503 on one probe
 behave exactly as without a hook — retried once when transient, annotated as
-that probe's failure, the pack written.
+that probe's failure, the pack written. A `fetchImpl` rejection's message is
+still hook text, so it is redacted like a `prepareRequest` throw's (the
+error itself stays ordinary: same name and code, the original kept as
+`cause`).
 
 The texts, exact: `OBSERVOGRAM_TRANSPORT_HOOK: cannot load <path>: <message>`
 · `OBSERVOGRAM_TRANSPORT_HOOK: <path> exports neither prepareRequest nor

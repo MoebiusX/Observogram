@@ -46,8 +46,10 @@
 //   isTransportHookError() is name-based so it survives module duplication.
 //
 // Redaction: a hook's own error text goes through redact() before it is
-// wrapped — the bearer, the URL's userinfo and every credential-named
-// query parameter value of mcpUrl (stripMcpUrl's rule) become <redacted>.
+// rethrown — wrapped for prepareRequest, kept an ordinary error for a
+// fetchImpl rejection — so the bearer, the URL's userinfo and every
+// credential-named query parameter value of mcpUrl (stripMcpUrl's rule)
+// become <redacted> in every log line, 502 body and run record downstream.
 // Nothing else the hook does is redacted for it; it runs with the
 // process's trust.
 
@@ -167,9 +169,20 @@ export function createMcpClient({ mcpUrl, mcpAuth = null, timeoutMs = 30_000, tr
     }
 
     // (4) the wire. A rejection here is NOT a hook fault (see the header).
+    // A fetchImpl's own rejection is still hook text, so it is redacted —
+    // the error stays ordinary (same name and code, cause kept), only its
+    // message changes; native fetch's rejections pass through untouched.
     const fetcher = t.fetchImpl || globalThis.fetch;
     const body = JSON.stringify(notification ? { jsonrpc: '2.0', method, params } : { jsonrpc: '2.0', id: nextId++, method, params });
-    const res = await fetcher(url, { method: 'POST', headers: reqHeaders, body, signal: AbortSignal.timeout(timeoutMs) });
+    let res;
+    try { res = await fetcher(url, { method: 'POST', headers: reqHeaders, body, signal: AbortSignal.timeout(timeoutMs) }); }
+    catch (e) {
+      if (!t.fetchImpl) throw e;
+      const err = new Error(redact(e?.message ?? e), { cause: e });
+      if (e?.name && e.name !== 'Error') err.name = e.name;
+      if (e?.code !== undefined) err.code = e.code;
+      throw err;
+    }
     if (t.fetchImpl && !(res && typeof res.ok === 'boolean' && typeof res.status === 'number'
         && typeof res.headers?.get === 'function' && typeof res.text === 'function' && typeof res.json === 'function')) {
       throw fault(`fetchImpl returned ${describe(res)}, not a Response`);

@@ -217,6 +217,18 @@ for (const [label, hook] of [
     const bad = { fetchImpl: async () => ({ nope: true }), hookPath: '/x/gw.mjs' };
     const e2 = await expectFail(() => twoCalls(fake2, bad));
     assert(isTransportHookError(e2) && e2.message === 'transport hook /x/gw.mjs: fetchImpl returned object, not a Response', 'fetchImpl returning a non-Response is a hook fault', e2?.message);
+    // …but its text is still hook text: an echoed header or URL is redacted
+    // while the error stays ordinary (name, code and cause kept).
+    const echoing = { fetchImpl: async (url, init) => { const err = new Error(`gateway refused ${init.headers.Authorization} for ${url}`); err.code = 'EGATEWAY'; throw err; }, hookPath: '/x/gw.mjs' };
+    const { rpc: echoRpc } = createMcpClient({ mcpUrl: `${fake2.url}?token=URLTOKENSENTINEL9&tier=x`, mcpAuth: 'BEARERSENTINEL7', transport: echoing });
+    const e3 = await expectFail(() => echoRpc('tools/list', {}));
+    assert(e3 && !isTransportHookError(e3) && e3.name === 'Error' && e3.code === 'EGATEWAY' && e3.cause?.message.includes('Bearer BEARERSENTINEL7'),
+      'a rejection from fetchImpl that echoes the request stays an ordinary error with its code and cause', e3?.message);
+    assert(e3 && !e3.message.includes('BEARERSENTINEL7') && !e3.message.includes('URLTOKENSENTINEL9') && e3.message === `gateway refused Bearer <redacted> for ${fake2.url}?token=<redacted>&tier=x`,
+      'the bearer and the URL token value are <redacted> in a fetchImpl rejection; the harmless parameter stays', e3?.message);
+    const abortLike = { fetchImpl: async () => { const err = new Error('The operation was aborted'); err.name = 'AbortError'; throw err; }, hookPath: '/x/gw.mjs' };
+    const e4 = await expectFail(() => twoCalls(fake2, abortLike));
+    assert(e4?.name === 'AbortError' && e4.message === 'The operation was aborted', 'a fetchImpl rejection with a typed name keeps it', e4?.name);
   } finally { await fake2.close(); }
 }
 
