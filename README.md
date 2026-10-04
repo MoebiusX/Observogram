@@ -661,7 +661,7 @@ endpoint) or 409 (a slug or name in use), and names the way out — `service
 authorization denial, with `denied`. The three MCP endpoint changes take
 the identity API's defences, because a record is where the server will
 send the org's read token: `X-Observogram-CSRF: 1` in every posture (403
-`csrf` — `missing X-Observogram-CSRF: 1 — changes to the MCP endpoints need
+`csrf` — `missing X-Observogram-CSRF: 1 — changes to the MCP endpoint API need
 it in every posture, so a cross-site form cannot make them (the studio
 sends it; with curl add -H 'X-Observogram-CSRF: 1')`), only a request sent
 straight to a loopback server without sign-in, and closed on an exposed

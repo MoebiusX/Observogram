@@ -1072,6 +1072,25 @@ test('the README Identity API section states the audit actor and its system exce
   }
 });
 
+// The README's Services section quotes the CSRF refusal the three MCP
+// endpoint changes send, with their closedAs: the quote is the bytes
+// csrfAlwaysText gives for those rows (whitespace folded — the README wraps
+// it), so a renamed closedAs cannot leave the README quoting the old text.
+test('the README Services section quotes the MCP endpoint changes\' CSRF refusal as the server sends it', () => {
+  const readme = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'README.md'), 'utf8');
+  const start = readme.indexOf('\n### Services, Environments And MCP Endpoints\n');
+  assert.ok(start >= 0, 'README has a Services section');
+  const end = readme.indexOf('\n### ', start + 1);
+  const section = readme.slice(start, end < 0 ? undefined : end).replace(/\s+/g, ' ');
+  const quotes = [...section.matchAll(/`(missing X-Observogram-CSRF: 1 — [^`]*)`/g)].map((m) => m[1]);
+  assert.ok(quotes.length >= 1, 'the section quotes the CSRF refusal');
+  const mcpWrites = Object.keys(ROUTES).filter((k) => k.startsWith('POST /api/mcp-endpoints') || k.startsWith('PATCH /api/mcp-endpoints') || k.startsWith('DELETE /api/mcp-endpoints'));
+  assert.equal(mcpWrites.length, 3, 'the three MCP endpoint changes');
+  const texts = new Set(mcpWrites.map((k) => csrfAlwaysText(routeEntry(k))));
+  assert.equal(texts.size, 1, 'one CSRF text for the three');
+  for (const q of quotes) assert.equal(q, [...texts][0], 'the README quote is the text the server sends');
+});
+
 // The README's Roles section states how the import maps orgs.json roles:
 // each word it lists maps to that role, and every word the import sends
 // to admin or viewer is listed (else a reader takes it for an operator).
