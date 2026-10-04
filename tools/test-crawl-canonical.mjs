@@ -136,8 +136,10 @@ assert(marks.includes('alerting.routes[0].channels[0]') && !marks.includes('aler
 assert(/address invented: the Alertmanager pagerduty receiver 'pd'/.test(ann['crawler.scaffold.alerting.routes[2].channels[0]']), 'a channel mark names its receiver and kind', ann['crawler.scaffold.alerting.routes[2].channels[0]']);
 assert(ann['crawler.scaffold.metadata.owners'] !== undefined, 'the defaulted owner is marked');
 assert(!('crawler.scaffold.metadata.owners' in crawlFiles({}, { repoName: 'svc', owners: ['team-x'], now: NOW }).canonical.metadata.annotations), 'an owner passed in is not marked');
-assert(['semconv', 'resource_attributes', 'sdk.languages', 'sdk.sampling', 'sdk.propagators'].every(f => marks.includes(`otel.${f}`)) && !marks.includes('otel'),
-  'the five otel fields are marked, never the otel artefact', marks);
+assert(['semconv', 'resource_attributes', 'sdk.sampling', 'sdk.propagators'].every(f => marks.includes(`otel.${f}`)) && !marks.includes('otel'),
+  'the four otel fields the repository cannot state are marked, never the otel artefact', marks);
+assert(JSON.stringify(canonical.spec.otel.sdk.languages) === JSON.stringify(['java', 'node']) && !marks.includes('otel.sdk.languages') && ann['crawler.discovered.sdk_languages'] === '["java","node"]',
+  'otel.sdk.languages is read off the source files (server/metrics.ts, event/EventMetrics.java) and is not marked', [canonical.spec.otel.sdk.languages, ann['crawler.discovered.sdk_languages']]);
 assert(ann['crawler.scaffoldCount'] === String(summary.scaffold.length) && summary.scaffold.length === marks.length, 'crawler.scaffoldCount counts every mark', [ann['crawler.scaffoldCount'], summary.scaffold.length]);
 assert(JSON.stringify(summary.scaffold.slice(0, 3)) === JSON.stringify(['pipelines.exporters.logs', 'baselines', 'validation.synthetic_checks.hostile_repo-health-canary']) && ann['crawler.scaffold.baselines'] === 'schema-required fallback; no source evidence found in selected environment',
   'the schema-required marks keep their order and their text; the invented-value marks follow', summary.scaffold);
@@ -151,7 +153,7 @@ assert(JSON.stringify(summary.scaffold.slice(0, 3)) === JSON.stringify(['pipelin
   const artefactIds = new Set(all.map(a => a.id));
   const isArtefact = (sym) => all.some(a => a.symbol === sym) || artefactIds.has(sym);
   const fields = marks.filter(m => /^(metadata\.|otel\.|telemetry\.backends\.[^.]+\.|alerting\.routes\[\d+\]\.)/.test(m));
-  assert(fields.length === 10 && fields.every(m => !isArtefact(m)), 'the five otel fields, the endpoints, the owners and the three channels are the field partition', fields);
+  assert(fields.length === 9 && fields.every(m => !isArtefact(m)), 'the four otel fields, the endpoints, the owners and the three channels are the field partition', fields);
 }
 
 // ---------- the Helm ConfigMap path: a dashboard without schemaVersion ----------
@@ -189,6 +191,11 @@ const tier3 = crawlFiles(readTree(TIER3_DIR), { repoName: 'tier3-alerts', now: N
 {
   const empty = crawlFiles({}, { repoName: 'svc', now: NOW });
   assert(errorsOf(empty.canonical).length === 0, 'an empty repository validates', errorsOf(empty.canonical).slice(0, 3));
+  assert(JSON.stringify(empty.canonical.spec.otel.sdk.languages) === JSON.stringify(['go']) && empty.summary.scaffold.includes('otel.sdk.languages'),
+    'a repository with no source files keeps the go default, marked', empty.canonical.spec.otel.sdk.languages);
+  const langs = crawlFiles({ 'src/a.ts': '', 'cmd/b.go': '', 'tests/c.py': '', 'src/d.kt': '' }, { repoName: 'svc', now: NOW });
+  assert(JSON.stringify(langs.canonical.spec.otel.sdk.languages) === JSON.stringify(['go', 'java', 'node']) && langs.canonical.metadata.annotations['crawler.discovered.sdk_languages'] === '["go","java","node"]' && !langs.summary.scaffold.includes('otel.sdk.languages') && errorsOf(langs.canonical).length === 0,
+    'source extensions name the SDK languages (.kt is the JVM SDK; a tests/ path is skipped) and the mark goes', langs.canonical.spec.otel.sdk.languages);
   const ea = empty.canonical.metadata.annotations;
   assert(ea['crawler.scaffold.slis.service_availability'] && ea['crawler.scaffold.slos.service_availability_99'] && empty.summary.scaffold.includes('slis.service_availability') && ea['crawler.scaffoldCount'] === String(empty.summary.scaffold.length),
     'the stub SLI/SLO pair is marked and counted', [empty.summary.scaffold, ea['crawler.scaffoldCount']]);

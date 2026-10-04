@@ -30,9 +30,10 @@
       "crawler.warningCount": "3",
       "crawler.syntheticRecordingRulesSkipped": "1",
       "crawler.extendedSurfaces": "0",
-      "crawler.scaffoldCount": "10",
+      "crawler.scaffoldCount": "9",
       "crawler.unresolvedChannelCount": "1",
       "crawler.unresolved.alerting": "SEV2:${GOLDEN_HOOK_URL} (alertmanager.yml)",
+      "crawler.discovered.sdk_languages": "[\"node\"]",
       "crawler.discovered.metric_names": "[\"golden:availability:good\",\"golden:availability:total\",\"http_requests_total\"]",
       "crawler.discovered.metric_names_count": "3",
       "crawler.discovered.metric_origins": "{\"golden:availability:good\":{\"file\":\"prometheus/rules.yml#slo/golden:availability:good\",\"service\":\"\",\"type\":\"recording-rule-output\",\"help\":\"\",\"labels\":[],\"source_name\":\"\",\"origin_kind\":\"recording-rule-output\",\"confidence\":\"declared\",\"candidate\":false,\"query\":\"sum(rate(http_requests_total{code!~\\\"5..\\\"}[5m]))\",\"used_by\":[\"recording_rule:golden:availability:good\",\"alert:GoldenAvailabilityBurnFast\",\"dashboard:golden-overview/availability\"],\"references\":[{\"kind\":\"recording-rule-output\",\"name\":\"golden:availability:good\",\"file\":\"prometheus/rules.yml#slo/golden:availability:good\"},{\"kind\":\"alert-rule\",\"name\":\"GoldenAvailabilityBurnFast\",\"file\":\"prometheus/rules.yml#slo/GoldenAvailabilityBurnFast\"},{\"kind\":\"dashboard-panel\",\"name\":\"availability\",\"file\":\"dashboards/golden.json#availability\"}]},\"golden:availability:total\":{\"file\":\"prometheus/rules.yml#slo/golden:availability:total\",\"service\":\"\",\"type\":\"recording-rule-output\",\"help\":\"\",\"labels\":[],\"source_name\":\"\",\"origin_kind\":\"recording-rule-output\",\"confidence\":\"declared\",\"candidate\":false,\"query\":\"sum(rate(http_requests_total[5m]))\",\"used_by\":[\"recording_rule:golden:availability:total\",\"alert:GoldenAvailabilityBurnFast\",\"dashboard:golden-overview/availability\"],\"references\":[{\"kind\":\"recording-rule-output\",\"name\":\"golden:availability:total\",\"file\":\"prometheus/rules.yml#slo/golden:availability:total\"},{\"kind\":\"alert-rule\",\"name\":\"GoldenAvailabilityBurnFast\",\"file\":\"prometheus/rules.yml#slo/GoldenAvailabilityBurnFast\"},{\"kind\":\"dashboard-panel\",\"name\":\"availability\",\"file\":\"dashboards/golden.json#availability\"}]},\"http_requests_total\":{\"file\":\"src/metrics.ts\",\"service\":\"golden\",\"type\":\"counter\",\"help\":\"requests\",\"labels\":[\"code\"],\"source_name\":\"\",\"origin_kind\":\"source-code\",\"confidence\":\"declared\",\"candidate\":false,\"query\":\"\",\"used_by\":[\"recording_rule:golden:availability:good\",\"recording_rule:golden:availability:total\"],\"references\":[{\"kind\":\"recording-rule\",\"name\":\"golden:availability:good\",\"file\":\"prometheus/rules.yml#slo/golden:availability:good\"},{\"kind\":\"recording-rule\",\"name\":\"golden:availability:total\",\"file\":\"prometheus/rules.yml#slo/golden:availability:total\"}]}}",
@@ -43,7 +44,6 @@
       "crawler.scaffold.metadata.owners": "default owner 'team-platform'; no source evidence (pass --owners)",
       "crawler.scaffold.otel.semconv": "default; the repository states no SDK configuration",
       "crawler.scaffold.otel.resource_attributes": "default; the repository states no SDK configuration",
-      "crawler.scaffold.otel.sdk.languages": "default; the repository states no SDK configuration",
       "crawler.scaffold.otel.sdk.sampling": "default; the repository states no SDK configuration",
       "crawler.scaffold.otel.sdk.propagators": "default; the repository states no SDK configuration"
     }
@@ -58,7 +58,7 @@
       },
       "sdk": {
         "languages": [
-          "go"
+          "node"
         ],
         "sampling": {
           "policy": "parentbased_traceidratio",

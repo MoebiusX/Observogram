@@ -880,7 +880,10 @@ export function crawlFiles(filesInput, opts = {}) {
     markInvented(`alerting.routes[${ch.routeIndex}].channels[${ch.channelIndex}]`, `address invented: the Alertmanager ${ch.kind} receiver '${ch.receiver ?? 'oncall'}' has no spec channel or states no address`);
   }
   if (ownersDefaulted) markInvented('metadata.owners', "default owner 'team-platform'; no source evidence (pass --owners)");
-  for (const field of ['semconv', 'resource_attributes', 'sdk.languages', 'sdk.sampling', 'sdk.propagators']) {
+  // The SDK languages are read off the repository's source files (test paths
+  // aside); only a repository with none keeps the default, marked.
+  const sdkLanguages = inferSdkLanguages(files);
+  for (const field of ['semconv', 'resource_attributes', ...(sdkLanguages.length ? [] : ['sdk.languages']), 'sdk.sampling', 'sdk.propagators']) {
     markInvented(`otel.${field}`, 'default; the repository states no SDK configuration');
   }
   for (const [symbol, note] of inventedMarks) mark(symbol, note);
@@ -941,6 +944,7 @@ export function crawlFiles(filesInput, opts = {}) {
           'crawler.unresolved.alerting': summary.omitted.unresolvedChannels
             .map(u => `${u.severity || '?'}:${u.value}${u.source ? ` (${u.source})` : ''}`).join(' · '),
         } : {}),
+        ...(sdkLanguages.length ? { 'crawler.discovered.sdk_languages': annotationJson(sdkLanguages) } : {}),
         ...metricAnnotations,
         ...scrapeAnnotations,
         ...scaffoldAnnotations,
@@ -951,7 +955,7 @@ export function crawlFiles(filesInput, opts = {}) {
         semconv: '1.26.0',
         resource_attributes: { required: ['service.name'] },
         sdk: {
-          languages: ['go'],
+          languages: sdkLanguages.length ? sdkLanguages : ['go'],
           sampling: { policy: 'parentbased_traceidratio', ratio: 0.1 },
           propagators: ['tracecontext'],
         },
@@ -1188,6 +1192,24 @@ function looksLikeMetricSource(content, relPath = '') {
 // those metrics just as a client library call does. Not read from test
 // files, where such lines are sample input, not a declaration.
 const EXPOSITION_TYPE_RE = /#\s*TYPE\s+[A-Za-z_:][A-Za-z0-9_:]*\s+(?:counter|gauge|histogram|summary|untyped)\b/;
+
+// The OTel SDK languages a repository's source files imply (the schema's
+// enum: java, node, python, go, dotnet, rust, …), test paths excluded; sorted,
+// unique. A heuristic over extensions — a Go service with a scripts/*.js
+// helper reports both — stated as such in the DOWNSTREAM table.
+const SDK_LANGUAGE_BY_EXT = [
+  [/\.go$/i, 'go'], [/\.(java|kt)$/i, 'java'], [/\.py$/i, 'python'],
+  [/\.(js|mjs|cjs|jsx|ts|tsx)$/i, 'node'], [/\.rs$/i, 'rust'], [/\.cs$/i, 'dotnet'],
+];
+function inferSdkLanguages(files) {
+  const out = new Set();
+  for (const relPath of files.keys()) {
+    const p = normalizeRepoPath(relPath);
+    if (isTestPath(p)) continue;
+    for (const [re, lang] of SDK_LANGUAGE_BY_EXT) if (re.test(p)) { out.add(lang); break; }
+  }
+  return [...out].sort();
+}
 
 function isTestPath(relPath) {
   return /(^|\/)(tests?|__tests__|specs?|fixtures?|testdata)(\/|$)|\.(?:test|spec)\.[a-z]+$|_test\.[a-z]+$/i.test(normalizeRepoPath(relPath));

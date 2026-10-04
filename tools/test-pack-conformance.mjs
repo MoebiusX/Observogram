@@ -259,7 +259,7 @@ test('catalogue pin: every shipped canonical pack reports zero rows; krystaline 
   assert.deepEqual(k.counts.byState, { placeholder: 7, 'marker-only': 0, unmarked: 2, dangling: 0 });
   assert.deepEqual(k.rows.filter(x => x.state === 'unmarked').map(x => x.symbol), ['metadata.version', 'metadata.owners']);
   const g = packConformance(loadPack('tools/fixtures/golden-crawl.pack.json'));
-  assert.deepEqual([g.markers, g.counts.symbols, g.counts.byState.unmarked], [10, 11, 1], 'the golden crawl: 10 marks (4 stubs + owners + 5 otel fields), the version the one unmarked row');
+  assert.deepEqual([g.markers, g.counts.symbols, g.counts.byState.unmarked], [9, 10, 1], 'the golden crawl: 9 marks (4 stubs + owners + 4 otel fields; the languages are read off src/metrics.ts), the version the one unmarked row');
   const f = packConformance(fetcherPack());
   assert.equal(f.writers.fetcher, true);
   assert.ok(f.rows.every(x => x.writer === 'fetcher'));
