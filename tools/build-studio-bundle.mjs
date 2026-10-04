@@ -33,7 +33,8 @@
 // traces name data: URLs. A page whose Content-Security-Policy forbids
 // `data:` in script-src needs a directory form (`--split`), a follow-up.
 //
-// Zero dependencies beyond Node: fs, path, this repo's tools/lib. No bundler.
+// Zero dependencies beyond Node: fs, path, this repo's tools/lib and the
+// tokenizer of tools/gen-vendor-manifest.mjs. No bundler.
 // Exit 0 built · 1 a pack fails the schema, a specifier cannot be inlined, a
 // file is missing · 2 usage.
 
@@ -44,6 +45,7 @@ import { parse as parseYaml } from './lib/mini-yaml.mjs';
 import { validateCanonical, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 import { stripMcpUrl } from './lib/mcp-url-safety.mjs';
 import { fileSlug } from './lib/slug.mjs';
+import { importSpecifiers } from './gen-vendor-manifest.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_ROOT = resolve(HERE, '..');
@@ -55,24 +57,17 @@ const usage = `usage: build-studio-bundle.mjs [--pack <file> [--id <id>] [--labe
 
 // ---------- the module graph ----------
 
-// Comments out, so a specifier in a comment is neither collected nor
-// asserted against (server/test-authz.mjs's approach).
-export function withoutComments(src) {
-  return src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|\s)\/\/[^\n]*/g, '$1');
-}
-
-// The three forms a specifier takes; each regex names the quote (`q`) and
-// the specifier (`spec`), so a rewrite keeps the quote.
-//   import … from 'x' · export … from 'x'      (over any number of lines)
-//   import 'x'                                  (a side-effect import — at a
-//                                                statement start, so a string
-//                                                ending in "import" is not one)
-//   import('x')                                 (a dynamic import)
-const QUOTED = `(?<q>['"])(?<spec>[^'"\\n]+)\\k<q>`;
-const FROM_RE = new RegExp(`\\b(?:import|export)\\b[^;'"\`]*?\\bfrom\\s*${QUOTED}`, 'g');
-const SIDE_RE = new RegExp(`(?<=^|[;{}])[ \\t]*import\\s*${QUOTED}`, 'gm');
-const DYNAMIC_RE = new RegExp(`\\bimport\\s*\\(\\s*${QUOTED}\\s*\\)`, 'g');
-const SPECIFIER_RES = [FROM_RE, SIDE_RE, DYNAMIC_RE];
+// Where the specifiers are: tools/gen-vendor-manifest.mjs's tokenizer, which
+// walks the source once and knows strings, template literals, regex bodies
+// and both comment forms — so a specifier in a comment is neither collected
+// nor asserted against, and a `/*` inside a `//` comment (compile.mjs has
+// one: `provisioning/alerting/*.yaml`) does not pair with a `*/` inside a
+// template literal and swallow the code between them, as a regex strip
+// would. importSpecifiers yields the four forms the bundle rewrites —
+// import … from 'x' · export … from 'x' · import 'x' · import('x') — each
+// with the index of its opening quote, so the rewrite splices exactly the
+// specifier and keeps the quote.
+const PATH_SPEC_RE = /^(?:\.{1,2}\/|\/lib\/)/;
 
 // A root-relative path → its import-map key, or null outside the two trees.
 export function keyOf(relPath) {
@@ -125,17 +120,13 @@ export function collectModuleGraph(root = DEFAULT_ROOT, entries = ENTRIES, { rea
     const key = queue.shift();
     const path = pathOf(key);
     const src = readFile(path);
-    const stripped = withoutComments(src);
     const imports = [];
-    for (const re of SPECIFIER_RES) {
-      for (const m of stripped.matchAll(re)) {
-        const spec = m.groups.spec;
-        const target = resolveSpecifier(spec, path);
-        if (!target) {
-          throw new Error(`${path}:${lineOf(stripped, m.index)}: cannot inline the specifier '${spec}' — only ./, ../ and /lib/ paths into studio/ and tools/lib/ are bundled (a bare package or node:* module cannot be)`);
-        }
-        imports.push({ spec, key: enqueue(target, `${path}:${lineOf(stripped, m.index)}`) });
+    for (const { spec, index } of importSpecifiers(src)) {
+      const target = resolveSpecifier(spec, path);
+      if (!target) {
+        throw new Error(`${path}:${lineOf(src, index)}: cannot inline the specifier '${spec}' — only ./, ../ and /lib/ paths into studio/ and tools/lib/ are bundled (a bare package or node:* module cannot be)`);
       }
+      imports.push({ spec, key: enqueue(target, `${path}:${lineOf(src, index)}`) });
     }
     graph.set(key, { path, src, imports });
   }
@@ -143,29 +134,25 @@ export function collectModuleGraph(root = DEFAULT_ROOT, entries = ENTRIES, { rea
 }
 
 // The source with every inlinable specifier replaced by its key — nothing
-// else touched. A specifier that does not resolve stays as it is.
+// else touched. A specifier that does not resolve stays as it is. The
+// splices run from the last specifier back, so earlier indices hold.
 export function rewriteSpecifiers(src, fromKey) {
   const fromPath = pathOf(fromKey);
   let out = src;
-  for (const re of SPECIFIER_RES) {
-    out = out.replace(re, (whole, ...rest) => {
-      const { q: quote, spec } = rest[rest.length - 1];
-      const target = resolveSpecifier(spec, fromPath);
-      const key = target && keyOf(target);
-      if (!key) return whole;
-      const at = whole.lastIndexOf(`${quote}${spec}${quote}`);
-      return `${whole.slice(0, at)}${quote}${key}${quote}${whole.slice(at + spec.length + 2)}`;
-    });
+  for (const { spec, index } of importSpecifiers(src).reverse()) {
+    const target = resolveSpecifier(spec, fromPath);
+    const key = target && keyOf(target);
+    if (!key) continue;
+    out = `${out.slice(0, index + 1)}${key}${out.slice(index + 1 + spec.length)}`;
   }
   return out;
 }
 
 // After the rewrite no module may still name a path specifier (comments aside).
-const LEFTOVER_RE = /\b(?:from|import)\s*\(?\s*['"](?:\.{1,2}\/|\/lib\/)/;
 export function assertRewritten(rewritten, key) {
-  const stripped = withoutComments(rewritten);
-  const m = LEFTOVER_RE.exec(stripped);
-  if (m) throw new Error(`${pathOf(key)}:${lineOf(stripped, m.index)}: a path specifier survived the rewrite: ${stripped.slice(m.index, m.index + 60).split('\n')[0]}`);
+  for (const { spec, index } of importSpecifiers(rewritten)) {
+    if (PATH_SPEC_RE.test(spec)) throw new Error(`${pathOf(key)}:${lineOf(rewritten, index)}: a path specifier survived the rewrite: ${spec}`);
+  }
 }
 
 // ---------- the HTML ----------

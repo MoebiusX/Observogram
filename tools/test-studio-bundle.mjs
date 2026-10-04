@@ -140,6 +140,27 @@ test('T1 collectModuleGraph: every module under studio/ or lib/, the dynamic /li
   delete files['tools/lib/side.mjs'];
   files['studio/a.mjs'] = 'export const a = 1;\n';
   assert.throws(() => collectModuleGraph(ROOT, ENTRIES, { read: (p) => { if (!(p in files)) throw new Error(`module file missing: ${p}`); return files[p]; } }), /module file missing: tools\/lib\/side\.mjs/);
+  // The shape of tools/lib/compile.mjs: a `//` comment holding `/*`, later a
+  // template literal holding `*/` — a regex comment strip pairs the two and
+  // swallows everything between, and a specifier after them would be neither
+  // collected nor flagged. The tokenizer sees it: collected when it resolves,
+  // thrown with its file:line when it does not.
+  const trap = (line) => `// provisioning/alerting/*.yaml\nexport const a = 1;\n${line}\nexport const banner = (id) => \`/* === ${'${id}'} === */\`;\n`;
+  files['tools/lib/side.mjs'] = 'export const side = 1;\n';
+  files['studio/a.mjs'] = trap("export const probe = () => import('/lib/side.mjs');");
+  const trapped = collectModuleGraph(ROOT, ENTRIES, { read: (p) => { if (!(p in files)) throw new Error(`module file missing: ${p}`); return files[p]; } });
+  assert.deepEqual(trapped.get('studio/a.mjs').imports.map((i) => i.spec), ['/lib/side.mjs'], 'the import() between the comment trap and the template is collected');
+  files['studio/a.mjs'] = trap("export const probe = () => import('./does-not-exist.mjs');");
+  assert.throws(() => collectModuleGraph(ROOT, ENTRIES, { read: (p) => { if (!(p in files)) throw new Error(`module file missing: ${p}`); return files[p]; } }), /module file missing: studio\/does-not-exist\.mjs/);
+  files['studio/a.mjs'] = trap("import x from '@x/y';");
+  assert.throws(() => collectModuleGraph(ROOT, ENTRIES, { read: (p) => files[p] }), /studio\/a\.mjs:3: cannot inline the specifier '@x\/y'/);
+  // Over the real tools/lib/compile.mjs the trap is live: a probe placed right after its `/*`-in-comment line is seen.
+  const compileSrc = readFileSync(join(ROOT, 'tools/lib/compile.mjs'), 'utf8');
+  const markAt = compileSrc.indexOf('provisioning/alerting/*.yaml');
+  assert.ok(markAt > 0 && compileSrc.indexOf('`/* === ${', markAt) > markAt, 'compile.mjs still carries the `/*`-in-comment and `*/`-in-template pair this guards');
+  const probeAt = compileSrc.indexOf('\n', markAt) + 1;
+  const probed = `${compileSrc.slice(0, probeAt)}export const probe = () => import('./does-not-exist.mjs');\n${compileSrc.slice(probeAt)}`;
+  assert.throws(() => collectModuleGraph(ROOT, ENTRIES, { read: (p) => (p === 'tools/lib/compile.mjs' ? probed : readFileSync(join(ROOT, p), 'utf8')) }), /tools\/lib\/does-not-exist\.mjs/, 'the probe past compile.mjs:605 is collected and resolved');
 });
 
 // ---------- T2 the rewrite ----------
@@ -155,7 +176,9 @@ test('T2 rewriteSpecifiers: every import form, comments and non-import strings u
     ["const m = await import('/lib/e.mjs');", "const m = await import('lib/e.mjs');"],
     ["const m = await import('/lib/e');", "const m = await import('lib/e.mjs');"],
     ["import './side.mjs';", "import 'studio/side.mjs';"],
-    ["import { q } from './q.mjs'; // import('/lib/zz.mjs')", "import { q } from 'studio/q.mjs'; // import('lib/zz.mjs')"],
+    ["import { q } from './q.mjs'; // import('/lib/zz.mjs')", "import { q } from 'studio/q.mjs'; // import('/lib/zz.mjs')"],
+    ["/* import('/lib/zz.mjs') */ const t = `from './tpl.mjs' ${import('./e.mjs')}`; const r = /from '.\\/x'/;", "/* import('/lib/zz.mjs') */ const t = `from './tpl.mjs' ${import('studio/e.mjs')}`; const r = /from '.\\/x'/;"],
+    ["// provisioning/alerting/*.yaml\nconst b = `/* === ${1} === */`;\nexport const probe = () => import('./after.mjs');", "// provisioning/alerting/*.yaml\nconst b = `/* === ${1} === */`;\nexport const probe = () => import('studio/after.mjs');"],
     ["const s = './not-an-import.mjs'; const t = { note: 'nothing to import', tone: 'x' };", null],
     ["import x from '@x/y';\nconst u = new URL('https://example.com/lib/x.mjs');", null],
     ['const a = 1;\nconst b = 2;\n', null],
@@ -171,6 +194,7 @@ test('T2 rewriteSpecifiers: every import form, comments and non-import strings u
   assert.throws(() => assertRewritten("import { a } from './left.mjs';", 'studio/x.mjs'), /studio\/x\.mjs:1: a path specifier survived the rewrite/);
   assert.throws(() => assertRewritten("const m = import('/lib/left.mjs');", 'studio/x.mjs'), /a path specifier survived/);
   assert.doesNotThrow(() => assertRewritten("// import('/lib/left.mjs') in a comment\nconst s = './data.mjs';", 'studio/x.mjs'));
+  assert.throws(() => assertRewritten("// provisioning/alerting/*.yaml\nconst b = `/* === ${1} === */`;\nexport const probe = () => import('./left.mjs');", 'studio/x.mjs'), /studio\/x\.mjs:3: a path specifier survived the rewrite: \.\/left\.mjs/);
 });
 
 // ---------- T3 the build ----------
