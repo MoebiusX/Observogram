@@ -75,7 +75,8 @@ const { start } = await import('./index.mjs');
 const { currentStore, closeStore, openRaw, prepare } = await import('./store/db.mjs');
 const { runWithOrg } = await import('./org-context.mjs');
 const { registerPack, resetPackRegistry } = await import('./pack-registry.mjs');
-const { listServicesForPack } = await import('./store/pack-services.mjs');
+const { listServicesForPack, linkPackService } = await import('./store/pack-services.mjs');
+const { addPack, removePack } = await import('./store/packs.mjs');
 const { WAYS, serviceTierFor } = await import('./service-admin.mjs');
 const { envNameOwnerText, envNameShapeText } = await import('./store/mcp-endpoints.mjs');
 const { routeEntry } = await import('./route-table.mjs');
@@ -964,6 +965,24 @@ test('GET /api/packs/:id/conformance grades an uploaded pack at its service reco
   // A catalogue pack has no record: its own tier, service null.
   const cat = await conformance('vera', '/api/packs/production-curated/conformance');
   assert.deepEqual(cat.tier, { graded: cat.declaredTier, pack: cat.declaredTier, from: 'pack', service: null, environment: null, mismatch: false });
+  // ... even with a live primary link under its id (a hand-copied
+  // packs/production-curated.pack.yaml the rehydrate adopted and linked, then
+  // left unparseable: the row and its link stay, the catalogue entry is
+  // served). The record is read for an uploaded pack only; the catalogue
+  // pack is never graded at the service's tier-1.
+  await ok('PATCH /api/services/:id', 'oscar', `/api/services/${svc.id}`, { tier: 'tier-1' });
+  runWithOrg('acme', () => {
+    addPack(db, 'oscar', { id: 'production-curated', source: 'upload' });
+    linkPackService(db, 'oscar', { packId: 'production-curated', serviceId: svc.id, role: 'primary' });
+  });
+  assert.equal(runWithOrg('acme', () => serviceTierFor(db, 'production-curated')).tier, 'tier-1', 'the fixture holds: a record under the catalogue id');
+  try {
+    const linked = await conformance('vera', '/api/packs/production-curated/conformance');
+    assert.deepEqual(linked, cat, 'the catalogue pack is graded by itself, the record under its id unread');
+  } finally {
+    runWithOrg('acme', () => removePack(db, 'oscar', 'production-curated'));
+    await ok('PATCH /api/services/:id', 'oscar', `/api/services/${svc.id}`, { tier: null });
+  }
   // Another org's member reads none of it: the pack is acme's.
   const other = await call('bob', 'GET', `/api/packs/${packId}/conformance`);
   assert.equal(other.status, 404);
