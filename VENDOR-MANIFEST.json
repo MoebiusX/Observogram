@@ -545,8 +545,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/legacy.mjs": {
-      "sha256": "9dfd59186e16e3799255c24549c318b3c62be3fa0249e33c251709848255b508",
-      "bytes": 17224,
+      "sha256": "b499d1b87bc91130997126e60c8b6daedc3639ed8d9050042f48b75c2e255b06",
+      "bytes": 17774,
       "exports": [
         "isLegacyLayeredPack",
         "upconvertLegacyPack"

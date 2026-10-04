@@ -395,6 +395,13 @@ export function upconvertLegacyPack(legacy, opts = {}) {
   annotations['crawler.scaffold.pipelines.exporters.metrics'] = PLACEHOLDER_NOTE;
   annotations['crawler.scaffold.pipelines.exporters.logs'] = PLACEHOLDER_NOTE;
   annotations['crawler.scaffold.pipelines.exporters.traces'] = PLACEHOLDER_NOTE;
+  // The six ride in the count too (report.scaffolded, legacy.scaffoldCount):
+  // pushed AFTER the direct writes so the annotation keys keep their order
+  // (re-assigning an existing key keeps its position in JS key order) — the
+  // one byte run that changes in the output is the count's value.
+  scaffoldSymbols.push('otel', 'pipelines.receivers[0]', 'pipelines.processors[0]',
+    'pipelines.exporters.metrics', 'pipelines.exporters.logs', 'pipelines.exporters.traces');
+  annotations['legacy.scaffoldCount'] = String(scaffoldSymbols.length);
   if (!canonical.metadata.imports) delete canonical.metadata.imports;
 
   const report = {
