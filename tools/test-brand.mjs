@@ -22,13 +22,14 @@ import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import * as fsSync from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_BRAND, DEFAULT_LOGO_SVG, SPEC_LINK, SHELL_ANCHORS, normalizeBrand, brandChrome, brandTokensCss, brandShellHtml,
   brandConfigScript, escapeHtml,
 } from './lib/brand.mjs';
 import { loadBrand, brandSource, resetBrandCache, BRAND_ENV } from './lib/brand-env.mjs';
 
-const ROOT = resolve(new URL('..', import.meta.url).pathname);
+const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const read = (rel) => readFileSync(join(ROOT, rel), 'utf8');
 const SHELL = read('studio/index.html');
 const ACME_FILE = join(ROOT, 'tools/fixtures/brand/acme.json');

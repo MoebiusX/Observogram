@@ -22,6 +22,7 @@
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { crawlFiles, crawlToYaml, detectArtefactKind } from './lib/crawler.mjs';
 import { validateCanonical, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 import { parse as parseYaml } from './lib/mini-yaml.mjs';
@@ -33,7 +34,7 @@ const { assert, report } = createHarness({ truncate: 600 });
 const SCHEMA = JSON.parse(readFileSync(new URL(`../${SPEC_SCHEMA_PATH}`, import.meta.url), 'utf8'));
 
 // The fixture directory as a file map, every file under it (README aside).
-const ROOT = new URL('./fixtures/crawl/operational-alerts/', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('./fixtures/crawl/operational-alerts/', import.meta.url));
 const FILES = {};
 (function walk(dir) {
   for (const name of readdirSync(dir)) {
