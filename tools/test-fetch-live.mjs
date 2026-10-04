@@ -24,9 +24,10 @@ import { parse as parseYaml, emit as emitYaml } from './lib/mini-yaml.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
 import { adapt } from './lib/adapter.mjs';
 import {
-  buildCanonicalPack, fetchMcp, mapDiscoveredBurnAlerts, PROBES,
-  sampleStackSelfMetrics, sampleFromInstantVector, observeAlertmanager, observeGrafana,
+  buildCanonicalPack, fetchMcp, observeInventory, mapDiscoveredBurnAlerts, PROBES,
+  sampleStackSelfMetrics, sampleFromInstantVector, observeAlertmanager, observeGrafana, createMcpClient,
 } from './fetch-live-pack.mjs';
+import { isTransportHookError } from './lib/mcp-client.mjs';
 import { STACK_SELF_METRIC_PROBES } from './lib/contracts/stack-self-metrics.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -37,6 +38,13 @@ const SCHEMA = JSON.parse(readFileSync(
 
 import { createHarness } from './lib/harness.mjs';
 const { assert, report } = createHarness();
+
+// This suite never honours a developer's exported transport hook: the
+// fetchMcp / observeInventory calls below take the default transport (the
+// process-wide memo, read from process.env at the first call), which must
+// resolve inert here. Children spawned below get an explicit env.
+delete process.env.OBSERVOGRAM_TRANSPORT_HOOK;
+delete process.env.TOMOGRAPH_TRANSPORT_HOOK;
 
 const refreshedAt = '2026-06-06T00:00:00Z';
 
@@ -2130,6 +2138,66 @@ const healthFor = (uid) => (uid === HEALTH_ERR.datasource?.uid ? HEALTH_ERR : HE
     { name: 'svc:r:ratio_5m', expr: 'g / t' }, { name: 'svc:r:error_ratio_5m', expr: '1 - r' },
   ]);
   assert(ratio.length === 1 && ratio[0].sli.type === 'ratio' && ratio[0].sli.good === 'g', 'good/total still infer a ratio SLI');
+}
+
+// ---------- case 9: a transport hook fault is never a probe failure ----------
+// Every swallowing catch of the fetcher — safe, both catches of quiet, the
+// initialize/notify/tools-list catches, observeInventory's per-kind catch
+// and the probe helpers' default `quietly` — rethrows a TransportHookError
+// (docs/MCP_INTEGRATION.md "Transport hook"), so fetchMcp rejects instead
+// of writing a pack that says "tools failed". The transports here are
+// inline objects: no env, no file, nothing process-wide.
+
+{
+  const fake = await withFakeMcp((name) => {
+    if (name === 'system_health') return { services: [] };
+    if (name === 'system_topology') return { dependencies: [] };
+    return {};
+  });
+  const failing = async (fn) => { try { await fn(); return null; } catch (e) { return e; } };
+  // A transport that throws only from its Nth prepareRequest on: the calls
+  // before it reach the wire, so the fault lands inside a probe's wrapper,
+  // not at initialize.
+  const throwingFrom = (n) => {
+    let calls = 0;
+    return { calls: () => calls, transport: { hookPath: '/x/late.mjs', prepareRequest: (r) => { if (++calls >= n) throw new Error('gateway refused'); return r; } } };
+  };
+  try {
+    const first = await failing(() => fetchMcp({ mcpUrl: fake.url, transport: { hookPath: '/x/hook.mjs', prepareRequest: () => { throw new Error('boom'); } } }));
+    assert(isTransportHookError(first) && first.message === 'transport hook /x/hook.mjs: prepareRequest threw: boom',
+           'fetchMcp rejects on a hook that throws at initialize (not swallowed into errors/probeFailures)', first?.message);
+    const late = throwingFrom(6);
+    const sixth = await failing(() => fetchMcp({ mcpUrl: fake.url, transport: late.transport }));
+    assert(isTransportHookError(sixth) && late.calls() >= 6,
+           'fetchMcp rejects on a hook that throws only from its 6th call — inside safe/quiet, after initialize, notify and tools/list succeeded', { message: sixth?.message, calls: late.calls() });
+    const loading = await failing(() => fetchMcp({ mcpUrl: fake.url, transport: Promise.reject(Object.assign(new Error('OBSERVOGRAM_TRANSPORT_HOOK: cannot load /x/nope.mjs: no'), { name: 'TransportHookError' })) }));
+    assert(isTransportHookError(loading) && /cannot load/.test(loading.message), 'a transport promise that rejects fails fetchMcp before any wire call', loading?.message);
+
+    const expected = { kinds: { host: { count: 2, labels: ['a', 'b'] } } };
+    const invFirst = await failing(() => observeInventory({ mcpUrl: fake.url, expected, transport: { hookPath: '/x/hook.mjs', prepareRequest: () => { throw new Error('boom'); } } }));
+    assert(isTransportHookError(invFirst), 'observeInventory rejects on a hook that throws at initialize', invFirst?.message);
+    const invLate = throwingFrom(3);
+    const invThird = await failing(() => observeInventory({ mcpUrl: fake.url, expected, transport: invLate.transport }));
+    assert(isTransportHookError(invThird) && invLate.calls() === 3, 'observeInventory rejects on a hook that throws from its 3rd call (tools/list), never a "failed" observation', { message: invThird?.message, calls: invLate.calls() });
+
+    // The probe helpers called WITHOUT a `quiet` — their default `quietly`
+    // must rethrow too (a caller outside fetchMcp gets the same hard fail).
+    const { callTool } = createMcpClient({ mcpUrl: fake.url, transport: { hookPath: '/x/hook.mjs', prepareRequest: () => { throw new Error('boom'); } } });
+    const rows = STACK_SELF_METRIC_PROBES.slice(0, 1);
+    const eStack = await failing(() => sampleStackSelfMetrics({ callTool, metricsQueryTool: 'metrics_query', inventory: null, rows }));
+    assert(isTransportHookError(eStack), 'sampleStackSelfMetrics without quiet rethrows a hook fault', eStack?.message);
+    const eAm = await failing(() => observeAlertmanager({ callTool, statusTool: 'alertmanager_status', silencesTool: 'alertmanager_silences' }));
+    assert(isTransportHookError(eAm), 'observeAlertmanager without quiet rethrows a hook fault', eAm?.message);
+    const eGf = await failing(() => observeGrafana({ callTool, datasourcesTool: 'grafana_datasources', datasourceHealthTool: 'grafana_datasource_health', contactPointsTool: 'grafana_contact_points' }));
+    assert(isTransportHookError(eGf), 'observeGrafana without quiet rethrows a hook fault', eGf?.message);
+
+    // And the ordinary error through the same helpers stays swallowed, as before.
+    const { callTool: refused } = createMcpClient({ mcpUrl: fake.url, transport: { hookPath: '/x/h.mjs', fetchImpl: async () => { throw new Error('ECONNREFUSED'); } } });
+    const am = await observeAlertmanager({ callTool: refused, statusTool: 'alertmanager_status', silencesTool: 'alertmanager_silences' });
+    assert(am && /ECONNREFUSED/.test(am.error || '') && am.version === null, 'a wire error through a hook\'s fetchImpl is still a probe-level error, not a rejection', am);
+  } finally {
+    await fake.close();
+  }
 }
 
 // ---------- summary ----------

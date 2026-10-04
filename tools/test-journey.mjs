@@ -28,6 +28,11 @@ const { assert, report } = createHarness();
 
 const TMP = mkdtempSync(join(tmpdir(), 'observogram-journey-'));
 process.env.OBSERVOGRAM_WORKSPACE = TMP;
+// The live journeys below take the fetcher's default transport (the
+// process-wide memo, read from process.env at the first call): a
+// developer's exported hook must not reach this suite or its CLI children.
+delete process.env.OBSERVOGRAM_TRANSPORT_HOOK;
+delete process.env.TOMOGRAPH_TRANSPORT_HOOK;
 
 const {
   loadJourneyDef, runJourney, listJourneys, readJourneyRuns,
@@ -692,6 +697,30 @@ try {
   let nofileErr = null;
   try { await runJourney(loadJourneyDef('nofile')); } catch (e) { nofileErr = e; }
   assert(nofileErr && !nofileErr.vantageLost && readJourneyRuns('nofile').length === 0, 'a missing pack file is a config error — no vantage-lost record');
+  // A transport hook that breaks its contract (OBSERVOGRAM_TRANSPORT_HOOK,
+  // docs/MCP_INTEGRATION.md "Transport hook") is a configuration error of
+  // the same class: exit 2, no run record, not a vantage loss. Run as a CLI
+  // child — the hook is process-wide and must never load into this process.
+  const throwingHook = join(TMP, 'throwing-hook.mjs');
+  writeFileSync(throwingHook, 'export function prepareRequest({ headers }) { throw new Error(`gateway refused ${headers.Authorization}`); }\n');
+  const hookedPath = join(TMP, 'journeys', 'hooked.journey.yaml');
+  writeFileSync(hookedPath, [
+    'name: hooked',
+    `packA: { file: ${PACK_A.replaceAll('\\', '/')} }`,
+    `packB: { mcp: { url: ${lostUrl}, authEnv: HOOKED_MCP_TOKEN } }`,
+  ].join('\n'));
+  const hooked = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'run', hookedPath], {
+    env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP, OBSERVOGRAM_TRANSPORT_HOOK: throwingHook, HOOKED_MCP_TOKEN: 'hooked-secret-token' }, encoding: 'utf8', timeout: 60_000,
+  });
+  assert(hooked.status === 2 && /packc journey: transport hook .*prepareRequest threw: gateway refused Bearer <redacted>/.test(hooked.stderr),
+         'a transport hook fault is a configuration error: exit 2 naming the hook, the bearer redacted', { status: hooked.status, stderr: hooked.stderr.slice(0, 300) });
+  assert(!hooked.stderr.includes('hooked-secret-token') && !hooked.stdout.includes('hooked-secret-token'), 'the journey\'s token reaches no output');
+  assert(readJourneyRuns('hooked').length === 0, 'a hook fault leaves no run record — not a vantage loss');
+  const unloadable = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'run', hookedPath], {
+    env: { ...process.env, OBSERVOGRAM_WORKSPACE: TMP, OBSERVOGRAM_TRANSPORT_HOOK: join(TMP, 'nope.mjs'), HOOKED_MCP_TOKEN: 'x' }, encoding: 'utf8', timeout: 60_000,
+  });
+  assert(unloadable.status === 2 && /OBSERVOGRAM_TRANSPORT_HOOK: cannot load/.test(unloadable.stderr) && readJourneyRuns('hooked').length === 0,
+         'a hook that cannot load: exit 2, no run record', unloadable.stderr.slice(0, 300));
 
   // CLI contract: exit code stays 2 and the record still lands.
   const cli = spawnSync(process.execPath, [resolve('tools/cli.mjs'), 'journey', 'run', lostPath], {
