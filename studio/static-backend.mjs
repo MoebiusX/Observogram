@@ -446,8 +446,10 @@ export function installStaticBackend(config, win = globalThis.window) {
   const doc = win.document;
   const whenReady = (fn) => (doc.readyState === 'loading' ? doc.addEventListener('DOMContentLoaded', fn, { once: true }) : fn());
   whenReady(() => {
+    // `hidden` alone is beaten by the author `display` on .ctrl-link
+    // (app.css, reskin.css): set the style too.
     const link = doc.getElementById('api-link');
-    if (link) link.hidden = true;
+    if (link) { link.hidden = true; link.style.display = 'none'; }
     disableApiMenuItem(doc, win);
     mountNotice(doc, win, backend.packCount);
   });

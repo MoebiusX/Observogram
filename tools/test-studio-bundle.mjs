@@ -654,6 +654,9 @@ test('T7 the REAL bundle boots in headless Chromium against the fixture pack: th
   await page.waitForFunction(() => (document.querySelector('#layer-view')?.textContent || '').trim().length > 0, null, { timeout: 30_000 });
   await page.waitForFunction(() => (document.querySelector('#build-label')?.textContent || '').includes('static bundle'), null, { timeout: 10_000 });
   assert.match(await page.textContent('#build-label'), /static bundle/);
+  // The toolbar is shown now: the api link must stay hidden here too (an
+  // author `display` on .ctrl-link beats the UA's [hidden] rule).
+  assert.equal(await page.isVisible('#api-link'), false, 'the api link is hidden once a pack is open');
   // The Advanced menu's API item is disabled.
   const item = await page.evaluate(() => {
     const el = document.querySelector('.observa-adv-item[data-action="api"]');
