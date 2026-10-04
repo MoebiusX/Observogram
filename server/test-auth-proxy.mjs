@@ -43,7 +43,7 @@ for (const k of STRIP) {
   delete process.env[`TOMOGRAPH_${k}`];
 }
 
-const { ACK_REFUSAL, EXPOSED_REFUSAL, OIDC_REFUSAL, PROXY_ACK, PROXY_AUTH_ENV, duplicatedHeader, parseProxyAuthEnv, rolesOf } = await import('./auth-proxy.mjs');
+const { ACK_REFUSAL, EXPOSED_REFUSAL, OIDC_REFUSAL, PROXY_ACK, PROXY_AUTH_ENV, duplicatedHeader, explainerPageHtml, parseProxyAuthEnv, rolesOf } = await import('./auth-proxy.mjs');
 const { hashPassword } = await import('./auth.mjs');
 const { openRaw, prepare } = await import('./store/db.mjs');
 const { isProxyIssuerKey, proxyIssuerKey } = await import('./store/identity.mjs');
@@ -185,6 +185,12 @@ test('parseProxyAuthEnv refuses: no ACK (a), a wrong ACK, OIDC beside it (b), a 
   refuses({ ...ok, OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET: 'short' }, 'OBSERVOGRAM_PROXY_AUTH_SHARED_SECRET is at least 32 characters');
   refuses({ ...ok, OBSERVOGRAM_PROXY_AUTH_LOGOUT_URL: 'sso.example.test/logout' }, 'OBSERVOGRAM_PROXY_AUTH_LOGOUT_URL is not a URL');
   refuses({ ...ok, OBSERVOGRAM_PROXY_AUTH_LOGOUT_URL: 'javascript:alert(1)' }, 'OBSERVOGRAM_PROXY_AUTH_LOGOUT_URL is an http(s) URL, not javascript:');
+});
+
+test('explainerPageHtml escapes the error like the chrome beside it: a header name holding & or \' (RFC 7230 token characters) is well-formed HTML', () => {
+  const html = explainerPageHtml("no sign-in page: this request carried no X-User&Co'", { name: 'Observogram', tagline: 'a tagline', wordmarkHtml: () => 'Observogram' });
+  assert.ok(html.includes('<div class="err">no sign-in page: this request carried no X-User&amp;Co&#39;</div>'), html);
+  assert.ok(!html.includes('X-User&Co'), 'the raw ampersand must not reach the page');
 });
 
 test('rolesOf: the top rank wins, * covers every user the header names, owner is the flag plus admin, no match is no membership; duplicatedHeader counts raw lines', () => {

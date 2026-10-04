@@ -323,7 +323,7 @@ export const explainerPageHtml = (error, c = authPageChrome()) => `<!doctype htm
 ${AUTH_PAGE_STYLE}</head><body>
 <form onsubmit="return false">
   <h1>${c.wordmarkHtml('i')}</h1><p>${escapeBrand(c.tagline)} · identity from the reverse proxy</p>
-  <div class="err">${error}</div>
+  <div class="err">${escapeBrand(error)}</div>
   <a class="skip" href="/">Back to the studio</a>
 </form></body></html>`;
 
