@@ -187,6 +187,32 @@ test('an empty-repo crawl: the crawler marks every value it invents (the stub SL
   assert.deepEqual(packConformance(older).rows.filter(x => x.symbol === 'slis.service_availability').map(x => [x.field, x.state]), [['good', 'unmarked'], ['total', 'unmarked']]);
 });
 
+test('the hostile fixture crawl: every crawler mark reads `placeholder` (invented channels, the assumed port, the probe target of an underscore name)', () => {
+  const readTree = (dir) => {
+    const out = new Map();
+    (function walk(d) {
+      for (const ent of readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+        const p = join(d, ent.name);
+        if (ent.isDirectory()) walk(p);
+        else if (ent.name !== 'README.md') out.set(p.slice(dir.length + 1).split(/[\\/]/).join('/'), readFileSync(p, 'utf8'));
+      }
+    })(dir);
+    return out;
+  };
+  const pack = crawlFiles(readTree(rel('tools/fixtures/crawl/canonical/Hostile_Repo')), { repoName: 'Hostile_Repo', now: '2026-01-01T00:00:00.000Z' }).canonical;
+  const r = packConformance(pack);
+  assert.equal(r.writers.crawler, true);
+  assert.deepEqual(r.rows.filter(x => x.marker && x.state !== 'placeholder').map(x => `${x.symbol}.${x.field}`), [], 'every crawler literal is recognised');
+  assert.deepEqual(r.rows.filter(x => x.symbol.startsWith('alerting.routes[')).map(x => [x.symbol, x.field, x.state]),
+    [['alerting.routes[0].channels[0]', 'channels.0', 'placeholder'], ['alerting.routes[1].channels[0]', 'channels.0', 'placeholder'], ['alerting.routes[2].channels[0]', 'channels.0', 'placeholder']]);
+  const ep = r.rows.find(x => x.symbol === 'telemetry.backends.metrics-prometheus.endpoints');
+  assert.deepEqual([ep.field, ep.source, ep.state], ['endpoints', 'telemetry', 'placeholder']);
+  const real = clone(pack); real.spec.alerting.routes[2].channels[0].voice = 'pagerduty://real-service-key';
+  assert.equal(packConformance(real).rows.find(x => x.symbol === 'alerting.routes[2].channels[0]').state, 'placeholder', 'a pagerduty:// value is still the library\'s stub shape');
+  real.spec.alerting.routes[2].channels[0].voice = 'tel:+15551234567';
+  assert.equal(packConformance(real).rows.find(x => x.symbol === 'alerting.routes[2].channels[0]').state, 'marker-only', 'a real voice target under a standing mark is marker-only');
+});
+
 // ---------- 6. library ----------
 
 test('a library pack: the note names the fields and the literal; the value walks array indices; a note without a literal is `placeholder`; metadata.owners falls back to the table', () => {

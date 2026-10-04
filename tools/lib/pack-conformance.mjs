@@ -247,7 +247,10 @@ const STUB_PROMQL_RE = /^sum\(rate\((http_requests_total(\{(status_code!~"5\.\."
 // Every importer's baseline defaults: the upconvert's tier-3 trio and the fetcher's per-tier pairs.
 const STUB_MTTD = ['15m', '5m', '2m'];
 const STUB_MTTR = ['1d', '2h', '30m'];
-const STUB_CHANNEL_RE = /@[a-z0-9-]+\.example\.com$|^https:\/\/hooks\.example\.com\/|^https:\/\/hooks\.slack\.example\.com\/|^\+0-000-|^#[a-z0-9_-]+-oncall$|^pagerduty:\/\/|^pagerduty:/;
+// The upconvert's channel stubs (`oncall@<svc>.example.com`, `https://hooks.example.com/<slug>`, `+0-000-…`,
+// `#<svc>-oncall`), the library's (`#<svc>-oncall`, `pagerduty://<svc>`) and the crawler's invented addresses
+// (`#<receiver>`, `oncall@<receiver>.com`, `pagerduty:<receiver>`, `https://hooks.slack.example.com/<channel>`).
+const STUB_CHANNEL_RE = /^oncall@[a-z0-9-]+\.com$|@[a-z0-9-]+\.example\.com$|^https:\/\/hooks\.example\.com\/|^https:\/\/hooks\.slack\.example\.com\/|^\+0-000-|^#[a-z0-9_-]+$|^pagerduty:\/\/|^pagerduty:/;
 const STUB_BURN_WINDOWS = [{ short: '5m', long: '1h', factor: 14, severity: 'SEV1' }, { short: '30m', long: '6h', factor: 6, severity: 'SEV2' }];
 const STUB_GUARDRAILS = { max_invocations_per_hour: 1, requires_human_above: 'SEV2', rollback_on_failure: true };
 const channelValues = (v) => (Array.isArray(v) ? v.flatMap(c => (isObj(c) ? Object.values(c) : [c])) : isObj(v) ? Object.values(v) : [v]);
@@ -331,7 +334,7 @@ export const PLACEHOLDER_FIELDS = Object.freeze({
     F('review_cadence', 'how often the team reviews the baselines', 'operator', 'monthly and weekly are the importers\' stubs', (v) => v === 'monthly' || v === 'weekly'),
   ],
   'validation.synthetic_checks': [
-    F('target', 'the URL the probe calls', 'crawl', 'the service\'s health endpoint; https://<svc>.example.com/health is the importers\' stub', (v) => /^https:\/\/[a-z0-9-]+\.example\.com\/health$/.test(String(v ?? ''))),
+    F('target', 'the URL the probe calls', 'crawl', 'the service\'s health endpoint; https://<svc>.example.com/health is the importers\' stub', (v) => /^https:\/\/[a-z0-9_-]+\.example\.com\/health$/.test(String(v ?? ''))),
     F('interval', 'how often the probe runs', 'operator', '1m is the importers\' stub', (v) => v === '1m'),
     F('on_fail_severity', 'the severity a failed probe pages at', 'operator', 'SEV3 is the importers\' stub', (v) => v === 'SEV3'),
   ],
