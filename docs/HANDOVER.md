@@ -251,7 +251,7 @@ under the workspace for persistence with `:memory:` for tests and demos, one sch
 with versioned migrations, tables for users (with roles), orgs, services (name, owners,
 criticality tier, the pack it carries, its environments), environments (name, bindings,
 endpoints, the MCP it is checked through), pack registrations, and the audit log; the
-existing `requireAuth` / `observogramActor` / `workspaceRoot()` seams stay the integration
+existing `requireAuth` / `observogramActor` (since slice 5 `req.observogramPrincipal`) / `workspaceRoot()` seams stay the integration
 points so OIDC and the file workspace keep working during the migration. The studio side is
 what he means by "feel like a product": sign in, land in your org, see your services and
 their environments as the axis (the landing's *Check an existing service* picks from this
