@@ -78,6 +78,7 @@ import { defaultOrgId } from './store/identity.mjs';
 import { getOrg, listOrgs } from './store/orgs.mjs';
 import { listMembershipsForUser } from './store/memberships.mjs';
 import { brandEnv } from '../tools/lib/brand-env.mjs';
+import { loadTaxonomy, taxonomyAnswer } from './taxonomy.mjs';
 import { mcpTransport, describeTransport } from '../tools/mcp-transport.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
 import { stackSummary } from '../tools/lib/stack-evidence.mjs';
@@ -427,6 +428,16 @@ function findPackMeta(id) {
 // home screen renders these as a small "Browse examples" affordance.
 app.get('/api/examples', authorize('GET /api/examples'), (req, res) => {
   res.json({ examples: EXAMPLE_PACKS.map(catalogEntry) });
+});
+
+// The artefact taxonomy override (OBSERVOGRAM_TAXONOMY, server/taxonomy.mjs):
+// the document the studio compiles at boot to classify typed artefacts, or
+// null when none is configured. `configured` says which; the file's path
+// is logged at start, never served. `no-store` like /api/version: the
+// answer changes with the process, not with the resource.
+app.get('/api/taxonomy', authorize('GET /api/taxonomy'), (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(taxonomyAnswer());
 });
 
 // Catalogue reference packs — the curated best-practice packs surfaced in
@@ -1954,6 +1965,11 @@ function noteLegacyLivePack(db, log, legacyPath) {
 export async function start({ port = PORT, host = HOST, silent = false, legacyLivePack = resolve(ROOT, LEGACY_LIVE_PACK) } = {}) {
   const log = (m) => { if (!silent) process.stdout.write(m + '\n'); };
   const warn = (m) => { if (!silent) process.stderr.write(m + '\n'); };
+  // The artefact taxonomy override (OBSERVOGRAM_TAXONOMY, server/taxonomy.mjs)
+  // is read first: an unreadable or invalid file refuses the start before
+  // the store is touched; a loaded one is installed process-wide for the
+  // diff and the graphs and logged here once, path only.
+  loadTaxonomy({ log });
   const { db, ctx } = await bootStore({ host, log, warn });
   // The MCP transport hook (OBSERVOGRAM_TRANSPORT_HOOK, tools/mcp-transport.mjs)
   // loads once per process: a hook that cannot load refuses the start, and

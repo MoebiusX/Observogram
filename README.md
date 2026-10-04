@@ -1423,6 +1423,7 @@ every other `GET` is `viewer` and every other route `operator`.
 | `GET` | `/api/version` | Which build is this: version, build (commit count), commit, branch, dirty, date, shallow, source, label — public, no-store |
 | `GET` | `/api/packs` | In-memory and catalog pack registry |
 | `GET` | `/api/examples` | Bundled example packs |
+| `GET` | `/api/taxonomy` | The artefact taxonomy override the server was started with (`OBSERVOGRAM_TAXONOMY`): `{ ok, taxonomy, configured }` — the document or `null`, never its path; no-store |
 | `GET` | `/api/references` | Curated catalogue reference packs |
 | `GET` | `/api/packs/:id` | Adapted layered pack |
 | `GET` | `/api/packs/:id/canonical` | Canonical pack with env overlay |

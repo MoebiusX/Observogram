@@ -298,6 +298,14 @@ export async function api(path, opts = {}) {
   return r.json();
 }
 
+// The artefact taxonomy override the server was started with
+// (GET /api/taxonomy, a viewer route — after loadIdentity()): the document
+// to compile, or null for the default families.
+export async function loadTaxonomy() {
+  const r = await api('/api/taxonomy');
+  return r?.taxonomy ?? null;
+}
+
 export async function loadCatalog() {
   const { packs } = await api('/api/packs');
   state.catalog = packs || [];

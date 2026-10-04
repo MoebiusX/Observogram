@@ -77,6 +77,7 @@ export const ROUTES = Object.freeze({
   'GET /api/orgs': { class: 'viewer' },
   'GET /api/packs': { class: 'viewer' },
   'GET /api/examples': { class: 'viewer' },
+  'GET /api/taxonomy': { class: 'viewer' },
   'GET /api/references': { class: 'viewer' },
   'GET /api/packs/:id': { class: 'viewer' },
   'GET /api/packs/:id/canonical': { class: 'viewer' },

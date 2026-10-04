@@ -32,7 +32,7 @@ delete process.env.TOMOGRAPH_BUILD;
 // imports; a shell's OBSERVOGRAM_DB (or a seed / join-role knob) must not
 // leak in. The store lands in SMOKE_WORKSPACE. Read at start(), so these
 // land before it despite the hoisted import below.
-for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH', 'TRANSPORT_HOOK']) {
+for (const k of ['DB', 'BOOTSTRAP_ADMIN', 'OIDC_JOIN_ROLE', 'ADMIN_PASSWORD', 'INSECURE_NO_AUTH', 'TRANSPORT_HOOK', 'TAXONOMY']) {
   delete process.env[`OBSERVOGRAM_${k}`];
   delete process.env[`TOMOGRAPH_${k}`];
 }
@@ -178,6 +178,15 @@ try {
   const catalog = await getJson(base, '/api/packs');
   assert(Array.isArray(catalog.packs), 'GET /api/packs returns packs[]');
   assert(catalog.packs.length === 0, 'GET /api/packs returns empty catalog (Phase 7q)', catalog.packs.length, 0);
+
+  // /api/taxonomy — the artefact taxonomy override (server/taxonomy.mjs):
+  // unconfigured here (the in-process strip above), so the studio binds the
+  // default families; the path is never in the body.
+  const taxRes = await fetch(`${base}/api/taxonomy`);
+  const tax = await taxRes.json();
+  assert(taxRes.status === 200, 'GET /api/taxonomy answers 200');
+  assert(JSON.stringify(tax) === JSON.stringify({ ok: true, taxonomy: null, configured: false }), 'GET /api/taxonomy unconfigured: { ok, taxonomy: null, configured: false }', tax, { ok: true, taxonomy: null, configured: false });
+  assert((taxRes.headers.get('cache-control') || '') === 'no-store', 'GET /api/taxonomy is Cache-Control: no-store', taxRes.headers.get('cache-control'), 'no-store');
 
   // /api/examples — the curated reference packs. Trimmed to the three
   // hand-authored baselines; demo-skeleton and production-live are no

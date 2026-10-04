@@ -16,7 +16,7 @@ import {
 } from './constants.mjs';
 import { state, $, $$, persistence, defaultBuildState, BUILD_PERSIST_FIELDS } from './state.mjs';
 import {
-  api, loadCatalog, validateUploaded, registeredOrValidated, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel, deniedError, deployRefusal,
+  api, loadCatalog, loadTaxonomy, validateUploaded, registeredOrValidated, authHeaders, orgQuery, setActiveOrg, getActiveOrg, savedOrg, orgChipModel, deniedError, deployRefusal,
   setSignedInLogin, recallMcpUrl, rememberMcpUrl, forgetMcpUrls, signOutOthersText,
   loadDeployProfiles, storeDeployProfile, removeDeployProfile,
 } from './api.mjs';
@@ -1523,9 +1523,12 @@ async function boot() {
   await loadIdentity();
   resolveActiveOrg();
   // The artefact taxonomy (tools/lib/artefact-classify.mjs), bound before
-  // the first render: the Discover board groups by it, the row kinds and
-  // the drawer read it for typed artefacts.
-  bindTaxonomy(await import('/lib/artefact-classify.mjs'), null);
+  // the first render with the server's override (GET /api/taxonomy, a
+  // viewer route — hence after the identity): the Discover board groups
+  // by it, the row kinds and the drawer read it for typed artefacts. An
+  // answer that cannot be fetched or compiled binds the default families
+  // and says so once; it never blocks the boot.
+  await bindTaxonomyFromServer();
   // The deploy target profiles saved before slice 3 (one browser-wide key,
   // URLs as typed) become this user's, stripped, now — not at the first
   // deploy: no credential waits in localStorage until then. Not on a boot
@@ -5096,6 +5099,18 @@ function setupMcpPanel() {
 // package.json fallback.
 let serverVersion = null;   // /healthz: { version, build, node, specVersion }
 let serverBuild = null;     // buildLabelModel(/api/version)
+
+async function bindTaxonomyFromServer() {
+  const mod = await import('/lib/artefact-classify.mjs');
+  let json = null;
+  try { json = await loadTaxonomy(); }
+  catch (e) { console.warn(`[taxonomy] GET /api/taxonomy failed — classifying with the default families: ${e.message}`); }
+  try { bindTaxonomy(mod, json); }
+  catch (e) {
+    console.warn(`[taxonomy] the server's override does not compile — classifying with the default families: ${e.message}`);
+    bindTaxonomy(mod, null);
+  }
+}
 
 async function loadVersion() {
   const [info, health] = await Promise.all([loadBuildInfo(), loadHealth()]);
