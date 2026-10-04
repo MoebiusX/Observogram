@@ -1,0 +1,65 @@
+{
+  "id": "checkout-typed",
+  "name": "checkout (typed)",
+  "badge": "TIER-1",
+  "description": "A layered pack produced by another toolchain: every artefact carries a `type`, the ids follow its own scheme. Rendered by tools/test-golden-board.mjs without and with tools/fixtures/taxonomy/taxonomy.json.",
+  "meta": {
+    "name": "checkout",
+    "version": "2.3.0",
+    "service": "checkout",
+    "criticality": "tier-1",
+    "environment": "prod",
+    "owners": ["team-payments"]
+  },
+  "layers": {
+    "L1": [
+      { "id": "svc-checkout-availability", "type": "PackSLI", "title": "availability", "desc": "good requests over all requests", "tool": "ratio SLI", "tags": ["sli"], "source": "Declared",
+        "spec": { "id": "availability", "type": "ratio", "good": "sum(rate(http_requests_total{service=\"checkout\",code!~\"5..\"}[5m]))", "total": "sum(rate(http_requests_total{service=\"checkout\"}[5m]))" } },
+      { "id": "svc-checkout-latency", "type": "PackSLI", "title": "latency", "desc": "p99 request latency", "tool": "threshold SLI", "tags": ["sli"], "source": "Declared",
+        "spec": { "id": "latency", "type": "threshold", "query": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service=\"checkout\"}[5m])) by (le))", "threshold": 0.3 } },
+      { "id": "svc-checkout-slo-availability", "type": "PackSLO", "title": "availability-slo", "desc": "99.9% over 30d (SLI: availability)", "tool": "SLO", "tags": ["slo"], "source": "Declared",
+        "spec": { "id": "availability-slo", "sli": "availability", "objective": 0.999, "window": "30d" } },
+      { "id": "svc-checkout-slo-latency", "type": "PackSLO", "title": "latency-slo", "desc": "99% over 28d (SLI: latency)", "tool": "SLO", "tags": ["slo"], "source": "Declared",
+        "spec": { "id": "latency-slo", "sli": "latency", "objective": 0.99, "window": "28d" } },
+      { "id": "checkout-error-budget-sli", "type": "sli", "title": "error-budget", "desc": "declares the family name itself: classified with no override", "tool": "ratio SLI", "tags": ["sli"], "source": "Declared",
+        "spec": { "id": "error-budget", "type": "ratio", "good": "vector(1)", "total": "vector(1)" } }
+    ],
+    "L2": [
+      { "id": "otel-contract-checkout", "type": "OtelContract", "title": "OpenTelemetry contract", "desc": "semconv 1.28.0 · go, typescript", "tool": "OpenTelemetry", "tags": ["otel"], "source": "Declared",
+        "spec": { "semconv": "1.28.0", "resource_attributes": { "required": ["service.name", "deployment.environment"] },
+                  "sdk": { "languages": ["go", "typescript"], "sampling": { "policy": "parentbased_traceidratio", "ratio": 0.2 }, "propagators": ["tracecontext", "baggage"] } } },
+      { "id": "mimir-main", "type": "backend", "title": "mimir", "desc": "metrics backend", "tool": "mimir", "tags": ["backend", "metrics"], "source": "Declared",
+        "spec": { "id": "mimir", "signal": "metrics", "product": "mimir" } }
+    ],
+    "L3": [
+      { "id": "grafana-uid-9f2", "type": "GrafanaDashboard", "title": "Checkout overview", "desc": "the service at a glance", "tool": "Grafana", "tags": ["dashboard"], "source": "Declared",
+        "spec": { "id": "checkout-overview", "provider": { "kind": "grafana" }, "folder": "checkout" } },
+      { "id": "grafana-uid-a41", "type": "GrafanaDashboard", "title": "Checkout latency", "desc": "latency by endpoint", "tool": "Grafana", "tags": ["dashboard"], "source": "Declared",
+        "spec": { "id": "checkout-latency", "provider": { "kind": "grafana" }, "folder": "checkout" } },
+      { "id": "rr-checkout-error-ratio", "type": "RecordingRule", "title": "checkout:http_requests:error_ratio_5m", "desc": "recording rule", "tool": "Prometheus recording rule", "tags": ["recording"], "source": "Declared",
+        "spec": { "name": "checkout:http_requests:error_ratio_5m", "expr": "sum(rate(http_requests_total{service=\"checkout\",code=~\"5..\"}[5m])) / sum(rate(http_requests_total{service=\"checkout\"}[5m]))" } },
+      { "id": "rr-checkout-latency-p99", "type": "RecordingRule", "title": "checkout:http_request_duration_seconds:p99_5m", "desc": "recording rule", "tool": "Prometheus recording rule", "tags": ["recording"], "source": "Declared",
+        "spec": { "name": "checkout:http_request_duration_seconds:p99_5m", "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service=\"checkout\"}[5m])) by (le))" } }
+    ],
+    "L4": {
+      "policy": [
+        { "id": "burn-checkout-fast", "type": "burn_rate", "title": "burn-rate alert: availability-slo", "desc": "2 window(s) · severities: SEV1, SEV2", "tool": "Prometheus alerting", "tags": ["burn-rate"], "source": "Declared",
+          "spec": { "slo": "availability-slo", "windows": [{ "short": "5m", "long": "1h", "factor": 14, "severity": "SEV1" }, { "short": "30m", "long": "6h", "factor": 6, "severity": "SEV2" }] } }
+      ],
+      "alerting": [
+        { "id": "promrule-HighErrorRate", "type": "PrometheusRule", "title": "HighErrorRate", "desc": "error ratio above 5% for 5m", "tool": "PrometheusRule", "tags": ["alert", "SEV2"], "source": "Declared",
+          "spec": { "name": "HighErrorRate", "expr": "checkout:http_requests:error_ratio_5m > 0.05", "for": "5m", "severity": "SEV2" } },
+        { "id": "promrule-LatencyBudgetBurn", "title": "LatencyBudgetBurn", "desc": "no `type`: only the override's id rule can place it", "tool": "PrometheusRule", "tags": ["alert", "SEV3"], "source": "Declared",
+          "spec": { "name": "LatencyBudgetBurn", "expr": "checkout:http_request_duration_seconds:p99_5m > 0.3", "for": "15m", "severity": "SEV3" } },
+        { "id": "route-sev1-pager", "type": "AlertRoute", "title": "SEV1 → pager", "desc": "pages the on-call", "tool": "Alertmanager", "tags": ["route", "SEV1"], "source": "Declared",
+          "spec": { "severity": "SEV1", "channels": [{ "pagerduty": "checkout-oncall" }] } },
+        { "id": "route-sev2-chat", "type": "AlertRoute", "title": "SEV2 → chat", "desc": "tells the team channel", "tool": "Alertmanager", "tags": ["route", "SEV2"], "source": "Declared",
+          "spec": { "severity": "SEV2", "channels": [{ "msteams": "#checkout-alerts" }] } }
+      ],
+      "healing": [
+        { "id": "heal-rollout-restart", "type": "remediation", "title": "rollout restart", "desc": "restarts the deployment when HighErrorRate fires", "tool": "Argo Rollouts", "tags": ["remediation"], "source": "Declared",
+          "spec": { "trigger": "alert:HighErrorRate", "automation": "kubectl rollout restart deploy/checkout", "runbook": "runbooks/checkout-restart.md" } }
+      ]
+    }
+  }
+}
