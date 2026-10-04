@@ -699,8 +699,8 @@
       "changedSinceRelease": false
     },
     "tools/lib/pack-conformance.mjs": {
-      "sha256": "88aec49336b8161c682bb53d2014065ef2f0f648d013e7de5ce3f4dfd7f62f04",
-      "bytes": 34066,
+      "sha256": "7706981dbfef266c64f4c63cb0116449e89e1272bcc9a9433ef6b0b008d5c877",
+      "bytes": 34775,
       "exports": [
         "PLACEHOLDER_FIELDS",
         "SCAFFOLD_PREFIXES",

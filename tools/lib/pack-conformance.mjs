@@ -240,7 +240,13 @@ function parseLibraryNote(note) {
 // ---------- 1.2 the field table ----------
 
 const PROMQL_HINT = 'the service\'s recording rules or dashboard queries (npm run crawl reads them), or the backend\'s rule listing';
-const STUB_PROMQL_RE = /^sum\(rate\(http_requests_total\{(status_code!~"5\.\.",)?service="[^"]*"\}\[5m\]\)\)$/;
+// The upconvert's `http_requests_total{…service="<svc>"}` pair, the fetcher's platform stub
+// `http_requests_total{status_code!~"5.."}` / `http_requests_total` and its per-service
+// `http_server_request_duration_seconds_count{service_name="<svc>"…}` pair.
+const STUB_PROMQL_RE = /^sum\(rate\((http_requests_total(\{(status_code!~"5\.\.",)?service="[^"]*"\}|\{status_code!~"5\.\."\})?|http_server_request_duration_seconds_count\{service_name="[^"]*"(,http_response_status_code!~"5\.\.")?\})\[5m\]\)\)$/;
+// Every importer's baseline defaults: the upconvert's tier-3 trio and the fetcher's per-tier pairs.
+const STUB_MTTD = ['15m', '5m', '2m'];
+const STUB_MTTR = ['1d', '2h', '30m'];
 const STUB_CHANNEL_RE = /@[a-z0-9-]+\.example\.com$|^https:\/\/hooks\.example\.com\/|^https:\/\/hooks\.slack\.example\.com\/|^\+0-000-|^#[a-z0-9_-]+-oncall$|^pagerduty:\/\/|^pagerduty:/;
 const STUB_BURN_WINDOWS = [{ short: '5m', long: '1h', factor: 14, severity: 'SEV1' }, { short: '30m', long: '6h', factor: 6, severity: 'SEV2' }];
 const STUB_GUARDRAILS = { max_invocations_per_hour: 1, requires_human_above: 'SEV2', rollback_on_failure: true };
@@ -291,7 +297,7 @@ export const PLACEHOLDER_FIELDS = Object.freeze({
     F('version', 'the version it runs', 'telemetry', 'the backend\'s build-info endpoint, or the image tag', null),
   ],
   'pipelines.receivers': [F('name', 'confirmation from the collector config that this receiver exists (the stub assumes otlp)', 'crawl', 'the collector config\'s receivers: block', (v) => v === 'otlp')],
-  'pipelines.processors': [F('name', 'confirmation from the collector config that this processor exists (the stub assumes batch)', 'crawl', 'the collector config\'s processors: block', (v) => v === 'batch')],
+  'pipelines.processors': [F('name', 'confirmation from the collector config that this processor exists (the stub assumes batch / memory_limiter)', 'crawl', 'the collector config\'s processors: block', (v) => v === 'batch' || v === 'memory_limiter')],
   'pipelines.exporters': [
     F('kind', 'the exporter the collector config declares for this signal', 'crawl', 'the collector config\'s exporters: block and the pipeline that uses it', (v, _it, ctx) => (ctx.key === 'metrics' && v === 'prometheusremotewrite') || (ctx.key === 'logs' && v === 'elasticsearch') || (ctx.key === 'traces' && (v === 'otlp' || v === 'jaeger'))),
   ],
@@ -320,9 +326,9 @@ export const PLACEHOLDER_FIELDS = Object.freeze({
     F('trigger', 'the alert that triggers it', 'crawl', 'alert:<rule name>', null),
   ],
   baselines: [
-    F('mttd_target_p50', 'measured from the service\'s incident history', 'telemetry', '15m is every importer\'s stub', (v) => v === '15m'),
-    F('mttr_target_p50', 'measured from the service\'s incident history', 'telemetry', '1d is every importer\'s stub', (v) => v === '1d'),
-    F('review_cadence', 'how often the team reviews the baselines', 'operator', 'monthly is every importer\'s stub', (v) => v === 'monthly'),
+    F('mttd_target_p50', 'measured from the service\'s incident history', 'telemetry', '15m / 5m / 2m are the importers\' per-tier stubs', (v) => STUB_MTTD.includes(v)),
+    F('mttr_target_p50', 'measured from the service\'s incident history', 'telemetry', '1d / 2h / 30m are the importers\' per-tier stubs', (v) => STUB_MTTR.includes(v)),
+    F('review_cadence', 'how often the team reviews the baselines', 'operator', 'monthly and weekly are the importers\' stubs', (v) => v === 'monthly' || v === 'weekly'),
   ],
   'validation.synthetic_checks': [
     F('target', 'the URL the probe calls', 'crawl', 'the service\'s health endpoint; https://<svc>.example.com/health is the importers\' stub', (v) => /^https:\/\/[a-z0-9-]+\.example\.com\/health$/.test(String(v ?? ''))),
