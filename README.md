@@ -250,24 +250,32 @@ latest 22. See [docs/STORE_PLAN.md](docs/STORE_PLAN.md).
 
 Linux is the reference platform: CI runs `npm test` on Ubuntu on Node 22.16.0
 (the floor) and the latest 22. Windows (Node ≥ 22.16, PowerShell or cmd) is
-supported for the CLI, the server, the studio and the static bundle; `npm test`
-is green there except the explicit skips — every one printed by `node --test`
-as `# SKIP win32: <reason>` (or `- SKIP win32: <reason>` in a harness suite),
-never a silent pass — for facts Windows cannot express: POSIX mode bits
-(`0600`/`0644`, `chmod 0000`), signal delivery (`process.kill` ends a Windows
-process outright, so the store's SIGTERM/SIGINT self-close cannot be
-exercised) and symlink creation (a privilege). There are 15 win32-skip sites —
-`server/test-store.mjs` (8), `server/test-store-ops.mjs` (4),
-`server/test-store-import.mjs` (2), `tools/test-journey.mjs` (1) — 19 tests
-once the loops unroll, plus the PID 1 namespace test that skips wherever
-`unshare` is unavailable: 20 `SKIP` lines on a Windows run. `tools/test-platform.mjs`
-(`npm run test:platform`) keeps this count and the reasons honest and proves
-the module-relative path resolvers (`fileURLToPath`, never `URL.pathname`) on
-every platform. Every suite names the platform only through
-`server/fixtures/platform.mjs` (`isWin32`, `win32Skip(reason)`,
-`skipOnWin32(t, reason)`). The checkout is LF everywhere (`.gitattributes`),
-so goldens and `VENDOR-MANIFEST.json`'s hashes verify under any
-`core.autocrlf`. macOS is not in CI; the POSIX suites run there.
+intended to run the CLI, the server, the studio and the static bundle, and
+`npm test` is expected to be green there except the explicit skips — every
+one printed by `node --test` as `# SKIP win32: <reason>` (or `- SKIP win32:
+<reason>` in a harness suite), never a silent pass — for facts Windows cannot
+express: POSIX mode bits (`0600`/`0644`, `chmod 0000`), signal delivery
+(`process.kill` ends a Windows process outright, so the store's SIGTERM/SIGINT
+self-close cannot be exercised) and symlink creation (a privilege). *Expected,
+not verified*: the skip set is predicted from code reading, no Windows run
+exists yet, and the downstream's first `npm test` on Windows is the
+acceptance. There are 15 win32-skip sites — `server/test-store.mjs` (8),
+`server/test-store-ops.mjs` (4), `server/test-store-import.mjs` (2),
+`tools/test-journey.mjs` (1) — 19 skipped tests once the loops unroll, so a
+Windows run prints 19 `SKIP win32:` lines (18 `# SKIP win32:` from node:test,
+one `- SKIP win32:` from `tools/test-journey.mjs`), plus the PID 1 namespace
+test's `# SKIP unshare --pid is unavailable here` and the browser suites'
+Playwright skips when `OBSERVOGRAM_PLAYWRIGHT` is unset. An elevated runner
+(GitHub's `windows-latest`) can create symlinks, so it sees the 4 symlink
+skips as tests it could run — fewer `SKIP win32:` lines there is the next
+step, not a bug. `tools/test-platform.mjs` (`npm run test:platform`) keeps
+this count and the reasons honest and proves the module-relative path
+resolvers (`fileURLToPath`, never `URL.pathname`) on every platform. Every
+suite names the platform only through `server/fixtures/platform.mjs`
+(`isWin32`, `isLinux`, `PLATFORM`, `win32Skip(reason)`, `skipOnWin32(t,
+reason)`). The checkout is LF everywhere (`.gitattributes`), so goldens and
+`VENDOR-MANIFEST.json`'s hashes verify under any `core.autocrlf`. macOS is
+not in CI; the POSIX suites run there.
 
 ```bash
 git clone https://github.com/MoebiusX/Observogram.git
@@ -2219,6 +2227,7 @@ server/
   service-admin.mjs        The service, environment and MCP endpoint rules behind /api/services, /api/environments and /api/mcp-endpoints; the tier rule; an MCP target picked by id
   routes/                  The identity API (identity.mjs), the services API (services.mjs), the deploy routes, and the handler helpers they share (util.mjs)
   store/                   The embedded store (docs/STORE_PLAN.md): db.mjs (the one node:sqlite door), migrations, repositories, the legacy import and import --replace, backup/restore, ops.mjs (export, the replace request, rekey-issuer, purge-org)
+  fixtures/                What the suites share: serve-child.mjs (a hermetic child server, the STRIP list), platform.mjs (isWin32, the reasoned win32 skips), pre-store-build.mjs, route-inventory.mjs, store-050-guard.mjs
   test-smoke.mjs           End-to-end route smoke tests
 
 studio/
@@ -2246,6 +2255,7 @@ tools/
   build-studio-bundle.mjs  The studio as one static HTML file: an import map of data: modules, inlined stylesheets, the packs (npm run build:studio)
   pack-init.mjs            packc init: build a pack from the library (list / show / instantiate)
   test-build-model.mjs     The BUILD journey's studio models over captured API responses (tools/fixtures/build/)
+  test-platform.mjs        The Windows support statement's Linux-runnable proofs: fileURLToPath over URL.pathname, the T1 separator idiom, the platform fixture, and the guards (no URL.pathname as a path, 'win32' only in the fixture, every skip reasoned and counted in README "Platforms")
   validate-pack.mjs        Canonical pack validator
   pack-conformance.mjs     The placeholders a pack still carries: path, field, what it needs, where it comes from (--json, --strict)
   upconvert-legacy.mjs     Layered JSON -> canonical; idempotent, merges into an existing output (--merge, --overwrite)

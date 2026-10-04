@@ -179,6 +179,9 @@ The golden suites read `tools/fixtures/` — copy that directory with them.
   transport hook, the taxonomy, the reverse-proxy identity, the brand; §10:
   the embeddable studio bundle); the *Decisions — downstream seams* section
   of [`UPDATE_JOURNEY.md`](UPDATE_JOURNEY.md) tracks them.
+- Platform-specific behaviour beyond what §13 states: Windows as §13 says
+  (expected, not yet verified by a Windows run); macOS is untested (the POSIX
+  suites run there, no CI leg).
 
 ## 9. The private plugin layer
 
@@ -531,3 +534,41 @@ npm run pack-conformance -- pack.yaml --strict   # CI, once the pack is conforma
   `metadata.imports`, so the upconvert's `legacy/<slug>` pseudo-refs are
   reported `unmarked` and never parked; a board change.
 
+## 13. Platforms
+
+Linux is the reference platform (CI: Ubuntu, Node 22.16.0 and the latest 22).
+Windows (Node ≥ 22.16, PowerShell or cmd) is intended to run the CLI, the
+server, the studio and the static bundle, and `npm test` is expected to be
+green there except the explicit skips, every one printed as `# SKIP win32:
+<reason>` by `node --test` or `- SKIP win32: <reason>` by a harness suite —
+never a silent pass. The skipped facts are the ones Windows cannot express:
+POSIX mode bits (`0600`, `0644`, `chmod 0000`), signal delivery
+(`process.kill` ends a Windows process outright, so the store's SIGTERM/SIGINT
+self-close cannot be exercised) and symlink creation (a privilege). There are
+15 skip sites — `server/test-store.mjs` (8), `server/test-store-ops.mjs` (4),
+`server/test-store-import.mjs` (2), `tools/test-journey.mjs` (1) — 19 skipped
+tests once the loops unroll: **a Windows run is expected to print 19
+`SKIP win32:` lines** (18 `# SKIP win32:` from node:test, one `- SKIP win32:`
+from `tools/test-journey.mjs`), plus the PID 1 namespace test's `# SKIP
+unshare --pid is unavailable here` and the browser suites' Playwright skips
+when `OBSERVOGRAM_PLAYWRIGHT` is unset. Expected, not verified: the set is
+predicted from code reading (TerminateProcess semantics, `stat.mode` 0666, no
+`FILE_SHARE_DELETE` on the sqlite handle); no Windows run exists yet. Every
+suite names the platform only through `server/fixtures/platform.mjs`
+(`isWin32`, `isLinux`, `PLATFORM`, `win32Skip(reason)`, `skipOnWin32(t,
+reason)`); `tools/test-platform.mjs` keeps the count and the reasons honest
+and proves the module-relative resolvers (`fileURLToPath`, never
+`URL.pathname`, which is `/C:/…` on Windows and percent-encoded everywhere) on
+every platform. The checkout is LF everywhere (`.gitattributes`: `* text=auto
+eol=lf`), so the goldens and `VENDOR-MANIFEST.json`'s sha256 verify under any
+`core.autocrlf`.
+
+The downstream's first `npm test` on Windows is the acceptance. Report the
+`SKIP win32:` lines it prints: a count other than 19 — or fewer on an
+elevated runner, where symlinks work and the 4 symlink skips are tests that
+could run — is the bug report. A predicted-portable test that fails there is
+fixed upstream by a new reasoned skip site and the README count bump the
+guard forces; a skip that would pass there is a test to un-skip (the fixture
+can probe `symlinkSync` once and skip only on EPERM). The Windows CI leg
+itself (`windows-latest`, `npm ci && npm test`, no `fetch-validators`, no
+docker) is deferred until that first run confirms the count.

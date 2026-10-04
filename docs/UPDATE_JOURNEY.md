@@ -805,3 +805,41 @@ and languages commits regenerated with the stated diffs. Tests: 857 → 858
 repositories), plus pins in `tools/test-crawl.mjs` and
 `tools/test-pack-conformance.mjs`.
 
+**B4 — Windows portability.** Delivered as tests, fixtures and docs only:
+`server/fixtures/platform.mjs` (`isWin32`, `isLinux`, `PLATFORM`, `win32Skip`,
+`skipOnWin32`, the three `WIN32` reasons), `tools/test-platform.mjs` (the Linux-runnable guard),
+`fileURLToPath` in the three module-relative resolvers, the separator-safe
+studio-bundle T1 assertion, `closeStore()` before the five in-process suites
+remove their workspace, `* text=auto eol=lf` in `.gitattributes` (README,
+"Platforms"; [`DOWNSTREAM.md`](DOWNSTREAM.md) §13). Decisions: *fileURLToPath
+over `URL.pathname`, everywhere* — `.pathname` is `/C:/…` on Windows and
+percent-encoded on every platform, so the guard refuses the idiom under
+`server/`, `tools/` and `studio/` rather than fixing the two sites that bit;
+*skips are reasoned and counted, never silent* — a skip is `win32Skip(reason)`
+in node:test's option form or `skipOnWin32(t, reason)`, both print
+`win32: <reason>`, the guard rejects an argument that is not `WIN32.<fact>` or
+a literal of substance, and README pins the site count so a new skip is a
+README edit too; *a POSIX paragraph inside a portable test becomes a subtest*
+with the option form, because a mid-test `t.skip()` reports the whole test
+skipped after its assertions ran; *the store closes before its workspace is
+removed* — the portable fix, not a retrying `rmSync`, since on Linux the
+earlier close costs nothing and a use-after-close throws at once; *the
+fixture is the one place a suite reads `process.platform`* — the guard bans
+the identifier elsewhere, the two data reads of `isWin32` (the `.exe` suffix
+and mimirtool notice, the flat-export 0666 expectation) are allowlisted and a
+`skip: isWin32` or `if (isWin32)` is refused as a silent skip; *no Windows CI leg yet* — no Windows runner here
+to prove it green before it gates `develop`; the downstream's first Windows
+run is the acceptance, and a predicted-portable test failing there is fixed by
+a new reasoned skip site plus the README bump the guard forces. Config
+surface: none. Inert when unconfigured: on Linux every edited suite runs what
+it ran (every `skip` option is `false`), no module under `tools/lib`,
+`server/` runtime or `studio/` changes, so the goldens, `VENDOR-MANIFEST.json`
+and `studio/design-tokens.json` are untouched. Tests: 843 → 852
+(`tools/test-platform.mjs`; the three POSIX paragraphs now subtests or their
+own test). Expected on Windows — predicted from code reading, no Windows run exists
+yet: 19 `SKIP win32:` lines (18 `# SKIP win32:` from node:test, one
+`- SKIP win32:` from `tools/test-journey.mjs`), plus the PID 1 test's
+`unshare` skip and the browser suites' Playwright skips when unset; an
+elevated runner sees the 4 symlink skips as tests it could run. Verified
+here by the Linux-runnable proofs only; the downstream's first Windows run
+is the acceptance.
