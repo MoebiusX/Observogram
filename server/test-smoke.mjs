@@ -641,6 +641,8 @@ try {
   const authedAudit = await getJson(base, `/api/deploys?pack=payment-service&limit=5`);
   const authedRec = authedAudit.deploys.find(d => d.deployId === authedDeploy.deployId);
   assert(authedRec?.actor === 'smoke-ci', 'audit actor is the token label', authedRec?.actor, 'smoke-ci');
+  assert(JSON.stringify(Object.keys(authedRec).slice(0, 4)) === JSON.stringify(['type', 'deployId', 'at', 'actor']),
+         'a deploy record keeps its key order — the actor third', Object.keys(authedRec).slice(0, 4), ['type', 'deployId', 'at', 'actor']);
   assert(!JSON.stringify(authedRec).includes('smoke-secret'), 'the token secret never lands in the audit log');
   const authedRow = auditRows({ action: 'deploy.run', limit: 1 })[0];
   assert(authedRow?.targetId === authedDeploy.deployId && authedRow.actor === 'smoke-ci',
@@ -1161,6 +1163,11 @@ try {
     const rbAudit = await getJson(base, `/api/deploys?pack=payment-service&limit=3`);
     assert(rbAudit.deploys.find(d => d.deployId === rb.deployId)?.rollbackOf === bulkBody.deployId,
            'the rollback lands in the audit log with rollbackOf');
+    for (const id of [bulkBody.deployId, rb.deployId]) {
+      const keys = Object.keys(rbAudit.deploys.find(d => d.deployId === id) || {}).slice(0, 4);
+      assert(JSON.stringify(keys) === JSON.stringify(['type', 'deployId', 'at', 'actor']),
+             'a bulk and a rollback record keep their key order — the actor third', keys, ['type', 'deployId', 'at', 'actor']);
+    }
     const rbRow = auditRows({ action: 'deploy.rollback', limit: 1 })[0];
     assert(rbRow?.targetId === rb.deployId && rbRow.actor === 'local' && rbRow.detail.rollbackOf === bulkBody.deployId
            && rbRow.detail.items === 1 && rbRow.detail.ok === 1 && rbRow.detail.failed === 0 && rbRow.detail.manual === rb.manual.length

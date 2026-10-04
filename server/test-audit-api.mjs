@@ -502,6 +502,7 @@ test('the slice\'s rows by oscar (an operator with an email): the register, the 
   assert.ok(!('fileError' in d), 'fileError is an absent key on a normal row');
   const line = readFileSync(DEPLOYS, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).find((l) => l.deployId === ids.deploy && l.type === 'deploy');
   assert.equal(line.actor, 'oscar', 'the deploys.jsonl line says the login');
+  assert.deepEqual(Object.keys(line).slice(0, 4), ['type', 'deployId', 'at', 'actor'], 'the line keeps its key order: the actor third, as every line before slice 5');
   assert.ok(!readFileSync(DEPLOYS, 'utf8').includes(EMAIL), 'the email is in no line');
   assert.ok(!JSON.stringify(dep.rows).includes(EMAIL), 'the email is in no row');
 

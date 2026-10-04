@@ -67,15 +67,16 @@ export function deployRoutes({ findPackMeta, loadPackCanonical, overlaidCanonica
   const rethrowHook = (e) => { if (isTransportHookError(e)) throw e; };
 
   // One line and one row for a deploy-shaped act (deploy, deploy-bulk,
-  // rollback). In order: the principal's actor goes on the record (a blank
-  // one — a bug past authorize() — throws requireActor's TypeError before
-  // anything is written: neither the line nor the row); the line is
-  // appended (a failure is one stderr line and the response stands, as
-  // before); the audit row is written after it, flagged fileError when the
-  // line is missing. Returns null, or the insert's error text for the
-  // response's `auditError`.
-  function recordDeploy(req, record, { action, mcpEndpoint = null, manual, tag }) {
-    record.actor = actorForRecord(req);
+  // rollback). In order: the principal's actor goes on the record, third
+  // after deployId and at as every line before it (a blank one — a bug past
+  // authorize() — throws requireActor's TypeError before anything is
+  // written: neither the line nor the row); the line is appended (a failure
+  // is one stderr line and the response stands, as before); the audit row
+  // is written after it, flagged fileError when the line is missing.
+  // Returns null, or the insert's error text for the response's
+  // `auditError`.
+  function recordDeploy(req, { deployId, at, ...rest }, { action, mcpEndpoint = null, manual, tag }) {
+    const record = { deployId, at, actor: actorForRecord(req), ...rest };
     let fileError = false;
     try {
       appendDeployRecord(record);
