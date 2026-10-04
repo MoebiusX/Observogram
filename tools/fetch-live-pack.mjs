@@ -56,7 +56,7 @@ import { emit as emitYaml, parse as parseYaml } from './lib/mini-yaml.mjs';
 import { createMcpClient as createMcpClientCore, isTransportHookError } from './lib/mcp-client.mjs';
 import { mcpTransport, describeTransport } from './mcp-transport.mjs';
 import { validateCanonical, SPEC_VERSION } from './lib/validator.mjs';
-import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule } from './lib/sli-inference.mjs';
+import { inferSlisFromRecordingRules, ruleNameToSliId, burnAlertsFromAlertRules, operationalAlertRule, isSpecRecordingRuleName } from './lib/sli-inference.mjs';
 import { materializeL2XFromBackends } from './lib/l2x.mjs';
 import { routesFromAlertmanagerConfig } from './lib/alert-routes.mjs';
 import { backendForScrapeJob, knownBackendProduct } from './lib/backend-products.mjs';
@@ -1597,9 +1597,8 @@ export function buildCanonicalPack({
   // diff.mjs can match them instead of reporting false drift. We only have
   // NAMES here (no exprs), so each pseudo-rule's expr is the recorded
   // series itself (a bare series selector is valid PromQL).
-  const RULE_NAME_RE = /^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*:[a-z0-9_]+$/;
   const inventoryRules = (ruleEvidence?.recordingRuleNames || [])
-    .filter(n => typeof n === 'string' && RULE_NAME_RE.test(n))
+    .filter(n => isSpecRecordingRuleName(n))
     .map(n => ({ name: n, expr: n }));
 
   // Real recorded rules, preferring the rules API (carries exprs) and
@@ -1714,7 +1713,7 @@ export function buildCanonicalPack({
     // Schema requires the rule NAME to match the prometheus convention
     // ns:metric:op. Anything that doesn't can't go in spec.queries —
     // skip those (and they'll surface in the warnings).
-    recordingRules = recordedRules.filter(r => RULE_NAME_RE.test(r.name));
+    recordingRules = recordedRules.filter(r => isSpecRecordingRuleName(r.name));
     // The adapter projects each rule from sourceOf('queries.recording_rules[<i>]'),
     // so the evidence has to be stamped per index — and only for rules the
     // ruler reports healthy (or reports nothing about: inventory-grepped

@@ -13,7 +13,7 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, relative, basename } from 'node:path';
 import { crawlToYaml, SCAN_EXT, SCAN_MAX_FILE_BYTES, scanSkipsName } from './lib/crawler.mjs';
-import { validateCanonical, SPEC_VERSION, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
+import { validate, validateCanonical, SPEC_VERSION, SPEC_SCHEMA_PATH } from './lib/validator.mjs';
 import { brandEnv } from './lib/brand-env.mjs';
 import { readFileSync } from 'node:fs';
 const SCHEMA = JSON.parse(readFileSync(
@@ -72,6 +72,10 @@ manifest by introspecting common observability artefacts.
     --binding <name>     metadata.binding (default: otel-elastic-prometheus-grafana)
     --owners a,b,c       comma-separated metadata.owners list
                          (default: team-platform)
+    Names (--name, --env, --owners) must be spec Slugs: 2-64 lowercase
+    letters, digits, '_' or '-', starting with a letter and ending with a
+    letter or digit. Without --name the folder's name is normalized to one
+    (the original is kept in crawler.nameNormalizedFrom).
     --diff-scope <mode>  live-drift comparison lens: service | family | all
                          (default: service)
     -h, --help           print this message
@@ -79,6 +83,11 @@ manifest by introspecting common observability artefacts.
   Output:
     stdout — the canonical YAML (pipe to a file or to npm run validate)
     stderr — a summary of what was discovered, classified, and stubbed
+
+  Exit codes:
+    0  valid pack on stdout
+    2  usage error (an option the spec cannot hold; nothing emitted)
+    3  the pack failed its own schema (a crawler bug — report it)
 
   What gets detected:
     - docker-compose.yml services → spec.telemetry.backends[]
@@ -110,10 +119,31 @@ function parseArgs(argv) {
     else if (a === '--env')         out.environment = argv[++i];
     else if (a === '--criticality') out.criticality = argv[++i];
     else if (a === '--binding')     out.binding = argv[++i];
-    else if (a === '--owners')      out.owners = argv[++i].split(',');
+    else if (a === '--owners')      out.owners = (argv[++i] ?? '').split(',');
     else if (a === '--diff-scope' || a === '--live-scope') out.diffScopeMode = argv[++i];
   }
   return out;
+}
+
+// The options the manifest copies verbatim are checked against the vendored
+// schema BEFORE the crawl: a value the spec cannot hold is a usage error
+// (exit 2, the rule in the message, nothing on stdout), never a "crawler
+// bug" after the fact. Only options the user passed are checked; the
+// folder-name default is normalized by the library and warned about.
+const SLUG_RULE = "a spec Slug: 2-64 lowercase letters, digits, '_' or '-', starting with a letter and ending with a letter or digit";
+function validateOptions(opts) {
+  const errs = [];
+  const check = (flag, value, def, hint) => {
+    const found = [];
+    validate(value, SCHEMA.$defs[def], '$', found, SCHEMA);
+    for (const e of found) errs.push(`  ${flag} ${JSON.stringify(value)}: ${e} — ${hint}`);
+  };
+  if (opts.repoName !== undefined) check('--name', opts.repoName, 'Slug', SLUG_RULE);
+  if (opts.environment !== undefined) check('--env', opts.environment, 'Slug', SLUG_RULE);
+  for (const o of opts.owners || []) check('--owners', o, 'Slug', SLUG_RULE);
+  if (opts.criticality !== undefined) check('--criticality', opts.criticality, 'Criticality', `one of ${SCHEMA.$defs.Criticality.enum.join(', ')}`);
+  if (opts.binding !== undefined) check('--binding', opts.binding, 'Binding', `one of ${SCHEMA.$defs.Binding.enum.join(', ')}`);
+  return errs;
 }
 
 async function main() {
@@ -127,6 +157,11 @@ async function main() {
   const st = await stat(opts.repoPath).catch(() => null);
   if (!st || !st.isDirectory()) {
     process.stderr.write(`not a directory: ${opts.repoPath}\n`);
+    process.exit(2);
+  }
+  const optionErrors = validateOptions(opts);
+  if (optionErrors.length) {
+    process.stderr.write(`crawl-repo: invalid option(s)\n${optionErrors.join('\n')}\n`);
     process.exit(2);
   }
   if (!opts.repoName) opts.repoName = basename(opts.repoPath.replace(/[\\/]$/, ''));
@@ -147,6 +182,7 @@ async function main() {
     '',
     `# crawler summary`,
     `#   files scanned    : ${summary.files.scanned}`,
+    `#   name             : ${canonical.metadata.name}${summary.normalized?.name ? ` (normalized from '${summary.normalized.name.from}')` : ''}`,
     `#   files included   : ${summary.files.included}`,
     `#   env scope        : ${summary.environment.profile || 'none'}${summary.environment.scoped ? ` (${summary.files.excludedByEnvironment} excluded)` : ''}`,
     `#   diff scope       : ${summary.comparison?.diffScopeMode || 'service'}`,
@@ -154,6 +190,7 @@ async function main() {
     `#   by kind          : ${JSON.stringify(summary.files.byKind)}`,
     `#   backends         : ${summary.discovered.backends}`,
     `#   recording rules  : ${summary.discovered.recordingRules}`,
+    ...(summary.discovered.recordingRulesOmitted ? [`#   rules omitted    : ${summary.discovered.recordingRulesOmitted} (name not <service>:<metric>:<op>)`] : []),
     `#   burn-rate alerts : ${summary.discovered.burnRateAlerts}`,
     `#   alert rules      : ${summary.discovered.alertRules} (operational, alerting.rules)`,
     `#   metric definitions: ${summary.discovered.metricDefinitions}`,

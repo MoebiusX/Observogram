@@ -1680,16 +1680,10 @@ app.post('/api/crawl-github', authorize('POST /api/crawl-github'), async (req, r
       });
     }
 
-    // 5. Run the SAME crawler the upload path uses.
-    // Default the repoName to a Slug-pattern-compliant variant of the
-    // repo path (owner-repo, lowercase, slashes → hyphens, dots
-    // collapsed) so the canonical pack's metadata.name validates against
-    // the spec's `^[a-z][a-z0-9_-]*[a-z0-9]$` pattern.
-    const defaultRepoName = `${owner}-${repo}`
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 64);
+    // 5. Run the SAME crawler the upload path uses. The default name is the
+    // raw `owner-repo`: the library normalizes it to a spec Slug (one rule
+    // for the three doors; the original rides in crawler.nameNormalizedFrom).
+    const defaultRepoName = `${owner}-${repo}`;
     const opts = {
       repoName: typeof body.repoName === 'string' && body.repoName.trim()
         ? body.repoName.trim() : defaultRepoName,
