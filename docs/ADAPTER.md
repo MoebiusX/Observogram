@@ -103,6 +103,46 @@ The adapter walks each top-level spec section into a deterministic family of lay
 | `spec.validation.synthetic_checks[]` | L5 | `SYN-{NN}` | |
 | `metadata.imports[]` | GOV | `IMP-{NN}` | |
 
+## Id families and the classifier
+
+The id families above are the adapter's output vocabulary; the one place
+that reads them back is `tools/lib/artefact-classify.mjs` — `ID_RULES`
+(every prefix of the table, the longer first; the ids the adapter numbers
+once — `OTEL-01`, `PIP-EXP-MET`, `STO-MET-01`, `PROF-01`, `NET-01`,
+`POE-01`, `BASE-01` — are prefix rules, so a second id in such a family
+classifies like the first) and `DEFINES_RULES` (the `defines` symbol, read
+before any id). `artefact-model.classify()` delegates to it, so the diff's
+identity keys, the traceability graph's node kinds and the blast-radius
+weights share the Discover board's grouping (`FAMILY_HOME`: family → layer,
+group, label, role). Add an id family here and in `ID_RULES` together — the
+coverage test in `tools/test-artefact-classify.mjs` fails on a template
+`ID_RULES` does not match, and `npm run test:golden:board` pins every
+family of the catalogue packs.
+
+The classifier reads an explicit `type` before anything else. **`adapt()`
+emits no `type` on its own** — it carries one through only when the
+canonical manifest declares it:
+
+```
+metadata.annotations["observogram.artefact.type.<symbol>"] = "<TypeName>"
+```
+
+where `<symbol>` is the canonical symbol the artefact's `source` is read for
+(`slis.<id>`, `slos.<id>`, `telemetry.backends.<id>`, `storage.<family>`,
+`dashboards.<id>`, `queries.recording_rules[i]`, `policy.burn_rate_alerts[i]`,
+`alerting.routes[i]`, `remediation[i]`, `validation.synthetic_checks.<id>`,
+`imports[i]` …; `DECLARED_TYPE_PREFIX` in `adapter.mjs`). The legacy
+upconvert writes that annotation for a layered item that carried a `type`,
+so a typed pack from another toolchain uploaded in the layered shape keeps
+its types through the one canonical pipeline (`tools/test-declared-type.mjs`).
+Nothing the crawler, the live fetcher or the library produces declares one,
+so every pack of the catalogue adapts without a `type` key — the guard the
+classifier's inert-by-default argument rests on. A family name in `type`
+(`sli`, `alert_rule` …) classifies by itself; a foreign name (`PackSLI`)
+needs the operator override (`OBSERVOGRAM_TAXONOMY`, README "Classify
+Typed Packs"), which can also place foreign ids by pattern — but never an
+artefact that carries `defines`.
+
 ## Cross-references and the symbol table
 
 The client builds a symbol table from every artefact's `defines`. Each artefact's `refs` is classified:
@@ -176,7 +216,10 @@ transparently; the response carries the `legacy` report) and as a CLI
 Conversion contract:
 
 - **Lossless** — every legacy artefact is kept verbatim in
-  `metadata.annotations["legacy.artefact.<LAYER>.<ID>"]`.
+  `metadata.annotations["legacy.artefact.<LAYER>.<ID>"]`; an item's `type`,
+  when it has one, is also kept as the declared type of the symbol it maps to
+  (`observogram.artefact.type.<symbol>`, see "Id families and the
+  classifier"), so the adapter emits it again.
 - **Honest** — the layered format never carried machine detail (exprs,
   windows, channels); every placeholder a schema-required field forces is
   marked `crawler.scaffold.<symbol>` so it projects as Scaffold, never

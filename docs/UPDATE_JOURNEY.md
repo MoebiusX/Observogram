@@ -495,3 +495,52 @@ with no hook and with an identity hook, and the goldens are byte-identical.
 Tests: 700 → 706 (`tools/test-mcp-transport.mjs`,
 `server/test-transport-hook.mjs`; `test-fetch-live`, `test-record-fixtures`
 and `test-journey` extended and made hermetic to the variable).
+
+**W3 — the artefact taxonomy classifier.** Delivered as
+`tools/lib/artefact-classify.mjs` (zero-import, vendorable), bound into the
+studio through `studio/taxonomy.mjs`, with the operator override
+`OBSERVOGRAM_TAXONOMY` served at `GET /api/taxonomy` (README, "Classify
+Typed Packs"; [`ADAPTER.md`](ADAPTER.md), "Id families and the classifier").
+Decisions: the *family* is the mapped unit, not the layer — a family has one
+home (`FAMILY_HOME`: layer, group, label, role), so one vocabulary serves
+the board, the row kinds, the drawer, the diff's identity keys, the
+traceability graph and the blast radius, and an operator names a family, not
+a place; the board never moves an artefact across layers — it groups what
+the pack put on a layer, and a family whose home is elsewhere is that
+layer's "Other", because the layer is the pack's own statement and the board
+only reads; the order is `type` → `defines` → override id rules → id prefix:
+`defines` is Observogram's canonical symbol and can never be re-homed by a
+regex (the override only has to beat the id heuristic, which is all a
+foreign pack reaches), proven by the vendored example classifying
+byte-identically under a `^SLI-` override; type names match exactly
+(case-sensitive) — a mapping file is written once and ambiguity costs more
+than a capital letter; the ids the adapter numbers once (`OTEL-01`,
+`PIP-EXP-MET`, `STO-MET-01`, `PROF-01`, `NET-01`, `POE-01`, `BASE-01`) became
+prefix rules so the board's grouping is byte-identical today and a second
+id in such a family lands with the first tomorrow — a `PIP-EXP-`/`STO-` id
+with a signal segment the adapter never emits has no family, where the old
+prefix table would have grouped it; the server refuses a bad file instead of
+ignoring it — a silently dropped override would group every typed pack
+wrong with no sign of why — and reads it before the store boots, so nothing
+is written; the file's path is logged once and never served
+(`configured: boolean`), like the transport hook's; the studio binding
+degrades to `via: 'unbound'` everywhere but the board, which cannot group
+unbound and throws the named error, so headless and pre-boot renders of
+adapted artefacts keep working; a declared per-artefact `type` passes
+through the legacy upconvert (`observogram.artefact.type.<symbol>`) and
+`adapt()` so a typed layered upload reaches the board through the one
+canonical pipeline — the critic's finding that no product path carried
+`type` — and the inertness claim ("adapted packs never carry `type`") is a
+guard test, not an observation; the one default-behaviour change — an
+artefact declaring a family name in `type` classifies by it with no
+configuration — is pinned by the typed fixture's unmapped golden. Config
+surface: `OBSERVOGRAM_TAXONOMY` (legacy `TOMOGRAPH_TAXONOMY` honoured),
+`GET /api/taxonomy` (viewer, no-store), the annotation
+`observogram.artefact.type.<symbol>`; scripts `test:golden:board`,
+`test:golden:board:update`, `test:artefact-classify`, `test:taxonomy`,
+`test:declared-type`. Inert when unset: the board and families of all 1049
+catalogue artefacts, the crawl and compile goldens and every self-diff are
+byte-identical, with and without an override installed. Tests: 706 → 731
+(`tools/test-golden-board.mjs`, `tools/test-artefact-classify.mjs`,
+`tools/test-declared-type.mjs`, `server/test-taxonomy.mjs`;
+`test-discover-rows`, `test-smoke`, `test-authz`, `test-tenancy` extended).

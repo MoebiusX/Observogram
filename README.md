@@ -713,6 +713,57 @@ The studio also accepts drag-and-drop or file picker upload. Uploaded, crawled,
 and MCP-drafted packs are registered in memory and become addressable through
 the same `/api/packs/:id/*` endpoints as catalog packs.
 
+### Classify Typed Packs
+
+Observogram groups a pack's artefacts into families — SLI, SLO, recording
+rule, dashboard, alert route … — and the Discover board, the drawer, the
+diff and the graphs all read that one classification
+(`tools/lib/artefact-classify.mjs`: an explicit `type` first, then the
+canonical `defines` symbol the adapter attaches, then the id prefix). A pack
+produced by another toolchain carries typed artefacts (`type: PackSLI |
+PrometheusRule | …`) with its own id scheme and would otherwise render as a
+flat wall of "Other". Point the server at a JSON file that maps those names
+and id patterns onto Observogram's families:
+
+```json
+{
+  "version": 1,
+  "types": { "PackSLI": "sli", "PackSLO": "slo",
+             "PrometheusRule": { "family": "alert_rule", "label": "Prometheus rule" } },
+  "ids":   [ { "pattern": "^promrule-", "family": "alert_rule", "flags": "i" } ]
+}
+```
+
+```bash
+OBSERVOGRAM_TAXONOMY=./taxonomy.json npm run dev
+```
+
+The server reads the file once at start (`[taxonomy] loaded <path>: N types,
+M id rules`), installs it process-wide and serves it to the studio at
+`GET /api/taxonomy` (`{ ok, taxonomy, configured }` — never the path). An
+unreadable or invalid file **refuses the start** with
+`OBSERVOGRAM_TAXONOMY: <path>: <reason>`. A value is a family name or
+`{ family, label?, role? }`; the family decides the board group
+(`FAMILY_HOME` in the classifier) and the label/role replace the row's
+plain-words kind. Type names match exactly (case-sensitive); a pattern must
+start with `^`, be at most 200 characters, use flags `""` or `"i"` and hold
+no quantified group, and is matched against the first 256 characters of the
+id. The file is operator-trusted configuration: regexes run server-side
+against the ids of uploaded packs. Observogram's own adapted artefacts are
+never re-homed by it — their canonical `defines` symbol wins over any id
+rule. In identity mode an anonymous studio boots on the default families
+until sign-in (`/api/taxonomy` is a viewer route, like `/api/examples`).
+Unset, nothing changes: the families are Observogram's own and the board
+goldens (`npm run test:golden:board`) are byte-identical.
+
+A typed pack reaches the pipeline either as a layered JSON upload whose items
+carry a `type` (kept through the upconvert as
+`metadata.annotations["observogram.artefact.type.<symbol>"]` and emitted by
+the adapter as the artefact's `type`, see [docs/ADAPTER.md](docs/ADAPTER.md),
+"Id families and the classifier") or as a layered pack a downstream server
+or bundle serves directly. `tools/fixtures/taxonomy/` holds a worked example
+of both the pack and the override.
+
 ### Compile Artifacts
 
 ```bash
