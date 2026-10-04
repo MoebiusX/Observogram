@@ -762,6 +762,8 @@ test('deploy target profiles keep no credential: per user, stripped like the rem
 const EXPECTED_CLASS = Object.freeze({
   'GET /healthz': 'public',
   'GET /api/version': 'public',
+  'GET /': 'public',
+  'GET /index.html': 'public',
   'GET /auth/login': 'public',
   'POST /auth/login': 'public',
   'GET /auth/callback': 'public',

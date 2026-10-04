@@ -75,7 +75,8 @@ import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypt
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as oidc from 'openid-client';
-import { brandEnv, baseWorkspacePath } from '../tools/lib/brand-env.mjs';
+import { brandEnv, baseWorkspacePath, loadBrand } from '../tools/lib/brand-env.mjs';
+import { brandChrome, escapeHtml as escapeBrand } from '../tools/lib/brand.mjs';
 import { currentStore } from './store/db.mjs';
 import { getMeta, isIdentityArmed } from './store/meta.mjs';
 import { getOrg } from './store/orgs.mjs';
@@ -483,24 +484,30 @@ export const AUTH_PAGE_STYLE = `<style>
        font-size:12px;margin-bottom:6px}
 </style>`;
 
-const LOGIN_PAGE = (error = '') => `<!doctype html>
+// The pages' brand (tools/lib/brand.mjs): read at request time through the
+// cached loader, so a suite's env lands before the first page and a
+// branded deployment names itself on every page. The brand strings are
+// escaped here; the error texts are the server's own.
+export const authPageChrome = () => brandChrome(loadBrand());
+
+export const loginPageHtml = (error = '', c = authPageChrome()) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Observogram — sign in</title>
+<title>${escapeBrand(c.loginTitle)}</title>
 ${AUTH_PAGE_STYLE}</head><body>
 <form method="post" action="/auth/login">
-  <h1>Observo<i>gram</i></h1><p>the observability compiler · sign in</p>
+  <h1>${c.wordmarkHtml('i')}</h1><p>${escapeBrand(c.tagline)} · sign in</p>
   ${error ? `<div class="err">${error}</div>` : ''}
   <label for="u">Username</label><input id="u" name="username" autocomplete="username" autofocus required>
   <label for="p">Password</label><input id="p" name="password" type="password" autocomplete="current-password" required>
   <button type="submit">Sign in</button>
 </form></body></html>`;
 
-const CHANGE_PAGE = (error = '', { canSkip = false, askCurrent = false } = {}) => `<!doctype html>
+export const changePageHtml = (error = '', { canSkip = false, askCurrent = false } = {}, c = authPageChrome()) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Observogram — ${askCurrent ? 'change your password' : 'set a new password'}</title>
+<title>${escapeBrand(c.name)} — ${askCurrent ? 'change your password' : 'set a new password'}</title>
 ${AUTH_PAGE_STYLE}</head><body>
 <form method="post" action="/auth/change-password">
-  <h1>Observo<i>gram</i></h1><p>${askCurrent ? 'change your password' : 'choose a new password to finish signing in'}</p>
+  <h1>${c.wordmarkHtml('i')}</h1><p>${askCurrent ? 'change your password' : 'choose a new password to finish signing in'}</p>
   ${error ? `<div class="err">${error}</div>` : ''}
   ${askCurrent ? '<label for="c">Current password</label><input id="c" name="current" type="password" autocomplete="current-password" autofocus required>' : ''}
   <label for="p">New password</label><input id="p" name="password" type="password" autocomplete="new-password" minlength="8"${askCurrent ? '' : ' autofocus'} required>
@@ -513,7 +520,7 @@ ${AUTH_PAGE_STYLE}</head><body>
 function initLocalUsers(app, authorize) {
   app.get('/auth/login', authorize('GET /auth/login'), (req, res) => {
     if (!localUsersEnabled()) return identityOff(res);
-    res.type('html').send(LOGIN_PAGE());
+    res.type('html').send(loginPageHtml());
   });
 
   app.post('/auth/login', authorize('POST /auth/login'), (req, res) => {
@@ -528,7 +535,7 @@ function initLocalUsers(app, authorize) {
       noteLoginFailure(key);
       return json
         ? res.status(status).json({ ok: false, error: msg })
-        : res.status(status).type('html').send(LOGIN_PAGE(msg));
+        : res.status(status).type('html').send(loginPageHtml(msg));
     };
     if (loginLocked(key)) return fail('too many attempts — wait 30 seconds', 429);
     const row = username ? getUserByLogin(db, username) : null;
@@ -574,12 +581,12 @@ function initLocalUsers(app, authorize) {
       // The skip affordance renders only while the record still holds the
       // seeded default — an admin-set temporary password stays a forced
       // change (see the skip route below for the rationale).
-      return res.type('html').send(CHANGE_PAGE('', { canSkip: self.user.seededDefault }));
+      return res.type('html').send(changePageHtml('', { canSkip: self.user.seededDefault }));
     }
     // Signed-in self-service (the account menu's "change password…"):
     // the same page, with the current password required.
     if (self.user.kind === 'local') {
-      return res.type('html').send(CHANGE_PAGE('', { askCurrent: true }));
+      return res.type('html').send(changePageHtml('', { askCurrent: true }));
     }
     res.redirect('/auth/login');
   });
@@ -606,7 +613,7 @@ function initLocalUsers(app, authorize) {
     const canSkip = inFlow && user.seededDefault;
     const bad = (msg, status = 400) => json
       ? res.status(status).json({ ok: false, error: msg })
-      : res.status(status).type('html').send(CHANGE_PAGE(msg, { canSkip, askCurrent: !inFlow }));
+      : res.status(status).type('html').send(changePageHtml(msg, { canSkip, askCurrent: !inFlow }));
     if (!inFlow) {
       // Same damper as login — current-password guesses from a stolen
       // session cookie must not be free.
@@ -647,7 +654,7 @@ function initLocalUsers(app, authorize) {
     if (!flow.user.seededDefault) {
       return json
         ? res.status(403).json({ ok: false, error: 'a password change is required for this account' })
-        : res.status(403).type('html').send(CHANGE_PAGE('a password change is required for this account'));
+        : res.status(403).type('html').send(changePageHtml('a password change is required for this account'));
     }
     touchLogin(db, flow.user.id);
     clearCookie(res, PWFLOW_COOKIE);

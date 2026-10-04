@@ -43,6 +43,10 @@ export const ROUTES = Object.freeze({
   // ---------- public ----------
   'GET /healthz': { class: 'public' },
   'GET /api/version': { class: 'public' },
+  // The studio shell, by name (server/index.mjs sendShell — the branded
+  // rendering or the file); the SPA fallback below is the same handler.
+  'GET /': { class: 'public' },
+  'GET /index.html': { class: 'public' },
   'GET /auth/login': { class: 'public', modes: ['local', 'oidc', 'proxy'] },
   'POST /auth/login': { class: 'public', csrf: 'form', modes: ['local'] },
   'GET /auth/callback': {

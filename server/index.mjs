@@ -78,7 +78,8 @@ import { currentStore } from './store/db.mjs';
 import { defaultOrgId } from './store/identity.mjs';
 import { getOrg, listOrgs } from './store/orgs.mjs';
 import { listMembershipsForUser } from './store/memberships.mjs';
-import { brandEnv } from '../tools/lib/brand-env.mjs';
+import { brandEnv, loadBrand, brandSource } from '../tools/lib/brand-env.mjs';
+import { brandShellHtml } from '../tools/lib/brand.mjs';
 import { loadTaxonomy, taxonomyAnswer } from './taxonomy.mjs';
 import { mcpTransport, describeTransport } from '../tools/mcp-transport.mjs';
 import { STACK_SELF_METRIC_PROBES, STACK_OUTCOMES, displayHint } from '../tools/lib/contracts/stack-self-metrics.mjs';
@@ -1910,14 +1911,32 @@ app.use('/lib', express.static(resolve(ROOT, 'tools/lib'), {
   },
 }));
 
-app.use(express.static(STUDIO_DIR, { extensions: ['html'], index: 'index.html' }));
+// The studio shell (studio/index.html), one way out for every path that
+// serves it: `/`, `/index.html` and the SPA fallback below. Unbranded (the
+// default) it is res.sendFile — the same `send` pipeline express.static ran,
+// so the bytes and the headers (ETag, Last-Modified, Cache-Control, Accept-
+// Ranges) are the ones the static mount used to answer. Branded
+// (OBSERVOGRAM_BRAND_FILE / OBSERVOGRAM_BRAND_*, read once in start()), it is
+// brandShellHtml's rendering, held in memory, no-cache. The static mount
+// serves no index and tries no extension, so `/index` cannot reach the
+// on-disk shell around this handler (it falls to the SPA route instead).
+const SHELL_FILE = resolve(STUDIO_DIR, 'index.html');
+let brandedShell = null;
+function sendShell(req, res) {
+  if (brandedShell !== null) return res.type('html').set('Cache-Control', 'no-cache').send(brandedShell);
+  res.sendFile(SHELL_FILE);
+}
+app.get('/', authorize('GET /'), sendShell);
+app.get('/index.html', authorize('GET /index.html'), sendShell);
+
+app.use(express.static(STUDIO_DIR, { index: false }));
 
 // SPA-style fallback: any unknown GET returns the studio shell so the client
 // can route. The /api/* paths above already handled JSON requests.
 const SPA_FALLBACK = /^(?!\/api\/).*/;
 app.get(SPA_FALLBACK, authorize(`GET ${SPA_FALLBACK}`), (req, res, next) => {
   if (req.method !== 'GET') return next();
-  res.sendFile(resolve(STUDIO_DIR, 'index.html'));
+  sendShell(req, res);
 });
 
 // ---------- entrypoint ----------
@@ -1971,6 +1990,13 @@ export async function start({ port = PORT, host = HOST, silent = false, legacyLi
   // the store is touched; a loaded one is installed process-wide for the
   // diff and the graphs and logged here once, path only.
   loadTaxonomy({ log });
+  // The brand (tools/lib/brand-env.mjs loadBrand, tools/lib/brand.mjs): read
+  // here, not at import, so an in-process suite's env lands first; a bad
+  // brand file refuses the start before the store is touched. Said once,
+  // name and source (a path or 'env') only — never the file's contents.
+  const brand = loadBrand();
+  brandedShell = brand.configured ? brandShellHtml(readFileSync(SHELL_FILE, 'utf8'), brand) : null;
+  if (brand.configured) log(`[studio] brand: ${brand.name} (${brandSource() === 'env' ? 'OBSERVOGRAM_BRAND_* env' : brandSource()})`);
   const { db, ctx } = await bootStore({ host, log, warn });
   // The MCP transport hook (OBSERVOGRAM_TRANSPORT_HOOK, tools/mcp-transport.mjs)
   // loads once per process: a hook that cannot load refuses the start, and

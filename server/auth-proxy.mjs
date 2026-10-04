@@ -46,7 +46,8 @@ import { brandEnv, brandEnvFrom } from '../tools/lib/brand-env.mjs';
 // auth.mjs imports this module too: a cycle ESM resolves because neither
 // module calls the other at load, only from functions (as auth.mjs and
 // identity-admin.mjs already do).
-import { AUTH_PAGE_STYLE, authDisabled, identityOff, wantsJson } from './auth.mjs';
+import { AUTH_PAGE_STYLE, authDisabled, identityOff, wantsJson, authPageChrome } from './auth.mjs';
+import { escapeHtml as escapeBrand } from '../tools/lib/brand.mjs';
 import { tokenEquals } from './authz.mjs';
 import { validOrgId } from './org-context.mjs';
 import { currentStore } from './store/db.mjs';
@@ -307,12 +308,13 @@ export function resolveProxySession(req, { db = currentStore() } = {}) {
 
 // ---------- the routes ----------
 
-const EXPLAINER_PAGE = (error) => `<!doctype html>
+// The brand as server/auth.mjs's pages read it (tools/lib/brand.mjs).
+export const explainerPageHtml = (error, c = authPageChrome()) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Observogram — no sign-in page</title>
+<title>${escapeBrand(c.name)} — no sign-in page</title>
 ${AUTH_PAGE_STYLE}</head><body>
 <form onsubmit="return false">
-  <h1>Observo<i>gram</i></h1><p>the observability compiler · identity from the reverse proxy</p>
+  <h1>${c.wordmarkHtml('i')}</h1><p>${escapeBrand(c.tagline)} · identity from the reverse proxy</p>
   <div class="err">${error}</div>
   <a class="skip" href="/">Back to the studio</a>
 </form></body></html>`;
@@ -332,6 +334,6 @@ export function initProxyAuth(app, authorize) {
         + `(a disabled or local user, a duplicated header${cfg.secret ? `, or a missing or wrong ${cfg.secretHeader}` : ''})`
       : `no sign-in page: this server takes identity from its reverse proxy, and this request carried no ${cfg.userHeader}`;
     if (wantsJson(req)) return res.status(401).json({ ok: false, error, denied: 'auth' });
-    res.status(401).type('html').send(EXPLAINER_PAGE(error));
+    res.status(401).type('html').send(explainerPageHtml(error));
   });
 }

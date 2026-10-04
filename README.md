@@ -1602,8 +1602,8 @@ of it may be needed again.
 
 Every route's class — public, self, viewer, operator, admin, owner — is in
 [`server/route-table.mjs`](server/route-table.mjs) (see [Roles](#roles)).
-Below, `/healthz` and `/api/version` are `public` and `/auth/signout-others`
-is `self`; `/api/org` and every `/api/org/…` route are `admin`, every
+Below, `/healthz`, `/api/version`, `/` and `/index.html` are `public` and
+`/auth/signout-others` is `self`; `/api/org` and every `/api/org/…` route are `admin`, every
 `/api/admin/…` route `owner` (see [The Identity API](#the-identity-api));
 every other `GET` is `viewer` and every other route `operator`.
 
@@ -1611,6 +1611,8 @@ every other `GET` is `viewer` and every other route `operator`.
 |---|---|---|
 | `GET` | `/healthz` | Health and vendored spec version |
 | `GET` | `/api/version` | Which build is this: version, build (commit count), commit, branch, dirty, date, shallow, source, label — public, no-store |
+| `GET` | `/` | The studio shell (`studio/index.html`) — the file as shipped, or its branded rendering when `OBSERVOGRAM_BRAND_FILE` / `OBSERVOGRAM_BRAND_*` is set (see Rebadging); every non-`/api` path the router does not know answers the same |
+| `GET` | `/index.html` | The same shell by name |
 | `GET` | `/api/packs` | In-memory and catalog pack registry |
 | `GET` | `/api/examples` | Bundled example packs |
 | `GET` | `/api/taxonomy` | The artefact taxonomy override the server was started with (`OBSERVOGRAM_TAXONOMY`): `{ ok, taxonomy, configured }` — the document or `null`, never its path; no-store |
